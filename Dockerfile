@@ -12,6 +12,6 @@ RUN apk update
 
 WORKDIR /usr/local/bin
 
-COPY --from=builder /usr/src/transmission-rss/target/release/transmission-rss .
+COPY --from=builder /usr/src/transmission-rss .
 
 ENTRYPOINT [ "./transmission-rss" ]
