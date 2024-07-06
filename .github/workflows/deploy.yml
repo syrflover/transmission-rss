@@ -25,4 +25,4 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           push: true
-          tags: syrlee/transmission-rss:${GITHUB_REF_NAME}
+          tags: syrlee/transmission-rss:$GITHUB_REF_NAME
