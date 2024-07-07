@@ -118,8 +118,13 @@ async fn test_get_torrent() {
                 TorrentGetField::HashString,
                 TorrentGetField::Status,
                 TorrentGetField::Labels,
+                TorrentGetField::Error,
+                TorrentGetField::ErrorString,
+                TorrentGetField::DoneDate,
             ]),
-            None,
+            Some(vec![Id::Hash(
+                "457be58a312d7a3881783b014cbf766e370c0598".to_owned(),
+            )]),
         )
         .await
         .unwrap();
@@ -209,14 +214,14 @@ async fn run() {
             let matched = channel_config
                 .rules
                 .iter()
-                .any(|rule| rule.test(item.title().unwrap_or_default()));
+                .find(|rule| rule.test(item.title().unwrap_or_default()));
 
-            if !matched {
+            let Some(matched) = matched else {
                 continue;
-            }
+            };
 
             println!();
-            println!("Matched {}", item.title().unwrap_or_default(),);
+            println!("Matched {}", matched.r#match);
 
             let link = item.link().unwrap_or_default();
 
