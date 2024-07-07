@@ -1,8 +1,8 @@
 use rss::Channel;
 use transmission_rpc::{
     types::{
-        Id, Torrent, TorrentAction, TorrentAddArgs, TorrentAddedOrDuplicate, TorrentGetField,
-        TorrentStatus,
+        Id, SessionSetArgs, Torrent, TorrentAction, TorrentAddArgs, TorrentAddedOrDuplicate,
+        TorrentGetField, TorrentStatus,
     },
     TransClient,
 };
@@ -197,6 +197,26 @@ async fn run() {
             .expect("can't parse transmission url"),
     );
 
+    let transmission_config = SessionSetArgs {
+        download_dir: config.download_dir,
+        speed_limit_up_enabled: config.speed_limit_up.is_some().then_some(true),
+        speed_limit_up: config.speed_limit_up,
+        speed_limit_down_enabled: config.speed_limit_down.is_some().then_some(true),
+        speed_limit_down: config.speed_limit_down,
+        download_queue_enabled: config.download_queue_size.is_some().then_some(true),
+        download_queue_size: config.download_queue_size,
+        seed_queue_enabled: config.seed_queue_size.is_some().then_some(true),
+        seed_queue_size: config.seed_queue_size,
+        ..Default::default()
+    };
+
+    println!("{:#?}", transmission_config);
+
+    transmission
+        .session_set(transmission_config)
+        .await
+        .expect("can't set transmission configuration");
+
     let mut channels = Vec::new();
 
     for channel_config in &channels_config {
@@ -336,8 +356,6 @@ async fn run() {
 
 #[tokio::main]
 async fn main() {
-    println!("Hello, world!");
-
     dotenv::dotenv().ok();
 
     run().await;
