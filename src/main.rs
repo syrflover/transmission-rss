@@ -161,7 +161,6 @@ async fn add_torrent(
         .torrent_add(TorrentAddArgs {
             filename: Some(link.to_owned()),
             labels: Some(vec![BOT_LABEL.to_owned()]),
-            paused: Some(false),
             download_dir: download_dir.to_str().map(|x| x.to_owned()),
             ..Default::default()
         })
