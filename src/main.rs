@@ -327,15 +327,17 @@ async fn run() {
         })
         .collect::<Vec<_>>();
 
+    println!();
+
     let matched_items = collect_items(channels.iter_mut());
+
+    println!();
 
     stream::iter(matched_items.into_iter())
         .for_each_concurrent(100, |(base_directory, matched, item)| {
             let transmission_url = transmission_url.clone();
 
             async move {
-                println!();
-
                 let mut transmission = TransClient::new(transmission_url);
 
                 let link = item.link().unwrap_or_default();
