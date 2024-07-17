@@ -178,6 +178,9 @@ async fn add_torrent(
                 .await?
                 .unwrap();
         }
+        TorrentAddedOrDuplicate::Error => {
+            eprintln!("{}", res.result);
+        }
     }
 
     Ok(res.arguments)
@@ -383,6 +386,9 @@ async fn run() {
                                 println!("Added {} | {}", name, hash);
 
                                 torrent
+                            }
+                            TorrentAddedOrDuplicate::Error => {
+                                return;
                             }
                         },
                         Err(err) => {
