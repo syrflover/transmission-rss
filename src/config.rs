@@ -1,4 +1,4 @@
-use std::{env, fmt::Debug, str::FromStr};
+use std::{env, fmt::Debug, path::PathBuf, str::FromStr};
 
 use serde::Deserialize;
 
@@ -57,5 +57,6 @@ impl Config {
 #[derive(Debug, Deserialize)]
 pub struct ChannelConfig {
     pub url: String,
+    pub directory: PathBuf,
     pub rules: Vec<Rule>,
 }

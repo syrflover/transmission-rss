@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 dotenv = "0.15.0"
+futures = "0.3.30"
 reqwest = "0.12.5"
 rss = { version = "2.0.8", features = ["serde"] }
 serde = "1.0.203"
@@ -13,3 +14,7 @@ serde_yaml = "0.9.34"
 thiserror = "1.0.61"
 tokio = { version = "1.38.0", features = ["rt-multi-thread", "macros"] }
 transmission-rpc = "0.4.2"
+url = "2.5.2"
+
+# trname = { path = "../renamer" }
+trname = { git = "https://github.com/syrflover/trname", rev = "65b0d5c" }
