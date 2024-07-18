@@ -17,4 +17,4 @@ transmission-rpc = "0.4.2"
 url = "2.5.2"
 
 # trname = { path = "../renamer" }
-trname = { git = "https://github.com/syrflover/trname", rev = "65b0d5c" }
+trname = { git = "https://github.com/syrflover/trname", rev = "36c2a19" }
