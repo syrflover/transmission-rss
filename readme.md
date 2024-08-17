@@ -15,16 +15,6 @@ export CHANNELS_CONFIG_URL=https://raw.githubusercontent.com/syrflover/syrflover
 transmission-rss
 ```
 
-### from dockerhub
-
-```sh
-# run for one time
-docker run -t \
-    -e TRANSMISSION_URL=http://localhost:9091/transmission/rpc \
-    -e CHANNELS_CONFIG_URL=https://raw.githubusercontent.com/syrflover/syrflover/master/transmission-rss-channels.yaml \
-    syrlee/transmission-rss:0.1.0
-```
-
 ## configuration
 
 [example](https://github.com/syrflover/syrflover/blob/master/transmission-rss-channels.yaml)
