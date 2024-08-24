@@ -23,12 +23,10 @@ impl Rule {
     pub fn test(&self, target: &str) -> bool {
         if self.regex {
             unimplemented!()
+        } else if self.case_insensitive {
+            target.to_lowercase().contains(&self.r#match.to_lowercase())
         } else {
-            if self.case_insensitive {
-                target.to_lowercase().contains(&self.r#match.to_lowercase())
-            } else {
-                target.contains(&self.r#match)
-            }
+            target.contains(&self.r#match)
         }
     }
 

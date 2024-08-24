@@ -1,4 +1,7 @@
-use std::{path::PathBuf, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use futures::{stream, StreamExt};
 use rss::{Channel, Item};
@@ -155,7 +158,7 @@ fn has_label(labels: Option<&[String]>, x: &str) -> bool {
 async fn add_torrent(
     transmission: &mut TransClient,
     link: &str,
-    download_dir: &PathBuf,
+    download_dir: &Path,
 ) -> transmission_rpc::types::Result<TorrentAddedOrDuplicate> {
     let mut res = transmission
         .torrent_add(TorrentAddArgs {
@@ -222,7 +225,7 @@ async fn rename_torrent(
     if torrent.file_count.unwrap() == 1 {
         let old_file_name = torrent.name.clone().unwrap();
 
-        if let Some(new_file_name) = trname(&download_dir, &old_file_name, starts_episode_at) {
+        if let Some(new_file_name) = trname(download_dir, &old_file_name, starts_episode_at) {
             let res = transmission
                 .torrent_rename_path(
                     vec![Id::Hash(hash.to_owned())],
@@ -242,7 +245,7 @@ async fn rename_torrent(
 
 async fn run() {
     let config = Config::new();
-    let channels_config: Vec<ChannelConfig> = serde_yaml::from_slice(
+    let channels_config: Vec<ChannelConfig> = serde_yml::from_slice(
         &reqwest::get(&config.channels_config_url)
             .await
             .expect("can't get channels configuration")
@@ -303,7 +306,7 @@ async fn run() {
             }
         }
 
-        return items;
+        items
     }
 
     let mut channels = stream::iter(channels_config.into_iter())
