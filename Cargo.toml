@@ -11,8 +11,8 @@ anissia = ["dep:tl", "dep:chrono", "dep:bytes"]
 trname = { git = "https://github.com/syrflover/trname", rev = "3becf44" }
 
 chrono = { version = "0.4", features = ["serde"], optional = true }
-bytes = { version = "1.7.1", optional = true }
-tl = { version = "0.7.8", optional = true }
+bytes = { version = "1.7", optional = true }
+tl = { version = "0.7", optional = true }
 
 dotenv = "0.15"
 futures = "0.3"

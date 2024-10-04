@@ -225,17 +225,24 @@ async fn rename_torrent(
     if torrent.file_count.unwrap() == 1 {
         let old_file_name = torrent.name.clone().unwrap();
 
-        if let Some(new_file_name) = trname(download_dir, &old_file_name, starts_episode_at) {
-            let res = transmission
-                .torrent_rename_path(
-                    vec![Id::Hash(hash.to_owned())],
-                    old_file_name,
-                    new_file_name.clone(),
-                )
-                .await?;
+        match trname(download_dir, &old_file_name, starts_episode_at) {
+            Some(new_file_name) => {
+                let res = transmission
+                    .torrent_rename_path(
+                        vec![Id::Hash(hash.to_owned())],
+                        old_file_name,
+                        new_file_name.clone(),
+                    )
+                    .await?;
 
-            if res.result == "success" {
-                return Ok(Some(new_file_name));
+                if res.result == "success" {
+                    return Ok(Some(new_file_name));
+                }
+            }
+            None => {
+                let _res = transmission
+                    .torrent_remove(vec![Id::Hash(hash.to_owned())], true)
+                    .await?;
             }
         }
     }
