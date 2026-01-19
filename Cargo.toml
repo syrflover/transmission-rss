@@ -8,7 +8,7 @@ anissia = ["dep:tl", "dep:chrono", "dep:bytes"]
 
 [dependencies]
 # trname = { path = "../trname" }
-trname = { git = "https://github.com/syrflover/trname", rev = "3becf44" }
+trname = { git = "https://github.com/syrflover/trname", rev = "6169808" }
 
 chrono = { version = "0.4", optional = true }
 bytes = { version = "1.10", optional = true }
@@ -22,7 +22,7 @@ serde = "1.0"
 serde_json = "1.0"
 serde_yml = "0.0.12"
 thiserror = "2.0"
-tokio = { version = "1.43", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1.49", features = ["rt-multi-thread", "macros"] }
 transmission-rpc = "0.5"
 tap = "1.0.1"
 url = "2.5"
