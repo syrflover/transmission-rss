@@ -96,3 +96,6 @@ $RECYCLE.BIN/
 a.json
 .env
 .temp_bin
+logs/
+
+.claude/

@@ -1,0 +1,26 @@
+services:
+  trss:
+    image: syrlee/transmission-rss:0.3.10
+    container_name: trss
+    environment:
+      - TRANSMISSION_URL=${TRANSMISSION_URL:-http://transmission:9091/transmission/rpc}
+      - CHANNELS_CONFIG_URL=${CHANNELS_CONFIG_URL:?Set CHANNELS_CONFIG_URL in .env}
+      - DOWNLOAD_DIR=/downloads
+      - SPEED_LIMIT_UP=${SPEED_LIMIT_UP:-0}
+      - SPEED_LIMIT_DOWN=${SPEED_LIMIT_DOWN:-30000}
+      - DOWNLOAD_QUEUE_SIZE=${DOWNLOAD_QUEUE_SIZE:-5}
+      - SEED_QUEUE_SIZE=${SEED_QUEUE_SIZE:-1}
+    volumes:
+      - ${DOWNLOADS_DIR:?Set DOWNLOADS_DIR in .env}:/downloads
+    deploy:
+      resources:
+        limits:
+          cpus: "0.1"
+          memory: 96M
+    restart: "no"
+    networks:
+      - trss_net
+
+networks:
+  trss_net:
+    external: true

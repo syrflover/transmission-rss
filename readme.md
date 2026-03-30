@@ -1,20 +1,43 @@
 # transmission-rss
 
-## installation and example usage
+Subscribes to RSS feeds and adds matching torrents to Transmission. Renames downloaded files and removes old torrents automatically.
 
-### from source
+## Docker Compose
+
+### Setup
+
+Create a `.env` file:
 
 ```sh
-git clone git@github.com:syrflover/transmission-rss.git
-cargo install --path ./transmission-rss
+# Transmission (required)
+TRANSMISSION_CONFIG_DIR=/path/to/transmission/config
+DOWNLOADS_DIR=/path/to/downloads
+WATCH_DIR=/path/to/watch
 
-export TRANSMISSION_URL=http://localhost:9091/transmission/rpc
-export CHANNELS_CONFIG_URL=https://raw.githubusercontent.com/syrflover/syrflover/master/transmission-rss-channels.yaml
+# trss (required)
+CHANNELS_CONFIG_URL=https://raw.githubusercontent.com/syrflover/syrflover/master/transmission-rss-channels.yaml
 
-# run for one time
-transmission-rss
+# trss (optional, defaults shown)
+TRANSMISSION_URL=http://transmission:9091/transmission/rpc
+SPEED_LIMIT_UP=0
+SPEED_LIMIT_DOWN=30000
+DOWNLOAD_QUEUE_SIZE=5
+SEED_QUEUE_SIZE=1
 ```
 
-## configuration
+### Run
 
-[example](https://github.com/syrflover/syrflover/blob/master/transmission-rss-channels.yaml)
+```sh
+# Start Transmission
+docker compose up -d
+
+# Install cron job (runs trss every 5 minutes)
+./scripts/cron.sh install
+
+# Uninstall cron job
+./scripts/cron.sh uninstall
+```
+
+### Channel Configuration
+
+[Example](https://github.com/syrflover/syrflover/blob/master/transmission-rss-channels.yaml)
