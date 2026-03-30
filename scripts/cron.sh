@@ -15,7 +15,7 @@ CRON_SCHEDULE="*/5 * * * *"
 
 cmd_run() {
     echo "--- $(date '+%Y-%m-%d %H:%M:%S') ---"
-    docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" run --rm trss
+    docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" -p trss-cron run --rm trss
 }
 
 cmd_install() {
