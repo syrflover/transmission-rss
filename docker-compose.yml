@@ -8,7 +8,7 @@ services:
       - TZ=Asia/Seoul
     volumes:
       - ${TRANSMISSION_CONFIG_DIR:?Set TRANSMISSION_CONFIG_DIR in .env}:/config
-      - ${DOWNLOADS_DIR:?Set DOWNLOADS_DIR in .env}:/downloads
+      - ${MEDIA_DIR:?Set MEDIA_DIR in .env}:/downloads
       - ${WATCH_DIR:?Set WATCH_DIR in .env}:/watch
     ports:
       - "9091:9091"

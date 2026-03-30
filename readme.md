@@ -11,7 +11,7 @@ Create a `.env` file:
 ```sh
 # Transmission (required)
 TRANSMISSION_CONFIG_DIR=/path/to/transmission/config
-DOWNLOADS_DIR=/path/to/downloads
+MEDIA_DIR=/path/to/media
 WATCH_DIR=/path/to/watch
 
 # trss (required)
@@ -24,6 +24,8 @@ SPEED_LIMIT_DOWN=30000
 DOWNLOAD_QUEUE_SIZE=5
 SEED_QUEUE_SIZE=1
 ```
+
+`MEDIA_DIR` is mounted to `/downloads` inside the container. trss downloads files to `/downloads/downloads`, so the actual host path becomes `$MEDIA_DIR/downloads`.
 
 ### Run
 
