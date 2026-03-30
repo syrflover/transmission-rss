@@ -252,7 +252,7 @@ async fn rename_torrent(
 
 async fn run() {
     let config = Config::new();
-    let channels_config: Vec<ChannelConfig> = serde_yml::from_slice(
+    let channels_config: Vec<ChannelConfig> = yaml_serde::from_slice(
         &reqwest::get(&config.channels_config_url)
             .await
             .expect("can't get channels configuration")

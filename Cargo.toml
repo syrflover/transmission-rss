@@ -11,18 +11,18 @@ anissia = ["dep:tl", "dep:chrono", "dep:bytes"]
 trname = { git = "https://github.com/syrflover/trname", rev = "6169808" }
 
 chrono = { version = "0.4", optional = true }
-bytes = { version = "1.10", optional = true }
+bytes = { version = "1", optional = true }
 tl = { version = "0.7", optional = true }
 
 dotenv = "0.15"
 futures = "0.3"
 reqwest = "0.13"
 rss = { version = "2.0", features = ["with-serde"] }
-serde = "1.0"
-serde_json = "1.0"
-serde_yml = "0.0.12"
-thiserror = "2.0"
-tokio = { version = "1.49", features = ["rt-multi-thread", "macros"] }
+serde = "1"
+serde_json = "1"
+yaml_serde = "0.10"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 transmission-rpc = "0.5"
-tap = "1.0.1"
-url = "2.5"
+tap = "1"
+url = "2"
