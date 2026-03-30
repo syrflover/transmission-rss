@@ -1,6 +1,6 @@
 services:
   trss:
-    image: syrlee/transmission-rss:0.3.10
+    image: ghcr.io/syrflover/transmission-rss:latest
     container_name: trss
     environment:
       - TRANSMISSION_URL=${TRANSMISSION_URL:-http://transmission:9091/transmission/rpc}
