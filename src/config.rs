@@ -64,5 +64,7 @@ impl Default for Config {
 pub struct ChannelConfig {
     pub url: String,
     pub directory: PathBuf,
+    #[serde(default)]
+    pub excludes: Vec<String>,
     pub rules: Vec<Rule>,
 }

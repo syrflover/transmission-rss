@@ -296,10 +296,17 @@ async fn run() {
 
         for (channel, channel_config) in channels {
             for item in channel.items_mut() {
-                let matched = channel_config
-                    .rules
+                let title = item.title().unwrap_or_default();
+
+                if channel_config
+                    .excludes
                     .iter()
-                    .find(|rule| rule.test(item.title().unwrap_or_default()));
+                    .any(|ex| title.contains(ex.as_str()))
+                {
+                    continue;
+                }
+
+                let matched = channel_config.rules.iter().find(|rule| rule.test(title));
 
                 let Some(matched) = matched else {
                     continue;
