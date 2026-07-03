@@ -4,6 +4,7 @@ use std::{
 };
 
 use futures::{stream, StreamExt};
+use reqwest::header;
 use rss::{Channel, Item};
 use tokio::time::sleep;
 use transmission_rpc::{
@@ -29,7 +30,13 @@ pub enum ChannelParseError {
 }
 
 async fn parse_channel(channel_config: &ChannelConfig) -> Result<Channel, ChannelParseError> {
-    let buf = reqwest::get(&channel_config.url).await?.bytes().await?;
+    let buf = reqwest::Client::new()
+        .get(&channel_config.url)
+        .header(header::USER_AGENT, transmission_rss::USER_AGENT)
+        .send()
+        .await?
+        .bytes()
+        .await?;
     let channel = rss::Channel::read_from(&buf[..])?;
 
     Ok(channel)
@@ -323,7 +330,7 @@ async fn run() {
         items
     }
 
-    let mut channels = stream::iter(channels_config.into_iter())
+    let mut channels = stream::iter(channels_config)
         .map(|channel_config| async {
             (
                 parse_channel(&channel_config)
@@ -349,7 +356,7 @@ async fn run() {
 
     println!();
 
-    stream::iter(matched_items.into_iter())
+    stream::iter(matched_items)
         .for_each_concurrent(100, |(base_directory, matched, item)| {
             let transmission_url = transmission_url.clone();
 
