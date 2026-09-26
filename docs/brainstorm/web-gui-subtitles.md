@@ -110,6 +110,7 @@ Transmission은 trss에서 상태를 확인하고 기존 Transmission 화면으�
 
 확장자 변경만으로 포맷을 변환하거나, 변환 과정에서 스타일·색상·위치 정보를 잃는 방식을 자동 적용하지 않는 안을 제안해요.
 사용자의 주 재생 환경은 Infuse, IINA, 다음 팟플레이어예요.
+Infuse는 SMB·NFS·WebDAV 계열의 폴더 공유로 접근하며, 특정 Apple 기기에 한정하지 않는 호환을 희망해요.
 폰트를 영상 옆에 두는 것만으로 각 재생기가 실제 사용하는지는 별도로 확인해야 해요.
 서버 전역 폰트 설치나 원본 영상 재먹스는 현재 선택한 동작에 포함하지 않아요.
 여러 형식을 함께 배치하면서 파일명으로 기본 자막을 표시하고 싶다는 요구가 있어요.
@@ -303,6 +304,26 @@ CDP 연결과 서버 다운로드 경로 `/home/seluser/Downloads` 설정, erula
 검증 환경은 같은 호스트의 격리된 컨테이너와 로컬 원격 화면이며, 실제 LAN·VPN 접속과 trss의 압축 해제·회차 연결·최종 배치는 검증하지 않았어요.
 관찰 연결을 해제하고 컨테이너를 중지했어요.
 사용자가 로컬 보관을 선택해 실행물·받은 표본·중지된 컨테이너를 남겼으며, 제품 코드나 원격 저장소에는 포함하지 않았어요.
+
+### 재생기 파일명과 폰트 호환 근거
+
+파일 이름의 기본 표시와 재생기의 기본 트랙 선택을 분리해서 검토해요.
+아래는 문서·소스 확인 결과이며, 사용자 기기에서 실행한 재생 시험은 아니에요.
+
+- [Infuse 외부 자막 안내](https://support.firecore.com/hc/en-us/articles/215090967-Using-Subtitles)는 영상과 같은 폴더의 동일 이름 자막과 `영상-en.srt` 같은 언어별 이름을 설명하며, UPnP·DLNA 연결의 외부 자막은 지원하지 않는다고 명시해요.
+  [설정 안내](https://support.firecore.com/hc/en-us/articles/360015608854-Settings-Overview)의 언어·`default` 트랙 태그 선택 설명은 외부 파일명의 `.default`를 태그로 해석한다는 근거가 아니에요.
+  같은 언어의 여러 외부 형식 사이 우선순위와 임의 접미사의 공통 인식은 확인하지 못했어요.
+- IINA `v1.4.4`의 [AutoFileMatcher](https://github.com/iina/iina/blob/v1.4.4/iina/AutoFileMatcher.swift)는 파일 경로로 접근하는 영상의 주변 자막을 자체적으로 찾고, `subAutoLoadPriorityString`에 설정한 문자열이 들어 있는 일치 자막의 순서를 앞당겨요.
+  [Preference](https://github.com/iina/iina/blob/v1.4.4/iina/Preference.swift)의 해당 기본값은 빈 문자열이므로 `.default`라는 이름 자체를 기본 지시자로 가정할 수는 없지만, 사용자 우선 문자열 설정에 연결하는 방안은 근거가 있어요.
+  [PlayerCore](https://github.com/iina/iina/blob/v1.4.4/iina/PlayerCore.swift)는 일치 자막을 불러온 뒤 자막 트랙 1을 선택하므로, 내장 트랙·사용자 설정·실제 버전을 포함한 최종 선택은 별도 확인이 필요해요.
+- [팟플레이어 공식 변경 이력](https://t1.kakaocdn.net/potplayer/PotPlayer/v4/Update2/Update.html)은 선호 자막 언어, 내장·외부 자막 우선순위와 이전 스트림 선택 기억 기능을 설명해요.
+  이 기록만으로 외부 파일명의 `.default` 해석이나 같은 언어의 ASS·SRT·SMI 사이 선택 순서를 확정하지 않아요.
+
+폰트를 자막 옆에 두는 것만으로 세 재생기에서 자동 사용하는 공통 규칙은 확인하지 못했어요.
+[mpv 문서](https://mpv.io/manual/stable/#options-sub-fonts-dir)는 전용 폰트 디렉터리 `sub-fonts-dir`를 제공하지만, 그 기본 경로를 IINA의 실제 유효 설정으로 단정하지 않아요.
+[Infuse 담당자의 과거 안내](https://community.firecore.com/t/subtitle-font-customization/36224/2)는 시스템 폰트와 iOS·tvOS의 차이를 설명하며, 이를 현재 모든 Apple 기기의 동작 보장으로 사용하지 않아요.
+팟플레이어의 폰트 처리·libass 출력 관련 변경 이력도 인접한 폰트 파일 자동 검색의 근거와 구분해요.
+`.forced`는 일반적인 기본 자막 표시와 의미가 다르므로, 기본 선택을 유도하려고 그 이름을 대신 사용하는 안은 취하지 않아요.
 
 ## 미해결 사항
 
