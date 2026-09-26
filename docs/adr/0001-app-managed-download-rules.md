@@ -21,4 +21,4 @@
 
 이 기록은 선택한 방향이며 아직 구현된 동작은 아니에요.
 앱 내부 저장 형식과 새 YAML의 구체적인 스키마는 이후 구현 설계에서 정해요.
-제품 범위와 관련 근거는 [웹 GUI와 자막 수작업 개선](../brainstorm/web-gui-subtitles.md)에 있어요.
+현재 요구와 완료 조건은 [구현 명세](../specs/web-gui-subtitles.md#앱-설정과-다운로드-규칙)에 있고, 선택 배경과 조사 근거는 [주제 문서](../brainstorm/web-gui-subtitles.md)에 있어요.
