@@ -7,7 +7,10 @@
 Svelte·TypeScript와 Rust 서버 HTML에 필요한 JavaScript만 더하는 대안도 비교했어요.
 React 기반 UI 생태계를 사용하는 방향을 선택한 것이며, 다른 방식보다 성능이 우월하다고 검증한 결과는 아니에요.
 [React의 앱 구성 안내](https://react.dev/learn/build-a-react-app-from-scratch)는 독립적인 프런트 빌드 구성을 설명해요.
-세부 빌드 도구·UI 라이브러리와 내부 폴더 구조는 아직 정하지 않았어요.
+정적 번들 빌드는 [Vite](https://vite.dev/guide/build)를 사용해요.
+이는 개발·빌드 도구의 선택이며, 운영용 Vite 서버나 SSR 서버를 추가하는 결정이 아니에요.
+UI 라이브러리는 아직 선택하지 않았으며, 내부 소스 파일 배치와 설치 버전은 구현 시 구체화해요.
+PC뿐 아니라 태블릿·휴대폰에서도 주요 작업을 완료하는 반응형 화면을 제공하되, 원격 인증의 터치·가상 키보드 조작은 별도로 검증해야 해요.
 
 웹과 작업은 [공통 라이브러리와 별도 바이너리](0006-separate-web-worker-binaries.md)로 구성하고, 같은 이미지의 별도 컨테이너에서 실행해요.
 현재 요구는 [구현 명세](../specs/web-gui-subtitles.md)에 있고, 이 기록은 구현 완료를 뜻하지 않아요.
