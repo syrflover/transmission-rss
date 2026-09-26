@@ -429,7 +429,8 @@ DB 임대 시각이 지났다는 이유만으로 멈춰 있던 이전 worker와 
 [현재 코드와 제약](../brainstorm/web-gui-subtitles.md#현재-제품의-근거와-한계)을 출발점으로 삼고, 기존 RSS·규칙·Transmission·trname 동작을 재사용해요.
 웹 화면 추가만으로 기존 미완성 Anissia 경로가 완성되거나 `regex: true`가 동작한다고 가정하지 않아요.
 
-[웹 기술 ADR](../adr/0004-rust-react-web-stack.md)에 따라 기존 Rust·Tokio를 유지하고 axum 서버와 React·TypeScript 화면을 사용해요.
+[웹 기술 ADR](../adr/0004-rust-react-web-stack.md)에 따라 기존 Rust·Tokio를 유지하고 axum 서버와 React·TypeScript·shadcn/ui 화면을 사용해요.
+shadcn/ui를 사용해도 작은 화면의 기능 범위나 웹 명령·선택·승인 계약은 축소하지 않아요.
 프런트엔드의 정적 빌드 결과는 Rust 서버가 제공하며, 운영용 Node 서버 없이 실제 배포 이미지에서 화면·작업 API·원격 인증 연결을 사용할 수 있어야 해요.
 실행 구성은 [웹·작업 바이너리 분리 ADR](../adr/0006-separate-web-worker-binaries.md)에 따라 공통 Rust 라이브러리와 `trss-web`·`trss-worker` 두 바이너리로 나눠요.
 두 바이너리는 같은 앱 이미지에 포함하고, 같은 호스트의 별도 컨테이너에서 같은 릴리스 버전으로 운용해요.
@@ -528,8 +529,6 @@ worker 재시작은 위 작업 복구 계약을 따르며, 복구 판정의 구�
 
 ## 남은 구체화와 비차단 보류
 
-- UI 컴포넌트 라이브러리 선택은 보류하며, [웹 기술 ADR](../adr/0004-rust-react-web-stack.md)의 비교 근거를 참고해요.
-  도구 선택이 작은 화면의 기능 범위나 위 명령·선택·승인 계약을 축소하지 않아요.
 - 재생기별 폰트 활용 방식과 Apple 기기별 실제 호환은 실기 검증이 필요해요.
   저장·복사·비교 작업과 독립적으로 진행할 수 있지만, 폰트 활용의 보장에는 필요한 근거예요.
 - 출처별 변경 확인·부분 수신 가능성은 아직 검증하지 않았어요.
