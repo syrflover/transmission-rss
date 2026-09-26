@@ -32,6 +32,8 @@
 - Transmission 제어 기능은 기존 화면을 이용하고 trss에는 상태 확인·이동만 두어 중복 구현을 피하기로 했어요.
 - [Rust·axum과 React·TypeScript](../adr/0004-rust-react-web-stack.md)를 선택해 기존 서버 코드를 재사용하고 상호작용이 많은 화면을 구성해요.
   프런트엔드는 정적 번들로 제공해 운영용 Node 서버를 추가하지 않아요.
+- [로컬 SQLite](../adr/0005-local-sqlite-app-state.md)를 선택해 앱 상태를 영속화하고 별도 DB 서버 운영을 피하기로 했어요.
+  미디어 공유와 DB 저장 위치를 분리하며, YAML 내보내기를 전체 이력·파일 백업으로 확대하지 않아요.
 
 ## 현재 제품의 근거와 한계
 
