@@ -71,10 +71,42 @@ RSS 채널은 작품 분류가 아니라 수집 경로·설정으로 다뤄요.
 표지 수집이나 실제 화면을 구현·검증한 상태는 아니에요.
 기존 Anissia 클라이언트의 자막 메타데이터와 trname의 경로 정리는 표지 URL이나 다른 서비스의 작품 ID를 제공하는 연동이 아니에요.
 확인한 [Anissia API 문서](https://github.com/anissia-net/anissia/blob/master/docs/anime_schdule.md)의 작품·자막 필드에도 표지 정보가 없으며, trname의 TheTVDB식 명명만으로 TheTVDB 작품 연결이 확보됐다고 간주하지 않아요.
-[AniList 검색 안내](https://docs.anilist.co/guide/graphql/queries/media)와 [인증 안내](https://docs.anilist.co/guide/auth/)에서는 인증 없이 공개 작품을 제목으로 검색할 수 있지만, 제목이 유일하지 않아 첫 결과가 의도한 작품이라는 보장은 없다고 설명해요.
-[표지 이미지 필드](https://docs.anilist.co/reference/object/mediacoverimage)는 이미지 URL을 제공하므로 후보 검색·선택 방식의 기술적 대안이 될 수 있어요.
-이는 제공자 채택이나 실제 작품 일치·이미지 수신 성공의 근거가 아니에요.
-[사용 약관](https://docs.anilist.co/guide/terms-of-use)의 대량 수집·백업 저장·경쟁 서비스 제한과 선택한 이미지의 보관 범위는 채택 전에 확인해야 하며, 개인 미디어 관리 화면에서의 구체적 적용은 아직 확인하지 않았어요.
+공식 문서에는 Anissia의 제목 `subject` 외에 선택적 원제 `originalSubject`와 시작일 `startDate`가 있어 검색 힌트로 사용할 수 있어요.
+값이 없을 수 있고 특정 시즌의 시작일일 수 있으므로, 외부 작품 ID나 시리즈 최초 방영일과 같다고 간주하지 않아요.
+자막 갱신일 `updDt`를 작품 방영 연도로 대신 쓰지 않아요.
+
+### 표지 제공자 비교
+
+제공자는 아직 선택하지 않았으며, 다음은 공식 문서에 근거한 기능·운영 조건 비교예요.
+계정·키를 발급하거나 실제 검색·이미지 수신을 실행하지 않았고, 한국어 애니메이션의 수록 범위·자동 매칭 정확도는 측정하지 않았어요.
+
+| 제공자 | 검색·표지 기능 | 접근·비용과 주요 조건 |
+| --- | --- | --- |
+| AniList | [애니메이션 제목 검색](https://docs.anilist.co/guide/graphql/queries/media)과 원제·영문·로마자 제목, [표지 URL](https://docs.anilist.co/reference/object/mediacoverimage) 제공 | [공개 데이터는 인증 불필요](https://docs.anilist.co/guide/auth/); [비상업용 무료](https://docs.anilist.co/guide/terms-of-use), 대량 수집·API의 백업 저장 용도·경쟁 서비스 제한 |
+| TMDB | [원제·번역 제목·별칭 검색](https://developer.themoviedb.org/reference/search-tv), [작품](https://developer.themoviedb.org/reference/tv-series-images)·[시즌](https://developer.themoviedb.org/reference/tv-season-images) 포스터 제공 | [계정의 API 키 또는 읽기 토큰](https://developer.themoviedb.org/docs/authentication-application) 필요; [비상업용 무료·출처 표시](https://developer.themoviedb.org/docs/faq), [6개월 초과 캐시 금지](https://www.themoviedb.org/api-terms-of-use) |
+| TheTVDB | [제목·번역·별칭 검색과 작품·시즌별 이미지](https://github.com/thetvdb/v4-api/blob/main/docs/swagger.yml) 제공 | [프로젝트 키·라이선스](https://thetvdb.com/api-information) 또는 [프로젝트 키와 구독자 PIN](https://github.com/thetvdb/v4-api/blob/main/README.md); 무료 라이선스 구간도 있지만 접근 승인과 이용 조건은 별도 확인 |
+
+초기 제공자는 TMDB 하나를 추천해요.
+원제·번역·별칭 검색과 작품·시즌 포스터, 비상업용 이미지·데이터 사용 및 출처 표시 조건이 문서화돼 있다는 이유이며, 검색 정확도가 다른 제공자보다 높다고 확인한 것은 아니에요.
+키 없는 연동을 우선하면 AniList가 대안이고, 처음부터 여러 제공자를 통합하는 것은 추천하지 않아요.
+
+AniList는 제목이 고유하지 않아 첫 검색 결과가 의도한 작품이라는 보장이 없다고 명시해요.
+약관의 경쟁 서비스·대량 수집 제한이 trss의 구체적인 사용에 어떻게 적용되는지는 확인하지 않았으며, 고정 보관 기간이 명시되지 않았다고 영구 보관 권리가 보장되는 것은 아니에요.
+
+TMDB 약관은 API에서 얻은 정보의 6개월 초과 캐시를 금지하고, 라이선스 종료 시 캐시를 포함한 TMDB 콘텐츠를 신속히 삭제하도록 요구해요.
+자동 갱신이나 만료 처리가 필요한 비용을 선택에 포함하며, 내려받은 표지를 무기한 유지할 일반 자막 보관본과 같은 것으로 취급하지 않아요.
+TMDB는 로고와 지정 고지 문구를 요구하고, FAQ의 짧은 예시와 문구가 다르므로 [현재 API 약관의 Attribution 절](https://www.themoviedb.org/api-terms-of-use)을 기준으로 삼아요.
+
+TheTVDB는 [현재 요금표](https://thetvdb.com/api-information)에 연 매출 5만 달러 미만 무료·출처 표시 구간을 두며, [구독 방식](https://thetvdb.com/subscribe)은 사용자당 연 11.99달러로 안내해요.
+[프로젝트 키 발급·승인](https://support.thetvdb.com/kb/faq.php?id=62)과 [구독자 PIN](https://support.thetvdb.com/kb/faq.php?id=82)은 별개이고, trname의 명명 형식이 이 접근 자격을 제공하지 않아요.
+[TheTVDB 약관](https://thetvdb.com/tos)은 API 라이선스가 관련 이미지의 사용·표시 권한까지 부여하지 않는다고 명시해요.
+
+어느 제공자든 API 접근·이미지 URL 제공을 이미지 저작권 소유나 무제한 재배포 허가로 해석하지 않으며, 이 구분이 모든 개인 이미지 표시를 금지한다는 뜻도 아니에요.
+
+자동 지정은 확실한 후보만 적용하고 모호하면 표지 없이 남기는 안과, 가장 유력한 후보를 우선 적용한 뒤 사용자가 고치는 안을 비교해요.
+현재 추천은 전자지만 아직 선택한 정책이 아니며, 어느 쪽이든 수동 선택을 자동 검색 결과로 덮어쓰지 않고 표지 연결을 자막·영상 대응의 근거로 사용하지 않아요.
+
+### 첫 화면 선택 이유
 
 첫 화면 대안 중 별도 요약 홈을 선택해, 작품·작업 목록 외에 요약 화면을 유지하는 비용을 받아들였어요.
 이는 화면 방향의 선택이며 실제 사용 빈도를 측정한 결과는 아니에요.
