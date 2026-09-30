@@ -298,10 +298,9 @@ pub async fn execute(
             let finished = refuse(ctx, &item, &reason, &now).await?;
             // A refusal does not say what Transmission holds either: it
             // fetches a `.torrent` link before it can tell it has the torrent.
-            Ok(Finished {
-                add_unconfirmed: unanswered,
-                ..unaccounted(finished)
-            })
+            let mut finished = unaccounted(finished);
+            finished.add_unconfirmed |= unanswered;
+            Ok(finished)
         }
     }
 }

@@ -1238,6 +1238,28 @@ async fn a_refused_connection_after_an_unanswered_add_leaves_the_command_for_the
 }
 
 #[tokio::test]
+async fn a_last_start_refused_after_an_unanswered_add_still_holds_the_next_cleanup() {
+    let liar = release("guid-liar-26", 26, LIAR, "");
+    let s = Scene::new(&[&liar], unrelated_rule()).await;
+    let worker = after_an_unanswered_add(&s).await;
+    s.h.tr
+        .reject_adds(Some("gotMetadataFromURL: http error 429"));
+
+    for _ in 2..MAX_ATTEMPTS {
+        assert_eq!(s.run_commands_with(&worker).await, CommandsOutcome::Ran(0));
+    }
+    assert_eq!(s.run_commands_with(&worker).await, CommandsOutcome::Ran(1));
+    assert_eq!(s.command(CMD).await.1["state"], "failed");
+
+    // The first add's torrent is still unaccounted for.
+    s.h.tr.reject_adds(None);
+    let report = s.cycle().await;
+    assert_eq!(report.commands_unconfirmed, 1);
+    assert!(report.removed.is_empty(), "{:?}", report.removed);
+    assert_eq!(s.h.tr.torrents().len(), 1);
+}
+
+#[tokio::test]
 async fn a_torrent_the_bot_did_not_add_is_not_taken_as_the_commands_own_after_an_unanswered_add() {
     let liar = release("guid-liar-26", 26, LIAR, "");
     let s = Scene::new(&[&liar], unrelated_rule()).await;
