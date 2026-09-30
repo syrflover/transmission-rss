@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Feed A</title>
+    <link>https://feeds.example.test/feed-a</link>
+    <description>Made-up feed for worker tests</description>
+    <item>
+      <title>[SubsPlease] Sayonara Lara - 03 (1080p) [AAAA0001].mkv</title>
+      <link>magnet:?xt=urn:btih:aaaa000000000000000000000000000000000001&amp;dn=%5BSubsPlease%5D%20Sayonara%20Lara%20-%2003%20%281080p%29%20%5BAAAA0001%5D.mkv</link>
+      <guid isPermaLink="false">guid-aaaa-1</guid>
+    </item>
+    <item>
+      <title>[SubsPlease] Sayonara Lara - 03 (720p) [AAAA0002].mkv</title>
+      <link>magnet:?xt=urn:btih:aaaa000000000000000000000000000000000002&amp;dn=%5BSubsPlease%5D%20Sayonara%20Lara%20-%2003%20%28720p%29%20%5BAAAA0002%5D.mkv</link>
+      <guid isPermaLink="false">guid-aaaa-2</guid>
+    </item>
+    <item>
+      <title>[SubsPlease] Sono Bisque Doll - 13 (1080p) [AAAA0003].mkv</title>
+      <link>magnet:?xt=urn:btih:aaaa000000000000000000000000000000000003&amp;dn=%5BSubsPlease%5D%20Sono%20Bisque%20Doll%20-%2013%20%281080p%29%20%5BAAAA0003%5D.mkv</link>
+      <guid isPermaLink="false">guid-aaaa-3</guid>
+    </item>
+    <item>
+      <title>[SubsPlease] Tensei Shitara Slime Datta Ken - 62 (1080p) [AAAA0006].mkv</title>
+      <link>magnet:?xt=urn:btih:aaaa000000000000000000000000000000000004&amp;dn=%5BSubsPlease%5D%20Tensei%20Shitara%20Slime%20Datta%20Ken%20-%2062%20%281080p%29%20%5BAAAA0006%5D.mkv</link>
+      <guid isPermaLink="false">guid-aaaa-4</guid>
+    </item>
+    <item>
+      <title>[SubsPlease] Sono Bisque Doll - 01~12 [Batch] (1080p).mkv</title>
+      <link>magnet:?xt=urn:btih:aaaa000000000000000000000000000000000005&amp;dn=%5BSubsPlease%5D%20Sono%20Bisque%20Doll%20-%2001~12%20%5BBatch%5D%20%281080p%29.mkv</link>
+      <guid isPermaLink="false">guid-aaaa-5</guid>
+    </item>
+    <item>
+      <title>[SubsPlease] Unrelated Show - 05 (1080p) [AAAA0009].mkv</title>
+      <link>magnet:?xt=urn:btih:aaaa000000000000000000000000000000000006&amp;dn=%5BSubsPlease%5D%20Unrelated%20Show%20-%2005%20%281080p%29%20%5BAAAA0009%5D.mkv</link>
+      <guid isPermaLink="false">guid-aaaa-6</guid>
+    </item>
+    <item>
+      
+      <link>magnet:?xt=urn:btih:aaaa000000000000000000000000000000000007&amp;dn=</link>
+      <guid isPermaLink="false">guid-aaaa-7</guid>
+    </item>
+  </channel>
+</rss>

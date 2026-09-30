@@ -1,24 +1,16 @@
-use std::{
-    path::{Path, PathBuf},
-    time::Duration,
-};
-
 use futures::{stream, StreamExt};
 use reqwest::header;
 use rss::Channel;
-use tokio::time::sleep;
-use transmission_rpc::{
-    types::{
-        Id, SessionSetArgs, Torrent, TorrentAction, TorrentAddArgs, TorrentAddedOrDuplicate,
-        TorrentGetField, TorrentStatus,
-    },
-    TransClient,
-};
+use tokio_util::sync::CancellationToken;
+use transmission_rpc::TransClient;
 use transmission_rss::{
     config::{ChannelConfig, Config},
     rss::legacy::{collect_items, SelectedItem},
+    transmission::{
+        add_item, remove_stale, rename_with_retries, AddError, Redactor, RenamePolicy,
+        SessionConfig,
+    },
 };
-use trname::trname;
 use url::Url;
 
 #[derive(Debug, thiserror::Error)]
@@ -83,48 +75,11 @@ async fn parse_channel(channel_config: &ChannelConfig) -> Result<Channel, Channe
 //     assert!(parse_hash(anything).is_none());
 // }
 
-async fn get_torrents(
-    transmission: &mut TransClient,
-) -> transmission_rpc::types::Result<Vec<Torrent>> {
-    let res = transmission
-        .torrent_get(
-            Some(vec![
-                TorrentGetField::Id,
-                TorrentGetField::Name,
-                TorrentGetField::HashString,
-                TorrentGetField::Labels,
-            ]),
-            None,
-        )
-        .await?;
-
-    Ok(res.arguments.torrents)
-}
-
-async fn get_torrent(
-    transmission: &mut TransClient,
-    hash: &str,
-) -> transmission_rpc::types::Result<Option<Torrent>> {
-    let res = transmission
-        .torrent_get(
-            Some(vec![
-                TorrentGetField::Id,
-                TorrentGetField::Name,
-                TorrentGetField::HashString,
-                TorrentGetField::Status,
-                TorrentGetField::Labels,
-                TorrentGetField::FileCount,
-            ]),
-            Some(vec![Id::Hash(hash.to_owned())]),
-        )
-        .await?;
-
-    Ok(res.arguments.torrents.into_iter().next())
-}
-
 #[tokio::test]
 #[ignore = "needs a Transmission instance at a hardcoded LAN address"]
 async fn test_get_torrent() {
+    use transmission_rpc::types::TorrentGetField;
+
     let mut transmission = TransClient::new(
         "http://192.168.1.21:32091/transmission/rpc"
             .parse()
@@ -157,45 +112,6 @@ async fn test_get_torrent() {
     println!("{res:#?}");
 }
 
-const BOT_LABEL: &str = "managed:transmission-rss";
-
-fn has_label(labels: Option<&[String]>, x: &str) -> bool {
-    labels.is_some_and(|labels| labels.iter().any(|label| label == x))
-}
-
-async fn add_torrent(
-    transmission: &mut TransClient,
-    link: &str,
-    download_dir: &Path,
-) -> transmission_rpc::types::Result<TorrentAddedOrDuplicate> {
-    let mut res = transmission
-        .torrent_add(TorrentAddArgs {
-            filename: Some(link.to_owned()),
-            labels: Some(vec![BOT_LABEL.to_owned()]),
-            download_dir: download_dir.to_str().map(|x| x.to_owned()),
-            ..Default::default()
-        })
-        .await?;
-
-    match &mut res.arguments {
-        TorrentAddedOrDuplicate::TorrentDuplicate(torrent) => {
-            *torrent = get_torrent(transmission, torrent.hash_string.as_deref().unwrap())
-                .await?
-                .unwrap();
-        }
-        TorrentAddedOrDuplicate::TorrentAdded(torrent) => {
-            *torrent = get_torrent(transmission, torrent.hash_string.as_deref().unwrap())
-                .await?
-                .unwrap();
-        }
-        TorrentAddedOrDuplicate::Error => {
-            eprintln!("{}", res.result);
-        }
-    }
-
-    Ok(res.arguments)
-}
-
 #[tokio::test]
 #[ignore = "needs a Transmission instance at a hardcoded LAN address and adds a torrent"]
 async fn test_add_torrent() {
@@ -207,55 +123,18 @@ async fn test_add_torrent() {
             .expect("can't parse transmission url"),
     );
 
-    let res = add_torrent(
+    let res = add_item(
         &mut transmission,
         link,
-        &PathBuf::from(
+        std::path::Path::new(
             "/downloads/Shows (current)/Katsute Mahou Shoujo to Aku wa Tekitai shiteita/Season 01",
         ),
+        &Redactor::none(),
     )
     .await
     .unwrap();
 
     println!("{res:#?}");
-}
-
-async fn rename_torrent(
-    transmission: &mut TransClient,
-    hash: &str,
-    download_dir: &PathBuf,
-    starts_episode_at: isize,
-) -> transmission_rpc::types::Result<Option<String>> {
-    let Some(torrent) = get_torrent(transmission, hash).await? else {
-        return Ok(None);
-    };
-
-    if torrent.file_count.unwrap() == 1 {
-        let old_file_name = torrent.name.clone().unwrap();
-
-        match trname(download_dir, &old_file_name, starts_episode_at) {
-            Some(new_file_name) => {
-                let res = transmission
-                    .torrent_rename_path(
-                        vec![Id::Hash(hash.to_owned())],
-                        old_file_name,
-                        new_file_name.clone(),
-                    )
-                    .await?;
-
-                if res.result == "success" {
-                    return Ok(Some(new_file_name));
-                }
-            }
-            None => {
-                let _res = transmission
-                    .torrent_remove(vec![Id::Hash(hash.to_owned())], true)
-                    .await?;
-            }
-        }
-    }
-
-    Ok(None)
 }
 
 async fn run() {
@@ -277,18 +156,14 @@ async fn run() {
 
     let mut transmission = TransClient::new(transmission_url.clone());
 
-    let transmission_config = SessionSetArgs {
+    let transmission_config = SessionConfig {
         download_dir: config.download_dir,
-        speed_limit_up_enabled: config.speed_limit_up.is_some().then_some(true),
         speed_limit_up: config.speed_limit_up,
-        speed_limit_down_enabled: config.speed_limit_down.is_some().then_some(true),
         speed_limit_down: config.speed_limit_down,
-        download_queue_enabled: config.download_queue_size.is_some().then_some(true),
         download_queue_size: config.download_queue_size,
-        seed_queue_enabled: config.seed_queue_size.is_some().then_some(true),
         seed_queue_size: config.seed_queue_size,
-        ..Default::default()
-    };
+    }
+    .to_args();
 
     println!("{:#?}", transmission_config);
 
@@ -323,9 +198,16 @@ async fn run() {
 
     println!();
 
+    // The binary logs errors as they are; nothing here needs redacting.
+    let redactor = Redactor::none();
+    // Nothing cancels the binary's run.
+    let cancel = CancellationToken::new();
+
     stream::iter(matched_items)
         .for_each_concurrent(100, |selected| {
             let transmission_url = transmission_url.clone();
+            let redactor = &redactor;
+            let cancel = &cancel;
 
             async move {
                 let SelectedItem {
@@ -338,84 +220,31 @@ async fn run() {
 
                 let link = item.link().unwrap_or_default();
 
-                let torrent = match add_torrent(&mut transmission, link, &save_path).await {
-                    Ok(r) => match r {
-                        TorrentAddedOrDuplicate::TorrentDuplicate(torrent) => {
-                            let hash = torrent.hash_string.as_deref().unwrap();
-
-                            match torrent.status.unwrap() {
-                                TorrentStatus::QueuedToSeed | TorrentStatus::Seeding
-                                    if has_label(torrent.labels.as_deref(), BOT_LABEL) =>
-                                {
-                                    // pause_torrent
-                                    transmission
-                                        .torrent_action(
-                                            TorrentAction::Stop,
-                                            vec![Id::Hash(hash.to_owned())],
-                                        )
-                                        .await
-                                        .inspect_err(|err| eprintln!("{err}"))
-                                        .ok(); // FIXME: error handle
-
-                                    println!(
-                                        "Stopped {} | {}",
-                                        torrent.name.as_deref().unwrap(),
-                                        torrent.hash_string.as_deref().unwrap()
-                                    );
-                                }
-                                _ => {
-                                    println!(
-                                        "Already {} | {}",
-                                        torrent.name.as_deref().unwrap(),
-                                        torrent.hash_string.as_deref().unwrap()
-                                    );
-                                }
-                            }
-
-                            torrent
-                        }
-                        TorrentAddedOrDuplicate::TorrentAdded(torrent) => {
-                            let hash = torrent.hash_string.as_deref().unwrap();
-                            let name = torrent.name.as_deref().unwrap();
-
-                            println!("Added {} | {}", name, hash);
-
-                            torrent
-                        }
-                        TorrentAddedOrDuplicate::Error => {
-                            return;
-                        }
-                    },
-                    Err(err) => {
+                let torrent = match add_item(&mut transmission, link, &save_path, redactor).await {
+                    Ok(torrent) => torrent,
+                    Err(AddError::Rejected(result)) => {
+                        eprintln!("{result}");
+                        return;
+                    }
+                    Err(AddError::Rpc(err)) => {
                         eprintln!("{err}");
                         return;
                     }
                 };
 
-                let hash = torrent.hash_string.unwrap();
+                let hash = torrent.hash;
 
                 // rename
-                {
-                    let mut i = 0;
-
-                    loop {
-                        sleep(Duration::from_secs(1)).await;
-
-                        let res = rename_torrent(&mut transmission, &hash, &save_path, episode)
-                            .await
-                            .inspect_err(|err| println!("{err}"));
-
-                        match res {
-                            Ok(Some(_name)) => break,
-                            _ => {
-                                if i > 15 {
-                                    break;
-                                }
-                                i += 1;
-                            }
-                        };
-                    }
-                };
+                rename_with_retries(
+                    &mut transmission,
+                    &hash,
+                    &save_path,
+                    episode,
+                    RenamePolicy::default(),
+                    redactor,
+                    cancel,
+                )
+                .await;
 
                 // set torrent hash
                 item.set_description(hash);
@@ -423,54 +252,21 @@ async fn run() {
         })
         .await;
 
-    match get_torrents(&mut transmission).await {
-        Ok(torrents) => {
-            // remove oldest torrents
-            let items = channels
-                .into_iter()
-                .flat_map(|(channel, _)| channel.items)
-                .collect::<Vec<_>>();
+    let items = channels
+        .into_iter()
+        .flat_map(|(channel, _)| channel.items)
+        .collect::<Vec<_>>();
 
-            let oldest_torrents = torrents
-                .into_iter()
-                .filter(|torrent| has_label(torrent.labels.as_deref(), BOT_LABEL))
-                .filter(|torrent| {
-                    !items.iter().any(|item| {
-                        item.description()
-                            .is_some_and(|desc| desc == torrent.hash_string.as_deref().unwrap())
-                    })
-                })
-                .collect::<Vec<_>>();
-
-            if !oldest_torrents.is_empty() {
-                transmission
-                    .torrent_remove(
-                        oldest_torrents
-                            .clone()
-                            .into_iter()
-                            .map(|torrent| Id::Hash(torrent.hash_string.unwrap()))
-                            .collect(),
-                        false,
-                    )
-                    .await
-                    .inspect_err(|err| eprintln!("{err}"))
-                    .ok();
-
-                println!();
-
-                for oldest_torrent in oldest_torrents {
-                    println!(
-                        "Removed {} | {}",
-                        oldest_torrent.name.unwrap(),
-                        oldest_torrent.hash_string.unwrap()
-                    );
-                }
-            }
-        }
-        Err(err) => {
-            eprintln!("{err}");
-        }
-    }
+    remove_stale(
+        &mut transmission,
+        |hash| {
+            items
+                .iter()
+                .any(|item| item.description().is_some_and(|desc| desc == hash))
+        },
+        &redactor,
+    )
+    .await;
 }
 
 #[tokio::main]

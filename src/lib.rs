@@ -5,6 +5,8 @@ pub mod import;
 pub mod rss;
 pub mod rule;
 pub mod store;
+pub mod transmission;
 pub mod web;
+pub mod worker;
 
 pub const USER_AGENT: &str = "trss/0.3";
