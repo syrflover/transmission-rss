@@ -26,6 +26,8 @@ const MIGRATIONS: &[&str] = &[
     include_str!("history/schema.sql"),
     // 3: optional channel display name
     "ALTER TABLE channels ADD COLUMN name TEXT CHECK (name IS NULL OR name <> '');",
+    // 4: the worker's snapshots for the collection screen's status board
+    include_str!("status/schema.sql"),
 ];
 
 #[derive(Debug, thiserror::Error)]

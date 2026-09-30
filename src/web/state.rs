@@ -1,4 +1,4 @@
-use crate::store::{channels::ChannelStore, history::HistoryStore, Db};
+use crate::store::{channels::ChannelStore, history::HistoryStore, status::StatusStore, Db};
 
 /// Shared handles every API handler can reach. Cheap to clone.
 ///
@@ -8,13 +8,15 @@ use crate::store::{channels::ChannelStore, history::HistoryStore, Db};
 pub struct AppState {
     pub channels: ChannelStore,
     pub history: HistoryStore,
+    pub status: StatusStore,
 }
 
 impl AppState {
     pub fn new(db: Db) -> Self {
         AppState {
             channels: ChannelStore::new(db.clone()),
-            history: HistoryStore::new(db),
+            history: HistoryStore::new(db.clone()),
+            status: StatusStore::new(db),
         }
     }
 }

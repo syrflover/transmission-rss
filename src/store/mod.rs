@@ -7,5 +7,6 @@
 pub mod channels;
 pub mod db;
 pub mod history;
+pub mod status;
 
 pub use db::{Db, DbError};
