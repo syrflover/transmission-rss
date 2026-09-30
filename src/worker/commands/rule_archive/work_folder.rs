@@ -306,6 +306,24 @@ fn listed(paths: &[PathBuf]) -> String {
     format!("{}{more}", names.join(", "))
 }
 
+/// How a refusal asks to try the move again toward `to`: the button the
+/// rule shows for it.
+fn again(to: Side) -> &'static str {
+    match to {
+        Side::Archive => "`다시 옮기기`를 눌러",
+        Side::Collect => "다시 `복원`해",
+    }
+}
+
+/// What a refusal over same-name files asks for. Two files with one name
+/// may hold different data, so it never calls either side safe to clear.
+fn compare_then_again(to: Side) -> String {
+    format!(
+        "이름이 같아도 내용이 다를 수 있으니, 겹치는 파일마다 두 쪽을 견줘 남길 것을 정하거나 한쪽 이름을 바꾼 뒤 {} 주세요.",
+        again(to)
+    )
+}
+
 /// The checks of step 1. They change nothing on disk except the rename probe
 /// ([`probe_renames`]), which leaves nothing behind.
 pub fn check(request: &Request, disk: &dyn Disk) -> Result<Checked, String> {
@@ -386,10 +404,11 @@ pub fn check(request: &Request, disk: &dyn Disk) -> Result<Checked, String> {
 
     if !walk.conflicts.is_empty() {
         return Err(format!(
-            "{}의 `{}`에 같은 이름의 파일이 있어서 아무것도 옮기지 않았어요: {}. 한쪽을 정리한 뒤 다시 옮겨 주세요.",
+            "{}의 `{}`에 같은 이름의 파일이 있어서 아무것도 옮기지 않았어요: {}. {}",
             request.to.name(),
             request.name,
-            listed(&walk.conflicts)
+            listed(&walk.conflicts),
+            compare_then_again(request.to)
         ));
     }
 
@@ -685,13 +704,10 @@ pub fn plan_torrents(
         .map(|(place, _)| PathBuf::from(&place.name))
         .collect();
     if !unfinished.is_empty() {
-        let again = match request.to {
-            Side::Archive => "`다시 옮기기`를 눌러",
-            Side::Collect => "다시 `복원`해",
-        };
         return Err(format!(
-            "Transmission에 아직 다 받지 않은 토렌트가 있어서 아무것도 옮기지 않았어요: {}. Transmission에서 그 토렌트를 다 받거나, 더 받지 않을 거면 지운 뒤 {again} 주세요.",
-            listed(&unfinished)
+            "Transmission에 아직 다 받지 않은 토렌트가 있어서 아무것도 옮기지 않았어요: {}. Transmission에서 그 토렌트를 다 받거나, 더 받지 않을 거면 지운 뒤 {} 주세요.",
+            listed(&unfinished),
+            again(request.to)
         ));
     }
     if let Some((place, error)) = moves
@@ -706,6 +722,7 @@ pub fn plan_torrents(
 
     let destination = request.destination();
     let mut conflicts = Vec::new();
+    let mut split = Vec::new();
     for (place, to) in &moves {
         let from = Path::new(&place.download_dir);
         let at_destination: Vec<(&TorrentFile, PathBuf)> = place
@@ -716,6 +733,10 @@ pub fn plan_torrents(
         if at_destination.is_empty() || own_data_at_destination(place, from, &at_destination) {
             continue;
         }
+        if split_between(place, from, &at_destination) {
+            split.push(PathBuf::from(&place.name));
+            continue;
+        }
         conflicts.extend(at_destination.into_iter().map(|(_, there)| {
             there
                 .strip_prefix(&destination)
@@ -723,12 +744,30 @@ pub fn plan_torrents(
                 .unwrap_or(there)
         }));
     }
-    if !conflicts.is_empty() {
+    if !conflicts.is_empty() || !split.is_empty() {
+        let mut reasons = Vec::new();
+        if !conflicts.is_empty() {
+            reasons.push(format!(
+                "{}의 `{}`에 Transmission 토렌트의 파일과 같은 이름의 파일이 있어요: {}. 이름이 같아도 내용이 다를 수 있으니, 겹치는 파일마다 두 쪽을 견줘 남길 것을 정하거나 한쪽 이름을 바꿔 주세요.",
+                request.to.name(),
+                request.name,
+                listed(&conflicts)
+            ));
+        }
+        if !split.is_empty() {
+            // Each side holds the only copy of different files: clearing
+            // either one loses data.
+            reasons.push(format!(
+                "Transmission 토렌트 {}의 파일이 {}와 {}에 나뉘어 있어요. 두 쪽에 서로 다른 파일이 있으니 어느 쪽도 지우지 말고, 남은 파일을 한쪽으로 모으거나 Transmission에서 그 토렌트의 위치를 한쪽으로 바꿔 주세요.",
+                listed(&split),
+                request.from.name(),
+                request.to.name()
+            ));
+        }
         return Err(format!(
-            "{}의 `{}`에 Transmission 토렌트의 파일과 같은 이름의 파일이 있어서 아무것도 옮기지 않았어요: {}. 한쪽을 정리한 뒤 다시 옮겨 주세요.",
-            request.to.name(),
-            request.name,
-            listed(&conflicts)
+            "아무것도 옮기지 않았어요. {} 그런 뒤 {} 주세요.",
+            reasons.join(" "),
+            again(request.to)
         ));
     }
 
@@ -751,13 +790,48 @@ fn present(dir: &Path, name: &str) -> Option<PathBuf> {
         .find(|path| fs::symlink_metadata(path).is_ok())
 }
 
+/// Whether the files of `place` lie partly in its folder `from` and partly
+/// at the destination (`at_destination`), with no name on both sides and
+/// each one at the destination looking like the torrent's own
+/// ([`own_file`]), as a move of the torrent's data stopped halfway leaves
+/// them. Each side then holds the only copy of its files.
+fn split_between(
+    place: &TorrentPlace,
+    from: &Path,
+    at_destination: &[(&TorrentFile, PathBuf)],
+) -> bool {
+    let at_source: Vec<&TorrentFile> = place
+        .files
+        .iter()
+        .filter(|file| present(from, &file.name).is_some())
+        .collect();
+    !at_source.is_empty()
+        && at_source.iter().all(|file| {
+            at_destination
+                .iter()
+                .all(|(there, _)| there.name != file.name)
+        })
+        && at_destination
+            .iter()
+            .all(|(file, there)| own_file(file, there))
+}
+
+/// Whether `there` looks like the torrent's own `file`: a plain file under
+/// its own name, complete, with the torrent's size for it.
+fn own_file(file: &TorrentFile, there: &Path) -> bool {
+    file.complete
+        && there.file_name() == Path::new(&file.name).file_name()
+        && fs::symlink_metadata(there).is_ok_and(|meta| {
+            meta.is_file() && i64::try_from(meta.len()).is_ok_and(|len| len == file.length)
+        })
+}
+
 /// Whether the files of `place` found at the destination (`at_destination`)
 /// are the torrent's own data, moved there by an earlier start or by hand, so
 /// that pointing the torrent there overwrites nothing. Only when none of its
 /// files is left in its folder `from` (by name or `.part` name) and each one
-/// at the destination is a plain file under the torrent's own name, complete,
-/// with the torrent's size for it. Anything else may be another file that
-/// only shares the name.
+/// at the destination looks like the torrent's own ([`own_file`]). Anything
+/// else may be another file that only shares the name.
 fn own_data_at_destination(
     place: &TorrentPlace,
     from: &Path,
@@ -768,13 +842,9 @@ fn own_data_at_destination(
         .iter()
         .all(|file| present(from, &file.name).is_none());
     none_left
-        && at_destination.iter().all(|(file, there)| {
-            file.complete
-                && there.file_name() == Path::new(&file.name).file_name()
-                && fs::symlink_metadata(there).is_ok_and(|meta| {
-                    meta.is_file() && i64::try_from(meta.len()).is_ok_and(|len| len == file.length)
-                })
-        })
+        && at_destination
+            .iter()
+            .all(|(file, there)| own_file(file, there))
 }
 
 /// Step 2: asks Transmission to move `moves` and waits until it reports each
@@ -907,9 +977,10 @@ pub fn move_entries(
         return Ok(merge.renamed);
     }
     Err(MoveError::Failed(format!(
-        "옮기는 사이 {}에 같은 이름의 파일이 생겨서 {}는 옮기지 않았어요. 한쪽을 정리한 뒤 다시 옮겨 주세요.",
+        "옮기는 사이 {}에 같은 이름의 파일이 생겨서 {}는 옮기지 않았어요. {}",
         to.name(),
-        listed(&merge.left)
+        listed(&merge.left),
+        compare_then_again(to)
     )))
 }
 

@@ -52,6 +52,16 @@ fn archive_request(f: &Folders, name: &str) -> Request {
     }
 }
 
+fn restore_request(f: &Folders, name: &str) -> Request {
+    Request {
+        from_root: f.archive.clone(),
+        from: Side::Archive,
+        to_root: f.collect.clone(),
+        to: Side::Collect,
+        name: name.to_owned(),
+    }
+}
+
 /// Every file below `root`, relative, sorted.
 fn files(root: &Path) -> Vec<String> {
     fn walk(dir: &Path, root: &Path, out: &mut Vec<String>) {
@@ -130,6 +140,8 @@ fn the_checks_list_every_file_on_both_sides_and_let_shared_directories_merge() {
     assert!(err.contains("`Season 02/e02.mkv`"), "{err}");
     assert!(err.contains("보관 폴더의 `Clevatess`"), "{err}");
     assert!(err.contains("아무것도 옮기지 않았어요"), "{err}");
+    assert!(err.contains("두 쪽을 견줘"), "{err}");
+    assert!(!err.contains("정리"), "{err}");
 
     // A file where the other side has a directory is a conflict too.
     let f = folders();
@@ -323,6 +335,8 @@ fn a_file_that_appeared_at_the_destination_is_left_at_the_source_and_named() {
         panic!("not refused");
     };
     assert!(err.contains("`S/e01.mkv`"), "{err}");
+    assert!(err.contains("두 쪽을 견줘"), "{err}");
+    assert!(!err.contains("정리"), "{err}");
     assert_eq!(
         fs::read_to_string(f.archive.join("X/S/e01.mkv")).unwrap(),
         "theirs"
@@ -507,21 +521,85 @@ fn a_torrent_file_the_destination_has_refuses_the_move_unless_it_is_only_there()
     let err = plan_torrents(&request, &[place("d", "e04.mkv", &from)]).unwrap_err();
     assert!(err.contains("`S/e04.mkv`"), "{err}");
 
-    // So is anything while a file of the torrent is still at its folder.
-    let mut two = place("e", "e03.mkv", &from);
-    two.files.push(crate::transmission::TorrentFile {
+    // Anything is refused while a file of the torrent is still at its
+    // folder; one with its name on both sides is named as a conflict.
+    let mut both = place("e", "e03.mkv", &from);
+    both.files.push(crate::transmission::TorrentFile {
         name: "e05.mkv".into(),
         length: 5,
         complete: true,
     });
-    write(&from.join("e05.mkv"), "still");
-    let err = plan_torrents(&request, &[two]).unwrap_err();
+    write(&from.join("e03.mkv"), "still");
+    let err = plan_torrents(&request, &[both]).unwrap_err();
     assert!(err.contains("`S/e03.mkv`"), "{err}");
+    assert!(err.contains("견줘"), "{err}");
+    assert!(!err.contains("나뉘어"), "{err}");
+    fs::remove_file(from.join("e03.mkv")).unwrap();
 
     // And only its `.part` name at the destination.
     write(&to.join("e06.mkv.part"), "moved");
     let err = plan_torrents(&request, &[place("f", "e06.mkv", &from)]).unwrap_err();
     assert!(err.contains("`S/e06.mkv.part`"), "{err}");
+}
+
+fn two_files(hash: &str, name: &str, dir: &Path, files: [&str; 2]) -> TorrentPlace {
+    TorrentPlace {
+        files: files
+            .into_iter()
+            .map(|name| crate::transmission::TorrentFile {
+                name: name.into(),
+                length: 5,
+                complete: true,
+            })
+            .collect(),
+        ..place(hash, name, dir)
+    }
+}
+
+#[test]
+fn a_torrent_split_between_the_two_folders_is_named_without_asking_to_clear_a_side() {
+    // Some of its files still in its folder, the rest at the destination,
+    // no name on both sides: each side holds the only copy of its files.
+    let f = folders();
+    let (from, to) = (f.collect.join("X/S"), f.archive.join("X/S"));
+    write(&from.join("e04.mkv"), "still");
+    write(&to.join("e05.mkv"), "moved");
+    let split = two_files("a", "Pack", &from, ["e04.mkv", "e05.mkv"]);
+    let err = plan_torrents(&archive_request(&f, "X"), &[split]).unwrap_err();
+    assert!(err.contains("`Pack`"), "{err}");
+    assert!(err.contains("수집 폴더와 보관 폴더에 나뉘어"), "{err}");
+    assert!(err.contains("어느 쪽도 지우지 말고"), "{err}");
+    assert!(err.contains("`다시 옮기기`를 눌러"), "{err}");
+    assert!(!err.contains("정리"), "{err}");
+    assert!(!err.contains("`S/e05.mkv`"), "{err}");
+
+    // Toward the collect folder, the retry is `복원`.
+    let f = folders();
+    let (from, to) = (f.archive.join("X/S"), f.collect.join("X/S"));
+    write(&from.join("e04.mkv"), "still");
+    write(&to.join("e05.mkv"), "moved");
+    let split = two_files("a", "Pack", &from, ["e04.mkv", "e05.mkv"]);
+    let err = plan_torrents(&restore_request(&f, "X"), std::slice::from_ref(&split)).unwrap_err();
+    assert!(err.contains("보관 폴더와 수집 폴더에 나뉘어"), "{err}");
+    assert!(err.contains("다시 `복원`해"), "{err}");
+
+    // A file at the destination that is not the torrent's size is another
+    // file: named as a conflict, with the split torrent beside it.
+    write(&to.join("e05.mkv"), "a different file");
+    let err = plan_torrents(&restore_request(&f, "X"), &[split]).unwrap_err();
+    assert!(err.contains("`S/e05.mkv`"), "{err}");
+    assert!(!err.contains("나뉘어"), "{err}");
+
+    // A conflict and a split torrent together: both are told.
+    write(&to.join("e05.mkv"), "moved");
+    write(&to.join("e07.mkv"), "theirs!");
+    let other = place("b", "e07.mkv", &from);
+    write(&from.join("e07.mkv"), "mine!");
+    let split = two_files("a", "Pack", &from, ["e04.mkv", "e05.mkv"]);
+    let err = plan_torrents(&restore_request(&f, "X"), &[split, other]).unwrap_err();
+    assert!(err.contains("`S/e07.mkv`"), "{err}");
+    assert!(err.contains("`Pack`"), "{err}");
+    assert!(err.contains("나뉘어"), "{err}");
 }
 
 /// A disk whose renames fail with `errno` for paths under `under`.

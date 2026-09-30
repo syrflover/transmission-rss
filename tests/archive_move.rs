@@ -455,6 +455,9 @@ async fn the_same_file_on_both_sides_moves_nothing_and_moving_again_works_once_c
         "{reason}"
     );
     assert!(reason.contains("아무것도 옮기지 않았어요"), "{reason}");
+    // The two copies may differ: it asks to compare, never to clear a side.
+    assert!(reason.contains("두 쪽을 견줘"), "{reason}");
+    assert!(!reason.contains("정리"), "{reason}");
     // The rule is archived, and nothing moved, on disk or in Transmission.
     let view = s.rule(&rule.id).await;
     assert_eq!(view["state"], "archived");
@@ -1283,6 +1286,57 @@ async fn a_torrent_whose_files_were_all_moved_by_hand_is_pointed_at_them() {
         fs::read_to_string(s.archive.join("Clevatess/Season 02/Pack/e05.mkv")).unwrap(),
         "episode 5"
     );
+}
+
+#[tokio::test]
+async fn a_torrent_split_between_the_two_folders_stops_the_move_without_asking_to_clear_a_side() {
+    let s = Scene::new(true).await;
+    let c = s
+        .channel("feed-a", &[("Clevatess", "Clevatess/Season 02")])
+        .await;
+    // Transmission was stopped halfway through moving the torrent's data:
+    // one file is at the archive, the other still at the collect folder,
+    // each the only copy.
+    write(
+        &s.collect.join("Clevatess/Season 02/Pack/e04.mkv"),
+        "episode 4",
+    );
+    write(
+        &s.archive.join("Clevatess/Season 02/Pack/e05.mkv"),
+        "episode 5",
+    );
+    s.h.tr.preload(
+        FakeTorrent::new(&hash(1), "Pack")
+            .in_dir(s.collect.join("Clevatess/Season 02"))
+            .files(&["Pack/e04.mkv", "Pack/e05.mkv"])
+            .file_length(9)
+            .status(0),
+    );
+    let (collect_before, archive_before) = (files(&s.collect), files(&s.archive));
+
+    s.send("archive-split-01", &c.rules[0].id, "archive").await;
+    s.run().await;
+
+    let command = s.command("archive-split-01").await;
+    assert_eq!(command["state"], "failed", "{command}");
+    let reason = command["outcome"]["reason"].as_str().unwrap();
+    assert!(reason.contains("아무것도 옮기지 않았어요"), "{reason}");
+    assert!(reason.contains("`Pack`"), "{reason}");
+    assert!(
+        reason.contains("수집 폴더와 보관 폴더에 나뉘어"),
+        "{reason}"
+    );
+    assert!(reason.contains("어느 쪽도 지우지 말고"), "{reason}");
+    assert!(reason.contains("남은 파일을 한쪽으로 모으거나"), "{reason}");
+    assert!(
+        reason.contains("Transmission에서 그 토렌트의 위치를"),
+        "{reason}"
+    );
+    assert!(reason.contains("`다시 옮기기`를 눌러"), "{reason}");
+    assert!(!reason.contains("정리"), "{reason}");
+    assert_eq!(files(&s.collect), collect_before);
+    assert_eq!(files(&s.archive), archive_before);
+    assert!(s.h.tr.calls_of("torrent-set-location").is_empty());
 }
 
 #[tokio::test]
