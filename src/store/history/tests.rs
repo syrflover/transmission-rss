@@ -250,6 +250,49 @@ async fn seeing_an_item_again_adds_no_record_and_keeps_the_first_seen_time() {
 }
 
 #[tokio::test]
+async fn torrent_hashes_are_looked_up_by_channel() {
+    let (_dir, _db, history) = store().await;
+    let other = |key: &str, hash: Option<&str>| Observation {
+        channel_id: "c2".into(),
+        torrent_hash: hash.map(str::to_owned),
+        ..obs(key, HistoryResult::Received)
+    };
+    history
+        .record(
+            1,
+            vec![
+                received("a", "r1", "hash-a"),
+                received("b", "r1", "hash-b"),
+                obs("c", HistoryResult::NoMatch), // no torrent
+                other("d", Some("hash-d")),
+                other("e", Some("hash-a")), // the same torrent seen through another channel
+            ],
+        )
+        .await
+        .unwrap();
+
+    let hashes = |ids: &[&str]| {
+        let history = history.clone();
+        let ids: Vec<String> = ids.iter().map(|s| s.to_string()).collect();
+        async move {
+            let mut hashes: Vec<_> = history
+                .torrent_hashes_of_channels(ids)
+                .await
+                .unwrap()
+                .into_iter()
+                .collect();
+            hashes.sort();
+            hashes
+        }
+    };
+    assert_eq!(hashes(&["c1"]).await, ["hash-a", "hash-b"]);
+    assert_eq!(hashes(&["c2"]).await, ["hash-a", "hash-d"]);
+    assert_eq!(hashes(&["c1", "c2"]).await, ["hash-a", "hash-b", "hash-d"]);
+    assert!(hashes(&["nobody"]).await.is_empty());
+    assert!(hashes(&[]).await.is_empty());
+}
+
+#[tokio::test]
 async fn the_same_key_in_two_channels_is_two_items() {
     let (_dir, _db, history) = store().await;
     let mut other = obs("a", HistoryResult::NoMatch);

@@ -174,6 +174,8 @@ pub async fn run_cycle(
 
     // Judge the items; record what needs no Transmission and collect the rest.
     let mut jobs: Vec<Job> = Vec::new();
+    // Channels whose feed was not read, for the cleanup of departed torrents.
+    let mut unread_channels: Vec<String> = Vec::new();
 
     for (plan, read) in plans.iter().zip(fetched) {
         let channel = &plan.channel;
@@ -188,9 +190,13 @@ pub async fn run_cycle(
             Some(Err(reason)) => {
                 println!("Failed {label}: {reason}");
                 report.channels_failed += 1;
+                unread_channels.push(channel.id.clone());
                 continue;
             }
-            None => continue,
+            None => {
+                unread_channels.push(channel.id.clone());
+                continue;
+            }
         };
 
         let mut skipped = Vec::new();
@@ -272,9 +278,16 @@ pub async fn run_cycle(
         return Ok(report);
     }
 
-    // Remove bot-labelled torrents whose item is no longer in any feed. With no
-    // feed read at all there is nothing to judge that against (a channel-less
-    // database, or every feed down), so nothing is removed.
+    // Remove bot-labelled torrents whose item is no longer in any feed. A torrent
+    // can only be called departed by a feed that was read, so:
+    //
+    // - With no feed read at all there is nothing to judge that against (a
+    //   channel-less database, or every feed down): nothing is removed.
+    // - A torrent that history records as coming from a channel whose feed was
+    //   not read this cycle stays: that feed may have dropped it, or may just
+    //   have been down.
+    // - A torrent with no history link (for example one the legacy cron added
+    //   before the switch) has no channel to wait for and follows the plain rule.
     //
     // Nor is anything removed when an item's task ended abnormally: it may have
     // handed a torrent to Transmission before it failed, and the cycle would not
@@ -288,9 +301,23 @@ pub async fn run_cycle(
              leaving Transmission's torrents alone this cycle"
         );
     } else if report.channels_read > 0 {
-        let mut transmission = ctx.transmission();
-        report.removed =
-            remove_stale(&mut transmission, |hash| kept.contains(hash), &redactor).await;
+        let mut kept = kept;
+        match ctx
+            .history
+            .torrent_hashes_of_channels(unread_channels)
+            .await
+        {
+            Ok(hashes) => {
+                kept.extend(hashes);
+                let mut transmission = ctx.transmission();
+                report.removed =
+                    remove_stale(&mut transmission, |hash| kept.contains(hash), &redactor).await;
+            }
+            Err(err) => eprintln!(
+                "Cannot tell which torrents came from unread channels ({err}); \
+                 leaving Transmission's torrents alone this cycle"
+            ),
+        }
     } else if report.channels > 0 {
         println!("No feed could be read; leaving Transmission's torrents alone");
     }

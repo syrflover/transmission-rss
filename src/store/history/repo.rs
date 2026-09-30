@@ -227,6 +227,25 @@ pub fn changes(conn: &Connection, item_id: i64) -> Result<Vec<HistoryChange>> {
     Ok(rows)
 }
 
+/// The torrent hashes recorded for the items of the given channels.
+pub fn torrent_hashes_of_channels(
+    conn: &Connection,
+    channel_ids: &[String],
+) -> Result<Vec<String>> {
+    if channel_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let placeholders = vec!["?"; channel_ids.len()].join(", ");
+    let mut stmt = conn.prepare(&format!(
+        "SELECT DISTINCT torrent_hash FROM history_items
+         WHERE torrent_hash IS NOT NULL AND channel_id IN ({placeholders})"
+    ))?;
+    let hashes = stmt
+        .query_map(params_from_iter(channel_ids), |row| row.get(0))?
+        .collect::<rusqlite::Result<Vec<String>>>()?;
+    Ok(hashes)
+}
+
 /// Marks a cycle as started unless the previous one started less than
 /// `min_gap` ago. The check and the mark are one write transaction.
 pub fn try_begin_cycle(conn: &mut Connection, now: Millis, min_gap: Millis) -> Result<bool> {

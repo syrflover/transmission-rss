@@ -42,6 +42,8 @@ pub use model::{
     HistoryResult, Millis, Observation, Recorded, Transition, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE,
 };
 
+use std::collections::HashSet;
+
 use super::db::{Db, DbError};
 
 #[derive(Debug, thiserror::Error)]
@@ -92,6 +94,18 @@ impl HistoryStore {
     /// The changes of an item's result, oldest first.
     pub async fn changes(&self, item_id: i64) -> Result<Vec<HistoryChange>, HistoryError> {
         self.db.run(move |c| repo::changes(c, item_id)).await
+    }
+
+    /// The torrent hashes recorded for items of the given channels (received or
+    /// found already in Transmission), which tells where a torrent came from.
+    pub async fn torrent_hashes_of_channels(
+        &self,
+        channel_ids: Vec<String>,
+    ) -> Result<HashSet<String>, HistoryError> {
+        self.db
+            .run(move |c| repo::torrent_hashes_of_channels(c, &channel_ids))
+            .await
+            .map(|hashes| hashes.into_iter().collect())
     }
 
     /// Marks a collection cycle as started at `now`, unless the previous cycle

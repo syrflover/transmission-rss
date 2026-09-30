@@ -402,6 +402,155 @@ async fn item_tasks_stop_when_the_cycle_is_dropped() {
     assert!(items.iter().all(|i| i.torrent_hash.is_none()));
 }
 
+// --- cleanup of departed torrents and unread channels -----------------------------------
+
+/// A feed of the given items, each a release name and the digit its torrent
+/// hash is made of.
+fn feed_of(items: &[(&str, char)]) -> String {
+    let items: String = items
+        .iter()
+        .map(|(name, digit)| {
+            format!(
+                "<item><title>{name}.mkv</title>\
+                 <link>magnet:?xt=urn:btih:{}&amp;dn={name}.mkv</link>\
+                 <guid>{name}-{digit}</guid></item>",
+                digit.to_string().repeat(40)
+            )
+        })
+        .collect();
+    format!(
+        r#"<?xml version="1.0"?><rss version="2.0"><channel><title>t</title>
+        <link>http://x/</link><description>d</description>{items}</channel></rss>"#
+    )
+}
+
+fn hash_of(digit: char) -> String {
+    digit.to_string().repeat(40)
+}
+
+fn torrent_hashes(h: &Harness) -> Vec<String> {
+    let mut hashes: Vec<String> = h.tr.torrents().into_iter().map(|t| t.hash).collect();
+    hashes.sort();
+    hashes
+}
+
+/// Channel X (`feed-x`: two shows) and channel Y (`feed-y`: two shows), one
+/// cycle run so that Transmission holds all four and history knows where each
+/// came from.
+async fn two_channels_with_their_torrents(h: &Harness) -> Worker {
+    h.feeds.set_xml(
+        "feed-x",
+        &feed_of(&[("[G] Show X1 - 01", '1'), ("[G] Show X2 - 01", '2')]),
+    );
+    h.feeds.set_xml(
+        "feed-y",
+        &feed_of(&[("[G] Show Y1 - 01", '3'), ("[G] Show Y2 - 01", '4')]),
+    );
+    h.add_channel(
+        "feed-x",
+        "/media/x",
+        &[],
+        vec![rule("Show X", "X/Season 01")],
+    )
+    .await;
+    h.add_channel(
+        "feed-y",
+        "/media/y",
+        &[],
+        vec![rule("Show Y", "Y/Season 01")],
+    )
+    .await;
+    let worker = h.worker();
+    let report = run(&worker).await;
+    assert_eq!((report.channels_read, report.added), (2, 4));
+    assert_eq!(
+        torrent_hashes(h),
+        [hash_of('1'), hash_of('2'), hash_of('3'), hash_of('4')]
+    );
+    worker
+}
+
+#[tokio::test]
+async fn torrents_of_a_channel_whose_feed_failed_stay_while_the_stale_ones_of_a_read_channel_go() {
+    let h = Harness::new().await;
+    let worker = two_channels_with_their_torrents(&h).await;
+    h.tr.clear_calls();
+
+    // X's feed is down. Y is read, and its second show has left the feed.
+    h.feeds.set_status("feed-x", 503);
+    h.feeds
+        .set_xml("feed-y", &feed_of(&[("[G] Show Y1 - 01", '3')]));
+    h.advance(300_000);
+    let report = run(&worker).await;
+
+    assert_eq!((report.channels_read, report.channels_failed), (1, 1));
+    // X's torrents stay whatever its feed would say; Y's departed one goes.
+    assert_eq!(
+        report
+            .removed
+            .iter()
+            .map(|t| t.hash.as_str())
+            .collect::<Vec<_>>(),
+        [hash_of('4')]
+    );
+    assert_eq!(
+        torrent_hashes(&h),
+        [hash_of('1'), hash_of('2'), hash_of('3')]
+    );
+
+    // Once X's feed is back and no longer lists its second show, that one goes too.
+    h.feeds
+        .set_xml("feed-x", &feed_of(&[("[G] Show X1 - 01", '1')]));
+    h.advance(300_000);
+    let report = run(&worker).await;
+    assert_eq!(report.channels_failed, 0);
+    assert_eq!(torrent_hashes(&h), [hash_of('1'), hash_of('3')]);
+}
+
+#[tokio::test]
+async fn a_torrent_of_unknown_origin_goes_when_any_feed_was_read() {
+    let h = Harness::new().await;
+    let worker = two_channels_with_their_torrents(&h).await;
+    // Added by something else that labels its torrents (the legacy cron before
+    // the switch): history has no record of it.
+    h.tr.preload(FakeTorrent::new(STALE_HASH, "Old Show").bot());
+    h.tr.preload(FakeTorrent::new(
+        "mine0000000000000000000000000000000000bb",
+        "Manual",
+    ));
+
+    h.feeds.set_status("feed-x", 503);
+    h.advance(300_000);
+    let report = run(&worker).await;
+
+    assert_eq!((report.channels_read, report.channels_failed), (1, 1));
+    assert_eq!(
+        report
+            .removed
+            .iter()
+            .map(|t| t.hash.as_str())
+            .collect::<Vec<_>>(),
+        [STALE_HASH],
+        "only the unlabelled-by-history one; X's and Y's torrents and the manual one stay"
+    );
+    assert_eq!(torrent_hashes(&h).len(), 5);
+}
+
+#[tokio::test]
+async fn nothing_is_removed_when_every_feed_failed_even_for_unknown_origin() {
+    let h = Harness::new().await;
+    let worker = two_channels_with_their_torrents(&h).await;
+    h.tr.preload(FakeTorrent::new(STALE_HASH, "Old Show").bot());
+
+    h.feeds.set_status("feed-x", 503);
+    h.feeds.set_status("feed-y", 503);
+    h.advance(300_000);
+    let report = run(&worker).await;
+
+    assert_eq!(report.channels_read, 0);
+    assert!(h.tr.calls_of("torrent-remove").is_empty());
+}
+
 // --- rules ----------------------------------------------------------------------------
 
 #[tokio::test]
