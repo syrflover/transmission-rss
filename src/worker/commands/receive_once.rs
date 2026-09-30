@@ -261,11 +261,15 @@ pub async fn execute(
         Ok(torrent) => {
             // After an earlier start's add got no answer, a bot torrent
             // Transmission has in this command's folder, for an item nothing
-            // else received, is the one that add put in.
+            // else received, is the one that add put in. A rule's cycle that
+            // met that torrent in between recorded it as a `duplicate` with its
+            // hash; it is still this command's.
+            let met_by_a_rule = item.result == HistoryResult::Duplicate
+                && item.torrent_hash.as_deref() == Some(torrent.hash.as_str());
             let own = torrent.kind == AddKind::Added
                 || (command.add_unconfirmed
                     && torrent.bot_labelled
-                    && !item.result.is_settled()
+                    && (!item.result.is_settled() || met_by_a_rule)
                     && torrent.download_dir.as_deref().map(Path::new) == Some(save_path.as_path()));
             let result = if own {
                 HistoryResult::Received

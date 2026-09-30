@@ -1261,6 +1261,45 @@ async fn a_last_start_refused_after_an_unanswered_add_still_holds_the_next_clean
 }
 
 #[tokio::test]
+async fn a_torrent_a_rule_met_between_the_starts_is_still_the_commands_own() {
+    let liar = release("guid-liar-26", 26, LIAR, "");
+    let s = Scene::new(&[&liar], unrelated_rule()).await;
+    let worker = after_an_unanswered_add(&s).await;
+    // A rule that selects the item comes in before the next look, and its cycle
+    // meets the command's torrent as one Transmission already has.
+    s.h.channels
+        .create_rule(
+            &s.channel.channel.id,
+            rule("LIAR GAME", "LIAR GAME/Season 02"),
+        )
+        .await
+        .unwrap();
+    let report = s.cycle().await;
+    assert_eq!(report.duplicates, 1);
+    assert_eq!(
+        s.item("LIAR GAME - 26").await.result,
+        HistoryResult::Duplicate
+    );
+
+    assert_eq!(s.run_commands_with(&worker).await, CommandsOutcome::Ran(1));
+    let (_, view) = s.command(CMD).await;
+    assert_eq!(view["outcome"]["result"], "received", "{view}");
+    assert_eq!(view["outcome"]["reason"], Value::Null, "{view}");
+    let held = s.item("LIAR GAME - 26").await;
+    assert_eq!(held.result, HistoryResult::Received);
+    assert_eq!(held.rule_id, None, "received by hand");
+    let torrent = s.h.tr.torrents().into_iter().next().unwrap();
+    assert_eq!(held.torrent_hash.as_deref(), Some(torrent.hash.as_str()));
+    assert_eq!(torrent.name, "LIAR GAME S01E26.mkv");
+
+    // The rule leaves the hand-received torrent's name alone from now on.
+    s.h.tr.clear_calls();
+    s.cycle().await;
+    assert!(s.h.tr.calls_of("torrent-rename-path").is_empty());
+    assert_eq!(s.h.tr.torrents().len(), 1);
+}
+
+#[tokio::test]
 async fn a_deleted_channel_after_an_unanswered_add_ends_the_command_at_once() {
     let liar = release("guid-liar-26", 26, LIAR, "");
     let s = Scene::new(&[&liar], unrelated_rule()).await;
