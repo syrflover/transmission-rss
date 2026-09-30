@@ -8,11 +8,14 @@
 //!    because the request may be old);
 //! 2. recover the item's original link ([`link::recover`]);
 //! 3. add it to Transmission, save it as the item's result and end the command;
-//! 4. give the file its `trname` name without any episode conversion.
+//! 4. when that add put the torrent in, give the file its `trname` name
+//!    without any episode conversion. A torrent Transmission already had (a
+//!    rule's, or this command's own from a run that died before its result was
+//!    written) is not renamed.
 //!
 //! The result lands on the history item (`received`, `duplicate` or
-//! `add_failed` with a reason) and on the command. Only steps 1 to 3 decide the
-//! result. A rename that does not happen leaves the torrent and its data under
+//! `add_failed` with a reason) and on the command, which reports the item's
+//! result as history holds it afterwards. Only steps 1 to 3 decide the result. A rename that does not happen leaves the torrent and its data under
 //! its own name (a person chose to receive this item, so it is never removed as
 //! the rule path does when `trname` has no name), and the history item gets a
 //! note saying so ([`RenameResult::Kept`]).
@@ -89,7 +92,8 @@ pub fn can_receive(result: HistoryResult) -> bool {
 pub struct Finished {
     pub state: CommandState,
     pub outcome: Outcome,
-    /// Set when Transmission holds the torrent and the file should be renamed.
+    /// Set when this command's add put the torrent in (Transmission did not
+    /// have it), so its file is to be renamed.
     pub rename: Option<Rename>,
 }
 
@@ -187,21 +191,16 @@ pub async fn execute(
                 .await
                 .map_err(Retry::store)?
                 .unwrap_or(result);
-            let reason = (result == HistoryResult::Duplicate)
-                .then(|| "Transmission에 이미 같은 토렌트가 있어서 새로 받지 않았어요.".to_owned());
-            Ok(Finished {
-                state: CommandState::Done,
-                outcome: Outcome {
-                    result: stored.code().to_owned(),
-                    reason,
-                },
-                rename: Some(Rename {
-                    item_id: item.id,
-                    hash: torrent.hash,
-                    save_path,
-                    redactor,
-                }),
-            })
+            // Only a torrent this command put in is renamed. One that was there
+            // already (a rule's, or this command's own from a run that died
+            // before its result was written) keeps its name and gets no note.
+            let rename = (torrent.kind == AddKind::Added).then_some(Rename {
+                item_id: item.id,
+                hash: torrent.hash,
+                save_path,
+                redactor,
+            });
+            Ok(held(stored, rename))
         }
         Err(err) => {
             let reason = add_failure_reason(&err, &redactor);
@@ -211,6 +210,23 @@ pub async fn execute(
             );
             refuse(ctx, &item, &reason, &now).await
         }
+    }
+}
+
+/// Why a command ended `duplicate`.
+const ALREADY_THERE: &str = "Transmission에 이미 같은 토렌트가 있어서 새로 받지 않았어요.";
+
+/// A command that ended with Transmission holding the item's torrent. The
+/// outcome follows `stored`, the item's result in history afterwards, which
+/// may be a rule's `received` rather than what this command's add answered.
+fn held(stored: HistoryResult, rename: Option<Rename>) -> Finished {
+    Finished {
+        state: CommandState::Done,
+        outcome: Outcome {
+            result: stored.code().to_owned(),
+            reason: (stored == HistoryResult::Duplicate).then(|| ALREADY_THERE.to_owned()),
+        },
+        rename,
     }
 }
 

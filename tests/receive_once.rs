@@ -792,6 +792,65 @@ async fn a_rule_with_another_folder_does_not_rename_a_hand_received_file() {
     assert_eq!(s.h.tr.torrents()[0].name, "LIAR GAME S01E26.mkv");
 }
 
+#[tokio::test]
+async fn a_command_that_meets_the_torrent_a_rule_received_after_intake_leaves_it_as_it_is() {
+    let liar = release("guid-liar-26", 26, LIAR, "");
+    let s = Scene::new(&[&liar], unrelated_rule()).await;
+    let item = s.item("LIAR GAME - 26").await;
+    s.post(CMD, &item, "Other Title/Season 03").await;
+    // Before the worker gets to the command, a new rule receives the item.
+    s.h.channels
+        .create_rule(
+            &s.channel.channel.id,
+            rule("LIAR GAME", "LIAR GAME/Season 01"),
+        )
+        .await
+        .unwrap();
+    s.cycle().await;
+    assert_eq!(s.h.tr.torrents()[0].name, "LIAR GAME S01E26.mkv");
+    s.h.tr.clear_calls();
+
+    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
+
+    // The command's add met the rule's torrent: no rename into its folder's name.
+    assert!(s.h.tr.calls_of("torrent-rename-path").is_empty());
+    assert_eq!(s.h.tr.torrents()[0].name, "LIAR GAME S01E26.mkv");
+    // It ends with what the item says, without calling it a duplicate.
+    let (_, view) = s.command(CMD).await;
+    assert_eq!(view["state"], "done");
+    assert_eq!(view["outcome"]["result"], "received");
+    assert_eq!(view["outcome"]["reason"], Value::Null);
+    let received = s.item("LIAR GAME - 26").await;
+    assert_eq!(received.result, HistoryResult::Received);
+    assert!(received.rule_id.is_some(), "still the rule's");
+    assert_eq!(received.reason, None);
+}
+
+#[tokio::test]
+async fn a_command_into_the_base_folder_puts_no_note_on_an_item_a_rule_received() {
+    let liar = release("guid-liar-26", 26, LIAR, "");
+    let s = Scene::new(&[&liar], unrelated_rule()).await;
+    let item = s.item("LIAR GAME - 26").await;
+    s.post(CMD, &item, "").await;
+    s.h.channels
+        .create_rule(
+            &s.channel.channel.id,
+            rule("LIAR GAME", "LIAR GAME/Season 01"),
+        )
+        .await
+        .unwrap();
+    s.cycle().await;
+
+    s.run_commands().await;
+
+    let received = s.item("LIAR GAME - 26").await;
+    assert_eq!(received.result, HistoryResult::Received);
+    assert_eq!(received.reason, None, "the rule's file was named; no note");
+    let (_, view) = s.command(CMD).await;
+    assert_eq!(view["outcome"]["result"], "received");
+    assert_eq!(view["outcome"]["reason"], Value::Null);
+}
+
 // --- restarts, two workers and the lock --------------------------------------------------------
 
 #[tokio::test]
@@ -853,6 +912,9 @@ async fn a_command_whose_torrent_went_in_before_the_worker_died_adds_no_second_t
     let item = s.item("LIAR GAME - 26").await;
     assert_eq!(item.result, HistoryResult::Duplicate);
     assert_eq!(s.command(CMD).await.1["state"], "done");
+    // The rerun did not add the torrent, so it does not rename it either.
+    assert!(s.h.tr.calls_of("torrent-rename-path").is_empty());
+    assert_eq!(item.reason, None);
 }
 
 #[tokio::test]
