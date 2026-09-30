@@ -139,6 +139,15 @@ pub fn has_open(conn: &Connection) -> Result<bool> {
     )?)
 }
 
+pub fn running_count(conn: &Connection) -> Result<usize> {
+    let count: i64 = conn.query_row(
+        "SELECT count(*) FROM commands WHERE state = 'running'",
+        [],
+        |row| row.get(0),
+    )?;
+    Ok(count as usize)
+}
+
 pub fn claim_next(conn: &mut Connection, now: Millis) -> Result<Option<Command>> {
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     loop {

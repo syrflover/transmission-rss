@@ -90,9 +90,22 @@ pub struct CycleReport {
     /// connection failed or timed out rather than Transmission refusing).
     /// Like a panic, the cycle then removes no departed torrents.
     pub adds_unconfirmed: usize,
+    /// Commands left `running` when the cycle started (see
+    /// [`CommandsAtStart::running`]). The cycle then removes no departed torrents.
+    pub commands_running: usize,
     /// The cycle stopped early because the worker is shutting down. What was
     /// done is recorded; the rest waits for the next cycle.
     pub interrupted: bool,
+}
+
+/// What the web commands looked like when the cycle started, as far as they
+/// bear on removing departed torrents.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct CommandsAtStart {
+    /// Commands still `running`. Under the worker lock that is a command a
+    /// worker died in, or stopped to retry later: it may have handed a torrent
+    /// to Transmission without history learning its hash yet.
+    pub running: usize,
 }
 
 /// A selected item on its way to Transmission.
@@ -122,7 +135,8 @@ enum JobOutcome {
     NotStarted,
 }
 
-/// Runs one cycle whose records are stamped `at`.
+/// Runs one cycle whose records are stamped `at`. `commands` is what the
+/// caller found among the web commands before the cycle started.
 ///
 /// The channels and rules are read once, first; edits made while the cycle
 /// runs apply from the next cycle. `cancel` asks the cycle to wind down: no
@@ -132,9 +146,13 @@ enum JobOutcome {
 pub async fn run_cycle(
     ctx: &CycleContext,
     at: Millis,
+    commands: CommandsAtStart,
     cancel: &CancellationToken,
 ) -> Result<CycleReport, CycleError> {
-    let mut report = CycleReport::default();
+    let mut report = CycleReport {
+        commands_running: commands.running,
+        ..CycleReport::default()
+    };
 
     // One consistent snapshot, before anything else.
     let snapshot = ctx.channels.list_channels_with_rules().await?;
@@ -328,6 +346,11 @@ pub async fn run_cycle(
     // before the hash is known, so the whole removal waits for the next cycle,
     // which meets the torrent again and keeps it. An add that timed out or lost
     // its connection is the same case: Transmission may have finished it.
+    //
+    // A command left `running` is that case for a receive-once: its worker may
+    // have died after Transmission took the torrent and before the hash was
+    // written. A restarted worker runs its cycle before it looks for commands,
+    // so the removal waits until the rerun has met the torrent and recorded it.
     if panicked > 0 {
         println!(
             "{panicked} item(s) ended with an internal error; \
@@ -337,6 +360,12 @@ pub async fn run_cycle(
         println!(
             "{unconfirmed} add(s) got no answer from Transmission; \
              leaving Transmission's torrents alone this cycle"
+        );
+    } else if commands.running > 0 {
+        println!(
+            "{} command(s) were left running by an earlier worker; \
+             leaving Transmission's torrents alone this cycle",
+            commands.running
         );
     } else if report.channels_read > 0 {
         let mut kept = kept;

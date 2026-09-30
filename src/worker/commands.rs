@@ -13,10 +13,15 @@
 //! A command claimed by a worker that then died stays `running`; the next
 //! worker to hold the lock claims it again (see [`CommandStore::claim_next`]).
 //! Adding a torrent Transmission already has answers `duplicate`, so running
-//! such a command a second time does not add a second torrent. The one gap is
-//! a process killed after Transmission took the torrent and before the result
-//! was written: the command is then run again and ends as `duplicate` instead
-//! of `received`.
+//! such a command a second time does not add a second torrent.
+//!
+//! A process killed after Transmission took the torrent and before the result
+//! was written leaves a torrent whose hash history does not know. A restarted
+//! worker runs a collection cycle before it looks for commands, and that cycle
+//! would remove the torrent as departed; so a cycle that starts while any
+//! command is `running` removes nothing (see [`super::CommandsAtStart`]). The
+//! rerun then meets the torrent, records its hash and ends the command as
+//! `duplicate`, without renaming the file or noting the item.
 //!
 //! Each command kind has its own module below.
 

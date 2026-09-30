@@ -332,3 +332,24 @@ async fn a_command_survives_reopening_the_database() {
         2
     );
 }
+
+#[tokio::test]
+async fn only_started_and_unended_commands_count_as_running() {
+    let (_dir, _db, commands) = store().await;
+    for (id, subject) in [("cmd-1", "1"), ("cmd-2", "2")] {
+        commands
+            .accept(new(id, r#"{"item_id":1}"#, Some(subject)), 1_000)
+            .await
+            .unwrap();
+    }
+    assert_eq!(commands.running_count().await.unwrap(), 0, "pending");
+
+    let claimed = commands.claim_next(1_100).await.unwrap().unwrap();
+    assert_eq!(commands.running_count().await.unwrap(), 1);
+
+    commands
+        .finish(&claimed.id, CommandState::Done, done(), 1_300)
+        .await
+        .unwrap();
+    assert_eq!(commands.running_count().await.unwrap(), 0, "ended");
+}

@@ -1019,6 +1019,35 @@ async fn a_command_whose_torrent_went_in_before_the_worker_died_adds_no_second_t
 }
 
 #[tokio::test]
+async fn a_cycle_run_while_a_command_is_left_running_removes_nothing() {
+    let liar = release("guid-liar-26", 26, LIAR, "");
+    let s = Scene::new(&[&liar], unrelated_rule()).await;
+    let item = s.item("LIAR GAME - 26").await;
+    s.post(CMD, &item, "LIAR GAME/Season 01").await;
+    let store = CommandStore::new(s.h.db.clone());
+    store.claim_next(s.h.now()).await.unwrap().unwrap();
+    // Transmission took the torrent, then the worker died before writing the
+    // result: history knows no hash for it, and no rule selects the item.
+    s.h.tr.preload(FakeTorrent::new(&hash(26), LIAR).bot());
+
+    // A restarted worker runs its cycle before it looks for commands.
+    let report = s.cycle().await;
+
+    assert_eq!(report.commands_running, 1);
+    assert!(report.removed.is_empty(), "{:?}", report.removed);
+    assert!(s.h.tr.calls_of("torrent-remove").is_empty());
+    assert_eq!(s.h.tr.torrents().len(), 1);
+
+    // The rerun meets the torrent and records its hash, so later cycles keep it.
+    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
+    assert_eq!(s.command(CMD).await.1["outcome"]["result"], "duplicate");
+    let report = s.cycle().await;
+    assert_eq!(report.commands_running, 0);
+    assert!(report.removed.is_empty(), "{:?}", report.removed);
+    assert_eq!(s.h.tr.torrents().len(), 1);
+}
+
+#[tokio::test]
 async fn two_workers_never_run_one_command_twice() {
     let liar = release("guid-liar-26", 26, LIAR, "");
     let s = Scene::new(&[&liar], unrelated_rule()).await;

@@ -207,6 +207,13 @@ impl CommandStore {
         self.db.run(|c| repo::has_open(c)).await
     }
 
+    /// How many commands are `running`. Asked while holding the worker lock,
+    /// these are commands a worker started and did not end: it died in them,
+    /// or stopped them to retry later.
+    pub async fn running_count(&self) -> Result<usize, CommandError> {
+        self.db.run(|c| repo::running_count(c)).await
+    }
+
     /// Hands out the oldest open command to run and marks it `running`, one
     /// more attempt. Call it only while holding the worker lock (see the module
     /// docs). A command already started [`MAX_ATTEMPTS`] times is failed on the

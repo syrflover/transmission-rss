@@ -67,7 +67,7 @@ use std::{
 use tokio_util::sync::CancellationToken;
 
 pub use commands::{CommandsOutcome, DEFAULT_COMMAND_POLL};
-pub use cycle::{run_cycle, CycleContext, CycleError, CycleReport};
+pub use cycle::{run_cycle, CommandsAtStart, CycleContext, CycleError, CycleReport};
 pub use env::{EnvError, WorkerEnv};
 pub use lock::{lock_path_for, CycleLock};
 
@@ -222,13 +222,18 @@ impl Worker {
             return Ok(TickOutcome::Busy);
         };
 
+        // Read under the lock, before the cycle starts: no command runs meanwhile.
+        let commands = CommandsAtStart {
+            running: self.commands.running_count().await?,
+        };
+
         let started = (self.clock)();
         let min_gap = i64::try_from(self.min_gap.as_millis()).unwrap_or(i64::MAX);
         if !self.ctx.history.try_begin_cycle(started, min_gap).await? {
             return Ok(TickOutcome::TooSoon);
         }
 
-        let report = run_cycle(&self.ctx, started, cancel).await?;
+        let report = run_cycle(&self.ctx, started, commands, cancel).await?;
 
         // An interrupted cycle stays unfinished in the marker.
         if !report.interrupted {
