@@ -165,6 +165,14 @@ pub fn list(conn: &Connection, query: &HistoryQuery) -> Result<HistoryPage> {
         args.push(result.code().to_owned().into());
         sql.push_str(&format!(" AND result = ?{}", args.len()));
     }
+    if !query.results.is_empty() {
+        let mut marks = Vec::new();
+        for result in &query.results {
+            args.push(result.code().to_owned().into());
+            marks.push(format!("?{}", args.len()));
+        }
+        sql.push_str(&format!(" AND result IN ({})", marks.join(", ")));
+    }
     if let Some(channel_id) = &query.channel_id {
         args.push(channel_id.clone().into());
         sql.push_str(&format!(" AND channel_id = ?{}", args.len()));
@@ -276,6 +284,145 @@ pub fn finish_cycle(conn: &Connection, now: Millis) -> Result<()> {
         [now],
     )?;
     Ok(())
+}
+
+pub fn get(conn: &Connection, id: i64) -> Result<Option<HistoryItem>> {
+    Ok(conn
+        .query_row(
+            &format!("SELECT {ITEM_COLUMNS} FROM history_items WHERE id = ?1"),
+            [id],
+            item_from_row,
+        )
+        .optional()?)
+}
+
+/// How many items have each result, optionally within one channel.
+pub fn counts(conn: &Connection, channel_id: Option<&str>) -> Result<Vec<(HistoryResult, i64)>> {
+    let mut stmt = conn.prepare(
+        "SELECT result, count(*) FROM history_items
+         WHERE (?1 IS NULL OR channel_id = ?1) GROUP BY result",
+    )?;
+    let rows = stmt
+        .query_map([channel_id], |row| {
+            let code: String = row.get(0)?;
+            Ok((parse_result(0, &code)?, row.get::<_, i64>(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+/// Sets the note of a `received` item that has none (its `reason` column);
+/// any other item is left alone. Returns whether a note was written.
+pub fn note_received(conn: &Connection, item_id: i64, note: &str) -> Result<bool> {
+    let changed = conn.execute(
+        "UPDATE history_items SET reason = ?2
+         WHERE id = ?1 AND result = 'received' AND reason IS NULL",
+        params![item_id, note],
+    )?;
+    Ok(changed > 0)
+}
+
+/// The torrent hashes of the items among the given `(channel_id,
+/// identity_key)` pairs that Transmission holds a torrent for (`received` or
+/// `duplicate`).
+pub fn held_hashes_of_items(conn: &Connection, items: &[(String, String)]) -> Result<Vec<String>> {
+    // Keeps the number of bound values well under SQLite's limit.
+    const CHUNK: usize = 400;
+
+    let mut by_channel: std::collections::BTreeMap<&str, Vec<&str>> = Default::default();
+    for (channel_id, key) in items {
+        by_channel.entry(channel_id).or_default().push(key);
+    }
+
+    let mut hashes = Vec::new();
+    for (channel_id, keys) in by_channel {
+        for chunk in keys.chunks(CHUNK) {
+            let placeholders = vec!["?"; chunk.len()].join(", ");
+            let mut stmt = conn.prepare(&format!(
+                "SELECT DISTINCT torrent_hash FROM history_items
+                 WHERE result IN ('received', 'duplicate') AND torrent_hash IS NOT NULL
+                   AND channel_id = ? AND identity_key IN ({placeholders})"
+            ))?;
+            let args = std::iter::once(channel_id).chain(chunk.iter().copied());
+            let found = stmt
+                .query_map(params_from_iter(args), |row| row.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            hashes.extend(found);
+        }
+    }
+    Ok(hashes)
+}
+
+/// Sets an item's result from something done to it outside a collection cycle
+/// (a command from the web), by the same transition rules as [`record`]. The
+/// item was not seen in a feed, so `last_seen_at`, the title and the link stay.
+/// Returns the item's result afterwards, or `None` when there is no such item.
+pub fn record_outcome(
+    conn: &mut Connection,
+    item_id: i64,
+    at: Millis,
+    result: HistoryResult,
+    reason: Option<&str>,
+    torrent_hash: Option<&str>,
+) -> Result<Option<HistoryResult>> {
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let stored: Option<String> = tx
+        .query_row(
+            "SELECT result FROM history_items WHERE id = ?1",
+            [item_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(code) = stored else {
+        return Ok(None);
+    };
+    let stored_result = parse_result(0, &code)?;
+
+    let after = match Transition::between(stored_result, result) {
+        Transition::Keep => {
+            if torrent_hash.is_some() && stored_result.is_settled() {
+                tx.execute(
+                    "UPDATE history_items SET torrent_hash = ?2
+                     WHERE id = ?1 AND torrent_hash IS NULL",
+                    params![item_id, torrent_hash],
+                )?;
+            }
+            stored_result
+        }
+        Transition::Refresh => {
+            tx.execute(
+                "UPDATE history_items SET rule_id = NULL, reason = ?2 WHERE id = ?1",
+                params![item_id, reason],
+            )?;
+            stored_result
+        }
+        Transition::Change => {
+            tx.execute(
+                "UPDATE history_items
+                 SET result = ?2, result_at = ?3, rule_id = NULL, reason = ?4,
+                     torrent_hash = COALESCE(?5, torrent_hash)
+                 WHERE id = ?1",
+                params![item_id, result.code(), at, reason, torrent_hash],
+            )?;
+            tx.execute(
+                "INSERT INTO history_changes
+                     (item_id, changed_at, from_result, to_result, rule_id, reason, torrent_hash)
+                 VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6)",
+                params![
+                    item_id,
+                    at,
+                    stored_result.code(),
+                    result.code(),
+                    reason,
+                    torrent_hash
+                ],
+            )?;
+            result
+        }
+    };
+
+    tx.commit()?;
+    Ok(Some(after))
 }
 
 pub fn last_cycle(conn: &Connection) -> Result<Option<CycleState>> {

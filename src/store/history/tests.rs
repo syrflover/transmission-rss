@@ -821,3 +821,335 @@ async fn migration_adds_history_to_a_database_that_only_has_channels() {
         .unwrap();
     assert_eq!(all(&history).await.len(), 1);
 }
+
+// --- reads for the screen and the cycle ------------------------------------------------
+
+#[tokio::test]
+async fn an_item_is_read_by_its_id() {
+    let (_dir, _db, history) = store().await;
+    history
+        .record(1_000, vec![obs("a", HistoryResult::NoMatch)])
+        .await
+        .unwrap();
+    let stored = all(&history).await.remove(0);
+
+    assert_eq!(history.get(stored.id).await.unwrap(), Some(stored));
+    assert_eq!(history.get(9_999).await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn the_list_can_be_limited_to_several_results_at_once() {
+    let (_dir, _db, history) = store().await;
+    for (n, result) in [
+        HistoryResult::Received,
+        HistoryResult::NoMatch,
+        HistoryResult::Duplicate,
+        HistoryResult::AddFailed,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        history
+            .record(1_000 + n as i64, vec![obs(&format!("k{n}"), result)])
+            .await
+            .unwrap();
+    }
+
+    let list = |results: Vec<HistoryResult>| {
+        let history = history.clone();
+        async move {
+            history
+                .list(HistoryQuery {
+                    results,
+                    ..Default::default()
+                })
+                .await
+                .unwrap()
+                .items
+                .into_iter()
+                .map(|i| i.result)
+                .collect::<Vec<_>>()
+        }
+    };
+
+    assert_eq!(
+        list(vec![HistoryResult::AddFailed, HistoryResult::Duplicate]).await,
+        [HistoryResult::AddFailed, HistoryResult::Duplicate]
+    );
+    assert_eq!(
+        list(vec![HistoryResult::Received]).await,
+        [HistoryResult::Received]
+    );
+    assert_eq!(list(vec![]).await.len(), 4);
+    // Together with the single-result filter, both must hold.
+    let both = history
+        .list(HistoryQuery {
+            result: Some(HistoryResult::Received),
+            results: vec![HistoryResult::AddFailed],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(both.items.is_empty());
+}
+
+#[tokio::test]
+async fn counts_are_per_result_and_can_be_limited_to_a_channel() {
+    let (_dir, _db, history) = store().await;
+    let mut other = obs("x", HistoryResult::NoMatch);
+    other.channel_id = "c2".into();
+    history
+        .record(
+            1_000,
+            vec![
+                obs("a", HistoryResult::NoMatch),
+                obs("b", HistoryResult::NoMatch),
+                obs("c", HistoryResult::AddFailed),
+                other,
+            ],
+        )
+        .await
+        .unwrap();
+
+    let mut everything = history.counts(None).await.unwrap();
+    everything.sort_by_key(|(result, _)| result.code());
+    assert_eq!(
+        everything,
+        [(HistoryResult::AddFailed, 1), (HistoryResult::NoMatch, 3)]
+    );
+    let mut c1 = history.counts(Some("c1".into())).await.unwrap();
+    c1.sort_by_key(|(result, _)| result.code());
+    assert_eq!(
+        c1,
+        [(HistoryResult::AddFailed, 1), (HistoryResult::NoMatch, 2)]
+    );
+    assert!(history
+        .counts(Some("nope".into()))
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+async fn held_hashes_are_those_of_received_or_duplicate_items_among_the_given_ones() {
+    let (_dir, _db, history) = store().await;
+    let mut other_channel = received("k1", "r1", "hash-elsewhere");
+    other_channel.channel_id = "c2".into();
+    history
+        .record(
+            1_000,
+            vec![
+                received("k1", "r1", "hash-1"),
+                Observation {
+                    torrent_hash: Some("hash-2".into()),
+                    ..obs("k2", HistoryResult::Duplicate)
+                },
+                obs("k3", HistoryResult::NoMatch),
+                Observation {
+                    torrent_hash: Some("hash-4".into()),
+                    ..obs("k4", HistoryResult::AddFailed)
+                },
+                received("k5", "r1", "hash-5"),
+                other_channel,
+            ],
+        )
+        .await
+        .unwrap();
+
+    let wanted = |keys: &[&str]| -> Vec<(String, String)> {
+        keys.iter()
+            .map(|k| ("c1".to_owned(), (*k).to_owned()))
+            .collect()
+    };
+    let held = history
+        .held_hashes_of_items(wanted(&["k1", "k2", "k3", "k4", "k6"]))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        held,
+        ["hash-1", "hash-2"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
+    );
+    assert!(history
+        .held_hashes_of_items(vec![])
+        .await
+        .unwrap()
+        .is_empty());
+
+    // Many items at once (more than one query holds).
+    let many: Vec<(String, String)> = (0..1_000)
+        .map(|n| ("c1".to_owned(), format!("absent-{n}")))
+        .chain(wanted(&["k5"]))
+        .collect();
+    assert_eq!(
+        history.held_hashes_of_items(many).await.unwrap(),
+        ["hash-5"].into_iter().map(str::to_owned).collect()
+    );
+}
+
+// --- results set from outside a cycle --------------------------------------------------
+
+#[tokio::test]
+async fn an_outcome_changes_the_result_and_the_trail_but_not_when_the_item_was_seen() {
+    let (_dir, _db, history) = store().await;
+    history
+        .record(1_000, vec![obs("a", HistoryResult::NoMatch)])
+        .await
+        .unwrap();
+    history
+        .record(2_000, vec![obs("a", HistoryResult::NoMatch)])
+        .await
+        .unwrap();
+    let before = all(&history).await.remove(0);
+    assert_eq!((before.first_seen_at, before.last_seen_at), (1_000, 2_000));
+
+    let after = history
+        .record_outcome(
+            before.id,
+            9_000,
+            HistoryResult::Received,
+            None,
+            Some("hash-1".into()),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(after, Some(HistoryResult::Received));
+    let item = history.get(before.id).await.unwrap().unwrap();
+    assert_eq!(item.result, HistoryResult::Received);
+    assert_eq!((item.result_at, item.last_seen_at), (9_000, 2_000));
+    assert_eq!(item.torrent_hash.as_deref(), Some("hash-1"));
+    assert_eq!(item.rule_id, None);
+    assert_eq!((item.title, item.link), (before.title, before.link));
+    let trail = history.changes(item.id).await.unwrap();
+    assert_eq!(trail.len(), 1);
+    assert_eq!(
+        (trail[0].from, trail[0].to, trail[0].changed_at),
+        (HistoryResult::NoMatch, HistoryResult::Received, 9_000)
+    );
+}
+
+#[tokio::test]
+async fn an_outcome_follows_the_same_transition_rules_as_a_cycle() {
+    let (_dir, _db, history) = store().await;
+    history
+        .record(1_000, vec![received("done", "r1", "hash-1")])
+        .await
+        .unwrap();
+    history
+        .record(1_000, vec![obs("open", HistoryResult::NoMatch)])
+        .await
+        .unwrap();
+    let items = all(&history).await;
+    let done = items.iter().find(|i| i.identity_key == "done").unwrap().id;
+    let open = items.iter().find(|i| i.identity_key == "open").unwrap().id;
+
+    // A received item stays received, whatever is said afterwards, and the
+    // answer tells the caller so.
+    let kept = history
+        .record_outcome(
+            done,
+            2_000,
+            HistoryResult::AddFailed,
+            Some("late failure".into()),
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(kept, Some(HistoryResult::Received));
+    let item = history.get(done).await.unwrap().unwrap();
+    assert_eq!(
+        (item.result, item.reason, item.result_at),
+        (HistoryResult::Received, None, 1_000)
+    );
+    assert!(history.changes(done).await.unwrap().is_empty());
+
+    // A failure is refreshed by another failure with a new reason.
+    history
+        .record_outcome(
+            open,
+            3_000,
+            HistoryResult::AddFailed,
+            Some("first".into()),
+            None,
+        )
+        .await
+        .unwrap();
+    history
+        .record_outcome(
+            open,
+            4_000,
+            HistoryResult::AddFailed,
+            Some("second".into()),
+            None,
+        )
+        .await
+        .unwrap();
+    let item = history.get(open).await.unwrap().unwrap();
+    assert_eq!(
+        (item.result, item.reason.as_deref()),
+        (HistoryResult::AddFailed, Some("second"))
+    );
+    assert_eq!(history.changes(open).await.unwrap().len(), 1);
+
+    // A failed item can then be received; the reason is dropped.
+    history
+        .record_outcome(
+            open,
+            5_000,
+            HistoryResult::Received,
+            None,
+            Some("hash-2".into()),
+        )
+        .await
+        .unwrap();
+    let item = history.get(open).await.unwrap().unwrap();
+    assert_eq!((item.result, item.reason), (HistoryResult::Received, None));
+
+    assert_eq!(
+        history
+            .record_outcome(9_999, 6_000, HistoryResult::Received, None, None)
+            .await
+            .unwrap(),
+        None
+    );
+}
+
+#[tokio::test]
+async fn a_note_goes_only_on_a_received_item_that_has_none() {
+    let (_dir, _db, history) = store().await;
+    history
+        .record(
+            1_000,
+            vec![
+                received("a", "rule-1", "hash-a"),
+                obs("b", HistoryResult::NoMatch),
+            ],
+        )
+        .await
+        .unwrap();
+    let items = all(&history).await;
+    let of = |key: &str| items.iter().find(|i| i.title.contains(key)).unwrap().id;
+    let (a, b) = (of("of a"), of("of b"));
+
+    assert!(history.note_received(a, "first note").await.unwrap());
+    assert!(
+        !history.note_received(a, "second note").await.unwrap(),
+        "an existing note stays"
+    );
+    assert!(
+        !history.note_received(b, "not received").await.unwrap(),
+        "only received items take a note"
+    );
+
+    let item = history.get(a).await.unwrap().unwrap();
+    assert_eq!(
+        (item.result, item.reason.as_deref()),
+        (HistoryResult::Received, Some("first note"))
+    );
+    assert!(history.changes(a).await.unwrap().is_empty());
+    assert_eq!(history.get(b).await.unwrap().unwrap().reason, None);
+}

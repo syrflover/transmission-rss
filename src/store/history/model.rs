@@ -215,6 +215,9 @@ pub const MAX_PAGE_SIZE: usize = 500;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HistoryQuery {
     pub result: Option<HistoryResult>,
+    /// When not empty, only items with one of these results (and with
+    /// `result`, when that is set too).
+    pub results: Vec<HistoryResult>,
     pub channel_id: Option<String>,
     /// Continue after this item (the previous page's `next`).
     pub after: Option<HistoryCursor>,
@@ -226,6 +229,7 @@ impl Default for HistoryQuery {
     fn default() -> Self {
         HistoryQuery {
             result: None,
+            results: Vec::new(),
             channel_id: None,
             after: None,
             limit: DEFAULT_PAGE_SIZE,

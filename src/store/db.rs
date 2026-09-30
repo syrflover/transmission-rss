@@ -28,6 +28,8 @@ const MIGRATIONS: &[&str] = &[
     "ALTER TABLE channels ADD COLUMN name TEXT CHECK (name IS NULL OR name <> '');",
     // 4: the worker's snapshots for the collection screen's status board
     include_str!("status/schema.sql"),
+    // 5: commands the web accepts and the worker carries out
+    include_str!("commands/schema.sql"),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -226,6 +228,33 @@ mod tests {
             })
             .await;
         assert!(blank.is_err());
+    }
+
+    #[tokio::test]
+    async fn database_from_before_the_commands_gets_the_commands_table_and_keeps_its_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        {
+            // A database as the build with three migrations left it, one channel in.
+            let conn = Connection::open(&path).unwrap();
+            for sql in &MIGRATIONS[..3] {
+                conn.execute_batch(sql).unwrap();
+            }
+            conn.pragma_update(None, "user_version", 3_i64).unwrap();
+            conn.execute(INSERT_CHANNEL, []).unwrap();
+        }
+
+        let db = Db::open(&path).await.unwrap();
+
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+        assert_eq!(count_channels(&db).await, 1);
+        let commands: i64 = db
+            .run::<_, DbError, _>(|c| {
+                Ok(c.query_row("SELECT count(*) FROM commands", [], |r| r.get(0))?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(commands, 0);
     }
 
     #[tokio::test]

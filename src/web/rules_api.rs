@@ -219,10 +219,10 @@ async fn channel_items(
     loop {
         let page = history
             .list(HistoryQuery {
-                result: None,
                 channel_id: Some(channel_id.to_owned()),
                 after,
                 limit: MAX_PAGE_SIZE,
+                ..HistoryQuery::default()
             })
             .await
             .map_err(history_error)?;

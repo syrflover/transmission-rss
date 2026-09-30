@@ -24,6 +24,11 @@
 //!    cycle every interval, one after the other. With it, the later one keeps
 //!    skipping and the period stays one cycle.
 //!
+//! # Commands
+//!
+//! Between cycles the loop also looks, every few seconds, for commands the web
+//! accepted and runs them under the same lock ([`commands`]).
+//!
 //! # Shutdown
 //!
 //! Cancelling the token ([`Worker::run`]) stops the loop between cycles and
@@ -46,6 +51,7 @@
 //! taking a torrent and the record being written leaves that item recorded as
 //! `duplicate` instead of `received` after the next cycle.
 
+pub mod commands;
 pub mod cycle;
 pub mod env;
 pub mod feed;
@@ -60,6 +66,7 @@ use std::{
 
 use tokio_util::sync::CancellationToken;
 
+pub use commands::{CommandsOutcome, DEFAULT_COMMAND_POLL};
 pub use cycle::{run_cycle, CycleContext, CycleError, CycleReport};
 pub use env::{EnvError, WorkerEnv};
 pub use lock::{lock_path_for, CycleLock};
@@ -67,6 +74,7 @@ pub use lock::{lock_path_for, CycleLock};
 use crate::{
     store::{
         channels::ChannelStore,
+        commands::{CommandError, CommandStore},
         history::{HistoryError, HistoryStore, Millis},
         Db,
     },
@@ -94,6 +102,8 @@ pub enum WorkerError {
     },
     #[error("cycle marker: {0}")]
     History(#[from] HistoryError),
+    #[error("commands: {0}")]
+    Command(#[from] CommandError),
     #[error(transparent)]
     Cycle(#[from] CycleError),
     #[error("cannot build the HTTP client: {0}")]
@@ -116,7 +126,10 @@ pub enum TickOutcome {
 #[derive(Clone)]
 pub struct Worker {
     ctx: CycleContext,
+    /// Commands the web accepted; see [`commands`].
+    commands: CommandStore,
     interval: Duration,
+    command_poll: Duration,
     min_gap: Duration,
     shutdown_grace: Duration,
     lock_path: PathBuf,
@@ -144,6 +157,7 @@ impl Worker {
         }
 
         Ok(Worker {
+            commands: CommandStore::new(db.clone()),
             ctx: CycleContext {
                 channels: ChannelStore::new(db.clone()),
                 history: HistoryStore::new(db),
@@ -158,6 +172,7 @@ impl Worker {
                 redactor,
             },
             interval: env.interval,
+            command_poll: DEFAULT_COMMAND_POLL,
             min_gap: env.interval / 2,
             shutdown_grace: SHUTDOWN_GRACE,
             lock_path,
@@ -228,12 +243,18 @@ impl Worker {
     pub async fn run(&self, cancel: CancellationToken) {
         let mut ticker = tokio::time::interval(self.interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut command_ticker = tokio::time::interval(self.command_poll);
+        command_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
         loop {
             tokio::select! {
                 biased;
                 _ = cancel.cancelled() => break,
                 _ = ticker.tick() => {}
+                _ = command_ticker.tick() => {
+                    self.poll_commands(&cancel).await;
+                    continue;
+                }
             }
 
             // In its own task so that a panic ends the cycle, not the worker.
