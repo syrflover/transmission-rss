@@ -1,4 +1,7 @@
-name: trss
+# Not `trss`: docker-compose.yml in the same folder is the project `trss`
+# (named after the folder), and sharing it would make each file's containers
+# orphans of the other, which `--remove-orphans` deletes.
+name: trss-app
 
 # trss-web (screens and API) and trss-worker (collection every 5 minutes and
 # the commands the web accepts) run all the time from the same image and the
