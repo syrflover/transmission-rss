@@ -128,7 +128,66 @@ async fn a_cycle_adds_the_selected_items_and_records_every_item() {
         assert_eq!(item.channel_id, channel.channel.id);
         assert_eq!(item.first_seen_at, 1_000_000);
     }
-    assert!(items[0].identity_key.starts_with("guid:guid-aaaa-"));
+    // The identity key is a hash of the GUID, not the GUID.
+    assert!(items[0].identity_key.starts_with("guid:"));
+    assert!(!items[0].identity_key.contains("guid-aaaa"));
+}
+
+fn magnet(hash_digit: char, name: &str) -> String {
+    format!(
+        "magnet:?xt=urn:btih:{}&amp;dn={name}.mkv",
+        hash_digit.to_string().repeat(40)
+    )
+}
+
+#[tokio::test]
+async fn items_differing_only_in_a_secret_named_query_value_are_all_added_and_recorded() {
+    let h = Harness::new().await;
+    // Every query name of the channel URL is secret, `id` included, and the
+    // items' GUIDs differ only in their `id` value.
+    let xml = format!(
+        r#"<?xml version="1.0"?><rss version="2.0"><channel><title>t</title>
+        <link>http://x/</link><description>d</description>
+        <item><title>Show - 01</title><link>{}</link>
+          <guid>https://t.test/details.php?id=101</guid></item>
+        <item><title>Show - 02</title><link>{}</link>
+          <guid>https://t.test/details.php?id=102</guid></item>
+        <item><title>Show - 03</title><link>{}</link>
+          <guid>https://t.test/details.php?id=103</guid></item>
+        </channel></rss>"#,
+        magnet('1', "Show%20-%2001"),
+        magnet('2', "Show%20-%2002"),
+        magnet('3', "Show%20-%2003"),
+    );
+    h.feeds.set_xml("ids", &xml);
+    let input = transmission_rss::store::channels::ChannelInput::new(
+        format!("{}?id=0&token={SECRET}", h.feeds.url("ids")),
+        "/media/p",
+    );
+    assert!(input.secret_query.contains(&"id".to_owned()));
+    h.channels
+        .create_channel_with_rules(input, vec![rule("Show", "Show/Season 01")])
+        .await
+        .unwrap();
+    let worker = h.worker();
+
+    let report = run(&worker).await;
+    assert_eq!(
+        (report.items_seen, report.items_new, report.added),
+        (3, 3, 3)
+    );
+    assert_eq!(h.tr.torrents().len(), 3);
+    let items = h.history_items().await;
+    assert_eq!(items.len(), 3);
+    assert!(items.iter().all(|i| i.result == HistoryResult::Received));
+    let keys: std::collections::HashSet<_> = items.iter().map(|i| &i.identity_key).collect();
+    assert_eq!(keys.len(), 3);
+
+    // The same sighting again is still three known items, not three new ones.
+    h.advance(300_000);
+    let report = run(&worker).await;
+    assert_eq!((report.items_seen, report.items_new), (3, 0));
+    assert_eq!(h.history_items().await.len(), 3);
 }
 
 #[tokio::test]
@@ -258,6 +317,238 @@ async fn nothing_is_removed_when_no_feed_could_be_read() {
         h.history_items().await.is_empty(),
         "an unread feed records nothing"
     );
+}
+
+// --- a failing item task ---------------------------------------------------------------
+
+const STALE_HASH: &str = "gone0000000000000000000000000000000000aa";
+
+#[tokio::test]
+async fn a_panic_after_torrent_add_does_not_remove_the_new_torrent_or_any_other() {
+    let h = Harness::new().await;
+    channel_a(&h).await;
+    h.tr.preload(FakeTorrent::new(STALE_HASH, "Old Show").bot());
+    // Every `torrent-get` leaves out `file-count`, so the renaming that follows
+    // each successful add panics inside the item's task.
+    h.tr.omit_file_count(true);
+    let worker = h.worker();
+
+    let report = run(&worker).await;
+
+    assert_eq!(report.job_panics, 3);
+    // The torrents Transmission accepted are recorded as received and stay.
+    assert_eq!(h.tr.torrents().len(), 4);
+    assert_eq!(
+        h.history_items()
+            .await
+            .iter()
+            .filter(|i| i.result == HistoryResult::Received)
+            .count(),
+        3
+    );
+    // Nothing is removed in a cycle whose item tasks failed, not even the old one.
+    assert!(report.removed.is_empty());
+    assert!(h.tr.calls_of("torrent-remove").is_empty());
+
+    // A healthy cycle carries on: the torrents are renamed and kept, the
+    // departed one goes.
+    h.tr.omit_file_count(false);
+    h.advance(300_000);
+    let report = run(&worker).await;
+    assert_eq!(report.job_panics, 0);
+    assert_eq!(
+        report
+            .removed
+            .iter()
+            .map(|t| t.hash.as_str())
+            .collect::<Vec<_>>(),
+        [STALE_HASH]
+    );
+    let mut names: Vec<String> = h.tr.torrents().into_iter().map(|t| t.name).collect();
+    names.sort();
+    assert_eq!(
+        names,
+        [
+            "Sayonara Lara S01E03.mkv",
+            "Slime S04E38.mkv",
+            "Sono Bisque Doll S02E01.mkv",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn item_tasks_stop_when_the_cycle_is_dropped() {
+    let h = Harness::new().await;
+    channel_a(&h).await;
+    let worker = h.worker();
+    let add_gate = h.tr.hold("torrent-add");
+
+    let running = {
+        let worker = worker.clone();
+        tokio::spawn(async move { worker.tick(&CancellationToken::new()).await })
+    };
+    add_gate.wait_arrived().await;
+
+    // What a panic of the cycle does to its future: it is dropped mid-way.
+    running.abort();
+    assert!(running.await.unwrap_err().is_cancelled());
+
+    // The item tasks went with it: they do not go on to record what
+    // Transmission answers after the worker gave up its lock.
+    add_gate.release_all();
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    let items = h.history_items().await;
+    assert_eq!(items.len(), 4, "only the items that needed no Transmission");
+    assert!(items.iter().all(|i| i.torrent_hash.is_none()));
+}
+
+// --- cleanup of departed torrents and unread channels -----------------------------------
+
+/// A feed of the given items, each a release name and the digit its torrent
+/// hash is made of.
+fn feed_of(items: &[(&str, char)]) -> String {
+    let items: String = items
+        .iter()
+        .map(|(name, digit)| {
+            format!(
+                "<item><title>{name}.mkv</title>\
+                 <link>magnet:?xt=urn:btih:{}&amp;dn={name}.mkv</link>\
+                 <guid>{name}-{digit}</guid></item>",
+                digit.to_string().repeat(40)
+            )
+        })
+        .collect();
+    format!(
+        r#"<?xml version="1.0"?><rss version="2.0"><channel><title>t</title>
+        <link>http://x/</link><description>d</description>{items}</channel></rss>"#
+    )
+}
+
+fn hash_of(digit: char) -> String {
+    digit.to_string().repeat(40)
+}
+
+fn torrent_hashes(h: &Harness) -> Vec<String> {
+    let mut hashes: Vec<String> = h.tr.torrents().into_iter().map(|t| t.hash).collect();
+    hashes.sort();
+    hashes
+}
+
+/// Channel X (`feed-x`: two shows) and channel Y (`feed-y`: two shows), one
+/// cycle run so that Transmission holds all four and history knows where each
+/// came from.
+async fn two_channels_with_their_torrents(h: &Harness) -> Worker {
+    h.feeds.set_xml(
+        "feed-x",
+        &feed_of(&[("[G] Show X1 - 01", '1'), ("[G] Show X2 - 01", '2')]),
+    );
+    h.feeds.set_xml(
+        "feed-y",
+        &feed_of(&[("[G] Show Y1 - 01", '3'), ("[G] Show Y2 - 01", '4')]),
+    );
+    h.add_channel(
+        "feed-x",
+        "/media/x",
+        &[],
+        vec![rule("Show X", "X/Season 01")],
+    )
+    .await;
+    h.add_channel(
+        "feed-y",
+        "/media/y",
+        &[],
+        vec![rule("Show Y", "Y/Season 01")],
+    )
+    .await;
+    let worker = h.worker();
+    let report = run(&worker).await;
+    assert_eq!((report.channels_read, report.added), (2, 4));
+    assert_eq!(
+        torrent_hashes(h),
+        [hash_of('1'), hash_of('2'), hash_of('3'), hash_of('4')]
+    );
+    worker
+}
+
+#[tokio::test]
+async fn torrents_of_a_channel_whose_feed_failed_stay_while_the_stale_ones_of_a_read_channel_go() {
+    let h = Harness::new().await;
+    let worker = two_channels_with_their_torrents(&h).await;
+    h.tr.clear_calls();
+
+    // X's feed is down. Y is read, and its second show has left the feed.
+    h.feeds.set_status("feed-x", 503);
+    h.feeds
+        .set_xml("feed-y", &feed_of(&[("[G] Show Y1 - 01", '3')]));
+    h.advance(300_000);
+    let report = run(&worker).await;
+
+    assert_eq!((report.channels_read, report.channels_failed), (1, 1));
+    // X's torrents stay whatever its feed would say; Y's departed one goes.
+    assert_eq!(
+        report
+            .removed
+            .iter()
+            .map(|t| t.hash.as_str())
+            .collect::<Vec<_>>(),
+        [hash_of('4')]
+    );
+    assert_eq!(
+        torrent_hashes(&h),
+        [hash_of('1'), hash_of('2'), hash_of('3')]
+    );
+
+    // Once X's feed is back and no longer lists its second show, that one goes too.
+    h.feeds
+        .set_xml("feed-x", &feed_of(&[("[G] Show X1 - 01", '1')]));
+    h.advance(300_000);
+    let report = run(&worker).await;
+    assert_eq!(report.channels_failed, 0);
+    assert_eq!(torrent_hashes(&h), [hash_of('1'), hash_of('3')]);
+}
+
+#[tokio::test]
+async fn a_torrent_of_unknown_origin_goes_when_any_feed_was_read() {
+    let h = Harness::new().await;
+    let worker = two_channels_with_their_torrents(&h).await;
+    // Added by something else that labels its torrents (the legacy cron before
+    // the switch): history has no record of it.
+    h.tr.preload(FakeTorrent::new(STALE_HASH, "Old Show").bot());
+    h.tr.preload(FakeTorrent::new(
+        "mine0000000000000000000000000000000000bb",
+        "Manual",
+    ));
+
+    h.feeds.set_status("feed-x", 503);
+    h.advance(300_000);
+    let report = run(&worker).await;
+
+    assert_eq!((report.channels_read, report.channels_failed), (1, 1));
+    assert_eq!(
+        report
+            .removed
+            .iter()
+            .map(|t| t.hash.as_str())
+            .collect::<Vec<_>>(),
+        [STALE_HASH],
+        "only the unlabelled-by-history one; X's and Y's torrents and the manual one stay"
+    );
+    assert_eq!(torrent_hashes(&h).len(), 5);
+}
+
+#[tokio::test]
+async fn nothing_is_removed_when_every_feed_failed_even_for_unknown_origin() {
+    let h = Harness::new().await;
+    let worker = two_channels_with_their_torrents(&h).await;
+    h.tr.preload(FakeTorrent::new(STALE_HASH, "Old Show").bot());
+
+    h.feeds.set_status("feed-x", 503);
+    h.feeds.set_status("feed-y", 503);
+    h.advance(300_000);
+    let report = run(&worker).await;
+
+    assert_eq!(report.channels_read, 0);
+    assert!(h.tr.calls_of("torrent-remove").is_empty());
 }
 
 // --- rules ----------------------------------------------------------------------------
@@ -474,6 +765,62 @@ async fn a_refused_torrent_is_add_failed_with_transmissions_reason() {
         .contains("download directory path is not absolute"));
 }
 
+// --- Transmission not answering ----------------------------------------------------------
+
+#[tokio::test]
+async fn a_hung_torrent_add_times_out_and_the_lock_is_released() {
+    let h = Harness::new().await;
+    channel_a(&h).await;
+    let timeout = std::time::Duration::from_millis(300);
+    let worker = h.worker().with_transmission_timeout(timeout);
+    // Transmission takes the connection and never answers `torrent-add`.
+    let _never_released = h.tr.hold("torrent-add");
+
+    let started = std::time::Instant::now();
+    let report = tokio::time::timeout(std::time::Duration::from_secs(20), run(&worker))
+        .await
+        .expect("the cycle ended although Transmission never answered");
+    assert!(started.elapsed() < std::time::Duration::from_secs(10));
+
+    assert_eq!(report.add_failed, 3);
+    let failed = h
+        .history
+        .list(HistoryQuery {
+            result: Some(HistoryResult::AddFailed),
+            limit: MAX_PAGE_SIZE,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .items;
+    assert_eq!(failed.len(), 3);
+    assert!(failed
+        .iter()
+        .all(|i| i.reason.as_deref().is_some_and(|r| !r.contains(SECRET))));
+
+    // The lock was let go: the next tick is not refused as busy.
+    h.advance(300_000);
+    assert!(matches!(
+        worker.tick(&CancellationToken::new()).await.unwrap(),
+        TickOutcome::Ran(_)
+    ));
+}
+
+#[tokio::test]
+async fn a_hung_session_set_delays_the_cycle_by_the_timeout_only() {
+    let h = Harness::new().await;
+    channel_a(&h).await;
+    let worker = h
+        .worker()
+        .with_transmission_timeout(std::time::Duration::from_millis(300));
+    let _never_released = h.tr.hold("session-set");
+
+    let report = tokio::time::timeout(std::time::Duration::from_secs(20), run(&worker))
+        .await
+        .expect("the cycle ended although session-set never answered");
+    assert_eq!(report.added, 3);
+}
+
 // --- secrets -------------------------------------------------------------------------------
 
 /// Every text value in the history tables, as one string.
@@ -569,6 +916,81 @@ async fn secrets_in_item_links_and_guids_are_masked_in_history_but_used_for_addi
     let dump = history_dump(&h).await;
     assert!(!dump.contains("PASSKEY-VALUE-123"), "{dump}");
     assert_eq!(h.history_items().await[0].result, HistoryResult::Received);
+}
+
+#[tokio::test]
+async fn secret_values_are_masked_in_history_under_other_names_in_paths_and_encoded() {
+    let h = Harness::new().await;
+    // The channel URL spells the secret percent-encoded; feeds may quote it
+    // decoded, in a path, or encoded again inside another URL.
+    const IN_URL: &str = "Tk%2Fen%2BSECRETVALUE99";
+    const DECODED: &str = "Tk/en+SECRETVALUE99";
+    const ENCODED_TWICE: &str = "Tk%252Fen%252BSECRETVALUE99";
+    let xml = format!(
+        r#"<?xml version="1.0"?><rss version="2.0"><channel><title>t</title>
+        <link>http://x/</link><description>d</description>
+        <item><title>Show - 01 [{DECODED}]</title>
+          <link>magnet:?xt=urn:btih:{}&amp;dn=Show%20-%2001&amp;tr=https%3A%2F%2Ftr.test%2Fa%3Ftorrent_pass%3D{ENCODED_TWICE}</link>
+          <guid>https://t.test/details/{IN_URL}/1</guid></item>
+        <item><title>Show - 02</title>
+          <link>https://t.test/{IN_URL}/dl/2.torrent?torrent_pass={IN_URL}&amp;id=2</link>
+          <guid>https://t.test/details/{DECODED}/2</guid></item>
+        </channel></rss>"#,
+        "dddd".repeat(10)
+    );
+    h.feeds.set_xml("other-names", &xml);
+    let input = transmission_rss::store::channels::ChannelInput::new(
+        format!("{}?passkey={IN_URL}&r=1080", h.feeds.url("other-names")),
+        "/media/p",
+    );
+    h.channels
+        .create_channel_with_rules(input, vec![rule("Show", "Show/Season 01")])
+        .await
+        .unwrap();
+    // A refusal that quotes the secret ends up in `reason`.
+    h.tr.reject_adds(Some(&format!("cannot use {DECODED} or {IN_URL}")));
+
+    run(&h.worker()).await;
+
+    // Transmission was asked with the real link.
+    let asked = h.tr.calls_of("torrent-add");
+    assert!(asked
+        .iter()
+        .any(|c| c.args["filename"].as_str().unwrap().contains(ENCODED_TWICE)));
+
+    let items = h.history_items().await;
+    assert_eq!(items.len(), 2);
+    let dump = history_dump(&h).await;
+    for form in ["SECRETVALUE99", IN_URL, DECODED, ENCODED_TWICE] {
+        assert!(!dump.contains(form), "{form} in history:\n{dump}");
+    }
+    let first = h.item("Show - 01").await;
+    assert_eq!(first.title, "Show - 01 [***]");
+    assert!(first.link.contains("torrent_pass%3D***"), "{}", first.link);
+    assert_eq!(first.result, HistoryResult::AddFailed);
+    assert_eq!(
+        first.reason.as_deref(),
+        Some("Transmission refused the torrent: cannot use *** or ***")
+    );
+    let second = h.item("Show - 02").await;
+    assert_eq!(
+        second.link,
+        "https://t.test/***/dl/2.torrent?torrent_pass=***&id=2"
+    );
+}
+
+#[tokio::test]
+async fn short_secret_looking_values_do_not_garble_stored_titles() {
+    // `filter=1080p` is secret like every query name, but too short to be
+    // replaced in text: the titles keep their "1080p".
+    let h = Harness::new().await;
+    channel_a(&h).await;
+    run(&h.worker()).await;
+    let sayonara = h.item("Sayonara Lara - 03 (1080p)").await;
+    assert_eq!(
+        sayonara.title,
+        "[SubsPlease] Sayonara Lara - 03 (1080p) [AAAA0001].mkv"
+    );
 }
 
 // --- exclusivity -----------------------------------------------------------------------------

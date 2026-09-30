@@ -136,6 +136,9 @@ struct TrState {
     calls: Vec<Call>,
     holds: HashMap<String, Arc<Gate>>,
     reject_adds: Option<String>,
+    /// Leave `file-count` out of `torrent-get` answers, which makes the client
+    /// code that reads it panic.
+    omit_file_count: bool,
     next_id: i64,
 }
 
@@ -234,6 +237,13 @@ impl FakeTransmission {
     /// Makes every `torrent-add` answer with this refusal text.
     pub fn reject_adds(&self, result: Option<&str>) {
         self.state.lock().unwrap().reject_adds = result.map(str::to_owned);
+    }
+
+    /// Makes `torrent-get` answers leave out `file-count`. The worker's renaming
+    /// step then panics (after the torrent was added), which is how tests
+    /// reach a panic in an item's task without a hook in the product code.
+    pub fn omit_file_count(&self, omit: bool) {
+        self.state.lock().unwrap().omit_file_count = omit;
     }
 
     /// Holds every request of `method` until the returned gate is released.
@@ -392,16 +402,21 @@ async fn tr_rpc(
         }
 
         "torrent-get" => {
+            let omit_file_count = st.omit_file_count;
             let wanted = ids(&args);
             let torrents: Vec<Value> = st
                 .torrents
                 .iter()
                 .filter(|t| wanted.is_empty() && args["ids"].is_null() || wanted.contains(&t.hash))
                 .map(|t| {
-                    json!({
+                    let mut torrent = json!({
                         "id": t.id, "name": t.name, "hashString": t.hash, "status": t.status,
                         "labels": t.labels, "file-count": t.file_count, "downloadDir": t.download_dir,
-                    })
+                    });
+                    if omit_file_count {
+                        torrent.as_object_mut().unwrap().remove("file-count");
+                    }
+                    torrent
                 })
                 .collect();
             ok(json!({ "torrents": torrents })).into_response()

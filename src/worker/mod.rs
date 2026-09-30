@@ -33,6 +33,15 @@
 //! skipped. Nothing is written for items that were not started; the next cycle
 //! sees them as new.
 //!
+//! Every request to Transmission times out ([`crate::transmission::REQUEST_TIMEOUT`],
+//! connecting [`crate::transmission::CONNECT_TIMEOUT`]), so a Transmission that
+//! stops answering fails the items of the cycle instead of holding the lock
+//! for good. A cycle that has not wound down [`SHUTDOWN_GRACE`] after the
+//! shutdown request is aborted, which aborts its item tasks and releases the
+//! lock; the process then exits without waiting for the hung call. What
+//! Transmission had not answered by then is not recorded (as after a kill,
+//! see below).
+//!
 //! A process killed outright (SIGKILL, power loss) between Transmission
 //! taking a torrent and the record being written leaves that item recorded as
 //! `duplicate` instead of `received` after the next cycle.
@@ -89,6 +98,8 @@ pub enum WorkerError {
     Cycle(#[from] CycleError),
     #[error("cannot build the HTTP client: {0}")]
     Http(#[from] reqwest::Error),
+    #[error("cannot build the Transmission HTTP client: {0}")]
+    TransmissionHttp(reqwest012::Error),
 }
 
 /// What one attempt to run a cycle came to.
@@ -107,9 +118,17 @@ pub struct Worker {
     ctx: CycleContext,
     interval: Duration,
     min_gap: Duration,
+    shutdown_grace: Duration,
     lock_path: PathBuf,
     clock: Clock,
 }
+
+/// How long a running cycle may take to wind down after shutdown was asked
+/// for. It normally finishes within milliseconds (it starts nothing new and
+/// records what Transmission has answered), but a Transmission call that hangs
+/// would otherwise hold the process until the call's own timeout. Container
+/// runtimes send SIGKILL after ten seconds by default; five leaves room.
+pub const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 
 impl Worker {
     /// A worker on `db`, taking its settings from `env` and its lock file from
@@ -129,6 +148,10 @@ impl Worker {
                 channels: ChannelStore::new(db.clone()),
                 history: HistoryStore::new(db),
                 transmission_url: env.transmission_url.clone(),
+                transmission_http: crate::transmission::http_client(
+                    crate::transmission::REQUEST_TIMEOUT,
+                )
+                .map_err(WorkerError::TransmissionHttp)?,
                 session: env.session.clone(),
                 http: feed::client()?,
                 rename: RenamePolicy::default(),
@@ -136,6 +159,7 @@ impl Worker {
             },
             interval: env.interval,
             min_gap: env.interval / 2,
+            shutdown_grace: SHUTDOWN_GRACE,
             lock_path,
             clock: system_clock(),
         })
@@ -154,6 +178,21 @@ impl Worker {
     /// Overrides the minimum time between cycle starts (default: half the interval).
     pub fn with_min_gap(mut self, gap: Duration) -> Self {
         self.min_gap = gap;
+        self
+    }
+
+    /// Overrides how long a running cycle may take to wind down after shutdown
+    /// was asked for (default: [`SHUTDOWN_GRACE`]).
+    pub fn with_shutdown_grace(mut self, grace: Duration) -> Self {
+        self.shutdown_grace = grace;
+        self
+    }
+
+    /// Overrides how long one request to Transmission may take (default:
+    /// [`crate::transmission::REQUEST_TIMEOUT`]).
+    pub fn with_transmission_timeout(mut self, timeout: Duration) -> Self {
+        self.ctx.transmission_http = crate::transmission::http_client(timeout)
+            .expect("a client with only timeouts set builds");
         self
     }
 
@@ -200,9 +239,29 @@ impl Worker {
             // In its own task so that a panic ends the cycle, not the worker.
             let worker = self.clone();
             let token = cancel.clone();
-            let cycle = tokio::spawn(async move { worker.tick(&token).await });
+            let mut cycle = tokio::spawn(async move { worker.tick(&token).await });
 
-            match cycle.await {
+            // After shutdown was asked for, the cycle gets a grace period to wind
+            // down. Past it, the cycle is aborted: dropping it aborts its item
+            // tasks and releases the lock, and what Transmission had not yet
+            // answered is left for the next start.
+            let joined = tokio::select! {
+                joined = &mut cycle => joined,
+                _ = async {
+                    cancel.cancelled().await;
+                    tokio::time::sleep(self.shutdown_grace).await;
+                } => {
+                    cycle.abort();
+                    let _ = cycle.await;
+                    println!(
+                        "Cycle abandoned: it did not wind down within {}s of the shutdown request",
+                        self.shutdown_grace.as_secs()
+                    );
+                    continue;
+                }
+            };
+
+            match joined {
                 Ok(Ok(TickOutcome::Ran(report))) if report.interrupted => {
                     println!("Cycle interrupted by shutdown");
                 }

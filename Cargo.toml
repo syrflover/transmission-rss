@@ -18,9 +18,12 @@ dotenv = "0.15"
 futures = "0.3"
 regex = "1"
 reqwest = "0.13"
+# The version transmission-rpc uses, for the timed client handed to it.
+reqwest012 = { package = "reqwest", version = "0.12", default-features = false }
 rusqlite = { version = "0.40", features = ["bundled"] }
 rss = { version = "2.0", features = ["with-serde"] }
 serde = "1"
+sha2 = "0.10"
 serde_json = "1"
 yaml_serde = "0.10"
 thiserror = "2"

@@ -43,55 +43,77 @@ async fn all(history: &HistoryStore) -> Vec<HistoryItem> {
 
 // --- identity ---------------------------------------------------------------
 
+fn sha256_hex(text: &str) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(text.as_bytes()))
+}
+
 #[test]
-fn identity_is_the_guid_then_the_link_then_the_title() {
-    let none: &[String] = &[];
+fn identity_is_the_hash_of_the_guid_then_the_link_then_the_title() {
     assert_eq!(
-        identity_key(Some("g-1"), Some("http://x/1"), Some("T"), none),
-        "guid:g-1"
+        identity_key(Some("g-1"), Some("http://x/1"), Some("T")),
+        format!("guid:{}", sha256_hex("g-1"))
     );
     assert_eq!(
-        identity_key(None, Some("http://x/1"), Some("T"), none),
-        "link:http://x/1"
+        identity_key(None, Some("http://x/1"), Some("T")),
+        format!("link:{}", sha256_hex("http://x/1"))
     );
     // A blank GUID is no GUID.
     assert_eq!(
-        identity_key(Some("  "), Some("http://x/1"), Some("T"), none),
-        "link:http://x/1"
+        identity_key(Some("  "), Some("http://x/1"), Some("T")),
+        format!("link:{}", sha256_hex("http://x/1"))
     );
-    assert_eq!(identity_key(Some(""), Some(""), Some("T"), none), "title:T");
-    assert_eq!(identity_key(None, None, None, none), "title:");
+    assert_eq!(
+        identity_key(Some(""), Some(""), Some("T")),
+        format!("title:{}", sha256_hex("T"))
+    );
+    assert_eq!(
+        identity_key(None, None, None),
+        format!("title:{}", sha256_hex(""))
+    );
 }
 
 #[test]
 fn identity_source_is_part_of_the_key() {
-    let none: &[String] = &[];
     assert_ne!(
-        identity_key(Some("http://x/1"), None, None, none),
-        identity_key(None, Some("http://x/1"), None, none)
+        identity_key(Some("http://x/1"), None, None),
+        identity_key(None, Some("http://x/1"), None)
     );
 }
 
 #[test]
-fn identity_and_stored_link_mask_secret_query_values() {
+fn identity_keeps_items_apart_that_differ_only_in_a_secret_looking_value() {
+    // The value is hashed as given, so a channel's secret query names do not
+    // enter into it: these are different items whatever is secret.
+    assert_ne!(
+        identity_key(Some("https://t.test/details.php?id=101"), None, None),
+        identity_key(Some("https://t.test/details.php?id=102"), None, None)
+    );
+    assert_ne!(
+        identity_key(None, Some("https://t.test/dl?id=1&token=a"), None),
+        identity_key(None, Some("https://t.test/dl?id=1&token=b"), None)
+    );
+}
+
+#[test]
+fn identity_holds_nothing_of_the_value() {
+    let key = identity_key(None, Some("https://t.test/dl?token=hunter2"), None);
+    assert!(!key.contains("hunter2") && !key.contains("t.test"), "{key}");
+
+    // `<source>:` and 64 lowercase hex digits.
+    let (source, digest) = key.split_once(':').unwrap();
+    assert_eq!(source, "link");
+    assert_eq!(digest.len(), 64);
+    assert!(digest
+        .bytes()
+        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)));
+}
+
+#[test]
+fn stored_link_masks_secret_query_values() {
     let secret = vec!["token".to_owned()];
-    let key = identity_key(
-        None,
-        Some("https://tracker.test/dl?id=7&token=hunter2"),
-        None,
-        &secret,
-    );
-    assert_eq!(
-        key,
-        format!("link:https://tracker.test/dl?id=7&token={MASK}")
-    );
-    assert!(!key.contains("hunter2"));
-
-    let guid_key = identity_key(Some("https://t.test/x?token=hunter2"), None, None, &secret);
-    assert!(!guid_key.contains("hunter2"));
-
-    let link = stored_link(Some("https://tracker.test/dl?token=hunter2"), &secret);
-    assert!(!link.contains("hunter2"));
+    let link = stored_link(Some("https://tracker.test/dl?id=7&token=hunter2"), &secret);
+    assert_eq!(link, format!("https://tracker.test/dl?id=7&token={MASK}"));
     assert_eq!(stored_link(None, &secret), "");
     // Links without secret parameters are kept as they are.
     assert_eq!(
@@ -225,6 +247,49 @@ async fn seeing_an_item_again_adds_no_record_and_keeps_the_first_seen_time() {
         assert_eq!(item.result_at, 1_000);
         assert!(history.changes(item.id).await.unwrap().is_empty());
     }
+}
+
+#[tokio::test]
+async fn torrent_hashes_are_looked_up_by_channel() {
+    let (_dir, _db, history) = store().await;
+    let other = |key: &str, hash: Option<&str>| Observation {
+        channel_id: "c2".into(),
+        torrent_hash: hash.map(str::to_owned),
+        ..obs(key, HistoryResult::Received)
+    };
+    history
+        .record(
+            1,
+            vec![
+                received("a", "r1", "hash-a"),
+                received("b", "r1", "hash-b"),
+                obs("c", HistoryResult::NoMatch), // no torrent
+                other("d", Some("hash-d")),
+                other("e", Some("hash-a")), // the same torrent seen through another channel
+            ],
+        )
+        .await
+        .unwrap();
+
+    let hashes = |ids: &[&str]| {
+        let history = history.clone();
+        let ids: Vec<String> = ids.iter().map(|s| s.to_string()).collect();
+        async move {
+            let mut hashes: Vec<_> = history
+                .torrent_hashes_of_channels(ids)
+                .await
+                .unwrap()
+                .into_iter()
+                .collect();
+            hashes.sort();
+            hashes
+        }
+    };
+    assert_eq!(hashes(&["c1"]).await, ["hash-a", "hash-b"]);
+    assert_eq!(hashes(&["c2"]).await, ["hash-a", "hash-d"]);
+    assert_eq!(hashes(&["c1", "c2"]).await, ["hash-a", "hash-b", "hash-d"]);
+    assert!(hashes(&["nobody"]).await.is_empty());
+    assert!(hashes(&[]).await.is_empty());
 }
 
 #[tokio::test]

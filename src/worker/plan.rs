@@ -92,11 +92,13 @@ impl ChannelPlan {
             .collect()
     }
 
-    /// Knows the channel URL's secret query values, for cleaning error text.
+    /// Knows the channel URL's secret query values (those long enough to be
+    /// replaced in free text, see [`crate::transmission::MIN_QUERY_SECRET_LEN`]), for cleaning error
+    /// text and the text that goes into history.
     pub fn redactor(&self) -> Redactor {
         let mut redactor = Redactor::none();
         for value in secret_values(&self.channel.url, &self.channel.secret_query) {
-            redactor.add(&value);
+            redactor.add_query_value(&value);
         }
         redactor
     }
@@ -249,5 +251,29 @@ mod tests {
         let out = r.apply(text);
         assert!(!out.contains("s3cret"), "{out}");
         assert!(out.contains("token2=keep") && out.contains("r=1080"));
+    }
+
+    #[test]
+    fn short_values_of_secret_parameters_do_not_garble_unrelated_text() {
+        // Every query name is secret by default, so `r=1080` and `f=0` are too.
+        let mut channel = channel();
+        channel.url = "https://feed.test/rss?r=1080&f=0&page=rss&token=Tk3n-0123456789".into();
+        channel.secret_query = ["r", "f", "page", "token"].map(str::to_owned).into();
+        let p = ChannelPlan::new(ChannelWithRules {
+            channel,
+            rules: vec![],
+        });
+
+        let r = p.redactor();
+        let text = "HTTP status 503 on Show - 1080p, page 10 (0 of 10)";
+        assert_eq!(r.apply(text), text);
+        // A real token in the same URL stays masked, in every spelling.
+        let out = r.apply("failed: Tk3n-0123456789 / Tk3n-0123456789");
+        assert!(!out.contains("Tk3n"), "{out}");
+        // The URL-shaped masking still hides the short values by name.
+        assert_eq!(
+            p.channel.masked_url(),
+            "https://feed.test/rss?r=***&f=***&page=***&token=***"
+        );
     }
 }

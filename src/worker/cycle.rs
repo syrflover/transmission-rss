@@ -1,11 +1,14 @@
 //! One collection cycle: read the configuration, read the feeds, judge the
 //! items, add the selected ones to Transmission and record everything.
 
-use std::{collections::HashSet, path::PathBuf};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+};
 
 use futures::{stream, StreamExt};
+use tokio::{task, task::JoinSet};
 use tokio_util::sync::CancellationToken;
-use transmission_rpc::TransClient;
 use url::Url;
 
 use super::{
@@ -18,8 +21,8 @@ use crate::{
         history::{HistoryResult, HistoryStore, Millis, Observation, Recorded},
     },
     transmission::{
-        add_item, remove_stale, rename_with_retries, AddError, AddKind, Redactor, RemovedTorrent,
-        RenamePolicy, SessionConfig,
+        self, add_item, remove_stale, rename_with_retries, AddError, AddKind, Redactor,
+        RemovedTorrent, RenamePolicy, SessionConfig,
     },
 };
 
@@ -36,12 +39,22 @@ pub struct CycleContext {
     pub channels: ChannelStore,
     pub history: HistoryStore,
     pub transmission_url: Url,
+    /// The client for Transmission's requests; they time out
+    /// (see [`crate::transmission::http_client`]).
+    pub transmission_http: reqwest012::Client,
     pub session: SessionConfig,
     pub http: reqwest::Client,
     pub rename: RenamePolicy,
     /// Knows secrets that do not come from channels, such as credentials in
     /// the Transmission URL.
     pub redactor: Redactor,
+}
+
+impl CycleContext {
+    /// A client for Transmission, with timeouts.
+    fn transmission(&self) -> transmission_rpc::TransClient {
+        transmission::client(self.transmission_url.clone(), &self.transmission_http)
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -68,6 +81,9 @@ pub struct CycleReport {
     pub excluded: usize,
     /// Torrents taken out of Transmission because they left the feeds.
     pub removed: Vec<RemovedTorrent>,
+    /// Items whose task panicked. Their torrents may or may not be in
+    /// Transmission, so the cycle removes no departed torrents.
+    pub job_panics: usize,
     /// The cycle stopped early because the worker is shutting down. What was
     /// done is recorded; the rest waits for the next cycle.
     pub interrupted: bool,
@@ -78,6 +94,7 @@ struct Job {
     /// The observation to record; `result`, `torrent_hash` and `reason` are
     /// filled in from what Transmission says.
     observation: Observation,
+    /// The title with the channel's secret values replaced, for logs.
     title: String,
     /// The item's own link, which Transmission is asked to add.
     link: String,
@@ -157,6 +174,8 @@ pub async fn run_cycle(
 
     // Judge the items; record what needs no Transmission and collect the rest.
     let mut jobs: Vec<Job> = Vec::new();
+    // Channels whose feed was not read, for the cleanup of departed torrents.
+    let mut unread_channels: Vec<String> = Vec::new();
 
     for (plan, read) in plans.iter().zip(fetched) {
         let channel = &plan.channel;
@@ -171,18 +190,26 @@ pub async fn run_cycle(
             Some(Err(reason)) => {
                 println!("Failed {label}: {reason}");
                 report.channels_failed += 1;
+                unread_channels.push(channel.id.clone());
                 continue;
             }
-            None => continue,
+            None => {
+                unread_channels.push(channel.id.clone());
+                continue;
+            }
         };
 
         let mut skipped = Vec::new();
 
-        for item in feed::items(&feed, &channel.secret_query) {
+        // What goes into history and logs passes through the channel's redactor.
+        let channel_redactor = plan.redactor();
+
+        for item in feed::items(&feed, &channel.secret_query, &channel_redactor) {
             report.items_seen += 1;
             let FeedItem {
                 identity_key,
                 title,
+                stored_title,
                 link,
                 stored_link,
             } = item;
@@ -191,7 +218,7 @@ pub async fn run_cycle(
                 channel_id: channel.id.clone(),
                 channel_label: label.clone(),
                 identity_key,
-                title: title.clone(),
+                title: stored_title.clone(),
                 link: stored_link,
                 result: HistoryResult::NoMatch,
                 rule_id: None,
@@ -209,7 +236,7 @@ pub async fn run_cycle(
                         rule_id: Some(rule_id),
                         ..observation
                     },
-                    title,
+                    title: stored_title,
                     link,
                     save_path,
                     episode,
@@ -242,68 +269,55 @@ pub async fn run_cycle(
         return Ok(report);
     }
 
-    // Add the selected items. Each runs in its own task so that a panic while
-    // handling one item cannot take the worker down; it is recorded as a failure.
-    let outcomes = stream::iter(jobs)
-        .map(|job| {
-            let ctx = ctx.clone();
-            let redactor = redactor.clone();
-            let cancel = cancel.clone();
-            async move {
-                let fallback = job.observation.clone();
-                let label = job.channel_label.clone();
-                let title = job.title.clone();
-                let handle = tokio::spawn(process_job(ctx.clone(), job, at, redactor, cancel));
-
-                match handle.await {
-                    Ok(outcome) => outcome,
-                    Err(_) => {
-                        eprintln!("Internal error while adding {title} ({label})");
-                        let observation = Observation {
-                            result: HistoryResult::AddFailed,
-                            reason: Some("internal error while adding the item".to_owned()),
-                            ..fallback
-                        };
-                        if let Err(err) = ctx.history.record(at, vec![observation]).await {
-                            eprintln!("Cannot record history for {label}: {err}");
-                        }
-                        (JobOutcome::Failed, false)
-                    }
-                }
-            }
-        })
-        .buffer_unordered(ADD_CONCURRENCY)
-        .collect::<Vec<_>>()
-        .await;
-
-    let mut kept: HashSet<String> = HashSet::new();
-    for (outcome, was_new) in outcomes {
-        report.items_new += usize::from(was_new);
-        match outcome {
-            JobOutcome::Held { hash, kind } => {
-                match kind {
-                    AddKind::Added => report.added += 1,
-                    AddKind::Duplicate => report.duplicates += 1,
-                }
-                kept.insert(hash);
-            }
-            JobOutcome::Failed => report.add_failed += 1,
-            JobOutcome::NotStarted => {}
-        }
-    }
+    // Add the selected items.
+    let Added { kept, panicked } = add_jobs(ctx, jobs, at, &redactor, cancel, &mut report).await;
+    report.job_panics = panicked;
 
     if cancel.is_cancelled() {
         report.interrupted = true;
         return Ok(report);
     }
 
-    // Remove bot-labelled torrents whose item is no longer in any feed. With no
-    // feed read at all there is nothing to judge that against (a channel-less
-    // database, or every feed down), so nothing is removed.
-    if report.channels_read > 0 {
-        let mut transmission = TransClient::new(ctx.transmission_url.clone());
-        report.removed =
-            remove_stale(&mut transmission, |hash| kept.contains(hash), &redactor).await;
+    // Remove bot-labelled torrents whose item is no longer in any feed. A torrent
+    // can only be called departed by a feed that was read, so:
+    //
+    // - With no feed read at all there is nothing to judge that against (a
+    //   channel-less database, or every feed down): nothing is removed.
+    // - A torrent that history records as coming from a channel whose feed was
+    //   not read this cycle stays: that feed may have dropped it, or may just
+    //   have been down.
+    // - A torrent with no history link (for example one the legacy cron added
+    //   before the switch) has no channel to wait for and follows the plain rule.
+    //
+    // Nor is anything removed when an item's task ended abnormally: it may have
+    // handed a torrent to Transmission before it failed, and the cycle would not
+    // know that torrent's hash, so it would look like a departed one. Recording
+    // the hashes of accepted torrents as they come would not cover a failure
+    // before the hash is known, so the whole removal waits for the next cycle,
+    // which meets the torrent again and keeps it.
+    if panicked > 0 {
+        println!(
+            "{panicked} item(s) ended with an internal error; \
+             leaving Transmission's torrents alone this cycle"
+        );
+    } else if report.channels_read > 0 {
+        let mut kept = kept;
+        match ctx
+            .history
+            .torrent_hashes_of_channels(unread_channels)
+            .await
+        {
+            Ok(hashes) => {
+                kept.extend(hashes);
+                let mut transmission = ctx.transmission();
+                report.removed =
+                    remove_stale(&mut transmission, |hash| kept.contains(hash), &redactor).await;
+            }
+            Err(err) => eprintln!(
+                "Cannot tell which torrents came from unread channels ({err}); \
+                 leaving Transmission's torrents alone this cycle"
+            ),
+        }
     } else if report.channels > 0 {
         println!("No feed could be read; leaving Transmission's torrents alone");
     }
@@ -324,11 +338,119 @@ pub async fn run_cycle(
     Ok(report)
 }
 
+/// What the item tasks of a cycle came to.
+struct Added {
+    /// Hashes of the torrents Transmission holds for the selected items.
+    kept: HashSet<String>,
+    /// Tasks that ended in a panic instead of an outcome.
+    panicked: usize,
+}
+
+/// What is needed to record a task's item as failed when the task panics.
+struct Fallback {
+    observation: Observation,
+    title: String,
+    channel_label: String,
+}
+
+/// Adds the selected items, up to [`ADD_CONCURRENCY`] at a time, and tallies
+/// the outcomes into `report`.
+///
+/// Each item runs in its own task so that a panic while handling it cannot take
+/// the worker down: the item is recorded as failed and counted in
+/// [`Added::panicked`]. The tasks belong to a [`JoinSet`] owned by this call,
+/// so when the cycle is dropped (its task panicked or was aborted) they are
+/// aborted with it instead of carrying on with Transmission after the worker
+/// lock has been released.
+async fn add_jobs(
+    ctx: &CycleContext,
+    jobs: Vec<Job>,
+    at: Millis,
+    redactor: &Redactor,
+    cancel: &CancellationToken,
+    report: &mut CycleReport,
+) -> Added {
+    let mut tasks: JoinSet<(JobOutcome, bool)> = JoinSet::new();
+    let mut fallbacks: HashMap<task::Id, Fallback> = HashMap::new();
+    let mut waiting = jobs.into_iter();
+    let mut added = Added {
+        kept: HashSet::new(),
+        panicked: 0,
+    };
+
+    loop {
+        while tasks.len() < ADD_CONCURRENCY {
+            let Some(job) = waiting.next() else { break };
+            let fallback = Fallback {
+                observation: job.observation.clone(),
+                title: job.title.clone(),
+                channel_label: job.channel_label.clone(),
+            };
+            let handle = tasks.spawn(process_job(
+                ctx.clone(),
+                job,
+                at,
+                redactor.clone(),
+                cancel.clone(),
+            ));
+            fallbacks.insert(handle.id(), fallback);
+        }
+
+        let Some(joined) = tasks.join_next_with_id().await else {
+            break;
+        };
+
+        let (outcome, was_new) = match joined {
+            Ok((id, done)) => {
+                fallbacks.remove(&id);
+                done
+            }
+            Err(err) => {
+                added.panicked += 1;
+                let Some(fallback) = fallbacks.remove(&err.id()) else {
+                    continue;
+                };
+                eprintln!(
+                    "Internal error while adding {} ({})",
+                    fallback.title, fallback.channel_label
+                );
+                let observation = Observation {
+                    result: HistoryResult::AddFailed,
+                    reason: Some("internal error while adding the item".to_owned()),
+                    ..fallback.observation
+                };
+                if let Err(err) = ctx.history.record(at, vec![observation]).await {
+                    eprintln!(
+                        "Cannot record history for {}: {err}",
+                        fallback.channel_label
+                    );
+                }
+                (JobOutcome::Failed, false)
+            }
+        };
+
+        report.items_new += usize::from(was_new);
+        match outcome {
+            JobOutcome::Held { hash, kind } => {
+                match kind {
+                    AddKind::Added => report.added += 1,
+                    AddKind::Duplicate => report.duplicates += 1,
+                }
+                added.kept.insert(hash);
+            }
+            JobOutcome::Failed => report.add_failed += 1,
+            JobOutcome::NotStarted => {}
+        }
+    }
+
+    added
+}
+
 /// Applies the session settings. Transmission being down is not fatal here:
 /// the items it would have taken are recorded as failed, and the next cycle
 /// tries again.
 async fn apply_session(ctx: &CycleContext, redactor: &Redactor) {
-    let mut transmission = TransClient::new(ctx.transmission_url.clone());
+    let mut transmission = ctx.transmission();
     let args = ctx.session.to_args();
     println!("Applying Transmission settings: {args:?}");
 
@@ -354,7 +476,7 @@ async fn process_job(
         return (JobOutcome::NotStarted, false);
     }
 
-    let mut transmission = TransClient::new(ctx.transmission_url.clone());
+    let mut transmission = ctx.transmission();
 
     let added = add_item(&mut transmission, &job.link, &job.save_path, &redactor).await;
 

@@ -12,7 +12,7 @@ mod redact;
 
 use std::{fmt, path::Path, time::Duration};
 
-pub use redact::{Redactor, REDACTED};
+pub use redact::{Redactor, MIN_QUERY_SECRET_LEN, REDACTED};
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 use transmission_rpc::{
@@ -23,6 +23,34 @@ use transmission_rpc::{
     TransClient,
 };
 use trname::trname;
+
+/// How long connecting to Transmission may take.
+pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How long one request to Transmission may take in total, from sending it to
+/// reading the whole answer. `transmission-rpc` builds its client without any
+/// timeout, so one hung request would otherwise wait forever, holding the
+/// worker's lock. A `torrent-add` of a `.torrent` URL is the slow kind (Transmission
+/// fetches the file before it answers); 30 seconds is far above what it takes
+/// when the tracker responds. A request that times out fails the item, which the
+/// next cycle retries.
+pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// An HTTP client for `transmission-rpc` with the connect timeout and a
+/// `request_timeout` for whole requests. (`transmission-rpc` uses reqwest 0.12,
+/// hence the separately named crate.)
+pub fn http_client(request_timeout: Duration) -> Result<reqwest012::Client, reqwest012::Error> {
+    reqwest012::Client::builder()
+        .connect_timeout(CONNECT_TIMEOUT.min(request_timeout))
+        .timeout(request_timeout)
+        .build()
+}
+
+/// A client for the Transmission at `url` that uses `http`, so its requests
+/// time out (see [`http_client`]).
+pub fn client(url: url::Url, http: &reqwest012::Client) -> TransClient {
+    TransClient::new_with_client(url, http.clone())
+}
 
 /// Label put on every torrent this program adds. Only labelled torrents are
 /// ever stopped or removed by the program.
