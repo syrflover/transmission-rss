@@ -175,9 +175,15 @@ pub async fn execute(
 ) -> Result<Finished, Retry> {
     // An add of an earlier start that got no answer stays unaccounted for
     // until an add of this one puts the torrent's hash in history. Until then
-    // a start that cannot do so does not end the command, but the last start
-    // does: cycles remove nothing while it runs, and the next start adds again.
-    // The check comes before `refuse` writes a failure on the item.
+    // a start that fails for a reason that may pass (the feed, the link or
+    // Transmission) does not end the command, but the last start does: cycles
+    // remove nothing while it runs, and the next start adds again. The check
+    // comes before `refuse` writes a failure on the item.
+    //
+    // A failure no later start can get past (the request, the item, the
+    // channel or the folder) ends the command at once with the mark kept, so
+    // the next cycle removes nothing either; after that the torrent's item
+    // label keeps it while its item is in a feed.
     let keep_trying = command.add_unconfirmed && command.attempts < MAX_ATTEMPTS;
     let unaccounted = |mut finished: Finished| {
         finished.add_unconfirmed |= command.add_unconfirmed;
@@ -185,9 +191,6 @@ pub async fn execute(
     };
 
     let Ok(payload) = serde_json::from_str::<ReceiveOnce>(&command.payload) else {
-        if keep_trying {
-            return Err(Retry::AddUnanswered);
-        }
         return Ok(unaccounted(failed("요청 내용을 읽지 못했어요.", None)));
     };
 
@@ -197,9 +200,6 @@ pub async fn execute(
         .await
         .map_err(Retry::store)?
     else {
-        if keep_trying {
-            return Err(Retry::AddUnanswered);
-        }
         return Ok(unaccounted(failed(
             "기록에서 이 항목을 찾지 못했어요.",
             None,
@@ -211,9 +211,6 @@ pub async fn execute(
         .await
         .map_err(Retry::store)?;
     let Some(channel) = channel else {
-        if keep_trying {
-            return Err(Retry::AddUnanswered);
-        }
         return refuse(
             ctx,
             &item,
@@ -226,7 +223,6 @@ pub async fn execute(
 
     let save_path = match folder::resolve(&channel.base_dir, &payload.folder) {
         Ok(path) => path,
-        Err(_) if keep_trying => return Err(Retry::AddUnanswered),
         Err(err) => {
             return refuse(ctx, &item, err.message(), &now)
                 .await

@@ -30,7 +30,10 @@
 //! adds the item again; Transmission answers `duplicate` with the hash, and a
 //! torrent in the command's folder, for an item nothing else received, counts
 //! as this command's own (`received`, renamed and noted). A connection that
-//! could not be made at all sent nothing and fails the command at once.
+//! could not be made at all sent nothing and fails the command at once. Once
+//! marked, a start that fails for a reason no later start can get past (the
+//! channel was deleted, the folder is refused) ends the command at once too;
+//! the torrent's item label keeps it while its item is in a feed.
 //!
 //! The last start ([`crate::store::commands::MAX_ATTEMPTS`]) ends the command
 //! instead, and so does a task that ended in a panic, with the unanswered add

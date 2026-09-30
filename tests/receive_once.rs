@@ -1261,6 +1261,35 @@ async fn a_last_start_refused_after_an_unanswered_add_still_holds_the_next_clean
 }
 
 #[tokio::test]
+async fn a_deleted_channel_after_an_unanswered_add_ends_the_command_at_once() {
+    let liar = release("guid-liar-26", 26, LIAR, "");
+    let s = Scene::new(&[&liar], unrelated_rule()).await;
+    let worker = after_an_unanswered_add(&s).await;
+    // Trying again cannot learn the hash any more: the save folder and the
+    // original link came from the channel.
+    let channel = &s.channel.channel;
+    s.h.channels
+        .delete_channel(&channel.id, channel.version, s.channel.rules.len())
+        .await
+        .unwrap();
+
+    assert_eq!(s.run_commands_with(&worker).await, CommandsOutcome::Ran(1));
+    let (_, command) = s.command(CMD).await;
+    assert_eq!(command["state"], "failed");
+    assert!(
+        command["outcome"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("채널이 삭제"),
+        "{command}"
+    );
+    // The first add's torrent is still unaccounted for.
+    let report = s.cycle().await;
+    assert_eq!(report.commands_unconfirmed, 1);
+    assert!(report.removed.is_empty(), "{:?}", report.removed);
+}
+
+#[tokio::test]
 async fn a_torrent_whose_hash_was_never_learned_stays_while_its_item_is_in_the_feed() {
     let liar = release("guid-liar-26", 26, LIAR, "");
     let other = release("guid-other-3", 3, OTHER, "");
