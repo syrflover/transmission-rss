@@ -1,0 +1,221 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "pretendard/dist/web/variable/pretendardvariable-dynamic-subset.css";
+
+/*
+ * Theme switching is driven by `data-theme="light" | "dark"` on <html>
+ * (see src/lib/theme.ts); `dark:` utilities follow it instead of the media query.
+ */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/* ---------- design tokens (from the accepted redesign prototype) ---------- */
+:root {
+  --gutter: 40px;
+  --topbar-h: 63px;
+  --bnav-h: 57px;
+  --page-max: 1440px;
+}
+
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg-void: #090b10;
+  --bg-void-2: #0d1017;
+  --surface-1: #161a21;
+  --surface-2: #1c2129;
+  --surface-3: #232933;
+  --hairline: #2a313c;
+  --hairline-soft: #212731;
+  --text-primary: #eceef1;
+  --text-secondary: #9aa2af;
+  --text-muted: #8892ab;
+  --accent-urgent: #ff6a4d;
+  --accent-urgent-ink: #1a0d09;
+  --accent-arch: #b9a3ff;
+  --ok: #6fd3a0;
+  --focus-ring: #7fb2ff;
+  --primary-ink: #07111f;
+  --shadow-color: rgba(0, 0, 0, 0.6);
+  --card-shadow: none;
+  --poster-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+  --bg-void: #e4e8ef;
+  --bg-void-2: #dce1ea;
+  --surface-1: #fbfcfd;
+  --surface-2: #f1f4f8;
+  --surface-3: #e6eaf1;
+  --hairline: #cdd3de;
+  --hairline-soft: #dbe0e8;
+  --card-shadow: 0 1px 2px rgba(22, 30, 46, 0.06), 0 6px 18px rgba(22, 30, 46, 0.07);
+  --poster-shadow: 0 2px 4px rgba(22, 30, 46, 0.18), 0 8px 16px rgba(22, 30, 46, 0.14);
+  --text-primary: #1a1f2b;
+  --text-secondary: #3f4a5e;
+  --text-muted: #55617a;
+  --accent-urgent: #b83816;
+  --accent-urgent-ink: #ffffff;
+  --accent-arch: #6a3fc2;
+  --ok: #1c7a49;
+  --focus-ring: #2f6fb0;
+  --primary-ink: #ffffff;
+  --shadow-color: rgba(30, 41, 59, 0.16);
+}
+
+@media (max-width: 720px) {
+  :root {
+    --gutter: 16px;
+    --topbar-h: 59px;
+  }
+}
+
+@media (max-width: 380px) {
+  :root {
+    --gutter: 14px;
+  }
+}
+
+/* shadcn/ui semantic tokens, pointed at the prototype tokens above */
+:root {
+  --radius: 0.75rem;
+  --background: var(--bg-void);
+  --foreground: var(--text-primary);
+  --card: var(--surface-1);
+  --card-foreground: var(--text-primary);
+  --popover: var(--surface-2);
+  --popover-foreground: var(--text-primary);
+  --primary: var(--focus-ring);
+  --primary-foreground: var(--primary-ink);
+  --secondary: var(--surface-2);
+  --secondary-foreground: var(--text-primary);
+  --muted: var(--surface-2);
+  --muted-foreground: var(--text-muted);
+  --accent: var(--surface-2);
+  --accent-foreground: var(--text-primary);
+  --destructive: var(--accent-urgent);
+  --border: var(--hairline);
+  --input: var(--hairline);
+  --ring: var(--focus-ring);
+}
+
+@theme inline {
+  --font-sans:
+    "Pretendard Variable", Pretendard, -apple-system, "Apple SD Gothic Neo", "Malgun Gothic",
+    sans-serif;
+  --font-mono:
+    ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-card: 12px;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-void: var(--bg-void);
+  --color-void-2: var(--bg-void-2);
+  --color-surface-1: var(--surface-1);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-hairline: var(--hairline);
+  --color-hairline-soft: var(--hairline-soft);
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-muted: var(--text-muted);
+  --color-urgent: var(--accent-urgent);
+  --color-urgent-ink: var(--accent-urgent-ink);
+  --color-arch: var(--accent-arch);
+  --color-ok: var(--ok);
+  --color-focus: var(--focus-ring);
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-background font-sans text-foreground antialiased;
+    margin: 0;
+    line-height: 1.45;
+    font-feature-settings: "tnum" 1;
+    /* Korean text breaks at word spaces; long tokens (paths, URLs) may still wrap */
+    word-break: keep-all;
+    overflow-wrap: anywhere;
+    transition:
+      background-color 0.18s ease,
+      color 0.18s ease;
+  }
+
+  h1,
+  h2,
+  h3,
+  p {
+    margin: 0;
+  }
+
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 3px;
+  }
+
+  button {
+    cursor: pointer;
+  }
+}
+
+@layer components {
+  /*
+   * Reserves the width of the bold weight so switching the current menu
+   * (regular <-> bold) does not shift its neighbours. The copy is invisible
+   * and empty of height, and hidden from assistive technology.
+   */
+  .bold-reserve::after {
+    content: attr(data-text);
+    display: block;
+    height: 0;
+    overflow: hidden;
+    visibility: hidden;
+    font-weight: 700;
+    pointer-events: none;
+    user-select: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    scroll-behavior: auto !important;
+    animation-duration: 0.001s !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001s !important;
+  }
+}
