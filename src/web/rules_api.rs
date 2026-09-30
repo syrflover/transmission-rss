@@ -22,6 +22,15 @@
 //! folder moves to the archive folder and on only after it moved back. A
 //! rule's view carries the last such command as `archive_move`.
 //!
+//! A save folder is also refused (`400`, with a sentence) when it is new or
+//! changed and:
+//!
+//! - has a `..` component, which could lead anywhere once links are followed.
+//!   A folder stored before this rule keeps saving as it is;
+//! - belongs to a rule whose `rule_archive` command is still open: the move
+//!   decided on the old folder;
+//! - is inside a work folder that an open `rule_archive` command is moving.
+//!
 //! # The preview is the worker's evaluation
 //!
 //! The preview does not judge titles itself. It puts the edited rule into the
@@ -253,6 +262,64 @@ async fn collect_folder(state: &AppState) -> Result<Option<String>, ApiError> {
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?
         .map(|settings| settings.folder))
+}
+
+/// Refuses a save folder `directory` for a new rule (`stored` is `None`) or
+/// a changed one. See the module docs.
+async fn check_directory(
+    state: &AppState,
+    stored: Option<&Rule>,
+    directory: &str,
+) -> Result<(), ApiError> {
+    if stored.is_some_and(|rule| rule.directory == directory) {
+        return Ok(());
+    }
+    if crate::folders::has_parent_dir(FsPath::new(directory)) {
+        return Err(ApiError::invalid(
+            "저장 폴더에는 `..`를 쓸 수 없어요. 수집 폴더 아래 경로를 `..` 없이 적어 주세요.",
+        ));
+    }
+
+    let rules: Vec<Rule> = state
+        .channels
+        .list_channels_with_rules()
+        .await
+        .map_err(store_error)?
+        .into_iter()
+        .flat_map(|cwr| cwr.rules)
+        .collect();
+    let open = archive_moves(state, &rules).await?;
+    let moving: Vec<&Rule> = rules
+        .iter()
+        .filter(|rule| open.get(&rule.id).is_some_and(|c| c.state.is_open()))
+        .collect();
+    if moving.is_empty() {
+        return Ok(());
+    }
+    if let Some(stored) = stored {
+        if moving.iter().any(|rule| rule.id == stored.id) {
+            return Err(ApiError::invalid(
+                "이 규칙의 작품 폴더를 옮기는 중이라 저장 폴더를 바꿀 수 없어요. 옮기기가 끝난 뒤 다시 시도해 주세요.",
+            ));
+        }
+    }
+    let Some(collect) = collect_folder(state).await? else {
+        return Ok(());
+    };
+    let collect = FsPath::new(&collect);
+    let rule_archive::WorkFolder::Named(name) = rule_archive::work_folder(collect, directory)
+    else {
+        return Ok(());
+    };
+    if moving.iter().any(|rule| {
+        rule_archive::work_folder(collect, &rule.directory)
+            == rule_archive::WorkFolder::Named(name.clone())
+    }) {
+        return Err(ApiError::invalid(format!(
+            "지금 옮기는 중인 작품 폴더 `{name}` 안으로는 규칙을 만들거나 옮길 수 없어요. 옮기기가 끝난 뒤 다시 시도해 주세요."
+        )));
+    }
+    Ok(())
 }
 
 /// The channel's recorded items, newest first, up to [`MAX_ITEMS_PER_CHANNEL`].
@@ -605,6 +672,7 @@ async fn create_rule(
 ) -> Result<(StatusCode, Json<RuleView>), ApiError> {
     let b = body(parsed)?;
     let input = require_valid_regex(b.fields.into_input(None)?)?;
+    check_directory(&state, None, &input.directory).await?;
     let created = state
         .channels
         .create_rule(&b.channel_id, input)
@@ -645,6 +713,7 @@ async fn update_rule(
     if input.state != stored.state {
         return Err(ApiError::invalid(STATE_NOT_EDITED));
     }
+    check_directory(&state, Some(&stored), &input.directory).await?;
     match state
         .channels
         .update_rule(&id, b.version, &b.channel_id, input)

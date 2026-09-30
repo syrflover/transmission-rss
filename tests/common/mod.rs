@@ -11,7 +11,12 @@
 //! `torrent-set-location` with `move` moves the torrent's data on the real
 //! disk (`downloadDir`/`name` to `location`/`name`, merging into folders that
 //! exist, creating the missing ones), as Transmission does. The new folder is
-//! reported at once, or after [`FakeTransmission::lag_locations`] looks.
+//! reported at once, or after [`FakeTransmission::lag_locations`] looks. With
+//! [`FakeTransmission::async_locations`] the data moves only when the new
+//! folder is reported, as Transmission 4 moves in the background after it has
+//! answered; [`FakeTransmission::fail_location_of`] makes that background move
+//! fail the way Transmission shows it: the old folder stays and the torrent
+//! reports a local error (`error` 3 and `errorString`).
 
 #![allow(dead_code)]
 
@@ -127,6 +132,14 @@ pub struct FakeTorrent {
     /// A `torrent-set-location` whose folder is not reported yet: the folder
     /// and how many more `torrent-get` answers keep the old one.
     pub pending_location: Option<(String, u32)>,
+    /// Whether the data of the pending move is still to be moved.
+    pub pending_data: bool,
+    /// The torrent's files as `torrent-get` lists them, relative to
+    /// `download_dir`; empty means one file named like the torrent.
+    pub files: Vec<String>,
+    /// Transmission's `error` (0 none, 3 a local error) and `errorString`.
+    pub error: u8,
+    pub error_string: String,
 }
 
 impl FakeTorrent {
@@ -141,6 +154,10 @@ impl FakeTorrent {
             file_count: 1,
             left_until_done: 0,
             pending_location: None,
+            pending_data: false,
+            files: Vec::new(),
+            error: 0,
+            error_string: String::new(),
         }
     }
 
@@ -165,6 +182,19 @@ impl FakeTorrent {
         self.left_until_done = 1 << 20;
         self
     }
+
+    /// The files `torrent-get` lists, relative to the torrent's folder.
+    pub fn files(mut self, files: &[&str]) -> Self {
+        self.files = files.iter().map(|f| f.to_string()).collect();
+        self
+    }
+
+    /// Reporting a local error (`error` 3) with this text.
+    pub fn local_error(mut self, text: &str) -> Self {
+        self.error = 3;
+        self.error_string = text.to_owned();
+        self
+    }
 }
 
 #[derive(Default)]
@@ -186,6 +216,12 @@ struct TrState {
     location_lag: u32,
     /// Makes every `torrent-set-location` answer with this refusal text.
     reject_locations: Option<String>,
+    /// Refusal texts of `torrent-set-location` for single torrents, by hash.
+    rejected_locations: HashMap<String, String>,
+    /// Moves the data only when the new folder is reported.
+    async_locations: bool,
+    /// Background moves that fail with this `errorString`, by hash.
+    failing_locations: HashMap<String, String>,
     next_id: i64,
 }
 
@@ -254,6 +290,15 @@ impl FakeTransmission {
         st.torrents.push(torrent);
     }
 
+    /// Forgets the torrent `hash`, as a person removing it in Transmission.
+    pub fn remove(&self, hash: &str) {
+        self.state
+            .lock()
+            .unwrap()
+            .torrents
+            .retain(|t| t.hash != hash);
+    }
+
     pub fn torrents(&self) -> Vec<FakeTorrent> {
         self.state.lock().unwrap().torrents.clone()
     }
@@ -319,9 +364,11 @@ impl FakeTransmission {
 
     /// Reports every folder a `torrent-set-location` asked for, now.
     pub fn settle_locations(&self) {
-        for t in self.state.lock().unwrap().torrents.iter_mut() {
+        let mut st = self.state.lock().unwrap();
+        let failing = st.failing_locations.clone();
+        for t in st.torrents.iter_mut() {
             if let Some((location, _)) = t.pending_location.take() {
-                t.download_dir = location;
+                settle_location(t, location, &failing);
             }
         }
     }
@@ -329,6 +376,37 @@ impl FakeTransmission {
     /// Makes every `torrent-set-location` answer with this refusal text.
     pub fn reject_locations(&self, result: Option<&str>) {
         self.state.lock().unwrap().reject_locations = result.map(str::to_owned);
+    }
+
+    /// Makes a `torrent-set-location` of the torrent `hash` answer with this
+    /// refusal text (`None` takes it back).
+    pub fn reject_location_of(&self, hash: &str, result: Option<&str>) {
+        let mut st = self.state.lock().unwrap();
+        match result {
+            Some(result) => st
+                .rejected_locations
+                .insert(hash.to_owned(), result.to_owned()),
+            None => st.rejected_locations.remove(hash),
+        };
+    }
+
+    /// Moves a torrent's data only when its new folder is reported (at the
+    /// next `torrent-get`, or after the lag), not when the move is asked for.
+    pub fn async_locations(&self, on: bool) {
+        self.state.lock().unwrap().async_locations = on;
+    }
+
+    /// Makes the background move of the torrent `hash` fail: when it would be
+    /// reported, the old folder stays and the torrent reports a local error
+    /// with `error_string` (`None` takes it back).
+    pub fn fail_location_of(&self, hash: &str, error_string: Option<&str>) {
+        let mut st = self.state.lock().unwrap();
+        match error_string {
+            Some(text) => st
+                .failing_locations
+                .insert(hash.to_owned(), text.to_owned()),
+            None => st.failing_locations.remove(hash),
+        };
     }
 
     /// The torrent `hash` as the fake holds it.
@@ -528,15 +606,20 @@ async fn tr_rpc_answer(
                 file_count,
                 left_until_done: 0,
                 pending_location: None,
+                pending_data: false,
+                files: Vec::new(),
+                error: 0,
+                error_string: String::new(),
             });
             ok(json!({ "torrent-added": { "id": id, "hashString": hash, "name": name } }))
                 .into_response()
         }
 
         "torrent-get" => {
+            let failing = st.failing_locations.clone();
             for t in st.torrents.iter_mut() {
                 match t.pending_location.take() {
-                    Some((location, 0)) => t.download_dir = location,
+                    Some((location, 0)) => settle_location(t, location, &failing),
                     Some((location, n)) => t.pending_location = Some((location, n - 1)),
                     None => {}
                 }
@@ -552,6 +635,8 @@ async fn tr_rpc_answer(
                         "id": t.id, "name": t.name, "hashString": t.hash, "status": t.status,
                         "labels": t.labels, "file-count": t.file_count, "downloadDir": t.download_dir,
                         "leftUntilDone": t.left_until_done, "sizeWhenDone": 1_i64 << 30,
+                        "error": t.error, "errorString": t.error_string,
+                        "files": fake_files(t),
                     });
                     if omit_file_count {
                         torrent.as_object_mut().unwrap().remove("file-count");
@@ -601,10 +686,21 @@ async fn tr_rpc_answer(
                 return err(&reason).into_response();
             }
             let wanted = ids(&args);
+            if let Some(reason) = wanted.iter().find_map(|h| st.rejected_locations.get(h)) {
+                return err(&reason.clone()).into_response();
+            }
             let location = args["location"].as_str().unwrap_or_default().to_owned();
             let moves = args["move"].as_bool().unwrap_or(false);
             let lag = st.location_lag;
+            let later = st.async_locations;
+            let failing = st.failing_locations.clone();
             for t in st.torrents.iter_mut().filter(|t| wanted.contains(&t.hash)) {
+                if later || failing.contains_key(&t.hash) {
+                    // Answered now, moved in the background.
+                    t.pending_location = Some((location.clone(), lag));
+                    t.pending_data = moves;
+                    continue;
+                }
                 if moves {
                     let from = std::path::Path::new(&t.download_dir).join(&t.name);
                     let to = std::path::Path::new(&location).join(&t.name);
@@ -631,6 +727,42 @@ async fn tr_rpc_answer(
 
         other => err(&format!("method {other} not supported by the fake")).into_response(),
     }
+}
+
+/// Ends the background move of `t` to `location`: fails it when `failing`
+/// names the torrent, else moves its data if still to do and reports the folder.
+fn settle_location(t: &mut FakeTorrent, location: String, failing: &HashMap<String, String>) {
+    let data = std::mem::take(&mut t.pending_data);
+    if let Some(text) = failing.get(&t.hash) {
+        t.error = 3;
+        t.error_string = text.clone();
+        return;
+    }
+    if data {
+        let from = std::path::Path::new(&t.download_dir).join(&t.name);
+        let to = std::path::Path::new(&location).join(&t.name);
+        if let Err(e) = move_tree(&from, &to) {
+            t.error = 3;
+            t.error_string = format!("move failed: {e}");
+            return;
+        }
+    }
+    t.download_dir = location;
+}
+
+/// A torrent's `files` as `torrent-get` lists them: all done, or none of
+/// their bytes for a torrent still downloading.
+fn fake_files(t: &FakeTorrent) -> Value {
+    let names = if t.files.is_empty() {
+        vec![t.name.clone()]
+    } else {
+        t.files.clone()
+    };
+    let done = if t.left_until_done > 0 { 0 } else { 100 };
+    names
+        .into_iter()
+        .map(|name| json!({ "name": name, "length": 100, "bytesCompleted": done }))
+        .collect()
 }
 
 /// Moves `from` to `to` as Transmission moves a torrent's data: a missing

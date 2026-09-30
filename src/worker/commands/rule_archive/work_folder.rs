@@ -3,24 +3,33 @@
 //!
 //! Where a work folder is, is never stored: every run looks at the disk and at
 //! Transmission and does what is left. That is what lets a move cut short (the
-//! worker was stopped or died) finish on the next run, and what makes a folder
-//! a person moved by hand count as moved.
+//! worker was stopped or died, or Transmission was slow) finish on the next
+//! run, and what makes a folder a person moved by hand count as moved.
 //!
 //! A move is, in this order:
 //!
 //! 1. **Checks, before anything changes** ([`check`]). The two folders exist,
 //!    are different, neither is inside the other, and they are on one
-//!    filesystem. The work folder is a direct child of the source folder
-//!    ([`is_work_folder_name`]) and is not a link. Nothing inside it is a link
-//!    leading out of the two folders or sits on another filesystem. And no
-//!    relative path is on both sides unless it is a real directory on both:
-//!    one such file refuses the whole move, with the list. A refused move has
-//!    touched nothing.
-//! 2. **Transmission first** ([`move_torrents`]). Every torrent whose data is
-//!    inside the work folder is moved with `torrent-set-location` (files
-//!    moved), and the move waits until Transmission reports the new folder for
-//!    each. Transmission keeps seeing its files where they are, and the folders
-//!    it creates for them are its own user's.
+//!    filesystem, and so are the work folder at the destination and every
+//!    directory there that the source merges into. The work folder is a direct
+//!    child of the source folder ([`is_work_folder_name`]) and is not a link.
+//!    Nothing inside it is a link leading out of the two folders or sits on
+//!    another filesystem. No relative path is on both sides unless it is a
+//!    real directory on both: one such file refuses the whole move, with the
+//!    list. And the filesystem renames without replacing: an empty probe file
+//!    is renamed from one folder to the other with `RENAME_NOREPLACE` and
+//!    removed ([`probe_renames`]). A refused move has moved nothing.
+//! 2. **Transmission first.** The torrents whose data is in the work folder
+//!    are found by where their folders really are ([`plan_torrents`]); a
+//!    torrent still downloading or verifying, one with a local error, one
+//!    whose folder is written with `..`, or one whose files the destination
+//!    has already, refuses the whole move before any torrent moves. Each is
+//!    then moved with `torrent-set-location` (files moved), and the move waits
+//!    until Transmission reports the new folder for each ([`move_torrents`]).
+//!    Transmission 4 moves after it has answered and shows a failed move only
+//!    as a local error on the torrent, which ends the wait with its text. A
+//!    wait that runs out leaves the command for the next start
+//!    ([`MoveError::Later`]).
 //! 3. **The rest is renamed** ([`move_entries`]). The work folder is renamed
 //!    whole when the destination has none. Otherwise it is merged: an entry the
 //!    destination lacks is renamed whole, and a directory both sides have is
@@ -33,18 +42,22 @@
 //! keeps its owner. The worker creates no directory of its own: what the
 //! destination lacks arrives whole by rename, and what it has is merged into.
 //! The only new directories are the ones Transmission makes for the torrents
-//! it moves, which belong to Transmission's user, as its downloads do. So a
-//! worker running as root never leaves a root-owned folder that Transmission
-//! could not write into after a restore.
+//! it moves, which belong to Transmission's user, as its downloads do. (The
+//! spec asks new folders to take the owner and group of the destination's
+//! parent; that holds when Transmission's user owns the media, and the rest is
+//! an open decision, see ticket 0011.)
 //!
 //! A rerun after a stop at any point repeats the three steps on what is left:
 //! the checks see the part already moved at the destination and the rest at
 //! the source (disjoint, so no conflict), Transmission's torrents that already
 //! report the destination are not touched again, and the renames move what is
 //! still at the source. Each step only ever moves things from the source to
-//! the destination, so reruns converge on everything at the destination.
+//! the destination, so reruns converge on everything at the destination. The
+//! blocking steps keep the worker's lock ([`Hold`]) until they return, and the
+//! renames stop between two entries once shutdown is asked for.
 
 use std::{
+    any::Any,
     fs, io,
     path::{Component, Path, PathBuf},
     sync::Arc,
@@ -54,15 +67,20 @@ use std::{
 use tokio_util::sync::CancellationToken;
 use transmission_rpc::TransClient;
 
-use crate::transmission::{self, Redactor, TorrentPlace};
+use crate::{
+    folders::has_parent_dir,
+    transmission::{self, Redactor, TorrentPlace},
+};
 
 /// How the move waits for Transmission to report the new folders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MovePolicy {
     /// Wait between two looks.
     pub poll: Duration,
-    /// How long Transmission may take for all the torrents of one move. Within
-    /// one filesystem Transmission renames too, which takes moments.
+    /// How long one start of the command waits for Transmission to report
+    /// every torrent at its new folder. Past it the command is left for the
+    /// next look (see [`MoveError::Later`]). Within one filesystem Transmission
+    /// renames too, which takes moments.
     pub timeout: Duration,
 }
 
@@ -128,15 +146,30 @@ pub enum Moved {
 pub enum MoveError {
     /// Not moved (or not all of it), for the reason given as a sentence.
     Failed(String),
-    /// Shutdown was asked for while waiting for Transmission. What moved so
-    /// far stays; the next run carries on.
+    /// Not finished yet, for the reason given as a sentence: Transmission has
+    /// not reported every torrent at its new folder in time. What moved stays;
+    /// the next start carries on.
+    Later(String),
+    /// Shutdown was asked for. What moved so far stays; the next start
+    /// carries on.
     Stopped,
 }
 
-/// Tells which filesystem a path is on. The worker uses the metadata's
-/// `st_dev` ([`RealDisk`]); tests stand in another filesystem.
+/// Something kept alive until the move's blocking work has returned, even
+/// when the task that waits for it is aborted: the worker passes its lock,
+/// so no cycle or other worker starts while files are still being renamed.
+pub type Hold = Arc<dyn Any + Send + Sync>;
+
+/// The filesystem as the move sees it. The worker uses the metadata's
+/// `st_dev` and `renameat2` ([`RealDisk`]); tests stand in another filesystem.
 pub trait Disk: Send + Sync {
+    /// Which filesystem `path` is on.
     fn device(&self, path: &Path, metadata: &fs::Metadata) -> u64;
+
+    /// Renames `from` to `to` unless `to` exists (see [`rename_noreplace`]).
+    fn rename_noreplace(&self, from: &Path, to: &Path) -> io::Result<()> {
+        rename_noreplace(from, to)
+    }
 }
 
 /// The filesystems as the operating system reports them.
@@ -159,25 +192,56 @@ pub fn is_work_folder_name(name: &str) -> bool {
 }
 
 /// Moves the work folder of `request`. See the module docs for the steps.
+/// `hold` stays alive until every blocking step has returned.
 pub async fn move_work_folder(
     transmission: &mut TransClient,
     redactor: &Redactor,
     request: &Request,
     policy: MovePolicy,
     disk: Arc<dyn Disk>,
+    hold: Hold,
     cancel: &CancellationToken,
 ) -> Result<Moved, MoveError> {
     let checked = {
-        let request = request.clone();
-        blocking(move || check(&request, disk.as_ref())).await?
+        let (request, disk) = (request.clone(), disk.clone());
+        blocking(&hold, move || {
+            check(&request, disk.as_ref()).map_err(MoveError::Failed)
+        })
+        .await?
     };
 
-    let torrents = move_torrents(transmission, redactor, request, policy, cancel).await?;
+    let places = transmission::torrent_places(transmission, None, true)
+        .await
+        .map_err(|err| {
+            eprintln!("{}", redactor.apply(&err.to_string()));
+            MoveError::Failed(
+                "Transmission에 연결하지 못해서 옮기지 않았어요. 잠시 뒤 다시 옮겨 주세요."
+                    .to_owned(),
+            )
+        })?
+        .into_iter()
+        .map(|mut place| {
+            place.local_error = place.local_error.map(|e| redactor.apply(&e));
+            place
+        })
+        .collect::<Vec<_>>();
+    let moves = {
+        let request = request.clone();
+        blocking(&hold, move || {
+            plan_torrents(&request, &places).map_err(MoveError::Failed)
+        })
+        .await?
+    };
+
+    let torrents = move_torrents(transmission, redactor, &moves, policy, cancel).await?;
 
     let renamed = {
         let (source, destination) = (request.source(), request.destination());
-        let to = request.to;
-        blocking(move || move_entries(&source, &destination, to)).await?
+        let (to, cancel) = (request.to, cancel.clone());
+        blocking(&hold, move || {
+            move_entries(&source, &destination, to, disk.as_ref(), &cancel)
+        })
+        .await?
     };
 
     Ok(if renamed || torrents > 0 {
@@ -189,11 +253,19 @@ pub async fn move_work_folder(
     })
 }
 
-async fn blocking<T: Send + 'static>(
-    work: impl FnOnce() -> Result<T, String> + Send + 'static,
+/// Runs `work` on the blocking pool with `hold` inside it, so that `hold`
+/// lives until `work` returns even if the caller stops waiting.
+pub async fn blocking<T: Send + 'static>(
+    hold: &Hold,
+    work: impl FnOnce() -> Result<T, MoveError> + Send + 'static,
 ) -> Result<T, MoveError> {
-    match tokio::task::spawn_blocking(work).await {
-        Ok(result) => result.map_err(MoveError::Failed),
+    let hold = hold.clone();
+    let task = tokio::task::spawn_blocking(move || {
+        let _hold = hold;
+        work()
+    });
+    match task.await {
+        Ok(result) => result,
         Err(_) => Err(MoveError::Failed(
             "폴더를 옮기다 내부 오류가 났어요.".to_owned(),
         )),
@@ -217,7 +289,23 @@ fn quoted(path: &Path) -> String {
     format!("`{}`", path.display())
 }
 
-/// The checks of step 1. Reads only.
+/// `paths` quoted, the first [`LISTED_CONFLICTS`] of them, and how many more.
+fn listed(paths: &[PathBuf]) -> String {
+    let names: Vec<String> = paths
+        .iter()
+        .take(LISTED_CONFLICTS)
+        .map(|p| quoted(p))
+        .collect();
+    let more = if paths.len() > LISTED_CONFLICTS {
+        format!(" 외 {}개", paths.len() - LISTED_CONFLICTS)
+    } else {
+        String::new()
+    };
+    format!("{}{more}", names.join(", "))
+}
+
+/// The checks of step 1. They change nothing on disk except the rename probe
+/// ([`probe_renames`]), which leaves nothing behind.
 pub fn check(request: &Request, disk: &dyn Disk) -> Result<Checked, String> {
     if !is_work_folder_name(&request.name) {
         return Err(format!(
@@ -253,7 +341,16 @@ pub fn check(request: &Request, disk: &dyn Disk) -> Result<Checked, String> {
             ));
         }
     }
+    // A work folder at the destination that is a mount of its own would take
+    // no rename from the source.
+    if let Some(meta) = &destination_meta {
+        if disk.device(&destination, meta) != from_dev {
+            return Err(different_filesystems());
+        }
+    }
     let Some(source_meta) = source_meta else {
+        // Nothing for the worker to rename; Transmission's torrents are
+        // checked on their own (plan_torrents).
         return Ok(Checked {
             destination_exists: destination_meta.is_some(),
         });
@@ -263,6 +360,9 @@ pub fn check(request: &Request, disk: &dyn Disk) -> Result<Checked, String> {
             "{}가 폴더가 아니라서 옮기지 않았어요.",
             quoted(&source)
         ));
+    }
+    if disk.device(&source, &source_meta) != from_dev {
+        return Err(different_filesystems());
     }
 
     let mut walk = Walk {
@@ -283,25 +383,15 @@ pub fn check(request: &Request, disk: &dyn Disk) -> Result<Checked, String> {
     walk.visit(&source, merge_into, Path::new(""))?;
 
     if !walk.conflicts.is_empty() {
-        let total = walk.conflicts.len();
-        let listed: Vec<String> = walk
-            .conflicts
-            .iter()
-            .take(LISTED_CONFLICTS)
-            .map(|p| quoted(p))
-            .collect();
-        let more = if total > LISTED_CONFLICTS {
-            format!(" 외 {}개", total - LISTED_CONFLICTS)
-        } else {
-            String::new()
-        };
         return Err(format!(
-            "{}의 `{}`에 같은 이름의 파일이 있어서 아무것도 옮기지 않았어요: {}{more}. 한쪽을 정리한 뒤 다시 옮겨 주세요.",
+            "{}의 `{}`에 같은 이름의 파일이 있어서 아무것도 옮기지 않았어요: {}. 한쪽을 정리한 뒤 다시 옮겨 주세요.",
             request.to.name(),
             request.name,
-            listed.join(", ")
+            listed(&walk.conflicts)
         ));
     }
+
+    probe_renames(request, disk)?;
     Ok(Checked {
         destination_exists: destination_meta.is_some(),
     })
@@ -310,6 +400,55 @@ pub fn check(request: &Request, disk: &dyn Disk) -> Result<Checked, String> {
 fn different_filesystems() -> String {
     "수집 폴더와 보관 폴더가 서로 다른 파일시스템에 있어서 옮기지 않았어요. 복사하지 않고 이름만 바꿔 옮기므로, 같은 파일시스템 안의 폴더여야 해요."
         .to_owned()
+}
+
+/// Renames an empty file of its own from the source folder to the destination
+/// folder the way the renames will ([`Disk::rename_noreplace`]), and removes
+/// it. A filesystem that cannot rename without replacing, or that refuses the
+/// rename, refuses the move here, before anything has moved.
+fn probe_renames(request: &Request, disk: &dyn Disk) -> Result<(), String> {
+    let name = format!(
+        ".trss-move-probe-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or_default()
+    );
+    let (here, there) = (request.from_root.join(&name), request.to_root.join(&name));
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&here)
+        .map_err(|e| {
+            format!(
+                "{} {}에 쓸 수 없어서 옮기지 않았어요: {e}",
+                request.from.name(),
+                quoted(&request.from_root)
+            )
+        })?;
+    let renamed = disk.rename_noreplace(&here, &there);
+    let _ = fs::remove_file(if renamed.is_ok() { &there } else { &here });
+    match renamed {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::CrossesDevices => Err(different_filesystems()),
+        Err(e)
+            if matches!(
+                e.kind(),
+                io::ErrorKind::InvalidInput | io::ErrorKind::Unsupported
+            ) =>
+        {
+            Err(
+                "이 파일시스템은 덮어쓰지 않는 이름 바꾸기(RENAME_NOREPLACE)를 지원하지 않아서 옮기지 않았어요. 지원하는 파일시스템의 폴더여야 해요."
+                    .to_owned(),
+            )
+        }
+        Err(e) => Err(format!(
+            "{}에서 {}로 이름을 바꿔 옮길 수 없어서 옮기지 않았어요: {e}",
+            request.from.name(),
+            request.to.name()
+        )),
+    }
 }
 
 /// A root folder with links resolved, and its filesystem.
@@ -389,6 +528,10 @@ impl Walk<'_> {
             let is_dir = meta.is_dir();
             match counterpart {
                 Some((there, there_meta)) if is_dir && there_meta.is_dir() => {
+                    // Merged into: it must take renames from the source.
+                    if self.disk.device(&there, &there_meta) != self.device {
+                        return Err(different_filesystems());
+                    }
                     self.visit(&path, Some(&there), &rel)?;
                 }
                 Some(_) => self.conflicts.push(rel),
@@ -404,6 +547,15 @@ impl Walk<'_> {
 // 2. Transmission
 // ---------------------------------------------------------------------------
 
+/// One torrent to move: from its folder as Transmission reports it to `to`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TorrentMove {
+    pub hash: String,
+    pub name: String,
+    pub from: PathBuf,
+    pub to: PathBuf,
+}
+
 /// `base` with `rest` joined on, without the trailing slash an empty `rest`
 /// would add.
 fn joined(base: &Path, rest: &Path) -> PathBuf {
@@ -414,71 +566,222 @@ fn joined(base: &Path, rest: &Path) -> PathBuf {
     }
 }
 
-/// Where the torrent at `place` goes when `request` moves, or `None` when its
-/// data is not in the work folder: its folder is the work folder or inside it,
-/// or it sits right in the source folder under the work folder's name.
-pub fn new_location(place: &TorrentPlace, request: &Request) -> Option<PathBuf> {
-    let folder = Path::new(&place.download_dir);
-    if let Ok(rest) = folder.strip_prefix(request.source()) {
+/// `path` with links resolved as far as it exists; the missing rest is joined
+/// on as written. For paths without `..`.
+fn resolve(path: &Path) -> PathBuf {
+    let parts: Vec<Component> = path.components().collect();
+    for keep in (1..=parts.len()).rev() {
+        let head: PathBuf = parts[..keep].iter().collect();
+        if let Ok(mut real) = fs::canonicalize(&head) {
+            for part in &parts[keep..] {
+                real.push(part);
+            }
+            return real;
+        }
+    }
+    path.to_path_buf()
+}
+
+/// Where a torrent in `folder` (where it really is) named `name` goes when
+/// `request` moves, or `None` when its data is not in the work folder: its
+/// folder is the work folder `work` or inside it, or it sits right in the
+/// source folder `root` under the work folder's name. `work` and `root` are
+/// the work folder and the source folder in the same form as `folder`.
+pub fn new_location(
+    folder: &Path,
+    name: &str,
+    work: &Path,
+    root: &Path,
+    request: &Request,
+) -> Option<PathBuf> {
+    if let Ok(rest) = folder.strip_prefix(work) {
         return Some(joined(&request.destination(), rest));
     }
-    let named_like_it = Path::new(&place.name)
+    let named_like_it = Path::new(name)
         .components()
         .next()
         .is_some_and(|first| first.as_os_str() == request.name.as_str());
-    (folder == request.from_root && named_like_it).then(|| request.to_root.clone())
+    (folder == root && named_like_it).then(|| request.to_root.clone())
 }
 
-/// Step 2: moves the torrents in the work folder and waits until Transmission
-/// reports them at the destination. Returns how many it asked to move.
+/// Which of the torrents `places` are in the work folder of `request`, judged
+/// by where their folders really are (links followed, as Transmission's own
+/// file access follows them), and whether all of them can move now. Refuses
+/// the whole move, before any torrent moves, when one of them:
+///
+/// - has a folder written with `..` that lands in the work folder (by text or
+///   by the disk): Transmission's and the worker's readings of it could part;
+/// - is still downloading or verifying: Transmission would keep writing it,
+///   possibly from its incomplete folder, and finishes a file by renaming it
+///   over whatever has its name;
+/// - reports a local error;
+/// - has a file whose name (or its `.part` name) is at the new folder while
+///   the file is still at the old one or not complete: Transmission's move
+///   replaces what it meets.
+///
+/// A complete torrent's file found only at the new folder is its own data,
+/// moved there by an earlier start or by hand, and is no conflict.
+pub fn plan_torrents(
+    request: &Request,
+    places: &[TorrentPlace],
+) -> Result<Vec<TorrentMove>, String> {
+    let (source, from_root) = (request.source(), request.from_root.clone());
+    let (work_real, root_real) = (resolve(&source), resolve(&from_root));
+    let (work_text, root_text) = (super::lexical(&source), super::lexical(&from_root));
+
+    let mut moves = Vec::new();
+    for place in places {
+        let folder = Path::new(&place.download_dir);
+        if has_parent_dir(folder) {
+            let by_text = new_location(
+                &super::lexical(folder),
+                &place.name,
+                &work_text,
+                &root_text,
+                request,
+            );
+            let by_disk = fs::canonicalize(folder)
+                .ok()
+                .and_then(|real| new_location(&real, &place.name, &work_real, &root_real, request));
+            if by_text.is_some() || by_disk.is_some() {
+                return Err(format!(
+                    "Transmission 토렌트 `{}`의 받는 폴더 {}에 `..`가 있어서 아무것도 옮기지 않았어요. Transmission에서 그 토렌트의 위치를 `..` 없이 바로잡은 뒤 다시 옮겨 주세요.",
+                    place.name,
+                    quoted(folder)
+                ));
+            }
+            continue;
+        }
+        let real = resolve(folder);
+        if let Some(to) = new_location(&real, &place.name, &work_real, &root_real, request) {
+            moves.push((place, to));
+        }
+    }
+
+    let unfinished: Vec<PathBuf> = moves
+        .iter()
+        .filter(|(place, _)| place.unfinished)
+        .map(|(place, _)| PathBuf::from(&place.name))
+        .collect();
+    if !unfinished.is_empty() {
+        return Err(format!(
+            "Transmission이 아직 받거나 확인하는 토렌트가 있어서 아무것도 옮기지 않았어요: {}. 다 받은 뒤 다시 옮겨 주세요.",
+            listed(&unfinished)
+        ));
+    }
+    if let Some((place, error)) = moves
+        .iter()
+        .find_map(|(place, _)| Some((place, place.local_error.as_ref()?)))
+    {
+        return Err(format!(
+            "Transmission이 토렌트 `{}`에 오류를 알리고 있어서 아무것도 옮기지 않았어요: {error}. Transmission에서 그 토렌트를 확인한 뒤 다시 옮겨 주세요.",
+            place.name
+        ));
+    }
+
+    let destination = request.destination();
+    let mut conflicts = Vec::new();
+    for (place, to) in &moves {
+        let from = Path::new(&place.download_dir);
+        for file in &place.files {
+            let names = [file.name.clone(), format!("{}.part", file.name)];
+            let present = |dir: &Path| {
+                names
+                    .iter()
+                    .map(|name| dir.join(name))
+                    .find(|path| fs::symlink_metadata(path).is_ok())
+            };
+            if let Some(there) = present(to) {
+                if present(from).is_some() || !file.complete {
+                    conflicts.push(
+                        there
+                            .strip_prefix(&destination)
+                            .map(Path::to_path_buf)
+                            .unwrap_or(there),
+                    );
+                }
+            }
+        }
+    }
+    if !conflicts.is_empty() {
+        return Err(format!(
+            "{}의 `{}`에 Transmission 토렌트의 파일과 같은 이름의 파일이 있어서 아무것도 옮기지 않았어요: {}. 한쪽을 정리한 뒤 다시 옮겨 주세요.",
+            request.to.name(),
+            request.name,
+            listed(&conflicts)
+        ));
+    }
+
+    Ok(moves
+        .into_iter()
+        .map(|(place, to)| TorrentMove {
+            hash: place.hash.clone(),
+            name: place.name.clone(),
+            from: PathBuf::from(&place.download_dir),
+            to,
+        })
+        .collect())
+}
+
+/// Step 2: asks Transmission to move `moves` and waits until it reports each
+/// at its new folder. Transmission answers before it moves the files and
+/// shows a failed move only as a local error on the torrent, so the wait
+/// watches for that too. Returns how many it asked to move.
 async fn move_torrents(
     transmission: &mut TransClient,
     redactor: &Redactor,
-    request: &Request,
+    moves: &[TorrentMove],
     policy: MovePolicy,
     cancel: &CancellationToken,
 ) -> Result<usize, MoveError> {
-    let places = transmission::torrent_places(transmission, None)
-        .await
-        .map_err(|err| {
-            eprintln!("{}", redactor.apply(&err.to_string()));
-            MoveError::Failed(
-                "Transmission에 연결하지 못해서 옮기지 않았어요. 잠시 뒤 다시 옮겨 주세요."
-                    .to_owned(),
-            )
-        })?;
-    let moves: Vec<(String, PathBuf)> = places
-        .iter()
-        .filter_map(|place| Some((place.hash.clone(), new_location(place, request)?)))
-        .collect();
     if moves.is_empty() {
         return Ok(0);
     }
 
-    for (hash, location) in &moves {
-        if let Err(err) = transmission::set_location(transmission, hash, location).await {
+    for (asked, m) in moves.iter().enumerate() {
+        if let Err(err) = transmission::set_location(transmission, &m.hash, &m.to).await {
             let err = redactor.apply(&err);
-            eprintln!("torrent-set-location {hash}: {err}");
+            eprintln!("torrent-set-location {}: {err}", m.hash);
+            let after = if asked == 0 {
+                "아무것도 옮기지 않았어요. 잠시 뒤 다시 옮겨 주세요.".to_owned()
+            } else {
+                format!(
+                    "먼저 맡긴 토렌트 {asked}개는 Transmission이 새 위치로 옮기고 있을 수 있어요. 다시 옮기면 남은 것만 옮겨요."
+                )
+            };
             return Err(MoveError::Failed(format!(
-                "Transmission이 토렌트의 위치를 옮기지 않았어요({err}). 잠시 뒤 다시 옮겨 주세요."
+                "Transmission이 토렌트 `{}`의 위치 옮기기를 거절했어요({err}). {after}",
+                m.name
             )));
         }
-        println!("Moving torrent {hash} to {}", location.display());
+        println!("Moving torrent {} to {}", m.hash, m.to.display());
     }
 
-    let hashes: Vec<String> = moves.iter().map(|(hash, _)| hash.clone()).collect();
+    let hashes: Vec<String> = moves.iter().map(|m| m.hash.clone()).collect();
     let started = Instant::now();
     loop {
         // A torrent removed meanwhile has nothing left to wait for.
-        let waiting = match transmission::torrent_places(transmission, Some(&hashes)).await {
-            Ok(places) => moves
-                .iter()
-                .filter(|(hash, location)| {
-                    places
-                        .iter()
-                        .any(|p| &p.hash == hash && Path::new(&p.download_dir) != location)
-                })
-                .count(),
+        let waiting = match transmission::torrent_places(transmission, Some(&hashes), false).await {
+            Ok(places) => {
+                let mut waiting = 0;
+                for m in moves {
+                    let Some(place) = places.iter().find(|p| p.hash == m.hash) else {
+                        continue;
+                    };
+                    if Path::new(&place.download_dir) == m.to {
+                        continue;
+                    }
+                    if let Some(error) = &place.local_error {
+                        return Err(MoveError::Failed(format!(
+                            "Transmission이 토렌트 `{}`를 옮기다 오류를 알렸어요: {}. 옮겨진 파일은 그대로 두었어요. Transmission에서 그 토렌트를 확인한 뒤 다시 옮기면 남은 것만 옮겨요.",
+                            m.name,
+                            redactor.apply(error)
+                        )));
+                    }
+                    waiting += 1;
+                }
+                waiting
+            }
             Err(err) => {
                 eprintln!("{}", redactor.apply(&err.to_string()));
                 moves.len()
@@ -488,8 +791,8 @@ async fn move_torrents(
             return Ok(moves.len());
         }
         if started.elapsed() >= policy.timeout {
-            return Err(MoveError::Failed(format!(
-                "Transmission이 토렌트 {waiting}개를 {}초 안에 옮기지 못했어요. 옮긴 것은 그대로 두었고, 다시 옮기면 남은 것만 옮겨요.",
+            return Err(MoveError::Later(format!(
+                "Transmission이 {}초 안에 토렌트 {waiting}개를 새 위치로 옮겼다고 알리지 않았어요. 옮긴 것은 그대로 두었고, 다시 옮기면 남은 것만 옮겨요.",
                 policy.timeout.as_secs()
             )));
         }
@@ -504,39 +807,44 @@ async fn move_torrents(
 // 3. Renames
 // ---------------------------------------------------------------------------
 
-/// Renames `from` to `to` unless `to` exists (an `AlreadyExists` error then).
-/// Never replaces anything, a directory included.
+/// Renames `from` to `to` unless `to` exists (an `AlreadyExists` error then),
+/// with `renameat2(RENAME_NOREPLACE)`. Never replaces anything, a directory
+/// included. There is no fallback: a filesystem without the flag answers
+/// `InvalidInput` or `Unsupported`, and the checks refuse such a move before
+/// anything has moved ([`probe_renames`]).
 pub fn rename_noreplace(from: &Path, to: &Path) -> io::Result<()> {
     use rustix::fs::{renameat_with, RenameFlags, CWD};
-    match renameat_with(CWD, from, CWD, to, RenameFlags::NOREPLACE) {
-        Ok(()) => Ok(()),
-        // A filesystem without the flag: check, then rename. The worker holds
-        // the lock that keeps its own cycles out meanwhile.
-        Err(rustix::io::Errno::INVAL) | Err(rustix::io::Errno::NOSYS) => {
-            if fs::symlink_metadata(to).is_ok() {
-                return Err(io::ErrorKind::AlreadyExists.into());
-            }
-            fs::rename(from, to)
-        }
-        Err(errno) => Err(errno.into()),
-    }
+    renameat_with(CWD, from, CWD, to, RenameFlags::NOREPLACE).map_err(io::Error::from)
 }
 
 /// Step 3: moves what is left at `source` to `destination`. Returns whether
-/// anything was renamed.
-pub fn move_entries(source: &Path, destination: &Path, to: Side) -> Result<bool, String> {
+/// anything was renamed. Stops between two entries when `cancel` is set.
+pub fn move_entries(
+    source: &Path,
+    destination: &Path,
+    to: Side,
+    disk: &dyn Disk,
+    cancel: &CancellationToken,
+) -> Result<bool, MoveError> {
     match fs::symlink_metadata(source) {
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
-        Err(e) => return Err(format!("{}를 읽지 못했어요: {e}", quoted(source))),
+        Err(e) => {
+            return Err(MoveError::Failed(format!(
+                "{}를 읽지 못했어요: {e}",
+                quoted(source)
+            )))
+        }
         Ok(meta) if meta.file_type().is_symlink() || !meta.is_dir() => {
-            return Err(format!(
+            return Err(MoveError::Failed(format!(
                 "{}가 링크이거나 폴더가 아니라서 옮기지 않았어요.",
                 quoted(source)
-            ));
+            )));
         }
         Ok(_) => {}
     }
     let mut merge = Merge {
+        disk,
+        cancel,
         renamed: false,
         left: Vec::new(),
     };
@@ -544,45 +852,45 @@ pub fn move_entries(source: &Path, destination: &Path, to: Side) -> Result<bool,
     if merge.left.is_empty() {
         return Ok(merge.renamed);
     }
-    let total = merge.left.len();
-    let listed: Vec<String> = merge
-        .left
-        .iter()
-        .take(LISTED_CONFLICTS)
-        .map(|p| quoted(p))
-        .collect();
-    let more = if total > LISTED_CONFLICTS {
-        format!(" 외 {}개", total - LISTED_CONFLICTS)
-    } else {
-        String::new()
-    };
-    Err(format!(
-        "옮기는 사이 {}에 같은 이름의 파일이 생겨서 {}{more}는 옮기지 않았어요. 한쪽을 정리한 뒤 다시 옮겨 주세요.",
+    Err(MoveError::Failed(format!(
+        "옮기는 사이 {}에 같은 이름의 파일이 생겨서 {}는 옮기지 않았어요. 한쪽을 정리한 뒤 다시 옮겨 주세요.",
         to.name(),
-        listed.join(", ")
-    ))
+        listed(&merge.left)
+    )))
 }
 
-struct Merge {
+struct Merge<'a> {
+    disk: &'a dyn Disk,
+    cancel: &'a CancellationToken,
     renamed: bool,
     /// Relative paths left at the source because the destination had them.
     left: Vec<PathBuf>,
 }
 
-impl Merge {
-    fn entry(&mut self, from: &Path, to: &Path, rel: &Path) -> Result<(), String> {
-        match rename_noreplace(from, to) {
+impl Merge<'_> {
+    fn entry(&mut self, from: &Path, to: &Path, rel: &Path) -> Result<(), MoveError> {
+        if self.cancel.is_cancelled() {
+            return Err(MoveError::Stopped);
+        }
+        match self.disk.rename_noreplace(from, to) {
             Ok(()) => {
                 self.renamed = true;
                 return Ok(());
             }
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(e) if e.kind() == io::ErrorKind::CrossesDevices => {
+                return Err(MoveError::Failed(format!(
+                    "{}와 {}가 서로 다른 파일시스템에 있어서 더 옮기지 않았어요. 옮긴 것은 그대로 두었어요. 두 폴더를 같은 파일시스템에 두면 다시 옮길 때 남은 것만 옮겨요.",
+                    quoted(from),
+                    quoted(to)
+                )))
+            }
             Err(e) => {
-                return Err(format!(
+                return Err(MoveError::Failed(format!(
                     "{}를 {}로 옮기지 못했어요: {e}. 옮긴 것은 그대로 두었고, 다시 옮기면 남은 것만 옮겨요.",
                     quoted(from),
                     quoted(to)
-                ))
+                )))
             }
         }
         let both_dirs = [from, to].iter().all(|path| {
@@ -592,10 +900,17 @@ impl Merge {
             self.left.push(rel.to_path_buf());
             return Ok(());
         }
+        let read = |e: io::Error| {
+            MoveError::Failed(format!(
+                "{}를 읽지 못해서 더 옮기지 않았어요: {e}. 옮긴 것은 그대로 두었고, 다시 옮기면 남은 것만 옮겨요.",
+                quoted(from)
+            ))
+        };
         let mut names: Vec<_> = fs::read_dir(from)
-            .map_err(|e| format!("{}를 읽지 못했어요: {e}", quoted(from)))?
-            .filter_map(|e| e.ok().map(|e| e.file_name()))
-            .collect();
+            .map_err(read)?
+            .map(|e| e.map(|e| e.file_name()))
+            .collect::<Result<_, _>>()
+            .map_err(read)?;
         names.sort();
         for name in names {
             self.entry(&from.join(&name), &to.join(&name), &rel.join(&name))?;

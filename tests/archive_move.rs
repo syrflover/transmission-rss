@@ -6,9 +6,9 @@
 //!
 //! The worker in these tests runs as the test's own user, so every folder has
 //! one owner: a test cannot make Transmission's user differ from the worker's
-//! without root. What is checked is that the folders Transmission creates take
-//! their parent's owner and group, and that what the worker moves is renamed
-//! (the same inode, hence the same owner), never copied or created by it.
+//! without root, and owners are not told apart here. What is checked is that
+//! what the worker moves is renamed (the same inode, hence the same owner),
+//! never copied or created by it.
 
 mod common;
 
@@ -821,6 +821,8 @@ async fn the_renames_wait_until_transmission_reports_the_new_folder() {
         &s.collect.join("Clevatess/Season 02"),
     );
     write(&s.collect.join("Clevatess/Season 02/notes.txt"), "x");
+    // Transmission 4 answers first and moves the data in the background.
+    s.h.tr.async_locations(true);
     s.h.tr.lag_locations(3);
 
     s.send("archive-wait-01", &c.rules[0].id, "archive").await;
@@ -837,59 +839,6 @@ async fn the_renames_wait_until_transmission_reports_the_new_folder() {
         text(s.archive.join("Clevatess/Season 02"))
     );
     assert!(!s.collect.join("Clevatess").exists());
-}
-
-#[tokio::test]
-async fn transmission_that_never_reports_the_new_folder_fails_the_move_and_moving_again_finishes() {
-    let s = Scene::new(true).await;
-    let c = s
-        .channel("feed-a", &[("Clevatess", "Clevatess/Season 02")])
-        .await;
-    let rule = &c.rules[0];
-    s.seeding(
-        1,
-        "Clevatess S02E01.mkv",
-        &s.collect.join("Clevatess/Season 02"),
-    );
-    write(&s.collect.join("Clevatess/Season 02/notes.txt"), "x");
-    s.h.tr.lag_locations(u32::MAX);
-
-    s.send("archive-slow-01", &rule.id, "archive").await;
-    s.h.worker()
-        .with_move_policy(MovePolicy {
-            poll: Duration::from_millis(20),
-            timeout: Duration::from_secs(1),
-        })
-        .run_commands(&CancellationToken::new())
-        .await
-        .unwrap();
-    let command = s.command("archive-slow-01").await;
-    assert_eq!(command["state"], "failed", "{command}");
-    assert!(command["outcome"]["reason"]
-        .as_str()
-        .unwrap()
-        .contains("옮기지 못했어요"));
-    // The worker renamed nothing of its own.
-    assert_eq!(files(&s.collect), ["Clevatess/Season 02/notes.txt"]);
-
-    // Transmission catches up; `다시 옮기기` moves the rest.
-    s.h.tr.lag_locations(0);
-    s.h.tr.settle_locations();
-    s.send("archive-slow-02", &rule.id, "archive").await;
-    s.run().await;
-    assert_eq!(
-        s.command("archive-slow-02").await["outcome"]["result"],
-        "moved"
-    );
-    assert!(!s.collect.join("Clevatess").exists());
-    assert_eq!(
-        files(&s.archive),
-        [
-            "Clevatess/Season 02/Clevatess S02E01.mkv",
-            "Clevatess/Season 02/notes.txt",
-        ]
-    );
-    assert_eq!(s.h.tr.calls_of("torrent-set-location").len(), 1);
 }
 
 #[tokio::test]
@@ -919,4 +868,344 @@ async fn a_transmission_that_refuses_the_move_leaves_everything_in_place() {
         ["Clevatess/Season 02/Clevatess S02E01.mkv"]
     );
     assert!(files(&s.archive).is_empty());
+}
+
+// --- review: torrents Transmission would still write ------------------------------------------
+
+#[tokio::test]
+async fn a_torrent_still_downloading_or_verifying_in_the_work_folder_stops_the_move() {
+    for (n, torrent) in [
+        (
+            1,
+            FakeTorrent::new(&hash(1), "Clevatess S02E02.mkv").unfinished(),
+        ),
+        (
+            2,
+            FakeTorrent::new(&hash(2), "Clevatess S02E02.mkv").status(2),
+        ),
+    ] {
+        let s = Scene::new(true).await;
+        let c = s
+            .channel("feed-a", &[("Clevatess", "Clevatess/Season 02")])
+            .await;
+        let season = s.collect.join("Clevatess/Season 02");
+        s.seeding(9, "Clevatess S02E01.mkv", &season);
+        s.h.tr.preload(torrent.in_dir(&season));
+        let before = files(&s.collect);
+
+        let id = format!("archive-busy-{n}");
+        s.send(&id, &c.rules[0].id, "archive").await;
+        s.run().await;
+
+        let command = s.command(&id).await;
+        assert_eq!(command["state"], "failed", "{command}");
+        let reason = command["outcome"]["reason"].as_str().unwrap();
+        assert!(reason.contains("`Clevatess S02E02.mkv`"), "{reason}");
+        assert!(reason.contains("다 받은 뒤"), "{reason}");
+        assert_eq!(s.rule(&c.rules[0].id).await["state"], "archived");
+        assert!(s.h.tr.calls_of("torrent-set-location").is_empty());
+        assert_eq!(files(&s.collect), before);
+        assert!(files(&s.archive).is_empty());
+    }
+}
+
+#[tokio::test]
+async fn a_downloading_torrent_counts_even_when_the_work_folder_is_gone() {
+    let s = Scene::new(true).await;
+    let c = s
+        .channel("feed-a", &[("Clevatess", "Clevatess/Season 02")])
+        .await;
+    // Its data is in Transmission's incomplete folder: nothing of the work
+    // folder is on disk yet, and the archive has a file of that name.
+    s.h.tr.preload(
+        FakeTorrent::new(&hash(1), "Clevatess S02E02.mkv")
+            .in_dir(s.collect.join("Clevatess/Season 02"))
+            .unfinished(),
+    );
+    write(
+        &s.archive.join("Clevatess/Season 02/Clevatess S02E02.mkv"),
+        "archived",
+    );
+
+    s.send("archive-gone-01", &c.rules[0].id, "archive").await;
+    s.run().await;
+
+    let command = s.command("archive-gone-01").await;
+    assert_eq!(command["state"], "failed", "{command}");
+    assert!(s.h.tr.calls_of("torrent-set-location").is_empty());
+    assert_eq!(
+        s.h.tr.torrent(&hash(1)).download_dir,
+        text(s.collect.join("Clevatess/Season 02"))
+    );
+    assert_eq!(
+        fs::read_to_string(s.archive.join("Clevatess/Season 02/Clevatess S02E02.mkv")).unwrap(),
+        "archived"
+    );
+}
+
+// --- review: which torrents are in the work folder, by where their folder really is ------------
+
+#[tokio::test]
+async fn a_torrent_found_through_a_link_into_the_work_folder_moves_with_it() {
+    let s = Scene::new(true).await;
+    let c = s
+        .channel("feed-a", &[("Clevatess", "Clevatess/Season 02")])
+        .await;
+    write(
+        &s.collect.join("Clevatess/Season 02/Clevatess S02E01.mkv"),
+        "video",
+    );
+    // Transmission knows the folder by another name: a link to the work folder.
+    symlink(s.collect.join("Clevatess"), s.collect.join("Alias")).unwrap();
+    s.h.tr.preload(
+        FakeTorrent::new(&hash(1), "Clevatess S02E01.mkv")
+            .in_dir(s.collect.join("Alias/Season 02"))
+            .status(SEEDING),
+    );
+
+    s.send("archive-alias-1", &c.rules[0].id, "archive").await;
+    s.run().await;
+
+    let command = s.command("archive-alias-1").await;
+    assert_eq!(command["state"], "done", "{command}");
+    assert_eq!(
+        s.h.tr.torrent(&hash(1)).download_dir,
+        text(s.archive.join("Clevatess/Season 02"))
+    );
+    assert_eq!(
+        files(&s.archive),
+        ["Clevatess/Season 02/Clevatess S02E01.mkv"]
+    );
+}
+
+#[tokio::test]
+async fn a_torrent_folder_with_dot_dot_is_judged_by_where_it_lands() {
+    let s = Scene::new(true).await;
+    let c = s
+        .channel("feed-a", &[("Clevatess", "Clevatess/Season 02")])
+        .await;
+    s.seeding(
+        1,
+        "Clevatess S02E01.mkv",
+        &s.collect.join("Clevatess/Season 02"),
+    );
+    // Another work's torrent, written through the work folder's name.
+    write(&s.collect.join("Other/Season 01/Other S01E01.mkv"), "other");
+    s.h.tr.preload(
+        FakeTorrent::new(&hash(2), "Other S01E01.mkv")
+            .in_dir(s.collect.join("Clevatess/../Other/Season 01"))
+            .status(SEEDING),
+    );
+    // And one of this work, written through another's name.
+    write(
+        &s.collect.join("Clevatess/Season 02/Clevatess S02E02.mkv"),
+        "video",
+    );
+    s.h.tr.preload(
+        FakeTorrent::new(&hash(3), "Clevatess S02E02.mkv")
+            .in_dir(s.collect.join("Other/../Clevatess/Season 02"))
+            .status(SEEDING),
+    );
+    let before = files(&s.collect);
+
+    s.send("archive-dots-01", &c.rules[0].id, "archive").await;
+    s.run().await;
+
+    // The one that lands in the work folder stops the move: nothing moves.
+    let command = s.command("archive-dots-01").await;
+    assert_eq!(command["state"], "failed", "{command}");
+    let reason = command["outcome"]["reason"].as_str().unwrap();
+    assert!(reason.contains("`..`"), "{reason}");
+    assert!(s.h.tr.calls_of("torrent-set-location").is_empty());
+    assert_eq!(files(&s.collect), before);
+
+    // Without it, the work moves and the other work's torrent stays.
+    s.h.tr.remove(&hash(3));
+    fs::remove_file(s.collect.join("Clevatess/Season 02/Clevatess S02E02.mkv")).unwrap();
+    s.send("archive-dots-02", &c.rules[0].id, "archive").await;
+    s.run().await;
+    let command = s.command("archive-dots-02").await;
+    assert_eq!(command["state"], "done", "{command}");
+    assert_eq!(
+        s.h.tr.torrent(&hash(2)).download_dir,
+        text(s.collect.join("Clevatess/../Other/Season 01"))
+    );
+    assert_eq!(files(&s.collect), ["Other/Season 01/Other S01E01.mkv"]);
+    let moved: Vec<Value> =
+        s.h.tr
+            .calls_of("torrent-set-location")
+            .into_iter()
+            .map(|c| c.args)
+            .collect();
+    assert_eq!(moved.len(), 1, "{moved:?}");
+    assert_eq!(moved[0]["ids"], json!([hash(1)]));
+}
+
+// --- review: Transmission 4 moves in the background --------------------------------------------
+
+#[tokio::test]
+async fn a_move_error_transmission_reports_fails_the_move_with_its_reason_without_waiting() {
+    let s = Scene::new(true).await;
+    let c = s
+        .channel("feed-a", &[("Clevatess", "Clevatess/Season 02")])
+        .await;
+    s.seeding(
+        1,
+        "Clevatess S02E01.mkv",
+        &s.collect.join("Clevatess/Season 02"),
+    );
+    write(&s.collect.join("Clevatess/Season 02/notes.txt"), "x");
+    s.h.tr.async_locations(true);
+    s.h.tr.fail_location_of(&hash(1), Some("Permission denied"));
+
+    s.send("archive-err-01", &c.rules[0].id, "archive").await;
+    let started = std::time::Instant::now();
+    s.h.worker()
+        .with_move_policy(MovePolicy {
+            poll: Duration::from_millis(20),
+            timeout: Duration::from_secs(60),
+        })
+        .run_commands(&CancellationToken::new())
+        .await
+        .unwrap();
+    assert!(started.elapsed() < Duration::from_secs(20));
+
+    let command = s.command("archive-err-01").await;
+    assert_eq!(command["state"], "failed", "{command}");
+    let reason = command["outcome"]["reason"].as_str().unwrap();
+    assert!(reason.contains("Permission denied"), "{reason}");
+    assert!(!reason.contains("정리"), "{reason}");
+    // The worker renamed nothing of its own.
+    assert_eq!(
+        files(&s.collect),
+        [
+            "Clevatess/Season 02/Clevatess S02E01.mkv",
+            "Clevatess/Season 02/notes.txt"
+        ]
+    );
+    assert!(files(&s.archive).is_empty());
+}
+
+#[tokio::test]
+async fn transmission_slower_than_the_wait_keeps_the_command_for_the_next_look() {
+    let s = Scene::new(true).await;
+    let c = s
+        .channel("feed-a", &[("Clevatess", "Clevatess/Season 02")])
+        .await;
+    let rule = &c.rules[0];
+    s.seeding(
+        1,
+        "Clevatess S02E01.mkv",
+        &s.collect.join("Clevatess/Season 02"),
+    );
+    write(&s.collect.join("Clevatess/Season 02/notes.txt"), "x");
+    s.h.tr.async_locations(true);
+    s.h.tr.lag_locations(u32::MAX);
+    let slow = || {
+        s.h.worker().with_move_policy(MovePolicy {
+            poll: Duration::from_millis(20),
+            timeout: Duration::from_millis(300),
+        })
+    };
+
+    s.send("archive-slow-01", &rule.id, "archive").await;
+    let outcome = slow()
+        .run_commands(&CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(outcome, CommandsOutcome::Ran(0));
+    let command = s.command("archive-slow-01").await;
+    assert_eq!(command["state"], "running", "{command}");
+    // The worker renamed nothing of its own meanwhile.
+    assert_eq!(
+        files(&s.collect),
+        [
+            "Clevatess/Season 02/Clevatess S02E01.mkv",
+            "Clevatess/Season 02/notes.txt"
+        ]
+    );
+
+    // Transmission catches up; the next look finishes the same command.
+    s.h.tr.settle_locations();
+    s.h.tr.lag_locations(0);
+    assert_eq!(s.run().await, CommandsOutcome::Ran(1));
+    let command = s.command("archive-slow-01").await;
+    assert_eq!(command["state"], "done", "{command}");
+    assert_eq!(command["outcome"]["result"], "moved");
+    assert!(!s.collect.join("Clevatess").exists());
+    assert_eq!(
+        files(&s.archive),
+        [
+            "Clevatess/Season 02/Clevatess S02E01.mkv",
+            "Clevatess/Season 02/notes.txt",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn transmission_that_never_reports_the_new_folder_fails_on_the_last_look_with_the_reason() {
+    let s = Scene::new(true).await;
+    let c = s
+        .channel("feed-a", &[("Clevatess", "Clevatess/Season 02")])
+        .await;
+    s.seeding(
+        1,
+        "Clevatess S02E01.mkv",
+        &s.collect.join("Clevatess/Season 02"),
+    );
+    s.h.tr.async_locations(true);
+    s.h.tr.lag_locations(u32::MAX);
+
+    s.send("archive-never-1", &c.rules[0].id, "archive").await;
+    for _ in 0..transmission_rss::store::commands::MAX_ATTEMPTS {
+        s.h.worker()
+            .with_move_policy(MovePolicy {
+                poll: Duration::from_millis(20),
+                timeout: Duration::from_millis(100),
+            })
+            .run_commands(&CancellationToken::new())
+            .await
+            .unwrap();
+    }
+    let command = s.command("archive-never-1").await;
+    assert_eq!(command["state"], "failed", "{command}");
+    let reason = command["outcome"]["reason"].as_str().unwrap();
+    assert!(reason.contains("Transmission"), "{reason}");
+    assert!(reason.contains("다시 옮기면 남은 것만"), "{reason}");
+    assert!(!reason.contains("정리"), "{reason}");
+}
+
+#[tokio::test]
+async fn a_refusal_after_some_torrents_moved_says_so_and_moving_again_finishes() {
+    let s = Scene::new(true).await;
+    let c = s
+        .channel("feed-a", &[("Clevatess", "Clevatess/Season 02")])
+        .await;
+    let season = s.collect.join("Clevatess/Season 02");
+    s.seeding(1, "Clevatess S02E01.mkv", &season);
+    s.seeding(2, "Clevatess S02E02.mkv", &season);
+    s.h.tr.reject_location_of(&hash(2), Some("torrent is busy"));
+
+    s.send("archive-part-01", &c.rules[0].id, "archive").await;
+    s.run().await;
+
+    let command = s.command("archive-part-01").await;
+    assert_eq!(command["state"], "failed", "{command}");
+    let reason = command["outcome"]["reason"].as_str().unwrap();
+    assert!(reason.contains("torrent is busy"), "{reason}");
+    assert!(reason.contains("1개"), "{reason}");
+    assert!(reason.contains("다시 옮기면 남은 것만"), "{reason}");
+    assert!(!reason.contains("정리"), "{reason}");
+
+    s.h.tr.reject_location_of(&hash(2), None);
+    s.send("archive-part-02", &c.rules[0].id, "archive").await;
+    s.run().await;
+    assert_eq!(s.command("archive-part-02").await["state"], "done");
+    assert!(!s.collect.join("Clevatess").exists());
+    for n in [1, 2] {
+        assert_eq!(
+            s.h.tr.torrent(&hash(n)).download_dir,
+            text(s.archive.join("Clevatess/Season 02"))
+        );
+    }
 }

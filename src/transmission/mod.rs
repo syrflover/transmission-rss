@@ -179,28 +179,57 @@ pub async fn get_torrent(
     Ok(res.arguments.torrents.into_iter().next())
 }
 
-/// Where Transmission keeps one torrent's data: `download_dir`/`name`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Where Transmission keeps one torrent's data (`download_dir`/`name`), and
+/// what tells whether it can be moved now.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct TorrentPlace {
     pub hash: String,
     pub name: String,
     /// As Transmission reports it.
     pub download_dir: String,
+    /// Still to download or to verify: its data may not be in `download_dir`
+    /// yet (Transmission's incomplete folder, `.part` names) and Transmission
+    /// still writes it.
+    pub unfinished: bool,
+    /// The text of a local error Transmission reports for it (`error` 3),
+    /// such as a move that failed. Tracker errors are not local.
+    pub local_error: Option<String>,
+    /// Its files relative to `download_dir`, when asked for.
+    pub files: Vec<TorrentFile>,
 }
 
-/// Every torrent's hash, name and folder, or those of `hashes` only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TorrentFile {
+    pub name: String,
+    /// All of its bytes are there.
+    pub complete: bool,
+}
+
+/// Every torrent's place, or those of `hashes` only; with their files when
+/// `with_files`.
 pub async fn torrent_places(
     transmission: &mut TransClient,
     hashes: Option<&[String]>,
+    with_files: bool,
 ) -> transmission_rpc::types::Result<Vec<TorrentPlace>> {
+    use transmission_rpc::types::{ErrorType, TorrentStatus};
+
+    let mut fields = vec![
+        TorrentGetField::Id,
+        TorrentGetField::Name,
+        TorrentGetField::HashString,
+        TorrentGetField::DownloadDir,
+        TorrentGetField::Status,
+        TorrentGetField::LeftUntilDone,
+        TorrentGetField::Error,
+        TorrentGetField::ErrorString,
+    ];
+    if with_files {
+        fields.push(TorrentGetField::Files);
+    }
     let res = transmission
         .torrent_get(
-            Some(vec![
-                TorrentGetField::Id,
-                TorrentGetField::Name,
-                TorrentGetField::HashString,
-                TorrentGetField::DownloadDir,
-            ]),
+            Some(fields),
             hashes.map(|hashes| hashes.iter().cloned().map(Id::Hash).collect()),
         )
         .await?;
@@ -209,10 +238,26 @@ pub async fn torrent_places(
         .torrents
         .into_iter()
         .filter_map(|torrent| {
+            let checking = matches!(
+                torrent.status,
+                Some(TorrentStatus::QueuedToVerify | TorrentStatus::Verifying)
+            );
             Some(TorrentPlace {
                 hash: torrent.hash_string?,
                 name: torrent.name.unwrap_or_default(),
                 download_dir: torrent.download_dir?,
+                unfinished: checking || torrent.left_until_done.unwrap_or(0) > 0,
+                local_error: (torrent.error == Some(ErrorType::LocalError))
+                    .then(|| torrent.error_string.unwrap_or_default()),
+                files: torrent
+                    .files
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|f| TorrentFile {
+                        complete: f.bytes_completed >= f.length,
+                        name: f.name,
+                    })
+                    .collect(),
             })
         })
         .collect())

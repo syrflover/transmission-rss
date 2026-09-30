@@ -1265,3 +1265,178 @@ async fn the_state_is_not_saved_by_an_edit_and_the_last_archive_move_is_shown() 
     let (status, _, _) = app.call(Method::GET, "/api/rules/no-such-rule", None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn a_save_folder_with_parent_components_is_refused_but_a_stored_one_still_saves() {
+    let app = App::new().await;
+    let a = app
+        .channel("a.test", &[], &[("Old", "Old/../Other/Season 01")])
+        .await;
+
+    let (status, text, error) = app
+        .call(
+            Method::POST,
+            "/api/rules",
+            Some(json!({
+                "channel_id": a.channel.id,
+                "match": "New",
+                "directory": "New/../../etc",
+                "episode": 0,
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+    assert!(
+        error["message"].as_str().unwrap().contains("`..`"),
+        "{text}"
+    );
+    assert_eq!(app.list().await["rules"].as_array().unwrap().len(), 1);
+
+    // The rule stored before keeps saving other changes with its folder...
+    let rule = app.list().await["rules"][0].clone();
+    let uri = format!("/api/rules/{}", rule["id"].as_str().unwrap());
+    let (status, text, saved) = app
+        .call(
+            Method::PUT,
+            &uri,
+            Some(rule_body(&a.channel, &rule, json!({ "episode": 2 }))),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(saved["directory"], "Old/../Other/Season 01");
+
+    // ...but its folder cannot be changed to another one with `..`.
+    let (status, text, _) = app
+        .call(
+            Method::PUT,
+            &uri,
+            Some(rule_body(
+                &a.channel,
+                &saved,
+                json!({ "directory": "Old/../Else" }),
+            )),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+}
+
+#[tokio::test]
+async fn while_a_work_folder_moves_no_rule_changes_its_folder_into_or_out_of_it() {
+    use crate::store::commands::{CommandState, NewCommand, Outcome};
+    use crate::worker::commands::rule_archive::{Direction, RuleArchive, KIND};
+
+    let app = App::new().await;
+    let a = app
+        .channel(
+            "a.test",
+            &[],
+            &[
+                ("Clevatess", "Clevatess/Season 02"),
+                ("Other", "Other/Season 01"),
+            ],
+        )
+        .await;
+    let list = app.list().await;
+    let moving = list["rules"][0].clone();
+    let other = list["rules"][1].clone();
+    let moving_id = moving["id"].as_str().unwrap().to_owned();
+    let payload = RuleArchive {
+        rule_id: moving_id.clone(),
+        direction: Direction::Archive,
+    };
+    app.state
+        .commands
+        .accept(
+            NewCommand {
+                id: "cmd-moving-1".into(),
+                kind: KIND.into(),
+                payload: payload.canonical(),
+                subject: Some(moving_id.clone()),
+            },
+            1,
+        )
+        .await
+        .unwrap();
+
+    // The moving rule keeps its folder; other fields still save.
+    let (status, text, error) = put(
+        &app,
+        &a.channel,
+        &moving,
+        json!({ "directory": "Clevatess/Season 03" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+    assert!(
+        error["message"].as_str().unwrap().contains("옮기는 중"),
+        "{text}"
+    );
+    let (status, text, moving) = put(&app, &a.channel, &moving, json!({ "episode": 4 })).await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+
+    // No rule moves into the moving work folder, nor is one made there.
+    let (status, text, _) = put(
+        &app,
+        &a.channel,
+        &other,
+        json!({ "directory": "Clevatess/Season 03" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+    let (status, text, _) = app
+        .call(
+            Method::POST,
+            "/api/rules",
+            Some(json!({
+                "channel_id": a.channel.id,
+                "match": "Clevatess S3",
+                "directory": "Clevatess/Season 03",
+                "episode": 0,
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+    // Elsewhere is fine.
+    let (status, text, _) = put(
+        &app,
+        &a.channel,
+        &other,
+        json!({ "directory": "Other/Season 02" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+
+    // Once the move has ended, the folder can change again.
+    app.state
+        .commands
+        .finish(
+            "cmd-moving-1",
+            CommandState::Done,
+            Outcome {
+                result: "moved".into(),
+                reason: None,
+            },
+            2,
+        )
+        .await
+        .unwrap();
+    let (status, text, _) = put(
+        &app,
+        &a.channel,
+        &moving,
+        json!({ "directory": "Clevatess/Season 03" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+}
+
+async fn put(
+    app: &App,
+    channel: &Channel,
+    rule: &Value,
+    patch: Value,
+) -> (StatusCode, String, Value) {
+    let uri = format!("/api/rules/{}", rule["id"].as_str().unwrap());
+    app.call(Method::PUT, &uri, Some(rule_body(channel, rule, patch)))
+        .await
+}

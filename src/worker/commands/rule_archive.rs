@@ -22,9 +22,10 @@
 //!   the folder stays, and the outcome names that rule. It moves when the last
 //!   of them is archived.
 //!
-//! A move that fails leaves the rule archived and the folder in place (the
-//! checks refuse before anything moves), and the command ends `failed` with the
-//! reason; archiving again (`다시 옮기기`) tries again.
+//! A move that fails leaves the rule archived, and the command ends `failed`
+//! with the reason; archiving again (`다시 옮기기`) tries again. The checks
+//! refuse before anything moves; a failure after Transmission began moving
+//! leaves what moved where it is, says so, and the next try moves the rest.
 //!
 //! **Restore** moves the work folder back into the collect folder first and
 //! then turns the rule on, so a new episode never makes a second work folder
@@ -34,7 +35,11 @@
 //!
 //! Every step is safe to repeat, and where the folder is comes from the disk
 //! each time ([`work_folder`]), so a command cut short (the worker stopped or
-//! died) is claimed again by the next worker and finishes what is left.
+//! died) is claimed again by the next worker and finishes what is left. So is
+//! a start that waited for Transmission longer than [`work_folder::MovePolicy`]
+//! allows ([`Retry::Later`]): the command stays `running` for the next look,
+//! and only its last start ([`MAX_ATTEMPTS`]) ends it `failed`, with that
+//! reason.
 
 pub mod work_folder;
 
@@ -50,13 +55,13 @@ use crate::{
     folders::has_parent_dir,
     store::{
         channels::{Rule, RuleState},
-        commands::{Command, CommandState, Outcome},
+        commands::{Command, CommandState, Outcome, MAX_ATTEMPTS},
     },
     transmission,
     worker::CycleContext,
 };
 
-use work_folder::{move_work_folder, Disk, MoveError, Moved, RealDisk, Request, Side};
+use work_folder::{move_work_folder, Disk, Hold, MoveError, Moved, RealDisk, Request, Side};
 
 /// The `kind` of the command.
 pub const KIND: &str = "rule_archive";
@@ -125,6 +130,9 @@ pub enum Retry {
     Store(String),
     #[error("shutdown was asked for while the folder was moving")]
     Stopped,
+    /// Not finished yet (Transmission is still moving); the next look carries on.
+    #[error("{0}")]
+    Later(String),
 }
 
 impl Retry {
@@ -238,13 +246,26 @@ fn held_reason(holders: &[&Rule]) -> String {
     }
 }
 
-/// Runs a `rule_archive` command to its end. See the module docs.
+/// One start of a command, and what its moves need.
+struct Start<'a> {
+    ctx: &'a CycleContext,
+    disk: Arc<dyn Disk>,
+    /// Kept until the move's blocking work returns: the worker's lock.
+    hold: Hold,
+    /// The last start the command gets: a move not finished yet ends it.
+    last: bool,
+    cancel: &'a CancellationToken,
+}
+
+/// Runs a `rule_archive` command to its end. See the module docs. `hold` is
+/// the worker's lock, kept until the move's blocking work returns.
 pub async fn run(
     ctx: &CycleContext,
     command: &Command,
+    hold: Hold,
     cancel: &CancellationToken,
 ) -> Result<Finished, Retry> {
-    run_on(ctx, command, Arc::new(RealDisk), cancel).await
+    run_on(ctx, command, Arc::new(RealDisk), hold, cancel).await
 }
 
 /// [`run`] with the filesystems told by `disk`.
@@ -252,8 +273,16 @@ pub async fn run_on(
     ctx: &CycleContext,
     command: &Command,
     disk: Arc<dyn Disk>,
+    hold: Hold,
     cancel: &CancellationToken,
 ) -> Result<Finished, Retry> {
+    let start = Start {
+        ctx,
+        disk,
+        hold,
+        last: command.attempts >= MAX_ATTEMPTS,
+        cancel,
+    };
     let Ok(payload) = serde_json::from_str::<RuleArchive>(&command.payload) else {
         return Ok(failed("요청 내용을 읽지 못했어요."));
     };
@@ -267,8 +296,8 @@ pub async fn run_on(
     };
 
     match payload.direction {
-        Direction::Archive => archive(ctx, rule, disk, cancel).await,
-        Direction::Restore => restore(ctx, rule, disk, cancel).await,
+        Direction::Archive => archive(&start, rule).await,
+        Direction::Restore => restore(&start, rule).await,
     }
 }
 
@@ -324,11 +353,10 @@ async fn settings(ctx: &CycleContext) -> Result<Option<(String, Option<String>)>
 
 /// Moves the work folder of `request`, as the outcome of the command.
 async fn move_folder(
-    ctx: &CycleContext,
+    start: &Start<'_>,
     request: &Request,
-    disk: Arc<dyn Disk>,
-    cancel: &CancellationToken,
 ) -> Result<Result<Finished, Finished>, Retry> {
+    let ctx = start.ctx;
     let mut client = transmission::client(ctx.transmission_url.clone(), &ctx.transmission_http);
     println!(
         "Moving work folder {:?} from {} to {}",
@@ -336,7 +364,17 @@ async fn move_folder(
         request.from_root.display(),
         request.to_root.display()
     );
-    match move_work_folder(&mut client, &ctx.redactor, request, ctx.moves, disk, cancel).await {
+    let moved = move_work_folder(
+        &mut client,
+        &ctx.redactor,
+        request,
+        ctx.moves,
+        start.disk.clone(),
+        start.hold.clone(),
+        start.cancel,
+    )
+    .await;
+    match moved {
         Ok(Moved::Moved) => Ok(Ok(done(MOVED, None))),
         Ok(Moved::AlreadyThere) => Ok(Ok(done(
             MOVED,
@@ -355,16 +393,14 @@ async fn move_folder(
             )),
         ))),
         Err(MoveError::Failed(reason)) => Ok(Err(failed(reason))),
+        Err(MoveError::Later(reason)) if start.last => Ok(Err(failed(reason))),
+        Err(MoveError::Later(reason)) => Err(Retry::Later(reason)),
         Err(MoveError::Stopped) => Err(Retry::Stopped),
     }
 }
 
-async fn archive(
-    ctx: &CycleContext,
-    rule: Rule,
-    disk: Arc<dyn Disk>,
-    cancel: &CancellationToken,
-) -> Result<Finished, Retry> {
+async fn archive(start: &Start<'_>, rule: Rule) -> Result<Finished, Retry> {
+    let ctx = start.ctx;
     // Off first: no new episode arrives at the old place while it moves.
     let Some(rule) = ctx
         .channels
@@ -394,20 +430,16 @@ async fn archive(
         return Ok(done(KEPT, Some(held_reason(&holding))));
     }
 
-    Ok(move_folder(ctx, &request, disk, cancel)
+    Ok(move_folder(start, &request)
         .await?
         .unwrap_or_else(|failed| failed))
 }
 
-async fn restore(
-    ctx: &CycleContext,
-    rule: Rule,
-    disk: Arc<dyn Disk>,
-    cancel: &CancellationToken,
-) -> Result<Finished, Retry> {
+async fn restore(start: &Start<'_>, rule: Rule) -> Result<Finished, Retry> {
+    let ctx = start.ctx;
     let settings = settings(ctx).await?;
     let finished = match plan_move(settings, &rule, Direction::Restore) {
-        Ok(request) => match move_folder(ctx, &request, disk, cancel).await? {
+        Ok(request) => match move_folder(start, &request).await? {
             Ok(finished) => finished,
             // The rule stays archived: the folder is not back.
             Err(failed) => return Ok(failed),

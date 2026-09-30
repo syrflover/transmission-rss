@@ -45,7 +45,9 @@
 //! under the same lock, so no cycle adds a torrent into the folder while it
 //! moves, and a start cut short leaves it `running`: the next start looks at
 //! the disk and Transmission again and moves what is left (see
-//! [`rule_archive`]).
+//! [`rule_archive`]). Its blocking renames hold the lock themselves, so a
+//! shutdown that aborts the command's task releases the lock only once they
+//! have returned.
 //!
 //! Each command kind has its own module below.
 
@@ -53,7 +55,7 @@ pub mod link;
 pub mod receive_once;
 pub mod rule_archive;
 
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
@@ -113,16 +115,19 @@ impl Worker {
             path: self.lock_path.clone(),
             source,
         })?;
-        let Some(_lock) = lock else {
+        let Some(lock) = lock else {
             return Ok(CommandsOutcome::Busy);
         };
+        // Shared with work that must keep the lock until it returns, even
+        // after this task is aborted (a `rule_archive` rename in progress).
+        let lock: rule_archive::work_folder::Hold = Arc::new(lock);
 
         let mut ran = 0;
         while !cancel.is_cancelled() {
             let Some(command) = self.commands.claim_next((self.clock)()).await? else {
                 break;
             };
-            if !self.run_command(&command, cancel).await? {
+            if !self.run_command(&command, &lock, cancel).await? {
                 break;
             }
             ran += 1;
@@ -136,6 +141,7 @@ impl Worker {
     async fn run_command(
         &self,
         command: &Command,
+        lock: &rule_archive::work_folder::Hold,
         cancel: &CancellationToken,
     ) -> Result<bool, WorkerError> {
         println!(
@@ -162,8 +168,9 @@ impl Worker {
                 });
             }
             rule_archive::KIND => {
+                let lock = lock.clone();
                 task.spawn(async move {
-                    match rule_archive::run(&ctx, &owned, &cancel).await {
+                    match rule_archive::run(&ctx, &owned, lock, &cancel).await {
                         Ok(finished) => Ran::Ended {
                             state: finished.state,
                             outcome: finished.outcome,
