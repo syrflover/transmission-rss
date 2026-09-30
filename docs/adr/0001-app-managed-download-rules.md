@@ -1,5 +1,7 @@
 # 앱 설정과 보관 정보를 관리하고 교환해요
 
+보관 파일을 `.trss-subtitles/`와 함께 옮긴다는 설명은 [작품 폴더 배치 ADR](0008-trss-folder-and-app-data-files.md)이 대체했어요: 자막·폰트는 작품 폴더의 `.trss/`, 표지·첨부는 앱 데이터 폴더와 함께 옮겨요.
+
 현재 trss는 `CHANNELS_CONFIG_URL`이 가리키는 외부 YAML을 실행마다 읽어요.
 웹 GUI에서 작품과 다운로드 규칙을 편집·저장해 바로 사용하는 경험을 위해, 앞으로 실행의 기준은 앱이 관리하는 설정으로 전환하기로 했어요.
 기존 YAML 가져오기와 새 앱 YAML 가져오기·내보내기를 제공해 설정과 자막 보관 정보를 옮길 수 있게 해요.
@@ -37,4 +39,4 @@ Transmission 접속 주소·기존 속도 제한·큐 크기, 서버 포트와 D
 
 이 기록은 선택한 방향이며 아직 구현된 동작은 아니에요.
 앱 내부 저장소는 [로컬 SQLite](0005-local-sqlite-app-state.md)로 정했으며, 새 YAML의 교환 계약은 아래 명세에서 다뤄요.
-현재 요구와 완료 조건은 [구현 명세](../specs/web-gui-subtitles.md#앱-설정과-다운로드-규칙)에 있고, 선택 배경과 조사 근거는 [주제 문서](../brainstorm/web-gui-subtitles.md)에 있어요.
+현재 요구와 완료 조건은 [설정과 이전 명세](../specs/settings.md)에 있고, 선택 배경과 조사 근거는 [주제 문서](../brainstorm/web-gui-subtitles.md)에 있어요.
