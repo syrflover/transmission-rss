@@ -7,8 +7,8 @@ use transmission_rss::{
     config::{ChannelConfig, Config},
     rss::legacy::{collect_items, SelectedItem},
     transmission::{
-        add_item, remove_stale, rename_with_retries, AddError, Redactor, RenameMode, RenamePolicy,
-        SessionConfig,
+        add_item, remove_stale, rename_with_retries, AddError, AddLabels, Redactor, RenameMode,
+        RenamePolicy, SessionConfig,
     },
 };
 use url::Url;
@@ -129,7 +129,7 @@ async fn test_add_torrent() {
         std::path::Path::new(
             "/downloads/Shows (current)/Katsute Mahou Shoujo to Aku wa Tekitai shiteita/Season 01",
         ),
-        None,
+        AddLabels::default(),
         &Redactor::none(),
     )
     .await
@@ -221,18 +221,25 @@ async fn run() {
 
                 let link = item.link().unwrap_or_default();
 
-                let torrent =
-                    match add_item(&mut transmission, link, &save_path, None, redactor).await {
-                        Ok(torrent) => torrent,
-                        Err(AddError::Rejected(result)) => {
-                            eprintln!("{result}");
-                            return;
-                        }
-                        Err(AddError::Unreachable(err) | AddError::Rpc(err)) => {
-                            eprintln!("{err}");
-                            return;
-                        }
-                    };
+                let torrent = match add_item(
+                    &mut transmission,
+                    link,
+                    &save_path,
+                    AddLabels::default(),
+                    redactor,
+                )
+                .await
+                {
+                    Ok(torrent) => torrent,
+                    Err(AddError::Rejected(result)) => {
+                        eprintln!("{result}");
+                        return;
+                    }
+                    Err(AddError::Unreachable(err) | AddError::Rpc(err)) => {
+                        eprintln!("{err}");
+                        return;
+                    }
+                };
 
                 let hash = torrent.hash;
 

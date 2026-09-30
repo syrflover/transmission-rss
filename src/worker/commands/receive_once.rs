@@ -7,14 +7,16 @@
 //!    the channel's base folder ([`folder::resolve`], checked again here
 //!    because the request may be old);
 //! 2. recover the item's original link ([`link::recover`]);
-//! 3. add it to Transmission and save the answer as the item's result. An add
-//!    that was sent and got no answer is tried again at the next look
-//!    ([`Retry::AddUnanswered`]), and then a `duplicate` answer for a torrent
-//!    in this command's folder counts as this command's own add;
-//! 4. when that add put the torrent in, give the file its `trname` name
-//!    without any episode conversion. A torrent Transmission already had (a
-//!    rule's, or this command's own from a run that died before its result was
-//!    written) is not renamed.
+//! 3. add it to Transmission, with the command's label
+//!    ([`transmission::command_label`]) next to the bot's and the item's, and
+//!    save the answer as the item's result. An add that was sent and got no
+//!    answer is tried again at the next look ([`Retry::AddUnanswered`]). A
+//!    `duplicate` answer for a torrent carrying the command's label counts as
+//!    this command's own add: an earlier start put it in, and that add got no
+//!    answer or the worker died before writing its result;
+//! 4. when this command's add put the torrent in, give the file its `trname`
+//!    name without any episode conversion and take the command's label off. A
+//!    torrent Transmission already had from elsewhere is not renamed.
 //!
 //! The worker ends the command after step 4. The result lands on the history
 //! item (`received`, `duplicate` or `add_failed` with a reason) and on the
@@ -38,7 +40,9 @@ use crate::{
         commands::{Command, CommandState, Outcome, MAX_ATTEMPTS},
         history::{HistoryItem, HistoryResult, Millis},
     },
-    transmission::{self, add_item, get_torrent, AddError, AddKind, Redactor},
+    transmission::{
+        self, add_item, get_torrent, remove_label, AddError, AddKind, AddLabels, Redactor,
+    },
     worker::{plan::ChannelPlan, CycleContext},
 };
 
@@ -146,7 +150,8 @@ impl Retry {
 /// re-reads the item once the command has ended sees the note too.
 ///
 /// A worker that dies before the command is ended leaves it `running`; the
-/// rerun meets the torrent as a duplicate and neither renames nor notes it.
+/// rerun meets the torrent as a duplicate carrying the command's label and
+/// goes through the same steps again (the rename leaves a name it gave already).
 pub async fn run(
     ctx: &CycleContext,
     command: &Command,
@@ -162,6 +167,13 @@ pub async fn run(
                 eprintln!("Cannot note the kept name on item {}: {err}", step.item_id);
             }
         }
+        // History holds the torrent's hash now; the command's label has done
+        // its job. One left behind (this fails, or the worker dies first) only
+        // names a command that has ended.
+        let mut transmission =
+            transmission::client(ctx.transmission_url.clone(), &ctx.transmission_http);
+        let label = transmission::command_label(&command.id);
+        remove_label(&mut transmission, &step.hash, &label, &step.redactor).await;
     }
     Ok(finished)
 }
@@ -247,30 +259,28 @@ pub async fn execute(
 
     let mut transmission =
         transmission::client(ctx.transmission_url.clone(), &ctx.transmission_http);
-    let label = transmission::item_label(&item.channel_id, &item.identity_key);
+    let item_label = transmission::item_label(&item.channel_id, &item.identity_key);
+    let command_label = transmission::command_label(&command.id);
     let added = add_item(
         &mut transmission,
         &raw_link,
         &save_path,
-        Some(&label),
+        AddLabels {
+            item: Some(&item_label),
+            command: Some(&command_label),
+        },
         &redactor,
     )
     .await;
 
     match added {
         Ok(torrent) => {
-            // After an earlier start's add got no answer, a bot torrent
-            // Transmission has in this command's folder, for an item nothing
-            // else received, is the one that add put in. A rule's cycle that
-            // met that torrent in between recorded it as a `duplicate` with its
-            // hash; it is still this command's.
-            let met_by_a_rule = item.result == HistoryResult::Duplicate
-                && item.torrent_hash.as_deref() == Some(torrent.hash.as_str());
-            let own = torrent.kind == AddKind::Added
-                || (command.add_unconfirmed
-                    && torrent.bot_labelled
-                    && (!item.result.is_settled() || met_by_a_rule)
-                    && torrent.download_dir.as_deref().map(Path::new) == Some(save_path.as_path()));
+            // A torrent Transmission already had carries this command's label
+            // only when an earlier start's add put it in: that add got no
+            // answer, or the worker died before writing its result. A rule's
+            // cycle may have met it in between and recorded it as a
+            // `duplicate`; it is still this command's.
+            let own = torrent.kind == AddKind::Added || torrent.has_label(&command_label);
             let result = if own {
                 HistoryResult::Received
             } else {
@@ -283,8 +293,7 @@ pub async fn execute(
                 .map_err(Retry::store)?
                 .unwrap_or(result);
             // Only a torrent this command put in is renamed. One that was there
-            // already (a rule's, or this command's own from a run that died
-            // before its result was written) keeps its name and gets no note.
+            // already keeps its name and gets no note.
             let rename = own.then_some(Rename {
                 item_id: item.id,
                 hash: torrent.hash,

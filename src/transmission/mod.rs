@@ -81,6 +81,28 @@ pub fn item_of_label(label: &str) -> Option<(&str, &str)> {
     label.strip_prefix(ITEM_LABEL_PREFIX)?.split_once(':')
 }
 
+/// Start of the label that says which command added a torrent.
+pub const COMMAND_LABEL_PREFIX: &str = "trss-cmd:";
+
+/// The label a command's add puts on its torrent: `trss-cmd:<command ID>`.
+/// Transmission keeps the labels of the add that put a torrent in and ignores
+/// those of an add it answers `duplicate`, and nothing else puts this label on,
+/// so a torrent carrying it is the one that command's add put in, even when
+/// that add got no answer. The command takes it off once it has recorded the
+/// torrent ([`remove_label`]).
+pub fn command_label(command_id: &str) -> String {
+    format!("{COMMAND_LABEL_PREFIX}{command_id}")
+}
+
+/// The labels an add puts on its torrent next to [`BOT_LABEL`].
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AddLabels<'a> {
+    /// An [`item_label`]; also put on a bot torrent the add finds already there.
+    pub item: Option<&'a str>,
+    /// A [`command_label`]; only ever on a torrent the add puts in.
+    pub command: Option<&'a str>,
+}
+
 /// Session settings applied to Transmission before each collection run.
 /// Unset options are left as they are in Transmission.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -206,18 +228,26 @@ pub struct AddedTorrent {
     pub name: String,
     /// Where Transmission saves it, as Transmission reports it.
     pub download_dir: Option<String>,
-    /// It carries the bot's label: the bot added it, not a person.
-    pub bot_labelled: bool,
+    /// Its labels as Transmission reported them with the answer: for a
+    /// duplicate, before any item label was put on.
+    pub labels: Vec<String>,
+}
+
+impl AddedTorrent {
+    pub fn has_label(&self, label: &str) -> bool {
+        self.labels.iter().any(|l| l == label)
+    }
 }
 
 async fn add_torrent(
     transmission: &mut TransClient,
     link: &str,
     download_dir: &Path,
-    item_label: Option<&str>,
+    labels: AddLabels<'_>,
 ) -> Result<TorrentAddedOrDuplicate, AddError> {
     let labels = std::iter::once(BOT_LABEL)
-        .chain(item_label)
+        .chain(labels.item)
+        .chain(labels.command)
         .map(str::to_owned)
         .collect();
     let mut res = transmission
@@ -250,22 +280,24 @@ async fn add_torrent(
 }
 
 /// Adds `link` to Transmission, saving to `download_dir`, with the bot's label
-/// and `item_label` (see [`item_label`]) when given.
+/// and the given [`AddLabels`].
 ///
 /// A torrent that is already present is left in place, except that a
 /// bot-labelled one that has finished (queued to seed or seeding) is stopped,
-/// and a bot-labelled one without `item_label` gets it (Transmission ignores
-/// the labels of an add it answers `duplicate`). A person's torrent keeps its
+/// and a bot-labelled one without the item label gets it (Transmission ignores
+/// the labels of an add it answers `duplicate`). The command label is never
+/// put on a torrent that was already there. A person's torrent keeps its
 /// labels. Prints `Added`, `Stopped` or `Already` with the torrent's name and
 /// hash.
 pub async fn add_item(
     transmission: &mut TransClient,
     link: &str,
     download_dir: &Path,
-    item_label: Option<&str>,
+    labels: AddLabels<'_>,
     redactor: &Redactor,
 ) -> Result<AddedTorrent, AddError> {
-    match add_torrent(transmission, link, download_dir, item_label).await? {
+    let item_label = labels.item;
+    match add_torrent(transmission, link, download_dir, labels).await? {
         TorrentAddedOrDuplicate::TorrentDuplicate(torrent) => {
             let hash = torrent.hash_string.as_deref().unwrap();
             let labels = torrent.labels.as_deref();
@@ -318,7 +350,7 @@ pub async fn add_item(
 
             Ok(AddedTorrent {
                 kind: AddKind::Duplicate,
-                bot_labelled: has_label(torrent.labels.as_deref(), BOT_LABEL),
+                labels: torrent.labels.clone().unwrap_or_default(),
                 hash: torrent.hash_string.unwrap(),
                 name: torrent.name.unwrap(),
                 download_dir: torrent.download_dir,
@@ -332,7 +364,7 @@ pub async fn add_item(
 
             Ok(AddedTorrent {
                 kind: AddKind::Added,
-                bot_labelled: has_label(torrent.labels.as_deref(), BOT_LABEL),
+                labels: torrent.labels.clone().unwrap_or_default(),
                 hash: torrent.hash_string.unwrap(),
                 name: torrent.name.unwrap(),
                 download_dir: torrent.download_dir,
@@ -340,6 +372,36 @@ pub async fn add_item(
         }
         // `add_torrent` returns this case as `AddError::Rejected`.
         TorrentAddedOrDuplicate::Error => Err(AddError::Rejected(String::new())),
+    }
+}
+
+/// Takes `label` off the torrent `hash`, keeping its other labels. A torrent
+/// that is gone or does not carry it is left alone; an error is printed and
+/// otherwise ignored.
+pub async fn remove_label(
+    transmission: &mut TransClient,
+    hash: &str,
+    label: &str,
+    redactor: &Redactor,
+) {
+    let torrent = match get_torrent(transmission, hash).await {
+        Ok(Some(torrent)) => torrent,
+        Ok(None) => return,
+        Err(err) => return eprintln!("{}", redactor.apply(&err.to_string())),
+    };
+    let labels = torrent.labels.unwrap_or_default();
+    if !labels.iter().any(|l| l == label) {
+        return;
+    }
+    let kept = labels.into_iter().filter(|l| l != label).collect();
+    if let Err(err) = transmission
+        .torrent_set(
+            TorrentSetArgs::new().labels(kept),
+            Some(vec![Id::Hash(hash.to_owned())]),
+        )
+        .await
+    {
+        eprintln!("{}", redactor.apply(&err.to_string()));
     }
 }
 

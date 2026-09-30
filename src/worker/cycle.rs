@@ -602,7 +602,10 @@ async fn process_job(
         &mut transmission,
         &job.link,
         &job.save_path,
-        Some(&label),
+        transmission::AddLabels {
+            item: Some(&label),
+            command: None,
+        },
         &redactor,
     )
     .await;

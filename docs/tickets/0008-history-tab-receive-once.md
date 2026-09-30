@@ -52,7 +52,7 @@
   상태는 `pending → running → done | failed`예요. 접수 응답은 `pending`일 뿐이고 결과는 worker가 남긴 `outcome`과 기록 항목에서만 나와요.
   명령 ID는 브라우저가 사용자 동작마다 `crypto.getRandomValues`로 만들어요(8~64자 `[A-Za-z0-9_-]`). 저장소는 `commands(seq, id UNIQUE, kind, payload(정규 JSON), subject, state, attempts, created_at, updated_at, finished_at, outcome, add_unconfirmed)`이고(`add_unconfirmed`는 리뷰 뒤 수정의 마이그레이션 6), 같은 ID의 접수는 한 쓰기 트랜잭션이라 동시 전달도 한 건이에요.
 - worker는 3초마다(`TRSS_` 환경 변수 없이 `Worker::with_command_poll`로 조정) 열린 명령을 확인하고, 수집 주기와 같은 flock을 잡았을 때만 실행해요. 잠겨 있으면 다음 확인으로 미뤄요. 루프 훅은 `src/worker/mod.rs`의 두 번째 ticker 하나예요.
-  실행 중이던 worker가 죽으면 다음 worker가 `running` 명령을 다시 집어요(최대 5번). 이때 Transmission이 이미 받았으면 `중복`으로 끝나 두 번 넣지 않고, 이름도 바꾸지 않아요. `running` 명령이 남은 채 시작한 수집 주기는 빠진 토렌트를 정리하지 않아요.
+  실행 중이던 worker가 죽으면 다음 worker가 `running` 명령을 다시 집어요(최대 5번). 이때 Transmission이 이미 받았으면 두 번 넣지 않아요. 명령의 추가가 붙인 명령 라벨로 이 명령이 넣은 토렌트임을 알아 `받음`으로 기록하고 이름을 바꿔요(아래 "명령 라벨"). `running` 명령이 남은 채 시작한 수집 주기는 빠진 토렌트를 정리하지 않아요.
 - `한 번 받기`(`receive_once`) 실행: 채널 기본 폴더 아래로 폴더를 다시 확인(절대 경로·`..`·링크로 벗어남 거부)하고, 원래 링크를 되살려 채널 라벨로 넣은 뒤 결과를 기록 항목(`record_outcome`, 규칙 없음)에 남겨요. 명령의 결과와 까닭은 넣은 뒤 기록 항목에 남은 결과를 따라요(그 사이 규칙이 받았으면 `받음`).
   이 명령의 추가로 토렌트가 새로 들어갔을 때만 고른 폴더 기준으로 회차 변환 없이(`starts_episode_at = 0`) trname 이름을 붙여요. Transmission에 이미 있던 토렌트(`중복`)는 이름을 바꾸지 않고 메모도 남기지 않아요.
   trname이 이름을 만들지 못하면(사용자 결정 "원래 이름으로 둠") 규칙 경로와 달리 토렌트와 데이터를 지우지 않고 원래 이름으로 둔 채 `받음`으로 기록하고, 항목에 메모를 남겨요(`HistoryStore::note_received`, 결과 변경 기록은 남기지 않아요). 채널 기본 폴더처럼 작품·시즌 부분이 없는 폴더에 받으면 이 경우라서, 원래 이름과 "작품과 회차를 알아내지 못했다"는 메모가 남아요. 파일이 여러 개인 토렌트는 바로 그대로 두고 "파일이 여러 개인 토렌트라 이름을 바꾸지 않았어요."를 남겨요.
@@ -87,7 +87,7 @@
 
 - 이름을 만들 수 없는 항목: `a_name_trname_cannot_derive_stays_in_transmission_with_its_data_and_is_noted`(토렌트·데이터가 남고 `torrent-remove`·이름 바꾸기 호출이 없으며 `받음`과 메모가 기록되고 다음 주기에도 남아요), 기본 폴더로 받는 테스트, 메모 저장소 테스트 `a_note_goes_only_on_a_received_item_that_has_none`. 브라우저 확인은 메모를 넣기 전에 했고, 그 뒤에는 줄의 문구 한 곳만 바꿨어요(빌드만 확인).
 - 정리 단계: `a_torrent_received_by_hand_survives_the_next_cycle_while_its_item_is_in_the_feed`(두 주기를 지나도 남고, 항목이 RSS에서 빠지면 그때 지워져요), `a_torrent_transmission_already_had_is_kept_too`.
-- 재시작·동시 실행: 재시작한 worker가 접수된 명령을 한 번 실행, 실행 중 죽은 명령의 재실행, 넣은 뒤 죽은 경우 토렌트 한 개(`중복`, 이름 변경 없음), worker 둘이 동시에 잡으면 한 쪽만 실행하고 다른 쪽은 `Busy`, 수집 주기가 잠금을 잡은 동안 대기, 돌고 있는 worker가 다음 주기를 기다리지 않고 명령을 실행.
+- 재시작·동시 실행: 재시작한 worker가 접수된 명령을 한 번 실행, 실행 중 죽은 명령의 재실행, 넣은 뒤 죽은 경우 토렌트 한 개(명령 라벨 뒤로 `받음`, 이름 변경), worker 둘이 동시에 잡으면 한 쪽만 실행하고 다른 쪽은 `Busy`, 수집 주기가 잠금을 잡은 동안 대기, 돌고 있는 worker가 다음 주기를 기다리지 않고 명령을 실행.
 - 저장소·API 단위 테스트(명령 마이그레이션이 기존 DB의 데이터를 지키는지 포함. 0006과 합치며 상태 스냅숏이 4, 명령이 5가 됐어요). `cargo test --offline` 전체 통과, `cargo clippy --offline --all-targets` 경고 없음, `cargo fmt --check` 통과, `bun run build` 통과.
 - 브라우저(헤드리스 Chromium, playwright-core, 로컬 `trss-web`·`trss-worker`, 시험용 RSS·Transmission 대역, 임시 DB): 44개 확인 통과. 1440·768·390·320px의 라이트·다크 모두에서 목록·펼침·긴 폴더 입력 상태에 가로 넘침 없음. `../../etc`는 문장으로 거부하고 접수하지 않음. 접수 뒤 줄이 `받는 중`이고 Transmission에 들어가기 전에는 `받음`으로 바뀌지 않음(4초 지연을 걸어 확인). 다시 불러온 화면도 진행 중 명령을 이어 보여줘요. 멈춘 Transmission은 빨간 까닭과 함께 `추가 실패`. 응답·페이지·웹/worker 로그에 비밀 값 없음.
 - 0006과 합친 뒤(임시 DB, 로컬 `trss-web`): 상태 판의 `실패·중복 2개`를 누르면 `/collect/history?result=add_failed,duplicate`가 열리고 `추가 실패`·`중복` 두 줄만 보여요. `규칙 생성` 연결은 위 표에 적었어요.
@@ -96,7 +96,7 @@
 
 - 브라우저 확인은 Rust 대역이 아니라 같은 프로토콜의 Node 대역으로 했어요. 실제 Transmission·실제 RSS는 쓰지 않았어요.
 - 저장 폴더의 링크 검사는 web/worker가 미디어 볼륨을 볼 수 있을 때만 링크를 따라가요. 볼 수 없으면 문자열 규칙(절대 경로·`..`)만 적용돼요. worker가 실행 직전에 다시 검사해요.
-- 알려진 틈: Transmission에 넣은 직후 결과를 쓰기 전에 worker가 죽으면 그 명령은 다시 실행돼 `중복`으로 끝나요(토렌트는 한 개이고, 이름 변경과 메모는 없어요). 그 사이에 도는 수집 주기는 `running` 명령이 있어 정리를 건너뛰어요.
+- Transmission에 넣은 직후 결과를 쓰기 전에 worker가 죽으면 그 명령은 다시 실행돼 명령 라벨로 자기 토렌트를 알아보고 `받음`으로 끝나요(토렌트는 한 개). 처음에는 `중복`으로 끝나고 이름을 바꾸지 않는 알려진 틈이었어요(아래 "명령 라벨"). 그 사이에 도는 수집 주기는 `running` 명령이 있어 정리를 건너뛰어요.
   보낸 추가 요청이 답을 받지 못했는데 Transmission이 실제로는 받은 경우는 아래 "리뷰 뒤 수정"의 다시 보내기로 해시를 알아내요. 다섯 번째 시도까지 답이 없거나 명령 태스크가 패닉하면 해시를 모르는 채 끝나고, 다음 주기 한 번만 정리를 건너뛰어요. 그 뒤에는 항목 라벨(아래 "항목 라벨")이 항목이 피드에 있는 동안 그 토렌트를 지켜요.
 - 이력 전이 규칙상 `추가 실패`로 남은 `한 번 받기` 결과를 이후 주기가 `규칙 불일치`로 덮어쓸 수 있어요(받음·중복만 고정). 명령 기록에는 실패와 까닭이 남아요.
 - 제목 검색 상자와 상태 판에서 넘어오는 추천 필터는 넣지 않았어요(완료 기준 밖).
@@ -128,14 +128,15 @@
   시험(기능과 함께 씀): `a_torrent_whose_hash_was_never_learned_stays_while_its_item_is_in_the_feed`, `worker_cycle::every_torrent_the_cycle_holds_for_an_item_says_which_item_it_is`, `worker_cycle::a_labelled_torrent_stays_while_its_item_is_in_a_feed_and_goes_after`, 단위 시험 `an_item_label_names_its_channel_and_identity_key`.
 - **소용없는 재시도 (후속)**: 답 없던 추가 뒤에는 다시 해도 소용없는 실패(채널 삭제, 저장 폴더 거부, 기록에 없는 항목, 읽지 못하는 요청)도 다섯 번째 시도까지 되풀이했고, 그동안 뒤의 명령이 기다렸어요. 항목 라벨이 토렌트를 지키게 된 뒤로는 이런 실패에서 바로 `추가 실패`로 끝내고 표시를 남겨요(다음 주기 한 번은 정리하지 않아요). RSS·링크·Transmission 쪽 실패는 지나갈 수 있어 계속 다시 보내요. 시험: `a_deleted_channel_after_an_unanswered_add_ends_the_command_at_once`(수정 전 실패).
 - **시도 사이에 규칙이 만난 토렌트 (후속)**: 답 없던 추가 뒤 다음 확인 전에 도는 주기에서 규칙이 그 항목을 고르면, 명령의 토렌트가 규칙의 `중복`으로 기록되고 명령도 `중복`으로 끝나 이름이 원래 이름 그대로였어요. 이제 명령에 표시가 있고, 봇 라벨이 있으며 명령의 폴더에 있는 토렌트이고, 항목이 바로 그 해시로 `중복`이면 명령 것으로 봐요. 항목은 `받음`(규칙 없음, 직접 받음)이 되고 이름을 바꿔요. 이후 주기의 규칙은 직접 받은 토렌트의 이름을 건드리지 않아요. 시험: `a_torrent_a_rule_met_between_the_starts_is_still_the_commands_own`(수정 전 실패).
+- **명령 라벨 (리뷰 뒤 후속, 사용자 결정 "바꾸고, 끝나면 라벨 제거")**: 답 없던 추가 뒤 `중복`을 받은 토렌트를 명령 것으로 보는 조건(표시, 봇 라벨, 명령의 폴더, 받지 않은 항목이거나 그 해시의 `중복`)은 정황이라, 같은 폴더에 다른 항목의 봇 토렌트나 전환 전 cron의 토렌트가 같은 토렌트로 있으면 그것을 명령 것으로 봤어요. 항목 라벨은 규칙 주기가 `중복`에도 덧붙이므로 근거가 되지 못해요.
+  이제 명령의 추가는 `trss-cmd:<명령 ID>` 라벨을 함께 실어요. Transmission은 `중복`으로 답한 추가의 라벨을 붙이지 않고 worker도 이 라벨은 덧붙이지 않으니, 이 라벨이 있는 토렌트만 명령 것으로 봐요. 표시 여부와 상관없이 판정해서, 넣은 뒤 결과를 쓰기 전에 worker가 죽은 경우도 이제 `받음`이 되고 이름을 바꿔요(위 알려진 틈이 닫힘). 기록을 마치면 명령 라벨을 떼요(실패하거나 그 전에 죽으면 끝난 명령을 가리키는 라벨이 남을 뿐이에요). 해시를 끝내 알지 못한 채 끝난 명령의 라벨도 남아요.
+  시험: `another_items_bot_torrent_in_the_chosen_folder_is_not_taken_as_the_commands_own`(수정 전 실패), `a_bot_torrent_without_the_commands_label_is_not_taken_as_its_own`, `a_command_whose_torrent_went_in_before_the_worker_died_adds_no_second_torrent`와 `a_cycle_run_while_a_command_is_left_running_removes_nothing`(미리 넣은 토렌트에 명령 라벨을 싣고 `받음`을 기대하도록 바꿈), `a_no_match_item_is_received_into_the_chosen_folder_by_the_worker`(추가 요청의 명령 라벨과 뗀 뒤의 라벨).
 
 남긴 것:
 
 - 다섯 번째 시도까지 해시를 알지 못한 명령의 토렌트는 항목이 피드에 있는 동안 항목 라벨로 남아요. 항목이 피드에서 빠지면 다른 봇 토렌트처럼 정리돼요(데이터는 남음).
-- 같은 폴더에 규칙이 다른 항목으로 넣은 봇 토렌트(또는 전환 전 cron이 넣은 토렌트)가 같은 토렌트라면, 답 없던 추가 뒤 그 토렌트를 명령 것으로 볼 수 있어요(같은 토렌트가 두 채널에 있고 같은 폴더를 고른 경우). 그 사이 규칙이 항목을 `중복`으로 기록한 경우도 같아요. 항목이 `받음`이 되고, 회차 변환 없는 이름 바꾸기는 대개 이미 바꾼 이름을 그대로 둬요.
 - `Existing`은 Transmission이 알려 준 폴더를 글자 그대로 규칙 폴더와 비교해요. Transmission은 추가할 때 받은 폴더 문자열을 그대로 돌려주므로 worker가 넣은 토렌트는 맞아요. 규칙 폴더나 채널 기본 폴더를 바꾼 뒤에는 옛 폴더의 토렌트를 다른 폴더로 보고 이름을 바꾸지 않아요.
 - 규칙 주기에서 `.torrent` 링크를 다시 가져오다 거절되면, 해시를 모르는 채 Transmission에 있던 그 토렌트가 정리될 수 있어요(기존 바이너리와 같은 동작, 데이터는 남음). worker가 넣었거나 한 번이라도 만난 토렌트는 항목 라벨로 남으니, 전환 전 cron이 넣고 worker가 아직 만나지 못한 토렌트만 해당해요.
-- 다시 보낸 추가가 `중복`을 받았을 때 그 토렌트를 이 명령 것으로 보는 조건(명령에 남은 표시, 다른 경로로 받지 않은 항목, 명령이 고른 폴더) 가운데, 항목을 다른 경로로 이미 받았거나 토렌트가 다른 폴더에 있어 `중복`으로 남는 경우는 시험 없이 코드로만 확인했어요. 표시가 없는 경우는 worker가 넣은 뒤 죽는 시험 `a_command_whose_torrent_went_in_before_the_worker_died_adds_no_second_torrent`가 지켜요.
 - 한 토렌트를 두 항목이 함께 가리키고 한 주기에 둘 다 `중복`으로 만나면, 라벨 덧붙이기가 서로의 라벨을 덮어써 하나만 남을 수 있어요. 두 항목 모두 이력에 해시가 있어 정리되지 않고, 다음 주기에 빠진 라벨을 다시 붙여요. 사람이 그 사이에 바꾼 라벨도 같은 방식으로 덮일 수 있어요.
 - `추가 실패`로 끝난 명령의 결과를 이후 주기가 `규칙 불일치`로 덮어쓰는 것은 그대로예요(위).
 - 브라우저로는 다시 확인하지 않았어요. 화면 쪽 변경은 `endedMessage` 한 곳이고 `bun run build`만 확인했어요.

@@ -20,16 +20,16 @@
 //! worker runs a collection cycle before it looks for commands, and that cycle
 //! would remove the torrent as departed; so a cycle that starts while any
 //! command is `running` removes nothing (see [`super::CommandsAtStart`]). The
-//! rerun then meets the torrent, records its hash and ends the command as
-//! `duplicate`, without renaming the file or noting the item.
+//! rerun then meets the torrent, which carries the command's label, and takes
+//! it as its own add (`received`, renamed and noted).
 //!
 //! A request to add a torrent that was sent and got no answer (it timed out,
 //! say) may have been taken all the same. The command is not ended then: it is
 //! marked ([`CommandStore::note_unconfirmed_add`]) and stays `running` for the
 //! next look, and cycles in between remove nothing, as above. The next start
 //! adds the item again; Transmission answers `duplicate` with the hash, and a
-//! torrent in the command's folder, for an item nothing else received, counts
-//! as this command's own (`received`, renamed and noted). A connection that
+//! torrent carrying the command's label counts as this command's own
+//! (`received`, renamed and noted). A connection that
 //! could not be made at all sent nothing and fails the command at once. Once
 //! marked, a start that fails for a reason no later start can get past (the
 //! channel was deleted, the folder is refused) ends the command at once too;

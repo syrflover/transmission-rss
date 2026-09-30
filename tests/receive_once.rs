@@ -25,6 +25,7 @@ use transmission_rss::{
         history::{HistoryItem, HistoryResult},
         Db,
     },
+    transmission::item_label,
     worker::{lock_path_for, CommandsOutcome, CycleLock, CycleReport, TickOutcome, Worker},
 };
 
@@ -266,6 +267,13 @@ async fn a_no_match_item_is_received_into_the_chosen_folder_by_the_worker() {
     assert_eq!(torrents[0].hash, hash(26));
     assert_eq!(torrents[0].download_dir, "/media/anime/LIAR GAME/Season 01");
     let item_label = format!("trss-item:{}:{}", item.channel_id, item.identity_key);
+    // The add carried the command's label too; the command took it off once it
+    // had recorded the torrent.
+    let add = &s.h.tr.calls_of("torrent-add")[0];
+    assert_eq!(
+        add.args["labels"],
+        json!([BOT_LABEL, item_label, format!("trss-cmd:{CMD}")])
+    );
     assert_eq!(torrents[0].labels, [BOT_LABEL, item_label.as_str()]);
     assert_eq!(torrents[0].name, "LIAR GAME S01E26.mkv");
     let received = s.item("LIAR GAME - 26").await;
@@ -395,8 +403,9 @@ async fn a_torrent_with_several_files_is_left_as_it_is_without_retrying() {
 
     assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
 
-    // One lookup by the add and one by the rename step, which stops there.
-    assert_eq!(s.h.tr.calls_of("torrent-get").len(), 2);
+    // One lookup by the add, one by the rename step, which stops there, and
+    // one to take the command's label off.
+    assert_eq!(s.h.tr.calls_of("torrent-get").len(), 3);
     assert!(s.h.tr.calls_of("torrent-rename-path").is_empty());
     assert_eq!(s.h.tr.torrents()[0].name, LIAR);
     let received = s.item("LIAR GAME - 26").await;
@@ -1083,18 +1092,63 @@ async fn a_command_whose_torrent_went_in_before_the_worker_died_adds_no_second_t
     s.post(CMD, &item, "LIAR GAME/Season 01").await;
     let store = CommandStore::new(s.h.db.clone());
     store.claim_next(s.h.now()).await.unwrap().unwrap();
-    // Transmission took the torrent, then the worker died before writing the result.
-    s.h.tr.preload(FakeTorrent::new(&hash(26), LIAR).bot());
+    // Transmission took the torrent with the add's labels, then the worker died
+    // before writing the result.
+    s.h.tr.preload(taken_by_the_commands_add(&item));
 
     s.run_commands().await;
 
-    assert_eq!(s.h.tr.torrents().len(), 1, "one torrent in Transmission");
+    let torrents = s.h.tr.torrents();
+    assert_eq!(torrents.len(), 1, "one torrent in Transmission");
+    let held = s.item("LIAR GAME - 26").await;
+    assert_eq!(held.result, HistoryResult::Received);
+    assert_eq!(held.torrent_hash.as_deref(), Some(hash(26).as_str()));
+    let (_, view) = s.command(CMD).await;
+    assert_eq!(view["state"], "done");
+    assert_eq!(view["outcome"]["result"], "received");
+    // The rerun knows the torrent as its own add's by the command's label, so it
+    // renames it and takes the label off.
+    assert_eq!(torrents[0].name, "LIAR GAME S01E26.mkv");
+    assert_eq!(
+        torrents[0].labels,
+        [BOT_LABEL, &item_label(&item.channel_id, &item.identity_key)]
+    );
+}
+
+#[tokio::test]
+async fn a_bot_torrent_without_the_commands_label_is_not_taken_as_its_own() {
+    let liar = release("guid-liar-26", 26, LIAR, "");
+    let s = Scene::new(&[&liar], unrelated_rule()).await;
+    let item = s.item("LIAR GAME - 26").await;
+    s.post(CMD, &item, "LIAR GAME/Season 01").await;
+    // Put in the chosen folder before the command ran, by an add that was not
+    // this command's (the cron before the switch, say).
+    s.h.tr.preload(FakeTorrent {
+        download_dir: "/media/anime/LIAR GAME/Season 01".to_owned(),
+        ..FakeTorrent::new(&hash(26), LIAR).bot()
+    });
+
+    s.run_commands().await;
+
     let item = s.item("LIAR GAME - 26").await;
     assert_eq!(item.result, HistoryResult::Duplicate);
-    assert_eq!(s.command(CMD).await.1["state"], "done");
-    // The rerun did not add the torrent, so it does not rename it either.
+    assert_eq!(s.command(CMD).await.1["outcome"]["result"], "duplicate");
     assert!(s.h.tr.calls_of("torrent-rename-path").is_empty());
     assert_eq!(item.reason, None);
+}
+
+/// The torrent Transmission holds after taking this command's add for `item`
+/// into `LIAR GAME/Season 01`.
+fn taken_by_the_commands_add(item: &HistoryItem) -> FakeTorrent {
+    FakeTorrent {
+        download_dir: "/media/anime/LIAR GAME/Season 01".to_owned(),
+        labels: vec![
+            BOT_LABEL.to_owned(),
+            item_label(&item.channel_id, &item.identity_key),
+            format!("trss-cmd:{CMD}"),
+        ],
+        ..FakeTorrent::new(&hash(26), LIAR)
+    }
 }
 
 #[tokio::test]
@@ -1107,7 +1161,7 @@ async fn a_cycle_run_while_a_command_is_left_running_removes_nothing() {
     store.claim_next(s.h.now()).await.unwrap().unwrap();
     // Transmission took the torrent, then the worker died before writing the
     // result: history knows no hash for it, and no rule selects the item.
-    s.h.tr.preload(FakeTorrent::new(&hash(26), LIAR).bot());
+    s.h.tr.preload(taken_by_the_commands_add(&item));
 
     // A restarted worker runs its cycle before it looks for commands.
     let report = s.cycle().await;
@@ -1119,7 +1173,7 @@ async fn a_cycle_run_while_a_command_is_left_running_removes_nothing() {
 
     // The rerun meets the torrent and records its hash, so later cycles keep it.
     assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
-    assert_eq!(s.command(CMD).await.1["outcome"]["result"], "duplicate");
+    assert_eq!(s.command(CMD).await.1["outcome"]["result"], "received");
     let report = s.cycle().await;
     assert_eq!(report.commands_running, 0);
     assert!(report.removed.is_empty(), "{:?}", report.removed);
@@ -1370,6 +1424,32 @@ async fn a_torrent_the_bot_did_not_add_is_not_taken_as_the_commands_own_after_an
     // Added by hand in Transmission, into the folder the command will choose.
     s.h.tr.preload(FakeTorrent {
         download_dir: "/media/anime/LIAR GAME/Season 01".to_owned(),
+        ..FakeTorrent::new(&hash(26), LIAR)
+    });
+    let worker = after_an_unanswered_add(&s).await;
+
+    assert_eq!(s.run_commands_with(&worker).await, CommandsOutcome::Ran(1));
+
+    assert_eq!(s.command(CMD).await.1["outcome"]["result"], "duplicate");
+    assert_eq!(
+        s.item("LIAR GAME - 26").await.result,
+        HistoryResult::Duplicate
+    );
+    assert_eq!(s.h.tr.torrents()[0].name, LIAR, "its name is left alone");
+}
+
+#[tokio::test]
+async fn another_items_bot_torrent_in_the_chosen_folder_is_not_taken_as_the_commands_own() {
+    let liar = release("guid-liar-26", 26, LIAR, "");
+    let s = Scene::new(&[&liar], unrelated_rule()).await;
+    // The same torrent, put in the folder the command will choose by another
+    // channel's rule for its own item.
+    s.h.tr.preload(FakeTorrent {
+        download_dir: "/media/anime/LIAR GAME/Season 01".to_owned(),
+        labels: vec![
+            BOT_LABEL.to_owned(),
+            item_label("another-channel", "guid:another-item"),
+        ],
         ..FakeTorrent::new(&hash(26), LIAR)
     });
     let worker = after_an_unanswered_add(&s).await;
