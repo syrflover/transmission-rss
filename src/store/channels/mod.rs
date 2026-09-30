@@ -9,6 +9,9 @@
 //! [`Channel::masked_url`] / [`mask_url`] for anything shown or logged; the
 //! `Debug` output and error messages of this module never contain them.
 
+pub mod import;
+#[cfg(test)]
+mod import_tests;
 mod model;
 mod repo;
 #[cfg(test)]
