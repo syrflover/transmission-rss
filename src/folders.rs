@@ -31,10 +31,20 @@ pub struct Folding {
     pub prefixes: Vec<String>,
 }
 
-/// The given bases have no leading component in common, which only relative
-/// folders can do; no folder can stand for all of them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct NoCommonFolder;
+/// Why some bases cannot be folded into one collect folder. Indices are
+/// positions in the `bases` given to [`fold_bases`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FoldError {
+    /// These bases are empty text; an empty folder is no collect folder.
+    Empty(Vec<usize>),
+    /// The bases have no leading component in common, which only relative
+    /// folders can do; no folder can stand for all of them.
+    NoCommonFolder,
+    /// A collect folder exists, but the base at this index cannot be written as
+    /// it plus a prefix without changing the text its save paths join to (for
+    /// example a base ending in more than one `/`).
+    NotExact(usize),
+}
 
 /// Folds channel base folders into a collect folder.
 ///
@@ -47,10 +57,14 @@ pub struct NoCommonFolder;
 /// base, the join of the collect folder and [`prefixed`] `(prefix, directory)`
 /// must equal the join of the base and `directory`, for the empty directory
 /// (which ends in `/`) and a non-empty one alike.
-pub fn fold_bases(bases: &[&str]) -> Result<Option<Folding>, NoCommonFolder> {
+pub fn fold_bases(bases: &[&str]) -> Result<Option<Folding>, FoldError> {
     let Some(&first) = bases.first() else {
         return Ok(None);
     };
+    let empty: Vec<usize> = (0..bases.len()).filter(|&i| bases[i].is_empty()).collect();
+    if !empty.is_empty() {
+        return Err(FoldError::Empty(empty));
+    }
     if bases.iter().all(|base| *base == first) {
         return Ok(Some(Folding {
             collect: first.to_owned(),
@@ -76,7 +90,7 @@ pub fn fold_bases(bases: &[&str]) -> Result<Option<Folding>, NoCommonFolder> {
         keep -= 1;
     }
     if keep == 0 {
-        return Err(NoCommonFolder);
+        return Err(FoldError::NoCommonFolder);
     }
 
     let collect = if keep == 1 && split[0][0].is_empty() {
@@ -89,13 +103,13 @@ pub fn fold_bases(bases: &[&str]) -> Result<Option<Folding>, NoCommonFolder> {
         .map(|s| s[keep.min(s.len())..].join("/"))
         .collect();
 
-    for (base, prefix) in bases.iter().zip(&prefixes) {
+    for (index, (base, prefix)) in bases.iter().zip(&prefixes).enumerate() {
         for directory in ["", "Show/Season 01"] {
             let before = Path::new(base).join(directory);
             let after = Path::new(&collect).join(prefixed(prefix, directory));
             // `Path` equality ignores slashes, so compare the text.
             if before.as_os_str() != after.as_os_str() {
-                return Err(NoCommonFolder);
+                return Err(FoldError::NotExact(index));
             }
         }
     }
@@ -119,20 +133,31 @@ fn components(path: &Path) -> Vec<Component<'_>> {
     path.components().collect()
 }
 
+/// Whether `path` has a `..` component. Such a path cannot be placed against
+/// another by its text: `/d/Shows/../Movies` is textually inside `/d/Shows`
+/// but is not.
+pub fn has_parent_dir(path: &Path) -> bool {
+    path.components().any(|c| c == Component::ParentDir)
+}
+
 /// The folder every path is inside (or is), by whole components, or `None` when
-/// they share no leading component or there are no paths.
+/// they share no leading component or there are no paths. The folder never
+/// contains a `..` component: the shared part stops before the first one.
 pub fn common_ancestor(paths: &[&Path]) -> Option<PathBuf> {
     let first = components(paths.first()?);
     let shared = (0..first.len())
+        .take_while(|&i| first[i] != Component::ParentDir)
         .take_while(|&i| paths.iter().all(|p| components(p).get(i) == first.get(i)))
         .count();
     (shared > 0).then(|| first[..shared].iter().collect())
 }
 
 /// What is left of `path` below `folder`, by whole components: empty when they
-/// are the same folder, `None` when `path` is not inside `folder`.
+/// are the same folder, `None` when `path` is not inside `folder`. A rest that
+/// has a `..` component counts as not inside: it could lead out of `folder`.
 pub fn relative_under(folder: &Path, path: &Path) -> Option<PathBuf> {
-    path.strip_prefix(folder).ok().map(Path::to_path_buf)
+    let rest = path.strip_prefix(folder).ok()?;
+    (!has_parent_dir(rest)).then(|| rest.to_path_buf())
 }
 
 #[cfg(test)]
@@ -235,10 +260,62 @@ mod tests {
 
     #[test]
     fn relative_folders_with_nothing_in_common_cannot_be_folded() {
-        assert_eq!(fold_bases(&["a/x", "b/y"]), Err(NoCommonFolder));
-        assert_eq!(fold_bases(&["/a", "b"]), Err(NoCommonFolder));
+        assert_eq!(fold_bases(&["a/x", "b/y"]), Err(FoldError::NoCommonFolder));
+        assert_eq!(fold_bases(&["/a", "b"]), Err(FoldError::NoCommonFolder));
         let folding = fold(&["rel/a", "rel/b"]);
         assert_eq!(folding.collect, "rel");
+    }
+
+    #[test]
+    fn folding_says_which_bases_it_refused_and_why() {
+        assert_eq!(
+            fold_bases(&["/d/a", "", "/d/b", ""]),
+            Err(FoldError::Empty(vec![1, 3]))
+        );
+        assert_eq!(fold_bases(&[""]), Err(FoldError::Empty(vec![0])));
+        // Two trailing slashes cannot be put back byte for byte.
+        assert_eq!(fold_bases(&["/d/a", "/d/b//"]), Err(FoldError::NotExact(1)));
+        assert_eq!(fold_bases(&["/d/a//", "/d/b"]), Err(FoldError::NotExact(0)));
+    }
+
+    #[test]
+    fn a_rest_with_parent_components_is_not_inside() {
+        let folder = Path::new("/downloads/Shows");
+        assert_eq!(
+            relative_under(folder, Path::new("/downloads/Shows/../Movies")),
+            None
+        );
+        assert_eq!(
+            relative_under(folder, Path::new("/downloads/Shows/A/../../Movies")),
+            None
+        );
+        assert_eq!(
+            relative_under(folder, Path::new("/downloads/Shows/..")),
+            None
+        );
+        // `.` is harmless and dropped by the component view.
+        assert_eq!(
+            relative_under(folder, Path::new("/downloads/Shows/./A")),
+            Some(PathBuf::from("A"))
+        );
+        assert!(has_parent_dir(Path::new("/a/../b")));
+        assert!(!has_parent_dir(Path::new("/a/b..c/..d")));
+    }
+
+    #[test]
+    fn the_common_ancestor_stops_before_a_parent_component() {
+        assert_eq!(
+            common_ancestor(&[Path::new("/d/Shows/../A"), Path::new("/d/Shows/../B")]),
+            Some(PathBuf::from("/d/Shows"))
+        );
+        assert_eq!(
+            common_ancestor(&[Path::new("/d/../A"), Path::new("/d/../A")]),
+            Some(PathBuf::from("/d"))
+        );
+        assert_eq!(
+            common_ancestor(&[Path::new("../A"), Path::new("../A")]),
+            None
+        );
     }
 
     #[test]

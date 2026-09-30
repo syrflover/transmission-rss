@@ -39,6 +39,23 @@ async fn app() -> App {
 }
 
 impl App {
+    /// The scratch folder the app's database lives in; it exists.
+    fn root(&self) -> String {
+        self._dir.path().to_str().unwrap().to_owned()
+    }
+
+    /// `content` with `/media` and `/downloads` moved under the scratch folder
+    /// and created there: a collect folder the import sets has to exist.
+    fn real(&self, content: &str) -> String {
+        let root = self.root();
+        for name in ["media", "downloads"] {
+            std::fs::create_dir_all(format!("{root}/{name}")).unwrap();
+        }
+        content
+            .replace("/media", &format!("{root}/media"))
+            .replace("/downloads", &format!("{root}/downloads"))
+    }
+
     async fn post(&self, uri: &str, body: Value) -> (StatusCode, String, Value) {
         self.post_raw(uri, body.to_string()).await
     }
@@ -179,19 +196,20 @@ fn assert_no_secret(text: &str) {
 async fn an_empty_app_takes_everything_without_asking_and_keeps_the_file_exactly() {
     let t = app().await;
 
-    let (status, text, review) = t.preview(&file()).await;
+    let (status, text, review) = t.preview(&t.real(&file())).await;
     assert_eq!(status, StatusCode::OK, "{text}");
     assert_no_secret(&text);
     assert_eq!(review["conflict_count"], 0);
     // No collect folder yet: the file's folders have `/media` in common.
     assert_eq!(review["collect_folder"]["current"], Value::Null);
-    assert_eq!(review["collect_folder"]["will_set"], "/media");
+    let media = format!("{}/media", t.root());
+    assert_eq!(review["collect_folder"]["will_set"], media.as_str());
     let channels = review["channels"].as_array().unwrap();
     assert_eq!(channels.len(), 2);
     assert!(channels.iter().all(|c| c["existing"].is_null()));
     assert!(channels.iter().all(|c| c["not_imported"].is_null()));
-    assert_eq!(channels[0]["directory"], "/media/a");
-    assert_eq!(channels[1]["directory"], "/media/b");
+    assert_eq!(channels[0]["directory"], format!("{media}/a").as_str());
+    assert_eq!(channels[1]["directory"], format!("{media}/b").as_str());
     // The review lists the rule folders as they will be stored, under the
     // collect folder.
     assert_eq!(channels[0]["rules"][0]["directory"], "a/A/keep1");
@@ -215,14 +233,14 @@ async fn an_empty_app_takes_everything_without_asking_and_keeps_the_file_exactly
     assert!(t.all().await.is_empty(), "a preview changes nothing");
     assert_eq!(t.collection().await, None, "a preview sets no folder");
 
-    let (status, text, result) = t.apply(&file(), json!([])).await;
+    let (status, text, result) = t.apply(&t.real(&file()), json!([])).await;
     assert_eq!(status, StatusCode::OK, "{text}");
     assert_no_secret(&text);
-    assert_eq!(result["collect_folder_set"], "/media");
+    assert_eq!(result["collect_folder_set"], media.as_str());
     let collection = t.collection().await.unwrap();
     assert_eq!(
         (collection.folder.as_str(), collection.archive_folder),
-        ("/media", None)
+        (media.as_str(), None)
     );
     assert_eq!(result["counts"]["channels_added"], 2);
     assert_eq!(result["counts"]["rules_added"], 7);
@@ -356,7 +374,9 @@ async fn add_copies_the_channel_with_new_ids_and_leaves_the_existing_one_alone()
         .await
         .unwrap();
 
-    let (status, text, _) = t.apply(&file(), json!([choice(0, &a, "add")])).await;
+    let (status, text, _) = t
+        .apply(&t.real(&file()), json!([choice(0, &a, "add")]))
+        .await;
     assert_eq!(status, StatusCode::OK, "{text}");
 
     let stored = t.all().await;
@@ -401,7 +421,7 @@ async fn skip_leaves_everything_and_choices_must_cover_every_conflict() {
             choice(2, &b, "skip")
         ]),
     ] {
-        let (status, text, body) = t.apply(&file(), choices).await;
+        let (status, text, body) = t.apply(&t.real(&file()), choices).await;
         assert_eq!(status, StatusCode::CONFLICT, "{text}");
         assert_eq!(body["error"], "conflict");
         assert!(body["message"].as_str().unwrap().contains("다시 검토"));
@@ -410,7 +430,7 @@ async fn skip_leaves_everything_and_choices_must_cover_every_conflict() {
 
     let (status, text, result) = t
         .apply(
-            &file(),
+            &t.real(&file()),
             json!([choice(0, &a, "skip"), choice(1, &b, "skip")]),
         )
         .await;
@@ -440,7 +460,7 @@ async fn a_channel_changed_after_the_review_is_refused_not_replaced() {
         .unwrap();
     let before = t.all().await;
 
-    let (status, _, body) = t.apply(&file(), json!([reviewed])).await;
+    let (status, _, body) = t.apply(&t.real(&file()), json!([reviewed])).await;
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(body["error"], "conflict");
     assert_eq!(t.all().await, before);
@@ -511,14 +531,18 @@ async fn a_database_error_mid_apply_leaves_the_state_from_before() {
          BEGIN SELECT RAISE(ABORT, 'injected failure'); END;",
     )
     .unwrap();
-    let (status, text, body) = t.apply(&file(), json!([choice(0, &a, "replace")])).await;
+    let (status, text, body) = t
+        .apply(&t.real(&file()), json!([choice(0, &a, "replace")]))
+        .await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{text}");
     assert_eq!(body["error"], "internal");
     assert_no_secret(&text);
     assert_eq!(t.all().await, before, "A and B are as they were");
 
     raw.execute_batch("DROP TRIGGER inject_failure").unwrap();
-    let (status, text, _) = t.apply(&file(), json!([choice(0, &a, "replace")])).await;
+    let (status, text, _) = t
+        .apply(&t.real(&file()), json!([choice(0, &a, "replace")]))
+        .await;
     assert_eq!(status, StatusCode::OK, "{text}");
     assert_eq!(t.all().await.len(), 2);
 }
@@ -553,18 +577,19 @@ fn directories(channel: &ChannelWithRules) -> Vec<&str> {
 async fn differing_channel_folders_set_their_common_parent_and_prefix_the_rules() {
     let t = app().await;
 
-    let (_, text, review) = t.preview(&folders_file()).await;
+    let (_, text, review) = t.preview(&t.real(&folders_file())).await;
     assert_no_secret(&text);
-    assert_eq!(review["collect_folder"]["will_set"], "/downloads");
+    let downloads = format!("{}/downloads", t.root());
+    assert_eq!(review["collect_folder"]["will_set"], downloads.as_str());
     assert_eq!(
         review["channels"][0]["rules"][0]["directory"],
         "Shows (current)/Clevatess/Season 02"
     );
 
-    let (status, text, result) = t.apply(&folders_file(), json!([])).await;
+    let (status, text, result) = t.apply(&t.real(&folders_file()), json!([])).await;
     assert_eq!(status, StatusCode::OK, "{text}");
-    assert_eq!(result["collect_folder_set"], "/downloads");
-    assert_eq!(t.collection().await.unwrap().folder, "/downloads");
+    assert_eq!(result["collect_folder_set"], downloads.as_str());
+    assert_eq!(t.collection().await.unwrap().folder, downloads);
 
     let stored = t.all().await;
     // The empty directory keeps its trailing slash, as the old save path had.
@@ -697,17 +722,107 @@ async fn skipping_every_channel_does_not_set_the_collect_folder() {
         .create_channel_with_rules(input, rules)
         .await
         .unwrap();
-    let content = format!(
+    let content = t.real(&format!(
         "- url: https://feeds.example.test/a?filter=1080p&token={TOKEN_A}
   directory: /media/a
   rules:
     - match: Keep1
       directory: X
 "
-    );
+    ));
+    // A single channel's folder would be the collect folder itself.
+    std::fs::create_dir_all(format!("{}/media/a", t.root())).unwrap();
 
     let (status, text, result) = t.apply(&content, json!([choice(0, &a, "skip")])).await;
     assert_eq!(status, StatusCode::OK, "{text}");
     assert_eq!(result["collect_folder_set"], Value::Null);
     assert_eq!(t.collection().await, None);
+}
+
+/// A one-channel file whose folder is `folder`.
+fn file_in(folder: &str) -> String {
+    channel_in("a", folder)
+}
+
+/// One channel, `name` telling it from the others, in `folder`.
+fn channel_in(name: &str, folder: &str) -> String {
+    format!(
+        "- url: https://feeds.example.test/{name}?token={TOKEN_A}
+  directory: {folder}
+  rules:
+    - match: A1
+      directory: Show
+"
+    )
+}
+
+/// Both steps refuse `content` with `400 invalid`, a message that holds
+/// `needle` and no secret, and nothing is imported or set.
+async fn assert_refused(t: &App, content: &str, needle: &str) {
+    let (status, text, body) = t.preview(content).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+    assert_eq!(body["error"], "invalid");
+    assert!(body["message"].as_str().unwrap().contains(needle), "{text}");
+    assert_no_secret(&text);
+
+    let (status, text, body) = t.apply(content, json!([])).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+    assert_eq!(body["error"], "invalid");
+    assert!(body["message"].as_str().unwrap().contains(needle), "{text}");
+    assert!(t.all().await.is_empty());
+    assert_eq!(t.collection().await, None);
+}
+
+#[tokio::test]
+async fn a_collect_folder_the_import_would_set_must_be_an_existing_directory() {
+    let t = app().await;
+    let root = t.root();
+
+    // A folder that does not exist (as the settings screen would say).
+    assert_refused(&t, &file_in(&format!("{root}/missing/a")), "찾지 못했어요").await;
+
+    // A file, not a directory.
+    std::fs::write(format!("{root}/a-file"), "x").unwrap();
+    assert_refused(&t, &file_in(&format!("{root}/a-file")), "폴더가 아니에요").await;
+}
+
+#[tokio::test]
+async fn an_import_that_would_set_a_relative_or_root_collect_folder_is_refused() {
+    let t = app().await;
+
+    assert_refused(&t, &file_in("relative/a"), "전체 경로가 아니어서").await;
+    assert_refused(&t, &file_in("/"), "`/`가 되어").await;
+    let two = format!("{}{}", file_in("/media/a"), channel_in("b", "/downloads/b"));
+    assert_refused(&t, &two, "설정에서 수집 폴더를 먼저").await;
+
+    // Once the collect folder is set in settings, the same file imports.
+    let media = t.real("/media");
+    t.set_folder(&media).await;
+    let (status, text, result) = t.apply(&file_in(&format!("{media}/a")), json!([])).await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(result["counts"]["channels_added"], 1);
+}
+
+#[tokio::test]
+async fn a_channel_folder_that_climbs_out_of_the_collect_folder_is_not_imported() {
+    let t = app().await;
+    let media = t.real("/media");
+    t.set_folder(&media).await;
+    let content = format!(
+        "{}{}",
+        file_in(&format!("{media}/a")),
+        channel_in("b", &format!("{media}/../downloads"))
+    );
+
+    let (status, text, review) = t.preview(&content).await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert!(review["channels"][0]["not_imported"].is_null());
+    let reason = review["channels"][1]["not_imported"].as_str().unwrap();
+    assert!(reason.contains("`..`"), "{reason}");
+
+    let (status, text, result) = t.apply(&content, json!([])).await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(result["counts"]["channels_added"], 1);
+    assert_eq!(result["counts"]["channels_not_imported"], 1);
+    assert_eq!(t.all().await.len(), 1);
 }

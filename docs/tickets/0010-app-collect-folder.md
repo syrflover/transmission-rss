@@ -46,6 +46,13 @@
 - 기존 YAML(`src/import/fit.rs`, `src/web/import_api.rs`): 수집 폴더가 없으면 파일의 채널 폴더(다르면 공통 상위)로 정하고, 안이면 규칙 저장 폴더 앞에 남은 부분을 붙이고, 밖이면 검토 단계에 까닭과 함께 알리고 가져오지 않아요(결과 단계에도 나와요). 폴더는 채널과 같은 트랜잭션으로 정해요. 검토한 수집 폴더가 적용 때 다르면 `409`로 다시 검토하게 해요.
 - 웹: 설정 `수집 폴더` 항목(폴더 두 칸·저장·되돌리기·충돌 안내), 목록 줄은 `Shows (current) · 보관 Shows` 또는 수집 폴더 이름만, 채널 카드·편집기에서 기본 저장 폴더를 빼고 채널 탭에 설정 링크가 든 한 줄, 규칙 상세가 전체 경로를 보여주고, 폴더를 바꾸면 규칙·미리보기·상태 캐시를 버려요. `readme.md`와 `docker-compose.trss.yml` 주석, `worker`·`channels_api` 모듈 문서를 고쳤어요.
 
+### 검토 뒤 고친 것
+
+- 기존 YAML이 `..`로 수집 폴더 밖으로 나가는 채널 폴더(`/downloads/Shows/../Movies`)를 안으로 잘못 보던 것을 고쳤어요. `..`가 든 채널 폴더는 까닭과 함께 가져오지 않고, 수집 폴더를 정할 때의 공통 상위 계산에서도 빠져요(`relative_under`·`common_ancestor`, `fit`). 시험: `folders::tests::a_rest_with_parent_components_is_not_inside`, `the_common_ancestor_stops_before_a_parent_component`, `import::fit::tests::a_channel_folder_with_parent_components_is_reported_not_placed`, `a_channel_folder_with_parent_components_takes_no_part_in_choosing_the_collect_folder`, `web::import_api::tests::a_channel_folder_that_climbs_out_of_the_collect_folder_is_not_imported`.
+- 마이그레이션 7이 접지 못하는 까닭(빈 기본 경로, 공통 상위 없음, 글자 그대로 접을 수 없는 `//` 끝 등)을 나눠 말하고 문제의 기본 경로와 채널 ID를 오류에 적어요. DB가 v6으로 남는 것은 그대로예요(`folders::FoldError`, `store::settings::migrate`). 시험: `folders::tests::folding_says_which_bases_it_refused_and_why`, `store::settings::tests::folders_with_no_common_parent_stop_the_migration_and_change_nothing`, `a_base_that_cannot_be_folded_byte_for_byte_is_named_not_blamed_on_the_parent`, `an_empty_base_is_named_with_its_channel`.
+- 이미 정한 수집 폴더를 다른 폴더로 바꿔 저장하면, 저장 전에 그 자리에서 확인을 물어요(이미 받은 파일은 그대로, 규칙 저장 폴더는 새 수집 폴더 기준, 앞으로 추가하는 항목은 새 폴더 아래). `CollectionPanel.tsx`의 자동 시험은 없고 타입 검사·빌드만 했어요.
+- 가져오기가 수집 폴더를 새로 정할 때 설정 화면과 같은 검사를 받아요. 정하게 될 폴더가 절대 경로가 아니거나 `/`이면 검토 단계에서 가져오기 전체를 까닭과 함께 거절하고, 웹이 볼 수 있는 폴더인지도 설정의 `check_folders`로 확인해요(수집 폴더가 이미 있으면 검사하지 않아요). 채널 폴더가 모두 상대 경로이면 거절하고, 절대·상대가 섞이면 절대 경로끼리만 공통 상위를 구하고 상대 경로 채널은 밖으로 알려요. 시험: `import::fit::tests::relative_channel_folders_alone_cannot_set_the_collect_folder`, `a_common_ancestor_that_is_the_filesystem_root_is_refused`, `with_no_collect_folder_absolute_folders_win_over_relative_ones`, `web::import_api::tests::a_collect_folder_the_import_would_set_must_be_an_existing_directory`, `an_import_that_would_set_a_relative_or_root_collect_folder_is_refused`. 폴더를 새로 정하는 기존 가져오기 시험은 임시 폴더 아래의 실제 폴더를 쓰도록 바꿨어요.
+
 ### 검증한 것
 
 - `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`가 모두 통과했어요(라이브러리 296개, 통합 시험 파일들 포함). 웹은 `npm run typecheck`와 `npm run build`가 통과했어요.

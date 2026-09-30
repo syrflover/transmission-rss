@@ -118,7 +118,8 @@ async fn the_worker_talks_to_transmission_like_the_legacy_binary() {
     );
 
     // --- the worker, configured by the same file imported into its database ---
-    let fitted = fit(legacy::parse(&yaml).expect("fixture yaml"), None);
+    let fitted =
+        fit(legacy::parse(&yaml).expect("fixture yaml"), None).expect("fixture folders fit");
     assert_eq!(fitted.collect_folder.as_deref(), Some("/media"));
     let actions = fitted
         .channels

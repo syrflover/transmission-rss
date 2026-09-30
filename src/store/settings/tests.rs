@@ -212,21 +212,23 @@ async fn no_channels_leave_the_collect_folder_unset() {
     assert!(!has_base_dir_column(&db).await);
 }
 
-#[tokio::test]
-async fn folders_with_no_common_parent_stop_the_migration_and_change_nothing() {
+/// Opens a database at version 6 holding `channels` (id, base folder), expects
+/// the migration to fail, checks nothing changed, and returns the error message.
+async fn failed_migration(channels: &[(&str, &str)]) -> String {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("app.db");
     {
         let conn = database_at(&path, BEFORE);
-        channel(&conn, "a", 0, "relative/a");
-        channel(&conn, "b", 1, "/absolute/b");
-        rule(&conn, "r1", "a", 0, "Show", "active");
+        for (i, (id, base)) in channels.iter().enumerate() {
+            channel(&conn, id, i as i64, base);
+        }
+        rule(&conn, "r1", channels[0].0, 0, "Show", "active");
     }
 
-    match Db::open(&path).await {
-        Err(DbError::Migration(_)) => {}
+    let message = match Db::open(&path).await {
+        Err(DbError::Migration(message)) => message,
         other => panic!("expected a migration error, got {:?}", other.map(|_| ())),
-    }
+    };
 
     // Still the previous schema, with its data, so a fixed configuration can retry.
     let conn = Connection::open(&path).unwrap();
@@ -235,11 +237,19 @@ async fn folders_with_no_common_parent_stop_the_migration_and_change_nothing() {
         .unwrap();
     assert_eq!(version, BEFORE as i64);
     let base: String = conn
-        .query_row("SELECT base_dir FROM channels WHERE id = 'a'", [], |r| {
+        .query_row(
+            "SELECT base_dir FROM channels WHERE id = ?1",
+            [channels[0].0],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(base, channels[0].1);
+    let directory: String = conn
+        .query_row("SELECT directory FROM rules WHERE id = 'r1'", [], |r| {
             r.get(0)
         })
         .unwrap();
-    assert_eq!(base, "relative/a");
+    assert_eq!(directory, "Show");
     let tables: i64 = conn
         .query_row(
             "SELECT count(*) FROM sqlite_master WHERE name = 'collection_settings'",
@@ -248,6 +258,34 @@ async fn folders_with_no_common_parent_stop_the_migration_and_change_nothing() {
         )
         .unwrap();
     assert_eq!(tables, 0);
+    message
+}
+
+#[tokio::test]
+async fn folders_with_no_common_parent_stop_the_migration_and_change_nothing() {
+    let message = failed_migration(&[("a", "relative/a"), ("b", "/absolute/b")]).await;
+    assert!(message.contains("share no parent folder"), "{message}");
+    assert!(message.contains("`relative/a` (channel a)"), "{message}");
+    assert!(message.contains("`/absolute/b` (channel b)"), "{message}");
+}
+
+#[tokio::test]
+async fn a_base_that_cannot_be_folded_byte_for_byte_is_named_not_blamed_on_the_parent() {
+    // Two trailing slashes cannot be put back: the folders do share a parent.
+    let message = failed_migration(&[("a", "/d/a"), ("b", "/d/b//")]).await;
+    assert!(!message.contains("share no parent folder"), "{message}");
+    assert!(message.contains("`/d/b//` (channel b)"), "{message}");
+    assert!(!message.contains("channel a"), "{message}");
+    assert!(message.contains("single slashes"), "{message}");
+}
+
+#[tokio::test]
+async fn an_empty_base_is_named_with_its_channel() {
+    let message = failed_migration(&[("a", "/d/a"), ("b", ""), ("c", "/d/c")]).await;
+    assert!(message.contains("empty base folder"), "{message}");
+    assert!(message.contains("`` (channel b)"), "{message}");
+    assert!(!message.contains("channel a"), "{message}");
+    assert!(!message.contains("channel c"), "{message}");
 }
 
 async fn store() -> SettingsStore {

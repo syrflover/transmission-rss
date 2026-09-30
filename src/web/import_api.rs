@@ -27,9 +27,12 @@
 //! that imports the channels. A channel folder inside the collect folder is
 //! imported with the part between the two put in front of its rules'
 //! directories; one outside it is reported with a reason and not imported,
-//! and needs no choice even if it matches an existing channel. The collect
-//! folder the review saw (`reviewed_collect_folder` in the apply request) must
-//! still be the one now, like a channel's version.
+//! and needs no choice even if it matches an existing channel. A collect folder
+//! the import would set is checked like the settings screen checks one (an
+//! absolute path to an existing directory, here also not `/`); when it fails,
+//! the whole review is refused with the reason, and nothing is imported. The
+//! collect folder the review saw (`reviewed_collect_folder` in the apply
+//! request) must still be the one now, like a channel's version.
 
 use axum::{
     extract::{rejection::JsonRejection, State},
@@ -38,6 +41,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
+use super::settings_api::check_folders;
 use super::{ApiError, AppState};
 use crate::import::{
     fit::{fit, Fit, Fitted},
@@ -301,7 +305,11 @@ async fn review(state: &AppState, content: &str) -> Result<Reviewed, ApiError> {
         .await
         .map_err(store_error)?;
 
-    let fitted = fit(file.clone(), current_folder.as_deref());
+    let fitted = fit(file.clone(), current_folder.as_deref())
+        .map_err(|refused| ApiError::invalid(refused.0))?;
+    if let Some(folder) = fitted.collect_folder.clone() {
+        check_folder_to_set(folder).await?;
+    }
     let mut positions = Vec::new();
     let mut importable = Vec::new();
     for (index, fit) in fitted.channels.iter().enumerate() {
@@ -318,6 +326,22 @@ async fn review(state: &AppState, content: &str) -> Result<Reviewed, ApiError> {
         positions,
         importable,
     })
+}
+
+/// The import would set the collect folder to `folder`, which skips the
+/// settings screen. The web sees the media read-only, so it can check what the
+/// screen checks: an existing directory it can open, at an absolute path.
+async fn check_folder_to_set(folder: String) -> Result<(), ApiError> {
+    let checked = tokio::task::spawn_blocking(move || check_folders(&folder, None))
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    match checked {
+        Ok(_) => Ok(()),
+        Err(ApiError::Invalid(message)) => Err(ApiError::invalid(format!(
+            "아직 수집 폴더가 없어서 파일의 채널 폴더로 정하려 했어요. {message} 설정에서 수집 폴더를 먼저 정한 뒤 다시 가져와 주세요."
+        ))),
+        Err(other) => Err(other),
+    }
 }
 
 async fn preview(
