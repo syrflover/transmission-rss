@@ -61,7 +61,7 @@ DB 테이블을 그대로 덤프하는 형식이 아니며, YAML의 버전은 �
 
 | 영역 | 담는 정보와 관계 |
 | --- | --- |
-| `settings.channels` | 안정적인 채널 ID, `url`·`directory`·`excludes`, 쿼리 값별 비밀 여부, 지난 회차 검색 형식, 채널 안의 순서 있는 `rules` 목록이에요. |
+| `settings.channels` | 안정적인 채널 ID, 선택적 표시 이름 `name`, `url`·`directory`·`excludes`, 쿼리 값별 비밀 여부, 지난 회차 검색 형식, 채널 안의 순서 있는 `rules` 목록이에요. |
 | `settings.channels[].rules` | 안정적인 규칙 ID, 기존 `match`·`regex`·`case_insensitive`·`directory`·`episode`의 의미, 규칙 상태와 선택적 구독 정보예요. |
 | `settings.watch_folders` | 감시 폴더의 안정적인 ID와 앱에서 접근하는 경로예요. |
 | `settings.works` | 작품 ID와 작품 폴더, 작품 안의 시즌 및 확인한 Anissia 연결·출처별 회차 대응, 작품 표지 선택 상태를 담아요. |
@@ -73,6 +73,7 @@ DB 테이블을 그대로 덤프하는 형식이 아니며, YAML의 버전은 �
 
 | 위치 | 필드와 의미 |
 | --- | --- |
+| `channels[].name` | 채널의 표시 이름이며 선택이에요. 앞뒤 공백을 지우고, 비었거나 없으면 `null`이에요. 이름이 없으면 화면은 `url`의 호스트를 보여줘요. |
 | `channels[].url` | 비밀로 표시한 쿼리 값을 비운 URL이에요. 비밀인 쿼리 이름을 `secret_query` 목록에 담고, 내보내기에는 비밀 값을 싣지 않아요([채널 URL의 비밀 값](collection.md#채널-url의-비밀-값)). |
 | `channels[].past_search` | `[SubsPlease] {match} 1080p` 같은 지난 회차 검색 형식이며, 없으면 `null`이에요. `{match}`는 규칙의 일치 문구로 바꾸는 자리예요. |
 | `rules[].state` | `active`·`archived`이에요. 보관한 규칙은 순서를 유지한 채 수집하지 않아요([규칙 보관](collection.md#규칙-보관)). |
