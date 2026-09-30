@@ -1,8 +1,10 @@
 import { useRef, type KeyboardEvent } from "react";
 import { useNavigate } from "react-router-dom";
 
+import { peek } from "@/lib/cached";
 import { cn } from "@/lib/utils";
 
+import { KEYS } from "./cache";
 import { PANEL_ID, tabId, type CollectTab } from "./tabs";
 
 interface CollectTabsProps {
@@ -15,7 +17,8 @@ interface CollectTabsProps {
  * The tab row. Arrow keys, Home and End only move keyboard focus between the
  * tabs; the tab (and so the URL) changes when a tab is activated with Enter,
  * Space or a click. Only the current tab is in the Tab order, so Tab leaves the
- * row for the panel.
+ * row for the panel. Another tab opens the way it was left (see `CollectScreen`);
+ * the current tab opens at its start, which is how its open item or filter is cleared.
  */
 export function CollectTabs({ tabs, current }: CollectTabsProps) {
   const navigate = useNavigate();
@@ -66,7 +69,7 @@ export function CollectTabs({ tabs, current }: CollectTabsProps) {
             aria-selected={selected}
             aria-controls={PANEL_ID}
             tabIndex={selected ? 0 : -1}
-            onClick={() => navigate(`/collect/${tab.path}`)}
+            onClick={() => navigate(`/collect/${tab.path}${selected ? "" : (peek<string>(KEYS.search(tab.path)) ?? "")}`)}
             className={cn(
               "-mb-px inline-flex items-center justify-center border-b-[3px] border-transparent px-4 pt-[13px] pb-3 text-[15px] font-medium whitespace-nowrap text-text-secondary hover:text-text-primary",
               "max-[720px]:flex-1 max-[720px]:basis-0 max-[720px]:px-0.5 max-[720px]:pt-3 max-[720px]:pb-[11px] max-[720px]:text-[14.5px]",

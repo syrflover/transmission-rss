@@ -1,3 +1,4 @@
+import { useAfterDelay } from "@/lib/cached";
 import { cn } from "@/lib/utils";
 
 import type { Preview, PreviewItem, PreviewKind } from "./api";
@@ -88,6 +89,8 @@ export function RulePreview({ state }: { state: PreviewState }) {
   const preview =
     state.state === "ready" ? state.preview : state.state === "loading" ? state.previous : null;
   const stale = state.state === "loading";
+  // A quick answer never shows the loading line.
+  const slow = useAfterDelay(!preview && state.state !== "failed");
 
   return (
     <section aria-labelledby="preview-heading" className="flex min-w-0 flex-col gap-2.5">
@@ -136,7 +139,7 @@ export function RulePreview({ state }: { state: PreviewState }) {
         </div>
       )}
 
-      {!preview && state.state !== "failed" && <p className="text-[13px] text-text-muted">미리보기를 불러오는 중이에요.</p>}
+      {slow && <p className="text-[13px] text-text-muted">미리보기를 불러오는 중이에요.</p>}
     </section>
   );
 }

@@ -217,5 +217,17 @@ export function useReceiveOnce(item: HistoryItem, onItem: (item: HistoryItem) =>
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // The row was shown from the cached list, and the list read again since
+  // found a command in progress that the cached copy did not have.
+  const openId = openCommand?.id;
+  useEffect(() => {
+    if (openCommand && !attempt.current) {
+      attempt.current = { id: openCommand.id, payload: null };
+      follow(openCommand);
+    }
+    // Only when a command appears on the item; the effect above handles the mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openId]);
+
   return { phase, submit, resend, recheck, dismiss };
 }

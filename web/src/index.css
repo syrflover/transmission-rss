@@ -156,6 +156,14 @@
 
   html {
     scroll-behavior: smooth;
+    /*
+     * The page scrollbar's width stays reserved, so a screen that grows or
+     * shrinks past the window does not shift sideways. `overflow-y: scroll`
+     * is the fallback for browsers that ignore the gutter on the root scroller;
+     * overlay scrollbars (phones) take no width either way.
+     */
+    scrollbar-gutter: stable;
+    overflow-y: scroll;
   }
 
   body {

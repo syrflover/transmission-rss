@@ -1,6 +1,10 @@
+import { useEffect } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 
+import { store } from "@/lib/cached";
+
 import { ScreenFrame } from "./ScreenFrame";
+import { KEYS } from "./collect/cache";
 import { CollectTabs } from "./collect/CollectTabs";
 import { StatusBoard } from "./collect/status/StatusBoard";
 import { COLLECT_TABS, DEFAULT_TAB, PANEL_ID, tabId } from "./collect/tabs";
@@ -10,9 +14,16 @@ import { COLLECT_TABS, DEFAULT_TAB, PANEL_ID, tabId } from "./collect/tabs";
  * `/collect` and unknown sub-paths open the first tab.
  */
 export function CollectScreen() {
-  const { pathname } = useLocation();
+  const { pathname, search } = useLocation();
   const segment = pathname.split("/")[2];
   const current = COLLECT_TABS.find((tab) => tab.path === segment)?.path ?? DEFAULT_TAB;
+
+  // A tab is opened again the way it was left: the rule that was open, the
+  // history filter. (A new, unsaved rule is not kept.)
+  const isNew = pathname.replace(/\/+$/, "").endsWith("/new");
+  useEffect(() => {
+    if (!isNew) store(KEYS.search(current), search);
+  }, [current, search, isNew]);
 
   return (
     <ScreenFrame title="수집">

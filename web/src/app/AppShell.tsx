@@ -1,8 +1,9 @@
-import { useEffect, type MouseEvent } from "react";
-import { Outlet, useLocation } from "react-router-dom";
+import type { MouseEvent } from "react";
+import { Outlet } from "react-router-dom";
 
 import { BottomNav, TopNav } from "./MainNav";
 import { APP_NAME } from "./menu";
+import { useScrollOnNavigate } from "./scroll";
 import { ThemeToggle } from "./ThemeToggle";
 
 function SkipLink() {
@@ -23,20 +24,12 @@ function SkipLink() {
   );
 }
 
-/** Back to the top of the page when the route (not just the query or hash) changes. */
-function useScrollToTopOnNavigate() {
-  const { pathname } = useLocation();
-  useEffect(() => {
-    window.scrollTo(0, 0);
-  }, [pathname]);
-}
-
 /**
  * The app frame: top bar (name, PC/tablet menu, screen-mode toggle), the routed
  * screen, and the phone bottom menu.
  */
 export function AppShell() {
-  useScrollToTopOnNavigate();
+  useScrollOnNavigate();
 
   return (
     <>

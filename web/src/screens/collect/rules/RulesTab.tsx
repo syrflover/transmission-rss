@@ -1,21 +1,40 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
-import { ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
+import { peek, store, useCached } from "@/lib/cached";
 import { cn } from "@/lib/utils";
 
+import { KEYS, ruleCountChanged, withoutRule } from "../cache";
 import { btnNeutral } from "../channels/styles";
 import { listRules, ruleTitle, type Rule, type RuleList as Loaded } from "./api";
 import { RuleDetail } from "./RuleDetail";
 import { RuleList, type SortKey } from "./RuleList";
 
-type Load =
-  | { state: "loading" }
-  | { state: "failed"; message: string }
-  | { state: "ready"; data: Loaded };
-
 const DISCARD = "저장하지 않은 변경이 있어요. 버리고 옮길까요?";
+
+const PHONE = "(max-width: 720px)";
+
+/**
+ * On a phone the list and a rule are separate screens on one page: opening a
+ * rule starts it at the top instead of wherever the long list was scrolled to,
+ * and going back to the list returns to the row that was tapped. Returns the
+ * function to call, before the list is left, to remember where it was.
+ */
+function useListScroll(detailOpen: boolean): () => void {
+  const saved = useRef<number | null>(null);
+  const was = useRef(detailOpen);
+  useLayoutEffect(() => {
+    if (was.current === detailOpen) return;
+    was.current = detailOpen;
+    if (!window.matchMedia(PHONE).matches) return;
+    if (detailOpen) window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+    else if (saved.current !== null) window.scrollTo({ top: saved.current, left: 0, behavior: "instant" });
+  }, [detailOpen]);
+  return () => {
+    if (!was.current) saved.current = window.scrollY;
+  };
+}
 
 /**
  * The 규칙 tab: every channel's rules in one list, and the selected rule
@@ -32,8 +51,12 @@ const DISCARD = "저장하지 않은 변경이 있어요. 버리고 옮길까요
  *   history item.
  */
 export function RulesTab() {
-  const [load, setLoad] = useState<Load>({ state: "loading" });
-  const [sort, setSort] = useState<SortKey>("order");
+  const rules = useCached<Loaded>(KEYS.rules, listRules, "규칙을 불러오지 못했어요.");
+  const [sort, setSortState] = useState<SortKey>(() => peek<SortKey>(KEYS.ruleSort) ?? "order");
+  const setSort = (next: SortKey) => {
+    store(KEYS.ruleSort, next);
+    setSortState(next);
+  };
   const [notice, setNotice] = useState<string | null>(null);
   const dirty = useRef(false);
   const navigate = useNavigate();
@@ -43,28 +66,28 @@ export function RulesTab() {
   const isNewRule = pathname.replace(/\/+$/, "").endsWith("/rules/new");
   const selectedId = isNewRule ? null : params.get("rule");
 
-  const fetchRules = useCallback((quiet: boolean) => {
-    let current = true;
-    if (!quiet) setLoad({ state: "loading" });
-    listRules().then(
-      (data) => current && setLoad({ state: "ready", data }),
-      (e: unknown) =>
-        current &&
-        setLoad((prev) =>
-          quiet && prev.state === "ready"
-            ? prev
-            : { state: "failed", message: e instanceof ApiError ? e.message : "규칙을 불러오지 못했어요." },
-        ),
-    );
-    return () => {
-      current = false;
-    };
-  }, []);
-  useEffect(() => fetchRules(false), [fetchRules]);
+  const detailOpen =
+    isNewRule || (selectedId !== null && (rules.data?.rules.some((r) => r.id === selectedId) ?? false));
+  const rememberListScroll = useListScroll(detailOpen);
 
   const onDirtyChange = useCallback((value: boolean) => {
     dirty.current = value;
   }, []);
+
+  /**
+   * A rule was saved or archived: the cached list takes the saved rule at once
+   * (its version decides the next save), then the list is read again for what
+   * the change did to the other rules (overlaps, order).
+   */
+  const changed = (saved?: Rule) => {
+    if (saved) {
+      rules.update((list) => ({
+        ...list,
+        rules: list.rules.map((r) => (r.id === saved.id ? saved : r)),
+      }));
+    }
+    rules.reload();
+  };
 
   /** Runs `go` unless the user declines to drop unsaved changes. */
   const leave = (go: () => void) => {
@@ -77,6 +100,7 @@ export function RulesTab() {
     if (rule.id === selectedId) return;
     setNotice(null);
     leave(() => {
+      rememberListScroll();
       if (isNewRule) navigate(`/collect/rules?rule=${encodeURIComponent(rule.id)}`);
       else setParams({ rule: rule.id });
     });
@@ -84,28 +108,33 @@ export function RulesTab() {
   const close = () => leave(() => navigate("/collect/rules"));
   const openNew = () => {
     setNotice(null);
-    const first = load.state === "ready" ? load.data.channels[0]?.id : undefined;
-    leave(() => navigate(`/collect/rules/new${first ? `?channel=${encodeURIComponent(first)}` : ""}`));
+    const first = rules.data?.channels[0]?.id;
+    leave(() => {
+      rememberListScroll();
+      navigate(`/collect/rules/new${first ? `?channel=${encodeURIComponent(first)}` : ""}`);
+    });
   };
 
-  if (load.state === "loading") return <p className="text-[13px] text-text-muted">규칙을 불러오는 중이에요.</p>;
-  if (load.state === "failed") {
-    return (
-      <div className="flex flex-col items-start gap-2.5">
-        <p role="alert" className="text-[13px] font-semibold text-urgent">
-          {load.message}
-        </p>
-        <Button type="button" variant="ghost" className={btnNeutral} onClick={() => fetchRules(false)}>
-          재시도
-        </Button>
-      </div>
-    );
+  if (rules.data === undefined) {
+    if (rules.error !== null) {
+      return (
+        <div className="flex flex-col items-start gap-2.5">
+          <p role="alert" className="text-[13px] font-semibold text-urgent">
+            {rules.error}
+          </p>
+          <Button type="button" variant="ghost" className={btnNeutral} onClick={rules.reload}>
+            재시도
+          </Button>
+        </div>
+      );
+    }
+    // A quick answer never shows the loading line.
+    return rules.slow ? <p className="text-[13px] text-text-muted">규칙을 불러오는 중이에요.</p> : null;
   }
 
-  const { rules, channels } = load.data;
-  const selected = selectedId ? rules.find((r) => r.id === selectedId) : undefined;
+  const { rules: ruleList, channels } = rules.data;
+  const selected = selectedId ? ruleList.find((r) => r.id === selectedId) : undefined;
   const missing = selectedId !== null && selected === undefined;
-  const detailOpen = isNewRule || selected !== undefined;
   const presetChannel = params.get("channel");
   const presetMatch = params.get("match") ?? "";
 
@@ -119,7 +148,7 @@ export function RulesTab() {
       <div className="grid min-w-0 grid-cols-[minmax(260px,360px)_minmax(0,1fr)] items-start gap-6 max-[720px]:grid-cols-1">
         <div className={cn(column, detailOpen && "max-[720px]:hidden")}>
           <RuleList
-            rules={rules}
+            rules={ruleList}
             channels={channels}
             selectedId={selected?.id ?? null}
             sort={sort}
@@ -135,10 +164,14 @@ export function RulesTab() {
               key={selected.id}
               rule={selected}
               channels={channels}
-              rules={rules}
-              onChanged={() => fetchRules(true)}
+              rules={ruleList}
+              onChanged={changed}
               onCreated={() => undefined}
               onDeleted={(rule) => {
+                // The cached list drops the rule at once; the read confirms it.
+                rules.update((list) => withoutRule(list, rule.id));
+                ruleCountChanged(rule.channel_id, -1);
+                rules.reload();
                 dirty.current = false;
                 setNotice(`${ruleTitle(rule)} 규칙을 삭제했어요.`);
                 navigate("/collect/rules", { replace: true });
@@ -151,19 +184,23 @@ export function RulesTab() {
               key={`new:${presetChannel}:${presetMatch}`}
               rule={null}
               channels={channels}
-              rules={rules}
+              rules={ruleList}
               presetChannelId={presetChannel}
               presetMatch={presetMatch}
-              onChanged={() => fetchRules(true)}
+              onChanged={changed}
               onCreated={(created) => {
                 dirty.current = false;
+                ruleCountChanged(created.channel_id, 1);
                 // Read the list first so the new rule is in it when it is opened.
                 listRules().then(
                   (data) => {
-                    setLoad({ state: "ready", data });
+                    rules.update(data);
                     navigate(`/collect/rules?rule=${encodeURIComponent(created.id)}`, { replace: true });
                   },
-                  () => navigate("/collect/rules", { replace: true }),
+                  () => {
+                    rules.reload();
+                    navigate("/collect/rules", { replace: true });
+                  },
                 );
               }}
               onDeleted={() => undefined}

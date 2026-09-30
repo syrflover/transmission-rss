@@ -1,53 +1,36 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 
-import { ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
+import { useCached } from "@/lib/cached";
 
 import { EmptyState } from "../../ScreenFrame";
+import { KEYS, channelsChanged } from "../cache";
 import { PlusIcon } from "../icons";
 import { channelTitle, listChannels, type Channel } from "./api";
 import { ChannelCard } from "./ChannelCard";
 import { ChannelEditor } from "./ChannelEditor";
 import { btnAction, btnNeutral } from "./styles";
 
-type Load =
-  | { state: "loading" }
-  | { state: "failed"; message: string }
-  | { state: "ready"; channels: Channel[] };
-
 /** The 채널 tab: RSS channels with their masked URLs, and adding, editing and deleting them. */
 export function ChannelsTab() {
-  const [load, setLoad] = useState<Load>({ state: "loading" });
+  const list = useCached<Channel[]>(KEYS.channels, listChannels, "채널을 불러오지 못했어요.");
   const [adding, setAdding] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const addButton = useRef<HTMLButtonElement>(null);
 
-  const fetchChannels = useCallback(() => {
-    let current = true;
-    setLoad({ state: "loading" });
-    listChannels().then(
-      (channels) => current && setLoad({ state: "ready", channels }),
-      (e: unknown) =>
-        current &&
-        setLoad({
-          state: "failed",
-          message: e instanceof ApiError ? e.message : "채널을 불러오지 못했어요.",
-        }),
-    );
-    return () => {
-      current = false;
-    };
-  }, []);
-  useEffect(fetchChannels, [fetchChannels]);
-
-  const update = (fn: (channels: Channel[]) => Channel[]) =>
-    setLoad((prev) => (prev.state === "ready" ? { state: "ready", channels: fn(prev.channels) } : prev));
+  /** The cached list takes the change at once, and the copies other screens keep of it are dropped. */
+  const update = (fn: (channels: Channel[]) => Channel[]) => {
+    list.update(fn);
+    channelsChanged();
+  };
+  const channels = list.data;
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2.5">
+      {/* Tall as the button, so the row does not change height as the button comes and goes. */}
+      <div className="flex min-h-9 flex-wrap items-center justify-between gap-x-4 gap-y-2.5 max-[720px]:min-h-10">
         <p className="min-w-[220px] flex-1 text-[13px] text-text-muted">RSS 수집 채널</p>
-        {!adding && load.state === "ready" && (
+        {!adding && channels !== undefined && (
           <Button
             ref={addButton}
             type="button"
@@ -68,20 +51,23 @@ export function ChannelsTab() {
         {notice}
       </p>
 
-      {load.state === "loading" && <p className="text-[13px] text-text-muted">채널을 불러오는 중이에요.</p>}
+      {/* A quick answer never shows the loading line. */}
+      {channels === undefined && list.error === null && list.slow && (
+        <p className="text-[13px] text-text-muted">채널을 불러오는 중이에요.</p>
+      )}
 
-      {load.state === "failed" && (
+      {channels === undefined && list.error !== null && (
         <div className="flex flex-col items-start gap-2.5">
           <p role="alert" className="text-[13px] font-semibold text-urgent">
-            {load.message}
+            {list.error}
           </p>
-          <Button type="button" variant="ghost" className={btnNeutral} onClick={fetchChannels}>
+          <Button type="button" variant="ghost" className={btnNeutral} onClick={list.reload}>
             재시도
           </Button>
         </div>
       )}
 
-      {load.state === "ready" && (
+      {channels !== undefined && (
         <>
           {adding && (
             <section
@@ -107,13 +93,13 @@ export function ChannelsTab() {
             </section>
           )}
 
-          {load.channels.length === 0 && !adding ? (
+          {channels.length === 0 && !adding ? (
             <EmptyState>
               아직 등록한 채널이 없어요. 채널을 추가하면 새 RSS 항목을 규칙과 맞춰 받아요.
             </EmptyState>
           ) : (
             <ul className="m-0 flex list-none flex-col gap-3.5 p-0">
-              {load.channels.map((channel) => (
+              {channels.map((channel) => (
                 <ChannelCard
                   key={channel.id}
                   channel={channel}

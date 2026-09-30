@@ -1,6 +1,7 @@
 import { useCallback, useState } from "react";
 
 import { api, ApiError } from "@/lib/api";
+import { everythingChanged } from "@/screens/collect/cache";
 
 import type { ApplyResult, ChoiceRequest, Decision, Preview } from "./types";
 
@@ -132,6 +133,8 @@ export function useImportFlow(): ImportFlow {
       }
     } finally {
       setApplying(false);
+      // The import adds or changes channels and rules, whether or not the answer arrived.
+      everythingChanged();
     }
   }, [preview, content, choices, undecided]);
 

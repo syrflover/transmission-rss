@@ -38,8 +38,12 @@ interface RuleDetailProps {
   /** For a new rule: the channel to start in and the phrase to start with. */
   presetChannelId?: string | null;
   presetMatch?: string;
-  /** Called after any successful write, so the list can be read again. */
-  onChanged: () => void;
+  /**
+   * Called after a write that kept the rule (`saved` is the rule as stored, when
+   * known), so the list can take it and be read again. A delete calls
+   * `onDeleted` instead.
+   */
+  onChanged: (saved?: Rule) => void;
   onCreated: (rule: Rule) => void;
   onDeleted: (rule: Rule) => void;
   /** Leaves the detail (the phone's way back to the list). */
@@ -111,6 +115,18 @@ export function RuleDetail({
   const positionDirty = !isNew && position !== basePosition;
   const dirty = fieldsDirty || positionDirty;
 
+  // The list was cached when this rule was opened and has been read again since
+  // (the worker moves `episode` on its own): follow a newer version unless the
+  // user has edits, in which case a save answers with the conflict.
+  const storedVersion = rule?.version;
+  useEffect(() => {
+    if (!rule || !known || rule.version <= known.version || dirty) return;
+    setKnown(rule);
+    setDraft(draftOf(rule));
+    // Only when the list brings a newer version.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storedVersion]);
+
   useEffect(() => {
     onDirtyChange(dirty);
   }, [dirty, onDirtyChange]);
@@ -175,12 +191,12 @@ export function RuleDetail({
         setKnown(current);
         setBasePosition(position);
       }
-      onChanged();
+      onChanged(current ?? undefined);
       setBusy(false);
     } catch (e) {
       fail(e, stage);
       // A save of the fields that went through stays saved when the order fails.
-      if (stage === "order") onChanged();
+      if (stage === "order") onChanged(current ?? undefined);
       setBusy(false);
     }
   };
@@ -195,7 +211,7 @@ export function RuleDetail({
       setKnown(next);
       setConflict(null);
       set("state", next.state);
-      onChanged();
+      onChanged(next);
     } catch (e) {
       fail(e, "fields");
     }
@@ -208,7 +224,6 @@ export function RuleDetail({
     setError(null);
     try {
       await deleteRule(known);
-      onChanged();
       onDeleted(known);
     } catch (e) {
       setConfirmingDelete(false);

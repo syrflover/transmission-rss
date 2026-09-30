@@ -1,9 +1,11 @@
 import { useEffect, useId, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 
+import { useCached } from "@/lib/cached";
 import { ago } from "@/lib/time";
 import { cn } from "@/lib/utils";
 
+import { KEYS } from "../cache";
 import { channelName } from "../rules/api";
 import { loadBoard, type Board } from "./api";
 
@@ -12,32 +14,30 @@ const WEEKDAY = ["일", "월", "화", "수", "목", "금", "토"];
 /** The history filter the `실패·중복` link opens. */
 export const PROBLEMS_HREF = "/collect/history?result=add_failed,duplicate";
 
-type Load = { board: Board | null; failed: boolean };
+interface Load {
+  board: Board | undefined;
+  /** The last read failed. With a board shown, it is the previous one. */
+  failed: boolean;
+  /** Nothing is cached and the first read is slow. */
+  slow: boolean;
+}
 
+/**
+ * The board: the copy from the last visit shows at once and is read again
+ * behind it, then every {@link POLL_MS} and when the page becomes visible.
+ */
 function useBoard(): Load {
-  const [load, setLoad] = useState<Load>({ board: null, failed: false });
+  const { data, error, slow, reload } = useCached(KEYS.status, loadBoard, "상태를 불러오지 못했어요.");
   useEffect(() => {
-    let controller = new AbortController();
-    const read = () => {
-      controller.abort();
-      controller = new AbortController();
-      const mine = controller;
-      loadBoard(mine.signal).then(
-        (board) => !mine.signal.aborted && setLoad({ board, failed: false }),
-        () => !mine.signal.aborted && setLoad((prev) => ({ board: prev.board, failed: true })),
-      );
-    };
-    read();
-    const timer = window.setInterval(read, POLL_MS);
-    const onVisible = () => document.visibilityState === "visible" && read();
+    const timer = window.setInterval(reload, POLL_MS);
+    const onVisible = () => document.visibilityState === "visible" && reload();
     document.addEventListener("visibilitychange", onVisible);
     return () => {
-      controller.abort();
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, []);
-  return load;
+  }, [reload]);
+  return { board: data, failed: error !== null, slow };
 }
 
 function weekday(date: string): string {
@@ -167,7 +167,7 @@ function summaryOf(board: Board): string {
  * Transmission. On phones it folds to one line that opens on tap.
  */
 export function StatusBoard() {
-  const { board, failed } = useBoard();
+  const { board, failed, slow } = useBoard();
   const [open, setOpen] = useState(false);
   const panelId = useId();
 
@@ -183,9 +183,9 @@ export function StatusBoard() {
         <Transmission board={board} />
       </Cell>
     </div>
-  ) : (
+  ) : failed || slow ? (
     <p className="text-[13px] text-text-muted">{failed ? "상태를 불러오지 못했어요." : "상태를 불러오는 중이에요."}</p>
-  );
+  ) : null;
 
   return (
     <section
@@ -202,7 +202,7 @@ export function StatusBoard() {
           onClick={() => setOpen((v) => !v)}
           className="flex min-h-9 min-w-0 flex-1 items-center gap-2 text-left text-[13px] font-semibold"
         >
-          <span className="min-w-0 flex-1 truncate">{board ? summaryOf(board) : failed ? "상태를 불러오지 못했어요." : "상태를 불러오는 중"}</span>
+          <span className="min-w-0 flex-1 truncate">{board ? summaryOf(board) : failed ? "상태를 불러오지 못했어요." : slow ? "상태를 불러오는 중" : ""}</span>
           <span aria-hidden="true" className={cn("flex-none text-text-muted transition-transform", open && "rotate-180")}>
             ▾
           </span>
