@@ -5,6 +5,7 @@
 //! submodule, starting with [`channels`].
 
 pub mod channels;
+pub mod commands;
 pub mod db;
 pub mod history;
 
