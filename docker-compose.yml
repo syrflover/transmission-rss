@@ -18,7 +18,11 @@ services:
       resources:
         limits:
           cpus: "0.5"
-          memory: 512M
+          # 512M was not enough: the daemon was OOM-killed inside the running
+          # container (s6 restarts it, so the container itself stays up), which
+          # lost every rename, label and progress not yet saved to its resume
+          # files. Check `oom_kill` in the container's cgroup memory.events.
+          memory: 1G
         reservations:
           cpus: "0.1"
           memory: 128M
