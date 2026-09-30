@@ -6,11 +6,14 @@ use axum::{
 };
 use serde_json::json;
 
+use super::state::AppState;
+
 /// JSON API mounted under `/api`.
 ///
 /// Unknown paths answer a JSON 404 here instead of falling through to the
 /// single-page app, so a mistyped API call is not mistaken for a screen.
-pub fn router() -> Router {
+/// Failed calls answer the shape described in [`super::error`].
+pub fn router() -> Router<AppState> {
     Router::new()
         .route("/health", get(health))
         .fallback(not_found)
@@ -24,5 +27,9 @@ async fn health() -> Json<serde_json::Value> {
 }
 
 async fn not_found() -> Response {
-    (StatusCode::NOT_FOUND, Json(json!({ "error": "not_found" }))).into_response()
+    (
+        StatusCode::NOT_FOUND,
+        Json(json!({ "error": "not_found", "message": "없는 API 경로예요." })),
+    )
+        .into_response()
 }

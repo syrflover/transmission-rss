@@ -18,9 +18,14 @@ use tower_http::{
 
 pub mod api;
 pub mod env;
+pub mod error;
+pub mod state;
+
+pub use error::ApiError;
+pub use state::AppState;
 
 /// Builds the app router for the frontend build in `static_dir`.
-pub fn router(static_dir: &Path) -> Router {
+pub fn router(static_dir: &Path, state: AppState) -> Router {
     // Files under `assets/` carry a content hash in their name, so they can be
     // cached for good; a missing one is a real 404, never the app shell.
     let assets = Router::new()
@@ -42,7 +47,7 @@ pub fn router(static_dir: &Path) -> Router {
         ));
 
     Router::new()
-        .nest("/api", api::router())
+        .nest("/api", api::router().with_state(state))
         .merge(assets)
         .fallback_service(pages)
 }
@@ -85,6 +90,10 @@ mod tests {
 
     const INDEX: &str = "<!doctype html><title>TRSS</title>";
 
+    fn test_state() -> AppState {
+        AppState::new(crate::store::Db::open_blocking(":memory:").unwrap())
+    }
+
     fn build_dir() -> TempDir {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("index.html"), INDEX).unwrap();
@@ -100,7 +109,10 @@ mod tests {
             .uri(uri)
             .body(Body::empty())
             .unwrap();
-        let response = router(dir.path()).oneshot(request).await.unwrap();
+        let response = router(dir.path(), test_state())
+            .oneshot(request)
+            .await
+            .unwrap();
         let (parts, body) = response.into_parts();
         let bytes = body.collect().await.unwrap().to_bytes();
         (
