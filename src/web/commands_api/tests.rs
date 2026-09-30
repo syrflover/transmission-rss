@@ -57,11 +57,11 @@ impl App {
         (status, text, json)
     }
 
-    async fn channel(&self, base_dir: &str) -> Channel {
+    async fn channel(&self) -> Channel {
         let url = format!("https://feed.example/rss?token={TOKEN}");
         self.state
             .channels
-            .create_channel(ChannelInput::new(url, base_dir))
+            .create_channel(ChannelInput::new(url))
             .await
             .unwrap()
     }
@@ -160,7 +160,7 @@ fn assert_no_secret(text: &str) {
 #[tokio::test]
 async fn a_command_is_accepted_pending_and_can_be_read_back() {
     let app = App::new();
-    let channel = app.channel("/media/anime").await;
+    let channel = app.channel().await;
     let rule = app.rule(&channel, RuleState::Active).await;
     let item = app.failed(&channel, "26", &rule).await;
 
@@ -195,7 +195,7 @@ async fn a_command_is_accepted_pending_and_can_be_read_back() {
 #[tokio::test]
 async fn the_same_command_delivered_twice_is_stored_once_and_answered_alike() {
     let app = App::new();
-    let channel = app.channel("/media/anime").await;
+    let channel = app.channel().await;
     let rule = app.rule(&channel, RuleState::Active).await;
     let item = app.failed(&channel, "26", &rule).await;
 
@@ -233,7 +233,7 @@ async fn the_same_command_delivered_twice_is_stored_once_and_answered_alike() {
 #[tokio::test]
 async fn the_same_id_for_another_item_is_refused() {
     let app = App::new();
-    let channel = app.channel("/media/anime").await;
+    let channel = app.channel().await;
     let rule = app.rule(&channel, RuleState::Active).await;
     let item = app.failed(&channel, "26", &rule).await;
     let other = app.failed(&channel, "27", &rule).await;
@@ -253,7 +253,7 @@ async fn the_same_id_for_another_item_is_refused() {
 #[tokio::test]
 async fn a_second_command_for_an_item_still_being_added_is_refused() {
     let app = App::new();
-    let channel = app.channel("/media/anime").await;
+    let channel = app.channel().await;
     let rule = app.rule(&channel, RuleState::Active).await;
     let item = app.failed(&channel, "26", &rule).await;
     app.post(ID, &item).await;
@@ -274,7 +274,7 @@ async fn a_second_command_for_an_item_still_being_added_is_refused() {
 #[tokio::test]
 async fn a_request_that_names_a_folder_is_refused_and_nothing_is_stored() {
     let app = App::new();
-    let channel = app.channel("/media/anime").await;
+    let channel = app.channel().await;
     let rule = app.rule(&channel, RuleState::Active).await;
     let item = app.failed(&channel, "26", &rule).await;
 
@@ -299,7 +299,7 @@ async fn a_request_that_names_a_folder_is_refused_and_nothing_is_stored() {
 #[tokio::test]
 async fn an_item_that_cannot_be_retried_is_refused_with_its_reason_and_nothing_is_stored() {
     let app = App::new();
-    let channel = app.channel("/media/anime").await;
+    let channel = app.channel().await;
     let active = app.rule(&channel, RuleState::Active).await;
     let archived = app.rule(&channel, RuleState::Archived).await;
     let deleted = app.rule(&channel, RuleState::Active).await;
@@ -352,7 +352,7 @@ async fn an_item_that_cannot_be_retried_is_refused_with_its_reason_and_nothing_i
 #[tokio::test]
 async fn requests_that_do_not_make_sense_are_refused_with_a_sentence() {
     let app = App::new();
-    let channel = app.channel("/media/anime").await;
+    let channel = app.channel().await;
     let rule = app.rule(&channel, RuleState::Active).await;
     let item = app.failed(&channel, "26", &rule).await;
 
@@ -400,7 +400,7 @@ async fn requests_that_do_not_make_sense_are_refused_with_a_sentence() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
 
     // A deleted channel takes its rules along, so nothing says where to go.
-    let gone = app.channel("/media/gone").await;
+    let gone = app.channel().await;
     let gone_rule = app.rule(&gone, RuleState::Active).await;
     let orphan = app.failed(&gone, "1", &gone_rule).await;
     app.state
@@ -454,7 +454,7 @@ async fn store_legacy(app: &App, id: &str, item: &HistoryItem, folder: &str) -> 
 #[tokio::test]
 async fn a_legacy_command_sent_again_is_answered_with_the_stored_command() {
     let app = App::new();
-    let channel = app.channel("/media/anime").await;
+    let channel = app.channel().await;
     let rule = app.rule(&channel, RuleState::Active).await;
     // The item is not retryable now (it was received since): a stored command
     // is answered before the item is looked at.

@@ -76,9 +76,16 @@ Each trss container is limited to 0.25 CPU and 128M of memory. The cron run of t
 
 Transmission is limited to 0.5 CPU and 512M, and runs in `transmission.slice`, which caps it softly at 384M (`MemoryHigh`). Most of that memory is page cache from writing downloads. Above the soft cap the kernel reclaims the cache and slows the writer down, and never kills it. At the hard limit, RHEL 9 kernels from 5.14.0-687.41.1 kill `transmission-daemon` while it writes, even when reclaim frees pages (RHEL-211058, reverted in RHEL-255363). The container keeps running because s6 restarts the daemon inside it, but every kill loses the progress, renames and labels saved since Transmission last wrote its resume files. Check for kills with `grep oom_kill /sys/fs/cgroup/transmission.slice/docker-*.scope/memory.events`.
 
-### Channels
+### Channels and the collect folder
 
-Channels and rules live in the app database and are edited in the web. To bring over a channel configuration of the old binary (the YAML at `CHANNELS_CONFIG_URL`), use Settings → Data → Import in the web. Importing only writes channels and rules; it adds, renames and removes nothing.
+Channels and rules live in the app database and are edited in the web. To bring over a channel configuration of the old binary (the YAML at `CHANNELS_CONFIG_URL`), use Settings → Data → Import in the web. Importing only writes channels and rules (and the collect folder, below); it adds, renames and removes nothing.
+
+A channel has no folder of its own. Every torrent is saved under the app's **collect folder** (Settings → Collection → Collect folder) plus its rule's save folder, so a rule with the save folder `Show/Season 01` saves to `<collect folder>/Show/Season 01`. The settings screen also takes an optional **archive folder**, which is only stored for now; nothing moves files into it yet.
+
+- Write both folders as paths the web container sees (they start with `/downloads`, the read-only mount above). The web checks that they exist, that neither is the other or inside the other, and that they are on the same filesystem. It cannot check that Transmission can write to them; that shows up when it tries.
+- Until a collect folder is set the worker adds nothing and records no failure for the items a rule picked. The status board says so, and the next cycle after the folder is set receives those items. A new database starts without one; importing a YAML file sets it (the channels' shared folder, or their common parent), and so does an upgrade from a version with per-channel folders.
+- Upgrading from 0.4.x (channels with their own base folder): the migration makes the shared base folder the collect folder, or, when the channels' base folders differ, their common parent, and puts the remainder in front of each rule's save folder. Every rule keeps saving to exactly the folder it had. The old `base_dir` column is dropped, so a database opened by this version cannot go back to an older one; keep a copy of `trss.db` before upgrading. Relative base folders with nothing in common cannot be folded into one collect folder; the upgrade then refuses to start and leaves the database unchanged.
+- Importing a YAML file whose channel folder is outside the collect folder reports that channel with the reason in the review step and does not import it.
 
 ## Switching from the cron job
 

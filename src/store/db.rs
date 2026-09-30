@@ -16,22 +16,42 @@ pub const DB_PATH_ENV: &str = "TRSS_DB_PATH";
 /// How long a connection waits for a lock held by the other process.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// One step of the schema history.
+enum Migration {
+    /// A SQL script.
+    Sql(&'static str),
+    /// Code for a change SQL cannot express. It runs inside the migration's
+    /// transaction, so an `Err` leaves the database at the previous version.
+    Code(fn(&Connection) -> Result<(), DbError>),
+}
+
+impl Migration {
+    fn apply(&self, conn: &Connection) -> Result<(), DbError> {
+        match self {
+            Migration::Sql(sql) => Ok(conn.execute_batch(sql)?),
+            Migration::Code(run) => run(conn),
+        }
+    }
+}
+
 /// Embedded migrations. Migration `n` (1-based position in this list) moves
 /// `PRAGMA user_version` from `n - 1` to `n`. Only append; never edit or
 /// reorder an entry that has shipped.
-const MIGRATIONS: &[&str] = &[
+const MIGRATIONS: &[Migration] = &[
     // 1: channels and rules
-    include_str!("channels/schema.sql"),
+    Migration::Sql(include_str!("channels/schema.sql")),
     // 2: collection history and the worker's cycle marker
-    include_str!("history/schema.sql"),
+    Migration::Sql(include_str!("history/schema.sql")),
     // 3: optional channel display name
-    "ALTER TABLE channels ADD COLUMN name TEXT CHECK (name IS NULL OR name <> '');",
+    Migration::Sql("ALTER TABLE channels ADD COLUMN name TEXT CHECK (name IS NULL OR name <> '');"),
     // 4: the worker's snapshots for the collection screen's status board
-    include_str!("status/schema.sql"),
+    Migration::Sql(include_str!("status/schema.sql")),
     // 5: commands the web accepts and the worker carries out
-    include_str!("commands/schema.sql"),
+    Migration::Sql(include_str!("commands/schema.sql")),
     // 6: a command whose Transmission add got no answer
-    include_str!("commands/add_unconfirmed.sql"),
+    Migration::Sql(include_str!("commands/add_unconfirmed.sql")),
+    // 7: the app-wide collect folder replaces the channels' base folders
+    Migration::Code(super::settings::fold_base_dirs),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -44,6 +64,9 @@ pub enum DbError {
     PathNotConfigured,
     #[error("database schema version {found} is newer than this build supports ({supported})")]
     SchemaTooNew { found: usize, supported: usize },
+    /// A migration that runs code could not preserve the data's meaning.
+    #[error("cannot migrate the database: {0}")]
+    Migration(String),
 }
 
 /// Handle to the app database. Cheap to clone; all clones share one
@@ -106,6 +129,18 @@ impl Db {
     }
 }
 
+/// Creates a database at `path` left as a build with its first `n` migrations
+/// would leave it, for tests of the migrations after them.
+#[cfg(test)]
+pub(crate) fn database_at(path: &Path, n: usize) -> Connection {
+    let conn = Connection::open(path).unwrap();
+    for migration in &MIGRATIONS[..n] {
+        migration.apply(&conn).unwrap();
+    }
+    conn.pragma_update(None, "user_version", n as i64).unwrap();
+    conn
+}
+
 /// Applies pending migrations inside one write transaction, so two processes
 /// starting together apply each migration once.
 fn migrate(conn: &mut Connection) -> Result<(), DbError> {
@@ -120,8 +155,8 @@ fn migrate(conn: &mut Connection) -> Result<(), DbError> {
     // Another process may have migrated while this one waited for the lock.
     let current = user_version(&tx)?;
     check_supported(current, supported)?;
-    for (index, sql) in MIGRATIONS.iter().enumerate().skip(current) {
-        tx.execute_batch(sql)?;
+    for (index, migration) in MIGRATIONS.iter().enumerate().skip(current) {
+        migration.apply(&tx)?;
         tx.pragma_update(None, "user_version", (index + 1) as i64)?;
     }
     tx.commit()?;
@@ -146,6 +181,12 @@ mod tests {
     use super::*;
 
     const INSERT_CHANNEL: &str =
+        "INSERT INTO channels (id, position, url, excludes, secret_query, version)
+         VALUES ('c1', 0, 'http://x/', '[]', '[]', 1)";
+
+    /// A channel as the schema had it before the collect folder replaced the
+    /// channels' base folders (migrations 1 to 6).
+    const INSERT_CHANNEL_WITH_BASE: &str =
         "INSERT INTO channels (id, position, url, base_dir, excludes, secret_query, version)
          VALUES ('c1', 0, 'http://x/', '/d', '[]', '[]', 1)";
 
@@ -201,13 +242,8 @@ mod tests {
         let path = dir.path().join("app.db");
         {
             // A database as the build with two migrations left it, one channel in.
-            let conn = Connection::open(&path).unwrap();
-            for sql in &MIGRATIONS[..2] {
-                conn.execute_batch(sql).unwrap();
-            }
-            conn.pragma_update(None, "user_version", 2_i64).unwrap();
-            conn.execute("INSERT INTO channels (id, position, url, base_dir, excludes, secret_query, version) VALUES ('c1', 0, 'http://x/', '/d', '[]', '[]', 1)", [])
-                .unwrap();
+            let conn = database_at(&path, 2);
+            conn.execute(INSERT_CHANNEL_WITH_BASE, []).unwrap();
         }
 
         let db = Db::open(&path).await.unwrap();
@@ -238,12 +274,8 @@ mod tests {
         let path = dir.path().join("app.db");
         {
             // A database as the build with three migrations left it, one channel in.
-            let conn = Connection::open(&path).unwrap();
-            for sql in &MIGRATIONS[..3] {
-                conn.execute_batch(sql).unwrap();
-            }
-            conn.pragma_update(None, "user_version", 3_i64).unwrap();
-            conn.execute(INSERT_CHANNEL, []).unwrap();
+            let conn = database_at(&path, 3);
+            conn.execute(INSERT_CHANNEL_WITH_BASE, []).unwrap();
         }
 
         let db = Db::open(&path).await.unwrap();
@@ -265,11 +297,7 @@ mod tests {
         let path = dir.path().join("app.db");
         {
             // A database as the build with five migrations left it, one command ended.
-            let conn = Connection::open(&path).unwrap();
-            for sql in &MIGRATIONS[..5] {
-                conn.execute_batch(sql).unwrap();
-            }
-            conn.pragma_update(None, "user_version", 5_i64).unwrap();
+            let conn = database_at(&path, 5);
             conn.execute(
                 "INSERT INTO commands (id, kind, payload, state, attempts, created_at,
                      updated_at, finished_at, outcome)

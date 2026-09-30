@@ -13,6 +13,7 @@ import {
 export type SettingsItemId =
   | "format"
   | "browser"
+  | "collection"
   | "folders"
   | "storage"
   | "export"
@@ -27,7 +28,7 @@ export interface SettingsItem {
   /**
    * Shown in the panel while the item has no content yet. Each item is filled
    * by the result goal that owns it (see docs/specs/settings.md); only the
-   * import is built so far.
+   * collect folder and the import are built so far.
    */
   empty?: string;
 }
@@ -48,6 +49,7 @@ export const SETTINGS_ITEMS: SettingsItem[] = [
     icon: WindowIcon,
     empty: "브라우저 유휴 시간과 동시 작업 수는 아직 바꿀 수 없어요. 작업 기능이 준비되면 여기에서 바꿔요.",
   },
+  { id: "collection", group: "수집", title: "수집 폴더", icon: FolderIcon },
   {
     id: "folders",
     group: "라이브러리",

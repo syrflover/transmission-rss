@@ -132,7 +132,7 @@ export function RulesTab() {
     return rules.slow ? <p className="text-[13px] text-text-muted">규칙을 불러오는 중이에요.</p> : null;
   }
 
-  const { rules: ruleList, channels } = rules.data;
+  const { rules: ruleList, channels, collect_folder } = rules.data;
   const selected = selectedId ? ruleList.find((r) => r.id === selectedId) : undefined;
   const missing = selectedId !== null && selected === undefined;
   const presetChannel = params.get("channel");
@@ -164,6 +164,7 @@ export function RulesTab() {
               key={selected.id}
               rule={selected}
               channels={channels}
+              collect_folder={collect_folder}
               rules={ruleList}
               onChanged={changed}
               onCreated={() => undefined}
@@ -184,6 +185,7 @@ export function RulesTab() {
               key={`new:${presetChannel}:${presetMatch}`}
               rule={null}
               channels={channels}
+              collect_folder={collect_folder}
               rules={ruleList}
               presetChannelId={presetChannel}
               presetMatch={presetMatch}

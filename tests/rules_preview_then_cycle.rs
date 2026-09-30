@@ -177,7 +177,7 @@ async fn what_the_preview_predicts_for_an_edit_is_what_the_next_cycle_does_after
     // from an earlier one).
     let rules = rules_of(&api).await;
     let slime = &rules[3];
-    let patch = json!({ "match": "[SubsPlease] ", "directory": "Everything" });
+    let patch = json!({ "match": "[SubsPlease] ", "directory": "anime/Everything" });
     let predicted = preview(
         &api,
         preview_body(&channel.channel.id, slime, patch.clone()),

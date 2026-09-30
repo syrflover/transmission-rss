@@ -26,7 +26,6 @@ export interface Channel {
   /** The URL to start an edit from: secret values are blank. */
   edit_url: string;
   query: QueryParam[];
-  base_dir: string;
   excludes: string[];
   past_search: string | null;
   rule_count: number;
@@ -36,7 +35,6 @@ export interface Channel {
 export interface ChannelDraft {
   /** Secret values that stay blank are kept by the server, matched by query name. */
   url: string;
-  base_dir: string;
   excludes: string[];
   /** `name -> is secret`; a name left out is secret. */
   secret: Record<string, boolean>;

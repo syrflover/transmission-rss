@@ -429,9 +429,16 @@ async fn a_retry_goes_where_the_rules_own_cycle_puts_the_same_release() {
 }
 
 #[tokio::test]
-async fn a_rule_without_a_folder_retries_into_the_channels_base_folder() {
+async fn a_rule_without_a_folder_retries_into_the_collect_folder() {
     let liar = release("guid-liar-26", 26, LIAR, "");
-    let s = Scene::failing(&[&liar], vec![rule("LIAR GAME", "")]).await;
+    let s = Scene::with(
+        &[&liar],
+        COLLECT_FOLDER,
+        &[],
+        vec![rule("LIAR GAME", "")],
+        true,
+    )
+    .await;
     let item = s.item("LIAR GAME - 26").await;
 
     assert_eq!(s.post(CMD, &item).await.0, StatusCode::ACCEPTED);
@@ -439,8 +446,8 @@ async fn a_rule_without_a_folder_retries_into_the_channels_base_folder() {
 
     assert_eq!(s.adds().len(), 1);
     // The rule's own cycle joins an empty folder on the same way.
-    assert_eq!(s.adds()[0]["download-dir"], "/media/anime/");
-    // The base folder has no title and season to name the file after: the torrent
+    assert_eq!(s.adds()[0]["download-dir"], "/media/");
+    // The collect folder has no title and season to name the file after: the torrent
     // stays as it is (the rule's cycle would have removed it and its data).
     let torrents = s.h.tr.torrents();
     assert_eq!(torrents.len(), 1, "{torrents:?}");
@@ -703,6 +710,29 @@ async fn assert_ended_without_adding(s: &Scene, says: &str, item_before: &Histor
     assert!(reason.contains(says), "{reason}");
     assert!(s.adds().is_empty(), "nothing went to Transmission");
     assert_eq!(&s.item(&item_before.title).await, item_before);
+}
+
+#[tokio::test]
+async fn a_retry_with_no_collect_folder_ends_at_once_and_leaves_the_item_as_it_was() {
+    let liar = release("guid-liar-26", 26, LIAR, "");
+    let s = Scene::failing(&[&liar], picked_rules()).await;
+    let item = s.item("LIAR GAME - 26").await;
+    s.post(CMD, &item).await;
+    // The app cannot unset the folder once it is set; this is a database that
+    // has none, as a fresh one does.
+    s.h.db
+        .run::<_, transmission_rss::store::DbError, _>(|c| {
+            Ok(c.execute("DELETE FROM collection_settings", [])
+                .map(|_| ())?)
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
+
+    // The rule's folder is relative to the collect folder, so there is nowhere
+    // to put the torrent. The item stays `add_failed` as it was, not failed anew.
+    assert_ended_without_adding(&s, "수집 폴더", &item).await;
 }
 
 #[tokio::test]

@@ -8,7 +8,8 @@
 //!   "received": { "total": 12, "days": [{ "date": "2026-09-24", "count": 3 }, ...7] },
 //!   "problems": 2,
 //!   "transmission": { "downloading": 1, "seeding": 3, "taken_at": 1790000000000 } | null,
-//!   "cycle": { "started_at", "finished_at" } | null
+//!   "cycle": { "started_at", "finished_at" } | null,
+//!   "collect_folder_set": true|false
 //! }
 //! ```
 //!
@@ -23,6 +24,11 @@
 //! today, oldest first). `received.total` is the sum of the bars and
 //! `problems` counts items that ended as failed or duplicate within the same
 //! seven days.
+//!
+//! `collect_folder_set` is false while the app's collect folder has not been
+//! chosen. The worker then adds no torrent, and the board says so: a rule's
+//! folder is relative to it, so there is nowhere to save. Nothing is recorded
+//! as failed meanwhile, so what a rule picks is received once the folder is set.
 
 use axum::{
     extract::{rejection::QueryRejection, Query, State},
@@ -106,6 +112,8 @@ pub struct Board {
     pub problems: u32,
     pub transmission: Option<TransmissionStatus>,
     pub cycle: Option<CycleStatus>,
+    /// False until the collect folder is chosen; the worker adds nothing then.
+    pub collect_folder_set: bool,
 }
 
 fn internal(e: impl std::fmt::Display) -> ApiError {
@@ -197,6 +205,13 @@ pub async fn board(state: &AppState, now: Millis, tz_offset: i64) -> Result<Boar
             finished_at: c.finished_at,
         });
 
+    let collect_folder_set = state
+        .settings
+        .collection()
+        .await
+        .map_err(internal)?
+        .is_some();
+
     Ok(Board {
         now,
         channels,
@@ -204,6 +219,7 @@ pub async fn board(state: &AppState, now: Millis, tz_offset: i64) -> Result<Boar
         problems: state.status.problems_since(since).await.map_err(internal)?,
         transmission,
         cycle,
+        collect_folder_set,
     })
 }
 

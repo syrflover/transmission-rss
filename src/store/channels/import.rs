@@ -17,6 +17,7 @@ use uuid::Uuid;
 
 use super::model::{Channel, ChannelInput, ChannelWithRules, Rule, RuleInput, Version};
 use super::{repo, ChannelError, ChannelStore};
+use crate::store::settings::{set_collect_folder_if_unset, SettingsError};
 
 /// One channel of the file: its fields and rules in file order.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,14 +105,33 @@ impl ChannelStore {
         &self,
         actions: Vec<ImportAction>,
     ) -> Result<Vec<ImportedChannel>, ChannelError> {
-        self.db.run(move |c| apply_import(c, &actions)).await
+        self.import_channels_setting_folder(actions, None).await
+    }
+
+    /// [`ChannelStore::import_channels`] that also sets the collect folder to
+    /// `collect_folder` in the same transaction, for an import that adopts the
+    /// file's folders while none is set. If a collect folder was set in the
+    /// meantime the import fails with [`ChannelError::Conflict`] and nothing of
+    /// it is applied.
+    pub async fn import_channels_setting_folder(
+        &self,
+        actions: Vec<ImportAction>,
+        collect_folder: Option<String>,
+    ) -> Result<Vec<ImportedChannel>, ChannelError> {
+        self.db
+            .run(move |c| apply_import(c, &actions, collect_folder.as_deref()))
+            .await
     }
 }
 
 fn apply_import(
     conn: &mut Connection,
     actions: &[ImportAction],
+    collect_folder: Option<&str>,
 ) -> Result<Vec<ImportedChannel>, ChannelError> {
+    if collect_folder == Some("") {
+        return Err(ChannelError::Invalid("collect folder is empty"));
+    }
     let mut replaced_ids = HashSet::new();
     for action in actions {
         let channel = match action {
@@ -130,6 +150,18 @@ fn apply_import(
     }
 
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    if let Some(folder) = collect_folder {
+        set_collect_folder_if_unset(&tx, folder).map_err(|e| match e {
+            SettingsError::Conflict { expected, actual } => ChannelError::Conflict {
+                kind: "collect folder",
+                id: String::new(),
+                expected,
+                actual,
+            },
+            SettingsError::Db(e) => ChannelError::Db(e),
+            SettingsError::Invalid(reason) => ChannelError::Invalid(reason),
+        })?;
+    }
     let mut results = Vec::with_capacity(actions.len());
     for action in actions {
         results.push(match action {
@@ -191,13 +223,12 @@ fn add_channel(
     )?;
     let input = &channel.input;
     tx.execute(
-        "INSERT INTO channels (id, position, url, base_dir, excludes, secret_query, past_search, name, version)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1)",
+        "INSERT INTO channels (id, position, url, excludes, secret_query, past_search, name, version)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1)",
         params![
             id,
             position,
             input.url,
-            input.base_dir,
             json(&input.excludes),
             json(&input.secret_query),
             input.past_search,
@@ -232,13 +263,12 @@ fn replace_keeping_rule_ids(
     let input = &channel.input;
     tx.execute(
         "UPDATE channels
-         SET url = ?2, base_dir = ?3, excludes = ?4, secret_query = ?5, past_search = ?6, name = ?7,
+         SET url = ?2, excludes = ?3, secret_query = ?4, past_search = ?5, name = ?6,
              version = version + 1
          WHERE id = ?1",
         params![
             id,
             input.url,
-            input.base_dir,
             json(&input.excludes),
             json(&input.secret_query),
             input.past_search,

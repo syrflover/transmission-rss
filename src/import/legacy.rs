@@ -7,6 +7,10 @@
 //! the app database needs and turns failures into Korean sentences that say why
 //! the file cannot be imported.
 //!
+//! The channel `directory` is not stored on the channel any more (the app has
+//! one collect folder); [`LegacyChannel`] carries it so [`super::fit`] can
+//! place the channel under the collect folder.
+//!
 //! An error message never repeats text from the file, because the file holds
 //! feed tokens.
 
@@ -41,12 +45,21 @@ impl fmt::Display for ParseError {
 
 impl std::error::Error for ParseError {}
 
+/// One channel of the file: the folder its `directory` names, and the channel
+/// with its rules. The rules' `directory` is relative to [`Self::folder`] until
+/// [`super::fit::fit`] puts it under the collect folder.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LegacyChannel {
+    pub folder: String,
+    pub channel: ImportChannel,
+}
+
 /// Parses the file into channels in file order, each with its rules in file
 /// order. Every query name of every URL is secret. A rule with `match: ""`
 /// is refused: the old executable matched every title with it, while the app
 /// has no match-everything rule and reads an empty phrase as waiting for a
 /// title, so neither reading would keep what the file meant.
-pub fn parse(content: &str) -> Result<Vec<ImportChannel>, ParseError> {
+pub fn parse(content: &str) -> Result<Vec<LegacyChannel>, ParseError> {
     let content = content.strip_prefix('\u{feff}').unwrap_or(content);
 
     let document: Value = yaml_serde::from_str(content).map_err(|e| {
@@ -123,7 +136,7 @@ fn check_present(
     }
 }
 
-fn convert(index: usize, config: &ChannelConfig) -> Result<ImportChannel, ParseError> {
+fn convert(index: usize, config: &ChannelConfig) -> Result<LegacyChannel, ParseError> {
     let n = index + 1;
 
     let url = config.url.trim();
@@ -141,8 +154,8 @@ fn convert(index: usize, config: &ChannelConfig) -> Result<ImportChannel, ParseE
         }
     }
 
-    let base_dir = config.directory.to_string_lossy().into_owned();
-    if base_dir.is_empty() {
+    let folder = config.directory.to_string_lossy().into_owned();
+    if folder.is_empty() {
         return Err(ParseError::new(format!(
             "{n}번째 채널의 `directory`가 비어 있어요."
         )));
@@ -173,9 +186,12 @@ fn convert(index: usize, config: &ChannelConfig) -> Result<ImportChannel, ParseE
         });
     }
 
-    let mut input = ChannelInput::new(url, base_dir);
+    let mut input = ChannelInput::new(url);
     input.excludes = config.excludes.clone();
-    Ok(ImportChannel { input, rules })
+    Ok(LegacyChannel {
+        folder,
+        channel: ImportChannel { input, rules },
+    })
 }
 
 #[cfg(test)]
@@ -192,12 +208,13 @@ mod tests {
         let channels = parse(sample).unwrap();
         assert_eq!(channels.len(), 2);
 
-        let first = &channels[0];
+        assert_eq!(channels[0].folder, "/media/anime");
+        assert_eq!(channels[1].folder, "/media/other");
+        let first = &channels[0].channel;
         assert_eq!(
             first.input.url,
             "https://feeds.example.test/subsplease?filter=1080p&token=REDACTED"
         );
-        assert_eq!(first.input.base_dir, "/media/anime");
         assert_eq!(first.input.excludes, ["[Batch]", "(720p)"]);
         assert_eq!(first.input.secret_query, ["filter", "token"]);
         let phrases: Vec<_> = first
@@ -222,8 +239,8 @@ mod tests {
         assert!(first.rules[1].case_insensitive);
         assert_eq!(first.rules[3].episode, -24);
         assert_eq!(first.rules[3].directory, "Slime/Season 04");
-        assert_eq!(channels[1].input.excludes, Vec::<String>::new());
-        assert_eq!(channels[1].rules.len(), 2);
+        assert_eq!(channels[1].channel.input.excludes, Vec::<String>::new());
+        assert_eq!(channels[1].channel.rules.len(), 2);
     }
 
     #[test]
@@ -232,7 +249,7 @@ mod tests {
             "- url: https://x.test/rss\n  directory: /m\n  rules:\n    - match: '^Show \\d+$'\n      regex: true\n      case_insensitive: true\n      episode: -24\n      directory: Show\n",
         )
         .unwrap();
-        let rule = &channels[0].rules[0];
+        let rule = &channels[0].channel.rules[0];
         assert_eq!(rule.r#match.as_deref(), Some("^Show \\d+$"));
         assert!(rule.regex && rule.case_insensitive);
         assert_eq!(rule.episode, -24);

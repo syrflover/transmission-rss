@@ -17,6 +17,19 @@
 //! secret value. A review that has gone stale (a channel changed, appeared or
 //! disappeared since the preview) is answered `409` with nothing applied, so
 //! the screen can review the file again.
+//!
+//! # Folders
+//!
+//! The app has one collect folder and a rule's directory is relative to it, so
+//! the file's channel `directory` is placed under it ([`crate::import::fit`]).
+//! While no collect folder is set, the import sets it from the file (the
+//! channels' shared folder, or their common ancestor) in the same transaction
+//! that imports the channels. A channel folder inside the collect folder is
+//! imported with the part between the two put in front of its rules'
+//! directories; one outside it is reported with a reason and not imported,
+//! and needs no choice even if it matches an existing channel. The collect
+//! folder the review saw (`reviewed_collect_folder` in the apply request) must
+//! still be the one now, like a channel's version.
 
 use axum::{
     extract::{rejection::JsonRejection, State},
@@ -27,7 +40,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{ApiError, AppState};
 use crate::import::{
-    legacy,
+    fit::{fit, Fit, Fitted},
+    legacy::{self, LegacyChannel},
     plan::{build_actions, display_url, find_existing, Choice, Decision},
 };
 use crate::store::channels::import::{match_rules, ImportChannel, ImportedChannel};
@@ -51,6 +65,11 @@ struct ApplyRequest {
     content: String,
     #[serde(default)]
     choices: Vec<ChoiceRequest>,
+    /// The collect folder the review saw (`collect_folder.current` of the
+    /// preview), `null` when none was set. A different one now makes the
+    /// review stale.
+    #[serde(default)]
+    reviewed_collect_folder: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -121,7 +140,12 @@ struct ChannelView {
     index: usize,
     /// Masked: every query value is `***`.
     url: String,
+    /// The folder the file names for the channel, as written.
     directory: String,
+    /// Why the channel is not imported (its folder is outside the collect
+    /// folder); `null` when it is. A channel that is not imported has no
+    /// `existing` and needs no choice.
+    not_imported: Option<String>,
     excludes: Vec<String>,
     rules: Vec<RuleView>,
     existing: Option<ExistingView>,
@@ -132,6 +156,17 @@ struct PreviewResponse {
     channels: Vec<ChannelView>,
     /// How many file channels need a choice.
     conflict_count: usize,
+    collect_folder: CollectFolderView,
+}
+
+#[derive(Serialize)]
+struct CollectFolderView {
+    /// The collect folder now; `null` when none is set. Send it back as
+    /// `reviewed_collect_folder` with the apply.
+    current: Option<String>,
+    /// The folder the import sets because none is set yet; `null` when one is
+    /// set or no channel is imported.
+    will_set: Option<String>,
 }
 
 fn invalid_regex(rule: &crate::store::channels::RuleInput) -> bool {
@@ -146,9 +181,16 @@ fn invalid_regex(rule: &crate::store::channels::RuleInput) -> bool {
 
 fn channel_view(
     index: usize,
-    channel: &ImportChannel,
+    folder: &str,
+    fit: &Fit,
+    original: &ImportChannel,
     existing: Option<&ChannelWithRules>,
 ) -> ChannelView {
+    // A channel that is not imported is shown as the file has it.
+    let (channel, not_imported) = match fit {
+        Fit::Import(channel) => (channel, None),
+        Fit::Outside(reason) => (original, Some(reason.clone())),
+    };
     let kept: Vec<Option<usize>> = existing
         .map(|e| match_rules(&e.rules, &channel.rules))
         .unwrap_or_else(|| vec![None; channel.rules.len()]);
@@ -166,7 +208,8 @@ fn channel_view(
     ChannelView {
         index,
         url: display_url(&channel.input.url),
-        directory: channel.input.base_dir.clone(),
+        directory: folder.to_owned(),
+        not_imported,
         excludes: channel.input.excludes.clone(),
         rules: channel
             .rules
@@ -219,27 +262,98 @@ fn store_error(e: ChannelError) -> ApiError {
     }
 }
 
-async fn preview(
-    State(state): State<AppState>,
-    body: Result<Json<PreviewRequest>, JsonRejection>,
-) -> Result<Json<PreviewResponse>, ApiError> {
-    let request = json(body)?;
-    let file = legacy::parse(&request.content).map_err(|e| ApiError::invalid(e.message()))?;
+/// The file read, placed under the collect folder, and what exists now.
+struct Reviewed {
+    file: Vec<LegacyChannel>,
+    fitted: Fitted,
+    current_folder: Option<String>,
+    existing: Vec<ChannelWithRules>,
+    /// File index of each channel that is imported, in file order.
+    positions: Vec<usize>,
+    /// Those channels, placed under the collect folder.
+    importable: Vec<ImportChannel>,
+}
+
+impl Reviewed {
+    /// For each file channel, the existing channel it is the same as, among the
+    /// channels that are imported; a channel that is not imported has none.
+    fn existing_of_file(&self) -> Vec<Option<usize>> {
+        let found = find_existing(&self.importable, &self.existing);
+        let mut of_file = vec![None; self.file.len()];
+        for (local, e) in found.into_iter().enumerate() {
+            of_file[self.positions[local]] = e;
+        }
+        of_file
+    }
+}
+
+async fn review(state: &AppState, content: &str) -> Result<Reviewed, ApiError> {
+    let file = legacy::parse(content).map_err(|e| ApiError::invalid(e.message()))?;
+    let current_folder = state
+        .settings
+        .collection()
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .map(|settings| settings.folder);
     let existing = state
         .channels
         .list_channels_with_rules()
         .await
         .map_err(store_error)?;
 
-    let found = find_existing(&file, &existing);
-    let channels: Vec<_> = file
+    let fitted = fit(file.clone(), current_folder.as_deref());
+    let mut positions = Vec::new();
+    let mut importable = Vec::new();
+    for (index, fit) in fitted.channels.iter().enumerate() {
+        if let Fit::Import(channel) = fit {
+            positions.push(index);
+            importable.push(channel.clone());
+        }
+    }
+    Ok(Reviewed {
+        file,
+        fitted,
+        current_folder,
+        existing,
+        positions,
+        importable,
+    })
+}
+
+async fn preview(
+    State(state): State<AppState>,
+    body: Result<Json<PreviewRequest>, JsonRejection>,
+) -> Result<Json<PreviewResponse>, ApiError> {
+    let request = json(body)?;
+    let reviewed = review(&state, &request.content).await?;
+
+    let found = reviewed.existing_of_file();
+    let channels: Vec<_> = reviewed
+        .file
         .iter()
+        .zip(&reviewed.fitted.channels)
         .enumerate()
-        .map(|(i, channel)| channel_view(i, channel, found[i].map(|e| &existing[e])))
+        .map(|(i, (legacy, fit))| {
+            channel_view(
+                i,
+                &legacy.folder,
+                fit,
+                &legacy.channel,
+                found[i].map(|e| &reviewed.existing[e]),
+            )
+        })
         .collect();
     Ok(Json(PreviewResponse {
         conflict_count: found.iter().flatten().count(),
         channels,
+        collect_folder: CollectFolderView {
+            will_set: reviewed
+                .fitted
+                .collect_folder
+                .clone()
+                .filter(|_| !reviewed.importable.is_empty()),
+            current: reviewed.current_folder,
+        },
     }))
 }
 
@@ -270,11 +384,23 @@ struct SkippedView {
     url: String,
 }
 
+/// A channel the import left out because its folder is outside the collect
+/// folder.
+#[derive(Serialize)]
+struct NotImportedView {
+    index: usize,
+    url: String,
+    reason: String,
+}
+
 #[derive(Serialize)]
 struct Counts {
     channels_added: usize,
     channels_replaced: usize,
     channels_skipped: usize,
+    /// Channels of the file left out because their folder is outside the
+    /// collect folder.
+    channels_not_imported: usize,
     /// Existing channels this import did not change.
     channels_unchanged: usize,
     /// Rules created, in added channels and as new rules of replaced ones.
@@ -288,6 +414,9 @@ struct ApplyResponse {
     added: Vec<AddedView>,
     replaced: Vec<ReplacedView>,
     skipped: Vec<SkippedView>,
+    not_imported: Vec<NotImportedView>,
+    /// The collect folder this import set; `null` when it changed none.
+    collect_folder_set: Option<String>,
     counts: Counts,
 }
 
@@ -296,55 +425,93 @@ async fn apply(
     body: Result<Json<ApplyRequest>, JsonRejection>,
 ) -> Result<Json<ApplyResponse>, ApiError> {
     let request = json(body)?;
-    let file = legacy::parse(&request.content).map_err(|e| ApiError::invalid(e.message()))?;
-    let existing = state
-        .channels
-        .list_channels_with_rules()
-        .await
-        .map_err(store_error)?;
+    let reviewed = review(&state, &request.content).await?;
+    let stale = || ApiError::Conflict {
+        message: STALE_MESSAGE.into(),
+        current: None,
+    };
+    if reviewed.current_folder != request.reviewed_collect_folder {
+        return Err(stale());
+    }
 
+    // The choices name channels by their place in the file; the plan numbers
+    // only the channels that are imported.
     let choices: Vec<Choice> = request
         .choices
         .into_iter()
-        .map(|c| Choice {
-            index: c.index,
-            existing_id: c.existing_id,
-            existing_version: c.existing_version,
-            decision: match c.decision {
-                DecisionRequest::Replace => Decision::Replace,
-                DecisionRequest::Add => Decision::Add,
-                DecisionRequest::Skip => Decision::Skip,
-            },
+        .map(|c| {
+            let index = reviewed
+                .positions
+                .iter()
+                .position(|&file_index| file_index == c.index)
+                .ok_or_else(stale)?;
+            Ok(Choice {
+                index,
+                existing_id: c.existing_id,
+                existing_version: c.existing_version,
+                decision: match c.decision {
+                    DecisionRequest::Replace => Decision::Replace,
+                    DecisionRequest::Add => Decision::Add,
+                    DecisionRequest::Skip => Decision::Skip,
+                },
+            })
+        })
+        .collect::<Result<_, ApiError>>()?;
+    let urls: Vec<String> = reviewed
+        .file
+        .iter()
+        .map(|c| display_url(&c.channel.input.url))
+        .collect();
+    let Reviewed {
+        fitted,
+        existing,
+        positions,
+        importable,
+        ..
+    } = reviewed;
+    let not_imported: Vec<NotImportedView> = fitted
+        .channels
+        .iter()
+        .enumerate()
+        .filter_map(|(index, fit)| match fit {
+            Fit::Outside(reason) => Some(NotImportedView {
+                index,
+                url: urls[index].clone(),
+                reason: reason.clone(),
+            }),
+            Fit::Import(_) => None,
         })
         .collect();
-    let urls: Vec<String> = file.iter().map(|c| display_url(&c.input.url)).collect();
-    let plan = build_actions(file, &existing, &choices).map_err(|_| ApiError::Conflict {
-        message: STALE_MESSAGE.into(),
-        current: None,
-    })?;
+    let plan = build_actions(importable, &existing, &choices).map_err(|_| stale())?;
 
     let (indexes, actions): (Vec<usize>, Vec<_>) = plan.actions.into_iter().unzip();
+    let indexes: Vec<usize> = indexes.into_iter().map(|local| positions[local]).collect();
+    let skipped: Vec<usize> = plan.skipped.iter().map(|&local| positions[local]).collect();
+    // The folder is set together with the channels that need it.
+    let collect_folder_set = fitted.collect_folder.filter(|_| !actions.is_empty());
     let results = state
         .channels
-        .import_channels(actions)
+        .import_channels_setting_folder(actions, collect_folder_set.clone())
         .await
         .map_err(store_error)?;
 
     let mut response = ApplyResponse {
         added: Vec::new(),
         replaced: Vec::new(),
-        skipped: plan
-            .skipped
+        skipped: skipped
             .iter()
             .map(|&index| SkippedView {
                 index,
                 url: urls[index].clone(),
             })
             .collect(),
+        not_imported: Vec::new(),
+        collect_folder_set,
         counts: Counts {
             channels_added: 0,
             channels_replaced: 0,
-            channels_skipped: plan.skipped.len(),
+            channels_skipped: skipped.len(),
+            channels_not_imported: not_imported.len(),
             channels_unchanged: 0,
             rules_added: 0,
             rules_kept: 0,
@@ -388,6 +555,7 @@ async fn apply(
             }
         }
     }
+    response.not_imported = not_imported;
     response.counts.channels_added = response.added.len();
     response.counts.channels_replaced = response.replaced.len();
     response.counts.channels_unchanged = existing.len() - response.replaced.len();

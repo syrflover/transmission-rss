@@ -542,10 +542,7 @@ async fn history_survives_channel_and_rule_deletion() {
     let (_dir, db, history) = store().await;
     let channels = ChannelStore::new(db.clone());
     let channel = channels
-        .create_channel(ChannelInput::new(
-            "http://feed.test/rss?token=abc",
-            "/media",
-        ))
+        .create_channel(ChannelInput::new("http://feed.test/rss?token=abc"))
         .await
         .unwrap();
     let rule = channels

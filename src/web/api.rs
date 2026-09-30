@@ -21,6 +21,7 @@ pub fn router() -> Router<AppState> {
         .merge(super::history_api::routes())
         .merge(super::import_api::routes())
         .merge(super::rules_api::routes())
+        .merge(super::settings_api::routes())
         .merge(super::status_api::routes())
         .fallback(not_found)
 }

@@ -385,7 +385,11 @@ pub async fn execute(
         Err(reason) => return Ok(ended_early(failed(reason.message(), None))),
     };
     let channel = plan.channel.clone();
-    let (save_path, episode) = rule_destination(plan.channel, plan.rule);
+    // The folder is read now, like the rule: it decides where the torrent goes.
+    let Some(collect_folder) = ctx.settings.collection().await.map_err(Retry::store)? else {
+        return Ok(ended_early(failed(NO_COLLECT_FOLDER, None)));
+    };
+    let (save_path, episode) = rule_destination(Path::new(&collect_folder.folder), plan.rule);
     let rule_id = plan.rule.id.clone();
 
     let redactor = redactor_for(ctx, &channel);
@@ -480,6 +484,11 @@ pub async fn execute(
 const LEGACY_FOLDER: &str =
     "폴더를 고르던 예전 요청이라 실행하지 않았어요. 필요하면 다시 받기로 받아요.";
 
+/// Why a retry does nothing while no collect folder is set: the rule's folder
+/// is relative to it, so there is nowhere to put the torrent.
+const NO_COLLECT_FOLDER: &str =
+    "수집 폴더가 정해지지 않아서 받지 않았어요. 설정에서 수집 폴더를 정한 뒤 다시 받아요.";
+
 /// Why a command ended `duplicate`.
 const ALREADY_THERE: &str = "Transmission에 이미 같은 토렌트가 있어서 새로 받지 않았어요.";
 
@@ -555,10 +564,13 @@ fn failed(reason: &str, rename: Option<Rename>) -> Finished {
 /// Knows the channel's secret values and the Transmission credentials.
 fn redactor_for(ctx: &CycleContext, channel: &Channel) -> Redactor {
     let mut redactor = ctx.redactor.clone();
-    let plan = ChannelPlan::new(ChannelWithRules {
-        channel: channel.clone(),
-        rules: Vec::new(),
-    });
+    let plan = ChannelPlan::new(
+        ChannelWithRules {
+            channel: channel.clone(),
+            rules: Vec::new(),
+        },
+        Path::new(""),
+    );
     redactor.extend(&plan.redactor());
     redactor
 }
@@ -735,7 +747,6 @@ mod tests {
             position: 0,
             version: 1,
             url: "https://feed.test/rss".into(),
-            base_dir: "/media/anime".into(),
             excludes: Vec::new(),
             secret_query: Vec::new(),
             past_search: None,
@@ -828,7 +839,7 @@ mod tests {
     #[test]
     fn the_retry_goes_where_the_rules_own_cycle_would_put_it() {
         let (destination, episode) = rule_destination(
-            &channel(),
+            Path::new("/media/anime"),
             &Rule {
                 episode: -12,
                 ..rule(RuleState::Active)

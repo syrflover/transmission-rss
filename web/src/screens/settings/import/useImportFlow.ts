@@ -1,7 +1,10 @@
 import { useCallback, useState } from "react";
 
 import { api, ApiError } from "@/lib/api";
-import { everythingChanged } from "@/screens/collect/cache";
+import { store } from "@/lib/cached";
+import { everythingChanged, KEYS } from "@/screens/collect/cache";
+
+import { loadCollection } from "../collection/api";
 
 import type { ApplyResult, ChoiceRequest, Decision, Preview } from "./types";
 
@@ -120,7 +123,7 @@ export function useImportFlow(): ImportFlow {
     try {
       const done = await api<ApplyResult>("/import/legacy/apply", {
         method: "POST",
-        body: { content, choices: body },
+        body: { content, choices: body, reviewed_collect_folder: preview.collect_folder.current },
       });
       setResult(done);
       setContent(null);
@@ -135,6 +138,11 @@ export function useImportFlow(): ImportFlow {
       setApplying(false);
       // The import adds or changes channels and rules, whether or not the answer arrived.
       everythingChanged();
+      // The import may have set the collect folder, which the settings list shows.
+      loadCollection().then(
+        (collection) => store(KEYS.collection, collection),
+        () => undefined,
+      );
     }
   }, [preview, content, choices, undecided]);
 

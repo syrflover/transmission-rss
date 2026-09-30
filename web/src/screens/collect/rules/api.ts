@@ -24,7 +24,7 @@ export interface Rule {
   match: string | null;
   regex: boolean;
   case_insensitive: boolean;
-  /** Relative to the channel's base directory. */
+  /** Relative to the app's collect folder. */
   directory: string;
   episode: number;
   episode_auto: boolean;
@@ -40,13 +40,14 @@ export interface ChannelBrief {
   position: number;
   name: string | null;
   host: string;
-  base_dir: string;
   rule_count: number;
 }
 
 export interface RuleList {
   rules: Rule[];
   channels: ChannelBrief[];
+  /** The app's collect folder; `null` until one is chosen in the settings. */
+  collect_folder: string | null;
 }
 
 /** The fields the detail edits. */

@@ -330,7 +330,6 @@ async fn logs_and_history_never_contain_secret_query_values() {
     h.channels
         .create_channel(transmission_rss::store::channels::ChannelInput::new(
             format!("http://{dead}/feed?filter=1080p&token={SECRET}"),
-            "/media/y",
         ))
         .await
         .unwrap();

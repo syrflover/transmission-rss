@@ -29,7 +29,7 @@ fn rule(phrase: &str) -> RuleInput {
 async fn channel_with_rules(f: &Fixture, url: &str, n: usize) -> ChannelWithRules {
     let rules = (0..n).map(|i| rule(&format!("r{i}"))).collect();
     f.store
-        .create_channel_with_rules(ChannelInput::new(url, "/media"), rules)
+        .create_channel_with_rules(ChannelInput::new(url), rules)
         .await
         .unwrap()
 }

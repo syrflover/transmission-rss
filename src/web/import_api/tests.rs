@@ -8,6 +8,7 @@ use tempfile::TempDir;
 use tower::ServiceExt;
 
 use crate::store::channels::{ChannelInput, ChannelStore, RuleInput};
+use crate::store::settings::{CollectionSettings, SettingsStore};
 use crate::store::Db;
 
 use super::*;
@@ -19,6 +20,7 @@ struct App {
     _dir: TempDir,
     path: std::path::PathBuf,
     store: ChannelStore,
+    settings: SettingsStore,
     app: Router,
 }
 
@@ -31,6 +33,7 @@ async fn app() -> App {
         _dir: dir,
         path,
         store: state.channels.clone(),
+        settings: state.settings.clone(),
         app: Router::new().nest("/api", crate::web::api::router().with_state(state)),
     }
 }
@@ -60,12 +63,40 @@ impl App {
             .await
     }
 
+    /// Applies as the screen does: it sends back the collect folder the review
+    /// showed, which is the one set now.
     async fn apply(&self, content: &str, choices: Value) -> (StatusCode, String, Value) {
+        let reviewed = self.collection().await.map(|c| c.folder);
+        self.apply_reviewed(content, choices, reviewed).await
+    }
+
+    async fn apply_reviewed(
+        &self,
+        content: &str,
+        choices: Value,
+        reviewed_collect_folder: Option<String>,
+    ) -> (StatusCode, String, Value) {
         self.post(
             "/api/import/legacy/apply",
-            json!({ "content": content, "choices": choices }),
+            json!({
+                "content": content,
+                "choices": choices,
+                "reviewed_collect_folder": reviewed_collect_folder,
+            }),
         )
         .await
+    }
+
+    async fn collection(&self) -> Option<CollectionSettings> {
+        self.settings.collection().await.unwrap()
+    }
+
+    async fn set_folder(&self, folder: &str) {
+        let version = self.collection().await.map_or(0, |c| c.version);
+        self.settings
+            .put_collection(version, folder.to_owned(), None)
+            .await
+            .unwrap();
     }
 
     async fn all(&self) -> Vec<ChannelWithRules> {
@@ -114,10 +145,7 @@ fn existing_a() -> (ChannelInput, Vec<RuleInput>) {
         ..RuleInput::default()
     };
     (
-        ChannelInput::new(
-            "https://feeds.example.test/a?filter=1080p&token=old",
-            "/old",
-        ),
+        ChannelInput::new("https://feeds.example.test/a?filter=1080p&token=old"),
         vec![
             rule("Keep1", "old/keep1"),
             rule("Gone1", "gone1"),
@@ -155,9 +183,18 @@ async fn an_empty_app_takes_everything_without_asking_and_keeps_the_file_exactly
     assert_eq!(status, StatusCode::OK, "{text}");
     assert_no_secret(&text);
     assert_eq!(review["conflict_count"], 0);
+    // No collect folder yet: the file's folders have `/media` in common.
+    assert_eq!(review["collect_folder"]["current"], Value::Null);
+    assert_eq!(review["collect_folder"]["will_set"], "/media");
     let channels = review["channels"].as_array().unwrap();
     assert_eq!(channels.len(), 2);
     assert!(channels.iter().all(|c| c["existing"].is_null()));
+    assert!(channels.iter().all(|c| c["not_imported"].is_null()));
+    assert_eq!(channels[0]["directory"], "/media/a");
+    assert_eq!(channels[1]["directory"], "/media/b");
+    // The review lists the rule folders as they will be stored, under the
+    // collect folder.
+    assert_eq!(channels[0]["rules"][0]["directory"], "a/A/keep1");
     assert_eq!(
         channels[0]["url"],
         "https://feeds.example.test/a?filter=***&token=***"
@@ -176,10 +213,17 @@ async fn an_empty_app_takes_everything_without_asking_and_keeps_the_file_exactly
     assert_eq!(channels[0]["rules"][1]["episode"], -24);
     assert_eq!(channels[0]["rules"][1]["regex"], true);
     assert!(t.all().await.is_empty(), "a preview changes nothing");
+    assert_eq!(t.collection().await, None, "a preview sets no folder");
 
     let (status, text, result) = t.apply(&file(), json!([])).await;
     assert_eq!(status, StatusCode::OK, "{text}");
     assert_no_secret(&text);
+    assert_eq!(result["collect_folder_set"], "/media");
+    let collection = t.collection().await.unwrap();
+    assert_eq!(
+        (collection.folder.as_str(), collection.archive_folder),
+        ("/media", None)
+    );
     assert_eq!(result["counts"]["channels_added"], 2);
     assert_eq!(result["counts"]["rules_added"], 7);
     assert_eq!(result["counts"]["rules_removed"], 0);
@@ -194,7 +238,6 @@ async fn an_empty_app_takes_everything_without_asking_and_keeps_the_file_exactly
         format!("https://feeds.example.test/a?filter=1080p&token={TOKEN_A}")
     );
     assert_eq!(a.channel.secret_query, ["filter", "token"]);
-    assert_eq!(a.channel.base_dir, "/media/a");
     assert_eq!(a.channel.excludes, ["[Batch]", "(720p)"]);
     assert_eq!(
         a.rules
@@ -202,6 +245,14 @@ async fn an_empty_app_takes_everything_without_asking_and_keeps_the_file_exactly
             .map(|r| r.r#match.as_deref())
             .collect::<Vec<_>>(),
         [Some("Keep1"), Some(r"^Regex \d+$"), Some("Fresh")]
+    );
+    assert_eq!(
+        a.rules
+            .iter()
+            .map(|r| r.directory.as_str())
+            .collect::<Vec<_>>(),
+        ["a/A/keep1", "a/A/regex", "a/A/fresh"],
+        "what lies between the collect folder and the channel's folder goes in front"
     );
     assert_eq!(a.rules[0].episode, 1, "an omitted episode reads as 1");
     assert_eq!(
@@ -215,7 +266,7 @@ async fn an_empty_app_takes_everything_without_asking_and_keeps_the_file_exactly
     assert_eq!(a.rules[2].episode, 13);
     assert_eq!(stored[1].channel.secret_query, ["token"]);
     assert_eq!(stored[1].rules[1].r#match.as_deref(), Some("B2"));
-    assert_eq!(stored[1].rules[1].directory, "B/two");
+    assert_eq!(stored[1].rules[1].directory, "b/B/two");
     assert_eq!(stored[1].rules[2].episode, 0);
     assert_eq!(stored[1].rules.len(), 4);
 }
@@ -223,6 +274,7 @@ async fn an_empty_app_takes_everything_without_asking_and_keeps_the_file_exactly
 #[tokio::test]
 async fn replace_shows_the_rules_that_go_and_reports_them_separately() {
     let t = app().await;
+    t.set_folder("/media").await;
     let (input, rules) = existing_a();
     let a = t
         .store
@@ -274,15 +326,15 @@ async fn replace_shows_the_rules_that_go_and_reports_them_separately() {
     let after = &stored[0];
     assert_eq!(after.channel.id, a.channel.id);
     assert_eq!(after.channel.version, a.channel.version + 1);
-    assert_eq!(after.channel.base_dir, "/media/a");
     assert_eq!(
         after
             .rules
             .iter()
             .map(|r| r.directory.as_str())
             .collect::<Vec<_>>(),
-        ["A/keep1", "A/regex", "A/fresh"]
+        ["a/A/keep1", "a/A/regex", "a/A/fresh"]
     );
+    assert_eq!(result["collect_folder_set"], Value::Null);
     // The two overlapping rules kept their IDs.
     assert_eq!(after.rules[0].id, a.rules[0].id);
     assert_eq!(after.rules[1].id, a.rules[2].id);
@@ -329,10 +381,7 @@ async fn skip_leaves_everything_and_choices_must_cover_every_conflict() {
         .unwrap();
     let b = t
         .store
-        .create_channel(ChannelInput::new(
-            "https://feeds.example.test/b?token=old",
-            "/old-b",
-        ))
+        .create_channel(ChannelInput::new("https://feeds.example.test/b?token=old"))
         .await
         .unwrap();
     let b = ChannelWithRules {
@@ -458,7 +507,7 @@ async fn a_database_error_mid_apply_leaves_the_state_from_before() {
     let raw = rusqlite::Connection::open(&t.path).unwrap();
     raw.execute_batch(
         "CREATE TRIGGER inject_failure BEFORE INSERT ON rules
-         WHEN NEW.directory = 'B/four'
+         WHEN NEW.directory = 'b/B/four'
          BEGIN SELECT RAISE(ABORT, 'injected failure'); END;",
     )
     .unwrap();
@@ -472,4 +521,193 @@ async fn a_database_error_mid_apply_leaves_the_state_from_before() {
     let (status, text, _) = t.apply(&file(), json!([choice(0, &a, "replace")])).await;
     assert_eq!(status, StatusCode::OK, "{text}");
     assert_eq!(t.all().await.len(), 2);
+}
+
+// --- folders ---------------------------------------------------------------------
+
+/// A file whose channels sit in different folders under `/downloads`, and one
+/// channel in `/elsewhere`.
+fn folders_file() -> String {
+    format!(
+        r#"- url: https://feeds.example.test/a?token={TOKEN_A}
+  directory: /downloads/Shows (current)
+  rules:
+    - match: A1
+      directory: Clevatess/Season 02
+    - match: A2
+      directory: ""
+- url: https://feeds.example.test/b?token={TOKEN_B}
+  directory: /downloads/Movies
+  rules:
+    - match: B1
+      directory: Dune
+"#
+    )
+}
+
+fn directories(channel: &ChannelWithRules) -> Vec<&str> {
+    channel.rules.iter().map(|r| r.directory.as_str()).collect()
+}
+
+#[tokio::test]
+async fn differing_channel_folders_set_their_common_parent_and_prefix_the_rules() {
+    let t = app().await;
+
+    let (_, text, review) = t.preview(&folders_file()).await;
+    assert_no_secret(&text);
+    assert_eq!(review["collect_folder"]["will_set"], "/downloads");
+    assert_eq!(
+        review["channels"][0]["rules"][0]["directory"],
+        "Shows (current)/Clevatess/Season 02"
+    );
+
+    let (status, text, result) = t.apply(&folders_file(), json!([])).await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(result["collect_folder_set"], "/downloads");
+    assert_eq!(t.collection().await.unwrap().folder, "/downloads");
+
+    let stored = t.all().await;
+    // The empty directory keeps its trailing slash, as the old save path had.
+    assert_eq!(
+        directories(&stored[0]),
+        ["Shows (current)/Clevatess/Season 02", "Shows (current)/"]
+    );
+    assert_eq!(directories(&stored[1]), ["Movies/Dune"]);
+}
+
+#[tokio::test]
+async fn with_a_collect_folder_set_a_channel_inside_it_is_prefixed_and_one_outside_is_reported() {
+    let t = app().await;
+    t.set_folder("/downloads/Shows (current)").await;
+    let content = format!(
+        "{}- url: https://feeds.example.test/c?token={TOKEN_A}
+  directory: /downloads/Shows (current)/Old
+  rules:
+    - match: C1
+      directory: Show
+",
+        folders_file()
+    );
+
+    let (status, text, review) = t.preview(&content).await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_no_secret(&text);
+    assert_eq!(
+        review["collect_folder"]["current"],
+        "/downloads/Shows (current)"
+    );
+    assert_eq!(review["collect_folder"]["will_set"], Value::Null);
+    let channels = review["channels"].as_array().unwrap();
+    assert!(channels[0]["not_imported"].is_null());
+    let reason = channels[1]["not_imported"].as_str().unwrap();
+    assert!(reason.contains("`/downloads/Movies`"), "{reason}");
+    assert!(
+        reason.contains("수집 폴더 `/downloads/Shows (current)` 밖"),
+        "{reason}"
+    );
+    assert!(channels[2]["not_imported"].is_null());
+
+    let (status, text, result) = t.apply(&content, json!([])).await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_no_secret(&text);
+    assert_eq!(result["collect_folder_set"], Value::Null);
+    assert_eq!(result["counts"]["channels_added"], 2);
+    assert_eq!(result["counts"]["channels_not_imported"], 1);
+    assert_eq!(result["not_imported"][0]["index"], 1);
+    assert_eq!(
+        result["not_imported"][0]["url"],
+        "https://feeds.example.test/b?token=***"
+    );
+    assert_eq!(result["not_imported"][0]["reason"], reason);
+
+    let stored = t.all().await;
+    assert_eq!(stored.len(), 2, "the outside channel was not imported");
+    assert_eq!(directories(&stored[0]), ["Clevatess/Season 02", ""]);
+    assert_eq!(directories(&stored[1]), ["Old/Show"]);
+    assert_eq!(
+        t.collection().await.unwrap().folder,
+        "/downloads/Shows (current)"
+    );
+}
+
+#[tokio::test]
+async fn a_channel_outside_the_collect_folder_needs_no_choice_even_if_it_exists_already() {
+    let t = app().await;
+    t.set_folder("/downloads/Shows (current)").await;
+    let (input, rules) = existing_a();
+    let a = t
+        .store
+        .create_channel_with_rules(input, rules)
+        .await
+        .unwrap();
+    // The file's channel `a` is the existing one, but its folder is outside.
+    let content = format!(
+        "- url: https://feeds.example.test/a?filter=1080p&token={TOKEN_A}
+  directory: /elsewhere
+  rules:
+    - match: Keep1
+      directory: X
+"
+    );
+
+    let (_, _, review) = t.preview(&content).await;
+    assert_eq!(review["conflict_count"], 0);
+    assert!(review["channels"][0]["existing"].is_null());
+    assert!(review["channels"][0]["not_imported"].is_string());
+
+    // No choices are needed, and the existing channel is not touched.
+    let before = t.all().await;
+    let (status, text, result) = t.apply(&content, json!([])).await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(result["counts"]["channels_not_imported"], 1);
+    assert_eq!(result["counts"]["channels_added"], 0);
+    assert_eq!(t.all().await, before);
+
+    // A choice for a channel that is not imported is a stale review.
+    let (status, _, body) = t.apply(&content, json!([choice(0, &a, "replace")])).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["error"], "conflict");
+}
+
+#[tokio::test]
+async fn a_collect_folder_that_changed_since_the_review_makes_it_stale() {
+    let t = app().await;
+
+    // The review saw no folder; one is set before the apply.
+    t.set_folder("/downloads").await;
+    let (status, _, body) = t.apply_reviewed(&folders_file(), json!([]), None).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["error"], "conflict");
+    assert!(t.all().await.is_empty());
+
+    // The review saw another folder than the one that is set.
+    let (status, _, _) = t
+        .apply_reviewed(&folders_file(), json!([]), Some("/media".into()))
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(t.all().await.is_empty());
+}
+
+#[tokio::test]
+async fn skipping_every_channel_does_not_set_the_collect_folder() {
+    let t = app().await;
+    let (input, rules) = existing_a();
+    let a = t
+        .store
+        .create_channel_with_rules(input, rules)
+        .await
+        .unwrap();
+    let content = format!(
+        "- url: https://feeds.example.test/a?filter=1080p&token={TOKEN_A}
+  directory: /media/a
+  rules:
+    - match: Keep1
+      directory: X
+"
+    );
+
+    let (status, text, result) = t.apply(&content, json!([choice(0, &a, "skip")])).await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(result["collect_folder_set"], Value::Null);
+    assert_eq!(t.collection().await, None);
 }

@@ -3,7 +3,7 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 use futures::{stream, StreamExt};
@@ -20,6 +20,7 @@ use crate::{
     store::{
         channels::{ChannelError, ChannelStore},
         history::{HistoryResult, HistoryStore, Millis, Observation, Recorded},
+        settings::{SettingsError, SettingsStore},
         status::{ChannelReadResult, StatusStore, TransmissionCounts},
     },
     transmission::{
@@ -39,6 +40,8 @@ const MAX_REASON_CHARS: usize = 300;
 #[derive(Clone)]
 pub struct CycleContext {
     pub channels: ChannelStore,
+    /// Where the collect folder is read from.
+    pub settings: SettingsStore,
     pub history: HistoryStore,
     pub transmission_url: Url,
     /// The client for Transmission's requests; they time out
@@ -63,6 +66,8 @@ impl CycleContext {
 pub enum CycleError {
     #[error("cannot read the channels: {0}")]
     Channels(#[from] ChannelError),
+    #[error("cannot read the collection settings: {0}")]
+    Settings(#[from] SettingsError),
 }
 
 /// What one cycle did, for logs and tests. The counts are about this cycle's
@@ -81,6 +86,9 @@ pub struct CycleReport {
     pub add_failed: usize,
     pub no_match: usize,
     pub excluded: usize,
+    /// Items a rule selected that were left alone because no collect folder is
+    /// set. They are not recorded at all, so the next cycle judges them again.
+    pub waiting_for_collect_folder: usize,
     /// Torrents taken out of Transmission because they left the feeds.
     pub removed: Vec<RemovedTorrent>,
     /// Items whose task panicked. Their torrents may or may not be in
@@ -165,7 +173,19 @@ pub async fn run_cycle(
 
     // One consistent snapshot, before anything else.
     let snapshot = ctx.channels.list_channels_with_rules().await?;
-    let plans: Vec<ChannelPlan> = snapshot.into_iter().map(ChannelPlan::new).collect();
+    let collect_folder: Option<PathBuf> = ctx
+        .settings
+        .collection()
+        .await?
+        .map(|settings| PathBuf::from(settings.folder));
+    // Without a collect folder the items are still judged (and the ones no rule
+    // takes recorded), but nothing is added: see `Judgement::Selected` below.
+    let plans: Vec<ChannelPlan> = snapshot
+        .into_iter()
+        .map(|channel| {
+            ChannelPlan::new(channel, collect_folder.as_deref().unwrap_or(Path::new("")))
+        })
+        .collect();
     report.channels = plans.len();
 
     let mut redactor = ctx.redactor.clone();
@@ -274,6 +294,14 @@ pub async fn run_cycle(
             };
 
             match plan.judge(&title) {
+                // No collect folder, so there is nowhere to save. The item is
+                // neither added nor recorded: a record (an `add_failed` above
+                // all) would pile up as a failure the user did nothing wrong
+                // to cause, and would need a retry. Left unrecorded it is new
+                // again next cycle and is judged afresh once the folder is set.
+                Judgement::Selected { .. } if collect_folder.is_none() => {
+                    report.waiting_for_collect_folder += 1;
+                }
                 Judgement::Selected {
                     rule_id,
                     save_path,
@@ -367,7 +395,11 @@ pub async fn run_cycle(
     // so the removal waits until the rerun has met the torrent and recorded it.
     // A command whose add got no answer is the unconfirmed case again; that
     // holds the removal of the first cycle after it.
-    if panicked > 0 {
+    if collect_folder.is_none() {
+        // The selected items were not recorded, so a torrent for one of them
+        // (an older add, or the legacy cron's) could look like a departed one.
+        println!("No collect folder is set; leaving Transmission's torrents alone");
+    } else if panicked > 0 {
         println!(
             "{panicked} item(s) ended with an internal error; \
              leaving Transmission's torrents alone this cycle"
@@ -445,6 +477,12 @@ pub async fn run_cycle(
         report.excluded,
         report.removed.len()
     );
+    if report.waiting_for_collect_folder > 0 {
+        println!(
+            "{} item(s) wait for the collect folder to be set",
+            report.waiting_for_collect_folder
+        );
+    }
 
     Ok(report)
 }

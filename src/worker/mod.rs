@@ -8,6 +8,18 @@
 //! ([`crate::store::history`]). The Transmission handling is the legacy
 //! binary's, shared through [`crate::transmission`].
 //!
+//! # The collect folder
+//!
+//! Every torrent is saved under the app's collect folder
+//! ([`crate::store::settings`]) plus its rule's directory. While no collect
+//! folder is set the worker has nowhere to save anything: it still reads the
+//! feeds and records the items no rule picks, but the items a rule picked are
+//! neither added nor recorded (the cycle counts them as
+//! `waiting_for_collect_folder`), and departed torrents are left alone. The
+//! next cycle after the folder is chosen judges them as new. Recording them as
+//! `add_failed` instead would pile up failures that are not failures and need
+//! a retry per item.
+//!
 //! # Exclusivity
 //!
 //! Two layers keep two workers from running the same cycle:
@@ -76,6 +88,7 @@ use crate::{
         channels::ChannelStore,
         commands::{CommandError, CommandStore},
         history::{HistoryError, HistoryStore, Millis},
+        settings::SettingsStore,
         Db,
     },
     transmission::{Redactor, RenamePolicy},
@@ -160,6 +173,7 @@ impl Worker {
             commands: CommandStore::new(db.clone()),
             ctx: CycleContext {
                 channels: ChannelStore::new(db.clone()),
+                settings: SettingsStore::new(db.clone()),
                 history: HistoryStore::new(db),
                 transmission_url: env.transmission_url.clone(),
                 transmission_http: crate::transmission::http_client(

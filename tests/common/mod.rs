@@ -36,12 +36,19 @@ use transmission_rss::{
     store::{
         channels::{ChannelInput, ChannelStore, ChannelWithRules, RuleInput},
         history::{HistoryItem, HistoryQuery, HistoryStore, MAX_PAGE_SIZE},
+        settings::SettingsStore,
         Db,
     },
     transmission::RenamePolicy,
     web::AppState,
     worker::{lock_path_for, Worker, WorkerEnv},
 };
+
+/// The collect folder every harness starts with. Test channels are given by
+/// the folder they used to have as a base folder (`/media/anime`), which
+/// [`Harness::add_channel`] turns into a rule-directory prefix under it, so the
+/// save paths the tests expect stay the same text.
+pub const COLLECT_FOLDER: &str = "/media";
 
 pub const BOT_LABEL: &str = "managed:transmission-rss";
 pub const SESSION_ID: &str = "fake-session-id";
@@ -690,7 +697,18 @@ pub struct Harness {
 }
 
 impl Harness {
+    /// A harness whose collect folder is [`COLLECT_FOLDER`].
     pub async fn new() -> Harness {
+        let harness = Harness::without_collect_folder().await;
+        SettingsStore::new(harness.db.clone())
+            .put_collection(0, COLLECT_FOLDER.to_owned(), None)
+            .await
+            .unwrap();
+        harness
+    }
+
+    /// A harness on a database with no collect folder set, as a fresh one is.
+    pub async fn without_collect_folder() -> Harness {
         let dir = tempfile::tempdir().unwrap();
         let db = Db::open(dir.path().join("app.db")).await.unwrap();
         let feeds = FeedServer::start().await;
@@ -762,16 +780,29 @@ impl Harness {
 
     /// Adds a channel for one of the fake feeds. Every query value of the URL
     /// is secret, as for a channel added in the app.
+    ///
+    /// `base_dir` is the folder the channel's rules' directories are under, as
+    /// channels used to have: it must be [`COLLECT_FOLDER`] or inside it, and
+    /// what lies below the collect folder is put in front of each rule's
+    /// directory, so the rule saves to `base_dir` + directory as before.
     pub async fn add_channel(
         &self,
         feed_path: &str,
         base_dir: &str,
         excludes: &[&str],
-        rules: Vec<RuleInput>,
+        mut rules: Vec<RuleInput>,
     ) -> ChannelWithRules {
         let url = format!("{}?filter=1080p&token={SECRET}", self.feeds.url(feed_path));
-        let mut input = ChannelInput::new(url, base_dir);
+        let mut input = ChannelInput::new(url);
         input.excludes = excludes.iter().map(|s| s.to_string()).collect();
+        let below = std::path::Path::new(base_dir)
+            .strip_prefix(COLLECT_FOLDER)
+            .unwrap_or_else(|_| panic!("{base_dir} is not inside {COLLECT_FOLDER}"))
+            .to_string_lossy()
+            .into_owned();
+        for rule in &mut rules {
+            rule.directory = transmission_rss::folders::prefixed(&below, &rule.directory);
+        }
         self.channels
             .create_channel_with_rules(input, rules)
             .await

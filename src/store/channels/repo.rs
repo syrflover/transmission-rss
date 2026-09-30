@@ -17,7 +17,7 @@ use super::ChannelError;
 type Result<T> = std::result::Result<T, ChannelError>;
 
 const CHANNEL_COLUMNS: &str =
-    "id, position, version, url, base_dir, excludes, secret_query, past_search, name";
+    "id, position, version, url, excludes, secret_query, past_search, name";
 const RULE_COLUMNS: &str = "id, channel_id, position, version, match_text, regex, \
      case_insensitive, directory, episode, episode_auto, state";
 
@@ -49,11 +49,10 @@ fn channel_from_row(row: &Row<'_>) -> rusqlite::Result<Channel> {
         position: row.get(1)?,
         version: row.get(2)?,
         url: row.get(3)?,
-        base_dir: row.get(4)?,
-        excludes: string_list(row, 5)?,
-        secret_query: string_list(row, 6)?,
-        past_search: row.get(7)?,
-        name: row.get(8)?,
+        excludes: string_list(row, 4)?,
+        secret_query: string_list(row, 5)?,
+        past_search: row.get(6)?,
+        name: row.get(7)?,
     })
 }
 
@@ -139,13 +138,12 @@ fn insert_channel(tx: &Transaction<'_>, input: &ChannelInput) -> Result<String> 
         |r| r.get(0),
     )?;
     tx.execute(
-        "INSERT INTO channels (id, position, url, base_dir, excludes, secret_query, past_search, name, version)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1)",
+        "INSERT INTO channels (id, position, url, excludes, secret_query, past_search, name, version)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1)",
         params![
             id,
             position,
             input.url,
-            input.base_dir,
             to_json(&input.excludes),
             to_json(&input.secret_query),
             input.past_search,
@@ -233,7 +231,7 @@ pub fn list_channels_with_rules(conn: &mut Connection) -> Result<Vec<ChannelWith
 }
 
 const UPDATE_CHANNEL: &str = "UPDATE channels
-     SET url = ?2, base_dir = ?3, excludes = ?4, secret_query = ?5, past_search = ?6, name = ?7,
+     SET url = ?2, excludes = ?3, secret_query = ?4, past_search = ?5, name = ?6,
          version = version + 1
      WHERE id = ?1";
 
@@ -243,7 +241,6 @@ fn write_channel_fields(tx: &Transaction<'_>, id: &str, input: &ChannelInput) ->
         params![
             id,
             input.url,
-            input.base_dir,
             to_json(&input.excludes),
             to_json(&input.secret_query),
             input.past_search,

@@ -67,9 +67,17 @@ function ChannelCard({ channel, flow }: { channel: ChannelView; flow: ImportFlow
       <header className="flex flex-col gap-2 border-b border-hairline-soft px-4 py-3">
         <h4 className="m-0 text-sm font-bold break-all">{channel.url}</h4>
         <Facts>
-          <Labeled label="저장 폴더">{channel.directory}</Labeled>
+          <Labeled label="파일의 채널 폴더">{channel.directory}</Labeled>
           <Labeled label="파일의 규칙">{channel.rules.length}개</Labeled>
-          {existing ? <Labeled label="지금 규칙">{existing.rule_count}개</Labeled> : <Tag>새 채널</Tag>}
+          {channel.not_imported !== null ? (
+            <Tag icon={AlertIcon} tone="warn">
+              가져오지 않음
+            </Tag>
+          ) : existing ? (
+            <Labeled label="지금 규칙">{existing.rule_count}개</Labeled>
+          ) : (
+            <Tag>새 채널</Tag>
+          )}
         </Facts>
         {channel.excludes.length > 0 && (
           <Facts>
@@ -81,7 +89,9 @@ function ChannelCard({ channel, flow }: { channel: ChannelView; flow: ImportFlow
         )}
       </header>
       <div className="flex flex-col gap-3 px-4 py-3.5">
-        {existing ? (
+        {channel.not_imported !== null ? (
+          <p className="text-[13px] leading-relaxed text-text-secondary">{channel.not_imported}</p>
+        ) : existing ? (
           <>
             <fieldset className="m-0 min-w-0 border-0 p-0">
               <legend className="mb-2 p-0 text-[13px] font-bold text-text-primary">가져오는 방법</legend>
@@ -136,7 +146,7 @@ function RuleRow({ rule, no, replacing }: { rule: RuleView; no: number; replacin
           <RuleName phrase={rule.match} />
         </div>
         <Facts>
-          <Labeled label="저장 폴더">{rule.directory || "채널 폴더"}</Labeled>
+          <Labeled label="저장 폴더">{rule.directory || "수집 폴더"}</Labeled>
           <Labeled label="회차 변환">{signed(rule.episode)}</Labeled>
         </Facts>
         <Facts>
@@ -159,7 +169,8 @@ function RuleRow({ rule, no, replacing }: { rule: RuleView; no: number; replacin
 
 function RulesFold({ channel, flow }: { channel: ChannelView; flow: ImportFlow }) {
   const replacing = flow.choices[channel.index] === "replace";
-  const skipped = flow.choices[channel.index] === "skip";
+  const notImported = channel.not_imported !== null;
+  const skipped = flow.choices[channel.index] === "skip" || notImported;
   return (
     <details open className={cn(CARD, "group overflow-hidden", skipped && "opacity-70")}>
       <summary className="flex cursor-pointer list-none flex-wrap items-center gap-x-3 gap-y-1.5 px-4 py-3 [&::-webkit-details-marker]:hidden">
@@ -169,7 +180,7 @@ function RulesFold({ channel, flow }: { channel: ChannelView; flow: ImportFlow }
           <Labeled label="평가 순서">
             {channel.rules.length === 0 ? "규칙 없음" : `1번에서 ${channel.rules.length}번`}
           </Labeled>
-          {skipped && <Tag tone="pending">건너뜀</Tag>}
+          {notImported ? <Tag tone="warn">가져오지 않음</Tag> : skipped && <Tag tone="pending">건너뜀</Tag>}
         </Facts>
       </summary>
       {channel.rules.length > 0 && (
@@ -189,9 +200,11 @@ export function ReviewStep({ flow }: { flow: ImportFlow }) {
 
   const ruleCount = preview.channels.reduce((sum, channel) => sum + channel.rules.length, 0);
   const conflicts = preview.conflict_count;
+  const outside = preview.channels.filter((channel) => channel.not_imported !== null).length;
+  const { current: currentFolder, will_set: folderToSet } = preview.collect_folder;
   const counts = { replace: 0, add: 0, skip: 0 };
   for (const decision of Object.values(flow.choices)) counts[decision] += 1;
-  const fresh = preview.channels.length - conflicts;
+  const fresh = preview.channels.length - conflicts - outside;
 
   const summary =
     flow.undecided > 0 ? (
@@ -212,9 +225,34 @@ export function ReviewStep({ flow }: { flow: ImportFlow }) {
         가져와요.{" "}
         {conflicts > 0
           ? `지금 설정에 파일과 같은 주소의 채널이 ${conflicts}개 있어서, 그 채널마다 어떻게 가져올지 선택해 주세요. 나머지 채널은 묻지 않고 새로 추가해요.`
-          : "지금 같은 주소의 채널이 없어서 파일의 채널을 모두 새로 추가해요."}{" "}
+          : outside > 0
+            ? "지금 같은 주소의 채널이 없어서 가져올 채널은 모두 새로 추가해요."
+            : "지금 같은 주소의 채널이 없어서 파일의 채널을 모두 새로 추가해요."}{" "}
         채널 주소의 쿼리 값은 모두 비밀로 저장하고 화면에는 가려서 보여줘요.
       </Banner>
+
+      {folderToSet !== null && (
+        <Banner tone="calm" title="수집 폴더를 정해요">
+          아직 수집 폴더가 없어서 가져오면서 <b className="font-mono break-all text-text-primary">{folderToSet}</b>로
+          정해요. 가져온 규칙의 저장 폴더는 이 폴더 아래 경로로 바뀌어 저장되고, 받는 위치는 파일에서와 같아요.
+        </Banner>
+      )}
+      {currentFolder !== null && outside === 0 && preview.channels.length > 0 && (
+        <p className="text-[13px] leading-relaxed text-text-secondary">
+          수집 폴더는 <b className="font-mono break-all text-text-primary">{currentFolder}</b>예요. 그 안에 있는 채널
+          폴더는 규칙의 저장 폴더 앞에 남은 부분을 붙여 가져와요.
+        </p>
+      )}
+      {outside > 0 && (
+        <Banner tone="fail" role="status" title={`수집 폴더 밖의 채널 ${outside}개는 가져오지 않아요`}>
+          {currentFolder !== null ? (
+            <>
+              수집 폴더는 <b className="font-mono break-all text-text-primary">{currentFolder}</b>예요.{" "}
+            </>
+          ) : null}
+          채널의 까닭은 아래 채널 카드에 있어요. 나머지 채널은 그대로 가져와요.
+        </Banner>
+      )}
 
       {flow.applyError && (
         <Banner

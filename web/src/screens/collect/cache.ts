@@ -19,11 +19,15 @@ export const KEYS = {
   history: (filter: string) => `collect:history:${filter}`,
   /** The query string a tab had when it was left (the open rule, the history filter), for coming back to it. */
   search: (tab: string) => `collect:search:${tab}`,
+  /** The collect and archive folders (`/api/settings/collection`), shown by the settings list and its panel. */
+  collection: "settings:collection",
   /** How the rule list is sorted. */
   ruleSort: "collect:rule-sort",
 } as const;
 
 const HISTORY_PREFIX = "collect:history:";
+/** The last preview of each rule (`usePreview`). */
+const PREVIEW_PREFIX = "collect:preview:";
 
 /**
  * A channel was added, edited or deleted. The rule list carries the channels'
@@ -35,9 +39,20 @@ export function channelsChanged(): void {
   forgetPrefix(HISTORY_PREFIX);
 }
 
+/**
+ * The collect folder was set or changed. The rule list and the rule previews
+ * carry full save paths, and the status board says whether a folder is set.
+ */
+export function collectFolderChanged(): void {
+  forget(KEYS.rules);
+  forget(KEYS.status);
+  forgetPrefix(PREVIEW_PREFIX);
+}
+
 /** Channels were added or changed by a path that cannot say how (the legacy import). */
 export function everythingChanged(): void {
   forget(KEYS.channels);
+  collectFolderChanged();
   channelsChanged();
 }
 
@@ -52,6 +67,7 @@ export function ruleCountChanged(channelId: string, delta: number): void {
 export function withoutRule(list: RuleList, ruleId: string): RuleList {
   const gone = list.rules.find((r) => r.id === ruleId);
   return {
+    ...list,
     rules: list.rules.filter((r) => r.id !== ruleId),
     channels: list.channels.map((c) =>
       gone && c.id === gone.channel_id ? { ...c, rule_count: Math.max(0, c.rule_count - 1) } : c,

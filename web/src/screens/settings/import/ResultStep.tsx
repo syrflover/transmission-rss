@@ -24,6 +24,7 @@ export function ResultStep({ flow }: { flow: ImportFlow }) {
           <Labeled label="추가한 채널">{counts.channels_added}개</Labeled>
           <Labeled label="교체한 채널">{counts.channels_replaced}개</Labeled>
           <Labeled label="건너뛴 채널">{counts.channels_skipped}개</Labeled>
+          <Labeled label="가져오지 않은 채널">{counts.channels_not_imported}개</Labeled>
           <Labeled label="그대로 남은 채널">{counts.channels_unchanged}개</Labeled>
         </Facts>
         <Facts className="gap-y-2">
@@ -43,6 +44,17 @@ export function ResultStep({ flow }: { flow: ImportFlow }) {
               <b className="text-text-primary break-all">{channel.url}</b> 채널을 파일 내용으로 바꿨어요. 규칙{" "}
               {channel.kept_rules}개는 지금 규칙의 ID를 유지한 채 값만 바꿨고, {channel.added_rules}개를 새로 더했고,{" "}
               {channel.removed_rules.length}개를 없앴어요.
+            </li>
+          ))}
+          {result.collect_folder_set !== null && (
+            <li>
+              수집 폴더를 <b className="text-text-primary font-mono break-all">{result.collect_folder_set}</b>로
+              정했어요.
+            </li>
+          )}
+          {result.not_imported.map((channel) => (
+            <li key={channel.index}>
+              <b className="text-text-primary break-all">{channel.url}</b> 채널은 가져오지 않았어요. {channel.reason}
             </li>
           ))}
           {result.skipped.map((channel) => (

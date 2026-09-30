@@ -150,11 +150,32 @@ function ProblemsLink({ count, className }: { count: number; className?: string 
   );
 }
 
+/**
+ * Why nothing is being received: the worker adds no torrent until the app has
+ * a collect folder, and leaves the items as they are so they are received once
+ * it is set.
+ */
+function NoCollectFolder({ className }: { className?: string }) {
+  return (
+    <p
+      role="status"
+      data-testid="no-collect-folder"
+      className={cn("text-[13px] leading-normal font-semibold text-urgent", className)}
+    >
+      수집 폴더가 아직 없어서 새 항목을 받지 않고 있어요.{" "}
+      <Link to="/settings/collection" className="underline underline-offset-2">
+        설정에서 수집 폴더 정하기
+      </Link>
+    </p>
+  );
+}
+
 /** One line for phones: the numbers that matter, in the order of the board. */
 function summaryOf(board: Board): string {
   const feeds = board.channels.length === 0 ? "채널 없음" : `RSS ${board.channels.filter((c) => c.ok === true).length}/${board.channels.length}`;
   const t = board.transmission;
   return [
+    ...(board.collect_folder_set ? [] : ["수집 폴더 없음"]),
     feeds,
     `7일 ${board.received.total}개`,
     t ? `받는 중 ${t.downloading} · 시딩 ${t.seeding}` : "Transmission 아직 없음",
@@ -211,6 +232,7 @@ export function StatusBoard() {
       </div>
 
       <div id={panelId} className={cn("px-4 py-3.5", "max-[720px]:border-t max-[720px]:border-hairline-soft", !open && "max-[720px]:hidden")}>
+        {board && !board.collect_folder_set && <NoCollectFolder className="mb-3" />}
         {body}
         {failed && board && <p className="mt-2 text-xs text-urgent">최신 상태를 불러오지 못해 이전 값을 보여줘요.</p>}
       </div>

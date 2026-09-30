@@ -32,15 +32,26 @@ export interface ChannelView {
   index: number;
   /** Masked: every query value is `***`. */
   url: string;
+  /** The folder the file names for the channel, as written. */
   directory: string;
+  /** Why the channel is not imported (its folder is outside the collect folder); null when it is. */
+  not_imported: string | null;
   excludes: string[];
   rules: RuleView[];
   existing: ExistingView | null;
 }
 
+export interface CollectFolderView {
+  /** The collect folder now; null when none is set. Sent back with the apply. */
+  current: string | null;
+  /** The folder this import sets because none is set yet. */
+  will_set: string | null;
+}
+
 export interface Preview {
   channels: ChannelView[];
   conflict_count: number;
+  collect_folder: CollectFolderView;
 }
 
 export type Decision = "replace" | "add" | "skip";
@@ -64,10 +75,14 @@ export interface ApplyResult {
     removed_rules: RemovedRule[];
   }[];
   skipped: { index: number; url: string }[];
+  not_imported: { index: number; url: string; reason: string }[];
+  /** The collect folder this import set; null when it changed none. */
+  collect_folder_set: string | null;
   counts: {
     channels_added: number;
     channels_replaced: number;
     channels_skipped: number;
+    channels_not_imported: number;
     channels_unchanged: number;
     rules_added: number;
     rules_kept: number;

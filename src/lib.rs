@@ -1,6 +1,7 @@
 #[cfg(feature = "anissia")]
 pub mod anissia;
 pub mod config;
+pub mod folders;
 pub mod import;
 pub mod rss;
 pub mod rule;

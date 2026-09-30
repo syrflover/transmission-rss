@@ -24,6 +24,7 @@ pub mod error;
 pub mod history_api;
 pub mod import_api;
 pub mod rules_api;
+pub mod settings_api;
 pub mod state;
 pub mod status_api;
 

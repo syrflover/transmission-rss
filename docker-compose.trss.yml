@@ -19,7 +19,7 @@ x-trss: &trss
   volumes:
     - ${TRSS_DATA_DIR:-./data}:/data
     # The media folder at the same path Transmission sees it, read-only: save
-    # folders are checked for links leading out of a channel's base folder,
+    # folders are checked for links leading out of the collect folder,
     # and Transmission's folder names are compared as written.
     - ${MEDIA_DIR:?Set MEDIA_DIR in .env}:/downloads:ro
   logging:

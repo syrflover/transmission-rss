@@ -58,11 +58,7 @@ impl App {
 
     async fn create(&self, url: &str) -> Value {
         let (status, text, json) = self
-            .call(
-                Method::POST,
-                "/api/channels",
-                Some(json!({ "url": url, "base_dir": "/media" })),
-            )
+            .call(Method::POST, "/api/channels", Some(json!({ "url": url })))
             .await;
         assert_eq!(status, StatusCode::CREATED, "{text}");
         json
@@ -77,7 +73,6 @@ impl App {
         let mut body = json!({
             "version": channel["version"],
             "url": channel["edit_url"],
-            "base_dir": channel["base_dir"],
             "excludes": channel["excludes"],
             "secret": secret_flags(channel),
             "past_search": channel["past_search"],
@@ -138,7 +133,7 @@ async fn the_name_is_optional_trimmed_and_returned() {
         .call(
             Method::POST,
             "/api/channels",
-            Some(json!({ "url": url, "base_dir": "/media", "name": "   " })),
+            Some(json!({ "url": url, "name": "   " })),
         )
         .await;
     assert_eq!(status, StatusCode::CREATED);
@@ -148,7 +143,7 @@ async fn the_name_is_optional_trimmed_and_returned() {
         .call(
             Method::POST,
             "/api/channels",
-            Some(json!({ "url": url, "base_dir": "/media", "name": "  주간 애니 " })),
+            Some(json!({ "url": url, "name": "  주간 애니 " })),
         )
         .await;
     assert_eq!(status, StatusCode::CREATED);
@@ -159,7 +154,9 @@ async fn the_name_is_optional_trimmed_and_returned() {
 
     // An edit that keeps the name and leaves the secret blank changes neither
     // the name nor the stored secret.
-    let (status, text, kept) = app.put(&named, json!({ "base_dir": "/other" })).await;
+    let (status, text, kept) = app
+        .put(&named, json!({ "past_search": "[Sub] {match}" }))
+        .await;
     assert_eq!(status, StatusCode::OK, "{text}");
     assert_eq!(kept["name"], "주간 애니");
     assert_eq!(app.stored(id).await.url, url);
@@ -191,7 +188,7 @@ async fn an_unusable_name_is_refused_without_echoing_the_request() {
             .call(
                 Method::POST,
                 "/api/channels",
-                Some(json!({ "url": url, "base_dir": "/media", "name": name })),
+                Some(json!({ "url": url, "name": name })),
             )
             .await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
@@ -210,7 +207,7 @@ async fn a_new_channel_masks_every_query_value_in_every_response() {
         .call(
             Method::POST,
             "/api/channels",
-            Some(json!({ "url": url, "base_dir": "/media", "excludes": ["Batch", " "], "past_search": "[Sub] {match} 1080p" })),
+            Some(json!({ "url": url, "excludes": ["Batch", " "], "past_search": "[Sub] {match} 1080p" })),
         )
         .await;
     assert_eq!(status, StatusCode::CREATED);
@@ -273,7 +270,6 @@ async fn create_can_start_a_name_as_not_secret() {
             "/api/channels",
             Some(json!({
                 "url": format!("https://feed.example/rss?r=1080&token={TOKEN}"),
-                "base_dir": "/media",
                 "secret": { "r": false },
             })),
         )
@@ -521,19 +517,19 @@ async fn a_stale_save_conflicts_and_shows_the_current_masked_value() {
         .create(&format!("https://feed.example/rss?token={TOKEN}"))
         .await;
     // Another screen saves first.
-    let (status, _, _) = app.put(&created, json!({ "base_dir": "/other" })).await;
+    let (status, _, _) = app.put(&created, json!({ "name": "Other" })).await;
     assert_eq!(status, StatusCode::OK);
 
     let (status, text, json) = app
         .put(
             &created,
-            json!({ "base_dir": "/mine", "url": format!("https://feed.example/rss?token={OTHER}") }),
+            json!({ "name": "Mine", "url": format!("https://feed.example/rss?token={OTHER}") }),
         )
         .await;
     assert_eq!(status, StatusCode::CONFLICT, "{text}");
     assert_no_secret(&text);
     assert_eq!(json["error"], "conflict");
-    assert_eq!(json["current"]["base_dir"], "/other");
+    assert_eq!(json["current"]["name"], "Other");
     assert_eq!(
         json["current"]["version"],
         created["version"].as_i64().unwrap() + 1
@@ -544,16 +540,18 @@ async fn a_stale_save_conflicts_and_shows_the_current_masked_value() {
     );
 
     let stored = app.stored(created["id"].as_str().unwrap()).await;
-    assert_eq!(stored.base_dir, "/other", "the stale save changed nothing");
+    assert_eq!(
+        stored.name.as_deref(),
+        Some("Other"),
+        "the stale save changed nothing"
+    );
     assert_eq!(
         stored.url,
         format!("https://feed.example/rss?token={TOKEN}")
     );
 
     // Sending the input again with the current version goes through.
-    let (status, _, _) = app
-        .put(&json["current"], json!({ "base_dir": "/mine" }))
-        .await;
+    let (status, _, _) = app.put(&json["current"], json!({ "name": "Mine" })).await;
     assert_eq!(status, StatusCode::OK);
 }
 
@@ -633,7 +631,7 @@ async fn delete_refuses_a_stale_version_or_a_changed_rule_count() {
     );
 
     // A save happened after the screen read the channel.
-    app.put(&channel, json!({ "base_dir": "/x" })).await;
+    app.put(&channel, json!({ "name": "X" })).await;
     let (status, _, _) = app
         .call(
             Method::DELETE,
@@ -672,20 +670,22 @@ async fn delete_needs_both_numbers_and_a_real_channel() {
 async fn invalid_input_is_a_korean_400_that_does_not_echo_the_request() {
     let app = App::new();
     let cases = [
-        json!({ "url": format!("ftp://feed.example/rss?token={TOKEN}"), "base_dir": "/m" }),
-        json!({ "url": format!("not a url {TOKEN}"), "base_dir": "/m" }),
-        json!({ "url": format!("https://feed.example/rss?token={TOKEN}"), "base_dir": "  " }),
-        json!({ "url": format!("https://feed.example/rss?token={TOKEN}"), "base_dir": "/m", "nope": TOKEN }),
-        json!({ "url": 42, "base_dir": TOKEN }),
-        json!({ "base_dir": TOKEN }),
+        json!({ "url": format!("ftp://feed.example/rss?token={TOKEN}") }),
+        json!({ "url": format!("not a url {TOKEN}") }),
+        // A channel has no save folder of its own any more; the collect folder
+        // is the app's. A body that still names one is not accepted.
+        json!({ "url": format!("https://feed.example/rss?token={TOKEN}"), "base_dir": "/m" }),
+        json!({ "url": format!("https://feed.example/rss?token={TOKEN}"), "nope": TOKEN }),
+        json!({ "url": 42, "name": TOKEN }),
+        json!({ "name": TOKEN }),
         // serde echoes the offending value for type errors, so these would
         // leak if a rejection's text ever reached the response.
-        json!({ "url": format!("https://feed.example/rss?token={TOKEN}"), "base_dir": "/m", "excludes": TOKEN }),
-        json!({ "url": format!("https://feed.example/rss?token={TOKEN}"), "base_dir": "/m", "secret": { "token": TOKEN } }),
-        json!({ "url": format!("https://feed.example/rss?token={TOKEN}"), "base_dir": "/m", TOKEN: 1 }),
+        json!({ "url": format!("https://feed.example/rss?token={TOKEN}"), "excludes": TOKEN }),
+        json!({ "url": format!("https://feed.example/rss?token={TOKEN}"), "secret": { "token": TOKEN } }),
+        json!({ "url": format!("https://feed.example/rss?token={TOKEN}"), TOKEN: 1 }),
         // `Url::parse` drops a newline that the masking would still see, so
         // a URL like this could name the query differently for the two.
-        json!({ "url": format!("https://feed.example/rss?to\nken={TOKEN}"), "base_dir": "/m" }),
+        json!({ "url": format!("https://feed.example/rss?to\nken={TOKEN}") }),
     ];
     for body in cases {
         let (status, text, json) = app
@@ -749,7 +749,6 @@ async fn a_bad_version_on_save_does_not_echo_the_request() {
             &format!("/api/channels/{id}"),
             Some(json!({
                 "url": created["edit_url"],
-                "base_dir": "/media",
                 "version": TOKEN,
             })),
         )
@@ -769,7 +768,7 @@ async fn unknown_channel_is_a_404_for_read_and_save() {
         .call(
             Method::PUT,
             "/api/channels/nope",
-            Some(json!({ "version": 1, "url": "https://a.example/", "base_dir": "/m" })),
+            Some(json!({ "version": 1, "url": "https://a.example/" })),
         )
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
@@ -783,7 +782,6 @@ fn stored_channel(url: &str, secret: &[&str]) -> Channel {
         position: 0,
         version: 1,
         url: url.into(),
-        base_dir: "/m".into(),
         excludes: vec![],
         secret_query: secret.iter().map(|s| s.to_string()).collect(),
         past_search: None,

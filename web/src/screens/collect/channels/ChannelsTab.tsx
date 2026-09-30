@@ -9,6 +9,7 @@ import { PlusIcon } from "../icons";
 import { channelTitle, listChannels, type Channel } from "./api";
 import { ChannelCard } from "./ChannelCard";
 import { ChannelEditor } from "./ChannelEditor";
+import { CollectFolderNote } from "./CollectFolderNote";
 import { btnAction, btnNeutral } from "./styles";
 
 /** The 채널 tab: RSS channels with their masked URLs, and adding, editing and deleting them. */
@@ -46,6 +47,8 @@ export function ChannelsTab() {
           </Button>
         )}
       </div>
+
+      <CollectFolderNote className="-mt-1" />
 
       <p role="status" className="text-[13px] font-semibold text-text-secondary empty:hidden">
         {notice}

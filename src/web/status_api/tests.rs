@@ -90,20 +90,19 @@ async fn an_empty_installation_has_no_snapshots_and_seven_zero_days() {
 #[tokio::test]
 async fn channels_show_the_workers_last_read_and_a_channel_never_read_is_unknown() {
     let (state, router) = app();
-    let mut named = ChannelInput::new("https://feed-a.test/rss?token=SECRETVALUE99", "/media");
+    let mut named = ChannelInput::new("https://feed-a.test/rss?token=SECRETVALUE99");
     named.name = Some("주간 애니".into());
     let a = state.channels.create_channel(named).await.unwrap();
     let b = state
         .channels
         .create_channel(ChannelInput::new(
             "https://feed-b.test/rss?token=SECRETVALUE99",
-            "/media",
         ))
         .await
         .unwrap();
     let c = state
         .channels
-        .create_channel(ChannelInput::new("https://feed-c.test/rss", "/media"))
+        .create_channel(ChannelInput::new("https://feed-c.test/rss"))
         .await
         .unwrap();
     let all = vec![a.id.clone(), b.id.clone(), c.id.clone()];

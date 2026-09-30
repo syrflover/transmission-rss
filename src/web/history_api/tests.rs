@@ -48,10 +48,7 @@ impl App {
     }
 
     async fn channel(&self, host: &str, name: Option<&str>) -> Channel {
-        let mut input = ChannelInput::new(
-            format!("https://{host}/rss?token={TOKEN}"),
-            format!("/media/{host}"),
-        );
+        let mut input = ChannelInput::new(format!("https://{host}/rss?token={TOKEN}"));
         input.name = name.map(str::to_owned);
         self.state.channels.create_channel(input).await.unwrap()
     }

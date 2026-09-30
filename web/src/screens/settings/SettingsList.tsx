@@ -1,15 +1,37 @@
 import { Fragment } from "react";
 import { Link } from "react-router-dom";
 
+import { useCached } from "@/lib/cached";
 import { cn } from "@/lib/utils";
+import { KEYS } from "@/screens/collect/cache";
 
+import { collectionSummary, loadCollection, type Collection } from "./collection/api";
 import { ChevronIcon } from "./icons";
 import { SETTINGS_ITEMS, type SettingsItem, type SettingsItemId } from "./items";
 import { Facts, Tag } from "./parts";
 import type { ImportFlow } from "./import/useImportFlow";
 
+/** The collect folder row: the two folders' names, or that none is chosen yet. */
+function CollectionFacts() {
+  // Shared with the panel: a save there updates this row at once.
+  const { data } = useCached<Collection>(KEYS.collection, loadCollection, "");
+  const summary = data ? collectionSummary(data) : null;
+  return (
+    <Facts>
+      {data === undefined ? (
+        <Tag>&nbsp;</Tag>
+      ) : summary === null ? (
+        <Tag tone="warn">정하지 않음</Tag>
+      ) : (
+        <span className="min-w-0 text-[13px] break-words text-text-secondary">{summary}</span>
+      )}
+    </Facts>
+  );
+}
+
 /** What the row shows without opening the item: its current value. */
 function RowFacts({ id, importFlow }: { id: SettingsItemId; importFlow: ImportFlow }) {
+  if (id === "collection") return <CollectionFacts />;
   if (id === "import") {
     return (
       <Facts>

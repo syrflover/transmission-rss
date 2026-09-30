@@ -18,8 +18,14 @@ struct App {
 }
 
 impl App {
-    fn new() -> App {
+    /// An app whose collect folder is `/media`.
+    async fn new() -> App {
         let state = AppState::new(Db::open_blocking(":memory:").unwrap());
+        state
+            .settings
+            .put_collection(0, "/media".to_owned(), None)
+            .await
+            .unwrap();
         let router =
             Router::new().nest("/api", crate::web::api::router().with_state(state.clone()));
         App { state, router }
@@ -59,8 +65,7 @@ impl App {
         excludes: &[&str],
         rules: &[(&str, &str)],
     ) -> ChannelWithRules {
-        let mut input =
-            ChannelInput::new(format!("https://{host}/rss?token=SECRETVALUE99"), "/media");
+        let mut input = ChannelInput::new(format!("https://{host}/rss?token=SECRETVALUE99"));
         input.excludes = excludes.iter().map(|s| s.to_string()).collect();
         let rules = rules
             .iter()
@@ -167,7 +172,7 @@ fn kinds(preview: &Value) -> Vec<(String, String)> {
 
 #[tokio::test]
 async fn the_list_holds_the_rules_of_every_channel_with_their_check_order() {
-    let app = App::new();
+    let app = App::new().await;
     let a = app
         .channel("a.test", &[], &[("Alpha", "Alpha"), ("Beta", "Beta")])
         .await;
@@ -203,7 +208,7 @@ async fn the_list_holds_the_rules_of_every_channel_with_their_check_order() {
 async fn reading_the_list_changes_nothing_and_the_order_does_not_depend_on_it() {
     // The screen sorts the list by title in the browser; that is a display
     // matter and never a request. Reading twice leaves order and versions alone.
-    let app = App::new();
+    let app = App::new().await;
     let a = app
         .channel(
             "a.test",
@@ -220,7 +225,7 @@ async fn reading_the_list_changes_nothing_and_the_order_does_not_depend_on_it() 
 
 #[tokio::test]
 async fn last_received_is_the_latest_time_the_rule_got_an_item_into_transmission() {
-    let app = App::new();
+    let app = App::new().await;
     let a = app
         .channel("a.test", &[], &[("Alpha", "a"), ("Beta", "b")])
         .await;
@@ -259,7 +264,7 @@ async fn last_received_is_the_latest_time_the_rule_got_an_item_into_transmission
 
 #[tokio::test]
 async fn overlap_is_shown_only_on_the_rule_an_earlier_rule_shadows() {
-    let app = App::new();
+    let app = App::new().await;
     let a = app
         .channel(
             "a.test",
@@ -287,7 +292,7 @@ async fn overlap_is_shown_only_on_the_rule_an_earlier_rule_shadows() {
 
 #[tokio::test]
 async fn an_excluded_item_and_an_archived_rule_make_no_overlap() {
-    let app = App::new();
+    let app = App::new().await;
     let a = app
         .channel("a.test", &["[Batch]"], &[("Show", "one"), ("Show", "two")])
         .await;
@@ -317,7 +322,7 @@ async fn an_excluded_item_and_an_archived_rule_make_no_overlap() {
 
 #[tokio::test]
 async fn a_rule_is_created_at_the_end_saved_and_deleted_with_versions() {
-    let app = App::new();
+    let app = App::new().await;
     let a = app.channel("a.test", &[], &[("Alpha", "a")]).await;
 
     let (status, text, created) = app
@@ -381,7 +386,7 @@ async fn a_rule_is_created_at_the_end_saved_and_deleted_with_versions() {
 
 #[tokio::test]
 async fn the_second_save_from_an_old_version_is_a_conflict_that_shows_the_saved_rule() {
-    let app = App::new();
+    let app = App::new().await;
     let a = app.channel("a.test", &[], &[("Alpha", "a")]).await;
     let rule = app.list().await["rules"][0].clone();
     let uri = format!("/api/rules/{}", rule["id"].as_str().unwrap());
@@ -435,7 +440,7 @@ async fn the_second_save_from_an_old_version_is_a_conflict_that_shows_the_saved_
 
 #[tokio::test]
 async fn a_delete_from_an_old_version_is_a_conflict() {
-    let app = App::new();
+    let app = App::new().await;
     let a = app.channel("a.test", &[], &[("Alpha", "a")]).await;
     let rule = app.list().await["rules"][0].clone();
     let uri = format!("/api/rules/{}", rule["id"].as_str().unwrap());
@@ -460,7 +465,7 @@ async fn a_delete_from_an_old_version_is_a_conflict() {
 
 #[tokio::test]
 async fn the_history_survives_the_deletion_of_its_rule() {
-    let app = App::new();
+    let app = App::new().await;
     let a = app.channel("a.test", &[], &[("Alpha", "a")]).await;
     let rule = &a.rules[0];
     app.record_as(
@@ -487,7 +492,7 @@ async fn the_history_survives_the_deletion_of_its_rule() {
 
 #[tokio::test]
 async fn an_invalid_regex_is_refused_with_a_sentence_and_nothing_is_saved() {
-    let app = App::new();
+    let app = App::new().await;
     let a = app.channel("a.test", &[], &[("Alpha", "a")]).await;
     let rule = app.list().await["rules"][0].clone();
     let uri = format!("/api/rules/{}", rule["id"].as_str().unwrap());
@@ -552,7 +557,7 @@ async fn an_invalid_regex_is_refused_with_a_sentence_and_nothing_is_saved() {
 
 #[tokio::test]
 async fn an_absolute_save_folder_and_a_missing_rule_are_refused() {
-    let app = App::new();
+    let app = App::new().await;
     let a = app.channel("a.test", &[], &[("Alpha", "a")]).await;
     let rule = app.list().await["rules"][0].clone();
     let uri = format!("/api/rules/{}", rule["id"].as_str().unwrap());
@@ -579,7 +584,7 @@ async fn an_absolute_save_folder_and_a_missing_rule_are_refused() {
 
 #[tokio::test]
 async fn a_rule_cannot_move_to_another_channel() {
-    let app = App::new();
+    let app = App::new().await;
     let a = app.channel("a.test", &[], &[("Alpha", "a")]).await;
     let b = app.channel("b.test", &[], &[]).await;
     let rule = app.list().await["rules"][0].clone();
@@ -606,7 +611,7 @@ async fn a_rule_cannot_move_to_another_channel() {
 
 #[tokio::test]
 async fn the_episode_offset_stays_automatic_only_until_the_user_changes_it() {
-    let app = App::new();
+    let app = App::new().await;
     let a = app.channel("a.test", &[], &[]).await;
     app.state
         .channels
@@ -647,7 +652,7 @@ async fn the_episode_offset_stays_automatic_only_until_the_user_changes_it() {
 
 #[tokio::test]
 async fn reordering_takes_the_versioned_list_and_changes_the_check_order() {
-    let app = App::new();
+    let app = App::new().await;
     let a = app
         .channel("a.test", &[], &[("One", "1"), ("Two", "2"), ("Three", "3")])
         .await;
@@ -690,7 +695,7 @@ async fn reordering_takes_the_versioned_list_and_changes_the_check_order() {
 
 #[tokio::test]
 async fn a_stale_order_is_a_conflict_that_carries_the_current_rules() {
-    let app = App::new();
+    let app = App::new().await;
     let a = app
         .channel("a.test", &[], &[("One", "1"), ("Two", "2")])
         .await;
@@ -755,7 +760,7 @@ fn edit(rule: &Value, patch: Value) -> Value {
 
 #[tokio::test]
 async fn widening_a_phrase_shows_the_items_an_earlier_rule_takes_and_saving_marks_the_overlap() {
-    let app = App::new();
+    let app = App::new().await;
     let a = app
         .channel(
             "a.test",
@@ -839,7 +844,7 @@ async fn widening_a_phrase_shows_the_items_an_earlier_rule_takes_and_saving_mark
 
 #[tokio::test]
 async fn an_invalid_regex_is_shown_in_the_preview_and_other_rules_still_preview() {
-    let app = App::new();
+    let app = App::new().await;
     let a = app
         .channel("a.test", &[], &[("Alpha", "Alpha"), ("Beta", "Beta")])
         .await;
@@ -880,7 +885,7 @@ async fn an_invalid_regex_is_shown_in_the_preview_and_other_rules_still_preview(
 
 #[tokio::test]
 async fn the_channel_excludes_and_the_position_in_the_order_apply_to_the_preview() {
-    let app = App::new();
+    let app = App::new().await;
     let a = app
         .channel(
             "a.test",
@@ -943,7 +948,7 @@ async fn the_channel_excludes_and_the_position_in_the_order_apply_to_the_preview
 
 #[tokio::test]
 async fn a_rule_not_saved_yet_previews_as_the_last_rule_and_an_archived_one_as_collecting() {
-    let app = App::new();
+    let app = App::new().await;
     let a = app.channel("a.test", &[], &[("Show", "first")]).await;
     app.record(&a.channel, 1_000, &["Show - 01", "New - 01"])
         .await;
@@ -1004,7 +1009,7 @@ async fn a_rule_not_saved_yet_previews_as_the_last_rule_and_an_archived_one_as_c
 
 #[tokio::test]
 async fn titles_with_the_secret_mask_are_flagged() {
-    let app = App::new();
+    let app = App::new().await;
     let a = app.channel("a.test", &[], &[("Show", "first")]).await;
     app.record(&a.channel, 1_000, &["Show - 01", "Show *** search"])
         .await;
@@ -1027,7 +1032,7 @@ async fn titles_with_the_secret_mask_are_flagged() {
 
 #[tokio::test]
 async fn a_long_preview_lists_the_newest_matches_and_counts_all_of_them() {
-    let app = App::new();
+    let app = App::new().await;
     let a = app.channel("a.test", &[], &[("Show", "first")]).await;
     let titles: Vec<String> = (0..130).map(|n| format!("Show - {n:03}")).collect();
     let refs: Vec<&str> = titles.iter().map(String::as_str).collect();
@@ -1055,8 +1060,8 @@ async fn the_preview_agrees_with_the_worker_mapping_for_every_recorded_title() {
     // The preview and the worker judge through `ChannelPlan`. This pins that the
     // preview's per-item answer is that plan's answer for the same items and
     // settings, including archived rules, regexes and excludes.
-    let app = App::new();
-    let mut input = ChannelInput::new("https://a.test/rss?token=SECRETVALUE99", "/media/anime");
+    let app = App::new().await;
+    let mut input = ChannelInput::new("https://a.test/rss?token=SECRETVALUE99");
     input.excludes = vec!["[Batch]".into(), "(720p)".into()];
     let rules = vec![
         RuleInput {
@@ -1118,8 +1123,17 @@ async fn the_preview_agrees_with_the_worker_mapping_for_every_recorded_title() {
         .await
         .unwrap()
         .items;
-    let preview = build_preview(&cwr, Some(&last.id), &last.to_input(), None, &items).unwrap();
-    let plan = ChannelPlan::new(cwr.clone());
+    let collect = std::path::Path::new("/media");
+    let preview = build_preview(
+        collect,
+        &cwr,
+        Some(&last.id),
+        &last.to_input(),
+        None,
+        &items,
+    )
+    .unwrap();
+    let plan = ChannelPlan::new(cwr.clone(), collect);
     let mut expected_mine = 0;
     let mut expected_earlier = 0;
     for item in &items {

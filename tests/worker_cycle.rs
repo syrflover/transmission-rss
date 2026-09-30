@@ -179,10 +179,10 @@ async fn items_differing_only_in_a_secret_named_query_value_are_all_added_and_re
         magnet('3', "Show%20-%2003"),
     );
     h.feeds.set_xml("ids", &xml);
-    let input = transmission_rss::store::channels::ChannelInput::new(
-        format!("{}?id=0&token={SECRET}", h.feeds.url("ids")),
-        "/media/p",
-    );
+    let input = transmission_rss::store::channels::ChannelInput::new(format!(
+        "{}?id=0&token={SECRET}",
+        h.feeds.url("ids")
+    ));
     assert!(input.secret_query.contains(&"id".to_owned()));
     h.channels
         .create_channel_with_rules(input, vec![rule("Show", "Show/Season 01")])
@@ -915,7 +915,7 @@ async fn edits_made_during_a_cycle_apply_from_the_next_cycle() {
             rule0.version,
             &channel.channel.id,
             RuleInput {
-                directory: "Sayonara Lara/Season 09".into(),
+                directory: "anime/Sayonara Lara/Season 09".into(),
                 ..rule0.to_input()
             },
         )
@@ -1161,7 +1161,7 @@ async fn secret_query_values_never_reach_history() {
     let dead_url = format!("http://{dead}/feed?token={SECRET}");
     h.channels
         .create_channel(transmission_rss::store::channels::ChannelInput::new(
-            dead_url, "/media/y",
+            dead_url,
         ))
         .await
         .unwrap();
@@ -1194,10 +1194,10 @@ async fn secrets_in_item_links_and_guids_are_masked_in_history_but_used_for_addi
         "cccc".repeat(10)
     );
     h.feeds.set_xml("private", &xml);
-    let mut input = transmission_rss::store::channels::ChannelInput::new(
-        format!("{}?passkey=PASSKEY-VALUE-123", h.feeds.url("private")),
-        "/media/p",
-    );
+    let mut input = transmission_rss::store::channels::ChannelInput::new(format!(
+        "{}?passkey=PASSKEY-VALUE-123",
+        h.feeds.url("private")
+    ));
     input.secret_query = vec!["passkey".into()];
     h.channels
         .create_channel_with_rules(input, vec![rule("Show", "Show/Season 01")])
@@ -1239,10 +1239,10 @@ async fn secret_values_are_masked_in_history_under_other_names_in_paths_and_enco
         "dddd".repeat(10)
     );
     h.feeds.set_xml("other-names", &xml);
-    let input = transmission_rss::store::channels::ChannelInput::new(
-        format!("{}?passkey={IN_URL}&r=1080", h.feeds.url("other-names")),
-        "/media/p",
-    );
+    let input = transmission_rss::store::channels::ChannelInput::new(format!(
+        "{}?passkey={IN_URL}&r=1080",
+        h.feeds.url("other-names")
+    ));
     h.channels
         .create_channel_with_rules(input, vec![rule("Show", "Show/Season 01")])
         .await

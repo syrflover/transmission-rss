@@ -39,17 +39,14 @@ fn rule(phrase: &str, directory: &str) -> RuleInput {
 
 fn import_channel(url: &str, rules: Vec<RuleInput>) -> ImportChannel {
     ImportChannel {
-        input: ChannelInput::new(url, "/media"),
+        input: ChannelInput::new(url),
         rules,
     }
 }
 
 async fn existing_channel(f: &Fixture, rules: Vec<RuleInput>) -> ChannelWithRules {
     f.store
-        .create_channel_with_rules(
-            ChannelInput::new("https://a.example/rss?token=t", "/old"),
-            rules,
-        )
+        .create_channel_with_rules(ChannelInput::new("https://a.example/rss?token=t"), rules)
         .await
         .unwrap()
 }
@@ -199,7 +196,7 @@ async fn adding_stores_no_name_and_replacing_writes_the_planned_name() {
 
     // A replacement writes the name the plan carries (the plan keeps the
     // existing one; see `build_actions`).
-    let mut named = ChannelInput::new("https://a.example/rss?token=t", "/old");
+    let mut named = ChannelInput::new("https://a.example/rss?token=t");
     named.name = Some("Kept".into());
     let a = f
         .store
@@ -258,7 +255,7 @@ async fn replacing_keeps_ids_of_matching_rules_and_reports_the_removed_ones() {
     let a = f
         .store
         .create_channel_with_rules(
-            ChannelInput::new("https://a.example/rss?token=t", "/old"),
+            ChannelInput::new("https://a.example/rss?token=t"),
             vec![
                 rule("Keep1", "old/keep1"),
                 rule("Gone1", "gone1"),
@@ -284,7 +281,7 @@ async fn replacing_keeps_ids_of_matching_rules_and_reports_the_removed_ones() {
     let file = ImportChannel {
         input: ChannelInput {
             excludes: vec!["[Batch]".into()],
-            ..ChannelInput::new("https://a.example/rss?token=new", "/new")
+            ..ChannelInput::new("https://a.example/rss?token=new")
         },
         rules: vec![
             RuleInput {

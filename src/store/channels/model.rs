@@ -17,8 +17,6 @@ pub const MASK: &str = "***";
 pub struct ChannelInput {
     /// Full URL with the original query values, secret ones included.
     pub url: String,
-    /// Base save directory for the channel's rules.
-    pub base_dir: String,
     /// Ordered exclude conditions.
     pub excludes: Vec<String>,
     /// Query names whose values are secret. Each must occur in `url`.
@@ -33,12 +31,11 @@ pub struct ChannelInput {
 impl ChannelInput {
     /// A new channel starts with every query value secret, so nothing leaks
     /// into an export before the user opts a value out.
-    pub fn new(url: impl Into<String>, base_dir: impl Into<String>) -> Self {
+    pub fn new(url: impl Into<String>) -> Self {
         let url = url.into();
         ChannelInput {
             secret_query: query_names(&url),
             url,
-            base_dir: base_dir.into(),
             excludes: Vec::new(),
             past_search: None,
             name: None,
@@ -68,9 +65,6 @@ impl ChannelInput {
         }
         let parsed = Url::parse(&self.url)
             .map_err(|_| ChannelError::Invalid("channel url is not a valid URL"))?;
-        if self.base_dir.is_empty() {
-            return Err(ChannelError::Invalid("channel base directory is empty"));
-        }
         let names = query_names(parsed.as_str());
         for (i, name) in self.secret_query.iter().enumerate() {
             if !names.contains(name) {
@@ -90,7 +84,6 @@ impl fmt::Debug for ChannelInput {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ChannelInput")
             .field("url", &mask_url(&self.url, &self.secret_query))
-            .field("base_dir", &self.base_dir)
             .field("excludes", &self.excludes)
             .field("secret_query", &self.secret_query)
             .field("past_search", &self.past_search)
@@ -107,7 +100,6 @@ pub struct Channel {
     pub position: i64,
     pub version: Version,
     pub url: String,
-    pub base_dir: String,
     pub excludes: Vec<String>,
     pub secret_query: Vec<String>,
     pub past_search: Option<String>,
@@ -126,7 +118,6 @@ impl Channel {
     pub fn to_input(&self) -> ChannelInput {
         ChannelInput {
             url: self.url.clone(),
-            base_dir: self.base_dir.clone(),
             excludes: self.excludes.clone(),
             secret_query: self.secret_query.clone(),
             past_search: self.past_search.clone(),
@@ -142,7 +133,6 @@ impl fmt::Debug for Channel {
             .field("position", &self.position)
             .field("version", &self.version)
             .field("url", &self.masked_url())
-            .field("base_dir", &self.base_dir)
             .field("excludes", &self.excludes)
             .field("secret_query", &self.secret_query)
             .field("past_search", &self.past_search)
@@ -184,7 +174,7 @@ pub struct RuleInput {
     pub r#match: Option<String>,
     pub regex: bool,
     pub case_insensitive: bool,
-    /// Save directory relative to the channel's base directory.
+    /// Save directory relative to the app's collect folder.
     pub directory: String,
     /// Episode offset handed to renaming; may be negative.
     pub episode: i64,
@@ -217,7 +207,7 @@ impl RuleInput {
         }
         if Path::new(&self.directory).is_absolute() {
             return Err(ChannelError::Invalid(
-                "rule directory must be relative to the channel directory",
+                "rule directory must be relative to the collect folder",
             ));
         }
         Ok(())

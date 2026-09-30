@@ -2,6 +2,12 @@
 //! same channels, rules and RSS sample. The real legacy binary is run against
 //! one fake Transmission; the worker, with the same channels and rules stored
 //! in its database, against another. Their Transmission requests are compared.
+//!
+//! The worker's side is set up the way a user would: the YAML goes through the
+//! import, which sets the collect folder from the file's two channel folders
+//! (`/media/anime` and `/media/other`, so `/media`) and puts what lies between
+//! it and each channel folder in front of that channel's rules. The worker must
+//! then save every torrent exactly where the legacy binary did.
 
 mod common;
 
@@ -10,8 +16,11 @@ use std::process::Command;
 use common::*;
 use tokio_util::sync::CancellationToken;
 use transmission_rss::{
-    config::ChannelConfig,
-    store::channels::{ChannelInput, RuleInput},
+    import::{
+        fit::{fit, Fit},
+        legacy,
+    },
+    store::channels::import::ImportAction,
     transmission::ITEM_LABEL_PREFIX,
     worker::TickOutcome,
 };
@@ -80,7 +89,7 @@ fn without_item_labels(calls: &[String]) -> Vec<String> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_worker_talks_to_transmission_like_the_legacy_binary() {
-    let h = Harness::new().await;
+    let h = Harness::without_collect_folder().await;
     let yaml = CHANNELS_YAML
         .replace("{FEED_A}", &h.feeds.url("feed-a"))
         .replace("{FEED_B}", &h.feeds.url("feed-b"));
@@ -108,28 +117,21 @@ async fn the_worker_talks_to_transmission_like_the_legacy_binary() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    // --- the worker, configured by the same channels and rules in its database ---
-    let configs: Vec<ChannelConfig> = yaml_serde::from_str(&yaml).expect("fixture yaml");
-    for config in &configs {
-        let mut input = ChannelInput::new(&config.url, config.directory.to_str().unwrap());
-        input.excludes = config.excludes.clone();
-        let rules = config
-            .rules
-            .iter()
-            .map(|rule| RuleInput {
-                r#match: Some(rule.r#match.clone()),
-                regex: rule.regex,
-                case_insensitive: rule.case_insensitive,
-                directory: rule.directory("").to_str().unwrap().to_owned(),
-                episode: rule.starts_episode_at as i64,
-                ..Default::default()
-            })
-            .collect();
-        h.channels
-            .create_channel_with_rules(input, rules)
-            .await
-            .unwrap();
-    }
+    // --- the worker, configured by the same file imported into its database ---
+    let fitted = fit(legacy::parse(&yaml).expect("fixture yaml"), None);
+    assert_eq!(fitted.collect_folder.as_deref(), Some("/media"));
+    let actions = fitted
+        .channels
+        .into_iter()
+        .map(|fit| match fit {
+            Fit::Import(channel) => ImportAction::Add(channel),
+            Fit::Outside(reason) => panic!("not imported: {reason}"),
+        })
+        .collect();
+    h.channels
+        .import_channels_setting_folder(actions, fitted.collect_folder)
+        .await
+        .unwrap();
     preload(&h.tr);
     let env = h.worker_env_with(&SESSION_ENV);
     let worker = h.worker_with(h.db.clone(), &env);

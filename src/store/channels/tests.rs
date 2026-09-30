@@ -56,10 +56,7 @@ async fn channel_with_four_rules(f: &Fixture) -> ChannelWithRules {
         .map(|i| rule(&format!("r{i}"), &format!("d{i}")))
         .collect();
     f.store
-        .create_channel_with_rules(
-            ChannelInput::new("https://example.com/rss?r=1080", "/media"),
-            rules,
-        )
+        .create_channel_with_rules(ChannelInput::new("https://example.com/rss?r=1080"), rules)
         .await
         .unwrap()
 }
@@ -68,11 +65,11 @@ async fn channel_with_four_rules(f: &Fixture) -> ChannelWithRules {
 async fn two_channels_five_rules_survive_reopen_with_every_field() {
     let f = fixture().await;
 
-    let mut input_a = ChannelInput::new("https://a.example/rss?r=1080&token=abc", "/media/a");
+    let mut input_a = ChannelInput::new("https://a.example/rss?r=1080&token=abc");
     input_a.excludes = vec!["[Batch]".into(), "HEVC".into()];
     input_a.secret_query = vec!["token".into()];
     input_a.past_search = Some("[SubsPlease] {match} 1080p".into());
-    let input_b = ChannelInput::new("https://b.example/feed", "/media/b");
+    let input_b = ChannelInput::new("https://b.example/feed");
 
     let a = f.store.create_channel(input_a.clone()).await.unwrap();
     let b = f.store.create_channel(input_b.clone()).await.unwrap();
@@ -159,7 +156,7 @@ async fn two_channels_five_rules_survive_reopen_with_every_field() {
 async fn channel_name_is_trimmed_and_blank_means_unnamed() {
     let f = fixture().await;
 
-    let mut input = ChannelInput::new("https://a.example/rss", "/m");
+    let mut input = ChannelInput::new("https://a.example/rss");
     input.name = Some("  Weekly anime \t".into());
     let created = f.store.create_channel(input).await.unwrap();
     assert_eq!(created.name.as_deref(), Some("Weekly anime"));
@@ -172,7 +169,7 @@ async fn channel_name_is_trimmed_and_blank_means_unnamed() {
     // Unnamed by default.
     let plain = f
         .store
-        .create_channel(ChannelInput::new("https://b.example/rss", "/m"))
+        .create_channel(ChannelInput::new("https://b.example/rss"))
         .await
         .unwrap();
     assert_eq!(plain.name, None);
@@ -210,7 +207,7 @@ async fn second_update_with_the_same_version_conflicts_and_changes_nothing() {
     let f = fixture().await;
     let channel = f
         .store
-        .create_channel(ChannelInput::new("https://x.example/rss", "/m"))
+        .create_channel(ChannelInput::new("https://x.example/rss"))
         .await
         .unwrap();
     let mut r = f
@@ -259,16 +256,16 @@ async fn stale_channel_update_conflicts_across_handles() {
     let other = ChannelStore::new(Db::open(&f.path).await.unwrap());
     let channel = f
         .store
-        .create_channel(ChannelInput::new("https://x.example/rss", "/m"))
+        .create_channel(ChannelInput::new("https://x.example/rss"))
         .await
         .unwrap();
 
     let mut edited = channel.to_input();
-    edited.base_dir = "/elsewhere".into();
+    edited.name = Some("Elsewhere".into());
     other.update_channel(&channel.id, 1, edited).await.unwrap();
 
     let mut stale = channel.to_input();
-    stale.base_dir = "/stale".into();
+    stale.name = Some("Stale".into());
     let err = f
         .store
         .update_channel(&channel.id, 1, stale)
@@ -276,7 +273,7 @@ async fn stale_channel_update_conflicts_across_handles() {
         .unwrap_err();
     assert!(err.is_conflict());
     let now = f.store.get_channel(&channel.id).await.unwrap().unwrap();
-    assert_eq!((now.base_dir.as_str(), now.version), ("/elsewhere", 2));
+    assert_eq!((now.name.as_deref(), now.version), (Some("Elsewhere"), 2));
 }
 
 #[tokio::test]
@@ -327,7 +324,7 @@ async fn reorder_rules_rejects_partial_duplicate_and_foreign_lists() {
     let other = f
         .store
         .create_channel_with_rules(
-            ChannelInput::new("https://o.example/", "/o"),
+            ChannelInput::new("https://o.example/"),
             vec![rule("o", "o")],
         )
         .await
@@ -410,7 +407,7 @@ async fn reorder_channels_is_versioned_and_atomic() {
     for i in 0..3 {
         chans.push(
             f.store
-                .create_channel(ChannelInput::new(format!("https://c{i}.example/"), "/m"))
+                .create_channel(ChannelInput::new(format!("https://c{i}.example/")))
                 .await
                 .unwrap(),
         );
@@ -451,7 +448,7 @@ async fn reorder_channels_is_versioned_and_atomic() {
 async fn secret_query_is_stored_verbatim_but_masked_for_display() {
     let f = fixture().await;
     let url = format!("https://example.com/rss?r=1080&token={SECRET}");
-    let mut input = ChannelInput::new(url.clone(), "/m");
+    let mut input = ChannelInput::new(url.clone());
     assert_eq!(
         input.secret_query,
         ["r", "token"],
@@ -495,7 +492,7 @@ async fn error_messages_do_not_contain_secret_values() {
     let url = format!("https://example.com/rss?token={SECRET}");
     let channel = f
         .store
-        .create_channel(ChannelInput::new(url.clone(), "/m"))
+        .create_channel(ChannelInput::new(url.clone()))
         .await
         .unwrap();
 
@@ -553,12 +550,12 @@ async fn changing_a_rules_channel_is_rejected() {
     let f = fixture().await;
     let a = f
         .store
-        .create_channel(ChannelInput::new("https://a.example/", "/a"))
+        .create_channel(ChannelInput::new("https://a.example/"))
         .await
         .unwrap();
     let b = f
         .store
-        .create_channel(ChannelInput::new("https://b.example/", "/b"))
+        .create_channel(ChannelInput::new("https://b.example/"))
         .await
         .unwrap();
     let r = f.store.create_rule(&a.id, rule("x", "x")).await.unwrap();
@@ -593,7 +590,7 @@ async fn replace_channel_swaps_the_whole_rule_list_atomically() {
     let created = channel_with_four_rules(&f).await;
     let id = &created.channel.id;
     let mut input = created.channel.to_input();
-    input.base_dir = "/replaced".into();
+    input.name = Some("Replaced".into());
     let new_rules = vec![
         rule("n0", "x"),
         RuleInput {
@@ -636,7 +633,7 @@ async fn replace_channel_swaps_the_whole_rule_list_atomically() {
         .unwrap();
     assert_eq!(replaced.channel.id, *id);
     assert_eq!(replaced.channel.version, 2);
-    assert_eq!(replaced.channel.base_dir, "/replaced");
+    assert_eq!(replaced.channel.name.as_deref(), Some("Replaced"));
     assert_eq!(replaced.rules.len(), 2);
     assert_eq!(replaced.rules[0].r#match.as_deref(), Some("n0"));
     assert_eq!(replaced.rules[1].r#match, None);
@@ -661,17 +658,15 @@ async fn replace_channel_swaps_the_whole_rule_list_atomically() {
 #[tokio::test]
 async fn invalid_input_is_rejected_before_anything_is_written() {
     let f = fixture().await;
-    let good = ChannelInput::new("https://x.example/?a=1", "/m");
+    let good = ChannelInput::new("https://x.example/?a=1");
 
     let mut bad = good.clone();
     bad.url = "not a url".into();
-    let mut empty_dir = good.clone();
-    empty_dir.base_dir.clear();
     let mut unknown_secret = good.clone();
     unknown_secret.secret_query = vec!["nope".into()];
     let mut dup_secret = good.clone();
     dup_secret.secret_query = vec!["a".into(), "a".into()];
-    for input in [bad, empty_dir, unknown_secret, dup_secret] {
+    for input in [bad, unknown_secret, dup_secret] {
         assert!(matches!(
             f.store.create_channel(input).await.unwrap_err(),
             ChannelError::Invalid(_)

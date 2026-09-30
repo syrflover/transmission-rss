@@ -22,7 +22,7 @@
 //! the very mapping the worker uses ([`ChannelPlan`], which builds the shared
 //! [`crate::rss`] evaluation from stored channels and rules) and judges every
 //! item the channel has in the collection history with it. So the channel's
-//! excludes, base directory and rule order apply exactly as they do in a
+//! excludes, collect folder and rule order apply exactly as they do in a
 //! cycle, and the same items and settings give the same selection, applied
 //! rule and save path. The history holds the worker's last read of the feed
 //! too, so the web never reads RSS.
@@ -41,6 +41,7 @@
 //! overlap.
 
 use std::collections::{HashMap, HashSet};
+use std::path::Path as FsPath;
 
 use axum::{
     extract::{
@@ -135,7 +136,7 @@ pub struct RuleView {
     pub r#match: Option<String>,
     pub regex: bool,
     pub case_insensitive: bool,
-    /// Relative to the channel's base directory.
+    /// Relative to the collect folder.
     pub directory: String,
     pub episode: i64,
     pub episode_auto: bool,
@@ -156,7 +157,6 @@ pub struct ChannelBrief {
     pub position: i64,
     pub name: Option<String>,
     pub host: String,
-    pub base_dir: String,
     pub rule_count: usize,
 }
 
@@ -173,7 +173,6 @@ fn brief(cwr: &ChannelWithRules) -> ChannelBrief {
         position: cwr.channel.position,
         name: cwr.channel.name.clone(),
         host: host_of(&cwr.channel),
-        base_dir: cwr.channel.base_dir.clone(),
         rule_count: cwr.rules.len(),
     }
 }
@@ -182,6 +181,10 @@ fn brief(cwr: &ChannelWithRules) -> ChannelBrief {
 struct RuleList {
     rules: Vec<RuleView>,
     channels: Vec<ChannelBrief>,
+    /// The app's collect folder, which every rule's `directory` is relative
+    /// to: a rule saves to `collect_folder` + `directory`. `null` while it is
+    /// not set.
+    collect_folder: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -207,6 +210,16 @@ fn store_error(e: ChannelError) -> ApiError {
         ChannelError::Invalid(_) => ApiError::invalid("입력한 값으로는 저장할 수 없어요."),
         e => e.into(),
     }
+}
+
+/// The collect folder, or `None` while it is not set.
+async fn collect_folder(state: &AppState) -> Result<Option<String>, ApiError> {
+    Ok(state
+        .settings
+        .collection()
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .map(|settings| settings.folder))
 }
 
 /// The channel's recorded items, newest first, up to [`MAX_ITEMS_PER_CHANNEL`].
@@ -254,7 +267,8 @@ async fn analyze(state: &AppState, cwr: &ChannelWithRules) -> Result<Analysis, A
     if cwr.rules.is_empty() {
         return Ok(analysis);
     }
-    let plan = ChannelPlan::new(cwr.clone());
+    // Only the judgement is used here, never a save path.
+    let plan = ChannelPlan::new(cwr.clone(), FsPath::new(""));
     for problem in plan.rule_errors() {
         analysis
             .errors
@@ -368,6 +382,7 @@ async fn list_rules(State(state): State<AppState>) -> Result<Json<RuleList>, Api
     Ok(Json(RuleList {
         rules,
         channels: all.iter().map(brief).collect(),
+        collect_folder: collect_folder(&state).await?,
     }))
 }
 
@@ -386,7 +401,7 @@ struct RuleFields {
     regex: bool,
     #[serde(default)]
     case_insensitive: bool,
-    /// Relative to the channel's base directory; may be empty.
+    /// Relative to the collect folder; may be empty.
     #[serde(default)]
     directory: String,
     episode: i64,
@@ -473,7 +488,7 @@ impl RuleFields {
         let directory = self.directory.trim().to_owned();
         if std::path::Path::new(&directory).is_absolute() {
             return Err(ApiError::invalid(
-                "저장 폴더는 채널의 기본 저장 폴더 아래 경로로 적어 주세요. /로 시작하면 안 돼요.",
+                "저장 폴더는 수집 폴더 아래 경로로 적어 주세요. /로 시작하면 안 돼요.",
             ));
         }
         Ok(RuleInput {
@@ -737,6 +752,7 @@ fn substitute(
 /// same items and settings always give the same [`Preview`]; the handler only
 /// fetches them.
 pub fn build_preview(
+    collect_folder: &FsPath,
     cwr: &ChannelWithRules,
     edited_id: Option<&str>,
     edited: &RuleInput,
@@ -753,10 +769,10 @@ pub fn build_preview(
 
     // The same mapping twice: as the channel is, and with no excludes, which
     // tells whether an excluded item would have been the edited rule's.
-    let plan = ChannelPlan::new(substituted.clone());
+    let plan = ChannelPlan::new(substituted.clone(), collect_folder);
     let mut open_channel = substituted.clone();
     open_channel.channel.excludes.clear();
-    let open_plan = ChannelPlan::new(open_channel);
+    let open_plan = ChannelPlan::new(open_channel, collect_folder);
 
     let error = plan
         .rule_errors()
@@ -867,7 +883,10 @@ async fn preview(
     let edited = b.rule.into_input(None)?;
     let cwr = load_channel(&state, &b.channel_id).await?;
     let items = channel_items(&state.history, &b.channel_id).await?;
+    // Unset, the folder is empty and a save path is the rule's directory alone.
+    let collect_folder = collect_folder(&state).await?.unwrap_or_default();
     Ok(Json(build_preview(
+        FsPath::new(&collect_folder),
         &cwr,
         b.rule_id.as_deref(),
         &edited,

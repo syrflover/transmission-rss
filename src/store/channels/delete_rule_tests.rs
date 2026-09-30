@@ -14,10 +14,7 @@ fn rule(phrase: &str) -> RuleInput {
 async fn channel_with_rules(store: &ChannelStore, n: usize) -> ChannelWithRules {
     let rules = (0..n).map(|i| rule(&format!("r{i}"))).collect();
     store
-        .create_channel_with_rules(
-            ChannelInput::new("https://example.com/a?t=1", "/media"),
-            rules,
-        )
+        .create_channel_with_rules(ChannelInput::new("https://example.com/a?t=1"), rules)
         .await
         .unwrap()
 }

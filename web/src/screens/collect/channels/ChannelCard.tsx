@@ -52,7 +52,6 @@ function ChannelDetails({ channel }: { channel: Channel }) {
           )}
         </div>
       </Row>
-      <Row label="기본 저장 폴더">{channel.base_dir}</Row>
       <Row label="제외 조건">
         {channel.excludes.length > 0 ? (
           <ul className="m-0 flex list-none flex-wrap gap-1.5 p-0">

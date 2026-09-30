@@ -13,6 +13,10 @@
 //! stored one, or a rule count that no longer matches on delete, answers
 //! `409` with the channel's current [`ChannelView`] as `current`.
 //!
+//! A channel has no folder of its own: torrents are saved under the app's
+//! collect folder plus the rule's directory (`/api/settings/collection`), and a
+//! request body that names `base_dir` is refused as an unknown field.
+//!
 //! # Secret values never leave the server
 //!
 //! A channel URL keeps its original query values in the database, but no
@@ -100,7 +104,6 @@ pub struct ChannelView {
     pub edit_url: String,
     /// The query names in order of appearance.
     pub query: Vec<QueryParamView>,
-    pub base_dir: String,
     pub excludes: Vec<String>,
     pub past_search: Option<String>,
     /// Rules of this channel, archived ones included. The delete confirmation
@@ -147,7 +150,6 @@ fn view(channel: &Channel, rule_count: usize) -> ChannelView {
                 name,
             })
             .collect(),
-        base_dir: channel.base_dir.clone(),
         excludes: channel.excludes.clone(),
         past_search: channel.past_search.clone(),
         rule_count,
@@ -174,7 +176,6 @@ struct Removed {
 #[serde(deny_unknown_fields)]
 struct CreateBody {
     url: String,
-    base_dir: String,
     #[serde(default)]
     excludes: Vec<String>,
     /// `name -> is secret`; a name not listed here is secret.
@@ -193,7 +194,6 @@ struct UpdateBody {
     /// The version the client saw.
     version: i64,
     url: String,
-    base_dir: String,
     #[serde(default)]
     excludes: Vec<String>,
     #[serde(default)]
@@ -216,7 +216,6 @@ struct DeleteQuery {
 /// The channel fields after trimming and checking, before secrets are merged.
 struct Fields {
     url: String,
-    base_dir: String,
     excludes: Vec<String>,
     secret: HashMap<String, bool>,
     past_search: Option<String>,
@@ -238,7 +237,6 @@ fn body<T>(parsed: Result<Json<T>, JsonRejection>) -> Result<T, ApiError> {
 impl Fields {
     fn check(
         url: String,
-        base_dir: String,
         excludes: Vec<String>,
         secret: HashMap<String, bool>,
         past_search: Option<String>,
@@ -257,10 +255,6 @@ impl Fields {
                     "RSS 주소가 올바르지 않아요. http:// 또는 https://로 시작하는 전체 주소를 넣어 주세요.",
                 ))
             }
-        }
-        let base_dir = base_dir.trim().to_owned();
-        if base_dir.is_empty() {
-            return Err(ApiError::invalid("기본 저장 폴더를 입력해 주세요."));
         }
         let excludes = excludes
             .into_iter()
@@ -283,7 +277,6 @@ impl Fields {
         }
         Ok(Fields {
             url,
-            base_dir,
             excludes,
             secret,
             past_search,
@@ -299,7 +292,6 @@ impl Fields {
             .collect();
         ChannelInput {
             url,
-            base_dir: self.base_dir,
             excludes: self.excludes,
             secret_query,
             past_search: self.past_search,
@@ -445,14 +437,7 @@ async fn create_channel(
     parsed: Result<Json<CreateBody>, JsonRejection>,
 ) -> Result<(StatusCode, Json<ChannelView>), ApiError> {
     let b = body(parsed)?;
-    let fields = Fields::check(
-        b.url,
-        b.base_dir,
-        b.excludes,
-        b.secret,
-        b.past_search,
-        b.name,
-    )?;
+    let fields = Fields::check(b.url, b.excludes, b.secret, b.past_search, b.name)?;
     let url = fields.url.clone();
     let created = state
         .channels
@@ -468,14 +453,7 @@ async fn update_channel(
     parsed: Result<Json<UpdateBody>, JsonRejection>,
 ) -> Result<Json<ChannelView>, ApiError> {
     let b = body(parsed)?;
-    let fields = Fields::check(
-        b.url,
-        b.base_dir,
-        b.excludes,
-        b.secret,
-        b.past_search,
-        b.name,
-    )?;
+    let fields = Fields::check(b.url, b.excludes, b.secret, b.past_search, b.name)?;
 
     let stored = state
         .channels

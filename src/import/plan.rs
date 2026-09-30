@@ -207,20 +207,19 @@ mod tests {
 
     fn file_channel(url: &str) -> ImportChannel {
         ImportChannel {
-            input: ChannelInput::new(url, "/media"),
+            input: ChannelInput::new(url),
             rules: vec![RuleInput::default()],
         }
     }
 
     fn existing_channel(id: &str, version: Version, url: &str) -> ChannelWithRules {
-        let input = ChannelInput::new(url, "/old");
+        let input = ChannelInput::new(url);
         ChannelWithRules {
             channel: Channel {
                 id: id.into(),
                 position: 0,
                 version,
                 url: input.url,
-                base_dir: input.base_dir,
                 excludes: vec![],
                 secret_query: input.secret_query,
                 past_search: Some("[X] {match}".into()),

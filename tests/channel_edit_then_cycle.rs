@@ -31,11 +31,7 @@ async fn run(worker: &Worker) -> CycleReport {
 async fn add_channel_via_api(h: &Harness, api: &WebApi) -> Value {
     let url = format!("{}?filter=1080p&token={SECRET}", h.feeds.url("feed-a"));
     let (status, text, view) = api
-        .call(
-            "POST",
-            "/api/channels",
-            Some(json!({ "url": url, "base_dir": "/media/anime" })),
-        )
+        .call("POST", "/api/channels", Some(json!({ "url": url })))
         .await;
     assert_eq!(status, StatusCode::CREATED, "{text}");
     assert!(
@@ -43,6 +39,9 @@ async fn add_channel_via_api(h: &Harness, api: &WebApi) -> Value {
         "secret in the create response: {text}"
     );
 
+    // A channel has no save folder of its own: rules save under the app's
+    // collect folder.
+    assert!(view.get("base_dir").is_none(), "{text}");
     let id = view["id"].as_str().unwrap();
     for rule in feed_a_rules() {
         h.channels.create_rule(id, rule).await.unwrap();
@@ -62,7 +61,6 @@ async fn save(api: &WebApi, view: &Value, patch: Value) -> Value {
     let mut body = json!({
         "version": view["version"],
         "url": view["edit_url"],
-        "base_dir": view["base_dir"],
         "excludes": view["excludes"],
         "secret": flags,
         "past_search": view["past_search"],
@@ -102,16 +100,9 @@ async fn a_save_with_the_secret_left_blank_still_fetches_the_feed_with_the_store
         format!("{}?filter=&token=", h.feeds.url("feed-a"))
     );
 
-    // A real edit whose URL still has the secret blank: only the folder and
-    // the name change.
-    let saved = save(
-        &api,
-        &created,
-        json!({ "base_dir": "/media/edited", "name": "Feed A" }),
-    )
-    .await;
+    // A real edit whose URL still has the secret blank: only the name changes.
+    let saved = save(&api, &created, json!({ "name": "Feed A" })).await;
     assert_eq!(saved["name"], "Feed A");
-    assert_eq!(saved["base_dir"], "/media/edited");
     assert_eq!(
         saved["masked_url"],
         format!("{}?filter=***&token=***", h.feeds.url("feed-a"))
@@ -128,13 +119,10 @@ async fn a_save_with_the_secret_left_blank_still_fetches_the_feed_with_the_store
     assert_eq!(report.add_failed, 0, "{report:?}");
     assert!(report.added > 0, "{report:?}");
 
-    // The cycle also used the edited folder, so it ran on the saved state.
+    // Every torrent went under the collect folder.
     let dirs = add_dirs(&h);
     assert_eq!(dirs.len(), report.added);
-    assert!(
-        dirs.iter().all(|d| d.starts_with("/media/edited/")),
-        "{dirs:?}"
-    );
+    assert!(dirs.iter().all(|d| d.starts_with("/media/")), "{dirs:?}");
 
     // The secret is kept in the store and stays out of history.
     let stored = h

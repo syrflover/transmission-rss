@@ -30,6 +30,8 @@ export interface Board {
   problems: number;
   transmission: { downloading: number; seeding: number; taken_at: number } | null;
   cycle: { started_at: number; finished_at: number | null } | null;
+  /** False until the collect folder is chosen; the worker adds no torrent before that. */
+  collect_folder_set: boolean;
 }
 
 export function loadBoard(signal?: AbortSignal): Promise<Board> {

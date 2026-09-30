@@ -53,7 +53,12 @@ impl ChannelPlan {
     /// Archived rules are left out; the remaining rules keep their stored order,
     /// which is their priority. A rule without a match phrase (waiting for its
     /// title) is passed on as `pattern: None`, which matches nothing.
-    pub fn new(channel_with_rules: ChannelWithRules) -> ChannelPlan {
+    ///
+    /// Rules save under `collect_folder`, the app-wide collect folder. A caller
+    /// with no folder set (the web preview on a fresh database) passes an empty
+    /// path, which leaves each rule's own directory as the save path; the worker
+    /// never adds with one (see [`crate::worker::cycle`]).
+    pub fn new(channel_with_rules: ChannelWithRules, collect_folder: &Path) -> ChannelPlan {
         let ChannelWithRules { channel, rules } = channel_with_rules;
 
         let active: Vec<&Rule> = rules
@@ -62,7 +67,7 @@ impl ChannelPlan {
             .collect();
 
         let spec = ChannelSpec {
-            directory: PathBuf::from(&channel.base_dir),
+            directory: collect_folder.to_path_buf(),
             excludes: channel.excludes.clone(),
             rules: active.iter().map(|rule| rule_spec(rule)).collect(),
         };
@@ -149,13 +154,11 @@ impl ChannelPlan {
 /// Where a rule saves what it selects and the episode conversion it applies:
 /// the same values [`ChannelPlan::judge`] gives for an item the rule selects.
 /// A retry of a failed item uses them, so that it lands where the rule's own
-/// cycle would have put it.
-pub fn rule_destination(channel: &Channel, rule: &Rule) -> (PathBuf, isize) {
+/// cycle would have put it. Both put the rule's directory under
+/// `collect_folder` with [`save_path`].
+pub fn rule_destination(collect_folder: &Path, rule: &Rule) -> (PathBuf, isize) {
     let spec = rule_spec(rule);
-    (
-        save_path(Path::new(&channel.base_dir), &spec.directory),
-        spec.episode,
-    )
+    (save_path(collect_folder, &spec.directory), spec.episode)
 }
 
 fn rule_spec(rule: &Rule) -> RuleSpec {
@@ -199,7 +202,6 @@ mod tests {
             position: 0,
             version: 1,
             url: "https://feed.test/rss?r=1080&token=s3cret%20x&token2=keep".into(),
-            base_dir: "/media/anime".into(),
             excludes: vec!["[Batch]".into()],
             secret_query: vec!["token".into()],
             past_search: None,
@@ -224,10 +226,13 @@ mod tests {
     }
 
     fn plan(rules: Vec<Rule>) -> ChannelPlan {
-        ChannelPlan::new(ChannelWithRules {
-            channel: channel(),
-            rules,
-        })
+        ChannelPlan::new(
+            ChannelWithRules {
+                channel: channel(),
+                rules,
+            },
+            Path::new("/media/anime"),
+        )
     }
 
     #[test]
@@ -335,10 +340,13 @@ mod tests {
         let mut channel = channel();
         channel.url = "https://feed.test/rss?r=1080&f=0&page=rss&token=Tk3n-0123456789".into();
         channel.secret_query = ["r", "f", "page", "token"].map(str::to_owned).into();
-        let p = ChannelPlan::new(ChannelWithRules {
-            channel,
-            rules: vec![],
-        });
+        let p = ChannelPlan::new(
+            ChannelWithRules {
+                channel,
+                rules: vec![],
+            },
+            Path::new("/media/anime"),
+        );
 
         let r = p.redactor();
         let text = "HTTP status 503 on Show - 1080p, page 10 (0 of 10)";

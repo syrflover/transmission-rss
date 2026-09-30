@@ -1,5 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
 
+import { Link } from "react-router-dom";
+
 import { ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -33,6 +35,8 @@ interface RuleDetailProps {
   /** The stored rule to edit, or `null` for a rule that is not saved yet. */
   rule: Rule | null;
   channels: ChannelBrief[];
+  /** The app's collect folder, `null` until chosen. */
+  collect_folder: string | null;
   /** Every rule of every channel, as of the last load. */
   rules: Rule[];
   /** For a new rule: the channel to start in and the phrase to start with. */
@@ -66,6 +70,7 @@ const checkRow = "flex min-h-6 cursor-pointer items-center gap-2 text-[13.5px]";
 export function RuleDetail({
   rule,
   channels,
+  collect_folder,
   rules,
   presetChannelId,
   presetMatch,
@@ -241,7 +246,8 @@ export function RuleDetail({
   };
 
   const heading = draft.match !== "" ? draft.match : isNew ? "새 규칙" : "제목 대기";
-  const joined = `${channel?.base_dir.replace(/\/+$/, "") ?? ""}/${draft.directory.trim().replace(/^\/+/, "")}`.replace(/\/+$/, "");
+  const collectFolder = collect_folder;
+  const joined = `${collectFolder?.replace(/\/+$/, "") ?? ""}/${draft.directory.trim().replace(/^\/+/, "")}`.replace(/\/+$/, "");
 
   return (
     <div className="flex min-w-0 flex-col gap-5" data-testid="rule-detail">
@@ -367,8 +373,17 @@ export function RuleDetail({
               aria-describedby={`${uid}-dir-hint`}
             />
             <p id={`${uid}-dir-hint`} className={hintClass}>
-              채널의 기본 저장 폴더 아래에 저장해요.{" "}
-              {channel && <span className="font-mono break-all">→ {joined}</span>}
+              앱의 수집 폴더 아래에 저장해요.{" "}
+              {collectFolder ? (
+                <span className="font-mono break-all">→ {joined}</span>
+              ) : (
+                <>
+                  수집 폴더를 정하면 받기 시작해요.{" "}
+                  <Link to="/settings/collection" className="font-semibold text-focus underline underline-offset-2">
+                    수집 폴더 정하기
+                  </Link>
+                </>
+              )}
             </p>
           </div>
           <div className="flex min-w-0 flex-col gap-1.5">
