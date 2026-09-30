@@ -1,6 +1,6 @@
 # 0009 웹과 worker를 배포하고 cron을 걷어내요
 
-- 상태: 진행 중 (서버 전환 끝, Transmission OOM은 `memory.high`로 피하는 중, 서버 적용 확인 대기)
+- 상태: 진행 중 (서버 전환 끝, Transmission OOM은 `memory.high`로 피함, 완료 기준의 실제 확인 남음)
 - 출처: [구현 경계와 실행 순서](../specs/web-app.md#구현-경계와-실행-순서), [접근 경계와 기기](../specs/web-app.md#접근-경계와-기기)
 - 막는 티켓: [0004](0004-worker-collection-history.md), [0005](0005-legacy-yaml-import.md)
 
@@ -76,7 +76,7 @@
   cron이 남긴 릴리스 이름의 원인은 옛 바이너리가 아니라 아래의 Transmission 강제 종료로 보여요(바꾼 이름이 저장되기 전에 사라짐). trname은 이 이름들에 정상 이름을 만들고, 같은 Transmission에 직접 보낸 `torrent-rename-path`도 `success`였어요.
 - Compose 프로젝트 이름을 `trss`로 둔 탓에 같은 폴더의 Transmission Compose(폴더 이름으로 `trss`)와 한 프로젝트가 되어, Transmission 컨테이너가 고아로 표시됐어요. `trss-app`으로 바꿨어요(`--remove-orphans`를 쓰면 Transmission이 지워질 수 있었어요).
 - 웹만 재시작: `restart trss-web` 동안 worker의 시작 시각(15:23:10 UTC)이 그대로였고, 웹은 다시 200을 돌려줬어요.
-- 한 번 받기: 명령 두 개(Re Zero S04E18, Link Click S3-08)가 `received`로 끝났고, Link Click은 규칙 폴더 `Link Click/Season 03`에 들어갔어요. 끝난 뒤 두 토렌트에 명령 라벨(`trss-cmd:`)이 남아 있지 않았어요. 추가할 때 라벨이 실제로 붙었는지는 보지 못했어요.
+- 한 번 받기: 명령 두 개(Re Zero S04E18, Link Click S3-08)가 `received`로 끝났고, Link Click은 규칙 폴더 `Link Click/Season 03`에 들어갔어요. 끝난 뒤 두 토렌트에 명령 라벨(`trss-cmd:`)이 남아 있지 않았어요. 추가할 때 라벨이 실제로 붙었는지는 보지 못했어요. Link Click은 확인용으로 받은 것이라 사용자가 뒤에 지웠어요.
 - 자원: 전환 직후 worker 3.1MiB, web 1.1MiB였어요. 며칠 뒤 다시 봐요.
 
 #### 이름과 라벨이 되돌아간 일: 호스트 커널의 OOM 강제 종료
@@ -93,6 +93,7 @@
 - 한도는 1G로 올렸다가 사용자 결정으로 512M로 되돌렸고([docker-compose.yml](../../docker-compose.yml)), 한도를 없애는 우회는 사용자가 택하지 않았어요.
 - 조치: 이 버그는 `memory.max`에 부딪힌 할당에서만 동작해요. `memory.high`를 넘은 쪽의 회수(`mem_cgroup_handle_over_high`)는 회수하고 늦추기만 하고 OOM을 부르지 않아요. 그래서 캐시를 384M 아래로 붙잡아 512M 벽에 닿지 않게 해요. 커널을 17.1로 되돌리는 방법도 있었지만, 보안 수정을 잃지 않는 이 방법을 택했어요.
   2026-09-30 서버에서 실행 중인 컨테이너의 cgroup에 `memory.high` 384M를 직접 써서 시험했고, 받는 동안 잘 된다고 사용자가 확인했어요(카운터 값은 받지 않았어요). 저장소에는 컨테이너를 다시 만들어도 남도록 [transmission.slice](../../deploy/transmission.slice)(`MemoryHigh=384M`)와 compose의 `cgroup_parent`로 넣었어요. 되돌림이 들어간 커널이 나와도 남겨 둬도 괜찮아요.
+  2026-10-01 서버에 slice를 설치하고 컨테이너를 다시 만든 뒤 `transmission.slice/memory.high`가 `402653184`(384M), 컨테이너의 `oom_kill`이 0이었어요(사용자 확인).
 - 이름 바꾸기가 되돌아가는 동안 생길 수 있는 일: Transmission(4.1.1 `renamePath`)은 바꿀 이름의 파일이 이미 있으면 파일을 옮기지 않고도 성공으로 답하고 토렌트를 그 파일에 이어요. 강제 종료 사이에 버려진 새 이름의 `.part`가 있으면, 받은 조각 기록과 파일 내용이 어긋날 수 있어요. 그래서 받는 중인 봇 토렌트를 한 번 verify해요.
 
 #### 강제 종료 기간 뒤 정리 (2026-10-01)
@@ -106,6 +107,6 @@
 
 ### 남은 일
 
-- 서버에 slice를 설치하고 Transmission 컨테이너를 다시 만든 뒤, 봇 토렌트 여럿을 받는 동안 `oom_kill`이 늘지 않는지(`transmission.slice` 아래 경로), 봇 토렌트의 이름·항목 라벨이 주기를 넘어 유지되는지 봐요.
+- 며칠 동안 봇 토렌트 여럿을 받는 사이 `oom_kill`이 0에 머무는지(`transmission.slice` 아래 경로), 봇 토렌트의 이름·항목 라벨이 주기를 넘어 유지되는지 봐요. 되돌림(RHEL-255363)이 들어간 커널이 나오면 올려요.
 - 완료 기준의 나머지 실제 확인: cron과 같은 결과를 주기 수·차이와 함께 기록, 실제 배포 경로의 보호 경계(`ss -ltn`, 휴대폰 LTE에서 공인 IP 접속 불가), 휴대폰에서 0003·0006 수행, `.torrent` 추가 응답 시간, 자원 한도 재검토.
 - 되돌리기가 필요 없어지면 ENTRYPOINT를 정하고 `cron.sh`와 `legacy` 서비스를 걷어내요.
