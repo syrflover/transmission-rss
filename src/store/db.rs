@@ -22,6 +22,8 @@ const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 const MIGRATIONS: &[&str] = &[
     // 1: channels and rules
     include_str!("channels/schema.sql"),
+    // 2: collection history and the worker's cycle marker
+    include_str!("history/schema.sql"),
 ];
 
 #[derive(Debug, thiserror::Error)]
