@@ -375,6 +375,23 @@ async fn a_named_torrent_with_a_three_digit_episode_is_not_renamed() {
 }
 
 #[tokio::test]
+async fn a_release_named_like_sxxeyy_under_another_title_is_still_renamed_in_the_rules_folder() {
+    let h = Harness::new().await;
+    channel_a(&h).await;
+    // A release whose own name ends in `SxxEyy`, left unrenamed by an earlier
+    // run: it is not a name this rule gave, so its episode offset (-24) applies.
+    h.tr.preload(held(
+        4,
+        "Tensura S04E62.mkv",
+        "/media/anime/Slime/Season 04",
+    ));
+
+    run(&h.worker()).await;
+
+    assert_eq!(name_of(&h, 4), "Slime S04E38.mkv");
+}
+
+#[tokio::test]
 async fn a_rename_cut_short_in_the_rules_folder_is_finished_when_the_torrent_is_met_again() {
     let h = Harness::new().await;
     channel_a(&h).await;

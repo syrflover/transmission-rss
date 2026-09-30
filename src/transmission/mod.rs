@@ -350,7 +350,7 @@ pub async fn rename_torrent(
     if file_count == 1 {
         let old_file_name = torrent.name.clone().unwrap();
 
-        if mode == RenameMode::Existing && looks_renamed(&old_file_name) {
+        if mode == RenameMode::Existing && looks_renamed(&old_file_name, download_dir) {
             return Ok(Renamed::Finished);
         }
 
@@ -386,15 +386,29 @@ pub async fn rename_torrent(
     Ok(Renamed::NotYet)
 }
 
-/// Whether `name` ends the way a `trname` name does (`<title> S01E05.mkv`,
-/// `S01E05.5`, and three-digit episodes like `S01E105`), whatever its title.
-/// `trname` itself only accepts the name when it starts with the folder's
-/// title, case and all, and has a two-digit episode, so it would read a name
-/// given under an earlier spelling of the title, or `E105`, as a release name.
-fn looks_renamed(name: &str) -> bool {
-    static FORM: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"(?i)(?:^|\s)S\d{2,}E\d{2,}(?:\.\d)?\.\w+$").unwrap());
-    FORM.is_match(name)
+/// Whether `name` is the name `trname` gives in `download_dir`
+/// (`.../<title>/Season NN`): the folder's title and an episode, as in
+/// `<title> S01E05.mkv`, `S01E05.5` or a three-digit `S01E105`, with the
+/// title's case not counting. `trname` itself only accepts a two-digit
+/// episode, so it would read `E105` as a release name and take `05` from it.
+/// A release that merely ends in `SxxEyy` under another title is not one.
+fn looks_renamed(name: &str, download_dir: &Path) -> bool {
+    static EPISODE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(?i)^ S\d{2,}E\d{2,}(?:\.\d)?\.\w+$").unwrap());
+    let Some(title) = download_dir
+        .components()
+        .rev()
+        .nth(1)
+        .and_then(|c| c.as_os_str().to_str())
+    else {
+        return false;
+    };
+    match name.get(..title.len()) {
+        Some(head) if head.to_lowercase() == title.to_lowercase() => {
+            EPISODE.is_match(&name[title.len()..])
+        }
+        _ => false,
+    }
 }
 
 /// How persistently a freshly added torrent is renamed: Transmission needs a
@@ -520,23 +534,29 @@ mod tests {
 
     #[test]
     fn a_trname_name_is_told_apart_from_a_release_name() {
+        let dir = std::path::Path::new("/media/anime/Slime/Season 04");
         for name in [
             "Slime S04E38.mkv",
-            "SONO BISQUE DOLL S02E01.mkv",
+            "SLIME S04E38.mkv",
             "Slime S04E105.mkv",
-            "Show S01E05.5.mp4",
-            "S01E05.mkv",
+            "Slime S04E05.5.mp4",
         ] {
-            assert!(looks_renamed(name), "{name}");
+            assert!(looks_renamed(name, dir), "{name}");
         }
         for name in [
             "[SubsPlease] Tensei Shitara Slime Datta Ken - 62 (1080p) [AAAA0006].mkv",
-            "Show.S01E05.1080p.WEB.mkv",
-            "Show S01E05 (1080p).mkv",
-            "ShowS01E05.mkv",
-            "Some Special Collection.mkv",
+            "Tensura S04E62.mkv",
+            "S04E05.mkv",
+            "Slime.S04E05.1080p.WEB.mkv",
+            "Slime S04E05 (1080p).mkv",
+            "SlimeS04E05.mkv",
+            "Slime Special.mkv",
         ] {
-            assert!(!looks_renamed(name), "{name}");
+            assert!(!looks_renamed(name, dir), "{name}");
         }
+        assert!(!looks_renamed(
+            "Slime S04E38.mkv",
+            std::path::Path::new("/")
+        ));
     }
 }
