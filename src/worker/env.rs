@@ -33,11 +33,28 @@ pub enum EnvError {
     Invalid(&'static str),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct WorkerEnv {
+    /// May carry credentials (`http://user:password@host/`); never print it.
     pub transmission_url: Url,
     pub session: SessionConfig,
     pub interval: Duration,
+}
+
+impl std::fmt::Debug for WorkerEnv {
+    /// Shows the Transmission address without its credentials.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut url = self.transmission_url.clone();
+        let has_credentials = !url.username().is_empty() || url.password().is_some();
+        let _ = url.set_username("");
+        let _ = url.set_password(None);
+        f.debug_struct("WorkerEnv")
+            .field("transmission_url", &url.as_str())
+            .field("has_credentials", &has_credentials)
+            .field("session", &self.session)
+            .field("interval", &self.interval)
+            .finish()
+    }
 }
 
 impl WorkerEnv {
@@ -137,6 +154,21 @@ mod tests {
             }
         );
         assert_eq!(env.interval, Duration::from_secs(60));
+    }
+
+    #[test]
+    fn debug_output_has_no_credentials() {
+        let env = WorkerEnv::from_lookup(lookup(&[(
+            "TRANSMISSION_URL",
+            "http://admin:hunter2@tr:9091/transmission/rpc",
+        )]))
+        .unwrap();
+        // The credentials are still there for the client to use.
+        assert_eq!(env.transmission_url.password(), Some("hunter2"));
+
+        let shown = format!("{env:?}");
+        assert!(!shown.contains("hunter2") && !shown.contains("admin"), "{shown}");
+        assert!(shown.contains("tr:9091/transmission/rpc"), "{shown}");
     }
 
     #[test]
