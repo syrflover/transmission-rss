@@ -23,6 +23,22 @@ pub enum Judgement {
     NoMatch,
 }
 
+/// A [`Judgement`] together with the later rules that also matched the title.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanEvaluation {
+    pub judgement: Judgement,
+    /// IDs of the active rules after the applied one that also match the title,
+    /// in order. Empty unless a rule was applied.
+    pub overlapping: Vec<String>,
+}
+
+/// An active rule whose regular expression does not compile.
+#[derive(Debug, Clone)]
+pub struct RuleProblem {
+    pub rule_id: String,
+    pub error: regex::Error,
+}
+
 /// A channel ready to judge items: the shared evaluator built from the
 /// channel's active rules, with the way back from the evaluation's rule
 /// numbers to stored rule IDs.
@@ -60,7 +76,14 @@ impl ChannelPlan {
     }
 
     pub fn judge(&self, title: &str) -> Judgement {
-        match self.evaluator.evaluate(title).outcome {
+        self.evaluate(title).judgement
+    }
+
+    /// The judgement of `judge`, plus which later rules also matched. The web's
+    /// rule preview reads this, so that it and the worker cannot differ.
+    pub fn evaluate(&self, title: &str) -> PlanEvaluation {
+        let evaluation = self.evaluator.evaluate(title);
+        let judgement = match evaluation.outcome {
             Outcome::Selected {
                 rule,
                 save_path,
@@ -72,21 +95,40 @@ impl ChannelPlan {
             },
             Outcome::Skipped(SkipReason::ChannelExcluded) => Judgement::Excluded,
             Outcome::Skipped(SkipReason::NoRuleMatched) => Judgement::NoMatch,
+        };
+        PlanEvaluation {
+            judgement,
+            overlapping: evaluation
+                .overlapping
+                .iter()
+                .map(|&rule| self.rule_ids[rule].clone())
+                .collect(),
         }
     }
 
-    /// One line per active rule whose regular expression does not compile.
+    /// The active rules whose regular expression does not compile, by rule ID.
     /// Such a rule matches nothing; the channel's other rules still apply.
-    pub fn rule_problems(&self) -> Vec<String> {
+    pub fn rule_errors(&self) -> Vec<RuleProblem> {
         self.evaluator
             .rule_errors()
             .iter()
-            .map(|err| {
+            .map(|err| RuleProblem {
+                rule_id: self.rule_ids[err.rule].clone(),
+                error: err.source.clone(),
+            })
+            .collect()
+    }
+
+    /// One line per active rule whose regular expression does not compile.
+    pub fn rule_problems(&self) -> Vec<String> {
+        self.rule_errors()
+            .iter()
+            .map(|problem| {
                 format!(
                     "Invalid regex in rule {} of {}: {}",
-                    self.rule_ids[err.rule],
+                    problem.rule_id,
                     self.channel.masked_url(),
-                    err.source
+                    problem.error
                 )
             })
             .collect()
@@ -197,6 +239,28 @@ mod tests {
         assert_eq!(rule_id, "second");
         assert_eq!(save_path, PathBuf::from("/media/anime/second/Season 01"));
         assert_eq!(episode, 1);
+    }
+
+    #[test]
+    fn evaluation_lists_the_later_active_rules_that_also_match_by_id() {
+        let p = plan(vec![
+            rule("first", 0, Some("Show"), RuleState::Active),
+            rule("archived", 1, Some("Show"), RuleState::Archived),
+            rule("waiting", 2, None, RuleState::Active),
+            rule("other", 3, Some("Other"), RuleState::Active),
+            rule("last", 4, Some("Sho"), RuleState::Active),
+        ]);
+
+        let evaluation = p.evaluate("Show - 01");
+        assert_eq!(evaluation.overlapping, ["last"]);
+        assert_eq!(evaluation.judgement, p.judge("Show - 01"));
+        // Nothing overlaps when a single rule matches, or none does.
+        assert!(p.evaluate("Other - 01").overlapping.is_empty());
+        assert!(p.evaluate("Nothing").overlapping.is_empty());
+        // An excluded item is taken by no rule, so it overlaps nothing either.
+        let excluded = p.evaluate("Show [Batch]");
+        assert_eq!(excluded.judgement, Judgement::Excluded);
+        assert!(excluded.overlapping.is_empty());
     }
 
     #[test]

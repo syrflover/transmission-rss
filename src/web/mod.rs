@@ -21,7 +21,9 @@ pub mod channels_api;
 pub mod env;
 pub mod error;
 pub mod import_api;
+pub mod rules_api;
 pub mod state;
+pub mod status_api;
 
 pub use error::ApiError;
 pub use state::AppState;
