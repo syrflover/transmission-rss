@@ -167,7 +167,10 @@ mod tests {
         assert_eq!(env.transmission_url.password(), Some("hunter2"));
 
         let shown = format!("{env:?}");
-        assert!(!shown.contains("hunter2") && !shown.contains("admin"), "{shown}");
+        assert!(
+            !shown.contains("hunter2") && !shown.contains("admin"),
+            "{shown}"
+        );
         assert!(shown.contains("tr:9091/transmission/rpc"), "{shown}");
     }
 

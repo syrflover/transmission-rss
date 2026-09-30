@@ -203,8 +203,13 @@ mod tests {
             }
         }
         assert_eq!(got[0].stored_title, "Show [***] - 01");
-        assert!(got[0].stored_link.contains("tr=https%3A%2F%2Ftr.test%2Fa%3Fpasskey%3D***"));
-        assert_eq!(got[1].stored_link, "https://t.test/dl?torrent_pass=***&id=3");
+        assert!(got[0]
+            .stored_link
+            .contains("tr=https%3A%2F%2Ftr.test%2Fa%3Fpasskey%3D***"));
+        assert_eq!(
+            got[1].stored_link,
+            "https://t.test/dl?torrent_pass=***&id=3"
+        );
         // What Transmission is asked to add and what is judged stay as the feed gave them.
         assert!(got[0].link.contains(encoded_twice));
         assert!(got[0].title.contains(TOKEN));

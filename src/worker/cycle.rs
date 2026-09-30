@@ -21,8 +21,8 @@ use crate::{
         history::{HistoryResult, HistoryStore, Millis, Observation, Recorded},
     },
     transmission::{
-        self, add_item, remove_stale, rename_with_retries, AddError, AddKind, Redactor, RemovedTorrent,
-        RenamePolicy, SessionConfig,
+        self, add_item, remove_stale, rename_with_retries, AddError, AddKind, Redactor,
+        RemovedTorrent, RenamePolicy, SessionConfig,
     },
 };
 
