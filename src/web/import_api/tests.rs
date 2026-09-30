@@ -96,8 +96,8 @@ fn file() -> String {
   rules:
     - match: B1
       directory: B/one
-    - match: ''
-      directory: B/waiting
+    - match: B2
+      directory: B/two
     - match: B3
       directory: B/three
       episode: 0
@@ -171,7 +171,7 @@ async fn an_empty_app_takes_everything_without_asking_and_keeps_the_file_exactly
         .collect();
     assert_eq!(
         phrases,
-        [json!("B1"), Value::Null, json!("B3"), json!("B4")]
+        [json!("B1"), json!("B2"), json!("B3"), json!("B4")]
     );
     assert_eq!(channels[0]["rules"][1]["episode"], -24);
     assert_eq!(channels[0]["rules"][1]["regex"], true);
@@ -214,9 +214,8 @@ async fn an_empty_app_takes_everything_without_asking_and_keeps_the_file_exactly
     );
     assert_eq!(a.rules[2].episode, 13);
     assert_eq!(stored[1].channel.secret_query, ["token"]);
-    // `match: ''` is stored as a rule waiting for its title, never as ''.
-    assert_eq!(stored[1].rules[1].r#match, None);
-    assert_eq!(stored[1].rules[1].directory, "B/waiting");
+    assert_eq!(stored[1].rules[1].r#match.as_deref(), Some("B2"));
+    assert_eq!(stored[1].rules[1].directory, "B/two");
     assert_eq!(stored[1].rules[2].episode, 0);
     assert_eq!(stored[1].rules.len(), 4);
 }

@@ -43,9 +43,9 @@ impl std::error::Error for ParseError {}
 
 /// Parses the file into channels in file order, each with its rules in file
 /// order. Every query name of every URL is secret. A rule with `match: ""`
-/// becomes a rule waiting for its title (no phrase), because the database
-/// cannot store an empty phrase and an empty phrase means exactly that state
-/// in the app.
+/// is refused: the old executable matched every title with it, while the app
+/// has no match-everything rule and reads an empty phrase as waiting for a
+/// title, so neither reading would keep what the file meant.
 pub fn parse(content: &str) -> Result<Vec<ImportChannel>, ParseError> {
     let content = content.strip_prefix('\u{feff}').unwrap_or(content);
 
@@ -151,8 +151,14 @@ fn convert(index: usize, config: &ChannelConfig) -> Result<ImportChannel, ParseE
                 j + 1
             )));
         }
+        if rule.r#match.is_empty() {
+            return Err(ParseError::new(format!(
+                "{n}번째 채널의 {}번째 규칙은 `match`가 비어 있어요. 지금 실행 파일에서는 모든 항목에 맞는 규칙이지만 앱에는 그런 규칙이 없어요. 일치 문구를 채우거나 규칙을 지운 뒤 다시 가져와 주세요.",
+                j + 1
+            )));
+        }
         rules.push(RuleInput {
-            r#match: Some(rule.r#match.clone()).filter(|phrase| !phrase.is_empty()),
+            r#match: Some(rule.r#match.clone()),
             regex: rule.regex,
             case_insensitive: rule.case_insensitive,
             directory: rule.directory.to_string_lossy().into_owned(),
@@ -228,14 +234,12 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_match_becomes_a_rule_waiting_for_its_title() {
-        let channels = parse(
-            "- url: https://x.test/rss\n  directory: /m\n  rules:\n    - match: ''\n      directory: Later\n",
-        )
-        .unwrap();
-        let rule = &channels[0].rules[0];
-        assert_eq!(rule.r#match, None);
-        assert_eq!(rule.directory, "Later");
+    fn an_empty_match_is_refused_naming_the_rule() {
+        let message = err(
+            "- url: https://x.test/rss\n  directory: /m\n  rules:\n    - match: a\n      directory: A\n    - match: ''\n      directory: Later\n",
+        );
+        assert!(message.contains("1번째 채널의 2번째 규칙"), "{message}");
+        assert!(message.contains("`match`가 비어"), "{message}");
     }
 
     #[test]

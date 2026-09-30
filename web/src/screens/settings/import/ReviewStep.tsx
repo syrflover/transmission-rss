@@ -142,7 +142,6 @@ function RuleRow({ rule, no, replacing }: { rule: RuleView; no: number; replacin
         <Facts>
           {rule.regex && <Tag>정규식</Tag>}
           {rule.case_insensitive && <Tag>대소문자 무시</Tag>}
-          {rule.match === null && <Tag>일치 문구가 비어 있어요</Tag>}
           {replacing && rule.keeps_existing_rule && <Tag icon={CheckIcon}>지금 규칙 유지</Tag>}
           {rule.invalid_regex && (
             <Tag icon={AlertIcon} tone="warn">
@@ -152,11 +151,6 @@ function RuleRow({ rule, no, replacing }: { rule: RuleView; no: number; replacin
         </Facts>
         {rule.invalid_regex && (
           <p className="text-[13px] text-text-muted">정규식을 읽을 수 없어서 이 규칙은 어떤 제목에도 맞지 않아요.</p>
-        )}
-        {rule.match === null && (
-          <p className="text-[13px] text-text-muted">
-            일치 문구가 비어 있어서 제목 대기 규칙으로 가져와요. 제목이 정해지기 전에는 아무것도 받지 않아요.
-          </p>
         )}
       </div>
     </li>
