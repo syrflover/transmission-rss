@@ -141,12 +141,20 @@ pub async fn get_torrents(
                 TorrentGetField::Name,
                 TorrentGetField::HashString,
                 TorrentGetField::Labels,
+                TorrentGetField::LeftUntilDone,
+                TorrentGetField::SizeWhenDone,
             ]),
             None,
         )
         .await?;
 
     Ok(res.arguments.torrents)
+}
+
+/// Whether Transmission has everything of `torrent` it was asked to download.
+/// A torrent without metadata yet (size 0) or without the fields is not.
+fn is_finished(torrent: &Torrent) -> bool {
+    torrent.left_until_done == Some(0) && torrent.size_when_done.is_some_and(|size| size > 0)
 }
 
 pub async fn get_torrent(
@@ -581,10 +589,12 @@ pub struct RemovedTorrent {
     pub hash: String,
 }
 
-/// Removes (keeping the downloaded data) every bot-labelled torrent for which
-/// `is_kept(hash, labels)` is false, i.e. torrents whose item is no longer in
-/// the feeds. Prints one `Removed` line per torrent. A failure to list or remove
-/// is printed and leaves things as they are.
+/// Removes (keeping the downloaded data) every finished bot-labelled torrent
+/// for which `is_kept(hash, labels)` is false, i.e. torrents whose item is no
+/// longer in the feeds. One still downloading stays until it has finished, so a
+/// Transmission that was down while its item left the feed does not leave the
+/// episode half downloaded. Prints one `Removed` line per torrent. A failure to
+/// list or remove is printed and leaves things as they are.
 pub async fn remove_stale(
     transmission: &mut TransClient,
     is_kept: impl Fn(&str, &[String]) -> bool,
@@ -596,6 +606,7 @@ pub async fn remove_stale(
             let oldest_torrents = torrents
                 .into_iter()
                 .filter(|torrent| has_label(torrent.labels.as_deref(), BOT_LABEL))
+                .filter(is_finished)
                 .filter(|torrent| {
                     !is_kept(
                         torrent.hash_string.as_deref().unwrap(),

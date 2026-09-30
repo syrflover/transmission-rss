@@ -541,6 +541,25 @@ async fn torrents_that_left_the_feed_are_removed_but_only_bot_labelled_ones() {
 }
 
 #[tokio::test]
+async fn a_bot_torrent_that_left_the_feed_unfinished_is_removed_once_it_has_finished() {
+    let h = Harness::new().await;
+    channel_a(&h).await;
+    let hash = "slow0000000000000000000000000000000000aa";
+    h.tr.preload(FakeTorrent::new(hash, "Stalled.mkv").bot().unfinished());
+    let worker = h.worker();
+
+    let report = run(&worker).await;
+    assert!(report.removed.is_empty(), "{:?}", report.removed);
+    assert!(h.tr.calls_of("torrent-remove").is_empty());
+
+    h.tr.finish(hash);
+    h.advance(300_000);
+    let report = run(&worker).await;
+    let removed: Vec<_> = report.removed.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(removed, ["Stalled.mkv"]);
+}
+
+#[tokio::test]
 async fn nothing_is_removed_when_no_feed_could_be_read() {
     let h = Harness::new().await;
     h.tr.preload(FakeTorrent::new("gone0000000000000000000000000000000000aa", "Old Show").bot());

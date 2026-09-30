@@ -109,6 +109,9 @@ pub struct FakeTorrent {
     /// Transmission status number: 0 stopped, 4 downloading, 6 seeding.
     pub status: u8,
     pub file_count: usize,
+    /// Bytes still to download (`leftUntilDone`); 0 for a finished torrent,
+    /// which is the default.
+    pub left_until_done: i64,
 }
 
 impl FakeTorrent {
@@ -121,6 +124,7 @@ impl FakeTorrent {
             download_dir: "/downloads".to_owned(),
             status: 4,
             file_count: 1,
+            left_until_done: 0,
         }
     }
 
@@ -131,6 +135,12 @@ impl FakeTorrent {
 
     pub fn status(mut self, status: u8) -> Self {
         self.status = status;
+        self
+    }
+
+    /// Still downloading: some bytes are left.
+    pub fn unfinished(mut self) -> Self {
+        self.left_until_done = 1 << 20;
         self
     }
 }
@@ -225,6 +235,15 @@ impl FakeTransmission {
         for t in self.state.lock().unwrap().torrents.iter_mut() {
             if t.hash == hash {
                 t.status = status;
+            }
+        }
+    }
+
+    /// Finishes the download of `hash`: nothing is left to download.
+    pub fn finish(&self, hash: &str) {
+        for t in self.state.lock().unwrap().torrents.iter_mut() {
+            if t.hash == hash {
+                t.left_until_done = 0;
             }
         }
     }
@@ -447,6 +466,7 @@ async fn tr_rpc_answer(
                     .to_owned(),
                 status: 4,
                 file_count,
+                left_until_done: 0,
             });
             ok(json!({ "torrent-added": { "id": id, "hashString": hash, "name": name } }))
                 .into_response()
@@ -463,6 +483,7 @@ async fn tr_rpc_answer(
                     let mut torrent = json!({
                         "id": t.id, "name": t.name, "hashString": t.hash, "status": t.status,
                         "labels": t.labels, "file-count": t.file_count, "downloadDir": t.download_dir,
+                        "leftUntilDone": t.left_until_done, "sizeWhenDone": 1_i64 << 30,
                     });
                     if omit_file_count {
                         torrent.as_object_mut().unwrap().remove("file-count");

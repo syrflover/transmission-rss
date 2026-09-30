@@ -332,8 +332,9 @@ pub async fn run_cycle(
         return Ok(report);
     }
 
-    // Remove bot-labelled torrents whose item is no longer in any feed. A torrent
-    // can only be called departed by a feed that was read, so:
+    // Remove finished bot-labelled torrents whose item is no longer in any feed
+    // (one still downloading waits until it has finished). A torrent can only be
+    // called departed by a feed that was read, so:
     //
     // - With no feed read at all there is nothing to judge that against (a
     //   channel-less database, or every feed down): nothing is removed.
