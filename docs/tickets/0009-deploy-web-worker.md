@@ -15,7 +15,9 @@
 - 자원 한도는 상시 실행에 맞게 다시 정하고, 정한 값과 근거를 운영 안내에 적어요.
 - 앞 티켓이 정한 실행 설정을 운영 안내와 Compose에 반영해요.
   DB 경로는 `TRSS_DB_PATH`, 웹은 `TRSS_WEB_BIND`·`TRSS_WEB_PORT`·`TRSS_WEB_STATIC_DIR`(이미지 기본값 `0.0.0.0`·`8080`·`/usr/local/share/trss/web`)이에요.
-  이미지의 ENTRYPOINT는 cron이 쓰는 `transmission-rss`라서, 웹 컨테이너는 `trss-web`을 명시해 실행해요. cron을 걷어낼 때 ENTRYPOINT도 다시 정해요.
+  worker는 `TRSS_DB_PATH`·`TRANSMISSION_URL`(필수)과 기존과 같은 이름의 속도 제한·큐·다운로드 폴더 변수, 주기 `TRSS_WORKER_INTERVAL_SECS`(기본 300)를 읽어요.
+  worker 배타성은 DB 파일 옆 `<DB 경로>.worker.lock`의 파일 잠금이라, DB와 같은 로컬 볼륨에 둬야 해요.
+  이미지의 ENTRYPOINT는 cron이 쓰는 `transmission-rss`라서, 웹·worker 컨테이너는 `trss-web`·`trss-worker`를 명시해 실행해요. cron을 걷어낼 때 ENTRYPOINT도 다시 정해요.
 - 0001–0003을 합친 트리의 `docker build`에서 `rusqlite`의 `bundled` SQLite가 musl로 컴파일되는 것까지 확인했어요. musl 바이너리가 실제로 DB를 열고 쓰는 것은 worker가 생긴 뒤 이 티켓에서 확인해요.
 - `Cargo.lock`이 `.gitignore`에 있어 이미지 빌드마다 Rust 의존성 버전이 달라질 수 있어요. 상시 실행 배포 전에 커밋해 고정할지 정해요.
 - 태그 기반 [배포 workflow](../../.github/workflows/deploy.yml)의 이미지 게시는 원격 쓰기이므로, 게시와 서버 반영은 사용자가 승인한 때만 해요.

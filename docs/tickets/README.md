@@ -28,10 +28,10 @@
 | [0001](0001-rule-evaluation.md) | 규칙 판정을 공통 모듈로 옮기고 정규식을 동작시켜요 | 완료 | 없음 |
 | [0002](0002-app-state-db.md) | 채널·규칙을 앱 DB에 저장해요 | 완료 | 없음 |
 | [0003](0003-web-shell.md) | 웹 서버와 화면 골격을 세워요 | 완료 | 없음 |
-| [0004](0004-worker-collection-history.md) | worker가 DB 설정으로 상시 수집하고 수집 이력을 남겨요 | 대기 | 0001, 0002 |
-| [0005](0005-legacy-yaml-import.md) | 기존 YAML을 채널 단위로 가져와요 | 대기 | 0002, 0003 |
+| [0004](0004-worker-collection-history.md) | worker가 DB 설정으로 상시 수집하고 수집 이력을 남겨요 | 완료 | 0001, 0002 |
+| [0005](0005-legacy-yaml-import.md) | 기존 YAML을 채널 단위로 가져와요 | 완료 | 0002, 0003 |
 | [0006](0006-rules-tab-preview.md) | 수집 화면 규칙 탭에서 규칙을 고치고 미리 봐요 | 대기 | 0001, 0002, 0003, 0004 |
-| [0007](0007-channels-tab-secrets.md) | 채널 탭에서 채널과 비밀 값을 관리해요 | 대기 | 0002, 0003 |
+| [0007](0007-channels-tab-secrets.md) | 채널 탭에서 채널과 비밀 값을 관리해요 | 완료 | 0002, 0003 |
 | [0008](0008-history-tab-receive-once.md) | 수집 이력을 보고 한 번 받기를 해요 | 대기 | 0003, 0004, 0006 |
 | [0009](0009-deploy-web-worker.md) | 웹과 worker를 배포하고 cron을 걷어내요 | 대기 | 0004, 0005 |
 
