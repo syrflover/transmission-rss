@@ -79,19 +79,19 @@
 | 다른 이름·경로, 지금 RSS에 있음 | `a_secret_under_another_name_is_found_in_the_current_feed`, 동일성이 링크인 경우 `a_link_whose_own_value_differs_from_the_channels_is_taken_from_the_feed_instead` |
 | 지금 RSS에서 빠짐 | `when_the_item_has_left_the_feed_the_link_cannot_be_recovered`, RSS가 500인 경우 `when_the_feed_cannot_be_read_the_link_cannot_be_recovered_either`(모두 Transmission 호출 없음) |
 | 1,000건 이상에서 `추가 실패` | 서버: `over_a_thousand_records_the_add_failed_filter_pages_without_jumping`(1,300건을 도착분과 함께 페이지). 브라우저: 1,306건 DB에서 `add_failed` 260건이 50건씩 6번에 중복·누락 없이 오고, 따라가던 줄의 문서 위치가 95프레임 내내 같아요. 날짜 머리 28개. |
-| `규칙 생성` 후 저장 안 함 | 화면은 링크로 이동만 하고 저장 API를 부르지 않아요. 브라우저 흐름 끝에서 채널 `rule_count`가 0이에요. 0006의 화면과 이어서 열리는 것은 확인하지 못했어요(아래). |
+| `규칙 생성` 후 저장 안 함 | 화면은 링크로 이동만 하고 저장 API를 부르지 않아요. 브라우저 흐름 끝에서 채널 `rule_count`가 0이에요. 0006과 합친 뒤 브라우저에서 `&`·`?`·`#`·`%`가 든 제목의 `규칙 생성`을 누르면 새 규칙 상세가 그 채널과 제목 그대로 채워져 열리고, 미리보기가 그 항목을 `이 규칙이 받아요`로 보여줘요. |
 
 그 밖에 확인한 것:
 
 - 이름을 만들 수 없는 항목: `a_name_trname_cannot_derive_stays_in_transmission_with_its_data_and_is_noted`(토렌트·데이터가 남고 `torrent-remove`·이름 바꾸기 호출이 없으며 `받음`과 메모가 기록되고 다음 주기에도 남아요), 기본 폴더로 받는 테스트, 메모 저장소 테스트 `a_note_goes_only_on_a_received_item_that_has_none`. 브라우저 확인은 메모를 넣기 전에 했고, 그 뒤에는 줄의 문구 한 곳만 바꿨어요(빌드만 확인).
 - 정리 단계: `a_torrent_received_by_hand_survives_the_next_cycle_while_its_item_is_in_the_feed`(두 주기를 지나도 남고, 항목이 RSS에서 빠지면 그때 지워져요), `a_torrent_transmission_already_had_is_kept_too`.
 - 재시작·동시 실행: 재시작한 worker가 접수된 명령을 한 번 실행, 실행 중 죽은 명령의 재실행, 넣은 뒤 죽은 경우 토렌트 한 개(`중복`), worker 둘이 동시에 잡으면 한 쪽만 실행하고 다른 쪽은 `Busy`, 수집 주기가 잠금을 잡은 동안 대기, 돌고 있는 worker가 다음 주기를 기다리지 않고 명령을 실행.
-- 저장소·API 단위 테스트(마이그레이션 4가 기존 DB의 데이터를 지키는지 포함). `cargo test --offline` 전체 통과, `cargo clippy --offline --all-targets` 경고 없음, `cargo fmt --check` 통과, `bun run build` 통과.
+- 저장소·API 단위 테스트(명령 마이그레이션이 기존 DB의 데이터를 지키는지 포함. 0006과 합치며 상태 스냅숏이 4, 명령이 5가 됐어요). `cargo test --offline` 전체 통과, `cargo clippy --offline --all-targets` 경고 없음, `cargo fmt --check` 통과, `bun run build` 통과.
 - 브라우저(헤드리스 Chromium, playwright-core, 로컬 `trss-web`·`trss-worker`, 시험용 RSS·Transmission 대역, 임시 DB): 44개 확인 통과. 1440·768·390·320px의 라이트·다크 모두에서 목록·펼침·긴 폴더 입력 상태에 가로 넘침 없음. `../../etc`는 문장으로 거부하고 접수하지 않음. 접수 뒤 줄이 `받는 중`이고 Transmission에 들어가기 전에는 `받음`으로 바뀌지 않음(4초 지연을 걸어 확인). 다시 불러온 화면도 진행 중 명령을 이어 보여줘요. 멈춘 Transmission은 빨간 까닭과 함께 `추가 실패`. 응답·페이지·웹/worker 로그에 비밀 값 없음.
+- 0006과 합친 뒤(임시 DB, 로컬 `trss-web`): 상태 판의 `실패·중복 2개`를 누르면 `/collect/history?result=add_failed,duplicate`가 열리고 `추가 실패`·`중복` 두 줄만 보여요. `규칙 생성` 연결은 위 표에 적었어요.
 
 ### 검증하지 못한 것과 남은 점
 
-- `규칙 생성`이 0006의 새 규칙 화면을 여는 것은 0006을 합치기 전이라 링크 주소(`/collect/rules/new?channel=…&match=…`)까지만 확인했어요. 합친 뒤 실제로 열리고 제목이 채워지는지 한 번 봐야 해요. 상태 판의 `실패·중복 N개` 링크는 0006의 몫이고, 이 탭은 `?result=add_failed,duplicate`를 받아 해당 칩을 눌린 상태로 열어요.
 - 브라우저 확인은 Rust 대역이 아니라 같은 프로토콜의 Node 대역으로 했어요. 실제 Transmission·실제 RSS는 쓰지 않았어요.
 - 저장 폴더의 링크 검사는 web/worker가 미디어 볼륨을 볼 수 있을 때만 링크를 따라가요. 볼 수 없으면 문자열 규칙(절대 경로·`..`)만 적용돼요. worker가 실행 직전에 다시 검사해요.
 - 알려진 틈: Transmission에 넣은 직후 결과를 쓰기 전에 worker가 죽으면 그 명령은 `중복`으로 끝나요(토렌트는 한 개). 추가 요청이 시간 초과로 실패했는데 Transmission이 실제로는 받았다면, 다음 주기의 정리가 그 토렌트를 지울 수 있어요.
