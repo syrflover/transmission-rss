@@ -2,6 +2,7 @@ import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 
 import { ScreenFrame } from "./ScreenFrame";
 import { CollectTabs } from "./collect/CollectTabs";
+import { StatusBoard } from "./collect/status/StatusBoard";
 import { COLLECT_TABS, DEFAULT_TAB, PANEL_ID, tabId } from "./collect/tabs";
 
 /**
@@ -15,7 +16,7 @@ export function CollectScreen() {
 
   return (
     <ScreenFrame title="수집">
-      {/* The status board (0006) goes here, above the tab row, the same for every tab. */}
+      <StatusBoard />
       <CollectTabs tabs={COLLECT_TABS} current={current} />
       <div
         role="tabpanel"
@@ -26,7 +27,8 @@ export function CollectScreen() {
       >
         <Routes>
           {COLLECT_TABS.map((tab) => (
-            <Route key={tab.path} path={tab.path} element={tab.element} />
+            // `/*` lets a tab own sub-paths, like `/collect/rules/new`.
+            <Route key={tab.path} path={`${tab.path}/*`} element={tab.element} />
           ))}
           <Route path="*" element={<Navigate to={`/collect/${DEFAULT_TAB}`} replace />} />
         </Routes>
