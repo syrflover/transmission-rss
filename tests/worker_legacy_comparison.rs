@@ -125,7 +125,12 @@ async fn the_worker_talks_to_transmission_like_the_legacy_binary() {
     assert_eq!(state(&h.tr), state(&legacy_tr));
 
     // The comparison is not vacuous.
-    let count = |prefix: &str| worker_calls.iter().filter(|c| c.starts_with(prefix)).count();
+    let count = |prefix: &str| {
+        worker_calls
+            .iter()
+            .filter(|c| c.starts_with(prefix))
+            .count()
+    };
     assert_eq!(count("session-set"), 1);
     assert_eq!(count("torrent-add"), 4, "{worker_calls:#?}");
     assert_eq!(count("torrent-rename-path"), 4);

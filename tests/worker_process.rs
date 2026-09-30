@@ -223,7 +223,8 @@ async fn two_worker_processes_run_a_period_once() {
     wait_until("the other to have skipped", || async {
         let skipped = |p: &Proc| {
             let out = p.output();
-            out.contains("Another worker is running a cycle") || out.contains("A cycle started recently")
+            out.contains("Another worker is running a cycle")
+                || out.contains("A cycle started recently")
         };
         skipped(&a) || skipped(&b)
     })
@@ -274,7 +275,10 @@ async fn logs_and_history_never_contain_secret_query_values() {
     assert!(worker.wait_exit(Duration::from_secs(10)).await.success());
 
     let output = worker.output();
-    assert!(!output.contains(SECRET), "secret in the worker's output:\n{output}");
+    assert!(
+        !output.contains(SECRET),
+        "secret in the worker's output:\n{output}"
+    );
     // The failures are reported, with the channel in masked form.
     assert!(output.contains("token=***"), "{output}");
     assert!(output.contains("HTTP status 500"), "{output}");
