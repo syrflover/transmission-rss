@@ -42,7 +42,7 @@
 
 ### 구현한 것
 
-- 웹 명령의 계약을 `src/store/commands/`(저장소, 마이그레이션 4), `src/web/commands_api.rs`, `src/worker/commands.rs`로 세웠어요. 다음 명령은 종류와 payload만 더하면 돼요.
+- 웹 명령의 계약을 `src/store/commands/`(저장소, 마이그레이션 5), `src/web/commands_api.rs`, `src/worker/commands.rs`로 세웠어요. 다음 명령은 종류와 payload만 더하면 돼요.
 
   | 호출 | 응답 |
   | --- | --- |
@@ -50,13 +50,15 @@
   | `GET /api/commands/{id}` | 명령과 상태, 끝났으면 `outcome{result, reason}`. 모르는 ID는 `404`(서버가 접수한 적 없음). |
 
   상태는 `pending → running → done | failed`예요. 접수 응답은 `pending`일 뿐이고 결과는 worker가 남긴 `outcome`과 기록 항목에서만 나와요.
-  명령 ID는 브라우저가 사용자 동작마다 `crypto.getRandomValues`로 만들어요(8~64자 `[A-Za-z0-9_-]`). 저장소는 `commands(seq, id UNIQUE, kind, payload(정규 JSON), subject, state, attempts, created_at, updated_at, finished_at, outcome)`이고, 같은 ID의 접수는 한 쓰기 트랜잭션이라 동시 전달도 한 건이에요.
+  명령 ID는 브라우저가 사용자 동작마다 `crypto.getRandomValues`로 만들어요(8~64자 `[A-Za-z0-9_-]`). 저장소는 `commands(seq, id UNIQUE, kind, payload(정규 JSON), subject, state, attempts, created_at, updated_at, finished_at, outcome, add_unconfirmed)`이고(`add_unconfirmed`는 리뷰 뒤 수정의 마이그레이션 6), 같은 ID의 접수는 한 쓰기 트랜잭션이라 동시 전달도 한 건이에요.
 - worker는 3초마다(`TRSS_` 환경 변수 없이 `Worker::with_command_poll`로 조정) 열린 명령을 확인하고, 수집 주기와 같은 flock을 잡았을 때만 실행해요. 잠겨 있으면 다음 확인으로 미뤄요. 루프 훅은 `src/worker/mod.rs`의 두 번째 ticker 하나예요.
-  실행 중이던 worker가 죽으면 다음 worker가 `running` 명령을 다시 집어요(최대 5번). 이때 Transmission이 이미 받았으면 `중복`으로 끝나 두 번 넣지 않아요.
-- `한 번 받기`(`receive_once`) 실행: 채널 기본 폴더 아래로 폴더를 다시 확인(절대 경로·`..`·링크로 벗어남 거부)하고, 원래 링크를 되살려 채널 라벨로 넣은 뒤 결과를 기록 항목(`record_outcome`, 규칙 없음)과 명령에 함께 남겨요. 저장 폴더가 `Title/Season NN`이면 회차 변환 없이(`starts_episode_at = 0`) trname 이름으로 바꾸고, 기본 폴더에 받으면 이름을 바꾸지 않아요.
-  trname이 이름을 만들지 못하면(사용자 결정 "원래 이름으로 둠") 규칙 경로의 `rename_torrent`처럼 토렌트와 데이터를 지우지 않고 원래 이름으로 둔 채 `받음`으로 기록하고, 항목에 "이름을 바꾸지 못했다"는 메모를 남겨요(`HistoryStore::note_received`, 결과 변경 기록은 남기지 않아요). 규칙 경로(`src/transmission/`)는 바꾸지 않았어요.
-- 링크 복원(`src/worker/commands/link.rs`): (1) 가린 자리를 채널 URL에서 같은 이름의 비밀 값으로 채워요. 채운 링크가 항목의 동일성 키와 맞는지 확인해요. (2) 가림이 남으면 채널의 지금 RSS를 읽어 같은 동일성 키의 항목 링크를 써요. (3) 못 찾으면 `추가 실패`와 "원래 링크를 되살리지 못했어요."로 시작하는 까닭을 남기고 Transmission에는 아무것도 보내지 않아요. 복원한 링크는 이력·응답·로그에 남지 않고, 로그 가림 목록에만 더해요.
-- `cycle.rs`: 청소 단계가 지우지 않을 해시에, 이번 주기에 읽은 RSS에 아직 있는 항목 중 이력이 받음·중복으로 기록한 해시를 더했어요. 규칙 없이 받은 토렌트가 다음 주기에 지워지지 않아요.
+  실행 중이던 worker가 죽으면 다음 worker가 `running` 명령을 다시 집어요(최대 5번). 이때 Transmission이 이미 받았으면 `중복`으로 끝나 두 번 넣지 않고, 이름도 바꾸지 않아요. `running` 명령이 남은 채 시작한 수집 주기는 빠진 토렌트를 정리하지 않아요.
+- `한 번 받기`(`receive_once`) 실행: 채널 기본 폴더 아래로 폴더를 다시 확인(절대 경로·`..`·링크로 벗어남 거부)하고, 원래 링크를 되살려 채널 라벨로 넣은 뒤 결과를 기록 항목(`record_outcome`, 규칙 없음)에 남겨요. 명령의 결과와 까닭은 넣은 뒤 기록 항목에 남은 결과를 따라요(그 사이 규칙이 받았으면 `받음`).
+  이 명령의 추가로 토렌트가 새로 들어갔을 때만 고른 폴더 기준으로 회차 변환 없이(`starts_episode_at = 0`) trname 이름을 붙여요. Transmission에 이미 있던 토렌트(`중복`)는 이름을 바꾸지 않고 메모도 남기지 않아요.
+  trname이 이름을 만들지 못하면(사용자 결정 "원래 이름으로 둠") 규칙 경로와 달리 토렌트와 데이터를 지우지 않고 원래 이름으로 둔 채 `받음`으로 기록하고, 항목에 메모를 남겨요(`HistoryStore::note_received`, 결과 변경 기록은 남기지 않아요). 채널 기본 폴더처럼 작품·시즌 부분이 없는 폴더에 받으면 이 경우라서, 원래 이름과 "작품과 회차를 알아내지 못했다"는 메모가 남아요. 파일이 여러 개인 토렌트는 바로 그대로 두고 "파일이 여러 개인 토렌트라 이름을 바꾸지 않았어요."를 남겨요.
+  이름 바꾸기와 메모가 끝난 뒤에 명령을 끝내요. 화면이 끝난 명령을 보고 항목을 다시 읽으면 메모가 함께 보여요.
+- 링크 복원(`src/worker/commands/link.rs`): (1) 링크의 호스트가 채널 URL의 호스트와 같을 때만(대소문자 무시, 사용자 결정) 가린 자리를 채널 URL에서 같은 이름의 비밀 값으로 채워요. 채운 링크가 항목의 동일성 키와 맞는지 확인해요. 호스트가 없는 자석 링크나 다른 호스트의 링크는 채우지 않아요. (2) 가림이 남거나 채우지 않았으면 채널의 지금 RSS를 읽어 같은 동일성 키의 항목 링크를 써요. (3) 못 찾으면 `추가 실패`와 "원래 링크를 되살리지 못했어요."로 시작하는 까닭을 남기고 Transmission에는 아무것도 보내지 않아요. 복원한 링크는 이력·응답·로그에 남지 않고, 로그 가림 목록에만 더해요.
+- `cycle.rs`: 청소 단계가 지우지 않을 해시에, 이번 주기에 읽은 RSS에 아직 있는 항목 중 이력이 받음·중복으로 기록한 해시를 더했어요. 규칙 없이 받은 토렌트가 다음 주기에 지워지지 않아요. 규칙이 나중에 그 항목을 고르면 `중복`이 되고, 규칙 경로는 직접 받은 토렌트의 이름을 바꾸거나 지우지 않아요(리뷰 뒤 수정).
 - 기록 API `GET /api/history?result=a,b&channel=&after=&limit=`(기본 50, 최대 200)와 `GET /api/history/{id}`(`src/web/history_api.rs`)는 최신순 커서 페이지와 `counts`를 주고, 링크는 보내지 않아요. 열린 명령은 항목의 `command`로 실려 새로고침해도 받는 중이 이어져요.
 - 화면(`web/src/screens/collect/history/`): 결과 칩(개수 포함)·채널 선택, `9월 28일 (월)` 날짜 머리, IntersectionObserver 무한 스크롤, 펼침 줄(받지 않은 까닭, 저장 폴더 칸, `한 번 받기`, `규칙 생성`)이에요. 필터는 `/collect/history?result=add_failed,duplicate&channel=<id>`로 주소에 남아요.
   저장 폴더 칸은 채널 기본 폴더를 앞에 고정해 보여주고 그 아래 경로만 적어요(비우면 기본 폴더). `규칙 생성`은 `/collect/rules/new?channel=<id>&match=<제목>`으로 이동해요.
@@ -64,7 +66,7 @@
 
 ### 검증한 것
 
-백엔드 행은 `tests/receive_once.rs`(26개, 시험용 Transmission·RSS)로 확인했어요.
+백엔드 행은 `tests/receive_once.rs`(리뷰 뒤 수정을 더해 38개, 시험용 Transmission·RSS)로 확인했어요.
 
 | 완료 기준 | 근거 |
 | --- | --- |
@@ -75,9 +77,9 @@
 | 같은 ID·다른 항목 | `the_same_command_id_with_another_item_is_refused`(`409`, 첫 요청만 실행) |
 | 접수 응답 전 끊김 | 서버: `after_a_lost_answer_the_command_is_looked_up_by_the_same_id`(GET으로 조회, 모르는 ID는 404). 브라우저: 응답을 버린 경우와 요청이 서버에 닿지 않은 경우 모두 POST의 ID가 같고 새 ID가 없음 |
 | Transmission 멈춤 | `a_stopped_transmission_leaves_add_failed_with_a_reason`, `a_transmission_that_refuses_the_torrent_gives_its_reason`, 실패 뒤 새 명령으로 다시 받기 `a_failed_item_can_be_received_again_with_a_new_command` |
-| 같은 이름 `token` 비밀 값 | `a_secret_in_a_query_of_the_channels_name_is_filled_back_from_the_channel`(복원한 링크가 Transmission에 가고 RSS를 다시 읽지 않음), `assert_secret_nowhere`가 API 본문·이력·변경 이력·명령에서 원문을 찾지 않음. 실제 `trss-worker` 프로세스 출력에서도 `a_started_worker_process_runs_an_accepted_command_and_prints_no_secret` |
-| 다른 이름·경로, 지금 RSS에 있음 | `a_secret_under_another_name_is_found_in_the_current_feed`, 동일성이 링크인 경우 `a_link_whose_own_value_differs_from_the_channels_is_taken_from_the_feed_instead` |
-| 지금 RSS에서 빠짐 | `when_the_item_has_left_the_feed_the_link_cannot_be_recovered`, RSS가 500인 경우 `when_the_feed_cannot_be_read_the_link_cannot_be_recovered_either`(모두 Transmission 호출 없음) |
+| 같은 이름 `token` 비밀 값 | `a_secret_in_a_query_of_the_channels_name_is_filled_back_from_the_channel`(채널과 같은 호스트의 링크. 복원한 링크가 Transmission에 가고 RSS를 다시 읽지 않음), `assert_secret_nowhere`가 API 본문·이력·변경 이력·명령에서 원문을 찾지 않음. 실제 `trss-worker` 프로세스 출력에서도 `a_started_worker_process_runs_an_accepted_command_and_prints_no_secret` |
+| 다른 이름·경로, 지금 RSS에 있음 | `a_secret_under_another_name_is_found_in_the_current_feed`, 동일성이 링크인 경우 `a_link_whose_own_value_differs_from_the_channels_is_taken_from_the_feed_instead`, 다른 호스트의 링크 `a_link_on_another_host_is_not_filled_with_the_channels_secret`(채널의 비밀 값이 Transmission 요청에 없음) |
+| 지금 RSS에서 빠짐 | `when_the_item_has_left_the_feed_the_link_cannot_be_recovered`, RSS가 500인 경우 `when_the_feed_cannot_be_read_the_link_cannot_be_recovered_either`, 다른 호스트의 링크 `a_link_on_another_host_that_left_the_feed_is_not_received`(모두 Transmission 호출 없음) |
 | 1,000건 이상에서 `추가 실패` | 서버: `over_a_thousand_records_the_add_failed_filter_pages_without_jumping`(1,300건을 도착분과 함께 페이지). 브라우저: 1,306건 DB에서 `add_failed` 260건이 50건씩 6번에 중복·누락 없이 오고, 따라가던 줄의 문서 위치가 95프레임 내내 같아요. 날짜 머리 28개. |
 | `규칙 생성` 후 저장 안 함 | 화면은 링크로 이동만 하고 저장 API를 부르지 않아요. 브라우저 흐름 끝에서 채널 `rule_count`가 0이에요. 0006과 합친 뒤 브라우저에서 `&`·`?`·`#`·`%`가 든 제목의 `규칙 생성`을 누르면 새 규칙 상세가 그 채널과 제목 그대로 채워져 열리고, 미리보기가 그 항목을 `이 규칙이 받아요`로 보여줘요. |
 
@@ -85,7 +87,7 @@
 
 - 이름을 만들 수 없는 항목: `a_name_trname_cannot_derive_stays_in_transmission_with_its_data_and_is_noted`(토렌트·데이터가 남고 `torrent-remove`·이름 바꾸기 호출이 없으며 `받음`과 메모가 기록되고 다음 주기에도 남아요), 기본 폴더로 받는 테스트, 메모 저장소 테스트 `a_note_goes_only_on_a_received_item_that_has_none`. 브라우저 확인은 메모를 넣기 전에 했고, 그 뒤에는 줄의 문구 한 곳만 바꿨어요(빌드만 확인).
 - 정리 단계: `a_torrent_received_by_hand_survives_the_next_cycle_while_its_item_is_in_the_feed`(두 주기를 지나도 남고, 항목이 RSS에서 빠지면 그때 지워져요), `a_torrent_transmission_already_had_is_kept_too`.
-- 재시작·동시 실행: 재시작한 worker가 접수된 명령을 한 번 실행, 실행 중 죽은 명령의 재실행, 넣은 뒤 죽은 경우 토렌트 한 개(`중복`), worker 둘이 동시에 잡으면 한 쪽만 실행하고 다른 쪽은 `Busy`, 수집 주기가 잠금을 잡은 동안 대기, 돌고 있는 worker가 다음 주기를 기다리지 않고 명령을 실행.
+- 재시작·동시 실행: 재시작한 worker가 접수된 명령을 한 번 실행, 실행 중 죽은 명령의 재실행, 넣은 뒤 죽은 경우 토렌트 한 개(`중복`, 이름 변경 없음), worker 둘이 동시에 잡으면 한 쪽만 실행하고 다른 쪽은 `Busy`, 수집 주기가 잠금을 잡은 동안 대기, 돌고 있는 worker가 다음 주기를 기다리지 않고 명령을 실행.
 - 저장소·API 단위 테스트(명령 마이그레이션이 기존 DB의 데이터를 지키는지 포함. 0006과 합치며 상태 스냅숏이 4, 명령이 5가 됐어요). `cargo test --offline` 전체 통과, `cargo clippy --offline --all-targets` 경고 없음, `cargo fmt --check` 통과, `bun run build` 통과.
 - 브라우저(헤드리스 Chromium, playwright-core, 로컬 `trss-web`·`trss-worker`, 시험용 RSS·Transmission 대역, 임시 DB): 44개 확인 통과. 1440·768·390·320px의 라이트·다크 모두에서 목록·펼침·긴 폴더 입력 상태에 가로 넘침 없음. `../../etc`는 문장으로 거부하고 접수하지 않음. 접수 뒤 줄이 `받는 중`이고 Transmission에 들어가기 전에는 `받음`으로 바뀌지 않음(4초 지연을 걸어 확인). 다시 불러온 화면도 진행 중 명령을 이어 보여줘요. 멈춘 Transmission은 빨간 까닭과 함께 `추가 실패`. 응답·페이지·웹/worker 로그에 비밀 값 없음.
 - 0006과 합친 뒤(임시 DB, 로컬 `trss-web`): 상태 판의 `실패·중복 2개`를 누르면 `/collect/history?result=add_failed,duplicate`가 열리고 `추가 실패`·`중복` 두 줄만 보여요. `규칙 생성` 연결은 위 표에 적었어요.
@@ -94,7 +96,29 @@
 
 - 브라우저 확인은 Rust 대역이 아니라 같은 프로토콜의 Node 대역으로 했어요. 실제 Transmission·실제 RSS는 쓰지 않았어요.
 - 저장 폴더의 링크 검사는 web/worker가 미디어 볼륨을 볼 수 있을 때만 링크를 따라가요. 볼 수 없으면 문자열 규칙(절대 경로·`..`)만 적용돼요. worker가 실행 직전에 다시 검사해요.
-- 알려진 틈: Transmission에 넣은 직후 결과를 쓰기 전에 worker가 죽으면 그 명령은 `중복`으로 끝나요(토렌트는 한 개). 추가 요청이 시간 초과로 실패했는데 Transmission이 실제로는 받았다면, 다음 주기의 정리가 그 토렌트를 지울 수 있어요.
+- 알려진 틈: Transmission에 넣은 직후 결과를 쓰기 전에 worker가 죽으면 그 명령은 다시 실행돼 `중복`으로 끝나요(토렌트는 한 개이고, 이름 변경과 메모는 없어요). 그 사이에 도는 수집 주기는 `running` 명령이 있어 정리를 건너뛰어요.
+  추가 요청이 답을 받지 못했는데(시간 초과·연결 실패) Transmission이 실제로는 받았다면, 명령에 그 사실을 남겨 다음 주기 한 번만 정리를 건너뛰어요. 해시를 알 방법은 없어서, 규칙이나 새 `한 번 받기`가 그 항목을 다시 만나 해시를 남기지 않으면 그다음 주기의 정리가 그 토렌트를 Transmission에서 빼요(데이터는 남아요).
 - 이력 전이 규칙상 `추가 실패`로 남은 `한 번 받기` 결과를 이후 주기가 `규칙 불일치`로 덮어쓸 수 있어요(받음·중복만 고정). 명령 기록에는 실패와 까닭이 남아요.
 - 제목 검색 상자와 상태 판에서 넘어오는 추천 필터는 넣지 않았어요(완료 기준 밖).
 
+### 리뷰 뒤 수정
+
+독립 리뷰의 지적을 고쳤어요. 고친 것마다 회귀 시험을 먼저 써서 수정 전에는 실패하고 수정 뒤에는 통과하는 것을 확인했어요. 시험은 따로 적지 않으면 `tests/receive_once.rs`에 있어요.
+
+- **규칙 경로가 직접 받은 토렌트를 지움 (P1)**: 주기는 Transmission에 이미 있던 토렌트(`중복`)에도 이름 변경을 걸었고, 기존 `rename_torrent`는 trname이 이름을 만들지 못하면 토렌트를 데이터와 함께 지워요. 직접 받은 항목에서 만든 규칙이 그 항목을 고르면 데이터가 지워졌어요.
+  이제 `rename_torrent`는 `RenameMode`를 받아요. 이번 주기가 새로 넣은 토렌트(`Added`)만 기존 동작(이름 변경, 이름을 못 만들면 데이터와 함께 제거)을 따르고, 기존 바이너리도 이 방식을 써요. 이미 있던 토렌트(`Existing`)는 지우지 않고, 이름이 아직 trname 형식이 아닐 때만 바꿔요(앞선 실행이 끝내지 못한 이름 변경). 기록에 직접 받음(규칙 없는 `받음`)으로 남은 토렌트는 이름도 바꾸지 않아요.
+  기존 바이너리는 이미 이름을 바꾼 `중복` 토렌트에 회차 보정을 한 번 더 적용했어요(`Slime S04E38` → `S04E14`). 이 경우도 이제 그대로 둬요. 출처를 모르는 토렌트(전환 전 cron이 넣은 것)의 첫 이름 변경은 기존 바이너리와 같아서 `worker_legacy_comparison`이 그대로 통과해요.
+  시험: `a_rule_that_later_selects_a_hand_received_item_neither_removes_nor_renames_it`, `a_rule_with_another_folder_does_not_rename_a_hand_received_file`, `worker_cycle::a_torrent_transmission_already_had_is_never_removed_by_the_renaming`, `worker_cycle::a_torrent_a_rule_received_and_named_is_not_renamed_again`, 저장소 `a_torrent_is_received_by_hand_when_a_received_item_without_a_rule_holds_it`.
+- **`중복`에도 이름을 바꾸고 결과가 어긋남 (P2)**: 명령은 자기 추가가 새로 넣었을 때만 이름을 바꿔요. 명령의 결과와 까닭은 기록 항목에 남은 결과에서 나와서, 규칙이 먼저 받은 항목이 "받음"과 "이미 같은 토렌트가 있어요"를 함께 보이지 않아요. 시험: `a_command_that_meets_the_torrent_a_rule_received_after_intake_leaves_it_as_it_is`, `a_command_into_the_base_folder_puts_no_note_on_an_item_a_rule_received`, `a_command_whose_torrent_went_in_before_the_worker_died_adds_no_second_torrent`(이름 변경 없음을 더함).
+- **재시작 뒤 첫 주기의 정리 (P2)**: 넣은 뒤 결과를 쓰기 전에 죽은 worker를 다시 띄우면 주기가 명령보다 먼저 돌아, 해시를 모르는 그 토렌트를 정리했어요. 이제 `Worker::tick`이 잠금을 잡은 채 `running` 명령 수를 세어 넘기고(`CommandsAtStart`), 하나라도 있으면 그 주기는 정리하지 않아요(`CycleReport::commands_running`). 시험: `a_cycle_run_while_a_command_is_left_running_removes_nothing`, 저장소 `only_started_and_unended_commands_count_as_running`.
+- **시간 초과한 명령의 추가 (P2)**: 명령의 추가가 답을 받지 못하면(`AddError::Rpc`) 또는 명령 태스크가 패닉하면, 명령을 끝낼 때 `add_unconfirmed`를 남겨요(마이그레이션 6, `CommandStore::finish_with_unconfirmed_add`). 다음 주기는 직전 주기 시작 뒤에 끝난 그런 명령이 있으면 정리를 한 번 건너뛰어요(`CycleReport::commands_unconfirmed`). 시험: `a_command_add_that_timed_out_after_transmission_took_it_holds_the_next_cleanup`(가짜 Transmission이 추가는 하고 답을 늦춰요), 저장소 `unconfirmed_adds_are_counted_from_a_point_in_time`, 마이그레이션 `database_from_before_unconfirmed_adds_keeps_its_commands_as_confirmed`.
+- **이미 받은 항목에 실패로 끝남 (P2)**: 규칙이 접수 뒤에 항목을 받았거나 `중복`으로 만난 뒤 명령의 추가가 실패하면, 명령은 기록 항목의 결과로 `done`이 돼요. 화면의 `endedMessage`도 `received`·`duplicate` 결과를 실패로 보이지 않아요. 시험: `a_failed_add_for_an_item_already_held_ends_with_the_items_result`.
+- **메모가 늦게 남음 (P3)**: 이름 바꾸기와 메모를 명령 태스크 안에서 마친 뒤 명령을 끝내요(`receive_once::run`). 시험: `the_command_ends_only_after_its_rename_step_and_note`(이름 변경 단계의 조회를 붙잡아 그동안 명령이 `running`인지 봐요).
+- **파일이 여러 개인 토렌트 (P3)**: 잠금을 잡은 채 이름 변경 시도를 끝까지 되풀이하지 않고 바로 그대로 둬요. 메모는 "파일이 여러 개인 토렌트라 이름을 바꾸지 않았어요."예요(명세의 "이름을 바꾸지 못했다는 메모"에 맞춘 짧은 문장). 파일 수 0은 자석 링크의 메타데이터를 기다리는 중이라 계속 기다려요. 시험: `a_torrent_with_several_files_is_left_as_it_is_without_retrying`.
+- **링크 복원이 다른 호스트로 비밀 값을 보냄 (P2, 사용자 결정 "같은 호스트만 채움")**: 이력은 이름으로 가리므로, 다른 호스트 링크의 자기 `token`도 가려져 채널의 `token`으로 채워졌고, GUID·제목 동일성에서는 확인할 방법이 없었어요. 이제 링크 호스트가 채널 URL 호스트와 같을 때만 채우고, 아니면 지금 RSS에서 찾아요. 시험: `a_link_on_another_host_is_not_filled_with_the_channels_secret`, `a_link_on_another_host_that_left_the_feed_is_not_received`, 같은 호스트는 `a_secret_in_a_query_of_the_channels_name_is_filled_back_from_the_channel`, 단위 시험 `only_a_link_on_the_channels_host_is_filled`. 명세도 고쳤어요.
+
+남긴 것:
+
+- 시간 초과한 명령의 토렌트는 한 주기만 지켜요(위 알려진 틈).
+- `추가 실패`로 끝난 명령의 결과를 이후 주기가 `규칙 불일치`로 덮어쓰는 것은 그대로예요(위).
+- 브라우저로는 다시 확인하지 않았어요. 화면 쪽 변경은 `endedMessage` 한 곳이고 `bun run build`만 확인했어요.
