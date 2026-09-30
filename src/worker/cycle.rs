@@ -9,7 +9,6 @@ use std::{
 use futures::{stream, StreamExt};
 use tokio::{task, task::JoinSet};
 use tokio_util::sync::CancellationToken;
-use transmission_rpc::TransClient;
 use url::Url;
 
 use super::{
@@ -22,7 +21,7 @@ use crate::{
         history::{HistoryResult, HistoryStore, Millis, Observation, Recorded},
     },
     transmission::{
-        add_item, remove_stale, rename_with_retries, AddError, AddKind, Redactor, RemovedTorrent,
+        self, add_item, remove_stale, rename_with_retries, AddError, AddKind, Redactor, RemovedTorrent,
         RenamePolicy, SessionConfig,
     },
 };
@@ -40,12 +39,22 @@ pub struct CycleContext {
     pub channels: ChannelStore,
     pub history: HistoryStore,
     pub transmission_url: Url,
+    /// The client for Transmission's requests; they time out
+    /// (see [`crate::transmission::http_client`]).
+    pub transmission_http: reqwest012::Client,
     pub session: SessionConfig,
     pub http: reqwest::Client,
     pub rename: RenamePolicy,
     /// Knows secrets that do not come from channels, such as credentials in
     /// the Transmission URL.
     pub redactor: Redactor,
+}
+
+impl CycleContext {
+    /// A client for Transmission, with timeouts.
+    fn transmission(&self) -> transmission_rpc::TransClient {
+        transmission::client(self.transmission_url.clone(), &self.transmission_http)
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -279,7 +288,7 @@ pub async fn run_cycle(
              leaving Transmission's torrents alone this cycle"
         );
     } else if report.channels_read > 0 {
-        let mut transmission = TransClient::new(ctx.transmission_url.clone());
+        let mut transmission = ctx.transmission();
         report.removed =
             remove_stale(&mut transmission, |hash| kept.contains(hash), &redactor).await;
     } else if report.channels > 0 {
@@ -414,7 +423,7 @@ async fn add_jobs(
 /// the items it would have taken are recorded as failed, and the next cycle
 /// tries again.
 async fn apply_session(ctx: &CycleContext, redactor: &Redactor) {
-    let mut transmission = TransClient::new(ctx.transmission_url.clone());
+    let mut transmission = ctx.transmission();
     let args = ctx.session.to_args();
     println!("Applying Transmission settings: {args:?}");
 
@@ -440,7 +449,7 @@ async fn process_job(
         return (JobOutcome::NotStarted, false);
     }
 
-    let mut transmission = TransClient::new(ctx.transmission_url.clone());
+    let mut transmission = ctx.transmission();
 
     let added = add_item(&mut transmission, &job.link, &job.save_path, &redactor).await;
 

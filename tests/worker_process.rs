@@ -185,6 +185,28 @@ async fn sigterm_while_reading_a_feed_exits_without_waiting_for_it() {
 }
 
 #[tokio::test]
+async fn sigterm_while_transmission_hangs_exits_within_the_grace_period() {
+    let h = harness_with_channel_a().await;
+    // Transmission takes the connection and never answers `torrent-add`; the
+    // request timeout (30 s) is far longer than the shutdown grace (5 s).
+    let gate = h.tr.hold("torrent-add");
+    let mut worker = Proc::spawn(&h, "w", &[]);
+
+    gate.wait_arrived().await;
+    let asked = Instant::now();
+    worker.sigterm();
+
+    let status = worker.wait_exit(Duration::from_secs(9)).await;
+    assert!(status.success(), "{status:?}\n{}", worker.output());
+    assert!(asked.elapsed() < Duration::from_secs(9));
+    let output = worker.output();
+    assert!(output.contains("Cycle abandoned"), "{output}");
+    assert!(output.contains("trss-worker stopped"), "{output}");
+    // Nothing was recorded for the items whose adds never answered.
+    assert_eq!(count_result(&h, HistoryResult::Received).await, 0);
+}
+
+#[tokio::test]
 async fn the_worker_keeps_running_while_transmission_is_down_and_adds_when_it_returns() {
     let mut h = harness_with_channel_a().await;
     h.tr.stop().await;

@@ -616,6 +616,62 @@ async fn a_refused_torrent_is_add_failed_with_transmissions_reason() {
         .contains("download directory path is not absolute"));
 }
 
+// --- Transmission not answering ----------------------------------------------------------
+
+#[tokio::test]
+async fn a_hung_torrent_add_times_out_and_the_lock_is_released() {
+    let h = Harness::new().await;
+    channel_a(&h).await;
+    let timeout = std::time::Duration::from_millis(300);
+    let worker = h.worker().with_transmission_timeout(timeout);
+    // Transmission takes the connection and never answers `torrent-add`.
+    let _never_released = h.tr.hold("torrent-add");
+
+    let started = std::time::Instant::now();
+    let report = tokio::time::timeout(std::time::Duration::from_secs(20), run(&worker))
+        .await
+        .expect("the cycle ended although Transmission never answered");
+    assert!(started.elapsed() < std::time::Duration::from_secs(10));
+
+    assert_eq!(report.add_failed, 3);
+    let failed = h
+        .history
+        .list(HistoryQuery {
+            result: Some(HistoryResult::AddFailed),
+            limit: MAX_PAGE_SIZE,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .items;
+    assert_eq!(failed.len(), 3);
+    assert!(failed
+        .iter()
+        .all(|i| i.reason.as_deref().is_some_and(|r| !r.contains(SECRET))));
+
+    // The lock was let go: the next tick is not refused as busy.
+    h.advance(300_000);
+    assert!(matches!(
+        worker.tick(&CancellationToken::new()).await.unwrap(),
+        TickOutcome::Ran(_)
+    ));
+}
+
+#[tokio::test]
+async fn a_hung_session_set_delays_the_cycle_by_the_timeout_only() {
+    let h = Harness::new().await;
+    channel_a(&h).await;
+    let worker = h
+        .worker()
+        .with_transmission_timeout(std::time::Duration::from_millis(300));
+    let _never_released = h.tr.hold("session-set");
+
+    let report = tokio::time::timeout(std::time::Duration::from_secs(20), run(&worker))
+        .await
+        .expect("the cycle ended although session-set never answered");
+    assert_eq!(report.added, 3);
+}
+
 // --- secrets -------------------------------------------------------------------------------
 
 /// Every text value in the history tables, as one string.
