@@ -90,8 +90,10 @@ pub struct ChannelView {
     pub position: i64,
     /// Send back as `version` when saving or deleting.
     pub version: i64,
-    /// The URL's host, for a heading; the store keeps no channel name.
+    /// The URL's host, the heading of a channel that has no `name`.
     pub host: String,
+    /// The display name the user gave, `null` when left blank.
+    pub name: Option<String>,
     /// The URL with secret values replaced by `***`; empty secrets stay empty.
     pub masked_url: String,
     /// The URL to start an edit from: secret values are blank.
@@ -128,6 +130,7 @@ fn view(channel: &Channel, rule_count: usize) -> ChannelView {
             .ok()
             .and_then(|u| u.host_str().map(str::to_owned))
             .unwrap_or_default(),
+        name: channel.name.clone(),
         masked_url: channel.masked_url(),
         edit_url: rewrite_query(&channel.url, |name, _, _| {
             channel
@@ -179,6 +182,9 @@ struct CreateBody {
     secret: HashMap<String, bool>,
     #[serde(default)]
     past_search: Option<String>,
+    /// Optional display name; blank or absent means unnamed.
+    #[serde(default)]
+    name: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -194,6 +200,9 @@ struct UpdateBody {
     secret: HashMap<String, bool>,
     #[serde(default)]
     past_search: Option<String>,
+    /// Optional display name; blank or absent means unnamed.
+    #[serde(default)]
+    name: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -211,7 +220,11 @@ struct Fields {
     excludes: Vec<String>,
     secret: HashMap<String, bool>,
     past_search: Option<String>,
+    name: Option<String>,
 }
+
+/// Longest display name, in characters.
+const NAME_MAX_CHARS: usize = 100;
 
 const BAD_BODY: &str = "요청 내용을 읽지 못했어요. 화면을 새로고침한 뒤 다시 시도해 주세요.";
 
@@ -229,6 +242,7 @@ impl Fields {
         excludes: Vec<String>,
         secret: HashMap<String, bool>,
         past_search: Option<String>,
+        name: Option<String>,
     ) -> Result<Fields, ApiError> {
         let url = url.trim().to_owned();
         if url.chars().any(|c| c.is_control() || c.is_whitespace()) {
@@ -256,12 +270,24 @@ impl Fields {
         let past_search = past_search
             .map(|s| s.trim().to_owned())
             .filter(|s| !s.is_empty());
+        let name = name.map(|n| n.trim().to_owned()).filter(|n| !n.is_empty());
+        if let Some(name) = &name {
+            if name.chars().any(char::is_control) {
+                return Err(ApiError::invalid("채널 이름은 한 줄로 입력해 주세요."));
+            }
+            if name.chars().count() > NAME_MAX_CHARS {
+                return Err(ApiError::invalid(
+                    "채널 이름이 너무 길어요. 100자 이하로 줄여 주세요.",
+                ));
+            }
+        }
         Ok(Fields {
             url,
             base_dir,
             excludes,
             secret,
             past_search,
+            name,
         })
     }
 
@@ -277,6 +303,7 @@ impl Fields {
             excludes: self.excludes,
             secret_query,
             past_search: self.past_search,
+            name: self.name,
         }
     }
 }
@@ -418,7 +445,14 @@ async fn create_channel(
     parsed: Result<Json<CreateBody>, JsonRejection>,
 ) -> Result<(StatusCode, Json<ChannelView>), ApiError> {
     let b = body(parsed)?;
-    let fields = Fields::check(b.url, b.base_dir, b.excludes, b.secret, b.past_search)?;
+    let fields = Fields::check(
+        b.url,
+        b.base_dir,
+        b.excludes,
+        b.secret,
+        b.past_search,
+        b.name,
+    )?;
     let url = fields.url.clone();
     let created = state
         .channels
@@ -434,7 +468,14 @@ async fn update_channel(
     parsed: Result<Json<UpdateBody>, JsonRejection>,
 ) -> Result<Json<ChannelView>, ApiError> {
     let b = body(parsed)?;
-    let fields = Fields::check(b.url, b.base_dir, b.excludes, b.secret, b.past_search)?;
+    let fields = Fields::check(
+        b.url,
+        b.base_dir,
+        b.excludes,
+        b.secret,
+        b.past_search,
+        b.name,
+    )?;
 
     let stored = state
         .channels

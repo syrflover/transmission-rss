@@ -17,7 +17,7 @@ use super::ChannelError;
 type Result<T> = std::result::Result<T, ChannelError>;
 
 const CHANNEL_COLUMNS: &str =
-    "id, position, version, url, base_dir, excludes, secret_query, past_search";
+    "id, position, version, url, base_dir, excludes, secret_query, past_search, name";
 const RULE_COLUMNS: &str = "id, channel_id, position, version, match_text, regex, \
      case_insensitive, directory, episode, episode_auto, state";
 
@@ -53,6 +53,7 @@ fn channel_from_row(row: &Row<'_>) -> rusqlite::Result<Channel> {
         excludes: string_list(row, 5)?,
         secret_query: string_list(row, 6)?,
         past_search: row.get(7)?,
+        name: row.get(8)?,
     })
 }
 
@@ -138,8 +139,8 @@ fn insert_channel(tx: &Transaction<'_>, input: &ChannelInput) -> Result<String> 
         |r| r.get(0),
     )?;
     tx.execute(
-        "INSERT INTO channels (id, position, url, base_dir, excludes, secret_query, past_search, version)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1)",
+        "INSERT INTO channels (id, position, url, base_dir, excludes, secret_query, past_search, name, version)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1)",
         params![
             id,
             position,
@@ -148,6 +149,7 @@ fn insert_channel(tx: &Transaction<'_>, input: &ChannelInput) -> Result<String> 
             to_json(&input.excludes),
             to_json(&input.secret_query),
             input.past_search,
+            input.stored_name(),
         ],
     )?;
     Ok(id)
@@ -231,7 +233,7 @@ pub fn list_channels_with_rules(conn: &mut Connection) -> Result<Vec<ChannelWith
 }
 
 const UPDATE_CHANNEL: &str = "UPDATE channels
-     SET url = ?2, base_dir = ?3, excludes = ?4, secret_query = ?5, past_search = ?6,
+     SET url = ?2, base_dir = ?3, excludes = ?4, secret_query = ?5, past_search = ?6, name = ?7,
          version = version + 1
      WHERE id = ?1";
 
@@ -245,6 +247,7 @@ fn write_channel_fields(tx: &Transaction<'_>, id: &str, input: &ChannelInput) ->
             to_json(&input.excludes),
             to_json(&input.secret_query),
             input.past_search,
+            input.stored_name(),
         ],
     )?;
     Ok(())

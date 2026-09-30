@@ -191,8 +191,8 @@ fn add_channel(
     )?;
     let input = &channel.input;
     tx.execute(
-        "INSERT INTO channels (id, position, url, base_dir, excludes, secret_query, past_search, version)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1)",
+        "INSERT INTO channels (id, position, url, base_dir, excludes, secret_query, past_search, name, version)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1)",
         params![
             id,
             position,
@@ -201,6 +201,7 @@ fn add_channel(
             json(&input.excludes),
             json(&input.secret_query),
             input.past_search,
+            input.stored_name(),
         ],
     )?;
     for (position, rule) in channel.rules.iter().enumerate() {
@@ -231,7 +232,7 @@ fn replace_keeping_rule_ids(
     let input = &channel.input;
     tx.execute(
         "UPDATE channels
-         SET url = ?2, base_dir = ?3, excludes = ?4, secret_query = ?5, past_search = ?6,
+         SET url = ?2, base_dir = ?3, excludes = ?4, secret_query = ?5, past_search = ?6, name = ?7,
              version = version + 1
          WHERE id = ?1",
         params![
@@ -241,6 +242,7 @@ fn replace_keeping_rule_ids(
             json(&input.excludes),
             json(&input.secret_query),
             input.past_search,
+            input.stored_name(),
         ],
     )?;
 

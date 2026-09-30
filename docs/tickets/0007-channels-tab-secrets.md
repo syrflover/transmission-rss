@@ -36,7 +36,7 @@
   탭 목록은 `web/src/screens/collect/tabs.tsx`의 `COLLECT_TABS` 한 곳이라 [0006](0006-rules-tab-preview.md)·[0008](0008-history-tab-receive-once.md)은 자기 탭의 `element`만 바꾸면 돼요. 탭 위 상태 판 자리는 `CollectScreen.tsx`에 주석으로 남겼어요.
   화살표·Home·End는 초점만 옮기고, Enter·Space·클릭으로 활성화해야 탭(과 주소)이 바뀌어요.
 - `채널` 탭은 채널마다 가린 URL(자물쇠 표시와 쿼리 이름별 `비밀`·`공개` 칩), 기본 저장 폴더, 제외 조건, 지난 회차 검색 형식을 보여줘요. 추가·수정·삭제는 모두 제자리에서 해요.
-  채널 저장소에 이름이 없어서 카드 제목은 URL의 호스트예요.
+  처음에는 채널 저장소에 이름이 없어서 카드 제목이 URL의 호스트였고, 뒤에 선택 이름을 더했어요(아래 "worker를 합친 뒤 확인한 것").
 - API는 `src/web/channels_api.rs`예요.
 
   | 호출 | 요청 | 응답 |
@@ -67,9 +67,9 @@
 | `r=1080&token=abc` 채널 추가 → 둘 다 가려지고 자물쇠 | 브라우저: 목록이 `?r=***&token=***`이고 `r 비밀`·`token 비밀` 칩과 자물쇠가 보여요. 테스트 `a_new_channel_masks_every_query_value_in_every_response` |
 | `r`의 비밀 표시를 풂 | 브라우저: `r=1080&token=***`, 칩은 `r 공개`. 테스트 `unsetting_secret_on_one_name_shows_it_and_keeps_the_other_masked` |
 | API 응답·네트워크 응답에 원문 없음 | 백엔드 테스트가 생성·목록·상세·수정·충돌·삭제·잘못된 입력의 모든 응답 본문에서 원문을 찾지 않아요. 브라우저 흐름 전체에서 받은 응답 전부(API 응답 포함)를 모아 원문 세 개가 어디에도 없음을 확인했어요. |
-| 비밀을 비운 채 다른 부분 수정 → 비밀 유지 | 브라우저에서 경로·`r`을 바꿔 저장한 뒤 DB의 URL이 원래 토큰을 그대로 가져요. 테스트 `blank_secret_with_another_url_part_changed_keeps_the_stored_secret`. 병합을 없애면 이 테스트를 포함해 5개가 실패하는 것도 확인했어요. 다음 worker 처리의 성공은 아래 "확인하지 못한 것"이에요. |
+| 비밀을 비운 채 다른 부분 수정 → 비밀 유지 | 브라우저에서 경로·`r`을 바꿔 저장한 뒤 DB의 URL이 원래 토큰을 그대로 가져요. 테스트 `blank_secret_with_another_url_part_changed_keeps_the_stored_secret`. 병합을 없애면 이 테스트를 포함해 5개가 실패하는 것도 확인했어요. 다음 worker 처리의 성공은 "worker를 합친 뒤 확인한 것"에서 확인했어요. |
 | 규칙 3개 채널 삭제 | 브라우저: 확인 문장이 `규칙 3개를 삭제해요`이고, 취소하면 그대로, 확인하면 채널과 규칙 3개가 DB에서 사라지고 다른 채널은 남아요. 테스트 `deleting_a_channel_with_three_rules_removes_both`, 저장소 테스트 8개(원자성 실패 주입, 오래된 버전, 확인 뒤 규칙 추가, 이력 유사 테이블 보존) |
-| 제외 조건을 더해 저장 | `list_channels_with_rules`로 읽은 채널에 새 제외 조건과 원래 비밀이 있음을 테스트 `adding_excludes_is_saved_with_the_original_secret`와 브라우저(DB 확인)에서 봤어요. worker와 규칙 탭 미리보기가 쓰는 부분은 아래에 적었어요. |
+| 제외 조건을 더해 저장 | `list_channels_with_rules`로 읽은 채널에 새 제외 조건과 원래 비밀이 있음을 테스트 `adding_excludes_is_saved_with_the_original_secret`와 브라우저(DB 확인)에서 봤어요. worker가 쓰는 부분은 "worker를 합친 뒤 확인한 것"에서 확인했고, 규칙 탭 미리보기가 쓰는 부분은 [0006](0006-rules-tab-preview.md)을 기다려요. |
 
 그 밖에 확인한 것이에요.
 
@@ -81,14 +81,29 @@
 
 ### 확인하지 못한 것
 
-- 저장한 제외 조건과 비밀이 다음 worker 처리와 규칙 탭 미리보기에서 실제로 쓰이는지는 아직 확인하지 못했어요. worker([0004](0004-worker-collection-history.md))와 규칙 탭([0006](0006-rules-tab-preview.md))이 이 티켓과 따로 만들어지고 있어서, 여기서는 저장소에서 읽은 채널이 새 제외 조건과 원래 비밀을 가졌음까지만 봤어요. 두 티켓을 합친 뒤 이 두 행을 다시 확인해야 해요.
+- 저장한 제외 조건과 비밀이 규칙 탭 미리보기에서 실제로 쓰이는지는 아직 확인하지 못했어요. 미리보기는 [0006](0006-rules-tab-preview.md)이 만들어야 하므로, 0006을 합친 뒤 그 부분만 다시 확인해야 해요. worker 처리에서 쓰이는지는 아래 "worker를 합친 뒤 확인한 것"에서 확인했어요.
 - 삭제 뒤 수집 이력이 남는지는 실제 이력 테이블([0004](0004-worker-collection-history.md))이 없어서 채널을 가리키는 유사 테이블로만 확인했어요.
 - 실제 휴대폰의 터치·가상 키보드, 스크린 리더, Chromium 외 브라우저, 실제 렌더링 배경 위의 글자 대비 측정은 하지 않았어요.
 - 이 화면의 접근 보호(LAN·VPN·앞단 인증)는 범위 밖이라 확인하지 않았어요.
 
 ### 남은 일과 참고
 
-- 채널에는 이름이 없어 카드 제목이 호스트라서, 호스트가 같은 채널 둘은 제목이 같아요. 이름 필드가 필요한지는 사용자가 정해야 해요.
+- 호스트가 같은 채널 둘의 제목이 같던 문제는 선택 이름으로 풀었어요(아래 "worker를 합친 뒤 확인한 것").
 - URL의 사용자 정보(`user:pass@`)와 경로에 든 토큰은 비밀로 다루지 않아요. 명세가 쿼리 값만 다뤄요.
 - 규칙 수는 화면을 연 시점의 값이고 목록은 주기 조회하지 않아요. 확인 뒤 규칙이 생기면 서버가 삭제를 거부하고 새 규칙 수를 돌려줘요.
 - 할 일 배지·상태 판·구독·규칙·기록 탭의 내용은 각 티켓이 이 틀에 채워요.
+
+### worker를 합친 뒤 확인한 것
+
+[0004](0004-worker-collection-history.md)를 합친 뒤, 위에서 확인하지 못했던 두 행 가운데 worker 쪽을 확인했어요.
+
+| 완료 기준 | 근거 |
+| --- | --- |
+| 비밀을 비운 채 수정 → 다음 worker 처리가 성공 | 통합 테스트 `a_save_with_the_secret_left_blank_still_fetches_the_feed_with_the_stored_secret`(`tests/channel_edit_then_cycle.rs`)가 실제 `POST`·`PUT /api/channels`로 채널을 만들고, 주소의 비밀을 비운 채(저장 폴더와 이름만 바꿔) 저장한 뒤, 가짜 Transmission과 가짜 피드 서버를 두고 worker 처리 한 번을 돌려요. 피드 서버가 받은 요청은 정확히 `feed-a?filter=1080p&token=<저장한 토큰>` 하나이고 빈 값도 `***`도 아니었어요. 처리는 실패 없이 항목을 추가했고 수정한 저장 폴더를 썼어요. 저장·생성 응답과 수집 이력에는 토큰이 없어요. 병합을 일부러 끄면 이 테스트가 실패하는 것도 확인했어요. |
+| 제외 조건을 더해 저장 → 다음 worker 처리가 써요 | 통합 테스트 `an_exclude_added_through_the_api_is_used_by_the_next_cycle`이 `PUT`으로 제외 조건을 더한 뒤 worker 처리를 돌려요. 제외한 두 항목(`(720p)`, `[Batch]`)이 이력에 `제외`로 남고 Transmission에는 추가되지 않았어요. 제외 조건이 없는 같은 채널·규칙은 720p 항목을 추가하는 대조 처리도 같은 테스트에서 확인했어요. |
+
+- 규칙은 API가 아직 없어서 저장소에 바로 넣었어요. 채널은 전부 HTTP API로 다뤘어요.
+- 가짜 Transmission과 가짜 피드는 worker 테스트가 쓰던 것이라 실제 Transmission 데몬과 실제 피드 사이트는 쓰지 않았어요. 테스트의 토큰은 지어낸 값이에요.
+- 규칙 탭 미리보기가 저장한 제외 조건과 비밀을 쓰는 부분은 여전히 [0006](0006-rules-tab-preview.md)을 기다려요.
+
+같은 때 사용자가 정한 대로 채널에 비워 둘 수 있는 `name`을 더했어요. `POST`·`PUT`이 `name?`을 받고(앞뒤 공백을 지우고, 비었거나 없으면 `null`) 채널 응답에 `name`이 더해져요. 카드 제목은 이름이고, 이름이 없으면 호스트예요. 마이그레이션 3번이 `channels.name` 열을 더해요.

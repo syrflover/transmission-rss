@@ -81,6 +81,7 @@ impl App {
             "excludes": channel["excludes"],
             "secret": secret_flags(channel),
             "past_search": channel["past_search"],
+            "name": channel["name"],
         });
         for (key, value) in patch.as_object().unwrap() {
             body[key] = value.clone();
@@ -123,6 +124,83 @@ fn names(channel: &Value) -> Vec<(String, bool)> {
 }
 
 // --- add and read -----------------------------------------------------------
+
+#[tokio::test]
+async fn the_name_is_optional_trimmed_and_returned() {
+    let app = App::new();
+    let url = format!("https://feed.example/rss?token={TOKEN}");
+
+    // Absent and blank both mean unnamed; the host stays available.
+    let unnamed = app.create(&url).await;
+    assert_eq!(unnamed["name"], Value::Null);
+    assert_eq!(unnamed["host"], "feed.example");
+    let (status, _, blank) = app
+        .call(
+            Method::POST,
+            "/api/channels",
+            Some(json!({ "url": url, "base_dir": "/media", "name": "   " })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(blank["name"], Value::Null);
+
+    let (status, text, named) = app
+        .call(
+            Method::POST,
+            "/api/channels",
+            Some(json!({ "url": url, "base_dir": "/media", "name": "  주간 애니 " })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_no_secret(&text);
+    assert_eq!(named["name"], "주간 애니");
+    let id = named["id"].as_str().unwrap();
+    assert_eq!(app.stored(id).await.name.as_deref(), Some("주간 애니"));
+
+    // An edit that keeps the name and leaves the secret blank changes neither
+    // the name nor the stored secret.
+    let (status, text, kept) = app.put(&named, json!({ "base_dir": "/other" })).await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(kept["name"], "주간 애니");
+    assert_eq!(app.stored(id).await.url, url);
+
+    // A blank name clears it; a new value replaces it.
+    let (_, _, cleared) = app.put(&kept, json!({ "name": "" })).await;
+    assert_eq!(cleared["name"], Value::Null);
+    assert_eq!(app.stored(id).await.name, None);
+    let (_, _, renamed) = app.put(&cleared, json!({ "name": " Feed B " })).await;
+    assert_eq!(renamed["name"], "Feed B");
+
+    // The list carries the name too.
+    let (_, _, list) = app.call(Method::GET, "/api/channels", None).await;
+    let listed: Vec<_> = list["channels"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["name"].clone())
+        .collect();
+    assert_eq!(listed, [Value::Null, Value::Null, json!("Feed B")]);
+}
+
+#[tokio::test]
+async fn an_unusable_name_is_refused_without_echoing_the_request() {
+    let app = App::new();
+    let url = format!("https://feed.example/rss?token={TOKEN}");
+    for name in ["two\nlines".to_owned(), "가".repeat(101)] {
+        let (status, text, _) = app
+            .call(
+                Method::POST,
+                "/api/channels",
+                Some(json!({ "url": url, "base_dir": "/media", "name": name })),
+            )
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+        assert_no_secret(&text);
+        assert!(!text.contains("two"), "{text}");
+    }
+    let (_, _, list) = app.call(Method::GET, "/api/channels", None).await;
+    assert_eq!(list["channels"], json!([]));
+}
 
 #[tokio::test]
 async fn a_new_channel_masks_every_query_value_in_every_response() {
@@ -709,6 +787,7 @@ fn stored_channel(url: &str, secret: &[&str]) -> Channel {
         excludes: vec![],
         secret_query: secret.iter().map(|s| s.to_string()).collect(),
         past_search: None,
+        name: None,
     }
 }
 

@@ -25,6 +25,9 @@ pub struct ChannelInput {
     pub secret_query: Vec<String>,
     /// Past-episode search template such as `[SubsPlease] {match} 1080p`.
     pub past_search: Option<String>,
+    /// Display name. `None` means unnamed: the host is shown instead. The
+    /// store trims it and treats a blank one as `None`.
+    pub name: Option<String>,
 }
 
 impl ChannelInput {
@@ -38,14 +41,27 @@ impl ChannelInput {
             base_dir: base_dir.into(),
             excludes: Vec::new(),
             past_search: None,
+            name: None,
         }
+    }
+
+    /// The name as stored: trimmed, and `None` when blank.
+    pub(super) fn stored_name(&self) -> Option<&str> {
+        self.name
+            .as_deref()
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
     }
 
     pub(super) fn validate(&self) -> Result<(), ChannelError> {
         // `Url::parse` drops tabs and newlines that `mask_url` would still
         // see in the raw text, so such a URL could name a query differently
         // for the two and leave a secret unmasked.
-        if self.url.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        if self
+            .url
+            .chars()
+            .any(|c| c.is_control() || c.is_whitespace())
+        {
             return Err(ChannelError::Invalid(
                 "channel url contains whitespace or control characters",
             ));
@@ -78,6 +94,7 @@ impl fmt::Debug for ChannelInput {
             .field("excludes", &self.excludes)
             .field("secret_query", &self.secret_query)
             .field("past_search", &self.past_search)
+            .field("name", &self.name)
             .finish()
     }
 }
@@ -94,6 +111,8 @@ pub struct Channel {
     pub excludes: Vec<String>,
     pub secret_query: Vec<String>,
     pub past_search: Option<String>,
+    /// Display name; `None` when the user left it blank.
+    pub name: Option<String>,
 }
 
 impl Channel {
@@ -111,6 +130,7 @@ impl Channel {
             excludes: self.excludes.clone(),
             secret_query: self.secret_query.clone(),
             past_search: self.past_search.clone(),
+            name: self.name.clone(),
         }
     }
 }
@@ -126,6 +146,7 @@ impl fmt::Debug for Channel {
             .field("excludes", &self.excludes)
             .field("secret_query", &self.secret_query)
             .field("past_search", &self.past_search)
+            .field("name", &self.name)
             .finish()
     }
 }

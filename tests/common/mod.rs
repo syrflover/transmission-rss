@@ -28,8 +28,10 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use tokio::{net::TcpListener, sync::Semaphore, task::JoinHandle};
+use tower::ServiceExt;
 use transmission_rss::{
     store::{
         channels::{ChannelInput, ChannelStore, ChannelWithRules, RuleInput},
@@ -37,6 +39,7 @@ use transmission_rss::{
         Db,
     },
     transmission::RenamePolicy,
+    web::AppState,
     worker::{lock_path_for, Worker, WorkerEnv},
 };
 
@@ -694,6 +697,61 @@ impl Harness {
             "several history items with {title_part:?}"
         );
         item
+    }
+}
+
+// --- the real web API, in process ---------------------------------------------------
+
+/// The `/api` router on the harness's own database handle, called without a
+/// socket. Requests go through the same handlers and store as `trss-web`.
+pub struct WebApi {
+    router: Router,
+}
+
+impl WebApi {
+    pub fn new(db: Db) -> WebApi {
+        WebApi {
+            router: Router::new().nest(
+                "/api",
+                transmission_rss::web::api::router().with_state(AppState::new(db)),
+            ),
+        }
+    }
+
+    /// Sends one request; returns the status, the raw body text and its JSON
+    /// (`null` when the body is not JSON).
+    pub async fn call(
+        &self,
+        method: &str,
+        uri: &str,
+        body: Option<Value>,
+    ) -> (StatusCode, String, Value) {
+        let mut request = axum::http::Request::builder().method(method).uri(uri);
+        let body = match body {
+            Some(json) => {
+                request = request.header("content-type", "application/json");
+                axum::body::Body::from(json.to_string())
+            }
+            None => axum::body::Body::empty(),
+        };
+        let response = self
+            .router
+            .clone()
+            .oneshot(request.body(body).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let text = String::from_utf8(bytes.to_vec()).unwrap();
+        let json = serde_json::from_str(&text).unwrap_or(Value::Null);
+        (status, text, json)
+    }
+}
+
+impl Harness {
+    /// The channels API on this harness's database.
+    pub fn web_api(&self) -> WebApi {
+        WebApi::new(self.db.clone())
     }
 }
 
