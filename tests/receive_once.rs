@@ -851,6 +851,56 @@ async fn a_command_into_the_base_folder_puts_no_note_on_an_item_a_rule_received(
     assert_eq!(view["outcome"]["reason"], Value::Null);
 }
 
+#[tokio::test]
+async fn a_failed_add_for_an_item_already_held_ends_with_the_items_result() {
+    let liar = release("guid-liar-26", 26, LIAR, "");
+    let other = release("guid-other-3", 3, OTHER, "");
+    let s = Scene::new(&[&liar, &other], unrelated_rule()).await;
+    let liar_item = s.item("LIAR GAME - 26").await;
+    let other_item = s.item("Another Show").await;
+    s.post(CMD, &liar_item, "LIAR GAME/Season 01").await;
+    let second = "1e2d3c4b-0000-4000-8000-000000000003";
+    s.post(second, &other_item, "").await;
+    // Before the worker gets to the commands, rules take both items: one is
+    // received, the other was in Transmission already.
+    s.h.tr
+        .preload(FakeTorrent::new(&hash(3), OTHER).bot().status(6));
+    for (text, folder) in [
+        ("LIAR GAME", "LIAR GAME/Season 01"),
+        ("Another Show", "Another Show/Season 01"),
+    ] {
+        s.h.channels
+            .create_rule(&s.channel.channel.id, rule(text, folder))
+            .await
+            .unwrap();
+    }
+    s.cycle().await;
+    // Then Transmission refuses the commands' adds.
+    s.h.tr.reject_adds(Some("nope"));
+
+    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(2));
+
+    let (_, view) = s.command(CMD).await;
+    assert_eq!(view["state"], "done");
+    assert_eq!(view["outcome"]["result"], "received");
+    assert_eq!(view["outcome"]["reason"], Value::Null);
+    let (_, view) = s.command(second).await;
+    assert_eq!(view["state"], "done");
+    assert_eq!(view["outcome"]["result"], "duplicate");
+    assert!(view["outcome"]["reason"]
+        .as_str()
+        .unwrap()
+        .contains("이미 같은 토렌트"));
+    assert_eq!(
+        s.item("LIAR GAME - 26").await.result,
+        HistoryResult::Received
+    );
+    assert_eq!(
+        s.item("Another Show").await.result,
+        HistoryResult::Duplicate
+    );
+}
+
 // --- restarts, two workers and the lock --------------------------------------------------------
 
 #[tokio::test]

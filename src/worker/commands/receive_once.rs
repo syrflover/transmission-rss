@@ -230,7 +230,10 @@ fn held(stored: HistoryResult, rename: Option<Rename>) -> Finished {
     }
 }
 
-/// Records `add_failed` with `reason` on the item and returns the failed command.
+/// Records `add_failed` with `reason` on the item and returns the failed
+/// command. An item that Transmission holds already (a rule received it, or
+/// found it there, after the command was accepted) keeps its result, and the
+/// command then ends with that result instead of failing.
 async fn refuse(
     ctx: &CycleContext,
     item: &HistoryItem,
@@ -250,6 +253,9 @@ async fn refuse(
         .await
         .map_err(Retry::store)?
         .unwrap_or(HistoryResult::AddFailed);
+    if stored.is_settled() {
+        return Ok(held(stored, None));
+    }
     Ok(Finished {
         state: CommandState::Failed,
         outcome: Outcome {

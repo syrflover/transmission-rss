@@ -43,9 +43,20 @@ interface Attempt {
 const FALLBACK_DONE = "";
 const FALLBACK_FAILED = "받지 못했어요. 까닭은 알 수 없어요.";
 
+/**
+ * How an ended command reads. An item that ended `received` or `duplicate` is
+ * in Transmission, even when this command's own add failed (a rule got it after
+ * the request was accepted): that is never a failure. The worker ends such a
+ * command as `done`; one it ended as `failed` before it did so carries the
+ * add's error, which the row does not show next to `받음`.
+ */
 function endedMessage(command: Command): { failed: boolean; message: string } {
-  const failed = command.state === "failed" || command.outcome?.result === "add_failed";
+  const result = command.outcome?.result;
   const reason = command.outcome?.reason;
+  if (result === "received" || result === "duplicate") {
+    return { failed: false, message: command.state === "done" && reason ? reason : FALLBACK_DONE };
+  }
+  const failed = command.state === "failed" || result === "add_failed";
   if (reason) return { failed, message: reason };
   return { failed, message: failed ? FALLBACK_FAILED : FALLBACK_DONE };
 }
