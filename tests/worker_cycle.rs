@@ -319,6 +319,89 @@ async fn nothing_is_removed_when_no_feed_could_be_read() {
     );
 }
 
+// --- a failing item task ---------------------------------------------------------------
+
+const STALE_HASH: &str = "gone0000000000000000000000000000000000aa";
+
+#[tokio::test]
+async fn a_panic_after_torrent_add_does_not_remove_the_new_torrent_or_any_other() {
+    let h = Harness::new().await;
+    channel_a(&h).await;
+    h.tr.preload(FakeTorrent::new(STALE_HASH, "Old Show").bot());
+    // Every `torrent-get` leaves out `file-count`, so the renaming that follows
+    // each successful add panics inside the item's task.
+    h.tr.omit_file_count(true);
+    let worker = h.worker();
+
+    let report = run(&worker).await;
+
+    assert_eq!(report.job_panics, 3);
+    // The torrents Transmission accepted are recorded as received and stay.
+    assert_eq!(h.tr.torrents().len(), 4);
+    assert_eq!(
+        h.history_items()
+            .await
+            .iter()
+            .filter(|i| i.result == HistoryResult::Received)
+            .count(),
+        3
+    );
+    // Nothing is removed in a cycle whose item tasks failed, not even the old one.
+    assert!(report.removed.is_empty());
+    assert!(h.tr.calls_of("torrent-remove").is_empty());
+
+    // A healthy cycle carries on: the torrents are renamed and kept, the
+    // departed one goes.
+    h.tr.omit_file_count(false);
+    h.advance(300_000);
+    let report = run(&worker).await;
+    assert_eq!(report.job_panics, 0);
+    assert_eq!(
+        report
+            .removed
+            .iter()
+            .map(|t| t.hash.as_str())
+            .collect::<Vec<_>>(),
+        [STALE_HASH]
+    );
+    let mut names: Vec<String> = h.tr.torrents().into_iter().map(|t| t.name).collect();
+    names.sort();
+    assert_eq!(
+        names,
+        [
+            "Sayonara Lara S01E03.mkv",
+            "Slime S04E38.mkv",
+            "Sono Bisque Doll S02E01.mkv",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn item_tasks_stop_when_the_cycle_is_dropped() {
+    let h = Harness::new().await;
+    channel_a(&h).await;
+    let worker = h.worker();
+    let add_gate = h.tr.hold("torrent-add");
+
+    let running = {
+        let worker = worker.clone();
+        tokio::spawn(async move { worker.tick(&CancellationToken::new()).await })
+    };
+    add_gate.wait_arrived().await;
+
+    // What a panic of the cycle does to its future: it is dropped mid-way.
+    running.abort();
+    assert!(running.await.unwrap_err().is_cancelled());
+
+    // The item tasks went with it: they do not go on to record what
+    // Transmission answers after the worker gave up its lock.
+    add_gate.release_all();
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    let items = h.history_items().await;
+    assert_eq!(items.len(), 4, "only the items that needed no Transmission");
+    assert!(items.iter().all(|i| i.torrent_hash.is_none()));
+}
+
 // --- rules ----------------------------------------------------------------------------
 
 #[tokio::test]
