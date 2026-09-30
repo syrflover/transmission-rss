@@ -116,14 +116,12 @@
 - **메모가 늦게 남음 (P3)**: 이름 바꾸기와 메모를 명령 태스크 안에서 마친 뒤 명령을 끝내요(`receive_once::run`). 시험: `the_command_ends_only_after_its_rename_step_and_note`(이름 변경 단계의 조회를 붙잡아 그동안 명령이 `running`인지 봐요).
 - **파일이 여러 개인 토렌트 (P3)**: 잠금을 잡은 채 이름 변경 시도를 끝까지 되풀이하지 않고 바로 그대로 둬요. 메모는 "파일이 여러 개인 토렌트라 이름을 바꾸지 않았어요."예요(명세의 "이름을 바꾸지 못했다는 메모"에 맞춘 짧은 문장). 파일 수 0은 자석 링크의 메타데이터를 기다리는 중이라 계속 기다려요. 시험: `a_torrent_with_several_files_is_left_as_it_is_without_retrying`.
 - **링크 복원이 다른 호스트로 비밀 값을 보냄 (P2, 사용자 결정 "같은 호스트만 채움")**: 이력은 이름으로 가리므로, 다른 호스트 링크의 자기 `token`도 가려져 채널의 `token`으로 채워졌고, GUID·제목 동일성에서는 확인할 방법이 없었어요. 이제 링크 호스트가 채널 URL 호스트와 같을 때만 채우고, 아니면 지금 RSS에서 찾아요. 시험: `a_link_on_another_host_is_not_filled_with_the_channels_secret`, `a_link_on_another_host_that_left_the_feed_is_not_received`, 같은 호스트는 `a_secret_in_a_query_of_the_channels_name_is_filled_back_from_the_channel`, 단위 시험 `only_a_link_on_the_channels_host_is_filled`. 명세도 고쳤어요.
+- **이미 바꾼 이름을 다시 바꿈 (P2, 재검토에서 찾음)**: 처음에는 `Existing`의 "이미 trname 형식" 판정을 trname에 맡겼어요. trname은 이름이 폴더 제목(대소문자 구분)으로 시작하고 두 자리 회차일 때만 자기 형식으로 봐요. 그래서 규칙 폴더의 제목을 바꾼 뒤(대소문자만 바꿔도), 다른 규칙·채널의 폴더에 있는 토렌트, 회차 100 이상(`S01E105` → `S01E05`)에서 이미 바꾼 이름을 다시 바꿨어요. 고치기 전 코드도 같았으니 새로 생긴 문제는 아니었어요.
+  이제 `Existing`은 Transmission이 알려 준 저장 폴더가 규칙 폴더와 같을 때만 이름을 바꾸고, 제목과 상관없이 ` S01E05.mkv`·`S01E105.mkv`·`S01E05.5.mkv`처럼 끝나는 이름은 형식으로 봐요(`looks_renamed`). 다른 폴더의 토렌트는 기존 바이너리라면 이 규칙의 제목으로 이름을 바꿨을 텐데, worker는 그대로 둬요. `worker_legacy_comparison`의 미리 넣은 토렌트는 기존 바이너리가 실제로 넣는 자리인 규칙 폴더로 옮겼고, 두 쪽 요청은 여전히 같아요.
+  시험(`tests/worker_cycle.rs`): `a_named_torrent_under_a_folder_whose_case_changed_is_not_renamed`, `a_torrent_in_another_rules_folder_is_not_renamed_after_this_rule`, `a_named_torrent_with_a_three_digit_episode_is_not_renamed`(세 개 모두 수정 전 실패), 지키는 동작 `a_rename_cut_short_in_the_rules_folder_is_finished_when_the_torrent_is_met_again`, 단위 시험 `a_trname_name_is_told_apart_from_a_release_name`.
 
 남긴 것:
 
 - 시간 초과한 명령의 토렌트는 한 주기만 지켜요(위 알려진 틈).
-- `Existing`의 "이미 trname 형식" 판정은 trname에 맡겨요. trname은 이름이 폴더 제목(대소문자 구분)으로 시작하고 `S\d\dE\d\d`일 때만 형식으로 봐요. 그래서 다음 경우에는 이미 바꾼 이름을 다시 바꿔요.
-  - 규칙 폴더를 바꾼 뒤(대소문자만 바꿔도) 항목이 아직 RSS에 있을 때: `LIAR GAME S02E14`가 보정 -12로 `S02E02`가 돼요.
-  - 폴더가 다른 두 규칙·채널이 같은 토렌트를 가질 때.
-  - 회차가 100 이상일 때: `S01E105`가 `S01E05`가 돼요.
-  고치기 전에는 모든 `중복`에 매 주기 이름 변경을 걸었으니 새로 생긴 문제는 아니에요. 고치려면 Transmission의 폴더가 규칙 폴더와 같을 때만 바꾸고 `S\d{2}E\d+` 이름을 형식으로 보면 돼요.
 - `추가 실패`로 끝난 명령의 결과를 이후 주기가 `규칙 불일치`로 덮어쓰는 것은 그대로예요(위).
 - 브라우저로는 다시 확인하지 않았어요. 화면 쪽 변경은 `endedMessage` 한 곳이고 `bun run build`만 확인했어요.

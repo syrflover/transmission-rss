@@ -30,15 +30,21 @@ const MANUAL_HASH: &str = "mine0000000000000000000000000000000000bb";
 /// Torrents already in Transmission: a finished bot torrent that is also in
 /// the feed (to be stopped), a bot torrent no longer in any feed (to be
 /// removed), and one the bot never added (to be left alone).
+///
+/// The finished one sits in its rule's folder, where the bot added it, with a
+/// name the bot never got to change; both then rename it. (The worker leaves a
+/// torrent in another folder alone, where the legacy binary renamed it after
+/// this rule's title; `tests/worker_cycle.rs` covers that.)
 fn preload(tr: &FakeTransmission) {
-    tr.preload(
-        FakeTorrent::new(
+    tr.preload(FakeTorrent {
+        download_dir: "/media/anime/Sayonara Lara/Season 01".to_owned(),
+        ..FakeTorrent::new(
             FINISHED_HASH,
             "[SubsPlease] Sayonara Lara - 03 (1080p) [AAAA0001].mkv",
         )
         .bot()
-        .status(6),
-    );
+        .status(6)
+    });
     tr.preload(FakeTorrent::new(GONE_HASH, "Old Show - 12.mkv").bot());
     tr.preload(FakeTorrent::new(MANUAL_HASH, "Manual Download.mkv"));
 }

@@ -296,6 +296,102 @@ async fn a_torrent_a_rule_received_and_named_is_not_renamed_again() {
     assert!(h.tr.calls_of("torrent-rename-path").is_empty());
 }
 
+/// A torrent Transmission already holds for an item of `channel_a`, saved in
+/// `dir` under `name`.
+fn held(n: u32, name: &str, dir: &str) -> FakeTorrent {
+    FakeTorrent {
+        download_dir: dir.to_owned(),
+        ..FakeTorrent::new(&hash_a(n), name).bot()
+    }
+}
+
+fn renames_of(h: &Harness, n: u32) -> usize {
+    h.tr.calls_of("torrent-rename-path")
+        .iter()
+        .filter(|c| c.args["ids"] == serde_json::json!([hash_a(n)]))
+        .count()
+}
+
+fn name_of(h: &Harness, n: u32) -> String {
+    h.tr.torrents()
+        .into_iter()
+        .find(|t| t.hash == hash_a(n))
+        .unwrap()
+        .name
+}
+
+#[tokio::test]
+async fn a_named_torrent_under_a_folder_whose_case_changed_is_not_renamed() {
+    let h = Harness::new().await;
+    channel_a(&h).await;
+    // Named under the rule's folder before its title was written in another
+    // case. trname compares the title case-sensitively, so it would read the
+    // name as a release and apply the rule's offset (-12) again.
+    h.tr.preload(held(
+        3,
+        "SONO BISQUE DOLL S02E01.mkv",
+        "/media/anime/SONO BISQUE DOLL/Season 02",
+    ));
+
+    run(&h.worker()).await;
+
+    assert_eq!(name_of(&h, 3), "SONO BISQUE DOLL S02E01.mkv");
+    assert_eq!(renames_of(&h, 3), 0);
+}
+
+#[tokio::test]
+async fn a_torrent_in_another_rules_folder_is_not_renamed_after_this_rule() {
+    let h = Harness::new().await;
+    channel_a(&h).await;
+    // Another rule or channel received the same torrent into its own folder,
+    // with a name that rule's title gives. This rule's title does not apply.
+    h.tr.preload(held(
+        1,
+        "[SubsPlease] Sayonara Lara - 03 (1080p) [AAAA0001].mkv",
+        "/media/other/Lara/Season 01",
+    ));
+
+    run(&h.worker()).await;
+
+    assert_eq!(
+        name_of(&h, 1),
+        "[SubsPlease] Sayonara Lara - 03 (1080p) [AAAA0001].mkv"
+    );
+    assert_eq!(renames_of(&h, 1), 0);
+}
+
+#[tokio::test]
+async fn a_named_torrent_with_a_three_digit_episode_is_not_renamed() {
+    let h = Harness::new().await;
+    channel_a(&h).await;
+    // trname only reads two-digit episodes as its own form, and would take
+    // `05` out of `E105`.
+    h.tr.preload(held(4, "Slime S04E105.mkv", "/media/anime/Slime/Season 04"));
+
+    run(&h.worker()).await;
+
+    assert_eq!(name_of(&h, 4), "Slime S04E105.mkv");
+    assert_eq!(renames_of(&h, 4), 0);
+}
+
+#[tokio::test]
+async fn a_rename_cut_short_in_the_rules_folder_is_finished_when_the_torrent_is_met_again() {
+    let h = Harness::new().await;
+    channel_a(&h).await;
+    // An earlier run added the torrent into the rule's folder but did not get
+    // to rename it.
+    h.tr.preload(held(
+        4,
+        "[SubsPlease] Tensei Shitara Slime Datta Ken - 62 (1080p) [AAAA0006].mkv",
+        "/media/anime/Slime/Season 04",
+    ));
+
+    let report = run(&h.worker()).await;
+
+    assert_eq!(report.duplicates, 1);
+    assert_eq!(name_of(&h, 4), "Slime S04E38.mkv");
+}
+
 #[tokio::test]
 async fn a_finished_bot_torrent_is_stopped_when_it_is_met_again() {
     let h = Harness::new().await;
