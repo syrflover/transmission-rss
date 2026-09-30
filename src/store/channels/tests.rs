@@ -156,6 +156,51 @@ async fn two_channels_five_rules_survive_reopen_with_every_field() {
 }
 
 #[tokio::test]
+async fn channel_name_is_trimmed_and_blank_means_unnamed() {
+    let f = fixture().await;
+
+    let mut input = ChannelInput::new("https://a.example/rss", "/m");
+    input.name = Some("  Weekly anime \t".into());
+    let created = f.store.create_channel(input).await.unwrap();
+    assert_eq!(created.name.as_deref(), Some("Weekly anime"));
+    assert_eq!(
+        created.to_input().name.as_deref(),
+        Some("Weekly anime"),
+        "to_input round-trips the stored name"
+    );
+
+    // Unnamed by default.
+    let plain = f
+        .store
+        .create_channel(ChannelInput::new("https://b.example/rss", "/m"))
+        .await
+        .unwrap();
+    assert_eq!(plain.name, None);
+
+    // Blank on update clears the name; a value sets it. Both survive a reopen.
+    let mut edit = created.to_input();
+    edit.name = Some("   ".into());
+    let cleared = f
+        .store
+        .update_channel(&created.id, created.version, edit)
+        .await
+        .unwrap();
+    assert_eq!(cleared.name, None);
+    let mut edit = plain.to_input();
+    edit.name = Some(" Second ".into());
+    let named = f
+        .store
+        .update_channel(&plain.id, plain.version, edit)
+        .await
+        .unwrap();
+    assert_eq!(named.name.as_deref(), Some("Second"));
+
+    let reopened = ChannelStore::new(Db::open(&f.path).await.unwrap());
+    let stored = reopened.list_channels().await.unwrap();
+    assert_eq!(stored, vec![cleared, named]);
+}
+
+#[tokio::test]
 async fn legacy_episode_default_is_one() {
     assert_eq!(RuleInput::default().episode, 1);
 }

@@ -24,6 +24,8 @@ const MIGRATIONS: &[&str] = &[
     include_str!("channels/schema.sql"),
     // 2: collection history and the worker's cycle marker
     include_str!("history/schema.sql"),
+    // 3: optional channel display name
+    "ALTER TABLE channels ADD COLUMN name TEXT CHECK (name IS NULL OR name <> '');",
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -185,6 +187,43 @@ mod tests {
         let db = Db::open(&path).await.unwrap();
         assert_eq!(count_channels(&db).await, 1);
         assert_eq!(version_of(&db).await, MIGRATIONS.len());
+    }
+
+    #[tokio::test]
+    async fn database_from_before_the_channel_name_gets_an_unnamed_column() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        {
+            // A database as the build with two migrations left it, one channel in.
+            let conn = Connection::open(&path).unwrap();
+            for sql in &MIGRATIONS[..2] {
+                conn.execute_batch(sql).unwrap();
+            }
+            conn.pragma_update(None, "user_version", 2_i64).unwrap();
+            conn.execute("INSERT INTO channels (id, position, url, base_dir, excludes, secret_query, version) VALUES ('c1', 0, 'http://x/', '/d', '[]', '[]', 1)", [])
+                .unwrap();
+        }
+
+        let db = Db::open(&path).await.unwrap();
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+        let name: Option<String> = db
+            .run::<_, DbError, _>(|c| {
+                Ok(
+                    c.query_row("SELECT name FROM channels WHERE id = 'c1'", [], |r| {
+                        r.get(0)
+                    })?,
+                )
+            })
+            .await
+            .unwrap();
+        assert_eq!(name, None);
+        // A blank name is not storable; the API and store turn it into NULL.
+        let blank = db
+            .run::<_, DbError, _>(|c| {
+                Ok(c.execute("UPDATE channels SET name = ''", []).map(|_| ())?)
+            })
+            .await;
+        assert!(blank.is_err());
     }
 
     #[tokio::test]

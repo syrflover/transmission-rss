@@ -183,6 +183,46 @@ async fn adding_appends_channels_in_order_with_every_rule_value() {
 }
 
 #[tokio::test]
+async fn adding_stores_no_name_and_replacing_writes_the_planned_name() {
+    let f = fixture().await;
+
+    // The legacy file has no name, so an added channel is unnamed.
+    let results = f
+        .store
+        .import_channels(vec![ImportAction::Add(import_channel(
+            "https://one.example/rss",
+            vec![],
+        ))])
+        .await
+        .unwrap();
+    assert_eq!(results[0].channel().channel.name, None);
+
+    // A replacement writes the name the plan carries (the plan keeps the
+    // existing one; see `build_actions`).
+    let mut named = ChannelInput::new("https://a.example/rss?token=t", "/old");
+    named.name = Some("Kept".into());
+    let a = f
+        .store
+        .create_channel_with_rules(named.clone(), vec![])
+        .await
+        .unwrap();
+    let mut file = import_channel("https://a.example/rss?token=new", vec![]);
+    file.input.name = a.channel.name.clone();
+    let results = f
+        .store
+        .import_channels(vec![ImportAction::Replace {
+            id: a.channel.id.clone(),
+            expected_version: a.channel.version,
+            channel: file,
+        }])
+        .await
+        .unwrap();
+    assert_eq!(results[0].channel().channel.name.as_deref(), Some("Kept"));
+    let stored = f.store.list_channels().await.unwrap();
+    assert_eq!(stored[1].name.as_deref(), Some("Kept"));
+}
+
+#[tokio::test]
 async fn adding_keeps_existing_channels_and_gives_new_ids() {
     let f = fixture().await;
     let a = existing_channel(&f, vec![rule("A1", "a1"), rule("A2", "a2")]).await;

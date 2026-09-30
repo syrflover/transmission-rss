@@ -164,10 +164,11 @@ pub fn build_actions(
             Decision::Replace => {
                 let current = &existing[e].channel;
                 let mut channel = channel;
-                // The file cannot express the past-episode search, so a
-                // replacement keeps what the app already has instead of
-                // silently dropping it.
+                // The file cannot express the past-episode search or the
+                // display name, so a replacement keeps what the app already
+                // has instead of silently dropping it.
                 channel.input.past_search = current.past_search.clone();
+                channel.input.name = current.name.clone();
                 plan.actions.push((
                     index,
                     ImportAction::Replace {
@@ -223,6 +224,7 @@ mod tests {
                 excludes: vec![],
                 secret_query: input.secret_query,
                 past_search: Some("[X] {match}".into()),
+                name: Some("Kept name".into()),
             },
             rules: vec![Rule {
                 id: format!("{id}-r"),
@@ -363,6 +365,7 @@ mod tests {
             unreachable!()
         };
         assert_eq!(channel.input.past_search.as_deref(), Some("[X] {match}"));
+        assert_eq!(channel.input.name.as_deref(), Some("Kept name"));
 
         // Add ignores the version: the existing channel is not touched.
         let add = [

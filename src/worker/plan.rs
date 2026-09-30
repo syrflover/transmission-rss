@@ -147,6 +147,7 @@ mod tests {
             excludes: vec!["[Batch]".into()],
             secret_query: vec!["token".into()],
             past_search: None,
+            name: None,
         }
     }
 
