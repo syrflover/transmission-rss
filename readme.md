@@ -40,6 +40,13 @@ SEED_QUEUE_SIZE=1
 - `TRSS_DATA_DIR` holds `trss.db` and the worker's lock file `trss.db.worker.lock`. Keep it on a local disk, not an SMB or NFS share: SQLite and the lock rely on local file locking.
 - The web has no sign-in of its own. `TRSS_WEB_HOST_IP` binds its port to the LAN address only; reach it from outside through a VPN, never by forwarding the port.
 
+On a host whose Docker uses the systemd cgroup driver, install the slice the Transmission container runs in once (see [Resource limits](#resource-limits)):
+
+```sh
+sudo cp deploy/transmission.slice /etc/systemd/system/
+sudo systemctl daemon-reload
+```
+
 ### Run, stop, update
 
 ```sh
@@ -66,6 +73,8 @@ To back up, copy `TRSS_DATA_DIR/trss.db` while the containers are stopped (or us
 ### Resource limits
 
 Each trss container is limited to 0.25 CPU and 128M of memory. The cron run of the old binary had 0.1 CPU and 96M for a job that lived a few seconds. The worker now stays up, parses every feed each cycle, and adds the selected items concurrently; the web serves the screens and previews rules against stored history. These limits are a starting point, to be revisited with `docker stats` after the first days of running.
+
+Transmission is limited to 0.5 CPU and 512M, and runs in `transmission.slice`, which caps it softly at 384M (`MemoryHigh`). Most of that memory is page cache from writing downloads. Above the soft cap the kernel reclaims the cache and slows the writer down, and never kills it. At the hard limit, RHEL 9 kernels from 5.14.0-687.41.1 kill `transmission-daemon` while it writes, even when reclaim frees pages (RHEL-211058, reverted in RHEL-255363). The container keeps running because s6 restarts the daemon inside it, but every kill loses the progress, renames and labels saved since Transmission last wrote its resume files. Check for kills with `grep oom_kill /sys/fs/cgroup/transmission.slice/docker-*.scope/memory.events`.
 
 ### Channels
 

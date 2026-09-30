@@ -1,0 +1,17 @@
+# The systemd slice docker-compose.yml puts the Transmission container in
+# (`cgroup_parent`). Install it on the host before starting Transmission:
+#
+#   sudo cp deploy/transmission.slice /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#
+# MemoryHigh keeps the container's page cache below its `memory: 512M` limit:
+# over it, the kernel reclaims and throttles without ever calling the OOM
+# killer. At the hard limit, RHEL 9 kernels from 5.14.0-687.41.1 give up after
+# 16 reclaim attempts even when each one frees pages (RHEL-211058, reverted in
+# RHEL-255363), and kill transmission-daemon while it writes downloads.
+
+[Unit]
+Description=Transmission container (docker-compose.yml)
+
+[Slice]
+MemoryHigh=384M

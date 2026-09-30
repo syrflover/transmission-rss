@@ -1,6 +1,6 @@
 # 0009 웹과 worker를 배포하고 cron을 걷어내요
 
-- 상태: 진행 중 (서버 전환 끝, Transmission OOM의 커널 원인 확인, 커널 조치 대기)
+- 상태: 진행 중 (서버 전환 끝, Transmission OOM은 `memory.high`로 피하는 중, 서버 적용 확인 대기)
 - 출처: [구현 경계와 실행 순서](../specs/web-app.md#구현-경계와-실행-순서), [접근 경계와 기기](../specs/web-app.md#접근-경계와-기기)
 - 막는 티켓: [0004](0004-worker-collection-history.md), [0005](0005-legacy-yaml-import.md)
 
@@ -90,11 +90,13 @@
 - `687.53.1`로 올린 직후 죽지 않은 것은 받는 토렌트가 없어서였어요. 2026-09-30에 봇 토렌트 5개를 받기 시작하자 512M에서 다시 죽었고(16:46–17:23 UTC에 9번, 짧게는 34초 간격), 죽는 순간의 모습(`anon` 50MB 안팎, `inactive_file` 420–470MB)도 같았어요. MGLRU(`/sys/kernel/mm/lru_gen/enabled` `0x0007`)를 꺼도 죽어서 원인에서 뺐어요.
 - 원인: 커널 회수 추적(`vmscan` tracepoint)에서 죽기 직전 1ms 동안 데몬 스레드가 회수를 **16번 연달아 모두 성공**(`nr_scanned=64 nr_reclaimed=64`, 못 비운 이유 0)한 뒤 OOM을 냈어요. 58초 동안 3,667번의 회수 중 아무것도 못 비운 회수는 없었어요. 캐시를 못 비운 게 아니라, 비운 자리를 다른 쓰기가 먼저 가져가는 동안 재시도 한도 16번을 다 쓴 거예요.
   `687.41.1`부터의 RHEL 커널에는 RHEL 전용 변경 "mm/memcg: refactor try_charge_memcg retry logic to use for loop"(RHEL-211058)이 들어 있어요. upstream은 회수가 진전을 내는 재시도를 한도에 세지 않는데, 이 변경은 모든 재시도를 16번 안에 세요. Red Hat은 2026-09-21 CentOS Stream 9에서 이 변경을 되돌렸어요(RHEL-255363, "unexpected oom kills"). 같이 들어온 `vm.mem_cgroup_reclaim_retries`는 범위가 1–16이라 한도를 늘리는 데 쓸 수 없어요.
-- 한도는 1G로 올렸다가 사용자 결정으로 512M로 되돌렸고([docker-compose.yml](../../docker-compose.yml)), 한도를 없애는 우회는 사용자가 택하지 않았어요. 커널 쪽에서 고쳐요.
+- 한도는 1G로 올렸다가 사용자 결정으로 512M로 되돌렸고([docker-compose.yml](../../docker-compose.yml)), 한도를 없애는 우회는 사용자가 택하지 않았어요.
+- 조치: 이 버그는 `memory.max`에 부딪힌 할당에서만 동작해요. `memory.high`를 넘은 쪽의 회수(`mem_cgroup_handle_over_high`)는 회수하고 늦추기만 하고 OOM을 부르지 않아요. 그래서 캐시를 384M 아래로 붙잡아 512M 벽에 닿지 않게 해요. 커널을 17.1로 되돌리는 방법도 있었지만, 보안 수정을 잃지 않는 이 방법을 택했어요.
+  2026-09-30 서버에서 실행 중인 컨테이너의 cgroup에 `memory.high` 384M를 직접 써서 시험했고, 받는 동안 잘 된다고 사용자가 확인했어요(카운터 값은 받지 않았어요). 저장소에는 컨테이너를 다시 만들어도 남도록 [transmission.slice](../../deploy/transmission.slice)(`MemoryHigh=384M`)와 compose의 `cgroup_parent`로 넣었어요. 되돌림이 들어간 커널이 나와도 남겨 둬도 괜찮아요.
 - 이름 바꾸기가 되돌아가는 동안 생길 수 있는 일: Transmission(4.1.1 `renamePath`)은 바꿀 이름의 파일이 이미 있으면 파일을 옮기지 않고도 성공으로 답하고 토렌트를 그 파일에 이어요. 강제 종료 사이에 버려진 새 이름의 `.part`가 있으면, 받은 조각 기록과 파일 내용이 어긋날 수 있어요. 그래서 받는 중인 봇 토렌트를 한 번 verify해요.
 
 ### 남은 일
 
-- 되돌림이 들어간 커널(또는 그 변경 전의 `687.17.1`)로 부팅한 뒤, 봇 토렌트 여럿을 받는 동안 `oom_kill`이 늘지 않는지, worker를 다시 켠 뒤 봇 토렌트의 이름·항목 라벨이 주기를 넘어 유지되는지, 받는 중인 봇 토렌트를 verify한 뒤 진행률이 오르는지 봐요. `incomplete`에 버려진 `.part` 파일이 있는지 보고, 지울지는 사용자와 정해요.
+- 서버에 slice를 설치하고 Transmission 컨테이너를 다시 만든 뒤, 봇 토렌트 여럿을 받는 동안 `oom_kill`이 늘지 않는지(`transmission.slice` 아래 경로), worker를 다시 켠 뒤 봇 토렌트의 이름·항목 라벨이 주기를 넘어 유지되는지, 받는 중인 봇 토렌트를 verify한 뒤 진행률이 오르는지 봐요. `incomplete`에 버려진 `.part` 파일이 있는지 보고, 지울지는 사용자와 정해요.
 - 완료 기준의 나머지 실제 확인: cron과 같은 결과를 주기 수·차이와 함께 기록, 실제 배포 경로의 보호 경계(`ss -ltn`, 휴대폰 LTE에서 공인 IP 접속 불가), 휴대폰에서 0003·0006 수행, `.torrent` 추가 응답 시간, 자원 한도 재검토.
 - 되돌리기가 필요 없어지면 ENTRYPOINT를 정하고 `cron.sh`와 `legacy` 서비스를 걷어내요.
