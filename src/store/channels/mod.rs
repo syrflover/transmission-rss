@@ -10,6 +10,9 @@
 //! `Debug` output and error messages of this module never contain them.
 
 mod delete;
+pub mod import;
+#[cfg(test)]
+mod import_tests;
 mod model;
 mod repo;
 #[cfg(test)]

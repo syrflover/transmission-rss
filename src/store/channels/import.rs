@@ -1,0 +1,299 @@
+//! Applying an import of several channels in one transaction.
+//!
+//! An import adds new channels and replaces existing ones with the file's
+//! version. All of it is one `BEGIN IMMEDIATE` transaction: if any channel
+//! fails (a stale version, a database error), nothing of the import remains.
+//!
+//! Replacing a channel keeps the ID of every existing rule that the file's rule
+//! *matches* (see [`match_rules`]), so anything that points at a rule ID keeps
+//! pointing at it. Existing rules the file has no match for are deleted; the
+//! file's other rules get new IDs. [`ChannelStore::replace_channel`] instead
+//! reissues every ID, which is why an import does not use it.
+
+use std::collections::{HashMap, HashSet};
+
+use rusqlite::{params, Connection, Transaction, TransactionBehavior};
+use uuid::Uuid;
+
+use super::model::{Channel, ChannelInput, ChannelWithRules, Rule, RuleInput, Version};
+use super::{repo, ChannelError, ChannelStore};
+
+/// One channel of the file: its fields and rules in file order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportChannel {
+    pub input: ChannelInput,
+    pub rules: Vec<RuleInput>,
+}
+
+/// What to do with one channel of the file. A channel to skip is simply left
+/// out of the list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ImportAction {
+    /// Append as a new channel with new IDs, whatever else exists.
+    Add(ImportChannel),
+    /// Replace the existing channel `id`, if it is still at `expected_version`.
+    Replace {
+        id: String,
+        expected_version: Version,
+        channel: ImportChannel,
+    },
+}
+
+/// The result of one applied action.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ImportedChannel {
+    Added(ChannelWithRules),
+    Replaced {
+        channel: ChannelWithRules,
+        /// Rules of the file that took over an existing rule's ID.
+        kept_rules: usize,
+        /// Existing rules that were deleted, as they were before.
+        removed_rules: Vec<Rule>,
+    },
+}
+
+impl ImportedChannel {
+    pub fn channel(&self) -> &ChannelWithRules {
+        match self {
+            ImportedChannel::Added(channel) => channel,
+            ImportedChannel::Replaced { channel, .. } => channel,
+        }
+    }
+}
+
+/// For each incoming rule, the index in `existing` of the rule whose ID it
+/// keeps, or `None` when it becomes a new rule.
+///
+/// An incoming rule matches an existing rule of the same channel when they have
+/// the same match phrase, regex flag and case-insensitive flag. Everything else
+/// (directory, episode, state) is replaced by the incoming values. Pairing is
+/// one to one and in order: when a key occurs several times, the first incoming
+/// rule takes the first existing one, and so on; the surplus on either side is
+/// new or removed. A rule without a phrase (still waiting for its title) has no
+/// identity to compare, so it never matches.
+pub fn match_rules(existing: &[Rule], incoming: &[RuleInput]) -> Vec<Option<usize>> {
+    type Key<'a> = (&'a str, bool, bool);
+    let mut pool: HashMap<Key<'_>, Vec<usize>> = HashMap::new();
+    for (index, rule) in existing.iter().enumerate().rev() {
+        if let Some(phrase) = rule.r#match.as_deref() {
+            pool.entry((phrase, rule.regex, rule.case_insensitive))
+                .or_default()
+                .push(index);
+        }
+    }
+    incoming
+        .iter()
+        .map(|rule| {
+            let phrase = rule.r#match.as_deref()?;
+            pool.get_mut(&(phrase, rule.regex, rule.case_insensitive))?
+                .pop()
+        })
+        .collect()
+}
+
+impl ChannelStore {
+    /// Applies `actions` in order as one transaction and returns one result per
+    /// action, in the same order. Added channels are appended after the
+    /// existing ones in action order; a replaced channel keeps its place.
+    ///
+    /// Fails with [`ChannelError::Conflict`] if a replaced channel changed
+    /// since the caller read it, and with [`ChannelError::Invalid`] if a channel
+    /// or rule is invalid or one channel is replaced twice. In every failure
+    /// nothing of the import is applied.
+    pub async fn import_channels(
+        &self,
+        actions: Vec<ImportAction>,
+    ) -> Result<Vec<ImportedChannel>, ChannelError> {
+        self.db.run(move |c| apply_import(c, &actions)).await
+    }
+}
+
+fn apply_import(
+    conn: &mut Connection,
+    actions: &[ImportAction],
+) -> Result<Vec<ImportedChannel>, ChannelError> {
+    let mut replaced_ids = HashSet::new();
+    for action in actions {
+        let channel = match action {
+            ImportAction::Add(channel) => channel,
+            ImportAction::Replace { id, channel, .. } => {
+                if !replaced_ids.insert(id.as_str()) {
+                    return Err(ChannelError::Invalid(
+                        "one channel cannot be replaced twice in an import",
+                    ));
+                }
+                channel
+            }
+        };
+        channel.input.validate()?;
+        channel.rules.iter().try_for_each(RuleInput::validate)?;
+    }
+
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let mut results = Vec::with_capacity(actions.len());
+    for action in actions {
+        results.push(match action {
+            ImportAction::Add(channel) => add_channel(&tx, channel)?,
+            ImportAction::Replace {
+                id,
+                expected_version,
+                channel,
+            } => replace_keeping_rule_ids(&tx, id, *expected_version, channel)?,
+        });
+    }
+    tx.commit()?;
+    Ok(results)
+}
+
+fn new_id() -> String {
+    Uuid::new_v4().to_string()
+}
+
+fn json(list: &[String]) -> String {
+    serde_json::to_string(list).expect("a string list always serializes")
+}
+
+fn insert_rule(
+    tx: &Transaction<'_>,
+    channel_id: &str,
+    position: usize,
+    rule: &RuleInput,
+) -> Result<(), ChannelError> {
+    tx.execute(
+        "INSERT INTO rules (id, channel_id, position, match_text, regex, case_insensitive,
+                            directory, episode, episode_auto, state, version)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1)",
+        params![
+            new_id(),
+            channel_id,
+            position as i64,
+            rule.r#match,
+            rule.regex,
+            rule.case_insensitive,
+            rule.directory,
+            rule.episode,
+            rule.episode_auto,
+            rule.state.as_str(),
+        ],
+    )?;
+    Ok(())
+}
+
+fn add_channel(
+    tx: &Transaction<'_>,
+    channel: &ImportChannel,
+) -> Result<ImportedChannel, ChannelError> {
+    let id = new_id();
+    let position: i64 = tx.query_row(
+        "SELECT COALESCE(MAX(position), -1) + 1 FROM channels",
+        [],
+        |r| r.get(0),
+    )?;
+    let input = &channel.input;
+    tx.execute(
+        "INSERT INTO channels (id, position, url, base_dir, excludes, secret_query, past_search, version)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1)",
+        params![
+            id,
+            position,
+            input.url,
+            input.base_dir,
+            json(&input.excludes),
+            json(&input.secret_query),
+            input.past_search,
+        ],
+    )?;
+    for (position, rule) in channel.rules.iter().enumerate() {
+        insert_rule(tx, &id, position, rule)?;
+    }
+    Ok(ImportedChannel::Added(read_channel(tx, &id)?))
+}
+
+fn replace_keeping_rule_ids(
+    tx: &Transaction<'_>,
+    id: &str,
+    expected: Version,
+    channel: &ImportChannel,
+) -> Result<ImportedChannel, ChannelError> {
+    let current = repo::get_channel(tx, id)?.ok_or_else(|| ChannelError::NotFound {
+        kind: "channel",
+        id: id.to_owned(),
+    })?;
+    if current.version != expected {
+        return Err(ChannelError::Conflict {
+            kind: "channel",
+            id: id.to_owned(),
+            expected,
+            actual: current.version,
+        });
+    }
+
+    let input = &channel.input;
+    tx.execute(
+        "UPDATE channels
+         SET url = ?2, base_dir = ?3, excludes = ?4, secret_query = ?5, past_search = ?6,
+             version = version + 1
+         WHERE id = ?1",
+        params![
+            id,
+            input.url,
+            input.base_dir,
+            json(&input.excludes),
+            json(&input.secret_query),
+            input.past_search,
+        ],
+    )?;
+
+    let existing = repo::list_rules(tx, id)?;
+    let matches = match_rules(&existing, &channel.rules);
+    let mut kept = HashSet::new();
+    let mut kept_rules = 0;
+    for (position, (rule, matched)) in channel.rules.iter().zip(&matches).enumerate() {
+        match matched {
+            Some(index) => {
+                kept.insert(*index);
+                kept_rules += 1;
+                tx.execute(
+                    "UPDATE rules
+                     SET position = ?2, match_text = ?3, regex = ?4, case_insensitive = ?5,
+                         directory = ?6, episode = ?7, episode_auto = ?8, state = ?9,
+                         version = version + 1
+                     WHERE id = ?1",
+                    params![
+                        existing[*index].id,
+                        position as i64,
+                        rule.r#match,
+                        rule.regex,
+                        rule.case_insensitive,
+                        rule.directory,
+                        rule.episode,
+                        rule.episode_auto,
+                        rule.state.as_str(),
+                    ],
+                )?;
+            }
+            None => insert_rule(tx, id, position, rule)?,
+        }
+    }
+
+    let mut removed_rules = Vec::new();
+    for (index, rule) in existing.into_iter().enumerate() {
+        if !kept.contains(&index) {
+            tx.execute("DELETE FROM rules WHERE id = ?1", [&rule.id])?;
+            removed_rules.push(rule);
+        }
+    }
+
+    Ok(ImportedChannel::Replaced {
+        channel: read_channel(tx, id)?,
+        kept_rules,
+        removed_rules,
+    })
+}
+
+fn read_channel(conn: &Connection, id: &str) -> Result<ChannelWithRules, ChannelError> {
+    let channel: Channel =
+        repo::get_channel(conn, id)?.expect("the channel exists in this transaction");
+    let rules = repo::list_rules(conn, id)?;
+    Ok(ChannelWithRules { channel, rules })
+}
