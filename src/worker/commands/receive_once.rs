@@ -344,11 +344,14 @@ pub enum RenameResult {
 /// The file's name gave `trname` no title and episode to work with.
 pub const NAME_NOT_DERIVED: &str =
     "파일 이름에서 작품과 회차를 알아내지 못해서 원래 이름 그대로 뒀어요.";
+/// The torrent has more than one file; `trname` names a single file.
+pub const SEVERAL_FILES: &str = "파일이 여러 개인 토렌트라 이름을 바꾸지 않았어요.";
 /// Renaming was tried and did not go through.
 pub const NAME_NOT_CHANGED: &str = "이름을 바꾸지 못해서 원래 이름 그대로 뒀어요.";
 
 /// Gives the torrent's single file its `trname` name for the folder it was
-/// saved in, without any episode conversion.
+/// saved in, without any episode conversion. A torrent with several files is
+/// left as it is at once, as the rule path leaves it.
 ///
 /// Unlike the renaming after a rule's add, a torrent whose name cannot be
 /// derived is left alone: that path removes the torrent and its data, which is
@@ -378,8 +381,11 @@ pub async fn rename(
                 continue;
             }
         };
-        if torrent.file_count != Some(1) {
-            continue;
+        match torrent.file_count {
+            Some(1) => {}
+            // Transmission counts no files until a magnet link's metadata is in.
+            Some(0) | None => continue,
+            Some(_) => return RenameResult::Kept(SEVERAL_FILES),
         }
         let Some(old_name) = torrent.name else {
             continue;

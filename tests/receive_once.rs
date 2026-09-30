@@ -17,7 +17,7 @@ use axum::http::StatusCode;
 use common::*;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
-use transmission_rss::worker::commands::receive_once::NAME_NOT_DERIVED;
+use transmission_rss::worker::commands::receive_once::{NAME_NOT_DERIVED, SEVERAL_FILES};
 use transmission_rss::{
     store::{
         channels::{ChannelWithRules, RuleInput},
@@ -371,6 +371,27 @@ async fn the_command_ends_only_after_its_rename_step_and_note() {
         .call("GET", &format!("/api/history/{}", item.id), None)
         .await;
     assert_eq!(row["reason"], NAME_NOT_DERIVED);
+}
+
+#[tokio::test]
+async fn a_torrent_with_several_files_is_left_as_it_is_without_retrying() {
+    let liar = release("guid-liar-26", 26, LIAR, "");
+    let s = Scene::new(&[&liar], unrelated_rule()).await;
+    let item = s.item("LIAR GAME - 26").await;
+    s.h.tr.files_on_add(&hash(26), 12);
+    s.post(CMD, &item, "LIAR GAME/Season 01").await;
+    s.h.tr.clear_calls();
+
+    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
+
+    // One lookup by the add and one by the rename step, which stops there.
+    assert_eq!(s.h.tr.calls_of("torrent-get").len(), 2);
+    assert!(s.h.tr.calls_of("torrent-rename-path").is_empty());
+    assert_eq!(s.h.tr.torrents()[0].name, LIAR);
+    let received = s.item("LIAR GAME - 26").await;
+    assert_eq!(received.result, HistoryResult::Received);
+    assert_eq!(received.reason.as_deref(), Some(SEVERAL_FILES));
+    assert_eq!(s.command(CMD).await.1["state"], "done");
 }
 
 #[tokio::test]

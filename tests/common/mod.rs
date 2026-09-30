@@ -147,6 +147,8 @@ struct TrState {
     /// Leave `file-count` out of `torrent-get` answers, which makes the client
     /// code that reads it panic.
     omit_file_count: bool,
+    /// `file-count` for a torrent `torrent-add` takes, by hash (default 1).
+    file_counts: HashMap<String, usize>,
     next_id: i64,
 }
 
@@ -252,6 +254,15 @@ impl FakeTransmission {
     /// reach a panic in an item's task without a hook in the product code.
     pub fn omit_file_count(&self, omit: bool) {
         self.state.lock().unwrap().omit_file_count = omit;
+    }
+
+    /// Makes the torrent `hash`, once `torrent-add` takes it, have `count` files.
+    pub fn files_on_add(&self, hash: &str, count: usize) {
+        self.state
+            .lock()
+            .unwrap()
+            .file_counts
+            .insert(hash.to_owned(), count);
     }
 
     /// Holds every request of `method` until the returned gate is released.
@@ -417,6 +428,7 @@ async fn tr_rpc_answer(
             }
             let id = st.next_id;
             st.next_id += 1;
+            let file_count = st.file_counts.get(&hash).copied().unwrap_or(1);
             st.torrents.push(FakeTorrent {
                 id,
                 hash: hash.clone(),
@@ -434,7 +446,7 @@ async fn tr_rpc_answer(
                     .unwrap_or("/downloads")
                     .to_owned(),
                 status: 4,
-                file_count: 1,
+                file_count,
             });
             ok(json!({ "torrent-added": { "id": id, "hashString": hash, "name": name } }))
                 .into_response()
