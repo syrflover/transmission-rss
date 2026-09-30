@@ -52,6 +52,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("commands/add_unconfirmed.sql")),
     // 7: the app-wide collect folder replaces the channels' base folders
     Migration::Code(super::settings::fold_base_dirs),
+    // 8: watch folders and the works, seasons, episodes and files found in them
+    Migration::Sql(include_str!("library/schema.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]

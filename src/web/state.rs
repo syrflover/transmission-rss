@@ -1,6 +1,6 @@
 use crate::store::{
-    channels::ChannelStore, commands::CommandStore, history::HistoryStore, settings::SettingsStore,
-    status::StatusStore, Db,
+    channels::ChannelStore, commands::CommandStore, history::HistoryStore, library::LibraryStore,
+    settings::SettingsStore, status::StatusStore, Db,
 };
 
 /// Shared handles every API handler can reach. Cheap to clone.
@@ -16,6 +16,8 @@ pub struct AppState {
     pub commands: CommandStore,
     /// App-wide settings: the collect and archive folders.
     pub settings: SettingsStore,
+    /// The watch folders and what was found in them.
+    pub library: LibraryStore,
 }
 
 impl AppState {
@@ -25,7 +27,8 @@ impl AppState {
             history: HistoryStore::new(db.clone()),
             status: StatusStore::new(db.clone()),
             commands: CommandStore::new(db.clone()),
-            settings: SettingsStore::new(db),
+            settings: SettingsStore::new(db.clone()),
+            library: LibraryStore::new(db),
         }
     }
 }
