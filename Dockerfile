@@ -16,10 +16,11 @@ FROM clux/muslrust:stable as builder
 
 WORKDIR /usr/src/transmission-rss
 
-COPY Cargo.toml ./
+COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 
-RUN cargo build --release
+# `--locked`: build the dependency versions the tests ran against.
+RUN cargo build --release --locked
 
 
 FROM alpine:edge
