@@ -1,10 +1,77 @@
+name: trss
+
+# trss-web (screens and API) and trss-worker (collection every 5 minutes and
+# the commands the web accepts) run all the time from the same image and the
+# same release. Transmission comes from docker-compose.yml on `trss_net`.
+#
+# Both share the app database in TRSS_DATA_DIR. Keep it on a local disk of this
+# host, not an SMB or NFS share: SQLite and the worker's lock file
+# (`trss.db.worker.lock`) rely on local file locking.
+
+x-trss: &trss
+  image: ghcr.io/syrflover/transmission-rss:${TRSS_VERSION:?Set TRSS_VERSION in .env to a release tag, e.g. 0.4.0}
+  restart: unless-stopped
+  environment: &trss-env
+    TRSS_DB_PATH: /data/trss.db
+  volumes:
+    - ${TRSS_DATA_DIR:-./data}:/data
+    # The media folder at the same path Transmission sees it, read-only: save
+    # folders are checked for links leading out of a channel's base folder,
+    # and Transmission's folder names are compared as written.
+    - ${MEDIA_DIR:?Set MEDIA_DIR in .env}:/downloads:ro
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: "3"
+  networks:
+    - trss_net
+
 services:
+  trss-worker:
+    <<: *trss
+    container_name: trss-worker
+    entrypoint: ["/usr/local/bin/trss-worker"]
+    environment:
+      <<: *trss-env
+      TRANSMISSION_URL: ${TRANSMISSION_URL:-http://transmission:9091/transmission/rpc}
+      DOWNLOAD_DIR: /downloads/downloads
+      SPEED_LIMIT_UP: ${SPEED_LIMIT_UP:-0}
+      SPEED_LIMIT_DOWN: ${SPEED_LIMIT_DOWN:-30000}
+      DOWNLOAD_QUEUE_SIZE: ${DOWNLOAD_QUEUE_SIZE:-5}
+      SEED_QUEUE_SIZE: ${SEED_QUEUE_SIZE:-1}
+      TRSS_WORKER_INTERVAL_SECS: ${TRSS_WORKER_INTERVAL_SECS:-300}
+    # The worker winds down within 5 seconds of SIGTERM (a cycle or command in
+    # flight is abandoned and picked up again at the next start).
+    stop_grace_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
+
+  trss-web:
+    <<: *trss
+    container_name: trss-web
+    entrypoint: ["/usr/local/bin/trss-web"]
+    # Only on the LAN address of this host: the web has no sign-in of its own.
+    ports:
+      - "${TRSS_WEB_HOST_IP:?Set TRSS_WEB_HOST_IP in .env to this host's LAN address}:${TRSS_WEB_HOST_PORT:-8080}:8080"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
+
+  # The cron run of the legacy binary, kept for rolling back while switching
+  # (`scripts/cron.sh install`). `docker compose up` does not start it.
   trss:
     image: ghcr.io/syrflover/transmission-rss:latest
     container_name: trss
+    profiles: ["legacy"]
     environment:
       - TRANSMISSION_URL=${TRANSMISSION_URL:-http://transmission:9091/transmission/rpc}
-      - CHANNELS_CONFIG_URL=${CHANNELS_CONFIG_URL:?Set CHANNELS_CONFIG_URL in .env}
+      - CHANNELS_CONFIG_URL=${CHANNELS_CONFIG_URL:-}
       - DOWNLOAD_DIR=/downloads/downloads
       - SPEED_LIMIT_UP=${SPEED_LIMIT_UP:-0}
       - SPEED_LIMIT_DOWN=${SPEED_LIMIT_DOWN:-30000}

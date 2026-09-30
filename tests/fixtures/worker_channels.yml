@@ -1,0 +1,28 @@
+# Legacy channels YAML for the worker tests. `{FEED_A}` and `{FEED_B}` are
+# replaced by the address of the local feed server. Tokens are made up.
+- url: "{FEED_A}?filter=1080p&token=REDACTED"
+  directory: /media/anime
+  excludes:
+    - "[Batch]"
+    - "(720p)"
+  rules:
+    - match: "[SubsPlease] Sayonara Lara - "
+      directory: Sayonara Lara/Season 01
+    - match: "sono bisque doll"
+      case_insensitive: true
+      directory: Sono Bisque Doll/Season 02
+      episode: -12
+    - match: "Sono Bisque Doll"
+      directory: Sono Bisque Doll (overlap)
+    - match: "[SubsPlease] Tensei Shitara Slime Datta Ken"
+      directory: Slime/Season 04
+      episode: -24
+
+- url: "{FEED_B}?token=REDACTED"
+  directory: /media/other
+  rules:
+    - match: "Sayonara Lara"
+      directory: Elsewhere/Sayonara Lara/Season 01
+      episode: 2
+    - match: "Never Aired Yet"
+      directory: Never Aired Yet/Season 01

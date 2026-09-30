@@ -2,7 +2,10 @@ use std::{env, fmt::Debug, path::PathBuf, str::FromStr};
 
 use serde::Deserialize;
 
-use crate::rule::Rule;
+use crate::{
+    rss::{ChannelSpec, RuleSpec},
+    rule::Rule,
+};
 
 fn env<T>(key: &str) -> T
 where
@@ -67,4 +70,14 @@ pub struct ChannelConfig {
     #[serde(default)]
     pub excludes: Vec<String>,
     pub rules: Vec<Rule>,
+}
+
+impl From<&ChannelConfig> for ChannelSpec {
+    fn from(channel: &ChannelConfig) -> Self {
+        Self {
+            directory: channel.directory.clone(),
+            excludes: channel.excludes.clone(),
+            rules: channel.rules.iter().map(RuleSpec::from).collect(),
+        }
+    }
 }

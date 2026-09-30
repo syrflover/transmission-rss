@@ -1,0 +1,877 @@
+//! `/api/rules`: the rules of every channel in one list, editing them, and the
+//! preview of what a rule would do with the items the worker has recorded.
+//!
+//! | call                                   | success                                   |
+//! | -------------------------------------- | ----------------------------------------- |
+//! | `GET /rules`                           | `200 { rules: [RuleView], channels: [ChannelBrief] }` |
+//! | `POST /rules`                          | `201 RuleView`                            |
+//! | `PUT /rules/{id}`                      | `200 RuleView`                            |
+//! | `DELETE /rules/{id}?version=N`         | `200 { removed: true }`                   |
+//! | `PUT /rules/order`                     | `200 { rules: [RuleView] }` (the channel's) |
+//! | `POST /rules/preview`                  | `200 Preview`                             |
+//!
+//! Failures use the shape in [`super::error`]. A version that is not the
+//! stored one answers `409` with the rule's current [`RuleView`] as `current`
+//! (for `PUT /rules/order`: the channel's current rules). A regular expression
+//! that does not compile is refused with `400` and a sentence; nothing is saved.
+//!
+//! # The preview is the worker's evaluation
+//!
+//! The preview does not judge titles itself. It puts the edited rule into the
+//! channel's stored rules (at the requested place in the order), hands that to
+//! the very mapping the worker uses ([`ChannelPlan`], which builds the shared
+//! [`crate::rss`] evaluation from stored channels and rules) and judges every
+//! item the channel has in the collection history with it. So the channel's
+//! excludes, base directory and rule order apply exactly as they do in a
+//! cycle, and the same items and settings give the same selection, applied
+//! rule and save path. The history holds the worker's last read of the feed
+//! too, so the web never reads RSS.
+//!
+//! One limit: history keeps titles with the channel's long secret query values
+//! replaced by `***` (see the history module). The preview judges what is
+//! stored, so a title that contained such a value may judge differently from
+//! the worker, which saw the original. Items whose stored title contains the
+//! mask are flagged `masked`.
+//!
+//! # Overlap
+//!
+//! A rule is `overlap` when some recorded item is taken by an earlier rule
+//! although this rule matches it too. It is computed over the recorded items
+//! with the channel's active rules; archived rules neither take items nor
+//! overlap.
+
+use std::collections::{HashMap, HashSet};
+
+use axum::{
+    extract::{
+        rejection::{JsonRejection, QueryRejection},
+        Path, Query, State,
+    },
+    http::StatusCode,
+    routing::{get, post, put},
+    Json, Router,
+};
+use serde::{Deserialize, Serialize};
+use url::Url;
+
+use super::{ApiError, AppState};
+use crate::rss::{ChannelEvaluator, ChannelSpec, RuleSpec};
+use crate::store::channels::{
+    Channel, ChannelError, ChannelWithRules, OrderItem, Rule, RuleInput, RuleState, MASK,
+};
+use crate::store::history::{
+    HistoryError, HistoryItem, HistoryQuery, HistoryResult, HistoryStore, MAX_PAGE_SIZE,
+};
+use crate::worker::plan::{ChannelPlan, Judgement, PlanEvaluation};
+
+#[cfg(test)]
+mod tests;
+
+pub fn routes() -> Router<AppState> {
+    Router::new()
+        .route("/rules", get(list_rules).post(create_rule))
+        .route("/rules/preview", post(preview))
+        .route("/rules/order", put(reorder_rules))
+        .route("/rules/{id}", put(update_rule).delete(delete_rule))
+}
+
+/// The most recorded items of one channel that are read for the list and the
+/// preview. History is kept for good, so this bounds the work of a request;
+/// the newest items are read first.
+const MAX_ITEMS_PER_CHANNEL: usize = 20_000;
+
+/// How many matching items a preview lists (the counts cover all of them).
+const PREVIEW_LIST_LIMIT: usize = 100;
+
+/// The ID the edited rule has in a preview when it is not saved yet.
+const NEW_RULE_ID: &str = "new";
+
+// ---------------------------------------------------------------------------
+// Response shapes
+// ---------------------------------------------------------------------------
+
+/// A regular expression that does not compile, said for people.
+#[derive(Debug, Clone, Serialize)]
+pub struct RegexProblem {
+    /// A full sentence for the screen.
+    pub message: String,
+    /// The regex library's own reason, short and in English.
+    pub detail: String,
+}
+
+fn regex_problem(err: &regex::Error) -> RegexProblem {
+    match err {
+        regex::Error::CompiledTooBig(_) => RegexProblem {
+            message: "정규식이 너무 커요. 더 짧게 줄여 주세요.".into(),
+            detail: "compiled program too big".into(),
+        },
+        other => {
+            let text = other.to_string();
+            let detail = text
+                .lines()
+                .rev()
+                .find_map(|line| line.trim().strip_prefix("error:"))
+                .map(|reason| reason.trim().to_owned())
+                .unwrap_or_else(|| text.lines().last().unwrap_or_default().trim().to_owned());
+            RegexProblem {
+                message: "정규식이 올바르지 않아요. 괄호와 특수 문자를 확인해 주세요.".into(),
+                detail,
+            }
+        }
+    }
+}
+
+/// A stored rule as the screen sees it.
+#[derive(Debug, Serialize)]
+pub struct RuleView {
+    pub id: String,
+    pub channel_id: String,
+    /// Send back as `version` when saving, deleting or reordering.
+    pub version: i64,
+    /// Place among the channel's rules, archived ones included, from 1. This
+    /// is the order the worker checks the rules in.
+    pub order: usize,
+    /// The match phrase; `null` while the rule waits for its title.
+    pub r#match: Option<String>,
+    pub regex: bool,
+    pub case_insensitive: bool,
+    /// Relative to the channel's base directory.
+    pub directory: String,
+    pub episode: i64,
+    pub episode_auto: bool,
+    /// `active` or `archived`.
+    pub state: &'static str,
+    /// An earlier rule takes an item that this rule also matches.
+    pub overlap: bool,
+    /// Set when the rule's regular expression does not compile.
+    pub error: Option<RegexProblem>,
+    /// When the rule last got an item into Transmission (Unix ms), if ever.
+    pub last_received_at: Option<i64>,
+}
+
+/// The channel a rule belongs to, enough to name and group its rules.
+#[derive(Debug, Serialize)]
+pub struct ChannelBrief {
+    pub id: String,
+    pub position: i64,
+    pub name: Option<String>,
+    pub host: String,
+    pub base_dir: String,
+    pub rule_count: usize,
+}
+
+fn host_of(channel: &Channel) -> String {
+    Url::parse(&channel.url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_owned))
+        .unwrap_or_default()
+}
+
+fn brief(cwr: &ChannelWithRules) -> ChannelBrief {
+    ChannelBrief {
+        id: cwr.channel.id.clone(),
+        position: cwr.channel.position,
+        name: cwr.channel.name.clone(),
+        host: host_of(&cwr.channel),
+        base_dir: cwr.channel.base_dir.clone(),
+        rule_count: cwr.rules.len(),
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct RuleList {
+    rules: Vec<RuleView>,
+    channels: Vec<ChannelBrief>,
+}
+
+#[derive(Serialize)]
+struct RuleGroup {
+    rules: Vec<RuleView>,
+}
+
+#[derive(Serialize)]
+struct Removed {
+    removed: bool,
+}
+
+// ---------------------------------------------------------------------------
+// Reading the history
+// ---------------------------------------------------------------------------
+
+fn history_error(e: HistoryError) -> ApiError {
+    ApiError::Internal(e.to_string())
+}
+
+fn store_error(e: ChannelError) -> ApiError {
+    match e {
+        ChannelError::Invalid(_) => ApiError::invalid("입력한 값으로는 저장할 수 없어요."),
+        e => e.into(),
+    }
+}
+
+/// The channel's recorded items, newest first, up to [`MAX_ITEMS_PER_CHANNEL`].
+async fn channel_items(
+    history: &HistoryStore,
+    channel_id: &str,
+) -> Result<Vec<HistoryItem>, ApiError> {
+    let mut items: Vec<HistoryItem> = Vec::new();
+    let mut after = None;
+    loop {
+        let page = history
+            .list(HistoryQuery {
+                channel_id: Some(channel_id.to_owned()),
+                after,
+                limit: MAX_PAGE_SIZE,
+                ..HistoryQuery::default()
+            })
+            .await
+            .map_err(history_error)?;
+        items.extend(page.items);
+        match page.next {
+            Some(next) if items.len() < MAX_ITEMS_PER_CHANNEL => after = Some(next),
+            _ => break,
+        }
+    }
+    Ok(items)
+}
+
+// ---------------------------------------------------------------------------
+// Views of stored rules
+// ---------------------------------------------------------------------------
+
+/// What the recorded items say about a channel's stored rules.
+#[derive(Default)]
+struct Analysis {
+    /// Rules that an earlier rule shadows for some recorded item.
+    overlap: HashSet<String>,
+    /// Latest time each rule got an item into Transmission.
+    last_received: HashMap<String, i64>,
+    errors: HashMap<String, RegexProblem>,
+}
+
+async fn analyze(state: &AppState, cwr: &ChannelWithRules) -> Result<Analysis, ApiError> {
+    let mut analysis = Analysis::default();
+    if cwr.rules.is_empty() {
+        return Ok(analysis);
+    }
+    let plan = ChannelPlan::new(cwr.clone());
+    for problem in plan.rule_errors() {
+        analysis
+            .errors
+            .insert(problem.rule_id, regex_problem(&problem.error));
+    }
+    for item in channel_items(&state.history, &cwr.channel.id).await? {
+        if item.result == HistoryResult::Received {
+            if let Some(rule_id) = &item.rule_id {
+                let latest = analysis.last_received.entry(rule_id.clone()).or_insert(0);
+                *latest = (*latest).max(item.result_at);
+            }
+        }
+        analysis
+            .overlap
+            .extend(plan.evaluate(&item.title).overlapping);
+    }
+    Ok(analysis)
+}
+
+fn views(cwr: &ChannelWithRules, analysis: &Analysis) -> Vec<RuleView> {
+    cwr.rules
+        .iter()
+        .enumerate()
+        .map(|(index, rule)| RuleView {
+            id: rule.id.clone(),
+            channel_id: rule.channel_id.clone(),
+            version: rule.version,
+            order: index + 1,
+            r#match: rule.r#match.clone(),
+            regex: rule.regex,
+            case_insensitive: rule.case_insensitive,
+            directory: rule.directory.clone(),
+            episode: rule.episode,
+            episode_auto: rule.episode_auto,
+            state: rule.state.as_str(),
+            overlap: analysis.overlap.contains(&rule.id),
+            error: analysis.errors.get(&rule.id).cloned(),
+            last_received_at: analysis.last_received.get(&rule.id).copied(),
+        })
+        .collect()
+}
+
+async fn load_channel(state: &AppState, channel_id: &str) -> Result<ChannelWithRules, ApiError> {
+    let channel = state
+        .channels
+        .get_channel(channel_id)
+        .await
+        .map_err(store_error)?
+        .ok_or_else(|| ChannelError::NotFound {
+            kind: "channel",
+            id: channel_id.to_owned(),
+        })?;
+    let rules = state
+        .channels
+        .list_rules(channel_id)
+        .await
+        .map_err(store_error)?;
+    Ok(ChannelWithRules { channel, rules })
+}
+
+/// The views of a channel's rules as they are now.
+async fn channel_views(state: &AppState, channel_id: &str) -> Result<Vec<RuleView>, ApiError> {
+    let cwr = load_channel(state, channel_id).await?;
+    let analysis = analyze(state, &cwr).await?;
+    Ok(views(&cwr, &analysis))
+}
+
+/// One rule as it is now, or 404.
+async fn rule_view(state: &AppState, id: &str) -> Result<RuleView, ApiError> {
+    let rule = state
+        .channels
+        .get_rule(id)
+        .await
+        .map_err(store_error)?
+        .ok_or_else(|| ChannelError::NotFound {
+            kind: "rule",
+            id: id.to_owned(),
+        })?;
+    channel_views(state, &rule.channel_id)
+        .await?
+        .into_iter()
+        .find(|view| view.id == id)
+        .ok_or_else(|| {
+            ChannelError::NotFound {
+                kind: "rule",
+                id: id.to_owned(),
+            }
+            .into()
+        })
+}
+
+/// 409 with the rule as it is now, or 404 if it is gone.
+async fn rule_conflict(state: &AppState, id: &str) -> ApiError {
+    match rule_view(state, id).await {
+        Ok(current) => ApiError::conflict_with(current),
+        Err(e) => e,
+    }
+}
+
+async fn list_rules(State(state): State<AppState>) -> Result<Json<RuleList>, ApiError> {
+    let all = state
+        .channels
+        .list_channels_with_rules()
+        .await
+        .map_err(store_error)?;
+    let mut rules = Vec::new();
+    for cwr in &all {
+        let analysis = analyze(&state, cwr).await?;
+        rules.extend(views(cwr, &analysis));
+    }
+    Ok(Json(RuleList {
+        rules,
+        channels: all.iter().map(brief).collect(),
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// Requests
+// ---------------------------------------------------------------------------
+
+/// The editable fields of a rule, as the screen sends them.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuleFields {
+    /// Blank or `null` means the rule waits for its title.
+    #[serde(default)]
+    r#match: Option<String>,
+    #[serde(default)]
+    regex: bool,
+    #[serde(default)]
+    case_insensitive: bool,
+    /// Relative to the channel's base directory; may be empty.
+    #[serde(default)]
+    directory: String,
+    episode: i64,
+    /// `active` (the default) or `archived`.
+    #[serde(default)]
+    state: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CreateBody {
+    channel_id: String,
+    #[serde(flatten)]
+    fields: RuleFields,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UpdateBody {
+    /// The version the client saw.
+    version: i64,
+    /// The channel the client believes the rule belongs to.
+    channel_id: String,
+    #[serde(flatten)]
+    fields: RuleFields,
+}
+
+#[derive(Deserialize)]
+struct DeleteQuery {
+    version: i64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OrderBody {
+    channel_id: String,
+    /// Every rule of the channel once, in the wanted order, each with the
+    /// version the client saw.
+    order: Vec<OrderEntry>,
+}
+
+#[derive(Deserialize)]
+struct OrderEntry {
+    id: String,
+    version: i64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PreviewBody {
+    channel_id: String,
+    /// The rule being edited; absent for a rule not saved yet.
+    #[serde(default)]
+    rule_id: Option<String>,
+    /// The edited fields (the `state` is ignored: a preview always judges the
+    /// rule as if it were collecting).
+    rule: RuleFields,
+    /// Where the edited rule stands among the channel's rules, from 0. Absent
+    /// keeps its place (a new rule goes last).
+    #[serde(default)]
+    position: Option<usize>,
+}
+
+const BAD_BODY: &str = "요청 내용을 읽지 못했어요. 화면을 새로고침한 뒤 다시 시도해 주세요.";
+
+fn body<T>(parsed: Result<Json<T>, JsonRejection>) -> Result<T, ApiError> {
+    parsed
+        .map(|Json(v)| v)
+        .map_err(|_| ApiError::invalid(BAD_BODY))
+}
+
+impl RuleFields {
+    /// The store input. The stored rule, when there is one, tells whether the
+    /// episode offset was typed or derived.
+    fn into_input(self, stored: Option<&Rule>) -> Result<RuleInput, ApiError> {
+        let state = match self.state.as_deref() {
+            None | Some("active") => RuleState::Active,
+            Some("archived") => RuleState::Archived,
+            Some(_) => return Err(ApiError::invalid(BAD_BODY)),
+        };
+        // A blank phrase is a rule waiting for its title. Anything else is
+        // kept exactly: a trailing space can be part of the phrase.
+        let r#match = self.r#match.filter(|phrase| !phrase.is_empty());
+        let directory = self.directory.trim().to_owned();
+        if std::path::Path::new(&directory).is_absolute() {
+            return Err(ApiError::invalid(
+                "저장 폴더는 채널의 기본 저장 폴더 아래 경로로 적어 주세요. /로 시작하면 안 돼요.",
+            ));
+        }
+        Ok(RuleInput {
+            r#match,
+            regex: self.regex,
+            case_insensitive: self.case_insensitive,
+            directory,
+            episode: self.episode,
+            // A typed change makes the offset the user's own.
+            episode_auto: stored.is_some_and(|s| s.episode == self.episode && s.episode_auto),
+            state,
+        })
+    }
+}
+
+/// Refuses a rule whose regular expression does not compile.
+fn require_valid_regex(input: RuleInput) -> Result<RuleInput, ApiError> {
+    match regex_problem_of(&input) {
+        Some(problem) => Err(ApiError::invalid(format!(
+            "{} ({})",
+            problem.message, problem.detail
+        ))),
+        None => Ok(input),
+    }
+}
+
+/// Whether the rule's regular expression fails to compile, decided by the same
+/// evaluation the worker uses.
+fn regex_problem_of(input: &RuleInput) -> Option<RegexProblem> {
+    if !input.regex {
+        return None;
+    }
+    let evaluator = ChannelEvaluator::new(ChannelSpec {
+        directory: Default::default(),
+        excludes: Vec::new(),
+        rules: vec![RuleSpec {
+            pattern: input.r#match.clone(),
+            regex: true,
+            case_insensitive: input.case_insensitive,
+            directory: Default::default(),
+            episode: 0,
+        }],
+    });
+    evaluator
+        .rule_errors()
+        .first()
+        .map(|err| regex_problem(&err.source))
+}
+
+// ---------------------------------------------------------------------------
+// Handlers: save, delete, reorder
+// ---------------------------------------------------------------------------
+
+async fn create_rule(
+    State(state): State<AppState>,
+    parsed: Result<Json<CreateBody>, JsonRejection>,
+) -> Result<(StatusCode, Json<RuleView>), ApiError> {
+    let b = body(parsed)?;
+    let input = require_valid_regex(b.fields.into_input(None)?)?;
+    let created = state
+        .channels
+        .create_rule(&b.channel_id, input)
+        .await
+        .map_err(store_error)?;
+    Ok((
+        StatusCode::CREATED,
+        Json(rule_view(&state, &created.id).await?),
+    ))
+}
+
+async fn update_rule(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    parsed: Result<Json<UpdateBody>, JsonRejection>,
+) -> Result<Json<RuleView>, ApiError> {
+    let b = body(parsed)?;
+    let stored = state
+        .channels
+        .get_rule(&id)
+        .await
+        .map_err(store_error)?
+        .ok_or_else(|| ChannelError::NotFound {
+            kind: "rule",
+            id: id.clone(),
+        })?;
+    if stored.version != b.version {
+        return Err(rule_conflict(&state, &id).await);
+    }
+    let input = require_valid_regex(b.fields.into_input(Some(&stored))?)?;
+    match state
+        .channels
+        .update_rule(&id, b.version, &b.channel_id, input)
+        .await
+    {
+        Ok(_) => Ok(Json(rule_view(&state, &id).await?)),
+        Err(e) if e.is_conflict() => Err(rule_conflict(&state, &id).await),
+        Err(e) => Err(store_error(e)),
+    }
+}
+
+async fn delete_rule(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    parsed: Result<Query<DeleteQuery>, QueryRejection>,
+) -> Result<Json<Removed>, ApiError> {
+    let Query(q) = parsed.map_err(|_| ApiError::invalid(BAD_BODY))?;
+    match state.channels.delete_rule(&id, q.version).await {
+        Ok(()) => Ok(Json(Removed { removed: true })),
+        Err(e) if e.is_conflict() => Err(rule_conflict(&state, &id).await),
+        Err(e) => Err(store_error(e)),
+    }
+}
+
+async fn reorder_rules(
+    State(state): State<AppState>,
+    parsed: Result<Json<OrderBody>, JsonRejection>,
+) -> Result<Json<RuleGroup>, ApiError> {
+    let b = body(parsed)?;
+    let order = b
+        .order
+        .into_iter()
+        .map(|e| OrderItem {
+            id: e.id,
+            version: e.version,
+        })
+        .collect();
+    match state.channels.reorder_rules(&b.channel_id, order).await {
+        Ok(_) => Ok(Json(RuleGroup {
+            rules: channel_views(&state, &b.channel_id).await?,
+        })),
+        Err(e) if e.is_conflict() => match channel_views(&state, &b.channel_id).await {
+            Ok(current) => Err(ApiError::conflict_with(RuleGroup { rules: current })),
+            Err(e) => Err(e),
+        },
+        Err(e) => Err(store_error(e)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The preview
+// ---------------------------------------------------------------------------
+
+/// How an item relates to the edited rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Kind {
+    /// The edited rule is the first to match: it would take the item.
+    Mine,
+    /// The edited rule matches, but an earlier rule takes the item.
+    Earlier,
+    /// The edited rule matches, but a channel exclude keeps the item out.
+    Excluded,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TakenBy {
+    /// The rule that takes the item; `null` for the edited rule itself.
+    pub rule_id: Option<String>,
+    pub r#match: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PreviewItem {
+    pub id: i64,
+    /// The title as history stores it.
+    pub title: String,
+    pub first_seen_at: i64,
+    /// The stored title contains the mask that replaces a long secret value,
+    /// so the worker, which saw the original, may judge it differently.
+    pub masked: bool,
+    pub kind: Kind,
+    /// Where the item would be saved by the rule that takes it; `null` when it
+    /// is excluded.
+    pub save_path: Option<String>,
+    /// The rule that takes the item (only for [`Kind::Earlier`]).
+    pub taken_by: Option<TakenBy>,
+    /// The channel exclude that keeps the item out (only for [`Kind::Excluded`]).
+    pub excluded_by: Option<String>,
+    /// What history recorded for the item so far, as its stable code.
+    pub stored_result: &'static str,
+}
+
+#[derive(Debug, Default, Serialize)]
+pub struct PreviewCounts {
+    /// Recorded items of the channel that were judged.
+    pub total: usize,
+    pub mine: usize,
+    pub earlier: usize,
+    pub excluded: usize,
+    /// Items the edited rule does not match (taken by other rules or by none).
+    pub unmatched: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub struct Preview {
+    /// Set when the edited rule's regular expression does not compile; the rule
+    /// then matches nothing and `items` is empty.
+    pub error: Option<RegexProblem>,
+    pub counts: PreviewCounts,
+    /// How many of the judged items have a masked title.
+    pub masked_total: usize,
+    /// The items the edited rule matches, newest first, up to a limit.
+    pub items: Vec<PreviewItem>,
+    /// There are more matching items than `items` lists.
+    pub truncated: bool,
+}
+
+/// The channel's rules with the edited one put in: replacing the stored rule
+/// `edited_id` when there is one, or added as a new rule. It always collects.
+fn substitute(
+    cwr: &ChannelWithRules,
+    edited_id: Option<&str>,
+    edited: &RuleInput,
+    position: Option<usize>,
+) -> Result<ChannelWithRules, ApiError> {
+    let mut rules = cwr.rules.clone();
+    let stored_index = match edited_id {
+        Some(id) => Some(rules.iter().position(|r| r.id == id).ok_or_else(|| {
+            ApiError::from(ChannelError::NotFound {
+                kind: "rule",
+                id: id.to_owned(),
+            })
+        })?),
+        None => None,
+    };
+    let mut rule = match stored_index {
+        Some(index) => rules.remove(index),
+        None => Rule {
+            id: NEW_RULE_ID.to_owned(),
+            channel_id: cwr.channel.id.clone(),
+            position: rules.len() as i64,
+            version: 0,
+            r#match: None,
+            regex: false,
+            case_insensitive: false,
+            directory: String::new(),
+            episode: 0,
+            episode_auto: false,
+            state: RuleState::Active,
+        },
+    };
+    rule.r#match = edited.r#match.clone();
+    rule.regex = edited.regex;
+    rule.case_insensitive = edited.case_insensitive;
+    rule.directory = edited.directory.clone();
+    rule.episode = edited.episode;
+    rule.state = RuleState::Active;
+
+    let at = position
+        .or(stored_index)
+        .unwrap_or(rules.len())
+        .min(rules.len());
+    rules.insert(at, rule);
+    Ok(ChannelWithRules {
+        channel: cwr.channel.clone(),
+        rules,
+    })
+}
+
+/// Judges `items` with the edited rule put into the channel's rules. Pure: the
+/// same items and settings always give the same [`Preview`]; the handler only
+/// fetches them.
+pub fn build_preview(
+    cwr: &ChannelWithRules,
+    edited_id: Option<&str>,
+    edited: &RuleInput,
+    position: Option<usize>,
+    items: &[HistoryItem],
+) -> Result<Preview, ApiError> {
+    let substituted = substitute(cwr, edited_id, edited, position)?;
+    let id = edited_id.unwrap_or(NEW_RULE_ID).to_owned();
+    let match_of: HashMap<&str, Option<String>> = substituted
+        .rules
+        .iter()
+        .map(|r| (r.id.as_str(), r.r#match.clone()))
+        .collect();
+
+    // The same mapping twice: as the channel is, and with no excludes, which
+    // tells whether an excluded item would have been the edited rule's.
+    let plan = ChannelPlan::new(substituted.clone());
+    let mut open_channel = substituted.clone();
+    open_channel.channel.excludes.clear();
+    let open_plan = ChannelPlan::new(open_channel);
+
+    let error = plan
+        .rule_errors()
+        .into_iter()
+        .find(|problem| problem.rule_id == id)
+        .map(|problem| regex_problem(&problem.error));
+
+    let mut counts = PreviewCounts {
+        total: items.len(),
+        ..PreviewCounts::default()
+    };
+    let mut masked_total = 0;
+    let mut listed = Vec::new();
+
+    for item in items {
+        let masked = item.title.contains(MASK);
+        masked_total += usize::from(masked);
+        let PlanEvaluation {
+            judgement,
+            overlapping,
+        } = plan.evaluate(&item.title);
+
+        let matches_edited = |applied: Option<&str>, overlapping: &[String]| {
+            applied == Some(id.as_str()) || overlapping.iter().any(|r| r == &id)
+        };
+        let (kind, save_path, taken_by, excluded_by) = match &judgement {
+            Judgement::Selected {
+                rule_id, save_path, ..
+            } if rule_id == &id => (
+                Kind::Mine,
+                Some(save_path.display().to_string()),
+                None,
+                None,
+            ),
+            Judgement::Selected {
+                rule_id, save_path, ..
+            } if overlapping.iter().any(|r| r == &id) => (
+                Kind::Earlier,
+                Some(save_path.display().to_string()),
+                Some(TakenBy {
+                    rule_id: Some(rule_id.clone()),
+                    r#match: match_of.get(rule_id.as_str()).cloned().flatten(),
+                }),
+                None,
+            ),
+            Judgement::Excluded => {
+                let open = open_plan.evaluate(&item.title);
+                let applied = match &open.judgement {
+                    Judgement::Selected { rule_id, .. } => Some(rule_id.as_str()),
+                    _ => None,
+                };
+                if matches_edited(applied, &open.overlapping) {
+                    let by = cwr
+                        .channel
+                        .excludes
+                        .iter()
+                        .find(|ex| item.title.contains(ex.as_str()))
+                        .cloned();
+                    (Kind::Excluded, None, None, by)
+                } else {
+                    counts.unmatched += 1;
+                    continue;
+                }
+            }
+            _ => {
+                counts.unmatched += 1;
+                continue;
+            }
+        };
+
+        match kind {
+            Kind::Mine => counts.mine += 1,
+            Kind::Earlier => counts.earlier += 1,
+            Kind::Excluded => counts.excluded += 1,
+        }
+        if listed.len() < PREVIEW_LIST_LIMIT {
+            listed.push(PreviewItem {
+                id: item.id,
+                title: item.title.clone(),
+                first_seen_at: item.first_seen_at,
+                masked,
+                kind,
+                save_path,
+                taken_by,
+                excluded_by,
+                stored_result: item.result.code(),
+            });
+        }
+    }
+
+    let matching = counts.mine + counts.earlier + counts.excluded;
+    Ok(Preview {
+        error,
+        counts,
+        masked_total,
+        truncated: matching > listed.len(),
+        items: listed,
+    })
+}
+
+async fn preview(
+    State(state): State<AppState>,
+    parsed: Result<Json<PreviewBody>, JsonRejection>,
+) -> Result<Json<Preview>, ApiError> {
+    let b = body(parsed)?;
+    // The fields are shaped the way a save shapes them, but a regular
+    // expression that does not compile is a result to show, not a refusal.
+    let edited = b.rule.into_input(None)?;
+    let cwr = load_channel(&state, &b.channel_id).await?;
+    let items = channel_items(&state.history, &b.channel_id).await?;
+    Ok(Json(build_preview(
+        &cwr,
+        b.rule_id.as_deref(),
+        &edited,
+        b.position,
+        &items,
+    )?))
+}

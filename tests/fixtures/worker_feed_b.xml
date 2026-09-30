@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Feed B</title>
+    <link>https://feeds.example.test/feed-b</link>
+    <description>Made-up feed for worker tests</description>
+    <item>
+      <title>[Erai-raws] Sayonara Lara - 04 [1080p].mkv</title>
+      <link>magnet:?xt=urn:btih:bbbb000000000000000000000000000000000011&amp;dn=%5BErai-raws%5D%20Sayonara%20Lara%20-%2004%20%5B1080p%5D.mkv</link>
+      <guid isPermaLink="false">guid-bbbb-11</guid>
+    </item>
+    <item>
+      <title>[Erai-raws] Never Aired Show - 01 [1080p].mkv</title>
+      <link>magnet:?xt=urn:btih:bbbb000000000000000000000000000000000012&amp;dn=%5BErai-raws%5D%20Never%20Aired%20Show%20-%2001%20%5B1080p%5D.mkv</link>
+      <guid isPermaLink="false">guid-bbbb-12</guid>
+    </item>
+  </channel>
+</rss>

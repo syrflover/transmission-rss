@@ -1,6 +1,6 @@
 # 0003 웹 서버와 화면 골격을 세워요
 
-- 상태: 대기
+- 상태: 완료
 - 출처: [메뉴와 탐색](../specs/web-app.md#메뉴와-탐색), [시각 방향과 테마](../specs/web-app.md#시각-방향과-테마), [접근 경계와 기기](../specs/web-app.md#접근-경계와-기기), [웹 기술 ADR](../adr/0004-rust-react-web-stack.md), [웹·worker 분리 ADR](../adr/0006-separate-web-worker-binaries.md)
 - 막는 티켓: 없음
 
@@ -26,3 +26,53 @@
 - 현재 메뉴가 색만이 아니라 배경·굵기·표시선으로 구분되고, Tab으로 다른 메뉴에 초점만 옮겼을 때 경로와 현재 메뉴 표시가 바뀌지 않아요.
 - 태블릿 폭에서 아이콘만 보이는 메뉴가 보조 기술에 메뉴 이름을 전달해요.
 - 화면 모드를 다크로 고른 뒤 새로고침하면 다크가 남고, 시스템을 고르면 기기 설정 변경을 따라가요.
+
+## 결과
+
+### 구현한 것
+
+- `transmission-rss` 패키지에 `trss-web` 바이너리(`src/bin/trss-web.rs`)와 라이브러리 모듈 `src/web/`를 더했어요.
+  axum이 `/api/health`(JSON)와 프런트엔드 정적 빌드를 함께 제공해요.
+  `/api/*`와 `/assets/*`의 없는 경로는 404이고, 나머지 없는 경로는 `index.html`로 돌려 클라이언트 경로를 새로고침해도 열려요.
+  기존 `transmission-rss` 바이너리(`src/main.rs`)는 바꾸지 않았어요.
+- 정적 파일은 바이너리에 넣지 않고 디렉터리에서 읽어요. 그래서 `cargo build`가 프런트엔드 빌드 없이 되고, 이미지에서는 Rust 빌드와 프런트엔드 빌드가 서로의 캐시를 깨지 않아요.
+  환경 변수는 `TRSS_WEB_BIND`(기본 `127.0.0.1`), `TRSS_WEB_PORT`(기본 `8080`), `TRSS_WEB_STATIC_DIR`(기본 `web/dist`)예요.
+  앱 로그인이 없어서 기본 바인드는 루프백이고, 이미지는 `0.0.0.0`·`8080`·`/usr/local/share/trss/web`으로 정해 둬요.
+- `web/`에 React·TypeScript·shadcn/ui(Tailwind v4)를 Vite와 bun으로 세웠고 잠금 파일은 `web/bun.lock`이에요.
+  다섯 메뉴 경로, `TRSS` 이름, 한 칸짜리 화면 모드 전환 버튼, 숨겨 둔 할 일 개수 배지 자리(`useTodoCount`)를 갖췄고 화면마다 제목과 빈 화면 문구만 있어요.
+  색·간격·글꼴은 기준 시안의 토큰이고, 글꼴은 시안의 외부 CDN 대신 npm `pretendard`를 번들에 포함해요.
+- `Dockerfile`은 bun 단계에서 프런트엔드를 빌드하고 musl Rust 단계의 두 바이너리와 함께 최종 이미지에 담아요. 최종 이미지에는 Node도 bun도 없고 ENTRYPOINT는 그대로 `./transmission-rss`예요.
+  웹 서버는 ENTRYPOINT를 덮어써 `./trss-web`으로 실행해요. Compose와 `scripts/cron.sh`는 [0009](0009-deploy-web-worker.md)가 맡아서 건드리지 않았어요.
+
+### 검증한 것
+
+- `cargo build`가 두 바이너리를 만들어요. `cargo test --lib`의 9개(환경 변수 읽기 4개, 서버 경로 5개: 상태 확인, 없는 `/api`, 클라이언트 경로, 정적·해시 파일 캐시, 없는 자산)가 통과해요.
+- `bun run build`(`tsc -b && vite build`)가 성공해요.
+- 로컬 `trss-web`을 시스템 Chromium 헤드리스(playwright-core)로 확인했어요. 같은 검사를 Docker 컨테이너에서도 돌려 모두 통과했어요.
+  - 1440·1024·768·390·320px의 라이트·다크에서 여섯 경로(다섯 메뉴와 없는 경로) 모두 `scrollWidth`가 창 너비를 넘지 않고, 화면 안 어느 요소도 오른쪽·왼쪽 밖으로 나가지 않아요.
+  - 메뉴 방식은 1440·1024px에서 이름이 보이는 상단 메뉴, 768px에서 아이콘만 보이는 상단 메뉴, 390·320px에서 하단 메뉴예요. 한 시점에 보이는 메뉴는 하나뿐이에요.
+  - 768px에서 다섯 링크가 접근성 이름(`getByRole`)으로 모두 하나씩 잡혀요.
+  - 현재 메뉴는 채운 배경·굵기 700·표시선으로 구분돼요. 현재 메뉴가 바뀌어도 링크 너비 변화는 0.3px 이하예요.
+  - `/collect`에서 Tab을 12번 눌러 모든 메뉴와 전환 버튼에 초점이 지나가도 경로와 현재 메뉴 표시가 그대로예요. Enter를 눌러야만 이동해요(1440·390px).
+  - 화면 모드는 시스템→라이트→다크→시스템으로 돌아요. 다크를 고르고 새로고침하거나 화면을 옮겨도 다크가 남아요. 시스템에서는 `prefers-color-scheme` 변경(다크→라이트)을 바로 따르고, 직접 고른 다크는 기기 설정이 바뀌어도 유지돼요. `localStorage`가 막혀도 화면이 뜨고 전환이 동작해요.
+  - 안전 영역은 Chromium DevTools의 `Emulation.setSafeAreaInsetsOverride`로 아래 34px를 주어 확인했어요. 하단 메뉴가 34px만큼 커지고 링크가 그 위에 머물러요. 본문 아래 여백(130px)이 메뉴 높이(93px)보다 커서 내용을 가리지 않아요.
+  - 키보드 초점 고리와 스크린샷을 눈으로 확인했어요. 텍스트 대비는 토큰 값으로 계산해 두 모드 모두 4.5:1 이상이에요(가장 낮은 것은 라이트의 `text-muted` 5.06:1).
+- 배포 이미지를 `docker build`로 빌드하고 컨테이너(`--entrypoint ./trss-web`)로 띄웠어요. 이미지 안에 `node`·`bun`·`npm`이 없고, `/api/health`와 `/settings`(앱 화면)에 응답해요. `docker stop`은 0.3초에 끝나요.
+  기본 ENTRYPOINT로 실행하면 이전처럼 `transmission-rss`가 `CHANNELS_CONFIG_URL` 미설정으로 멈춰서, 그 경로가 그대로임을 확인했어요.
+- 스크린샷은 커밋하지 않고 작업 트리의 `.scratch/0003-shots/`와 `.scratch/0003-shots-docker/`에 뒀어요.
+
+### 검증하지 못한 것
+
+- 실제 휴대폰의 안전 영역·터치·가상 키보드는 확인하지 못했어요. 안전 영역은 Chromium의 덮어쓰기 값으로만 봤어요. 실제 기기와 실제 배포는 [0009](0009-deploy-web-worker.md) 뒤에 확인해요.
+- 접근성은 Chromium의 접근성 이름까지만 봤어요. 실제 스크린 리더(VoiceOver, TalkBack 등)로 아이콘만 보이는 메뉴를 읽어 보지 않았어요.
+- Chromium 외의 브라우저(Firefox, Safari)는 확인하지 못했어요.
+- 텍스트 대비는 토큰 값 계산이고, 실제 렌더링 배경 위의 값은 재지 않았어요.
+- 실제 배포의 접근 보호(LAN·VPN·앞단 인증)는 이 티켓 범위 밖이고 확인하지 않았어요.
+
+### 남은 일과 참고
+
+- `cargo test` 전체에서 `src/main.rs`의 기존 테스트 하나가 실제 Transmission 서버(192.168.1.21)에 접속하려다 실패해요. 이 티켓과 무관한 기존 동작이에요. [0001](0001-rule-evaluation.md)과 합친 뒤에는 이 테스트가 `#[ignore]`라 `cargo test` 전체가 오프라인으로 통과해요.
+- `Cargo.lock`이 `.gitignore`에 있어서 이미지 빌드는 의존성 버전을 고정하지 못해요. 기존 상태 그대로 뒀어요.
+- 할 일 배지는 시안대로 빨간색(`accent-urgent`)이에요. 명세는 빨강을 실패·오류에만 쓰라고 해서, 할 일 개수를 실제로 채우는 티켓에서 색을 다시 정해야 해요.
+- 화면 모드의 저장 키(`trss-theme-v1`)는 `index.html`의 첫 그림 전 스크립트와 `web/src/lib/theme.ts`에 두 번 적혀 있어요. 바꿀 때 둘을 함께 고쳐야 해요.
+- 개발 중에는 `bun run dev`가 `/api`를 `TRSS_WEB_DEV_API`(기본 `http://127.0.0.1:8080`)로 넘겨요.
