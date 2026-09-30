@@ -99,3 +99,6 @@ a.json
 logs/
 
 .claude/
+
+web/node_modules/
+web/dist/

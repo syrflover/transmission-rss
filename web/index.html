@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark light" />
+    <title>TRSS</title>
+    <script>
+      // Apply the saved screen mode before first paint (mirrors src/lib/theme.ts).
+      (function () {
+        var pref = "system";
+        try {
+          var stored = localStorage.getItem("trss-theme-v1");
+          if (stored === "light" || stored === "dark" || stored === "system") pref = stored;
+        } catch (e) {}
+        var dark = window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches;
+        var root = document.documentElement;
+        root.setAttribute("data-theme-pref", pref);
+        root.setAttribute("data-theme", pref === "system" ? (dark ? "dark" : "light") : pref);
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
