@@ -667,7 +667,9 @@ async fn rename_mode(ctx: &CycleContext, kind: AddKind, hash: &str) -> Option<Re
 
 fn failure_reason(err: &AddError, redactor: &Redactor) -> String {
     let text = match err {
-        AddError::Rpc(err) => format!("Transmission unreachable or failed: {err}"),
+        AddError::Unreachable(err) | AddError::Rpc(err) => {
+            format!("Transmission unreachable or failed: {err}")
+        }
         AddError::Rejected(result) => format!("Transmission refused the torrent: {result}"),
     };
     redactor

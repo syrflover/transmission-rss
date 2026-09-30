@@ -134,6 +134,11 @@ pub struct Command {
     pub updated_at: Millis,
     pub finished_at: Option<Millis>,
     pub outcome: Option<Outcome>,
+    /// A request of this command to add a torrent got no answer from
+    /// Transmission, so Transmission may hold a torrent whose hash history did
+    /// not learn. Set on a running command by
+    /// [`CommandStore::note_unconfirmed_add`], and kept or cleared when it ends.
+    pub add_unconfirmed: bool,
 }
 
 /// A command to store.
@@ -246,6 +251,17 @@ impl CommandStore {
         now: Millis,
     ) -> Result<bool, CommandError> {
         self.end(id, state, outcome, now, true).await
+    }
+
+    /// Records on a running command that its request to add a torrent got no
+    /// answer, before the command is left for another start (see
+    /// [`Command::add_unconfirmed`]). The return value tells whether the
+    /// command was running.
+    pub async fn note_unconfirmed_add(&self, id: &str, now: Millis) -> Result<bool, CommandError> {
+        let id = id.to_owned();
+        self.db
+            .run(move |c| repo::note_unconfirmed_add(c, &id, now))
+            .await
     }
 
     async fn end(

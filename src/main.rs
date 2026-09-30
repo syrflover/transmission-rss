@@ -226,7 +226,7 @@ async fn run() {
                         eprintln!("{result}");
                         return;
                     }
-                    Err(AddError::Rpc(err)) => {
+                    Err(AddError::Unreachable(err) | AddError::Rpc(err)) => {
                         eprintln!("{err}");
                         return;
                     }

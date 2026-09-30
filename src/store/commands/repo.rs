@@ -11,7 +11,7 @@ use crate::store::history::Millis;
 type Result<T> = std::result::Result<T, CommandError>;
 
 const COLUMNS: &str = "id, kind, payload, subject, state, attempts, created_at, updated_at, \
-     finished_at, outcome";
+     finished_at, outcome, add_unconfirmed";
 
 /// Reason recorded for a command given up after [`MAX_ATTEMPTS`] starts.
 const GIVEN_UP: &str = "worker가 이 명령을 처리하다 여러 번 멈춰서 더는 시도하지 않아요.";
@@ -42,6 +42,7 @@ fn command_from_row(row: &Row<'_>) -> Result<Command> {
         updated_at: row.get(7)?,
         finished_at: row.get(8)?,
         outcome,
+        add_unconfirmed: row.get(10)?,
     })
 }
 
@@ -169,7 +170,15 @@ pub fn claim_next(conn: &mut Connection, now: Millis) -> Result<Option<Command>>
                 result: "failed".to_owned(),
                 reason: Some(GIVEN_UP.to_owned()),
             };
-            end(&tx, &command.id, CommandState::Failed, &outcome, now, false)?;
+            // A torrent an earlier start may have put in stays accounted for.
+            end(
+                &tx,
+                &command.id,
+                CommandState::Failed,
+                &outcome,
+                now,
+                command.add_unconfirmed,
+            )?;
             continue;
         }
 
@@ -182,6 +191,17 @@ pub fn claim_next(conn: &mut Connection, now: Millis) -> Result<Option<Command>>
         tx.commit()?;
         return Ok(Some(claimed));
     }
+}
+
+pub fn note_unconfirmed_add(conn: &mut Connection, id: &str, now: Millis) -> Result<bool> {
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let changed = tx.execute(
+        "UPDATE commands SET add_unconfirmed = 1, updated_at = ?2
+         WHERE id = ?1 AND state = 'running'",
+        params![id, now],
+    )?;
+    tx.commit()?;
+    Ok(changed == 1)
 }
 
 fn end(
@@ -219,7 +239,8 @@ pub fn finish(
 pub fn unconfirmed_adds_since(conn: &Connection, since: Option<Millis>) -> Result<usize> {
     let count: i64 = conn.query_row(
         "SELECT count(*) FROM commands
-         WHERE add_unconfirmed = 1 AND (?1 IS NULL OR finished_at >= ?1)",
+         WHERE add_unconfirmed = 1 AND finished_at IS NOT NULL
+           AND (?1 IS NULL OR finished_at >= ?1)",
         [since],
         |row| row.get(0),
     )?;

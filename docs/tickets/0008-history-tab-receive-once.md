@@ -97,7 +97,7 @@
 - 브라우저 확인은 Rust 대역이 아니라 같은 프로토콜의 Node 대역으로 했어요. 실제 Transmission·실제 RSS는 쓰지 않았어요.
 - 저장 폴더의 링크 검사는 web/worker가 미디어 볼륨을 볼 수 있을 때만 링크를 따라가요. 볼 수 없으면 문자열 규칙(절대 경로·`..`)만 적용돼요. worker가 실행 직전에 다시 검사해요.
 - 알려진 틈: Transmission에 넣은 직후 결과를 쓰기 전에 worker가 죽으면 그 명령은 다시 실행돼 `중복`으로 끝나요(토렌트는 한 개이고, 이름 변경과 메모는 없어요). 그 사이에 도는 수집 주기는 `running` 명령이 있어 정리를 건너뛰어요.
-  추가 요청이 답을 받지 못했는데(시간 초과·연결 실패) Transmission이 실제로는 받았다면, 명령에 그 사실을 남겨 다음 주기 한 번만 정리를 건너뛰어요. 해시를 알 방법은 없어서, 규칙이나 새 `한 번 받기`가 그 항목을 다시 만나 해시를 남기지 않으면 그다음 주기의 정리가 그 토렌트를 Transmission에서 빼요(데이터는 남아요).
+  보낸 추가 요청이 답을 받지 못했는데 Transmission이 실제로는 받은 경우는 아래 "리뷰 뒤 수정"의 다시 보내기로 해시를 알아내요. 다섯 번째 시도까지 답이 없거나 명령 태스크가 패닉하면 해시를 모르는 채 끝나고, 다음 주기 한 번만 정리를 건너뛰어요. 그 뒤에도 해시를 남긴 경로가 없으면 그다음 주기의 정리가 그 토렌트를 Transmission에서 빼요(데이터는 남아요).
 - 이력 전이 규칙상 `추가 실패`로 남은 `한 번 받기` 결과를 이후 주기가 `규칙 불일치`로 덮어쓸 수 있어요(받음·중복만 고정). 명령 기록에는 실패와 까닭이 남아요.
 - 제목 검색 상자와 상태 판에서 넘어오는 추천 필터는 넣지 않았어요(완료 기준 밖).
 
@@ -111,7 +111,7 @@
   시험: `a_rule_that_later_selects_a_hand_received_item_neither_removes_nor_renames_it`, `a_rule_with_another_folder_does_not_rename_a_hand_received_file`, `worker_cycle::a_torrent_transmission_already_had_is_never_removed_by_the_renaming`, `worker_cycle::a_torrent_a_rule_received_and_named_is_not_renamed_again`, 저장소 `a_torrent_is_received_by_hand_when_a_received_item_without_a_rule_holds_it`.
 - **`중복`에도 이름을 바꾸고 결과가 어긋남 (P2)**: 명령은 자기 추가가 새로 넣었을 때만 이름을 바꿔요. 명령의 결과와 까닭은 기록 항목에 남은 결과에서 나와서, 규칙이 먼저 받은 항목이 "받음"과 "이미 같은 토렌트가 있어요"를 함께 보이지 않아요. 시험: `a_command_that_meets_the_torrent_a_rule_received_after_intake_leaves_it_as_it_is`, `a_command_into_the_base_folder_puts_no_note_on_an_item_a_rule_received`, `a_command_whose_torrent_went_in_before_the_worker_died_adds_no_second_torrent`(이름 변경 없음을 더함).
 - **재시작 뒤 첫 주기의 정리 (P2)**: 넣은 뒤 결과를 쓰기 전에 죽은 worker를 다시 띄우면 주기가 명령보다 먼저 돌아, 해시를 모르는 그 토렌트를 정리했어요. 이제 `Worker::tick`이 잠금을 잡은 채 `running` 명령 수를 세어 넘기고(`CommandsAtStart`), 하나라도 있으면 그 주기는 정리하지 않아요(`CycleReport::commands_running`). 시험: `a_cycle_run_while_a_command_is_left_running_removes_nothing`, 저장소 `only_started_and_unended_commands_count_as_running`.
-- **시간 초과한 명령의 추가 (P2)**: 명령의 추가가 답을 받지 못하면(`AddError::Rpc`) 또는 명령 태스크가 패닉하면, 명령을 끝낼 때 `add_unconfirmed`를 남겨요(마이그레이션 6, `CommandStore::finish_with_unconfirmed_add`). 다음 주기는 직전 주기 시작 뒤에 끝난 그런 명령이 있으면 정리를 한 번 건너뛰어요(`CycleReport::commands_unconfirmed`). 시험: `a_command_add_that_timed_out_after_transmission_took_it_holds_the_next_cleanup`(가짜 Transmission이 추가는 하고 답을 늦춰요), 저장소 `unconfirmed_adds_are_counted_from_a_point_in_time`, 마이그레이션 `database_from_before_unconfirmed_adds_keeps_its_commands_as_confirmed`.
+- **시간 초과한 명령의 추가 (P2)**: 명령의 추가가 답을 받지 못하면(`AddError::Rpc`) 또는 명령 태스크가 패닉하면, 명령을 끝낼 때 `add_unconfirmed`를 남겨요(마이그레이션 6, `CommandStore::finish_with_unconfirmed_add`). 다음 주기는 직전 주기 시작 뒤에 끝난 그런 명령이 있으면 정리를 한 번 건너뛰어요(`CycleReport::commands_unconfirmed`). 시험(아래 후속에서 두 시험으로 바뀜): 저장소 `unconfirmed_adds_are_counted_from_a_point_in_time`, 마이그레이션 `database_from_before_unconfirmed_adds_keeps_its_commands_as_confirmed`.
 - **이미 받은 항목에 실패로 끝남 (P2)**: 규칙이 접수 뒤에 항목을 받았거나 `중복`으로 만난 뒤 명령의 추가가 실패하면, 명령은 기록 항목의 결과로 `done`이 돼요. 화면의 `endedMessage`도 `received`·`duplicate` 결과를 실패로 보이지 않아요. 시험: `a_failed_add_for_an_item_already_held_ends_with_the_items_result`.
 - **메모가 늦게 남음 (P3)**: 이름 바꾸기와 메모를 명령 태스크 안에서 마친 뒤 명령을 끝내요(`receive_once::run`). 시험: `the_command_ends_only_after_its_rename_step_and_note`(이름 변경 단계의 조회를 붙잡아 그동안 명령이 `running`인지 봐요).
 - **파일이 여러 개인 토렌트 (P3)**: 잠금을 잡은 채 이름 변경 시도를 끝까지 되풀이하지 않고 바로 그대로 둬요. 메모는 "파일이 여러 개인 토렌트라 이름을 바꾸지 않았어요."예요(명세의 "이름을 바꾸지 못했다는 메모"에 맞춘 짧은 문장). 파일 수 0은 자석 링크의 메타데이터를 기다리는 중이라 계속 기다려요. 시험: `a_torrent_with_several_files_is_left_as_it_is_without_retrying`.
@@ -119,9 +119,13 @@
 - **이미 바꾼 이름을 다시 바꿈 (P2, 재검토에서 찾음)**: 처음에는 `Existing`의 "이미 trname 형식" 판정을 trname에 맡겼어요. trname은 이름이 폴더 제목(대소문자 구분)으로 시작하고 두 자리 회차일 때만 자기 형식으로 봐요. 그래서 규칙 폴더의 제목을 바꾼 뒤(대소문자만 바꿔도), 다른 규칙·채널의 폴더에 있는 토렌트, 회차 100 이상(`S01E105` → `S01E05`)에서 이미 바꾼 이름을 다시 바꿨어요. 고치기 전 코드도 같았으니 새로 생긴 문제는 아니었어요.
   이제 `Existing`은 Transmission이 알려 준 저장 폴더가 규칙 폴더와 같을 때만 이름을 바꾸고, 제목과 상관없이 ` S01E05.mkv`·`S01E105.mkv`·`S01E05.5.mkv`처럼 끝나는 이름은 형식으로 봐요(`looks_renamed`). 다른 폴더의 토렌트는 기존 바이너리라면 이 규칙의 제목으로 이름을 바꿨을 텐데, worker는 그대로 둬요. `worker_legacy_comparison`의 미리 넣은 토렌트는 기존 바이너리가 실제로 넣는 자리인 규칙 폴더로 옮겼고, 두 쪽 요청은 여전히 같아요.
   시험(`tests/worker_cycle.rs`): `a_named_torrent_under_a_folder_whose_case_changed_is_not_renamed`, `a_torrent_in_another_rules_folder_is_not_renamed_after_this_rule`, `a_named_torrent_with_a_three_digit_episode_is_not_renamed`(세 개 모두 수정 전 실패), 지키는 동작 `a_rename_cut_short_in_the_rules_folder_is_finished_when_the_torrent_is_met_again`, 단위 시험 `a_trname_name_is_told_apart_from_a_release_name`.
-
+- **답이 없던 명령의 추가를 다시 보내기 (재검토 뒤 후속)**: 위 "시간 초과한 명령의 추가"는 정리를 한 주기만 늦출 뿐이라, 규칙이 고르지 않는 직접 받은 항목의 토렌트는 그다음 주기에 Transmission에서 빠졌어요.
+  이제 Transmission은 연결을 만들지 못한 추가(`AddError::Unreachable`, 요청이 가지 않음)와 보냈지만 답이 없는 추가(`AddError::Rpc`)를 나눠요. 명령은 앞의 경우 바로 `추가 실패`로 끝나요. 뒤의 경우에는 마지막 시도(`MAX_ATTEMPTS`)가 아니면 끝내지 않아요. 명령에 표시를 남기고(`CommandStore::note_unconfirmed_add`, 마이그레이션 6의 `add_unconfirmed`를 실행 중에도 씀) `running`으로 두어 다음 확인에서 다시 보내요. 그동안 도는 주기는 `running` 명령이 있어 정리하지 않아요.
+  다시 보낸 추가가 `중복`과 해시를 받으면, 명령에 표시가 있고 항목이 다른 경로로 받은 상태가 아니며 토렌트가 명령이 고른 폴더에 있을 때 이 명령이 넣은 것으로 봐요. 그러면 `받음`으로 기록하고 이름을 바꾸고 메모를 남겨요. 추가 전 단계에서 거절되거나 다시 연결하지 못하면 이전 표시를 이어받아, 명령이 끝날 때 다음 주기가 정리를 건너뛰어요. 포기(`GIVEN_UP`)도 표시를 지켜요. 명령 사유 문구는 "연결하지 못했어요"와 "응답하지 않았어요"로 나뉘었어요.
+  시험: `a_command_add_that_timed_out_after_transmission_took_it_is_received_on_the_next_look`(한 번 답을 늦춘 추가가 다음 확인에서 `받음`·해시·trname 이름이 되고 두 주기 뒤에도 남음), `a_command_whose_adds_never_get_an_answer_ends_add_failed_and_holds_the_next_cleanup`(다섯 번 모두 답이 없으면 `추가 실패`와 한 번의 정리 보류). 두 시험 모두 수정 전에 실패했어요. 저장소 `an_unanswered_add_noted_on_a_running_command_stays_through_the_next_start_and_a_give_up`는 실행 중인 명령을 `unconfirmed_adds_since(None)`이 끝난 명령으로 세던 것도 잡았어요(`finished_at IS NOT NULL`을 더함). 연결 실패가 바로 끝나는 것은 기존 `a_stopped_transmission_leaves_add_failed_with_a_reason`이 지켜요.
 남긴 것:
 
-- 시간 초과한 명령의 토렌트는 한 주기만 지켜요(위 알려진 틈).
+- 다섯 번째 시도까지 답이 없었던 명령의 토렌트는 한 주기만 지켜요(위 알려진 틈).
+- 다시 보낸 추가가 `중복`을 받았을 때 그 토렌트를 이 명령 것으로 보는 조건(명령에 남은 표시, 다른 경로로 받지 않은 항목, 명령이 고른 폴더) 가운데, 항목을 다른 경로로 이미 받았거나 토렌트가 다른 폴더에 있어 `중복`으로 남는 경우는 시험 없이 코드로만 확인했어요. 표시가 없는 경우는 worker가 넣은 뒤 죽는 시험 `a_command_whose_torrent_went_in_before_the_worker_died_adds_no_second_torrent`가 지켜요.
 - `추가 실패`로 끝난 명령의 결과를 이후 주기가 `규칙 불일치`로 덮어쓰는 것은 그대로예요(위).
 - 브라우저로는 다시 확인하지 않았어요. 화면 쪽 변경은 `endedMessage` 한 곳이고 `bun run build`만 확인했어요.

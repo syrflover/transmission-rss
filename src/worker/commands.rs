@@ -23,11 +23,20 @@
 //! rerun then meets the torrent, records its hash and ends the command as
 //! `duplicate`, without renaming the file or noting the item.
 //!
-//! A command whose add got no answer from Transmission (or whose task ended in
-//! a panic) is ended with that recorded
-//! ([`CommandStore::finish_with_unconfirmed_add`]): Transmission may hold its
-//! torrent under a hash history never learned. The next cycle removes no
-//! departed torrents either (see [`super::CommandsAtStart`]).
+//! A request to add a torrent that was sent and got no answer (it timed out,
+//! say) may have been taken all the same. The command is not ended then: it is
+//! marked ([`CommandStore::note_unconfirmed_add`]) and stays `running` for the
+//! next look, and cycles in between remove nothing, as above. The next start
+//! adds the item again; Transmission answers `duplicate` with the hash, and a
+//! torrent in the command's folder, for an item nothing else received, counts
+//! as this command's own (`received`, renamed and noted). A connection that
+//! could not be made at all sent nothing and fails the command at once.
+//!
+//! The last start ([`crate::store::commands::MAX_ATTEMPTS`]) ends the command
+//! instead, and so does a task that ended in a panic, with the unanswered add
+//! recorded ([`CommandStore::finish_with_unconfirmed_add`]): Transmission may
+//! hold its torrent under a hash history never learned, and the next cycle
+//! removes no departed torrents either (see [`super::CommandsAtStart`]).
 //!
 //! Each command kind has its own module below.
 
@@ -134,6 +143,16 @@ impl Worker {
 
         let finished = match task.join_next().await {
             Some(Ok(Ok(finished))) => finished,
+            Some(Ok(Err(receive_once::Retry::AddUnanswered))) => {
+                println!(
+                    "Command {}: Transmission did not answer the add; trying again at the next look",
+                    command.id
+                );
+                self.commands
+                    .note_unconfirmed_add(&command.id, (self.clock)())
+                    .await?;
+                return Ok(false);
+            }
             Some(Ok(Err(err))) => {
                 eprintln!("Command {} not finished: {err}", command.id);
                 return Ok(false);

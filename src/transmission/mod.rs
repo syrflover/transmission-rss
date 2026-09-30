@@ -134,7 +134,11 @@ pub async fn get_torrent(
 /// Why an item could not be added.
 #[derive(Debug)]
 pub enum AddError {
-    /// The request itself failed (connection, protocol, decoding).
+    /// No connection to Transmission could be made for the request, so it was
+    /// never sent and Transmission cannot have taken the torrent.
+    Unreachable(Box<dyn std::error::Error + Send + Sync>),
+    /// The request failed once sent, or a later one did (no answer in time,
+    /// protocol, decoding): Transmission may hold the torrent all the same.
     Rpc(Box<dyn std::error::Error + Send + Sync>),
     /// Transmission answered but refused, with its result text.
     Rejected(String),
@@ -143,7 +147,7 @@ pub enum AddError {
 impl fmt::Display for AddError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            AddError::Rpc(err) => write!(f, "{err}"),
+            AddError::Unreachable(err) | AddError::Rpc(err) => write!(f, "{err}"),
             AddError::Rejected(result) => write!(f, "{result}"),
         }
     }
@@ -154,6 +158,17 @@ impl std::error::Error for AddError {}
 impl From<Box<dyn std::error::Error + Send + Sync>> for AddError {
     fn from(err: Box<dyn std::error::Error + Send + Sync>) -> Self {
         AddError::Rpc(err)
+    }
+}
+
+impl AddError {
+    /// Sorts the error of the `torrent-add` request itself: a failure to
+    /// connect means it was never sent.
+    fn of_add_request(err: Box<dyn std::error::Error + Send + Sync>) -> Self {
+        match err.downcast_ref::<reqwest012::Error>() {
+            Some(http) if http.is_connect() => AddError::Unreachable(err),
+            _ => AddError::Rpc(err),
+        }
     }
 }
 
@@ -171,6 +186,8 @@ pub struct AddedTorrent {
     pub kind: AddKind,
     pub hash: String,
     pub name: String,
+    /// Where Transmission saves it, as Transmission reports it.
+    pub download_dir: Option<String>,
 }
 
 async fn add_torrent(
@@ -185,7 +202,8 @@ async fn add_torrent(
             download_dir: download_dir.to_str().map(|x| x.to_owned()),
             ..Default::default()
         })
-        .await?;
+        .await
+        .map_err(AddError::of_add_request)?;
 
     match &mut res.arguments {
         TorrentAddedOrDuplicate::TorrentDuplicate(torrent) => {
@@ -251,6 +269,7 @@ pub async fn add_item(
                 kind: AddKind::Duplicate,
                 hash: torrent.hash_string.unwrap(),
                 name: torrent.name.unwrap(),
+                download_dir: torrent.download_dir,
             })
         }
         TorrentAddedOrDuplicate::TorrentAdded(torrent) => {
@@ -263,6 +282,7 @@ pub async fn add_item(
                 kind: AddKind::Added,
                 hash: torrent.hash_string.unwrap(),
                 name: torrent.name.unwrap(),
+                download_dir: torrent.download_dir,
             })
         }
         // `add_torrent` returns this case as `AddError::Rejected`.

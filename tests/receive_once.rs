@@ -21,7 +21,7 @@ use transmission_rss::worker::commands::receive_once::{NAME_NOT_DERIVED, SEVERAL
 use transmission_rss::{
     store::{
         channels::{ChannelWithRules, RuleInput},
-        commands::{CommandState, CommandStore},
+        commands::{CommandState, CommandStore, MAX_ATTEMPTS},
         history::{HistoryItem, HistoryResult},
         Db,
     },
@@ -1126,38 +1126,93 @@ async fn a_cycle_run_while_a_command_is_left_running_removes_nothing() {
 }
 
 #[tokio::test]
-async fn a_command_add_that_timed_out_after_transmission_took_it_holds_the_next_cleanup() {
+async fn a_command_add_that_timed_out_after_transmission_took_it_is_received_on_the_next_look() {
     let liar = release("guid-liar-26", 26, LIAR, "");
     let s = Scene::new(&[&liar], unrelated_rule()).await;
     let item = s.item("LIAR GAME - 26").await;
     s.post(CMD, &item, "LIAR GAME/Season 01").await;
     // Transmission takes the torrent but answers only after the worker gave up.
     let late = s.h.tr.hold_answer("torrent-add");
-    let worker =
+    let impatient =
         s.h.worker()
             .with_transmission_timeout(Duration::from_millis(300));
 
-    assert_eq!(s.run_commands_with(&worker).await, CommandsOutcome::Ran(1));
+    assert_eq!(
+        s.run_commands_with(&impatient).await,
+        CommandsOutcome::Ran(0)
+    );
 
+    // Not ended: the command waits for the next look, and a cycle meanwhile
+    // does not call the torrent departed.
     let (_, view) = s.command(CMD).await;
-    assert_eq!(view["state"], "failed");
-    assert_eq!(view["outcome"]["result"], "add_failed");
+    assert_eq!(view["state"], "running");
     assert_eq!(
         s.h.tr.torrents().len(),
         1,
         "Transmission has it all the same"
     );
     assert_eq!(s.item("LIAR GAME - 26").await.torrent_hash, None);
+    let report = s.cycle().await;
+    assert!(report.removed.is_empty(), "{:?}", report.removed);
+
+    // The next look adds it again; Transmission answers that it has it, with
+    // its hash, and the command takes that torrent as its own.
+    late.release_all();
+    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
+
+    let (_, view) = s.command(CMD).await;
+    assert_eq!(view["state"], "done");
+    assert_eq!(view["outcome"]["result"], "received");
+    let held = s.item("LIAR GAME - 26").await;
+    assert_eq!(held.result, HistoryResult::Received);
+    let torrent = s.h.tr.torrents().into_iter().next().unwrap();
+    assert_eq!(held.torrent_hash.as_deref(), Some(torrent.hash.as_str()));
+    assert_eq!(torrent.name, "LIAR GAME S01E26.mkv");
+
+    // Kept by the cycles after that, while the item is in the feed.
+    s.cycle().await;
+    s.cycle().await;
+    assert!(s.h.tr.calls_of("torrent-remove").is_empty());
+    assert_eq!(s.h.tr.torrents().len(), 1);
+}
+
+#[tokio::test]
+async fn a_command_whose_adds_never_get_an_answer_ends_add_failed_and_holds_the_next_cleanup() {
+    let liar = release("guid-liar-26", 26, LIAR, "");
+    let s = Scene::new(&[&liar], unrelated_rule()).await;
+    let item = s.item("LIAR GAME - 26").await;
+    s.post(CMD, &item, "LIAR GAME/Season 01").await;
+    let late = s.h.tr.hold_answer("torrent-add");
+    let impatient =
+        s.h.worker()
+            .with_transmission_timeout(Duration::from_millis(300));
+
+    // Every start but the last leaves the command for the next look.
+    for _ in 1..MAX_ATTEMPTS {
+        assert_eq!(
+            s.run_commands_with(&impatient).await,
+            CommandsOutcome::Ran(0)
+        );
+    }
+    assert_eq!(
+        s.run_commands_with(&impatient).await,
+        CommandsOutcome::Ran(1)
+    );
+
+    let (_, view) = s.command(CMD).await;
+    assert_eq!(view["state"], "failed");
+    assert_eq!(view["outcome"]["result"], "add_failed");
+    assert_eq!(
+        s.item("LIAR GAME - 26").await.result,
+        HistoryResult::AddFailed
+    );
+    assert_eq!(s.h.tr.torrents().len(), 1);
 
     // The next cycle does not call it departed.
     let report = s.cycle().await;
     assert_eq!(report.commands_unconfirmed, 1);
     assert!(report.removed.is_empty(), "{:?}", report.removed);
-    assert!(s.h.tr.calls_of("torrent-remove").is_empty());
     assert_eq!(s.h.tr.torrents().len(), 1);
-    // Once: the cycle after that no longer counts the command.
-    let report = s.cycle().await;
-    assert_eq!(report.commands_unconfirmed, 0);
     late.release_all();
 }
 

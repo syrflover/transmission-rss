@@ -397,3 +397,37 @@ async fn unconfirmed_adds_are_counted_from_a_point_in_time() {
         0
     );
 }
+
+#[tokio::test]
+async fn an_unanswered_add_noted_on_a_running_command_stays_through_the_next_start_and_a_give_up() {
+    let (_dir, _db, commands) = store().await;
+    commands
+        .accept(new("cmd-1", r#"{"item_id":1}"#, Some("1")), 1_000)
+        .await
+        .unwrap();
+    assert!(
+        !commands.note_unconfirmed_add("cmd-1", 1_050).await.unwrap(),
+        "a waiting command is not running"
+    );
+
+    let first = commands.claim_next(1_100).await.unwrap().unwrap();
+    assert!(!first.add_unconfirmed);
+    assert!(commands.note_unconfirmed_add("cmd-1", 1_200).await.unwrap());
+    // Still running, so not yet counted among the ended ones.
+    assert_eq!(commands.unconfirmed_adds_since(None).await.unwrap(), 0);
+
+    let again = commands.claim_next(1_300).await.unwrap().unwrap();
+    assert!(again.add_unconfirmed);
+    for now in 1_400..(1_400 + MAX_ATTEMPTS - 2) {
+        commands.claim_next(now).await.unwrap().unwrap();
+    }
+    assert!(commands.claim_next(2_000).await.unwrap().is_none());
+
+    let given_up = commands.get("cmd-1").await.unwrap().unwrap();
+    assert_eq!(given_up.state, CommandState::Failed);
+    assert!(given_up.add_unconfirmed);
+    assert_eq!(
+        commands.unconfirmed_adds_since(Some(2_000)).await.unwrap(),
+        1
+    );
+}

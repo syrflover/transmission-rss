@@ -7,7 +7,10 @@
 //!    the channel's base folder ([`folder::resolve`], checked again here
 //!    because the request may be old);
 //! 2. recover the item's original link ([`link::recover`]);
-//! 3. add it to Transmission and save the answer as the item's result;
+//! 3. add it to Transmission and save the answer as the item's result. An add
+//!    that was sent and got no answer is tried again at the next look
+//!    ([`Retry::AddUnanswered`]), and then a `duplicate` answer for a torrent
+//!    in this command's folder counts as this command's own add;
 //! 4. when that add put the torrent in, give the file its `trname` name
 //!    without any episode conversion. A torrent Transmission already had (a
 //!    rule's, or this command's own from a run that died before its result was
@@ -32,7 +35,7 @@ use super::{folder, link};
 use crate::{
     store::{
         channels::{Channel, ChannelWithRules},
-        commands::{Command, CommandState, Outcome},
+        commands::{Command, CommandState, Outcome, MAX_ATTEMPTS},
         history::{HistoryItem, HistoryResult, Millis},
     },
     transmission::{self, add_item, get_torrent, AddError, AddKind, Redactor},
@@ -96,10 +99,11 @@ pub struct Finished {
     /// Set when this command's add put the torrent in (Transmission did not
     /// have it), so its file is to be renamed.
     pub rename: Option<Rename>,
-    /// The add got no answer (the connection failed or timed out), so
-    /// Transmission may hold the torrent all the same, under a hash history
-    /// did not learn. The command is ended with this recorded, and the next
-    /// collection cycle then removes no departed torrents.
+    /// An add of this command, on this start or an earlier one, was sent and
+    /// got no answer, and no later add got one: Transmission may hold the
+    /// torrent all the same, under a hash history did not learn. The command is
+    /// ended with this recorded, and the next collection cycle then removes no
+    /// departed torrents.
     pub add_unconfirmed: bool,
 }
 
@@ -114,11 +118,19 @@ pub struct Rename {
 }
 
 /// A command that could not be carried out or recorded and should be tried
-/// again later (the database failed).
+/// again later.
 #[derive(Debug, thiserror::Error)]
 pub enum Retry {
+    /// The database failed.
     #[error("cannot read or write the app database: {0}")]
     Store(String),
+    /// The request to add the torrent was sent and got no answer, so
+    /// Transmission may have taken it. The caller records that on the command
+    /// ([`Command::add_unconfirmed`]) and leaves it for the next look, whose
+    /// add learns the torrent's hash from Transmission's `duplicate` answer.
+    /// The last start ([`MAX_ATTEMPTS`]) ends the command instead.
+    #[error("Transmission did not answer the request to add the torrent")]
+    AddUnanswered,
 }
 
 impl Retry {
@@ -160,8 +172,15 @@ pub async fn execute(
     command: &Command,
     now: impl Fn() -> Millis,
 ) -> Result<Finished, Retry> {
+    // An add of an earlier start that got no answer stays unaccounted for
+    // until an add of this one gets an answer.
+    let unaccounted = |mut finished: Finished| {
+        finished.add_unconfirmed |= command.add_unconfirmed;
+        finished
+    };
+
     let Ok(payload) = serde_json::from_str::<ReceiveOnce>(&command.payload) else {
-        return Ok(failed("요청 내용을 읽지 못했어요.", None));
+        return Ok(unaccounted(failed("요청 내용을 읽지 못했어요.", None)));
     };
 
     let Some(item) = ctx
@@ -170,7 +189,10 @@ pub async fn execute(
         .await
         .map_err(Retry::store)?
     else {
-        return Ok(failed("기록에서 이 항목을 찾지 못했어요.", None));
+        return Ok(unaccounted(failed(
+            "기록에서 이 항목을 찾지 못했어요.",
+            None,
+        )));
     };
     let channel = ctx
         .channels
@@ -184,18 +206,23 @@ pub async fn execute(
             "채널이 삭제돼서 저장 폴더와 원래 링크를 정할 수 없어요.",
             &now,
         )
-        .await;
+        .await
+        .map(unaccounted);
     };
 
     let save_path = match folder::resolve(&channel.base_dir, &payload.folder) {
         Ok(path) => path,
-        Err(err) => return refuse(ctx, &item, err.message(), &now).await,
+        Err(err) => {
+            return refuse(ctx, &item, err.message(), &now)
+                .await
+                .map(unaccounted)
+        }
     };
 
     let redactor = redactor_for(ctx, &channel);
     let raw_link = match link::recover(&item, &channel, &ctx.http, &redactor).await {
         Ok(raw) => raw,
-        Err(reason) => return refuse(ctx, &item, &reason, &now).await,
+        Err(reason) => return refuse(ctx, &item, &reason, &now).await.map(unaccounted),
     };
     // The recovered link is a secret from here on, whatever it carried.
     let mut redactor = redactor;
@@ -212,9 +239,17 @@ pub async fn execute(
 
     match added {
         Ok(torrent) => {
-            let result = match torrent.kind {
-                AddKind::Added => HistoryResult::Received,
-                AddKind::Duplicate => HistoryResult::Duplicate,
+            // After an earlier start's add got no answer, a torrent Transmission
+            // has in this command's folder for an item nothing else received is
+            // the one that add put in.
+            let own = torrent.kind == AddKind::Added
+                || (command.add_unconfirmed
+                    && !item.result.is_settled()
+                    && torrent.download_dir.as_deref().map(Path::new) == Some(save_path.as_path()));
+            let result = if own {
+                HistoryResult::Received
+            } else {
+                HistoryResult::Duplicate
             };
             let stored = ctx
                 .history
@@ -225,7 +260,7 @@ pub async fn execute(
             // Only a torrent this command put in is renamed. One that was there
             // already (a rule's, or this command's own from a run that died
             // before its result was written) keeps its name and gets no note.
-            let rename = (torrent.kind == AddKind::Added).then_some(Rename {
+            let rename = own.then_some(Rename {
                 item_id: item.id,
                 hash: torrent.hash,
                 save_path,
@@ -239,9 +274,20 @@ pub async fn execute(
                 "Cannot add item {} of {}: {reason}",
                 item.id, item.channel_label
             );
-            let mut finished = refuse(ctx, &item, &reason, &now).await?;
-            finished.add_unconfirmed = matches!(err, AddError::Rpc(_));
-            Ok(finished)
+            let unanswered = matches!(err, AddError::Rpc(_));
+            if unanswered && command.attempts < MAX_ATTEMPTS {
+                return Err(Retry::AddUnanswered);
+            }
+            let finished = refuse(ctx, &item, &reason, &now).await?;
+            Ok(match err {
+                // Answered: Transmission does not hold the torrent.
+                AddError::Rejected(_) => finished,
+                AddError::Unreachable(_) => unaccounted(finished),
+                AddError::Rpc(_) => Finished {
+                    add_unconfirmed: true,
+                    ..finished
+                },
+            })
         }
     }
 }
@@ -327,9 +373,8 @@ fn redactor_for(ctx: &CycleContext, channel: &Channel) -> Redactor {
 
 fn add_failure_reason(err: &AddError, redactor: &Redactor) -> String {
     let text = match err {
-        AddError::Rpc(err) => {
-            format!("Transmission에 연결하지 못했거나 응답이 없어요: {err}")
-        }
+        AddError::Unreachable(err) => format!("Transmission에 연결하지 못했어요: {err}"),
+        AddError::Rpc(err) => format!("Transmission이 응답하지 않았어요: {err}"),
         AddError::Rejected(result) => format!("Transmission이 토렌트를 받지 않았어요: {result}"),
     };
     redactor
