@@ -35,7 +35,7 @@
 
 ### 구현한 것
 
-- 마이그레이션 7(`src/store/settings/migrate.rs`, 코드 마이그레이션 `Migration::Code`)이 `channels.base_dir`를 수집 폴더로 접고 컬럼을 지워요(`DROP COLUMN`을 골랐어요. 남겨 두면 두 곳이 같은 뜻을 들고 어긋날 수 있어서예요). 같은 트랜잭션에서 `settings_collection`(`folder`, `archive_folder`, `version`; `src/store/settings/`)을 만들어요.
+- 마이그레이션 7(`src/store/settings/migrate.rs`, 코드 마이그레이션 `Migration::Code`)이 `channels.base_dir`를 수집 폴더로 접고 컬럼을 지워요(`DROP COLUMN`을 골랐어요. 남겨 두면 두 곳이 같은 뜻을 들고 어긋날 수 있어서예요). 같은 트랜잭션에서 `collection_settings`(`id`, `collect_folder`, `archive_folder`, `version`; `src/store/settings/`)을 만들어요.
   - 모든 채널의 기본 경로가 같은 글자이면 그 글자가 수집 폴더이고 규칙은 그대로예요.
   - 다르면 경로 조각 단위의 가장 긴 공통 상위가 수집 폴더이고, 각 채널의 남은 조각이 그 채널 규칙의 저장 폴더 앞에 붙어요. 끝의 `/`(저장 폴더가 빈 규칙)와 절대 경로 저장 폴더도 `Path::join`이 옛 기본 경로와 만들던 글자 그대로 나오도록 조각을 글자 단위로 접어요(`src/folders.rs`). 접은 결과는 모든 기본 경로·저장 폴더 쌍에서 옛 경로와 같은지 스스로 검사하고, 어긋나면 마이그레이션이 실패해 DB가 v6으로 남아요.
   - 채널이 없으면 수집 폴더는 정해지지 않아요.
