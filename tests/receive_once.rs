@@ -265,7 +265,8 @@ async fn a_no_match_item_is_received_into_the_chosen_folder_by_the_worker() {
     assert_eq!(torrents.len(), 1);
     assert_eq!(torrents[0].hash, hash(26));
     assert_eq!(torrents[0].download_dir, "/media/anime/LIAR GAME/Season 01");
-    assert_eq!(torrents[0].labels, [BOT_LABEL]);
+    let item_label = format!("trss-item:{}:{}", item.channel_id, item.identity_key);
+    assert_eq!(torrents[0].labels, [BOT_LABEL, item_label.as_str()]);
     assert_eq!(torrents[0].name, "LIAR GAME S01E26.mkv");
     let received = s.item("LIAR GAME - 26").await;
     assert_eq!(received.result, HistoryResult::Received);
@@ -1257,6 +1258,41 @@ async fn a_last_start_refused_after_an_unanswered_add_still_holds_the_next_clean
     assert_eq!(report.commands_unconfirmed, 1);
     assert!(report.removed.is_empty(), "{:?}", report.removed);
     assert_eq!(s.h.tr.torrents().len(), 1);
+}
+
+#[tokio::test]
+async fn a_torrent_whose_hash_was_never_learned_stays_while_its_item_is_in_the_feed() {
+    let liar = release("guid-liar-26", 26, LIAR, "");
+    let other = release("guid-other-3", 3, OTHER, "");
+    let s = Scene::new(&[&liar, &other], unrelated_rule()).await;
+    let worker = after_an_unanswered_add(&s).await;
+    // Every later start is refused, so history never learns the hash.
+    s.h.tr
+        .reject_adds(Some("gotMetadataFromURL: http error 429"));
+    for _ in 2..=MAX_ATTEMPTS {
+        s.run_commands_with(&worker).await;
+    }
+    assert_eq!(s.command(CMD).await.1["state"], "failed");
+    assert_eq!(s.item("LIAR GAME - 26").await.torrent_hash, None);
+    s.h.tr.reject_adds(None);
+
+    // The torrent says which item it is for, and that item is still in the feed.
+    let torrent = s.h.tr.torrents().into_iter().next().unwrap();
+    let item = s.item("LIAR GAME - 26").await;
+    assert!(torrent.labels.contains(&format!(
+        "trss-item:{}:{}",
+        item.channel_id, item.identity_key
+    )));
+    for _ in 0..3 {
+        let report = s.cycle().await;
+        assert!(report.removed.is_empty(), "{:?}", report.removed);
+    }
+    assert_eq!(s.h.tr.torrents().len(), 1);
+
+    // Once the item leaves the feed, the ordinary cleanup applies to it again.
+    s.h.feeds.set_xml(FEED, &feed_xml(&[&other]));
+    let report = s.cycle().await;
+    assert_eq!(report.removed.len(), 1);
 }
 
 #[tokio::test]

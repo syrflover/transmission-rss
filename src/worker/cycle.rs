@@ -340,8 +340,13 @@ pub async fn run_cycle(
     // - A torrent that history records as coming from a channel whose feed was
     //   not read this cycle stays: that feed may have dropped it, or may just
     //   have been down.
-    // - A torrent with no history link (for example one the legacy cron added
-    //   before the switch) has no channel to wait for and follows the plain rule.
+    // - A torrent whose item label ([`transmission::item_label`]) names an item
+    //   in a feed read this cycle, or a channel whose feed was not read, stays
+    //   the same way, whether or not history learned its hash: the label went
+    //   in with the add, so it holds even for an add whose answer was lost.
+    // - A torrent with neither (for example one the legacy cron added before
+    //   the switch, until a cycle meets it and labels it) has no channel to
+    //   wait for and follows the plain rule.
     // - A torrent that history records as received (or found already there) for
     //   an item that is still in a feed read this cycle stays, though no rule
     //   selected it now. That is
@@ -386,6 +391,17 @@ pub async fn run_cycle(
         );
     } else if report.channels_read > 0 {
         let mut kept = kept;
+        let present_items: HashSet<(String, String)> = present.iter().cloned().collect();
+        let unread: HashSet<String> = unread_channels.iter().cloned().collect();
+        let labelled_for_a_waiting_item = |labels: &[String]| {
+            labels
+                .iter()
+                .filter_map(|label| transmission::item_of_label(label))
+                .any(|(channel, key)| {
+                    unread.contains(channel)
+                        || present_items.contains(&(channel.to_owned(), key.to_owned()))
+                })
+        };
         let recorded = async {
             let mut hashes = ctx
                 .history
@@ -399,8 +415,12 @@ pub async fn run_cycle(
             Ok(hashes) => {
                 kept.extend(hashes);
                 let mut transmission = ctx.transmission();
-                report.removed =
-                    remove_stale(&mut transmission, |hash| kept.contains(hash), &redactor).await;
+                report.removed = remove_stale(
+                    &mut transmission,
+                    |hash, labels| kept.contains(hash) || labelled_for_a_waiting_item(labels),
+                    &redactor,
+                )
+                .await;
             }
             Err(err) => eprintln!(
                 "Cannot tell which torrents came from unread channels ({err}); \
@@ -576,7 +596,16 @@ async fn process_job(
 
     let mut transmission = ctx.transmission();
 
-    let added = add_item(&mut transmission, &job.link, &job.save_path, &redactor).await;
+    let label =
+        transmission::item_label(&job.observation.channel_id, &job.observation.identity_key);
+    let added = add_item(
+        &mut transmission,
+        &job.link,
+        &job.save_path,
+        Some(&label),
+        &redactor,
+    )
+    .await;
 
     let (observation, outcome) = match &added {
         Ok(torrent) => {

@@ -493,6 +493,20 @@ async fn tr_rpc_answer(
             ok(json!({})).into_response()
         }
 
+        "torrent-set" => {
+            let wanted = ids(&args);
+            if let Some(labels) = args["labels"].as_array() {
+                let labels: Vec<String> = labels
+                    .iter()
+                    .filter_map(|x| x.as_str().map(str::to_owned))
+                    .collect();
+                for t in st.torrents.iter_mut().filter(|t| wanted.contains(&t.hash)) {
+                    t.labels = labels.clone();
+                }
+            }
+            ok(json!({})).into_response()
+        }
+
         "torrent-stop" => {
             let wanted = ids(&args);
             for t in st.torrents.iter_mut().filter(|t| wanted.contains(&t.hash)) {

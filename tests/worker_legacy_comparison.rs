@@ -12,6 +12,7 @@ use tokio_util::sync::CancellationToken;
 use transmission_rss::{
     config::ChannelConfig,
     store::channels::{ChannelInput, RuleInput},
+    transmission::ITEM_LABEL_PREFIX,
     worker::TickOutcome,
 };
 
@@ -49,14 +50,32 @@ fn preload(tr: &FakeTransmission) {
     tr.preload(FakeTorrent::new(MANUAL_HASH, "Manual Download.mkv"));
 }
 
+/// The torrents, without the worker's item labels (see [`without_item_labels`]).
 fn state(tr: &FakeTransmission) -> Vec<(String, String, Vec<String>, u8)> {
     let mut torrents: Vec<_> = tr
         .torrents()
         .into_iter()
-        .map(|t| (t.hash, t.name, t.labels, t.status))
+        .map(|t| {
+            let labels = t
+                .labels
+                .into_iter()
+                .filter(|l| !l.starts_with(ITEM_LABEL_PREFIX))
+                .collect();
+            (t.hash, t.name, labels, t.status)
+        })
         .collect();
     torrents.sort();
     torrents
+}
+
+/// The worker also labels each torrent with its item, which the legacy binary
+/// has no notion of; the rest of its requests must be the binary's.
+fn without_item_labels(calls: &[String]) -> Vec<String> {
+    let item_label = regex::Regex::new(r#","trss-item:[^"]*""#).unwrap();
+    calls
+        .iter()
+        .map(|c| item_label.replace_all(c, "").into_owned())
+        .collect()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -121,6 +140,12 @@ async fn the_worker_talks_to_transmission_like_the_legacy_binary() {
     // --- the same requests, and the same Transmission afterwards ---
     let legacy_calls = legacy_tr.mutations();
     let worker_calls = h.tr.mutations();
+    let item_labelled = worker_calls
+        .iter()
+        .filter(|c| c.starts_with("torrent-add") && c.contains("\"trss-item:"))
+        .count();
+    assert_eq!(item_labelled, 4, "every add carries its item's label");
+    let worker_calls = without_item_labels(&worker_calls);
     assert_eq!(
         worker_calls,
         legacy_calls,
@@ -129,6 +154,20 @@ async fn the_worker_talks_to_transmission_like_the_legacy_binary() {
         worker_calls.join("\n")
     );
     assert_eq!(state(&h.tr), state(&legacy_tr));
+    // The finished torrent the bot had added before gets its item's label too.
+    let finished =
+        h.tr.torrents()
+            .into_iter()
+            .find(|t| t.hash == FINISHED_HASH)
+            .unwrap();
+    assert!(
+        finished
+            .labels
+            .iter()
+            .any(|l| l.starts_with(ITEM_LABEL_PREFIX)),
+        "{:?}",
+        finished.labels
+    );
 
     // The comparison is not vacuous.
     let count = |prefix: &str| {

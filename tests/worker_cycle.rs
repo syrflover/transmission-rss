@@ -67,7 +67,8 @@ async fn a_cycle_adds_the_selected_items_and_records_every_item() {
         (3, 2, 2, 0)
     );
 
-    // The selected items went to Transmission with their rule's save path and the bot label.
+    // The selected items went to Transmission with their rule's save path, the
+    // bot label and the label of their item.
     assert_eq!(
         add_dirs(&h),
         [
@@ -76,8 +77,26 @@ async fn a_cycle_adds_the_selected_items_and_records_every_item() {
             "/media/anime/Sono Bisque Doll/Season 02",
         ]
     );
+    let items = h.history_items().await;
     for call in h.tr.calls_of("torrent-add") {
-        assert_eq!(call.args["labels"], serde_json::json!([BOT_LABEL]));
+        let hash = call.args["filename"]
+            .as_str()
+            .unwrap()
+            .split("btih:")
+            .nth(1)
+            .unwrap()[..40]
+            .to_lowercase();
+        let item = items
+            .iter()
+            .find(|i| i.torrent_hash.as_deref() == Some(hash.as_str()))
+            .unwrap();
+        assert_eq!(
+            call.args["labels"],
+            serde_json::json!([
+                BOT_LABEL,
+                format!("trss-item:{}:{}", item.channel_id, item.identity_key)
+            ])
+        );
     }
 
     // Each was renamed by trname (episode offsets applied).
@@ -407,6 +426,72 @@ async fn a_rename_cut_short_in_the_rules_folder_is_finished_when_the_torrent_is_
 
     assert_eq!(report.duplicates, 1);
     assert_eq!(name_of(&h, 4), "Slime S04E38.mkv");
+}
+
+#[tokio::test]
+async fn every_torrent_the_cycle_holds_for_an_item_says_which_item_it_is() {
+    let h = Harness::new().await;
+    channel_a(&h).await;
+    // A bot torrent from before the item labels (the legacy cron's), and one a
+    // person added: only the bot's gets the item's label.
+    h.tr.preload(FakeTorrent::new(&hash_a(1), "Sayonara Lara S01E03.mkv").bot());
+    h.tr.preload(FakeTorrent::new(&hash_a(3), "Sono Bisque Doll S02E01.mkv"));
+
+    run(&h.worker()).await;
+
+    let items = h.history_items().await;
+    let label_of = |n: u32| {
+        let item = items
+            .iter()
+            .find(|i| i.torrent_hash.as_deref() == Some(hash_a(n).as_str()))
+            .unwrap();
+        format!("trss-item:{}:{}", item.channel_id, item.identity_key)
+    };
+    let labels_of = |n: u32| {
+        h.tr.torrents()
+            .into_iter()
+            .find(|t| t.hash == hash_a(n))
+            .unwrap()
+            .labels
+    };
+    assert!(labels_of(1).contains(&label_of(1)), "{:?}", labels_of(1));
+    assert!(labels_of(1).contains(&BOT_LABEL.to_owned()));
+    assert!(labels_of(4).contains(&label_of(4)), "{:?}", labels_of(4));
+    assert_eq!(
+        labels_of(3),
+        Vec::<String>::new(),
+        "a person's torrent is left as it is"
+    );
+}
+
+#[tokio::test]
+async fn a_labelled_torrent_stays_while_its_item_is_in_a_feed_and_goes_after() {
+    let h = Harness::new().await;
+    let channel = channel_a(&h).await;
+    run(&h.worker()).await;
+    // A bot torrent history knows nothing of (its add was never answered,
+    // say), labelled for an item of the feed, and one for an item not in it.
+    let in_feed = h
+        .history_items()
+        .await
+        .into_iter()
+        .find(|i| i.torrent_hash.is_none())
+        .unwrap();
+    let label = |key: &str| format!("trss-item:{}:{key}", channel.channel.id);
+    h.tr.preload(FakeTorrent {
+        labels: vec![BOT_LABEL.to_owned(), label(&in_feed.identity_key)],
+        ..FakeTorrent::new("feed0000000000000000000000000000000000aa", "Kept.mkv")
+    });
+    h.tr.preload(FakeTorrent {
+        labels: vec![BOT_LABEL.to_owned(), label("guid:gone")],
+        ..FakeTorrent::new("gone0000000000000000000000000000000000aa", "Gone.mkv")
+    });
+    h.advance(300_000);
+
+    let report = run(&h.worker()).await;
+
+    let removed: Vec<_> = report.removed.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(removed, ["Gone.mkv"]);
 }
 
 #[tokio::test]

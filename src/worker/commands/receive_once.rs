@@ -251,7 +251,15 @@ pub async fn execute(
 
     let mut transmission =
         transmission::client(ctx.transmission_url.clone(), &ctx.transmission_http);
-    let added = add_item(&mut transmission, &raw_link, &save_path, &redactor).await;
+    let label = transmission::item_label(&item.channel_id, &item.identity_key);
+    let added = add_item(
+        &mut transmission,
+        &raw_link,
+        &save_path,
+        Some(&label),
+        &redactor,
+    )
+    .await;
 
     match added {
         Ok(torrent) => {

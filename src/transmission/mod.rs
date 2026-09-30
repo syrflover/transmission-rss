@@ -21,7 +21,7 @@ use tokio_util::sync::CancellationToken;
 use transmission_rpc::{
     types::{
         Id, SessionSetArgs, Torrent, TorrentAction, TorrentAddArgs, TorrentAddedOrDuplicate,
-        TorrentGetField, TorrentStatus,
+        TorrentGetField, TorrentSetArgs, TorrentStatus,
     },
     TransClient,
 };
@@ -61,6 +61,24 @@ pub const BOT_LABEL: &str = "managed:transmission-rss";
 
 pub fn has_label(labels: Option<&[String]>, x: &str) -> bool {
     labels.is_some_and(|labels| labels.iter().any(|label| label == x))
+}
+
+/// Start of the label that says which feed item a torrent is for.
+pub const ITEM_LABEL_PREFIX: &str = "trss-item:";
+
+/// The label that says a torrent is for the item with `identity_key` in the
+/// channel `channel_id`: `trss-item:<channel ID>:<identity key>`. The worker
+/// puts it on the torrents it holds for an item, so the torrent itself tells
+/// the cleanup which item it belongs to, whether or not history learned its
+/// hash. Neither part carries a secret: the channel ID is a UUID and the
+/// identity key a SHA-256 digest.
+pub fn item_label(channel_id: &str, identity_key: &str) -> String {
+    format!("{ITEM_LABEL_PREFIX}{channel_id}:{identity_key}")
+}
+
+/// The `(channel ID, identity key)` an [`item_label`] names.
+pub fn item_of_label(label: &str) -> Option<(&str, &str)> {
+    label.strip_prefix(ITEM_LABEL_PREFIX)?.split_once(':')
 }
 
 /// Session settings applied to Transmission before each collection run.
@@ -196,11 +214,16 @@ async fn add_torrent(
     transmission: &mut TransClient,
     link: &str,
     download_dir: &Path,
+    item_label: Option<&str>,
 ) -> Result<TorrentAddedOrDuplicate, AddError> {
+    let labels = std::iter::once(BOT_LABEL)
+        .chain(item_label)
+        .map(str::to_owned)
+        .collect();
     let mut res = transmission
         .torrent_add(TorrentAddArgs {
             filename: Some(link.to_owned()),
-            labels: Some(vec![BOT_LABEL.to_owned()]),
+            labels: Some(labels),
             download_dir: download_dir.to_str().map(|x| x.to_owned()),
             ..Default::default()
         })
@@ -226,20 +249,46 @@ async fn add_torrent(
     Ok(res.arguments)
 }
 
-/// Adds `link` to Transmission, saving to `download_dir`.
+/// Adds `link` to Transmission, saving to `download_dir`, with the bot's label
+/// and `item_label` (see [`item_label`]) when given.
 ///
 /// A torrent that is already present is left in place, except that a
-/// bot-labelled one that has finished (queued to seed or seeding) is stopped.
-/// Prints `Added`, `Stopped` or `Already` with the torrent's name and hash.
+/// bot-labelled one that has finished (queued to seed or seeding) is stopped,
+/// and a bot-labelled one without `item_label` gets it (Transmission ignores
+/// the labels of an add it answers `duplicate`). A person's torrent keeps its
+/// labels. Prints `Added`, `Stopped` or `Already` with the torrent's name and
+/// hash.
 pub async fn add_item(
     transmission: &mut TransClient,
     link: &str,
     download_dir: &Path,
+    item_label: Option<&str>,
     redactor: &Redactor,
 ) -> Result<AddedTorrent, AddError> {
-    match add_torrent(transmission, link, download_dir).await? {
+    match add_torrent(transmission, link, download_dir, item_label).await? {
         TorrentAddedOrDuplicate::TorrentDuplicate(torrent) => {
             let hash = torrent.hash_string.as_deref().unwrap();
+            let labels = torrent.labels.as_deref();
+
+            if let Some(item_label) =
+                item_label.filter(|label| has_label(labels, BOT_LABEL) && !has_label(labels, label))
+            {
+                let labels = labels
+                    .unwrap_or_default()
+                    .iter()
+                    .map(String::as_str)
+                    .chain([item_label])
+                    .map(str::to_owned)
+                    .collect();
+                transmission
+                    .torrent_set(
+                        TorrentSetArgs::new().labels(labels),
+                        Some(vec![Id::Hash(hash.to_owned())]),
+                    )
+                    .await
+                    .inspect_err(|err| eprintln!("{}", redactor.apply(&err.to_string())))
+                    .ok();
+            }
 
             match torrent.status.unwrap() {
                 TorrentStatus::QueuedToSeed | TorrentStatus::Seeding
@@ -471,12 +520,12 @@ pub struct RemovedTorrent {
 }
 
 /// Removes (keeping the downloaded data) every bot-labelled torrent for which
-/// `is_kept(hash)` is false, i.e. torrents whose item is no longer in the
-/// feeds. Prints one `Removed` line per torrent. A failure to list or remove
+/// `is_kept(hash, labels)` is false, i.e. torrents whose item is no longer in
+/// the feeds. Prints one `Removed` line per torrent. A failure to list or remove
 /// is printed and leaves things as they are.
 pub async fn remove_stale(
     transmission: &mut TransClient,
-    is_kept: impl Fn(&str) -> bool,
+    is_kept: impl Fn(&str, &[String]) -> bool,
     redactor: &Redactor,
 ) -> Vec<RemovedTorrent> {
     match get_torrents(transmission).await {
@@ -485,7 +534,12 @@ pub async fn remove_stale(
             let oldest_torrents = torrents
                 .into_iter()
                 .filter(|torrent| has_label(torrent.labels.as_deref(), BOT_LABEL))
-                .filter(|torrent| !is_kept(torrent.hash_string.as_deref().unwrap()))
+                .filter(|torrent| {
+                    !is_kept(
+                        torrent.hash_string.as_deref().unwrap(),
+                        torrent.labels.as_deref().unwrap_or_default(),
+                    )
+                })
                 .collect::<Vec<_>>();
 
             let mut removed = Vec::new();
@@ -530,7 +584,22 @@ pub async fn remove_stale(
 
 #[cfg(test)]
 mod tests {
-    use super::looks_renamed;
+    use super::{item_label, item_of_label, looks_renamed};
+
+    #[test]
+    fn an_item_label_names_its_channel_and_identity_key() {
+        let label = item_label("0b7c6a52-9d1e-4b8a-a3c1-5f2e8d9c7b10", "guid:ab12");
+        assert_eq!(
+            label,
+            "trss-item:0b7c6a52-9d1e-4b8a-a3c1-5f2e8d9c7b10:guid:ab12"
+        );
+        assert_eq!(
+            item_of_label(&label),
+            Some(("0b7c6a52-9d1e-4b8a-a3c1-5f2e8d9c7b10", "guid:ab12"))
+        );
+        assert_eq!(item_of_label("managed:transmission-rss"), None);
+        assert_eq!(item_of_label("trss-item:no-key"), None);
+    }
 
     #[test]
     fn a_trname_name_is_told_apart_from_a_release_name() {

@@ -129,6 +129,7 @@ async fn test_add_torrent() {
         std::path::Path::new(
             "/downloads/Shows (current)/Katsute Mahou Shoujo to Aku wa Tekitai shiteita/Season 01",
         ),
+        None,
         &Redactor::none(),
     )
     .await
@@ -220,17 +221,18 @@ async fn run() {
 
                 let link = item.link().unwrap_or_default();
 
-                let torrent = match add_item(&mut transmission, link, &save_path, redactor).await {
-                    Ok(torrent) => torrent,
-                    Err(AddError::Rejected(result)) => {
-                        eprintln!("{result}");
-                        return;
-                    }
-                    Err(AddError::Unreachable(err) | AddError::Rpc(err)) => {
-                        eprintln!("{err}");
-                        return;
-                    }
-                };
+                let torrent =
+                    match add_item(&mut transmission, link, &save_path, None, redactor).await {
+                        Ok(torrent) => torrent,
+                        Err(AddError::Rejected(result)) => {
+                            eprintln!("{result}");
+                            return;
+                        }
+                        Err(AddError::Unreachable(err) | AddError::Rpc(err)) => {
+                            eprintln!("{err}");
+                            return;
+                        }
+                    };
 
                 let hash = torrent.hash;
 
@@ -260,7 +262,7 @@ async fn run() {
 
     remove_stale(
         &mut transmission,
-        |hash| {
+        |hash, _| {
             items
                 .iter()
                 .any(|item| item.description().is_some_and(|desc| desc == hash))
