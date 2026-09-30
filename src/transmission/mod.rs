@@ -179,6 +179,72 @@ pub async fn get_torrent(
     Ok(res.arguments.torrents.into_iter().next())
 }
 
+/// Where Transmission keeps one torrent's data: `download_dir`/`name`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TorrentPlace {
+    pub hash: String,
+    pub name: String,
+    /// As Transmission reports it.
+    pub download_dir: String,
+}
+
+/// Every torrent's hash, name and folder, or those of `hashes` only.
+pub async fn torrent_places(
+    transmission: &mut TransClient,
+    hashes: Option<&[String]>,
+) -> transmission_rpc::types::Result<Vec<TorrentPlace>> {
+    let res = transmission
+        .torrent_get(
+            Some(vec![
+                TorrentGetField::Id,
+                TorrentGetField::Name,
+                TorrentGetField::HashString,
+                TorrentGetField::DownloadDir,
+            ]),
+            hashes.map(|hashes| hashes.iter().cloned().map(Id::Hash).collect()),
+        )
+        .await?;
+    Ok(res
+        .arguments
+        .torrents
+        .into_iter()
+        .filter_map(|torrent| {
+            Some(TorrentPlace {
+                hash: torrent.hash_string?,
+                name: torrent.name.unwrap_or_default(),
+                download_dir: torrent.download_dir?,
+            })
+        })
+        .collect())
+}
+
+/// Asks Transmission to move the torrent `hash` to `location`, moving its
+/// files with it (`torrent-set-location` with `move`). Transmission answers
+/// before the files have moved; [`torrent_places`] shows the new folder once
+/// they have. A refusal comes back as Transmission's result text.
+pub async fn set_location(
+    transmission: &mut TransClient,
+    hash: &str,
+    location: &Path,
+) -> Result<(), String> {
+    let Some(location) = location.to_str() else {
+        return Err("the folder is not UTF-8".to_owned());
+    };
+    let res = transmission
+        .torrent_set_location(
+            vec![Id::Hash(hash.to_owned())],
+            location.to_owned(),
+            Some(true),
+        )
+        .await
+        .map_err(|err| err.to_string())?;
+    if res.is_ok() {
+        Ok(())
+    } else {
+        Err(res.result)
+    }
+}
+
 /// Why an item could not be added.
 #[derive(Debug)]
 pub enum AddError {

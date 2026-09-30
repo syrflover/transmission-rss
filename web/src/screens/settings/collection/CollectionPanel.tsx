@@ -37,8 +37,8 @@ export function CollectionPanel() {
         </h2>
         <p className="max-w-[62ch] text-[13.5px] leading-relaxed text-text-secondary">
           RSS로 받는 파일은 모두 수집 폴더 아래에 저장해요. 규칙의 저장 폴더는
-          이 폴더를 기준으로 한 경로예요. 보관 폴더는 수집 폴더와 짝이 되는
-          폴더이고, 지금은 저장만 해요.
+          이 폴더를 기준으로 한 경로예요. 규칙을 보관하면 그 작품 폴더를 보관
+          폴더로 옮기고, 복원하면 수집 폴더로 되돌려요.
         </p>
       </header>
 
@@ -196,8 +196,8 @@ function CollectionForm({
           aria-describedby={`${uid}-archive-hint`}
         />
         <p id={`${uid}-archive-hint`} className={hintClass}>
-          비워 둘 수 있어요. 수집 폴더와 같거나 그 안에 있으면 안 되고, 같은
-          파일시스템에 있어야 해요.
+          비워 두면 보관할 때 규칙만 끄고 폴더는 옮기지 않아요. 수집 폴더와
+          같거나 그 안에 있으면 안 되고, 같은 파일시스템에 있어야 해요.
         </p>
       </div>
 

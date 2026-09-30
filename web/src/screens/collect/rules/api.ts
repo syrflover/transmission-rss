@@ -1,4 +1,5 @@
 import { api } from "@/lib/api";
+import { sendCommand, type Command } from "@/lib/commands";
 
 /**
  * The rules API (`src/web/rules_api.rs`). Every write carries the version the
@@ -13,6 +14,19 @@ export interface RegexProblem {
 }
 
 export type RuleState = "active" | "archived";
+
+/** `보관` (`archive`) or `복원` (`restore`) of a rule: the `rule_archive` command. */
+export type ArchiveDirection = "archive" | "restore";
+
+/**
+ * The last archive or restore of a rule and where it is. The outcome's
+ * `result` is `moved` (the work folder is where the command puts it), `kept`
+ * (the rule changed state and the folder stayed, for the `reason`) or `failed`.
+ */
+export interface ArchiveMove {
+  direction: ArchiveDirection;
+  command: Command;
+}
 
 export interface Rule {
   id: string;
@@ -33,6 +47,8 @@ export interface Rule {
   overlap: boolean;
   error: RegexProblem | null;
   last_received_at: number | null;
+  /** The last `보관`·`복원` of the rule, open or ended; `null` when it never had one. */
+  archive_move: ArchiveMove | null;
 }
 
 export interface ChannelBrief {
@@ -104,6 +120,19 @@ const body = (fields: RuleFields) => ({
 
 export function listRules(): Promise<RuleList> {
   return api<RuleList>("/rules");
+}
+
+export function getRule(id: string): Promise<Rule> {
+  return api<Rule>(`/rules/${encodeURIComponent(id)}`);
+}
+
+/**
+ * Asks the worker to archive or restore the rule. The rule's state is not
+ * saved with the other fields: the worker turns it off before the folder moves
+ * and on after it moved back.
+ */
+export function sendArchive(id: string, ruleId: string, direction: ArchiveDirection): Promise<Command> {
+  return sendCommand(id, "rule_archive", { rule_id: ruleId, direction });
 }
 
 export function createRule(channelId: string, fields: RuleFields): Promise<Rule> {

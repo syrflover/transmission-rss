@@ -132,6 +132,32 @@ pub fn open_for_subjects(
     Ok(out)
 }
 
+pub fn latest_for_subjects(
+    conn: &Connection,
+    kind: &str,
+    subjects: &[String],
+) -> Result<HashMap<String, Command>> {
+    if subjects.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let placeholders = vec!["?"; subjects.len()].join(", ");
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {COLUMNS} FROM commands
+         WHERE kind = ? AND subject IN ({placeholders})
+         ORDER BY seq DESC"
+    ))?;
+    let args = std::iter::once(kind).chain(subjects.iter().map(String::as_str));
+    let mut rows = stmt.query(params_from_iter(args))?;
+    let mut out = HashMap::new();
+    while let Some(row) = rows.next()? {
+        let command = command_from_row(row)?;
+        if let Some(subject) = command.subject.clone() {
+            out.entry(subject).or_insert(command);
+        }
+    }
+    Ok(out)
+}
+
 pub fn has_open(conn: &Connection) -> Result<bool> {
     Ok(conn.query_row(
         "SELECT EXISTS (SELECT 1 FROM commands WHERE state IN ('pending', 'running'))",

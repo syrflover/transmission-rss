@@ -5,8 +5,15 @@
 //! | `POST /commands`          | `202 CommandView` when stored now, `200 CommandView` when the same command was accepted before |
 //! | `GET /commands/{id}`      | `200 CommandView`, or `404` when no command has that ID    |
 //!
-//! Request: `{ "id": <command ID>, "kind": "receive_once", "payload": { "item_id": <history item> } }`
-//! (`receive_once` is the stored name of `다시 받기`).
+//! Request: `{ "id": <command ID>, "kind": <kind>, "payload": <the kind's payload> }`:
+//!
+//! | kind           | on screen    | payload                                                        |
+//! | -------------- | ------------ | -------------------------------------------------------------- |
+//! | `receive_once` | `다시 받기`  | `{ "item_id": <history item> }`                                |
+//! | `rule_archive` | `보관`·`복원` | `{ "rule_id": <rule>, "direction": "archive" \| "restore" }` |
+//!
+//! A rule is archived and restored only through `rule_archive`: the worker
+//! turns the rule off before its folder moves and on after it moved back.
 //! The browser makes one ID per user action and sends it with the content.
 //!
 //! **Accepted is not done.** The answer to a `POST` says the command is stored
@@ -41,8 +48,9 @@ use serde_json::Value;
 
 use super::{ApiError, AppState};
 use crate::{
+    store::channels::RuleState,
     store::commands::{Accepted, Command, CommandState, NewCommand},
-    worker::commands::receive_once,
+    worker::commands::{receive_once, rule_archive},
 };
 
 #[cfg(test)]
@@ -114,6 +122,8 @@ const MISMATCH: &str =
     "이 명령 ID는 다른 내용으로 이미 접수됐어요. 화면을 새로고침한 뒤 다시 시도해 주세요.";
 const FOLDER_REFUSED: &str = "`다시 받기`는 그 항목을 고른 규칙의 저장 폴더에 받아서 폴더를 고를 수 없어요. 화면을 새로고침한 뒤 다시 시도해 주세요.";
 const BUSY: &str = "이 항목은 이미 추가하는 중이에요. 그 결과가 나올 때까지 기다려 주세요.";
+const RULE_BUSY: &str =
+    "이 규칙은 이미 보관하거나 복원하는 중이에요. 그 결과가 나올 때까지 기다려 주세요.";
 
 /// The shortest and longest command ID.
 const ID_LEN: std::ops::RangeInclusive<usize> = 8..=64;
@@ -135,6 +145,7 @@ fn now_millis() -> i64 {
 /// stored data.
 enum Request {
     ReceiveOnce(receive_once::ReceiveOnce),
+    RuleArchive(rule_archive::RuleArchive),
 }
 
 impl Request {
@@ -145,6 +156,11 @@ impl Request {
                     serde_json::from_value(payload).map_err(|_| ApiError::invalid(BAD_BODY))?;
                 Ok(Request::ReceiveOnce(payload))
             }
+            rule_archive::KIND => {
+                let payload: rule_archive::RuleArchive =
+                    serde_json::from_value(payload).map_err(|_| ApiError::invalid(BAD_BODY))?;
+                Ok(Request::RuleArchive(payload))
+            }
             _ => Err(ApiError::invalid("모르는 종류의 명령이에요.")),
         }
     }
@@ -152,6 +168,15 @@ impl Request {
     fn kind(&self) -> &'static str {
         match self {
             Request::ReceiveOnce(_) => receive_once::KIND,
+            Request::RuleArchive(_) => rule_archive::KIND,
+        }
+    }
+
+    /// What a second open command for the same subject is told.
+    fn busy(&self) -> &'static str {
+        match self {
+            Request::ReceiveOnce(_) => BUSY,
+            Request::RuleArchive(_) => RULE_BUSY,
         }
     }
 
@@ -167,6 +192,10 @@ impl Request {
                 serde_json::from_str::<receive_once::ReceiveOnce>(&stored.payload)
                     .is_ok_and(|stored| stored.canonical() == payload.canonical())
             }
+            Request::RuleArchive(payload) => {
+                serde_json::from_str::<rule_archive::RuleArchive>(&stored.payload)
+                    .is_ok_and(|stored| stored == *payload)
+            }
         }
     }
 
@@ -178,7 +207,7 @@ impl Request {
             Request::ReceiveOnce(payload) if payload.names_a_folder() => {
                 Err(ApiError::invalid(FOLDER_REFUSED))
             }
-            Request::ReceiveOnce(_) => Ok(()),
+            Request::ReceiveOnce(_) | Request::RuleArchive(_) => Ok(()),
         }
     }
 
@@ -190,6 +219,12 @@ impl Request {
                 payload: payload.canonical(),
                 subject: Some(payload.subject()),
             },
+            Request::RuleArchive(payload) => NewCommand {
+                id,
+                kind: rule_archive::KIND.to_owned(),
+                payload: payload.canonical(),
+                subject: Some(payload.subject()),
+            },
         }
     }
 
@@ -197,8 +232,28 @@ impl Request {
     async fn check(&self, state: &AppState) -> Result<(), ApiError> {
         match self {
             Request::ReceiveOnce(payload) => check_receive_once(payload, state).await,
+            Request::RuleArchive(payload) => check_rule_archive(payload, state).await,
         }
     }
+}
+
+/// The rule must exist, and only an archived rule is restored. Archiving an
+/// archived rule is `다시 옮기기`: the folder is moved again if it can be.
+async fn check_rule_archive(
+    payload: &rule_archive::RuleArchive,
+    state: &AppState,
+) -> Result<(), ApiError> {
+    let rule = state
+        .channels
+        .get_rule(&payload.rule_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("규칙을 찾지 못했어요. 삭제됐을 수 있어요."))?;
+    if payload.direction == rule_archive::Direction::Restore && rule.state == RuleState::Active {
+        return Err(ApiError::invalid(
+            "이 규칙은 이미 수집 중이에요. 화면을 새로고침해 주세요.",
+        ));
+    }
+    Ok(())
 }
 
 async fn check_receive_once(
@@ -271,7 +326,7 @@ async fn create_command(
         Accepted::Created(command) => Ok((StatusCode::ACCEPTED, Json(CommandView::from(&command)))),
         Accepted::Existing(command) => Ok((StatusCode::OK, Json(CommandView::from(&command)))),
         Accepted::Mismatch(command) => Err(conflict(MISMATCH, &command)),
-        Accepted::Busy(command) => Err(conflict(BUSY, &command)),
+        Accepted::Busy(command) => Err(conflict(request.busy(), &command)),
     }
 }
 

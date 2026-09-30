@@ -4,6 +4,7 @@
 //! | call                                   | success                                   |
 //! | -------------------------------------- | ----------------------------------------- |
 //! | `GET /rules`                           | `200 { rules: [RuleView], channels: [ChannelBrief] }` |
+//! | `GET /rules/{id}`                      | `200 RuleView`                            |
 //! | `POST /rules`                          | `201 RuleView`                            |
 //! | `PUT /rules/{id}`                      | `200 RuleView`                            |
 //! | `DELETE /rules/{id}?version=N`         | `200 { removed: true }`                   |
@@ -14,6 +15,12 @@
 //! stored one answers `409` with the rule's current [`RuleView`] as `current`
 //! (for `PUT /rules/order`: the channel's current rules). A regular expression
 //! that does not compile is refused with `400` and a sentence; nothing is saved.
+//!
+//! A rule's `state` is not edited here: `PUT` refuses a `state` other than the
+//! stored one. Archiving and restoring go through the `rule_archive` command
+//! (`/api/commands`), because the worker has to turn the rule off before its
+//! folder moves to the archive folder and on only after it moved back. A
+//! rule's view carries the last such command as `archive_move`.
 //!
 //! # The preview is the worker's evaluation
 //!
@@ -55,14 +62,16 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use super::{ApiError, AppState};
+use super::{commands_api::CommandView, ApiError, AppState};
 use crate::rss::{ChannelEvaluator, ChannelSpec, RuleSpec};
 use crate::store::channels::{
     Channel, ChannelError, ChannelWithRules, OrderItem, Rule, RuleInput, RuleState, MASK,
 };
+use crate::store::commands::Command;
 use crate::store::history::{
     HistoryError, HistoryItem, HistoryQuery, HistoryResult, HistoryStore, MAX_PAGE_SIZE,
 };
+use crate::worker::commands::rule_archive::{self, RuleArchive};
 use crate::worker::plan::{ChannelPlan, Judgement, PlanEvaluation};
 
 #[cfg(test)]
@@ -73,7 +82,10 @@ pub fn routes() -> Router<AppState> {
         .route("/rules", get(list_rules).post(create_rule))
         .route("/rules/preview", post(preview))
         .route("/rules/order", put(reorder_rules))
-        .route("/rules/{id}", put(update_rule).delete(delete_rule))
+        .route(
+            "/rules/{id}",
+            get(read_rule).put(update_rule).delete(delete_rule),
+        )
 }
 
 /// The most recorded items of one channel that are read for the list and the
@@ -148,6 +160,27 @@ pub struct RuleView {
     pub error: Option<RegexProblem>,
     /// When the rule last got an item into Transmission (Unix ms), if ever.
     pub last_received_at: Option<i64>,
+    /// The last archive or restore of the rule (a `rule_archive` command),
+    /// open or ended; `null` when it never had one.
+    pub archive_move: Option<ArchiveMoveView>,
+}
+
+/// An archive or restore of a rule and where it is.
+#[derive(Debug, Serialize)]
+pub struct ArchiveMoveView {
+    /// `archive` or `restore`.
+    pub direction: &'static str,
+    /// The command; its outcome's `result` is `moved`, `kept` (the rule
+    /// changed state and the folder stayed, for the `reason`) or `failed`.
+    pub command: CommandView,
+}
+
+fn archive_move_view(command: &Command) -> Option<ArchiveMoveView> {
+    let payload: RuleArchive = serde_json::from_str(&command.payload).ok()?;
+    Some(ArchiveMoveView {
+        direction: payload.direction.code(),
+        command: CommandView::from(command),
+    })
 }
 
 /// The channel a rule belongs to, enough to name and group its rules.
@@ -288,7 +321,26 @@ async fn analyze(state: &AppState, cwr: &ChannelWithRules) -> Result<Analysis, A
     Ok(analysis)
 }
 
-fn views(cwr: &ChannelWithRules, analysis: &Analysis) -> Vec<RuleView> {
+/// The last `rule_archive` command of each of the rules.
+async fn archive_moves(
+    state: &AppState,
+    rules: &[Rule],
+) -> Result<HashMap<String, Command>, ApiError> {
+    state
+        .commands
+        .latest_for_subjects(
+            rule_archive::KIND,
+            rules.iter().map(|r| r.id.clone()).collect(),
+        )
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))
+}
+
+fn views(
+    cwr: &ChannelWithRules,
+    analysis: &Analysis,
+    moves: &HashMap<String, Command>,
+) -> Vec<RuleView> {
     cwr.rules
         .iter()
         .enumerate()
@@ -307,6 +359,7 @@ fn views(cwr: &ChannelWithRules, analysis: &Analysis) -> Vec<RuleView> {
             overlap: analysis.overlap.contains(&rule.id),
             error: analysis.errors.get(&rule.id).cloned(),
             last_received_at: analysis.last_received.get(&rule.id).copied(),
+            archive_move: moves.get(&rule.id).and_then(archive_move_view),
         })
         .collect()
 }
@@ -333,7 +386,8 @@ async fn load_channel(state: &AppState, channel_id: &str) -> Result<ChannelWithR
 async fn channel_views(state: &AppState, channel_id: &str) -> Result<Vec<RuleView>, ApiError> {
     let cwr = load_channel(state, channel_id).await?;
     let analysis = analyze(state, &cwr).await?;
-    Ok(views(&cwr, &analysis))
+    let moves = archive_moves(state, &cwr.rules).await?;
+    Ok(views(&cwr, &analysis, &moves))
 }
 
 /// One rule as it is now, or 404.
@@ -377,7 +431,8 @@ async fn list_rules(State(state): State<AppState>) -> Result<Json<RuleList>, Api
     let mut rules = Vec::new();
     for cwr in &all {
         let analysis = analyze(&state, cwr).await?;
-        rules.extend(views(cwr, &analysis));
+        let moves = archive_moves(&state, &cwr.rules).await?;
+        rules.extend(views(cwr, &analysis, &moves));
     }
     Ok(Json(RuleList {
         rules,
@@ -466,6 +521,8 @@ struct PreviewBody {
 }
 
 const BAD_BODY: &str = "요청 내용을 읽지 못했어요. 화면을 새로고침한 뒤 다시 시도해 주세요.";
+const STATE_NOT_EDITED: &str =
+    "보관과 복원은 규칙 상세의 `보관`·`복원` 버튼으로 해요. 화면을 새로고침한 뒤 다시 시도해 주세요.";
 
 fn body<T>(parsed: Result<Json<T>, JsonRejection>) -> Result<T, ApiError> {
     parsed
@@ -559,6 +616,13 @@ async fn create_rule(
     ))
 }
 
+async fn read_rule(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<RuleView>, ApiError> {
+    Ok(Json(rule_view(&state, &id).await?))
+}
+
 async fn update_rule(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -578,6 +642,9 @@ async fn update_rule(
         return Err(rule_conflict(&state, &id).await);
     }
     let input = require_valid_regex(b.fields.into_input(Some(&stored))?)?;
+    if input.state != stored.state {
+        return Err(ApiError::invalid(STATE_NOT_EDITED));
+    }
     match state
         .channels
         .update_rule(&id, b.version, &b.channel_id, input)

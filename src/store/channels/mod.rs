@@ -195,6 +195,21 @@ impl ChannelStore {
             .await
     }
 
+    /// Archives or restores a rule, whatever version it is at: only the worker
+    /// does this, in the order its archive and restore need (see
+    /// `worker::commands::rule_archive`). The version goes up when the state
+    /// changes. `None` when the rule is gone.
+    pub async fn set_rule_state(
+        &self,
+        id: &str,
+        state: RuleState,
+    ) -> Result<Option<Rule>, ChannelError> {
+        let id = id.to_owned();
+        self.db
+            .run(move |c| repo::set_rule_state(c, &id, state))
+            .await
+    }
+
     /// Sets the order of a channel's rules. `order` must list every rule of the
     /// channel once (archived included), each with the version the caller saw.
     /// Rules that move get a new version. All or nothing.

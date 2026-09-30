@@ -206,6 +206,19 @@ impl CommandStore {
             .await
     }
 
+    /// The latest command of `kind` for each of the given subjects, open or
+    /// ended, if any: what a screen shows as the last thing done to a subject.
+    pub async fn latest_for_subjects(
+        &self,
+        kind: &str,
+        subjects: Vec<String>,
+    ) -> Result<HashMap<String, Command>, CommandError> {
+        let kind = kind.to_owned();
+        self.db
+            .run(move |c| repo::latest_for_subjects(c, &kind, &subjects))
+            .await
+    }
+
     /// Whether any command is waiting for a worker (a cheap check the worker
     /// makes before it bothers taking the lock).
     pub async fn has_open(&self) -> Result<bool, CommandError> {

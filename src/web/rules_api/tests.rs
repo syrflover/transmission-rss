@@ -303,18 +303,12 @@ async fn an_excluded_item_and_an_archived_rule_make_no_overlap() {
     app.record(&a.channel, 2_000, &["Show - 01"]).await;
     assert_eq!(app.list().await["rules"][1]["overlap"], true);
     let second = &app.list().await["rules"][1];
-    let (status, text, _) = app
-        .call(
-            Method::PUT,
-            &format!("/api/rules/{}", second["id"].as_str().unwrap()),
-            Some(rule_body(
-                &a.channel,
-                second,
-                json!({ "state": "archived" }),
-            )),
-        )
-        .await;
-    assert_eq!(status, StatusCode::OK, "{text}");
+    // The worker archives (the `rule_archive` command); the store call is its.
+    app.state
+        .channels
+        .set_rule_state(second["id"].as_str().unwrap(), RuleState::Archived)
+        .await
+        .unwrap();
     assert_eq!(app.list().await["rules"][1]["overlap"], false);
 }
 
@@ -973,12 +967,11 @@ async fn a_rule_not_saved_yet_previews_as_the_last_rule_and_an_archived_one_as_c
 
     // Archived, a rule is judged as if restored.
     let rule = app.list().await["rules"][0].clone();
-    app.call(
-        Method::PUT,
-        &format!("/api/rules/{}", rule["id"].as_str().unwrap()),
-        Some(rule_body(&a.channel, &rule, json!({ "state": "archived" }))),
-    )
-    .await;
+    app.state
+        .channels
+        .set_rule_state(rule["id"].as_str().unwrap(), RuleState::Archived)
+        .await
+        .unwrap();
     let archived = app.list().await["rules"][0].clone();
     assert_eq!(archived["state"], "archived");
     let restored = app
@@ -1178,4 +1171,97 @@ async fn the_preview_agrees_with_the_worker_mapping_for_every_recorded_title() {
     assert_eq!(preview.counts.mine, expected_mine);
     assert_eq!(preview.counts.earlier, expected_earlier);
     assert!(expected_mine > 0 && expected_earlier > 0);
+}
+
+// --- archive and restore --------------------------------------------------------
+
+#[tokio::test]
+async fn the_state_is_not_saved_by_an_edit_and_the_last_archive_move_is_shown() {
+    use crate::store::commands::{CommandState, NewCommand, Outcome};
+    use crate::worker::commands::rule_archive::{Direction, RuleArchive, KIND};
+
+    let app = App::new().await;
+    let a = app
+        .channel("a.test", &[], &[("Show", "Show/Season 01")])
+        .await;
+    let rule = app.list().await["rules"][0].clone();
+    let id = rule["id"].as_str().unwrap().to_owned();
+    assert_eq!(rule["archive_move"], Value::Null);
+
+    // An edit cannot archive: only the worker does, after the command.
+    let (status, text, body) = app
+        .call(
+            Method::PUT,
+            &format!("/api/rules/{id}"),
+            Some(rule_body(&a.channel, &rule, json!({ "state": "archived" }))),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+    assert!(
+        body["message"].as_str().unwrap().contains("`보관`"),
+        "{text}"
+    );
+    let unchanged = app.list().await["rules"][0].clone();
+    assert_eq!(unchanged["state"], "active");
+    assert_eq!(unchanged["version"], rule["version"]);
+
+    // An edit that keeps the state still saves.
+    let (status, text, _) = app
+        .call(
+            Method::PUT,
+            &format!("/api/rules/{id}"),
+            Some(rule_body(&a.channel, &rule, json!({ "episode": 3 }))),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+
+    // The rule shows its last archive command, open or ended.
+    let payload = RuleArchive {
+        rule_id: id.clone(),
+        direction: Direction::Archive,
+    };
+    let new = |cid: &str| NewCommand {
+        id: cid.to_owned(),
+        kind: KIND.to_owned(),
+        payload: payload.canonical(),
+        subject: Some(id.clone()),
+    };
+    app.state
+        .commands
+        .accept(new("cmd-first-1"), 1)
+        .await
+        .unwrap();
+    app.state
+        .commands
+        .finish(
+            "cmd-first-1",
+            CommandState::Failed,
+            Outcome {
+                result: "failed".into(),
+                reason: Some("겹쳐요".into()),
+            },
+            2,
+        )
+        .await
+        .unwrap();
+    app.state
+        .commands
+        .accept(new("cmd-second"), 3)
+        .await
+        .unwrap();
+
+    let (status, text, one) = app
+        .call(Method::GET, &format!("/api/rules/{id}"), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(one["archive_move"]["direction"], "archive");
+    assert_eq!(one["archive_move"]["command"]["id"], "cmd-second");
+    assert_eq!(one["archive_move"]["command"]["state"], "pending");
+    assert_eq!(
+        app.list().await["rules"][0]["archive_move"],
+        one["archive_move"]
+    );
+
+    let (status, _, _) = app.call(Method::GET, "/api/rules/no-such-rule", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }

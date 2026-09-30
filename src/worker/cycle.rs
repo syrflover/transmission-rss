@@ -13,6 +13,7 @@ use transmission_rpc::types::{TorrentGetField, TorrentStatus};
 use url::Url;
 
 use super::{
+    commands::rule_archive::work_folder::MovePolicy,
     feed::{self, FeedItem},
     plan::{ChannelPlan, Judgement},
 };
@@ -50,6 +51,9 @@ pub struct CycleContext {
     pub session: SessionConfig,
     pub http: reqwest::Client,
     pub rename: RenamePolicy,
+    /// How a work folder move waits for Transmission (the `rule_archive`
+    /// command; see [`crate::worker::commands::rule_archive`]).
+    pub moves: MovePolicy,
     /// Knows secrets that do not come from channels, such as credentials in
     /// the Transmission URL.
     pub redactor: Redactor,

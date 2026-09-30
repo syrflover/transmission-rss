@@ -41,10 +41,17 @@
 //! hold its torrent under a hash history never learned, and the next cycle
 //! removes no departed torrents either (see [`super::CommandsAtStart`]).
 //!
+//! A `rule_archive` command (보관·복원) moves a work folder on disk. It runs
+//! under the same lock, so no cycle adds a torrent into the folder while it
+//! moves, and a start cut short leaves it `running`: the next start looks at
+//! the disk and Transmission again and moves what is left (see
+//! [`rule_archive`]).
+//!
 //! Each command kind has its own module below.
 
 pub mod link;
 pub mod receive_once;
+pub mod rule_archive;
 
 use std::time::Duration;
 
@@ -56,6 +63,21 @@ use crate::store::commands::{Command, CommandState, Outcome};
 
 /// How often the worker looks for waiting commands.
 pub const DEFAULT_COMMAND_POLL: Duration = Duration::from_secs(3);
+
+/// How one start of a command came out, whatever its kind.
+enum Ran {
+    /// It ended; the command is ended with this.
+    Ended {
+        state: CommandState,
+        outcome: Outcome,
+        add_unconfirmed: bool,
+    },
+    /// A `receive_once` add got no answer; see the module docs.
+    AddUnanswered,
+    /// It could not be carried through now (the database failed, or shutdown
+    /// was asked for) and stays `running` for the next look.
+    NotNow(String),
+}
 
 /// What one look for commands came to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,12 +146,32 @@ impl Worker {
         // In its own task so that a panic ends the command, not the worker.
         let mut task = JoinSet::new();
         let (ctx, clock, owned) = (self.ctx.clone(), self.clock.clone(), command.clone());
+        let cancel = cancel.clone();
         match command.kind.as_str() {
             receive_once::KIND => {
-                let cancel = cancel.clone();
-                task.spawn(
-                    async move { receive_once::run(&ctx, &owned, || clock(), &cancel).await },
-                );
+                task.spawn(async move {
+                    match receive_once::run(&ctx, &owned, || clock(), &cancel).await {
+                        Ok(finished) => Ran::Ended {
+                            state: finished.state,
+                            outcome: finished.outcome,
+                            add_unconfirmed: finished.add_unconfirmed,
+                        },
+                        Err(receive_once::Retry::AddUnanswered) => Ran::AddUnanswered,
+                        Err(err) => Ran::NotNow(err.to_string()),
+                    }
+                });
+            }
+            rule_archive::KIND => {
+                task.spawn(async move {
+                    match rule_archive::run(&ctx, &owned, &cancel).await {
+                        Ok(finished) => Ran::Ended {
+                            state: finished.state,
+                            outcome: finished.outcome,
+                            add_unconfirmed: false,
+                        },
+                        Err(err) => Ran::NotNow(err.to_string()),
+                    }
+                });
             }
             other => {
                 let outcome = Outcome {
@@ -143,9 +185,13 @@ impl Worker {
             }
         }
 
-        let finished = match task.join_next().await {
-            Some(Ok(Ok(finished))) => finished,
-            Some(Ok(Err(receive_once::Retry::AddUnanswered))) => {
+        let (state, outcome, add_unconfirmed) = match task.join_next().await {
+            Some(Ok(Ran::Ended {
+                state,
+                outcome,
+                add_unconfirmed,
+            })) => (state, outcome, add_unconfirmed),
+            Some(Ok(Ran::AddUnanswered)) => {
                 println!(
                     "Command {}: Transmission did not answer the add; trying again at the next look",
                     command.id
@@ -155,7 +201,7 @@ impl Worker {
                     .await?;
                 return Ok(false);
             }
-            Some(Ok(Err(err))) => {
+            Some(Ok(Ran::NotNow(err))) => {
                 eprintln!("Command {} not finished: {err}", command.id);
                 return Ok(false);
             }
@@ -180,8 +226,9 @@ impl Worker {
             None => return Ok(false),
         };
 
-        let (state, outcome, now) = (finished.state, finished.outcome.clone(), (self.clock)());
-        if finished.add_unconfirmed {
+        let now = (self.clock)();
+        let result = outcome.result.clone();
+        if add_unconfirmed {
             self.commands
                 .finish_with_unconfirmed_add(&command.id, state, outcome, now)
                 .await?;
@@ -190,10 +237,7 @@ impl Worker {
                 .finish(&command.id, state, outcome, now)
                 .await?;
         }
-        println!(
-            "Command {} {}: {}",
-            command.id, finished.state, finished.outcome.result
-        );
+        println!("Command {} {}: {}", command.id, state, result);
         Ok(true)
     }
 

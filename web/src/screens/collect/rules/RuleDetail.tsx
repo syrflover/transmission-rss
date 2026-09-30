@@ -25,10 +25,12 @@ import {
   type ChannelBrief,
   type Rule,
 } from "./api";
+import { ArchiveMoveNotice } from "./ArchiveMoveNotice";
 import { BLANK_DRAFT, draftOf, fieldsOf, parseEpisode, sameDraft, type Draft } from "./draft";
 import { ChannelTag, StateBadge } from "./RuleList";
 import { ConflictNotice, OrderRow, RuleSummary } from "./parts";
 import { RulePreview } from "./RulePreview";
+import { useArchiveMove } from "./useArchiveMove";
 import { usePreview } from "./usePreview";
 
 interface RuleDetailProps {
@@ -132,6 +134,13 @@ export function RuleDetail({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storedVersion]);
 
+  // The state is the worker's to change (`보관`·`복원` below), never typed: the
+  // draft follows the rule's stored state however the rule was last read.
+  const knownState = known?.state;
+  useEffect(() => {
+    if (knownState) setDraft((d) => (d.state === knownState ? d : { ...d, state: knownState }));
+  }, [knownState]);
+
   useEffect(() => {
     onDirtyChange(dirty);
   }, [dirty, onDirtyChange]);
@@ -206,22 +215,20 @@ export function RuleDetail({
     }
   };
 
-  /** Archive or restore right away, leaving the other unsaved edits in place. */
-  const setArchived = async (archived: boolean) => {
-    if (!known || busy) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const next = await saveRule(known, { ...fieldsOf(draftOf(known), known.episode), state: archived ? "archived" : "active" });
-      setKnown(next);
-      setConflict(null);
-      set("state", next.state);
-      onChanged(next);
-    } catch (e) {
-      fail(e, "fields");
-    }
-    setBusy(false);
-  };
+  /**
+   * Archive or restore through the worker, leaving the other unsaved edits in
+   * place. The rule as the worker left it comes back when the command ends.
+   */
+  const move = useArchiveMove(known, (fresh) => {
+    setKnown(fresh);
+    setConflict(null);
+    onChanged(fresh);
+  });
+  const movingDirection =
+    move.phase.kind === "sending" || move.phase.kind === "waiting" || move.phase.kind === "unconfirmed"
+      ? move.phase.direction
+      : null;
+  const moving = movingDirection !== null;
 
   const remove = async () => {
     if (!known || busy) return;
@@ -280,8 +287,17 @@ export function RuleDetail({
 
       {known?.state === "archived" && (
         <p className="rounded-xl border border-hairline bg-surface-2 px-3.5 py-3 text-[13px] leading-normal text-text-secondary">
-          이 규칙은 보관했어요. 새 항목을 받지 않고, 받은 파일과 기록은 그대로예요. 복원하면 다음 RSS 확인부터 다시 받아요.
+          이 규칙은 보관했어요. 새 항목을 받지 않고, 수집 기록은 그대로예요. 복원하면 작품 폴더를 수집 폴더로 되돌린 뒤 다음 RSS 확인부터 다시 받아요.
         </p>
+      )}
+      {known && (
+        <ArchiveMoveNotice
+          rule={known}
+          phase={move.phase}
+          onMoveAgain={() => move.submit("archive")}
+          onResend={move.resend}
+          onRecheck={move.recheck}
+        />
       )}
       {known && known.state === "active" && known.match === null && (
         <p className="rounded-xl border border-hairline bg-surface-2 px-3.5 py-3 text-[13px] leading-normal text-text-secondary">
@@ -495,25 +511,43 @@ export function RuleDetail({
               </div>
             </div>
           ) : (
-            <div className="flex flex-wrap items-center gap-2">
-              <Button
-                type="button"
-                variant="ghost"
-                className={btnNeutral}
-                disabled={busy}
-                onClick={() => setArchived(known.state !== "archived")}
-              >
-                {known.state === "archived" ? "복원" : "보관"}
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                className={`${btnDanger} ml-auto`}
-                disabled={busy}
-                onClick={() => setConfirmingDelete(true)}
-              >
-                삭제
-              </Button>
+            <div className="flex flex-col gap-2">
+              {move.phase.kind === "idle" && move.phase.error !== null && (
+                <p role="alert" className="text-[13px] font-semibold text-urgent">
+                  {move.phase.error}
+                </p>
+              )}
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className={btnNeutral}
+                  disabled={busy || moving}
+                  onClick={() => move.submit(known.state === "archived" ? "restore" : "archive")}
+                >
+                  {movingDirection === "restore"
+                    ? "복원하는 중"
+                    : movingDirection === "archive"
+                      ? "보관하는 중"
+                      : known.state === "archived"
+                        ? "복원"
+                        : "보관"}
+                </Button>
+                {known.state === "active" && !moving && (
+                  <span className="min-w-0 flex-1 basis-48 text-xs text-text-muted">
+                    보관하면 새 항목을 받지 않고, 보관 폴더를 정해 두었으면 작품 폴더를 그리로 옮겨요.
+                  </span>
+                )}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className={`${btnDanger} ml-auto`}
+                  disabled={busy || moving}
+                  onClick={() => setConfirmingDelete(true)}
+                >
+                  삭제
+                </Button>
+              </div>
             </div>
           )}
         </div>

@@ -78,7 +78,7 @@ use std::{
 
 use tokio_util::sync::CancellationToken;
 
-pub use commands::{CommandsOutcome, DEFAULT_COMMAND_POLL};
+pub use commands::{rule_archive::work_folder::MovePolicy, CommandsOutcome, DEFAULT_COMMAND_POLL};
 pub use cycle::{run_cycle, CommandsAtStart, CycleContext, CycleError, CycleReport};
 pub use env::{EnvError, WorkerEnv};
 pub use lock::{lock_path_for, CycleLock};
@@ -183,6 +183,7 @@ impl Worker {
                 session: env.session.clone(),
                 http: feed::client()?,
                 rename: RenamePolicy::default(),
+                moves: MovePolicy::default(),
                 redactor,
             },
             interval: env.interval,
@@ -201,6 +202,13 @@ impl Worker {
 
     pub fn with_rename_policy(mut self, policy: RenamePolicy) -> Self {
         self.ctx.rename = policy;
+        self
+    }
+
+    /// Overrides how a work folder move waits for Transmission (default:
+    /// [`MovePolicy::default`]).
+    pub fn with_move_policy(mut self, policy: MovePolicy) -> Self {
+        self.ctx.moves = policy;
         self
     }
 

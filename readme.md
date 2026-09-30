@@ -36,7 +36,7 @@ DOWNLOAD_QUEUE_SIZE=5
 SEED_QUEUE_SIZE=1
 ```
 
-- `MEDIA_DIR` is mounted to `/downloads` in Transmission and, read-only, in both trss containers, so all of them spell folders the same way. Transmission downloads to `/downloads/downloads` (`$MEDIA_DIR/downloads` on the host) unless a rule says otherwise.
+- `MEDIA_DIR` is mounted to `/downloads` in Transmission and in both trss containers, so all of them spell folders the same way: read-write in `trss-worker`, which moves work folders when rules are archived and restored (see below), and read-only in `trss-web`, which only reads it. Transmission downloads to `/downloads/downloads` (`$MEDIA_DIR/downloads` on the host) unless a rule says otherwise.
 - `TRSS_DATA_DIR` holds `trss.db` and the worker's lock file `trss.db.worker.lock`. Keep it on a local disk, not an SMB or NFS share: SQLite and the lock rely on local file locking.
 - The web has no sign-in of its own. `TRSS_WEB_HOST_IP` binds its port to the LAN address only; reach it from outside through a VPN, never by forwarding the port.
 
@@ -80,12 +80,21 @@ Transmission is limited to 0.5 CPU and 512M, and runs in `transmission.slice`, w
 
 Channels and rules live in the app database and are edited in the web. To bring over a channel configuration of the old binary (the YAML at `CHANNELS_CONFIG_URL`), use Settings → Data → Import in the web. Importing only writes channels and rules (and the collect folder, below); it adds, renames and removes nothing.
 
-A channel has no folder of its own. Every torrent is saved under the app's **collect folder** (Settings → Collection → Collect folder) plus its rule's save folder, so a rule with the save folder `Show/Season 01` saves to `<collect folder>/Show/Season 01`. The settings screen also takes an optional **archive folder**, which is only stored for now; nothing moves files into it yet.
+A channel has no folder of its own. Every torrent is saved under the app's **collect folder** (Settings → Collection → Collect folder) plus its rule's save folder, so a rule with the save folder `Show/Season 01` saves to `<collect folder>/Show/Season 01`. The settings screen also takes an optional **archive folder**, where the work folders of archived rules go (below).
 
-- Write both folders as paths the web container sees (they start with `/downloads`, the read-only mount above). The web checks that they exist, that neither is the other or inside the other, and that they are on the same filesystem. It cannot check that Transmission can write to them; that shows up when it tries.
+- Write both folders as paths the web container sees (they start with `/downloads`, the mount above). The web checks that they exist, that neither is the other or inside the other, and that they are on the same filesystem. It cannot check that Transmission can write to them; that shows up when it tries.
 - Until a collect folder is set the worker adds nothing and records no failure for the items a rule picked. The status board says so, and the next cycle after the folder is set receives those items. A new database starts without one; importing a YAML file sets it (the channels' shared folder, or their common parent), and so does an upgrade from a version with per-channel folders.
 - Upgrading from 0.4.x (channels with their own base folder): the migration makes the shared base folder the collect folder, or, when the channels' base folders differ, their common parent, and puts the remainder in front of each rule's save folder. Every rule keeps saving to exactly the folder it had. The old `base_dir` column is dropped, so a database opened by this version cannot go back to an older one; keep a copy of `trss.db` before upgrading. Relative base folders with nothing in common cannot be folded into one collect folder; the upgrade then refuses to start and leaves the database unchanged.
 - Importing a YAML file whose channel folder is outside the collect folder reports that channel with the reason in the review step and does not import it.
+
+### Archiving and restoring a rule
+
+A rule's **work folder** is the first part of its save folder: `Clevatess` for `Clevatess/Season 02`. Archiving a rule (the rule's `보관` button) turns it off and then moves its work folder, `.trss/` included, from the collect folder into the archive folder; restoring it (`복원`) moves the folder back and only then turns the rule on. The web only accepts the request; `trss-worker` carries it out between cycles, under the same lock, and the rule shows how the move went.
+
+- Transmission's torrents inside the work folder are moved first, with `torrent-set-location` (files moved), and the worker waits until Transmission reports the new folder. Then the worker renames what is left. It only renames within one filesystem, so moved files keep their owner; the folders Transmission makes for its torrents belong to Transmission's user.
+- When the archive folder already has the work folder (an earlier season archived before), the two are merged, season folders file by file. If any file is at the same place on both sides, nothing moves and the rule lists those files; clear one side and use `다시 옮기기`.
+- The folder stays where it is when no archive folder is set, when the rule saves into the collect folder itself, or while another active rule (in any channel) still saves into the same work folder. It moves when the last of those rules is archived. A work folder that is a link, or that holds a link leading out of the two folders, is not moved.
+- Where a work folder is, is read from the disk each time. A move cut short (the worker stopped or restarted) is picked up again by the worker, which moves what is left. A folder moved by hand is recognised too.
 
 ## Switching from the cron job
 

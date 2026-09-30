@@ -1,8 +1,12 @@
 import { api } from "@/lib/api";
+import { sendCommand, type Command } from "@/lib/commands";
+
+// The command API is shared with other screens; these were first defined here.
+export { getCommand, newCommandId, type Command, type CommandOutcome, type CommandState } from "@/lib/commands";
 
 /**
- * The history and commands APIs (`src/web/history_api.rs`,
- * `src/web/commands_api.rs`). A history item never carries its link: the copy
+ * The history API (`src/web/history_api.rs`) and the `다시 받기` command
+ * (`src/web/commands_api.rs`). A history item never carries its link: the copy
  * kept there is masked and nothing on the screen needs it.
  */
 
@@ -16,23 +20,6 @@ export const HISTORY_RESULTS: readonly HistoryResult[] = [
   "add_failed",
 ];
 
-export type CommandState = "pending" | "running" | "done" | "failed";
-
-export interface CommandOutcome {
-  /** For a retry (`receive_once`), a history result code. */
-  result: string;
-  reason: string | null;
-}
-
-export interface Command {
-  id: string;
-  kind: string;
-  state: CommandState;
-  created_at: number;
-  updated_at: number;
-  finished_at: number | null;
-  outcome: CommandOutcome | null;
-}
 
 export interface HistoryItem {
   id: number;
@@ -103,26 +90,7 @@ export interface RetryPayload {
   item_id: number;
 }
 
-/**
- * A command ID for one user action. The browser makes it, sends it together
- * with the request's content, and asks for the command by it after a lost
- * answer. `randomUUID` needs a secure context, so the ID is built from
- * `getRandomValues`, which the app also has over plain HTTP.
- */
-export function newCommandId(): string {
-  const bytes = new Uint8Array(16);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
-}
-
 /** Sends the command; `202` when stored now, `200` when the same command was stored before: both give its current state. */
 export function sendRetry(id: string, payload: RetryPayload): Promise<Command> {
-  return api<Command>("/commands", {
-    method: "POST",
-    body: { id, kind: "receive_once", payload },
-  });
-}
-
-export function getCommand(id: string): Promise<Command> {
-  return api<Command>(`/commands/${id}`);
+  return sendCommand(id, "receive_once", payload);
 }

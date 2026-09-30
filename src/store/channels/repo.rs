@@ -356,6 +356,21 @@ pub fn update_rule(
     Ok(updated)
 }
 
+/// Sets a rule's state without a version check (the worker's archive and
+/// restore; see `worker::commands::rule_archive`). The version goes up only
+/// when the state changes, so an edit made meanwhile from a screen that saw
+/// the old state is answered with a conflict. `None` when the rule is gone.
+pub fn set_rule_state(conn: &mut Connection, id: &str, state: RuleState) -> Result<Option<Rule>> {
+    let tx = begin(conn)?;
+    tx.execute(
+        "UPDATE rules SET state = ?2, version = version + 1 WHERE id = ?1 AND state <> ?2",
+        params![id, state.as_str()],
+    )?;
+    let rule = fetch_rule(&tx, id)?;
+    tx.commit()?;
+    Ok(rule)
+}
+
 /// Applies `order` to `current` (`(id, version, position)` in current order).
 /// `order` must name every current item exactly once with its current version;
 /// items whose position changes get a new version.

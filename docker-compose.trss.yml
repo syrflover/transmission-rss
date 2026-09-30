@@ -18,9 +18,10 @@ x-trss: &trss
     TRSS_DB_PATH: /data/trss.db
   volumes:
     - ${TRSS_DATA_DIR:-./data}:/data
-    # The media folder at the same path Transmission sees it, read-only: save
-    # folders are checked for links leading out of the collect folder,
-    # and Transmission's folder names are compared as written.
+    # The media folder at the same path Transmission sees it, so that
+    # Transmission's folder names are compared as written. Read-only here, for
+    # trss-web, which only reads it (folder checks, links leading out of the
+    # collect folder). trss-worker mounts it read-write below.
     - ${MEDIA_DIR:?Set MEDIA_DIR in .env}:/downloads:ro
   logging:
     driver: json-file
@@ -44,6 +45,13 @@ services:
       DOWNLOAD_QUEUE_SIZE: ${DOWNLOAD_QUEUE_SIZE:-5}
       SEED_QUEUE_SIZE: ${SEED_QUEUE_SIZE:-1}
       TRSS_WORKER_INTERVAL_SECS: ${TRSS_WORKER_INTERVAL_SECS:-300}
+    # The worker is the only writer to the media: archiving and restoring a
+    # rule moves its work folder between the collect and archive folders
+    # (after Transmission has moved its torrents there). Replaces the shared
+    # list above, so the database is listed again.
+    volumes:
+      - ${TRSS_DATA_DIR:-./data}:/data
+      - ${MEDIA_DIR:?Set MEDIA_DIR in .env}:/downloads
     # The worker winds down within 5 seconds of SIGTERM (a cycle or command in
     # flight is abandoned and picked up again at the next start).
     stop_grace_period: 15s
