@@ -128,7 +128,66 @@ async fn a_cycle_adds_the_selected_items_and_records_every_item() {
         assert_eq!(item.channel_id, channel.channel.id);
         assert_eq!(item.first_seen_at, 1_000_000);
     }
-    assert!(items[0].identity_key.starts_with("guid:guid-aaaa-"));
+    // The identity key is a hash of the GUID, not the GUID.
+    assert!(items[0].identity_key.starts_with("guid:"));
+    assert!(!items[0].identity_key.contains("guid-aaaa"));
+}
+
+fn magnet(hash_digit: char, name: &str) -> String {
+    format!(
+        "magnet:?xt=urn:btih:{}&amp;dn={name}.mkv",
+        hash_digit.to_string().repeat(40)
+    )
+}
+
+#[tokio::test]
+async fn items_differing_only_in_a_secret_named_query_value_are_all_added_and_recorded() {
+    let h = Harness::new().await;
+    // Every query name of the channel URL is secret, `id` included, and the
+    // items' GUIDs differ only in their `id` value.
+    let xml = format!(
+        r#"<?xml version="1.0"?><rss version="2.0"><channel><title>t</title>
+        <link>http://x/</link><description>d</description>
+        <item><title>Show - 01</title><link>{}</link>
+          <guid>https://t.test/details.php?id=101</guid></item>
+        <item><title>Show - 02</title><link>{}</link>
+          <guid>https://t.test/details.php?id=102</guid></item>
+        <item><title>Show - 03</title><link>{}</link>
+          <guid>https://t.test/details.php?id=103</guid></item>
+        </channel></rss>"#,
+        magnet('1', "Show%20-%2001"),
+        magnet('2', "Show%20-%2002"),
+        magnet('3', "Show%20-%2003"),
+    );
+    h.feeds.set_xml("ids", &xml);
+    let input = transmission_rss::store::channels::ChannelInput::new(
+        format!("{}?id=0&token={SECRET}", h.feeds.url("ids")),
+        "/media/p",
+    );
+    assert!(input.secret_query.contains(&"id".to_owned()));
+    h.channels
+        .create_channel_with_rules(input, vec![rule("Show", "Show/Season 01")])
+        .await
+        .unwrap();
+    let worker = h.worker();
+
+    let report = run(&worker).await;
+    assert_eq!(
+        (report.items_seen, report.items_new, report.added),
+        (3, 3, 3)
+    );
+    assert_eq!(h.tr.torrents().len(), 3);
+    let items = h.history_items().await;
+    assert_eq!(items.len(), 3);
+    assert!(items.iter().all(|i| i.result == HistoryResult::Received));
+    let keys: std::collections::HashSet<_> = items.iter().map(|i| &i.identity_key).collect();
+    assert_eq!(keys.len(), 3);
+
+    // The same sighting again is still three known items, not three new ones.
+    h.advance(300_000);
+    let report = run(&worker).await;
+    assert_eq!((report.items_seen, report.items_new), (3, 0));
+    assert_eq!(h.history_items().await.len(), 3);
 }
 
 #[tokio::test]

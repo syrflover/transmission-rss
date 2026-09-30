@@ -7,8 +7,9 @@
 -- milliseconds. `result` holds a stable code (see `HistoryResult`); it has no
 -- CHECK constraint so later migrations can add codes without rebuilding the
 -- table, and unknown codes are rejected on read instead.
--- `identity_key` is built by `identity_key()` (guid, else link, else title),
--- with secret query values of the channel masked out.
+-- `identity_key` is built by `identity_key()`: `guid:`, `link:` or `title:`
+-- (the first the item has) followed by the SHA-256 of that value in hex, so
+-- it holds nothing of the value.
 
 CREATE TABLE history_items (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,

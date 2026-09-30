@@ -65,18 +65,16 @@ pub struct FeedItem {
 }
 
 /// The feed's items in feed order. An item whose identity key already appeared
-/// earlier in the same feed is dropped, so one sighting produces one record.
+/// earlier in the same feed (the same GUID, or the same link or title when
+/// there is no GUID) is dropped, so one sighting produces one record. Items are
+/// never dropped for looking alike after masking: the key is built from the
+/// unmasked value.
 pub fn items(channel: &rss::Channel, secret_query: &[String]) -> Vec<FeedItem> {
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
 
     for item in channel.items() {
-        let key = identity_key(
-            item.guid().map(|g| g.value()),
-            item.link(),
-            item.title(),
-            secret_query,
-        );
+        let key = identity_key(item.guid().map(|g| g.value()), item.link(), item.title());
         if !seen.insert(key.clone()) {
             continue;
         }
@@ -114,7 +112,16 @@ mod tests {
             .into_iter()
             .map(|i| i.identity_key)
             .collect();
-        assert_eq!(keys, ["guid:g-a", "link:http://x/b", "title:C"]);
+        assert_eq!(
+            keys,
+            [
+                identity_key(Some("g-a"), None, None),
+                identity_key(None, Some("http://x/b"), None),
+                identity_key(None, None, Some("C")),
+            ]
+        );
+        assert!(keys[0].starts_with("guid:") && keys[1].starts_with("link:"));
+        assert!(keys[2].starts_with("title:"));
     }
 
     #[test]
@@ -138,6 +145,7 @@ mod tests {
         assert!(got[0].link.contains("abc123"));
         assert!(!got[0].stored_link.contains("abc123"));
         assert!(!got[0].identity_key.contains("abc123"));
+        assert!(!got[0].identity_key.contains("t.test"));
     }
 
     #[test]
@@ -146,6 +154,22 @@ mod tests {
         let got = items(&ch, &[]);
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].title, "");
-        assert_eq!(got[0].identity_key, "title:");
+        assert_eq!(got[0].identity_key, identity_key(None, None, None));
+    }
+
+    #[test]
+    fn items_that_differ_only_in_a_secret_query_value_are_both_kept() {
+        // Every query name is secret by default; that must not merge items.
+        let ch = feed(
+            r#"<item><title>A</title><guid>https://t.test/details.php?id=101</guid></item>
+               <item><title>B</title><guid>https://t.test/details.php?id=102</guid></item>
+               <item><title>C</title><link>https://t.test/dl?id=1&amp;token=x</link></item>
+               <item><title>D</title><link>https://t.test/dl?id=1&amp;token=y</link></item>"#,
+        );
+        let got = items(&ch, &["id".to_owned(), "token".to_owned()]);
+        let titles: Vec<_> = got.iter().map(|i| i.title.as_str()).collect();
+        assert_eq!(titles, ["A", "B", "C", "D"]);
+        let keys: std::collections::HashSet<_> = got.iter().map(|i| &i.identity_key).collect();
+        assert_eq!(keys.len(), 4);
     }
 }
