@@ -64,7 +64,7 @@ DB 기반은 `src/store/db.rs`, 채널·규칙 기능은 `src/store/channels/`�
 
 ### 확인하지 못한 것
 
-- `cargo test` 전체는 `src/main.rs`의 `test_get_torrent`가 외부 Transmission 호스트에 연결하지 못해 실패해요(이번 변경과 무관해요). 그래서 라이브러리 테스트(`cargo test --lib store`)만 근거로 삼았어요.
+- `cargo test` 전체는 `src/main.rs`의 `test_get_torrent`가 외부 Transmission 호스트에 연결하지 못해 실패해요(이번 변경과 무관해요). 그래서 라이브러리 테스트(`cargo test --lib store`)만 근거로 삼았어요. [0001](0001-rule-evaluation.md)과 합친 뒤에는 이 테스트가 `#[ignore]`라 `cargo test` 전체가 오프라인으로 통과해요.
 - musl 타깃 빌드(`clux/muslrust`)는 이 환경에 타깃과 `musl-gcc`가 없어 시험하지 못했어요. `bundled` 빌드라 문제가 없으리라 기대하지만 [0009](0009-deploy-web-worker.md)에서 이미지 빌드로 확인해야 해요.
 - 웹과 worker가 서로 다른 프로세스로 동시에 쓰는 경우는 확인하지 못했어요. 같은 파일을 여는 두 핸들(연결)까지만 시험했어요.
 
