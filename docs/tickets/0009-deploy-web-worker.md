@@ -1,6 +1,6 @@
 # 0009 웹과 worker를 배포하고 cron을 걷어내요
 
-- 상태: 진행 중 (릴리스 끝, 서버 전환 대기)
+- 상태: 진행 중 (서버 전환 끝, Transmission 메모리 한도 수정 뒤 관찰 중)
 - 출처: [구현 경계와 실행 순서](../specs/web-app.md#구현-경계와-실행-순서), [접근 경계와 기기](../specs/web-app.md#접근-경계와-기기)
 - 막는 티켓: [0004](0004-worker-collection-history.md), [0005](0005-legacy-yaml-import.md)
 
@@ -73,11 +73,22 @@
 - worker 첫 주기: `250 item(s) seen (250 new), 0 added, 17 already in Transmission, 0 failed, 217 without a rule, 16 excluded, 0 removed`.
   기준선과 견주면 빠진 토렌트·새 토렌트·폴더가 바뀐 토렌트가 없어, cron이 넣은 항목을 같은 폴더에서 모두 알아봤어요. 봇 토렌트 16개에 항목 라벨이 하나씩 붙었어요.
 - **cron과 다른 점**: 릴리스 이름 그대로이던 봇 토렌트 11개(모두 받는 중·대기·멈춤, 메타데이터는 받음)의 이름을 worker가 규칙의 회차 보정대로 바꿨어요(예: `[SubsPlease] Re Zero ... - 84` → `Re Zero kara Hajimeru Isekai Seikatsu S04E18.mkv`, `episode: -66`). `Existing`이 앞선 실행이 끝내지 못한 이름 바꾸기를 마무리하는 명세대로의 동작이에요.
-  cron(배포돼 있던 0.3.13 바이너리)은 매 실행 이름 바꾸기를 시도하고도 오류 없이 이름을 남겨 두고 있었어요. trname은 이 이름들에 정상 이름을 만들고(같은 rev로 확인), 같은 Transmission에 직접 보낸 `torrent-rename-path`는 받는 중인 토렌트에서도 `success`였어요. 그래서 원인은 옛 바이너리 쪽이고, 무엇인지는 확인하지 않았어요(`Cargo.lock` 없이 빌드된 옛 RPC 라이브러리와 Transmission 4.1의 조합으로 짐작만 해요).
+  cron이 남긴 릴리스 이름의 원인은 옛 바이너리가 아니라 아래의 Transmission 강제 종료로 보여요(바꾼 이름이 저장되기 전에 사라짐). trname은 이 이름들에 정상 이름을 만들고, 같은 Transmission에 직접 보낸 `torrent-rename-path`도 `success`였어요.
 - Compose 프로젝트 이름을 `trss`로 둔 탓에 같은 폴더의 Transmission Compose(폴더 이름으로 `trss`)와 한 프로젝트가 되어, Transmission 컨테이너가 고아로 표시됐어요. `trss-app`으로 바꿨어요(`--remove-orphans`를 쓰면 Transmission이 지워질 수 있었어요).
+- 웹만 재시작: `restart trss-web` 동안 worker의 시작 시각(15:23:10 UTC)이 그대로였고, 웹은 다시 200을 돌려줬어요.
+- 한 번 받기: 명령 두 개(Re Zero S04E18, Link Click S3-08)가 `received`로 끝났고, Link Click은 규칙 폴더 `Link Click/Season 03`에 들어갔어요. 끝난 뒤 두 토렌트에 명령 라벨(`trss-cmd:`)이 남아 있지 않았어요. 추가할 때 라벨이 실제로 붙었는지는 보지 못했어요.
+- 자원: 전환 직후 worker 3.1MiB, web 1.1MiB였어요. 며칠 뒤 다시 봐요.
+
+#### 이름과 라벨이 되돌아간 일: Transmission 메모리 한도
+
+- 첫 주기 직후에는 봇 토렌트 16개에 항목 라벨이 있고 10개가 새 이름이었는데, 15:40 UTC에는 항목 라벨이 2개(뒤에 새로 추가된 토렌트)만 남고 10개가 릴리스 이름으로 돌아가 있었어요. 뒤 주기들의 `Already` 줄도 릴리스 이름이었어요.
+- 토렌트는 다시 추가되지 않았어요(`addedDate`가 cron 시각 그대로). 대신 Transmission id가 바뀌어 있었어요(`Mebius Dust` 17 → 18). 데몬이 다시 시작됐다는 뜻이에요.
+- 원인: Transmission 컨테이너의 메모리 한도 512M에서 커널이 `transmission-daemon`을 OOM으로 죽이고 있었어요(cgroup `memory.events`의 `oom_kill 463`, 최고치 556MB). 컨테이너 안의 s6가 데몬을 다시 띄워서 컨테이너는 계속 떠 있고 Docker도 OOM을 보고하지 않아요. 로그의 `Killed`는 2026-08-26부터 1204번이고, 전환 무렵에는 거의 1분에 한 번이었어요.
+  죽을 때마다 resume 파일에 아직 쓰지 않은 이름·라벨·받기 진행률이 사라져요. 그래서 받는 중인 토렌트들이 몇 %에 머물러 있었어요. worker 코드와는 상관없고, 전환 전부터 있던 문제예요.
+- 사용자 결정으로 한도를 1G로 올렸고([docker-compose.yml](../../docker-compose.yml)), worker는 멈추지 않았어요.
 
 ### 남은 일
 
-
-- 서버 전환과 완료 기준의 실제 확인: cron과 같은 결과 관찰(주기 수·차이 기록), 실제 배포 경로의 보호 경계, 웹만 재시작, 휴대폰에서 0003·0006 수행, `.torrent` 추가 응답 시간, 한 번 받기의 명령 라벨이 실제 Transmission에서 붙었다 떨어지는지(0008의 전제), 자원 한도 재검토.
+- 한도를 올린 뒤: `oom_kill`이 0으로 남는지, 봇 토렌트의 이름·항목 라벨이 주기를 넘어 유지되는지, 받기 진행률이 오르는지 봐요. `incomplete`에 강제 종료 사이에 이름이 바뀐 채 버려진 `.part` 파일이 있는지 보고, 지울지는 사용자와 정해요.
+- 완료 기준의 나머지 실제 확인: cron과 같은 결과를 주기 수·차이와 함께 기록, 실제 배포 경로의 보호 경계(`ss -ltn`, 휴대폰 LTE에서 공인 IP 접속 불가), 휴대폰에서 0003·0006 수행, `.torrent` 추가 응답 시간, 자원 한도 재검토.
 - 되돌리기가 필요 없어지면 ENTRYPOINT를 정하고 `cron.sh`와 `legacy` 서비스를 걷어내요.
