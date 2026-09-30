@@ -9,6 +9,7 @@ use std::{
 use futures::{stream, StreamExt};
 use tokio::{task, task::JoinSet};
 use tokio_util::sync::CancellationToken;
+use transmission_rpc::types::{TorrentGetField, TorrentStatus};
 use url::Url;
 
 use super::{
@@ -19,6 +20,7 @@ use crate::{
     store::{
         channels::{ChannelError, ChannelStore},
         history::{HistoryResult, HistoryStore, Millis, Observation, Recorded},
+        status::{ChannelReadResult, StatusStore, TransmissionCounts},
     },
     transmission::{
         self, add_item, remove_stale, rename_with_retries, AddError, AddKind, Redactor,
@@ -181,6 +183,8 @@ pub async fn run_cycle(
     let mut jobs: Vec<Job> = Vec::new();
     // Channels whose feed was not read, for the cleanup of departed torrents.
     let mut unread_channels: Vec<String> = Vec::new();
+    // Which feeds could be read, for the status board.
+    let mut reads: Vec<ChannelReadResult> = Vec::new();
 
     for (plan, read) in plans.iter().zip(fetched) {
         let channel = &plan.channel;
@@ -190,12 +194,20 @@ pub async fn run_cycle(
             Some(Ok(feed)) => {
                 println!("Parsed {label}");
                 report.channels_read += 1;
+                reads.push(ChannelReadResult {
+                    channel_id: channel.id.clone(),
+                    ok: true,
+                });
                 feed
             }
             Some(Err(reason)) => {
                 println!("Failed {label}: {reason}");
                 report.channels_failed += 1;
                 unread_channels.push(channel.id.clone());
+                reads.push(ChannelReadResult {
+                    channel_id: channel.id.clone(),
+                    ok: false,
+                });
                 continue;
             }
             None => {
@@ -269,6 +281,8 @@ pub async fn run_cycle(
         }
     }
 
+    record_reads(ctx, at, &plans, reads).await;
+
     if cancel.is_cancelled() {
         report.interrupted = true;
         return Ok(report);
@@ -337,6 +351,8 @@ pub async fn run_cycle(
     } else if report.channels > 0 {
         println!("No feed could be read; leaving Transmission's torrents alone");
     }
+
+    record_transmission_counts(ctx, at, &redactor).await;
 
     println!(
         "Cycle finished: {} item(s) seen ({} new), {} added, {} already in Transmission, \
@@ -572,4 +588,55 @@ fn failure_reason(err: &AddError, redactor: &Redactor) -> String {
         .chars()
         .take(MAX_REASON_CHARS)
         .collect()
+}
+
+/// Leaves this cycle's feed reads in the database for the status board. The
+/// board is informational, so a failure to write is printed and the cycle goes on.
+async fn record_reads(
+    ctx: &CycleContext,
+    at: Millis,
+    plans: &[ChannelPlan],
+    reads: Vec<ChannelReadResult>,
+) {
+    let existing = plans.iter().map(|plan| plan.channel.id.clone()).collect();
+    let status = StatusStore::new(ctx.channels.db().clone());
+    if let Err(err) = status.record_reads(at, reads, existing).await {
+        eprintln!("Cannot record the feed read status: {err}");
+    }
+}
+
+/// Leaves Transmission's downloading and seeding counts (queued torrents count
+/// with their kind) for the status board. If Transmission cannot be asked, the
+/// previous counts and their time stay as they were, and the cycle goes on.
+async fn record_transmission_counts(ctx: &CycleContext, at: Millis, redactor: &Redactor) {
+    let mut transmission = ctx.transmission();
+    let torrents = match transmission
+        .torrent_get(Some(vec![TorrentGetField::Status]), None)
+        .await
+    {
+        Ok(response) => response.arguments.torrents,
+        Err(err) => {
+            eprintln!(
+                "Cannot count the torrents in Transmission: {}",
+                redactor.apply(&err.to_string())
+            );
+            return;
+        }
+    };
+
+    let count = |kinds: [TorrentStatus; 2]| {
+        torrents
+            .iter()
+            .filter(|torrent| torrent.status.is_some_and(|status| kinds.contains(&status)))
+            .count() as u32
+    };
+    let counts = TransmissionCounts {
+        downloading: count([TorrentStatus::Downloading, TorrentStatus::QueuedToDownload]),
+        seeding: count([TorrentStatus::Seeding, TorrentStatus::QueuedToSeed]),
+        taken_at: at,
+    };
+    let status = StatusStore::new(ctx.channels.db().clone());
+    if let Err(err) = status.record_transmission(counts).await {
+        eprintln!("Cannot record the Transmission counts: {err}");
+    }
 }
