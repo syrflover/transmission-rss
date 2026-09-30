@@ -311,6 +311,17 @@ pub fn counts(conn: &Connection, channel_id: Option<&str>) -> Result<Vec<(Histor
     Ok(rows)
 }
 
+/// Sets the note of a `received` item that has none (its `reason` column);
+/// any other item is left alone. Returns whether a note was written.
+pub fn note_received(conn: &Connection, item_id: i64, note: &str) -> Result<bool> {
+    let changed = conn.execute(
+        "UPDATE history_items SET reason = ?2
+         WHERE id = ?1 AND result = 'received' AND reason IS NULL",
+        params![item_id, note],
+    )?;
+    Ok(changed > 0)
+}
+
 /// The torrent hashes of the items among the given `(channel_id,
 /// identity_key)` pairs that Transmission holds a torrent for (`received` or
 /// `duplicate`).

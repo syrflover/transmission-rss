@@ -82,7 +82,7 @@ pub struct HistoryItemView {
     pub rule_label: Option<String>,
     /// Whether the item was received without a rule.
     pub by_hand: bool,
-    /// Why adding failed.
+    /// Why adding failed, or (for a received item) a note such as that the file kept its original name.
     pub reason: Option<String>,
     /// Whether `한 번 받기` can be offered.
     pub can_receive_once: bool,

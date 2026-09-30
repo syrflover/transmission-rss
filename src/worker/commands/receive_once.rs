@@ -12,7 +12,10 @@
 //!
 //! The result lands on the history item (`received`, `duplicate` or
 //! `add_failed` with a reason) and on the command. Only steps 1 to 3 decide the
-//! result; a rename that does not happen leaves the torrent under its own name.
+//! result. A rename that does not happen leaves the torrent and its data under
+//! its own name (a person chose to receive this item, so it is never removed as
+//! the rule path does when `trname` has no name), and the history item gets a
+//! note saying so ([`RenameResult::Kept`]).
 
 use std::path::Path;
 
@@ -93,6 +96,8 @@ pub struct Finished {
 /// What the renaming step needs.
 #[derive(Debug, Clone)]
 pub struct Rename {
+    /// The history item to note on when the name stays as it was.
+    pub item_id: i64,
     pub hash: String,
     pub save_path: std::path::PathBuf,
     pub redactor: Redactor,
@@ -191,6 +196,7 @@ pub async fn execute(
                     reason,
                 },
                 rename: Some(Rename {
+                    item_id: item.id,
                     hash: torrent.hash,
                     save_path,
                     redactor,
@@ -275,27 +281,50 @@ fn add_failure_reason(err: &AddError, redactor: &Redactor) -> String {
         .collect()
 }
 
+/// What [`rename`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenameResult {
+    /// The file has the `trname` name now.
+    Renamed,
+    /// Nothing to do: the name was already right, the torrent is gone, or
+    /// shutdown was asked for.
+    Unchanged,
+    /// The file keeps its original name; the note says why, for the history item.
+    Kept(&'static str),
+}
+
+/// The file's name gave `trname` no title and episode to work with.
+pub const NAME_NOT_DERIVED: &str =
+    "파일 이름에서 작품과 회차를 알아내지 못해서 원래 이름 그대로 뒀어요.";
+/// Renaming was tried and did not go through.
+pub const NAME_NOT_CHANGED: &str = "이름을 바꾸지 못해서 원래 이름 그대로 뒀어요.";
+
 /// Gives the torrent's single file its `trname` name for the folder it was
 /// saved in, without any episode conversion.
 ///
 /// Unlike the renaming after a rule's add, a torrent whose name cannot be
 /// derived is left alone: that path removes the torrent and its data, which is
 /// no answer to a person who chose to receive this item (the base folder, for
-/// one, has no title and season parts to name a file after). Attempts follow
-/// `ctx.rename`, as a magnet link's file name is only known once Transmission
-/// has its metadata.
-pub async fn rename(ctx: &CycleContext, rename: &Rename, cancel: &CancellationToken) {
+/// one, has no title and season parts to name a file after). The result says
+/// when the original name was kept, so the caller can note it on the history
+/// item. Attempts follow `ctx.rename`, as a magnet link's file name is only
+/// known once Transmission has its metadata.
+pub async fn rename(
+    ctx: &CycleContext,
+    rename: &Rename,
+    cancel: &CancellationToken,
+) -> RenameResult {
     let mut transmission =
         transmission::client(ctx.transmission_url.clone(), &ctx.transmission_http);
     for _ in 0..ctx.rename.attempts {
         tokio::select! {
             _ = tokio::time::sleep(ctx.rename.delay) => {}
-            _ = cancel.cancelled() => return,
+            _ = cancel.cancelled() => return RenameResult::Unchanged,
         }
 
         let torrent = match get_torrent(&mut transmission, &rename.hash).await {
             Ok(Some(torrent)) => torrent,
-            Ok(None) => return,
+            Ok(None) => return RenameResult::Unchanged,
             Err(err) => {
                 println!("{}", rename.redactor.apply(&err.to_string()));
                 continue;
@@ -308,20 +337,21 @@ pub async fn rename(ctx: &CycleContext, rename: &Rename, cancel: &CancellationTo
             continue;
         };
         let Some(new_name) = derived_name(&rename.save_path, &old_name) else {
-            return;
+            return RenameResult::Kept(NAME_NOT_DERIVED);
         };
         if new_name == old_name {
-            return;
+            return RenameResult::Unchanged;
         }
         match transmission
             .torrent_rename_path(vec![Id::Hash(rename.hash.clone())], old_name, new_name)
             .await
         {
-            Ok(response) if response.result == "success" => return,
+            Ok(response) if response.result == "success" => return RenameResult::Renamed,
             Ok(_) => {}
             Err(err) => println!("{}", rename.redactor.apply(&err.to_string())),
         }
     }
+    RenameResult::Kept(NAME_NOT_CHANGED)
 }
 
 /// The name `trname` gives `file_name` in `save_path`, with no episode conversion.

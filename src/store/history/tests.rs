@@ -1117,3 +1117,39 @@ async fn an_outcome_follows_the_same_transition_rules_as_a_cycle() {
         None
     );
 }
+
+#[tokio::test]
+async fn a_note_goes_only_on_a_received_item_that_has_none() {
+    let (_dir, _db, history) = store().await;
+    history
+        .record(
+            1_000,
+            vec![
+                received("a", "rule-1", "hash-a"),
+                obs("b", HistoryResult::NoMatch),
+            ],
+        )
+        .await
+        .unwrap();
+    let items = all(&history).await;
+    let of = |key: &str| items.iter().find(|i| i.title.contains(key)).unwrap().id;
+    let (a, b) = (of("of a"), of("of b"));
+
+    assert!(history.note_received(a, "first note").await.unwrap());
+    assert!(
+        !history.note_received(a, "second note").await.unwrap(),
+        "an existing note stays"
+    );
+    assert!(
+        !history.note_received(b, "not received").await.unwrap(),
+        "only received items take a note"
+    );
+
+    let item = history.get(a).await.unwrap().unwrap();
+    assert_eq!(
+        (item.result, item.reason.as_deref()),
+        (HistoryResult::Received, Some("first note"))
+    );
+    assert!(history.changes(a).await.unwrap().is_empty());
+    assert_eq!(history.get(b).await.unwrap().unwrap().reason, None);
+}

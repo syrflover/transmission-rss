@@ -17,6 +17,7 @@ use axum::http::StatusCode;
 use common::*;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
+use transmission_rss::worker::commands::receive_once::NAME_NOT_DERIVED;
 use transmission_rss::{
     store::{
         channels::{ChannelWithRules, RuleInput},
@@ -259,6 +260,7 @@ async fn a_no_match_item_is_received_into_the_chosen_folder_by_the_worker() {
     let received = s.item("LIAR GAME - 26").await;
     assert_eq!(received.result, HistoryResult::Received);
     assert_eq!(received.rule_id, None);
+    assert_eq!(received.reason, None, "a renamed file needs no note");
     assert_eq!(received.torrent_hash.as_deref(), Some(hash(26).as_str()));
     // Its neighbour was not touched, and no rule was made.
     assert_eq!(s.item("Another Show").await.result, HistoryResult::NoMatch);
@@ -299,10 +301,46 @@ async fn without_a_chosen_folder_it_goes_to_the_channels_base_folder() {
     assert_eq!(torrents.len(), 1, "{torrents:?}");
     assert_eq!(torrents[0].name, LIAR);
     assert!(s.h.tr.calls_of("torrent-remove").is_empty());
-    assert_eq!(
-        s.item("LIAR GAME - 26").await.result,
-        HistoryResult::Received
-    );
+    let received = s.item("LIAR GAME - 26").await;
+    assert_eq!(received.result, HistoryResult::Received);
+    assert_eq!(received.reason.as_deref(), Some(NAME_NOT_DERIVED));
+}
+
+#[tokio::test]
+async fn a_name_trname_cannot_derive_stays_in_transmission_with_its_data_and_is_noted() {
+    // A release name with no episode in it, into a folder without a season:
+    // the rule path would remove the torrent and its data here.
+    let odd = release("guid-odd", 9, "Some Special Collection.mkv", "");
+    let s = Scene::new(&[&odd], unrelated_rule()).await;
+    let item = s.item("Some Special").await;
+
+    s.post(CMD, &item, "Some Show").await;
+    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
+
+    // Still there, in the chosen folder, under its own name; nothing was removed.
+    let torrents = s.h.tr.torrents();
+    assert_eq!(torrents.len(), 1, "{torrents:?}");
+    assert_eq!(torrents[0].name, "Some Special Collection.mkv");
+    assert_eq!(torrents[0].download_dir, "/media/anime/Some Show");
+    assert!(s.h.tr.calls_of("torrent-remove").is_empty());
+    assert!(s.h.tr.calls_of("torrent-rename-path").is_empty());
+    // Received, with a note that the name was not changed.
+    let received = s.item("Some Special").await;
+    assert_eq!(received.result, HistoryResult::Received);
+    assert_eq!(received.reason.as_deref(), Some(NAME_NOT_DERIVED));
+    let (_, view) = s.command(CMD).await;
+    assert_eq!(view["state"], "done");
+    assert_eq!(view["outcome"]["result"], "received");
+    let (_, row) = s
+        .call("GET", &format!("/api/history/{}", item.id), None)
+        .await;
+    assert_eq!(row["result"], "received");
+    assert_eq!(row["reason"], NAME_NOT_DERIVED);
+
+    // The next cycle leaves it as well.
+    let report = s.cycle().await;
+    assert!(report.removed.is_empty(), "{:?}", report.removed);
+    assert_eq!(s.h.tr.torrents().len(), 1);
 }
 
 #[tokio::test]

@@ -152,7 +152,18 @@ impl Worker {
         );
 
         if let Some(rename) = &finished.rename {
-            receive_once::rename(&self.ctx, rename, cancel).await;
+            if let receive_once::RenameResult::Kept(note) =
+                receive_once::rename(&self.ctx, rename, cancel).await
+            {
+                // A note on the item; the command has ended already, so a
+                // failure here is only reported.
+                if let Err(err) = self.ctx.history.note_received(rename.item_id, note).await {
+                    eprintln!(
+                        "Cannot note the kept name on item {}: {err}",
+                        rename.item_id
+                    );
+                }
+            }
         }
         Ok(true)
     }

@@ -151,6 +151,17 @@ impl HistoryStore {
             .await
     }
 
+    /// Adds a note (for example, that a received file kept its original name)
+    /// to a `received` item that has none. It does not change the result and
+    /// leaves no entry in the item's changes. `note` must be free of secret
+    /// values. Returns whether the note was written.
+    pub async fn note_received(&self, item_id: i64, note: &str) -> Result<bool, HistoryError> {
+        let note = note.to_owned();
+        self.db
+            .run(move |c| repo::note_received(c, item_id, &note))
+            .await
+    }
+
     /// The changes of an item's result, oldest first.
     pub async fn changes(&self, item_id: i64) -> Result<Vec<HistoryChange>, HistoryError> {
         self.db.run(move |c| repo::changes(c, item_id)).await
