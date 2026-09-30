@@ -125,9 +125,10 @@ pub enum Retry {
     #[error("cannot read or write the app database: {0}")]
     Store(String),
     /// The request to add the torrent was sent and got no answer, so
-    /// Transmission may have taken it. The caller records that on the command
-    /// ([`Command::add_unconfirmed`]) and leaves it for the next look, whose
-    /// add learns the torrent's hash from Transmission's `duplicate` answer.
+    /// Transmission may have taken it; or an earlier start's did, and this
+    /// start could not learn the torrent's hash either. The caller records that
+    /// on the command ([`Command::add_unconfirmed`]) and leaves it for the next
+    /// look, whose add learns the hash from Transmission's `duplicate` answer.
     /// The last start ([`MAX_ATTEMPTS`]) ends the command instead.
     #[error("Transmission did not answer the request to add the torrent")]
     AddUnanswered,
@@ -173,13 +174,20 @@ pub async fn execute(
     now: impl Fn() -> Millis,
 ) -> Result<Finished, Retry> {
     // An add of an earlier start that got no answer stays unaccounted for
-    // until an add of this one gets an answer.
+    // until an add of this one puts the torrent's hash in history. Until then
+    // a start that cannot do so does not end the command, but the last start
+    // does: cycles remove nothing while it runs, and the next start adds again.
+    // The check comes before `refuse` writes a failure on the item.
+    let keep_trying = command.add_unconfirmed && command.attempts < MAX_ATTEMPTS;
     let unaccounted = |mut finished: Finished| {
         finished.add_unconfirmed |= command.add_unconfirmed;
         finished
     };
 
     let Ok(payload) = serde_json::from_str::<ReceiveOnce>(&command.payload) else {
+        if keep_trying {
+            return Err(Retry::AddUnanswered);
+        }
         return Ok(unaccounted(failed("요청 내용을 읽지 못했어요.", None)));
     };
 
@@ -189,6 +197,9 @@ pub async fn execute(
         .await
         .map_err(Retry::store)?
     else {
+        if keep_trying {
+            return Err(Retry::AddUnanswered);
+        }
         return Ok(unaccounted(failed(
             "기록에서 이 항목을 찾지 못했어요.",
             None,
@@ -200,6 +211,9 @@ pub async fn execute(
         .await
         .map_err(Retry::store)?;
     let Some(channel) = channel else {
+        if keep_trying {
+            return Err(Retry::AddUnanswered);
+        }
         return refuse(
             ctx,
             &item,
@@ -212,6 +226,7 @@ pub async fn execute(
 
     let save_path = match folder::resolve(&channel.base_dir, &payload.folder) {
         Ok(path) => path,
+        Err(_) if keep_trying => return Err(Retry::AddUnanswered),
         Err(err) => {
             return refuse(ctx, &item, err.message(), &now)
                 .await
@@ -222,6 +237,7 @@ pub async fn execute(
     let redactor = redactor_for(ctx, &channel);
     let raw_link = match link::recover(&item, &channel, &ctx.http, &redactor).await {
         Ok(raw) => raw,
+        Err(_) if keep_trying => return Err(Retry::AddUnanswered),
         Err(reason) => return refuse(ctx, &item, &reason, &now).await.map(unaccounted),
     };
     // The recovered link is a secret from here on, whatever it carried.
@@ -239,11 +255,12 @@ pub async fn execute(
 
     match added {
         Ok(torrent) => {
-            // After an earlier start's add got no answer, a torrent Transmission
-            // has in this command's folder for an item nothing else received is
-            // the one that add put in.
+            // After an earlier start's add got no answer, a bot torrent
+            // Transmission has in this command's folder, for an item nothing
+            // else received, is the one that add put in.
             let own = torrent.kind == AddKind::Added
                 || (command.add_unconfirmed
+                    && torrent.bot_labelled
                     && !item.result.is_settled()
                     && torrent.download_dir.as_deref().map(Path::new) == Some(save_path.as_path()));
             let result = if own {
@@ -275,18 +292,15 @@ pub async fn execute(
                 item.id, item.channel_label
             );
             let unanswered = matches!(err, AddError::Rpc(_));
-            if unanswered && command.attempts < MAX_ATTEMPTS {
+            if (unanswered && command.attempts < MAX_ATTEMPTS) || keep_trying {
                 return Err(Retry::AddUnanswered);
             }
             let finished = refuse(ctx, &item, &reason, &now).await?;
-            Ok(match err {
-                // Answered: Transmission does not hold the torrent.
-                AddError::Rejected(_) => finished,
-                AddError::Unreachable(_) => unaccounted(finished),
-                AddError::Rpc(_) => Finished {
-                    add_unconfirmed: true,
-                    ..finished
-                },
+            // A refusal does not say what Transmission holds either: it
+            // fetches a `.torrent` link before it can tell it has the torrent.
+            Ok(Finished {
+                add_unconfirmed: unanswered,
+                ..unaccounted(finished)
             })
         }
     }

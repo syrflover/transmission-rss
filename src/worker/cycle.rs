@@ -605,8 +605,12 @@ async fn process_job(
                     reason: Some(reason),
                     ..job.observation
                 },
+                // Only a refusal says this add did not leave the torrent in
+                // Transmission. One that could not connect sent nothing, but
+                // the item may be one whose hash only this add's `duplicate`
+                // answer would have given (an earlier add of it got no answer).
                 JobOutcome::Failed {
-                    unconfirmed: matches!(err, AddError::Rpc(_)),
+                    unconfirmed: !matches!(err, AddError::Rejected(_)),
                 },
             )
         }

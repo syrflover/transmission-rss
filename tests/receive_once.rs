@@ -1176,6 +1176,88 @@ async fn a_command_add_that_timed_out_after_transmission_took_it_is_received_on_
     assert_eq!(s.h.tr.torrents().len(), 1);
 }
 
+/// A command whose first add got no answer though Transmission took the
+/// torrent, left for the next look.
+async fn after_an_unanswered_add(s: &Scene) -> Worker {
+    let item = s.item("LIAR GAME - 26").await;
+    s.post(CMD, &item, "LIAR GAME/Season 01").await;
+    let late = s.h.tr.hold_answer("torrent-add");
+    let impatient =
+        s.h.worker()
+            .with_transmission_timeout(Duration::from_millis(300));
+    assert_eq!(
+        s.run_commands_with(&impatient).await,
+        CommandsOutcome::Ran(0)
+    );
+    late.release_all();
+    impatient
+}
+
+#[tokio::test]
+async fn a_refused_add_after_an_unanswered_one_leaves_the_command_for_the_next_look() {
+    let liar = release("guid-liar-26", 26, LIAR, "");
+    let s = Scene::new(&[&liar], unrelated_rule()).await;
+    let worker = after_an_unanswered_add(&s).await;
+    // Fetching a `.torrent` URL again can fail (a one-time link, a rate
+    // limit) whatever Transmission holds.
+    s.h.tr
+        .reject_adds(Some("gotMetadataFromURL: http error 429"));
+
+    assert_eq!(s.run_commands_with(&worker).await, CommandsOutcome::Ran(0));
+    assert_eq!(s.command(CMD).await.1["state"], "running");
+    let report = s.cycle().await;
+    assert!(report.removed.is_empty(), "{:?}", report.removed);
+
+    s.h.tr.reject_adds(None);
+    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
+    assert_eq!(s.command(CMD).await.1["outcome"]["result"], "received");
+    s.cycle().await;
+    assert_eq!(s.h.tr.torrents().len(), 1);
+}
+
+#[tokio::test]
+async fn a_refused_connection_after_an_unanswered_add_leaves_the_command_for_the_next_look() {
+    let liar = release("guid-liar-26", 26, LIAR, "");
+    let mut s = Scene::new(&[&liar], unrelated_rule()).await;
+    let worker = after_an_unanswered_add(&s).await;
+    // Transmission restarting: the next start cannot connect.
+    s.h.tr.stop().await;
+
+    assert_eq!(s.run_commands_with(&worker).await, CommandsOutcome::Ran(0));
+    assert_eq!(s.command(CMD).await.1["state"], "running");
+
+    s.h.tr.restart().await;
+    let first = s.cycle().await;
+    let second = s.cycle().await;
+    assert!(first.removed.is_empty(), "{:?}", first.removed);
+    assert!(second.removed.is_empty(), "{:?}", second.removed);
+    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
+    assert_eq!(s.command(CMD).await.1["outcome"]["result"], "received");
+    s.cycle().await;
+    assert_eq!(s.h.tr.torrents().len(), 1);
+}
+
+#[tokio::test]
+async fn a_torrent_the_bot_did_not_add_is_not_taken_as_the_commands_own_after_an_unanswered_add() {
+    let liar = release("guid-liar-26", 26, LIAR, "");
+    let s = Scene::new(&[&liar], unrelated_rule()).await;
+    // Added by hand in Transmission, into the folder the command will choose.
+    s.h.tr.preload(FakeTorrent {
+        download_dir: "/media/anime/LIAR GAME/Season 01".to_owned(),
+        ..FakeTorrent::new(&hash(26), LIAR)
+    });
+    let worker = after_an_unanswered_add(&s).await;
+
+    assert_eq!(s.run_commands_with(&worker).await, CommandsOutcome::Ran(1));
+
+    assert_eq!(s.command(CMD).await.1["outcome"]["result"], "duplicate");
+    assert_eq!(
+        s.item("LIAR GAME - 26").await.result,
+        HistoryResult::Duplicate
+    );
+    assert_eq!(s.h.tr.torrents()[0].name, LIAR, "its name is left alone");
+}
+
 #[tokio::test]
 async fn a_command_whose_adds_never_get_an_answer_ends_add_failed_and_holds_the_next_cleanup() {
     let liar = release("guid-liar-26", 26, LIAR, "");

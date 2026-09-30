@@ -188,6 +188,8 @@ pub struct AddedTorrent {
     pub name: String,
     /// Where Transmission saves it, as Transmission reports it.
     pub download_dir: Option<String>,
+    /// It carries the bot's label: the bot added it, not a person.
+    pub bot_labelled: bool,
 }
 
 async fn add_torrent(
@@ -267,6 +269,7 @@ pub async fn add_item(
 
             Ok(AddedTorrent {
                 kind: AddKind::Duplicate,
+                bot_labelled: has_label(torrent.labels.as_deref(), BOT_LABEL),
                 hash: torrent.hash_string.unwrap(),
                 name: torrent.name.unwrap(),
                 download_dir: torrent.download_dir,
@@ -280,6 +283,7 @@ pub async fn add_item(
 
             Ok(AddedTorrent {
                 kind: AddKind::Added,
+                bot_labelled: has_label(torrent.labels.as_deref(), BOT_LABEL),
                 hash: torrent.hash_string.unwrap(),
                 name: torrent.name.unwrap(),
                 download_dir: torrent.download_dir,
