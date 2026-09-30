@@ -268,6 +268,54 @@ async fn two_worker_processes_run_a_period_once() {
 }
 
 #[tokio::test]
+async fn the_lock_alone_keeps_a_second_process_out_of_a_running_cycle() {
+    let h = harness_with_channel_a().await;
+    let gate = h.feeds.hold("feed-a");
+
+    // The first process starts a cycle and stays in it, waiting for the feed.
+    let mut a = Proc::spawn(&h, "a", &[]);
+    gate.wait_arrived().await;
+    let started_at = h.history.last_cycle().await.unwrap().unwrap().started_at;
+
+    // The second one ticks every second, so its start marker allows a cycle
+    // once half a second has passed since the first one's start. Let that pass.
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    assert!(
+        now - started_at >= 500,
+        "the marker would let a cycle start"
+    );
+
+    let mut b = Proc::spawn(&h, "b", &[("TRSS_WORKER_INTERVAL_SECS", "1")]);
+    b.wait_output("Another worker is running a cycle").await;
+    // Two more ticks, so that a start would have had its chances.
+    tokio::time::sleep(Duration::from_millis(2_200)).await;
+
+    let output = b.output();
+    assert!(
+        !output.contains("A cycle started recently"),
+        "the marker, not the lock, refused it:\n{output}"
+    );
+    assert!(!output.contains("Cycle started"), "{output}");
+    assert_eq!(h.feeds.hits("feed-a"), 1, "the feed was read once");
+    assert!(h.tr.calls_of("torrent-add").is_empty());
+
+    b.sigterm();
+    assert!(b.wait_exit(Duration::from_secs(10)).await.success());
+
+    // The first process finishes its cycle undisturbed.
+    gate.release_all();
+    wait_until("the first cycle", || cycle_finished(&h)).await;
+    assert_eq!(count_result(&h, HistoryResult::Received).await, 3);
+    assert_eq!(h.tr.calls_of("torrent-add").len(), 3);
+    a.sigterm();
+    assert!(a.wait_exit(Duration::from_secs(10)).await.success());
+}
+
+#[tokio::test]
 async fn logs_and_history_never_contain_secret_query_values() {
     let h = harness_with_channel_a().await;
     // A feed answering 500 and one whose server is not there: errors that
