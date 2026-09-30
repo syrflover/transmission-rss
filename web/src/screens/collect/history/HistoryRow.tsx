@@ -56,7 +56,12 @@ function statusLine(item: HistoryItem, phase: ReceivePhase): { text: string; urg
   }
   switch (item.result) {
     case "received":
-      return { text: item.by_hand ? "직접 받음" : item.rule_label ? `규칙 ‘${item.rule_label}’` : "", urgent: false };
+      return {
+        text: [item.by_hand ? "직접 받음" : item.rule_label ? `규칙 ‘${item.rule_label}’` : "", item.reason ?? ""]
+          .filter((part) => part !== "")
+          .join(" · "),
+        urgent: false,
+      };
     case "duplicate":
       return { text: item.reason ?? "Transmission에 이미 있어요.", urgent: false };
     case "add_failed":
