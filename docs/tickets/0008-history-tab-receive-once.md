@@ -53,7 +53,8 @@
   명령 ID는 브라우저가 사용자 동작마다 `crypto.getRandomValues`로 만들어요(8~64자 `[A-Za-z0-9_-]`). 저장소는 `commands(seq, id UNIQUE, kind, payload(정규 JSON), subject, state, attempts, created_at, updated_at, finished_at, outcome)`이고, 같은 ID의 접수는 한 쓰기 트랜잭션이라 동시 전달도 한 건이에요.
 - worker는 3초마다(`TRSS_` 환경 변수 없이 `Worker::with_command_poll`로 조정) 열린 명령을 확인하고, 수집 주기와 같은 flock을 잡았을 때만 실행해요. 잠겨 있으면 다음 확인으로 미뤄요. 루프 훅은 `src/worker/mod.rs`의 두 번째 ticker 하나예요.
   실행 중이던 worker가 죽으면 다음 worker가 `running` 명령을 다시 집어요(최대 5번). 이때 Transmission이 이미 받았으면 `중복`으로 끝나 두 번 넣지 않아요.
-- `한 번 받기`(`receive_once`) 실행: 채널 기본 폴더 아래로 폴더를 다시 확인(절대 경로·`..`·링크로 벗어남 거부)하고, 원래 링크를 되살려 채널 라벨로 넣은 뒤 결과를 기록 항목(`record_outcome`, 규칙 없음)과 명령에 함께 남겨요. 저장 폴더가 `Title/Season NN`이면 회차 변환 없이(`starts_episode_at = 0`) trname 이름으로 바꾸고, 기본 폴더에 받으면 이름을 바꾸지 않아요(기존 삭제 후 다시 추가 경로는 쓰지 않아요).
+- `한 번 받기`(`receive_once`) 실행: 채널 기본 폴더 아래로 폴더를 다시 확인(절대 경로·`..`·링크로 벗어남 거부)하고, 원래 링크를 되살려 채널 라벨로 넣은 뒤 결과를 기록 항목(`record_outcome`, 규칙 없음)과 명령에 함께 남겨요. 저장 폴더가 `Title/Season NN`이면 회차 변환 없이(`starts_episode_at = 0`) trname 이름으로 바꾸고, 기본 폴더에 받으면 이름을 바꾸지 않아요.
+  trname이 이름을 만들지 못하면(사용자 결정 "원래 이름으로 둠") 규칙 경로의 `rename_torrent`처럼 토렌트와 데이터를 지우지 않고 원래 이름으로 둔 채 `받음`으로 기록하고, 항목에 "이름을 바꾸지 못했다"는 메모를 남겨요(`HistoryStore::note_received`, 결과 변경 기록은 남기지 않아요). 규칙 경로(`src/transmission/`)는 바꾸지 않았어요.
 - 링크 복원(`src/worker/commands/link.rs`): (1) 가린 자리를 채널 URL에서 같은 이름의 비밀 값으로 채워요. 채운 링크가 항목의 동일성 키와 맞는지 확인해요. (2) 가림이 남으면 채널의 지금 RSS를 읽어 같은 동일성 키의 항목 링크를 써요. (3) 못 찾으면 `추가 실패`와 "원래 링크를 되살리지 못했어요."로 시작하는 까닭을 남기고 Transmission에는 아무것도 보내지 않아요. 복원한 링크는 이력·응답·로그에 남지 않고, 로그 가림 목록에만 더해요.
 - `cycle.rs`: 청소 단계가 지우지 않을 해시에, 이번 주기에 읽은 RSS에 아직 있는 항목 중 이력이 받음·중복으로 기록한 해시를 더했어요. 규칙 없이 받은 토렌트가 다음 주기에 지워지지 않아요.
 - 기록 API `GET /api/history?result=a,b&channel=&after=&limit=`(기본 50, 최대 200)와 `GET /api/history/{id}`(`src/web/history_api.rs`)는 최신순 커서 페이지와 `counts`를 주고, 링크는 보내지 않아요. 열린 명령은 항목의 `command`로 실려 새로고침해도 받는 중이 이어져요.
@@ -82,6 +83,7 @@
 
 그 밖에 확인한 것:
 
+- 이름을 만들 수 없는 항목: `a_name_trname_cannot_derive_stays_in_transmission_with_its_data_and_is_noted`(토렌트·데이터가 남고 `torrent-remove`·이름 바꾸기 호출이 없으며 `받음`과 메모가 기록되고 다음 주기에도 남아요), 기본 폴더로 받는 테스트, 메모 저장소 테스트 `a_note_goes_only_on_a_received_item_that_has_none`. 브라우저 확인은 메모를 넣기 전에 했고, 그 뒤에는 줄의 문구 한 곳만 바꿨어요(빌드만 확인).
 - 정리 단계: `a_torrent_received_by_hand_survives_the_next_cycle_while_its_item_is_in_the_feed`(두 주기를 지나도 남고, 항목이 RSS에서 빠지면 그때 지워져요), `a_torrent_transmission_already_had_is_kept_too`.
 - 재시작·동시 실행: 재시작한 worker가 접수된 명령을 한 번 실행, 실행 중 죽은 명령의 재실행, 넣은 뒤 죽은 경우 토렌트 한 개(`중복`), worker 둘이 동시에 잡으면 한 쪽만 실행하고 다른 쪽은 `Busy`, 수집 주기가 잠금을 잡은 동안 대기, 돌고 있는 worker가 다음 주기를 기다리지 않고 명령을 실행.
 - 저장소·API 단위 테스트(마이그레이션 4가 기존 DB의 데이터를 지키는지 포함). `cargo test --offline` 전체 통과, `cargo clippy --offline --all-targets` 경고 없음, `cargo fmt --check` 통과, `bun run build` 통과.
