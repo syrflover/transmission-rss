@@ -42,6 +42,14 @@ impl ChannelInput {
     }
 
     pub(super) fn validate(&self) -> Result<(), ChannelError> {
+        // `Url::parse` drops tabs and newlines that `mask_url` would still
+        // see in the raw text, so such a URL could name a query differently
+        // for the two and leave a secret unmasked.
+        if self.url.chars().any(|c| c.is_control() || c.is_whitespace()) {
+            return Err(ChannelError::Invalid(
+                "channel url contains whitespace or control characters",
+            ));
+        }
         let parsed = Url::parse(&self.url)
             .map_err(|_| ChannelError::Invalid("channel url is not a valid URL"))?;
         if self.base_dir.is_empty() {

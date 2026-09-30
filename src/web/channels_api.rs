@@ -231,6 +231,11 @@ impl Fields {
         past_search: Option<String>,
     ) -> Result<Fields, ApiError> {
         let url = url.trim().to_owned();
+        if url.chars().any(|c| c.is_control() || c.is_whitespace()) {
+            return Err(ApiError::invalid(
+                "RSS 주소에 공백이나 줄바꿈이 들어 있어요. 주소를 한 줄로 붙여 넣어 주세요.",
+            ));
+        }
         match Url::parse(&url) {
             Ok(parsed) if matches!(parsed.scheme(), "http" | "https") && parsed.host().is_some() => {}
             _ => {

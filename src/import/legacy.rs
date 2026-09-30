@@ -127,6 +127,11 @@ fn convert(index: usize, config: &ChannelConfig) -> Result<ImportChannel, ParseE
     let n = index + 1;
 
     let url = config.url.trim();
+    if url.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        return Err(ParseError::new(format!(
+            "{n}번째 채널의 `url`에 공백이나 줄바꿈이 들어 있어요."
+        )));
+    }
     match Url::parse(url) {
         Ok(parsed) if matches!(parsed.scheme(), "http" | "https") => {}
         _ => {

@@ -600,6 +600,14 @@ async fn invalid_input_is_a_korean_400_that_does_not_echo_the_request() {
         json!({ "url": format!("https://feed.example/rss?token={TOKEN}"), "base_dir": "/m", "nope": TOKEN }),
         json!({ "url": 42, "base_dir": TOKEN }),
         json!({ "base_dir": TOKEN }),
+        // serde echoes the offending value for type errors, so these would
+        // leak if a rejection's text ever reached the response.
+        json!({ "url": format!("https://feed.example/rss?token={TOKEN}"), "base_dir": "/m", "excludes": TOKEN }),
+        json!({ "url": format!("https://feed.example/rss?token={TOKEN}"), "base_dir": "/m", "secret": { "token": TOKEN } }),
+        json!({ "url": format!("https://feed.example/rss?token={TOKEN}"), "base_dir": "/m", TOKEN: 1 }),
+        // `Url::parse` drops a newline that the masking would still see, so
+        // a URL like this could name the query differently for the two.
+        json!({ "url": format!("https://feed.example/rss?to\nken={TOKEN}"), "base_dir": "/m" }),
     ];
     for body in cases {
         let (status, text, json) = app
@@ -648,6 +656,29 @@ async fn invalid_input_is_a_korean_400_that_does_not_echo_the_request() {
     .unwrap();
     assert_no_secret(&text);
     assert!(serde_json::from_str::<Value>(&text).unwrap()["error"] == "invalid");
+}
+
+#[tokio::test]
+async fn a_bad_version_on_save_does_not_echo_the_request() {
+    let app = App::new();
+    let created = app
+        .create(&format!("https://feed.example/rss?token={TOKEN}"))
+        .await;
+    let id = created["id"].as_str().unwrap();
+    let (status, text, json) = app
+        .call(
+            Method::PUT,
+            &format!("/api/channels/{id}"),
+            Some(json!({
+                "url": created["edit_url"],
+                "base_dir": "/media",
+                "version": TOKEN,
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+    assert_eq!(json["error"], "invalid");
+    assert_no_secret(&text);
 }
 
 #[tokio::test]

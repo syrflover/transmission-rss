@@ -46,7 +46,7 @@ function statusOf(
   url: string,
   stored: QueryParam | undefined,
 ): string | null {
-  const typed = queryPairs(url).some((pair) => pair.name === name && pair.value !== "");
+  const typed = queryPairs(url).some((pair) => pair.name === name && pair.value !== "" && pair.value !== "***");
   const kept = stored?.secret === true && stored.filled;
   if (secret) {
     if (typed) return kept ? "새 값으로 변경" : "값 입력함";
