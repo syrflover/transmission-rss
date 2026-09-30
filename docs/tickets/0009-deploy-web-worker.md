@@ -66,7 +66,18 @@
 - `feat/app-owned-collection`을 master에 병합 커밋으로 합쳐 push했고, `0.4.0` 태그로 Deploy workflow가 `ghcr.io/syrflover/transmission-rss:0.4.0`과 `:latest`를 게시했어요(amd64).
   서버의 cron은 이미지를 새로 받지 않고, 받더라도 ENTRYPOINT가 옛 바이너리라 전환 전까지 동작이 같아요.
 
+### 서버 전환 (2026-10-01, j4105, Transmission 4.1.1)
+
+- cron의 마지막 실행은 00:05였어요. `cron.sh uninstall` 뒤 Transmission 토렌트 목록을 기준선으로 저장했어요(18개, 봇 라벨 16개). 저장소 폴더와 미디어 디스크는 모두 로컬 xfs예요.
+- web을 켜고 기존 YAML을 가져왔어요: 채널 2개(erai-raws, SubsPlease), 규칙 26개, 저장 폴더 `/downloads/Shows (current)`.
+- worker 첫 주기: `250 item(s) seen (250 new), 0 added, 17 already in Transmission, 0 failed, 217 without a rule, 16 excluded, 0 removed`.
+  기준선과 견주면 빠진 토렌트·새 토렌트·폴더가 바뀐 토렌트가 없어, cron이 넣은 항목을 같은 폴더에서 모두 알아봤어요. 봇 토렌트 16개에 항목 라벨이 하나씩 붙었어요.
+- **cron과 다른 점**: 릴리스 이름 그대로이던 봇 토렌트 11개(모두 받는 중·대기·멈춤, 메타데이터는 받음)의 이름을 worker가 규칙의 회차 보정대로 바꿨어요(예: `[SubsPlease] Re Zero ... - 84` → `Re Zero kara Hajimeru Isekai Seikatsu S04E18.mkv`, `episode: -66`). `Existing`이 앞선 실행이 끝내지 못한 이름 바꾸기를 마무리하는 명세대로의 동작이에요.
+  cron(배포돼 있던 0.3.13 바이너리)은 매 실행 이름 바꾸기를 시도하고도 오류 없이 이름을 남겨 두고 있었어요. trname은 이 이름들에 정상 이름을 만들고(같은 rev로 확인), 같은 Transmission에 직접 보낸 `torrent-rename-path`는 받는 중인 토렌트에서도 `success`였어요. 그래서 원인은 옛 바이너리 쪽이고, 무엇인지는 확인하지 않았어요(`Cargo.lock` 없이 빌드된 옛 RPC 라이브러리와 Transmission 4.1의 조합으로 짐작만 해요).
+- Compose 프로젝트 이름을 `trss`로 둔 탓에 같은 폴더의 Transmission Compose(폴더 이름으로 `trss`)와 한 프로젝트가 되어, Transmission 컨테이너가 고아로 표시됐어요. `trss-app`으로 바꿨어요(`--remove-orphans`를 쓰면 Transmission이 지워질 수 있었어요).
+
 ### 남은 일
+
 
 - 서버 전환과 완료 기준의 실제 확인: cron과 같은 결과 관찰(주기 수·차이 기록), 실제 배포 경로의 보호 경계, 웹만 재시작, 휴대폰에서 0003·0006 수행, `.torrent` 추가 응답 시간, 한 번 받기의 명령 라벨이 실제 Transmission에서 붙었다 떨어지는지(0008의 전제), 자원 한도 재검토.
 - 되돌리기가 필요 없어지면 ENTRYPOINT를 정하고 `cron.sh`와 `legacy` 서비스를 걷어내요.
