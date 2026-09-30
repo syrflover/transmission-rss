@@ -80,6 +80,11 @@ impl Gate {
             .forget();
     }
 
+    /// Lets one held (or the next) request through.
+    pub fn release_one(&self) {
+        self.release.add_permits(1);
+    }
+
     /// Lets the held requests and all later ones through.
     pub fn release_all(&self) {
         self.release.add_permits(100_000);

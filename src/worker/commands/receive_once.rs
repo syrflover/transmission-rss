@@ -1,24 +1,25 @@
 //! `receive_once` (한 번 받기): receive one history item without a rule.
 //!
 //! The web accepts the command with a [`ReceiveOnce`] payload; the worker runs
-//! it with [`execute`]:
+//! it with [`run`]:
 //!
 //! 1. find the history item and its channel, and resolve the save folder below
 //!    the channel's base folder ([`folder::resolve`], checked again here
 //!    because the request may be old);
 //! 2. recover the item's original link ([`link::recover`]);
-//! 3. add it to Transmission, save it as the item's result and end the command;
+//! 3. add it to Transmission and save the answer as the item's result;
 //! 4. when that add put the torrent in, give the file its `trname` name
 //!    without any episode conversion. A torrent Transmission already had (a
 //!    rule's, or this command's own from a run that died before its result was
 //!    written) is not renamed.
 //!
-//! The result lands on the history item (`received`, `duplicate` or
-//! `add_failed` with a reason) and on the command, which reports the item's
-//! result as history holds it afterwards. Only steps 1 to 3 decide the result. A rename that does not happen leaves the torrent and its data under
-//! its own name (a person chose to receive this item, so it is never removed as
-//! the rule path does when `trname` has no name), and the history item gets a
-//! note saying so ([`RenameResult::Kept`]).
+//! The worker ends the command after step 4. The result lands on the history
+//! item (`received`, `duplicate` or `add_failed` with a reason) and on the
+//! command, which reports the item's result as history holds it afterwards.
+//! Only steps 1 to 3 decide the result. A rename that does not happen leaves
+//! the torrent and its data under its own name (a person chose to receive this
+//! item, so it is never removed as the rule path does when `trname` has no
+//! name), and the history item gets a note saying so ([`RenameResult::Kept`]).
 
 use std::path::Path;
 
@@ -121,9 +122,34 @@ impl Retry {
     }
 }
 
+/// Runs a `receive_once` command to its end: [`execute`], then, when the add
+/// put the torrent in, [`rename`] and the note when the name stays. The caller
+/// ends the command with the returned [`Finished`] afterwards, so a screen that
+/// re-reads the item once the command has ended sees the note too.
+///
+/// A worker that dies before the command is ended leaves it `running`; the
+/// rerun meets the torrent as a duplicate and neither renames nor notes it.
+pub async fn run(
+    ctx: &CycleContext,
+    command: &Command,
+    now: impl Fn() -> Millis,
+    cancel: &CancellationToken,
+) -> Result<Finished, Retry> {
+    let finished = execute(ctx, command, now).await?;
+    if let Some(step) = &finished.rename {
+        if let RenameResult::Kept(note) = rename(ctx, step, cancel).await {
+            // Only reported: the item's result is written already, and a rerun
+            // would not rename or note it.
+            if let Err(err) = ctx.history.note_received(step.item_id, note).await {
+                eprintln!("Cannot note the kept name on item {}: {err}", step.item_id);
+            }
+        }
+    }
+    Ok(finished)
+}
+
 /// Runs a `receive_once` command up to the point where its outcome is known and
-/// recorded on the history item. The caller ends the command with the returned
-/// [`Finished`], then calls [`rename`].
+/// recorded on the history item (steps 1 to 3); [`run`] goes on from there.
 pub async fn execute(
     ctx: &CycleContext,
     command: &Command,

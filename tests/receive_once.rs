@@ -344,6 +344,36 @@ async fn a_name_trname_cannot_derive_stays_in_transmission_with_its_data_and_is_
 }
 
 #[tokio::test]
+async fn the_command_ends_only_after_its_rename_step_and_note() {
+    let odd = release("guid-odd", 9, "Some Special Collection.mkv", "");
+    let s = Scene::new(&[&odd], unrelated_rule()).await;
+    let item = s.item("Some Special").await;
+    s.post(CMD, &item, "Some Show").await;
+    let gate = s.h.tr.hold("torrent-get");
+    let running = {
+        let worker = s.h.worker();
+        tokio::spawn(async move { worker.run_commands(&CancellationToken::new()).await })
+    };
+
+    // The add looks the new torrent up; that goes through.
+    gate.wait_arrived().await;
+    gate.release_one();
+    // The rename step looks it up again. The screen re-reads the item once the
+    // command has ended, so it must not have ended before the note is written.
+    gate.wait_arrived().await;
+    assert_eq!(s.command(CMD).await.1["state"], "running");
+
+    gate.release_all();
+    assert_eq!(running.await.unwrap().unwrap(), CommandsOutcome::Ran(1));
+    let (_, view) = s.command(CMD).await;
+    assert_eq!(view["state"], "done");
+    let (_, row) = s
+        .call("GET", &format!("/api/history/{}", item.id), None)
+        .await;
+    assert_eq!(row["reason"], NAME_NOT_DERIVED);
+}
+
+#[tokio::test]
 async fn an_excluded_item_is_named_without_the_rules_episode_conversion() {
     let title = "[SubsPlease] Sono Bisque Doll - 13 (720p) [ABCD1236].mkv";
     let sono = release("guid-sono-13", 13, title, "");
