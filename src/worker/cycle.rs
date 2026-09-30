@@ -78,6 +78,7 @@ struct Job {
     /// The observation to record; `result`, `torrent_hash` and `reason` are
     /// filled in from what Transmission says.
     observation: Observation,
+    /// The title with the channel's secret values replaced, for logs.
     title: String,
     /// The item's own link, which Transmission is asked to add.
     link: String,
@@ -178,11 +179,15 @@ pub async fn run_cycle(
 
         let mut skipped = Vec::new();
 
-        for item in feed::items(&feed, &channel.secret_query) {
+        // What goes into history and logs passes through the channel's redactor.
+        let channel_redactor = plan.redactor();
+
+        for item in feed::items(&feed, &channel.secret_query, &channel_redactor) {
             report.items_seen += 1;
             let FeedItem {
                 identity_key,
                 title,
+                stored_title,
                 link,
                 stored_link,
             } = item;
@@ -191,7 +196,7 @@ pub async fn run_cycle(
                 channel_id: channel.id.clone(),
                 channel_label: label.clone(),
                 identity_key,
-                title: title.clone(),
+                title: stored_title.clone(),
                 link: stored_link,
                 result: HistoryResult::NoMatch,
                 rule_id: None,
@@ -209,7 +214,7 @@ pub async fn run_cycle(
                         rule_id: Some(rule_id),
                         ..observation
                     },
-                    title,
+                    title: stored_title,
                     link,
                     save_path,
                     episode,

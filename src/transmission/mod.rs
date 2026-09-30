@@ -12,7 +12,7 @@ mod redact;
 
 use std::{fmt, path::Path, time::Duration};
 
-pub use redact::{Redactor, REDACTED};
+pub use redact::{Redactor, MIN_QUERY_SECRET_LEN, REDACTED};
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 use transmission_rpc::{

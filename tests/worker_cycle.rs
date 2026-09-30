@@ -630,6 +630,81 @@ async fn secrets_in_item_links_and_guids_are_masked_in_history_but_used_for_addi
     assert_eq!(h.history_items().await[0].result, HistoryResult::Received);
 }
 
+#[tokio::test]
+async fn secret_values_are_masked_in_history_under_other_names_in_paths_and_encoded() {
+    let h = Harness::new().await;
+    // The channel URL spells the secret percent-encoded; feeds may quote it
+    // decoded, in a path, or encoded again inside another URL.
+    const IN_URL: &str = "Tk%2Fen%2BSECRETVALUE99";
+    const DECODED: &str = "Tk/en+SECRETVALUE99";
+    const ENCODED_TWICE: &str = "Tk%252Fen%252BSECRETVALUE99";
+    let xml = format!(
+        r#"<?xml version="1.0"?><rss version="2.0"><channel><title>t</title>
+        <link>http://x/</link><description>d</description>
+        <item><title>Show - 01 [{DECODED}]</title>
+          <link>magnet:?xt=urn:btih:{}&amp;dn=Show%20-%2001&amp;tr=https%3A%2F%2Ftr.test%2Fa%3Ftorrent_pass%3D{ENCODED_TWICE}</link>
+          <guid>https://t.test/details/{IN_URL}/1</guid></item>
+        <item><title>Show - 02</title>
+          <link>https://t.test/{IN_URL}/dl/2.torrent?torrent_pass={IN_URL}&amp;id=2</link>
+          <guid>https://t.test/details/{DECODED}/2</guid></item>
+        </channel></rss>"#,
+        "dddd".repeat(10)
+    );
+    h.feeds.set_xml("other-names", &xml);
+    let input = transmission_rss::store::channels::ChannelInput::new(
+        format!("{}?passkey={IN_URL}&r=1080", h.feeds.url("other-names")),
+        "/media/p",
+    );
+    h.channels
+        .create_channel_with_rules(input, vec![rule("Show", "Show/Season 01")])
+        .await
+        .unwrap();
+    // A refusal that quotes the secret ends up in `reason`.
+    h.tr.reject_adds(Some(&format!("cannot use {DECODED} or {IN_URL}")));
+
+    run(&h.worker()).await;
+
+    // Transmission was asked with the real link.
+    let asked = h.tr.calls_of("torrent-add");
+    assert!(asked
+        .iter()
+        .any(|c| c.args["filename"].as_str().unwrap().contains(ENCODED_TWICE)));
+
+    let items = h.history_items().await;
+    assert_eq!(items.len(), 2);
+    let dump = history_dump(&h).await;
+    for form in ["SECRETVALUE99", IN_URL, DECODED, ENCODED_TWICE] {
+        assert!(!dump.contains(form), "{form} in history:\n{dump}");
+    }
+    let first = h.item("Show - 01").await;
+    assert_eq!(first.title, "Show - 01 [***]");
+    assert!(first.link.contains("torrent_pass%3D***"), "{}", first.link);
+    assert_eq!(first.result, HistoryResult::AddFailed);
+    assert_eq!(
+        first.reason.as_deref(),
+        Some("Transmission refused the torrent: cannot use *** or ***")
+    );
+    let second = h.item("Show - 02").await;
+    assert_eq!(
+        second.link,
+        "https://t.test/***/dl/2.torrent?torrent_pass=***&id=2"
+    );
+}
+
+#[tokio::test]
+async fn short_secret_looking_values_do_not_garble_stored_titles() {
+    // `filter=1080p` is secret like every query name, but too short to be
+    // replaced in text: the titles keep their "1080p".
+    let h = Harness::new().await;
+    channel_a(&h).await;
+    run(&h.worker()).await;
+    let sayonara = h.item("Sayonara Lara - 03 (1080p)").await;
+    assert_eq!(
+        sayonara.title,
+        "[SubsPlease] Sayonara Lara - 03 (1080p) [AAAA0001].mkv"
+    );
+}
+
 // --- exclusivity -----------------------------------------------------------------------------
 
 #[tokio::test]
