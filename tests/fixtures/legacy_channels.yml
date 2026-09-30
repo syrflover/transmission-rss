@@ -1,0 +1,29 @@
+# Sample of the legacy channels configuration (same structure as the real one).
+# Tokens are made up.
+- url: https://feeds.example.test/subsplease?filter=1080p&token=REDACTED
+  directory: /media/anime
+  excludes:
+    - "[Batch]"
+    - "(720p)"
+  rules:
+    - match: "[SubsPlease] Sayonara Lara - "
+      directory: Sayonara Lara/Season 01
+    - match: "sono bisque doll"
+      case_insensitive: true
+      directory: Sono Bisque Doll/Season 02
+      episode: -12
+    - match: "Sono Bisque Doll"
+      directory: Sono Bisque Doll (overlap)
+    - match: "[SubsPlease] Tensei Shitara Slime Datta Ken"
+      directory: Slime/Season 04
+      episode: -24
+    - match: "Lowercase Show"
+      directory: Lowercase Show/Season 01
+
+- url: https://feeds.example.test/erai-raws?token=REDACTED
+  directory: /media/other
+  rules:
+    - match: "Sayonara Lara"
+      directory: Elsewhere/Sayonara Lara
+    - match: "Never Aired Yet"
+      directory: Never Aired Yet/Season 01

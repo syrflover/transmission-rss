@@ -5,7 +5,7 @@ use std::{
 
 use futures::{stream, StreamExt};
 use reqwest::header;
-use rss::{Channel, Item};
+use rss::Channel;
 use tokio::time::sleep;
 use transmission_rpc::{
     types::{
@@ -16,7 +16,7 @@ use transmission_rpc::{
 };
 use transmission_rss::{
     config::{ChannelConfig, Config},
-    rule::Rule,
+    rss::legacy::{collect_items, SelectedItem},
 };
 use trname::trname;
 use url::Url;
@@ -123,6 +123,7 @@ async fn get_torrent(
 }
 
 #[tokio::test]
+#[ignore = "needs a Transmission instance at a hardcoded LAN address"]
 async fn test_get_torrent() {
     let mut transmission = TransClient::new(
         "http://192.168.1.21:32091/transmission/rpc"
@@ -196,7 +197,7 @@ async fn add_torrent(
 }
 
 #[tokio::test]
-#[ignore]
+#[ignore = "needs a Transmission instance at a hardcoded LAN address and adds a torrent"]
 async fn test_add_torrent() {
     let link = "magnet:?xt=urn:btih:SEFD6A5N67C2CJ3NDJI74AP6CZXTCFSZ&dn=%5BSubsPlease%5D%20Katsute%20Mahou%20Shoujo%20to%20Aku%20wa%20Tekitai%20shiteita%20-%2002%20%281080p%29%20%5BC2A5EFC3%5D.mkv&xl=767183596&tr=http%3A%2F%2Fnyaa.tracker.wf%3A7777%2Fannounce&tr=udp%3A%2F%2Ftracker.coppersurfer.tk%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2F9.rarbg.to%3A2710%2Fannounce&tr=udp%3A%2F%2F9.rarbg.me%3A2710%2Fannounce&tr=udp%3A%2F%2Ftracker.leechers-paradise.org%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.internetwarriors.net%3A1337%2Fannounce&tr=udp%3A%2F%2Ftracker.cyberia.is%3A6969%2Fannounce&tr=udp%3A%2F%2Fexodus.desync.com%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker3.itzmx.com%3A6961%2Fannounce&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce&tr=udp%3A%2F%2Ftracker.tiny-vps.com%3A6969%2Fannounce&tr=udp%3A%2F%2Fretracker.lanta-net.ru%3A2710%2Fannounce&tr=http%3A%2F%2Fopen.acgnxtracker.com%3A80%2Fannounce&tr=wss%3A%2F%2Ftracker.openwebtorrent.com";
 
@@ -296,40 +297,6 @@ async fn run() {
         .await
         .expect("can't set transmission configuration");
 
-    pub fn collect_items<'a>(
-        channels: impl Iterator<Item = &'a mut (Channel, ChannelConfig)>,
-    ) -> Vec<(PathBuf, &'a Rule, &'a mut Item)> {
-        let mut items = Vec::new();
-
-        for (channel, channel_config) in channels {
-            for item in channel.items_mut() {
-                let title = item.title().unwrap_or_default();
-
-                if channel_config
-                    .excludes
-                    .iter()
-                    .any(|ex| title.contains(ex.as_str()))
-                {
-                    continue;
-                }
-
-                let matched = channel_config.rules.iter().find(|rule| rule.test(title));
-
-                let Some(matched) = matched else {
-                    continue;
-                };
-
-                items.push((channel_config.directory.clone(), matched, item));
-
-                println!("Matched {}", matched.r#match);
-
-                // return items;
-            }
-        }
-
-        items
-    }
-
     let mut channels = stream::iter(channels_config)
         .map(|channel_config| async {
             (
@@ -357,70 +324,73 @@ async fn run() {
     println!();
 
     stream::iter(matched_items)
-        .for_each_concurrent(100, |(base_directory, matched, item)| {
+        .for_each_concurrent(100, |selected| {
             let transmission_url = transmission_url.clone();
 
             async move {
+                let SelectedItem {
+                    save_path,
+                    episode,
+                    item,
+                } = selected;
+
                 let mut transmission = TransClient::new(transmission_url);
 
                 let link = item.link().unwrap_or_default();
 
-                let torrent =
-                    match add_torrent(&mut transmission, link, &matched.directory(&base_directory))
-                        .await
-                    {
-                        Ok(r) => match r {
-                            TorrentAddedOrDuplicate::TorrentDuplicate(torrent) => {
-                                let hash = torrent.hash_string.as_deref().unwrap();
+                let torrent = match add_torrent(&mut transmission, link, &save_path).await {
+                    Ok(r) => match r {
+                        TorrentAddedOrDuplicate::TorrentDuplicate(torrent) => {
+                            let hash = torrent.hash_string.as_deref().unwrap();
 
-                                match torrent.status.unwrap() {
-                                    TorrentStatus::QueuedToSeed | TorrentStatus::Seeding
-                                        if has_label(torrent.labels.as_deref(), BOT_LABEL) =>
-                                    {
-                                        // pause_torrent
-                                        transmission
-                                            .torrent_action(
-                                                TorrentAction::Stop,
-                                                vec![Id::Hash(hash.to_owned())],
-                                            )
-                                            .await
-                                            .inspect_err(|err| eprintln!("{err}"))
-                                            .ok(); // FIXME: error handle
+                            match torrent.status.unwrap() {
+                                TorrentStatus::QueuedToSeed | TorrentStatus::Seeding
+                                    if has_label(torrent.labels.as_deref(), BOT_LABEL) =>
+                                {
+                                    // pause_torrent
+                                    transmission
+                                        .torrent_action(
+                                            TorrentAction::Stop,
+                                            vec![Id::Hash(hash.to_owned())],
+                                        )
+                                        .await
+                                        .inspect_err(|err| eprintln!("{err}"))
+                                        .ok(); // FIXME: error handle
 
-                                        println!(
-                                            "Stopped {} | {}",
-                                            torrent.name.as_deref().unwrap(),
-                                            torrent.hash_string.as_deref().unwrap()
-                                        );
-                                    }
-                                    _ => {
-                                        println!(
-                                            "Already {} | {}",
-                                            torrent.name.as_deref().unwrap(),
-                                            torrent.hash_string.as_deref().unwrap()
-                                        );
-                                    }
+                                    println!(
+                                        "Stopped {} | {}",
+                                        torrent.name.as_deref().unwrap(),
+                                        torrent.hash_string.as_deref().unwrap()
+                                    );
                                 }
-
-                                torrent
+                                _ => {
+                                    println!(
+                                        "Already {} | {}",
+                                        torrent.name.as_deref().unwrap(),
+                                        torrent.hash_string.as_deref().unwrap()
+                                    );
+                                }
                             }
-                            TorrentAddedOrDuplicate::TorrentAdded(torrent) => {
-                                let hash = torrent.hash_string.as_deref().unwrap();
-                                let name = torrent.name.as_deref().unwrap();
 
-                                println!("Added {} | {}", name, hash);
+                            torrent
+                        }
+                        TorrentAddedOrDuplicate::TorrentAdded(torrent) => {
+                            let hash = torrent.hash_string.as_deref().unwrap();
+                            let name = torrent.name.as_deref().unwrap();
 
-                                torrent
-                            }
-                            TorrentAddedOrDuplicate::Error => {
-                                return;
-                            }
-                        },
-                        Err(err) => {
-                            eprintln!("{err}");
+                            println!("Added {} | {}", name, hash);
+
+                            torrent
+                        }
+                        TorrentAddedOrDuplicate::Error => {
                             return;
                         }
-                    };
+                    },
+                    Err(err) => {
+                        eprintln!("{err}");
+                        return;
+                    }
+                };
 
                 let hash = torrent.hash_string.unwrap();
 
@@ -431,14 +401,9 @@ async fn run() {
                     loop {
                         sleep(Duration::from_secs(1)).await;
 
-                        let res = rename_torrent(
-                            &mut transmission,
-                            &hash,
-                            &matched.directory(&base_directory),
-                            matched.starts_episode_at,
-                        )
-                        .await
-                        .inspect_err(|err| println!("{err}"));
+                        let res = rename_torrent(&mut transmission, &hash, &save_path, episode)
+                            .await
+                            .inspect_err(|err| println!("{err}"));
 
                         match res {
                             Ok(Some(_name)) => break,
