@@ -91,6 +91,66 @@ impl HistoryStore {
         self.db.run(move |c| repo::list(c, &query)).await
     }
 
+    /// One record by its ID.
+    pub async fn get(&self, item_id: i64) -> Result<Option<HistoryItem>, HistoryError> {
+        self.db.run(move |c| repo::get(c, item_id)).await
+    }
+
+    /// How many records have each result (results with none are left out),
+    /// optionally within one channel.
+    pub async fn counts(
+        &self,
+        channel_id: Option<String>,
+    ) -> Result<Vec<(HistoryResult, i64)>, HistoryError> {
+        self.db
+            .run(move |c| repo::counts(c, channel_id.as_deref()))
+            .await
+    }
+
+    /// The torrent hashes of the records among the given `(channel_id,
+    /// identity_key)` pairs that Transmission holds a torrent for (`received`
+    /// or `duplicate`): what a cycle keeps in Transmission for the items that
+    /// are still in the feeds it read.
+    pub async fn held_hashes_of_items(
+        &self,
+        items: Vec<(String, String)>,
+    ) -> Result<HashSet<String>, HistoryError> {
+        if items.is_empty() {
+            return Ok(HashSet::new());
+        }
+        self.db
+            .run(move |c| repo::held_hashes_of_items(c, &items))
+            .await
+            .map(|hashes| hashes.into_iter().collect())
+    }
+
+    /// Sets an item's result from something done to it outside a cycle (a
+    /// command from the web), by the transition rules of [`Transition::between`],
+    /// and returns the item's result afterwards (`None` for an unknown item).
+    /// The item's `last_seen_at`, title and link are left alone, because it was
+    /// not seen in a feed. `reason` must be free of secret values.
+    pub async fn record_outcome(
+        &self,
+        item_id: i64,
+        at: Millis,
+        result: HistoryResult,
+        reason: Option<String>,
+        torrent_hash: Option<String>,
+    ) -> Result<Option<HistoryResult>, HistoryError> {
+        self.db
+            .run(move |c| {
+                repo::record_outcome(
+                    c,
+                    item_id,
+                    at,
+                    result,
+                    reason.as_deref(),
+                    torrent_hash.as_deref(),
+                )
+            })
+            .await
+    }
+
     /// The changes of an item's result, oldest first.
     pub async fn changes(&self, item_id: i64) -> Result<Vec<HistoryChange>, HistoryError> {
         self.db.run(move |c| repo::changes(c, item_id)).await
