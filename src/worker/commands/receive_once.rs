@@ -96,6 +96,11 @@ pub struct Finished {
     /// Set when this command's add put the torrent in (Transmission did not
     /// have it), so its file is to be renamed.
     pub rename: Option<Rename>,
+    /// The add got no answer (the connection failed or timed out), so
+    /// Transmission may hold the torrent all the same, under a hash history
+    /// did not learn. The command is ended with this recorded, and the next
+    /// collection cycle then removes no departed torrents.
+    pub add_unconfirmed: bool,
 }
 
 /// What the renaming step needs.
@@ -234,7 +239,9 @@ pub async fn execute(
                 "Cannot add item {} of {}: {reason}",
                 item.id, item.channel_label
             );
-            refuse(ctx, &item, &reason, &now).await
+            let mut finished = refuse(ctx, &item, &reason, &now).await?;
+            finished.add_unconfirmed = matches!(err, AddError::Rpc(_));
+            Ok(finished)
         }
     }
 }
@@ -253,6 +260,7 @@ fn held(stored: HistoryResult, rename: Option<Rename>) -> Finished {
             reason: (stored == HistoryResult::Duplicate).then(|| ALREADY_THERE.to_owned()),
         },
         rename,
+        add_unconfirmed: false,
     }
 }
 
@@ -289,6 +297,7 @@ async fn refuse(
             reason: Some(reason),
         },
         rename: None,
+        add_unconfirmed: false,
     })
 }
 
@@ -301,6 +310,7 @@ fn failed(reason: &str, rename: Option<Rename>) -> Finished {
             reason: Some(reason.to_owned()),
         },
         rename,
+        add_unconfirmed: false,
     }
 }
 

@@ -93,6 +93,10 @@ pub struct CycleReport {
     /// Commands left `running` when the cycle started (see
     /// [`CommandsAtStart::running`]). The cycle then removes no departed torrents.
     pub commands_running: usize,
+    /// Commands with an unconfirmed add (see
+    /// [`CommandsAtStart::unconfirmed_adds`]). The cycle then removes no
+    /// departed torrents.
+    pub commands_unconfirmed: usize,
     /// The cycle stopped early because the worker is shutting down. What was
     /// done is recorded; the rest waits for the next cycle.
     pub interrupted: bool,
@@ -106,6 +110,10 @@ pub struct CommandsAtStart {
     /// worker died in, or stopped to retry later: it may have handed a torrent
     /// to Transmission without history learning its hash yet.
     pub running: usize,
+    /// Commands ended since the previous cycle started whose add to
+    /// Transmission got no answer (or whose task panicked): Transmission may
+    /// hold their torrent under a hash history does not know.
+    pub unconfirmed_adds: usize,
 }
 
 /// A selected item on its way to Transmission.
@@ -151,6 +159,7 @@ pub async fn run_cycle(
 ) -> Result<CycleReport, CycleError> {
     let mut report = CycleReport {
         commands_running: commands.running,
+        commands_unconfirmed: commands.unconfirmed_adds,
         ..CycleReport::default()
     };
 
@@ -351,6 +360,8 @@ pub async fn run_cycle(
     // have died after Transmission took the torrent and before the hash was
     // written. A restarted worker runs its cycle before it looks for commands,
     // so the removal waits until the rerun has met the torrent and recorded it.
+    // A command whose add got no answer is the unconfirmed case again; that
+    // holds the removal of the first cycle after it.
     if panicked > 0 {
         println!(
             "{panicked} item(s) ended with an internal error; \
@@ -366,6 +377,12 @@ pub async fn run_cycle(
             "{} command(s) were left running by an earlier worker; \
              leaving Transmission's torrents alone this cycle",
             commands.running
+        );
+    } else if commands.unconfirmed_adds > 0 {
+        println!(
+            "{} command(s) got no answer from Transmission to their add; \
+             leaving Transmission's torrents alone this cycle",
+            commands.unconfirmed_adds
         );
     } else if report.channels_read > 0 {
         let mut kept = kept;

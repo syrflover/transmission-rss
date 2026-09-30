@@ -231,10 +231,47 @@ impl CommandStore {
         outcome: Outcome,
         now: Millis,
     ) -> Result<bool, CommandError> {
+        self.end(id, state, outcome, now, false).await
+    }
+
+    /// Ends a command, like [`CommandStore::finish`], whose request to add a
+    /// torrent got no answer from Transmission: Transmission may have taken the
+    /// torrent without history learning its hash. See
+    /// [`CommandStore::unconfirmed_adds_since`].
+    pub async fn finish_with_unconfirmed_add(
+        &self,
+        id: &str,
+        state: CommandState,
+        outcome: Outcome,
+        now: Millis,
+    ) -> Result<bool, CommandError> {
+        self.end(id, state, outcome, now, true).await
+    }
+
+    async fn end(
+        &self,
+        id: &str,
+        state: CommandState,
+        outcome: Outcome,
+        now: Millis,
+        add_unconfirmed: bool,
+    ) -> Result<bool, CommandError> {
         assert!(!state.is_open(), "a command ends as done or failed");
         let id = id.to_owned();
         self.db
-            .run(move |c| repo::finish(c, &id, state, &outcome, now))
+            .run(move |c| repo::finish(c, &id, state, &outcome, now, add_unconfirmed))
+            .await
+    }
+
+    /// How many commands with an unconfirmed add (see
+    /// [`CommandStore::finish_with_unconfirmed_add`]) ended at or after
+    /// `since`, or at all when `since` is `None`.
+    pub async fn unconfirmed_adds_since(
+        &self,
+        since: Option<Millis>,
+    ) -> Result<usize, CommandError> {
+        self.db
+            .run(move |c| repo::unconfirmed_adds_since(c, since))
             .await
     }
 }

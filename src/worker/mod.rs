@@ -222,9 +222,12 @@ impl Worker {
             return Ok(TickOutcome::Busy);
         };
 
-        // Read under the lock, before the cycle starts: no command runs meanwhile.
+        // Read under the lock, before the cycle starts: no command runs
+        // meanwhile. The previous start is read before this cycle replaces it.
+        let previous_start = self.ctx.history.last_cycle().await?.map(|c| c.started_at);
         let commands = CommandsAtStart {
             running: self.commands.running_count().await?,
+            unconfirmed_adds: self.commands.unconfirmed_adds_since(previous_start).await?,
         };
 
         let started = (self.clock)();

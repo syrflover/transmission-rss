@@ -169,7 +169,7 @@ pub fn claim_next(conn: &mut Connection, now: Millis) -> Result<Option<Command>>
                 result: "failed".to_owned(),
                 reason: Some(GIVEN_UP.to_owned()),
             };
-            end(&tx, &command.id, CommandState::Failed, &outcome, now)?;
+            end(&tx, &command.id, CommandState::Failed, &outcome, now, false)?;
             continue;
         }
 
@@ -190,13 +190,14 @@ fn end(
     state: CommandState,
     outcome: &Outcome,
     now: Millis,
+    add_unconfirmed: bool,
 ) -> Result<bool> {
     let outcome = serde_json::to_string(outcome).expect("an outcome serializes");
     let changed = conn.execute(
         "UPDATE commands
-         SET state = ?2, outcome = ?3, updated_at = ?4, finished_at = ?4
+         SET state = ?2, outcome = ?3, updated_at = ?4, finished_at = ?4, add_unconfirmed = ?5
          WHERE id = ?1 AND state IN ('pending', 'running')",
-        params![id, state.code(), outcome, now],
+        params![id, state.code(), outcome, now, add_unconfirmed],
     )?;
     Ok(changed == 1)
 }
@@ -207,9 +208,20 @@ pub fn finish(
     state: CommandState,
     outcome: &Outcome,
     now: Millis,
+    add_unconfirmed: bool,
 ) -> Result<bool> {
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let ended = end(&tx, id, state, outcome, now)?;
+    let ended = end(&tx, id, state, outcome, now, add_unconfirmed)?;
     tx.commit()?;
     Ok(ended)
+}
+
+pub fn unconfirmed_adds_since(conn: &Connection, since: Option<Millis>) -> Result<usize> {
+    let count: i64 = conn.query_row(
+        "SELECT count(*) FROM commands
+         WHERE add_unconfirmed = 1 AND (?1 IS NULL OR finished_at >= ?1)",
+        [since],
+        |row| row.get(0),
+    )?;
+    Ok(count as usize)
 }

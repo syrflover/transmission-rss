@@ -353,3 +353,47 @@ async fn only_started_and_unended_commands_count_as_running() {
         .unwrap();
     assert_eq!(commands.running_count().await.unwrap(), 0, "ended");
 }
+
+#[tokio::test]
+async fn unconfirmed_adds_are_counted_from_a_point_in_time() {
+    let (_dir, _db, commands) = store().await;
+    for (id, subject) in [("cmd-1", "1"), ("cmd-2", "2"), ("cmd-3", "3")] {
+        commands
+            .accept(new(id, r#"{"item_id":1}"#, Some(subject)), 1_000)
+            .await
+            .unwrap();
+    }
+    let failed = Outcome {
+        result: "add_failed".to_owned(),
+        reason: Some("no answer".to_owned()),
+    };
+    let first = commands.claim_next(1_100).await.unwrap().unwrap();
+    commands
+        .finish_with_unconfirmed_add(&first.id, CommandState::Failed, failed.clone(), 1_200)
+        .await
+        .unwrap();
+    let second = commands.claim_next(1_300).await.unwrap().unwrap();
+    commands
+        .finish(&second.id, CommandState::Failed, failed.clone(), 1_400)
+        .await
+        .unwrap();
+    let third = commands.claim_next(1_500).await.unwrap().unwrap();
+    commands
+        .finish_with_unconfirmed_add(&third.id, CommandState::Failed, failed, 1_600)
+        .await
+        .unwrap();
+
+    assert_eq!(commands.unconfirmed_adds_since(None).await.unwrap(), 2);
+    assert_eq!(
+        commands.unconfirmed_adds_since(Some(1_200)).await.unwrap(),
+        2
+    );
+    assert_eq!(
+        commands.unconfirmed_adds_since(Some(1_201)).await.unwrap(),
+        1
+    );
+    assert_eq!(
+        commands.unconfirmed_adds_since(Some(1_601)).await.unwrap(),
+        0
+    );
+}

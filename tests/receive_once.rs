@@ -1048,6 +1048,42 @@ async fn a_cycle_run_while_a_command_is_left_running_removes_nothing() {
 }
 
 #[tokio::test]
+async fn a_command_add_that_timed_out_after_transmission_took_it_holds_the_next_cleanup() {
+    let liar = release("guid-liar-26", 26, LIAR, "");
+    let s = Scene::new(&[&liar], unrelated_rule()).await;
+    let item = s.item("LIAR GAME - 26").await;
+    s.post(CMD, &item, "LIAR GAME/Season 01").await;
+    // Transmission takes the torrent but answers only after the worker gave up.
+    let late = s.h.tr.hold_answer("torrent-add");
+    let worker =
+        s.h.worker()
+            .with_transmission_timeout(Duration::from_millis(300));
+
+    assert_eq!(s.run_commands_with(&worker).await, CommandsOutcome::Ran(1));
+
+    let (_, view) = s.command(CMD).await;
+    assert_eq!(view["state"], "failed");
+    assert_eq!(view["outcome"]["result"], "add_failed");
+    assert_eq!(
+        s.h.tr.torrents().len(),
+        1,
+        "Transmission has it all the same"
+    );
+    assert_eq!(s.item("LIAR GAME - 26").await.torrent_hash, None);
+
+    // The next cycle does not call it departed.
+    let report = s.cycle().await;
+    assert_eq!(report.commands_unconfirmed, 1);
+    assert!(report.removed.is_empty(), "{:?}", report.removed);
+    assert!(s.h.tr.calls_of("torrent-remove").is_empty());
+    assert_eq!(s.h.tr.torrents().len(), 1);
+    // Once: the cycle after that no longer counts the command.
+    let report = s.cycle().await;
+    assert_eq!(report.commands_unconfirmed, 0);
+    late.release_all();
+}
+
+#[tokio::test]
 async fn two_workers_never_run_one_command_twice() {
     let liar = release("guid-liar-26", 26, LIAR, "");
     let s = Scene::new(&[&liar], unrelated_rule()).await;

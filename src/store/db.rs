@@ -30,6 +30,8 @@ const MIGRATIONS: &[&str] = &[
     include_str!("status/schema.sql"),
     // 5: commands the web accepts and the worker carries out
     include_str!("commands/schema.sql"),
+    // 6: a command whose Transmission add got no answer
+    include_str!("commands/add_unconfirmed.sql"),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -255,6 +257,43 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(commands, 0);
+    }
+
+    #[tokio::test]
+    async fn database_from_before_unconfirmed_adds_keeps_its_commands_as_confirmed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        {
+            // A database as the build with five migrations left it, one command ended.
+            let conn = Connection::open(&path).unwrap();
+            for sql in &MIGRATIONS[..5] {
+                conn.execute_batch(sql).unwrap();
+            }
+            conn.pragma_update(None, "user_version", 5_i64).unwrap();
+            conn.execute(
+                "INSERT INTO commands (id, kind, payload, state, attempts, created_at,
+                     updated_at, finished_at, outcome)
+                 VALUES ('cmd-1', 'receive_once', '{}', 'failed', 1, 1, 2, 2,
+                     '{\"result\":\"add_failed\",\"reason\":\"x\"}')",
+                [],
+            )
+            .unwrap();
+        }
+
+        let db = Db::open(&path).await.unwrap();
+
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+        let row: (String, i64) = db
+            .run::<_, DbError, _>(|c| {
+                Ok(c.query_row(
+                    "SELECT state, add_unconfirmed FROM commands WHERE id = 'cmd-1'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(row, ("failed".to_owned(), 0));
     }
 
     #[tokio::test]

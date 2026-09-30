@@ -23,6 +23,12 @@
 //! rerun then meets the torrent, records its hash and ends the command as
 //! `duplicate`, without renaming the file or noting the item.
 //!
+//! A command whose add got no answer from Transmission (or whose task ended in
+//! a panic) is ended with that recorded
+//! ([`CommandStore::finish_with_unconfirmed_add`]): Transmission may hold its
+//! torrent under a hash history never learned. The next cycle removes no
+//! departed torrents either (see [`super::CommandsAtStart`]).
+//!
 //! Each command kind has its own module below.
 
 pub mod folder;
@@ -138,22 +144,31 @@ impl Worker {
                     result: "failed".to_owned(),
                     reason: Some("처리하다 내부 오류가 났어요.".to_owned()),
                 };
+                // The task may have ended after Transmission took a torrent and
+                // before its hash was recorded, as an unconfirmed add may.
                 self.commands
-                    .finish(&command.id, CommandState::Failed, outcome, (self.clock)())
+                    .finish_with_unconfirmed_add(
+                        &command.id,
+                        CommandState::Failed,
+                        outcome,
+                        (self.clock)(),
+                    )
                     .await?;
                 return Ok(true);
             }
             None => return Ok(false),
         };
 
-        self.commands
-            .finish(
-                &command.id,
-                finished.state,
-                finished.outcome.clone(),
-                (self.clock)(),
-            )
-            .await?;
+        let (state, outcome, now) = (finished.state, finished.outcome.clone(), (self.clock)());
+        if finished.add_unconfirmed {
+            self.commands
+                .finish_with_unconfirmed_add(&command.id, state, outcome, now)
+                .await?;
+        } else {
+            self.commands
+                .finish(&command.id, state, outcome, now)
+                .await?;
+        }
         println!(
             "Command {} {}: {}",
             command.id, finished.state, finished.outcome.result
