@@ -1,6 +1,6 @@
 # 0009 웹과 worker를 배포하고 cron을 걷어내요
 
-- 상태: 진행 중 (로컬 준비 끝, 릴리스·서버 전환 대기)
+- 상태: 진행 중 (릴리스 끝, 서버 전환 대기)
 - 출처: [구현 경계와 실행 순서](../specs/web-app.md#구현-경계와-실행-순서), [접근 경계와 기기](../specs/web-app.md#접근-경계와-기기)
 - 막는 티켓: [0004](0004-worker-collection-history.md), [0005](0005-legacy-yaml-import.md)
 
@@ -61,8 +61,12 @@
 - `down` 뒤 `up`으로 다시 만들어도 API로 만든 채널이 남았고, worker는 DB의 주기 기록을 보고 "최근에 돈 주기"로 건너뛰었어요.
 - `stop`에 두 컨테이너 모두 종료 코드 0으로 곧바로 끝났어요.
 
+### 릴리스 (2026-09-30, 사용자 승인)
+
+- `feat/app-owned-collection`을 master에 병합 커밋으로 합쳐 push했고, `0.4.0` 태그로 Deploy workflow가 `ghcr.io/syrflover/transmission-rss:0.4.0`과 `:latest`를 게시했어요(amd64).
+  서버의 cron은 이미지를 새로 받지 않고, 받더라도 ENTRYPOINT가 옛 바이너리라 전환 전까지 동작이 같아요.
+
 ### 남은 일
 
-- 릴리스: 이 브랜치를 master에 합쳐 push하고 `0.4.0` 태그를 push해 이미지를 게시해요(원격 쓰기, 사용자 승인 필요).
 - 서버 전환과 완료 기준의 실제 확인: cron과 같은 결과 관찰(주기 수·차이 기록), 실제 배포 경로의 보호 경계, 웹만 재시작, 휴대폰에서 0003·0006 수행, `.torrent` 추가 응답 시간, 한 번 받기의 명령 라벨이 실제 Transmission에서 붙었다 떨어지는지(0008의 전제), 자원 한도 재검토.
 - 되돌리기가 필요 없어지면 ENTRYPOINT를 정하고 `cron.sh`와 `legacy` 서비스를 걷어내요.
