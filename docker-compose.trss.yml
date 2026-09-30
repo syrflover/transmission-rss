@@ -21,7 +21,8 @@ x-trss: &trss
     # The media folder at the same path Transmission sees it, so that
     # Transmission's folder names are compared as written. Read-only here, for
     # trss-web, which only reads it (folder checks, links leading out of the
-    # collect folder). trss-worker mounts it read-write below.
+    # collect folder, the first reading of a watch folder that is added).
+    # trss-worker mounts it read-write below.
     - ${MEDIA_DIR:?Set MEDIA_DIR in .env}:/downloads:ro
   logging:
     driver: json-file
