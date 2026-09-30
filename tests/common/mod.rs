@@ -506,9 +506,11 @@ async fn tr_rpc_answer(
 }
 
 /// Hash (lowercased) and release name (`dn`, else the hash) of a magnet link.
+/// An `http(s)` link stands for a `.torrent` download and is read the same way
+/// from its `xt` and `dn` query values (the fake downloads nothing).
 fn parse_magnet(link: &str) -> Option<(String, String)> {
     let url = url::Url::parse(link).ok()?;
-    if url.scheme() != "magnet" {
+    if !matches!(url.scheme(), "magnet" | "http" | "https") {
         return None;
     }
     let mut hash = None;

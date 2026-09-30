@@ -5,13 +5,16 @@
 //! Transmission as it is. [`recover`] rebuilds the link in the order the
 //! collection spec sets (수집 이력):
 //!
-//! 1. Fill each masked query value from the value the channel's own URL stores
-//!    under the same query name ([`fill_masked_values`]). When the item's
-//!    identity is its link, the result must hash to that identity, so a link
-//!    whose secret differs from the channel's is not trusted.
-//! 2. If a mask remains (the secret sits under another name, or in the path or
-//!    a magnet's tracker), read the channel's feed now and take the raw link of
-//!    the item with the same identity key.
+//! 1. When the link's host is the channel URL's host (compared without regard
+//!    to case; a magnet link has none), fill each masked query value from the
+//!    value the channel's own URL stores under the same query name
+//!    ([`fill_masked_values`]). A link on another host is never filled, so the
+//!    channel's secret does not go to a host it was not made for. When the
+//!    item's identity is its link, the result must hash to that identity, so
+//!    a link whose secret differs from the channel's is not trusted.
+//! 2. If a mask remains (the link is on another host, or the secret sits under
+//!    another name, or in the path or a magnet's tracker), read the channel's
+//!    feed now and take the raw link of the item with the same identity key.
 //! 3. Otherwise give up with a reason that says the original link could not be
 //!    recovered.
 //!
@@ -49,9 +52,11 @@ pub async fn recover(
         return Ok(item.link.clone());
     }
 
-    let filled = fill_masked_values(&item.link, &channel.url);
-    if !has_mask(&filled) && matches_identity(&filled, &item.identity_key) {
-        return Ok(filled);
+    if same_host(&item.link, &channel.url) {
+        let filled = fill_masked_values(&item.link, &channel.url);
+        if !has_mask(&filled) && matches_identity(&filled, &item.identity_key) {
+            return Ok(filled);
+        }
     }
 
     let read = feed::fetch(http, &channel.url).await.map_err(|err| {
@@ -74,6 +79,17 @@ pub async fn recover(
 /// Whether some part of `link` is still masked.
 pub fn has_mask(link: &str) -> bool {
     link.contains(MASK)
+}
+
+/// Whether both URLs name the same host, ignoring case. A URL without a host
+/// (a magnet link, or text that is not a URL) matches nothing.
+fn same_host(link: &str, channel_url: &str) -> bool {
+    let host = |url: &str| {
+        url::Url::parse(url)
+            .ok()
+            .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
+    };
+    matches!((host(link), host(channel_url)), (Some(a), Some(b)) if a == b)
 }
 
 /// A link built from the feed item's link can be checked against the item's
@@ -206,6 +222,16 @@ mod tests {
             ),
             "http://x.test/dl?to%6Ben=TOKEN123456"
         );
+    }
+
+    #[test]
+    fn only_a_link_on_the_channels_host_is_filled() {
+        assert!(same_host("http://FEEDS.test/dl?token=***", CHANNEL));
+        assert!(same_host("https://feeds.test:8443/dl?token=***", CHANNEL));
+        assert!(!same_host("http://elsewhere.test/dl?token=***", CHANNEL));
+        assert!(!same_host("http://feeds.test.elsewhere.test/dl", CHANNEL));
+        assert!(!same_host("magnet:?xt=urn:btih:abc&token=***", CHANNEL));
+        assert!(!same_host("not a url", CHANNEL));
     }
 
     #[test]

@@ -44,6 +44,16 @@ fn magnet(n: u32, name: &str, extra: &str) -> String {
     format!("magnet:?xt=urn:btih:{}&dn={dn}{extra}", hash(n))
 }
 
+/// A `.torrent` download link on `host`, which the fake Transmission reads
+/// like a magnet link.
+fn download_link(host: &str, n: u32, name: &str, extra: &str) -> String {
+    let dn: String = url::form_urlencoded::byte_serialize(name.as_bytes()).collect();
+    format!("http://{host}/dl?xt=urn:btih:{}&dn={dn}{extra}", hash(n))
+}
+
+/// The host of the fake feeds, hence of every channel URL here.
+const FEED_HOST: &str = "127.0.0.1";
+
 fn xml_escape(text: &str) -> String {
     text.replace('&', "&amp;").replace('<', "&lt;")
 }
@@ -613,7 +623,12 @@ async fn a_failed_item_can_be_received_again_with_a_new_command() {
 
 #[tokio::test]
 async fn a_secret_in_a_query_of_the_channels_name_is_filled_back_from_the_channel() {
-    let with_token = release("guid-liar-26", 26, LIAR, &format!("&token={SECRET}"));
+    // A download link on the channel's own host.
+    let with_token = Release {
+        guid: "guid-liar-26",
+        title: LIAR.to_owned(),
+        link: download_link(FEED_HOST, 26, LIAR, &format!("&token={SECRET}")),
+    };
     let s = Scene::new(&[&with_token], unrelated_rule()).await;
     let item = s.item("LIAR GAME - 26").await;
     assert!(item.link.contains("token=***"), "{}", item.link);
@@ -641,7 +656,11 @@ async fn a_link_whose_own_value_differs_from_the_channels_is_taken_from_the_feed
     // No GUID, so the item's identity is its link; the channel's token fills the
     // mask into a link that hashes to something else, which is not trusted.
     let own = "OWNTOKEN9876543210";
-    let with_own_token = release("", 26, LIAR, &format!("&token={own}"));
+    let with_own_token = Release {
+        guid: "",
+        title: LIAR.to_owned(),
+        link: download_link(FEED_HOST, 26, LIAR, &format!("&token={own}")),
+    };
     let s = Scene::new(&[&with_own_token], unrelated_rule()).await;
     let item = s.item("LIAR GAME - 26").await;
     assert!(item.identity_key.starts_with("link:"));
@@ -657,6 +676,65 @@ async fn a_link_whose_own_value_differs_from_the_channels_is_taken_from_the_feed
         HistoryResult::Received
     );
     assert!(!format!("{:?}", s.h.history_items().await).contains(own));
+}
+
+#[tokio::test]
+async fn a_link_on_another_host_is_not_filled_with_the_channels_secret() {
+    // A GUID identity says nothing about the link, so a filled link could not be
+    // checked: the channel's token would go to another host.
+    let own = "OWNTOKEN9876543210";
+    let elsewhere = Release {
+        guid: "guid-liar-26",
+        title: LIAR.to_owned(),
+        link: download_link("elsewhere.test", 26, LIAR, &format!("&token={own}")),
+    };
+    let s = Scene::new(&[&elsewhere], unrelated_rule()).await;
+    let item = s.item("LIAR GAME - 26").await;
+    assert!(item.link.contains("token=***"), "{}", item.link);
+    let feed_reads = s.h.feeds.hits(FEED);
+
+    s.post(CMD, &item, "LIAR GAME/Season 01").await;
+    s.run_commands().await;
+
+    // The link came from the current feed, with its own value.
+    assert_eq!(s.h.feeds.hits(FEED), feed_reads + 1, "the feed was read");
+    assert_eq!(s.adds().len(), 1);
+    assert_eq!(s.adds()[0]["filename"], elsewhere.link);
+    for call in s.h.tr.calls() {
+        assert!(!call.args.to_string().contains(SECRET), "{call:?}");
+    }
+    assert_eq!(
+        s.item("LIAR GAME - 26").await.result,
+        HistoryResult::Received
+    );
+    s.assert_secret_nowhere().await;
+}
+
+#[tokio::test]
+async fn a_link_on_another_host_that_left_the_feed_is_not_received() {
+    let own = "OWNTOKEN9876543210";
+    let elsewhere = Release {
+        guid: "guid-liar-26",
+        title: LIAR.to_owned(),
+        link: download_link("elsewhere.test", 26, LIAR, &format!("&token={own}")),
+    };
+    let other = release("guid-other-3", 3, OTHER, "");
+    let s = Scene::new(&[&elsewhere, &other], unrelated_rule()).await;
+    let item = s.item("LIAR GAME - 26").await;
+    s.h.feeds.set_xml(FEED, &feed_xml(&[&other]));
+
+    s.post(CMD, &item, "LIAR GAME/Season 01").await;
+    s.run_commands().await;
+
+    assert!(s.adds().is_empty(), "nothing goes to Transmission");
+    let failed = s.item("LIAR GAME - 26").await;
+    assert_eq!(failed.result, HistoryResult::AddFailed);
+    assert!(failed
+        .reason
+        .unwrap()
+        .contains("원래 링크를 되살리지 못했어요"));
+    assert_eq!(s.command(CMD).await.1["state"], "failed");
+    s.assert_secret_nowhere().await;
 }
 
 #[tokio::test]
