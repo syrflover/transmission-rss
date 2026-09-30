@@ -901,7 +901,8 @@ async fn a_torrent_still_downloading_or_verifying_in_the_work_folder_stops_the_m
         assert_eq!(command["state"], "failed", "{command}");
         let reason = command["outcome"]["reason"].as_str().unwrap();
         assert!(reason.contains("`Clevatess S02E02.mkv`"), "{reason}");
-        assert!(reason.contains("다 받은 뒤"), "{reason}");
+        assert!(reason.contains("다 받거나"), "{reason}");
+        assert!(reason.contains("지운 뒤 `다시 옮기기`"), "{reason}");
         assert_eq!(s.rule(&c.rules[0].id).await["state"], "archived");
         assert!(s.h.tr.calls_of("torrent-set-location").is_empty());
         assert_eq!(files(&s.collect), before);
@@ -946,7 +947,7 @@ async fn a_downloading_torrent_counts_even_when_the_work_folder_is_gone() {
 // --- review: which torrents are in the work folder, by where their folder really is ------------
 
 #[tokio::test]
-async fn a_torrent_found_through_a_link_into_the_work_folder_moves_with_it() {
+async fn a_torrent_found_through_a_link_into_the_work_folder_stops_the_move() {
     let s = Scene::new(true).await;
     let c = s
         .channel("feed-a", &[("Clevatess", "Clevatess/Season 02")])
@@ -962,20 +963,19 @@ async fn a_torrent_found_through_a_link_into_the_work_folder_moves_with_it() {
             .in_dir(s.collect.join("Alias/Season 02"))
             .status(SEEDING),
     );
+    let before = files(&s.collect);
 
     s.send("archive-alias-1", &c.rules[0].id, "archive").await;
     s.run().await;
 
+    // Its text says elsewhere and the disk says here: nothing moves.
     let command = s.command("archive-alias-1").await;
-    assert_eq!(command["state"], "done", "{command}");
-    assert_eq!(
-        s.h.tr.torrent(&hash(1)).download_dir,
-        text(s.archive.join("Clevatess/Season 02"))
-    );
-    assert_eq!(
-        files(&s.archive),
-        ["Clevatess/Season 02/Clevatess S02E01.mkv"]
-    );
+    assert_eq!(command["state"], "failed", "{command}");
+    let reason = command["outcome"]["reason"].as_str().unwrap();
+    assert!(reason.contains("링크"), "{reason}");
+    assert!(s.h.tr.calls_of("torrent-set-location").is_empty());
+    assert_eq!(files(&s.collect), before);
+    assert!(files(&s.archive).is_empty());
 }
 
 #[tokio::test]
@@ -1208,4 +1208,158 @@ async fn a_refusal_after_some_torrents_moved_says_so_and_moving_again_finishes()
             text(s.archive.join("Clevatess/Season 02"))
         );
     }
+}
+
+// --- second review: the torrent's own data, metadata, links inside ------------------------------
+
+#[tokio::test]
+async fn another_file_of_the_same_name_only_at_the_destination_stops_the_move() {
+    let s = Scene::new(true).await;
+    let c = s
+        .channel("feed-a", &[("Clevatess", "Clevatess/Season 02")])
+        .await;
+    let season = s.collect.join("Clevatess/Season 02");
+    // A stopped, finished torrent of two files; the person removed `e05.mkv`
+    // at the source, and the archive has a different `e05.mkv`.
+    write(&season.join("Pack/e04.mkv"), "episode 4");
+    s.h.tr.preload(
+        FakeTorrent::new(&hash(1), "Pack")
+            .in_dir(&season)
+            .files(&["Pack/e04.mkv", "Pack/e05.mkv"])
+            .file_length(9)
+            .status(0),
+    );
+    write(
+        &s.archive.join("Clevatess/Season 02/Pack/e05.mkv"),
+        "someone else's file",
+    );
+    let before = (files(&s.collect), files(&s.archive));
+
+    s.send("archive-own-01", &c.rules[0].id, "archive").await;
+    s.run().await;
+
+    let command = s.command("archive-own-01").await;
+    assert_eq!(command["state"], "failed", "{command}");
+    let reason = command["outcome"]["reason"].as_str().unwrap();
+    assert!(reason.contains("`Season 02/Pack/e05.mkv`"), "{reason}");
+    assert!(s.h.tr.calls_of("torrent-set-location").is_empty());
+    assert_eq!((files(&s.collect), files(&s.archive)), before);
+}
+
+#[tokio::test]
+async fn a_torrent_whose_files_were_all_moved_by_hand_is_pointed_at_them() {
+    let s = Scene::new(true).await;
+    let c = s
+        .channel("feed-a", &[("Clevatess", "Clevatess/Season 02")])
+        .await;
+    // The person moved the work folder already; Transmission still names the
+    // old folder, and the files at the archive are the torrent's, size for size.
+    write(
+        &s.archive.join("Clevatess/Season 02/Pack/e04.mkv"),
+        "episode 4",
+    );
+    write(
+        &s.archive.join("Clevatess/Season 02/Pack/e05.mkv"),
+        "episode 5",
+    );
+    s.h.tr.preload(
+        FakeTorrent::new(&hash(1), "Pack")
+            .in_dir(s.collect.join("Clevatess/Season 02"))
+            .files(&["Pack/e04.mkv", "Pack/e05.mkv"])
+            .file_length(9)
+            .status(0),
+    );
+
+    s.send("archive-hand-01", &c.rules[0].id, "archive").await;
+    s.run().await;
+
+    let command = s.command("archive-hand-01").await;
+    assert_eq!(command["state"], "done", "{command}");
+    assert_eq!(
+        s.h.tr.torrent(&hash(1)).download_dir,
+        text(s.archive.join("Clevatess/Season 02"))
+    );
+    assert_eq!(
+        fs::read_to_string(s.archive.join("Clevatess/Season 02/Pack/e05.mkv")).unwrap(),
+        "episode 5"
+    );
+}
+
+#[tokio::test]
+async fn a_magnet_still_fetching_its_metadata_or_a_downloading_torrent_stops_the_move() {
+    for (n, torrent) in [
+        (
+            1,
+            FakeTorrent::new(&hash(1), "Clevatess S02E03")
+                .without_metadata()
+                .status(0),
+        ),
+        (
+            2,
+            FakeTorrent::new(&hash(2), "Clevatess S02E03")
+                .without_metadata()
+                .status(4),
+        ),
+        // Downloading, although it reports nothing left.
+        (
+            3,
+            FakeTorrent::new(&hash(3), "Clevatess S02E03.mkv").status(4),
+        ),
+    ] {
+        let s = Scene::new(true).await;
+        let c = s
+            .channel("feed-a", &[("Clevatess", "Clevatess/Season 02")])
+            .await;
+        let season = s.collect.join("Clevatess/Season 02");
+        s.seeding(9, "Clevatess S02E01.mkv", &season);
+        s.h.tr.preload(torrent.in_dir(&season));
+
+        let id = format!("archive-meta-{n}");
+        s.send(&id, &c.rules[0].id, "archive").await;
+        s.run().await;
+
+        let command = s.command(&id).await;
+        assert_eq!(command["state"], "failed", "{n}: {command}");
+        let reason = command["outcome"]["reason"].as_str().unwrap();
+        assert!(reason.contains("`Clevatess S02E03"), "{reason}");
+        assert!(reason.contains("지운 뒤"), "{reason}");
+        assert!(reason.contains("`다시 옮기기`"), "{reason}");
+        assert!(s.h.tr.calls_of("torrent-set-location").is_empty());
+        assert!(files(&s.archive).is_empty());
+    }
+}
+
+#[tokio::test]
+async fn a_torrent_reached_through_a_link_inside_the_work_folder_stops_the_move() {
+    let s = Scene::new(true).await;
+    let c = s
+        .channel("feed-a", &[("Clevatess", "Clevatess/Season 01")])
+        .await;
+    write(&s.collect.join("Clevatess/Season 01/e01.mkv"), "a");
+    // `Season 02` is a link to another work's folder, and Transmission saves
+    // through it.
+    write(&s.collect.join("Other/Season 02/o01.mkv"), "o");
+    symlink(
+        s.collect.join("Other/Season 02"),
+        s.collect.join("Clevatess/Season 02"),
+    )
+    .unwrap();
+    s.h.tr.preload(
+        FakeTorrent::new(&hash(1), "o01.mkv")
+            .in_dir(s.collect.join("Clevatess/Season 02"))
+            .status(SEEDING),
+    );
+    let before = files(&s.collect);
+
+    s.send("archive-inlink-1", &c.rules[0].id, "archive").await;
+    s.run().await;
+
+    let command = s.command("archive-inlink-1").await;
+    assert_eq!(command["state"], "failed", "{command}");
+    let reason = command["outcome"]["reason"].as_str().unwrap();
+    assert!(reason.contains("`o01.mkv`"), "{reason}");
+    assert!(reason.contains("링크"), "{reason}");
+    assert!(s.h.tr.calls_of("torrent-set-location").is_empty());
+    assert_eq!(files(&s.collect), before);
+    assert!(files(&s.archive).is_empty());
 }

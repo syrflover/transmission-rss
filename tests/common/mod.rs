@@ -140,6 +140,12 @@ pub struct FakeTorrent {
     /// Transmission's `error` (0 none, 3 a local error) and `errorString`.
     pub error: u8,
     pub error_string: String,
+    /// `metadataPercentComplete`: below 1 for a magnet still fetching its
+    /// metadata (which lists no files and nothing left to download).
+    pub metadata: f64,
+    /// Each file's `length`; by default the size of the file on disk under
+    /// `download_dir`, or 100 when it is not there.
+    pub file_length: Option<i64>,
 }
 
 impl FakeTorrent {
@@ -158,6 +164,8 @@ impl FakeTorrent {
             files: Vec::new(),
             error: 0,
             error_string: String::new(),
+            metadata: 1.0,
+            file_length: None,
         }
     }
 
@@ -186,6 +194,19 @@ impl FakeTorrent {
     /// The files `torrent-get` lists, relative to the torrent's folder.
     pub fn files(mut self, files: &[&str]) -> Self {
         self.files = files.iter().map(|f| f.to_string()).collect();
+        self
+    }
+
+    /// A magnet still fetching its metadata: no files, nothing left.
+    pub fn without_metadata(mut self) -> Self {
+        self.metadata = 0.0;
+        self.files = Vec::new();
+        self
+    }
+
+    /// Each file `length` bytes long, as the torrent says.
+    pub fn file_length(mut self, length: i64) -> Self {
+        self.file_length = Some(length);
         self
     }
 
@@ -610,6 +631,8 @@ async fn tr_rpc_answer(
                 files: Vec::new(),
                 error: 0,
                 error_string: String::new(),
+                metadata: 1.0,
+                file_length: None,
             });
             ok(json!({ "torrent-added": { "id": id, "hashString": hash, "name": name } }))
                 .into_response()
@@ -636,6 +659,7 @@ async fn tr_rpc_answer(
                         "labels": t.labels, "file-count": t.file_count, "downloadDir": t.download_dir,
                         "leftUntilDone": t.left_until_done, "sizeWhenDone": 1_i64 << 30,
                         "error": t.error, "errorString": t.error_string,
+                        "metadataPercentComplete": t.metadata,
                         "files": fake_files(t),
                     });
                     if omit_file_count {
@@ -753,15 +777,25 @@ fn settle_location(t: &mut FakeTorrent, location: String, failing: &HashMap<Stri
 /// A torrent's `files` as `torrent-get` lists them: all done, or none of
 /// their bytes for a torrent still downloading.
 fn fake_files(t: &FakeTorrent) -> Value {
+    if t.metadata < 1.0 {
+        return json!([]);
+    }
     let names = if t.files.is_empty() {
         vec![t.name.clone()]
     } else {
         t.files.clone()
     };
-    let done = if t.left_until_done > 0 { 0 } else { 100 };
     names
         .into_iter()
-        .map(|name| json!({ "name": name, "length": 100, "bytesCompleted": done }))
+        .map(|name| {
+            let length = t.file_length.unwrap_or_else(|| {
+                std::fs::metadata(std::path::Path::new(&t.download_dir).join(&name))
+                    .map(|m| m.len() as i64)
+                    .unwrap_or(100)
+            });
+            let done = if t.left_until_done > 0 { 0 } else { length };
+            json!({ "name": name, "length": length, "bytesCompleted": done })
+        })
         .collect()
 }
 

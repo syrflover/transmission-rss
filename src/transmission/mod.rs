@@ -187,9 +187,11 @@ pub struct TorrentPlace {
     pub name: String,
     /// As Transmission reports it.
     pub download_dir: String,
-    /// Still to download or to verify: its data may not be in `download_dir`
-    /// yet (Transmission's incomplete folder, `.part` names) and Transmission
-    /// still writes it.
+    /// Still to download or to verify: queued to or verifying, queued to or
+    /// downloading, bytes left, or a magnet still fetching its metadata (which
+    /// lists no files and nothing left). Its data may not be in
+    /// `download_dir` yet (Transmission's incomplete folder, `.part` names)
+    /// and Transmission still writes it.
     pub unfinished: bool,
     /// The text of a local error Transmission reports for it (`error` 3),
     /// such as a move that failed. Tracker errors are not local.
@@ -201,6 +203,8 @@ pub struct TorrentPlace {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TorrentFile {
     pub name: String,
+    /// Its size in bytes, as the torrent says.
+    pub length: i64,
     /// All of its bytes are there.
     pub complete: bool,
 }
@@ -223,6 +227,7 @@ pub async fn torrent_places(
         TorrentGetField::LeftUntilDone,
         TorrentGetField::Error,
         TorrentGetField::ErrorString,
+        TorrentGetField::MetadataPercentComplete,
     ];
     if with_files {
         fields.push(TorrentGetField::Files);
@@ -238,15 +243,21 @@ pub async fn torrent_places(
         .torrents
         .into_iter()
         .filter_map(|torrent| {
-            let checking = matches!(
+            let busy = matches!(
                 torrent.status,
-                Some(TorrentStatus::QueuedToVerify | TorrentStatus::Verifying)
+                Some(
+                    TorrentStatus::QueuedToVerify
+                        | TorrentStatus::Verifying
+                        | TorrentStatus::QueuedToDownload
+                        | TorrentStatus::Downloading
+                )
             );
+            let without_metadata = torrent.metadata_percent_complete.unwrap_or(1.0) < 1.0;
             Some(TorrentPlace {
                 hash: torrent.hash_string?,
                 name: torrent.name.unwrap_or_default(),
                 download_dir: torrent.download_dir?,
-                unfinished: checking || torrent.left_until_done.unwrap_or(0) > 0,
+                unfinished: busy || without_metadata || torrent.left_until_done.unwrap_or(0) > 0,
                 local_error: (torrent.error == Some(ErrorType::LocalError))
                     .then(|| torrent.error_string.unwrap_or_default()),
                 files: torrent
@@ -255,6 +266,7 @@ pub async fn torrent_places(
                     .into_iter()
                     .map(|f| TorrentFile {
                         complete: f.bytes_completed >= f.length,
+                        length: f.length,
                         name: f.name,
                     })
                     .collect(),

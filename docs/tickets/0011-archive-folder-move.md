@@ -46,7 +46,7 @@
   - 결과는 `moved`(옮김, 또는 이미 목적지에만 있음), `kept`(일부러 두었음, 까닭 포함), `failed`(옮기지 못함, 까닭 포함)예요.
 - 옮기기(`src/worker/commands/rule_archive/work_folder.rs`)는 매번 디스크와 Transmission을 보고 남은 것을 해요. 위치는 저장하지 않아요.
   1. 검사: 두 폴더가 있고 서로 안에 있지 않으며 같은 `st_dev`, 목적지의 작품 폴더와 합쳐 들어갈 폴더도 같은 `st_dev`, 작품 폴더 이름이 경로 조각 하나이고 링크가 아님, 안쪽에 두 폴더 밖을 가리키는 링크나 다른 파일시스템이 없음, 양쪽에 같은 상대 경로의 파일(양쪽 모두 실제 폴더인 것은 합침)이 없음. 겹치면 파일을 5개까지 적고(`외 N개`) 아무것도 옮기지 않아요. 마지막으로 빈 시험 파일을 수집 폴더에서 보관 폴더로 `RENAME_NOREPLACE`로 옮겨 보고 지워요(검사가 디스크에 쓰는 유일한 것이며 남기지 않아요).
-  2. Transmission: 받는 폴더가 실제로(링크를 따라) 작품 폴더 안인 토렌트를 모두 고른 뒤, 하나라도 받거나 확인하는 중이거나, 로컬 오류를 알리거나, 받는 폴더에 `..`가 있고 작품 폴더에 닿거나, 그 파일(또는 `.part` 이름)이 목적지에 있으면 어느 토렌트도 옮기지 않고 까닭과 함께 끝나요. 그다음 토렌트마다 `torrent-set-location`(`move: true`)을 보내고, 모두 새 위치를 보고할 때까지 1초마다 확인해요. 그 사이 토렌트가 로컬 오류를 알리면 그 글로 바로 `failed`, 300초 안에 끝나지 않으면 명령을 `running`으로 두어 다음 확인이 이어 가요(마지막 다섯 번째 시작에서는 그 까닭으로 `failed`). 누가 넣은 토렌트든 옮겨요.
+  2. Transmission: 받는 폴더가 작품 폴더 안인 토렌트를 글자와 실제 위치(링크를 따름) 두 가지로 모두 고른 뒤, 하나라도 다 받지 않았거나(받는 중·대기·확인 중, 메타데이터를 아직 받는 자석 링크), 로컬 오류를 알리거나, 받는 폴더에 `..`가 있고 작품 폴더에 닿거나, 글자와 실제 위치가 작품 폴더 안팎으로 엇갈리거나, 그 파일(또는 `.part` 이름)이 목적지에 있는데 그 토렌트 자신의 데이터라고 확인되지 않으면 어느 토렌트도 옮기지 않고 까닭과 함께 끝나요. 자신의 데이터로 보는 것은 원래 자리에 그 토렌트의 파일이 하나도 없고, 목적지의 파일이 모두 토렌트의 이름 그대로인 보통 파일이며 크기가 토렌트의 `length`와 같을 때뿐이에요. 그다음 토렌트마다 `torrent-set-location`(`move: true`)을 보내고, 모두 새 위치를 보고할 때까지 1초마다 확인해요. 그 사이 토렌트가 로컬 오류를 알리면 그 글로 바로 `failed`, 300초 안에 끝나지 않으면 명령을 `running`으로 두어 다음 확인이 이어 가요(마지막 다섯 번째 시작에서는 그 까닭으로 `failed`). 누가 넣은 토렌트든 옮겨요.
   3. 나머지: `renameat2(RENAME_NOREPLACE)`(`rustix`, 대체 경로 없음)로 목적지에 없는 것은 통째로, 양쪽에 있는 폴더는 그 안을 파일 단위로 옮기고, 비게 된 원래 폴더는 지워요. 검사 뒤 목적지에 생긴 파일은 덮지 않고 원래 자리에 둔 채 `failed`로 알려요. 다른 파일시스템(`EXDEV`)이나 읽기 오류를 만나면 거기서 멈추고 까닭을 남겨요. 종료 요청이 오면 항목 사이에서 멈추고, 이 단계들은 worker의 잠금을 끝날 때까지 쥐고 있어요.
   - worker는 폴더를 새로 만들지 않아요. 목적지에 없는 것은 이름 바꾸기로 원래 소유자째 옮겨지고, 새 폴더는 Transmission이 자기 토렌트를 옮기며 만든 것뿐이라 Transmission 사용자의 것이에요.
 - 수집 주기와 같은 flock 아래에서 명령을 실행하므로, 옮기는 동안 주기는 `Busy`로 건너뛰고 새 회차를 넣지 않아요.
@@ -68,9 +68,17 @@
 - 종료 요청으로 명령 작업이 중단되면, 아직 도는 이름 바꾸기가 있는데도 worker 잠금이 풀렸어요. 이제 잠금을 막는 작업(`spawn_blocking`)이 잠금을 함께 쥐고 끝날 때 놓으며, 이름 바꾸기는 항목 사이에서 종료 요청을 보고 멈춰요(명령은 `running`으로 남아 다음 시작이 이어 가요). 단위 시험: `the_blocking_work_keeps_its_hold_after_the_waiting_task_is_aborted`, `the_renames_stop_between_entries_once_shutdown_is_asked_for`.
 - 옮기는 중에 규칙을 고칠 수 있었어요. 이제 `rule_archive` 명령이 열려 있는 규칙의 저장 폴더는 바꿀 수 없고(다른 칸은 저장돼요), 옮기는 중인 작품 폴더 안으로 규칙을 만들거나 옮길 수 없어요(`400`). 고치기 전 실패: `web::rules_api::tests::while_a_work_folder_moves_no_rule_changes_its_folder_into_or_out_of_it`.
 
+두 번째 검토의 지적과 고친 내용이에요. 위 첫째·둘째 항목의 규칙을 아래처럼 좁혔어요.
+
+- 다 받은 파일이 목적지에만 있으면 겹침이 아니라던 예외가, 원래 자리에서 사용자가 지운 파일과 같은 이름의 다른 파일을 목적지에서 토렌트의 것으로 삼게 했어요(뒤의 확인·받기가 그 파일에 조각을 써요). 이제 그 토렌트의 파일이 원래 자리에 하나도 없고(이름·`.part` 이름 모두), 목적지에 있는 것이 모두 토렌트의 이름 그대로인 보통 파일이며 크기가 토렌트가 알려 준 `length`와 같을 때만 그 토렌트 자신의 데이터로 보고, 그 밖에는 목적지의 파일을 적어 겹침으로 거절해요. 고치기 전 실패: `another_file_of_the_same_name_only_at_the_destination_stops_the_move`. 정당한 경우를 지키는 `a_torrent_whose_files_were_all_moved_by_hand_is_pointed_at_them`은 고치기 전에도 통과했어요. 단위 시험 `a_torrent_file_the_destination_has_refuses_the_move_unless_it_is_only_there`에 크기가 다른 파일, 원래 자리에 파일이 남은 토렌트, 목적지에 `.part` 이름만 있는 경우를 더했어요.
+- 메타데이터를 아직 받지 못한 자석 링크는 남은 바이트 0·파일 없음으로 보여 다 받은 것으로 여겨졌어요. 이제 `metadataPercentComplete`가 1보다 작거나, 상태가 받기 대기·받는 중(3·4)이면 남은 바이트와 상관없이 다 받지 않은 것으로 봐요. 고치기 전 실패: `a_magnet_still_fetching_its_metadata_or_a_downloading_torrent_stops_the_move`.
+- 작품 폴더 안의 링크(`X/S2` → `Other/S2`)를 거쳐 받는 토렌트는 실제 위치로만 견줘서 남겨 두고 폴더만 옮겼어요. 이제 받는 폴더를 글자로 본 판단과 실제 위치로 본 판단이 작품 폴더 안팎으로 엇갈리면 `..`처럼 이동 전체를 거절해요. 그래서 밖의 링크로 작품 폴더에 닿는 토렌트도 옮기지 않고 거절해요(앞선 시험 `a_torrent_found_through_a_link_into_the_work_folder_moves_with_it`를 `a_torrent_found_through_a_link_into_the_work_folder_stops_the_move`로 바꿨어요). 작품 폴더 안에서 안을 가리키는 링크는 두 판단이 같아 실제 위치로 옮겨요. 고치기 전 실패: `a_torrent_reached_through_a_link_inside_the_work_folder_stops_the_move`. 단위 시험: `torrents_are_matched_by_where_their_folders_really_are`.
+- 다 받지 않은 토렌트로 거절할 때, 받기를 멈춘 토렌트도 생각해 "Transmission에서 그 토렌트를 다 받거나, 더 받지 않을 거면 지운 뒤 `다시 옮기기`를 눌러 주세요"라고 토렌트 이름과 함께 알려요(복원은 "다시 `복원`해 주세요"). 단위 시험: `a_torrent_transmission_still_writes_or_reports_an_error_for_refuses_the_move`.
+- 이름 바꾸기 시험 파일을 지우지 못하면 조용히 넘기지 않고 worker 로그에 남겨요.
+
 ### 검증한 것
 
-검토 뒤 고친 것까지 넣고 `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`(라이브러리 335개, `tests/archive_move.rs` 20개 포함 모든 통합 시험)가 통과했고, 웹은 `npm run typecheck`와 `npm run build`가 통과했어요. 아래 브라우저 확인은 검토 전 코드로 했어요(화면 코드는 그 뒤 바뀌지 않았어요).
+검토 뒤 고친 것까지 넣고 `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`(라이브러리 335개, `tests/archive_move.rs` 24개 포함 모든 통합 시험)가 통과했고, 웹은 `npm run typecheck`와 `npm run build`가 통과했어요. 아래 브라우저 확인은 검토 전 코드로 했어요(화면 코드는 그 뒤 바뀌지 않았어요).
 완료 기준은 `tests/archive_move.rs`(시험용 Transmission이 `torrent-set-location`에서 실제 임시 폴더의 파일을 옮겨요)로 확인했어요.
 
 | 완료 기준 | 근거 |

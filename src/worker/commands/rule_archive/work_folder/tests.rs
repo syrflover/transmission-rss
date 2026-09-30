@@ -379,6 +379,7 @@ fn place(hash: &str, name: &str, dir: &Path) -> TorrentPlace {
         download_dir: dir.to_str().unwrap().into(),
         files: vec![crate::transmission::TorrentFile {
             name: name.into(),
+            length: 5,
             complete: true,
         }],
         ..TorrentPlace::default()
@@ -393,11 +394,13 @@ fn torrents_are_matched_by_where_their_folders_really_are() {
     symlink(f.collect.join("X"), f.collect.join("Alias")).unwrap();
     let request = archive_request(&f, "X");
 
-    // Through a link into the work folder: moved, to where it really is.
+    // A link inside the work folder to itself: both readings agree, and it
+    // moves to where it really is.
+    symlink(f.collect.join("X/Season 02"), f.collect.join("X/Latest")).unwrap();
     let moves = plan_torrents(
         &request,
         &[
-            place("a", "e01.mkv", &f.collect.join("Alias/Season 02")),
+            place("a", "e01.mkv", &f.collect.join("X/Latest")),
             place("b", "o01.mkv", &f.collect.join("Other/Season 01")),
         ],
     )
@@ -405,6 +408,19 @@ fn torrents_are_matched_by_where_their_folders_really_are() {
     assert_eq!(moves.len(), 1, "{moves:?}");
     assert_eq!(moves[0].hash, "a");
     assert_eq!(moves[0].to, f.archive.join("X/Season 02"));
+
+    // Through a link into the work folder from outside, or out of it from
+    // inside: the text and the disk disagree, and the move is refused.
+    symlink(
+        f.collect.join("Other/Season 01"),
+        f.collect.join("X/Borrowed"),
+    )
+    .unwrap();
+    for dir in ["Alias/Season 02", "X/Borrowed"] {
+        let err =
+            plan_torrents(&request, &[place("c", "e01.mkv", &f.collect.join(dir))]).unwrap_err();
+        assert!(err.contains("링크"), "{dir}: {err}");
+    }
 
     // `..` that lands elsewhere is not this work's; one that lands in it
     // refuses the move.
@@ -434,7 +450,22 @@ fn a_torrent_transmission_still_writes_or_reports_an_error_for_refuses_the_move(
     };
     let err = plan_torrents(&request, &[place("b", "e01.mkv", &dir), unfinished]).unwrap_err();
     assert!(err.contains("`e02.mkv`"), "{err}");
-    assert!(err.contains("다 받은 뒤"), "{err}");
+    assert!(err.contains("지운 뒤 `다시 옮기기`"), "{err}");
+    // A restore says to restore again instead.
+    let back = Request {
+        from_root: f.archive.clone(),
+        from: Side::Archive,
+        to_root: f.collect.clone(),
+        to: Side::Collect,
+        name: "X".into(),
+    };
+    let stuck = TorrentPlace {
+        unfinished: true,
+        ..place("g", "e07.mkv", &f.archive.join("X/S"))
+    };
+    let err = plan_torrents(&back, &[stuck]).unwrap_err();
+    assert!(err.contains("`e07.mkv`"), "{err}");
+    assert!(err.contains("다시 `복원`해"), "{err}");
 
     let broken = TorrentPlace {
         local_error: Some("No data found!".into()),
@@ -465,11 +496,32 @@ fn a_torrent_file_the_destination_has_refuses_the_move_unless_it_is_only_there()
     let err = plan_torrents(&request, &[partial]).unwrap_err();
     assert!(err.contains("`S/e02.mkv`"), "{err}");
 
-    // A complete file found only at the destination is the torrent's own,
-    // moved by an earlier start or by hand.
+    // A complete file found only at the destination, with the torrent's size
+    // for it, is the torrent's own, moved by an earlier start or by hand.
     write(&to.join("e03.mkv"), "moved");
     let moves = plan_torrents(&request, &[place("c", "e03.mkv", &from)]).unwrap();
     assert_eq!(moves[0].to, to);
+
+    // Another size is another file that shares the name.
+    write(&to.join("e04.mkv"), "a different file");
+    let err = plan_torrents(&request, &[place("d", "e04.mkv", &from)]).unwrap_err();
+    assert!(err.contains("`S/e04.mkv`"), "{err}");
+
+    // So is anything while a file of the torrent is still at its folder.
+    let mut two = place("e", "e03.mkv", &from);
+    two.files.push(crate::transmission::TorrentFile {
+        name: "e05.mkv".into(),
+        length: 5,
+        complete: true,
+    });
+    write(&from.join("e05.mkv"), "still");
+    let err = plan_torrents(&request, &[two]).unwrap_err();
+    assert!(err.contains("`S/e03.mkv`"), "{err}");
+
+    // And only its `.part` name at the destination.
+    write(&to.join("e06.mkv.part"), "moved");
+    let err = plan_torrents(&request, &[place("f", "e06.mkv", &from)]).unwrap_err();
+    assert!(err.contains("`S/e06.mkv.part`"), "{err}");
 }
 
 /// A disk whose renames fail with `errno` for paths under `under`.

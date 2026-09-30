@@ -20,10 +20,12 @@
 //!    is renamed from one folder to the other with `RENAME_NOREPLACE` and
 //!    removed ([`probe_renames`]). A refused move has moved nothing.
 //! 2. **Transmission first.** The torrents whose data is in the work folder
-//!    are found by where their folders really are ([`plan_torrents`]); a
-//!    torrent still downloading or verifying, one with a local error, one
-//!    whose folder is written with `..`, or one whose files the destination
-//!    has already, refuses the whole move before any torrent moves. Each is
+//!    are found by their folders' text and by where the folders really are
+//!    ([`plan_torrents`]); a torrent not finished (downloading, verifying, or
+//!    a magnet without its metadata yet), one with a local error, one whose
+//!    folder is written with `..` or whose two readings disagree, or one with
+//!    a file the destination already has that is not provably its own data,
+//!    refuses the whole move before any torrent moves. Each is
 //!    then moved with `torrent-set-location` (files moved), and the move waits
 //!    until Transmission reports the new folder for each ([`move_torrents`]).
 //!    Transmission 4 moves after it has answered and shows a failed move only
@@ -69,7 +71,7 @@ use transmission_rpc::TransClient;
 
 use crate::{
     folders::has_parent_dir,
-    transmission::{self, Redactor, TorrentPlace},
+    transmission::{self, Redactor, TorrentFile, TorrentPlace},
 };
 
 /// How the move waits for Transmission to report the new folders.
@@ -428,7 +430,10 @@ fn probe_renames(request: &Request, disk: &dyn Disk) -> Result<(), String> {
             )
         })?;
     let renamed = disk.rename_noreplace(&here, &there);
-    let _ = fs::remove_file(if renamed.is_ok() { &there } else { &here });
+    let probe = if renamed.is_ok() { &there } else { &here };
+    if let Err(e) = fs::remove_file(probe) {
+        eprintln!("Could not remove the rename probe {}: {e}", probe.display());
+    }
     match renamed {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == io::ErrorKind::CrossesDevices => Err(different_filesystems()),
@@ -604,23 +609,25 @@ pub fn new_location(
     (folder == root && named_like_it).then(|| request.to_root.clone())
 }
 
-/// Which of the torrents `places` are in the work folder of `request`, judged
-/// by where their folders really are (links followed, as Transmission's own
-/// file access follows them), and whether all of them can move now. Refuses
-/// the whole move, before any torrent moves, when one of them:
+/// Which of the torrents `places` are in the work folder of `request`, and
+/// whether all of them can move now. A torrent's folder is judged both by its
+/// text and by where it really is (links followed, as Transmission's own file
+/// access follows them). Refuses the whole move, before any torrent moves,
+/// when one of them:
 ///
 /// - has a folder written with `..` that lands in the work folder (by text or
 ///   by the disk): Transmission's and the worker's readings of it could part;
-/// - is still downloading or verifying: Transmission would keep writing it,
-///   possibly from its incomplete folder, and finishes a file by renaming it
-///   over whatever has its name;
+/// - has a folder whose text and real place disagree on being in the work
+///   folder (a link into it from outside, or out of it from inside): one
+///   reading would leave its data behind or take another work's along;
+/// - is not finished ([`TorrentPlace::unfinished`]): Transmission would keep
+///   writing it, possibly from its incomplete folder, and finishes a file by
+///   renaming it over whatever has its name;
 /// - reports a local error;
-/// - has a file whose name (or its `.part` name) is at the new folder while
-///   the file is still at the old one or not complete: Transmission's move
-///   replaces what it meets.
-///
-/// A complete torrent's file found only at the new folder is its own data,
-/// moved there by an earlier start or by hand, and is no conflict.
+/// - has a file (or its `.part` name) at the new folder, unless the torrent's
+///   data is all there already (see [`own_data_at_destination`]):
+///   Transmission's move replaces what it meets, and a torrent pointed at a
+///   file not its own later writes its pieces into it.
 pub fn plan_torrents(
     request: &Request,
     places: &[TorrentPlace],
@@ -632,14 +639,14 @@ pub fn plan_torrents(
     let mut moves = Vec::new();
     for place in places {
         let folder = Path::new(&place.download_dir);
+        let by_text = new_location(
+            &super::lexical(folder),
+            &place.name,
+            &work_text,
+            &root_text,
+            request,
+        );
         if has_parent_dir(folder) {
-            let by_text = new_location(
-                &super::lexical(folder),
-                &place.name,
-                &work_text,
-                &root_text,
-                request,
-            );
             let by_disk = fs::canonicalize(folder)
                 .ok()
                 .and_then(|real| new_location(&real, &place.name, &work_real, &root_real, request));
@@ -652,9 +659,23 @@ pub fn plan_torrents(
             }
             continue;
         }
-        let real = resolve(folder);
-        if let Some(to) = new_location(&real, &place.name, &work_real, &root_real, request) {
-            moves.push((place, to));
+        let by_disk = new_location(
+            &resolve(folder),
+            &place.name,
+            &work_real,
+            &root_real,
+            request,
+        );
+        match (by_text, by_disk) {
+            (None, None) => {}
+            (Some(_), Some(to)) => moves.push((place, to)),
+            _ => {
+                return Err(format!(
+                    "Transmission 토렌트 `{}`의 받는 폴더 {}가 링크를 거쳐 작품 폴더 안팎을 오가서 아무것도 옮기지 않았어요. Transmission에서 그 토렌트의 위치를 링크 없는 실제 폴더로 바로잡은 뒤 다시 옮겨 주세요.",
+                    place.name,
+                    quoted(folder)
+                ));
+            }
         }
     }
 
@@ -664,8 +685,12 @@ pub fn plan_torrents(
         .map(|(place, _)| PathBuf::from(&place.name))
         .collect();
     if !unfinished.is_empty() {
+        let again = match request.to {
+            Side::Archive => "`다시 옮기기`를 눌러",
+            Side::Collect => "다시 `복원`해",
+        };
         return Err(format!(
-            "Transmission이 아직 받거나 확인하는 토렌트가 있어서 아무것도 옮기지 않았어요: {}. 다 받은 뒤 다시 옮겨 주세요.",
+            "Transmission에 아직 다 받지 않은 토렌트가 있어서 아무것도 옮기지 않았어요: {}. Transmission에서 그 토렌트를 다 받거나, 더 받지 않을 거면 지운 뒤 {again} 주세요.",
             listed(&unfinished)
         ));
     }
@@ -683,25 +708,20 @@ pub fn plan_torrents(
     let mut conflicts = Vec::new();
     for (place, to) in &moves {
         let from = Path::new(&place.download_dir);
-        for file in &place.files {
-            let names = [file.name.clone(), format!("{}.part", file.name)];
-            let present = |dir: &Path| {
-                names
-                    .iter()
-                    .map(|name| dir.join(name))
-                    .find(|path| fs::symlink_metadata(path).is_ok())
-            };
-            if let Some(there) = present(to) {
-                if present(from).is_some() || !file.complete {
-                    conflicts.push(
-                        there
-                            .strip_prefix(&destination)
-                            .map(Path::to_path_buf)
-                            .unwrap_or(there),
-                    );
-                }
-            }
+        let at_destination: Vec<(&TorrentFile, PathBuf)> = place
+            .files
+            .iter()
+            .filter_map(|file| Some((file, present(to, &file.name)?)))
+            .collect();
+        if at_destination.is_empty() || own_data_at_destination(place, from, &at_destination) {
+            continue;
         }
+        conflicts.extend(at_destination.into_iter().map(|(_, there)| {
+            there
+                .strip_prefix(&destination)
+                .map(Path::to_path_buf)
+                .unwrap_or(there)
+        }));
     }
     if !conflicts.is_empty() {
         return Err(format!(
@@ -721,6 +741,40 @@ pub fn plan_torrents(
             to,
         })
         .collect())
+}
+
+/// The file `name` in `dir`, or its `.part` name, when either is there.
+fn present(dir: &Path, name: &str) -> Option<PathBuf> {
+    [name.to_owned(), format!("{name}.part")]
+        .into_iter()
+        .map(|name| dir.join(name))
+        .find(|path| fs::symlink_metadata(path).is_ok())
+}
+
+/// Whether the files of `place` found at the destination (`at_destination`)
+/// are the torrent's own data, moved there by an earlier start or by hand, so
+/// that pointing the torrent there overwrites nothing. Only when none of its
+/// files is left in its folder `from` (by name or `.part` name) and each one
+/// at the destination is a plain file under the torrent's own name, complete,
+/// with the torrent's size for it. Anything else may be another file that
+/// only shares the name.
+fn own_data_at_destination(
+    place: &TorrentPlace,
+    from: &Path,
+    at_destination: &[(&TorrentFile, PathBuf)],
+) -> bool {
+    let none_left = place
+        .files
+        .iter()
+        .all(|file| present(from, &file.name).is_none());
+    none_left
+        && at_destination.iter().all(|(file, there)| {
+            file.complete
+                && there.file_name() == Path::new(&file.name).file_name()
+                && fs::symlink_metadata(there).is_ok_and(|meta| {
+                    meta.is_file() && i64::try_from(meta.len()).is_ok_and(|len| len == file.length)
+                })
+        })
 }
 
 /// Step 2: asks Transmission to move `moves` and waits until it reports each
