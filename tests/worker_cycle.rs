@@ -807,6 +807,44 @@ async fn a_hung_torrent_add_times_out_and_the_lock_is_released() {
 }
 
 #[tokio::test]
+async fn an_add_that_times_out_after_transmission_took_it_is_not_removed() {
+    let h = Harness::new().await;
+    channel_a(&h).await;
+    // A bot torrent that has left the feed: the plain rule would remove it.
+    h.tr.preload(FakeTorrent::new("stale0000", "Gone - 01.mkv").bot());
+    let worker = h
+        .worker()
+        .with_transmission_timeout(std::time::Duration::from_millis(300));
+    // Transmission adds the torrents but answers only after the client gave up.
+    let _late = h.tr.hold_answer("torrent-add");
+
+    let report = tokio::time::timeout(std::time::Duration::from_secs(20), run(&worker))
+        .await
+        .expect("the cycle ended although Transmission never answered");
+
+    assert_eq!(report.add_failed, 3);
+    assert_eq!(report.adds_unconfirmed, 3);
+    assert!(report.removed.is_empty(), "{:?}", report.removed);
+    assert!(h.tr.calls_of("torrent-remove").is_empty());
+    // What Transmission took is still there, and so is the older torrent.
+    assert_eq!(h.tr.torrents().len(), 4);
+}
+
+#[tokio::test]
+async fn a_refused_add_still_lets_departed_torrents_go() {
+    let h = Harness::new().await;
+    channel_a(&h).await;
+    h.tr.preload(FakeTorrent::new("stale0000", "Gone - 01.mkv").bot());
+    h.tr.reject_adds(Some("invalid or corrupt torrent file"));
+
+    let report = run(&h.worker()).await;
+
+    assert_eq!(report.add_failed, 3);
+    assert_eq!(report.adds_unconfirmed, 0);
+    assert_eq!(report.removed.len(), 1);
+}
+
+#[tokio::test]
 async fn a_hung_session_set_delays_the_cycle_by_the_timeout_only() {
     let h = Harness::new().await;
     channel_a(&h).await;

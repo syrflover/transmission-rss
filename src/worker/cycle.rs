@@ -84,6 +84,10 @@ pub struct CycleReport {
     /// Items whose task panicked. Their torrents may or may not be in
     /// Transmission, so the cycle removes no departed torrents.
     pub job_panics: usize,
+    /// Failed adds whose request may still have reached Transmission (the
+    /// connection failed or timed out rather than Transmission refusing).
+    /// Like a panic, the cycle then removes no departed torrents.
+    pub adds_unconfirmed: usize,
     /// The cycle stopped early because the worker is shutting down. What was
     /// done is recorded; the rest waits for the next cycle.
     pub interrupted: bool,
@@ -106,11 +110,12 @@ struct Job {
 /// What happened to a [`Job`].
 enum JobOutcome {
     /// Transmission holds the torrent (added now or already there).
-    Held {
-        hash: String,
-        kind: AddKind,
-    },
-    Failed,
+    Held { hash: String, kind: AddKind },
+    /// Transmission does not hold the torrent as far as the worker knows.
+    /// `unconfirmed` is set when the request failed without an answer (a
+    /// connection error or timeout): Transmission may have added the torrent
+    /// all the same, under a hash the worker never learned.
+    Failed { unconfirmed: bool },
     /// Shutdown began before the item was started; nothing was done or recorded.
     NotStarted,
 }
@@ -270,8 +275,13 @@ pub async fn run_cycle(
     }
 
     // Add the selected items.
-    let Added { kept, panicked } = add_jobs(ctx, jobs, at, &redactor, cancel, &mut report).await;
+    let Added {
+        kept,
+        panicked,
+        unconfirmed,
+    } = add_jobs(ctx, jobs, at, &redactor, cancel, &mut report).await;
     report.job_panics = panicked;
+    report.adds_unconfirmed = unconfirmed;
 
     if cancel.is_cancelled() {
         report.interrupted = true;
@@ -294,10 +304,16 @@ pub async fn run_cycle(
     // know that torrent's hash, so it would look like a departed one. Recording
     // the hashes of accepted torrents as they come would not cover a failure
     // before the hash is known, so the whole removal waits for the next cycle,
-    // which meets the torrent again and keeps it.
+    // which meets the torrent again and keeps it. An add that timed out or lost
+    // its connection is the same case: Transmission may have finished it.
     if panicked > 0 {
         println!(
             "{panicked} item(s) ended with an internal error; \
+             leaving Transmission's torrents alone this cycle"
+        );
+    } else if unconfirmed > 0 {
+        println!(
+            "{unconfirmed} add(s) got no answer from Transmission; \
              leaving Transmission's torrents alone this cycle"
         );
     } else if report.channels_read > 0 {
@@ -344,6 +360,8 @@ struct Added {
     kept: HashSet<String>,
     /// Tasks that ended in a panic instead of an outcome.
     panicked: usize,
+    /// Failed adds that got no answer from Transmission.
+    unconfirmed: usize,
 }
 
 /// What is needed to record a task's item as failed when the task panics.
@@ -376,6 +394,7 @@ async fn add_jobs(
     let mut added = Added {
         kept: HashSet::new(),
         panicked: 0,
+        unconfirmed: 0,
     };
 
     loop {
@@ -425,7 +444,7 @@ async fn add_jobs(
                         fallback.channel_label
                     );
                 }
-                (JobOutcome::Failed, false)
+                (JobOutcome::Failed { unconfirmed: false }, false)
             }
         };
 
@@ -438,7 +457,10 @@ async fn add_jobs(
                 }
                 added.kept.insert(hash);
             }
-            JobOutcome::Failed => report.add_failed += 1,
+            JobOutcome::Failed { unconfirmed } => {
+                report.add_failed += 1;
+                added.unconfirmed += usize::from(unconfirmed);
+            }
             JobOutcome::NotStarted => {}
         }
     }
@@ -507,7 +529,9 @@ async fn process_job(
                     reason: Some(reason),
                     ..job.observation
                 },
-                JobOutcome::Failed,
+                JobOutcome::Failed {
+                    unconfirmed: matches!(err, AddError::Rpc(_)),
+                },
             )
         }
     };

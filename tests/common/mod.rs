@@ -135,6 +135,9 @@ struct TrState {
     torrents: Vec<FakeTorrent>,
     calls: Vec<Call>,
     holds: HashMap<String, Arc<Gate>>,
+    /// Like `holds`, but the request is carried out first and only the answer
+    /// is held.
+    holds_answer: HashMap<String, Arc<Gate>>,
     reject_adds: Option<String>,
     /// Leave `file-count` out of `torrent-get` answers, which makes the client
     /// code that reads it panic.
@@ -257,6 +260,19 @@ impl FakeTransmission {
         gate
     }
 
+    /// Carries out every request of `method` but holds its answer until the
+    /// returned gate is released, as a Transmission that is slow to reply to a
+    /// change it has already made.
+    pub fn hold_answer(&self, method: &str) -> Arc<Gate> {
+        let gate = Gate::new();
+        self.state
+            .lock()
+            .unwrap()
+            .holds_answer
+            .insert(method.to_owned(), gate.clone());
+        gate
+    }
+
     /// What the server was asked to change, in a form that does not depend on
     /// request order: one sorted line per `session-set`, `torrent-add`,
     /// `torrent-rename-path`, `torrent-remove` and `torrent-stop`.
@@ -310,6 +326,24 @@ fn sorted_ids(ids: &Value) -> String {
 }
 
 async fn tr_rpc(
+    State(state): State<Arc<Mutex<TrState>>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let method = serde_json::from_slice::<Value>(&body)
+        .ok()
+        .and_then(|r| r["method"].as_str().map(str::to_owned));
+    let response = tr_rpc_answer(State(state.clone()), headers, body).await;
+    if response.status() != StatusCode::CONFLICT {
+        let gate = method.and_then(|m| state.lock().unwrap().holds_answer.get(&m).cloned());
+        if let Some(gate) = gate {
+            gate.pass().await;
+        }
+    }
+    response
+}
+
+async fn tr_rpc_answer(
     State(state): State<Arc<Mutex<TrState>>>,
     headers: HeaderMap,
     body: Bytes,

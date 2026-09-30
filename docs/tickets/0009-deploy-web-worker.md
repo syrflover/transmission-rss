@@ -18,7 +18,8 @@
   worker는 `TRSS_DB_PATH`·`TRANSMISSION_URL`(필수)과 기존과 같은 이름의 속도 제한·큐·다운로드 폴더 변수, 주기 `TRSS_WORKER_INTERVAL_SECS`(기본 300)를 읽어요.
   worker 배타성은 DB 파일 옆 `<DB 경로>.worker.lock`의 파일 잠금이라, DB와 같은 로컬 볼륨에 둬야 해요.
   이미지의 ENTRYPOINT는 cron이 쓰는 `transmission-rss`라서, 웹·worker 컨테이너는 `trss-web`·`trss-worker`를 명시해 실행해요. cron을 걷어낼 때 ENTRYPOINT도 다시 정해요.
-- 0001–0003을 합친 트리의 `docker build`에서 `rusqlite`의 `bundled` SQLite가 musl로 컴파일되는 것까지 확인했어요. musl 바이너리가 실제로 DB를 열고 쓰는 것은 worker가 생긴 뒤 이 티켓에서 확인해요.
+- 0001–0007을 합친 트리의 `docker build`로 만든 이미지에서 `trss-worker`를 띄워, musl 바이너리가 빈 DB를 만들고 마이그레이션을 적용하고 잠금 파일을 만든 뒤 한 주기를 돌고 SIGTERM에 0으로 끝나는 것을 확인했어요(연결할 수 없는 Transmission 주소로). 실제 Transmission과 실제 피드는 이 티켓에서 확인해요.
+- worker의 Transmission 요청 제한은 연결 5초·전체 30초예요. 실제 `.torrent` 주소 추가가 30초 안에 답하는지 관찰해요.
 - 전환 중 cron의 `transmission-rss`와 `trss-worker`를 함께 돌리면, 둘 다 자기 피드에 없는 trss 라벨 토렌트를 정리하므로 서로가 받은 토렌트를 지울 수 있어요.
   cron을 먼저 멈춘 뒤 worker를 켜거나, 두 쪽이 같은 채널 설정을 쓰는 동안만 겹치게 해요.
 - `Cargo.lock`이 `.gitignore`에 있어 이미지 빌드마다 Rust 의존성 버전이 달라질 수 있어요. 상시 실행 배포 전에 커밋해 고정할지 정해요.
