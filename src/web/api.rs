@@ -23,6 +23,7 @@ pub fn router() -> Router<AppState> {
         .merge(super::rules_api::routes())
         .merge(super::settings_api::routes())
         .merge(super::status_api::routes())
+        .merge(super::watch_folders_api::routes())
         .fallback(not_found)
 }
 

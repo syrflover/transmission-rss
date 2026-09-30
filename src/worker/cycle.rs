@@ -21,6 +21,7 @@ use crate::{
     store::{
         channels::{ChannelError, ChannelStore},
         history::{HistoryResult, HistoryStore, Millis, Observation, Recorded},
+        library::LibraryStore,
         settings::{SettingsError, SettingsStore},
         status::{ChannelReadResult, StatusStore, TransmissionCounts},
     },
@@ -44,6 +45,8 @@ pub struct CycleContext {
     /// Where the collect folder is read from.
     pub settings: SettingsStore,
     pub history: HistoryStore,
+    /// The watch folders the worker rescans (see [`crate::worker::watch`]).
+    pub library: LibraryStore,
     pub transmission_url: Url,
     /// The client for Transmission's requests; they time out
     /// (see [`crate::transmission::http_client`]).

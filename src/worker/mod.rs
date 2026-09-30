@@ -36,6 +36,11 @@
 //!    cycle every interval, one after the other. With it, the later one keeps
 //!    skipping and the period stays one cycle.
 //!
+//! # Watch folders
+//!
+//! After the RSS work of each cycle, still under the lock, the worker rescans
+//! every watch folder ([`watch`]), reading the disk without changing it.
+//!
 //! # Commands
 //!
 //! Between cycles the loop also looks, every few seconds, for commands the web
@@ -69,6 +74,7 @@ pub mod env;
 pub mod feed;
 pub mod lock;
 pub mod plan;
+pub mod watch;
 
 use std::{
     path::PathBuf,
@@ -88,6 +94,7 @@ use crate::{
         channels::ChannelStore,
         commands::{CommandError, CommandStore},
         history::{HistoryError, HistoryStore, Millis},
+        library::LibraryStore,
         settings::SettingsStore,
         Db,
     },
@@ -174,7 +181,8 @@ impl Worker {
             ctx: CycleContext {
                 channels: ChannelStore::new(db.clone()),
                 settings: SettingsStore::new(db.clone()),
-                history: HistoryStore::new(db),
+                history: HistoryStore::new(db.clone()),
+                library: LibraryStore::new(db),
                 transmission_url: env.transmission_url.clone(),
                 transmission_http: crate::transmission::http_client(
                     crate::transmission::REQUEST_TIMEOUT,
@@ -263,6 +271,12 @@ impl Worker {
         // An interrupted cycle stays unfinished in the marker.
         if !report.interrupted {
             self.ctx.history.finish_cycle((self.clock)()).await?;
+        }
+
+        // The watch folders are read after the RSS work, under the same lock,
+        // and one that cannot be read neither stops the others nor fails the tick.
+        if !report.interrupted && !cancel.is_cancelled() {
+            watch::scan_all(&self.ctx, &self.clock, cancel).await;
         }
 
         Ok(TickOutcome::Ran(report))

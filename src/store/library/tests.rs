@@ -259,8 +259,8 @@ async fn adding_the_same_path_twice_is_refused_and_removing_takes_the_works_alon
     ));
     assert_eq!(store.folders().await.unwrap().len(), 1);
 
-    assert!(store.remove_folder(&folder.id).await.unwrap());
-    assert!(!store.remove_folder(&folder.id).await.unwrap());
+    assert_eq!(store.remove_folder(&folder.id).await.unwrap(), Some(1));
+    assert_eq!(store.remove_folder(&folder.id).await.unwrap(), None);
     assert!(store.folders().await.unwrap().is_empty());
     let left: i64 = store
         .db

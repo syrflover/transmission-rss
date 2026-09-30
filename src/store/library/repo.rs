@@ -106,11 +106,16 @@ pub(super) fn add_folder(
     Ok((folder, report))
 }
 
-pub(super) fn remove_folder(conn: &mut Connection, id: &str) -> rusqlite::Result<bool> {
+pub(super) fn remove_folder(conn: &mut Connection, id: &str) -> rusqlite::Result<Option<usize>> {
     let tx = begin(conn)?;
+    let works: i64 = tx.query_row(
+        "SELECT count(*) FROM works WHERE watch_folder_id = ?1",
+        [id],
+        |row| row.get(0),
+    )?;
     let removed = tx.execute("DELETE FROM watch_folders WHERE id = ?1", [id])?;
     tx.commit()?;
-    Ok(removed > 0)
+    Ok((removed > 0).then_some(works as usize))
 }
 
 pub(super) fn record_scan(

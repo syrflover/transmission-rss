@@ -728,6 +728,28 @@ mod tests {
     }
 
     #[test]
+    fn an_unreadable_work_folder_does_not_hide_the_other_works() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        touch(dir.path(), "Good/Season 01/Good S01E01.mkv");
+        touch(dir.path(), "Locked/Season 01/Locked S01E01.mkv");
+        let locked = dir.path().join("Locked");
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+        let scan = scan(dir.path());
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+        let scan = scan.unwrap();
+        assert_eq!(scan.works.len(), 2);
+        assert_eq!(work(&scan, "Good").files.len(), 1);
+        match &scan.works[1] {
+            WorkRead::Unreadable { dir_name, reason } => {
+                assert_eq!(dir_name, "Locked");
+                assert!(reason.contains("권한"), "{reason}");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
     fn a_missing_or_file_watch_folder_is_an_error_with_a_sentence() {
         let dir = tempfile::tempdir().unwrap();
         let error = scan(&dir.path().join("nope")).unwrap_err();

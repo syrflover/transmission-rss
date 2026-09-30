@@ -33,6 +33,12 @@
 //! leaves the rule archived, with the reason. When the work folder is in the
 //! collect folder already, or in neither, the rule is just turned on.
 //!
+//! **The library follows the folder.** When a work folder has moved (or is found
+//! moved already), the work the library holds under the old place keeps its ID
+//! and belongs to the new place, or is merged into the work the destination
+//! already had ([`crate::worker::watch::follow_move`]). Nothing follows a folder
+//! moved by hand.
+//!
 //! Every step is safe to repeat, and where the folder is comes from the disk
 //! each time ([`work_folder`]), so a command cut short (the worker stopped or
 //! died) is claimed again by the next worker and finishes what is left. So is
@@ -58,7 +64,7 @@ use crate::{
         commands::{Command, CommandState, Outcome, MAX_ATTEMPTS},
     },
     transmission,
-    worker::CycleContext,
+    worker::{watch, CycleContext},
 };
 
 use work_folder::{move_work_folder, Disk, Hold, MoveError, Moved, RealDisk, Request, Side};
@@ -374,6 +380,23 @@ async fn move_folder(
         start.cancel,
     )
     .await;
+    if matches!(moved, Ok(Moved::Moved | Moved::AlreadyThere)) {
+        // The work the library knows under the old place is this one: keep its
+        // ID (see `watch::follow_move`). A failure leaves the command to run
+        // again, which finds the folder moved already and follows it then.
+        let followed = watch::follow_move(
+            ctx,
+            request.from_root.clone(),
+            request.to_root.clone(),
+            request.name.clone(),
+        )
+        .await
+        .map_err(Retry::store)?;
+        println!(
+            "Library: work {:?} after the move: {followed:?}",
+            request.name
+        );
+    }
     match moved {
         Ok(Moved::Moved) => Ok(Ok(done(MOVED, None))),
         Ok(Moved::AlreadyThere) => Ok(Ok(done(

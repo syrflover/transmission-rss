@@ -27,6 +27,7 @@ pub mod rules_api;
 pub mod settings_api;
 pub mod state;
 pub mod status_api;
+pub mod watch_folders_api;
 
 pub use error::ApiError;
 pub use state::AppState;

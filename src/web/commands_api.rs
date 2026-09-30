@@ -11,6 +11,7 @@
 //! | -------------- | ------------ | -------------------------------------------------------------- |
 //! | `receive_once` | `다시 받기`  | `{ "item_id": <history item> }`                                |
 //! | `rule_archive` | `보관`·`복원` | `{ "rule_id": <rule>, "direction": "archive" \| "restore" }` |
+//! | `watch_rescan` | `다시 확인`  | `{ "folder_id": <watch folder> }`                              |
 //!
 //! A rule is archived and restored only through `rule_archive`: the worker
 //! turns the rule off before its folder moves and on after it moved back.
@@ -50,7 +51,7 @@ use super::{ApiError, AppState};
 use crate::{
     store::channels::RuleState,
     store::commands::{Accepted, Command, CommandState, NewCommand},
-    worker::commands::{receive_once, rule_archive},
+    worker::commands::{receive_once, rule_archive, watch_rescan},
 };
 
 #[cfg(test)]
@@ -124,6 +125,8 @@ const FOLDER_REFUSED: &str = "`다시 받기`는 그 항목을 고른 규칙의 
 const BUSY: &str = "이 항목은 이미 추가하는 중이에요. 그 결과가 나올 때까지 기다려 주세요.";
 const RULE_BUSY: &str =
     "이 규칙은 이미 보관하거나 복원하는 중이에요. 그 결과가 나올 때까지 기다려 주세요.";
+const FOLDER_BUSY: &str =
+    "이 폴더는 이미 다시 확인하는 중이에요. 그 결과가 나올 때까지 기다려 주세요.";
 
 /// The shortest and longest command ID.
 const ID_LEN: std::ops::RangeInclusive<usize> = 8..=64;
@@ -135,7 +138,7 @@ fn valid_id(id: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
-fn now_millis() -> i64 {
+pub(super) fn now_millis() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_millis() as i64)
@@ -146,6 +149,7 @@ fn now_millis() -> i64 {
 enum Request {
     ReceiveOnce(receive_once::ReceiveOnce),
     RuleArchive(rule_archive::RuleArchive),
+    WatchRescan(watch_rescan::WatchRescan),
 }
 
 impl Request {
@@ -161,6 +165,11 @@ impl Request {
                     serde_json::from_value(payload).map_err(|_| ApiError::invalid(BAD_BODY))?;
                 Ok(Request::RuleArchive(payload))
             }
+            watch_rescan::KIND => {
+                let payload: watch_rescan::WatchRescan =
+                    serde_json::from_value(payload).map_err(|_| ApiError::invalid(BAD_BODY))?;
+                Ok(Request::WatchRescan(payload))
+            }
             _ => Err(ApiError::invalid("모르는 종류의 명령이에요.")),
         }
     }
@@ -169,6 +178,7 @@ impl Request {
         match self {
             Request::ReceiveOnce(_) => receive_once::KIND,
             Request::RuleArchive(_) => rule_archive::KIND,
+            Request::WatchRescan(_) => watch_rescan::KIND,
         }
     }
 
@@ -177,6 +187,7 @@ impl Request {
         match self {
             Request::ReceiveOnce(_) => BUSY,
             Request::RuleArchive(_) => RULE_BUSY,
+            Request::WatchRescan(_) => FOLDER_BUSY,
         }
     }
 
@@ -196,6 +207,10 @@ impl Request {
                 serde_json::from_str::<rule_archive::RuleArchive>(&stored.payload)
                     .is_ok_and(|stored| stored == *payload)
             }
+            Request::WatchRescan(payload) => {
+                serde_json::from_str::<watch_rescan::WatchRescan>(&stored.payload)
+                    .is_ok_and(|stored| stored == *payload)
+            }
         }
     }
 
@@ -207,7 +222,7 @@ impl Request {
             Request::ReceiveOnce(payload) if payload.names_a_folder() => {
                 Err(ApiError::invalid(FOLDER_REFUSED))
             }
-            Request::ReceiveOnce(_) | Request::RuleArchive(_) => Ok(()),
+            Request::ReceiveOnce(_) | Request::RuleArchive(_) | Request::WatchRescan(_) => Ok(()),
         }
     }
 
@@ -225,6 +240,12 @@ impl Request {
                 payload: payload.canonical(),
                 subject: Some(payload.subject()),
             },
+            Request::WatchRescan(payload) => NewCommand {
+                id,
+                kind: watch_rescan::KIND.to_owned(),
+                payload: payload.canonical(),
+                subject: Some(payload.subject()),
+            },
         }
     }
 
@@ -233,8 +254,25 @@ impl Request {
         match self {
             Request::ReceiveOnce(payload) => check_receive_once(payload, state).await,
             Request::RuleArchive(payload) => check_rule_archive(payload, state).await,
+            Request::WatchRescan(payload) => check_watch_rescan(payload, state).await,
         }
     }
+}
+
+/// The watch folder must be registered.
+async fn check_watch_rescan(
+    payload: &watch_rescan::WatchRescan,
+    state: &AppState,
+) -> Result<(), ApiError> {
+    state
+        .library
+        .folder(&payload.folder_id)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .ok_or_else(|| {
+            ApiError::not_found("감시 폴더를 찾지 못했어요. 등록이 해제됐을 수 있어요.")
+        })?;
+    Ok(())
 }
 
 /// The rule must exist, and only an archived rule is restored. Archiving an

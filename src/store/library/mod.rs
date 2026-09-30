@@ -215,9 +215,9 @@ impl LibraryStore {
             .await
     }
 
-    /// Removes the folder and its works from the library (no file is touched).
-    /// `false` when there is no such folder.
-    pub async fn remove_folder(&self, id: &str) -> Result<bool, LibraryError> {
+    /// Removes the folder and its works from the library (no file is touched)
+    /// and returns how many works went. `None` when there is no such folder.
+    pub async fn remove_folder(&self, id: &str) -> Result<Option<usize>, LibraryError> {
         let id = id.to_owned();
         self.db.run(move |c| Ok(repo::remove_folder(c, &id)?)).await
     }

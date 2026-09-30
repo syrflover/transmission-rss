@@ -49,11 +49,15 @@
 //! shutdown that aborts the command's task releases the lock only once they
 //! have returned.
 //!
+//! A `watch_rescan` command (`다시 확인` of a watch folder) reads the folder
+//! again, like the cycles do, and only reads ([`watch_rescan`]).
+//!
 //! Each command kind has its own module below.
 
 pub mod link;
 pub mod receive_once;
 pub mod rule_archive;
+pub mod watch_rescan;
 
 use std::{sync::Arc, time::Duration};
 
@@ -171,6 +175,18 @@ impl Worker {
                 let lock = lock.clone();
                 task.spawn(async move {
                     match rule_archive::run(&ctx, &owned, lock, &cancel).await {
+                        Ok(finished) => Ran::Ended {
+                            state: finished.state,
+                            outcome: finished.outcome,
+                            add_unconfirmed: false,
+                        },
+                        Err(err) => Ran::NotNow(err.to_string()),
+                    }
+                });
+            }
+            watch_rescan::KIND => {
+                task.spawn(async move {
+                    match watch_rescan::run(&ctx, &owned, &clock).await {
                         Ok(finished) => Ran::Ended {
                             state: finished.state,
                             outcome: finished.outcome,
