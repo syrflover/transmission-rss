@@ -6,7 +6,9 @@
 //! `transmission-rss` binary and `trss-worker` behave the same way. Where the
 //! binary printed an error, these functions print it through a [`Redactor`]
 //! (the binary passes [`Redactor::none`]), so the worker never logs a
-//! secret that an HTTP error quotes.
+//! secret that an HTTP error quotes. Renaming takes a [`RenameMode`]: the
+//! binary renames every torrent as one it has just added (the legacy
+//! behavior), while the worker keeps that for its own new adds only.
 
 mod redact;
 
@@ -22,7 +24,7 @@ use transmission_rpc::{
     },
     TransClient,
 };
-use trname::trname;
+use trname::trname_raw;
 
 /// How long connecting to Transmission may take.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -266,25 +268,60 @@ pub async fn add_item(
     }
 }
 
+/// Which torrent [`rename_torrent`] is renaming, which decides how far it may go.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenameMode {
+    /// A torrent the caller has just added: the legacy behavior. The single
+    /// file is renamed, and the torrent is removed together with its data when
+    /// its name cannot be derived.
+    Added,
+    /// A torrent Transmission already had. Its file is renamed only while its
+    /// name is not in the `trname` form yet (a rename that was cut short
+    /// earlier); a name in that form is left alone, because applying the
+    /// episode offset again would change the episode. Nothing is ever removed.
+    Existing,
+}
+
+/// What one [`rename_torrent`] call came to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Renamed {
+    /// The file has the new name now.
+    To(String),
+    /// Nothing more to do: the torrent was removed or is gone, or (in
+    /// [`RenameMode::Existing`]) its name is to be left as it is.
+    Finished,
+    /// Not now: the metadata or the rename is not there yet; try again later.
+    NotYet,
+}
+
 /// Renames the torrent's single file to the `trname` name for `download_dir`
-/// (`.../<title>/Season NN`), or removes the torrent and its data when the
-/// name cannot be derived. Torrents with more than one file are left alone.
-/// Returns the new name when the rename succeeded.
+/// (`.../<title>/Season NN`). What happens when the name cannot be derived, or
+/// is in that form already, depends on `mode`. Torrents with more than one
+/// file are left alone.
 pub async fn rename_torrent(
     transmission: &mut TransClient,
     hash: &str,
     download_dir: &Path,
     starts_episode_at: isize,
-) -> transmission_rpc::types::Result<Option<String>> {
+    mode: RenameMode,
+) -> transmission_rpc::types::Result<Renamed> {
     let Some(torrent) = get_torrent(transmission, hash).await? else {
-        return Ok(None);
+        return Ok(match mode {
+            RenameMode::Added => Renamed::NotYet,
+            RenameMode::Existing => Renamed::Finished,
+        });
     };
 
-    if torrent.file_count.unwrap() == 1 {
+    let file_count = torrent.file_count.unwrap();
+    if file_count == 1 {
         let old_file_name = torrent.name.clone().unwrap();
 
-        match trname(download_dir, &old_file_name, starts_episode_at) {
-            Some(new_file_name) => {
+        let derived = trname_raw(download_dir, &old_file_name, starts_episode_at);
+        match (mode, derived) {
+            (RenameMode::Existing, Some((_, file, _))) if file.already_formatted => {
+                return Ok(Renamed::Finished);
+            }
+            (_, Some((_, _, new_file_name))) => {
                 let res = transmission
                     .torrent_rename_path(
                         vec![Id::Hash(hash.to_owned())],
@@ -294,18 +331,21 @@ pub async fn rename_torrent(
                     .await?;
 
                 if res.result == "success" {
-                    return Ok(Some(new_file_name));
+                    return Ok(Renamed::To(new_file_name));
                 }
             }
-            None => {
+            (RenameMode::Added, None) => {
                 let _res = transmission
                     .torrent_remove(vec![Id::Hash(hash.to_owned())], true)
                     .await?;
             }
+            (RenameMode::Existing, None) => return Ok(Renamed::Finished),
         }
+    } else if file_count > 1 && mode == RenameMode::Existing {
+        return Ok(Renamed::Finished);
     }
 
-    Ok(None)
+    Ok(Renamed::NotYet)
 }
 
 /// How persistently a freshly added torrent is renamed: Transmission needs a
@@ -331,11 +371,13 @@ impl Default for RenamePolicy {
 /// Calls [`rename_torrent`] until it succeeds or the attempts run out, printing
 /// each error. Stops early, without a further attempt, once `cancel` fires;
 /// the next collection run tries again because it meets the torrent again.
+#[allow(clippy::too_many_arguments)]
 pub async fn rename_with_retries(
     transmission: &mut TransClient,
     hash: &str,
     save_path: &Path,
     episode: isize,
+    mode: RenameMode,
     policy: RenamePolicy,
     redactor: &Redactor,
     cancel: &CancellationToken,
@@ -346,12 +388,14 @@ pub async fn rename_with_retries(
             _ = cancel.cancelled() => break,
         }
 
-        let res = rename_torrent(transmission, hash, save_path, episode)
+        let res = rename_torrent(transmission, hash, save_path, episode, mode)
             .await
             .inspect_err(|err| println!("{}", redactor.apply(&err.to_string())));
 
-        if let Ok(Some(_name)) = res {
-            break;
+        match res {
+            Ok(Renamed::To(_)) => break,
+            Ok(Renamed::Finished) if mode == RenameMode::Existing => break,
+            _ => {}
         }
     }
 }

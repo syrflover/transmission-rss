@@ -252,6 +252,51 @@ async fn processing_the_same_feed_twice_adds_no_records_and_no_torrents() {
 }
 
 #[tokio::test]
+async fn a_torrent_transmission_already_had_is_never_removed_by_the_renaming() {
+    let h = Harness::new().await;
+    channel_a(&h).await;
+    // Transmission holds the torrent of a selected item already, under a name
+    // trname cannot derive a new one from. The legacy renaming removed such a
+    // torrent together with its data; it was not added by this cycle.
+    h.tr.preload(FakeTorrent::new(&hash_a(1), "Some Special Collection.mkv").bot());
+
+    let report = run(&h.worker()).await;
+
+    assert_eq!(report.duplicates, 1);
+    assert!(h.tr.calls_of("torrent-remove").is_empty());
+    assert!(h
+        .tr
+        .torrents()
+        .iter()
+        .any(|t| t.hash == hash_a(1) && t.name == "Some Special Collection.mkv"));
+}
+
+#[tokio::test]
+async fn a_torrent_a_rule_received_and_named_is_not_renamed_again() {
+    let h = Harness::new().await;
+    channel_a(&h).await;
+    let worker = h.worker();
+    run(&worker).await;
+    let slime = |h: &Harness| {
+        h.tr.torrents()
+            .into_iter()
+            .find(|t| t.hash == hash_a(4))
+            .unwrap()
+            .name
+    };
+    assert_eq!(slime(&h), "Slime S04E38.mkv");
+    h.tr.clear_calls();
+
+    // Met again as a duplicate. Its rule's episode offset (-24) must not be
+    // applied a second time to the name it already has.
+    h.advance(300_000);
+    run(&worker).await;
+
+    assert_eq!(slime(&h), "Slime S04E38.mkv");
+    assert!(h.tr.calls_of("torrent-rename-path").is_empty());
+}
+
+#[tokio::test]
 async fn a_finished_bot_torrent_is_stopped_when_it_is_met_again() {
     let h = Harness::new().await;
     channel_a(&h).await;

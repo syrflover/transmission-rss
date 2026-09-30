@@ -24,7 +24,7 @@ use crate::{
     },
     transmission::{
         self, add_item, remove_stale, rename_with_retries, AddError, AddKind, Redactor,
-        RemovedTorrent, RenamePolicy, SessionConfig,
+        RemovedTorrent, RenameMode, RenamePolicy, SessionConfig,
     },
 };
 
@@ -514,8 +514,9 @@ async fn apply_session(ctx: &CycleContext, redactor: &Redactor) {
     }
 }
 
-/// Adds one item, records the result, then renames the torrent. The second
-/// value tells whether the item had no record before.
+/// Adds one item, records the result, then renames the torrent (see
+/// [`rename_mode`]). The second value tells whether the item had no record
+/// before.
 async fn process_job(
     ctx: CycleContext,
     job: Job,
@@ -576,19 +577,46 @@ async fn process_job(
     };
 
     if let Ok(torrent) = &added {
-        rename_with_retries(
-            &mut transmission,
-            &torrent.hash,
-            &job.save_path,
-            job.episode,
-            ctx.rename,
-            &redactor,
-            &cancel,
-        )
-        .await;
+        if let Some(mode) = rename_mode(&ctx, torrent.kind, &torrent.hash).await {
+            rename_with_retries(
+                &mut transmission,
+                &torrent.hash,
+                &job.save_path,
+                job.episode,
+                mode,
+                ctx.rename,
+                &redactor,
+                &cancel,
+            )
+            .await;
+        }
     }
 
     (outcome, was_new)
+}
+
+/// How the rule path may rename a torrent Transmission holds for an item,
+/// or `None` to leave it alone.
+///
+/// - A torrent this cycle has just added gets the legacy treatment, including
+///   removal with its data when `trname` has no name for it.
+/// - A torrent that was there already is never removed, and is renamed only
+///   while its name is not in the `trname` form ([`RenameMode::Existing`]),
+///   which finishes a rename an earlier run did not get to.
+/// - A torrent that history records as received by hand is not touched at
+///   all: a person chose its folder, and the rule's folder may say otherwise.
+async fn rename_mode(ctx: &CycleContext, kind: AddKind, hash: &str) -> Option<RenameMode> {
+    match kind {
+        AddKind::Added => Some(RenameMode::Added),
+        AddKind::Duplicate => match ctx.history.received_by_hand(hash).await {
+            Ok(false) => Some(RenameMode::Existing),
+            Ok(true) => None,
+            Err(err) => {
+                eprintln!("Cannot tell whether torrent {hash} was received by hand ({err}); leaving its name alone");
+                None
+            }
+        },
+    }
 }
 
 fn failure_reason(err: &AddError, redactor: &Redactor) -> String {

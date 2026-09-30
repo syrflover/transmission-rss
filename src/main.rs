@@ -7,7 +7,7 @@ use transmission_rss::{
     config::{ChannelConfig, Config},
     rss::legacy::{collect_items, SelectedItem},
     transmission::{
-        add_item, remove_stale, rename_with_retries, AddError, Redactor, RenamePolicy,
+        add_item, remove_stale, rename_with_retries, AddError, Redactor, RenameMode, RenamePolicy,
         SessionConfig,
     },
 };
@@ -240,6 +240,7 @@ async fn run() {
                     &hash,
                     &save_path,
                     episode,
+                    RenameMode::Added,
                     RenamePolicy::default(),
                     redactor,
                     cancel,

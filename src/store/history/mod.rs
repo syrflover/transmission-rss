@@ -162,6 +162,14 @@ impl HistoryStore {
             .await
     }
 
+    /// Whether some item records the torrent `hash` as received by hand: a
+    /// `received` item without a rule (see [`HistoryStore::record_outcome`]).
+    /// The rule path leaves such a torrent's name and data alone.
+    pub async fn received_by_hand(&self, hash: &str) -> Result<bool, HistoryError> {
+        let hash = hash.to_owned();
+        self.db.run(move |c| repo::received_by_hand(c, &hash)).await
+    }
+
     /// The changes of an item's result, oldest first.
     pub async fn changes(&self, item_id: i64) -> Result<Vec<HistoryChange>, HistoryError> {
         self.db.run(move |c| repo::changes(c, item_id)).await

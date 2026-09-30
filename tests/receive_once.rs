@@ -732,6 +732,66 @@ async fn a_torrent_transmission_already_had_is_kept_too() {
     assert_eq!(s.h.tr.torrents().len(), 1);
 }
 
+#[tokio::test]
+async fn a_rule_that_later_selects_a_hand_received_item_neither_removes_nor_renames_it() {
+    // Received by hand into a folder where trname has no name for the file.
+    let odd = release("guid-odd", 9, "Some Special Collection.mkv", "");
+    let s = Scene::new(&[&odd], unrelated_rule()).await;
+    let item = s.item("Some Special").await;
+    s.post(CMD, &item, "Some Show").await;
+    s.run_commands().await;
+    assert_eq!(s.h.tr.torrents().len(), 1);
+
+    // A rule made from the item (항목에서 새 규칙) selects it now, into a folder
+    // trname cannot name the file for either: the legacy renaming would remove
+    // the torrent and its data.
+    s.h.channels
+        .create_rule(
+            &s.channel.channel.id,
+            rule("Some Special", "Some Special/Season 01"),
+        )
+        .await
+        .unwrap();
+    s.h.tr.clear_calls();
+    let report = s.cycle().await;
+
+    assert_eq!(report.duplicates, 1);
+    assert!(report.removed.is_empty(), "{:?}", report.removed);
+    assert!(s.h.tr.calls_of("torrent-remove").is_empty());
+    assert!(s.h.tr.calls_of("torrent-rename-path").is_empty());
+    let torrents = s.h.tr.torrents();
+    assert_eq!(torrents.len(), 1);
+    assert_eq!(torrents[0].name, "Some Special Collection.mkv");
+    assert_eq!(torrents[0].download_dir, "/media/anime/Some Show");
+    let kept = s.item("Some Special").await;
+    assert_eq!(kept.result, HistoryResult::Received);
+    assert_eq!(kept.rule_id, None, "still received by hand");
+    assert_eq!(kept.reason.as_deref(), Some(NAME_NOT_DERIVED));
+}
+
+#[tokio::test]
+async fn a_rule_with_another_folder_does_not_rename_a_hand_received_file() {
+    let liar = release("guid-liar-26", 26, LIAR, "");
+    let s = Scene::new(&[&liar], unrelated_rule()).await;
+    let item = s.item("LIAR GAME - 26").await;
+    s.post(CMD, &item, "LIAR GAME/Season 01").await;
+    s.run_commands().await;
+    assert_eq!(s.h.tr.torrents()[0].name, "LIAR GAME S01E26.mkv");
+
+    s.h.channels
+        .create_rule(
+            &s.channel.channel.id,
+            rule("LIAR GAME", "LIAR GAME/Season 02"),
+        )
+        .await
+        .unwrap();
+    s.h.tr.clear_calls();
+    s.cycle().await;
+
+    assert!(s.h.tr.calls_of("torrent-rename-path").is_empty());
+    assert_eq!(s.h.tr.torrents()[0].name, "LIAR GAME S01E26.mkv");
+}
+
 // --- restarts, two workers and the lock --------------------------------------------------------
 
 #[tokio::test]

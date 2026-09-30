@@ -322,6 +322,15 @@ pub fn note_received(conn: &Connection, item_id: i64, note: &str) -> Result<bool
     Ok(changed > 0)
 }
 
+pub fn received_by_hand(conn: &Connection, hash: &str) -> Result<bool> {
+    Ok(conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM history_items
+                        WHERE torrent_hash = ?1 AND result = 'received' AND rule_id IS NULL)",
+        [hash],
+        |row| row.get(0),
+    )?)
+}
+
 /// The torrent hashes of the items among the given `(channel_id,
 /// identity_key)` pairs that Transmission holds a torrent for (`received` or
 /// `duplicate`).

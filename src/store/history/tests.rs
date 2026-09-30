@@ -1153,3 +1153,58 @@ async fn a_note_goes_only_on_a_received_item_that_has_none() {
     assert!(history.changes(a).await.unwrap().is_empty());
     assert_eq!(history.get(b).await.unwrap().unwrap().reason, None);
 }
+
+#[tokio::test]
+async fn a_torrent_is_received_by_hand_when_a_received_item_without_a_rule_holds_it() {
+    let (_dir, _db, history) = store().await;
+    history
+        .record(
+            1_000,
+            vec![
+                received("a", "rule-1", "hash-rule"),
+                received("b", "rule-1", "hash-both"),
+                Observation {
+                    torrent_hash: Some("hash-dup".into()),
+                    ..obs("c", HistoryResult::Duplicate)
+                },
+                obs("d", HistoryResult::NoMatch),
+                obs("e", HistoryResult::NoMatch),
+                obs("f", HistoryResult::NoMatch),
+            ],
+        )
+        .await
+        .unwrap();
+    let items = all(&history).await;
+    let of = |key: &str| items.iter().find(|i| i.title.contains(key)).unwrap().id;
+    // Received by hand: `d` alone, and `e` with the same torrent as rule item `b`.
+    for (key, hash) in [("d", "hash-hand"), ("e", "hash-both")] {
+        history
+            .record_outcome(
+                of(key),
+                2_000,
+                HistoryResult::Received,
+                None,
+                Some(hash.into()),
+            )
+            .await
+            .unwrap();
+    }
+    // A command that met a torrent already there did not receive it.
+    history
+        .record_outcome(
+            of("f"),
+            2_000,
+            HistoryResult::Duplicate,
+            None,
+            Some("hash-cmd-dup".into()),
+        )
+        .await
+        .unwrap();
+
+    assert!(history.received_by_hand("hash-hand").await.unwrap());
+    assert!(history.received_by_hand("hash-both").await.unwrap());
+    assert!(!history.received_by_hand("hash-rule").await.unwrap());
+    assert!(!history.received_by_hand("hash-dup").await.unwrap());
+    assert!(!history.received_by_hand("hash-cmd-dup").await.unwrap());
+    assert!(!history.received_by_hand("hash-unknown").await.unwrap());
+}
