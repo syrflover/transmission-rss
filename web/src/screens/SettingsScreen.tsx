@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { ScreenFrame } from "./ScreenFrame";
 import { BackIcon } from "./settings/icons";
 import { CollectionPanel } from "./settings/collection/CollectionPanel";
+import { FoldersPanel } from "./settings/folders/FoldersPanel";
 import { ImportPanel } from "./settings/import/ImportPanel";
 import { useImportFlow } from "./settings/import/useImportFlow";
 import { findItem, SETTINGS_ITEMS, type SettingsItem } from "./settings/items";
@@ -43,8 +44,8 @@ function EmptyItem({ item }: { item: SettingsItem }) {
 /**
  * Settings as a list and detail. On a PC the list is on the left and the open
  * item on the right; on a phone an item is its own screen and its back button
- * returns to the list. Only the collect folder and the import are built so
- * far; the other items show why they are empty.
+ * returns to the list. Only the collect folder, the watch folders and the import
+ * are built so far; the other items show why they are empty.
  */
 export function SettingsScreen() {
   const { "*": rest } = useParams();
@@ -82,6 +83,8 @@ export function SettingsScreen() {
                 <ImportPanel flow={importFlow} />
               ) : shown.id === "collection" ? (
                 <CollectionPanel />
+              ) : shown.id === "folders" ? (
+                <FoldersPanel />
               ) : (
                 <EmptyItem item={shown} />
               )}

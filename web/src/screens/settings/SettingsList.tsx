@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { KEYS } from "@/screens/collect/cache";
 
 import { collectionSummary, loadCollection, type Collection } from "./collection/api";
+import { foldersSummary, loadWatchFolders, type WatchFolderList } from "./folders/api";
 import { ChevronIcon } from "./icons";
 import { SETTINGS_ITEMS, type SettingsItem, type SettingsItemId } from "./items";
 import { Facts, Tag } from "./parts";
@@ -29,9 +30,28 @@ function CollectionFacts() {
   );
 }
 
+/** The watch folders row: how many folders are registered, or that none is. */
+function FoldersFacts() {
+  // Shared with the panel: adding or unregistering a folder there updates this row at once.
+  const { data } = useCached<WatchFolderList>(KEYS.watchFolders, loadWatchFolders, "");
+  const summary = data ? foldersSummary(data) : null;
+  return (
+    <Facts>
+      {data === undefined ? (
+        <Tag>&nbsp;</Tag>
+      ) : summary === null ? (
+        <Tag tone="warn">등록한 폴더 없음</Tag>
+      ) : (
+        <span className="text-[13px] text-text-secondary">{summary}</span>
+      )}
+    </Facts>
+  );
+}
+
 /** What the row shows without opening the item: its current value. */
 function RowFacts({ id, importFlow }: { id: SettingsItemId; importFlow: ImportFlow }) {
   if (id === "collection") return <CollectionFacts />;
+  if (id === "folders") return <FoldersFacts />;
   if (id === "import") {
     return (
       <Facts>

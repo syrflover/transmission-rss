@@ -21,6 +21,8 @@ export const KEYS = {
   search: (tab: string) => `collect:search:${tab}`,
   /** The collect and archive folders (`/api/settings/collection`), shown by the settings list and its panel. */
   collection: "settings:collection",
+  /** The watch folders with their counts (`/api/library/watch-folders`), shown by the settings list and its panel. */
+  watchFolders: "settings:watch-folders",
   /** How the rule list is sorted. */
   ruleSort: "collect:rule-sort",
 } as const;

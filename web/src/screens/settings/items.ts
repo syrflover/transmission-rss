@@ -28,7 +28,7 @@ export interface SettingsItem {
   /**
    * Shown in the panel while the item has no content yet. Each item is filled
    * by the result goal that owns it (see docs/specs/settings.md); only the
-   * collect folder and the import are built so far.
+   * collect folder, the watch folders and the import are built so far.
    */
   empty?: string;
 }
@@ -50,13 +50,7 @@ export const SETTINGS_ITEMS: SettingsItem[] = [
     empty: "브라우저 유휴 시간과 동시 작업 수는 아직 바꿀 수 없어요. 작업 기능이 준비되면 여기에서 바꿔요.",
   },
   { id: "collection", group: "수집", title: "수집 폴더", icon: FolderIcon },
-  {
-    id: "folders",
-    group: "라이브러리",
-    title: "감시 폴더",
-    icon: FolderIcon,
-    empty: "등록한 감시 폴더가 아직 없어요. 라이브러리 기능이 준비되면 여기에서 폴더를 추가해요.",
-  },
+  { id: "folders", group: "라이브러리", title: "감시 폴더", icon: FolderIcon },
   {
     id: "storage",
     group: "라이브러리",
