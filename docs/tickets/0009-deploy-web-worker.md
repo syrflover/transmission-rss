@@ -1,6 +1,6 @@
 # 0009 웹과 worker를 배포하고 cron을 걷어내요
 
-- 상태: 대기
+- 상태: 진행 중 (로컬 준비 끝, 릴리스·서버 전환 대기)
 - 출처: [구현 경계와 실행 순서](../specs/web-app.md#구현-경계와-실행-순서), [접근 경계와 기기](../specs/web-app.md#접근-경계와-기기)
 - 막는 티켓: [0004](0004-worker-collection-history.md), [0005](0005-legacy-yaml-import.md)
 
@@ -35,3 +35,34 @@
 - 보호 경계 밖에서 웹 포트에 접근할 수 없는 것을 실제 배포 경로에서 확인해요.
   원격 인증 경로의 보호 확인은 결과 목표 3에서 해요.
 - 실제 휴대폰에서 골격 화면(0003)과 규칙 편집(0006)을 한 번 수행하고 결과를 기록해요.
+
+## 결과
+
+### 정한 것 (사용자 결정)
+
+- 웹 포트는 서버 LAN IP에만 바인드해요(`TRSS_WEB_HOST_IP`, 비어 있으면 Compose가 실행을 거부). 밖에서는 VPN으로 들어와요.
+- `Cargo.lock`을 커밋하고 이미지를 `cargo build --locked`로 빌드해요.
+- 릴리스는 `0.4.0`이에요.
+- 서버 작업은 사용자가 실행하고, 명령과 확인할 출력은 이쪽에서 드려요.
+
+### 로컬 준비
+
+- `docker-compose.trss.yml`에 상시 서비스 `trss-worker`·`trss-web`을 두었어요. 둘 다 `ghcr.io/syrflover/transmission-rss:${TRSS_VERSION}`(같은 릴리스), `restart: unless-stopped`, 로그 회전(10m×3)이고, 실행 파일은 `entrypoint`로 명시해요.
+  DB는 `TRSS_DATA_DIR`(기본 `./data`)의 `/data/trss.db`예요. 미디어는 Transmission과 같은 `/downloads`에 읽기 전용으로 붙여, 폴더 링크 검사와 Transmission `downloadDir` 비교가 같은 경로 표기를 봐요.
+- 옛 cron 서비스 `trss`는 되돌리기용으로 `legacy` 프로필에 남겼고, `scripts/cron.sh`가 `--profile legacy`로 불러요. `CHANNELS_CONFIG_URL`은 전환 뒤 `.env`에서 빠져도 파일 전체가 풀리도록 필수에서 뺐어요. ENTRYPOINT(`transmission-rss`)는 되돌리기가 필요 없어질 때 다시 정해요.
+- 자원 한도는 컨테이너마다 0.25 CPU·128M으로 시작해요. 근거와 재검토 계획은 [readme](../../readme.md#resource-limits)에 있어요. 로컬 유휴 상태는 worker 3.4MiB·web 1.2MiB였어요(피드와 Transmission 없이, 실제 부하가 아님).
+- 운영 안내([readme](../../readme.md))에 설정, 실행·중지·업데이트·로그·백업, cron에서 옮기는 순서(토렌트 목록 저장 → cron 해제 → web → 가져오기 → worker), 되돌리기를 적었어요.
+
+### 로컬 확인 (2026-09-30, `--locked`로 빌드한 이미지, 연결할 수 없는 Transmission 주소)
+
+- 두 컨테이너가 뜨고, 데이터 폴더에 `trss.db`와 `trss.db.worker.lock`이 생기고, worker가 빈 주기를 한 번 돌았어요.
+- 웹은 `127.0.0.1:18080`에서 200을 돌려주고, 같은 호스트의 LAN IP로는 연결되지 않았어요(로컬에서 바인드 주소만 확인한 것이고, 실제 배포 경로의 보호 경계 확인은 아래 남은 일이에요).
+- `restart trss-web` 동안 worker 컨테이너의 시작 시각이 그대로였어요.
+- `down` 뒤 `up`으로 다시 만들어도 API로 만든 채널이 남았고, worker는 DB의 주기 기록을 보고 "최근에 돈 주기"로 건너뛰었어요.
+- `stop`에 두 컨테이너 모두 종료 코드 0으로 곧바로 끝났어요.
+
+### 남은 일
+
+- 릴리스: 이 브랜치를 master에 합쳐 push하고 `0.4.0` 태그를 push해 이미지를 게시해요(원격 쓰기, 사용자 승인 필요).
+- 서버 전환과 완료 기준의 실제 확인: cron과 같은 결과 관찰(주기 수·차이 기록), 실제 배포 경로의 보호 경계, 웹만 재시작, 휴대폰에서 0003·0006 수행, `.torrent` 추가 응답 시간, 한 번 받기의 명령 라벨이 실제 Transmission에서 붙었다 떨어지는지(0008의 전제), 자원 한도 재검토.
+- 되돌리기가 필요 없어지면 ENTRYPOINT를 정하고 `cron.sh`와 `legacy` 서비스를 걷어내요.
