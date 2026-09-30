@@ -17,6 +17,7 @@ use tower_http::{
 };
 
 pub mod api;
+pub mod channels_api;
 pub mod env;
 pub mod error;
 pub mod state;
