@@ -16,6 +16,7 @@ use super::state::AppState;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/health", get(health))
+        .merge(super::import_api::routes())
         .fallback(not_found)
 }
 
