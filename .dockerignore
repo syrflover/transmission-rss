@@ -1,2 +1,11 @@
-target/
-.vscode/
+target
+.vscode
+.git
+.claude
+.env
+.scratch
+.codegraph
+.omp
+.qmd
+web/node_modules
+web/dist
