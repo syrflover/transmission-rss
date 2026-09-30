@@ -18,8 +18,10 @@ export interface Channel {
   position: number;
   /** Sent back on save and delete so the server can refuse stale ones. */
   version: number;
-  /** The URL's host, used as the heading. */
+  /** The URL's host, the heading of a channel without a name. */
   host: string;
+  /** The name the user gave, `null` when left blank. */
+  name: string | null;
   masked_url: string;
   /** The URL to start an edit from: secret values are blank. */
   edit_url: string;
@@ -39,6 +41,13 @@ export interface ChannelDraft {
   /** `name -> is secret`; a name left out is secret. */
   secret: Record<string, boolean>;
   past_search: string;
+  /** May be blank; the host is shown instead. */
+  name: string;
+}
+
+/** What a channel is called on screen: its name, or the host when it has none. */
+export function channelTitle(channel: Pick<Channel, "name" | "host">): string {
+  return channel.name ?? channel.host;
 }
 
 export async function listChannels(): Promise<Channel[]> {

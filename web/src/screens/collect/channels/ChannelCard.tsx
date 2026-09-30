@@ -3,7 +3,7 @@ import { useId, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 
 import { EditIcon, LockIcon } from "../icons";
-import type { Channel } from "./api";
+import { channelTitle, type Channel } from "./api";
 import { ChannelEditor } from "./ChannelEditor";
 import { btnNeutral } from "./styles";
 
@@ -106,7 +106,7 @@ export function ChannelCard({ channel, onEdit, onUpdated, onDeleted }: ChannelCa
     >
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         <h3 id={headingId} className="min-w-0 text-[17px] font-bold">
-          {channel.host}
+          {channelTitle(channel)}
         </h3>
         {!editing && (
           <Button
@@ -118,7 +118,7 @@ export function ChannelCard({ channel, onEdit, onUpdated, onDeleted }: ChannelCa
               onEdit();
               setEditing(true);
             }}
-            aria-label={`${channel.host} 채널 수정`}
+            aria-label={`${channelTitle(channel)} 채널 수정`}
           >
             <EditIcon className="size-[15px]" />
             수정

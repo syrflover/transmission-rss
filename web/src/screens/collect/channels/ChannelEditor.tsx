@@ -73,6 +73,7 @@ export function ChannelEditor({ channel, onSaved, onCancel, onDeleted }: Channel
   const isNew = channel === null;
 
   const [url, setUrl] = useState(channel?.edit_url ?? "");
+  const [name, setName] = useState(channel?.name ?? "");
   const [baseDir, setBaseDir] = useState(channel?.base_dir ?? "");
   const [excludes, setExcludes] = useState((channel?.excludes ?? []).join("\n"));
   const [pastSearch, setPastSearch] = useState(channel?.past_search ?? "");
@@ -104,6 +105,7 @@ export function ChannelEditor({ channel, onSaved, onCancel, onDeleted }: Channel
     excludes: excludes.split("\n"),
     secret: Object.fromEntries(names.map((name) => [name, isSecret(name)])),
     past_search: pastSearch,
+    name,
   });
 
   /** A 409 keeps the input, remembers the server's channel and its version. */
@@ -215,19 +217,39 @@ export function ChannelEditor({ channel, onSaved, onCancel, onDeleted }: Channel
         </fieldset>
       )}
 
-      <div className="flex min-w-0 flex-col gap-1.5">
-        <Label htmlFor={`${uid}-dir`} className={labelClass}>
-          기본 저장 폴더
-        </Label>
-        <Input
-          id={`${uid}-dir`}
-          value={baseDir}
-          onChange={(e) => setBaseDir(e.target.value)}
-          className={inputClass}
-          placeholder="/media/anime"
-          autoComplete="off"
-          spellCheck={false}
-        />
+      <div className="grid min-w-0 grid-cols-2 gap-3.5 max-[720px]:grid-cols-1">
+        <div className="flex min-w-0 flex-col gap-1.5">
+          <Label htmlFor={`${uid}-name`} className={labelClass}>
+            이름
+          </Label>
+          <Input
+            id={`${uid}-name`}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            className={inputClass}
+            placeholder="주간 애니"
+            maxLength={100}
+            autoComplete="off"
+            aria-describedby={`${uid}-name-hint`}
+          />
+          <p id={`${uid}-name-hint`} className={hintClass}>
+            비워 둘 수 있어요. 비우면 주소의 호스트를 보여줘요.
+          </p>
+        </div>
+        <div className="flex min-w-0 flex-col gap-1.5">
+          <Label htmlFor={`${uid}-dir`} className={labelClass}>
+            기본 저장 폴더
+          </Label>
+          <Input
+            id={`${uid}-dir`}
+            value={baseDir}
+            onChange={(e) => setBaseDir(e.target.value)}
+            className={inputClass}
+            placeholder="/media/anime"
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </div>
       </div>
 
       <div className="grid min-w-0 grid-cols-2 gap-3.5 max-[720px]:grid-cols-1">
@@ -344,6 +366,8 @@ function ConflictNotice({ current }: { current: Channel }) {
         입력한 값은 그대로 두었어요. 아래는 지금 저장된 값이에요. 확인하고 다시 저장할 수 있어요.
       </p>
       <dl className="m-0 grid grid-cols-[110px_minmax(0,1fr)] gap-x-3.5 gap-y-1.5 text-[13px] max-[480px]:grid-cols-1 max-[480px]:gap-y-0.5">
+        <dt className="font-semibold text-text-muted">이름</dt>
+        <dd className="m-0 min-w-0 break-all max-[480px]:mb-1.5">{current.name ?? "없음"}</dd>
         <dt className="font-semibold text-text-muted">주소</dt>
         <dd className="m-0 min-w-0 font-mono text-xs break-all max-[480px]:mb-1.5">{current.masked_url}</dd>
         <dt className="font-semibold text-text-muted">기본 저장 폴더</dt>

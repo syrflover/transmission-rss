@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 
 import { EmptyState } from "../../ScreenFrame";
 import { PlusIcon } from "../icons";
-import { listChannels, type Channel } from "./api";
+import { channelTitle, listChannels, type Channel } from "./api";
 import { ChannelCard } from "./ChannelCard";
 import { ChannelEditor } from "./ChannelEditor";
 import { btnAction, btnNeutral } from "./styles";
@@ -96,7 +96,7 @@ export function ChannelsTab() {
                 onSaved={(created) => {
                   update((all) => [...all, created]);
                   setAdding(false);
-                  setNotice(`${created.host} 채널을 추가했어요.`);
+                  setNotice(`${channelTitle(created)} 채널을 추가했어요.`);
                   requestAnimationFrame(() => addButton.current?.focus());
                 }}
                 onCancel={() => {
@@ -120,14 +120,14 @@ export function ChannelsTab() {
                   onEdit={() => setNotice(null)}
                   onUpdated={(saved) => {
                     update((all) => all.map((c) => (c.id === saved.id ? saved : c)));
-                    setNotice(`${saved.host} 채널을 저장했어요.`);
+                    setNotice(`${channelTitle(saved)} 채널을 저장했어요.`);
                   }}
                   onDeleted={(deleted, removedRules) => {
                     update((all) => all.filter((c) => c.id !== deleted.id));
                     setNotice(
                       removedRules > 0
-                        ? `${deleted.host} 채널과 규칙 ${removedRules}개를 삭제했어요.`
-                        : `${deleted.host} 채널을 삭제했어요.`,
+                        ? `${channelTitle(deleted)} 채널과 규칙 ${removedRules}개를 삭제했어요.`
+                        : `${channelTitle(deleted)} 채널을 삭제했어요.`,
                     );
                     requestAnimationFrame(() => addButton.current?.focus());
                   }}
