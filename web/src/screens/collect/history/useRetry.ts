@@ -6,26 +6,26 @@ import {
   getCommand,
   getHistoryItem,
   newCommandId,
-  sendReceiveOnce,
+  sendRetry,
   type Command,
   type HistoryItem,
-  type ReceiveOncePayload,
+  type RetryPayload,
 } from "./api";
 
 /** How often a running command is asked for its state, in milliseconds. */
 export const POLL_MS = 2000;
 
 /**
- * Where one `한 번 받기` is. The parts that matter for the wording:
+ * Where one `다시 받기` is. The parts that matter for the wording:
  *
  * - `waiting`: the server has the command (accepted), the worker has not
- *   finished it. This is not "received".
+ *   finished it. This is not "added" (`추가함`).
  * - `unconfirmed`: the answer to the request was lost, or the server cannot be
  *   reached, so it is not known whether the server has the command. That is
  *   different from `ended` with `failed`, where the worker tried and could not.
  * - `ended`: the worker wrote the outcome.
  */
-export type ReceivePhase =
+export type RetryPhase =
   | { kind: "idle"; error: string | null }
   | { kind: "sending" }
   | { kind: "waiting" }
@@ -36,19 +36,19 @@ export type ReceivePhase =
 interface Attempt {
   id: string;
   /** `null` for a command found on the item at load: it is only followed, never resent. */
-  payload: ReceiveOncePayload | null;
+  payload: RetryPayload | null;
 }
 
 /** A finished command with nothing to explain: the row then shows what the item itself says. */
 const FALLBACK_DONE = "";
-const FALLBACK_FAILED = "받지 못했어요. 까닭은 알 수 없어요.";
+const FALLBACK_FAILED = "추가하지 못했어요. 까닭은 알 수 없어요.";
 
 /**
  * How an ended command reads. An item that ended `received` or `duplicate` is
  * in Transmission, even when this command's own add failed (a rule got it after
  * the request was accepted): that is never a failure. The worker ends such a
  * command as `done`; one it ended as `failed` before it did so carries the
- * add's error, which the row does not show next to `받음`.
+ * add's error, which the row does not show next to `추가함`.
  */
 function endedMessage(command: Command): { failed: boolean; message: string } {
   const result = command.outcome?.result;
@@ -62,12 +62,12 @@ function endedMessage(command: Command): { failed: boolean; message: string } {
 }
 
 /**
- * The `한 번 받기` flow of one history item, following the web command
- * contract (`src/store/commands`):
+ * The `다시 받기` flow of one history item, following the web command
+ * contract (`src/store/commands`). The item's rule decides the folder and the
+ * episode conversion, so the request carries the item alone:
  *
  * - One ID per user action, made when the button is pressed and kept until the
- *   command ends or the server refuses the request. It is sent with the
- *   folder; the folder is fixed with the ID, so a resend is the same request.
+ *   command ends or the server refuses the request. A resend is the same request.
  * - The answer to the request only says accepted. The screen then asks for the
  *   command by its ID every {@link POLL_MS} until the worker has ended it.
  * - When the answer is lost, the screen asks for the command by the same ID.
@@ -76,8 +76,8 @@ function endedMessage(command: Command): { failed: boolean; message: string } {
  * - When the command ends, the item is read again so the row shows what the
  *   worker wrote.
  */
-export function useReceiveOnce(item: HistoryItem, onItem: (item: HistoryItem) => void) {
-  const [phase, setPhase] = useState<ReceivePhase>({ kind: "idle", error: null });
+export function useRetry(item: HistoryItem, onItem: (item: HistoryItem) => void) {
+  const [phase, setPhase] = useState<RetryPhase>({ kind: "idle", error: null });
   const attempt = useRef<Attempt | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const alive = useRef(true);
@@ -152,7 +152,7 @@ export function useReceiveOnce(item: HistoryItem, onItem: (item: HistoryItem) =>
     if (!current?.payload) return;
     setPhase({ kind: "sending" });
     try {
-      follow(await sendReceiveOnce(current.id, current.payload));
+      follow(await sendRetry(current.id, current.payload));
     } catch (e) {
       if (!alive.current) return;
       if (e instanceof ApiError && (e.code === "invalid" || e.code === "not_found")) {
@@ -178,14 +178,11 @@ export function useReceiveOnce(item: HistoryItem, onItem: (item: HistoryItem) =>
   }, [follow]);
 
   /** The button was pressed: a new user action, so a new ID. */
-  const submit = useCallback(
-    (folder: string) => {
-      if (attempt.current) return;
-      attempt.current = { id: newCommandId(), payload: { item_id: itemId, folder } };
-      void send();
-    },
-    [itemId, send],
-  );
+  const submit = useCallback(() => {
+    if (attempt.current) return;
+    attempt.current = { id: newCommandId(), payload: { item_id: itemId } };
+    void send();
+  }, [itemId, send]);
 
   /** Sends the same request again after the server said it never stored it. */
   const resend = useCallback(() => void send(), [send]);

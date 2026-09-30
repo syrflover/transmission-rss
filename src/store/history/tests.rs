@@ -142,7 +142,10 @@ fn result_codes_are_stable() {
     }
     assert_eq!(HistoryResult::parse("nope"), None);
     let labels: Vec<_> = HistoryResult::ALL.iter().map(|r| r.label()).collect();
-    assert_eq!(labels, ["받음", "규칙 불일치", "제외", "중복", "추가 실패"]);
+    assert_eq!(
+        labels,
+        ["추가함", "규칙 불일치", "제외", "중복", "추가 실패"]
+    );
 }
 
 #[test]
@@ -1012,6 +1015,7 @@ async fn an_outcome_changes_the_result_and_the_trail_but_not_when_the_item_was_s
             9_000,
             HistoryResult::Received,
             None,
+            None,
             Some("hash-1".into()),
         )
         .await
@@ -1054,6 +1058,7 @@ async fn an_outcome_follows_the_same_transition_rules_as_a_cycle() {
             done,
             2_000,
             HistoryResult::AddFailed,
+            None,
             Some("late failure".into()),
             None,
         )
@@ -1073,6 +1078,7 @@ async fn an_outcome_follows_the_same_transition_rules_as_a_cycle() {
             open,
             3_000,
             HistoryResult::AddFailed,
+            None,
             Some("first".into()),
             None,
         )
@@ -1083,6 +1089,7 @@ async fn an_outcome_follows_the_same_transition_rules_as_a_cycle() {
             open,
             4_000,
             HistoryResult::AddFailed,
+            None,
             Some("second".into()),
             None,
         )
@@ -1102,6 +1109,7 @@ async fn an_outcome_follows_the_same_transition_rules_as_a_cycle() {
             5_000,
             HistoryResult::Received,
             None,
+            None,
             Some("hash-2".into()),
         )
         .await
@@ -1111,10 +1119,61 @@ async fn an_outcome_follows_the_same_transition_rules_as_a_cycle() {
 
     assert_eq!(
         history
-            .record_outcome(9_999, 6_000, HistoryResult::Received, None, None)
+            .record_outcome(9_999, 6_000, HistoryResult::Received, None, None, None)
             .await
             .unwrap(),
         None
+    );
+}
+
+#[tokio::test]
+async fn an_outcome_keeps_the_rule_it_is_given_through_failure_and_success() {
+    let (_dir, _db, history) = store().await;
+    history
+        .record(1_000, vec![obs("a", HistoryResult::AddFailed)])
+        .await
+        .unwrap();
+    let id = all(&history).await.remove(0).id;
+
+    // A retry that fails again keeps the item tied to the rule that picked it,
+    // so it can be retried once more.
+    for (at, reason) in [(2_000, "first"), (3_000, "second")] {
+        history
+            .record_outcome(
+                id,
+                at,
+                HistoryResult::AddFailed,
+                Some("rule-1".into()),
+                Some(reason.into()),
+                None,
+            )
+            .await
+            .unwrap();
+        let item = history.get(id).await.unwrap().unwrap();
+        assert_eq!(item.rule_id.as_deref(), Some("rule-1"));
+        assert_eq!(item.reason.as_deref(), Some(reason));
+    }
+
+    // The retry that succeeds leaves the rule on the item and on the trail.
+    history
+        .record_outcome(
+            id,
+            4_000,
+            HistoryResult::Received,
+            Some("rule-1".into()),
+            None,
+            Some("hash-1".into()),
+        )
+        .await
+        .unwrap();
+    let item = history.get(id).await.unwrap().unwrap();
+    assert_eq!(item.result, HistoryResult::Received);
+    assert_eq!(item.rule_id.as_deref(), Some("rule-1"));
+    let trail = history.changes(id).await.unwrap();
+    assert_eq!(trail.last().unwrap().rule_id.as_deref(), Some("rule-1"));
+    assert!(
+        !history.received_by_hand("hash-1").await.unwrap(),
+        "a retry for a rule is not a receive by hand"
     );
 }
 
@@ -1184,6 +1243,7 @@ async fn a_torrent_is_received_by_hand_when_a_received_item_without_a_rule_holds
                 2_000,
                 HistoryResult::Received,
                 None,
+                None,
                 Some(hash.into()),
             )
             .await
@@ -1195,6 +1255,7 @@ async fn a_torrent_is_received_by_hand_when_a_received_item_without_a_rule_holds
             of("f"),
             2_000,
             HistoryResult::Duplicate,
+            None,
             None,
             Some("hash-cmd-dup".into()),
         )

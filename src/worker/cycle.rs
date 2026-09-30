@@ -350,9 +350,8 @@ pub async fn run_cycle(
     //   wait for and follows the plain rule.
     // - A torrent that history records as received (or found already there) for
     //   an item that is still in a feed read this cycle stays, though no rule
-    //   selected it now. That is
-    //   how a torrent received by hand (a receive-once command) survives: it
-    //   was never selected by a rule.
+    //   selects it now (the rule was edited or archived since a retry added it,
+    //   or an older receive by hand, which no rule ever selected).
     //
     // Nor is anything removed when an item's task ended abnormally: it may have
     // handed a torrent to Transmission before it failed, and the cycle would not
@@ -362,7 +361,7 @@ pub async fn run_cycle(
     // which meets the torrent again and keeps it. An add that timed out or lost
     // its connection is the same case: Transmission may have finished it.
     //
-    // A command left `running` is that case for a receive-once: its worker may
+    // A command left `running` is that case for a retry: its worker may
     // have died after Transmission took the torrent and before the hash was
     // written. A restarted worker runs its cycle before it looks for commands,
     // so the removal waits until the rerun has met the torrent and recorded it.

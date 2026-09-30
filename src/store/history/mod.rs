@@ -13,7 +13,7 @@
 //!
 //! # Results
 //!
-//! [`HistoryResult`] has the stable codes `received` (받음), `no_match`
+//! [`HistoryResult`] has the stable codes `received` (추가함), `no_match`
 //! (규칙 불일치), `excluded` (제외), `duplicate` (중복) and `add_failed`
 //! (추가 실패). When an item is seen again with a different result, the change
 //! is applied by the rules in [`Transition::between`]: `no_match`, `excluded`
@@ -128,12 +128,15 @@ impl HistoryStore {
     /// command from the web), by the transition rules of [`Transition::between`],
     /// and returns the item's result afterwards (`None` for an unknown item).
     /// The item's `last_seen_at`, title and link are left alone, because it was
-    /// not seen in a feed. `reason` must be free of secret values.
+    /// not seen in a feed. `rule_id` is the rule that picked the item, which a
+    /// retry for that rule keeps (a receive with no rule passes `None`).
+    /// `reason` must be free of secret values.
     pub async fn record_outcome(
         &self,
         item_id: i64,
         at: Millis,
         result: HistoryResult,
+        rule_id: Option<String>,
         reason: Option<String>,
         torrent_hash: Option<String>,
     ) -> Result<Option<HistoryResult>, HistoryError> {
@@ -144,6 +147,7 @@ impl HistoryStore {
                     item_id,
                     at,
                     result,
+                    rule_id.as_deref(),
                     reason.as_deref(),
                     torrent_hash.as_deref(),
                 )

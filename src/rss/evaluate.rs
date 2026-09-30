@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use regex::{Regex, RegexBuilder};
 
@@ -119,6 +119,13 @@ impl Matcher {
     }
 }
 
+/// Where a rule saves what it selects: the channel's directory with the
+/// rule's directory joined on. The evaluation and a retry of a failed item
+/// (which goes where its rule would have put it) both come here.
+pub fn save_path(channel_directory: &Path, rule_directory: &Path) -> PathBuf {
+    channel_directory.join(rule_directory)
+}
+
 /// A [`ChannelSpec`] with its regular expressions compiled once, ready to evaluate many titles.
 pub struct ChannelEvaluator {
     spec: ChannelSpec,
@@ -189,7 +196,7 @@ impl ChannelEvaluator {
         Evaluation {
             outcome: Outcome::Selected {
                 rule,
-                save_path: self.spec.directory.join(&applied.directory),
+                save_path: save_path(&self.spec.directory, &applied.directory),
                 episode: applied.episode,
             },
             overlapping: matching.collect(),

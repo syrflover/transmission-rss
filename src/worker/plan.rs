@@ -1,9 +1,9 @@
 //! Mapping from the stored channels and rules to the shared rule evaluation.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::{
-    rss::{ChannelEvaluator, ChannelSpec, Outcome, RuleSpec, SkipReason},
+    rss::{save_path, ChannelEvaluator, ChannelSpec, Outcome, RuleSpec, SkipReason},
     store::channels::{Channel, ChannelWithRules, Rule, RuleState},
     transmission::Redactor,
 };
@@ -144,6 +144,18 @@ impl ChannelPlan {
         }
         redactor
     }
+}
+
+/// Where a rule saves what it selects and the episode conversion it applies:
+/// the same values [`ChannelPlan::judge`] gives for an item the rule selects.
+/// A retry of a failed item uses them, so that it lands where the rule's own
+/// cycle would have put it.
+pub fn rule_destination(channel: &Channel, rule: &Rule) -> (PathBuf, isize) {
+    let spec = rule_spec(rule);
+    (
+        save_path(Path::new(&channel.base_dir), &spec.directory),
+        spec.episode,
+    )
 }
 
 fn rule_spec(rule: &Rule) -> RuleSpec {

@@ -8,7 +8,8 @@ pub type Millis = i64;
 /// stable; the Korean labels are what the screens show.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HistoryResult {
-    /// `received` (받음): a rule selected the item and Transmission took it.
+    /// `received` (추가함): Transmission took the torrent (a rule selected the
+    /// item, or a retry of a failed one added it). Not that the download is done.
     Received,
     /// `no_match` (규칙 불일치): no rule matched the title.
     NoMatch,
@@ -44,7 +45,7 @@ impl HistoryResult {
 
     pub fn label(self) -> &'static str {
         match self {
-            HistoryResult::Received => "받음",
+            HistoryResult::Received => "추가함",
             HistoryResult::NoMatch => "규칙 불일치",
             HistoryResult::Excluded => "제외",
             HistoryResult::Duplicate => "중복",

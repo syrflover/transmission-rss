@@ -43,7 +43,6 @@
 //!
 //! Each command kind has its own module below.
 
-pub mod folder;
 pub mod link;
 pub mod receive_once;
 

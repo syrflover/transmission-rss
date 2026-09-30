@@ -89,10 +89,10 @@ function Bars({ board }: { board: Board }) {
   const max = Math.max(1, ...days.map((d) => d.count));
   return (
     <>
-      <p className="text-[15px] font-bold">{total}개 받음</p>
+      <p className="text-[15px] font-bold">{total}개</p>
       <div
         role="img"
-        aria-label={`최근 7일 받은 개수: ${days.map((d) => `${weekday(d.date)}요일 ${d.count}개`).join(", ")}`}
+        aria-label={`최근 7일 추가한 개수: ${days.map((d) => `${weekday(d.date)}요일 ${d.count}개`).join(", ")}`}
         className="mt-0.5 flex h-[38px] items-end gap-1"
         data-testid="day-bars"
       >
@@ -176,7 +176,7 @@ export function StatusBoard() {
       <Cell label="RSS 채널">
         <Feeds board={board} />
       </Cell>
-      <Cell label="최근 7일 받은 항목">
+      <Cell label="최근 7일 추가">
         <Bars board={board} />
       </Cell>
       <Cell label="Transmission">

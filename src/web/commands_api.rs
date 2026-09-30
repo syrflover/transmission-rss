@@ -5,7 +5,8 @@
 //! | `POST /commands`          | `202 CommandView` when stored now, `200 CommandView` when the same command was accepted before |
 //! | `GET /commands/{id}`      | `200 CommandView`, or `404` when no command has that ID    |
 //!
-//! Request: `{ "id": <command ID>, "kind": "receive_once", "payload": {...} }`.
+//! Request: `{ "id": <command ID>, "kind": "receive_once", "payload": { "item_id": <history item> } }`
+//! (`receive_once` is the stored name of `다시 받기`).
 //! The browser makes one ID per user action and sends it with the content.
 //!
 //! **Accepted is not done.** The answer to a `POST` says the command is stored
@@ -24,7 +25,7 @@
 //! A `404` means the request never reached the store; sending it again with the
 //! *same* ID is safe. It never needs a new ID.
 //!
-//! Validation that depends on the request's kind (which item, which folder)
+//! Validation that depends on the request's kind (which item, which rule)
 //! happens before a command is stored, so a refused request stores nothing.
 
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -41,7 +42,7 @@ use serde_json::Value;
 use super::{ApiError, AppState};
 use crate::{
     store::commands::{Accepted, Command, CommandState, NewCommand},
-    worker::commands::{folder, receive_once},
+    worker::commands::receive_once,
 };
 
 #[cfg(test)]
@@ -111,7 +112,8 @@ struct CreateBody {
 const BAD_BODY: &str = "요청 내용을 읽지 못했어요. 화면을 새로고침한 뒤 다시 시도해 주세요.";
 const MISMATCH: &str =
     "이 명령 ID는 다른 내용으로 이미 접수됐어요. 화면을 새로고침한 뒤 다시 시도해 주세요.";
-const BUSY: &str = "이 항목은 이미 받는 중이에요. 그 결과가 나올 때까지 기다려 주세요.";
+const FOLDER_REFUSED: &str = "`다시 받기`는 그 항목을 고른 규칙의 저장 폴더에 받아서 폴더를 고를 수 없어요. 화면을 새로고침한 뒤 다시 시도해 주세요.";
+const BUSY: &str = "이 항목은 이미 추가하는 중이에요. 그 결과가 나올 때까지 기다려 주세요.";
 
 /// The shortest and longest command ID.
 const ID_LEN: std::ops::RangeInclusive<usize> = 8..=64;
@@ -138,10 +140,45 @@ enum Request {
 impl Request {
     fn read(kind: &str, payload: Value) -> Result<Request, ApiError> {
         match kind {
-            receive_once::KIND => serde_json::from_value(payload)
-                .map(Request::ReceiveOnce)
-                .map_err(|_| ApiError::invalid(BAD_BODY)),
+            receive_once::KIND => {
+                let payload: receive_once::ReceiveOnce =
+                    serde_json::from_value(payload).map_err(|_| ApiError::invalid(BAD_BODY))?;
+                Ok(Request::ReceiveOnce(payload))
+            }
             _ => Err(ApiError::invalid("모르는 종류의 명령이에요.")),
+        }
+    }
+
+    fn kind(&self) -> &'static str {
+        match self {
+            Request::ReceiveOnce(_) => receive_once::KIND,
+        }
+    }
+
+    /// Whether `stored`, accepted earlier, is this same request. Payloads are
+    /// compared in canonical form, so a command stored before the payload
+    /// dropped its `folder` is still the request an old tab sends again.
+    fn is_repeat_of(&self, stored: &Command) -> bool {
+        if stored.kind != self.kind() {
+            return false;
+        }
+        match self {
+            Request::ReceiveOnce(payload) => {
+                serde_json::from_str::<receive_once::ReceiveOnce>(&stored.payload)
+                    .is_ok_and(|stored| stored.canonical() == payload.canonical())
+            }
+        }
+    }
+
+    /// Refuses what a new command may not carry. A request already accepted
+    /// is answered before this is asked.
+    fn refuse_if_not_new(&self) -> Result<(), ApiError> {
+        match self {
+            // Only commands accepted before a rule decided the folder have one.
+            Request::ReceiveOnce(payload) if payload.names_a_folder() => {
+                Err(ApiError::invalid(FOLDER_REFUSED))
+            }
+            Request::ReceiveOnce(_) => Ok(()),
         }
     }
 
@@ -174,20 +211,13 @@ async fn check_receive_once(
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?
         .ok_or_else(|| ApiError::not_found("기록에서 이 항목을 찾지 못했어요."))?;
-    if !receive_once::can_receive(item.result) {
-        return Err(ApiError::invalid(
-            "이 항목은 Transmission에 이미 있어서 다시 받을 필요가 없어요.",
-        ));
-    }
-    let channel = state
-        .channels
-        .get_channel(&item.channel_id)
-        .await?
-        .ok_or_else(|| {
-            ApiError::invalid("이 항목의 채널이 삭제돼서 저장 폴더를 정할 수 없어요.")
-        })?;
-    folder::resolve(&channel.base_dir, &payload.folder)
-        .map_err(|err| ApiError::invalid(err.message()))?;
+    let channel = state.channels.get_channel(&item.channel_id).await?;
+    let rule = match &item.rule_id {
+        Some(id) => state.channels.get_rule(id).await?,
+        None => None,
+    };
+    receive_once::retry_plan(&item, channel.as_ref(), rule.as_ref())
+        .map_err(|why| ApiError::invalid(why.message()))?;
     Ok(())
 }
 
@@ -214,20 +244,23 @@ async fn create_command(
         ));
     }
     let request = Request::read(&body.kind, body.payload)?;
-    let new = request.new_command(body.id);
 
-    // A command accepted before is answered as it stands, before anything is
-    // checked again: the data it was checked against may have changed since.
+    // A command accepted before is answered as it stands, before anything else
+    // is asked of the request: the data it was checked against may have
+    // changed since, and a tab that predates an upgrade may send it again in
+    // its old form.
     let store = |e: crate::store::commands::CommandError| ApiError::Internal(e.to_string());
-    match state.commands.get(&new.id).await.map_err(store)? {
-        Some(stored) if stored.kind == new.kind && stored.payload == new.payload => {
+    match state.commands.get(&body.id).await.map_err(store)? {
+        Some(stored) if request.is_repeat_of(&stored) => {
             return Ok((StatusCode::OK, Json(CommandView::from(&stored))));
         }
         Some(stored) => return Err(conflict(MISMATCH, &stored)),
         None => {}
     }
 
+    request.refuse_if_not_new()?;
     request.check(&state).await?;
+    let new = request.new_command(body.id);
 
     match state
         .commands

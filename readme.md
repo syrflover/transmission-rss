@@ -4,7 +4,7 @@ Subscribes to RSS feeds and adds matching torrents to Transmission. Renames down
 
 It runs as two long-running containers from one image:
 
-- `trss-web` serves the screens and the API (channels, rules, collection history, receive once).
+- `trss-web` serves the screens and the API (channels, rules, collection history, retrying a failed item).
 - `trss-worker` reads the feeds every 5 minutes, adds matching torrents, and carries out the commands the web accepts.
 
 Both keep their state in one SQLite database (channels, rules, collection history).

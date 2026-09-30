@@ -8,7 +8,7 @@ import { HISTORY_RESULTS, type HistoryCounts, type HistoryFilter, type HistoryRe
 
 /** Row labels of the results. */
 export const RESULT_LABEL: Record<HistoryResult, string> = {
-  received: "받음",
+  received: "추가함",
   no_match: "규칙 불일치",
   excluded: "제외",
   duplicate: "중복",
@@ -24,7 +24,7 @@ export interface ResultChip {
 /** The result filters, in display order. The first is every result. */
 export const RESULT_CHIPS: readonly ResultChip[] = [
   { id: "all", label: "전체", results: [] },
-  { id: "received", label: "받음", results: ["received"] },
+  { id: "received", label: "추가함", results: ["received"] },
   { id: "no_match", label: "규칙 불일치", results: ["no_match"] },
   { id: "excluded", label: "제외", results: ["excluded"] },
   { id: "failed", label: "실패·중복", results: ["add_failed", "duplicate"] },

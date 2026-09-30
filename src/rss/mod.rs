@@ -9,5 +9,5 @@ mod evaluate;
 pub mod legacy;
 
 pub use evaluate::{
-    ChannelEvaluator, ChannelSpec, Evaluation, Outcome, RuleError, RuleSpec, SkipReason,
+    save_path, ChannelEvaluator, ChannelSpec, Evaluation, Outcome, RuleError, RuleSpec, SkipReason,
 };

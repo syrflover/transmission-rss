@@ -371,6 +371,7 @@ pub fn record_outcome(
     item_id: i64,
     at: Millis,
     result: HistoryResult,
+    rule_id: Option<&str>,
     reason: Option<&str>,
     torrent_hash: Option<&str>,
 ) -> Result<Option<HistoryResult>> {
@@ -400,28 +401,29 @@ pub fn record_outcome(
         }
         Transition::Refresh => {
             tx.execute(
-                "UPDATE history_items SET rule_id = NULL, reason = ?2 WHERE id = ?1",
-                params![item_id, reason],
+                "UPDATE history_items SET rule_id = ?2, reason = ?3 WHERE id = ?1",
+                params![item_id, rule_id, reason],
             )?;
             stored_result
         }
         Transition::Change => {
             tx.execute(
                 "UPDATE history_items
-                 SET result = ?2, result_at = ?3, rule_id = NULL, reason = ?4,
-                     torrent_hash = COALESCE(?5, torrent_hash)
+                 SET result = ?2, result_at = ?3, rule_id = ?4, reason = ?5,
+                     torrent_hash = COALESCE(?6, torrent_hash)
                  WHERE id = ?1",
-                params![item_id, result.code(), at, reason, torrent_hash],
+                params![item_id, result.code(), at, rule_id, reason, torrent_hash],
             )?;
             tx.execute(
                 "INSERT INTO history_changes
                      (item_id, changed_at, from_result, to_result, rule_id, reason, torrent_hash)
-                 VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 params![
                     item_id,
                     at,
                     stored_result.code(),
                     result.code(),
+                    rule_id,
                     reason,
                     torrent_hash
                 ],

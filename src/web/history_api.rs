@@ -20,8 +20,10 @@
 //! result filter), so the filter chips can show how many each holds.
 //!
 //! An item carries `command` while a `receive_once` command for it is
-//! pending or running, so a screen that is opened or reloaded after `한 번
-//! 받기` still shows it as in progress. The item's own link is never sent: it
+//! pending or running, so a screen that is opened or reloaded after `다시
+//! 받기` still shows it as in progress. `can_retry` says whether `다시 받기` is
+//! offered (see [`receive_once::retry_plan`]); for an item a rule picked and
+//! failed to add but cannot retry, `retry_blocked` says why. The item's own link is never sent: it
 //! is only a masked copy, and nothing on the screen needs it.
 
 use std::collections::HashMap;
@@ -37,7 +39,7 @@ use url::Url;
 use super::{commands_api::CommandView, ApiError, AppState};
 use crate::{
     store::{
-        channels::{Channel, ChannelWithRules},
+        channels::{Channel, ChannelWithRules, Rule},
         history::{HistoryCursor, HistoryItem, HistoryQuery, HistoryResult, DEFAULT_PAGE_SIZE},
     },
     worker::commands::receive_once,
@@ -66,13 +68,10 @@ pub struct HistoryItemView {
     /// The channel's name, or its host; for a deleted channel, the host it had.
     pub channel_name: String,
     pub channel_deleted: bool,
-    /// The channel's base folder (what a save folder is relative to); `null`
-    /// once the channel is deleted.
-    pub base_dir: Option<String>,
     pub title: String,
     /// Unix milliseconds.
     pub first_seen_at: i64,
-    /// A result code: `received`, `no_match`, `excluded`, `duplicate` or `add_failed`.
+    /// A result code: `received` (`추가함`), `no_match`, `excluded`, `duplicate` or `add_failed`.
     pub result: &'static str,
     pub result_label: &'static str,
     /// When the result was decided, Unix milliseconds.
@@ -80,12 +79,16 @@ pub struct HistoryItemView {
     /// The rule that selected the item, described by its match phrase or
     /// folder; `null` for an item no rule selected, or a deleted rule.
     pub rule_label: Option<String>,
-    /// Whether the item was received without a rule.
+    /// Whether the item was received without a rule (an item received by the
+    /// `한 번 받기` that `다시 받기` replaced).
     pub by_hand: bool,
     /// Why adding failed, or (for a received item) a note such as that the file kept its original name.
     pub reason: Option<String>,
-    /// Whether `한 번 받기` can be offered.
-    pub can_receive_once: bool,
+    /// Whether `다시 받기` can be offered.
+    pub can_retry: bool,
+    /// Why `다시 받기` is not offered on an item that failed to be added, as a
+    /// sentence; `null` when it is offered or there is nothing to say.
+    pub retry_blocked: Option<&'static str>,
     /// The `receive_once` command for this item that has not ended yet.
     pub command: Option<CommandView>,
 }
@@ -115,11 +118,19 @@ struct HistoryList {
 /// What the views need to know about the channels and rules.
 struct Directory {
     channels: HashMap<String, Channel>,
-    /// Rule ID to a short description of the rule.
-    rules: HashMap<String, String>,
+    /// Rule ID to the rule.
+    rules: HashMap<String, Rule>,
 }
 
 impl Directory {
+    /// A short description of the rule: its match phrase, or its folder.
+    fn rule_label(rule: &Rule) -> String {
+        rule.r#match
+            .clone()
+            .filter(|m| !m.trim().is_empty())
+            .unwrap_or_else(|| rule.directory.clone())
+    }
+
     async fn load(state: &AppState) -> Result<Directory, ApiError> {
         let all = state.channels.list_channels_with_rules().await?;
         let mut channels = HashMap::new();
@@ -130,12 +141,7 @@ impl Directory {
         } in all
         {
             for rule in channel_rules {
-                let label = rule
-                    .r#match
-                    .clone()
-                    .filter(|m| !m.trim().is_empty())
-                    .unwrap_or_else(|| rule.directory.clone());
-                rules.insert(rule.id, label);
+                rules.insert(rule.id.clone(), rule);
             }
             channels.insert(channel.id.clone(), channel);
         }
@@ -164,23 +170,28 @@ fn views(
                         .unwrap_or_default()
                 })
                 .unwrap_or_else(|| host_of(&item.channel_label).unwrap_or_default());
+            let rule = item
+                .rule_id
+                .as_ref()
+                .and_then(|rule| directory.rules.get(rule));
+            let retry = receive_once::retry_plan(&item, channel, rule);
             HistoryItemView {
                 id: item.id,
                 channel_name,
                 channel_deleted: channel.is_none(),
-                base_dir: channel.map(|c| c.base_dir.clone()),
                 title: item.title,
                 first_seen_at: item.first_seen_at,
                 result: item.result.code(),
                 result_label: item.result.label(),
                 result_at: item.result_at,
-                rule_label: item
-                    .rule_id
-                    .as_ref()
-                    .and_then(|rule| directory.rules.get(rule).cloned()),
+                rule_label: rule.map(Directory::rule_label),
                 by_hand: item.result == HistoryResult::Received && item.rule_id.is_none(),
                 reason: item.reason,
-                can_receive_once: receive_once::can_receive(item.result),
+                can_retry: retry.is_ok(),
+                retry_blocked: retry
+                    .err()
+                    .filter(|why| why.explains_missing_button())
+                    .map(|why| why.message()),
                 command: open.get(&item.id.to_string()).cloned(),
                 channel_id: item.channel_id,
             }

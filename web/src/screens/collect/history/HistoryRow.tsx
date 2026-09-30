@@ -8,8 +8,8 @@ import type { HistoryItem } from "./api";
 import { RESULT_LABEL } from "./filters";
 import { clock } from "./format";
 import { ChevronIcon, PlusIcon } from "./icons";
-import { ReceiveForm } from "./ReceiveForm";
-import { useReceiveOnce, type ReceivePhase } from "./useReceiveOnce";
+import { RetryActions } from "./RetryActions";
+import { useRetry, type RetryPhase } from "./useRetry";
 
 /** The new-rule screen (ticket 0006), opened with the channel and the item's title filled in. */
 export function newRuleLink(item: Pick<HistoryItem, "channel_id" | "title">): string {
@@ -30,12 +30,12 @@ function whyNot(item: HistoryItem): string {
   }
 }
 
-function inProgress(phase: ReceivePhase): boolean {
+function inProgress(phase: RetryPhase): boolean {
   return phase.kind === "sending" || phase.kind === "waiting" || phase.kind === "unconfirmed";
 }
 
 /** The dimmed line under the title: what the row is doing or why it ended as it did. */
-function statusLine(item: HistoryItem, phase: ReceivePhase): { text: string; urgent: boolean } | null {
+function statusLine(item: HistoryItem, phase: RetryPhase): { text: string; urgent: boolean } | null {
   switch (phase.kind) {
     case "sending":
       return { text: "접수하는 중이에요.", urgent: false };
@@ -57,7 +57,7 @@ function statusLine(item: HistoryItem, phase: ReceivePhase): { text: string; urg
   switch (item.result) {
     case "received":
       return {
-        text: [item.by_hand ? "직접 받음" : item.rule_label ? `규칙 ‘${item.rule_label}’` : "", item.reason ?? ""]
+        text: [item.by_hand ? "직접 추가함" : item.rule_label ? `규칙 ‘${item.rule_label}’` : "", item.reason ?? ""]
           .filter((part) => part !== "")
           .join(" · "),
         urgent: false,
@@ -81,20 +81,22 @@ interface HistoryRowProps {
 
 /**
  * One history row. What happened comes first (the result chip, the title);
- * the channel and time sit dimmed beside it. A row that can still be received
- * expands to say why it was not, and to offer `한 번 받기` and `규칙 생성`.
+ * the channel and time sit dimmed beside it. A row that Transmission does not
+ * hold expands to say why it was not added, and to offer `규칙 생성` and, for an
+ * item a rule picked and failed to add, `다시 받기` (or why that is missing).
  */
 export function HistoryRow({ item, onItem }: HistoryRowProps) {
   const [open, setOpen] = useState(false);
-  const { phase, submit, resend, recheck } = useReceiveOnce(item, onItem);
+  const { phase, submit, resend, recheck } = useRetry(item, onItem);
   const detailId = useId();
   const busy = inProgress(phase);
-  const expandable = item.can_receive_once;
+  // A row Transmission holds has nothing to offer; the others say why they were not added.
+  const expandable = item.result !== "received" && item.result !== "duplicate";
   const status = statusLine(item, phase);
   const failed = item.result === "add_failed" || (phase.kind === "ended" && phase.failed);
 
   const chip = busy ? (
-    <span className={`${chipBase} border-focus text-focus`}>받는 중</span>
+    <span className={`${chipBase} border-focus text-focus`}>추가하는 중</span>
   ) : (
     <span
       className={`${chipBase} ${failed ? "border-urgent text-urgent" : "border-hairline bg-surface-2 text-text-primary"}`}
@@ -161,23 +163,17 @@ export function HistoryRow({ item, onItem }: HistoryRowProps) {
           className="col-start-2 col-end-[-1] flex flex-col gap-3 pt-1 pb-1.5 max-[720px]:col-start-1 max-[720px]:col-end-[-1]"
         >
           <p className="text-[12.5px] leading-[1.5] text-text-secondary">{whyNot(item)}</p>
-          {item.base_dir === null ? (
+          {item.can_retry ? (
+            <RetryActions phase={phase} onSubmit={submit} onResend={resend} onRecheck={recheck}>
+              <NewRuleButton item={item} />
+            </RetryActions>
+          ) : (
             <>
-              <p className="text-xs text-text-muted">이 항목의 채널이 삭제돼서 저장 폴더를 정할 수 없어요.</p>
+              {item.retry_blocked !== null && <p className="text-xs text-text-muted">{item.retry_blocked}</p>}
               <div className="flex flex-wrap gap-2">
                 <NewRuleButton item={item} />
               </div>
             </>
-          ) : (
-            <ReceiveForm
-              baseDir={item.base_dir}
-              phase={phase}
-              onSubmit={submit}
-              onResend={resend}
-              onRecheck={recheck}
-            >
-              <NewRuleButton item={item} />
-            </ReceiveForm>
           )}
         </div>
       ) : null}

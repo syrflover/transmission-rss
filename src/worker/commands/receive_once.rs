@@ -1,30 +1,44 @@
-//! `receive_once` (한 번 받기): receive one history item without a rule.
+//! `receive_once`, shown on the screen as `다시 받기`: receive again a history
+//! item that a rule picked but did not receive.
 //!
 //! The web accepts the command with a [`ReceiveOnce`] payload; the worker runs
-//! it with [`run`]:
+//! it with [`run`]. The command kind keeps its first name, which is stored
+//! with every command already accepted.
 //!
-//! 1. find the history item and its channel, and resolve the save folder below
-//!    the channel's base folder ([`folder::resolve`], checked again here
-//!    because the request may be old);
+//! An item can be retried only when [`retry_plan`] says so: its result is one a
+//! retry may repair (today `add_failed`), and the rule that picked it is
+//! recorded on it, still exists and is active. The web checks that when it
+//! accepts the request and the worker checks again when it runs the command,
+//! because the request may be old. The retry goes where the rule's own cycle
+//! would have put the torrent: [`rule_destination`] gives the folder and the
+//! episode conversion.
+//!
+//! 1. find the history item, its channel and its rule, and check that the item
+//!    can be retried ([`retry_plan`]); what cannot be retried ends the command
+//!    at once, leaving the item as it is. A command stored with a folder chosen
+//!    by hand (see [`ReceiveOnce`]) ends the same way: it is not run into the
+//!    rule's folder. Every such end takes the command's label off a torrent an
+//!    earlier start may have put in;
 //! 2. recover the item's original link ([`link::recover`]);
 //! 3. add it to Transmission, with the command's label
 //!    ([`transmission::command_label`]) next to the bot's and the item's, and
-//!    save the answer as the item's result. An add that was sent and got no
-//!    answer is tried again at the next look ([`Retry::AddUnanswered`]). A
-//!    `duplicate` answer for a torrent carrying the command's label counts as
-//!    this command's own add: an earlier start put it in, and that add got no
-//!    answer or the worker died before writing its result;
+//!    save the answer as the item's result, with the rule kept on the item. An
+//!    add that was sent and got no answer is tried again at the next look
+//!    ([`Retry::AddUnanswered`]). A `duplicate` answer for a torrent carrying
+//!    the command's label counts as this command's own add: an earlier start
+//!    put it in, and that add got no answer or the worker died before writing
+//!    its result;
 //! 4. when this command's add put the torrent in, give the file its `trname`
-//!    name without any episode conversion and take the command's label off. A
-//!    torrent Transmission already had from elsewhere is not renamed.
+//!    name with the rule's episode conversion and take the command's label off.
+//!    A torrent Transmission already had from elsewhere is not renamed.
 //!
 //! The worker ends the command after step 4. The result lands on the history
 //! item (`received`, `duplicate` or `add_failed` with a reason) and on the
 //! command, which reports the item's result as history holds it afterwards.
 //! Only steps 1 to 3 decide the result. A rename that does not happen leaves
 //! the torrent and its data under its own name (a person chose to receive this
-//! item, so it is never removed as the rule path does when `trname` has no
-//! name), and the history item gets a note saying so ([`RenameResult::Kept`]).
+//! item again, so it is never removed as the rule cycle does when `trname` has
+//! no name), and the history item gets a note saying so ([`RenameResult::Kept`]).
 
 use std::path::Path;
 
@@ -33,17 +47,21 @@ use tokio_util::sync::CancellationToken;
 use transmission_rpc::types::Id;
 use trname::trname;
 
-use super::{folder, link};
+use super::link;
 use crate::{
     store::{
-        channels::{Channel, ChannelWithRules},
+        channels::{Channel, ChannelWithRules, Rule, RuleState},
         commands::{Command, CommandState, Outcome, MAX_ATTEMPTS},
         history::{HistoryItem, HistoryResult, Millis},
     },
     transmission::{
-        self, add_item, get_torrent, remove_label, AddError, AddKind, AddLabels, Redactor,
+        self, add_item, get_torrent, get_torrents, has_label, remove_label, AddError, AddKind,
+        AddLabels, Redactor,
     },
-    worker::{plan::ChannelPlan, CycleContext},
+    worker::{
+        plan::{rule_destination, ChannelPlan},
+        CycleContext,
+    },
 };
 
 /// The `kind` of the command.
@@ -52,34 +70,42 @@ pub const KIND: &str = "receive_once";
 /// Longest failure reason kept, in characters.
 const MAX_REASON_CHARS: usize = 300;
 
-/// What `trname` is asked for: the file keeps the episode number it has. A
-/// one-off receive changes no numbering (no `episode` offset of a rule applies).
-/// `trname` adds `starts_episode_at - 1` for positive values and shifts by the
-/// value for negative ones, so both `0` and `1` leave the number as it is.
-pub const NO_EPISODE_CONVERSION: isize = 0;
-
-/// The content of a `receive_once` request.
+/// The content of a `receive_once` request: only the item. The save folder and
+/// the episode conversion are the rule's.
+///
+/// Requests accepted while a person still chose a save folder carry a
+/// `folder`; it is read so those stored commands still parse, and ignored.
+/// A new request with one is refused by the web.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReceiveOnce {
-    /// The history item to receive.
+    /// The history item to receive again.
     pub item_id: i64,
-    /// The save folder below the channel's base folder; empty is the base
-    /// folder itself.
-    #[serde(default)]
-    pub folder: String,
+    /// The folder an earlier version of this command let a person choose. Never
+    /// written, never used; see above.
+    #[serde(default, skip_serializing)]
+    pub folder: Option<String>,
 }
 
 impl ReceiveOnce {
+    pub fn new(item_id: i64) -> ReceiveOnce {
+        ReceiveOnce {
+            item_id,
+            folder: None,
+        }
+    }
+
+    /// Whether the request names a save folder, which a retry no longer takes
+    /// (spacing alone does not count).
+    pub fn names_a_folder(&self) -> bool {
+        self.folder.as_deref().is_some_and(|f| !f.trim().is_empty())
+    }
+
     /// The canonical text stored with the command and compared to tell a
-    /// repeat of a request from a different one: same fields, same order, and
-    /// the folder trimmed.
+    /// repeat of a request from a different one. It holds the item alone, so a
+    /// repeat that also carries an empty `folder` is the same request.
     pub fn canonical(&self) -> String {
-        serde_json::to_string(&ReceiveOnce {
-            item_id: self.item_id,
-            folder: self.folder.trim().to_owned(),
-        })
-        .expect("a payload serializes")
+        serde_json::to_string(&ReceiveOnce::new(self.item_id)).expect("a payload serializes")
     }
 
     /// The subject stored with the command: what it is about.
@@ -88,11 +114,93 @@ impl ReceiveOnce {
     }
 }
 
-/// Whether the screen may offer `한 번 받기` for an item with this result.
-/// An item Transmission already holds (`received`, `duplicate`) has nothing to
-/// receive.
-pub fn can_receive(result: HistoryResult) -> bool {
-    !result.is_settled()
+/// Whether a retry may repair an item with this result. The one place that
+/// says which results are offered `다시 받기`: `add_failed` now, and `버전 미상`
+/// (a revision without a CRC32 that was not received automatically) once that
+/// result exists.
+pub fn is_retryable_result(result: HistoryResult) -> bool {
+    matches!(result, HistoryResult::AddFailed)
+}
+
+/// Why a history item cannot be retried.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotRetryable {
+    /// Transmission holds the item's torrent already (`received`, `duplicate`).
+    Held,
+    /// No rule picked the item (`no_match`, `excluded`); making a rule from it
+    /// is how it gets received.
+    NotPicked,
+    /// The item's channel was deleted.
+    ChannelDeleted,
+    /// The item failed without a rule: it comes from the retry that let a
+    /// person receive any item into a folder, which no longer exists.
+    NoRule,
+    /// The rule that picked the item was deleted.
+    RuleDeleted,
+    /// The rule that picked the item is archived. Its work folder may be in the
+    /// archive folder by now, so it is to be restored first.
+    RuleArchived,
+}
+
+impl NotRetryable {
+    /// The sentence for the person, which is also what the row explains.
+    pub fn message(self) -> &'static str {
+        match self {
+            NotRetryable::Held => "이 항목은 Transmission에 이미 있어서 다시 받을 필요가 없어요.",
+            NotRetryable::NotPicked => {
+                "이 항목은 규칙이 고르지 않아서 다시 받을 수 없어요. 받으려면 이 항목으로 규칙을 만들어요."
+            }
+            NotRetryable::ChannelDeleted => {
+                "이 항목의 채널이 삭제돼서 다시 받을 수 없어요."
+            }
+            NotRetryable::NoRule => {
+                "규칙 없이 받으려다 실패한 항목이라 다시 받을 수 없어요. 이 항목으로 규칙을 만들어요."
+            }
+            NotRetryable::RuleDeleted => "이 항목을 고른 규칙이 지워져서 다시 받을 수 없어요.",
+            NotRetryable::RuleArchived => "규칙이 보관돼 있어요. 복원한 뒤 다시 받아요.",
+        }
+    }
+
+    /// Whether the row says this to the person: the item is one a rule picked
+    /// and failed to receive, so `다시 받기` would be expected on it. For the
+    /// others (held, not picked) the row has nothing to add.
+    pub fn explains_missing_button(self) -> bool {
+        !matches!(self, NotRetryable::Held | NotRetryable::NotPicked)
+    }
+}
+
+/// What a retry of an item needs: its channel and the rule that picked it.
+#[derive(Debug, Clone, Copy)]
+pub struct RetryPlan<'a> {
+    pub channel: &'a Channel,
+    pub rule: &'a Rule,
+}
+
+/// Whether `item` can be retried, given its channel and the rule recorded on
+/// it (`None` when they are gone). This is the eligibility the web checks when
+/// it accepts a request, the worker checks again when it runs one, and the
+/// history list uses to offer the button.
+pub fn retry_plan<'a>(
+    item: &HistoryItem,
+    channel: Option<&'a Channel>,
+    rule: Option<&'a Rule>,
+) -> Result<RetryPlan<'a>, NotRetryable> {
+    if !is_retryable_result(item.result) {
+        return Err(if item.result.is_settled() {
+            NotRetryable::Held
+        } else {
+            NotRetryable::NotPicked
+        });
+    }
+    let channel = channel.ok_or(NotRetryable::ChannelDeleted)?;
+    if item.rule_id.is_none() {
+        return Err(NotRetryable::NoRule);
+    }
+    let rule = rule.ok_or(NotRetryable::RuleDeleted)?;
+    if rule.state != RuleState::Active {
+        return Err(NotRetryable::RuleArchived);
+    }
+    Ok(RetryPlan { channel, rule })
 }
 
 /// How an executed command ended.
@@ -103,6 +211,11 @@ pub struct Finished {
     /// Set when this command's add put the torrent in (Transmission did not
     /// have it), so its file is to be renamed.
     pub rename: Option<Rename>,
+    /// The command ends before it adds anything, but an earlier start may have
+    /// put a torrent in under this command's label (its add got no answer, or
+    /// the worker died before writing the result): the label is taken off
+    /// every torrent that carries it, whatever ends the command.
+    pub unlabel: Option<Redactor>,
     /// An add of this command, on this start or an earlier one, was sent and
     /// got no answer, and no later add got one: Transmission may hold the
     /// torrent all the same, under a hash history did not learn. The command is
@@ -118,6 +231,8 @@ pub struct Rename {
     pub item_id: i64,
     pub hash: String,
     pub save_path: std::path::PathBuf,
+    /// The rule's episode conversion.
+    pub episode: isize,
     pub redactor: Redactor,
 }
 
@@ -175,6 +290,22 @@ pub async fn run(
         let label = transmission::command_label(&command.id);
         remove_label(&mut transmission, &step.hash, &label, &step.redactor).await;
     }
+    if let Some(redactor) = &finished.unlabel {
+        let mut transmission =
+            transmission::client(ctx.transmission_url.clone(), &ctx.transmission_http);
+        let label = transmission::command_label(&command.id);
+        match get_torrents(&mut transmission).await {
+            Ok(torrents) => {
+                for torrent in torrents {
+                    let carries = has_label(torrent.labels.as_deref(), &label);
+                    if let (true, Some(hash)) = (carries, torrent.hash_string) {
+                        remove_label(&mut transmission, &hash, &label, redactor).await;
+                    }
+                }
+            }
+            Err(err) => eprintln!("{}", redactor.apply(&err.to_string())),
+        }
+    }
     Ok(finished)
 }
 
@@ -193,7 +324,7 @@ pub async fn execute(
     // comes before `refuse` writes a failure on the item.
     //
     // A failure no later start can get past (the request, the item, the
-    // channel or the folder) ends the command at once with the mark kept, so
+    // channel or the rule) ends the command at once with the mark kept, so
     // the next cycle removes nothing either; after that the torrent's item
     // label keeps it while its item is in a feed.
     let keep_trying = command.add_unconfirmed && command.attempts < MAX_ATTEMPTS;
@@ -201,10 +332,25 @@ pub async fn execute(
         finished.add_unconfirmed |= command.add_unconfirmed;
         finished
     };
+    // An end before this start adds anything. A torrent may still carry the
+    // command's label when an earlier start ran (it is claimed again after
+    // its first start), so the label comes off whatever ends the command; the
+    // item is left as it is.
+    let ended_early = |mut finished: Finished| {
+        if command.add_unconfirmed || command.attempts > 1 {
+            finished.unlabel = Some(ctx.redactor.clone());
+        }
+        unaccounted(finished)
+    };
 
     let Ok(payload) = serde_json::from_str::<ReceiveOnce>(&command.payload) else {
-        return Ok(unaccounted(failed("요청 내용을 읽지 못했어요.", None)));
+        return Ok(ended_early(failed("요청 내용을 읽지 못했어요.", None)));
     };
+    // A command stored while a person chose the folder asked for that folder.
+    // Receiving it into the rule's folder is not what was asked.
+    if payload.names_a_folder() {
+        return Ok(ended_early(failed(LEGACY_FOLDER, None)));
+    }
 
     let Some(item) = ctx
         .history
@@ -212,7 +358,7 @@ pub async fn execute(
         .await
         .map_err(Retry::store)?
     else {
-        return Ok(unaccounted(failed(
+        return Ok(ended_early(failed(
             "기록에서 이 항목을 찾지 못했어요.",
             None,
         )));
@@ -222,25 +368,25 @@ pub async fn execute(
         .get_channel(&item.channel_id)
         .await
         .map_err(Retry::store)?;
-    let Some(channel) = channel else {
-        return refuse(
-            ctx,
-            &item,
-            "채널이 삭제돼서 저장 폴더와 원래 링크를 정할 수 없어요.",
-            &now,
-        )
-        .await
-        .map(unaccounted);
-    };
 
-    let save_path = match folder::resolve(&channel.base_dir, &payload.folder) {
-        Ok(path) => path,
-        Err(err) => {
-            return refuse(ctx, &item, err.message(), &now)
-                .await
-                .map(unaccounted)
-        }
+    // The rule that picked the item decides where it goes. It is read now, not
+    // when the request was accepted: the rule may be gone or archived since.
+    let rule = match &item.rule_id {
+        Some(id) => ctx.channels.get_rule(id).await.map_err(Retry::store)?,
+        None => None,
     };
+    let plan = match retry_plan(&item, channel.as_ref(), rule.as_ref()) {
+        Ok(plan) => plan,
+        // Something holds the item's torrent now (a rule took it after the
+        // request was accepted): that is the command's result too.
+        Err(NotRetryable::Held) => return Ok(ended_early(held(item.result, None))),
+        // Nothing to repair and nothing to keep trying: it ends the command at
+        // once. The item is left as it is; this command did not fail to add it.
+        Err(reason) => return Ok(ended_early(failed(reason.message(), None))),
+    };
+    let channel = plan.channel.clone();
+    let (save_path, episode) = rule_destination(plan.channel, plan.rule);
+    let rule_id = plan.rule.id.clone();
 
     let redactor = redactor_for(ctx, &channel);
     let raw_link = match link::recover(&item, &channel, &ctx.http, &redactor).await {
@@ -288,7 +434,14 @@ pub async fn execute(
             };
             let stored = ctx
                 .history
-                .record_outcome(item.id, now(), result, None, Some(torrent.hash.clone()))
+                .record_outcome(
+                    item.id,
+                    now(),
+                    result,
+                    Some(rule_id.clone()),
+                    None,
+                    Some(torrent.hash.clone()),
+                )
                 .await
                 .map_err(Retry::store)?
                 .unwrap_or(result);
@@ -298,6 +451,7 @@ pub async fn execute(
                 item_id: item.id,
                 hash: torrent.hash,
                 save_path,
+                episode,
                 redactor,
             });
             Ok(held(stored, rename))
@@ -322,6 +476,10 @@ pub async fn execute(
     }
 }
 
+/// Why a command stored with a folder chosen by hand is not run.
+const LEGACY_FOLDER: &str =
+    "폴더를 고르던 예전 요청이라 실행하지 않았어요. 필요하면 다시 받기로 받아요.";
+
 /// Why a command ended `duplicate`.
 const ALREADY_THERE: &str = "Transmission에 이미 같은 토렌트가 있어서 새로 받지 않았어요.";
 
@@ -336,6 +494,7 @@ fn held(stored: HistoryResult, rename: Option<Rename>) -> Finished {
             reason: (stored == HistoryResult::Duplicate).then(|| ALREADY_THERE.to_owned()),
         },
         rename,
+        unlabel: None,
         add_unconfirmed: false,
     }
 }
@@ -357,6 +516,7 @@ async fn refuse(
             item.id,
             now(),
             HistoryResult::AddFailed,
+            item.rule_id.clone(),
             Some(reason.clone()),
             None,
         )
@@ -373,6 +533,7 @@ async fn refuse(
             reason: Some(reason),
         },
         rename: None,
+        unlabel: None,
         add_unconfirmed: false,
     })
 }
@@ -386,6 +547,7 @@ fn failed(reason: &str, rename: Option<Rename>) -> Finished {
             reason: Some(reason.to_owned()),
         },
         rename,
+        unlabel: None,
         add_unconfirmed: false,
     }
 }
@@ -435,13 +597,14 @@ pub const SEVERAL_FILES: &str = "파일이 여러 개인 토렌트라 이름을 
 pub const NAME_NOT_CHANGED: &str = "이름을 바꾸지 못해서 원래 이름 그대로 뒀어요.";
 
 /// Gives the torrent's single file its `trname` name for the folder it was
-/// saved in, without any episode conversion. A torrent with several files is
-/// left as it is at once, as the rule path leaves it.
+/// saved in, with the rule's episode conversion. A torrent with several files
+/// is left as it is at once, as the rule cycle leaves it.
 ///
 /// Unlike the renaming after a rule's add, a torrent whose name cannot be
 /// derived is left alone: that path removes the torrent and its data, which is
-/// no answer to a person who chose to receive this item (the base folder, for
-/// one, has no title and season parts to name a file after). The result says
+/// no answer to a person who chose to receive this item again (a rule saving
+/// to the base folder, for one, has no title and season parts to name a file
+/// after). The result says
 /// when the original name was kept, so the caller can note it on the history
 /// item. Attempts follow `ctx.rename`, as a magnet link's file name is only
 /// known once Transmission has its metadata.
@@ -475,7 +638,7 @@ pub async fn rename(
         let Some(old_name) = torrent.name else {
             continue;
         };
-        let Some(new_name) = derived_name(&rename.save_path, &old_name) else {
+        let Some(new_name) = derived_name(&rename.save_path, &old_name, rename.episode) else {
             return RenameResult::Kept(NAME_NOT_DERIVED);
         };
         if new_name == old_name {
@@ -493,60 +656,65 @@ pub async fn rename(
     RenameResult::Kept(NAME_NOT_CHANGED)
 }
 
-/// The name `trname` gives `file_name` in `save_path`, with no episode conversion.
-pub fn derived_name(save_path: &Path, file_name: &str) -> Option<String> {
-    trname(save_path, file_name, NO_EPISODE_CONVERSION)
+/// The name `trname` gives `file_name` in `save_path` with the rule's `episode`
+/// conversion, as the rule cycle's renaming derives it.
+pub fn derived_name(save_path: &Path, file_name: &str, episode: isize) -> Option<String> {
+    trname(save_path, file_name, episode)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::channels::{Channel, Rule};
 
     #[test]
-    fn the_canonical_payload_ignores_spacing_but_not_content() {
-        let a = ReceiveOnce {
+    fn the_canonical_payload_holds_the_item_alone() {
+        let a = ReceiveOnce::new(7);
+        let with_empty_folder = ReceiveOnce {
             item_id: 7,
-            folder: " LIAR GAME/Season 01 ".into(),
+            folder: Some("  ".into()),
         };
-        let b = ReceiveOnce {
-            item_id: 7,
-            folder: "LIAR GAME/Season 01".into(),
-        };
-        let c = ReceiveOnce {
-            item_id: 8,
-            folder: "LIAR GAME/Season 01".into(),
-        };
-        assert_eq!(a.canonical(), b.canonical());
-        assert_ne!(a.canonical(), c.canonical());
+        let other = ReceiveOnce::new(8);
+        assert_eq!(a.canonical(), with_empty_folder.canonical());
+        assert_ne!(a.canonical(), other.canonical());
+        assert_eq!(a.canonical(), r#"{"item_id":7}"#);
+    }
+
+    #[test]
+    fn a_payload_stored_with_a_folder_still_parses_and_the_folder_is_not_kept() {
+        // Commands accepted while a person chose the folder are in the database.
+        let old: ReceiveOnce =
+            serde_json::from_str(r#"{"item_id":7,"folder":"LIAR GAME/Season 01"}"#).unwrap();
+        assert_eq!(old.item_id, 7);
+        assert!(old.names_a_folder());
+        assert_eq!(old.canonical(), r#"{"item_id":7}"#);
+        let older: ReceiveOnce = serde_json::from_str(r#"{"item_id":7,"folder":""}"#).unwrap();
+        assert!(!older.names_a_folder());
         assert_eq!(
-            b.canonical(),
-            r#"{"item_id":7,"folder":"LIAR GAME/Season 01"}"#
+            serde_json::from_str::<ReceiveOnce>(r#"{"item_id":7}"#).unwrap(),
+            ReceiveOnce::new(7)
         );
     }
 
     #[test]
-    fn a_payload_with_an_unknown_field_is_not_read() {
+    fn a_payload_with_another_unknown_field_is_not_read() {
         assert!(serde_json::from_str::<ReceiveOnce>(r#"{"item_id":7,"link":"x"}"#).is_err());
         assert!(serde_json::from_str::<ReceiveOnce>(r#"{"folder":"x"}"#).is_err());
-        assert_eq!(
-            serde_json::from_str::<ReceiveOnce>(r#"{"item_id":7}"#)
-                .unwrap()
-                .folder,
-            ""
-        );
     }
 
     #[test]
-    fn no_conversion_leaves_the_release_episode_as_it_is() {
+    fn an_episode_conversion_moves_the_release_episode_as_the_rule_would() {
         let folder = Path::new("/media/anime/LIAR GAME/Season 01");
         let release = "[SubsPlease] LIAR GAME - 26 (1080p) [ABCD1234].mkv";
 
+        // 0 and 1 leave the number as it is: the legacy default is 1.
         let expected = Some("LIAR GAME S01E26.mkv".to_owned());
-        assert_eq!(derived_name(folder, release), expected);
-        // 1 is the value the legacy configuration defaults to; it converts nothing either.
-        assert_eq!(trname(folder, release, 1), expected);
-        // A rule's offset would have moved it.
-        assert_ne!(trname(folder, release, -12), expected);
+        assert_eq!(derived_name(folder, release, 0), expected);
+        assert_eq!(derived_name(folder, release, 1), expected);
+        assert_eq!(
+            derived_name(folder, release, -12),
+            Some("LIAR GAME S01E14.mkv".to_owned())
+        );
     }
 
     #[test]
@@ -554,18 +722,119 @@ mod tests {
         assert_eq!(
             derived_name(
                 Path::new("/media/anime"),
-                "[SubsPlease] LIAR GAME - 26 (1080p) [ABCD1234].mkv"
+                "[SubsPlease] LIAR GAME - 26 (1080p) [ABCD1234].mkv",
+                1
             ),
             None
         );
     }
 
+    fn channel() -> Channel {
+        Channel {
+            id: "c1".into(),
+            position: 0,
+            version: 1,
+            url: "https://feed.test/rss".into(),
+            base_dir: "/media/anime".into(),
+            excludes: Vec::new(),
+            secret_query: Vec::new(),
+            past_search: None,
+            name: None,
+        }
+    }
+
+    fn rule(state: RuleState) -> Rule {
+        Rule {
+            id: "r1".into(),
+            channel_id: "c1".into(),
+            position: 0,
+            version: 1,
+            r#match: Some("LIAR GAME".into()),
+            regex: false,
+            case_insensitive: false,
+            directory: "LIAR GAME/Season 01".into(),
+            episode: 1,
+            episode_auto: false,
+            state,
+        }
+    }
+
+    fn item(result: HistoryResult, rule_id: Option<&str>) -> HistoryItem {
+        HistoryItem {
+            id: 1,
+            channel_id: "c1".into(),
+            channel_label: "https://feed.test/rss".into(),
+            identity_key: "guid:1".into(),
+            title: "LIAR GAME - 26".into(),
+            link: "magnet:?xt=urn:btih:x".into(),
+            first_seen_at: 0,
+            last_seen_at: 0,
+            result,
+            result_at: 0,
+            rule_id: rule_id.map(str::to_owned),
+            reason: None,
+            torrent_hash: None,
+        }
+    }
+
     #[test]
-    fn only_items_transmission_does_not_hold_can_be_received() {
-        assert!(can_receive(HistoryResult::NoMatch));
-        assert!(can_receive(HistoryResult::Excluded));
-        assert!(can_receive(HistoryResult::AddFailed));
-        assert!(!can_receive(HistoryResult::Received));
-        assert!(!can_receive(HistoryResult::Duplicate));
+    fn only_an_item_a_rule_picked_and_failed_to_add_with_an_active_rule_can_be_retried() {
+        let (channel, active, archived) = (
+            channel(),
+            rule(RuleState::Active),
+            rule(RuleState::Archived),
+        );
+        let failed = item(HistoryResult::AddFailed, Some("r1"));
+        let plan = retry_plan(&failed, Some(&channel), Some(&active)).unwrap();
+        assert_eq!(plan.rule.id, "r1");
+
+        let why = |item: &HistoryItem, channel, rule| retry_plan(item, channel, rule).unwrap_err();
+        assert_eq!(
+            why(&failed, Some(&channel), None),
+            NotRetryable::RuleDeleted,
+            "the rule was deleted"
+        );
+        assert_eq!(
+            why(&failed, Some(&channel), Some(&archived)),
+            NotRetryable::RuleArchived
+        );
+        assert_eq!(
+            why(&failed, None, Some(&active)),
+            NotRetryable::ChannelDeleted
+        );
+        assert_eq!(
+            why(
+                &item(HistoryResult::AddFailed, None),
+                Some(&channel),
+                Some(&active)
+            ),
+            NotRetryable::NoRule,
+            "a failure with no rule recorded"
+        );
+        for (result, expected) in [
+            (HistoryResult::Received, NotRetryable::Held),
+            (HistoryResult::Duplicate, NotRetryable::Held),
+            (HistoryResult::NoMatch, NotRetryable::NotPicked),
+            (HistoryResult::Excluded, NotRetryable::NotPicked),
+        ] {
+            assert_eq!(
+                why(&item(result, Some("r1")), Some(&channel), Some(&active)),
+                expected,
+                "{result}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_retry_goes_where_the_rules_own_cycle_would_put_it() {
+        let (destination, episode) = rule_destination(
+            &channel(),
+            &Rule {
+                episode: -12,
+                ..rule(RuleState::Active)
+            },
+        );
+        assert_eq!(destination, Path::new("/media/anime/LIAR GAME/Season 01"));
+        assert_eq!(episode, -12);
     }
 }

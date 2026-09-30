@@ -11,7 +11,7 @@ const KIND: Record<PreviewKind, { label: string; badge: string }> = {
 };
 
 const STORED: Record<string, string> = {
-  received: "받음",
+  received: "추가함",
   no_match: "규칙 불일치",
   excluded: "제외",
   duplicate: "중복",

@@ -11,7 +11,7 @@ use tower::ServiceExt;
 
 use super::*;
 use crate::store::{
-    channels::{ChannelInput, RuleInput},
+    channels::{ChannelInput, RuleInput, RuleState},
     commands::{CommandState, NewCommand, Outcome},
     history::Observation,
     Db,
@@ -128,14 +128,14 @@ async fn items_come_newest_first_with_what_the_screen_needs() {
     assert_eq!(items[0]["result_label"], "추가 실패");
     assert_eq!(items[0]["reason"], "Transmission이 토렌트를 받지 않았어요");
     assert_eq!(items[0]["channel_name"], "Nyaa");
-    assert_eq!(items[0]["base_dir"], "/media/nyaa.example");
     assert_eq!(
         items[1]["channel_name"], "feed.example",
         "an unnamed channel shows its host"
     );
-    assert_eq!(items[1]["can_receive_once"], true);
+    assert_eq!(items[1]["can_retry"], false, "no rule picked it");
+    assert_eq!(items[1]["retry_blocked"], Value::Null);
     assert_eq!(items[2]["rule_label"], "Show");
-    assert_eq!(items[2]["can_receive_once"], false);
+    assert_eq!(items[2]["can_retry"], false);
     assert_eq!(items[2]["by_hand"], false);
     assert_eq!(items[0]["first_seen_at"], 1_000_000 + 3 * 60_000);
     assert_eq!(page["next"], Value::Null);
@@ -325,6 +325,69 @@ async fn a_bad_cursor_or_query_is_refused_and_the_page_size_is_capped() {
 }
 
 #[tokio::test]
+async fn the_row_says_whether_a_failed_item_can_be_retried_and_why_not() {
+    let app = App::new();
+    let channel = app.channel("nyaa.example", None).await;
+    let rule = |state, directory: &'static str| RuleInput {
+        r#match: Some("Show".to_owned()),
+        directory: directory.to_owned(),
+        state,
+        ..Default::default()
+    };
+    let rules = &app.state.channels;
+    let active = rules
+        .create_rule(&channel.id, rule(RuleState::Active, "Show/Season 01"))
+        .await
+        .unwrap();
+    let archived = rules
+        .create_rule(&channel.id, rule(RuleState::Archived, "Show/Season 02"))
+        .await
+        .unwrap();
+    let deleted = rules
+        .create_rule(&channel.id, rule(RuleState::Active, "Show/Season 03"))
+        .await
+        .unwrap();
+    rules
+        .delete_rule(&deleted.id, deleted.version)
+        .await
+        .unwrap();
+
+    app.record(&channel, 1, HistoryResult::AddFailed, Some(&active.id))
+        .await;
+    app.record(&channel, 2, HistoryResult::AddFailed, Some(&archived.id))
+        .await;
+    app.record(&channel, 3, HistoryResult::AddFailed, Some(&deleted.id))
+        .await;
+    app.record(&channel, 4, HistoryResult::AddFailed, None)
+        .await;
+    app.record(&channel, 5, HistoryResult::NoMatch, None).await;
+    app.record(&channel, 6, HistoryResult::Received, Some(&active.id))
+        .await;
+
+    let (_, _, page) = app.get("/api/history").await;
+
+    // Newest first: items 6 down to 1.
+    let items = page["items"].as_array().unwrap();
+    let row = |n: usize| &items[6 - n];
+    let summary = |n: usize| (row(n)["can_retry"].clone(), row(n)["retry_blocked"].clone());
+    assert_eq!(summary(1), (Value::Bool(true), Value::Null));
+    assert_eq!(row(1)["rule_label"], "Show");
+    assert_eq!(summary(2).0, false);
+    assert_eq!(summary(2).1, "규칙이 보관돼 있어요. 복원한 뒤 다시 받아요.");
+    assert_eq!(summary(3).0, false);
+    assert_eq!(
+        summary(3).1,
+        "이 항목을 고른 규칙이 지워져서 다시 받을 수 없어요."
+    );
+    assert_eq!(summary(4).0, false);
+    assert!(summary(4).1.as_str().unwrap().contains("규칙 없이"));
+    // Nothing to say for an item no rule picked or one already added.
+    assert_eq!(summary(5), (Value::Bool(false), Value::Null));
+    assert_eq!(summary(6), (Value::Bool(false), Value::Null));
+    assert_eq!(row(6)["result_label"], "추가함");
+}
+
+#[tokio::test]
 async fn an_item_shows_its_open_receive_once_command_until_it_ends() {
     let app = App::new();
     let channel = app.channel("nyaa.example", None).await;
@@ -339,7 +402,7 @@ async fn an_item_shows_its_open_receive_once_command_until_it_ends() {
             NewCommand {
                 id: "0b7d5a44-6c1e".into(),
                 kind: "receive_once".into(),
-                payload: format!(r#"{{"item_id":{first},"folder":""}}"#),
+                payload: format!(r#"{{"item_id":{first}}}"#),
                 subject: Some(first.to_string()),
             },
             5_000,
@@ -397,6 +460,5 @@ async fn an_item_of_a_deleted_channel_still_lists_with_its_old_host() {
     let item = &page["items"][0];
     assert_eq!(item["channel_deleted"], true);
     assert_eq!(item["channel_name"], "gone.example");
-    assert_eq!(item["base_dir"], Value::Null);
     assert!(!text.contains(TOKEN));
 }

@@ -19,7 +19,7 @@ export const HISTORY_RESULTS: readonly HistoryResult[] = [
 export type CommandState = "pending" | "running" | "done" | "failed";
 
 export interface CommandOutcome {
-  /** For `receive_once`, a history result code. */
+  /** For a retry (`receive_once`), a history result code. */
   result: string;
   reason: string | null;
 }
@@ -39,8 +39,6 @@ export interface HistoryItem {
   channel_id: string;
   channel_name: string;
   channel_deleted: boolean;
-  /** What a save folder is relative to; `null` once the channel is deleted. */
-  base_dir: string | null;
   title: string;
   /** Unix milliseconds. */
   first_seen_at: number;
@@ -50,8 +48,11 @@ export interface HistoryItem {
   rule_label: string | null;
   by_hand: boolean;
   reason: string | null;
-  can_receive_once: boolean;
-  /** The `receive_once` command that has not ended yet. */
+  /** Whether `다시 받기` is offered: the item failed to be added, and the rule that picked it still exists and is active. */
+  can_retry: boolean;
+  /** Why `다시 받기` is missing on an item a rule picked and failed to add, as a sentence. */
+  retry_blocked: string | null;
+  /** The retry command (`receive_once`) that has not ended yet. */
   command: Command | null;
 }
 
@@ -94,10 +95,12 @@ export function getHistoryItem(id: number): Promise<HistoryItem> {
   return api<HistoryItem>(`/history/${id}`);
 }
 
-/** What `한 번 받기` sends. `folder` is relative to the channel's base folder; empty means the base folder. */
-export interface ReceiveOncePayload {
+/**
+ * What `다시 받기` sends: the item alone. The save folder and the episode
+ * conversion are the rule's, so there is no folder to send.
+ */
+export interface RetryPayload {
   item_id: number;
-  folder: string;
 }
 
 /**
@@ -113,7 +116,7 @@ export function newCommandId(): string {
 }
 
 /** Sends the command; `202` when stored now, `200` when the same command was stored before: both give its current state. */
-export function sendReceiveOnce(id: string, payload: ReceiveOncePayload): Promise<Command> {
+export function sendRetry(id: string, payload: RetryPayload): Promise<Command> {
   return api<Command>("/commands", {
     method: "POST",
     body: { id, kind: "receive_once", payload },

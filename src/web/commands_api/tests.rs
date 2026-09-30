@@ -9,7 +9,7 @@ use tower::ServiceExt;
 
 use super::*;
 use crate::store::{
-    channels::{Channel, ChannelInput},
+    channels::{Channel, ChannelInput, Rule, RuleInput, RuleState},
     history::{HistoryItem, HistoryQuery, HistoryResult, Observation},
     Db,
 };
@@ -66,7 +66,45 @@ impl App {
             .unwrap()
     }
 
+    async fn rule(&self, channel: &Channel, state: RuleState) -> Rule {
+        self.state
+            .channels
+            .create_rule(
+                &channel.id,
+                RuleInput {
+                    r#match: Some("LIAR GAME".into()),
+                    directory: "LIAR GAME/Season 01".into(),
+                    state,
+                    ..RuleInput::default()
+                },
+            )
+            .await
+            .unwrap()
+    }
+
+    /// An item with the result, not picked by any rule.
     async fn item(&self, channel: &Channel, key: &str, result: HistoryResult) -> HistoryItem {
+        self.item_of(channel, key, result, None).await
+    }
+
+    /// An item a rule picked and failed to add: what `다시 받기` is for.
+    async fn failed(&self, channel: &Channel, key: &str, rule: &Rule) -> HistoryItem {
+        self.item_of(
+            channel,
+            key,
+            HistoryResult::AddFailed,
+            Some(rule.id.clone()),
+        )
+        .await
+    }
+
+    async fn item_of(
+        &self,
+        channel: &Channel,
+        key: &str,
+        result: HistoryResult,
+        rule_id: Option<String>,
+    ) -> HistoryItem {
         self.state
             .history
             .record(
@@ -78,7 +116,7 @@ impl App {
                     title: format!("LIAR GAME - {key}"),
                     link: "magnet:?xt=urn:btih:abc&token=***".to_owned(),
                     result,
-                    rule_id: None,
+                    rule_id,
                     torrent_hash: None,
                     reason: None,
                 }],
@@ -101,20 +139,15 @@ impl App {
             .unwrap()
     }
 
-    async fn post(
-        &self,
-        id: &str,
-        item: &HistoryItem,
-        folder: &str,
-    ) -> (StatusCode, String, Value) {
+    async fn post(&self, id: &str, item: &HistoryItem) -> (StatusCode, String, Value) {
+        self.post_payload(id, json!({ "item_id": item.id })).await
+    }
+
+    async fn post_payload(&self, id: &str, payload: Value) -> (StatusCode, String, Value) {
         self.call(
             Method::POST,
             "/api/commands",
-            Some(json!({
-                "id": id,
-                "kind": "receive_once",
-                "payload": { "item_id": item.id, "folder": folder },
-            })),
+            Some(json!({ "id": id, "kind": "receive_once", "payload": payload })),
         )
         .await
     }
@@ -128,14 +161,15 @@ fn assert_no_secret(text: &str) {
 async fn a_command_is_accepted_pending_and_can_be_read_back() {
     let app = App::new();
     let channel = app.channel("/media/anime").await;
-    let item = app.item(&channel, "26", HistoryResult::NoMatch).await;
+    let rule = app.rule(&channel, RuleState::Active).await;
+    let item = app.failed(&channel, "26", &rule).await;
 
-    let (status, text, view) = app.post(ID, &item, "LIAR GAME/Season 01").await;
+    let (status, text, view) = app.post(ID, &item).await;
 
     assert_eq!(status, StatusCode::ACCEPTED, "{text}");
     assert_eq!(view["id"], ID);
     assert_eq!(view["kind"], "receive_once");
-    assert_eq!(view["state"], "pending", "accepted is not received");
+    assert_eq!(view["state"], "pending", "accepted is not added");
     assert_eq!(view["outcome"], Value::Null);
     assert_no_secret(&text);
 
@@ -145,33 +179,31 @@ async fn a_command_is_accepted_pending_and_can_be_read_back() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(read["state"], "pending");
 
-    // The stored payload is the canonical form of the request.
+    // The stored payload is the canonical form of the request: the item alone.
     let stored = app.state.commands.get(ID).await.unwrap().unwrap();
-    assert_eq!(
-        stored.payload,
-        format!(
-            r#"{{"item_id":{},"folder":"LIAR GAME/Season 01"}}"#,
-            item.id
-        )
-    );
+    assert_eq!(stored.payload, format!(r#"{{"item_id":{}}}"#, item.id));
     assert_eq!(
         stored.subject.as_deref(),
         Some(item.id.to_string().as_str())
     );
     // Accepting it did not touch the item.
     let same = app.state.history.get(item.id).await.unwrap().unwrap();
-    assert_eq!(same.result, HistoryResult::NoMatch);
+    assert_eq!(same.result, HistoryResult::AddFailed);
+    assert_eq!(same.rule_id.as_deref(), Some(rule.id.as_str()));
 }
 
 #[tokio::test]
 async fn the_same_command_delivered_twice_is_stored_once_and_answered_alike() {
     let app = App::new();
     let channel = app.channel("/media/anime").await;
-    let item = app.item(&channel, "26", HistoryResult::NoMatch).await;
+    let rule = app.rule(&channel, RuleState::Active).await;
+    let item = app.failed(&channel, "26", &rule).await;
 
-    let (first, _, one) = app.post(ID, &item, "LIAR GAME/Season 01").await;
-    // The repeat may differ in spacing only.
-    let (second, _, two) = app.post(ID, &item, " LIAR GAME/Season 01 ").await;
+    let (first, _, one) = app.post(ID, &item).await;
+    // A client from before the folder went away repeats it with an empty folder.
+    let (second, _, two) = app
+        .post_payload(ID, json!({ "item_id": item.id, "folder": " " }))
+        .await;
 
     assert_eq!(first, StatusCode::ACCEPTED);
     assert_eq!(second, StatusCode::OK);
@@ -192,43 +224,41 @@ async fn the_same_command_delivered_twice_is_stored_once_and_answered_alike() {
         )
         .await
         .unwrap();
-    let (third, _, late) = app.post(ID, &item, "LIAR GAME/Season 01").await;
+    let (third, _, late) = app.post(ID, &item).await;
     assert_eq!(third, StatusCode::OK);
     assert_eq!(late["state"], "done");
     assert_eq!(late["outcome"]["result"], "received");
 }
 
 #[tokio::test]
-async fn the_same_id_for_another_item_or_folder_is_refused() {
+async fn the_same_id_for_another_item_is_refused() {
     let app = App::new();
     let channel = app.channel("/media/anime").await;
-    let item = app.item(&channel, "26", HistoryResult::NoMatch).await;
-    let other = app.item(&channel, "27", HistoryResult::NoMatch).await;
-    app.post(ID, &item, "LIAR GAME/Season 01").await;
+    let rule = app.rule(&channel, RuleState::Active).await;
+    let item = app.failed(&channel, "26", &rule).await;
+    let other = app.failed(&channel, "27", &rule).await;
+    app.post(ID, &item).await;
 
-    let (status, text, body) = app.post(ID, &other, "LIAR GAME/Season 01").await;
+    let (status, text, body) = app.post(ID, &other).await;
     assert_eq!(status, StatusCode::CONFLICT, "{text}");
     assert_eq!(body["error"], "conflict");
     assert!(body["message"].as_str().unwrap().ends_with("요."));
     assert_eq!(body["current"]["id"], ID);
 
-    let (status, _, _) = app.post(ID, &item, "Elsewhere/Season 01").await;
-    assert_eq!(status, StatusCode::CONFLICT);
-
     // The stored command is still the first one.
     let stored = app.state.commands.get(ID).await.unwrap().unwrap();
     assert!(stored.payload.contains(&format!("\"item_id\":{}", item.id)));
-    assert!(stored.payload.contains("LIAR GAME/Season 01"));
 }
 
 #[tokio::test]
-async fn a_second_command_for_an_item_still_being_received_is_refused() {
+async fn a_second_command_for_an_item_still_being_added_is_refused() {
     let app = App::new();
     let channel = app.channel("/media/anime").await;
-    let item = app.item(&channel, "26", HistoryResult::NoMatch).await;
-    app.post(ID, &item, "").await;
+    let rule = app.rule(&channel, RuleState::Active).await;
+    let item = app.failed(&channel, "26", &rule).await;
+    app.post(ID, &item).await;
 
-    let (status, _, body) = app.post("another-command-id", &item, "").await;
+    let (status, _, body) = app.post("another-command-id", &item).await;
 
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(body["current"]["id"], ID, "the open command is handed back");
@@ -242,24 +272,20 @@ async fn a_second_command_for_an_item_still_being_received_is_refused() {
 }
 
 #[tokio::test]
-async fn a_folder_that_leaves_the_base_folder_is_refused_and_nothing_is_stored() {
+async fn a_request_that_names_a_folder_is_refused_and_nothing_is_stored() {
     let app = App::new();
     let channel = app.channel("/media/anime").await;
-    let item = app.item(&channel, "26", HistoryResult::NoMatch).await;
+    let rule = app.rule(&channel, RuleState::Active).await;
+    let item = app.failed(&channel, "26", &rule).await;
 
-    for folder in [
-        "../../etc",
-        "..",
-        "a/../../b",
-        "/etc",
-        "/media/anime/x",
-        "a\\b",
-    ] {
-        let (status, text, body) = app.post(ID, &item, folder).await;
+    for folder in ["LIAR GAME/Season 01", "../../etc", "/etc", "x"] {
+        let (status, text, body) = app
+            .post_payload(ID, json!({ "item_id": item.id, "folder": folder }))
+            .await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{folder}: {text}");
         assert_eq!(body["error"], "invalid");
         let message = body["message"].as_str().unwrap();
-        assert!(message.contains("저장 폴더"), "{message}");
+        assert!(message.contains("폴더를 고를 수 없어요"), "{message}");
         assert!(message.ends_with("요."), "{message}");
     }
 
@@ -270,24 +296,56 @@ async fn a_folder_that_leaves_the_base_folder_is_refused_and_nothing_is_stored()
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
-#[cfg(unix)]
 #[tokio::test]
-async fn a_folder_that_reaches_outside_through_a_link_is_refused() {
-    let dir = tempfile::tempdir().unwrap();
-    let base = dir.path().join("anime");
-    let outside = dir.path().join("elsewhere");
-    std::fs::create_dir_all(&base).unwrap();
-    std::fs::create_dir_all(&outside).unwrap();
-    std::os::unix::fs::symlink(&outside, base.join("escape")).unwrap();
-
+async fn an_item_that_cannot_be_retried_is_refused_with_its_reason_and_nothing_is_stored() {
     let app = App::new();
-    let channel = app.channel(base.to_str().unwrap()).await;
-    let item = app.item(&channel, "26", HistoryResult::NoMatch).await;
+    let channel = app.channel("/media/anime").await;
+    let active = app.rule(&channel, RuleState::Active).await;
+    let archived = app.rule(&channel, RuleState::Archived).await;
+    let deleted = app.rule(&channel, RuleState::Active).await;
+    let rule_deleted = app.failed(&channel, "1", &deleted).await;
+    app.state
+        .channels
+        .delete_rule(&deleted.id, deleted.version)
+        .await
+        .unwrap();
+    let rule_archived = app.failed(&channel, "2", &archived).await;
+    let no_rule = app.item(&channel, "3", HistoryResult::AddFailed).await;
+    let no_match = app.item(&channel, "4", HistoryResult::NoMatch).await;
+    let excluded = app.item(&channel, "5", HistoryResult::Excluded).await;
+    let received = app
+        .item_of(
+            &channel,
+            "6",
+            HistoryResult::Received,
+            Some(active.id.clone()),
+        )
+        .await;
+    let duplicate = app
+        .item_of(
+            &channel,
+            "7",
+            HistoryResult::Duplicate,
+            Some(active.id.clone()),
+        )
+        .await;
 
-    let (status, _, body) = app.post(ID, &item, "escape/Season 01").await;
-
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(body["message"].as_str().unwrap().contains("링크"));
+    for (item, says) in [
+        (&rule_deleted, "지워져서"),
+        (&rule_archived, "복원한 뒤"),
+        (&no_rule, "규칙 없이"),
+        (&no_match, "규칙이 고르지 않아서"),
+        (&excluded, "규칙이 고르지 않아서"),
+        (&received, "이미"),
+        (&duplicate, "이미"),
+    ] {
+        let (status, text, body) = app.post(ID, item).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{}: {text}", item.title);
+        assert_eq!(body["error"], "invalid");
+        let message = body["message"].as_str().unwrap();
+        assert!(message.contains(says), "{}: {message}", item.title);
+        assert!(message.ends_with("요."), "{message}");
+    }
     assert!(app.state.commands.get(ID).await.unwrap().is_none());
 }
 
@@ -295,21 +353,12 @@ async fn a_folder_that_reaches_outside_through_a_link_is_refused() {
 async fn requests_that_do_not_make_sense_are_refused_with_a_sentence() {
     let app = App::new();
     let channel = app.channel("/media/anime").await;
-    let item = app.item(&channel, "26", HistoryResult::NoMatch).await;
-    let received = app.item(&channel, "25", HistoryResult::Received).await;
-    let duplicate = app.item(&channel, "24", HistoryResult::Duplicate).await;
-
-    let (status, _, body) = app.post(ID, &received, "").await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(body["message"].as_str().unwrap().contains("이미"));
-    assert_eq!(
-        app.post(ID, &duplicate, "").await.0,
-        StatusCode::BAD_REQUEST
-    );
+    let rule = app.rule(&channel, RuleState::Active).await;
+    let item = app.failed(&channel, "26", &rule).await;
 
     let mut missing = item.clone();
     missing.id = 9_999;
-    assert_eq!(app.post(ID, &missing, "").await.0, StatusCode::NOT_FOUND);
+    assert_eq!(app.post(ID, &missing).await.0, StatusCode::NOT_FOUND);
 
     for (id, kind, payload) in [
         ("short", "receive_once", json!({ "item_id": item.id })),
@@ -350,15 +399,16 @@ async fn requests_that_do_not_make_sense_are_refused_with_a_sentence() {
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 
-    // A deleted channel cannot say where the item should go.
+    // A deleted channel takes its rules along, so nothing says where to go.
     let gone = app.channel("/media/gone").await;
-    let orphan = app.item(&gone, "1", HistoryResult::NoMatch).await;
+    let gone_rule = app.rule(&gone, RuleState::Active).await;
+    let orphan = app.failed(&gone, "1", &gone_rule).await;
     app.state
         .channels
-        .delete_channel(&gone.id, gone.version, 0)
+        .delete_channel(&gone.id, gone.version, 1)
         .await
         .unwrap();
-    let (status, _, body) = app.post(ID, &orphan, "").await;
+    let (status, _, body) = app.post(ID, &orphan).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(body["message"].as_str().unwrap().contains("채널"));
 
@@ -376,4 +426,100 @@ async fn an_unknown_command_id_is_not_found() {
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(body["error"], "not_found");
     assert!(body["message"].as_str().unwrap().ends_with("요."));
+}
+
+/// Every command accepted before `다시 받기` stored `{"item_id":N,"folder":"…"}`.
+async fn store_legacy(app: &App, id: &str, item: &HistoryItem, folder: &str) -> Command {
+    let payload = format!(r#"{{"item_id":{},"folder":{}}}"#, item.id, json!(folder));
+    match app
+        .state
+        .commands
+        .accept(
+            NewCommand {
+                id: id.to_owned(),
+                kind: "receive_once".to_owned(),
+                payload,
+                subject: Some(item.id.to_string()),
+            },
+            1_500,
+        )
+        .await
+        .unwrap()
+    {
+        Accepted::Created(command) => command,
+        other => panic!("not stored: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_legacy_command_sent_again_is_answered_with_the_stored_command() {
+    let app = App::new();
+    let channel = app.channel("/media/anime").await;
+    let rule = app.rule(&channel, RuleState::Active).await;
+    // The item is not retryable now (it was received since): a stored command
+    // is answered before the item is looked at.
+    let item = app
+        .item_of(
+            &channel,
+            "26",
+            HistoryResult::Received,
+            Some(rule.id.clone()),
+        )
+        .await;
+    let item_named = app
+        .item_of(
+            &channel,
+            "28",
+            HistoryResult::Received,
+            Some(rule.id.clone()),
+        )
+        .await;
+    let other = app.failed(&channel, "27", &rule).await;
+
+    let empty_id = "legacy-empty-folder";
+    let named_id = "legacy-named-folder";
+    let stored_empty = store_legacy(&app, empty_id, &item, "").await;
+    let stored_named = store_legacy(&app, named_id, &item_named, "LIAR GAME/Season 01").await;
+
+    // The request of the current client, and the old tab's own.
+    for (id, stored, payload) in [
+        (empty_id, &stored_empty, json!({ "item_id": item.id })),
+        (
+            empty_id,
+            &stored_empty,
+            json!({ "item_id": item.id, "folder": "" }),
+        ),
+        (
+            named_id,
+            &stored_named,
+            json!({ "item_id": item_named.id, "folder": "LIAR GAME/Season 01" }),
+        ),
+    ] {
+        let (status, text, body) = app.post_payload(id, payload.clone()).await;
+        assert_eq!(status, StatusCode::OK, "{payload}: {text}");
+        assert_eq!(body["id"], id);
+        assert_eq!(body["state"], "pending");
+        assert_eq!(
+            body,
+            serde_json::to_value(CommandView::from(stored)).unwrap(),
+            "{payload}"
+        );
+    }
+
+    // Another item under the same ID is still a different request.
+    let (status, _, body) = app
+        .post_payload(empty_id, json!({ "item_id": other.id }))
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["error"], "conflict");
+    assert_eq!(body["current"]["id"], empty_id);
+
+    // A new ID that names a folder is still refused.
+    let (status, _, _) = app
+        .post_payload(
+            "a-new-command-id",
+            json!({ "item_id": other.id, "folder": "x" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 }
