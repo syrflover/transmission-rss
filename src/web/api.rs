@@ -17,6 +17,8 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/health", get(health))
         .merge(super::channels_api::routes())
+        .merge(super::commands_api::routes())
+        .merge(super::history_api::routes())
         .merge(super::import_api::routes())
         .fallback(not_found)
 }
