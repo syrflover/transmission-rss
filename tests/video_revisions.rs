@@ -1605,3 +1605,63 @@ async fn a_version_unknown_item_is_recorded_with_its_decision() {
     assert_eq!(s.item(&v2).await.result, HistoryResult::VersionUnknown);
     assert_eq!(s.state_of(&v2).await, RevisionState::Unknown);
 }
+
+// --- a revision's name on the normal path ----------------------------------------
+
+const ERAI_HASH: &str = "6666000000000000000000000000000000000006";
+const ERAI_EPISODE: &str = "Show S01E06.mkv";
+
+/// `[Erai-raws] Show - 06<version> [1080p CR WEBRip HEVC AAC][MultiSub][<crc>].mkv`:
+/// `trname` alone reads `06v2` of this name as another episode, taken from
+/// the CRC32 bracket.
+fn erai(version: &str) -> String {
+    format!(
+        "[Erai-raws] Show - 06{version} [1080p CR WEBRip HEVC AAC][MultiSub][{}].mkv",
+        crc(NEW_BYTES)
+    )
+}
+
+/// A revision seen first (no earlier release of it in the folder) is received
+/// as any release and named as its episode, not as `trname` reads its marker.
+#[tokio::test]
+async fn a_revision_seen_first_is_named_as_its_episode() {
+    let s = Setup::with_match("[Erai-raws] Show - ").await;
+    let title = erai("v2");
+    s.feed(&[(ERAI_HASH, &title)]);
+    s.h.tr.content_on_add(ERAI_HASH, NEW_BYTES);
+    s.cycle().await;
+    assert_eq!(s.names(), vec![ERAI_EPISODE]);
+    assert_eq!(s.h.tr.torrent(ERAI_HASH).name, ERAI_EPISODE);
+    // History keeps the release's own title.
+    assert_eq!(s.item(&title).await.result, HistoryResult::Received);
+}
+
+#[tokio::test]
+async fn a_revision_received_with_retry_is_named_as_its_episode() {
+    let s = Setup::with_match("[Erai-raws] Show - ").await;
+    let title = erai("v2");
+    s.feed(&[(ERAI_HASH, &title)]);
+    s.h.tr.reject_adds(Some("refused"));
+    s.cycle().await;
+    assert_eq!(s.item(&title).await.result, HistoryResult::AddFailed);
+    s.h.tr.reject_adds(None);
+    s.feed(&[]);
+
+    s.h.tr.content_on_add(ERAI_HASH, NEW_BYTES);
+    let item = s.item(&title).await;
+    s.retry(item.id, "00000000-0000-4000-8000-000000000611")
+        .await;
+    assert_eq!(s.commands().await, CommandsOutcome::Ran(1));
+    assert_eq!(s.item(&title).await.result, HistoryResult::Received);
+    assert_eq!(s.names(), vec![ERAI_EPISODE]);
+}
+
+/// SubsPlease's `14v2` seen first is named as episode 14.
+#[tokio::test]
+async fn a_subsplease_revision_seen_first_is_named_as_its_episode() {
+    let s = Setup::new().await;
+    s.feed(&[(NEW_HASH, &v2())]);
+    s.h.tr.content_on_add(NEW_HASH, NEW_BYTES);
+    s.cycle().await;
+    assert_eq!(s.names(), vec![EPISODE_NAME]);
+}

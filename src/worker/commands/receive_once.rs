@@ -60,6 +60,7 @@ use trname::trname;
 
 use super::link;
 use crate::{
+    revision::Release,
     store::{
         channels::{Channel, ChannelWithRules, Rule, RuleState},
         commands::{Command, CommandState, Outcome, MAX_ATTEMPTS},
@@ -893,9 +894,11 @@ pub async fn rename(
 }
 
 /// The name `trname` gives `file_name` in `save_path` with the rule's `episode`
-/// conversion, as the rule cycle's renaming derives it.
+/// conversion, as the rule cycle's renaming derives it: read from the name
+/// without its revision ([`Release::without_version`]), because `trname` does
+/// not read `06v2` as episode 6 in every name.
 pub fn derived_name(save_path: &Path, file_name: &str, episode: isize) -> Option<String> {
-    trname(save_path, file_name, episode)
+    trname(save_path, &Release::without_version(file_name), episode)
 }
 
 #[cfg(test)]
@@ -1054,6 +1057,56 @@ mod tests {
         assert_eq!(
             derived_name(folder, release, -12),
             Some("LIAR GAME S01E14.mkv".to_owned())
+        );
+    }
+
+    /// `trname` reads Erai-raws' `06v2` as episode 34 (from the CRC32
+    /// bracket); the name is read without the revision, and a name without
+    /// one is left as `trname` reads it.
+    #[test]
+    fn a_revision_is_named_as_its_episode() {
+        let folder = Path::new("/media/anime/Show/Season 01");
+        let erai = "[Erai-raws] Show - 06v2 [1080p CR WEBRip HEVC AAC][MultiSub][1BBD34E6].mkv";
+        assert_eq!(
+            trname(folder, erai, 0).as_deref(),
+            Some("Show S01E34.mkv"),
+            "trname alone"
+        );
+        assert_eq!(
+            derived_name(folder, erai, 0).as_deref(),
+            Some("Show S01E06.mkv")
+        );
+        let first = "[Erai-raws] Show - 06 [1080p CR WEBRip HEVC AAC][MultiSub][1BBD34E6].mkv";
+        assert_eq!(derived_name(folder, first, 0), trname(folder, first, 0));
+        assert_eq!(
+            derived_name(folder, "[SubsPlease] Show - 14v2 (1080p) [8F2EFECC].mkv", 0).as_deref(),
+            Some("Show S01E14.mkv")
+        );
+        for name in [
+            "[SubsPlease] Show - 14 (1080p) [8F2EFECC].mkv",
+            "[SubsPlease] Show - 14 (1080p).mkv",
+            "[Erai-raws] Show - 06 [1080p CR WEBRip HEVC AAC][MultiSub].mkv",
+            "Show S01E14.mkv",
+        ] {
+            assert_eq!(
+                derived_name(folder, name, 0),
+                trname(folder, name, 0),
+                "{name}"
+            );
+        }
+        // The rule's episode conversion applies to the revision's episode.
+        assert_eq!(
+            derived_name(
+                folder,
+                "[SubsPlease] Show - 13v2 (1080p) [8F2EFECC].mkv",
+                -12
+            )
+            .as_deref(),
+            Some("Show S01E01.mkv")
+        );
+        assert_eq!(
+            derived_name(folder, "[SubsPlease] Show - 13 (1080p) [8F2EFECC].mkv", -12).as_deref(),
+            Some("Show S01E01.mkv")
         );
     }
 

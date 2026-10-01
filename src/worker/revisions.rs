@@ -201,10 +201,10 @@ pub fn is_revision(title: &str) -> bool {
 }
 
 /// The episode's file name in `save_path` for the release `title`, as the
-/// rule cycle's renaming derives it (with the rule's `episode` conversion),
-/// read from the name without its revision ([`Release::without_version`]).
+/// rule cycle's renaming derives it (with the rule's `episode` conversion,
+/// read from the name without its revision).
 pub fn episode_name(save_path: &Path, title: &str, episode: isize) -> Option<String> {
-    derived_name(save_path, &Release::without_version(title), episode)
+    derived_name(save_path, title, episode)
 }
 
 /// Transmission's whole file list, read when first needed and then shared:
@@ -1219,18 +1219,13 @@ mod tests {
         assert!(!is_revision("[SubsPlease] Show - 14v1 (1080p).mkv"));
     }
 
-    /// `trname` reads Erai-raws' `06v2` as episode 34 (from the CRC32
-    /// bracket); the revision's episode name is the first release's.
+    /// The revision's episode name is the first release's, whatever
+    /// `trname` would read from the revision marker.
     #[test]
     fn a_revisions_episode_name_is_its_first_releases() {
         let folder = Path::new("/media/Show/Season 01");
         let v1 = "[Erai-raws] Show - 06 [1080p CR WEBRip HEVC AAC][MultiSub][1BBD34E6].mkv";
         let v2 = "[Erai-raws] Show - 06v2 [1080p CR WEBRip HEVC AAC][MultiSub][1BBD34E6].mkv";
-        assert_eq!(
-            derived_name(folder, v2, 0).as_deref(),
-            Some("Show S01E34.mkv"),
-            "trname alone"
-        );
         assert_eq!(
             episode_name(folder, v2, 0).as_deref(),
             Some("Show S01E06.mkv")
