@@ -247,8 +247,8 @@ async fn a_channel_without_a_waiting_subscription_has_no_candidates() {
     assert_eq!(status, StatusCode::OK, "{paused}");
     assert!(app.candidates().await.is_empty(), "paused offers nothing");
 
-    // Turned back on, what appeared while it was off stays out, and what
-    // appears afterwards is offered.
+    // Turned back on, the candidate first seen while it waited is offered again,
+    // and so is what appears afterwards.
     app.now.fetch_add(10_000, Ordering::SeqCst);
     let (_, resumed) = app
         .call(
@@ -258,7 +258,9 @@ async fn a_channel_without_a_waiting_subscription_has_no_candidates() {
         )
         .await;
     assert_eq!(resumed["state"], "active");
-    assert!(app.candidates().await.is_empty());
+    let kept = app.candidates().await;
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0]["work"], "New Work");
     app.record(
         &channel,
         NOW + 20_000,
@@ -266,8 +268,9 @@ async fn a_channel_without_a_waiting_subscription_has_no_candidates() {
     )
     .await;
     let candidates = app.candidates().await;
-    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates.len(), 2);
     assert_eq!(candidates[0]["work"], "Later Work");
+    assert_eq!(candidates[1]["work"], "New Work");
 }
 
 #[tokio::test]
@@ -612,4 +615,143 @@ async fn a_history_row_that_matched_no_rule_offers_naming_only_where_a_subscript
     let (_, row) = app.get(&format!("/api/history/{}", item.id)).await;
     assert_eq!(row["result"], "received");
     assert!(row["name_title"].is_null());
+}
+
+#[tokio::test]
+async fn the_item_window_says_when_it_left_older_items_unread() {
+    let app = App::new().await;
+    let channel = app.channel("feed.test").await;
+    let titles: Vec<String> = (0..=crate::store::history::MAX_PAGE_SIZE)
+        .map(|n| format!("[G] Work {n} - 01"))
+        .collect();
+    let refs: Vec<&str> = titles.iter().map(String::as_str).collect();
+    app.record(&channel, NOW, &refs).await;
+
+    let (read, cut) = rules_api::channel_items_up_to(&app.state.history, &channel.id, 1)
+        .await
+        .unwrap();
+    assert_eq!(read.len(), crate::store::history::MAX_PAGE_SIZE);
+    assert!(cut, "a page was read and the history goes on");
+
+    let (read, cut) = rules_api::channel_items_up_to(&app.state.history, &channel.id, 10_000)
+        .await
+        .unwrap();
+    assert_eq!(read.len(), titles.len());
+    assert!(!cut);
+}
+
+#[tokio::test]
+async fn a_stored_folder_that_is_no_work_folder_is_checked_when_the_title_keeps_it() {
+    let app = App::new().await;
+    let (channel, rule) = app.waiting_in_a_known_channel().await;
+    app.record(&channel, NOW + 1_000, &[NEW_1]).await;
+    let id = rule["id"].as_str().unwrap().to_owned();
+
+    // The subscription's folder is the collect folder itself, or nothing.
+    for bad in [".", "./", ""] {
+        let stored = app.state.channels.get_rule(&id).await.unwrap().unwrap();
+        let broken = app
+            .state
+            .channels
+            .update_rule(
+                &id,
+                stored.version,
+                &channel.id,
+                RuleInput {
+                    directory: bad.into(),
+                    ..stored.to_input()
+                },
+            )
+            .await
+            .unwrap();
+        let (status, answer) = app
+            .call(
+                Method::POST,
+                &format!("/api/rules/{id}/title"),
+                Some(json!({ "version": broken.version, "work": "New Work" })),
+            )
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad:?}: {answer}");
+        let (_, read) = app.get(&format!("/api/rules/{id}")).await;
+        assert_eq!(read["match"], Value::Null, "{bad:?}: nothing was written");
+
+        // Naming a work folder with the title fixes it.
+        let (status, named) = app
+            .call(
+                Method::POST,
+                &format!("/api/rules/{id}/title"),
+                Some(json!({
+                    "version": broken.version, "work": "New Work", "directory": "New Work",
+                })),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{bad:?}: {named}");
+        // Back to waiting for the next round.
+        let named = app.state.channels.get_rule(&id).await.unwrap().unwrap();
+        assert_eq!(named.directory, "New Work");
+        app.state
+            .channels
+            .update_rule(
+                &id,
+                named.version,
+                &channel.id,
+                RuleInput {
+                    r#match: None,
+                    ..named.to_input()
+                },
+            )
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn editing_a_subscription_refuses_a_folder_that_is_no_work_folder() {
+    let app = App::new().await;
+    let (channel, rule) = app.waiting_in_a_known_channel().await;
+    let id = rule["id"].as_str().unwrap().to_owned();
+    let put = |version: Value, directory: &str| {
+        json!({
+            "version": version, "channel_id": channel.id, "match": "Phrase",
+            "directory": directory, "episode": 1,
+        })
+    };
+
+    for bad in [".", "./", "", "  "] {
+        let (status, answer) = app
+            .call(
+                Method::PUT,
+                &format!("/api/rules/{id}"),
+                Some(put(rule["version"].clone(), bad)),
+            )
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad:?}: {answer}");
+    }
+    let (_, read) = app.get(&format!("/api/rules/{id}")).await;
+    assert_eq!(read["version"], rule["version"], "nothing was written");
+
+    let (status, saved) = app
+        .call(
+            Method::PUT,
+            &format!("/api/rules/{id}"),
+            Some(put(rule["version"].clone(), "Other Folder")),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+
+    // A plain rule may still save into the collect folder itself.
+    let plain = app
+        .state
+        .channels
+        .create_rule(&channel.id, RuleInput::default())
+        .await
+        .unwrap();
+    let (status, saved) = app
+        .call(
+            Method::PUT,
+            &format!("/api/rules/{}", plain.id),
+            Some(put(json!(plain.version), ".")),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
 }

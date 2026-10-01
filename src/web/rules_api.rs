@@ -341,6 +341,34 @@ async fn collect_folder(state: &AppState) -> Result<Option<String>, ApiError> {
         .map(|settings| settings.folder))
 }
 
+/// Refuses a save folder typed for a subscription that is no folder below the
+/// collect folder: a subscription saves into a work folder, never into the
+/// collect folder itself (`.` and `./` name it, as an empty one does).
+pub(super) fn check_work_folder(directory: &str) -> Result<(), ApiError> {
+    let directory = directory.trim();
+    if directory.is_empty() {
+        return Err(ApiError::invalid("저장 폴더를 적어 주세요."));
+    }
+    if crate::folders::is_collect_folder_itself(FsPath::new(directory)) {
+        return Err(ApiError::invalid(
+            "저장 폴더로 `.`만 적을 수는 없어요. 수집 폴더 자체에 받게 되니, 그 아래의 작품 폴더 이름을 적어 주세요.",
+        ));
+    }
+    Ok(())
+}
+
+/// [`check_work_folder`] for the folder a rule already has, which the request
+/// does not name: the user is told to choose one first.
+pub(super) fn check_stored_work_folder(rule: &Rule) -> Result<(), ApiError> {
+    let directory = rule.directory.trim();
+    if directory.is_empty() || crate::folders::is_collect_folder_itself(FsPath::new(directory)) {
+        return Err(ApiError::invalid(
+            "이 규칙은 수집 폴더 자체에 받아요. 구독은 작품 폴더에 받으니, 규칙의 저장 폴더를 작품 폴더로 먼저 정해 주세요.",
+        ));
+    }
+    Ok(())
+}
+
 /// Refuses a save folder `directory` for a new rule (`stored` is `None`) or
 /// a changed one. See the module docs.
 pub(super) async fn check_directory(
@@ -404,8 +432,27 @@ pub(super) async fn channel_items(
     history: &HistoryStore,
     channel_id: &str,
 ) -> Result<Vec<HistoryItem>, ApiError> {
+    Ok(channel_items_window(history, channel_id).await?.0)
+}
+
+/// [`channel_items`] and whether the history holds older items than it read.
+pub(super) async fn channel_items_window(
+    history: &HistoryStore,
+    channel_id: &str,
+) -> Result<(Vec<HistoryItem>, bool), ApiError> {
+    channel_items_up_to(history, channel_id, MAX_ITEMS_PER_CHANNEL).await
+}
+
+/// [`channel_items_window`] with the number of items at which it stops reading
+/// (a whole page past it at most) given.
+pub(super) async fn channel_items_up_to(
+    history: &HistoryStore,
+    channel_id: &str,
+    max_items: usize,
+) -> Result<(Vec<HistoryItem>, bool), ApiError> {
     let mut items: Vec<HistoryItem> = Vec::new();
     let mut after = None;
+    let mut truncated = false;
     loop {
         let page = history
             .list(HistoryQuery {
@@ -418,11 +465,15 @@ pub(super) async fn channel_items(
             .map_err(history_error)?;
         items.extend(page.items);
         match page.next {
-            Some(next) if items.len() < MAX_ITEMS_PER_CHANNEL => after = Some(next),
-            _ => break,
+            Some(next) if items.len() < max_items => after = Some(next),
+            Some(_) => {
+                truncated = true;
+                break;
+            }
+            None => break,
         }
     }
-    Ok(items)
+    Ok((items, truncated))
 }
 
 // ---------------------------------------------------------------------------
@@ -912,6 +963,9 @@ async fn update_rule(
     let input = require_valid_regex(b.fields.into_input(Some(&stored))?)?;
     if input.state != stored.state {
         return Err(ApiError::invalid(STATE_NOT_EDITED));
+    }
+    if stored.subscription.is_some() {
+        check_work_folder(&input.directory)?;
     }
     check_directory(&state, Some(&stored), &input.directory).await?;
     match state

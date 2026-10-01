@@ -568,10 +568,18 @@ async fn apply(
     // Anissia is asked only for the checked suggestions, and never blocks the
     // import: what it cannot say is left for the worker's daily refresh.
     let resolved = suggestions::resolve(&state, &picked.anime_nos()).await;
-    let to_subscribe = suggestions::subscriptions(&picked.wanted, &resolved, state.anissia.now());
+    let picked = suggestions::settle(picked, &resolved);
+    let to_subscribe = suggestions::subscriptions(&picked.wanted, &resolved);
+    // The import is stamped with the time read inside its transaction.
+    let anissia = state.anissia.clone();
     let (results, outcomes) = state
         .channels
-        .import_channels_subscribing(actions, collect_folder_set.clone(), to_subscribe)
+        .import_channels_subscribing(
+            actions,
+            collect_folder_set.clone(),
+            to_subscribe,
+            move || anissia.now(),
+        )
         .await
         .map_err(store_error)?;
     let subscriptions = suggestions::result(picked, &resolved, &outcomes);

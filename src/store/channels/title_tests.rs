@@ -294,3 +294,114 @@ async fn a_rejected_title_is_remembered_once_and_goes_with_its_channel() {
         .unwrap();
     assert!(env.store.rejected_titles().await.unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn clearing_the_phrase_of_a_subscription_notes_the_time_it_began_to_wait_again() {
+    let env = Env::new().await;
+    let rule = env.waiting(7, 100).await;
+    let titled = env
+        .store
+        .give_title(&rule.id, rule.version, "New Work", None, 300)
+        .await
+        .unwrap();
+    assert_eq!(titled.subscription.as_ref().unwrap().titled_at, Some(300));
+
+    // Blanked, it waits again from the moment of the save.
+    let blank = env
+        .store
+        .update_rule_at(
+            &rule.id,
+            titled.version,
+            &env.channel,
+            RuleInput {
+                r#match: None,
+                ..titled.to_input()
+            },
+            900,
+        )
+        .await
+        .unwrap();
+    assert_eq!(blank.r#match, None);
+    assert_eq!(blank.subscription.as_ref().unwrap().titled_at, Some(900));
+
+    // Saving it again while it still waits moves nothing.
+    let again = env
+        .store
+        .update_rule_at(
+            &rule.id,
+            blank.version,
+            &env.channel,
+            RuleInput {
+                directory: "Elsewhere".into(),
+                ..blank.to_input()
+            },
+            1_500,
+        )
+        .await
+        .unwrap();
+    assert_eq!(again.subscription.unwrap().titled_at, Some(900));
+
+    // A plain rule that loses its phrase has no subscription to note.
+    let plain = env
+        .store
+        .create_rule(
+            &env.channel,
+            RuleInput {
+                r#match: Some("Plain".into()),
+                ..RuleInput::default()
+            },
+        )
+        .await
+        .unwrap();
+    let plain = env
+        .store
+        .update_rule_at(
+            &plain.id,
+            plain.version,
+            &env.channel,
+            RuleInput {
+                r#match: None,
+                ..plain.to_input()
+            },
+            800,
+        )
+        .await
+        .unwrap();
+    assert!(plain.subscription.is_none());
+}
+
+#[tokio::test]
+async fn a_title_is_a_literal_work_name_so_giving_it_clears_the_regex_flag() {
+    let env = Env::new().await;
+    let rule = env
+        .store
+        .create_subscription_rule(
+            &env.channel,
+            RuleInput {
+                r#match: None,
+                regex: true,
+                case_insensitive: true,
+                directory: "작품".into(),
+                ..RuleInput::default()
+            },
+            NewSubscription {
+                anime: anime(7),
+                subtitles: SubtitleMode::Undecided,
+                creator: None,
+                subscribed_at: 100,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(rule.regex);
+
+    // A work name like this one is a pattern if the flag stays.
+    let titled = env
+        .store
+        .give_title(&rule.id, rule.version, "Re:Zero (2nd) + More", None, 300)
+        .await
+        .unwrap();
+    assert_eq!(titled.r#match.as_deref(), Some("Re:Zero (2nd) + More"));
+    assert!(!titled.regex);
+    assert!(titled.case_insensitive, "the case flag is the user's");
+}

@@ -24,6 +24,7 @@ use super::{
     repo, ChannelError, ChannelStore,
 };
 use crate::store::{
+    history::Millis,
     library::{ensure_automatic_in, LibraryError},
     settings::{set_collect_folder_if_unset, SettingsError},
 };
@@ -137,7 +138,7 @@ impl ChannelStore {
     ) -> Result<Vec<ImportedChannel>, ChannelError> {
         self.db
             .run(move |c| {
-                apply_import(c, &actions, collect_folder.as_deref(), &[])
+                apply_import(c, &actions, collect_folder.as_deref(), &[], || 0)
                     .map(|(channels, _)| channels)
             })
             .await
@@ -152,6 +153,7 @@ pub(super) fn apply_import(
     actions: &[ImportAction],
     collect_folder: Option<&str>,
     subscriptions: &[ImportSubscription],
+    now: impl FnOnce() -> Millis,
 ) -> Result<(Vec<ImportedChannel>, Vec<SubscriptionOutcome>), ChannelError> {
     if collect_folder == Some("") {
         return Err(ChannelError::Invalid("collect folder is empty"));
@@ -177,6 +179,9 @@ pub(super) fn apply_import(
     }
 
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    // Read with the write lock held: the import time is not older than a write
+    // that finished while this transaction waited to begin.
+    let at = now();
     if let Some(folder) = collect_folder {
         set_collect_folder_if_unset(&tx, folder).map_err(|e| match e {
             SettingsError::Conflict { expected, actual } => ChannelError::Conflict {
@@ -207,7 +212,7 @@ pub(super) fn apply_import(
             } => replace_keeping_rule_ids(&tx, id, *expected_version, channel)?,
         });
     }
-    let outcomes = subscribe(&tx, &mut results, subscriptions)?;
+    let outcomes = subscribe(&tx, &mut results, subscriptions, at)?;
     tx.commit()?;
     Ok((results, outcomes))
 }

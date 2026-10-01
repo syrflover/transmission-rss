@@ -70,12 +70,21 @@ fn unmatched(id: i64, title: &str, at: Millis) -> HistoryItem {
 }
 
 fn found(rules: Vec<Rule>, items: &[HistoryItem], rejected: &[&str]) -> Vec<TitleCandidate> {
+    found_in(rules, items, false, rejected)
+}
+
+fn found_in(
+    rules: Vec<Rule>,
+    items: &[HistoryItem],
+    truncated: bool,
+    rejected: &[&str],
+) -> Vec<TitleCandidate> {
     let channel = ChannelWithRules {
         channel: channel(),
         rules,
     };
     let rejected = rejected.iter().map(|k| (*k).to_owned()).collect();
-    title_candidates(&channel, items, &rejected)
+    title_candidates(&channel, items, truncated, &rejected)
 }
 
 const NEW_1: &str = "[SubsPlease] New Work - 01 (1080p) [AAAA1111].mkv";
@@ -194,7 +203,7 @@ fn a_title_naming_the_waiting_subscription_itself_ends_the_candidate() {
 }
 
 #[test]
-fn a_paused_or_archived_subscription_offers_nothing_and_a_resume_starts_afresh() {
+fn a_paused_or_archived_subscription_offers_nothing_and_a_resume_keeps_the_boundary() {
     let items = [unmatched(1, NEW_1, 3_000)];
     for state in [RuleState::Paused, RuleState::Archived] {
         let mut off = waiting();
@@ -202,14 +211,23 @@ fn a_paused_or_archived_subscription_offers_nothing_and_a_resume_starts_afresh()
         assert!(found(vec![off], &items, &[]).is_empty(), "{state:?}");
     }
 
-    // Turned back on after the work appeared: it appeared while off.
+    // Pausing and turning the subscription back on does not move the boundary: a
+    // work first seen while it waited stays a candidate across the pause.
+    for resumed_at in [2_000, 4_000] {
+        let mut resumed = waiting();
+        resumed.resumed_at = Some(resumed_at);
+        assert_eq!(
+            found(vec![resumed], &items, &[]).len(),
+            1,
+            "resumed at {resumed_at}"
+        );
+    }
+    // A work first seen before the subscription began to wait is not new, however
+    // late it was turned back on.
+    let before = [unmatched(1, NEW_1, SINCE - 1)];
     let mut resumed = waiting();
     resumed.resumed_at = Some(4_000);
-    assert!(found(vec![resumed], &items, &[]).is_empty());
-    // Turned back on before it: a candidate.
-    let mut resumed = waiting();
-    resumed.resumed_at = Some(2_000);
-    assert_eq!(found(vec![resumed], &items, &[]).len(), 1);
+    assert!(found(vec![resumed], &before, &[]).is_empty());
 
     // Another subscription that waits since later does not make the work new
     // for it; one that waits since before the work does.
@@ -249,4 +267,33 @@ fn candidates_come_newest_work_first_and_a_title_without_a_work_is_left_out() {
         .map(|c| c.work)
         .collect();
     assert_eq!(works, ["Newer", "Older"]);
+}
+
+#[test]
+fn a_truncated_window_that_does_not_reach_the_boundary_offers_nothing() {
+    // The newest items only: every work looks new, though a long-running one
+    // may have been recorded long before the window starts.
+    let items = [unmatched(2, NEW_2, 3_000), unmatched(1, NEW_1, SINCE)];
+    assert_eq!(found_in(vec![waiting()], &items, false, &[]).len(), 1);
+    assert!(found_in(vec![waiting()], &items, true, &[]).is_empty());
+
+    // A window that reaches back past the boundary shows what was there before.
+    let items = [
+        unmatched(3, NEW_2, 3_000),
+        unmatched(2, NEW_1, 2_000),
+        unmatched(1, "[SubsPlease] Old Work - 05", SINCE - 1),
+    ];
+    let candidates = found_in(vec![waiting()], &items, true, &[]);
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].work, "New Work");
+
+    // A truncated window with no items has nothing to be wrong about.
+    assert!(found_in(vec![waiting()], &[], true, &[]).is_empty());
+}
+
+#[test]
+fn an_unknowable_first_sighting_is_logged_once_per_channel() {
+    assert!(note_unknowable_once("log-once-a"));
+    assert!(!note_unknowable_once("log-once-a"));
+    assert!(note_unknowable_once("log-once-b"));
 }

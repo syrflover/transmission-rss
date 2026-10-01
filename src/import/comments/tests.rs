@@ -173,9 +173,10 @@ fn the_two_line_convention_gives_the_weekday_time_creator_and_anime() {
         read(&comment),
         address_airs(1001, Some("Team Alpha"), 1, "23:30")
     );
-    // Line 1 may come after the address, and the surrounding spaces do not matter.
+    // The address line is the one directly above the rule: with line 1 after
+    // it, the comment is not the convention and attributes nothing.
     let reversed = lines("  https://anissia.net/anime?animeNo=1001 \n   Mon. 23:30. Team Alpha  ");
-    assert_eq!(read(&reversed), read(&comment));
+    assert_eq!(read(&reversed), unreadable(ADDRESS_NOT_LAST));
 }
 
 #[test]
@@ -329,5 +330,52 @@ fn a_file_the_scan_cannot_place_comments_in_reads_none_without_comments_and_unre
     assert_eq!(
         rule_comments(content, &[2]),
         vec![vec![unreadable(NO_PLACE); 2]]
+    );
+}
+
+const HEAD: &str = "    # Mon. 23:30. Team Alpha\n    # https://anissia.net/anime?animeNo=1001\n";
+
+/// A channel with one rule below `above`.
+fn yaml_with(above: &str) -> String {
+    format!(
+        "- url: https://x.test/rss\n  directory: /m\n  rules:\n{above}    - match: a\n      directory: A\n"
+    )
+}
+
+#[test]
+fn only_the_two_lines_directly_above_the_rule_are_its_comment() {
+    // A commented-out rule above the real comment, and a note above it, are not
+    // part of it.
+    let above =
+        format!("    # - match: old\n    #   directory: Old\n    # a note about this one\n{HEAD}");
+    assert_eq!(
+        rule_comments(&yaml_with(&above), &[1]),
+        vec![vec![address_airs(1001, Some("Team Alpha"), 1, "23:30")]]
+    );
+}
+
+#[test]
+fn a_commented_out_rule_above_a_rule_lends_it_no_address() {
+    // The commented-out rule kept its own comment, address included, and
+    // nothing real sits between it and the rule below.
+    let above = format!("{HEAD}    # - match: old\n    #   directory: Old\n");
+    assert_eq!(
+        rule_comments(&yaml_with(&above), &[1]),
+        vec![vec![unreadable(NO_ADDRESS)]]
+    );
+    // With the address on the line just above the commented-out line.
+    let above = format!("{HEAD}    # - match: old\n");
+    assert_eq!(
+        rule_comments(&yaml_with(&above), &[1]),
+        vec![vec![unreadable(ADDRESS_NOT_LAST)]]
+    );
+}
+
+#[test]
+fn a_note_between_the_address_and_the_rule_leaves_the_comment_unattributed() {
+    let above = format!("{HEAD}    # watch out for batches\n");
+    assert_eq!(
+        rule_comments(&yaml_with(&above), &[1]),
+        vec![vec![unreadable(ADDRESS_NOT_LAST)]]
     );
 }

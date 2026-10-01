@@ -73,7 +73,7 @@ export function useImportFlow(): ImportFlow {
     : 0;
 
   const lookup = useSuggestionLookup(preview);
-  const pickedCount = preview ? pickedRequests(preview.channels, picks, choices).length : 0;
+  const pickedCount = preview ? pickedRequests(preview.channels, picks, choices, lookup.unlisted).length : 0;
 
   const review = useCallback(async (text: string, name: string) => {
     setReading(true);
@@ -132,21 +132,21 @@ export function useImportFlow(): ImportFlow {
         const next = { ...previous };
         view.rules.forEach((rule, index) => {
           // The marks of suggestions that cannot be checked are not changed.
-          if (standing(view, rule, undefined) === "pickable") next[pickKey(channel, index)] = on;
+          if (standing(view, rule, undefined, lookup.unlisted) === "pickable") next[pickKey(channel, index)] = on;
         });
         return next;
       });
     },
-    [preview],
+    [preview, lookup.unlisted],
   );
 
   const picked = useCallback(
     (channel: number, rule: number) => {
       const view = preview?.channels.find((candidate) => candidate.index === channel);
       const ruleView = view?.rules[rule];
-      return view && ruleView ? isPicked(view, ruleView, rule, picks, choices[channel]) : false;
+      return view && ruleView ? isPicked(view, ruleView, rule, picks, choices[channel], lookup.unlisted) : false;
     },
-    [preview, picks, choices],
+    [preview, picks, choices, lookup.unlisted],
   );
 
   const apply = useCallback(async () => {
@@ -172,7 +172,7 @@ export function useImportFlow(): ImportFlow {
           content,
           choices: body,
           reviewed_collect_folder: preview.collect_folder.current,
-          subscriptions: pickedRequests(preview.channels, picks, choices),
+          subscriptions: pickedRequests(preview.channels, picks, choices, lookup.unlisted),
         },
       });
       setResult(done);
@@ -194,7 +194,7 @@ export function useImportFlow(): ImportFlow {
         () => undefined,
       );
     }
-  }, [preview, content, choices, picks, undecided]);
+  }, [preview, content, choices, picks, undecided, lookup.unlisted]);
 
   const reviewAgain = useCallback(async () => {
     if (content !== null) await review(content, fileName ?? "");

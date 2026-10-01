@@ -2,7 +2,7 @@ import { cn } from "@/lib/utils";
 
 import { AlertIcon, BackIcon, CheckIcon, ChevronIcon } from "../icons";
 import { ActionBar, Banner, BTN, CARD, Facts, Labeled, Tag } from "../parts";
-import { caseCounts, standing, weekLabel } from "./suggestions";
+import { caseCounts, standing, UNLISTED_NOTE, weekLabel } from "./suggestions";
 import type { ChannelView, Decision, RuleView } from "./types";
 import type { ImportFlow } from "./useImportFlow";
 
@@ -172,13 +172,18 @@ function SuggestionBlock({
 
   const animeNo = suggestion.anime_no as number;
   const decision = flow.choices[channel.index];
-  const state = standing(channel, rule, decision);
+  const state = standing(channel, rule, decision, flow.lookup.unlisted);
   const checked = flow.isPicked(channel.index, index);
   const found = flow.lookup.schedules[animeNo];
   const looking = flow.lookup.status === "loading";
   const unknown = looking ? "읽는 중" : "미정";
   const creators = flow.lookup.creators[animeNo];
-  const unlisted = suggestion.creator !== null && Array.isArray(creators) && !creators.includes(suggestion.creator);
+  // An anime Anissia does not list has no caption list to compare the name with.
+  const unlisted =
+    state !== "unlisted" &&
+    suggestion.creator !== null &&
+    Array.isArray(creators) &&
+    !creators.includes(suggestion.creator);
   const note =
     state === "skipped"
       ? "이 채널을 건너뛰어서 구독 제안도 함께 빠져요."
@@ -188,7 +193,9 @@ function SuggestionBlock({
           ? suggestion.blocked
           : state === "kept"
             ? "교체해도 이 규칙은 지금 구독 그대로 두고, 이 제안은 쓰지 않아요."
-            : null;
+            : state === "unlisted"
+              ? UNLISTED_NOTE
+              : null;
 
   return (
     <div className="flex flex-col gap-1.5 rounded-lg border border-hairline bg-surface-2 p-3">
@@ -234,7 +241,7 @@ function SuggestionBlock({
           </Tag>
         )}
       </Facts>
-      {unlisted && (
+      {unlisted && state === "pickable" && (
         <p className="pl-[26px] text-[13px] leading-relaxed text-text-muted">
           이 작품의 Anissia 자막 목록에 없는 이름이에요. 체크하면 적힌 이름 그대로 따라가는 구독으로 가져와요.
         </p>
@@ -296,7 +303,9 @@ function RuleRow({
 function SuggestionToolbar({ channel, flow }: { channel: ChannelView; flow: ImportFlow }) {
   const counts = caseCounts(channel);
   const decision = flow.choices[channel.index];
-  const pickable = channel.rules.filter((rule) => standing(channel, rule, decision) === "pickable").length;
+  const pickable = channel.rules.filter(
+    (rule) => standing(channel, rule, decision, flow.lookup.unlisted) === "pickable",
+  ).length;
   const picked = channel.rules.filter((_, index) => flow.isPicked(channel.index, index)).length;
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-2.5 border-t border-hairline-soft px-4 py-3">

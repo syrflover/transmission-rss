@@ -225,8 +225,8 @@ impl ChannelStore {
     }
 
     /// [`ChannelStore::update_rule`] at a moment the caller's clock gives, which
-    /// a subscription that waited for its title and gets one here is noted as
-    /// titled at ([`Subscription::titled_at`]).
+    /// a subscription whose phrase is given here, or cleared so that it waits for
+    /// a title again, is noted as titled at ([`Subscription::titled_at`]).
     pub async fn update_rule_at(
         &self,
         id: &str,
