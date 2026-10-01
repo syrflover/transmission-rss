@@ -665,6 +665,84 @@ async fn an_episode_in_transmission_is_downloading_until_the_library_holds_it() 
 }
 
 #[tokio::test]
+async fn an_episode_stays_downloading_while_a_long_cycle_is_running() {
+    let app = App::new().await;
+    let rule = app
+        .subscribe(
+            anime(1, "받는 중", 4, Some("10:00"), Some("2026-07-02")),
+            self::rule("Work"),
+            SubtitleMode::None,
+            Some("Empty"),
+        )
+        .await;
+    app.state
+        .history
+        .record(
+            NOW - 1000,
+            vec![Observation {
+                channel_id: app.channel.id.clone(),
+                channel_label: app.channel.masked_url(),
+                identity_key: "title:x".into(),
+                title: "[G] Work - 14 (1080p) [AAAA1111].mkv".into(),
+                link: "https://feed.test/item".into(),
+                result: HistoryResult::Received,
+                rule_id: Some(rule.id.clone()),
+                torrent_hash: Some("aa".into()),
+                reason: None,
+            }],
+        )
+        .await
+        .unwrap();
+    let minute = 60_000;
+    app.state
+        .status
+        .record_cycle_interval(minute)
+        .await
+        .unwrap();
+    // The worker looked at Transmission four minutes ago, during the cycle
+    // before this one.
+    app.state
+        .status
+        .record_transmission(
+            TransmissionCounts {
+                downloading: 1,
+                seeding: 0,
+                taken_at: NOW - 4 * minute,
+            },
+            vec!["aa".into()],
+        )
+        .await
+        .unwrap();
+    let video = |body: &Value| body["week"]["days"][3]["cards"][0]["video"].clone();
+
+    // Between cycles that look is more than three intervals old.
+    assert_eq!(video(&app.week().await), "waiting");
+
+    // A cycle began a minute after that look and is still running: the worker is
+    // alive, so what it saw is kept until the cycle ends.
+    assert!(app
+        .state
+        .history
+        .try_begin_cycle(NOW - 3 * minute, 0)
+        .await
+        .unwrap());
+    assert_eq!(video(&app.week().await), "downloading");
+
+    // Once it ends without a newer look, the look is old again.
+    app.state.history.finish_cycle(NOW - 1000).await.unwrap();
+    assert_eq!(video(&app.week().await), "waiting");
+
+    // A cycle running past the bound is a hung worker: not believed.
+    assert!(app
+        .state
+        .history
+        .try_begin_cycle(NOW - 31 * minute, 0)
+        .await
+        .unwrap());
+    assert_eq!(video(&app.week().await), "waiting");
+}
+
+#[tokio::test]
 async fn nothing_is_downloading_without_a_recorded_cycle_interval() {
     let app = App::new().await;
     let rule = app

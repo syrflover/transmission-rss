@@ -40,7 +40,7 @@ use url::Url;
 
 use super::{ApiError, AppState};
 use crate::store::channels::ChannelError;
-use crate::store::history::{HistoryError, Millis};
+use crate::store::history::{CycleState, HistoryError, Millis};
 use crate::store::status::StatusError;
 
 #[cfg(test)]
@@ -105,8 +105,10 @@ pub struct CycleStatus {
     /// When the next cycle is due: the start plus the interval the worker
     /// recorded when it started. `null` while no worker has recorded one.
     pub next_at: Option<Millis>,
-    /// The next cycle is more than one interval overdue: the worker is not
-    /// checking the feeds, and the board says so instead of a past time.
+    /// The worker is not checking the feeds, and the board says so instead of a
+    /// past time: the next cycle is more than one interval overdue while none
+    /// is running, or the running one has gone on past [`running_bound`]. A cycle
+    /// that is running, however long it has taken, is not stalled.
     pub stalled: bool,
 }
 
@@ -120,6 +122,42 @@ pub struct Board {
     pub cycle: Option<CycleStatus>,
     /// False until the collect folder is chosen; the worker adds nothing then.
     pub collect_folder_set: bool,
+}
+
+/// The shortest bound on how long a cycle may run and still be taken for
+/// running.
+const RUNNING_FLOOR_MS: i64 = 30 * 60_000;
+/// How many intervals a cycle may run and still be taken for running, when that
+/// is longer than [`RUNNING_FLOOR_MS`].
+const RUNNING_INTERVALS: i64 = 10;
+
+/// How long after its start a cycle without an end is believed to be running
+/// rather than hung or dead (the worker cannot say which: a cycle it was
+/// stopped in also stays unfinished): the larger of 30 minutes and ten
+/// intervals, so that a short interval does not call a slow cycle stopped and a
+/// worker that died mid-cycle is still reported.
+fn running_bound(interval_ms: i64) -> i64 {
+    RUNNING_FLOOR_MS.max(interval_ms.saturating_mul(RUNNING_INTERVALS))
+}
+
+/// Whether `cycle` is running as of `now`: it has started and not ended, and has
+/// not gone on past [`running_bound`].
+pub(super) fn cycle_running(cycle: &CycleState, interval_ms: i64, now: Millis) -> bool {
+    cycle.finished_at.is_none()
+        && now.saturating_sub(cycle.started_at) <= running_bound(interval_ms)
+}
+
+/// Whether the worker is taken to have stopped checking as of `now`. A running
+/// cycle is not stopped; a cycle that has no end and has outlived
+/// [`running_bound`] is; otherwise the next check is stopped once it is more
+/// than one interval overdue.
+fn cycle_stalled(cycle: &CycleState, interval_ms: i64, now: Millis) -> bool {
+    if cycle.finished_at.is_none() {
+        return !cycle_running(cycle, interval_ms, now);
+    }
+    now > cycle
+        .started_at
+        .saturating_add(interval_ms.saturating_mul(2))
 }
 
 fn internal(e: impl std::fmt::Display) -> ApiError {
@@ -211,8 +249,7 @@ pub async fn board(state: &AppState, now: Millis, tz_offset: i64) -> Result<Boar
             started_at: c.started_at,
             finished_at: c.finished_at,
             next_at: interval.map(|ms| c.started_at.saturating_add(ms)),
-            stalled: interval
-                .is_some_and(|ms| now > c.started_at.saturating_add(ms.saturating_mul(2))),
+            stalled: interval.is_some_and(|ms| cycle_stalled(&c, ms, now)),
         });
 
     let collect_folder_set = state

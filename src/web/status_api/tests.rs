@@ -296,6 +296,74 @@ async fn a_next_check_more_than_one_interval_overdue_is_stalled() {
 }
 
 #[tokio::test]
+async fn a_cycle_that_is_running_is_not_stalled_however_short_the_interval() {
+    let (state, _router) = app();
+    let minute = 60_000;
+    state.status.record_cycle_interval(minute).await.unwrap();
+    let stalled = |board: Board| board.cycle.unwrap().stalled;
+
+    // A cycle began three minutes ago (three intervals) and has not ended: the
+    // worker is busy with it, not stopped.
+    assert!(state
+        .history
+        .try_begin_cycle(NOON - 3 * minute, 0)
+        .await
+        .unwrap());
+    assert!(!stalled(board(&state, NOON, 0).await.unwrap()));
+
+    // Still running at the bound: the larger of 30 minutes and ten intervals.
+    assert!(!stalled(
+        board(&state, NOON - 3 * minute + 30 * minute, 0)
+            .await
+            .unwrap()
+    ));
+    // Past it, a cycle that has not ended is a worker that hung or died.
+    assert!(stalled(
+        board(&state, NOON - 3 * minute + 30 * minute + 1, 0)
+            .await
+            .unwrap()
+    ));
+
+    // With a long interval the bound is ten intervals.
+    state
+        .status
+        .record_cycle_interval(10 * minute)
+        .await
+        .unwrap();
+    assert!(!stalled(
+        board(&state, NOON - 3 * minute + 100 * minute, 0)
+            .await
+            .unwrap()
+    ));
+    assert!(stalled(
+        board(&state, NOON - 3 * minute + 100 * minute + 1, 0)
+            .await
+            .unwrap()
+    ));
+}
+
+#[tokio::test]
+async fn a_finished_cycle_three_intervals_overdue_is_stalled() {
+    let (state, _router) = app();
+    let minute = 60_000;
+    state.status.record_cycle_interval(minute).await.unwrap();
+    assert!(state
+        .history
+        .try_begin_cycle(NOON - 4 * minute, 0)
+        .await
+        .unwrap());
+    state
+        .history
+        .finish_cycle(NOON - 4 * minute + 1_000)
+        .await
+        .unwrap();
+
+    // No cycle is running and the next check was due three intervals ago.
+    let board = board(&state, NOON, 0).await.unwrap();
+    assert!(board.cycle.unwrap().stalled);
+}
+
+#[tokio::test]
 async fn a_bad_offset_is_refused_and_a_huge_one_is_clamped() {
     let (state, router) = app();
     let (status, json) = get(&router, "/api/collect/status?tz_offset=abc").await;
