@@ -353,6 +353,16 @@ impl FakeTransmission {
         }
     }
 
+    /// Each file of `hash` is `length` bytes long, as the torrent says,
+    /// whatever is on disk.
+    pub fn set_file_length(&self, hash: &str, length: i64) {
+        for t in self.state.lock().unwrap().torrents.iter_mut() {
+            if t.hash == hash {
+                t.file_length = Some(length);
+            }
+        }
+    }
+
     /// Finishes the download of `hash`: nothing is left to download.
     pub fn finish(&self, hash: &str) {
         for t in self.state.lock().unwrap().torrents.iter_mut() {

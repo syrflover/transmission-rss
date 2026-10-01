@@ -12,7 +12,11 @@
 -- CRC32 the new release's name carries, eight upper-case hex digits; NULL
 -- when the person received it with `다시 받기` and that request is the
 -- confirmation. `received_name` and `file_crc` are the new file's name as
--- received and its CRC32 as read, once it has been checked. `state` is where
+-- received and its CRC32 as read, once it has been checked, and
+-- `file_identity` what told that file apart when it was read (device, inode,
+-- size, modification and status-change times, `:`-joined): the old video is
+-- removed only while the file under `received_name` is still that one.
+-- `state` is where
 -- the replacement is; the worker writes each step before it takes the next
 -- (see `RevisionState`). `overtaken_by` is the row of the higher revision a
 -- `skipped` row was skipped for while that one was on its way; when that row
@@ -35,6 +39,7 @@ CREATE TABLE video_revisions (
     torrent_hash  TEXT,
     received_name TEXT,
     file_crc      TEXT,
+    file_identity TEXT,
     state         TEXT    NOT NULL CHECK (state IN ('unknown', 'skipped', 'receiving',
                       'verified', 'removing', 'removed', 'done', 'failed', 'cleared',
                       'abandoned')),

@@ -70,7 +70,10 @@
 //!    one of the video decided about. Anything else (a batch, a torrent trss
 //!    did not add or of another release, a file two torrents hold, a file that
 //!    changed) is left alone and the replacement fails. A failure here leaves
-//!    the old video in place.
+//!    the old video in place. Right before the removal the new video is
+//!    looked at again too: unless its received name still holds the file
+//!    whose CRC32 was read (its identity, kept at step 1), nothing is removed
+//!    and the replacement waits, and ends after a second such look.
 //! 3. **The new video takes the episode name**, by Transmission's rename (or,
 //!    for a torrent that is gone, a rename on disk that never replaces), and
 //!    only while that name is free. Until it goes through, the row says why
@@ -569,6 +572,7 @@ const DESTINATION_TAKEN: &str =
 const NEW_FILE_MISSING: &str = "받은 새 영상 파일을 찾지 못해 회차 이름을 붙이지 못했어요.";
 const OLD_FILE_LEFT: &str = "이전 영상의 토렌트는 Transmission에서 지웠지만 회차 이름의 파일이 아직 있어요. 그 파일이 없어지면 새 영상에 회차 이름을 붙여요.";
 const NEW_GONE_OLD_LEFT: &str = "이전 영상의 토렌트는 Transmission에서 지웠지만 회차 이름의 파일이 아직 있고, 받은 새 영상 파일은 없어요. 다음 확인에도 없으면 이 대체를 끝내요.";
+const NEW_UNCHECKED_OLD_KEPT: &str = "받은 새 영상 파일이 없거나 CRC32를 확인한 파일과 달라서 이전 영상을 지우지 않았어요. 다음 확인에도 그러면 이 대체를 끝내요.";
 /// Why a replacement whose new video is gone was ended (not shown).
 const ABANDONED: &str =
     "받은 새 영상 파일이 이어진 두 번의 확인에서 모두 없어서 대체를 끝냈어요. 아무 파일도 지우지 않았어요.";
@@ -698,10 +702,12 @@ async fn drive(
             Step::Verified {
                 received_name,
                 file_crc,
+                file_identity,
             } => {
                 row.state = RevisionState::Verified;
                 row.received_name = Some(received_name);
                 row.file_crc = Some(file_crc);
+                row.file_identity = Some(file_identity);
             }
             Step::Removing => row.state = RevisionState::Removing,
             Step::Removed { reason } => {
@@ -794,8 +800,10 @@ async fn received(ctx: &CycleContext, row: &Revision) -> Next {
         return failed(EMPTY, Some(file.name.clone()));
     }
     let path = Path::new(&row.folder).join(&file.name);
-    let crc = match crc_of(path.clone()).await {
-        Ok(crc) => crc_text(crc),
+    // The identity of the file read: the old video is removed only while the
+    // received name still holds that file.
+    let (crc, identity) = match identified_crc_of(path.clone()).await {
+        Ok((crc, identity)) => (crc_text(crc), identity),
         Err(err) if err.kind() == io::ErrorKind::NotFound => {
             return failed(NEW_FILE_GONE, Some(file.name.clone()))
         }
@@ -814,6 +822,7 @@ async fn received(ctx: &CycleContext, row: &Revision) -> Next {
     Next::Step(Step::Verified {
         received_name: file.name.clone(),
         file_crc: crc,
+        file_identity: identity.to_text(),
     })
 }
 
@@ -875,6 +884,54 @@ fn new_video_gone(row: &Revision) -> Result<bool, String> {
         .map_err(|err| format!("cannot look at {}: {err}", path.display()))
 }
 
+/// Whether the last look at the `removing` row found its new video gone or
+/// not the checked one, with the old video in place.
+fn missed_last_look(row: &Revision) -> bool {
+    matches!(
+        row.reason.as_deref(),
+        Some(NEW_GONE_OLD_LEFT | NEW_UNCHECKED_OLD_KEPT)
+    )
+}
+
+/// Whether the row's new video is still the file whose CRC32 was checked
+/// ([`Revision::file_identity`]): under its received name in the folder,
+/// with the same identity. A row checked before identities were kept needs
+/// the file there with the length its torrent gives it in the folder.
+/// `Err` when the folder, the file or Transmission could not be looked at.
+async fn new_video_kept(ctx: &CycleContext, row: &Revision) -> Result<bool, String> {
+    if new_video_gone(row)? {
+        return Ok(false);
+    }
+    let Some(name) = &row.received_name else {
+        return Ok(false);
+    };
+    let path = Path::new(&row.folder).join(name);
+    let now = match FileIdentity::at(&path) {
+        Ok(now) => now,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(err) => return Err(format!("cannot look at {}: {err}", path.display())),
+    };
+    if let Some(seen) = row.file_identity.as_deref().and_then(FileIdentity::parse) {
+        return Ok(seen == now);
+    }
+    let Some(hash) = row.torrent_hash.clone() else {
+        return Ok(false);
+    };
+    let mut transmission = ctx.transmission();
+    let place = match torrent_places(&mut transmission, Some(&[hash]), true).await {
+        Ok(places) => places.into_iter().next(),
+        Err(err) => return Err(err.to_string()),
+    };
+    Ok(place.is_some_and(|place| {
+        same_folder(Path::new(&place.download_dir), Path::new(&row.folder))
+            && place.files.iter().any(|file| {
+                file.name == *name
+                    && file.complete
+                    && u64::try_from(file.length).is_ok_and(|length| length == now.size())
+            })
+    }))
+}
+
 fn exists(path: &Path) -> io::Result<bool> {
     match std::fs::symlink_metadata(path) {
         Ok(_) => Ok(true),
@@ -920,11 +977,9 @@ async fn remove_old(ctx: &CycleContext, row: &mut Revision, at: Millis, listing:
                     Ok(false) => Next::Step(Step::RemovalWaits {
                         reason: OLD_FILE_LEFT.to_owned(),
                     }),
-                    Ok(true) if row.reason.as_deref() == Some(NEW_GONE_OLD_LEFT) => {
-                        Next::Step(Step::Abandoned {
-                            reason: ABANDONED.to_owned(),
-                        })
-                    }
+                    Ok(true) if missed_last_look(row) => Next::Step(Step::Abandoned {
+                        reason: ABANDONED.to_owned(),
+                    }),
                     Ok(true) => Next::Step(Step::RemovalWaits {
                         reason: NEW_GONE_OLD_LEFT.to_owned(),
                     }),
@@ -969,6 +1024,30 @@ async fn remove_old(ctx: &CycleContext, row: &mut Revision, at: Millis, listing:
         }
         (_, Err(err)) => return Next::Later(format!("cannot look at {}: {err}", old.display())),
         _ => return failed(OLD_CHANGED, None),
+    }
+    // And the new video must still be the file whose CRC32 was checked: one
+    // deleted or put over since would leave the episode with neither. Not
+    // the checked one on two looks in a row (one per cycle), the replacement
+    // ends; the first may be a mount that was away for a moment.
+    match new_video_kept(ctx, row).await {
+        Ok(true) => {}
+        Ok(false) => {
+            println!(
+                "Revision of {}: not removing the old video, the new video {} is not the one checked",
+                row.episode_name,
+                row.received_name.as_deref().unwrap_or("(unknown)")
+            );
+            return if missed_last_look(row) {
+                Next::Step(Step::Abandoned {
+                    reason: ABANDONED.to_owned(),
+                })
+            } else {
+                Next::Step(Step::RemovalWaits {
+                    reason: NEW_UNCHECKED_OLD_KEPT.to_owned(),
+                })
+            };
+        }
+        Err(why) => return Next::Later(why),
     }
 
     match &found.torrent_hash {

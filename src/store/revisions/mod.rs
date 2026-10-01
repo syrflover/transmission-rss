@@ -28,12 +28,15 @@
 //! [`RevisionState::Cleared`]. A `removed` row with a reason is a rename that
 //! did not go through yet; the worker tries again while the name is free. A
 //! `removing` row with a reason ([`Step::RemovalWaits`]) removed the old
-//! torrent but the episode's file is still there; it waits for that file to
-//! go. Both are listed with the failures. A `removing` row whose old torrent
-//! is gone, or a `removed` one, whose new video is then gone too ends as
-//! [`RevisionState::Abandoned`]: nothing is renamed, it holds up no other
-//! replacement of the episode, and the old release stays superseded (its
-//! torrent was removed for this replacement).
+//! torrent but the episode's file is still there, and waits for that file to
+//! go; or it found, right before removing the old video, that the new video
+//! was not the file whose CRC32 was checked ([`Revision::file_identity`]),
+//! and removed nothing. Both are listed with the failures. A `removing` or
+//! `removed` row whose new video is gone (or not the checked one) on two
+//! looks in a row ends as [`RevisionState::Abandoned`]: nothing is removed
+//! or renamed, it holds up no other replacement of the episode, and the old
+//! release stays superseded (its torrent was removed for this replacement,
+//! or is still there with its video).
 //!
 //! A step is written only from the state it was decided from
 //! ([`RevisionStore::advance`]), and a row the worker decides together with
@@ -197,6 +200,10 @@ pub struct Revision {
     pub received_name: Option<String>,
     /// The new file's CRC32 as read.
     pub file_crc: Option<String>,
+    /// What told the new file apart when its CRC32 was read
+    /// ([`crate::revision::FileIdentity::to_text`]): the old video is removed
+    /// only while the file under `received_name` is still that one.
+    pub file_identity: Option<String>,
     pub state: RevisionState,
     /// Why the replacement failed or waits; free of secret values.
     pub reason: Option<String>,
@@ -212,8 +219,8 @@ pub struct Revision {
 
 impl Revision {
     /// A `받기 실패`: a failure that holds, a rename after the old video was
-    /// removed that has not gone through yet, or an old video whose torrent
-    /// was removed and whose file is still there ([`Step::RemovalWaits`]).
+    /// removed that has not gone through yet, or a removal that waits
+    /// ([`Step::RemovalWaits`]).
     pub fn is_failure(&self) -> bool {
         self.state == RevisionState::Failed
             || (matches!(self.state, RevisionState::Removed | RevisionState::Removing)
@@ -256,6 +263,8 @@ pub enum Step {
     Verified {
         received_name: String,
         file_crc: String,
+        /// [`Revision::file_identity`].
+        file_identity: String,
     },
     Removing,
     /// The old video is gone; `reason` says why the rename has not gone
@@ -285,15 +294,18 @@ pub enum Step {
     /// ([`Step::Failed`]). Not written when nothing overtakes the row any
     /// more.
     Overtaken,
-    /// A `removing` row whose old torrent Transmission took out while the
-    /// old video's file is still there: it stays `removing` (the old release
-    /// stays superseded) and `reason` says why it waits.
+    /// A `removing` row that waits with the old video in place: its old
+    /// torrent Transmission took out while the old video's file is still
+    /// there, or its new video was not the checked one right before the old
+    /// video was to be removed. It stays `removing` (the old release stays
+    /// superseded) and `reason` says why it waits.
     RemovalWaits {
         reason: String,
     },
-    /// A `removing` row whose old torrent is gone, or a `removed` one, whose
-    /// new video is gone too: the replacement ends as
-    /// [`RevisionState::Abandoned`], and `reason` says why.
+    /// A `removing` or `removed` row whose new video was gone (or, before
+    /// the old video was removed, not the checked one) on two looks in a
+    /// row: the replacement ends as [`RevisionState::Abandoned`], and
+    /// `reason` says why.
     Abandoned {
         reason: String,
     },
@@ -400,7 +412,8 @@ pub struct WorkRef {
 
 const COLUMNS: &str = "id, item_id, old_item_id, rule_id, folder, episode_name, old_version, \
      new_version, expected_crc, torrent_hash, received_name, file_crc, state, reason, \
-     created_at, updated_at, replaced_at, old_crc, old_torrent_hash, overtaken_by";
+     created_at, updated_at, replaced_at, old_crc, old_torrent_hash, overtaken_by, \
+     file_identity";
 
 fn from_row(row: &Row<'_>) -> rusqlite::Result<Revision> {
     from_row_at(row, 0)
@@ -437,6 +450,7 @@ fn from_row_at(row: &Row<'_>, at: usize) -> rusqlite::Result<Revision> {
         old_crc: row.get(at + 17)?,
         old_torrent_hash: row.get(at + 18)?,
         overtaken_by: row.get(at + 19)?,
+        file_identity: row.get(at + 20)?,
     })
 }
 
@@ -1000,10 +1014,12 @@ impl RevisionStore {
                     Step::Verified {
                         received_name,
                         file_crc,
+                        file_identity,
                     } => tx.execute(
                         "UPDATE video_revisions SET state = 'verified', received_name = ?2,
-                             file_crc = ?3, reason = NULL, updated_at = ?4 WHERE id = ?1",
-                        params![id, received_name, file_crc, at],
+                             file_crc = ?3, file_identity = ?5, reason = NULL, updated_at = ?4
+                          WHERE id = ?1",
+                        params![id, received_name, file_crc, at, file_identity],
                     )?,
                     Step::Removing => tx.execute(
                         "UPDATE video_revisions SET state = 'removing', updated_at = ?2
@@ -1047,7 +1063,8 @@ impl RevisionStore {
                         tx.execute(
                             "UPDATE video_revisions
                                 SET state = 'receiving', reason = NULL, received_name = NULL,
-                                    file_crc = NULL, overtaken_by = NULL, updated_at = ?2
+                                    file_crc = NULL, file_identity = NULL, overtaken_by = NULL,
+                                    updated_at = ?2
                               WHERE state = 'skipped' AND overtaken_by = ?1",
                             params![id, at],
                         )?

@@ -183,6 +183,35 @@ impl FileIdentity {
     pub fn at(path: &Path) -> io::Result<FileIdentity> {
         std::fs::symlink_metadata(path).map(|meta| FileIdentity::of(&meta))
     }
+
+    /// The file's size in bytes.
+    pub fn size(&self) -> u64 {
+        self.len
+    }
+
+    /// The identity as a row keeps it: its numbers joined by `:`.
+    pub fn to_text(&self) -> String {
+        format!(
+            "{}:{}:{}:{}:{}:{}:{}",
+            self.dev, self.ino, self.len, self.mtime, self.mtime_nsec, self.ctime, self.ctime_nsec
+        )
+    }
+
+    /// The identity [`FileIdentity::to_text`] wrote; `None` for any other text.
+    pub fn parse(text: &str) -> Option<FileIdentity> {
+        let mut parts = text.split(':');
+        let mut next = || parts.next();
+        let identity = FileIdentity {
+            dev: next()?.parse().ok()?,
+            ino: next()?.parse().ok()?,
+            len: next()?.parse().ok()?,
+            mtime: next()?.parse().ok()?,
+            mtime_nsec: next()?.parse().ok()?,
+            ctime: next()?.parse().ok()?,
+            ctime_nsec: next()?.parse().ok()?,
+        };
+        next().is_none().then_some(identity)
+    }
 }
 
 /// [`file_crc32`], with the identity of the file that was read, taken from
@@ -236,6 +265,22 @@ mod tests {
             Some((2, "05.5".to_owned()))
         );
         assert_eq!(season_episode("[SubsPlease] Show - 14.mkv"), None);
+    }
+
+    #[test]
+    fn a_file_identity_reads_back_from_its_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("video.mkv");
+        std::fs::write(&path, b"video").unwrap();
+        let identity = FileIdentity::at(&path).unwrap();
+        assert_eq!(FileIdentity::parse(&identity.to_text()), Some(identity));
+        assert_eq!(identity.size(), 5);
+        assert_eq!(FileIdentity::parse("1:2:3"), None);
+        assert_eq!(
+            FileIdentity::parse(&format!("{}:9", identity.to_text())),
+            None
+        );
+        assert_eq!(FileIdentity::parse("a:2:3:4:5:6:7"), None);
     }
 
     #[test]

@@ -257,6 +257,7 @@ async fn verified(store: &RevisionStore, id: i64) {
     let step = Step::Verified {
         received_name: format!("v{id}.mkv"),
         file_crc: "1A2B3C4D".into(),
+        file_identity: "1:2:3:4:5:6:7".into(),
     };
     store
         .advance(id, 15, RevisionState::Receiving, step)

@@ -2445,3 +2445,119 @@ async fn a_retry_of_a_version_unknown_revision_lower_than_the_placed_video_is_re
     assert_eq!(s.state_of(&v2).await, RevisionState::Unknown);
     assert_eq!(read(&s.file(EPISODE_NAME)), V3_BYTES);
 }
+
+// --- The new video is looked at again right before the old one goes -----------
+
+impl Setup {
+    /// `14v3` is received and checked while `14v2` waits for `14`'s file to
+    /// go, so it waits as verified: one replacement of the episode at a time.
+    /// Then `14`'s file goes and `14v2`'s rename is refused for now. Once
+    /// `14v2` takes the name, `14v3` replaces it.
+    async fn v3_verified_behind_v2(&self) {
+        self.removal_waits().await;
+        self.feed(&[(NEW_HASH, &v2()), (V3_HASH, &v3()), (OLD_HASH, &v1())]);
+        self.h.tr.content_on_add(V3_HASH, V3_BYTES);
+        self.h.tr.unfinished_on_add(V3_HASH);
+        self.cycle().await;
+        assert_eq!(self.state_of(&v3()).await, RevisionState::Receiving);
+        self.complete(V3_HASH);
+        self.cycle().await;
+        assert_eq!(self.state_of(&v3()).await, RevisionState::Verified);
+
+        self.h.tr.reject_rename_of(NEW_HASH, Some("busy"));
+        std::fs::remove_file(self.file(EPISODE_NAME)).unwrap();
+        self.cycle().await;
+        assert_eq!(self.state_of(&v2()).await, RevisionState::Removed);
+        assert_eq!(self.state_of(&v3()).await, RevisionState::Verified);
+    }
+}
+
+/// `14v3`'s file is deleted after its CRC32 was checked and before it removes
+/// the old video (`14v2`, which takes the episode name meanwhile). The old
+/// video is not removed: the replacement waits on the first look and ends on
+/// the second, with `14v2` and its torrent in place.
+#[tokio::test]
+async fn a_new_video_deleted_after_its_check_removes_no_old_video() {
+    let s = Setup::new().await;
+    s.v3_verified_behind_v2().await;
+    std::fs::remove_file(s.file(&v3())).unwrap();
+    let removes = s.removals_with_data();
+
+    s.h.tr.reject_rename_of(NEW_HASH, None);
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Done);
+    assert_eq!(
+        read(&s.file(EPISODE_NAME)),
+        NEW_BYTES,
+        "the old video stays"
+    );
+    let row = s.row_of(&v3()).await;
+    assert_eq!(row.state, RevisionState::Removing, "seen missing once");
+    assert!(row.reason.is_some(), "{row:?}");
+
+    s.cycle().await;
+    assert_eq!(s.state_of(&v3()).await.code(), "abandoned");
+    s.cycle().await;
+    assert_eq!(s.names(), vec![EPISODE_NAME]);
+    assert_eq!(read(&s.file(EPISODE_NAME)), NEW_BYTES);
+    assert!(s.h.tr.torrents().iter().any(|t| t.hash == NEW_HASH));
+    assert_eq!(s.removals_with_data(), removes);
+    assert!(s.failures().await.is_empty());
+}
+
+/// `14v3`'s file is replaced by another file under its name after its CRC32
+/// was checked: that is not the video checked, and the old video is not
+/// removed for it.
+#[tokio::test]
+async fn a_new_video_replaced_after_its_check_removes_no_old_video() {
+    let s = Setup::new().await;
+    s.v3_verified_behind_v2().await;
+    std::fs::remove_file(s.file(&v3())).unwrap();
+    std::fs::write(s.file(&v3()), b"episode 14, something else").unwrap();
+    let removes = s.removals_with_data();
+
+    s.h.tr.reject_rename_of(NEW_HASH, None);
+    s.cycle().await;
+    assert_eq!(
+        read(&s.file(EPISODE_NAME)),
+        NEW_BYTES,
+        "the old video stays"
+    );
+    assert_eq!(s.state_of(&v3()).await, RevisionState::Removing);
+    s.cycle().await;
+    assert_eq!(s.state_of(&v3()).await.code(), "abandoned");
+    assert_eq!(read(&s.file(EPISODE_NAME)), NEW_BYTES);
+    assert!(s.h.tr.torrents().iter().any(|t| t.hash == NEW_HASH));
+    assert_eq!(s.removals_with_data(), removes);
+}
+
+/// A row checked without the new file's identity kept (made so by hand)
+/// removes the old video while the file under its received name has the
+/// length its torrent gives it, and not otherwise.
+#[tokio::test]
+async fn a_new_video_without_its_identity_kept_is_told_by_its_length() {
+    let s = Setup::new().await;
+    s.v3_verified_behind_v2().await;
+    let forget = format!(
+        "UPDATE video_revisions SET file_identity = NULL WHERE item_id = {}",
+        s.item(&v3()).await.id
+    );
+    s.sql(&forget);
+    s.h.tr.set_file_length(V3_HASH, V3_BYTES.len() as i64);
+    std::fs::write(s.file(&v3()), b"episode 14, third release and more").unwrap();
+    s.h.tr.reject_rename_of(NEW_HASH, None);
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Done);
+    assert_eq!(s.state_of(&v3()).await, RevisionState::Removing);
+    assert_eq!(
+        read(&s.file(EPISODE_NAME)),
+        NEW_BYTES,
+        "the old video stays"
+    );
+
+    std::fs::write(s.file(&v3()), V3_BYTES).unwrap();
+    s.cycle().await;
+    assert_eq!(s.state_of(&v3()).await, RevisionState::Done);
+    assert_eq!(s.names(), vec![EPISODE_NAME]);
+    assert_eq!(read(&s.file(EPISODE_NAME)), V3_BYTES);
+}
