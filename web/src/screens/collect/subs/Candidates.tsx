@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { ApiError } from "@/lib/api";
 import { useCached } from "@/lib/cached";
 import { dateTime } from "@/lib/time";
+import { cn } from "@/lib/utils";
 
 import { candidatesChanged, KEYS } from "../cache";
 import { btnAction, btnNeutral } from "../channels/styles";
@@ -26,7 +27,7 @@ const idOf = (c: TitleCandidate) => `${c.channel_id}\n${c.key}`;
  * (blue, not a warning); nothing here changes until the user picks `정하기` or
  * turns a candidate down with `거절`. Renders nothing while there are none.
  */
-export function Candidates() {
+export function Candidates({ className }: { className?: string }) {
   const headingId = useId();
   const list = useCached<TitleCandidate[]>(KEYS.candidates, fetchCandidates, "제목 후보를 불러오지 못했어요.");
   const candidates = list.data;
@@ -51,7 +52,7 @@ export function Candidates() {
     // A failed first load is said once; a quiet "none" says nothing.
     if (candidates === undefined && list.error !== null) {
       return (
-        <p role="alert" className="text-[13px] font-semibold text-urgent">
+        <p role="alert" className={cn("text-[13px] font-semibold text-urgent", className)}>
           {list.error}
         </p>
       );
@@ -62,7 +63,10 @@ export function Candidates() {
   return (
     <section
       aria-labelledby={headingId}
-      className="flex min-w-0 flex-col gap-3 rounded-card border border-[color-mix(in_srgb,var(--focus-ring)_45%,transparent)] bg-[color-mix(in_srgb,var(--focus-ring)_7%,transparent)] p-4 max-[480px]:p-3.5"
+      className={cn(
+        "flex min-w-0 flex-col gap-3 rounded-card border border-[color-mix(in_srgb,var(--focus-ring)_45%,transparent)] bg-[color-mix(in_srgb,var(--focus-ring)_7%,transparent)] p-4 max-[480px]:p-3.5",
+        className,
+      )}
     >
       <div className="flex min-w-0 flex-col gap-1">
         <h2 id={headingId} className="text-[15px] font-bold text-focus">

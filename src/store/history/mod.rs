@@ -158,6 +158,34 @@ impl HistoryStore {
             .await
     }
 
+    /// When each of the given rules last got an item into Transmission, by
+    /// rule ID; a rule that received nothing is left out. What an archive
+    /// suggestion's weeks of "no new item" count from.
+    pub async fn last_received_of_rules(
+        &self,
+        rule_ids: Vec<String>,
+    ) -> Result<std::collections::HashMap<String, Millis>, HistoryError> {
+        if rule_ids.is_empty() {
+            return Ok(Default::default());
+        }
+        self.db
+            .run(move |c| repo::last_received_of_rules(c, &rule_ids))
+            .await
+    }
+
+    /// The titles of the channel's items first seen after `since`, newest
+    /// first, at most `limit`, and whether the window held more than that.
+    pub async fn titles_since(
+        &self,
+        channel_id: String,
+        since: Millis,
+        limit: usize,
+    ) -> Result<(Vec<String>, bool), HistoryError> {
+        self.db
+            .run(move |c| repo::titles_since(c, &channel_id, since, limit))
+            .await
+    }
+
     /// Sets an item's result from something done to it outside a cycle (a
     /// command from the web), by the transition rules of [`Transition::between`],
     /// and returns the item's result afterwards (`None` for an unknown item).

@@ -495,6 +495,54 @@ pub fn first_sightings(
     Ok(found)
 }
 
+/// The query of [`last_received_of_rules`] for one rule.
+pub(super) const LAST_RECEIVED_SQL: &str =
+    "SELECT MAX(result_at) FROM history_items WHERE rule_id = ?1 AND result = 'received'";
+
+/// The query of [`titles_since`].
+pub(super) const TITLES_SINCE_SQL: &str = "SELECT title FROM history_items
+      WHERE channel_id = ?1 AND first_seen_at > ?2
+      ORDER BY first_seen_at DESC, id DESC LIMIT ?3";
+
+/// When each of the given rules last got an item into Transmission (the newest
+/// `result_at` of its `received` items), by rule ID. A rule that received
+/// nothing is not in the map. One lookup of `history_items_by_rule` per rule,
+/// however long the history is.
+pub fn last_received_of_rules(
+    conn: &Connection,
+    rule_ids: &[String],
+) -> Result<std::collections::HashMap<String, Millis>> {
+    let mut stmt = conn.prepare(LAST_RECEIVED_SQL)?;
+    let mut found = std::collections::HashMap::new();
+    for rule_id in rule_ids {
+        let last: Option<Millis> = stmt.query_row([rule_id], |row| row.get(0))?;
+        if let Some(last) = last {
+            found.insert(rule_id.clone(), last);
+        }
+    }
+    Ok(found)
+}
+
+/// The titles of the channel's items first seen after `since`, newest
+/// first, at most `limit` of them, and whether there were more. Reads through
+/// `history_items_by_channel`, so its cost follows the window, not the history.
+pub fn titles_since(
+    conn: &Connection,
+    channel_id: &str,
+    since: Millis,
+    limit: usize,
+) -> Result<(Vec<String>, bool)> {
+    let mut stmt = conn.prepare(TITLES_SINCE_SQL)?;
+    let mut titles = stmt
+        .query_map(params![channel_id, since, limit as i64 + 1], |row| {
+            row.get::<_, String>(0)
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let truncated = titles.len() > limit;
+    titles.truncate(limit);
+    Ok((titles, truncated))
+}
+
 /// Sets an item's result from something done to it outside a collection cycle
 /// (a command from the web), by the same transition rules as [`record`]. The
 /// item was not seen in a feed, so `last_seen_at`, the title and the link stay.

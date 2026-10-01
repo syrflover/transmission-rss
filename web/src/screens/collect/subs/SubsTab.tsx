@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { useCached } from "@/lib/cached";
 
 import { EmptyState } from "../../ScreenFrame";
+import { ArchiveSuggestions } from "../archive/ArchiveSuggestions";
 import { KEYS } from "../cache";
 import { btnAction, btnNeutral } from "../channels/styles";
 import { PlusIcon } from "../icons";
@@ -16,7 +17,7 @@ import { SubscriptionCard } from "./SubscriptionCard";
 const grid = "m-0 grid list-none grid-cols-[repeat(auto-fill,minmax(min(100%,300px),1fr))] gap-3.5 p-0";
 
 /**
- * The 구독 tab: the title candidates at the top, the subscriptions of this
+ * The 구독 tab: the title candidates and the archive suggestions at the top, the subscriptions of this
  * quarter with the way in from the schedule, and the coming quarter's below.
  * `/collect/subs/add` is the subscribe flow and `/collect/subs/title` gives a
  * candidate to a subscription waiting for its title.
@@ -55,7 +56,11 @@ function SubscriptionsView() {
         </Button>
       </div>
 
-      <Candidates />
+      {/* Side by side on a wide screen, stacked on a phone; the wrapper vanishes while both are empty. */}
+      <div className="flex flex-wrap items-start gap-3.5 empty:hidden">
+        <Candidates className="min-w-0 flex-[1_1_320px]" />
+        <ArchiveSuggestions className="min-w-0 flex-[1_1_320px]" onArchived={list.reload} />
+      </div>
 
       {data === undefined && list.error === null && list.slow && (
         <p className="text-[13px] text-text-muted">구독을 불러오는 중이에요.</p>

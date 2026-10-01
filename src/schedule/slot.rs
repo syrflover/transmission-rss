@@ -67,6 +67,31 @@ pub fn slot_in_week(anime: &Anime, week_start: i64) -> Option<Slot> {
     })
 }
 
+/// Why an anime's run is over ([`run_over`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Over {
+    /// Its end date, as Anissia gave it, has passed.
+    EndDate(String),
+    /// It has no end date and Anissia no longer lists it.
+    Unlisted,
+}
+
+/// Whether the anime's run is over on the Seoul day `today`, by the rule the
+/// weekly schedule drops its card by ([`slot_in_week`], and `unlisted` from the
+/// worker's daily refresh): an anime with an end date is over once the date has
+/// passed (a date that knows the month only reaches as far as the month), and
+/// only an anime without one is over when Anissia no longer lists it. An end
+/// date that cannot be read says nothing, as it does there. While Anissia
+/// cannot be reached `unlisted` is never found out, so nothing is over by it.
+pub fn run_over(anime: &Anime, unlisted: bool, today: i64) -> Option<Over> {
+    match &anime.end_date {
+        Some(text) => PartialDate::parse(text)
+            .is_some_and(|end| end.is_before(today))
+            .then(|| Over::EndDate(text.clone())),
+        None => unlisted.then_some(Over::Unlisted),
+    }
+}
+
 /// The episode of the season that airs in `slot`, if it can be told.
 ///
 /// - If the season's AniList entries know when each episode airs
@@ -270,5 +295,31 @@ mod tests {
         // Anything further off is another broadcast: counted from the start instead.
         let far = BTreeMap::from([(99, at(slot.day + 7, 22 * 60))]);
         assert_eq!(episode_on(&a, &slot, &far), Some(14));
+    }
+
+    #[test]
+    fn the_run_is_over_by_the_end_date_or_only_without_one_by_the_listing() {
+        let today = days_from_civil(2026, 10, 1);
+        let over = |end: Option<&str>, unlisted: bool| {
+            run_over(&anime(3, Some("22:00"), None, end), unlisted, today)
+        };
+        // The date has passed, whatever the listing says.
+        assert_eq!(
+            over(Some("2026-09-30"), false),
+            Some(Over::EndDate("2026-09-30".into()))
+        );
+        // On the end date, and before it, the run is not over: even unlisted.
+        assert_eq!(over(Some("2026-10-01"), true), None);
+        assert_eq!(over(Some("2026-12-01"), true), None);
+        // A month alone reaches its last day.
+        assert_eq!(over(Some("2026-10"), false), None);
+        assert_eq!(
+            over(Some("2026-09"), false),
+            Some(Over::EndDate("2026-09".into()))
+        );
+        // Without an end date only the listing says; an unreadable one says nothing.
+        assert_eq!(over(None, false), None);
+        assert_eq!(over(None, true), Some(Over::Unlisted));
+        assert_eq!(over(Some("soon"), true), None);
     }
 }

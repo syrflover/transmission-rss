@@ -17,6 +17,7 @@ use tower_http::{
 };
 
 pub mod api;
+pub mod archive_api;
 pub mod artwork_api;
 pub mod channels_api;
 pub mod commands_api;
