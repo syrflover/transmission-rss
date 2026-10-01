@@ -52,6 +52,18 @@ pub fn record(
     observations: &[Observation],
 ) -> Result<Vec<Recorded>> {
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let out = record_in(&tx, at, observations)?;
+    tx.commit()?;
+    Ok(out)
+}
+
+/// [`record`] inside the caller's transaction `tx`, which another store
+/// writes in too (`store::revisions` writes a revision row with its item).
+pub fn record_in(
+    tx: &Connection,
+    at: Millis,
+    observations: &[Observation],
+) -> Result<Vec<Recorded>> {
     let mut out = Vec::with_capacity(observations.len());
 
     for obs in observations {
@@ -151,7 +163,6 @@ pub fn record(
         }
     }
 
-    tx.commit()?;
     Ok(out)
 }
 
@@ -613,6 +624,21 @@ pub fn record_outcome(
     torrent_hash: Option<&str>,
 ) -> Result<Option<HistoryResult>> {
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let after = record_outcome_in(&tx, item_id, at, result, rule_id, reason, torrent_hash)?;
+    tx.commit()?;
+    Ok(after)
+}
+
+/// [`record_outcome`] inside the caller's transaction `tx`.
+pub fn record_outcome_in(
+    tx: &Connection,
+    item_id: i64,
+    at: Millis,
+    result: HistoryResult,
+    rule_id: Option<&str>,
+    reason: Option<&str>,
+    torrent_hash: Option<&str>,
+) -> Result<Option<HistoryResult>> {
     let stored: Option<String> = tx
         .query_row(
             "SELECT result FROM history_items WHERE id = ?1",
@@ -669,7 +695,6 @@ pub fn record_outcome(
         }
     };
 
-    tx.commit()?;
     Ok(Some(after))
 }
 

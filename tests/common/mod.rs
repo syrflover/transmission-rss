@@ -258,6 +258,12 @@ struct TrState {
     rejected_removes: HashMap<String, String>,
     /// `torrent-rename-path` refusals for single torrents, by hash.
     rejected_renames: HashMap<String, String>,
+    /// Torrents whose `torrent-remove` is carried out and then answered with
+    /// a broken response, as a timeout after Transmission acted would be.
+    broken_remove_answers: std::collections::HashSet<String>,
+    /// Torrents whose `torrent-remove` with their data takes the torrent out
+    /// and leaves the data on disk.
+    kept_data_on_remove: std::collections::HashSet<String>,
     next_id: i64,
 }
 
@@ -490,6 +496,22 @@ impl FakeTransmission {
         };
     }
 
+    /// Makes a `torrent-remove` of the torrent `hash` carry the removal out
+    /// and then answer with a broken response: the client sees an error,
+    /// as for a timeout after Transmission acted.
+    pub fn break_remove_answer_of(&self, hash: &str) {
+        let mut st = self.state.lock().unwrap();
+        st.broken_remove_answers.insert(hash.to_owned());
+    }
+
+    /// Makes a `torrent-remove` of the torrent `hash` with its data take the
+    /// torrent out and leave the data on disk (Transmission deletes it later,
+    /// or cannot).
+    pub fn keep_data_on_remove_of(&self, hash: &str) {
+        let mut st = self.state.lock().unwrap();
+        st.kept_data_on_remove.insert(hash.to_owned());
+    }
+
     /// Makes a `torrent-rename-path` of the torrent `hash` answer with this
     /// refusal text and rename nothing (`None` takes it back).
     pub fn reject_rename_of(&self, hash: &str, result: Option<&str>) {
@@ -604,6 +626,7 @@ impl FakeTransmission {
                         a["delete-local-data"]
                     ),
                     "torrent-stop" => format!("torrent-stop ids={}", a["ids"]),
+                    "torrent-start" => format!("torrent-start ids={}", a["ids"]),
                     "torrent-set-location" => format!(
                         "torrent-set-location ids={} location={} move={}",
                         a["ids"], a["location"], a["move"]
@@ -834,6 +857,7 @@ async fn tr_rpc_answer(
                     .torrents
                     .iter()
                     .filter(|t| wanted.contains(&t.hash))
+                    .filter(|t| !st.kept_data_on_remove.contains(&t.hash))
                     .flat_map(|t| {
                         let names = if t.files.is_empty() {
                             vec![t.name.clone()]
@@ -851,6 +875,20 @@ async fn tr_rpc_answer(
                 }
             }
             st.torrents.retain(|t| !wanted.contains(&t.hash));
+            if wanted.iter().any(|h| st.broken_remove_answers.contains(h)) {
+                return (StatusCode::INTERNAL_SERVER_ERROR, "broken answer").into_response();
+            }
+            ok(json!({})).into_response()
+        }
+
+        "torrent-start" => {
+            let wanted = ids(&args);
+            for t in st.torrents.iter_mut().filter(|t| wanted.contains(&t.hash)) {
+                // Starting a torrent clears its local error, as libtransmission does.
+                t.status = 4;
+                t.error = 0;
+                t.error_string.clear();
+            }
             ok(json!({})).into_response()
         }
 

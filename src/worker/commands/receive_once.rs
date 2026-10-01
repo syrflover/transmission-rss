@@ -38,9 +38,10 @@
 //!    revision the worker did not receive) is not renamed either: receiving it
 //!    is the confirmation that starts its replacement
 //!    ([`crate::worker::revisions::confirm`]), which names it once the old
-//!    video is gone. The confirmation is written in step 3, before the
-//!    item's result: a rerun of a command whose item is `received` already
-//!    ends at once, so it could not confirm any more.
+//!    video is gone; nor is a revision a caller decided replaces the video
+//!    (`지난 회차 검색`). Their row is written in step 3, in one transaction
+//!    with the item's result: a rerun of a command whose item is `received`
+//!    already ends at once, so a row not written with it would never be.
 //!
 //! The worker ends the command after step 4. The result lands on the history
 //! item (`received`, `duplicate` or `add_failed` with a reason) and on the
@@ -63,6 +64,7 @@ use crate::{
         channels::{Channel, ChannelWithRules, Rule, RuleState},
         commands::{Command, CommandState, Outcome, MAX_ATTEMPTS},
         history::{HistoryItem, HistoryResult, Millis},
+        revisions::{HistoryWrite, NewRevision, RevisionState, RowWrite},
     },
     transmission::{
         self, add_item, get_torrent, get_torrents, has_label, remove_label, AddError, AddKind,
@@ -423,7 +425,7 @@ pub async fn execute(
     command: &Command,
     now: impl Fn() -> Millis,
 ) -> Result<Finished, Retry> {
-    execute_with(ctx, command, now, Settle::Offset).await
+    execute_with(ctx, command, now, Settle::Offset, None).await
 }
 
 /// Whether receiving an item of a rule that has picked nothing decides the
@@ -436,12 +438,17 @@ pub enum Settle {
     Keep,
 }
 
-/// [`execute`], told whether the rule's offset may be decided from the item.
+/// [`execute`], told whether the rule's offset may be decided from the item,
+/// and, with `replacing`, that the item is a revision whose replacement
+/// starts once this command's add puts its torrent in: the row (its torrent
+/// hash filled in then) is written with the item's result, and the torrent
+/// is not renamed ([`crate::worker::revisions`]).
 pub async fn execute_with(
     ctx: &CycleContext,
     command: &Command,
     now: impl Fn() -> Millis,
     settle: Settle,
+    replacing: Option<NewRevision>,
 ) -> Result<Finished, Retry> {
     // An add of an earlier start that got no answer stays unaccounted for
     // until an add of this one puts the torrent's hash in history. Until then
@@ -576,33 +583,72 @@ pub async fn execute_with(
             } else {
                 HistoryResult::Duplicate
             };
-            // A `버전 미상` revision received this way replaces the folder's
-            // video: the request is the person's confirmation. Its torrent
-            // keeps its received name until the old video is gone. The
-            // confirmation is written before the item's result: once the item
-            // is `received` a rerun of this command ends at once, so a
-            // confirmation not written yet would never be. One that cannot be
+            // A revision received this way replaces the folder's video and
+            // keeps its received name until the old video is gone: one the
+            // caller decided replaces it (its row starts now), and a `버전
+            // 미상` one, whose request is the person's confirmation. The row
+            // is written with the item's result, in one transaction: once the
+            // item is `received` a rerun of this command ends at once, so a
+            // row not written with it would never be. One that cannot be
             // written leaves the command to be run again.
-            let replacing = if item.result == HistoryResult::VersionUnknown {
-                revisions::confirm(ctx, item.id, &item.title, now(), &torrent.hash)
-                    .await
-                    .map_err(Retry::Store)?
-            } else {
-                false
+            let row = match replacing {
+                Some(new) if own => Some(RowWrite::Create {
+                    new: NewRevision {
+                        item_id: item.id,
+                        torrent_hash: Some(torrent.hash.clone()),
+                        ..new
+                    },
+                    reopen: torrent.kind == AddKind::Added,
+                }),
+                _ if item.result == HistoryResult::VersionUnknown => {
+                    Some(revisions::confirm(&item.title, &torrent.hash))
+                }
+                _ => None,
             };
-            let stored = ctx
-                .history
-                .record_outcome(
-                    item.id,
-                    now(),
-                    result,
-                    Some(rule_id.clone()),
-                    None,
-                    Some(torrent.hash.clone()),
-                )
-                .await
-                .map_err(Retry::store)?
-                .unwrap_or(result);
+            let (stored, replacing) = match row {
+                Some(row) => {
+                    let written = ctx
+                        .revisions
+                        .write_with_history(
+                            now(),
+                            HistoryWrite::Outcome {
+                                item_id: item.id,
+                                result,
+                                rule_id: Some(rule_id.clone()),
+                                reason: None,
+                                torrent_hash: Some(torrent.hash.clone()),
+                            },
+                            row,
+                        )
+                        .await
+                        .map_err(|err| {
+                            Retry::Store(format!(
+                                "cannot record item {} with its revision: {err}",
+                                item.id
+                            ))
+                        })?;
+                    let replacing = written
+                        .row
+                        .is_some_and(|row| row.state != RevisionState::Unknown);
+                    (written.stored, replacing)
+                }
+                None => {
+                    let stored = ctx
+                        .history
+                        .record_outcome(
+                            item.id,
+                            now(),
+                            result,
+                            Some(rule_id.clone()),
+                            None,
+                            Some(torrent.hash.clone()),
+                        )
+                        .await
+                        .map_err(Retry::store)?;
+                    (stored, false)
+                }
+            };
+            let stored = stored.unwrap_or(result);
             // Only a torrent this command put in is renamed. One that was there
             // already keeps its name and gets no note.
             let rename = (own && !replacing).then_some(Rename {

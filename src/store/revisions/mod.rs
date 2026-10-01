@@ -50,13 +50,15 @@ use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Row, Tra
 
 use super::{
     db::{Db, DbError},
-    history::Millis,
+    history::{repo as history_repo, HistoryError, HistoryResult, Millis, Observation, Recorded},
 };
 
 #[derive(Debug, thiserror::Error)]
 pub enum RevisionError {
     #[error(transparent)]
     Db(#[from] DbError),
+    #[error(transparent)]
+    History(#[from] HistoryError),
 }
 
 impl From<rusqlite::Error> for RevisionError {
@@ -181,11 +183,13 @@ pub struct Revision {
 }
 
 impl Revision {
-    /// A `받기 실패`: a failure that holds, or a rename after the old video was
-    /// removed that has not gone through yet.
+    /// A `받기 실패`: a failure that holds, a rename after the old video was
+    /// removed that has not gone through yet, or an old video whose torrent
+    /// was removed and whose file is still there ([`Step::RemovalWaits`]).
     pub fn is_failure(&self) -> bool {
         self.state == RevisionState::Failed
-            || (self.state == RevisionState::Removed && self.reason.is_some())
+            || (matches!(self.state, RevisionState::Removed | RevisionState::Removing)
+                && self.reason.is_some())
     }
 
     /// A failure before the new video was received in the rule's folder: its
@@ -244,6 +248,56 @@ pub enum Step {
     Skipped {
         reason: String,
     },
+    /// A `removing` row whose old torrent Transmission took out while the
+    /// old video's file is still there: it stays `removing` (the old release
+    /// stays superseded) and `reason` says why it waits.
+    RemovalWaits {
+        reason: String,
+    },
+}
+
+/// A history write that goes with a row's write, in one transaction
+/// ([`RevisionStore::write_with_history`]).
+#[derive(Debug, Clone)]
+pub enum HistoryWrite {
+    /// A cycle's sighting of an item, which may be new: the row is that item's.
+    Observe(Observation),
+    /// The outcome of the item `item_id`
+    /// ([`crate::store::history::HistoryStore::record_outcome`]).
+    Outcome {
+        item_id: i64,
+        result: HistoryResult,
+        rule_id: Option<String>,
+        reason: Option<String>,
+        torrent_hash: Option<String>,
+    },
+}
+
+/// What becomes of the row of the history write's item.
+#[derive(Debug, Clone)]
+pub enum RowWrite {
+    /// [`RevisionStore::create`] (the item ID is the history write's). With
+    /// `reopen`, a row that failed before its new video was received starts
+    /// over with `new.torrent_hash` ([`RevisionStore::reopen`]).
+    Create { new: NewRevision, reopen: bool },
+    /// [`RevisionStore::confirm`] with the torrent `hash`.
+    Confirm {
+        hash: String,
+        expected_crc: Option<String>,
+    },
+    /// [`RevisionStore::reopen`] with the torrent `hash`.
+    Reopen { hash: String },
+}
+
+/// What [`RevisionStore::write_with_history`] wrote.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Written {
+    /// The item's row afterwards; `None` when there is none (or no item).
+    pub row: Option<Revision>,
+    /// For [`HistoryWrite::Observe`]: what recording the sighting did.
+    pub recorded: Option<Recorded>,
+    /// For [`HistoryWrite::Outcome`]: the item's result afterwards.
+    pub stored: Option<HistoryResult>,
 }
 
 /// What a history item is to a cycle that would receive it.
@@ -372,6 +426,98 @@ fn torrent_taken(conn: &Connection, id: Option<i64>, hash: &str) -> Result<bool>
     )?)
 }
 
+/// [`RevisionStore::create`] inside the transaction `tx`.
+fn create_in(tx: &Connection, at: Millis, new: NewRevision) -> Result<Revision> {
+    if let Some(row) = query(tx, "WHERE item_id = ?1", &[&new.item_id])?.pop() {
+        return Ok(row);
+    }
+    let (state, reason) = match &new.torrent_hash {
+        Some(hash) if new.state == RevisionState::Receiving && torrent_taken(tx, None, hash)? => {
+            (RevisionState::Skipped, Some(SAME_TORRENT.to_owned()))
+        }
+        _ => (new.state, new.reason),
+    };
+    tx.execute(
+        "INSERT INTO video_revisions (item_id, old_item_id, rule_id, folder,
+             episode_name, old_version, new_version, old_crc, expected_crc,
+             torrent_hash, state, reason, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13)",
+        params![
+            new.item_id,
+            new.old_item_id,
+            new.rule_id,
+            new.folder,
+            new.episode_name,
+            new.old_version,
+            new.new_version,
+            new.old_crc,
+            new.expected_crc,
+            new.torrent_hash,
+            state.code(),
+            reason,
+            at
+        ],
+    )?;
+    Ok(query(tx, "WHERE item_id = ?1", &[&new.item_id])?
+        .pop()
+        .expect("the row just written"))
+}
+
+/// [`RevisionStore::reopen`] inside the transaction `tx`.
+fn reopen_in(tx: &Connection, id: i64, at: Millis, hash: &str) -> Result<Option<Revision>> {
+    let (state, reason) = if torrent_taken(tx, Some(id), hash)? {
+        ("skipped", Some(SAME_TORRENT))
+    } else {
+        ("receiving", None)
+    };
+    tx.execute(
+        "UPDATE video_revisions
+            SET state = ?2, torrent_hash = ?3, reason = ?4, updated_at = ?5
+          WHERE id = ?1 AND state = 'failed' AND received_name IS NULL",
+        params![id, state, hash, reason, at],
+    )?;
+    by_id(tx, id)
+}
+
+/// [`RevisionStore::confirm`] inside the transaction `tx`.
+fn confirm_in(
+    tx: &Connection,
+    item_id: i64,
+    at: Millis,
+    hash: &str,
+    expected_crc: Option<&str>,
+) -> Result<Option<Revision>> {
+    let Some(row) = query(tx, "WHERE item_id = ?1", &[&item_id])?.pop() else {
+        return Ok(None);
+    };
+    if row.state == RevisionState::Unknown {
+        let (state, reason) = if torrent_taken(tx, Some(row.id), hash)? {
+            ("skipped", Some(SAME_TORRENT))
+        } else {
+            ("receiving", None)
+        };
+        tx.execute(
+            "UPDATE video_revisions
+                SET state = ?2, torrent_hash = ?3, expected_crc = ?4,
+                    reason = ?5, updated_at = ?6
+              WHERE id = ?1",
+            params![row.id, state, hash, expected_crc, reason, at],
+        )?;
+    }
+    by_id(tx, row.id)
+}
+
+/// The ID of the history item of `observation`'s channel and identity key.
+fn item_of(tx: &Connection, observation: &Observation) -> Result<Option<i64>> {
+    Ok(tx
+        .query_row(
+            "SELECT id FROM history_items WHERE channel_id = ?1 AND identity_key = ?2",
+            params![observation.channel_id, observation.identity_key],
+            |r| r.get(0),
+        )
+        .optional()?)
+}
+
 /// What the other rows of `row`'s episode say about it removing the old video.
 fn verdict(conn: &Connection, row: &Revision) -> Result<Claim> {
     let siblings = query(
@@ -415,44 +561,108 @@ impl RevisionStore {
         self.db
             .run(move |c| {
                 let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-                if let Some(row) = query(&tx, "WHERE item_id = ?1", &[&new.item_id])?.pop() {
-                    return Ok(row);
-                }
-                let (state, reason) = match &new.torrent_hash {
-                    Some(hash)
-                        if new.state == RevisionState::Receiving
-                            && torrent_taken(&tx, None, hash)? =>
-                    {
-                        (RevisionState::Skipped, Some(SAME_TORRENT.to_owned()))
-                    }
-                    _ => (new.state, new.reason),
-                };
-                tx.execute(
-                    "INSERT INTO video_revisions (item_id, old_item_id, rule_id, folder,
-                         episode_name, old_version, new_version, old_crc, expected_crc,
-                         torrent_hash, state, reason, created_at, updated_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13)",
-                    params![
-                        new.item_id,
-                        new.old_item_id,
-                        new.rule_id,
-                        new.folder,
-                        new.episode_name,
-                        new.old_version,
-                        new.new_version,
-                        new.old_crc,
-                        new.expected_crc,
-                        new.torrent_hash,
-                        state.code(),
-                        reason,
-                        at
-                    ],
-                )?;
-                let row = query(&tx, "WHERE item_id = ?1", &[&new.item_id])?
-                    .pop()
-                    .expect("the row just written");
+                let row = create_in(&tx, at, new)?;
                 tx.commit()?;
                 Ok(row)
+            })
+            .await
+    }
+
+    /// Writes `row` and `history` in one transaction at `at`: a row the
+    /// worker decided is never without its history item's record, nor that
+    /// record without the row (a `received` item whose replacement was never
+    /// written would not be received again and would replace nothing, and a
+    /// `버전 미상` one would be received with `다시 받기` and named as an
+    /// ordinary item). The row is written first; only a sighting of an item
+    /// history does not hold yet is recorded first, as the row needs its ID.
+    /// Either both are written or neither.
+    pub async fn write_with_history(
+        &self,
+        at: Millis,
+        history: HistoryWrite,
+        row: RowWrite,
+    ) -> Result<Written> {
+        self.db
+            .run(move |c| {
+                let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                let mut written = Written {
+                    row: None,
+                    recorded: None,
+                    stored: None,
+                };
+                let item_id = match &history {
+                    HistoryWrite::Observe(observation) => match item_of(&tx, observation)? {
+                        Some(id) => Some(id),
+                        None => {
+                            written.recorded = history_repo::record_in(
+                                &tx,
+                                at,
+                                std::slice::from_ref(observation),
+                            )?
+                            .pop();
+                            item_of(&tx, observation)?
+                        }
+                    },
+                    HistoryWrite::Outcome { item_id, .. } => {
+                        let exists: bool = tx.query_row(
+                            "SELECT EXISTS (SELECT 1 FROM history_items WHERE id = ?1)",
+                            [item_id],
+                            |r| r.get(0),
+                        )?;
+                        exists.then_some(*item_id)
+                    }
+                };
+                if let Some(item_id) = item_id {
+                    written.row = match row {
+                        RowWrite::Create { mut new, reopen } => {
+                            new.item_id = item_id;
+                            let hash = new.torrent_hash.clone();
+                            let row = create_in(&tx, at, new)?;
+                            match hash {
+                                Some(hash) if reopen && row.not_received() => {
+                                    reopen_in(&tx, row.id, at, &hash)?
+                                }
+                                _ => Some(row),
+                            }
+                        }
+                        RowWrite::Confirm { hash, expected_crc } => {
+                            confirm_in(&tx, item_id, at, &hash, expected_crc.as_deref())?
+                        }
+                        RowWrite::Reopen { hash } => {
+                            match query(&tx, "WHERE item_id = ?1", &[&item_id])?.pop() {
+                                Some(row) => reopen_in(&tx, row.id, at, &hash)?,
+                                None => None,
+                            }
+                        }
+                    };
+                }
+                match history {
+                    HistoryWrite::Observe(observation) => {
+                        if written.recorded.is_none() {
+                            written.recorded =
+                                history_repo::record_in(&tx, at, &[observation])?.pop();
+                        }
+                    }
+                    HistoryWrite::Outcome {
+                        item_id,
+                        result,
+                        rule_id,
+                        reason,
+                        torrent_hash,
+                    } => {
+                        written.stored = history_repo::record_outcome_in(
+                            &tx,
+                            item_id,
+                            at,
+                            result,
+                            rule_id.as_deref(),
+                            reason.as_deref(),
+                            torrent_hash.as_deref(),
+                        )?;
+                    }
+                }
+                tx.commit()?;
+                Ok(written)
             })
             .await
     }
@@ -473,18 +683,7 @@ impl RevisionStore {
         self.db
             .run(move |c| {
                 let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-                let (state, reason) = if torrent_taken(&tx, Some(id), &hash)? {
-                    ("skipped", Some(SAME_TORRENT))
-                } else {
-                    ("receiving", None)
-                };
-                tx.execute(
-                    "UPDATE video_revisions
-                        SET state = ?2, torrent_hash = ?3, reason = ?4, updated_at = ?5
-                      WHERE id = ?1 AND state = 'failed' AND received_name IS NULL",
-                    params![id, state, hash, reason, at],
-                )?;
-                let row = by_id(&tx, id)?;
+                let row = reopen_in(&tx, id, at, &hash)?;
                 tx.commit()?;
                 Ok(row)
             })
@@ -506,24 +705,7 @@ impl RevisionStore {
         self.db
             .run(move |c| {
                 let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-                let Some(row) = query(&tx, "WHERE item_id = ?1", &[&item_id])?.pop() else {
-                    return Ok(None);
-                };
-                if row.state == RevisionState::Unknown {
-                    let (state, reason) = if torrent_taken(&tx, Some(row.id), &hash)? {
-                        ("skipped", Some(SAME_TORRENT))
-                    } else {
-                        ("receiving", None)
-                    };
-                    tx.execute(
-                        "UPDATE video_revisions
-                            SET state = ?2, torrent_hash = ?3, expected_crc = ?4,
-                                reason = ?5, updated_at = ?6
-                          WHERE id = ?1",
-                        params![row.id, state, hash, expected_crc, reason, at],
-                    )?;
-                }
-                let row = by_id(&tx, row.id)?;
+                let row = confirm_in(&tx, item_id, at, &hash, expected_crc.as_deref())?;
                 tx.commit()?;
                 Ok(row)
             })
@@ -563,7 +745,8 @@ impl RevisionStore {
                         "UPDATE video_revisions
                             SET state = 'removing', old_item_id = COALESCE(?2, old_item_id),
                                 old_version = COALESCE(?3, old_version),
-                                old_torrent_hash = ?4, updated_at = ?5
+                                old_torrent_hash = COALESCE(?4, old_torrent_hash),
+                                updated_at = ?5
                           WHERE id = ?1",
                         params![id, old.item_id, old.version, old.torrent_hash, at],
                     )?;
@@ -701,13 +884,33 @@ impl RevisionStore {
             .await
     }
 
-    /// Writes `step` on the row `id` at `at`. `done` also skips the lower (or
-    /// equal) revisions of the episode still receiving or checked: they would
-    /// replace the video that just took the name.
-    pub async fn advance(&self, id: i64, at: Millis, step: Step) -> Result<()> {
+    /// Writes `step` on the row `id` at `at` if the row is still in the state
+    /// `from` the step was decided on, and returns whether it was written. A
+    /// row another write moved on since (a higher revision's `done` skipped it
+    /// earlier in the same pass, say) keeps what that write made of it. `done`
+    /// also skips the lower (or equal) revisions of the episode still
+    /// receiving or checked: they would replace the video that just took the
+    /// name.
+    pub async fn advance(
+        &self,
+        id: i64,
+        at: Millis,
+        from: RevisionState,
+        step: Step,
+    ) -> Result<bool> {
         self.db
             .run(move |c| {
                 let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                let state: Option<String> = tx
+                    .query_row(
+                        "SELECT state FROM video_revisions WHERE id = ?1",
+                        [id],
+                        |r| r.get(0),
+                    )
+                    .optional()?;
+                if state.as_deref() != Some(from.code()) {
+                    return Ok(false);
+                }
                 match step {
                     Step::Receiving => tx.execute(
                         "UPDATE video_revisions SET state = 'receiving', reason = NULL,
@@ -769,9 +972,14 @@ impl RevisionStore {
                              updated_at = ?3 WHERE id = ?1",
                         params![id, reason, at],
                     )?,
+                    Step::RemovalWaits { reason } => tx.execute(
+                        "UPDATE video_revisions SET reason = ?2, updated_at = ?3
+                          WHERE id = ?1 AND state = 'removing'",
+                        params![id, reason, at],
+                    )?,
                 };
                 tx.commit()?;
-                Ok(())
+                Ok(true)
             })
             .await
     }
@@ -782,7 +990,8 @@ impl RevisionStore {
             .run(|c| {
                 let mut rows = query(
                     c,
-                    "WHERE state = 'failed' OR (state = 'removed' AND reason IS NOT NULL)",
+                    "WHERE state = 'failed'
+                        OR (state IN ('removed', 'removing') AND reason IS NOT NULL)",
                     &[],
                 )?;
                 rows.sort_by_key(|r| std::cmp::Reverse((r.updated_at, r.id)));
@@ -799,7 +1008,7 @@ impl RevisionStore {
                 let prefix = format!("{}/", work_folder.trim_end_matches('/'));
                 let rows = query(
                     c,
-                    "WHERE state IN ('done', 'failed', 'removed')
+                    "WHERE state IN ('done', 'failed', 'removed', 'removing')
                        AND substr(folder, 1, length(?1)) = ?1",
                     &[&prefix],
                 )?;
