@@ -157,6 +157,7 @@ mod tests {
                     })
                     .collect(),
             },
+            readings: Vec::new(),
         }
     }
 

@@ -1,0 +1,39 @@
+# Sample of the legacy channels configuration with the comments the import
+# reads above the rules. The comment format is the one `src/import/comments.rs`
+# documents (an assumption: the author's own convention is not in the repo).
+# Tokens and anime numbers are made up.
+- url: https://feeds.example.test/subsplease?filter=1080p&token=REDACTED
+  directory: /media/anime
+  rules:
+    # Q. 2026/3
+
+    # 수 22:30
+    # 자막: Team Alpha
+    # https://anissia.net/anime/1001
+    - match: "[SubsPlease] Alpha Show - "
+      directory: Alpha Show/Season 01
+    # 목 23:00 | https://anissia.net/anime/1002
+    - match: "[SubsPlease] Beta Show - "
+      directory: Beta Show/Season 01
+    # 금 21:00 자막 오래전에 받던 곳 https://nyaa.example.test/?q=gamma
+    - match: "[SubsPlease] Gamma Show - "
+      directory: Gamma Show/Season 01
+    - match: "[SubsPlease] Delta Show - "
+      directory: Delta Show/Season 01
+      episode: -12
+    # 토 01:00
+    # 제작자: Team Alpha
+    # https://anissia.net/anime/1001
+    - match: "[SubsPlease] Alpha Show Again - "
+      directory: Alpha Show/Season 02
+- url: https://feeds.example.test/erai-raws?token=REDACTED
+  directory: /media/anime
+  rules:
+    # 자막 제작자: Team Epsilon
+    # https://anissia.net/anime/1003
+    - match: "Epsilon Show"
+      directory: Epsilon Show/Season 01
+    # 자막: 미정
+    # https://anissia.net/anime/1004
+    - match: "Zeta Show"
+      directory: Zeta Show/Season 01
