@@ -374,7 +374,9 @@ pub async fn week_at(state: &AppState, now: Millis) -> Result<WeekView, ApiError
             }
         }
         let Some(anime) = anime else { continue };
-        if unlisted.contains(&anime.anime_no) {
+        // An end date says when the anime leaves (see `slot_in_week`); only
+        // one without leaves when Anissia no longer lists it.
+        if anime.end_date.is_none() && unlisted.contains(&anime.anime_no) {
             continue;
         }
         if let Some(slot) = slot_in_week(anime, start) {

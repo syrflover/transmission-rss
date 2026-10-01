@@ -560,6 +560,23 @@ async fn an_anime_without_an_end_date_leaves_once_anissia_is_found_not_to_list_i
         .unwrap();
     assert_eq!(titles(&app.week().await), ["빠짐", "오래됨"]);
 
+    // With an end date still ahead, the end date decides, not the listing.
+    app.state
+        .anissia
+        .store
+        .put_anime(Anime {
+            end_date: Some("2026-12-31".into()),
+            ..anime(2, "빠짐", 4, Some("10:00"), Some("2026-07-02"))
+        })
+        .await
+        .unwrap();
+    app.state
+        .anissia
+        .store
+        .mark_unlisted(vec![2], NOW, NOW + 24 * 60 * 60 * 1000, NOW)
+        .await
+        .unwrap();
+    assert_eq!(titles(&app.week().await), ["빠짐", "오래됨"]);
 }
 
 #[tokio::test]
