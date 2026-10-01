@@ -307,3 +307,105 @@ async fn a_paused_rule_that_received_videos_is_connected_too() {
         Some(format!("{work}:1").as_str())
     );
 }
+
+// --- what the pass does not repeat ----------------------------------------------
+
+impl Scene {
+    /// How many times the season link asked Transmission for torrents with
+    /// their files.
+    fn file_reads(&self) -> usize {
+        self.h
+            .tr
+            .calls_of("torrent-get")
+            .iter()
+            .filter(|call| {
+                call.args["fields"]
+                    .as_array()
+                    .is_some_and(|fields| fields.iter().any(|f| f == "files"))
+            })
+            .count()
+    }
+}
+
+#[tokio::test]
+async fn a_rule_that_cannot_be_connected_costs_nothing_until_something_it_depends_on_changes() {
+    let mut scene = Scene::new().await;
+    let lost = scene.subscription(9, "Lost").await;
+    let first = "Lost/Season 01/Lost - S01E01.mkv";
+    scene.received(&lost, first).await;
+    // The video is not in the library: not there when the folder is read.
+    fs::remove_file(scene.shows.join(first)).unwrap();
+    scene.register().await;
+
+    scene.tick().await;
+    assert_eq!(scene.file_reads(), 1, "the first attempt asks Transmission");
+    scene.tick().await;
+    scene.tick().await;
+    assert_eq!(
+        scene.file_reads(),
+        1,
+        "nothing it depends on changed, so there is nothing to ask"
+    );
+
+    // Another video it received: its torrents are a different set.
+    scene
+        .received(&lost, "Lost/Season 01/Lost - S01E02.mkv")
+        .await;
+    fs::remove_file(scene.shows.join("Lost/Season 01/Lost - S01E02.mkv")).unwrap();
+    scene.tick().await;
+    assert_eq!(scene.file_reads(), 2, "a new received item");
+    scene.tick().await;
+    assert_eq!(scene.file_reads(), 2);
+
+    // The library changes: the first video turns up.
+    touch(&scene.shows.join(first));
+    scene.tick().await;
+    assert_eq!(scene.file_reads(), 3, "the library changed");
+    let work = scene.work_id("Lost").await;
+    assert_eq!(
+        season_of(&scene.rule(&lost).await),
+        Some(format!("{work}:1").as_str())
+    );
+    // Connected, it is out of the pass.
+    scene.tick().await;
+    assert_eq!(scene.file_reads(), 3);
+}
+
+#[tokio::test]
+async fn a_rule_with_videos_in_several_seasons_and_a_rule_whose_season_is_taken_are_not_retried() {
+    let mut scene = Scene::new().await;
+    let several = scene.subscription(7, "Several").await;
+    scene
+        .received(&several, "Several/Season 01/Several - S01E12.mkv")
+        .await;
+    scene
+        .received(&several, "Several/Season 02/Several - S02E01.mkv")
+        .await;
+    let holder = scene.subscription(8, "Holder").await;
+    let taken = scene.subscription(9, "Taken").await;
+    scene
+        .received(&holder, "Same/Season 01/Same - S01E01.mkv")
+        .await;
+    scene
+        .received(&taken, "Same/Season 01/Same - S01E02.mkv")
+        .await;
+    scene.register().await;
+
+    scene.tick().await;
+    assert_eq!(scene.file_reads(), 1);
+    let work = scene.work_id("Same").await;
+    assert_eq!(
+        season_of(&scene.rule(&holder).await),
+        Some(format!("{work}:1").as_str())
+    );
+    let blocked = scene.rule(&taken).await;
+    assert_eq!(blocked_of(&blocked), Some(format!("{work}:1").as_str()));
+
+    scene.tick().await;
+    scene.tick().await;
+
+    assert_eq!(scene.file_reads(), 1);
+    assert_eq!(season_of(&scene.rule(&several).await), None);
+    // The note on the taken rule is not written again either.
+    assert_eq!(scene.rule(&taken).await.version, blocked.version);
+}

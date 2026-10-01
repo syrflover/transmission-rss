@@ -199,6 +199,7 @@ impl Worker {
                 history: HistoryStore::new(db.clone()),
                 library: LibraryStore::new(db),
                 scan_cache: watch::ScanCaches::default(),
+                season_link: season_link::Memory::default(),
                 live: live::LiveWatch::default(),
                 transmission_url: env.transmission_url.clone(),
                 transmission_http: crate::transmission::http_client(
