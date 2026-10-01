@@ -4,7 +4,7 @@ use crate::{
     seasons::Seasons,
     store::{
         channels::ChannelStore, commands::CommandStore, history::HistoryStore,
-        library::LibraryStore, settings::SettingsStore, status::StatusStore, Db,
+        library::LibraryStore, settings::SettingsStore, setup::SetupStore, status::StatusStore, Db,
     },
 };
 
@@ -31,6 +31,8 @@ pub struct AppState {
     pub seasons: Seasons,
     /// Anissia's schedule, and the snapshots of the anime that are subscribed.
     pub anissia: Anissia,
+    /// Which steps of the first run's checklist the user skipped.
+    pub setup: SetupStore,
 }
 
 impl AppState {
@@ -45,6 +47,7 @@ impl AppState {
             commands: CommandStore::new(db.clone()),
             settings: SettingsStore::new(db.clone()),
             library: LibraryStore::new(db.clone()),
+            setup: SetupStore::new(db.clone()),
             // No app data folder: covers can be read and changed but no image
             // stored or served until `with_artwork` gives one.
             artwork,

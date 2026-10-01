@@ -230,6 +230,63 @@ pub(super) fn season_holdings(
     }))
 }
 
+/// What one whole-numbered episode of a season has.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Held {
+    pub video: bool,
+    pub subtitle: bool,
+}
+
+/// The whole-numbered episodes of season `season` of the work `id` that have a
+/// file, by number (`013` and `13` are one episode; `17.5` and `SP` are left
+/// out). Empty for a work whose folder is gone, whose last record is not
+/// holdings. `None` when there is no such work in a registered folder.
+pub(super) fn season_episodes(
+    conn: &Connection,
+    id: &str,
+    season: u32,
+) -> rusqlite::Result<Option<BTreeMap<u32, Held>>> {
+    let head: Option<bool> = conn
+        .query_row(
+            "SELECT w.missing FROM works w
+               JOIN watch_folders f ON f.id = w.watch_folder_id
+              WHERE w.id = ?1 AND f.unregistered_at IS NULL",
+            [id],
+            |row| Ok(row.get::<_, i64>(0)? != 0),
+        )
+        .optional()?;
+    let Some(missing) = head else {
+        return Ok(None);
+    };
+    let mut held: BTreeMap<u32, Held> = BTreeMap::new();
+    if missing {
+        return Ok(Some(held));
+    }
+    let mut stmt =
+        conn.prepare("SELECT episode, kind FROM media_files WHERE work_id = ?1 AND season = ?2")?;
+    let mut cursor = stmt.query(params![id, season])?;
+    while let Some(row) = cursor.next()? {
+        let episode: String = row.get(0)?;
+        let kind: String = row.get(1)?;
+        let EpisodeKey::Number(whole, fraction) = key_of(&episode) else {
+            continue;
+        };
+        let Some(number) = fraction
+            .is_empty()
+            .then(|| u32::try_from(whole).ok())
+            .flatten()
+        else {
+            continue;
+        };
+        let entry = held.entry(number).or_default();
+        match FileKind::from_code(&kind).unwrap_or(FileKind::Video) {
+            FileKind::Video => entry.video = true,
+            FileKind::Subtitle => entry.subtitle = true,
+        }
+    }
+    Ok(Some(held))
+}
+
 /// The video at one place of one work, by the keys of `works`
 /// (`watch_folder_id`, `dir_name`) and `media_files` (`work_id`, `path`).
 const FIND_VIDEO_SQL: &str = "SELECT m.work_id, m.season FROM works w
@@ -400,6 +457,85 @@ mod tests {
         assert_eq!(detail.unrecognized[0].reason, Reason::OutsideSeason);
 
         assert_eq!(store.work_detail("no-such-work").await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn the_whole_numbered_episodes_of_a_season_say_what_they_have() {
+        use FileKind::{Subtitle, Video};
+        let (store, id) = store_with(scan(
+            "Show",
+            &[1, 2],
+            vec![
+                file(1, "01", "S01E01.mkv", Video),
+                file(1, "01", "S01E01.ko.ass", Subtitle),
+                file(1, "013", "S01E013.mkv", Video),
+                file(1, "13", "S01E13.ko.srt", Subtitle),
+                file(1, "02", "S01E02.ko.ass", Subtitle),
+                file(1, "17.5", "S01E17.5.mkv", Video),
+                file(1, "SP", "S01SP.mkv", Video),
+                file(2, "01", "S02E01.mkv", Video),
+            ],
+            Vec::new(),
+        ))
+        .await;
+
+        let held = store.season_episodes(&id, 1).await.unwrap().unwrap();
+        assert_eq!(
+            held.into_iter().collect::<Vec<_>>(),
+            [
+                (
+                    1,
+                    Held {
+                        video: true,
+                        subtitle: true
+                    }
+                ),
+                // A subtitle without its video.
+                (
+                    2,
+                    Held {
+                        video: false,
+                        subtitle: true
+                    }
+                ),
+                // `013` and `13` are one episode.
+                (
+                    13,
+                    Held {
+                        video: true,
+                        subtitle: true
+                    }
+                ),
+            ]
+        );
+        assert_eq!(
+            store.season_episodes(&id, 3).await.unwrap().unwrap().len(),
+            0
+        );
+        assert_eq!(
+            store.season_episodes("no-such-work", 1).await.unwrap(),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn a_work_whose_folder_is_gone_has_no_episodes_to_hold() {
+        let (store, id) = store_with(scan(
+            "Show",
+            &[1],
+            vec![file(1, "01", "S01E01.mkv", FileKind::Video)],
+            Vec::new(),
+        ))
+        .await;
+        let folder = store.folders().await.unwrap().remove(0);
+        store
+            .record_scan(&folder.id, Ok(Scan { works: Vec::new() }), 200)
+            .await
+            .unwrap();
+
+        // The work stays known, but its last record is not holdings.
+        let held = store.season_episodes(&id, 1).await.unwrap().unwrap();
+        assert!(held.is_empty());
     }
 
     #[tokio::test]

@@ -296,6 +296,37 @@ pub fn received_hashes_of_rules(
         .collect())
 }
 
+/// The release title and torrent hash of each item each of the given rules
+/// received (`received` with the rule recorded and a torrent hash), by rule ID.
+/// It reads through `history_items_by_rule` like [`received_hashes_of_rules`].
+pub fn received_titles_of_rules(
+    conn: &Connection,
+    rule_ids: &[String],
+) -> Result<std::collections::HashMap<String, Vec<(String, String)>>> {
+    let mut by_rule: std::collections::HashMap<String, Vec<(String, String)>> = Default::default();
+    for chunk in rule_ids.chunks(RECEIVED_HASHES_CHUNK) {
+        let placeholders = vec!["?"; chunk.len()].join(", ");
+        let mut stmt = conn.prepare(&format!(
+            "SELECT rule_id, torrent_hash, title FROM history_items
+              WHERE result = 'received' AND torrent_hash IS NOT NULL
+                AND rule_id IN ({placeholders})"
+        ))?;
+        let rows = stmt
+            .query_map(params_from_iter(chunk), |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for (rule_id, hash, title) in rows {
+            by_rule.entry(rule_id).or_default().push((hash, title));
+        }
+    }
+    Ok(by_rule)
+}
+
 /// Marks a cycle as started unless the previous one started less than
 /// `min_gap` ago. The check and the mark are one write transaction.
 pub fn try_begin_cycle(conn: &mut Connection, now: Millis, min_gap: Millis) -> Result<bool> {

@@ -219,6 +219,17 @@ impl HistoryStore {
             .await
     }
 
+    /// The torrent hash and release title of the items each of the given rules
+    /// received, by rule ID: what tells which episode a torrent is of.
+    pub async fn received_titles_of_rules(
+        &self,
+        rule_ids: Vec<String>,
+    ) -> Result<std::collections::HashMap<String, Vec<(String, String)>>, HistoryError> {
+        self.db
+            .run(move |c| repo::received_titles_of_rules(c, &rule_ids))
+            .await
+    }
+
     /// Marks a collection cycle as started at `now`, unless the previous cycle
     /// started less than `min_gap` milliseconds ago; returns whether it did.
     pub async fn try_begin_cycle(

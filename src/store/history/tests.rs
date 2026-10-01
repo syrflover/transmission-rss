@@ -1327,3 +1327,39 @@ async fn the_hashes_of_rules_are_read_through_an_index_on_the_rule() {
         "{plan:?}"
     );
 }
+
+#[tokio::test]
+async fn the_titles_of_what_rules_received_come_back_with_their_torrents() {
+    let (_dir, _db, history) = store().await;
+    history
+        .record(
+            1_000,
+            vec![
+                received("a", "rule-1", "hash-a"),
+                received("b", "rule-1", "hash-b"),
+                received("c", "rule-2", "hash-c"),
+                Observation {
+                    rule_id: Some("rule-1".into()),
+                    ..obs("no-torrent", HistoryResult::AddFailed)
+                },
+            ],
+        )
+        .await
+        .unwrap();
+
+    let got = history
+        .received_titles_of_rules(vec!["rule-1".into(), "rule-3".into()])
+        .await
+        .unwrap();
+
+    assert_eq!(got.len(), 1);
+    let mut rule_1 = got["rule-1"].clone();
+    rule_1.sort();
+    assert_eq!(
+        rule_1,
+        [
+            ("hash-a".to_owned(), "title of a".to_owned()),
+            ("hash-b".to_owned(), "title of b".to_owned()),
+        ]
+    );
+}
