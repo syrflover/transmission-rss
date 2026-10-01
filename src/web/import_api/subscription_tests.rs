@@ -443,16 +443,46 @@ async fn when_anissia_cannot_be_reached_the_subscription_is_kept_with_an_unknown
 }
 
 #[tokio::test]
-async fn an_anime_the_schedule_does_not_list_is_kept_the_same_way_without_blaming_anissia() {
+async fn an_anime_the_schedule_does_not_list_is_refused_and_its_rule_imported_plain() {
     let app = App::new().await;
     let content = app.real(COMMENTED);
-    // Zeta (1004) is on no list, and checking it is the user's choice.
-    let (status, done) = app.apply(&content, json!([]), json!([pick(1, 1)])).await;
+    // Zeta (1004) is on no list: Anissia answered, so there is no stand-in. It is
+    // picked next to Alpha (1001), which is listed.
+    let (status, done) = app
+        .apply(&content, json!([]), json!([pick(0, 0), pick(1, 1)]))
+        .await;
     assert_eq!(status, StatusCode::OK, "{done}");
     assert_eq!(done["subscriptions"]["unavailable"], Value::Null);
-    assert_eq!(done["subscriptions"]["created"][0]["schedule_known"], false);
-    assert_eq!(app.followed().await, [("Zeta Show".to_owned(), 1004, None)]);
-    // Every week was looked at before giving up.
+    assert_eq!(done["counts"]["subscriptions_created"], 1);
+    let created = done["subscriptions"]["created"].as_array().unwrap();
+    assert_eq!(created.len(), 1);
+    assert_eq!(created[0]["anime_no"], 1001);
+    assert_eq!(created[0]["schedule_known"], true);
+    let not_created = done["subscriptions"]["not_created"].as_array().unwrap();
+    assert_eq!(not_created.len(), 1);
+    assert_eq!(
+        (
+            not_created[0]["channel"].as_u64(),
+            not_created[0]["rule"].as_u64()
+        ),
+        (Some(1), Some(1))
+    );
+    assert!(not_created[0]["reason"]
+        .as_str()
+        .unwrap()
+        .contains("편성표에 없는"));
+    // The rule came in without a subscription, and no snapshot stands in for it.
+    assert_eq!(
+        app.followed().await,
+        [(
+            "[SubsPlease] Alpha Show - ".to_owned(),
+            1001,
+            Some("Team Alpha".to_owned())
+        )]
+    );
+    assert_eq!(done["counts"]["rules_added"], 7);
+    assert!(app.state.anissia.store.anime(1004).await.unwrap().is_none());
+    // Every week was looked at before deciding.
     assert_eq!(app.fake.count("/anime/schedule/"), 9);
 }
 

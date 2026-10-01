@@ -7,17 +7,27 @@ import type { ChannelView, Decision, PickRequest, RuleView, SuggestionKind } fro
  * - `skipped`: the channel is skipped, so its suggestions go with it;
  * - `not_imported`: the channel is not imported;
  * - `blocked`: the comment was read but the rule cannot become a subscription;
- * - `kept`: replacing keeps a rule that is a subscription already.
+ * - `kept`: replacing keeps a rule that is a subscription already;
+ * - `unlisted`: Anissia answered and does not list the anime, so only the rule is imported.
  */
-export type Standing = "pickable" | "none" | "skipped" | "not_imported" | "blocked" | "kept";
+export type Standing = "pickable" | "none" | "skipped" | "not_imported" | "blocked" | "kept" | "unlisted";
 
-export function standing(channel: ChannelView, rule: RuleView, decision: Decision | undefined): Standing {
+/** Why a suggestion for an anime Anissia does not list cannot be checked. */
+export const UNLISTED_NOTE = "Anissia 편성표에 없는 작품이라서 규칙만 가져와요.";
+
+export function standing(
+  channel: ChannelView,
+  rule: RuleView,
+  decision: Decision | undefined,
+  unlisted: ReadonlySet<number>,
+): Standing {
   const suggestion = rule.suggestion;
   if (suggestion.anime_no === null) return "none";
   if (channel.not_imported !== null) return "not_imported";
   if (decision === "skip") return "skipped";
   if (suggestion.blocked !== null) return "blocked";
   if (decision === "replace" && suggestion.keeps_subscription) return "kept";
+  if (unlisted.has(suggestion.anime_no)) return "unlisted";
   return "pickable";
 }
 
@@ -33,8 +43,9 @@ export function isPicked(
   index: number,
   picks: Picks,
   decision: Decision | undefined,
+  unlisted: ReadonlySet<number>,
 ): boolean {
-  if (standing(channel, rule, decision) !== "pickable") return false;
+  if (standing(channel, rule, decision, unlisted) !== "pickable") return false;
   return picks[pickKey(channel.index, index)] ?? rule.suggestion.checked;
 }
 
@@ -43,10 +54,13 @@ export function pickedRequests(
   channels: ChannelView[],
   picks: Picks,
   choices: Record<number, Decision>,
+  unlisted: ReadonlySet<number>,
 ): PickRequest[] {
   return channels.flatMap((channel) =>
     channel.rules.flatMap((rule, index) =>
-      isPicked(channel, rule, index, picks, choices[channel.index]) ? [{ channel: channel.index, rule: index }] : [],
+      isPicked(channel, rule, index, picks, choices[channel.index], unlisted)
+        ? [{ channel: channel.index, rule: index }]
+        : [],
     ),
   );
 }

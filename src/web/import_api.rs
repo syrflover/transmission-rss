@@ -568,6 +568,7 @@ async fn apply(
     // Anissia is asked only for the checked suggestions, and never blocks the
     // import: what it cannot say is left for the worker's daily refresh.
     let resolved = suggestions::resolve(&state, &picked.anime_nos()).await;
+    let picked = suggestions::settle(picked, &resolved);
     let to_subscribe = suggestions::subscriptions(&picked.wanted, &resolved, state.anissia.now());
     let (results, outcomes) = state
         .channels

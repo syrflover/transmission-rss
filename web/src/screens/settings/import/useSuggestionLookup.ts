@@ -19,11 +19,23 @@ export interface SuggestionLookup {
   schedules: Record<number, ScheduledAnime>;
   /** The creators Anissia lists for an anime; null when they could not be read. */
   creators: Record<number, string[] | null>;
+  /**
+   * The anime Anissia answered without, though every week of its schedule was
+   * read: nothing is known of them, so a subscription cannot be made. Empty when
+   * Anissia stopped answering, since then nothing is known either way.
+   */
+  unlisted: ReadonlySet<number>;
   /** Why Anissia stopped answering, if it did. */
   problem: string | null;
 }
 
-const NOTHING: SuggestionLookup = { status: "idle", schedules: {}, creators: {}, problem: null };
+const NOTHING: SuggestionLookup = {
+  status: "idle",
+  schedules: {},
+  creators: {},
+  unlisted: new Set(),
+  problem: null,
+};
 
 interface ScheduleAnswer {
   entries: { anime_no: number; week: number; subject: string; air_time: string | null }[];
@@ -41,6 +53,7 @@ const LAST_WEEK = 8;
  * suggestion: the anime's weekday and time, and whether the creator the comment
  * names is one of the anime's. The preview itself never waits for Anissia, and a
  * failure only leaves those values undecided (`미정`): it never blocks the import.
+ * An anime that Anissia answered without is reported in `unlisted`.
  *
  * Anissia has no request for one anime, so the schedule is read week by week
  * (each answer is cached by the server for a few minutes) until every anime of
@@ -102,6 +115,8 @@ export function useSuggestionLookup(preview: Preview | null): SuggestionLookup {
         }
         publish({ schedules: { ...current.schedules, ...found } });
       }
+      // The loop ends early only by failing, so what is still missing was not listed.
+      if (missing.size > 0) publish({ unlisted: new Set(missing) });
 
       for (const animeNo of withCreator) {
         let names: string[] | null;

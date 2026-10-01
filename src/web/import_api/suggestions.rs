@@ -20,9 +20,13 @@
 //! when the anime's caption list does not name it, and the user decides by
 //! checking or not. A suggestion without a creator is `제작자 미정`. The
 //! anime's schedule values are asked of Anissia once per anime when the import
-//! is applied; when Anissia cannot answer (or does not list the anime), the
-//! subscription is still made with a stand-in snapshot that the worker's daily
-//! refresh replaces, and the result says so. Suggestions never block an import.
+//! is applied. When Anissia cannot answer, the subscription is still made with a
+//! stand-in snapshot that the worker's daily refresh replaces, and the result
+//! says so. When Anissia answered and does not list the anime (a mistyped
+//! number, a show that ended), nothing is known of it: the pick is reported as
+//! not created and the rule is imported plain ([`settle`]); the review shows
+//! the suggestion unchecked once its own reads find the same. Suggestions never
+//! block an import.
 
 use std::{collections::HashMap, time::Duration};
 
@@ -208,6 +212,35 @@ pub(super) fn pick(
         });
     }
     Ok(out)
+}
+
+/// Why a pick for an anime that Anissia answered without is left out.
+const UNLISTED: &str = "Anissia 편성표에 없는 작품이라서 규칙만 가져왔어요.";
+
+/// Leaves out the picks for an anime Anissia was asked about and did not list
+/// (a mistyped number, a show that ended): nothing can be said of its schedule,
+/// so no subscription is made and the rule comes in plain. When Anissia could
+/// not be asked at all the picks stay, to be made with a stand-in snapshot.
+pub(super) fn settle(picked: Picked, resolved: &Resolved) -> Picked {
+    if resolved.unavailable.is_some() {
+        return picked;
+    }
+    let Picked {
+        wanted,
+        mut not_created,
+    } = picked;
+    let (listed, unlisted): (Vec<_>, Vec<_>) = wanted
+        .into_iter()
+        .partition(|w| resolved.found.contains_key(&w.anime_no));
+    not_created.extend(unlisted.into_iter().map(|w| NotCreated {
+        channel: w.channel,
+        rule: w.rule,
+        reason: UNLISTED.to_owned(),
+    }));
+    Picked {
+        wanted: listed,
+        not_created,
+    }
 }
 
 /// The schedule snapshots of the anime Anissia lists, and why it could not be

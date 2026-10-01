@@ -35,7 +35,8 @@ pub struct ImportSubscription {
     pub subscription: NewSubscription,
     /// Whether `subscription.anime` is a stand-in because Anissia could not be
     /// asked (see [`ImportSubscription::stand_in`]): it never replaces a
-    /// snapshot the app already has.
+    /// snapshot the app already has. An anime Anissia answered without is not
+    /// subscribed at all; the caller leaves such a rule out.
     pub placeholder: bool,
 }
 
