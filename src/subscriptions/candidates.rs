@@ -24,6 +24,11 @@
 //!   found a duplicate or failed to add, and no rule of the channel, in any
 //!   state, matches any of its titles now. A work another rule handles is not
 //!   anyone's to name.
+//! - The history window is known to reach the boundary. `items` may be only the
+//!   newest of a long history; when the window was cut short and its oldest item
+//!   is not older than the boundary, a work's first sighting cannot be told, so
+//!   the channel offers no candidates (and says so once in the log) rather than
+//!   calling a long-running work new.
 //! - The user did not reject it for this channel. A rejection is permanent and
 //!   changes no subscription.
 //!
@@ -35,6 +40,7 @@
 use std::{
     collections::{HashMap, HashSet},
     path::Path,
+    sync::{LazyLock, Mutex},
 };
 
 use crate::{
@@ -88,12 +94,24 @@ fn began_waiting(rule: &Rule) -> Option<Millis> {
     )
 }
 
+/// Records that the channel's candidates could not be told, and says whether
+/// this is the first time in this process, so that the caller logs it once.
+fn note_unknowable_once(channel_id: &str) -> bool {
+    static NOTED: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(Mutex::default);
+    NOTED
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(channel_id.to_owned())
+}
+
 /// The channel's title candidates, the work with the newest item first. `items`
-/// are the channel's recorded items, `rejected` the [`work_key`]s the user
-/// turned down for this channel.
+/// are the channel's recorded items, `truncated` is whether they are only the
+/// newest of a longer history, `rejected` the [`work_key`]s the user turned
+/// down for this channel.
 pub fn title_candidates(
     channel: &ChannelWithRules,
     items: &[HistoryItem],
+    truncated: bool,
     rejected: &HashSet<String>,
 ) -> Vec<TitleCandidate> {
     let waiting: Vec<&Rule> = channel.rules.iter().filter(|r| is_waiting(r)).collect();
@@ -102,6 +120,18 @@ pub fn title_candidates(
     let Some(since) = waiting.iter().filter_map(|rule| began_waiting(rule)).min() else {
         return Vec::new();
     };
+
+    // Cut short before the boundary, the window cannot say when a work was first
+    // seen: an old work would look new.
+    if truncated && items.iter().all(|item| item.first_seen_at >= since) {
+        if note_unknowable_once(&channel.channel.id) {
+            eprintln!(
+                "Title candidates: channel {} has more recorded items than are read, and they do not reach back to when its subscriptions began to wait; it offers no candidates",
+                channel.channel.id
+            );
+        }
+        return Vec::new();
+    }
 
     // Every rule, whatever its state, is asked whether it matches a title.
     let mut open = channel.clone();

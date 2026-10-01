@@ -616,3 +616,26 @@ async fn a_history_row_that_matched_no_rule_offers_naming_only_where_a_subscript
     assert_eq!(row["result"], "received");
     assert!(row["name_title"].is_null());
 }
+
+#[tokio::test]
+async fn the_item_window_says_when_it_left_older_items_unread() {
+    let app = App::new().await;
+    let channel = app.channel("feed.test").await;
+    let titles: Vec<String> = (0..=crate::store::history::MAX_PAGE_SIZE)
+        .map(|n| format!("[G] Work {n} - 01"))
+        .collect();
+    let refs: Vec<&str> = titles.iter().map(String::as_str).collect();
+    app.record(&channel, NOW, &refs).await;
+
+    let (read, cut) = rules_api::channel_items_up_to(&app.state.history, &channel.id, 1)
+        .await
+        .unwrap();
+    assert_eq!(read.len(), crate::store::history::MAX_PAGE_SIZE);
+    assert!(cut, "a page was read and the history goes on");
+
+    let (read, cut) = rules_api::channel_items_up_to(&app.state.history, &channel.id, 10_000)
+        .await
+        .unwrap();
+    assert_eq!(read.len(), titles.len());
+    assert!(!cut);
+}

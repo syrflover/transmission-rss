@@ -400,8 +400,27 @@ pub(super) async fn channel_items(
     history: &HistoryStore,
     channel_id: &str,
 ) -> Result<Vec<HistoryItem>, ApiError> {
+    Ok(channel_items_window(history, channel_id).await?.0)
+}
+
+/// [`channel_items`] and whether the history holds older items than it read.
+pub(super) async fn channel_items_window(
+    history: &HistoryStore,
+    channel_id: &str,
+) -> Result<(Vec<HistoryItem>, bool), ApiError> {
+    channel_items_up_to(history, channel_id, MAX_ITEMS_PER_CHANNEL).await
+}
+
+/// [`channel_items_window`] with the number of items at which it stops reading
+/// (a whole page past it at most) given.
+pub(super) async fn channel_items_up_to(
+    history: &HistoryStore,
+    channel_id: &str,
+    max_items: usize,
+) -> Result<(Vec<HistoryItem>, bool), ApiError> {
     let mut items: Vec<HistoryItem> = Vec::new();
     let mut after = None;
+    let mut truncated = false;
     loop {
         let page = history
             .list(HistoryQuery {
@@ -414,11 +433,15 @@ pub(super) async fn channel_items(
             .map_err(history_error)?;
         items.extend(page.items);
         match page.next {
-            Some(next) if items.len() < MAX_ITEMS_PER_CHANNEL => after = Some(next),
-            _ => break,
+            Some(next) if items.len() < max_items => after = Some(next),
+            Some(_) => {
+                truncated = true;
+                break;
+            }
+            None => break,
         }
     }
-    Ok(items)
+    Ok((items, truncated))
 }
 
 // ---------------------------------------------------------------------------

@@ -609,13 +609,19 @@ pub async fn title_candidates(state: &AppState) -> Result<Vec<TitleCandidate>, A
         if !cwr.rules.iter().any(candidates::is_waiting) {
             continue;
         }
-        let items = rules_api::channel_items(&state.history, &cwr.channel.id).await?;
+        let (items, truncated) =
+            rules_api::channel_items_window(&state.history, &cwr.channel.id).await?;
         let rejected_here = rejected
             .iter()
             .filter(|(channel_id, _)| channel_id == &cwr.channel.id)
             .map(|(_, key)| key.clone())
             .collect();
-        found.extend(candidates::title_candidates(cwr, &items, &rejected_here));
+        found.extend(candidates::title_candidates(
+            cwr,
+            &items,
+            truncated,
+            &rejected_here,
+        ));
     }
     found.sort_by(|a, b| {
         b.latest_seen_at
