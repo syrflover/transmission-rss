@@ -20,8 +20,9 @@
 //! neither. A repeat of the request is the same rule and result, whatever search
 //! it names, so a lost answer can be asked again after the search is gone.
 //! A result history says Transmission took is accepted only when the search
-//! offered it, which it does for a result whose torrent and video are gone; the
-//! worker checks that again when it runs the command.
+//! found it gone from the work (its torrent removed and its video not in the
+//! folder), and then as a result nothing has received; the worker checks that
+//! again when it runs the command.
 //!
 //! A rule is archived and restored only through `rule_archive`: the worker
 //! turns the rule off before its folder moves and on after it moved back.
@@ -351,13 +352,20 @@ async fn check_receive_past(
     let probe = existing.unwrap_or_else(|| {
         receive_past::past_item(&payload, channel.as_ref().map_or("", |c| c.id.as_str()), 0)
     });
-    match receive_once::adoption_plan(&probe, channel.as_ref(), Some(&rule)) {
-        Ok(_) => {}
-        // An item Transmission took that the search offered anyway: its torrent
-        // and video are gone. The worker looks again when it runs the command.
-        Err(receive_once::NotRetryable::Held) if stored.selectable => {}
-        Err(why) => return Err(ApiError::invalid(why.message())),
-    }
+    // An item Transmission took that the search found gone from the work is
+    // judged as one nothing has received, as the worker does: the rule must be
+    // active and pick it. The worker looks at Transmission and the folder
+    // again when it runs the command.
+    let probe = if stored.departed && probe.result.is_settled() {
+        crate::store::history::HistoryItem {
+            result: crate::store::history::HistoryResult::NoMatch,
+            ..probe
+        }
+    } else {
+        probe
+    };
+    receive_once::adoption_plan(&probe, channel.as_ref(), Some(&rule))
+        .map_err(|why| ApiError::invalid(why.message()))?;
     Ok(payload)
 }
 

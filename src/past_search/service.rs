@@ -87,10 +87,10 @@ pub struct Outcome {
 pub struct Stored {
     pub title: String,
     pub link: String,
-    /// Whether the preview offered the item for choosing. An item history says
-    /// Transmission took is offered only when it has gone from the work, and
-    /// then it is received again though its result says `received`.
-    pub selectable: bool,
+    /// Whether history says Transmission took the item and it had gone from the
+    /// work when the search looked ([`world::departed`]): it is received again
+    /// though its result says `received`.
+    pub departed: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -338,11 +338,11 @@ impl PastSearch {
         let world = {
             let rule_id = rule.id.clone();
             tokio::task::spawn_blocking(move || {
-                let files = world::read_folder(&save_path)?;
+                let folder = world::read_folder(&save_path)?;
                 Ok(world::build(
                     offset,
                     season,
-                    files,
+                    folder,
                     &rule_id,
                     &settled,
                     listing.as_ref(),
@@ -395,6 +395,7 @@ impl PastSearch {
             })
             .collect();
         let judged = judging.clone();
+        let departed = world.departed.clone();
         let preview = tokio::task::spawn_blocking(move || {
             judge(&results, range, &world, &*judged, &mut |path| {
                 file_crc32(path)
@@ -418,7 +419,7 @@ impl PastSearch {
                         Stored {
                             title: item.stored_title.clone(),
                             link: item.stored_link.clone(),
-                            selectable: listed.selectable,
+                            departed: departed.contains(&listed.key),
                         },
                     )
                 })
@@ -490,7 +491,7 @@ mod tests {
                 Stored {
                     title: "Show - 01".into(),
                     link: "magnet:?xt=urn:btih:a".into(),
-                    selectable: true,
+                    departed: false,
                 },
             )]),
             rule_id: "r".into(),

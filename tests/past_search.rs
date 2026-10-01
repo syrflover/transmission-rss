@@ -1306,3 +1306,173 @@ async fn a_result_offered_from_an_older_look_is_not_added_when_its_video_is_back
     assert_eq!(command["outcome"]["result"], "received", "{command}");
     assert!(s.added().is_empty(), "{:?}", s.added());
 }
+
+// --- what is not taken for gone ----------------------------------------------------------
+
+/// The result of episode 5 offered again (its torrent is removed, its video
+/// was never placed), and the poll that offered it.
+async fn offered_again(s: &Setup) -> (Value, String) {
+    let (key, hash) = s.receive_five().await;
+    s.h.tr.remove(&hash);
+    s.look_at_transmission().await;
+    let poll = s.search("[SubsPlease] Show 1080p", 5, 8).await;
+    assert_eq!(item(&poll, "- 05 ")["selectable"], true, "{poll}");
+    (poll, key)
+}
+
+#[tokio::test]
+async fn a_work_folder_that_is_not_there_does_not_make_a_received_episode_gone() {
+    let s = Setup::new(Options::show()).await;
+    let (key, hash) = s.receive_five().await;
+    s.h.tr.remove(&hash);
+    s.look_at_transmission().await;
+
+    // The media volume is not mounted: no video is seen, and none is gone.
+    std::fs::remove_dir_all(&s.folder).unwrap();
+    let poll = s.search("[SubsPlease] Show 1080p", 5, 8).await;
+    assert_eq!(
+        choice(item(&poll, "- 05 ")),
+        (json!("have"), json!(false), json!(false))
+    );
+    assert_eq!(s.try_receive(&poll, &key).await, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn a_folder_that_vanishes_after_the_search_stops_the_worker_adding_the_result() {
+    let s = Setup::new(Options::show()).await;
+    let (poll, key) = offered_again(&s).await;
+
+    std::fs::remove_dir_all(&s.folder).unwrap();
+    s.h.tr.clear_calls();
+    let id = s.receive(&poll, &key).await;
+    s.run_commands().await;
+    assert_eq!(s.command(&id).await["state"], "done");
+    assert!(s.added().is_empty(), "{:?}", s.added());
+}
+
+#[tokio::test]
+async fn a_folder_with_more_entries_than_are_looked_at_holds_a_received_episode() {
+    let s = Setup::new(Options::show()).await;
+    let (key, hash) = s.receive_five().await;
+    s.h.tr.remove(&hash);
+    s.look_at_transmission().await;
+    for n in 0..5001 {
+        s.write(&format!("{n}.txt"), b"");
+    }
+    let poll = s.search("[SubsPlease] Show 1080p", 5, 8).await;
+    assert_eq!(
+        choice(item(&poll, "- 05 ")),
+        (json!("have"), json!(false), json!(false))
+    );
+    assert_eq!(s.try_receive(&poll, &key).await, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn a_batch_whose_torrent_is_removed_stays_held() {
+    let s = Setup::new(Options::show()).await;
+    let batch = "[SubsPlease] Show (05-08) (1080p) [Batch]".to_owned();
+    let mut titles: Vec<String> = (5..=8)
+        .map(|n| episode("SubsPlease", "Show", n, ""))
+        .collect();
+    titles.push(batch.clone());
+    s.nyaa.set_releases(&titles);
+    let poll = s.search("[SubsPlease] Show 1080p", 5, 8).await;
+    let key = item(&poll, "Batch")["key"].as_str().unwrap().to_owned();
+    s.h.history
+        .record(
+            s.h.now(),
+            vec![Observation {
+                channel_id: s.channel_id.clone(),
+                channel_label: "nyaa".into(),
+                identity_key: key.clone(),
+                title: batch.clone(),
+                link: "magnet:?xt=urn:btih:bbbb".into(),
+                result: HistoryResult::Received,
+                rule_id: Some(s.rule_id.clone()),
+                torrent_hash: Some("bbbb".into()),
+                reason: None,
+            }],
+        )
+        .await
+        .unwrap();
+    // The batch's torrent is gone from Transmission, as they are once done.
+    s.look_at_transmission().await;
+
+    let poll = s.search("[SubsPlease] Show 1080p", 5, 8).await;
+    assert_eq!(item(&poll, "Batch")["selectable"], false, "{poll}");
+    assert_eq!(s.try_receive(&poll, &key).await, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn a_rule_that_is_paused_after_the_search_does_not_receive_a_gone_result() {
+    let s = Setup::new(Options::show()).await;
+    let (poll, key) = offered_again(&s).await;
+    s.h.channels
+        .set_rule_state(&s.rule_id, RuleState::Paused, 1)
+        .await
+        .unwrap();
+    assert_eq!(s.try_receive(&poll, &key).await, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn another_torrent_of_the_rule_for_the_episode_stops_the_worker_adding_a_gone_result() {
+    let s = Setup::new(Options::show()).await;
+    let (poll, key) = offered_again(&s).await;
+
+    // Meanwhile the same episode came from another release, which Transmission holds.
+    let hash = "eeee00000000000000000000000000000000000a";
+    let erai = "[Erai-raws] Show - 05 [1080p][ABCD1234].mkv";
+    s.h.history
+        .record(
+            1,
+            vec![Observation {
+                channel_id: s.channel_id.clone(),
+                channel_label: "nyaa".into(),
+                identity_key: "guid:erai05".into(),
+                title: erai.into(),
+                link: format!("magnet:?xt=urn:btih:{hash}"),
+                result: HistoryResult::Received,
+                rule_id: Some(s.rule_id.clone()),
+                torrent_hash: Some(hash.into()),
+                reason: None,
+            }],
+        )
+        .await
+        .unwrap();
+    s.h.tr
+        .preload(FakeTorrent::new(hash, erai).in_dir(&s.folder));
+    s.h.tr.clear_calls();
+    let id = s.receive(&poll, &key).await;
+    s.run_commands().await;
+    assert_eq!(s.command(&id).await["state"], "done");
+    assert!(s.added().is_empty(), "{:?}", s.added());
+}
+
+#[tokio::test]
+async fn a_lower_revision_that_a_higher_one_replaced_is_not_received_again_when_the_folder_is_empty(
+) {
+    let s = Setup::new(Options::show()).await;
+    let v1 = s.first_release().await;
+    let v3 = show_14(3, V3);
+    s.nyaa.set_releases(&[v3.clone(), v1.clone()]);
+    s.on_add(&v3, V3);
+    let poll = s.search("[SubsPlease] Show 1080p", 14, 14).await;
+    let command = s.receive_title(&poll, &v3).await;
+    assert_eq!(command["outcome"]["result"], "received", "{command}");
+    s.seed(&v3);
+    s.cycle().await;
+    assert_eq!(s.episode_14(), V3);
+
+    // The person deletes the video and removes the torrent: the folder has no
+    // episode 14, and v1, which v3 replaced, is gone from the work too.
+    s.h.tr.remove(&FakeNyaa::hash_for(&v3));
+    std::fs::remove_file(s.folder.join("Show S01E14.mkv")).unwrap();
+    s.look_at_transmission().await;
+    let poll = s.search("[SubsPlease] Show 1080p", 14, 14).await;
+    assert_eq!(item(&poll, &v1)["selectable"], true, "{poll}");
+
+    s.h.tr.clear_calls();
+    let command = s.receive_title(&poll, &v1).await;
+    assert_eq!(command["outcome"]["result"], "duplicate", "{command}");
+    assert!(s.added().is_empty(), "{:?}", s.added());
+}

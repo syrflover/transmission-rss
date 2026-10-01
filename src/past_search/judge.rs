@@ -151,6 +151,10 @@ pub struct World {
     /// took (`received`, `duplicate`) and that are not gone from the work
     /// ([`super::world::departed`]); such a result is not chosen again.
     pub held: HashSet<String>,
+    /// Identity keys of the channel's items that history says Transmission
+    /// took and that are gone from the work ([`super::world::departed`]):
+    /// offered again, though history has them as received.
+    pub departed: HashSet<String>,
     /// Other releases of the channel's history, to find which revision a video
     /// of unknown version is by its CRC32.
     pub releases: Vec<Known>,

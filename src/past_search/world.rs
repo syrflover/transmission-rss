@@ -32,16 +32,42 @@ use crate::{
 /// The most files of one folder that are looked at.
 const MAX_FILES: usize = 5000;
 
-/// The episodes the videos of `folder` are of, with their paths. A folder that
-/// does not exist (a rule that has received nothing yet) holds none.
-pub fn read_folder(folder: &Path) -> io::Result<Vec<(Episode, PathBuf)>> {
-    let entries = match std::fs::read_dir(folder) {
+/// What reading a work folder found.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Folder {
+    /// The folder episodes the videos are of, with their paths.
+    pub files: Vec<(Episode, PathBuf)>,
+    /// Whether the folder was read to its end. A folder that is not there (a
+    /// rule that has received nothing yet, or a media volume that is not
+    /// mounted) or that holds more than [`MAX_FILES`] entries was not, and its
+    /// videos that are not in `files` cannot be said to be gone.
+    pub whole: bool,
+}
+
+impl Folder {
+    /// A folder read to its end.
+    pub fn complete(files: Vec<(Episode, PathBuf)>) -> Folder {
+        Folder { files, whole: true }
+    }
+
+    /// The episodes of the videos, when the folder was read to its end: what a
+    /// video's absence can be told from ([`departed`]).
+    pub fn episodes(&self) -> Option<HashSet<Episode>> {
+        self.whole
+            .then(|| self.files.iter().map(|(episode, _)| *episode).collect())
+    }
+}
+
+/// The episodes the videos of `folder` are of, with their paths, and whether
+/// the folder was read whole ([`Folder`]).
+pub fn read_folder(folder: &Path) -> io::Result<Folder> {
+    let mut entries = match std::fs::read_dir(folder) {
         Ok(entries) => entries,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Folder::default()),
         Err(err) => return Err(err),
     };
     let mut found = Vec::new();
-    for entry in entries.take(MAX_FILES) {
+    for entry in entries.by_ref().take(MAX_FILES) {
         let entry = entry?;
         let Ok(name) = entry.file_name().into_string() else {
             continue;
@@ -63,7 +89,12 @@ pub fn read_folder(folder: &Path) -> io::Result<Vec<(Episode, PathBuf)>> {
         found.push((Episode { number, half }, entry.path()));
     }
     found.sort();
-    Ok(found)
+    // An entry left over, or one that cannot be read, is a folder not read whole.
+    let whole = entries.next().is_none();
+    Ok(Folder {
+        files: found,
+        whole,
+    })
 }
 
 /// The releases of `titles` that a video can be told from by its CRC32: the ones
@@ -92,32 +123,53 @@ pub fn torrent_gone(item: &HistoryItem, listing: Option<&TorrentListing>) -> boo
     item.result_at < listing.taken_at && !listing.holds(hash)
 }
 
-/// Whether a result history says Transmission took is gone from the work: its
-/// torrent is no longer in Transmission ([`torrent_gone`]) and, for an
-/// episode, the work folder holds no video (or download in progress) of it.
+/// The folder episode of a single-episode `item`; a batch or an unnumbered
+/// item is of none.
+pub fn folder_episode_of(item: &HistoryItem, offset: i64) -> Option<Episode> {
+    folder_episode_of_title(&item.title, offset)
+}
+
+/// [`folder_episode_of`] for a release title.
+pub fn folder_episode_of_title(title: &str, offset: i64) -> Option<Episode> {
+    match read(title).kind {
+        Kind::Episode { episode, .. } => Some(folder_episode(episode, offset)),
+        Kind::Batch { .. } | Kind::Unnumbered => None,
+    }
+}
+
+/// Whether an episode's result history says Transmission took is gone from the
+/// work: its torrent is no longer in Transmission ([`torrent_gone`]) and the
+/// work folder holds no video (or download in progress) of the episode.
 /// Such a result is received again when it is chosen; the one whose video is
 /// still in the folder is not, as the folder has the episode.
 ///
-/// `folder` is the folder episodes the work folder holds ([`read_folder`]) and
-/// `offset` the rule's episode conversion.
+/// Only a single episode can be gone: a batch or an item with no episode
+/// number has no video to look for, and its torrent is routinely removed once
+/// it is done, so it stays held. So does everything when `folder` is `None`,
+/// the folder not having been read to its end ([`Folder::episodes`]): a video
+/// that is not seen may be on a volume that is not mounted or past the files
+/// that are looked at.
+///
+/// `folder` is the folder episodes the work folder holds and `offset` the
+/// rule's episode conversion.
 pub fn departed(
     item: &HistoryItem,
     offset: i64,
-    folder: &HashSet<Episode>,
+    folder: Option<&HashSet<Episode>>,
     listing: Option<&TorrentListing>,
 ) -> bool {
+    let Some(folder) = folder else {
+        return false;
+    };
     if !item.result.is_settled() || !torrent_gone(item, listing) {
         return false;
     }
-    match read(&item.title).kind {
-        Kind::Episode { episode, .. } => !folder.contains(&folder_episode(episode, offset)),
-        Kind::Batch { .. } | Kind::Unnumbered => true,
-    }
+    folder_episode_of(item, offset).is_some_and(|episode| !folder.contains(&episode))
 }
 
 /// The world of a rule whose episode conversion is `offset`.
 ///
-/// - `files`: the folder's videos ([`read_folder`]);
+/// - `folder`: the folder's videos ([`read_folder`]);
 /// - `settled`: the channel's items that history says Transmission took
 ///   (`received`, `duplicate`); the ones `rule_id` picked also tell which
 ///   release the folder's episode came from;
@@ -128,7 +180,7 @@ pub fn departed(
 pub fn build(
     offset: i64,
     season: Option<u32>,
-    files: Vec<(Episode, PathBuf)>,
+    folder: Folder,
     rule_id: &str,
     settled: &[HistoryItem],
     listing: Option<&TorrentListing>,
@@ -139,26 +191,18 @@ pub fn build(
         season,
         ..World::default()
     };
-    let in_folder: HashSet<Episode> = files.iter().map(|(episode, _)| *episode).collect();
-    for (episode, path) in files {
+    let in_folder = folder.episodes();
+    for (episode, path) in folder.files {
         let present: &mut Present = world.present.entry(episode).or_default();
         // Two videos of one episode: the first by name is the one looked at.
         present.file.get_or_insert(path);
     }
-    let mut held = HashSet::new();
     let mut records: BTreeMap<Episode, (Vec<Known>, bool)> = BTreeMap::new();
-    for item in settled {
-        if !item.result.is_settled() {
-            continue;
-        }
-        if !departed(item, offset, &in_folder, listing) {
-            held.insert(item.identity_key.clone());
-        }
+    for item in settled.iter().filter(|item| item.result.is_settled()) {
         if item.rule_id.as_deref() != Some(rule_id) {
             continue;
         }
-        if let Kind::Episode { episode, .. } = read(&item.title).kind {
-            let folder = folder_episode(episode, offset);
+        if let Some(folder) = folder_episode_of(item, offset) {
             let (known, there) = records.entry(folder).or_default();
             // The release stays known for a video that is still in the folder
             // after its torrent was removed.
@@ -166,11 +210,27 @@ pub fn build(
             *there |= !torrent_gone(item, listing);
         }
     }
+    let mut held = HashSet::new();
+    let mut gone = HashSet::new();
+    for item in settled.iter().filter(|item| item.result.is_settled()) {
+        // Another torrent of the rule for the same episode is still in
+        // Transmission: the episode is there, whatever became of this one.
+        let elsewhere = item.rule_id.as_deref() == Some(rule_id)
+            && folder_episode_of(item, offset)
+                .and_then(|folder| records.get(&folder))
+                .is_some_and(|(_, there)| *there);
+        if !elsewhere && departed(item, offset, in_folder.as_ref(), listing) {
+            gone.insert(item.identity_key.clone());
+        } else {
+            held.insert(item.identity_key.clone());
+        }
+    }
     for (folder, (known, in_transmission)) in records {
         let present = world.present.entry(folder).or_default();
         present.records = known;
         present.in_transmission = in_transmission;
     }
+    world.departed = gone;
     world.held = held;
     world.releases = releases(titles);
     world
@@ -214,11 +274,9 @@ mod tests {
             fs::write(dir.path().join(name), b"x").unwrap();
         }
         fs::create_dir(dir.path().join("Show S02E09.mkv")).unwrap();
-        let found: Vec<_> = read_folder(dir.path())
-            .unwrap()
-            .into_iter()
-            .map(|(e, _)| e)
-            .collect();
+        let folder = read_folder(dir.path()).unwrap();
+        assert!(folder.whole);
+        let found: Vec<_> = folder.files.into_iter().map(|(e, _)| e).collect();
         assert_eq!(
             found,
             vec![
@@ -230,7 +288,20 @@ mod tests {
                 }
             ]
         );
-        assert!(read_folder(&dir.path().join("none")).unwrap().is_empty());
+        // A folder that is not there holds none, and was not read.
+        let none = read_folder(&dir.path().join("none")).unwrap();
+        assert!(none.files.is_empty() && !none.whole);
+    }
+
+    #[test]
+    fn a_folder_with_more_entries_than_are_looked_at_is_not_read_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        for n in 0..MAX_FILES {
+            fs::write(dir.path().join(format!("{n}.txt")), b"").unwrap();
+        }
+        assert!(read_folder(dir.path()).unwrap().whole);
+        fs::write(dir.path().join("one-more.txt"), b"").unwrap();
+        assert!(!read_folder(dir.path()).unwrap().whole);
     }
 
     #[test]
@@ -256,7 +327,7 @@ mod tests {
                 HistoryResult::AddFailed,
             ),
         ];
-        let world = build(-12, Some(2), vec![], "r", &settled, None, &[]);
+        let world = build(-12, Some(2), Folder::default(), "r", &settled, None, &[]);
         assert_eq!(world.held.len(), 2);
         assert!(world.held.contains("k1") && world.held.contains("k2"));
         let present = &world.present[&Episode::whole(2)];
@@ -277,7 +348,7 @@ mod tests {
         ]
         .map(str::to_owned)
         .to_vec();
-        let world = build(0, None, vec![], "r", &[], None, &titles);
+        let world = build(0, None, Folder::default(), "r", &[], None, &titles);
         let versions: Vec<(u32, Option<u32>)> =
             world.releases.iter().map(|k| (k.version, k.crc)).collect();
         assert_eq!(versions, vec![(1, Some(0xAAAA0005)), (2, Some(0xBBBB0005))]);
@@ -303,6 +374,11 @@ mod tests {
             taken_at: 200,
             hashes: hashes.iter().map(|h| h.to_string()).collect(),
         }
+    }
+
+    /// A folder read whole that holds no video.
+    fn empty() -> Folder {
+        Folder::complete(vec![])
     }
 
     fn five() -> Vec<(Episode, PathBuf)> {
@@ -332,13 +408,14 @@ mod tests {
         let settled = [received_five()];
         // The video was deleted and the torrent removed: Transmission's list,
         // taken after the item was received, does not have it.
-        let world = build(0, None, vec![], "r", &settled, Some(&listing(&["x"])), &[]);
+        let world = build(0, None, empty(), "r", &settled, Some(&listing(&["x"])), &[]);
         let five = judged_five(&world);
         assert_eq!(
             (five.state, five.selected, five.selectable),
             (State::Missing, true, true)
         );
         assert!(world.held.is_empty());
+        assert!(world.departed.contains(KEY));
         assert!(!world.has_release(5));
     }
 
@@ -346,13 +423,21 @@ mod tests {
     fn an_episode_whose_video_is_in_the_folder_is_had_whatever_became_of_its_torrent() {
         use crate::past_search::judge::State;
         let settled = [received_five()];
-        let world = build(0, None, five(), "r", &settled, Some(&listing(&["x"])), &[]);
+        let world = build(
+            0,
+            None,
+            Folder::complete(five()),
+            "r",
+            &settled,
+            Some(&listing(&["x"])),
+            &[],
+        );
         let five = judged_five(&world);
         assert_eq!(
             (five.state, five.selected, five.selectable),
             (State::Have, false, false)
         );
-        assert!(world.held.contains(KEY));
+        assert!(world.held.contains(KEY) && world.departed.is_empty());
         // The video's release stays known after its torrent was removed.
         assert_eq!(world.present[&Episode::whole(5)].records.len(), 1);
     }
@@ -361,7 +446,15 @@ mod tests {
     fn a_torrent_still_in_transmission_keeps_its_episode_before_the_video_is_placed() {
         use crate::past_search::judge::State;
         let settled = [received_five()];
-        let world = build(0, None, vec![], "r", &settled, Some(&listing(&[HASH])), &[]);
+        let world = build(
+            0,
+            None,
+            empty(),
+            "r",
+            &settled,
+            Some(&listing(&[HASH])),
+            &[],
+        );
         let five = judged_five(&world);
         assert_eq!(
             (five.state, five.selected, five.selectable),
@@ -383,7 +476,7 @@ mod tests {
             (after, Some(listing(&["x"]))),
             (unhashed, Some(listing(&["x"]))),
         ] {
-            let world = build(0, None, vec![], "r", &[settled], list.as_ref(), &[]);
+            let world = build(0, None, empty(), "r", &[settled], list.as_ref(), &[]);
             assert!(world.held.contains(KEY));
             assert!(world.has_release(5));
         }
@@ -397,21 +490,68 @@ mod tests {
     }
 
     #[test]
-    fn a_batch_whose_torrent_is_gone_can_be_chosen_again() {
-        let mut batch = item(
-            "guid:batch",
+    fn a_batch_or_an_unnumbered_item_is_never_gone() {
+        // A batch's torrent is routinely removed once it is done.
+        let gone = listing(&["x"]);
+        for title in [
             "[SubsPlease] Show (01-12) (1080p) [Batch]",
-            None,
+            "[SubsPlease] Show (1080p) [Special]",
+        ] {
+            let mut batch = item("guid:batch", title, None, HistoryResult::Received);
+            batch.result_at = 100;
+            batch.torrent_hash = Some("bbbb".into());
+            assert!(torrent_gone(&batch, Some(&gone)));
+            assert!(!departed(&batch, 0, Some(&HashSet::new()), Some(&gone)));
+            let world = build(0, None, empty(), "r", &[batch], Some(&gone), &[]);
+            assert!(world.held.contains("guid:batch") && world.departed.is_empty());
+        }
+    }
+
+    #[test]
+    fn a_folder_that_is_missing_or_not_read_whole_says_no_video_is_gone() {
+        use crate::past_search::judge::State;
+        // A media volume that is not mounted, or too many entries to look at.
+        let settled = [received_five()];
+        for folder in [
+            Folder::default(),
+            Folder {
+                files: vec![],
+                whole: false,
+            },
+        ] {
+            let world = build(0, None, folder, "r", &settled, Some(&listing(&["x"])), &[]);
+            let five = judged_five(&world);
+            assert_eq!(
+                (five.state, five.selected, five.selectable),
+                (State::Have, false, false)
+            );
+            assert!(world.held.contains(KEY) && world.departed.is_empty());
+        }
+    }
+
+    #[test]
+    fn another_torrent_of_the_rule_for_the_episode_keeps_the_episode_there() {
+        // Episode 5 came twice, from two releases; the first one's torrent was
+        // removed and the second one's is in Transmission.
+        let mut other = item(
+            "guid:erai5",
+            "[Erai-raws] Show - 05 [1080p][ABCD1234].mkv",
+            Some("r"),
             HistoryResult::Received,
         );
-        batch.result_at = 100;
-        batch.torrent_hash = Some("bbbb".into());
-        assert!(departed(&batch, 0, &HashSet::new(), Some(&listing(&["x"]))));
-        assert!(!departed(
-            &batch,
+        other.result_at = 100;
+        other.torrent_hash = Some("eeee".into());
+        let settled = [received_five(), other];
+        let world = build(
             0,
-            &HashSet::new(),
-            Some(&listing(&["bbbb"]))
-        ));
+            None,
+            empty(),
+            "r",
+            &settled,
+            Some(&listing(&["eeee"])),
+            &[],
+        );
+        assert!(world.held.contains(KEY) && world.departed.is_empty());
+        assert!(world.has_release(5));
     }
 }
