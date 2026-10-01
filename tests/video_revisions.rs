@@ -1980,3 +1980,41 @@ async fn a_subsplease_revision_seen_first_is_named_as_its_episode() {
     s.cycle().await;
     assert_eq!(s.names(), vec![EPISODE_NAME]);
 }
+
+/// A show named with `NvM` (`Show 3v3`) whose first release of an episode
+/// carries no revision marker: that release is the episode's first revision
+/// (not revision 3 of another release), received and named as any, and its
+/// `06v2` replaces it.
+#[tokio::test]
+async fn a_revision_of_a_show_named_with_a_number_v_number_replaces_its_first_release() {
+    let s = Setup::with_match("[SubsPlease] Show 3v3 - ").await;
+    let first = format!(
+        "[SubsPlease] Show 3v3 - 06 (1080p) [{}].mkv",
+        crc(OLD_BYTES)
+    );
+    let second = format!(
+        "[SubsPlease] Show 3v3 - 06v2 (1080p) [{}].mkv",
+        crc(NEW_BYTES)
+    );
+    let episode = "Show S01E06.mkv";
+    s.feed(&[(OLD_HASH, &first)]);
+    s.h.tr.content_on_add(OLD_HASH, OLD_BYTES);
+    s.cycle().await;
+    s.complete(OLD_HASH);
+    assert_eq!(s.names(), vec![episode]);
+    assert_eq!(s.h.tr.torrent(OLD_HASH).name, episode);
+
+    s.feed(&[(NEW_HASH, &second), (OLD_HASH, &first)]);
+    s.h.tr.content_on_add(NEW_HASH, NEW_BYTES);
+    s.cycle().await;
+    assert_eq!(s.added(NEW_HASH), 1);
+    assert_eq!(s.state_of(&second).await, RevisionState::Receiving);
+    assert_eq!(s.names(), sorted(vec![episode.to_owned(), second.clone()]));
+
+    s.complete(NEW_HASH);
+    s.cycle().await;
+    assert_eq!(s.state_of(&second).await, RevisionState::Done);
+    assert_eq!(s.names(), vec![episode]);
+    assert_eq!(read(&s.file(episode)), NEW_BYTES);
+    assert!(s.removed(OLD_HASH));
+}

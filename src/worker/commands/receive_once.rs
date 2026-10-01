@@ -1208,6 +1208,23 @@ mod tests {
         );
     }
 
+    /// A show named with `NvM` (`Show 3v3`): its first release of an episode
+    /// is named as `trname` reads it, and its revision of that episode gets
+    /// the same name.
+    #[test]
+    fn a_show_named_with_a_number_v_number_is_named_by_its_episode() {
+        let folder = Path::new("/media/anime/Show 3v3/Season 01");
+        let first = "[SubsPlease] Show 3v3 - 06 (1080p) [1A2B3C4D].mkv";
+        let second = "[SubsPlease] Show 3v3 - 06v2 (1080p) [5E6F7A8B].mkv";
+        let named = derived_name(folder, first, 0);
+        assert_eq!(named, trname(folder, first, 0));
+        assert!(
+            named.as_deref().is_some_and(|n| n.ends_with("E06.mkv")),
+            "{named:?}"
+        );
+        assert_eq!(derived_name(folder, second, 0), named);
+    }
+
     /// `trname` reads Erai-raws' `06v2` as episode 34 (from the CRC32
     /// bracket); the name is read without the revision, and a name without
     /// one is left as `trname` reads it.

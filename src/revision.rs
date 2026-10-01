@@ -9,7 +9,9 @@
 //!   A name whose last bracket is something else (`[MultiSub]`) has none. RSS
 //!   titles may leave the extension out; the rule is the same.
 //! - **The revision** is the last `vN` right after a number (`14v2`, `06v3`;
-//!   a show named `Show 3v3` keeps its `3v3`); without one the release is its
+//!   a show named `Show 3v3` keeps its `3v3`), unless a bare number outside
+//!   brackets follows it: that number is the episode's, and `Show 3v3 - 06`
+//!   is the first revision of episode 6. Without one the release is its
 //!   first revision.
 //! - **The same release** of an episode is the name without its revision,
 //!   its CRC32 bracket and its extension ([`Release::stem`]): `[SubsPlease]
@@ -37,10 +39,33 @@ static CRC: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[([0-9A-Fa-f]{8})\]
 static VERSION: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)\b(\d{1,4}(?:\.\d)?)v(\d{1,2})\b").unwrap());
 
-/// The last `NvM` in `text`: the episode's revision follows the show's name
-/// (`Show 3v3 - 06v2`), so an earlier one is part of the name.
+/// A number standing alone, as an episode's number does (`- 06 `), outside
+/// of words like `H.264` or `10-bit`.
+static BARE_NUMBER: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?:^|[\s_])\d{1,4}(?:\.\d)?(?:[\s_]|$)").unwrap());
+
+/// The episode's revision marker in `text`: the last `NvM`, unless a bare
+/// number outside brackets follows it. The episode's number follows the
+/// show's name, so in `Show 3v3 - 06v2` the last `NvM` is the episode's, and
+/// in `Show 3v3 - 06` the `3v3` is part of the name and the episode `06`
+/// carries no revision.
 fn last_version(text: &str) -> Option<regex::Captures<'_>> {
-    VERSION.captures_iter(text).last()
+    let found = VERSION.captures_iter(text).last()?;
+    let after = &text[found.get(0).unwrap().end()..];
+    let episode_after = BARE_NUMBER
+        .find_iter(after)
+        .any(|number| bracket_depth(&after[..number.start()]) == 0);
+    (!episode_after).then_some(found)
+}
+
+/// How deep in brackets or parentheses the end of `text` is, counting from
+/// its start (a closing one with none open counts as none).
+fn bracket_depth(text: &str) -> usize {
+    text.chars().fold(0usize, |depth, c| match c {
+        '[' | '(' => depth + 1,
+        ']' | ')' => depth.saturating_sub(1),
+        _ => depth,
+    })
 }
 
 impl Release {
@@ -251,6 +276,34 @@ mod tests {
             Release::without_version(name),
             "[SubsPlease] Show 3v3 - 06 (1080p) [1A2B3C4D].mkv"
         );
+    }
+
+    /// A show named with `NvM` whose episode carries no revision marker is
+    /// the first revision of that episode: only a marker on the episode's
+    /// number counts.
+    #[test]
+    fn a_number_v_number_in_the_show_name_of_an_unversioned_episode_is_no_revision() {
+        let first = "Show 3v3 - 06 [1080p].mkv";
+        let second = "Show 3v3 - 06v2 [1080p].mkv";
+        let v1 = Release::parse(first);
+        let v2 = Release::parse(second);
+        assert_eq!((v1.version, v1.stem.as_str()), (1, "Show 3v3 - 06 [1080p]"));
+        assert_eq!((v2.version, v2.stem.as_str()), (2, "Show 3v3 - 06 [1080p]"));
+        assert_eq!(Release::without_version(first), first);
+        assert_eq!(Release::without_version(second), first);
+        // The same with a CRC32, and with the extension left out.
+        let named = "[SubsPlease] Show 3v3 - 06 (1080p) [1A2B3C4D].mkv";
+        assert_eq!(Release::parse(named).version, 1);
+        assert_eq!(Release::without_version(named), named);
+        let title = "[SubsPlease] Show 3v3 - 06 (1080p) [1A2B3C4D]";
+        assert_eq!(Release::parse(title).version, 1);
+        assert_eq!(
+            Release::parse(title).stem,
+            "[SubsPlease] Show 3v3 - 06 (1080p)"
+        );
+        // A revision marker in brackets right after the show is still read.
+        let bracketed = "[Group] Show [06v2][1080p].mkv";
+        assert_eq!(Release::parse(bracketed).version, 2);
     }
 
     #[test]
