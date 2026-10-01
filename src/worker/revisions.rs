@@ -285,7 +285,7 @@ fn owner_of<'a>(places: &'a [TorrentPlace], path: &Path) -> io::Result<Owner<'a>
 }
 
 /// Whether `a` and `b` are the same folder, however spelled.
-fn same_folder(a: &Path, b: &Path) -> bool {
+pub fn same_folder(a: &Path, b: &Path) -> bool {
     if a == b {
         return true;
     }

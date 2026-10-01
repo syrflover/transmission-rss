@@ -404,14 +404,30 @@ async fn check_receive_once(
         None => None,
     };
     let planned = if payload.rule_id.is_some() {
-        receive_once::adoption_plan(&item, channel.as_ref(), rule.as_ref())
+        receive_once::adoption_plan(&item, channel.as_ref(), rule.as_ref()).map(|_| ())
     } else {
         // A video revision whose download stopped is retried by its
         // replacement's record, whatever the item's result.
         let revision = receive_once::revision_retry(&state.revisions, item.id)
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?;
-        receive_once::retry_plan_for(&item, channel.as_ref(), rule.as_ref(), &revision)
+        match receive_once::retry_plan_for(&item, channel.as_ref(), rule.as_ref(), &revision) {
+            // Received into the folder it was decided for, or not at all.
+            Ok(plan) => match state
+                .settings
+                .collection()
+                .await
+                .map_err(|e| ApiError::Internal(e.to_string()))?
+            {
+                Some(collect) => receive_once::same_destination(
+                    &revision,
+                    std::path::Path::new(&collect.folder),
+                    plan.rule,
+                ),
+                None => Ok(()),
+            },
+            Err(why) => Err(why),
+        }
     };
     planned.map_err(|why| ApiError::invalid(why.message()))?;
     Ok(())

@@ -1918,6 +1918,59 @@ async fn a_stopped_revision_of_a_paused_rule_says_why_it_is_not_offered() {
     assert!(failure["retry_blocked"].as_str().unwrap().contains("멈춰"));
 }
 
+/// The rule's folder changed after the revision's replacement was decided: a
+/// torrent added now would be received into the new folder, away from the
+/// video it replaces, and the replacement would fail again with nothing more
+/// to try. `다시 받기` is not offered, and a request accepted before the change
+/// ends without adding anything.
+#[tokio::test]
+async fn a_stopped_revision_of_a_rule_whose_folder_changed_is_not_received_again() {
+    let s = Setup::new().await;
+    let item = stopped_after_leaving_the_feed(&s).await;
+    let rule_id = item.rule_id.clone().unwrap();
+    // Accepted while the folder is the same.
+    s.retry(item.id, "00000000-0000-4000-8000-000000000a05")
+        .await;
+    s.sql(&format!(
+        "UPDATE rules SET directory = 'Show/Season 02' WHERE id = '{rule_id}';"
+    ));
+
+    let failure = revision_failure(&s.failures().await).clone();
+    assert_eq!(failure["can_retry"], false);
+    assert!(failure["retry_blocked"].as_str().unwrap().contains("폴더"));
+    let (status, text, _) =
+        s.h.web_api()
+            .call(
+                "POST",
+                "/api/commands",
+                Some(json!({
+                    "id": "00000000-0000-4000-8000-000000000a06",
+                    "kind": "receive_once",
+                    "payload": { "item_id": item.id },
+                })),
+            )
+            .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+
+    assert_eq!(s.commands().await, CommandsOutcome::Ran(1));
+    let (_, _, command) =
+        s.h.web_api()
+            .call(
+                "GET",
+                "/api/commands/00000000-0000-4000-8000-000000000a05",
+                None,
+            )
+            .await;
+    assert_eq!(command["state"], "failed", "{command}");
+    assert!(command["outcome"]["reason"]
+        .as_str()
+        .unwrap()
+        .contains("폴더"));
+    assert_eq!(s.added(NEW_HASH), 1, "nothing was added");
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Failed);
+    assert_eq!(read(&s.file(EPISODE_NAME)), OLD_BYTES);
+}
+
 /// SubsPlease's `14v2` seen first is named as episode 14.
 #[tokio::test]
 async fn a_subsplease_revision_seen_first_is_named_as_its_episode() {
