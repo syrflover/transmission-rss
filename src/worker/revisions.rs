@@ -101,7 +101,9 @@ use crate::{
     revision::{crc_text, file_crc32_identified, FileIdentity, Release},
     store::{
         history::{HistoryItem, HistoryResult, Millis},
-        revisions::{Claim, OldVideo, Replacement, Revision, RevisionState, RowWrite, Step},
+        revisions::{
+            Claim, OldVideo, Replacement, Revision, RevisionState, RowWrite, Step, OLD_FILE_WATCHED,
+        },
     },
     transmission::{get_torrent, torrent_places, Redactor, TorrentPlace},
 };
@@ -576,6 +578,10 @@ const NEW_UNCHECKED_OLD_KEPT: &str = "받은 새 영상 파일이 없거나 CRC3
 /// Why a replacement whose new video is gone was ended after the old video
 /// was removed: the episode has no video under its name.
 const NO_VIDEO_LEFT: &str = "이전 영상을 지운 뒤 받은 새 영상 파일이 이어진 두 번의 확인에서 모두 없어서 대체를 끝냈어요. 회차 이름에 영상이 없어요.";
+/// Why a replacement that ended beside the old video's file left after its
+/// torrent was removed ([`OLD_FILE_WATCHED`]) became a failure: that file is
+/// gone too.
+const OLD_FILE_GONE_TOO: &str = "이전 영상의 토렌트를 지운 뒤 받은 새 영상 파일이 없어져서 대체를 끝냈고, 회차 이름에 남아 있던 이전 영상 파일도 없어졌어요. 회차 이름에 영상이 없어요.";
 
 /// Carries every replacement under way as far as it goes now. `at` stamps
 /// what is written.
@@ -650,7 +656,7 @@ async fn drive(
             RevisionState::Removed => rename(ctx, &mut row, listing).await,
             RevisionState::Failed if row.not_received() => recover(ctx, &row).await,
             RevisionState::Failed => cleared(&row),
-            RevisionState::Abandoned if row.reason.is_some() => video_back(&row),
+            RevisionState::Abandoned if row.reason.is_some() => ended_watch(&row),
             _ => return,
         };
         let step = match next {
@@ -1043,10 +1049,11 @@ async fn remove_old(ctx: &CycleContext, row: &mut Revision, at: Millis, listing:
     // The old torrent was asked to go (perhaps with no answer): once
     // Transmission no longer holds it, its file is the old video's data,
     // which Transmission deletes after it answers, or could not delete. It is
-    // not looked at as an old video again (the torrent that told its revision
+    // is not looked at as an old video again (the torrent that told its revision
     // is gone); the replacement waits, as removing, for the file to go. If
     // the new video is gone instead (the person deleted it, keeping the old
-    // one), the replacement ends once a second look finds it gone too.
+    // one), the replacement ends once a second look finds it gone too, and
+    // watches the old file it left ([`OLD_FILE_WATCHED`]).
     if let (true, RevisionState::Removing, Some(hash)) =
         (present, row.state, row.old_torrent_hash.as_ref())
     {
@@ -1061,7 +1068,7 @@ async fn remove_old(ctx: &CycleContext, row: &mut Revision, at: Millis, listing:
                         }),
                         Err(next) => next,
                     },
-                    Ok(true) => new_video_missed(row, NEW_GONE_OLD_LEFT, None),
+                    Ok(true) => new_video_missed(row, NEW_GONE_OLD_LEFT, Some(OLD_FILE_WATCHED)),
                     // The reason stays: the old file is still there to wait for.
                     Err(why) => folder_away(ctx, row, why, None).await,
                 };
@@ -1488,12 +1495,23 @@ async fn renamed_already(
     }
 }
 
-/// A replacement that ended with no video under the episode name, once a
-/// video is there again (the person put one, or another release came): it is
-/// no failure any more.
-fn video_back(row: &Revision) -> Next {
-    match exists(&Path::new(&row.folder).join(&row.episode_name)) {
-        Ok(true) => Next::Step(Step::Abandoned { reason: None }),
+/// A replacement that ended with a reason, looked at again (in a folder
+/// that is there). One that ended beside the old video's file left after its
+/// torrent was removed ([`OLD_FILE_WATCHED`]) becomes a failure once that
+/// file goes too: the episode has no video. One that ended with no video
+/// under the episode name is no failure any more once a video is there again
+/// (the person put one, or another release came).
+fn ended_watch(row: &Revision) -> Next {
+    if folder_there(row).is_err() {
+        return Next::Wait;
+    }
+    let held = exists(&Path::new(&row.folder).join(&row.episode_name));
+    let watched = row.reason.as_deref() == Some(OLD_FILE_WATCHED);
+    match (watched, held) {
+        (true, Ok(false)) => Next::Step(Step::Abandoned {
+            reason: Some(OLD_FILE_GONE_TOO.to_owned()),
+        }),
+        (false, Ok(true)) => Next::Step(Step::Abandoned { reason: None }),
         _ => Next::Wait,
     }
 }

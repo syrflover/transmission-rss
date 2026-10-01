@@ -2859,6 +2859,44 @@ async fn a_replacement_ended_with_no_video_left_is_a_failure_until_the_name_hold
     assert_eq!(read(&s.file(EPISODE_NAME)), b"put back by hand");
 }
 
+/// `14v2` removed `14`'s torrent, whose file Transmission left, and then lost
+/// its own video: the replacement ends with `14`'s file still under the name,
+/// which is no failure. The ended replacement keeps watching that file: once
+/// it goes too (Transmission deleting it late, or the person), the episode
+/// has no video, and that is a `받기 실패` until a video is there again.
+#[tokio::test]
+async fn a_replacement_ended_beside_a_left_old_file_is_a_failure_once_that_file_goes() {
+    let s = Setup::new().await;
+    s.removal_waits().await;
+    std::fs::remove_file(s.file(&v2())).unwrap();
+    s.cycle().await;
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await.code(), "abandoned");
+    s.cycle().await;
+    assert!(s.failures().await.is_empty());
+    assert_eq!(read(&s.file(EPISODE_NAME)), OLD_BYTES);
+
+    std::fs::remove_file(s.file(EPISODE_NAME)).unwrap();
+    s.cycle().await;
+    let failures = s.failures().await;
+    let failure = revision_failure(&failures);
+    assert!(
+        failure["reason"]
+            .as_str()
+            .unwrap()
+            .contains("회차 이름에 영상이 없어요"),
+        "{failure}"
+    );
+    assert_eq!(failure["files"][0]["state"], "removed");
+    assert_eq!(failure["files"][1]["state"], "missing");
+
+    std::fs::write(s.file(EPISODE_NAME), b"put back by hand").unwrap();
+    s.cycle().await;
+    assert!(s.failures().await.is_empty());
+    assert_eq!(s.state_of(&v2()).await.code(), "abandoned");
+    assert_eq!(read(&s.file(EPISODE_NAME)), b"put back by hand");
+}
+
 // --- A rule folder that is away decides nothing -------------------------------------
 
 impl Setup {

@@ -36,7 +36,9 @@
 //! two looks in a row ([`Revision::new_missing_at`]) ends as
 //! [`RevisionState::Abandoned`]: nothing is removed or renamed (one that
 //! ended after the old video was removed is listed with the failures until
-//! the episode name holds a video again), it holds up
+//! the episode name holds a video again; one that ended beside the old
+//! video's file left after its torrent was removed, [`OLD_FILE_WATCHED`],
+//! is listed once that file goes too), it holds up
 //! no other replacement of the episode nor any lower revision of its release
 //! (the rows skipped for it start over, as when it fails), and the old
 //! release stays superseded (its torrent was removed for this replacement,
@@ -97,6 +99,11 @@ type Result<T> = std::result::Result<T, RevisionError>;
 /// Why a row was skipped because another row of the episode has the same
 /// torrent: the same release through another channel.
 pub const SAME_TORRENT: &str = "같은 토렌트가 이미 이 회차를 대체하고 있어요.";
+/// Why a replacement ended with the old video's file still under the episode
+/// name after its torrent was removed for it ([`Step::RemovalWaits`]), and
+/// the new video gone: no failure while that file is there, but the worker
+/// watches it, and the row becomes one if the file goes too.
+pub const OLD_FILE_WATCHED: &str = "이전 영상의 토렌트를 지운 뒤 받은 새 영상 파일이 없어져서 대체를 끝냈어요. 회차 이름에 남은 이전 영상 파일이 없어지면 알려요.";
 /// Why a row was skipped because a higher revision of the episode replaced
 /// the old video, or is about to.
 pub const OVERTAKEN: &str =
@@ -232,16 +239,20 @@ impl Revision {
     /// removed that has not gone through yet, a removal that waits
     /// ([`Step::RemovalWaits`], [`Step::NewMissing`]), or a replacement that
     /// ended after the old video was removed while the episode has no video
-    /// under its name ([`Step::Abandoned`] with a reason).
+    /// under its name ([`Step::Abandoned`] with a reason other than
+    /// [`OLD_FILE_WATCHED`]).
     pub fn is_failure(&self) -> bool {
-        self.state == RevisionState::Failed
-            || (matches!(
-                self.state,
-                RevisionState::Verified
-                    | RevisionState::Removed
-                    | RevisionState::Removing
-                    | RevisionState::Abandoned
-            ) && self.reason.is_some())
+        match self.state {
+            RevisionState::Failed => true,
+            RevisionState::Verified | RevisionState::Removed | RevisionState::Removing => {
+                self.reason.is_some()
+            }
+            RevisionState::Abandoned => self
+                .reason
+                .as_deref()
+                .is_some_and(|reason| reason != OLD_FILE_WATCHED),
+            _ => false,
+        }
     }
 
     /// A failure before the new video was received in the rule's folder: its
@@ -331,6 +342,8 @@ pub enum Step {
     /// was on its way start over, as when it fails. A `reason` makes it a
     /// `받기 실패`: the old video was removed, so the episode has no video
     /// under its name; written again without one once it has.
+    /// [`OLD_FILE_WATCHED`] is no failure: the old video's file is still
+    /// there, and the worker watches it ([`Revision::is_failure`]).
     Abandoned {
         reason: Option<String>,
     },
@@ -1220,13 +1233,16 @@ impl RevisionStore {
     pub async fn failures(&self) -> Result<Vec<Revision>> {
         self.db
             .run(|c| {
-                let mut rows = query(
+                let mut rows: Vec<Revision> = query(
                     c,
                     "WHERE state = 'failed'
                         OR (state IN ('verified', 'removed', 'removing', 'abandoned')
                             AND reason IS NOT NULL)",
                     &[],
-                )?;
+                )?
+                .into_iter()
+                .filter(Revision::is_failure)
+                .collect();
                 rows.sort_by_key(|r| std::cmp::Reverse((r.updated_at, r.id)));
                 Ok(rows)
             })
