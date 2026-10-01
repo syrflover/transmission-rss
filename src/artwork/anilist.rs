@@ -300,7 +300,7 @@ impl Anilist {
 
     /// Sends one GraphQL request. `Ok(None)` for a `404` (AniList's answer for
     /// an ID it does not have).
-    async fn post<T: for<'de> Deserialize<'de>>(
+    pub(crate) async fn post<T: for<'de> Deserialize<'de>>(
         &self,
         query: String,
         variables: serde_json::Value,

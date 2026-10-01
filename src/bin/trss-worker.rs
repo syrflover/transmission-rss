@@ -3,6 +3,7 @@ use std::{path::PathBuf, process::ExitCode};
 use tokio_util::sync::CancellationToken;
 use transmission_rss::{
     artwork::{self, AnilistConfig, AppData, Artwork},
+    seasons::{self, Seasons},
     store::{db::DB_PATH_ENV, Db},
     worker::{lock_path_for, Worker, WorkerEnv},
 };
@@ -32,6 +33,7 @@ async fn run() -> Result<(), String> {
     })?;
 
     let artwork = Artwork::new(db.clone(), Some(AppData::for_database(&db_path)), anilist);
+    let season_info = Seasons::over(db.clone(), &artwork);
     let worker = Worker::new(db, &env, lock_path_for(&db_path)).map_err(|e| e.to_string())?;
 
     let cancel = CancellationToken::new();
@@ -45,6 +47,14 @@ async fn run() -> Result<(), String> {
         async move { artwork.run_queue(lock, cancel).await }
     });
 
+    // Season info: linking a first season by its folder name and the daily
+    // refresh of entries that are not finished, on the same pace.
+    let season_queue = tokio::spawn({
+        let cancel = cancel.clone();
+        let lock = seasons::queue::lock_path_for(&db_path);
+        async move { season_info.run_queue(lock, cancel).await }
+    });
+
     println!(
         "trss-worker started: a cycle every {}s (database: {})",
         env.interval.as_secs(),
@@ -53,6 +63,7 @@ async fn run() -> Result<(), String> {
 
     worker.run(cancel).await;
     let _ = queue.await;
+    let _ = season_queue.await;
 
     println!("trss-worker stopped");
     Ok(())
