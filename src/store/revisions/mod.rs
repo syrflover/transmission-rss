@@ -34,7 +34,9 @@
 //! whose CRC32 was checked, and removed nothing. All of them are listed with
 //! the failures. A row whose new video is gone (or not the checked one) on
 //! two looks in a row ([`Revision::new_missing_at`]) ends as
-//! [`RevisionState::Abandoned`]: nothing is removed or renamed, it holds up
+//! [`RevisionState::Abandoned`]: nothing is removed or renamed (one that
+//! ended after the old video was removed is listed with the failures until
+//! the episode name holds a video again), it holds up
 //! no other replacement of the episode nor any lower revision of its release
 //! (the rows skipped for it start over, as when it fails), and the old
 //! release stays superseded (its torrent was removed for this replacement,
@@ -227,13 +229,18 @@ pub struct Revision {
 
 impl Revision {
     /// A `받기 실패`: a failure that holds, a rename after the old video was
-    /// removed that has not gone through yet, or a removal that waits
-    /// ([`Step::RemovalWaits`], [`Step::NewMissing`]).
+    /// removed that has not gone through yet, a removal that waits
+    /// ([`Step::RemovalWaits`], [`Step::NewMissing`]), or a replacement that
+    /// ended after the old video was removed while the episode has no video
+    /// under its name ([`Step::Abandoned`] with a reason).
     pub fn is_failure(&self) -> bool {
         self.state == RevisionState::Failed
             || (matches!(
                 self.state,
-                RevisionState::Verified | RevisionState::Removed | RevisionState::Removing
+                RevisionState::Verified
+                    | RevisionState::Removed
+                    | RevisionState::Removing
+                    | RevisionState::Abandoned
             ) && self.reason.is_some())
     }
 
@@ -320,10 +327,12 @@ pub enum Step {
     },
     /// A row whose new video was gone (or, before the old video was
     /// removed, not the checked one) on two looks in a row: the replacement
-    /// ends as [`RevisionState::Abandoned`], and `reason` says why. The rows
-    /// skipped for it while it was on its way start over, as when it fails.
+    /// ends as [`RevisionState::Abandoned`]. The rows skipped for it while it
+    /// was on its way start over, as when it fails. A `reason` makes it a
+    /// `받기 실패`: the old video was removed, so the episode has no video
+    /// under its name; written again without one once it has.
     Abandoned {
-        reason: String,
+        reason: Option<String>,
     },
 }
 
@@ -995,7 +1004,8 @@ impl RevisionStore {
             .run(|c| {
                 query(
                     c,
-                    "WHERE state IN ('receiving', 'verified', 'removing', 'removed', 'failed')",
+                    "WHERE state IN ('receiving', 'verified', 'removing', 'removed', 'failed')
+                        OR (state = 'abandoned' AND reason IS NOT NULL)",
                     &[],
                 )
             })
@@ -1190,7 +1200,8 @@ impl RevisionStore {
                 let mut rows = query(
                     c,
                     "WHERE state = 'failed'
-                        OR (state IN ('verified', 'removed', 'removing') AND reason IS NOT NULL)",
+                        OR (state IN ('verified', 'removed', 'removing', 'abandoned')
+                            AND reason IS NOT NULL)",
                     &[],
                 )?;
                 rows.sort_by_key(|r| std::cmp::Reverse((r.updated_at, r.id)));
@@ -1207,7 +1218,8 @@ impl RevisionStore {
                 let prefix = format!("{}/", work_folder.trim_end_matches('/'));
                 let rows = query(
                     c,
-                    "WHERE state IN ('done', 'failed', 'verified', 'removed', 'removing')
+                    "WHERE state IN ('done', 'failed', 'verified', 'removed', 'removing',
+                                     'abandoned')
                        AND substr(folder, 1, length(?1)) = ?1",
                     &[&prefix],
                 )?;

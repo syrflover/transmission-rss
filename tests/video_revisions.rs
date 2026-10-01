@@ -2349,6 +2349,10 @@ async fn a_new_video_missing_on_two_looks_ends_the_replacement() {
         adds,
         "the old release is not received again"
     );
+    // Ended with no video under the name, `14v2` is a failure until the next
+    // look finds `14v3` there.
+    assert_eq!(s.failures().await.len(), 1);
+    s.cycle().await;
     assert!(s.failures().await.is_empty());
 }
 
@@ -2740,4 +2744,37 @@ async fn a_lower_revision_skipped_for_an_abandoned_one_replaces_the_video() {
     assert_eq!(s.state_of(&v2()).await, RevisionState::Done);
     assert_eq!(s.names(), vec![EPISODE_NAME]);
     assert_eq!(read(&s.file(EPISODE_NAME)), NEW_BYTES);
+}
+
+// --- An ended replacement that left the episode without a video -------------------
+
+/// `14v2` removed `14` and then lost its video before it took the name. The
+/// episode has no video under its name, so the ended replacement is a
+/// `받기 실패` that says so, until a video is under the name again.
+#[tokio::test]
+async fn a_replacement_ended_with_no_video_left_is_a_failure_until_the_name_holds_one() {
+    let s = Setup::new().await;
+    s.v2_waits_for_its_name().await;
+    std::fs::remove_file(s.file(&v2())).unwrap();
+    s.cycle().await;
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await.code(), "abandoned");
+    let failures = s.failures().await;
+    let failure = revision_failure(&failures);
+    assert!(
+        failure["reason"]
+            .as_str()
+            .unwrap()
+            .contains("회차 이름에 영상이 없어요"),
+        "{failure}"
+    );
+    assert_eq!(failure["files"][0]["state"], "removed");
+    assert_eq!(failure["files"][1]["state"], "missing");
+    assert_eq!(s.episode_row().await["failure"]["files"], failure["files"]);
+
+    std::fs::write(s.file(EPISODE_NAME), b"put back by hand").unwrap();
+    s.cycle().await;
+    assert!(s.failures().await.is_empty());
+    assert_eq!(s.state_of(&v2()).await.code(), "abandoned");
+    assert_eq!(read(&s.file(EPISODE_NAME)), b"put back by hand");
 }

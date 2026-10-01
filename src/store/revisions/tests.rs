@@ -715,9 +715,7 @@ async fn an_abandoned_replacement_keeps_the_old_release_superseded_and_holds_not
     verified(&store, v3.id).await;
     assert_eq!(store.verdict(v3.id).await.unwrap(), Claim::Wait);
 
-    let step = Step::Abandoned {
-        reason: "gone".into(),
-    };
+    let step = Step::Abandoned { reason: None };
     assert!(store
         .advance(v2.id, 30, RevisionState::Removing, step)
         .await

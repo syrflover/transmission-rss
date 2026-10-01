@@ -24,8 +24,10 @@
 //!   ([`crate::store::revisions::Revision::is_failure`]). `files` are the two
 //!   videos with what became of each: the old one `kept` (still there) or
 //!   `removed`; the new one under the name it was received with
-//!   (`received_name`), or `not_received` (its download did not complete or
-//!   is not in the rule's folder, so `path` is `null`). Paths are relative to
+//!   (`received_name`), `missing` from there (a replacement that ended after
+//!   the old video was removed, so the episode has no video), or
+//!   `not_received` (its download did not complete or is not in the rule's
+//!   folder, so `path` is `null`). Paths are relative to
 //!   the work folder; `work` is `null` when the library has no work at that
 //!   folder, and the paths are then absolute. An item goes away once the
 //!   worker sees one of the two files gone, or the rename go through; a
@@ -181,7 +183,7 @@ pub fn failure_of(row: &Revision, base: Option<&FsPath>) -> RevisionFailure {
     let old = FailureFile {
         role: "old",
         path: Some(path(&row.episode_name)),
-        state: if row.state == RevisionState::Removed {
+        state: if matches!(row.state, RevisionState::Removed | RevisionState::Abandoned) {
             "removed"
         } else {
             "kept"
@@ -191,7 +193,11 @@ pub fn failure_of(row: &Revision, base: Option<&FsPath>) -> RevisionFailure {
         Some(name) => FailureFile {
             role: "new",
             path: Some(path(name)),
-            state: "received_name",
+            state: if row.state == RevisionState::Abandoned {
+                "missing"
+            } else {
+                "received_name"
+            },
         },
         None => FailureFile {
             role: "new",

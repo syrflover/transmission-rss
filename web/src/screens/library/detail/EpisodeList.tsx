@@ -54,6 +54,7 @@ const FAILURE_STATE: Record<FailureFile["state"], string> = {
   kept: "그대로 있음",
   removed: "지움",
   received_name: "받은 이름 그대로",
+  missing: "없어짐",
   not_received: "받지 못함",
 };
 
