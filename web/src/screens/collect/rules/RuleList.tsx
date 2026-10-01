@@ -39,9 +39,11 @@ export function sortRules(rules: Rule[], channels: ChannelBrief[], sort: SortKey
 const badge =
   "inline-flex flex-none items-center rounded-full border px-2 py-px text-[11.5px] leading-tight font-semibold";
 
-/** 수집 중 / 보관됨 / 제목 대기 */
+/** 수집 중 / 멈춤 / 보관됨 / 제목 대기 */
 export function StateBadge({ rule }: { rule: Pick<Rule, "state" | "match"> }) {
   if (rule.state === "archived") return <span className={cn(badge, "border-arch text-arch")}>보관됨</span>;
+  if (rule.state === "paused")
+    return <span className={cn(badge, "border-hairline text-text-secondary")}>멈춤</span>;
   if (rule.match === null || rule.match === "")
     return <span className={cn(badge, "border-focus text-focus")}>제목 대기</span>;
   return <span className={cn(badge, "border-ok text-ok")}>수집 중</span>;

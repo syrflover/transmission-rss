@@ -9,6 +9,7 @@
 //!   "folder_path": "/media/anime/Lycoris Recoil",
 //!   "added_at": null,
 //!   "native_title": "リコリス・リコイル",
+//!   "korean_title": "리코리스 리코일",
 //!   "seasons": [{
 //!     "number": 1,
 //!     "info": { "version": 2, "entries": [ … ], … },
@@ -39,6 +40,15 @@
 //!   first looked).
 //! - `native_title` is the first (lowest-numbered, not season 0) season's first
 //!   linked AniList entry's native title, `null` without one.
+//! - `korean_title` is the Anissia title (`subject`) of the anime the work's
+//!   first (lowest-numbered) season with a subscription is connected to, `null`
+//!   when no subscription is connected to a season of the work.
+//! - `subscriptions` are the rules whose subscription is connected to a season
+//!   of this work (the connection is made from the videos the rule received, see
+//!   [`crate::worker::season_link`]), by season: the rule's ID, version and
+//!   state, the anime (`anime_no`, `subject`), the subtitle mode and the creator
+//!   followed. The head shows the selected season's creator and changes it
+//!   through `PUT /api/rules/{id}/creator`.
 //! - `info` is the season's info, the linked AniList entries taken together
 //!   (see [`super::seasons_api`]); a season with no link has version 0 and no
 //!   values, which the screen shows as unknown. `air_at` is when AniList
@@ -161,6 +171,22 @@ struct RuleRef {
     state: &'static str,
 }
 
+/// A subscription rule connected to a season of the work.
+#[derive(Serialize)]
+struct WorkSubscription {
+    season: u32,
+    rule_id: String,
+    rule_version: i64,
+    /// `active`, `paused` or `archived`.
+    rule_state: &'static str,
+    anime_no: i64,
+    /// The Anissia title; `null` when the app has no snapshot of the anime.
+    subject: Option<String>,
+    /// `follow`, `undecided` or `none`.
+    subtitles: &'static str,
+    creator: Option<String>,
+}
+
 #[derive(Serialize)]
 struct WorkDetailView {
     id: String,
@@ -170,6 +196,8 @@ struct WorkDetailView {
     folder_path: String,
     added_at: Option<i64>,
     native_title: Option<String>,
+    korean_title: Option<String>,
+    subscriptions: Vec<WorkSubscription>,
     seasons: Vec<SeasonView>,
     unrecognized: Vec<UnrecognizedView>,
     rules: Vec<RuleRef>,
@@ -257,6 +285,40 @@ async fn show(
         Err(e) => return Err(ApiError::Internal(e.to_string())),
     };
 
+    let connected = state.channels.subscriptions_of_work(&work.id).await?;
+    let animes = state
+        .anissia
+        .store
+        .animes(
+            connected
+                .iter()
+                .filter_map(|(_, rule)| rule.subscription.as_ref().map(|s| s.anissia_anime_no))
+                .collect(),
+        )
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let mut subscriptions: Vec<WorkSubscription> = connected
+        .into_iter()
+        .filter_map(|(season, rule)| {
+            let subscription = rule.subscription.as_ref()?;
+            Some(WorkSubscription {
+                season,
+                rule_id: rule.id.clone(),
+                rule_version: rule.version,
+                rule_state: rule.state.as_str(),
+                anime_no: subscription.anissia_anime_no,
+                subject: animes
+                    .get(&subscription.anissia_anime_no)
+                    .map(|a| a.subject.clone()),
+                subtitles: subscription.subtitles.as_str(),
+                creator: subscription.creator.clone(),
+            })
+        })
+        .collect();
+    // Stable: rules of one season keep the channel and rule order.
+    subscriptions.sort_by_key(|s| s.season);
+    let korean_title = subscriptions.iter().find_map(|s| s.subject.clone());
+
     let numbers: Vec<u32> = work.seasons.iter().map(|s| s.number).collect();
     let (links, first) = work_infos(&state, &work.id, &numbers).await?;
     let native_title = first
@@ -313,6 +375,8 @@ async fn show(
         folder_path,
         added_at: work.first_seen_at,
         native_title,
+        korean_title,
+        subscriptions,
         seasons,
         unrecognized: work
             .unrecognized

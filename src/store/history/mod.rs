@@ -207,6 +207,18 @@ impl HistoryStore {
             .map(|hashes| hashes.into_iter().collect())
     }
 
+    /// The torrent hashes of the items each of the given rules received
+    /// (`received` with the rule recorded on the item), by rule ID: what shows
+    /// which videos a rule brought in. A rule that received nothing is absent.
+    pub async fn received_hashes_of_rules(
+        &self,
+        rule_ids: Vec<String>,
+    ) -> Result<std::collections::HashMap<String, Vec<String>>, HistoryError> {
+        self.db
+            .run(move |c| repo::received_hashes_of_rules(c, &rule_ids))
+            .await
+    }
+
     /// Marks a collection cycle as started at `now`, unless the previous cycle
     /// started less than `min_gap` milliseconds ago; returns whether it did.
     pub async fn try_begin_cycle(

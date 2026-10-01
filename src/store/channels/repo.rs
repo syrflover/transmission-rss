@@ -10,8 +10,8 @@ use rusqlite::{params, Connection, OptionalExtension, Row, Transaction, Transact
 use uuid::Uuid;
 
 use super::model::{
-    Channel, ChannelInput, ChannelWithRules, OrderItem, Rule, RuleInput, RuleState, Subscription,
-    SubtitleMode, Version,
+    Channel, ChannelInput, ChannelWithRules, OrderItem, Rule, RuleInput, RuleState, SeasonRef,
+    Subscription, SubtitleMode, Version,
 };
 use super::ChannelError;
 use crate::store::{anissia, history::Millis};
@@ -20,10 +20,10 @@ type Result<T> = std::result::Result<T, ChannelError>;
 
 const CHANNEL_COLUMNS: &str =
     "id, position, version, url, excludes, secret_query, past_search, name";
-/// A rule with its subscription, if it has one (columns 11 to 15).
+/// A rule with its subscription, if it has one (columns 11 to 16).
 const RULE_COLUMNS: &str = "r.id, r.channel_id, r.position, r.version, r.match_text, r.regex, \
      r.case_insensitive, r.directory, r.episode, r.episode_auto, r.state, \
-     s.anissia_anime_no, s.subtitles, s.creator, s.season_id, s.subscribed_at";
+     s.anissia_anime_no, s.subtitles, s.creator, s.season_id, s.subscribed_at, s.season_blocked";
 const RULE_FROM: &str = "rules r LEFT JOIN rule_subscriptions s ON s.rule_id = r.id";
 
 fn begin(conn: &mut Connection) -> Result<Transaction<'_>> {
@@ -74,6 +74,7 @@ fn rule_from_row(row: &Row<'_>) -> rusqlite::Result<Rule> {
                 creator: row.get(13)?,
                 season_id: row.get(14)?,
                 subscribed_at: row.get(15)?,
+                season_blocked: row.get(16)?,
             })
         }
         None => None,
@@ -339,17 +340,8 @@ pub struct NewSubscription {
     pub subscribed_at: Millis,
 }
 
-/// Adds a rule at the end of the channel's rules that is a subscription to
-/// `subscription.anime`, and stores the anime's snapshot, in one transaction.
-/// A channel has one rule per subscribed anime: a second one is refused with
-/// [`ChannelError::AlreadySubscribed`].
-pub fn create_subscription_rule(
-    conn: &mut Connection,
-    channel_id: &str,
-    input: &RuleInput,
-    subscription: &NewSubscription,
-) -> Result<Rule> {
-    input.validate()?;
+/// The creator of a new subscription fits its subtitle mode.
+fn check_creator(subscription: &NewSubscription) -> Result<()> {
     let creator_fits = match subscription.subtitles {
         SubtitleMode::Follow => subscription
             .creator
@@ -361,25 +353,47 @@ pub fn create_subscription_rule(
             .as_deref()
             .is_none_or(|c| !c.is_empty()),
     };
-    if !creator_fits {
-        return Err(ChannelError::Invalid(
+    if creator_fits {
+        Ok(())
+    } else {
+        Err(ChannelError::Invalid(
             "a creator is needed to follow one and not allowed while undecided, and is never blank",
-        ));
+        ))
     }
+}
 
-    let tx = begin(conn)?;
-    require_channel(&tx, channel_id)?;
+/// A channel keeps one rule per subscribed anime.
+fn check_not_subscribed(tx: &Transaction<'_>, channel_id: &str, anime_no: i64) -> Result<()> {
     let existing: Option<String> = tx
         .query_row(
             "SELECT s.rule_id FROM rule_subscriptions s JOIN rules r ON r.id = s.rule_id
               WHERE r.channel_id = ?1 AND s.anissia_anime_no = ?2",
-            params![channel_id, subscription.anime.anime_no],
+            params![channel_id, anime_no],
             |r| r.get(0),
         )
         .optional()?;
-    if let Some(rule_id) = existing {
-        return Err(ChannelError::AlreadySubscribed { rule_id });
+    match existing {
+        Some(rule_id) => Err(ChannelError::AlreadySubscribed { rule_id }),
+        None => Ok(()),
     }
+}
+
+/// Adds a rule at the end of the channel's rules that is a subscription to
+/// `subscription.anime`, and stores the anime's snapshot, in one transaction.
+/// A channel has one rule per subscribed anime: a second one is refused with
+/// [`ChannelError::AlreadySubscribed`].
+pub fn create_subscription_rule(
+    conn: &mut Connection,
+    channel_id: &str,
+    input: &RuleInput,
+    subscription: &NewSubscription,
+) -> Result<Rule> {
+    input.validate()?;
+    check_creator(subscription)?;
+
+    let tx = begin(conn)?;
+    require_channel(&tx, channel_id)?;
+    check_not_subscribed(&tx, channel_id, subscription.anime.anime_no)?;
     anissia::upsert_in(&tx, &subscription.anime)?;
     let position: i64 = tx.query_row(
         "SELECT COALESCE(MAX(position), -1) + 1 FROM rules WHERE channel_id = ?1",
@@ -466,6 +480,254 @@ pub fn set_rule_state(conn: &mut Connection, id: &str, state: RuleState) -> Resu
     let rule = fetch_rule(&tx, id)?;
     tx.commit()?;
     Ok(rule)
+}
+
+fn require_rule(tx: &Transaction<'_>, id: &str, expected: Version) -> Result<Rule> {
+    let rule = fetch_rule(tx, id)?.ok_or_else(|| ChannelError::NotFound {
+        kind: "rule",
+        id: id.to_owned(),
+    })?;
+    check_version("rule", id, expected, rule.version)?;
+    Ok(rule)
+}
+
+fn bump_version(tx: &Transaction<'_>, id: &str) -> Result<()> {
+    tx.execute("UPDATE rules SET version = version + 1 WHERE id = ?1", [id])?;
+    Ok(())
+}
+
+/// `영상 받기`: turns the rule's collecting on (`active`) or off (`paused`) if
+/// it is still at `expected`. An archived rule is restored through the worker,
+/// which moves its folder back first, so this refuses it. Nothing changes (and
+/// the version stays) when the rule is in the wanted state already.
+pub fn set_video_receiving(
+    conn: &mut Connection,
+    id: &str,
+    expected: Version,
+    on: bool,
+) -> Result<Rule> {
+    let tx = begin(conn)?;
+    let rule = require_rule(&tx, id, expected)?;
+    if rule.state == RuleState::Archived {
+        return Err(ChannelError::Invalid(
+            "an archived rule is restored, not switched",
+        ));
+    }
+    let wanted = if on {
+        RuleState::Active
+    } else {
+        RuleState::Paused
+    };
+    if rule.state != wanted {
+        tx.execute(
+            "UPDATE rules SET state = ?2, version = version + 1 WHERE id = ?1",
+            params![id, wanted.as_str()],
+        )?;
+    }
+    let updated = fetch_rule(&tx, id)?.expect("the rule still exists");
+    tx.commit()?;
+    Ok(updated)
+}
+
+/// `자막 받기`: off keeps the creator and makes the subscription `none`; on
+/// goes back to following the kept creator, or to `undecided` when there was
+/// none. Only a subscription of a collecting rule has the switch: a paused or
+/// archived rule keeps its subtitle setting as it is.
+pub fn set_subtitle_receiving(
+    conn: &mut Connection,
+    id: &str,
+    expected: Version,
+    on: bool,
+) -> Result<Rule> {
+    let tx = begin(conn)?;
+    let rule = require_rule(&tx, id, expected)?;
+    let Some(subscription) = &rule.subscription else {
+        return Err(ChannelError::Invalid(
+            "only a subscription receives subtitles",
+        ));
+    };
+    if rule.state != RuleState::Active {
+        return Err(ChannelError::Invalid(
+            "subtitles are switched only while the rule collects videos",
+        ));
+    }
+    let wanted = match (on, subscription.creator.is_some()) {
+        (false, _) => SubtitleMode::None,
+        (true, true) => SubtitleMode::Follow,
+        (true, false) => SubtitleMode::Undecided,
+    };
+    if subscription.subtitles != wanted {
+        tx.execute(
+            "UPDATE rule_subscriptions SET subtitles = ?2 WHERE rule_id = ?1",
+            params![id, wanted.as_str()],
+        )?;
+        bump_version(&tx, id)?;
+    }
+    let updated = fetch_rule(&tx, id)?.expect("the rule still exists");
+    tx.commit()?;
+    Ok(updated)
+}
+
+/// Changes the creator a subscription follows: a name follows that creator,
+/// `None` is `제작자 미정`. A subscription that receives no subtitles (`none`)
+/// has no creator to change; switching them on comes first.
+pub fn set_creator(
+    conn: &mut Connection,
+    id: &str,
+    expected: Version,
+    creator: Option<&str>,
+) -> Result<Rule> {
+    if creator.is_some_and(str::is_empty) {
+        return Err(ChannelError::Invalid("a creator is never blank"));
+    }
+    let tx = begin(conn)?;
+    let rule = require_rule(&tx, id, expected)?;
+    let Some(subscription) = &rule.subscription else {
+        return Err(ChannelError::Invalid(
+            "only a subscription follows a creator",
+        ));
+    };
+    if subscription.subtitles == SubtitleMode::None {
+        return Err(ChannelError::Invalid(
+            "a subscription without subtitles has no creator to change",
+        ));
+    }
+    if subscription.creator.as_deref() != creator {
+        let mode = if creator.is_some() {
+            SubtitleMode::Follow
+        } else {
+            SubtitleMode::Undecided
+        };
+        tx.execute(
+            "UPDATE rule_subscriptions SET subtitles = ?2, creator = ?3 WHERE rule_id = ?1",
+            params![id, mode.as_str(), creator],
+        )?;
+        bump_version(&tx, id)?;
+    }
+    let updated = fetch_rule(&tx, id)?.expect("the rule still exists");
+    tx.commit()?;
+    Ok(updated)
+}
+
+/// `편성표와 연결`: makes an existing rule a subscription to
+/// `subscription.anime` if it is still at `expected`, keeping everything else
+/// about it (match phrase, save folder, order, state), and stores the anime's
+/// snapshot. The rule must not be a subscription already, and the channel
+/// keeps one rule per subscribed anime.
+pub fn subscribe_rule(
+    conn: &mut Connection,
+    id: &str,
+    expected: Version,
+    subscription: &NewSubscription,
+) -> Result<Rule> {
+    check_creator(subscription)?;
+    let tx = begin(conn)?;
+    let rule = require_rule(&tx, id, expected)?;
+    if rule.subscription.is_some() {
+        return Err(ChannelError::Invalid("the rule is a subscription already"));
+    }
+    check_not_subscribed(&tx, &rule.channel_id, subscription.anime.anime_no)?;
+    anissia::upsert_in(&tx, &subscription.anime)?;
+    tx.execute(
+        "INSERT INTO rule_subscriptions (rule_id, anissia_anime_no, subtitles, creator, season_id, subscribed_at)
+         VALUES (?1, ?2, ?3, ?4, NULL, ?5)",
+        params![
+            id,
+            subscription.anime.anime_no,
+            subscription.subtitles.as_str(),
+            subscription.creator,
+            subscription.subscribed_at,
+        ],
+    )?;
+    bump_version(&tx, id)?;
+    let updated = fetch_rule(&tx, id)?.expect("the rule still exists");
+    tx.commit()?;
+    Ok(updated)
+}
+
+/// What connecting a subscription to a season came to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SeasonLinked {
+    /// The rule is connected to the season now.
+    Linked,
+    /// The rule was connected already; it stays as it was.
+    Kept,
+    /// Another Anissia anime holds the season, so the rule was not connected
+    /// and notes the season (see [`Subscription::season_blocked`]).
+    Taken,
+    /// The rule is gone or no longer a subscription.
+    Gone,
+}
+
+/// Connects the subscription of rule `id` to `season_id` unless it has a season
+/// already (it stays) or another Anissia anime holds that season. This is the
+/// worker's doing, so there is no version check; the rule's version goes up
+/// when the subscription changes.
+pub fn link_season(conn: &mut Connection, id: &str, season_id: &str) -> Result<SeasonLinked> {
+    let tx = begin(conn)?;
+    let Some(subscription) = fetch_rule(&tx, id)?.and_then(|rule| rule.subscription) else {
+        return Ok(SeasonLinked::Gone);
+    };
+    if subscription.season_id.is_some() {
+        return Ok(SeasonLinked::Kept);
+    }
+    let taken: bool = tx.query_row(
+        "SELECT EXISTS (SELECT 1 FROM rule_subscriptions
+                         WHERE season_id = ?1 AND anissia_anime_no <> ?2)",
+        params![season_id, subscription.anissia_anime_no],
+        |r| r.get(0),
+    )?;
+    if taken {
+        if subscription.season_blocked.as_deref() != Some(season_id) {
+            tx.execute(
+                "UPDATE rule_subscriptions SET season_blocked = ?2 WHERE rule_id = ?1",
+                params![id, season_id],
+            )?;
+            bump_version(&tx, id)?;
+        }
+        tx.commit()?;
+        return Ok(SeasonLinked::Taken);
+    }
+    tx.execute(
+        "UPDATE rule_subscriptions SET season_id = ?2, season_blocked = NULL WHERE rule_id = ?1",
+        params![id, season_id],
+    )?;
+    bump_version(&tx, id)?;
+    tx.commit()?;
+    Ok(SeasonLinked::Linked)
+}
+
+/// The Anissia anime whose subscriptions hold `season_id`, if any: what a rule
+/// that could not take the season names as the reason.
+pub fn season_holder(conn: &Connection, season_id: &str) -> Result<Option<i64>> {
+    Ok(conn
+        .query_row(
+            "SELECT anissia_anime_no FROM rule_subscriptions WHERE season_id = ?1
+              ORDER BY rule_id LIMIT 1",
+            [season_id],
+            |r| r.get(0),
+        )
+        .optional()?)
+}
+
+/// The rules whose subscription is connected to a season of the work
+/// `work_id`, with the season's number, in channel and rule order.
+pub fn subscriptions_of_work(conn: &Connection, work_id: &str) -> Result<Vec<(u32, Rule)>> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {RULE_COLUMNS} FROM {RULE_FROM} JOIN channels c ON c.id = r.channel_id
+          WHERE s.season_id IS NOT NULL AND substr(s.season_id, 1, length(?1) + 1) = ?1 || ':'
+          ORDER BY c.position, r.position, r.id"
+    ))?;
+    let rules: Vec<Rule> = stmt
+        .query_map([work_id], rule_from_row)?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(rules
+        .into_iter()
+        .filter_map(|rule| {
+            let season = SeasonRef::parse(rule.subscription.as_ref()?.season_id.as_deref()?)?;
+            (season.work_id == work_id).then_some((season.number, rule))
+        })
+        .collect())
 }
 
 /// Applies `order` to `current` (`(id, version, position)` in current order).

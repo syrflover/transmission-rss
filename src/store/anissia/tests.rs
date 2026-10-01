@@ -442,3 +442,389 @@ async fn request_slots_keep_their_spacing_and_a_block_holds_every_request() {
         Ok(62_000)
     );
 }
+
+// -- The rule detail's switches, the creator and the season connection -----
+
+use crate::store::channels::{SeasonLinked, SeasonRef};
+
+#[tokio::test]
+async fn turning_video_receiving_off_pauses_the_rule_and_on_collects_again() {
+    let env = Env::new().await;
+    let rule = env.subscribe("Work", 7, 1_000).await;
+
+    let off = env
+        .channels
+        .set_video_receiving(&rule.id, rule.version, false)
+        .await
+        .unwrap();
+    assert_eq!(off.state, RuleState::Paused);
+    assert_eq!(off.version, rule.version + 1);
+    // The subscription and its subtitle setting stay as they were.
+    assert_eq!(off.subscription, rule.subscription);
+
+    // Off again changes nothing, not even the version.
+    let again = env
+        .channels
+        .set_video_receiving(&rule.id, off.version, false)
+        .await
+        .unwrap();
+    assert_eq!(again, off);
+
+    let on = env
+        .channels
+        .set_video_receiving(&rule.id, off.version, true)
+        .await
+        .unwrap();
+    assert_eq!(on.state, RuleState::Active);
+
+    // A version the client did not see is a conflict, and nothing changed.
+    let stale = env
+        .channels
+        .set_video_receiving(&rule.id, rule.version, false)
+        .await;
+    assert!(stale.unwrap_err().is_conflict());
+    assert_eq!(
+        env.channels
+            .get_rule(&rule.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .state,
+        RuleState::Active
+    );
+}
+
+#[tokio::test]
+async fn an_archived_rule_is_restored_not_switched() {
+    let env = Env::new().await;
+    let rule = env.subscribe("Work", 7, 1_000).await;
+    let archived = env
+        .channels
+        .set_rule_state(&rule.id, RuleState::Archived)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let refused = env
+        .channels
+        .set_video_receiving(&rule.id, archived.version, true)
+        .await;
+    assert!(matches!(refused, Err(ChannelError::Invalid(_))));
+}
+
+#[tokio::test]
+async fn turning_subtitle_receiving_off_keeps_the_creator_and_on_follows_it_again() {
+    let env = Env::new().await;
+    let rule = env.subscribe("Work", 7, 1_000).await;
+    assert_eq!(
+        rule.subscription.as_ref().unwrap().subtitles,
+        SubtitleMode::Follow
+    );
+
+    let off = env
+        .channels
+        .set_subtitle_receiving(&rule.id, rule.version, false)
+        .await
+        .unwrap();
+    let kept = off.subscription.as_ref().unwrap();
+    assert_eq!(kept.subtitles, SubtitleMode::None);
+    assert_eq!(kept.creator.as_deref(), Some("에텔레로사"));
+
+    let on = env
+        .channels
+        .set_subtitle_receiving(&rule.id, off.version, true)
+        .await
+        .unwrap();
+    let back = on.subscription.as_ref().unwrap();
+    assert_eq!(back.subtitles, SubtitleMode::Follow);
+    assert_eq!(back.creator.as_deref(), Some("에텔레로사"));
+    // The rule itself and the anime link are untouched by the switch.
+    assert_eq!(on.state, RuleState::Active);
+    assert_eq!(back.anissia_anime_no, 7);
+}
+
+#[tokio::test]
+async fn a_subscription_without_a_creator_returns_to_undecided() {
+    let env = Env::new().await;
+    let rule = env
+        .channels
+        .create_subscription_rule(
+            &env.channel,
+            rule("Work"),
+            NewSubscription {
+                subtitles: SubtitleMode::Undecided,
+                creator: None,
+                ..subscription(7, 1_000)
+            },
+        )
+        .await
+        .unwrap();
+
+    let off = env
+        .channels
+        .set_subtitle_receiving(&rule.id, rule.version, false)
+        .await
+        .unwrap();
+    assert_eq!(
+        off.subscription.as_ref().unwrap().subtitles,
+        SubtitleMode::None
+    );
+    let on = env
+        .channels
+        .set_subtitle_receiving(&rule.id, off.version, true)
+        .await
+        .unwrap();
+    assert_eq!(
+        on.subscription.as_ref().unwrap().subtitles,
+        SubtitleMode::Undecided
+    );
+}
+
+#[tokio::test]
+async fn subtitles_are_switched_only_for_a_collecting_subscription() {
+    let env = Env::new().await;
+    let sub = env.subscribe("Work", 7, 1_000).await;
+    let paused = env
+        .channels
+        .set_video_receiving(&sub.id, sub.version, false)
+        .await
+        .unwrap();
+    let refused = env
+        .channels
+        .set_subtitle_receiving(&sub.id, paused.version, false)
+        .await;
+    assert!(matches!(refused, Err(ChannelError::Invalid(_))));
+
+    let plain = env
+        .channels
+        .create_rule(&env.channel, rule("Plain"))
+        .await
+        .unwrap();
+    let refused = env
+        .channels
+        .set_subtitle_receiving(&plain.id, plain.version, false)
+        .await;
+    assert!(matches!(refused, Err(ChannelError::Invalid(_))));
+}
+
+#[tokio::test]
+async fn the_creator_changes_to_another_one_or_to_undecided_and_a_stale_version_conflicts() {
+    let env = Env::new().await;
+    let rule = env.subscribe("Work", 7, 1_000).await;
+
+    let other = env
+        .channels
+        .set_creator(&rule.id, rule.version, Some("SubKor".into()))
+        .await
+        .unwrap();
+    let s = other.subscription.as_ref().unwrap();
+    assert_eq!(
+        (s.subtitles, s.creator.as_deref()),
+        (SubtitleMode::Follow, Some("SubKor"))
+    );
+
+    let undecided = env
+        .channels
+        .set_creator(&rule.id, other.version, None)
+        .await
+        .unwrap();
+    let s = undecided.subscription.as_ref().unwrap();
+    assert_eq!(
+        (s.subtitles, s.creator.as_deref()),
+        (SubtitleMode::Undecided, None)
+    );
+
+    let stale = env
+        .channels
+        .set_creator(&rule.id, rule.version, Some("Late".into()))
+        .await;
+    assert!(stale.unwrap_err().is_conflict());
+
+    // With the subtitles off there is no creator to change.
+    let off = env
+        .channels
+        .set_subtitle_receiving(&rule.id, undecided.version, false)
+        .await
+        .unwrap();
+    let refused = env
+        .channels
+        .set_creator(&rule.id, off.version, Some("SubKor".into()))
+        .await;
+    assert!(matches!(refused, Err(ChannelError::Invalid(_))));
+}
+
+#[tokio::test]
+async fn an_existing_rule_becomes_a_subscription_and_keeps_what_it_was() {
+    let env = Env::new().await;
+    let rule = env
+        .channels
+        .create_rule(
+            &env.channel,
+            RuleInput {
+                r#match: Some("Work 1080".into()),
+                directory: "Work/Season 02".into(),
+                episode: -12,
+                ..RuleInput::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let linked = env
+        .channels
+        .subscribe_rule(&rule.id, rule.version, subscription(7, 5_000))
+        .await
+        .unwrap();
+
+    assert_eq!(linked.r#match, rule.r#match);
+    assert_eq!(linked.directory, rule.directory);
+    assert_eq!(linked.episode, rule.episode);
+    assert_eq!(linked.position, rule.position);
+    assert_eq!(linked.state, RuleState::Active);
+    let s = linked.subscription.clone().unwrap();
+    assert_eq!((s.anissia_anime_no, s.season_id), (7, None));
+    assert_eq!(
+        env.anissia.anime(7).await.unwrap().unwrap().fetched_at,
+        5_000
+    );
+
+    // Once is enough, and the channel keeps one rule per anime.
+    let again = env
+        .channels
+        .subscribe_rule(&rule.id, linked.version, subscription(8, 5_000))
+        .await;
+    assert!(matches!(again, Err(ChannelError::Invalid(_))));
+    let other = env
+        .channels
+        .create_rule(&env.channel, RuleInput::default())
+        .await
+        .unwrap();
+    let taken = env
+        .channels
+        .subscribe_rule(&other.id, other.version, subscription(7, 5_000))
+        .await;
+    assert!(matches!(taken, Err(ChannelError::AlreadySubscribed { .. })));
+    let stale = env
+        .channels
+        .subscribe_rule(&other.id, other.version + 3, subscription(9, 5_000))
+        .await;
+    assert!(stale.unwrap_err().is_conflict());
+}
+
+#[tokio::test]
+async fn a_season_is_connected_once_and_a_season_another_anime_holds_is_noted_not_taken() {
+    let env = Env::new().await;
+    let first = env.subscribe("First", 7, 1_000).await;
+    let second = env.subscribe("Second", 8, 1_000).await;
+    let season = SeasonRef {
+        work_id: "work-a".into(),
+        number: 2,
+    }
+    .id();
+
+    assert_eq!(
+        env.channels.link_season(&first.id, &season).await.unwrap(),
+        SeasonLinked::Linked
+    );
+    // Connected already: it stays, even for a different season.
+    assert_eq!(
+        env.channels
+            .link_season(&first.id, "work-a:3")
+            .await
+            .unwrap(),
+        SeasonLinked::Kept
+    );
+    let stored = env.channels.get_rule(&first.id).await.unwrap().unwrap();
+    assert_eq!(
+        stored.subscription.unwrap().season_id.as_deref(),
+        Some("work-a:2")
+    );
+    assert_eq!(env.channels.season_holder(&season).await.unwrap(), Some(7));
+
+    // The same season is held by anime 7: anime 8 is not connected and says why.
+    assert_eq!(
+        env.channels.link_season(&second.id, &season).await.unwrap(),
+        SeasonLinked::Taken
+    );
+    let noted = env.channels.get_rule(&second.id).await.unwrap().unwrap();
+    let s = noted.subscription.unwrap();
+    assert_eq!(
+        (s.season_id.as_deref(), s.season_blocked.as_deref()),
+        (None, Some("work-a:2"))
+    );
+
+    // A rule of the same anime in another channel may share the season.
+    let channel = env
+        .channels
+        .create_channel(ChannelInput::new("https://feed2.test/rss"))
+        .await
+        .unwrap();
+    let same = env
+        .channels
+        .create_subscription_rule(&channel.id, rule("Same"), subscription(7, 1_000))
+        .await
+        .unwrap();
+    assert_eq!(
+        env.channels.link_season(&same.id, &season).await.unwrap(),
+        SeasonLinked::Linked
+    );
+
+    // The work's connected subscriptions, by the season's number.
+    let of_work = env.channels.subscriptions_of_work("work-a").await.unwrap();
+    assert_eq!(
+        of_work
+            .iter()
+            .map(|(n, r)| (*n, r.id.clone()))
+            .collect::<Vec<_>>(),
+        vec![(2, first.id.clone()), (2, same.id.clone())]
+    );
+    assert!(env
+        .channels
+        .subscriptions_of_work("work")
+        .await
+        .unwrap()
+        .is_empty());
+
+    // A rule that is gone is not connected.
+    assert_eq!(
+        env.channels.link_season("missing", "w:1").await.unwrap(),
+        SeasonLinked::Gone
+    );
+}
+
+#[test]
+fn a_season_id_round_trips_and_a_malformed_one_is_refused() {
+    let id = SeasonRef {
+        work_id: "a:b".into(),
+        number: 12,
+    };
+    assert_eq!(SeasonRef::parse(&id.id()), Some(id));
+    assert_eq!(SeasonRef::parse("no-number"), None);
+    assert_eq!(SeasonRef::parse(":1"), None);
+    assert_eq!(SeasonRef::parse("w:x"), None);
+}
+
+#[tokio::test]
+async fn a_paused_rule_keeps_its_anime_snapshot_refreshed_and_an_archived_one_does_not() {
+    let env = Env::new().await;
+    let paused = env.subscribe("Paused", 7, 1_000).await;
+    let archived = env.subscribe("Archived", 8, 1_000).await;
+    env.channels
+        .set_video_receiving(&paused.id, paused.version, false)
+        .await
+        .unwrap();
+    env.channels
+        .set_rule_state(&archived.id, RuleState::Archived)
+        .await
+        .unwrap();
+    env.db
+        .run::<_, AnissiaStoreError, _>(|c| {
+            c.execute("UPDATE anissia_anime SET fetched_at = 0", [])?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+    let due = env.anissia.due(10 * DAY).await.unwrap();
+    assert_eq!(due.iter().map(|d| d.anime_no).collect::<Vec<_>>(), vec![7]);
+}

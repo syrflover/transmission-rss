@@ -679,3 +679,591 @@ async fn editing_a_subscription_rule_keeps_its_subscription_and_a_stale_version_
         3320
     );
 }
+
+/// The rule detail (ticket 0019): the switches, the creator, `편성표와 연결` and
+/// what the rule's view says of its season.
+mod rule_detail {
+    use std::collections::BTreeSet;
+
+    use super::*;
+    use crate::{
+        discovery::{EpisodeFile, FileKind, Scan, ScannedWork, WorkRead},
+        store::{
+            channels::Rule,
+            seasons::{Entry, FuzzyDate},
+        },
+    };
+
+    impl App {
+        /// A subscription to 3320 on a fresh channel, with the schedule up.
+        async fn subscribed(&self) -> (Channel, Rule) {
+            self.schedule_of_wednesday();
+            let channel = self.channel("feed.test").await;
+            self.record(&channel, 1000, &[WORK_1]).await;
+            let (status, body) = self
+                .call(
+                    Method::POST,
+                    "/api/subscriptions",
+                    Some(self.subscribe_body(&channel)),
+                )
+                .await;
+            assert_eq!(status, StatusCode::CREATED, "{body}");
+            let id = body["rule"]["id"].as_str().unwrap().to_owned();
+            let rule = self.state.channels.get_rule(&id).await.unwrap().unwrap();
+            (channel, rule)
+        }
+
+        async fn put(&self, rule: &Rule, path: &str, mut body: Value) -> (StatusCode, Value) {
+            body["version"] = json!(rule.version);
+            self.call(
+                Method::PUT,
+                &format!("/api/rules/{}/{path}", rule.id),
+                Some(body),
+            )
+            .await
+        }
+
+        async fn fresh(&self, rule: &Rule) -> Rule {
+            self.state
+                .channels
+                .get_rule(&rule.id)
+                .await
+                .unwrap()
+                .unwrap()
+        }
+
+        /// A plain rule (no subscription) in `channel`.
+        async fn plain(&self, channel: &Channel, phrase: &str) -> Rule {
+            self.state
+                .channels
+                .create_rule(
+                    &channel.id,
+                    RuleInput {
+                        r#match: Some(phrase.into()),
+                        directory: format!("{phrase}/Season 02"),
+                        episode: -12,
+                        ..RuleInput::default()
+                    },
+                )
+                .await
+                .unwrap()
+        }
+    }
+
+    fn work_with_videos(count: usize) -> ScannedWork {
+        ScannedWork {
+            dir_name: "Work".into(),
+            seasons: BTreeSet::from([1]),
+            files: (1..=count)
+                .map(|n| EpisodeFile {
+                    path: format!("Season 01/Work S01E{n:02}.mkv"),
+                    kind: FileKind::Video,
+                    season: 1,
+                    episode: format!("{n:02}"),
+                })
+                .collect(),
+            unrecognized: Vec::new(),
+        }
+    }
+
+    fn entry(id: i64, episodes: Option<u32>) -> Entry {
+        Entry {
+            id,
+            romaji: Some("Work".into()),
+            english: None,
+            native: Some("ワーク".into()),
+            format: Some("TV".into()),
+            status: Some("RELEASING".into()),
+            episodes,
+            start: FuzzyDate {
+                year: Some(2026),
+                month: Some(10),
+                day: None,
+            },
+            end: FuzzyDate::default(),
+            studios: Vec::new(),
+            genres: Vec::new(),
+            description: None,
+            airing: Vec::new(),
+            sequels: Vec::new(),
+            fetched_at: 1,
+        }
+    }
+
+    #[tokio::test]
+    async fn video_receiving_pauses_the_rule_and_leaves_its_folder_and_subscription() {
+        let app = App::new().await;
+        let (_, rule) = app.subscribed().await;
+
+        let (status, off) = app.put(&rule, "switch", json!({ "video": false })).await;
+        assert_eq!(status, StatusCode::OK, "{off}");
+        assert_eq!(off["state"], "paused");
+        assert_eq!(off["directory"], rule.directory);
+        assert_eq!(off["subscription"]["anissia_anime_no"], 3320);
+        assert_eq!(off["subscription"]["subtitles"], "follow");
+        // A paused subscription still lists, marked as paused.
+        let (_, list) = app.get("/api/subscriptions").await;
+        assert_eq!(list["subscriptions"][0]["state"], "paused");
+
+        let stored = app.fresh(&rule).await;
+        let (status, on) = app.put(&stored, "switch", json!({ "video": true })).await;
+        assert_eq!(status, StatusCode::OK, "{on}");
+        assert_eq!(on["state"], "active");
+        let (_, list) = app.get("/api/subscriptions").await;
+        assert_eq!(list["subscriptions"][0]["state"], "active");
+    }
+
+    #[tokio::test]
+    async fn subtitle_receiving_is_off_none_and_on_follows_the_kept_creator() {
+        let app = App::new().await;
+        let (_, rule) = app.subscribed().await;
+
+        let (status, off) = app
+            .put(&rule, "switch", json!({ "subtitles": false }))
+            .await;
+        assert_eq!(status, StatusCode::OK, "{off}");
+        assert_eq!(off["subscription"]["subtitles"], "none");
+        assert_eq!(off["subscription"]["creator"], "에텔레로사");
+        assert_eq!(off["state"], "active");
+
+        let stored = app.fresh(&rule).await;
+        let (_, on) = app
+            .put(&stored, "switch", json!({ "subtitles": true }))
+            .await;
+        assert_eq!(on["subscription"]["subtitles"], "follow");
+        assert_eq!(on["subscription"]["creator"], "에텔레로사");
+    }
+
+    #[tokio::test]
+    async fn a_switch_with_an_old_version_is_a_conflict_with_the_current_rule() {
+        let app = App::new().await;
+        let (_, rule) = app.subscribed().await;
+        let (_, first) = app.put(&rule, "switch", json!({ "video": false })).await;
+
+        // The same, old version again: nothing changes and the answer is the rule now.
+        let (status, stale) = app.put(&rule, "switch", json!({ "video": true })).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{stale}");
+        assert_eq!(stale["current"]["version"], first["version"]);
+        assert_eq!(stale["current"]["state"], "paused");
+        assert_eq!(app.fresh(&rule).await.state, RuleState::Paused);
+
+        let (status, stale) = app
+            .put(&rule, "switch", json!({ "subtitles": false }))
+            .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{stale}");
+    }
+
+    #[tokio::test]
+    async fn the_switches_refuse_what_the_detail_disables() {
+        let app = App::new().await;
+        let (channel, rule) = app.subscribed().await;
+
+        // Both at once, or none, is no request.
+        let (status, _) = app
+            .put(&rule, "switch", json!({ "video": true, "subtitles": true }))
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = app.put(&rule, "switch", json!({})).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Subtitles wait for the video switch.
+        let (_, paused) = app.put(&rule, "switch", json!({ "video": false })).await;
+        let stored = app.fresh(&rule).await;
+        assert_eq!(stored.version, paused["version"]);
+        let (status, body) = app
+            .put(&stored, "switch", json!({ "subtitles": false }))
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["message"], "영상 받기를 켜야 자막을 받을 수 있어요.");
+
+        // A plain rule has the video switch only.
+        let plain = app.plain(&channel, "Plain").await;
+        let (status, body) = app
+            .put(&plain, "switch", json!({ "subtitles": false }))
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        let (status, body) = app.put(&plain, "switch", json!({ "video": false })).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["state"], "paused");
+        assert_eq!(body["subscription"], Value::Null);
+
+        // An archived rule is restored, not switched.
+        let archived = app
+            .state
+            .channels
+            .set_rule_state(&rule.id, RuleState::Archived)
+            .await
+            .unwrap()
+            .unwrap();
+        let (status, body) = app.put(&archived, "switch", json!({ "video": true })).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        let (status, _) = app
+            .put(&archived, "switch", json!({ "subtitles": true }))
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(app.fresh(&rule).await.state, RuleState::Archived);
+
+        // A rule that is not there.
+        let mut gone = rule.clone();
+        gone.id = "no-such-rule".into();
+        let (status, _) = app.put(&gone, "switch", json!({ "video": true })).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn the_creator_is_changed_to_one_of_the_anime_or_to_undecided() {
+        let app = App::new().await;
+        let (_, rule) = app.subscribed().await;
+
+        let (status, body) = app
+            .put(&rule, "creator", json!({ "creator": "다른 제작자" }))
+            .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["subscription"]["creator"], "다른 제작자");
+        assert_eq!(body["subscription"]["subtitles"], "follow");
+
+        // A stale version conflicts and carries the rule as it is.
+        let (status, stale) = app
+            .put(&rule, "creator", json!({ "creator": "에텔레로사" }))
+            .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{stale}");
+        assert_eq!(stale["current"]["subscription"]["creator"], "다른 제작자");
+
+        // Only a creator the anime's captions name.
+        let stored = app.fresh(&rule).await;
+        let (status, _) = app
+            .put(&stored, "creator", json!({ "creator": "아무개" }))
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = app.put(&stored, "creator", json!({ "creator": "" })).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        let (status, undecided) = app
+            .put(&stored, "creator", json!({ "creator": null }))
+            .await;
+        assert_eq!(status, StatusCode::OK, "{undecided}");
+        assert_eq!(undecided["subscription"]["creator"], Value::Null);
+        assert_eq!(undecided["subscription"]["subtitles"], "undecided");
+    }
+
+    #[tokio::test]
+    async fn the_creator_is_not_changed_without_subtitles_or_a_subscription() {
+        let app = App::new().await;
+        let (channel, rule) = app.subscribed().await;
+        let plain = app.plain(&channel, "Plain").await;
+        let (status, _) = app
+            .put(&plain, "creator", json!({ "creator": "에텔레로사" }))
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        let (_, off) = app
+            .put(&rule, "switch", json!({ "subtitles": false }))
+            .await;
+        let stored = app.fresh(&rule).await;
+        assert_eq!(stored.version, off["version"]);
+        let (status, _) = app
+            .put(&stored, "creator", json!({ "creator": "다른 제작자" }))
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn an_existing_rule_is_linked_to_the_schedule_keeping_phrase_folder_and_order() {
+        let app = App::new().await;
+        app.schedule_of_wednesday();
+        let channel = app.channel("feed.test").await;
+        let first = app.plain(&channel, "First").await;
+        let rule = app.plain(&channel, "Work 1080").await;
+        let link = |version: i64, creator: &str| {
+            json!({
+                "version": version, "anissia_anime_no": 3320, "week": 3,
+                "subtitles": "follow", "creator": creator,
+            })
+        };
+        let post = |rule: &Rule, body: Value| {
+            app.call(
+                Method::POST,
+                format!("/api/rules/{}/subscription", rule.id).leak(),
+                Some(body),
+            )
+        };
+
+        // The creator must be one of the anime's.
+        let (status, _) = post(&rule, link(rule.version, "아무개")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(app.fresh(&rule).await.subscription.is_none());
+        // The anime must be in the week's schedule.
+        let mut elsewhere = link(rule.version, "에텔레로사");
+        elsewhere["anissia_anime_no"] = json!(9999);
+        let (status, _) = post(&rule, elsewhere).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        let (status, linked) = post(&rule, link(rule.version, "에텔레로사")).await;
+        assert_eq!(status, StatusCode::OK, "{linked}");
+        assert_eq!(linked["match"], "Work 1080");
+        assert_eq!(linked["directory"], "Work 1080/Season 02");
+        assert_eq!(linked["episode"], -12);
+        assert_eq!(linked["order"], 2);
+        assert_eq!(linked["state"], "active");
+        assert_eq!(linked["subscription"]["anissia_anime_no"], 3320);
+        assert_eq!(linked["subscription"]["creator"], "에텔레로사");
+        assert_eq!(linked["subscription"]["quarter"]["number"], 4);
+        assert_eq!(app.fresh(&first).await.version, first.version);
+
+        // It is a subscription now, and the schedule says who follows the anime.
+        let (_, schedule) = app.get("/api/anissia/schedule/3").await;
+        assert_eq!(
+            schedule["entries"][1]["subscribed_rules"][0]["rule_id"],
+            rule.id
+        );
+        let stored = app.fresh(&rule).await;
+        let (status, _) = post(&stored, link(stored.version, "에텔레로사")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "linked once");
+
+        // The channel keeps one rule per anime; an old version conflicts.
+        let (status, _) = post(&first, link(first.version, "에텔레로사")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, stale) = post(&first, link(first.version + 5, "에텔레로사")).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{stale}");
+        assert_eq!(stale["current"]["id"], first.id);
+
+        // Undecided needs no creator.
+        let (status, undecided) = post(
+            &first,
+            json!({ "version": first.version, "anissia_anime_no": 3321, "week": 3,
+                    "subtitles": "undecided" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{undecided}");
+        assert_eq!(undecided["subscription"]["subtitles"], "undecided");
+    }
+
+    #[tokio::test]
+    async fn a_paused_rule_matches_nothing_in_the_preview_and_does_not_shadow_a_later_one() {
+        let app = App::new().await;
+        let (channel, rule) = app.subscribed().await;
+        let later = app.plain(&channel, "Work").await;
+        app.record(&channel, 2000, &[WORK_2]).await;
+        let preview = |edited: &Rule| {
+            app.call(
+                Method::POST,
+                "/api/rules/preview",
+                Some(json!({
+                    "channel_id": channel.id, "rule_id": edited.id,
+                    "rule": { "match": "Work", "directory": "x", "episode": 0 },
+                })),
+            )
+        };
+
+        // While the subscription collects it takes both items before the later rule.
+        let (_, view) = preview(&later).await;
+        assert_eq!(view["counts"]["earlier"], 2, "{view}");
+
+        let (_, paused) = app.put(&rule, "switch", json!({ "video": false })).await;
+        assert_eq!(paused["state"], "paused");
+        let (_, view) = preview(&later).await;
+        assert_eq!(view["counts"]["mine"], 2, "{view}");
+        assert_eq!(view["counts"]["earlier"], 0, "{view}");
+        // The paused rule's own preview shows what it would take once on.
+        let (_, view) = preview(&rule).await;
+        assert_eq!(view["counts"]["mine"], 2, "{view}");
+    }
+
+    #[tokio::test]
+    async fn the_view_of_a_connected_subscription_has_its_season_and_progress() {
+        let app = App::new().await;
+        let (_, rule) = app.subscribed().await;
+        let (folder, _) = app
+            .state
+            .library
+            .add_folder(
+                "/c".into(),
+                Scan {
+                    works: vec![WorkRead::Read(work_with_videos(9))],
+                },
+                100,
+                &[],
+            )
+            .await
+            .unwrap();
+        let work = app
+            .state
+            .library
+            .works(&folder.id)
+            .await
+            .unwrap()
+            .remove(0)
+            .id;
+        app.state
+            .channels
+            .link_season(&rule.id, &format!("{work}:1"))
+            .await
+            .unwrap();
+        let (_, view) = app.get(&format!("/api/rules/{}", rule.id)).await;
+        assert_eq!(view["season"]["work_id"], work.as_str());
+        assert_eq!(view["season"]["work_name"], "Work");
+        assert_eq!(view["season"]["number"], 1);
+        assert_eq!(view["season"]["videos"], 9);
+        assert_eq!(view["season"]["episodes"], Value::Null, "unknown count");
+        assert_eq!(view["season"]["cover_url"], Value::Null);
+        assert_eq!(view["season_blocked"], Value::Null);
+
+        // With the AniList entries' episode count known, the progress has a total.
+        app.state
+            .seasons
+            .store
+            .put_entry(entry(1, Some(12)))
+            .await
+            .unwrap();
+        let link = app.state.seasons.store.link(&work, 1).await.unwrap();
+        app.state
+            .seasons
+            .set_links(&work, 1, link.version, vec![1])
+            .await
+            .unwrap();
+        let (_, view) = app.get(&format!("/api/rules/{}", rule.id)).await;
+        assert_eq!(view["season"]["episodes"], 12);
+        assert_eq!(view["season"]["videos"], 9);
+
+        // An entry without a count makes the whole season's count unknown.
+        app.state
+            .seasons
+            .store
+            .put_entry(entry(2, None))
+            .await
+            .unwrap();
+        let link = app.state.seasons.store.link(&work, 1).await.unwrap();
+        app.state
+            .seasons
+            .set_links(&work, 1, link.version, vec![1, 2])
+            .await
+            .unwrap();
+        let (_, view) = app.get(&format!("/api/rules/{}", rule.id)).await;
+        assert_eq!(view["season"]["episodes"], Value::Null);
+
+        // The work's head: the Anissia title and the subscription of the season.
+        let (status, detail) = app.get(&format!("/api/library/works/{work}")).await;
+        assert_eq!(status, StatusCode::OK, "{detail}");
+        assert_eq!(detail["korean_title"], "작품");
+        assert_eq!(detail["subscriptions"][0]["season"], 1);
+        assert_eq!(detail["subscriptions"][0]["rule_id"], rule.id.as_str());
+        assert_eq!(detail["subscriptions"][0]["creator"], "에텔레로사");
+        assert_eq!(
+            detail["subscriptions"][0]["rule_version"],
+            app.fresh(&rule).await.version
+        );
+
+        // Changing the creator in the rule detail shows in the work's head.
+        let current = app.fresh(&rule).await;
+        let (status, _) = app
+            .put(&current, "creator", json!({ "creator": "다른 제작자" }))
+            .await;
+        assert_eq!(status, StatusCode::OK);
+        let (_, detail) = app.get(&format!("/api/library/works/{work}")).await;
+        assert_eq!(detail["subscriptions"][0]["creator"], "다른 제작자");
+    }
+
+    #[tokio::test]
+    async fn a_work_without_a_connected_subscription_has_no_korean_title() {
+        let app = App::new().await;
+        let (_, _rule) = app.subscribed().await;
+        let (folder, _) = app
+            .state
+            .library
+            .add_folder(
+                "/c".into(),
+                Scan {
+                    works: vec![WorkRead::Read(work_with_videos(1))],
+                },
+                100,
+                &[],
+            )
+            .await
+            .unwrap();
+        let work = app
+            .state
+            .library
+            .works(&folder.id)
+            .await
+            .unwrap()
+            .remove(0)
+            .id;
+        let (_, detail) = app.get(&format!("/api/library/works/{work}")).await;
+        assert_eq!(detail["korean_title"], Value::Null);
+        assert_eq!(detail["subscriptions"], json!([]));
+    }
+
+    #[tokio::test]
+    async fn the_view_says_which_anime_holds_the_season_that_kept_a_rule_unconnected() {
+        let app = App::new().await;
+        let (channel, holder) = app.subscribed().await;
+        let blocked = app
+            .state
+            .channels
+            .create_subscription_rule(
+                &channel.id,
+                RuleInput {
+                    r#match: Some("Bare".into()),
+                    directory: "Bare/Season 01".into(),
+                    ..RuleInput::default()
+                },
+                NewSubscription {
+                    anime: Anime {
+                        anime_no: 3321,
+                        subject: "빈 작품".into(),
+                        original_subject: None,
+                        week: 3,
+                        air_time: None,
+                        start_date: None,
+                        end_date: None,
+                        status: "ON".into(),
+                        fetched_at: 1,
+                    },
+                    subtitles: SubtitleMode::Undecided,
+                    creator: None,
+                    subscribed_at: 1,
+                },
+            )
+            .await
+            .unwrap();
+        let (folder, _) = app
+            .state
+            .library
+            .add_folder(
+                "/c".into(),
+                Scan {
+                    works: vec![WorkRead::Read(work_with_videos(2))],
+                },
+                100,
+                &[],
+            )
+            .await
+            .unwrap();
+        let work = app
+            .state
+            .library
+            .works(&folder.id)
+            .await
+            .unwrap()
+            .remove(0)
+            .id;
+        let season = format!("{work}:1");
+        app.state
+            .channels
+            .link_season(&holder.id, &season)
+            .await
+            .unwrap();
+        app.state
+            .channels
+            .link_season(&blocked.id, &season)
+            .await
+            .unwrap();
+
+        let (_, view) = app.get(&format!("/api/rules/{}", blocked.id)).await;
+        assert_eq!(view["season"], Value::Null);
+        assert_eq!(view["season_blocked"]["work_name"], "Work");
+        assert_eq!(view["season_blocked"]["number"], 1);
+        assert_eq!(view["season_blocked"]["holder_anime_no"], 3320);
+        assert_eq!(view["season_blocked"]["holder_subject"], "작품");
+    }
+}

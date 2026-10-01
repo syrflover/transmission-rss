@@ -163,6 +163,9 @@ pub enum NotRetryable {
     /// The rule that picked the item is archived. Its work folder may be in the
     /// archive folder by now, so it is to be restored first.
     RuleArchived,
+    /// The rule that picked the item is paused (`영상 받기` is off): it collects
+    /// nothing until turned on.
+    RulePaused,
     /// The rule asked to receive the item does not exist (any more).
     RuleMissing,
     /// The rule asked to receive the item belongs to another channel.
@@ -190,6 +193,7 @@ impl NotRetryable {
             }
             NotRetryable::RuleDeleted => "이 항목을 고른 규칙이 지워져서 다시 받을 수 없어요.",
             NotRetryable::RuleArchived => "규칙이 보관돼 있어요. 복원한 뒤 다시 받아요.",
+            NotRetryable::RulePaused => "규칙이 멈춰 있어요. 영상 받기를 켠 뒤 다시 받아요.",
             NotRetryable::RuleMissing => "받으려는 규칙을 찾지 못했어요. 삭제됐을 수 있어요.",
             NotRetryable::WrongChannel => "이 규칙은 다른 채널의 규칙이라 이 항목을 받을 수 없어요.",
             NotRetryable::NotMatching => {
@@ -216,6 +220,15 @@ pub struct RetryPlan<'a> {
     pub rule: &'a Rule,
 }
 
+/// A rule that does not collect receives nothing, whatever the item.
+fn inactive(rule: &Rule) -> Result<(), NotRetryable> {
+    match rule.state {
+        RuleState::Active => Ok(()),
+        RuleState::Paused => Err(NotRetryable::RulePaused),
+        RuleState::Archived => Err(NotRetryable::RuleArchived),
+    }
+}
+
 /// Whether `item` can be retried, given its channel and the rule recorded on
 /// it (`None` when they are gone). This is the eligibility the web checks when
 /// it accepts a request, the worker checks again when it runs one, and the
@@ -237,9 +250,7 @@ pub fn retry_plan<'a>(
         return Err(NotRetryable::NoRule);
     }
     let rule = rule.ok_or(NotRetryable::RuleDeleted)?;
-    if rule.state != RuleState::Active {
-        return Err(NotRetryable::RuleArchived);
-    }
+    inactive(rule)?;
     Ok(RetryPlan { channel, rule })
 }
 
@@ -261,9 +272,7 @@ pub fn adoption_plan<'a>(
     if item.result.is_settled() {
         return Err(NotRetryable::Held);
     }
-    if rule.state != RuleState::Active {
-        return Err(NotRetryable::RuleArchived);
-    }
+    inactive(rule)?;
     match item.result {
         HistoryResult::AddFailed if item.rule_id.as_deref() == Some(rule.id.as_str()) => {}
         HistoryResult::AddFailed => return Err(NotRetryable::OtherRule),
@@ -792,10 +801,11 @@ mod tests {
 
     #[test]
     fn a_rule_receives_an_item_it_would_pick_in_its_own_channel_only_while_active() {
-        let (channel, active, archived) = (
+        let (channel, active, archived, paused) = (
             channel(),
             rule(RuleState::Active),
             rule(RuleState::Archived),
+            rule(RuleState::Paused),
         );
         let missed = item(HistoryResult::NoMatch, None);
         assert_eq!(
@@ -819,6 +829,10 @@ mod tests {
         assert_eq!(
             why(&missed, Some(&channel), Some(&archived)),
             NotRetryable::RuleArchived
+        );
+        assert_eq!(
+            why(&missed, Some(&channel), Some(&paused)),
+            NotRetryable::RulePaused
         );
         let elsewhere = Rule {
             channel_id: "c2".into(),
@@ -965,10 +979,11 @@ mod tests {
 
     #[test]
     fn only_an_item_a_rule_picked_and_failed_to_add_with_an_active_rule_can_be_retried() {
-        let (channel, active, archived) = (
+        let (channel, active, archived, paused) = (
             channel(),
             rule(RuleState::Active),
             rule(RuleState::Archived),
+            rule(RuleState::Paused),
         );
         let failed = item(HistoryResult::AddFailed, Some("r1"));
         let plan = retry_plan(&failed, Some(&channel), Some(&active)).unwrap();
@@ -983,6 +998,10 @@ mod tests {
         assert_eq!(
             why(&failed, Some(&channel), Some(&archived)),
             NotRetryable::RuleArchived
+        );
+        assert_eq!(
+            why(&failed, Some(&channel), Some(&paused)),
+            NotRetryable::RulePaused
         );
         assert_eq!(
             why(&failed, None, Some(&active)),

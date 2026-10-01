@@ -104,6 +104,10 @@ The 구독 tab's `편성표에서 추가` reads the airing schedule (weekdays, `
 - For each subscribed anime the app stores the schedule values (title, original title, weekday, time, start and end dates, status). `trss-worker` asks again once a day, under its own lock, `trss.db.anissia.lock`; an anime that cannot be read is retried after an hour and one that Anissia no longer lists keeps its stored values.
 - `TRSS_ANISSIA_URL` overrides Anissia's address, for local testing only.
 
+### Season link
+
+`trss-worker` connects a subscription to the library season its videos appeared in. After each library scan it takes the history items a subscription's rule received, finds those torrents' files in Transmission, and looks for the work and `Season NN` folder holding that video. Folder names are never compared, so a person's own files or another rule's videos connect nothing, and a rule whose videos appear in more than one season stays unconnected. A connected season stays. If another Anissia anime already holds that season the rule is not connected, and its detail says which anime holds it. The link needs the torrent to still be in Transmission when the video first shows up in the library.
+
 ### Watch folders and inotify
 
 `trss-worker` watches the watch folders (including the collect and archive folders) with inotify. A new episode shows up in the library a few seconds after its file appears, without waiting for the 5-minute cycle, and only the work that changed is read again. Changes made by other containers on the same host (Transmission) are seen the same way. The cycle still reads a folder's directories by their modification times when the worker starts, when the kernel reports that it dropped events, for directories that could not be watched, and once an hour as a safety net (for example for a share that other machines change over SMB or NFS, which the kernel does not report).

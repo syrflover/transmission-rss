@@ -3,10 +3,14 @@ import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from "rea
 import { Link } from "react-router-dom";
 
 import { ApiError } from "@/lib/api";
+import { forget } from "@/lib/cached";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
+import { KEYS, subscriptionChanged } from "../cache";
+import { changeCreator } from "../subs/api";
+import { CreatorPicker } from "../subs/CreatorPicker";
 import {
   btnDanger,
   btnDangerSolid,
@@ -27,9 +31,11 @@ import {
 } from "./api";
 import { ArchiveMoveNotice } from "./ArchiveMoveNotice";
 import { BLANK_DRAFT, draftOf, fieldsOf, parseEpisode, sameDraft, type Draft } from "./draft";
+import { LinkToSchedule } from "./LinkToSchedule";
 import { ChannelTag, StateBadge } from "./RuleList";
 import { ConflictNotice, OrderRow, RuleSummary } from "./parts";
 import { RulePreview } from "./RulePreview";
+import { SwitchRows } from "./SwitchRows";
 import { useArchiveMove } from "./useArchiveMove";
 import { usePreview } from "./usePreview";
 
@@ -110,6 +116,8 @@ export function RuleDetail({
   const [conflict, setConflict] = useState<Rule | null>(null);
   const [orderConflict, setOrderConflict] = useState<Rule[] | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [creatorOpen, setCreatorOpen] = useState(false);
+  const [linkOpen, setLinkOpen] = useState(false);
   const confirmRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (confirmingDelete) confirmRef.current?.focus();
@@ -230,6 +238,14 @@ export function RuleDetail({
       : null;
   const moving = movingDirection !== null;
 
+  /** A switch, the creator or `편성표와 연결` changed the rule: take it, the list and the other screens. */
+  const taken = (fresh: Rule) => {
+    setKnown(fresh);
+    setConflict(null);
+    onChanged(fresh);
+    subscriptionChanged();
+  };
+
   const remove = async () => {
     if (!known || busy) return;
     setBusy(true);
@@ -252,7 +268,10 @@ export function RuleDetail({
     setError(null);
   };
 
-  const heading = draft.match !== "" ? draft.match : isNew ? "새 규칙" : "제목 대기";
+  const matchTitle = draft.match !== "" ? draft.match : isNew ? "새 규칙" : "제목 대기";
+  // A subscription is named by its anime.
+  const anime = known?.subscription?.anime ?? null;
+  const heading = anime?.subject ?? matchTitle;
   const collectFolder = collect_folder;
   const joined = `${collectFolder?.replace(/\/+$/, "") ?? ""}/${draft.directory.trim().replace(/^\/+/, "")}`.replace(/\/+$/, "");
 
@@ -281,9 +300,90 @@ export function RuleDetail({
           <h2 className="min-w-0 text-xl leading-snug font-bold break-all" data-testid="rule-heading">
             {heading}
           </h2>
+          {anime?.original_subject && (
+            <p lang="ja" className="min-w-0 text-[13px] leading-snug break-words text-text-secondary">
+              {anime.original_subject}
+            </p>
+          )}
         </div>
-        <RuleSummary title={heading} lastReceivedAt={known?.last_received_at ?? null} />
+        <RuleSummary
+          rule={known}
+          creatorOpen={creatorOpen}
+          linkOpen={linkOpen}
+          onChangeCreator={() => {
+            setLinkOpen(false);
+            setCreatorOpen((open) => !open);
+          }}
+          onLink={() => {
+            setCreatorOpen(false);
+            setLinkOpen((open) => !open);
+          }}
+        />
       </div>
+
+      {known && creatorOpen && known.subscription && (
+        <CreatorPicker
+          key={`${known.version}:${known.subscription.creator ?? ""}`}
+          animeNo={known.subscription.anissia_anime_no}
+          current={known.subscription.creator}
+          onCancel={() => setCreatorOpen(false)}
+          onApply={async (creator) => {
+            try {
+              taken(await changeCreator(known, creator));
+              setCreatorOpen(false);
+            } catch (e) {
+              if (e instanceof ApiError && e.code === "conflict" && e.current) {
+                taken(e.current as Rule);
+                throw new Error("다른 곳에서 먼저 바꿨어요. 지금 상태를 보여드려요. 다시 골라 주세요.");
+              }
+              throw e;
+            }
+          }}
+        />
+      )}
+      {known && linkOpen && known.subscription === null && (
+        <LinkToSchedule
+          rule={known}
+          onCancel={() => setLinkOpen(false)}
+          onStale={taken}
+          onLinked={(linked) => {
+            taken(linked);
+            forget(KEYS.rules);
+            setLinkOpen(false);
+          }}
+        />
+      )}
+
+      {known && (
+        <SwitchRows
+          rule={known}
+          disabled={busy || moving}
+          onChanged={(fresh) => {
+            taken(fresh);
+          }}
+        />
+      )}
+
+      {known?.state === "paused" && (
+        <p
+          role="status"
+          data-testid="paused-banner"
+          className="rounded-xl border border-hairline bg-surface-2 px-3.5 py-3 text-[13px] leading-normal text-text-secondary"
+        >
+          영상 받기를 꺼서 멈춰 있어요. 새 항목을 받지 않고 작품 폴더는 그대로 두어요. 다시 켜면 다음 RSS 확인부터 맞는 항목을 받아요.
+        </p>
+      )}
+      {known?.season_blocked && (
+        <p
+          role="status"
+          data-testid="season-blocked"
+          className="rounded-xl border border-hairline bg-surface-2 px-3.5 py-3 text-[13px] leading-normal text-text-secondary"
+        >
+          이 규칙이 받은 영상은 ‘{known.season_blocked.work_name ?? "작품"}’ 시즌 {known.season_blocked.number}에 있어요. 그 시즌은 이미{" "}
+          {known.season_blocked.holder_subject ? `‘${known.season_blocked.holder_subject}’` : "다른 Anissia 작품"}에 이어져 있어서 이 규칙을
+          잇지 않았어요. 그 구독이 사라지면 다음 확인에서 다시 이어 봐요.
+        </p>
+      )}
 
       {known?.state === "archived" && (
         <p className="rounded-xl border border-hairline bg-surface-2 px-3.5 py-3 text-[13px] leading-normal text-text-secondary">
@@ -533,7 +633,7 @@ export function RuleDetail({
                         ? "복원"
                         : "보관"}
                 </Button>
-                {known.state === "active" && !moving && (
+                {known.state !== "archived" && !moving && (
                   <span className="min-w-0 flex-1 basis-48 text-xs text-text-muted">
                     보관하면 새 항목을 받지 않고, 보관 폴더를 정해 두었으면 작품 폴더를 그리로 옮겨요.
                   </span>

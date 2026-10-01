@@ -1,5 +1,5 @@
 import { forget, forgetPrefix, patch } from "@/lib/cached";
-import { forgetLibrary } from "@/screens/library/api";
+import { forgetLibrary, WORK_PREFIX } from "@/screens/library/api";
 
 import type { Channel } from "./channels/api";
 import type { RuleList } from "./rules/api";
@@ -89,11 +89,21 @@ export function withoutRule(list: RuleList, ruleId: string): RuleList {
 }
 
 /**
+ * A subscription changed (its creator or its season, `영상 받기`·`자막 받기`):
+ * the subscription list and the work pages, which show the creator in their
+ * head, read the server again. The caller patches the rule list itself.
+ */
+export function subscriptionChanged(): void {
+  forget(KEYS.subscriptions);
+  forgetPrefix(WORK_PREFIX);
+}
+
+/**
  * A rule was made by subscribing: the lists that show rules, the subscriptions
  * and the schedule (which says who follows each anime) read the server again.
  */
 export function subscriptionAdded(channelId: string): void {
-  forget(KEYS.subscriptions);
+  subscriptionChanged();
   forget(KEYS.rules);
   forgetPrefix(SCHEDULE_PREFIX);
   ruleCountChanged(channelId, 1);

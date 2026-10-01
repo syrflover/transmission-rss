@@ -70,7 +70,7 @@ pub struct CycleContext {
 
 impl CycleContext {
     /// A client for Transmission, with timeouts.
-    fn transmission(&self) -> transmission_rpc::TransClient {
+    pub(super) fn transmission(&self) -> transmission_rpc::TransClient {
         transmission::client(self.transmission_url.clone(), &self.transmission_http)
     }
 }

@@ -8,6 +8,8 @@
 //! | `GET /subscriptions`                         | `200 { quarter, subscriptions: [SubscriptionItem] }` |
 //! | `GET /subscriptions/titles?channel_id=&q=`   | `200 Titles`                                   |
 //! | `POST /subscriptions`                        | `201 { rule: RuleView }`                       |
+//! | `PUT /rules/{id}/creator`                    | `200 RuleView` (`제작자 변경`)                 |
+//! | `POST /rules/{id}/subscription`              | `200 RuleView` (`편성표와 연결`)               |
 //!
 //! Anissia is a third party: a call that needs it and cannot get an answer
 //! fails with `502 { error: "unavailable", message }` and a sentence that says
@@ -23,13 +25,20 @@
 //! data and Anissia, not trusted from the request: the release title must be
 //! one the channel's history holds, the anime one the schedule lists, and a
 //! subtitle creator one of the anime's captions names.
+//!
+//! `PUT /rules/{id}/creator` (`{ version, creator }`, `creator` a name or
+//! `null` for `제작자 미정`) changes whom a subscription follows, for a
+//! subscription that receives subtitles; `POST /rules/{id}/subscription`
+//! (`{ version, anissia_anime_no, week, subtitles, creator }`) makes an existing
+//! rule a subscription and changes nothing else about it. A version that is not
+//! the stored one answers `409` with the rule's current view.
 
 use std::{collections::HashMap, time::Duration};
 
 use axum::{
     extract::{rejection::JsonRejection, rejection::QueryRejection, Path, Query, State},
     http::StatusCode,
-    routing::get,
+    routing::{get, post, put},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -57,6 +66,8 @@ pub fn routes() -> Router<AppState> {
         .route("/anissia/anime/{no}/creators", get(creators))
         .route("/subscriptions", get(list).post(subscribe))
         .route("/subscriptions/titles", get(titles))
+        .route("/rules/{id}/creator", put(change_creator))
+        .route("/rules/{id}/subscription", post(link_rule))
 }
 
 /// The longest a request of the screen waits for its turn to ask Anissia.
@@ -115,26 +126,38 @@ pub struct SubscriptionBrief {
     pub subscribed_at: Millis,
     /// The stored snapshot; `null` only if the row is gone.
     pub anime: Option<AnimeView>,
+    /// The quarter the anime started in (or, without a start date, the
+    /// subscription began in).
+    pub quarter: QuarterView,
 }
 
 pub fn subscription_brief(
     subscription: &Subscription,
     animes: &HashMap<i64, Anime>,
 ) -> SubscriptionBrief {
+    let anime = animes.get(&subscription.anissia_anime_no);
     SubscriptionBrief {
         anissia_anime_no: subscription.anissia_anime_no,
         subtitles: subscription.subtitles.as_str(),
         creator: subscription.creator.clone(),
         season_id: subscription.season_id.clone(),
         subscribed_at: subscription.subscribed_at,
-        anime: animes
-            .get(&subscription.anissia_anime_no)
-            .map(AnimeView::from),
+        anime: anime.map(AnimeView::from),
+        quarter: quarter_of(anime, subscription.subscribed_at).into(),
     }
 }
 
-#[derive(Debug, Serialize)]
-struct QuarterView {
+/// The quarter an anime belongs to: the one it started in, or, without a start
+/// date, the one the subscription began in.
+fn quarter_of(anime: Option<&Anime>, subscribed_at: Millis) -> Quarter {
+    anime
+        .and_then(|a| a.start_date.as_deref())
+        .and_then(Quarter::of_date)
+        .unwrap_or_else(|| Quarter::at(subscribed_at))
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct QuarterView {
     year: i32,
     /// 1 to 4.
     number: u8,
@@ -335,6 +358,8 @@ async fn creators(
 #[derive(Debug, Serialize)]
 struct SubscriptionItem {
     rule_id: String,
+    /// `active` or `paused` (`영상 받기` off).
+    state: &'static str,
     rule_version: i64,
     channel_id: String,
     channel_name: Option<String>,
@@ -354,8 +379,9 @@ struct SubscriptionItem {
 struct SubscriptionList {
     /// The current quarter in Asia/Seoul.
     quarter: QuarterView,
-    /// Active subscriptions, this quarter's and any begun in earlier quarters
-    /// that are still collected first, then the ones of a coming quarter.
+    /// Subscriptions that are not archived (paused ones too, with their
+    /// `state`), this quarter's and any begun in earlier quarters first, then
+    /// the ones of a coming quarter.
     subscriptions: Vec<SubscriptionItem>,
 }
 
@@ -389,16 +415,14 @@ async fn list(State(state): State<AppState>) -> Result<Json<SubscriptionList>, A
             let Some(subscription) = &rule.subscription else {
                 continue;
             };
-            if rule.state != RuleState::Active {
+            if rule.state == RuleState::Archived {
                 continue;
             }
             let anime = animes.get(&subscription.anissia_anime_no);
-            let quarter = anime
-                .and_then(|a| a.start_date.as_deref())
-                .and_then(Quarter::of_date)
-                .unwrap_or_else(|| Quarter::at(subscription.subscribed_at));
+            let quarter = quarter_of(anime, subscription.subscribed_at);
             items.push(SubscriptionItem {
                 rule_id: rule.id.clone(),
+                state: rule.state.as_str(),
                 rule_version: rule.version,
                 channel_id: cwr.channel.id.clone(),
                 channel_name: cwr.channel.name.clone(),
@@ -505,6 +529,62 @@ async fn titles(
     }))
 }
 
+/// The anime of the schedule's week `week` numbered `anime_no`, as the
+/// snapshot to keep: the request names an anime the schedule really lists.
+async fn scheduled_anime(state: &AppState, week: u8, anime_no: i64) -> Result<Anime, ApiError> {
+    let listed = state
+        .anissia
+        .schedule(week, Some(USER_MAX_WAIT))
+        .await
+        .map_err(unavailable)?;
+    let entry = listed
+        .value
+        .iter()
+        .find(|e| e.anime_no == anime_no)
+        .ok_or_else(|| {
+            ApiError::invalid(
+                "편성표에서 이 작품을 찾지 못했어요. 편성표를 다시 불러와 골라 주세요.",
+            )
+        })?;
+    Ok(entry.snapshot(listed.fetched_at))
+}
+
+/// The creator a subscription stores for the subtitle mode asked: to follow
+/// one the anime's captions must name it, and only that mode takes one.
+async fn chosen_creator(
+    state: &AppState,
+    subtitles: SubtitleMode,
+    creator: Option<&str>,
+    anime_no: i64,
+) -> Result<Option<String>, ApiError> {
+    match (subtitles, creator.map(str::trim)) {
+        (SubtitleMode::Follow, Some(name)) if !name.is_empty() => {
+            Ok(Some(named_creator(state, anime_no, name).await?))
+        }
+        (SubtitleMode::Follow, _) => Err(ApiError::invalid("따라 받을 자막 제작자를 골라 주세요.")),
+        (_, None) => Ok(None),
+        (_, Some(_)) => Err(ApiError::invalid(
+            "자막 제작자는 제작자를 따라 받을 때만 정해요.",
+        )),
+    }
+}
+
+/// `name` if the anime's captions name that creator.
+async fn named_creator(state: &AppState, anime_no: i64, name: &str) -> Result<String, ApiError> {
+    let captions = state
+        .anissia
+        .captions(anime_no, Some(USER_MAX_WAIT))
+        .await
+        .map_err(unavailable)?;
+    if creators_of(&captions).iter().any(|c| c.name == name) {
+        Ok(name.to_owned())
+    } else {
+        Err(ApiError::invalid(
+            "이 작품의 자막 목록에 없는 제작자예요. 목록에서 골라 주세요.",
+        ))
+    }
+}
+
 const BAD_BODY: &str = "요청 내용을 읽지 못했어요. 화면을 새로고침한 뒤 다시 시도해 주세요.";
 
 #[derive(Deserialize)]
@@ -567,48 +647,9 @@ async fn subscribe(
             )
         })?;
 
-    // The anime is one the schedule lists, and its snapshot is that entry.
-    let listed = state
-        .anissia
-        .schedule(b.week, Some(USER_MAX_WAIT))
-        .await
-        .map_err(unavailable)?;
-    let entry = listed
-        .value
-        .iter()
-        .find(|e| e.anime_no == b.anissia_anime_no)
-        .ok_or_else(|| {
-            ApiError::invalid(
-                "편성표에서 이 작품을 찾지 못했어요. 편성표를 다시 불러와 골라 주세요.",
-            )
-        })?;
-    let anime = entry.snapshot(listed.fetched_at);
-
-    // A creator to follow is one the anime's captions name.
-    let creator = match (subtitles, b.creator.as_deref().map(str::trim)) {
-        (SubtitleMode::Follow, Some(name)) if !name.is_empty() => {
-            let captions = state
-                .anissia
-                .captions(b.anissia_anime_no, Some(USER_MAX_WAIT))
-                .await
-                .map_err(unavailable)?;
-            if !creators_of(&captions).iter().any(|c| c.name == name) {
-                return Err(ApiError::invalid(
-                    "이 작품의 자막 목록에 없는 제작자예요. 목록에서 골라 주세요.",
-                ));
-            }
-            Some(name.to_owned())
-        }
-        (SubtitleMode::Follow, _) => {
-            return Err(ApiError::invalid("따라 받을 자막 제작자를 골라 주세요."));
-        }
-        (_, None) => None,
-        (_, Some(_)) => {
-            return Err(ApiError::invalid(
-                "자막 제작자는 제작자를 따라 받을 때만 정해요.",
-            ));
-        }
-    };
+    let anime = scheduled_anime(&state, b.week, b.anissia_anime_no).await?;
+    let creator =
+        chosen_creator(&state, subtitles, b.creator.as_deref(), b.anissia_anime_no).await?;
 
     let input = RuleInput {
         r#match: Some(group.work),
@@ -639,6 +680,127 @@ async fn subscribe(
             rule: rules_api::rule_view(&state, &created.id).await?,
         }),
     ))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CreatorBody {
+    /// The version the client saw.
+    version: i64,
+    /// The creator to follow, one of the anime's; `null` is `제작자 미정`.
+    creator: Option<String>,
+}
+
+/// The stored rule at the version the client saw, or the `404`/`409` to answer.
+async fn rule_at(
+    state: &AppState,
+    id: &str,
+    version: i64,
+) -> Result<crate::store::channels::Rule, ApiError> {
+    let rule = state
+        .channels
+        .get_rule(id)
+        .await
+        .map_err(rules_api::store_error)?
+        .ok_or_else(|| ApiError::not_found("규칙을 찾지 못했어요. 이미 삭제됐을 수 있어요."))?;
+    if rule.version != version {
+        return Err(rules_api::rule_conflict(state, id).await);
+    }
+    Ok(rule)
+}
+
+/// The answer of a write on a rule: its view now, or the conflict when the
+/// store found the version changed meanwhile.
+async fn rule_after(
+    state: &AppState,
+    id: &str,
+    written: Result<crate::store::channels::Rule, ChannelError>,
+) -> Result<Json<RuleView>, ApiError> {
+    match written {
+        Ok(_) => Ok(Json(rules_api::rule_view(state, id).await?)),
+        Err(e) if e.is_conflict() => Err(rules_api::rule_conflict(state, id).await),
+        Err(e) => Err(rules_api::store_error(e)),
+    }
+}
+
+async fn change_creator(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    parsed: Result<Json<CreatorBody>, JsonRejection>,
+) -> Result<Json<RuleView>, ApiError> {
+    let Json(b) = parsed.map_err(|_| ApiError::invalid(BAD_BODY))?;
+    let rule = rule_at(&state, &id, b.version).await?;
+    let Some(subscription) = &rule.subscription else {
+        return Err(ApiError::invalid(
+            "편성표와 연결된 규칙만 자막 제작자를 정해요.",
+        ));
+    };
+    if subscription.subtitles == SubtitleMode::None {
+        return Err(ApiError::invalid(
+            "자막을 받지 않는 구독이에요. 자막 받기를 켠 뒤 제작자를 바꿔 주세요.",
+        ));
+    }
+    let creator = match b.creator.as_deref().map(str::trim) {
+        Some("") => return Err(ApiError::invalid("따라 받을 자막 제작자를 골라 주세요.")),
+        Some(name) => Some(named_creator(&state, subscription.anissia_anime_no, name).await?),
+        None => None,
+    };
+    // The rule may have changed while Anissia was asked; the store checks again.
+    let written = state.channels.set_creator(&id, b.version, creator).await;
+    rule_after(&state, &id, written).await
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LinkBody {
+    /// The version the client saw.
+    version: i64,
+    /// Anissia's `animeNo`.
+    anissia_anime_no: i64,
+    /// The schedule week the anime was picked from, to find its entry.
+    week: u8,
+    /// `follow`, `undecided` or `none`.
+    subtitles: String,
+    /// The creator to follow; only with `follow`, and one of the anime's.
+    #[serde(default)]
+    creator: Option<String>,
+}
+
+async fn link_rule(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    parsed: Result<Json<LinkBody>, JsonRejection>,
+) -> Result<Json<RuleView>, ApiError> {
+    let Json(b) = parsed.map_err(|_| ApiError::invalid(BAD_BODY))?;
+    let subtitles = SubtitleMode::parse(&b.subtitles).ok_or_else(|| ApiError::invalid(BAD_BODY))?;
+    let rule = rule_at(&state, &id, b.version).await?;
+    if rule.subscription.is_some() {
+        return Err(ApiError::invalid(
+            "이미 편성표와 연결된 규칙이에요. 화면을 새로고침해 주세요.",
+        ));
+    }
+    let anime = scheduled_anime(&state, b.week, b.anissia_anime_no).await?;
+    let creator =
+        chosen_creator(&state, subtitles, b.creator.as_deref(), b.anissia_anime_no).await?;
+    let written = state
+        .channels
+        .subscribe_rule(
+            &id,
+            b.version,
+            NewSubscription {
+                anime,
+                subtitles,
+                creator,
+                subscribed_at: state.anissia.now(),
+            },
+        )
+        .await;
+    match written {
+        Err(ChannelError::AlreadySubscribed { .. }) => Err(ApiError::invalid(
+            "이 채널에서 이미 구독 중인 작품이에요. 그 구독 규칙을 열어 주세요.",
+        )),
+        written => rule_after(&state, &id, written).await,
+    }
 }
 
 #[cfg(test)]

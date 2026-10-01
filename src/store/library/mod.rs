@@ -70,7 +70,7 @@ mod tests;
 
 use std::collections::BTreeMap;
 
-pub use detail::{EpisodeDetail, SeasonDetail, WorkDetail};
+pub use detail::{EpisodeDetail, SeasonDetail, SeasonHoldings, WorkDetail};
 use rusqlite::Transaction;
 
 pub use overview::{EpisodeRange, SubtitleCoverage, WorkOverview};
@@ -466,5 +466,27 @@ impl LibraryStore {
     pub async fn work_detail(&self, id: &str) -> Result<Option<WorkDetail>, LibraryError> {
         let id = id.to_owned();
         self.db.run(move |c| Ok(detail::detail(c, &id)?)).await
+    }
+
+    /// How far season `season` of the work has come (see [`SeasonHoldings`]),
+    /// or `None` when there is no such work.
+    pub async fn season_holdings(
+        &self,
+        work_id: &str,
+        season: u32,
+    ) -> Result<Option<SeasonHoldings>, LibraryError> {
+        let id = work_id.to_owned();
+        self.db
+            .run(move |c| Ok(detail::season_holdings(c, &id, season)?))
+            .await
+    }
+
+    /// The work and season number of the video the library recorded at the
+    /// absolute `path`, if it has one in a registered watch folder.
+    pub async fn find_video(&self, path: &str) -> Result<Option<(String, u32)>, LibraryError> {
+        let path = path.to_owned();
+        self.db
+            .run(move |c| Ok(detail::find_video(c, &path)?))
+            .await
     }
 }

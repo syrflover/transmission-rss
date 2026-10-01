@@ -68,6 +68,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("library/unregistered.sql")),
     // 15: Anissia: the schedule snapshot of subscribed anime, rule subscriptions, the request pace
     Migration::Sql(include_str!("anissia/schema.sql")),
+    // 16: a rule can be paused (`영상 받기` off); a subscription notes a season that is taken
+    Migration::Sql(include_str!("channels/paused.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -478,6 +480,79 @@ mod tests {
             (rule.as_str(), subscriptions, snapshots),
             ("Clevatess|2", 0, 0)
         );
+    }
+
+    #[tokio::test]
+    async fn a_database_from_before_paused_rules_keeps_rules_and_subscriptions_and_accepts_paused()
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        {
+            // A database as the build with fifteen migrations left it: an
+            // active rule, an archived one and a subscription of the first.
+            let conn = database_at(&path, 15);
+            conn.execute_batch(
+                "INSERT INTO channels (id, position, url, excludes, secret_query, version)
+                     VALUES ('c1', 0, 'http://x/feed', '[]', '[]', 1);
+                 INSERT INTO rules (id, channel_id, position, match_text, regex,
+                         case_insensitive, directory, episode, episode_auto, state, version)
+                     VALUES ('r1', 'c1', 0, 'Clevatess', 0, 1, 'Clevatess/Season 02', 1, 0,
+                         'active', 2),
+                            ('r2', 'c1', 1, 'Old', 0, 0, 'Old', 0, 0, 'archived', 5);
+                 INSERT INTO anissia_anime (anime_no, subject, week, status, fetched_at)
+                     VALUES (7, '클레바테스', 1, 'ON', 10);
+                 INSERT INTO rule_subscriptions (rule_id, anissia_anime_no, subtitles, creator,
+                         season_id, subscribed_at)
+                     VALUES ('r1', 7, 'follow', 'SubKor', 'w1:2', 99);",
+            )
+            .unwrap();
+        }
+
+        // Foreign keys are on for a connection the app opens.
+        let db = Db::open(&path).await.unwrap();
+
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+        let (rules, subscription, blocked, broken): (String, String, Option<String>, i64) = db
+            .run::<_, DbError, _>(|c| {
+                let rules = c.query_row(
+                    "SELECT group_concat(id || ':' || state || ':' || version, ',')
+                       FROM (SELECT * FROM rules ORDER BY position)",
+                    [],
+                    |r| r.get(0),
+                )?;
+                let (subscription, blocked) = c.query_row(
+                    "SELECT anissia_anime_no || '|' || subtitles || '|' || creator || '|'
+                            || season_id || '|' || subscribed_at, season_blocked
+                       FROM rule_subscriptions WHERE rule_id = 'r1'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?;
+                let broken =
+                    c.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| {
+                        r.get(0)
+                    })?;
+                Ok((rules, subscription, blocked, broken))
+            })
+            .await
+            .unwrap();
+        assert_eq!(rules, "r1:active:2,r2:archived:5");
+        assert_eq!(subscription, "7|follow|SubKor|w1:2|99");
+        assert_eq!(blocked, None);
+        assert_eq!(broken, 0);
+
+        // A rule can now be paused, and the subscription still goes with its rule.
+        let left: i64 = db
+            .run::<_, DbError, _>(|c| {
+                c.execute("UPDATE rules SET state = 'paused' WHERE id = 'r1'", [])?;
+                assert!(c
+                    .execute("UPDATE rules SET state = 'stopped' WHERE id = 'r1'", [])
+                    .is_err());
+                c.execute("DELETE FROM rules WHERE id = 'r1'", [])?;
+                Ok(c.query_row("SELECT count(*) FROM rule_subscriptions", [], |r| r.get(0))?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(left, 0);
     }
 
     #[tokio::test]

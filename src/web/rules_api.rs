@@ -9,6 +9,7 @@
 //! | `PUT /rules/{id}`                      | `200 RuleView`                            |
 //! | `DELETE /rules/{id}?version=N`         | `200 { removed: true }`                   |
 //! | `PUT /rules/order`                     | `200 { rules: [RuleView] }` (the channel's) |
+//! | `PUT /rules/{id}/switch`               | `200 RuleView`                            |
 //! | `POST /rules/preview`                  | `200 Preview`                             |
 //!
 //! Failures use the shape in [`super::error`]. A version that is not the
@@ -16,11 +17,26 @@
 //! (for `PUT /rules/order`: the channel's current rules). A regular expression
 //! that does not compile is refused with `400` and a sentence; nothing is saved.
 //!
-//! A rule's `state` is not edited here: `PUT` refuses a `state` other than the
-//! stored one. Archiving and restoring go through the `rule_archive` command
-//! (`/api/commands`), because the worker has to turn the rule off before its
-//! folder moves to the archive folder and on only after it moved back. A
-//! rule's view carries the last such command as `archive_move`.
+//! A rule's `state` is not edited by `PUT`, which refuses a `state` other than
+//! the stored one. Archiving and restoring go through the `rule_archive`
+//! command (`/api/commands`), because the worker has to turn the rule off
+//! before its folder moves to the archive folder and on only after it moved
+//! back. A rule's view carries the last such command as `archive_move`.
+//!
+//! `PUT /rules/{id}/switch` (`{ version, video?: bool, subtitles?: bool }`) is
+//! the rule detail's pair of switches, applied at once: `video` is `영상 받기`
+//! (`active` or, off, `paused`: the rule collects nothing and its folder stays
+//! where it is) and `subtitles` is `자막 받기` of a subscription (off is the
+//! subtitle mode `none`, which keeps the creator). Exactly one is sent. A
+//! switch is refused (`400`) for an archived rule, for `subtitles` while
+//! `영상 받기` is off, and for `subtitles` of a rule that is no subscription.
+//! A version that is not the stored one answers `409` with the current view.
+//!
+//! A subscription's view also tells where it stands in the library:
+//! `season` (the season its received videos appeared in, with the work's name,
+//! cover, how many episodes have a video and the AniList episode count) and
+//! `season_blocked` (the season they appeared in is held by another Anissia
+//! anime, so the rule was not connected).
 //!
 //! A save folder is also refused (`400`, with a sentence) when it is new or
 //! changed and:
@@ -72,6 +88,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use super::{
+    artwork_api::image_url,
     commands_api::CommandView,
     subscriptions_api::{subscription_brief, SubscriptionBrief},
     ApiError, AppState,
@@ -79,7 +96,7 @@ use super::{
 use crate::rss::{ChannelEvaluator, ChannelSpec, RuleSpec};
 use crate::store::anissia::Anime;
 use crate::store::channels::{
-    Channel, ChannelError, ChannelWithRules, OrderItem, Rule, RuleInput, RuleState, MASK,
+    Channel, ChannelError, ChannelWithRules, OrderItem, Rule, RuleInput, RuleState, SeasonRef, MASK,
 };
 use crate::store::commands::Command;
 use crate::store::history::{
@@ -96,6 +113,7 @@ pub fn routes() -> Router<AppState> {
         .route("/rules", get(list_rules).post(create_rule))
         .route("/rules/preview", post(preview))
         .route("/rules/order", put(reorder_rules))
+        .route("/rules/{id}/switch", put(switch_rule))
         .route(
             "/rules/{id}",
             get(read_rule).put(update_rule).delete(delete_rule),
@@ -166,7 +184,7 @@ pub struct RuleView {
     pub directory: String,
     pub episode: i64,
     pub episode_auto: bool,
-    /// `active` or `archived`.
+    /// `active`, `paused` or `archived`.
     pub state: &'static str,
     /// An earlier rule takes an item that this rule also matches.
     pub overlap: bool,
@@ -179,6 +197,39 @@ pub struct RuleView {
     pub archive_move: Option<ArchiveMoveView>,
     /// Set when the rule follows an anime of Anissia's schedule.
     pub subscription: Option<SubscriptionBrief>,
+    /// The season a subscription is connected to; `null` before it is, or
+    /// when the work left the library.
+    pub season: Option<RuleSeasonView>,
+    /// Why a subscription is not connected: its videos are in a season that
+    /// another anime holds.
+    pub season_blocked: Option<SeasonBlockedView>,
+}
+
+/// The season a subscription is connected to and how far it has come.
+#[derive(Debug, Clone, Serialize)]
+pub struct RuleSeasonView {
+    pub season_id: String,
+    pub work_id: String,
+    /// The work's folder name.
+    pub work_name: String,
+    pub number: u32,
+    /// Where the work's cover is served, if it has one.
+    pub cover_url: Option<String>,
+    /// How many episodes of the season have a video.
+    pub videos: u32,
+    /// The season's episode count by AniList, `null` when unknown.
+    pub episodes: Option<u32>,
+}
+
+/// A season that another anime holds, which kept a rule from connecting.
+#[derive(Debug, Clone, Serialize)]
+pub struct SeasonBlockedView {
+    pub work_id: String,
+    pub work_name: Option<String>,
+    pub number: u32,
+    /// Anissia's `animeNo` of the holder, and its title when the app has one.
+    pub holder_anime_no: Option<i64>,
+    pub holder_subject: Option<String>,
 }
 
 /// An archive or restore of a rule and where it is.
@@ -369,6 +420,88 @@ struct Analysis {
     errors: HashMap<String, RegexProblem>,
     /// The stored schedule snapshots of the subscribed anime.
     animes: HashMap<i64, Anime>,
+    /// The connected season of each subscription rule.
+    seasons: HashMap<String, RuleSeasonView>,
+    /// The season that kept a subscription rule from connecting.
+    blocked: HashMap<String, SeasonBlockedView>,
+}
+
+/// The season of `season_id` as a subscription's progress shows it, if the
+/// work is still in the library.
+async fn season_of(state: &AppState, season_id: &str) -> Result<Option<RuleSeasonView>, ApiError> {
+    let Some(parsed) = SeasonRef::parse(season_id) else {
+        return Ok(None);
+    };
+    let internal = |e: &dyn std::fmt::Display| ApiError::Internal(e.to_string());
+    let Some(holdings) = state
+        .library
+        .season_holdings(&parsed.work_id, parsed.number)
+        .await
+        .map_err(|e| internal(&e))?
+    else {
+        return Ok(None);
+    };
+    let episodes = state
+        .seasons
+        .store
+        .link(&parsed.work_id, parsed.number)
+        .await
+        .map_err(|e| internal(&e))?;
+    let episodes = crate::seasons::combine::combine(&episodes.entries).and_then(|c| c.episodes);
+    let cover_url = state
+        .artwork
+        .store
+        .selection(&parsed.work_id)
+        .await
+        .map_err(|e| internal(&e))?
+        .image
+        .map(|image| image_url(&parsed.work_id, &image.id));
+    Ok(Some(RuleSeasonView {
+        season_id: season_id.to_owned(),
+        work_id: parsed.work_id,
+        work_name: holdings.dir_name,
+        number: parsed.number,
+        cover_url,
+        videos: holdings.videos,
+        episodes,
+    }))
+}
+
+/// The reason a subscription is not connected to `season_id`.
+async fn blocked_by(state: &AppState, season_id: &str) -> Result<SeasonBlockedView, ApiError> {
+    let internal = |e: &dyn std::fmt::Display| ApiError::Internal(e.to_string());
+    let (work_id, number) = match SeasonRef::parse(season_id) {
+        Some(parsed) => (parsed.work_id, parsed.number),
+        None => (season_id.to_owned(), 0),
+    };
+    let work_name = state
+        .library
+        .season_holdings(&work_id, number)
+        .await
+        .map_err(|e| internal(&e))?
+        .map(|h| h.dir_name);
+    let holder_anime_no = state
+        .channels
+        .season_holder(season_id)
+        .await
+        .map_err(store_error)?;
+    let holder_subject = match holder_anime_no {
+        Some(no) => state
+            .anissia
+            .store
+            .anime(no)
+            .await
+            .map_err(|e| internal(&e))?
+            .map(|a| a.subject),
+        None => None,
+    };
+    Ok(SeasonBlockedView {
+        work_id,
+        work_name,
+        number,
+        holder_anime_no,
+        holder_subject,
+    })
 }
 
 async fn analyze(state: &AppState, cwr: &ChannelWithRules) -> Result<Analysis, ApiError> {
@@ -391,6 +524,21 @@ async fn analyze(state: &AppState, cwr: &ChannelWithRules) -> Result<Analysis, A
     }
     // Only the judgement is used here, never a save path.
     let plan = ChannelPlan::new(cwr.clone(), FsPath::new(""));
+    for rule in &cwr.rules {
+        let Some(subscription) = &rule.subscription else {
+            continue;
+        };
+        if let Some(season_id) = &subscription.season_id {
+            if let Some(season) = season_of(state, season_id).await? {
+                analysis.seasons.insert(rule.id.clone(), season);
+            }
+        }
+        if let Some(season_id) = &subscription.season_blocked {
+            analysis
+                .blocked
+                .insert(rule.id.clone(), blocked_by(state, season_id).await?);
+        }
+    }
     for problem in plan.rule_errors() {
         analysis
             .errors
@@ -453,6 +601,8 @@ fn views(
                 .subscription
                 .as_ref()
                 .map(|s| subscription_brief(s, &analysis.animes)),
+            season: analysis.seasons.get(&rule.id).cloned(),
+            season_blocked: analysis.blocked.get(&rule.id).cloned(),
         })
         .collect()
 }
@@ -508,7 +658,7 @@ pub(super) async fn rule_view(state: &AppState, id: &str) -> Result<RuleView, Ap
 }
 
 /// 409 with the rule as it is now, or 404 if it is gone.
-async fn rule_conflict(state: &AppState, id: &str) -> ApiError {
+pub(super) async fn rule_conflict(state: &AppState, id: &str) -> ApiError {
     match rule_view(state, id).await {
         Ok(current) => ApiError::conflict_with(current),
         Err(e) => e,
@@ -553,7 +703,8 @@ struct RuleFields {
     #[serde(default)]
     directory: String,
     episode: i64,
-    /// `active` (the default) or `archived`.
+    /// `active` (the default), `paused` or `archived`; a save sends the stored
+    /// one (see the module docs).
     #[serde(default)]
     state: Option<String>,
 }
@@ -629,6 +780,7 @@ impl RuleFields {
     fn into_input(self, stored: Option<&Rule>) -> Result<RuleInput, ApiError> {
         let state = match self.state.as_deref() {
             None | Some("active") => RuleState::Active,
+            Some("paused") => RuleState::Paused,
             Some("archived") => RuleState::Archived,
             Some(_) => return Err(ApiError::invalid(BAD_BODY)),
         };
@@ -759,6 +911,67 @@ async fn delete_rule(
     let Query(q) = parsed.map_err(|_| ApiError::invalid(BAD_BODY))?;
     match state.channels.delete_rule(&id, q.version).await {
         Ok(()) => Ok(Json(Removed { removed: true })),
+        Err(e) if e.is_conflict() => Err(rule_conflict(&state, &id).await),
+        Err(e) => Err(store_error(e)),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SwitchBody {
+    /// The version the client saw.
+    version: i64,
+    /// `영상 받기`.
+    #[serde(default)]
+    video: Option<bool>,
+    /// `자막 받기`.
+    #[serde(default)]
+    subtitles: Option<bool>,
+}
+
+async fn switch_rule(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    parsed: Result<Json<SwitchBody>, JsonRejection>,
+) -> Result<Json<RuleView>, ApiError> {
+    let b = body(parsed)?;
+    let stored = state
+        .channels
+        .get_rule(&id)
+        .await
+        .map_err(store_error)?
+        .ok_or_else(|| ChannelError::NotFound {
+            kind: "rule",
+            id: id.clone(),
+        })?;
+    if stored.version != b.version {
+        return Err(rule_conflict(&state, &id).await);
+    }
+    if stored.state == RuleState::Archived {
+        return Err(ApiError::invalid(
+            "보관된 규칙은 스위치를 바꿀 수 없어요. 복원한 뒤 바꿔 주세요.",
+        ));
+    }
+    let written = match (b.video, b.subtitles) {
+        (Some(on), None) => state.channels.set_video_receiving(&id, b.version, on).await,
+        (None, Some(on)) => {
+            if stored.subscription.is_none() {
+                return Err(ApiError::invalid(
+                    "편성표와 연결된 규칙만 자막을 받아요. 먼저 편성표와 연결해 주세요.",
+                ));
+            }
+            if stored.state != RuleState::Active {
+                return Err(ApiError::invalid("영상 받기를 켜야 자막을 받을 수 있어요."));
+            }
+            state
+                .channels
+                .set_subtitle_receiving(&id, b.version, on)
+                .await
+        }
+        _ => return Err(ApiError::invalid(BAD_BODY)),
+    };
+    match written {
+        Ok(_) => Ok(Json(rule_view(&state, &id).await?)),
         Err(e) if e.is_conflict() => Err(rule_conflict(&state, &id).await),
         Err(e) => Err(store_error(e)),
     }

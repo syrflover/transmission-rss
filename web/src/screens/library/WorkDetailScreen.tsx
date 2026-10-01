@@ -2,12 +2,24 @@ import { useEffect, useRef, useState, type MouseEvent } from "react";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
-import { forgetPrefix, useCached } from "@/lib/cached";
+import { forget, forgetPrefix, useCached } from "@/lib/cached";
 import { useMediaQuery, PHONE_QUERY } from "@/lib/media";
 
 import { EmptyState, ScreenFrame, usePageTitle } from "../ScreenFrame";
 import { btnNeutral } from "../collect/channels/styles";
-import { LIST_PREFIX, loadWork, workKey, type SeasonInfo, type WorkDetail } from "./api";
+import { KEYS } from "../collect/cache";
+import { changeCreator, type SubtitleMode } from "../collect/subs/api";
+import { CreatorPicker } from "../collect/subs/CreatorPicker";
+import { subtitleChoice } from "../collect/subs/format";
+import { ApiError } from "@/lib/api";
+import {
+  LIST_PREFIX,
+  loadWork,
+  workKey,
+  type SeasonInfo,
+  type WorkDetail,
+  type WorkSubscription,
+} from "./api";
 import { CoverDialog } from "./detail/CoverDialog";
 import { EpisodeList } from "./detail/EpisodeList";
 import { defaultSeason, rowId } from "./detail/model";
@@ -80,8 +92,23 @@ function WorkPage({ workId }: { workId: string }) {
     work.reload();
   };
 
+  // The creator changed (here or in the rule): the page, the rule list and the subscriptions read it again.
+  const subscriptionEdited = () => {
+    forget(KEYS.subscriptions);
+    forget(KEYS.rules);
+    work.reload();
+  };
+
   if (work.data) {
-    return <Loaded work={work.data} backLink={backLink} onCoverChanged={coverChanged} onInfoChanged={infoChanged} />;
+    return (
+      <Loaded
+        work={work.data}
+        backLink={backLink}
+        onCoverChanged={coverChanged}
+        onInfoChanged={infoChanged}
+        onSubscriptionChanged={subscriptionEdited}
+      />
+    );
   }
   return (
     <ScreenFrame title="작품">
@@ -111,15 +138,19 @@ function Loaded({
   backLink,
   onCoverChanged,
   onInfoChanged,
+  onSubscriptionChanged,
 }: {
   work: WorkDetail;
   backLink: React.ReactNode;
   onCoverChanged: (coverUrl: string | null) => void;
   onInfoChanged: (info: SeasonInfo) => void;
+  onSubscriptionChanged: () => void;
 }) {
   const cover = coverOf(work.name);
+  // The Anissia title takes the place of the folder's name once a subscription is connected.
+  const title = work.korean_title ?? cover.title;
   const [coverOpen, setCoverOpen] = useState(false);
-  usePageTitle(cover.title);
+  usePageTitle(title);
   const phone = useMediaQuery(PHONE_QUERY);
   const wide = useMediaQuery(WIDE_QUERY);
   const [order, setOrder] = useEpisodeOrder();
@@ -152,6 +183,13 @@ function Loaded({
   }, [wantEpisode, settled, season, locationKey]);
 
   const hasSubtitles = season?.episodes.some((e) => e.subtitle.length > 0) ?? false;
+  // The subscription of the chosen season: one that collects before a paused or archived one.
+  const forSeason = work.subscriptions.filter((s) => s.season === season?.number);
+  const subscription: WorkSubscription | undefined =
+    forSeason.find((s) => s.rule_state === "active") ??
+    forSeason.find((s) => s.rule_state === "paused") ??
+    forSeason[0];
+  const [creatorOpen, setCreatorOpen] = useState(false);
 
   return (
     <section className="mx-auto pb-4 max-[1099px]:max-w-[900px]">
@@ -181,17 +219,59 @@ function Loaded({
           onChanged={onCoverChanged}
         />
         <div className="min-w-0 flex-1">
-          <h1 className="text-[26px] leading-[1.28] font-bold tracking-[-0.005em] max-[720px]:text-xl">{cover.title}</h1>
+          <h1 className="text-[26px] leading-[1.28] font-bold tracking-[-0.005em] max-[720px]:text-xl">{title}</h1>
           {work.native_title && (
             <p lang="ja" className="mt-1 text-[14px] leading-snug font-medium break-words text-text-secondary">
               {work.native_title}
             </p>
           )}
-          {hasSubtitles && (
-            <p className="mt-3 flex flex-wrap items-baseline gap-x-2 gap-y-1 text-[13px]">
-              <span className="font-semibold text-text-muted">자막 제작자</span>
-              <span className="font-medium text-text-secondary">제작자 알 수 없음</span>
-            </p>
+          {subscription ? (
+            <div className="mt-3 flex min-w-0 flex-col gap-2.5" data-testid="head-creator">
+              <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px]">
+                <span className="font-semibold text-text-muted">자막 제작자</span>
+                <span className="font-medium text-text-secondary">
+                  {subtitleChoice({ subtitles: subscription.subtitles as SubtitleMode, creator: subscription.creator })}
+                </span>
+                <button
+                  type="button"
+                  aria-expanded={creatorOpen}
+                  disabled={subscription.subtitles === "none"}
+                  title={subscription.subtitles === "none" ? "자막 받기를 켠 뒤 바꿀 수 있어요" : undefined}
+                  onClick={() => setCreatorOpen((open) => !open)}
+                  className="inline-flex min-h-6 items-center rounded-md px-1.5 text-[12.5px] font-semibold text-focus underline underline-offset-2 outline-offset-2 hover:bg-surface-2 focus-visible:outline-2 focus-visible:outline-focus disabled:cursor-not-allowed disabled:text-text-muted disabled:no-underline max-[720px]:min-h-9"
+                >
+                  제작자 변경
+                </button>
+              </p>
+              {creatorOpen && (
+                <CreatorPicker
+                  key={`${subscription.rule_version}:${subscription.creator ?? ""}`}
+                  animeNo={subscription.anime_no}
+                  current={subscription.creator}
+                  onCancel={() => setCreatorOpen(false)}
+                  onApply={async (creator) => {
+                    try {
+                      await changeCreator({ id: subscription.rule_id, version: subscription.rule_version }, creator);
+                    } catch (e) {
+                      if (e instanceof ApiError && e.code === "conflict") {
+                        onSubscriptionChanged();
+                        throw new Error("다른 곳에서 먼저 바꿨어요. 지금 상태를 보여드려요. 다시 골라 주세요.");
+                      }
+                      throw e;
+                    }
+                    onSubscriptionChanged();
+                    setCreatorOpen(false);
+                  }}
+                />
+              )}
+            </div>
+          ) : (
+            hasSubtitles && (
+              <p className="mt-3 flex flex-wrap items-baseline gap-x-2 gap-y-1 text-[13px]">
+                <span className="font-semibold text-text-muted">자막 제작자</span>
+                <span className="font-medium text-text-secondary">제작자 알 수 없음</span>
+              </p>
+            )
           )}
         </div>
       </div>
