@@ -14,18 +14,40 @@
 //!
 //! A video the library has not recorded yet (the scan comes later), a torrent
 //! Transmission no longer has, and a rule that received nothing leave the rule
-//! as it is; every cycle tries again. A rule whose videos are in more than one
-//! season is left alone too: which one the rule belongs to is not told by them.
-//! Videos a person put into a folder, and videos other rules received, are no
-//! evidence for this rule, even in a folder of the same name.
+//! as it is. A rule whose videos are in more than one season is left alone too:
+//! which one the rule belongs to is not told by them. Videos a person put into a
+//! folder, and videos other rules received, are no evidence for this rule, even
+//! in a folder of the same name.
 //!
 //! Once connected a rule stays connected. When the season is held by another
 //! Anissia anime already the rule is not connected and notes the season, which
-//! its detail explains ([`crate::store::channels::Subscription::season_blocked`]).
-//! The season ID is `<work id>:<number>` ([`SeasonRef`]); season 0 (specials) is
-//! no season of an airing anime and is never connected.
+//! its detail explains ([`crate::store::channels::Subscription::season_blocked`]);
+//! the note goes when no other anime holds that season any more. The season ID is
+//! `<work id>:<number>` ([`SeasonRef`]); season 0 (specials) is no season of an
+//! airing anime and is never connected.
+//!
+//! # What a pass does not repeat
+//!
+//! A rule that stays unconnected for good (its torrent is gone, its videos are in
+//! several seasons, its season is taken, the library knows its folder by another
+//! path) would otherwise ask Transmission for its torrents and look every file up
+//! on every cycle. What decides an attempt's outcome is the set of torrents the
+//! rule received and what the library holds at the paths Transmission reports,
+//! and Transmission's paths change together with the files on disk, which the
+//! library then notes. So the pass remembers, per rule, the torrents and the
+//! library's generation ([`crate::store::library::LibraryStore::generation`]) of
+//! its last attempt that did not connect it, and tries again only when either
+//! differs. A taken season is the one more input: its holder can leave without
+//! touching the library, which is why [`link_seasons`] first lets the store clear
+//! the notes of seasons nobody holds and forgets those rules' attempts.
+//!
+//! The memory is in the worker's process ([`Memory`]), not the database: it only
+//! saves work, a restart costs one attempt per rule, and nothing else reads it.
 
-use std::collections::BTreeSet;
+use std::{
+    collections::{BTreeSet, HashMap, HashSet},
+    sync::{Arc, Mutex},
+};
 
 use super::CycleContext;
 use crate::{
@@ -40,33 +62,130 @@ pub struct Linked {
     pub linked: usize,
     /// Rules whose season another Anissia anime holds.
     pub taken: usize,
+    /// Rules this pass reported as having torrents in Transmission with none
+    /// of their videos in the library (see [`link_seasons`]).
+    pub unmatched: Vec<String>,
 }
 
-/// The seasons that hold a video of the given torrents.
-async fn seasons_of(ctx: &CycleContext, places: &[&TorrentPlace]) -> BTreeSet<(String, u32)> {
-    let mut found = BTreeSet::new();
-    for place in places {
-        let dir = place.download_dir.trim_end_matches('/');
-        for file in &place.files {
-            let path = format!("{dir}/{}", file.name);
-            match ctx.library.find_video(&path).await {
-                Ok(Some((work_id, season))) if season >= 1 => {
-                    found.insert((work_id, season));
-                }
-                Ok(_) => {}
-                Err(err) => eprintln!("Season link: cannot look a video up: {err}"),
-            }
+/// The inputs of an attempt that left a rule unconnected.
+#[derive(Debug, PartialEq, Eq)]
+struct Attempt {
+    /// The torrents the rule had received, sorted.
+    hashes: Vec<String>,
+    /// The library's generation before the attempt read anything.
+    generation: i64,
+}
+
+/// What the pass remembers between cycles (see the module's `What a pass does
+/// not repeat`).
+#[derive(Default)]
+pub struct Remembered {
+    /// The last attempt that left the rule unconnected, by rule ID.
+    attempts: HashMap<String, Attempt>,
+    /// The rules reported as unmatched since the worker started, so that a
+    /// rule is reported once, not on every attempt.
+    reported: HashSet<String>,
+}
+
+pub type Memory = Arc<Mutex<Remembered>>;
+
+impl Remembered {
+    /// Keeps only what is about the given rules.
+    fn retain(&mut self, rule_ids: &HashSet<&str>) {
+        self.attempts.retain(|id, _| rule_ids.contains(id.as_str()));
+        self.reported.retain(|id| rule_ids.contains(id.as_str()));
+    }
+
+    fn forget(&mut self, rule_id: &str) {
+        self.attempts.remove(rule_id);
+    }
+
+    /// Whether trying again could end differently.
+    fn worth_trying(&self, rule_id: &str, hashes: &[String], generation: i64) -> bool {
+        self.attempts
+            .get(rule_id)
+            .is_none_or(|last| last.hashes != hashes || last.generation != generation)
+    }
+}
+
+fn lock(memory: &Memory) -> std::sync::MutexGuard<'_, Remembered> {
+    memory.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// What the library knows of the files of some torrents.
+#[derive(Default)]
+struct Found {
+    /// The seasons (work and number, from 1) that hold a video of them.
+    seasons: BTreeSet<(String, u32)>,
+    /// Whether the library has any of the files as a video, in any season.
+    any: bool,
+}
+
+/// What the library holds at the files of the given torrents, or `None` when
+/// it could not be asked.
+async fn find(ctx: &CycleContext, places: &[&TorrentPlace]) -> Option<Found> {
+    let paths: Vec<String> = places
+        .iter()
+        .flat_map(|place| {
+            let dir = place.download_dir.trim_end_matches('/');
+            place
+                .files
+                .iter()
+                .map(move |file| format!("{dir}/{}", file.name))
+        })
+        .collect();
+    let videos = match ctx.library.find_videos(paths).await {
+        Ok(videos) => videos,
+        Err(err) => {
+            eprintln!("Season link: cannot look the videos up: {err}");
+            return None;
+        }
+    };
+    let mut found = Found::default();
+    for (work_id, season) in videos.into_iter().flatten() {
+        found.any = true;
+        if season >= 1 {
+            found.seasons.insert((work_id, season));
         }
     }
-    found
+    Some(found)
 }
 
 /// Connects the subscriptions that have no season yet to the season their
 /// received videos are in. Reads Transmission only when some subscription is
-/// waiting for a season and has received something. Failures are logged and
-/// leave the rules for the next cycle.
+/// waiting for a season and something it depends on is new (see the module's
+/// `What a pass does not repeat`). Failures are logged and leave the rules for
+/// the next cycle.
+///
+/// A rule whose torrents Transmission has but none of whose videos the library
+/// has under the path Transmission reports is logged once per worker start: it
+/// is what a download folder that is mounted at another path for the worker
+/// than for Transmission looks like. The log names the rule's ID only.
 pub async fn link_seasons(ctx: &CycleContext) -> Linked {
     let mut done = Linked::default();
+    // Read before anything the attempt depends on, so that a change during the
+    // attempt makes the next one try again.
+    let generation = match ctx.library.generation().await {
+        Ok(generation) => generation,
+        Err(err) => {
+            eprintln!("Season link: cannot read the library: {err}");
+            return done;
+        }
+    };
+
+    match ctx.channels.release_unheld_seasons().await {
+        Ok(released) => {
+            let mut memory = lock(&ctx.season_link);
+            for rule_id in released {
+                println!(
+                    "Season link: rule {rule_id} no longer waits for a season another anime held"
+                );
+                memory.forget(&rule_id);
+            }
+        }
+        Err(err) => eprintln!("Season link: cannot release the notes of seasons: {err}"),
+    }
+
     let rules: Vec<Rule> = match ctx.channels.list_channels_with_rules().await {
         Ok(all) => all
             .into_iter()
@@ -82,6 +201,7 @@ pub async fn link_seasons(ctx: &CycleContext) -> Linked {
             return done;
         }
     };
+    lock(&ctx.season_link).retain(&rules.iter().map(|r| r.id.as_str()).collect());
     if rules.is_empty() {
         return done;
     }
@@ -97,7 +217,18 @@ pub async fn link_seasons(ctx: &CycleContext) -> Linked {
             return done;
         }
     };
-    let mut hashes: Vec<String> = received.values().flatten().cloned().collect();
+    let waiting: Vec<(&Rule, &Vec<String>)> = {
+        let memory = lock(&ctx.season_link);
+        rules
+            .iter()
+            .filter_map(|rule| Some((rule, received.get(&rule.id)?)))
+            .filter(|(rule, hashes)| memory.worth_trying(&rule.id, hashes, generation))
+            .collect()
+    };
+    let mut hashes: Vec<String> = waiting
+        .iter()
+        .flat_map(|(_, hashes)| hashes.iter().cloned())
+        .collect();
     hashes.sort();
     hashes.dedup();
     if hashes.is_empty() {
@@ -116,28 +247,68 @@ pub async fn link_seasons(ctx: &CycleContext) -> Linked {
         }
     };
 
-    for rule in &rules {
-        let Some(hashes) = received.get(&rule.id) else {
-            continue;
-        };
+    for (rule, hashes) in waiting {
         let own: Vec<&TorrentPlace> = places
             .iter()
             .filter(|place| hashes.contains(&place.hash))
             .collect();
-        let seasons = seasons_of(ctx, &own).await;
-        let mut seasons = seasons.into_iter();
-        let (Some((work_id, number)), None) = (seasons.next(), seasons.next()) else {
+        let Some(found) = find(ctx, &own).await else {
             continue;
         };
-        let season = SeasonRef { work_id, number }.id();
-        match ctx.channels.link_season(&rule.id, &season).await {
-            Ok(SeasonLinked::Linked) => {
-                println!("Season link: rule {} is in season {number}", rule.id);
-                done.linked += 1;
+        let mut seasons = found.seasons.iter();
+        let one = match (seasons.next(), seasons.next()) {
+            (Some(season), None) => Some(season),
+            _ => None,
+        };
+        let linked = match one {
+            Some((work_id, number)) => {
+                let season = SeasonRef {
+                    work_id: work_id.clone(),
+                    number: *number,
+                }
+                .id();
+                match ctx.channels.link_season(&rule.id, &season).await {
+                    Ok(SeasonLinked::Linked) => {
+                        println!("Season link: rule {} is in season {number}", rule.id);
+                        done.linked += 1;
+                        true
+                    }
+                    Ok(SeasonLinked::Taken) => {
+                        done.taken += 1;
+                        false
+                    }
+                    Ok(SeasonLinked::Kept | SeasonLinked::Gone) => true,
+                    Err(err) => {
+                        eprintln!("Season link: cannot connect rule {}: {err}", rule.id);
+                        continue;
+                    }
+                }
             }
-            Ok(SeasonLinked::Taken) => done.taken += 1,
-            Ok(SeasonLinked::Kept | SeasonLinked::Gone) => {}
-            Err(err) => eprintln!("Season link: cannot connect rule {}: {err}", rule.id),
+            None => false,
+        };
+
+        let mut memory = lock(&ctx.season_link);
+        if linked {
+            memory.forget(&rule.id);
+            continue;
+        }
+        memory.attempts.insert(
+            rule.id.clone(),
+            Attempt {
+                hashes: hashes.clone(),
+                generation,
+            },
+        );
+        let has_files = own.iter().any(|place| !place.files.is_empty());
+        if has_files && !found.any && memory.reported.insert(rule.id.clone()) {
+            eprintln!(
+                "Season link: rule {} has {} torrent(s) in Transmission, but none of their videos \
+                 is in the library at the path Transmission reports. If the download folder is \
+                 mounted at another path here than in Transmission, the rule cannot be connected.",
+                rule.id,
+                own.len()
+            );
+            done.unmatched.push(rule.id.clone());
         }
     }
     done

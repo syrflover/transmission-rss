@@ -534,9 +534,12 @@ async fn analyze(state: &AppState, cwr: &ChannelWithRules) -> Result<Analysis, A
             }
         }
         if let Some(season_id) = &subscription.season_blocked {
-            analysis
-                .blocked
-                .insert(rule.id.clone(), blocked_by(state, season_id).await?);
+            // The worker clears the note when nothing holds the season any
+            // more; until it does, there is no block to explain.
+            let blocked = blocked_by(state, season_id).await?;
+            if blocked.holder_anime_no.is_some() {
+                analysis.blocked.insert(rule.id.clone(), blocked);
+            }
         }
     }
     for problem in plan.rule_errors() {

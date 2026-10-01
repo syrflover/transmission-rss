@@ -1193,9 +1193,10 @@ mod rule_detail {
         assert_eq!(detail["subscriptions"], json!([]));
     }
 
-    #[tokio::test]
-    async fn the_view_says_which_anime_holds_the_season_that_kept_a_rule_unconnected() {
-        let app = App::new().await;
+    /// Two subscriptions of different anime whose videos are in one season:
+    /// the first holds it and the second is noted as blocked by it. The holder
+    /// first, then the blocked one.
+    async fn blocked_pair(app: &App) -> (Rule, Rule) {
         let (channel, holder) = app.subscribed().await;
         let blocked = app
             .state
@@ -1258,6 +1259,13 @@ mod rule_detail {
             .link_season(&blocked.id, &season)
             .await
             .unwrap();
+        (holder, blocked)
+    }
+
+    #[tokio::test]
+    async fn the_view_says_which_anime_holds_the_season_that_kept_a_rule_unconnected() {
+        let app = App::new().await;
+        let (_holder, blocked) = blocked_pair(&app).await;
 
         let (_, view) = app.get(&format!("/api/rules/{}", blocked.id)).await;
         assert_eq!(view["season"], Value::Null);
@@ -1265,5 +1273,22 @@ mod rule_detail {
         assert_eq!(view["season_blocked"]["number"], 1);
         assert_eq!(view["season_blocked"]["holder_anime_no"], 3320);
         assert_eq!(view["season_blocked"]["holder_subject"], "작품");
+    }
+
+    #[tokio::test]
+    async fn the_view_does_not_explain_a_block_that_nothing_holds_any_more() {
+        let app = App::new().await;
+        let (holder, blocked) = blocked_pair(&app).await;
+        // The worker has not cleared the note yet, but the holder is gone.
+        let holder = app.fresh(&holder).await;
+        app.state
+            .channels
+            .delete_rule(&holder.id, holder.version)
+            .await
+            .unwrap();
+
+        let (_, view) = app.get(&format!("/api/rules/{}", blocked.id)).await;
+        assert_eq!(view["season"], Value::Null);
+        assert_eq!(view["season_blocked"], Value::Null);
     }
 }

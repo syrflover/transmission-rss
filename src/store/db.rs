@@ -70,6 +70,10 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("anissia/schema.sql")),
     // 16: a rule can be paused (`영상 받기` off); a subscription notes a season that is taken
     Migration::Sql(include_str!("channels/paused.sql")),
+    // 17: the history's items found by the rule that received them
+    Migration::Sql(include_str!("history/by_rule.sql")),
+    // 18: a number that changes when a video lookup in the library could answer differently
+    Migration::Sql(include_str!("library/generation.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]

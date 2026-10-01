@@ -317,6 +317,17 @@ impl LibraryStore {
         LibraryStore { db }
     }
 
+    /// A number that changes whenever what [`LibraryStore::find_videos`]
+    /// answers can change: a file recorded or forgotten or changed, a work
+    /// folder renamed, moved to another watch folder or forgotten, a watch
+    /// folder registered or unregistered. It is kept by the database itself,
+    /// so it counts the writes of the web and of the worker alike, and a scan
+    /// that finds everything as it was does not change it. Compare it for
+    /// equality only.
+    pub async fn generation(&self) -> Result<i64, LibraryError> {
+        self.db.run(|c| Ok(repo::generation(c)?)).await
+    }
+
     /// The watch folders in the order they were registered.
     pub async fn folders(&self) -> Result<Vec<WatchFolder>, LibraryError> {
         self.db.run(|c| Ok(repo::folders(c)?)).await
@@ -481,12 +492,15 @@ impl LibraryStore {
             .await
     }
 
-    /// The work and season number of the video the library recorded at the
-    /// absolute `path`, if it has one in a registered watch folder.
-    pub async fn find_video(&self, path: &str) -> Result<Option<(String, u32)>, LibraryError> {
-        let path = path.to_owned();
+    /// The work and season number of the video the library recorded at each
+    /// of the absolute `paths`, in the order given; `None` for a path with no
+    /// such video in a registered watch folder.
+    pub async fn find_videos(
+        &self,
+        paths: Vec<String>,
+    ) -> Result<Vec<Option<(String, u32)>>, LibraryError> {
         self.db
-            .run(move |c| Ok(detail::find_video(c, &path)?))
+            .run(move |c| Ok(detail::find_videos(c, &paths)?))
             .await
     }
 }

@@ -199,6 +199,7 @@ impl Worker {
                 history: HistoryStore::new(db.clone()),
                 library: LibraryStore::new(db),
                 scan_cache: watch::ScanCaches::default(),
+                season_link: season_link::Memory::default(),
                 live: live::LiveWatch::default(),
                 transmission_url: env.transmission_url.clone(),
                 transmission_http: crate::transmission::http_client(
@@ -257,6 +258,13 @@ impl Worker {
             .live
             .start(self.ctx.clone(), self.lock_path.clone(), self.clock.clone());
         self.ctx.live.sync_folders().await;
+    }
+
+    /// One pass of the season link, which a cycle runs after the watch folder
+    /// scan (see [`season_link`]). It takes no lock, so it is for callers that
+    /// know no cycle is running, such as tests.
+    pub async fn link_seasons(&self) -> season_link::Linked {
+        season_link::link_seasons(&self.ctx).await
     }
 
     /// Ends every watch.
