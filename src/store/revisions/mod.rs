@@ -1199,6 +1199,23 @@ impl RevisionStore {
             .await
     }
 
+    /// The new video of the row `id`, `verified` or `removing`, was told by
+    /// its CRC32 after its identity had changed (a remount, a copy put
+    /// back): `file_identity` is the identity it has now, which the next
+    /// look compares instead of reading the whole file again.
+    pub async fn keep_identity(&self, id: i64, file_identity: String) -> Result<()> {
+        self.db
+            .run(move |c| {
+                c.execute(
+                    "UPDATE video_revisions SET file_identity = ?2
+                      WHERE id = ?1 AND state IN ('verified', 'removing')",
+                    params![id, file_identity],
+                )?;
+                Ok(())
+            })
+            .await
+    }
+
     /// The `받기 실패` of replacements (see [`Revision::is_failure`]), newest first.
     pub async fn failures(&self) -> Result<Vec<Revision>> {
         self.db

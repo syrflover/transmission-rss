@@ -17,6 +17,7 @@ use common::*;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 use transmission_rss::{
+    revision::FileIdentity,
     store::{
         channels::{ChannelInput, RuleInput},
         history::{HistoryItem, HistoryResult, Observation},
@@ -2664,6 +2665,27 @@ async fn a_new_video_whose_identity_changed_is_told_by_its_crc() {
     assert_eq!(s.state_of(&v3()).await, RevisionState::Done);
     assert_eq!(s.names(), vec![EPISODE_NAME]);
     assert_eq!(read(&s.file(EPISODE_NAME)), V3_BYTES);
+}
+
+/// Told by its CRC32 after its identity changed, `14v3`'s file keeps the
+/// identity it has now: a later look compares that instead of reading the
+/// whole file again on every cycle.
+#[tokio::test]
+async fn a_new_video_told_by_its_crc_keeps_its_identity_now() {
+    let s = Setup::new().await;
+    s.v3_verified_behind_v2().await;
+    let copy = s.season.parent().unwrap().join("copy.mkv");
+    std::fs::copy(s.file(&v3()), &copy).unwrap();
+    std::fs::rename(&copy, s.file(&v3())).unwrap();
+    let now = FileIdentity::at(&s.file(&v3())).unwrap().to_text();
+    assert_ne!(s.row_of(&v3()).await.file_identity, Some(now.clone()));
+
+    s.h.tr.reject_rename_of(NEW_HASH, None);
+    s.cycle().await;
+    s.cycle().await;
+    let row = s.row_of(&v3()).await;
+    assert_eq!(row.state, RevisionState::Done);
+    assert_eq!(row.file_identity, Some(now));
 }
 
 /// `14v3`'s file is gone when it is to remove `14v2`, a file no torrent holds

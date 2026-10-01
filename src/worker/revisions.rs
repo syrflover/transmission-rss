@@ -1077,6 +1077,15 @@ async fn remove_old(ctx: &CycleContext, row: &mut Revision, at: Millis, listing:
                 if let Err(next) = new_video_found(ctx, row, Some(NEW_UNCHECKED_OLD_KEPT)).await {
                     return next;
                 }
+                // Told by its CRC32: the identity it has now is the one the
+                // next look compares, so the file is not read on every look.
+                let text = now.to_text();
+                if row.file_identity.as_deref() != Some(text.as_str()) {
+                    if let Err(err) = ctx.revisions.keep_identity(row.id, text.clone()).await {
+                        return Next::Later(err.to_string());
+                    }
+                    row.file_identity = Some(text);
+                }
                 Some(now)
             }
             NewLook::Missed => return new_video_missed(row, NEW_UNCHECKED_OLD_KEPT, None),
