@@ -415,6 +415,68 @@ async fn a_failure_waits_and_a_429_holds_every_request_without_counting() {
     assert_eq!((s.job, s.note, s.source), (None, Some(Note::Failed), None));
 }
 
+/// Makes the writes `sql` names fail, as a full disk or a broken file would.
+async fn refuse(env: &Env, sql: &'static str) {
+    env.db
+        .run::<_, DbError, _>(move |c| Ok(c.execute_batch(sql)?))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn an_outcome_that_cannot_be_written_waits_like_a_failure_instead_of_asking_again_at_once() {
+    let env = Env::new(&["A"]).await;
+    env.fake
+        .add_search("A", vec![env.fake.entry(1, "A", &[])], &samples::jpeg());
+
+    // The search's answer cannot be recorded.
+    refuse(
+        &env,
+        "CREATE TRIGGER refuse BEFORE UPDATE OF anilist_media_id ON work_artwork
+         WHEN NEW.anilist_media_id IS NOT NULL
+         BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+    )
+    .await;
+    let before = env.art.now();
+    assert_eq!(env.art.run_next().await, Some(Ran::Later));
+    let job = env.selection("A").await.job.unwrap();
+    assert_eq!((job.kind, job.attempts), (JobKind::Search, 1));
+    let wait = job.not_before.unwrap() - before;
+    assert!((60_000..65_000).contains(&wait), "{wait}");
+    let requests = env.fake.api_requests().len();
+    assert_eq!(env.art.run_next().await, None);
+    assert_eq!(env.fake.api_requests().len(), requests);
+    refuse(&env, "DROP TRIGGER refuse;").await;
+    let claimed = env.art.store.next_job(i64::MAX).await.unwrap().unwrap();
+    assert_eq!(env.art.run_job(&claimed).await, Ran::Recorded);
+
+    // Nor can the fetched image.
+    refuse(
+        &env,
+        "CREATE TRIGGER refuse BEFORE UPDATE OF image_id ON work_artwork
+         WHEN NEW.image_id IS NOT NULL
+         BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+    )
+    .await;
+    let before = env.art.now();
+    assert_eq!(env.art.run_next().await, Some(Ran::Later));
+    let s = env.selection("A").await;
+    let job = s.job.unwrap();
+    assert_eq!((job.kind, job.attempts), (JobKind::Fetch, 1));
+    let wait = job.not_before.unwrap() - before;
+    assert!((60_000..65_000).contains(&wait), "{wait}");
+    assert!(s.image.is_none());
+    assert_eq!(env.art.run_next().await, None);
+    refuse(&env, "DROP TRIGGER refuse;").await;
+    let claimed = env.art.store.next_job(i64::MAX).await.unwrap().unwrap();
+    assert_eq!(env.art.run_job(&claimed).await, Ran::Recorded);
+    let s = env.selection("A").await;
+    assert_eq!(
+        env.art.image(image_of(&s).clone()).await.unwrap(),
+        samples::jpeg()
+    );
+}
+
 #[tokio::test]
 async fn hundreds_of_new_works_are_searched_one_at_a_time_at_the_pace() {
     let names: Vec<String> = (0..520).map(|i| format!("Work {i:03}")).collect();
@@ -577,6 +639,7 @@ async fn held_fetch(env: &Env, name: &str, id: i64) -> tokio::task::JoinHandle<O
         work_id: env.id(name).await,
         dir_name: name.to_owned(),
         version: s.version,
+        requested_at: s.job.as_ref().unwrap().requested_at,
         kind: JobKind::Search,
         anilist_media_id: None,
         image_url: None,

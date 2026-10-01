@@ -286,6 +286,9 @@ pub struct ClaimedJob {
     pub dir_name: String,
     /// The selection's version when the job was taken.
     pub version: i64,
+    /// When the job was asked for. A user's repair asks for a fetch again
+    /// without changing the version; this tells the two requests apart.
+    pub requested_at: Millis,
     pub kind: JobKind,
     pub anilist_media_id: Option<i64>,
     /// The cover URL a verified search answer gave (fetch only).
@@ -412,44 +415,60 @@ impl ArtworkStore {
     }
 
     /// Records a search's outcome, unless the selection changed since the job
-    /// was taken at `version` or the search is no longer wanted. Whether it
-    /// was recorded.
+    /// was taken at `version`, or the search is no longer wanted or was asked
+    /// for again after `requested_at`. Whether it was recorded.
     pub async fn searched(
         &self,
         work_id: &str,
         version: i64,
+        requested_at: Millis,
         outcome: Searched,
         now: Millis,
     ) -> Result<bool, ArtworkError> {
         let id = work_id.to_owned();
         self.db
-            .run(move |c| Ok(repo::searched(c, &id, version, &outcome, now)?))
+            .run(move |c| {
+                Ok(repo::searched(
+                    c,
+                    &id,
+                    version,
+                    requested_at,
+                    &outcome,
+                    now,
+                )?)
+            })
             .await
     }
 
     /// Makes `image` the image of the AniList selection the fetch job was
-    /// taken for, unless the selection changed since `version`. Whether it was
-    /// recorded; when not, the staged file is left to the cleanup.
+    /// taken for, unless the selection changed since `version` or the fetch was
+    /// asked for again after `requested_at` (a newer repair runs instead).
+    /// Whether it was recorded; when not, the staged file is left to the
+    /// cleanup.
     pub async fn fetched(
         &self,
         work_id: &str,
         version: i64,
+        requested_at: Millis,
         anilist_media_id: i64,
         image: ImageRef,
     ) -> Result<bool, ArtworkError> {
         let id = work_id.to_owned();
         self.db
-            .run(move |c| repo::fetched(c, &id, version, anilist_media_id, &image))
+            .run(move |c| repo::fetched(c, &id, version, requested_at, anilist_media_id, &image))
             .await
     }
 
-    /// The job taken at `version` did not finish: try again at `retry_at`
-    /// (counting a failed attempt when `failed`), or, with `retry_at` `None`,
-    /// give up and leave `note`.
+    /// The job taken at `version`, asked for at `requested_at`, did not
+    /// finish: try again at `retry_at` (counting a failed attempt when
+    /// `failed`), or, with `retry_at` `None`, give up and leave `note`. A job
+    /// asked for again since (a user's repair) is left as it is.
+    #[allow(clippy::too_many_arguments)]
     pub async fn job_later(
         &self,
         work_id: &str,
         version: i64,
+        requested_at: Millis,
         retry_at: Option<Millis>,
         failed: bool,
         note: Note,
@@ -459,7 +478,14 @@ impl ArtworkStore {
         self.db
             .run(move |c| {
                 Ok(repo::job_later(
-                    c, &id, version, retry_at, failed, note, now,
+                    c,
+                    &id,
+                    version,
+                    requested_at,
+                    retry_at,
+                    failed,
+                    note,
+                    now,
                 )?)
             })
             .await

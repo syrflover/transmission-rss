@@ -184,9 +184,12 @@ pub(super) fn change(
                     "AniList에서 고른 표지만 다시 받을 수 있어요.",
                 ));
             }
-            // The selected ID's image again; what is selected stays.
+            // The selected ID's image again; what is selected stays. The
+            // request time moves past a job still running, so that job's
+            // late result or failure tells itself apart from this request.
             tx.execute(
-                "UPDATE work_artwork SET job = 'fetch', job_requested_at = ?2,
+                "UPDATE work_artwork SET job = 'fetch',
+                     job_requested_at = MAX(?2, COALESCE(job_requested_at + 1, ?2)),
                      job_attempts = 0, job_not_before = NULL, job_image_url = NULL,
                      note = NULL, note_at = NULL
                  WHERE work_id = ?1",
@@ -275,7 +278,7 @@ pub(super) fn select_manual(
 pub(super) fn next_job(conn: &Connection, now: Millis) -> rusqlite::Result<Option<ClaimedJob>> {
     conn.query_row(
         "SELECT a.work_id, w.dir_name, a.version, a.job, a.anilist_media_id,
-                a.job_image_url, a.job_attempts
+                a.job_image_url, a.job_attempts, a.job_requested_at
            FROM work_artwork a JOIN works w ON w.id = a.work_id
            JOIN watch_folders f ON f.id = w.watch_folder_id AND f.unregistered_at IS NULL
           WHERE a.job IS NOT NULL AND (a.job_not_before IS NULL OR a.job_not_before <= ?1)
@@ -292,25 +295,32 @@ pub(super) fn next_job(conn: &Connection, now: Millis) -> rusqlite::Result<Optio
                 anilist_media_id: row.get(4)?,
                 image_url: row.get(5)?,
                 attempts: row.get::<_, i64>(6)?.max(0) as u32,
+                requested_at: row.get(7)?,
             })
         },
     )
     .optional()
 }
 
-/// Whether the job of `kind` taken at `version` still stands: the selection
-/// did not change and the job is still asked for (in `auto` for a search).
+/// Whether the job of `kind` taken at `version`, asked for at
+/// `requested_at`, still stands: the selection did not change and that same
+/// request is still waiting (in `auto` for a search). A repair asked for since
+/// is a newer request, which runs itself.
 fn job_stands(
     tx: &Transaction<'_>,
     work_id: &str,
     version: i64,
+    requested_at: Millis,
     kind: JobKind,
 ) -> rusqlite::Result<Option<Selection>> {
     let Some(selection) = read(tx, work_id)? else {
         return Ok(None);
     };
     let wanted = selection.version == version
-        && selection.job.as_ref().map(|j| j.kind) == Some(kind)
+        && selection
+            .job
+            .as_ref()
+            .is_some_and(|j| j.kind == kind && j.requested_at == requested_at)
         && (kind != JobKind::Search || selection.mode == Mode::Auto);
     Ok(wanted.then_some(selection))
 }
@@ -319,11 +329,12 @@ pub(super) fn searched(
     conn: &mut Connection,
     work_id: &str,
     version: i64,
+    requested_at: Millis,
     outcome: &Searched,
     now: Millis,
 ) -> rusqlite::Result<bool> {
     let tx = begin(conn)?;
-    if job_stands(&tx, work_id, version, JobKind::Search)?.is_none() {
+    if job_stands(&tx, work_id, version, requested_at, JobKind::Search)?.is_none() {
         return Ok(false);
     }
     match outcome {
@@ -362,11 +373,12 @@ pub(super) fn fetched(
     conn: &mut Connection,
     work_id: &str,
     version: i64,
+    requested_at: Millis,
     anilist_media_id: i64,
     image: &ImageRef,
 ) -> Result<bool, ArtworkError> {
     let tx = begin(conn)?;
-    let stands = job_stands(&tx, work_id, version, JobKind::Fetch)?;
+    let stands = job_stands(&tx, work_id, version, requested_at, JobKind::Fetch)?;
     let applies = match &stands {
         Some(s) => {
             s.anilist_media_id == Some(anilist_media_id) && staged(&tx, &image.relative_path)?
@@ -388,10 +400,12 @@ pub(super) fn fetched(
     Ok(true)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn job_later(
     conn: &mut Connection,
     work_id: &str,
     version: i64,
+    requested_at: Millis,
     retry_at: Option<Millis>,
     failed: bool,
     note: Note,
@@ -401,7 +415,12 @@ pub(super) fn job_later(
     let Some(selection) = read(&tx, work_id)? else {
         return Ok(());
     };
-    if selection.version != version || selection.job.is_none() {
+    // A newer request (a repair asked for while this one ran) is not touched.
+    let same_request = selection
+        .job
+        .as_ref()
+        .is_some_and(|j| j.requested_at == requested_at);
+    if selection.version != version || !same_request {
         return Ok(());
     }
     match retry_at {

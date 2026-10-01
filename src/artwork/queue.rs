@@ -81,17 +81,24 @@ impl Artwork {
             job.kind.code(),
             job.work_id
         );
-        let _ = self
+        let written = self
             .store
             .job_later(
                 &job.work_id,
                 job.version,
+                job.requested_at,
                 retry_at,
                 failed,
                 Note::Failed,
                 now,
             )
             .await;
+        if let Err(e) = written {
+            // Nothing holds the job back: pause the queue instead, so it is
+            // not taken again at once.
+            eprintln!("Artwork queue: cannot put off work {}: {e}", job.work_id);
+            tokio::time::sleep(POLL).await;
+        }
         if retry_at.is_some() {
             Ran::Later
         } else {
@@ -100,10 +107,22 @@ impl Artwork {
     }
 
     async fn give_up(&self, job: &ClaimedJob, note: Note) -> Ran {
-        let _ = self
+        let written = self
             .store
-            .job_later(&job.work_id, job.version, None, false, note, self.now())
+            .job_later(
+                &job.work_id,
+                job.version,
+                job.requested_at,
+                None,
+                false,
+                note,
+                self.now(),
+            )
             .await;
+        if let Err(e) = written {
+            eprintln!("Artwork queue: cannot give up work {}: {e}", job.work_id);
+            tokio::time::sleep(POLL).await;
+        }
         Ran::GaveUp(note)
     }
 
@@ -123,15 +142,20 @@ impl Artwork {
         };
         match self
             .store
-            .searched(&job.work_id, job.version, outcome, self.now())
+            .searched(
+                &job.work_id,
+                job.version,
+                job.requested_at,
+                outcome,
+                self.now(),
+            )
             .await
         {
             Ok(true) => Ran::Recorded,
             Ok(false) => Ran::Dropped,
-            Err(e) => {
-                eprintln!("Artwork search for work {}: {e}", job.work_id);
-                Ran::Later
-            }
+            // The outcome could not be recorded: try the job again later, not
+            // at once (each try asks AniList again).
+            Err(e) => self.later(job, &AnilistError::Store(e)).await,
         }
     }
 
@@ -173,7 +197,7 @@ impl Artwork {
         };
         match self
             .store
-            .fetched(&job.work_id, job.version, media_id, image)
+            .fetched(&job.work_id, job.version, job.requested_at, media_id, image)
             .await
         {
             Ok(true) => {
@@ -184,10 +208,8 @@ impl Artwork {
                 self.tidy().await;
                 Ran::Dropped
             }
-            Err(e) => {
-                eprintln!("Artwork image for work {}: {e}", job.work_id);
-                Ran::Later
-            }
+            // The stored file is left to the recovery; the job waits.
+            Err(e) => self.later(job, &AnilistError::Store(e)).await,
         }
     }
 

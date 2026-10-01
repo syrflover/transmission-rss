@@ -95,7 +95,13 @@ async fn a_newly_recorded_work_is_auto_with_a_search_and_a_rescan_asks_for_none(
     let claimed = store.next_job(200).await.unwrap().unwrap();
     assert_eq!(claimed.dir_name, "Lycoris Recoil");
     assert!(store
-        .searched(&ids[0], claimed.version, Searched::Left(Note::NoMatch), 200)
+        .searched(
+            &ids[0],
+            claimed.version,
+            claimed.requested_at,
+            Searched::Left(Note::NoMatch),
+            200
+        )
         .await
         .unwrap());
     library
@@ -256,13 +262,14 @@ async fn a_late_automatic_result_never_undoes_a_newer_user_choice() {
         let (store, id) = (store.clone(), id.to_owned());
         async move {
             let s = store.selection(&id).await.unwrap();
-            assert_eq!(s.job.unwrap().kind, JobKind::Search);
-            s.version
+            let job = s.job.unwrap();
+            assert_eq!(job.kind, JobKind::Search);
+            (s.version, job.requested_at)
         }
     };
 
     // A: the user uploads while the search runs.
-    let va = job(&ids[0]).await;
+    let (va, ra) = job(&ids[0]).await;
     store
         .select_manual(
             &ids[0],
@@ -277,7 +284,7 @@ async fn a_late_automatic_result_never_undoes_a_newer_user_choice() {
         image_url: None,
     };
     assert!(!store
-        .searched(&ids[0], va, selected.clone(), 9)
+        .searched(&ids[0], va, ra, selected.clone(), 9)
         .await
         .unwrap());
     let a = store.selection(&ids[0]).await.unwrap();
@@ -285,13 +292,13 @@ async fn a_late_automatic_result_never_undoes_a_newer_user_choice() {
     assert_eq!(a.job, None);
 
     // B: the user clears while the search runs.
-    let vb = job(&ids[1]).await;
+    let (vb, rb) = job(&ids[1]).await;
     store
         .change(&ids[1], vb, UserChange::Clear, 5)
         .await
         .unwrap();
     assert!(!store
-        .searched(&ids[1], vb, selected.clone(), 9)
+        .searched(&ids[1], vb, rb, selected.clone(), 9)
         .await
         .unwrap());
     let b = store.selection(&ids[1]).await.unwrap();
@@ -299,8 +306,8 @@ async fn a_late_automatic_result_never_undoes_a_newer_user_choice() {
 
     // C: the search selects, then the user picks another entry while the
     // image of the first is being fetched; the fetched image is dropped.
-    let vc = job(&ids[2]).await;
-    assert!(store.searched(&ids[2], vc, selected, 9).await.unwrap());
+    let (vc, rc) = job(&ids[2]).await;
+    assert!(store.searched(&ids[2], vc, rc, selected, 9).await.unwrap());
     let c = store.selection(&ids[2]).await.unwrap();
     assert_eq!(
         (c.mode, c.source, c.anilist_media_id),
@@ -309,6 +316,7 @@ async fn a_late_automatic_result_never_undoes_a_newer_user_choice() {
     assert_eq!(c.job.as_ref().unwrap().kind, JobKind::Fetch);
     assert!(c.image.is_none(), "no image before it is verified");
     let fetch_version = c.version;
+    let fetch_requested = c.job.as_ref().unwrap().requested_at;
     let picked = staged_image(&store, "artwork/picked.jpg", Source::Anilist).await;
     store
         .select_manual(&ids[2], fetch_version, Some(12), picked)
@@ -316,7 +324,7 @@ async fn a_late_automatic_result_never_undoes_a_newer_user_choice() {
         .unwrap();
     let auto_image = staged_image(&store, "artwork/auto.jpg", Source::Anilist).await;
     assert!(!store
-        .fetched(&ids[2], fetch_version, 9, auto_image)
+        .fetched(&ids[2], fetch_version, fetch_requested, 9, auto_image)
         .await
         .unwrap());
     let c = store.selection(&ids[2]).await.unwrap();
@@ -330,6 +338,69 @@ async fn a_late_automatic_result_never_undoes_a_newer_user_choice() {
     assert!(published
         .iter()
         .any(|f| f.relative_path == "artwork/auto.jpg"));
+}
+
+#[tokio::test]
+async fn a_repair_asked_for_while_a_fetch_runs_outlives_that_fetchs_failure_and_result() {
+    let (db, _, _, ids) = library(&["A"]).await;
+    let store = ArtworkStore::new(db);
+    let v = store.selection(&ids[0]).await.unwrap().version;
+    let manual = store
+        .select_manual(
+            &ids[0],
+            v,
+            Some(4),
+            staged_image(&store, "artwork/a.jpg", Source::Anilist).await,
+        )
+        .await
+        .unwrap();
+    store
+        .change(&ids[0], manual.version, UserChange::Repair, 50)
+        .await
+        .unwrap();
+    let running = store.next_job(60).await.unwrap().unwrap();
+    assert_eq!(running.kind, JobKind::Fetch);
+
+    // The user asks again while that fetch runs (in the same millisecond,
+    // even); what is selected, and so the version, stays.
+    let asked = store
+        .change(&ids[0], manual.version, UserChange::Repair, 50)
+        .await
+        .unwrap();
+    assert_eq!(asked.version, running.version);
+    let request = asked.job.clone().unwrap();
+    assert!(request.requested_at > running.requested_at);
+
+    // The running fetch gives up, or puts itself off: the new request stays
+    // as it was asked for.
+    for retry_at in [None, Some(10_000)] {
+        store
+            .job_later(
+                &ids[0],
+                running.version,
+                running.requested_at,
+                retry_at,
+                true,
+                Note::Failed,
+                70,
+            )
+            .await
+            .unwrap();
+        let s = store.selection(&ids[0]).await.unwrap();
+        assert_eq!((s.job.as_ref(), s.note), (Some(&request), None));
+    }
+    // Its image arriving late does not stand for the new request either.
+    let late = staged_image(&store, "artwork/late.jpg", Source::Anilist).await;
+    assert!(!store
+        .fetched(&ids[0], running.version, running.requested_at, 4, late)
+        .await
+        .unwrap());
+    assert_eq!(store.selection(&ids[0]).await.unwrap().job, Some(request));
+    let next = store.next_job(80).await.unwrap().unwrap();
+    assert_eq!(
+        (next.kind, next.requested_at),
+        (JobKind::Fetch, asked.job.unwrap().requested_at)
+    );
 }
 
 #[tokio::test]
