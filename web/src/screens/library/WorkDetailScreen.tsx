@@ -76,6 +76,8 @@ function WorkPage({ workId }: { workId: string }) {
       return { ...w, seasons, native_title: native };
     });
     forgetPrefix(LIST_PREFIX);
+    // The episodes' air days follow the entries, so the page is read again behind what it shows.
+    work.reload();
   };
 
   if (work.data) {
