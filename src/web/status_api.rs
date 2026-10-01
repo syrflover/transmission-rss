@@ -41,7 +41,7 @@ use url::Url;
 use super::{ApiError, AppState};
 use crate::store::channels::ChannelError;
 use crate::store::history::{CycleState, HistoryError, Millis};
-use crate::store::status::StatusError;
+use crate::store::status::{StatusError, WorkerHeartbeat};
 
 #[cfg(test)]
 mod tests;
@@ -106,9 +106,11 @@ pub struct CycleStatus {
     /// recorded when it started. `null` while no worker has recorded one.
     pub next_at: Option<Millis>,
     /// The worker is not checking the feeds, and the board says so instead of a
-    /// past time: the next cycle is more than one interval overdue while none
-    /// is running, or the running one has gone on past [`running_bound`]. A cycle
-    /// that is running, however long it has taken, is not stalled.
+    /// past time: its heartbeat has stopped while a cycle never ended or the
+    /// next cycle is more than one interval overdue, or it has held the cycle
+    /// lock past [`running_bound`] while still beating. A worker that is busy
+    /// (beating), however long its cycle and the folder reading after it have
+    /// taken, is not stalled. See [`cycle_stalled`].
     pub stalled: bool,
 }
 
@@ -131,33 +133,85 @@ const RUNNING_FLOOR_MS: i64 = 30 * 60_000;
 /// is longer than [`RUNNING_FLOOR_MS`].
 const RUNNING_INTERVALS: i64 = 10;
 
-/// How long after its start a cycle without an end is believed to be running
-/// rather than hung or dead (the worker cannot say which: a cycle it was
-/// stopped in also stays unfinished): the larger of 30 minutes and ten
-/// intervals, so that a short interval does not call a slow cycle stopped and a
-/// worker that died mid-cycle is still reported.
+/// How old the worker's heartbeat may be and still show it busy. The worker
+/// beats every 15 seconds while it holds the cycle lock
+/// ([`crate::worker::heartbeat`]); this allows three missed beats, and one
+/// slow database write, before a worker that died is told from one that works,
+/// which is why a killed worker shows as stalled within about a minute.
+pub(super) const HEARTBEAT_FRESH_MS: i64 = 60_000;
+
+/// How long a worker may hold the cycle lock, or (with no heartbeat) a cycle
+/// run without an end, and still be taken for busy rather than hung or dead:
+/// the larger of 30 minutes and ten intervals, so that a short interval does not
+/// call a slow cycle stopped.
 fn running_bound(interval_ms: i64) -> i64 {
     RUNNING_FLOOR_MS.max(interval_ms.saturating_mul(RUNNING_INTERVALS))
 }
 
-/// Whether `cycle` is running as of `now`: it has started and not ended, and has
-/// not gone on past [`running_bound`].
-pub(super) fn cycle_running(cycle: &CycleState, interval_ms: i64, now: Millis) -> bool {
-    cycle.finished_at.is_none()
-        && now.saturating_sub(cycle.started_at) <= running_bound(interval_ms)
+/// Whether the heartbeat says the worker is alive as of `now`: it was written
+/// within [`HEARTBEAT_FRESH_MS`]. (A beat dated after `now` is a clock a little
+/// ahead and counts as fresh.)
+fn beating(beat: &WorkerHeartbeat, now: Millis) -> bool {
+    now.saturating_sub(beat.beat_at) <= HEARTBEAT_FRESH_MS
 }
 
-/// Whether the worker is taken to have stopped checking as of `now`. A running
-/// cycle is not stopped; a cycle that has no end and has outlived
-/// [`running_bound`] is; otherwise the next check is stopped once it is more
-/// than one interval overdue.
-fn cycle_stalled(cycle: &CycleState, interval_ms: i64, now: Millis) -> bool {
-    if cycle.finished_at.is_none() {
-        return !cycle_running(cycle, interval_ms, now);
+/// Whether the worker has held the cycle lock past [`running_bound`] while it
+/// goes on beating: alive, but stuck in a cycle.
+fn hung(beat: &WorkerHeartbeat, interval_ms: i64, now: Millis) -> bool {
+    beat.held_since
+        .is_some_and(|since| now.saturating_sub(since) > running_bound(interval_ms))
+}
+
+/// Whether the worker is busy as of `now`, so that what it left (the look at
+/// Transmission, the cycle's marker) is expected to be replaced soon.
+///
+/// With a heartbeat (a worker of this version has run), the worker is busy
+/// while it beats, and until it has held the lock past [`running_bound`]. That
+/// covers the whole time under the cycle lock, including the watch folder
+/// reading after the cycle's RSS work ended, and a worker killed in a cycle
+/// stops being busy as soon as its beat is stale. Without one (an older
+/// worker), the cycle's own marker is all there is: a cycle that has started
+/// and not ended, and has not gone on past [`running_bound`].
+pub(super) fn worker_busy(
+    cycle: &CycleState,
+    beat: Option<&WorkerHeartbeat>,
+    interval_ms: i64,
+    now: Millis,
+) -> bool {
+    match beat {
+        Some(beat) => beating(beat, now) && !hung(beat, interval_ms, now),
+        None => {
+            cycle.finished_at.is_none()
+                && now.saturating_sub(cycle.started_at) <= running_bound(interval_ms)
+        }
     }
-    now > cycle
-        .started_at
-        .saturating_add(interval_ms.saturating_mul(2))
+}
+
+/// Whether the worker is taken to have stopped checking as of `now`.
+///
+/// While the heartbeat is fresh the worker is alive: it is stopped only when it
+/// has held the lock past [`running_bound`]. Once the heartbeat is stale, a
+/// cycle that never ended means the worker died in it, and otherwise the
+/// next check is stopped once it is more than one interval overdue. Without a
+/// heartbeat (an older worker) a cycle that has no end is running until it has
+/// outlived [`running_bound`].
+fn cycle_stalled(
+    cycle: &CycleState,
+    beat: Option<&WorkerHeartbeat>,
+    interval_ms: i64,
+    now: Millis,
+) -> bool {
+    let overdue = || {
+        now > cycle
+            .started_at
+            .saturating_add(interval_ms.saturating_mul(2))
+    };
+    match beat {
+        Some(beat) if beating(beat, now) => hung(beat, interval_ms, now),
+        Some(_) => cycle.finished_at.is_none() || overdue(),
+        None if cycle.finished_at.is_none() => !worker_busy(cycle, None, interval_ms, now),
+        None => overdue(),
+    }
 }
 
 fn internal(e: impl std::fmt::Display) -> ApiError {
@@ -240,6 +294,7 @@ pub async fn board(state: &AppState, now: Millis, tz_offset: i64) -> Result<Boar
             taken_at: t.taken_at,
         });
     let interval = state.status.cycle_interval().await.map_err(internal)?;
+    let heartbeat = state.status.heartbeat().await.map_err(internal)?;
     let cycle = state
         .history
         .last_cycle()
@@ -249,7 +304,7 @@ pub async fn board(state: &AppState, now: Millis, tz_offset: i64) -> Result<Boar
             started_at: c.started_at,
             finished_at: c.finished_at,
             next_at: interval.map(|ms| c.started_at.saturating_add(ms)),
-            stalled: interval.is_some_and(|ms| cycle_stalled(&c, ms, now)),
+            stalled: interval.is_some_and(|ms| cycle_stalled(&c, heartbeat.as_ref(), ms, now)),
         });
 
     let collect_folder_set = state

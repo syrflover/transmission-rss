@@ -72,7 +72,7 @@ use serde::Serialize;
 use super::{
     artwork_api::image_url,
     setup_api::{self, FirstRunView},
-    status_api::cycle_running,
+    status_api::worker_busy,
     subscriptions_api::{quarter_of, QuarterView},
     ApiError, AppState,
 };
@@ -276,11 +276,12 @@ const DOWNLOADING_FRESH_CYCLES: i64 = 3;
 /// cycle intervals. Without a recorded interval (no worker of this version has
 /// run) nothing is believed.
 ///
-/// While a cycle is running the worker is alive, and the look it left is the
-/// one before this cycle; a cycle longer than the allowance would otherwise age
-/// it out before the cycle can leave a newer one. So the look's age is counted
-/// up to the cycle's start. A cycle that has run past the bound of
-/// [`cycle_running`] is a hung worker and does not hold the look.
+/// While the worker is busy ([`worker_busy`]: it beats while it holds the cycle
+/// lock, through the folder reading after the cycle's RSS work too) it is alive,
+/// and the look it left is the one before this cycle; a cycle longer than the
+/// allowance would otherwise age it out before the cycle can leave a newer
+/// one. So the look's age is counted up to the cycle's start. A worker that
+/// died in a cycle, or holds the lock past the bound, does not hold the look.
 async fn downloading_hashes(state: &AppState, now: Millis) -> Result<HashSet<String>, ApiError> {
     let Some(counts) = state.status.transmission().await.map_err(internal)? else {
         return Ok(HashSet::new());
@@ -288,9 +289,12 @@ async fn downloading_hashes(state: &AppState, now: Millis) -> Result<HashSet<Str
     let Some(interval) = state.status.cycle_interval().await.map_err(internal)? else {
         return Ok(HashSet::new());
     };
-    let running = state.history.last_cycle().await.map_err(internal)?;
-    let seen_until = match running {
-        Some(cycle) if cycle_running(&cycle, interval, now) => cycle.started_at.min(now),
+    let last = state.history.last_cycle().await.map_err(internal)?;
+    let beat = state.status.heartbeat().await.map_err(internal)?;
+    let seen_until = match last {
+        Some(cycle) if worker_busy(&cycle, beat.as_ref(), interval, now) => {
+            cycle.started_at.min(now)
+        }
         _ => now,
     };
     if seen_until.saturating_sub(counts.taken_at)

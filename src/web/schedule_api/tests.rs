@@ -767,6 +767,173 @@ async fn an_episode_stays_downloading_while_a_long_cycle_is_running() {
 }
 
 #[tokio::test]
+async fn an_episode_stays_downloading_while_the_worker_beats_through_a_long_scan() {
+    let app = App::new().await;
+    let rule = app
+        .subscribe(
+            anime(1, "받는 중", 4, Some("10:00"), Some("2026-07-02")),
+            self::rule("Work"),
+            SubtitleMode::None,
+            Some("Empty"),
+        )
+        .await;
+    app.state
+        .history
+        .record(
+            NOW - 1000,
+            vec![Observation {
+                channel_id: app.channel.id.clone(),
+                channel_label: app.channel.masked_url(),
+                identity_key: "title:x".into(),
+                title: "[G] Work - 14 (1080p) [AAAA1111].mkv".into(),
+                link: "https://feed.test/item".into(),
+                result: HistoryResult::Received,
+                rule_id: Some(rule.id.clone()),
+                torrent_hash: Some("aa".into()),
+                reason: None,
+            }],
+        )
+        .await
+        .unwrap();
+    let minute = 60_000;
+    app.state
+        .status
+        .record_cycle_interval(minute)
+        .await
+        .unwrap();
+    // The worker looked at Transmission four minutes ago, in the cycle before.
+    app.state
+        .status
+        .record_transmission(
+            TransmissionCounts {
+                downloading: 1,
+                seeding: 0,
+                taken_at: NOW - 4 * minute,
+            },
+            vec!["aa".into()],
+        )
+        .await
+        .unwrap();
+    let video = |body: &Value| body["week"]["days"][3]["cards"][0]["video"].clone();
+
+    // A cycle began three minutes ago and its RSS work ended a minute later;
+    // the worker is still reading the watch folders under the same lock.
+    assert!(app
+        .state
+        .history
+        .try_begin_cycle(NOW - 3 * minute, 0)
+        .await
+        .unwrap());
+    app.state
+        .history
+        .finish_cycle(NOW - 2 * minute)
+        .await
+        .unwrap();
+    app.state
+        .status
+        .record_heartbeat(NOW - 5_000, Some(NOW - 3 * minute))
+        .await
+        .unwrap();
+    assert_eq!(video(&app.week().await), "downloading");
+
+    // It let go a moment ago: the next cycle follows at once.
+    app.state
+        .status
+        .record_heartbeat(NOW - 5_000, None)
+        .await
+        .unwrap();
+    assert_eq!(video(&app.week().await), "downloading");
+
+    // The beat stopped (the worker died in the scan): the look ages out.
+    app.state
+        .status
+        .record_heartbeat(NOW - 2 * minute, Some(NOW - 3 * minute))
+        .await
+        .unwrap();
+    assert_eq!(video(&app.week().await), "waiting");
+
+    // Beating on but holding the lock past the bound is a hung worker.
+    app.state
+        .status
+        .record_heartbeat(NOW - 5_000, Some(NOW - 31 * minute))
+        .await
+        .unwrap();
+    assert_eq!(video(&app.week().await), "waiting");
+}
+
+#[tokio::test]
+async fn a_worker_killed_in_a_cycle_no_longer_holds_the_downloading_look() {
+    let app = App::new().await;
+    let rule = app
+        .subscribe(
+            anime(1, "받는 중", 4, Some("10:00"), Some("2026-07-02")),
+            self::rule("Work"),
+            SubtitleMode::None,
+            Some("Empty"),
+        )
+        .await;
+    app.state
+        .history
+        .record(
+            NOW - 1000,
+            vec![Observation {
+                channel_id: app.channel.id.clone(),
+                channel_label: app.channel.masked_url(),
+                identity_key: "title:x".into(),
+                title: "[G] Work - 14 (1080p) [AAAA1111].mkv".into(),
+                link: "https://feed.test/item".into(),
+                result: HistoryResult::Received,
+                rule_id: Some(rule.id.clone()),
+                torrent_hash: Some("aa".into()),
+                reason: None,
+            }],
+        )
+        .await
+        .unwrap();
+    let minute = 60_000;
+    app.state
+        .status
+        .record_cycle_interval(minute)
+        .await
+        .unwrap();
+    app.state
+        .status
+        .record_transmission(
+            TransmissionCounts {
+                downloading: 1,
+                seeding: 0,
+                taken_at: NOW - 4 * minute,
+            },
+            vec!["aa".into()],
+        )
+        .await
+        .unwrap();
+    // A cycle began three minutes ago and never ended.
+    assert!(app
+        .state
+        .history
+        .try_begin_cycle(NOW - 3 * minute, 0)
+        .await
+        .unwrap());
+    let video = |body: &Value| body["week"]["days"][3]["cards"][0]["video"].clone();
+
+    app.state
+        .status
+        .record_heartbeat(NOW - 5_000, Some(NOW - 3 * minute))
+        .await
+        .unwrap();
+    assert_eq!(video(&app.week().await), "downloading");
+
+    // The beat stopped two minutes ago: the worker is gone, not slow.
+    app.state
+        .status
+        .record_heartbeat(NOW - 2 * minute, Some(NOW - 3 * minute))
+        .await
+        .unwrap();
+    assert_eq!(video(&app.week().await), "waiting");
+}
+
+#[tokio::test]
 async fn nothing_is_downloading_without_a_recorded_cycle_interval() {
     let app = App::new().await;
     let rule = app
