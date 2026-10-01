@@ -102,6 +102,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("status/listing.sql")),
     // 28: which items a channel's first read recorded, and when it was
     Migration::Sql(include_str!("history/first_read.sql")),
+    // 29: the worker's heartbeat while it holds the cycle lock, so the web tells a dead worker from a slow cycle
+    Migration::Sql(include_str!("status/heartbeat.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -1198,6 +1200,32 @@ mod tests {
         assert_eq!(status.torrent_listing().await.unwrap(), None);
         status.record_listing(500, vec!["aa".into()]).await.unwrap();
         assert!(status.torrent_listing().await.unwrap().unwrap().holds("aa"));
+    }
+
+    /// The migration that added the worker's heartbeat is number 29.
+    const BEFORE_HEARTBEAT: usize = 28;
+
+    #[tokio::test]
+    async fn a_database_from_before_the_heartbeat_has_none_until_the_worker_writes_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        {
+            let conn = database_at(&path, BEFORE_HEARTBEAT);
+            conn.execute(
+                "INSERT INTO worker_info (id, cycle_interval_ms) VALUES (1, 300000)",
+                [],
+            )
+            .unwrap();
+        }
+
+        let db = Db::open(&path).await.unwrap();
+
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+        let status = crate::store::status::StatusStore::new(db);
+        assert_eq!(status.cycle_interval().await.unwrap(), Some(300_000));
+        assert_eq!(status.heartbeat().await.unwrap(), None);
+        status.record_heartbeat(500, Some(400)).await.unwrap();
+        assert_eq!(status.heartbeat().await.unwrap().unwrap().beat_at, 500);
     }
 
     /// How many migrations come before the one that stored the first read of
