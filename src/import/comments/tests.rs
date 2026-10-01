@@ -379,3 +379,30 @@ fn a_note_between_the_address_and_the_rule_leaves_the_comment_unattributed() {
         vec![vec![unreadable(ADDRESS_NOT_LAST)]]
     );
 }
+
+#[test]
+fn blank_comment_lines_do_not_hide_the_address_line() {
+    // `#` alone under the address, or between the two lines, says nothing.
+    let trailing = lines(" Mon. 23:30. Team Alpha\n https://anissia.net/anime?animeNo=1001\n \n");
+    assert_eq!(
+        read(&trailing),
+        address_airs(1001, Some("Team Alpha"), 1, "23:30")
+    );
+    let between = lines(" Mon. 23:30. Team Alpha\n\n https://anissia.net/anime?animeNo=1001\n\n");
+    assert_eq!(
+        read(&between),
+        address_airs(1001, Some("Team Alpha"), 1, "23:30")
+    );
+    // Through the file scan: the title, the address and an empty `#` line.
+    let above = "    # Frieren\n    # https://anissia.net/anime?animeNo=1001\n    #\n";
+    assert_eq!(
+        rule_comments(&yaml_with(above), &[1]),
+        vec![vec![address(1001, None)]]
+    );
+    // A real note under the address still leaves the comment unattributed.
+    let above = format!("{HEAD}    #\n    # watch out for batches\n");
+    assert_eq!(
+        rule_comments(&yaml_with(&above), &[1]),
+        vec![vec![unreadable(ADDRESS_NOT_LAST)]]
+    );
+}
