@@ -227,22 +227,37 @@ fn lexical_work_folder(collect: &Path, directory: &str) -> WorkFolder {
     }
 }
 
-/// The active rules other than `rule` whose save folders are in `name`. A
-/// save folder with `..` counts when its text lands there: the folder then
-/// stays rather than leave a rule saving into a moved work folder.
+/// The rules other than `rule` that still use the work folder `name`: the ones
+/// that collect, and the paused ones, which collect again when turned on (a
+/// work folder moved away under them would split the work in two). A save
+/// folder with `..` counts when its text lands there: the folder then stays
+/// rather than leave a rule saving into a moved work folder.
 fn holders<'a>(rules: &'a [Rule], rule: &Rule, collect: &Path, name: &str) -> Vec<&'a Rule> {
-    rules
+    let mut holding: Vec<&Rule> = rules
         .iter()
-        .filter(|other| other.id != rule.id && other.state == RuleState::Active)
+        .filter(|other| other.id != rule.id && other.state != RuleState::Archived)
         .filter(|other| {
             lexical_work_folder(collect, &other.directory) == WorkFolder::Named(name.to_owned())
         })
-        .collect()
+        .collect();
+    // The rules that collect now are the ones to name first.
+    holding.sort_by_key(|other| other.state != RuleState::Active);
+    holding
 }
 
 /// The sentence for a work folder kept because other rules still save in it.
 fn held_reason(holders: &[&Rule]) -> String {
     let first = &holders[0].directory;
+    if holders[0].state == RuleState::Paused {
+        // Every holder is paused: none of them collects now.
+        return match holders.len() {
+            1 => format!("‘{first}’ 규칙이 멈춰 있지만 다시 켜면 이 작품 폴더에 받아서 옮기지 않았어요."),
+            n => format!(
+                "‘{first}’ 규칙 외 {}개가 멈춰 있지만 다시 켜면 이 작품 폴더에 받아서 옮기지 않았어요.",
+                n - 1
+            ),
+        };
+    }
     match holders.len() {
         1 => format!("‘{first}’ 규칙이 아직 이 작품 폴더에 받고 있어서 옮기지 않았어요."),
         n => format!(
@@ -567,6 +582,19 @@ mod tests {
             "‘Clevatess/Season 03’ 규칙 외 1개가 아직 이 작품 폴더에 받고 있어서 옮기지 않았어요."
         );
 
+        // A paused rule collects again when turned on: it still holds the folder,
+        // and is named after the ones that collect now.
+        let mut paused = rule("Clevatess/Season 06");
+        paused.state = RuleState::Paused;
+        assert_eq!(
+            held_reason(&[&paused]),
+            "‘Clevatess/Season 06’ 규칙이 멈춰 있지만 다시 켜면 이 작품 폴더에 받아서 옮기지 않았어요."
+        );
+        assert_eq!(
+            held_reason(&[&paused, &paused]),
+            "‘Clevatess/Season 06’ 규칙 외 1개가 멈춰 있지만 다시 켜면 이 작품 폴더에 받아서 옮기지 않았어요."
+        );
+
         let archiving = rule("Clevatess/Season 02");
         let mut archived = rule("Clevatess/Season 01");
         archived.state = RuleState::Archived;
@@ -575,12 +603,16 @@ mod tests {
         let rules = [
             archiving.clone(),
             archived,
+            paused.clone(),
             one.clone(),
             other,
             dotted.clone(),
         ];
         let found = holders(&rules, &archiving, Path::new("/c"), "Clevatess");
         let ids: Vec<&str> = found.iter().map(|r| r.id.as_str()).collect();
-        assert_eq!(ids, [one.id.as_str(), dotted.id.as_str()]);
+        assert_eq!(
+            ids,
+            [one.id.as_str(), dotted.id.as_str(), paused.id.as_str()]
+        );
     }
 }

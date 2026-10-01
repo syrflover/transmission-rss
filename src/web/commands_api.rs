@@ -286,9 +286,9 @@ async fn check_rule_archive(
         .get_rule(&payload.rule_id)
         .await?
         .ok_or_else(|| ApiError::not_found("규칙을 찾지 못했어요. 삭제됐을 수 있어요."))?;
-    if payload.direction == rule_archive::Direction::Restore && rule.state == RuleState::Active {
+    if payload.direction == rule_archive::Direction::Restore && rule.state != RuleState::Archived {
         return Err(ApiError::invalid(
-            "이 규칙은 이미 수집 중이에요. 화면을 새로고침해 주세요.",
+            "이 규칙은 보관돼 있지 않아요. 화면을 새로고침해 주세요.",
         ));
     }
     Ok(())

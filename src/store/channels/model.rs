@@ -144,7 +144,12 @@ impl fmt::Debug for Channel {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuleState {
     Active,
-    /// Kept in place but not collected.
+    /// `영상 받기` is off: the rule keeps its place and its work folder, and
+    /// collects nothing until it is turned on again. Archiving (which moves
+    /// the folder) is a different state.
+    Paused,
+    /// Kept in place but not collected; the work folder may be in the archive
+    /// folder.
     Archived,
 }
 
@@ -152,6 +157,7 @@ impl RuleState {
     pub fn as_str(self) -> &'static str {
         match self {
             RuleState::Active => "active",
+            RuleState::Paused => "paused",
             RuleState::Archived => "archived",
         }
     }
@@ -159,6 +165,7 @@ impl RuleState {
     pub(super) fn parse(s: &str) -> Option<RuleState> {
         match s {
             "active" => Some(RuleState::Active),
+            "paused" => Some(RuleState::Paused),
             "archived" => Some(RuleState::Archived),
             _ => None,
         }
@@ -256,11 +263,42 @@ pub struct Subscription {
     /// empty for [`SubtitleMode::Undecided`], and for [`SubtitleMode::None`]
     /// the creator followed before, if any, so switching back restores it.
     pub creator: Option<String>,
-    /// The season the rule's videos belong to; `None` until it is connected.
+    /// The season the rule's videos belong to ([`SeasonRef::id`]); `None`
+    /// until it is connected. Once set it stays.
     pub season_id: Option<String>,
+    /// The season the rule's videos are in when another Anissia anime holds it
+    /// already, so the rule could not be connected to it. `None` otherwise.
+    pub season_blocked: Option<String>,
     /// When the rule became a subscription (Unix ms). Items the feed held and
     /// history had recorded before are past: the user receives those.
     pub subscribed_at: i64,
+}
+
+/// A season of a work in the library: what a subscription connects to. The ID
+/// kept in `season_id` is `<work id>:<season number>`; a season has no ID of
+/// its own in the library, which keys its seasons by work and number.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SeasonRef {
+    pub work_id: String,
+    pub number: u32,
+}
+
+impl SeasonRef {
+    pub fn id(&self) -> String {
+        format!("{}:{}", self.work_id, self.number)
+    }
+
+    /// The season an ID from [`SeasonRef::id`] names.
+    pub fn parse(id: &str) -> Option<SeasonRef> {
+        let (work_id, number) = id.rsplit_once(':')?;
+        if work_id.is_empty() {
+            return None;
+        }
+        Some(SeasonRef {
+            work_id: work_id.to_owned(),
+            number: number.parse().ok()?,
+        })
+    }
 }
 
 /// A stored rule.

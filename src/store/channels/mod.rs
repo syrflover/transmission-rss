@@ -20,11 +20,11 @@ mod repo;
 #[cfg(test)]
 mod tests;
 
-pub use repo::NewSubscription;
+pub use repo::{NewSubscription, SeasonLinked};
 
 pub use model::{
     mask_url, query_names, Channel, ChannelInput, ChannelWithRules, OrderItem, Rule, RuleInput,
-    RuleState, Subscription, SubtitleMode, Version, MASK,
+    RuleState, SeasonRef, Subscription, SubtitleMode, Version, MASK,
 };
 
 use super::db::{Db, DbError};
@@ -228,6 +228,97 @@ impl ChannelStore {
         let id = id.to_owned();
         self.db
             .run(move |c| repo::set_rule_state(c, &id, state))
+            .await
+    }
+
+    /// `영상 받기`: turns a rule's collecting on or off (`active`/`paused`) if
+    /// it is still at `expected_version`. An archived rule is refused: it is
+    /// restored through the worker.
+    pub async fn set_video_receiving(
+        &self,
+        id: &str,
+        expected_version: Version,
+        on: bool,
+    ) -> Result<Rule, ChannelError> {
+        let id = id.to_owned();
+        self.db
+            .run(move |c| repo::set_video_receiving(c, &id, expected_version, on))
+            .await
+    }
+
+    /// `자막 받기` of a subscription of a collecting rule: off makes it
+    /// `none` and keeps the creator, on follows the kept creator (or is
+    /// `undecided` when there was none).
+    pub async fn set_subtitle_receiving(
+        &self,
+        id: &str,
+        expected_version: Version,
+        on: bool,
+    ) -> Result<Rule, ChannelError> {
+        let id = id.to_owned();
+        self.db
+            .run(move |c| repo::set_subtitle_receiving(c, &id, expected_version, on))
+            .await
+    }
+
+    /// Changes the creator a subscription follows; `None` is `제작자 미정`.
+    pub async fn set_creator(
+        &self,
+        id: &str,
+        expected_version: Version,
+        creator: Option<String>,
+    ) -> Result<Rule, ChannelError> {
+        let id = id.to_owned();
+        self.db
+            .run(move |c| repo::set_creator(c, &id, expected_version, creator.as_deref()))
+            .await
+    }
+
+    /// Makes an existing rule a subscription (`편성표와 연결`), keeping its
+    /// match phrase, save folder, order and state.
+    pub async fn subscribe_rule(
+        &self,
+        id: &str,
+        expected_version: Version,
+        subscription: NewSubscription,
+    ) -> Result<Rule, ChannelError> {
+        let id = id.to_owned();
+        self.db
+            .run(move |c| repo::subscribe_rule(c, &id, expected_version, &subscription))
+            .await
+    }
+
+    /// Connects a subscription to the season `season_id` the rule's videos are
+    /// in, unless it has one already or another Anissia anime holds the
+    /// season (see [`SeasonLinked`]).
+    pub async fn link_season(
+        &self,
+        rule_id: &str,
+        season_id: &str,
+    ) -> Result<SeasonLinked, ChannelError> {
+        let (rule_id, season_id) = (rule_id.to_owned(), season_id.to_owned());
+        self.db
+            .run(move |c| repo::link_season(c, &rule_id, &season_id))
+            .await
+    }
+
+    /// The Anissia anime whose subscriptions hold the season, if any.
+    pub async fn season_holder(&self, season_id: &str) -> Result<Option<i64>, ChannelError> {
+        let season_id = season_id.to_owned();
+        self.db
+            .run(move |c| repo::season_holder(c, &season_id))
+            .await
+    }
+
+    /// The rules whose subscription is connected to a season of the work, with
+    /// the season's number.
+    pub async fn subscriptions_of_work(
+        &self,
+        work_id: &str,
+    ) -> Result<Vec<(u32, Rule)>, ChannelError> {
+        let work_id = work_id.to_owned();
+        self.db
+            .run(move |c| repo::subscriptions_of_work(c, &work_id))
             .await
     }
 

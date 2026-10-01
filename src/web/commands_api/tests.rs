@@ -624,6 +624,18 @@ async fn a_restore_needs_an_archived_rule_and_a_missing_rule_is_not_found() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
     assert!(app.state.commands.get(ID).await.unwrap().is_none());
 
+    // A paused rule is switched on, not restored: its folder never moved.
+    let paused = app.rule(&channel, RuleState::Paused).await;
+    let (status, text, _) = app
+        .call(
+            Method::POST,
+            "/api/commands",
+            Some(archive_body(ID, &paused, "restore")),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+    assert!(app.state.commands.get(ID).await.unwrap().is_none());
+
     let (status, text, _) = app
         .call(
             Method::POST,

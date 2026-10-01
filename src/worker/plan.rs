@@ -58,7 +58,8 @@ pub struct ChannelPlan {
 }
 
 impl ChannelPlan {
-    /// Archived rules are left out; the remaining rules keep their stored order,
+    /// Paused and archived rules are left out (they collect nothing); the
+    /// remaining rules keep their stored order,
     /// which is their priority. A rule without a match phrase (waiting for its
     /// title) is passed on as `pattern: None`, which matches nothing.
     ///
@@ -344,6 +345,23 @@ mod tests {
     fn archived_rules_never_apply() {
         let p = plan(vec![rule("old", 0, Some("Show"), RuleState::Archived)]);
         assert_eq!(p.judge("Show - 01"), Judgement::NoMatch);
+    }
+
+    #[test]
+    fn paused_rules_never_apply_and_never_shadow_a_later_rule() {
+        let p = plan(vec![
+            rule("paused", 0, Some("Show"), RuleState::Paused),
+            rule("later", 1, Some("Show"), RuleState::Active),
+        ]);
+        assert!(matches!(
+            p.judge("Show - 01"),
+            Judgement::Selected { ref rule_id, .. } if rule_id == "later"
+        ));
+        // Nor does the paused rule count as overlapping the one that takes it.
+        assert!(p.evaluate("Show - 01").overlapping.is_empty());
+
+        let only = plan(vec![rule("paused", 0, Some("Show"), RuleState::Paused)]);
+        assert_eq!(only.judge("Show - 01"), Judgement::NoMatch);
     }
 
     #[test]
