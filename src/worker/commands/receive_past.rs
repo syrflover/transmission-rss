@@ -359,7 +359,7 @@ async fn record(
     at: Millis,
 ) -> Result<HistoryItem, Retry> {
     ctx.history
-        .record(
+        .record_elsewhere(
             at,
             vec![Observation {
                 channel_id: channel.id.clone(),

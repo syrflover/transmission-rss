@@ -1198,8 +1198,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_history_from_before_first_reads_takes_the_items_first_seen_earliest_as_the_first_read(
-    ) {
+    async fn a_history_from_before_first_reads_takes_its_first_recorded_items_as_the_first_read() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("app.db");
         {
@@ -1207,10 +1206,11 @@ mod tests {
             conn.execute_batch(
                 "INSERT INTO history_items (channel_id, channel_label, identity_key, title, link,
                          first_seen_at, last_seen_at, result, result_at) VALUES
-                     ('c1', 'feed', 'guid:a', 'A', 'x', 300, 900, 'no_match', 300),
                      ('c1', 'feed', 'guid:b', 'B', 'x', 100, 900, 'no_match', 100),
+                     ('c1', 'feed', 'guid:a', 'A', 'x', 300, 900, 'no_match', 300),
                      ('c1', 'feed', 'guid:c', 'C', 'x', 200, 900, 'no_match', 200),
                      ('c1', 'feed', 'guid:e', 'E', 'x', 100, 900, 'no_match', 100),
+                     ('c1', 'feed', 'guid:f', 'F', 'x', 40, 900, 'no_match', 40),
                      ('c2', 'feed', 'guid:d', 'D', 'x', 50, 50, 'no_match', 50);",
             )
             .unwrap();
@@ -1242,10 +1242,11 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(found.0, ["c1=100", "c2=50"]);
-        assert_eq!(found.1, 5, "the records are untouched");
+        assert_eq!(found.1, 6, "the records are untouched");
         assert_eq!(
             found.2, "guid:b,guid:d,guid:e",
-            "the items first seen at the channel's earliest time are its first read's"
+            "the items first seen at the time of the channel's first recorded item are its \
+             first read's, not the ones a clock that went back stamped earlier"
         );
     }
 

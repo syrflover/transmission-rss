@@ -17,7 +17,7 @@ use transmission_rss::{
     store::{
         anissia::Anime,
         channels::{ChannelWithRules, NewSubscription, Rule, RuleInput, SubtitleMode},
-        history::HistoryResult,
+        history::{HistoryResult, Observation},
     },
     worker::{CommandsOutcome, CycleReport, TickOutcome},
 };
@@ -488,4 +488,61 @@ async fn a_history_that_cannot_say_when_the_channel_was_first_read_holds_its_sub
     s.feed(&[&p1, &n1, &n2, &n3]);
     s.cycle().await;
     assert_eq!(s.hashes(), vec![hash(103), hash(201)]);
+}
+
+/// What the past search leaves in history when it runs before the channel's
+/// feed has ever been read: the tracker's search feed is not the channel's
+/// feed, so that item says nothing of what the channel held.
+#[tokio::test]
+async fn a_record_made_off_the_feed_is_not_the_channels_first_read() {
+    let (p1, n1, n2) = (plain(1), nova(1), nova(2));
+    let s = Scene::new(&[&p1, &n1, &n2]).await;
+    s.h.advance(1_000);
+    let subscription = s.subscribe().await;
+
+    // A past search finds an earlier episode on the tracker before any cycle
+    // has read the channel.
+    let off_feed = nova(0);
+    let at = s.h.now();
+    s.h.history
+        .record_elsewhere(
+            at,
+            vec![Observation {
+                channel_id: s.channel.channel.id.clone(),
+                channel_label: "x".to_owned(),
+                identity_key: off_feed.guid.clone(),
+                title: off_feed.title.clone(),
+                link: off_feed.link.clone(),
+                result: HistoryResult::NoMatch,
+                rule_id: None,
+                torrent_hash: None,
+                reason: None,
+            }],
+        )
+        .await
+        .unwrap();
+    assert!(!s.h.item("Nova Quest - 00").await.first_read);
+
+    // The first cycle that reads the feed still reads it for the first time:
+    // the subscription takes none of what the feed holds.
+    let report = s.cycle().await;
+    assert_eq!(report.added, 1, "{report:?}");
+    assert_eq!(s.hashes(), vec![hash(201)]);
+    for part in ["Nova Quest - 01", "Nova Quest - 02"] {
+        let item = s.h.item(part).await;
+        assert_eq!(item.result, HistoryResult::NoMatch, "{part}");
+        assert!(item.first_read, "{part}");
+    }
+
+    // Later cycles leave them alone too, and they are past for the rule.
+    s.cycle().await;
+    assert_eq!(s.hashes(), vec![hash(201)]);
+    let preview = s.preview(&subscription).await;
+    for part in ["Nova Quest - 01", "Nova Quest - 02"] {
+        assert_eq!(
+            row_of(&preview, part),
+            ("past".to_owned(), Some("first_read".to_owned())),
+            "{preview}"
+        );
+    }
 }

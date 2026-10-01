@@ -14,9 +14,11 @@
 -- what the first read is, and when. Like the rest of the history it has no
 -- foreign key: it is a fact about records that outlive their channel.
 --
--- The records from before are taken by what they were read by before: a
--- channel's first read is its earliest `first_seen_at`, and the items first
--- seen then are the ones its first read recorded.
+-- The records from before are taken by their order, not their times: a
+-- channel's first read is the time its first record (the lowest `id`) was first
+-- seen, and the items first seen then are the ones its first read recorded.
+-- Taking the earliest `first_seen_at` instead would let a clock that had gone
+-- back, stamping a later item earlier, move the first read to that item.
 
 CREATE TABLE history_first_reads (
     channel_id    TEXT    PRIMARY KEY CHECK (channel_id <> ''),
@@ -24,7 +26,8 @@ CREATE TABLE history_first_reads (
 ) WITHOUT ROWID;
 
 INSERT INTO history_first_reads (channel_id, first_read_at)
-SELECT channel_id, MIN(first_seen_at) FROM history_items GROUP BY channel_id;
+SELECT channel_id, first_seen_at FROM history_items
+WHERE id IN (SELECT MIN(id) FROM history_items GROUP BY channel_id);
 
 ALTER TABLE history_items
     ADD COLUMN first_read INTEGER NOT NULL DEFAULT 0 CHECK (first_read IN (0, 1));

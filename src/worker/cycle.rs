@@ -160,8 +160,9 @@ pub struct CommandsAtStart {
 }
 
 /// The plan of each channel. A channel with a subscription gets one more
-/// look at history, for its first read: when history holds nothing of it yet,
-/// this cycle reads it for the first time and its subscriptions sit out
+/// look at history, for its first read: when history has no first read of it
+/// yet (an item the past search left there is not one), this cycle reads it for
+/// the first time and its subscriptions sit out
 /// ([`ChannelPlan::for_first_read`]); otherwise the items the first read
 /// recorded say for themselves that the feed held them then
 /// ([`ChannelPlan::is_past`]). Channels without a subscription need neither, and

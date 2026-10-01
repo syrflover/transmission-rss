@@ -51,6 +51,7 @@ pub use model::{
 
 use std::collections::HashSet;
 
+use self::repo::Origin;
 use super::db::{Db, DbError};
 
 #[derive(Debug, thiserror::Error)]
@@ -84,11 +85,33 @@ impl HistoryStore {
         at: Millis,
         observations: Vec<Observation>,
     ) -> Result<Vec<Recorded>, HistoryError> {
+        self.record_from(at, Origin::Feed, observations).await
+    }
+
+    /// [`HistoryStore::record`] for sightings made somewhere other than the
+    /// channel's feed (the past search's tracker read). They never establish
+    /// the channel's first read: the first cycle that reads the feed still
+    /// finds the channel unread and keeps its subscriptions out of what the
+    /// feed already holds.
+    pub async fn record_elsewhere(
+        &self,
+        at: Millis,
+        observations: Vec<Observation>,
+    ) -> Result<Vec<Recorded>, HistoryError> {
+        self.record_from(at, Origin::Elsewhere, observations).await
+    }
+
+    async fn record_from(
+        &self,
+        at: Millis,
+        origin: Origin,
+        observations: Vec<Observation>,
+    ) -> Result<Vec<Recorded>, HistoryError> {
         if observations.is_empty() {
             return Ok(Vec::new());
         }
         self.db
-            .run(move |c| repo::record(c, at, &observations))
+            .run(move |c| repo::record(c, at, origin, &observations))
             .await
     }
 

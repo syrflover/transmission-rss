@@ -45,15 +45,29 @@ fn item_from_row(row: &Row<'_>) -> rusqlite::Result<HistoryItem> {
     })
 }
 
+/// Where a sighting was made. Only a read of the channel's feed can be its
+/// first read; an item recorded from anywhere else (the past search, which
+/// reads a tracker's search feed) says nothing of what the channel's own feed
+/// held.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Origin {
+    /// The worker read the channel's feed.
+    Feed,
+    /// Some other read of the tracker: it never establishes the channel's
+    /// first read, nor is its item marked as part of it.
+    Elsewhere,
+}
+
 /// Records all observations in one transaction, in order. The outcome list
 /// matches the input list.
 pub fn record(
     conn: &mut Connection,
     at: Millis,
+    origin: Origin,
     observations: &[Observation],
 ) -> Result<Vec<Recorded>> {
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let out = record_in(&tx, at, observations)?;
+    let out = record_in(&tx, at, origin, observations)?;
     tx.commit()?;
     Ok(out)
 }
@@ -63,6 +77,7 @@ pub fn record(
 pub fn record_in(
     tx: &Connection,
     at: Millis,
+    origin: Origin,
     observations: &[Observation],
 ) -> Result<Vec<Recorded>> {
     let mut out = Vec::with_capacity(observations.len());
@@ -77,26 +92,34 @@ pub fn record_in(
             .optional()?;
 
         let Some((id, code)) = stored else {
-            // The channel's first record is its first read, and the records of
-            // that same cycle (the same `at`) belong to it. Which they are is
-            // kept with each item, so that no later comparison of times can
-            // move the line, whatever the clock does.
-            let first_read_cycle: Option<bool> = tx
-                .query_row(
-                    "SELECT first_read_at = ?2 FROM history_first_reads WHERE channel_id = ?1",
-                    params![obs.channel_id, at],
-                    |row| row.get(0),
-                )
-                .optional()?;
-            let first_read = match first_read_cycle {
-                Some(same_cycle) => same_cycle,
-                None => {
-                    tx.execute(
-                        "INSERT INTO history_first_reads (channel_id, first_read_at)
-                         VALUES (?1, ?2)",
-                        params![obs.channel_id, at],
-                    )?;
-                    true
+            // The channel's first record of its feed is its first read, and
+            // the records of that same cycle (the same `at`) belong to it.
+            // Which they are is kept with each item, so that no later
+            // comparison of times can move the line, whatever the clock did.
+            // A record from elsewhere is neither: it leaves the first read to
+            // the cycle that reads the feed.
+            let first_read = match origin {
+                Origin::Elsewhere => false,
+                Origin::Feed => {
+                    let first_read_cycle: Option<bool> = tx
+                        .query_row(
+                            "SELECT first_read_at = ?2 FROM history_first_reads
+                             WHERE channel_id = ?1",
+                            params![obs.channel_id, at],
+                            |row| row.get(0),
+                        )
+                        .optional()?;
+                    match first_read_cycle {
+                        Some(same_cycle) => same_cycle,
+                        None => {
+                            tx.execute(
+                                "INSERT INTO history_first_reads (channel_id, first_read_at)
+                                 VALUES (?1, ?2)",
+                                params![obs.channel_id, at],
+                            )?;
+                            true
+                        }
+                    }
                 }
             };
             tx.execute(

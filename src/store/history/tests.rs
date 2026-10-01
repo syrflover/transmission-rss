@@ -321,6 +321,59 @@ async fn the_items_of_a_channels_first_read_are_marked_whatever_the_clock_does_a
 }
 
 #[tokio::test]
+async fn a_record_from_elsewhere_than_the_feed_neither_makes_nor_joins_the_first_read() {
+    let (_dir, _db, history) = store().await;
+    let first_read = |history: &HistoryStore| {
+        let history = history.clone();
+        async move {
+            history
+                .first_sightings(vec!["c1".into()])
+                .await
+                .unwrap()
+                .get("c1")
+                .copied()
+        }
+    };
+    let marked = |history: &HistoryStore, key: &str| {
+        let history = history.clone();
+        let key = key.to_owned();
+        async move {
+            history
+                .item_by_key("c1".into(), key)
+                .await
+                .unwrap()
+                .unwrap()
+                .first_read
+        }
+    };
+
+    // Before the feed was ever read: the record is kept, the channel is not read.
+    history
+        .record_elsewhere(1_000, vec![obs("found", HistoryResult::NoMatch)])
+        .await
+        .unwrap();
+    assert_eq!(first_read(&history).await, None);
+    assert!(!marked(&history, "found").await);
+
+    // The feed's first read comes afterwards and is the channel's first read,
+    // whatever was recorded before it.
+    history
+        .record(2_000, vec![obs("a", HistoryResult::NoMatch)])
+        .await
+        .unwrap();
+    assert_eq!(first_read(&history).await, Some(2_000));
+    assert!(marked(&history, "a").await);
+
+    // Nor does a record from elsewhere at the very time of the first read join it.
+    history
+        .record_elsewhere(2_000, vec![obs("found-later", HistoryResult::NoMatch)])
+        .await
+        .unwrap();
+    assert!(!marked(&history, "found-later").await);
+    assert_eq!(first_read(&history).await, Some(2_000));
+}
+
+#[tokio::test]
 async fn a_channels_first_read_does_not_move_when_the_clock_goes_back() {
     let (_dir, _db, history) = store().await;
     history
