@@ -1,5 +1,5 @@
 import { forget, forgetPrefix, patch } from "@/lib/cached";
-import { WORKS_KEY } from "@/screens/library/api";
+import { forgetLibrary } from "@/screens/library/api";
 
 import type { Channel } from "./channels/api";
 import type { RuleList } from "./rules/api";
@@ -52,7 +52,7 @@ export function collectFolderChanged(): void {
   forget(KEYS.rules);
   forget(KEYS.status);
   forget(KEYS.watchFolders);
-  forget(WORKS_KEY);
+  forgetLibrary();
   forgetPrefix(PREVIEW_PREFIX);
 }
 

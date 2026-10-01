@@ -49,6 +49,11 @@ export function peek<T>(key: string): T | undefined {
   return entries.get(key) as T | undefined;
 }
 
+/** The cached value of a key, shown again whenever it changes; `undefined` while there is none. */
+export function useStored<T>(key: string): T | undefined {
+  return useSyncExternalStore(subscribe, () => peek<T>(key));
+}
+
 /** Sets the value of a key. */
 export function store<T>(key: string, value: T): void {
   entries.set(key, value);

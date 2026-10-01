@@ -1,19 +1,22 @@
-import { useDeferredValue, useMemo } from "react";
+import { useEffect, useRef } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { useCached } from "@/lib/cached";
 import { cn } from "@/lib/utils";
 
 import { EmptyState, ScreenFrame } from "./ScreenFrame";
 import { btnNeutral, inputClass } from "./collect/channels/styles";
-import { loadWorks, WORKS_KEY, type LibraryWorkList } from "./library/api";
+import type { FilterKey, SortKey } from "./library/api";
 import { GridIcon, ListIcon } from "./library/icons";
-import { FILTERS, prepare, selectWorks, sortWorks, SORTS, type FilterKey, type SortKey } from "./library/model";
+import { FILTERS, SORTS } from "./library/model";
+import { useDebounced, useWorkPages } from "./library/pages";
 import { useLibraryPrefs, type ViewKey } from "./library/prefs";
 import { WorkItems } from "./library/WorkItem";
 
-const LOAD_FAILED = "작품 목록을 불러오지 못했어요.";
+/** How long typing has to stop before the search is sent. */
+const SEARCH_PAUSE_MS = 250;
+/** The next page is read this far before the end of the list comes into view. */
+const READ_AHEAD = "0px 0px 600px 0px";
 
 const VIEWS: { key: ViewKey; label: string; Icon: typeof GridIcon }[] = [
   { key: "grid", label: "표지", Icon: GridIcon },
@@ -21,43 +24,32 @@ const VIEWS: { key: ViewKey; label: string; Icon: typeof GridIcon }[] = [
 ];
 
 /**
- * Library: every work in one list, as a cover grid or a list, with a sort, a
- * filter and a title search. The whole answer is kept in memory (see
- * `lib/cached.ts`), so sorting and searching never wait for the server and
- * coming back from a work shows the list, tall enough to scroll to where it was,
- * in the first render.
+ * Library: the works as a cover grid or a list, with a sort, a filter and a
+ * title search. The server sorts, filters and searches and answers one page at
+ * a time; the next page is read when the end of the list comes into view (see
+ * `library/pages.ts`). Pages already read stay in memory, so coming back from a
+ * work shows them, tall enough to scroll to where the page was, in the first render.
  */
 export function LibraryScreen() {
   const prefs = useLibraryPrefs();
-  const works = useCached<LibraryWorkList>(WORKS_KEY, loadWorks, LOAD_FAILED);
-
-  const all = useMemo(() => (works.data ? prepare(works.data.works) : null), [works.data]);
-  const sorted = useMemo(() => (all ? sortWorks(all, prefs.sort) : null), [all, prefs.sort]);
-  // The list follows typing a moment later, so the field itself never lags.
-  const search = useDeferredValue(prefs.search);
-  const shown = useMemo(
-    () => (sorted ? selectWorks(sorted, prefs.filter, search) : null),
-    [sorted, prefs.filter, search],
-  );
+  // The list follows typing once it pauses, so the field itself never lags and a request is not sent per key.
+  const search = useDebounced(prefs.search, SEARCH_PAUSE_MS);
+  const pages = useWorkPages({ sort: prefs.sort, filter: prefs.filter, search });
+  const data = pages.data;
 
   let body;
-  if (shown === null) {
+  if (data === undefined) {
     body =
-      works.error !== null ? (
-        <div className="flex flex-col items-start gap-2.5">
-          <p role="alert" className="text-[13px] font-semibold text-urgent">
-            {works.error}
-          </p>
-          <Button type="button" variant="ghost" className={btnNeutral} onClick={works.reload}>
-            재시도
-          </Button>
-        </div>
-      ) : works.slow ? (
+      pages.error !== null ? (
+        <LoadError message={pages.error} onRetry={pages.reload} />
+      ) : pages.slow ? (
         <p className="text-[13px] text-text-muted">작품을 불러오는 중이에요.</p>
       ) : null;
-  } else if (all!.length === 0) {
+  } else if (pages.error !== null) {
+    body = <LoadError message={pages.error} onRetry={pages.reload} />;
+  } else if (data.libraryCount === 0) {
     body = <EmptyState>아직 발견한 작품이 없어요. 감시 폴더를 연결하면 작품이 여기에 나타나요.</EmptyState>;
-  } else if (shown.length === 0) {
+  } else if (data.works.length === 0 && !pages.stale) {
     body =
       prefs.filter === "airing" ? (
         <EmptyState>방영 정보를 아직 알 수 없어서 방영 중인 작품을 가려낼 수 없어요.</EmptyState>
@@ -79,15 +71,18 @@ export function LibraryScreen() {
       );
   } else {
     body = (
-      <div className={shown === null || search !== prefs.search ? "opacity-80" : undefined}>
-        <WorkItems works={shown} view={prefs.view} />
-      </div>
+      <>
+        <div className={pages.stale || search !== prefs.search ? "opacity-80" : undefined}>
+          <WorkItems works={data.works} view={prefs.view} />
+        </div>
+        <EndOfList pages={pages} />
+      </>
     );
   }
 
   return (
     <ScreenFrame title="라이브러리">
-      {all !== null && all.length > 0 && (
+      {data !== undefined && data.libraryCount > 0 && (
         <div className="flex flex-col gap-3 pb-4">
           <div className="flex flex-wrap items-center gap-2.5">
             <Input
@@ -142,11 +137,9 @@ export function LibraryScreen() {
             ))}
           </div>
 
-          {shown !== null && (
-            <p role="status" className="text-[13px] text-text-muted">
-              작품 {shown.length}편
-            </p>
-          )}
+          <p role="status" className="text-[13px] text-text-muted">
+            작품 {data.total}편
+          </p>
         </div>
       )}
       {body}
@@ -164,5 +157,61 @@ function FilterChip(props: { label: string; pressed: boolean; onClick: () => voi
     >
       {props.label}
     </button>
+  );
+}
+
+function LoadError(props: { message: string; onRetry: () => void }) {
+  return (
+    <div className="flex flex-col items-start gap-2.5">
+      <p role="alert" className="text-[13px] font-semibold text-urgent">
+        {props.message}
+      </p>
+      <Button type="button" variant="ghost" className={btnNeutral} onClick={props.onRetry}>
+        재시도
+      </Button>
+    </div>
+  );
+}
+
+/**
+ * What follows the last loaded work: an empty strip that reads the next page when it
+ * comes within reach of the viewport, and the line for a read that is slow or failed.
+ * It sits below the list, so appending a page never moves what is above it.
+ */
+function EndOfList({ pages }: { pages: ReturnType<typeof useWorkPages> }) {
+  const { data, loadMore, moreFailed } = pages;
+  const strip = useRef<HTMLDivElement>(null);
+  const loaded = data?.works.length ?? 0;
+  const watching = data?.next != null && !moreFailed;
+
+  // Watching starts again after each page: a strip that is still within reach reports at once.
+  useEffect(() => {
+    const element = strip.current;
+    if (!watching || element === null) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) loadMore();
+      },
+      { rootMargin: READ_AHEAD },
+    );
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [watching, loaded, loadMore]);
+
+  return (
+    <>
+      <div ref={strip} aria-hidden="true" className="h-px" />
+      {pages.loadingMore && <p className="pt-4 text-[13px] text-text-muted">작품을 더 불러오는 중이에요.</p>}
+      {moreFailed && (
+        <div className="flex flex-col items-start gap-2.5 pt-4">
+          <p role="alert" className="text-[13px] font-semibold text-urgent">
+            다음 작품을 불러오지 못했어요.
+          </p>
+          <Button type="button" variant="ghost" className={btnNeutral} onClick={loadMore}>
+            다시 시도
+          </Button>
+        </div>
+      )}
+    </>
   );
 }

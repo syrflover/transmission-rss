@@ -3,10 +3,10 @@ import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ApiError } from "@/lib/api";
-import { forget, useCached } from "@/lib/cached";
+import { useCached } from "@/lib/cached";
 import { ago, dateTime } from "@/lib/time";
 import { KEYS } from "@/screens/collect/cache";
-import { WORKS_KEY } from "@/screens/library/api";
+import { forgetLibrary } from "@/screens/library/api";
 import { hintClass, inputClass, labelClass } from "@/screens/collect/channels/styles";
 
 import { Labeled, BTN, Facts } from "../parts";
@@ -29,9 +29,9 @@ const LOAD_FAILED = "감시 폴더를 불러오지 못했어요.";
 export function FoldersPanel() {
   const folders = useCached<WatchFolderList>(KEYS.watchFolders, loadWatchFolders, LOAD_FAILED);
   const data = folders.data;
-  // The library list carries the works of these folders: it is read again the next time it opens.
+  // The library list and the work pages carry what these folders hold: they are read again the next time they open.
   const reload = () => {
-    forget(WORKS_KEY);
+    forgetLibrary();
     folders.reload();
   };
 
@@ -75,7 +75,7 @@ export function FoldersPanel() {
                     folder={folder}
                     onReload={reload}
                     onRemoved={() => {
-                      forget(WORKS_KEY);
+                      forgetLibrary();
                       folders.update((list) => ({ folders: list.folders.filter((f) => f.id !== folder.id) }));
                     }}
                   />
@@ -85,7 +85,7 @@ export function FoldersPanel() {
           )}
           <AddFolder
             onAdded={(folder) => {
-              forget(WORKS_KEY);
+              forgetLibrary();
               folders.update((list) => ({ folders: [...list.folders, folder] }));
             }}
           />

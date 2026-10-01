@@ -17,27 +17,34 @@ export const FROM_LIBRARY = { from: "library" } as const;
 /**
  * The cover until artwork exists: the first letter of the title on a block
  * tinted by the title, so the same work looks the same every time. Decorative
- * (the title is next to it as text).
+ * (the title is next to it as text). An `imageUrl` (no work has one yet) is
+ * read lazily, only once the cover is near the viewport, and covers the
+ * placeholder, which stays underneath while it loads or if it fails.
  */
 export function Cover({
   work,
   className,
   letterClass,
+  imageUrl,
 }: {
   work: Pick<Work, "hue" | "initial">;
   className: string;
   letterClass: string;
+  imageUrl?: string | null;
 }) {
   return (
     <span
       aria-hidden="true"
-      className={cn("flex flex-none items-center justify-center overflow-hidden rounded-lg shadow-(--poster-shadow)", className)}
+      className={cn("relative flex flex-none items-center justify-center overflow-hidden rounded-lg shadow-(--poster-shadow)", className)}
       style={{
         backgroundColor: `color-mix(in srgb, hsl(${work.hue} 52% 52%) 30%, var(--surface-2))`,
         color: `color-mix(in srgb, hsl(${work.hue} 70% 62%) 78%, var(--text-primary))`,
       }}
     >
       <span className={cn("font-bold select-none", letterClass)}>{work.initial}</span>
+      {imageUrl && (
+        <img src={imageUrl} alt="" loading="lazy" decoding="async" className="absolute inset-0 size-full object-cover" />
+      )}
     </span>
   );
 }

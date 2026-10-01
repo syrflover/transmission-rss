@@ -1,6 +1,7 @@
 import { useCallback, useState } from "react";
 
-import { DEFAULT_SORT, FILTERS, SORTS, type FilterKey, type SortKey } from "./model";
+import type { FilterKey, SortKey } from "./api";
+import { DEFAULT_SORT, FILTERS, SORTS } from "./model";
 
 /**
  * What the library list remembers.

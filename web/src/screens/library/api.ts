@@ -1,8 +1,9 @@
 import { api, ApiError } from "@/lib/api";
+import { forgetPrefix } from "@/lib/cached";
 
 /**
- * The library list (`src/web/library_api.rs`): every work with the summary the
- * list shows. Times are Unix milliseconds, `null` when unknown.
+ * The library list (`src/web/library_api.rs`): the works with the summary the
+ * list shows, one page at a time. Times are Unix milliseconds, `null` when unknown.
  */
 
 /** A run of consecutive episodes, written as in the file names (`first === last` for one). */
@@ -36,15 +37,54 @@ export interface LibraryWork {
   subtitle_added_at: number | null;
 }
 
-export interface LibraryWorkList {
-  works: LibraryWork[];
+/** How a page is ordered (`sort=` of the request). */
+export type SortKey = "title" | "year" | "added" | "video" | "subtitle";
+/** Which works a page lists (`filter=` of the request). */
+export type FilterKey = "all" | "airing" | "complete" | "partial" | "none" | "check";
+
+/** One page of the list. */
+export interface LibraryWorkPage {
+  items: LibraryWork[];
+  /** Where the page after this one starts (`after=`); `null` after the last page. */
+  next: string | null;
+  /** How many works the filter and the search match, over every page. */
+  total: number;
+  /** How many works the library has, whatever the filter and the search. */
+  library_count: number;
 }
 
-/** The cache key of the list; whoever changes the watch folders drops it. */
-export const WORKS_KEY = "library:works";
+export interface WorkPageQuery {
+  sort: SortKey;
+  filter: FilterKey;
+  /** The title text to search for; empty for none. */
+  q: string;
+  /** The `next` of the page before, none for the first page. */
+  after?: string | null;
+  /** How many works a page has; the server's default (60) when left out. */
+  limit?: number;
+}
 
-export function loadWorks(signal?: AbortSignal): Promise<LibraryWorkList> {
-  return api<LibraryWorkList>("/library/works", { signal });
+export function loadWorkPage(query: WorkPageQuery, signal?: AbortSignal): Promise<LibraryWorkPage> {
+  const params = new URLSearchParams({ sort: query.sort, filter: query.filter });
+  if (query.q !== "") params.set("q", query.q);
+  if (query.after) params.set("after", query.after);
+  if (query.limit !== undefined) params.set("limit", String(query.limit));
+  return api<LibraryWorkPage>(`/library/works?${params}`, { signal });
+}
+
+/** The cache keys that start with this hold the loaded pages of the list. */
+export const LIST_PREFIX = "library:list:";
+/** ...and these one work's page. */
+export const WORK_PREFIX = "library:work:";
+
+/**
+ * Whoever changes which folders the library reads (adds, rescans or removes a
+ * watch folder, sets the collect or archive folder) calls this: the loaded
+ * pages of the list and every work's page are read again the next time.
+ */
+export function forgetLibrary(): void {
+  forgetPrefix(LIST_PREFIX);
+  forgetPrefix(WORK_PREFIX);
 }
 
 /** Where a work opens (the work detail screen). */
@@ -106,7 +146,7 @@ export interface WorkDetail {
 }
 
 /** The cache key of one work's page. */
-export const workKey = (id: string) => `library:work:${id}`;
+export const workKey = (id: string) => `${WORK_PREFIX}${id}`;
 
 /** One work, or `null` when the library has no work with this ID. */
 export async function loadWork(id: string, signal?: AbortSignal): Promise<WorkDetail | null> {
