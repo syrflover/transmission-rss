@@ -35,9 +35,10 @@
 //! the failures. A row whose new video is gone (or not the checked one) on
 //! two looks in a row ([`Revision::new_missing_at`]) ends as
 //! [`RevisionState::Abandoned`]: nothing is removed or renamed, it holds up
-//! no other replacement of the episode, and the old release stays superseded
-//! (its torrent was removed for this replacement, or is still there with its
-//! video).
+//! no other replacement of the episode nor any lower revision of its release
+//! (the rows skipped for it start over, as when it fails), and the old
+//! release stays superseded (its torrent was removed for this replacement,
+//! or is still there with its video).
 //!
 //! A step is written only from the state it was decided from
 //! ([`RevisionStore::advance`]), and a row the worker decides together with
@@ -59,9 +60,9 @@
 //!
 //! A lower revision skipped while a higher one was on its way
 //! ([`Step::Overtaken`]) keeps that row ([`Revision::overtaken_by`]). If the
-//! higher one fails, the lower one goes back to `receiving` in the same
-//! transaction and replaces the video after all, from its first step; a
-//! lower revision skipped for any other reason stays skipped.
+//! higher one fails or is abandoned, the lower one goes back to `receiving`
+//! in the same transaction and replaces the video after all, from its first
+//! step; a lower revision skipped for any other reason stays skipped.
 
 #[cfg(test)]
 mod tests;
@@ -317,10 +318,10 @@ pub enum Step {
     NewMissing {
         reason: String,
     },
-    /// A `removing` or `removed` row whose new video was gone (or, before
-    /// the old video was removed, not the checked one) on two looks in a
-    /// row: the replacement ends as [`RevisionState::Abandoned`], and
-    /// `reason` says why.
+    /// A row whose new video was gone (or, before the old video was
+    /// removed, not the checked one) on two looks in a row: the replacement
+    /// ends as [`RevisionState::Abandoned`], and `reason` says why. The rows
+    /// skipped for it while it was on its way start over, as when it fails.
     Abandoned {
         reason: String,
     },
@@ -501,7 +502,8 @@ fn torrent_taken(conn: &Connection, id: Option<i64>, hash: &str) -> Result<bool>
 }
 
 /// The rows skipped for the row `id` while it was on its way
-/// ([`Revision::overtaken_by`]), which has failed: each starts over as
+/// ([`Revision::overtaken_by`]), which has failed or was abandoned (its video
+/// never took the episode name): each starts over as
 /// `receiving`, having forgotten what it found, unless another row under way
 /// or done has its torrent by now (the same release through another channel,
 /// or another row skipped for `id` that started over first), which skips it
@@ -947,16 +949,17 @@ impl RevisionStore {
             .await
     }
 
-    /// The releases that replaced (or are replacing) a video, or removed its
-    /// torrent and then lost their own ([`RevisionState::Abandoned`]): their
-    /// lower revisions are not received into the folder again.
+    /// The releases that replaced (or are replacing) a video: their lower
+    /// revisions are not received into the folder again. Not one abandoned
+    /// ([`RevisionState::Abandoned`]), whose video never took the episode
+    /// name: a lower revision may still replace the video there.
     pub async fn replacements(&self) -> Result<Vec<Replacement>> {
         self.db
             .run(|c| {
                 let mut stmt = c.prepare(
                     "SELECT r.folder, h.title, r.new_version FROM video_revisions r
                        JOIN history_items h ON h.id = r.item_id
-                      WHERE r.state IN ('removing', 'removed', 'done', 'abandoned')",
+                      WHERE r.state IN ('removing', 'removed', 'done')",
                 )?;
                 let rows = stmt
                     .query_map([], |row| {
@@ -1135,11 +1138,15 @@ impl RevisionStore {
                             params![id, OVERTAKEN, by, at],
                         )?
                     }
-                    Step::Abandoned { reason } => tx.execute(
-                        "UPDATE video_revisions SET state = 'abandoned', reason = ?2,
-                             updated_at = ?3 WHERE id = ?1",
-                        params![id, reason, at],
-                    )?,
+                    Step::Abandoned { reason } => {
+                        let written = tx.execute(
+                            "UPDATE video_revisions SET state = 'abandoned', reason = ?2,
+                                 updated_at = ?3 WHERE id = ?1",
+                            params![id, reason, at],
+                        )?;
+                        revive_overtaken(&tx, id, at)?;
+                        written
+                    }
                     Step::RemovalWaits { reason } => tx.execute(
                         "UPDATE video_revisions SET reason = ?2, updated_at = ?3
                           WHERE id = ?1 AND state = 'removing'",

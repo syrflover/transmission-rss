@@ -2713,3 +2713,31 @@ async fn a_missing_new_video_is_seen_before_the_old_video_is_read() {
     assert!(!probe.await.unwrap(), "the old video was read");
     assert_eq!(s.state_of(&v3()).await.code(), "abandoned");
 }
+
+// --- An abandoned replacement holds nothing back ---------------------------------------
+
+/// `14v2` was skipped because `14v3` was on its way. `14v3` removes `14` and
+/// then loses its video before it takes the name, so it is abandoned: `14v2`
+/// starts over as if `14v3` had failed, and puts its video under the episode
+/// name.
+#[tokio::test]
+async fn a_lower_revision_skipped_for_an_abandoned_one_replaces_the_video() {
+    let s = Setup::new().await;
+    s.v2_skipped_for_v3().await;
+    s.h.tr.reject_rename_of(V3_HASH, Some("busy"));
+    s.complete(V3_HASH);
+    s.cycle().await;
+    assert_eq!(s.state_of(&v3()).await, RevisionState::Removed);
+    assert_eq!(s.names(), sorted(vec![v2(), v3()]));
+
+    std::fs::remove_file(s.file(&v3())).unwrap();
+    s.cycle().await;
+    s.cycle().await;
+    assert_eq!(s.state_of(&v3()).await.code(), "abandoned");
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Receiving);
+
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Done);
+    assert_eq!(s.names(), vec![EPISODE_NAME]);
+    assert_eq!(read(&s.file(EPISODE_NAME)), NEW_BYTES);
+}

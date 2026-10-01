@@ -688,8 +688,9 @@ async fn every_item_of_the_removed_torrent_is_superseded() {
 }
 
 /// A replacement that removed the old torrent and then lost its new video
-/// ends as abandoned: it holds up no other replacement of the episode, is no
-/// failure and no longer acted on, and the old release stays superseded.
+/// ends as abandoned: it holds up no other replacement of the episode or
+/// lower revision of its release, is no failure and no longer acted on, and
+/// the old release stays superseded.
 #[tokio::test]
 async fn an_abandoned_replacement_keeps_the_old_release_superseded_and_holds_nothing_up() {
     let (_dir, db) = db().await;
@@ -729,7 +730,8 @@ async fn an_abandoned_replacement_keeps_the_old_release_superseded_and_holds_not
     assert_eq!(store.verdict(v3.id).await.unwrap(), Claim::Go);
     let marks = store.marks("c1".into(), vec!["14".into()]).await.unwrap();
     assert_eq!(marks.get("14"), Some(&Mark::Superseded));
-    assert_eq!(store.replacements().await.unwrap().len(), 1);
+    // Its video never took the episode name: it holds no lower revision back.
+    assert!(store.replacements().await.unwrap().is_empty());
 }
 
 /// A look that missed the new video marks the row; one that found it again
