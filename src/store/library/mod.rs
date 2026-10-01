@@ -317,6 +317,17 @@ impl LibraryStore {
         LibraryStore { db }
     }
 
+    /// A number that changes whenever what [`LibraryStore::find_videos`]
+    /// answers can change: a file recorded or forgotten or changed, a work
+    /// folder renamed, moved to another watch folder or forgotten, a watch
+    /// folder registered or unregistered. It is kept by the database itself,
+    /// so it counts the writes of the web and of the worker alike, and a scan
+    /// that finds everything as it was does not change it. Compare it for
+    /// equality only.
+    pub async fn generation(&self) -> Result<i64, LibraryError> {
+        self.db.run(|c| Ok(repo::generation(c)?)).await
+    }
+
     /// The watch folders in the order they were registered.
     pub async fn folders(&self) -> Result<Vec<WatchFolder>, LibraryError> {
         self.db.run(|c| Ok(repo::folders(c)?)).await

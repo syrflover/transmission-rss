@@ -813,3 +813,12 @@ pub(super) fn works(conn: &Connection, folder_id: &str) -> rusqlite::Result<Vec<
     }
     Ok(works)
 }
+
+/// See [`super::LibraryStore::generation`].
+pub(super) fn generation(conn: &Connection) -> rusqlite::Result<i64> {
+    conn.query_row(
+        "SELECT generation FROM library_generation WHERE id = 1",
+        [],
+        |row| row.get(0),
+    )
+}
