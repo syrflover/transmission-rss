@@ -159,6 +159,15 @@ A rule's **work folder** is the first part of its save folder: `Clevatess` for `
 - Where a work folder is, is read from the disk each time. A move cut short (the worker stopped or restarted) is picked up again by the worker, which moves what is left. A folder moved by hand is recognised too.
 - While a rule's folder is moving, the rule's save folder cannot be changed, and no rule can be created in or moved into that work folder. A save folder with `..` is refused when it is typed (rules saved before keep working).
 
+### Archive suggestions
+
+The 구독 tab (beside the title candidates) and a rule's detail suggest archiving a rule that is not archived and has a match phrase (a subscription still waiting for its title has none), paused rules included. Nothing is switched off by itself, and the menu badge does not count suggestions. A suggestion is computed when read (`GET /api/archive-suggestions`, which the future 할 일 list reads too) from the stored Anissia snapshots and the history; nothing is asked of Anissia or the feed, so while Anissia cannot be reached the refresh finds nothing out and no `방영 종료` ground appears. Grounds:
+
+- `방영 종료`: the subscription's anime has an end date that has passed (the weekly schedule drops its card by the same rule), or it has none and the daily refresh found it no longer listed.
+- `새 항목 없음`: 4 weeks (exactly) have passed with no new item matching the rule. A *new item* is one the channel first recorded in the last 4 weeks whose title the rule matches (the channel's excludes and the rules ahead of it set aside as the rule preview does), whatever became of it; so what an earlier rule took, or a paused rule saw, counts. The 4 weeks count from the rule's last receive, and for a rule that never received from when it started collecting: the latest of when the app first had the rule, when it became a subscription or was given its title, when it was last turned back on or restored, and, for a rule from before the migration, when its channel was first read. A channel that recorded more than 20,000 items in 4 weeks gives its rules no `새 항목 없음` ground (the web logs it), and so does a rule whose regular expression does not compile.
+
+`수집 유지` remembers the grounds it saw and nothing else changes about the rule: the same ground does not suggest it again (the end of the anime is told by its end date, the quiet stretch by the moment it counts from), and a new ground does (an ending, or a quiet stretch after another receive). Archiving from the suggestions sends each rule's own `rule_archive` command in the list's order, one after another, so a work folder shared by several of them moves once, with the last. The migration adds `rule_started` (stamped by triggers when a rule is created; rules from before it have no stamp) and `archive_suggestion_kept`.
+
 ## Switching from the cron job
 
 Up to 0.3.x, `scripts/cron.sh` ran the old binary every 5 minutes. Do not run it next to the worker: each removes the trss-labelled torrents that are not in its own feeds, so they can remove each other's torrents.
