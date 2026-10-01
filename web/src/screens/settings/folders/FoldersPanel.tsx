@@ -204,13 +204,19 @@ function FolderRow({
           </div>
         </div>
       ) : (
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
           <button type="button" className={BTN.action} disabled={waiting} onClick={() => void rescan.press()}>
             {waiting ? "확인 중" : "다시 확인"}
           </button>
-          <button type="button" className={BTN.plain} disabled={waiting} onClick={() => setConfirming(true)}>
-            등록 해제
-          </button>
+          {folder.automatic ? (
+            <p className="m-0 min-w-0 flex-1 basis-60 text-[13px] leading-normal text-text-secondary">
+              수집 폴더 또는 보관 폴더라서, 수집 폴더 설정에 정해 두는 동안 늘 감시해요.
+            </p>
+          ) : (
+            <button type="button" className={BTN.plain} disabled={waiting} onClick={() => setConfirming(true)}>
+              등록 해제
+            </button>
+          )}
         </div>
       )}
     </section>

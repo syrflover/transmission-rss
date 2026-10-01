@@ -29,8 +29,20 @@
 //! - both are on the same filesystem (`st_dev`), because the archive move is a
 //!   rename and a copy across filesystems is not something it does.
 //!
+//! - neither is inside a watch folder the user registered, and neither contains
+//!   one (the same work would be found twice).
+//!
 //! The folders are stored as typed (trailing slashes dropped), not resolved:
 //! Transmission's folder names are compared as written.
+//!
+//! # The watch folders
+//!
+//! The two folders are always watch folders ([`crate::automatic_watch`]). The
+//! save registers a newly set folder (reading it once, so that its first
+//! reading is the baseline as for a folder added by hand), turns a folder the
+//! user registered at the same place into the automatic one with its records,
+//! and removes the automatic watch folder of a path that is not used any more,
+//! all in the transaction that stores the settings.
 
 use std::path::{Path, PathBuf};
 
@@ -41,8 +53,15 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::{ApiError, AppState};
-use crate::store::settings::{CollectionSettings, SettingsError};
+use super::{commands_api::now_millis, watch_folders_api, ApiError, AppState};
+use crate::{
+    automatic_watch::{self, Wanted},
+    store::{
+        db::DbError,
+        library::{self, LibraryError},
+        settings::{CollectionSettings, SettingsError},
+    },
+};
 
 #[cfg(test)]
 mod tests;
@@ -130,14 +149,79 @@ async fn write(
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))??;
 
-    match state
-        .settings
-        .put_collection(version, folder, archive_folder)
-        .await
-    {
-        Ok(saved) => Ok(Json(Some(saved).into())),
-        Err(SettingsError::Conflict { .. }) => Err(ApiError::conflict_with(current(&state).await?)),
-        Err(e) => Err(store_error(e)),
+    // The settings and the watch folders change together. The plan is made
+    // from the registered folders as read here; if they change before the
+    // transaction, it fails and the plan is made again.
+    let mut attempt = 0;
+    loop {
+        let registered = state.library.folders().await.map_err(watch_error)?;
+        let plan = {
+            let wanted = wanted_folders(&folder, archive_folder.as_deref());
+            tokio::task::spawn_blocking(move || {
+                let mut plan =
+                    automatic_watch::plan(&wanted, &registered).map_err(ApiError::invalid)?;
+                automatic_watch::read_new_folders(&mut plan);
+                Ok::<_, ApiError>(plan)
+            })
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))??
+        };
+        let saved = state
+            .settings
+            .put_collection_with(version, folder.clone(), archive_folder.clone(), move |tx| {
+                library::apply_automatic_in(tx, &plan, now_millis()).map_err(SaveError::Library)
+            })
+            .await;
+        match saved {
+            Ok((saved, _)) => return Ok(Json(Some(saved).into())),
+            Err(SaveError::Library(LibraryError::Changed)) if attempt < SAVE_ATTEMPTS => {
+                attempt += 1;
+            }
+            Err(SaveError::Library(e)) => return Err(watch_error(e)),
+            Err(SaveError::Settings(SettingsError::Conflict { .. })) => {
+                return Err(ApiError::conflict_with(current(&state).await?))
+            }
+            Err(SaveError::Settings(e)) => return Err(store_error(e)),
+        }
+    }
+}
+
+/// How often a save plans again after the watch folders changed under it.
+const SAVE_ATTEMPTS: usize = 3;
+
+fn wanted_folders(folder: &str, archive_folder: Option<&str>) -> Vec<Wanted> {
+    let mut wanted = vec![Wanted {
+        what: "수집 폴더",
+        path: folder.to_owned(),
+    }];
+    if let Some(archive) = archive_folder {
+        wanted.push(Wanted {
+            what: "보관 폴더",
+            path: archive.to_owned(),
+        });
+    }
+    wanted
+}
+
+fn watch_error(e: LibraryError) -> ApiError {
+    watch_folders_api::store_error(e)
+}
+
+/// Why saving the settings with their watch folders failed.
+enum SaveError {
+    Settings(SettingsError),
+    Library(LibraryError),
+}
+
+impl From<SettingsError> for SaveError {
+    fn from(e: SettingsError) -> Self {
+        SaveError::Settings(e)
+    }
+}
+
+impl From<DbError> for SaveError {
+    fn from(e: DbError) -> Self {
+        SaveError::Settings(SettingsError::Db(e))
     }
 }
 

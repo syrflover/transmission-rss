@@ -10,14 +10,20 @@
 //! file's other rules get new IDs. [`ChannelStore::replace_channel`] instead
 //! reissues every ID, which is why an import does not use it.
 
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use rusqlite::{params, Connection, Transaction, TransactionBehavior};
 use uuid::Uuid;
 
 use super::model::{Channel, ChannelInput, ChannelWithRules, Rule, RuleInput, Version};
 use super::{repo, ChannelError, ChannelStore};
-use crate::store::settings::{set_collect_folder_if_unset, SettingsError};
+use crate::store::{
+    library::{ensure_automatic_in, LibraryError},
+    settings::{set_collect_folder_if_unset, SettingsError},
+};
 
 /// One channel of the file: its fields and rules in file order.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -110,9 +116,10 @@ impl ChannelStore {
 
     /// [`ChannelStore::import_channels`] that also sets the collect folder to
     /// `collect_folder` in the same transaction, for an import that adopts the
-    /// file's folders while none is set. If a collect folder was set in the
-    /// meantime the import fails with [`ChannelError::Conflict`] and nothing of
-    /// it is applied.
+    /// file's folders while none is set, and makes that folder a watch folder
+    /// as the collect folder always is (without reading it: the worker's next
+    /// cycle does). If a collect folder was set in the meantime the import fails
+    /// with [`ChannelError::Conflict`] and nothing of it is applied.
     pub async fn import_channels_setting_folder(
         &self,
         actions: Vec<ImportAction>,
@@ -160,6 +167,13 @@ fn apply_import(
             },
             SettingsError::Db(e) => ChannelError::Db(e),
             SettingsError::Invalid(reason) => ChannelError::Invalid(reason),
+        })?;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis() as i64);
+        ensure_automatic_in(&tx, folder, now).map_err(|e| match e {
+            LibraryError::Db(e) => ChannelError::Db(e),
+            _ => ChannelError::Invalid("the collect folder cannot be a watch folder"),
         })?;
     }
     let mut results = Vec::with_capacity(actions.len());

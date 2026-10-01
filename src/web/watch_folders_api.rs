@@ -9,7 +9,7 @@
 //! | `DELETE /library/watch-folders/{id}`   | `200 { "removed_works": 3 }`              |
 //!
 //! ```json
-//! { "id": "…", "path": "/media/anime",
+//! { "id": "…", "path": "/media/anime", "automatic": false,
 //!   "works": 3, "missing_works": 0, "linked_works": 0, "new_works": 1,
 //!   "checked_at": 1760000000000, "error": null }
 //! ```
@@ -18,6 +18,9 @@
 //!   whose folder is gone (`폴더 없음`), `linked_works` is 0 until works can be
 //!   linked to Anissia, and `new_works` are the works found after the folder's
 //!   first check, within the last [`NEW_DAYS`] days.
+//! - `automatic` is true for the collect folder and the archive folder, which
+//!   the app registers itself ([`crate::automatic_watch`]) while the settings
+//!   use them; `DELETE` refuses them with a `400` and a sentence.
 //! - `checked_at` is the last attempt to read the folder (`null` before any) and
 //!   `error` a sentence when that attempt could not read everything; the works
 //!   recorded before are kept.
@@ -32,9 +35,12 @@
 //!
 //! Folders are compared after resolving links (`canonicalize`), so a link cannot
 //! hide that two folders overlap; the path is stored as typed (trailing slashes
-//! dropped), as it is what the worker opens.
+//! dropped), as it is what the worker opens. The check runs against the folders
+//! as read before the transaction that registers the new one, and the
+//! transaction fails if they are not the registered folders any more (another
+//! folder was added or removed meanwhile); the check is then run again.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use axum::{
     extract::{rejection::JsonRejection, Path as UrlPath, State},
@@ -50,6 +56,10 @@ use crate::{
     store::library::{FolderSummary, LibraryError, WatchFolder},
 };
 
+/// How often adding a folder checks again after the registered folders changed
+/// under it.
+const ADD_ATTEMPTS: usize = 3;
+
 /// How long after it was found a work counts as newly found.
 pub const NEW_DAYS: i64 = 7;
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
@@ -64,6 +74,8 @@ pub fn routes() -> Router<AppState> {
 pub struct FolderView {
     pub id: String,
     pub path: String,
+    /// The collect or archive folder: it cannot be unregistered.
+    pub automatic: bool,
     pub works: usize,
     pub missing_works: usize,
     /// Works linked to Anissia: none can be yet.
@@ -78,6 +90,7 @@ impl From<FolderSummary> for FolderView {
         FolderView {
             id: summary.folder.id,
             path: summary.folder.path,
+            automatic: summary.folder.automatic,
             works: summary.works,
             missing_works: summary.missing_works,
             linked_works: 0,
@@ -113,9 +126,17 @@ struct AddBody {
 const BAD_BODY: &str = "요청 내용을 읽지 못했어요. 화면을 새로고침한 뒤 다시 시도해 주세요.";
 const NOT_FOUND: &str = "감시 폴더를 찾지 못했어요. 이미 등록이 해제됐을 수 있어요.";
 
-fn store_error(e: LibraryError) -> ApiError {
+const AUTOMATIC: &str = "수집 폴더나 보관 폴더라서 등록을 해제할 수 없어요. 수집 폴더 설정에서 그 폴더를 바꾸면 감시 폴더도 함께 바뀌어요.";
+const CHANGED: &str = "감시 폴더가 그사이에 바뀌었어요. 목록을 확인하고 다시 시도해 주세요.";
+
+pub(super) fn store_error(e: LibraryError) -> ApiError {
     match e {
         LibraryError::Duplicate => ApiError::invalid("이미 등록한 감시 폴더예요."),
+        LibraryError::Automatic => ApiError::invalid(AUTOMATIC),
+        LibraryError::Changed => ApiError::Conflict {
+            message: CHANGED.to_owned(),
+            current: None,
+        },
         LibraryError::Db(e) => ApiError::Internal(e.to_string()),
     }
 }
@@ -147,19 +168,34 @@ async fn add(
         return Err(ApiError::invalid("감시 폴더의 경로를 입력해 주세요."));
     }
 
-    let registered = state.library.folders().await.map_err(store_error)?;
-    let scan = {
-        let path = path.clone();
-        tokio::task::spawn_blocking(move || check_and_scan(&path, &registered))
+    // Check against the folders as they are, read the folder once, and add it
+    // in a transaction that notices if the folders changed in between.
+    let mut read: Option<discovery::Scan> = None;
+    let mut attempt = 0;
+    let (folder, report) = loop {
+        let registered = state.library.folders().await.map_err(store_error)?;
+        let (registered, scan) = {
+            let path = path.clone();
+            let earlier = read.take();
+            tokio::task::spawn_blocking(move || {
+                let scan = check_and_scan(&path, &registered, earlier)?;
+                Ok::<_, ApiError>((registered, scan))
+            })
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))??
+        };
+        match state
+            .library
+            .add_folder(path.clone(), scan.clone(), now_millis(), &registered)
+            .await
+        {
+            Err(LibraryError::Changed) if attempt < ADD_ATTEMPTS => {
+                attempt += 1;
+                read = Some(scan);
+            }
+            other => break other.map_err(store_error)?,
+        }
     };
-
-    let (folder, report) = state
-        .library
-        .add_folder(path, scan, now_millis())
-        .await
-        .map_err(store_error)?;
     let summary = state
         .library
         .summaries(now_millis() - NEW_DAYS * DAY_MS)
@@ -207,14 +243,13 @@ fn normalize(text: &str) -> String {
     }
 }
 
-/// `path` with links resolved, or as written when it cannot be resolved (a
-/// registered folder that is not mounted right now).
-fn resolved(path: &str) -> PathBuf {
-    std::fs::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path))
-}
-
-/// Checks that `text` can be a new watch folder and reads it once.
-fn check_and_scan(text: &str, registered: &[WatchFolder]) -> Result<discovery::Scan, ApiError> {
+/// Checks that `text` can be a new watch folder and reads it once (`read` is a
+/// reading made for an earlier check of the same folder, which is kept).
+fn check_and_scan(
+    text: &str,
+    registered: &[WatchFolder],
+    read: Option<discovery::Scan>,
+) -> Result<discovery::Scan, ApiError> {
     let path = Path::new(text);
     if !path.is_absolute() {
         return Err(ApiError::invalid(
@@ -244,7 +279,7 @@ fn check_and_scan(text: &str, registered: &[WatchFolder]) -> Result<discovery::S
         ))
     })?;
     for other in registered {
-        let other_real = resolved(&other.path);
+        let other_real = crate::automatic_watch::resolved(&other.path);
         if other_real == real {
             return Err(ApiError::invalid("이미 등록한 감시 폴더예요."));
         }
@@ -255,13 +290,23 @@ fn check_and_scan(text: &str, registered: &[WatchFolder]) -> Result<discovery::S
             )));
         }
         if other_real.starts_with(&real) {
-            return Err(ApiError::invalid(format!(
-                "이 폴더 안에 이미 등록한 감시 폴더 `{}`가 있어요. 같은 작품을 두 번 찾게 되므로, 그 폴더의 등록을 해제한 뒤 이 폴더를 추가해 주세요.",
-                other.path
-            )));
+            return Err(ApiError::invalid(if other.automatic {
+                format!(
+                    "이 폴더 안에 수집 폴더나 보관 폴더 `{}`가 있어요. 두 폴더는 늘 감시하므로, 같은 작품을 두 번 찾게 되는 이 폴더는 추가할 수 없어요.",
+                    other.path
+                )
+            } else {
+                format!(
+                    "이 폴더 안에 이미 등록한 감시 폴더 `{}`가 있어요. 같은 작품을 두 번 찾게 되므로, 그 폴더의 등록을 해제한 뒤 이 폴더를 추가해 주세요.",
+                    other.path
+                )
+            }));
         }
     }
 
+    if let Some(read) = read {
+        return Ok(read);
+    }
     discovery::scan(path).map_err(|e| {
         eprintln!("trss-web: cannot read the watch folder {text}: {e}");
         ApiError::invalid(format!("`{text}`를 읽지 못했어요. {}", e.message))

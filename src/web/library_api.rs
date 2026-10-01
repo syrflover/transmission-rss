@@ -110,7 +110,7 @@ struct WorkList {
 async fn list(State(state): State<AppState>) -> Result<Json<WorkList>, ApiError> {
     let works = state.library.overview().await.map_err(|e| match e {
         LibraryError::Db(e) => ApiError::Internal(e.to_string()),
-        LibraryError::Duplicate => ApiError::Internal("unexpected duplicate".into()),
+        other => ApiError::Internal(other.to_string()),
     })?;
     Ok(Json(WorkList {
         works: works.into_iter().map(WorkView::from).collect(),

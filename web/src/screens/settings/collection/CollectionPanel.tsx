@@ -38,7 +38,8 @@ export function CollectionPanel() {
         <p className="max-w-[62ch] text-[13.5px] leading-relaxed text-text-secondary">
           RSS로 받는 파일은 모두 수집 폴더 아래에 저장해요. 규칙의 저장 폴더는
           이 폴더를 기준으로 한 경로예요. 규칙을 보관하면 그 작품 폴더를 보관
-          폴더로 옮기고, 복원하면 수집 폴더로 되돌려요.
+          폴더로 옮기고, 복원하면 수집 폴더로 되돌려요. 두 폴더는 늘 감시 폴더라서
+          정하거나 바꾸면 감시 폴더에도 함께 반영해요.
         </p>
       </header>
 

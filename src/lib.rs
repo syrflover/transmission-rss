@@ -1,5 +1,6 @@
 #[cfg(feature = "anissia")]
 pub mod anissia;
+pub mod automatic_watch;
 pub mod config;
 pub mod discovery;
 pub mod folders;

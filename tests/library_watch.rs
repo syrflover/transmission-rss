@@ -67,6 +67,51 @@ impl Lib {
         }
     }
 
+    /// Saves the collection settings through the web API at `version`.
+    async fn save_collection(
+        &self,
+        version: i64,
+        collect: &Path,
+        archive: Option<&Path>,
+    ) -> (StatusCode, Value) {
+        let (status, text, body) = self
+            .api
+            .call(
+                "PUT",
+                "/api/settings/collection",
+                Some(json!({
+                    "version": version,
+                    "folder": text(collect),
+                    "archive_folder": archive.map(text),
+                })),
+            )
+            .await;
+        assert!(body != Value::Null, "{text}");
+        (status, body)
+    }
+
+    async fn unregister(&self, folder: &WatchFolder) -> (StatusCode, Value) {
+        let (status, _, body) = self
+            .api
+            .call(
+                "DELETE",
+                &format!("/api/library/watch-folders/{}", folder.id),
+                None,
+            )
+            .await;
+        (status, body)
+    }
+
+    /// The watch folder registered at `path`.
+    async fn folder_at(&self, path: &Path) -> Option<WatchFolder> {
+        self.library
+            .folders()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|f| f.path == text(path))
+    }
+
     fn folder(&self, name: &str) -> PathBuf {
         let path = self.media.join(name);
         fs::create_dir_all(&path).unwrap();
@@ -566,6 +611,208 @@ async fn unregistering_removes_the_folders_works_and_leaves_the_files_alone() {
     assert_eq!(lib.works(&again).await.len(), 1);
 }
 
+// --- the collect and archive folders are always watched ---------------------------------
+
+#[tokio::test]
+async fn saving_the_collect_and_archive_folders_registers_and_reads_them_and_they_cannot_be_unregistered(
+) {
+    let lib = Lib::new().await;
+    let (collect, archive) = (lib.folder("Shows (current)"), lib.folder("Shows"));
+    touch(&collect.join("A/Season 01/A S01E01.mkv"));
+    touch(&archive.join("B/Season 01/B S01E01.mkv"));
+
+    let (status, body) = lib.save_collection(0, &collect, Some(&archive)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let listed = lib.list().await;
+    assert_eq!(listed.len(), 2);
+    assert_eq!(listed[0]["path"], text(&collect));
+    assert_eq!(listed[1]["path"], text(&archive));
+    for folder in &listed {
+        assert_eq!(folder["automatic"], true, "{folder}");
+        assert_eq!(folder["works"], 1);
+        assert!(folder["checked_at"].as_i64().unwrap() > 0);
+        assert_eq!(folder["error"], Value::Null);
+    }
+    // The first reading is the baseline: nothing is dated, nothing is new.
+    let fc = lib.folder_at(&collect).await.unwrap();
+    assert!(fc.baselined);
+    let a = lib.work(&fc, "A").await;
+    assert_eq!(a.first_seen_at, None);
+    assert!(a.files().values().all(|f| f.added_at.is_none()));
+    assert_eq!(listed[0]["new_works"], 0);
+
+    // Neither can be unregistered, and both stay.
+    for folder in [&fc, &lib.folder_at(&archive).await.unwrap()] {
+        let (status, body) = lib.unregister(folder).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert!(
+            body["message"]
+                .as_str()
+                .unwrap()
+                .contains("수집 폴더나 보관 폴더"),
+            "{body}"
+        );
+    }
+    assert_eq!(lib.list().await.len(), 2);
+
+    // A folder added by hand is not automatic.
+    let other = lib.folder("other");
+    let by_hand = lib.register(&other).await;
+    assert!(!by_hand.automatic);
+    assert_eq!(lib.unregister(&by_hand).await.0, StatusCode::OK);
+
+    // A later cycle reads them like any watch folder: only new files are dated.
+    touch(&collect.join("A/Season 01/A S01E02.mkv"));
+    lib.h.advance(1000);
+    lib.tick().await;
+    let a = lib.work(&fc, "A").await;
+    assert_eq!(a.files()["Season 01/A S01E01.mkv"].added_at, None);
+    assert_eq!(
+        a.files()["Season 01/A S01E02.mkv"].added_at,
+        Some(lib.h.clock.load(std::sync::atomic::Ordering::SeqCst))
+    );
+}
+
+#[tokio::test]
+async fn changing_the_collect_folder_swaps_its_watch_folder_and_adopts_one_registered_by_hand() {
+    let lib = Lib::new().await;
+    let (a, b, c) = (lib.folder("a"), lib.folder("b"), lib.folder("c"));
+    touch(&a.join("Old/Season 01/Old S01E01.mkv"));
+    touch(&b.join("InB/Season 01/InB S01E01.mkv"));
+    touch(&c.join("InC/Season 01/InC S01E01.mkv"));
+    let (status, body) = lib.save_collection(0, &a, Some(&b)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let fa = lib.folder_at(&a).await.unwrap();
+    let fb = lib.folder_at(&b).await.unwrap();
+    let by_hand = lib.register(&c).await;
+    let in_c = lib.work(&by_hand, "InC").await;
+    assert!(!by_hand.automatic);
+
+    // /c replaces /a: /a goes like an unregistered folder, /c keeps its records.
+    let (status, body) = lib.save_collection(1, &c, Some(&b)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(lib.folder_at(&a).await.is_none());
+    assert!(lib.library.works(&fa.id).await.unwrap().is_empty());
+    let adopted = lib.folder_at(&c).await.unwrap();
+    assert_eq!(adopted.id, by_hand.id);
+    assert!(adopted.automatic);
+    assert_eq!(lib.work(&adopted, "InC").await, in_c);
+    // The archive folder was not touched.
+    let kept = lib.folder_at(&b).await.unwrap();
+    assert_eq!(kept.id, fb.id);
+    assert_eq!(lib.works(&kept).await.len(), 1);
+    // The files of the folder that went are still there.
+    assert!(a.join("Old/Season 01/Old S01E01.mkv").exists());
+    assert_eq!(lib.list().await.len(), 2);
+
+    // Clearing the archive folder takes its watch folder away.
+    let (status, body) = lib.save_collection(2, &c, None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(lib.folder_at(&b).await.is_none());
+    assert_eq!(lib.list().await.len(), 1);
+
+    // A folder that went can be registered by hand afterwards.
+    let again = lib.register(&a).await;
+    assert!(!again.automatic);
+}
+
+#[tokio::test]
+async fn a_collect_or_archive_folder_that_overlaps_a_registered_folder_is_not_saved() {
+    let lib = Lib::new().await;
+    let downloads = lib.folder("downloads");
+    let current = lib.folder("downloads/Shows (current)");
+    let archive = lib.folder("archive");
+    lib.register(&downloads).await;
+
+    let (status, body) = lib.save_collection(0, &current, None).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let message = body["message"].as_str().unwrap();
+    assert!(
+        message.contains("수집 폴더") && message.contains("안에 있어요"),
+        "{message}"
+    );
+    // Nothing was saved or registered.
+    let (_, _, settings) = lib.api.call("GET", "/api/settings/collection", None).await;
+    assert_eq!(settings["folder"], Value::Null);
+    assert_eq!(settings["version"], 0);
+    assert_eq!(lib.list().await.len(), 1);
+
+    // A folder around a registered one is refused as well.
+    let inner = lib.folder("inner/watched");
+    let around = lib.media.join("inner");
+    lib.register(&inner).await;
+    let (status, body) = lib.save_collection(0, &archive, Some(&around)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let message = body["message"].as_str().unwrap();
+    assert!(
+        message.contains("보관 폴더") && message.contains("등록한 감시 폴더"),
+        "{message}"
+    );
+    assert!(lib.folder_at(&archive).await.is_none());
+    assert_eq!(lib.list().await.len(), 2);
+}
+
+#[tokio::test]
+async fn a_collect_folder_that_cannot_be_read_is_still_saved_and_shows_why_on_its_row() {
+    use std::os::unix::fs::PermissionsExt;
+    let lib = Lib::new().await;
+    let collect = lib.folder("locked");
+    touch(&collect.join("A/Season 01/A S01E01.mkv"));
+    fs::set_permissions(&collect, fs::Permissions::from_mode(0o000)).unwrap();
+    let (status, body) = lib.save_collection(0, &collect, None).await;
+    // Whether the web could see the folder at all is the settings check's matter
+    // (a process allowed everything does not even fail here).
+    fs::set_permissions(&collect, fs::Permissions::from_mode(0o755)).unwrap();
+    if status != StatusCode::OK {
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        return;
+    }
+    let folder = lib.folder_at(&collect).await.unwrap();
+    assert!(folder.automatic);
+    // The worker reads it when it can; until then there is no first reading.
+    lib.h.advance(1000);
+    lib.tick().await;
+    assert_eq!(lib.works(&folder).await.len(), 1);
+}
+
+#[tokio::test]
+async fn the_worker_registers_the_folders_of_settings_saved_before_they_were_watched() {
+    let lib = Lib::new().await;
+    let (collect, archive) = (lib.folder("Shows (current)"), lib.folder("Shows"));
+    touch(&collect.join("A/Season 01/A S01E01.mkv"));
+    touch(&archive.join("B/Season 01/B S01E01.mkv"));
+    // As a database from before the folders were watched has them: set, not watched.
+    SettingsStore::new(lib.h.db.clone())
+        .put_collection(0, text(&collect), Some(text(&archive)))
+        .await
+        .unwrap();
+    // One of them was registered by hand.
+    let by_hand = lib.register(&archive).await;
+    let in_b = lib.work(&by_hand, "B").await;
+    assert!(lib.library.folders().await.unwrap().len() == 1);
+
+    lib.h.advance(1000);
+    lib.tick().await;
+
+    let folders = lib.library.folders().await.unwrap();
+    assert_eq!(folders.len(), 2);
+    assert!(folders.iter().all(|f| f.automatic));
+    let adopted = lib.folder_at(&archive).await.unwrap();
+    assert_eq!(adopted.id, by_hand.id);
+    assert_eq!(lib.work(&adopted, "B").await, in_b);
+    // The new one was read in the same cycle, as its baseline.
+    let fc = lib.folder_at(&collect).await.unwrap();
+    assert!(fc.baselined);
+    assert_eq!(lib.work(&fc, "A").await.first_seen_at, None);
+
+    // The next cycle changes none of that.
+    lib.h.advance(1000);
+    lib.tick().await;
+    assert_eq!(lib.library.folders().await.unwrap().len(), 2);
+    assert_eq!(lib.folder_at(&collect).await.unwrap().id, fc.id);
+}
+
 // --- 다시 확인 ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -699,10 +946,6 @@ impl Archive {
         let lib = Lib::new().await;
         let collect = lib.folder("Shows (current)");
         let archive = lib.folder("Shows");
-        SettingsStore::new(lib.h.db.clone())
-            .put_collection(0, text(&collect), Some(text(&archive)))
-            .await
-            .unwrap();
         lib.h.feeds.set_xml(
             "feed-a",
             r#"<?xml version="1.0"?><rss version="2.0"><channel><title>x</title>
@@ -733,8 +976,12 @@ impl Archive {
         touch(&collect.join("Solo/Season 01/Solo S01E01.mkv"));
         // The archive already has the earlier season of Clevatess.
         touch(&archive.join("Clevatess/Season 01/Clevatess S01E01.mkv"));
-        let collect_folder = lib.register(&collect).await;
-        let archive_folder = lib.register(&archive).await;
+        // Saving the settings makes both folders watch folders and reads them.
+        let (status, body) = lib.save_collection(0, &collect, Some(&archive)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let collect_folder = lib.folder_at(&collect).await.unwrap();
+        let archive_folder = lib.folder_at(&archive).await.unwrap();
+        assert!(collect_folder.automatic && archive_folder.automatic);
         Archive {
             lib,
             collect,

@@ -8,6 +8,7 @@ use tempfile::TempDir;
 use tower::ServiceExt;
 
 use crate::store::channels::{ChannelInput, ChannelStore, RuleInput};
+use crate::store::library::LibraryStore;
 use crate::store::settings::{CollectionSettings, SettingsStore};
 use crate::store::Db;
 
@@ -21,6 +22,7 @@ struct App {
     path: std::path::PathBuf,
     store: ChannelStore,
     settings: SettingsStore,
+    library: LibraryStore,
     app: Router,
 }
 
@@ -34,6 +36,7 @@ async fn app() -> App {
         path,
         store: state.channels.clone(),
         settings: state.settings.clone(),
+        library: state.library.clone(),
         app: Router::new().nest("/api", crate::web::api::router().with_state(state)),
     }
 }
@@ -571,6 +574,42 @@ fn folders_file() -> String {
 
 fn directories(channel: &ChannelWithRules) -> Vec<&str> {
     channel.rules.iter().map(|r| r.directory.as_str()).collect()
+}
+
+#[tokio::test]
+async fn an_import_that_sets_the_collect_folder_also_makes_it_a_watch_folder() {
+    let t = app().await;
+    let (status, text, result) = t.apply(&t.real(&file()), json!([])).await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let media = format!("{}/media", t.root());
+    assert_eq!(result["collect_folder_set"], media.as_str());
+
+    let folders = t.library.folders().await.unwrap();
+    assert_eq!(folders.len(), 1);
+    assert_eq!(folders[0].path, media);
+    assert!(folders[0].automatic);
+}
+
+#[tokio::test]
+async fn an_import_whose_collect_folder_would_sit_inside_a_registered_watch_folder_changes_nothing()
+{
+    let t = app().await;
+    let content = t.real(&file());
+    // The root of the scratch folder is a watch folder, and `/media` is in it.
+    let root = t.root();
+    t.library
+        .add_folder(root.clone(), crate::discovery::Scan::default(), 1, &[])
+        .await
+        .unwrap();
+    let (status, text, result) = t.apply(&content, json!([])).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+    assert!(
+        result["message"].as_str().unwrap().contains("안에 있어요"),
+        "{text}"
+    );
+    assert!(t.all().await.is_empty());
+    assert_eq!(t.collection().await, None);
+    assert_eq!(t.library.folders().await.unwrap().len(), 1);
 }
 
 #[tokio::test]

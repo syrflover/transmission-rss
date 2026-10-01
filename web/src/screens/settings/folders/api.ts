@@ -9,6 +9,8 @@ import { api } from "@/lib/api";
 export interface WatchFolder {
   id: string;
   path: string;
+  /** The collect or archive folder: the app keeps it registered while the settings use it, so it cannot be unregistered. */
+  automatic: boolean;
   /** Every work of the folder, including the ones whose folder is gone. */
   works: number;
   /** Of those, the works whose folder is gone (`폴더 없음`). */

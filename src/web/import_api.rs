@@ -513,6 +513,23 @@ async fn apply(
     let skipped: Vec<usize> = plan.skipped.iter().map(|&local| positions[local]).collect();
     // The folder is set together with the channels that need it.
     let collect_folder_set = fitted.collect_folder.filter(|_| !actions.is_empty());
+    if let Some(folder) = &collect_folder_set {
+        // The collect folder is always a watch folder (it is registered with
+        // the import), so it must not overlap one registered by hand.
+        let registered = state
+            .library
+            .folders()
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+        let wanted = vec![crate::automatic_watch::Wanted {
+            what: "수집 폴더",
+            path: folder.clone(),
+        }];
+        tokio::task::spawn_blocking(move || crate::automatic_watch::plan(&wanted, &registered))
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+            .map_err(ApiError::invalid)?;
+    }
     let results = state
         .channels
         .import_channels_setting_folder(actions, collect_folder_set.clone())

@@ -1,4 +1,5 @@
 import { forget, forgetPrefix, patch } from "@/lib/cached";
+import { WORKS_KEY } from "@/screens/library/api";
 
 import type { Channel } from "./channels/api";
 import type { RuleList } from "./rules/api";
@@ -42,12 +43,16 @@ export function channelsChanged(): void {
 }
 
 /**
- * The collect folder was set or changed. The rule list and the rule previews
- * carry full save paths, and the status board says whether a folder is set.
+ * The collect folder or the archive folder was set or changed. The rule list
+ * and the rule previews carry full save paths, the status board says whether a
+ * folder is set, and the two folders are watch folders that follow the setting
+ * (so the watch folder list and the works found in them change too).
  */
 export function collectFolderChanged(): void {
   forget(KEYS.rules);
   forget(KEYS.status);
+  forget(KEYS.watchFolders);
+  forget(WORKS_KEY);
   forgetPrefix(PREVIEW_PREFIX);
 }
 

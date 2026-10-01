@@ -74,7 +74,45 @@ impl SettingsStore {
         archive_folder: Option<String>,
     ) -> Result<CollectionSettings, SettingsError> {
         self.db
-            .run(move |c| write_collection(c, expected_version, &folder, archive_folder.as_deref()))
+            .run(move |c| {
+                write_collection(
+                    c,
+                    expected_version,
+                    &folder,
+                    archive_folder.as_deref(),
+                    |_| Ok(()),
+                )
+                .map(|(stored, ())| stored)
+            })
+            .await
+    }
+
+    /// [`SettingsStore::put_collection`] that also runs `then` inside the same
+    /// transaction after the settings are written, for a change that must
+    /// happen with the save or not at all (the watch folders of the collect and
+    /// archive folders). If `then` fails nothing is saved.
+    pub async fn put_collection_with<R, E, F>(
+        &self,
+        expected_version: i64,
+        folder: String,
+        archive_folder: Option<String>,
+        then: F,
+    ) -> Result<(CollectionSettings, R), E>
+    where
+        F: FnOnce(&Transaction<'_>) -> Result<R, E> + Send + 'static,
+        R: Send + 'static,
+        E: From<SettingsError> + From<DbError> + Send + 'static,
+    {
+        self.db
+            .run(move |c| {
+                write_collection(
+                    c,
+                    expected_version,
+                    &folder,
+                    archive_folder.as_deref(),
+                    then,
+                )
+            })
             .await
     }
 }
@@ -94,22 +132,32 @@ fn read_collection(conn: &Connection) -> rusqlite::Result<Option<CollectionSetti
     .optional()
 }
 
-fn write_collection(
+fn write_collection<R, E>(
     conn: &mut Connection,
     expected_version: i64,
     folder: &str,
     archive_folder: Option<&str>,
-) -> Result<CollectionSettings, SettingsError> {
+    then: impl FnOnce(&Transaction<'_>) -> Result<R, E>,
+) -> Result<(CollectionSettings, R), E>
+where
+    E: From<SettingsError>,
+{
     if folder.is_empty() || archive_folder == Some("") {
-        return Err(SettingsError::Invalid("a folder cannot be empty"));
+        return Err(SettingsError::Invalid("a folder cannot be empty").into());
     }
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let actual = read_collection(&tx)?.map_or(0, |settings| settings.version);
+    let sql = |e: rusqlite::Error| E::from(SettingsError::from(e));
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(sql)?;
+    let actual = read_collection(&tx)
+        .map_err(sql)?
+        .map_or(0, |settings| settings.version);
     if actual != expected_version {
         return Err(SettingsError::Conflict {
             expected: expected_version,
             actual,
-        });
+        }
+        .into());
     }
     tx.execute(
         "INSERT INTO collection_settings (id, collect_folder, archive_folder, version)
@@ -119,10 +167,14 @@ fn write_collection(
              archive_folder = excluded.archive_folder,
              version = version + 1",
         params![folder, archive_folder],
-    )?;
-    let stored = read_collection(&tx)?.expect("the row was just written");
-    tx.commit()?;
-    Ok(stored)
+    )
+    .map_err(sql)?;
+    let stored = read_collection(&tx)
+        .map_err(sql)?
+        .expect("the row was just written");
+    let result = then(&tx)?;
+    tx.commit().map_err(sql)?;
+    Ok((stored, result))
 }
 
 /// Sets the collect folder inside `tx` only while none is set (the archive

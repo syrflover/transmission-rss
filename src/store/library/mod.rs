@@ -33,6 +33,20 @@
 //!
 //! Removing a watch folder removes its works from the library and touches no
 //! file.
+//!
+//! # Automatic watch folders
+//!
+//! The collect folder and the archive folder of the collection settings are
+//! always watch folders, so that a work an archive move takes from one to the
+//! other stays in the library. Their watch folders are *automatic*
+//! ([`WatchFolder::automatic`]): registered by the app, not removable by hand.
+//! An [`AutomaticPlan`] says how the registered folders become the ones the
+//! settings call for: a folder the user had registered at the same place turns
+//! automatic and keeps its records, a new one is registered (with its first
+//! scan when the caller has one), and an automatic folder at a path the
+//! settings no longer use is removed like an unregistered one. A plan is made
+//! from the folders as they were read, and applying it fails with
+//! [`LibraryError::Changed`] if they are not the registered folders any more.
 
 mod overview;
 mod repo;
@@ -40,6 +54,8 @@ mod repo;
 mod tests;
 
 use std::collections::BTreeMap;
+
+use rusqlite::Transaction;
 
 pub use overview::{EpisodeRange, SubtitleCoverage, WorkOverview};
 
@@ -58,6 +74,14 @@ pub enum LibraryError {
     /// A watch folder with this path is registered already.
     #[error("the watch folder is registered already")]
     Duplicate,
+    /// The folder is the collect or archive folder, which stays a watch folder
+    /// while the settings use it.
+    #[error("the watch folder is the collect or archive folder")]
+    Automatic,
+    /// The registered watch folders are not the ones the caller checked
+    /// against; nothing was changed. Read them again and check again.
+    #[error("the watch folders changed while they were being checked")]
+    Changed,
 }
 
 impl From<rusqlite::Error> for LibraryError {
@@ -73,6 +97,9 @@ pub struct WatchFolder {
     /// As the user typed it (trailing slashes dropped).
     pub path: String,
     pub created_at: Millis,
+    /// Registered by the app for the collect or archive folder: it cannot be
+    /// unregistered by hand.
+    pub automatic: bool,
     /// Whether a scan has read the folder without error yet; until then what
     /// scans find has no added time.
     pub baselined: bool,
@@ -112,6 +139,84 @@ pub struct ScanReport {
     pub works_unreadable: usize,
     /// The folder's error after this scan.
     pub error: Option<String>,
+}
+
+/// A watch folder to register for a folder of the collection settings.
+#[derive(Debug, Clone)]
+pub struct NewAutomatic {
+    pub path: String,
+    /// The folder's first reading. Without one the folder is registered
+    /// unread, and the worker's next cycle makes the first reading (which then
+    /// baselines it, as a manual add's first scan does).
+    pub scan: Option<Scan>,
+}
+
+/// How the watch folders become the ones the collection settings call for;
+/// made by [`crate::automatic_watch::plan`].
+#[derive(Debug, Clone, Default)]
+pub struct AutomaticPlan {
+    /// The registered folders the plan was made from (id, path, automatic).
+    pub(crate) based_on: Vec<(String, String, bool)>,
+    /// Folders that become automatic, with the path the settings give them.
+    pub keep: Vec<(String, String)>,
+    /// Automatic folders whose path the settings no longer use.
+    pub remove: Vec<String>,
+    pub add: Vec<NewAutomatic>,
+}
+
+impl AutomaticPlan {
+    /// An empty plan over `folders`.
+    pub fn over(folders: &[WatchFolder]) -> AutomaticPlan {
+        AutomaticPlan {
+            based_on: folders
+                .iter()
+                .map(|f| (f.id.clone(), f.path.clone(), f.automatic))
+                .collect(),
+            ..AutomaticPlan::default()
+        }
+    }
+
+    /// Whether applying the plan changes nothing.
+    pub fn is_empty(&self) -> bool {
+        self.keep.is_empty() && self.remove.is_empty() && self.add.is_empty()
+    }
+}
+
+/// What applying an [`AutomaticPlan`] did.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AutomaticApplied {
+    /// Folders registered.
+    pub added: usize,
+    /// Folders that were registered by hand and became automatic, or whose
+    /// path text changed.
+    pub converted: usize,
+    /// Folders removed, and the works that went with them.
+    pub removed: usize,
+    pub removed_works: usize,
+}
+
+/// Applies `plan` inside `tx`, which the caller commits. Fails with
+/// [`LibraryError::Changed`] if the registered folders differ from the ones the
+/// plan was made from.
+pub fn apply_automatic_in(
+    tx: &Transaction<'_>,
+    plan: &AutomaticPlan,
+    now: Millis,
+) -> Result<AutomaticApplied, LibraryError> {
+    repo::apply_automatic(tx, plan, now)
+}
+
+/// Sets the automatic watch folder of `path` inside `tx`, which the caller
+/// commits, when nothing has the settings' folders to compare with yet (the
+/// legacy import, which sets the collect folder on a database that has none).
+/// A folder registered at the same path turns automatic; otherwise one is
+/// registered unread.
+pub fn ensure_automatic_in(
+    tx: &Transaction<'_>,
+    path: &str,
+    now: Millis,
+) -> Result<(), LibraryError> {
+    Ok(repo::ensure_automatic(tx, path, now)?)
 }
 
 /// What [`LibraryStore::follow_move`] did.
@@ -207,22 +312,46 @@ impl LibraryStore {
 
     /// Registers the folder at `path` and records `scan`, its first reading, in
     /// one transaction. [`LibraryError::Duplicate`] when `path` is registered.
+    ///
+    /// `checked_against` is the registered folders the caller checked that the
+    /// new folder does not overlap; if they are not the registered folders when
+    /// the transaction starts, nothing is added and the answer is
+    /// [`LibraryError::Changed`].
     pub async fn add_folder(
         &self,
         path: String,
         scan: Scan,
         now: Millis,
+        checked_against: &[WatchFolder],
     ) -> Result<(WatchFolder, ScanReport), LibraryError> {
+        let checked = AutomaticPlan::over(checked_against).based_on;
         self.db
-            .run(move |c| repo::add_folder(c, &path, &scan, now))
+            .run(move |c| repo::add_folder(c, &path, &scan, now, &checked))
             .await
     }
 
     /// Removes the folder and its works from the library (no file is touched)
-    /// and returns how many works went. `None` when there is no such folder.
+    /// and returns how many works went. `None` when there is no such folder;
+    /// [`LibraryError::Automatic`] for the collect or archive folder.
     pub async fn remove_folder(&self, id: &str) -> Result<Option<usize>, LibraryError> {
         let id = id.to_owned();
-        self.db.run(move |c| Ok(repo::remove_folder(c, &id)?)).await
+        self.db.run(move |c| repo::remove_folder(c, &id)).await
+    }
+
+    /// Applies `plan` in one transaction, provided the collection settings are
+    /// still at `settings_version` (0 when none are stored): the plan was made
+    /// from the settings of that version, and a newer save has its own plan.
+    /// [`LibraryError::Changed`] when they are not, or when the watch folders
+    /// are not the ones the plan was made from.
+    pub async fn sync_automatic(
+        &self,
+        plan: AutomaticPlan,
+        settings_version: i64,
+        now: Millis,
+    ) -> Result<AutomaticApplied, LibraryError> {
+        self.db
+            .run(move |c| repo::sync_automatic(c, &plan, settings_version, now))
+            .await
     }
 
     /// Records the outcome of reading folder `id` at `now`. `None` when the

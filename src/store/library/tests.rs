@@ -37,6 +37,7 @@ async fn the_first_scan_leaves_times_unknown_and_a_later_one_stamps_only_what_is
             "/w".into(),
             scan(vec![work("A", vec![video(1, "01", "A S01E01.mkv")])]),
             100,
+            &[],
         )
         .await
         .unwrap();
@@ -111,6 +112,7 @@ async fn gone_files_and_episodes_drop_and_a_gone_work_folder_keeps_its_id() {
                 work("B", vec![video(1, "01", "B S01E01.mkv")]),
             ]),
             100,
+            &[],
         )
         .await
         .unwrap();
@@ -161,6 +163,7 @@ async fn a_failed_scan_records_the_error_and_keeps_what_was_known() {
             "/w".into(),
             scan(vec![work("A", vec![video(1, "01", "A S01E01.mkv")])]),
             100,
+            &[],
         )
         .await
         .unwrap();
@@ -219,6 +222,7 @@ async fn one_unreadable_work_does_not_hold_back_the_baseline_of_the_others() {
                 unreadable("Locked"),
             ]),
             100,
+            &[],
         )
         .await
         .unwrap();
@@ -307,7 +311,7 @@ async fn a_work_folder_first_seen_unreadable_in_a_later_scan_is_dated_by_that_sc
 ) {
     let store = store();
     let (folder, _) = store
-        .add_folder("/w".into(), scan(vec![work("A", vec![])]), 100)
+        .add_folder("/w".into(), scan(vec![work("A", vec![])]), 100, &[])
         .await
         .unwrap();
     store
@@ -346,6 +350,7 @@ async fn an_unreadable_folder_that_is_gone_is_new_when_it_comes_back() {
             "/w".into(),
             scan(vec![work("A", vec![]), unreadable("Locked")]),
             100,
+            &[],
         )
         .await
         .unwrap();
@@ -379,6 +384,7 @@ async fn a_recorded_work_that_becomes_unreadable_keeps_its_records_and_times() {
             "/w".into(),
             scan(vec![work("A", vec![video(1, "01", "A S01E01.mkv")])]),
             100,
+            &[],
         )
         .await
         .unwrap();
@@ -435,11 +441,12 @@ async fn adding_the_same_path_twice_is_refused_and_removing_takes_the_works_alon
             "/w".into(),
             scan(vec![work("A", vec![video(1, "01", "A S01E01.mkv")])]),
             100,
+            &[],
         )
         .await
         .unwrap();
     assert!(matches!(
-        store.add_folder("/w".into(), scan(vec![]), 100).await,
+        store.add_folder("/w".into(), scan(vec![]), 100, &[]).await,
         Err(LibraryError::Duplicate)
     ));
     assert_eq!(store.folders().await.unwrap().len(), 1);
@@ -471,6 +478,7 @@ async fn the_summary_counts_works_missing_ones_and_new_ones_within_the_window() 
             "/w".into(),
             scan(vec![work("Old", vec![video(1, "01", "O S01E01.mkv")])]),
             100,
+            &[],
         )
         .await
         .unwrap();
@@ -517,6 +525,7 @@ async fn following_a_move_keeps_the_id_and_a_merge_keeps_the_destinations() {
                 work("Both", vec![video(2, "01", "B S02E01.mkv")]),
             ]),
             100,
+            &[],
         )
         .await
         .unwrap();
@@ -525,6 +534,7 @@ async fn following_a_move_keeps_the_id_and_a_merge_keeps_the_destinations() {
             "/to".into(),
             scan(vec![work("Both", vec![video(1, "01", "B S01E01.mkv")])]),
             100,
+            std::slice::from_ref(&from),
         )
         .await
         .unwrap();
@@ -595,6 +605,7 @@ async fn unrecognized_files_are_replaced_by_each_scan() {
             "/w".into(),
             scan(vec![WorkRead::Read(scanned.clone())]),
             100,
+            &[],
         )
         .await
         .unwrap();
@@ -646,7 +657,7 @@ async fn the_list_summarizes_the_latest_season_with_ranges_split_at_gaps() {
         }
     }
     store
-        .add_folder("/w".into(), scan(vec![work("A", files)]), 100)
+        .add_folder("/w".into(), scan(vec![work("A", files)]), 100, &[])
         .await
         .unwrap();
 
@@ -697,6 +708,7 @@ async fn an_unrecognized_subtitle_asks_for_a_check_and_a_download_in_progress_do
                 ),
             ]),
             100,
+            &[],
         )
         .await
         .unwrap();
@@ -729,6 +741,7 @@ async fn a_work_whose_folder_is_gone_stays_listed_without_holdings_and_keeps_its
             "/w".into(),
             scan(vec![work("Keep", vec![video(1, "01", "K S01E01.mkv")])]),
             100,
+            &[],
         )
         .await
         .unwrap();
@@ -793,6 +806,7 @@ async fn the_list_takes_the_latest_known_time_over_seasons_and_none_when_all_are
                 ),
             ]),
             100,
+            &[],
         )
         .await
         .unwrap();
@@ -866,6 +880,7 @@ async fn a_work_without_a_season_folder_has_no_latest_season_and_no_holdings() {
                 ..ScannedWork::default()
             })]),
             100,
+            &[],
         )
         .await
         .unwrap();
@@ -873,4 +888,169 @@ async fn a_work_without_a_season_folder_has_no_latest_season_and_no_holdings() {
     assert_eq!(list[0].latest_season, None);
     assert!(list[0].video.is_empty());
     assert_eq!(list[0].subtitle_coverage, Some(SubtitleCoverage::None));
+}
+
+/// A plan over `store`'s folders as they are.
+async fn plan_over(store: &LibraryStore) -> AutomaticPlan {
+    AutomaticPlan::over(&store.folders().await.unwrap())
+}
+
+#[tokio::test]
+async fn adding_a_folder_checked_against_folders_that_have_changed_is_refused() {
+    let store = store();
+    let (a, _) = store
+        .add_folder("/a".into(), scan(vec![]), 100, &[])
+        .await
+        .unwrap();
+    // The caller checked against no folders, but /a is registered now.
+    assert!(matches!(
+        store.add_folder("/b".into(), scan(vec![]), 100, &[]).await,
+        Err(LibraryError::Changed)
+    ));
+    assert_eq!(store.folders().await.unwrap().len(), 1);
+    store
+        .add_folder("/b".into(), scan(vec![]), 100, &[a])
+        .await
+        .unwrap();
+    assert_eq!(store.folders().await.unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn an_automatic_folder_is_registered_with_its_first_reading_or_without_one() {
+    let store = store();
+    let mut plan = plan_over(&store).await;
+    plan.add.push(NewAutomatic {
+        path: "/collect".into(),
+        scan: Some(scan(vec![work("A", vec![video(1, "01", "A S01E01.mkv")])])),
+    });
+    plan.add.push(NewAutomatic {
+        path: "/archive".into(),
+        scan: None,
+    });
+    let applied = store.sync_automatic(plan, 0, 100).await.unwrap();
+    assert_eq!(applied.added, 2);
+
+    let folders = store.folders().await.unwrap();
+    assert!(folders.iter().all(|f| f.automatic));
+    let collect = &folders[0];
+    assert_eq!(collect.path, "/collect");
+    // Read once: baselined, its work of unknown age.
+    assert!(collect.baselined);
+    let works = store.works(&collect.id).await.unwrap();
+    assert_eq!(works.len(), 1);
+    assert_eq!(works[0].first_seen_at, None);
+    // Not read yet: the worker's first reading is its baseline.
+    let archive = &folders[1];
+    assert!(!archive.baselined && archive.checked_at.is_none());
+}
+
+#[tokio::test]
+async fn a_folder_registered_by_hand_becomes_automatic_and_keeps_its_records() {
+    let store = store();
+    let (manual, _) = store
+        .add_folder(
+            "/downloads/Shows".into(),
+            scan(vec![work("A", vec![video(1, "01", "A S01E01.mkv")])]),
+            100,
+            &[],
+        )
+        .await
+        .unwrap();
+    let before = store.works(&manual.id).await.unwrap();
+    assert!(!manual.automatic);
+
+    let mut plan = plan_over(&store).await;
+    plan.keep
+        .push((manual.id.clone(), "/downloads/Shows".into()));
+    let applied = store.sync_automatic(plan, 0, 200).await.unwrap();
+    assert_eq!((applied.converted, applied.added), (1, 0));
+
+    let folders = store.folders().await.unwrap();
+    assert_eq!(folders.len(), 1);
+    assert!(folders[0].automatic);
+    assert_eq!(folders[0].id, manual.id);
+    assert_eq!(store.works(&manual.id).await.unwrap(), before);
+}
+
+#[tokio::test]
+async fn an_automatic_folder_that_is_not_called_for_any_more_goes_with_its_works() {
+    let store = store();
+    let mut plan = plan_over(&store).await;
+    plan.add.push(NewAutomatic {
+        path: "/a".into(),
+        scan: Some(scan(vec![work("A", vec![video(1, "01", "A S01E01.mkv")])])),
+    });
+    store.sync_automatic(plan, 0, 100).await.unwrap();
+    let a = store.folders().await.unwrap().remove(0);
+
+    let mut plan = plan_over(&store).await;
+    plan.remove.push(a.id.clone());
+    plan.add.push(NewAutomatic {
+        path: "/c".into(),
+        scan: None,
+    });
+    let applied = store.sync_automatic(plan, 0, 200).await.unwrap();
+    assert_eq!(
+        (applied.removed, applied.removed_works, applied.added),
+        (1, 1, 1)
+    );
+    let folders = store.folders().await.unwrap();
+    assert_eq!(folders.len(), 1);
+    assert_eq!(folders[0].path, "/c");
+    assert!(store.works(&a.id).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn an_automatic_folder_cannot_be_removed_by_hand_but_a_manual_one_can() {
+    let store = store();
+    let (manual, _) = store
+        .add_folder("/m".into(), scan(vec![]), 100, &[])
+        .await
+        .unwrap();
+    let mut plan = plan_over(&store).await;
+    plan.add.push(NewAutomatic {
+        path: "/auto".into(),
+        scan: None,
+    });
+    store.sync_automatic(plan, 0, 100).await.unwrap();
+    let auto = store.folders().await.unwrap().remove(1);
+
+    assert!(matches!(
+        store.remove_folder(&auto.id).await,
+        Err(LibraryError::Automatic)
+    ));
+    assert_eq!(store.folders().await.unwrap().len(), 2);
+    assert_eq!(store.remove_folder(&manual.id).await.unwrap(), Some(0));
+}
+
+#[tokio::test]
+async fn a_plan_made_from_other_folders_or_other_settings_is_not_applied() {
+    let store = store();
+    let stale = plan_over(&store).await;
+    store
+        .add_folder("/m".into(), scan(vec![]), 100, &[])
+        .await
+        .unwrap();
+    let mut plan = stale;
+    plan.add.push(NewAutomatic {
+        path: "/auto".into(),
+        scan: None,
+    });
+    assert!(matches!(
+        store.sync_automatic(plan, 0, 100).await,
+        Err(LibraryError::Changed)
+    ));
+    assert_eq!(store.folders().await.unwrap().len(), 1);
+
+    // The settings are at version 0 (none stored): a plan for version 3 is stale.
+    let mut plan = plan_over(&store).await;
+    plan.add.push(NewAutomatic {
+        path: "/auto".into(),
+        scan: None,
+    });
+    assert!(matches!(
+        store.sync_automatic(plan, 3, 100).await,
+        Err(LibraryError::Changed)
+    ));
+    assert_eq!(store.folders().await.unwrap().len(), 1);
 }

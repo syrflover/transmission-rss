@@ -15,6 +15,14 @@
 //! The duration of every scan is logged, since a large library (hundreds of
 //! works, thousands of files) is read in the cycle's own time.
 //!
+//! # The collect and archive folders
+//!
+//! The collect folder and the archive folder are always watch folders. The web
+//! registers them when the settings are saved; [`sync_automatic`] does the same
+//! at the start of every cycle for a database whose settings were saved before
+//! that (a folder it registers is read, as the first reading, by the same
+//! cycle). It changes nothing when the watch folders already match.
+//!
 //! # A folder that hangs
 //!
 //! Every scan runs on a blocking thread, and the cycle waits for it under its
@@ -36,6 +44,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::{Clock, CycleContext};
 use crate::{
+    automatic_watch::{self, Wanted},
     discovery,
     store::library::{Followed, LibraryError, ScanReport, WatchFolder},
 };
@@ -165,9 +174,75 @@ pub async fn scan_folder(
     })
 }
 
+/// Makes the automatic watch folders the collect and archive folders of the
+/// settings (see the module docs). Failures are logged: the folders already
+/// registered are read all the same.
+pub async fn sync_automatic(ctx: &CycleContext, now: crate::store::history::Millis) {
+    let settings = match ctx.settings.collection().await {
+        Ok(Some(settings)) => settings,
+        Ok(None) => return,
+        Err(err) => {
+            eprintln!("Watch folders: cannot read the collection settings: {err}");
+            return;
+        }
+    };
+    let registered = match ctx.library.folders().await {
+        Ok(folders) => folders,
+        Err(err) => {
+            eprintln!("Watch folders: cannot list them: {err}");
+            return;
+        }
+    };
+    let mut wanted = vec![Wanted {
+        what: "수집 폴더",
+        path: settings.folder.clone(),
+    }];
+    if let Some(archive) = &settings.archive_folder {
+        wanted.push(Wanted {
+            what: "보관 폴더",
+            path: archive.clone(),
+        });
+    }
+    let plan = match tokio::task::spawn_blocking(move || {
+        automatic_watch::plan(&wanted, &registered)
+    })
+    .await
+    {
+        Ok(Ok(plan)) => plan,
+        Ok(Err(reason)) => {
+            eprintln!("Watch folders: the collect and archive folders cannot be watched: {reason}");
+            return;
+        }
+        Err(err) => {
+            eprintln!("Watch folders: planning the collect and archive folders failed: {err}");
+            return;
+        }
+    };
+    if plan.is_empty() {
+        return;
+    }
+    match ctx
+        .library
+        .sync_automatic(plan, settings.version, now)
+        .await
+    {
+        Ok(applied) => println!(
+            "Watch folders: the collect and archive folders: {} registered, {} turned automatic, \
+             {} removed",
+            applied.added, applied.converted, applied.removed
+        ),
+        // The settings or the folders changed meanwhile; the next cycle plans again.
+        Err(LibraryError::Changed) => {}
+        Err(err) => {
+            eprintln!("Watch folders: cannot register the collect and archive folders: {err}")
+        }
+    }
+}
+
 /// Reads every watch folder in turn. A folder that fails, or a database error
 /// on one, is logged and the next folder is read.
 pub async fn scan_all(ctx: &CycleContext, clock: &Clock, cancel: &CancellationToken) {
+    sync_automatic(ctx, clock()).await;
     let folders = match ctx.library.folders().await {
         Ok(folders) => folders,
         Err(err) => {

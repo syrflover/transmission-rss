@@ -9,8 +9,8 @@ use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBe
 use uuid::Uuid;
 
 use super::{
-    EpisodeRecord, FileRecord, FolderSummary, Followed, LibraryError, ScanReport,
-    UnrecognizedRecord, WatchFolder, WorkRecord,
+    AutomaticApplied, AutomaticPlan, EpisodeRecord, FileRecord, FolderSummary, Followed,
+    LibraryError, ScanReport, UnrecognizedRecord, WatchFolder, WorkRecord,
 };
 use crate::{
     discovery::{EpisodeFile, FileKind, Reason, Scan, ScanError, ScannedWork, WorkRead},
@@ -25,7 +25,7 @@ fn new_id() -> String {
     Uuid::new_v4().to_string()
 }
 
-const FOLDER_COLUMNS: &str = "id, path, created_at, baselined, checked_at, error";
+const FOLDER_COLUMNS: &str = "id, path, created_at, baselined, checked_at, error, automatic";
 
 fn folder_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WatchFolder> {
     Ok(WatchFolder {
@@ -35,6 +35,7 @@ fn folder_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WatchFolder> {
         baselined: row.get::<_, i64>(3)? != 0,
         checked_at: row.get(4)?,
         error: row.get(5)?,
+        automatic: row.get::<_, i64>(6)? != 0,
     })
 }
 
@@ -60,7 +61,7 @@ pub(super) fn summaries(
     new_since: Millis,
 ) -> rusqlite::Result<Vec<FolderSummary>> {
     let mut stmt = conn.prepare(
-        "SELECT f.id, f.path, f.created_at, f.baselined, f.checked_at, f.error,
+        "SELECT f.id, f.path, f.created_at, f.baselined, f.checked_at, f.error, f.automatic,
                 (SELECT count(*) FROM works w WHERE w.watch_folder_id = f.id),
                 (SELECT count(*) FROM works w WHERE w.watch_folder_id = f.id AND w.missing = 1),
                 (SELECT count(*) FROM works w
@@ -71,12 +72,26 @@ pub(super) fn summaries(
     let rows = stmt.query_map([new_since], |row| {
         Ok(FolderSummary {
             folder: folder_from_row(row)?,
-            works: row.get::<_, i64>(6)? as usize,
-            missing_works: row.get::<_, i64>(7)? as usize,
-            new_works: row.get::<_, i64>(8)? as usize,
+            works: row.get::<_, i64>(7)? as usize,
+            missing_works: row.get::<_, i64>(8)? as usize,
+            new_works: row.get::<_, i64>(9)? as usize,
         })
     })?;
     rows.collect()
+}
+
+/// Fails with [`LibraryError::Changed`] unless the registered folders are
+/// `expected`.
+fn require_folders(
+    tx: &Transaction<'_>,
+    expected: &[(String, String, bool)],
+) -> Result<(), LibraryError> {
+    let current = AutomaticPlan::over(&folders(tx)?).based_on;
+    if current == expected {
+        Ok(())
+    } else {
+        Err(LibraryError::Changed)
+    }
 }
 
 pub(super) fn add_folder(
@@ -84,38 +99,139 @@ pub(super) fn add_folder(
     path: &str,
     scan: &Scan,
     now: Millis,
+    checked_against: &[(String, String, bool)],
 ) -> Result<(WatchFolder, ScanReport), LibraryError> {
     let tx = begin(conn)?;
-    let id = new_id();
-    let inserted = tx.execute(
-        "INSERT INTO watch_folders (id, path, created_at) VALUES (?1, ?2, ?3)",
-        params![id, path, now],
-    );
-    match inserted {
-        Ok(_) => {}
-        Err(rusqlite::Error::SqliteFailure(e, _))
-            if e.code == rusqlite::ErrorCode::ConstraintViolation =>
-        {
-            return Err(LibraryError::Duplicate)
-        }
-        Err(e) => return Err(e.into()),
+    // The caller checked overlaps against these folders outside the
+    // transaction; a folder registered meanwhile may overlap the new one.
+    let registered = folders(&tx)?;
+    if registered.iter().any(|f| f.path == path) {
+        return Err(LibraryError::Duplicate);
     }
+    require_folders(&tx, checked_against)?;
+    let id = insert_folder(&tx, path, false, now)?;
     let report = apply(&tx, &id, &Ok(scan.clone()), now)?.expect("the folder was just added");
     let folder = folder(&tx, &id)?.expect("the folder was just added");
     tx.commit()?;
     Ok((folder, report))
 }
 
-pub(super) fn remove_folder(conn: &mut Connection, id: &str) -> rusqlite::Result<Option<usize>> {
-    let tx = begin(conn)?;
+fn insert_folder(
+    tx: &Transaction<'_>,
+    path: &str,
+    automatic: bool,
+    now: Millis,
+) -> Result<String, LibraryError> {
+    let id = new_id();
+    let inserted = tx.execute(
+        "INSERT INTO watch_folders (id, path, created_at, automatic) VALUES (?1, ?2, ?3, ?4)",
+        params![id, path, now, automatic],
+    );
+    match inserted {
+        Ok(_) => Ok(id),
+        Err(rusqlite::Error::SqliteFailure(e, _))
+            if e.code == rusqlite::ErrorCode::ConstraintViolation =>
+        {
+            Err(LibraryError::Duplicate)
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Deletes folder `id` with its works; how many works went.
+fn delete_folder(tx: &Transaction<'_>, id: &str) -> rusqlite::Result<Option<usize>> {
     let works: i64 = tx.query_row(
         "SELECT count(*) FROM works WHERE watch_folder_id = ?1",
         [id],
         |row| row.get(0),
     )?;
     let removed = tx.execute("DELETE FROM watch_folders WHERE id = ?1", [id])?;
-    tx.commit()?;
     Ok((removed > 0).then_some(works as usize))
+}
+
+pub(super) fn remove_folder(
+    conn: &mut Connection,
+    id: &str,
+) -> Result<Option<usize>, LibraryError> {
+    let tx = begin(conn)?;
+    if folder(&tx, id)?.is_some_and(|f| f.automatic) {
+        return Err(LibraryError::Automatic);
+    }
+    let removed = delete_folder(&tx, id)?;
+    tx.commit()?;
+    Ok(removed)
+}
+
+pub(super) fn apply_automatic(
+    tx: &Transaction<'_>,
+    plan: &AutomaticPlan,
+    now: Millis,
+) -> Result<AutomaticApplied, LibraryError> {
+    require_folders(tx, &plan.based_on)?;
+    let mut applied = AutomaticApplied::default();
+    // Removals first, so that a path given up can be taken by another folder.
+    for id in &plan.remove {
+        if let Some(works) = delete_folder(tx, id)? {
+            applied.removed += 1;
+            applied.removed_works += works;
+        }
+    }
+    for (id, path) in &plan.keep {
+        tx.execute(
+            "UPDATE watch_folders SET automatic = 1, path = ?2 WHERE id = ?1",
+            params![id, path],
+        )?;
+        applied.converted += 1;
+    }
+    for new in &plan.add {
+        let id = insert_folder(tx, &new.path, true, now)?;
+        if let Some(scan) = &new.scan {
+            apply(tx, &id, &Ok(scan.clone()), now)?;
+        }
+        applied.added += 1;
+    }
+    Ok(applied)
+}
+
+pub(super) fn sync_automatic(
+    conn: &mut Connection,
+    plan: &AutomaticPlan,
+    settings_version: i64,
+    now: Millis,
+) -> Result<AutomaticApplied, LibraryError> {
+    let tx = begin(conn)?;
+    let version: Option<i64> = tx
+        .query_row(
+            "SELECT version FROM collection_settings WHERE id = 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if version.unwrap_or(0) != settings_version {
+        return Err(LibraryError::Changed);
+    }
+    let applied = apply_automatic(&tx, plan, now)?;
+    tx.commit()?;
+    Ok(applied)
+}
+
+/// See [`super::ensure_automatic_in`].
+pub(super) fn ensure_automatic(
+    tx: &Transaction<'_>,
+    path: &str,
+    now: Millis,
+) -> rusqlite::Result<()> {
+    let updated = tx.execute(
+        "UPDATE watch_folders SET automatic = 1 WHERE path = ?1",
+        [path],
+    )?;
+    if updated == 0 {
+        tx.execute(
+            "INSERT INTO watch_folders (id, path, created_at, automatic) VALUES (?1, ?2, ?3, 1)",
+            params![new_id(), path, now],
+        )?;
+    }
+    Ok(())
 }
 
 pub(super) fn record_scan(
