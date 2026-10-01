@@ -27,6 +27,7 @@ use transmission_rss::{
     store::{
         channels::{ChannelInput, ChannelWithRules, RuleInput},
         library::{LibraryStore, WatchFolder, WorkRecord},
+        status::StatusStore,
     },
     worker::{
         live::{LiveConfig, Reading},
@@ -246,6 +247,27 @@ async fn a_file_added_while_the_worker_runs_is_recorded_without_a_cycle_and_only
     );
     // The work's other records are as they were.
     assert_eq!(lib.work(&folder, "B").await.unwrap().files().len(), 1);
+}
+
+#[tokio::test]
+async fn a_reading_an_alert_asked_for_beats_under_the_lock_and_lets_go_of_the_hold() {
+    let lib = Live::new(config()).await;
+    let (root, _folder) = lib.two_works().await;
+    let status = StatusStore::new(lib.h.db.clone());
+    let before = status.heartbeat().await.unwrap().expect("the cycle's beat");
+
+    lib.h.advance(5000);
+    let stamp = lib.h.now();
+    touch(&root.join("A/Season 01/A S01E02.mkv"));
+
+    // The reading beat at its own time, then let go: the board keeps a worker
+    // that reads its folders for a long while from looking stopped.
+    eventually("the reading's beat", || async {
+        let beat = status.heartbeat().await.unwrap().unwrap();
+        beat.beat_at == stamp && beat.held_since.is_none()
+    })
+    .await;
+    assert!(before.beat_at < stamp);
 }
 
 #[tokio::test]

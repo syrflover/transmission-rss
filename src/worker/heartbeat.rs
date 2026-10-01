@@ -2,15 +2,18 @@
 //!
 //! The web cannot ask the worker whether it is alive, and must not look at the
 //! cycle lock: even a try-lock from the web could make the worker's own
-//! try-lock fail and skip a cycle. So while the worker holds the lock for a
-//! cycle (the RSS work, then the watch folder reading and the season link that
-//! follow under the same lock) a task writes a timestamp to the database every
-//! [`BEAT_EVERY`] ([`crate::store::status::StatusStore::record_heartbeat`]).
+//! try-lock fail and skip a cycle. So while the worker holds the lock, whatever
+//! for (a cycle: the RSS work, then the watch folder reading and the season
+//! link that follow under the same lock; the commands the web accepted; a
+//! reading that a watch folder's alert asked for), a task writes a timestamp to
+//! the database every [`BEAT_EVERY`]
+//! ([`crate::store::status::StatusStore::record_heartbeat`]). Every holder runs
+//! its work through [`while_holding`] once it has the lock.
 //! A timestamp that stops ageing means the worker is busy; one that has aged
 //! for a minute means it died or is stopped, whatever the cycle's own marker
 //! says. See `crate::web::status_api` for how the web reads it.
 
-use std::time::Duration;
+use std::{future::Future, time::Duration};
 
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -21,6 +24,23 @@ use crate::store::{history::Millis, status::StatusStore};
 /// How often the heartbeat is written. The web calls the worker busy for a
 /// minute after a beat, so this leaves room for three missed beats.
 pub const BEAT_EVERY: Duration = Duration::from_secs(15);
+
+/// Runs `work`, which the caller does with the cycle lock held, with the
+/// heartbeat beating, and lets go of the hold when it returns. The caller drops
+/// the lock after this returns, so the last beat is written under it. If `work`
+/// panics or is dropped the heartbeat is dropped with it: no clean end is
+/// written and the timestamp ages.
+pub async fn while_holding<T>(
+    status: StatusStore,
+    clock: Clock,
+    every: Duration,
+    work: impl Future<Output = T>,
+) -> T {
+    let beat = Heartbeat::start(status, clock, every).await;
+    let out = work.await;
+    beat.stop().await;
+    out
+}
 
 /// A running heartbeat. Writes the first beat when it starts, one more every
 /// [`BEAT_EVERY`], and a last one that clears the hold when [`Heartbeat::stop`]

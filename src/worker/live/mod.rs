@@ -169,6 +169,8 @@ pub(super) struct Runtime {
     pub ctx: CycleContext,
     pub lock_path: PathBuf,
     pub clock: Clock,
+    /// How often the heartbeat is written while a reading holds the lock.
+    pub heartbeat_every: Duration,
 }
 
 struct Attached {
@@ -244,11 +246,18 @@ impl LiveWatch {
 
     /// Lets the folders be watched: [`LiveWatch::sync_folders`] places the
     /// watches. `ctx` is the context the readings run with.
-    pub(super) fn start(&self, ctx: CycleContext, lock_path: PathBuf, clock: Clock) {
+    pub(super) fn start(
+        &self,
+        ctx: CycleContext,
+        lock_path: PathBuf,
+        clock: Clock,
+        heartbeat_every: Duration,
+    ) {
         *self.inner.runtime.lock().unwrap_or_else(|e| e.into_inner()) = Some(Runtime {
             ctx,
             lock_path,
             clock,
+            heartbeat_every,
         });
     }
 

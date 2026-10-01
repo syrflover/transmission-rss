@@ -15,9 +15,13 @@ use super::{
     tree::{self, Due, RawEvent, WatchTree},
     FolderStatus, LiveConfig, Runtime,
 };
-use crate::worker::{
-    lock::CycleLock,
-    watch::{self, ScanMode, WorksMode},
+use crate::{
+    store::status::StatusStore,
+    worker::{
+        heartbeat,
+        lock::CycleLock,
+        watch::{self, ScanMode, WorksMode},
+    },
 };
 
 /// What the rest of the worker can ask of a folder's task.
@@ -211,50 +215,62 @@ impl Task {
             }
         };
 
-        let folder = match ctx.library.folder(&self.folder_id).await {
-            Ok(Some(folder)) => folder,
-            // Unregistered meanwhile: the worker's next look at the folders ends this task.
-            Ok(None) => return Some(retry),
-            Err(error) => {
+        // The web sees the worker busy, not stopped, for as long as a reading
+        // takes (a whole folder on a slow disk takes minutes); the beat ends
+        // before the lock is let go.
+        let read = async {
+            let folder = match ctx.library.folder(&self.folder_id).await {
+                Ok(Some(folder)) => folder,
+                // Unregistered meanwhile: the worker's next look at the folders ends this task.
+                Ok(None) => return Some(retry),
+                Err(error) => {
+                    eprintln!(
+                        "Watch folder {}: cannot read it from the database: {error}",
+                        self.folder_id
+                    );
+                    tree.defer(due, retry);
+                    return Some(retry);
+                }
+            };
+            // The cycle may have read the whole folder since the catch-up was asked for.
+            let whole = due.folder || !folder.baselined || (catching_up && self.catching_up());
+            let now = (self.runtime.clock)();
+            let works = std::mem::take(&mut due.works);
+            let outcome = if whole {
+                watch::scan_folder(ctx, &folder, now, ScanMode::Periodic)
+                    .await
+                    .map(|_| ())
+            } else if !works.is_empty() {
+                watch::scan_works(ctx, &folder, works.clone(), now, WorksMode::Fresh)
+                    .await
+                    .map(|_| ())
+            } else {
+                Ok(())
+            };
+            if let Err(error) = outcome {
                 eprintln!(
-                    "Watch folder {}: cannot read it from the database: {error}",
-                    self.folder_id
+                    "Watch folder {}: cannot record the reading: {error}",
+                    folder.path
                 );
-                tree.defer(due, retry);
+                // Nothing was recorded: what was due is read again shortly.
+                let again = Due {
+                    folder: whole,
+                    works: if whole { Vec::new() } else { works },
+                };
+                tree.defer(again, retry);
                 return Some(retry);
             }
+            None
         };
-        // The cycle may have read the whole folder since the catch-up was asked for.
-        let whole = due.folder || !folder.baselined || (catching_up && self.catching_up());
-        let now = (self.runtime.clock)();
-        let works = std::mem::take(&mut due.works);
-        let outcome = if whole {
-            watch::scan_folder(ctx, &folder, now, ScanMode::Periodic)
-                .await
-                .map(|_| ())
-        } else if !works.is_empty() {
-            watch::scan_works(ctx, &folder, works.clone(), now, WorksMode::Fresh)
-                .await
-                .map(|_| ())
-        } else {
-            Ok(())
-        };
-        if let Err(error) = outcome {
-            eprintln!(
-                "Watch folder {}: cannot record the reading: {error}",
-                folder.path
-            );
-            // Nothing was recorded: what was due is read again shortly.
-            let again = Due {
-                folder: whole,
-                works: if whole { Vec::new() } else { works },
-            };
-            tree.defer(again, retry);
-            drop(lock);
-            return Some(retry);
-        }
+        let next = heartbeat::while_holding(
+            StatusStore::new(ctx.channels.db().clone()),
+            self.runtime.clock.clone(),
+            self.runtime.heartbeat_every,
+            read,
+        )
+        .await;
         drop(lock);
-        None
+        next
     }
 
     fn catching_up(&self) -> bool {

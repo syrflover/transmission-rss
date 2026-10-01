@@ -141,17 +141,22 @@ impl Worker {
         // after this task is aborted (a `rule_archive` rename in progress).
         let lock: rule_archive::work_folder::Hold = Arc::new(lock);
 
-        let mut ran = 0;
-        while !cancel.is_cancelled() {
-            let Some(command) = self.commands.claim_next((self.clock)()).await? else {
-                break;
-            };
-            if !self.run_command(&command, &lock, cancel).await? {
-                break;
+        // The web sees the worker busy, not stopped, for as long as a command
+        // runs; the beat ends before the lock is let go.
+        self.beating(async {
+            let mut ran = 0;
+            while !cancel.is_cancelled() {
+                let Some(command) = self.commands.claim_next((self.clock)()).await? else {
+                    break;
+                };
+                if !self.run_command(&command, &lock, cancel).await? {
+                    break;
+                }
+                ran += 1;
             }
-            ran += 1;
-        }
-        Ok(CommandsOutcome::Ran(ran))
+            Ok(CommandsOutcome::Ran(ran))
+        })
+        .await
     }
 
     /// Runs one claimed command and ends it. `false` means it could not be
