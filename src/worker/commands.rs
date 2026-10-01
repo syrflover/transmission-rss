@@ -41,6 +41,10 @@
 //! hold its torrent under a hash history never learned, and the next cycle
 //! removes no departed torrents either (see [`super::CommandsAtStart`]).
 //!
+//! A `receive_past` command (`받기` of a past episode search's result) is a
+//! `receive_once` of a result no feed showed: it records the result as a past
+//! item and receives it the same way ([`receive_past`]).
+//!
 //! A `rule_archive` command (보관·복원) moves a work folder on disk. It runs
 //! under the same lock, so no cycle adds a torrent into the folder while it
 //! moves, and a start cut short leaves it `running`: the next start looks at
@@ -56,6 +60,7 @@
 
 pub mod link;
 pub mod receive_once;
+pub mod receive_past;
 pub mod rule_archive;
 pub mod watch_rescan;
 
@@ -161,6 +166,19 @@ impl Worker {
             receive_once::KIND => {
                 task.spawn(async move {
                     match receive_once::run(&ctx, &owned, || clock(), &cancel).await {
+                        Ok(finished) => Ran::Ended {
+                            state: finished.state,
+                            outcome: finished.outcome,
+                            add_unconfirmed: finished.add_unconfirmed,
+                        },
+                        Err(receive_once::Retry::AddUnanswered) => Ran::AddUnanswered,
+                        Err(err) => Ran::NotNow(err.to_string()),
+                    }
+                });
+            }
+            receive_past::KIND => {
+                task.spawn(async move {
+                    match receive_past::run(&ctx, &owned, || clock(), &cancel).await {
                         Ok(finished) => Ran::Ended {
                             state: finished.state,
                             outcome: finished.outcome,

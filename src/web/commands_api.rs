@@ -11,7 +11,14 @@
 //! | -------------- | ------------ | -------------------------------------------------------------- |
 //! | `receive_once` | `다시 받기`·`받기` | `{ "item_id": <history item>, "rule_id": <rule> }` (`rule_id` only to receive an item no rule has picked) |
 //! | `rule_archive` | `보관`·`복원` | `{ "rule_id": <rule>, "direction": "archive" \| "restore" }` |
+//! | `receive_past` | `받기`       | `{ "rule_id": <rule>, "search_id": <past episode search>, "key": <result's key> }` |
 //! | `watch_rescan` | `다시 확인`  | `{ "folder_id": <watch folder> }`                              |
+//!
+//! `receive_past` adds one result of a finished past episode search
+//! ([`super::past_search_api`]). The web resolves the result from the search it
+//! keeps and stores its title and link as history would; the browser supplies
+//! neither. A repeat of the request is the same rule and result, whatever search
+//! it names, so a lost answer can be asked again after the search is gone.
 //!
 //! A rule is archived and restored only through `rule_archive`: the worker
 //! turns the rule off before its folder moves and on after it moved back.
@@ -49,9 +56,10 @@ use serde_json::Value;
 
 use super::{ApiError, AppState};
 use crate::{
+    past_search::service::Resolve,
     store::channels::RuleState,
     store::commands::{Accepted, Command, CommandState, NewCommand},
-    worker::commands::{receive_once, rule_archive, watch_rescan},
+    worker::commands::{receive_once, receive_past, rule_archive, watch_rescan},
 };
 
 #[cfg(test)]
@@ -148,13 +156,28 @@ pub(super) fn now_millis() -> i64 {
 /// stored data.
 enum Request {
     ReceiveOnce(receive_once::ReceiveOnce),
+    ReceivePast(PastRequest),
     RuleArchive(rule_archive::RuleArchive),
     WatchRescan(watch_rescan::WatchRescan),
+}
+
+/// What the browser sends to receive a result of a past episode search.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PastRequest {
+    rule_id: String,
+    search_id: String,
+    key: String,
 }
 
 impl Request {
     fn read(kind: &str, payload: Value) -> Result<Request, ApiError> {
         match kind {
+            receive_past::KIND => {
+                let payload: PastRequest =
+                    serde_json::from_value(payload).map_err(|_| ApiError::invalid(BAD_BODY))?;
+                Ok(Request::ReceivePast(payload))
+            }
             receive_once::KIND => {
                 let payload: receive_once::ReceiveOnce =
                     serde_json::from_value(payload).map_err(|_| ApiError::invalid(BAD_BODY))?;
@@ -177,6 +200,7 @@ impl Request {
     fn kind(&self) -> &'static str {
         match self {
             Request::ReceiveOnce(_) => receive_once::KIND,
+            Request::ReceivePast(_) => receive_past::KIND,
             Request::RuleArchive(_) => rule_archive::KIND,
             Request::WatchRescan(_) => watch_rescan::KIND,
         }
@@ -185,7 +209,7 @@ impl Request {
     /// What a second open command for the same subject is told.
     fn busy(&self) -> &'static str {
         match self {
-            Request::ReceiveOnce(_) => BUSY,
+            Request::ReceiveOnce(_) | Request::ReceivePast(_) => BUSY,
             Request::RuleArchive(_) => RULE_BUSY,
             Request::WatchRescan(_) => FOLDER_BUSY,
         }
@@ -203,6 +227,10 @@ impl Request {
                 serde_json::from_str::<receive_once::ReceiveOnce>(&stored.payload)
                     .is_ok_and(|stored| stored.canonical() == payload.canonical())
             }
+            Request::ReceivePast(payload) => serde_json::from_str::<receive_past::ReceivePast>(
+                &stored.payload,
+            )
+            .is_ok_and(|stored| stored.rule_id == payload.rule_id && stored.key == payload.key),
             Request::RuleArchive(payload) => {
                 serde_json::from_str::<rule_archive::RuleArchive>(&stored.payload)
                     .is_ok_and(|stored| stored == *payload)
@@ -222,11 +250,15 @@ impl Request {
             Request::ReceiveOnce(payload) if payload.names_a_folder() => {
                 Err(ApiError::invalid(FOLDER_REFUSED))
             }
-            Request::ReceiveOnce(_) | Request::RuleArchive(_) | Request::WatchRescan(_) => Ok(()),
+            Request::ReceiveOnce(_)
+            | Request::ReceivePast(_)
+            | Request::RuleArchive(_)
+            | Request::WatchRescan(_) => Ok(()),
         }
     }
 
-    fn new_command(&self, id: String) -> NewCommand {
+    /// `past` is what [`Request::check`] resolved a `receive_past` request to.
+    fn new_command(&self, id: String, past: Option<receive_past::ReceivePast>) -> NewCommand {
         match self {
             Request::ReceiveOnce(payload) => NewCommand {
                 id,
@@ -234,6 +266,15 @@ impl Request {
                 payload: payload.canonical(),
                 subject: Some(payload.subject()),
             },
+            Request::ReceivePast(_) => {
+                let payload = past.expect("a checked receive_past request is resolved");
+                NewCommand {
+                    id,
+                    kind: receive_past::KIND.to_owned(),
+                    payload: payload.canonical(),
+                    subject: Some(payload.subject()),
+                }
+            }
             Request::RuleArchive(payload) => NewCommand {
                 id,
                 kind: rule_archive::KIND.to_owned(),
@@ -250,13 +291,66 @@ impl Request {
     }
 
     /// Checks the request against the stored data; a refusal stores nothing.
-    async fn check(&self, state: &AppState) -> Result<(), ApiError> {
+    /// A `receive_past` request comes back as the payload to store.
+    async fn check(&self, state: &AppState) -> Result<Option<receive_past::ReceivePast>, ApiError> {
         match self {
-            Request::ReceiveOnce(payload) => check_receive_once(payload, state).await,
-            Request::RuleArchive(payload) => check_rule_archive(payload, state).await,
-            Request::WatchRescan(payload) => check_watch_rescan(payload, state).await,
+            Request::ReceiveOnce(payload) => {
+                check_receive_once(payload, state).await.map(|()| None)
+            }
+            Request::ReceivePast(payload) => check_receive_past(payload, state).await.map(Some),
+            Request::RuleArchive(payload) => {
+                check_rule_archive(payload, state).await.map(|()| None)
+            }
+            Request::WatchRescan(payload) => {
+                check_watch_rescan(payload, state).await.map(|()| None)
+            }
         }
     }
+}
+
+/// The result must be one of the rule's finished search, and the rule must be
+/// one that receives it.
+async fn check_receive_past(
+    request: &PastRequest,
+    state: &AppState,
+) -> Result<receive_past::ReceivePast, ApiError> {
+    let stored = state
+        .past_search
+        .resolve(&request.search_id, &request.rule_id, &request.key)
+        .map_err(|why| match why {
+            Resolve::Gone => ApiError::not_found(
+                "이 검색은 끝났거나 서버가 다시 시작돼서 결과가 없어요. 다시 검색해 주세요.",
+            ),
+            Resolve::OtherRule => ApiError::invalid("이 검색은 다른 규칙의 검색이에요."),
+            Resolve::Running => ApiError::invalid("검색이 아직 끝나지 않았어요."),
+            Resolve::NoItem => ApiError::invalid("이 검색 결과에 없는 항목이에요."),
+        })?;
+    let payload = receive_past::ReceivePast {
+        rule_id: request.rule_id.clone(),
+        key: request.key.clone(),
+        title: stored.title,
+        link: stored.link,
+    };
+    let rule = state
+        .channels
+        .get_rule(&payload.rule_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("규칙을 찾지 못했어요. 삭제됐을 수 있어요."))?;
+    let channel = state.channels.get_channel(&rule.channel_id).await?;
+    let existing = match &channel {
+        Some(channel) => state
+            .history
+            .item_by_key(channel.id.clone(), payload.key.clone())
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?,
+        None => None,
+    };
+    let probe = existing.unwrap_or_else(|| {
+        receive_past::past_item(&payload, channel.as_ref().map_or("", |c| c.id.as_str()), 0)
+    });
+    receive_once::adoption_plan(&probe, channel.as_ref(), Some(&rule))
+        .map_err(|why| ApiError::invalid(why.message()))?;
+    Ok(payload)
 }
 
 /// The watch folder must be registered.
@@ -356,8 +450,8 @@ async fn create_command(
     }
 
     request.refuse_if_not_new()?;
-    request.check(&state).await?;
-    let new = request.new_command(body.id);
+    let past = request.check(&state).await?;
+    let new = request.new_command(body.id, past);
 
     match state
         .commands
