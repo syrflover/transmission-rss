@@ -287,6 +287,12 @@ async fn start(
 
     let (save_path, episode) = rule_destination(FsPath::new(&collect), &rule);
     let (settled, settled_cut) = settled_items(&state, &channel.id).await?;
+    // What the worker last saw in Transmission; the web cannot ask it.
+    let listing = state
+        .status
+        .torrent_listing()
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
     // One more than the cap is asked for, to tell a history of exactly that
     // length from a longer one.
     let mut titles: Vec<String> = state
@@ -313,6 +319,7 @@ async fn start(
         offset: episode as i64,
         save_path,
         settled,
+        listing,
         titles,
         history_cut,
         redactor,

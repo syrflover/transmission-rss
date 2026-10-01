@@ -22,7 +22,8 @@
 //! anime's schedule values are asked of Anissia once per anime when the import
 //! is applied. When Anissia cannot answer, the subscription is still made with a
 //! stand-in snapshot that the worker's daily refresh replaces, and the result
-//! says so. When Anissia answered and does not list the anime (a mistyped
+//! says so. The stand-in sits on the weekday and time the comment gave (in `기타`
+//! when it gave none), so the card shows on that weekday meanwhile. When Anissia answered and does not list the anime (a mistyped
 //! number, a show that ended), nothing is known of it: the pick is reported as
 //! not created and the rule is imported plain ([`settle`]); the review shows
 //! the suggestion unchecked once its own reads find the same. Suggestions never
@@ -133,6 +134,8 @@ pub(super) struct Wanted {
     creator: Option<String>,
     /// The rule's match phrase, for a stand-in snapshot's title.
     phrase: String,
+    /// The weekday and time the comment gives, for a stand-in snapshot.
+    airs: Option<Airs>,
 }
 
 /// A checked suggestion that was left out.
@@ -186,7 +189,7 @@ pub(super) fn pick(
             continue;
         };
         let suggestion = offered.get(pick.rule).ok_or(StalePick)?;
-        let Reading::Address { .. } = suggestion.reading else {
+        let Reading::Address { airs, .. } = &suggestion.reading else {
             return Err(StalePick);
         };
         if let Some(reason) = &suggestion.blocked {
@@ -208,6 +211,7 @@ pub(super) fn pick(
                 .r#match
                 .clone()
                 .unwrap_or_default(),
+            airs: airs.clone(),
         });
     }
     Ok(out)
@@ -306,7 +310,13 @@ pub(super) fn subscriptions(wanted: &[Wanted], resolved: &Resolved) -> Vec<Impor
         .map(|w| {
             let (anime, placeholder) = match resolved.found.get(&w.anime_no) {
                 Some(anime) => (anime.clone(), false),
-                None => (ImportSubscription::stand_in(w.anime_no, &w.phrase), true),
+                None => {
+                    let airs = w.airs.as_ref().map(|a| (a.week, a.time.as_str()));
+                    (
+                        ImportSubscription::stand_in(w.anime_no, &w.phrase, airs),
+                        true,
+                    )
+                }
             };
             ImportSubscription {
                 action: w.action,
@@ -340,6 +350,9 @@ struct Created {
     /// Whether the weekday and time were read from Anissia. `false` leaves
     /// them for the worker's daily refresh.
     schedule_known: bool,
+    /// Whether, until then, the subscription sits on the weekday and time the
+    /// comment gave (`기타` when the comment gave none).
+    schedule_from_comment: bool,
 }
 
 /// What became of the checked suggestions.
@@ -385,6 +398,7 @@ pub(super) fn result(
                     subject: found.map(|a| a.subject.clone()),
                     creator: w.creator.clone(),
                     schedule_known: found.is_some(),
+                    schedule_from_comment: found.is_none() && w.airs.is_some(),
                 });
             }
             SubscriptionOutcome::RuleAlreadySubscribed => result.not_created.push(NotCreated {

@@ -84,8 +84,8 @@
 //! archived (before it was last turned back on). A subscription also leaves
 //! alone the items the feed already held when the channel was first read, even
 //! when it began before that read (the first read had no history to tell old
-//! items from new; the preview gets the read's time from
-//! [`HistoryStore::first_sightings`]). The preview applies the cycle's own test
+//! items from new; the items it recorded are marked
+//! ([`HistoryItem::first_read`])). The preview applies the cycle's own test
 //! ([`ChannelPlan::is_past`]) to the item's history record and lists such an
 //! item as `past` (with `past_cause` and the folder that `받기` would save it
 //! to) rather than `mine`; a `receive_once` command naming the rule receives
@@ -127,7 +127,7 @@ use crate::store::channels::{
 };
 use crate::store::commands::Command;
 use crate::store::history::{
-    HistoryError, HistoryItem, HistoryQuery, HistoryResult, HistoryStore, Millis, MAX_PAGE_SIZE,
+    HistoryError, HistoryItem, HistoryQuery, HistoryResult, HistoryStore, KnownItem, MAX_PAGE_SIZE,
 };
 use crate::worker::commands::rule_archive::{self, RuleArchive};
 use crate::worker::plan::{ChannelPlan, Judgement, PastCause, PlanEvaluation};
@@ -1262,10 +1262,9 @@ fn substitute(
 }
 
 /// Judges `items` with the edited rule put into the channel's rules.
-/// `first_read_at` is when history first saw an item of the channel (its first
-/// read), which tells a subscription what the feed already held then. Pure: the
-/// same items and settings always give the same [`Preview`]; the handler only
-/// fetches them.
+/// Each item says whether the channel's first read recorded it, which tells a
+/// subscription what the feed already held then. Pure: the same items and
+/// settings always give the same [`Preview`]; the handler only fetches them.
 pub fn build_preview(
     collect_folder: &FsPath,
     cwr: &ChannelWithRules,
@@ -1273,7 +1272,6 @@ pub fn build_preview(
     edited: &RuleInput,
     position: Option<usize>,
     items: &[HistoryItem],
-    first_read_at: Option<Millis>,
 ) -> Result<Preview, ApiError> {
     let substituted = substitute(cwr, edited_id, edited, position)?;
     let id = edited_id.unwrap_or(NEW_RULE_ID).to_owned();
@@ -1285,8 +1283,7 @@ pub fn build_preview(
 
     // The same mapping twice: as the channel is, and with no excludes, which
     // tells whether an excluded item would have been the edited rule's.
-    let plan =
-        ChannelPlan::new(substituted.clone(), collect_folder).with_first_read_at(first_read_at);
+    let plan = ChannelPlan::new(substituted.clone(), collect_folder);
     let mut open_channel = substituted.clone();
     open_channel.channel.excludes.clear();
     let open_plan = ChannelPlan::new(open_channel, collect_folder);
@@ -1321,7 +1318,7 @@ pub fn build_preview(
                 rule_id, save_path, ..
             } if rule_id == &id => {
                 // The cycle's own test, on the same record of the item.
-                let known = Some((item.first_seen_at, item.result));
+                let known = Some(KnownItem::from(item));
                 let kind = if plan.is_past(&id, known) {
                     past_cause = plan
                         .past_cause(&id, item.first_seen_at)
@@ -1410,13 +1407,6 @@ async fn preview(
     let edited = b.rule.into_input(None)?;
     let cwr = load_channel(&state, &b.channel_id).await?;
     let items = channel_items(&state.history, &b.channel_id).await?;
-    let first_read_at = state
-        .history
-        .first_sightings(vec![b.channel_id.clone()])
-        .await
-        .map_err(history_error)?
-        .get(&b.channel_id)
-        .copied();
     // Unset, the folder is empty and a save path is the rule's directory alone.
     let collect_folder = collect_folder(&state).await?.unwrap_or_default();
     Ok(Json(build_preview(
@@ -1426,6 +1416,5 @@ async fn preview(
         &edited,
         b.position,
         &items,
-        first_read_at,
     )?))
 }

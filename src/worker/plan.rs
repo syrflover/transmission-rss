@@ -9,7 +9,7 @@ use crate::{
     rss::{save_path, ChannelEvaluator, ChannelSpec, Outcome, RuleSpec, SkipReason},
     store::{
         channels::{Channel, ChannelWithRules, Rule, RuleState},
-        history::{HistoryResult, Millis},
+        history::{HistoryResult, KnownItem, Millis},
     },
     transmission::Redactor,
 };
@@ -56,9 +56,6 @@ pub struct ChannelPlan {
     /// For each active rule that holds back its past items, since when. See
     /// [`ChannelPlan::is_past`].
     past_since: HashMap<String, PastSince>,
-    /// When history first saw an item of the channel: the moment of its first
-    /// read, if history has one. See [`ChannelPlan::is_past`].
-    first_read_at: Option<Millis>,
 }
 
 /// The moments before which a rule leaves unpicked items to the user: when it
@@ -140,22 +137,12 @@ impl ChannelPlan {
     /// already holds is for the user to pick, not for a subscription to
     /// receive (`docs/specs/collection.md`, 방영작 구독), so the items are
     /// judged by the other rules and the ones nothing takes are recorded as
-    /// `no_match`. Later plans call those items past
-    /// ([`ChannelPlan::with_first_read_at`]).
+    /// `no_match`. Later plans call those items past ([`ChannelPlan::is_past`]).
     pub fn for_first_read(
         channel_with_rules: ChannelWithRules,
         collect_folder: &Path,
     ) -> ChannelPlan {
         ChannelPlan::build(channel_with_rules, collect_folder, true)
-    }
-
-    /// Tells the plan when history first saw an item of the channel (its first
-    /// read), which is what [`ChannelPlan::is_past`] needs to find what the
-    /// feed already held then. `None` when history has no record of the
-    /// channel.
-    pub fn with_first_read_at(mut self, first_read_at: Option<Millis>) -> ChannelPlan {
-        self.first_read_at = first_read_at;
-        self
     }
 
     fn build(
@@ -187,7 +174,6 @@ impl ChannelPlan {
             evaluator: ChannelEvaluator::new(spec),
             rule_ids,
             past_since,
-            first_read_at: None,
         }
     }
 
@@ -231,19 +217,22 @@ impl ChannelPlan {
     /// items from the new, so a subscription (never a plain rule) leaves all
     /// of them ([`ChannelPlan::for_first_read`]). A rule that is no
     /// subscription and was never turned back on has no past.
-    /// `known` is the item's history record: when it was first seen and its
-    /// result. An item a rule picked and failed to add is not past, nor is one
-    /// first seen after the rule began or resumed collecting.
-    pub fn is_past(&self, rule_id: &str, known: Option<(Millis, HistoryResult)>) -> bool {
+    /// `known` is the item's history record: when it was first seen, its result
+    /// and whether the channel's first read recorded it. An item a rule picked
+    /// and failed to add is not past, nor is one first seen after the rule began
+    /// or resumed collecting. What the first read recorded is told by the item
+    /// itself, not by comparing times, so no clock moves that line.
+    pub fn is_past(&self, rule_id: &str, known: Option<KnownItem>) -> bool {
         let Some(since) = self.past_since.get(rule_id) else {
             return false;
         };
         matches!(
             known,
-            Some((first_seen_at, HistoryResult::NoMatch | HistoryResult::Excluded))
-                if first_seen_at < since.until()
-                    || (since.subscribed.is_some()
-                        && self.first_read_at.is_some_and(|read| first_seen_at <= read))
+            Some(KnownItem {
+                first_seen_at,
+                result: HistoryResult::NoMatch | HistoryResult::Excluded,
+                first_read,
+            }) if first_seen_at < since.until() || (since.subscribed.is_some() && first_read)
         )
     }
 
@@ -412,6 +401,14 @@ mod tests {
         }
     }
 
+    fn known(first_seen_at: i64, result: HistoryResult, first_read: bool) -> KnownItem {
+        KnownItem {
+            first_seen_at,
+            result,
+            first_read,
+        }
+    }
+
     fn plan(rules: Vec<Rule>) -> ChannelPlan {
         ChannelPlan::new(
             ChannelWithRules {
@@ -485,7 +482,7 @@ mod tests {
             r.resumed_at = resumed_at;
             plan(vec![r])
         };
-        let seen = |at| Some((at, HistoryResult::NoMatch));
+        let seen = |at| Some(known(at, HistoryResult::NoMatch, false));
 
         // Never subscribed nor turned back on: nothing is past.
         let plain = held(None, None);
@@ -519,9 +516,12 @@ mod tests {
             HistoryResult::Received,
             HistoryResult::Duplicate,
         ] {
-            assert!(!both.is_past("r", Some((1, result))), "{result:?}");
+            assert!(
+                !both.is_past("r", Some(known(1, result, false))),
+                "{result:?}"
+            );
         }
-        assert!(both.is_past("r", Some((1, HistoryResult::Excluded))));
+        assert!(both.is_past("r", Some(known(1, HistoryResult::Excluded, false))));
         // An item history does not know is not past.
         assert!(!both.is_past("r", None));
     }
@@ -543,7 +543,7 @@ mod tests {
             r.resumed_at = resumed;
             plan(vec![r])
         };
-        let seen = |at| Some((at, HistoryResult::NoMatch));
+        let seen = |at| Some(known(at, HistoryResult::NoMatch, false));
 
         // Subscribed at 50, given its title at 200: what came before 200 is
         // past, and says it came before the title, or before the subscription.
@@ -581,37 +581,39 @@ mod tests {
             });
             vec![sub, rule("plain", 1, Some("Show"), RuleState::Active)]
         };
-        let seen = |at, result| Some((at, result));
+        // `first_read`: the item was recorded by the channel's first read.
+        let seen = |at, result, first_read| Some(known(at, result, first_read));
 
-        // The subscription began at 50, before the first read at 100: the
-        // boundary alone calls nothing past, the first read does.
-        let p = plan(rules(Some(50))).with_first_read_at(Some(100));
-        assert!(p.is_past("sub", seen(100, HistoryResult::NoMatch)));
-        assert!(p.is_past("sub", seen(100, HistoryResult::Excluded)));
+        // The subscription began at 50, before the first read: the boundary
+        // alone calls nothing past, the first read does.
+        let p = plan(rules(Some(50)));
+        assert!(p.is_past("sub", seen(100, HistoryResult::NoMatch, true)));
+        assert!(p.is_past("sub", seen(100, HistoryResult::Excluded, true)));
         assert_eq!(p.past_cause("sub", 100), Some(PastCause::FirstRead));
         assert_eq!(PastCause::FirstRead.code(), "first_read");
-        // Later items are the subscription's own; so is an item a rule took.
-        assert!(!p.is_past("sub", seen(101, HistoryResult::NoMatch)));
-        assert!(!p.is_past("sub", seen(100, HistoryResult::AddFailed)));
-        assert!(!p.is_past("sub", seen(100, HistoryResult::Received)));
+        // An item the first read did not record is the subscription's own,
+        // whenever its time says it was seen: so is an item a rule took.
+        assert!(!p.is_past("sub", seen(101, HistoryResult::NoMatch, false)));
+        assert!(!p.is_past("sub", seen(100, HistoryResult::NoMatch, false)));
+        assert!(!p.is_past("sub", seen(60, HistoryResult::NoMatch, false)));
+        assert!(!p.is_past("sub", seen(100, HistoryResult::AddFailed, true)));
+        assert!(!p.is_past("sub", seen(100, HistoryResult::Received, true)));
+        // An item of the first read is past however late its time says it is.
+        assert!(p.is_past("sub", seen(10_000, HistoryResult::NoMatch, true)));
         // A plain rule has no past, and none of the first read's.
-        assert!(!p.is_past("plain", seen(100, HistoryResult::NoMatch)));
-
-        // Without a first read to go by nothing changes.
-        let p = plan(rules(Some(50)));
-        assert!(!p.is_past("sub", seen(100, HistoryResult::NoMatch)));
+        assert!(!p.is_past("plain", seen(100, HistoryResult::NoMatch, true)));
 
         // A subscription that began after the first read: the earlier cause
         // is the one shown.
-        let p = plan(rules(Some(150))).with_first_read_at(Some(100));
-        assert!(p.is_past("sub", seen(100, HistoryResult::NoMatch)));
+        let p = plan(rules(Some(150)));
+        assert!(p.is_past("sub", seen(100, HistoryResult::NoMatch, true)));
         assert_eq!(p.past_cause("sub", 100), Some(PastCause::Subscribed));
 
         // A rule turned back on, no subscription, ignores the first read.
         let mut resumed = rule("r", 0, Some("Show"), RuleState::Active);
         resumed.resumed_at = Some(50);
-        let p = plan(vec![resumed]).with_first_read_at(Some(100));
-        assert!(!p.is_past("r", seen(100, HistoryResult::NoMatch)));
+        let p = plan(vec![resumed]);
+        assert!(!p.is_past("r", seen(100, HistoryResult::NoMatch, true)));
     }
 
     #[test]

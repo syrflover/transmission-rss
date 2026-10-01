@@ -7,7 +7,9 @@
 //! Replacing a channel keeps the ID of every existing rule that the file's rule
 //! *matches* (see [`match_rules`]), so anything that points at a rule ID keeps
 //! pointing at it. Existing rules the file has no match for are deleted; the
-//! file's other rules get new IDs. [`ChannelStore::replace_channel`] instead
+//! file's other rules get new IDs. The exception is a title-waiting
+//! subscription ([`is_title_waiting_subscription`]): the file cannot express
+//! one, so a replacement leaves it as it is, after the file's rules. [`ChannelStore::replace_channel`] instead
 //! reissues every ID, which is why an import does not use it.
 
 use std::{
@@ -60,6 +62,9 @@ pub enum ImportedChannel {
         kept_rules: usize,
         /// Existing rules that were deleted, as they were before.
         removed_rules: Vec<Rule>,
+        /// Title-waiting subscriptions of the channel that the replacement left
+        /// untouched; they are the last rules of the channel.
+        waiting_kept: usize,
     },
 }
 
@@ -77,6 +82,13 @@ impl ImportedChannel {
             ImportedChannel::Replaced { channel, .. } => channel,
         }
     }
+}
+
+/// Whether `rule` is a subscription still waiting for its title (a match phrase
+/// of `null`, no first release yet). A legacy file cannot express it, so an
+/// import replacing its channel keeps it.
+pub fn is_title_waiting_subscription(rule: &Rule) -> bool {
+    rule.r#match.is_none() && rule.subscription.is_some()
 }
 
 /// For each incoming rule, the index in `existing` of the rule whose ID it
@@ -354,8 +366,21 @@ fn replace_keeping_rule_ids(
     }
 
     let mut removed_rules = Vec::new();
+    let mut waiting_kept = 0;
     for (index, rule) in existing.into_iter().enumerate() {
-        if !kept.contains(&index) {
+        if kept.contains(&index) {
+            continue;
+        }
+        if is_title_waiting_subscription(&rule) {
+            // Left as it is (its subscription row goes on pointing at it); only
+            // its place moves behind the file's rules, which keep the places
+            // their index in the file names.
+            tx.execute(
+                "UPDATE rules SET position = ?2 WHERE id = ?1",
+                params![rule.id, (channel.rules.len() + waiting_kept) as i64],
+            )?;
+            waiting_kept += 1;
+        } else {
             tx.execute("DELETE FROM rules WHERE id = ?1", [&rule.id])?;
             removed_rules.push(rule);
         }
@@ -365,6 +390,7 @@ fn replace_keeping_rule_ids(
         channel: read_channel(tx, id)?,
         kept_rules,
         removed_rules,
+        waiting_kept,
     })
 }
 

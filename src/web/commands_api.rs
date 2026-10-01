@@ -20,6 +20,10 @@
 //! keeps and stores its title and link as history would; the browser supplies
 //! neither. A repeat of the request is the same rule and result, whatever search
 //! it names, so a lost answer can be asked again after the search is gone.
+//! A result history says Transmission took is accepted only when the search
+//! found it gone from the work (its torrent removed and its video not in the
+//! folder), and then as a result nothing has received; the worker checks that
+//! again when it runs the command.
 //!
 //! `episode_undo` is accepted only while the rule's offset is the automatic
 //! one the request names and the value it replaced is known; the worker puts
@@ -357,8 +361,8 @@ async fn check_receive_past(
     let payload = receive_past::ReceivePast {
         rule_id: request.rule_id.clone(),
         key: request.key.clone(),
-        title: stored.title,
-        link: stored.link,
+        title: stored.title.clone(),
+        link: stored.link.clone(),
     };
     let rule = state
         .channels
@@ -377,6 +381,18 @@ async fn check_receive_past(
     let probe = existing.unwrap_or_else(|| {
         receive_past::past_item(&payload, channel.as_ref().map_or("", |c| c.id.as_str()), 0)
     });
+    // An item Transmission took that the search found gone from the work is
+    // judged as one nothing has received, as the worker does: the rule must be
+    // active and pick it. The worker looks at Transmission and the folder
+    // again when it runs the command.
+    let probe = if stored.departed && probe.result.is_settled() {
+        crate::store::history::HistoryItem {
+            result: crate::store::history::HistoryResult::NoMatch,
+            ..probe
+        }
+    } else {
+        probe
+    };
     receive_once::adoption_plan(&probe, channel.as_ref(), Some(&rule))
         .map_err(|why| ApiError::invalid(why.message()))?;
     Ok(payload)

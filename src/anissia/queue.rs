@@ -14,7 +14,11 @@
 //! that an anime without an end date has ended. A refresh that failed, was
 //! refused or was cut short records nothing of the kind, and neither does one
 //! whose every week came back empty (an answer that lists nothing at all says
-//! more about Anissia than about the anime).
+//! more about Anissia than about the anime). Likewise a week that came back
+//! empty although a due snapshot was last listed in it is not believed: Anissia
+//! may have answered that one week wrongly, so the anime whose snapshot is in
+//! that week are not recorded as unlisted by this refresh (they are looked for
+//! again a day later), while the other weeks decide theirs as usual.
 //!
 //! A failure to reach Anissia puts every anime that was still to be found off
 //! for an hour, and `429` for as long as Anissia says. One process runs the
@@ -101,9 +105,14 @@ impl Anissia {
             }
         }
 
+        // The week each anime's snapshot was listed in.
+        let weeks_of: Vec<(i64, Option<u8>)> = due.iter().map(|d| (d.anime_no, d.week)).collect();
         let mut refreshed = 0;
         // Whether any week listed any anime at all.
         let mut anything_listed = false;
+        // The weeks that answered with nothing although a due snapshot is in
+        // them.
+        let mut doubtful_weeks: Vec<u8> = Vec::new();
         for week in weeks {
             if pending.is_empty() {
                 break;
@@ -127,6 +136,19 @@ impl Anissia {
             };
             let at = self.now();
             anything_listed |= !entries.is_empty();
+            if entries.is_empty() {
+                let held = weeks_of
+                    .iter()
+                    .filter(|(no, w)| *w == Some(week) && pending.contains(no))
+                    .count();
+                if held > 0 {
+                    eprintln!(
+                        "Anissia refresh of week {week}: the list is empty but {held} anime \
+                         were last listed in it; not recording them as unlisted"
+                    );
+                    doubtful_weeks.push(week);
+                }
+            }
             for entry in entries {
                 let Some(index) = pending.iter().position(|no| *no == entry.anime_no) else {
                     continue;
@@ -156,8 +178,19 @@ impl Anissia {
         if missing > 0 {
             let wait = Duration::from_millis(REFRESH_AFTER_MS as u64);
             if anything_listed {
-                // Every week answered and these were in none of them.
-                self.leave_unlisted(pending, wait, asked_from).await;
+                // Every week answered and these were in none of them, except
+                // those whose own week came back empty: that answer is doubted.
+                let (doubted, gone): (Vec<i64>, Vec<i64>) = pending.into_iter().partition(|no| {
+                    weeks_of
+                        .iter()
+                        .any(|(n, w)| n == no && w.is_some_and(|w| doubtful_weeks.contains(&w)))
+                });
+                if !gone.is_empty() {
+                    self.leave_unlisted(gone, wait, asked_from).await;
+                }
+                if !doubted.is_empty() {
+                    self.put_off(doubted, wait).await;
+                }
             } else {
                 self.put_off(pending, wait).await;
             }

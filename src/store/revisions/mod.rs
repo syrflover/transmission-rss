@@ -605,6 +605,7 @@ impl RevisionStore {
                             written.recorded = history_repo::record_in(
                                 &tx,
                                 at,
+                                history_repo::Origin::Feed,
                                 std::slice::from_ref(observation),
                             )?
                             .pop();
@@ -647,8 +648,13 @@ impl RevisionStore {
                 match history {
                     HistoryWrite::Observe(observation) => {
                         if written.recorded.is_none() {
-                            written.recorded =
-                                history_repo::record_in(&tx, at, &[observation])?.pop();
+                            written.recorded = history_repo::record_in(
+                                &tx,
+                                at,
+                                history_repo::Origin::Feed,
+                                &[observation],
+                            )?
+                            .pop();
                         }
                     }
                     HistoryWrite::Outcome {

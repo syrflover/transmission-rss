@@ -23,7 +23,7 @@ use crate::{
     episode_offset::may_decide,
     store::{
         channels::{ChannelError, ChannelStore, ChannelWithRules, RuleState},
-        history::{HistoryResult, HistoryStore, Millis, Observation, Recorded},
+        history::{HistoryResult, HistoryStore, KnownItem, Millis, Observation, Recorded},
         library::LibraryStore,
         revisions::{
             HistoryWrite, Mark, NewRevision, Revision, RevisionState, RevisionStore, RowWrite,
@@ -160,11 +160,13 @@ pub struct CommandsAtStart {
 }
 
 /// The plan of each channel. A channel with a subscription gets one more
-/// look at history, for its first read: when history holds nothing of it yet,
-/// this cycle reads it for the first time and its subscriptions sit out
-/// ([`ChannelPlan::for_first_read`]); otherwise the plan learns when the first
-/// read was, to tell what the feed held then ([`ChannelPlan::with_first_read_at`]).
-/// Channels without a subscription need neither, and cost no query.
+/// look at history, for its first read: when history has no first read of it
+/// yet (an item the past search left there is not one), this cycle reads it for
+/// the first time and its subscriptions sit out
+/// ([`ChannelPlan::for_first_read`]); otherwise the items the first read
+/// recorded say for themselves that the feed held them then
+/// ([`ChannelPlan::is_past`]). Channels without a subscription need neither, and
+/// cost no query.
 ///
 /// When history cannot be read for that, a channel with a subscription is
 /// planned as if it were read for the first time: its subscriptions sit out
@@ -206,12 +208,12 @@ async fn make_plans(
             }
             match first_reads
                 .as_ref()
-                .map(|found| found.get(&cwr.channel.id).copied())
+                .map(|found| found.contains_key(&cwr.channel.id))
             {
                 // No record yet, or none could be read: this cycle's read is
                 // taken as the first.
-                None | Some(None) => ChannelPlan::for_first_read(cwr, collect_folder),
-                Some(at) => ChannelPlan::new(cwr, collect_folder).with_first_read_at(at),
+                None | Some(false) => ChannelPlan::for_first_read(cwr, collect_folder),
+                Some(true) => ChannelPlan::new(cwr, collect_folder),
             }
         })
         .collect()
@@ -430,7 +432,7 @@ pub async fn run_cycle(
                     Some(known) => {
                         let record = known.get(&observation.identity_key).copied();
                         if plan.is_past(rule_id, record) {
-                            if let Some((_, stored)) = record {
+                            if let Some(KnownItem { result: stored, .. }) = record {
                                 skipped.push(Observation {
                                     result: stored,
                                     ..observation
@@ -1167,7 +1169,8 @@ async fn record_reads(
 
 /// Leaves Transmission's downloading and seeding counts (queued torrents count
 /// with their kind) and the hashes of the torrents that are downloading for the
-/// status board and the weekly schedule. If Transmission cannot be asked, the
+/// status board and the weekly schedule, and the hashes of all its torrents for
+/// the past episode search. If Transmission cannot be asked, the
 /// previous counts, hashes and their time stay as they were, and the cycle goes on.
 async fn record_transmission_counts(ctx: &CycleContext, at: Millis, redactor: &Redactor) {
     let mut transmission = ctx.transmission();
@@ -1208,9 +1211,16 @@ async fn record_transmission_counts(ctx: &CycleContext, at: Millis, redactor: &R
         })
         .filter_map(|torrent| torrent.hash_string.clone())
         .collect();
+    let everything: Vec<String> = torrents
+        .iter()
+        .filter_map(|torrent| torrent.hash_string.clone())
+        .collect();
     let status = StatusStore::new(ctx.channels.db().clone());
     if let Err(err) = status.record_transmission(counts, downloading).await {
         eprintln!("Cannot record the Transmission counts: {err}");
+    }
+    if let Err(err) = status.record_listing(at, everything).await {
+        eprintln!("Cannot record the torrents in Transmission: {err}");
     }
 }
 

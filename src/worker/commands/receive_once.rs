@@ -534,7 +534,7 @@ pub async fn execute(
     command: &Command,
     now: impl Fn() -> Millis,
 ) -> Result<Finished, Retry> {
-    execute_with(ctx, command, now, Settle::Offset, None).await
+    execute_with(ctx, command, now, Settle::Offset, None, false).await
 }
 
 /// Whether receiving an item of a rule that has picked nothing decides the
@@ -552,12 +552,18 @@ pub enum Settle {
 /// starts once this command's add puts its torrent in: the row (its torrent
 /// hash filled in then) is written with the item's result, and the torrent
 /// is not renamed ([`crate::worker::revisions`]).
+///
+/// With `departed`, the item is one Transmission took (`received`,
+/// `duplicate`) whose torrent has gone from Transmission and whose video from
+/// the folder, which the caller has found out (`receive_past`): it is received
+/// again like an item no rule has received, and keeps its result.
 pub async fn execute_with(
     ctx: &CycleContext,
     command: &Command,
     now: impl Fn() -> Millis,
     settle: Settle,
     replacing: Option<NewRevision>,
+    departed: bool,
 ) -> Result<Finished, Retry> {
     // An add of an earlier start that got no answer stays unaccounted for
     // until an add of this one puts the torrent's hash in history. Until then
@@ -618,7 +624,15 @@ pub async fn execute_with(
     };
     let again = matches!(revision, RevisionRetry::Again(_));
     let planned = if payload.rule_id.is_some() {
-        adoption_plan(&item, channel.as_ref(), rule.as_ref())
+        if departed {
+            let unsettled = HistoryItem {
+                result: HistoryResult::NoMatch,
+                ..item.clone()
+            };
+            adoption_plan(&unsettled, channel.as_ref(), rule.as_ref())
+        } else {
+            adoption_plan(&item, channel.as_ref(), rule.as_ref())
+        }
     } else {
         retry_plan_for(&item, channel.as_ref(), rule.as_ref(), &revision)
     };
@@ -661,8 +675,9 @@ pub async fn execute_with(
         Ok(raw) => raw,
         Err(_) if keep_trying => return Err(Retry::AddUnanswered),
         // A revision received again keeps its result: the failure stays on
-        // its replacement, and the command says why it did not add it.
-        Err(reason) if again => return Ok(ended_early(failed(&reason, None))),
+        // its replacement, and the command says why it did not add it. So does
+        // an item whose torrent was gone: its result says Transmission took it.
+        Err(reason) if again || departed => return Ok(ended_early(failed(&reason, None))),
         Err(reason) => {
             return refuse(ctx, &item, &rule_id, &reason, &now)
                 .await
@@ -814,7 +829,7 @@ pub async fn execute_with(
             if (unanswered && command.attempts < MAX_ATTEMPTS) || keep_trying {
                 return Err(Retry::AddUnanswered);
             }
-            if again {
+            if again || departed {
                 let mut finished = ended_early(failed(&reason, None));
                 finished.add_unconfirmed |= unanswered;
                 return Ok(finished);
@@ -1303,6 +1318,7 @@ mod tests {
 
     fn item(result: HistoryResult, rule_id: Option<&str>) -> HistoryItem {
         HistoryItem {
+            first_read: false,
             id: 1,
             channel_id: "c1".into(),
             channel_label: "https://feed.test/rss".into(),

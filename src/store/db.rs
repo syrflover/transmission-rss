@@ -98,6 +98,10 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("revisions/schema.sql")),
     // 26: the pace of search requests to a feed host, shared by the web and the worker
     Migration::Sql(include_str!("search_pace/schema.sql")),
+    // 27: every torrent Transmission held when the worker last looked, for the web's past search
+    Migration::Sql(include_str!("status/listing.sql")),
+    // 28: which items a channel's first read recorded, and when it was
+    Migration::Sql(include_str!("history/first_read.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -947,6 +951,53 @@ mod tests {
         assert_eq!(kept, (0, 0));
     }
 
+    #[tokio::test]
+    async fn a_database_from_before_read_days_takes_the_28_days_up_to_each_last_success() {
+        const DAY: i64 = 86_400_000;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        {
+            // A database as the build with twenty-three migrations left it:
+            // one channel read well, one whose last read failed after a
+            // success long ago, and one that never worked.
+            let conn = database_at(&path, BEFORE_ARCHIVE_SUGGESTIONS);
+            conn.execute_batch(&format!(
+                "INSERT INTO channel_read_status (channel_id, ok, read_at, ok_at) VALUES
+                     ('fine', 1, {now}, {now}),
+                     ('dead', 0, {now}, {then}),
+                     ('never', 0, {now}, NULL);",
+                now = 20_000 * DAY + 5,
+                then = 19_000 * DAY + 5,
+            ))
+            .unwrap();
+        }
+
+        let db = Db::open(&path).await.unwrap();
+
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+        let days: Vec<(String, i64, i64, i64)> = db
+            .run::<_, DbError, _>(|c| {
+                let mut stmt = c.prepare(
+                    "SELECT channel_id, count(*), min(day), max(day)
+                     FROM channel_read_days GROUP BY channel_id ORDER BY channel_id",
+                )?;
+                let rows = stmt
+                    .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(rows)
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            days,
+            [
+                ("dead".to_owned(), 28, 19_000 - 27, 19_000),
+                ("fine".to_owned(), 28, 20_000 - 27, 20_000),
+            ],
+            "a channel that never read successfully has none"
+        );
+    }
+
     /// The triggers that keep `rule_started` go with a rebuild of `rules`; a
     /// later migration that rebuilds it has to make them again.
     #[tokio::test]
@@ -1118,6 +1169,100 @@ mod tests {
             })
             .await;
         assert!(refused.is_err());
+    }
+
+    /// The migration that kept the list of every torrent in Transmission is number 27.
+    const BEFORE_TORRENT_LISTING: usize = 26;
+
+    #[tokio::test]
+    async fn a_database_from_before_the_torrent_listing_has_none_until_the_worker_writes_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        {
+            let conn = database_at(&path, BEFORE_TORRENT_LISTING);
+            conn.execute(
+                "INSERT INTO transmission_snapshot (id, downloading, seeding, taken_at)
+                 VALUES (1, 2, 3, 400)",
+                [],
+            )
+            .unwrap();
+        }
+
+        let db = Db::open(&path).await.unwrap();
+
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+        let status = crate::store::status::StatusStore::new(db);
+        // The counts the older worker left stay, and say nothing of which
+        // torrents are gone.
+        assert_eq!(status.transmission().await.unwrap().unwrap().seeding, 3);
+        assert_eq!(status.torrent_listing().await.unwrap(), None);
+        status.record_listing(500, vec!["aa".into()]).await.unwrap();
+        assert!(status.torrent_listing().await.unwrap().unwrap().holds("aa"));
+    }
+
+    /// How many migrations come before the one that stored the first read of
+    /// each channel (found by what it creates, so it stays right when other
+    /// migrations are numbered ahead of it).
+    fn before_first_reads() -> usize {
+        MIGRATIONS
+            .iter()
+            .position(|m| {
+                matches!(m, Migration::Sql(sql) if sql.contains("CREATE TABLE history_first_reads"))
+            })
+            .expect("the migration of the first reads")
+    }
+
+    #[tokio::test]
+    async fn a_history_from_before_first_reads_takes_its_first_recorded_items_as_the_first_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        {
+            let conn = database_at(&path, before_first_reads());
+            conn.execute_batch(
+                "INSERT INTO history_items (channel_id, channel_label, identity_key, title, link,
+                         first_seen_at, last_seen_at, result, result_at) VALUES
+                     ('c1', 'feed', 'guid:b', 'B', 'x', 100, 900, 'no_match', 100),
+                     ('c1', 'feed', 'guid:a', 'A', 'x', 300, 900, 'no_match', 300),
+                     ('c1', 'feed', 'guid:c', 'C', 'x', 200, 900, 'no_match', 200),
+                     ('c1', 'feed', 'guid:e', 'E', 'x', 100, 900, 'no_match', 100),
+                     ('c1', 'feed', 'guid:f', 'F', 'x', 40, 900, 'no_match', 40),
+                     ('c2', 'feed', 'guid:d', 'D', 'x', 50, 50, 'no_match', 50);",
+            )
+            .unwrap();
+        }
+
+        let db = Db::open(&path).await.unwrap();
+
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+        let found = db
+            .run::<_, DbError, _>(|c| {
+                let mut stmt = c.prepare(
+                    "SELECT channel_id || '=' || first_read_at FROM history_first_reads
+                     ORDER BY channel_id",
+                )?;
+                let found = stmt
+                    .query_map([], |r| r.get::<_, String>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                let items: i64 =
+                    c.query_row("SELECT count(*) FROM history_items", [], |r| r.get(0))?;
+                let marked: String = c.query_row(
+                    "SELECT group_concat(identity_key, ',') FROM
+                         (SELECT identity_key FROM history_items WHERE first_read = 1
+                          ORDER BY identity_key)",
+                    [],
+                    |r| r.get(0),
+                )?;
+                Ok((found, items, marked))
+            })
+            .await
+            .unwrap();
+        assert_eq!(found.0, ["c1=100", "c2=50"]);
+        assert_eq!(found.1, 6, "the records are untouched");
+        assert_eq!(
+            found.2, "guid:b,guid:d,guid:e",
+            "the items first seen at the time of the channel's first recorded item are its \
+             first read's, not the ones a clock that went back stamped earlier"
+        );
     }
 
     #[tokio::test]
