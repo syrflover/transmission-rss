@@ -39,6 +39,30 @@ interface Attempt {
   payload: RetryPayload | null;
 }
 
+/**
+ * What a `다시 받기` in progress, or one that ended with something to explain,
+ * says under the item; `null` when the item's own line applies.
+ */
+export function retryStatus(phase: RetryPhase): { text: string; urgent: boolean } | null {
+  switch (phase.kind) {
+    case "sending":
+      return { text: "접수하는 중이에요.", urgent: false };
+    case "waiting":
+      return { text: "접수됐어요. Transmission에 넣는 중이에요.", urgent: false };
+    case "unconfirmed":
+      return {
+        text: phase.lost
+          ? "접수됐는지 확인했더니 서버에 요청이 없어요. 같은 요청을 다시 보낼 수 있어요."
+          : "접수됐는지 확인하지 못했어요. 결과를 알 수 없어 다시 확인하고 있어요.",
+        urgent: false,
+      };
+    case "ended":
+      return phase.message === "" ? null : { text: phase.message, urgent: phase.failed };
+    default:
+      return null;
+  }
+}
+
 /** A finished command with nothing to explain: the row then shows what the item itself says. */
 const FALLBACK_DONE = "";
 const FALLBACK_FAILED = "추가하지 못했어요. 까닭은 알 수 없어요.";
@@ -62,9 +86,22 @@ function endedMessage(command: Command): { failed: boolean; message: string } {
 }
 
 /**
+ * The `다시 받기` flow of one history row: {@link useItemRetry} with the row
+ * read again when the command ends.
+ */
+export function useRetry(item: HistoryItem, onItem: (item: HistoryItem) => void) {
+  const onItemRef = useRef(onItem);
+  onItemRef.current = onItem;
+  const itemId = item.id;
+  const refresh = useCallback(async () => onItemRef.current(await getHistoryItem(itemId)), [itemId]);
+  return useItemRetry(itemId, item.command, refresh);
+}
+
+/**
  * The `다시 받기` flow of one history item, following the web command
- * contract (`src/store/commands`). The item's rule decides the folder and the
- * episode conversion, so the request carries the item alone:
+ * contract (`src/store/commands`), wherever the item is shown (a history row,
+ * a failed replacement on a work's episode row). The item's rule decides the
+ * folder and the episode conversion, so the request carries the item alone:
  *
  * - One ID per user action, made when the button is pressed and kept until the
  *   command ends or the server refuses the request. A resend is the same request.
@@ -73,17 +110,17 @@ function endedMessage(command: Command): { failed: boolean; message: string } {
  * - When the answer is lost, the screen asks for the command by the same ID.
  *   Only a `404` (the server never stored it) allows sending it again, still
  *   with the same ID.
- * - When the command ends, the item is read again so the row shows what the
- *   worker wrote.
+ * - When the command ends, `onEnded` reads again what shows the item, so it
+ *   shows what the worker wrote. `openCommand` is the item's command that had
+ *   not ended when that was read: it is followed, never sent again.
  */
-export function useRetry(item: HistoryItem, onItem: (item: HistoryItem) => void) {
+export function useItemRetry(itemId: number, openCommand: Command | null, onEnded: () => Promise<void>) {
   const [phase, setPhase] = useState<RetryPhase>({ kind: "idle", error: null });
   const attempt = useRef<Attempt | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const alive = useRef(true);
-  const onItemRef = useRef(onItem);
-  onItemRef.current = onItem;
-  const itemId = item.id;
+  const onEndedRef = useRef(onEnded);
+  onEndedRef.current = onEnded;
 
   const clearTimer = () => {
     if (timer.current !== null) clearTimeout(timer.current);
@@ -103,14 +140,13 @@ export function useRetry(item: HistoryItem, onItem: (item: HistoryItem) => void)
       clearTimer();
       const { failed, message } = endedMessage(command);
       try {
-        const fresh = await getHistoryItem(itemId);
-        if (alive.current) onItemRef.current(fresh);
+        if (alive.current) await onEndedRef.current();
       } catch {
         // The row keeps its old look; the outcome below still says what happened.
       }
       if (alive.current) setPhase({ kind: "ended", failed, message });
     },
-    [itemId],
+    [],
   );
 
   const follow = useCallback(
@@ -196,7 +232,6 @@ export function useRetry(item: HistoryItem, onItem: (item: HistoryItem) => void)
   const dismiss = useCallback(() => setPhase({ kind: "idle", error: null }), []);
 
   // A command already in progress when the list loaded (or reloaded).
-  const openCommand = item.command;
   useEffect(() => {
     alive.current = true;
     if (openCommand && !attempt.current) {

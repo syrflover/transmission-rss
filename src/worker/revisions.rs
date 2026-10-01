@@ -494,6 +494,8 @@ enum Next {
     Later(String),
 }
 
+/// How the reason of a torrent that reported a local error begins.
+const LOCAL_ERROR: &str = "새 영상을 받다 Transmission이 오류를 알렸어요: ";
 const RECEIVE_STOPPED: &str =
     "새 영상의 토렌트가 Transmission에서 사라져 받기가 끝나지 않았어요. 이전 영상은 그대로 있어요.";
 const SEVERAL_FILES: &str =
@@ -664,6 +666,20 @@ async fn drive(
     }
 }
 
+/// Whether `row` failed because its download stopped before the new video
+/// was received: its torrent left Transmission, or Transmission reported an
+/// error on it. `다시 받기` receives such a revision again (and starts its
+/// torrent when Transmission still has it); the other failures before the
+/// video was received (several files, another folder, the episode's own
+/// file) would end the same way again.
+pub fn stopped_before_received(row: &Revision) -> bool {
+    row.not_received()
+        && row
+            .reason
+            .as_deref()
+            .is_some_and(|reason| reason == RECEIVE_STOPPED || reason.starts_with(LOCAL_ERROR))
+}
+
 fn failed(reason: impl Into<String>, received_name: Option<String>) -> Next {
     Next::Step(Step::Failed {
         reason: reason.into(),
@@ -693,7 +709,7 @@ async fn received(ctx: &CycleContext, row: &Revision) -> Next {
     };
     if let Some(error) = &place.local_error {
         return failed(
-            format!("새 영상을 받다 Transmission이 오류를 알렸어요: {error}. 이전 영상은 그대로 있어요."),
+            format!("{LOCAL_ERROR}{error}. 이전 영상은 그대로 있어요."),
             None,
         );
     }

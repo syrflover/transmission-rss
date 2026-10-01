@@ -1,5 +1,6 @@
 import { api, ApiError } from "@/lib/api";
 import { forgetPrefix } from "@/lib/cached";
+import type { Command } from "@/lib/commands";
 
 import { forgetWeek } from "../schedule/api";
 
@@ -125,8 +126,16 @@ export interface FailureFile {
 /** A replacement of the episode's video that failed (`받기 실패`), with why and both files. */
 export interface EpisodeFailure {
   at: number;
+  /** The revision's history item, which `다시 받기` receives. */
+  history_item_id: number;
   reason: string;
   files: FailureFile[];
+  /** Whether `다시 받기` is offered: the revision's download stopped before it was received. */
+  can_retry: boolean;
+  /** Why `다시 받기` is missing on such a revision, as a sentence. */
+  retry_blocked: string | null;
+  /** Its `다시 받기` command that has not ended yet. */
+  command: Command | null;
 }
 
 export interface WorkEpisode {

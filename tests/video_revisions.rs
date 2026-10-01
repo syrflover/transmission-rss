@@ -1656,6 +1656,185 @@ async fn a_revision_received_with_retry_is_named_as_its_episode() {
     assert_eq!(s.names(), vec![ERAI_EPISODE]);
 }
 
+// --- `다시 받기` of a revision whose download stopped --------------------------------
+
+/// `14v2` received while `14` is in place, its torrent taken out of
+/// Transmission before it finished, and the release gone from the feed: no
+/// cycle receives it again.
+async fn stopped_after_leaving_the_feed(s: &Setup) -> HistoryItem {
+    s.received_v1().await;
+    s.feed(&[(NEW_HASH, &v2()), (OLD_HASH, &v1())]);
+    s.h.tr.unfinished_on_add(NEW_HASH);
+    s.cycle().await;
+    s.h.tr.remove(NEW_HASH);
+    s.feed(&[(OLD_HASH, &v1())]);
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Failed);
+    s.cycle().await;
+    assert_eq!(s.added(NEW_HASH), 1, "no cycle receives it again");
+    s.item(&v2()).await
+}
+
+#[tokio::test]
+async fn a_stopped_revision_that_left_the_feed_is_received_again_with_retry() {
+    let s = Setup::new().await;
+    let item = stopped_after_leaving_the_feed(&s).await;
+    assert_eq!(item.result, HistoryResult::Received);
+
+    // Both places that show the failure offer `다시 받기` on the item.
+    let failures = s.failures().await;
+    let failure = revision_failure(&failures);
+    assert_eq!(failure["history_item_id"], item.id);
+    assert_eq!(failure["can_retry"], true);
+    assert_eq!(failure["command"], Value::Null);
+    let row = s.episode_row().await;
+    assert_eq!(row["failure"]["can_retry"], true);
+    assert_eq!(row["failure"]["history_item_id"], item.id);
+
+    s.h.tr.content_on_add(NEW_HASH, NEW_BYTES);
+    s.h.tr.unfinished_on_add(NEW_HASH);
+    s.retry(item.id, "00000000-0000-4000-8000-000000000a01")
+        .await;
+    // Accepted and not yet run: the failure says so.
+    assert_eq!(
+        revision_failure(&s.failures().await)["command"]["state"],
+        "pending"
+    );
+    assert_eq!(s.commands().await, CommandsOutcome::Ran(1));
+
+    // Received under its own name; the old video stays until it is checked.
+    assert_eq!(s.added(NEW_HASH), 2);
+    assert!(!s.renamed_onto_episode(NEW_HASH));
+    assert_eq!(s.item(&v2()).await.result, HistoryResult::Received);
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Receiving);
+    assert!(s.failures().await.is_empty());
+    assert_eq!(read(&s.file(EPISODE_NAME)), OLD_BYTES);
+    s.cycle().await;
+    assert_eq!(read(&s.file(EPISODE_NAME)), OLD_BYTES);
+
+    s.complete(NEW_HASH);
+    s.cycle().await;
+    assert_eq!(s.names(), vec![EPISODE_NAME]);
+    assert_eq!(read(&s.file(EPISODE_NAME)), NEW_BYTES);
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Done);
+}
+
+#[tokio::test]
+async fn a_revision_whose_torrent_reports_an_error_is_started_again_with_retry() {
+    let s = Setup::new().await;
+    s.received_v1().await;
+    s.feed(&[(NEW_HASH, &v2()), (OLD_HASH, &v1())]);
+    s.h.tr.content_on_add(NEW_HASH, NEW_BYTES);
+    s.h.tr.unfinished_on_add(NEW_HASH);
+    s.cycle().await;
+    s.h.tr
+        .set_local_error(NEW_HASH, Some("No space left on device"));
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Failed);
+    assert_eq!(revision_failure(&s.failures().await)["can_retry"], true);
+
+    let item = s.item(&v2()).await;
+    s.retry(item.id, "00000000-0000-4000-8000-000000000a02")
+        .await;
+    assert_eq!(s.commands().await, CommandsOutcome::Ran(1));
+    // Transmission still had it: started again, not added a second time.
+    assert_eq!(
+        s.h.tr
+            .calls_of("torrent-start")
+            .iter()
+            .filter(|c| c.args["ids"] == json!([NEW_HASH]))
+            .count(),
+        1
+    );
+    assert_eq!(s.item(&v2()).await.result, HistoryResult::Received);
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Receiving);
+    assert!(!s.renamed_onto_episode(NEW_HASH));
+
+    s.complete(NEW_HASH);
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Done);
+    assert_eq!(read(&s.file(EPISODE_NAME)), NEW_BYTES);
+}
+
+/// A revision whose retry cannot be added keeps its item's result and its
+/// failure; only the command says why.
+#[tokio::test]
+async fn a_stopped_revision_whose_retry_is_refused_stays_a_failure() {
+    let s = Setup::new().await;
+    let item = stopped_after_leaving_the_feed(&s).await;
+    s.h.tr.reject_adds(Some("refused"));
+    s.retry(item.id, "00000000-0000-4000-8000-000000000a03")
+        .await;
+    assert_eq!(s.commands().await, CommandsOutcome::Ran(1));
+    let (_, _, command) =
+        s.h.web_api()
+            .call(
+                "GET",
+                "/api/commands/00000000-0000-4000-8000-000000000a03",
+                None,
+            )
+            .await;
+    assert_eq!(command["state"], "failed", "{command}");
+    assert!(command["outcome"]["reason"]
+        .as_str()
+        .unwrap()
+        .contains("refused"));
+    assert_eq!(s.item(&v2()).await.result, HistoryResult::Received);
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Failed);
+    assert_eq!(revision_failure(&s.failures().await)["can_retry"], true);
+    assert_eq!(read(&s.file(EPISODE_NAME)), OLD_BYTES);
+}
+
+/// Only a download that stopped is offered again: a revision received into
+/// another folder would end the same way.
+#[tokio::test]
+async fn a_revision_received_elsewhere_is_not_offered_again() {
+    let s = Setup::new().await;
+    s.received_v1().await;
+    s.feed(&[(NEW_HASH, &v2()), (OLD_HASH, &v1())]);
+    s.h.tr.content_on_add(NEW_HASH, NEW_BYTES);
+    s.h.tr.unfinished_on_add(NEW_HASH);
+    s.cycle().await;
+    let elsewhere = s.season.parent().unwrap().join("Elsewhere");
+    s.h.tr.relocate(NEW_HASH, &elsewhere);
+    s.complete(NEW_HASH);
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Failed);
+    let failure = revision_failure(&s.failures().await).clone();
+    assert_eq!(failure["can_retry"], false);
+    assert_eq!(failure["retry_blocked"], Value::Null);
+
+    let item = s.item(&v2()).await;
+    let (status, text, _) =
+        s.h.web_api()
+            .call(
+                "POST",
+                "/api/commands",
+                Some(json!({
+                    "id": "00000000-0000-4000-8000-000000000a04",
+                    "kind": "receive_once",
+                    "payload": { "item_id": item.id },
+                })),
+            )
+            .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+}
+
+/// A stopped revision whose rule is paused says why `다시 받기` is missing,
+/// and the request is refused.
+#[tokio::test]
+async fn a_stopped_revision_of_a_paused_rule_says_why_it_is_not_offered() {
+    let s = Setup::new().await;
+    let item = stopped_after_leaving_the_feed(&s).await;
+    let rule_id = item.rule_id.clone().unwrap();
+    s.sql(&format!(
+        "UPDATE rules SET state = 'paused' WHERE id = '{rule_id}';"
+    ));
+    let failure = revision_failure(&s.failures().await).clone();
+    assert_eq!(failure["can_retry"], false);
+    assert!(failure["retry_blocked"].as_str().unwrap().contains("멈춰"));
+}
+
 /// SubsPlease's `14v2` seen first is named as episode 14.
 #[tokio::test]
 async fn a_subsplease_revision_seen_first_is_named_as_its_episode() {

@@ -15,6 +15,16 @@
 //! would have put the torrent: [`rule_destination`] gives the folder and the
 //! episode conversion.
 //!
+//! A video revision whose download stopped before it was received (its
+//! torrent left Transmission or reported an error) can be retried too,
+//! whatever its item's result, by the rule recorded on it ([`RevisionRetry`],
+//! [`retry_plan_for`]); not while a higher revision of its episode is in the
+//! folder or on its way. Its add puts the replacement back at its first step
+//! with the item's result, in one transaction; a torrent Transmission still
+//! had is started again. It is never renamed here, and an add that fails
+//! leaves the item and the replacement as they were: the command alone says
+//! why.
+//!
 //! 1. find the history item, its channel and its rule, and check that the item
 //!    can be retried ([`retry_plan`]), or, for a request with a `rule_id`,
 //!    received by that rule ([`adoption_plan`]); what cannot be retried ends the command
@@ -55,7 +65,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
-use transmission_rpc::types::Id;
+use transmission_rpc::types::{Id, TorrentAction};
 use trname::trname;
 
 use super::link;
@@ -65,7 +75,10 @@ use crate::{
         channels::{Channel, ChannelWithRules, Rule, RuleState},
         commands::{Command, CommandState, Outcome, MAX_ATTEMPTS},
         history::{HistoryItem, HistoryResult, Millis},
-        revisions::{HistoryWrite, NewRevision, RevisionState, RowWrite},
+        revisions::{
+            Claim, HistoryWrite, NewRevision, Revision, RevisionError, RevisionState,
+            RevisionStore, RowWrite,
+        },
     },
     transmission::{
         self, add_item, get_torrent, get_torrents, has_label, remove_label, AddError, AddKind,
@@ -191,6 +204,9 @@ pub enum NotRetryable {
     NotMatching,
     /// A different rule picked the item and failed to add it.
     OtherRule,
+    /// The item is a revision whose download stopped, and a higher revision
+    /// of its episode is in the folder or on its way.
+    Overtaken,
 }
 
 impl NotRetryable {
@@ -217,6 +233,9 @@ impl NotRetryable {
             }
             NotRetryable::OtherRule => {
                 "다른 규칙이 받으려다 실패한 항목이에요. 그 규칙으로 다시 받아요."
+            }
+            NotRetryable::Overtaken => {
+                "이 회차에 더 높은 수정본이 있거나 받는 중이라 다시 받지 않아요."
             }
         }
     }
@@ -261,6 +280,16 @@ pub fn retry_plan<'a>(
             NotRetryable::NotPicked
         });
     }
+    rule_plan(item, channel, rule)
+}
+
+/// The channel and the rule of a retry: the rule recorded on `item` must
+/// still exist and be active.
+fn rule_plan<'a>(
+    item: &HistoryItem,
+    channel: Option<&'a Channel>,
+    rule: Option<&'a Rule>,
+) -> Result<RetryPlan<'a>, NotRetryable> {
     let channel = channel.ok_or(NotRetryable::ChannelDeleted)?;
     if item.rule_id.is_none() {
         return Err(NotRetryable::NoRule);
@@ -268,6 +297,56 @@ pub fn retry_plan<'a>(
     let rule = rule.ok_or(NotRetryable::RuleDeleted)?;
     inactive(rule)?;
     Ok(RetryPlan { channel, rule })
+}
+
+/// What the replacement row of an item says about `다시 받기` of it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RevisionRetry {
+    /// No row, or none `다시 받기` receives again: the item is retried as any
+    /// other ([`retry_plan`]).
+    None,
+    /// A revision whose download stopped before it was received
+    /// ([`revisions::stopped_before_received`]): received again whatever the
+    /// item's result, and its replacement goes on with the same checks and
+    /// order. It may have left the feed or come from a past episode search.
+    Again(Box<Revision>),
+    /// Such a revision, but a higher revision of its episode is in the folder
+    /// or on its way; the replacement steps skip it.
+    Overtaken,
+}
+
+/// Reads [`RevisionRetry`] for the history item `item_id`.
+pub async fn revision_retry(
+    store: &RevisionStore,
+    item_id: i64,
+) -> Result<RevisionRetry, RevisionError> {
+    let Some(row) = store.by_item(item_id).await? else {
+        return Ok(RevisionRetry::None);
+    };
+    if !revisions::stopped_before_received(&row) {
+        return Ok(RevisionRetry::None);
+    }
+    Ok(match store.verdict(row.id).await? {
+        Claim::Overtaken => RevisionRetry::Overtaken,
+        _ => RevisionRetry::Again(Box::new(row)),
+    })
+}
+
+/// [`retry_plan`] for an item whose replacement row says `revision`: a
+/// revision whose download stopped is retried whatever the item's result
+/// (it is `received`: Transmission took it, then lost it), by the rule
+/// recorded on it.
+pub fn retry_plan_for<'a>(
+    item: &HistoryItem,
+    channel: Option<&'a Channel>,
+    rule: Option<&'a Rule>,
+    revision: &RevisionRetry,
+) -> Result<RetryPlan<'a>, NotRetryable> {
+    match revision {
+        RevisionRetry::None => retry_plan(item, channel, rule),
+        RevisionRetry::Again(_) => rule_plan(item, channel, rule),
+        RevisionRetry::Overtaken => Err(NotRetryable::Overtaken),
+    }
 }
 
 /// Whether `rule` may receive `item`, an item that no rule has received: the
@@ -502,10 +581,17 @@ pub async fn execute_with(
         Some(id) => ctx.channels.get_rule(id).await.map_err(Retry::store)?,
         None => None,
     };
+    let revision = match payload.rule_id {
+        Some(_) => RevisionRetry::None,
+        None => revision_retry(&ctx.revisions, item.id)
+            .await
+            .map_err(Retry::store)?,
+    };
+    let again = matches!(revision, RevisionRetry::Again(_));
     let planned = if payload.rule_id.is_some() {
         adoption_plan(&item, channel.as_ref(), rule.as_ref())
     } else {
-        retry_plan(&item, channel.as_ref(), rule.as_ref())
+        retry_plan_for(&item, channel.as_ref(), rule.as_ref(), &revision)
     };
     let plan = match planned {
         Ok(plan) => plan,
@@ -540,6 +626,9 @@ pub async fn execute_with(
     let raw_link = match link::recover(&item, &channel, &ctx.http, &redactor).await {
         Ok(raw) => raw,
         Err(_) if keep_trying => return Err(Retry::AddUnanswered),
+        // A revision received again keeps its result: the failure stays on
+        // its replacement, and the command says why it did not add it.
+        Err(reason) if again => return Ok(ended_early(failed(&reason, None))),
         Err(reason) => {
             return refuse(ctx, &item, &rule_id, &reason, &now)
                 .await
@@ -579,7 +668,9 @@ pub async fn execute_with(
             // cycle may have met it in between and recorded it as a
             // `duplicate`; it is still this command's.
             let own = torrent.kind == AddKind::Added || torrent.has_label(&command_label);
-            let result = if own {
+            // A revision received again is the item's own torrent, as it was
+            // when it was first received.
+            let result = if own || again {
                 HistoryResult::Received
             } else {
                 HistoryResult::Duplicate
@@ -591,7 +682,8 @@ pub async fn execute_with(
             // is written with the item's result, in one transaction: once the
             // item is `received` a rerun of this command ends at once, so a
             // row not written with it would never be. One that cannot be
-            // written leaves the command to be run again.
+            // written leaves the command to be run again. A revision whose
+            // download stopped goes back to its replacement's first step.
             let row = match replacing {
                 Some(new) if own => Some(RowWrite::Create {
                     new: NewRevision {
@@ -600,6 +692,9 @@ pub async fn execute_with(
                         ..new
                     },
                     reopen: torrent.kind == AddKind::Added,
+                }),
+                _ if again => Some(RowWrite::Reopen {
+                    hash: torrent.hash.clone(),
                 }),
                 _ if item.result == HistoryResult::VersionUnknown => {
                     Some(revisions::confirm(&item.title, &torrent.hash))
@@ -650,6 +745,20 @@ pub async fn execute_with(
                 }
             };
             let stored = stored.unwrap_or(result);
+            // Transmission still had the revision's torrent, stopped on an
+            // error: it is started again, and the replacement looks at it.
+            if again && torrent.kind != AddKind::Added {
+                let started = transmission
+                    .torrent_action(TorrentAction::Start, vec![Id::Hash(torrent.hash.clone())])
+                    .await;
+                if let Err(err) = started {
+                    eprintln!(
+                        "Cannot start the torrent of item {}: {}",
+                        item.id,
+                        redactor.apply(&err.to_string())
+                    );
+                }
+            }
             // Only a torrent this command put in is renamed. One that was there
             // already keeps its name and gets no note.
             let rename = (own && !replacing).then_some(Rename {
@@ -670,6 +779,11 @@ pub async fn execute_with(
             let unanswered = matches!(err, AddError::Rpc(_));
             if (unanswered && command.attempts < MAX_ATTEMPTS) || keep_trying {
                 return Err(Retry::AddUnanswered);
+            }
+            if again {
+                let mut finished = ended_early(failed(&reason, None));
+                finished.add_unconfirmed |= unanswered;
+                return Ok(finished);
             }
             let finished = refuse(ctx, &item, &rule_id, &reason, &now).await?;
             // A refusal does not say what Transmission holds either: it
@@ -1222,6 +1336,18 @@ mod tests {
                 "{result}"
             );
         }
+    }
+
+    #[test]
+    fn a_stopped_revision_overtaken_by_a_higher_one_is_not_retried() {
+        let (channel, active) = (channel(), rule(RuleState::Active));
+        let received = item(HistoryResult::Received, Some("r1"));
+        let plan = |revision| {
+            retry_plan_for(&received, Some(&channel), Some(&active), &revision).map(|_| ())
+        };
+        assert_eq!(plan(RevisionRetry::None), Err(NotRetryable::Held));
+        assert_eq!(plan(RevisionRetry::Overtaken), Err(NotRetryable::Overtaken));
+        assert!(NotRetryable::Overtaken.explains_missing_button());
     }
 
     #[test]

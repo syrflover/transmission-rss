@@ -8,6 +8,8 @@ import { CheckIcon, ChevronIcon, MinusIcon } from "../icons";
 import { airDay, baseName, episodeLabel, inOrder, ORDERS, rowId, type EpisodeOrder } from "./model";
 import { EmptyState } from "../../ScreenFrame";
 import { inputClass } from "../../collect/channels/styles";
+import { RetryActions } from "../../collect/history/RetryActions";
+import { retryStatus, useItemRetry } from "../../collect/history/useRetry";
 
 /**
  * One kind of file of an episode: `영상 ✓` or `자막 −`. The label is the same
@@ -56,10 +58,33 @@ const FAILURE_STATE: Record<FailureFile["state"], string> = {
 };
 
 /**
- * A replacement of the episode's video that failed: why, and the two files with
- * what became of each. Neither file is taken as the episode's video here.
+ * `다시 받기` of a revision whose download stopped: the same command as a
+ * history row's, for the revision's history item. Once it ends the work is
+ * read again, so the row shows the replacement going on (the failure gone) or
+ * still failed.
  */
-function Failure({ failure }: { failure: EpisodeFailure }) {
+function FailureRetry({ failure, onRetried }: { failure: EpisodeFailure; onRetried: () => Promise<void> }) {
+  const { phase, submit, resend, recheck } = useItemRetry(failure.history_item_id, failure.command, onRetried);
+  const status = retryStatus(phase);
+  return (
+    <div className="mt-0.5 flex flex-col gap-1.5">
+      <p
+        role={phase.kind === "idle" ? undefined : "status"}
+        className={cn("text-xs leading-[1.45] [overflow-wrap:anywhere] empty:hidden", status?.urgent ? "text-urgent" : "text-text-secondary")}
+      >
+        {status?.text}
+      </p>
+      <RetryActions phase={phase} onSubmit={submit} onResend={resend} onRecheck={recheck} />
+    </div>
+  );
+}
+
+/**
+ * A replacement of the episode's video that failed: why, and the two files with
+ * what became of each. Neither file is taken as the episode's video here. One
+ * whose download stopped offers `다시 받기`, or says why it does not.
+ */
+function Failure({ failure, onRetried }: { failure: EpisodeFailure; onRetried: () => Promise<void> }) {
   return (
     <div className="col-span-full min-w-0">
       <dt className="text-[12px] font-semibold text-urgent">받기 실패 · {dateTime(failure.at)}</dt>
@@ -78,6 +103,11 @@ function Failure({ failure }: { failure: EpisodeFailure }) {
             </li>
           ))}
         </ul>
+        {failure.can_retry ? (
+          <FailureRetry failure={failure} onRetried={onRetried} />
+        ) : (
+          failure.retry_blocked !== null && <span className="text-xs text-text-muted">{failure.retry_blocked}</span>
+        )}
       </dd>
     </div>
   );
@@ -101,10 +131,10 @@ function VersionLine({ revision }: { revision: EpisodeRevision }) {
 /** The time a file was added, or `미상` when it was there before the app first looked. */
 const addedAt = (file: WorkFile) => (file.added_at === null ? "미상" : dateTime(file.added_at));
 
-function Details({ id, episode }: { id: string; episode: WorkEpisode }) {
+function Details({ id, episode, onRetried }: { id: string; episode: WorkEpisode; onRetried: () => Promise<void> }) {
   return (
     <dl id={id} className="m-0 grid grid-cols-[repeat(auto-fit,minmax(170px,1fr))] gap-x-4 gap-y-3 px-4 pt-1 pb-4 max-[720px]:px-3">
-      {episode.failure !== null && <Failure failure={episode.failure} />}
+      {episode.failure !== null && <Failure failure={episode.failure} onRetried={onRetried} />}
       <Cell label="영상 파일">
         <Files files={episode.video} />
       </Cell>
@@ -133,12 +163,14 @@ function Row({
   missing,
   open,
   onToggle,
+  onRetried,
 }: {
   season: number;
   episode: WorkEpisode;
   missing: boolean;
   open: boolean;
   onToggle: () => void;
+  onRetried: () => Promise<void>;
 }) {
   const id = rowId(season, episode.episode);
   const detailId = `${id}-files`;
@@ -172,7 +204,7 @@ function Row({
         <span className="text-[12.5px] text-text-muted">{episode.air_at === null ? null : airDay(episode.air_at)}</span>
         <ChevronIcon className={cn("size-4 text-text-muted transition-transform", open && "rotate-90")} />
       </button>
-      {open && <Details id={detailId} episode={episode} />}
+      {open && <Details id={detailId} episode={episode} onRetried={onRetried} />}
     </li>
   );
 }
@@ -184,6 +216,8 @@ interface EpisodeListProps {
   missing: boolean;
   order: EpisodeOrder;
   onOrder: (order: EpisodeOrder) => void;
+  /** Reads the work again after a `다시 받기` of a failed replacement ended. */
+  onRetried: () => Promise<void>;
 }
 
 /**
@@ -192,9 +226,9 @@ interface EpisodeListProps {
  * with a `받기 실패` badge while a replacement of its video by a higher
  * revision has failed and a quiet version line once one went through; pressing
  * it opens the files and when each was added, and the failed replacement's two
- * files with why.
+ * files with why (and `다시 받기` when its download stopped).
  */
-export function EpisodeList({ season, seasonCount, missing, order, onOrder }: EpisodeListProps) {
+export function EpisodeList({ season, seasonCount, missing, order, onOrder, onRetried }: EpisodeListProps) {
   const [opened, setOpened] = useState<ReadonlySet<string>>(new Set());
   const toggle = (episode: string) =>
     setOpened((prev) => {
@@ -238,6 +272,7 @@ export function EpisodeList({ season, seasonCount, missing, order, onOrder }: Ep
               missing={missing}
               open={opened.has(episode.episode)}
               onToggle={() => toggle(episode.episode)}
+              onRetried={onRetried}
             />
           ))}
         </ul>
