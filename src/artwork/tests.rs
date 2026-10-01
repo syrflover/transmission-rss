@@ -185,6 +185,54 @@ async fn one_exact_title_is_selected_and_shown_only_after_its_bytes_are_verified
 }
 
 #[tokio::test]
+async fn a_work_of_several_seasons_takes_the_entry_named_like_its_folder() {
+    // Several local seasons alone do not hold the automatic cover back: the
+    // entry whose title is the folder name (usually the first season) is used.
+    let env = Env::new(&[]).await;
+    let work = ScannedWork {
+        dir_name: "Kaguya-sama wa Kokurasetai".to_owned(),
+        seasons: BTreeSet::from([1, 2, 3]),
+        files: Vec::new(),
+        unrecognized: Vec::new(),
+    };
+    env.library
+        .record_scan(
+            &env.folder,
+            Ok(Scan {
+                works: vec![WorkRead::Read(work)],
+            }),
+            200,
+        )
+        .await
+        .unwrap();
+    let seasons = env.library.works(&env.folder).await.unwrap()[0]
+        .seasons
+        .clone();
+    assert_eq!(seasons, [1, 2, 3]);
+    env.fake.add_search(
+        "Kaguya-sama wa Kokurasetai",
+        vec![
+            env.fake.entry(101921, "Kaguya-sama wa Kokurasetai", &[]),
+            env.fake.entry(
+                112641,
+                "Kaguya-sama wa Kokurasetai?: Tensai-tachi no Renai Zunousen",
+                &[],
+            ),
+            env.fake
+                .entry(125367, "Kaguya-sama wa Kokurasetai: Ultra Romantic", &[]),
+        ],
+        &samples::jpeg(),
+    );
+    assert_eq!(env.drain().await, [Ran::Recorded, Ran::Recorded]);
+    let s = env.selection("Kaguya-sama wa Kokurasetai").await;
+    assert_eq!(
+        (s.mode, s.source, s.anilist_media_id),
+        (Mode::Auto, Some(Source::Anilist), Some(101921))
+    );
+    assert!(s.image.is_some());
+}
+
+#[tokio::test]
 async fn an_entry_whose_image_is_not_an_image_selects_the_id_but_shows_nothing() {
     let env = Env::new(&["Lycoris Recoil"]).await;
     env.fake.add_search(

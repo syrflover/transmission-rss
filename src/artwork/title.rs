@@ -12,6 +12,10 @@
 //! second season or a remake listed under the same name) leaves it empty, and
 //! so does an unfinished search. The first result or the most similar one is
 //! never taken.
+//!
+//! How many local seasons the work has does not matter: the cover is the
+//! work's, so a work of several seasons takes the one entry named exactly like
+//! its folder (usually the first season).
 
 use unicode_normalization::UnicodeNormalization;
 
