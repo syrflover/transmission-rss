@@ -68,9 +68,11 @@ struct Gathered {
 }
 
 /// Gathers the facts and decides. Bounded work: one indexed lookup per rule for
-/// its last receive, one per channel for its first sighting, and, only for the
-/// channels with a rule that is quiet by the clock and not kept, the titles of
-/// the last 4 weeks (at most [`WINDOW_TITLES`] of them, read through the
+/// its last receive, one per channel for its first read and one for its read
+/// days (at most 28 rows), and, only for the channels with a rule that is
+/// quiet and not kept, the titles since the start of its window (the last 4
+/// weeks, or back to the first of its last 28 read days when the feed was not
+/// read on some of them; at most [`WINDOW_TITLES`] of them, read through the
 /// channel's index), never the whole history.
 async fn gather(state: &AppState) -> Result<Gathered, ApiError> {
     let now = state.anissia.now();
@@ -119,7 +121,7 @@ async fn gather(state: &AppState) -> Result<Gathered, ApiError> {
         .map_err(internal)?;
     let read_floors = state
         .status
-        .read_day_floors(all.iter().map(|c| c.channel.id.clone()).collect())
+        .read_day_floors(all.iter().map(|c| c.channel.id.clone()).collect(), now)
         .await
         .map_err(internal)?;
     let kept = state

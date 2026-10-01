@@ -245,9 +245,14 @@ async fn read_days(store: &StatusStore, from: i64, to: i64, ok: bool) {
     }
 }
 
+/// The floor as of day 2000, long after the days the tests read on.
 async fn floor_of_a(store: &StatusStore) -> Option<i64> {
+    floor_of_a_on(store, 2000).await
+}
+
+async fn floor_of_a_on(store: &StatusStore, day: i64) -> Option<i64> {
     store
-        .read_day_floors(ids(&["a", "b"]))
+        .read_day_floors(ids(&["a", "b"]), day * DAY)
         .await
         .unwrap()
         .get("a")
@@ -298,16 +303,46 @@ async fn a_day_read_twice_counts_once_and_a_failed_read_or_a_gap_counts_for_noth
 }
 
 #[tokio::test]
-async fn a_read_on_an_earlier_day_than_the_newest_28_is_not_kept() {
+async fn a_read_on_the_newest_day_again_adds_nothing() {
     let store = StatusStore::new(db().await);
     read_days(&store, 1000, 1027, true).await;
-    // The clock went back: a day before all of them.
-    read_days(&store, 990, 990, true).await;
+    read_days(&store, 1027, 1027, true).await;
     assert_eq!(floor_of_a(&store).await, Some(1000));
     assert_eq!(stored_days(&store, "a").await, 28);
-    // And one inside them adds nothing, as it is there already.
-    read_days(&store, 1010, 1010, true).await;
-    assert_eq!(floor_of_a(&store).await, Some(1000));
+}
+
+#[tokio::test]
+async fn a_clock_that_went_back_takes_the_days_ahead_of_it_with_it() {
+    let store = StatusStore::new(db().await);
+    read_days(&store, 1000, 1027, true).await;
+    // The clock is now at day 1020: the days after it were stamped by a clock
+    // that was ahead.
+    read_days(&store, 1020, 1020, true).await;
+    assert_eq!(stored_days(&store, "a").await, 21);
+    assert_eq!(floor_of_a_on(&store, 1020).await, None);
+}
+
+#[tokio::test]
+async fn days_written_by_a_clock_that_was_ahead_do_not_count_once_it_is_back() {
+    let store = StatusStore::new(db().await);
+    // 12 real days, then a clock a long way ahead for 16 days, so that 28 days
+    // are stored in all.
+    read_days(&store, 1000, 1011, true).await;
+    read_days(&store, 5000, 5015, true).await;
+    assert_eq!(stored_days(&store, "a").await, 28);
+
+    // The clock is back at day 1012: only 12 real days are behind it. The
+    // days ahead are not read days, whether or not another read has been
+    // written yet.
+    assert_eq!(floor_of_a_on(&store, 1012).await, None);
+    read_days(&store, 1012, 1012, true).await;
+    assert_eq!(floor_of_a_on(&store, 1012).await, None, "13 real days");
+    // They did not crowd the real days out either.
+    assert_eq!(stored_days(&store, "a").await, 13);
+
+    // Real days make up the 28 as they come.
+    read_days(&store, 1013, 1027, true).await;
+    assert_eq!(floor_of_a_on(&store, 1027).await, Some(1000));
 }
 
 #[tokio::test]
