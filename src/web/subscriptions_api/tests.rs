@@ -1343,3 +1343,6 @@ mod rule_detail {
         assert_eq!(view["season_blocked"], Value::Null);
     }
 }
+
+#[path = "title_tests.rs"]
+mod title_waiting;
