@@ -303,6 +303,13 @@ impl DirCache {
     pub fn is_empty(&self) -> bool {
         self.dirs.is_empty()
     }
+
+    /// Takes what `other` saw: its directories replace the ones of the same
+    /// path, and the rest stay (each is checked against the directory's own
+    /// stamp before it is used, so an old one is only ever a miss).
+    pub fn merge(&mut self, other: DirCache) {
+        self.dirs.extend(other.dirs);
+    }
 }
 
 /// The identity and modification time of a directory when it was listed.
@@ -430,6 +437,27 @@ pub fn scan_incremental(root: &Path, previous: Option<DirCache>) -> Scanned {
     }
 }
 
+/// Reads only the works named `names` of the watch folder at `root`, with the
+/// same rules as [`scan_incremental`] (`previous` is used in the same way, and
+/// the returned cache holds only what this read looked at; see
+/// [`DirCache::merge`]). A name that is not a work folder now (gone, a file,
+/// hidden) is simply not in the result. `Err` says the watch folder itself
+/// could not be read.
+pub fn scan_works(root: &Path, names: &[String], previous: Option<DirCache>) -> Scanned {
+    let mut walker = Walker {
+        real_root: PathBuf::new(),
+        previous: previous.unwrap_or_default(),
+        next: DirCache::default(),
+        stats: ScanStats::default(),
+    };
+    let result = walker.scan_named(root, names);
+    Scanned {
+        result,
+        cache: walker.next,
+        stats: walker.stats,
+    }
+}
+
 struct Walker {
     real_root: PathBuf,
     previous: DirCache,
@@ -481,6 +509,38 @@ impl Walker {
                 },
             };
             works.push(read);
+        }
+        Ok(Scan { works })
+    }
+
+    /// Reads the works called `names` only.
+    fn scan_named(&mut self, root: &Path, names: &[String]) -> Result<Scan, ScanError> {
+        self.real_root = fs::canonicalize(root).map_err(|e| scan_error(&e))?;
+        let real_root = self.real_root.clone();
+        // A watch folder that cannot be examined is the folder's error.
+        fs::metadata(&real_root).map_err(|e| scan_error(&e))?;
+        let mut works = Vec::new();
+        for name in names {
+            if skipped(name) {
+                continue;
+            }
+            let path = real_root.join(name);
+            let file_type = fs::symlink_metadata(&path).map(|m| m.file_type());
+            let link = file_type.as_ref().is_ok_and(|t| t.is_symlink());
+            match classify_at(&path, file_type, &real_root) {
+                Ok(Node::Dir) => works.push(match self.read_work(&path, name, link) {
+                    Ok(work) => WorkRead::Read(work),
+                    Err(reason) => WorkRead::Unreadable {
+                        dir_name: name.clone(),
+                        reason,
+                    },
+                }),
+                Ok(_) => {}
+                Err(error) => works.push(WorkRead::Unreadable {
+                    dir_name: name.clone(),
+                    reason: unreadable_reason(&error),
+                }),
+            }
         }
         Ok(Scan { works })
     }
@@ -721,6 +781,12 @@ impl Walker {
     }
 }
 
+/// Whether discovery leaves an entry of this name out of everything: hidden
+/// entries and the folders appliances add.
+pub fn is_skipped(name: &str) -> bool {
+    skipped(name)
+}
+
 fn skipped(name: &str) -> bool {
     name.starts_with('.') || IGNORED_NAMES.contains(&name)
 }
@@ -753,7 +819,17 @@ fn is_gone(error: &io::Error) -> bool {
 /// An error other than "it is gone" is returned: the entry could not be
 /// examined, which is not the same as it not being there.
 fn classify(entry: &fs::DirEntry, real_root: &Path) -> io::Result<Node> {
-    let file_type = match entry.file_type() {
+    classify_at(&entry.path(), entry.file_type(), real_root)
+}
+
+/// [`classify`] for the entry at `path`, given what the system said its type is
+/// (without following a link).
+fn classify_at(
+    path: &Path,
+    file_type: io::Result<fs::FileType>,
+    real_root: &Path,
+) -> io::Result<Node> {
+    let file_type = match file_type {
         Ok(file_type) => file_type,
         Err(error) if is_gone(&error) => return Ok(Node::Skip),
         Err(error) => return Err(error),
@@ -767,7 +843,7 @@ fn classify(entry: &fs::DirEntry, real_root: &Path) -> io::Result<Node> {
     if !file_type.is_symlink() {
         return Ok(Node::Skip);
     }
-    let real = match fs::canonicalize(entry.path()) {
+    let real = match fs::canonicalize(path) {
         Ok(real) => real,
         Err(error) if is_gone(&error) => return Ok(Node::Skip),
         Err(error) => return Err(error),
@@ -778,7 +854,7 @@ fn classify(entry: &fs::DirEntry, real_root: &Path) -> io::Result<Node> {
     match fs::metadata(&real) {
         Ok(metadata) if metadata.is_dir() => {
             // A link to the folder it is in, or to one above it, only loops.
-            let Some(parent) = entry.path().parent().map(fs::canonicalize).transpose()? else {
+            let Some(parent) = path.parent().map(fs::canonicalize).transpose()? else {
                 return Ok(Node::Skip);
             };
             Ok(if parent.starts_with(&real) {
@@ -1207,6 +1283,42 @@ mod tests {
             touch(root, file);
         }
         age_dirs(root);
+    }
+
+    #[test]
+    fn named_works_are_read_alone_and_what_is_not_a_work_is_left_out() {
+        let dir = tempfile::tempdir().unwrap();
+        two_works(dir.path());
+        touch(dir.path(), "loose.mkv");
+        touch(dir.path(), ".Hidden/Season 01/H S01E01.mkv");
+
+        let names: Vec<String> = ["A", "gone", "loose.mkv", ".Hidden"]
+            .map(str::to_owned)
+            .to_vec();
+        let read = scan_works(dir.path(), &names, None);
+        let scan = read.result.unwrap();
+        let found: Vec<_> = scan.works.iter().map(WorkRead::dir_name).collect();
+        assert_eq!(found, ["A"], "only a folder that is a work now is returned");
+        // Work A, its two seasons: three directories; B and the root are not read.
+        assert_eq!(read.stats.dirs_read, 3);
+        assert_eq!(file_paths(&scan, "A").len(), 3);
+
+        // The same read of what has not changed lists nothing, and what it keeps
+        // merges into an earlier cache.
+        let mut cache = scan_incremental(dir.path(), None).cache;
+        let again = scan_works(dir.path(), &names, Some(cache.clone()));
+        assert_eq!(again.stats.dirs_read, 0);
+        assert_eq!(again.stats.dirs_reused, 3);
+        cache.merge(again.cache);
+        assert_eq!(cache.len(), 6);
+    }
+
+    #[test]
+    fn reading_named_works_of_a_folder_that_is_gone_is_the_folders_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("nowhere");
+        let read = scan_works(&missing, &["A".to_owned()], None);
+        assert!(read.result.unwrap_err().message.contains("찾지 못했어요"));
     }
 
     #[test]

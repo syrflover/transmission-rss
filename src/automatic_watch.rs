@@ -125,6 +125,7 @@ mod tests {
             baselined: true,
             checked_at: None,
             error: None,
+            watch_note: None,
         }
     }
 

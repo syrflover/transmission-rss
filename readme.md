@@ -85,6 +85,12 @@ Each work in the library has one cover: an AniList entry's cover image or a file
 - Images are judged by their bytes (JPEG, PNG or WebP), up to 10 MiB and 12 million pixels (8192 pixels a side), and stored under new names in `TRSS_DATA_DIR/artwork/`. Images are only fetched from AniList's image host, from addresses AniList's own answers give.
 - `TRSS_ANILIST_URL` and `TRSS_ANILIST_IMAGE_ORIGINS` (comma-separated origins) override AniList's addresses, for local testing only.
 
+### Watch folders and inotify
+
+`trss-worker` watches the watch folders (including the collect and archive folders) with inotify. A new episode shows up in the library a few seconds after its file appears, without waiting for the 5-minute cycle, and only the work that changed is read again. Changes made by other containers on the same host (Transmission) are seen the same way. The cycle still reads a folder's directories by their modification times when the worker starts, when the kernel reports that it dropped events, for directories that could not be watched, and once an hour as a safety net (for example for a share that other machines change over SMB or NFS, which the kernel does not report).
+
+Each watched directory (a watch folder, each work folder, each `Season NN` folder) takes one watch of the kernel's `fs.inotify.max_user_watches`, about 1 KB of kernel memory, counted per user for every process of that user on the host. A library of about 1,500 folders uses about 1,500 watches; the worker also opens one inotify instance per watch folder (`fs.inotify.max_user_instances`, 128 by default). When the limit is reached the watch folder's row in the settings says how many directories are not watched and why; the worker then checks those works itself every cycle, and nothing else changes. To watch them as well, raise the limit on the host, for example `echo 'fs.inotify.max_user_watches=524288' | sudo tee /etc/sysctl.d/60-inotify.conf` and `sudo sysctl --system`. Read the current value with `cat /proc/sys/fs/inotify/max_user_watches`, and see how many watches the worker holds with the `directories watched` line it logs when it starts.
+
 ### Channels and the collect folder
 
 Channels and rules live in the app database and are edited in the web. To bring over a channel configuration of the old binary (the YAML at `CHANNELS_CONFIG_URL`), use Settings → Data → Import in the web. Importing only writes channels and rules (and the collect folder, below); it adds, renames and removes nothing.

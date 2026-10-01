@@ -11,7 +11,7 @@
 //! ```json
 //! { "id": "…", "path": "/media/anime", "automatic": false,
 //!   "works": 3, "missing_works": 0, "linked_works": 0, "new_works": 1,
-//!   "checked_at": 1760000000000, "error": null }
+//!   "checked_at": 1760000000000, "error": null, "watch_note": null }
 //! ```
 //!
 //! - `works` counts every work of the folder, `missing_works` of them are works
@@ -24,6 +24,9 @@
 //! - `checked_at` is the last attempt to read the folder (`null` before any) and
 //!   `error` a sentence when that attempt could not read everything; the works
 //!   recorded before are kept.
+//! - `watch_note` is a sentence while the worker could not watch every directory of
+//!   the folder for changes (how many and why; the worker then checks those itself
+//!   every cycle), and `null` otherwise.
 //! - `POST` takes `{ "path": <text> }`, refuses with a `400` and a sentence a
 //!   folder that is registered already, inside a registered folder, around a
 //!   registered folder, missing, not a folder or unreadable, and otherwise
@@ -83,6 +86,8 @@ pub struct FolderView {
     pub new_works: usize,
     pub checked_at: Option<i64>,
     pub error: Option<String>,
+    /// A sentence while the worker could not watch every directory for changes.
+    pub watch_note: Option<String>,
 }
 
 impl From<FolderSummary> for FolderView {
@@ -97,6 +102,7 @@ impl From<FolderSummary> for FolderView {
             new_works: summary.new_works,
             checked_at: summary.folder.checked_at,
             error: summary.folder.error,
+            watch_note: summary.folder.watch_note,
         }
     }
 }

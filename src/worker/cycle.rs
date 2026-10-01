@@ -50,6 +50,9 @@ pub struct CycleContext {
     /// What the worker remembers of each watch folder's directories between
     /// scans (see [`crate::worker::watch`]).
     pub scan_cache: super::watch::ScanCaches,
+    /// The inotify watches of the watch folders, which say what the cycle has
+    /// to read of them (see [`crate::worker::live`]).
+    pub live: super::live::LiveWatch,
     pub transmission_url: Url,
     /// The client for Transmission's requests; they time out
     /// (see [`crate::transmission::http_client`]).

@@ -60,6 +60,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("library/automatic.sql")),
     // 11: work artwork: the selection, the image files the app made, AniList's pace
     Migration::Sql(include_str!("artwork/schema.sql")),
+    // 12: what the worker's inotify watches could not cover in a watch folder
+    Migration::Sql(include_str!("library/watch_note.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
