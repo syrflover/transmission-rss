@@ -272,15 +272,14 @@ pub enum BasisError {
     Seasons(#[from] SeasonError),
 }
 
-/// Where the rule's first video goes and what is known of it, or `None` when
-/// there is no telling (the collect folder is not set, the rule's folder is not
+/// The work (when the library has it) and the season number the rule's videos
+/// go to, or `None` when there is no telling (the rule's folder is not
 /// `<work>/Season NN`, or it is the specials folder).
-pub async fn gather(
+async fn locate(
     library: &LibraryStore,
-    seasons: &SeasonStore,
     collect_folder: &str,
     rule: &Rule,
-) -> Result<Option<Basis>, BasisError> {
+) -> Result<Option<(Option<String>, u32)>, LibraryError> {
     let collect_folder = collect_folder.trim_end_matches('/');
     let Some((work_dir, folder_season)) = place_of(&rule.directory) else {
         return Ok(None);
@@ -297,9 +296,21 @@ pub async fn gather(
             folder_season,
         ),
     };
-    if season == 0 {
+    Ok((season != 0).then_some((work_id, season)))
+}
+
+/// Where the rule's first video goes and what is known of it, or `None` when
+/// there is no telling (the collect folder is not set, the rule's folder is not
+/// `<work>/Season NN`, or it is the specials folder).
+pub async fn gather(
+    library: &LibraryStore,
+    seasons: &SeasonStore,
+    collect_folder: &str,
+    rule: &Rule,
+) -> Result<Option<Basis>, BasisError> {
+    let Some((work_id, season)) = locate(library, collect_folder, rule).await? else {
         return Ok(None);
-    }
+    };
 
     let held = match &work_id {
         Some(id) => library
@@ -325,6 +336,32 @@ pub async fn gather(
         previous,
         held,
     }))
+}
+
+/// The season the rule's videos go to and the AniList episode count of that
+/// season, which is `None` when the library has no such season, no AniList
+/// entry is linked to it, or an entry has no count. The past episode search's
+/// range starts from it.
+pub async fn season_total(
+    library: &LibraryStore,
+    seasons: &SeasonStore,
+    collect_folder: &str,
+    rule: &Rule,
+) -> Result<Option<(u32, Option<u32>)>, BasisError> {
+    let Some((work_id, season)) = locate(library, collect_folder, rule).await? else {
+        return Ok(None);
+    };
+    let Some(work_id) = work_id else {
+        return Ok(Some((season, None)));
+    };
+    let links = seasons.links_of_seasons(vec![(work_id, season)]).await?;
+    let total = links
+        .into_iter()
+        .next()
+        .flatten()
+        .filter(|link| !link.entries.is_empty())
+        .and_then(|link| combine(&link.entries).and_then(|c| c.episodes));
+    Ok(Some((season, total)))
 }
 
 /// The AniList episodes of seasons `1..season` of the work.

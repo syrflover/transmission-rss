@@ -22,6 +22,11 @@ pub const FETCH_TIMEOUT: Duration = Duration::from_secs(60);
 /// bytes after any content decoding, so a compressed bomb is stopped too.
 pub const MAX_FEED_BYTES: usize = 2 * 1024 * 1024;
 
+/// How long to wait when a `429` answer names no time.
+const DEFAULT_RETRY_AFTER: Duration = Duration::from_secs(60);
+/// The longest `Retry-After` honoured as given.
+const MAX_RETRY_AFTER: Duration = Duration::from_secs(3600);
+
 /// A failure to read a feed. Its text never contains the request URL, because
 /// the URL carries the channel's secret query values.
 #[derive(Debug, thiserror::Error)]
@@ -30,6 +35,10 @@ pub enum FetchError {
     Http(reqwest::Error),
     #[error("HTTP status {0}")]
     Status(u16),
+    /// `429`: the server asks for a pause, as long as `Retry-After` says (a
+    /// minute when it names no time, an hour at most).
+    #[error("the server asks to wait {}s", .0.as_secs())]
+    Busy(Duration),
     #[error("the feed is larger than {MAX_FEED_BYTES} bytes")]
     TooLarge,
     #[error("not a valid RSS feed: {0}")]
@@ -52,6 +61,16 @@ pub async fn fetch(client: &reqwest::Client, url: &str) -> Result<rss::Channel, 
         .map_err(|e| FetchError::Http(e.without_url()))?;
 
     let status = response.status();
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        let wait = response
+            .headers()
+            .get(header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .map_or(DEFAULT_RETRY_AFTER, Duration::from_secs)
+            .min(MAX_RETRY_AFTER);
+        return Err(FetchError::Busy(wait));
+    }
     if !status.is_success() {
         return Err(FetchError::Status(status.as_u16()));
     }
