@@ -284,6 +284,48 @@ async fn a_subscription_receives_nothing_of_what_the_feed_held_at_the_first_read
 }
 
 #[tokio::test]
+async fn a_clock_that_goes_back_does_not_move_the_first_read_boundary() {
+    let (p1, n1, n2, n3) = (plain(1), nova(1), nova(2), nova(3));
+    let s = Scene::new(&[&p1, &n1, &n2]).await;
+    s.h.advance(1_000);
+    let subscription = s.subscribe().await;
+
+    // The first read: the subscription's items are set aside.
+    s.cycle().await;
+    assert_eq!(s.hashes(), vec![hash(201)]);
+
+    // The server's clock goes back an hour, and episode 3 comes: it is the
+    // subscription's own, first seen before the channel's first read.
+    s.h.advance(-3_600_000);
+    s.feed(&[&p1, &n1, &n2, &n3]);
+    s.cycle().await;
+    assert_eq!(s.hashes(), vec![hash(103), hash(201)]);
+    let first_read = s.h.item("Nova Quest - 01").await.first_seen_at;
+    assert!(s.h.item("Nova Quest - 03").await.first_seen_at < first_read);
+
+    // The first read stays the boundary: episodes 1 and 2 are still the ones
+    // the feed held then, and no cycle takes them.
+    s.cycle().await;
+    s.cycle().await;
+    assert_eq!(s.hashes(), vec![hash(103), hash(201)]);
+    for part in ["Nova Quest - 01", "Nova Quest - 02"] {
+        assert_eq!(
+            s.h.item(part).await.result,
+            HistoryResult::NoMatch,
+            "{part}"
+        );
+    }
+    let preview = s.preview(&subscription).await;
+    for part in ["Nova Quest - 01", "Nova Quest - 02"] {
+        assert_eq!(
+            row_of(&preview, part),
+            ("past".to_owned(), Some("first_read".to_owned())),
+            "{preview}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn a_subscription_added_to_a_channel_that_has_history_keeps_its_own_boundary() {
     let (n1, n2) = (nova(1), nova(2));
     let s = Scene::new(&[&n1]).await;
@@ -338,16 +380,15 @@ async fn a_history_that_cannot_say_when_the_channel_was_first_read_holds_its_sub
     s.h.advance(1_000);
     s.subscribe().await;
 
-    // The channel's earliest record has a time history cannot read, so the
-    // question "when was this channel first read" fails, while the feed's
-    // items are still looked up one by one.
+    // The time the channel was first read, as stored, is one history cannot
+    // read, so the question "when was this channel first read" fails, while the
+    // feed's items are still looked up one by one.
     let channel_id = s.channel.channel.id.clone();
     s.h.db
         .run::<_, transmission_rss::store::DbError, _>(move |c| {
             c.execute(
-                "INSERT INTO history_items (channel_id, channel_label, identity_key, title,
-                                            link, first_seen_at, last_seen_at, result, result_at)
-                 VALUES (?1, 'x', 'guid:old', 'old', 'l', 'unreadable', 0, 'no_match', 0)",
+                "INSERT INTO history_first_reads (channel_id, first_read_at)
+                 VALUES (?1, 'unreadable')",
                 [&channel_id],
             )?;
             Ok(())
@@ -362,11 +403,12 @@ async fn a_history_that_cannot_say_when_the_channel_was_first_read_holds_its_sub
     assert_eq!(s.hashes(), vec![hash(201)]);
 
     // Once history can be read again, what the subscription sat out is past.
+    let first_read = s.h.item("Nova Quest - 01").await.first_seen_at;
     s.h.db
-        .run::<_, transmission_rss::store::DbError, _>(|c| {
+        .run::<_, transmission_rss::store::DbError, _>(move |c| {
             c.execute(
-                "DELETE FROM history_items WHERE identity_key = 'guid:old'",
-                [],
+                "UPDATE history_first_reads SET first_read_at = ?1",
+                [first_read],
             )?;
             Ok(())
         })

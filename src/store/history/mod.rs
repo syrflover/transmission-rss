@@ -188,9 +188,11 @@ impl HistoryStore {
             .await
     }
 
-    /// When history first saw an item of each of the given channels, by channel
-    /// ID; a channel with no record is left out. A channel's first record is
-    /// its first read, which is what the past-items rule tells the items the
+    /// When each of the given channels was first read, by channel ID; a channel
+    /// with no record is left out. A channel's first record is its first read,
+    /// whose time is stored when it is written and never moves afterwards, not
+    /// even when a later record carries an earlier time (the clock went back).
+    /// It is what the past-items rule tells the items the
     /// feed already held from the later ones
     /// ([`crate::worker::plan::ChannelPlan::with_first_read_at`]).
     pub async fn first_sightings(

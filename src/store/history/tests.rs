@@ -271,6 +271,48 @@ async fn a_channels_first_sighting_is_its_earliest_first_seen_time() {
 }
 
 #[tokio::test]
+async fn a_channels_first_read_does_not_move_when_the_clock_goes_back() {
+    let (_dir, _db, history) = store().await;
+    history
+        .record(
+            2_000,
+            vec![
+                obs("a", HistoryResult::NoMatch),
+                obs("b", HistoryResult::NoMatch),
+            ],
+        )
+        .await
+        .unwrap();
+    let first = |history: &HistoryStore| {
+        let history = history.clone();
+        async move {
+            history
+                .first_sightings(vec!["c1".into()])
+                .await
+                .unwrap()
+                .get("c1")
+                .copied()
+        }
+    };
+    assert_eq!(first(&history).await, Some(2_000));
+
+    // The server's clock goes back and a new item is recorded: it is first
+    // seen before the channel was first read, but the first read stays where it
+    // was.
+    history
+        .record(500, vec![obs("late", HistoryResult::NoMatch)])
+        .await
+        .unwrap();
+    let late = history
+        .item_by_key("c1".into(), "late".into())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(late.first_seen_at, 500);
+    assert_eq!(first(&history).await, Some(2_000));
+}
+
+#[tokio::test]
 async fn the_last_receive_of_a_rule_is_the_newest_time_it_got_a_torrent_added() {
     let (_dir, _db, history) = store().await;
     history

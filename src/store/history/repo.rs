@@ -93,6 +93,13 @@ pub fn record_in(
                     obs.torrent_hash,
                 ],
             )?;
+            // The channel's first record is its first read, kept as it was:
+            // a later record, whatever its time says, does not move it.
+            tx.execute(
+                "INSERT OR IGNORE INTO history_first_reads (channel_id, first_read_at)
+                 VALUES (?1, ?2)",
+                params![obs.channel_id, at],
+            )?;
             out.push(Recorded::New);
             continue;
         };
@@ -543,18 +550,18 @@ pub fn known_items(
     Ok(known)
 }
 
-/// When history first saw an item of each of the given channels, by channel
-/// ID. A channel with no record is left out. One index lookup per channel
-/// (`history_items_by_channel`), however long its history is.
+/// When each of the given channels was first read, by channel ID: the time
+/// of its first record, stored once and never changed (`history_first_reads`).
+/// A channel with no record is left out. One key lookup per channel.
 pub fn first_sightings(
     conn: &Connection,
     channel_ids: &[String],
 ) -> Result<std::collections::HashMap<String, Millis>> {
     let mut stmt =
-        conn.prepare("SELECT MIN(first_seen_at) FROM history_items WHERE channel_id = ?1")?;
+        conn.prepare("SELECT first_read_at FROM history_first_reads WHERE channel_id = ?1")?;
     let mut found = std::collections::HashMap::new();
     for channel_id in channel_ids {
-        let first: Option<Millis> = stmt.query_row([channel_id], |row| row.get(0))?;
+        let first: Option<Millis> = stmt.query_row([channel_id], |row| row.get(0)).optional()?;
         if let Some(first) = first {
             found.insert(channel_id.clone(), first);
         }

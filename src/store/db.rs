@@ -98,6 +98,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("revisions/schema.sql")),
     // 26: the pace of search requests to a feed host, shared by the web and the worker
     Migration::Sql(include_str!("search_pace/schema.sql")),
+    // 27: when each channel was first read, kept once instead of read off the earliest record
+    Migration::Sql(include_str!("history/first_read.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -1150,6 +1152,48 @@ mod tests {
             })
             .await;
         assert!(refused.is_err());
+    }
+
+    /// The migration that stored when each channel was first read is number 27.
+    const BEFORE_FIRST_READS: usize = 26;
+
+    #[tokio::test]
+    async fn a_history_from_before_first_reads_takes_each_channels_earliest_first_seen_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        {
+            let conn = database_at(&path, BEFORE_FIRST_READS);
+            conn.execute_batch(
+                "INSERT INTO history_items (channel_id, channel_label, identity_key, title, link,
+                         first_seen_at, last_seen_at, result, result_at) VALUES
+                     ('c1', 'feed', 'guid:a', 'A', 'x', 300, 900, 'no_match', 300),
+                     ('c1', 'feed', 'guid:b', 'B', 'x', 100, 900, 'no_match', 100),
+                     ('c1', 'feed', 'guid:c', 'C', 'x', 200, 900, 'no_match', 200),
+                     ('c2', 'feed', 'guid:d', 'D', 'x', 50, 50, 'no_match', 50);",
+            )
+            .unwrap();
+        }
+
+        let db = Db::open(&path).await.unwrap();
+
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+        let (found, items) = db
+            .run::<_, DbError, _>(|c| {
+                let mut stmt = c.prepare(
+                    "SELECT channel_id || '=' || first_read_at FROM history_first_reads
+                     ORDER BY channel_id",
+                )?;
+                let found = stmt
+                    .query_map([], |r| r.get::<_, String>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                let items: i64 =
+                    c.query_row("SELECT count(*) FROM history_items", [], |r| r.get(0))?;
+                Ok((found, items))
+            })
+            .await
+            .unwrap();
+        assert_eq!(found, ["c1=100", "c2=50"]);
+        assert_eq!(items, 4, "the records are untouched");
     }
 
     #[tokio::test]
