@@ -265,7 +265,11 @@ mod tests {
             channels[0].readings[0],
             Reading::Address {
                 anime_no: 1001,
-                creator: Some("Team Alpha".into())
+                creator: Some("Team Alpha".into()),
+                airs: Some(crate::import::comments::Airs {
+                    week: 3,
+                    time: "22:30".into()
+                })
             }
         );
         assert_eq!(channels[0].readings[3], Reading::None);

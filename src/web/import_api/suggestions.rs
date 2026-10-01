@@ -32,7 +32,7 @@ use super::super::AppState;
 use crate::{
     anissia::{AnissiaError, LAST_WEEK},
     import::{
-        comments::Reading,
+        comments::{Airs, Reading},
         suggest::{suggest, Suggestion},
     },
     store::{
@@ -57,6 +57,9 @@ pub(super) struct SuggestionView {
     anime_no: Option<i64>,
     /// The creator the comment names; `null` is `제작자 미정`.
     creator: Option<String>,
+    /// The weekday and time the comment gives: shown only while Anissia has
+    /// not answered, since Anissia is the authority.
+    comment_airs: Option<Airs>,
     /// Why an unreadable comment could not be read.
     reason: Option<String>,
     /// Why a suggestion that was read cannot become a subscription.
@@ -79,10 +82,14 @@ pub(super) fn views(
         .into_iter()
         .zip(kept)
         .map(|(suggestion, kept)| {
-            let (anime_no, creator, reason) = match &suggestion.reading {
-                Reading::Address { anime_no, creator } => (Some(*anime_no), creator.clone(), None),
-                Reading::Unreadable { reason } => (None, None, Some(reason.clone())),
-                Reading::None => (None, None, None),
+            let (anime_no, creator, airs, reason) = match &suggestion.reading {
+                Reading::Address {
+                    anime_no,
+                    creator,
+                    airs,
+                } => (Some(*anime_no), creator.clone(), airs.clone(), None),
+                Reading::Unreadable { reason } => (None, None, None, Some(reason.clone())),
+                Reading::None => (None, None, None, None),
             };
             let keeps_subscription = existing
                 .zip(*kept)
@@ -91,6 +98,7 @@ pub(super) fn views(
                 kind: suggestion.kind().code(),
                 anime_no,
                 creator,
+                comment_airs: airs,
                 reason,
                 checked: suggestion.checked_at_first(),
                 blocked: suggestion.blocked,

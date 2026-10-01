@@ -7,34 +7,44 @@
 //! comment lines directly above each rule, and [`read`] turns one rule's
 //! comment into a [`Reading`].
 //!
-//! # The comment format is an assumption
+//! # The comment format
 //!
-//! The spec says the format is the convention of the author's own channel
-//! configuration, read on 2026-09-29, and that other formats count as unread
-//! comments. The repository holds no example of it (the fixtures carry no
-//! comments, and the brainstorm only says that each rule is preceded by
-//! comments naming the Anissia schedule's weekday and time, the subtitle
-//! creator and the Anissia anime address). So the grammar below is a
-//! documented guess, kept in this file and nowhere else; to match the real
-//! convention only [`read`] and its helpers need to change.
+//! The format is the author's own convention, verified on 2026-10-01 against
+//! the author's channel configuration (every commented rule there has this
+//! shape). Directly above a rule's `- ` line, with no blank line between,
+//! stand two comment lines:
 //!
-//! - **Which comment.** The comment lines (`# ...`) written directly above a
-//!   rule's `- ` line, with no blank line between. A blank line ends a block,
-//!   so a section heading such as `# Q. 2026/3` followed by a blank line
-//!   belongs to no rule. Comments elsewhere (above a channel or between keys)
-//!   are not read.
-//! - **The Anissia address.** Any `http(s)` address in the block whose host is
-//!   `anissia.net` or a subdomain of it, with the anime number either as a
-//!   query value named `animeNo`, `anime_no`, `no` or `id`, or as the last
-//!   all-digit path segment. The weekday and time the author wrote are not
-//!   read: they come from Anissia, so they stay current.
-//! - **The creator.** A line, or a part of a line split at `|`, written as
-//!   `자막: <name>`, `자막 제작자: <name>`, `제작자: <name>` or `자막팀: <name>`
-//!   (`:` may be full-width). An empty name or `미정`, `없음` or `-` is no
-//!   creator.
+//! ```yaml
+//! # Mon. 23:30. <creator name>
+//! # https://anissia.net/anime?animeNo=<number>
+//! ```
 //!
-//! Anything else is not read, and the reason is a sentence fragment that the
-//! review shows after `주석을 읽을 수 없음`.
+//! - **Line 1** is the weekday, the time and the creator, separated by `. `
+//!   (a period and a space). The weekday is an English three-letter
+//!   abbreviation (`Mon` `Tue` `Wed` `Thu` `Fri` `Sat` `Sun`), the time is
+//!   `HH:MM`, and the creator is everything after the second separator, trimmed,
+//!   so it may hold spaces and periods. A line 1 that does not have this shape
+//!   (another weekday word, a time that is not `HH:MM`), or whose creator is
+//!   empty or `미정`, says no creator: the rule is *address only*, not
+//!   unreadable. The weekday and time are not authoritative: Anissia's own
+//!   values are shown, and [`Airs`] is only what the review falls back on when
+//!   Anissia cannot be reached.
+//! - **Line 2** is the Anissia address, with the anime number as the query
+//!   value `animeNo`. A comment without a readable Anissia address is
+//!   [`Reading::Unreadable`] with the reason.
+//!
+//! Also accepted, for hand-written comments that do not follow the convention:
+//! an address anywhere in the block, with the anime number as a query value
+//! named `animeNo`, `anime_no`, `no` or `id` or as the last all-digit path
+//! segment, and a creator written as `자막: <name>`, `자막 제작자: <name>`,
+//! `제작자: <name>` or `자막팀: <name>` (`:` may be full-width), alone on a line
+//! or as a part of a line split at `|`.
+//!
+//! **Which comment.** The comment lines (`# ...`) directly above a rule's `- `
+//! line. A blank line ends a block, so a section heading such as `# Q. 2026/3`
+//! followed by a blank line belongs to no rule, and a comment separated from
+//! its rule by a blank line is no comment of that rule. Comments elsewhere
+//! (above a channel or between keys) are not read.
 
 use std::sync::LazyLock;
 
@@ -50,11 +60,60 @@ pub enum Reading {
     /// `reason` completes `... 주석을 읽을 수 없음: <reason>`, such as
     /// `Anissia 주소 형식이 달라서`.
     Unreadable { reason: String },
-    /// An Anissia anime, and the subtitle creator when the comment names one.
+    /// An Anissia anime, and the subtitle creator and the airing time when the
+    /// comment gives them.
     Address {
         anime_no: i64,
         creator: Option<String>,
+        airs: Option<Airs>,
     },
+}
+
+/// The weekday and time the comment gives, kept for showing when Anissia
+/// cannot be reached.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Airs {
+    /// 0 (Sunday) to 6 (Saturday), as Anissia numbers its weekdays.
+    pub week: u8,
+    /// `HH:MM`.
+    pub time: String,
+}
+
+/// Line 1 of the convention: `Mon. 23:30. <creator>`.
+#[derive(Debug, PartialEq, Eq)]
+struct Headline {
+    airs: Airs,
+    creator: Option<String>,
+}
+
+/// Whether a creator field names nobody.
+fn names_nobody(name: &str) -> bool {
+    name.is_empty() || matches!(name, "미정" | "없음" | "-" | "?")
+}
+
+/// Reads `line` as line 1 of the convention, if it has that shape.
+fn headline(line: &str) -> Option<Headline> {
+    static HEADLINE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^(?i:(Sun|Mon|Tue|Wed|Thu|Fri|Sat))\. (\d{2}):(\d{2})\.(?:\s+(.*))?$")
+            .expect("a valid pattern")
+    });
+    let captures = HEADLINE.captures(line.trim())?;
+    let hour: u8 = captures[2].parse().ok()?;
+    let minute: u8 = captures[3].parse().ok()?;
+    if hour > 23 || minute > 59 {
+        return None;
+    }
+    let week = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"]
+        .iter()
+        .position(|day| captures[1].eq_ignore_ascii_case(day))?;
+    let name = captures.get(4).map_or("", |m| m.as_str().trim());
+    Some(Headline {
+        airs: Airs {
+            week: u8::try_from(week).ok()?,
+            time: format!("{hour:02}:{minute:02}"),
+        },
+        creator: (!names_nobody(name)).then(|| name.to_owned()),
+    })
 }
 
 const NO_ADDRESS: &str = "Anissia 주소가 없어서";
@@ -109,8 +168,7 @@ fn creator_of(line: &str) -> Option<String> {
     let without_addresses = ADDRESS.replace_all(line, " ");
     without_addresses.split('|').find_map(|part| {
         let name = LABEL.captures(part.trim())?.get(1)?.as_str().trim();
-        let none = name.is_empty() || matches!(name, "미정" | "없음" | "-" | "?");
-        (!none).then(|| name.to_owned())
+        (!names_nobody(name)).then(|| name.to_owned())
     })
 }
 
@@ -149,9 +207,19 @@ pub fn read(lines: &[String]) -> Reading {
         [one] => *one,
         _ => return reason(SEVERAL_ANIME),
     };
+    // The convention's line 1 decides the creator when it is there, even when
+    // it names nobody; without it the labelled forms are tried. A line 1 of
+    // another shape names no creator and no time, but the address still makes
+    // the rule address only.
+    let headline = lines.iter().find_map(|line| headline(line));
+    let creator = match &headline {
+        Some(h) => h.creator.clone(),
+        None => lines.iter().find_map(|line| creator_of(line)),
+    };
     Reading::Address {
         anime_no,
-        creator: lines.iter().find_map(|line| creator_of(line)),
+        creator,
+        airs: headline.map(|h| h.airs),
     }
 }
 

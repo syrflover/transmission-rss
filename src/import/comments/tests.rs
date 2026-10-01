@@ -8,6 +8,19 @@ fn address(anime_no: i64, creator: Option<&str>) -> Reading {
     Reading::Address {
         anime_no,
         creator: creator.map(str::to_owned),
+        airs: None,
+    }
+}
+
+/// An address read together with the weekday and time of the comment's line 1.
+fn address_airs(anime_no: i64, creator: Option<&str>, week: u8, time: &str) -> Reading {
+    Reading::Address {
+        anime_no,
+        creator: creator.map(str::to_owned),
+        airs: Some(Airs {
+            week,
+            time: time.to_owned(),
+        }),
     }
 }
 
@@ -19,6 +32,7 @@ fn unreadable(reason: &str) -> Reading {
 
 #[test]
 fn an_address_and_a_creator_are_read_whatever_else_the_comment_says() {
+    // The labelled forms and the paths without `animeNo` are also accepted.
     let comment = lines(" 수 22:30\n 자막: Team Alpha\n https://anissia.net/anime/1001");
     assert_eq!(read(&comment), address(1001, Some("Team Alpha")));
 
@@ -136,14 +150,129 @@ fn each_rule_gets_the_comment_directly_above_it() {
         vec![
             vec![
                 // The section heading is separated by a blank line.
-                address(1001, Some("Team Alpha")),
-                address(1002, None),
+                address_airs(1001, Some("Team Alpha"), 3, "22:30"),
+                // A line 1 with no creator is address only.
+                address_airs(1002, None, 4, "23:00"),
                 unreadable(NO_ADDRESS),
                 Reading::None,
-                address(1001, Some("Team Alpha")),
+                address_airs(1001, Some("Team Alpha"), 6, "01:00"),
             ],
-            vec![address(1003, Some("Team Epsilon")), address(1004, None)],
+            vec![
+                address_airs(1003, Some("Team Epsilon"), 0, "12:00"),
+                // A time that is not `HH:MM`: the address alone.
+                address(1004, None),
+            ],
         ]
+    );
+}
+
+#[test]
+fn the_two_line_convention_gives_the_weekday_time_creator_and_anime() {
+    let comment = lines(" Mon. 23:30. Team Alpha\n https://anissia.net/anime?animeNo=1001");
+    assert_eq!(
+        read(&comment),
+        address_airs(1001, Some("Team Alpha"), 1, "23:30")
+    );
+    // Line 1 may come after the address, and the surrounding spaces do not matter.
+    let reversed = lines("  https://anissia.net/anime?animeNo=1001 \n   Mon. 23:30. Team Alpha  ");
+    assert_eq!(read(&reversed), read(&comment));
+}
+
+#[test]
+fn the_creator_is_everything_after_the_second_separator() {
+    let comment =
+        lines(" Tue. 00:05. Team A. B & Co. 2nd Unit \n https://anissia.net/anime?animeNo=12");
+    assert_eq!(
+        read(&comment),
+        address_airs(12, Some("Team A. B & Co. 2nd Unit"), 2, "00:05")
+    );
+}
+
+#[test]
+fn each_weekday_abbreviation_is_read() {
+    for (week, day) in ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+        .iter()
+        .enumerate()
+    {
+        let comment = lines(&format!(
+            " {day}. 21:00. Team\n https://anissia.net/anime?animeNo=5"
+        ));
+        assert_eq!(
+            read(&comment),
+            address_airs(5, Some("Team"), week as u8, "21:00"),
+            "{day}"
+        );
+    }
+}
+
+#[test]
+fn a_line_one_that_does_not_fit_leaves_the_address_only() {
+    let url = "https://anissia.net/anime?animeNo=7";
+    for line in [
+        // A time that is not `HH:MM`.
+        "Mon. 9pm. Team",
+        "Mon. 2330. Team",
+        "Mon. 23:60. Team",
+        "Mon. 24:00. Team",
+        "Mon. 7:30. Team",
+        // A weekday that is not the three-letter abbreviation.
+        "Monday. 23:30. Team",
+        "Mo. 23:30. Team",
+        "Xyz. 23:30. Team",
+        // Another separator.
+        "Mon 23:30 Team",
+        "Mon, 23:30, Team",
+        // Nothing but the line's text.
+        "Team Alpha",
+    ] {
+        let comment = lines(&format!(" {line}\n {url}"));
+        assert_eq!(read(&comment), address(7, None), "{line}");
+    }
+}
+
+#[test]
+fn an_empty_creator_field_is_address_only_with_the_time_kept() {
+    for line in [
+        "Fri. 22:00.",
+        "Fri. 22:00. ",
+        "Fri. 22:00. 미정",
+        "Fri. 22:00. -",
+    ] {
+        let comment = lines(&format!(" {line}\n https://anissia.net/anime?animeNo=7"));
+        assert_eq!(read(&comment), address_airs(7, None, 5, "22:00"), "{line}");
+    }
+}
+
+#[test]
+fn a_missing_line_one_is_address_only() {
+    assert_eq!(
+        read(&lines(" https://anissia.net/anime?animeNo=7")),
+        address(7, None)
+    );
+}
+
+#[test]
+fn a_blank_line_between_the_comment_and_the_rule_leaves_no_comment() {
+    let content = "\
+- url: https://x.test/rss
+  directory: /m
+  rules:
+    # Mon. 23:30. Team Alpha
+    # https://anissia.net/anime?animeNo=1001
+
+    - match: a
+      directory: A
+    # Mon. 23:30. Team Alpha
+    # https://anissia.net/anime?animeNo=1002
+    - match: b
+      directory: B
+";
+    assert_eq!(
+        rule_comments(content, &[2]),
+        vec![vec![
+            Reading::None,
+            address_airs(1002, Some("Team Alpha"), 1, "23:30")
+        ]]
     );
 }
 

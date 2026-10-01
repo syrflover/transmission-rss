@@ -12,6 +12,7 @@ fn address(anime_no: i64, creator: Option<&str>) -> Reading {
     Reading::Address {
         anime_no,
         creator: creator.map(str::to_owned),
+        airs: None,
     }
 }
 

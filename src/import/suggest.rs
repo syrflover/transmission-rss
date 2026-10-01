@@ -65,7 +65,12 @@ impl Suggestion {
     /// The anime and creator of a suggestion that can become a subscription.
     pub fn offer(&self) -> Option<(i64, Option<&str>)> {
         match (&self.reading, &self.blocked) {
-            (Reading::Address { anime_no, creator }, None) => Some((*anime_no, creator.as_deref())),
+            (
+                Reading::Address {
+                    anime_no, creator, ..
+                },
+                None,
+            ) => Some((*anime_no, creator.as_deref())),
             _ => None,
         }
     }

@@ -176,6 +176,11 @@ async fn the_preview_offers_the_four_cases_checked_as_the_spec_says_without_aski
     assert_eq!(with_creator["kind"], "with_creator");
     assert_eq!(with_creator["anime_no"], 1001);
     assert_eq!(with_creator["creator"], "Team Alpha");
+    // What the comment says of the weekday and time rides along as a fallback.
+    assert_eq!(
+        with_creator["comment_airs"],
+        json!({ "week": 3, "time": "22:30" })
+    );
     assert_eq!(with_creator["checked"], true);
     assert_eq!(with_creator["blocked"], Value::Null);
 
@@ -184,6 +189,7 @@ async fn the_preview_offers_the_four_cases_checked_as_the_spec_says_without_aski
     assert_eq!(address_only["kind"], "address_only");
     assert_eq!(address_only["anime_no"], 1002);
     assert_eq!(address_only["creator"], Value::Null);
+    assert_eq!(address_only["comment_airs"]["week"], 4);
     assert_eq!(address_only["checked"], false);
 
     // A comment that cannot be read says why, and offers nothing.
@@ -591,8 +597,8 @@ async fn a_rule_saving_into_the_collect_folder_itself_is_offered_but_blocked() {
 - url: https://feeds.example.test/x?token=t
   directory: /media
   rules:
-    # 자막: Team
-    # https://anissia.net/anime/1001
+    # Wed. 22:30. Team
+    # https://anissia.net/anime?animeNo=1001
     - match: Direct
       directory: ''
 ";
