@@ -1424,17 +1424,65 @@ async fn a_torrent_whose_file_is_not_at_its_name_is_never_renamed_onto_another_f
     assert_eq!(states, ["kept", "kept"]);
 }
 
+/// A torrent still downloading is not renamed: its file waits, `pending`
+/// with why, and `이어서 되돌리기` renames it once it is complete.
 #[tokio::test]
-async fn a_torrent_still_downloading_is_not_renamed() {
+async fn a_torrent_still_downloading_waits_and_is_renamed_when_carried_on() {
     let (s, rule) = Scene::third_season_received().await;
     s.h.tr.unfinish(&hash(50));
 
     let command = s.undo(&rule, "undo-0103-a", -48).await;
 
     assert_eq!(command["state"], "done", "{command}");
+    assert_eq!(command["outcome"]["result"], "paused", "{command}");
     assert_eq!(s.names(), ["Show S03E02.mkv", "Show S03E25.mkv"]);
     let view = s.view(&rule).await;
-    assert_eq!(view["episode_undo"]["files"][1]["state"], "kept");
+    assert_eq!(
+        undo_files(&view),
+        [
+            file("Show S03E01.mkv", "Show S03E25.mkv", "renamed"),
+            file("Show S03E02.mkv", "Show S03E26.mkv", "pending"),
+        ]
+    );
+    let reason = view["episode_undo"]["files"][1]["reason"].as_str().unwrap();
+    assert!(reason.contains("다 받은 뒤 이어서"), "{reason}");
+
+    s.h.tr.finish(&hash(50));
+    let command = s.undo(&rule, "undo-0103-b", -48).await;
+    assert_eq!(command["state"], "done", "{command}");
+    assert_eq!(command["outcome"]["result"], "undone", "{command}");
+    assert_eq!(s.names(), ["Show S03E25.mkv", "Show S03E26.mkv"]);
+    assert_eq!(
+        fs::read(s.season3().join("Show S03E26.mkv")).unwrap(),
+        b"video 50"
+    );
+}
+
+/// A torrent whose file is not written yet when the undo is planned (still
+/// a partial file) waits too, and is renamed once complete.
+#[tokio::test]
+async fn a_torrent_without_its_file_yet_waits_and_is_renamed_when_carried_on() {
+    let (s, rule) = Scene::third_season_received().await;
+    s.h.tr.unfinish(&hash(50));
+    let (whole, part) = (
+        s.season3().join("Show S03E02.mkv"),
+        s.season3().join("Show S03E02.mkv.part"),
+    );
+    fs::rename(&whole, &part).unwrap();
+
+    let command = s.undo(&rule, "undo-0104-a", -48).await;
+
+    assert_eq!(command["outcome"]["result"], "paused", "{command}");
+    let view = s.view(&rule).await;
+    assert_eq!(view["episode_undo"]["files"][1]["state"], "pending");
+
+    // The download ends.
+    fs::rename(&part, &whole).unwrap();
+    s.h.tr.finish(&hash(50));
+    let command = s.undo(&rule, "undo-0104-b", -48).await;
+    assert_eq!(command["outcome"]["result"], "undone", "{command}");
+    assert_eq!(s.names(), ["Show S03E25.mkv", "Show S03E26.mkv"]);
+    assert_eq!(s.on_disk(), ["Show S03E25.mkv", "Show S03E26.mkv"]);
 }
 
 // --- revision rows checked file by file -----------------------------------------
@@ -1511,10 +1559,15 @@ async fn a_start_cut_short_carries_on_and_checks_each_file_again() {
     let view = s.view(&rule).await;
     assert_eq!(view["episode_undo"]["command"]["state"], "done");
     assert_eq!(
+        view["episode_undo"]["command"]["outcome"]["result"],
+        "paused"
+    );
+    // The replacement's file waits for it to end.
+    assert_eq!(
         undo_files(&view),
         [
             file("Show S03E01.mkv", "Show S03E25.mkv", "renamed"),
-            file("Show S03E02.mkv", "Show S03E26.mkv", "kept"),
+            file("Show S03E02.mkv", "Show S03E26.mkv", "pending"),
         ]
     );
     let reason = view["episode_undo"]["files"][1]["reason"].as_str().unwrap();
@@ -1594,31 +1647,47 @@ impl Scene {
     }
 }
 
+/// An undo that began and cannot reach Transmission ends at once with its
+/// files still `pending`: it does not hold up the other commands, and
+/// `이어서 되돌리기` carries it on later.
 #[tokio::test]
-async fn an_undo_that_began_waits_out_an_outage_however_long() {
-    use transmission_rss::store::commands::MAX_ATTEMPTS;
+async fn an_undo_that_cannot_reach_transmission_stops_and_is_carried_on_later() {
+    use transmission_rss::store::commands::{CommandStore, NewCommand};
     let (s, rule) = Scene::third_season_received().await;
     s.undo_cut_short(&rule, "undo-0301-a").await;
+    // Another command waits behind it (an undo of a rule that is gone).
+    CommandStore::new(s.h.db.clone())
+        .accept(
+            NewCommand {
+                id: "undo-0301-other".into(),
+                kind: "episode_undo".into(),
+                payload: r#"{"rule_id":"gone","episode":-48}"#.into(),
+                subject: Some("gone".into()),
+            },
+            s.h.now(),
+        )
+        .await
+        .unwrap();
 
-    // Transmission cannot be reached for more looks than a command is
-    // started: the undo is not given up.
-    let broken = s.worker_without_transmission();
-    for _ in 0..MAX_ATTEMPTS + 2 {
-        broken
-            .run_commands(&CancellationToken::new())
-            .await
-            .unwrap();
-    }
-    assert_eq!(s.command("undo-0301-a").await["state"], "running");
+    // Transmission cannot be reached: one look ends both.
+    s.worker_without_transmission()
+        .run_commands(&CancellationToken::new())
+        .await
+        .unwrap();
+    let command = s.command("undo-0301-a").await;
+    assert_eq!(command["state"], "done", "{command}");
+    assert_eq!(command["outcome"]["result"], "paused", "{command}");
+    let reason = command["outcome"]["reason"].as_str().unwrap();
+    assert!(reason.contains("이어서 되돌리기"), "{reason}");
+    assert_eq!(s.command("undo-0301-other").await["state"], "failed");
+    let view = s.view(&rule).await;
+    let states: Vec<String> = undo_files(&view).into_iter().map(|f| f.2).collect();
+    assert_eq!(states, ["pending", "pending"]);
+    assert_eq!(s.rule(&rule).await.episode, -24);
 
-    assert_eq!(
-        s.h.worker()
-            .run_commands(&CancellationToken::new())
-            .await
-            .unwrap(),
-        CommandsOutcome::Ran(1)
-    );
-    assert_eq!(s.command("undo-0301-a").await["state"], "done");
+    // Carried on once Transmission answers.
+    let command = s.undo(&rule, "undo-0301-b", -48).await;
+    assert_eq!(command["outcome"]["result"], "undone", "{command}");
     assert_eq!(s.names(), ["Show S03E25.mkv", "Show S03E26.mkv"]);
     let states: Vec<String> = undo_files(&s.view(&rule).await)
         .into_iter()

@@ -33,7 +33,9 @@ mod tests;
 mod title_tests;
 
 pub use episode::EpisodeMark;
-pub use episode_undo::{EpisodeUndo, NewUndoFile, UndoBegun, UndoFile, UndoFileState};
+pub use episode_undo::{
+    EpisodeUndo, NewUndoFile, UndoBegun, UndoFile, UndoFileState, REVISION_UNDER_WAY,
+};
 pub use repo::{NewSubscription, SeasonLinked};
 
 pub use model::{

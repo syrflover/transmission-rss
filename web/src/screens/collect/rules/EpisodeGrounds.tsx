@@ -184,11 +184,11 @@ function keptLines(undo: EpisodeUndo): string[] {
     .map((f) => `이름을 되돌리지 못했어요: ${f.from_name} → ${f.to_name}. ${f.reason ?? "까닭은 알 수 없어요."}`);
 }
 
-/** The files an undo has still to rename, a sentence each. */
+/** The files an undo has still to rename, a sentence each, with why one waits. */
 function pendingLines(undo: EpisodeUndo): string[] {
   return undo.files
     .filter((f) => f.state === "pending")
-    .map((f) => `아직 이름을 바꾸지 않았어요: ${f.from_name} → ${f.to_name}`);
+    .map((f) => `아직 이름을 바꾸지 않았어요: ${f.from_name} → ${f.to_name}.${f.reason ? ` ${f.reason}` : ""}`);
 }
 
 /**
@@ -250,7 +250,9 @@ function undoOutcome(phase: UndoPhase, last: EpisodeUndo | null, undone: boolean
   if (last === null) return null;
   const pending = pendingLines(last);
   if (pending.length > 0 && last.from !== null) {
-    const why = last.command.outcome?.reason;
+    // A paused undo says itself why it stopped; a failed one (an internal
+    // error) gets the reason after the summary.
+    const why = last.command.outcome?.result === "paused" ? null : last.command.outcome?.reason;
     return {
       title: "되돌리다 멈췄어요.",
       detail:

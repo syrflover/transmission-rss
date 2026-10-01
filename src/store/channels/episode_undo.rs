@@ -127,9 +127,10 @@ pub enum UndoBegun {
     Busy(Vec<String>),
 }
 
-/// Why a file keeps its name: a replacement acts on it or on its new name.
+/// Why a file waits, still `pending`: a replacement acts on it or on its new
+/// name.
 pub const REVISION_UNDER_WAY: &str =
-    "수정본으로 대체하는 중인 영상이에요. 대체가 끝난 뒤 다시 되돌려 주세요.";
+    "수정본으로 대체하는 중인 영상이에요. 대체가 끝난 뒤 이어서 되돌릴 수 있어요.";
 /// Why a file keeps its name: the new name has video revision rows of its own.
 pub const REVISION_ROWS_THERE: &str =
     "새 이름에 다른 영상의 수정본 기록이 있어서 이름을 바꾸지 않았어요.";
@@ -333,6 +334,24 @@ fn finish_file(
     Ok(())
 }
 
+fn wait_file(conn: &Connection, command_id: &str, item_id: i64, reason: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE episode_undo_files SET reason = ?3
+          WHERE command_id = ?1 AND item_id = ?2 AND state = 'pending'",
+        params![command_id, item_id, reason],
+    )?;
+    Ok(())
+}
+
+fn note_identity(conn: &Connection, command_id: &str, item_id: i64, identity: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE episode_undo_files SET identity = ?3
+          WHERE command_id = ?1 AND item_id = ?2 AND state = 'pending' AND identity IS NULL",
+        params![command_id, item_id, identity],
+    )?;
+    Ok(())
+}
+
 fn file_hold(
     conn: &Connection,
     folder: &str,
@@ -494,6 +513,31 @@ impl ChannelStore {
                 }
                 Ok(found)
             })
+            .await
+    }
+
+    /// Leaves the video of `item_id` in the undo `pending`, with why it waits
+    /// (still downloading, a replacement under way): the next request for
+    /// the undo looks at it again.
+    pub async fn wait_undo_file(&self, command_id: &str, item_id: i64, reason: &str) -> Result<()> {
+        let (command_id, reason) = (command_id.to_owned(), reason.to_owned());
+        self.db
+            .run(move |c| wait_file(c, &command_id, item_id, &reason))
+            .await
+    }
+
+    /// Keeps the identity of the video of `item_id`, found once its torrent
+    /// completed (it was planned while still downloading, with none), before
+    /// it is renamed: a start cut short then knows the file it renamed.
+    pub async fn note_undo_file_identity(
+        &self,
+        command_id: &str,
+        item_id: i64,
+        identity: String,
+    ) -> Result<()> {
+        let command_id = command_id.to_owned();
+        self.db
+            .run(move |c| note_identity(c, &command_id, item_id, &identity))
             .await
     }
 

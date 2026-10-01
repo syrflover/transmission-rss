@@ -266,16 +266,6 @@ impl CommandStore {
         self.end(id, state, outcome, now, true).await
     }
 
-    /// Gives a running command back the start it was claimed with: a start
-    /// that waited on something outside the worker (Transmission, the
-    /// database) and was not the command's own failing, so that an outage
-    /// longer than [`MAX_ATTEMPTS`] looks does not give it up. Used for work
-    /// that must be finished once begun (`episode_undo`).
-    pub async fn give_back_attempt(&self, id: &str) -> Result<bool, CommandError> {
-        let id = id.to_owned();
-        self.db.run(move |c| repo::give_back_attempt(c, &id)).await
-    }
-
     /// Records on a running command that its request to add a torrent got no
     /// answer, before the command is left for another start (see
     /// [`Command::add_unconfirmed`]). The return value tells whether the

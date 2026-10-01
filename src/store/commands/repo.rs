@@ -219,15 +219,6 @@ pub fn claim_next(conn: &mut Connection, now: Millis) -> Result<Option<Command>>
     }
 }
 
-pub fn give_back_attempt(conn: &mut Connection, id: &str) -> Result<bool> {
-    let changed = conn.execute(
-        "UPDATE commands SET attempts = max(attempts - 1, 0)
-         WHERE id = ?1 AND state = 'running'",
-        params![id],
-    )?;
-    Ok(changed == 1)
-}
-
 pub fn note_unconfirmed_add(conn: &mut Connection, id: &str, now: Millis) -> Result<bool> {
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let changed = tx.execute(

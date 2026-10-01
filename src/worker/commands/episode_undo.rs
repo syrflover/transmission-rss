@@ -73,13 +73,19 @@
 //! old; when the file is still at the old name (Transmission named the torrent
 //! without moving it), the torrent gets its old name back first.
 //!
-//! A start that cannot reach Transmission or the database after the undo
-//! began gives its attempt back, so the command waits out an outage however
-//! long (see [`super`]). One that ended half done all the same (a panic, an
-//! older build that gave it up) is carried on by a new request for the same
-//! automatic value, though the rule is not automatic any more: the request
-//! takes the files left ([`ChannelStore::adopt_episode_undo`](crate::store::channels::ChannelStore::adopt_episode_undo)),
-//! and the rule detail shows them with `이어서 되돌리기`.
+//! A file that cannot be renamed yet waits, still `pending` with why: its
+//! torrent is still downloading ([`UNFINISHED`]; one planned before its file
+//! had its name gets its identity once complete), or a replacement acts on
+//! it (`REVISION_UNDER_WAY`). A start that cannot reach Transmission or the
+//! database after the undo began stops there. Either way the command ends
+//! `done` with the outcome [`PAUSED`]: the value is back, and the files left
+//! wait for a new request rather than holding up the commands behind this
+//! one or retrying on every look. That request, for the same automatic
+//! value, is accepted though the rule is not automatic any more: it takes
+//! the files left ([`ChannelStore::adopt_episode_undo`](crate::store::channels::ChannelStore::adopt_episode_undo)),
+//! and the rule detail shows them with `이어서 되돌리기`. So does an undo that
+//! ended half done otherwise (a panic, or a database that failed for every
+//! start).
 //!
 //! A user who saves the rule while an undo is unfinished does not change it:
 //! the files still `pending` take the names of the value put back (the
@@ -104,7 +110,7 @@ use crate::{
     revision::FileIdentity,
     rss::save_path,
     store::{
-        channels::{NewUndoFile, Rule, UndoBegun, UndoFileState},
+        channels::{NewUndoFile, Rule, UndoBegun, UndoFileState, REVISION_UNDER_WAY},
         commands::{Command, CommandState, Outcome},
     },
     transmission::{torrent_places, TorrentPlace},
@@ -122,6 +128,9 @@ pub const KIND: &str = "episode_undo";
 pub const UNDONE: &str = "undone";
 /// The outcome's `result` of a command that ended `failed`.
 pub const FAILED: &str = "failed";
+/// The outcome's `result` when the previous value is back and some files are
+/// still to rename: they wait for `이어서 되돌리기`.
+pub const PAUSED: &str = "paused";
 
 /// Why a file keeps its name: the name it would take is taken.
 pub const TAKEN: &str = "같은 이름의 파일이 이미 있어요.";
@@ -131,8 +140,8 @@ pub const NAME_CHANGED: &str = "토렌트 파일의 이름이 그사이 바뀌�
 pub const FILE_CHANGED: &str = "되돌리기를 시작한 뒤 파일이 바뀌었어요.";
 /// Why a file keeps its name: it is not there.
 pub const MISSING: &str = "파일을 찾지 못했어요.";
-/// Why a file keeps its name: Transmission is still writing it.
-pub const UNFINISHED: &str = "토렌트를 아직 받는 중이에요. 다 받은 뒤 다시 되돌려 주세요.";
+/// Why a file waits, still `pending`: Transmission is still writing it.
+pub const UNFINISHED: &str = "토렌트를 아직 받는 중이에요. 다 받은 뒤 이어서 되돌릴 수 있어요.";
 /// Why a file keeps its name: another torrent's file has the name it would take.
 pub const CLAIMED: &str = "다른 토렌트가 그 이름을 쓰고 있어요.";
 /// Why a file keeps its name: its torrent is in another folder now.
@@ -177,8 +186,8 @@ pub struct Finished {
     pub outcome: Outcome,
 }
 
-/// A command that could not be carried through now and is left `running` for
-/// the next look, which carries on with the files still to rename.
+/// A command that could not be carried through now. Before the undo began it
+/// is left `running` for the next look; after, the start ends [`PAUSED`].
 #[derive(Debug, thiserror::Error)]
 pub enum Retry {
     #[error("cannot read or write the app database: {0}")]
@@ -193,6 +202,70 @@ fn store(err: impl std::fmt::Display) -> Retry {
 
 fn transmission(err: impl std::fmt::Display) -> Retry {
     Retry::Transmission(err.to_string())
+}
+
+/// The value is back and `left` files are still to rename, for `why`.
+fn paused(to: i64, left: usize, why: &str) -> Finished {
+    Finished {
+        state: CommandState::Done,
+        outcome: Outcome {
+            result: PAUSED.to_owned(),
+            reason: Some(format!(
+                "회차 변환은 전의 값으로 돌아왔어요. 지금 값: {}. 남은 영상 {left}개는 {why} \
+                 규칙 상세의 `이어서 되돌리기`로 마저 바꿀 수 있어요.",
+                signed(to)
+            )),
+        },
+    }
+}
+
+/// Whether a reason a file keeps its name passes: the file waits, `pending`,
+/// for the next request rather than being left as it is.
+fn passes(reason: &str) -> bool {
+    reason == UNFINISHED || reason == REVISION_UNDER_WAY
+}
+
+/// Renames one pending file of the undo `command_id` and records how it
+/// ended. `false` when it waits, still `pending`.
+async fn carry_on(
+    ctx: &CycleContext,
+    command_id: &str,
+    file: &NewUndoFile,
+    listing: &mut Listing,
+    clock: &Clock,
+) -> Result<bool, Retry> {
+    // A cycle may have run since the undo began (see the store's docs).
+    let held = ctx
+        .channels
+        .undo_file_hold(&file.folder, &file.from_name, &file.to_name)
+        .await
+        .map_err(store)?;
+    let kept = match held {
+        Some(reason) => Some(reason.to_owned()),
+        None => rename(ctx, command_id, file, listing).await?,
+    };
+    match &kept {
+        None => println!(
+            "Episode undo {command_id}: {} is now {}",
+            file.from_name, file.to_name
+        ),
+        Some(why) => println!(
+            "Episode undo {command_id}: {} keeps its name: {why}",
+            file.from_name
+        ),
+    }
+    if let Some(why) = kept.as_deref().filter(|why| passes(why)) {
+        ctx.channels
+            .wait_undo_file(command_id, file.item_id, why)
+            .await
+            .map_err(store)?;
+        return Ok(false);
+    }
+    ctx.channels
+        .finish_undo_file(command_id, file.item_id, kept, clock())
+        .await
+        .map_err(store)?;
+    Ok(true)
 }
 
 fn failed(reason: impl Into<String>) -> Finished {
@@ -285,32 +358,34 @@ pub async fn run(ctx: &CycleContext, command: &Command, clock: &Clock) -> Result
         .filter(|f| f.state == UndoFileState::Pending)
         .map(|f| &f.file)
         .collect();
+    let mut waiting = 0;
     while !pending.is_empty() {
         let file = pending.remove(next(&pending));
-        // A cycle may have run since the undo began (see the store's docs).
-        let held = ctx
-            .channels
-            .undo_file_hold(&file.folder, &file.from_name, &file.to_name)
-            .await
-            .map_err(store)?;
-        let kept = match held {
-            Some(reason) => Some(reason.to_owned()),
-            None => rename(ctx, file, &mut listing).await?,
-        };
-        match &kept {
-            None => println!(
-                "Episode undo {}: {} is now {}",
-                command.id, file.from_name, file.to_name
-            ),
-            Some(why) => println!(
-                "Episode undo {}: {} keeps its name: {why}",
-                command.id, file.from_name
-            ),
+        match carry_on(ctx, &command.id, file, &mut listing, clock).await {
+            Ok(true) => {}
+            Ok(false) => waiting += 1,
+            // The value is back: the files left wait for a new request
+            // rather than holding up the commands behind this one.
+            Err(err) => {
+                eprintln!("Episode undo {} stops: {err}", command.id);
+                let why = match err {
+                    Retry::Transmission(_) => "Transmission에 닿지 못해서",
+                    Retry::Store(_) => "앱 DB를 읽거나 쓰지 못해서",
+                };
+                return Ok(paused(
+                    undo.to,
+                    waiting + pending.len() + 1,
+                    &format!("{why} 아직 이름을 바꾸지 않았어요."),
+                ));
+            }
         }
-        ctx.channels
-            .finish_undo_file(&command.id, file.item_id, kept, clock())
-            .await
-            .map_err(store)?;
+    }
+    if waiting > 0 {
+        return Ok(paused(
+            undo.to,
+            waiting,
+            "아직 바꿀 수 없어서 기다려요. 까닭은 영상마다 적었어요.",
+        ));
     }
 
     let done = ctx
@@ -616,9 +691,10 @@ fn identity_at(path: &Path) -> io::Result<Option<FileIdentity>> {
 }
 
 /// Renames one planned video. `None` when it has the new name, else why it
-/// keeps its old one.
+/// keeps its old one (or waits, for a reason that [`passes`]).
 async fn rename(
     ctx: &CycleContext,
+    command_id: &str,
     file: &NewUndoFile,
     listing: &mut Listing,
 ) -> Result<Option<String>, Retry> {
@@ -626,10 +702,7 @@ async fn rename(
     let source = folder.join(&file.from_name);
     let target = folder.join(&file.to_name);
     let looked = |err: io::Error| Some(format!("파일을 살펴보지 못했어요({err})."));
-    let Some(planned) = file.identity.as_deref().and_then(FileIdentity::parse) else {
-        // Nothing was at the name when the undo was planned.
-        return Ok(Some(MISSING.to_owned()));
-    };
+    let mut planned = file.identity.as_deref().and_then(FileIdentity::parse);
     let hash = file.torrent_hash.as_deref();
 
     let place = match hash {
@@ -651,6 +724,23 @@ async fn rename(
         if !same_folder(Path::new(&place.download_dir), folder) {
             return Ok(Some(MOVED.to_owned()));
         }
+        // Planned while it was still downloading, before its file had its
+        // name: the file the complete torrent has at its own name is it.
+        let planned = match planned {
+            Some(planned) => planned,
+            None if place.name == file.from_name => match identity_at(&source) {
+                Ok(Some(now)) => {
+                    ctx.channels
+                        .note_undo_file_identity(command_id, file.item_id, now.to_text())
+                        .await
+                        .map_err(store)?;
+                    now
+                }
+                Ok(None) => return Ok(Some(MISSING.to_owned())),
+                Err(err) => return Ok(looked(err)),
+            },
+            None => return Ok(Some(NAME_CHANGED.to_owned())),
+        };
         let mut client = ctx.transmission();
         if place.name == file.to_name {
             let (from, to) = match (identity_at(&source), identity_at(&target)) {
@@ -736,6 +826,10 @@ async fn rename(
 
     // No torrent holds it (any more): renamed on disk, if it is still the
     // file planned.
+    let Some(planned) = planned.take() else {
+        // Nothing was at the name when the undo was planned.
+        return Ok(Some(MISSING.to_owned()));
+    };
     match identity_at(&source) {
         Ok(Some(now)) if now == planned => {}
         Ok(Some(_)) => return Ok(Some(FILE_CHANGED.to_owned())),
