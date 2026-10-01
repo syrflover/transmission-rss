@@ -639,3 +639,119 @@ async fn the_item_window_says_when_it_left_older_items_unread() {
     assert_eq!(read.len(), titles.len());
     assert!(!cut);
 }
+
+#[tokio::test]
+async fn a_stored_folder_that_is_no_work_folder_is_checked_when_the_title_keeps_it() {
+    let app = App::new().await;
+    let (channel, rule) = app.waiting_in_a_known_channel().await;
+    app.record(&channel, NOW + 1_000, &[NEW_1]).await;
+    let id = rule["id"].as_str().unwrap().to_owned();
+
+    // The subscription's folder is the collect folder itself, or nothing.
+    for bad in [".", "./", ""] {
+        let stored = app.state.channels.get_rule(&id).await.unwrap().unwrap();
+        let broken = app
+            .state
+            .channels
+            .update_rule(
+                &id,
+                stored.version,
+                &channel.id,
+                RuleInput {
+                    directory: bad.into(),
+                    ..stored.to_input()
+                },
+            )
+            .await
+            .unwrap();
+        let (status, answer) = app
+            .call(
+                Method::POST,
+                &format!("/api/rules/{id}/title"),
+                Some(json!({ "version": broken.version, "work": "New Work" })),
+            )
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad:?}: {answer}");
+        let (_, read) = app.get(&format!("/api/rules/{id}")).await;
+        assert_eq!(read["match"], Value::Null, "{bad:?}: nothing was written");
+
+        // Naming a work folder with the title fixes it.
+        let (status, named) = app
+            .call(
+                Method::POST,
+                &format!("/api/rules/{id}/title"),
+                Some(json!({
+                    "version": broken.version, "work": "New Work", "directory": "New Work",
+                })),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{bad:?}: {named}");
+        // Back to waiting for the next round.
+        let named = app.state.channels.get_rule(&id).await.unwrap().unwrap();
+        assert_eq!(named.directory, "New Work");
+        app.state
+            .channels
+            .update_rule(
+                &id,
+                named.version,
+                &channel.id,
+                RuleInput {
+                    r#match: None,
+                    ..named.to_input()
+                },
+            )
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn editing_a_subscription_refuses_a_folder_that_is_no_work_folder() {
+    let app = App::new().await;
+    let (channel, rule) = app.waiting_in_a_known_channel().await;
+    let id = rule["id"].as_str().unwrap().to_owned();
+    let put = |version: Value, directory: &str| {
+        json!({
+            "version": version, "channel_id": channel.id, "match": "Phrase",
+            "directory": directory, "episode": 1,
+        })
+    };
+
+    for bad in [".", "./", "", "  "] {
+        let (status, answer) = app
+            .call(
+                Method::PUT,
+                &format!("/api/rules/{id}"),
+                Some(put(rule["version"].clone(), bad)),
+            )
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad:?}: {answer}");
+    }
+    let (_, read) = app.get(&format!("/api/rules/{id}")).await;
+    assert_eq!(read["version"], rule["version"], "nothing was written");
+
+    let (status, saved) = app
+        .call(
+            Method::PUT,
+            &format!("/api/rules/{id}"),
+            Some(put(rule["version"].clone(), "Other Folder")),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+
+    // A plain rule may still save into the collect folder itself.
+    let plain = app
+        .state
+        .channels
+        .create_rule(&channel.id, RuleInput::default())
+        .await
+        .unwrap();
+    let (status, saved) = app
+        .call(
+            Method::PUT,
+            &format!("/api/rules/{}", plain.id),
+            Some(put(json!(plain.version), ".")),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+}

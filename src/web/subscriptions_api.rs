@@ -799,19 +799,16 @@ async fn name_title(
         ));
     }
     let directory = match b.directory.as_deref().map(str::trim) {
-        None => None,
+        // The folder the subscription has stays, and must still be a work folder.
+        None => {
+            rules_api::check_stored_work_folder(&rule)?;
+            None
+        }
         Some(directory) => {
-            if directory.is_empty() {
-                return Err(ApiError::invalid("저장 폴더를 적어 주세요."));
-            }
+            rules_api::check_work_folder(directory)?;
             if std::path::Path::new(directory).is_absolute() {
                 return Err(ApiError::invalid(
                     "저장 폴더는 수집 폴더 아래 경로로 적어 주세요. /로 시작하면 안 돼요.",
-                ));
-            }
-            if crate::folders::is_collect_folder_itself(std::path::Path::new(directory)) {
-                return Err(ApiError::invalid(
-                    "저장 폴더로 `.`만 적을 수는 없어요. 수집 폴더 자체에 받게 되니, 그 아래의 작품 폴더 이름을 적어 주세요.",
                 ));
             }
             rules_api::check_directory(&state, Some(&rule), directory).await?;
@@ -925,19 +922,10 @@ async fn subscribe(
 
     let subtitles = SubtitleMode::parse(&b.subtitles).ok_or_else(|| ApiError::invalid(BAD_BODY))?;
     let directory = b.directory.trim().to_owned();
-    if directory.is_empty() {
-        return Err(ApiError::invalid("저장 폴더를 적어 주세요."));
-    }
+    rules_api::check_work_folder(&directory)?;
     if std::path::Path::new(&directory).is_absolute() {
         return Err(ApiError::invalid(
             "저장 폴더는 수집 폴더 아래 경로로 적어 주세요. /로 시작하면 안 돼요.",
-        ));
-    }
-    // `.` and `./` name no folder: the rule would save into the collect folder
-    // itself, which an empty folder is refused for as well.
-    if crate::folders::is_collect_folder_itself(std::path::Path::new(&directory)) {
-        return Err(ApiError::invalid(
-            "저장 폴더로 `.`만 적을 수는 없어요. 수집 폴더 자체에 받게 되니, 그 아래의 작품 폴더 이름을 적어 주세요.",
         ));
     }
     let channel = state
@@ -1094,14 +1082,7 @@ async fn link_rule(
     }
     // A subscription saves into a work folder below the collect folder, as
     // `subscribe` requires; a plain rule may save into the collect folder itself.
-    let directory = rule.directory.trim();
-    if directory.is_empty()
-        || crate::folders::is_collect_folder_itself(std::path::Path::new(directory))
-    {
-        return Err(ApiError::invalid(
-            "이 규칙은 수집 폴더 자체에 받아요. 편성표와 잇기 전에 규칙의 저장 폴더를 작품 폴더로 정해 주세요.",
-        ));
-    }
+    rules_api::check_stored_work_folder(&rule)?;
     let anime = scheduled_anime(&state, b.week, b.anissia_anime_no).await?;
     let creator =
         chosen_creator(&state, subtitles, b.creator.as_deref(), b.anissia_anime_no).await?;
