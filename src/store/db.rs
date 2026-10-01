@@ -84,8 +84,12 @@ const MIGRATIONS: &[Migration] = &[
         include_str!("status/week.sql"),
         include_str!("setup/schema.sql")
     )),
-    // 22: the first run's steps and end kept, instead of read from the data each time
-    Migration::Sql(include_str!("setup/ended.sql")),
+    // 22: when Anissia was found not to list an anime any more; the first run's steps and end
+    //     kept, instead of read from the data each time
+    Migration::Sql(concat!(
+        include_str!("anissia/unlisted.sql"),
+        include_str!("setup/ended.sql")
+    )),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -822,6 +826,41 @@ mod tests {
             first_run_after(&[SKIP_IMPORT]).await,
             Some((false, false, false))
         );
+    }
+
+    #[tokio::test]
+    async fn a_snapshot_from_before_unlisted_is_listed_and_can_be_marked() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        {
+            let conn = database_at(&path, BEFORE_ENDED);
+            conn.execute(
+                "INSERT INTO anissia_anime (anime_no, subject, week, status, fetched_at)
+                 VALUES (7, '작품', 3, 'ON', 100)",
+                [],
+            )
+            .unwrap();
+        }
+
+        let db = Db::open(&path).await.unwrap();
+
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+        let (before, after): (Option<i64>, Option<i64>) = db
+            .run::<_, DbError, _>(|c| {
+                let read = |c: &Connection| {
+                    c.query_row(
+                        "SELECT unlisted_at FROM anissia_anime WHERE anime_no = 7",
+                        [],
+                        |r| r.get(0),
+                    )
+                };
+                let before = read(c)?;
+                c.execute("UPDATE anissia_anime SET unlisted_at = 5", [])?;
+                Ok((before, read(c)?))
+            })
+            .await
+            .unwrap();
+        assert_eq!((before, after), (None, Some(5)));
     }
 
     #[tokio::test]

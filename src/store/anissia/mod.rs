@@ -9,7 +9,7 @@
 #[cfg(test)]
 mod tests;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use rusqlite::{params, Connection, OptionalExtension, Row, TransactionBehavior};
 
@@ -93,7 +93,8 @@ fn anime_from_row(row: &Row<'_>) -> rusqlite::Result<Anime> {
 }
 
 /// Writes `anime` as the anime's snapshot, replacing an earlier one. A refresh
-/// that failed earlier is forgotten: this one is the newest.
+/// that failed earlier is forgotten: this one is the newest. Anissia listing
+/// the anime also ends its having been found unlisted.
 pub(crate) fn upsert_in(conn: &Connection, anime: &Anime) -> rusqlite::Result<()> {
     conn.execute(
         "INSERT INTO anissia_anime (anime_no, subject, original_subject, week, air_time,
@@ -104,7 +105,7 @@ pub(crate) fn upsert_in(conn: &Connection, anime: &Anime) -> rusqlite::Result<()
              week = excluded.week, air_time = excluded.air_time,
              start_date = excluded.start_date, end_date = excluded.end_date,
              status = excluded.status, fetched_at = excluded.fetched_at,
-             refresh_not_before = NULL",
+             refresh_not_before = NULL, unlisted_at = NULL",
         params![
             anime.anime_no,
             anime.subject,
@@ -166,6 +167,29 @@ impl AnissiaStore {
             .await
     }
 
+    /// Which of `anime_nos` Anissia was found not to list any more (see
+    /// [`AnissiaStore::mark_unlisted`]); anime without a snapshot are not.
+    pub async fn unlisted(&self, anime_nos: Vec<i64>) -> Result<HashSet<i64>> {
+        self.db
+            .run(move |c| {
+                let mut stmt = c.prepare(
+                    "SELECT unlisted_at IS NOT NULL FROM anissia_anime WHERE anime_no = ?1",
+                )?;
+                let mut out = HashSet::new();
+                for no in anime_nos {
+                    if stmt
+                        .query_row([no], |r| r.get(0))
+                        .optional()?
+                        .unwrap_or(false)
+                    {
+                        out.insert(no);
+                    }
+                }
+                Ok::<_, AnissiaStoreError>(out)
+            })
+            .await
+    }
+
     /// The anime a collecting or paused rule subscribes to whose snapshot is a day old (or
     /// missing) and not held back, oldest first.
     pub async fn due(&self, now: Millis) -> Result<Vec<Due>> {
@@ -204,6 +228,35 @@ impl AnissiaStore {
                     tx.execute(
                         "UPDATE anissia_anime SET refresh_not_before = ?2 WHERE anime_no = ?1",
                         params![no, until],
+                    )?;
+                }
+                tx.commit()?;
+                Ok::<_, AnissiaStoreError>(())
+            })
+            .await
+    }
+
+    /// Records that Anissia answered for every week of its schedule at `at`
+    /// and listed none of `anime_nos`, and holds their next refresh back until
+    /// `until`. Only the worker's daily refresh may call this, and only after
+    /// every week was answered: a refresh that failed or stopped halfway knows
+    /// nothing about the anime it did not find. The first time is kept while the
+    /// anime stays unlisted.
+    pub async fn mark_unlisted(
+        &self,
+        anime_nos: Vec<i64>,
+        at: Millis,
+        until: Millis,
+    ) -> Result<()> {
+        self.db
+            .run(move |c| {
+                let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                for no in anime_nos {
+                    tx.execute(
+                        "UPDATE anissia_anime
+                            SET unlisted_at = coalesce(unlisted_at, ?2), refresh_not_before = ?3
+                          WHERE anime_no = ?1",
+                        params![no, at, until],
                     )?;
                 }
                 tx.commit()?;

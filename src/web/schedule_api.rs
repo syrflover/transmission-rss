@@ -27,11 +27,13 @@
 //!
 //! - its rule is archived (a subscription that is no longer followed; the spec
 //!   names the active and the paused ones, so the archived ones are left out);
-//! - Anissia has not listed the anime for [`SNAPSHOT_STALE_AFTER_MS`], which is
-//!   how a finished anime leaves the week (the worker refreshes the snapshot of
-//!   an anime only while Anissia lists it);
 //! - its snapshot puts no airing in the week (before its start, after its end,
-//!   `기타`, or a `신작` that starts in another week).
+//!   `기타`, or a `신작` that starts in another week): an anime with an end
+//!   date leaves once the date has passed;
+//! - the worker's daily refresh found that Anissia no longer lists the anime
+//!   (`unlisted_at`, see [`crate::store::anissia`]): an anime without an end
+//!   date leaves this way. While Anissia cannot be reached that is not found
+//!   out, so the card stays.
 //!
 //! The card's `episode` is the season's episode that airs in the slot
 //! ([`crate::schedule::slot::episode_on`]); it is `null` when that cannot be
@@ -65,7 +67,6 @@ use crate::{
         calendar::{date_text, day_of, week_start, weekday},
         slot::{episode_on, slot_in_week, Slot},
         state::{self, Facts, SubtitleState, VideoState},
-        SNAPSHOT_STALE_AFTER_MS,
     },
     seasons::combine::air_times,
     store::{
@@ -258,7 +259,13 @@ pub async fn week_at(state: &AppState, now: Millis) -> Result<WeekView, ApiError
         .iter()
         .filter_map(|r| r.subscription.as_ref().map(|s| s.anissia_anime_no))
         .collect();
-    let animes = state.anissia.store.animes(nos).await.map_err(internal)?;
+    let animes = state
+        .anissia
+        .store
+        .animes(nos.clone())
+        .await
+        .map_err(internal)?;
+    let unlisted = state.anissia.store.unlisted(nos).await.map_err(internal)?;
 
     let (mut coming, mut title_waiting) = (0, 0);
     let mut airings = Vec::new();
@@ -274,7 +281,7 @@ pub async fn week_at(state: &AppState, now: Millis) -> Result<WeekView, ApiError
             }
         }
         let Some(anime) = anime else { continue };
-        if now - anime.fetched_at > SNAPSHOT_STALE_AFTER_MS {
+        if unlisted.contains(&anime.anime_no) {
             continue;
         }
         if let Some(slot) = slot_in_week(anime, start) {

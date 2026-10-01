@@ -32,6 +32,8 @@ pub struct FakeState {
     pub retry_after: Option<u64>,
     /// The next this many requests answer `500`.
     pub failing: u32,
+    /// Requests for these paths (`/anime/schedule/5`) always answer `500`.
+    pub failing_paths: std::collections::HashSet<String>,
     /// Answers carry this many bytes of padding (an unknown field).
     pub padding: usize,
     /// Whether padded answers leave out `Content-Length` (sent in chunks).
@@ -113,7 +115,11 @@ impl Fake {
 /// The answer to one request, with the knobs applied.
 fn answer(fake: &Fake, path: String, data: Option<Value>) -> Response {
     let mut state = fake.state.lock().unwrap();
+    let fails = state.failing_paths.contains(&path);
     state.requests.push((Instant::now(), path));
+    if fails {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "{}").into_response();
+    }
     if state.rate_limited > 0 {
         state.rate_limited -= 1;
         let mut response = (StatusCode::TOO_MANY_REQUESTS, "{}").into_response();
