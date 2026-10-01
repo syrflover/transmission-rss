@@ -9,7 +9,12 @@
 //! 1. checks the rule the way `다시 받기` of a past item does
 //!    ([`receive_once::adoption_plan`]): the rule exists, is active, belongs to
 //!    the channel and picks the title. A refusal ends the command and writes
-//!    **nothing** to history: a search leaves only the items that were received;
+//!    **nothing** to history: a search leaves only the items that were received.
+//!    An item history says Transmission took is refused as held, unless it has
+//!    gone from the work ([`departed`]): its torrent is no longer in
+//!    Transmission and the work folder holds no video of its episode. The
+//!    screen offers exactly those again (`past_search::world::departed`), and
+//!    such an item is received once more, keeping its `received` result;
 //! 2. records the item in history as a past item (`no_match`, as an item the
 //!    channel's feed showed and no rule received), so the receive below is the
 //!    one `다시 받기` makes;
@@ -34,18 +39,21 @@
 //! The step that reads the revisions' records is the one place that knows how
 //! [`revisions`] keeps them ([`decide_revision`]).
 
-use std::path::Path;
+use std::{collections::HashSet, path::Path};
 
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
+use transmission_rpc::types::TorrentGetField;
 
 use super::receive_once::{self, failed, held, Finished, NotRetryable, Retry, Settle};
 use crate::{
+    past_search::{release::Episode, world},
     store::{
         channels::{Channel, Rule},
         commands::{Command, CommandState, Outcome},
         history::{HistoryItem, HistoryResult, Millis, Observation},
         revisions::{HistoryWrite, NewRevision, RevisionState, RowWrite},
+        status::TorrentListing,
     },
     worker::{
         plan::rule_destination,
@@ -131,7 +139,28 @@ pub async fn run(
     let probe = existing
         .clone()
         .unwrap_or_else(|| past_item(&payload, channel.as_ref().map_or("", |c| c.id.as_str()), 0));
-    match receive_once::adoption_plan(&probe, channel.as_ref(), rule.as_ref()) {
+    let gone = match (&existing, &rule) {
+        (Some(item), Some(rule)) if item.result.is_settled() => {
+            match ctx.settings.collection().await.map_err(store)? {
+                Some(collect) => {
+                    let (save_path, offset) = rule_destination(Path::new(&collect.folder), rule);
+                    departed(ctx, item, &save_path, offset as i64).await?
+                }
+                None => false,
+            }
+        }
+        _ => false,
+    };
+    // A departed item is checked as one nothing has received.
+    let unsettled = HistoryItem {
+        result: if gone {
+            HistoryResult::NoMatch
+        } else {
+            probe.result
+        },
+        ..probe.clone()
+    };
+    match receive_once::adoption_plan(&unsettled, channel.as_ref(), rule.as_ref()) {
         Ok(_) => {}
         Err(NotRetryable::Held) => {
             return ended(ctx, command, held(probe.result, None), cancel).await
@@ -154,10 +183,12 @@ pub async fn run(
     };
 
     let mut replacing = None;
-    if matches!(
-        item.result,
-        HistoryResult::NoMatch | HistoryResult::Excluded | HistoryResult::AddFailed
-    ) {
+    if !gone
+        && matches!(
+            item.result,
+            HistoryResult::NoMatch | HistoryResult::Excluded | HistoryResult::AddFailed
+        )
+    {
         match decide_revision(ctx, &item, &rule, &save_path, episode, &now).await? {
             Revision::Normal => {}
             Revision::Replace(decided) => replacing = Some(decided),
@@ -193,8 +224,65 @@ pub async fn run(
         )
     });
     let finished =
-        receive_once::execute_with(ctx, &delegated, &now, Settle::Keep, replacing).await?;
+        receive_once::execute_with(ctx, &delegated, &now, Settle::Keep, replacing, gone).await?;
     receive_once::finish(ctx, &delegated, finished, cancel).await
+}
+
+/// Whether `item`, which history says Transmission took, has gone from the
+/// work: [`world::departed`] with Transmission's torrents and the folder as
+/// they are now.
+///
+/// What cannot be found out leaves the item held, as it is for the screen: an
+/// item without a torrent hash, or a folder that cannot be read. A Transmission
+/// that cannot be asked leaves the command to the next look, as the add would
+/// fail all the same.
+async fn departed(
+    ctx: &CycleContext,
+    item: &HistoryItem,
+    save_path: &Path,
+    offset: i64,
+) -> Result<bool, Retry> {
+    if item.torrent_hash.is_none() {
+        return Ok(false);
+    }
+    let mut transmission = ctx.transmission();
+    let listed = transmission
+        .torrent_get(Some(vec![TorrentGetField::HashString]), None)
+        .await
+        .map_err(|err| {
+            Retry::Store(format!(
+                "cannot list the torrents in Transmission: {}",
+                ctx.redactor.apply(&err.to_string())
+            ))
+        })?;
+    // The list is of now: every item that has a result is older than it.
+    let listing = TorrentListing {
+        taken_at: Millis::MAX,
+        hashes: listed
+            .arguments
+            .torrents
+            .into_iter()
+            .filter_map(|torrent| torrent.hash_string)
+            .map(|hash| hash.to_ascii_lowercase())
+            .collect(),
+    };
+    let folder = save_path.to_owned();
+    let files = tokio::task::spawn_blocking(move || world::read_folder(&folder))
+        .await
+        .map_err(|err| Retry::Store(err.to_string()))?;
+    let files = match files {
+        Ok(files) => files,
+        Err(err) => {
+            eprintln!(
+                "Cannot read the folder {} to tell whether item {} is gone: {err}",
+                save_path.display(),
+                item.id
+            );
+            return Ok(false);
+        }
+    };
+    let in_folder: HashSet<Episode> = files.into_iter().map(|(episode, _)| episode).collect();
+    Ok(world::departed(item, offset, &in_folder, Some(&listing)))
 }
 
 /// A command that ends before anything is added ([`receive_once::end_early`]):

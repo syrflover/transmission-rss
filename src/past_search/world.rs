@@ -1,6 +1,13 @@
 //! What the work has, for a search's preview ([`super::judge::World`]): the
 //! videos in the rule's work folder, and what history says the rule's torrents
-//! got into Transmission.
+//! got into Transmission and the worker's last list of Transmission's torrents
+//! says are still there.
+//!
+//! History only says a torrent was added. An episode whose video was deleted
+//! and whose torrent was removed from Transmission is not the work's any more,
+//! so the history of such an item ([`departed`]) neither makes its episode
+//! present nor blocks its result from being chosen. The worker decides the same
+//! way when it receives the result (`receive_past`), from Transmission itself.
 //!
 //! The folder is read one level deep, by the names `trname` gave the videos
 //! (`Show S02E05.mkv`; `.part` while a download is in progress). Its files are
@@ -14,12 +21,12 @@ use std::{
 };
 
 use super::{
-    judge::{Known, Present, World},
+    judge::{folder_episode, Known, Present, World},
     release::{read, Episode, Kind},
 };
 use crate::{
     revision::season_episode,
-    store::history::{HistoryItem, HistoryResult},
+    store::{history::HistoryItem, status::TorrentListing},
 };
 
 /// The most files of one folder that are looked at.
@@ -72,12 +79,50 @@ fn releases(titles: &[String]) -> Vec<Known> {
         .collect()
 }
 
+/// Whether the torrent history says Transmission took for `item` is no longer
+/// in Transmission, as `listing` lists it.
+///
+/// Only a list taken after the item got its result can say so (a torrent added
+/// later is not on an older list), and only for an item whose torrent hash is
+/// known. Without either, the torrent is taken to be there.
+pub fn torrent_gone(item: &HistoryItem, listing: Option<&TorrentListing>) -> bool {
+    let (Some(listing), Some(hash)) = (listing, item.torrent_hash.as_deref()) else {
+        return false;
+    };
+    item.result_at < listing.taken_at && !listing.holds(hash)
+}
+
+/// Whether a result history says Transmission took is gone from the work: its
+/// torrent is no longer in Transmission ([`torrent_gone`]) and, for an
+/// episode, the work folder holds no video (or download in progress) of it.
+/// Such a result is received again when it is chosen; the one whose video is
+/// still in the folder is not, as the folder has the episode.
+///
+/// `folder` is the folder episodes the work folder holds ([`read_folder`]) and
+/// `offset` the rule's episode conversion.
+pub fn departed(
+    item: &HistoryItem,
+    offset: i64,
+    folder: &HashSet<Episode>,
+    listing: Option<&TorrentListing>,
+) -> bool {
+    if !item.result.is_settled() || !torrent_gone(item, listing) {
+        return false;
+    }
+    match read(&item.title).kind {
+        Kind::Episode { episode, .. } => !folder.contains(&folder_episode(episode, offset)),
+        Kind::Batch { .. } | Kind::Unnumbered => true,
+    }
+}
+
 /// The world of a rule whose episode conversion is `offset`.
 ///
 /// - `files`: the folder's videos ([`read_folder`]);
-/// - `settled`: the channel's items that history says Transmission holds
+/// - `settled`: the channel's items that history says Transmission took
 ///   (`received`, `duplicate`); the ones `rule_id` picked also tell which
 ///   release the folder's episode came from;
+/// - `listing`: the torrents Transmission held when the worker last looked,
+///   which tells the items of `settled` that were removed since ([`departed`]);
 /// - `titles`: the titles history holds for the channel; only those that name a
 ///   CRC32 are kept.
 pub fn build(
@@ -86,6 +131,7 @@ pub fn build(
     files: Vec<(Episode, PathBuf)>,
     rule_id: &str,
     settled: &[HistoryItem],
+    listing: Option<&TorrentListing>,
     titles: &[String],
 ) -> World {
     let mut world = World {
@@ -93,34 +139,37 @@ pub fn build(
         season,
         ..World::default()
     };
+    let in_folder: HashSet<Episode> = files.iter().map(|(episode, _)| *episode).collect();
     for (episode, path) in files {
         let present: &mut Present = world.present.entry(episode).or_default();
         // Two videos of one episode: the first by name is the one looked at.
         present.file.get_or_insert(path);
     }
     let mut held = HashSet::new();
-    let mut records: BTreeMap<Episode, Vec<Known>> = BTreeMap::new();
+    let mut records: BTreeMap<Episode, (Vec<Known>, bool)> = BTreeMap::new();
     for item in settled {
-        if !matches!(
-            item.result,
-            HistoryResult::Received | HistoryResult::Duplicate
-        ) {
+        if !item.result.is_settled() {
             continue;
         }
-        held.insert(item.identity_key.clone());
+        if !departed(item, offset, &in_folder, listing) {
+            held.insert(item.identity_key.clone());
+        }
         if item.rule_id.as_deref() != Some(rule_id) {
             continue;
         }
         if let Kind::Episode { episode, .. } = read(&item.title).kind {
-            let folder = super::judge::folder_episode(episode, offset);
-            records
-                .entry(folder)
-                .or_default()
-                .push(Known::of(&item.title));
+            let folder = folder_episode(episode, offset);
+            let (known, there) = records.entry(folder).or_default();
+            // The release stays known for a video that is still in the folder
+            // after its torrent was removed.
+            known.push(Known::of(&item.title));
+            *there |= !torrent_gone(item, listing);
         }
     }
-    for (folder, known) in records {
-        world.present.entry(folder).or_default().records = known;
+    for (folder, (known, in_transmission)) in records {
+        let present = world.present.entry(folder).or_default();
+        present.records = known;
+        present.in_transmission = in_transmission;
     }
     world.held = held;
     world.releases = releases(titles);
@@ -132,6 +181,7 @@ mod tests {
     use std::fs;
 
     use super::*;
+    use crate::store::history::HistoryResult;
 
     fn item(key: &str, title: &str, rule: Option<&str>, result: HistoryResult) -> HistoryItem {
         HistoryItem {
@@ -206,7 +256,7 @@ mod tests {
                 HistoryResult::AddFailed,
             ),
         ];
-        let world = build(-12, Some(2), vec![], "r", &settled, &[]);
+        let world = build(-12, Some(2), vec![], "r", &settled, None, &[]);
         assert_eq!(world.held.len(), 2);
         assert!(world.held.contains("k1") && world.held.contains("k2"));
         let present = &world.present[&Episode::whole(2)];
@@ -227,9 +277,141 @@ mod tests {
         ]
         .map(str::to_owned)
         .to_vec();
-        let world = build(0, None, vec![], "r", &[], &titles);
+        let world = build(0, None, vec![], "r", &[], None, &titles);
         let versions: Vec<(u32, Option<u32>)> =
             world.releases.iter().map(|k| (k.version, k.crc)).collect();
         assert_eq!(versions, vec![(1, Some(0xAAAA0005)), (2, Some(0xBBBB0005))]);
+    }
+
+    // --- an item whose torrent and video are both gone ----------------------------------
+
+    const KEY: &str = "guid:ep5";
+    const TITLE: &str = "[SubsPlease] Show - 05 (1080p) [AAAA0005].mkv";
+    const HASH: &str = "aaaa000000000000000000000000000000000005";
+
+    /// Episode 5 of the rule `r`, received at 100 with its torrent hash known.
+    fn received_five() -> HistoryItem {
+        let mut received = item(KEY, TITLE, Some("r"), HistoryResult::Received);
+        received.result_at = 100;
+        received.torrent_hash = Some(HASH.into());
+        received
+    }
+
+    /// What Transmission held when the worker looked at 200.
+    fn listing(hashes: &[&str]) -> TorrentListing {
+        TorrentListing {
+            taken_at: 200,
+            hashes: hashes.iter().map(|h| h.to_string()).collect(),
+        }
+    }
+
+    fn five() -> Vec<(Episode, PathBuf)> {
+        vec![(Episode::whole(5), PathBuf::from("Show S01E05.mkv"))]
+    }
+
+    fn judged_five(world: &World) -> crate::past_search::judge::Item {
+        use crate::past_search::judge::{judge, Range, Result as Judged};
+        let results = vec![Judged {
+            key: KEY.into(),
+            title: TITLE.into(),
+            shown: TITLE.into(),
+        }];
+        let preview = judge(
+            &results,
+            Range { from: 1, to: 12 },
+            world,
+            &|_: &str| true,
+            &mut |_: &Path| panic!("no video was to be read"),
+        );
+        preview.items.into_iter().next().unwrap()
+    }
+
+    #[test]
+    fn an_episode_whose_video_and_torrent_are_gone_is_missing_and_can_be_chosen() {
+        use crate::past_search::judge::State;
+        let settled = [received_five()];
+        // The video was deleted and the torrent removed: Transmission's list,
+        // taken after the item was received, does not have it.
+        let world = build(0, None, vec![], "r", &settled, Some(&listing(&["x"])), &[]);
+        let five = judged_five(&world);
+        assert_eq!(
+            (five.state, five.selected, five.selectable),
+            (State::Missing, true, true)
+        );
+        assert!(world.held.is_empty());
+        assert!(!world.has_release(5));
+    }
+
+    #[test]
+    fn an_episode_whose_video_is_in_the_folder_is_had_whatever_became_of_its_torrent() {
+        use crate::past_search::judge::State;
+        let settled = [received_five()];
+        let world = build(0, None, five(), "r", &settled, Some(&listing(&["x"])), &[]);
+        let five = judged_five(&world);
+        assert_eq!(
+            (five.state, five.selected, five.selectable),
+            (State::Have, false, false)
+        );
+        assert!(world.held.contains(KEY));
+        // The video's release stays known after its torrent was removed.
+        assert_eq!(world.present[&Episode::whole(5)].records.len(), 1);
+    }
+
+    #[test]
+    fn a_torrent_still_in_transmission_keeps_its_episode_before_the_video_is_placed() {
+        use crate::past_search::judge::State;
+        let settled = [received_five()];
+        let world = build(0, None, vec![], "r", &settled, Some(&listing(&[HASH])), &[]);
+        let five = judged_five(&world);
+        assert_eq!(
+            (five.state, five.selected, five.selectable),
+            (State::Have, false, false)
+        );
+        assert!(world.has_release(5));
+    }
+
+    #[test]
+    fn what_the_list_cannot_say_leaves_the_torrent_there() {
+        // No list yet, an item received after the list was taken, and an item
+        // whose hash history does not know.
+        let mut after = received_five();
+        after.result_at = 300;
+        let mut unhashed = received_five();
+        unhashed.torrent_hash = None;
+        for (settled, list) in [
+            (received_five(), None),
+            (after, Some(listing(&["x"]))),
+            (unhashed, Some(listing(&["x"]))),
+        ] {
+            let world = build(0, None, vec![], "r", &[settled], list.as_ref(), &[]);
+            assert!(world.held.contains(KEY));
+            assert!(world.has_release(5));
+        }
+    }
+
+    #[test]
+    fn a_hash_is_found_whatever_its_case() {
+        let mut upper = received_five();
+        upper.torrent_hash = Some(HASH.to_ascii_uppercase());
+        assert!(!torrent_gone(&upper, Some(&listing(&[HASH]))));
+    }
+
+    #[test]
+    fn a_batch_whose_torrent_is_gone_can_be_chosen_again() {
+        let mut batch = item(
+            "guid:batch",
+            "[SubsPlease] Show (01-12) (1080p) [Batch]",
+            None,
+            HistoryResult::Received,
+        );
+        batch.result_at = 100;
+        batch.torrent_hash = Some("bbbb".into());
+        assert!(departed(&batch, 0, &HashSet::new(), Some(&listing(&["x"]))));
+        assert!(!departed(
+            &batch,
+            0,
+            &HashSet::new(),
+            Some(&listing(&["bbbb"]))
+        ));
     }
 }

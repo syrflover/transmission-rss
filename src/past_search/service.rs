@@ -31,6 +31,7 @@ use crate::{
         channels::{Channel, Rule},
         history::HistoryItem,
         search_pace::SearchPace,
+        status::TorrentListing,
     },
     transmission::Redactor,
     worker::{feed::FeedItem, plan::picks},
@@ -54,6 +55,9 @@ pub struct Spec {
     /// The channel's items history says Transmission holds. Dropped once the
     /// search has built its picture of the work.
     pub settled: Vec<HistoryItem>,
+    /// The torrents Transmission held when the worker last looked, if it has;
+    /// they tell which of `settled` were removed since.
+    pub listing: Option<TorrentListing>,
     /// The titles history holds for the channel. Dropped like `settled`.
     pub titles: Vec<String>,
     /// Whether the channel's history is longer than what `settled` and
@@ -83,6 +87,10 @@ pub struct Outcome {
 pub struct Stored {
     pub title: String,
     pub link: String,
+    /// Whether the preview offered the item for choosing. An item history says
+    /// Transmission took is offered only when it has gone from the work, and
+    /// then it is received again though its result says `received`.
+    pub selectable: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -318,6 +326,7 @@ impl PastSearch {
             offset,
             season,
             settled,
+            listing,
             titles,
             history_cut,
             redactor,
@@ -331,7 +340,13 @@ impl PastSearch {
             tokio::task::spawn_blocking(move || {
                 let files = world::read_folder(&save_path)?;
                 Ok(world::build(
-                    offset, season, files, &rule_id, &settled, &titles,
+                    offset,
+                    season,
+                    files,
+                    &rule_id,
+                    &settled,
+                    listing.as_ref(),
+                    &titles,
                 ))
             })
             .await
@@ -403,6 +418,7 @@ impl PastSearch {
                         Stored {
                             title: item.stored_title.clone(),
                             link: item.stored_link.clone(),
+                            selectable: listed.selectable,
                         },
                     )
                 })
@@ -474,6 +490,7 @@ mod tests {
                 Stored {
                     title: "Show - 01".into(),
                     link: "magnet:?xt=urn:btih:a".into(),
+                    selectable: true,
                 },
             )]),
             rule_id: "r".into(),

@@ -6,6 +6,8 @@
 //! - per channel, whether the feed could be read ([`ChannelRead`]);
 //! - Transmission's downloading and seeding torrent counts ([`TransmissionCounts`])
 //!   and the hashes of the torrents that were downloading;
+//! - the hashes of every torrent it held ([`TorrentListing`]), which the past
+//!   episode search needs to tell a removed torrent from one that is still there;
 //! - the worker's cycle interval, which the web cannot read from its own
 //!   environment, so it can tell when the next check is due.
 //!
@@ -64,6 +66,22 @@ pub struct TransmissionCounts {
     pub downloading: u32,
     pub seeding: u32,
     pub taken_at: Millis,
+}
+
+/// Every torrent Transmission held when the worker last looked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TorrentListing {
+    /// When the worker took the list; a torrent added after it is not in it.
+    pub taken_at: Millis,
+    /// The torrents' hashes, lowercase.
+    pub hashes: HashSet<String>,
+}
+
+impl TorrentListing {
+    /// Whether the torrent `hash` was in Transmission when the list was taken.
+    pub fn holds(&self, hash: &str) -> bool {
+        self.hashes.contains(&hash.to_ascii_lowercase())
+    }
 }
 
 /// Async access to the worker's snapshots. Cheap to clone.
@@ -125,6 +143,53 @@ impl StatusStore {
                 drop(insert);
                 tx.commit()?;
                 Ok::<_, StatusError>(())
+            })
+            .await
+    }
+
+    /// Replaces the list of every torrent in Transmission, taken at `at`.
+    pub async fn record_listing(&self, at: Millis, hashes: Vec<String>) -> Result<(), StatusError> {
+        self.db
+            .run(move |c| {
+                let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                tx.execute(
+                    "INSERT INTO transmission_listing (id, taken_at) VALUES (1, ?1)
+                     ON CONFLICT (id) DO UPDATE SET taken_at = excluded.taken_at",
+                    [at],
+                )?;
+                tx.execute("DELETE FROM transmission_torrents", [])?;
+                let mut insert =
+                    tx.prepare("INSERT OR IGNORE INTO transmission_torrents (hash) VALUES (?1)")?;
+                for hash in hashes.iter().filter(|h| !h.is_empty()) {
+                    insert.execute([hash.to_ascii_lowercase()])?;
+                }
+                drop(insert);
+                tx.commit()?;
+                Ok::<_, StatusError>(())
+            })
+            .await
+    }
+
+    /// The list of every torrent in Transmission the worker last wrote, or
+    /// `None` while it has written none.
+    pub async fn torrent_listing(&self) -> Result<Option<TorrentListing>, StatusError> {
+        self.db
+            .run(|c| {
+                let Some(taken_at) = c
+                    .query_row(
+                        "SELECT taken_at FROM transmission_listing WHERE id = 1",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .optional()?
+                else {
+                    return Ok::<_, StatusError>(None);
+                };
+                let mut stmt = c.prepare("SELECT hash FROM transmission_torrents")?;
+                let hashes = stmt
+                    .query_map([], |r| r.get(0))?
+                    .collect::<rusqlite::Result<HashSet<String>>>()?;
+                Ok(Some(TorrentListing { taken_at, hashes }))
             })
             .await
     }
