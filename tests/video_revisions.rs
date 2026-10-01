@@ -2778,3 +2778,83 @@ async fn a_replacement_ended_with_no_video_left_is_a_failure_until_the_name_hold
     assert_eq!(s.state_of(&v2()).await.code(), "abandoned");
     assert_eq!(read(&s.file(EPISODE_NAME)), b"put back by hand");
 }
+
+// --- A rule folder that is away decides nothing -------------------------------------
+
+impl Setup {
+    /// Takes the season folder away (a mount that is not there) and returns
+    /// where it went.
+    fn folder_away(&self) -> PathBuf {
+        let elsewhere = self.season.with_file_name("Season 01 away");
+        std::fs::rename(&self.season, &elsewhere).unwrap();
+        elsewhere
+    }
+
+    fn folder_back(&self, elsewhere: &Path) {
+        std::fs::rename(elsewhere, &self.season).unwrap();
+    }
+}
+
+/// `14v2`'s torrent completes while the rule's folder is away: the new video
+/// is not "gone", the replacement waits, and goes on once the folder is back.
+#[tokio::test]
+async fn a_revision_completing_while_its_folder_is_away_waits_for_it() {
+    let s = Setup::new().await;
+    s.received_v1().await;
+    s.feed(&[(NEW_HASH, &v2()), (OLD_HASH, &v1())]);
+    s.h.tr.content_on_add(NEW_HASH, NEW_BYTES);
+    s.cycle().await;
+    s.complete(NEW_HASH);
+    let elsewhere = s.folder_away();
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Receiving);
+
+    s.folder_back(&elsewhere);
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Done);
+    assert_eq!(s.names(), vec![EPISODE_NAME]);
+    assert_eq!(read(&s.file(EPISODE_NAME)), NEW_BYTES);
+}
+
+/// `14v2` waits, removing, for `14`'s file to go after its torrent was
+/// removed, when the folder is away: that is not the old video gone, and
+/// the replacement keeps waiting instead of going on to a rename that would
+/// find `14` back under the name.
+#[tokio::test]
+async fn a_removal_waiting_while_its_folder_is_away_keeps_waiting() {
+    let s = Setup::new().await;
+    s.removal_waits().await;
+    let elsewhere = s.folder_away();
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Removing);
+
+    s.folder_back(&elsewhere);
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Removing);
+    std::fs::remove_file(s.file(EPISODE_NAME)).unwrap();
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Done);
+    assert_eq!(read(&s.file(EPISODE_NAME)), NEW_BYTES);
+}
+
+/// A failure that keeps both files is not "resolved" by its folder being
+/// away: it stays a failure.
+#[tokio::test]
+async fn a_failure_whose_folder_is_away_stays_a_failure() {
+    let s = Setup::new().await;
+    s.received_v1().await;
+    s.feed(&[(NEW_HASH, &v2()), (OLD_HASH, &v1())]);
+    s.h.tr.content_on_add(NEW_HASH, b"not what the name says");
+    s.cycle().await;
+    s.complete(NEW_HASH);
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Failed);
+
+    let elsewhere = s.folder_away();
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Failed);
+    s.folder_back(&elsewhere);
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Failed);
+    assert_eq!(s.failures().await.len(), 1);
+}

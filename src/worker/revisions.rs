@@ -804,6 +804,9 @@ async fn received(ctx: &CycleContext, row: &Revision) -> Next {
     if file.length <= 0 {
         return failed(EMPTY, Some(file.name.clone()));
     }
+    if let Err(why) = folder_there(row) {
+        return Next::Later(why);
+    }
     let path = Path::new(&row.folder).join(&file.name);
     // The identity of the file read: the old video is removed only while the
     // received name still holds that file.
@@ -843,6 +846,9 @@ async fn recover(ctx: &CycleContext, row: &Revision) -> Next {
         Ok(_) => {}
         Err(err) => return Next::Later(err.to_string()),
     }
+    if let Err(why) = folder_there(row) {
+        return Next::Later(why);
+    }
     let old = Path::new(&row.folder).join(&row.episode_name);
     if matches!(exists(&old), Ok(false)) {
         let rows = match ctx
@@ -870,16 +876,23 @@ async fn recover(ctx: &CycleContext, row: &Revision) -> Next {
     }
 }
 
-/// Whether the row's new video is gone: its received name is not in the
-/// folder. A folder that is not there is a mount that is away, not a video
-/// that was deleted: that is an error, and the look is tried again later.
-fn new_video_gone(row: &Revision) -> Result<bool, String> {
+/// The rule's folder of `row` is there. One that is not is a mount that is
+/// away, not videos that were deleted: a file missing from it tells nothing,
+/// and the look is tried again later (`Err` says why).
+fn folder_there(row: &Revision) -> Result<(), String> {
     let folder = Path::new(&row.folder);
     match std::fs::metadata(folder) {
-        Ok(meta) if meta.is_dir() => {}
-        Ok(_) => return Err(format!("{} is not a folder", folder.display())),
-        Err(err) => return Err(format!("cannot look at {}: {err}", folder.display())),
+        Ok(meta) if meta.is_dir() => Ok(()),
+        Ok(_) => Err(format!("{} is not a folder", folder.display())),
+        Err(err) => Err(format!("cannot look at {}: {err}", folder.display())),
     }
+}
+
+/// Whether the row's new video is gone: its received name is not in the
+/// folder. `Err` when the folder is away ([`folder_there`]).
+fn new_video_gone(row: &Revision) -> Result<bool, String> {
+    folder_there(row)?;
+    let folder = Path::new(&row.folder);
     let Some(name) = &row.received_name else {
         return Ok(true);
     };
@@ -1014,6 +1027,10 @@ async fn remove_old(ctx: &CycleContext, row: &mut Revision, at: Millis, listing:
             Ok(Claim::Overtaken) => return Next::Step(Step::Overtaken),
             Err(err) => return Next::Later(err.to_string()),
         }
+    }
+    // A folder that is away tells nothing about the old video either.
+    if let Err(why) = folder_there(row) {
+        return folder_away(ctx, row, why).await;
     }
     let old = Path::new(&row.folder).join(&row.episode_name);
     let present = match exists(&old) {
@@ -1457,8 +1474,12 @@ fn video_back(row: &Revision) -> Next {
     }
 }
 
-/// A failure the person resolved: one of the two files is gone.
+/// A failure the person resolved: one of the two files is gone (from a
+/// folder that is there).
 fn cleared(row: &Revision) -> Next {
+    if folder_there(row).is_err() {
+        return Next::Wait;
+    }
     let folder = Path::new(&row.folder);
     let old_gone = matches!(exists(&folder.join(&row.episode_name)), Ok(false));
     let new_gone = row
