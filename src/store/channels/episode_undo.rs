@@ -327,17 +327,28 @@ fn finish_file(
         params![command_id, item_id, state.code(), kept],
     )?;
     if kept.is_none() {
+        // The rows of the file's own episode: its item's, or written before
+        // the undo began, under the automatic value. A cycle since names
+        // under the restored value, and its rows at the old name are of
+        // another episode that has that name now.
+        let began: Millis = tx.query_row(
+            "SELECT started_at FROM episode_undos WHERE command_id = ?1",
+            params![command_id],
+            |row| row.get(0),
+        )?;
         let states = under_way();
-        let marks = (5..5 + states.len())
+        let marks = (7..7 + states.len())
             .map(|n| format!("?{n}"))
             .collect::<Vec<_>>()
             .join(", ");
-        let mut args: Vec<&dyn rusqlite::ToSql> = vec![&folder, &from_name, &to_name, &at];
+        let mut args: Vec<&dyn rusqlite::ToSql> =
+            vec![&folder, &from_name, &to_name, &at, &item_id, &began];
         args.extend(states.iter().map(|s| s as &dyn rusqlite::ToSql));
         tx.execute(
             &format!(
                 "UPDATE video_revisions SET episode_name = ?3, updated_at = ?4
-                  WHERE folder = ?1 AND episode_name = ?2 AND state NOT IN ({marks})"
+                  WHERE folder = ?1 AND episode_name = ?2 AND state NOT IN ({marks})
+                    AND (item_id = ?5 OR old_item_id = ?5 OR created_at <= ?6)"
             ),
             args.as_slice(),
         )?;
@@ -555,7 +566,8 @@ impl ChannelStore {
 
     /// Records how the rename of the video of `item_id` in the undo ended:
     /// renamed (`kept` is `None`), and then the video revision rows of its old
-    /// name that ended take the new one in the same transaction; or left as it is, with
+    /// name that ended take the new one in the same transaction, those of its
+    /// item or written before the undo began; or left as it is, with
     /// the reason. A file that is not `pending` any more is left as recorded.
     pub async fn finish_undo_file(
         &self,

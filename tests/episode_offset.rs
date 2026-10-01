@@ -1897,3 +1897,48 @@ async fn a_gone_torrent_of_a_title_without_an_extension_and_two_videos_is_kept_w
     let reason = view["episode_undo"]["files"][1]["reason"].as_str().unwrap();
     assert!(reason.contains("확장자만 다른 영상이 여러 개"), "{reason}");
 }
+
+// --- rows and files that are another's ------------------------------------------
+
+/// A file that waited moves only the revision rows of its old name that are
+/// its own or older than the undo: a row a cycle wrote since, under the
+/// restored value, for another episode of that name stays.
+#[tokio::test]
+async fn a_waiting_file_moves_only_the_revision_rows_that_were_its_own() {
+    use transmission_rss::store::revisions::RevisionStore;
+    let (s, rule) = Scene::third_season_received().await;
+    // A row of `S03E02` older than the undo (of another item: its own rows
+    // move whoever wrote them).
+    let older = s
+        .revision_row(&rule, "Other - 01", "Show S03E02.mkv", false)
+        .await;
+    s.h.tr.unfinish(&hash(50));
+    let command = s.undo(&rule, "undo-0401-a", -48).await;
+    assert_eq!(command["outcome"]["result"], "paused", "{command}");
+
+    // While `S03E02` waits, a cycle writes a row of that name for another
+    // episode.
+    s.h.advance(1_000);
+    let since = s
+        .revision_row(&rule, "Show - 49", "Show S03E02.mkv", false)
+        .await;
+    s.h.tr.finish(&hash(50));
+    let command = s.undo(&rule, "undo-0401-b", -48).await;
+    assert_eq!(command["outcome"]["result"], "undone", "{command}");
+
+    let rows = |name: &str| {
+        let revisions = RevisionStore::new(s.h.db.clone());
+        let (folder, name) = (s.season3().to_str().unwrap().to_owned(), name.to_owned());
+        async move {
+            revisions
+                .of_episode(folder, name)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|r| r.id)
+                .collect::<Vec<_>>()
+        }
+    };
+    assert_eq!(rows("Show S03E26.mkv").await, [older]);
+    assert_eq!(rows("Show S03E02.mkv").await, [since]);
+}
