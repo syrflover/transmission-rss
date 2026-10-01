@@ -100,6 +100,7 @@ use super::{commands::receive_once::derived_name, cycle::MAX_REASON_CHARS, Cycle
 use crate::{
     revision::{crc_text, file_crc32_identified, FileIdentity, Release},
     store::{
+        channels::RuleState,
         history::{HistoryItem, HistoryResult, Millis},
         revisions::{
             Claim, OldVideo, Replacement, Revision, RevisionState, RowWrite, Step, FOLDER_AWAY,
@@ -964,10 +965,21 @@ async fn recover(ctx: &CycleContext, row: &Revision) -> Next {
 /// folder is not waited for any more: a failure, or a replacement that
 /// ended with no video, is no failure any more, and a replacement under way
 /// (which still holds its torrent) says so ([`Step::FolderGone`]) until the
-/// folder is back. Nothing is removed. `Some` is what to do instead of the
-/// row's step.
+/// folder is back. Nothing is removed. A folder away while the row's rule is
+/// archived is no run. `Some` is what to do instead of the row's step.
 async fn folder_watch(ctx: &CycleContext, row: &mut Revision, at: Millis) -> Option<Next> {
-    if folder_there(row).is_ok() {
+    // An archived rule's work folder is in the archive folder on purpose
+    // (`rule_archive`), not a mount that went away: no run is kept while the
+    // rule is archived, and the row is looked at as before once it is
+    // restored.
+    let watched = match folder_there(row) {
+        Ok(()) => false,
+        Err(_) => match ctx.channels.get_rule(&row.rule_id).await {
+            Ok(rule) => rule.is_none_or(|rule| rule.state != RuleState::Archived),
+            Err(err) => return Some(Next::Later(err.to_string())),
+        },
+    };
+    if !watched {
         if row.folder_away_since.is_some() {
             if let Err(err) = ctx.revisions.folder_looked_at(row.id, None).await {
                 return Some(Next::Later(err.to_string()));

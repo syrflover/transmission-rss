@@ -19,7 +19,7 @@ use tokio_util::sync::CancellationToken;
 use transmission_rss::{
     revision::FileIdentity,
     store::{
-        channels::{ChannelInput, RuleInput},
+        channels::{ChannelInput, RuleInput, RuleState},
         history::{HistoryItem, HistoryResult, Observation},
         revisions::{Revision, RevisionState, RevisionStore},
         settings::SettingsStore,
@@ -3173,6 +3173,102 @@ async fn an_ended_replacement_whose_folder_is_away_for_a_week_is_cleared() {
     s.cycle().await;
     assert_eq!(s.state_of(&v2()).await.code(), "abandoned");
     assert!(s.failures().await.is_empty());
+}
+
+impl Setup {
+    /// Archives the rule of `14` (`보관`): the rule is off and its work
+    /// folder is in the archive folder. Returns where the folder went.
+    async fn archive(&self) -> PathBuf {
+        let rule_id = self.row_of(&v2()).await.rule_id;
+        self.h
+            .channels
+            .set_rule_state(&rule_id, RuleState::Archived, self.h.now())
+            .await
+            .unwrap();
+        let work = self.season.parent().unwrap();
+        let archive = self.h.dir.path().join("archive");
+        std::fs::create_dir_all(&archive).unwrap();
+        let archived = archive.join("Show");
+        std::fs::rename(work, &archived).unwrap();
+        archived
+    }
+
+    /// Restores the rule archived with [`Setup::archive`] (`복원`).
+    async fn restore(&self, archived: &Path) {
+        std::fs::rename(archived, self.season.parent().unwrap()).unwrap();
+        let rule_id = self.row_of(&v2()).await.rule_id;
+        self.h
+            .channels
+            .set_rule_state(&rule_id, RuleState::Active, self.h.now())
+            .await
+            .unwrap();
+    }
+}
+
+/// The rule of a failure that keeps both files is archived for ten days:
+/// its work folder is in the archive folder on purpose, not a mount that
+/// went away, so the failure is not cleared, and it is there as before once
+/// the rule is restored.
+#[tokio::test]
+async fn a_failure_of_a_rule_archived_for_ten_days_is_there_after_its_restore() {
+    let s = Setup::new().await;
+    s.received_v1().await;
+    s.feed(&[(NEW_HASH, &v2()), (OLD_HASH, &v1())]);
+    s.h.tr.content_on_add(NEW_HASH, b"not what the name says");
+    s.cycle().await;
+    s.complete(NEW_HASH);
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Failed);
+
+    let archived = s.archive().await;
+    s.cycle().await;
+    s.h.advance(10 * DAY);
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Failed);
+
+    s.restore(&archived).await;
+    s.cycle().await;
+    let row = s.row_of(&v2()).await;
+    assert_eq!(row.state, RevisionState::Failed, "{row:?}");
+    assert_eq!(row.folder_away_since, None);
+    assert_eq!(s.failures().await.len(), 1);
+    // The week starts with the first look that finds the folder away after
+    // the restore.
+    let elsewhere = s.folder_away();
+    s.cycle().await;
+    s.h.advance(7 * DAY - 1);
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Failed);
+    s.folder_back(&elsewhere);
+}
+
+/// The rule of a replacement that ended with no video under the episode name
+/// is archived for ten days: the failure and its `다시 받기` are there once
+/// the rule is restored, and `다시 받기` receives it again.
+#[tokio::test]
+async fn an_ended_replacement_of_a_rule_archived_for_ten_days_is_retried_after_its_restore() {
+    let s = Setup::new().await;
+    s.v2_ended_with_no_video().await;
+
+    let archived = s.archive().await;
+    s.cycle().await;
+    s.h.advance(10 * DAY);
+    s.cycle().await;
+
+    s.restore(&archived).await;
+    s.cycle().await;
+    let row = s.row_of(&v2()).await;
+    assert_eq!(row.state.code(), "abandoned", "{row:?}");
+    assert!(row.reason.is_some(), "{row:?}");
+    let failures = s.failures().await;
+    assert_eq!(revision_failure(&failures)["can_retry"], true);
+    s.retry(
+        s.item(&v2()).await.id,
+        "00000000-0000-4000-8000-000000000d08",
+    )
+    .await;
+    assert_eq!(s.commands().await, CommandsOutcome::Ran(1));
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Receiving);
 }
 
 // --- `다시 받기` of a replacement that ended with no video left ---------------------
