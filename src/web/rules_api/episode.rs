@@ -86,15 +86,15 @@ pub(super) async fn analyze(state: &AppState, rules: &[Rule]) -> Episodes {
         let Some(first) = first_release(&titles) else {
             continue;
         };
-        let basis =
-            match gather(&state.library, &state.seasons.store, &collect.folder, rule).await {
-                Ok(Some(basis)) => basis,
-                Ok(None) => continue,
-                Err(err) => {
-                    eprintln!("Episode offset: no suggestion for rule {}: {err}", rule.id);
-                    continue;
-                }
-            };
+        let basis = match gather(&state.library, &state.seasons.store, &collect.folder, rule).await
+        {
+            Ok(Some(basis)) => basis,
+            Ok(None) => continue,
+            Err(err) => {
+                eprintln!("Episode offset: no suggestion for rule {}: {err}", rule.id);
+                continue;
+            }
+        };
         if let Some((value, basis)) = decide(first, &basis).as_suggestion() {
             out.suggestion
                 .insert(rule.id.clone(), EpisodeSuggestion { value, basis });
