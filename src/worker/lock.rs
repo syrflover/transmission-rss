@@ -25,9 +25,22 @@ pub fn lock_path_for(db_path: &Path) -> PathBuf {
 ///
 /// Every `try_acquire` opens its own file description, so two guards on the
 /// same path exclude each other even inside one process.
+///
+/// Dropping the guard unlocks before it closes. Closing alone would not be
+/// enough: the lock belongs to the open file description, and a child process
+/// that another thread is starting holds a copy of every descriptor from its
+/// fork until its `exec` closes them, which would keep the lock taken for that
+/// moment after the guard is gone.
 #[derive(Debug)]
 pub struct CycleLock {
-    _file: File,
+    file: File,
+}
+
+impl Drop for CycleLock {
+    fn drop(&mut self) {
+        // Closing the file releases it anyway once no copy is left.
+        let _ = self.file.unlock();
+    }
 }
 
 impl CycleLock {
@@ -40,7 +53,7 @@ impl CycleLock {
             .open(path)?;
 
         match file.try_lock() {
-            Ok(()) => Ok(Some(CycleLock { _file: file })),
+            Ok(()) => Ok(Some(CycleLock { file })),
             Err(TryLockError::WouldBlock) => Ok(None),
             Err(TryLockError::Error(err)) => Err(err),
         }
@@ -70,6 +83,19 @@ mod tests {
 
         drop(first);
         assert!(CycleLock::try_acquire(&path).unwrap().is_some());
+    }
+
+    #[test]
+    fn a_dropped_guard_is_free_even_while_a_copy_of_its_descriptor_lives_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db.worker.lock");
+
+        let first = CycleLock::try_acquire(&path).unwrap().expect("free lock");
+        // What a child process being started holds until its `exec`.
+        let copy = first.file.try_clone().unwrap();
+        drop(first);
+        assert!(CycleLock::try_acquire(&path).unwrap().is_some());
+        drop(copy);
     }
 
     #[test]
