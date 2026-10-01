@@ -1,6 +1,8 @@
 //! `다시 받기` of a video revision is not offered when the web can tell the
 //! episode's place holds the same or a higher revision already.
 
+use std::path::PathBuf;
+
 use axum::{
     body::Body,
     http::{header, Method, Request, StatusCode},
@@ -20,7 +22,6 @@ use crate::{
     web::{commands_api::now_millis, AppState},
 };
 
-const FOLDER: &str = "/media/Show/Season 01";
 const EPISODE_NAME: &str = "Show S01E14.mkv";
 const STOPPED: &str =
     "새 영상의 토렌트가 Transmission에서 사라져 받기가 끝나지 않았어요. 이전 영상은 그대로 있어요.";
@@ -38,6 +39,10 @@ fn title(episode: u32, version: u32) -> String {
 }
 
 struct World {
+    /// The collect folder is `media` in it.
+    _dir: tempfile::TempDir,
+    /// The rule's folder, `Show/Season 01` under the collect folder.
+    folder: PathBuf,
     state: AppState,
     router: Router,
     channel: Channel,
@@ -51,9 +56,15 @@ impl World {
         let state = AppState::new(Db::open_blocking(":memory:").unwrap());
         let router =
             Router::new().nest("/api", crate::web::api::router().with_state(state.clone()));
+        let dir = tempfile::tempdir().unwrap();
+        let media = dir.path().join("media");
+        let folder = media.join("Show").join("Season 01");
+        std::fs::create_dir_all(&folder).unwrap();
+        // The episode's video is in its place, unless a test takes it away.
+        std::fs::write(folder.join(EPISODE_NAME), b"video").unwrap();
         state
             .settings
-            .put_collection(0, "/media".into(), None)
+            .put_collection(0, media.to_str().unwrap().to_owned(), None)
             .await
             .unwrap();
         let channel = state
@@ -74,12 +85,19 @@ impl World {
             .await
             .unwrap();
         World {
+            _dir: dir,
+            folder,
             state,
             router,
             channel,
             rule,
             next: std::cell::Cell::new(0),
         }
+    }
+
+    /// The video at the episode name is gone.
+    fn remove_video(&self) {
+        std::fs::remove_file(self.folder.join(EPISODE_NAME)).unwrap();
     }
 
     fn fresh(&self) -> (String, String) {
@@ -147,7 +165,7 @@ impl World {
             item_id: item.id,
             old_item_id: None,
             rule_id: self.rule.id.clone(),
-            folder: FOLDER.into(),
+            folder: self.folder.to_str().unwrap().to_owned(),
             episode_name: EPISODE_NAME.into(),
             old_version: Some(1),
             new_version: version,
@@ -449,4 +467,58 @@ async fn a_retry_with_no_evidence_is_accepted_and_the_worker_stays_the_authority
     let item = w.unknown_v2().await;
     let (status, body) = w.retry(&item).await;
     assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+}
+
+// --- the file at the episode name -----------------------------------------
+
+#[tokio::test]
+async fn a_done_revision_without_a_file_at_the_episode_name_leaves_the_button() {
+    let w = World::new().await;
+    let item = w.unknown_v2().await;
+    w.done(3).await;
+    w.remove_video();
+    let row = w.history_row(&item).await;
+    assert!(offered(&row), "{row}");
+    let (status, body) = w.retry(&item).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+}
+
+#[tokio::test]
+async fn a_held_item_without_a_file_at_the_episode_name_leaves_the_button() {
+    let w = World::new().await;
+    let item = w.unknown_v2().await;
+    let hash = w.placed(title(14, 3)).await;
+    w.listing(MINUTE, &[&hash]).await;
+    w.remove_video();
+    let row = w.history_row(&item).await;
+    assert!(offered(&row), "{row}");
+    let (status, body) = w.retry(&item).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+}
+
+#[tokio::test]
+async fn a_folder_that_cannot_be_looked_at_leaves_the_button() {
+    let w = World::new().await;
+    let item = w.unknown_v2().await;
+    w.done(3).await;
+    std::fs::remove_dir_all(&w.folder).unwrap();
+    let row = w.history_row(&item).await;
+    assert!(offered(&row), "{row}");
+    let (status, body) = w.retry(&item).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+}
+
+/// A stopped revision is also refused by the worker's own verdict on the rows
+/// of the episode (`RevisionRetry::Overtaken`), whatever the folder holds, so
+/// the web is no stricter than the worker in keeping it hidden.
+#[tokio::test]
+async fn a_stopped_revision_below_a_done_one_stays_refused_as_the_worker_refuses_it() {
+    let w = World::new().await;
+    let item = w.stopped_v2().await;
+    w.done(3).await;
+    w.remove_video();
+    let row = w.failure().await;
+    assert!(!offered(&row), "{row}");
+    let (status, _) = w.retry(&item).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 }

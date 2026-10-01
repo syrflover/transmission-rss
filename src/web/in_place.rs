@@ -3,14 +3,16 @@
 //! do not offer a button the worker is bound to refuse
 //! ([`NotRetryable::InPlace`](crate::worker::commands::receive_once::NotRetryable::InPlace)).
 //!
-//! The web cannot ask Transmission or read the media folders (deployment trust
-//! boundary), so it tells only from what it has, and only when it is sure: with
+//! The web cannot ask Transmission (deployment trust boundary) and looks at a
+//! media folder only for whether a file is there, so it tells only from what
+//! it has, and only when it is sure: with
 //! any doubt the button stays, and the worker, which stays the authority,
 //! looks at the folder when the command runs and refuses as before. A revision
 //! row waiting for `다시 받기` (its download stopped, its replacement ended
-//! with no video, or `버전 미상`) is held when there is
-//! evidence of one of two kinds, for a revision of the same release (the same
-//! stem) that is the same or higher:
+//! with no video, or `버전 미상`) is held when a file is at its episode name in
+//! its folder (a plain look at the media folder; a missing folder or any read
+//! error is no) and there is evidence of one of two kinds, for a revision of
+//! the same release (the same stem) that is the same or higher:
 //!
 //! - a replacement of the same episode file (the row's folder and episode name)
 //!   that is `done`: its video took the episode name;
@@ -19,11 +21,9 @@
 //!   episode file in that folder, whose torrent is in the worker's last list
 //!   of Transmission's torrents ([`StatusStore::torrent_listing`]). That list
 //!   has to be recent ([`LISTING_FRESH_FOR`]) and taken after the item got its
-//!   result, or it cannot say the torrent is still there. This is the one
-//!   place the web guesses: the item's file is taken to be at the episode
-//!   name because that is where a cycle renames it, which the worker does
-//!   right after the add; a torrent that stays under another name is not told
-//!   apart from one that was renamed.
+//!   result, or it cannot say the torrent is still there. The file at the
+//!   episode name is taken to be the item's because the rule's cycle names it
+//!   so; the web does not tell which torrent holds it.
 //!
 //! [`StatusStore::torrent_listing`]: crate::store::status::StatusStore::torrent_listing
 
@@ -85,6 +85,14 @@ pub struct Evidence<'a> {
     titles: HashMap<String, Vec<(i64, String)>>,
 }
 
+/// Whether a file is at `path`: a read error (a folder that is not there, a
+/// mount that is away) is no.
+async fn has_file(path: &Path) -> bool {
+    tokio::fs::symlink_metadata(path)
+        .await
+        .is_ok_and(|meta| meta.is_file())
+}
+
 fn internal(err: impl std::fmt::Display) -> ApiError {
     ApiError::Internal(err.to_string())
 }
@@ -120,6 +128,11 @@ impl<'a> Evidence<'a> {
         item: &HistoryItem,
         row: &Revision,
     ) -> Result<Option<InPlace>, ApiError> {
+        // Nothing is told of a place with no file at the episode name, or one
+        // that cannot be looked at: the worker may find what the web cannot.
+        if !has_file(&Path::new(&row.folder).join(&row.episode_name)).await {
+            return Ok(None);
+        }
         let release = Release::parse(&item.title);
         let mut best = self.done_replacement(item, row, &release).await?;
         if let Some(placed) = self.placed_item(item, row, &release, best).await? {
