@@ -252,8 +252,9 @@ pub struct Subscription {
     /// Anissia's `animeNo`, confirmed when the rule was subscribed.
     pub anissia_anime_no: i64,
     pub subtitles: SubtitleMode,
-    /// The subtitle creator to follow: set exactly when `subtitles` is
-    /// [`SubtitleMode::Follow`].
+    /// The subtitle creator: set when `subtitles` is [`SubtitleMode::Follow`],
+    /// empty for [`SubtitleMode::Undecided`], and for [`SubtitleMode::None`]
+    /// the creator followed before, if any, so switching back restores it.
     pub creator: Option<String>,
     /// The season the rule's videos belong to; `None` until it is connected.
     pub season_id: Option<String>,

@@ -15,8 +15,9 @@
 -- `rule_subscriptions` is the subscription of a rule: a rule without a row here
 -- is not a subscription. `subtitles` is how the subscription gets subtitles:
 -- `follow` (the creator in `creator` is followed), `undecided` (`제작자 미정`,
--- no creator chosen yet) or `none` (`받지 않음`, video only); `creator` has a
--- value exactly for `follow`. `season_id` is the season the rule's videos belong to; it stays
+-- no creator chosen yet) or `none` (`받지 않음`, video only). `creator` is the
+-- creator followed: always set for `follow`, never for `undecided`, and for
+-- `none` it may keep the creator chosen before so switching back restores it. `season_id` is the season the rule's videos belong to; it stays
 -- NULL until the season is connected. `subscribed_at` (Unix ms) is when the
 -- rule became a subscription: what the feed held and history had recorded
 -- before it is past, and only the user receives that. Deleting the rule deletes
@@ -46,7 +47,8 @@ CREATE TABLE rule_subscriptions (
     creator          TEXT    CHECK (creator IS NULL OR creator <> ''),
     season_id        TEXT    CHECK (season_id IS NULL OR season_id <> ''),
     subscribed_at    INTEGER NOT NULL,
-    CHECK ((subtitles = 'follow') = (creator IS NOT NULL))
+    CHECK (subtitles <> 'follow' OR creator IS NOT NULL),
+    CHECK (subtitles <> 'undecided' OR creator IS NULL)
 ) WITHOUT ROWID;
 
 CREATE INDEX rule_subscriptions_by_anime ON rule_subscriptions (anissia_anime_no);

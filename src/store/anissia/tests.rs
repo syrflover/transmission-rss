@@ -168,7 +168,7 @@ async fn subtitles_are_followed_undecided_or_off_and_only_following_names_a_crea
         (3, SubtitleMode::Follow, None),
         (4, SubtitleMode::Follow, Some(String::new())),
         (5, SubtitleMode::Undecided, Some("에텔레로사".to_owned())),
-        (6, SubtitleMode::None, Some("에텔레로사".to_owned())),
+        (6, SubtitleMode::None, Some(String::new())),
     ] {
         let refused = env
             .channels
@@ -190,19 +190,33 @@ async fn subtitles_are_followed_undecided_or_off_and_only_following_names_a_crea
         2
     );
 
-    // The table refuses the same shapes on its own.
-    let result = env
-        .db
-        .run::<_, AnissiaStoreError, _>(|c| {
-            Ok(c.execute(
-                "INSERT INTO rule_subscriptions (rule_id, anissia_anime_no, subtitles, creator, subscribed_at)
-                 SELECT id, 1, 'none', '제작자', 1 FROM rules LIMIT 1",
-                [],
-            )
-            .map(|_| ())?)
-        })
-        .await;
-    assert!(result.is_err());
+    // The table refuses the same shapes on its own: a snapshot and a plain
+    // rule exist, so only the checks on the row can say no.
+    let plain = env
+        .channels
+        .create_rule(&env.channel, rule("Plain"))
+        .await
+        .unwrap();
+    for (subtitles, creator) in [
+        ("follow", None),
+        ("undecided", Some("제작자")),
+        ("other", None),
+    ] {
+        let id = plain.id.clone();
+        let result = env
+            .db
+            .run::<_, AnissiaStoreError, _>(move |c| {
+                Ok(c.execute(
+                    "INSERT INTO rule_subscriptions
+                         (rule_id, anissia_anime_no, subtitles, creator, subscribed_at)
+                     VALUES (?1, 1, ?2, ?3, 1)",
+                    rusqlite::params![id, subtitles, creator],
+                )
+                .map(|_| ())?)
+            })
+            .await;
+        assert!(result.is_err(), "{subtitles} {creator:?}");
+    }
 }
 
 #[tokio::test]

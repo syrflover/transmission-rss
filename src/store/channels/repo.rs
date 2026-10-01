@@ -333,7 +333,8 @@ pub fn create_rule(conn: &mut Connection, channel_id: &str, input: &RuleInput) -
 pub struct NewSubscription {
     pub anime: anissia::Anime,
     pub subtitles: SubtitleMode,
-    /// The creator to follow: set exactly when `subtitles` is `Follow`.
+    /// The creator: set for `Follow`, empty for `Undecided`, and for `None`
+    /// the creator followed before, if any.
     pub creator: Option<String>,
     pub subscribed_at: Millis,
 }
@@ -354,11 +355,15 @@ pub fn create_subscription_rule(
             .creator
             .as_deref()
             .is_some_and(|c| !c.is_empty()),
-        SubtitleMode::Undecided | SubtitleMode::None => subscription.creator.is_none(),
+        SubtitleMode::Undecided => subscription.creator.is_none(),
+        SubtitleMode::None => subscription
+            .creator
+            .as_deref()
+            .is_none_or(|c| !c.is_empty()),
     };
     if !creator_fits {
         return Err(ChannelError::Invalid(
-            "a creator is set exactly when subtitles follow a creator",
+            "a creator is needed to follow one and not allowed while undecided, and is never blank",
         ));
     }
 
