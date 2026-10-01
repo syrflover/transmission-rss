@@ -65,6 +65,7 @@ fn rules_match_on_phrase_regex_and_case_flags_only() {
         episode: 9,
         episode_auto: true,
         state: RuleState::Archived,
+        subscription: None,
     };
     let existing = vec![
         stored("Frieren", false, false, "old dir"),
@@ -112,6 +113,7 @@ fn repeated_keys_pair_up_in_order_and_the_surplus_is_new_or_removed() {
         episode: 1,
         episode_auto: false,
         state: RuleState::Active,
+        subscription: None,
     };
     let existing = vec![
         stored("x1", Some("X")),

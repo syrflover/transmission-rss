@@ -554,6 +554,7 @@ mod tests {
             episode: 1,
             episode_auto: false,
             state: RuleState::Active,
+            subscription: None,
         };
         let one = rule("Clevatess/Season 03");
         assert_eq!(

@@ -864,6 +864,7 @@ fn substitute(
             episode: 0,
             episode_auto: false,
             state: RuleState::Active,
+            subscription: None,
         },
     };
     rule.r#match = edited.r#match.clone();

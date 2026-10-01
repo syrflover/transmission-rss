@@ -10,16 +10,21 @@ use rusqlite::{params, Connection, OptionalExtension, Row, Transaction, Transact
 use uuid::Uuid;
 
 use super::model::{
-    Channel, ChannelInput, ChannelWithRules, OrderItem, Rule, RuleInput, RuleState, Version,
+    Channel, ChannelInput, ChannelWithRules, OrderItem, Rule, RuleInput, RuleState, Subscription,
+    SubtitleMode, Version,
 };
 use super::ChannelError;
+use crate::store::{anissia, history::Millis};
 
 type Result<T> = std::result::Result<T, ChannelError>;
 
 const CHANNEL_COLUMNS: &str =
     "id, position, version, url, excludes, secret_query, past_search, name";
-const RULE_COLUMNS: &str = "id, channel_id, position, version, match_text, regex, \
-     case_insensitive, directory, episode, episode_auto, state";
+/// A rule with its subscription, if it has one (columns 11 to 15).
+const RULE_COLUMNS: &str = "r.id, r.channel_id, r.position, r.version, r.match_text, r.regex, \
+     r.case_insensitive, r.directory, r.episode, r.episode_auto, r.state, \
+     s.anissia_anime_no, s.subtitles, s.creator, s.season_id, s.subscribed_at";
+const RULE_FROM: &str = "rules r LEFT JOIN rule_subscriptions s ON s.rule_id = r.id";
 
 fn begin(conn: &mut Connection) -> Result<Transaction<'_>> {
     Ok(conn.transaction_with_behavior(TransactionBehavior::Immediate)?)
@@ -58,6 +63,21 @@ fn channel_from_row(row: &Row<'_>) -> rusqlite::Result<Channel> {
 
 fn rule_from_row(row: &Row<'_>) -> rusqlite::Result<Rule> {
     let state: String = row.get(10)?;
+    let anime_no: Option<i64> = row.get(11)?;
+    let subscription = match anime_no {
+        Some(anissia_anime_no) => {
+            let subtitles: String = row.get(12)?;
+            Some(Subscription {
+                anissia_anime_no,
+                subtitles: SubtitleMode::parse(&subtitles)
+                    .ok_or_else(|| conversion_error(12, Type::Text, "unknown subtitle mode"))?,
+                creator: row.get(13)?,
+                season_id: row.get(14)?,
+                subscribed_at: row.get(15)?,
+            })
+        }
+        None => None,
+    };
     Ok(Rule {
         id: row.get(0)?,
         channel_id: row.get(1)?,
@@ -71,6 +91,7 @@ fn rule_from_row(row: &Row<'_>) -> rusqlite::Result<Rule> {
         episode_auto: row.get(9)?,
         state: RuleState::parse(&state)
             .ok_or_else(|| conversion_error(10, Type::Text, "unknown rule state"))?,
+        subscription,
     })
 }
 
@@ -95,7 +116,7 @@ fn fetch_channels(conn: &Connection) -> Result<Vec<Channel>> {
 fn fetch_rule(conn: &Connection, id: &str) -> Result<Option<Rule>> {
     Ok(conn
         .query_row(
-            &format!("SELECT {RULE_COLUMNS} FROM rules WHERE id = ?1"),
+            &format!("SELECT {RULE_COLUMNS} FROM {RULE_FROM} WHERE r.id = ?1"),
             [id],
             rule_from_row,
         )
@@ -104,7 +125,7 @@ fn fetch_rule(conn: &Connection, id: &str) -> Result<Option<Rule>> {
 
 fn fetch_rules(conn: &Connection, channel_id: &str) -> Result<Vec<Rule>> {
     let mut stmt = conn.prepare(&format!(
-        "SELECT {RULE_COLUMNS} FROM rules WHERE channel_id = ?1 ORDER BY position, id"
+        "SELECT {RULE_COLUMNS} FROM {RULE_FROM} WHERE r.channel_id = ?1 ORDER BY r.position, r.id"
     ))?;
     let rows = stmt.query_map([channel_id], rule_from_row)?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
@@ -301,6 +322,77 @@ pub fn create_rule(conn: &mut Connection, channel_id: &str, input: &RuleInput) -
         |r| r.get(0),
     )?;
     let id = insert_rule(&tx, channel_id, position, input)?;
+    let created = fetch_rule(&tx, &id)?.expect("the rule was just inserted");
+    tx.commit()?;
+    Ok(created)
+}
+
+/// What a rule needs to become a subscription: the anime as Anissia's schedule
+/// listed it (stored as the anime's snapshot), how it gets subtitles, and when.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewSubscription {
+    pub anime: anissia::Anime,
+    pub subtitles: SubtitleMode,
+    /// The creator to follow: set exactly when `subtitles` is `Follow`.
+    pub creator: Option<String>,
+    pub subscribed_at: Millis,
+}
+
+/// Adds a rule at the end of the channel's rules that is a subscription to
+/// `subscription.anime`, and stores the anime's snapshot, in one transaction.
+/// A channel has one rule per subscribed anime: a second one is refused with
+/// [`ChannelError::AlreadySubscribed`].
+pub fn create_subscription_rule(
+    conn: &mut Connection,
+    channel_id: &str,
+    input: &RuleInput,
+    subscription: &NewSubscription,
+) -> Result<Rule> {
+    input.validate()?;
+    let creator_fits = match subscription.subtitles {
+        SubtitleMode::Follow => subscription
+            .creator
+            .as_deref()
+            .is_some_and(|c| !c.is_empty()),
+        SubtitleMode::Undecided | SubtitleMode::None => subscription.creator.is_none(),
+    };
+    if !creator_fits {
+        return Err(ChannelError::Invalid(
+            "a creator is set exactly when subtitles follow a creator",
+        ));
+    }
+
+    let tx = begin(conn)?;
+    require_channel(&tx, channel_id)?;
+    let existing: Option<String> = tx
+        .query_row(
+            "SELECT s.rule_id FROM rule_subscriptions s JOIN rules r ON r.id = s.rule_id
+              WHERE r.channel_id = ?1 AND s.anissia_anime_no = ?2",
+            params![channel_id, subscription.anime.anime_no],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if let Some(rule_id) = existing {
+        return Err(ChannelError::AlreadySubscribed { rule_id });
+    }
+    anissia::upsert_in(&tx, &subscription.anime)?;
+    let position: i64 = tx.query_row(
+        "SELECT COALESCE(MAX(position), -1) + 1 FROM rules WHERE channel_id = ?1",
+        [channel_id],
+        |r| r.get(0),
+    )?;
+    let id = insert_rule(&tx, channel_id, position, input)?;
+    tx.execute(
+        "INSERT INTO rule_subscriptions (rule_id, anissia_anime_no, subtitles, creator, season_id, subscribed_at)
+         VALUES (?1, ?2, ?3, ?4, NULL, ?5)",
+        params![
+            id,
+            subscription.anime.anime_no,
+            subscription.subtitles.as_str(),
+            subscription.creator,
+            subscription.subscribed_at,
+        ],
+    )?;
     let created = fetch_rule(&tx, &id)?.expect("the rule was just inserted");
     tx.commit()?;
     Ok(created)

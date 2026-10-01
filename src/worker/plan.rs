@@ -222,6 +222,7 @@ mod tests {
             episode: 1,
             episode_auto: false,
             state,
+            subscription: None,
         }
     }
 

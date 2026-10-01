@@ -66,6 +66,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("seasons/schema.sql")),
     // 14: unregistered watch folders keep their works instead of deleting them
     Migration::Sql(include_str!("library/unregistered.sql")),
+    // 15: Anissia: the schedule snapshot of subscribed anime, rule subscriptions, the request pace
+    Migration::Sql(include_str!("anissia/schema.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -437,6 +439,45 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(automatic, 0);
+    }
+
+    #[tokio::test]
+    async fn a_database_from_before_subscriptions_keeps_its_rules_as_plain_rules() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        {
+            // A database as the build with fourteen migrations left it, one rule in.
+            let conn = database_at(&path, 14);
+            conn.execute_batch(
+                "INSERT INTO channels (id, position, url, excludes, secret_query, version)
+                     VALUES ('c1', 0, 'http://x/feed', '[]', '[]', 1);
+                 INSERT INTO rules (id, channel_id, position, match_text, regex,
+                         case_insensitive, directory, episode, episode_auto, state, version)
+                     VALUES ('r1', 'c1', 0, 'Clevatess', 0, 1, 'Clevatess/Season 02', 1, 0,
+                         'active', 2);",
+            )
+            .unwrap();
+        }
+
+        let db = Db::open(&path).await.unwrap();
+
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+        let (rule, subscriptions, snapshots): (String, i64, i64) = db
+            .run::<_, DbError, _>(|c| {
+                Ok(c.query_row(
+                    "SELECT (SELECT match_text || '|' || version FROM rules WHERE id = 'r1'),
+                            (SELECT count(*) FROM rule_subscriptions),
+                            (SELECT count(*) FROM anissia_anime)",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            (rule.as_str(), subscriptions, snapshots),
+            ("Clevatess|2", 0, 0)
+        );
     }
 
     #[tokio::test]

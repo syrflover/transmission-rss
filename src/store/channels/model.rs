@@ -214,6 +214,54 @@ impl RuleInput {
     }
 }
 
+/// How a subscription gets subtitles (`docs/specs/collection.md`, 방영작 구독).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubtitleMode {
+    /// Follow the subtitle creator named in the subscription.
+    Follow,
+    /// `제작자 미정`: no creator chosen yet.
+    Undecided,
+    /// `받지 않음`: video only.
+    None,
+}
+
+impl SubtitleMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SubtitleMode::Follow => "follow",
+            SubtitleMode::Undecided => "undecided",
+            SubtitleMode::None => "none",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<SubtitleMode> {
+        match value {
+            "follow" => Some(SubtitleMode::Follow),
+            "undecided" => Some(SubtitleMode::Undecided),
+            "none" => Some(SubtitleMode::None),
+            _ => None,
+        }
+    }
+}
+
+/// The subscription of a rule: the rule follows an anime of Anissia's
+/// schedule (`docs/specs/collection.md`, 방영작 구독). A rule without one is not
+/// a subscription.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Subscription {
+    /// Anissia's `animeNo`, confirmed when the rule was subscribed.
+    pub anissia_anime_no: i64,
+    pub subtitles: SubtitleMode,
+    /// The subtitle creator to follow: set exactly when `subtitles` is
+    /// [`SubtitleMode::Follow`].
+    pub creator: Option<String>,
+    /// The season the rule's videos belong to; `None` until it is connected.
+    pub season_id: Option<String>,
+    /// When the rule became a subscription (Unix ms). Items the feed held and
+    /// history had recorded before are past: the user receives those.
+    pub subscribed_at: i64,
+}
+
 /// A stored rule.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rule {
@@ -229,6 +277,8 @@ pub struct Rule {
     pub episode: i64,
     pub episode_auto: bool,
     pub state: RuleState,
+    /// Set when the rule follows an anime of Anissia's schedule.
+    pub subscription: Option<Subscription>,
 }
 
 impl Rule {

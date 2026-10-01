@@ -1,4 +1,3 @@
-#[cfg(feature = "anissia")]
 pub mod anissia;
 pub mod artwork;
 pub mod automatic_watch;
