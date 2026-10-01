@@ -116,7 +116,9 @@ async fn a_newly_recorded_work_is_auto_with_a_search_and_a_rescan_asks_for_none(
 }
 
 #[tokio::test]
-async fn the_migration_gives_works_recorded_before_it_one_search() {
+async fn works_recorded_before_the_migration_get_no_search_until_asked() {
+    // Searches come only from a new registration or a user's request: the
+    // works of an existing library are `auto` with nothing to do.
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("app.db");
     {
@@ -128,22 +130,27 @@ async fn the_migration_gives_works_recorded_before_it_one_search() {
         .unwrap();
     }
     let db = Db::open(&path).await.unwrap();
+    assert_eq!(jobs(&db).await, []);
+    let store = ArtworkStore::new(db.clone());
+    assert_eq!(store.next_job(i64::MAX).await.unwrap(), None);
+    // Reading it (a screen) gives it its unselected `auto` row, still without
+    // a search; a restart adds nothing either.
+    let selection = store.selection("a").await.unwrap();
+    assert_eq!((selection.mode, selection.job), (Mode::Auto, None));
+    drop(store);
+    drop(db);
+    let db = Db::open(&path).await.unwrap();
+    assert_eq!(jobs(&db).await, [("a".to_owned(), None)]);
+    // The user asking for the automatic cover starts the search.
+    let store = ArtworkStore::new(db.clone());
+    store
+        .change("a", selection.version, UserChange::Auto, 5)
+        .await
+        .unwrap();
     assert_eq!(
         jobs(&db).await,
         [("a".to_owned(), Some("search".to_owned()))]
     );
-    // Opening it again (a restart) adds nothing.
-    drop(db);
-    let db = Db::open(&path).await.unwrap();
-    let store = ArtworkStore::new(db.clone());
-    let claimed = store.next_job(i64::MAX).await.unwrap().unwrap();
-    store
-        .searched("a", claimed.version, Searched::Left(Note::NoMatch), 5)
-        .await
-        .unwrap();
-    drop(db);
-    let db = Db::open(&path).await.unwrap();
-    assert_eq!(jobs(&db).await, [("a".to_owned(), None)]);
 }
 
 #[tokio::test]

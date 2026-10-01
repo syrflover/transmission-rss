@@ -81,11 +81,9 @@ BEGIN
             CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER));
 END;
 
--- The works recorded before artwork existed were recorded without their
--- search; they get it once, here.
-INSERT INTO work_artwork (work_id, mode, job, job_requested_at)
-SELECT id, 'auto', 'search', CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
-  FROM works;
+-- The works recorded before artwork existed get no row and no search here:
+-- searches come only from a new registration or a user's request. Their
+-- unselected `auto` row is made when something first reads or changes it.
 
 -- Image files the app made in the app data folder. A row is written before the
 -- file exists (`staging`) and becomes `published` in the transaction that
