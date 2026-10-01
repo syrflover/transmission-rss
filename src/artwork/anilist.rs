@@ -482,7 +482,14 @@ impl Anilist {
             {
                 return Err(ImageFetchError::TooLarge);
             }
-            let mut bytes = Vec::new();
+            // Reserved once (the declared length, else the limit, of which only
+            // what arrives is touched), so the buffer is never grown by
+            // copying into a larger one beside the old.
+            let mut bytes = Vec::with_capacity(
+                response
+                    .content_length()
+                    .map_or(MAX_IMAGE_BYTES, |n| n as usize),
+            );
             while let Some(chunk) = response
                 .chunk()
                 .await

@@ -11,7 +11,7 @@ use tower::ServiceExt;
 
 use super::*;
 use crate::{
-    artwork::{fake::Fake, image::samples, AppData, MAX_IMAGE_BYTES},
+    artwork::{fake::Fake, image::samples, AppData, MAX_IMAGE_BYTES, SERVING_BUDGET},
     discovery::{Scan, ScannedWork, WorkRead},
     store::Db,
     web::api,
@@ -571,4 +571,108 @@ mod reading_a_body {
         );
         assert_eq!(read_body(body, None, 8).await, Err(BodyError::Broken));
     }
+}
+
+/// Makes the work's cover a PNG-looking file of `size` bytes (serving looks at
+/// the size, the hash and the first bytes only) and returns the image URL.
+async fn plant_cover(env: &Env, size: usize) -> String {
+    use crate::{
+        artwork::files::{image_ref, ARTWORK_DIR},
+        store::artwork::{Format, Source},
+    };
+    let mut bytes = samples::png();
+    bytes.resize(size, 0);
+    let root = env.state.artwork.app_data().unwrap().root().to_owned();
+    std::fs::create_dir_all(root.join(ARTWORK_DIR)).unwrap();
+    let relative = format!("{ARTWORK_DIR}/planted.png");
+    std::fs::write(root.join(&relative), &bytes).unwrap();
+    let image = image_ref(Source::Upload, relative, &bytes, Format::Png);
+    let url = image_url(&env.work, &image.id);
+    let store = &env.state.artwork.store;
+    store
+        .reserve_file(&image.relative_path, "artwork/.staging/planted.tmp", 1)
+        .await
+        .unwrap();
+    store
+        .select_manual(&env.work, 1, None, image)
+        .await
+        .unwrap();
+    url.strip_prefix("/api").unwrap().to_owned()
+}
+
+fn get(uri: &str) -> Request<Body> {
+    Request::builder()
+        .method(Method::GET)
+        .uri(uri)
+        .body(Body::empty())
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_response_holds_its_room_until_its_body_is_sent_or_dropped() {
+    let env = env().await;
+    let size = 3 * 1024 * 1024;
+    let url = plant_cover(&env, size).await;
+    let taken = || SERVING_BUDGET - env.state.artwork.serving_free();
+    let router = || api::router().with_state(env.state.clone());
+
+    // The answer is ready but its body is not sent: the bytes are still held.
+    let response = router().oneshot(get(&url)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(taken(), size);
+    // Dropped unsent (what the server does when the client went away).
+    drop(response);
+    assert_eq!(taken(), 0);
+
+    // Sent: read to its end, and let go with the last of the bytes.
+    let response = router().oneshot(get(&url)).await.unwrap();
+    assert_eq!(taken(), size);
+    let mut body = response.into_body().into_data_stream();
+    let mut sent = 0;
+    while let Some(chunk) = body.next().await {
+        sent += chunk.unwrap().len();
+    }
+    assert_eq!(sent, size);
+    drop(body);
+    assert_eq!(taken(), 0);
+}
+
+#[tokio::test]
+async fn a_slow_client_holds_its_room_and_a_client_that_leaves_gives_it_back() {
+    use tokio::{io::AsyncWriteExt, net::TcpSocket};
+
+    let env = env().await;
+    let size = MAX_IMAGE_BYTES;
+    let url = plant_cover(&env, size).await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = api::router().with_state(env.state.clone());
+    let server = tokio::spawn(async move { axum::serve(listener, app).await });
+
+    // A client that asks and never reads: its small receive window leaves most
+    // of the 10 MiB with the server.
+    let socket = TcpSocket::new_v4().unwrap();
+    socket.set_recv_buffer_size(4096).unwrap();
+    let mut client = socket.connect(addr).await.unwrap();
+    client
+        .write_all(format!("GET {url} HTTP/1.1\r\nHost: x\r\n\r\n").as_bytes())
+        .await
+        .unwrap();
+    let taken = || SERVING_BUDGET - env.state.artwork.serving_free();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(taken(), size, "the bytes are still with the server");
+
+    // Gone: the connection fails, the server drops the response unsent, and
+    // the room comes back.
+    drop(client);
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while taken() != 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "a client that left kept {} bytes",
+            taken()
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    server.abort();
 }

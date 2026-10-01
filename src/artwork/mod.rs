@@ -22,35 +22,64 @@
 //! # Limits
 //!
 //! The image limits hold for uploads and AniList images alike. They are set
-//! for the containers' 128M memory limit: before an image is decoded, what the
+//! for the containers' 256M memory limit: before an image is decoded, what the
 //! decode would allocate (output, the JPEG decoder's input copy and the
 //! coefficients of a progressive JPEG or one written a scan a component, the
-//! WebP decoder's frame) is added up from
-//! its headers and must stay under [`DECODE_MAX_ALLOC`] (see [`image`], which
-//! also bounds what a PNG's colour profile may inflate to), and
-//! one decode runs at a time in a process, keeping its turn until it ends even
-//! when its caller went away. An upload's body is collected into one buffer
-//! (reserved from `Content-Length`, within [`MAX_IMAGE_BYTES`]) and that
-//! buffer is shared ([`Bytes`]) with the decode and the file, never copied;
-//! the decoders' own copies are what the cost above counts. At most
-//! [`UPLOAD_SLOTS`] uploads are taken in at once, and a body that takes longer
-//! than [`UPLOAD_BODY_TIMEOUT`] to arrive is dropped and gives its slot back.
-//! At most [`SERVING_SLOTS`] image files are read at once to serve or check
-//! them, and a file checked before is read again only when it changed
-//! ([`files::Verified`]).
+//! WebP decoder's frame) is added up from its headers and must stay under
+//! [`DECODE_MAX_ALLOC`] (see [`image`], which also bounds what a PNG's colour
+//! profile may inflate to), and one decode runs at a time in a process,
+//! keeping its turn until it ends even when its caller went away.
+//!
+//! An image's bytes are held in one buffer from where they arrive to where
+//! the file is published, and that buffer is shared ([`Bytes`]) with the
+//! decode and the file, never copied; the decoders' own copies are what the
+//! cost above counts. An upload's body is collected into a buffer reserved
+//! from `Content-Length` within [`MAX_IMAGE_BYTES`], and a body that takes
+//! longer than [`UPLOAD_BODY_TIMEOUT`] to arrive is dropped and gives its slot
+//! back. The cover of a picked AniList entry is fetched into a buffer reserved
+//! once the same way. At most [`UPLOAD_SLOTS`] uploads and picks are taken in
+//! at once: each holds its slot from before the first byte arrives until the
+//! file is published ([`Artwork::pick`], [`Artwork::upload`]).
+//!
+//! Serving is bounded by bytes. Before a file is read to serve or check it,
+//! its recorded size is taken from [`SERVING_BUDGET`], and the bytes keep it
+//! until the last [`Bytes`] made from them is dropped, which is when the
+//! server has written the last byte out (even into a slow client's socket
+//! buffer: the connection's write queue holds a clone) or dropped the
+//! response (a client that went away). A file of 10 MiB waits for 10 MiB of
+//! room; covers of a few hundred KB are served dozens at a time. A file
+//! checked before is read again only when it changed ([`files::Verified`]).
 //!
 //! # Memory of the web process
 //!
-//! Counted together, the web process holds at most one decode
-//! ([`DECODE_MAX_ALLOC`], 64 MiB), [`UPLOAD_SLOTS`] upload bodies (2 × 10 MiB)
-//! and [`SERVING_SLOTS`] image file reads (1 × 10 MiB): 94 MiB against the
-//! container's 128 MiB limit, leaving about 34 MiB for the rest of the process
-//! (an idle web process with an empty database takes about 14 MiB). With two serving slots the sum
-//! was 104 MiB, too close to the limit, so serving got one. Not counted: a
-//! response body already read from its file while it is sent, and the bytes of
-//! a picked AniList cover until they are decoded, each at most
-//! [`MAX_IMAGE_BYTES`] (covers are usually a few hundred KB). The worker takes
-//! no uploads and serves no files: one decode and the bytes it fetched.
+//! Counted together, the web process holds at most
+//!
+//! | what | bound | MiB |
+//! | --- | --- | --- |
+//! | one decode | [`DECODE_MAX_ALLOC`] | 64 |
+//! | uploads and picks | [`UPLOAD_SLOTS`] × [`MAX_IMAGE_BYTES`] | 20 |
+//! | cover files read or being sent | [`SERVING_BUDGET`] | 32 |
+//!
+//! 116 MiB, plus about 14 MiB for an idle web process with an empty database:
+//! 130 MiB against the container's 256 MiB limit, leaving about 126 MiB for
+//! the rest (the database's pages, rule previews, requests in flight).
+//! (At 128 MiB the first two rows and a 10 MiB file read at a time left 34
+//! MiB, which is why serving first got one slot and then a byte budget.)
+//!
+//! Not counted, all outside the web's own budgets: the kernel's socket buffers
+//! of a response, and the bytes a body holds beyond a declared length (an
+//! upload without `Content-Length` grows its buffer by doubling, up to about
+//! twice its size while it does).
+//!
+//! # Memory of the worker process
+//!
+//! The worker takes no uploads and serves no files. Its artwork queue runs one
+//! job at a time: the bytes it fetched ([`MAX_IMAGE_BYTES`], 10 MiB) are held
+//! until the file is published, and one decode ([`DECODE_MAX_ALLOC`], 64 MiB)
+//! runs on them: 74 MiB. The cycle (feeds, Transmission), the command loop
+//! and the directory watches come on top of it: a library of about 1,500
+//! folders measured 29 MB resident with its watches (ticket 0016), so 128M
+//! left about 25 MiB for the feeds and the database; the container has 256M.
 
 pub mod anilist;
 pub mod files;
@@ -92,15 +121,32 @@ pub const FETCH_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long a user's AniList request may wait for its turn before the web
 /// answers that AniList is busy.
 pub const USER_MAX_WAIT: Duration = Duration::from_secs(10);
-/// How many uploads a process takes in at once, from reading the body to the
-/// published file: at most this many bodies of [`MAX_IMAGE_BYTES`] are held.
+/// How many uploads and picked covers a process takes in at once, from the
+/// first byte to the published file: at most this many buffers of
+/// [`MAX_IMAGE_BYTES`] are held.
 pub const UPLOAD_SLOTS: usize = 2;
 /// How long reading one upload's body may take in total, while it holds an
 /// upload slot: a body that stalls is dropped and gives the slot back.
 pub const UPLOAD_BODY_TIMEOUT: Duration = Duration::from_secs(60);
-/// Image files read at once to serve or check them, each up to
-/// [`MAX_IMAGE_BYTES`].
-pub const SERVING_SLOTS: usize = 1;
+/// Bytes of image files a process holds at once to serve or check them: 32
+/// MiB. A file takes its own size from the budget before it is read and gives
+/// it back when its last byte has gone out of the process or the response was
+/// dropped (see [`Artwork::image`]). Covers of a few hundred KB are served
+/// dozens at a time; a file of [`MAX_IMAGE_BYTES`] waits for room.
+pub const SERVING_BUDGET: usize = 32 * 1024 * 1024;
+
+/// A file's bytes with the room they took from [`SERVING_BUDGET`]: the room
+/// goes back when the last [`Bytes`] made from it is dropped.
+struct Held {
+    data: Vec<u8>,
+    _room: OwnedSemaphorePermit,
+}
+
+impl AsRef<[u8]> for Held {
+    fn as_ref(&self) -> &[u8] {
+        &self.data
+    }
+}
 
 /// Why a user's artwork action did not happen. Nothing was changed.
 #[derive(Debug, thiserror::Error)]
@@ -169,7 +215,7 @@ impl Artwork {
             clock,
             decoding: Arc::new(Semaphore::new(1)),
             uploads: Arc::new(Semaphore::new(UPLOAD_SLOTS)),
-            serving: Arc::new(Semaphore::new(SERVING_SLOTS)),
+            serving: Arc::new(Semaphore::new(SERVING_BUDGET)),
             verified: Arc::default(),
             body_timeout: UPLOAD_BODY_TIMEOUT,
         }
@@ -332,9 +378,12 @@ impl Artwork {
             .await?
             .ok_or(ActionError::NoEntry)?;
         let url = entry.cover_url.ok_or(ActionError::NoCover)?;
+        // Like an upload, the cover is held from the first byte fetched to the
+        // published file, so picks and uploads together stay within the slots.
+        let slot = self.upload_slot().await;
         let bytes = self.anilist.fetch_image(&url).await?;
         let image = self
-            .store_image(bytes.into(), Source::Anilist, None)
+            .store_image(bytes.into(), Source::Anilist, Some(slot))
             .await?;
         self.take(work_id, expected, Some(anilist_media_id), image)
             .await
@@ -356,8 +405,19 @@ impl Artwork {
     }
 
     /// The bytes of the work's current image, checked (see [`files::check`]).
-    pub async fn image(&self, image: ImageRef) -> Result<Vec<u8>, Unavailable> {
+    ///
+    /// The bytes keep their size of the [`SERVING_BUDGET`] for as long as any
+    /// clone of the returned [`Bytes`] lives: a response body made from them
+    /// gives the room back when the server has written the last byte out, or
+    /// drops the body (a client that went away, a body never polled).
+    pub async fn image(&self, image: ImageRef) -> Result<Bytes, Unavailable> {
         self.check(image, true).await.map(Option::unwrap_or_default)
+    }
+
+    /// The part of the [`SERVING_BUDGET`] not taken now (tests).
+    #[cfg(test)]
+    pub(crate) fn serving_free(&self) -> usize {
+        self.serving.available_permits()
     }
 
     /// Whether the image's file is the one recorded, without reading it again
@@ -366,22 +426,32 @@ impl Artwork {
         self.check(image, false).await.map(|_| ())
     }
 
-    /// Checks on a blocking thread, at most [`SERVING_SLOTS`] at a time; a
-    /// check keeps its turn until it ends, even when the caller stops waiting.
-    async fn check(&self, image: ImageRef, read: bool) -> Result<Option<Vec<u8>>, Unavailable> {
+    /// Checks on a blocking thread. The file's recorded size is taken from the
+    /// [`SERVING_BUDGET`] first (a file larger than the budget takes all of
+    /// it), so only so many bytes of files are read or held at once. A check
+    /// keeps its room until it ends, even when the caller stops waiting; the
+    /// bytes it reads carry the room on to the caller.
+    async fn check(&self, image: ImageRef, read: bool) -> Result<Option<Bytes>, Unavailable> {
         let Some(app) = self.app_data.clone() else {
             return Err(Unavailable::Unverified);
         };
+        let room = image.byte_size.clamp(1, SERVING_BUDGET as u64) as u32;
         let permit = self
             .serving
             .clone()
-            .acquire_owned()
+            .acquire_many_owned(room)
             .await
             .expect("never closed");
         let verified = self.verified.clone();
         tokio::task::spawn_blocking(move || {
-            let _permit = permit;
-            files::check(&app, &image, &verified, read)
+            files::check(&app, &image, &verified, read).map(|bytes| {
+                bytes.map(|data| {
+                    Bytes::from_owner(Held {
+                        data,
+                        _room: permit,
+                    })
+                })
+            })
         })
         .await
         .unwrap_or(Err(Unavailable::Unverified))

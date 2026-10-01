@@ -967,7 +967,10 @@ async fn an_image_is_served_only_while_its_file_is_the_recorded_one() {
     let image = image_of(&s).clone();
     let path = env.path(&image.relative_path);
     let good = fs::read(&path).unwrap();
-    assert_eq!(env.art.image(image.clone()).await, Ok(good.clone()));
+    assert_eq!(
+        env.art.image(image.clone()).await,
+        Ok(Bytes::from(good.clone()))
+    );
 
     // Other bytes of the same size, a disguised text, a cut file.
     let mut other = good.clone();
@@ -1029,7 +1032,7 @@ async fn an_image_is_served_only_while_its_file_is_the_recorded_one() {
     assert_eq!(env.selection("A").await, s);
     assert_eq!(env.drain().await, []);
     fs::write(&path, &good).unwrap();
-    assert_eq!(env.art.image(image).await, Ok(good));
+    assert_eq!(env.art.image(image).await, Ok(Bytes::from(good)));
 }
 
 #[tokio::test]
@@ -1043,11 +1046,17 @@ async fn a_file_checked_before_is_hashed_again_only_when_it_changed() {
     let good = fs::read(&path).unwrap();
 
     let hashed = env.art.verified.hashed();
-    assert_eq!(env.art.image(image.clone()).await, Ok(good.clone()));
+    assert_eq!(
+        env.art.image(image.clone()).await,
+        Ok(Bytes::from(good.clone()))
+    );
     assert_eq!(env.art.verified.hashed(), hashed + 1);
     // Served and told again: nothing is hashed while the file is as it was.
     for _ in 0..3 {
-        assert_eq!(env.art.image(image.clone()).await, Ok(good.clone()));
+        assert_eq!(
+            env.art.image(image.clone()).await,
+            Ok(Bytes::from(good.clone()))
+        );
         assert_eq!(env.art.image_state(image.clone()).await, Ok(()));
     }
     assert_eq!(env.art.verified.hashed(), hashed + 1);
@@ -1075,34 +1084,176 @@ async fn a_file_checked_before_is_hashed_again_only_when_it_changed() {
     fs::write(&back, &good).unwrap();
     fs::rename(&back, &path).unwrap();
     assert_eq!(env.art.image_state(image.clone()).await, Ok(()));
-    assert_eq!(env.art.image(image).await, Ok(good));
+    assert_eq!(env.art.image(image).await, Ok(Bytes::from(good)));
     assert_eq!(env.art.verified.hashed(), hashed + 1);
 }
 
+/// A PNG-looking file of `size` bytes in the artwork folder (serving looks at
+/// the size, the hash and the first bytes only), and the reference to it.
+fn plant(env: &Env, name: &str, size: usize) -> crate::store::artwork::ImageRef {
+    let mut bytes = samples::png();
+    bytes.resize(size, 0);
+    fs::create_dir_all(env.path(ARTWORK_DIR)).unwrap();
+    let relative = format!("{ARTWORK_DIR}/{name}.png");
+    fs::write(env.path(&relative), &bytes).unwrap();
+    files::image_ref(Source::Upload, relative, &bytes, Format::Png)
+}
+
+const MIB: usize = 1024 * 1024;
+
 #[tokio::test]
-async fn image_files_are_read_a_few_at_a_time() {
+async fn a_served_image_keeps_its_size_of_the_budget_until_its_last_byte_is_dropped() {
     let env = Env::new(&["A"]).await;
+    let image = plant(&env, "a", MIB);
+    assert_eq!(env.art.serving_free(), SERVING_BUDGET);
+
+    let bytes = env.art.image(image.clone()).await.unwrap();
+    assert_eq!(SERVING_BUDGET - env.art.serving_free(), MIB);
+    // A slice or a clone (what a server splits a body into) holds it too.
+    let part = bytes.slice(..10);
+    drop(bytes);
+    assert_eq!(SERVING_BUDGET - env.art.serving_free(), MIB);
+    drop(part);
+    assert_eq!(env.art.serving_free(), SERVING_BUDGET);
+
+    // Telling the state, and a check that finds the file wrong, take nothing
+    // after they end.
+    env.art.image_state(image.clone()).await.unwrap();
+    let wrong = crate::store::artwork::ImageRef {
+        sha256: "0".repeat(64),
+        ..image
+    };
+    assert_eq!(env.art.image(wrong).await, Err(Unavailable::Mismatch));
+    assert_eq!(env.art.serving_free(), SERVING_BUDGET);
+}
+
+#[tokio::test]
+async fn small_images_are_served_together_up_to_the_budget() {
+    let env = Env::new(&["A"]).await;
+    let each = SERVING_BUDGET / 32;
+    let images: Vec<_> = (0..33)
+        .map(|n| plant(&env, &format!("s{n}"), each))
+        .collect();
+
+    // Thirty-two fill the budget exactly and are all served while held.
+    let mut held = Vec::new();
+    for image in &images[..32] {
+        let served = tokio::time::timeout(Duration::from_secs(5), env.art.image(image.clone()))
+            .await
+            .expect("an image that fits the room left is not made to wait");
+        held.push(served.unwrap());
+    }
+    assert_eq!(env.art.serving_free(), 0);
+
+    // The next one waits for any one of them to go.
+    let art = env.art.clone();
+    let last = images[32].clone();
+    let waiting = tokio::spawn(async move { art.image(last).await });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(!waiting.is_finished());
+    held.pop();
+    assert!(waiting.await.unwrap().is_ok());
+}
+
+#[tokio::test]
+async fn an_image_larger_than_the_room_left_waits_for_it() {
+    let env = Env::new(&["A"]).await;
+    let largest = |n: &str| plant(&env, n, MAX_IMAGE_BYTES);
+    let tiny = plant(&env, "tiny", 1000);
+
+    // Three of the largest take 30 of the 32 MiB.
+    let mut held = Vec::new();
+    for n in ["a", "b", "c"] {
+        held.push(env.art.image(largest(n)).await.unwrap());
+    }
+    let art = env.art.clone();
+    let next = largest("d");
+    let waiting = tokio::spawn(async move { art.image(next).await });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        !waiting.is_finished(),
+        "10 MiB does not fit in the 2 MiB left"
+    );
+    // The turns are in order: a small one that would fit waits behind it, so
+    // a stream of small ones never keeps a large one waiting for ever.
+    let art = env.art.clone();
+    let behind = tokio::spawn(async move { art.image(tiny).await });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(!behind.is_finished());
+
+    held.pop();
+    let fourth = waiting.await.unwrap().unwrap();
+    assert_eq!(fourth.len(), MAX_IMAGE_BYTES);
+    assert!(behind.await.unwrap().is_ok());
+    drop((held, fourth));
+    assert_eq!(env.art.serving_free(), SERVING_BUDGET);
+}
+
+#[tokio::test]
+async fn a_pick_holds_an_upload_slot_from_before_its_cover_is_fetched() {
+    let env = Env::new(&["A"]).await;
+    env.fake
+        .add_search("A", vec![env.fake.entry(1, "A", &[])], &samples::png());
     let id = env.id("A").await;
     let v = env.selection("A").await.version;
-    let s = env.art.upload(&id, v, samples::png(), None).await.unwrap();
-    let image = image_of(&s).clone();
 
-    let taken = env
+    // Every slot taken: the cover is not even asked for.
+    let held = futures::future::join_all((0..UPLOAD_SLOTS).map(|_| env.art.upload_slot())).await;
+    let art = env.art.clone();
+    let pick = tokio::spawn(async move { art.pick(&id, v, 1).await });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(!env.fake.image_asked("1.jpg"));
+    assert!(!pick.is_finished());
+
+    // A slot back: the pick fetches while it holds that slot, until the file
+    // is published.
+    env.fake.hold("1.jpg");
+    drop(held);
+    for _ in 0..200 {
+        if env.fake.image_asked("1.jpg") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert!(env.fake.image_asked("1.jpg"));
+    assert_eq!(env.art.uploads.available_permits(), UPLOAD_SLOTS - 1);
+    env.fake.release("1.jpg");
+    assert!(pick.await.unwrap().is_ok());
+    assert_eq!(env.art.uploads.available_permits(), UPLOAD_SLOTS);
+}
+
+#[tokio::test]
+async fn a_request_that_stops_waiting_for_room_or_for_its_read_leaves_the_room_alone() {
+    let env = Env::new(&["A"]).await;
+    let held = env
         .art
         .serving
         .clone()
-        .acquire_many_owned(super::SERVING_SLOTS as u32)
+        .acquire_many_owned(SERVING_BUDGET as u32)
         .await
         .unwrap();
+    let image = plant(&env, "a", MIB);
+
+    // Dropped while waiting: it never took any.
     let art = env.art.clone();
-    let served = tokio::spawn({
+    let waiting = tokio::spawn({
         let image = image.clone();
         async move { art.image(image).await }
     });
     tokio::time::sleep(Duration::from_millis(50)).await;
-    assert!(!served.is_finished(), "a read waits for a turn");
-    drop(taken);
-    assert!(served.await.unwrap().is_ok());
+    waiting.abort();
+    let _ = waiting.await;
+    drop(held);
+    assert_eq!(env.art.serving_free(), SERVING_BUDGET);
+
+    // Dropped while the file is read: the read ends, and its bytes go with it.
+    let gave_up = tokio::time::timeout(Duration::ZERO, env.art.image(image)).await;
+    assert!(gave_up.is_err());
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while env.art.serving_free() != SERVING_BUDGET {
+        assert!(Instant::now() < deadline, "the room was never given back");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
 }
 
 #[tokio::test]
