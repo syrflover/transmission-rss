@@ -875,14 +875,20 @@ impl RevisionStore {
             .await
     }
 
-    /// The new torrents the replacements under way still act on.
+    /// The torrents the replacements under way still act on: their new
+    /// torrents, and the old torrent of one that is removing (it asked for
+    /// it to go with its data; taking the torrent out of Transmission without
+    /// the data leaves the old video for the person to delete).
     pub async fn held_hashes(&self) -> Result<Vec<String>> {
         self.db
             .run(|c| {
                 let mut stmt = c.prepare(
                     "SELECT torrent_hash FROM video_revisions
                       WHERE torrent_hash IS NOT NULL
-                        AND state IN ('receiving', 'verified', 'removing', 'removed')",
+                        AND state IN ('receiving', 'verified', 'removing', 'removed')
+                      UNION
+                     SELECT old_torrent_hash FROM video_revisions
+                      WHERE old_torrent_hash IS NOT NULL AND state = 'removing'",
                 )?;
                 let hashes = stmt
                     .query_map([], |row| row.get(0))?
