@@ -899,7 +899,8 @@ mod tests {
         assert_eq!(version_of(&db).await, MIGRATIONS.len());
         let (rule, received, stamps, kept) = db
             .run::<_, DbError, _>(|c| {
-                // A rule made after the upgrade is stamped; the old one is not.
+                // The old rule is stamped by the upgrade, a rule made after it
+                // by the trigger.
                 c.execute(
                     "INSERT INTO rules (id, channel_id, position, match_text, regex,
                             case_insensitive, directory, episode, episode_auto, state, version)
@@ -940,8 +941,30 @@ mod tests {
             .unwrap();
         assert_eq!(rule, "Clevatess|3");
         assert_eq!(received, "r1|20");
-        assert_eq!(stamps, "r2");
+        assert_eq!(stamps, "r1,r2");
         assert_eq!(kept, (0, 0));
+    }
+
+    /// The triggers that keep `rule_started` go with a rebuild of `rules`; a
+    /// later migration that rebuilds it has to make them again.
+    #[tokio::test]
+    async fn the_rule_start_triggers_survive_every_migration() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open(dir.path().join("app.db")).await.unwrap();
+        let triggers: String = db
+            .run::<_, DbError, _>(|c| {
+                Ok(c.query_row(
+                    "SELECT group_concat(name, ',') FROM
+                         (SELECT name FROM sqlite_master
+                          WHERE type = 'trigger' AND tbl_name = 'rules'
+                            AND name LIKE 'rule_started_%' ORDER BY name)",
+                    [],
+                    |r| r.get(0),
+                )?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(triggers, "rule_started_on_delete,rule_started_on_insert");
     }
 
     #[tokio::test]

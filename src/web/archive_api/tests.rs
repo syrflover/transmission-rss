@@ -454,6 +454,11 @@ async fn keeping_collecting_is_refused_for_a_gone_rule_and_for_grounds_it_does_n
         json!(["whatever"]),
         json!([""]),
         json!(vec!["quiet:1"; 9]),
+        json!(["quiet:soon"]),
+        json!(["quiet:1:2"]),
+        json!(["ended:7"]),
+        json!(["ended:7:"]),
+        json!(["unlisted:x"]),
     ] {
         let (status, body) = app
             .call(

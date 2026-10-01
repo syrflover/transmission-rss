@@ -78,13 +78,9 @@ export async function archiveRule(ruleId: string): Promise<ArchiveOutcome> {
     try {
       command = await sendArchive(id, ruleId, "archive");
     } catch (e) {
-      if (e instanceof ApiError && e.code === "conflict") {
-        const open = e.current as Command | undefined;
-        if (open && typeof open.id === "string" && isOpen(open)) {
-          command = open;
-          break;
-        }
-      }
+      // A conflict means another command of this rule is open: a restore from
+      // another tab as likely as an archive, and the view does not say which,
+      // so it is not taken for this one and the run stops at it.
       if (e instanceof ApiError && e.code !== "network" && e.code !== "internal" && e.code !== "unavailable") {
         return { ok: false, message: e.message };
       }

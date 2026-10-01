@@ -32,9 +32,9 @@
 //!     Transmission (`received`), the "마지막 수집" of its detail. A rule that
 //!     never received has none, and counts from when it **started
 //!     collecting**: the latest of when the app first had the rule (stamped by
-//!     the database), when it became a subscription, when its title was given,
-//!     when it was last turned back on, and, for a rule from before the stamp,
-//!     when its channel was first read. Turning the rule back on, or restoring
+//!     the database; a rule from before the stamp has the moment of the
+//!     upgrade), when it became a subscription, when its title was given, when
+//!     it was last turned back on, and when its channel was first read. Turning the rule back on, or restoring
 //!     it, starts the 4 weeks over, however long its last receive was ago.
 //!   - The 4 weeks have passed at exactly [`QUIET`] after that moment, and the
 //!     ground is gone the moment a matching item is recorded.

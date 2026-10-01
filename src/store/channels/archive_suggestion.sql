@@ -9,8 +9,10 @@
 -- received anything counts from when it started collecting, which a plain
 -- rule (no subscription, never turned back on) has no column for. A trigger
 -- stamps every inserted rule, so no code that inserts rules has to know about
--- it; a rule from before this migration has no row, and the suggestion counts
--- from when its channel was first read instead. A migration that rebuilds
+-- it. The rules from before this migration are stamped with the moment it
+-- runs, so a rule that never received starts its 4 weeks at the upgrade
+-- rather than at its channel's first read, which may be long past. (A rule
+-- that has no row still counts from its channel's first read.) A migration that rebuilds
 -- `rules` drops the triggers with it and must create them again.
 --
 -- `archive_suggestion_kept` is `수집 유지`: the user looked at a suggestion and
@@ -23,6 +25,9 @@ CREATE TABLE rule_started (
     rule_id    TEXT    PRIMARY KEY CHECK (rule_id <> ''),
     started_at INTEGER NOT NULL
 ) WITHOUT ROWID;
+
+INSERT INTO rule_started (rule_id, started_at)
+SELECT id, CAST(strftime('%s', 'now') AS INTEGER) * 1000 FROM rules;
 
 CREATE TRIGGER rule_started_on_insert AFTER INSERT ON rules
 BEGIN

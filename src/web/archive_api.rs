@@ -309,12 +309,7 @@ async fn keep(
     parsed: Result<Json<KeepBody>, JsonRejection>,
 ) -> Result<Json<Kept>, ApiError> {
     let Json(body) = parsed.map_err(|_| ApiError::invalid(BAD_BODY))?;
-    let known = |ground: &str| {
-        ground.len() <= MAX_GROUND_LEN
-            && ["ended:", "unlisted:", "quiet:"]
-                .iter()
-                .any(|prefix| ground.starts_with(prefix))
-    };
+    let known = |ground: &str| ground.len() <= MAX_GROUND_LEN && is_ground_key(ground);
     if body.grounds.is_empty()
         || body.grounds.len() > MAX_GROUNDS
         || !body.grounds.iter().all(|g| known(g))
@@ -329,6 +324,22 @@ async fn keep(
     Ok(Json(Kept {
         kept: body.grounds.len(),
     }))
+}
+
+/// Whether `key` has the shape of a [`crate::archive_suggestions::Ground::key`]:
+/// `ended:<anime>:<date>`, `unlisted:<anime>` or `quiet:<ms>`.
+fn is_ground_key(key: &str) -> bool {
+    let number = |s: &str| s.parse::<i64>().is_ok();
+    match key.split(':').collect::<Vec<_>>().as_slice() {
+        ["ended", anime, date] => {
+            number(anime)
+                && !date.is_empty()
+                && date.chars().all(|c| c.is_ascii_digit() || c == '-')
+        }
+        ["unlisted", anime] => number(anime),
+        ["quiet", since] => number(since),
+        _ => false,
+    }
 }
 
 #[cfg(test)]
