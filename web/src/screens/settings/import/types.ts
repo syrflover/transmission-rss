@@ -1,5 +1,24 @@
 /** Shapes of `/api/import/legacy/*` (see src/web/import_api.rs). No secret value ever appears in them. */
 
+/** What the comment above a rule offers (`src/web/import_api/suggestions.rs`). */
+export type SuggestionKind = "with_creator" | "address_only" | "unreadable" | "none";
+
+export interface SuggestionView {
+  kind: SuggestionKind;
+  /** Anissia's `animeNo` of the address that was read. */
+  anime_no: number | null;
+  /** The creator the comment names; null is `제작자 미정`. */
+  creator: string | null;
+  /** Why an unreadable comment could not be read. */
+  reason: string | null;
+  /** Why a suggestion that was read cannot become a subscription. */
+  blocked: string | null;
+  /** Whether the review starts with it checked. */
+  checked: boolean;
+  /** Replacing keeps a rule that is a subscription already; it stays as it is. */
+  keeps_subscription: boolean;
+}
+
 export interface RuleView {
   /** The match phrase; null is a rule waiting for its title. */
   match: string | null;
@@ -11,6 +30,7 @@ export interface RuleView {
   invalid_regex: boolean;
   /** Replacing keeps the ID of an existing rule for this one. */
   keeps_existing_rule: boolean;
+  suggestion: SuggestionView;
 }
 
 export interface RemovedRule {
@@ -56,6 +76,12 @@ export interface Preview {
 
 export type Decision = "replace" | "add" | "skip";
 
+/** A suggestion the user kept checked: the channel's place in the file and the rule's in the channel. */
+export interface PickRequest {
+  channel: number;
+  rule: number;
+}
+
 export interface ChoiceRequest {
   index: number;
   existing_id: string;
@@ -78,6 +104,22 @@ export interface ApplyResult {
   not_imported: { index: number; url: string; reason: string }[];
   /** The collect folder this import set; null when it changed none. */
   collect_folder_set: string | null;
+  subscriptions: {
+    created: {
+      channel: number;
+      rule: number;
+      anime_no: number;
+      /** Anissia's title; null while the schedule is unknown. */
+      subject: string | null;
+      creator: string | null;
+      /** False leaves the weekday and time for the app's daily re-read. */
+      schedule_known: boolean;
+    }[];
+    /** Checked suggestions that did not become subscriptions, with the reason. */
+    not_created: { channel: number; rule: number; reason: string }[];
+    /** Why Anissia could not be asked, if it could not. */
+    unavailable: string | null;
+  };
   counts: {
     channels_added: number;
     channels_replaced: number;
@@ -87,5 +129,6 @@ export interface ApplyResult {
     rules_added: number;
     rules_kept: number;
     rules_removed: number;
+    subscriptions_created: number;
   };
 }

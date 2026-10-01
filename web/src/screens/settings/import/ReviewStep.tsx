@@ -2,6 +2,7 @@ import { cn } from "@/lib/utils";
 
 import { AlertIcon, BackIcon, CheckIcon, ChevronIcon } from "../icons";
 import { ActionBar, Banner, BTN, CARD, Facts, Labeled, Tag } from "../parts";
+import { caseCounts, standing, weekLabel } from "./suggestions";
 import type { ChannelView, Decision, RuleView } from "./types";
 import type { ImportFlow } from "./useImportFlow";
 
@@ -137,7 +138,119 @@ function ChannelCard({ channel, flow }: { channel: ChannelView; flow: ImportFlow
   );
 }
 
-function RuleRow({ rule, no, replacing }: { rule: RuleView; no: number; replacing: boolean }) {
+/** What the comment above a rule offers, and the box that keeps or drops it. */
+function SuggestionBlock({
+  channel,
+  rule,
+  index,
+  flow,
+}: {
+  channel: ChannelView;
+  rule: RuleView;
+  index: number;
+  flow: ImportFlow;
+}) {
+  const suggestion = rule.suggestion;
+  if (suggestion.kind === "none") {
+    return (
+      <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-text-muted">
+        <Tag>주석 없음</Tag>
+        규칙만 가져와요.
+      </p>
+    );
+  }
+  if (suggestion.kind === "unreadable") {
+    return (
+      <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-text-muted">
+        <Tag icon={AlertIcon} tone="warn">
+          주석을 읽을 수 없음
+        </Tag>
+        {suggestion.reason} 규칙만 가져와요.
+      </p>
+    );
+  }
+
+  const animeNo = suggestion.anime_no as number;
+  const decision = flow.choices[channel.index];
+  const state = standing(channel, rule, decision);
+  const checked = flow.isPicked(channel.index, index);
+  const found = flow.lookup.schedules[animeNo];
+  const looking = flow.lookup.status === "loading";
+  const unknown = looking ? "읽는 중" : "미정";
+  const creators = flow.lookup.creators[animeNo];
+  const unlisted = suggestion.creator !== null && Array.isArray(creators) && !creators.includes(suggestion.creator);
+  const note =
+    state === "skipped"
+      ? "이 채널을 건너뛰어서 구독 제안도 함께 빠져요."
+      : state === "not_imported"
+        ? "이 채널은 가져오지 않아서 구독 제안도 빠져요."
+        : state === "blocked"
+          ? suggestion.blocked
+          : state === "kept"
+            ? "교체해도 이 규칙은 지금 구독 그대로 두고, 이 제안은 쓰지 않아요."
+            : null;
+
+  return (
+    <div className="flex flex-col gap-1.5 rounded-lg border border-hairline bg-surface-2 p-3">
+      <label
+        className={cn(
+          "flex items-start gap-2.5 text-sm has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-focus",
+          state === "pickable" ? "cursor-pointer" : "cursor-not-allowed opacity-70",
+        )}
+      >
+        <input
+          type="checkbox"
+          checked={checked}
+          disabled={state !== "pickable"}
+          onChange={(event) => flow.pick(channel.index, index, event.target.checked)}
+          className="mt-0.5 size-4 flex-none accent-(--focus-ring)"
+        />
+        <span className="font-bold">구독으로 가져오기</span>
+      </label>
+      <Facts className="pl-[26px]">
+        <Labeled label="Anissia 작품">
+          {found ? found.subject : unknown} <span className="text-xs text-text-muted">#{animeNo}</span>
+        </Labeled>
+        <Labeled label="방영">{found ? weekLabel(found.week, found.air_time) : unknown}</Labeled>
+        {suggestion.creator !== null ? (
+          <Labeled label="자막 제작자">{suggestion.creator}</Labeled>
+        ) : (
+          <Tag>제작자 미정</Tag>
+        )}
+        {unlisted && (
+          <Tag icon={AlertIcon} tone="warn">
+            자막 목록에 없는 제작자
+          </Tag>
+        )}
+      </Facts>
+      {unlisted && (
+        <p className="pl-[26px] text-[13px] leading-relaxed text-text-muted">
+          이 작품의 Anissia 자막 목록에 없는 이름이에요. 체크하면 적힌 이름 그대로 따라가는 구독으로 가져와요.
+        </p>
+      )}
+      {suggestion.creator === null && state === "pickable" && (
+        <p className="pl-[26px] text-[13px] leading-relaxed text-text-muted">
+          제작자를 나중에 정해야 해서 처음에는 체크하지 않았어요. 체크하면 제작자 미정 구독으로 가져와요.
+        </p>
+      )}
+      {note && <p className="pl-[26px] text-[13px] leading-relaxed text-text-muted">{note}</p>}
+    </div>
+  );
+}
+
+function RuleRow({
+  rule,
+  no,
+  replacing,
+  channel,
+  flow,
+}: {
+  rule: RuleView;
+  no: number;
+  replacing: boolean;
+  channel: ChannelView;
+  flow: ImportFlow;
+}) {
   return (
     <li className="flex gap-3 border-t border-hairline-soft px-4 py-3 first:border-t-0">
       <span className="w-6 flex-none pt-0.5 text-right text-[13px] text-text-muted tabular-nums">{no}</span>
@@ -162,8 +275,51 @@ function RuleRow({ rule, no, replacing }: { rule: RuleView; no: number; replacin
         {rule.invalid_regex && (
           <p className="text-[13px] text-text-muted">정규식을 읽을 수 없어서 이 규칙은 어떤 제목에도 맞지 않아요.</p>
         )}
+        <SuggestionBlock channel={channel} rule={rule} index={no - 1} flow={flow} />
       </div>
     </li>
+  );
+}
+
+/** The four cases of a channel's comments as count chips, and the keep-all and drop-all buttons. */
+function SuggestionToolbar({ channel, flow }: { channel: ChannelView; flow: ImportFlow }) {
+  const counts = caseCounts(channel);
+  const decision = flow.choices[channel.index];
+  const pickable = channel.rules.filter((rule) => standing(channel, rule, decision) === "pickable").length;
+  const picked = channel.rules.filter((_, index) => flow.isPicked(channel.index, index)).length;
+  return (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-2.5 border-t border-hairline-soft px-4 py-3">
+      <Facts className="min-w-0 flex-1 basis-72">
+        <span className="text-[13px] text-text-muted">규칙 위 주석</span>
+        <Tag>주소와 제작자 {counts.with_creator}개</Tag>
+        <Tag>제작자 미정 {counts.address_only}개</Tag>
+        <Tag>읽을 수 없음 {counts.unreadable}개</Tag>
+        <Tag>주석 없음 {counts.none}개</Tag>
+      </Facts>
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
+        <span className="text-[13px] text-text-secondary" aria-live="polite">
+          구독으로 가져올 규칙 {picked}개
+        </span>
+        <button
+          type="button"
+          className={BTN.plain}
+          disabled={pickable === 0 || picked === pickable}
+          aria-label={`구독 제안 모두 선택 (${channel.url})`}
+          onClick={() => flow.pickAll(channel.index, true)}
+        >
+          모두 선택
+        </button>
+        <button
+          type="button"
+          className={BTN.plain}
+          disabled={picked === 0}
+          aria-label={`구독 제안 모두 해제 (${channel.url})`}
+          onClick={() => flow.pickAll(channel.index, false)}
+        >
+          모두 해제
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -183,15 +339,37 @@ function RulesFold({ channel, flow }: { channel: ChannelView; flow: ImportFlow }
           {notImported ? <Tag tone="warn">가져오지 않음</Tag> : skipped && <Tag tone="pending">건너뜀</Tag>}
         </Facts>
       </summary>
+      {channel.rules.length > 0 && <SuggestionToolbar channel={channel} flow={flow} />}
       {channel.rules.length > 0 && (
         <ol className="m-0 list-none border-t border-hairline-soft p-0">
           {channel.rules.map((rule, i) => (
-            <RuleRow key={i} rule={rule} no={i + 1} replacing={replacing} />
+            <RuleRow key={i} rule={rule} no={i + 1} replacing={replacing} channel={channel} flow={flow} />
           ))}
         </ol>
       )}
     </details>
   );
+}
+
+/** Where the background reads of Anissia stand, and what a failure leaves undecided. */
+function LookupNote({ flow }: { flow: ImportFlow }) {
+  const { status, problem } = flow.lookup;
+  if (problem !== null) {
+    return (
+      <Banner tone="fail" role="status" title="Anissia에서 읽지 못한 값이 있어요">
+        {problem} 읽지 못한 방영 요일·시간은 미정으로 두고, 구독은 그대로 가져올 수 있어요. 체크한 구독의 요일과 시간은
+        앱이 나중에 Anissia에서 다시 읽어 채워요.
+      </Banner>
+    );
+  }
+  if (status === "loading") {
+    return (
+      <p role="status" className="text-[13px] text-text-muted">
+        Anissia에서 방영 요일·시간과 자막 제작자를 읽는 중이에요. 기다리지 않고 가져와도 돼요.
+      </p>
+    );
+  }
+  return null;
 }
 
 export function ReviewStep({ flow }: { flow: ImportFlow }) {
@@ -215,6 +393,7 @@ export function ReviewStep({ flow }: { flow: ImportFlow }) {
         {counts.replace > 0 && <Labeled label="교체">{counts.replace}개 채널</Labeled>}
         {counts.add > 0 && <Labeled label="추가">{counts.add}개 채널</Labeled>}
         {counts.skip > 0 && <Labeled label="건너뛰기">{counts.skip}개 채널</Labeled>}
+        <Labeled label="구독으로 가져올 규칙">{flow.pickedCount}개</Labeled>
       </Facts>
     );
 
@@ -311,6 +490,12 @@ export function ReviewStep({ flow }: { flow: ImportFlow }) {
         <p className="text-[13.5px] leading-relaxed text-text-secondary">
           규칙은 위에서부터 순서대로 평가하고 처음 맞는 규칙이 적용돼요. 파일에 적힌 값이 그대로 저장돼요.
         </p>
+        <p className="text-[13.5px] leading-relaxed text-text-secondary">
+          규칙 위 주석에서 Anissia 작품 주소와 자막 제작자를 읽어 구독 제안을 만들었어요. 주석은 사람이 쓴 형식이라
+          틀릴 수 있어서, 체크한 제안만 구독으로 가져오고 나머지는 규칙만 가져와요. 방영 요일과 시간은 주석이 아니라
+          Anissia에서 읽어 보여줘요.
+        </p>
+        <LookupNote flow={flow} />
         <div className="flex flex-col gap-3">
           {preview.channels.map((channel) => (
             <RulesFold key={channel.index} channel={channel} flow={flow} />
