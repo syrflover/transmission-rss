@@ -1554,3 +1554,127 @@ async fn a_new_name_that_has_revision_rows_of_its_own_is_not_taken() {
         .unwrap();
     assert_eq!(rows.iter().map(|r| r.id).collect::<Vec<_>>(), [row]);
 }
+
+// --- an undo that began is never left half done ----------------------------------
+
+impl Scene {
+    /// Asks for the undo of `−48` as `id` and stops the worker while
+    /// Transmission renames the first file: the undo began, the value is back,
+    /// `S03E01` is renamed in Transmission and nothing is recorded of it.
+    async fn undo_cut_short(&self, rule: &Rule, id: &str) {
+        let (status, body) = self.ask_undo(rule, id, -48).await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+        let gate = self.h.tr.hold_answer("torrent-rename-path");
+        let worker = self.h.worker();
+        let task =
+            tokio::spawn(async move { worker.run_commands(&CancellationToken::new()).await });
+        gate.wait_arrived().await;
+        task.abort();
+        let _ = task.await;
+        gate.release_all();
+        assert_eq!(self.rule(rule).await.episode, -24);
+    }
+
+    /// A worker whose Transmission cannot be reached.
+    fn worker_without_transmission(&self) -> transmission_rss::worker::Worker {
+        let env = transmission_rss::worker::WorkerEnv::from_lookup(|key| {
+            (key == "TRANSMISSION_URL").then(|| "http://127.0.0.1:1/transmission/rpc".to_owned())
+        })
+        .unwrap();
+        self.h.worker_with(self.h.db.clone(), &env)
+    }
+
+    async fn command(&self, id: &str) -> Value {
+        let (status, _, command) = self
+            .api
+            .call("GET", &format!("/api/commands/{id}"), None)
+            .await;
+        assert_eq!(status, StatusCode::OK, "{command}");
+        command
+    }
+}
+
+#[tokio::test]
+async fn an_undo_that_began_waits_out_an_outage_however_long() {
+    use transmission_rss::store::commands::MAX_ATTEMPTS;
+    let (s, rule) = Scene::third_season_received().await;
+    s.undo_cut_short(&rule, "undo-0301-a").await;
+
+    // Transmission cannot be reached for more looks than a command is
+    // started: the undo is not given up.
+    let broken = s.worker_without_transmission();
+    for _ in 0..MAX_ATTEMPTS + 2 {
+        broken
+            .run_commands(&CancellationToken::new())
+            .await
+            .unwrap();
+    }
+    assert_eq!(s.command("undo-0301-a").await["state"], "running");
+
+    assert_eq!(
+        s.h.worker()
+            .run_commands(&CancellationToken::new())
+            .await
+            .unwrap(),
+        CommandsOutcome::Ran(1)
+    );
+    assert_eq!(s.command("undo-0301-a").await["state"], "done");
+    assert_eq!(s.names(), ["Show S03E25.mkv", "Show S03E26.mkv"]);
+    let states: Vec<String> = undo_files(&s.view(&rule).await)
+        .into_iter()
+        .map(|f| f.2)
+        .collect();
+    assert_eq!(states, ["renamed", "renamed"]);
+}
+
+#[tokio::test]
+async fn an_undo_that_ended_half_done_is_shown_and_carried_on_when_asked_again() {
+    use transmission_rss::store::commands::{CommandState, CommandStore, Outcome};
+    let (s, rule) = Scene::third_season_received().await;
+    s.undo_cut_short(&rule, "undo-0302-a").await;
+    // It ended there (a panic, say).
+    CommandStore::new(s.h.db.clone())
+        .finish(
+            "undo-0302-a",
+            CommandState::Failed,
+            Outcome {
+                result: "failed".into(),
+                reason: Some("처리하다 내부 오류가 났어요.".into()),
+            },
+            s.h.now(),
+        )
+        .await
+        .unwrap();
+
+    // The rule shows the value back, and the files still to rename.
+    let view = s.view(&rule).await;
+    assert_eq!(
+        (view["episode"].clone(), view["episode_auto"].clone()),
+        (json!(-24), json!(false))
+    );
+    assert_eq!(view["episode_undo"]["command"]["state"], "failed");
+    assert_eq!(view["episode_undo"]["from"], -48);
+    assert_eq!(view["episode_undo"]["to"], -24);
+    let states: Vec<String> = undo_files(&view).into_iter().map(|f| f.2).collect();
+    assert_eq!(states, ["pending", "pending"]);
+
+    // Asked again for the same automatic value, though the rule is no longer
+    // automatic: it carries on with the files left.
+    let command = s.undo(&rule, "undo-0302-b", -48).await;
+    assert_eq!(command["state"], "done", "{command}");
+    let view = s.view(&rule).await;
+    assert_eq!(view["episode_undo"]["command"]["id"], "undo-0302-b");
+    assert_eq!(
+        undo_files(&view),
+        [
+            file("Show S03E01.mkv", "Show S03E25.mkv", "renamed"),
+            file("Show S03E02.mkv", "Show S03E26.mkv", "renamed"),
+        ]
+    );
+    assert_eq!(s.names(), ["Show S03E25.mkv", "Show S03E26.mkv"]);
+    assert_eq!(s.rule(&rule).await.episode, -24);
+
+    // Nothing is left: another request is refused.
+    let (status, body) = s.ask_undo(&rule, "undo-0302-c", -48).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+}

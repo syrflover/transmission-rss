@@ -80,11 +80,16 @@ export interface EpisodeUndoFile {
 /**
  * The last `되돌리기` of a rule's automatic offset (the `episode_undo`
  * command). The command ends `done` once the value is back, whatever became of
- * the files, or `failed` with the reason nothing changed. `to` and `files` are
- * set once the worker began.
+ * the files, or `failed` with the reason nothing changed. `from`, `to` and
+ * `files` are set once the worker began. An undo whose command ended with files
+ * still `pending` stopped half done (the value is back already); a new
+ * `episode_undo` for its `from` carries it on.
  */
 export interface EpisodeUndo {
   command: Command;
+  /** The automatic value undone. */
+  from: number | null;
+  /** The value put back. */
   to: number | null;
   files: EpisodeUndoFile[];
 }

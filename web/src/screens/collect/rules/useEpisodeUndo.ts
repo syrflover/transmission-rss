@@ -142,12 +142,19 @@ export function useEpisodeUndo(rule: Rule, onRule: (fresh: Rule) => void) {
     }
   }, [follow, ruleId]);
 
-  /** `되돌리기` was pressed: a new user action, so a new ID. */
-  const submit = useCallback(() => {
-    if (attempt.current) return;
-    attempt.current = { id: newCommandId(), episode: rule.episode, mine: true };
-    void send();
-  }, [rule.episode, send]);
+  /**
+   * `되돌리기` was pressed: a new user action, so a new ID. `episode` is the
+   * automatic value to undo: the rule's own, or for `이어서 되돌리기` the `from`
+   * of an undo that stopped half done.
+   */
+  const submit = useCallback(
+    (episode: number = rule.episode) => {
+      if (attempt.current) return;
+      attempt.current = { id: newCommandId(), episode, mine: true };
+      void send();
+    },
+    [rule.episode, send],
+  );
 
   /** Sends the same request again after the server said it never stored it. */
   const resend = useCallback(() => void send(), [send]);

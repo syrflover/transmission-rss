@@ -349,7 +349,81 @@ fn file_hold(
     Ok(None)
 }
 
+/// The latest undo of `rule_id` that still has files to rename.
+fn unfinished(conn: &Connection, rule_id: &str) -> Result<Option<EpisodeUndo>> {
+    let command_id: Option<String> = conn
+        .query_row(
+            "SELECT u.command_id FROM episode_undos u
+              WHERE u.rule_id = ?1
+                AND EXISTS (SELECT 1 FROM episode_undo_files f
+                             WHERE f.command_id = u.command_id AND f.state = 'pending')
+              ORDER BY u.started_at DESC, u.command_id DESC LIMIT 1",
+            params![rule_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    match command_id {
+        Some(id) => read_undo(conn, &id),
+        None => Ok(None),
+    }
+}
+
+fn adopt(
+    conn: &mut Connection,
+    from_command: &str,
+    to_command: &str,
+) -> Result<Option<EpisodeUndo>> {
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    if let Some(undo) = read_undo(&tx, to_command)? {
+        tx.commit()?;
+        return Ok(Some(undo));
+    }
+    let copied = tx.execute(
+        "INSERT INTO episode_undos (command_id, rule_id, from_offset, to_offset, started_at)
+         SELECT ?2, rule_id, from_offset, to_offset, started_at
+           FROM episode_undos WHERE command_id = ?1",
+        params![from_command, to_command],
+    )?;
+    if copied == 0 {
+        return Ok(None);
+    }
+    tx.execute(
+        "UPDATE episode_undo_files SET command_id = ?2 WHERE command_id = ?1",
+        params![from_command, to_command],
+    )?;
+    tx.execute(
+        "DELETE FROM episode_undos WHERE command_id = ?1",
+        params![from_command],
+    )?;
+    let undo = read_undo(&tx, to_command)?;
+    tx.commit()?;
+    Ok(undo)
+}
+
 impl ChannelStore {
+    /// The latest undo of rule `rule_id` that has files still to rename: one
+    /// whose command ended before it was done (given up, or a panic). A new
+    /// request for it carries it on ([`ChannelStore::adopt_episode_undo`]).
+    pub async fn unfinished_episode_undo(&self, rule_id: &str) -> Result<Option<EpisodeUndo>> {
+        let rule_id = rule_id.to_owned();
+        self.db.run(move |c| unfinished(c, &rule_id)).await
+    }
+
+    /// Hands the undo of command `from_command`, with its files as they
+    /// stand, to command `to_command`, which carries it on. The undo as it is
+    /// then; `None` when `from_command` has none. Done once: an undo
+    /// `to_command` has already is returned as it is.
+    pub async fn adopt_episode_undo(
+        &self,
+        from_command: &str,
+        to_command: &str,
+    ) -> Result<Option<EpisodeUndo>> {
+        let (from_command, to_command) = (from_command.to_owned(), to_command.to_owned());
+        self.db
+            .run(move |c| adopt(c, &from_command, &to_command))
+            .await
+    }
+
     /// Begins the undo `command_id` of rule `rule_id`'s automatic offset
     /// `from`: puts the previous value back as the user's own and writes the
     /// plan `files` (see the module docs). An undo the command began before

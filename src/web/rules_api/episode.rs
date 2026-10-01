@@ -53,6 +53,9 @@ pub struct EpisodeUndoView {
     /// The command; it ends `done` (`undone`) once the value is back, or
     /// `failed` with the reason nothing changed.
     pub command: CommandView,
+    /// The automatic value undone, once the undo began: a request for it
+    /// carries an unfinished undo on.
+    pub from: Option<i64>,
     /// The value put back, once the undo began.
     pub to: Option<i64>,
     /// The videos it renames, in order, once it began.
@@ -191,6 +194,7 @@ async fn undos(state: &AppState, ids: Vec<String>) -> HashMap<String, EpisodeUnd
             let undo = begun.get(&command.id);
             let view = EpisodeUndoView {
                 command: CommandView::from(&command),
+                from: undo.map(|u| u.from),
                 to: undo.map(|u| u.to),
                 files: undo
                     .map(|u| {

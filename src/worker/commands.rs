@@ -60,7 +60,12 @@
 //! the rule's previous offset back and renames the videos it named, through
 //! Transmission or on disk without replacing anything ([`episode_undo`]). A
 //! start cut short leaves it `running`, and the next start carries on with the
-//! files still to rename.
+//! files still to rename. Once the value is back, a start that cannot reach
+//! Transmission or the database gives its attempt back
+//! ([`CommandStore::give_back_attempt`]): the undo waits out an outage however
+//! long instead of being given up half done. A start that ends in a panic
+//! still counts, and an undo given up that way is carried on by a new request
+//! for it.
 //!
 //! Each command kind has its own module below.
 
@@ -95,6 +100,9 @@ enum Ran {
     /// It could not be carried through now (the database failed, or shutdown
     /// was asked for) and stays `running` for the next look.
     NotNow(String),
+    /// Like [`Ran::NotNow`], for work that must be finished once begun: the
+    /// start does not count toward [`crate::store::commands::MAX_ATTEMPTS`].
+    Waiting(String),
 }
 
 /// What one look for commands came to.
@@ -229,7 +237,11 @@ impl Worker {
                             outcome: finished.outcome,
                             add_unconfirmed: false,
                         },
-                        Err(err) => Ran::NotNow(err.to_string()),
+                        // Begun: the value is back and files wait to be renamed.
+                        Err(err) => match ctx.channels.episode_undo(&owned.id).await {
+                            Ok(Some(_)) => Ran::Waiting(err.to_string()),
+                            _ => Ran::NotNow(err.to_string()),
+                        },
                     }
                 });
             }
@@ -263,6 +275,14 @@ impl Worker {
             }
             Some(Ok(Ran::NotNow(err))) => {
                 eprintln!("Command {} not finished: {err}", command.id);
+                return Ok(false);
+            }
+            Some(Ok(Ran::Waiting(err))) => {
+                eprintln!(
+                    "Command {} not finished: {err}; it carries on at the next look",
+                    command.id
+                );
+                self.commands.give_back_attempt(&command.id).await?;
                 return Ok(false);
             }
             Some(Err(err)) => {
