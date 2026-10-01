@@ -56,6 +56,9 @@ pub struct ChannelPlan {
     /// For each active rule that holds back its past items, since when. See
     /// [`ChannelPlan::is_past`].
     past_since: HashMap<String, PastSince>,
+    /// When history first saw an item of the channel: the moment of its first
+    /// read, if history has one. See [`ChannelPlan::is_past`].
+    first_read_at: Option<Millis>,
 }
 
 /// The moments before which a rule leaves unpicked items to the user: when it
@@ -90,6 +93,9 @@ pub enum PastCause {
     Titled,
     /// The item was first seen while the rule was paused or archived.
     Resumed,
+    /// The item was already in the feed when the channel was first read, which
+    /// is before any history of it existed.
+    FirstRead,
 }
 
 impl PastCause {
@@ -99,6 +105,7 @@ impl PastCause {
             PastCause::Subscribed => "subscribed",
             PastCause::Titled => "titled",
             PastCause::Resumed => "resumed",
+            PastCause::FirstRead => "first_read",
         }
     }
 }
@@ -125,11 +132,43 @@ impl ChannelPlan {
     /// path, which leaves each rule's own directory as the save path; the worker
     /// never adds with one (see [`crate::worker::cycle`]).
     pub fn new(channel_with_rules: ChannelWithRules, collect_folder: &Path) -> ChannelPlan {
+        ChannelPlan::build(channel_with_rules, collect_folder, false)
+    }
+
+    /// The plan for reading a channel that has no history yet. Its
+    /// subscription rules sit out, as paused rules do: whatever the feed
+    /// already holds is for the user to pick, not for a subscription to
+    /// receive (`docs/specs/collection.md`, 방영작 구독), so the items are
+    /// judged by the other rules and the ones nothing takes are recorded as
+    /// `no_match`. Later plans call those items past
+    /// ([`ChannelPlan::with_first_read_at`]).
+    pub fn for_first_read(
+        channel_with_rules: ChannelWithRules,
+        collect_folder: &Path,
+    ) -> ChannelPlan {
+        ChannelPlan::build(channel_with_rules, collect_folder, true)
+    }
+
+    /// Tells the plan when history first saw an item of the channel (its first
+    /// read), which is what [`ChannelPlan::is_past`] needs to find what the
+    /// feed already held then. `None` when history has no record of the
+    /// channel.
+    pub fn with_first_read_at(mut self, first_read_at: Option<Millis>) -> ChannelPlan {
+        self.first_read_at = first_read_at;
+        self
+    }
+
+    fn build(
+        channel_with_rules: ChannelWithRules,
+        collect_folder: &Path,
+        first_read: bool,
+    ) -> ChannelPlan {
         let ChannelWithRules { channel, rules } = channel_with_rules;
 
         let active: Vec<&Rule> = rules
             .iter()
             .filter(|rule| rule.state == RuleState::Active)
+            .filter(|rule| !(first_read && rule.subscription.is_some()))
             .collect();
 
         let spec = ChannelSpec {
@@ -148,6 +187,7 @@ impl ChannelPlan {
             evaluator: ChannelEvaluator::new(spec),
             rule_ids,
             past_since,
+            first_read_at: None,
         }
     }
 
@@ -165,15 +205,18 @@ impl ChannelPlan {
 
     /// Why an item of `rule_id` first seen at `first_seen_at` is past: it came
     /// before the subscription, else before the subscription got its title,
-    /// or else while the rule was off. `None` when the rule holds nothing back.
+    /// else while the rule was off, or else the feed already held it when the
+    /// channel was first read. `None` when the rule holds nothing back.
     pub fn past_cause(&self, rule_id: &str, first_seen_at: Millis) -> Option<PastCause> {
         let since = self.past_since.get(rule_id)?;
         Some(if since.subscribed.is_some_and(|at| first_seen_at < at) {
             PastCause::Subscribed
         } else if since.titled.is_some_and(|at| first_seen_at < at) {
             PastCause::Titled
-        } else {
+        } else if since.resumed.is_some_and(|at| first_seen_at < at) {
             PastCause::Resumed
+        } else {
+            PastCause::FirstRead
         })
     }
 
@@ -182,8 +225,12 @@ impl ChannelPlan {
     /// a subscription, before a subscription that waited for its title was
     /// given one, or while the rule was paused or archived (before it was last
     /// turned back on). Only the user receives those, after looking at them
-    /// (`docs/specs/collection.md`, 방영작 구독 and `영상 받기`). A rule that is
-    /// no subscription and was never turned back on has no past.
+    /// (`docs/specs/collection.md`, 방영작 구독 and `영상 받기`). So is what the
+    /// feed already held when the channel was first read, whenever the
+    /// subscription began: the first read has no history to tell the old
+    /// items from the new, so a subscription (never a plain rule) leaves all
+    /// of them ([`ChannelPlan::for_first_read`]). A rule that is no
+    /// subscription and was never turned back on has no past.
     /// `known` is the item's history record: when it was first seen and its
     /// result. An item a rule picked and failed to add is not past, nor is one
     /// first seen after the rule began or resumed collecting.
@@ -195,6 +242,8 @@ impl ChannelPlan {
             known,
             Some((first_seen_at, HistoryResult::NoMatch | HistoryResult::Excluded))
                 if first_seen_at < since.until()
+                    || (since.subscribed.is_some()
+                        && self.first_read_at.is_some_and(|read| first_seen_at <= read))
         )
     }
 
@@ -514,6 +563,95 @@ mod tests {
         let p = titled(50, Some(200), Some(300));
         assert!(p.is_past("r", seen(299)) && !p.is_past("r", seen(300)));
         assert_eq!(p.past_cause("r", 250), Some(PastCause::Resumed));
+    }
+
+    #[test]
+    fn what_the_feed_held_at_the_first_read_is_past_for_a_subscription_only() {
+        use crate::store::channels::{Subscription, SubtitleMode};
+        let rules = |subscribed_at: Option<i64>| {
+            let mut sub = rule("sub", 0, Some("Show"), RuleState::Active);
+            sub.subscription = subscribed_at.map(|at| Subscription {
+                anissia_anime_no: 1,
+                subtitles: SubtitleMode::None,
+                creator: None,
+                season_id: None,
+                subscribed_at: at,
+                season_blocked: None,
+                titled_at: None,
+            });
+            vec![sub, rule("plain", 1, Some("Show"), RuleState::Active)]
+        };
+        let seen = |at, result| Some((at, result));
+
+        // The subscription began at 50, before the first read at 100: the
+        // boundary alone calls nothing past, the first read does.
+        let p = plan(rules(Some(50))).with_first_read_at(Some(100));
+        assert!(p.is_past("sub", seen(100, HistoryResult::NoMatch)));
+        assert!(p.is_past("sub", seen(100, HistoryResult::Excluded)));
+        assert_eq!(p.past_cause("sub", 100), Some(PastCause::FirstRead));
+        assert_eq!(PastCause::FirstRead.code(), "first_read");
+        // Later items are the subscription's own; so is an item a rule took.
+        assert!(!p.is_past("sub", seen(101, HistoryResult::NoMatch)));
+        assert!(!p.is_past("sub", seen(100, HistoryResult::AddFailed)));
+        assert!(!p.is_past("sub", seen(100, HistoryResult::Received)));
+        // A plain rule has no past, and none of the first read's.
+        assert!(!p.is_past("plain", seen(100, HistoryResult::NoMatch)));
+
+        // Without a first read to go by nothing changes.
+        let p = plan(rules(Some(50)));
+        assert!(!p.is_past("sub", seen(100, HistoryResult::NoMatch)));
+
+        // A subscription that began after the first read: the earlier cause
+        // is the one shown.
+        let p = plan(rules(Some(150))).with_first_read_at(Some(100));
+        assert!(p.is_past("sub", seen(100, HistoryResult::NoMatch)));
+        assert_eq!(p.past_cause("sub", 100), Some(PastCause::Subscribed));
+
+        // A rule turned back on, no subscription, ignores the first read.
+        let mut resumed = rule("r", 0, Some("Show"), RuleState::Active);
+        resumed.resumed_at = Some(50);
+        let p = plan(vec![resumed]).with_first_read_at(Some(100));
+        assert!(!p.is_past("r", seen(100, HistoryResult::NoMatch)));
+    }
+
+    #[test]
+    fn a_plan_for_a_first_read_lets_the_subscriptions_sit_out() {
+        use crate::store::channels::{Subscription, SubtitleMode};
+        let mut sub = rule("sub", 0, Some("Show"), RuleState::Active);
+        sub.subscription = Some(Subscription {
+            anissia_anime_no: 1,
+            subtitles: SubtitleMode::None,
+            creator: None,
+            season_id: None,
+            subscribed_at: 50,
+            season_blocked: None,
+            titled_at: None,
+        });
+        let rules = vec![
+            sub,
+            rule("plain", 1, Some("Show"), RuleState::Active),
+            rule("other", 2, Some("Other"), RuleState::Active),
+        ];
+        let cwr = ChannelWithRules {
+            channel: channel(),
+            rules,
+        };
+
+        // As a paused rule: the later rule takes what the subscription would
+        // have, and nothing else changes.
+        let first = ChannelPlan::for_first_read(cwr.clone(), Path::new("/media/anime"));
+        assert!(matches!(
+            first.judge("Show - 01"),
+            Judgement::Selected { ref rule_id, .. } if rule_id == "plain"
+        ));
+        assert!(first.evaluate("Show - 01").overlapping.is_empty());
+        assert!(!first.holds_past("sub"));
+
+        let ordinary = ChannelPlan::new(cwr, Path::new("/media/anime"));
+        assert!(matches!(
+            ordinary.judge("Show - 01"),
+            Judgement::Selected { ref rule_id, .. } if rule_id == "sub"
+        ));
     }
 
     #[test]

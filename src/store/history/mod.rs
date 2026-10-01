@@ -140,6 +140,23 @@ impl HistoryStore {
             .await
     }
 
+    /// When history first saw an item of each of the given channels, by channel
+    /// ID; a channel with no record is left out. A channel's first record is
+    /// its first read, which is what the past-items rule tells the items the
+    /// feed already held from the later ones
+    /// ([`crate::worker::plan::ChannelPlan::with_first_read_at`]).
+    pub async fn first_sightings(
+        &self,
+        channel_ids: Vec<String>,
+    ) -> Result<std::collections::HashMap<String, Millis>, HistoryError> {
+        if channel_ids.is_empty() {
+            return Ok(Default::default());
+        }
+        self.db
+            .run(move |c| repo::first_sightings(c, &channel_ids))
+            .await
+    }
+
     /// Sets an item's result from something done to it outside a cycle (a
     /// command from the web), by the transition rules of [`Transition::between`],
     /// and returns the item's result afterwards (`None` for an unknown item).

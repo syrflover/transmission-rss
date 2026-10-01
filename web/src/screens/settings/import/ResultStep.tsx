@@ -22,9 +22,9 @@ function Subscriptions({ flow }: { flow: ImportFlow }) {
       {created.length > 0 && (
         <>
           <p className="text-[13.5px] leading-relaxed text-text-secondary">
-            체크한 제안 {created.length}개를 구독으로 가져왔어요. 구독으로 가져온 규칙도 아무것도 받지 않았어요. 규칙을
-            만들기 전에 기록된 항목은 지난 항목이라 자동으로 받지 않고, 규칙 상세의 지난 회차에서 직접 확인해 받을 수
-            있어요.
+            체크한 제안 {created.length}개를 구독으로 가져왔어요. 구독은 가져올 때 아무것도 받지 않았어요. 채널을
+            처음 읽을 때 피드에 이미 있던 항목과 구독 전에 기록된 항목은 규칙 상세의 지난 회차에서 직접 골라 받을 수
+            있어요. 구독이 아닌 규칙은 다음 RSS 확인부터 맞는 항목을 받아요.
           </p>
           <ul aria-label="구독으로 가져온 규칙" className="m-0 flex list-none flex-col gap-1.5 p-0 text-[13.5px]">
             {created.map((sub) => (

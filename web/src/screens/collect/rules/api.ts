@@ -125,8 +125,11 @@ export interface PreviewItem {
   save_path: string | null;
   taken_by: { rule_id: string | null; match: string | null } | null;
   excluded_by: string | null;
-  /** Why a `past` item is held back: it came before the subscription or its title, or while the rule was off. */
-  past_cause: "subscribed" | "titled" | "resumed" | null;
+  /**
+   * Why a `past` item is held back: it came before the subscription or its title, while the rule was off, or the
+   * feed already held it when the channel was first read.
+   */
+  past_cause: "subscribed" | "titled" | "resumed" | "first_read" | null;
   stored_result: string;
 }
 

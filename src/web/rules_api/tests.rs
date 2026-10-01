@@ -1126,6 +1126,7 @@ async fn the_preview_agrees_with_the_worker_mapping_for_every_recorded_title() {
         &last.to_input(),
         None,
         &items,
+        None,
     )
     .unwrap();
     let plan = ChannelPlan::new(cwr.clone(), collect);
