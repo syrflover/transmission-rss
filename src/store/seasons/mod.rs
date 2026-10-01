@@ -294,6 +294,28 @@ impl SeasonStore {
             .await
     }
 
+    /// [`SeasonStore::link`] for several seasons at once, in the order given;
+    /// `None` for a season the work has no record of.
+    pub async fn links_of_seasons(
+        &self,
+        seasons: Vec<(String, u32)>,
+    ) -> Result<Vec<Option<SeasonLink>>, SeasonError> {
+        self.db
+            .run(move |c| {
+                seasons
+                    .iter()
+                    .map(
+                        |(id, season)| match repo::link_of_recorded(c, id, *season) {
+                            Ok(link) => Ok(Some(link)),
+                            Err(SeasonError::NotFound) => Ok(None),
+                            Err(e) => Err(e),
+                        },
+                    )
+                    .collect()
+            })
+            .await
+    }
+
     /// The links of every season of a work that has one, by season number.
     pub async fn links_of(&self, work_id: &str) -> Result<BTreeMap<u32, SeasonLink>, SeasonError> {
         let id = work_id.to_owned();

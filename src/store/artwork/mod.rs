@@ -379,6 +379,17 @@ impl ArtworkStore {
         self.db.run(|c| Ok(repo::image_ids(c)?)).await
     }
 
+    /// The image ID of each of `work_ids` that has an image reference, by work
+    /// ID. Reads only those works, not the whole library.
+    pub async fn image_ids_of(
+        &self,
+        work_ids: Vec<String>,
+    ) -> Result<HashMap<String, String>, ArtworkError> {
+        self.db
+            .run(move |c| Ok(repo::image_ids_of(c, &work_ids)?))
+            .await
+    }
+
     /// Applies a user's change made from `expected` (see [`UserChange`]).
     pub async fn change(
         &self,

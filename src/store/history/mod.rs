@@ -237,13 +237,15 @@ impl HistoryStore {
     }
 
     /// The torrent hash and release title of the items each of the given rules
-    /// received, by rule ID: what tells which episode a torrent is of.
+    /// received whose torrent is one of `hashes`, by rule ID: what tells which
+    /// episode a torrent is of.
     pub async fn received_titles_of_rules(
         &self,
         rule_ids: Vec<String>,
+        hashes: Vec<String>,
     ) -> Result<std::collections::HashMap<String, Vec<(String, String)>>, HistoryError> {
         self.db
-            .run(move |c| repo::received_titles_of_rules(c, &rule_ids))
+            .run(move |c| repo::received_titles_of_rules(c, &rule_ids, &hashes))
             .await
     }
 

@@ -505,6 +505,22 @@ impl LibraryStore {
             .await
     }
 
+    /// [`LibraryStore::season_episodes`] for several seasons at once, in the
+    /// order given.
+    pub async fn seasons_episodes(
+        &self,
+        seasons: Vec<(String, u32)>,
+    ) -> Result<Vec<Option<BTreeMap<u32, Held>>>, LibraryError> {
+        self.db
+            .run(move |c| {
+                seasons
+                    .iter()
+                    .map(|(id, season)| Ok(detail::season_episodes(c, id, *season)?))
+                    .collect()
+            })
+            .await
+    }
+
     /// The work and season number of the video the library recorded at each
     /// of the absolute `paths`, in the order given; `None` for a path with no
     /// such video in a registered watch folder.

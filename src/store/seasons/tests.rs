@@ -163,6 +163,21 @@ async fn a_newly_recorded_first_season_gets_one_search_and_nothing_else_does() {
         env.store.link(&id, 9).await,
         Err(SeasonError::NotFound)
     ));
+
+    // Several seasons at once: a recorded one has its link, one the work has no
+    // record of is `None`, in the order asked.
+    let many = env
+        .store
+        .links_of_seasons(vec![
+            (id.clone(), 9),
+            (id.clone(), 1),
+            ("no-such".into(), 1),
+        ])
+        .await
+        .unwrap();
+    assert_eq!(many.len(), 3);
+    assert!(many[0].is_none() && many[2].is_none());
+    assert_eq!(many[1].as_ref().unwrap().version, 1);
 }
 
 #[tokio::test]

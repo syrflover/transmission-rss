@@ -596,6 +596,11 @@ async fn an_episode_in_transmission_is_downloading_until_the_library_holds_it() 
         .await
         .unwrap();
 
+    app.state
+        .status
+        .record_cycle_interval(5 * 60_000)
+        .await
+        .unwrap();
     // Nothing is downloading: the 14th has aired and not come.
     let video = |body: &Value| body["week"]["days"][3]["cards"][0]["video"].clone();
     assert_eq!(video(&app.week().await), "waiting");
@@ -616,6 +621,60 @@ async fn an_episode_in_transmission_is_downloading_until_the_library_holds_it() 
     assert_eq!(video(&app.week().await), "waiting");
 
     // The 14th is (a revision of it counts as the episode).
+    let record = |taken_at: i64| {
+        app.state.status.record_transmission(
+            TransmissionCounts {
+                downloading: 1,
+                seeding: 0,
+                taken_at,
+            },
+            vec!["bb".into()],
+        )
+    };
+    record(NOW).await.unwrap();
+    assert_eq!(video(&app.week().await), "downloading");
+
+    // The look is as old as three cycles: still believed. Older: the worker is
+    // not looking any more, so the episode is not shown as downloading.
+    let cycle = 5 * 60_000;
+    record(NOW - 3 * cycle).await.unwrap();
+    assert_eq!(video(&app.week().await), "downloading");
+    record(NOW - 3 * cycle - 1).await.unwrap();
+    assert_eq!(video(&app.week().await), "waiting");
+    // A worker that comes back and looks again shows it once more.
+    record(NOW).await.unwrap();
+    assert_eq!(video(&app.week().await), "downloading");
+}
+
+#[tokio::test]
+async fn nothing_is_downloading_without_a_recorded_cycle_interval() {
+    let app = App::new().await;
+    let rule = app
+        .subscribe(
+            anime(1, "받는 중", 4, Some("10:00"), Some("2026-07-02")),
+            self::rule("Work"),
+            SubtitleMode::None,
+            Some("Empty"),
+        )
+        .await;
+    app.state
+        .history
+        .record(
+            NOW - 1000,
+            vec![Observation {
+                channel_id: app.channel.id.clone(),
+                channel_label: app.channel.masked_url(),
+                identity_key: "title:x".into(),
+                title: "[G] Work - 14 (1080p) [AAAA1111].mkv".into(),
+                link: "https://feed.test/item".into(),
+                result: HistoryResult::Received,
+                rule_id: Some(rule.id.clone()),
+                torrent_hash: Some("aa".into()),
+                reason: None,
+            }],
+        )
+        .await
+        .unwrap();
     app.state
         .status
         .record_transmission(
@@ -624,11 +683,13 @@ async fn an_episode_in_transmission_is_downloading_until_the_library_holds_it() 
                 seeding: 0,
                 taken_at: NOW,
             },
-            vec!["bb".into()],
+            vec!["aa".into()],
         )
         .await
         .unwrap();
-    assert_eq!(video(&app.week().await), "downloading");
+    // Without the interval, how old a look may be cannot be told.
+    let body = app.week().await;
+    assert_eq!(body["week"]["days"][3]["cards"][0]["video"], "waiting");
 }
 
 #[tokio::test]

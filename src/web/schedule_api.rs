@@ -51,8 +51,11 @@
 //!   connected holds nothing.
 //! - `downloading`: a torrent the rule received for the episode (release
 //!   episode plus the rule's offset) is among the hashes the worker last saw
-//!   Transmission download. History is read only for the cards' rules, only
-//!   when something is downloading, and only for what they received.
+//!   Transmission download, provided that look is recent: not older than
+//!   [`DOWNLOADING_FRESH_CYCLES`] cycle intervals, so a worker that is down
+//!   does not leave an episode downloading for good. History is read only for
+//!   the cards' rules, only when something is downloading, and only for the
+//!   torrents downloading.
 //!
 //! `work_id` (the card's link to the work's detail) and `cover_url` exist only
 //! for a connected season; without them the card links to the rule and the
@@ -81,7 +84,6 @@ use crate::{
         channels::{Rule, RuleState, SeasonRef, SubtitleMode},
         history::Millis,
         library::Held,
-        seasons::SeasonError,
     },
     subscriptions::{parse_release, Quarter},
 };
@@ -177,35 +179,57 @@ struct SeasonFacts {
     air_times: BTreeMap<u32, i64>,
 }
 
-/// The season `season_id` as the cards need it; `None` when it is not a season
-/// of a work in the library.
-async fn season_facts(state: &AppState, season_id: &str) -> Result<Option<SeasonFacts>, ApiError> {
-    let Some(parsed) = SeasonRef::parse(season_id) else {
-        return Ok(None);
-    };
-    let Some(held) = state
+/// The seasons the cards follow as the cards need them, by season ID, each read
+/// once and all in one query per store. A season that is not one of a work in
+/// the library maps to `None`.
+async fn season_facts(
+    state: &AppState,
+    airings: &[Airing<'_>],
+) -> Result<HashMap<String, Option<SeasonFacts>>, ApiError> {
+    let mut ids: Vec<&str> = Vec::new();
+    for airing in airings {
+        let id = airing
+            .rule
+            .subscription
+            .as_ref()
+            .and_then(|s| s.season_id.as_deref());
+        if let Some(id) = id {
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+    }
+    // The ones that name a season, in the order of `ids`.
+    let parsed: Vec<(&str, SeasonRef)> = ids
+        .into_iter()
+        .filter_map(|id| SeasonRef::parse(id).map(|season| (id, season)))
+        .collect();
+    let wanted: Vec<(String, u32)> = parsed
+        .iter()
+        .map(|(_, s)| (s.work_id.clone(), s.number))
+        .collect();
+    let held = state
         .library
-        .season_episodes(&parsed.work_id, parsed.number)
+        .seasons_episodes(wanted.clone())
         .await
-        .map_err(internal)?
-    else {
-        return Ok(None);
-    };
-    let air_times = match state
+        .map_err(internal)?;
+    let links = state
         .seasons
         .store
-        .link(&parsed.work_id, parsed.number)
+        .links_of_seasons(wanted)
         .await
-    {
-        Ok(link) => air_times(&link.entries),
-        Err(SeasonError::NotFound) => BTreeMap::new(),
-        Err(e) => return Err(internal(e)),
-    };
-    Ok(Some(SeasonFacts {
-        work_id: parsed.work_id,
-        held,
-        air_times,
-    }))
+        .map_err(internal)?;
+
+    let mut out: HashMap<String, Option<SeasonFacts>> = HashMap::new();
+    for (((id, season), held), link) in parsed.into_iter().zip(held).zip(links) {
+        let facts = held.map(|held| SeasonFacts {
+            work_id: season.work_id,
+            held,
+            air_times: link.map_or_else(BTreeMap::new, |link| air_times(&link.entries)),
+        });
+        out.insert(id.to_owned(), facts);
+    }
+    Ok(out)
 }
 
 /// The episode a release title names as a whole number (`12`, `12v2`); not a
@@ -243,6 +267,68 @@ struct Airing<'a> {
     rule: &'a Rule,
     anime: &'a Anime,
     slot: Slot,
+}
+
+/// How many collection cycles old the worker's look at Transmission may be
+/// for `영상 받는 중` to be believed. The worker looks every cycle, and a failed
+/// look keeps the earlier list, so a worker that is down (or a Transmission it
+/// cannot reach) would otherwise leave an episode downloading for good. Three
+/// cycles ride out a slow or failed one.
+const DOWNLOADING_FRESH_CYCLES: i64 = 3;
+
+/// The torrents Transmission is downloading as of `now`: what the worker saw
+/// last, provided that look is not older than [`DOWNLOADING_FRESH_CYCLES`]
+/// cycle intervals. Without a recorded interval (no worker of this version has
+/// run) nothing is believed.
+async fn downloading_hashes(state: &AppState, now: Millis) -> Result<HashSet<String>, ApiError> {
+    let Some(counts) = state.status.transmission().await.map_err(internal)? else {
+        return Ok(HashSet::new());
+    };
+    let Some(interval) = state.status.cycle_interval().await.map_err(internal)? else {
+        return Ok(HashSet::new());
+    };
+    if now.saturating_sub(counts.taken_at) > interval.saturating_mul(DOWNLOADING_FRESH_CYCLES) {
+        return Ok(HashSet::new());
+    }
+    state.status.downloading_hashes().await.map_err(internal)
+}
+
+/// The episodes Transmission is downloading for each card's rule, by rule ID: a
+/// torrent the rule received whose release names the episode, shifted by the
+/// rule's episode offset.
+async fn downloading_by_rule<'a>(
+    state: &AppState,
+    now: Millis,
+    airings: &[Airing<'a>],
+) -> Result<HashMap<&'a str, HashSet<i64>>, ApiError> {
+    let mut downloading: HashMap<&str, HashSet<i64>> = HashMap::new();
+    if airings.is_empty() {
+        return Ok(downloading);
+    }
+    let hashes = downloading_hashes(state, now).await?;
+    if hashes.is_empty() {
+        return Ok(downloading);
+    }
+    let ids: Vec<String> = airings.iter().map(|a| a.rule.id.clone()).collect();
+    let received = state
+        .history
+        .received_titles_of_rules(ids, hashes.iter().cloned().collect())
+        .await
+        .map_err(internal)?;
+    for airing in airings {
+        for (hash, title) in received.get(&airing.rule.id).into_iter().flatten() {
+            if !hashes.contains(hash) {
+                continue;
+            }
+            if let Some(episode) = release_episode(title) {
+                downloading
+                    .entry(airing.rule.id.as_str())
+                    .or_default()
+                    .insert(episode + airing.rule.episode);
+            }
+        }
+    }
+    Ok(downloading)
 }
 
 /// The week `now` (Unix ms) is in, as the home screen shows it.
@@ -296,47 +382,23 @@ pub async fn week_at(state: &AppState, now: Millis) -> Result<WeekView, ApiError
         }
     }
 
-    // The seasons the cards follow, each read once.
-    let mut seasons: HashMap<&str, Option<SeasonFacts>> = HashMap::new();
-    for airing in &airings {
-        let season_id = airing
-            .rule
-            .subscription
-            .as_ref()
-            .and_then(|s| s.season_id.as_deref());
-        if let Some(season_id) = season_id {
-            if !seasons.contains_key(season_id) {
-                seasons.insert(season_id, season_facts(state, season_id).await?);
-            }
-        }
-    }
-    let covers = if seasons.values().any(Option::is_some) {
-        state.artwork.store.image_ids().await.map_err(internal)?
-    } else {
+    let seasons = season_facts(state, &airings).await?;
+    let work_ids: Vec<String> = seasons
+        .values()
+        .flatten()
+        .map(|s| s.work_id.clone())
+        .collect();
+    let covers = if work_ids.is_empty() {
         HashMap::new()
-    };
-
-    // The episodes Transmission is downloading, by rule.
-    let hashes: HashSet<String> = state.status.downloading_hashes().await.map_err(internal)?;
-    let mut downloading: HashMap<&str, HashSet<i64>> = HashMap::new();
-    if !hashes.is_empty() && !airings.is_empty() {
-        let ids: Vec<String> = airings.iter().map(|a| a.rule.id.clone()).collect();
-        let received = state
-            .history
-            .received_titles_of_rules(ids)
+    } else {
+        state
+            .artwork
+            .store
+            .image_ids_of(work_ids)
             .await
-            .map_err(internal)?;
-        for airing in &airings {
-            for (hash, title) in received.get(&airing.rule.id).into_iter().flatten() {
-                if let (true, Some(episode)) = (hashes.contains(hash), release_episode(title)) {
-                    downloading
-                        .entry(airing.rule.id.as_str())
-                        .or_default()
-                        .insert(episode + airing.rule.episode);
-                }
-            }
-        }
-    }
+            .map_err(internal)?
+    };
+    let downloading = downloading_by_rule(state, now, &airings).await?;
 
     let mut by_day: HashMap<i64, Vec<Card>> = HashMap::new();
     for Airing { rule, anime, slot } in airings {
