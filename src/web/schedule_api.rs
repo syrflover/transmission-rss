@@ -33,7 +33,8 @@
 //! - the worker's daily refresh found that Anissia no longer lists the anime
 //!   (`unlisted_at`, see [`crate::store::anissia`]): an anime without an end
 //!   date leaves this way. While Anissia cannot be reached that is not found
-//!   out, so the card stays.
+//!   out, so the card stays; nor is it found out from a weekday whose list came
+//!   back empty although the anime was last listed in it.
 //!
 //! The card's `episode` is the season's episode that airs in the slot
 //! ([`crate::schedule::slot::episode_on`]); it is `null` when that cannot be

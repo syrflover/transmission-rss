@@ -435,9 +435,9 @@ async fn an_anime_that_moved_from_the_upcoming_list_to_its_weekday_is_found_ther
 async fn an_anime_no_week_lists_keeps_its_snapshot_and_is_looked_for_a_day_later() {
     let env = Env::new().await;
     env.subscribe(9, 3, 10 * DAY - DAY).await;
-    // The schedule lists other anime, but not this one.
+    // The schedule lists other anime, among them on its own weekday, but not this one.
     env.fake
-        .set_week(5, vec![env.fake.entry(5, 5000, "22:00", "남", "")]);
+        .set_week(3, vec![env.fake.entry(3, 5000, "22:00", "남", "")]);
 
     let ran = env.anissia.run_next().await.unwrap();
     assert_eq!(
@@ -483,7 +483,7 @@ async fn an_unlisted_anime_is_listed_again_when_a_later_refresh_finds_it() {
     let env = Env::new().await;
     env.subscribe(9, 3, 10 * DAY - DAY).await;
     env.fake
-        .set_week(5, vec![env.fake.entry(5, 5000, "22:00", "남", "")]);
+        .set_week(3, vec![env.fake.entry(3, 5000, "22:00", "남", "")]);
     env.anissia.run_next().await.unwrap();
     assert_eq!(unlisted(&env, &[9]).await, [9]);
 
@@ -540,6 +540,41 @@ async fn a_schedule_that_lists_nothing_at_all_does_not_make_an_anime_unlisted() 
     assert!(env.anissia.run_next().await.is_none());
     env.advance(DAY);
     assert!(env.anissia.run_next().await.is_some());
+}
+
+#[tokio::test]
+async fn a_weekday_that_comes_back_empty_does_not_unlist_the_anime_it_held() {
+    let env = Env::new().await;
+    // The last refresh found two anime on each of Monday (1) and Tuesday (2).
+    env.subscribe(11, 1, 10 * DAY - DAY).await;
+    env.subscribe(12, 1, 10 * DAY - DAY).await;
+    env.subscribe(21, 2, 10 * DAY - DAY).await;
+    env.subscribe(22, 2, 10 * DAY - DAY).await;
+    // Now Anissia answers normally, but Monday's list is empty and Tuesday's no
+    // longer has 22.
+    env.fake
+        .set_week(2, vec![env.fake.entry(2, 21, "22:00", "작품 21", "")]);
+
+    let ran = env.anissia.run_next().await.unwrap();
+    assert_eq!(ran.refreshed, 1);
+    // Monday's answer is not believed, so its anime are not recorded as gone.
+    // Tuesday's was a real list, and 22 is not on it.
+    assert_eq!(unlisted(&env, &[11, 12, 21, 22]).await, [22]);
+
+    // Monday's anime are looked for again with the next daily refresh, and a
+    // Monday that lists them again leaves them as they were.
+    assert!(env.anissia.run_next().await.is_none());
+    env.advance(DAY);
+    env.fake.set_week(
+        1,
+        vec![
+            env.fake.entry(1, 11, "22:00", "작품 11", ""),
+            env.fake.entry(1, 12, "22:00", "작품 12", ""),
+        ],
+    );
+    // 21 is a day old by now too, and Tuesday still lists it.
+    assert_eq!(env.anissia.run_next().await.unwrap().refreshed, 3);
+    assert_eq!(unlisted(&env, &[11, 12, 21, 22]).await, [22]);
 }
 
 #[tokio::test]
