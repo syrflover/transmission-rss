@@ -20,7 +20,11 @@
 //! whatever its item's result, by the rule recorded on it ([`RevisionRetry`],
 //! [`retry_plan_for`]); not while a higher revision of its episode is in the
 //! folder or on its way, and not when the rule's folder is no longer the one
-//! its replacement was decided for ([`same_destination`]). Its add puts the replacement back at its first step
+//! its replacement was decided for ([`same_destination`]). The worker also
+//! refuses it, and a `버전 미상` revision, when the video at the episode's
+//! place is that revision or a higher one already, told the way a cycle's
+//! decision tells it ([`revisions::holds_same_or_higher`]): a higher revision
+//! that found the episode name free has no replacement row to say so. Its add puts the replacement back at its first step
 //! with the item's result, in one transaction; a torrent Transmission still
 //! had is started again. It is never renamed here, and an add that fails
 //! leaves the item and the replacement as they were: the command alone says
@@ -78,7 +82,7 @@ use crate::{
         history::{HistoryItem, HistoryResult, Millis},
         revisions::{
             Claim, HistoryWrite, NewRevision, Revision, RevisionError, RevisionState,
-            RevisionStore, RowWrite,
+            RevisionStore, RowWrite, Step,
         },
     },
     transmission::{
@@ -94,6 +98,11 @@ use crate::{
 
 /// The `kind` of the command.
 pub const KIND: &str = "receive_once";
+
+/// Why a revision was not received again when the folder's video of its
+/// episode could not be looked at.
+const PLACE_UNREAD: &str =
+    "폴더의 회차 영상이 어떤 수정본인지 확인하지 못해서 받지 않았어요. 잠시 뒤에 다시 받아요.";
 
 /// Longest failure reason kept, in characters.
 const MAX_REASON_CHARS: usize = 300;
@@ -212,6 +221,11 @@ pub enum NotRetryable {
     /// decided for: a torrent added now would be received elsewhere, and the
     /// replacement would fail again.
     FolderMoved,
+    /// The item is a revision whose replacement waits for `다시 받기` (its
+    /// download stopped, or `버전 미상`), and the folder's video of its
+    /// episode is that revision or a higher one already
+    /// ([`revisions::holds_same_or_higher`]). Only the worker can tell.
+    InPlace,
 }
 
 impl NotRetryable {
@@ -244,6 +258,9 @@ impl NotRetryable {
             }
             NotRetryable::FolderMoved => {
                 "규칙의 저장 폴더가 바뀌어서 이 수정본은 다시 받지 않아요. 새 폴더에 받으면 기존 영상과 같은 폴더가 아니라서 대체할 수 없어요."
+            }
+            NotRetryable::InPlace => {
+                "폴더의 이 회차 영상이 이미 같거나 더 높은 수정본이라 다시 받지 않아요."
             }
         }
     }
@@ -653,6 +670,49 @@ pub async fn execute_with(
     // old.
     if let Err(reason) = same_destination(&revision, Path::new(&collect_folder.folder), plan.rule) {
         return Ok(ended_early(failed(reason.message(), None)));
+    }
+    // A revision whose replacement waits for this request is received only
+    // while the folder's video of its episode is lower: a higher one may have
+    // taken the episode name as an ordinary item since, with no row to say
+    // so. A replacement stopped before its video was received could replace
+    // nothing now, and ends as skipped; a `버전 미상` one is left as it is,
+    // so a later request looks at the folder again.
+    let waiting = match &revision {
+        RevisionRetry::Again(row) => Some((**row).clone()),
+        RevisionRetry::None if is_retryable_result(item.result) => ctx
+            .revisions
+            .by_item(item.id)
+            .await
+            .map_err(Retry::store)?
+            .filter(|row| row.state == RevisionState::Unknown),
+        _ => None,
+    };
+    if let Some(row) = waiting {
+        match revisions::holds_same_or_higher(ctx, &item, &row).await {
+            Ok(false) => {}
+            Ok(true) => {
+                if again {
+                    let skip = Step::Skipped {
+                        reason: revisions::NOT_HIGHER.to_owned(),
+                    };
+                    if let Err(err) = ctx
+                        .revisions
+                        .advance(row.id, now(), RevisionState::Failed, skip)
+                        .await
+                    {
+                        eprintln!("Cannot record the revision of item {}: {err}", item.id);
+                    }
+                }
+                return Ok(ended_early(failed(NotRetryable::InPlace.message(), None)));
+            }
+            Err(why) => {
+                eprintln!(
+                    "Cannot look at the episode of item {} before receiving it again: {why}",
+                    item.id
+                );
+                return Ok(ended_early(failed(PLACE_UNREAD, None)));
+            }
+        }
     }
     let rule_id = plan.rule.id.clone();
 

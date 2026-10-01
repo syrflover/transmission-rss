@@ -2351,3 +2351,97 @@ async fn a_new_video_missing_on_two_looks_ends_the_replacement() {
     );
     assert!(s.failures().await.is_empty());
 }
+
+// --- `다시 받기` looks at the video in the episode's place ------------------------
+
+impl Setup {
+    /// The episode's video and its torrent are taken away, and `14v3` is the
+    /// only item of the feed: it finds the episode name free, so it is
+    /// received as an ordinary item (no replacement row) and takes the name.
+    async fn v3_placed_without_a_row(&self) {
+        self.h.tr.remove(OLD_HASH);
+        std::fs::remove_file(self.file(EPISODE_NAME)).unwrap();
+        self.feed(&[(V3_HASH, &v3())]);
+        self.h.tr.content_on_add(V3_HASH, V3_BYTES);
+        self.cycle().await;
+        self.complete(V3_HASH);
+        assert_eq!(read(&self.file(EPISODE_NAME)), V3_BYTES);
+        assert_eq!(self.h.tr.torrent(V3_HASH).name, EPISODE_NAME);
+        assert!(RevisionStore::new(self.h.db.clone())
+            .by_item(self.item(&v3()).await.id)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    /// The command `id`, as the web shows it.
+    async fn command(&self, id: &str) -> Value {
+        self.get(&format!("/api/commands/{id}")).await
+    }
+}
+
+/// `14v2` stopped before it was received; then `14v3` took the episode name
+/// as an ordinary item. `다시 받기` of `14v2` is refused with the reason, adds
+/// nothing, and the stopped replacement, which could replace nothing now,
+/// ends as skipped.
+#[tokio::test]
+async fn a_retry_of_a_stopped_revision_lower_than_the_placed_video_is_refused() {
+    let s = Setup::new().await;
+    let item = stopped_after_leaving_the_feed(&s).await;
+    s.v3_placed_without_a_row().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Failed);
+
+    let id = "00000000-0000-4000-8000-000000000c01";
+    s.retry(item.id, id).await;
+    assert_eq!(s.commands().await, CommandsOutcome::Ran(1));
+    let command = s.command(id).await;
+    assert_eq!(command["state"], "failed", "{command}");
+    assert!(
+        command["outcome"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("같거나 더 높은 수정본"),
+        "{command}"
+    );
+    assert_eq!(s.added(NEW_HASH), 1, "not added again");
+    assert_eq!(s.item(&v2()).await.result, HistoryResult::Received);
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Skipped);
+    assert!(s.failures().await.is_empty());
+    s.cycle().await;
+    assert_eq!(read(&s.file(EPISODE_NAME)), V3_BYTES);
+    assert_eq!(s.added(NEW_HASH), 1);
+}
+
+/// A `버전 미상` `14v2` (no CRC32 in its name), and `14v3` placed since as an
+/// ordinary item whose torrent has left Transmission: its CRC32 tells it is
+/// `14v3`, and `다시 받기` of `14v2` is refused with the reason. The item stays
+/// `버전 미상`, so a later request looks at the folder again.
+#[tokio::test]
+async fn a_retry_of_a_version_unknown_revision_lower_than_the_placed_video_is_refused() {
+    let s = Setup::new().await;
+    s.received_v1().await;
+    let v2 = release("v2", None);
+    s.feed(&[(NEW_HASH, &v2), (OLD_HASH, &v1())]);
+    s.cycle().await;
+    let item = s.item(&v2).await;
+    assert_eq!(item.result, HistoryResult::VersionUnknown);
+    s.v3_placed_without_a_row().await;
+    s.h.tr.remove(V3_HASH);
+
+    let id = "00000000-0000-4000-8000-000000000c02";
+    s.retry(item.id, id).await;
+    assert_eq!(s.commands().await, CommandsOutcome::Ran(1));
+    let command = s.command(id).await;
+    assert_eq!(command["state"], "failed", "{command}");
+    assert!(
+        command["outcome"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("같거나 더 높은 수정본"),
+        "{command}"
+    );
+    assert_eq!(s.added(NEW_HASH), 0);
+    assert_eq!(s.item(&v2).await.result, HistoryResult::VersionUnknown);
+    assert_eq!(s.state_of(&v2).await, RevisionState::Unknown);
+    assert_eq!(read(&s.file(EPISODE_NAME)), V3_BYTES);
+}

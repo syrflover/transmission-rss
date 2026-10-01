@@ -97,7 +97,7 @@ use super::{commands::receive_once::derived_name, cycle::MAX_REASON_CHARS, Cycle
 use crate::{
     revision::{crc_text, file_crc32_identified, FileIdentity, Release},
     store::{
-        history::{HistoryResult, Millis},
+        history::{HistoryItem, HistoryResult, Millis},
         revisions::{Claim, OldVideo, Replacement, Revision, RevisionState, RowWrite, Step},
     },
     transmission::{get_torrent, torrent_places, Redactor, TorrentPlace},
@@ -328,6 +328,18 @@ pub async fn plan(ctx: &CycleContext, item: &Selected<'_>, listing: &Listing) ->
     let Some(episode_name) = episode_name(item.save_path, item.title, item.episode) else {
         return Plan::Normal;
     };
+    plan_at(ctx, item, release, episode_name, listing).await
+}
+
+/// [`plan`] for the revision `release` of the episode file `episode_name` in
+/// `item.save_path`.
+async fn plan_at(
+    ctx: &CycleContext,
+    item: &Selected<'_>,
+    release: Release,
+    episode_name: String,
+    listing: &Listing,
+) -> Plan {
     let target = item.save_path.join(&episode_name);
     match std::fs::symlink_metadata(&target) {
         Ok(meta) if meta.is_file() => {}
@@ -468,6 +480,41 @@ pub async fn plan(ctx: &CycleContext, item: &Selected<'_>, listing: &Listing) ->
     match old {
         Some(_) => Plan::Replace(decided(old, Some(file_crc))),
         None => Plan::Unknown(decided(None, Some(file_crc)), UNKNOWN_FILE),
+    }
+}
+
+/// Whether the video at the episode's place of `row` is already `item`'s
+/// revision or a higher one of its release, told the way [`plan`] tells it
+/// when a cycle decides. The replacement rows alone do not say so: a higher
+/// revision that found the episode name free was received as an ordinary
+/// item, with no row. `다시 받기` of `item` is refused then, since its
+/// replacement could replace nothing. `Err` when Transmission or the disk
+/// could not be read.
+pub async fn holds_same_or_higher(
+    ctx: &CycleContext,
+    item: &HistoryItem,
+    row: &Revision,
+) -> Result<bool, String> {
+    let selected = Selected {
+        channel_id: &item.channel_id,
+        identity_key: &item.identity_key,
+        title: &item.title,
+        save_path: Path::new(&row.folder),
+        episode: 0,
+    };
+    let release = Release::parse(&item.title);
+    let plan = plan_at(
+        ctx,
+        &selected,
+        release,
+        row.episode_name.clone(),
+        &Listing::new(),
+    )
+    .await;
+    match plan {
+        Plan::Skip(..) => Ok(true),
+        Plan::Later(why) => Err(why),
+        Plan::Normal | Plan::Replace(_) | Plan::Unknown(..) => Ok(false),
     }
 }
 
