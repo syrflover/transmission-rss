@@ -1045,6 +1045,68 @@ async fn an_undo_waits_for_a_revision_replacement_under_way_and_moves_finished_o
     assert!(left.is_empty(), "{left:?}");
 }
 
+/// A replacement that ended beside its episode's old file, which the worker
+/// still watches (an abandoned row with a reason), acts on no file: it does
+/// not hold up an undo, and its row follows the file to the new name, where
+/// the worker keeps watching it, so no cycle takes the old name's emptiness
+/// for the file gone.
+#[tokio::test]
+async fn an_undo_moves_an_ended_replacement_that_watches_its_file() {
+    use transmission_rss::store::{
+        revisions::{NewRevision, RevisionState, RevisionStore, OLD_FILE_WATCHED},
+        DbError,
+    };
+    let (s, rule) = Scene::third_season_received().await;
+    let revisions = RevisionStore::new(s.h.db.clone());
+    let item = s.h.item("Show - 50").await;
+    let folder = s.season3().to_str().unwrap().to_owned();
+    let row = revisions
+        .create(
+            s.h.now(),
+            NewRevision {
+                item_id: item.id,
+                old_item_id: None,
+                rule_id: rule.id.clone(),
+                folder: folder.clone(),
+                episode_name: "Show S03E02.mkv".into(),
+                old_version: Some(1),
+                new_version: 2,
+                old_crc: None,
+                expected_crc: None,
+                torrent_hash: None,
+                state: RevisionState::Receiving,
+                reason: None,
+            },
+        )
+        .await
+        .unwrap();
+    let id = row.id;
+    s.h.db
+        .run::<_, DbError, _>(move |c| {
+            c.execute(
+                "UPDATE video_revisions SET state = 'abandoned', reason = ?2 WHERE id = ?1",
+                rusqlite::params![id, OLD_FILE_WATCHED],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+    let command = s.undo(&rule, "undo-0004-c", -48).await;
+    assert_eq!(command["state"], "done", "{command}");
+    assert_eq!(s.on_disk(), ["Show S03E25.mkv", "Show S03E26.mkv"]);
+    let moved = revisions
+        .of_episode(folder, "Show S03E26.mkv".into())
+        .await
+        .unwrap();
+    assert_eq!(moved.iter().map(|r| r.id).collect::<Vec<_>>(), [row.id]);
+
+    s.cycle().await;
+    let row = revisions.by_item(item.id).await.unwrap().unwrap();
+    assert_eq!(row.reason.as_deref(), Some(OLD_FILE_WATCHED));
+    assert!(revisions.failures().await.unwrap().is_empty());
+}
+
 #[tokio::test]
 async fn an_undo_before_any_item_keeps_the_app_from_deciding_again() {
     let s = Scene::new().await;
