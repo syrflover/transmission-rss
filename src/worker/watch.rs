@@ -428,8 +428,8 @@ pub async fn scan_all(ctx: &CycleContext, clock: &Clock, cancel: &CancellationTo
             Poll::Nothing => continue,
             // What the watches could not place is tried again each time it is read.
             Poll::Works(names) => {
-                if ctx.live.wants_resync(&folder.id) {
-                    ctx.live.resync(&folder.id, None);
+                for name in &names {
+                    ctx.live.resync(&folder.id, Some(name));
                 }
                 scan_works(ctx, &folder, names, now, WorksMode::Incremental)
                     .await

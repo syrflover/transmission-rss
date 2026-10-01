@@ -12,7 +12,7 @@ use rustix::fd::OwnedFd;
 use tokio::{io::unix::AsyncFd, sync::mpsc};
 
 use super::{
-    tree::{self, RawEvent, WatchTree},
+    tree::{self, Due, RawEvent, WatchTree},
     FolderStatus, LiveConfig, Runtime,
 };
 use crate::worker::{
@@ -191,6 +191,9 @@ impl Task {
         }
         let retry = Instant::now() + self.config.retry;
         let ctx = &self.runtime.ctx;
+        // Announced before the lock is tried, so a cycle that finds it taken
+        // waits for this reading instead of skipping itself.
+        let _flushing = Flushing::begin(&ctx.live);
         let lock = match CycleLock::try_acquire(&self.runtime.lock_path) {
             Ok(Some(lock)) => lock,
             Ok(None) => {
@@ -207,7 +210,6 @@ impl Task {
                 return Some(later);
             }
         };
-        let _flushing = Flushing::begin(&ctx.live);
 
         let folder = match ctx.library.folder(&self.folder_id).await {
             Ok(Some(folder)) => folder,
@@ -218,26 +220,22 @@ impl Task {
                     "Watch folder {}: cannot read it from the database: {error}",
                     self.folder_id
                 );
+                tree.defer(due, retry);
                 return Some(retry);
             }
         };
         // The cycle may have read the whole folder since the catch-up was asked for.
         let whole = due.folder || !folder.baselined || (catching_up && self.catching_up());
         let now = (self.runtime.clock)();
+        let works = std::mem::take(&mut due.works);
         let outcome = if whole {
             watch::scan_folder(ctx, &folder, now, ScanMode::Periodic)
                 .await
                 .map(|_| ())
-        } else if !due.works.is_empty() {
-            watch::scan_works(
-                ctx,
-                &folder,
-                std::mem::take(&mut due.works),
-                now,
-                WorksMode::Fresh,
-            )
-            .await
-            .map(|_| ())
+        } else if !works.is_empty() {
+            watch::scan_works(ctx, &folder, works.clone(), now, WorksMode::Fresh)
+                .await
+                .map(|_| ())
         } else {
             Ok(())
         };
@@ -246,6 +244,14 @@ impl Task {
                 "Watch folder {}: cannot record the reading: {error}",
                 folder.path
             );
+            // Nothing was recorded: what was due is read again shortly.
+            let again = Due {
+                folder: whole,
+                works: if whole { Vec::new() } else { works },
+            };
+            tree.defer(again, retry);
+            drop(lock);
+            return Some(retry);
         }
         drop(lock);
         None
