@@ -46,7 +46,10 @@
 //! - `upload` takes the file's bytes as the body; the format is judged from
 //!   the bytes, never the name or the content type. At most
 //!   [`crate::artwork::UPLOAD_SLOTS`] uploads are taken in at once; another
-//!   waits for its turn before its body is read.
+//!   waits for its turn before its body is read. The body is collected into
+//!   one buffer (sized from `Content-Length`, up to the byte limit) and is
+//!   not copied after that. Reading it may take [`crate::artwork::UPLOAD_BODY_TIMEOUT`]
+//!   in all: a body that stalls is answered `400` and gives its slot back.
 //! - `clear` makes the work `disabled` (no cover, no automatic search),
 //!   `auto` goes back to automatic with a new search, `repair` asks for the
 //!   selected AniList entry's image again.
@@ -60,6 +63,8 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use bytes::{Bytes, BytesMut};
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 
 use super::{ApiError, AppState};
@@ -395,6 +400,7 @@ async fn upload(
     State(state): State<AppState>,
     Path(id): Path<String>,
     params: Result<Query<UploadParams>, axum::extract::rejection::QueryRejection>,
+    headers: HeaderMap,
     body: Body,
 ) -> Result<Json<ArtworkView>, ApiError> {
     let version = params
@@ -403,11 +409,65 @@ async fn upload(
         .ok_or_else(|| ApiError::invalid("표지의 버전이 빠졌어요. 화면을 새로 고쳐 주세요."))?;
     // The turn comes first, so only so many bodies are held at once.
     let slot = state.artwork.upload_slot().await;
-    let bytes = axum::body::to_bytes(body, MAX_IMAGE_BYTES)
-        .await
-        .map_err(|_| ApiError::invalid(crate::artwork::Rejected::TooLarge.message()))?;
+    let declared = headers
+        .get(header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse().ok());
+    let bytes = match tokio::time::timeout(
+        state.artwork.body_timeout(),
+        read_body(body, declared, MAX_IMAGE_BYTES),
+    )
+    .await
+    {
+        Ok(Ok(bytes)) => bytes,
+        Ok(Err(BodyError::TooLarge)) => {
+            return Err(ApiError::invalid(
+                crate::artwork::Rejected::TooLarge.message(),
+            ))
+        }
+        Ok(Err(BodyError::Broken)) => {
+            return Err(ApiError::invalid(
+                "이미지를 끝까지 받지 못했어요. 다시 올려 주세요.",
+            ))
+        }
+        Err(_) => {
+            return Err(ApiError::invalid(
+                "이미지를 받는 데 너무 오래 걸려요. 다시 올려 주세요.",
+            ))
+        }
+    };
     let result = state.artwork.upload(&id, version, bytes, Some(slot)).await;
     answer(&state, result).await
+}
+
+/// Why an upload's body was not taken.
+#[derive(Debug, PartialEq, Eq)]
+enum BodyError {
+    /// More than the limit (declared or arrived).
+    TooLarge,
+    /// The connection ended or failed before the body was complete.
+    Broken,
+}
+
+/// Collects `body` into one buffer of at most `limit` bytes. The buffer is
+/// reserved from the declared length (`Content-Length`, up to `limit`), so a
+/// body that arrives in several chunks is written once and handed on without
+/// the copy `axum::body::to_bytes` makes to join chunks.
+async fn read_body(body: Body, declared: Option<u64>, limit: usize) -> Result<Bytes, BodyError> {
+    if declared.is_some_and(|n| n > limit as u64) {
+        return Err(BodyError::TooLarge);
+    }
+    let reserve = declared.map_or(0, |n| n as usize);
+    let mut out = BytesMut::with_capacity(reserve);
+    let mut chunks = body.into_data_stream();
+    while let Some(chunk) = chunks.next().await {
+        let chunk = chunk.map_err(|_| BodyError::Broken)?;
+        if chunk.len() > limit - out.len() {
+            return Err(BodyError::TooLarge);
+        }
+        out.extend_from_slice(&chunk);
+    }
+    Ok(out.freeze())
 }
 
 #[derive(Deserialize)]

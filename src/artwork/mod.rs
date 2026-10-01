@@ -29,11 +29,28 @@
 //! its headers and must stay under [`DECODE_MAX_ALLOC`] (see [`image`], which
 //! also bounds what a PNG's colour profile may inflate to), and
 //! one decode runs at a time in a process, keeping its turn until it ends even
-//! when its caller went away. The bytes are shared ([`Bytes`]), never copied,
-//! from the upload's body to the decode and the file, and at most
-//! [`UPLOAD_SLOTS`] uploads are taken in at once. At most [`SERVING_SLOTS`]
-//! image files are read at once to serve or check them, and a file checked
-//! before is read again only when it changed ([`files::Verified`]).
+//! when its caller went away. An upload's body is collected into one buffer
+//! (reserved from `Content-Length`, within [`MAX_IMAGE_BYTES`]) and that
+//! buffer is shared ([`Bytes`]) with the decode and the file, never copied;
+//! the decoders' own copies are what the cost above counts. At most
+//! [`UPLOAD_SLOTS`] uploads are taken in at once, and a body that takes longer
+//! than [`UPLOAD_BODY_TIMEOUT`] to arrive is dropped and gives its slot back.
+//! At most [`SERVING_SLOTS`] image files are read at once to serve or check
+//! them, and a file checked before is read again only when it changed
+//! ([`files::Verified`]).
+//!
+//! # Memory of the web process
+//!
+//! Counted together, the web process holds at most one decode
+//! ([`DECODE_MAX_ALLOC`], 64 MiB), [`UPLOAD_SLOTS`] upload bodies (2 × 10 MiB)
+//! and [`SERVING_SLOTS`] image file reads (1 × 10 MiB): 94 MiB against the
+//! container's 128 MiB limit, leaving about 34 MiB for the rest of the process
+//! (an idle web process with an empty database takes about 14 MiB). With two serving slots the sum
+//! was 104 MiB, too close to the limit, so serving got one. Not counted: a
+//! response body already read from its file while it is sent, and the bytes of
+//! a picked AniList cover until they are decoded, each at most
+//! [`MAX_IMAGE_BYTES`] (covers are usually a few hundred KB). The worker takes
+//! no uploads and serves no files: one decode and the bytes it fetched.
 
 pub mod anilist;
 pub mod files;
@@ -78,9 +95,12 @@ pub const USER_MAX_WAIT: Duration = Duration::from_secs(10);
 /// How many uploads a process takes in at once, from reading the body to the
 /// published file: at most this many bodies of [`MAX_IMAGE_BYTES`] are held.
 pub const UPLOAD_SLOTS: usize = 2;
+/// How long reading one upload's body may take in total, while it holds an
+/// upload slot: a body that stalls is dropped and gives the slot back.
+pub const UPLOAD_BODY_TIMEOUT: Duration = Duration::from_secs(60);
 /// Image files read at once to serve or check them, each up to
 /// [`MAX_IMAGE_BYTES`].
-pub const SERVING_SLOTS: usize = 2;
+pub const SERVING_SLOTS: usize = 1;
 
 /// Why a user's artwork action did not happen. Nothing was changed.
 #[derive(Debug, thiserror::Error)]
@@ -127,6 +147,7 @@ pub struct Artwork {
     uploads: Arc<Semaphore>,
     serving: Arc<Semaphore>,
     verified: Arc<files::Verified>,
+    body_timeout: Duration,
 }
 
 impl Artwork {
@@ -150,7 +171,19 @@ impl Artwork {
             uploads: Arc::new(Semaphore::new(UPLOAD_SLOTS)),
             serving: Arc::new(Semaphore::new(SERVING_SLOTS)),
             verified: Arc::default(),
+            body_timeout: UPLOAD_BODY_TIMEOUT,
         }
+    }
+
+    /// Overrides how long an upload's body may take to arrive (tests).
+    pub fn with_body_timeout(mut self, timeout: Duration) -> Self {
+        self.body_timeout = timeout;
+        self
+    }
+
+    /// How long reading one upload's body may take ([`UPLOAD_BODY_TIMEOUT`]).
+    pub fn body_timeout(&self) -> Duration {
+        self.body_timeout
     }
 
     /// Overrides the time between AniList requests (tests).

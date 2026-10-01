@@ -441,3 +441,134 @@ async fn an_upload_waits_for_a_slot_before_it_reads_its_body() {
     assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
     assert!(read.load(Ordering::SeqCst));
 }
+
+#[tokio::test]
+async fn a_stalled_upload_body_times_out_and_gives_its_slot_back() {
+    let mut env = env().await;
+    env.state.artwork = env
+        .state
+        .artwork
+        .clone()
+        .with_body_timeout(Duration::from_millis(200));
+    let uri = format!("{}/upload?version=1", base(&env));
+    let stalled = || {
+        // One chunk, then nothing: the body never ends.
+        let body = Body::from_stream(
+            futures::stream::once(async {
+                Ok::<_, std::io::Error>(bytes::Bytes::from_static(b"\x89PNG"))
+            })
+            .chain(futures::stream::pending()),
+        );
+        call(
+            &env.state,
+            Method::POST,
+            &uri,
+            body,
+            &[(header::CONTENT_TYPE, "image/png")],
+        )
+    };
+    // Every slot is held by a stalled body, and one more upload waits behind
+    // them: it is read after they give their slots back.
+    let waiting = async {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        call(
+            &env.state,
+            Method::POST,
+            &uri,
+            Body::from(samples::png()),
+            &[(header::CONTENT_TYPE, "image/png")],
+        )
+        .await
+    };
+    let (first, second, third) = tokio::time::timeout(Duration::from_secs(10), async {
+        futures::join!(stalled(), stalled(), waiting)
+    })
+    .await
+    .expect("the stalled bodies must not hold their slots for ever");
+    for (status, _, body) in [first, second] {
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert!(
+            body["message"].as_str().unwrap().contains("오래 걸려요"),
+            "{body}"
+        );
+    }
+    assert_eq!(
+        third.0,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&third.2)
+    );
+}
+
+mod reading_a_body {
+    use futures::StreamExt;
+
+    use super::*;
+    use crate::web::artwork_api::{read_body, BodyError};
+
+    fn chunks(parts: &[&'static [u8]]) -> Body {
+        Body::from_stream(futures::stream::iter(
+            parts
+                .iter()
+                .map(|p| Ok::<_, std::io::Error>(bytes::Bytes::from_static(p)))
+                .collect::<Vec<_>>(),
+        ))
+    }
+
+    #[tokio::test]
+    async fn chunks_are_joined_in_order_into_one_buffer() {
+        let body = chunks(&[b"abc", b"", b"defg", b"h"]);
+        let bytes = read_body(body, Some(8), 8).await.unwrap();
+        assert_eq!(&bytes[..], b"abcdefgh");
+        // Without a length, or with a wrong one, the buffer still grows to fit.
+        let bytes = read_body(chunks(&[b"abc", b"def"]), None, 10)
+            .await
+            .unwrap();
+        assert_eq!(&bytes[..], b"abcdef");
+        let bytes = read_body(chunks(&[b"abc", b"def"]), Some(1), 10)
+            .await
+            .unwrap();
+        assert_eq!(&bytes[..], b"abcdef");
+        assert!(read_body(Body::empty(), Some(0), 10)
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_limit_holds_for_what_is_declared_and_for_what_arrives() {
+        // Exactly the limit is taken.
+        assert!(read_body(chunks(&[b"abcd", b"efgh"]), Some(8), 8)
+            .await
+            .is_ok());
+        // A declared length over the limit is refused before the body is read.
+        let read = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = read.clone();
+        let body = Body::from_stream(futures::stream::once(async move {
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok::<_, std::io::Error>(bytes::Bytes::from_static(b"x"))
+        }));
+        assert_eq!(read_body(body, Some(9), 8).await, Err(BodyError::TooLarge));
+        assert!(!read.load(std::sync::atomic::Ordering::SeqCst));
+        // A body longer than it declared, or with no declaration, is cut at
+        // the limit.
+        assert_eq!(
+            read_body(chunks(&[b"abcd", b"efghi"]), Some(2), 8).await,
+            Err(BodyError::TooLarge)
+        );
+        assert_eq!(
+            read_body(chunks(&[b"abcd", b"efghi"]), None, 8).await,
+            Err(BodyError::TooLarge)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_body_that_fails_midway_is_not_taken() {
+        let body = Body::from_stream(
+            futures::stream::iter([Ok(bytes::Bytes::from_static(b"abc"))])
+                .chain(futures::stream::iter([Err(std::io::Error::other("reset"))])),
+        );
+        assert_eq!(read_body(body, None, 8).await, Err(BodyError::Broken));
+    }
+}
