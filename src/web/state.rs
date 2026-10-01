@@ -1,6 +1,9 @@
-use crate::store::{
-    channels::ChannelStore, commands::CommandStore, history::HistoryStore, library::LibraryStore,
-    settings::SettingsStore, status::StatusStore, Db,
+use crate::{
+    artwork::{AnilistConfig, Artwork},
+    store::{
+        channels::ChannelStore, commands::CommandStore, history::HistoryStore,
+        library::LibraryStore, settings::SettingsStore, status::StatusStore, Db,
+    },
 };
 
 /// Shared handles every API handler can reach. Cheap to clone.
@@ -18,6 +21,9 @@ pub struct AppState {
     pub settings: SettingsStore,
     /// The watch folders and what was found in them.
     pub library: LibraryStore,
+    /// Work covers: their state, AniList, and the image files of the app
+    /// data folder.
+    pub artwork: Artwork,
 }
 
 impl AppState {
@@ -28,7 +34,16 @@ impl AppState {
             status: StatusStore::new(db.clone()),
             commands: CommandStore::new(db.clone()),
             settings: SettingsStore::new(db.clone()),
-            library: LibraryStore::new(db),
+            library: LibraryStore::new(db.clone()),
+            // No app data folder: covers can be read and changed but no image
+            // stored or served until `with_artwork` gives one.
+            artwork: Artwork::new(db, None, AnilistConfig::default()),
         }
+    }
+
+    /// Replaces the artwork services (the app data folder and AniList's address).
+    pub fn with_artwork(mut self, artwork: Artwork) -> Self {
+        self.artwork = artwork;
+        self
     }
 }

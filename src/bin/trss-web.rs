@@ -1,7 +1,10 @@
 use std::process::ExitCode;
 
+use std::path::PathBuf;
 use tokio::net::TcpListener;
+
 use transmission_rss::{
+    artwork::{AnilistConfig, AppData, Artwork},
     store::{db::DB_PATH_ENV, Db},
     web::{self, env::WebEnv, AppState},
 };
@@ -31,9 +34,15 @@ async fn run() -> Result<(), String> {
         ));
     }
 
-    let db = Db::open_from_env().await.map_err(|e| {
+    let anilist = AnilistConfig::from_env()?;
+    let db_path: PathBuf = std::env::var_os(DB_PATH_ENV)
+        .ok_or_else(|| format!("environment variable {DB_PATH_ENV} is not set"))?
+        .into();
+    let db = Db::open(&db_path).await.map_err(|e| {
         format!("cannot open the app database (set {DB_PATH_ENV} to a file on a local volume): {e}")
     })?;
+    // Cover images live in the app data folder: the database's folder.
+    let artwork = Artwork::new(db.clone(), Some(AppData::for_database(&db_path)), anilist);
 
     let listener = TcpListener::bind(env.addr)
         .await
@@ -44,7 +53,8 @@ async fn run() -> Result<(), String> {
         env.static_dir.display()
     );
 
-    axum::serve(listener, web::router(&env.static_dir, AppState::new(db)))
+    let state = AppState::new(db).with_artwork(artwork);
+    axum::serve(listener, web::router(&env.static_dir, state))
         .with_graceful_shutdown(web::shutdown_signal())
         .await
         .map_err(|e| e.to_string())

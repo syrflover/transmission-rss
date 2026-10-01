@@ -1,0 +1,260 @@
+//! The worker's automatic artwork work: one job at a time, in request order,
+//! each AniList request in its turn ([`super::anilist::REQUEST_SPACING`]).
+//!
+//! It runs beside the collection loop, not under the cycle lock (it touches
+//! neither the media nor Transmission), so a long queue (the first reading of
+//! a watch folder records hundreds of works at once) never holds up a cycle,
+//! and the web keeps answering. One process runs the queue at a time
+//! (`<db path>.artwork.lock`); jobs are rows in the database, so a restart
+//! continues where the queue stopped.
+//!
+//! A search job looks the work's folder name up and records the decision
+//! ([`super::title::decide`]); a clear match becomes a fetch job for its image.
+//! A job whose selection changed meanwhile (the user chose, cleared or asked
+//! for something else) is dropped by the store's version check. A failure to
+//! reach AniList is tried again later ([`RETRY_DELAYS`]); AniList's `429`
+//! waits as long as it says.
+
+use std::{path::PathBuf, time::Duration};
+
+use tokio_util::sync::CancellationToken;
+
+use super::{
+    anilist::AnilistError,
+    files,
+    title::{decide, Decision},
+    ActionError, Artwork, ImageFetchError,
+};
+use crate::{
+    store::artwork::{ClaimedJob, JobKind, Note, Searched, Source},
+    worker::CycleLock,
+};
+
+/// How often an idle queue looks for new jobs.
+pub const POLL: Duration = Duration::from_secs(5);
+/// How often the queue recovers interrupted publishes and cleans up.
+pub const TIDY_EVERY: Duration = Duration::from_secs(10 * 60);
+/// How long a queue that finds another process running it waits to look again.
+pub const LOCK_RETRY: Duration = Duration::from_secs(60);
+/// The waits after the first, second and third failed attempt; after that the
+/// job is given up with [`Note::Failed`] and waits for the user.
+pub const RETRY_DELAYS: [Duration; 3] = [
+    Duration::from_secs(60),
+    Duration::from_secs(10 * 60),
+    Duration::from_secs(60 * 60),
+];
+
+/// The lock file's path for a database file.
+pub fn lock_path_for(db_path: &std::path::Path) -> PathBuf {
+    let mut name = db_path.as_os_str().to_owned();
+    name.push(".artwork.lock");
+    PathBuf::from(name)
+}
+
+/// What running one job came to (tests and logs).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Ran {
+    /// The job's outcome was recorded.
+    Recorded,
+    /// The selection changed while the job ran; its outcome was dropped.
+    Dropped,
+    /// The job waits for a later try.
+    Later,
+    /// The job was given up with this note.
+    GaveUp(Note),
+}
+
+impl Artwork {
+    async fn later(&self, job: &ClaimedJob, error: &AnilistError) -> Ran {
+        let now = self.now();
+        let (retry_at, failed) = match error {
+            AnilistError::Busy { retry_after } => {
+                (Some(now + retry_after.as_millis() as i64), false)
+            }
+            _ => match RETRY_DELAYS.get(job.attempts as usize) {
+                Some(delay) => (Some(now + delay.as_millis() as i64), true),
+                None => (None, true),
+            },
+        };
+        eprintln!(
+            "Artwork {} for work {}: {error}",
+            job.kind.code(),
+            job.work_id
+        );
+        let _ = self
+            .store
+            .job_later(
+                &job.work_id,
+                job.version,
+                retry_at,
+                failed,
+                Note::Failed,
+                now,
+            )
+            .await;
+        if retry_at.is_some() {
+            Ran::Later
+        } else {
+            Ran::GaveUp(Note::Failed)
+        }
+    }
+
+    async fn give_up(&self, job: &ClaimedJob, note: Note) -> Ran {
+        let _ = self
+            .store
+            .job_later(&job.work_id, job.version, None, false, note, self.now())
+            .await;
+        Ran::GaveUp(note)
+    }
+
+    async fn run_search(&self, job: &ClaimedJob) -> Ran {
+        let search = match self.anilist.search_all(&job.dir_name).await {
+            Ok(search) => search,
+            Err(e) => return self.later(job, &e).await,
+        };
+        let outcome = match decide(&job.dir_name, &search.candidates, search.complete) {
+            Decision::Select(candidate) => Searched::Selected {
+                anilist_media_id: candidate.id,
+                image_url: candidate.cover_url.clone(),
+            },
+            Decision::NoMatch => Searched::Left(Note::NoMatch),
+            Decision::Ambiguous => Searched::Left(Note::Ambiguous),
+            Decision::Incomplete => Searched::Left(Note::Incomplete),
+        };
+        match self
+            .store
+            .searched(&job.work_id, job.version, outcome, self.now())
+            .await
+        {
+            Ok(true) => Ran::Recorded,
+            Ok(false) => Ran::Dropped,
+            Err(e) => {
+                eprintln!("Artwork search for work {}: {e}", job.work_id);
+                Ran::Later
+            }
+        }
+    }
+
+    async fn run_fetch(&self, job: &ClaimedJob) -> Ran {
+        let Some(media_id) = job.anilist_media_id else {
+            return self.give_up(job, Note::Gone).await;
+        };
+        let url = match &job.image_url {
+            Some(url) => url.clone(),
+            None => match self.anilist.media(media_id, None).await {
+                Ok(Some(entry)) => match entry.cover_url {
+                    Some(url) => url,
+                    None => return self.give_up(job, Note::NoImage).await,
+                },
+                Ok(None) => return self.give_up(job, Note::Gone).await,
+                Err(e) => return self.later(job, &e).await,
+            },
+        };
+        let bytes = match self.anilist.fetch_image(&url).await {
+            Ok(bytes) => bytes,
+            Err(ImageFetchError::NotAllowed | ImageFetchError::TooLarge) => {
+                return self.give_up(job, Note::Rejected).await
+            }
+            Err(e) => {
+                return self
+                    .later(job, &AnilistError::Unreachable(e.to_string()))
+                    .await
+            }
+        };
+        let image = match self.store_image(bytes, Source::Anilist).await {
+            Ok(image) => image,
+            Err(ActionError::Rejected(_)) => return self.give_up(job, Note::Rejected).await,
+            Err(e) => {
+                eprintln!("Artwork image for work {}: {e}", job.work_id);
+                return self
+                    .later(job, &AnilistError::Unreachable(e.to_string()))
+                    .await;
+            }
+        };
+        match self
+            .store
+            .fetched(&job.work_id, job.version, media_id, image)
+            .await
+        {
+            Ok(true) => {
+                self.tidy().await;
+                Ran::Recorded
+            }
+            Ok(false) => {
+                self.tidy().await;
+                Ran::Dropped
+            }
+            Err(e) => {
+                eprintln!("Artwork image for work {}: {e}", job.work_id);
+                Ran::Later
+            }
+        }
+    }
+
+    /// Runs `job` to its outcome.
+    pub async fn run_job(&self, job: &ClaimedJob) -> Ran {
+        match job.kind {
+            JobKind::Search => self.run_search(job).await,
+            JobKind::Fetch => self.run_fetch(job).await,
+        }
+    }
+
+    /// Runs the next job that is due, if any.
+    pub async fn run_next(&self) -> Option<Ran> {
+        let job = match self.store.next_job(self.now()).await {
+            Ok(job) => job?,
+            Err(e) => {
+                eprintln!("Artwork queue: {e}");
+                return None;
+            }
+        };
+        Some(self.run_job(&job).await)
+    }
+
+    /// Recovers interrupted publishes and removes unreferenced files.
+    pub async fn maintain(&self) {
+        let Some(app) = self.app_data() else { return };
+        if let Err(e) = files::recover(app, &self.store, self.now()).await {
+            eprintln!("Artwork recovery failed: {e}");
+        }
+        self.tidy().await;
+    }
+
+    /// Runs the queue until `cancel` fires (see the module docs). A job cut
+    /// short by the shutdown stays in the database and runs at the next start.
+    pub async fn run_queue(&self, lock_path: PathBuf, cancel: CancellationToken) {
+        loop {
+            let lock = match CycleLock::try_acquire(&lock_path) {
+                Ok(lock) => lock,
+                Err(e) => {
+                    eprintln!("Artwork queue: cannot take {}: {e}", lock_path.display());
+                    None
+                }
+            };
+            let Some(_lock) = lock else {
+                tokio::select! {
+                    _ = cancel.cancelled() => return,
+                    _ = tokio::time::sleep(LOCK_RETRY) => continue,
+                }
+            };
+            self.maintain().await;
+            let mut tidied = tokio::time::Instant::now();
+            loop {
+                if tidied.elapsed() >= TIDY_EVERY {
+                    self.maintain().await;
+                    tidied = tokio::time::Instant::now();
+                }
+                let ran = tokio::select! {
+                    _ = cancel.cancelled() => return,
+                    ran = self.run_next() => ran,
+                };
+                if ran.is_none() {
+                    tokio::select! {
+                        _ = cancel.cancelled() => return,
+                        _ = tokio::time::sleep(POLL) => {}
+                    }
+                }
+            }
+        }
+    }
+}

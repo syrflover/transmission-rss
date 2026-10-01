@@ -2,6 +2,7 @@ use std::{path::PathBuf, process::ExitCode};
 
 use tokio_util::sync::CancellationToken;
 use transmission_rss::{
+    artwork::{self, AnilistConfig, AppData, Artwork},
     store::{db::DB_PATH_ENV, Db},
     worker::{lock_path_for, Worker, WorkerEnv},
 };
@@ -21,6 +22,7 @@ async fn main() -> ExitCode {
 
 async fn run() -> Result<(), String> {
     let env = WorkerEnv::from_env().map_err(|e| e.to_string())?;
+    let anilist = AnilistConfig::from_env()?;
 
     let db_path: PathBuf = std::env::var_os(DB_PATH_ENV)
         .ok_or_else(|| format!("environment variable {DB_PATH_ENV} is not set"))?
@@ -29,10 +31,19 @@ async fn run() -> Result<(), String> {
         format!("cannot open the app database (set {DB_PATH_ENV} to a file on a local volume): {e}")
     })?;
 
+    let artwork = Artwork::new(db.clone(), Some(AppData::for_database(&db_path)), anilist);
     let worker = Worker::new(db, &env, lock_path_for(&db_path)).map_err(|e| e.to_string())?;
 
     let cancel = CancellationToken::new();
     tokio::spawn(shutdown_on_signal(cancel.clone()));
+
+    // Work covers: AniList searches and image fetches, one at a time, beside
+    // the collection loop and outside its lock.
+    let queue = tokio::spawn({
+        let cancel = cancel.clone();
+        let lock = artwork::queue::lock_path_for(&db_path);
+        async move { artwork.run_queue(lock, cancel).await }
+    });
 
     println!(
         "trss-worker started: a cycle every {}s (database: {})",
@@ -41,6 +52,7 @@ async fn run() -> Result<(), String> {
     );
 
     worker.run(cancel).await;
+    let _ = queue.await;
 
     println!("trss-worker stopped");
     Ok(())

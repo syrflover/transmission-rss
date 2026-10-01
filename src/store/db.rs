@@ -58,6 +58,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("library/unread_works.sql")),
     // 10: watch folders the app registers for the collect and archive folders
     Migration::Sql(include_str!("library/automatic.sql")),
+    // 11: work artwork: the selection, the image files the app made, AniList's pace
+    Migration::Sql(include_str!("artwork/schema.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]

@@ -4,6 +4,7 @@
 //! migrations); each feature keeps its own tables, SQL and rules in its own
 //! submodule, starting with [`channels`].
 
+pub mod artwork;
 pub mod channels;
 pub mod commands;
 pub mod db;

@@ -7,7 +7,7 @@ It runs as two long-running containers from one image:
 - `trss-web` serves the screens and the API (channels, rules, collection history, retrying a failed item).
 - `trss-worker` reads the feeds every 5 minutes, adds matching torrents, and carries out the commands the web accepts.
 
-Both keep their state in one SQLite database (channels, rules, collection history).
+Both keep their state in one SQLite database (channels, rules, collection history, the library), with the work covers in a folder next to it.
 
 ## Docker Compose
 
@@ -37,7 +37,7 @@ SEED_QUEUE_SIZE=1
 ```
 
 - `MEDIA_DIR` is mounted to `/downloads` in Transmission and in both trss containers, so all of them spell folders the same way: read-write in `trss-worker`, which moves work folders when rules are archived and restored (see below), and read-only in `trss-web`, which only reads it. Transmission downloads to `/downloads/downloads` (`$MEDIA_DIR/downloads` on the host) unless a rule says otherwise.
-- `TRSS_DATA_DIR` holds `trss.db` and the worker's lock file `trss.db.worker.lock`. Keep it on a local disk, not an SMB or NFS share: SQLite and the lock rely on local file locking.
+- `TRSS_DATA_DIR` holds `trss.db`, the worker's lock files `trss.db.worker.lock` and `trss.db.artwork.lock`, and `artwork/`, the work covers (see [Work covers](#work-covers)). Keep it on a local disk, not an SMB or NFS share: SQLite and the locks rely on local file locking.
 - The web has no sign-in of its own. `TRSS_WEB_HOST_IP` binds its port to the LAN address only; reach it from outside through a VPN, never by forwarding the port.
 
 On a host whose Docker uses the systemd cgroup driver, install the slice the Transmission container runs in once (see [Resource limits](#resource-limits)):
@@ -68,13 +68,22 @@ docker compose -f docker-compose.trss.yml up -d
 
 Restarting one container leaves the other running: `docker compose -f docker-compose.trss.yml restart trss-web` does not pause collection.
 
-To back up, copy `TRSS_DATA_DIR/trss.db` while the containers are stopped (or use `sqlite3 trss.db ".backup copy.db"` while they run). The containers run as root, so the files there belong to root.
+To back up, copy `TRSS_DATA_DIR/trss.db` and `TRSS_DATA_DIR/artwork/` together while the containers are stopped (or use `sqlite3 trss.db ".backup copy.db"` while they run, then copy `artwork/`). The database records which cover file each work uses and checks the file's size and SHA-256 before showing it, so a database restored without its `artwork/` folder shows no covers until the files are back. The containers run as root, so the files there belong to root.
 
 ### Resource limits
 
 Each trss container is limited to 0.25 CPU and 128M of memory. The cron run of the old binary had 0.1 CPU and 96M for a job that lived a few seconds. The worker now stays up, parses every feed each cycle, and adds the selected items concurrently; the web serves the screens and previews rules against stored history. These limits are a starting point, to be revisited with `docker stats` after the first days of running.
 
 Transmission is limited to 0.5 CPU and 512M, and runs in `transmission.slice`, which caps it softly at 384M (`MemoryHigh`). Most of that memory is page cache from writing downloads. Above the soft cap the kernel reclaims the cache and slows the writer down, and never kills it. At the hard limit, RHEL 9 kernels from 5.14.0-687.41.1 kill `transmission-daemon` while it writes, even when reclaim frees pages (RHEL-211058, reverted in RHEL-255363). The container keeps running because s6 restarts the daemon inside it, but every kill loses the progress, renames and labels saved since Transmission last wrote its resume files. Check for kills with `grep oom_kill /sys/fs/cgroup/transmission.slice/docker-*.scope/memory.events`.
+
+### Work covers
+
+Each work in the library has one cover: an AniList entry's cover image or a file uploaded in the work's page (tap the cover). Both containers reach AniList over HTTPS, so they need outbound access to `graphql.anilist.co` (searches) and `s4.anilist.co` (cover images); no account or key is involved.
+
+- When the app records a work for the first time (a new folder in a watch folder, or every work of a watch folder that is added), `trss-worker` searches AniList for the work's folder name and selects an entry only when exactly one entry has that title (ignoring case and spacing) and the search was read to its end. Anything less clear stays empty for the user to choose. A rescan, a restart or opening a page never searches again.
+- The worker sends at most one AniList request every 2 seconds, together with the web's searches, and waits as long as AniList asks when it answers `429`. Adding a watch folder with 500 works therefore takes about 20 minutes of searching in the background; collection and the web go on meanwhile. The queue lives in the database, so a restart continues it.
+- Images are judged by their bytes (JPEG, PNG or WebP), up to 10 MiB and 12 million pixels (8192 pixels a side), and stored under new names in `TRSS_DATA_DIR/artwork/`. Images are only fetched from AniList's image host, from addresses AniList's own answers give.
+- `TRSS_ANILIST_URL` and `TRSS_ANILIST_IMAGE_ORIGINS` (comma-separated origins) override AniList's addresses, for local testing only.
 
 ### Channels and the collect folder
 

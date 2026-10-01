@@ -17,6 +17,7 @@
 //!     }]
 //!   }],
 //!   "unrecognized": [{ "path": "Extras/PV.mkv", "reason": "outside_season", "message": "…" }],
+//!   "cover_url": "/api/library/works/…/artwork/image?v=…",
 //!   "rules": [{
 //!     "id": "…", "channel": { "id": "…", "name": null, "host": "example.org" },
 //!     "match": "Lycoris", "directory": "Lycoris Recoil/Season 01",
@@ -42,6 +43,9 @@
 //!   (where `보관` moves it). Archived rules are listed with their `state`.
 //!   Empty when the work is in some other watch folder or no collect folder is
 //!   set.
+//! - `cover_url` is where the work's cover is served while it has an image
+//!   reference, `null` otherwise; the cover view reads the rest from
+//!   [`super::artwork_api`].
 //! - `404` for a work that is not in the library.
 
 use std::path::Path as FsPath;
@@ -54,7 +58,7 @@ use axum::{
 use serde::Serialize;
 use url::Url;
 
-use super::{ApiError, AppState};
+use super::{artwork_api::image_url, ApiError, AppState};
 use crate::{
     rss::save_path,
     store::{
@@ -152,6 +156,7 @@ struct WorkDetailView {
     seasons: Vec<SeasonView>,
     unrecognized: Vec<UnrecognizedView>,
     rules: Vec<RuleRef>,
+    cover_url: Option<String>,
 }
 
 fn host_of(url: &str) -> String {
@@ -230,6 +235,11 @@ async fn show(
         &channels,
     );
 
+    let cover_url = match state.artwork.store.selection(&work.id).await {
+        Ok(selection) => selection.image.map(|image| image_url(&work.id, &image.id)),
+        Err(e) => return Err(ApiError::Internal(e.to_string())),
+    };
+
     let folder_path = FsPath::new(&work.watch_folder_path)
         .join(&work.dir_name)
         .to_string_lossy()
@@ -262,5 +272,6 @@ async fn show(
             })
             .collect(),
         rules,
+        cover_url,
     }))
 }

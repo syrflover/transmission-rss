@@ -25,7 +25,8 @@
 //!     "subtitle_check_needed": false,
 //!     "added_at": 1760000000000,
 //!     "video_added_at": null,
-//!     "subtitle_added_at": 1760000100000
+//!     "subtitle_added_at": 1760000100000,
+//!     "cover_url": "/api/library/works/…/artwork/image?v=…"
 //!   }],
 //!   "next": "7b2273…", "total": 520, "library_count": 520 }
 //! ```
@@ -58,6 +59,10 @@
 //! - Times are Unix milliseconds, `null` when unknown: `added_at` is when the
 //!   work first appeared, `video_added_at` / `subtitle_added_at` the latest
 //!   known time a video / subtitle was added over every season.
+//! - `cover_url` is where the work's cover image is served while it has one
+//!   (see [`super::artwork_api`]), `null` otherwise. The image is checked when
+//!   it is asked for, so the URL may still answer `404`; the screen then
+//!   keeps the placeholder.
 
 use axum::{
     extract::{rejection::QueryRejection, Query, State},
@@ -66,7 +71,9 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::{ApiError, AppState};
+use std::collections::HashMap;
+
+use super::{artwork_api::image_url, ApiError, AppState};
 use crate::store::library::{
     Cursor, EpisodeRange, Filter, LibraryError, ListQuery, Sort, WorkOverview,
 };
@@ -110,11 +117,15 @@ struct WorkView {
     added_at: Option<i64>,
     video_added_at: Option<i64>,
     subtitle_added_at: Option<i64>,
+    cover_url: Option<String>,
 }
 
-impl From<WorkOverview> for WorkView {
-    fn from(work: WorkOverview) -> Self {
+impl WorkView {
+    fn new(work: WorkOverview, image_ids: &HashMap<String, String>) -> Self {
         WorkView {
+            cover_url: image_ids
+                .get(&work.id)
+                .map(|image| image_url(&work.id, image)),
             id: work.id,
             name: work.dir_name,
             missing: work.missing,
@@ -217,8 +228,18 @@ async fn list(
         LibraryError::Db(e) => ApiError::Internal(e.to_string()),
         other => ApiError::Internal(other.to_string()),
     })?;
+    let image_ids = state
+        .artwork
+        .store
+        .image_ids()
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
     Ok(Json(WorkPage {
-        items: page.items.into_iter().map(WorkView::from).collect(),
+        items: page
+            .items
+            .into_iter()
+            .map(|work| WorkView::new(work, &image_ids))
+            .collect(),
         next: page.next.map(|cursor| cursor.encode()),
         total: page.total,
         library_count: page.library_count,
