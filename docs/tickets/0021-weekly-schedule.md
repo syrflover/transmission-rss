@@ -1,6 +1,6 @@
 # 0021 이번 주 편성과 처음 설정 체크리스트를 보여줘요
 
-- 상태: 대기
+- 상태: 완료 (실제 Anissia·실제 Transmission·`trss-worker`와 함께 도는 확인, AniList 방영 시각으로 회차를 정하는 경로와 표지 이미지가 있는 카드의 화면 확인, 다크 모드의 일부는 남았어요)
 - 출처: [이번 주 편성](../specs/web-app.md#이번-주-편성), [처음 실행](../specs/settings.md#처음-실행)
 - 막는 티켓: [0019](0019-subscription-rule-detail.md), [0020](0020-title-waiting.md)(다음 분기 제목 대기 수)
 
@@ -27,3 +27,62 @@
 | 감시 폴더·채널이 없는 새 설치 | 체크리스트만 보이고 수집 상태·다음 분기·요약 줄·할 일 배지가 없어요. |
 | 감시 폴더 하나를 추가하고 가져오기를 건너뜀 | 체크리스트가 사라지고 이번 주 편성이 나와요. 다른 기기에서 열어도 같아요. 건너뛴 단계는 되돌릴 수 있어요. |
 | 처음 실행의 기존 YAML 가져오기 | 채널마다 교체·추가·건너뛰기를 묻지 않고 모두 추가해요. |
+
+## 결과
+
+### 구현한 것
+
+- 마이그레이션 21(`src/store/status/week.sql`, `src/store/setup/schema.sql`): `transmission_downloading`(Transmission이 받는 중인 토렌트의 해시), `worker_info`(worker 주기 간격), `first_run`(처음 실행 중인 설치의 행과 단계별 건너뛴 시각). `first_run` 행은 이 마이그레이션이 DB에 채널도 등록된 감시 폴더도 없을 때만 한 번 써요. 옛 DB가 데이터를 그대로 두고 행을 만들지 않는 것, 빈 옛 DB가 행을 얻는 것은 `src/store/db.rs`의 시험이 봐요.
+- worker: 주기마다 받는 중(대기 포함) 토렌트의 해시를 개수와 함께 남기고(`record_transmission`), 시작할 때 주기 간격을 남겨요(`Worker::run`). 웹은 이 기록만 읽어요. `/api/collect/status`의 `cycle.next_at`은 이번 주기 시작에 간격을 더한 값이에요(간격이 없으면 `null`).
+- 순수 규칙 `src/schedule/`: 서울 달력의 월–일 주(`calendar`), 구독이 그 주 어느 날 몇 시에 방영하는지와 그 회차(`slot`), 카드의 상태 줄(`state`). 시험은 같은 파일에 있어요.
+- 저장소: `LibraryStore::season_episodes`(시즌의 정수 회차별 영상·자막 보유), `HistoryStore::received_titles_of_rules`(규칙이 받은 항목의 해시와 제목), `SetupStore`(건너뛰기 저장).
+- API: `GET /api/schedule/week`(이번 주 일곱 날의 카드, 다음 분기 구독·제목 대기 수. 처음 실행 중이면 `first_run`만 보내고 `week`는 `null`), `PUT /api/first-run/{step}`(`{skipped}`; 처음 실행이 아닌 설치는 `404`). 자세한 계약은 `src/web/schedule_api.rs`, `src/web/setup_api.rs`의 머리 문서에 있어요.
+- 웹(`web/src/screens/ScheduleScreen.tsx`, `web/src/screens/schedule/`): 요일 줄과 카드, 방영 없는 날의 얇은 줄, `오늘로 이동`, 제목 아래의 범위·분기·기준 시각, 980px 이상에서 편성 옆 좁은 열(수집 상태, 다음 분기 구독과 `편성표에서 추가`), 그보다 좁으면 편성 위의 한 줄 요약(눌러서 두 묶음을 펼쳐요), `처음 설정` 체크리스트(`건너뛰기`·`건너뛰기 취소`). 폴더·채널·구독이 바뀌는 곳(`forgetLibrary`, `channelsChanged`, `subscriptionChanged`, `ruleCountChanged`)이 홈 캐시를 비워요.
+- `readme.md`에 `Weekly schedule and the first run` 절을 더했어요.
+
+### 결정
+
+- 카드가 되는 구독: 보관(`archived`)이 아닌 모든 구독이에요. 명세가 `영상 받기`를 끈(멈춤) 작품은 카드를 남기고 `받기 멈춤`을 둔다고 해서 멈춤은 보여주고, 보관은 명세가 말하지 않아 가장 보수적으로 뺐어요. 멈춘 카드는 자막 줄이 없어요.
+- Anissia가 14일(`SNAPSHOT_STALE_AFTER_MS`) 넘게 싣지 않은 작품은 카드를 뺐어요. worker가 스냅샷을 새로 받는 것은 Anissia가 싣는 동안뿐이고 규칙은 사용자가 보관해야 보관돼서, 끝난 작품이 영원히 남지 않게 하려는 거예요.
+- 회차: 연결된 시즌의 AniList 방영 시각이 있으면 그 칸에 가장 가까운(±36시간) 회차, 없으면 Anissia 시작일의 첫 방영일부터 주 단위로 세요. 둘 다 못 정하면 `회차 없음`(카드는 남아요). 휴방·2회 연속 방영은 AniList가 없으면 못 따라가요.
+- `영상 받는 중`: 방영 회차가 규칙이 받은 항목의 릴리스 회차(`12v2`는 12, 묶음 `01-12`와 `5.5`는 제외)에 규칙의 회차 변환을 더한 값과 같고, 그 토렌트의 해시가 worker가 마지막에 본 받는 중 해시에 있을 때예요. 기록은 이번 주 카드의 규칙이 받은 항목만, 받는 중인 토렌트가 있을 때만 읽어요.
+- 영상이 있으면 방영 시각 전이어도 `영상 받음`이에요(순서: 멈춤 → 받음 → 받는 중 → 방영 전 → 영상 대기). 자막 줄은 `받지 않음`이거나 멈춘 구독에는 없어요. `인증 필요`·`회차 확인 필요`·`자막 받는 중`은 상태 모양과 줄만 있고 서버가 보내지 않아요.
+- 처음 실행은 마이그레이션 시점의 데이터로 정하고(티켓의 "하나도 없을 때"를 업그레이드 순간의 상태로 읽었어요), 단계가 끝났는지는 읽을 때마다 데이터에서 알아내요(감시 폴더가 하나라도 있으면 `감시 폴더 등록`, 채널이 하나라도 있으면 `기존 설정 가져오기`). 수집 폴더를 정하는 가져오기는 감시 폴더도 만들어서 두 단계가 함께 끝나요. 끝난 단계는 기억하지 않아서 폴더·채널을 모두 지우면 체크리스트가 돌아와요.
+- 건너뛰기 취소: 체크리스트가 떠 있는 동안, 그리고 마지막 단계를 건너뛰어 체크리스트가 사라진 직후 같은 화면의 안내 줄에서 할 수 있어요. 화면을 벗어나면 그 안내가 없어요.
+- 좁은 열은 980px부터예요. 그보다 좁으면(휴대폰과 태블릿) 한 줄 요약이에요. 휴대폰 요약은 수집 상태를 한 줄에 줄임표로 자르고 `다음 분기 N`은 늘 보이게 해서, 모두 보려면 눌러서 펼쳐요.
+- 시즌이 연결되지 않은 카드는 규칙(`/collect/rules?rule=`)으로 이어져요. 작품이 아직 없어서 작품 상세로 갈 수 없어요.
+- 다음 분기 묶음은 지금 분기보다 뒤 분기의 구독을 세고, 이름은 바로 다음 분기로 보여줘요.
+- 할 일 메뉴 배지는 세는 곳이 아직 없어서(`useTodoCount`) 바꾸지 않았어요. 개수가 생기면 처음 실행 중에는 `undefined`를 줘야 해요.
+
+### 검증한 것
+
+- `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`(합계 969개 통과, 실패 0개, 무시 2개), 웹 `bun run typecheck`, `bun run build`가 통과했어요.
+- 완료 기준의 행과 확인:
+  - 수·금 카드와 나머지 `방영 없음`, 카드가 작품 상세로 이어짐: `the_week_has_a_card_on_each_day_something_airs_and_a_bare_day_otherwise`(`src/web/schedule_api/tests.rs`), 브라우저(월·화·일이 `방영 없음`, 수요일 카드 둘, 연결된 카드의 링크는 `/library/<작품>`).
+  - 영상 있음·자막 없음: `a_held_video_without_a_subtitle_is_received_and_the_subtitle_waits`(자막 줄은 `waiting`); 브라우저에서 `자막 대기`의 톤이 `quiet`이고 `영상 받는 중`만 `active`인 것을 확인했어요.
+  - 방영 시각 전: `a_work_before_its_air_time_is_upcoming_and_a_new_subscription_has_an_empty_cover`와 브라우저(`방영 전`, 같은 카드, 조용한 톤).
+  - 시즌이 연결되지 않은 새 구독: 같은 시험(`work_id`·`cover_url`이 `null`)과 브라우저(표지 자리가 빈 칸).
+  - `오늘로 이동`: 브라우저에서 눌러 오늘 줄이 머리 아래(71px)에 오고 `document.activeElement`가 그 줄이었어요(자동 시험은 없어요).
+  - PC·휴대폰 너비: 브라우저에서 1440·1024px는 편성 옆 좁은 열(수집 상태, 다음 분기 구독), 375px는 한 줄 요약(320px는 가로 넘침만 봤어요)이고 모든 너비에서 `scrollWidth == clientWidth`(1024px는 세로 스크롤바 15px 때문에 `innerWidth`보다 작음)였어요. 1440px에서 오늘 줄의 카드가 한 줄에 셋씩 줄바꿈됐어요.
+  - 새 설치: `a_new_install_shows_only_the_checklist`(`src/web/setup_api/tests.rs`, `week`가 `null`), 브라우저(체크리스트만, 수집 상태·다음 분기·요약 줄이 없고 `/api/collect/status`를 부르지 않음. 할 일 배지는 세는 곳이 없어 원래 없음).
+  - 폴더 하나 추가하고 가져오기를 건너뜀, 다른 기기, 되돌리기: `a_folder_and_a_skipped_import_end_the_checklist_for_every_device`, `a_skip_can_be_taken_back_and_brings_the_checklist_back`, `both_steps_skipped_end_the_checklist_too`, 서버 시험이 DB에 남긴 건너뛰기를 새 요청이 읽어요. 브라우저에서 건너뛰기→`건너뛰기 취소`와 두 단계 건너뛰기 뒤 안내 줄의 취소가 서버 상태를 바꿨어요.
+  - 처음 실행의 YAML 가져오기: `importing_the_legacy_file_into_a_new_install_adds_every_channel_without_asking`(미리보기의 `conflict_count`가 0이고 `choices: []`로 채널 둘이 모두 추가됨). 기존 `import_api`의 `an_empty_app_takes_everything_without_asking_…`도 같은 동작을 봐요.
+- 받는 중 판정: `an_episode_in_transmission_is_downloading_until_the_library_holds_it`(다른 회차·묶음 토렌트는 받는 중이 아니고 `14v2`는 14화), worker가 받는 중 해시만 남기는 것은 `tests/status_snapshots_from_cycle.rs`(가짜 Transmission)가 봐요. 브라우저에서는 DB에 직접 넣은 해시로 `영상 받는 중`(강조)을 봤어요.
+- 순수 규칙: 요일·시각·늦은 밤 시각·시작·종료일(월만 아는 날짜 포함)·신작·회차 세기·AniList 시각(휴방, ±36시간)은 `src/schedule/`의 시험이 봐요.
+- 브라우저(로컬 `trss-web`, 스크래치 DB 둘, 2026-10-01 목요일, 데스크톱 1024·1440px와 375·320px, 라이트와 일부 다크): 위 항목들. Anissia는 부르지 않으므로 가짜 Anissia는 쓰지 않았어요(편성 화면은 저장된 스냅샷만 읽어요).
+
+### 검증하지 못한 것
+
+- `trss-worker`를 띄운 흐름: 주기 간격 기록(`Worker::run`)과 `다음` 시각이 실제로 채워지는 것은 보지 못했어요. 브라우저에서는 간격과 해시를 DB에 직접 넣었어요. 해시 기록은 가짜 Transmission 시험으로만 봤어요.
+- 실제 Anissia·AniList: AniList 방영 시각으로 회차를 정하는 경로는 `slot`의 단위 시험으로만 봤고 API·화면에서는 시즌 정보를 연결하지 않았어요.
+- 표지 이미지가 있는 카드: 이미지 URL은 만들지만 표지가 저장된 작품으로는 화면을 보지 않았어요(빈 자리와 이미지 실패 시 빈 자리 유지만 봤어요).
+- 다크 모드는 편성 화면 한 번만 봤고 체크리스트·요약 줄은 보지 않았어요. 실제 휴대폰·스크린 리더·터치도 보지 않았어요.
+- 비용: 요청마다 카드 수만큼 시즌 보유(`season_episodes`)와 시즌 정보를 읽어요. 구독이 수백 개일 때는 재지 않았어요. 컨테이너 메모리 128M에서는 재지 않았어요.
+- 자동 화면 시험은 없어요(이 저장소에 웹 시험 도구가 없어요).
+
+### 남은 일
+
+- 명세 확인 필요(사용자 결정): 보관된 구독을 카드로 보여줄지(지금은 뺐어요), 14일 기준이 맞는지, 건너뛴 단계를 체크리스트가 사라진 뒤에도 되돌릴 자리(설정의 가져오기·감시 폴더 줄 등)가 필요한지(지금은 같은 화면의 안내 줄뿐이에요), 폴더·채널을 모두 지웠을 때 체크리스트가 돌아와도 되는지.
+- 수집 화면의 상태판(`StatusBoard`)은 `확인`을 `5분 전`처럼 상대 시각으로 보여줘서, 시각을 `오늘 17:53`처럼 보여주는 이번 주 편성의 옆 열과 표기가 달라요. 명세의 표기 규칙에 맞춰 둘을 하나로 할지는 따로 정해야 해요.
+- 자막 쪽 티켓(목표 3·4)이 `자막 받는 중`·`인증 필요`·`회차 확인 필요`를 서버에서 보내면 카드가 그대로 그려요(`SubtitleState`, `WeekCard.tsx`의 줄 표).
+- 할 일 화면이 배지 개수를 내면 처음 실행 중에는 개수를 내지 않아야 해요(`web/src/app/todo-count.ts`).
