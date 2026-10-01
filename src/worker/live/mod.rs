@@ -78,8 +78,12 @@ use tree::WatchTree;
 pub use tree::Why;
 use watcher::{Control, SharedFd, Task};
 
-use super::{watch::SCAN_TIMEOUT, Clock, CycleContext};
+use super::{Clock, CycleContext};
 use crate::store::{history::Millis, library::WatchFolder};
+
+/// How long placing the watches of one folder may hold up whoever attaches it
+/// (the command poll). Past it the folder is read by every cycle instead.
+const ATTACH_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// How the watches behave. The defaults are what the worker runs with; tests
 /// shorten the times and set a small limit.
@@ -350,7 +354,7 @@ impl LiveWatch {
         // The directories are listed on a blocking thread, which a mount that
         // does not answer would hold; the claim lasts as long as the thread.
         let placed = tokio::time::timeout(
-            SCAN_TIMEOUT,
+            ATTACH_TIMEOUT,
             tokio::task::spawn_blocking(move || {
                 let _claim = claim;
                 tree.sync_all(None);
@@ -371,7 +375,7 @@ impl LiveWatch {
                 eprintln!(
                     "Watch folder {}: placing its watches took more than {} s; it is read by every cycle instead",
                     folder.path,
-                    SCAN_TIMEOUT.as_secs()
+                    ATTACH_TIMEOUT.as_secs()
                 );
                 return None;
             }
