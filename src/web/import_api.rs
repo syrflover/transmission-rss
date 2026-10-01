@@ -582,15 +582,19 @@ async fn apply(
         )
         .await
         .map_err(store_error)?;
-    // The first run's import step is done once an import has been applied. The
-    // import itself is committed, so a failure here is only logged: the user
-    // can still skip the step.
-    if let Err(e) = state
-        .setup
-        .mark_import_applied(super::commands_api::now_millis())
-        .await
-    {
-        eprintln!("import: cannot record that the import was applied: {e}");
+    // The first run's import step is done once an import has created or
+    // changed a channel (its rules and subscriptions come with one). An apply
+    // that skipped every channel or left every channel out did nothing, so the
+    // step stays open. The import itself is committed, so a failure here is
+    // only logged: the user can still skip the step.
+    if !results.is_empty() {
+        if let Err(e) = state
+            .setup
+            .mark_import_applied(super::commands_api::now_millis())
+            .await
+        {
+            eprintln!("import: cannot record that the import was applied: {e}");
+        }
     }
     let subscriptions = suggestions::result(picked, &resolved, &outcomes);
 

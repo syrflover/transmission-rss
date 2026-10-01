@@ -10,6 +10,7 @@ use tower::ServiceExt;
 use crate::store::channels::{ChannelInput, ChannelStore, RuleInput};
 use crate::store::library::LibraryStore;
 use crate::store::settings::{CollectionSettings, SettingsStore};
+use crate::store::setup::{SetupStore, Step};
 use crate::store::Db;
 
 use super::*;
@@ -23,6 +24,7 @@ struct App {
     store: ChannelStore,
     settings: SettingsStore,
     library: LibraryStore,
+    setup: SetupStore,
     app: Router,
 }
 
@@ -37,6 +39,7 @@ async fn app() -> App {
         store: state.channels.clone(),
         settings: state.settings.clone(),
         library: state.library.clone(),
+        setup: state.setup.clone(),
         app: Router::new().nest("/api", crate::web::api::router().with_state(state)),
     }
 }
@@ -776,6 +779,83 @@ async fn skipping_every_channel_does_not_set_the_collect_folder() {
     assert_eq!(status, StatusCode::OK, "{text}");
     assert_eq!(result["collect_folder_set"], Value::Null);
     assert_eq!(t.collection().await, None);
+}
+
+#[tokio::test]
+async fn an_apply_that_creates_or_changes_nothing_does_not_finish_the_import_step() {
+    let t = app().await;
+    let (input, rules) = existing_a();
+    let a = t
+        .store
+        .create_channel_with_rules(input, rules)
+        .await
+        .unwrap();
+    t.set_folder(&t.root()).await;
+    let content = t.real(&format!(
+        "- url: https://feeds.example.test/a?filter=1080p&token={TOKEN_A}
+  directory: /media/a
+  rules:
+    - match: Keep1
+      directory: X
+"
+    ));
+    let done = || async {
+        t.setup
+            .first_run()
+            .await
+            .unwrap()
+            .unwrap()
+            .done(Step::Import)
+    };
+    assert!(!done().await);
+
+    // Every channel skipped: nothing was created or changed.
+    let (status, text, result) = t.apply(&content, json!([choice(0, &a, "skip")])).await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(result["counts"]["channels_skipped"], 1);
+    assert!(!done().await);
+
+    // A channel that is added counts.
+    let (status, text, result) = t.apply(&content, json!([choice(0, &a, "add")])).await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(result["counts"]["channels_added"], 1);
+    assert!(done().await);
+}
+
+#[tokio::test]
+async fn replacing_a_channel_finishes_the_import_step() {
+    let t = app().await;
+    let (input, rules) = existing_a();
+    let a = t
+        .store
+        .create_channel_with_rules(input, rules)
+        .await
+        .unwrap();
+    t.set_folder(&t.root()).await;
+    let content = t.real(&format!(
+        "- url: https://feeds.example.test/a?filter=1080p&token={TOKEN_A}
+  directory: /media/a
+  rules:
+    - match: Other
+      directory: X
+"
+    ));
+    assert!(!t
+        .setup
+        .first_run()
+        .await
+        .unwrap()
+        .unwrap()
+        .done(Step::Import));
+    let (status, text, _) = t.apply(&content, json!([choice(0, &a, "replace")])).await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert!(t
+        .setup
+        .first_run()
+        .await
+        .unwrap()
+        .unwrap()
+        .done(Step::Import));
 }
 
 /// A one-channel file whose folder is `folder`.
