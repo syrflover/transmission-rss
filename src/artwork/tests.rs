@@ -478,6 +478,35 @@ async fn an_outcome_that_cannot_be_written_waits_like_a_failure_instead_of_askin
 }
 
 #[tokio::test]
+async fn an_answer_larger_than_the_limit_is_refused_before_it_is_read_whole() {
+    let env = Env::new(&["A"]).await;
+    env.fake
+        .add_search("A", vec![env.fake.entry(1, "A", &[])], &samples::jpeg());
+    let limit = super::anilist::MAX_ANSWER_BYTES;
+    for chunked in [false, true] {
+        {
+            let mut state = env.fake.state.lock().unwrap();
+            state.chunked = chunked;
+            state.padding = limit - 4096;
+        }
+        let page = env.art.anilist.search_page("A", 1, None).await.unwrap();
+        assert_eq!(page.candidates.len(), 1, "chunked: {chunked}");
+        env.fake.state.lock().unwrap().padding = limit;
+        assert!(
+            matches!(
+                env.art.anilist.search_page("A", 1, None).await,
+                Err(AnilistError::Invalid(_))
+            ),
+            "chunked: {chunked}"
+        );
+        assert!(matches!(
+            env.art.anilist.media(1, None).await,
+            Err(AnilistError::Invalid(_))
+        ));
+    }
+}
+
+#[tokio::test]
 async fn hundreds_of_new_works_are_searched_one_at_a_time_at_the_pace() {
     let names: Vec<String> = (0..520).map(|i| format!("Work {i:03}")).collect();
     let refs: Vec<&str> = names.iter().map(String::as_str).collect();

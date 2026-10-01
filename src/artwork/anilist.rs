@@ -12,6 +12,8 @@
 //!   [`AnilistConfig::image_origins`], without following redirects, within
 //!   [`super::MAX_IMAGE_BYTES`] and [`super::FETCH_TIMEOUT`]. No URL a user
 //!   typed is ever fetched.
+//! - **Bounded answers.** An API answer is read up to [`MAX_ANSWER_BYTES`];
+//!   a longer one is refused before it is parsed.
 //! - **Configurable for tests.** The API URL and the image origins come from
 //!   [`AnilistConfig`], so tests point them at a local fake.
 
@@ -47,6 +49,9 @@ pub const SEARCH_PAGE_SIZE: u32 = 50;
 /// Pages read for one automatic search. A search with more results than this
 /// is not read to its end, so it never selects automatically.
 pub const MAX_SEARCH_PAGES: u32 = 4;
+/// The largest API answer read. A search page of 50 entries or one entry
+/// with its airing schedule is far below it.
+pub const MAX_ANSWER_BYTES: usize = 2 * 1024 * 1024;
 /// How long to wait when a `429` answer names no time.
 const DEFAULT_RETRY_AFTER: Duration = Duration::from_secs(60);
 /// The longest `Retry-After` honoured as given.
@@ -337,10 +342,7 @@ impl Anilist {
         if !status.is_success() {
             return Err(AnilistError::Status(status.as_u16()));
         }
-        let body = response
-            .bytes()
-            .await
-            .map_err(|e| AnilistError::Unreachable(e.without_url().to_string()))?;
+        let body = read_answer(response).await?;
         let answer: Answer<T> = serde_json::from_slice(&body)
             .map_err(|e| AnilistError::Invalid(format!("unexpected shape: {e}")))?;
         if answer.errors.as_ref().is_some_and(|e| !e.is_empty()) {
@@ -497,6 +499,29 @@ impl Anilist {
             .await
             .map_err(|_| ImageFetchError::Unreachable("timed out".to_owned()))?
     }
+}
+
+/// The body of an API answer, refused once it passes [`MAX_ANSWER_BYTES`].
+async fn read_answer(mut response: reqwest::Response) -> Result<Vec<u8>, AnilistError> {
+    let too_large = || AnilistError::Invalid(format!("larger than {MAX_ANSWER_BYTES} bytes"));
+    if response
+        .content_length()
+        .is_some_and(|n| n > MAX_ANSWER_BYTES as u64)
+    {
+        return Err(too_large());
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|e| AnilistError::Unreachable(e.without_url().to_string()))?
+    {
+        if body.len() + chunk.len() > MAX_ANSWER_BYTES {
+            return Err(too_large());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
 }
 
 #[cfg(test)]

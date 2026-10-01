@@ -33,6 +33,10 @@ pub struct FakeState {
     pub retry_after: u64,
     /// The next this many API requests answer `500`.
     pub failing: u32,
+    /// API answers carry this many bytes of padding (an unknown field).
+    pub padding: usize,
+    /// Whether the padded answers leave out `Content-Length` (sent in chunks).
+    pub chunked: bool,
     /// When each API request arrived, with its variables.
     pub requests: Vec<(Instant, Value)>,
     /// Image requests, by name.
@@ -143,26 +147,46 @@ async fn graphql(State(fake): State<Fake>, body: Bytes) -> Response {
         state.failing -= 1;
         return (StatusCode::INTERNAL_SERVER_ERROR, "{}").into_response();
     }
+    let padding = state.padding;
+    let chunked = state.chunked;
+    let answer = |status: StatusCode, mut value: Value| -> Response {
+        if padding == 0 {
+            return (status, axum::Json(value)).into_response();
+        }
+        value["extensions"] = json!({ "padding": "x".repeat(padding) });
+        let text = value.to_string();
+        if chunked {
+            let chunks: Vec<Result<Bytes, std::io::Error>> = text
+                .into_bytes()
+                .chunks(64 * 1024)
+                .map(|c| Ok(Bytes::copy_from_slice(c)))
+                .collect();
+            let body = axum::body::Body::from_stream(futures::stream::iter(chunks));
+            return (status, [(header::CONTENT_TYPE, "application/json")], body).into_response();
+        }
+        (status, [(header::CONTENT_TYPE, "application/json")], text).into_response()
+    };
     let query = body["query"].as_str().unwrap_or("");
     if query.contains("Page(") {
         let text = variables["search"].as_str().unwrap_or("");
         let page = variables["page"].as_u64().unwrap_or(1) as usize;
         let pages = state.searches.get(text).cloned().unwrap_or_default();
         let media = pages.get(page - 1).cloned().unwrap_or_default();
-        let answer = json!({ "data": { "Page": {
-            "pageInfo": { "hasNextPage": page < pages.len() },
-            "media": media,
-        } } });
-        return axum::Json(answer).into_response();
+        return answer(
+            StatusCode::OK,
+            json!({ "data": { "Page": {
+                "pageInfo": { "hasNextPage": page < pages.len() },
+                "media": media,
+            } } }),
+        );
     }
     let id = variables["id"].as_i64().unwrap_or(0);
     match state.media.get(&id) {
-        Some(entry) => axum::Json(json!({ "data": { "Media": entry } })).into_response(),
-        None => (
+        Some(entry) => answer(StatusCode::OK, json!({ "data": { "Media": entry } })),
+        None => answer(
             StatusCode::NOT_FOUND,
-            axum::Json(json!({ "errors": [{ "message": "Not Found.", "status": 404 }], "data": { "Media": null } })),
-        )
-            .into_response(),
+            json!({ "errors": [{ "message": "Not Found.", "status": 404 }], "data": { "Media": null } }),
+        ),
     }
 }
 
