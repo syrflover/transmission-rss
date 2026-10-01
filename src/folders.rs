@@ -140,6 +140,13 @@ pub fn has_parent_dir(path: &Path) -> bool {
     path.components().any(|c| c == Component::ParentDir)
 }
 
+/// Whether `path` is made of nothing but `.` components (or is empty): it
+/// names no folder below the collect folder, so a rule with it saves into the
+/// collect folder itself. `.` and `./` are what a person may type for it.
+pub fn is_collect_folder_itself(path: &Path) -> bool {
+    path.components().all(|c| c == Component::CurDir)
+}
+
 /// The folder every path is inside (or is), by whole components, or `None` when
 /// they share no leading component or there are no paths. The folder never
 /// contains a `..` component: the shared part stops before the first one.
@@ -300,6 +307,13 @@ mod tests {
         );
         assert!(has_parent_dir(Path::new("/a/../b")));
         assert!(!has_parent_dir(Path::new("/a/b..c/..d")));
+        // Only `.` components (or nothing) name the collect folder itself.
+        for itself in ["", ".", "./", "././", "./."] {
+            assert!(is_collect_folder_itself(Path::new(itself)), "{itself:?}");
+        }
+        for below in ["a", "./a", "a/.", "..", ".a", "..."] {
+            assert!(!is_collect_folder_itself(Path::new(below)), "{below:?}");
+        }
     }
 
     #[test]

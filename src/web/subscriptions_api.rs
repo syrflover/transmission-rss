@@ -628,6 +628,13 @@ async fn subscribe(
             "저장 폴더는 수집 폴더 아래 경로로 적어 주세요. /로 시작하면 안 돼요.",
         ));
     }
+    // `.` and `./` name no folder: the rule would save into the collect folder
+    // itself, which an empty folder is refused for as well.
+    if crate::folders::is_collect_folder_itself(std::path::Path::new(&directory)) {
+        return Err(ApiError::invalid(
+            "저장 폴더로 `.`만 적을 수는 없어요. 수집 폴더 자체에 받게 되니, 그 아래의 작품 폴더 이름을 적어 주세요.",
+        ));
+    }
     let channel = state
         .channels
         .get_channel(&b.channel_id)

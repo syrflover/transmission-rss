@@ -554,6 +554,10 @@ async fn a_subscription_is_refused_when_what_it_names_is_not_there_and_creates_n
         (with("directory", json!("  ")), "저장 폴더"),
         (with("directory", json!("/abs/path")), "/로 시작"),
         (with("directory", json!("../escape")), ".."),
+        // Folders that are the collect folder itself.
+        (with("directory", json!(".")), "수집 폴더 자체"),
+        (with("directory", json!("./")), "수집 폴더 자체"),
+        (with("directory", json!(" ./. ")), "수집 폴더 자체"),
         (with("creator", json!("없는 제작자")), "자막 목록에 없는"),
         (with("creator", Value::Null), "제작자를 골라"),
         (with("subtitles", json!("undecided")), "따라 받을 때만"),

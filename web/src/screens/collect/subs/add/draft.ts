@@ -19,7 +19,10 @@ export function folderProblem(directory: string): string | null {
   const dir = directory.trim();
   if (dir === "") return "저장 폴더를 적어 주세요.";
   if (dir.startsWith("/") || /^[A-Za-z]:/.test(dir)) return "수집 폴더 아래의 상대 경로로 적어 주세요.";
-  if (dir.split(/[\\/]/).includes("..")) return "경로에 ‘..’은 쓸 수 없어요.";
+  const parts = dir.split(/[\\/]/);
+  if (parts.includes("..")) return "경로에 ‘..’은 쓸 수 없어요.";
+  // `.` and `./` are the collect folder itself, not a folder below it.
+  if (parts.every((part) => part === "." || part === "")) return "‘.’만 적으면 수집 폴더 자체에 받아요. 작품 폴더 이름을 적어 주세요.";
   return null;
 }
 
