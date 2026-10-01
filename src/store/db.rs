@@ -78,6 +78,12 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("channels/resumed.sql")),
     // 20: when a title-waiting subscription got its title; the title candidates the user rejected
     Migration::Sql(include_str!("channels/title_waiting.sql")),
+    // 21: the weekly schedule: the torrents being downloaded and the cycle interval the worker
+    //     leaves for the web, and the first run's checklist
+    Migration::Sql(concat!(
+        include_str!("status/week.sql"),
+        include_str!("setup/schema.sql")
+    )),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -656,6 +662,87 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(left, 0);
+    }
+
+    /// The migration that added `first_run` is number 21, the one after these.
+    const BEFORE_FIRST_RUN: usize = 20;
+
+    async fn first_run_rows(db: &Db) -> i64 {
+        db.run::<_, DbError, _>(|c| {
+            Ok(c.query_row("SELECT count(*) FROM first_run", [], |r| r.get(0))?)
+        })
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_database_with_channels_or_folders_from_before_the_first_run_is_not_a_first_run() {
+        for (name, data) in [
+            ("channel", INSERT_CHANNEL),
+            (
+                "folder",
+                "INSERT INTO watch_folders (id, path, created_at) VALUES ('w', '/w', 1)",
+            ),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("app.db");
+            {
+                let conn = database_at(&path, BEFORE_FIRST_RUN);
+                conn.execute(data, []).unwrap();
+            }
+
+            let db = Db::open(&path).await.unwrap();
+
+            assert_eq!(version_of(&db).await, MIGRATIONS.len(), "{name}");
+            assert_eq!(first_run_rows(&db).await, 0, "{name}");
+            let kept: i64 = db
+                .run::<_, DbError, _>(|c| {
+                    Ok(c.query_row(
+                        "SELECT (SELECT count(*) FROM channels)
+                                + (SELECT count(*) FROM watch_folders)",
+                        [],
+                        |r| r.get(0),
+                    )?)
+                })
+                .await
+                .unwrap();
+            assert_eq!(kept, 1, "{name}");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_empty_database_from_before_the_first_run_begins_one_and_gets_the_week_tables() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        {
+            database_at(&path, BEFORE_FIRST_RUN);
+        }
+
+        let db = Db::open(&path).await.unwrap();
+
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+        assert_eq!(first_run_rows(&db).await, 1);
+        // The tables the weekly schedule reads can be written and read.
+        let (hashes, interval): (i64, i64) = db
+            .run::<_, DbError, _>(|c| {
+                c.execute(
+                    "INSERT INTO transmission_downloading (hash) VALUES ('aa')",
+                    [],
+                )?;
+                c.execute(
+                    "INSERT INTO worker_info (id, cycle_interval_ms) VALUES (1, 300000)",
+                    [],
+                )?;
+                Ok(c.query_row(
+                    "SELECT (SELECT count(*) FROM transmission_downloading),
+                            (SELECT cycle_interval_ms FROM worker_info)",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?)
+            })
+            .await
+            .unwrap();
+        assert_eq!((hashes, interval), (1, 300_000));
     }
 
     #[tokio::test]

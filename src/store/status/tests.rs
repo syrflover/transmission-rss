@@ -99,19 +99,25 @@ async fn transmission_counts_are_replaced() {
     assert_eq!(store.transmission().await.unwrap(), None);
 
     store
-        .record_transmission(TransmissionCounts {
-            downloading: 2,
-            seeding: 5,
-            taken_at: 100,
-        })
+        .record_transmission(
+            TransmissionCounts {
+                downloading: 2,
+                seeding: 5,
+                taken_at: 100,
+            },
+            Vec::new(),
+        )
         .await
         .unwrap();
     store
-        .record_transmission(TransmissionCounts {
-            downloading: 0,
-            seeding: 7,
-            taken_at: 300,
-        })
+        .record_transmission(
+            TransmissionCounts {
+                downloading: 0,
+                seeding: 7,
+                taken_at: 300,
+            },
+            Vec::new(),
+        )
         .await
         .unwrap();
 
@@ -123,6 +129,46 @@ async fn transmission_counts_are_replaced() {
             taken_at: 300,
         })
     );
+}
+
+#[tokio::test]
+async fn the_downloading_hashes_are_replaced_with_the_counts() {
+    let store = StatusStore::new(db().await);
+    assert!(store.downloading_hashes().await.unwrap().is_empty());
+    let counts = |downloading| TransmissionCounts {
+        downloading,
+        seeding: 0,
+        taken_at: 100,
+    };
+
+    store
+        .record_transmission(counts(2), ids(&["aaa", "bbb", "aaa", ""]))
+        .await
+        .unwrap();
+    assert_eq!(
+        store.downloading_hashes().await.unwrap(),
+        ["aaa", "bbb"].iter().map(|h| h.to_string()).collect()
+    );
+
+    store
+        .record_transmission(counts(1), ids(&["ccc"]))
+        .await
+        .unwrap();
+    assert_eq!(
+        store.downloading_hashes().await.unwrap(),
+        ["ccc"].iter().map(|h| h.to_string()).collect()
+    );
+}
+
+#[tokio::test]
+async fn the_cycle_interval_is_whatever_the_worker_last_recorded() {
+    let store = StatusStore::new(db().await);
+    assert_eq!(store.cycle_interval().await.unwrap(), None);
+
+    store.record_cycle_interval(300_000).await.unwrap();
+    store.record_cycle_interval(60_000).await.unwrap();
+
+    assert_eq!(store.cycle_interval().await.unwrap(), Some(60_000));
 }
 
 fn observation(key: &str, result: HistoryResult) -> Observation {

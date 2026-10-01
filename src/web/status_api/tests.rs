@@ -221,17 +221,29 @@ async fn transmission_counts_and_the_last_cycle_are_reported_with_their_time() {
     let (state, router) = app();
     state
         .status
-        .record_transmission(TransmissionCounts {
-            downloading: 1,
-            seeding: 3,
-            taken_at: NOON,
-        })
+        .record_transmission(
+            TransmissionCounts {
+                downloading: 1,
+                seeding: 3,
+                taken_at: NOON,
+            },
+            Vec::new(),
+        )
         .await
         .unwrap();
     assert!(state.history.try_begin_cycle(NOON - HOUR, 0).await.unwrap());
     state
         .history
         .finish_cycle(NOON - HOUR + 1_000)
+        .await
+        .unwrap();
+
+    // Before any worker recorded its interval the next check is not known.
+    let (_, json) = get(&router, "/api/collect/status?tz_offset=540").await;
+    assert_eq!(json["cycle"]["next_at"], serde_json::Value::Null);
+    state
+        .status
+        .record_cycle_interval(5 * 60_000)
         .await
         .unwrap();
 
@@ -242,6 +254,7 @@ async fn transmission_counts_and_the_last_cycle_are_reported_with_their_time() {
     assert_eq!(json["transmission"]["taken_at"], NOON);
     assert_eq!(json["cycle"]["started_at"], NOON - HOUR);
     assert_eq!(json["cycle"]["finished_at"], NOON - HOUR + 1_000);
+    assert_eq!(json["cycle"]["next_at"], NOON - HOUR + 5 * 60_000);
     assert_eq!(json["received"]["days"].as_array().unwrap().len(), 7);
 }
 

@@ -29,7 +29,8 @@ export interface Board {
   /** Items that ended as failed or duplicate in those seven days. */
   problems: number;
   transmission: { downloading: number; seeding: number; taken_at: number } | null;
-  cycle: { started_at: number; finished_at: number | null } | null;
+  /** `next_at` is when the next cycle is due; `null` until a worker has recorded its interval. */
+  cycle: { started_at: number; finished_at: number | null; next_at: number | null } | null;
   /** False until the collect folder is chosen; the worker adds no torrent before that. */
   collect_folder_set: boolean;
 }

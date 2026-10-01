@@ -13,6 +13,7 @@ pub mod history;
 pub mod library;
 pub mod seasons;
 pub mod settings;
+pub mod setup;
 pub mod status;
 
 pub use db::{Db, DbError};

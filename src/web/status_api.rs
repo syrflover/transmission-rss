@@ -8,7 +8,7 @@
 //!   "received": { "total": 12, "days": [{ "date": "2026-09-24", "count": 3 }, ...7] },
 //!   "problems": 2,
 //!   "transmission": { "downloading": 1, "seeding": 3, "taken_at": 1790000000000 } | null,
-//!   "cycle": { "started_at", "finished_at" } | null,
+//!   "cycle": { "started_at", "finished_at", "next_at" } | null,
 //!   "collect_folder_set": true|false
 //! }
 //! ```
@@ -102,6 +102,9 @@ pub struct CycleStatus {
     pub started_at: Millis,
     /// `null` while that cycle runs or if the worker died in it.
     pub finished_at: Option<Millis>,
+    /// When the next cycle is due: the start plus the interval the worker
+    /// recorded when it started. `null` while no worker has recorded one.
+    pub next_at: Option<Millis>,
 }
 
 #[derive(Debug, Serialize)]
@@ -195,6 +198,7 @@ pub async fn board(state: &AppState, now: Millis, tz_offset: i64) -> Result<Boar
             seeding: t.seeding,
             taken_at: t.taken_at,
         });
+    let interval = state.status.cycle_interval().await.map_err(internal)?;
     let cycle = state
         .history
         .last_cycle()
@@ -203,6 +207,7 @@ pub async fn board(state: &AppState, now: Millis, tz_offset: i64) -> Result<Boar
         .map(|c| CycleStatus {
             started_at: c.started_at,
             finished_at: c.finished_at,
+            next_at: interval.map(|ms| c.started_at.saturating_add(ms)),
         });
 
     let collect_folder_set = state

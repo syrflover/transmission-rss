@@ -1,5 +1,6 @@
 import { forget, forgetPrefix, patch } from "@/lib/cached";
 import { forgetLibrary, WORK_PREFIX } from "@/screens/library/api";
+import { forgetWeek } from "@/screens/schedule/api";
 
 import type { Channel } from "./channels/api";
 import type { RuleList } from "./rules/api";
@@ -46,6 +47,8 @@ const PREVIEW_PREFIX = "collect:preview:";
  * rows carry the channel's name.
  */
 export function channelsChanged(): void {
+  // The home screen's checklist ends with the first channel.
+  forgetWeek();
   forget(KEYS.rules);
   forgetPrefix(HISTORY_PREFIX);
 }
@@ -73,6 +76,7 @@ export function everythingChanged(): void {
 
 /** A rule was created (`+1`) or deleted (`-1`): the channel list shows how many rules a channel has. */
 export function ruleCountChanged(channelId: string, delta: number): void {
+  forgetWeek();
   patch<Channel[]>(KEYS.channels, (channels) =>
     channels.map((c) => (c.id === channelId ? { ...c, rule_count: Math.max(0, c.rule_count + delta) } : c)),
   );
@@ -96,6 +100,7 @@ export function withoutRule(list: RuleList, ruleId: string): RuleList {
  * head, read the server again. The caller patches the rule list itself.
  */
 export function subscriptionChanged(): void {
+  forgetWeek();
   forget(KEYS.subscriptions);
   forget(KEYS.candidates);
   forgetPrefix(WORK_PREFIX);

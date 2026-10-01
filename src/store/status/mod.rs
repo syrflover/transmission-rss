@@ -4,7 +4,10 @@
 //! worker leaves a small snapshot in the database at each cycle:
 //!
 //! - per channel, whether the feed could be read ([`ChannelRead`]);
-//! - Transmission's downloading and seeding torrent counts ([`TransmissionCounts`]).
+//! - Transmission's downloading and seeding torrent counts ([`TransmissionCounts`])
+//!   and the hashes of the torrents that were downloading;
+//! - the worker's cycle interval, which the web cannot read from its own
+//!   environment, so it can tell when the next check is due.
 //!
 //! A snapshot is a fact about the time it was taken, so it carries that time
 //! and the screen shows it; a failed look at Transmission leaves the older
@@ -94,11 +97,17 @@ impl StatusStore {
         self.db.run(|c| channel_reads(c)).await
     }
 
-    /// Replaces the Transmission counts.
-    pub async fn record_transmission(&self, counts: TransmissionCounts) -> Result<(), StatusError> {
+    /// Replaces the Transmission counts and the hashes of the torrents that
+    /// were downloading (or queued to download) when they were taken.
+    pub async fn record_transmission(
+        &self,
+        counts: TransmissionCounts,
+        downloading: Vec<String>,
+    ) -> Result<(), StatusError> {
         self.db
             .run(move |c| {
-                c.execute(
+                let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                tx.execute(
                     "INSERT INTO transmission_snapshot (id, downloading, seeding, taken_at)
                      VALUES (1, ?1, ?2, ?3)
                      ON CONFLICT (id) DO UPDATE SET
@@ -107,7 +116,60 @@ impl StatusStore {
                          taken_at = excluded.taken_at",
                     params![counts.downloading, counts.seeding, counts.taken_at],
                 )?;
+                tx.execute("DELETE FROM transmission_downloading", [])?;
+                let mut insert = tx
+                    .prepare("INSERT OR IGNORE INTO transmission_downloading (hash) VALUES (?1)")?;
+                for hash in downloading.iter().filter(|h| !h.is_empty()) {
+                    insert.execute([hash])?;
+                }
+                drop(insert);
+                tx.commit()?;
                 Ok::<_, StatusError>(())
+            })
+            .await
+    }
+
+    /// The hashes of the torrents Transmission was downloading when the worker
+    /// last looked.
+    pub async fn downloading_hashes(&self) -> Result<HashSet<String>, StatusError> {
+        self.db
+            .run(|c| {
+                let mut stmt = c.prepare("SELECT hash FROM transmission_downloading")?;
+                let hashes = stmt
+                    .query_map([], |r| r.get(0))?
+                    .collect::<rusqlite::Result<HashSet<String>>>()?;
+                Ok::<_, StatusError>(hashes)
+            })
+            .await
+    }
+
+    /// Records the time between two collection cycles of this worker.
+    pub async fn record_cycle_interval(&self, interval_ms: i64) -> Result<(), StatusError> {
+        self.db
+            .run(move |c| {
+                c.execute(
+                    "INSERT INTO worker_info (id, cycle_interval_ms) VALUES (1, ?1)
+                     ON CONFLICT (id) DO UPDATE SET cycle_interval_ms = excluded.cycle_interval_ms",
+                    [interval_ms.max(1)],
+                )?;
+                Ok::<_, StatusError>(())
+            })
+            .await
+    }
+
+    /// The time between two collection cycles the worker last recorded, in
+    /// milliseconds; `None` while no worker has started.
+    pub async fn cycle_interval(&self) -> Result<Option<i64>, StatusError> {
+        self.db
+            .run(|c| {
+                Ok::<_, StatusError>(
+                    c.query_row(
+                        "SELECT cycle_interval_ms FROM worker_info WHERE id = 1",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .optional()?,
+                )
             })
             .await
     }

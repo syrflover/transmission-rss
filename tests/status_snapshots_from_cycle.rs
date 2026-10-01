@@ -44,6 +44,13 @@ async fn a_cycle_records_that_the_feed_was_read_and_how_many_torrents_transmissi
     assert_eq!(counts.seeding, 2);
     assert!(counts.downloading >= 1, "{counts:?}");
     assert_eq!(counts.taken_at, h.now());
+    // The weekly schedule reads which torrents those are: the downloading ones
+    // by hash, not the seeding or stopped ones.
+    let hashes = status.downloading_hashes().await.unwrap();
+    assert_eq!(hashes.len() as u32, counts.downloading);
+    for seeding in ["b", "c", "d"] {
+        assert!(!hashes.contains(&seeding.repeat(40)), "{hashes:?}");
+    }
 }
 
 #[tokio::test]

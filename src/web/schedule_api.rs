@@ -1,0 +1,403 @@
+//! `GET /api/schedule/week`: what the home screen, `이번 주 편성`, shows
+//! (`docs/specs/web-app.md`).
+//!
+//! ```json
+//! { "now": 1790780400000,
+//!   "first_run": null | { "active": true, "steps": [...] },
+//!   "week": null | {
+//!     "start": "2026-09-28", "end": "2026-10-04", "today": "2026-10-01",
+//!     "quarter": { "year": 2026, "number": 4 },
+//!     "days": [{ "date": "2026-09-28", "weekday": 0, "today": false,
+//!                "cards": [Card] }, ... 7 days, Monday first],
+//!     "next_quarter": { "quarter": { ... }, "subscriptions": 3, "title_waiting": 1 }
+//!   } }
+//! ```
+//!
+//! While the first run's checklist is up ([`super::setup_api`]) only
+//! `first_run` is sent and `week` is `null`; otherwise `first_run` is `null`.
+//! The collect status beside the schedule is the existing
+//! `GET /collect/status`, not repeated here.
+//!
+//! # The cards
+//!
+//! A card is one subscription that airs in the week. Which subscriptions have
+//! one, on which day and at what time, is read from the stored Anissia
+//! snapshot in Asia/Seoul ([`crate::schedule::slot`]); the web neither asks
+//! Anissia nor Transmission. A subscription has no card when
+//!
+//! - its rule is archived (a subscription that is no longer followed; the spec
+//!   names the active and the paused ones, so the archived ones are left out);
+//! - Anissia has not listed the anime for [`SNAPSHOT_STALE_AFTER_MS`], which is
+//!   how a finished anime leaves the week (the worker refreshes the snapshot of
+//!   an anime only while Anissia lists it);
+//! - its snapshot puts no airing in the week (before its start, after its end,
+//!   `기타`, or a `신작` that starts in another week).
+//!
+//! The card's `episode` is the season's episode that airs in the slot
+//! ([`crate::schedule::slot::episode_on`]); it is `null` when that cannot be
+//! told. The status lines come from [`crate::schedule::state`]:
+//!
+//! - `video_held` / `subtitle_held`: the season the subscription follows holds a
+//!   video / a subtitle for the episode. A subscription whose season is not
+//!   connected holds nothing.
+//! - `downloading`: a torrent the rule received for the episode (release
+//!   episode plus the rule's offset) is among the hashes the worker last saw
+//!   Transmission download. History is read only for the cards' rules, only
+//!   when something is downloading, and only for what they received.
+//!
+//! `work_id` (the card's link to the work's detail) and `cover_url` exist only
+//! for a connected season; without them the card links to the rule and the
+//! cover is an empty slot.
+
+use std::collections::{BTreeMap, HashMap, HashSet};
+
+use axum::{extract::State, routing::get, Json, Router};
+use serde::Serialize;
+
+use super::{
+    artwork_api::image_url,
+    setup_api::{self, FirstRunView},
+    subscriptions_api::{quarter_of, QuarterView},
+    ApiError, AppState,
+};
+use crate::{
+    schedule::{
+        calendar::{date_text, day_of, week_start, weekday},
+        slot::{episode_on, slot_in_week, Slot},
+        state::{self, Facts, SubtitleState, VideoState},
+        SNAPSHOT_STALE_AFTER_MS,
+    },
+    seasons::combine::air_times,
+    store::{
+        anissia::Anime,
+        channels::{Rule, RuleState, SeasonRef, SubtitleMode},
+        history::Millis,
+        library::Held,
+        seasons::SeasonError,
+    },
+    subscriptions::{parse_release, Quarter},
+};
+
+#[cfg(test)]
+mod tests;
+
+pub fn routes() -> Router<AppState> {
+    Router::new().route("/schedule/week", get(week))
+}
+
+#[derive(Debug, Serialize)]
+pub struct Card {
+    pub rule_id: String,
+    pub anime_no: i64,
+    pub title: String,
+    /// `HH:MM` (past 24 for late-night programmes), `null` without a time.
+    pub time: Option<String>,
+    /// When the episode airs (Unix ms).
+    pub air_at: Millis,
+    pub episode: Option<u32>,
+    pub video: VideoState,
+    /// `null` when the subscription takes no subtitles or is paused.
+    pub subtitle: Option<SubtitleState>,
+    /// The subtitle creator being followed.
+    pub creator: Option<String>,
+    /// The work of the connected season: the card links to its detail.
+    pub work_id: Option<String>,
+    pub cover_url: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DayView {
+    /// `YYYY-MM-DD`, Asia/Seoul.
+    pub date: String,
+    /// 0 (Monday) to 6 (Sunday).
+    pub weekday: u8,
+    pub today: bool,
+    pub cards: Vec<Card>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct NextQuarter {
+    pub quarter: QuarterView,
+    /// Subscriptions of a coming quarter.
+    pub subscriptions: u32,
+    /// Of those, the ones that wait for their title.
+    pub title_waiting: u32,
+}
+
+#[derive(Debug, Serialize)]
+pub struct WeekView {
+    pub start: String,
+    pub end: String,
+    pub today: String,
+    /// The quarter of `today`.
+    pub quarter: QuarterView,
+    pub days: Vec<DayView>,
+    pub next_quarter: NextQuarter,
+}
+
+#[derive(Debug, Serialize)]
+pub struct Answer {
+    pub now: Millis,
+    pub first_run: Option<FirstRunView>,
+    pub week: Option<WeekView>,
+}
+
+fn internal(e: impl std::fmt::Display) -> ApiError {
+    ApiError::Internal(e.to_string())
+}
+
+async fn week(State(state): State<AppState>) -> Result<Json<Answer>, ApiError> {
+    let now = state.anissia.now();
+    if let Some(first_run) = setup_api::checklist(&state).await? {
+        return Ok(Json(Answer {
+            now,
+            first_run: Some(first_run),
+            week: None,
+        }));
+    }
+    Ok(Json(Answer {
+        now,
+        first_run: None,
+        week: Some(week_at(&state, now).await?),
+    }))
+}
+
+/// What a connected season gives the cards of the subscriptions that follow it.
+struct SeasonFacts {
+    work_id: String,
+    held: BTreeMap<u32, Held>,
+    air_times: BTreeMap<u32, i64>,
+}
+
+/// The season `season_id` as the cards need it; `None` when it is not a season
+/// of a work in the library.
+async fn season_facts(state: &AppState, season_id: &str) -> Result<Option<SeasonFacts>, ApiError> {
+    let Some(parsed) = SeasonRef::parse(season_id) else {
+        return Ok(None);
+    };
+    let Some(held) = state
+        .library
+        .season_episodes(&parsed.work_id, parsed.number)
+        .await
+        .map_err(internal)?
+    else {
+        return Ok(None);
+    };
+    let air_times = match state
+        .seasons
+        .store
+        .link(&parsed.work_id, parsed.number)
+        .await
+    {
+        Ok(link) => air_times(&link.entries),
+        Err(SeasonError::NotFound) => BTreeMap::new(),
+        Err(e) => return Err(internal(e)),
+    };
+    Ok(Some(SeasonFacts {
+        work_id: parsed.work_id,
+        held,
+        air_times,
+    }))
+}
+
+/// The episode a release title names as a whole number (`12`, `12v2`); not a
+/// batch (`01-12`) or a half episode.
+fn release_episode(title: &str) -> Option<i64> {
+    let written = parse_release(title)?.episode?;
+    let digits: String = written.chars().take_while(char::is_ascii_digit).collect();
+    let rest = &written[digits.len()..];
+    let revision = rest
+        .strip_prefix('v')
+        .is_some_and(|v| !v.is_empty() && v.chars().all(|c| c.is_ascii_digit()));
+    if digits.is_empty() || !(rest.is_empty() || revision) {
+        return None;
+    }
+    digits.parse().ok()
+}
+
+/// The quarter after `quarter`.
+fn next_of(quarter: Quarter) -> Quarter {
+    if quarter.number >= 4 {
+        Quarter {
+            year: quarter.year + 1,
+            number: 1,
+        }
+    } else {
+        Quarter {
+            year: quarter.year,
+            number: quarter.number + 1,
+        }
+    }
+}
+
+/// A subscription that airs in the week, before its card is made.
+struct Airing<'a> {
+    rule: &'a Rule,
+    anime: &'a Anime,
+    slot: Slot,
+}
+
+/// The week `now` (Unix ms) is in, as the home screen shows it.
+pub async fn week_at(state: &AppState, now: Millis) -> Result<WeekView, ApiError> {
+    let today = day_of(now);
+    let start = week_start(today);
+    let current = Quarter::at(now);
+    let next = next_of(current);
+
+    let all = state
+        .channels
+        .list_channels_with_rules()
+        .await
+        .map_err(ApiError::from)?;
+    let rules: Vec<&Rule> = all
+        .iter()
+        .flat_map(|c| &c.rules)
+        .filter(|r| r.state != RuleState::Archived && r.subscription.is_some())
+        .collect();
+    let nos: Vec<i64> = rules
+        .iter()
+        .filter_map(|r| r.subscription.as_ref().map(|s| s.anissia_anime_no))
+        .collect();
+    let animes = state.anissia.store.animes(nos).await.map_err(internal)?;
+
+    let (mut coming, mut title_waiting) = (0, 0);
+    let mut airings = Vec::new();
+    for rule in &rules {
+        let Some(subscription) = &rule.subscription else {
+            continue;
+        };
+        let anime = animes.get(&subscription.anissia_anime_no);
+        if quarter_of(anime, subscription.subscribed_at) > current {
+            coming += 1;
+            if rule.r#match.is_none() {
+                title_waiting += 1;
+            }
+        }
+        let Some(anime) = anime else { continue };
+        if now - anime.fetched_at > SNAPSHOT_STALE_AFTER_MS {
+            continue;
+        }
+        if let Some(slot) = slot_in_week(anime, start) {
+            airings.push(Airing { rule, anime, slot });
+        }
+    }
+
+    // The seasons the cards follow, each read once.
+    let mut seasons: HashMap<&str, Option<SeasonFacts>> = HashMap::new();
+    for airing in &airings {
+        let season_id = airing
+            .rule
+            .subscription
+            .as_ref()
+            .and_then(|s| s.season_id.as_deref());
+        if let Some(season_id) = season_id {
+            if !seasons.contains_key(season_id) {
+                seasons.insert(season_id, season_facts(state, season_id).await?);
+            }
+        }
+    }
+    let covers = if seasons.values().any(Option::is_some) {
+        state.artwork.store.image_ids().await.map_err(internal)?
+    } else {
+        HashMap::new()
+    };
+
+    // The episodes Transmission is downloading, by rule.
+    let hashes: HashSet<String> = state.status.downloading_hashes().await.map_err(internal)?;
+    let mut downloading: HashMap<&str, HashSet<i64>> = HashMap::new();
+    if !hashes.is_empty() && !airings.is_empty() {
+        let ids: Vec<String> = airings.iter().map(|a| a.rule.id.clone()).collect();
+        let received = state
+            .history
+            .received_titles_of_rules(ids)
+            .await
+            .map_err(internal)?;
+        for airing in &airings {
+            for (hash, title) in received.get(&airing.rule.id).into_iter().flatten() {
+                if let (true, Some(episode)) = (hashes.contains(hash), release_episode(title)) {
+                    downloading
+                        .entry(airing.rule.id.as_str())
+                        .or_default()
+                        .insert(episode + airing.rule.episode);
+                }
+            }
+        }
+    }
+
+    let mut by_day: HashMap<i64, Vec<Card>> = HashMap::new();
+    for Airing { rule, anime, slot } in airings {
+        let Some(subscription) = &rule.subscription else {
+            continue;
+        };
+        let season = subscription
+            .season_id
+            .as_deref()
+            .and_then(|id| seasons.get(id))
+            .and_then(Option::as_ref);
+        let no_times = BTreeMap::new();
+        let episode = episode_on(anime, &slot, season.map_or(&no_times, |s| &s.air_times));
+        let held = episode
+            .and_then(|e| season.and_then(|s| s.held.get(&e)))
+            .copied()
+            .unwrap_or_default();
+        let facts = Facts {
+            now,
+            instant: slot.instant,
+            paused: rule.state == RuleState::Paused,
+            subtitles: subscription.subtitles,
+            video_held: held.video,
+            subtitle_held: held.subtitle,
+            downloading: episode.is_some_and(|e| {
+                downloading
+                    .get(rule.id.as_str())
+                    .is_some_and(|set| set.contains(&i64::from(e)))
+            }),
+        };
+        by_day.entry(slot.day).or_default().push(Card {
+            rule_id: rule.id.clone(),
+            anime_no: anime.anime_no,
+            title: anime.subject.clone(),
+            time: slot.time.clone(),
+            air_at: slot.instant,
+            episode,
+            video: state::video(&facts),
+            subtitle: state::subtitle(&facts),
+            creator: (subscription.subtitles == SubtitleMode::Follow)
+                .then(|| subscription.creator.clone())
+                .flatten(),
+            work_id: season.map(|s| s.work_id.clone()),
+            cover_url: season.and_then(|s| {
+                covers
+                    .get(&s.work_id)
+                    .map(|image_id| image_url(&s.work_id, image_id))
+            }),
+        });
+    }
+
+    let days = (0..7)
+        .map(|offset| {
+            let day = start + offset;
+            let mut cards = by_day.remove(&day).unwrap_or_default();
+            cards.sort_by(|a, b| a.air_at.cmp(&b.air_at).then_with(|| a.title.cmp(&b.title)));
+            DayView {
+                date: date_text(day),
+                weekday: weekday(day),
+                today: day == today,
+                cards,
+            }
+        })
+        .collect();
+
+    Ok(WeekView {
+        start: date_text(start),
+        end: date_text(start + 6),
+        today: date_text(today),
+        quarter: current.into(),
+        days,
+        next_quarter: NextQuarter {
+            quarter: next.into(),
+            subscriptions: coming,
+            title_waiting,
+        },
+    })
+}

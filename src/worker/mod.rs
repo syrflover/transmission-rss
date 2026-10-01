@@ -107,6 +107,7 @@ use crate::{
         history::{HistoryError, HistoryStore, Millis},
         library::LibraryStore,
         settings::SettingsStore,
+        status::StatusStore,
         Db,
     },
     transmission::{Redactor, RenamePolicy},
@@ -354,6 +355,14 @@ impl Worker {
     /// Runs a cycle at start and then every interval until `cancel` fires. A
     /// failed or panicking cycle is logged and the loop carries on.
     pub async fn run(&self, cancel: CancellationToken) {
+        // The web shows when the next check is due and cannot read this worker's settings.
+        let status = StatusStore::new(self.ctx.channels.db().clone());
+        if let Err(err) = status
+            .record_cycle_interval(self.interval.as_millis() as i64)
+            .await
+        {
+            eprintln!("Cannot record the cycle interval: {err}");
+        }
         self.start_watching().await;
         self.run_loop(cancel).await;
         self.stop_watching();

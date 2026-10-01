@@ -6,6 +6,10 @@ interface ScreenFrameProps {
   title: string;
   /** The screen's content. */
   children: ReactNode;
+  /** Next to the title, such as a button that moves within the screen. */
+  actions?: ReactNode;
+  /** Under the title: facts about what the screen shows. */
+  meta?: ReactNode;
 }
 
 /** Sets the browser tab title to "<screen> - TRSS" while the screen is mounted. */
@@ -19,14 +23,22 @@ export function usePageTitle(title: string) {
 }
 
 /** Common page frame: the screen title, then whatever the screen shows. */
-export function ScreenFrame({ title, children }: ScreenFrameProps) {
+export function ScreenFrame({ title, children, actions, meta }: ScreenFrameProps) {
   usePageTitle(title);
 
   return (
     <section className="pb-4">
-      <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 pt-7 pb-3.5 max-[720px]:pt-[18px] max-[720px]:pb-3">
+      <div
+        className={
+          meta
+            ? "flex flex-wrap items-center gap-x-4 gap-y-1 pt-7 pb-1.5 max-[720px]:pt-[18px]"
+            : "flex flex-wrap items-baseline gap-x-4 gap-y-1 pt-7 pb-3.5 max-[720px]:pt-[18px] max-[720px]:pb-3"
+        }
+      >
         <h1 className="text-2xl font-bold tracking-[-0.005em]">{title}</h1>
+        {actions}
       </div>
+      {meta && <div className="pb-3.5 max-[720px]:pb-3">{meta}</div>}
       {children}
     </section>
   );

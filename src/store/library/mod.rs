@@ -70,7 +70,7 @@ mod tests;
 
 use std::collections::BTreeMap;
 
-pub use detail::{EpisodeDetail, SeasonDetail, SeasonHoldings, WorkDetail};
+pub use detail::{EpisodeDetail, Held, SeasonDetail, SeasonHoldings, WorkDetail};
 use rusqlite::Transaction;
 
 pub use overview::{EpisodeRange, SubtitleCoverage, WorkOverview};
@@ -489,6 +489,19 @@ impl LibraryStore {
         let id = work_id.to_owned();
         self.db
             .run(move |c| Ok(detail::season_holdings(c, &id, season)?))
+            .await
+    }
+
+    /// The whole-numbered episodes of season `season` of the work that have a
+    /// video or a subtitle (see [`Held`]), or `None` when there is no such work.
+    pub async fn season_episodes(
+        &self,
+        work_id: &str,
+        season: u32,
+    ) -> Result<Option<BTreeMap<u32, Held>>, LibraryError> {
+        let id = work_id.to_owned();
+        self.db
+            .run(move |c| Ok(detail::season_episodes(c, &id, season)?))
             .await
     }
 
