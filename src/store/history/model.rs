@@ -177,6 +177,29 @@ pub struct HistoryItem {
     pub rule_id: Option<String>,
     pub reason: Option<String>,
     pub torrent_hash: Option<String>,
+    /// Whether the channel's first read recorded the item: the feed already
+    /// held it then. See [`HistoryStore::first_sightings`](super::HistoryStore::first_sightings).
+    pub first_read: bool,
+}
+
+/// What a cycle needs to know of an item history already has: when it was
+/// first seen, what became of it, and whether the channel's first read
+/// recorded it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KnownItem {
+    pub first_seen_at: Millis,
+    pub result: HistoryResult,
+    pub first_read: bool,
+}
+
+impl From<&HistoryItem> for KnownItem {
+    fn from(item: &HistoryItem) -> Self {
+        KnownItem {
+            first_seen_at: item.first_seen_at,
+            result: item.result,
+            first_read: item.first_read,
+        }
+    }
 }
 
 /// One entry of an item's change trail.

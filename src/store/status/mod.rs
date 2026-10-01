@@ -8,6 +8,9 @@
 //!   and the hashes of the torrents that were downloading;
 //! - the hashes of every torrent it held ([`TorrentListing`]), which the past
 //!   episode search needs to tell a removed torrent from one that is still there;
+//! - per channel, the days on which a read of the feed worked
+//!   ([`StatusStore::read_day_floors`]), which the archive suggestions count the
+//!   weeks without a new item in;
 //! - the worker's cycle interval, which the web cannot read from its own
 //!   environment, so it can tell when the next check is due.
 //!
@@ -28,6 +31,18 @@ use super::history::Millis;
 
 #[cfg(test)]
 mod tests;
+
+/// How many of a channel's newest read days are kept: the 28 days of the
+/// `새 항목 없음` ground of the archive suggestions.
+pub const READ_DAYS_KEPT: usize = 28;
+
+const DAY_MS: Millis = 24 * 60 * 60 * 1000;
+
+/// The day a moment belongs to: Unix milliseconds divided by a day. Read days
+/// are told apart by this and nothing more, so the time zone does not matter.
+pub fn read_day(at: Millis) -> i64 {
+    at.div_euclid(DAY_MS)
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum StatusError {
@@ -107,6 +122,22 @@ impl StatusStore {
     ) -> Result<(), StatusError> {
         self.db
             .run(move |c| record_reads(c, at, &reads, &existing))
+            .await
+    }
+
+    /// For each of the given channels with at least [`READ_DAYS_KEPT`] days up
+    /// to `now` on which a read of its feed worked, the [`read_day`] of the
+    /// oldest of its newest [`READ_DAYS_KEPT`]; a channel with fewer is left
+    /// out. Reading the feed on every one of those days is what a quiet stretch
+    /// of that many days takes. Days after `now` (written by a clock that was
+    /// ahead) do not count. One lookup of the table's key per channel.
+    pub async fn read_day_floors(
+        &self,
+        channel_ids: Vec<String>,
+        now: Millis,
+    ) -> Result<std::collections::HashMap<String, i64>, StatusError> {
+        self.db
+            .run(move |c| read_day_floors(c, &channel_ids, now))
             .await
     }
 
@@ -314,6 +345,28 @@ fn record_reads(
             params![read.channel_id, read.ok, at],
         )?;
     }
+    for read in reads.iter().filter(|read| read.ok) {
+        // A day after this read's own is from a clock that was ahead and has
+        // come back: it was not a day the feed was read, and it must not take
+        // the place of the real days among the newest ones.
+        tx.execute(
+            "DELETE FROM channel_read_days WHERE channel_id = ?1 AND day > ?2",
+            params![read.channel_id, read_day(at)],
+        )?;
+        // The newest `READ_DAYS_KEPT` days are all that is asked for; an older
+        // one (a clock that went back) is gone as soon as it is written.
+        tx.execute(
+            "INSERT OR IGNORE INTO channel_read_days (channel_id, day) VALUES (?1, ?2)",
+            params![read.channel_id, read_day(at)],
+        )?;
+        tx.execute(
+            "DELETE FROM channel_read_days
+             WHERE channel_id = ?1 AND day < (
+                 SELECT day FROM channel_read_days WHERE channel_id = ?1
+                 ORDER BY day DESC LIMIT 1 OFFSET ?2)",
+            params![read.channel_id, READ_DAYS_KEPT as i64 - 1],
+        )?;
+    }
     let keep: HashSet<&str> = existing.iter().map(String::as_str).collect();
     let stored: Vec<String> = {
         let mut stmt = tx.prepare("SELECT channel_id FROM channel_read_status")?;
@@ -328,8 +381,43 @@ fn record_reads(
             [id],
         )?;
     }
+    let days_of: Vec<String> = {
+        let mut stmt = tx.prepare("SELECT DISTINCT channel_id FROM channel_read_days")?;
+        let ids = stmt
+            .query_map([], |r| r.get(0))?
+            .collect::<rusqlite::Result<Vec<String>>>()?;
+        ids
+    };
+    for id in days_of.iter().filter(|id| !keep.contains(id.as_str())) {
+        tx.execute("DELETE FROM channel_read_days WHERE channel_id = ?1", [id])?;
+    }
     tx.commit()?;
     Ok(())
+}
+
+fn read_day_floors(
+    conn: &Connection,
+    channel_ids: &[String],
+    now: Millis,
+) -> Result<std::collections::HashMap<String, i64>, StatusError> {
+    // The days up to today only: a day after it was written by a clock that was
+    // ahead, and is no day the feed was read.
+    let mut stmt = conn.prepare(
+        "SELECT MIN(day), COUNT(*) FROM (
+             SELECT day FROM channel_read_days WHERE channel_id = ?1 AND day <= ?2
+             ORDER BY day DESC LIMIT ?3)",
+    )?;
+    let mut floors = std::collections::HashMap::new();
+    for id in channel_ids {
+        let (floor, days): (Option<i64>, i64) = stmt
+            .query_row(params![id, read_day(now), READ_DAYS_KEPT as i64], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })?;
+        if let (Some(floor), true) = (floor, days >= READ_DAYS_KEPT as i64) {
+            floors.insert(id.clone(), floor);
+        }
+    }
+    Ok(floors)
 }
 
 fn channel_reads(conn: &Connection) -> Result<Vec<ChannelRead>, StatusError> {

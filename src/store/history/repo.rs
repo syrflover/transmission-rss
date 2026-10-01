@@ -6,14 +6,14 @@ use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Row, Tra
 
 use super::model::{
     CycleState, HistoryChange, HistoryCursor, HistoryItem, HistoryPage, HistoryQuery,
-    HistoryResult, Millis, Observation, Recorded, Transition, MAX_PAGE_SIZE,
+    HistoryResult, KnownItem, Millis, Observation, Recorded, Transition, MAX_PAGE_SIZE,
 };
 use super::HistoryError;
 
 type Result<T> = std::result::Result<T, HistoryError>;
 
 const ITEM_COLUMNS: &str = "id, channel_id, channel_label, identity_key, title, link, \
-     first_seen_at, last_seen_at, result, result_at, rule_id, reason, torrent_hash";
+     first_seen_at, last_seen_at, result, result_at, rule_id, reason, torrent_hash, first_read";
 
 fn parse_result(idx: usize, code: &str) -> rusqlite::Result<HistoryResult> {
     HistoryResult::parse(code).ok_or_else(|| {
@@ -41,7 +41,21 @@ fn item_from_row(row: &Row<'_>) -> rusqlite::Result<HistoryItem> {
         rule_id: row.get(10)?,
         reason: row.get(11)?,
         torrent_hash: row.get(12)?,
+        first_read: row.get(13)?,
     })
+}
+
+/// Where a sighting was made. Only a read of the channel's feed can be its
+/// first read; an item recorded from anywhere else (the past search, which
+/// reads a tracker's search feed) says nothing of what the channel's own feed
+/// held.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Origin {
+    /// The worker read the channel's feed.
+    Feed,
+    /// Some other read of the tracker: it never establishes the channel's
+    /// first read, nor is its item marked as part of it.
+    Elsewhere,
 }
 
 /// Records all observations in one transaction, in order. The outcome list
@@ -49,10 +63,11 @@ fn item_from_row(row: &Row<'_>) -> rusqlite::Result<HistoryItem> {
 pub fn record(
     conn: &mut Connection,
     at: Millis,
+    origin: Origin,
     observations: &[Observation],
 ) -> Result<Vec<Recorded>> {
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let out = record_in(&tx, at, observations)?;
+    let out = record_in(&tx, at, origin, observations)?;
     tx.commit()?;
     Ok(out)
 }
@@ -62,6 +77,7 @@ pub fn record(
 pub fn record_in(
     tx: &Connection,
     at: Millis,
+    origin: Origin,
     observations: &[Observation],
 ) -> Result<Vec<Recorded>> {
     let mut out = Vec::with_capacity(observations.len());
@@ -76,10 +92,41 @@ pub fn record_in(
             .optional()?;
 
         let Some((id, code)) = stored else {
+            // The channel's first record of its feed is its first read, and
+            // the records of that same cycle (the same `at`) belong to it.
+            // Which they are is kept with each item, so that no later
+            // comparison of times can move the line, whatever the clock did.
+            // A record from elsewhere is neither: it leaves the first read to
+            // the cycle that reads the feed.
+            let first_read = match origin {
+                Origin::Elsewhere => false,
+                Origin::Feed => {
+                    let first_read_cycle: Option<bool> = tx
+                        .query_row(
+                            "SELECT first_read_at = ?2 FROM history_first_reads
+                             WHERE channel_id = ?1",
+                            params![obs.channel_id, at],
+                            |row| row.get(0),
+                        )
+                        .optional()?;
+                    match first_read_cycle {
+                        Some(same_cycle) => same_cycle,
+                        None => {
+                            tx.execute(
+                                "INSERT INTO history_first_reads (channel_id, first_read_at)
+                                 VALUES (?1, ?2)",
+                                params![obs.channel_id, at],
+                            )?;
+                            true
+                        }
+                    }
+                }
+            };
             tx.execute(
                 "INSERT INTO history_items (channel_id, channel_label, identity_key, title, link,
-                     first_seen_at, last_seen_at, result, result_at, rule_id, reason, torrent_hash)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7, ?6, ?8, ?9, ?10)",
+                     first_seen_at, last_seen_at, result, result_at, rule_id, reason, torrent_hash,
+                     first_read)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7, ?6, ?8, ?9, ?10, ?11)",
                 params![
                     obs.channel_id,
                     obs.channel_label,
@@ -91,6 +138,7 @@ pub fn record_in(
                     obs.rule_id,
                     obs.reason,
                     obs.torrent_hash,
+                    first_read,
                 ],
             )?;
             out.push(Recorded::New);
@@ -509,13 +557,14 @@ pub fn held_hashes_of_items(conn: &Connection, items: &[(String, String)]) -> Re
     Ok(hashes)
 }
 
-/// When each of the given items of a channel was first seen and what became
-/// of it, by identity key. Keys the channel has no record of are left out.
+/// When each of the given items of a channel was first seen, what became of it
+/// and whether the first read recorded it, by identity key. Keys the channel
+/// has no record of are left out.
 pub fn known_items(
     conn: &Connection,
     channel_id: &str,
     keys: &[String],
-) -> Result<std::collections::HashMap<String, (Millis, HistoryResult)>> {
+) -> Result<std::collections::HashMap<String, KnownItem>> {
     // Keeps the number of bound values well under SQLite's limit.
     const CHUNK: usize = 400;
 
@@ -523,7 +572,7 @@ pub fn known_items(
     for chunk in keys.chunks(CHUNK) {
         let placeholders = vec!["?"; chunk.len()].join(", ");
         let mut stmt = conn.prepare(&format!(
-            "SELECT identity_key, first_seen_at, result FROM history_items
+            "SELECT identity_key, first_seen_at, result, first_read FROM history_items
              WHERE channel_id = ? AND identity_key IN ({placeholders})"
         ))?;
         let args = std::iter::once(channel_id).chain(chunk.iter().map(String::as_str));
@@ -533,28 +582,36 @@ pub fn known_items(
                     row.get::<_, String>(0)?,
                     row.get::<_, Millis>(1)?,
                     row.get::<_, String>(2)?,
+                    row.get::<_, bool>(3)?,
                 ))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        for (key, first_seen_at, code) in rows {
-            known.insert(key, (first_seen_at, parse_result(2, &code)?));
+        for (key, first_seen_at, code, first_read) in rows {
+            known.insert(
+                key,
+                KnownItem {
+                    first_seen_at,
+                    result: parse_result(2, &code)?,
+                    first_read,
+                },
+            );
         }
     }
     Ok(known)
 }
 
-/// When history first saw an item of each of the given channels, by channel
-/// ID. A channel with no record is left out. One index lookup per channel
-/// (`history_items_by_channel`), however long its history is.
+/// When each of the given channels was first read, by channel ID: the time
+/// of its first record, stored once and never changed (`history_first_reads`).
+/// A channel with no record is left out. One key lookup per channel.
 pub fn first_sightings(
     conn: &Connection,
     channel_ids: &[String],
 ) -> Result<std::collections::HashMap<String, Millis>> {
     let mut stmt =
-        conn.prepare("SELECT MIN(first_seen_at) FROM history_items WHERE channel_id = ?1")?;
+        conn.prepare("SELECT first_read_at FROM history_first_reads WHERE channel_id = ?1")?;
     let mut found = std::collections::HashMap::new();
     for channel_id in channel_ids {
-        let first: Option<Millis> = stmt.query_row([channel_id], |row| row.get(0))?;
+        let first: Option<Millis> = stmt.query_row([channel_id], |row| row.get(0)).optional()?;
         if let Some(first) = first {
             found.insert(channel_id.clone(), first);
         }

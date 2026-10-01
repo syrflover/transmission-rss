@@ -45,11 +45,13 @@ mod tests;
 pub use identity::{identity_key, stored_link};
 pub use model::{
     CycleState, HistoryChange, HistoryCursor, HistoryItem, HistoryPage, HistoryQuery,
-    HistoryResult, Millis, Observation, Recorded, Transition, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE,
+    HistoryResult, KnownItem, Millis, Observation, Recorded, Transition, DEFAULT_PAGE_SIZE,
+    MAX_PAGE_SIZE,
 };
 
 use std::collections::HashSet;
 
+use self::repo::Origin;
 use super::db::{Db, DbError};
 
 #[derive(Debug, thiserror::Error)]
@@ -83,11 +85,33 @@ impl HistoryStore {
         at: Millis,
         observations: Vec<Observation>,
     ) -> Result<Vec<Recorded>, HistoryError> {
+        self.record_from(at, Origin::Feed, observations).await
+    }
+
+    /// [`HistoryStore::record`] for sightings made somewhere other than the
+    /// channel's feed (the past search's tracker read). They never establish
+    /// the channel's first read: the first cycle that reads the feed still
+    /// finds the channel unread and keeps its subscriptions out of what the
+    /// feed already holds.
+    pub async fn record_elsewhere(
+        &self,
+        at: Millis,
+        observations: Vec<Observation>,
+    ) -> Result<Vec<Recorded>, HistoryError> {
+        self.record_from(at, Origin::Elsewhere, observations).await
+    }
+
+    async fn record_from(
+        &self,
+        at: Millis,
+        origin: Origin,
+        observations: Vec<Observation>,
+    ) -> Result<Vec<Recorded>, HistoryError> {
         if observations.is_empty() {
             return Ok(Vec::new());
         }
         self.db
-            .run(move |c| repo::record(c, at, &observations))
+            .run(move |c| repo::record(c, at, origin, &observations))
             .await
     }
 
@@ -172,14 +196,15 @@ impl HistoryStore {
             .map(|hashes| hashes.into_iter().collect())
     }
 
-    /// When each of the given items of a channel was first seen and what became
-    /// of it, by identity key: what a cycle needs to tell the items a rule has
-    /// not seen yet from the ones already in history.
+    /// When each of the given items of a channel was first seen, what became of
+    /// it and whether the channel's first read recorded it, by identity key:
+    /// what a cycle needs to tell the items a rule has not seen yet from the
+    /// ones already in history.
     pub async fn known_items(
         &self,
         channel_id: String,
         keys: Vec<String>,
-    ) -> Result<std::collections::HashMap<String, (Millis, HistoryResult)>, HistoryError> {
+    ) -> Result<std::collections::HashMap<String, KnownItem>, HistoryError> {
         if keys.is_empty() {
             return Ok(Default::default());
         }
@@ -188,11 +213,14 @@ impl HistoryStore {
             .await
     }
 
-    /// When history first saw an item of each of the given channels, by channel
-    /// ID; a channel with no record is left out. A channel's first record is
-    /// its first read, which is what the past-items rule tells the items the
-    /// feed already held from the later ones
-    /// ([`crate::worker::plan::ChannelPlan::with_first_read_at`]).
+    /// When each of the given channels was first read, by channel ID; a channel
+    /// with no record is left out. A channel's first record is its first read,
+    /// whose time is stored when it is written and never moves afterwards, not
+    /// even when a later record carries an earlier time (the clock went back).
+    /// A channel without one is read for the first time by the next cycle
+    /// ([`crate::worker::plan::ChannelPlan::for_first_read`]). Which items the
+    /// feed already held then is told by the items themselves
+    /// ([`HistoryItem::first_read`]), not by comparing times with this one.
     pub async fn first_sightings(
         &self,
         channel_ids: Vec<String>,
