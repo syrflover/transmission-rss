@@ -54,6 +54,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Code(super::settings::fold_base_dirs),
     // 8: watch folders and the works, seasons, episodes and files found in them
     Migration::Sql(include_str!("library/schema.sql")),
+    // 9: work folders seen but not readable yet, so a folder's baseline is per work
+    Migration::Sql(include_str!("library/unread_works.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]

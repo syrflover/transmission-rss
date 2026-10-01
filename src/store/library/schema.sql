@@ -2,11 +2,12 @@
 -- `store::library`).
 --
 -- `watch_folders.path` is the folder as the user typed it (trailing slashes
--- dropped). `baselined` is 0 until one scan has read the folder without any
--- error: files and works found by scans up to then are of unknown age
--- (`added_at` / `first_seen_at` NULL), because they may have been there
--- before the app looked. `checked_at` is the last attempt, successful or not;
--- `error` is a sentence while the last attempt could not read everything.
+-- dropped). `baselined` is 0 until one scan has read the folder (some of its
+-- work folders may still have been unreadable, see `unread_works`): files and
+-- works found by that scan are of unknown age (`added_at` / `first_seen_at`
+-- NULL), because they may have been there before the app looked. `checked_at`
+-- is the last attempt, successful or not; `error` is a sentence while the last
+-- attempt could not read everything.
 --
 -- A work is a folder directly under a watch folder (`dir_name`); its `id` is
 -- issued by the app and outlives the folder's path, so an archive move can

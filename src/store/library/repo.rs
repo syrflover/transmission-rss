@@ -169,10 +169,24 @@ fn apply(
         Ok(scan) => scan,
     };
 
+    // The folder's first reading: what it finds was there before the app
+    // looked (unknown age), not new. What a later scan finds first is stamped
+    // with that scan's time.
     let baseline = baselined == 0;
-    // Files and works that appear while the folder is not baselined may have
-    // been there before the app looked: unknown, not now.
     let stamp: Option<Millis> = if baseline { None } else { Some(now) };
+
+    // Work folders an earlier scan saw and could not read (and the time that
+    // scan was, `None` for the first one).
+    let mut pending: HashMap<String, Option<Millis>> = HashMap::new();
+    {
+        let mut stmt =
+            tx.prepare("SELECT dir_name, seen_at FROM unread_works WHERE watch_folder_id = ?1")?;
+        let rows = stmt.query_map([folder_id], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        for row in rows {
+            let (name, seen_at) = row?;
+            pending.insert(name, seen_at);
+        }
+    }
 
     let mut known: HashMap<String, KnownWork> = HashMap::new();
     {
@@ -204,11 +218,20 @@ fn apply(
         seen.insert(read.dir_name());
         match read {
             WorkRead::Unreadable { dir_name, reason } => {
-                // Its records stay; a work not recorded yet waits for a scan that can read it.
+                // Its records stay; a work not recorded yet waits for a scan
+                // that can read it, and is dated by this one.
+                if !known.contains_key(dir_name) && !pending.contains_key(dir_name) {
+                    tx.execute(
+                        "INSERT INTO unread_works (watch_folder_id, dir_name, seen_at)
+                         VALUES (?1, ?2, ?3)",
+                        params![folder_id, dir_name, stamp],
+                    )?;
+                }
                 unreadable.push((dir_name, reason));
                 report.works_unreadable += 1;
             }
             WorkRead::Read(work) => {
+                let mut files_stamp = stamp;
                 let id = match known.get(&work.dir_name) {
                     Some(known) => {
                         if known.missing {
@@ -218,17 +241,27 @@ fn apply(
                     }
                     None => {
                         let id = new_id();
+                        // A folder first read after a scan that could not read
+                        // it is dated by that scan, and its files may have been
+                        // there then: unknown.
+                        let first_seen = match pending.get(&work.dir_name) {
+                            Some(seen_at) => {
+                                files_stamp = None;
+                                *seen_at
+                            }
+                            None => stamp,
+                        };
                         tx.execute(
                             "INSERT INTO works (id, watch_folder_id, dir_name, first_seen_at)
                              VALUES (?1, ?2, ?3, ?4)",
-                            params![id, folder_id, work.dir_name, stamp],
+                            params![id, folder_id, work.dir_name, first_seen],
                         )?;
                         report.works_added += 1;
                         id
                     }
                 };
                 report.works_found += 1;
-                sync_work(tx, &id, work, stamp, &mut report)?;
+                sync_work(tx, &id, work, files_stamp, &mut report)?;
             }
         }
     }
@@ -241,6 +274,16 @@ fn apply(
             tx.execute("UPDATE works SET missing = 1 WHERE id = ?1", [&work.id])?;
         }
     }
+    // A pending folder that was read is a work now, and one that is gone is
+    // not waiting for anything.
+    for name in pending.keys() {
+        if !unreadable.iter().any(|(n, _)| n == name) {
+            tx.execute(
+                "DELETE FROM unread_works WHERE watch_folder_id = ?1 AND dir_name = ?2",
+                params![folder_id, name],
+            )?;
+        }
+    }
     report.works_missing = tx.query_row(
         "SELECT count(*) FROM works WHERE watch_folder_id = ?1 AND missing = 1",
         [folder_id],
@@ -249,9 +292,7 @@ fn apply(
 
     let error = unreadable_sentence(&unreadable);
     tx.execute(
-        "UPDATE watch_folders
-            SET checked_at = ?2, error = ?3, baselined = CASE WHEN ?3 IS NULL THEN 1 ELSE baselined END
-          WHERE id = ?1",
+        "UPDATE watch_folders SET checked_at = ?2, error = ?3, baselined = 1 WHERE id = ?1",
         params![folder_id, now, error],
     )?;
     report.error = error;

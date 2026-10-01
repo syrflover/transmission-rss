@@ -194,14 +194,24 @@ async fn a_failed_scan_records_the_error_and_keeps_what_was_known() {
     assert_eq!(store.folder(&folder.id).await.unwrap().unwrap().error, None);
 }
 
-#[tokio::test]
-async fn an_unreadable_work_keeps_its_records_and_the_folder_is_not_baselined_yet() {
-    let store = store();
-    let unreadable = |name: &str| WorkRead::Unreadable {
+fn unreadable(name: &str) -> WorkRead {
+    WorkRead::Unreadable {
         dir_name: name.to_owned(),
         reason: "읽을 권한이 없어요.".to_owned(),
-    };
-    let (folder, _) = store
+    }
+}
+
+fn find<'a>(works: &'a [WorkRecord], name: &str) -> &'a WorkRecord {
+    works
+        .iter()
+        .find(|w| w.dir_name == name)
+        .unwrap_or_else(|| panic!("no work {name}"))
+}
+
+#[tokio::test]
+async fn one_unreadable_work_does_not_hold_back_the_baseline_of_the_others() {
+    let store = store();
+    let (folder, report) = store
         .add_folder(
             "/w".into(),
             scan(vec![
@@ -212,14 +222,19 @@ async fn an_unreadable_work_keeps_its_records_and_the_folder_is_not_baselined_ye
         )
         .await
         .unwrap();
+    assert!(report.baseline);
+    assert_eq!(report.works_unreadable, 1);
     let stored = store.folder(&folder.id).await.unwrap().unwrap();
-    assert!(!stored.baselined);
+    assert!(stored.baselined, "the first reading baselines the folder");
     assert!(stored.error.unwrap().contains("Locked"));
-    // The unreadable work was not recorded; A was.
-    assert_eq!(store.works(&folder.id).await.unwrap().len(), 1);
+    // The unreadable work is not recorded; A is, of unknown age.
+    let works = store.works(&folder.id).await.unwrap();
+    assert_eq!(works.len(), 1);
+    assert_eq!(find(&works, "A").first_seen_at, None);
 
-    // Still not baselined: what turns up now is still of unknown age.
-    store
+    // A later scan: a new file of A and a new work B are stamped even though
+    // Locked is still unreadable; Locked stays unrecorded.
+    let report = store
         .record_scan(
             &folder.id,
             Ok(scan(vec![
@@ -230,16 +245,186 @@ async fn an_unreadable_work_keeps_its_records_and_the_folder_is_not_baselined_ye
                         video(1, "02", "A S01E02.mkv"),
                     ],
                 ),
-                work("Locked", vec![video(1, "01", "L S01E01.mkv")]),
+                work("B", vec![video(1, "01", "B S01E01.mkv")]),
+                unreadable("Locked"),
             ])),
             200,
         )
         .await
+        .unwrap()
+        .unwrap();
+    assert!(!report.baseline);
+    assert!(report.error.unwrap().contains("Locked"));
+    let works = store.works(&folder.id).await.unwrap();
+    assert_eq!(works.len(), 2);
+    let a = find(&works, "A");
+    assert_eq!(a.files()["Season 01/A S01E01.mkv"].added_at, None);
+    assert_eq!(a.files()["Season 01/A S01E02.mkv"].added_at, Some(200));
+    let b = find(&works, "B");
+    assert_eq!(b.first_seen_at, Some(200));
+    assert_eq!(b.files()["Season 01/B S01E01.mkv"].added_at, Some(200));
+
+    // Locked becomes readable: it was there when the folder was first read, so
+    // its files are of unknown age and it is not newly found.
+    store
+        .record_scan(
+            &folder.id,
+            Ok(scan(vec![
+                work("A", vec![video(1, "01", "A S01E01.mkv")]),
+                work("Locked", vec![video(1, "01", "L S01E01.mkv")]),
+            ])),
+            300,
+        )
+        .await
         .unwrap();
     let works = store.works(&folder.id).await.unwrap();
-    assert!(works.iter().all(|w| w.first_seen_at.is_none()));
-    assert!(works[0].files().values().all(|f| f.added_at.is_none()));
-    assert!(store.folder(&folder.id).await.unwrap().unwrap().baselined);
+    let locked = find(&works, "Locked");
+    assert_eq!(locked.first_seen_at, None);
+    assert_eq!(locked.files()["Season 01/L S01E01.mkv"].added_at, None);
+    // From then on it is an ordinary work: what it gets next is stamped.
+    store
+        .record_scan(
+            &folder.id,
+            Ok(scan(vec![work(
+                "Locked",
+                vec![
+                    video(1, "01", "L S01E01.mkv"),
+                    video(1, "02", "L S01E02.mkv"),
+                ],
+            )])),
+            400,
+        )
+        .await
+        .unwrap();
+    let works = store.works(&folder.id).await.unwrap();
+    let locked = find(&works, "Locked");
+    assert_eq!(locked.files()["Season 01/L S01E01.mkv"].added_at, None);
+    assert_eq!(locked.files()["Season 01/L S01E02.mkv"].added_at, Some(400));
+}
+
+#[tokio::test]
+async fn a_work_folder_first_seen_unreadable_in_a_later_scan_is_dated_by_that_scan_with_unknown_files(
+) {
+    let store = store();
+    let (folder, _) = store
+        .add_folder("/w".into(), scan(vec![work("A", vec![])]), 100)
+        .await
+        .unwrap();
+    store
+        .record_scan(
+            &folder.id,
+            Ok(scan(vec![work("A", vec![]), unreadable("New")])),
+            200,
+        )
+        .await
+        .unwrap();
+    assert_eq!(store.works(&folder.id).await.unwrap().len(), 1);
+
+    store
+        .record_scan(
+            &folder.id,
+            Ok(scan(vec![
+                work("A", vec![]),
+                work("New", vec![video(1, "01", "N S01E01.mkv")]),
+            ])),
+            300,
+        )
+        .await
+        .unwrap();
+    let works = store.works(&folder.id).await.unwrap();
+    let new = find(&works, "New");
+    // First seen at 200, though unreadable; the files may have been there then.
+    assert_eq!(new.first_seen_at, Some(200));
+    assert_eq!(new.files()["Season 01/N S01E01.mkv"].added_at, None);
+}
+
+#[tokio::test]
+async fn an_unreadable_folder_that_is_gone_is_new_when_it_comes_back() {
+    let store = store();
+    let (folder, _) = store
+        .add_folder(
+            "/w".into(),
+            scan(vec![work("A", vec![]), unreadable("Locked")]),
+            100,
+        )
+        .await
+        .unwrap();
+    // It goes away without ever having been read.
+    store
+        .record_scan(&folder.id, Ok(scan(vec![work("A", vec![])])), 200)
+        .await
+        .unwrap();
+    store
+        .record_scan(
+            &folder.id,
+            Ok(scan(vec![
+                work("A", vec![]),
+                work("Locked", vec![video(1, "01", "L S01E01.mkv")]),
+            ])),
+            300,
+        )
+        .await
+        .unwrap();
+    let works = store.works(&folder.id).await.unwrap();
+    let locked = find(&works, "Locked");
+    assert_eq!(locked.first_seen_at, Some(300));
+    assert_eq!(locked.files()["Season 01/L S01E01.mkv"].added_at, Some(300));
+}
+
+#[tokio::test]
+async fn a_recorded_work_that_becomes_unreadable_keeps_its_records_and_times() {
+    let store = store();
+    let (folder, _) = store
+        .add_folder(
+            "/w".into(),
+            scan(vec![work("A", vec![video(1, "01", "A S01E01.mkv")])]),
+            100,
+        )
+        .await
+        .unwrap();
+    store
+        .record_scan(
+            &folder.id,
+            Ok(scan(vec![work(
+                "A",
+                vec![
+                    video(1, "01", "A S01E01.mkv"),
+                    video(1, "02", "A S01E02.mkv"),
+                ],
+            )])),
+            200,
+        )
+        .await
+        .unwrap();
+    let before = store.works(&folder.id).await.unwrap();
+
+    store
+        .record_scan(&folder.id, Ok(scan(vec![unreadable("A")])), 300)
+        .await
+        .unwrap();
+    assert_eq!(store.works(&folder.id).await.unwrap(), before);
+
+    // Readable again with a file more: only that one is stamped.
+    store
+        .record_scan(
+            &folder.id,
+            Ok(scan(vec![work(
+                "A",
+                vec![
+                    video(1, "01", "A S01E01.mkv"),
+                    video(1, "02", "A S01E02.mkv"),
+                    video(1, "03", "A S01E03.mkv"),
+                ],
+            )])),
+            400,
+        )
+        .await
+        .unwrap();
+    let works = store.works(&folder.id).await.unwrap();
+    let a = find(&works, "A");
+    assert_eq!(a.files()["Season 01/A S01E01.mkv"].added_at, None);
+    assert_eq!(a.files()["Season 01/A S01E02.mkv"].added_at, Some(200));
+    assert_eq!(a.files()["Season 01/A S01E03.mkv"].added_at, Some(400));
 }
 
 #[tokio::test]
