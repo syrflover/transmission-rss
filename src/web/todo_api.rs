@@ -36,7 +36,8 @@
 //!   Transmission or reported an error), even when it left the feed or came
 //!   from a past episode search, while the rule recorded on it is active and
 //!   no higher revision of the episode is in the folder or on its way
-//!   ([`receive_once::RevisionRetry`]). `retry_blocked` says why it is
+//!   ([`receive_once::RevisionRetry`]) and the rule's folder is the one the
+//!   replacement was decided for ([`receive_once::same_destination`]). `retry_blocked` says why it is
 //!   missing on such a revision, and `command` is its command that has not
 //!   ended yet. The link it receives comes from the history record, never
 //!   from the screen.
@@ -121,6 +122,12 @@ pub async fn retry_offers(
         .open_for_subjects(receive_once::KIND, subjects)
         .await
         .map_err(|e| internal(&e))?;
+    let collect_folder = state
+        .settings
+        .collection()
+        .await
+        .map_err(|e| internal(&e))?
+        .map(|collect| collect.folder);
     for row in stopped {
         let Some(item) = state
             .history
@@ -138,7 +145,14 @@ pub async fn retry_offers(
             Some(id) => state.channels.get_rule(id).await?,
             None => None,
         };
-        let plan = receive_once::retry_plan_for(&item, channel.as_ref(), rule.as_ref(), &revision);
+        let plan = receive_once::retry_plan_for(&item, channel.as_ref(), rule.as_ref(), &revision)
+            .and_then(|plan| match &collect_folder {
+                Some(folder) => {
+                    receive_once::same_destination(&revision, FsPath::new(folder), plan.rule)?;
+                    Ok(plan)
+                }
+                None => Ok(plan),
+            });
         offers.insert(
             item.id,
             RetryOffer {

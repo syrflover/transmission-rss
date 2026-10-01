@@ -19,7 +19,8 @@
 //! torrent left Transmission or reported an error) can be retried too,
 //! whatever its item's result, by the rule recorded on it ([`RevisionRetry`],
 //! [`retry_plan_for`]); not while a higher revision of its episode is in the
-//! folder or on its way. Its add puts the replacement back at its first step
+//! folder or on its way, and not when the rule's folder is no longer the one
+//! its replacement was decided for ([`same_destination`]). Its add puts the replacement back at its first step
 //! with the item's result, in one transaction; a torrent Transmission still
 //! had is started again. It is never renamed here, and an add that fails
 //! leaves the item and the replacement as they were: the command alone says
@@ -207,6 +208,10 @@ pub enum NotRetryable {
     /// The item is a revision whose download stopped, and a higher revision
     /// of its episode is in the folder or on its way.
     Overtaken,
+    /// The rule's folder is not the folder the revision's replacement was
+    /// decided for: a torrent added now would be received elsewhere, and the
+    /// replacement would fail again.
+    FolderMoved,
 }
 
 impl NotRetryable {
@@ -236,6 +241,9 @@ impl NotRetryable {
             }
             NotRetryable::Overtaken => {
                 "이 회차에 더 높은 수정본이 있거나 받는 중이라 다시 받지 않아요."
+            }
+            NotRetryable::FolderMoved => {
+                "규칙의 저장 폴더가 바뀌어서 이 수정본은 다시 받지 않아요. 새 폴더에 받으면 기존 영상과 같은 폴더가 아니라서 대체할 수 없어요."
             }
         }
     }
@@ -346,6 +354,27 @@ pub fn retry_plan_for<'a>(
         RevisionRetry::None => retry_plan(item, channel, rule),
         RevisionRetry::Again(_) => rule_plan(item, channel, rule),
         RevisionRetry::Overtaken => Err(NotRetryable::Overtaken),
+    }
+}
+
+/// Whether a revision received again would go where its replacement was
+/// decided for: the rule's folder under `collect_folder` is the row's. A
+/// revision received into another folder is not next to the video it replaces
+/// (the replacement fails, with no more tries), and the web and the worker
+/// both refuse it first. Items that are not received again need nothing.
+pub fn same_destination(
+    revision: &RevisionRetry,
+    collect_folder: &Path,
+    rule: &Rule,
+) -> Result<(), NotRetryable> {
+    let RevisionRetry::Again(row) = revision else {
+        return Ok(());
+    };
+    let (save_path, _) = rule_destination(collect_folder, rule);
+    if revisions::same_folder(&save_path, Path::new(&row.folder)) {
+        Ok(())
+    } else {
+        Err(NotRetryable::FolderMoved)
     }
 }
 
@@ -620,6 +649,11 @@ pub async fn execute_with(
         Path::new(&collect_folder.folder),
         settled.as_ref().unwrap_or(plan.rule),
     );
+    // Checked against the folder read now, like the rule: the request may be
+    // old.
+    if let Err(reason) = same_destination(&revision, Path::new(&collect_folder.folder), plan.rule) {
+        return Ok(ended_early(failed(reason.message(), None)));
+    }
     let rule_id = plan.rule.id.clone();
 
     let redactor = redactor_for(ctx, &channel);

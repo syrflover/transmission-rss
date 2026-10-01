@@ -352,6 +352,35 @@ async fn a_claim_after_a_restart_keeps_the_old_torrent_it_found_first() {
 }
 
 #[tokio::test]
+async fn a_removing_row_holds_the_old_torrent_it_asked_to_remove() {
+    let (_dir, db) = db().await;
+    let store = RevisionStore::new(db.clone());
+    let v2 = store
+        .create(10, of_episode(item(&db, "14v2").await, "14v2", 2))
+        .await
+        .unwrap();
+    verified(&store, v2.id).await;
+    assert_eq!(store.held_hashes().await.unwrap(), vec!["hash-14v2"]);
+
+    assert_eq!(store.claim(v2.id, 20, old()).await.unwrap(), Claim::Go);
+    let mut held = store.held_hashes().await.unwrap();
+    held.sort();
+    assert_eq!(held, vec!["hash-14", "hash-14v2"]);
+
+    // Once removed, the old torrent is the cycle's to take out like any other.
+    assert!(store
+        .advance(
+            v2.id,
+            30,
+            RevisionState::Removing,
+            Step::Removed { reason: None }
+        )
+        .await
+        .unwrap());
+    assert_eq!(store.held_hashes().await.unwrap(), vec!["hash-14v2"]);
+}
+
+#[tokio::test]
 async fn a_step_from_a_state_the_row_has_left_is_not_written() {
     let (_dir, db) = db().await;
     let store = RevisionStore::new(db.clone());

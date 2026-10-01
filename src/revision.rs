@@ -8,8 +8,9 @@
 //!   Erai-raws' several brackets `… [1080p CR WEBRip HEVC AAC][MultiSub][1BBD34E6].mkv`.
 //!   A name whose last bracket is something else (`[MultiSub]`) has none. RSS
 //!   titles may leave the extension out; the rule is the same.
-//! - **The revision** is the `vN` right after a number (`14v2`, `06v3`);
-//!   without one the release is its first revision.
+//! - **The revision** is the last `vN` right after a number (`14v2`, `06v3`;
+//!   a show named `Show 3v3` keeps its `3v3`); without one the release is its
+//!   first revision.
 //! - **The same release** of an episode is the name without its revision,
 //!   its CRC32 bracket and its extension ([`Release::stem`]): `[SubsPlease]
 //!   Show - 14 (1080p)` for both `14` and `14v2`. Another group's release of
@@ -36,6 +37,12 @@ static CRC: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[([0-9A-Fa-f]{8})\]
 static VERSION: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)\b(\d{1,4}(?:\.\d)?)v(\d{1,2})\b").unwrap());
 
+/// The last `NvM` in `text`: the episode's revision follows the show's name
+/// (`Show 3v3 - 06v2`), so an earlier one is part of the name.
+fn last_version(text: &str) -> Option<regex::Captures<'_>> {
+    VERSION.captures_iter(text).last()
+}
+
 impl Release {
     pub fn parse(name: &str) -> Release {
         let mut rest = name.trim().to_owned();
@@ -51,7 +58,7 @@ impl Release {
             value
         });
         let mut version = 1;
-        let found = VERSION.captures(&rest).map(|c| {
+        let found = last_version(&rest).map(|c| {
             let range = c.get(1).unwrap().end()..c.get(0).unwrap().end();
             (c[2].parse().unwrap_or(1).max(1), range)
         });
@@ -79,7 +86,7 @@ impl Release {
         if let Some(found) = CRC.captures(&name[..end]) {
             end = found.get(0).unwrap().start();
         }
-        match VERSION.captures(&name[..end]) {
+        match last_version(&name[..end]) {
             Some(c) => {
                 let mut out = name.to_owned();
                 out.replace_range(c.get(1).unwrap().end()..c.get(0).unwrap().end(), "");
@@ -118,8 +125,9 @@ pub fn file_crc32(path: &Path) -> io::Result<u32> {
 }
 
 /// What tells a file apart from another one put under its name: its device
-/// and inode, and its size and modification time (which a write into it
-/// changes).
+/// and inode, its size, and its modification and status-change times (a
+/// write into it changes the first; the second also catches a write that put
+/// the modification time back, and any change of mode or owner).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FileIdentity {
     dev: u64,
@@ -127,6 +135,8 @@ pub struct FileIdentity {
     len: u64,
     mtime: i64,
     mtime_nsec: i64,
+    ctime: i64,
+    ctime_nsec: i64,
 }
 
 impl FileIdentity {
@@ -138,6 +148,8 @@ impl FileIdentity {
             len: meta.len(),
             mtime: meta.mtime(),
             mtime_nsec: meta.mtime_nsec(),
+            ctime: meta.ctime(),
+            ctime_nsec: meta.ctime_nsec(),
         }
     }
 
@@ -184,6 +196,8 @@ pub fn season_episode(name: &str) -> Option<(u32, String)> {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::FileExt;
+
     use super::*;
 
     #[test]
@@ -225,6 +239,32 @@ mod tests {
             "[Erai-raws] Kimi to Idol Precure - 06v2 [1080p CR WEBRip HEVC AAC][MultiSub][1BBD34E6]",
         );
         assert_eq!(title, release);
+    }
+
+    #[test]
+    fn a_number_v_number_in_the_show_name_is_not_the_revision() {
+        let name = "[SubsPlease] Show 3v3 - 06v2 (1080p) [1A2B3C4D].mkv";
+        let release = Release::parse(name);
+        assert_eq!(release.version, 2);
+        assert_eq!(release.stem, "[SubsPlease] Show 3v3 - 06 (1080p)");
+        assert_eq!(
+            Release::without_version(name),
+            "[SubsPlease] Show 3v3 - 06 (1080p) [1A2B3C4D].mkv"
+        );
+    }
+
+    #[test]
+    fn a_v_number_that_does_not_follow_a_number_is_no_revision() {
+        for name in [
+            "[Group] Gundam V2 - 06 (1080p) [1A2B3C4D].mkv",
+            "[Group] Show Ver.2 - 06 (1080p) [1A2B3C4D].mkv",
+            "[Group] Show S01E06v2 (1080p) [1A2B3C4D].mkv",
+            "[Group] Show - 06 (x264v2) [1A2B3C4D].mkv",
+        ] {
+            let release = Release::parse(name);
+            assert_eq!(release.version, 1, "{name}");
+            assert_eq!(Release::without_version(name), name, "{name}");
+        }
     }
 
     #[test]
@@ -274,6 +314,23 @@ mod tests {
         assert_eq!(crc_text(0x5), "00000005");
         assert_eq!(parse_crc("1BBD34E6"), Some(0x1BBD34E6));
         assert_eq!(parse_crc("1BBD34E"), None);
+    }
+
+    #[test]
+    fn a_rewrite_that_restores_the_modification_time_changes_the_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.mkv");
+        std::fs::write(&path, b"aaaa").unwrap();
+        let before = FileIdentity::at(&path).unwrap();
+        let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+        // The kernel's clock ticks coarsely: let the rewrite fall in another.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        file.write_all_at(b"bbbb", 0).unwrap();
+        file.set_modified(modified).unwrap();
+        drop(file);
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), 4);
+        assert_ne!(FileIdentity::at(&path).unwrap(), before);
     }
 
     #[test]
