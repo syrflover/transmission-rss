@@ -117,7 +117,7 @@ async fn an_anime_found_unlisted_is_marked_until_a_snapshot_is_received_again() 
     assert!(unlisted(vec![7, 8, 9]).await.unwrap().is_empty());
 
     env.anissia
-        .mark_unlisted(vec![7], 500, 1_000)
+        .mark_unlisted(vec![7], 500, 1_000, 500)
         .await
         .unwrap();
     assert_eq!(unlisted(vec![7, 8, 9]).await.unwrap(), HashSet::from([7]));
@@ -137,7 +137,7 @@ async fn an_anime_found_unlisted_is_marked_until_a_snapshot_is_received_again() 
 
     // Found unlisted again: the first time stays.
     env.anissia
-        .mark_unlisted(vec![7], 900, 2_000)
+        .mark_unlisted(vec![7], 900, 2_000, 900)
         .await
         .unwrap();
     assert_eq!(at("unlisted_at").await.unwrap(), Some(500));
@@ -145,13 +145,21 @@ async fn an_anime_found_unlisted_is_marked_until_a_snapshot_is_received_again() 
 
     // An anime without a snapshot has nothing to mark.
     env.anissia
-        .mark_unlisted(vec![9], 900, 2_000)
+        .mark_unlisted(vec![9], 900, 2_000, 900)
         .await
         .unwrap();
     assert!(!unlisted(vec![9]).await.unwrap().contains(&9));
 
     // Anissia lists it again.
     env.anissia.put_anime(anime(7, 3_000)).await.unwrap();
+    assert!(unlisted(vec![7]).await.unwrap().is_empty());
+
+    // A snapshot written after the refresh began asking is newer than its
+    // answers: the refresh does not mark it.
+    env.anissia
+        .mark_unlisted(vec![7], 3_500, 4_000, 2_500)
+        .await
+        .unwrap();
     assert!(unlisted(vec![7]).await.unwrap().is_empty());
     assert_eq!(at("unlisted_at").await.unwrap(), None);
 }

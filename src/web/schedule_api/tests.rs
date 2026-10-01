@@ -546,7 +546,7 @@ async fn an_anime_without_an_end_date_leaves_once_anissia_is_found_not_to_list_i
     app.state
         .anissia
         .store
-        .mark_unlisted(vec![2], NOW, NOW + 24 * 60 * 60 * 1000)
+        .mark_unlisted(vec![2], NOW, NOW + 24 * 60 * 60 * 1000, NOW)
         .await
         .unwrap();
     assert_eq!(titles(&app.week().await), ["오래됨"]);
@@ -559,6 +559,7 @@ async fn an_anime_without_an_end_date_leaves_once_anissia_is_found_not_to_list_i
         .await
         .unwrap();
     assert_eq!(titles(&app.week().await), ["빠짐", "오래됨"]);
+
 }
 
 #[tokio::test]

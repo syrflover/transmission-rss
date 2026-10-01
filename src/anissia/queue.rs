@@ -28,7 +28,10 @@ use tokio_util::sync::CancellationToken;
 use super::{Anissia, AnissiaError, LAST_WEEK};
 use crate::{
     artwork::queue::{LOCK_RETRY, POLL},
-    store::anissia::{Due, REFRESH_AFTER_MS},
+    store::{
+        anissia::{Due, REFRESH_AFTER_MS},
+        history::Millis,
+    },
     worker::CycleLock,
 };
 
@@ -67,10 +70,14 @@ impl Anissia {
 
     /// Records that Anissia answered for every week and listed none of
     /// `anime_nos`, and puts their refresh off by `wait`.
-    async fn leave_unlisted(&self, anime_nos: Vec<i64>, wait: Duration) {
+    async fn leave_unlisted(&self, anime_nos: Vec<i64>, wait: Duration, asked_from: Millis) {
         let at = self.now();
         let until = at + wait.as_millis() as i64;
-        if let Err(e) = self.store.mark_unlisted(anime_nos, at, until).await {
+        if let Err(e) = self
+            .store
+            .mark_unlisted(anime_nos, at, until, asked_from)
+            .await
+        {
             eprintln!("Anissia queue: cannot record the unlisted anime: {e}");
             tokio::time::sleep(POLL).await;
         }
@@ -78,6 +85,9 @@ impl Anissia {
 
     /// Receives the snapshots of `due` again.
     pub async fn refresh(&self, due: Vec<Due>) -> Ran {
+        // A snapshot written after this (by the web, which found the anime
+        // listed) is newer than the answers below and is not marked unlisted.
+        let asked_from = self.now();
         let mut pending: Vec<i64> = due.iter().map(|d| d.anime_no).collect();
         let mut weeks: Vec<u8> = Vec::new();
         for week in due.iter().filter_map(|d| d.week) {
@@ -147,7 +157,7 @@ impl Anissia {
             let wait = Duration::from_millis(REFRESH_AFTER_MS as u64);
             if anything_listed {
                 // Every week answered and these were in none of them.
-                self.leave_unlisted(pending, wait).await;
+                self.leave_unlisted(pending, wait, asked_from).await;
             } else {
                 self.put_off(pending, wait).await;
             }

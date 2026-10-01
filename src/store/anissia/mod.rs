@@ -247,6 +247,7 @@ impl AnissiaStore {
         anime_nos: Vec<i64>,
         at: Millis,
         until: Millis,
+        asked_from: Millis,
     ) -> Result<()> {
         self.db
             .run(move |c| {
@@ -255,8 +256,8 @@ impl AnissiaStore {
                     tx.execute(
                         "UPDATE anissia_anime
                             SET unlisted_at = coalesce(unlisted_at, ?2), refresh_not_before = ?3
-                          WHERE anime_no = ?1",
-                        params![no, at, until],
+                          WHERE anime_no = ?1 AND fetched_at < ?4",
+                        params![no, at, until, asked_from],
                     )?;
                 }
                 tx.commit()?;
