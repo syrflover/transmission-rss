@@ -113,7 +113,7 @@ export interface RuleFields {
   state: RuleState;
 }
 
-export type PreviewKind = "mine" | "earlier" | "excluded";
+export type PreviewKind = "mine" | "earlier" | "excluded" | "past";
 
 export interface PreviewItem {
   id: number;
@@ -125,12 +125,14 @@ export interface PreviewItem {
   save_path: string | null;
   taken_by: { rule_id: string | null; match: string | null } | null;
   excluded_by: string | null;
+  /** Why a `past` item is held back: it came before the subscription, or while the rule was off. */
+  past_cause: "subscribed" | "resumed" | null;
   stored_result: string;
 }
 
 export interface Preview {
   error: RegexProblem | null;
-  counts: { total: number; mine: number; earlier: number; excluded: number; unmatched: number };
+  counts: { total: number; mine: number; earlier: number; excluded: number; past: number; unmatched: number };
   masked_total: number;
   items: PreviewItem[];
   truncated: boolean;

@@ -7,14 +7,14 @@ import { useAfterDelay } from "@/lib/cached";
 import { dateTime } from "@/lib/time";
 
 import { subscriptionAdded } from "../../cache";
-import { btnNeutral, btnPrimary, hintClass } from "../../channels/styles";
+import { btnAction, btnNeutral, btnPrimary, hintClass } from "../../channels/styles";
 import type { PreviewItem, RuleFields } from "../../rules/api";
 import { usePreview } from "../../rules/usePreview";
 import type { Channel } from "../../channels/api";
 import { subscribe, type ScheduleEntry, type TitleGroup } from "../api";
 import { subtitleChoice } from "../format";
 import type { Draft } from "./draft";
-import { useReceive, type ReceivePhase } from "./useReceive";
+import { PHASE_TEXT, useReceive } from "./useReceive";
 
 const check = "mt-0.5 size-[18px] flex-none accent-focus";
 
@@ -22,13 +22,6 @@ const check = "mt-0.5 size-[18px] flex-none accent-focus";
 function receivable(item: PreviewItem): boolean {
   return item.kind === "mine" && item.stored_result === "no_match";
 }
-
-const PHASE_TEXT: Record<ReceivePhase["kind"], string> = {
-  sending: "요청하는 중",
-  waiting: "추가하는 중",
-  added: "추가함",
-  failed: "추가하지 못함",
-};
 
 /**
  * The last step: the past items of the channel that the new rule would pick,
@@ -69,6 +62,8 @@ export function Confirm({
   const [ticked, setTicked] = useState<ReadonlySet<number>>(new Set());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The rule that already follows this anime in this channel (a `409`), to open.
+  const [existing, setExisting] = useState<string | null>(null);
   const [ruleId, setRuleId] = useState<string | null>(null);
   // The titles of the items asked for, kept because the preview moves on.
   const [titles, setTitles] = useState<ReadonlyMap<number, string>>(new Map());
@@ -89,6 +84,7 @@ export function Confirm({
   const submit = async () => {
     setBusy(true);
     setError(null);
+    setExisting(null);
     try {
       const rule = await subscribe({
         channel_id: channel.id,
@@ -107,6 +103,10 @@ export function Confirm({
       if (tickedNow.length > 0) receive.start(rule.id, tickedNow.map((i) => i.id));
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "구독하지 못했어요. 다시 시도해 주세요.");
+      // Subscribed already, from another tab or by an earlier press whose
+      // answer was lost: its rule is where the past items are received.
+      const current = e instanceof ApiError && e.code === "conflict" ? (e.current as { rule_id?: unknown } | null) : null;
+      if (typeof current?.rule_id === "string") setExisting(current.rule_id);
     } finally {
       setBusy(false);
     }
@@ -122,7 +122,7 @@ export function Confirm({
         </h3>
         <p className="min-w-0 text-[13px] leading-normal break-words text-text-secondary">
           {anime.subject}의 새 회차는 다음 RSS 확인부터 {channel.name ?? channel.host} 채널에서 받아요.
-          {receive.entries.length === 0 && " 지난 항목은 받지 않았어요."}
+          {receive.entries.length === 0 && " 지난 항목은 받지 않았어요. 규칙 화면에서 골라 받을 수 있어요."}
         </p>
 
         {receive.entries.length > 0 && (
@@ -286,6 +286,13 @@ export function Confirm({
         <p role="alert" className="text-[13px] leading-normal font-semibold text-urgent">
           {error}
         </p>
+      )}
+      {existing !== null && (
+        <div className="flex">
+          <Button asChild type="button" variant="ghost" className={btnAction}>
+            <Link to={`/collect/rules?rule=${encodeURIComponent(existing)}`}>그 구독 규칙 열기</Link>
+          </Button>
+        </div>
       )}
 
       <div className="flex">

@@ -74,6 +74,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("history/by_rule.sql")),
     // 18: a number that changes when a video lookup in the library could answer differently
     Migration::Sql(include_str!("library/generation.sql")),
+    // 19: when a rule was last turned back on, so what it missed while off is left to the user
+    Migration::Sql(include_str!("channels/resumed.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -445,6 +447,44 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(automatic, 0);
+    }
+
+    #[tokio::test]
+    async fn a_database_from_before_resume_times_keeps_its_rules_with_no_resume_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        {
+            // A database as the build with eighteen migrations left it: a paused
+            // rule and an active one.
+            let conn = database_at(&path, 18);
+            conn.execute_batch(
+                "INSERT INTO channels (id, position, url, excludes, secret_query, version)
+                     VALUES ('c1', 0, 'http://x/feed', '[]', '[]', 1);
+                 INSERT INTO rules (id, channel_id, position, match_text, regex,
+                         case_insensitive, directory, episode, episode_auto, state, version)
+                     VALUES ('r1', 'c1', 0, 'Clevatess', 0, 1, 'Clevatess/Season 02', 1, 0,
+                         'active', 2),
+                            ('r2', 'c1', 1, 'Old', 0, 0, 'Old', 0, 0, 'paused', 5);",
+            )
+            .unwrap();
+        }
+
+        let db = Db::open(&path).await.unwrap();
+
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+        let (rules, stamped): (String, i64) = db
+            .run::<_, DbError, _>(|c| {
+                Ok(c.query_row(
+                    "SELECT group_concat(id || ':' || state || ':' || version, ','),
+                            count(resumed_at)
+                       FROM rules",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?)
+            })
+            .await
+            .unwrap();
+        assert_eq!((rules.as_str(), stamped), ("r1:active:2,r2:paused:5", 0));
     }
 
     #[tokio::test]

@@ -20,10 +20,12 @@ type Result<T> = std::result::Result<T, ChannelError>;
 
 const CHANNEL_COLUMNS: &str =
     "id, position, version, url, excludes, secret_query, past_search, name";
-/// A rule with its subscription, if it has one (columns 11 to 16).
+/// A rule with its subscription, if it has one (columns 11 to 16), and when it
+/// was last turned back on (column 17).
 const RULE_COLUMNS: &str = "r.id, r.channel_id, r.position, r.version, r.match_text, r.regex, \
      r.case_insensitive, r.directory, r.episode, r.episode_auto, r.state, \
-     s.anissia_anime_no, s.subtitles, s.creator, s.season_id, s.subscribed_at, s.season_blocked";
+     s.anissia_anime_no, s.subtitles, s.creator, s.season_id, s.subscribed_at, s.season_blocked, \
+     r.resumed_at";
 const RULE_FROM: &str = "rules r LEFT JOIN rule_subscriptions s ON s.rule_id = r.id";
 
 fn begin(conn: &mut Connection) -> Result<Transaction<'_>> {
@@ -93,6 +95,7 @@ fn rule_from_row(row: &Row<'_>) -> rusqlite::Result<Rule> {
         state: RuleState::parse(&state)
             .ok_or_else(|| conversion_error(10, Type::Text, "unknown rule state"))?,
         subscription,
+        resumed_at: row.get(17)?,
     })
 }
 
@@ -470,12 +473,21 @@ pub fn update_rule(
 /// Sets a rule's state without a version check (the worker's archive and
 /// restore; see `worker::commands::rule_archive`). The version goes up only
 /// when the state changes, so an edit made meanwhile from a screen that saw
-/// the old state is answered with a conflict. `None` when the rule is gone.
-pub fn set_rule_state(conn: &mut Connection, id: &str, state: RuleState) -> Result<Option<Rule>> {
+/// the old state is answered with a conflict. A rule turned back on is noted as
+/// resumed at `at` (see [`Rule::resumed_at`]). `None` when the rule is gone.
+pub fn set_rule_state(
+    conn: &mut Connection,
+    id: &str,
+    state: RuleState,
+    at: Millis,
+) -> Result<Option<Rule>> {
     let tx = begin(conn)?;
     tx.execute(
-        "UPDATE rules SET state = ?2, version = version + 1 WHERE id = ?1 AND state <> ?2",
-        params![id, state.as_str()],
+        "UPDATE rules
+         SET state = ?2, version = version + 1,
+             resumed_at = CASE WHEN ?2 = 'active' THEN ?3 ELSE resumed_at END
+         WHERE id = ?1 AND state <> ?2",
+        params![id, state.as_str(), at],
     )?;
     let rule = fetch_rule(&tx, id)?;
     tx.commit()?;
@@ -499,12 +511,14 @@ fn bump_version(tx: &Transaction<'_>, id: &str) -> Result<()> {
 /// `영상 받기`: turns the rule's collecting on (`active`) or off (`paused`) if
 /// it is still at `expected`. An archived rule is restored through the worker,
 /// which moves its folder back first, so this refuses it. Nothing changes (and
-/// the version stays) when the rule is in the wanted state already.
+/// the version stays) when the rule is in the wanted state already. Turning it
+/// on notes the rule as resumed at `at` (see [`Rule::resumed_at`]).
 pub fn set_video_receiving(
     conn: &mut Connection,
     id: &str,
     expected: Version,
     on: bool,
+    at: Millis,
 ) -> Result<Rule> {
     let tx = begin(conn)?;
     let rule = require_rule(&tx, id, expected)?;
@@ -520,8 +534,11 @@ pub fn set_video_receiving(
     };
     if rule.state != wanted {
         tx.execute(
-            "UPDATE rules SET state = ?2, version = version + 1 WHERE id = ?1",
-            params![id, wanted.as_str()],
+            "UPDATE rules
+             SET state = ?2, version = version + 1,
+                 resumed_at = CASE WHEN ?2 = 'active' THEN ?3 ELSE resumed_at END
+             WHERE id = ?1",
+            params![id, wanted.as_str(), at],
         )?;
     }
     let updated = fetch_rule(&tx, id)?.expect("the rule still exists");

@@ -156,7 +156,8 @@ pub enum NotRetryable {
     /// The item's channel was deleted.
     ChannelDeleted,
     /// The item failed without a rule: it comes from the retry that let a
-    /// person receive any item into a folder, which no longer exists.
+    /// person receive any item into a folder, which no longer exists. Also the
+    /// reason a rule is refused such an item.
     NoRule,
     /// The rule that picked the item was deleted.
     RuleDeleted,
@@ -275,6 +276,8 @@ pub fn adoption_plan<'a>(
     inactive(rule)?;
     match item.result {
         HistoryResult::AddFailed if item.rule_id.as_deref() == Some(rule.id.as_str()) => {}
+        // A failure that no rule is recorded on belongs to no rule at all.
+        HistoryResult::AddFailed if item.rule_id.is_none() => return Err(NotRetryable::NoRule),
         HistoryResult::AddFailed => return Err(NotRetryable::OtherRule),
         _ if picks(channel, rule, &item.title) => {}
         _ => return Err(NotRetryable::NotMatching),
@@ -878,6 +881,12 @@ mod tests {
             why(&failed_elsewhere, Some(&channel), Some(&active)),
             NotRetryable::OtherRule
         );
+        // A failure with no rule recorded at all is no other rule's.
+        let failed_without_rule = item(HistoryResult::AddFailed, None);
+        assert_eq!(
+            why(&failed_without_rule, Some(&channel), Some(&active)),
+            NotRetryable::NoRule
+        );
     }
 
     #[test]
@@ -956,6 +965,7 @@ mod tests {
             episode_auto: false,
             state,
             subscription: None,
+            resumed_at: None,
         }
     }
 

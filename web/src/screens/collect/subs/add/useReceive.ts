@@ -31,6 +31,14 @@ interface Entry {
   phase: ReceivePhase;
 }
 
+/** What each phase says on a row. */
+export const PHASE_TEXT: Record<ReceivePhase["kind"], string> = {
+  sending: "요청하는 중",
+  waiting: "추가하는 중",
+  added: "추가함",
+  failed: "추가하지 못함",
+};
+
 function ended(command: Command): ReceivePhase {
   const result = command.outcome?.result;
   if (result === "received" || result === "duplicate") return { kind: "added" };
@@ -105,6 +113,24 @@ export function useReceive(ruleId: string | null) {
     [ruleId, send],
   );
 
+  /**
+   * Receives one past item with the rule, from the rule's own detail: a new
+   * command per press, or the same one again after a lost answer. Does nothing
+   * while the item's command is under way or has added it.
+   */
+  const one = useCallback(
+    (itemId: number) => {
+      if (!ruleId) return;
+      const entry = open.current.find((e) => e.itemId === itemId);
+      if (entry && entry.phase.kind !== "failed") return;
+      const commandId = entry?.phase.kind === "failed" && entry.phase.lost ? entry.commandId : newCommandId();
+      const next: Entry = { itemId, commandId, phase: { kind: "sending" } };
+      setEntries((all) => [...all.filter((e) => e.itemId !== itemId), next]);
+      void send(ruleId, itemId, commandId);
+    },
+    [ruleId, send],
+  );
+
   const waiting = entries.some((e) => e.phase.kind === "waiting");
   useEffect(() => {
     if (!waiting) return;
@@ -124,5 +150,5 @@ export function useReceive(ruleId: string | null) {
     return () => window.clearInterval(timer);
   }, [waiting, setPhase]);
 
-  return { entries, start, retry };
+  return { entries, start, retry, one };
 }

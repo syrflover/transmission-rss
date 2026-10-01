@@ -28,6 +28,7 @@ pub use model::{
 };
 
 use super::db::{Db, DbError};
+use super::history::Millis;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ChannelError {
@@ -219,30 +220,34 @@ impl ChannelStore {
     /// Archives or restores a rule, whatever version it is at: only the worker
     /// does this, in the order its archive and restore need (see
     /// `worker::commands::rule_archive`). The version goes up when the state
-    /// changes. `None` when the rule is gone.
+    /// changes. A rule that becomes `active` is noted as resumed at `at`
+    /// ([`Rule::resumed_at`]). `None` when the rule is gone.
     pub async fn set_rule_state(
         &self,
         id: &str,
         state: RuleState,
+        at: Millis,
     ) -> Result<Option<Rule>, ChannelError> {
         let id = id.to_owned();
         self.db
-            .run(move |c| repo::set_rule_state(c, &id, state))
+            .run(move |c| repo::set_rule_state(c, &id, state, at))
             .await
     }
 
     /// `영상 받기`: turns a rule's collecting on or off (`active`/`paused`) if
-    /// it is still at `expected_version`. An archived rule is refused: it is
-    /// restored through the worker.
+    /// it is still at `expected_version`; on, it is noted as resumed at `at`
+    /// ([`Rule::resumed_at`]). An archived rule is refused: it is restored
+    /// through the worker.
     pub async fn set_video_receiving(
         &self,
         id: &str,
         expected_version: Version,
         on: bool,
+        at: Millis,
     ) -> Result<Rule, ChannelError> {
         let id = id.to_owned();
         self.db
-            .run(move |c| repo::set_video_receiving(c, &id, expected_version, on))
+            .run(move |c| repo::set_video_receiving(c, &id, expected_version, on, at))
             .await
     }
 

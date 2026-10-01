@@ -1,6 +1,9 @@
+import { Button } from "@/components/ui/button";
 import { useAfterDelay } from "@/lib/cached";
 import { cn } from "@/lib/utils";
 
+import { btnNeutral } from "../channels/styles";
+import { PHASE_TEXT, type ReceivePhase } from "../subs/add/useReceive";
 import type { Preview, PreviewItem, PreviewKind } from "./api";
 import type { PreviewState } from "./usePreview";
 
@@ -8,6 +11,7 @@ const KIND: Record<PreviewKind, { label: string; badge: string }> = {
   mine: { label: "이 규칙이 받아요", badge: "border-ok text-ok" },
   earlier: { label: "앞 규칙이 가져가요", badge: "border-arch text-arch" },
   excluded: { label: "채널 제외 조건", badge: "border-hairline text-text-muted" },
+  past: { label: "지난 회차", badge: "border-hairline text-text-secondary" },
 };
 
 const STORED: Record<string, string> = {
@@ -18,7 +22,49 @@ const STORED: Record<string, string> = {
   add_failed: "추가 실패",
 };
 
-function Row({ item }: { item: PreviewItem }) {
+/**
+ * How a past item of a subscription rule is received from its row: the rule
+ * receives it when the user asks, with the command the subscribe flow uses.
+ */
+export interface PastReceive {
+  /** Where the item's command is; `undefined` before `받기` was pressed. */
+  phaseOf: (itemId: number) => ReceivePhase | undefined;
+  onReceive: (itemId: number) => void;
+  /** Why `받기` is not offered now, as a sentence; `null` when it is. */
+  blocked: string | null;
+}
+
+/** The core action of a past item's row: receive it, and follow how that goes. */
+function PastAction({ item, receive }: { item: PreviewItem; receive: PastReceive }) {
+  if (receive.blocked) {
+    return <p className="min-w-0 text-xs text-text-muted">{receive.blocked}</p>;
+  }
+  const phase = receive.phaseOf(item.id);
+  if (!phase || phase.kind === "failed") {
+    return (
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+        <Button type="button" variant="ghost" className={btnNeutral} onClick={() => receive.onReceive(item.id)}>
+          {phase ? "다시 받기" : "받기"}
+        </Button>
+        {phase?.kind === "failed" && (
+          <span role="alert" className="min-w-0 text-xs break-words text-urgent">
+            {PHASE_TEXT.failed}. {phase.message}
+          </span>
+        )}
+      </div>
+    );
+  }
+  return (
+    <span
+      role="status"
+      className={cn("text-xs font-semibold", phase.kind === "added" ? "text-ok" : "text-text-secondary")}
+    >
+      {PHASE_TEXT[phase.kind]}
+    </span>
+  );
+}
+
+function Row({ item, receive }: { item: PreviewItem; receive?: PastReceive }) {
   const kind = KIND[item.kind];
   return (
     <li className="flex min-w-0 flex-col gap-1 rounded-[10px] border border-hairline-soft bg-surface-2 px-3 py-2.5">
@@ -46,6 +92,15 @@ function Row({ item }: { item: PreviewItem }) {
       {item.kind === "mine" && item.save_path && (
         <p className="min-w-0 font-mono text-xs break-all text-text-secondary">→ {item.save_path}</p>
       )}
+      {item.kind === "past" && (
+        <p className="min-w-0 text-xs text-text-secondary">
+          {item.past_cause === "resumed"
+            ? "규칙이 멈춰 있는 동안 올라온 항목이라 고르기 전에는 받지 않아요."
+            : "구독하기 전에 올라온 항목이라 고르기 전에는 받지 않아요."}
+          {item.save_path && <span className="block font-mono break-all text-text-muted">→ {item.save_path}</span>}
+        </p>
+      )}
+      {item.kind === "past" && receive && <PastAction item={item} receive={receive} />}
       {item.kind === "earlier" && item.taken_by && (
         <p className="min-w-0 text-xs break-all text-text-secondary">
           {item.taken_by.match ?? "제목 대기"} 규칙이 먼저 맞아서 그쪽 폴더로 가요.
@@ -75,7 +130,8 @@ function Summary({ preview }: { preview: Preview }) {
       기록된 항목 {counts.total}개 중 이 규칙이 받는 항목 <strong>{counts.mine}개</strong>
       {counts.earlier > 0 && <>, 앞 규칙이 가져가는 항목 {counts.earlier}개</>}
       {counts.excluded > 0 && <>, 제외 조건에 걸리는 항목 {counts.excluded}개</>}
-      {counts.mine + counts.earlier + counts.excluded === 0 && <>. 맞는 항목이 없어요</>}
+      {counts.past > 0 && <>, 고르기 전에는 받지 않는 지난 회차 {counts.past}개</>}
+      {counts.mine + counts.earlier + counts.excluded + counts.past === 0 && <>. 맞는 항목이 없어요</>}
       {"."}
     </p>
   );
@@ -85,7 +141,7 @@ function Summary({ preview }: { preview: Preview }) {
  * What the rule as edited would do with the items the worker recorded for its
  * channel. The judgement comes from the server; this only shows it.
  */
-export function RulePreview({ state }: { state: PreviewState }) {
+export function RulePreview({ state, receive }: { state: PreviewState; receive?: PastReceive }) {
   const preview =
     state.state === "ready" ? state.preview : state.state === "loading" ? state.previous : null;
   const stale = state.state === "loading";
@@ -124,7 +180,7 @@ export function RulePreview({ state }: { state: PreviewState }) {
           {preview.items.length > 0 && (
             <ul className="m-0 flex list-none flex-col gap-2 p-0">
               {preview.items.map((item) => (
-                <Row key={item.id} item={item} />
+                <Row key={item.id} item={item} receive={receive} />
               ))}
             </ul>
           )}

@@ -306,7 +306,7 @@ async fn an_excluded_item_and_an_archived_rule_make_no_overlap() {
     // The worker archives (the `rule_archive` command); the store call is its.
     app.state
         .channels
-        .set_rule_state(second["id"].as_str().unwrap(), RuleState::Archived)
+        .set_rule_state(second["id"].as_str().unwrap(), RuleState::Archived, 0)
         .await
         .unwrap();
     assert_eq!(app.list().await["rules"][1]["overlap"], false);
@@ -965,11 +965,12 @@ async fn a_rule_not_saved_yet_previews_as_the_last_rule_and_an_archived_one_as_c
         .await;
     assert_eq!(kinds(&waiting), []);
 
-    // Archived, a rule is judged as if restored.
+    // Archived, a rule is judged as if restored: what history holds that it has
+    // not taken came while it was off, so it would leave that to the user.
     let rule = app.list().await["rules"][0].clone();
     app.state
         .channels
-        .set_rule_state(rule["id"].as_str().unwrap(), RuleState::Archived)
+        .set_rule_state(rule["id"].as_str().unwrap(), RuleState::Archived, 0)
         .await
         .unwrap();
     let archived = app.list().await["rules"][0].clone();
@@ -983,8 +984,9 @@ async fn a_rule_not_saved_yet_previews_as_the_last_rule_and_an_archived_one_as_c
         .await;
     assert_eq!(
         kinds(&restored),
-        [("Show - 01".to_owned(), "mine".to_owned())]
+        [("Show - 01".to_owned(), "past".to_owned())]
     );
+    assert_eq!(restored["items"][0]["past_cause"], "resumed");
 
     let (status, _, _) = app
         .call(

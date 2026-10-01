@@ -688,7 +688,7 @@ async fn a_worker_stopped_during_the_renames_finishes_the_rest_on_the_next_run()
     let claimed = commands.claim_next(s.h.now()).await.unwrap().unwrap();
     assert_eq!(claimed.id, "archive-stop-02");
     s.h.channels
-        .set_rule_state(&rule.id, RuleState::Archived)
+        .set_rule_state(&rule.id, RuleState::Archived, 0)
         .await
         .unwrap();
     s.seeding(

@@ -174,7 +174,7 @@ impl Worker {
             rule_archive::KIND => {
                 let lock = lock.clone();
                 task.spawn(async move {
-                    match rule_archive::run(&ctx, &owned, lock, &cancel).await {
+                    match rule_archive::run(&ctx, &owned, lock, &clock, &cancel).await {
                         Ok(finished) => Ran::Ended {
                             state: finished.state,
                             outcome: finished.outcome,

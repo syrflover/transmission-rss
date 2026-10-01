@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 
 import { KEYS, subscriptionChanged } from "../cache";
 import { changeCreator } from "../subs/api";
+import { useReceive } from "../subs/add/useReceive";
 import { CreatorPicker } from "../subs/CreatorPicker";
 import {
   btnDanger,
@@ -34,7 +35,7 @@ import { BLANK_DRAFT, draftOf, fieldsOf, parseEpisode, sameDraft, type Draft } f
 import { LinkToSchedule } from "./LinkToSchedule";
 import { ChannelTag, StateBadge } from "./RuleList";
 import { ConflictNotice, OrderRow, RuleSummary } from "./parts";
-import { RulePreview } from "./RulePreview";
+import { RulePreview, type PastReceive } from "./RulePreview";
 import { SwitchRows } from "./SwitchRows";
 import { useArchiveMove } from "./useArchiveMove";
 import { usePreview } from "./usePreview";
@@ -154,7 +155,26 @@ export function RuleDetail({
   }, [dirty, onDirtyChange]);
   useEffect(() => () => onDirtyChange(false), [onDirtyChange]);
 
-  const preview = usePreview(channelId, known?.id ?? null, fields, position);
+  // `받기` on a past item row receives it with the stored rule. Once an item is
+  // added the preview is asked again, so its row reads as received.
+  const received = useReceive(known?.id ?? null);
+  const addedCount = received.entries.filter((e) => e.phase.kind === "added").length;
+  const preview = usePreview(channelId, known?.id ?? null, fields, position, addedCount);
+  const pastReceive: PastReceive | undefined = known
+    ? {
+        phaseOf: (itemId) => received.entries.find((e) => e.itemId === itemId)?.phase,
+        onReceive: received.one,
+        // The worker receives with the stored rule, so the row must be what is stored.
+        blocked:
+          known.state === "archived"
+            ? "보관된 규칙이에요. 복원한 뒤에 받을 수 있어요."
+            : known.state === "paused"
+              ? "영상 받기를 켠 뒤에 받을 수 있어요."
+              : dirty
+                ? "저장하지 않은 변경이 있어요. 저장한 뒤에 받을 수 있어요."
+                : null,
+      }
+    : undefined;
   const latest =
     preview.state === "ready" ? preview.preview : preview.state === "loading" ? preview.previous : null;
   const regexProblem = latest?.error ?? null;
@@ -370,7 +390,7 @@ export function RuleDetail({
           data-testid="paused-banner"
           className="rounded-xl border border-hairline bg-surface-2 px-3.5 py-3 text-[13px] leading-normal text-text-secondary"
         >
-          영상 받기를 꺼서 멈춰 있어요. 새 항목을 받지 않고 작품 폴더는 그대로 두어요. 다시 켜면 다음 RSS 확인부터 맞는 항목을 받아요.
+          영상 받기를 꺼서 멈춰 있어요. 새 항목을 받지 않고 작품 폴더는 그대로 두어요. 다시 켜면 다음 RSS 확인부터 새로 올라오는 항목을 받아요. 멈춘 동안 올라온 항목은 지난 회차로 남아서 직접 골라 받아요.
         </p>
       )}
       {known?.season_blocked && (
@@ -387,7 +407,7 @@ export function RuleDetail({
 
       {known?.state === "archived" && (
         <p className="rounded-xl border border-hairline bg-surface-2 px-3.5 py-3 text-[13px] leading-normal text-text-secondary">
-          이 규칙은 보관했어요. 새 항목을 받지 않고, 수집 기록은 그대로예요. 복원하면 작품 폴더를 수집 폴더로 되돌린 뒤 다음 RSS 확인부터 다시 받아요.
+          이 규칙은 보관했어요. 새 항목을 받지 않고, 수집 기록은 그대로예요. 복원하면 작품 폴더를 수집 폴더로 되돌린 뒤 다음 RSS 확인부터 새 항목을 받아요. 보관된 동안 올라온 항목은 지난 회차로 남아요.
         </p>
       )}
       {known && (
@@ -553,7 +573,7 @@ export function RuleDetail({
           </p>
         )}
 
-        <RulePreview state={preview} />
+        <RulePreview state={preview} receive={pastReceive} />
 
         {dirty && (
           <div

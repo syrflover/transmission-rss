@@ -318,6 +318,10 @@ pub struct Rule {
     pub state: RuleState,
     /// Set when the rule follows an anime of Anissia's schedule.
     pub subscription: Option<Subscription>,
+    /// When the rule was last turned back on (`영상 받기` on, or restored), as
+    /// Unix milliseconds; `None` while it never was. What history first saw
+    /// before then is left to the user ([`crate::worker::plan::ChannelPlan::is_past`]).
+    pub resumed_at: Option<i64>,
 }
 
 impl Rule {

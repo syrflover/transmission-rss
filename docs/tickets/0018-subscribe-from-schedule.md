@@ -48,9 +48,17 @@
 
 - 자막 고르기에 `받지 않음`을 더했어요(조정자 결정, 2026-10-01). 완료 기준 표의 "제작자가 없는 작품은 `제작자 미정`만"은 "제작자 목록이 없어도 `제작자 미정`과 `받지 않음`"으로 읽었어요. 구독 규칙의 자막 저장·표시만 여기서 하고, 자막을 받는 일은 다른 티켓이에요.
 - 다음 분기에 시작하는 작품을 구독해도 목록에서 사라지지 않도록 구독 탭에 `다음 분기 구독` 구역을 최소로 두었어요. 티켓은 "다음 분기 묶음은 0020이 채운다"고 했으므로 0020이 이 구역을 이어받아 다듬어요.
-- 구독하려면 저장 폴더가 비어 있으면 안 돼요(`수집 폴더` 자체에 받는 구독은 없어요).
+- 구독하려면 저장 폴더가 비어 있으면 안 돼요(`수집 폴더` 자체에 받는 구독은 없어요). `.`·`./`처럼 구성이 모두 `.`인 폴더도 같아요.
 - 지난 항목의 체크는 모두 해제된 채 시작해요(명세의 "확인한 것만 받기"). `모두 선택`·`선택 해제`가 있어요. 체크할 수 있는 항목은 이 규칙이 고르고 기록의 결과가 `규칙 불일치`인 것뿐이에요.
 - 이 변경이 `receive_once`의 공개 명령 계약(선택 필드 `rule_id`)과 주기의 핵심 경로(지난 항목 방어)를 건드려서 별도 검토를 권해요.
+
+### 검토 뒤 고친 것
+
+- 규칙 상세 미리보기가 주기의 지난 항목 방어와 어긋났어요. 구독 규칙이 구독 전에 처음 본 `규칙 불일치`·`제외` 항목을 주기는 건드리지 않는데 미리보기는 `이 규칙이 받아요`와 저장 경로로 보여줬어요. 미리보기가 주기와 같은 `ChannelPlan::is_past`를 쓰고 그런 항목을 `past`(`지난 회차`)로 나눠 보여줘요. `past_cause`가 구독 전(`subscribed`)인지 멈춘 동안(`resumed`)인지 알려줘요. 시험: `the_preview_calls_the_items_the_cycle_leaves_alone_past`(`tests/receive_once.rs`, 같은 기록과 규칙에서 주기는 건드리지 않고 미리보기는 `past`), `src/worker/plan.rs`의 `is_past` 시험.
+- 지난 항목은 구독 확인 단계에서만 받을 수 있었어요. 탭을 닫았거나 체크를 풀었다가 마음을 바꾸면 받을 길이 없었고, 같은 요청을 다시 보내면 `409`만 받았어요. 규칙 상세 미리보기의 `지난 회차` 행에 `받기`를 두고, 구독 흐름과 같은 `useReceive`로 `receive_once`(`rule_id`)를 보내 같은 상태·`다시 받기`로 따라가요. 항목이 추가되면 미리보기를 다시 불러요. 규칙이 멈춤·보관이거나 저장하지 않은 변경이 있으면 worker가 저장된 규칙으로 받으므로 `받기` 대신 까닭을 적어요. `POST /api/subscriptions`의 `409`(이미 구독 중)에는 `current.rule_id`를 실어, 구독 흐름이 `그 구독 규칙 열기`를 보여줘요. 시험: `a_past_item_of_the_rule_detail_is_received_by_that_rule_and_then_reads_as_received`, `an_anime_is_followed_once_per_channel`.
+- 저장 폴더 `.`·`./`는 수집 폴더 자체에 받는데 서버와 구독 흐름이 받아들였어요. 서버(`folders::is_collect_folder_itself`)와 `folderProblem`이 거절해요. 구독이 아닌 규칙은 명세대로 빈 저장 폴더(수집 폴더 자체)를 받으므로 그대로 두었고, `편성표와 연결`은 규칙의 저장 폴더를 그대로 두므로 새로 받는 값이 없어요. 시험: `a_subscription_is_refused_when_what_it_names_is_not_there_and_creates_nothing`의 `.` 행들, `src/folders.rs`.
+- `rule_id`가 있는 `receive_once`가 규칙이 기록되지 않은 `add_failed` 항목을 "다른 규칙이 받으려다 실패한…"으로 거절했어요. 이제 `NoRule`("규칙 없이 받으려다 실패한…")로 거절해요. 시험: `an_item_that_failed_without_any_rule_is_not_said_to_belong_to_another_rule`.
+- 사용자 결정(2026-10-01): 규칙이 멈춘 동안(보관했다가 복원한 경우 포함) 처음 나타난 항목은 다시 켜도 자동으로 받지 않고 구독 전 항목처럼 `지난 회차`로 남아 `받기`로 받아요. 구독 규칙뿐 아니라 멈출 수 있는 모든 규칙에 적용해요. `rules.resumed_at`(마이그레이션 19)에 켠 시각을 적고(`PUT /rules/{id}/switch`의 켜기, `rule_archive` 복원), `is_past`는 `max(subscribed_at, resumed_at)`보다 먼저 처음 본 `규칙 불일치`·`제외` 항목을 지난 항목으로 봐요. 주기와 미리보기가 같은 함수를 써요. 한 번도 켜지 않은 규칙은 그대로예요. 지금 멈춘 규칙의 미리보기는 지금까지 기록된 항목 뒤에 켠 것처럼 보여줘요. 멈춤·보관 안내 문구도 이에 맞췄어요. 시험: `an_item_first_seen_while_a_rule_was_paused_is_left_to_the_user_when_it_resumes`(멈춤 → 항목 → 켬: 주기가 받지 않고 미리보기가 `past`, `받기`가 받음, 켠 뒤 항목은 저절로 받음), `an_item_first_seen_while_a_rule_was_archived_is_left_to_the_user_after_the_restore`(`rule_archive` 보관·복원 명령), `a_rule_that_was_never_paused_takes_the_recorded_items_as_before`, `a_restored_rule_notes_when_it_was_turned_back_on`, 마이그레이션 `a_database_from_before_resume_times_keeps_its_rules_with_no_resume_time`.
 
 ### 검증한 것
 
@@ -68,6 +76,8 @@
   - Anissia를 `500`으로 만들면 편성표 자리에 `Anissia가 오류로 답했어요(HTTP 500)…`와 `재시도`가 보이고, `GET /api/subscriptions`는 저장된 값으로 계속 답해요.
   - 375px: 구독 탭(긴 제목·긴 제작자 이름·`다음 분기 구독` 포함)과 구독 흐름의 여섯 단계 모두 `scrollWidth == innerWidth`였어요.
   - 실제 Anissia: 2026-10-01에 읽기 전용 `GET`으로 요일별 편성과 자막 목록의 봉투(`{"code":"ok","data":[…]}`)와 필드 모양(`week`가 문자열, `신작`의 `time`에 날짜, `2027-01-99` 같은 일부 날짜, 빈 `endDate`)을 확인해 파서에 반영했어요.
+
+검토 뒤 고친 것의 확인: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`(합계 849개 통과, 실패 0개)와 웹 `bun run typecheck`, `bun run build`가 통과했어요. 브라우저(로컬 `trss-web`, 스크래치 DB, 가짜 Anissia, 2026-10-01): 구독 흐름의 저장 폴더 칸에 `./`를 적으면 문장이 보이고 `다음`이 막혀요. 확인 단계에서 다른 쪽이 먼저 구독하게 한 뒤 `구독`을 누르면 `409` 문장과 `그 구독 규칙 열기`가 보이고 규칙 상세가 열려요. 상세의 `지난 회차` 행 둘에서 `받기`를 누르면 `추가하는 중`, DB에서 명령을 `failed`로 바꾸면 까닭과 `다시 받기`, 새 명령을 `done`으로 바꾸고 기록을 `received`로 바꾸면 행이 `이 규칙이 받아요`·`기록: 추가함`으로 바뀌어요. `영상 받기`를 끄면 `받기` 자리에 `영상 받기를 켠 뒤에 받을 수 있어요.`가 보이고, 다시 켜면 멈춘 동안 기록한 항목이 `규칙이 멈춰 있는 동안 올라온 항목…`과 함께 `받기`와 나와요(375px도 봤어요). worker는 띄우지 않았어요.
 
 ### 검증하지 못한 것
 

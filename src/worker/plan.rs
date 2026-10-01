@@ -53,8 +53,53 @@ pub struct ChannelPlan {
     evaluator: ChannelEvaluator,
     /// Stored rule ID at each evaluation rule number.
     rule_ids: Vec<String>,
-    /// When each active subscription rule became one, by rule ID.
-    subscribed_at: HashMap<String, Millis>,
+    /// For each active rule that holds back its past items, since when. See
+    /// [`ChannelPlan::is_past`].
+    past_since: HashMap<String, PastSince>,
+}
+
+/// The moments before which a rule leaves unpicked items to the user: when it
+/// became a subscription and when it was last turned back on. At least one is
+/// set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PastSince {
+    pub subscribed: Option<Millis>,
+    pub resumed: Option<Millis>,
+}
+
+impl PastSince {
+    /// The later moment: what history first saw before it is past.
+    fn until(self) -> Millis {
+        self.subscribed.max(self.resumed).unwrap_or(Millis::MIN)
+    }
+}
+
+/// What made an item past for a rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PastCause {
+    /// The item was recorded before the rule became a subscription.
+    Subscribed,
+    /// The item was first seen while the rule was paused or archived.
+    Resumed,
+}
+
+impl PastCause {
+    /// The stable code the web sends.
+    pub fn code(self) -> &'static str {
+        match self {
+            PastCause::Subscribed => "subscribed",
+            PastCause::Resumed => "resumed",
+        }
+    }
+}
+
+/// `None` for a rule that is no subscription and was never turned back on.
+fn past_since(rule: &Rule) -> Option<PastSince> {
+    let subscribed = rule.subscription.as_ref().map(|s| s.subscribed_at);
+    (subscribed.is_some() || rule.resumed_at.is_some()).then_some(PastSince {
+        subscribed,
+        resumed: rule.resumed_at,
+    })
 }
 
 impl ChannelPlan {
@@ -81,44 +126,60 @@ impl ChannelPlan {
             rules: active.iter().map(|rule| rule_spec(rule)).collect(),
         };
         let rule_ids = active.iter().map(|rule| rule.id.clone()).collect();
-        let subscribed_at = active
+        let past_since = active
             .iter()
-            .filter_map(|rule| Some((rule.id.clone(), rule.subscription.as_ref()?.subscribed_at)))
+            .filter_map(|rule| Some((rule.id.clone(), past_since(rule)?)))
             .collect();
 
         ChannelPlan {
             channel,
             evaluator: ChannelEvaluator::new(spec),
             rule_ids,
-            subscribed_at,
+            past_since,
         }
     }
 
-    /// Whether `rule_id` is an active subscription rule of this plan.
-    pub fn is_subscription(&self, rule_id: &str) -> bool {
-        self.subscribed_at.contains_key(rule_id)
+    /// Whether `rule_id` is an active rule of this plan that holds back past
+    /// items (see [`ChannelPlan::is_past`]): a subscription, or a rule that was
+    /// turned back on after being paused or archived.
+    pub fn holds_past(&self, rule_id: &str) -> bool {
+        self.past_since.contains_key(rule_id)
     }
 
-    /// Whether the plan has an active subscription rule.
-    pub fn has_subscriptions(&self) -> bool {
-        !self.subscribed_at.is_empty()
+    /// Whether the plan has an active rule that holds back past items.
+    pub fn has_past_holders(&self) -> bool {
+        !self.past_since.is_empty()
     }
 
-    /// Whether `rule_id` is a subscription rule that must leave an item alone
-    /// because the item is past: history had recorded it, without any rule
-    /// taking it, before the rule became a subscription. Only the user receives
-    /// those, after looking at them (`docs/specs/collection.md`, 방영작 구독).
+    /// Why an item of `rule_id` first seen at `first_seen_at` is past: it came
+    /// before the subscription, or else while the rule was off. `None` when the
+    /// rule holds nothing back.
+    pub fn past_cause(&self, rule_id: &str, first_seen_at: Millis) -> Option<PastCause> {
+        let since = self.past_since.get(rule_id)?;
+        Some(if since.subscribed.is_some_and(|at| first_seen_at < at) {
+            PastCause::Subscribed
+        } else {
+            PastCause::Resumed
+        })
+    }
+
+    /// Whether `rule_id` must leave an item alone because the item is past:
+    /// history recorded it, without any rule taking it, before the rule became
+    /// a subscription, or while the rule was paused or archived (before it was
+    /// last turned back on). Only the user receives those, after looking at
+    /// them (`docs/specs/collection.md`, 방영작 구독 and `영상 받기`). A rule
+    /// that is no subscription and was never turned back on has no past.
     /// `known` is the item's history record: when it was first seen and its
     /// result. An item a rule picked and failed to add is not past, nor is one
-    /// first seen after the subscription began.
+    /// first seen after the rule began or resumed collecting.
     pub fn is_past(&self, rule_id: &str, known: Option<(Millis, HistoryResult)>) -> bool {
-        let Some(subscribed_at) = self.subscribed_at.get(rule_id) else {
+        let Some(since) = self.past_since.get(rule_id) else {
             return false;
         };
         matches!(
             known,
             Some((first_seen_at, HistoryResult::NoMatch | HistoryResult::Excluded))
-                if first_seen_at < *subscribed_at
+                if first_seen_at < since.until()
         )
     }
 
@@ -283,6 +344,7 @@ mod tests {
             episode_auto: false,
             state,
             subscription: None,
+            resumed_at: None,
         }
     }
 
@@ -339,6 +401,64 @@ mod tests {
         let excluded = p.evaluate("Show [Batch]");
         assert_eq!(excluded.judgement, Judgement::Excluded);
         assert!(excluded.overlapping.is_empty());
+    }
+
+    #[test]
+    fn a_rule_holds_back_what_came_before_the_later_of_its_subscription_and_its_resume() {
+        use crate::store::channels::{Subscription, SubtitleMode};
+        let subscribed = |at| Subscription {
+            anissia_anime_no: 1,
+            subtitles: SubtitleMode::None,
+            creator: None,
+            season_id: None,
+            subscribed_at: at,
+            season_blocked: None,
+        };
+        let held = |subscribed_at: Option<i64>, resumed_at: Option<i64>| {
+            let mut r = rule("r", 0, Some("Show"), RuleState::Active);
+            r.subscription = subscribed_at.map(subscribed);
+            r.resumed_at = resumed_at;
+            plan(vec![r])
+        };
+        let seen = |at| Some((at, HistoryResult::NoMatch));
+
+        // Never subscribed nor turned back on: nothing is past.
+        let plain = held(None, None);
+        assert!(!plain.holds_past("r") && !plain.has_past_holders());
+        assert!(!plain.is_past("r", seen(1)));
+
+        // Resumed alone: what was first seen before is past, with that cause.
+        let resumed = held(None, Some(100));
+        assert!(resumed.is_past("r", seen(99)));
+        assert!(!resumed.is_past("r", seen(100)));
+        assert_eq!(resumed.past_cause("r", 99), Some(PastCause::Resumed));
+
+        // A subscription that resumed later is held back to the resume; an
+        // item from before the subscription says so.
+        let both = held(Some(50), Some(100));
+        assert!(both.is_past("r", seen(99)));
+        assert_eq!(both.past_cause("r", 99), Some(PastCause::Resumed));
+        assert_eq!(both.past_cause("r", 49), Some(PastCause::Subscribed));
+        // One that resumed before it subscribed, to the subscription.
+        let subscribed_later = held(Some(100), Some(50));
+        assert!(subscribed_later.is_past("r", seen(99)));
+        assert!(!subscribed_later.is_past("r", seen(100)));
+        assert_eq!(
+            subscribed_later.past_cause("r", 99),
+            Some(PastCause::Subscribed)
+        );
+
+        // Only an item nobody took is past: a failed add or a held torrent is not.
+        for result in [
+            HistoryResult::AddFailed,
+            HistoryResult::Received,
+            HistoryResult::Duplicate,
+        ] {
+            assert!(!both.is_past("r", Some((1, result))), "{result:?}");
+        }
+        assert!(both.is_past("r", Some((1, HistoryResult::Excluded))));
+        // An item history does not know is not past.
+        assert!(!both.is_past("r", None));
     }
 
     #[test]

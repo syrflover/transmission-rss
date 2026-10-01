@@ -2417,3 +2417,311 @@ async fn a_repeat_of_a_request_is_not_stored_twice_and_an_archived_rule_receives
         HistoryResult::NoMatch
     );
 }
+
+// --- the rule detail's view of the past items ----------------------------------------------
+
+/// What the rule detail sends to preview the stored rule as it is.
+fn preview_of(channel_id: &str, rule: &transmission_rss::store::channels::Rule) -> Value {
+    json!({
+        "channel_id": channel_id,
+        "rule_id": rule.id,
+        "rule": {
+            "match": rule.r#match,
+            "regex": rule.regex,
+            "case_insensitive": rule.case_insensitive,
+            "directory": rule.directory,
+            "episode": rule.episode,
+        },
+    })
+}
+
+fn kind_of<'a>(preview: &'a Value, title_part: &str) -> &'a str {
+    preview["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["title"].as_str().unwrap().contains(title_part))
+        .unwrap_or_else(|| panic!("the preview lists no {title_part}: {preview}"))["kind"]
+        .as_str()
+        .unwrap()
+}
+
+async fn preview_rule(s: &Scene, rule: &transmission_rss::store::channels::Rule) -> Value {
+    let (status, preview) = s
+        .call(
+            "POST",
+            "/api/rules/preview",
+            Some(preview_of(&s.channel.channel.id, rule)),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    preview
+}
+
+#[tokio::test]
+async fn the_preview_calls_the_items_the_cycle_leaves_alone_past() {
+    let (liar25, liar26) = (liar(25), liar(26));
+    let s = Scene::new(&[&liar25, &liar26], unrelated_rule()).await;
+    s.h.advance(1_000);
+    let sub = subscribe(&s, "LIAR GAME", "anime/LIAR GAME/Season 01").await;
+
+    // The cycle leaves both alone ...
+    s.cycle().await;
+    assert!(s.adds().is_empty());
+
+    // ... and the rule detail says the same of them, with the folder `받기`
+    // would use.
+    let preview = preview_rule(&s, &sub).await;
+    assert_eq!(kind_of(&preview, "LIAR GAME - 25"), "past", "{preview}");
+    assert_eq!(kind_of(&preview, "LIAR GAME - 26"), "past", "{preview}");
+    assert_eq!(preview["counts"]["past"], 2, "{preview}");
+    assert_eq!(preview["counts"]["mine"], 0, "{preview}");
+    assert_eq!(
+        preview["items"][0]["save_path"],
+        "/media/anime/LIAR GAME/Season 01"
+    );
+
+    // A release first seen after the subscription is the rule's own.
+    let liar27 = liar(27);
+    s.feed(&[&liar25, &liar26, &liar27]);
+    s.cycle().await;
+    assert_eq!(s.h.tr.torrents().len(), 1);
+    let preview = preview_rule(&s, &sub).await;
+    assert_eq!(kind_of(&preview, "LIAR GAME - 27"), "mine", "{preview}");
+    assert_eq!(kind_of(&preview, "LIAR GAME - 26"), "past", "{preview}");
+}
+
+#[tokio::test]
+async fn a_past_item_of_the_rule_detail_is_received_by_that_rule_and_then_reads_as_received() {
+    let (liar25, liar26) = (liar(25), liar(26));
+    let s = Scene::new(&[&liar25, &liar26], unrelated_rule()).await;
+    s.h.advance(1_000);
+    let sub = subscribe(&s, "LIAR GAME", "anime/LIAR GAME/Season 01").await;
+    s.cycle().await;
+
+    let preview = preview_rule(&s, &sub).await;
+    let id = preview["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["kind"] == "past" && i["title"].as_str().unwrap().contains("LIAR GAME - 25"))
+        .expect("a past item to receive")["id"]
+        .as_i64()
+        .unwrap();
+
+    // `받기` of that row, long after the subscribe flow ended.
+    let (status, _) = s
+        .post_payload(CMD, json!({ "item_id": id, "rule_id": sub.id }))
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
+    assert_eq!(s.command(CMD).await.1["outcome"]["result"], "received");
+    assert_eq!(s.h.tr.torrents().len(), 1);
+    assert_eq!(
+        s.h.tr.torrents()[0].download_dir,
+        "/media/anime/LIAR GAME/Season 01"
+    );
+
+    // The row stops being past: the rule received it. The other still is.
+    let after = preview_rule(&s, &sub).await;
+    assert_eq!(kind_of(&after, "LIAR GAME - 25"), "mine", "{after}");
+    assert_eq!(kind_of(&after, "LIAR GAME - 26"), "past", "{after}");
+    assert_eq!(after["counts"]["past"], 1);
+}
+
+#[tokio::test]
+async fn an_item_that_failed_without_any_rule_is_not_said_to_belong_to_another_rule() {
+    let liar26 = liar(26);
+    let s = Scene::new(&[&liar26], unrelated_rule()).await;
+    s.h.advance(1_000);
+    let sub = subscribe(&s, "LIAR GAME", "anime/LIAR GAME/Season 01").await;
+    let item = s.item("LIAR GAME - 26").await;
+    s.h.history
+        .record_outcome(
+            item.id,
+            s.h.now(),
+            HistoryResult::AddFailed,
+            None,
+            Some("Transmission이 응답하지 않았어요".into()),
+            None,
+        )
+        .await
+        .unwrap();
+
+    let (status, body) = s
+        .post_payload(CMD, json!({ "item_id": item.id, "rule_id": sub.id }))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let message = body["message"].as_str().unwrap();
+    assert!(message.contains("규칙 없이"), "{message}");
+    assert!(!message.contains("다른 규칙"), "{message}");
+}
+
+// --- what a rule missed while it was off ------------------------------------------------------
+
+/// The `n`-th rule of the scene as stored now.
+async fn stored_rule(s: &Scene, n: usize) -> transmission_rss::store::channels::Rule {
+    s.h.channels
+        .get_rule(&s.rule_of(n).id)
+        .await
+        .unwrap()
+        .unwrap()
+}
+
+/// `영상 받기` turned off or on, as of the harness's clock.
+async fn switch_video(s: &Scene, n: usize, on: bool) {
+    let rule = stored_rule(s, n).await;
+    s.h.channels
+        .set_video_receiving(&rule.id, rule.version, on, s.h.now())
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn an_item_first_seen_while_a_rule_was_paused_is_left_to_the_user_when_it_resumes() {
+    let (liar25, liar26) = (liar(25), liar(26));
+    let s = Scene::new(&[], vec![rule("LIAR GAME", "LIAR GAME/Season 01")]).await;
+
+    switch_video(&s, 0, false).await;
+    s.feed(&[&liar25]);
+    s.cycle().await;
+    assert!(s.h.tr.torrents().is_empty());
+    assert_eq!(
+        s.item("LIAR GAME - 25").await.result,
+        HistoryResult::NoMatch
+    );
+
+    s.h.advance(1_000);
+    switch_video(&s, 0, true).await;
+
+    // Turned on, the rule does not take what appeared while it was off ...
+    s.cycle().await;
+    assert!(s.adds().is_empty());
+    assert!(s.h.tr.torrents().is_empty());
+    assert_eq!(
+        s.item("LIAR GAME - 25").await.result,
+        HistoryResult::NoMatch
+    );
+
+    // ... and its detail lists the item as past, as the cycle treats it.
+    let rule = stored_rule(&s, 0).await;
+    let preview = preview_rule(&s, &rule).await;
+    assert_eq!(kind_of(&preview, "LIAR GAME - 25"), "past", "{preview}");
+    assert_eq!(preview["items"][0]["past_cause"], "resumed");
+    assert_eq!(preview["counts"]["past"], 1);
+
+    // `받기` receives it with the rule.
+    let item = s.item("LIAR GAME - 25").await;
+    let (status, _) = s
+        .post_payload(CMD, json!({ "item_id": item.id, "rule_id": rule.id }))
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
+    let received = s.item("LIAR GAME - 25").await;
+    assert_eq!(received.result, HistoryResult::Received);
+    assert_eq!(received.rule_id.as_deref(), Some(rule.id.as_str()));
+    assert_eq!(
+        s.h.tr.torrents()[0].download_dir,
+        "/media/anime/LIAR GAME/Season 01"
+    );
+
+    // What appears after it resumed is received on its own.
+    s.feed(&[&liar25, &liar26]);
+    s.cycle().await;
+    assert_eq!(
+        s.item("LIAR GAME - 26").await.result,
+        HistoryResult::Received
+    );
+    assert_eq!(s.h.tr.torrents().len(), 2);
+    let after = preview_rule(&s, &rule).await;
+    assert_eq!(kind_of(&after, "LIAR GAME - 26"), "mine", "{after}");
+}
+
+#[tokio::test]
+async fn a_rule_that_was_never_paused_takes_the_recorded_items_as_before() {
+    // The rule is made after the cycle recorded the item without a rule.
+    let liar26 = liar(26);
+    let s = Scene::new(&[&liar26], unrelated_rule()).await;
+    s.h.advance(1_000);
+    s.h.channels
+        .create_rule(
+            &s.channel.channel.id,
+            rule("LIAR GAME", "LIAR GAME/Season 01"),
+        )
+        .await
+        .unwrap();
+    s.cycle().await;
+    assert_eq!(s.h.tr.torrents().len(), 1);
+
+    // Pausing alone holds nothing back: the rule has never been turned back on.
+    let created =
+        s.h.channels
+            .list_channels_with_rules()
+            .await
+            .unwrap()
+            .remove(0)
+            .rules
+            .into_iter()
+            .find(|r| r.r#match.as_deref() == Some("LIAR GAME"))
+            .unwrap();
+    assert_eq!(created.resumed_at, None);
+    let preview = preview_rule(&s, &created).await;
+    assert_eq!(kind_of(&preview, "LIAR GAME - 26"), "mine", "{preview}");
+    assert_eq!(preview["counts"]["past"], 0);
+}
+
+#[tokio::test]
+async fn an_item_first_seen_while_a_rule_was_archived_is_left_to_the_user_after_the_restore() {
+    let (liar25, liar26) = (liar(25), liar(26));
+    let s = Scene::new(&[], vec![rule("LIAR GAME", "LIAR GAME/Season 01")]).await;
+    let id = s.rule_of(0).id.clone();
+    let command = |name: &str, direction: &str| {
+        json!({ "id": name, "kind": "rule_archive",
+                "payload": { "rule_id": id, "direction": direction } })
+    };
+
+    let (status, body) = s
+        .call(
+            "POST",
+            "/api/commands",
+            Some(command("0b7d5a44-6c1e-4c62-9a6a-3f0c1d2e4b01", "archive")),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
+    assert_eq!(stored_rule(&s, 0).await.state, RuleState::Archived);
+
+    s.feed(&[&liar25]);
+    s.cycle().await;
+    assert!(s.h.tr.torrents().is_empty());
+
+    s.h.advance(1_000);
+    let (status, body) = s
+        .call(
+            "POST",
+            "/api/commands",
+            Some(command("0b7d5a44-6c1e-4c62-9a6a-3f0c1d2e4b02", "restore")),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
+    let restored = stored_rule(&s, 0).await;
+    assert_eq!(restored.state, RuleState::Active);
+    assert!(restored.resumed_at.is_some());
+
+    // Restored, it leaves the item that came while it was archived, and the
+    // detail offers it as past.
+    s.cycle().await;
+    assert!(s.h.tr.torrents().is_empty());
+    let preview = preview_rule(&s, &restored).await;
+    assert_eq!(kind_of(&preview, "LIAR GAME - 25"), "past", "{preview}");
+
+    // A later release is received as usual.
+    s.feed(&[&liar25, &liar26]);
+    s.cycle().await;
+    assert_eq!(s.h.tr.torrents().len(), 1);
+    assert_eq!(
+        s.item("LIAR GAME - 26").await.result,
+        HistoryResult::Received
+    );
+}
