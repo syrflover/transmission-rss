@@ -1942,3 +1942,31 @@ async fn a_waiting_file_moves_only_the_revision_rows_that_were_its_own() {
     assert_eq!(rows("Show S03E26.mkv").await, [older]);
     assert_eq!(rows("Show S03E02.mkv").await, [since]);
 }
+
+/// A file another torrent lists too is not renamed through its torrent:
+/// Transmission would move it from under the other one.
+#[tokio::test]
+async fn a_file_another_torrent_shares_keeps_its_name() {
+    let (s, rule) = Scene::third_season_received().await;
+    s.h.tr.preload(
+        FakeTorrent::new(&format!("{:040}", 7), "Pack")
+            .in_dir(s.season3())
+            .files(&["Show S03E02.mkv"])
+            .status(6),
+    );
+
+    let command = s.undo(&rule, "undo-0402-a", -48).await;
+
+    assert_eq!(command["state"], "done", "{command}");
+    assert_eq!(s.on_disk(), ["Show S03E02.mkv", "Show S03E25.mkv"]);
+    let view = s.view(&rule).await;
+    assert_eq!(
+        undo_files(&view),
+        [
+            file("Show S03E01.mkv", "Show S03E25.mkv", "renamed"),
+            file("Show S03E02.mkv", "Show S03E26.mkv", "kept"),
+        ]
+    );
+    let reason = view["episode_undo"]["files"][1]["reason"].as_str().unwrap();
+    assert!(reason.contains("다른 토렌트"), "{reason}");
+}

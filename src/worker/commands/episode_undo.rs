@@ -51,7 +51,8 @@
 //! inode); otherwise it keeps its name with the reason. A name another
 //! torrent lists in the folder is not taken either, even while its file is
 //! missing or still being written: Transmission would write that torrent's
-//! file there.
+//! file there. Nor is a file another torrent lists too ([`SHARED`]):
+//! Transmission would move it from under that torrent.
 //!
 //! The undo's own names overlap when the values differ by less than the
 //! numbers it renames (`−36` back to `−24`: `S03E01` becomes `S03E13`, which
@@ -152,6 +153,9 @@ pub const MISSING: &str = "파일을 찾지 못했어요.";
 pub const UNFINISHED: &str = "토렌트를 아직 받는 중이에요. 다 받은 뒤 이어서 되돌릴 수 있어요.";
 /// Why a file keeps its name: another torrent's file has the name it would take.
 pub const CLAIMED: &str = "다른 토렌트가 그 이름을 쓰고 있어요.";
+/// Why a file keeps its name: another torrent lists the file too, and
+/// Transmission would move it from under that one.
+pub const SHARED: &str = "다른 토렌트도 이 파일을 쓰고 있어요.";
 /// Why a file keeps its name: its torrent is in another folder now.
 pub const MOVED: &str = "토렌트가 다른 폴더로 옮겨졌어요.";
 /// Why a file keeps its name: its torrent is gone, the RSS title has no
@@ -856,7 +860,11 @@ async fn rename(
             Ok(true) => return Ok(Some(TAKEN.to_owned())),
             Err(err) => return Ok(looked(err)),
         }
-        if claimed(listing.get(ctx).await?, Some(hash), folder, &file.to_name) {
+        let places = listing.get(ctx).await?;
+        if claimed(places, Some(hash), folder, &file.from_name) {
+            return Ok(Some(SHARED.to_owned()));
+        }
+        if claimed(places, Some(hash), folder, &file.to_name) {
             return Ok(Some(CLAIMED.to_owned()));
         }
         let answer = client
