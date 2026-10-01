@@ -25,6 +25,7 @@ pub mod env;
 pub mod error;
 pub mod history_api;
 pub mod import_api;
+pub mod in_place;
 pub mod library_api;
 pub mod library_work_api;
 pub mod past_search_api;

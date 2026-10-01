@@ -132,7 +132,10 @@ export interface EpisodeFailure {
   files: FailureFile[];
   /** Whether `다시 받기` is offered: the revision's download stopped before it was received. */
   can_retry: boolean;
-  /** Why `다시 받기` is missing on such a revision, as a sentence. */
+  /**
+   * Why `다시 받기` is missing on such a revision, as a sentence; also `이미 같거나 더 높은 수정본(v3)이 있어서 다시
+   * 받지 않아요.` when the episode's place is known to hold the same or a higher revision already.
+   */
   retry_blocked: string | null;
   /** Its `다시 받기` command that has not ended yet. */
   command: Command | null;

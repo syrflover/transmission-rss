@@ -40,10 +40,15 @@ export interface HistoryItem {
   reason: string | null;
   /**
    * Whether `다시 받기` is offered: the item failed to be added, or is a video revision held as `version_unknown`,
-   * and the rule that picked it still exists and is active.
+   * and the rule that picked it still exists and is active, and the episode's place is not known to hold the
+   * same or a higher revision already.
    */
   can_retry: boolean;
-  /** Why `다시 받기` is missing on an item a rule picked and failed to add, as a sentence. */
+  /**
+   * Why `다시 받기` is missing on an item a rule picked and failed to add, as a sentence. It is also the sentence
+   * (`이미 같거나 더 높은 수정본(v3)이 있어서 다시 받지 않아요.`) that replaces the button on a `버전 미상` revision
+   * whose episode already holds the same or a higher revision.
+   */
   retry_blocked: string | null;
   /** The retry command (`receive_once`) that has not ended yet. */
   command: Command | null;

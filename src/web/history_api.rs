@@ -23,7 +23,10 @@
 //! pending or running, so a screen that is opened or reloaded after `다시
 //! 받기` still shows it as in progress. `can_retry` says whether `다시 받기` is
 //! offered (see [`receive_once::retry_plan`]); for an item a rule picked and
-//! failed to add but cannot retry, `retry_blocked` says why. The item's own link is never sent: it
+//! failed to add but cannot retry, `retry_blocked` says why. A `버전 미상` item
+//! whose episode is known to hold its revision or a higher one already has no
+//! button either, and `retry_blocked` says so ([`super::in_place`]). The
+//! item's own link is never sent: it
 //! is only a masked copy, and nothing on the screen needs it.
 //!
 //! An item that matched no rule carries `name_title` when its channel has a
@@ -43,6 +46,7 @@ use url::Url;
 
 use super::{
     commands_api::CommandView,
+    in_place,
     subscriptions_api::{waiting_views, WaitingView},
     ApiError, AppState,
 };
@@ -100,7 +104,7 @@ pub struct HistoryItemView {
     pub can_retry: bool,
     /// Why `다시 받기` is not offered on an item that failed to be added, as a
     /// sentence; `null` when it is offered or there is nothing to say.
-    pub retry_blocked: Option<&'static str>,
+    pub retry_blocked: Option<String>,
     /// The `receive_once` command for this item that has not ended yet.
     pub command: Option<CommandView>,
     /// For an item no rule matched, in a channel with a subscription waiting
@@ -218,10 +222,14 @@ fn host_of(url: &str) -> Option<String> {
     Url::parse(url).ok()?.host_str().map(str::to_owned)
 }
 
+/// `held` are the `버전 미상` items whose episode already holds their revision
+/// ([`in_place::version_unknown_held`]), with the sentence that replaces the
+/// button.
 fn views(
     items: Vec<HistoryItem>,
     directory: &Directory,
     open: &HashMap<String, CommandView>,
+    held: &HashMap<i64, String>,
 ) -> Vec<HistoryItemView> {
     items
         .into_iter()
@@ -240,6 +248,7 @@ fn views(
                 .as_ref()
                 .and_then(|rule| directory.rules.get(rule));
             let retry = receive_once::retry_plan(&item, channel, rule);
+            let in_place = held.get(&item.id);
             let name_title = (item.result == HistoryResult::NoMatch)
                 .then(|| name_title_of(&item, directory))
                 .flatten();
@@ -256,11 +265,13 @@ fn views(
                 rule_label: rule.map(Directory::rule_label),
                 by_hand: item.result == HistoryResult::Received && item.rule_id.is_none(),
                 reason: item.reason,
-                can_retry: retry.is_ok(),
-                retry_blocked: retry
-                    .err()
-                    .filter(|why| why.explains_missing_button())
-                    .map(|why| why.message()),
+                can_retry: retry.is_ok() && in_place.is_none(),
+                retry_blocked: in_place.cloned().or_else(|| {
+                    retry
+                        .err()
+                        .filter(|why| why.explains_missing_button())
+                        .map(|why| why.message().to_owned())
+                }),
                 command: open.get(&item.id.to_string()).cloned(),
                 channel_id: item.channel_id,
             }
@@ -369,8 +380,9 @@ async fn list_history(
 
     let directory = Directory::load(&state).await?;
     let open = open_commands(&state, &page.items).await?;
+    let held = in_place::version_unknown_held(&state, &page.items).await?;
     Ok(Json(HistoryList {
-        items: views(page.items, &directory, &open),
+        items: views(page.items, &directory, &open, &held),
         next: page.next.map(|cursor| cursor.to_string()),
         counts,
     }))
@@ -391,6 +403,7 @@ async fn get_history_item(
     let items = vec![item];
     let directory = Directory::load(&state).await?;
     let open = open_commands(&state, &items).await?;
-    let mut views = views(items, &directory, &open);
+    let held = in_place::version_unknown_held(&state, &items).await?;
+    let mut views = views(items, &directory, &open, &held);
     Ok(Json(views.remove(0)))
 }

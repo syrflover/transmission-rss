@@ -15,6 +15,12 @@
 //! | `watch_rescan` | `다시 확인`  | `{ "folder_id": <watch folder> }`                              |
 //! | `episode_undo` | `되돌리기`   | `{ "rule_id": <rule>, "episode": <the automatic offset seen> }` |
 //!
+//! `receive_once` of a video revision is refused with `400` and the reason
+//! when the episode's place is known to hold the same or a higher revision
+//! already, the same case the screens show instead of the button
+//! ([`super::in_place`]); the worker still looks at the folder when it runs
+//! the command.
+//!
 //! `receive_past` adds one result of a finished past episode search
 //! ([`super::past_search_api`]). The web resolves the result from the search it
 //! keeps and stores its title and link as history would; the browser supplies
@@ -65,7 +71,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::{ApiError, AppState};
+use super::{in_place::Evidence, ApiError, AppState};
 use crate::{
     past_search::service::Resolve,
     store::channels::RuleState,
@@ -494,6 +500,16 @@ async fn check_receive_once(
         let revision = receive_once::revision_retry(&state.revisions, item.id)
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?;
+        // A revision whose episode already holds it or a higher one is
+        // refused first, as the screens say it first (`web::in_place`).
+        if let Some(row) = receive_once::waiting_revision(&state.revisions, &item, &revision)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+        {
+            if let Some(place) = Evidence::load(state).await?.held(&item, &row).await? {
+                return Err(ApiError::invalid(place.message()));
+            }
+        }
         match receive_once::retry_plan_for(&item, channel.as_ref(), rule.as_ref(), &revision) {
             // Received into the folder it was decided for, or not at all.
             Ok(plan) => match state
