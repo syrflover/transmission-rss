@@ -15,10 +15,10 @@
 //! receiving one of them is the `receive_past` command
 //! ([`super::commands_api`]), which names the item by its key.
 //!
-//! A new search of a rule ends the rule's earlier one. A search that is not
-//! polled stays [`crate::past_search::service::KEEP`] and goes after that, as it
-//! does when the web restarts: the screen then says the search is gone and the
-//! person searches again.
+//! A new search of a rule ends the rule's earlier one. A search is forgotten
+//! [`crate::past_search::service::KEEP`] (30 minutes) after it started, however
+//! often it is polled, and when the web restarts: the screen then says the
+//! search is gone and the person searches again.
 
 use std::path::Path as FsPath;
 

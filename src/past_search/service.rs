@@ -289,7 +289,10 @@ impl PastSearch {
     /// The item `key` of the finished search `id` of rule `rule_id`, as history
     /// stores it.
     pub fn resolve(&self, id: &str, rule_id: &str, key: &str) -> Result<Stored, Resolve> {
-        let registry = self.lock();
+        let mut registry = self.lock();
+        // A search is kept for [`KEEP`] and no longer, whether or not
+        // anything polled it in the meantime.
+        registry.sweep();
         let entry = registry.searches.get(id).ok_or(Resolve::Gone)?;
         if entry.rule_id != rule_id {
             return Err(Resolve::OtherRule);
@@ -484,5 +487,20 @@ mod tests {
         service.lock().searches.insert("old".into(), old);
         assert!(service.status("old").is_none());
         assert!(ended(task).await, "the dropped search's task still runs");
+    }
+
+    #[tokio::test]
+    async fn a_search_past_its_keep_cannot_be_received_even_before_anything_sweeps() {
+        let (service, _dir) = service().await;
+        let (old, _task) = entry(
+            KEEP + Duration::from_secs(1),
+            Status::Done(Arc::new(outcome())),
+        );
+        service.lock().searches.insert("old".into(), old);
+        assert_eq!(service.resolve("old", "r", "k"), Err(Resolve::Gone));
+
+        let (fresh, _task) = entry(Duration::from_secs(1), Status::Done(Arc::new(outcome())));
+        service.lock().searches.insert("fresh".into(), fresh);
+        assert!(service.resolve("fresh", "r", "k").is_ok());
     }
 }
