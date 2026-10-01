@@ -232,7 +232,7 @@ async fn first_sighting_creates_a_record() {
 }
 
 #[tokio::test]
-async fn a_channels_first_sighting_is_its_earliest_first_seen_time() {
+async fn a_channels_first_sighting_is_the_time_of_its_first_record() {
     let (_dir, _db, history) = store().await;
     history
         .record(2_000, vec![obs("a", HistoryResult::NoMatch)])
@@ -268,6 +268,151 @@ async fn a_channels_first_sighting_is_its_earliest_first_seen_time() {
     assert_eq!(found.get("c2"), Some(&1_000));
     assert!(!found.contains_key("unknown"), "{found:?}");
     assert!(history.first_sightings(vec![]).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn the_items_of_a_channels_first_read_are_marked_whatever_the_clock_does_after() {
+    let (_dir, _db, history) = store().await;
+    let first = |key: &str| {
+        let history = history.clone();
+        let key = key.to_owned();
+        async move {
+            history
+                .item_by_key("c1".into(), key)
+                .await
+                .unwrap()
+                .unwrap()
+                .first_read
+        }
+    };
+    // The first cycle writes in two calls with one time; the first read is both.
+    history
+        .record(2_000, vec![obs("a", HistoryResult::NoMatch)])
+        .await
+        .unwrap();
+    history
+        .record(2_000, vec![obs("b", HistoryResult::Received)])
+        .await
+        .unwrap();
+    // A later cycle, and ones whose time is before or far after the first.
+    for (at, key) in [(3_000, "next"), (500, "back"), (9_999_999, "ahead")] {
+        history
+            .record(at, vec![obs(key, HistoryResult::NoMatch)])
+            .await
+            .unwrap();
+    }
+    // Seeing a first-read item again keeps it marked.
+    history
+        .record(5_000, vec![obs("a", HistoryResult::NoMatch)])
+        .await
+        .unwrap();
+
+    assert!(first("a").await && first("b").await);
+    for key in ["next", "back", "ahead"] {
+        assert!(!first(key).await, "{key}");
+    }
+    let known = history
+        .known_items("c1".into(), vec!["a".into(), "back".into(), "none".into()])
+        .await
+        .unwrap();
+    assert_eq!(known.len(), 2);
+    assert!(known["a"].first_read && !known["back"].first_read);
+    assert_eq!(known["back"].first_seen_at, 500);
+}
+
+#[tokio::test]
+async fn a_record_from_elsewhere_than_the_feed_neither_makes_nor_joins_the_first_read() {
+    let (_dir, _db, history) = store().await;
+    let first_read = |history: &HistoryStore| {
+        let history = history.clone();
+        async move {
+            history
+                .first_sightings(vec!["c1".into()])
+                .await
+                .unwrap()
+                .get("c1")
+                .copied()
+        }
+    };
+    let marked = |history: &HistoryStore, key: &str| {
+        let history = history.clone();
+        let key = key.to_owned();
+        async move {
+            history
+                .item_by_key("c1".into(), key)
+                .await
+                .unwrap()
+                .unwrap()
+                .first_read
+        }
+    };
+
+    // Before the feed was ever read: the record is kept, the channel is not read.
+    history
+        .record_elsewhere(1_000, vec![obs("found", HistoryResult::NoMatch)])
+        .await
+        .unwrap();
+    assert_eq!(first_read(&history).await, None);
+    assert!(!marked(&history, "found").await);
+
+    // The feed's first read comes afterwards and is the channel's first read,
+    // whatever was recorded before it.
+    history
+        .record(2_000, vec![obs("a", HistoryResult::NoMatch)])
+        .await
+        .unwrap();
+    assert_eq!(first_read(&history).await, Some(2_000));
+    assert!(marked(&history, "a").await);
+
+    // Nor does a record from elsewhere at the very time of the first read join it.
+    history
+        .record_elsewhere(2_000, vec![obs("found-later", HistoryResult::NoMatch)])
+        .await
+        .unwrap();
+    assert!(!marked(&history, "found-later").await);
+    assert_eq!(first_read(&history).await, Some(2_000));
+}
+
+#[tokio::test]
+async fn a_channels_first_read_does_not_move_when_the_clock_goes_back() {
+    let (_dir, _db, history) = store().await;
+    history
+        .record(
+            2_000,
+            vec![
+                obs("a", HistoryResult::NoMatch),
+                obs("b", HistoryResult::NoMatch),
+            ],
+        )
+        .await
+        .unwrap();
+    let first = |history: &HistoryStore| {
+        let history = history.clone();
+        async move {
+            history
+                .first_sightings(vec!["c1".into()])
+                .await
+                .unwrap()
+                .get("c1")
+                .copied()
+        }
+    };
+    assert_eq!(first(&history).await, Some(2_000));
+
+    // The server's clock goes back and a new item is recorded: it is first
+    // seen before the channel was first read, but the first read stays where it
+    // was.
+    history
+        .record(500, vec![obs("late", HistoryResult::NoMatch)])
+        .await
+        .unwrap();
+    let late = history
+        .item_by_key("c1".into(), "late".into())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(late.first_seen_at, 500);
+    assert_eq!(first(&history).await, Some(2_000));
 }
 
 #[tokio::test]

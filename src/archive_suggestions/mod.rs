@@ -18,8 +18,9 @@
 //!   no longer listed. Nothing is read from Anissia here: while it cannot be
 //!   reached the refresh finds nothing out, so this ground does not appear.
 //! - [`Ground::Quiet`] (`새 항목 없음`): **no new item matching the rule has come
-//!   for [`QUIET`] (4 weeks) since its last receive** (user decision,
-//!   2026-10-01). Both words are read from the history:
+//!   for [`QUIET`] (4 weeks) since its last receive, the channel having been
+//!   read for those weeks** (user decisions, 2026-10-01). The words are read
+//!   from the history, and the weeks from the days the worker read the feed:
 //!   - A *new item matching the rule* is a recorded item of the rule's channel,
 //!     first seen within the last 4 weeks (after the moment 4 weeks ago, so the
 //!     item a receive at exactly that moment took is not new), whose title the rule matches when
@@ -36,8 +37,21 @@
 //!     upgrade), when it became a subscription, when its title was given, when
 //!     it was last turned back on, and when its channel was first read. Turning the rule back on, or restoring
 //!     it, starts the 4 weeks over, however long its last receive was ago.
-//!   - The 4 weeks have passed at exactly [`QUIET`] after that moment, and the
-//!     ground is gone the moment a matching item is recorded.
+//!   - Only time the feed was **read** counts. A week in which the channel's
+//!     address was dead, or the worker was off, is no quiet week: the worker
+//!     leaves the days a read of each channel worked
+//!     ([`crate::store::status::StatusStore::read_day_floors`]), and the
+//!     ground needs [`QUIET_DAYS`] of them after the moment it counts from.
+//!     So a rule whose last item was 5 weeks ago, on a channel that could not
+//!     be read for the last 2, has had 3 weeks of reading and is not suggested
+//!     until it has had 4, and a channel that fails gives its rules no new
+//!     quiet ground. The clock still has to reach [`QUIET`] after that moment,
+//!     so a rule is never suggested before 4 weeks have passed. A new item
+//!     seen on a day that still counts within the last [`QUIET_DAYS`] read days
+//!     is as recent as one of the last 4 weeks ([`Facts::window_start`]).
+//!   - The 4 weeks have passed at exactly [`QUIET`] after that moment (when the
+//!     feed was read every day), and the ground is gone the moment a matching
+//!     item is recorded.
 //!   - The window of titles is bounded ([`WINDOW_TITLES`] per channel). When a
 //!     channel holds more than that in 4 weeks the recent items cannot all be
 //!     told, so its rules get no quiet ground; a rule whose regular expression
@@ -63,6 +77,7 @@ use crate::{
         anissia::Anime,
         channels::{ChannelWithRules, Rule, RuleState},
         history::Millis,
+        status::{read_day, READ_DAYS_KEPT},
     },
     subscriptions::DAY_MS,
     worker::plan::ChannelPlan,
@@ -70,6 +85,11 @@ use crate::{
 
 /// How long a rule must go without a new item before it is suggested: 4 weeks.
 pub const QUIET: Millis = 28 * DAY_MS;
+
+/// How many days on which its channel was read those 4 weeks must hold.
+pub const QUIET_DAYS: usize = READ_DAYS_KEPT;
+
+const _: () = assert!(QUIET == QUIET_DAYS as i64 * DAY_MS);
 
 /// The most titles of one channel's last [`QUIET`] that are read. A channel
 /// that held more in 4 weeks (a feed of everything everywhere would) gives its
@@ -195,18 +215,31 @@ pub struct Facts<'a> {
     pub last_received: &'a HashMap<String, Millis>,
     /// When the app first had each rule, by rule ID.
     pub started: &'a HashMap<String, Millis>,
-    /// When history first saw an item of each channel, by channel ID.
+    /// When each channel was first read (the time of its first history record,
+    /// stored once), by channel ID.
     pub first_read: &'a HashMap<String, Millis>,
+    /// The [`read_day`] of the oldest of each channel's newest [`QUIET_DAYS`]
+    /// days on which the worker read its feed, by channel ID. A channel with
+    /// fewer read days is not in the map and gives no quiet ground.
+    pub read_floors: &'a HashMap<String, i64>,
     /// The grounds the user chose to keep collecting on, as `(rule ID, key)`.
     pub kept: &'a HashSet<(String, String)>,
 }
 
 impl Facts<'_> {
-    /// The start of the last [`QUIET`]: the items first seen after here are the
-    /// recent ones. An item first seen at this very moment is no newer than a
-    /// receive that is exactly [`QUIET`] ago, and is not counted.
-    pub fn window_start(&self) -> Millis {
-        self.now - QUIET
+    /// The start of the channel's last [`QUIET`]: the items first seen after
+    /// here are the recent ones. An item first seen at this very moment is no
+    /// newer than a receive that is exactly [`QUIET`] ago, and is not counted.
+    /// When the feed was not read on some of those days the window reaches back
+    /// to the first of its last [`QUIET_DAYS`] read days, because an item
+    /// seen on a day that still counts has not yet been followed by 4 weeks of
+    /// reading.
+    pub fn window_start(&self, channel_id: &str) -> Millis {
+        let by_clock = self.now - QUIET;
+        match self.read_floors.get(channel_id) {
+            Some(floor) => by_clock.min(floor * DAY_MS - 1),
+            None => by_clock,
+        }
     }
 
     /// The moment the rule's 4 weeks count from; see the module docs. `None`
@@ -219,7 +252,11 @@ impl Facts<'_> {
             rule.resumed_at,
             subscription.map(|s| s.subscribed_at),
             subscription.and_then(|s| s.titled_at),
-            self.first_read.get(&rule.channel_id).copied(),
+            // A first read stamped by a clock that was ahead is no start.
+            self.first_read
+                .get(&rule.channel_id)
+                .copied()
+                .filter(|&at| at <= self.now),
         ]
         .into_iter()
         .flatten()
@@ -244,10 +281,13 @@ impl Facts<'_> {
     }
 
     /// The quiet ground of the rule, when 4 weeks have passed since its start
-    /// moment; whether anything recent matched is asked separately.
+    /// moment and its channel was read on [`QUIET_DAYS`] days since (the day of
+    /// the moment itself is not counted: a read of it may be from before);
+    /// whether anything recent matched is asked separately.
     fn quiet_due(&self, rule: &Rule) -> Option<Ground> {
         let since = self.quiet_since(rule)?;
-        (self.now - since >= QUIET).then(|| Ground::Quiet {
+        let floor = *self.read_floors.get(&rule.channel_id)?;
+        (self.now - since >= QUIET && read_day(since) < floor).then(|| Ground::Quiet {
             since,
             last_received: self.last_received.get(&rule.id).copied(),
         })
@@ -255,7 +295,7 @@ impl Facts<'_> {
 
     /// The channels whose last [`QUIET`] has to be read: those with a rule that
     /// is quiet by the clock and whose quiet ground the user has not kept
-    /// already. The caller reads `titles_since(window_start)` of each and
+    /// already. The caller reads `titles_since(window_start(channel))` of each and
     /// answers [`Facts::suggestions`] with what [`recent_matches`] makes of it.
     pub fn channels_to_read(&self) -> Vec<String> {
         self.channels

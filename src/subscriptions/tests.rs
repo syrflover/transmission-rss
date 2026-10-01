@@ -8,6 +8,7 @@ fn parsed(title: &str) -> (String, Option<String>) {
 
 fn item(id: i64, title: &str, seen: Millis) -> HistoryItem {
     HistoryItem {
+        first_read: false,
         id,
         channel_id: "c".into(),
         channel_label: "feed".into(),

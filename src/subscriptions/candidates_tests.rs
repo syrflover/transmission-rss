@@ -49,6 +49,7 @@ fn waiting() -> Rule {
 
 fn item(id: i64, title: &str, first_seen_at: Millis, result: HistoryResult) -> HistoryItem {
     HistoryItem {
+        first_read: false,
         id,
         channel_id: "c1".into(),
         channel_label: "feed".into(),

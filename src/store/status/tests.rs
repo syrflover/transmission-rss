@@ -229,6 +229,144 @@ async fn history_questions_count_by_result_time() {
     assert_eq!(store.problems_since(9_000).await.unwrap(), 0);
 }
 
+// ---------------------------------------------------------------------------
+// Read days
+// ---------------------------------------------------------------------------
+
+const DAY: Millis = 24 * 60 * 60 * 1000;
+
+/// Reads of the channel `a` at noon of each of the days `from..=to`.
+async fn read_days(store: &StatusStore, from: i64, to: i64, ok: bool) {
+    for day in from..=to {
+        store
+            .record_reads(day * DAY + DAY / 2, vec![read("a", ok)], ids(&["a"]))
+            .await
+            .unwrap();
+    }
+}
+
+/// The floor as of day 2000, long after the days the tests read on.
+async fn floor_of_a(store: &StatusStore) -> Option<i64> {
+    floor_of_a_on(store, 2000).await
+}
+
+async fn floor_of_a_on(store: &StatusStore, day: i64) -> Option<i64> {
+    store
+        .read_day_floors(ids(&["a", "b"]), day * DAY)
+        .await
+        .unwrap()
+        .get("a")
+        .copied()
+}
+
+async fn stored_days(store: &StatusStore, channel: &'static str) -> i64 {
+    store
+        .db
+        .run::<_, StatusError, _>(move |c| {
+            Ok(c.query_row(
+                "SELECT count(*) FROM channel_read_days WHERE channel_id = ?1",
+                [channel],
+                |r| r.get(0),
+            )?)
+        })
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn the_28th_newest_read_day_is_the_floor_and_fewer_days_give_none() {
+    let store = StatusStore::new(db().await);
+    read_days(&store, 1000, 1026, true).await;
+    assert_eq!(floor_of_a(&store).await, None, "27 days");
+
+    read_days(&store, 1027, 1027, true).await;
+    assert_eq!(floor_of_a(&store).await, Some(1000), "28 days");
+
+    // The oldest day goes as a newer one comes: 28 are kept, no more.
+    read_days(&store, 1028, 1030, true).await;
+    assert_eq!(floor_of_a(&store).await, Some(1003));
+    assert_eq!(stored_days(&store, "a").await, 28);
+}
+
+#[tokio::test]
+async fn a_day_read_twice_counts_once_and_a_failed_read_or_a_gap_counts_for_nothing() {
+    let store = StatusStore::new(db().await);
+    read_days(&store, 1000, 1013, true).await;
+    // Reads again on the same days, and failed reads on others.
+    read_days(&store, 1010, 1013, true).await;
+    read_days(&store, 1014, 1030, false).await;
+    assert_eq!(floor_of_a(&store).await, None, "14 days read");
+
+    // The days that failed are not made up later: a gap stays a gap.
+    read_days(&store, 1031, 1044, true).await;
+    assert_eq!(floor_of_a(&store).await, Some(1000), "14 + 14 days");
+}
+
+#[tokio::test]
+async fn a_read_on_the_newest_day_again_adds_nothing() {
+    let store = StatusStore::new(db().await);
+    read_days(&store, 1000, 1027, true).await;
+    read_days(&store, 1027, 1027, true).await;
+    assert_eq!(floor_of_a(&store).await, Some(1000));
+    assert_eq!(stored_days(&store, "a").await, 28);
+}
+
+#[tokio::test]
+async fn a_clock_that_went_back_takes_the_days_ahead_of_it_with_it() {
+    let store = StatusStore::new(db().await);
+    read_days(&store, 1000, 1027, true).await;
+    // The clock is now at day 1020: the days after it were stamped by a clock
+    // that was ahead.
+    read_days(&store, 1020, 1020, true).await;
+    assert_eq!(stored_days(&store, "a").await, 21);
+    assert_eq!(floor_of_a_on(&store, 1020).await, None);
+}
+
+#[tokio::test]
+async fn days_written_by_a_clock_that_was_ahead_do_not_count_once_it_is_back() {
+    let store = StatusStore::new(db().await);
+    // 12 real days, then a clock a long way ahead for 16 days, so that 28 days
+    // are stored in all.
+    read_days(&store, 1000, 1011, true).await;
+    read_days(&store, 5000, 5015, true).await;
+    assert_eq!(stored_days(&store, "a").await, 28);
+
+    // The clock is back at day 1012: only 12 real days are behind it. The
+    // days ahead are not read days, whether or not another read has been
+    // written yet.
+    assert_eq!(floor_of_a_on(&store, 1012).await, None);
+    read_days(&store, 1012, 1012, true).await;
+    assert_eq!(floor_of_a_on(&store, 1012).await, None, "13 real days");
+    // They did not crowd the real days out either.
+    assert_eq!(stored_days(&store, "a").await, 13);
+
+    // Real days make up the 28 as they come.
+    read_days(&store, 1013, 1027, true).await;
+    assert_eq!(floor_of_a_on(&store, 1027).await, Some(1000));
+}
+
+#[tokio::test]
+async fn the_read_days_of_deleted_channels_go_with_them() {
+    let store = StatusStore::new(db().await);
+    read_days(&store, 1000, 1027, true).await;
+    // A later write that no longer lists the channel `a`.
+    store
+        .record_reads(1028 * DAY, vec![read("b", true)], ids(&["b"]))
+        .await
+        .unwrap();
+    assert_eq!(floor_of_a(&store).await, None);
+    assert_eq!(stored_days(&store, "a").await, 0);
+    assert_eq!(stored_days(&store, "b").await, 1);
+}
+
+#[test]
+fn a_day_is_unix_ms_over_a_day() {
+    assert_eq!(read_day(0), 0);
+    assert_eq!(read_day(DAY - 1), 0);
+    assert_eq!(read_day(DAY), 1);
+    assert_eq!(read_day(-1), -1);
+}
+
 #[tokio::test]
 async fn the_torrent_listing_is_none_until_the_worker_writes_one_and_is_replaced_as_a_whole() {
     let store = StatusStore::new(db().await);
