@@ -20,9 +20,17 @@
 //! whatever its item's result, by the rule recorded on it ([`RevisionRetry`],
 //! [`retry_plan_for`]); not while a higher revision of its episode is in the
 //! folder or on its way, and not when the rule's folder is no longer the one
-//! its replacement was decided for ([`same_destination`]). Its add puts the replacement back at its first step
+//! its replacement was decided for ([`same_destination`]). The worker also
+//! refuses it, and a `버전 미상` revision, when the video at the episode's
+//! place is that revision or a higher one already, told the way a cycle's
+//! decision tells it ([`revisions::holds_same_or_higher`]): a higher revision
+//! that found the episode name free has no replacement row to say so. Its add puts the replacement back at its first step
 //! with the item's result, in one transaction; a torrent Transmission still
-//! had is started again. It is never renamed here, and an add that fails
+//! had is started again. A revision whose replacement ended after the old
+//! video was removed, with no video left under the episode name
+//! ([`revisions::ended_with_no_video`], or received so and whole with no file, [`revisions::checked_on_retry`]), is received again the same way;
+//! a torrent Transmission still has is checked (`torrent-verify`) before it
+//! is started, so it downloads the file that went missing. It is never renamed here, and an add that fails
 //! leaves the item and the replacement as they were: the command alone says
 //! why.
 //!
@@ -78,7 +86,7 @@ use crate::{
         history::{HistoryItem, HistoryResult, Millis},
         revisions::{
             Claim, HistoryWrite, NewRevision, Revision, RevisionError, RevisionState,
-            RevisionStore, RowWrite,
+            RevisionStore, RowWrite, Step,
         },
     },
     transmission::{
@@ -94,6 +102,19 @@ use crate::{
 
 /// The `kind` of the command.
 pub const KIND: &str = "receive_once";
+
+/// Why a revision was not received again when the folder's video of its
+/// episode could not be looked at. Nothing asks again by itself: the person
+/// may, later.
+/// Why a replacement that ended with no video left was not received again:
+/// another file holds its received name, which Transmission would take for
+/// the torrent's data and write over.
+const RECEIVED_NAME_TAKEN: &str = "받은 이름에 확인한 새 영상이 아닌 다른 파일이 있어서 다시 받지 않았어요. Transmission이 그 파일을 덮어쓸 수 있어요. 그 파일을 옮기거나 지운 뒤 다시 받기를 누를 수 있어요.";
+/// Why it was not received again: its received name could not be looked at.
+const RECEIVED_NAME_UNREAD: &str = "받은 이름의 파일을 확인하지 못해서 다시 받지 않았어요. 잠시 뒤 다시 받기를 다시 누를 수 있어요.";
+/// Why it was not started: Transmission did not check the torrent's data.
+const NOT_VERIFIED: &str = "Transmission이 토렌트의 데이터를 다시 확인하지 않아서 시작하지 않았어요. 잠시 뒤 다시 받기를 다시 누를 수 있어요: ";
+const PLACE_UNREAD: &str = "폴더의 회차 영상이 어떤 수정본인지 확인하지 못해서 받지 않았어요. 잠시 뒤 다시 받기를 다시 누를 수 있어요.";
 
 /// Longest failure reason kept, in characters.
 const MAX_REASON_CHARS: usize = 300;
@@ -212,6 +233,11 @@ pub enum NotRetryable {
     /// decided for: a torrent added now would be received elsewhere, and the
     /// replacement would fail again.
     FolderMoved,
+    /// The item is a revision whose replacement waits for `다시 받기` (its
+    /// download stopped, or `버전 미상`), and the folder's video of its
+    /// episode is that revision or a higher one already
+    /// ([`revisions::holds_same_or_higher`]). Only the worker can tell.
+    InPlace,
 }
 
 impl NotRetryable {
@@ -244,6 +270,9 @@ impl NotRetryable {
             }
             NotRetryable::FolderMoved => {
                 "규칙의 저장 폴더가 바뀌어서 이 수정본은 다시 받지 않아요. 새 폴더에 받으면 기존 영상과 같은 폴더가 아니라서 대체할 수 없어요."
+            }
+            NotRetryable::InPlace => {
+                "폴더의 이 회차 영상이 이미 같거나 더 높은 수정본이라 다시 받지 않아요."
             }
         }
     }
@@ -313,10 +342,12 @@ pub enum RevisionRetry {
     /// No row, or none `다시 받기` receives again: the item is retried as any
     /// other ([`retry_plan`]).
     None,
-    /// A revision whose download stopped before it was received
-    /// ([`revisions::stopped_before_received`]): received again whatever the
-    /// item's result, and its replacement goes on with the same checks and
-    /// order. It may have left the feed or come from a past episode search.
+    /// A revision whose download stopped before it was received, or whose
+    /// replacement ended with no video left
+    /// ([`revisions::received_again_on_retry`]): received again whatever the
+    /// item's result, and its replacement starts over with the same checks
+    /// and order. It may have left the feed or come from a past episode
+    /// search.
     Again(Box<Revision>),
     /// Such a revision, but a higher revision of its episode is in the folder
     /// or on its way; the replacement steps skip it.
@@ -331,7 +362,7 @@ pub async fn revision_retry(
     let Some(row) = store.by_item(item_id).await? else {
         return Ok(RevisionRetry::None);
     };
-    if !revisions::stopped_before_received(&row) {
+    if !revisions::received_again_on_retry(&row) {
         return Ok(RevisionRetry::None);
     }
     Ok(match store.verdict(row.id).await? {
@@ -668,6 +699,61 @@ pub async fn execute_with(
     if let Err(reason) = same_destination(&revision, Path::new(&collect_folder.folder), plan.rule) {
         return Ok(ended_early(failed(reason.message(), None)));
     }
+    // A revision whose replacement waits for this request is received only
+    // while the folder's video of its episode is lower: a higher one may have
+    // taken the episode name as an ordinary item since, with no row to say
+    // so. A replacement stopped before its video was received could replace
+    // nothing now, and ends as skipped; a `버전 미상` one is left as it is,
+    // so a later request looks at the folder again.
+    let waiting = match &revision {
+        RevisionRetry::Again(row) => Some((**row).clone()),
+        RevisionRetry::None if is_retryable_result(item.result) => ctx
+            .revisions
+            .by_item(item.id)
+            .await
+            .map_err(Retry::store)?
+            .filter(|row| row.state == RevisionState::Unknown),
+        _ => None,
+    };
+    if let Some(row) = waiting {
+        match revisions::holds_same_or_higher(ctx, &item, &row).await {
+            Ok(false) => {}
+            Ok(true) => {
+                if again {
+                    let skip = Step::Skipped {
+                        reason: revisions::NOT_HIGHER.to_owned(),
+                    };
+                    if let Err(err) = ctx.revisions.advance(row.id, now(), row.state, skip).await {
+                        eprintln!("Cannot record the revision of item {}: {err}", item.id);
+                    }
+                }
+                return Ok(ended_early(failed(NotRetryable::InPlace.message(), None)));
+            }
+            Err(why) => {
+                eprintln!(
+                    "Cannot look at the episode of item {} before receiving it again: {why}",
+                    item.id
+                );
+                return Ok(ended_early(failed(PLACE_UNREAD, None)));
+            }
+        }
+    }
+    // A replacement that ended with no video left: its torrent's data is
+    // checked again, which must not find another file under its name.
+    let ended = matches!(&revision, RevisionRetry::Again(row) if revisions::checked_on_retry(row));
+    if let (true, RevisionRetry::Again(row)) = (ended, &revision) {
+        match revisions::received_name_free(row).await {
+            Ok(true) => {}
+            Ok(false) => return Ok(ended_early(failed(RECEIVED_NAME_TAKEN, None))),
+            Err(why) => {
+                eprintln!(
+                    "Cannot look at the received name of item {} before receiving it again: {why}",
+                    item.id
+                );
+                return Ok(ended_early(failed(RECEIVED_NAME_UNREAD, None)));
+            }
+        }
+    }
     let rule_id = plan.rule.id.clone();
 
     let redactor = redactor_for(ctx, &channel);
@@ -717,6 +803,30 @@ pub async fn execute_with(
             // cycle may have met it in between and recorded it as a
             // `duplicate`; it is still this command's.
             let own = torrent.kind == AddKind::Added || torrent.has_label(&command_label);
+            // Transmission still has the torrent of a replacement that ended
+            // with no video left: it checks the data first, so it downloads
+            // the file that went missing. Unchecked, the torrent is not
+            // started (nor the row written): the failure stays, with
+            // `다시 받기`.
+            let check = ended && torrent.kind != AddKind::Added;
+            if check {
+                let verified = transmission
+                    .torrent_action(TorrentAction::Verify, vec![Id::Hash(torrent.hash.clone())])
+                    .await;
+                let failure = match verified {
+                    Ok(response) if response.is_ok() => None,
+                    Ok(response) => Some(response.result),
+                    Err(err) => Some(err.to_string()),
+                };
+                if let Some(failure) = failure {
+                    let failure = redactor.apply(&failure);
+                    eprintln!("Cannot check the torrent of item {}: {failure}", item.id);
+                    return Ok(ended_early(failed(
+                        &format!("{NOT_VERIFIED}{failure}"),
+                        None,
+                    )));
+                }
+            }
             // A revision received again is the item's own torrent, as it was
             // when it was first received.
             let result = if own || again {
@@ -796,6 +906,7 @@ pub async fn execute_with(
             let stored = stored.unwrap_or(result);
             // Transmission still had the revision's torrent, stopped on an
             // error: it is started again, and the replacement looks at it.
+            // One checked above starts once the check is done.
             if again && torrent.kind != AddKind::Added {
                 let started = transmission
                     .torrent_action(TorrentAction::Start, vec![Id::Hash(torrent.hash.clone())])
@@ -1221,6 +1332,23 @@ mod tests {
             derived_name(folder, release, -12),
             Some("LIAR GAME S01E14.mkv".to_owned())
         );
+    }
+
+    /// A show named with `NvM` (`Show 3v3`): its first release of an episode
+    /// is named as `trname` reads it, and its revision of that episode gets
+    /// the same name.
+    #[test]
+    fn a_show_named_with_a_number_v_number_is_named_by_its_episode() {
+        let folder = Path::new("/media/anime/Show 3v3/Season 01");
+        let first = "[SubsPlease] Show 3v3 - 06 (1080p) [1A2B3C4D].mkv";
+        let second = "[SubsPlease] Show 3v3 - 06v2 (1080p) [5E6F7A8B].mkv";
+        let named = derived_name(folder, first, 0);
+        assert_eq!(named, trname(folder, first, 0));
+        assert!(
+            named.as_deref().is_some_and(|n| n.ends_with("E06.mkv")),
+            "{named:?}"
+        );
+        assert_eq!(derived_name(folder, second, 0), named);
     }
 
     /// `trname` reads Erai-raws' `06v2` as episode 34 (from the CRC32

@@ -8,9 +8,13 @@
 //!   Erai-raws' several brackets `… [1080p CR WEBRip HEVC AAC][MultiSub][1BBD34E6].mkv`.
 //!   A name whose last bracket is something else (`[MultiSub]`) has none. RSS
 //!   titles may leave the extension out; the rule is the same.
-//! - **The revision** is the last `vN` right after a number (`14v2`, `06v3`;
-//!   a show named `Show 3v3` keeps its `3v3`); without one the release is its
-//!   first revision.
+//! - **The revision** is the `vN` right after the episode's number, which
+//!   follows ` - ` (`Show - 14v2`, `Show 3v3 - 06v3`), whatever follows it
+//!   (`… - 03v2 1080p AAC 2.0`, `… - 03v2 - Part 2`). A name with no such
+//!   marker takes the last `vN` right after a number (`Show 14v2 (1080p)`),
+//!   unless ` - ` and a number follow it outside brackets: then it is part of
+//!   the show's name (`Show 3v3 - 06` is the first revision of episode 6).
+//!   Without one the release is its first revision.
 //! - **The same release** of an episode is the name without its revision,
 //!   its CRC32 bracket and its extension ([`Release::stem`]): `[SubsPlease]
 //!   Show - 14 (1080p)` for both `14` and `14v2`. Another group's release of
@@ -37,10 +41,40 @@ static CRC: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[([0-9A-Fa-f]{8})\]
 static VERSION: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)\b(\d{1,4}(?:\.\d)?)v(\d{1,2})\b").unwrap());
 
-/// The last `NvM` in `text`: the episode's revision follows the show's name
-/// (`Show 3v3 - 06v2`), so an earlier one is part of the name.
+/// ` - ` and a number, as a name gives its episode's number after the
+/// show's name.
+static EPISODE_AFTER_DASH: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\s-\s*\d{1,4}(?:\.\d)?(?:\D|$)").unwrap());
+
+/// The episode's revision marker in `text`. The last `NvM` right after ` - `
+/// is on the episode's number, whatever follows it. Without one, the last
+/// `NvM`, unless ` - ` and a number follow it outside brackets: the episode's
+/// number follows the show's name, so in `Show 3v3 - 06` the `3v3` is part
+/// of the name and the episode `06` carries no revision.
 fn last_version(text: &str) -> Option<regex::Captures<'_>> {
-    VERSION.captures_iter(text).last()
+    let mut all: Vec<regex::Captures<'_>> = VERSION.captures_iter(text).collect();
+    let on_episode = all
+        .iter()
+        .rposition(|c| text[..c.get(0).unwrap().start()].trim_end().ends_with('-'));
+    if let Some(at) = on_episode {
+        return Some(all.swap_remove(at));
+    }
+    let found = all.pop()?;
+    let after = &text[found.get(0).unwrap().end()..];
+    let episode_after = EPISODE_AFTER_DASH
+        .find_iter(after)
+        .any(|dash| bracket_depth(&after[..dash.start()]) == 0);
+    (!episode_after).then_some(found)
+}
+
+/// How deep in brackets or parentheses the end of `text` is, counting from
+/// its start (a closing one with none open counts as none).
+fn bracket_depth(text: &str) -> usize {
+    text.chars().fold(0usize, |depth, c| match c {
+        '[' | '(' => depth + 1,
+        ']' | ')' => depth.saturating_sub(1),
+        _ => depth,
+    })
 }
 
 impl Release {
@@ -288,6 +322,75 @@ mod tests {
         assert_eq!(
             Release::without_version(name),
             "[SubsPlease] Show 3v3 - 06 (1080p) [1A2B3C4D].mkv"
+        );
+    }
+
+    /// A show named with `NvM` whose episode carries no revision marker is
+    /// the first revision of that episode: only a marker on the episode's
+    /// number counts.
+    #[test]
+    fn a_number_v_number_in_the_show_name_of_an_unversioned_episode_is_no_revision() {
+        let first = "Show 3v3 - 06 [1080p].mkv";
+        let second = "Show 3v3 - 06v2 [1080p].mkv";
+        let v1 = Release::parse(first);
+        let v2 = Release::parse(second);
+        assert_eq!((v1.version, v1.stem.as_str()), (1, "Show 3v3 - 06 [1080p]"));
+        assert_eq!((v2.version, v2.stem.as_str()), (2, "Show 3v3 - 06 [1080p]"));
+        assert_eq!(Release::without_version(first), first);
+        assert_eq!(Release::without_version(second), first);
+        // The same with a CRC32, and with the extension left out.
+        let named = "[SubsPlease] Show 3v3 - 06 (1080p) [1A2B3C4D].mkv";
+        assert_eq!(Release::parse(named).version, 1);
+        assert_eq!(Release::without_version(named), named);
+        let title = "[SubsPlease] Show 3v3 - 06 (1080p) [1A2B3C4D]";
+        assert_eq!(Release::parse(title).version, 1);
+        assert_eq!(
+            Release::parse(title).stem,
+            "[SubsPlease] Show 3v3 - 06 (1080p)"
+        );
+        // A revision marker in brackets right after the show is still read.
+        let bracketed = "[Group] Show [06v2][1080p].mkv";
+        assert_eq!(Release::parse(bracketed).version, 2);
+    }
+
+    /// The `NvM` right after ` - ` is the episode's and its revision, whatever
+    /// numbers follow it (audio channels, a part); one in the show's name is
+    /// followed by ` - ` and the episode's number.
+    #[test]
+    fn the_revision_on_the_episode_number_is_read_whatever_follows() {
+        for (name, version, stem) in [
+            (
+                "[Group] Show - 03v2 1080p WEB AAC 2.0 x264.mkv",
+                2,
+                "[Group] Show - 03 1080p WEB AAC 2.0 x264",
+            ),
+            (
+                "[Group] Show - 03v2 - Part 2.mkv",
+                2,
+                "[Group] Show - 03 - Part 2",
+            ),
+            ("Show 2 - 03v2.mkv", 2, "Show 2 - 03"),
+            ("Show - 03v2 (2024).mkv", 2, "Show - 03 (2024)"),
+            ("Show S2 - 03v2 [1080p].mkv", 2, "Show S2 - 03 [1080p]"),
+            ("86 - 03v2.mkv", 2, "86 - 03"),
+            ("Re:Zero 3v3 - 06.mkv", 1, "Re:Zero 3v3 - 06"),
+            ("Re:Zero 3v3 - 06v2.mkv", 2, "Re:Zero 3v3 - 06"),
+            (
+                "[Group] Show 14v2 (1080p).mkv",
+                2,
+                "[Group] Show 14 (1080p)",
+            ),
+        ] {
+            let release = Release::parse(name);
+            assert_eq!(
+                (release.version, release.stem.as_str()),
+                (version, stem),
+                "{name}"
+            );
+        }
+        assert_eq!(
+            Release::without_version("[Group] Show - 03v2 - Part 2.mkv"),
+            "[Group] Show - 03 - Part 2.mkv"
         );
     }
 

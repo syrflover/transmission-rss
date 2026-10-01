@@ -28,8 +28,26 @@
 //! [`RevisionState::Cleared`]. A `removed` row with a reason is a rename that
 //! did not go through yet; the worker tries again while the name is free. A
 //! `removing` row with a reason ([`Step::RemovalWaits`]) removed the old
-//! torrent but the episode's file is still there; it waits for that file to
-//! go. Both are listed with the failures.
+//! torrent but the episode's file is still there, and waits for that file to
+//! go. A `verified` or `removing` row with a reason ([`Step::NewMissing`])
+//! found, before removing the old video, that the new video was not the one
+//! whose CRC32 was checked, and removed nothing. All of them are listed with
+//! the failures. A row whose new video is gone (or not the checked one) on
+//! two looks in a row ([`Revision::new_missing_at`]) ends as
+//! [`RevisionState::Abandoned`]: nothing is removed or renamed (one that
+//! ended after the old video was removed is listed with the failures until
+//! the episode name holds a video again; one that ended beside the old
+//! video's file left after its torrent was removed, [`OLD_FILE_WATCHED`],
+//! is listed once that file goes too), it holds up
+//! no other replacement of the episode nor any lower revision of its release
+//! (the rows skipped for it start over, as when it fails), and the old
+//! release stays superseded (its torrent was removed for this replacement,
+//! or is still there with its video).
+//!
+//! A rule folder that is away decides nothing; one away for
+//! [`FOLDER_GONE_AFTER`] ([`Revision::folder_away_since`]) is not waited for
+//! any more: failures leave the list, and replacements under way say so
+//! ([`Step::FolderGone`]) until it is back.
 //!
 //! A step is written only from the state it was decided from
 //! ([`RevisionStore::advance`]), and a row the worker decides together with
@@ -40,6 +58,8 @@
 //! [`Revision::not_received`]) is not final: the worker looks at its torrent
 //! again every cycle, and a cycle that receives its item again (the torrent
 //! had gone), or `다시 받기` of it, starts it over ([`RevisionStore::reopen`]).
+//! So does `다시 받기` of a replacement that ended with no video under the
+//! episode name; its old release stays superseded meanwhile.
 //!
 //! # One episode, one replacement at a time
 //!
@@ -48,6 +68,12 @@
 //! removes the old video at a time ([`RevisionStore::claim`]), a lower one
 //! never replaces a higher one, and a row whose torrent is another row's is
 //! skipped when it is written.
+//!
+//! A lower revision skipped while a higher one was on its way
+//! ([`Step::Overtaken`]) keeps that row ([`Revision::overtaken_by`]). If the
+//! higher one fails or is abandoned, the lower one goes back to `receiving`
+//! in the same transaction and replaces the video after all, from its first
+//! step; a lower revision skipped for any other reason stays skipped.
 
 #[cfg(test)]
 mod tests;
@@ -80,6 +106,21 @@ type Result<T> = std::result::Result<T, RevisionError>;
 /// Why a row was skipped because another row of the episode has the same
 /// torrent: the same release through another channel.
 pub const SAME_TORRENT: &str = "같은 토렌트가 이미 이 회차를 대체하고 있어요.";
+/// Why a replacement ended with the old video's file still under the episode
+/// name after its torrent was removed for it ([`Step::RemovalWaits`]), and
+/// the new video gone: no failure while that file is there, but the worker
+/// watches it, and the row becomes one if the file goes too.
+pub const OLD_FILE_WATCHED: &str = "이전 영상의 토렌트를 지운 뒤 받은 새 영상 파일이 없어져서 대체를 끝냈어요. 회차 이름에 남은 이전 영상 파일이 없어지면 알려요.";
+/// How long the rule's folder of a row may be away (a mount that is not
+/// there) before the worker stops waiting for it: a failure, or a
+/// replacement that ended with no video, is no failure any more
+/// ([`RevisionState::Cleared`], [`Step::Abandoned`] without a reason), and a
+/// replacement under way, which still holds its torrent, is listed as a
+/// failure with [`FOLDER_AWAY`] until the folder is back. A week.
+pub const FOLDER_GONE_AFTER: Millis = 7 * 24 * 60 * 60 * 1000;
+/// Why a replacement under way waits: its folder has been away for
+/// [`FOLDER_GONE_AFTER`].
+pub const FOLDER_AWAY: &str = "작품 폴더가 보이지 않아요. 저장 폴더를 7일 넘게 찾지 못해서 대체가 멈춰 있어요. 폴더가 돌아오면 이어가요.";
 /// Why a row was skipped because a higher revision of the episode replaced
 /// the old video, or is about to.
 pub const OVERTAKEN: &str =
@@ -97,10 +138,11 @@ pub enum RevisionState {
     Done,
     Failed,
     Cleared,
+    Abandoned,
 }
 
 impl RevisionState {
-    pub const ALL: [RevisionState; 9] = [
+    pub const ALL: [RevisionState; 10] = [
         RevisionState::Unknown,
         RevisionState::Skipped,
         RevisionState::Receiving,
@@ -110,6 +152,7 @@ impl RevisionState {
         RevisionState::Done,
         RevisionState::Failed,
         RevisionState::Cleared,
+        RevisionState::Abandoned,
     ];
 
     pub fn code(self) -> &'static str {
@@ -123,6 +166,7 @@ impl RevisionState {
             RevisionState::Done => "done",
             RevisionState::Failed => "failed",
             RevisionState::Cleared => "cleared",
+            RevisionState::Abandoned => "abandoned",
         }
     }
 
@@ -147,7 +191,10 @@ impl RevisionState {
     pub fn supersedes_old(self) -> bool {
         matches!(
             self,
-            RevisionState::Removing | RevisionState::Removed | RevisionState::Done
+            RevisionState::Removing
+                | RevisionState::Removed
+                | RevisionState::Done
+                | RevisionState::Abandoned
         )
     }
 }
@@ -181,6 +228,27 @@ pub struct Revision {
     pub received_name: Option<String>,
     /// The new file's CRC32 as read.
     pub file_crc: Option<String>,
+    /// What told the new file apart when its CRC32 was read
+    /// ([`crate::revision::FileIdentity::to_text`]): the old video is removed
+    /// only while the file under `received_name` is still that one.
+    pub file_identity: Option<String>,
+    /// When a look, with the folder there, last found the new video missing
+    /// (or, before the old video is removed, not the checked file):
+    /// [`Step::NewMissing`]. `None` once a look finds it, or finds the folder
+    /// away ([`RevisionStore::forget_miss`]). The next such look in a row
+    /// ends the replacement.
+    pub new_missing_at: Option<Millis>,
+    /// When a look first found the rule's folder itself away (a mount that
+    /// is not there); `None` once a look finds it
+    /// ([`RevisionStore::folder_looked_at`]). See [`FOLDER_GONE_AFTER`].
+    pub folder_away_since: Option<Millis>,
+    /// When the replacement first went ahead to remove the old video
+    /// ([`RevisionStore::claim`]); kept when it is received again after it
+    /// ended ([`RevisionStore::reopen`]): the old release stays superseded.
+    pub claimed_at: Option<Millis>,
+    /// The last old torrent a claim of the replacement found, kept like
+    /// `claimed_at`; [`Revision::old_torrent_hash`] is the current claim's.
+    pub superseded_hash: Option<String>,
     pub state: RevisionState,
     /// Why the replacement failed or waits; free of secret values.
     pub reason: Option<String>,
@@ -188,16 +256,34 @@ pub struct Revision {
     pub updated_at: Millis,
     /// When the new video got the episode name.
     pub replaced_at: Option<Millis>,
+    /// The row of the higher revision this `skipped` row was skipped for
+    /// while that one was on its way ([`Step::Overtaken`]); `None` for any
+    /// other skip.
+    pub overtaken_by: Option<i64>,
 }
 
 impl Revision {
     /// A `받기 실패`: a failure that holds, a rename after the old video was
-    /// removed that has not gone through yet, or an old video whose torrent
-    /// was removed and whose file is still there ([`Step::RemovalWaits`]).
+    /// removed that has not gone through yet, a removal that waits
+    /// ([`Step::RemovalWaits`], [`Step::NewMissing`]), a replacement under
+    /// way whose folder has been away for long ([`FOLDER_AWAY`]), or one that
+    /// ended after the old video was removed while the episode has no video
+    /// under its name ([`Step::Abandoned`] with a reason other than
+    /// [`OLD_FILE_WATCHED`]).
     pub fn is_failure(&self) -> bool {
-        self.state == RevisionState::Failed
-            || (matches!(self.state, RevisionState::Removed | RevisionState::Removing)
-                && self.reason.is_some())
+        match self.state {
+            RevisionState::Failed => true,
+            RevisionState::Verified | RevisionState::Removed | RevisionState::Removing => {
+                self.reason.is_some()
+            }
+            // Only its folder away for long has a reason ([`FOLDER_AWAY`]).
+            RevisionState::Receiving => self.reason.is_some(),
+            RevisionState::Abandoned => self
+                .reason
+                .as_deref()
+                .is_some_and(|reason| reason != OLD_FILE_WATCHED),
+            _ => false,
+        }
     }
 
     /// A failure before the new video was received in the rule's folder: its
@@ -236,6 +322,8 @@ pub enum Step {
     Verified {
         received_name: String,
         file_crc: String,
+        /// [`Revision::file_identity`].
+        file_identity: String,
     },
     Removing,
     /// The old video is gone; `reason` says why the rename has not gone
@@ -252,16 +340,49 @@ pub enum Step {
     },
     Cleared,
     /// Before the old video was touched: the folder holds this revision or a
-    /// higher one by now, or a higher one is replacing it.
+    /// higher one by now. Not for a higher revision of the episode in a row
+    /// (that is [`Step::Overtaken`]).
     Skipped {
         reason: String,
     },
+    /// Before the old video was touched: a higher revision of the episode
+    /// is on its way or replaced the video ([`Claim::Overtaken`]), so the
+    /// row is `skipped` ([`OVERTAKEN`]). The store works out which, in the
+    /// same transaction: a row skipped for one on its way keeps that row
+    /// ([`Revision::overtaken_by`]) and goes back to `receiving` if it fails
+    /// ([`Step::Failed`]). Not written when nothing overtakes the row any
+    /// more.
+    Overtaken,
     /// A `removing` row whose old torrent Transmission took out while the
     /// old video's file is still there: it stays `removing` (the old release
     /// stays superseded) and `reason` says why it waits.
     RemovalWaits {
         reason: String,
     },
+    /// A look, with the folder there, found the new video missing (or, before
+    /// the old video is removed, not the checked file): the row keeps its
+    /// state, `reason` says why it waits, and [`Revision::new_missing_at`]
+    /// marks the look. The next such look in a row ends the replacement
+    /// ([`Step::Abandoned`]).
+    NewMissing {
+        reason: String,
+    },
+    /// A row whose new video was gone (or, before the old video was
+    /// removed, not the checked one) on two looks in a row: the replacement
+    /// ends as [`RevisionState::Abandoned`]. The rows skipped for it while it
+    /// was on its way start over, as when it fails. A `reason` makes it a
+    /// `받기 실패`: the old video was removed, so the episode has no video
+    /// under its name; written again without one once it has.
+    /// [`OLD_FILE_WATCHED`] is no failure: the old video's file is still
+    /// there, and the worker watches it ([`Revision::is_failure`]).
+    Abandoned {
+        reason: Option<String>,
+    },
+    /// A replacement under way whose folder has been away for
+    /// [`FOLDER_GONE_AFTER`]: it keeps its state (and its torrent), and the
+    /// reason [`FOLDER_AWAY`] lists it with the failures until a look finds
+    /// the folder ([`RevisionStore::folder_looked_at`]).
+    FolderGone,
 }
 
 /// A history write that goes with a row's write, in one transaction
@@ -365,7 +486,8 @@ pub struct WorkRef {
 
 const COLUMNS: &str = "id, item_id, old_item_id, rule_id, folder, episode_name, old_version, \
      new_version, expected_crc, torrent_hash, received_name, file_crc, state, reason, \
-     created_at, updated_at, replaced_at, old_crc, old_torrent_hash";
+     created_at, updated_at, replaced_at, old_crc, old_torrent_hash, overtaken_by, \
+     file_identity, new_missing_at, folder_away_since, claimed_at, superseded_hash";
 
 fn from_row(row: &Row<'_>) -> rusqlite::Result<Revision> {
     from_row_at(row, 0)
@@ -401,6 +523,12 @@ fn from_row_at(row: &Row<'_>, at: usize) -> rusqlite::Result<Revision> {
         replaced_at: row.get(at + 16)?,
         old_crc: row.get(at + 17)?,
         old_torrent_hash: row.get(at + 18)?,
+        overtaken_by: row.get(at + 19)?,
+        file_identity: row.get(at + 20)?,
+        new_missing_at: row.get(at + 21)?,
+        folder_away_since: row.get(at + 22)?,
+        claimed_at: row.get(at + 23)?,
+        superseded_hash: row.get(at + 24)?,
     })
 }
 
@@ -432,6 +560,39 @@ fn torrent_taken(conn: &Connection, id: Option<i64>, hash: &str) -> Result<bool>
         params![hash, id],
         |row| row.get(0),
     )?)
+}
+
+/// The rows skipped for the row `id` while it was on its way
+/// ([`Revision::overtaken_by`]), which has failed or was abandoned (its video
+/// never took the episode name): each starts over as
+/// `receiving`, having forgotten what it found, unless another row under way
+/// or done has its torrent by now (the same release through another channel,
+/// or another row skipped for `id` that started over first), which skips it
+/// as that torrent's ([`SAME_TORRENT`]), as [`create_in`] would.
+fn revive_overtaken(tx: &Connection, id: i64, at: Millis) -> Result<()> {
+    for row in query(tx, "WHERE state = 'skipped' AND overtaken_by = ?1", &[&id])? {
+        let taken = match &row.torrent_hash {
+            Some(hash) => torrent_taken(tx, Some(row.id), hash)?,
+            None => false,
+        };
+        if taken {
+            tx.execute(
+                "UPDATE video_revisions SET reason = ?2, overtaken_by = NULL, updated_at = ?3
+                  WHERE id = ?1",
+                params![row.id, SAME_TORRENT, at],
+            )?;
+        } else {
+            tx.execute(
+                "UPDATE video_revisions
+                    SET state = 'receiving', reason = NULL, received_name = NULL,
+                        file_crc = NULL, file_identity = NULL, overtaken_by = NULL,
+                        new_missing_at = NULL, updated_at = ?2
+                  WHERE id = ?1",
+                params![row.id, at],
+            )?;
+        }
+    }
+    Ok(())
 }
 
 /// [`RevisionStore::create`] inside the transaction `tx`.
@@ -471,7 +632,11 @@ fn create_in(tx: &Connection, at: Millis, new: NewRevision) -> Result<Revision> 
         .expect("the row just written"))
 }
 
-/// [`RevisionStore::reopen`] inside the transaction `tx`.
+/// [`RevisionStore::reopen`] inside the transaction `tx`: a failure before
+/// the new video was received ([`Revision::not_received`]), or a replacement
+/// that ended with no video under the episode name (an abandoned
+/// [`Revision::is_failure`]), starts over having forgotten the file it had
+/// checked.
 fn reopen_in(tx: &Connection, id: i64, at: Millis, hash: &str) -> Result<Option<Revision>> {
     let (state, reason) = if torrent_taken(tx, Some(id), hash)? {
         ("skipped", Some(SAME_TORRENT))
@@ -480,9 +645,13 @@ fn reopen_in(tx: &Connection, id: i64, at: Millis, hash: &str) -> Result<Option<
     };
     tx.execute(
         "UPDATE video_revisions
-            SET state = ?2, torrent_hash = ?3, reason = ?4, updated_at = ?5
-          WHERE id = ?1 AND state = 'failed' AND received_name IS NULL",
-        params![id, state, hash, reason, at],
+            SET state = ?2, torrent_hash = ?3, reason = ?4, received_name = NULL,
+                file_crc = NULL, file_identity = NULL, new_missing_at = NULL,
+                updated_at = ?5
+          WHERE id = ?1
+            AND ((state = 'failed' AND received_name IS NULL)
+                 OR (state = 'abandoned' AND reason IS NOT NULL AND reason <> ?6))",
+        params![id, state, hash, reason, at, OLD_FILE_WATCHED],
     )?;
     by_id(tx, id)
 }
@@ -526,19 +695,44 @@ fn item_of(tx: &Connection, observation: &Observation) -> Result<Option<i64>> {
         .optional()?)
 }
 
-/// What the other rows of `row`'s episode say about it removing the old video.
-fn verdict(conn: &Connection, row: &Revision) -> Result<Claim> {
-    let siblings = query(
+/// The other rows of `row`'s episode that are under way or done.
+fn siblings(conn: &Connection, row: &Revision) -> Result<Vec<Revision>> {
+    query(
         conn,
         "WHERE folder = ?1 AND episode_name = ?2 AND id <> ?3
            AND state IN ('receiving', 'verified', 'removing', 'removed', 'done')",
         &[&row.folder, &row.episode_name, &row.id],
-    )?;
-    let overtaken = siblings.iter().any(|s| match s.state {
-        RevisionState::Done => s.new_version >= row.new_version,
-        _ => s.new_version > row.new_version,
-    });
-    if overtaken {
+    )
+}
+
+/// What keeps a row from replacing the video, of its `siblings`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Overtaker {
+    None,
+    /// A replacement of the same or a higher revision is done.
+    InPlace,
+    /// A higher revision is on its way: the row of the highest one.
+    OnItsWay(i64),
+}
+
+fn overtaker(siblings: &[Revision], row: &Revision) -> Overtaker {
+    if siblings
+        .iter()
+        .any(|s| s.state == RevisionState::Done && s.new_version >= row.new_version)
+    {
+        return Overtaker::InPlace;
+    }
+    siblings
+        .iter()
+        .filter(|s| s.state != RevisionState::Done && s.new_version > row.new_version)
+        .max_by_key(|s| (s.new_version, s.id))
+        .map_or(Overtaker::None, |s| Overtaker::OnItsWay(s.id))
+}
+
+/// What the other rows of `row`'s episode say about it removing the old video.
+fn verdict(conn: &Connection, row: &Revision) -> Result<Claim> {
+    let siblings = siblings(conn, row)?;
+    if overtaker(&siblings, row) != Overtaker::None {
         return Ok(Claim::Overtaken);
     }
     if siblings
@@ -689,10 +883,11 @@ impl RevisionStore {
     }
 
     /// A cycle added the torrent `hash` again for the row `id`, a failure
-    /// before its new video was received ([`Revision::not_received`]): the
-    /// replacement starts over (or is skipped when another row has that
-    /// torrent). Returns the row afterwards; a row in any other state is left
-    /// alone.
+    /// before its new video was received ([`Revision::not_received`]), or
+    /// `다시 받기` received it again (such a failure, or a replacement that
+    /// ended with no video under the episode name): the replacement starts
+    /// over (or is skipped when another row has that torrent). Returns the
+    /// row afterwards; a row in any other state is left alone.
     pub async fn reopen(&self, id: i64, at: Millis, hash: String) -> Result<Option<Revision>> {
         self.db
             .run(move |c| {
@@ -755,14 +950,23 @@ impl RevisionStore {
                     _ => Claim::Wait,
                 };
                 if claim == Claim::Go {
+                    // From `verified` the claim is for what was found now
+                    // (a row received again may hold the torrent an earlier
+                    // claim removed); again after a restart, `removing`
+                    // keeps the torrent the first look found, which may be
+                    // gone by now.
+                    let fresh = row.state == RevisionState::Verified;
                     tx.execute(
                         "UPDATE video_revisions
                             SET state = 'removing', old_item_id = COALESCE(?2, old_item_id),
                                 old_version = COALESCE(?3, old_version),
-                                old_torrent_hash = COALESCE(?4, old_torrent_hash),
+                                old_torrent_hash = CASE WHEN ?6 THEN ?4
+                                                        ELSE COALESCE(?4, old_torrent_hash) END,
+                                superseded_hash = COALESCE(?4, superseded_hash),
+                                claimed_at = COALESCE(claimed_at, ?5),
                                 updated_at = ?5
                           WHERE id = ?1",
-                        params![id, old.item_id, old.version, old.torrent_hash, at],
+                        params![id, old.item_id, old.version, old.torrent_hash, at, fresh],
                     )?;
                 }
                 tx.commit()?;
@@ -809,14 +1013,20 @@ impl RevisionStore {
                     out.insert(key, mark);
                 }
                 // The old video's item, and every item of the torrent removed
-                // with it (the same release through another channel).
+                // with it (the same release through another channel). A
+                // replacement received again after it ended with no video
+                // ([`RevisionStore::reopen`]) went ahead before
+                // ([`Revision::claimed_at`]).
                 let mut stmt = c.prepare(
                     "SELECT h.identity_key FROM video_revisions r
                        JOIN history_items h
                          ON h.id = r.old_item_id
                          OR (r.old_torrent_hash IS NOT NULL AND h.torrent_hash = r.old_torrent_hash)
+                         OR (r.superseded_hash IS NOT NULL AND h.torrent_hash = r.superseded_hash)
                       WHERE h.channel_id = ?1
-                        AND r.state IN ('removing', 'removed', 'done')",
+                        AND (r.state IN ('removing', 'removed', 'done', 'abandoned')
+                             OR (r.state IN ('receiving', 'verified')
+                                 AND r.claimed_at IS NOT NULL))",
                 )?;
                 let mut rows = stmt.query([&channel_id])?;
                 while let Some(row) = rows.next()? {
@@ -831,7 +1041,9 @@ impl RevisionStore {
     }
 
     /// The releases that replaced (or are replacing) a video: their lower
-    /// revisions are not received into the folder again.
+    /// revisions are not received into the folder again. Not one abandoned
+    /// ([`RevisionState::Abandoned`]), whose video never took the episode
+    /// name: a lower revision may still replace the video there.
     pub async fn replacements(&self) -> Result<Vec<Replacement>> {
         self.db
             .run(|c| {
@@ -874,7 +1086,8 @@ impl RevisionStore {
             .run(|c| {
                 query(
                     c,
-                    "WHERE state IN ('receiving', 'verified', 'removing', 'removed', 'failed')",
+                    "WHERE state IN ('receiving', 'verified', 'removing', 'removed', 'failed')
+                        OR (state = 'abandoned' AND reason IS NOT NULL)",
                     &[],
                 )
             })
@@ -907,10 +1120,14 @@ impl RevisionStore {
     /// Writes `step` on the row `id` at `at` if the row is still in the state
     /// `from` the step was decided on, and returns whether it was written. A
     /// row another write moved on since (a higher revision's `done` skipped it
-    /// earlier in the same pass, say) keeps what that write made of it. `done`
+    /// earlier in the same pass, say) keeps what that write made of it, and
+    /// [`Step::Overtaken`] is not written once nothing overtakes the row. `done`
     /// also skips the lower (or equal) revisions of the episode still
     /// receiving or checked: they would replace the video that just took the
-    /// name.
+    /// name. `failed` puts the rows skipped for this one while it was on its
+    /// way ([`Revision::overtaken_by`]) back to `receiving`, with what they
+    /// had checked forgotten: the lower revision replaces the video after
+    /// all, from its first step, unless another higher one is on its way.
     pub async fn advance(
         &self,
         id: i64,
@@ -940,10 +1157,13 @@ impl RevisionStore {
                     Step::Verified {
                         received_name,
                         file_crc,
+                        file_identity,
                     } => tx.execute(
                         "UPDATE video_revisions SET state = 'verified', received_name = ?2,
-                             file_crc = ?3, reason = NULL, updated_at = ?4 WHERE id = ?1",
-                        params![id, received_name, file_crc, at],
+                             file_crc = ?3, file_identity = ?5, new_missing_at = NULL,
+                             reason = NULL, updated_at = ?4
+                          WHERE id = ?1",
+                        params![id, received_name, file_crc, at, file_identity],
                     )?,
                     Step::Removing => tx.execute(
                         "UPDATE video_revisions SET state = 'removing', updated_at = ?2
@@ -958,7 +1178,8 @@ impl RevisionStore {
                     Step::Done => {
                         tx.execute(
                             "UPDATE video_revisions
-                                SET state = 'skipped', reason = ?2, updated_at = ?3
+                                SET state = 'skipped', reason = ?2, overtaken_by = NULL,
+                                    updated_at = ?3
                               WHERE id IN (
                                 SELECT o.id FROM video_revisions o, video_revisions r
                                  WHERE r.id = ?1 AND o.id <> r.id
@@ -976,12 +1197,16 @@ impl RevisionStore {
                     Step::Failed {
                         reason,
                         received_name,
-                    } => tx.execute(
-                        "UPDATE video_revisions SET state = 'failed', reason = ?2,
-                             received_name = COALESCE(?4, received_name), updated_at = ?3
-                          WHERE id = ?1",
-                        params![id, reason, at, received_name],
-                    )?,
+                    } => {
+                        let written = tx.execute(
+                            "UPDATE video_revisions SET state = 'failed', reason = ?2,
+                                 received_name = COALESCE(?4, received_name), updated_at = ?3
+                              WHERE id = ?1",
+                            params![id, reason, at, received_name],
+                        )?;
+                        revive_overtaken(&tx, id, at)?;
+                        written
+                    }
                     Step::Cleared => tx.execute(
                         "UPDATE video_revisions SET state = 'cleared', updated_at = ?2
                           WHERE id = ?1",
@@ -989,12 +1214,44 @@ impl RevisionStore {
                     )?,
                     Step::Skipped { reason } => tx.execute(
                         "UPDATE video_revisions SET state = 'skipped', reason = ?2,
-                             updated_at = ?3 WHERE id = ?1",
+                             overtaken_by = NULL, updated_at = ?3 WHERE id = ?1",
                         params![id, reason, at],
                     )?,
+                    Step::Overtaken => {
+                        let row = by_id(&tx, id)?.expect("the row whose state was read");
+                        let by = match overtaker(&siblings(&tx, &row)?, &row) {
+                            Overtaker::None => return Ok(false),
+                            Overtaker::InPlace => None,
+                            Overtaker::OnItsWay(by) => Some(by),
+                        };
+                        tx.execute(
+                            "UPDATE video_revisions SET state = 'skipped', reason = ?2,
+                                 overtaken_by = ?3, updated_at = ?4 WHERE id = ?1",
+                            params![id, OVERTAKEN, by, at],
+                        )?
+                    }
+                    Step::Abandoned { reason } => {
+                        let written = tx.execute(
+                            "UPDATE video_revisions SET state = 'abandoned', reason = ?2,
+                                 updated_at = ?3 WHERE id = ?1",
+                            params![id, reason, at],
+                        )?;
+                        revive_overtaken(&tx, id, at)?;
+                        written
+                    }
                     Step::RemovalWaits { reason } => tx.execute(
                         "UPDATE video_revisions SET reason = ?2, updated_at = ?3
                           WHERE id = ?1 AND state = 'removing'",
+                        params![id, reason, at],
+                    )?,
+                    Step::FolderGone => tx.execute(
+                        "UPDATE video_revisions SET reason = ?2, updated_at = ?3
+                          WHERE id = ?1",
+                        params![id, FOLDER_AWAY, at],
+                    )?,
+                    Step::NewMissing { reason } => tx.execute(
+                        "UPDATE video_revisions SET reason = ?2, new_missing_at = ?3,
+                             updated_at = ?3 WHERE id = ?1",
                         params![id, reason, at],
                     )?,
                 };
@@ -1004,16 +1261,83 @@ impl RevisionStore {
             .await
     }
 
+    /// A look at the new video of the row `id` found it, or found its folder
+    /// away: an earlier miss ([`Step::NewMissing`]) no longer counts toward
+    /// two in a row. A `reason` that was the miss's (`miss_reason`) goes with
+    /// it. Nothing else of the row changes.
+    pub async fn forget_miss(&self, id: i64, miss_reason: Option<String>) -> Result<()> {
+        self.db
+            .run(move |c| {
+                c.execute(
+                    "UPDATE video_revisions
+                        SET new_missing_at = NULL,
+                            reason = CASE WHEN reason = ?2 THEN NULL ELSE reason END
+                      WHERE id = ?1 AND new_missing_at IS NOT NULL",
+                    params![id, miss_reason],
+                )?;
+                Ok(())
+            })
+            .await
+    }
+
+    /// The new video of the row `id`, `verified` or `removing`, was told by
+    /// its CRC32 after its identity had changed (a remount, a copy put
+    /// back): `file_identity` is the identity it has now, which the next
+    /// look compares instead of reading the whole file again.
+    pub async fn keep_identity(&self, id: i64, file_identity: String) -> Result<()> {
+        self.db
+            .run(move |c| {
+                c.execute(
+                    "UPDATE video_revisions SET file_identity = ?2
+                      WHERE id = ?1 AND state IN ('verified', 'removing')",
+                    params![id, file_identity],
+                )?;
+                Ok(())
+            })
+            .await
+    }
+
+    /// A look at the row `id` found its folder there (`away` `None`), or away
+    /// at `away`: [`Revision::folder_away_since`] is the first look of a run
+    /// that found it away. A folder found there takes [`FOLDER_AWAY`] away
+    /// too; the next look says why the row waits, if it does.
+    pub async fn folder_looked_at(&self, id: i64, away: Option<Millis>) -> Result<()> {
+        self.db
+            .run(move |c| {
+                match away {
+                    Some(at) => c.execute(
+                        "UPDATE video_revisions SET folder_away_since = ?2
+                          WHERE id = ?1 AND folder_away_since IS NULL",
+                        params![id, at],
+                    )?,
+                    None => c.execute(
+                        "UPDATE video_revisions
+                            SET folder_away_since = NULL,
+                                reason = CASE WHEN reason = ?2 THEN NULL ELSE reason END
+                          WHERE id = ?1 AND folder_away_since IS NOT NULL",
+                        params![id, FOLDER_AWAY],
+                    )?,
+                };
+                Ok(())
+            })
+            .await
+    }
+
     /// The `받기 실패` of replacements (see [`Revision::is_failure`]), newest first.
     pub async fn failures(&self) -> Result<Vec<Revision>> {
         self.db
             .run(|c| {
-                let mut rows = query(
+                let mut rows: Vec<Revision> = query(
                     c,
                     "WHERE state = 'failed'
-                        OR (state IN ('removed', 'removing') AND reason IS NOT NULL)",
+                        OR (state IN ('receiving', 'verified', 'removed', 'removing',
+                                      'abandoned')
+                            AND reason IS NOT NULL)",
                     &[],
-                )?;
+                )?
+                .into_iter()
+                .filter(Revision::is_failure)
+                .collect();
                 rows.sort_by_key(|r| std::cmp::Reverse((r.updated_at, r.id)));
                 Ok(rows)
             })
@@ -1028,7 +1352,8 @@ impl RevisionStore {
                 let prefix = format!("{}/", work_folder.trim_end_matches('/'));
                 let rows = query(
                     c,
-                    "WHERE state IN ('done', 'failed', 'removed', 'removing')
+                    "WHERE state IN ('done', 'failed', 'receiving', 'verified', 'removed',
+                                     'removing', 'abandoned')
                        AND substr(folder, 1, length(?1)) = ?1",
                     &[&prefix],
                 )?;

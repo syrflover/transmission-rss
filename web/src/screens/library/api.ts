@@ -120,7 +120,7 @@ export interface FailureFile {
   role: "old" | "new";
   /** Relative to the work folder; `null` for a new video that was not received. */
   path: string | null;
-  state: "kept" | "removed" | "received_name" | "not_received";
+  state: "kept" | "removed" | "received_name" | "missing" | "not_received";
 }
 
 /** A replacement of the episode's video that failed (`받기 실패`), with why and both files. */

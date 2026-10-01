@@ -59,6 +59,9 @@
 //!    time ([`RevisionStore::claim`](crate::store::revisions::RevisionStore::claim));
 //!    a replacement whose revision is lower than one in place, or than one
 //!    on its way, is skipped instead and its video keeps its received name.
+//!    If the one on its way then fails, the skipped one starts over from
+//!    step 1 on a later cycle and replaces the video after all
+//!    ([`Step::Overtaken`]).
 //!    What is at the episode name is looked at again just before: if it is the
 //!    single file of a torrent trss added (a `received` record in history) of
 //!    a lower revision of the release, that torrent is removed with its data
@@ -67,7 +70,10 @@
 //!    one of the video decided about. Anything else (a batch, a torrent trss
 //!    did not add or of another release, a file two torrents hold, a file that
 //!    changed) is left alone and the replacement fails. A failure here leaves
-//!    the old video in place.
+//!    the old video in place. Right before the removal the new video is
+//!    looked at again too: unless its received name still holds the file
+//!    whose CRC32 was read (its identity, kept at step 1), nothing is removed
+//!    and the replacement waits, and ends after a second such look.
 //! 3. **The new video takes the episode name**, by Transmission's rename (or,
 //!    for a torrent that is gone, a rename on disk that never replaces), and
 //!    only while that name is free. Until it goes through, the row says why
@@ -94,9 +100,11 @@ use super::{commands::receive_once::derived_name, cycle::MAX_REASON_CHARS, Cycle
 use crate::{
     revision::{crc_text, file_crc32_identified, FileIdentity, Release},
     store::{
-        history::{HistoryResult, Millis},
+        channels::RuleState,
+        history::{HistoryItem, HistoryResult, Millis},
         revisions::{
-            Claim, OldVideo, Replacement, Revision, RevisionState, RowWrite, Step, OVERTAKEN,
+            Claim, OldVideo, Replacement, Revision, RevisionState, RowWrite, Step, FOLDER_AWAY,
+            FOLDER_GONE_AFTER, OLD_FILE_WATCHED,
         },
     },
     transmission::{get_torrent, torrent_places, Redactor, TorrentPlace},
@@ -327,6 +335,18 @@ pub async fn plan(ctx: &CycleContext, item: &Selected<'_>, listing: &Listing) ->
     let Some(episode_name) = episode_name(item.save_path, item.title, item.episode) else {
         return Plan::Normal;
     };
+    plan_at(ctx, item, release, episode_name, listing).await
+}
+
+/// [`plan`] for the revision `release` of the episode file `episode_name` in
+/// `item.save_path`.
+async fn plan_at(
+    ctx: &CycleContext,
+    item: &Selected<'_>,
+    release: Release,
+    episode_name: String,
+    listing: &Listing,
+) -> Plan {
     let target = item.save_path.join(&episode_name);
     match std::fs::symlink_metadata(&target) {
         Ok(meta) if meta.is_file() => {}
@@ -470,6 +490,41 @@ pub async fn plan(ctx: &CycleContext, item: &Selected<'_>, listing: &Listing) ->
     }
 }
 
+/// Whether the video at the episode's place of `row` is already `item`'s
+/// revision or a higher one of its release, told the way [`plan`] tells it
+/// when a cycle decides. The replacement rows alone do not say so: a higher
+/// revision that found the episode name free was received as an ordinary
+/// item, with no row. `다시 받기` of `item` is refused then, since its
+/// replacement could replace nothing. `Err` when Transmission or the disk
+/// could not be read.
+pub async fn holds_same_or_higher(
+    ctx: &CycleContext,
+    item: &HistoryItem,
+    row: &Revision,
+) -> Result<bool, String> {
+    let selected = Selected {
+        channel_id: &item.channel_id,
+        identity_key: &item.identity_key,
+        title: &item.title,
+        save_path: Path::new(&row.folder),
+        episode: 0,
+    };
+    let release = Release::parse(&item.title);
+    let plan = plan_at(
+        ctx,
+        &selected,
+        release,
+        row.episode_name.clone(),
+        &Listing::new(),
+    )
+    .await;
+    match plan {
+        Plan::Skip(..) => Ok(true),
+        Plan::Later(why) => Err(why),
+        Plan::Normal | Plan::Replace(_) | Plan::Unknown(..) => Ok(false),
+    }
+}
+
 /// What `다시 받기` of the `버전 미상` item titled `title`, received as the
 /// torrent `hash`, writes on its row with the item's result: its replacement
 /// goes ahead, checking the CRC32 only when the name carries one. A row past
@@ -505,6 +560,10 @@ const ELSEWHERE: &str =
 const NOT_COMPLETE: &str = "새 영상 파일을 다 받지 않았어요. 이전 영상은 그대로 있어요.";
 const EMPTY: &str = "받은 새 영상 파일이 비어 있어서 대체하지 않았어요. 이전 영상은 그대로 있어요.";
 const NEW_FILE_GONE: &str = "받은 새 영상 파일이 없어요. 이전 영상은 그대로 있어요.";
+/// Why a replacement received again after it removed the old video (and
+/// ended with no video left) failed before its video was received: the
+/// torrent is whole by Transmission's account, and no file is there.
+const NOT_THERE_AGAIN: &str = "다시 받은 새 영상의 토렌트는 다 받았다는데 파일이 없어요. 다시 받기로 받으면 Transmission이 데이터를 다시 확인해요. 회차 이름에 영상이 없어요.";
 const UNKNOWN_TORRENT: &str = "새 영상의 토렌트를 알 수 없어요. 이전 영상은 그대로 있어요.";
 const NAME_TAKEN_BY_NEW: &str =
     "새 영상의 토렌트가 이미 회차 이름의 파일을 가리키고 있어서 대체하지 않았어요. 두 파일을 그대로 뒀어요.";
@@ -520,6 +579,15 @@ const DESTINATION_TAKEN: &str =
     "회차 이름에 다른 파일이 있어서 새 영상의 이름을 바꾸지 않았어요. 그 이름이 비면 다시 바꿔요.";
 const NEW_FILE_MISSING: &str = "받은 새 영상 파일을 찾지 못해 회차 이름을 붙이지 못했어요.";
 const OLD_FILE_LEFT: &str = "이전 영상의 토렌트는 Transmission에서 지웠지만 회차 이름의 파일이 아직 있어요. 그 파일이 없어지면 새 영상에 회차 이름을 붙여요.";
+const NEW_GONE_OLD_LEFT: &str = "이전 영상의 토렌트는 Transmission에서 지웠지만 회차 이름의 파일이 아직 있고, 받은 새 영상 파일은 없어요. 다음 확인에도 없으면 이 대체를 끝내요.";
+const NEW_UNCHECKED_OLD_KEPT: &str = "받은 새 영상 파일이 없거나 CRC32를 확인한 파일과 달라서 이전 영상을 지우지 않았어요. 다음 확인에도 그러면 이 대체를 끝내요.";
+/// Why a replacement whose new video is gone was ended after the old video
+/// was removed: the episode has no video under its name.
+const NO_VIDEO_LEFT: &str = "이전 영상을 지운 뒤 받은 새 영상 파일이 이어진 두 번의 확인에서 모두 없어서 대체를 끝냈어요. 회차 이름에 영상이 없어요.";
+/// Why a replacement that ended beside the old video's file left after its
+/// torrent was removed ([`OLD_FILE_WATCHED`]) became a failure: that file is
+/// gone too.
+const OLD_FILE_GONE_TOO: &str = "이전 영상의 토렌트를 지운 뒤 받은 새 영상 파일이 없어져서 대체를 끝냈고, 회차 이름에 남아 있던 이전 영상 파일도 없어졌어요. 회차 이름에 영상이 없어요.";
 
 /// Carries every replacement under way as far as it goes now. `at` stamps
 /// what is written.
@@ -568,6 +636,12 @@ fn cleaned(step: Step, redactor: &Redactor) -> Step {
         Step::Skipped { reason } => Step::Skipped {
             reason: clean(&reason, redactor),
         },
+        Step::Abandoned { reason } => Step::Abandoned {
+            reason: reason.map(|reason| clean(&reason, redactor)),
+        },
+        Step::NewMissing { reason } => Step::NewMissing {
+            reason: clean(&reason, redactor),
+        },
         other => other,
     }
 }
@@ -579,16 +653,21 @@ async fn drive(
     redactor: &Redactor,
     listing: &Listing,
 ) {
+    let mut first = folder_watch(ctx, &mut row, at).await;
     loop {
-        let next = match row.state {
-            RevisionState::Receiving => received(ctx, &row).await,
-            RevisionState::Verified | RevisionState::Removing => {
-                remove_old(ctx, &mut row, at, listing).await
-            }
-            RevisionState::Removed => rename(ctx, &row, listing).await,
-            RevisionState::Failed if row.not_received() => recover(ctx, &row).await,
-            RevisionState::Failed => cleared(&row),
-            _ => return,
+        let next = match first.take() {
+            Some(next) => next,
+            None => match row.state {
+                RevisionState::Receiving => received(ctx, &row).await,
+                RevisionState::Verified | RevisionState::Removing => {
+                    remove_old(ctx, &mut row, at, listing).await
+                }
+                RevisionState::Removed => rename(ctx, &mut row, listing).await,
+                RevisionState::Failed if row.not_received() => recover(ctx, &row).await,
+                RevisionState::Failed => cleared(&row),
+                RevisionState::Abandoned if row.reason.is_some() => ended_watch(ctx, &row).await,
+                _ => return,
+            },
         };
         let step = match next {
             Next::Step(step) => cleaned(step, redactor),
@@ -643,10 +722,12 @@ async fn drive(
             Step::Verified {
                 received_name,
                 file_crc,
+                file_identity,
             } => {
                 row.state = RevisionState::Verified;
                 row.received_name = Some(received_name);
                 row.file_crc = Some(file_crc);
+                row.file_identity = Some(file_identity);
             }
             Step::Removing => row.state = RevisionState::Removing,
             Step::Removed { reason } => {
@@ -657,10 +738,17 @@ async fn drive(
                     return;
                 }
             }
+            Step::FolderGone => {
+                row.reason = Some(FOLDER_AWAY.to_owned());
+                return;
+            }
             Step::Done
             | Step::Failed { .. }
             | Step::Cleared
             | Step::Skipped { .. }
+            | Step::Overtaken
+            | Step::Abandoned { .. }
+            | Step::NewMissing { .. }
             | Step::RemovalWaits { .. } => return,
         }
     }
@@ -668,16 +756,71 @@ async fn drive(
 
 /// Whether `row` failed because its download stopped before the new video
 /// was received: its torrent left Transmission, or Transmission reported an
-/// error on it. `다시 받기` receives such a revision again (and starts its
-/// torrent when Transmission still has it); the other failures before the
+/// error on it, or, received again after it removed the old video, it was
+/// whole with no file ([`NOT_THERE_AGAIN`]). `다시 받기` receives such a
+/// revision again (and starts its torrent when Transmission still has it,
+/// [`checked_on_retry`]); the other failures before the
 /// video was received (several files, another folder, the episode's own
 /// file) would end the same way again.
 pub fn stopped_before_received(row: &Revision) -> bool {
     row.not_received()
-        && row
-            .reason
-            .as_deref()
-            .is_some_and(|reason| reason == RECEIVE_STOPPED || reason.starts_with(LOCAL_ERROR))
+        && row.reason.as_deref().is_some_and(|reason| {
+            reason == RECEIVE_STOPPED
+                || reason.starts_with(LOCAL_ERROR)
+                || reason == NOT_THERE_AGAIN
+        })
+}
+
+/// Whether `다시 받기` of `row` has Transmission check the torrent's data
+/// before it starts it: a replacement whose video went missing after
+/// Transmission had it all ([`ended_with_no_video`], or one received again
+/// that found no file, [`NOT_THERE_AGAIN`]).
+pub fn checked_on_retry(row: &Revision) -> bool {
+    ended_with_no_video(row)
+        || (row.not_received() && row.reason.as_deref() == Some(NOT_THERE_AGAIN))
+}
+
+/// Whether the replacement of `row` ended after the old video was removed
+/// with no video left under the episode name (an abandoned
+/// [`Revision::is_failure`]).
+pub fn ended_with_no_video(row: &Revision) -> bool {
+    row.state == RevisionState::Abandoned && row.is_failure()
+}
+
+/// Whether the received name of `row`, a replacement that ended with no video
+/// left, holds nothing but its checked video: no file, or the file whose
+/// identity was kept, or one whose CRC32 is the one read then. Any other
+/// file there would be taken by Transmission, checking the torrent, for the
+/// torrent's own data and written over. `Err` when that cannot be told now
+/// (the folder is away, the file cannot be read).
+pub async fn received_name_free(row: &Revision) -> Result<bool, String> {
+    folder_there(row)?;
+    let Some(name) = &row.received_name else {
+        return Ok(true);
+    };
+    let path = Path::new(&row.folder).join(name);
+    let now = match FileIdentity::at(&path) {
+        Ok(now) => now,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(true),
+        Err(err) => return Err(format!("cannot look at {}: {err}", path.display())),
+    };
+    if row.file_identity.as_deref().and_then(FileIdentity::parse) == Some(now) {
+        return Ok(true);
+    }
+    match crc_of(path.clone()).await {
+        Ok(crc) => Ok(row.file_crc.as_deref() == Some(crc_text(crc).as_str())),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(true),
+        Err(err) => Err(format!("cannot read {}: {err}", path.display())),
+    }
+}
+
+/// Whether `다시 받기` receives the revision of `row` again: its download
+/// stopped before it was received ([`stopped_before_received`]), or its
+/// replacement ended with no video left ([`ended_with_no_video`]), which
+/// Transmission checks and downloads again. Either starts over from its
+/// first step, with the same checks.
+pub fn received_again_on_retry(row: &Revision) -> bool {
+    stopped_before_received(row) || ended_with_no_video(row)
 }
 
 fn failed(reason: impl Into<String>, received_name: Option<String>) -> Next {
@@ -736,9 +879,20 @@ async fn received(ctx: &CycleContext, row: &Revision) -> Next {
     if file.length <= 0 {
         return failed(EMPTY, Some(file.name.clone()));
     }
+    if let Err(why) = folder_there(row) {
+        return Next::Later(why);
+    }
     let path = Path::new(&row.folder).join(&file.name);
-    let crc = match crc_of(path.clone()).await {
-        Ok(crc) => crc_text(crc),
+    // The identity of the file read: the old video is removed only while the
+    // received name still holds that file.
+    let (crc, identity) = match identified_crc_of(path.clone()).await {
+        Ok((crc, identity)) => (crc_text(crc), identity),
+        // Received again after it removed the old video: no failure the
+        // person resolves by deleting the new file, as the old video is
+        // gone; it stays one before the video was received, with 다시 받기.
+        Err(err) if err.kind() == io::ErrorKind::NotFound && row.claimed_at.is_some() => {
+            return failed(NOT_THERE_AGAIN, None)
+        }
         Err(err) if err.kind() == io::ErrorKind::NotFound => {
             return failed(NEW_FILE_GONE, Some(file.name.clone()))
         }
@@ -757,6 +911,7 @@ async fn received(ctx: &CycleContext, row: &Revision) -> Next {
     Next::Step(Step::Verified {
         received_name: file.name.clone(),
         file_crc: crc,
+        file_identity: identity.to_text(),
     })
 }
 
@@ -768,34 +923,229 @@ async fn received(ctx: &CycleContext, row: &Revision) -> Next {
 /// removing the old video and naming its new one, is not the old video gone.
 async fn recover(ctx: &CycleContext, row: &Revision) -> Next {
     match ctx.revisions.verdict(row.id).await {
-        Ok(Claim::Overtaken) => return skipped(OVERTAKEN),
+        Ok(Claim::Overtaken) => return Next::Step(Step::Overtaken),
         Ok(_) => {}
         Err(err) => return Next::Later(err.to_string()),
     }
+    if let Err(why) = folder_there(row) {
+        return Next::Later(why);
+    }
     let old = Path::new(&row.folder).join(&row.episode_name);
-    if matches!(exists(&old), Ok(false)) {
-        let rows = match ctx
-            .revisions
-            .of_episode(row.folder.clone(), row.episode_name.clone())
-            .await
-        {
-            Ok(rows) => rows,
-            Err(err) => return Next::Later(err.to_string()),
-        };
-        let naming = rows.iter().any(|other| {
-            other.id != row.id
-                && matches!(
-                    other.state,
-                    RevisionState::Removing | RevisionState::Removed
-                )
-        });
-        if !naming {
-            return Next::Step(Step::Cleared);
+    // A replacement that removed the old video itself left the name empty.
+    if row.claimed_at.is_none() && matches!(exists(&old), Ok(false)) {
+        match another_naming(ctx, row).await {
+            Ok(true) => {}
+            Ok(false) => return Next::Step(Step::Cleared),
+            Err(err) => return Next::Later(err),
         }
     }
     match received(ctx, row).await {
         Next::Wait => Next::Step(Step::Receiving),
         other => other,
+    }
+}
+
+/// Whether another replacement of `row`'s episode removed the file under
+/// the episode name and is on its way to the name (`removing`, `removed`):
+/// the name is empty for it, not for want of a video.
+async fn another_naming(ctx: &CycleContext, row: &Revision) -> Result<bool, String> {
+    let rows = ctx
+        .revisions
+        .of_episode(row.folder.clone(), row.episode_name.clone())
+        .await
+        .map_err(|err| err.to_string())?;
+    Ok(rows.iter().any(|other| {
+        other.id != row.id
+            && matches!(
+                other.state,
+                RevisionState::Removing | RevisionState::Removed
+            )
+    }))
+}
+
+/// The rule's folder of `row`, looked at before its step, which decides
+/// nothing while the folder is away ([`folder_there`]). The first look of a
+/// run that finds it away is kept ([`Revision::folder_away_since`]), and a
+/// look that finds it ends the run. Away for [`FOLDER_GONE_AFTER`], the
+/// folder is not waited for any more: a failure, or a replacement that
+/// ended with no video, is no failure any more, and a replacement under way
+/// (which still holds its torrent) says so ([`Step::FolderGone`]) until the
+/// folder is back. Nothing is removed. A folder away while the row's rule is
+/// archived is no run. `Some` is what to do instead of the row's step.
+async fn folder_watch(ctx: &CycleContext, row: &mut Revision, at: Millis) -> Option<Next> {
+    // An archived rule's work folder is in the archive folder on purpose
+    // (`rule_archive`), not a mount that went away: no run is kept while the
+    // rule is archived, and the row is looked at as before once it is
+    // restored.
+    let watched = match folder_there(row) {
+        Ok(()) => false,
+        Err(_) => match ctx.channels.get_rule(&row.rule_id).await {
+            Ok(rule) => rule.is_none_or(|rule| rule.state != RuleState::Archived),
+            Err(err) => return Some(Next::Later(err.to_string())),
+        },
+    };
+    if !watched {
+        if row.folder_away_since.is_some() {
+            if let Err(err) = ctx.revisions.folder_looked_at(row.id, None).await {
+                return Some(Next::Later(err.to_string()));
+            }
+            row.folder_away_since = None;
+            if row.reason.as_deref() == Some(FOLDER_AWAY) {
+                row.reason = None;
+            }
+        }
+        return None;
+    }
+    let Some(since) = row.folder_away_since else {
+        if let Err(err) = ctx.revisions.folder_looked_at(row.id, Some(at)).await {
+            return Some(Next::Later(err.to_string()));
+        }
+        row.folder_away_since = Some(at);
+        return None;
+    };
+    if at - since < FOLDER_GONE_AFTER {
+        return None;
+    }
+    match row.state {
+        RevisionState::Failed => Some(Next::Step(Step::Cleared)),
+        RevisionState::Abandoned => Some(Next::Step(Step::Abandoned { reason: None })),
+        state if state.holds_torrent() && row.reason.as_deref() != Some(FOLDER_AWAY) => {
+            Some(Next::Step(Step::FolderGone))
+        }
+        _ => None,
+    }
+}
+
+/// The rule's folder of `row` is there. One that is not is a mount that is
+/// away, not videos that were deleted: a file missing from it tells nothing,
+/// and the look is tried again later (`Err` says why).
+fn folder_there(row: &Revision) -> Result<(), String> {
+    let folder = Path::new(&row.folder);
+    match std::fs::metadata(folder) {
+        Ok(meta) if meta.is_dir() => Ok(()),
+        Ok(_) => Err(format!("{} is not a folder", folder.display())),
+        Err(err) => Err(format!("cannot look at {}: {err}", folder.display())),
+    }
+}
+
+/// Whether the row's new video is gone: its received name is not in the
+/// folder. `Err` when the folder is away ([`folder_there`]).
+fn new_video_gone(row: &Revision) -> Result<bool, String> {
+    folder_there(row)?;
+    let folder = Path::new(&row.folder);
+    let Some(name) = &row.received_name else {
+        return Ok(true);
+    };
+    let path = folder.join(name);
+    exists(&path)
+        .map(|present| !present)
+        .map_err(|err| format!("cannot look at {}: {err}", path.display()))
+}
+
+/// A look, with the folder there, found the row's new video missing (or not
+/// the checked one): the first such look waits with `reason`, and the next
+/// one in a row ends the replacement, with `ended` as its reason when that
+/// leaves the episode with no video (see [`Step::Abandoned`]). Looks that
+/// find the video, or the folder away, break the run ([`new_video_found`],
+/// [`folder_away`]).
+fn new_video_missed(row: &Revision, reason: &str, ended: Option<&str>) -> Next {
+    println!(
+        "Revision of {}: the new video {} is missing or not the one checked",
+        row.episode_name,
+        row.received_name.as_deref().unwrap_or("(unknown)")
+    );
+    if row.new_missing_at.is_some() {
+        Next::Step(Step::Abandoned {
+            reason: ended.map(str::to_owned),
+        })
+    } else {
+        Next::Step(Step::NewMissing {
+            reason: reason.to_owned(),
+        })
+    }
+}
+
+/// A look found the row's new video: an earlier miss no longer counts, and
+/// its reason `miss_reason` goes with it.
+async fn new_video_found(
+    ctx: &CycleContext,
+    row: &mut Revision,
+    miss_reason: Option<&str>,
+) -> Result<(), Next> {
+    if row.new_missing_at.is_none() {
+        return Ok(());
+    }
+    ctx.revisions
+        .forget_miss(row.id, miss_reason.map(str::to_owned))
+        .await
+        .map_err(|err| Next::Later(err.to_string()))?;
+    row.new_missing_at = None;
+    if row.reason.is_some() && row.reason.as_deref() == miss_reason {
+        row.reason = None;
+    }
+    Ok(())
+}
+
+/// A look found the row's folder away (`why`): it decides nothing, and an
+/// earlier miss no longer counts toward two in a row; its reason
+/// `miss_reason` goes with it, as when the video is found.
+async fn folder_away(
+    ctx: &CycleContext,
+    row: &mut Revision,
+    why: String,
+    miss_reason: Option<&str>,
+) -> Next {
+    match new_video_found(ctx, row, miss_reason).await {
+        Ok(()) => Next::Later(why),
+        Err(next) => next,
+    }
+}
+
+/// What a look at the row's new video, before the old video is removed for
+/// it, found.
+enum NewLook {
+    /// The file whose CRC32 was checked is under its received name; the
+    /// identity it has now.
+    Kept(FileIdentity),
+    /// It is not there, or another video is.
+    Missed,
+    /// The rule's folder is away: nothing is decided.
+    FolderAway(String),
+    /// The file could not be looked at or read now.
+    Unread(String),
+}
+
+/// Whether the row's new video is still the file whose CRC32 was checked:
+/// under its received name in the folder, with the identity kept when it was
+/// read ([`Revision::file_identity`]). An identity that differs (a remount
+/// may give the same file another device or inode, and a copy put back
+/// another inode) is no answer by itself: the file is read again, and it is
+/// the checked video when its CRC32 is the one read then.
+async fn new_video_kept(row: &Revision) -> NewLook {
+    match new_video_gone(row) {
+        Ok(false) => {}
+        Ok(true) => return NewLook::Missed,
+        Err(why) => return NewLook::FolderAway(why),
+    }
+    let Some(name) = &row.received_name else {
+        return NewLook::Missed;
+    };
+    let path = Path::new(&row.folder).join(name);
+    let now = match FileIdentity::at(&path) {
+        Ok(now) => now,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return NewLook::Missed,
+        Err(err) => return NewLook::Unread(format!("cannot look at {}: {err}", path.display())),
+    };
+    if row.file_identity.as_deref().and_then(FileIdentity::parse) == Some(now) {
+        return NewLook::Kept(now);
+    }
+    match identified_crc_of(path.clone()).await {
+        Ok((crc, read)) if row.file_crc.as_deref() == Some(crc_text(crc).as_str()) => {
+            NewLook::Kept(read)
+        }
+        Ok(_) => NewLook::Missed,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => NewLook::Missed,
+        Err(err) => NewLook::Unread(format!("cannot read {}: {err}", path.display())),
     }
 }
 
@@ -817,9 +1167,13 @@ async fn remove_old(ctx: &CycleContext, row: &mut Revision, at: Millis, listing:
         match ctx.revisions.verdict(row.id).await {
             Ok(Claim::Go) => {}
             Ok(Claim::Wait) => return Next::Wait,
-            Ok(Claim::Overtaken) => return skipped(OVERTAKEN),
+            Ok(Claim::Overtaken) => return Next::Step(Step::Overtaken),
             Err(err) => return Next::Later(err.to_string()),
         }
+    }
+    // A folder that is away tells nothing about the old video either.
+    if let Err(why) = folder_there(row) {
+        return folder_away(ctx, row, why, Some(NEW_UNCHECKED_OLD_KEPT)).await;
     }
     let old = Path::new(&row.folder).join(&row.episode_name);
     let present = match exists(&old) {
@@ -829,8 +1183,11 @@ async fn remove_old(ctx: &CycleContext, row: &mut Revision, at: Millis, listing:
     // The old torrent was asked to go (perhaps with no answer): once
     // Transmission no longer holds it, its file is the old video's data,
     // which Transmission deletes after it answers, or could not delete. It is
-    // not looked at as an old video again (the torrent that told its revision
-    // is gone); the replacement waits, as removing, for the file to go.
+    // is not looked at as an old video again (the torrent that told its revision
+    // is gone); the replacement waits, as removing, for the file to go. If
+    // the new video is gone instead (the person deleted it, keeping the old
+    // one), the replacement ends once a second look finds it gone too, and
+    // watches the old file it left ([`OLD_FILE_WATCHED`]).
     if let (true, RevisionState::Removing, Some(hash)) =
         (present, row.state, row.old_torrent_hash.as_ref())
     {
@@ -838,13 +1195,53 @@ async fn remove_old(ctx: &CycleContext, row: &mut Revision, at: Millis, listing:
         match get_torrent(&mut transmission, hash).await {
             Ok(Some(_)) => {}
             Ok(None) => {
-                return Next::Step(Step::RemovalWaits {
-                    reason: OLD_FILE_LEFT.to_owned(),
-                })
+                return match new_video_gone(row) {
+                    Ok(false) => match new_video_found(ctx, row, None).await {
+                        Ok(()) => Next::Step(Step::RemovalWaits {
+                            reason: OLD_FILE_LEFT.to_owned(),
+                        }),
+                        Err(next) => next,
+                    },
+                    Ok(true) => new_video_missed(row, NEW_GONE_OLD_LEFT, Some(OLD_FILE_WATCHED)),
+                    // The reason stays: the old file is still there to wait for.
+                    Err(why) => folder_away(ctx, row, why, None).await,
+                };
             }
             Err(err) => return Next::Later(err.to_string()),
         }
     }
+    // The new video first, before the old one is looked at (which may read
+    // a whole file): it must still be the file whose CRC32 was checked, or
+    // the removal would leave the episode with neither. Not that file on two
+    // looks in a row (one per cycle), the replacement ends; the first may be
+    // a mount that was away for a moment. Only an old video still there is
+    // removed: one gone already goes on to the rename, which looks again.
+    let new_now = if present {
+        match new_video_kept(row).await {
+            NewLook::Kept(now) => {
+                if let Err(next) = new_video_found(ctx, row, Some(NEW_UNCHECKED_OLD_KEPT)).await {
+                    return next;
+                }
+                // Told by its CRC32: the identity it has now is the one the
+                // next look compares, so the file is not read on every look.
+                let text = now.to_text();
+                if row.file_identity.as_deref() != Some(text.as_str()) {
+                    if let Err(err) = ctx.revisions.keep_identity(row.id, text.clone()).await {
+                        return Next::Later(err.to_string());
+                    }
+                    row.file_identity = Some(text);
+                }
+                Some(now)
+            }
+            NewLook::Missed => return new_video_missed(row, NEW_UNCHECKED_OLD_KEPT, None),
+            NewLook::FolderAway(why) => {
+                return folder_away(ctx, row, why, Some(NEW_UNCHECKED_OLD_KEPT)).await
+            }
+            NewLook::Unread(why) => return Next::Later(why),
+        }
+    } else {
+        None
+    };
     let (found, identity) = if present {
         match old_video(ctx, row, &old, listing).await {
             Ok(found) => found,
@@ -861,7 +1258,7 @@ async fn remove_old(ctx: &CycleContext, row: &mut Revision, at: Millis, listing:
     match ctx.revisions.claim(row.id, at, found.clone()).await {
         Ok(Claim::Go) => row.state = RevisionState::Removing,
         Ok(Claim::Wait) => return Next::Wait,
-        Ok(Claim::Overtaken) => return skipped(OVERTAKEN),
+        Ok(Claim::Overtaken) => return Next::Step(Step::Overtaken),
         Err(err) => return Next::Later(err.to_string()),
     }
     if !present {
@@ -880,6 +1277,18 @@ async fn remove_old(ctx: &CycleContext, row: &mut Revision, at: Millis, listing:
         }
         (_, Err(err)) => return Next::Later(format!("cannot look at {}: {err}", old.display())),
         _ => return failed(OLD_CHANGED, None),
+    }
+    // And the new video must still be the file looked at first.
+    if let (Some(seen), Some(name)) = (new_now, &row.received_name) {
+        let new = Path::new(&row.folder).join(name);
+        match FileIdentity::at(&new) {
+            Ok(now) if now == seen => {}
+            Ok(_) => return new_video_missed(row, NEW_UNCHECKED_OLD_KEPT, None),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                return new_video_missed(row, NEW_UNCHECKED_OLD_KEPT, None)
+            }
+            Err(err) => return Next::Later(format!("cannot look at {}: {err}", new.display())),
+        }
     }
 
     match &found.torrent_hash {
@@ -1085,21 +1494,43 @@ async fn new_release(ctx: &CycleContext, row: &Revision) -> Result<Release, Next
 }
 
 /// Step 3: the new video takes the episode name while the name is free.
-async fn rename(ctx: &CycleContext, row: &Revision, listing: &Listing) -> Next {
-    let folder = Path::new(&row.folder);
+async fn rename(ctx: &CycleContext, row: &mut Revision, listing: &Listing) -> Next {
+    let folder = PathBuf::from(&row.folder);
+    let folder = folder.as_path();
     let target = folder.join(&row.episode_name);
     match exists(&target) {
         Ok(false) => {}
         Ok(true) => {
             return match renamed_already(ctx, row, &target).await {
                 Ok(true) => Next::Step(Step::Done),
-                Ok(false) => Next::Step(Step::Removed {
-                    reason: Some(DESTINATION_TAKEN.to_owned()),
-                }),
+                Ok(false) => {
+                    // The received file there is a look that found it.
+                    if matches!(new_video_gone(row), Ok(false)) {
+                        if let Err(next) = new_video_found(ctx, row, Some(NEW_FILE_MISSING)).await {
+                            return next;
+                        }
+                    }
+                    Next::Step(Step::Removed {
+                        reason: Some(DESTINATION_TAKEN.to_owned()),
+                    })
+                }
                 Err(why) => Next::Later(why),
-            }
+            };
         }
         Err(err) => return Next::Later(format!("cannot look at {}: {err}", target.display())),
+    }
+    // The new video missing on two looks in a row (one per cycle) ends the
+    // replacement: the first may be a mount that was away for a moment. A
+    // look that finds it, or finds the folder away, takes the miss and its
+    // reason away, however far it goes after.
+    match new_video_gone(row) {
+        Ok(false) => {
+            if let Err(next) = new_video_found(ctx, row, Some(NEW_FILE_MISSING)).await {
+                return next;
+            }
+        }
+        Ok(true) => return new_video_missed(row, NEW_FILE_MISSING, Some(NO_VIDEO_LEFT)),
+        Err(why) => return folder_away(ctx, row, why, Some(NEW_FILE_MISSING)).await,
     }
     let Some(received_name) = row.received_name.clone() else {
         return Next::Step(Step::Removed {
@@ -1107,15 +1538,6 @@ async fn rename(ctx: &CycleContext, row: &Revision, listing: &Listing) -> Next {
         });
     };
     let source = folder.join(&received_name);
-    match exists(&source) {
-        Ok(true) => {}
-        Ok(false) => {
-            return Next::Step(Step::Removed {
-                reason: Some(NEW_FILE_MISSING.to_owned()),
-            })
-        }
-        Err(err) => return Next::Later(format!("cannot look at {}: {err}", source.display())),
-    }
 
     let mut transmission = ctx.transmission();
     let torrent = match &row.torrent_hash {
@@ -1207,8 +1629,42 @@ async fn renamed_already(
     }
 }
 
-/// A failure the person resolved: one of the two files is gone.
+/// A replacement that ended with a reason, looked at again (in a folder
+/// that is there). One that ended beside the old video's file left after its
+/// torrent was removed ([`OLD_FILE_WATCHED`]) becomes a failure once that
+/// file goes too: the episode has no video. One that ended with no video
+/// under the episode name is no failure any more once a video is there again
+/// (the person put one, or another release came). A name emptied by another
+/// replacement of the episode that removed the file and is on its way to the
+/// name (`removing`, `removed`) is no failure: that one says so if it fails.
+async fn ended_watch(ctx: &CycleContext, row: &Revision) -> Next {
+    if folder_there(row).is_err() {
+        return Next::Wait;
+    }
+    let held = exists(&Path::new(&row.folder).join(&row.episode_name));
+    let watched = row.reason.as_deref() == Some(OLD_FILE_WATCHED);
+    match (watched, held) {
+        (true, Ok(false)) => {
+            match another_naming(ctx, row).await {
+                Ok(true) => return Next::Wait,
+                Ok(false) => {}
+                Err(err) => return Next::Later(err),
+            }
+            Next::Step(Step::Abandoned {
+                reason: Some(OLD_FILE_GONE_TOO.to_owned()),
+            })
+        }
+        (false, Ok(true)) => Next::Step(Step::Abandoned { reason: None }),
+        _ => Next::Wait,
+    }
+}
+
+/// A failure the person resolved: one of the two files is gone (from a
+/// folder that is there).
 fn cleared(row: &Revision) -> Next {
+    if folder_there(row).is_err() {
+        return Next::Wait;
+    }
     let folder = Path::new(&row.folder);
     let old_gone = matches!(exists(&folder.join(&row.episode_name)), Ok(false));
     let new_gone = row

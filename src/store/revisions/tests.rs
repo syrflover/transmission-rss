@@ -257,6 +257,7 @@ async fn verified(store: &RevisionStore, id: i64) {
     let step = Step::Verified {
         received_name: format!("v{id}.mkv"),
         file_crc: "1A2B3C4D".into(),
+        file_identity: "1:2:3:4:5:6:7".into(),
     };
     store
         .advance(id, 15, RevisionState::Receiving, step)
@@ -327,6 +328,150 @@ async fn one_replacement_of_an_episode_removes_the_old_video_at_a_time() {
         assert_eq!(row.state, RevisionState::Skipped);
         assert_eq!(row.reason.as_deref(), Some(OVERTAKEN));
     }
+}
+
+/// A lower revision skipped for a higher one on its way keeps that row, and
+/// goes back to its first step when that row fails; one skipped for another
+/// reason, or for a replacement that is done, does not.
+#[tokio::test]
+async fn a_revision_skipped_for_a_higher_one_comes_back_when_that_one_fails() {
+    let (_dir, db) = db().await;
+    let store = RevisionStore::new(db.clone());
+    let v2 = store
+        .create(10, of_episode(item(&db, "14v2").await, "14v2", 2))
+        .await
+        .unwrap();
+    let v3 = store
+        .create(10, of_episode(item(&db, "14v3").await, "14v3", 3))
+        .await
+        .unwrap();
+    let v4 = store
+        .create(10, of_episode(item(&db, "14v4").await, "14v4", 4))
+        .await
+        .unwrap();
+    let other = store
+        .create(10, of_episode(item(&db, "14v2b").await, "14v2b", 2))
+        .await
+        .unwrap();
+    verified(&store, v2.id).await;
+    verified(&store, other.id).await;
+
+    // Skipped for the highest revision on its way.
+    assert!(store
+        .advance(v2.id, 20, RevisionState::Verified, Step::Overtaken)
+        .await
+        .unwrap());
+    let row = store.by_item(v2.item_id).await.unwrap().unwrap();
+    assert_eq!(row.state, RevisionState::Skipped);
+    assert_eq!(row.reason.as_deref(), Some(OVERTAKEN));
+    assert_eq!(row.overtaken_by, Some(v4.id));
+    let skip = Step::Skipped {
+        reason: "the folder holds it".into(),
+    };
+    assert!(store
+        .advance(other.id, 20, RevisionState::Verified, skip)
+        .await
+        .unwrap());
+    // `14v3` is skipped for `14v4` too.
+    assert!(store
+        .advance(v3.id, 20, RevisionState::Receiving, Step::Overtaken)
+        .await
+        .unwrap());
+
+    // `14v4` fails: the rows skipped for it start over, the other one stays.
+    let failed = Step::Failed {
+        reason: "stopped".into(),
+        received_name: None,
+    };
+    assert!(store
+        .advance(v4.id, 30, RevisionState::Receiving, failed.clone())
+        .await
+        .unwrap());
+    for id in [v2.item_id, v3.item_id] {
+        let row = store.by_item(id).await.unwrap().unwrap();
+        assert_eq!(row.state, RevisionState::Receiving, "{row:?}");
+        assert_eq!(
+            (
+                row.reason,
+                row.received_name,
+                row.file_crc,
+                row.overtaken_by
+            ),
+            (None, None, None, None)
+        );
+        assert_eq!(row.updated_at, 30);
+    }
+    let row = store.by_item(other.item_id).await.unwrap().unwrap();
+    assert_eq!(row.state, RevisionState::Skipped);
+
+    // `14v2` is overtaken again, now by `14v3`; with nothing overtaking it
+    // the skip is not written.
+    assert!(store
+        .advance(v2.id, 40, RevisionState::Receiving, Step::Overtaken)
+        .await
+        .unwrap());
+    assert_eq!(
+        store
+            .by_item(v2.item_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .overtaken_by,
+        Some(v3.id)
+    );
+    assert!(store
+        .advance(v3.id, 50, RevisionState::Receiving, failed)
+        .await
+        .unwrap());
+    assert!(!store
+        .advance(v2.id, 60, RevisionState::Receiving, Step::Overtaken)
+        .await
+        .unwrap());
+    assert_eq!(
+        store.by_item(v2.item_id).await.unwrap().unwrap().state,
+        RevisionState::Receiving
+    );
+}
+
+/// A revision skipped for a replacement that is done does not come back.
+#[tokio::test]
+async fn a_revision_skipped_for_a_done_one_is_not_bound_to_it() {
+    let (_dir, db) = db().await;
+    let store = RevisionStore::new(db.clone());
+    let v2 = store
+        .create(10, of_episode(item(&db, "14v2").await, "14v2", 2))
+        .await
+        .unwrap();
+    let v3 = store
+        .create(10, of_episode(item(&db, "14v3").await, "14v3", 3))
+        .await
+        .unwrap();
+    for (from, step) in [
+        (RevisionState::Receiving, Step::Removing),
+        (RevisionState::Removing, Step::Removed { reason: None }),
+        (RevisionState::Removed, Step::Done),
+    ] {
+        assert!(store.advance(v3.id, 20, from, step).await.unwrap());
+    }
+    let row = store.by_item(v2.item_id).await.unwrap().unwrap();
+    assert_eq!(
+        (row.state, row.overtaken_by),
+        (RevisionState::Skipped, None)
+    );
+    // Written by `Overtaken` too, the skip is bound to no row.
+    let v2b = store
+        .create(10, of_episode(item(&db, "14v2b").await, "14v2b", 2))
+        .await
+        .unwrap();
+    assert!(store
+        .advance(v2b.id, 30, RevisionState::Receiving, Step::Overtaken)
+        .await
+        .unwrap());
+    let row = store.by_item(v2b.item_id).await.unwrap().unwrap();
+    assert_eq!(
+        (row.state, row.overtaken_by),
+        (RevisionState::Skipped, None)
+    );
 }
 
 #[tokio::test]
@@ -540,4 +685,224 @@ async fn every_item_of_the_removed_torrent_is_superseded() {
         "[SubsPlease] Show - 14v2 (1080p).mkv"
     );
     assert_eq!(replacements[0].new_version, 2);
+}
+
+/// A replacement that removed the old torrent and then lost its new video
+/// ends as abandoned: it holds up no other replacement of the episode or
+/// lower revision of its release, is no failure and no longer acted on, and
+/// the old release stays superseded.
+#[tokio::test]
+async fn an_abandoned_replacement_keeps_the_old_release_superseded_and_holds_nothing_up() {
+    let (_dir, db) = db().await;
+    let store = RevisionStore::new(db.clone());
+    let v1 = item(&db, "14").await;
+    let v2 = store
+        .create(10, of_episode(item(&db, "14v2").await, "14v2", 2))
+        .await
+        .unwrap();
+    verified(&store, v2.id).await;
+    let old = OldVideo {
+        item_id: Some(v1),
+        version: Some(1),
+        torrent_hash: Some("hash-14".into()),
+    };
+    assert_eq!(store.claim(v2.id, 20, old).await.unwrap(), Claim::Go);
+    // `14v3`, decided while the old file was still there, waits for it.
+    let v3 = store
+        .create(25, of_episode(item(&db, "14v3").await, "14v3", 3))
+        .await
+        .unwrap();
+    verified(&store, v3.id).await;
+    assert_eq!(store.verdict(v3.id).await.unwrap(), Claim::Wait);
+
+    let step = Step::Abandoned { reason: None };
+    assert!(store
+        .advance(v2.id, 30, RevisionState::Removing, step)
+        .await
+        .unwrap());
+    let row = store.by_item(v2.item_id).await.unwrap().unwrap();
+    assert_eq!(row.state, RevisionState::Abandoned);
+    assert!(!row.is_failure());
+    assert!(store.failures().await.unwrap().is_empty());
+    assert!(store.open().await.unwrap().iter().all(|r| r.id != v2.id));
+    assert_eq!(store.verdict(v3.id).await.unwrap(), Claim::Go);
+    let marks = store.marks("c1".into(), vec!["14".into()]).await.unwrap();
+    assert_eq!(marks.get("14"), Some(&Mark::Superseded));
+    // Its video never took the episode name: it holds no lower revision back.
+    assert!(store.replacements().await.unwrap().is_empty());
+}
+
+/// A look that missed the new video marks the row; one that found it again
+/// forgets the mark, and the reason only when it was the miss's.
+#[tokio::test]
+async fn a_found_new_video_forgets_the_miss_and_its_reason() {
+    let (_dir, db) = db().await;
+    let store = RevisionStore::new(db.clone());
+    let v2 = store
+        .create(10, of_episode(item(&db, "14v2").await, "14v2", 2))
+        .await
+        .unwrap();
+    verified(&store, v2.id).await;
+    let step = Step::NewMissing {
+        reason: "missing".into(),
+    };
+    assert!(store
+        .advance(v2.id, 20, RevisionState::Verified, step)
+        .await
+        .unwrap());
+    let row = store.by_item(v2.item_id).await.unwrap().unwrap();
+    assert_eq!(
+        (row.state, row.new_missing_at, row.reason.as_deref()),
+        (RevisionState::Verified, Some(20), Some("missing"))
+    );
+
+    store
+        .forget_miss(v2.id, Some("other".into()))
+        .await
+        .unwrap();
+    let row = store.by_item(v2.item_id).await.unwrap().unwrap();
+    assert_eq!(
+        (row.new_missing_at, row.reason.as_deref()),
+        (None, Some("missing"))
+    );
+
+    let step = Step::NewMissing {
+        reason: "missing".into(),
+    };
+    store
+        .advance(v2.id, 30, RevisionState::Verified, step)
+        .await
+        .unwrap();
+    store
+        .forget_miss(v2.id, Some("missing".into()))
+        .await
+        .unwrap();
+    let row = store.by_item(v2.item_id).await.unwrap().unwrap();
+    assert_eq!((row.new_missing_at, row.reason), (None, None));
+}
+
+/// Two rows of one torrent (the same release through two channels) were both
+/// skipped for `14v3` on its way. When it fails, one of them starts over and
+/// the other is skipped as that torrent's, as it would be when written.
+#[tokio::test]
+async fn rows_of_one_torrent_that_come_back_start_over_once() {
+    let (_dir, db) = db().await;
+    let store = RevisionStore::new(db.clone());
+    let v3 = store
+        .create(10, of_episode(item(&db, "14v3").await, "14v3", 3))
+        .await
+        .unwrap();
+    let mut rows = Vec::new();
+    for key in ["14v2", "14v2-other-channel"] {
+        let mut new = of_episode(item(&db, key).await, key, 2);
+        new.torrent_hash = Some("hash-14v2".into());
+        let row = store.create(10, new).await.unwrap();
+        assert_eq!(row.state, RevisionState::Receiving);
+        assert!(store
+            .advance(row.id, 20, RevisionState::Receiving, Step::Overtaken)
+            .await
+            .unwrap());
+        rows.push(row);
+    }
+
+    let failed = Step::Failed {
+        reason: "stopped".into(),
+        received_name: None,
+    };
+    assert!(store
+        .advance(v3.id, 30, RevisionState::Receiving, failed)
+        .await
+        .unwrap());
+    let mut states = Vec::new();
+    for row in &rows {
+        let row = store.by_item(row.item_id).await.unwrap().unwrap();
+        states.push((row.state, row.reason, row.overtaken_by));
+    }
+    assert_eq!(
+        states,
+        vec![
+            (RevisionState::Receiving, None, None),
+            (RevisionState::Skipped, Some(SAME_TORRENT.to_owned()), None),
+        ]
+    );
+}
+
+/// A replacement that removed the old torrent, ended with no video left and
+/// was received again claims what it finds this time: the old torrent it
+/// removed before is no longer the one it removes (a restart would wait for
+/// it to go), while the release it removed stays superseded, through every
+/// channel, from the moment it is received again.
+#[tokio::test]
+async fn a_replacement_received_again_claims_what_it_finds_and_keeps_the_old_release_superseded() {
+    let (_dir, db) = db().await;
+    let store = RevisionStore::new(db.clone());
+    let v1 = item(&db, "14").await;
+    HistoryStore::new(db.clone())
+        .record(
+            1,
+            vec![Observation {
+                channel_id: "c2".into(),
+                channel_label: "https://y/".into(),
+                identity_key: "other-14".into(),
+                title: "[SubsPlease] Show - 14 (1080p).mkv".into(),
+                link: "magnet:?".into(),
+                result: HistoryResult::Duplicate,
+                rule_id: Some("r2".into()),
+                torrent_hash: Some("hash-14".into()),
+                reason: None,
+            }],
+        )
+        .await
+        .unwrap();
+    let v2 = store
+        .create(10, of_episode(item(&db, "14v2").await, "14v2", 2))
+        .await
+        .unwrap();
+    verified(&store, v2.id).await;
+    let found = OldVideo {
+        item_id: Some(v1),
+        version: Some(1),
+        torrent_hash: Some("hash-14".into()),
+    };
+    assert_eq!(store.claim(v2.id, 20, found).await.unwrap(), Claim::Go);
+    let step = Step::Abandoned {
+        reason: Some("no video".into()),
+    };
+    assert!(store
+        .advance(v2.id, 30, RevisionState::Removing, step)
+        .await
+        .unwrap());
+    let row = store
+        .reopen(v2.id, 40, "hash-14v2".into())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.state, RevisionState::Receiving);
+    let superseded = |store: RevisionStore| async move {
+        let other = store
+            .marks("c2".into(), vec!["other-14".into()])
+            .await
+            .unwrap();
+        let own = store.marks("c1".into(), vec!["14".into()]).await.unwrap();
+        (other.get("other-14").cloned(), own.get("14").cloned())
+    };
+    assert_eq!(
+        superseded(store.clone()).await,
+        (Some(Mark::Superseded), Some(Mark::Superseded))
+    );
+
+    // A file of no torrent is at the episode name now.
+    verified(&store, v2.id).await;
+    let found = OldVideo {
+        item_id: Some(v1),
+        version: Some(1),
+        torrent_hash: None,
+    };
+    assert_eq!(store.claim(v2.id, 50, found).await.unwrap(), Claim::Go);
+    let row = store.by_item(v2.item_id).await.unwrap().unwrap();
+    assert_eq!(row.old_torrent_hash, None);
+    assert_eq!(
+        superseded(store.clone()).await,
+        (Some(Mark::Superseded), Some(Mark::Superseded))
+    );
 }

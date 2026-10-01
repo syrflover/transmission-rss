@@ -24,8 +24,10 @@
 //!   ([`crate::store::revisions::Revision::is_failure`]). `files` are the two
 //!   videos with what became of each: the old one `kept` (still there) or
 //!   `removed`; the new one under the name it was received with
-//!   (`received_name`), or `not_received` (its download did not complete or
-//!   is not in the rule's folder, so `path` is `null`). Paths are relative to
+//!   (`received_name`), `missing` from there (a replacement that ended after
+//!   the old video was removed, so the episode has no video), or
+//!   `not_received` (its download did not complete or is not in the rule's
+//!   folder, so `path` is `null`). Paths are relative to
 //!   the work folder; `work` is `null` when the library has no work at that
 //!   folder, and the paths are then absolute. An item goes away once the
 //!   worker sees one of the two files gone, or the rename go through; a
@@ -33,7 +35,8 @@
 //!   receives its item again. `can_retry` says whether `다시 받기` (the
 //!   `receive_once` command of `history_item_id`) is offered: on a revision
 //!   whose download stopped before it was received (its torrent left
-//!   Transmission or reported an error), even when it left the feed or came
+//!   Transmission or reported an error), or whose replacement ended with no
+//!   video under the episode name, even when it left the feed or came
 //!   from a past episode search, while the rule recorded on it is active and
 //!   no higher revision of the episode is in the folder or on its way
 //!   ([`receive_once::RevisionRetry`]) and the rule's folder is the one the
@@ -59,7 +62,7 @@ use crate::{
         history::{HistoryQuery, HistoryResult},
         revisions::{Revision, RevisionState},
     },
-    worker::{commands::receive_once, revisions::stopped_before_received},
+    worker::{commands::receive_once, revisions::received_again_on_retry},
 };
 
 pub fn routes() -> Router<AppState> {
@@ -102,7 +105,8 @@ pub struct RetryOffer {
 }
 
 /// [`RetryOffer`]s of the failed replacements `rows`, by history item. A
-/// row whose download did not stop before it was received has none.
+/// row `다시 받기` does not receive again ([`received_again_on_retry`]) has
+/// none.
 pub async fn retry_offers(
     state: &AppState,
     rows: &[Revision],
@@ -110,7 +114,7 @@ pub async fn retry_offers(
     let internal = |e: &dyn std::fmt::Display| ApiError::Internal(e.to_string());
     let stopped: Vec<&Revision> = rows
         .iter()
-        .filter(|row| stopped_before_received(row))
+        .filter(|row| received_again_on_retry(row))
         .collect();
     let mut offers = HashMap::new();
     if stopped.is_empty() {
@@ -181,7 +185,11 @@ pub fn failure_of(row: &Revision, base: Option<&FsPath>) -> RevisionFailure {
     let old = FailureFile {
         role: "old",
         path: Some(path(&row.episode_name)),
-        state: if row.state == RevisionState::Removed {
+        // A replacement received again that has not got its video yet
+        // removed the old one before.
+        state: if matches!(row.state, RevisionState::Removed | RevisionState::Abandoned)
+            || (row.not_received() && row.claimed_at.is_some())
+        {
             "removed"
         } else {
             "kept"
@@ -191,7 +199,11 @@ pub fn failure_of(row: &Revision, base: Option<&FsPath>) -> RevisionFailure {
         Some(name) => FailureFile {
             role: "new",
             path: Some(path(name)),
-            state: "received_name",
+            state: if row.state == RevisionState::Abandoned {
+                "missing"
+            } else {
+                "received_name"
+            },
         },
         None => FailureFile {
             role: "new",

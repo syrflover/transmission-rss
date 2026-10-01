@@ -12,10 +12,27 @@
 -- CRC32 the new release's name carries, eight upper-case hex digits; NULL
 -- when the person received it with `다시 받기` and that request is the
 -- confirmation. `received_name` and `file_crc` are the new file's name as
--- received and its CRC32 as read, once it has been checked. `state` is where
+-- received and its CRC32 as read, once it has been checked, and
+-- `file_identity` what told that file apart when it was read (device, inode,
+-- size, modification and status-change times, `:`-joined): the old video is
+-- removed only while the file under `received_name` is still that one.
+-- `new_missing_at` is when a look, with the folder there, last found the new
+-- video missing (or, before the old video is removed, not the checked file);
+-- NULL once a look finds it, or finds the folder away. A second such look in
+-- a row ends the replacement. `folder_away_since` is when a look first found
+-- `folder` itself away (a mount that is not there), NULL once a look finds
+-- it: a folder away for a week ends the failures and says so on the
+-- replacements under way. `claimed_at` is when the replacement first went
+-- ahead to remove the old video (a claim), and `superseded_hash` the last
+-- old torrent a claim of it found: neither is cleared when the replacement
+-- is received again after it ended (`old_torrent_hash` is the torrent the
+-- current claim removes), so the old release stays superseded. `state` is where
 -- the replacement is; the worker writes each step before it takes the next
--- (see `RevisionState`). Times are Unix milliseconds; `replaced_at` is when
--- the new video got the episode name.
+-- (see `RevisionState`). `overtaken_by` is the row of the higher revision a
+-- `skipped` row was skipped for while that one was on its way; when that row
+-- fails, this one goes back to `receiving`. NULL for any other skip. Times
+-- are Unix milliseconds; `replaced_at` is when the new video got the episode
+-- name.
 
 CREATE TABLE video_revisions (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -32,15 +49,23 @@ CREATE TABLE video_revisions (
     torrent_hash  TEXT,
     received_name TEXT,
     file_crc      TEXT,
+    file_identity TEXT,
     state         TEXT    NOT NULL CHECK (state IN ('unknown', 'skipped', 'receiving',
-                      'verified', 'removing', 'removed', 'done', 'failed', 'cleared')),
+                      'verified', 'removing', 'removed', 'done', 'failed', 'cleared',
+                      'abandoned')),
     reason        TEXT,
     created_at    INTEGER NOT NULL,
     updated_at    INTEGER NOT NULL,
-    replaced_at   INTEGER
+    replaced_at   INTEGER,
+    overtaken_by  INTEGER REFERENCES video_revisions (id),
+    new_missing_at INTEGER,
+    folder_away_since INTEGER,
+    claimed_at    INTEGER,
+    superseded_hash TEXT
 );
 
 CREATE INDEX video_revisions_old_item ON video_revisions (old_item_id);
 CREATE INDEX video_revisions_state ON video_revisions (state);
 CREATE INDEX video_revisions_episode ON video_revisions (folder, episode_name);
 CREATE INDEX video_revisions_hash ON video_revisions (torrent_hash);
+CREATE INDEX video_revisions_overtaken_by ON video_revisions (overtaken_by);
