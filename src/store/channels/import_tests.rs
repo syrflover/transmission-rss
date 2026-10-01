@@ -317,11 +317,13 @@ async fn replacing_keeps_ids_of_matching_rules_and_reports_the_removed_ones() {
         channel,
         kept_rules,
         removed_rules,
+        waiting_kept,
     } = &results[0]
     else {
         panic!("expected a replacement");
     };
     assert_eq!(*kept_rules, 2);
+    assert_eq!(*waiting_kept, 0);
     let removed: Vec<_> = removed_rules.iter().map(|r| r.r#match.as_deref()).collect();
     assert_eq!(removed, [Some("Gone1"), None, Some("Gone2")]);
 
@@ -496,4 +498,111 @@ async fn invalid_input_and_double_replacement_are_rejected_before_anything_is_wr
     assert!(matches!(err, ChannelError::NotFound { .. }), "{err:?}");
 
     assert_eq!(f.store.list_channels_with_rules().await.unwrap(), before);
+}
+
+#[tokio::test]
+async fn replacing_leaves_title_waiting_subscriptions_as_they_are() {
+    use super::{NewSubscription, Rule, SubtitleMode};
+    use crate::store::anissia::Anime;
+
+    let f = fixture().await;
+    let a = existing_channel(&f, vec![rule("Gone", "gone")]).await;
+    let waiting = |no: i64, state: RuleState| {
+        let store = f.store.clone();
+        let channel = a.channel.id.clone();
+        async move {
+            store
+                .create_subscription_rule(
+                    &channel,
+                    RuleInput {
+                        r#match: None,
+                        state,
+                        directory: format!("작품 {no}"),
+                        ..RuleInput::default()
+                    },
+                    NewSubscription {
+                        anime: Anime {
+                            anime_no: no,
+                            subject: format!("작품 {no}"),
+                            original_subject: None,
+                            week: 3,
+                            air_time: Some("22:00".into()),
+                            start_date: None,
+                            end_date: None,
+                            status: "ON".into(),
+                            fetched_at: 1,
+                        },
+                        subtitles: SubtitleMode::Undecided,
+                        creator: None,
+                        subscribed_at: 100,
+                    },
+                )
+                .await
+                .unwrap()
+        }
+    };
+    let first = waiting(7, RuleState::Active).await;
+    let second = waiting(8, RuleState::Paused).await;
+    let current = f.store.list_channels_with_rules().await.unwrap().remove(0);
+    assert_eq!(current.rules.len(), 3);
+
+    let file = import_channel(
+        "https://a.example/rss?token=t",
+        vec![rule("Fresh", "fresh"), rule("Second", "second")],
+    );
+    let results = f
+        .store
+        .import_channels(vec![ImportAction::Replace {
+            id: a.channel.id.clone(),
+            expected_version: current.channel.version,
+            channel: file,
+        }])
+        .await
+        .unwrap();
+    let ImportedChannel::Replaced {
+        channel,
+        removed_rules,
+        waiting_kept,
+        ..
+    } = &results[0]
+    else {
+        panic!("expected a replacement");
+    };
+
+    // Only the ordinary rule went; the two waiting subscriptions did not.
+    assert_eq!(*waiting_kept, 2);
+    let removed: Vec<_> = removed_rules.iter().map(|r| r.r#match.as_deref()).collect();
+    assert_eq!(removed, [Some("Gone")]);
+    // The file's rules come first, at the places their index in the file names;
+    // the waiting subscriptions follow, in their old order.
+    let phrases: Vec<_> = channel.rules.iter().map(|r| r.r#match.as_deref()).collect();
+    assert_eq!(phrases, [Some("Fresh"), Some("Second"), None, None]);
+    assert_eq!(
+        channel.rules.iter().map(|r| r.position).collect::<Vec<_>>(),
+        [0, 1, 2, 3]
+    );
+    // The rows are the ones they were: ID, version, state, folder and the
+    // subscription (with its anime and subscription time).
+    assert_eq!(
+        channel.rules[2],
+        Rule {
+            position: 2,
+            ..first
+        }
+    );
+    assert_eq!(
+        channel.rules[3],
+        Rule {
+            position: 3,
+            ..second
+        }
+    );
+    assert_eq!(channel.rules[3].state, RuleState::Paused);
+    assert_eq!(
+        channel.rules[2]
+            .subscription
+            .as_ref()
+            .map(|s| s.anissia_anime_no),
+        Some(7)
+    );
 }

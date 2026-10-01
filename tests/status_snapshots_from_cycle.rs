@@ -51,6 +51,16 @@ async fn a_cycle_records_that_the_feed_was_read_and_how_many_torrents_transmissi
     for seeding in ["b", "c", "d"] {
         assert!(!hashes.contains(&seeding.repeat(40)), "{hashes:?}");
     }
+    // The past episode search reads every torrent, whatever its state.
+    let listing = status.torrent_listing().await.unwrap().unwrap();
+    assert_eq!(listing.taken_at, h.now());
+    for kept in ["b", "c", "d"] {
+        assert!(listing.holds(&kept.repeat(40)), "{:?}", listing.hashes);
+    }
+    for downloading in &hashes {
+        assert!(listing.holds(downloading));
+    }
+    assert_eq!(listing.hashes.len(), 3 + hashes.len());
 }
 
 #[tokio::test]
@@ -125,6 +135,7 @@ async fn when_transmission_cannot_be_asked_the_old_counts_stay_and_the_cycle_sti
     let status = StatusStore::new(h.db.clone());
     run(&h.worker()).await;
     let before = status.transmission().await.unwrap().unwrap();
+    let listed = status.torrent_listing().await.unwrap().unwrap();
 
     h.tr.stop().await;
     h.advance(600_000);
@@ -140,6 +151,8 @@ async fn when_transmission_cannot_be_asked_the_old_counts_stay_and_the_cycle_sti
         after, before,
         "no zeros were written for an unreachable Transmission"
     );
+    // Nor an empty list, which would say every torrent was removed.
+    assert_eq!(status.torrent_listing().await.unwrap().unwrap(), listed);
     // The feed was still read and recorded.
     let reads = status.channel_reads().await.unwrap();
     assert!(reads[0].ok);

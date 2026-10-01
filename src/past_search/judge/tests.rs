@@ -127,6 +127,7 @@ fn an_episode_the_folder_has_is_shown_and_not_selected() {
         Present {
             file: Some("/media/Show/Season 02/Show S02E01.mkv".into()),
             records: vec![],
+            in_transmission: false,
         },
     );
     let preview = judged(
@@ -157,6 +158,7 @@ fn an_episode_received_from_another_release_is_judged_by_its_number() {
         Present {
             file: Some("/media/Show/Season 01/Show S01E05.mkv".into()),
             records: vec![Known::of("[Erai-raws] Show - 05 [1080p][ABCD1234].mkv")],
+            in_transmission: false,
         },
     );
     let preview = judged(
@@ -169,7 +171,9 @@ fn an_episode_received_from_another_release_is_judged_by_its_number() {
     assert!(item.note.as_deref().unwrap().contains("다른 릴리스"));
 
     // The same, when the video is still downloading and only history knows it.
-    world.present.get_mut(&Episode::whole(5)).unwrap().file = None;
+    let held = world.present.get_mut(&Episode::whole(5)).unwrap();
+    held.file = None;
+    held.in_transmission = true;
     let preview = judged(
         &["[SubsPlease] Show - 05 (1080p) [AAAA0005].mkv"],
         range(1, 12),
@@ -207,6 +211,7 @@ fn a_revision_of_a_video_whose_release_history_knows_is_judged_by_that_release()
         Present {
             file: Some("/media/Show/Season 01/Show S01E14.mkv".into()),
             records: vec![Known::of("[SubsPlease] Show - 14 (1080p) [AAAA0014].mkv")],
+            in_transmission: false,
         },
     );
     let preview = judged(
@@ -251,6 +256,7 @@ fn file_world(file: &str) -> World {
         Present {
             file: Some(file.into()),
             records: vec![],
+            in_transmission: false,
         },
     );
     world
@@ -358,6 +364,7 @@ fn the_files_read_for_one_preview_are_bounded() {
             Present {
                 file: Some(format!("/media/Show/Season 01/Show S01E{n:02}.mkv").into()),
                 records: vec![],
+                in_transmission: false,
             },
         );
         titles.push(format!(

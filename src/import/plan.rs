@@ -18,7 +18,8 @@ use std::collections::HashSet;
 
 use url::Url;
 
-use crate::store::channels::import::{ImportAction, ImportChannel};
+use crate::folders::is_work_folder;
+use crate::store::channels::import::{match_rules, ImportAction, ImportChannel};
 use crate::store::channels::{mask_url, query_names, ChannelWithRules, Version};
 
 /// The user's decision for one file channel that already exists.
@@ -50,6 +51,51 @@ pub struct StaleReview;
 pub struct Plan {
     pub actions: Vec<(usize, ImportAction)>,
     pub skipped: Vec<usize>,
+    /// For each replaced file channel (by its index), the subscriptions whose
+    /// save folder the replacement keeps (see [`keep_subscription_folders`]).
+    pub kept_folders: Vec<(usize, Vec<KeptFolder>)>,
+}
+
+/// A subscription's save folder that a replacement leaves as it is because the
+/// file's folder for its rule is no work folder.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeptFolder {
+    /// The rule's place in the file channel.
+    pub rule: usize,
+    /// The folder the subscription keeps.
+    pub directory: String,
+}
+
+/// Makes a replacement of `existing` by `channel` keep the save folder of every
+/// subscription whose rule the file's rule takes over, when the file's folder
+/// is no work folder ([`is_work_folder`]): a subscription saves into a work
+/// folder below the collect folder, and a rule that does not could no longer be
+/// saved from the rule screen. The rule is still replaced otherwise. Returns
+/// what was kept.
+///
+/// Rules that are no subscription take the file's folder, as before.
+pub fn keep_subscription_folders(
+    channel: &mut ImportChannel,
+    existing: &ChannelWithRules,
+) -> Vec<KeptFolder> {
+    let matches = match_rules(&existing.rules, &channel.rules);
+    let mut kept = Vec::new();
+    for (index, (rule, matched)) in channel.rules.iter_mut().zip(matches).enumerate() {
+        let Some(current) = matched.map(|m| &existing.rules[m]) else {
+            continue;
+        };
+        if current.subscription.is_some()
+            && !is_work_folder(&rule.directory)
+            && rule.directory != current.directory
+        {
+            rule.directory = current.directory.clone();
+            kept.push(KeptFolder {
+                rule: index,
+                directory: current.directory.clone(),
+            });
+        }
+    }
+    kept
 }
 
 /// The comparison key of a URL (see the module docs); `None` if it is not a
@@ -148,6 +194,7 @@ pub fn build_actions(
     let mut plan = Plan {
         actions: Vec::new(),
         skipped: Vec::new(),
+        kept_folders: Vec::new(),
     };
     for (index, channel) in file.into_iter().enumerate() {
         let Some(e) = found[index] else {
@@ -164,6 +211,10 @@ pub fn build_actions(
             Decision::Replace => {
                 let current = &existing[e].channel;
                 let mut channel = channel;
+                let kept = keep_subscription_folders(&mut channel, &existing[e]);
+                if !kept.is_empty() {
+                    plan.kept_folders.push((index, kept));
+                }
                 // The file cannot express the past-episode search or the
                 // display name, so a replacement keeps what the app already
                 // has instead of silently dropping it.

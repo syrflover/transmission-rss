@@ -35,6 +35,11 @@ export interface RuleView {
   invalid_regex: boolean;
   /** Replacing keeps the ID of an existing rule for this one. */
   keeps_existing_rule: boolean;
+  /**
+   * The save folder that stays when the channel is replaced: the rule is a subscription and
+   * the file's folder for it is no work folder. Null when the file's folder is used.
+   */
+  folder_kept: string | null;
   suggestion: SuggestionView;
 }
 
@@ -51,6 +56,8 @@ export interface ExistingView {
   rule_count: number;
   /** What a replacement would delete. */
   removed_rules: RemovedRule[];
+  /** Title-waiting subscriptions of the channel, which a replacement leaves as they are. */
+  title_waiting_kept: number;
 }
 
 export interface ChannelView {
@@ -104,6 +111,10 @@ export interface ApplyResult {
     kept_rules: number;
     added_rules: number;
     removed_rules: RemovedRule[];
+    /** Title-waiting subscriptions the replacement left as they were. */
+    title_waiting_kept: number;
+    /** Subscriptions whose save folder stayed because the file's folder is no work folder. */
+    folders_kept: { rule: number; match: string | null; directory: string }[];
   }[];
   skipped: { index: number; url: string }[];
   not_imported: { index: number; url: string; reason: string }[];
@@ -119,6 +130,8 @@ export interface ApplyResult {
       creator: string | null;
       /** False leaves the weekday and time for the app's daily re-read. */
       schedule_known: boolean;
+      /** While the schedule is unknown: the subscription sits on the weekday and time the comment gave (`기타` when it gave none). */
+      schedule_from_comment: boolean;
     }[];
     /** Checked suggestions that did not become subscriptions, with the reason. */
     not_created: { channel: number; rule: number; reason: string }[];
@@ -134,6 +147,8 @@ export interface ApplyResult {
     rules_added: number;
     rules_kept: number;
     rules_removed: number;
+    title_waiting_kept: number;
+    folders_kept: number;
     subscriptions_created: number;
   };
 }

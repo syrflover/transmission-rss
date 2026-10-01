@@ -98,7 +98,9 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("revisions/schema.sql")),
     // 26: the pace of search requests to a feed host, shared by the web and the worker
     Migration::Sql(include_str!("search_pace/schema.sql")),
-    // 27: when each channel was first read, kept once instead of read off the earliest record
+    // 27: every torrent Transmission held when the worker last looked, for the web's past search
+    Migration::Sql(include_str!("status/listing.sql")),
+    // 28: which items a channel's first read recorded, and when it was
     Migration::Sql(include_str!("history/first_read.sql")),
 ];
 
@@ -1152,6 +1154,35 @@ mod tests {
             })
             .await;
         assert!(refused.is_err());
+    }
+
+    /// The migration that kept the list of every torrent in Transmission is number 27.
+    const BEFORE_TORRENT_LISTING: usize = 26;
+
+    #[tokio::test]
+    async fn a_database_from_before_the_torrent_listing_has_none_until_the_worker_writes_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        {
+            let conn = database_at(&path, BEFORE_TORRENT_LISTING);
+            conn.execute(
+                "INSERT INTO transmission_snapshot (id, downloading, seeding, taken_at)
+                 VALUES (1, 2, 3, 400)",
+                [],
+            )
+            .unwrap();
+        }
+
+        let db = Db::open(&path).await.unwrap();
+
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+        let status = crate::store::status::StatusStore::new(db);
+        // The counts the older worker left stay, and say nothing of which
+        // torrents are gone.
+        assert_eq!(status.transmission().await.unwrap().unwrap().seeding, 3);
+        assert_eq!(status.torrent_listing().await.unwrap(), None);
+        status.record_listing(500, vec!["aa".into()]).await.unwrap();
+        assert!(status.torrent_listing().await.unwrap().unwrap().holds("aa"));
     }
 
     /// How many migrations come before the one that stored the first read of

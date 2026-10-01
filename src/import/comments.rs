@@ -41,7 +41,9 @@
 //! line split at `|`.
 //!
 //! **Which comment.** The two comment lines (`# ...`) directly above a rule's
-//! `- ` line, the address being the nearer one. Lines above those two (another
+//! `- ` line, the address being the nearer one. A line with nothing after the
+//! `#` is skipped, so an empty `#` line under the address does not hide it.
+//! Lines above those two (another
 //! rule left commented out, a note, a heading) are ignored, so an address in
 //! them is never taken; an address that is not on the line directly above the
 //! rule (a note stands between) leaves the comment unreadable. A blank line
@@ -182,8 +184,14 @@ fn creator_of(line: &str) -> Option<String> {
 /// the nearest: what stands above them is another rule left commented out, a
 /// note or a heading, and an address there belongs to nothing here.
 pub fn read(lines: &[String]) -> Reading {
-    let lines: Vec<&str> = lines.iter().map(|l| l.trim()).collect();
-    if lines.iter().all(|l| l.is_empty()) {
+    // A line with nothing after the `#` says nothing, so it is neither the
+    // address line nor one of the two lines.
+    let lines: Vec<&str> = lines
+        .iter()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .collect();
+    if lines.is_empty() {
         return Reading::None;
     }
     let lines = &lines[lines.len().saturating_sub(2)..];

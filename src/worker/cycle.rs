@@ -1168,7 +1168,8 @@ async fn record_reads(
 
 /// Leaves Transmission's downloading and seeding counts (queued torrents count
 /// with their kind) and the hashes of the torrents that are downloading for the
-/// status board and the weekly schedule. If Transmission cannot be asked, the
+/// status board and the weekly schedule, and the hashes of all its torrents for
+/// the past episode search. If Transmission cannot be asked, the
 /// previous counts, hashes and their time stay as they were, and the cycle goes on.
 async fn record_transmission_counts(ctx: &CycleContext, at: Millis, redactor: &Redactor) {
     let mut transmission = ctx.transmission();
@@ -1209,9 +1210,16 @@ async fn record_transmission_counts(ctx: &CycleContext, at: Millis, redactor: &R
         })
         .filter_map(|torrent| torrent.hash_string.clone())
         .collect();
+    let everything: Vec<String> = torrents
+        .iter()
+        .filter_map(|torrent| torrent.hash_string.clone())
+        .collect();
     let status = StatusStore::new(ctx.channels.db().clone());
     if let Err(err) = status.record_transmission(counts, downloading).await {
         eprintln!("Cannot record the Transmission counts: {err}");
+    }
+    if let Err(err) = status.record_listing(at, everything).await {
+        eprintln!("Cannot record the torrents in Transmission: {err}");
     }
 }
 

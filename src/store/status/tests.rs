@@ -366,3 +366,29 @@ fn a_day_is_unix_ms_over_a_day() {
     assert_eq!(read_day(DAY), 1);
     assert_eq!(read_day(-1), -1);
 }
+
+#[tokio::test]
+async fn the_torrent_listing_is_none_until_the_worker_writes_one_and_is_replaced_as_a_whole() {
+    let store = StatusStore::new(db().await);
+    assert_eq!(store.torrent_listing().await.unwrap(), None);
+
+    store
+        .record_listing(100, ids(&["AAA", "bbb", "aaa", ""]))
+        .await
+        .unwrap();
+    let listing = store.torrent_listing().await.unwrap().unwrap();
+    assert_eq!(listing.taken_at, 100);
+    // Hashes are kept lowercase and asked for in either case.
+    assert_eq!(listing.hashes, ["aaa", "bbb"].map(String::from).into());
+    assert!(listing.holds("BBB") && !listing.holds("ccc"));
+
+    // A look at an empty Transmission is a list too, not "no list".
+    store.record_listing(200, vec![]).await.unwrap();
+    assert_eq!(
+        store.torrent_listing().await.unwrap(),
+        Some(TorrentListing {
+            taken_at: 200,
+            hashes: HashSet::new(),
+        })
+    );
+}
