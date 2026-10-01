@@ -8,8 +8,9 @@
 //!   Erai-raws' several brackets `… [1080p CR WEBRip HEVC AAC][MultiSub][1BBD34E6].mkv`.
 //!   A name whose last bracket is something else (`[MultiSub]`) has none. RSS
 //!   titles may leave the extension out; the rule is the same.
-//! - **The revision** is the `vN` right after a number (`14v2`, `06v3`);
-//!   without one the release is its first revision.
+//! - **The revision** is the last `vN` right after a number (`14v2`, `06v3`;
+//!   a show named `Show 3v3` keeps its `3v3`); without one the release is its
+//!   first revision.
 //! - **The same release** of an episode is the name without its revision,
 //!   its CRC32 bracket and its extension ([`Release::stem`]): `[SubsPlease]
 //!   Show - 14 (1080p)` for both `14` and `14v2`. Another group's release of
@@ -36,6 +37,12 @@ static CRC: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[([0-9A-Fa-f]{8})\]
 static VERSION: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)\b(\d{1,4}(?:\.\d)?)v(\d{1,2})\b").unwrap());
 
+/// The last `NvM` in `text`: the episode's revision follows the show's name
+/// (`Show 3v3 - 06v2`), so an earlier one is part of the name.
+fn last_version(text: &str) -> Option<regex::Captures<'_>> {
+    VERSION.captures_iter(text).last()
+}
+
 impl Release {
     pub fn parse(name: &str) -> Release {
         let mut rest = name.trim().to_owned();
@@ -51,7 +58,7 @@ impl Release {
             value
         });
         let mut version = 1;
-        let found = VERSION.captures(&rest).map(|c| {
+        let found = last_version(&rest).map(|c| {
             let range = c.get(1).unwrap().end()..c.get(0).unwrap().end();
             (c[2].parse().unwrap_or(1).max(1), range)
         });
@@ -79,7 +86,7 @@ impl Release {
         if let Some(found) = CRC.captures(&name[..end]) {
             end = found.get(0).unwrap().start();
         }
-        match VERSION.captures(&name[..end]) {
+        match last_version(&name[..end]) {
             Some(c) => {
                 let mut out = name.to_owned();
                 out.replace_range(c.get(1).unwrap().end()..c.get(0).unwrap().end(), "");
@@ -225,6 +232,32 @@ mod tests {
             "[Erai-raws] Kimi to Idol Precure - 06v2 [1080p CR WEBRip HEVC AAC][MultiSub][1BBD34E6]",
         );
         assert_eq!(title, release);
+    }
+
+    #[test]
+    fn a_number_v_number_in_the_show_name_is_not_the_revision() {
+        let name = "[SubsPlease] Show 3v3 - 06v2 (1080p) [1A2B3C4D].mkv";
+        let release = Release::parse(name);
+        assert_eq!(release.version, 2);
+        assert_eq!(release.stem, "[SubsPlease] Show 3v3 - 06 (1080p)");
+        assert_eq!(
+            Release::without_version(name),
+            "[SubsPlease] Show 3v3 - 06 (1080p) [1A2B3C4D].mkv"
+        );
+    }
+
+    #[test]
+    fn a_v_number_that_does_not_follow_a_number_is_no_revision() {
+        for name in [
+            "[Group] Gundam V2 - 06 (1080p) [1A2B3C4D].mkv",
+            "[Group] Show Ver.2 - 06 (1080p) [1A2B3C4D].mkv",
+            "[Group] Show S01E06v2 (1080p) [1A2B3C4D].mkv",
+            "[Group] Show - 06 (x264v2) [1A2B3C4D].mkv",
+        ] {
+            let release = Release::parse(name);
+            assert_eq!(release.version, 1, "{name}");
+            assert_eq!(Release::without_version(name), name, "{name}");
+        }
     }
 
     #[test]
