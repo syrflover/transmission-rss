@@ -26,12 +26,20 @@
 //! removed: both files stay and the reason says why. A failure the person has
 //! since resolved (one of the two files is gone) becomes
 //! [`RevisionState::Cleared`]. A `removed` row with a reason is a rename that
-//! did not go through yet; the worker tries again while the name is free.
+//! did not go through yet; the worker tries again while the name is free. A
+//! `removing` row with a reason ([`Step::RemovalWaits`]) removed the old
+//! torrent but the episode's file is still there; it waits for that file to
+//! go. Both are listed with the failures.
+//!
+//! A step is written only from the state it was decided from
+//! ([`RevisionStore::advance`]), and a row the worker decides together with
+//! its history item's result is written in the same transaction
+//! ([`RevisionStore::write_with_history`]).
 //!
 //! A failure before the new video was received (no `received_name`, see
 //! [`Revision::not_received`]) is not final: the worker looks at its torrent
 //! again every cycle, and a cycle that receives its item again (the torrent
-//! had gone) starts it over ([`RevisionStore::reopen`]).
+//! had gone), or `다시 받기` of it, starts it over ([`RevisionStore::reopen`]).
 //!
 //! # One episode, one replacement at a time
 //!
