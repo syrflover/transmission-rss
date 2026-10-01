@@ -36,6 +36,12 @@
 //!    cycle every interval, one after the other. With it, the later one keeps
 //!    skipping and the period stays one cycle.
 //!
+//! While it holds the lock, for a cycle, for commands, or for a reading that a
+//! watch folder's alert asked for, the worker also leaves a heartbeat in the
+//! database ([`heartbeat`]), which is how the web tells a busy worker from a
+//! dead one without touching the lock. (The Anissia, artwork and season
+//! queues hold locks of their own, not this one.)
+//!
 //! # Watch folders
 //!
 //! The worker watches the watch folders with inotify ([`live`]) and reads the
@@ -81,6 +87,7 @@ pub mod commands;
 pub mod cycle;
 pub mod env;
 pub mod feed;
+pub mod heartbeat;
 pub mod live;
 pub mod lock;
 pub mod offsets;
@@ -168,6 +175,8 @@ pub struct Worker {
     command_poll: Duration,
     min_gap: Duration,
     shutdown_grace: Duration,
+    /// How often the heartbeat is written while a cycle holds the lock.
+    heartbeat_every: Duration,
     lock_path: PathBuf,
     clock: Clock,
 }
@@ -223,6 +232,7 @@ impl Worker {
             command_poll: DEFAULT_COMMAND_POLL,
             min_gap: env.interval / 2,
             shutdown_grace: SHUTDOWN_GRACE,
+            heartbeat_every: heartbeat::BEAT_EVERY,
             lock_path,
             clock: system_clock(),
         })
@@ -261,9 +271,12 @@ impl Worker {
     /// does this itself; a worker that is only ticked is not watching, and its
     /// cycles read every folder.
     pub async fn start_watching(&self) {
-        self.ctx
-            .live
-            .start(self.ctx.clone(), self.lock_path.clone(), self.clock.clone());
+        self.ctx.live.start(
+            self.ctx.clone(),
+            self.lock_path.clone(),
+            self.clock.clone(),
+            self.heartbeat_every,
+        );
         self.ctx.live.sync_folders().await;
     }
 
@@ -292,6 +305,13 @@ impl Worker {
         self
     }
 
+    /// Overrides how often the heartbeat is written while a cycle holds the lock
+    /// (default: [`heartbeat::BEAT_EVERY`]).
+    pub fn with_heartbeat_every(mut self, every: Duration) -> Self {
+        self.heartbeat_every = every;
+        self
+    }
+
     /// Overrides how long one request to Transmission may take (default:
     /// [`crate::transmission::REQUEST_TIMEOUT`]).
     pub fn with_transmission_timeout(mut self, timeout: Duration) -> Self {
@@ -308,6 +328,26 @@ impl Worker {
             return Ok(TickOutcome::Busy);
         };
 
+        // The web tells a busy worker from a dead one by this pulse, for as long
+        // as the lock is held: the cycle and the folder reading after it.
+        self.beating(self.tick_locked(cancel)).await
+    }
+
+    /// Runs `work` with the cycle lock held by this worker and its heartbeat
+    /// beating ([`heartbeat::while_holding`]). Every holder of the lock does its
+    /// work through this.
+    pub(crate) async fn beating<T>(&self, work: impl std::future::Future<Output = T>) -> T {
+        heartbeat::while_holding(
+            StatusStore::new(self.ctx.channels.db().clone()),
+            self.clock.clone(),
+            self.heartbeat_every,
+            work,
+        )
+        .await
+    }
+
+    /// One cycle and what follows it, with the cycle lock held.
+    async fn tick_locked(&self, cancel: &CancellationToken) -> Result<TickOutcome, WorkerError> {
         // Read under the lock, before the cycle starts: no command runs
         // meanwhile. The previous start is read before this cycle replaces it.
         let previous_start = self.ctx.history.last_cycle().await?.map(|c| c.started_at);

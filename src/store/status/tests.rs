@@ -171,6 +171,32 @@ async fn the_cycle_interval_is_whatever_the_worker_last_recorded() {
     assert_eq!(store.cycle_interval().await.unwrap(), Some(60_000));
 }
 
+#[tokio::test]
+async fn the_heartbeat_is_whatever_the_worker_last_wrote() {
+    let store = StatusStore::new(db().await);
+    assert_eq!(store.heartbeat().await.unwrap(), None);
+
+    store.record_heartbeat(1_000, Some(900)).await.unwrap();
+    store.record_heartbeat(16_000, Some(900)).await.unwrap();
+    assert_eq!(
+        store.heartbeat().await.unwrap(),
+        Some(WorkerHeartbeat {
+            beat_at: 16_000,
+            held_since: Some(900)
+        })
+    );
+
+    // Letting go of the lock keeps the time and clears the hold.
+    store.record_heartbeat(20_000, None).await.unwrap();
+    assert_eq!(
+        store.heartbeat().await.unwrap(),
+        Some(WorkerHeartbeat {
+            beat_at: 20_000,
+            held_since: None
+        })
+    );
+}
+
 fn observation(key: &str, result: HistoryResult) -> Observation {
     Observation {
         channel_id: "c1".into(),

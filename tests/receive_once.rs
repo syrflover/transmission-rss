@@ -2725,3 +2725,53 @@ async fn an_item_first_seen_while_a_rule_was_archived_is_left_to_the_user_after_
         HistoryResult::Received
     );
 }
+
+// --- the worker's heartbeat while a command holds the lock (ticket 0021) -----------------------
+
+#[tokio::test]
+async fn a_long_command_beats_and_the_board_shows_no_stall_meanwhile() {
+    use transmission_rss::{
+        store::status::StatusStore,
+        web::{status_api::board, AppState},
+    };
+
+    let odd = release("guid-odd", 9, "Some Special Collection.mkv", "");
+    let s = Scene::failing(&[&odd], vec![rule("Some Special", "Some Show")]).await;
+    let item = s.item("Some Special").await;
+    s.post(CMD, &item).await;
+    let status = StatusStore::new(s.h.db.clone());
+    // The set-up cycle ended; its worker takes five minutes between cycles.
+    status.record_cycle_interval(300_000).await.unwrap();
+    let state = AppState::new(s.h.db.clone());
+    let stalled = |now| {
+        let state = state.clone();
+        async move { board(&state, now, 0).await.unwrap().cycle.unwrap().stalled }
+    };
+
+    let gate = s.h.tr.hold("torrent-get");
+    let worker = s.h.worker().with_heartbeat_every(Duration::from_millis(10));
+    let running = tokio::spawn(async move { worker.run_commands(&CancellationToken::new()).await });
+    gate.wait_arrived().await;
+    let started = s.h.now();
+    let held = status.heartbeat().await.unwrap().expect("a beat");
+    assert_eq!(held.held_since, Some(started));
+
+    // The command goes on for a quarter of an hour (three intervals since the
+    // cycle began): the worker is busy, and the board does not say it stopped.
+    s.h.advance(15 * 60_000);
+    let now = s.h.now();
+    for _ in 0..200 {
+        if status.heartbeat().await.unwrap().unwrap().beat_at == now {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let beat = status.heartbeat().await.unwrap().unwrap();
+    assert_eq!((beat.beat_at, beat.held_since), (now, Some(started)));
+    assert!(!stalled(now).await);
+
+    gate.release_all();
+    assert_eq!(running.await.unwrap().unwrap(), CommandsOutcome::Ran(1));
+    let done = status.heartbeat().await.unwrap().unwrap();
+    assert_eq!(done.held_since, None);
+}
