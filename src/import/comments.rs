@@ -4,7 +4,7 @@
 //! the anime is on Anissia and which subtitle creator to follow
 //! (`docs/specs/settings.md`, 기존 YAML). The YAML parser drops comments, so
 //! this module scans the file's lines itself: [`rule_comments`] finds the
-//! comment lines directly above each rule, and [`read`] turns one rule's
+//! comment lines directly above each rule (the last two are read), and [`read`] turns one rule's
 //! comment into a [`Reading`].
 //!
 //! # The comment format
@@ -33,18 +33,22 @@
 //!   value `animeNo`. A comment without a readable Anissia address is
 //!   [`Reading::Unreadable`] with the reason.
 //!
-//! Also accepted, for hand-written comments that do not follow the convention:
-//! an address anywhere in the block, with the anime number as a query value
-//! named `animeNo`, `anime_no`, `no` or `id` or as the last all-digit path
-//! segment, and a creator written as `자막: <name>`, `자막 제작자: <name>`,
-//! `제작자: <name>` or `자막팀: <name>` (`:` may be full-width), alone on a line
-//! or as a part of a line split at `|`.
+//! Also accepted, for hand-written comments that do not follow the convention
+//! but fit its two lines: the anime number as a query value named `animeNo`,
+//! `anime_no`, `no` or `id` or as the last all-digit path segment, and a
+//! creator written as `자막: <name>`, `자막 제작자: <name>`, `제작자: <name>` or
+//! `자막팀: <name>` (`:` may be full-width), alone on a line or as a part of a
+//! line split at `|`.
 //!
-//! **Which comment.** The comment lines (`# ...`) directly above a rule's `- `
-//! line. A blank line ends a block, so a section heading such as `# Q. 2026/3`
-//! followed by a blank line belongs to no rule, and a comment separated from
-//! its rule by a blank line is no comment of that rule. Comments elsewhere
-//! (above a channel or between keys) are not read.
+//! **Which comment.** The two comment lines (`# ...`) directly above a rule's
+//! `- ` line, the address being the nearer one. Lines above those two (another
+//! rule left commented out, a note, a heading) are ignored, so an address in
+//! them is never taken; an address that is not on the line directly above the
+//! rule (a note stands between) leaves the comment unreadable. A blank line
+//! ends a block, so a section heading such as `# Q. 2026/3` followed by a blank
+//! line belongs to no rule, and a comment separated from its rule by a blank
+//! line is no comment of that rule. Comments elsewhere (above a channel or
+//! between keys) are not read.
 
 use std::sync::LazyLock;
 
@@ -118,6 +122,7 @@ fn headline(line: &str) -> Option<Headline> {
 
 const NO_ADDRESS: &str = "Anissia 주소가 없어서";
 const ODD_ADDRESS: &str = "Anissia 주소 형식이 달라서";
+const ADDRESS_NOT_LAST: &str = "Anissia 주소가 규칙 바로 윗줄에 있지 않아서";
 const SEVERAL_ANIME: &str = "Anissia 주소가 서로 다른 작품을 가리켜서";
 /// The scan could not tell which rule a comment belongs to.
 const NO_PLACE: &str = "주석이 어느 규칙 것인지 찾지 못해서";
@@ -172,19 +177,30 @@ fn creator_of(line: &str) -> Option<String> {
     })
 }
 
-/// Reads the comment lines above one rule (each without its `#`).
+/// Reads the comment lines above one rule (each without its `#`). Only the two
+/// lines nearest the rule are the rule's comment, and the address must be on
+/// the nearest: what stands above them is another rule left commented out, a
+/// note or a heading, and an address there belongs to nothing here.
 pub fn read(lines: &[String]) -> Reading {
-    let lines: Vec<&str> = lines
-        .iter()
-        .map(|l| l.trim())
-        .filter(|l| !l.is_empty())
-        .collect();
-    if lines.is_empty() {
+    let lines: Vec<&str> = lines.iter().map(|l| l.trim()).collect();
+    if lines.iter().all(|l| l.is_empty()) {
         return Reading::None;
+    }
+    let lines = &lines[lines.len().saturating_sub(2)..];
+    let has_anissia_address = |line: &str| {
+        addresses(line)
+            .iter()
+            .any(|url| url.host_str().is_some_and(is_anissia))
+    };
+    if lines.last().is_some_and(|last| !has_anissia_address(last)) {
+        let above = lines.iter().any(|line| has_anissia_address(line));
+        return Reading::Unreadable {
+            reason: if above { ADDRESS_NOT_LAST } else { NO_ADDRESS }.to_owned(),
+        };
     }
 
     let mut anissia = Vec::new();
-    for line in &lines {
+    for line in lines {
         anissia.extend(
             addresses(line)
                 .into_iter()
@@ -248,7 +264,8 @@ fn is_item(text: &str) -> bool {
     text == "-" || text.starts_with("- ")
 }
 
-/// The comment lines directly above each rule: for each channel, for each rule
+/// The comment lines directly above each rule (all of them; [`read`] keeps the
+/// last two): for each channel, for each rule
 /// in order. `None` when the file's layout is not one this scan follows (flow
 /// style, a `rules:` on the same line as a channel's `- `, ...); the caller
 /// then compares the shape with what the YAML parser found.
