@@ -241,29 +241,27 @@ pub async fn plan(ctx: &CycleContext, item: &Selected<'_>) -> Plan {
 
 /// `다시 받기` received the `버전 미상` item `item_id` as the torrent `hash`: its
 /// replacement goes ahead, checking the CRC32 only when the name carries one.
-/// Returns whether the item has a replacement under way, whose torrent the
-/// caller must not rename.
+/// Returns whether the item has a replacement row past `버전 미상`, whose
+/// torrent the caller must not rename; an error when that cannot be known
+/// (the caller tries the whole request again rather than rename).
 pub async fn confirm(
     ctx: &CycleContext,
     item_id: i64,
     title: &str,
     at: Millis,
     hash: &str,
-) -> bool {
+) -> Result<bool, String> {
     let expected = Release::parse(title).crc.map(crc_text);
     match ctx
         .revisions
         .confirm(item_id, at, hash.to_owned(), expected)
         .await
     {
-        Ok(Some(row)) => row.state != RevisionState::Unknown,
-        Ok(None) => false,
-        Err(err) => {
-            eprintln!("Cannot confirm the revision of item {item_id}: {err}");
-            // Not renaming is the safe side: a rename could take the old
-            // video's name.
-            true
-        }
+        Ok(Some(row)) => Ok(row.state != RevisionState::Unknown),
+        Ok(None) => Ok(false),
+        Err(err) => Err(format!(
+            "cannot confirm the revision of item {item_id}: {err}"
+        )),
     }
 }
 

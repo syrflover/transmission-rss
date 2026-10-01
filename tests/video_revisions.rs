@@ -744,3 +744,104 @@ async fn an_add_failure_is_in_the_receive_failure_source_too() {
     assert_eq!(items[0]["title"], v1());
     assert!(items[0]["reason"].as_str().unwrap().contains("refused"));
 }
+
+// --- `다시 받기` that is cut short -------------------------------------------------
+
+impl Setup {
+    /// Runs the pending commands.
+    async fn commands(&self) -> CommandsOutcome {
+        self.h
+            .worker()
+            .run_commands(&CancellationToken::new())
+            .await
+            .unwrap()
+    }
+
+    /// Accepts `다시 받기` of `item_id` as the command `id`.
+    async fn retry(&self, item_id: i64, id: &str) {
+        let (status, text, _) = self
+            .h
+            .web_api()
+            .call(
+                "POST",
+                "/api/commands",
+                Some(json!({
+                    "id": id,
+                    "kind": "receive_once",
+                    "payload": { "item_id": item_id },
+                })),
+            )
+            .await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{text}");
+    }
+
+    /// Runs `sql` on the database from another connection.
+    fn sql(&self, sql: &str) {
+        rusqlite::Connection::open(self.h.db_path())
+            .unwrap()
+            .execute_batch(sql)
+            .unwrap();
+    }
+}
+
+/// `다시 받기` of a `버전 미상` revision whose confirmation cannot be written:
+/// the command is not ended as if it had been, and its next run starts the
+/// replacement.
+#[tokio::test]
+async fn a_retry_whose_confirmation_is_not_written_runs_again_and_replaces() {
+    let s = Setup::new().await;
+    s.received_v1().await;
+    let v2 = release("v2", None);
+    s.feed(&[(NEW_HASH, &v2), (OLD_HASH, &v1())]);
+    s.h.tr.content_on_add(NEW_HASH, NEW_BYTES);
+    s.cycle().await;
+    let item = s.item(&v2).await;
+    assert_eq!(item.result, HistoryResult::VersionUnknown);
+
+    s.sql(
+        "CREATE TRIGGER no_confirm BEFORE UPDATE ON video_revisions
+         BEGIN SELECT RAISE(ABORT, 'injected'); END;",
+    );
+    s.retry(item.id, "00000000-0000-4000-8000-000000000251")
+        .await;
+    s.commands().await;
+    s.sql("DROP TRIGGER no_confirm;");
+    s.commands().await;
+    assert!(!s.renamed_onto_episode(NEW_HASH));
+
+    s.complete(NEW_HASH);
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2).await, RevisionState::Done);
+    assert_eq!(s.names(), vec![EPISODE_NAME]);
+    assert_eq!(read(&s.file(EPISODE_NAME)), NEW_BYTES);
+    assert_eq!(s.item(&v2).await.result, HistoryResult::Received);
+}
+
+/// The same, with the history write failing after the confirmation.
+#[tokio::test]
+async fn a_retry_whose_result_is_not_written_runs_again_and_replaces() {
+    let s = Setup::new().await;
+    s.received_v1().await;
+    let v2 = release("v2", None);
+    s.feed(&[(NEW_HASH, &v2), (OLD_HASH, &v1())]);
+    s.h.tr.content_on_add(NEW_HASH, NEW_BYTES);
+    s.cycle().await;
+    let item = s.item(&v2).await;
+
+    s.sql(
+        "CREATE TRIGGER no_result BEFORE UPDATE OF result ON history_items
+         BEGIN SELECT RAISE(ABORT, 'injected'); END;",
+    );
+    s.retry(item.id, "00000000-0000-4000-8000-000000000252")
+        .await;
+    s.commands().await;
+    s.sql("DROP TRIGGER no_result;");
+    s.commands().await;
+    assert!(!s.renamed_onto_episode(NEW_HASH));
+
+    s.complete(NEW_HASH);
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2).await, RevisionState::Done);
+    assert_eq!(read(&s.file(EPISODE_NAME)), NEW_BYTES);
+    assert_eq!(s.item(&v2).await.result, HistoryResult::Received);
+}

@@ -38,7 +38,9 @@
 //!    revision the worker did not receive) is not renamed either: receiving it
 //!    is the confirmation that starts its replacement
 //!    ([`crate::worker::revisions::confirm`]), which names it once the old
-//!    video is gone.
+//!    video is gone. The confirmation is written in step 3, before the
+//!    item's result: a rerun of a command whose item is `received` already
+//!    ends at once, so it could not confirm any more.
 //!
 //! The worker ends the command after step 4. The result lands on the history
 //! item (`received`, `duplicate` or `add_failed` with a reason) and on the
@@ -550,6 +552,20 @@ pub async fn execute(
             } else {
                 HistoryResult::Duplicate
             };
+            // A `버전 미상` revision received this way replaces the folder's
+            // video: the request is the person's confirmation. Its torrent
+            // keeps its received name until the old video is gone. The
+            // confirmation is written before the item's result: once the item
+            // is `received` a rerun of this command ends at once, so a
+            // confirmation not written yet would never be. One that cannot be
+            // written leaves the command to be run again.
+            let replacing = if item.result == HistoryResult::VersionUnknown {
+                revisions::confirm(ctx, item.id, &item.title, now(), &torrent.hash)
+                    .await
+                    .map_err(Retry::Store)?
+            } else {
+                false
+            };
             let stored = ctx
                 .history
                 .record_outcome(
@@ -563,11 +579,6 @@ pub async fn execute(
                 .await
                 .map_err(Retry::store)?
                 .unwrap_or(result);
-            // A `버전 미상` revision received this way replaces the folder's
-            // video: the request is the person's confirmation. Its torrent
-            // keeps its received name until the old video is gone.
-            let replacing = item.result == HistoryResult::VersionUnknown
-                && revisions::confirm(ctx, item.id, &item.title, now(), &torrent.hash).await;
             // Only a torrent this command put in is renamed. One that was there
             // already keeps its name and gets no note.
             let rename = (own && !replacing).then_some(Rename {
