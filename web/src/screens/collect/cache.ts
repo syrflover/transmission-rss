@@ -26,7 +26,13 @@ export const KEYS = {
   watchFolders: "settings:watch-folders",
   /** How the rule list is sorted. */
   ruleSort: "collect:rule-sort",
+  /** The subscriptions of this and a coming quarter (`/api/subscriptions`). */
+  subscriptions: "collect:subscriptions",
+  /** One week of Anissia's schedule (`/api/anissia/schedule/<week>`). */
+  schedule: (week: number) => `collect:schedule:${week}`,
 } as const;
+
+const SCHEDULE_PREFIX = "collect:schedule:";
 
 const HISTORY_PREFIX = "collect:history:";
 /** The last preview of each rule (`usePreview`). */
@@ -80,4 +86,15 @@ export function withoutRule(list: RuleList, ruleId: string): RuleList {
       gone && c.id === gone.channel_id ? { ...c, rule_count: Math.max(0, c.rule_count - 1) } : c,
     ),
   };
+}
+
+/**
+ * A rule was made by subscribing: the lists that show rules, the subscriptions
+ * and the schedule (which says who follows each anime) read the server again.
+ */
+export function subscriptionAdded(channelId: string): void {
+  forget(KEYS.subscriptions);
+  forget(KEYS.rules);
+  forgetPrefix(SCHEDULE_PREFIX);
+  ruleCountChanged(channelId, 1);
 }

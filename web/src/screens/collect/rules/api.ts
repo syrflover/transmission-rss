@@ -1,6 +1,8 @@
 import { api } from "@/lib/api";
 import { sendCommand, type Command } from "@/lib/commands";
 
+import type { SubscriptionBrief } from "../subs/api";
+
 /**
  * The rules API (`src/web/rules_api.rs`). Every write carries the version the
  * screen saw; a stale one answers `conflict` with the server's current value.
@@ -49,6 +51,8 @@ export interface Rule {
   last_received_at: number | null;
   /** The last `보관`·`복원` of the rule, open or ended; `null` when it never had one. */
   archive_move: ArchiveMove | null;
+  /** Set when the rule follows an anime of Anissia's schedule. */
+  subscription: SubscriptionBrief | null;
 }
 
 export interface ChannelBrief {
