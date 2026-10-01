@@ -1131,3 +1131,118 @@ async fn numbers_run_on_from_the_season_before_are_offered_and_never_set() {
     s.cycle().await;
     assert_eq!(s.names(), ["Show S03E02.mkv", "Show S03E25.mkv"]);
 }
+
+// --- a split cour that restarts at `- 01` (user decision, 2026-10-02) ------------
+
+impl Scene {
+    /// Links these AniList entries (id, episodes), in order, to `season` of `Show`.
+    async fn link_season(&self, season: u32, entries: &[(i64, Option<u32>)]) {
+        let folder = self.library.folders().await.unwrap().remove(0);
+        let work = self
+            .library
+            .works(&folder.id)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|w| w.dir_name == "Show")
+            .unwrap()
+            .id;
+        let seasons = SeasonStore::new(self.h.db.clone());
+        for (id, count) in entries {
+            seasons.put_entry(entry(*id, *count)).await.unwrap();
+        }
+        let link = seasons.link(&work, season).await.unwrap();
+        seasons
+            .set_links(
+                &work,
+                season,
+                link.version,
+                entries.iter().map(|(id, _)| *id).collect(),
+            )
+            .await
+            .unwrap();
+    }
+
+    /// Season 2 of `Show` holds these episodes and is linked to cours of
+    /// these counts; a subscription to its next cour, saving into it, picks
+    /// `- 01` first. The rule as it is after that.
+    async fn restarted_cour(held: &[u32], cours: &[u32]) -> (Scene, Rule) {
+        let s = Scene::new().await;
+        let dir = s.shows.join("Show/Season 02");
+        for e in held {
+            fs::write(dir.join(format!("Show S02E{e:02}.mkv")), "x").unwrap();
+        }
+        for e in [1, 2] {
+            if !held.contains(&e) {
+                fs::remove_file(dir.join(format!("Show S02E{e:02}.mkv"))).unwrap();
+            }
+        }
+        s.cycle().await; // reads the folder into the library
+        s.link_season(1, &[(101, Some(12))]).await;
+        let entries: Vec<(i64, Option<u32>)> = cours
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (201 + i as i64, Some(*c)))
+            .collect();
+        s.link_season(2, &entries).await;
+        s.h.advance(1_000);
+        let rule = s.subscribe("Show", "Show/Season 02", 8, 0).await;
+        s.feed(&[]);
+        s.cycle().await;
+        s.feed(&[&show(1)]);
+        s.cycle().await;
+        (s, rule)
+    }
+}
+
+#[tokio::test]
+async fn a_second_cour_that_restarts_at_one_is_offered_a_start_and_never_given_one() {
+    let (s, rule) = Scene::restarted_cour(&(1..=12).collect::<Vec<_>>(), &[12, 12]).await;
+
+    // Never set by the app: received as it is. `S02E01` is the first cour's,
+    // so the video keeps its release name.
+    let first = "[SubsPlease] Show - 01 (1080p) [ABCD0001].mkv";
+    assert_eq!(s.names(), [first]);
+    let stored = s.rule(&rule).await;
+    assert_eq!((stored.episode, stored.episode_auto), (0, false));
+    let view = s.view(&rule).await;
+    assert_eq!(view["episode_basis"], Value::Null);
+    assert_eq!(
+        view["episode_suggestion"],
+        json!({
+            "value": 13,
+            "basis": "2쿨을 1화부터 센 번호로 보여요. 회차 변환을 +13으로 할까요?",
+        })
+    );
+
+    // `적용`: the cour's releases are named on from the first cour's twelve.
+    let (status, _, applied) = s
+        .api
+        .call(
+            "PUT",
+            &format!("/api/rules/{}/episode", rule.id),
+            Some(json!({ "version": view["version"], "episode": 13 })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    assert_eq!(applied["episode"], 13);
+    assert_eq!(applied["episode_auto"], false);
+    s.feed(&[&show(1), &show(2)]);
+    s.cycle().await;
+    // `- 01`, which the feed still shows and which kept its release name, is
+    // named now too: a rename an earlier cycle could not make is finished.
+    assert_eq!(s.names(), ["Show S02E13.mkv", "Show S02E14.mkv"]);
+}
+
+#[tokio::test]
+async fn a_restart_without_every_episode_of_the_first_cour_is_offered_nothing() {
+    let missing_7: Vec<u32> = (1..=12).filter(|e| *e != 7).collect();
+    let (s, rule) = Scene::restarted_cour(&missing_7, &[12, 12]).await;
+    assert_eq!(s.view(&rule).await["episode_suggestion"], Value::Null);
+    assert_eq!(s.rule(&rule).await.episode, 0);
+
+    // One entry linked to the season: no cours to tell apart.
+    let (s, rule) = Scene::restarted_cour(&(1..=12).collect::<Vec<_>>(), &[24]).await;
+    assert_eq!(s.view(&rule).await["episode_suggestion"], Value::Null);
+    assert_eq!(s.rule(&rule).await.episode, 0);
+}
