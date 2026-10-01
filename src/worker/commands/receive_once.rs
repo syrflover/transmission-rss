@@ -370,6 +370,17 @@ pub async fn run(
     cancel: &CancellationToken,
 ) -> Result<Finished, Retry> {
     let finished = execute(ctx, command, now).await?;
+    finish(ctx, command, finished, cancel).await
+}
+
+/// The steps of [`run`] after the add: the rename of a torrent this command
+/// put in, the note when the name stays, and the labels that come off.
+pub async fn finish(
+    ctx: &CycleContext,
+    command: &Command,
+    finished: Finished,
+    cancel: &CancellationToken,
+) -> Result<Finished, Retry> {
     if let Some(step) = &finished.rename {
         if let RenameResult::Kept(note) = rename(ctx, step, cancel).await {
             // Only reported: the item's result is written already, and a rerun
@@ -411,6 +422,26 @@ pub async fn execute(
     ctx: &CycleContext,
     command: &Command,
     now: impl Fn() -> Millis,
+) -> Result<Finished, Retry> {
+    execute_with(ctx, command, now, Settle::Offset).await
+}
+
+/// Whether receiving an item of a rule that has picked nothing decides the
+/// rule's episode offset from that item (`다시 받기` of a past item does; a
+/// past episode search does not, because the person confirmed a range that was
+/// shown with the offset the rule has).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Settle {
+    Offset,
+    Keep,
+}
+
+/// [`execute`], told whether the rule's offset may be decided from the item.
+pub async fn execute_with(
+    ctx: &CycleContext,
+    command: &Command,
+    now: impl Fn() -> Millis,
+    settle: Settle,
 ) -> Result<Finished, Retry> {
     // An add of an earlier start that got no answer stays unaccounted for
     // until an add of this one puts the torrent's hash in history. Until then
@@ -494,9 +525,11 @@ pub async fn execute(
     // A past item given to a rule that has picked nothing is the rule's first
     // item: the rule's episode offset is decided before the item is named
     // (`worker::offsets`).
-    let settled = match payload.rule_id {
-        Some(_) => offsets::settle_one(ctx, &collect_folder.folder, plan.rule, &item.title).await,
-        None => None,
+    let settled = match (payload.rule_id, settle) {
+        (Some(_), Settle::Offset) => {
+            offsets::settle_one(ctx, &collect_folder.folder, plan.rule, &item.title).await
+        }
+        _ => None,
     };
     let (save_path, episode) = rule_destination(
         Path::new(&collect_folder.folder),
@@ -616,7 +649,7 @@ const LEGACY_FOLDER: &str =
 
 /// Why a retry does nothing while no collect folder is set: the rule's folder
 /// is relative to it, so there is nowhere to put the torrent.
-const NO_COLLECT_FOLDER: &str =
+pub(super) const NO_COLLECT_FOLDER: &str =
     "수집 폴더가 정해지지 않아서 받지 않았어요. 설정에서 수집 폴더를 정한 뒤 다시 받아요.";
 
 /// Why a command ended `duplicate`.
@@ -625,7 +658,7 @@ const ALREADY_THERE: &str = "Transmission에 이미 같은 토렌트가 있어�
 /// A command that ended with Transmission holding the item's torrent. The
 /// outcome follows `stored`, the item's result in history afterwards, which
 /// may be a rule's `received` rather than what this command's add answered.
-fn held(stored: HistoryResult, rename: Option<Rename>) -> Finished {
+pub(super) fn held(stored: HistoryResult, rename: Option<Rename>) -> Finished {
     Finished {
         state: CommandState::Done,
         outcome: Outcome {
@@ -679,7 +712,7 @@ async fn refuse(
 }
 
 /// A failed command that has no history item to write to.
-fn failed(reason: &str, rename: Option<Rename>) -> Finished {
+pub(super) fn failed(reason: &str, rename: Option<Rename>) -> Finished {
     Finished {
         state: CommandState::Failed,
         outcome: Outcome {

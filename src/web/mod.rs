@@ -27,6 +27,7 @@ pub mod history_api;
 pub mod import_api;
 pub mod library_api;
 pub mod library_work_api;
+pub mod past_search_api;
 pub mod rules_api;
 pub mod schedule_api;
 pub mod seasons_api;

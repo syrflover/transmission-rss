@@ -1,11 +1,12 @@
 use crate::{
     anissia::{Anissia, AnissiaConfig},
     artwork::{AnilistConfig, Artwork},
+    past_search::service::PastSearch,
     seasons::Seasons,
     store::{
         channels::ChannelStore, commands::CommandStore, history::HistoryStore,
-        library::LibraryStore, revisions::RevisionStore, settings::SettingsStore,
-        setup::SetupStore, status::StatusStore, Db,
+        library::LibraryStore, revisions::RevisionStore, search_pace::SearchPace,
+        settings::SettingsStore, setup::SetupStore, status::StatusStore, Db,
     },
 };
 
@@ -36,6 +37,9 @@ pub struct AppState {
     pub setup: SetupStore,
     /// The replacements of video revisions the worker carries out.
     pub revisions: RevisionStore,
+    /// The past episode searches this process runs, and the request pace of
+    /// the trackers they read.
+    pub past_search: PastSearch,
 }
 
 impl AppState {
@@ -52,6 +56,7 @@ impl AppState {
             library: LibraryStore::new(db.clone()),
             setup: SetupStore::new(db.clone()),
             revisions: RevisionStore::new(db.clone()),
+            past_search: PastSearch::new(SearchPace::new(db.clone())),
             // No app data folder: covers can be read and changed but no image
             // stored or served until `with_artwork` gives one.
             artwork,
@@ -61,6 +66,12 @@ impl AppState {
     /// Replaces the Anissia client (its address, and a clock or pace in tests).
     pub fn with_anissia(mut self, anissia: Anissia) -> Self {
         self.anissia = anissia;
+        self
+    }
+
+    /// Replaces the past episode search service (the time between requests in tests).
+    pub fn with_past_search(mut self, past_search: PastSearch) -> Self {
+        self.past_search = past_search;
         self
     }
 

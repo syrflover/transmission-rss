@@ -96,6 +96,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("channels/archive_suggestion.sql")),
     // 25: the replacement of video revisions and how far each has come
     Migration::Sql(include_str!("revisions/schema.sql")),
+    // 26: the pace of search requests to a feed host, shared by the web and the worker
+    Migration::Sql(include_str!("search_pace/schema.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
