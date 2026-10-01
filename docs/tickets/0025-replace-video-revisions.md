@@ -84,6 +84,7 @@ worker는 `14v2`를 추가하고 곧바로 `Show S01E14.mkv`로 이름을 바꿨
   - 전체 파일 목록: `a_cycle_reads_transmissions_whole_file_list_at_most_once`(수정본 셋을 판정하는 주기의 전체 목록 요청이 고치기 전 3번, 고친 뒤 1번 이하. 자기 토렌트가 회차 이름을 가진 수정본만 있는 주기는 0번).
   - 받기 전 실패: `row_2_a_revision_whose_download_stops_leaves_the_old_video`의 뒷부분(피드에 남은 항목을 다시 추가해 대체까지 감. 고치기 전 추가 1번에 멈춤), `a_revision_whose_torrent_reports_a_local_error_goes_on_once_it_clears`(고치기 전 `failed`에 머묾), `a_revision_received_outside_the_rule_folder_stays_a_failure`(고치기 전 다음 주기에 `cleared`).
   - 토렌트 소속과 받은 파일: `an_old_torrent_whose_folder_is_spelled_another_way_is_removed_with_its_file`(고치기 전 토렌트를 남기고 파일만 지움), `an_old_video_two_torrents_hold_is_not_removed`(고치기 전 첫 토렌트를 데이터와 함께 지움), `an_empty_revision_does_not_replace_the_old_video`(고치기 전 빈 파일이 이전 영상을 대체함), `a_revision_whose_torrent_names_the_episode_file_removes_nothing`(고치기 전 이전 토렌트를 지움).
+  - 지난 회차 검색([0026](0026-past-episode-search.md))으로 받은 수정본도 같은 대체를 지나요: `tests/past_search.rs`의 `two_searched_revisions_of_an_episode_leave_the_higher_one`, `a_searched_revision_higher_than_the_feeds_open_one_is_the_one_that_replaces`(둘 다 고치기 전 `v2`가 회차 이름을 차지함), `a_searched_revision_lower_than_the_one_that_replaced_the_video_is_not_added`(검색으로 고른 낮은 수정본은 피드 주기와 같은 판단으로 추가하지 않음. 고치기 전에도 통과했어요).
   - 단위 시험: 장치·inode로 찾는 소속(`a_file_is_held_by_the_torrents_whose_file_it_is_however_spelled`), 까닭의 비밀 값 가림과 300자 제한(`a_kept_reason_is_redacted_and_capped`), Erai-raws 회차 이름(`a_revisions_episode_name_is_its_first_releases`, `a_name_without_its_revision_keeps_everything_else`), 저장소의 한 회차 한 대체·같은 토렌트·받기 전 실패 다시 열기·해시로 다시 받지 않기(`src/store/revisions/tests.rs` 4개 추가).
 - 그 밖: 이름 파싱과 파일 CRC(`src/revision.rs` 8개), 저장소(`src/store/revisions/tests.rs` 8개), 옛 DB(24) 올림 시험 `a_history_from_before_revisions_keeps_its_items_and_takes_revisions_of_them`, 이력 결과 코드·전이 표.
 - 시험이 실패하는 것을 본 것: 재현 시험(1행의 앞부분)은 고치기 전 worker에서 실패했고 고친 뒤 통과했어요. 나머지 새 시험은 새 동작에 대한 것이라 고치기 전 실패를 따로 보지 않았어요.
@@ -102,5 +103,5 @@ worker는 `14v2`를 추가하고 곧바로 `Show S01E14.mkv`로 이름을 바꿨
 - 지난 회차 검색의 수정본·`버전 미상` 표시(명세의 지난 회차 검색)는 [0026](0026-past-episode-search.md)의 일이에요.
 - trname은 Erai-raws의 수정본 이름에서 회차를 잘못 읽어요. `[Erai-raws] Show - 06v2 [1080p CR WEBRip HEVC AAC][MultiSub][1BBD34E6].mkv`는 `Show S01E34.mkv`(CRC 대괄호의 숫자)가 돼요. 대체 판정은 수정본 표시를 뺀 이름으로 회차를 읽어 `S01E06`을 찾게 고쳤지만, 회차 영상이 없을 때 그런 수정본을 보통 항목으로 받으면 추가 직후 이름 변경이 여전히 토렌트 이름 그대로 trname을 써서 `S01E34`로 붙여요. trname이나 그 이름 변경을 고칠지는 정할 일이에요.
 - RSS 제목에 확장자가 없으면(`… [8F2EFECC]`) trname이 이름을 주지 않아 수정본을 판정하지 않고 보통 항목으로 받아요. 이름 변경 보호 때문에 이전 영상은 그대로이고 새 영상은 받은 이름으로 남아요. 확장자를 짐작해 붙이지는 않았어요.
-- 받기 전 실패에서 항목이 피드를 떠나고 토렌트도 없으면 `받기 실패`가 이전 영상을 지우기 전까지 남고 `다시 받기`가 없어요. 그런 실패에 `다시 받기`를 열지(이력은 `received`라 지금의 다시 받기 조건 밖이에요) 정할 일이에요.
+- 받기 전 실패에서 항목이 피드를 떠나고 토렌트도 없으면(지난 회차 검색으로 받은 수정본은 처음부터 피드에 없어요) `받기 실패`가 이전 영상을 지우기 전까지 남고 `다시 받기`가 없어요. 그런 실패에 `다시 받기`를 열지(이력은 `received`라 지금의 다시 받기 조건 밖이에요) 정할 일이에요.
 - 높은 수정본이 오는 중이라 건너뛴 낮은 수정본은, 높은 수정본이 나중에 실패해도 다시 시도하지 않아요. 그때 낮은 수정본으로라도 대체할지 정할 일이에요.

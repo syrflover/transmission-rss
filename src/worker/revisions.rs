@@ -95,7 +95,7 @@ use crate::{
     revision::{crc_text, file_crc32, Release},
     store::{
         history::{HistoryResult, Millis},
-        revisions::{Claim, OldVideo, Revision, RevisionState, Step, OVERTAKEN},
+        revisions::{Claim, OldVideo, Replacement, Revision, RevisionState, Step, OVERTAKEN},
     },
     transmission::{get_torrent, torrent_places, Redactor, TorrentPlace},
 };
@@ -161,6 +161,35 @@ pub struct Selected<'a> {
     pub title: &'a str,
     pub save_path: &'a Path,
     pub episode: isize,
+}
+
+/// The releases that replaced, or are replacing, a video
+/// ([`crate::store::revisions::RevisionStore::replacements`]): a lower
+/// revision of one of them, its first release included, is not received into
+/// the same folder again, whichever channel or search it comes from.
+pub struct Replaced(Vec<(String, String, u32)>);
+
+impl Replaced {
+    pub fn new(rows: Vec<Replacement>) -> Replaced {
+        Replaced(
+            rows.into_iter()
+                .map(|r| (r.folder, Release::parse(&r.title).stem, r.new_version))
+                .collect(),
+        )
+    }
+
+    /// Whether `title`, received into `folder`, is lower than a release that
+    /// replaced a video there.
+    pub fn holds_higher(&self, folder: &Path, title: &str) -> bool {
+        if self.0.is_empty() {
+            return false;
+        }
+        let release = Release::parse(title);
+        let folder = folder.to_string_lossy();
+        self.0.iter().any(|(at, stem, version)| {
+            *at == folder && *stem == release.stem && release.version < *version
+        })
+    }
 }
 
 /// Whether the release name `title` is a revision at all: the cheap test that

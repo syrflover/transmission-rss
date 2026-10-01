@@ -43,7 +43,7 @@ use crate::{
     },
     worker::{
         plan::rule_destination,
-        revisions::{self, Decided, Listing, Plan, Selected},
+        revisions::{self, Decided, Listing, Plan, Replaced, Selected},
         CycleContext,
     },
 };
@@ -281,6 +281,23 @@ async fn decide_revision(
     episode: isize,
     now: &impl Fn() -> Millis,
 ) -> Result<Revision, Retry> {
+    // A lower revision of a release that replaced, or is replacing, the
+    // folder's video is not received there again, as a cycle withholds it.
+    let replaced = Replaced::new(ctx.revisions.replacements().await.map_err(store)?);
+    if replaced.holds_higher(save_path, &item.title) {
+        ctx.history
+            .record_outcome(
+                item.id,
+                now(),
+                HistoryResult::Duplicate,
+                Some(rule.id.clone()),
+                Some(revisions::NOT_HIGHER.to_owned()),
+                None,
+            )
+            .await
+            .map_err(store)?;
+        return Ok(Revision::Held(duplicate(revisions::NOT_HIGHER)));
+    }
     if !revisions::is_revision(&item.title) {
         return Ok(Revision::Normal);
     }
@@ -348,16 +365,21 @@ async fn decide_revision(
                 None,
             );
             ctx.revisions.create(now(), row).await.map_err(store)?;
-            Ok(Revision::Held(Finished {
-                state: CommandState::Done,
-                outcome: Outcome {
-                    result: HistoryResult::Duplicate.code().to_owned(),
-                    reason: Some(reason.to_owned()),
-                },
-                rename: None,
-                unlabel: None,
-                add_unconfirmed: false,
-            }))
+            Ok(Revision::Held(duplicate(reason)))
         }
+    }
+}
+
+/// A command that ends `duplicate` because the folder holds the revision.
+fn duplicate(reason: &str) -> Finished {
+    Finished {
+        state: CommandState::Done,
+        outcome: Outcome {
+            result: HistoryResult::Duplicate.code().to_owned(),
+            reason: Some(reason.to_owned()),
+        },
+        rename: None,
+        unlabel: None,
+        add_unconfirmed: false,
     }
 }

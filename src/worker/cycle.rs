@@ -17,11 +17,10 @@ use super::{
     commands::rule_archive::work_folder::MovePolicy,
     feed::{self, FeedItem},
     plan::{ChannelPlan, Judgement},
-    revisions::{self, Decided, Listing, Plan, Selected},
+    revisions::{self, Decided, Listing, Plan, Replaced, Selected},
 };
 use crate::{
     episode_offset::is_open,
-    revision::Release,
     store::{
         channels::{ChannelError, ChannelStore, ChannelWithRules, RuleState},
         history::{HistoryResult, HistoryStore, Millis, Observation, Recorded},
@@ -1220,11 +1219,8 @@ async fn leave_revisions(
         };
         marks.insert(channel, read);
     }
-    let replacements: Vec<(String, String, u32)> = match ctx.revisions.replacements().await {
-        Ok(found) => found
-            .into_iter()
-            .map(|r| (r.folder, Release::parse(&r.title).stem, r.new_version))
-            .collect(),
+    let replaced = match ctx.revisions.replacements().await {
+        Ok(found) => Replaced::new(found),
         Err(err) => {
             eprintln!("Cannot read the video revisions; the selected items wait: {err}");
             report.revisions_left += jobs.len();
@@ -1232,16 +1228,7 @@ async fn leave_revisions(
         }
     };
     // A lower revision of a release that replaced a video in the job's folder.
-    let replaced = |job: &Job| {
-        if replacements.is_empty() {
-            return false;
-        }
-        let release = Release::parse(&job.title);
-        let folder = job.save_path.to_string_lossy();
-        replacements.iter().any(|(at, stem, version)| {
-            *at == folder && *stem == release.stem && release.version < *version
-        })
-    };
+    let replaced = |job: &Job| replaced.holds_higher(&job.save_path, &job.title);
     let mut kept = Vec::new();
     // Lower revisions of a release in place, recorded as the folder's
     // duplicates as `plan` records them.
