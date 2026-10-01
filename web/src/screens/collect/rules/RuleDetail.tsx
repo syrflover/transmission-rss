@@ -35,6 +35,7 @@ import { ArchiveMoveNotice } from "./ArchiveMoveNotice";
 import { EpisodeGrounds } from "./EpisodeGrounds";
 import { BLANK_DRAFT, draftOf, fieldsOf, parseEpisode, sameDraft, type Draft } from "./draft";
 import { LinkToSchedule } from "./LinkToSchedule";
+import { PastSearch } from "./past-search/PastSearch";
 import { ChannelTag, StateBadge } from "./RuleList";
 import { ConflictNotice, OrderRow, RuleSummary } from "./parts";
 import { RulePreview, type PastReceive } from "./RulePreview";
@@ -162,7 +163,9 @@ export function RuleDetail({
   // added the preview is asked again, so its row reads as received.
   const received = useReceive(known?.id ?? null);
   const addedCount = received.entries.filter((e) => e.phase.kind === "added").length;
-  const preview = usePreview(channelId, known?.id ?? null, fields, position, addedCount);
+  // Results of a past episode search that were added also change the recorded items.
+  const [searchAdded, setSearchAdded] = useState(0);
+  const preview = usePreview(channelId, known?.id ?? null, fields, position, addedCount + searchAdded);
   const pastReceive: PastReceive | undefined = known
     ? {
         phaseOf: (itemId) => received.entries.find((e) => e.itemId === itemId)?.phase,
@@ -624,6 +627,20 @@ export function RuleDetail({
           </div>
         )}
       </form>
+
+      {known && known.state !== "archived" && (
+        <PastSearch
+          ruleId={known.id}
+          disabled={
+            dirty
+              ? "저장하지 않은 변경이 있어요. 저장한 뒤에 검색하고 받을 수 있어요."
+              : moving
+                ? "작품 폴더를 옮기는 중이에요. 끝난 뒤에 검색하고 받을 수 있어요."
+                : null
+          }
+          onAdded={setSearchAdded}
+        />
+      )}
 
       {known && (
         <div className="flex flex-col gap-2.5 border-t border-hairline-soft pt-4" data-testid="manage-row">
