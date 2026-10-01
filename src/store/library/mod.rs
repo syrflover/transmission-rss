@@ -21,6 +21,14 @@
 //!   read (the rest of the folder was) keeps its records, and the folder's
 //!   error says so; a folder with such an error is not yet baselined.
 //!
+//! # Reading only some works
+//!
+//! The worker's inotify watches say which work folders changed, and
+//! [`LibraryStore::record_works`] records the reading of just those: the rules
+//! above hold for them (added times, files that are gone, a work folder that is
+//! gone is marked missing), the other works are not looked at, and the folder's
+//! own error and baseline are left to the readings of the whole folder.
+//!
 //! # A work keeps its ID when its folder moves
 //!
 //! A work is identified by an app-issued ID and found again by its folder's
@@ -109,6 +117,11 @@ pub struct WatchFolder {
     pub checked_at: Option<Millis>,
     /// A sentence while the last attempt could not read everything.
     pub error: Option<String>,
+    /// A sentence while the worker could not watch every directory of the
+    /// folder for changes (how many and why); the worker then checks those
+    /// directories itself every cycle. `None` when none is missing, or when the
+    /// worker does not watch the folder (see [`crate::worker::live`]).
+    pub watch_note: Option<String>,
 }
 
 /// A watch folder with the counts its row shows.
@@ -367,6 +380,34 @@ impl LibraryStore {
         let id = id.to_owned();
         self.db
             .run(move |c| Ok(repo::record_scan(c, &id, &scan, now)?))
+            .await
+    }
+
+    /// Records the reading of only the work folders called `names` of folder
+    /// `id` (see [`crate::discovery::scan_works`]): the works of the scan are
+    /// brought up to date, and a work of one of those names that the scan does
+    /// not have is marked missing. The other works, and the folder's error
+    /// unless one of these work folders could not be read, stay as they were.
+    /// `None` when the folder is not registered (any more).
+    pub async fn record_works(
+        &self,
+        id: &str,
+        names: Vec<String>,
+        scan: Scan,
+        now: Millis,
+    ) -> Result<Option<ScanReport>, LibraryError> {
+        let id = id.to_owned();
+        self.db
+            .run(move |c| Ok(repo::record_works(c, &id, &names, &scan, now)?))
+            .await
+    }
+
+    /// Sets the sentence on folder `id`'s row about directories the worker
+    /// could not watch (see [`WatchFolder::watch_note`]); `None` clears it.
+    pub async fn set_watch_note(&self, id: &str, note: Option<String>) -> Result<(), LibraryError> {
+        let id = id.to_owned();
+        self.db
+            .run(move |c| Ok(repo::set_watch_note(c, &id, note.as_deref())?))
             .await
     }
 

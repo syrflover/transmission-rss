@@ -58,6 +58,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("library/unread_works.sql")),
     // 10: watch folders the app registers for the collect and archive folders
     Migration::Sql(include_str!("library/automatic.sql")),
+    // 11: what the worker's inotify watches could not cover in a watch folder
+    Migration::Sql(include_str!("library/watch_note.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]

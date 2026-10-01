@@ -1054,3 +1054,161 @@ async fn a_plan_made_from_other_folders_or_other_settings_is_not_applied() {
     ));
     assert_eq!(store.folders().await.unwrap().len(), 1);
 }
+
+#[tokio::test]
+async fn recording_some_works_changes_only_them_and_leaves_the_folders_error_alone() {
+    let store = store();
+    let (folder, _) = store
+        .add_folder(
+            "/w".into(),
+            scan(vec![
+                work("A", vec![video(1, "01", "A S01E01.mkv")]),
+                work("B", vec![video(1, "01", "B S01E01.mkv")]),
+                work("C", vec![video(1, "01", "C S01E01.mkv")]),
+            ]),
+            100,
+            &[],
+        )
+        .await
+        .unwrap();
+    let before = store.works(&folder.id).await.unwrap();
+
+    // A gets a file and B's folder is gone; C is not part of the reading and
+    // is absent from it without being marked missing.
+    let report = store
+        .record_works(
+            &folder.id,
+            vec!["A".into(), "B".into(), "D".into()],
+            scan(vec![work(
+                "A",
+                vec![
+                    video(1, "01", "A S01E01.mkv"),
+                    video(1, "02", "A S01E02.mkv"),
+                ],
+            )]),
+            200,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!report.baseline);
+    assert_eq!(report.files_added, 1);
+    let works = store.works(&folder.id).await.unwrap();
+    let by_name = |n: &str| works.iter().find(|w| w.dir_name == n).unwrap();
+    assert_eq!(
+        by_name("A").files()["Season 01/A S01E02.mkv"].added_at,
+        Some(200)
+    );
+    assert!(by_name("B").missing);
+    assert!(!by_name("C").missing);
+    assert_eq!(
+        by_name("C"),
+        before.iter().find(|w| w.dir_name == "C").unwrap()
+    );
+    // A work no one knew and that is not there stays unknown.
+    assert!(works.iter().all(|w| w.dir_name != "D"));
+    assert_eq!(
+        store.folder(&folder.id).await.unwrap().unwrap().checked_at,
+        Some(200)
+    );
+
+    // A new work is dated by the reading that found it, B returns with its ID.
+    let b_id = by_name("B").id.clone();
+    store
+        .record_works(
+            &folder.id,
+            vec!["B".into(), "E".into()],
+            scan(vec![
+                work("B", vec![video(1, "01", "B S01E01.mkv")]),
+                work("E", vec![video(1, "01", "E S01E01.mkv")]),
+            ]),
+            300,
+        )
+        .await
+        .unwrap();
+    let works = store.works(&folder.id).await.unwrap();
+    let by_name = |n: &str| works.iter().find(|w| w.dir_name == n).unwrap();
+    assert_eq!(by_name("B").id, b_id);
+    assert!(!by_name("B").missing);
+    assert_eq!(by_name("E").first_seen_at, Some(300));
+}
+
+#[tokio::test]
+async fn reading_some_works_adds_to_the_folders_error_and_keeps_it_until_a_whole_read() {
+    let store = store();
+    let (folder, _) = store
+        .add_folder(
+            "/w".into(),
+            scan(vec![work("A", vec![video(1, "01", "A S01E01.mkv")])]),
+            100,
+            &[],
+        )
+        .await
+        .unwrap();
+
+    let report = store
+        .record_works(
+            &folder.id,
+            vec!["A".into()],
+            scan(vec![WorkRead::Unreadable {
+                dir_name: "A".into(),
+                reason: "읽을 권한이 없어요.".into(),
+            }]),
+            200,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(report.works_unreadable, 1);
+    let error = store.folder(&folder.id).await.unwrap().unwrap().error;
+    assert!(error.as_deref().unwrap().contains("`A`"), "{error:?}");
+
+    // A clean reading of the same work does not clear what a whole read said.
+    store
+        .record_works(
+            &folder.id,
+            vec!["A".into()],
+            scan(vec![work("A", vec![video(1, "01", "A S01E01.mkv")])]),
+            300,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store.folder(&folder.id).await.unwrap().unwrap().error,
+        error
+    );
+    store
+        .record_scan(
+            &folder.id,
+            Ok(scan(vec![work("A", vec![video(1, "01", "A S01E01.mkv")])])),
+            400,
+        )
+        .await
+        .unwrap();
+    assert_eq!(store.folder(&folder.id).await.unwrap().unwrap().error, None);
+}
+
+#[tokio::test]
+async fn the_watch_note_is_kept_until_it_is_cleared() {
+    let store = store();
+    let (folder, _) = store
+        .add_folder("/w".into(), scan(vec![]), 100, &[])
+        .await
+        .unwrap();
+    assert_eq!(folder.watch_note, None);
+    store
+        .set_watch_note(&folder.id, Some("폴더 3개를 지켜보지 못해요.".into()))
+        .await
+        .unwrap();
+    store
+        .record_scan(&folder.id, Ok(scan(vec![])), 200)
+        .await
+        .unwrap();
+    let note = store.folder(&folder.id).await.unwrap().unwrap().watch_note;
+    assert_eq!(note.as_deref(), Some("폴더 3개를 지켜보지 못해요."));
+    store.set_watch_note(&folder.id, None).await.unwrap();
+    assert_eq!(
+        store.folder(&folder.id).await.unwrap().unwrap().watch_note,
+        None
+    );
+}

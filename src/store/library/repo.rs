@@ -25,7 +25,8 @@ fn new_id() -> String {
     Uuid::new_v4().to_string()
 }
 
-const FOLDER_COLUMNS: &str = "id, path, created_at, baselined, checked_at, error, automatic";
+const FOLDER_COLUMNS: &str =
+    "id, path, created_at, baselined, checked_at, error, automatic, watch_note";
 
 fn folder_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WatchFolder> {
     Ok(WatchFolder {
@@ -36,6 +37,7 @@ fn folder_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WatchFolder> {
         checked_at: row.get(4)?,
         error: row.get(5)?,
         automatic: row.get::<_, i64>(6)? != 0,
+        watch_note: row.get(7)?,
     })
 }
 
@@ -61,7 +63,7 @@ pub(super) fn summaries(
     new_since: Millis,
 ) -> rusqlite::Result<Vec<FolderSummary>> {
     let mut stmt = conn.prepare(
-        "SELECT f.id, f.path, f.created_at, f.baselined, f.checked_at, f.error, f.automatic,
+        "SELECT f.id, f.path, f.created_at, f.baselined, f.checked_at, f.error, f.automatic, f.watch_note,
                 (SELECT count(*) FROM works w WHERE w.watch_folder_id = f.id),
                 (SELECT count(*) FROM works w WHERE w.watch_folder_id = f.id AND w.missing = 1),
                 (SELECT count(*) FROM works w
@@ -72,9 +74,9 @@ pub(super) fn summaries(
     let rows = stmt.query_map([new_since], |row| {
         Ok(FolderSummary {
             folder: folder_from_row(row)?,
-            works: row.get::<_, i64>(7)? as usize,
-            missing_works: row.get::<_, i64>(8)? as usize,
-            new_works: row.get::<_, i64>(9)? as usize,
+            works: row.get::<_, i64>(8)? as usize,
+            missing_works: row.get::<_, i64>(9)? as usize,
+            new_works: row.get::<_, i64>(10)? as usize,
         })
     })?;
     rows.collect()
@@ -110,7 +112,7 @@ pub(super) fn add_folder(
     }
     require_folders(&tx, checked_against)?;
     let id = insert_folder(&tx, path, false, now)?;
-    let report = apply(&tx, &id, &Ok(scan.clone()), now)?.expect("the folder was just added");
+    let report = apply(&tx, &id, &Ok(scan.clone()), now, None)?.expect("the folder was just added");
     let folder = folder(&tx, &id)?.expect("the folder was just added");
     tx.commit()?;
     Ok((folder, report))
@@ -178,7 +180,9 @@ pub(super) fn apply_automatic(
     }
     for (id, path) in &plan.keep {
         tx.execute(
-            "UPDATE watch_folders SET automatic = 1, path = ?2 WHERE id = ?1",
+            "UPDATE watch_folders SET automatic = 1, path = ?2,
+                    watch_note = CASE WHEN path = ?2 THEN watch_note END
+              WHERE id = ?1",
             params![id, path],
         )?;
         applied.converted += 1;
@@ -186,7 +190,7 @@ pub(super) fn apply_automatic(
     for new in &plan.add {
         let id = insert_folder(tx, &new.path, true, now)?;
         if let Some(scan) = &new.scan {
-            apply(tx, &id, &Ok(scan.clone()), now)?;
+            apply(tx, &id, &Ok(scan.clone()), now, None)?;
         }
         applied.added += 1;
     }
@@ -241,9 +245,36 @@ pub(super) fn record_scan(
     now: Millis,
 ) -> rusqlite::Result<Option<ScanReport>> {
     let tx = begin(conn)?;
-    let report = apply(&tx, id, scan, now)?;
+    let report = apply(&tx, id, scan, now, None)?;
     tx.commit()?;
     Ok(report)
+}
+
+/// Records the reading of the works called `names` only.
+pub(super) fn record_works(
+    conn: &mut Connection,
+    id: &str,
+    names: &[String],
+    scan: &Scan,
+    now: Millis,
+) -> rusqlite::Result<Option<ScanReport>> {
+    let tx = begin(conn)?;
+    let scope: HashSet<&str> = names.iter().map(String::as_str).collect();
+    let report = apply(&tx, id, &Ok(scan.clone()), now, Some(&scope))?;
+    tx.commit()?;
+    Ok(report)
+}
+
+pub(super) fn set_watch_note(
+    conn: &Connection,
+    id: &str,
+    note: Option<&str>,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE watch_folders SET watch_note = ?2 WHERE id = ?1",
+        params![id, note],
+    )?;
+    Ok(())
 }
 
 /// A work as the store has it, before a scan.
@@ -252,12 +283,19 @@ struct KnownWork {
     missing: bool,
 }
 
+/// Records `scan` for folder `folder_id`. With a `scope`, the scan covers only
+/// the works of those names: it is the reading of just those work folders (a
+/// name in the scope that the scan does not have is a work folder that is gone),
+/// every other work and the folder's own error are left as they are, and the
+/// folder is not baselined by it.
 fn apply(
     tx: &Transaction<'_>,
     folder_id: &str,
     scan: &Result<Scan, ScanError>,
     now: Millis,
+    scope: Option<&HashSet<&str>>,
 ) -> rusqlite::Result<Option<ScanReport>> {
+    let in_scope = |name: &str| scope.is_none_or(|names| names.contains(name));
     let baselined: Option<i64> = tx
         .query_row(
             "SELECT baselined FROM watch_folders WHERE id = ?1",
@@ -299,8 +337,10 @@ fn apply(
             tx.prepare("SELECT dir_name, seen_at FROM unread_works WHERE watch_folder_id = ?1")?;
         let rows = stmt.query_map([folder_id], |row| Ok((row.get(0)?, row.get(1)?)))?;
         for row in rows {
-            let (name, seen_at) = row?;
-            pending.insert(name, seen_at);
+            let (name, seen_at): (String, Option<Millis>) = row?;
+            if in_scope(&name) {
+                pending.insert(name, seen_at);
+            }
         }
     }
 
@@ -383,7 +423,7 @@ fn apply(
     }
 
     for (name, work) in &known {
-        if seen.contains(name.as_str()) {
+        if seen.contains(name.as_str()) || !in_scope(name) {
             continue;
         }
         if !work.missing {
@@ -407,10 +447,25 @@ fn apply(
     )? as usize;
 
     let error = unreadable_sentence(&unreadable);
-    tx.execute(
-        "UPDATE watch_folders SET checked_at = ?2, error = ?3, baselined = 1 WHERE id = ?1",
-        params![folder_id, now, error],
-    )?;
+    if scope.is_some() {
+        // Only some works were read: that can add to the folder's error, not
+        // clear what other works or an earlier folder-wide read left there.
+        match &error {
+            Some(error) => tx.execute(
+                "UPDATE watch_folders SET checked_at = ?2, error = ?3 WHERE id = ?1",
+                params![folder_id, now, error],
+            )?,
+            None => tx.execute(
+                "UPDATE watch_folders SET checked_at = ?2 WHERE id = ?1",
+                params![folder_id, now],
+            )?,
+        };
+    } else {
+        tx.execute(
+            "UPDATE watch_folders SET checked_at = ?2, error = ?3, baselined = 1 WHERE id = ?1",
+            params![folder_id, now, error],
+        )?;
+    }
     report.error = error;
     Ok(Some(report))
 }
