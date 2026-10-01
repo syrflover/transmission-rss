@@ -1,3 +1,5 @@
+import type { ReactNode } from "react";
+
 import { Button } from "@/components/ui/button";
 import { dateTime } from "@/lib/time";
 
@@ -19,6 +21,66 @@ export function receivable(item: PreviewItem): boolean {
 /** The items a past-items list shows: what the rule would take, ticked or not. */
 export function listed(items: PreviewItem[]): PreviewItem[] {
   return items.filter((i) => i.kind === "mine" || i.kind === "past");
+}
+
+/**
+ * The toolbar over a list the user ticks from: what to tick all at once, how to
+ * clear, and how many are ticked. The history's past items and a past episode
+ * search's results share it.
+ */
+export function SelectionBar({
+  count,
+  onAll,
+  onNone,
+  allLabel = "모두 선택",
+}: {
+  count: number;
+  onAll: () => void;
+  onNone: () => void;
+  allLabel?: string;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <Button type="button" variant="ghost" className={btnNeutral} onClick={onAll}>
+        {allLabel}
+      </Button>
+      <Button type="button" variant="ghost" className={btnNeutral} onClick={onNone}>
+        선택 해제
+      </Button>
+      <span className="text-xs text-text-muted" role="status">
+        {count}개 선택
+      </span>
+    </div>
+  );
+}
+
+/** One row of a list the user ticks from: a box, then what the row says. */
+export function PickRow({
+  can,
+  checked,
+  onChange,
+  children,
+}: {
+  /** Whether the row can be ticked at all. */
+  can: boolean;
+  checked: boolean;
+  onChange: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <li>
+      <label
+        className={
+          can
+            ? "flex min-w-0 cursor-pointer items-start gap-3 rounded-[10px] border border-hairline-soft bg-surface-2 px-3 py-2.5 has-[:checked]:border-focus"
+            : "flex min-w-0 items-start gap-3 rounded-[10px] border border-hairline-soft bg-surface-2 px-3 py-2.5 opacity-70"
+        }
+      >
+        <input type="checkbox" className={check} disabled={!can} checked={can && checked} onChange={onChange} />
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">{children}</span>
+      </label>
+    </li>
+  );
 }
 
 /**
@@ -47,22 +109,11 @@ export function PastChecklist({
   return (
     <>
       {pickable.length > 0 && (
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            type="button"
-            variant="ghost"
-            className={btnNeutral}
-            onClick={() => onTicked(new Set(pickable.map((i) => i.id)))}
-          >
-            모두 선택
-          </Button>
-          <Button type="button" variant="ghost" className={btnNeutral} onClick={() => onTicked(new Set())}>
-            선택 해제
-          </Button>
-          <span className="text-xs text-text-muted" role="status">
-            {tickedNow.length}개 선택
-          </span>
-        </div>
+        <SelectionBar
+          count={tickedNow.length}
+          onAll={() => onTicked(new Set(pickable.map((i) => i.id)))}
+          onNone={() => onTicked(new Set())}
+        />
       )}
 
       {items.length > 0 && (
@@ -70,30 +121,13 @@ export function PastChecklist({
           {items.map((item) => {
             const can = receivable(item);
             return (
-              <li key={item.id}>
-                <label
-                  className={
-                    can
-                      ? "flex min-w-0 cursor-pointer items-start gap-3 rounded-[10px] border border-hairline-soft bg-surface-2 px-3 py-2.5 has-[:checked]:border-focus"
-                      : "flex min-w-0 items-start gap-3 rounded-[10px] border border-hairline-soft bg-surface-2 px-3 py-2.5 opacity-70"
-                  }
-                >
-                  <input
-                    type="checkbox"
-                    className={check}
-                    disabled={!can}
-                    checked={can && ticked.has(item.id)}
-                    onChange={() => toggle(item.id)}
-                  />
-                  <span className="flex min-w-0 flex-col gap-0.5">
-                    <span className="min-w-0 text-[13px] leading-snug break-all">{item.title}</span>
-                    <span className="text-xs text-text-muted">
-                      {dateTime(item.first_seen_at)} 기록
-                      {!can && " · 이미 처리된 항목이라 받을 수 없어요"}
-                    </span>
-                  </span>
-                </label>
-              </li>
+              <PickRow key={item.id} can={can} checked={ticked.has(item.id)} onChange={() => toggle(item.id)}>
+                <span className="min-w-0 text-[13px] leading-snug break-all">{item.title}</span>
+                <span className="text-xs text-text-muted">
+                  {dateTime(item.first_seen_at)} 기록
+                  {!can && " · 이미 처리된 항목이라 받을 수 없어요"}
+                </span>
+              </PickRow>
             );
           })}
         </ul>
@@ -102,27 +136,34 @@ export function PastChecklist({
   );
 }
 
+/** One line of a receive's progress: the item and how its command goes. */
+export interface ProgressEntry<K extends string | number> {
+  key: K;
+  title: string;
+  phase: ReceivePhase;
+}
+
 /** How each ticked item's receive goes, one row each, until the worker ends it. */
-export function ReceiveProgress({
+export function ProgressRows<K extends string | number>({
   entries,
-  titleOf,
+  label,
   onRetry,
 }: {
-  entries: { itemId: number; phase: ReceivePhase }[];
-  titleOf: (itemId: number) => string;
-  onRetry: (itemId: number) => void;
+  entries: ProgressEntry<K>[];
+  label: string;
+  onRetry: (key: K) => void;
 }) {
   if (entries.length === 0) return null;
   const settled = entries.every((e) => e.phase.kind === "added" || e.phase.kind === "failed");
   return (
     <>
-      <ul className="m-0 flex list-none flex-col gap-2 p-0" aria-label="지난 항목 받기">
+      <ul className="m-0 flex list-none flex-col gap-2 p-0" aria-label={label}>
         {entries.map((entry) => (
           <li
-            key={entry.itemId}
+            key={entry.key}
             className="flex min-w-0 flex-col gap-1 rounded-[10px] border border-hairline-soft bg-surface-2 px-3 py-2.5"
           >
-            <p className="min-w-0 text-[13px] leading-snug break-all">{titleOf(entry.itemId)}</p>
+            <p className="min-w-0 text-[13px] leading-snug break-all">{entry.title}</p>
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
               <span
                 role="status"
@@ -139,7 +180,7 @@ export function ReceiveProgress({
               {entry.phase.kind === "failed" && (
                 <>
                   <span className="min-w-0 text-xs break-words text-text-secondary">{entry.phase.message}</span>
-                  <Button type="button" variant="ghost" className={btnNeutral} onClick={() => onRetry(entry.itemId)}>
+                  <Button type="button" variant="ghost" className={btnNeutral} onClick={() => onRetry(entry.key)}>
                     다시 받기
                   </Button>
                 </>
@@ -150,5 +191,24 @@ export function ReceiveProgress({
       </ul>
       {!settled && <p className={hintClass}>worker가 하나씩 추가해요. 이 화면을 떠나도 계속돼요.</p>}
     </>
+  );
+}
+
+/** How each ticked past item's receive goes, one row each, until the worker ends it. */
+export function ReceiveProgress({
+  entries,
+  titleOf,
+  onRetry,
+}: {
+  entries: { itemId: number; phase: ReceivePhase }[];
+  titleOf: (itemId: number) => string;
+  onRetry: (itemId: number) => void;
+}) {
+  return (
+    <ProgressRows
+      label="지난 항목 받기"
+      entries={entries.map((e) => ({ key: e.itemId, title: titleOf(e.itemId), phase: e.phase }))}
+      onRetry={onRetry}
+    />
   );
 }

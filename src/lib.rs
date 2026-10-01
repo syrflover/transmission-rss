@@ -7,6 +7,7 @@ pub mod discovery;
 pub mod episode_offset;
 pub mod folders;
 pub mod import;
+pub mod past_search;
 pub mod revision;
 pub mod rss;
 pub mod rule;

@@ -269,7 +269,7 @@ export function ChannelEditor({ channel, onSaved, onCancel, onDeleted }: Channel
             aria-describedby={`${uid}-ps-hint`}
           />
           <p id={`${uid}-ps-hint`} className={hintClass}>
-            비우면 검색할 때 검색어를 직접 넣어요.
+            <span className="font-mono">{"{match}"}</span> 자리에 규칙의 일치 문구가 들어가요. 비우면 검색할 때 일치 문구로 채운 검색어를 그 자리에서 고쳐 써요.
           </p>
         </div>
       </div>
