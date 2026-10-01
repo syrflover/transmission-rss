@@ -38,8 +38,13 @@
 //!
 //! # Watch folders
 //!
-//! After the RSS work of each cycle, still under the lock, the worker rescans
-//! every watch folder ([`watch`]), reading the disk without changing it.
+//! The worker watches the watch folders with inotify ([`live`]) and reads the
+//! works an alert names a few seconds after it, under the same lock as the
+//! cycles. After the RSS work of each cycle, still under the lock, it reads the
+//! folders the alerts could not cover ([`watch`]): all of them at the start, the
+//! ones with a directory that has no watch, a folder that has not been read whole
+//! for an hour, and, when it is not watching at all, every folder. Reading only
+//! looks at the disk and changes nothing.
 //!
 //! # Commands
 //!
@@ -72,6 +77,7 @@ pub mod commands;
 pub mod cycle;
 pub mod env;
 pub mod feed;
+pub mod live;
 pub mod lock;
 pub mod plan;
 pub mod watch;
@@ -156,6 +162,10 @@ pub struct Worker {
     clock: Clock,
 }
 
+/// The longest a cycle waits for a reading of one of the worker's own watches
+/// to let go of the lock.
+const LIVE_LOCK_WAIT: Duration = Duration::from_secs(20);
+
 /// How long a running cycle may take to wind down after shutdown was asked
 /// for. It normally finishes within milliseconds (it starts nothing new and
 /// records what Transmission has answered), but a Transmission call that hangs
@@ -184,6 +194,7 @@ impl Worker {
                 history: HistoryStore::new(db.clone()),
                 library: LibraryStore::new(db),
                 scan_cache: watch::ScanCaches::default(),
+                live: live::LiveWatch::default(),
                 transmission_url: env.transmission_url.clone(),
                 transmission_http: crate::transmission::http_client(
                     crate::transmission::REQUEST_TIMEOUT,
@@ -221,6 +232,33 @@ impl Worker {
         self
     }
 
+    /// Overrides how the inotify watches behave (default: [`live::LiveConfig::default`]).
+    pub fn with_live_config(mut self, config: live::LiveConfig) -> Self {
+        self.ctx.live = live::LiveWatch::new(config);
+        self
+    }
+
+    /// The inotify watches of the watch folders.
+    pub fn live(&self) -> &live::LiveWatch {
+        &self.ctx.live
+    }
+
+    /// Starts watching the watch folders for changes, so that cycles stop
+    /// reading the folders that alerts cover (see [`live`]). [`Worker::run`]
+    /// does this itself; a worker that is only ticked is not watching, and its
+    /// cycles read every folder.
+    pub async fn start_watching(&self) {
+        self.ctx
+            .live
+            .start(self.ctx.clone(), self.lock_path.clone(), self.clock.clone());
+        self.ctx.live.sync_folders().await;
+    }
+
+    /// Ends every watch.
+    pub fn stop_watching(&self) {
+        self.ctx.live.stop();
+    }
+
     /// Overrides the minimum time between cycle starts (default: half the interval).
     pub fn with_min_gap(mut self, gap: Duration) -> Self {
         self.min_gap = gap;
@@ -245,10 +283,7 @@ impl Worker {
     /// Tries to run one cycle now: takes the lock, checks the start marker,
     /// runs the cycle, and releases the lock.
     pub async fn tick(&self, cancel: &CancellationToken) -> Result<TickOutcome, WorkerError> {
-        let lock = CycleLock::try_acquire(&self.lock_path).map_err(|source| WorkerError::Lock {
-            path: self.lock_path.clone(),
-            source,
-        })?;
+        let lock = self.acquire_cycle_lock().await?;
         let Some(_lock) = lock else {
             return Ok(TickOutcome::Busy);
         };
@@ -283,9 +318,33 @@ impl Worker {
         Ok(TickOutcome::Ran(report))
     }
 
+    /// Takes the cycle lock. A lock that one of the worker's own watches holds
+    /// for a reading of a work (a moment) is waited for rather than reported
+    /// as another worker's cycle, which would skip the whole cycle.
+    async fn acquire_cycle_lock(&self) -> Result<Option<CycleLock>, WorkerError> {
+        let started = tokio::time::Instant::now();
+        loop {
+            let lock =
+                CycleLock::try_acquire(&self.lock_path).map_err(|source| WorkerError::Lock {
+                    path: self.lock_path.clone(),
+                    source,
+                })?;
+            if lock.is_some() || !self.ctx.live.flushing() || started.elapsed() > LIVE_LOCK_WAIT {
+                return Ok(lock);
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    }
+
     /// Runs a cycle at start and then every interval until `cancel` fires. A
     /// failed or panicking cycle is logged and the loop carries on.
     pub async fn run(&self, cancel: CancellationToken) {
+        self.start_watching().await;
+        self.run_loop(cancel).await;
+        self.stop_watching();
+    }
+
+    async fn run_loop(&self, cancel: CancellationToken) {
         let mut ticker = tokio::time::interval(self.interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut command_ticker = tokio::time::interval(self.command_poll);
@@ -297,6 +356,8 @@ impl Worker {
                 _ = cancel.cancelled() => break,
                 _ = ticker.tick() => {}
                 _ = command_ticker.tick() => {
+                    // A watch folder registered meanwhile is watched from now on.
+                    self.ctx.live.sync_folders().await;
                     self.poll_commands(&cancel).await;
                     continue;
                 }

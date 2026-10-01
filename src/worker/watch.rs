@@ -2,8 +2,14 @@
 //! 발견과 감시 폴더).
 //!
 //! Every cycle, after the RSS work and under the same lock, [`scan_all`] reads
-//! each registered watch folder with [`crate::discovery::scan`] and records what
-//! it found ([`crate::store::library`]). The `watch_rescan` command
+//! the registered watch folders that need it with [`crate::discovery::scan`]
+//! and records what it found ([`crate::store::library`]); which ones need it is
+//! decided by [`super::live`]: with the kernel's inotify alerts doing the
+//! reading of changes as they happen, a cycle reads a folder only when the
+//! worker has just started, when alerts could not be relied on, and for the
+//! hourly safety net (when the worker is not watching at all, every folder every
+//! cycle, as it always did). The same alerts read single works with
+//! [`scan_works`]. The `watch_rescan` command
 //! ([`super::commands::watch_rescan`]) reads one folder the same way when the
 //! user asks for `다시 확인`. The web reads a folder only when it is added, with
 //! the same scan.
@@ -54,7 +60,7 @@ use std::{
 
 use tokio_util::sync::CancellationToken;
 
-use super::{Clock, CycleContext};
+use super::{live::Poll, Clock, CycleContext};
 use crate::{
     automatic_watch::{self, Wanted},
     discovery,
@@ -72,6 +78,15 @@ pub enum ScanMode {
     Periodic,
     /// Every directory is listed (`다시 확인`).
     Full,
+}
+
+/// How [`scan_works`] reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorksMode {
+    /// Every directory of the works is listed (what an alert asks for).
+    Fresh,
+    /// Directories that have not changed are skipped, as in the periodic scan.
+    Incremental,
 }
 
 /// How long reading one watch folder may take before it is given up on.
@@ -160,6 +175,7 @@ pub async fn scan_folder(
     mode: ScanMode,
 ) -> Result<Scanned, LibraryError> {
     let started = Instant::now();
+    ctx.live.folder_scan_started(&folder.id);
     let path = folder.path.clone();
     // What the last scan saw goes with the scan; a scan that does not finish
     // leaves nothing behind, so the next one reads everything.
@@ -191,6 +207,8 @@ pub async fn scan_folder(
     let failure = result.as_ref().err().cloned();
     let recorded = ctx.library.record_scan(&folder.id, result, now).await?;
     let total = started.elapsed();
+    let clean = failure.is_none() && recorded.as_ref().is_some_and(|r| r.error.is_none());
+    ctx.live.folder_scan_done(&folder.id, now, clean);
 
     Ok(match (recorded, failure) {
         (None, _) => Scanned::Gone,
@@ -227,6 +245,93 @@ pub async fn scan_folder(
             Scanned::Read(report)
         }
     })
+}
+
+/// Reads only the works called `names` of `folder` and records what it found
+/// (see [`LibraryStore::record_works`](crate::store::library::LibraryStore::record_works)),
+/// logging how long it took. A work whose folder is gone is marked missing; a
+/// folder that cannot be read at all records its error as a whole scan does.
+pub async fn scan_works(
+    ctx: &CycleContext,
+    folder: &WatchFolder,
+    names: Vec<String>,
+    now: crate::store::history::Millis,
+    mode: WorksMode,
+) -> Result<Scanned, LibraryError> {
+    let started = Instant::now();
+    let previous = match mode {
+        WorksMode::Fresh => None,
+        WorksMode::Incremental => ctx
+            .scan_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&folder.id)
+            .cloned(),
+    };
+    let (path, wanted) = (folder.path.clone(), names.clone());
+    let scanned = read_with_timeout(&folder.path, SCAN_TIMEOUT, move || {
+        discovery::scan_works(path.as_ref(), &wanted, previous)
+    })
+    .await;
+    let result = match scanned {
+        Ok(scanned) => {
+            if scanned.result.is_ok() {
+                ctx.scan_cache
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .entry(folder.id.clone())
+                    .or_default()
+                    .merge(scanned.cache);
+            }
+            scanned.result
+        }
+        Err(error) => Err(error),
+    };
+    let read_in = started.elapsed();
+    let recorded = match result {
+        Ok(scan) => {
+            ctx.library
+                .record_works(&folder.id, names.clone(), scan, now)
+                .await?
+        }
+        Err(error) => {
+            eprintln!(
+                "Watch folder {}: cannot read it: {error} ({} ms)",
+                folder.path,
+                read_in.as_millis()
+            );
+            let message = error.message.clone();
+            let recorded = ctx.library.record_scan(&folder.id, Err(error), now).await?;
+            ctx.live.works_scan_done(&folder.id, &names, false);
+            return Ok(match recorded {
+                Some(_) => Scanned::Failed(message),
+                None => Scanned::Gone,
+            });
+        }
+    };
+    let Some(report) = recorded else {
+        return Ok(Scanned::Gone);
+    };
+    ctx.live
+        .works_scan_done(&folder.id, &names, report.error.is_none());
+    println!(
+        "Watch folder {}: {} works read ({}): {} found, {} new, {} files added, {} removed, \
+         {} missing; read in {} ms, took {} ms in all",
+        folder.path,
+        names.len(),
+        names.join(", "),
+        report.works_found,
+        report.works_added,
+        report.files_added,
+        report.files_removed,
+        report.works_missing,
+        read_in.as_millis(),
+        started.elapsed().as_millis()
+    );
+    if let Some(error) = &report.error {
+        eprintln!("Watch folder {}: {error}", folder.path);
+    }
+    Ok(Scanned::Read(report))
 }
 
 /// Makes the automatic watch folders the collect and archive folders of the
@@ -294,8 +399,10 @@ pub async fn sync_automatic(ctx: &CycleContext, now: crate::store::history::Mill
     }
 }
 
-/// Reads every watch folder in turn. A folder that fails, or a database error
-/// on one, is logged and the next folder is read.
+/// Reads the watch folders that need it, in turn: all of them when the worker
+/// is not watching (see the module docs), otherwise what
+/// [`super::live::LiveWatch::poll_for`] says. A folder that fails, or a
+/// database error on one, is logged and the next folder is read.
 pub async fn scan_all(ctx: &CycleContext, clock: &Clock, cancel: &CancellationToken) {
     sync_automatic(ctx, clock()).await;
     let folders = match ctx.library.folders().await {
@@ -310,11 +417,34 @@ pub async fn scan_all(ctx: &CycleContext, clock: &Clock, cancel: &CancellationTo
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .retain(|id, _| folders.iter().any(|f| &f.id == id));
+    // A folder registered since the last look is watched from now on.
+    ctx.live.sync_folders().await;
     for folder in folders {
         if cancel.is_cancelled() {
             break;
         }
-        if let Err(err) = scan_folder(ctx, &folder, clock(), ScanMode::Periodic).await {
+        let now = clock();
+        let read = match ctx.live.poll_for(&folder.id, now) {
+            Poll::Nothing => continue,
+            // What the watches could not place is tried again each time it is read.
+            Poll::Works(names) => {
+                if ctx.live.wants_resync(&folder.id) {
+                    ctx.live.resync(&folder.id, None);
+                }
+                scan_works(ctx, &folder, names, now, WorksMode::Incremental)
+                    .await
+                    .map(|_| ())
+            }
+            Poll::Folder => {
+                if ctx.live.wants_resync(&folder.id) {
+                    ctx.live.resync(&folder.id, None);
+                }
+                scan_folder(ctx, &folder, now, ScanMode::Periodic)
+                    .await
+                    .map(|_| ())
+            }
+        };
+        if let Err(err) = read {
             eprintln!(
                 "Watch folder {}: cannot record the scan: {err}",
                 folder.path
@@ -362,7 +492,11 @@ pub async fn follow_move(
     let Some((from, to)) = ids else {
         return Ok(Followed::NotTracked);
     };
-    ctx.library.follow_move(&from, &to, &name).await
+    let followed = ctx.library.follow_move(&from, &to, &name).await?;
+    // The work folder's watches follow it, though the alerts of the move say so too.
+    ctx.live.resync(&from, Some(&name));
+    ctx.live.resync(&to, Some(&name));
+    Ok(followed)
 }
 
 #[cfg(test)]
