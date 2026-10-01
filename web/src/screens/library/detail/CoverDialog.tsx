@@ -41,6 +41,10 @@ function describe(state: ArtworkState): string {
 /** What is wrong with the image file, and what fixes it. */
 function recovery(state: ArtworkState): string | null {
   const image = state.image;
+  // An AniList entry is selected but its image never arrived (the receiving gave up).
+  if (!image && state.source === "anilist" && state.pending === null) {
+    return "표지 이미지를 받지 못했어요. 다시 받으면 같은 AniList 작품의 표지를 받아요.";
+  }
   if (!image || image.status === "available") return null;
   const what =
     image.status === "missing"
