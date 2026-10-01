@@ -331,6 +331,107 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_database_from_before_the_library_keeps_every_row_through_the_library_migrations() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        {
+            // A database as the build with seven migrations left it, with data
+            // in every table the library migrations must leave alone.
+            let conn = database_at(&path, 7);
+            conn.execute_batch(
+                "INSERT INTO channels (id, position, url, excludes, secret_query, version)
+                     VALUES ('c1', 0, 'http://x/feed', '[\"[Batch]\"]', '[\"token\"]', 3);
+                 INSERT INTO rules (id, channel_id, position, match_text, regex,
+                         case_insensitive, directory, episode, episode_auto, state, version)
+                     VALUES ('r1', 'c1', 0, 'Clevatess', 0, 1, 'Clevatess/Season 02', -24, 1,
+                         'active', 2);
+                 INSERT INTO history_items (id, channel_id, channel_label, identity_key, title,
+                         link, first_seen_at, last_seen_at, result, result_at, rule_id,
+                         torrent_hash)
+                     VALUES (1, 'c1', 'feed', 'k1', 'Clevatess - 01', 'magnet:?xt=urn:btih:aa',
+                         10, 20, 'received', 15, 'r1', 'aa');
+                 INSERT INTO history_changes (item_id, changed_at, from_result, to_result)
+                     VALUES (1, 15, 'new', 'received');
+                 INSERT INTO collection_cycle (id, started_at, finished_at) VALUES (1, 100, 110);
+                 INSERT INTO collection_settings (id, collect_folder, archive_folder, version)
+                     VALUES (1, '/downloads/Shows (current)', '/downloads/Shows', 4);",
+            )
+            .unwrap();
+        }
+
+        let db = Db::open(&path).await.unwrap();
+
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+        let rows: Vec<String> = db
+            .run::<_, DbError, _>(|c| {
+                let one = |sql: &str| -> rusqlite::Result<String> {
+                    c.query_row(sql, [], |r| r.get::<_, String>(0))
+                };
+                Ok(vec![
+                    one(
+                        "SELECT url || '|' || excludes || '|' || secret_query || '|' || version
+                           FROM channels WHERE id = 'c1'",
+                    )?,
+                    one(
+                        "SELECT match_text || '|' || directory || '|' || episode || '|' || state
+                           || '|' || version FROM rules WHERE id = 'r1'",
+                    )?,
+                    one(
+                        "SELECT title || '|' || result || '|' || rule_id || '|' || torrent_hash
+                           FROM history_items WHERE id = 1",
+                    )?,
+                    one("SELECT from_result || '>' || to_result FROM history_changes")?,
+                    one("SELECT started_at || '|' || finished_at FROM collection_cycle")?,
+                    one(
+                        "SELECT collect_folder || '|' || archive_folder || '|' || version
+                           FROM collection_settings",
+                    )?,
+                ])
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            rows,
+            [
+                "http://x/feed|[\"[Batch]\"]|[\"token\"]|3",
+                "Clevatess|Clevatess/Season 02|-24|active|2",
+                "Clevatess - 01|received|r1|aa",
+                "new>received",
+                "100|110",
+                "/downloads/Shows (current)|/downloads/Shows|4",
+            ]
+        );
+
+        // The library is there and empty: the collect and archive folders become
+        // watch folders when the worker runs, not in the migration (the media may
+        // not be mounted then).
+        let (folders, works, pending): (i64, i64, i64) = db
+            .run::<_, DbError, _>(|c| {
+                Ok(c.query_row(
+                    "SELECT (SELECT count(*) FROM watch_folders), (SELECT count(*) FROM works),
+                            (SELECT count(*) FROM unread_works)",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )?)
+            })
+            .await
+            .unwrap();
+        assert_eq!((folders, works, pending), (0, 0, 0));
+        // A folder registered afterwards is not automatic unless it says so.
+        let automatic: i64 = db
+            .run::<_, DbError, _>(|c| {
+                c.execute(
+                    "INSERT INTO watch_folders (id, path, created_at) VALUES ('w', '/w', 1)",
+                    [],
+                )?;
+                Ok(c.query_row("SELECT automatic FROM watch_folders", [], |r| r.get(0))?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(automatic, 0);
+    }
+
+    #[tokio::test]
     async fn newer_schema_than_the_build_is_refused() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("app.db");
