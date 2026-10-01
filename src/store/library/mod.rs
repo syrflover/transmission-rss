@@ -34,11 +34,14 @@
 //! Removing a watch folder removes its works from the library and touches no
 //! file.
 
+mod overview;
 mod repo;
 #[cfg(test)]
 mod tests;
 
 use std::collections::BTreeMap;
+
+pub use overview::{EpisodeRange, SubtitleCoverage, WorkOverview};
 
 use crate::{
     discovery::{FileKind, Reason, Scan, ScanError},
@@ -254,5 +257,11 @@ impl LibraryStore {
     pub async fn works(&self, folder_id: &str) -> Result<Vec<WorkRecord>, LibraryError> {
         let id = folder_id.to_owned();
         self.db.run(move |c| Ok(repo::works(c, &id)?)).await
+    }
+
+    /// Every work of every watch folder with the summary the library list
+    /// shows (see [`WorkOverview`]), by folder name, in a fixed number of queries.
+    pub async fn overview(&self) -> Result<Vec<WorkOverview>, LibraryError> {
+        self.db.run(|c| Ok(overview::overview(c)?)).await
     }
 }

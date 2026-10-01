@@ -853,6 +853,88 @@ async fn a_folder_moved_by_hand_is_a_new_work_and_the_old_one_is_missing() {
 
 // --- a large library -----------------------------------------------------------------
 
+// --- the library list ----------------------------------------------------------------
+
+impl Lib {
+    async fn library_list(&self) -> Vec<Value> {
+        let (status, text, body) = self.api.call("GET", "/api/library/works", None).await;
+        assert_eq!(status, StatusCode::OK, "{text}");
+        body["works"].as_array().unwrap().clone()
+    }
+}
+
+#[tokio::test]
+async fn the_library_list_answers_ranges_flags_and_times_of_every_work() {
+    let lib = Lib::new().await;
+    let root = lib.folder("anime");
+    // Season 2 is the latest: videos 1-5, subtitles 1-2 and 4-5.
+    for e in 1..=5 {
+        touch(&root.join(format!("Alpha/Season 02/Alpha S02E{e:02}.mkv")));
+        if e != 3 {
+            touch(&root.join(format!("Alpha/Season 02/Alpha S02E{e:02}.ko.ass")));
+        }
+    }
+    touch(&root.join("Alpha/Season 01/Alpha S01E01.mkv"));
+    // A subtitle whose episode cannot be read.
+    touch(&root.join("Beta/Season 01/Beta S01E01.mkv"));
+    touch(&root.join("Beta/Season 01/Beta-extras.srt"));
+    touch(&root.join("Gamma/Season 01/Gamma S01E13.mkv"));
+    touch(&root.join("Gamma/Season 01/Gamma S01E13.ass"));
+    let folder = lib.register(&root).await;
+
+    // After the first check a new subtitle and a new work get the worker's time.
+    touch(&root.join("Alpha/Season 02/Alpha S02E03.ko.ass"));
+    touch(&root.join("Delta/Season 01/Delta S01E01.mkv"));
+    lib.h.advance(5_000);
+    lib.tick().await;
+    let later = lib.h.now();
+
+    // A work folder that goes away stays in the list.
+    fs::remove_dir_all(root.join("Gamma")).unwrap();
+    lib.h.advance(5_000);
+    lib.tick().await;
+
+    let list = lib.library_list().await;
+    let names: Vec<&str> = list.iter().map(|w| w["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["Alpha", "Beta", "Delta", "Gamma"]);
+    let by = |name: &str| list.iter().find(|w| w["name"] == name).unwrap();
+
+    let alpha = by("Alpha");
+    assert_eq!(alpha["latest_season"], 2);
+    assert_eq!(alpha["video"], json!([{ "first": "01", "last": "05" }]));
+    // Episode 3's subtitle arrived after the first check.
+    assert_eq!(alpha["subtitle"], json!([{ "first": "01", "last": "05" }]));
+    assert_eq!(alpha["subtitle_coverage"], "all");
+    assert_eq!(alpha["subtitle_check_needed"], false);
+    assert_eq!(alpha["added_at"], Value::Null);
+    assert_eq!(alpha["video_added_at"], Value::Null);
+    assert_eq!(alpha["subtitle_added_at"], later);
+    assert_eq!(alpha["watch_folder"]["id"], folder.id);
+    assert_eq!(alpha["watch_folder"]["path"], text(&root));
+    assert_eq!(alpha["missing"], false);
+
+    let beta = by("Beta");
+    assert_eq!(beta["subtitle"], json!([]));
+    assert_eq!(beta["subtitle_coverage"], "none");
+    assert_eq!(beta["subtitle_check_needed"], true);
+
+    let delta = by("Delta");
+    assert_eq!(delta["added_at"], later);
+    assert_eq!(delta["video_added_at"], later);
+    assert_eq!(delta["subtitle_added_at"], Value::Null);
+
+    let gamma = by("Gamma");
+    assert_eq!(gamma["missing"], true);
+    assert_eq!(gamma["video"], json!([]));
+    assert_eq!(gamma["subtitle_coverage"], Value::Null);
+}
+
+#[tokio::test]
+async fn an_empty_library_lists_no_works() {
+    let lib = Lib::new().await;
+    assert!(lib.library_list().await.is_empty());
+}
+
 /// About 520 works and 10 000 files: one full reading and recording, an unchanged
 /// one, and one with a single new file. The times are printed (run with
 /// `--nocapture`) and recorded in the ticket, and not asserted: what is checked
@@ -905,6 +987,22 @@ async fn a_library_of_520_works_and_10_000_files_is_read_and_recorded() {
         Some(lib.h.now())
     );
 
+    let list = std::time::Instant::now();
+    let works = lib.library_list().await;
+    let list_time = list.elapsed();
+    assert_eq!(works.len(), WORKS);
+    let seven = works.iter().find(|w| w["name"] == "Work 007").unwrap();
+    assert_eq!(
+        seven["video"],
+        json!([{ "first": "01", "last": "12" }, { "first": "14", "last": "14" }])
+    );
+    assert_eq!(seven["subtitle"], json!([{ "first": "01", "last": "06" }]));
+    assert_eq!(seven["subtitle_coverage"], "some");
+
+    eprintln!(
+        "library list (GET /api/library/works, {} works): {list_time:?}",
+        works.len()
+    );
     eprintln!(
         "scan only: {read_time:?}; first registration (scan, web checks and record): {first_time:?}; \
          worker cycle with one new file (scan and record): {second_time:?}"

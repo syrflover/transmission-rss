@@ -426,3 +426,266 @@ async fn unrecognized_files_are_replaced_by_each_scan() {
     assert_eq!(works[0].unrecognized.len(), 1);
     assert_eq!(works[0].unrecognized[0].reason, Reason::OutsideSeason);
 }
+
+// --- the library list ---------------------------------------------------------------
+
+fn subtitle(season: u32, episode: &str, name: &str) -> EpisodeFile {
+    EpisodeFile {
+        kind: FileKind::Subtitle,
+        ..video(season, episode, name)
+    }
+}
+
+fn range(first: &str, last: &str) -> EpisodeRange {
+    EpisodeRange {
+        first: first.into(),
+        last: last.into(),
+    }
+}
+
+#[tokio::test]
+async fn the_list_summarizes_the_latest_season_with_ranges_split_at_gaps() {
+    let store = store();
+    let mut files = vec![
+        video(1, "01", "A S01E01.mkv"),
+        subtitle(1, "01", "A S01E01.ass"),
+    ];
+    for e in 1..=12 {
+        files.push(video(2, &format!("{e:02}"), &format!("A S02E{e:02}.mkv")));
+        if e != 4 {
+            files.push(subtitle(
+                2,
+                &format!("{e:02}"),
+                &format!("A S02E{e:02}.ass"),
+            ));
+        }
+    }
+    store
+        .add_folder("/w".into(), scan(vec![work("A", files)]), 100)
+        .await
+        .unwrap();
+
+    let list = store.overview().await.unwrap();
+    assert_eq!(list.len(), 1);
+    let a = &list[0];
+    assert_eq!(a.dir_name, "A");
+    assert_eq!(a.watch_folder_path, "/w");
+    assert_eq!(a.latest_season, Some(2));
+    assert_eq!(a.video, [range("01", "12")]);
+    assert_eq!(a.subtitle, [range("01", "03"), range("05", "12")]);
+    assert_eq!(a.subtitle_coverage, Some(SubtitleCoverage::Some));
+    assert!(!a.subtitle_check_needed);
+}
+
+#[tokio::test]
+async fn an_unrecognized_subtitle_asks_for_a_check_and_a_download_in_progress_does_not() {
+    let store = store();
+    let unrecognized = |path: &str, reason: Reason| Unrecognized {
+        path: path.into(),
+        reason,
+    };
+    let with = |name: &str, extra: Vec<Unrecognized>| {
+        WorkRead::Read(ScannedWork {
+            dir_name: name.into(),
+            seasons: BTreeSet::from([1]),
+            files: vec![video(1, "01", &format!("{name} S01E01.mkv"))],
+            unrecognized: extra,
+        })
+    };
+    store
+        .add_folder(
+            "/w".into(),
+            scan(vec![
+                with("Plain", vec![]),
+                with(
+                    "Sub",
+                    vec![unrecognized("Season 01/x.KO.srt", Reason::NoEpisode)],
+                ),
+                with(
+                    "Part",
+                    vec![unrecognized("Season 01/x.mkv.part", Reason::Partial)],
+                ),
+                // A video that could not be placed is not a subtitle problem.
+                with(
+                    "Vid",
+                    vec![unrecognized("Season 01/y.mkv", Reason::NoEpisode)],
+                ),
+            ]),
+            100,
+        )
+        .await
+        .unwrap();
+    let list = store.overview().await.unwrap();
+    let needed: Vec<(&str, bool)> = list
+        .iter()
+        .map(|w| (w.dir_name.as_str(), w.subtitle_check_needed))
+        .collect();
+    assert_eq!(
+        needed,
+        [
+            ("Part", false),
+            ("Plain", false),
+            ("Sub", true),
+            ("Vid", false)
+        ]
+    );
+    // No subtitle is confirmed for any of them.
+    assert!(list.iter().all(|w| w.subtitle.is_empty()));
+    assert!(list
+        .iter()
+        .all(|w| w.subtitle_coverage == Some(SubtitleCoverage::None)));
+}
+
+#[tokio::test]
+async fn a_work_whose_folder_is_gone_stays_listed_without_holdings_and_keeps_its_times() {
+    let store = store();
+    let (folder, _) = store
+        .add_folder(
+            "/w".into(),
+            scan(vec![work("Keep", vec![video(1, "01", "K S01E01.mkv")])]),
+            100,
+        )
+        .await
+        .unwrap();
+    store
+        .record_scan(
+            &folder.id,
+            Ok(scan(vec![
+                work("Keep", vec![video(1, "01", "K S01E01.mkv")]),
+                work(
+                    "Gone",
+                    vec![
+                        video(1, "01", "G S01E01.mkv"),
+                        subtitle(1, "01", "G S01E01.ass"),
+                    ],
+                ),
+            ])),
+            200,
+        )
+        .await
+        .unwrap();
+    store
+        .record_scan(
+            &folder.id,
+            Ok(scan(vec![work(
+                "Keep",
+                vec![video(1, "01", "K S01E01.mkv")],
+            )])),
+            300,
+        )
+        .await
+        .unwrap();
+
+    let list = store.overview().await.unwrap();
+    let gone = list.iter().find(|w| w.dir_name == "Gone").unwrap();
+    assert!(gone.missing);
+    assert!(gone.video.is_empty() && gone.subtitle.is_empty());
+    assert_eq!(gone.subtitle_coverage, None);
+    assert!(!gone.subtitle_check_needed);
+    // Its recorded times are still there for the orders.
+    assert_eq!(gone.first_seen_at, Some(200));
+    assert_eq!(gone.video_added_at, Some(200));
+    assert_eq!(gone.subtitle_added_at, Some(200));
+    let keep = list.iter().find(|w| w.dir_name == "Keep").unwrap();
+    assert!(!keep.missing);
+    assert_eq!(keep.video, [range("01", "01")]);
+}
+
+#[tokio::test]
+async fn the_list_takes_the_latest_known_time_over_seasons_and_none_when_all_are_unknown() {
+    let store = store();
+    let (folder, _) = store
+        .add_folder(
+            "/w".into(),
+            scan(vec![
+                work("Old", vec![video(1, "01", "O S01E01.mkv")]),
+                work(
+                    "Mixed",
+                    vec![
+                        video(1, "01", "M S01E01.mkv"),
+                        subtitle(1, "01", "M S01E01.ass"),
+                    ],
+                ),
+            ]),
+            100,
+        )
+        .await
+        .unwrap();
+    // A later scan: a new episode of the second season and a new subtitle.
+    store
+        .record_scan(
+            &folder.id,
+            Ok(scan(vec![
+                work("Old", vec![video(1, "01", "O S01E01.mkv")]),
+                work(
+                    "Mixed",
+                    vec![
+                        video(1, "01", "M S01E01.mkv"),
+                        subtitle(1, "01", "M S01E01.ass"),
+                        video(2, "01", "M S02E01.mkv"),
+                    ],
+                ),
+            ])),
+            200,
+        )
+        .await
+        .unwrap();
+    store
+        .record_scan(
+            &folder.id,
+            Ok(scan(vec![
+                work("Old", vec![video(1, "01", "O S01E01.mkv")]),
+                work(
+                    "Mixed",
+                    vec![
+                        video(1, "01", "M S01E01.mkv"),
+                        subtitle(1, "01", "M S01E01.ass"),
+                        video(2, "01", "M S02E01.mkv"),
+                        video(1, "02", "M S01E02.mkv"),
+                    ],
+                ),
+            ])),
+            300,
+        )
+        .await
+        .unwrap();
+
+    let list = store.overview().await.unwrap();
+    let old = list.iter().find(|w| w.dir_name == "Mixed").unwrap();
+    // The newest video is in season 1, the latest season is 2: times span all seasons.
+    assert_eq!(old.latest_season, Some(2));
+    assert_eq!(old.video_added_at, Some(300));
+    // The only subtitle is of unknown age.
+    assert_eq!(old.subtitle_added_at, None);
+    assert_eq!(old.first_seen_at, None);
+    // Holdings are the latest season's alone: a video and no subtitle.
+    assert_eq!(old.video, [range("01", "01")]);
+    assert!(old.subtitle.is_empty());
+    assert_eq!(old.subtitle_coverage, Some(SubtitleCoverage::None));
+
+    let plain = list.iter().find(|w| w.dir_name == "Old").unwrap();
+    assert_eq!(
+        (plain.video_added_at, plain.subtitle_added_at),
+        (None, None)
+    );
+}
+
+#[tokio::test]
+async fn a_work_without_a_season_folder_has_no_latest_season_and_no_holdings() {
+    let store = store();
+    store
+        .add_folder(
+            "/w".into(),
+            scan(vec![WorkRead::Read(ScannedWork {
+                dir_name: "Bare".into(),
+                ..ScannedWork::default()
+            })]),
+            100,
+        )
+        .await
+        .unwrap();
+    let list = store.overview().await.unwrap();
+    assert_eq!(list[0].latest_season, None);
+    assert!(list[0].video.is_empty());
+    assert_eq!(list[0].subtitle_coverage, Some(SubtitleCoverage::None));
+}

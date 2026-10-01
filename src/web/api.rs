@@ -20,6 +20,7 @@ pub fn router() -> Router<AppState> {
         .merge(super::commands_api::routes())
         .merge(super::history_api::routes())
         .merge(super::import_api::routes())
+        .merge(super::library_api::routes())
         .merge(super::rules_api::routes())
         .merge(super::settings_api::routes())
         .merge(super::status_api::routes())

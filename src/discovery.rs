@@ -338,7 +338,8 @@ fn extension(name: &str) -> Option<String> {
         .map(str::to_ascii_lowercase)
 }
 
-fn kind_of(name: &str) -> Option<FileKind> {
+/// Whether a file name is a video or a subtitle, by its extension.
+pub fn kind_of(name: &str) -> Option<FileKind> {
     let ext = extension(name)?;
     if VIDEO_EXTENSIONS.contains(&ext.as_str()) {
         Some(FileKind::Video)

@@ -23,6 +23,7 @@ pub mod env;
 pub mod error;
 pub mod history_api;
 pub mod import_api;
+pub mod library_api;
 pub mod rules_api;
 pub mod settings_api;
 pub mod state;
