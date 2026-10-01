@@ -1541,15 +1541,35 @@ impl Artwork {
 #[tokio::test]
 async fn an_image_whose_caller_went_away_is_stored_whole_and_then_cleaned_up() {
     let env = Env::new(&["A"]).await;
-    // The caller goes away as soon as the storing is under way.
-    let art = env.art.clone();
-    let caller = tokio::spawn(async move {
-        art.store_image(samples::png().into(), Source::Upload, None)
-            .await
+    // Hold the database, so that the storing is under way and cannot finish
+    // before the caller goes away, whatever the scheduling.
+    let (locked_tx, locked_rx) = tokio::sync::oneshot::channel();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    let db = env.db.clone();
+    let holder = tokio::spawn(async move {
+        db.run(move |_| {
+            let _ = locked_tx.send(());
+            let _ = released.recv();
+            Ok::<_, DbError>(())
+        })
+        .await
     });
-    tokio::task::yield_now().await;
-    caller.abort();
-    assert!(caller.await.unwrap_err().is_cancelled());
+    locked_rx.await.unwrap();
+    // The first poll starts the storing; the caller then goes away (its
+    // future is dropped, as a request handler's is when the client leaves).
+    let mut caller = Box::pin(
+        env.art
+            .store_image(samples::png().into(), Source::Upload, None),
+    );
+    let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+    assert!(std::future::Future::poll(caller.as_mut(), &mut cx).is_pending());
+    for _ in 0..8 {
+        tokio::task::yield_now().await;
+    }
+    drop(caller);
+    assert!(env.files().is_empty() && env.staging().is_empty());
+    drop(release);
+    holder.await.unwrap().unwrap();
     // The storing goes on to a published file whose identity is recorded,
     // never a staged file nobody can claim.
     let deadline = Instant::now() + Duration::from_secs(30);
