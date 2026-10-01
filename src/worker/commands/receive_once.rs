@@ -1,5 +1,7 @@
 //! `receive_once`, shown on the screen as `다시 받기`: receive again a history
-//! item that a rule picked but did not receive.
+//! item that a rule picked but did not receive. With a `rule_id` it receives
+//! an item the rule would pick but nobody has (`no_match`): a subscription's
+//! past items, which the user chooses one by one.
 //!
 //! The web accepts the command with a [`ReceiveOnce`] payload; the worker runs
 //! it with [`run`]. The command kind keeps its first name, which is stored
@@ -14,7 +16,8 @@
 //! episode conversion.
 //!
 //! 1. find the history item, its channel and its rule, and check that the item
-//!    can be retried ([`retry_plan`]); what cannot be retried ends the command
+//!    can be retried ([`retry_plan`]), or, for a request with a `rule_id`,
+//!    received by that rule ([`adoption_plan`]); what cannot be retried ends the command
 //!    at once, leaving the item as it is. A command stored with a folder chosen
 //!    by hand (see [`ReceiveOnce`]) ends the same way: it is not run into the
 //!    rule's folder. Every such end takes the command's label off a torrent an
@@ -59,7 +62,7 @@ use crate::{
         AddLabels, Redactor,
     },
     worker::{
-        plan::{rule_destination, ChannelPlan},
+        plan::{picks, rule_destination, ChannelPlan},
         CycleContext,
     },
 };
@@ -70,8 +73,9 @@ pub const KIND: &str = "receive_once";
 /// Longest failure reason kept, in characters.
 const MAX_REASON_CHARS: usize = 300;
 
-/// The content of a `receive_once` request: only the item. The save folder and
-/// the episode conversion are the rule's.
+/// The content of a `receive_once` request: the item, and for an item no rule
+/// has picked yet, the rule that receives it. The save folder and the episode
+/// conversion are the rule's.
 ///
 /// Requests accepted while a person still chose a save folder carry a
 /// `folder`; it is read so those stored commands still parse, and ignored.
@@ -81,6 +85,10 @@ const MAX_REASON_CHARS: usize = 300;
 pub struct ReceiveOnce {
     /// The history item to receive again.
     pub item_id: i64,
+    /// The rule that receives an item it would pick but did not (`no_match`).
+    /// Without it the item is retried by the rule that picked it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule_id: Option<String>,
     /// The folder an earlier version of this command let a person choose. Never
     /// written, never used; see above.
     #[serde(default, skip_serializing)]
@@ -91,6 +99,16 @@ impl ReceiveOnce {
     pub fn new(item_id: i64) -> ReceiveOnce {
         ReceiveOnce {
             item_id,
+            rule_id: None,
+            folder: None,
+        }
+    }
+
+    /// A request for `rule_id` to receive an item it would pick but did not.
+    pub fn by_rule(item_id: i64, rule_id: impl Into<String>) -> ReceiveOnce {
+        ReceiveOnce {
+            item_id,
+            rule_id: Some(rule_id.into()),
             folder: None,
         }
     }
@@ -105,7 +123,12 @@ impl ReceiveOnce {
     /// repeat of a request from a different one. It holds the item alone, so a
     /// repeat that also carries an empty `folder` is the same request.
     pub fn canonical(&self) -> String {
-        serde_json::to_string(&ReceiveOnce::new(self.item_id)).expect("a payload serializes")
+        let payload = ReceiveOnce {
+            item_id: self.item_id,
+            rule_id: self.rule_id.clone(),
+            folder: None,
+        };
+        serde_json::to_string(&payload).expect("a payload serializes")
     }
 
     /// The subject stored with the command: what it is about.
@@ -140,6 +163,15 @@ pub enum NotRetryable {
     /// The rule that picked the item is archived. Its work folder may be in the
     /// archive folder by now, so it is to be restored first.
     RuleArchived,
+    /// The rule asked to receive the item does not exist (any more).
+    RuleMissing,
+    /// The rule asked to receive the item belongs to another channel.
+    WrongChannel,
+    /// The rule would not pick the item: its title does not match, or the
+    /// channel excludes it.
+    NotMatching,
+    /// A different rule picked the item and failed to add it.
+    OtherRule,
 }
 
 impl NotRetryable {
@@ -158,6 +190,14 @@ impl NotRetryable {
             }
             NotRetryable::RuleDeleted => "이 항목을 고른 규칙이 지워져서 다시 받을 수 없어요.",
             NotRetryable::RuleArchived => "규칙이 보관돼 있어요. 복원한 뒤 다시 받아요.",
+            NotRetryable::RuleMissing => "받으려는 규칙을 찾지 못했어요. 삭제됐을 수 있어요.",
+            NotRetryable::WrongChannel => "이 규칙은 다른 채널의 규칙이라 이 항목을 받을 수 없어요.",
+            NotRetryable::NotMatching => {
+                "이 규칙이 고르지 않는 항목이에요. 제목이 맞지 않거나 채널의 제외 조건에 걸려요."
+            }
+            NotRetryable::OtherRule => {
+                "다른 규칙이 받으려다 실패한 항목이에요. 그 규칙으로 다시 받아요."
+            }
         }
     }
 
@@ -199,6 +239,36 @@ pub fn retry_plan<'a>(
     let rule = rule.ok_or(NotRetryable::RuleDeleted)?;
     if rule.state != RuleState::Active {
         return Err(NotRetryable::RuleArchived);
+    }
+    Ok(RetryPlan { channel, rule })
+}
+
+/// Whether `rule` may receive `item`, an item that no rule has received: the
+/// plan of a request with a `rule_id`. The rule must exist, be active and be in
+/// the item's channel, and it must pick the item (`no_match`) the way the rule
+/// cycle would. An item a rule picked and failed to add is received again by
+/// that rule only, and one Transmission holds already needs nothing.
+pub fn adoption_plan<'a>(
+    item: &HistoryItem,
+    channel: Option<&'a Channel>,
+    rule: Option<&'a Rule>,
+) -> Result<RetryPlan<'a>, NotRetryable> {
+    let channel = channel.ok_or(NotRetryable::ChannelDeleted)?;
+    let rule = rule.ok_or(NotRetryable::RuleMissing)?;
+    if rule.channel_id != item.channel_id {
+        return Err(NotRetryable::WrongChannel);
+    }
+    if item.result.is_settled() {
+        return Err(NotRetryable::Held);
+    }
+    if rule.state != RuleState::Active {
+        return Err(NotRetryable::RuleArchived);
+    }
+    match item.result {
+        HistoryResult::AddFailed if item.rule_id.as_deref() == Some(rule.id.as_str()) => {}
+        HistoryResult::AddFailed => return Err(NotRetryable::OtherRule),
+        _ if picks(channel, rule, &item.title) => {}
+        _ => return Err(NotRetryable::NotMatching),
     }
     Ok(RetryPlan { channel, rule })
 }
@@ -369,13 +439,19 @@ pub async fn execute(
         .await
         .map_err(Retry::store)?;
 
-    // The rule that picked the item decides where it goes. It is read now, not
-    // when the request was accepted: the rule may be gone or archived since.
-    let rule = match &item.rule_id {
+    // The rule that picked the item (or the one asked to receive it) decides
+    // where it goes. It is read now, not when the request was accepted: the
+    // rule may be gone or archived since.
+    let rule = match payload.rule_id.as_ref().or(item.rule_id.as_ref()) {
         Some(id) => ctx.channels.get_rule(id).await.map_err(Retry::store)?,
         None => None,
     };
-    let plan = match retry_plan(&item, channel.as_ref(), rule.as_ref()) {
+    let planned = if payload.rule_id.is_some() {
+        adoption_plan(&item, channel.as_ref(), rule.as_ref())
+    } else {
+        retry_plan(&item, channel.as_ref(), rule.as_ref())
+    };
+    let plan = match planned {
         Ok(plan) => plan,
         // Something holds the item's torrent now (a rule took it after the
         // request was accepted): that is the command's result too.
@@ -396,7 +472,11 @@ pub async fn execute(
     let raw_link = match link::recover(&item, &channel, &ctx.http, &redactor).await {
         Ok(raw) => raw,
         Err(_) if keep_trying => return Err(Retry::AddUnanswered),
-        Err(reason) => return refuse(ctx, &item, &reason, &now).await.map(unaccounted),
+        Err(reason) => {
+            return refuse(ctx, &item, &rule_id, &reason, &now)
+                .await
+                .map(unaccounted)
+        }
     };
     // The recovered link is a secret from here on, whatever it carried.
     let mut redactor = redactor;
@@ -470,7 +550,7 @@ pub async fn execute(
             if (unanswered && command.attempts < MAX_ATTEMPTS) || keep_trying {
                 return Err(Retry::AddUnanswered);
             }
-            let finished = refuse(ctx, &item, &reason, &now).await?;
+            let finished = refuse(ctx, &item, &rule_id, &reason, &now).await?;
             // A refusal does not say what Transmission holds either: it
             // fetches a `.torrent` link before it can tell it has the torrent.
             let mut finished = unaccounted(finished);
@@ -515,6 +595,7 @@ fn held(stored: HistoryResult, rename: Option<Rename>) -> Finished {
 async fn refuse(
     ctx: &CycleContext,
     item: &HistoryItem,
+    rule_id: &str,
     reason: &str,
     now: &impl Fn() -> Millis,
 ) -> Result<Finished, Retry> {
@@ -525,7 +606,7 @@ async fn refuse(
             item.id,
             now(),
             HistoryResult::AddFailed,
-            item.rule_id.clone(),
+            Some(rule_id.to_owned()),
             Some(reason.clone()),
             None,
         )
@@ -684,12 +765,105 @@ mod tests {
         let a = ReceiveOnce::new(7);
         let with_empty_folder = ReceiveOnce {
             item_id: 7,
+            rule_id: None,
             folder: Some("  ".into()),
         };
         let other = ReceiveOnce::new(8);
         assert_eq!(a.canonical(), with_empty_folder.canonical());
         assert_ne!(a.canonical(), other.canonical());
         assert_eq!(a.canonical(), r#"{"item_id":7}"#);
+    }
+
+    #[test]
+    fn a_request_for_a_rule_is_another_request_than_the_plain_one() {
+        let by_rule = ReceiveOnce::by_rule(7, "r1");
+        assert_eq!(by_rule.canonical(), r#"{"item_id":7,"rule_id":"r1"}"#);
+        assert_ne!(by_rule.canonical(), ReceiveOnce::new(7).canonical());
+        assert_ne!(
+            by_rule.canonical(),
+            ReceiveOnce::by_rule(7, "r2").canonical()
+        );
+        assert_eq!(
+            serde_json::from_str::<ReceiveOnce>(r#"{"item_id":7,"rule_id":"r1"}"#).unwrap(),
+            by_rule
+        );
+        assert_eq!(by_rule.subject(), "7");
+    }
+
+    #[test]
+    fn a_rule_receives_an_item_it_would_pick_in_its_own_channel_only_while_active() {
+        let (channel, active, archived) = (
+            channel(),
+            rule(RuleState::Active),
+            rule(RuleState::Archived),
+        );
+        let missed = item(HistoryResult::NoMatch, None);
+        assert_eq!(
+            adoption_plan(&missed, Some(&channel), Some(&active))
+                .unwrap()
+                .rule
+                .id,
+            "r1"
+        );
+
+        let why =
+            |item: &HistoryItem, channel, rule| adoption_plan(item, channel, rule).unwrap_err();
+        assert_eq!(
+            why(&missed, Some(&channel), None),
+            NotRetryable::RuleMissing
+        );
+        assert_eq!(
+            why(&missed, None, Some(&active)),
+            NotRetryable::ChannelDeleted
+        );
+        assert_eq!(
+            why(&missed, Some(&channel), Some(&archived)),
+            NotRetryable::RuleArchived
+        );
+        let elsewhere = Rule {
+            channel_id: "c2".into(),
+            ..rule(RuleState::Active)
+        };
+        assert_eq!(
+            why(&missed, Some(&channel), Some(&elsewhere)),
+            NotRetryable::WrongChannel
+        );
+        // The title must match the rule, and the channel must not exclude it.
+        let other_phrase = Rule {
+            r#match: Some("Another Show".into()),
+            ..rule(RuleState::Active)
+        };
+        assert_eq!(
+            why(&missed, Some(&channel), Some(&other_phrase)),
+            NotRetryable::NotMatching
+        );
+        let excluding = Channel {
+            excludes: vec!["26".into()],
+            ..channel.clone()
+        };
+        assert_eq!(
+            why(&missed, Some(&excluding), Some(&active)),
+            NotRetryable::NotMatching
+        );
+        let excluded = item(HistoryResult::Excluded, None);
+        assert_eq!(
+            why(&excluded, Some(&excluding), Some(&active)),
+            NotRetryable::NotMatching
+        );
+        for result in [HistoryResult::Received, HistoryResult::Duplicate] {
+            assert_eq!(
+                why(&item(result, Some("r1")), Some(&channel), Some(&active)),
+                NotRetryable::Held
+            );
+        }
+        // A failed add is repaired by the rule that picked it, not another.
+        let failed = item(HistoryResult::AddFailed, Some("r1"));
+        assert!(adoption_plan(&failed, Some(&channel), Some(&active)).is_ok());
+        let failed_elsewhere = item(HistoryResult::AddFailed, Some("r9"));
+        assert_eq!(
+            why(&failed_elsewhere, Some(&channel), Some(&active)),
+            NotRetryable::OtherRule
+        );
     }
 
     #[test]

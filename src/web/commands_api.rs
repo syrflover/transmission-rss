@@ -9,7 +9,7 @@
 //!
 //! | kind           | on screen    | payload                                                        |
 //! | -------------- | ------------ | -------------------------------------------------------------- |
-//! | `receive_once` | `다시 받기`  | `{ "item_id": <history item> }`                                |
+//! | `receive_once` | `다시 받기`·`받기` | `{ "item_id": <history item>, "rule_id": <rule> }` (`rule_id` only to receive an item no rule has picked) |
 //! | `rule_archive` | `보관`·`복원` | `{ "rule_id": <rule>, "direction": "archive" \| "restore" }` |
 //! | `watch_rescan` | `다시 확인`  | `{ "folder_id": <watch folder> }`                              |
 //!
@@ -305,12 +305,16 @@ async fn check_receive_once(
         .map_err(|e| ApiError::Internal(e.to_string()))?
         .ok_or_else(|| ApiError::not_found("기록에서 이 항목을 찾지 못했어요."))?;
     let channel = state.channels.get_channel(&item.channel_id).await?;
-    let rule = match &item.rule_id {
+    let rule = match payload.rule_id.as_ref().or(item.rule_id.as_ref()) {
         Some(id) => state.channels.get_rule(id).await?,
         None => None,
     };
-    receive_once::retry_plan(&item, channel.as_ref(), rule.as_ref())
-        .map_err(|why| ApiError::invalid(why.message()))?;
+    let planned = if payload.rule_id.is_some() {
+        receive_once::adoption_plan(&item, channel.as_ref(), rule.as_ref())
+    } else {
+        receive_once::retry_plan(&item, channel.as_ref(), rule.as_ref())
+    };
+    planned.map_err(|why| ApiError::invalid(why.message()))?;
     Ok(())
 }
 

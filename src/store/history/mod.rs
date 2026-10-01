@@ -124,6 +124,22 @@ impl HistoryStore {
             .map(|hashes| hashes.into_iter().collect())
     }
 
+    /// When each of the given items of a channel was first seen and what became
+    /// of it, by identity key: what a cycle needs to tell the items a rule has
+    /// not seen yet from the ones already in history.
+    pub async fn known_items(
+        &self,
+        channel_id: String,
+        keys: Vec<String>,
+    ) -> Result<std::collections::HashMap<String, (Millis, HistoryResult)>, HistoryError> {
+        if keys.is_empty() {
+            return Ok(Default::default());
+        }
+        self.db
+            .run(move |c| repo::known_items(c, &channel_id, &keys))
+            .await
+    }
+
     /// Sets an item's result from something done to it outside a cycle (a
     /// command from the web), by the transition rules of [`Transition::between`],
     /// and returns the item's result afterwards (`None` for an unknown item).

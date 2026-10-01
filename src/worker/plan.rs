@@ -1,10 +1,16 @@
 //! Mapping from the stored channels and rules to the shared rule evaluation.
 
-use std::path::{Path, PathBuf};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 
 use crate::{
     rss::{save_path, ChannelEvaluator, ChannelSpec, Outcome, RuleSpec, SkipReason},
-    store::channels::{Channel, ChannelWithRules, Rule, RuleState},
+    store::{
+        channels::{Channel, ChannelWithRules, Rule, RuleState},
+        history::{HistoryResult, Millis},
+    },
     transmission::Redactor,
 };
 
@@ -47,6 +53,8 @@ pub struct ChannelPlan {
     evaluator: ChannelEvaluator,
     /// Stored rule ID at each evaluation rule number.
     rule_ids: Vec<String>,
+    /// When each active subscription rule became one, by rule ID.
+    subscribed_at: HashMap<String, Millis>,
 }
 
 impl ChannelPlan {
@@ -72,12 +80,45 @@ impl ChannelPlan {
             rules: active.iter().map(|rule| rule_spec(rule)).collect(),
         };
         let rule_ids = active.iter().map(|rule| rule.id.clone()).collect();
+        let subscribed_at = active
+            .iter()
+            .filter_map(|rule| Some((rule.id.clone(), rule.subscription.as_ref()?.subscribed_at)))
+            .collect();
 
         ChannelPlan {
             channel,
             evaluator: ChannelEvaluator::new(spec),
             rule_ids,
+            subscribed_at,
         }
+    }
+
+    /// Whether `rule_id` is an active subscription rule of this plan.
+    pub fn is_subscription(&self, rule_id: &str) -> bool {
+        self.subscribed_at.contains_key(rule_id)
+    }
+
+    /// Whether the plan has an active subscription rule.
+    pub fn has_subscriptions(&self) -> bool {
+        !self.subscribed_at.is_empty()
+    }
+
+    /// Whether `rule_id` is a subscription rule that must leave an item alone
+    /// because the item is past: history had recorded it, without any rule
+    /// taking it, before the rule became a subscription. Only the user receives
+    /// those, after looking at them (`docs/specs/collection.md`, 방영작 구독).
+    /// `known` is the item's history record: when it was first seen and its
+    /// result. An item a rule picked and failed to add is not past, nor is one
+    /// first seen after the subscription began.
+    pub fn is_past(&self, rule_id: &str, known: Option<(Millis, HistoryResult)>) -> bool {
+        let Some(subscribed_at) = self.subscribed_at.get(rule_id) else {
+            return false;
+        };
+        matches!(
+            known,
+            Some((first_seen_at, HistoryResult::NoMatch | HistoryResult::Excluded))
+                if first_seen_at < *subscribed_at
+        )
     }
 
     pub fn judge(&self, title: &str) -> Judgement {
@@ -159,6 +200,24 @@ impl ChannelPlan {
 pub fn rule_destination(collect_folder: &Path, rule: &Rule) -> (PathBuf, isize) {
     let spec = rule_spec(rule);
     (save_path(collect_folder, &spec.directory), spec.episode)
+}
+
+/// Whether `rule` alone would select an item with this title in `channel`:
+/// the channel does not exclude it and the rule matches. Other rules and the
+/// rule's state are not looked at.
+pub fn picks(channel: &Channel, rule: &Rule, title: &str) -> bool {
+    let active = Rule {
+        state: RuleState::Active,
+        ..rule.clone()
+    };
+    let plan = ChannelPlan::new(
+        ChannelWithRules {
+            channel: channel.clone(),
+            rules: vec![active],
+        },
+        Path::new(""),
+    );
+    matches!(plan.judge(title), Judgement::Selected { .. })
 }
 
 fn rule_spec(rule: &Rule) -> RuleSpec {
