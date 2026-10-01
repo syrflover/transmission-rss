@@ -1143,21 +1143,28 @@ async fn rename(ctx: &CycleContext, row: &Revision, listing: &Listing) -> Next {
         }
         Err(err) => return Next::Later(format!("cannot look at {}: {err}", target.display())),
     }
+    // The new video missing on two looks in a row (one per cycle) ends the
+    // replacement: the first may be a mount that was away for a moment.
+    match new_video_gone(row) {
+        Ok(false) => {}
+        Ok(true) if row.reason.as_deref() == Some(NEW_FILE_MISSING) => {
+            return Next::Step(Step::Abandoned {
+                reason: ABANDONED.to_owned(),
+            })
+        }
+        Ok(true) => {
+            return Next::Step(Step::Removed {
+                reason: Some(NEW_FILE_MISSING.to_owned()),
+            })
+        }
+        Err(why) => return Next::Later(why),
+    }
     let Some(received_name) = row.received_name.clone() else {
         return Next::Step(Step::Removed {
             reason: Some(NEW_FILE_MISSING.to_owned()),
         });
     };
     let source = folder.join(&received_name);
-    match exists(&source) {
-        Ok(true) => {}
-        Ok(false) => {
-            return Next::Step(Step::Removed {
-                reason: Some(NEW_FILE_MISSING.to_owned()),
-            })
-        }
-        Err(err) => return Next::Later(format!("cannot look at {}: {err}", source.display())),
-    }
 
     let mut transmission = ctx.transmission();
     let torrent = match &row.torrent_hash {

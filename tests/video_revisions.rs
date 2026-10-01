@@ -2209,6 +2209,16 @@ impl Setup {
         assert_eq!(read(&self.file(EPISODE_NAME)), OLD_BYTES);
     }
 
+    /// How many torrent removals asked for the data to go too.
+    fn removals_with_data(&self) -> usize {
+        self.h
+            .tr
+            .calls_of("torrent-remove")
+            .iter()
+            .filter(|c| c.args["delete-local-data"] == true)
+            .count()
+    }
+
     /// `14v3` appears and is received and checked.
     async fn v3_received(&self) {
         self.feed(&[(V3_HASH, &v3()), (OLD_HASH, &v1())]);
@@ -2228,7 +2238,7 @@ impl Setup {
 async fn a_new_video_deleted_while_the_old_file_is_left_ends_the_replacement() {
     let s = Setup::new().await;
     s.removal_waits().await;
-    let removes = s.h.tr.calls_of("torrent-remove").len();
+    let removes = s.removals_with_data();
     let adds = s.added(OLD_HASH);
 
     std::fs::remove_file(s.file(&v2())).unwrap();
@@ -2245,7 +2255,7 @@ async fn a_new_video_deleted_while_the_old_file_is_left_ends_the_replacement() {
     s.cycle().await;
     assert_eq!(s.names(), vec![EPISODE_NAME]);
     assert_eq!(read(&s.file(EPISODE_NAME)), OLD_BYTES);
-    assert_eq!(s.h.tr.calls_of("torrent-remove").len(), removes);
+    assert_eq!(s.removals_with_data(), removes);
     assert_eq!(
         s.added(OLD_HASH),
         adds,
@@ -2258,4 +2268,86 @@ async fn a_new_video_deleted_while_the_old_file_is_left_ends_the_replacement() {
     assert_eq!(s.state_of(&v3()).await, RevisionState::Done);
     assert_eq!(s.names(), vec![EPISODE_NAME]);
     assert_eq!(read(&s.file(EPISODE_NAME)), V3_BYTES);
+}
+
+/// The old video is gone and `14v2`'s rename has not gone through when its
+/// file goes missing for one look (a mount that was away): it keeps waiting,
+/// and takes the episode name once the file is back.
+#[tokio::test]
+async fn a_new_video_missing_on_one_look_still_takes_the_name() {
+    let s = Setup::new().await;
+    s.received_v1().await;
+    s.feed(&[(NEW_HASH, &v2()), (OLD_HASH, &v1())]);
+    s.h.tr.content_on_add(NEW_HASH, NEW_BYTES);
+    s.cycle().await;
+    s.complete(NEW_HASH);
+    s.h.tr.reject_rename_of(NEW_HASH, Some("busy"));
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Removed);
+    assert_eq!(s.names(), vec![v2()]);
+
+    let away = s.season.parent().unwrap().join("away.mkv");
+    std::fs::rename(s.file(&v2()), &away).unwrap();
+    s.cycle().await;
+    let row = s.row_of(&v2()).await;
+    assert_eq!(row.state, RevisionState::Removed);
+    assert!(
+        row.reason.as_deref().unwrap().contains("찾지 못해"),
+        "{row:?}"
+    );
+
+    std::fs::rename(&away, s.file(&v2())).unwrap();
+    s.h.tr.reject_rename_of(NEW_HASH, None);
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Done);
+    assert_eq!(s.names(), vec![EPISODE_NAME]);
+    assert_eq!(read(&s.file(EPISODE_NAME)), NEW_BYTES);
+}
+
+/// `14v2` removed the old video (its file had waited after the torrent was
+/// removed) and its rename has not gone through when its own file goes
+/// missing. Missing on two looks in a row, the replacement ends without
+/// anything deleted, and `14v3`, decided while the old file was there, is
+/// no longer held up by it.
+#[tokio::test]
+async fn a_new_video_missing_on_two_looks_ends_the_replacement() {
+    let s = Setup::new().await;
+    s.removal_waits().await;
+    s.v3_received().await;
+    s.cycle().await;
+    assert_eq!(s.state_of(&v3()).await, RevisionState::Verified);
+
+    // The old file goes; `14v2`'s rename is refused for now.
+    s.h.tr.reject_rename_of(NEW_HASH, Some("busy"));
+    std::fs::remove_file(s.file(EPISODE_NAME)).unwrap();
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Removed);
+    assert_eq!(s.state_of(&v3()).await, RevisionState::Verified);
+
+    // Its file goes missing.
+    std::fs::remove_file(s.file(&v2())).unwrap();
+    let removes = s.removals_with_data();
+    let adds = s.added(OLD_HASH);
+    s.cycle().await;
+    assert_eq!(
+        s.state_of(&v2()).await,
+        RevisionState::Removed,
+        "seen missing once"
+    );
+    assert_eq!(s.state_of(&v3()).await, RevisionState::Verified);
+
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await.code(), "abandoned");
+    assert_eq!(s.state_of(&v3()).await, RevisionState::Done);
+    assert_eq!(s.names(), vec![EPISODE_NAME]);
+    assert_eq!(read(&s.file(EPISODE_NAME)), V3_BYTES);
+    // The cycle may take `14v2`'s torrent out once its item left the feed,
+    // as any; never with data.
+    assert_eq!(s.removals_with_data(), removes);
+    assert_eq!(
+        s.added(OLD_HASH),
+        adds,
+        "the old release is not received again"
+    );
+    assert!(s.failures().await.is_empty());
 }
