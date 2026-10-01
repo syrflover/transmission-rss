@@ -512,8 +512,10 @@ impl LiveWatch {
         });
     }
 
-    /// Some works of folder `id` were read, `clean` when nothing could not be read.
-    pub(super) fn works_scan_done(&self, id: &str, names: &[String], clean: bool) {
+    /// A read of some works of folder `id` starts. Logged before anything is
+    /// recorded, as a whole read is, so a reading whose record can be seen is
+    /// always in [`LiveWatch::readings`] already.
+    pub(super) fn works_scan_started(&self, id: &str, names: &[String]) {
         self.inner
             .stats
             .work_reads
@@ -521,6 +523,11 @@ impl LiveWatch {
         for name in names {
             self.log(Reading::Work(id.to_owned(), name.clone()));
         }
+    }
+
+    /// A read of some works of folder `id` ended, `clean` when nothing could
+    /// not be read.
+    pub(super) fn works_scan_done(&self, id: &str, clean: bool) {
         if !clean {
             self.with_status(id, |status| status.scan_problem = true);
         }

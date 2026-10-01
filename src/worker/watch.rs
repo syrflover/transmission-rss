@@ -259,6 +259,7 @@ pub async fn scan_works(
     mode: WorksMode,
 ) -> Result<Scanned, LibraryError> {
     let started = Instant::now();
+    ctx.live.works_scan_started(&folder.id, &names);
     let previous = match mode {
         WorksMode::Fresh => None,
         WorksMode::Incremental => ctx
@@ -302,7 +303,7 @@ pub async fn scan_works(
             );
             let message = error.message.clone();
             let recorded = ctx.library.record_scan(&folder.id, Err(error), now).await?;
-            ctx.live.works_scan_done(&folder.id, &names, false);
+            ctx.live.works_scan_done(&folder.id, false);
             return Ok(match recorded {
                 Some(_) => Scanned::Failed(message),
                 None => Scanned::Gone,
@@ -312,8 +313,7 @@ pub async fn scan_works(
     let Some(report) = recorded else {
         return Ok(Scanned::Gone);
     };
-    ctx.live
-        .works_scan_done(&folder.id, &names, report.error.is_none());
+    ctx.live.works_scan_done(&folder.id, report.error.is_none());
     println!(
         "Watch folder {}: {} works read ({}): {} found, {} new, {} files added, {} removed, \
          {} missing; read in {} ms, took {} ms in all",
