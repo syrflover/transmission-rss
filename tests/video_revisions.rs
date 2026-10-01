@@ -2561,3 +2561,77 @@ async fn a_new_video_without_its_identity_kept_is_told_by_its_length() {
     assert_eq!(s.names(), vec![EPISODE_NAME]);
     assert_eq!(read(&s.file(EPISODE_NAME)), V3_BYTES);
 }
+
+// --- Two looks in a row ------------------------------------------------------------
+
+impl Setup {
+    /// `14v2` removed `14` and its rename is refused for now.
+    async fn v2_waits_for_its_name(&self) {
+        self.received_v1().await;
+        self.feed(&[(NEW_HASH, &v2()), (OLD_HASH, &v1())]);
+        self.h.tr.content_on_add(NEW_HASH, NEW_BYTES);
+        self.cycle().await;
+        self.complete(NEW_HASH);
+        self.h.tr.reject_rename_of(NEW_HASH, Some("busy"));
+        self.cycle().await;
+        assert_eq!(self.state_of(&v2()).await, RevisionState::Removed);
+        assert_eq!(self.names(), vec![v2()]);
+    }
+
+    /// Where a test puts `14v2`'s file while it is "missing".
+    fn away(&self) -> PathBuf {
+        self.season.parent().unwrap().join("away.mkv")
+    }
+}
+
+/// `14v2`'s file is missing on one look, there on the next (which goes no
+/// further: Transmission does not answer), and missing again on the one
+/// after. No two looks in a row found it missing, so the replacement goes on,
+/// and the file takes the name once it is back.
+#[tokio::test]
+async fn a_new_video_found_between_two_misses_keeps_its_replacement() {
+    let mut s = Setup::new().await;
+    s.v2_waits_for_its_name().await;
+
+    std::fs::rename(s.file(&v2()), s.away()).unwrap();
+    s.cycle().await;
+    std::fs::rename(s.away(), s.file(&v2())).unwrap();
+    s.h.tr.stop().await;
+    s.cycle().await;
+    s.h.tr.restart().await;
+    std::fs::rename(s.file(&v2()), s.away()).unwrap();
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Removed);
+
+    std::fs::rename(s.away(), s.file(&v2())).unwrap();
+    s.h.tr.reject_rename_of(NEW_HASH, None);
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Done);
+    assert_eq!(s.names(), vec![EPISODE_NAME]);
+    assert_eq!(read(&s.file(EPISODE_NAME)), NEW_BYTES);
+}
+
+/// `14v2`'s file is missing on one look, and on the next its whole folder is
+/// away (a mount): that look decides nothing and breaks the run, so the file
+/// missing once more after the folder is back is a first miss again.
+#[tokio::test]
+async fn a_folder_away_between_two_misses_keeps_the_replacement() {
+    let s = Setup::new().await;
+    s.v2_waits_for_its_name().await;
+
+    std::fs::rename(s.file(&v2()), s.away()).unwrap();
+    s.cycle().await;
+    let elsewhere = s.season.with_file_name("Season 01 away");
+    std::fs::rename(&s.season, &elsewhere).unwrap();
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Removed);
+    std::fs::rename(&elsewhere, &s.season).unwrap();
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Removed);
+
+    std::fs::rename(s.away(), s.file(&v2())).unwrap();
+    s.h.tr.reject_rename_of(NEW_HASH, None);
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Done);
+    assert_eq!(read(&s.file(EPISODE_NAME)), NEW_BYTES);
+}

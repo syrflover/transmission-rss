@@ -16,7 +16,10 @@
 -- `file_identity` what told that file apart when it was read (device, inode,
 -- size, modification and status-change times, `:`-joined): the old video is
 -- removed only while the file under `received_name` is still that one.
--- `state` is where
+-- `new_missing_at` is when a look, with the folder there, last found the new
+-- video missing (or, before the old video is removed, not the checked file);
+-- NULL once a look finds it, or finds the folder away. A second such look in
+-- a row ends the replacement. `state` is where
 -- the replacement is; the worker writes each step before it takes the next
 -- (see `RevisionState`). `overtaken_by` is the row of the higher revision a
 -- `skipped` row was skipped for while that one was on its way; when that row
@@ -47,7 +50,8 @@ CREATE TABLE video_revisions (
     created_at    INTEGER NOT NULL,
     updated_at    INTEGER NOT NULL,
     replaced_at   INTEGER,
-    overtaken_by  INTEGER REFERENCES video_revisions (id)
+    overtaken_by  INTEGER REFERENCES video_revisions (id),
+    new_missing_at INTEGER
 );
 
 CREATE INDEX video_revisions_old_item ON video_revisions (old_item_id);

@@ -731,3 +731,52 @@ async fn an_abandoned_replacement_keeps_the_old_release_superseded_and_holds_not
     assert_eq!(marks.get("14"), Some(&Mark::Superseded));
     assert_eq!(store.replacements().await.unwrap().len(), 1);
 }
+
+/// A look that missed the new video marks the row; one that found it again
+/// forgets the mark, and the reason only when it was the miss's.
+#[tokio::test]
+async fn a_found_new_video_forgets_the_miss_and_its_reason() {
+    let (_dir, db) = db().await;
+    let store = RevisionStore::new(db.clone());
+    let v2 = store
+        .create(10, of_episode(item(&db, "14v2").await, "14v2", 2))
+        .await
+        .unwrap();
+    verified(&store, v2.id).await;
+    let step = Step::NewMissing {
+        reason: "missing".into(),
+    };
+    assert!(store
+        .advance(v2.id, 20, RevisionState::Verified, step)
+        .await
+        .unwrap());
+    let row = store.by_item(v2.item_id).await.unwrap().unwrap();
+    assert_eq!(
+        (row.state, row.new_missing_at, row.reason.as_deref()),
+        (RevisionState::Verified, Some(20), Some("missing"))
+    );
+
+    store
+        .forget_miss(v2.id, Some("other".into()))
+        .await
+        .unwrap();
+    let row = store.by_item(v2.item_id).await.unwrap().unwrap();
+    assert_eq!(
+        (row.new_missing_at, row.reason.as_deref()),
+        (None, Some("missing"))
+    );
+
+    let step = Step::NewMissing {
+        reason: "missing".into(),
+    };
+    store
+        .advance(v2.id, 30, RevisionState::Verified, step)
+        .await
+        .unwrap();
+    store
+        .forget_miss(v2.id, Some("missing".into()))
+        .await
+        .unwrap();
+    let row = store.by_item(v2.item_id).await.unwrap().unwrap();
+    assert_eq!((row.new_missing_at, row.reason), (None, None));
+}

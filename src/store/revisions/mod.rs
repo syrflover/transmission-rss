@@ -204,6 +204,12 @@ pub struct Revision {
     /// ([`crate::revision::FileIdentity::to_text`]): the old video is removed
     /// only while the file under `received_name` is still that one.
     pub file_identity: Option<String>,
+    /// When a look, with the folder there, last found the new video missing
+    /// (or, before the old video is removed, not the checked file):
+    /// [`Step::NewMissing`]. `None` once a look finds it, or finds the folder
+    /// away ([`RevisionStore::forget_miss`]). The next such look in a row
+    /// ends the replacement.
+    pub new_missing_at: Option<Millis>,
     pub state: RevisionState,
     /// Why the replacement failed or waits; free of secret values.
     pub reason: Option<String>,
@@ -294,12 +300,18 @@ pub enum Step {
     /// ([`Step::Failed`]). Not written when nothing overtakes the row any
     /// more.
     Overtaken,
-    /// A `removing` row that waits with the old video in place: its old
-    /// torrent Transmission took out while the old video's file is still
-    /// there, or its new video was not the checked one right before the old
-    /// video was to be removed. It stays `removing` (the old release stays
-    /// superseded) and `reason` says why it waits.
+    /// A `removing` row whose old torrent Transmission took out while the
+    /// old video's file is still there: it stays `removing` (the old release
+    /// stays superseded) and `reason` says why it waits.
     RemovalWaits {
+        reason: String,
+    },
+    /// A look, with the folder there, found the new video missing (or, before
+    /// the old video is removed, not the checked file): the row keeps its
+    /// state, `reason` says why it waits, and [`Revision::new_missing_at`]
+    /// marks the look. The next such look in a row ends the replacement
+    /// ([`Step::Abandoned`]).
+    NewMissing {
         reason: String,
     },
     /// A `removing` or `removed` row whose new video was gone (or, before
@@ -413,7 +425,7 @@ pub struct WorkRef {
 const COLUMNS: &str = "id, item_id, old_item_id, rule_id, folder, episode_name, old_version, \
      new_version, expected_crc, torrent_hash, received_name, file_crc, state, reason, \
      created_at, updated_at, replaced_at, old_crc, old_torrent_hash, overtaken_by, \
-     file_identity";
+     file_identity, new_missing_at";
 
 fn from_row(row: &Row<'_>) -> rusqlite::Result<Revision> {
     from_row_at(row, 0)
@@ -451,6 +463,7 @@ fn from_row_at(row: &Row<'_>, at: usize) -> rusqlite::Result<Revision> {
         old_torrent_hash: row.get(at + 18)?,
         overtaken_by: row.get(at + 19)?,
         file_identity: row.get(at + 20)?,
+        new_missing_at: row.get(at + 21)?,
     })
 }
 
@@ -1017,7 +1030,8 @@ impl RevisionStore {
                         file_identity,
                     } => tx.execute(
                         "UPDATE video_revisions SET state = 'verified', received_name = ?2,
-                             file_crc = ?3, file_identity = ?5, reason = NULL, updated_at = ?4
+                             file_crc = ?3, file_identity = ?5, new_missing_at = NULL,
+                             reason = NULL, updated_at = ?4
                           WHERE id = ?1",
                         params![id, received_name, file_crc, at, file_identity],
                     )?,
@@ -1064,6 +1078,7 @@ impl RevisionStore {
                             "UPDATE video_revisions
                                 SET state = 'receiving', reason = NULL, received_name = NULL,
                                     file_crc = NULL, file_identity = NULL, overtaken_by = NULL,
+                                    new_missing_at = NULL,
                                     updated_at = ?2
                               WHERE state = 'skipped' AND overtaken_by = ?1",
                             params![id, at],
@@ -1102,9 +1117,33 @@ impl RevisionStore {
                           WHERE id = ?1 AND state = 'removing'",
                         params![id, reason, at],
                     )?,
+                    Step::NewMissing { reason } => tx.execute(
+                        "UPDATE video_revisions SET reason = ?2, new_missing_at = ?3,
+                             updated_at = ?3 WHERE id = ?1",
+                        params![id, reason, at],
+                    )?,
                 };
                 tx.commit()?;
                 Ok(true)
+            })
+            .await
+    }
+
+    /// A look at the new video of the row `id` found it, or found its folder
+    /// away: an earlier miss ([`Step::NewMissing`]) no longer counts toward
+    /// two in a row. A `reason` that was the miss's (`miss_reason`) goes with
+    /// it. Nothing else of the row changes.
+    pub async fn forget_miss(&self, id: i64, miss_reason: Option<String>) -> Result<()> {
+        self.db
+            .run(move |c| {
+                c.execute(
+                    "UPDATE video_revisions
+                        SET new_missing_at = NULL,
+                            reason = CASE WHEN reason = ?2 THEN NULL ELSE reason END
+                      WHERE id = ?1 AND new_missing_at IS NOT NULL",
+                    params![id, miss_reason],
+                )?;
+                Ok(())
             })
             .await
     }
