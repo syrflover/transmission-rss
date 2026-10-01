@@ -114,7 +114,46 @@ pub const CRC_BUFFER: usize = 1 << 20;
 /// [`CRC_BUFFER`]-sized buffer: a video of any size costs that much memory.
 /// Blocking; call it off the async threads.
 pub fn file_crc32(path: &Path) -> io::Result<u32> {
+    file_crc32_identified(path).map(|(crc, _)| crc)
+}
+
+/// What tells a file apart from another one put under its name: its device
+/// and inode, and its size and modification time (which a write into it
+/// changes).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileIdentity {
+    dev: u64,
+    ino: u64,
+    len: u64,
+    mtime: i64,
+    mtime_nsec: i64,
+}
+
+impl FileIdentity {
+    pub fn of(meta: &std::fs::Metadata) -> FileIdentity {
+        use std::os::unix::fs::MetadataExt;
+        FileIdentity {
+            dev: meta.dev(),
+            ino: meta.ino(),
+            len: meta.len(),
+            mtime: meta.mtime(),
+            mtime_nsec: meta.mtime_nsec(),
+        }
+    }
+
+    /// The identity of what is at `path` itself (a symbolic link is not
+    /// followed, so it is never the file it points to).
+    pub fn at(path: &Path) -> io::Result<FileIdentity> {
+        std::fs::symlink_metadata(path).map(|meta| FileIdentity::of(&meta))
+    }
+}
+
+/// [`file_crc32`], with the identity of the file that was read, taken from
+/// the open file itself: whatever is put under `path` while it is read, the
+/// CRC32 is this file's. A file that changes while it is read is an error.
+pub fn file_crc32_identified(path: &Path) -> io::Result<(u32, FileIdentity)> {
     let mut file = File::open(path)?;
+    let before = FileIdentity::of(&file.metadata()?);
     let mut hasher = crc32fast::Hasher::new();
     let mut buffer = vec![0; CRC_BUFFER];
     loop {
@@ -125,7 +164,14 @@ pub fn file_crc32(path: &Path) -> io::Result<u32> {
             Err(err) => return Err(err),
         }
     }
-    Ok(hasher.finalize())
+    let after = FileIdentity::of(&file.metadata()?);
+    if after != before {
+        return Err(io::Error::other(format!(
+            "{} changed while it was read",
+            path.display()
+        )));
+    }
+    Ok((hasher.finalize(), after))
 }
 
 /// The season and episode an episode file name (`Show S01E14.mkv`) is of.

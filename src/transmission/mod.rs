@@ -27,6 +27,8 @@ use transmission_rpc::{
 };
 use trname::trname_raw;
 
+use crate::revision::Release;
+
 /// How long connecting to Transmission may take.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -599,7 +601,13 @@ pub async fn rename_torrent(
             return Ok(Renamed::Finished);
         }
 
-        let derived = trname_raw(download_dir, &old_file_name, starts_episode_at);
+        // Read without the revision marker: `trname` does not read `06v2`
+        // as episode 6 in every name (Erai-raws' gives episode 34).
+        let derived = trname_raw(
+            download_dir,
+            &Release::without_version(&old_file_name),
+            starts_episode_at,
+        );
         match (mode, derived) {
             (RenameMode::Existing, Some((_, file, _))) if file.already_formatted => {
                 return Ok(Renamed::Finished);

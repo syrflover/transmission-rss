@@ -45,7 +45,7 @@ use crate::{
         channels::{Channel, Rule},
         commands::{Command, CommandState, Outcome},
         history::{HistoryItem, HistoryResult, Millis, Observation},
-        revisions::{NewRevision, RevisionState},
+        revisions::{HistoryWrite, NewRevision, RevisionState, RowWrite},
     },
     worker::{
         plan::rule_destination,
@@ -178,24 +178,22 @@ pub async fn run(
         payload: receive_once::ReceiveOnce::by_rule(item.id, rule.id.clone()).canonical(),
         ..command.clone()
     };
-    let mut finished = receive_once::execute_with(ctx, &delegated, &now, Settle::Keep).await?;
-    if let Some(decided) = replacing {
-        // A revision keeps its received name until the old video is gone.
-        if let Some(step) = finished.rename.take() {
-            let row = new_revision(
-                &item,
-                &rule,
-                &save_path,
-                decided,
-                RevisionState::Receiving,
-                None,
-                Some(step.hash),
-            );
-            if let Err(err) = ctx.revisions.create(now(), row).await {
-                eprintln!("Cannot record the revision of {}: {err}", item.title);
-            }
-        }
-    }
+    // A revision that replaces the folder's video starts its replacement
+    // with the item's result, and keeps its received name until the old
+    // video is gone.
+    let replacing = replacing.map(|decided| {
+        new_revision(
+            &item,
+            &rule,
+            &save_path,
+            decided,
+            RevisionState::Receiving,
+            None,
+            None,
+        )
+    });
+    let finished =
+        receive_once::execute_with(ctx, &delegated, &now, Settle::Keep, replacing).await?;
     receive_once::finish(ctx, &delegated, finished, cancel).await
 }
 
@@ -348,18 +346,8 @@ async fn decide_revision(
         Plan::Later(why) => Err(Retry::Store(why)),
         Plan::Unknown(decided, reason) => {
             // The person chose this result, which is what `다시 받기` of a
-            // `버전 미상` item asks: the item is recorded as such and received.
-            ctx.history
-                .record_outcome(
-                    item.id,
-                    now(),
-                    HistoryResult::VersionUnknown,
-                    Some(rule.id.clone()),
-                    Some(reason.to_owned()),
-                    None,
-                )
-                .await
-                .map_err(store)?;
+            // `버전 미상` item asks: the item is recorded as such, with its
+            // decision, and received.
             let row = new_revision(
                 item,
                 rule,
@@ -369,21 +357,19 @@ async fn decide_revision(
                 Some(reason.to_owned()),
                 None,
             );
-            ctx.revisions.create(now(), row).await.map_err(store)?;
+            withhold(
+                ctx,
+                item,
+                rule,
+                now(),
+                HistoryResult::VersionUnknown,
+                reason,
+                row,
+            )
+            .await?;
             Ok(Revision::Unknown)
         }
         Plan::Skip(decided, reason) => {
-            ctx.history
-                .record_outcome(
-                    item.id,
-                    now(),
-                    HistoryResult::Duplicate,
-                    Some(rule.id.clone()),
-                    Some(reason.to_owned()),
-                    None,
-                )
-                .await
-                .map_err(store)?;
             let row = new_revision(
                 item,
                 rule,
@@ -393,10 +379,50 @@ async fn decide_revision(
                 Some(reason.to_owned()),
                 None,
             );
-            ctx.revisions.create(now(), row).await.map_err(store)?;
+            withhold(
+                ctx,
+                item,
+                rule,
+                now(),
+                HistoryResult::Duplicate,
+                reason,
+                row,
+            )
+            .await?;
             Ok(Revision::Held(duplicate(reason)))
         }
     }
+}
+
+/// Records `result` with `reason` on `item` and the revision decision `row`
+/// that says why, together.
+async fn withhold(
+    ctx: &CycleContext,
+    item: &HistoryItem,
+    rule: &Rule,
+    at: Millis,
+    result: HistoryResult,
+    reason: &str,
+    row: NewRevision,
+) -> Result<(), Retry> {
+    ctx.revisions
+        .write_with_history(
+            at,
+            HistoryWrite::Outcome {
+                item_id: item.id,
+                result,
+                rule_id: Some(rule.id.clone()),
+                reason: Some(reason.to_owned()),
+                torrent_hash: None,
+            },
+            RowWrite::Create {
+                new: row,
+                reopen: false,
+            },
+        )
+        .await
+        .map_err(store)?;
+    Ok(())
 }
 
 /// A command that ends `duplicate` because the folder holds the revision.

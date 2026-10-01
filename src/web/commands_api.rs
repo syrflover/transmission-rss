@@ -76,7 +76,7 @@ pub fn routes() -> Router<AppState> {
 // ---------------------------------------------------------------------------
 
 /// A command as the screen sees it.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CommandView {
     pub id: String,
     pub kind: String,
@@ -89,7 +89,7 @@ pub struct CommandView {
     pub outcome: Option<OutcomeView>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct OutcomeView {
     /// A code of the command's kind; for `receive_once`, a history result.
     pub result: String,
@@ -406,7 +406,12 @@ async fn check_receive_once(
     let planned = if payload.rule_id.is_some() {
         receive_once::adoption_plan(&item, channel.as_ref(), rule.as_ref())
     } else {
-        receive_once::retry_plan(&item, channel.as_ref(), rule.as_ref())
+        // A video revision whose download stopped is retried by its
+        // replacement's record, whatever the item's result.
+        let revision = receive_once::revision_retry(&state.revisions, item.id)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+        receive_once::retry_plan_for(&item, channel.as_ref(), rule.as_ref(), &revision)
     };
     planned.map_err(|why| ApiError::invalid(why.message()))?;
     Ok(())

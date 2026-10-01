@@ -981,6 +981,95 @@ async fn a_searched_revision_lower_than_the_one_that_replaced_the_video_is_not_a
     assert_eq!(s.episode_14(), V3);
 }
 
+/// The replacement row of a searched revision is written with the item's
+/// `received`: when it cannot be written the command runs again, instead of
+/// ending with the revision received and nothing to replace the video.
+#[tokio::test]
+async fn a_searched_revision_whose_replacement_is_not_written_runs_again_and_replaces() {
+    let s = Setup::new(Options::show()).await;
+    let v1 = s.first_release().await;
+    let v2 = show_14(2, V2);
+    s.nyaa.set_releases(&[v2.clone(), v1.clone()]);
+    s.on_add(&v2, V2);
+    let poll = s.search("[SubsPlease] Show 1080p", 14, 14).await;
+    // The feed no longer has it: only the search's `받기` receives it.
+    s.nyaa.set_releases(std::slice::from_ref(&v1));
+    let sql = |sql: &str| {
+        rusqlite::Connection::open(s.h.db_path())
+            .unwrap()
+            .execute_batch(sql)
+            .unwrap()
+    };
+    sql("CREATE TRIGGER no_row BEFORE INSERT ON video_revisions
+         BEGIN SELECT RAISE(ABORT, 'injected'); END;");
+    let key = item(&poll, &v2)["key"].as_str().unwrap().to_owned();
+    let id = s.receive(&poll, &key).await;
+    s.run_commands().await;
+    sql("DROP TRIGGER no_row;");
+    // Runs it again if it is still to run.
+    s.h.worker()
+        .run_commands(&CancellationToken::new())
+        .await
+        .unwrap();
+    let command = s.command(&id).await;
+    assert_eq!(command["outcome"]["result"], "received", "{command}");
+    assert_eq!(s.revision_of(&v2).await, Some(RevisionState::Receiving));
+
+    s.seed(&v2);
+    s.cycle().await;
+    assert_eq!(s.episode_14(), V2);
+    assert_eq!(s.revision_of(&v2).await, Some(RevisionState::Done));
+}
+
+/// A revision chosen in a past episode search whose download stopped (its
+/// torrent left Transmission) is offered `다시 받기`, though no feed has it,
+/// and replaces the video once received again.
+#[tokio::test]
+async fn a_searched_revision_whose_download_stopped_is_received_again_with_retry() {
+    let s = Setup::new(Options::show()).await;
+    let v1 = s.first_release().await;
+    let v2 = show_14(2, V2);
+    s.nyaa.set_releases(&[v2.clone(), v1.clone()]);
+    s.on_add(&v2, V2);
+    let poll = s.search("[SubsPlease] Show 1080p", 14, 14).await;
+    s.nyaa.set_releases(std::slice::from_ref(&v1));
+    let command = s.receive_title(&poll, &v2).await;
+    assert_eq!(command["outcome"]["result"], "received", "{command}");
+    assert_eq!(s.revision_of(&v2).await, Some(RevisionState::Receiving));
+
+    let hash = FakeNyaa::hash_for(&v2);
+    s.h.tr.remove(&hash);
+    s.cycle().await;
+    assert_eq!(s.revision_of(&v2).await, Some(RevisionState::Failed));
+    let (status, failures) = s.call("GET", "/api/todo/receive-failures", None).await;
+    assert_eq!(status, StatusCode::OK, "{failures}");
+    let failure = &failures["items"][0];
+    assert_eq!(failure["kind"], "revision", "{failures}");
+    assert_eq!(failure["can_retry"], true, "{failure}");
+
+    s.on_add(&v2, V2);
+    let (status, body) = s
+        .call(
+            "POST",
+            "/api/commands",
+            Some(json!({
+                "id": "00000000-0000-4000-8000-0000000000b1",
+                "kind": "receive_once",
+                "payload": { "item_id": failure["history_item_id"] },
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    s.run_commands().await;
+    assert_eq!(s.revision_of(&v2).await, Some(RevisionState::Receiving));
+    assert_eq!(s.episode_14(), V1);
+
+    s.seed(&v2);
+    s.cycle().await;
+    assert_eq!(s.episode_14(), V2);
+    assert_eq!(s.revision_of(&v2).await, Some(RevisionState::Done));
+}
+
 // --- a `받기` whose add got no answer -----------------------------------------------
 
 /// A `받기` whose add got no answer though Transmission took the torrent, and

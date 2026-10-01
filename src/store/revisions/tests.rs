@@ -90,7 +90,10 @@ async fn a_confirmed_unknown_revision_is_received_without_a_crc_check() {
     assert_eq!((row.expected_crc, row.reason), (None, None));
 
     // A row under way is not confirmed again.
-    store.advance(row.id, 30, Step::Removing).await.unwrap();
+    store
+        .advance(row.id, 30, RevisionState::Receiving, Step::Removing)
+        .await
+        .unwrap();
     let row = store
         .confirm(v2, 40, "h3".into(), None)
         .await
@@ -123,11 +126,17 @@ async fn marks_say_which_items_a_cycle_leaves_to_the_replacement() {
     assert_eq!(marks.get("15"), None);
     assert_eq!(store.held_hashes().await.unwrap(), vec!["hash-14v2"]);
 
-    store.advance(row.id, 20, Step::Removing).await.unwrap();
+    store
+        .advance(row.id, 20, RevisionState::Receiving, Step::Removing)
+        .await
+        .unwrap();
     let marks = store.marks("c1".into(), keys.clone()).await.unwrap();
     assert_eq!(marks.get("14"), Some(&Mark::Superseded));
 
-    store.advance(row.id, 30, Step::Done).await.unwrap();
+    store
+        .advance(row.id, 30, RevisionState::Removing, Step::Done)
+        .await
+        .unwrap();
     let marks = store.marks("c1".into(), keys).await.unwrap();
     assert_eq!(marks.get("14"), Some(&Mark::Superseded));
     assert_eq!(
@@ -164,6 +173,7 @@ async fn failures_are_failed_rows_and_renames_still_waiting() {
         .advance(
             a.id,
             20,
+            RevisionState::Receiving,
             Step::Failed {
                 reason: "crc".into(),
                 received_name: Some("v2.mkv".into()),
@@ -175,6 +185,7 @@ async fn failures_are_failed_rows_and_renames_still_waiting() {
         .advance(
             b.id,
             30,
+            RevisionState::Receiving,
             Step::Removed {
                 reason: Some("busy".into()),
             },
@@ -182,7 +193,12 @@ async fn failures_are_failed_rows_and_renames_still_waiting() {
         .await
         .unwrap();
     store
-        .advance(c.id, 40, Step::Removed { reason: None })
+        .advance(
+            c.id,
+            40,
+            RevisionState::Receiving,
+            Step::Removed { reason: None },
+        )
         .await
         .unwrap();
 
@@ -199,8 +215,14 @@ async fn failures_are_failed_rows_and_renames_still_waiting() {
         .unwrap()
         .is_empty());
 
-    store.advance(a.id, 50, Step::Cleared).await.unwrap();
-    store.advance(c.id, 50, Step::Done).await.unwrap();
+    store
+        .advance(a.id, 50, RevisionState::Failed, Step::Cleared)
+        .await
+        .unwrap();
+    store
+        .advance(c.id, 50, RevisionState::Removed, Step::Done)
+        .await
+        .unwrap();
     let failures = store.failures().await.unwrap();
     assert_eq!(
         failures.iter().map(|r| r.id).collect::<Vec<_>>(),
@@ -236,7 +258,10 @@ async fn verified(store: &RevisionStore, id: i64) {
         received_name: format!("v{id}.mkv"),
         file_crc: "1A2B3C4D".into(),
     };
-    store.advance(id, 15, step).await.unwrap();
+    store
+        .advance(id, 15, RevisionState::Receiving, step)
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -282,18 +307,73 @@ async fn one_replacement_of_an_episode_removes_the_old_video_at_a_time() {
     verified(&store, other.id).await;
     assert_eq!(store.claim(other.id, 22, old()).await.unwrap(), Claim::Wait);
     store
-        .advance(v3.id, 23, Step::Removed { reason: None })
+        .advance(
+            v3.id,
+            23,
+            RevisionState::Removing,
+            Step::Removed { reason: None },
+        )
         .await
         .unwrap();
     assert_eq!(store.verdict(other.id).await.unwrap(), Claim::Wait);
 
     // Done: the lower and equal revisions still checked are skipped.
-    store.advance(v3.id, 30, Step::Done).await.unwrap();
+    store
+        .advance(v3.id, 30, RevisionState::Removed, Step::Done)
+        .await
+        .unwrap();
     for id in [v2.item_id, other.item_id] {
         let row = store.by_item(id).await.unwrap().unwrap();
         assert_eq!(row.state, RevisionState::Skipped);
         assert_eq!(row.reason.as_deref(), Some(OVERTAKEN));
     }
+}
+
+#[tokio::test]
+async fn a_claim_after_a_restart_keeps_the_old_torrent_it_found_first() {
+    let (_dir, db) = db().await;
+    let store = RevisionStore::new(db.clone());
+    let v2 = store
+        .create(10, of_episode(item(&db, "14v2").await, "14v2", 2))
+        .await
+        .unwrap();
+    verified(&store, v2.id).await;
+    assert_eq!(store.claim(v2.id, 20, old()).await.unwrap(), Claim::Go);
+
+    // The old torrent was removed before the restart: the second look finds
+    // no torrent and must not forget the one the first look found.
+    let gone = OldVideo {
+        torrent_hash: None,
+        ..old()
+    };
+    assert_eq!(store.claim(v2.id, 21, gone).await.unwrap(), Claim::Go);
+    let row = store.by_item(v2.item_id).await.unwrap().unwrap();
+    assert_eq!(row.old_torrent_hash.as_deref(), Some("hash-14"));
+}
+
+#[tokio::test]
+async fn a_step_from_a_state_the_row_has_left_is_not_written() {
+    let (_dir, db) = db().await;
+    let store = RevisionStore::new(db.clone());
+    let v2 = store
+        .create(10, of_episode(item(&db, "14v2").await, "14v2", 2))
+        .await
+        .unwrap();
+    assert!(store
+        .advance(v2.id, 20, RevisionState::Receiving, Step::Removing)
+        .await
+        .unwrap());
+    // A step decided from what the row said before is not written over it.
+    let stale = Step::Failed {
+        reason: "stopped".into(),
+        received_name: None,
+    };
+    assert!(!store
+        .advance(v2.id, 30, RevisionState::Receiving, stale)
+        .await
+        .unwrap());
+    let row = store.by_item(v2.item_id).await.unwrap().unwrap();
+    assert_eq!((row.state, row.reason), (RevisionState::Removing, None));
 }
 
 #[tokio::test]
@@ -337,7 +417,10 @@ async fn a_failure_before_the_video_was_received_is_received_again() {
         reason: "stopped".into(),
         received_name: None,
     };
-    store.advance(row.id, 20, stopped).await.unwrap();
+    store
+        .advance(row.id, 20, RevisionState::Receiving, stopped)
+        .await
+        .unwrap();
 
     let marks = store.marks("c1".into(), vec!["14v2".into()]).await.unwrap();
     let Some(Mark::Retry(failed)) = marks.get("14v2") else {
@@ -361,7 +444,10 @@ async fn a_failure_before_the_video_was_received_is_received_again() {
         reason: "crc".into(),
         received_name: Some("v2.mkv".into()),
     };
-    store.advance(row.id, 40, crc).await.unwrap();
+    store
+        .advance(row.id, 40, RevisionState::Receiving, crc)
+        .await
+        .unwrap();
     let row = store
         .reopen(row.id, 50, "hash-3".into())
         .await

@@ -92,6 +92,12 @@ function WorkPage({ workId }: { workId: string }) {
     work.reload();
   };
 
+  // A `다시 받기` of a failed replacement ended: the episode rows show what the worker did.
+  const retried = async () => {
+    const fresh = await loadWork(workId);
+    if (fresh) work.update(fresh);
+  };
+
   // The creator changed (here or in the rule): the page, the rule list and the subscriptions read it again.
   const subscriptionEdited = () => {
     forget(KEYS.subscriptions);
@@ -107,6 +113,7 @@ function WorkPage({ workId }: { workId: string }) {
         onCoverChanged={coverChanged}
         onInfoChanged={infoChanged}
         onSubscriptionChanged={subscriptionEdited}
+        onRetried={retried}
       />
     );
   }
@@ -139,12 +146,14 @@ function Loaded({
   onCoverChanged,
   onInfoChanged,
   onSubscriptionChanged,
+  onRetried,
 }: {
   work: WorkDetail;
   backLink: React.ReactNode;
   onCoverChanged: (coverUrl: string | null) => void;
   onInfoChanged: (info: SeasonInfo) => void;
   onSubscriptionChanged: () => void;
+  onRetried: () => Promise<void>;
 }) {
   const cover = coverOf(work.name);
   // The Anissia title takes the place of the folder's name once a subscription is connected.
@@ -317,6 +326,7 @@ function Loaded({
               missing={work.missing}
               order={order}
               onOrder={setOrder}
+              onRetried={onRetried}
             />
           ) : (
             <EmptyState>아직 회차로 읽은 파일이 없어요.</EmptyState>

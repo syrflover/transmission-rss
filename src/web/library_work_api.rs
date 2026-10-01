@@ -45,8 +45,10 @@
 //!   `from` is `null` when the old video's revision was not known), `null`
 //!   otherwise. `failure` is a replacement of the episode's video that failed
 //!   (`받기 실패`), in the shape of [`super::todo_api`]'s `revision` items
-//!   (`at`, `reason`, `files`), `null` otherwise; an episode left with no file
-//!   under its name by such a failure still has a row, with no files. Both
+//!   (`at`, `history_item_id`, `reason`, `files`, and `다시 받기` with
+//!   `can_retry`, `retry_blocked`, `command`), `null` otherwise; an episode
+//!   left with no file under its name by such a failure still has a row,
+//!   with no files. Both
 //!   come from [`crate::store::revisions`], for season folders of the work.
 //! - `native_title` is the first (lowest-numbered, not season 0) season's first
 //!   linked AniList entry's native title, `null` without one.
@@ -77,7 +79,7 @@
 //!   [`super::artwork_api`].
 //! - `404` for a work that is not in the library.
 
-use std::path::Path as FsPath;
+use std::{collections::HashMap, path::Path as FsPath};
 
 use axum::{
     extract::{Path, State},
@@ -90,7 +92,7 @@ use url::Url;
 use super::{
     artwork_api::image_url,
     seasons_api::{season_view, work_infos, SeasonInfoView},
-    todo_api::{failure_of, RevisionFailure},
+    todo_api::{failure_of, retry_offers, RetryOffer, RevisionFailure},
     ApiError, AppState,
 };
 use crate::{
@@ -286,7 +288,12 @@ fn rules_of(
 /// no row (its old video is gone and the new one does not have the episode
 /// name yet) gets a row of its own with no files. Rows whose folder is not a
 /// season folder of the work, or whose name is no episode, are left out.
-fn attach_revisions(seasons: &mut [SeasonView], rows: Vec<Revision>, work_folder: &FsPath) {
+fn attach_revisions(
+    seasons: &mut [SeasonView],
+    rows: Vec<Revision>,
+    work_folder: &FsPath,
+    mut offers: HashMap<i64, RetryOffer>,
+) {
     for row in rows {
         let Some((season, episode)) = season_episode(&row.episode_name) else {
             continue;
@@ -329,7 +336,9 @@ fn attach_revisions(seasons: &mut [SeasonView], rows: Vec<Revision>, work_folder
         };
         let view = &mut episodes[index];
         if failure {
-            view.failure = Some(failure_of(&row, Some(work_folder)));
+            let mut shown = failure_of(&row, Some(work_folder));
+            shown.retry = offers.remove(&row.item_id).unwrap_or_default();
+            view.failure = Some(shown);
         } else if let Some(replaced_at) = row.replaced_at {
             if view
                 .revision
@@ -463,8 +472,14 @@ async fn show(
         .in_work_folder(folder_path.clone())
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let failed: Vec<Revision> = revisions
+        .iter()
+        .filter(|row| row.is_failure())
+        .cloned()
+        .collect();
+    let offers = retry_offers(&state, &failed).await?;
     let mut seasons = seasons;
-    attach_revisions(&mut seasons, revisions, FsPath::new(&folder_path));
+    attach_revisions(&mut seasons, revisions, FsPath::new(&folder_path), offers);
     Ok(Json(WorkDetailView {
         id: work.id,
         name: work.dir_name,

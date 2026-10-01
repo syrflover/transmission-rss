@@ -1263,3 +1263,584 @@ async fn a_revision_whose_torrent_names_the_episode_file_removes_nothing() {
     assert_eq!(read(&s.file(EPISODE_NAME)), OLD_BYTES);
     assert!(s.h.tr.torrents().iter().any(|t| t.hash == OLD_HASH));
 }
+
+// --- what a step finds when an earlier one went further than it wrote --------------
+
+/// The rename went through but `done` was not written (the worker stopped, or
+/// the write failed): the next look finds the new video under the episode
+/// name and finishes, instead of failing on a name its own video holds.
+#[tokio::test]
+async fn a_rename_whose_done_was_not_written_finishes_on_the_next_look() {
+    let s = Setup::new().await;
+    s.received_v1().await;
+    s.feed(&[(NEW_HASH, &v2()), (OLD_HASH, &v1())]);
+    s.h.tr.content_on_add(NEW_HASH, NEW_BYTES);
+    s.cycle().await;
+    s.complete(NEW_HASH);
+    s.sql(
+        "CREATE TRIGGER no_done BEFORE UPDATE OF state ON video_revisions
+         WHEN NEW.state = 'done' BEGIN SELECT RAISE(ABORT, 'injected'); END;",
+    );
+    s.cycle().await;
+    s.sql("DROP TRIGGER no_done;");
+    assert_eq!(s.names(), vec![EPISODE_NAME]);
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Removed);
+
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Done);
+    assert!(s.failures().await.is_empty());
+    assert_eq!(read(&s.file(EPISODE_NAME)), NEW_BYTES);
+    assert_eq!(s.episode_row().await["revision"]["to"], "v2");
+
+    // A higher revision of the episode is not held up behind it.
+    let v3 = v3();
+    s.feed(&[(V3_HASH, &v3)]);
+    s.h.tr.content_on_add(V3_HASH, V3_BYTES);
+    s.cycle().await;
+    s.complete(V3_HASH);
+    s.cycle().await;
+    assert_eq!(s.state_of(&v3).await, RevisionState::Done);
+    assert_eq!(read(&s.file(EPISODE_NAME)), V3_BYTES);
+}
+
+/// The same when the new torrent has left Transmission since: the file
+/// under the episode name is told by its CRC32.
+#[tokio::test]
+async fn a_rename_whose_done_was_not_written_finishes_without_its_torrent_too() {
+    let s = Setup::new().await;
+    s.received_v1().await;
+    s.feed(&[(NEW_HASH, &v2()), (OLD_HASH, &v1())]);
+    s.h.tr.content_on_add(NEW_HASH, NEW_BYTES);
+    s.cycle().await;
+    s.complete(NEW_HASH);
+    s.sql(
+        "CREATE TRIGGER no_done BEFORE UPDATE OF state ON video_revisions
+         WHEN NEW.state = 'done' BEGIN SELECT RAISE(ABORT, 'injected'); END;",
+    );
+    s.cycle().await;
+    s.sql("DROP TRIGGER no_done;");
+    s.h.tr.remove(NEW_HASH);
+
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Done);
+    assert!(s.failures().await.is_empty());
+    assert_eq!(read(&s.file(EPISODE_NAME)), NEW_BYTES);
+}
+
+/// A file put over the old video (an atomic rename by another program) while
+/// the worker reads the old video's CRC32 is not deleted: the CRC32 belongs
+/// to the file that was read, not to the one at the name now. The episode
+/// name is a pipe here so the test can swap the file while the read is open.
+#[tokio::test]
+async fn a_file_put_over_the_old_video_while_it_is_read_is_not_deleted() {
+    let s = Setup::new().await;
+    s.received_v1().await;
+    // A file of no torrent, which is deleted by path once its CRC32 matches.
+    s.h.tr.remove(OLD_HASH);
+    s.feed(&[(NEW_HASH, &v2())]);
+    s.h.tr.content_on_add(NEW_HASH, NEW_BYTES);
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Receiving);
+
+    let episode = s.file(EPISODE_NAME);
+    std::fs::remove_file(&episode).unwrap();
+    rustix::fs::mknodat(
+        rustix::fs::CWD,
+        &episode,
+        rustix::fs::FileType::Fifo,
+        rustix::fs::Mode::from_raw_mode(0o644),
+        0,
+    )
+    .unwrap();
+    let incoming = s.file(".incoming");
+    std::fs::write(&incoming, b"someone else's").unwrap();
+    s.complete(NEW_HASH);
+
+    let swap = {
+        let episode = episode.clone();
+        tokio::task::spawn_blocking(move || {
+            use std::{io::Write, os::unix::fs::OpenOptionsExt};
+            let begun = std::time::Instant::now();
+            // Waits for the worker to open the pipe for its read.
+            let mut pipe = loop {
+                match std::fs::OpenOptions::new()
+                    .write(true)
+                    .custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32)
+                    .open(&episode)
+                {
+                    Ok(pipe) => break pipe,
+                    Err(_) if begun.elapsed() < std::time::Duration::from_secs(30) => {
+                        std::thread::sleep(std::time::Duration::from_millis(5))
+                    }
+                    Err(err) => panic!("the worker never read the old video: {err}"),
+                }
+            };
+            std::fs::rename(&incoming, &episode).unwrap();
+            pipe.write_all(OLD_BYTES).unwrap();
+        })
+    };
+    let (_, swapped) = tokio::join!(s.cycle(), swap);
+    swapped.unwrap();
+    // A read the swap disturbed may be left to the next look.
+    s.cycle().await;
+
+    assert_eq!(read(&episode), b"someone else's", "the new file is kept");
+    assert_eq!(read(&s.file(&v2())), NEW_BYTES);
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Failed);
+    let failures = s.failures().await;
+    assert_eq!(revision_failure(&failures)["files"][0]["state"], "kept");
+}
+
+/// Transmission removed the old torrent and its data, but its answer never
+/// came (a timeout): the replacement goes on as removing, finds the old video
+/// gone, and names the new one; the old release is not received again.
+#[tokio::test]
+async fn an_old_torrent_removed_without_an_answer_still_ends_in_the_replacement() {
+    let s = Setup::new().await;
+    s.received_v1().await;
+    s.feed(&[(NEW_HASH, &v2()), (OLD_HASH, &v1())]);
+    s.h.tr.content_on_add(NEW_HASH, NEW_BYTES);
+    s.cycle().await;
+    s.complete(NEW_HASH);
+    s.h.tr.break_remove_answer_of(OLD_HASH);
+    s.cycle().await;
+    assert!(s.h.tr.torrents().iter().all(|t| t.hash != OLD_HASH));
+    let adds = s.added(OLD_HASH);
+    s.cycle().await;
+    s.cycle().await;
+
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Done);
+    assert_eq!(s.names(), vec![EPISODE_NAME]);
+    assert_eq!(read(&s.file(EPISODE_NAME)), NEW_BYTES);
+    assert_eq!(
+        s.added(OLD_HASH),
+        adds,
+        "the old release is not received again"
+    );
+    assert!(s.failures().await.is_empty());
+    // Every item of the removed torrent stays superseded.
+    let row = RevisionStore::new(s.h.db.clone())
+        .by_item(s.item(&v2()).await.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.old_torrent_hash.as_deref(), Some(OLD_HASH));
+}
+
+/// Transmission took the old torrent out but its file is still there (it
+/// deletes data after answering, or could not), and the old release's name
+/// carries no CRC32 to check the file by. The replacement stays removing and
+/// says so, the old release is not received again, and once the file is gone
+/// the new video takes the name.
+#[tokio::test]
+async fn an_old_file_left_after_its_torrent_was_removed_waits_as_removing() {
+    let s = Setup::new().await;
+    let v1 = release("", None);
+    s.feed(&[(OLD_HASH, &v1)]);
+    s.h.tr.content_on_add(OLD_HASH, OLD_BYTES);
+    s.cycle().await;
+    s.complete(OLD_HASH);
+    assert_eq!(s.names(), vec![EPISODE_NAME]);
+
+    s.feed(&[(NEW_HASH, &v2()), (OLD_HASH, &v1)]);
+    s.h.tr.content_on_add(NEW_HASH, NEW_BYTES);
+    s.cycle().await;
+    s.complete(NEW_HASH);
+    s.h.tr.keep_data_on_remove_of(OLD_HASH);
+    s.cycle().await;
+    let adds = s.added(OLD_HASH);
+    s.cycle().await;
+    s.cycle().await;
+    s.cycle().await;
+
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Removing);
+    let failures = s.failures().await;
+    let failure = revision_failure(&failures);
+    assert_eq!(failure["files"][0]["state"], "kept");
+    assert_eq!(s.added(OLD_HASH), adds);
+
+    // Transmission (or the person) deletes it at last.
+    std::fs::remove_file(s.file(EPISODE_NAME)).unwrap();
+    s.cycle().await;
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Done);
+    assert_eq!(s.names(), vec![EPISODE_NAME]);
+    assert_eq!(read(&s.file(EPISODE_NAME)), NEW_BYTES);
+    assert_eq!(
+        s.added(OLD_HASH),
+        adds,
+        "the old release is not received again"
+    );
+    assert!(s.failures().await.is_empty());
+}
+
+/// `14v3` failed before it was received, then `14v2` removed the old video
+/// and its rename is still to go through: the empty episode name is not the
+/// person having resolved `14v3`'s failure.
+#[tokio::test]
+async fn a_higher_revision_not_received_is_not_cleared_while_a_lower_one_is_renamed() {
+    let s = Setup::new().await;
+    s.received_v1().await;
+    s.feed(&[(NEW_HASH, &v2()), (V3_HASH, &v3()), (OLD_HASH, &v1())]);
+    s.h.tr.content_on_add(NEW_HASH, NEW_BYTES);
+    s.h.tr.unfinished_on_add(NEW_HASH);
+    s.h.tr.unfinished_on_add(V3_HASH);
+    s.cycle().await;
+    // `14v3` stops: its torrent is taken out and it leaves the feed.
+    s.h.tr.remove(V3_HASH);
+    s.feed(&[(NEW_HASH, &v2()), (OLD_HASH, &v1())]);
+    s.cycle().await;
+    assert_eq!(s.state_of(&v3()).await, RevisionState::Failed);
+
+    s.complete(NEW_HASH);
+    s.h.tr.reject_rename_of(NEW_HASH, Some("busy"));
+    s.cycle().await;
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Removed);
+    assert_eq!(s.state_of(&v3()).await, RevisionState::Failed);
+
+    s.h.tr.reject_rename_of(NEW_HASH, None);
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Done);
+    assert_eq!(s.state_of(&v3()).await, RevisionState::Failed);
+}
+
+/// The old video is the single file of a torrent that keeps it in a folder
+/// (`Season 01/Show S01E14.mkv` under the work folder): removing that torrent
+/// with its data could take the folder with it, so it is not replaced.
+#[tokio::test]
+async fn an_old_video_inside_its_torrents_folder_is_not_removed() {
+    let s = Setup::new().await;
+    std::fs::write(s.file(EPISODE_NAME), OLD_BYTES).unwrap();
+    let show = s.season.parent().unwrap();
+    s.h.tr.preload(
+        FakeTorrent::new(OLD_HASH, "Season 01")
+            .in_dir(show)
+            .files(&[&format!("Season 01/{EPISODE_NAME}")])
+            .status(6),
+    );
+    s.h.history
+        .record(
+            1,
+            vec![Observation {
+                channel_id: s.channel_id.clone(),
+                channel_label: "https://feeds.example.test/show".into(),
+                identity_key: "guid:v1".into(),
+                title: v1(),
+                link: magnet(OLD_HASH, &v1()),
+                result: HistoryResult::Received,
+                rule_id: None,
+                torrent_hash: Some(OLD_HASH.into()),
+                reason: None,
+            }],
+        )
+        .await
+        .unwrap();
+    s.feed(&[(NEW_HASH, &v2())]);
+    s.h.tr.content_on_add(NEW_HASH, NEW_BYTES);
+    s.cycle().await;
+    s.complete(NEW_HASH);
+    s.cycle().await;
+
+    assert!(s.h.tr.calls_of("torrent-remove").is_empty());
+    assert_eq!(read(&s.file(EPISODE_NAME)), OLD_BYTES);
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Failed);
+}
+
+/// `14v3` replaces the video and skips `14v2` in the same pass; the pass then
+/// reaches `14v2` from what it read before. Its stale look (a CRC32 that
+/// does not match) must not turn the skip into a failure.
+#[tokio::test]
+async fn a_revision_skipped_earlier_in_the_same_pass_stays_skipped() {
+    let s = Setup::new().await;
+    s.received_v1().await;
+    // `14v3`'s row comes first, so the pass looks at it first.
+    s.feed(&[(V3_HASH, &v3()), (OLD_HASH, &v1())]);
+    s.h.tr.content_on_add(V3_HASH, V3_BYTES);
+    s.h.tr.unfinished_on_add(V3_HASH);
+    s.cycle().await;
+    s.feed(&[(NEW_HASH, &v2()), (V3_HASH, &v3()), (OLD_HASH, &v1())]);
+    s.h.tr.content_on_add(NEW_HASH, b"not what the name says");
+    s.h.tr.unfinished_on_add(NEW_HASH);
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Receiving);
+
+    s.complete(V3_HASH);
+    s.complete(NEW_HASH);
+    s.cycle().await;
+
+    assert_eq!(s.state_of(&v3()).await, RevisionState::Done);
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Skipped);
+    assert!(s.failures().await.is_empty());
+}
+
+/// A `버전 미상` decision is written with its history record: an item that
+/// history holds as `버전 미상` always has the decision `다시 받기` needs.
+#[tokio::test]
+async fn a_version_unknown_item_is_recorded_with_its_decision() {
+    let s = Setup::new().await;
+    s.received_v1().await;
+    let v2 = release("v2", None);
+    s.feed(&[(NEW_HASH, &v2), (OLD_HASH, &v1())]);
+    s.sql(
+        "CREATE TRIGGER no_row BEFORE INSERT ON video_revisions
+         BEGIN SELECT RAISE(ABORT, 'injected'); END;",
+    );
+    s.cycle().await;
+    s.sql("DROP TRIGGER no_row;");
+    let revisions = RevisionStore::new(s.h.db.clone());
+    let unknown =
+        s.h.history_items()
+            .await
+            .into_iter()
+            .find(|i| i.title == v2 && i.result == HistoryResult::VersionUnknown);
+    if let Some(item) = unknown {
+        assert!(
+            revisions.by_item(item.id).await.unwrap().is_some(),
+            "버전 미상 without its decision"
+        );
+    }
+
+    s.cycle().await;
+    assert_eq!(s.item(&v2).await.result, HistoryResult::VersionUnknown);
+    assert_eq!(s.state_of(&v2).await, RevisionState::Unknown);
+}
+
+// --- a revision's name on the normal path ----------------------------------------
+
+const ERAI_HASH: &str = "6666000000000000000000000000000000000006";
+const ERAI_EPISODE: &str = "Show S01E06.mkv";
+
+/// `[Erai-raws] Show - 06<version> [1080p CR WEBRip HEVC AAC][MultiSub][<crc>].mkv`:
+/// `trname` alone reads `06v2` of this name as another episode, taken from
+/// the CRC32 bracket.
+fn erai(version: &str) -> String {
+    format!(
+        "[Erai-raws] Show - 06{version} [1080p CR WEBRip HEVC AAC][MultiSub][{}].mkv",
+        crc(NEW_BYTES)
+    )
+}
+
+/// A revision seen first (no earlier release of it in the folder) is received
+/// as any release and named as its episode, not as `trname` reads its marker.
+#[tokio::test]
+async fn a_revision_seen_first_is_named_as_its_episode() {
+    let s = Setup::with_match("[Erai-raws] Show - ").await;
+    let title = erai("v2");
+    s.feed(&[(ERAI_HASH, &title)]);
+    s.h.tr.content_on_add(ERAI_HASH, NEW_BYTES);
+    s.cycle().await;
+    assert_eq!(s.names(), vec![ERAI_EPISODE]);
+    assert_eq!(s.h.tr.torrent(ERAI_HASH).name, ERAI_EPISODE);
+    // History keeps the release's own title.
+    assert_eq!(s.item(&title).await.result, HistoryResult::Received);
+}
+
+#[tokio::test]
+async fn a_revision_received_with_retry_is_named_as_its_episode() {
+    let s = Setup::with_match("[Erai-raws] Show - ").await;
+    let title = erai("v2");
+    s.feed(&[(ERAI_HASH, &title)]);
+    s.h.tr.reject_adds(Some("refused"));
+    s.cycle().await;
+    assert_eq!(s.item(&title).await.result, HistoryResult::AddFailed);
+    s.h.tr.reject_adds(None);
+    s.feed(&[]);
+
+    s.h.tr.content_on_add(ERAI_HASH, NEW_BYTES);
+    let item = s.item(&title).await;
+    s.retry(item.id, "00000000-0000-4000-8000-000000000611")
+        .await;
+    assert_eq!(s.commands().await, CommandsOutcome::Ran(1));
+    assert_eq!(s.item(&title).await.result, HistoryResult::Received);
+    assert_eq!(s.names(), vec![ERAI_EPISODE]);
+}
+
+// --- `다시 받기` of a revision whose download stopped --------------------------------
+
+/// `14v2` received while `14` is in place, its torrent taken out of
+/// Transmission before it finished, and the release gone from the feed: no
+/// cycle receives it again.
+async fn stopped_after_leaving_the_feed(s: &Setup) -> HistoryItem {
+    s.received_v1().await;
+    s.feed(&[(NEW_HASH, &v2()), (OLD_HASH, &v1())]);
+    s.h.tr.unfinished_on_add(NEW_HASH);
+    s.cycle().await;
+    s.h.tr.remove(NEW_HASH);
+    s.feed(&[(OLD_HASH, &v1())]);
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Failed);
+    s.cycle().await;
+    assert_eq!(s.added(NEW_HASH), 1, "no cycle receives it again");
+    s.item(&v2()).await
+}
+
+#[tokio::test]
+async fn a_stopped_revision_that_left_the_feed_is_received_again_with_retry() {
+    let s = Setup::new().await;
+    let item = stopped_after_leaving_the_feed(&s).await;
+    assert_eq!(item.result, HistoryResult::Received);
+
+    // Both places that show the failure offer `다시 받기` on the item.
+    let failures = s.failures().await;
+    let failure = revision_failure(&failures);
+    assert_eq!(failure["history_item_id"], item.id);
+    assert_eq!(failure["can_retry"], true);
+    assert_eq!(failure["command"], Value::Null);
+    let row = s.episode_row().await;
+    assert_eq!(row["failure"]["can_retry"], true);
+    assert_eq!(row["failure"]["history_item_id"], item.id);
+
+    s.h.tr.content_on_add(NEW_HASH, NEW_BYTES);
+    s.h.tr.unfinished_on_add(NEW_HASH);
+    s.retry(item.id, "00000000-0000-4000-8000-000000000a01")
+        .await;
+    // Accepted and not yet run: the failure says so.
+    assert_eq!(
+        revision_failure(&s.failures().await)["command"]["state"],
+        "pending"
+    );
+    assert_eq!(s.commands().await, CommandsOutcome::Ran(1));
+
+    // Received under its own name; the old video stays until it is checked.
+    assert_eq!(s.added(NEW_HASH), 2);
+    assert!(!s.renamed_onto_episode(NEW_HASH));
+    assert_eq!(s.item(&v2()).await.result, HistoryResult::Received);
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Receiving);
+    assert!(s.failures().await.is_empty());
+    assert_eq!(read(&s.file(EPISODE_NAME)), OLD_BYTES);
+    s.cycle().await;
+    assert_eq!(read(&s.file(EPISODE_NAME)), OLD_BYTES);
+
+    s.complete(NEW_HASH);
+    s.cycle().await;
+    assert_eq!(s.names(), vec![EPISODE_NAME]);
+    assert_eq!(read(&s.file(EPISODE_NAME)), NEW_BYTES);
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Done);
+}
+
+#[tokio::test]
+async fn a_revision_whose_torrent_reports_an_error_is_started_again_with_retry() {
+    let s = Setup::new().await;
+    s.received_v1().await;
+    s.feed(&[(NEW_HASH, &v2()), (OLD_HASH, &v1())]);
+    s.h.tr.content_on_add(NEW_HASH, NEW_BYTES);
+    s.h.tr.unfinished_on_add(NEW_HASH);
+    s.cycle().await;
+    s.h.tr
+        .set_local_error(NEW_HASH, Some("No space left on device"));
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Failed);
+    assert_eq!(revision_failure(&s.failures().await)["can_retry"], true);
+
+    let item = s.item(&v2()).await;
+    s.retry(item.id, "00000000-0000-4000-8000-000000000a02")
+        .await;
+    assert_eq!(s.commands().await, CommandsOutcome::Ran(1));
+    // Transmission still had it: started again, not added a second time.
+    assert_eq!(
+        s.h.tr
+            .calls_of("torrent-start")
+            .iter()
+            .filter(|c| c.args["ids"] == json!([NEW_HASH]))
+            .count(),
+        1
+    );
+    assert_eq!(s.item(&v2()).await.result, HistoryResult::Received);
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Receiving);
+    assert!(!s.renamed_onto_episode(NEW_HASH));
+
+    s.complete(NEW_HASH);
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Done);
+    assert_eq!(read(&s.file(EPISODE_NAME)), NEW_BYTES);
+}
+
+/// A revision whose retry cannot be added keeps its item's result and its
+/// failure; only the command says why.
+#[tokio::test]
+async fn a_stopped_revision_whose_retry_is_refused_stays_a_failure() {
+    let s = Setup::new().await;
+    let item = stopped_after_leaving_the_feed(&s).await;
+    s.h.tr.reject_adds(Some("refused"));
+    s.retry(item.id, "00000000-0000-4000-8000-000000000a03")
+        .await;
+    assert_eq!(s.commands().await, CommandsOutcome::Ran(1));
+    let (_, _, command) =
+        s.h.web_api()
+            .call(
+                "GET",
+                "/api/commands/00000000-0000-4000-8000-000000000a03",
+                None,
+            )
+            .await;
+    assert_eq!(command["state"], "failed", "{command}");
+    assert!(command["outcome"]["reason"]
+        .as_str()
+        .unwrap()
+        .contains("refused"));
+    assert_eq!(s.item(&v2()).await.result, HistoryResult::Received);
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Failed);
+    assert_eq!(revision_failure(&s.failures().await)["can_retry"], true);
+    assert_eq!(read(&s.file(EPISODE_NAME)), OLD_BYTES);
+}
+
+/// Only a download that stopped is offered again: a revision received into
+/// another folder would end the same way.
+#[tokio::test]
+async fn a_revision_received_elsewhere_is_not_offered_again() {
+    let s = Setup::new().await;
+    s.received_v1().await;
+    s.feed(&[(NEW_HASH, &v2()), (OLD_HASH, &v1())]);
+    s.h.tr.content_on_add(NEW_HASH, NEW_BYTES);
+    s.h.tr.unfinished_on_add(NEW_HASH);
+    s.cycle().await;
+    let elsewhere = s.season.parent().unwrap().join("Elsewhere");
+    s.h.tr.relocate(NEW_HASH, &elsewhere);
+    s.complete(NEW_HASH);
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Failed);
+    let failure = revision_failure(&s.failures().await).clone();
+    assert_eq!(failure["can_retry"], false);
+    assert_eq!(failure["retry_blocked"], Value::Null);
+
+    let item = s.item(&v2()).await;
+    let (status, text, _) =
+        s.h.web_api()
+            .call(
+                "POST",
+                "/api/commands",
+                Some(json!({
+                    "id": "00000000-0000-4000-8000-000000000a04",
+                    "kind": "receive_once",
+                    "payload": { "item_id": item.id },
+                })),
+            )
+            .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+}
+
+/// A stopped revision whose rule is paused says why `다시 받기` is missing,
+/// and the request is refused.
+#[tokio::test]
+async fn a_stopped_revision_of_a_paused_rule_says_why_it_is_not_offered() {
+    let s = Setup::new().await;
+    let item = stopped_after_leaving_the_feed(&s).await;
+    let rule_id = item.rule_id.clone().unwrap();
+    s.sql(&format!(
+        "UPDATE rules SET state = 'paused' WHERE id = '{rule_id}';"
+    ));
+    let failure = revision_failure(&s.failures().await).clone();
+    assert_eq!(failure["can_retry"], false);
+    assert!(failure["retry_blocked"].as_str().unwrap().contains("멈춰"));
+}
+
+/// SubsPlease's `14v2` seen first is named as episode 14.
+#[tokio::test]
+async fn a_subsplease_revision_seen_first_is_named_as_its_episode() {
+    let s = Setup::new().await;
+    s.feed(&[(NEW_HASH, &v2())]);
+    s.h.tr.content_on_add(NEW_HASH, NEW_BYTES);
+    s.cycle().await;
+    assert_eq!(s.names(), vec![EPISODE_NAME]);
+}

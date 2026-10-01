@@ -13,7 +13,8 @@
 //!     "files": [
 //!       { "role": "old", "path": "Season 01/Show S01E14.mkv", "state": "kept" },
 //!       { "role": "new", "path": "Season 01/[SubsPlease] Show - 14v2 (1080p) [1A2B3C4D].mkv",
-//!         "state": "received_name" } ] },
+//!         "state": "received_name" } ],
+//!     "can_retry": false, "retry_blocked": null, "command": null },
 //!   { "kind": "add_failed", "at": 1759990000000, "history_item_id": 9,
 //!     "title": "…", "reason": "Transmission에 연결하지 못했어요: …" } ] }
 //! ```
@@ -29,25 +30,35 @@
 //!   folder, and the paths are then absolute. An item goes away once the
 //!   worker sees one of the two files gone, or the rename go through; a
 //!   `not_received` one also once its torrent is right again or a cycle
-//!   receives its item again.
+//!   receives its item again. `can_retry` says whether `다시 받기` (the
+//!   `receive_once` command of `history_item_id`) is offered: on a revision
+//!   whose download stopped before it was received (its torrent left
+//!   Transmission or reported an error), even when it left the feed or came
+//!   from a past episode search, while the rule recorded on it is active and
+//!   no higher revision of the episode is in the folder or on its way
+//!   ([`receive_once::RevisionRetry`]). `retry_blocked` says why it is
+//!   missing on such a revision, and `command` is its command that has not
+//!   ended yet. The link it receives comes from the history record, never
+//!   from the screen.
 //! - `add_failed` items are the history items a rule picked and Transmission
 //!   did not add (`추가 실패`), the newest 200; `다시 받기` is on the history
 //!   item.
 //!
 //! Items come newest first, each kind by its own time, revisions first.
 
-use std::path::Path as FsPath;
+use std::{collections::HashMap, path::Path as FsPath};
 
 use axum::{extract::State, routing::get, Json, Router};
 use serde::Serialize;
 
-use super::{ApiError, AppState};
+use super::{commands_api::CommandView, ApiError, AppState};
 use crate::{
     revision::season_episode,
     store::{
         history::{HistoryQuery, HistoryResult},
         revisions::{Revision, RevisionState},
     },
+    worker::{commands::receive_once, revisions::stopped_before_received},
 };
 
 pub fn routes() -> Router<AppState> {
@@ -73,8 +84,74 @@ pub struct FailureFile {
 #[derive(Debug, Serialize, PartialEq)]
 pub struct RevisionFailure {
     pub at: i64,
+    /// The revision's history item, which `다시 받기` receives.
+    pub history_item_id: i64,
     pub reason: String,
     pub files: Vec<FailureFile>,
+    #[serde(flatten)]
+    pub retry: RetryOffer,
+}
+
+/// `다시 받기` on a failed replacement (see the module docs).
+#[derive(Debug, Clone, Default, Serialize, PartialEq)]
+pub struct RetryOffer {
+    pub can_retry: bool,
+    pub retry_blocked: Option<&'static str>,
+    pub command: Option<CommandView>,
+}
+
+/// [`RetryOffer`]s of the failed replacements `rows`, by history item. A
+/// row whose download did not stop before it was received has none.
+pub async fn retry_offers(
+    state: &AppState,
+    rows: &[Revision],
+) -> Result<HashMap<i64, RetryOffer>, ApiError> {
+    let internal = |e: &dyn std::fmt::Display| ApiError::Internal(e.to_string());
+    let stopped: Vec<&Revision> = rows
+        .iter()
+        .filter(|row| stopped_before_received(row))
+        .collect();
+    let mut offers = HashMap::new();
+    if stopped.is_empty() {
+        return Ok(offers);
+    }
+    let subjects = stopped.iter().map(|row| row.item_id.to_string()).collect();
+    let open = state
+        .commands
+        .open_for_subjects(receive_once::KIND, subjects)
+        .await
+        .map_err(|e| internal(&e))?;
+    for row in stopped {
+        let Some(item) = state
+            .history
+            .get(row.item_id)
+            .await
+            .map_err(|e| internal(&e))?
+        else {
+            continue;
+        };
+        let revision = receive_once::revision_retry(&state.revisions, item.id)
+            .await
+            .map_err(|e| internal(&e))?;
+        let channel = state.channels.get_channel(&item.channel_id).await?;
+        let rule = match &item.rule_id {
+            Some(id) => state.channels.get_rule(id).await?,
+            None => None,
+        };
+        let plan = receive_once::retry_plan_for(&item, channel.as_ref(), rule.as_ref(), &revision);
+        offers.insert(
+            item.id,
+            RetryOffer {
+                can_retry: plan.is_ok(),
+                retry_blocked: plan
+                    .err()
+                    .filter(|why| why.explains_missing_button())
+                    .map(|why| why.message()),
+                command: open.get(&item.id.to_string()).map(CommandView::from),
+            },
+        );
+    }
+    Ok(offers)
 }
 
 /// The files of a failed replacement, with paths relative to `base` when
@@ -110,8 +187,10 @@ pub fn failure_of(row: &Revision, base: Option<&FsPath>) -> RevisionFailure {
     };
     RevisionFailure {
         at: row.updated_at,
+        history_item_id: row.item_id,
         reason: row.reason.clone().unwrap_or_default(),
         files: vec![old, new],
+        retry: RetryOffer::default(),
     }
 }
 
@@ -127,6 +206,8 @@ enum FailureItem {
         episode: Option<String>,
         reason: String,
         files: Vec<FailureFile>,
+        #[serde(flatten)]
+        retry: Box<RetryOffer>,
     },
     AddFailed {
         at: i64,
@@ -147,7 +228,9 @@ const ADD_FAILURES: usize = 200;
 async fn list(State(state): State<AppState>) -> Result<Json<FailureList>, ApiError> {
     let internal = |e: &dyn std::fmt::Display| ApiError::Internal(e.to_string());
     let mut items = Vec::new();
-    for row in state.revisions.failures().await.map_err(|e| internal(&e))? {
+    let rows = state.revisions.failures().await.map_err(|e| internal(&e))?;
+    let mut offers = retry_offers(&state, &rows).await?;
+    for row in rows {
         let work = state
             .revisions
             .work_at(row.folder.clone())
@@ -174,6 +257,7 @@ async fn list(State(state): State<AppState>) -> Result<Json<FailureList>, ApiErr
             episode,
             reason: failure.reason,
             files: failure.files,
+            retry: Box::new(offers.remove(&row.item_id).unwrap_or_default()),
         });
     }
     let failed = state

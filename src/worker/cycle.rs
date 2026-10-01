@@ -25,7 +25,9 @@ use crate::{
         channels::{ChannelError, ChannelStore, ChannelWithRules, RuleState},
         history::{HistoryResult, HistoryStore, Millis, Observation, Recorded},
         library::LibraryStore,
-        revisions::{Mark, NewRevision, Revision, RevisionState, RevisionStore},
+        revisions::{
+            HistoryWrite, Mark, NewRevision, Revision, RevisionState, RevisionStore, RowWrite,
+        },
         seasons::SeasonStore,
         settings::{SettingsError, SettingsStore},
         status::{ChannelReadResult, StatusStore, TransmissionCounts},
@@ -928,6 +930,23 @@ async fn process_job(
         }
     };
 
+    if let (Ok(torrent), Some(decided)) = (&added, &replacing) {
+        // A revision keeps its received name until the old video is gone
+        // (see [`revisions::advance`]). Its replacement is written with the
+        // history record.
+        let was_new = start_replacement(
+            &ctx,
+            &job,
+            at,
+            observation,
+            decided.clone(),
+            torrent.kind,
+            &torrent.hash,
+        )
+        .await;
+        return (outcome, was_new);
+    }
+
     // Recorded as soon as Transmission has answered, before the renaming
     // that can take many seconds.
     let was_new = match ctx.history.record(at, vec![observation]).await {
@@ -937,13 +956,6 @@ async fn process_job(
             false
         }
     };
-
-    if let (Ok(torrent), Some(decided)) = (&added, replacing) {
-        // A revision keeps its received name until the old video is gone
-        // (see [`revisions::advance`]).
-        start_replacement(&ctx, &job, at, decided, torrent.kind, &torrent.hash).await;
-        return (outcome, was_new);
-    }
 
     if let Ok(torrent) = &added {
         if let Some(mode) = rename_mode(&ctx, torrent.kind, &torrent.hash).await {
@@ -964,26 +976,8 @@ async fn process_job(
     (outcome, was_new)
 }
 
-/// The row of the item `job` once its history record is written, or `None`
-/// (logged) when the record cannot be found.
-async fn item_id(ctx: &CycleContext, job: &Job) -> Option<i64> {
-    match ctx
-        .history
-        .item_by_key(
-            job.observation.channel_id.clone(),
-            job.observation.identity_key.clone(),
-        )
-        .await
-    {
-        Ok(Some(item)) => Some(item.id),
-        Ok(None) => None,
-        Err(err) => {
-            eprintln!("Cannot read history for {}: {err}", job.channel_label);
-            None
-        }
-    }
-}
-
+/// The row a cycle decides for `job` (its item ID is filled in when the row
+/// is written with the item's history record).
 fn new_revision(
     job: &Job,
     item_id: i64,
@@ -1009,7 +1003,7 @@ fn new_revision(
 }
 
 /// Records a revision that is not received (`버전 미상`, or the folder holds
-/// it already) and its decision.
+/// it already) and its decision, together.
 async fn withhold(
     ctx: &CycleContext,
     job: Job,
@@ -1028,62 +1022,94 @@ async fn withhold(
         reason: Some(reason.to_owned()),
         ..job.observation.clone()
     };
-    let was_new = match ctx.history.record(at, vec![observation]).await {
-        Ok(recorded) => recorded.first() == Some(&Recorded::New),
+    let row = new_revision(&job, 0, decided, state, Some(reason.to_owned()), None);
+    let written = ctx
+        .revisions
+        .write_with_history(
+            at,
+            HistoryWrite::Observe(observation),
+            RowWrite::Create {
+                new: row,
+                reopen: false,
+            },
+        )
+        .await;
+    match written {
+        Ok(written) => (
+            JobOutcome::Withheld,
+            written.recorded == Some(Recorded::New),
+        ),
         Err(err) => {
-            eprintln!("Cannot record history for {}: {err}", job.channel_label);
-            return (JobOutcome::Later, false);
-        }
-    };
-    if let Some(id) = item_id(ctx, &job).await {
-        let row = new_revision(&job, id, decided, state, Some(reason.to_owned()), None);
-        if let Err(err) = ctx.revisions.create(at, row).await {
-            eprintln!("Cannot record the revision of {}: {err}", job.title);
+            eprintln!(
+                "Cannot record history and the revision of {} ({}): {err}",
+                job.title, job.channel_label
+            );
+            (JobOutcome::Later, false)
         }
     }
-    (JobOutcome::Withheld, was_new)
 }
 
-/// Starts the replacement of a revision Transmission now holds as `hash`
-/// (`kind` says whether it was added now). Without its row the next cycle
-/// decides again, and the torrent keeps its received name meanwhile. A row
-/// that failed before its video was received starts over when the torrent
-/// was added again (it had gone); one Transmission still holds is looked at
-/// by the replacement steps.
+/// Records `observation` of a revision Transmission now holds as `hash`
+/// (`kind` says whether it was added now) and starts its replacement, in one
+/// transaction; returns whether the item was new to history. Without them
+/// the next cycle decides again, and the torrent keeps its received name
+/// meanwhile. A row that failed before its video was received starts over
+/// when the torrent was added again (it had gone); one Transmission still
+/// holds is looked at by the replacement steps.
 async fn start_replacement(
     ctx: &CycleContext,
     job: &Job,
     at: Millis,
+    observation: Observation,
     decided: Decided,
     kind: AddKind,
     hash: &str,
-) {
-    let Some(id) = item_id(ctx, job).await else {
-        return;
-    };
+) -> bool {
     let row = new_revision(
         job,
-        id,
+        0,
         decided,
         RevisionState::Receiving,
         None,
         Some(hash.to_owned()),
     );
-    let row = match ctx.revisions.create(at, row).await {
-        Ok(row) => row,
-        Err(err) => return eprintln!("Cannot record the revision of {}: {err}", job.title),
-    };
-    if row.not_received() && kind == AddKind::Added {
-        if let Err(err) = ctx.revisions.reopen(row.id, at, hash.to_owned()).await {
-            return eprintln!("Cannot record the revision of {}: {err}", job.title);
+    let reopened = job.retry.is_some() && kind == AddKind::Added;
+    let written = ctx
+        .revisions
+        .write_with_history(
+            at,
+            HistoryWrite::Observe(observation),
+            RowWrite::Create {
+                new: row,
+                reopen: kind == AddKind::Added,
+            },
+        )
+        .await;
+    let written = match written {
+        Ok(written) => written,
+        Err(err) => {
+            eprintln!(
+                "Cannot record history and the revision of {} ({}): {err}",
+                job.title, job.channel_label
+            );
+            return false;
         }
-        println!("Receiving {} again for its replacement", job.title);
-    } else if row.state == RevisionState::Receiving {
-        println!(
-            "Replacing with {}: received under its own name until checked",
-            job.title
-        );
+    };
+    if written
+        .row
+        .as_ref()
+        .is_some_and(|row| row.state == RevisionState::Receiving)
+    {
+        if reopened {
+            println!("Receiving {} again for its replacement", job.title);
+        } else {
+            println!(
+                "Replacing with {}: received under its own name until checked",
+                job.title
+            );
+        }
     }
+    written.recorded == Some(Recorded::New)
 }
 
 /// How the rule path may rename a torrent Transmission holds for an item,
@@ -1254,6 +1280,18 @@ async fn leave_revisions(
                 });
             }
             Ok(None) => kept.push(job),
+            // A failure before the revision was received is not received
+            // again once a higher revision replaced the video: the
+            // replacement steps skip it.
+            Ok(Some(Mark::Retry(_))) if replaced(&job) => {
+                println!(
+                    "Not adding {} ({}) again: {}",
+                    job.title,
+                    job.channel_label,
+                    revisions::NOT_HIGHER
+                );
+                report.revisions_withheld += 1;
+            }
             Ok(Some(Mark::Retry(row))) => {
                 job.retry = Some(row.clone());
                 kept.push(job);

@@ -10,7 +10,7 @@ import { RESULT_LABEL } from "./filters";
 import { clock } from "./format";
 import { ChevronIcon, PlusIcon } from "./icons";
 import { RetryActions } from "./RetryActions";
-import { useRetry, type RetryPhase } from "./useRetry";
+import { retryStatus, useRetry, type RetryPhase } from "./useRetry";
 
 /** The new-rule screen (ticket 0006), opened with the channel and the item's title filled in. */
 export function newRuleLink(item: Pick<HistoryItem, "channel_id" | "title">): string {
@@ -39,24 +39,8 @@ function inProgress(phase: RetryPhase): boolean {
 
 /** The dimmed line under the title: what the row is doing or why it ended as it did. */
 function statusLine(item: HistoryItem, phase: RetryPhase): { text: string; urgent: boolean } | null {
-  switch (phase.kind) {
-    case "sending":
-      return { text: "접수하는 중이에요.", urgent: false };
-    case "waiting":
-      return { text: "접수됐어요. Transmission에 넣는 중이에요.", urgent: false };
-    case "unconfirmed":
-      return {
-        text: phase.lost
-          ? "접수됐는지 확인했더니 서버에 요청이 없어요. 같은 요청을 다시 보낼 수 있어요."
-          : "접수됐는지 확인하지 못했어요. 결과를 알 수 없어 다시 확인하고 있어요.",
-        urgent: false,
-      };
-    case "ended":
-      if (phase.message === "") break;
-      return { text: phase.message, urgent: phase.failed };
-    default:
-      break;
-  }
+  const retrying = retryStatus(phase);
+  if (retrying !== null) return retrying;
   switch (item.result) {
     case "received":
       return {

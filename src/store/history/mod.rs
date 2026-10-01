@@ -35,7 +35,9 @@
 
 mod identity;
 mod model;
-mod repo;
+/// Shared with `store::revisions`, which writes a revision row in the same
+/// transaction as its history item.
+pub(in crate::store) mod repo;
 mod rule_items;
 #[cfg(test)]
 mod tests;

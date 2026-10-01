@@ -92,10 +92,12 @@ use transmission_rpc::types::Id;
 
 use super::{commands::receive_once::derived_name, cycle::MAX_REASON_CHARS, CycleContext};
 use crate::{
-    revision::{crc_text, file_crc32, Release},
+    revision::{crc_text, file_crc32_identified, FileIdentity, Release},
     store::{
         history::{HistoryResult, Millis},
-        revisions::{Claim, OldVideo, Replacement, Revision, RevisionState, Step, OVERTAKEN},
+        revisions::{
+            Claim, OldVideo, Replacement, Revision, RevisionState, RowWrite, Step, OVERTAKEN,
+        },
     },
     transmission::{get_torrent, torrent_places, Redactor, TorrentPlace},
 };
@@ -199,10 +201,10 @@ pub fn is_revision(title: &str) -> bool {
 }
 
 /// The episode's file name in `save_path` for the release `title`, as the
-/// rule cycle's renaming derives it (with the rule's `episode` conversion),
-/// read from the name without its revision ([`Release::without_version`]).
+/// rule cycle's renaming derives it (with the rule's `episode` conversion,
+/// read from the name without its revision).
 pub fn episode_name(save_path: &Path, title: &str, episode: isize) -> Option<String> {
-    derived_name(save_path, &Release::without_version(title), episode)
+    derived_name(save_path, title, episode)
 }
 
 /// Transmission's whole file list, read when first needed and then shared:
@@ -299,12 +301,18 @@ static CRC_READS: Semaphore = Semaphore::const_new(1);
 
 /// Reads the CRC32 of `path` off the async threads, one file at a time.
 async fn crc_of(path: PathBuf) -> io::Result<u32> {
+    identified_crc_of(path).await.map(|(crc, _)| crc)
+}
+
+/// [`crc_of`], with the identity of the file that was read
+/// ([`file_crc32_identified`]).
+async fn identified_crc_of(path: PathBuf) -> io::Result<(u32, FileIdentity)> {
     let permit = CRC_READS.acquire().await.map_err(io::Error::other)?;
     tokio::task::spawn_blocking(move || {
         // Held by the read itself: a cycle that is dropped does not let
         // another read start beside it.
         let _permit = permit;
-        file_crc32(&path)
+        file_crc32_identified(&path)
     })
     .await
     .map_err(io::Error::other)?
@@ -462,29 +470,14 @@ pub async fn plan(ctx: &CycleContext, item: &Selected<'_>, listing: &Listing) ->
     }
 }
 
-/// `다시 받기` received the `버전 미상` item `item_id` as the torrent `hash`: its
-/// replacement goes ahead, checking the CRC32 only when the name carries one.
-/// Returns whether the item has a replacement row past `버전 미상`, whose
-/// torrent the caller must not rename; an error when that cannot be known
-/// (the caller tries the whole request again rather than rename).
-pub async fn confirm(
-    ctx: &CycleContext,
-    item_id: i64,
-    title: &str,
-    at: Millis,
-    hash: &str,
-) -> Result<bool, String> {
-    let expected = Release::parse(title).crc.map(crc_text);
-    match ctx
-        .revisions
-        .confirm(item_id, at, hash.to_owned(), expected)
-        .await
-    {
-        Ok(Some(row)) => Ok(row.state != RevisionState::Unknown),
-        Ok(None) => Ok(false),
-        Err(err) => Err(format!(
-            "cannot confirm the revision of item {item_id}: {err}"
-        )),
+/// What `다시 받기` of the `버전 미상` item titled `title`, received as the
+/// torrent `hash`, writes on its row with the item's result: its replacement
+/// goes ahead, checking the CRC32 only when the name carries one. A row past
+/// `버전 미상` afterwards is one whose torrent the caller must not rename.
+pub fn confirm(title: &str, hash: &str) -> RowWrite {
+    RowWrite::Confirm {
+        hash: hash.to_owned(),
+        expected_crc: Release::parse(title).crc.map(crc_text),
     }
 }
 
@@ -501,6 +494,8 @@ enum Next {
     Later(String),
 }
 
+/// How the reason of a torrent that reported a local error begins.
+const LOCAL_ERROR: &str = "새 영상을 받다 Transmission이 오류를 알렸어요: ";
 const RECEIVE_STOPPED: &str =
     "새 영상의 토렌트가 Transmission에서 사라져 받기가 끝나지 않았어요. 이전 영상은 그대로 있어요.";
 const SEVERAL_FILES: &str =
@@ -524,6 +519,7 @@ const OLD_CHANGED: &str =
 const DESTINATION_TAKEN: &str =
     "회차 이름에 다른 파일이 있어서 새 영상의 이름을 바꾸지 않았어요. 그 이름이 비면 다시 바꿔요.";
 const NEW_FILE_MISSING: &str = "받은 새 영상 파일을 찾지 못해 회차 이름을 붙이지 못했어요.";
+const OLD_FILE_LEFT: &str = "이전 영상의 토렌트는 Transmission에서 지웠지만 회차 이름의 파일이 아직 있어요. 그 파일이 없어지면 새 영상에 회차 이름을 붙여요.";
 
 /// Carries every replacement under way as far as it goes now. `at` stamps
 /// what is written.
@@ -614,13 +610,29 @@ async fn drive(
             Step::Failed { reason, .. } => {
                 row.state == RevisionState::Failed && Some(reason) == row.reason.as_ref()
             }
+            Step::RemovalWaits { reason } => Some(reason) == row.reason.as_ref(),
             _ => false,
         };
         if again {
             return;
         }
-        if let Err(err) = ctx.revisions.advance(row.id, at, step.clone()).await {
-            return eprintln!("Cannot record the revision of {}: {err}", row.episode_name);
+        // Written only over the state it was decided on: an earlier row of
+        // this pass may have moved this one on (skipped it) since it was read.
+        match ctx
+            .revisions
+            .advance(row.id, at, row.state, step.clone())
+            .await
+        {
+            Ok(true) => {}
+            Ok(false) => {
+                return println!(
+                    "Revision of {} moved on before {step:?} was written",
+                    row.episode_name
+                )
+            }
+            Err(err) => {
+                return eprintln!("Cannot record the revision of {}: {err}", row.episode_name)
+            }
         }
         println!("Revision of {}: {step:?}", row.episode_name);
         match step {
@@ -645,9 +657,27 @@ async fn drive(
                     return;
                 }
             }
-            Step::Done | Step::Failed { .. } | Step::Cleared | Step::Skipped { .. } => return,
+            Step::Done
+            | Step::Failed { .. }
+            | Step::Cleared
+            | Step::Skipped { .. }
+            | Step::RemovalWaits { .. } => return,
         }
     }
+}
+
+/// Whether `row` failed because its download stopped before the new video
+/// was received: its torrent left Transmission, or Transmission reported an
+/// error on it. `다시 받기` receives such a revision again (and starts its
+/// torrent when Transmission still has it); the other failures before the
+/// video was received (several files, another folder, the episode's own
+/// file) would end the same way again.
+pub fn stopped_before_received(row: &Revision) -> bool {
+    row.not_received()
+        && row
+            .reason
+            .as_deref()
+            .is_some_and(|reason| reason == RECEIVE_STOPPED || reason.starts_with(LOCAL_ERROR))
 }
 
 fn failed(reason: impl Into<String>, received_name: Option<String>) -> Next {
@@ -679,7 +709,7 @@ async fn received(ctx: &CycleContext, row: &Revision) -> Next {
     };
     if let Some(error) = &place.local_error {
         return failed(
-            format!("새 영상을 받다 Transmission이 오류를 알렸어요: {error}. 이전 영상은 그대로 있어요."),
+            format!("{LOCAL_ERROR}{error}. 이전 영상은 그대로 있어요."),
             None,
         );
     }
@@ -732,11 +762,36 @@ async fn received(ctx: &CycleContext, row: &Revision) -> Next {
 
 /// A failure before the new video was received, looked at again: once the
 /// torrent is right it goes on (step 1), and once the old video is gone
-/// there is nothing to replace.
+/// there is nothing to replace. A higher revision of the episode in place or
+/// on its way skips it, as it would skip it before removing anything; and an
+/// episode name left empty by another replacement of the episode, between
+/// removing the old video and naming its new one, is not the old video gone.
 async fn recover(ctx: &CycleContext, row: &Revision) -> Next {
+    match ctx.revisions.verdict(row.id).await {
+        Ok(Claim::Overtaken) => return skipped(OVERTAKEN),
+        Ok(_) => {}
+        Err(err) => return Next::Later(err.to_string()),
+    }
     let old = Path::new(&row.folder).join(&row.episode_name);
     if matches!(exists(&old), Ok(false)) {
-        return Next::Step(Step::Cleared);
+        let rows = match ctx
+            .revisions
+            .of_episode(row.folder.clone(), row.episode_name.clone())
+            .await
+        {
+            Ok(rows) => rows,
+            Err(err) => return Next::Later(err.to_string()),
+        };
+        let naming = rows.iter().any(|other| {
+            other.id != row.id
+                && matches!(
+                    other.state,
+                    RevisionState::Removing | RevisionState::Removed
+                )
+        });
+        if !naming {
+            return Next::Step(Step::Cleared);
+        }
     }
     match received(ctx, row).await {
         Next::Wait => Next::Step(Step::Receiving),
@@ -771,17 +826,37 @@ async fn remove_old(ctx: &CycleContext, row: &mut Revision, at: Millis, listing:
         Ok(present) => present,
         Err(err) => return Next::Later(format!("cannot look at {}: {err}", old.display())),
     };
-    let found = if present {
+    // The old torrent was asked to go (perhaps with no answer): once
+    // Transmission no longer holds it, its file is the old video's data,
+    // which Transmission deletes after it answers, or could not delete. It is
+    // not looked at as an old video again (the torrent that told its revision
+    // is gone); the replacement waits, as removing, for the file to go.
+    if let (true, RevisionState::Removing, Some(hash)) =
+        (present, row.state, row.old_torrent_hash.as_ref())
+    {
+        let mut transmission = ctx.transmission();
+        match get_torrent(&mut transmission, hash).await {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                return Next::Step(Step::RemovalWaits {
+                    reason: OLD_FILE_LEFT.to_owned(),
+                })
+            }
+            Err(err) => return Next::Later(err.to_string()),
+        }
+    }
+    let (found, identity) = if present {
         match old_video(ctx, row, &old, listing).await {
             Ok(found) => found,
             Err(next) => return next,
         }
     } else {
-        OldVideo {
+        let none = OldVideo {
             item_id: None,
             version: None,
             torrent_hash: None,
-        }
+        };
+        (none, None)
     };
     match ctx.revisions.claim(row.id, at, found.clone()).await {
         Ok(Claim::Go) => row.state = RevisionState::Removing,
@@ -791,6 +866,16 @@ async fn remove_old(ctx: &CycleContext, row: &mut Revision, at: Millis, listing:
     }
     if !present {
         return Next::Step(Step::Removed { reason: None });
+    }
+    // What is at the name now must be the file that was looked at: another
+    // program may have put a file there since (an atomic rename), which the
+    // removal below would take with it.
+    match (identity, FileIdentity::at(&old)) {
+        (Some(seen), Ok(now)) if seen == now => {}
+        (_, Err(err)) if err.kind() != io::ErrorKind::NotFound => {
+            return Next::Later(format!("cannot look at {}: {err}", old.display()))
+        }
+        _ => return failed(OLD_CHANGED, None),
     }
 
     match &found.torrent_hash {
@@ -811,13 +896,12 @@ async fn remove_old(ctx: &CycleContext, row: &mut Revision, at: Millis, listing:
                         None,
                     )
                 }
+                // No answer: Transmission may have removed it all the same.
+                // The row stays removing, and the next look tells which.
                 Err(err) => {
-                    return failed(
-                        format!(
-                            "이전 영상의 토렌트를 지우지 못했어요({err}). 두 파일을 그대로 뒀어요."
-                        ),
-                        None,
-                    )
+                    return Next::Later(format!(
+                        "no answer to removing the old torrent {hash}: {err}"
+                    ))
                 }
             }
         }
@@ -841,14 +925,18 @@ async fn remove_old(ctx: &CycleContext, row: &mut Revision, at: Millis, listing:
 }
 
 /// What is at the episode name `old` now, when it is a lower revision of the
-/// row's release that may be removed; otherwise what to do instead.
+/// row's release that may be removed, with the identity of the file that was
+/// looked at; otherwise what to do instead.
 async fn old_video(
     ctx: &CycleContext,
     row: &Revision,
     old: &Path,
     listing: &Listing,
-) -> Result<OldVideo, Next> {
+) -> Result<(OldVideo, Option<FileIdentity>), Next> {
     let places = listing.get(ctx).await.map_err(Next::Later)?;
+    // Taken before the torrents are matched against it.
+    let seen = FileIdentity::at(old)
+        .map_err(|err| Next::Later(format!("cannot look at {}: {err}", old.display())))?;
     let owner = owner_of(&places, old)
         .map_err(|err| Next::Later(format!("cannot look at {}: {err}", old.display())))?;
     match owner {
@@ -869,6 +957,17 @@ async fn old_video(
         Owner::One(owner) => {
             if row.torrent_hash.as_deref() == Some(owner.hash.as_str()) {
                 return Err(failed(NAME_TAKEN_BY_NEW, None));
+            }
+            if owner.files.iter().any(|file| file.name.contains('/')) {
+                // One file, inside a folder of the torrent's: removing the
+                // torrent with its data takes what is left of the folder too.
+                return Err(failed(
+                    format!(
+                        "이전 영상이 토렌트 {}의 폴더 안에 있어서 폴더째 지울 수 있어 대체하지 않았어요. 두 파일을 그대로 뒀어요.",
+                        owner.name
+                    ),
+                    None,
+                ));
             }
             if owner.files.len() > 1 {
                 return Err(failed(
@@ -906,11 +1005,12 @@ async fn old_video(
             if version >= row.new_version {
                 return Err(skipped(IN_PLACE));
             }
-            Ok(OldVideo {
+            let found = OldVideo {
                 item_id: Some(id),
                 version: Some(version),
                 torrent_hash: Some(owner.hash.clone()),
-            })
+            };
+            Ok((found, Some(seen)))
         }
         Owner::Nobody => {
             // A file no torrent holds is deleted only when it is the video
@@ -948,18 +1048,23 @@ async fn old_video(
             if known.is_empty() {
                 return Err(failed(OLD_UNCHECKED, None));
             }
-            let crc = match crc_of(old.to_owned()).await {
-                Ok(crc) => crc_text(crc),
+            // The identity is the read file's own: the name is checked
+            // against it right before the file is deleted.
+            let (crc, read) = match identified_crc_of(old.to_owned()).await {
+                Ok((crc, read)) => (crc_text(crc), read),
                 Err(err) => {
                     return Err(Next::Later(format!("cannot read {}: {err}", old.display())))
                 }
             };
             match known.into_iter().find(|(known, _, _)| *known == crc) {
-                Some((_, item_id, version)) => Ok(OldVideo {
-                    item_id,
-                    version,
-                    torrent_hash: None,
-                }),
+                Some((_, item_id, version)) => {
+                    let found = OldVideo {
+                        item_id,
+                        version,
+                        torrent_hash: None,
+                    };
+                    Ok((found, Some(read)))
+                }
                 None => Err(failed(OLD_CHANGED, None)),
             }
         }
@@ -982,9 +1087,13 @@ async fn rename(ctx: &CycleContext, row: &Revision, listing: &Listing) -> Next {
     match exists(&target) {
         Ok(false) => {}
         Ok(true) => {
-            return Next::Step(Step::Removed {
-                reason: Some(DESTINATION_TAKEN.to_owned()),
-            })
+            return match renamed_already(ctx, row, &target).await {
+                Ok(true) => Next::Step(Step::Done),
+                Ok(false) => Next::Step(Step::Removed {
+                    reason: Some(DESTINATION_TAKEN.to_owned()),
+                }),
+                Err(why) => Next::Later(why),
+            }
         }
         Err(err) => return Next::Later(format!("cannot look at {}: {err}", target.display())),
     }
@@ -1054,6 +1163,46 @@ async fn rename(ctx: &CycleContext, row: &Revision, listing: &Listing) -> Next {
     }
 }
 
+/// Whether the file at the episode name `target` is the row's own new video,
+/// renamed by an earlier look that did not get to write `done` (it stopped,
+/// or the write failed): the received name is gone, and the file is the one
+/// the row's torrent holds, or (the torrent gone too) its CRC32 is the one
+/// read when the new video was checked.
+async fn renamed_already(
+    ctx: &CycleContext,
+    row: &Revision,
+    target: &Path,
+) -> Result<bool, String> {
+    let Some(received_name) = &row.received_name else {
+        return Ok(false);
+    };
+    match exists(&Path::new(&row.folder).join(received_name)) {
+        Ok(false) => {}
+        Ok(true) => return Ok(false),
+        Err(err) => return Err(format!("cannot look at {received_name}: {err}")),
+    }
+    if let Some(hash) = &row.torrent_hash {
+        let mut transmission = ctx.transmission();
+        let places = torrent_places(&mut transmission, Some(std::slice::from_ref(hash)), true)
+            .await
+            .map_err(|err| err.to_string())?;
+        if !places.is_empty() {
+            return match owner_of(&places, target) {
+                Ok(Owner::One(_)) => Ok(true),
+                Ok(_) => Ok(false),
+                Err(err) => Err(format!("cannot look at {}: {err}", target.display())),
+            };
+        }
+    }
+    let Some(expected) = &row.file_crc else {
+        return Ok(false);
+    };
+    match crc_of(target.to_owned()).await {
+        Ok(crc) => Ok(crc_text(crc) == *expected),
+        Err(err) => Err(format!("cannot read {}: {err}", target.display())),
+    }
+}
+
 /// A failure the person resolved: one of the two files is gone.
 fn cleared(row: &Revision) -> Next {
     let folder = Path::new(&row.folder);
@@ -1086,18 +1235,13 @@ mod tests {
         assert!(!is_revision("[SubsPlease] Show - 14v1 (1080p).mkv"));
     }
 
-    /// `trname` reads Erai-raws' `06v2` as episode 34 (from the CRC32
-    /// bracket); the revision's episode name is the first release's.
+    /// The revision's episode name is the first release's, whatever
+    /// `trname` would read from the revision marker.
     #[test]
     fn a_revisions_episode_name_is_its_first_releases() {
         let folder = Path::new("/media/Show/Season 01");
         let v1 = "[Erai-raws] Show - 06 [1080p CR WEBRip HEVC AAC][MultiSub][1BBD34E6].mkv";
         let v2 = "[Erai-raws] Show - 06v2 [1080p CR WEBRip HEVC AAC][MultiSub][1BBD34E6].mkv";
-        assert_eq!(
-            derived_name(folder, v2, 0).as_deref(),
-            Some("Show S01E34.mkv"),
-            "trname alone"
-        );
         assert_eq!(
             episode_name(folder, v2, 0).as_deref(),
             Some("Show S01E06.mkv")
