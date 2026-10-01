@@ -112,6 +112,7 @@ worker는 `14v2`를 추가하고 곧바로 `Show S01E14.mkv`로 이름을 바꿨
   - 제목의 `NvM`: `a_number_v_number_in_the_show_name_is_not_the_revision`(`Show 3v3 - 06v2`; 고치기 전 수정본 번호 3, 제목의 `3v3`이 지워져요), `a_v_number_that_does_not_follow_a_number_is_no_revision`(`Gundam V2`·`Ver.2`·`S01E06v2`·`x264v2`는 수정본이 아니에요. 고치기 전에도 통과했어요).
   - 상태 변경 시각: `a_rewrite_that_restores_the_modification_time_changes_the_identity`(같은 크기로 덮어쓰고 수정 시각을 되돌린 파일. 고치기 전 같은 신원, 고친 뒤 다름. 커널의 시계가 성기게 움직이므로 50ms 쉬어요).
   - 이 보완 뒤(master `369d34f` 위): `cargo fmt --check`와 `cargo clippy --all-targets -- -D warnings`가 통과했고, `cargo test --no-fail-fast`는 1257개 통과, 실패 0개, 무시 2개였어요(27개 실행 파일). 웹은 건드리지 않아 `bun`은 돌리지 않았어요. 첫 실행에서 `artwork::tests::hundreds_of_new_works_are_searched_one_at_a_time_at_the_pace`(시간에 의존하는 시험) 하나가 실패했지만 이 변경과 관계없고, 혼자 돌리거나 다시 돌리면 통과했어요.
+- 남은 한계 보완(새 영상의 신원, 놓침 표시, 지켜보는 끝낸 대체, 영상이 없는 실패의 `다시 받기`와 그 확인, 다시 받은 행의 `claim`·받기 전 실패, 오래 보이지 않는 폴더와 보관된 규칙) 뒤(master `947ab49` 위): `cargo fmt --check`와 `cargo clippy --all-targets -- -D warnings`가 통과했고, `cargo test --no-fail-fast`는 1411개 통과, 실패 0개, 무시 2개였어요(27개 실행 파일). 웹은 `bun run typecheck`, `bun run build`가 통과했어요.
 
 ### 검증하지 못한 것
 
