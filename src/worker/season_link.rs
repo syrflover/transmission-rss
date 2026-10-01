@@ -44,19 +44,26 @@ pub struct Linked {
 
 /// The seasons that hold a video of the given torrents.
 async fn seasons_of(ctx: &CycleContext, places: &[&TorrentPlace]) -> BTreeSet<(String, u32)> {
+    let paths: Vec<String> = places
+        .iter()
+        .flat_map(|place| {
+            let dir = place.download_dir.trim_end_matches('/');
+            place
+                .files
+                .iter()
+                .map(move |file| format!("{dir}/{}", file.name))
+        })
+        .collect();
     let mut found = BTreeSet::new();
-    for place in places {
-        let dir = place.download_dir.trim_end_matches('/');
-        for file in &place.files {
-            let path = format!("{dir}/{}", file.name);
-            match ctx.library.find_video(&path).await {
-                Ok(Some((work_id, season))) if season >= 1 => {
+    match ctx.library.find_videos(paths).await {
+        Ok(videos) => {
+            for (work_id, season) in videos.into_iter().flatten() {
+                if season >= 1 {
                     found.insert((work_id, season));
                 }
-                Ok(_) => {}
-                Err(err) => eprintln!("Season link: cannot look a video up: {err}"),
             }
         }
+        Err(err) => eprintln!("Season link: cannot look the videos up: {err}"),
     }
     found
 }

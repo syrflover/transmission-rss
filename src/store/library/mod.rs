@@ -481,12 +481,15 @@ impl LibraryStore {
             .await
     }
 
-    /// The work and season number of the video the library recorded at the
-    /// absolute `path`, if it has one in a registered watch folder.
-    pub async fn find_video(&self, path: &str) -> Result<Option<(String, u32)>, LibraryError> {
-        let path = path.to_owned();
+    /// The work and season number of the video the library recorded at each
+    /// of the absolute `paths`, in the order given; `None` for a path with no
+    /// such video in a registered watch folder.
+    pub async fn find_videos(
+        &self,
+        paths: Vec<String>,
+    ) -> Result<Vec<Option<(String, u32)>>, LibraryError> {
         self.db
-            .run(move |c| Ok(detail::find_video(c, &path)?))
+            .run(move |c| Ok(detail::find_videos(c, &paths)?))
             .await
     }
 }
