@@ -148,7 +148,8 @@ export interface NewSubscription {
   anissia_anime_no: number;
   /** The schedule week the anime was picked from. */
   week: number;
-  work: string;
+  /** The release title's work; `null` subscribes before the first episode, waiting for its title. */
+  work: string | null;
   subtitles: SubtitleMode;
   creator: string | null;
   directory: string;
@@ -189,4 +190,59 @@ export function linkToSchedule(rule: Pick<Rule, "id" | "version">, link: Schedul
  */
 export function receiveWithRule(id: string, itemId: number, ruleId: string): Promise<Command> {
   return sendCommand(id, "receive_once", { item_id: itemId, rule_id: ruleId });
+}
+
+/** A subscription that waits for its title, as a work is offered to it. */
+export interface WaitingSub {
+  rule_id: string;
+  rule_version: number;
+  /** The anime it follows; only a hint for which work belongs to it. */
+  anime: Anime | null;
+  /** The save folder it has now. */
+  directory: string;
+}
+
+/** A work that appeared in a channel with a subscription waiting for a title. */
+export interface TitleCandidate {
+  channel_id: string;
+  channel_name: string | null;
+  channel_host: string;
+  /** What identifies the candidate within its channel. */
+  key: string;
+  /** The work, as the newest item writes it: the match phrase it would give. */
+  work: string;
+  latest_title: string;
+  items: number;
+  first_seen_at: number;
+  latest_seen_at: number;
+  /** The save folder made from the work, to offer in place of the folder the subscription has. */
+  folder: string | null;
+  waiting: WaitingSub[];
+}
+
+export function fetchCandidates(signal?: AbortSignal): Promise<TitleCandidate[]> {
+  return api<{ candidates: TitleCandidate[] }>("/subscriptions/candidates", { signal }).then((r) => r.candidates);
+}
+
+/** `거절`: the work is not offered again in this channel. */
+export async function rejectCandidate(channelId: string, work: string): Promise<void> {
+  await api<{ rejected: boolean }>("/subscriptions/candidates/reject", {
+    method: "POST",
+    body: { channel_id: channelId, work },
+  });
+}
+
+/**
+ * Names the title of a waiting subscription: the work becomes its match phrase,
+ * and `directory` (when given) replaces its save folder. Receives nothing.
+ */
+export function nameTitle(
+  rule: Pick<WaitingSub, "rule_id" | "rule_version">,
+  work: string,
+  directory: string | null,
+): Promise<Rule> {
+  return api<Rule>(`/rules/${encodeURIComponent(rule.rule_id)}/title`, {
+    method: "POST",
+    body: { version: rule.rule_version, work, ...(directory === null ? {} : { directory }) },
+  });
 }

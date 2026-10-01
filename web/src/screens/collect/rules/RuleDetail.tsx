@@ -37,6 +37,7 @@ import { ChannelTag, StateBadge } from "./RuleList";
 import { ConflictNotice, OrderRow, RuleSummary } from "./parts";
 import { RulePreview, type PastReceive } from "./RulePreview";
 import { SwitchRows } from "./SwitchRows";
+import { WaitingBanner } from "./WaitingBanner";
 import { useArchiveMove } from "./useArchiveMove";
 import { usePreview } from "./usePreview";
 
@@ -419,7 +420,10 @@ export function RuleDetail({
           onRecheck={move.recheck}
         />
       )}
-      {known && known.state === "active" && known.match === null && (
+      {known && known.state !== "archived" && known.match === null && known.subscription !== null && (
+        <WaitingBanner rule={known} />
+      )}
+      {known && known.state === "active" && known.match === null && known.subscription === null && (
         <p className="rounded-xl border border-hairline bg-surface-2 px-3.5 py-3 text-[13px] leading-normal text-text-secondary">
           일치 문구를 적기 전까지는 아무것도 받지 않아요.
         </p>
