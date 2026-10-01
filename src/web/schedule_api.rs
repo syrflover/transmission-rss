@@ -37,8 +37,15 @@
 //!
 //! The card's `episode` is the season's episode that airs in the slot
 //! ([`crate::schedule::slot::episode_on`]); it is `null` when that cannot be
-//! told. The status lines come from [`crate::schedule::state`]:
+//! told, and for a `결방` card. The status lines come from
+//! [`crate::schedule::state`]:
 //!
+//! - an anime the stored Anissia snapshot marks `OFF` is `video: "off"`
+//!   (`결방`) with no subtitle line, whatever the library holds; a paused rule
+//!   says `paused` instead. The stand-in snapshot an import keeps while Anissia
+//!   could not be asked (week `기타`, status `OFF`, `fetched_at` 0) is not
+//!   Anissia's word: it has no weekday so it makes no card, and it would not be
+//!   read as `OFF` if it had.
 //! - `video_held` / `subtitle_held`: the season the subscription follows holds a
 //!   video / a subtitle for the episode. A subscription whose season is not
 //!   connected holds nothing.
@@ -342,7 +349,14 @@ pub async fn week_at(state: &AppState, now: Millis) -> Result<WeekView, ApiError
             .and_then(|id| seasons.get(id))
             .and_then(Option::as_ref);
         let no_times = BTreeMap::new();
-        let episode = episode_on(anime, &slot, season.map_or(&no_times, |s| &s.air_times));
+        let off = state::is_off(anime);
+        // A `결방` week airs no episode, and a count from the start date would
+        // name one that did not.
+        let episode = if off {
+            None
+        } else {
+            episode_on(anime, &slot, season.map_or(&no_times, |s| &s.air_times))
+        };
         let held = episode
             .and_then(|e| season.and_then(|s| s.held.get(&e)))
             .copied()
@@ -351,6 +365,7 @@ pub async fn week_at(state: &AppState, now: Millis) -> Result<WeekView, ApiError
             now,
             instant: slot.instant,
             paused: rule.state == RuleState::Paused,
+            off,
             subtitles: subscription.subtitles,
             video_held: held.video,
             subtitle_held: held.subtitle,

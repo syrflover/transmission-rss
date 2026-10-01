@@ -6,8 +6,11 @@ import { forget } from "@/lib/cached";
  * Times are Unix milliseconds; the dates are Asia/Seoul calendar days.
  */
 
-/** `영상 받기` is off: `paused` (`받기 멈춤`). */
-export type VideoState = "received" | "downloading" | "waiting" | "upcoming" | "paused";
+/**
+ * `영상 받기` is off: `paused` (`받기 멈춤`). Anissia marks the anime `OFF`:
+ * `off` (`결방`), which stands in place of the video and the subtitle line.
+ */
+export type VideoState = "received" | "downloading" | "waiting" | "upcoming" | "paused" | "off";
 
 /**
  * The last three are the states the subtitle side will fill; the server does

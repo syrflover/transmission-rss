@@ -30,6 +30,7 @@ const VIDEO: Record<VideoState, Line> = {
   waiting: { text: "영상 대기", tone: "quiet", icon: MinusIcon },
   upcoming: { text: "방영 전", tone: "quiet", icon: MinusIcon },
   paused: { text: "받기 멈춤", tone: "quiet", icon: MinusIcon },
+  off: { text: "결방", tone: "quiet", icon: MinusIcon },
 };
 
 const SUBTITLE: Record<SubtitleState, Line> = {

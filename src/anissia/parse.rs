@@ -466,6 +466,16 @@ mod tests {
     }
 
     #[test]
+    fn an_entry_without_a_status_is_on_and_one_that_gives_off_is_off() {
+        let status = |raw: Value| entry(&raw, 2).unwrap().status;
+        assert_eq!(status(json!({ "animeNo": 9, "subject": "s" })), "ON");
+        assert_eq!(
+            status(json!({ "animeNo": 9, "subject": "s", "status": "OFF" })),
+            "OFF"
+        );
+    }
+
+    #[test]
     fn the_snapshot_is_the_part_of_an_entry_the_app_keeps() {
         let entry = entry(
             &json!({ "week": "2", "animeNo": 9, "subject": "s", "time": "21:30",

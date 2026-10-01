@@ -428,6 +428,80 @@ async fn an_archived_subscription_has_no_card() {
 }
 
 #[tokio::test]
+async fn an_anime_anissia_marks_off_has_a_quiet_off_card_in_place_of_the_video_and_subtitle_lines()
+{
+    let app = App::new().await;
+    let mut off = anime(1, "결방 작품", 4, Some("10:00"), Some("2026-07-02"));
+    off.status = "OFF".into();
+    // The library holds the 14th, which still does not make it a received card.
+    app.subscribe(off, rule("O"), SubtitleMode::Follow, Some("Both"))
+        .await;
+    // A paused rule of an off anime says it is paused.
+    let mut paused = anime(2, "멈춘 결방", 4, Some("10:00"), Some("2026-07-02"));
+    paused.status = "OFF".into();
+    app.subscribe(
+        paused,
+        RuleInput {
+            state: RuleState::Paused,
+            ..rule("P")
+        },
+        SubtitleMode::Follow,
+        None,
+    )
+    .await;
+    app.subscribe(
+        anime(3, "방영", 4, Some("10:00"), Some("2026-07-02")),
+        rule("N"),
+        SubtitleMode::Follow,
+        Some("VideoOnly"),
+    )
+    .await;
+
+    let body = app.week().await;
+    let cards = body["week"]["days"][3]["cards"].as_array().unwrap();
+    let by_title = |title: &str| cards.iter().find(|c| c["title"] == title).unwrap();
+
+    let off = by_title("결방 작품");
+    assert_eq!(off["video"], "off");
+    assert_eq!(off["subtitle"], Value::Null);
+    assert_eq!(off["episode"], Value::Null);
+    assert_eq!(off["time"], "10:00");
+    assert_eq!(by_title("멈춘 결방")["video"], "paused");
+    assert_eq!(by_title("방영")["video"], "received");
+    assert_eq!(by_title("방영")["subtitle"], "waiting");
+}
+
+#[tokio::test]
+async fn the_stand_in_an_import_keeps_is_not_anissias_off() {
+    let app = App::new().await;
+    // What an import stores while Anissia cannot be asked: `기타`, `OFF`, never
+    // received. It has no weekday, so no card; and if it were moved to a weekday
+    // without being received, it is still not read as `OFF`.
+    let stand_in =
+        crate::store::channels::import_subscriptions::ImportSubscription::stand_in(1, "대역");
+    assert_eq!(stand_in.status, "OFF");
+    app.subscribe(stand_in.clone(), rule("S"), SubtitleMode::None, None)
+        .await;
+    let body = app.week().await;
+    assert!(body["week"]["days"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|d| d["cards"].as_array().unwrap().is_empty()));
+
+    let weekday = Anime {
+        week: 4,
+        air_time: Some("10:00".into()),
+        start_date: Some("2026-07-02".into()),
+        ..stand_in
+    };
+    app.state.anissia.store.put_anime(weekday).await.unwrap();
+    let body = app.week().await;
+    let card = &body["week"]["days"][3]["cards"][0];
+    assert_eq!(card["video"], "waiting");
+}
+
+#[tokio::test]
 async fn a_card_leaves_once_the_end_date_has_passed() {
     let app = App::new().await;
     let mut ended = anime(1, "종영", 4, Some("10:00"), Some("2026-07-02"));
