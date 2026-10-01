@@ -322,3 +322,36 @@ async fn an_import_keeps_the_grounds_of_an_automatic_value_it_leaves_as_it_is() 
     let after = env.store.get_rule(&rule.id).await.unwrap().unwrap();
     assert_eq!((after.episode, after.episode_auto), (-12, true));
 }
+
+#[tokio::test]
+async fn an_undo_begins_only_for_the_previous_value_it_was_planned_for() {
+    let env = Env::new().await;
+    let rule = env.subscription(-24).await;
+    env.store
+        .set_auto_episode(&rule.id, rule.version, -48, BASIS)
+        .await
+        .unwrap()
+        .unwrap();
+
+    // Planned for −12, but the value before the app's is −24: nothing changes.
+    let begun = env
+        .store
+        .begin_episode_undo("undo-1", &rule.id, -48, -12, Vec::new(), 5)
+        .await
+        .unwrap();
+    assert_eq!(begun, UndoBegun::Changed);
+    let stored = env.store.get_rule(&rule.id).await.unwrap().unwrap();
+    assert_eq!((stored.episode, stored.episode_auto), (-48, true));
+
+    let begun = env
+        .store
+        .begin_episode_undo("undo-2", &rule.id, -48, -24, Vec::new(), 5)
+        .await
+        .unwrap();
+    assert!(
+        matches!(begun, UndoBegun::Begun(ref undo) if undo.to == -24),
+        "{begun:?}"
+    );
+    let stored = env.store.get_rule(&rule.id).await.unwrap().unwrap();
+    assert_eq!((stored.episode, stored.episode_auto), (-24, false));
+}

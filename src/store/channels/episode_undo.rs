@@ -25,6 +25,13 @@
 //! the files of its name across cycles, so an undo that would rename one of
 //! them, or rename a file onto its name, is refused before anything changes
 //! ([`UndoBegun::Busy`]); it can be asked again once the replacement ended.
+//!
+//! A cycle can run between two starts of an undo, so each file is looked at
+//! again right before its rename ([`ChannelStore::undo_file_hold`]): a
+//! replacement that began meanwhile keeps the file, and so do rows the new
+//! name has of its own (an ended replacement of a file that is gone), which
+//! would otherwise be merged with the file's. Only rows of ended
+//! replacements move.
 
 use std::collections::HashMap;
 
@@ -116,6 +123,13 @@ pub enum UndoBegun {
     Busy(Vec<String>),
 }
 
+/// Why a file keeps its name: a replacement acts on it or on its new name.
+pub const REVISION_UNDER_WAY: &str =
+    "수정본으로 대체하는 중인 영상이에요. 대체가 끝난 뒤 다시 되돌려 주세요.";
+/// Why a file keeps its name: the new name has video revision rows of its own.
+pub const REVISION_ROWS_THERE: &str =
+    "새 이름에 다른 영상의 수정본 기록이 있어서 이름을 바꾸지 않았어요.";
+
 /// The states of a replacement still acting on its episode's files.
 fn under_way() -> Vec<&'static str> {
     RevisionState::ALL
@@ -172,11 +186,13 @@ fn read_undo(conn: &Connection, command_id: &str) -> Result<Option<EpisodeUndo>>
     }))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn begin(
     conn: &mut Connection,
     command_id: &str,
     rule_id: &str,
     from: i64,
+    to: i64,
     files: &[NewUndoFile],
     at: Millis,
 ) -> Result<UndoBegun> {
@@ -193,9 +209,10 @@ fn begin(
             |row| row.get(0),
         )
         .optional()?;
-    let Some(Some(to)) = previous else {
+    // The plan was made for `to`; another previous value is another undo.
+    if previous != Some(Some(to)) {
         return Ok(UndoBegun::Changed);
-    };
+    }
 
     let states = under_way();
     let marks = vec!["?"; states.len()].join(", ");
@@ -285,14 +302,51 @@ fn finish_file(
         params![command_id, item_id, state.code(), kept],
     )?;
     if kept.is_none() {
+        let states = under_way();
+        let marks = (5..5 + states.len())
+            .map(|n| format!("?{n}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut args: Vec<&dyn rusqlite::ToSql> = vec![&folder, &from_name, &to_name, &at];
+        args.extend(states.iter().map(|s| s as &dyn rusqlite::ToSql));
         tx.execute(
-            "UPDATE video_revisions SET episode_name = ?3, updated_at = ?4
-              WHERE folder = ?1 AND episode_name = ?2",
-            params![folder, from_name, to_name, at],
+            &format!(
+                "UPDATE video_revisions SET episode_name = ?3, updated_at = ?4
+                  WHERE folder = ?1 AND episode_name = ?2 AND state NOT IN ({marks})"
+            ),
+            args.as_slice(),
         )?;
     }
     tx.commit()?;
     Ok(())
+}
+
+fn file_hold(
+    conn: &Connection,
+    folder: &str,
+    from_name: &str,
+    to_name: &str,
+) -> Result<Option<&'static str>> {
+    let mut stmt = conn.prepare(
+        "SELECT episode_name, state FROM video_revisions
+          WHERE folder = ?1 AND episode_name IN (?2, ?3)",
+    )?;
+    let rows = stmt
+        .query_map(params![folder, from_name, to_name], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let states = under_way();
+    if rows
+        .iter()
+        .any(|(_, state)| states.contains(&state.as_str()))
+    {
+        return Ok(Some(REVISION_UNDER_WAY));
+    }
+    if rows.iter().any(|(name, _)| name == to_name) {
+        return Ok(Some(REVISION_ROWS_THERE));
+    }
+    Ok(None)
 }
 
 impl ChannelStore {
@@ -300,17 +354,36 @@ impl ChannelStore {
     /// `from`: puts the previous value back as the user's own and writes the
     /// plan `files` (see the module docs). An undo the command began before
     /// is returned as it stands, whatever `files` says now.
+    /// `to` is the previous value the plan was made for; the undo begins only
+    /// while it is still the rule's.
     pub async fn begin_episode_undo(
         &self,
         command_id: &str,
         rule_id: &str,
         from: i64,
+        to: i64,
         files: Vec<NewUndoFile>,
         at: Millis,
     ) -> Result<UndoBegun> {
         let (command_id, rule_id) = (command_id.to_owned(), rule_id.to_owned());
         self.db
-            .run(move |c| begin(c, &command_id, &rule_id, from, &files, at))
+            .run(move |c| begin(c, &command_id, &rule_id, from, to, &files, at))
+            .await
+    }
+
+    /// Why the video at `from_name` in `folder` keeps its name, as the video
+    /// revision rows have it now, or `None` when it may take `to_name` (see
+    /// the module docs).
+    pub async fn undo_file_hold(
+        &self,
+        folder: &str,
+        from_name: &str,
+        to_name: &str,
+    ) -> Result<Option<&'static str>> {
+        let (folder, from_name, to_name) =
+            (folder.to_owned(), from_name.to_owned(), to_name.to_owned());
+        self.db
+            .run(move |c| file_hold(c, &folder, &from_name, &to_name))
             .await
     }
 
@@ -340,7 +413,7 @@ impl ChannelStore {
 
     /// Records how the rename of the video of `item_id` in the undo ended:
     /// renamed (`kept` is `None`), and then the video revision rows of its old
-    /// name take the new one in the same transaction; or left as it is, with
+    /// name that ended take the new one in the same transaction; or left as it is, with
     /// the reason. A file that is not `pending` any more is left as recorded.
     pub async fn finish_undo_file(
         &self,

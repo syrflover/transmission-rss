@@ -224,7 +224,7 @@ pub async fn run(ctx: &CycleContext, command: &Command, clock: &Clock) -> Result
             let files = plan(ctx, &rule, &collect.folder, payload.episode, to).await?;
             match ctx
                 .channels
-                .begin_episode_undo(&command.id, &rule.id, payload.episode, files, clock())
+                .begin_episode_undo(&command.id, &rule.id, payload.episode, to, files, clock())
                 .await
                 .map_err(store)?
             {
@@ -250,7 +250,16 @@ pub async fn run(ctx: &CycleContext, command: &Command, clock: &Clock) -> Result
         .collect();
     while !pending.is_empty() {
         let file = pending.remove(next(&pending));
-        let kept = rename(ctx, file, &mut listing).await?;
+        // A cycle may have run since the undo began (see the store's docs).
+        let held = ctx
+            .channels
+            .undo_file_hold(&file.folder, &file.from_name, &file.to_name)
+            .await
+            .map_err(store)?;
+        let kept = match held {
+            Some(reason) => Some(reason.to_owned()),
+            None => rename(ctx, file, &mut listing).await?,
+        };
         match &kept {
             None => println!(
                 "Episode undo {}: {} is now {}",

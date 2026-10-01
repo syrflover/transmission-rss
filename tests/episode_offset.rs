@@ -1436,3 +1436,121 @@ async fn a_torrent_still_downloading_is_not_renamed() {
     let view = s.view(&rule).await;
     assert_eq!(view["episode_undo"]["files"][1]["state"], "kept");
 }
+
+// --- revision rows checked file by file -----------------------------------------
+
+impl Scene {
+    /// A video revision row of `episode_name` in the season 3 folder, for the
+    /// item whose title has `part`.
+    async fn revision_row(
+        &self,
+        rule: &Rule,
+        part: &str,
+        episode_name: &str,
+        receiving: bool,
+    ) -> i64 {
+        use transmission_rss::store::revisions::{NewRevision, RevisionState, RevisionStore};
+        let item = self.h.item(part).await;
+        RevisionStore::new(self.h.db.clone())
+            .create(
+                self.h.now(),
+                NewRevision {
+                    item_id: item.id,
+                    old_item_id: None,
+                    rule_id: rule.id.clone(),
+                    folder: self.season3().to_str().unwrap().to_owned(),
+                    episode_name: episode_name.into(),
+                    old_version: Some(1),
+                    new_version: 2,
+                    old_crc: None,
+                    expected_crc: None,
+                    torrent_hash: None,
+                    state: if receiving {
+                        RevisionState::Receiving
+                    } else {
+                        RevisionState::Skipped
+                    },
+                    reason: None,
+                },
+            )
+            .await
+            .unwrap()
+            .id
+    }
+}
+
+/// A start cut short after Transmission renamed the first file carries on;
+/// a replacement that began between the starts keeps its episode's file.
+#[tokio::test]
+async fn a_start_cut_short_carries_on_and_checks_each_file_again() {
+    let (s, rule) = Scene::third_season_received().await;
+    let (status, body) = s.ask_undo(&rule, "undo-0201-a", -48).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    let gate = s.h.tr.hold_answer("torrent-rename-path");
+    let worker = s.h.worker();
+    let task = tokio::spawn(async move { worker.run_commands(&CancellationToken::new()).await });
+    gate.wait_arrived().await;
+    // The worker stops while Transmission renames the first file.
+    task.abort();
+    let _ = task.await;
+    assert_eq!(s.names(), ["Show S03E02.mkv", "Show S03E25.mkv"]);
+    assert_eq!(s.rule(&rule).await.episode, -24);
+
+    // A cycle between the starts began replacing `S03E02` with a revision.
+    s.revision_row(&rule, "Show - 50", "Show S03E02.mkv", true)
+        .await;
+    gate.release_all();
+    assert_eq!(
+        s.h.worker()
+            .run_commands(&CancellationToken::new())
+            .await
+            .unwrap(),
+        CommandsOutcome::Ran(1)
+    );
+
+    let view = s.view(&rule).await;
+    assert_eq!(view["episode_undo"]["command"]["state"], "done");
+    assert_eq!(
+        undo_files(&view),
+        [
+            file("Show S03E01.mkv", "Show S03E25.mkv", "renamed"),
+            file("Show S03E02.mkv", "Show S03E26.mkv", "kept"),
+        ]
+    );
+    let reason = view["episode_undo"]["files"][1]["reason"].as_str().unwrap();
+    assert!(reason.contains("수정본"), "{reason}");
+    assert_eq!(s.names(), ["Show S03E02.mkv", "Show S03E25.mkv"]);
+    assert_eq!(s.on_disk(), ["Show S03E02.mkv", "Show S03E25.mkv"]);
+}
+
+/// Revision rows the new name has already are never merged with the file's.
+#[tokio::test]
+async fn a_new_name_that_has_revision_rows_of_its_own_is_not_taken() {
+    use transmission_rss::store::revisions::RevisionStore;
+    let (s, rule) = Scene::third_season_received().await;
+    // An ended replacement left a row for `S03E26`, whose file is gone.
+    let row = s
+        .revision_row(&rule, "Show - 49", "Show S03E26.mkv", false)
+        .await;
+
+    let command = s.undo(&rule, "undo-0202-a", -48).await;
+
+    assert_eq!(command["state"], "done", "{command}");
+    let view = s.view(&rule).await;
+    assert_eq!(
+        undo_files(&view),
+        [
+            file("Show S03E01.mkv", "Show S03E25.mkv", "renamed"),
+            file("Show S03E02.mkv", "Show S03E26.mkv", "kept"),
+        ]
+    );
+    assert_eq!(s.names(), ["Show S03E02.mkv", "Show S03E25.mkv"]);
+    let rows = RevisionStore::new(s.h.db.clone())
+        .of_episode(
+            s.season3().to_str().unwrap().to_owned(),
+            "Show S03E26.mkv".into(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(rows.iter().map(|r| r.id).collect::<Vec<_>>(), [row]);
+}

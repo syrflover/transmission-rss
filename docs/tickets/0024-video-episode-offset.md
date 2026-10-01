@@ -52,6 +52,8 @@
   - 토렌트가 없어졌으면 계획 때 저장한 파일 신원과 지금 파일이 같을 때만 `renameat2(RENAME_NOREPLACE)`로 바꿔요(`a_video_whose_torrent_is_gone_is_renamed_on_disk_without_replacing`). 목적지가 생겼으면 커널이 거절해요.
   - 목적지가 있으면 그 파일은 그대로 두고 `이름을 되돌리지 못했어요`와 까닭을 남기고, 나머지 파일은 계속 바꿔요(`a_name_that_is_taken_is_never_renamed_onto_and_the_others_go_on`).
   - 영상 수정본 기록(0025, 폴더와 회차 이름으로 영상을 찾아요)은 두 가지 중 더 안전한 쪽을 골랐어요. 끝난 기록(`done`·`failed`·`skipped` 등)은 파일 이름을 바꾼 기록과 같은 트랜잭션에서 새 이름으로 옮겨요. 옛 이름이나 새 이름에 진행 중인 기록(`receiving`·`verified`·`removing`·`removed`)이 있으면 되돌리기 전체를 거절하고 값도 바꾸지 않아요(`an_undo_waits_for_a_revision_replacement_under_way_and_moves_finished_ones`). 진행 중인 대체는 이전 영상을 지우고 새 영상에 회차 이름을 붙이는 중이라, 그 사이 이름이 바뀌면 대체가 엉뚱한 파일을 지우거나 이름을 잘못 붙일 수 있어요. 대체가 끝나면 다시 되돌릴 수 있어요.
+  - 되돌리기가 멈췄다가 이어지는 사이 주기가 돌 수 있으므로, 이름을 바꾸기 직전에 파일마다 다시 확인해요. 그사이 시작된 대체가 있으면 그 파일은 그대로 둬요(`a_start_cut_short_carries_on_and_checks_each_file_again`: Transmission이 첫 파일의 이름을 바꾸는 중에 worker가 멈추고, 다음 실행이 그 파일을 바꾼 것으로 기록하고 두 번째 파일은 대체 중이라 그대로 둬요). 새 이름에 이 계획이 옮기지 않는 기록이 이미 있으면(파일이 없어진 영상의 끝난 대체) 두 기록을 섞지 않고 파일을 그대로 둬요(`a_new_name_that_has_revision_rows_of_its_own_is_not_taken`). 옮기는 것은 끝난 상태의 기록뿐이에요. 두 시험은 고치기 전 코드에서 실패했어요.
+  - 계획은 그 전 값으로 만들므로, 시작할 때 규칙의 그 전 값이 계획한 값과 같을 때만 시작해요(저장소 시험 `an_undo_begins_only_for_the_previous_value_it_was_planned_for`).
   - 값은 이름을 바꾸기 전에 되살려요. 명령이 도는 동안 주기는 같은 잠금을 기다리므로 섞이지 않고, 그 뒤 받는 항목은 되살린 값으로 이름이 붙어요(위 시험의 세 번째 항목 `S03E27`).
   - 대상은 앱 값이 있는 동안 받은 `받음` 항목이에요. 앱이 값을 정하기 전에 받은 항목은 고른 항목이 없을 때만 정하므로 있을 수 없고, 되살린 뒤 받은 항목은 계획 뒤에 오므로 담기지 않아요. `중복` 항목은 받은 파일이 없어서 빼요.
   - 그 전 값(`episode_previous`)과 정한 적이 있다는 표시(`episode_decided`)는 설정 내보내기에 넣지 않아요. 둘 다 이 설치에서 받은 영상의 이름을 되돌리는 데만 쓰이고, 가져온 설치에는 그 영상과 수집 이력이 없어서 되돌릴 대상이 없어요. 가져오기에서 `episode_auto: true`인 규칙은 정한 것으로 봐요([설정 명세](../specs/settings.md#채널과-규칙-필드)).
