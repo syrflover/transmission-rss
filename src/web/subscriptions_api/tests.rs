@@ -1052,6 +1052,43 @@ mod rule_detail {
     }
 
     #[tokio::test]
+    async fn a_rule_that_saves_into_the_collect_folder_itself_is_not_linked() {
+        let app = App::new().await;
+        app.schedule_of_wednesday();
+        let channel = app.channel("feed.test").await;
+        for directory in ["", ".", "./"] {
+            let rule = app
+                .state
+                .channels
+                .create_rule(
+                    &channel.id,
+                    RuleInput {
+                        r#match: Some(format!("Work {directory:?}")),
+                        directory: directory.into(),
+                        ..RuleInput::default()
+                    },
+                )
+                .await
+                .unwrap();
+            let (status, body) = app
+                .call(
+                    Method::POST,
+                    format!("/api/rules/{}/subscription", rule.id).leak(),
+                    Some(json!({
+                        "version": rule.version, "anissia_anime_no": 3320, "week": 3,
+                        "subtitles": "undecided",
+                    })),
+                )
+                .await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{directory:?}: {body}");
+            assert!(
+                app.fresh(&rule).await.subscription.is_none(),
+                "{directory:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn a_paused_rule_matches_nothing_in_the_preview_and_does_not_shadow_a_later_one() {
         let app = App::new().await;
         let (channel, rule) = app.subscribed().await;

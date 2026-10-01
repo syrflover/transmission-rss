@@ -786,6 +786,16 @@ async fn link_rule(
             "이미 편성표와 연결된 규칙이에요. 화면을 새로고침해 주세요.",
         ));
     }
+    // A subscription saves into a work folder below the collect folder, as
+    // `subscribe` requires; a plain rule may save into the collect folder itself.
+    let directory = rule.directory.trim();
+    if directory.is_empty()
+        || crate::folders::is_collect_folder_itself(std::path::Path::new(directory))
+    {
+        return Err(ApiError::invalid(
+            "이 규칙은 수집 폴더 자체에 받아요. 편성표와 잇기 전에 규칙의 저장 폴더를 작품 폴더로 정해 주세요.",
+        ));
+    }
     let anime = scheduled_anime(&state, b.week, b.anissia_anime_no).await?;
     let creator =
         chosen_creator(&state, subtitles, b.creator.as_deref(), b.anissia_anime_no).await?;
