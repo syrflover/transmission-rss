@@ -20,7 +20,7 @@ use std::{
 use tokio::task::AbortHandle;
 
 use super::{
-    client::{SearchClient, SearchError, REQUEST_SPACING},
+    client::{wait_phrase, SearchClient, SearchError, REQUEST_SPACING},
     judge::{judge, Preview, Range, Result as Judged},
     run::{run, Limits},
     world,
@@ -105,9 +105,18 @@ struct Registry {
 }
 
 impl Registry {
+    /// Forgets the searches past [`KEEP`], and the oldest ones beyond
+    /// [`MAX_SEARCHES`]; the task of each is aborted.
     fn sweep(&mut self) {
-        self.searches
-            .retain(|_, entry| entry.started.elapsed() < KEEP);
+        let expired: Vec<String> = self
+            .searches
+            .iter()
+            .filter(|(_, entry)| entry.started.elapsed() >= KEEP)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in expired {
+            self.remove(&id);
+        }
         while self.searches.len() > MAX_SEARCHES {
             let oldest = self
                 .searches
@@ -115,14 +124,16 @@ impl Registry {
                 .min_by_key(|(_, e)| e.started)
                 .map(|(id, _)| id.clone());
             match oldest {
-                Some(id) => {
-                    if let Some(entry) = self.searches.remove(&id) {
-                        if let Some(abort) = entry.abort {
-                            abort.abort();
-                        }
-                    }
-                }
+                Some(id) => self.remove(&id),
                 None => break,
+            }
+        }
+    }
+
+    fn remove(&mut self, id: &str) {
+        if let Some(entry) = self.searches.remove(id) {
+            if let Some(abort) = entry.abort {
+                abort.abort();
             }
         }
     }
@@ -401,10 +412,77 @@ fn search_error(err: SearchError) -> String {
         SearchError::Pace(_) => {
             "검색 요청 간격을 확인하지 못했어요. 잠시 뒤 다시 시도해 주세요.".to_owned()
         }
+        SearchError::Wait(wait) => format!(
+            "검색 서버에 요청을 보내는 간격 제한이 걸려 있어서 지금은 검색하지 못했어요. {} 뒤에 다시 검색해 주세요.",
+            wait_phrase(wait)
+        ),
         SearchError::Busy(wait) => format!(
             "검색 서버가 {}초 뒤에 다시 요청해 달라고 해서 검색하지 못했어요.",
             wait.as_secs()
         ),
         SearchError::Read(why) => format!("검색 결과를 읽지 못했어요: {why}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::Db;
+
+    async fn service() -> (PastSearch, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open(dir.path().join("app.db")).await.unwrap();
+        (PastSearch::new(SearchPace::new(db)), dir)
+    }
+
+    fn outcome() -> Outcome {
+        Outcome {
+            range: Range { from: 1, to: 1 },
+            query: "Show".into(),
+            preview: Preview::default(),
+            notes: Vec::new(),
+            first_full: false,
+            extra_sent: 0,
+            extra_needed: 0,
+            storable: HashMap::from([(
+                "k".to_owned(),
+                Stored {
+                    title: "Show - 01".into(),
+                    link: "magnet:?xt=urn:btih:a".into(),
+                },
+            )]),
+            rule_id: "r".into(),
+        }
+    }
+
+    /// A task that never ends on its own, and an entry that holds it.
+    fn entry(age: Duration, status: Status) -> (Entry, tokio::task::JoinHandle<()>) {
+        let task = tokio::spawn(std::future::pending::<()>());
+        let entry = Entry {
+            rule_id: "r".into(),
+            started: Instant::now().checked_sub(age).unwrap(),
+            status,
+            abort: Some(task.abort_handle()),
+        };
+        (entry, task)
+    }
+
+    async fn ended(task: tokio::task::JoinHandle<()>) -> bool {
+        match tokio::time::timeout(Duration::from_secs(1), task).await {
+            Ok(joined) => joined.unwrap_err().is_cancelled(),
+            Err(_) => false,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_search_dropped_for_its_age_is_aborted_as_by_every_other_removal() {
+        let (service, _dir) = service().await;
+        let (old, task) = entry(
+            KEEP + Duration::from_secs(1),
+            Status::Running { sent: 0, needed: 0 },
+        );
+        service.lock().searches.insert("old".into(), old);
+        assert!(service.status("old").is_none());
+        assert!(ended(task).await, "the dropped search's task still runs");
     }
 }

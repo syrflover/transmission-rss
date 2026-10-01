@@ -10,6 +10,9 @@
 //!
 //! A search reads the RSS only. The page's HTML is never requested.
 
+#[cfg(test)]
+mod tests;
+
 use std::time::Duration;
 
 use super::query::search_url;
@@ -27,6 +30,23 @@ use crate::{
 /// price of those: a minute at the most.
 pub const REQUEST_SPACING: Duration = Duration::from_secs(3);
 
+/// The longest a request waits for its turn. A turn further away (the host
+/// asked for no request for a long while, or the clock moved) fails the search
+/// with the time to try again, rather than leaving the screen on `검색하는
+/// 중` for as long. The queue of searches running side by side is far shorter:
+/// [`super::service::MAX_SEARCHES`] × [`REQUEST_SPACING`].
+pub const MAX_WAIT: Duration = Duration::from_secs(60);
+
+/// How long to wait, for a sentence: `45초`, `12분`, `2시간` (rounded up).
+pub fn wait_phrase(wait: Duration) -> String {
+    let secs = wait.as_secs() + u64::from(wait.subsec_nanos() > 0);
+    match secs {
+        0..=59 => format!("{}초", secs.max(1)),
+        60..=3599 => format!("{}분", secs.div_ceil(60)),
+        _ => format!("{}시간", secs.div_ceil(3600)),
+    }
+}
+
 /// A page of results.
 #[derive(Debug, Clone)]
 pub struct Page {
@@ -43,6 +63,10 @@ pub enum SearchError {
     BadAddress,
     #[error("cannot use the request pace: {0}")]
     Pace(String),
+    /// The request pace of the host allows no request before this long, which
+    /// is more than a search waits ([`MAX_WAIT`]). Nothing was sent.
+    #[error("the host allows no request for {}s", .0.as_secs())]
+    Wait(Duration),
     /// The tracker asks to wait. The host is blocked for that long.
     #[error("the tracker asks to wait {}s", .0.as_secs())]
     Busy(Duration),
@@ -98,11 +122,30 @@ impl SearchClient {
         let now = (self.clock)();
         let slot = self
             .pace
-            .take_slot(&host, now, self.spacing.as_millis() as i64)
+            .take_slot(
+                &host,
+                now,
+                self.spacing.as_millis() as i64,
+                Some(MAX_WAIT.as_millis() as i64),
+            )
             .await
-            .map_err(|e| SearchError::Pace(e.to_string()))?;
+            .map_err(|e| SearchError::Pace(e.to_string()))?
+            .map_err(|wait| SearchError::Wait(Duration::from_millis(wait.max(0) as u64)))?;
         if slot > now {
             tokio::time::sleep(Duration::from_millis((slot - now) as u64)).await;
+            // A request of another search may have been answered `429` while
+            // this one waited: its turn was taken before the block was.
+            let until = self
+                .pace
+                .blocked_until(&host)
+                .await
+                .map_err(|e| SearchError::Pace(e.to_string()))?;
+            let now = (self.clock)();
+            if let Some(until) = until.filter(|until| *until > now) {
+                return Err(SearchError::Wait(Duration::from_millis(
+                    (until - now) as u64,
+                )));
+            }
         }
 
         let read = match feed::fetch(&self.http, &url).await {

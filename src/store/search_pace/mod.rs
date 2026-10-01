@@ -45,7 +45,17 @@ impl SearchPace {
     /// Takes the next slot for a request to `host` at or after `now` and keeps
     /// `spacing_ms` between this slot and the next one, whichever process asks.
     /// The slot is when the request may start: `now` or later.
-    pub async fn take_slot(&self, host: &str, now: Millis, spacing_ms: i64) -> Result<Millis> {
+    ///
+    /// With `max_wait_ms`, a slot further away than that is not taken: the
+    /// answer is `Err(wait_ms)` and the pace is left as it was, so a caller
+    /// that gives up does not push the other requests back.
+    pub async fn take_slot(
+        &self,
+        host: &str,
+        now: Millis,
+        spacing_ms: i64,
+        max_wait_ms: Option<i64>,
+    ) -> Result<std::result::Result<Millis, i64>> {
         let host = host.to_ascii_lowercase();
         self.db
             .run(move |c| {
@@ -59,13 +69,33 @@ impl SearchPace {
                     .optional()?;
                 let (next_at, blocked) = pace.unwrap_or((now, None));
                 let slot = now.max(next_at).max(blocked.unwrap_or(now));
+                if max_wait_ms.is_some_and(|max| slot - now > max) {
+                    return Ok::<_, PaceError>(Err(slot - now));
+                }
                 tx.execute(
                     "INSERT INTO search_pace (host, next_at, blocked_until) VALUES (?1, ?2, ?3)
                      ON CONFLICT (host) DO UPDATE SET next_at = excluded.next_at",
                     params![host, slot + spacing_ms, blocked],
                 )?;
                 tx.commit()?;
-                Ok::<_, PaceError>(slot)
+                Ok::<_, PaceError>(Ok(slot))
+            })
+            .await
+    }
+
+    /// Until when the host asked for no request, if it did.
+    pub async fn blocked_until(&self, host: &str) -> Result<Option<Millis>> {
+        let host = host.to_ascii_lowercase();
+        self.db
+            .run(move |c| {
+                let blocked: Option<Option<Millis>> = c
+                    .query_row(
+                        "SELECT blocked_until FROM search_pace WHERE host = ?1",
+                        params![host],
+                        |r| r.get(0),
+                    )
+                    .optional()?;
+                Ok::<_, PaceError>(blocked.flatten())
             })
             .await
     }
