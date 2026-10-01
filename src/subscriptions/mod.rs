@@ -188,11 +188,11 @@ pub struct Quarter {
     pub number: u8,
 }
 
-const KST_OFFSET_MS: i64 = 9 * 60 * 60 * 1000;
-const DAY_MS: i64 = 24 * 60 * 60 * 1000;
+pub(crate) const KST_OFFSET_MS: i64 = 9 * 60 * 60 * 1000;
+pub(crate) const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 
 /// The civil date of a day count since 1970-01-01 (proleptic Gregorian).
-fn civil_from_days(days: i64) -> (i32, u32, u32) {
+pub(crate) fn civil_from_days(days: i64) -> (i32, u32, u32) {
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
     let doe = z.rem_euclid(146_097);

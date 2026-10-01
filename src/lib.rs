@@ -7,6 +7,7 @@ pub mod folders;
 pub mod import;
 pub mod rss;
 pub mod rule;
+pub mod schedule;
 pub mod seasons;
 pub mod store;
 pub mod subscriptions;
