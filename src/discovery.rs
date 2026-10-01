@@ -33,15 +33,25 @@
 //! folders NAS appliances and file systems add (`@eaDir`, `#recycle`,
 //! `$RECYCLE.BIN`, `lost+found`, `System Volume Information`). A link is followed
 //! only when it resolves to a place inside the watch folder, so a link can not
-//! lead the scan out of it; a link that leaves is skipped. Names that are not
-//! valid UTF-8 cannot be stored and are skipped too.
+//! lead the scan out of it; a link that leaves, or that points nowhere, is
+//! skipped.
+//!
+//! A video, subtitle or `.part` file whose name is not valid UTF-8 cannot be
+//! stored by name: it is counted as unrecognized ([`Reason::InvalidName`]) under
+//! its name with the invalid bytes replaced. A folder with such a name is read
+//! under the replaced name too, except directly under the watch folder, where it
+//! would be a work: that one is [`WorkRead::Unreadable`], so that the folder's
+//! row says a work folder could not be read.
 //!
 //! # Failures
 //!
 //! A watch folder that cannot be read is a [`ScanError`] and says nothing about
 //! what is in it. A work folder that cannot be read is [`WorkRead::Unreadable`]
 //! and the other works are still read, so one bad folder does not hide the rest.
-//! Neither may make a caller forget what it knew.
+//! So is a work folder in which any entry could not be examined (a failed
+//! `file_type` or `canonicalize` other than "it is gone"): a transient error must
+//! not look like a file that vanished. Neither may make a caller forget what it
+//! knew.
 
 use std::{collections::BTreeSet, fs, io, path::Path, sync::LazyLock};
 
@@ -104,6 +114,8 @@ pub enum Reason {
     Partial,
     /// In a season folder, but the name has no `SxxEyy`.
     NoEpisode,
+    /// A media or `.part` file whose name is not valid UTF-8.
+    InvalidName,
 }
 
 impl Reason {
@@ -114,6 +126,7 @@ impl Reason {
             Reason::InSubfolder => "in_subfolder",
             Reason::Partial => "partial",
             Reason::NoEpisode => "no_episode",
+            Reason::InvalidName => "invalid_name",
         }
     }
 
@@ -124,6 +137,7 @@ impl Reason {
             Reason::InSubfolder,
             Reason::Partial,
             Reason::NoEpisode,
+            Reason::InvalidName,
         ]
         .into_iter()
         .find(|reason| reason.code() == code)
@@ -137,6 +151,7 @@ impl Reason {
             Reason::InSubfolder => "시즌 폴더 안의 하위 폴더에 있어요",
             Reason::Partial => "아직 받는 중인 파일이에요",
             Reason::NoEpisode => "이름에서 회차를 읽지 못했어요",
+            Reason::InvalidName => "파일 이름이 UTF-8이 아니라서 읽지 못했어요",
         }
     }
 }
@@ -237,6 +252,14 @@ fn unreadable_reason(error: &io::Error) -> String {
     }
 }
 
+/// The entry's name with invalid UTF-8 replaced, and whether it was valid.
+fn entry_name(entry: &fs::DirEntry) -> (String, bool) {
+    match entry.file_name().into_string() {
+        Ok(name) => (name, true),
+        Err(raw) => (raw.to_string_lossy().into_owned(), false),
+    }
+}
+
 /// Reads the watch folder at `root`. See the module docs.
 pub fn scan(root: &Path) -> Result<Scan, ScanError> {
     let real_root = fs::canonicalize(root).map_err(|e| scan_error(&e))?;
@@ -244,13 +267,30 @@ pub fn scan(root: &Path) -> Result<Scan, ScanError> {
 
     let mut works = Vec::new();
     for entry in entries {
-        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
-            continue;
-        };
+        let (name, valid) = entry_name(&entry);
         if skipped(&name) {
             continue;
         }
-        if classify(&entry, &real_root) != Node::Dir {
+        // An entry that cannot be examined may be a work: say so, so that the
+        // record of a work by that name is kept.
+        let node = match classify(&entry, &real_root) {
+            Ok(node) => node,
+            Err(error) => {
+                works.push(WorkRead::Unreadable {
+                    dir_name: name,
+                    reason: unreadable_reason(&error),
+                });
+                continue;
+            }
+        };
+        if node != Node::Dir {
+            continue;
+        }
+        if !valid {
+            works.push(WorkRead::Unreadable {
+                dir_name: name,
+                reason: "폴더 이름이 UTF-8이 아니라서 읽지 못했어요.".to_owned(),
+            });
             continue;
         }
         let read = match read_work(&entry.path(), &name, &real_root) {
@@ -285,42 +325,56 @@ enum Node {
     Skip,
 }
 
+/// Whether an error says the path is not there (a link to nothing, a link
+/// loop, an entry removed since the folder was listed), as opposed to a failure
+/// to look.
+fn is_gone(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::NotFound
+        || error.raw_os_error() == Some(rustix::io::Errno::LOOP.raw_os_error())
+}
+
 /// What an entry is, following a link only when it stays inside `real_root`.
-fn classify(entry: &fs::DirEntry, real_root: &Path) -> Node {
-    let Ok(file_type) = entry.file_type() else {
-        return Node::Skip;
+/// An error other than "it is gone" is returned: the entry could not be
+/// examined, which is not the same as it not being there.
+fn classify(entry: &fs::DirEntry, real_root: &Path) -> io::Result<Node> {
+    let file_type = match entry.file_type() {
+        Ok(file_type) => file_type,
+        Err(error) if is_gone(&error) => return Ok(Node::Skip),
+        Err(error) => return Err(error),
     };
     if file_type.is_dir() {
-        return Node::Dir;
+        return Ok(Node::Dir);
     }
     if file_type.is_file() {
-        return Node::File;
+        return Ok(Node::File);
     }
     if !file_type.is_symlink() {
-        return Node::Skip;
+        return Ok(Node::Skip);
     }
-    let Ok(real) = fs::canonicalize(entry.path()) else {
-        return Node::Skip;
+    let real = match fs::canonicalize(entry.path()) {
+        Ok(real) => real,
+        Err(error) if is_gone(&error) => return Ok(Node::Skip),
+        Err(error) => return Err(error),
     };
     if !real.starts_with(real_root) {
-        return Node::Skip;
+        return Ok(Node::Skip);
     }
     match fs::metadata(&real) {
         Ok(metadata) if metadata.is_dir() => {
             // A link to the folder it is in, or to one above it, only loops.
-            let loops = entry
-                .path()
-                .parent()
-                .and_then(|parent| fs::canonicalize(parent).ok())
-                .is_none_or(|parent| parent.starts_with(&real));
-            if loops {
+            let Some(parent) = entry.path().parent().map(fs::canonicalize).transpose()? else {
+                return Ok(Node::Skip);
+            };
+            Ok(if parent.starts_with(&real) {
                 Node::Skip
             } else {
                 Node::Dir
-            }
+            })
         }
-        Ok(metadata) if metadata.is_file() => Node::File,
-        _ => Node::Skip,
+        Ok(metadata) if metadata.is_file() => Ok(Node::File),
+        Ok(_) => Ok(Node::Skip),
+        Err(error) if is_gone(&error) => Ok(Node::Skip),
+        Err(error) => Err(error),
     }
 }
 
@@ -395,17 +449,17 @@ fn read_work(dir: &Path, name: &str, real_root: &Path) -> io::Result<ScannedWork
         ..ScannedWork::default()
     };
     for entry in sorted_entries(dir)? {
-        let Some(entry_name) = entry.file_name().to_str().map(str::to_owned) else {
-            continue;
-        };
+        let (entry_name, valid) = entry_name(&entry);
         if skipped(&entry_name) {
             continue;
         }
-        match classify(&entry, real_root) {
+        match classify(&entry, real_root)? {
             Node::Skip => {}
             Node::File => {
                 if is_media_or_partial(&entry_name) {
-                    let reason = if is_partial(&entry_name) {
+                    let reason = if !valid {
+                        Reason::InvalidName
+                    } else if is_partial(&entry_name) {
                         Reason::Partial
                     } else {
                         Reason::OutsideSeason
@@ -445,14 +499,12 @@ fn read_season(
     work: &mut ScannedWork,
 ) -> io::Result<()> {
     for entry in sorted_entries(dir)? {
-        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
-            continue;
-        };
+        let (name, valid) = entry_name(&entry);
         if skipped(&name) {
             continue;
         }
         let path = format!("{folder}/{name}");
-        match classify(&entry, real_root) {
+        match classify(&entry, real_root)? {
             Node::Skip => {}
             Node::Dir => collect_all(
                 &entry.path(),
@@ -463,6 +515,15 @@ fn read_season(
                 work,
             )?,
             Node::File => {
+                if !valid {
+                    if is_media_or_partial(&name) {
+                        work.unrecognized.push(Unrecognized {
+                            path,
+                            reason: Reason::InvalidName,
+                        });
+                    }
+                    continue;
+                }
                 if is_partial(&name) {
                     work.unrecognized.push(Unrecognized {
                         path,
@@ -509,18 +570,23 @@ fn collect_all(
         return Ok(());
     }
     for entry in sorted_entries(dir)? {
-        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
-            continue;
-        };
+        let (name, valid) = entry_name(&entry);
         if skipped(&name) {
             continue;
         }
         let path = format!("{shown}/{name}");
-        match classify(&entry, real_root) {
+        match classify(&entry, real_root)? {
             Node::Skip => {}
             Node::Dir => collect_all(&entry.path(), &path, reason, real_root, depth + 1, work)?,
             Node::File => {
-                if is_partial(&name) {
+                if !valid {
+                    if is_media_or_partial(&name) {
+                        work.unrecognized.push(Unrecognized {
+                            path,
+                            reason: Reason::InvalidName,
+                        });
+                    }
+                } else if is_partial(&name) {
                     work.unrecognized.push(Unrecognized {
                         path,
                         reason: Reason::Partial,
@@ -748,6 +814,96 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn an_entry_that_cannot_be_examined_makes_its_work_unreadable_not_empty() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        touch(dir.path(), "Hold/inner/target.mkv");
+        touch(dir.path(), "W/Season 01/W S01E01.mkv");
+        // A link whose target cannot be resolved because a folder on the way
+        // cannot be searched: that is a failure to look, not a file that is gone.
+        std::os::unix::fs::symlink(
+            dir.path().join("Hold/inner/target.mkv"),
+            dir.path().join("W/Season 01/W S01E02.mkv"),
+        )
+        .unwrap();
+        let hold = dir.path().join("Hold");
+        fs::set_permissions(&hold, fs::Permissions::from_mode(0o000)).unwrap();
+        let scan = scan(dir.path());
+        fs::set_permissions(&hold, fs::Permissions::from_mode(0o755)).unwrap();
+        let scan = scan.unwrap();
+        let w = scan
+            .works
+            .iter()
+            .find(|w| w.dir_name() == "W")
+            .expect("W is listed");
+        assert!(
+            matches!(w, WorkRead::Unreadable { .. }),
+            "a work with an entry that could not be examined is unreadable, not read as smaller: {w:?}"
+        );
+    }
+
+    #[test]
+    fn a_link_that_points_nowhere_or_loops_is_just_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        touch(dir.path(), "W/Season 01/W S01E01.mkv");
+        std::os::unix::fs::symlink(
+            dir.path().join("nothing"),
+            dir.path().join("W/Season 01/W S01E02.mkv"),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(
+            dir.path().join("W/Season 01/W S01E03.mkv"),
+            dir.path().join("W/Season 01/W S01E03.mkv"),
+        )
+        .unwrap();
+        let scan = scan(dir.path()).unwrap();
+        let w = work(&scan, "W");
+        assert_eq!(w.files.len(), 1, "{:?}", w.files);
+        assert!(w.unrecognized.is_empty(), "{:?}", w.unrecognized);
+    }
+
+    #[test]
+    fn names_that_are_not_utf8_are_counted_with_a_reason_not_dropped() {
+        use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
+        let dir = tempfile::tempdir().unwrap();
+        touch(dir.path(), "W/Season 01/W S01E01.mkv");
+        let bad = |parent: &str, bytes: &[u8]| {
+            let mut path = dir.path().join(parent);
+            fs::create_dir_all(&path).unwrap();
+            path.push(OsStr::from_bytes(bytes));
+            fs::write(path, "x").unwrap();
+        };
+        bad("W/Season 01", b"W S01E02 \xff.mkv");
+        bad("W", b"loose \xfe.mp4");
+        bad("W/Season 01/batch", b"ep \xfd.mkv");
+        // Not media: not counted, like any other such file.
+        bad("W/Season 01", b"notes \xff.txt");
+        // A work folder whose name cannot be stored is reported, not skipped.
+        fs::create_dir(dir.path().join(OsStr::from_bytes(b"Bad \xff"))).unwrap();
+
+        let scan = scan(dir.path()).unwrap();
+        let w = work(&scan, "W");
+        assert_eq!(w.files.len(), 1);
+        let mut unrecognized: Vec<_> = w
+            .unrecognized
+            .iter()
+            .map(|u| (u.path.as_str(), u.reason))
+            .collect();
+        unrecognized.sort();
+        assert_eq!(
+            unrecognized,
+            [
+                ("Season 01/W S01E02 \u{fffd}.mkv", Reason::InvalidName),
+                ("Season 01/batch/ep \u{fffd}.mkv", Reason::InvalidName),
+                ("loose \u{fffd}.mp4", Reason::InvalidName),
+            ]
+        );
+        let names: Vec<_> = scan.works.iter().map(WorkRead::dir_name).collect();
+        assert_eq!(names, ["Bad \u{fffd}", "W"]);
+        assert!(matches!(scan.works[0], WorkRead::Unreadable { .. }));
     }
 
     #[test]
