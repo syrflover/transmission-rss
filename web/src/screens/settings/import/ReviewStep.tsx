@@ -303,6 +303,12 @@ function RuleRow({
         {rule.invalid_regex && (
           <p className="text-[13px] text-text-muted">정규식을 읽을 수 없어서 이 규칙은 어떤 제목에도 맞지 않아요.</p>
         )}
+        {replacing && rule.folder_kept !== null && (
+          <p className="text-[13px] text-text-secondary">
+            파일의 저장 폴더는 작품 폴더가 아니라서, 구독의 지금 저장 폴더{" "}
+            <b className="text-text-primary break-all">{rule.folder_kept}</b>를 그대로 둬요.
+          </p>
+        )}
         <SuggestionBlock channel={channel} rule={rule} index={no - 1} flow={flow} />
       </div>
     </li>

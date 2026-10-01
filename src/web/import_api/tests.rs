@@ -458,6 +458,134 @@ async fn replacing_keeps_the_title_waiting_subscriptions_of_the_channel() {
     assert_eq!(stored.rules[1], waiting_after(&waiting, 1));
 }
 
+#[tokio::test]
+async fn replacing_keeps_the_folder_of_a_subscription_when_the_files_folder_is_no_work_folder() {
+    use crate::store::anissia::Anime;
+    use crate::store::channels::{NewSubscription, SubtitleMode};
+
+    let t = app().await;
+    t.set_folder("/media").await;
+    let subscribe = |channel: &str, no: i64, phrase: &str, directory: &str| {
+        let store = t.store.clone();
+        let (channel, phrase, directory) =
+            (channel.to_owned(), phrase.to_owned(), directory.to_owned());
+        async move {
+            store
+                .create_subscription_rule(
+                    &channel,
+                    RuleInput {
+                        r#match: Some(phrase),
+                        directory,
+                        ..RuleInput::default()
+                    },
+                    NewSubscription {
+                        anime: Anime {
+                            anime_no: no,
+                            subject: format!("작품 {no}"),
+                            original_subject: None,
+                            week: 3,
+                            air_time: Some("22:00".into()),
+                            start_date: None,
+                            end_date: None,
+                            status: "ON".into(),
+                            fetched_at: 1,
+                        },
+                        subtitles: SubtitleMode::Undecided,
+                        creator: None,
+                        subscribed_at: 100,
+                    },
+                )
+                .await
+                .unwrap()
+        }
+    };
+    let a = t
+        .store
+        .create_channel_with_rules(
+            ChannelInput::new("https://feeds.example.test/a?filter=1080p&token=old"),
+            vec![RuleInput {
+                r#match: Some("Plain".into()),
+                directory: "plain old".into(),
+                ..RuleInput::default()
+            }],
+        )
+        .await
+        .unwrap();
+    subscribe(&a.channel.id, 1, "Sub", "Sub Work").await;
+    subscribe(&a.channel.id, 2, "Climb", "Climb Work").await;
+    subscribe(&a.channel.id, 3, "Fine", "Fine Old").await;
+    let a = t.all().await.remove(0);
+
+    // The channel's folder is the collect folder itself. The file gives `Sub`
+    // no folder of its own (`.`), `Climb` a `..` folder and `Fine` a work
+    // folder; the plain rule `Plain` has no folder either.
+    let content = format!(
+        "- url: https://feeds.example.test/a?filter=1080p&token={TOKEN_A}
+  directory: /media
+  rules:
+    - match: Plain
+      directory: .
+    - match: Sub
+      directory: .
+    - match: Climb
+      directory: ../elsewhere
+    - match: Fine
+      directory: Fine New
+"
+    );
+
+    // The preview names the subscriptions whose folder stays.
+    let (status, text, review) = t.preview(&content).await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let kept: Vec<_> = review["channels"][0]["rules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["folder_kept"].clone())
+        .collect();
+    assert_eq!(
+        kept,
+        [
+            Value::Null,
+            json!("Sub Work"),
+            json!("Climb Work"),
+            Value::Null
+        ]
+    );
+
+    let (status, text, result) = t.apply(&content, json!([choice(0, &a, "replace")])).await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(result["counts"]["folders_kept"], 2);
+    assert_eq!(
+        result["replaced"][0]["folders_kept"],
+        json!([
+            { "rule": 1, "match": "Sub", "directory": "Sub Work" },
+            { "rule": 2, "match": "Climb", "directory": "Climb Work" },
+        ])
+    );
+
+    let stored = t.all().await.remove(0);
+    let folders: Vec<_> = stored
+        .rules
+        .iter()
+        .map(|r| (r.r#match.as_deref().unwrap(), r.directory.as_str()))
+        .collect();
+    // The rule without a subscription took the file's folder, as before; the
+    // subscriptions kept theirs, except the one with a work folder in the file.
+    assert_eq!(
+        folders,
+        [
+            ("Plain", "."),
+            ("Sub", "Sub Work"),
+            ("Climb", "Climb Work"),
+            ("Fine", "Fine New"),
+        ]
+    );
+    // They are still subscriptions, and the rule screen can save them.
+    assert!(stored.rules[1..].iter().all(|r| r.subscription.is_some()));
+    assert!(crate::folders::is_work_folder(&stored.rules[1].directory));
+}
+
 /// `rule` as it is stored after it moved to `position`.
 fn waiting_after(
     rule: &crate::store::channels::Rule,

@@ -25,6 +25,17 @@
 //! the apply takes the ones the user checked (`subscriptions`). See
 //! [`suggestions`]. Nothing is received by an import, subscriptions included.
 //!
+//! # Save folders of subscriptions
+//!
+//! A subscription saves into a work folder below the collect folder, which the
+//! rule screen checks when it saves ([`crate::folders::is_work_folder`]). A
+//! replacement that would give a subscription's rule a folder that fails that
+//! check (the channel's folder is the collect folder itself and the file's
+//! rule names no folder of its own, or the folder has `..`) keeps the
+//! subscription's folder instead; the rule is replaced otherwise. The preview
+//! says so per rule (`folder_kept`) and the result lists the subscriptions
+//! (`folders_kept`). It never fails the import.
+//!
 //! # Title-waiting subscriptions
 //!
 //! A file cannot express a subscription still waiting for its title (a rule
@@ -67,7 +78,9 @@ use super::{ApiError, AppState};
 use crate::import::{
     fit::{fit, Fit, Fitted},
     legacy::{self, LegacyChannel},
-    plan::{build_actions, display_url, find_existing, Choice, Decision},
+    plan::{
+        build_actions, display_url, find_existing, keep_subscription_folders, Choice, Decision,
+    },
     suggest::suggest,
 };
 use crate::store::channels::import::{
@@ -135,6 +148,10 @@ struct RuleView {
     /// True when replacing keeps the ID of an existing rule for this one.
     /// Only ever true on a channel that already exists.
     keeps_existing_rule: bool,
+    /// The save folder that stays when the channel is replaced, because the
+    /// rule is a subscription and the file's folder for it is no work folder
+    /// (empty, only `.`, or with `..`). `null` when the file's folder is used.
+    folder_kept: Option<String>,
     /// What the comment above the rule offers.
     suggestion: SuggestionView,
 }
@@ -230,6 +247,9 @@ fn channel_view(
     let kept: Vec<Option<usize>> = existing
         .map(|e| match_rules(&e.rules, &channel.rules))
         .unwrap_or_else(|| vec![None; channel.rules.len()]);
+    let kept_folders = existing
+        .map(|e| keep_subscription_folders(&mut channel.clone(), e))
+        .unwrap_or_default();
     let removed_rules = existing
         .map(|e| {
             e.rules
@@ -256,7 +276,8 @@ fn channel_view(
             .iter()
             .zip(&kept)
             .zip(suggestions)
-            .map(|((rule, kept), suggestion)| RuleView {
+            .enumerate()
+            .map(|(index, ((rule, kept), suggestion))| RuleView {
                 r#match: rule.r#match.clone(),
                 regex: rule.regex,
                 case_insensitive: rule.case_insensitive,
@@ -264,6 +285,10 @@ fn channel_view(
                 episode: rule.episode,
                 invalid_regex: invalid_regex(rule),
                 keeps_existing_rule: kept.is_some(),
+                folder_kept: kept_folders
+                    .iter()
+                    .find(|f| f.rule == index)
+                    .map(|f| f.directory.clone()),
                 suggestion,
             })
             .collect(),
@@ -439,6 +464,19 @@ struct ReplacedView {
     removed_rules: Vec<RemovedRule>,
     /// Title-waiting subscriptions the replacement left as they were.
     title_waiting_kept: usize,
+    /// Subscriptions whose save folder stayed because the file's folder for
+    /// their rule is no work folder.
+    folders_kept: Vec<FolderKept>,
+}
+
+/// A subscription whose save folder a replacement kept.
+#[derive(Serialize)]
+struct FolderKept {
+    /// The rule's place in the file channel.
+    rule: usize,
+    r#match: Option<String>,
+    /// The folder the subscription keeps.
+    directory: String,
 }
 
 #[derive(Serialize)]
@@ -472,6 +510,8 @@ struct Counts {
     rules_removed: usize,
     /// Title-waiting subscriptions that replaced channels kept as they were.
     title_waiting_kept: usize,
+    /// Subscriptions whose save folder stayed (see [`FolderKept`]).
+    folders_kept: usize,
     /// Rules that became subscriptions.
     subscriptions_created: usize,
 }
@@ -561,6 +601,22 @@ async fn apply(
         .collect();
     let plan = build_actions(importable, &existing, &choices).map_err(|_| stale())?;
 
+    // The subscriptions whose folder the replacement keeps, by the channel's
+    // place in the file.
+    let mut folders_kept: HashMap<usize, Vec<FolderKept>> = HashMap::new();
+    for (local, kept) in plan.kept_folders {
+        let at = positions[local];
+        folders_kept.insert(
+            at,
+            kept.into_iter()
+                .map(|f| FolderKept {
+                    rule: f.rule,
+                    r#match: rules_of[&at][f.rule].r#match.clone(),
+                    directory: f.directory,
+                })
+                .collect(),
+        );
+    }
     let (indexes, actions): (Vec<usize>, Vec<_>) = plan.actions.into_iter().unzip();
     let indexes: Vec<usize> = indexes.into_iter().map(|local| positions[local]).collect();
     let skipped: Vec<usize> = plan.skipped.iter().map(|&local| positions[local]).collect();
@@ -645,6 +701,7 @@ async fn apply(
             rules_kept: 0,
             rules_removed: 0,
             title_waiting_kept: 0,
+            folders_kept: 0,
             subscriptions_created: subscriptions.created_count(),
         },
         subscriptions,
@@ -677,6 +734,8 @@ async fn apply(
                 response.counts.rules_kept += kept_rules;
                 response.counts.rules_removed += removed_rules.len();
                 response.counts.title_waiting_kept += waiting_kept;
+                let folders_kept = folders_kept.remove(&index).unwrap_or_default();
+                response.counts.folders_kept += folders_kept.len();
                 response.replaced.push(ReplacedView {
                     index,
                     id,
@@ -686,6 +745,7 @@ async fn apply(
                     added_rules,
                     removed_rules: removed_rules.iter().map(RemovedRule::from).collect(),
                     title_waiting_kept: waiting_kept,
+                    folders_kept,
                 });
             }
         }

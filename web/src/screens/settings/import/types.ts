@@ -35,6 +35,11 @@ export interface RuleView {
   invalid_regex: boolean;
   /** Replacing keeps the ID of an existing rule for this one. */
   keeps_existing_rule: boolean;
+  /**
+   * The save folder that stays when the channel is replaced: the rule is a subscription and
+   * the file's folder for it is no work folder. Null when the file's folder is used.
+   */
+  folder_kept: string | null;
   suggestion: SuggestionView;
 }
 
@@ -108,6 +113,8 @@ export interface ApplyResult {
     removed_rules: RemovedRule[];
     /** Title-waiting subscriptions the replacement left as they were. */
     title_waiting_kept: number;
+    /** Subscriptions whose save folder stayed because the file's folder is no work folder. */
+    folders_kept: { rule: number; match: string | null; directory: string }[];
   }[];
   skipped: { index: number; url: string }[];
   not_imported: { index: number; url: string; reason: string }[];
@@ -141,6 +148,7 @@ export interface ApplyResult {
     rules_kept: number;
     rules_removed: number;
     title_waiting_kept: number;
+    folders_kept: number;
     subscriptions_created: number;
   };
 }

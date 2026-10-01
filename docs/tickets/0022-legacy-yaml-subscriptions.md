@@ -51,6 +51,7 @@
 - 제작자가 그 작품의 자막 목록에 없으면: 제안을 그대로 두고 `자막 목록에 없는 제작자` 표시와 설명을 붙여요. 구독하면 `follow`로 만들어져요(자막 목록에 없다고 막지 않아요).
 - 임시 편성 값은 Anissia에 묻지 못했을 때만 써요. Anissia가 답했는데 작품이 없으면 가짜 편성으로 구독을 만들지 않고 규칙만 가져와요(임시 값이 사용자에게 없는 작품을 `기타`에 보이게 하는 것을 막으려는 결정이에요). 중간에 묻기를 멈추면(일부 주만 읽음) 못 찾은 작품은 아직 모르는 것이라서 임시 값으로 구독을 만들어요.
 - 임시 편성 값은 갱신 전까지 주석의 요일·시각으로 보이고, 주석에 요일이 없으면 `기타`로 보여요. 0018의 `anissia_anime` 외래 키를 지키려는 대가예요. Anissia가 답했으면 주석의 요일·시각은 쓰지 않아요(시험 `when_anissia_cannot_be_reached_the_subscription_is_kept_with_an_unknown_schedule`, `a_stand_in_without_a_weekday_in_the_comment_stays_in_the_other_tab`, `the_comments_weekday_is_not_used_when_anissia_answered`, `a_stand_in_with_the_comments_weekday_shows_its_card_on_that_weekday`, `a_stand_in_sits_on_the_comments_weekday_or_in_the_other_tab`).
+- 교체는 구독인 규칙의 저장 폴더를 규칙 저장과 같은 작품 폴더 검사(`crate::folders::is_work_folder`: 비어 있지 않고 `.`만이 아니며 `..`가 없음)에 거쳐요. 파일의 폴더가 검사에 걸리면 그 구독은 지금 저장 폴더를 그대로 두고 나머지 값은 파일대로 바꿔요(`plan::keep_subscription_folders`). 검토 단계는 규칙마다 `folder_kept`로, 결과는 교체한 채널의 `folders_kept`와 `counts.folders_kept`로 알려요. 가져오기를 거절하지는 않아요(시험 `replacing_keeps_the_folder_of_a_subscription_when_the_files_folder_is_no_work_folder`). 규칙을 옮기는 중인 `rule_archive` 명령과의 충돌 검사(`check_directory`의 나머지)는 가져오기에서 하지 않아요.
 - 이미 구독인 규칙을 `교체`하면 그 구독이 남아요(제안 체크 상자는 잠기고 이유를 보여요). `추가`면 새 규칙이라 제안이 정상이에요.
 
 ### 검증한 것
@@ -67,5 +68,4 @@
 ### 남은 일
 
 - 실제 Anissia 검증. 다른 파일에서 읽히지 않는 주석이 나오면 `src/import/comments.rs`의 `read`를 맞춰요.
-- 알려진 한계: YAML 교체 가져오기는 이미 있는 구독 규칙의 저장 폴더를 작품 폴더 확인 없이 덮어써요. 그 폴더가 수집 폴더 자체가 되면 규칙 상세에서 그 구독을 저장할 수 없어요(폴더를 작품 폴더로 고쳐야 해요). 이 티켓 이전부터 있던 원인이에요.
 - 알려진 한계: 새 채널의 첫 읽기 묶음은 채널의 가장 이른 `first_seen_at`으로 가려요. 서버 시계가 뒤로 돌아간 뒤 그 채널에 새 항목이 기록되면 경계가 앞당겨져, 첫 읽기에서 지난 회차로 둔 항목을 구독 규칙이 자동으로 받을 수 있어요.

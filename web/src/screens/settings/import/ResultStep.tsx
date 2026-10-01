@@ -113,6 +113,8 @@ export function ResultStep({ flow }: { flow: ImportFlow }) {
               {channel.removed_rules.length}개를 없앴어요.
               {channel.title_waiting_kept > 0 &&
                 ` 제목 대기 구독 ${channel.title_waiting_kept}개는 그대로 남겼어요.`}
+              {channel.folders_kept.length > 0 &&
+                ` 파일의 저장 폴더가 작품 폴더가 아니라서 구독 ${channel.folders_kept.length}개는 지금 저장 폴더를 그대로 뒀어요.`}
             </li>
           ))}
           {result.collect_folder_set !== null && (
