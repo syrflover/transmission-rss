@@ -328,7 +328,9 @@ fn replace_keeping_rule_ids(
                 tx.execute(
                     "UPDATE rules
                      SET position = ?2, match_text = ?3, regex = ?4, case_insensitive = ?5,
-                         directory = ?6, episode = ?7, episode_auto = ?8, state = ?9,
+                         directory = ?6,
+                         episode_basis = CASE WHEN ?8 AND episode = ?7 THEN episode_basis END,
+                         episode = ?7, episode_auto = ?8, state = ?9,
                          version = version + 1
                      WHERE id = ?1",
                     params![

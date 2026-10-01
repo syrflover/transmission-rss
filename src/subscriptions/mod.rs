@@ -90,6 +90,21 @@ pub fn parse_release(title: &str) -> Option<Release> {
     })
 }
 
+/// The episode a release title names as a whole number (`12`, `12v2`); not a
+/// batch (`01-12`) or a half episode.
+pub fn whole_episode(title: &str) -> Option<u32> {
+    let written = parse_release(title)?.episode?;
+    let digits: String = written.chars().take_while(char::is_ascii_digit).collect();
+    let rest = &written[digits.len()..];
+    let revision = rest
+        .strip_prefix('v')
+        .is_some_and(|v| !v.is_empty() && v.chars().all(|c| c.is_ascii_digit()));
+    if digits.is_empty() || !(rest.is_empty() || revision) {
+        return None;
+    }
+    digits.parse().ok()
+}
+
 /// How two spellings of a work are told to be one: case and runs of spaces do
 /// not count.
 pub fn work_key(work: &str) -> String {

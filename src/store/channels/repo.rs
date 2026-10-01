@@ -476,6 +476,7 @@ pub fn update_rule_at(
     tx.execute(
         "UPDATE rules
          SET match_text = ?2, regex = ?3, case_insensitive = ?4, directory = ?5,
+             episode_basis = CASE WHEN ?7 AND episode = ?6 THEN episode_basis END,
              episode = ?6, episode_auto = ?7, state = ?8, version = version + 1
          WHERE id = ?1",
         params![
