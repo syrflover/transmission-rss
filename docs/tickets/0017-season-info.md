@@ -36,8 +36,8 @@
 
 ### 구현한 것
 
-- 저장(`src/store/seasons/`, 마이그레이션 13): AniList 항목(`anilist_entries`: 제목 셋, 형식, 상태, 회차 수, 시작·종료일, 제작사·장르·방영 일정·속편, 설명, 받은 때), 시즌마다의 연결 상태(`season_info`: 버전, `auto`/`user`, 검색 작업, 메모), 순서 있는 연결(`season_entries`)이에요. 연결은 작품 ID에 묶여서 시즌 폴더가 사라졌다 돌아와도 남아요.
-- 서비스와 대기열(`src/seasons/`, `trss-worker`): 첫 시즌의 검색 작업은 표지와 같은 `title.rs` 판정(정규화한 정확히 같은 제목 하나, 검색을 끝까지 읽음)으로 항목을 `자동`으로 이어요. 방영 전·방영 중 항목은 하루가 지나면 다시 받고, 끝난 항목은 `정보 다시 받기`로만 받아요. 요청은 표지와 같은 `anilist_pace`(2초 간격, `429` 대기)를 쓰고, 대기열은 따로 잠금(`<DB>.seasons.lock`)을 잡아요. 연결마다 버전이 있어 오래된 버전은 `409`와 지금 상태를 받고, 늦게 끝난 자동 결과는 버려져요.
+- 저장(`src/store/seasons/`, 마이그레이션 13): AniList 항목(`anilist_entries`: 제목 셋, 형식, 상태, 회차 수, 시작·종료일, 제작사·장르·방영 일정·속편, 설명, 받은 때), 시즌마다의 연결 상태(`season_info`: 버전, `auto`/`user`, 검색 작업, 메모), 순서 있는 연결(`season_entries`)이에요. 연결은 작품 ID에 묶여서 시즌 폴더가 사라졌다 돌아와도 남아요. 감시 폴더를 등록 해제해도 작품을 떼어 둘 뿐이라([0012](0012-watch-folders-discovery.md)) 연결이 남고, 떼어 둔 작품의 시즌은 화면·검색·하루 갱신에서 빠졌다가 같은 경로를 다시 등록하면 그대로 돌아와요.
+- 서비스와 대기열(`src/seasons/`, `trss-worker`): 첫 시즌의 검색 작업은 표지와 같은 `title.rs` 판정(정규화한 정확히 같은 제목 하나, 검색을 끝까지 읽음)으로 항목을 `자동`으로 이어요. 방영 전·방영 중 항목은 하루가 지나면 다시 받고, 끝난 항목은 `정보 다시 받기`로만 받아요. 요청은 표지와 같은 `anilist_pace`(2초 간격, `429` 대기)를 쓰고, 대기열은 따로 잠금(`<DB>.seasons.lock`)을 잡아요. 연결마다 버전이 있어 오래된 버전은 `409`와 지금 상태를 받고, 늦게 끝난 자동 결과는 버려져요. 검색 결과(항목 저장, 자동 연결, 메모)를 DB에 적지 못하면 AniList 실패와 같이 다음 재시도 간격만큼 미루고, 갱신한 항목을 적지 못하면 1시간 뒤로 미뤄요. 미루는 기록마저 실패하면 대기열이 한 번 쉬어요. 같은 일을 곧바로 다시 잡아 AniList에 거듭 묻지 않아요.
 - 웹 API(`src/web/seasons_api.rs`): `info`·`search`·`links`·`auto`·`refresh`와 작품 상세의 시즌별 `info`·작품의 `native_title`·회차의 `air_at`. 줄거리는 서버가 글자만 남겨 문단 배열로 보내요(`src/seasons/describe.rs`: `<br>`는 줄바꿈, `<p>`는 문단, 나머지 태그는 지우고 안의 글자는 남기며, 문자 참조는 한 번만 풀어요).
 - 합쳐 보이는 값: 방영은 첫 항목의 시작부터 마지막 항목의 끝까지(방영 중 항목이 있으면 `방영 중`), 분량은 합(미상이 하나면 미상), 제작사는 애니메이션 제작사로 표시된 주 제작사, 제작사·장르는 순서를 지킨 합집합이에요. 머리의 원제는 가장 앞 시즌 첫 항목의 원제예요.
 - 라이브러리: `방영연도순`(최신 로컬 시즌의 첫 항목 시작 연도 내림차순, 미상은 뒤), `방영 중`(최신 로컬 시즌에 `RELEASING` 항목), 검색(연결한 항목의 원제·영문명·로마자 제목도 찾아요).
@@ -46,10 +46,10 @@
 
 ### 결정
 
-- 마이그레이션은 이미 있는 작품·시즌에 검색을 만들지 않아요(조정자 결정). 검색 작업은 새로 기록되는 첫 시즌 줄에 대한 트리거가 만들어서, 이 버전 전에 등록한 작품은 `연결 바꾸기`로 직접 이어야 해요. 표지의 마이그레이션 채우기와 다른 점이에요.
+- 마이그레이션은 이미 있는 작품·시즌에 검색을 만들지 않아요(조정자 결정). 검색 작업은 새로 기록되는 첫 시즌 줄에 대한 트리거가 만들어서, 이 버전 전에 등록한 작품은 `연결 바꾸기`로 직접 이어야 해요. 표지도 이제 같은 규칙이에요([0015](0015-work-artwork.md)).
 - 가장 앞 시즌은 번호가 1 이상인 시즌 가운데 가장 작은 것이고, 시즌 0(스페셜)은 아니에요. 더 작은 시즌이 나중에 생기면 새 첫 시즌이 검색을 받고 이전 첫 시즌의 아직 안 한 검색은 버려요(이미 이어진 연결은 그대로).
 - 속편 제안은 바로 앞 번호(N-1) 시즌이 로컬에 있을 때만, 그 시즌의 마지막 항목의 `SEQUEL`(형식·날짜 포함 전부)을 보여요. 시즌 2가 없고 3만 있는 작품은 제안이 없어요.
-- 작품이 합쳐지면(보관 이동에서 같은 이름이 있는 경우) 옮긴 작품의 연결은 작품 줄과 함께 사라져요. 표지와 같은 규칙이에요.
+- 작품이 합쳐지면(보관 이동에서 같은 이름이 있는 경우) 남는 작품의 같은 시즌에 연결이 없을 때 옮긴 작품의 연결(항목과 그 순서, `auto`/`user`)을 가져와요. 그 시즌의 메모와 아직 안 한 검색은 비우고, 버전은 두 작품의 것보다 올라가요. 남는 작품에 이미 연결이 있으면 그것이 남고, 옮긴 작품의 나머지는 작품 줄과 함께 사라져요. 표지와 같은 규칙이에요.
 - 한 시즌에 이을 수 있는 항목은 8개까지예요. 작품 하나를 연결하는 데 첫 시즌 자동 연결은 검색 요청 1–4개와 항목 요청 1개, 사용자가 이은 항목은 항목마다 요청 1개(이미 저장돼 있으면 없어요), 하루 갱신은 방영 전·방영 중 항목마다 요청 1개예요.
 - 설명의 HTML 문자 참조는 자주 쓰는 이름 표(손으로 쓴 것)와 숫자 참조만 풀어요. 표에 없는 이름은 쓰인 그대로 남겨요.
 - 설명의 "태그는 글자로 다룬다"를 "태그 표기는 지우고 안의 글자는 남긴다"로 읽었어요. `<i>`·`<b>` 같은 흔한 태그가 `<i>`라는 글자로 보이면 줄거리가 읽기 어렵기 때문이에요. 태그 모양을 그대로 보여주는 쪽을 원하면 `describe.rs`의 한 곳만 바꾸면 돼요.
@@ -71,6 +71,7 @@
   - 연결 없음: `a_season_without_a_link_is_unknown_and_never_filled_from_another_season`.
   - 마이그레이션과 트리거: `the_migration_creates_no_search_for_what_exists_already`, `a_newly_recorded_first_season_gets_one_search_and_nothing_else_does`, `a_lower_season_that_appears_later_takes_the_search_and_the_higher_ones_is_dropped`, `a_season_folder_that_goes_and_comes_back_keeps_its_link_and_gets_no_new_search`.
   - 방영일: `episode_air_dates_come_only_from_a_releasing_entry_with_a_schedule`, `air_times_come_only_from_a_releasing_entry_after_known_counts`.
+  - 리뷰 뒤 더한 것(고치기 전 코드에서 실패를 확인했어요): `a_search_whose_outcome_cannot_be_written_waits_like_a_failure_instead_of_asking_again_at_once`, `a_refresh_that_cannot_be_written_waits_an_hour`(트리거로 기록을 실패시킴), `a_merge_carries_the_moved_works_choices_where_the_kept_work_has_none`(`src/store/library/tests.rs`). 등록 해제 뒤 연결이 남는 것은 `an_entry_round_trips_and_an_unregistered_work_keeps_its_links`와 `unregistering_takes_the_works_out_and_the_same_path_brings_them_back_as_they_were`(`tests/library_watch.rs`)가 봐요.
 - 브라우저(로컬 `trss-web`·`trss-worker`, 스크래치 DB, 가짜 AniList(`TRSS_ANILIST_URL`·`TRSS_ANILIST_IMAGE_ORIGINS`), 작품 8개, 1280px와 390px, 2026-10-01):
   - worker가 시즌 1을 검색해 `Lycoris Recoil`·`Sousou no Frieren`·`Oshi no Ko`·`Bocchi the Rock!`·`Dandadan`·`Kusuriya no Hitorigoto`는 `자동`으로 이었고, `Clevatess`(같은 제목 둘)는 `모호함`, `Spy x Family`(같은 제목 없음)는 `일치 없음` 메모로 남았어요.
   - `Dandadan`(방영 중): 방영 `2024년 10월 4일 ~`, 분량 12화, 제작사 `Science SARU`, 장르 셋, `방영 중` 표시, 회차 줄에 `9월 30일 (수)` 같은 방영일이 AniList 일정에서만 채워졌어요.
