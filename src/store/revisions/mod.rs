@@ -53,6 +53,8 @@
 //! [`Revision::not_received`]) is not final: the worker looks at its torrent
 //! again every cycle, and a cycle that receives its item again (the torrent
 //! had gone), or `다시 받기` of it, starts it over ([`RevisionStore::reopen`]).
+//! So does `다시 받기` of a replacement that ended with no video under the
+//! episode name; its old release stays superseded meanwhile.
 //!
 //! # One episode, one replacement at a time
 //!
@@ -593,7 +595,11 @@ fn create_in(tx: &Connection, at: Millis, new: NewRevision) -> Result<Revision> 
         .expect("the row just written"))
 }
 
-/// [`RevisionStore::reopen`] inside the transaction `tx`.
+/// [`RevisionStore::reopen`] inside the transaction `tx`: a failure before
+/// the new video was received ([`Revision::not_received`]), or a replacement
+/// that ended with no video under the episode name (an abandoned
+/// [`Revision::is_failure`]), starts over having forgotten the file it had
+/// checked.
 fn reopen_in(tx: &Connection, id: i64, at: Millis, hash: &str) -> Result<Option<Revision>> {
     let (state, reason) = if torrent_taken(tx, Some(id), hash)? {
         ("skipped", Some(SAME_TORRENT))
@@ -602,9 +608,13 @@ fn reopen_in(tx: &Connection, id: i64, at: Millis, hash: &str) -> Result<Option<
     };
     tx.execute(
         "UPDATE video_revisions
-            SET state = ?2, torrent_hash = ?3, reason = ?4, updated_at = ?5
-          WHERE id = ?1 AND state = 'failed' AND received_name IS NULL",
-        params![id, state, hash, reason, at],
+            SET state = ?2, torrent_hash = ?3, reason = ?4, received_name = NULL,
+                file_crc = NULL, file_identity = NULL, new_missing_at = NULL,
+                updated_at = ?5
+          WHERE id = ?1
+            AND ((state = 'failed' AND received_name IS NULL)
+                 OR (state = 'abandoned' AND reason IS NOT NULL AND reason <> ?6))",
+        params![id, state, hash, reason, at, OLD_FILE_WATCHED],
     )?;
     by_id(tx, id)
 }
@@ -836,10 +846,11 @@ impl RevisionStore {
     }
 
     /// A cycle added the torrent `hash` again for the row `id`, a failure
-    /// before its new video was received ([`Revision::not_received`]): the
-    /// replacement starts over (or is skipped when another row has that
-    /// torrent). Returns the row afterwards; a row in any other state is left
-    /// alone.
+    /// before its new video was received ([`Revision::not_received`]), or
+    /// `다시 받기` received it again (such a failure, or a replacement that
+    /// ended with no video under the episode name): the replacement starts
+    /// over (or is skipped when another row has that torrent). Returns the
+    /// row afterwards; a row in any other state is left alone.
     pub async fn reopen(&self, id: i64, at: Millis, hash: String) -> Result<Option<Revision>> {
         self.db
             .run(move |c| {
@@ -956,14 +967,18 @@ impl RevisionStore {
                     out.insert(key, mark);
                 }
                 // The old video's item, and every item of the torrent removed
-                // with it (the same release through another channel).
+                // with it (the same release through another channel). A
+                // replacement received again after it ended with no video
+                // ([`RevisionStore::reopen`]) removed that torrent already.
                 let mut stmt = c.prepare(
                     "SELECT h.identity_key FROM video_revisions r
                        JOIN history_items h
                          ON h.id = r.old_item_id
                          OR (r.old_torrent_hash IS NOT NULL AND h.torrent_hash = r.old_torrent_hash)
                       WHERE h.channel_id = ?1
-                        AND r.state IN ('removing', 'removed', 'done', 'abandoned')",
+                        AND (r.state IN ('removing', 'removed', 'done', 'abandoned')
+                             OR (r.state IN ('receiving', 'verified')
+                                 AND r.old_torrent_hash IS NOT NULL))",
                 )?;
                 let mut rows = stmt.query([&channel_id])?;
                 while let Some(row) = rows.next()? {

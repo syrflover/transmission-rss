@@ -35,7 +35,8 @@
 //!   receives its item again. `can_retry` says whether `다시 받기` (the
 //!   `receive_once` command of `history_item_id`) is offered: on a revision
 //!   whose download stopped before it was received (its torrent left
-//!   Transmission or reported an error), even when it left the feed or came
+//!   Transmission or reported an error), or whose replacement ended with no
+//!   video under the episode name, even when it left the feed or came
 //!   from a past episode search, while the rule recorded on it is active and
 //!   no higher revision of the episode is in the folder or on its way
 //!   ([`receive_once::RevisionRetry`]) and the rule's folder is the one the
@@ -61,7 +62,7 @@ use crate::{
         history::{HistoryQuery, HistoryResult},
         revisions::{Revision, RevisionState},
     },
-    worker::{commands::receive_once, revisions::stopped_before_received},
+    worker::{commands::receive_once, revisions::received_again_on_retry},
 };
 
 pub fn routes() -> Router<AppState> {
@@ -104,7 +105,8 @@ pub struct RetryOffer {
 }
 
 /// [`RetryOffer`]s of the failed replacements `rows`, by history item. A
-/// row whose download did not stop before it was received has none.
+/// row `다시 받기` does not receive again ([`received_again_on_retry`]) has
+/// none.
 pub async fn retry_offers(
     state: &AppState,
     rows: &[Revision],
@@ -112,7 +114,7 @@ pub async fn retry_offers(
     let internal = |e: &dyn std::fmt::Display| ApiError::Internal(e.to_string());
     let stopped: Vec<&Revision> = rows
         .iter()
-        .filter(|row| stopped_before_received(row))
+        .filter(|row| received_again_on_retry(row))
         .collect();
     let mut offers = HashMap::new();
     if stopped.is_empty() {

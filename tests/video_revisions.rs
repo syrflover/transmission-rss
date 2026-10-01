@@ -2897,6 +2897,70 @@ async fn a_replacement_ended_beside_a_left_old_file_is_a_failure_once_that_file_
     assert_eq!(read(&s.file(EPISODE_NAME)), b"put back by hand");
 }
 
+/// `14v2` removed `14` and then lost its video, while its torrent is still
+/// in Transmission: the ended replacement is a `받기 실패` with `다시 받기`.
+/// Receiving it again has Transmission check the torrent's data (it finds
+/// the file gone) and start it, and the replacement starts over from its
+/// first step: the downloaded video is checked and takes the episode name.
+#[tokio::test]
+async fn a_replacement_ended_with_no_video_left_is_received_again_with_retry() {
+    let s = Setup::new().await;
+    s.v2_waits_for_its_name().await;
+    std::fs::remove_file(s.file(&v2())).unwrap();
+    s.cycle().await;
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await.code(), "abandoned");
+    assert!(s.h.tr.torrents().iter().any(|t| t.hash == NEW_HASH));
+    let old_adds = s.added(OLD_HASH);
+
+    let item = s.item(&v2()).await;
+    let failures = s.failures().await;
+    let failure = revision_failure(&failures);
+    assert_eq!(failure["history_item_id"], item.id);
+    assert_eq!(failure["can_retry"], true, "{failure}");
+    assert_eq!(s.episode_row().await["failure"]["can_retry"], true);
+
+    s.h.tr.reject_rename_of(NEW_HASH, None);
+    s.retry(item.id, "00000000-0000-4000-8000-000000000d01")
+        .await;
+    assert_eq!(s.commands().await, CommandsOutcome::Ran(1));
+    assert_eq!(s.added(NEW_HASH), 2, "asked for again");
+    assert_eq!(
+        s.h.tr
+            .mutations()
+            .iter()
+            .filter(|m| m.starts_with("torrent-verify") || m.starts_with("torrent-start"))
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec![
+            format!("torrent-start ids=[\"{NEW_HASH}\"]"),
+            format!("torrent-verify ids=[\"{NEW_HASH}\"]"),
+        ]
+    );
+    assert_eq!(s.item(&v2()).await.result, HistoryResult::Received);
+    let row = s.row_of(&v2()).await;
+    assert_eq!(row.state, RevisionState::Receiving);
+    assert_eq!(row.received_name, None);
+    assert_eq!(row.new_missing_at, None);
+    assert!(s.failures().await.is_empty());
+
+    // Transmission downloads it again.
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Receiving);
+    std::fs::write(s.file(&v2()), NEW_BYTES).unwrap();
+    s.complete(NEW_HASH);
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Done);
+    assert_eq!(s.names(), vec![EPISODE_NAME]);
+    assert_eq!(read(&s.file(EPISODE_NAME)), NEW_BYTES);
+    assert_eq!(
+        s.added(OLD_HASH),
+        old_adds,
+        "the old release is not received again"
+    );
+    assert!(s.failures().await.is_empty());
+}
+
 // --- A rule folder that is away decides nothing -------------------------------------
 
 impl Setup {

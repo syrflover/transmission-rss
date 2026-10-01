@@ -754,6 +754,22 @@ pub fn stopped_before_received(row: &Revision) -> bool {
             .is_some_and(|reason| reason == RECEIVE_STOPPED || reason.starts_with(LOCAL_ERROR))
 }
 
+/// Whether the replacement of `row` ended after the old video was removed
+/// with no video left under the episode name (an abandoned
+/// [`Revision::is_failure`]).
+pub fn ended_with_no_video(row: &Revision) -> bool {
+    row.state == RevisionState::Abandoned && row.is_failure()
+}
+
+/// Whether `다시 받기` receives the revision of `row` again: its download
+/// stopped before it was received ([`stopped_before_received`]), or its
+/// replacement ended with no video left ([`ended_with_no_video`]), which
+/// Transmission checks and downloads again. Either starts over from its
+/// first step, with the same checks.
+pub fn received_again_on_retry(row: &Revision) -> bool {
+    stopped_before_received(row) || ended_with_no_video(row)
+}
+
 fn failed(reason: impl Into<String>, received_name: Option<String>) -> Next {
     Next::Step(Step::Failed {
         reason: reason.into(),

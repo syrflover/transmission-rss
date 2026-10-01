@@ -602,8 +602,8 @@ impl FakeTransmission {
 
     /// What the server was asked to change, in a form that does not depend on
     /// request order: one sorted line per `session-set`, `torrent-add`,
-    /// `torrent-rename-path`, `torrent-remove`, `torrent-stop` and
-    /// `torrent-set-location`.
+    /// `torrent-rename-path`, `torrent-remove`, `torrent-stop`,
+    /// `torrent-start`, `torrent-verify` and `torrent-set-location`.
     pub fn mutations(&self) -> Vec<String> {
         let mut out: Vec<String> = self
             .calls()
@@ -627,6 +627,7 @@ impl FakeTransmission {
                     ),
                     "torrent-stop" => format!("torrent-stop ids={}", a["ids"]),
                     "torrent-start" => format!("torrent-start ids={}", a["ids"]),
+                    "torrent-verify" => format!("torrent-verify ids={}", a["ids"]),
                     "torrent-set-location" => format!(
                         "torrent-set-location ids={} location={} move={}",
                         a["ids"], a["location"], a["move"]
@@ -937,6 +938,23 @@ async fn tr_rpc_answer(
                     t.download_dir = location.clone();
                 } else {
                     t.pending_location = Some((location.clone(), lag));
+                }
+            }
+            ok(json!({})).into_response()
+        }
+
+        "torrent-verify" => {
+            let wanted = ids(&args);
+            for t in st.torrents.iter_mut().filter(|t| wanted.contains(&t.hash)) {
+                // A file missing from its folder is data to download again.
+                let names = if t.files.is_empty() {
+                    vec![t.name.clone()]
+                } else {
+                    t.files.clone()
+                };
+                let dir = std::path::Path::new(&t.download_dir);
+                if names.iter().any(|name| !dir.join(name).exists()) {
+                    t.left_until_done = 1 << 20;
                 }
             }
             ok(json!({})).into_response()

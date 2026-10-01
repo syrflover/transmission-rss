@@ -26,7 +26,11 @@
 //! decision tells it ([`revisions::holds_same_or_higher`]): a higher revision
 //! that found the episode name free has no replacement row to say so. Its add puts the replacement back at its first step
 //! with the item's result, in one transaction; a torrent Transmission still
-//! had is started again. It is never renamed here, and an add that fails
+//! had is started again. A revision whose replacement ended after the old
+//! video was removed, with no video left under the episode name
+//! ([`revisions::ended_with_no_video`]), is received again the same way;
+//! a torrent Transmission still has is checked (`torrent-verify`) before it
+//! is started, so it downloads the file that went missing. It is never renamed here, and an add that fails
 //! leaves the item and the replacement as they were: the command alone says
 //! why.
 //!
@@ -330,10 +334,12 @@ pub enum RevisionRetry {
     /// No row, or none `다시 받기` receives again: the item is retried as any
     /// other ([`retry_plan`]).
     None,
-    /// A revision whose download stopped before it was received
-    /// ([`revisions::stopped_before_received`]): received again whatever the
-    /// item's result, and its replacement goes on with the same checks and
-    /// order. It may have left the feed or come from a past episode search.
+    /// A revision whose download stopped before it was received, or whose
+    /// replacement ended with no video left
+    /// ([`revisions::received_again_on_retry`]): received again whatever the
+    /// item's result, and its replacement starts over with the same checks
+    /// and order. It may have left the feed or come from a past episode
+    /// search.
     Again(Box<Revision>),
     /// Such a revision, but a higher revision of its episode is in the folder
     /// or on its way; the replacement steps skip it.
@@ -348,7 +354,7 @@ pub async fn revision_retry(
     let Some(row) = store.by_item(item_id).await? else {
         return Ok(RevisionRetry::None);
     };
-    if !revisions::stopped_before_received(&row) {
+    if !revisions::received_again_on_retry(&row) {
         return Ok(RevisionRetry::None);
     }
     Ok(match store.verdict(row.id).await? {
@@ -709,11 +715,7 @@ pub async fn execute_with(
                     let skip = Step::Skipped {
                         reason: revisions::NOT_HIGHER.to_owned(),
                     };
-                    if let Err(err) = ctx
-                        .revisions
-                        .advance(row.id, now(), RevisionState::Failed, skip)
-                        .await
-                    {
+                    if let Err(err) = ctx.revisions.advance(row.id, now(), row.state, skip).await {
                         eprintln!("Cannot record the revision of item {}: {err}", item.id);
                     }
                 }
@@ -856,7 +858,23 @@ pub async fn execute_with(
             let stored = stored.unwrap_or(result);
             // Transmission still had the revision's torrent, stopped on an
             // error: it is started again, and the replacement looks at it.
+            // One whose video went missing after it was received is checked
+            // first, so Transmission downloads the file again (a check asked
+            // for first, Transmission starts the torrent once it is done).
             if again && torrent.kind != AddKind::Added {
+                let ended = matches!(&revision, RevisionRetry::Again(row) if revisions::ended_with_no_video(row));
+                if ended {
+                    let verified = transmission
+                        .torrent_action(TorrentAction::Verify, vec![Id::Hash(torrent.hash.clone())])
+                        .await;
+                    if let Err(err) = verified {
+                        eprintln!(
+                            "Cannot check the torrent of item {}: {}",
+                            item.id,
+                            redactor.apply(&err.to_string())
+                        );
+                    }
+                }
                 let started = transmission
                     .torrent_action(TorrentAction::Start, vec![Id::Hash(torrent.hash.clone())])
                     .await;
