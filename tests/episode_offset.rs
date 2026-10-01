@@ -1306,3 +1306,32 @@ async fn a_rule_whose_field_already_holds_the_suggestion_is_offered_nothing() {
     s.link_earlier_seasons([Some(12), Some(12)]).await;
     assert_eq!(s.view(&rule).await["episode_suggestion"], Value::Null);
 }
+
+/// The user's value saved while the first release is read wins, and this
+/// cycle's items are named with it, not with the value the cycle read.
+#[tokio::test]
+async fn the_first_items_take_the_value_the_user_saves_meanwhile_not_the_one_read() {
+    let s = Scene::new().await;
+    s.link_earlier_seasons([Some(12), Some(12)]).await;
+    s.h.advance(1_000);
+    // A value carried over from season 2.
+    let rule = s.subscribe("Show", "Show/Season 03", 7, -12).await;
+    s.feed(&[]);
+    s.cycle().await;
+
+    s.feed(&[&show(25)]);
+    cycle_while(&s, async {
+        let now = s.rule(&rule).await;
+        let mut input = now.to_input();
+        input.episode = -20;
+        s.h.channels
+            .update_rule(&now.id, now.version, &s.channel, input)
+            .await
+            .unwrap();
+    })
+    .await;
+
+    let stored = s.rule(&rule).await;
+    assert_eq!((stored.episode, stored.episode_auto), (-20, false));
+    assert_eq!(s.names(), ["Show S03E05.mkv"]);
+}

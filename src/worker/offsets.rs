@@ -17,7 +17,11 @@
 //! user saved the rule meanwhile, it is read again and decided once more if
 //! the app may still decide it and the save changed neither its offset nor
 //! what picked and places the items ([`same_choice`]); otherwise the rule is
-//! left as the user made it, and its items are named with the user's offset.
+//! left as the user made it. Either way the cycle's items are named with the
+//! offset the rule has then: when the stored offset is no longer the one the
+//! cycle read (the user saved another), [`settle`] hands that one back, so a
+//! value carried over in the cycle's snapshot does not name the first items
+//! after the user replaced it.
 //!
 //! Anything that cannot be read (the library, the season info, the history)
 //! leaves the rule as it is, with a line in the log: a rule is received with
@@ -31,8 +35,9 @@ use crate::{
     store::channels::Rule,
 };
 
-/// The offsets set for the rules that are about to receive their first items,
-/// by rule ID. `firsts` has the titles each rule is about to receive; `open`
+/// The offsets the rules that are about to receive their first items take,
+/// by rule ID: the one the app set, or the user's when the user saved another
+/// while the cycle ran. A rule not in it keeps the offset the cycle read. `firsts` has the titles each rule is about to receive; `open`
 /// the rules of the cycle's snapshot that may be looked at at all
 /// ([`may_decide`]).
 pub async fn settle(
@@ -74,7 +79,7 @@ pub async fn settle(
 }
 
 /// [`settle`] for one rule and one item: the rule as it is after, when the app
-/// set its offset. Used by `다시 받기` of a past item, which is a rule's first
+/// set its offset or the user saved another meanwhile. Used by `다시 받기` of a past item, which is a rule's first
 /// when the rule has picked nothing.
 pub async fn settle_one(
     ctx: &CycleContext,
@@ -101,7 +106,8 @@ pub async fn settle_one(
 }
 
 /// Decides one rule from its first titles and stores the offset if the app
-/// sets one. The offset set, or `None`.
+/// sets one. The offset the titles take: the one set, or the stored one when
+/// the user saved another since `rule` was read; `None` when `rule`'s holds.
 async fn settle_rule(
     ctx: &CycleContext,
     collect_folder: &str,
@@ -109,26 +115,29 @@ async fn settle_rule(
     titles: &[String],
 ) -> Option<i64> {
     let first = first_release(titles)?;
+    let read = rule.episode;
+    // What the items take when the app sets nothing: the offset as last read.
+    let kept = |now: &Rule| (now.episode != read).then_some(now.episode);
     let mut rule = rule.clone();
     // The second try is for a rule the user saved while the cycle ran.
     for _ in 0..2 {
         let basis = match gather(&ctx.library, &ctx.seasons, collect_folder, &rule).await {
             Ok(Some(basis)) => basis,
-            Ok(None) => return None,
+            Ok(None) => return kept(&rule),
             Err(err) => {
                 eprintln!(
                     "Episode offset: rule {} is received without one: {err}",
                     rule.id
                 );
-                return None;
+                return kept(&rule);
             }
         };
         let Verdict::Auto { offset, basis, .. } = decide(first, &basis) else {
-            return None;
+            return kept(&rule);
         };
         if same_effect(rule.episode, offset) {
             // Named as the app would name them already: nothing to tell.
-            return None;
+            return kept(&rule);
         }
         match ctx
             .channels
@@ -145,12 +154,12 @@ async fn settle_rule(
             }
             Ok(None) => match ctx.channels.get_rule(&rule.id).await {
                 Ok(Some(now)) if may_decide(&now) && same_choice(&now, &rule) => rule = now,
-                Ok(_) => {
+                Ok(now) => {
                     println!(
                         "Episode offset: rule {} was changed meanwhile and is left as it is",
                         rule.id
                     );
-                    return None;
+                    return now.and_then(|now| kept(&now));
                 }
                 Err(err) => {
                     eprintln!("Episode offset: cannot read rule {} again: {err}", rule.id);
@@ -162,7 +171,7 @@ async fn settle_rule(
                     "Episode offset: cannot save the offset of rule {}: {err}",
                     rule.id
                 );
-                return None;
+                return kept(&rule);
             }
         }
     }
@@ -170,7 +179,7 @@ async fn settle_rule(
         "Episode offset: rule {} kept changing and is received without one",
         rule.id
     );
-    None
+    kept(&rule)
 }
 
 /// The rules among `ids` the app has never decided, or `None` (with a line in

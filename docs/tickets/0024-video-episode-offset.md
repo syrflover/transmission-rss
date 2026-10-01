@@ -60,7 +60,7 @@
   - 제안은 규칙이 첫 항목을 받은 뒤에 보여요. 그 첫 `- 01`은 변환 없이 `S02E01` 이름을 받으려 하는데, 그 이름은 앞 쿨의 영상이 갖고 있어서 이름을 바꾸지 않고 릴리스 이름 그대로 남아요. `적용`한 뒤 피드에 그 항목이 남아 있으면 다음 주기가 `S02E13`으로 이름을 마저 붙여요.
 - 번호를 이어 세는 분할 방영(같은 폴더에 영상이 있고 `f = P + 1`)은 여전히 값 없는 안내만 해요.
 - 재시도(실패한 항목을 다시 보내기)는 저장된 오프셋을 그대로 써요. 판단은 주기와 `receive_once`에서만 해요.
-- 주기가 규칙을 읽은 뒤 사용자가 그 규칙을 저장했으면 규칙을 다시 읽어 한 번 더 판단해요. 그 저장이 회차 변환 값이나, 이번 주기의 항목을 고르고 놓은 일치 문구·정규식·대소문자·저장 폴더를 바꿨으면 사용자가 정한 대로 두어요(그 항목들은 바뀐 규칙이 고른 것이 아니니까요, `a_rule_whose_match_changes_while_its_first_release_is_read_is_not_decided`). 이렇게 하지 않으면 다른 필드를 고친 저장 하나로 첫 항목이 변환 없이 받아지고, 그 뒤로는 고른 항목이 있어 다시 판단하지 않아요(`a_rule_saved_while_its_first_release_is_read_still_gets_the_offset`, `an_offset_the_user_saves_while_the_first_release_is_read_is_kept`).
+- 주기가 규칙을 읽은 뒤 사용자가 그 규칙을 저장했으면 규칙을 다시 읽어 한 번 더 판단해요. 그 저장이 회차 변환 값이나, 이번 주기의 항목을 고르고 놓은 일치 문구·정규식·대소문자·저장 폴더를 바꿨으면 사용자가 정한 대로 두어요(그 항목들은 바뀐 규칙이 고른 것이 아니니까요, `a_rule_whose_match_changes_while_its_first_release_is_read_is_not_decided`). 사용자가 회차 변환을 바꿨으면 그 주기의 항목도 주기가 읽은 값이 아니라 저장된 값으로 이름이 붙어요(이전 시즌에서 옮겨 온 −12를 읽은 주기 중에 사용자가 −20을 저장하면 `- 25`가 `S03E05`, `the_first_items_take_the_value_the_user_saves_meanwhile_not_the_one_read`). 이렇게 하지 않으면 다른 필드를 고친 저장 하나로 첫 항목이 변환 없이 받아지고, 그 뒤로는 고른 항목이 있어 다시 판단하지 않아요(`a_rule_saved_while_its_first_release_is_read_still_gets_the_offset`, `an_offset_the_user_saves_while_the_first_release_is_read_is_kept`).
 - 규칙 상세의 근거·제안을 읽지 못하면(저장소 오류) 그 규칙만 근거·제안 없이 보이고 로그를 남겨요. 채널·규칙 목록이 `500`이 되지 않아요(`a_suggestion_that_cannot_be_read_leaves_the_rule_list_answering`).
 
 ### 검증한 것
