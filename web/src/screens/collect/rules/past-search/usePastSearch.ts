@@ -40,17 +40,20 @@ function message(error: unknown, fallback: string): string {
  * Drives one rule's past episode search. The server runs and judges it; this
  * only starts it, follows it and hands over the finished preview. A search that
  * is left (the section closed, the rule left) is ended on the server, so
- * nothing of it stays, unless something was already sent to be received.
+ * nothing of it stays, unless something of that very search was already sent
+ * to be received (a later search of the rule is ended as usual).
  */
 export function usePastSearch(ruleId: string) {
   const [phase, setPhase] = useState<SearchPhase>({ kind: "closed" });
   const searchId = useRef<string | null>(null);
-  const keep = useRef(false);
+  /** The search whose results are being received: the server keeps it until its time runs out. */
+  const held = useRef<string | null>(null);
 
+  /** Lets go of the current search: ends it on the server unless it was handed off to a receive. */
   const drop = useCallback(() => {
     const id = searchId.current;
     searchId.current = null;
-    if (id) void cancelSearch(id).catch(() => undefined);
+    if (id && id !== held.current) void cancelSearch(id).catch(() => undefined);
   }, []);
 
   /** Opens the section: reads the search words and the range to start from. */
@@ -85,20 +88,20 @@ export function usePastSearch(ruleId: string) {
   /** Back to step 1 with the words and range as they were; the running search ends. */
   const back = useCallback(
     (context: SearchContext, error: string | null = null) => {
-      if (!keep.current) drop();
+      drop();
       setPhase({ kind: "range", context, error });
     },
     [drop],
   );
 
   const close = useCallback(() => {
-    if (!keep.current) drop();
+    drop();
     setPhase({ kind: "closed" });
   }, [drop]);
 
-  /** Tells the search it has results being received, so leaving does not end it. */
+  /** Tells the current search it has results being received, so leaving does not end it. */
   const hold = useCallback(() => {
-    keep.current = true;
+    held.current = searchId.current;
   }, []);
 
   const searching = phase.kind === "searching" ? phase : null;
@@ -146,15 +149,7 @@ export function usePastSearch(ruleId: string) {
   }, [searching?.searchId, searching?.context]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Leaving the screen ends a search that nothing was received from.
-  useEffect(
-    () => () => {
-      if (!keep.current) {
-        const id = searchId.current;
-        if (id) void cancelSearch(id).catch(() => undefined);
-      }
-    },
-    [],
-  );
+  useEffect(() => drop, [drop]);
 
   return { phase, open, begin, back, close, hold, searchId };
 }
