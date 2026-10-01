@@ -217,6 +217,45 @@ async fn first_sighting_creates_a_record() {
 }
 
 #[tokio::test]
+async fn a_channels_first_sighting_is_its_earliest_first_seen_time() {
+    let (_dir, _db, history) = store().await;
+    history
+        .record(2_000, vec![obs("a", HistoryResult::NoMatch)])
+        .await
+        .unwrap();
+    history
+        .record(
+            1_000,
+            vec![Observation {
+                channel_id: "c2".into(),
+                ..obs("b", HistoryResult::NoMatch)
+            }],
+        )
+        .await
+        .unwrap();
+    // Seeing "a" again, and a newer item, move nothing.
+    history
+        .record(
+            3_000,
+            vec![
+                obs("a", HistoryResult::NoMatch),
+                obs("c", HistoryResult::NoMatch),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let found = history
+        .first_sightings(vec!["c1".into(), "c2".into(), "unknown".into()])
+        .await
+        .unwrap();
+    assert_eq!(found.get("c1"), Some(&2_000));
+    assert_eq!(found.get("c2"), Some(&1_000));
+    assert!(!found.contains_key("unknown"), "{found:?}");
+    assert!(history.first_sightings(vec![]).await.unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn seeing_an_item_again_adds_no_record_and_keeps_the_first_seen_time() {
     let (_dir, _db, history) = store().await;
 

@@ -19,7 +19,7 @@ use super::{
 };
 use crate::{
     store::{
-        channels::{ChannelError, ChannelStore},
+        channels::{ChannelError, ChannelStore, ChannelWithRules, RuleState},
         history::{HistoryResult, HistoryStore, Millis, Observation, Recorded},
         library::LibraryStore,
         settings::{SettingsError, SettingsStore},
@@ -140,6 +140,54 @@ pub struct CommandsAtStart {
     pub unconfirmed_adds: usize,
 }
 
+/// The plan of each channel. A channel with a subscription gets one more
+/// look at history, for its first read: when history holds nothing of it yet,
+/// this cycle reads it for the first time and its subscriptions sit out
+/// ([`ChannelPlan::for_first_read`]); otherwise the plan learns when the first
+/// read was, to tell what the feed held then ([`ChannelPlan::with_first_read_at`]).
+/// Channels without a subscription need neither, and cost no query.
+async fn make_plans(
+    ctx: &CycleContext,
+    snapshot: Vec<ChannelWithRules>,
+    collect_folder: &Path,
+) -> Vec<ChannelPlan> {
+    let subscribed: Vec<String> = snapshot
+        .iter()
+        .filter(|cwr| {
+            cwr.rules
+                .iter()
+                .any(|rule| rule.state == RuleState::Active && rule.subscription.is_some())
+        })
+        .map(|cwr| cwr.channel.id.clone())
+        .collect();
+    // When history cannot be read the plans are the ordinary ones. The channel
+    // loop reads the same history for `known` and leaves the items a
+    // subscription would take to the next cycle when that fails as well.
+    let first_reads = match ctx.history.first_sightings(subscribed.clone()).await {
+        Ok(found) => Some(found),
+        Err(err) => {
+            eprintln!("Cannot read the first reads of the channels from history: {err}");
+            None
+        }
+    };
+
+    snapshot
+        .into_iter()
+        .map(|cwr| {
+            let first_read = first_reads
+                .as_ref()
+                .filter(|_| subscribed.contains(&cwr.channel.id))
+                .map(|found| found.get(&cwr.channel.id).copied());
+            match first_read {
+                // No record yet: this cycle's read is the first.
+                Some(None) => ChannelPlan::for_first_read(cwr, collect_folder),
+                Some(at) => ChannelPlan::new(cwr, collect_folder).with_first_read_at(at),
+                None => ChannelPlan::new(cwr, collect_folder),
+            }
+        })
+        .collect()
+}
+
 /// A selected item on its way to Transmission.
 struct Job {
     /// The observation to record; `result`, `torrent_hash` and `reason` are
@@ -196,12 +244,12 @@ pub async fn run_cycle(
         .map(|settings| PathBuf::from(settings.folder));
     // Without a collect folder the items are still judged (and the ones no rule
     // takes recorded), but nothing is added: see `Judgement::Selected` below.
-    let plans: Vec<ChannelPlan> = snapshot
-        .into_iter()
-        .map(|channel| {
-            ChannelPlan::new(channel, collect_folder.as_deref().unwrap_or(Path::new("")))
-        })
-        .collect();
+    let plans = make_plans(
+        ctx,
+        snapshot,
+        collect_folder.as_deref().unwrap_or(Path::new("")),
+    )
+    .await;
     report.channels = plans.len();
 
     let mut redactor = ctx.redactor.clone();

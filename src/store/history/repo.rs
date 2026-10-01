@@ -438,6 +438,25 @@ pub fn known_items(
     Ok(known)
 }
 
+/// When history first saw an item of each of the given channels, by channel
+/// ID. A channel with no record is left out. One index lookup per channel
+/// (`history_items_by_channel`), however long its history is.
+pub fn first_sightings(
+    conn: &Connection,
+    channel_ids: &[String],
+) -> Result<std::collections::HashMap<String, Millis>> {
+    let mut stmt =
+        conn.prepare("SELECT MIN(first_seen_at) FROM history_items WHERE channel_id = ?1")?;
+    let mut found = std::collections::HashMap::new();
+    for channel_id in channel_ids {
+        let first: Option<Millis> = stmt.query_row([channel_id], |row| row.get(0))?;
+        if let Some(first) = first {
+            found.insert(channel_id.clone(), first);
+        }
+    }
+    Ok(found)
+}
+
 /// Sets an item's result from something done to it outside a collection cycle
 /// (a command from the web), by the same transition rules as [`record`]. The
 /// item was not seen in a feed, so `last_seen_at`, the title and the link stay.
