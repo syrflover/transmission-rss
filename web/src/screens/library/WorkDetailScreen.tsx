@@ -310,7 +310,7 @@ function Loaded({
           )}
           {season && (
             <SeasonInfoSection
-              key={season.number}
+              key={`info-${season.number}`}
               workId={work.id}
               workName={work.name}
               info={season.info}
@@ -320,7 +320,7 @@ function Loaded({
           )}
           {season ? (
             <EpisodeList
-              key={season.number}
+              key={`episodes-${season.number}`}
               season={season}
               seasonCount={work.seasons.length}
               missing={work.missing}
