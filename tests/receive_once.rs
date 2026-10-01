@@ -2528,3 +2528,31 @@ async fn a_past_item_of_the_rule_detail_is_received_by_that_rule_and_then_reads_
     assert_eq!(kind_of(&after, "LIAR GAME - 26"), "past", "{after}");
     assert_eq!(after["counts"]["past"], 1);
 }
+
+#[tokio::test]
+async fn an_item_that_failed_without_any_rule_is_not_said_to_belong_to_another_rule() {
+    let liar26 = liar(26);
+    let s = Scene::new(&[&liar26], unrelated_rule()).await;
+    s.h.advance(1_000);
+    let sub = subscribe(&s, "LIAR GAME", "anime/LIAR GAME/Season 01").await;
+    let item = s.item("LIAR GAME - 26").await;
+    s.h.history
+        .record_outcome(
+            item.id,
+            s.h.now(),
+            HistoryResult::AddFailed,
+            None,
+            Some("Transmission이 응답하지 않았어요".into()),
+            None,
+        )
+        .await
+        .unwrap();
+
+    let (status, body) = s
+        .post_payload(CMD, json!({ "item_id": item.id, "rule_id": sub.id }))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let message = body["message"].as_str().unwrap();
+    assert!(message.contains("규칙 없이"), "{message}");
+    assert!(!message.contains("다른 규칙"), "{message}");
+}
