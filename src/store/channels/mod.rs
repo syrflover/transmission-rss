@@ -20,9 +20,11 @@ mod repo;
 #[cfg(test)]
 mod tests;
 
+pub use repo::NewSubscription;
+
 pub use model::{
     mask_url, query_names, Channel, ChannelInput, ChannelWithRules, OrderItem, Rule, RuleInput,
-    RuleState, Version, MASK,
+    RuleState, Subscription, SubtitleMode, Version, MASK,
 };
 
 use super::db::{Db, DbError};
@@ -52,6 +54,9 @@ pub enum ChannelError {
     RuleChannelChange { rule_id: String },
     #[error("{0}")]
     Invalid(&'static str),
+    /// The channel already has a rule subscribed to the anime.
+    #[error("rule {rule_id} already subscribes to the anime in this channel")]
+    AlreadySubscribed { rule_id: String },
 }
 
 impl ChannelError {
@@ -164,6 +169,22 @@ impl ChannelStore {
         let channel_id = channel_id.to_owned();
         self.db
             .run(move |c| repo::create_rule(c, &channel_id, &input))
+            .await
+    }
+
+    /// Adds a rule at the end of the channel's rules that is a subscription
+    /// to an Anissia anime, and stores the anime's snapshot, atomically. The
+    /// channel keeps one rule per subscribed anime
+    /// ([`ChannelError::AlreadySubscribed`]).
+    pub async fn create_subscription_rule(
+        &self,
+        channel_id: &str,
+        input: RuleInput,
+        subscription: NewSubscription,
+    ) -> Result<Rule, ChannelError> {
+        let channel_id = channel_id.to_owned();
+        self.db
+            .run(move |c| repo::create_subscription_rule(c, &channel_id, &input, &subscription))
             .await
     }
 

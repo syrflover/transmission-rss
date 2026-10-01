@@ -71,8 +71,13 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use super::{commands_api::CommandView, ApiError, AppState};
+use super::{
+    commands_api::CommandView,
+    subscriptions_api::{subscription_brief, SubscriptionBrief},
+    ApiError, AppState,
+};
 use crate::rss::{ChannelEvaluator, ChannelSpec, RuleSpec};
+use crate::store::anissia::Anime;
 use crate::store::channels::{
     Channel, ChannelError, ChannelWithRules, OrderItem, Rule, RuleInput, RuleState, MASK,
 };
@@ -172,6 +177,8 @@ pub struct RuleView {
     /// The last archive or restore of the rule (a `rule_archive` command),
     /// open or ended; `null` when it never had one.
     pub archive_move: Option<ArchiveMoveView>,
+    /// Set when the rule follows an anime of Anissia's schedule.
+    pub subscription: Option<SubscriptionBrief>,
 }
 
 /// An archive or restore of a rule and where it is.
@@ -247,7 +254,7 @@ fn history_error(e: HistoryError) -> ApiError {
     ApiError::Internal(e.to_string())
 }
 
-fn store_error(e: ChannelError) -> ApiError {
+pub(super) fn store_error(e: ChannelError) -> ApiError {
     match e {
         ChannelError::Invalid(_) => ApiError::invalid("입력한 값으로는 저장할 수 없어요."),
         e => e.into(),
@@ -266,7 +273,7 @@ async fn collect_folder(state: &AppState) -> Result<Option<String>, ApiError> {
 
 /// Refuses a save folder `directory` for a new rule (`stored` is `None`) or
 /// a changed one. See the module docs.
-async fn check_directory(
+pub(super) async fn check_directory(
     state: &AppState,
     stored: Option<&Rule>,
     directory: &str,
@@ -323,7 +330,7 @@ async fn check_directory(
 }
 
 /// The channel's recorded items, newest first, up to [`MAX_ITEMS_PER_CHANNEL`].
-async fn channel_items(
+pub(super) async fn channel_items(
     history: &HistoryStore,
     channel_id: &str,
 ) -> Result<Vec<HistoryItem>, ApiError> {
@@ -360,12 +367,27 @@ struct Analysis {
     /// Latest time each rule got an item into Transmission.
     last_received: HashMap<String, i64>,
     errors: HashMap<String, RegexProblem>,
+    /// The stored schedule snapshots of the subscribed anime.
+    animes: HashMap<i64, Anime>,
 }
 
 async fn analyze(state: &AppState, cwr: &ChannelWithRules) -> Result<Analysis, ApiError> {
     let mut analysis = Analysis::default();
     if cwr.rules.is_empty() {
         return Ok(analysis);
+    }
+    let subscribed: Vec<i64> = cwr
+        .rules
+        .iter()
+        .filter_map(|r| r.subscription.as_ref().map(|s| s.anissia_anime_no))
+        .collect();
+    if !subscribed.is_empty() {
+        analysis.animes = state
+            .anissia
+            .store
+            .animes(subscribed)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
     }
     // Only the judgement is used here, never a save path.
     let plan = ChannelPlan::new(cwr.clone(), FsPath::new(""));
@@ -427,6 +449,10 @@ fn views(
             error: analysis.errors.get(&rule.id).cloned(),
             last_received_at: analysis.last_received.get(&rule.id).copied(),
             archive_move: moves.get(&rule.id).and_then(archive_move_view),
+            subscription: rule
+                .subscription
+                .as_ref()
+                .map(|s| subscription_brief(s, &analysis.animes)),
         })
         .collect()
 }
@@ -458,7 +484,7 @@ async fn channel_views(state: &AppState, channel_id: &str) -> Result<Vec<RuleVie
 }
 
 /// One rule as it is now, or 404.
-async fn rule_view(state: &AppState, id: &str) -> Result<RuleView, ApiError> {
+pub(super) async fn rule_view(state: &AppState, id: &str) -> Result<RuleView, ApiError> {
     let rule = state
         .channels
         .get_rule(id)
@@ -864,6 +890,7 @@ fn substitute(
             episode: 0,
             episode_auto: false,
             state: RuleState::Active,
+            subscription: None,
         },
     };
     rule.r#match = edited.r#match.clone();

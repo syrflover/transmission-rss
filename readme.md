@@ -37,7 +37,7 @@ SEED_QUEUE_SIZE=1
 ```
 
 - `MEDIA_DIR` is mounted to `/downloads` in Transmission and in both trss containers, so all of them spell folders the same way: read-write in `trss-worker`, which moves work folders when rules are archived and restored (see below), and read-only in `trss-web`, which only reads it. Transmission downloads to `/downloads/downloads` (`$MEDIA_DIR/downloads` on the host) unless a rule says otherwise.
-- `TRSS_DATA_DIR` holds `trss.db`, the worker's lock files `trss.db.worker.lock`, `trss.db.artwork.lock` and `trss.db.seasons.lock`, and `artwork/`, the work covers (see [Work covers](#work-covers)). Keep it on a local disk, not an SMB or NFS share: SQLite and the locks rely on local file locking.
+- `TRSS_DATA_DIR` holds `trss.db`, the worker's lock files `trss.db.worker.lock`, `trss.db.artwork.lock`, `trss.db.seasons.lock` and `trss.db.anissia.lock`, and `artwork/`, the work covers (see [Work covers](#work-covers)). Keep it on a local disk, not an SMB or NFS share: SQLite and the locks rely on local file locking.
 - The web has no sign-in of its own. `TRSS_WEB_HOST_IP` binds its port to the LAN address only; reach it from outside through a VPN, never by forwarding the port.
 
 On a host whose Docker uses the systemd cgroup driver, install the slice the Transmission container runs in once (see [Resource limits](#resource-limits)):
@@ -92,6 +92,15 @@ A season's air dates, episode count, studios, genres, original title and synopsi
 - When the app records a work (or a first season) for the first time, `trss-worker` searches AniList for the folder name and links the entry only on the same exact, unique title match and complete search as for covers (up to four search requests, then one request for the entry). The link is marked `자동` and the user can change it. Works and seasons recorded before this version are not searched for; open the season and use `연결 바꾸기`. Later seasons are never linked by the app: the previous season's last entry's sequels are offered and the user confirms one.
 - Entries that are not yet released or are releasing are received again once a day by the worker (one request each, at the same pace as the covers, `429` waits included). Finished entries are received again only from `정보 다시 받기`.
 - The queue takes its own lock, `trss.db.seasons.lock`, so it never holds up collection or the cover queue. Descriptions are shown as plain text only.
+
+### Anissia schedule
+
+The 구독 tab's `편성표에서 추가` reads the airing schedule (weekdays, `기타`, `신작`) and an anime's subtitle creators from Anissia. Both containers need outbound HTTPS access to `api.anissia.net`; no account or key is involved. Times are Asia/Seoul.
+
+- The web asks Anissia when someone looks and keeps each answer for 5 minutes. If Anissia is slow, down or answers something unreadable, the schedule shows the reason with a retry; subscriptions already made keep showing the weekday and time stored with them.
+- Every Anissia request, from the web and the worker together, is spaced at least 2 seconds apart through the database, waits as long as Anissia asks after a `429`, reads at most 2 MiB and follows no redirects.
+- For each subscribed anime the app stores the schedule values (title, original title, weekday, time, start and end dates, status). `trss-worker` asks again once a day, under its own lock, `trss.db.anissia.lock`; an anime that cannot be read is retried after an hour and one that Anissia no longer lists keeps its stored values.
+- `TRSS_ANISSIA_URL` overrides Anissia's address, for local testing only.
 
 ### Watch folders and inotify
 

@@ -283,7 +283,24 @@ pub async fn run_cycle(
         // What goes into history and logs passes through the channel's redactor.
         let channel_redactor = plan.redactor();
 
-        for item in feed::items(&feed, &channel.secret_query, &channel_redactor) {
+        let feed_items = feed::items(&feed, &channel.secret_query, &channel_redactor);
+        // What history already knows of the items, read only when a
+        // subscription rule could take one of them: the items it recorded
+        // before the subscription began are past, and are not received.
+        let known = if plan.has_subscriptions() {
+            let keys = feed_items.iter().map(|i| i.identity_key.clone()).collect();
+            match ctx.history.known_items(channel.id.clone(), keys).await {
+                Ok(known) => Some(known),
+                Err(err) => {
+                    eprintln!("Cannot read history for {label}: {err}");
+                    None
+                }
+            }
+        } else {
+            Some(HashMap::new())
+        };
+
+        for item in feed_items {
             report.items_seen += 1;
             let FeedItem {
                 identity_key,
@@ -306,7 +323,29 @@ pub async fn run_cycle(
                 reason: None,
             };
 
-            match plan.judge(&title) {
+            let judgement = plan.judge(&title);
+            if let Judgement::Selected { rule_id, .. } = &judgement {
+                match &known {
+                    // Without history there is no telling a past item from a
+                    // new one: a subscription rule leaves the item for the
+                    // next cycle.
+                    None if plan.is_subscription(rule_id) => continue,
+                    Some(known) => {
+                        let record = known.get(&observation.identity_key).copied();
+                        if plan.is_past(rule_id, record) {
+                            if let Some((_, stored)) = record {
+                                skipped.push(Observation {
+                                    result: stored,
+                                    ..observation
+                                });
+                            }
+                            continue;
+                        }
+                    }
+                    None => {}
+                }
+            }
+            match judgement {
                 // No collect folder, so there is nowhere to save. The item is
                 // neither added nor recorded: a record (an `add_failed` above
                 // all) would pile up as a failure the user did nothing wrong

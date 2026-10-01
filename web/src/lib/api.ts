@@ -8,7 +8,13 @@
  * the user's input.
  */
 
-export type ApiErrorCode = "invalid" | "not_found" | "conflict" | "internal" | "network";
+export type ApiErrorCode =
+  | "invalid"
+  | "not_found"
+  | "conflict"
+  | "unavailable"
+  | "internal"
+  | "network";
 
 export class ApiError extends Error {
   readonly code: ApiErrorCode;

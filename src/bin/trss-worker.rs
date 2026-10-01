@@ -2,6 +2,7 @@ use std::{path::PathBuf, process::ExitCode};
 
 use tokio_util::sync::CancellationToken;
 use transmission_rss::{
+    anissia::{self, Anissia, AnissiaConfig},
     artwork::{self, AnilistConfig, AppData, Artwork},
     seasons::{self, Seasons},
     store::{db::DB_PATH_ENV, Db},
@@ -24,6 +25,7 @@ async fn main() -> ExitCode {
 async fn run() -> Result<(), String> {
     let env = WorkerEnv::from_env().map_err(|e| e.to_string())?;
     let anilist = AnilistConfig::from_env()?;
+    let anissia_config = AnissiaConfig::from_env()?;
 
     let db_path: PathBuf = std::env::var_os(DB_PATH_ENV)
         .ok_or_else(|| format!("environment variable {DB_PATH_ENV} is not set"))?
@@ -34,6 +36,7 @@ async fn run() -> Result<(), String> {
 
     let artwork = Artwork::new(db.clone(), Some(AppData::for_database(&db_path)), anilist);
     let season_info = Seasons::over(db.clone(), &artwork);
+    let anissia = Anissia::with_defaults(db.clone(), anissia_config);
     let worker = Worker::new(db, &env, lock_path_for(&db_path)).map_err(|e| e.to_string())?;
 
     let cancel = CancellationToken::new();
@@ -55,6 +58,14 @@ async fn run() -> Result<(), String> {
         async move { season_info.run_queue(lock, cancel).await }
     });
 
+    // Subscribed anime: the daily refresh of their schedule snapshots, on
+    // Anissia's own pace.
+    let anissia_queue = tokio::spawn({
+        let cancel = cancel.clone();
+        let lock = anissia::queue::lock_path_for(&db_path);
+        async move { anissia.run_queue(lock, cancel).await }
+    });
+
     println!(
         "trss-worker started: a cycle every {}s (database: {})",
         env.interval.as_secs(),
@@ -64,6 +75,7 @@ async fn run() -> Result<(), String> {
     worker.run(cancel).await;
     let _ = queue.await;
     let _ = season_queue.await;
+    let _ = anissia_queue.await;
 
     println!("trss-worker stopped");
     Ok(())

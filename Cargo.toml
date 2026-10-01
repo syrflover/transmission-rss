@@ -3,17 +3,12 @@ name = "transmission-rss"
 version = "0.1.0"
 edition = "2021"
 
-[features]
-anissia = ["dep:tl", "dep:chrono"]
-
 [dependencies]
 # trname = { path = "../trname" }
 trname = { git = "https://github.com/syrflover/trname", rev = "6169808" }
 
-chrono = { version = "0.4", optional = true }
 # Image bytes shared between the web, the decode and the file writer without copies.
 bytes = "1"
-tl = { version = "0.7", optional = true }
 
 dotenv = "0.15"
 futures = "0.3"

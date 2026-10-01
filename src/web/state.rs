@@ -1,4 +1,5 @@
 use crate::{
+    anissia::{Anissia, AnissiaConfig},
     artwork::{AnilistConfig, Artwork},
     seasons::Seasons,
     store::{
@@ -28,12 +29,15 @@ pub struct AppState {
     /// The AniList entries linked to each season, and the user's choices
     /// about them.
     pub seasons: Seasons,
+    /// Anissia's schedule, and the snapshots of the anime that are subscribed.
+    pub anissia: Anissia,
 }
 
 impl AppState {
     pub fn new(db: Db) -> Self {
         let artwork = Artwork::new(db.clone(), None, AnilistConfig::default());
         AppState {
+            anissia: Anissia::with_defaults(db.clone(), AnissiaConfig::default()),
             seasons: Seasons::over(db.clone(), &artwork),
             channels: ChannelStore::new(db.clone()),
             history: HistoryStore::new(db.clone()),
@@ -45,6 +49,12 @@ impl AppState {
             // stored or served until `with_artwork` gives one.
             artwork,
         }
+    }
+
+    /// Replaces the Anissia client (its address, and a clock or pace in tests).
+    pub fn with_anissia(mut self, anissia: Anissia) -> Self {
+        self.anissia = anissia;
+        self
     }
 
     /// Replaces the artwork services (the app data folder and AniList's address).

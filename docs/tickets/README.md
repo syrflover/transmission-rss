@@ -62,7 +62,7 @@
 | [0015](0015-work-artwork.md) | 작품 표지를 AniList에서 고르거나 올려요 | 완료 | 0012 |
 | [0016](0016-watch-inotify.md) | 감시 폴더의 변경을 inotify로 바로 반영해요 | 진행 중 | 0012 |
 | [0017](0017-season-info.md) | 시즌마다 AniList 항목을 이어 시즌 정보를 보여줘요 | 완료 | 0014, 0015 |
-| [0018](0018-subscribe-from-schedule.md) | Anissia 편성표에서 방영작을 구독해요 | 대기 | 없음 |
+| [0018](0018-subscribe-from-schedule.md) | Anissia 편성표에서 방영작을 구독해요 | 완료 | 없음 |
 | [0019](0019-subscription-rule-detail.md) | 구독 규칙을 작품·시즌에 잇고 규칙 상세 위 네 줄과 받기 스위치를 보여줘요 | 대기 | 0018 |
 | [0020](0020-title-waiting.md) | 첫 화 전에 구독하고 제목 후보로 규칙을 완성해요 | 대기 | 0018 |
 | [0021](0021-weekly-schedule.md) | 이번 주 편성과 처음 설정 체크리스트를 보여줘요 | 대기 | 0019, 0020 |

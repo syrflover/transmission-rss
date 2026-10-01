@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use tokio::net::TcpListener;
 
 use transmission_rss::{
+    anissia::{Anissia, AnissiaConfig},
     artwork::{AnilistConfig, AppData, Artwork},
     store::{db::DB_PATH_ENV, Db},
     web::{self, env::WebEnv, AppState},
@@ -35,6 +36,7 @@ async fn run() -> Result<(), String> {
     }
 
     let anilist = AnilistConfig::from_env()?;
+    let anissia = AnissiaConfig::from_env()?;
     let db_path: PathBuf = std::env::var_os(DB_PATH_ENV)
         .ok_or_else(|| format!("environment variable {DB_PATH_ENV} is not set"))?
         .into();
@@ -53,7 +55,9 @@ async fn run() -> Result<(), String> {
         env.static_dir.display()
     );
 
-    let state = AppState::new(db).with_artwork(artwork);
+    let state = AppState::new(db.clone())
+        .with_artwork(artwork)
+        .with_anissia(Anissia::with_defaults(db, anissia));
     axum::serve(listener, web::router(&env.static_dir, state))
         .with_graceful_shutdown(web::shutdown_signal())
         .await

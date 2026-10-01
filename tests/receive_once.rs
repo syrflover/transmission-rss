@@ -2219,3 +2219,201 @@ async fn a_held_item_whose_channel_is_gone_ends_with_its_result_and_the_label_co
         .iter()
         .all(|t| !t.labels.iter().any(|l| l.starts_with("trss-cmd:"))));
 }
+
+// --- receiving the past items of a subscription ------------------------------------------
+
+/// Makes `phrase` a subscription rule of the scene's channel, as of the harness's clock.
+async fn subscribe(
+    s: &Scene,
+    phrase: &str,
+    directory: &str,
+) -> transmission_rss::store::channels::Rule {
+    use transmission_rss::store::{
+        anissia::Anime,
+        channels::{NewSubscription, SubtitleMode},
+    };
+    s.h.channels
+        .create_subscription_rule(
+            &s.channel.channel.id,
+            rule(phrase, directory),
+            NewSubscription {
+                anime: Anime {
+                    anime_no: 3320,
+                    subject: phrase.to_owned(),
+                    original_subject: None,
+                    week: 3,
+                    air_time: Some("22:00".to_owned()),
+                    start_date: Some("2026-10-07".to_owned()),
+                    end_date: None,
+                    status: "ON".to_owned(),
+                    fetched_at: s.h.now(),
+                },
+                subtitles: SubtitleMode::Undecided,
+                creator: None,
+                subscribed_at: s.h.now(),
+            },
+        )
+        .await
+        .unwrap()
+}
+
+fn liar(episode: u32) -> Release {
+    let title = format!("[SubsPlease] LIAR GAME - {episode} (1080p) [ABCD12{episode}].mkv");
+    let guid: &'static str = Box::leak(format!("guid-liar-{episode}").into_boxed_str());
+    release(guid, episode, &title, "")
+}
+
+#[tokio::test]
+async fn a_subscription_receives_nothing_that_was_recorded_before_it_until_the_user_picks() {
+    let (liar25, liar26) = (liar(25), liar(26));
+    let s = Scene::new(&[&liar25, &liar26], unrelated_rule()).await;
+    assert_eq!(
+        s.item("LIAR GAME - 25").await.result,
+        HistoryResult::NoMatch
+    );
+
+    s.h.advance(1_000);
+    let sub = subscribe(&s, "LIAR GAME", "anime/LIAR GAME/Season 01").await;
+
+    // The next cycle sees both in the feed and the new rule matches them, but
+    // they are past: creating the rule received nothing.
+    s.cycle().await;
+    assert!(s.adds().is_empty());
+    assert!(s.h.tr.torrents().is_empty());
+    for part in ["LIAR GAME - 25", "LIAR GAME - 26"] {
+        let item = s.item(part).await;
+        assert_eq!(item.result, HistoryResult::NoMatch, "{part}");
+        assert_eq!(item.rule_id, None);
+    }
+
+    // The user ticked the 25th only.
+    let item = s.item("LIAR GAME - 25").await;
+    let (status, _) = s
+        .post_payload(CMD, json!({ "item_id": item.id, "rule_id": sub.id }))
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
+
+    let torrents = s.h.tr.torrents();
+    assert_eq!(torrents.len(), 1);
+    assert_eq!(torrents[0].hash, hash(25));
+    assert_eq!(torrents[0].download_dir, "/media/anime/LIAR GAME/Season 01");
+    assert_eq!(torrents[0].name, "LIAR GAME S01E25.mkv");
+    let received = s.item("LIAR GAME - 25").await;
+    assert_eq!(received.result, HistoryResult::Received);
+    assert_eq!(received.rule_id.as_deref(), Some(sub.id.as_str()));
+    assert_eq!(s.command(CMD).await.1["outcome"]["result"], "received");
+
+    // The 26th stays unreceived, cycle after cycle.
+    s.cycle().await;
+    assert_eq!(s.h.tr.torrents().len(), 1);
+    assert_eq!(
+        s.item("LIAR GAME - 26").await.result,
+        HistoryResult::NoMatch
+    );
+
+    // A release that appears after the subscription is collected as usual.
+    let liar27 = liar(27);
+    s.feed(&[&liar25, &liar26, &liar27]);
+    s.cycle().await;
+    let hashes: Vec<String> = s.h.tr.torrents().into_iter().map(|t| t.hash).collect();
+    assert_eq!(hashes.len(), 2, "{hashes:?}");
+    assert!(hashes.contains(&hash(27)));
+    assert_eq!(
+        s.item("LIAR GAME - 27").await.result,
+        HistoryResult::Received
+    );
+    s.assert_secret_nowhere().await;
+}
+
+#[tokio::test]
+async fn a_plain_rule_still_takes_the_items_in_the_feed_the_cycle_has_recorded_without_a_rule() {
+    // Only subscriptions hold back the past: a rule made by hand keeps taking
+    // what the feed still holds, as before.
+    let liar26 = liar(26);
+    let s = Scene::new(&[&liar26], unrelated_rule()).await;
+    s.h.advance(1_000);
+    s.h.channels
+        .create_rule(
+            &s.channel.channel.id,
+            rule("LIAR GAME", "LIAR GAME/Season 01"),
+        )
+        .await
+        .unwrap();
+    s.cycle().await;
+    assert_eq!(s.h.tr.torrents().len(), 1);
+}
+
+#[tokio::test]
+async fn a_request_for_a_rule_is_refused_when_the_rule_would_not_pick_the_item() {
+    let (liar26, other) = (liar(26), release("guid-other-3", 3, OTHER, ""));
+    let s = Scene::new(&[&liar26, &other], unrelated_rule()).await;
+    s.h.advance(1_000);
+    let sub = subscribe(&s, "LIAR GAME", "anime/LIAR GAME/Season 01").await;
+    let item = s.item("Another Show").await;
+
+    // The title does not match the rule.
+    let (status, body) = s
+        .post_payload(CMD, json!({ "item_id": item.id, "rule_id": sub.id }))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body["message"].as_str().unwrap().contains("고르지 않는"));
+    // A rule that does not exist.
+    let liar_item = s.item("LIAR GAME - 26").await;
+    let (status, _) = s
+        .post_payload(
+            CMD,
+            json!({ "item_id": liar_item.id, "rule_id": "no-such-rule" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    // Without a rule, an item no rule picked is still not retried.
+    let (status, _) = s.post(CMD, &liar_item).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    assert_eq!(s.run_commands().await, CommandsOutcome::Idle);
+    assert!(s.h.tr.torrents().is_empty());
+    assert_eq!(
+        s.item("LIAR GAME - 26").await.result,
+        HistoryResult::NoMatch
+    );
+}
+
+#[tokio::test]
+async fn a_repeat_of_a_request_is_not_stored_twice_and_an_archived_rule_receives_nothing() {
+    let liar26 = liar(26);
+    let s = Scene::new(&[&liar26], unrelated_rule()).await;
+    s.h.advance(1_000);
+    let sub = subscribe(&s, "LIAR GAME", "anime/LIAR GAME/Season 01").await;
+    let item = s.item("LIAR GAME - 26").await;
+    let payload = json!({ "item_id": item.id, "rule_id": sub.id });
+
+    assert_eq!(
+        s.post_payload(CMD, payload.clone()).await.0,
+        StatusCode::ACCEPTED
+    );
+    // The same request again is the stored command.
+    assert_eq!(s.post_payload(CMD, payload.clone()).await.0, StatusCode::OK);
+
+    let rule = s.h.channels.get_rule(&sub.id).await.unwrap().unwrap();
+    s.h.channels
+        .update_rule(
+            &rule.id,
+            rule.version,
+            &rule.channel_id,
+            RuleInput {
+                state: RuleState::Archived,
+                ..rule.to_input()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
+    assert!(s.h.tr.torrents().is_empty());
+    let (_, view) = s.command(CMD).await;
+    assert_eq!(view["state"], "failed");
+    assert_eq!(
+        s.item("LIAR GAME - 26").await.result,
+        HistoryResult::NoMatch
+    );
+}

@@ -362,6 +362,40 @@ pub fn held_hashes_of_items(conn: &Connection, items: &[(String, String)]) -> Re
     Ok(hashes)
 }
 
+/// When each of the given items of a channel was first seen and what became
+/// of it, by identity key. Keys the channel has no record of are left out.
+pub fn known_items(
+    conn: &Connection,
+    channel_id: &str,
+    keys: &[String],
+) -> Result<std::collections::HashMap<String, (Millis, HistoryResult)>> {
+    // Keeps the number of bound values well under SQLite's limit.
+    const CHUNK: usize = 400;
+
+    let mut known = std::collections::HashMap::new();
+    for chunk in keys.chunks(CHUNK) {
+        let placeholders = vec!["?"; chunk.len()].join(", ");
+        let mut stmt = conn.prepare(&format!(
+            "SELECT identity_key, first_seen_at, result FROM history_items
+             WHERE channel_id = ? AND identity_key IN ({placeholders})"
+        ))?;
+        let args = std::iter::once(channel_id).chain(chunk.iter().map(String::as_str));
+        let rows = stmt
+            .query_map(params_from_iter(args), |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Millis>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for (key, first_seen_at, code) in rows {
+            known.insert(key, (first_seen_at, parse_result(2, &code)?));
+        }
+    }
+    Ok(known)
+}
+
 /// Sets an item's result from something done to it outside a collection cycle
 /// (a command from the web), by the same transition rules as [`record`]. The
 /// item was not seen in a feed, so `last_seen_at`, the title and the link stay.
