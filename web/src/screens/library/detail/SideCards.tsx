@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 import { cn } from "@/lib/utils";
 
 import { channelName, ruleTitle } from "../../collect/rules/api";
-import type { WorkDetail, WorkRule } from "../api";
+import type { SeasonInfo, WorkDetail, WorkRule } from "../api";
 import { ChevronIcon } from "../icons";
 import { baseName, episodeLabel } from "./model";
 
@@ -99,6 +99,31 @@ export function CollectCard({ work, collapsible }: { work: WorkDetail; collapsib
           </ul>
         </>
       )}
+    </Card>
+  );
+}
+
+/**
+ * `작품 정보`: the synopsis of the chosen season (its first linked AniList
+ * entry's description), as the paragraphs the server cut it into. They are put
+ * on the page as text only, so nothing in the description can become markup.
+ */
+export function InfoCard({ info, collapsible }: { info: SeasonInfo; collapsible: boolean }) {
+  const paragraphs = info.synopsis ?? [];
+  return (
+    <Card title="작품 정보" summary={paragraphs.length === 0 ? "줄거리 없음" : "줄거리"} collapsible={collapsible}>
+      <div className="flex flex-col gap-1.5">
+        <h3 className={subHeading}>작품 줄거리</h3>
+        {paragraphs.length === 0 ? (
+          <p className="text-[13px] text-text-muted">{info.entries.length === 0 ? "연결한 AniList 항목이 없어서 줄거리를 몰라요." : "AniList에 줄거리가 없어요."}</p>
+        ) : (
+          paragraphs.map((paragraph, index) => (
+            <p key={index} className="text-[13px] leading-relaxed whitespace-pre-line break-words text-text-primary">
+              {paragraph}
+            </p>
+          ))
+        )}
+      </div>
     </Card>
   );
 }

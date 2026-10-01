@@ -7,13 +7,14 @@ import { useMediaQuery, PHONE_QUERY } from "@/lib/media";
 
 import { EmptyState, ScreenFrame, usePageTitle } from "../ScreenFrame";
 import { btnNeutral } from "../collect/channels/styles";
-import { LIST_PREFIX, loadWork, workKey, type WorkDetail } from "./api";
+import { LIST_PREFIX, loadWork, workKey, type SeasonInfo, type WorkDetail } from "./api";
 import { CoverDialog } from "./detail/CoverDialog";
 import { EpisodeList } from "./detail/EpisodeList";
 import { defaultSeason, rowId } from "./detail/model";
 import { useEpisodeOrder } from "./detail/prefs";
+import { SeasonInfoSection } from "./detail/SeasonInfoSection";
 import { SeasonTiles } from "./detail/SeasonTiles";
-import { CollectCard, FilesCard } from "./detail/SideCards";
+import { CollectCard, FilesCard, InfoCard } from "./detail/SideCards";
 import { coverOf } from "./model";
 import { Cover, FROM_LIBRARY } from "./WorkItem";
 
@@ -65,8 +66,20 @@ function WorkPage({ workId }: { workId: string }) {
     }
   };
 
+  // A season's info after a change (or after the app linked it) shows at once; the list reads its pages again.
+  const infoChanged = (info: SeasonInfo) => {
+    work.update((w) => {
+      if (!w) return w;
+      const seasons = w.seasons.map((s) => (s.number === info.season ? { ...s, info } : s));
+      // The head's original title is the work's first season's first entry's.
+      const native = info.can_auto ? (info.entries[0]?.native ?? null) : w.native_title;
+      return { ...w, seasons, native_title: native };
+    });
+    forgetPrefix(LIST_PREFIX);
+  };
+
   if (work.data) {
-    return <Loaded work={work.data} backLink={backLink} onCoverChanged={coverChanged} />;
+    return <Loaded work={work.data} backLink={backLink} onCoverChanged={coverChanged} onInfoChanged={infoChanged} />;
   }
   return (
     <ScreenFrame title="작품">
@@ -95,10 +108,12 @@ function Loaded({
   work,
   backLink,
   onCoverChanged,
+  onInfoChanged,
 }: {
   work: WorkDetail;
   backLink: React.ReactNode;
   onCoverChanged: (coverUrl: string | null) => void;
+  onInfoChanged: (info: SeasonInfo) => void;
 }) {
   const cover = coverOf(work.name);
   const [coverOpen, setCoverOpen] = useState(false);
@@ -165,6 +180,11 @@ function Loaded({
         />
         <div className="min-w-0 flex-1">
           <h1 className="text-[26px] leading-[1.28] font-bold tracking-[-0.005em] max-[720px]:text-xl">{cover.title}</h1>
+          {work.native_title && (
+            <p lang="ja" className="mt-1 text-[14px] leading-snug font-medium break-words text-text-secondary">
+              {work.native_title}
+            </p>
+          )}
           {hasSubtitles && (
             <p className="mt-3 flex flex-wrap items-baseline gap-x-2 gap-y-1 text-[13px]">
               <span className="font-semibold text-text-muted">자막 제작자</span>
@@ -197,6 +217,16 @@ function Loaded({
               />
             </section>
           )}
+          {season && (
+            <SeasonInfoSection
+              key={season.number}
+              workId={work.id}
+              workName={work.name}
+              info={season.info}
+              seasonCount={work.seasons.length}
+              onChanged={onInfoChanged}
+            />
+          )}
           {season ? (
             <EpisodeList
               key={season.number}
@@ -212,6 +242,7 @@ function Loaded({
         </div>
 
         <div className={wide ? (work.seasons.length > 1 ? "mt-[29px] flex flex-col gap-3" : "flex flex-col gap-3") : "flex flex-col gap-3"}>
+          {season && <InfoCard info={season.info} collapsible={!wide} />}
           <CollectCard work={work} collapsible={!wide} />
           <FilesCard work={work} collapsible={!wide} />
         </div>

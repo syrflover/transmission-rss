@@ -105,12 +105,16 @@ export interface WorkEpisode {
   episode: string;
   /** The episode as a number, `null` when it is no number. */
   sort: number | null;
+  /** When AniList schedules it (Unix milliseconds); only for a releasing entry with a schedule, else `null`. */
+  air_at: number | null;
   video: WorkFile[];
   subtitle: WorkFile[];
 }
 
 export interface WorkSeason {
   number: number;
+  /** The AniList entries the season links, taken together. */
+  info: SeasonInfo;
   /** Ascending. */
   episodes: WorkEpisode[];
 }
@@ -141,6 +145,8 @@ export interface WorkDetail {
   watch_folder: { id: string; path: string };
   folder_path: string;
   added_at: number | null;
+  /** The first season's first linked AniList entry's native title. */
+  native_title: string | null;
   /** Ascending by season number. */
   seasons: WorkSeason[];
   unrecognized: UnrecognizedFile[];
@@ -236,4 +242,92 @@ export function changeArtwork(id: string, version: number, action: "clear" | "au
 /** The cover URL the list and the detail show for a state. */
 export function coverUrlOf(state: ArtworkState): string | null {
   return state.image?.url ?? null;
+}
+
+// --- a season's info (`src/web/seasons_api.rs`) ---------------------------------------
+
+/** A date AniList may know only in part. */
+export interface FuzzyDate {
+  year: number | null;
+  month: number | null;
+  day: number | null;
+}
+
+/** An AniList entry a season links. */
+export interface SeasonEntry {
+  id: number;
+  title: string;
+  romaji: string | null;
+  english: string | null;
+  native: string | null;
+  format: string | null;
+  status: string | null;
+  episodes: number | null;
+  start: FuzzyDate;
+  end: FuzzyDate;
+  url: string;
+}
+
+/** A sequel of the previous season's last entry, offered until the user confirms one. */
+export interface SeasonSuggestion {
+  id: number;
+  title: string;
+  romaji: string | null;
+  english: string | null;
+  native: string | null;
+  format: string | null;
+  status: string | null;
+  start: FuzzyDate;
+  url: string;
+}
+
+export type AiringState = "releasing" | "finished" | "not_yet_released" | "cancelled" | "hiatus";
+
+export interface SeasonInfo {
+  season: number;
+  /** Sent back with a change; a change from an older version is a `conflict`. A season never touched has 0. */
+  version: number;
+  /** `auto`: the app linked the entry itself (or nothing is linked yet). */
+  origin: "auto" | "user";
+  /** The app still has the season's automatic search to do. */
+  pending: "search" | null;
+  /** Why the last automatic search linked nothing. */
+  note: { code: string; message: string } | null;
+  /** The work's first season: the only one the app searches for. */
+  can_auto: boolean;
+  entries: SeasonEntry[];
+  airing: { start: FuzzyDate; end: FuzzyDate; state: AiringState | string | null } | null;
+  /** `null` when unknown (no entry, or an entry's count is unknown). */
+  episodes: number | null;
+  studios: string[];
+  genres: string[];
+  anilist_url: string | null;
+  /** The first entry's description as plain text paragraphs; `null` without one. */
+  synopsis: string[] | null;
+  suggestions: SeasonSuggestion[];
+}
+
+const seasonPath = (id: string, season: number) => `/library/works/${encodeURIComponent(id)}/seasons/${season}`;
+
+export function loadSeasonInfo(id: string, season: number, signal?: AbortSignal): Promise<SeasonInfo> {
+  return api<SeasonInfo>(`${seasonPath(id, season)}/info`, { signal });
+}
+
+export function searchSeason(id: string, season: number, q: string, page: number, signal?: AbortSignal): Promise<AnilistPage> {
+  return api<AnilistPage>(`${seasonPath(id, season)}/search`, { method: "POST", body: { q, page }, signal });
+}
+
+/** Makes `anilistIds` the season's entries, in this order (empty unlinks). */
+export function setSeasonLinks(id: string, season: number, version: number, anilistIds: number[]): Promise<SeasonInfo> {
+  return api<SeasonInfo>(`${seasonPath(id, season)}/links`, { method: "POST", body: { version, anilist_ids: anilistIds } });
+}
+
+/** Unlinks the first season and asks for a new automatic search. */
+export function restartSeasonAuto(id: string, season: number, version: number): Promise<SeasonInfo> {
+  return api<SeasonInfo>(`${seasonPath(id, season)}/auto`, { method: "POST", body: { version } });
+}
+
+/** Asks AniList again for the season's entries, finished ones too. */
+export function refreshSeason(id: string, season: number): Promise<SeasonInfo> {
+  return api<SeasonInfo>(`${seasonPath(id, season)}/refresh`, { method: "POST", body: {} });
 }

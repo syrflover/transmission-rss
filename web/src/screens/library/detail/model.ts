@@ -1,4 +1,4 @@
-import type { EpisodeRange, WorkEpisode, WorkSeason } from "../api";
+import type { EpisodeRange, FuzzyDate, SeasonInfo, WorkEpisode, WorkSeason } from "../api";
 import { formatRanges } from "../model";
 
 /**
@@ -84,4 +84,56 @@ export function inOrder(episodes: readonly WorkEpisode[], order: EpisodeOrder): 
 /** The last part of a relative path. */
 export function baseName(path: string): string {
   return path.slice(path.lastIndexOf("/") + 1);
+}
+
+/** A date as far as AniList knows it: `2022년 7월 2일`, `2022년 7월`, `2022년`; `null` when not even the year is known. */
+export function fuzzyDate(date: FuzzyDate): string | null {
+  if (date.year === null) return null;
+  const parts = [`${date.year}년`];
+  if (date.month !== null) {
+    parts.push(`${date.month}월`);
+    if (date.day !== null) parts.push(`${date.day}일`);
+  }
+  return parts.join(" ");
+}
+
+/** A short label for how the linked entries stand, `null` when the dates say it all. */
+export function airingBadge(info: SeasonInfo): string | null {
+  switch (info.airing?.state) {
+    case "releasing":
+      return "방영 중";
+    case "not_yet_released":
+      return "방영 예정";
+    case "hiatus":
+      return "휴방";
+    case "cancelled":
+      return "취소";
+    default:
+      return null;
+  }
+}
+
+/** The `방영` cell: the first entry's start through the last entry's end, `미상` when unknown. */
+export function airingText(info: SeasonInfo): string {
+  const airing = info.airing;
+  if (!airing) return "미상";
+  const start = fuzzyDate(airing.start);
+  const end = fuzzyDate(airing.end);
+  if (airing.state === "releasing") return start ? `${start} ~` : "미상";
+  if (start && end) return start === end ? start : `${start} ~ ${end}`;
+  if (start) return airing.state === "finished" ? `${start} ~ 종료일 미상` : `${start} ~`;
+  return end ? `~ ${end}` : "미상";
+}
+
+/** `13화` for an entry with a known count, `미상` otherwise. */
+export function episodesText(count: number | null): string {
+  return count === null ? "미상" : `${count}화`;
+}
+
+/** The air day of an episode (`7월 2일 (토)`, with the year when it is not this year's). */
+export function airDay(at: number, now: Date = new Date()): string {
+  const d = new Date(at);
+  const weekday = ["일", "월", "화", "수", "목", "금", "토"][d.getDay()];
+  const year = d.getFullYear() === now.getFullYear() ? "" : `${d.getFullYear()}년 `;
+  return `${year}${d.getMonth() + 1}월 ${d.getDate()}일 (${weekday})`;
 }

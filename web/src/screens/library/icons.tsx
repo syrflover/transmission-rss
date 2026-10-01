@@ -75,3 +75,46 @@ export function QuestionIcon(props: ComponentProps<"svg">) {
     </Icon>
   );
 }
+
+export function CalendarIcon(props: ComponentProps<"svg">) {
+  return (
+    <Icon {...props}>
+      <rect x="4" y="5.5" width="16" height="14" rx="2" />
+      <path d="M4 10h16M8.5 3.5v4M15.5 3.5v4" />
+    </Icon>
+  );
+}
+
+export function FilmIcon(props: ComponentProps<"svg">) {
+  return (
+    <Icon {...props}>
+      <rect x="4" y="4" width="16" height="16" rx="2" />
+      <path d="M8 4v16M16 4v16M4 9h4M4 15h4M16 9h4M16 15h4" />
+    </Icon>
+  );
+}
+
+export function StudioIcon(props: ComponentProps<"svg">) {
+  return (
+    <Icon {...props}>
+      <path d="M4 20V9l5 3V9l5 3V6h6v14zM8 20v-3M13 20v-3" />
+    </Icon>
+  );
+}
+
+export function TagIcon(props: ComponentProps<"svg">) {
+  return (
+    <Icon {...props}>
+      <path d="M4 12.5V5h7.5L20 13.5 13.5 20z" />
+      <circle cx="8.5" cy="9.5" r="1" />
+    </Icon>
+  );
+}
+
+export function ExternalIcon(props: ComponentProps<"svg">) {
+  return (
+    <Icon {...props}>
+      <path d="M14 5h5v5M19 5l-8 8M18 14v4a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h4" />
+    </Icon>
+  );
+}

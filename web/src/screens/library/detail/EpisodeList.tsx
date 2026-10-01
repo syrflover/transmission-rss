@@ -5,7 +5,7 @@ import { dateTime } from "@/lib/time";
 
 import type { WorkEpisode, WorkFile, WorkSeason } from "../api";
 import { CheckIcon, ChevronIcon, MinusIcon } from "../icons";
-import { baseName, episodeLabel, inOrder, ORDERS, rowId, type EpisodeOrder } from "./model";
+import { airDay, baseName, episodeLabel, inOrder, ORDERS, rowId, type EpisodeOrder } from "./model";
 import { EmptyState } from "../../ScreenFrame";
 import { inputClass } from "../../collect/channels/styles";
 
@@ -98,7 +98,7 @@ function Row({
         aria-controls={detailId}
         onClick={onToggle}
         className={cn(
-          "grid min-h-12 w-full scroll-mt-[calc(var(--topbar-h)+16px)] grid-cols-[4.2em_minmax(0,1fr)_16px] items-center gap-x-3 px-4 py-2.5 text-left hover:bg-surface-2 focus:bg-surface-2 max-[720px]:px-3 dark:hover:bg-surface-2 dark:focus:bg-surface-2",
+          "grid min-h-12 w-full scroll-mt-[calc(var(--topbar-h)+16px)] grid-cols-[4.2em_minmax(0,1fr)_auto_16px] items-center gap-x-3 px-4 py-2.5 text-left hover:bg-surface-2 focus:bg-surface-2 max-[720px]:px-3 dark:hover:bg-surface-2 dark:focus:bg-surface-2",
           open && "bg-[color-mix(in_srgb,var(--focus-ring)_5%,var(--surface-1))]",
         )}
       >
@@ -107,6 +107,8 @@ function Row({
           <Hold label="영상" on={episode.video.length > 0} missing={missing} />
           <Hold label="자막" on={episode.subtitle.length > 0} missing={missing} />
         </span>
+        {/* The air day is AniList's schedule of a releasing entry; blank when there is none. */}
+        <span className="text-[12.5px] text-text-muted">{episode.air_at === null ? null : airDay(episode.air_at)}</span>
         <ChevronIcon className={cn("size-4 text-text-muted transition-transform", open && "rotate-90")} />
       </button>
       {open && <Details id={detailId} episode={episode} />}
