@@ -15,6 +15,13 @@
 //! WebP decoder's intermediate frame. An image whose cost is over
 //! [`DECODE_MAX_ALLOC`] is refused without being decoded
 //! ([`Rejected::TooCostly`]).
+//!
+//! A PNG's embedded colour profile (iCCP) is inflated by the decoder while it
+//! reads the header, before the output exists, and kept beside it. The header
+//! is therefore read with a limit of what [`DECODE_MAX_ALLOC`] leaves after
+//! the output the IHDR (and tRNS) announce ([`png_header_budget`]): a profile
+//! that inflates past it is dropped by the decoder, not allocated. The app
+//! keeps the file as it came and reads no profile.
 
 use std::io::Cursor;
 
@@ -105,14 +112,24 @@ pub(crate) fn verify_within(bytes: &[u8], budget: u64) -> Result<Format, Rejecte
     };
 
     let mut reader = ImageReader::with_format(Cursor::new(bytes), image_format);
+    // The PNG decoder inflates compressed ancillary chunks (an ICC profile,
+    // compressed text) while it reads the header, bounded only by this limit,
+    // and keeps them while it decodes: the header gets what the output leaves.
+    let header_alloc = match format {
+        Format::Png => png_header_budget(bytes, budget)?,
+        _ => budget,
+    };
     let mut limits = Limits::default();
     limits.max_image_width = Some(MAX_IMAGE_SIDE);
     limits.max_image_height = Some(MAX_IMAGE_SIDE);
-    limits.max_alloc = Some(budget);
+    limits.max_alloc = Some(header_alloc);
     reader.limits(limits);
 
     let decoder = reader.into_decoder().map_err(|e| match e {
-        image::ImageError::Limits(_) => Rejected::TooManyPixels,
+        image::ImageError::Limits(l) => match l.kind() {
+            image::error::LimitErrorKind::InsufficientMemory => Rejected::TooCostly,
+            _ => Rejected::TooManyPixels,
+        },
         _ => Rejected::Damaged,
     })?;
     let (width, height) = decoder.dimensions();
@@ -164,6 +181,62 @@ pub(crate) fn decode_cost(
         }
     };
     Ok(output.saturating_add(extra))
+}
+
+/// What the PNG decoder may allocate for the header's chunks, from the file's
+/// IHDR (and tRNS): `budget` less the decoded image, which it allocates beside
+/// them. A header that already claims an image too large or too costly is
+/// refused here, before any chunk is read.
+fn png_header_budget(bytes: &[u8], budget: u64) -> Result<u64, Rejected> {
+    // Signature (8), then IHDR: length (4), "IHDR", 13 bytes of fields.
+    let ihdr = bytes.get(8..33).ok_or(Rejected::Damaged)?;
+    if &ihdr[4..8] != b"IHDR" {
+        return Err(Rejected::Damaged);
+    }
+    let width = u32::from_be_bytes([ihdr[8], ihdr[9], ihdr[10], ihdr[11]]);
+    let height = u32::from_be_bytes([ihdr[12], ihdr[13], ihdr[14], ihdr[15]]);
+    let (depth, color) = (ihdr[16], ihdr[17]);
+    if width == 0 || height == 0 {
+        return Err(Rejected::Damaged);
+    }
+    if width > MAX_IMAGE_SIDE
+        || height > MAX_IMAGE_SIDE
+        || u64::from(width) * u64::from(height) > MAX_IMAGE_PIXELS
+    {
+        return Err(Rejected::TooManyPixels);
+    }
+    // The decoder expands palettes and low bit depths to 8 bits, and a tRNS
+    // chunk adds an alpha channel (`image` reads them with `EXPAND`).
+    let transparent = png_has_transparency(&bytes[33..]);
+    let channels: u64 = match (color, transparent) {
+        (0, false) => 1,
+        (0, true) | (4, _) => 2,
+        (2, false) | (3, false) => 3,
+        (2, true) | (3, true) | (6, _) => 4,
+        _ => return Err(Rejected::Damaged),
+    };
+    let sample = if depth == 16 { 2 } else { 1 };
+    let output = u64::from(width) * u64::from(height) * channels * sample;
+    budget.checked_sub(output).ok_or(Rejected::TooCostly)
+}
+
+/// Whether a tRNS chunk comes among the chunks `chunks` (the PNG after its
+/// IHDR) before the first IDAT. Stops at anything that is not a chunk.
+fn png_has_transparency(mut chunks: &[u8]) -> bool {
+    while let Some(head) = chunks.get(..8) {
+        let length = u32::from_be_bytes([head[0], head[1], head[2], head[3]]) as usize;
+        match &head[4..8] {
+            b"tRNS" => return true,
+            b"IDAT" | b"IEND" => return false,
+            _ => {}
+        }
+        // The data and the CRC after the head.
+        match chunks.get(8usize.saturating_add(length).saturating_add(4)..) {
+            Some(rest) => chunks = rest,
+            None => return false,
+        }
+    }
+    false
 }
 
 /// A JPEG frame header (SOF): what the decoder's buffers depend on.
@@ -300,6 +373,22 @@ pub(crate) mod samples {
         let mut out = Cursor::new(Vec::new());
         image.write_to(&mut out, ImageFormat::Png).unwrap();
         out.into_inner()
+    }
+
+    /// A `width` × `height` 8-bit RGBA PNG with an ICC profile chunk (iCCP)
+    /// that inflates to `profile_len` bytes of zeros. It compresses to a few
+    /// kilobytes whatever its length.
+    pub fn png_with_profile(width: u32, height: u32, profile_len: usize) -> Vec<u8> {
+        use image::{ExtendedColorType, ImageEncoder};
+
+        let pixels = vec![0x80u8; width as usize * height as usize * 4];
+        let mut out = Vec::new();
+        let mut encoder = image::codecs::png::PngEncoder::new(&mut out);
+        encoder.set_icc_profile(vec![0; profile_len]).unwrap();
+        encoder
+            .write_image(&pixels, width, height, ExtendedColorType::Rgba8)
+            .unwrap();
+        out
     }
 
     /// A 64 × 64 progressive JPEG without chroma subsampling (made with
@@ -462,6 +551,88 @@ mod tests {
         );
         assert_eq!(verify_within(&progressive, 40_000), Ok(Format::Jpeg));
         assert_eq!(verify_within(&scans, 40_000), Ok(Format::Jpeg));
+    }
+
+    #[test]
+    fn a_png_profile_over_what_the_output_leaves_is_dropped_not_refused() {
+        // 512 × 512 8-bit RGBA is 1 MiB decoded: with a 2 MiB budget, 1 MiB
+        // is left for the header's chunks. The profile is metadata, so an
+        // image whose profile inflates past that is still taken, and the
+        // decoder never holds the profile (`tests/artwork_decode_peak.rs`
+        // measures the memory).
+        let budget = 2 * 1024 * 1024;
+        let small = samples::png_with_profile(512, 512, 3 * 1024);
+        assert_eq!(verify_within(&small, budget), Ok(Format::Png));
+        let big = samples::png_with_profile(512, 512, 1536 * 1024);
+        // Its bytes are tiny; only what it inflates to is large.
+        assert!(big.len() < 64 * 1024, "{}", big.len());
+        assert_eq!(verify_within(&big, budget), Ok(Format::Png));
+        let mut limits = Limits::default();
+        limits.max_alloc = Some(png_header_budget(&big, budget).unwrap());
+        let mut kept =
+            image::codecs::png::PngDecoder::with_limits(Cursor::new(&big[..]), limits).unwrap();
+        assert_eq!(kept.icc_profile().unwrap(), None);
+        let mut limits = Limits::default();
+        limits.max_alloc = Some(png_header_budget(&small, budget).unwrap());
+        let mut kept =
+            image::codecs::png::PngDecoder::with_limits(Cursor::new(&small[..]), limits).unwrap();
+        assert_eq!(kept.icc_profile().unwrap().map(|p| p.len()), Some(3 * 1024));
+    }
+
+    #[test]
+    fn the_png_header_budget_is_what_the_decoded_image_leaves() {
+        let png = |depth: u8, color: u8| {
+            let mut out = samples::png();
+            out[16..20].copy_from_slice(&100u32.to_be_bytes());
+            out[20..24].copy_from_slice(&10u32.to_be_bytes());
+            out[24] = depth;
+            out[25] = color;
+            out
+        };
+        // 1,000 pixels: 8-bit gray, RGB, RGBA, and 16-bit RGBA.
+        assert_eq!(png_header_budget(&png(8, 0), 10_000), Ok(9_000));
+        assert_eq!(png_header_budget(&png(8, 2), 10_000), Ok(7_000));
+        assert_eq!(png_header_budget(&png(8, 6), 10_000), Ok(6_000));
+        assert_eq!(png_header_budget(&png(16, 6), 10_000), Ok(2_000));
+        // Low bit depths and palettes are expanded to 8 bits a sample.
+        assert_eq!(png_header_budget(&png(4, 0), 10_000), Ok(9_000));
+        assert_eq!(png_header_budget(&png(8, 3), 10_000), Ok(7_000));
+        assert_eq!(
+            png_header_budget(&png(16, 6), 7_000),
+            Err(Rejected::TooCostly)
+        );
+        assert_eq!(
+            png_header_budget(&png(8, 9), 10_000),
+            Err(Rejected::Damaged)
+        );
+        assert_eq!(
+            png_header_budget(&[0x89, b'P'], 10_000),
+            Err(Rejected::Damaged)
+        );
+    }
+
+    #[test]
+    fn a_png_transparency_chunk_adds_an_alpha_channel_to_the_estimate() {
+        let chunk = |kind: &[u8; 4], data: &[u8]| {
+            let mut out = (data.len() as u32).to_be_bytes().to_vec();
+            out.extend_from_slice(kind);
+            out.extend_from_slice(data);
+            out.extend_from_slice(&[0; 4]);
+            out
+        };
+        let mut with = chunk(b"gAMA", &[0; 4]);
+        with.extend(chunk(b"tRNS", &[0, 0]));
+        with.extend(chunk(b"IDAT", &[0]));
+        assert!(png_has_transparency(&with));
+        // After the image data, or cut short, it does not count.
+        let mut after = chunk(b"IDAT", &[0]);
+        after.extend(chunk(b"tRNS", &[0, 0]));
+        assert!(!png_has_transparency(&after));
+        assert!(!png_has_transparency(&with[..14]));
+        // A chunk claiming more than the file has ends the walk.
+        let mut long = u32::MAX.to_be_bytes().to_vec();
+        long.extend_from_slice(b"zTXt");
+        assert!(!png_has_transparency(&long));
     }
 
     #[test]

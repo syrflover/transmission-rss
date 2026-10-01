@@ -26,7 +26,8 @@
 //! decode would allocate (output, the JPEG decoder's input copy and the
 //! coefficients of a progressive JPEG or one written a scan a component, the
 //! WebP decoder's frame) is added up from
-//! its headers and must stay under [`DECODE_MAX_ALLOC`] (see [`image`]), and
+//! its headers and must stay under [`DECODE_MAX_ALLOC`] (see [`image`], which
+//! also bounds what a PNG's colour profile may inflate to), and
 //! one decode runs at a time in a process, keeping its turn until it ends even
 //! when its caller went away. The bytes are shared ([`Bytes`]), never copied,
 //! from the upload's body to the decode and the file, and at most
