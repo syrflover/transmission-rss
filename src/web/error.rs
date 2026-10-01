@@ -117,11 +117,13 @@ impl From<ChannelError> for ApiError {
                 "규칙의 채널은 바꿀 수 없어요. 다른 채널에는 새 규칙을 만들어 주세요.".into(),
             ),
             ChannelError::Invalid(reason) => ApiError::Invalid(reason.into()),
-            ChannelError::AlreadySubscribed { .. } => ApiError::Conflict {
+            // `current` names the rule that follows the anime, for the screen
+            // to open (`{ "rule_id": … }`).
+            ChannelError::AlreadySubscribed { rule_id } => ApiError::Conflict {
                 message:
                     "이 채널에서 이미 구독 중인 작품이에요. 구독 탭에서 그 구독을 열어 주세요."
                         .into(),
-                current: None,
+                current: Some(json!({ "rule_id": rule_id })),
             },
             ChannelError::Db(e) => ApiError::Internal(e.to_string()),
         }

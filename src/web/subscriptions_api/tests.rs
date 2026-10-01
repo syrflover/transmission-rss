@@ -620,12 +620,10 @@ async fn an_anime_is_followed_once_per_channel() {
     let channel = app.channel("feed.test").await;
     app.record(&channel, 1000, &[WORK_1, OTHER]).await;
     let body = app.subscribe_body(&channel);
-    assert_eq!(
-        app.call(Method::POST, "/api/subscriptions", Some(body.clone()))
-            .await
-            .0,
-        StatusCode::CREATED
-    );
+    let (status, created) = app
+        .call(Method::POST, "/api/subscriptions", Some(body.clone()))
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
     let mut again = body;
     again["work"] = json!("Another Show");
     let (status, error) = app
@@ -633,6 +631,11 @@ async fn an_anime_is_followed_once_per_channel() {
         .await;
     assert_eq!(status, StatusCode::CONFLICT, "{error}");
     assert!(error["message"].as_str().unwrap().contains("이미 구독"));
+    // The answer names the rule that follows it, for the screen to open.
+    assert_eq!(
+        error["current"]["rule_id"], created["rule"]["id"],
+        "{error}"
+    );
     assert_eq!(app.rules(&channel).await, 1);
 }
 

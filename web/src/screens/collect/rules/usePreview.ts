@@ -27,6 +27,8 @@ export function usePreview(
   ruleId: string | null,
   fields: RuleFields,
   position: number,
+  /** Changes when the recorded items did (an item was received), to ask again. */
+  refresh = 0,
 ): PreviewState {
   const [result, setResult] = useState<PreviewState>(() => ({
     state: "loading",
@@ -34,7 +36,7 @@ export function usePreview(
   }));
   const asked = useRef(false);
   // The edited fields as one string, so the effect depends on their content.
-  const key = JSON.stringify([channelId, ruleId, fields, position]);
+  const key = JSON.stringify([channelId, ruleId, fields, position, refresh]);
 
   useEffect(() => {
     const controller = new AbortController();

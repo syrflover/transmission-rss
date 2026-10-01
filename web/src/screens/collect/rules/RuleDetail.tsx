@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 
 import { KEYS, subscriptionChanged } from "../cache";
 import { changeCreator } from "../subs/api";
+import { useReceive } from "../subs/add/useReceive";
 import { CreatorPicker } from "../subs/CreatorPicker";
 import {
   btnDanger,
@@ -34,7 +35,7 @@ import { BLANK_DRAFT, draftOf, fieldsOf, parseEpisode, sameDraft, type Draft } f
 import { LinkToSchedule } from "./LinkToSchedule";
 import { ChannelTag, StateBadge } from "./RuleList";
 import { ConflictNotice, OrderRow, RuleSummary } from "./parts";
-import { RulePreview } from "./RulePreview";
+import { RulePreview, type PastReceive } from "./RulePreview";
 import { SwitchRows } from "./SwitchRows";
 import { useArchiveMove } from "./useArchiveMove";
 import { usePreview } from "./usePreview";
@@ -154,7 +155,26 @@ export function RuleDetail({
   }, [dirty, onDirtyChange]);
   useEffect(() => () => onDirtyChange(false), [onDirtyChange]);
 
-  const preview = usePreview(channelId, known?.id ?? null, fields, position);
+  // `받기` on a past item row receives it with the stored rule. Once an item is
+  // added the preview is asked again, so its row reads as received.
+  const received = useReceive(known?.id ?? null);
+  const addedCount = received.entries.filter((e) => e.phase.kind === "added").length;
+  const preview = usePreview(channelId, known?.id ?? null, fields, position, addedCount);
+  const pastReceive: PastReceive | undefined = known
+    ? {
+        phaseOf: (itemId) => received.entries.find((e) => e.itemId === itemId)?.phase,
+        onReceive: received.one,
+        // The worker receives with the stored rule, so the row must be what is stored.
+        blocked:
+          known.state === "archived"
+            ? "보관된 규칙이에요. 복원한 뒤에 받을 수 있어요."
+            : known.state === "paused"
+              ? "영상 받기를 켠 뒤에 받을 수 있어요."
+              : dirty
+                ? "저장하지 않은 변경이 있어요. 저장한 뒤에 받을 수 있어요."
+                : null,
+      }
+    : undefined;
   const latest =
     preview.state === "ready" ? preview.preview : preview.state === "loading" ? preview.previous : null;
   const regexProblem = latest?.error ?? null;
@@ -553,7 +573,7 @@ export function RuleDetail({
           </p>
         )}
 
-        <RulePreview state={preview} />
+        <RulePreview state={preview} receive={pastReceive} />
 
         {dirty && (
           <div
