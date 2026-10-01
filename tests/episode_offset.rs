@@ -1211,7 +1211,7 @@ async fn a_second_cour_that_restarts_at_one_is_offered_a_start_and_never_given_o
         view["episode_suggestion"],
         json!({
             "value": 13,
-            "basis": "2쿨을 1화부터 센 번호로 보여요. 회차 변환을 +13으로 할까요?",
+            "basis": "2쿨을 1화부터 센 번호로 보여요. 1화를 13화로 받도록 회차 변환을 13으로 할까요?",
         })
     );
 

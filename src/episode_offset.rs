@@ -83,8 +83,10 @@
 //! episodes, the cours before a later one, and none after them; and the first
 //! release is `1`. The offer is `C + 1`, which makes `- 01` episode `C + 1`
 //! (a positive offset is where the numbering starts, `starts_episode_at`):
-//! `2쿨을 1화부터 센 번호로 보여요. 회차 변환을 +13으로 할까요?` after a cour of
-//! 12. It is never set by the app. A folder missing an episode of those cours,
+//! `2쿨을 1화부터 센 번호로 보여요. 1화를 13화로 받도록 회차 변환을 13으로
+//! 할까요?` after a cour of 12. The sentence says what the value does, and
+//! writes it without a sign, as the field shows it: `+13` would read as
+//! "add 13". It is never set by the app. A folder missing an episode of those cours,
 //! or holding one past them, offers nothing: which cour restarted is not clear.
 
 use std::path::{Component, Path};
@@ -354,7 +356,8 @@ fn restarted_cour(first: u32, basis: &Basis) -> Option<Verdict> {
     Some(Verdict::Suggest {
         value: Some(value),
         basis: format!(
-            "{}쿨을 1화부터 센 번호로 보여요. 회차 변환을 +{value}{} 할까요?",
+            "{}쿨을 1화부터 센 번호로 보여요. 1화를 {value}화로 받도록 회차 변환을 \
+             {value}{} 할까요?",
             cours + 1,
             particle_ro(value)
         ),
@@ -763,7 +766,9 @@ mod tests {
             verdict,
             Verdict::Suggest {
                 value: Some(13),
-                basis: "2쿨을 1화부터 센 번호로 보여요. 회차 변환을 +13으로 할까요?".to_owned(),
+                basis:
+                    "2쿨을 1화부터 센 번호로 보여요. 1화를 13화로 받도록 회차 변환을 13으로 할까요?"
+                        .to_owned(),
             }
         );
         // The value makes `- 01` episode 13, as the rename reads it.
