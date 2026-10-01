@@ -219,7 +219,10 @@ pub(super) fn apply_automatic(
                     path = CASE WHEN EXISTS (SELECT 1 FROM watch_folders o
                                               WHERE o.path = ?2 AND o.id <> ?1)
                                 THEN path ELSE ?2 END,
-                    watch_note = CASE WHEN path = ?2 THEN watch_note END
+                    watch_note = CASE WHEN path = ?2
+                                       OR EXISTS (SELECT 1 FROM watch_folders o
+                                                   WHERE o.path = ?2 AND o.id <> ?1)
+                                      THEN watch_note END
               WHERE id = ?1",
             params![id, path],
         )?;

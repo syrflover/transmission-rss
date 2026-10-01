@@ -14,8 +14,9 @@
 //!
 //! What a plan does, for each folder the settings call for:
 //!
-//! - one registered at the same place (automatic or by hand) is kept, made
-//!   automatic, and given the path as the settings write it; its records stay;
+//! - one registered at the same place (automatic or by hand) is kept; one by
+//!   hand is made automatic and given the path as the settings write it (one
+//!   that is automatic already keeps the spelling it has); its records stay;
 //! - otherwise a new automatic one is registered, unless it would be inside a
 //!   folder the user registered by hand or contain one: that is refused, since
 //!   the same work would be found twice;
@@ -61,7 +62,11 @@ pub fn plan(wanted: &[Wanted], registered: &[WatchFolder]) -> Result<AutomaticPl
             .find(|(i, f)| f.path == want.path || real[*i] == real_want);
         if let Some((i, folder)) = same {
             kept.insert(i);
-            if !folder.automatic || folder.path != want.path {
+            // One that is automatic already is settled, however it is spelled:
+            // the store cannot always take the settings' spelling (an
+            // unregistered folder may hold it), and a keep that changes
+            // nothing would come back every cycle.
+            if !folder.automatic {
                 plan.keep.push((folder.id.clone(), want.path.clone()));
             }
             continue;
@@ -261,5 +266,67 @@ mod tests {
         read_new_folders(&mut made);
         assert_eq!(made.add[0].scan.as_ref().unwrap().works.len(), 1);
         assert!(made.add[1].scan.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_folder_kept_under_another_spelling_is_settled_and_keeps_its_note() {
+        use crate::{
+            discovery::Scan,
+            store::{
+                library::{LibraryError, LibraryStore},
+                Db,
+            },
+        };
+
+        // The settings write the folder as `real`; a folder is registered at
+        // the same place as `alias`, and an unregistered one still holds the
+        // text `real` (it is that path's to come back to), so the registered
+        // one cannot take the settings' spelling.
+        let t = Tree::new(&["real"]);
+        std::os::unix::fs::symlink(t.at("real"), t.at("alias")).unwrap();
+        let store = LibraryStore::new(Db::open_blocking(":memory:").unwrap());
+        let scan = || Scan { works: Vec::new() };
+        let real = t.at("real").to_str().unwrap().to_owned();
+        let (old, _) = store
+            .add_folder(real.clone(), scan(), 1, &[])
+            .await
+            .unwrap();
+        assert!(store.remove_folder(&old.id, 2).await.unwrap().is_some());
+        let (folder, _) = store
+            .add_folder(t.at("alias").to_str().unwrap().to_owned(), scan(), 3, &[])
+            .await
+            .unwrap();
+        store
+            .set_watch_note(&folder.id, Some("폴더 3개를 지켜보지 못해요.".into()))
+            .await
+            .unwrap();
+
+        let wanted = [want("수집 폴더", &t.at("real"))];
+        let mut cycles_with_a_change = 0;
+        for cycle in 0..3 {
+            let registered = store.folders().await.unwrap();
+            let made = plan(&wanted, &registered).unwrap();
+            if cycle == 0 {
+                // The first cycle makes it automatic.
+                assert_eq!(made.keep.len(), 1);
+            }
+            if made.is_empty() {
+                continue;
+            }
+            cycles_with_a_change += 1;
+            match store.sync_automatic(made, 0, 10 + cycle).await {
+                Ok(_) | Err(LibraryError::Changed) => {}
+                Err(e) => panic!("{e}"),
+            }
+        }
+        let after = store.folder(&folder.id).await.unwrap().unwrap();
+        assert!(after.automatic);
+        // Every cycle after the first finds nothing to change, and the note of
+        // the folder is still there.
+        assert_eq!(cycles_with_a_change, 1);
+        assert_eq!(
+            after.watch_note.as_deref(),
+            Some("폴더 3개를 지켜보지 못해요.")
+        );
     }
 }
