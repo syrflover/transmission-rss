@@ -26,6 +26,10 @@
 //! - **Its torrent is gone** and a file of that name is in the folder that no
 //!   torrent holds: renamed on disk with `RENAME_NOREPLACE`, and only if it is
 //!   still the file planned ([`FileIdentity`]: device, inode, size and times).
+//!   An RSS title without an extension (which takes its torrent's otherwise)
+//!   takes the one of the video of its name in the folder; when videos of
+//!   that name have more than one extension, the item's is not known and the
+//!   undo lists it as kept from the start ([`WHICH_FILE`]).
 //!
 //! A torrent of another name (a revision that kept its received name, a file
 //! the person renamed) and a file another torrent holds are left out: they
@@ -95,6 +99,7 @@ use serde::{Deserialize, Serialize};
 use transmission_rpc::types::Id;
 
 use crate::{
+    discovery::VIDEO_EXTENSIONS,
     episode_offset::signed,
     revision::FileIdentity,
     rss::save_path,
@@ -132,6 +137,10 @@ pub const UNFINISHED: &str = "토렌트를 아직 받는 중이에요. 다 받�
 pub const CLAIMED: &str = "다른 토렌트가 그 이름을 쓰고 있어요.";
 /// Why a file keeps its name: its torrent is in another folder now.
 pub const MOVED: &str = "토렌트가 다른 폴더로 옮겨졌어요.";
+/// Why a file keeps its name: its torrent is gone, the RSS title has no
+/// extension, and more than one video in the folder could be the item's.
+pub const WHICH_FILE: &str =
+    "토렌트가 없고 항목 제목에 확장자가 없는데, 확장자만 다른 영상이 여러 개 있어서 어느 것인지 알 수 없어요.";
 
 const NO_COLLECT_FOLDER: &str =
     "수집 폴더가 정해지지 않아서 영상이 어디 있는지 알 수 없어 되돌리지 않았어요.";
@@ -372,8 +381,34 @@ async fn plan(
             Some(place) => PathBuf::from(&place.download_dir),
             None => rule_folder.clone(),
         };
-        let Some((from_name, to_name)) = names(&folder, &item.title, place, from, to) else {
-            continue;
+        let (from_name, to_name) = match names(&folder, &item.title, place, from, to) {
+            Some(names) => names,
+            // The torrent is gone and the title has no extension: the videos
+            // of the item's name, whatever their extension.
+            None if place.is_none() => {
+                let mut found = by_extension(&folder, &item.title, from, to, &places);
+                match found.len() {
+                    0 => continue,
+                    1 => found.remove(0),
+                    _ => {
+                        let (from_name, to_name) = found.remove(0);
+                        let path = folder.join(&from_name);
+                        if seen.insert(path) {
+                            planned.push(NewUndoFile {
+                                item_id: item.id,
+                                folder: folder.to_string_lossy().into_owned(),
+                                from_name,
+                                to_name,
+                                torrent_hash: None,
+                                identity: None,
+                                kept: Some(WHICH_FILE.to_owned()),
+                            });
+                        }
+                        continue;
+                    }
+                }
+            }
+            None => continue,
         };
         if from_name == to_name {
             continue;
@@ -395,6 +430,7 @@ async fn plan(
                     to_name,
                     torrent_hash: Some(place.hash.clone()),
                     identity: FileIdentity::at(&path).ok().map(|id| id.to_text()),
+                    kept: None,
                 }
             }
             None => {
@@ -415,6 +451,7 @@ async fn plan(
                     to_name,
                     torrent_hash: None,
                     identity: Some(FileIdentity::of(&meta).to_text()),
+                    kept: None,
                 }
             }
         };
@@ -433,16 +470,51 @@ fn names(
     from: i64,
     to: i64,
 ) -> Option<(String, String)> {
-    let both = |title: &str| {
-        Some((
-            episode_name(folder, title, from as isize)?,
-            episode_name(folder, title, to as isize)?,
-        ))
-    };
-    both(title).or_else(|| {
+    both(folder, title, from, to).or_else(|| {
         let ext = Path::new(&place?.name).extension()?.to_str()?;
-        both(&format!("{title}.{ext}"))
+        both(folder, &format!("{title}.{ext}"), from, to)
     })
+}
+
+fn both(folder: &Path, title: &str, from: i64, to: i64) -> Option<(String, String)> {
+    Some((
+        episode_name(folder, title, from as isize)?,
+        episode_name(folder, title, to as isize)?,
+    ))
+}
+
+/// For an RSS title without an extension whose torrent is gone: the names of
+/// the videos in `folder` that have the item's name under `from` with a video
+/// extension, are plain files, and belong to no torrent, sorted. One is the
+/// item's file; more cannot tell which.
+fn by_extension(
+    folder: &Path,
+    title: &str,
+    from: i64,
+    to: i64,
+    places: &[TorrentPlace],
+) -> Vec<(String, String)> {
+    let Ok(entries) = std::fs::read_dir(folder) else {
+        return Vec::new();
+    };
+    let mut found: Vec<(String, String)> = entries
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let name = entry.file_name().into_string().ok()?;
+            let ext = Path::new(&name).extension()?.to_str()?.to_owned();
+            if !VIDEO_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()) {
+                return None;
+            }
+            let (from_name, to_name) = both(folder, &format!("{title}.{ext}"), from, to)?;
+            if from_name != name || !entry.file_type().ok()?.is_file() {
+                return None;
+            }
+            matches!(owner_of(places, &entry.path()), Ok(Owner::Nobody))
+                .then_some((from_name, to_name))
+        })
+        .collect();
+    found.sort();
+    found
 }
 
 /// Whether something is at `path` (a link counts as itself).
@@ -712,6 +784,7 @@ mod tests {
             to_name: to.into(),
             torrent_hash: None,
             identity: None,
+            kept: None,
         }
     }
 

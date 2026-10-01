@@ -1678,3 +1678,76 @@ async fn an_undo_that_ended_half_done_is_shown_and_carried_on_when_asked_again()
     let (status, body) = s.ask_undo(&rule, "undo-0302-c", -48).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
 }
+
+// --- a gone torrent whose RSS title has no extension -----------------------------
+
+impl Scene {
+    /// Drops the extension of the RSS title `Show - {n}` was received for, as
+    /// a feed without one has it.
+    async fn title_without_extension(&self, n: u32) {
+        use transmission_rss::store::DbError;
+        let title = show(n).title;
+        let bare = title.trim_end_matches(".mkv").to_owned();
+        self.h
+            .db
+            .run::<_, DbError, _>(move |c| {
+                let changed = c.execute(
+                    "UPDATE history_items SET title = ?2 WHERE title = ?1",
+                    rusqlite::params![title, bare],
+                )?;
+                assert_eq!(changed, 1);
+                Ok(())
+            })
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn a_gone_torrent_of_a_title_without_an_extension_is_found_by_its_name() {
+    let (s, rule) = Scene::third_season_received().await;
+    s.h.tr.remove(&hash(50));
+    s.title_without_extension(50).await;
+
+    let command = s.undo(&rule, "undo-0801-a", -48).await;
+
+    assert_eq!(command["state"], "done", "{command}");
+    assert_eq!(s.on_disk(), ["Show S03E25.mkv", "Show S03E26.mkv"]);
+    assert_eq!(
+        fs::read(s.season3().join("Show S03E26.mkv")).unwrap(),
+        b"video 50"
+    );
+    assert_eq!(
+        undo_files(&s.view(&rule).await),
+        [
+            file("Show S03E01.mkv", "Show S03E25.mkv", "renamed"),
+            file("Show S03E02.mkv", "Show S03E26.mkv", "renamed"),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_gone_torrent_of_a_title_without_an_extension_and_two_videos_is_kept_with_why() {
+    let (s, rule) = Scene::third_season_received().await;
+    s.h.tr.remove(&hash(50));
+    s.title_without_extension(50).await;
+    fs::write(s.season3().join("Show S03E02.mp4"), b"another").unwrap();
+
+    let command = s.undo(&rule, "undo-0802-a", -48).await;
+
+    assert_eq!(command["state"], "done", "{command}");
+    assert_eq!(
+        s.on_disk(),
+        ["Show S03E02.mkv", "Show S03E02.mp4", "Show S03E25.mkv"]
+    );
+    let view = s.view(&rule).await;
+    assert_eq!(
+        undo_files(&view),
+        [
+            file("Show S03E01.mkv", "Show S03E25.mkv", "renamed"),
+            file("Show S03E02.mkv", "Show S03E26.mkv", "kept"),
+        ]
+    );
+    let reason = view["episode_undo"]["files"][1]["reason"].as_str().unwrap();
+    assert!(reason.contains("확장자만 다른 영상이 여러 개"), "{reason}");
+}

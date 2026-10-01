@@ -58,6 +58,10 @@ pub struct NewUndoFile {
     /// The file's identity when planned
     /// ([`FileIdentity::to_text`](crate::revision::FileIdentity::to_text)).
     pub identity: Option<String>,
+    /// Why the file is left as it is from the start, when planning could not
+    /// tell which file the item's is. Only for planning: an undo read back
+    /// has it as [`UndoFile::reason`].
+    pub kept: Option<String>,
 }
 
 /// Where the rename of one video is.
@@ -171,6 +175,7 @@ fn read_undo(conn: &Connection, command_id: &str) -> Result<Option<EpisodeUndo>>
                     to_name: row.get(3)?,
                     torrent_hash: row.get(4)?,
                     identity: row.get(5)?,
+                    kept: None,
                 },
                 state: UndoFileState::parse(&state).unwrap_or(UndoFileState::Kept),
                 reason: row.get(7)?,
@@ -222,7 +227,7 @@ fn begin(
             "SELECT DISTINCT episode_name FROM video_revisions
               WHERE folder = ? AND episode_name IN (?, ?) AND state IN ({marks})"
         ))?;
-        for file in files {
+        for file in files.iter().filter(|f| f.kept.is_none()) {
             let mut args: Vec<&str> = vec![&file.folder, &file.from_name, &file.to_name];
             args.extend(states.iter().copied());
             let names = stmt
@@ -254,8 +259,9 @@ fn begin(
     for file in files {
         tx.execute(
             "INSERT OR IGNORE INTO episode_undo_files
-                 (command_id, item_id, folder, from_name, to_name, torrent_hash, identity, state)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending')",
+                 (command_id, item_id, folder, from_name, to_name, torrent_hash, identity,
+                  state, reason)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 command_id,
                 file.item_id,
@@ -264,6 +270,12 @@ fn begin(
                 file.to_name,
                 file.torrent_hash,
                 file.identity,
+                if file.kept.is_some() {
+                    "kept"
+                } else {
+                    "pending"
+                },
+                file.kept,
             ],
         )?;
     }
