@@ -666,7 +666,9 @@ async fn a_replaced_rule_that_follows_an_anime_already_keeps_it_and_the_preview_
     let preview = app.preview(&content).await;
     let s = suggestion(&preview, 0, 0);
     assert_eq!(s["keeps_subscription"], true);
-    assert_eq!(s["checked"], false);
+    // It still starts checked; the screen leaves it out while the channel is
+    // replaced, and a copy (`추가`) would make a new rule for it.
+    assert_eq!(s["checked"], true);
 
     let choices = json!([{
         "index": 0,

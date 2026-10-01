@@ -64,7 +64,8 @@ pub(super) struct SuggestionView {
     /// Whether the review starts with it checked.
     checked: bool,
     /// Replacing the channel keeps an existing rule for this one, and that
-    /// rule is a subscription already: it stays as it is.
+    /// rule is a subscription already: it stays as it is. The review leaves
+    /// the suggestion unchecked and unavailable while the channel is replaced.
     keeps_subscription: bool,
 }
 
@@ -91,7 +92,7 @@ pub(super) fn views(
                 anime_no,
                 creator,
                 reason,
-                checked: suggestion.checked_at_first() && !keeps_subscription,
+                checked: suggestion.checked_at_first(),
                 blocked: suggestion.blocked,
                 keeps_subscription,
             }
