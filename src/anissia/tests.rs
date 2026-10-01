@@ -203,27 +203,38 @@ async fn requests_keep_their_spacing_across_clients_sharing_a_database() {
     // The web and the worker are two clients over one database.
     let pace = Duration::from_millis(300);
     let web = env.anissia.clone().with_spacing(pace);
-    let worker = Anissia::with_defaults(env.db.clone(), env.fake.config()).with_spacing(pace);
-    // The system clock paces the real wait; the web's fixed clock is only
-    // consulted for the slot, so use the same clock for both.
-    let worker = Anissia {
-        clock: web.clock.clone(),
-        ..worker
-    };
-    let clock = web.clock.clone();
-    // The slots are laid out in the (fixed) clock's time, so the second
-    // request is told to wait one spacing from the first.
-    let first = web.fetch_schedule(1, None).await.unwrap();
-    assert!(first.is_empty());
-    let busy = worker
+    let worker = env.anissia.clone().with_spacing(pace);
+    assert!(web.fetch_schedule(1, None).await.unwrap().is_empty());
+    // The clock stands still, so the worker's turn is one spacing away: a
+    // caller that may wait less is told so without a request being sent.
+    match worker
         .fetch_schedule(2, Some(Duration::from_millis(100)))
-        .await;
-    match busy {
+        .await
+    {
         Err(AnissiaError::Busy { retry_after }) => assert_eq!(retry_after, pace),
         other => panic!("expected Busy, got {other:?}"),
     }
     assert_eq!(env.fake.count("/anime/schedule/2"), 0);
-    drop(clock);
+    // A spacing later it has the turn.
+    env.advance(300);
+    assert!(worker
+        .fetch_schedule(2, Some(Duration::from_millis(100)))
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+async fn a_caller_that_may_wait_waits_for_its_turn_in_real_time() {
+    let db = Db::open_blocking(":memory:").unwrap();
+    let fake = Fake::start().await;
+    let anissia =
+        Anissia::with_defaults(db, fake.config()).with_spacing(Duration::from_millis(300));
+    anissia.fetch_schedule(1, None).await.unwrap();
+    anissia.fetch_schedule(2, None).await.unwrap();
+    let times: Vec<_> = fake.requests().into_iter().map(|(at, _)| at).collect();
+    let gap = times[1] - times[0];
+    assert!(gap >= Duration::from_millis(250), "{gap:?}");
 }
 
 #[tokio::test]
@@ -234,7 +245,7 @@ async fn a_429_blocks_every_request_until_its_retry_after_has_passed() {
     {
         let mut state = env.fake.state.lock().unwrap();
         state.rate_limited = 1;
-        state.retry_after = 30;
+        state.retry_after = Some(30);
     }
     match env.anissia.fetch_schedule(1, None).await {
         Err(AnissiaError::Busy { retry_after }) => {
@@ -274,17 +285,20 @@ async fn a_429_without_a_retry_after_waits_a_minute_and_a_huge_one_is_cut_to_an_
     {
         let mut state = env.fake.state.lock().unwrap();
         state.rate_limited = 1;
-        state.retry_after = 0;
+        state.retry_after = None;
     }
-    // `0` is a valid value: no wait asked, but the pace still applies.
     match env.anissia.fetch_schedule(1, None).await {
-        Err(AnissiaError::Busy { retry_after }) => assert_eq!(retry_after, Duration::ZERO),
+        Err(AnissiaError::Busy { retry_after }) => {
+            assert_eq!(retry_after, Duration::from_secs(60))
+        }
         other => panic!("expected Busy, got {other:?}"),
     }
+    // The minute passes before the next request, or it would wait for it.
+    env.advance(60_000);
     {
         let mut state = env.fake.state.lock().unwrap();
         state.rate_limited = 1;
-        state.retry_after = 999_999;
+        state.retry_after = Some(999_999);
     }
     match env.anissia.fetch_schedule(1, None).await {
         Err(AnissiaError::Busy { retry_after }) => {
@@ -476,7 +490,7 @@ async fn a_failed_refresh_puts_the_anime_off_for_an_hour_and_a_429_for_as_long_a
     {
         let mut state = env.fake.state.lock().unwrap();
         state.rate_limited = 1;
-        state.retry_after = 90;
+        state.retry_after = Some(90);
     }
     assert_eq!(env.anissia.run_next().await.unwrap().failed, 1);
     env.advance(89_000);

@@ -28,7 +28,8 @@ pub struct FakeState {
     pub captions: HashMap<i64, Vec<Value>>,
     /// The next this many requests answer `429` with this `Retry-After`.
     pub rate_limited: u32,
-    pub retry_after: u64,
+    /// `None` sends no `Retry-After`.
+    pub retry_after: Option<u64>,
     /// The next this many requests answer `500`.
     pub failing: u32,
     /// Answers carry this many bytes of padding (an unknown field).
@@ -115,12 +116,13 @@ fn answer(fake: &Fake, path: String, data: Option<Value>) -> Response {
     state.requests.push((Instant::now(), path));
     if state.rate_limited > 0 {
         state.rate_limited -= 1;
-        return (
-            StatusCode::TOO_MANY_REQUESTS,
-            [(header::RETRY_AFTER, state.retry_after.to_string())],
-            "{}",
-        )
-            .into_response();
+        let mut response = (StatusCode::TOO_MANY_REQUESTS, "{}").into_response();
+        if let Some(seconds) = state.retry_after {
+            response
+                .headers_mut()
+                .insert(header::RETRY_AFTER, seconds.into());
+        }
+        return response;
     }
     if state.failing > 0 {
         state.failing -= 1;
