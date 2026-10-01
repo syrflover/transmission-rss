@@ -78,7 +78,7 @@ DB 테이블을 그대로 덤프하는 형식이 아니며, YAML의 버전은 �
 | `channels[].name` | 채널의 표시 이름이며 선택이에요. 앞뒤 공백을 지우고, 비었거나 없으면 `null`이에요. 이름이 없으면 화면은 `url`의 호스트를 보여줘요. |
 | `channels[].url` | 비밀로 표시한 쿼리 값을 비운 URL이에요. 비밀인 쿼리 이름을 `secret_query` 목록에 담고, 내보내기에는 비밀 값을 싣지 않아요([채널 URL의 비밀 값](collection.md#채널-url의-비밀-값)). |
 | `channels[].past_search` | `[SubsPlease] {match} 1080p` 같은 지난 회차 검색 형식이며, 없으면 `null`이에요. `{match}`는 규칙의 일치 문구로 바꾸는 자리예요. |
-| `rules[].state` | `active`·`archived`이에요. 보관한 규칙은 순서를 유지한 채 수집하지 않아요([규칙 보관](collection.md#규칙-보관)). |
+| `rules[].state` | `active`·`paused`·`archived`이에요. `paused`는 `영상 받기`를 끈 규칙이고 `archived`는 보관한 규칙이며, 둘 다 순서를 유지한 채 수집하지 않아요([방영작 구독](collection.md#방영작-구독), [규칙 보관](collection.md#규칙-보관)). |
 | `rules[].match` | 제목 대기 구독은 빈 문자열이 아니라 `null`이에요. `null`인 규칙은 어떤 항목에도 맞지 않아요. |
 | `rules[].episode_auto` | 회차 변환을 자동으로 정했으면 `true`이고, 사용자가 직접 넣었으면 `false`예요([영상 회차 변환](collection.md#영상-회차-변환)). |
 | `rules[].subscription` | 방영작 구독이면 `anissia_anime_no`, 자막을 받는 방식 `subtitles`(`follow`·`undecided`·`none`, 각각 제작자 따라 받기·제작자 미정·받지 않음), 따라갈 자막 제작자 `creator`(`follow`일 때만 값이 있고 나머지는 `null`), 규칙이 받은 영상이 속하는 `season_id`(아직 없으면 `null`)를 담고, 구독이 아닌 규칙은 `null`이에요. `season_id`가 있으면 그 시즌의 `anissia_anime_no`와 같아야 하며, 다르면 가져오기를 거부해요. |
