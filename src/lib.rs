@@ -1,4 +1,5 @@
 pub mod anissia;
+pub mod archive_suggestions;
 pub mod artwork;
 pub mod automatic_watch;
 pub mod config;

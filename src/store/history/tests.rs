@@ -256,6 +256,97 @@ async fn a_channels_first_sighting_is_its_earliest_first_seen_time() {
 }
 
 #[tokio::test]
+async fn the_last_receive_of_a_rule_is_the_newest_time_it_got_a_torrent_added() {
+    let (_dir, _db, history) = store().await;
+    history
+        .record(
+            1_000,
+            vec![received("a", "r1", "h1"), received("x", "r2", "h3")],
+        )
+        .await
+        .unwrap();
+    history
+        .record(
+            3_000,
+            vec![
+                received("b", "r1", "h2"),
+                // Seen, and failed to add: not a receive.
+                Observation {
+                    rule_id: Some("r1".into()),
+                    ..obs("c", HistoryResult::AddFailed)
+                },
+            ],
+        )
+        .await
+        .unwrap();
+    // A later duplicate is not a receive either.
+    history
+        .record(
+            5_000,
+            vec![Observation {
+                rule_id: Some("r1".into()),
+                ..obs("d", HistoryResult::Duplicate)
+            }],
+        )
+        .await
+        .unwrap();
+
+    let found = history
+        .last_received_of_rules(vec!["r1".into(), "r2".into(), "never".into()])
+        .await
+        .unwrap();
+    assert_eq!(found.get("r1"), Some(&3_000));
+    assert_eq!(found.get("r2"), Some(&1_000));
+    assert!(!found.contains_key("never"), "{found:?}");
+    assert!(history
+        .last_received_of_rules(vec![])
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+async fn the_titles_of_a_window_are_the_channels_recent_ones_newest_first_and_bounded() {
+    let (_dir, _db, history) = store().await;
+    for (at, key) in [(1_000, "old"), (2_000, "a"), (3_000, "b"), (4_000, "c")] {
+        history
+            .record(at, vec![obs(key, HistoryResult::NoMatch)])
+            .await
+            .unwrap();
+    }
+    history
+        .record(
+            3_500,
+            vec![Observation {
+                channel_id: "c2".into(),
+                ..obs("other", HistoryResult::NoMatch)
+            }],
+        )
+        .await
+        .unwrap();
+
+    // After the boundary (an item at the boundary is not in), this channel's only.
+    let (titles, truncated) = history.titles_since("c1".into(), 1_999, 10).await.unwrap();
+    assert_eq!(titles, ["title of c", "title of b", "title of a"]);
+    assert!(!truncated);
+    let (titles, _) = history.titles_since("c1".into(), 2_000, 10).await.unwrap();
+    assert_eq!(titles, ["title of c", "title of b"]);
+
+    // Cut short, the newest stay and it says so.
+    let (titles, truncated) = history.titles_since("c1".into(), 1_999, 2).await.unwrap();
+    assert_eq!(titles, ["title of c", "title of b"]);
+    assert!(truncated);
+
+    // Exactly the limit is not cut short.
+    let (titles, truncated) = history.titles_since("c1".into(), 2_000, 2).await.unwrap();
+    assert_eq!(titles.len(), 2);
+    assert!(!truncated);
+
+    let (titles, _) = history.titles_since("c1".into(), 9_000, 10).await.unwrap();
+    assert!(titles.is_empty());
+}
+
+#[tokio::test]
 async fn seeing_an_item_again_adds_no_record_and_keeps_the_first_seen_time() {
     let (_dir, _db, history) = store().await;
 
@@ -1364,6 +1455,66 @@ async fn the_hashes_of_rules_are_read_through_an_index_on_the_rule() {
     assert!(
         plan.iter().all(|step| !step.starts_with("SCAN")),
         "{plan:?}"
+    );
+}
+
+#[tokio::test]
+async fn the_last_receive_and_the_recent_titles_are_read_through_indexes_not_the_whole_history() {
+    let (_dir, db, _history) = store().await;
+    let plans: Vec<(&str, Vec<String>)> = db
+        .run::<_, DbError, _>(|c| {
+            let mut plans = Vec::new();
+            for (name, sql, params) in [
+                (
+                    "last receive",
+                    repo::LAST_RECEIVED_SQL,
+                    rusqlite::params_from_iter(vec!["r1".to_owned()]),
+                ),
+                (
+                    "titles",
+                    repo::TITLES_SINCE_SQL,
+                    rusqlite::params_from_iter(vec![
+                        "c1".to_owned(),
+                        "0".to_owned(),
+                        "10".to_owned(),
+                    ]),
+                ),
+            ] {
+                let mut stmt = c.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
+                let rows = stmt
+                    .query_map(params, |row| row.get::<_, String>(3))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                plans.push((name, rows));
+            }
+            Ok(plans)
+        })
+        .await
+        .unwrap();
+
+    for (name, plan) in &plans {
+        assert!(
+            plan.iter()
+                .any(|step| step.starts_with("SEARCH history_items USING INDEX")),
+            "{name}: {plan:?}"
+        );
+        assert!(
+            plan.iter().all(|step| !step.starts_with("SCAN")),
+            "{name}: {plan:?}"
+        );
+    }
+    assert!(
+        plans[0]
+            .1
+            .iter()
+            .any(|s| s.contains("history_items_by_rule")),
+        "{plans:?}"
+    );
+    assert!(
+        plans[1]
+            .1
+            .iter()
+            .any(|s| s.contains("history_items_by_channel")),
+        "{plans:?}"
     );
 }
 

@@ -90,6 +90,8 @@ const MIGRATIONS: &[Migration] = &[
         include_str!("anissia/unlisted.sql"),
         include_str!("setup/ended.sql")
     )),
+    // 23: when a rule started and which archive suggestion grounds the user chose to keep collecting
+    Migration::Sql(include_str!("channels/archive_suggestion.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -861,6 +863,81 @@ mod tests {
             .await
             .unwrap();
         assert_eq!((before, after), (None, Some(5)));
+    }
+
+    /// The migration that added archive suggestions' tables is number 23.
+    const BEFORE_ARCHIVE_SUGGESTIONS: usize = 22;
+
+    #[tokio::test]
+    async fn a_database_from_before_archive_suggestions_keeps_its_rows_and_stamps_new_rules() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        {
+            // A database as the build with twenty-two migrations left it: a
+            // rule that received an item.
+            let conn = database_at(&path, BEFORE_ARCHIVE_SUGGESTIONS);
+            conn.execute_batch(
+                "INSERT INTO channels (id, position, url, excludes, secret_query, version)
+                     VALUES ('c1', 0, 'http://x/feed', '[]', '[]', 1);
+                 INSERT INTO rules (id, channel_id, position, match_text, regex,
+                         case_insensitive, directory, episode, episode_auto, state, version)
+                     VALUES ('r1', 'c1', 0, 'Clevatess', 0, 0, 'Clevatess', 1, 0, 'active', 3);
+                 INSERT INTO history_items (channel_id, channel_label, identity_key, title, link,
+                         first_seen_at, last_seen_at, result, result_at, rule_id)
+                     VALUES ('c1', 'feed', 'title:a', 'Clevatess - 01', 'x', 10, 10, 'received',
+                         20, 'r1');",
+            )
+            .unwrap();
+        }
+
+        let db = Db::open(&path).await.unwrap();
+
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+        let (rule, received, stamps, kept) = db
+            .run::<_, DbError, _>(|c| {
+                // A rule made after the upgrade is stamped; the old one is not.
+                c.execute(
+                    "INSERT INTO rules (id, channel_id, position, match_text, regex,
+                            case_insensitive, directory, episode, episode_auto, state, version)
+                     VALUES ('r2', 'c1', 1, 'Other', 0, 0, 'Other', 1, 0, 'active', 1)",
+                    [],
+                )?;
+                c.execute(
+                    "INSERT INTO archive_suggestion_kept (rule_id, ground, kept_at)
+                     VALUES ('r1', 'quiet:1', 5)",
+                    [],
+                )?;
+                let rule: String = c.query_row(
+                    "SELECT match_text || '|' || version FROM rules WHERE id = 'r1'",
+                    [],
+                    |r| r.get(0),
+                )?;
+                let received: String = c.query_row(
+                    "SELECT rule_id || '|' || result_at FROM history_items",
+                    [],
+                    |r| r.get(0),
+                )?;
+                let stamps: String = c.query_row(
+                    "SELECT group_concat(rule_id, ',') FROM rule_started",
+                    [],
+                    |r| r.get(0),
+                )?;
+                // The keep and the stamp go with the rule.
+                c.execute("DELETE FROM rules", [])?;
+                let kept: (i64, i64) = c.query_row(
+                    "SELECT (SELECT count(*) FROM archive_suggestion_kept),
+                            (SELECT count(*) FROM rule_started)",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?;
+                Ok((rule, received, stamps, kept))
+            })
+            .await
+            .unwrap();
+        assert_eq!(rule, "Clevatess|3");
+        assert_eq!(received, "r1|20");
+        assert_eq!(stamps, "r2");
+        assert_eq!(kept, (0, 0));
     }
 
     #[tokio::test]
