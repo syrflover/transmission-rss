@@ -2,7 +2,7 @@
 //! 유지`, and what archiving would do with the folder.
 
 use std::sync::{
-    atomic::{AtomicI64, Ordering},
+    atomic::{AtomicBool, AtomicI64, Ordering},
     Arc,
 };
 
@@ -22,6 +22,7 @@ use crate::{
         anissia::Anime,
         channels::{Channel, ChannelInput, NewSubscription, RuleInput, RuleState, SubtitleMode},
         history::{HistoryResult, Observation},
+        status::{read_day, ChannelReadResult},
         Db,
     },
     worker::Clock,
@@ -41,6 +42,11 @@ struct App {
     router: Router,
     now: Arc<AtomicI64>,
     channel: Channel,
+    /// The last day the worker read the channel's feed, as far as the test has
+    /// let it (see [`App::read_to_now`]).
+    read_through: AtomicI64,
+    /// Whether the feed can be read: while it cannot, days pass unread.
+    readable: AtomicBool,
 }
 
 fn anime(no: i64, end_date: Option<&str>) -> Anime {
@@ -85,6 +91,50 @@ impl App {
             router,
             now,
             channel,
+            // Read every day for two months up to now, unless a test says
+            // otherwise.
+            read_through: AtomicI64::new(read_day(NOW) - 60),
+            readable: AtomicBool::new(true),
+        }
+    }
+
+    /// The worker reads the feed once a day up to the test's clock while the
+    /// feed can be read, and leaves the days unread while it cannot (the
+    /// address is dead, or the worker is off).
+    async fn read_to_now(&self) {
+        self.read_up_to(self.now.load(Ordering::SeqCst)).await;
+    }
+
+    async fn read_up_to(&self, until: Millis) {
+        let through = self.read_through.load(Ordering::SeqCst);
+        let last = read_day(until);
+        if self.readable.load(Ordering::SeqCst) {
+            for day in through + 1..=last {
+                self.state
+                    .status
+                    .record_reads(
+                        day * DAY,
+                        vec![ChannelReadResult {
+                            channel_id: self.channel.id.clone(),
+                            ok: true,
+                        }],
+                        vec![self.channel.id.clone()],
+                    )
+                    .await
+                    .unwrap();
+            }
+        }
+        self.read_through.fetch_max(last, Ordering::SeqCst);
+    }
+
+    /// The feed cannot be read from now on, or can be again, from today.
+    fn feed_readable(&self, readable: bool) {
+        self.readable.store(readable, Ordering::SeqCst);
+        if readable {
+            self.read_through.store(
+                read_day(self.now.load(Ordering::SeqCst)) - 1,
+                Ordering::SeqCst,
+            );
         }
     }
 
@@ -109,6 +159,7 @@ impl App {
     }
 
     async fn call(&self, method: Method, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
+        self.read_to_now().await;
         let mut request = Request::builder().method(method).uri(uri);
         let body = match body {
             Some(json) => {
@@ -321,6 +372,68 @@ async fn three_weeks_without_a_new_item_is_not_enough_and_four_weeks_is() {
     assert_eq!(ground["kind"], "quiet");
     assert_eq!(ground["since"], NOW - 3 * WEEK);
     assert_eq!(ground["key"], format!("quiet:{}", NOW - 3 * WEEK));
+}
+
+#[tokio::test]
+async fn weeks_the_channel_could_not_be_read_are_not_quiet_weeks() {
+    let app = App::new().await;
+    let rule = app.rule("Work", "Work/Season 01").await;
+    // The rule's last item came 5 weeks ago, but the feed could not be read for
+    // the last 2 of them: 3 weeks of reading, not enough yet.
+    app.received_weeks_ago(&rule, 5).await;
+    app.read_up_to(NOW - 2 * WEEK).await;
+    app.feed_readable(false);
+    assert!(app.ids().await.is_empty());
+
+    // A channel that keeps failing gives its rules no new quiet ground, however
+    // long it goes on.
+    app.at(NOW + 10 * WEEK);
+    assert!(app.ids().await.is_empty());
+    app.at(NOW);
+
+    // Reading again from today: 6 days make 27 days of reading since the item,
+    // and the 7th the 28th.
+    app.feed_readable(true);
+    app.at(NOW + 5 * DAY);
+    assert!(app.ids().await.is_empty(), "6 days after reads succeed");
+    app.at(NOW + 6 * DAY);
+    let found = app.suggestions().await;
+    assert_eq!(found.len(), 1, "a week after reads succeed again");
+    assert_eq!(found[0]["grounds"][0]["kind"], "quiet");
+    assert_eq!(found[0]["grounds"][0]["since"], NOW - 5 * WEEK);
+}
+
+#[tokio::test]
+async fn a_worker_that_was_off_for_four_weeks_suggests_nothing_when_it_starts_again() {
+    let app = App::new().await;
+    let rule = app.rule("Work", "Work/Season 01").await;
+    app.received_weeks_ago(&rule, 6).await;
+    // The worker read the feed up to 4 weeks ago, was off since, and starts now.
+    app.read_up_to(NOW - 4 * WEEK).await;
+    app.feed_readable(false);
+    app.at(NOW - 1);
+    assert!(app.ids().await.is_empty());
+    app.feed_readable(true);
+    app.at(NOW);
+    assert!(app.ids().await.is_empty(), "right after the restart");
+
+    // Two weeks of reading on, 2 + 2 weeks of the 6 have been read.
+    app.at(NOW + 12 * DAY);
+    assert!(app.ids().await.is_empty());
+    app.at(NOW + 13 * DAY);
+    assert_eq!(app.ids().await, std::slice::from_ref(&rule.id));
+}
+
+#[tokio::test]
+async fn a_channel_never_read_for_28_days_gives_no_quiet_ground_at_all() {
+    let app = App::new().await;
+    let rule = app.rule("Work", "Work/Season 01").await;
+    app.received_weeks_ago(&rule, 20).await;
+    // 27 days of reading and no more.
+    app.read_through.store(read_day(NOW) - 27, Ordering::SeqCst);
+    assert!(app.ids().await.is_empty(), "27 read days");
+    app.at(NOW + DAY);
+    assert_eq!(app.ids().await.len(), 1, "28 read days");
 }
 
 #[tokio::test]

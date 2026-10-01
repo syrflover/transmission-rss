@@ -73,6 +73,50 @@ async fn a_failed_read_keeps_when_the_last_good_one_was() {
     assert_eq!(reads[0].ok_at, Some(first_at));
 }
 
+/// The days on which the channel's feed was read, as the archive suggestions
+/// count their 4 weeks in.
+async fn read_days_of(h: &Harness, channel_id: &str) -> Vec<i64> {
+    let channel_id = channel_id.to_owned();
+    h.db.run::<_, transmission_rss::store::DbError, _>(move |c| {
+        let mut stmt =
+            c.prepare("SELECT day FROM channel_read_days WHERE channel_id = ?1 ORDER BY day")?;
+        let days = stmt
+            .query_map([channel_id], |r| r.get(0))?
+            .collect::<rusqlite::Result<Vec<i64>>>()?;
+        Ok(days)
+    })
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn only_a_cycle_that_read_the_feed_leaves_a_read_day() {
+    const DAY: i64 = 86_400_000;
+    let h = Harness::new().await;
+    let channel = h
+        .add_channel("feed-a", "/media/anime", &[], feed_a_rules())
+        .await;
+    let id = channel.channel.id.clone();
+
+    run(&h.worker()).await;
+    let first_day = h.now() / DAY;
+    assert_eq!(read_days_of(&h, &id).await, [first_day]);
+
+    // Another cycle the same day adds nothing; a day on which the feed cannot
+    // be read adds nothing either; the next day it can be, one more.
+    h.advance(600_000);
+    run(&h.worker()).await;
+    h.advance(DAY);
+    h.feeds.set_status("feed-a", 500);
+    run(&h.worker()).await;
+    assert_eq!(read_days_of(&h, &id).await, [first_day]);
+
+    h.advance(DAY);
+    h.feeds.set_xml("feed-a", FEED_A);
+    run(&h.worker()).await;
+    assert_eq!(read_days_of(&h, &id).await, [first_day, h.now() / DAY]);
+}
+
 #[tokio::test]
 async fn when_transmission_cannot_be_asked_the_old_counts_stay_and_the_cycle_still_finishes() {
     let mut h = Harness::new().await;

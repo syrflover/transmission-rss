@@ -1,4 +1,5 @@
 use super::*;
+use crate::store::status::read_day;
 use crate::{
     schedule::calendar::date_text,
     store::channels::{Channel, Subscription, SubtitleMode},
@@ -75,6 +76,7 @@ struct World {
     last_received: HashMap<String, Millis>,
     started: HashMap<String, Millis>,
     first_read: HashMap<String, Millis>,
+    read_floors: HashMap<String, i64>,
     kept: HashSet<(String, String)>,
 }
 
@@ -86,6 +88,8 @@ impl World {
         };
         // The channel was read long before the rules' quiet stretch.
         world.first_read.insert("c1".into(), NOW - 52 * WEEK);
+        // And read every day since, the newest of the 28 days being today.
+        world.read_floors.insert("c1".into(), read_day(NOW) - 27);
         world
     }
 
@@ -110,6 +114,7 @@ impl World {
             last_received: &self.last_received,
             started: &self.started,
             first_read: &self.first_read,
+            read_floors: &self.read_floors,
             kept: &self.kept,
         }
     }
@@ -279,6 +284,7 @@ impl World {
             last_received: HashMap::from([(rule.to_owned(), at)]),
             started: self.started.clone(),
             first_read: self.first_read.clone(),
+            read_floors: self.read_floors.clone(),
             kept: self.kept.clone(),
         }
     }
@@ -536,5 +542,83 @@ fn suggestions_follow_the_channels_and_their_rules() {
 fn the_window_starts_four_weeks_back() {
     let world = World::with(vec![]);
     let channels = world.channels();
-    assert_eq!(world.facts(&channels).window_start(), NOW - 28 * DAY_MS);
+    assert_eq!(world.facts(&channels).window_start("c1"), NOW - 28 * DAY_MS);
+}
+
+// ---------------------------------------------------------------------------
+// Only the weeks the channel was read count
+// ---------------------------------------------------------------------------
+
+#[test]
+fn weeks_the_channel_could_not_be_read_are_not_quiet_weeks() {
+    // The last item came 5 weeks ago; the feed could not be read for the last 2,
+    // so the newest of its 28 read days is 2 weeks old and only 3 weeks of
+    // reading follow the item.
+    let mut world = World::with(vec![rule("r1", Some("Work"))]).received("r1", NOW - 5 * WEEK);
+    world
+        .read_floors
+        .insert("c1".into(), read_day(NOW - 2 * WEEK) - 27);
+    assert_eq!(world.quiet_rules(&[]), Vec::<String>::new());
+    let channels = world.channels();
+    assert!(
+        world.facts(&channels).channels_to_read().is_empty(),
+        "there is nothing to read for it either"
+    );
+}
+
+#[test]
+fn the_ground_appears_when_reading_has_made_up_the_four_weeks() {
+    // The same, one week after the feed could be read again: the item is 6
+    // weeks old, 3 weeks were read before the gap (to 3 weeks ago) and the 8
+    // days since 1 week ago make the 28 read days.
+    let mut world = World::with(vec![rule("r1", Some("Work"))]).received("r1", NOW - 6 * WEEK);
+    world
+        .read_floors
+        .insert("c1".into(), read_day(NOW - 3 * WEEK) - 19);
+    assert_eq!(world.quiet_rules(&[]), ["r1"]);
+}
+
+#[test]
+fn a_channel_that_has_not_been_read_for_28_days_gives_no_quiet_ground() {
+    let mut world = World::with(vec![rule("r1", Some("Work"))]).received("r1", NOW - 20 * WEEK);
+    world.read_floors.clear();
+    assert_eq!(world.quiet_rules(&[]), Vec::<String>::new());
+    let channels = world.channels();
+    assert!(world.facts(&channels).channels_to_read().is_empty());
+}
+
+#[test]
+fn the_day_of_the_moment_itself_is_not_one_of_the_28() {
+    let since = NOW - 10 * WEEK;
+    let mut world = World::with(vec![rule("r1", Some("Work"))]).received("r1", since);
+    // The newest 28 read days start on the very day of the moment: that day is
+    // not after it, so only 27 days are.
+    world.read_floors.insert("c1".into(), read_day(since));
+    assert_eq!(world.quiet_rules(&[]), Vec::<String>::new());
+    world.read_floors.insert("c1".into(), read_day(since) + 1);
+    assert_eq!(world.quiet_rules(&[]), ["r1"]);
+}
+
+#[test]
+fn the_clock_still_has_to_reach_four_weeks_when_the_days_are_there() {
+    // 28 read days after the moment's own day, but an hour short of 4 weeks.
+    let since = NOW - QUIET + 60 * 60 * 1000;
+    let mut world = World::with(vec![rule("r1", Some("Work"))]).received("r1", since);
+    world.read_floors.insert("c1".into(), read_day(since) + 1);
+    assert_eq!(world.quiet_rules(&[]), Vec::<String>::new());
+}
+
+#[test]
+fn the_window_reaches_back_to_the_first_of_the_read_days() {
+    // The feed was read until 2 weeks ago: the window starts at the first of
+    // its last 28 read days, 6 weeks back, not 4 weeks from now.
+    let mut world = World::with(vec![rule("r1", Some("Work"))]);
+    let floor = read_day(NOW - 2 * WEEK) - 27;
+    world.read_floors.insert("c1".into(), floor);
+    let channels = world.channels();
+    let facts = world.facts(&channels);
+    assert_eq!(facts.window_start("c1"), floor * DAY_MS - 1);
+    assert!(facts.window_start("c1") < NOW - QUIET);
+    // A channel with fewer read days has only the clock to go by.
+    assert_eq!(facts.window_start("other"), NOW - QUIET);
 }

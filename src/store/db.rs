@@ -947,6 +947,53 @@ mod tests {
         assert_eq!(kept, (0, 0));
     }
 
+    #[tokio::test]
+    async fn a_database_from_before_read_days_takes_the_28_days_up_to_each_last_success() {
+        const DAY: i64 = 86_400_000;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        {
+            // A database as the build with twenty-three migrations left it:
+            // one channel read well, one whose last read failed after a
+            // success long ago, and one that never worked.
+            let conn = database_at(&path, BEFORE_ARCHIVE_SUGGESTIONS);
+            conn.execute_batch(&format!(
+                "INSERT INTO channel_read_status (channel_id, ok, read_at, ok_at) VALUES
+                     ('fine', 1, {now}, {now}),
+                     ('dead', 0, {now}, {then}),
+                     ('never', 0, {now}, NULL);",
+                now = 20_000 * DAY + 5,
+                then = 19_000 * DAY + 5,
+            ))
+            .unwrap();
+        }
+
+        let db = Db::open(&path).await.unwrap();
+
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+        let days: Vec<(String, i64, i64, i64)> = db
+            .run::<_, DbError, _>(|c| {
+                let mut stmt = c.prepare(
+                    "SELECT channel_id, count(*), min(day), max(day)
+                     FROM channel_read_days GROUP BY channel_id ORDER BY channel_id",
+                )?;
+                let rows = stmt
+                    .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(rows)
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            days,
+            [
+                ("dead".to_owned(), 28, 19_000 - 27, 19_000),
+                ("fine".to_owned(), 28, 20_000 - 27, 20_000),
+            ],
+            "a channel that never read successfully has none"
+        );
+    }
+
     /// The triggers that keep `rule_started` go with a rebuild of `rules`; a
     /// later migration that rebuilds it has to make them again.
     #[tokio::test]

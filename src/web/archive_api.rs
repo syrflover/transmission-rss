@@ -117,6 +117,11 @@ async fn gather(state: &AppState) -> Result<Gathered, ApiError> {
         .first_sightings(all.iter().map(|c| c.channel.id.clone()).collect())
         .await
         .map_err(internal)?;
+    let read_floors = state
+        .status
+        .read_day_floors(all.iter().map(|c| c.channel.id.clone()).collect())
+        .await
+        .map_err(internal)?;
     let kept = state
         .channels
         .kept_archive_grounds()
@@ -131,6 +136,7 @@ async fn gather(state: &AppState) -> Result<Gathered, ApiError> {
         last_received: &last_received,
         started: &started,
         first_read: &first_read,
+        read_floors: &read_floors,
         kept: &kept,
     };
 
@@ -138,7 +144,11 @@ async fn gather(state: &AppState) -> Result<Gathered, ApiError> {
     for channel_id in facts.channels_to_read() {
         let (titles, truncated) = state
             .history
-            .titles_since(channel_id.clone(), facts.window_start(), WINDOW_TITLES)
+            .titles_since(
+                channel_id.clone(),
+                facts.window_start(&channel_id),
+                WINDOW_TITLES,
+            )
             .await
             .map_err(internal)?;
         if truncated {
