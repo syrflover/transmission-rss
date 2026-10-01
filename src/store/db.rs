@@ -76,6 +76,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("library/generation.sql")),
     // 19: when a rule was last turned back on, so what it missed while off is left to the user
     Migration::Sql(include_str!("channels/resumed.sql")),
+    // 20: when a title-waiting subscription got its title; the title candidates the user rejected
+    Migration::Sql(include_str!("channels/title_waiting.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -485,6 +487,63 @@ mod tests {
             .await
             .unwrap();
         assert_eq!((rules.as_str(), stamped), ("r1:active:2,r2:paused:5", 0));
+    }
+
+    #[tokio::test]
+    async fn a_database_from_before_title_waiting_keeps_its_subscriptions_with_no_title_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        {
+            // A database as the build with nineteen migrations left it: a
+            // subscription that waits for its title and one that has it.
+            let conn = database_at(&path, 19);
+            conn.execute_batch(
+                "INSERT INTO channels (id, position, url, excludes, secret_query, version)
+                     VALUES ('c1', 0, 'http://x/feed', '[]', '[]', 1);
+                 INSERT INTO rules (id, channel_id, position, match_text, regex,
+                         case_insensitive, directory, episode, episode_auto, state, version)
+                     VALUES ('r1', 'c1', 0, NULL, 0, 0, 'Wait', 1, 0, 'active', 2),
+                            ('r2', 'c1', 1, 'Clevatess', 0, 0, 'Clevatess', 1, 0, 'active', 3);
+                 INSERT INTO anissia_anime (anime_no, subject, week, status, fetched_at)
+                     VALUES (7, '기다림', 1, 'ON', 10), (8, '클레바테스', 1, 'ON', 10);
+                 INSERT INTO rule_subscriptions (rule_id, anissia_anime_no, subtitles, creator,
+                         season_id, subscribed_at)
+                     VALUES ('r1', 7, 'undecided', NULL, NULL, 99),
+                            ('r2', 8, 'undecided', NULL, NULL, 98);",
+            )
+            .unwrap();
+        }
+
+        let db = Db::open(&path).await.unwrap();
+
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+        let (subscriptions, titled, rejected): (String, i64, i64) = db
+            .run::<_, DbError, _>(|c| {
+                // A rejection goes with its channel.
+                c.execute(
+                    "INSERT INTO rejected_titles (channel_id, title_key, work, rejected_at)
+                     VALUES ('c1', 'new work', 'New Work', 1)",
+                    [],
+                )?;
+                let rejected_before: i64 =
+                    c.query_row("SELECT count(*) FROM rejected_titles", [], |r| r.get(0))?;
+                let read = c.query_row(
+                    "SELECT group_concat(rule_id || ':' || subscribed_at, ','), count(titled_at)
+                       FROM rule_subscriptions",
+                    [],
+                    |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)),
+                )?;
+                c.execute("DELETE FROM rules", [])?;
+                c.execute("DELETE FROM channels", [])?;
+                let rejected_after: i64 =
+                    c.query_row("SELECT count(*) FROM rejected_titles", [], |r| r.get(0))?;
+                assert_eq!(rejected_before, 1);
+                Ok((read.0, read.1, rejected_after))
+            })
+            .await
+            .unwrap();
+        assert_eq!((subscriptions.as_str(), titled), ("r1:99,r2:98", 0));
+        assert_eq!(rejected, 0);
     }
 
     #[tokio::test]

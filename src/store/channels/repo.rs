@@ -20,12 +20,13 @@ type Result<T> = std::result::Result<T, ChannelError>;
 
 const CHANNEL_COLUMNS: &str =
     "id, position, version, url, excludes, secret_query, past_search, name";
-/// A rule with its subscription, if it has one (columns 11 to 16), and when it
-/// was last turned back on (column 17).
+/// A rule with its subscription, if it has one (columns 11 to 16), when it was
+/// last turned back on (column 17) and when its subscription got its title
+/// (column 18).
 const RULE_COLUMNS: &str = "r.id, r.channel_id, r.position, r.version, r.match_text, r.regex, \
      r.case_insensitive, r.directory, r.episode, r.episode_auto, r.state, \
      s.anissia_anime_no, s.subtitles, s.creator, s.season_id, s.subscribed_at, s.season_blocked, \
-     r.resumed_at";
+     r.resumed_at, s.titled_at";
 const RULE_FROM: &str = "rules r LEFT JOIN rule_subscriptions s ON s.rule_id = r.id";
 
 fn begin(conn: &mut Connection) -> Result<Transaction<'_>> {
@@ -77,6 +78,7 @@ fn rule_from_row(row: &Row<'_>) -> rusqlite::Result<Rule> {
                 season_id: row.get(14)?,
                 subscribed_at: row.get(15)?,
                 season_blocked: row.get(16)?,
+                titled_at: row.get(18)?,
             })
         }
         None => None,
@@ -436,6 +438,23 @@ pub fn update_rule(
     channel_id: &str,
     input: &RuleInput,
 ) -> Result<Rule> {
+    let at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as Millis);
+    update_rule_at(conn, id, expected, channel_id, input, at)
+}
+
+/// [`update_rule`] at a moment the caller's clock gives. A subscription that
+/// waited for its title and gets one here is noted as titled at `at`
+/// ([`Subscription::titled_at`]): what history recorded before is past for it.
+pub fn update_rule_at(
+    conn: &mut Connection,
+    id: &str,
+    expected: Version,
+    channel_id: &str,
+    input: &RuleInput,
+    at: Millis,
+) -> Result<Rule> {
     input.validate()?;
 
     let tx = begin(conn)?;
@@ -465,9 +484,91 @@ pub fn update_rule(
             input.state.as_str(),
         ],
     )?;
+    if current.subscription.is_some() && current.r#match.is_none() && input.r#match.is_some() {
+        note_titled(&tx, id, at)?;
+    }
     let updated = fetch_rule(&tx, id)?.expect("the rule still exists");
     tx.commit()?;
     Ok(updated)
+}
+
+/// Notes that the subscription of rule `id` got its title at `at`.
+fn note_titled(tx: &Transaction<'_>, id: &str, at: Millis) -> Result<()> {
+    tx.execute(
+        "UPDATE rule_subscriptions SET titled_at = ?2 WHERE rule_id = ?1",
+        params![id, at],
+    )?;
+    Ok(())
+}
+
+/// Gives a collecting subscription that waits for its title (no match phrase)
+/// the phrase `title`, and, when `directory` is given, a new save folder, if it
+/// is still at `expected`. The subscription is noted as titled at `at`, so what
+/// history recorded before is left to the user.
+pub fn give_title(
+    conn: &mut Connection,
+    id: &str,
+    expected: Version,
+    title: &str,
+    directory: Option<&str>,
+    at: Millis,
+) -> Result<Rule> {
+    if title.is_empty() {
+        return Err(ChannelError::Invalid("a title must not be empty"));
+    }
+    if directory.is_some_and(|d| std::path::Path::new(d).is_absolute()) {
+        return Err(ChannelError::Invalid(
+            "rule directory must be relative to the collect folder",
+        ));
+    }
+    let tx = begin(conn)?;
+    let rule = require_rule(&tx, id, expected)?;
+    if rule.subscription.is_none() || rule.r#match.is_some() || rule.state != RuleState::Active {
+        return Err(ChannelError::Invalid(
+            "only a collecting subscription that waits for its title is given one",
+        ));
+    }
+    tx.execute(
+        "UPDATE rules
+         SET match_text = ?2, directory = COALESCE(?3, directory), version = version + 1
+         WHERE id = ?1",
+        params![id, title, directory],
+    )?;
+    note_titled(&tx, id, at)?;
+    let updated = fetch_rule(&tx, id)?.expect("the rule still exists");
+    tx.commit()?;
+    Ok(updated)
+}
+
+/// Remembers that the user turned down the title `key` (a
+/// `subscriptions::work_key`) of `work` in the channel. Asked twice, the first
+/// rejection stands.
+pub fn reject_title(
+    conn: &mut Connection,
+    channel_id: &str,
+    key: &str,
+    work: &str,
+    at: Millis,
+) -> Result<()> {
+    if key.is_empty() {
+        return Err(ChannelError::Invalid("a title key must not be empty"));
+    }
+    let tx = begin(conn)?;
+    require_channel(&tx, channel_id)?;
+    tx.execute(
+        "INSERT OR IGNORE INTO rejected_titles (channel_id, title_key, work, rejected_at)
+         VALUES (?1, ?2, ?3, ?4)",
+        params![channel_id, key, work, at],
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// Every rejected title as `(channel ID, title key)`.
+pub fn rejected_titles(conn: &Connection) -> Result<HashSet<(String, String)>> {
+    let mut stmt = conn.prepare("SELECT channel_id, title_key FROM rejected_titles")?;
+    let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
 /// Sets a rule's state without a version check (the worker's archive and

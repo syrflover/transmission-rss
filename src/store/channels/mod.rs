@@ -19,6 +19,8 @@ mod model;
 mod repo;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod title_tests;
 
 pub use repo::{NewSubscription, SeasonLinked};
 
@@ -26,6 +28,8 @@ pub use model::{
     mask_url, query_names, Channel, ChannelInput, ChannelWithRules, OrderItem, Rule, RuleInput,
     RuleState, SeasonRef, Subscription, SubtitleMode, Version, MASK,
 };
+
+use std::collections::HashSet;
 
 use super::db::{Db, DbError};
 use super::history::Millis;
@@ -215,6 +219,67 @@ impl ChannelStore {
         self.db
             .run(move |c| repo::update_rule(c, &id, expected_version, &channel_id, &input))
             .await
+    }
+
+    /// [`ChannelStore::update_rule`] at a moment the caller's clock gives, which
+    /// a subscription that waited for its title and gets one here is noted as
+    /// titled at ([`Subscription::titled_at`]).
+    pub async fn update_rule_at(
+        &self,
+        id: &str,
+        expected_version: Version,
+        channel_id: &str,
+        input: RuleInput,
+        at: Millis,
+    ) -> Result<Rule, ChannelError> {
+        let id = id.to_owned();
+        let channel_id = channel_id.to_owned();
+        self.db
+            .run(move |c| repo::update_rule_at(c, &id, expected_version, &channel_id, &input, at))
+            .await
+    }
+
+    /// Gives a collecting subscription that waits for its title the match
+    /// phrase `title` (and a new save folder when `directory` is given) if it
+    /// is still at `expected_version`, noting it as titled at `at`
+    /// ([`Subscription::titled_at`]). What history recorded before is left to
+    /// the user; the cycle takes what it first sees from now on.
+    pub async fn give_title(
+        &self,
+        id: &str,
+        expected_version: Version,
+        title: &str,
+        directory: Option<&str>,
+        at: Millis,
+    ) -> Result<Rule, ChannelError> {
+        let (id, title) = (id.to_owned(), title.to_owned());
+        let directory = directory.map(str::to_owned);
+        self.db
+            .run(move |c| {
+                repo::give_title(c, &id, expected_version, &title, directory.as_deref(), at)
+            })
+            .await
+    }
+
+    /// Remembers that the user turned down the title candidate `key` (the
+    /// `subscriptions::work_key` of `work`) in the channel: it is not offered
+    /// again, and the title-waiting subscriptions stay as they are.
+    pub async fn reject_title(
+        &self,
+        channel_id: &str,
+        key: &str,
+        work: &str,
+        at: Millis,
+    ) -> Result<(), ChannelError> {
+        let (channel_id, key, work) = (channel_id.to_owned(), key.to_owned(), work.to_owned());
+        self.db
+            .run(move |c| repo::reject_title(c, &channel_id, &key, &work, at))
+            .await
+    }
+
+    /// The titles the user turned down, as `(channel ID, title key)`.
+    pub async fn rejected_titles(&self) -> Result<HashSet<(String, String)>, ChannelError> {
+        self.db.run(|c| repo::rejected_titles(c)).await
     }
 
     /// Archives or restores a rule, whatever version it is at: only the worker

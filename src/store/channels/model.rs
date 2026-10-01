@@ -272,6 +272,10 @@ pub struct Subscription {
     /// When the rule became a subscription (Unix ms). Items the feed held and
     /// history had recorded before are past: the user receives those.
     pub subscribed_at: i64,
+    /// When a subscription that waited for its title (no match phrase) was
+    /// given one (Unix ms); `None` for one that had its phrase from the start.
+    /// What history first saw before then is past too.
+    pub titled_at: Option<i64>,
 }
 
 /// A season of a work in the library: what a subscription connects to. The ID
