@@ -46,6 +46,14 @@
 - 웹: 규칙 상세 맨 위 네 줄과 포스터(이어진 작품의 표지, 없으면 같은 크기의 빈 자리), 진행 막대(`9 / 12화 받음`, 총 회차 미상이면 `9 / ?화 받음`과 점선), `영상 받기`·`자막 받기` 스위치(`role="switch"`, 비활성 까닭 문장, 버전 어긋남이면 지금 상태로 바꿔 보여줘요), 멈춤 배너, 시즌 연결 거절 안내, `편성표와 연결`, 제작자 `변경`(규칙 상세와 작품 상세 머리가 같은 `CreatorPicker`), 목록 배지(`수집 중`·`멈춤`·`보관됨`·`제목 대기`), 구독 카드의 `멈춤` 표시, 작품 상세 머리의 Anissia 제목·제작자·`제작자 변경`.
 - `readme.md`에 `Season link` 절을 더했어요.
 
+### 검토 뒤 고친 것
+
+- 시즌 연결이 주기마다 쓰는 비용: ① 규칙별로 하던 받은 해시 조회를 한 번의 `rule_id IN (…)` 조회(400개씩 나눔)로 바꾸고 마이그레이션 17(`history_items (rule_id, result)` 색인)을 더했어요. 계획이 `result` 색인으로 받은 항목 전체를 훑던 것에서 `history_items_by_rule` 검색으로 바뀌었어요. ② 영상 찾기는 이어 붙인 문자열 비교(`media_files` 전체 훑기) 대신 경로를 감시 폴더·작품 폴더·상대 경로로 잘라 `works (watch_folder_id, dir_name)`과 `media_files (work_id, path)` 키로 찾아요. ③ 이어지지 못한 규칙은 마지막 시도의 받은 토렌트와 라이브러리 세대(마이그레이션 18의 `library_generation`, 파일·작품 폴더 위치·감시 폴더 등록이 바뀔 때 트리거가 올려요)를 worker 메모리에 기억하고, 둘 중 하나가 달라질 때만 다시 Transmission에 물어요. 재시작하면 규칙마다 한 번씩 다시 시도해요.
+- 경로가 맞지 않아 조용히 이어지지 못하던 것: 규칙의 토렌트가 Transmission에 있는데 그 영상이 하나도 라이브러리의 같은 경로에 없으면 worker 시작마다 규칙당 한 번 규칙 ID만 담아 로그를 남겨요(`Linked::unmatched`).
+- 막힌 시즌의 `season_blocked`가 남던 것: 이은 구독이 사라지면 시즌 연결 단계가 먼저 그 표시를 지우고(값이 바뀔 때만 규칙 버전을 올려요), 규칙 상세도 잡고 있는 작품이 없는 표시는 보여주지 않아요.
+- 시험: `the_hashes_of_rules_are_read_through_an_index_on_the_rule`, `a_video_is_looked_up_by_keys_not_by_scanning_the_files`, `the_generation_changes_with_what_a_video_lookup_can_answer_and_only_then`, `tests/season_link.rs`의 `a_rule_that_cannot_be_connected_costs_nothing_until_something_it_depends_on_changes`·`a_rule_with_videos_in_several_seasons_and_a_rule_whose_season_is_taken_are_not_retried`·`a_rule_whose_torrents_are_found_nowhere_in_the_library_is_reported_once`·`the_note_of_a_taken_season_goes_when_nothing_holds_the_season_any_more`, `the_view_does_not_explain_a_block_that_nothing_holds_any_more`.
+- 한계: 실제 Transmission·실제 마운트 구성으로는 보지 못했어요. 다시 시도할지는 받은 토렌트와 라이브러리 세대로만 정하므로, Transmission의 경로가 디스크 파일과 따로 바뀌는 경우(라이브러리가 못 보는 경우)는 재시작 때까지 다시 시도하지 않아요.
+
 ### 결정
 
 - `영상 받기`를 끄면 규칙 상태가 `paused`가 되고 보관과는 별개예요(조정자 결정). 멈춘 규칙의 폴더는 옮기지 않아요.
