@@ -28,7 +28,7 @@ use crate::{
         queue::{LOCK_RETRY, POLL, RETRY_DELAYS},
         title::{decide, Decision},
     },
-    store::seasons::{ClaimedSearch, Note},
+    store::seasons::{ClaimedSearch, Note, SeasonError},
     worker::CycleLock,
 };
 
@@ -62,21 +62,34 @@ pub enum Ran {
 
 impl Seasons {
     async fn later(&self, job: &ClaimedSearch, error: &AnilistError) -> Ran {
+        let busy = match error {
+            AnilistError::Busy { retry_after } => Some(*retry_after),
+            _ => None,
+        };
+        self.put_off(job, busy, error).await
+    }
+
+    /// Puts the search off: by `busy` (AniList's own wait, not counted as a
+    /// failure) or by the next of [`RETRY_DELAYS`], after which it is given up.
+    async fn put_off(
+        &self,
+        job: &ClaimedSearch,
+        busy: Option<Duration>,
+        why: &(dyn std::fmt::Display + Sync),
+    ) -> Ran {
         let now = self.now();
-        let (retry_at, failed) = match error {
-            AnilistError::Busy { retry_after } => {
-                (Some(now + retry_after.as_millis() as i64), false)
-            }
-            _ => match RETRY_DELAYS.get(job.attempts as usize) {
+        let (retry_at, failed) = match busy {
+            Some(wait) => (Some(now + wait.as_millis() as i64), false),
+            None => match RETRY_DELAYS.get(job.attempts as usize) {
                 Some(delay) => (Some(now + delay.as_millis() as i64), true),
                 None => (None, true),
             },
         };
         eprintln!(
-            "Season search for work {} season {}: {error}",
+            "Season search for work {} season {}: {why}",
             job.work_id, job.season
         );
-        let _ = self
+        let written = self
             .store
             .search_later(
                 &job.work_id,
@@ -87,11 +100,24 @@ impl Seasons {
                 Note::Failed,
             )
             .await;
+        if let Err(e) = written {
+            // Nothing holds the search back: pause the queue instead, so it is
+            // not taken again at once.
+            eprintln!("Season queue: cannot put off work {}: {e}", job.work_id);
+            tokio::time::sleep(POLL).await;
+        }
         if retry_at.is_some() {
             Ran::Later
         } else {
             Ran::Left(Note::Failed)
         }
+    }
+
+    /// The search's outcome could not be recorded: it is tried again later,
+    /// not at once (each try asks AniList again).
+    async fn not_recorded(&self, job: &ClaimedSearch, error: SeasonError) -> Ran {
+        self.put_off(job, None, &format!("cannot record the outcome: {error}"))
+            .await
     }
 
     async fn leave(&self, job: &ClaimedSearch, note: Note) -> Ran {
@@ -102,10 +128,7 @@ impl Seasons {
         {
             Ok(true) => Ran::Left(note),
             Ok(false) => Ran::Dropped,
-            Err(e) => {
-                eprintln!("Season search for work {}: {e}", job.work_id);
-                Ran::Later
-            }
+            Err(e) => self.not_recorded(job, e).await,
         }
     }
 
@@ -132,8 +155,7 @@ impl Seasons {
         };
         let id = entry.id;
         if let Err(e) = self.store.put_entry(entry).await {
-            eprintln!("Season search for work {}: {e}", job.work_id);
-            return Ran::Later;
+            return self.not_recorded(job, e).await;
         }
         match self
             .store
@@ -142,11 +164,19 @@ impl Seasons {
         {
             Ok(true) => Ran::Linked(id),
             Ok(false) => Ran::Dropped,
-            Err(e) => {
-                eprintln!("Season search for work {}: {e}", job.work_id);
-                Ran::Later
-            }
+            Err(e) => self.not_recorded(job, e).await,
         }
+    }
+
+    /// Puts the refresh of entry `id` off by `wait`; when even that cannot be
+    /// written, pauses the queue so the entry is not taken again at once.
+    async fn refresh_off(&self, id: i64, wait: Duration) -> Ran {
+        let retry_at = self.now() + wait.as_millis() as i64;
+        if let Err(e) = self.store.refresh_later(id, retry_at).await {
+            eprintln!("Season queue: cannot put off entry {id}: {e}");
+            tokio::time::sleep(POLL).await;
+        }
+        Ran::RefreshLater(id)
     }
 
     async fn run_refresh(&self, id: i64) -> Ran {
@@ -156,24 +186,23 @@ impl Seasons {
                 Ok(()) => Ran::Refreshed(id),
                 Err(e) => {
                     eprintln!("Season refresh of entry {id}: {e}");
-                    Ran::RefreshLater(id)
+                    self.refresh_off(id, REFRESH_RETRY).await
                 }
             },
-            Ok(None) => {
-                let _ = self.store.refresh_gone(id, now).await;
-                Ran::RefreshLater(id)
-            }
+            Ok(None) => match self.store.refresh_gone(id, now).await {
+                Ok(()) => Ran::RefreshLater(id),
+                Err(e) => {
+                    eprintln!("Season refresh of entry {id}: {e}");
+                    self.refresh_off(id, REFRESH_RETRY).await
+                }
+            },
             Err(e) => {
                 eprintln!("Season refresh of entry {id}: {e}");
                 let wait = match &e {
                     AnilistError::Busy { retry_after } => *retry_after,
                     _ => REFRESH_RETRY,
                 };
-                let _ = self
-                    .store
-                    .refresh_later(id, now + wait.as_millis() as i64)
-                    .await;
-                Ran::RefreshLater(id)
+                self.refresh_off(id, wait).await
             }
         }
     }

@@ -594,3 +594,64 @@ async fn a_failed_search_is_tried_again_later_and_given_up_after_three_failures(
     assert!(again.job.is_some());
     assert_eq!(env.drain().await, [Ran::Linked(1)]);
 }
+
+/// Makes every write that `sql` names fail, as a full disk or a broken file would.
+async fn refuse(env: &Env, sql: &'static str) {
+    env.db
+        .run::<_, crate::store::DbError, _>(move |conn| Ok(conn.execute_batch(sql)?))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_search_whose_outcome_cannot_be_written_waits_like_a_failure_instead_of_asking_again_at_once(
+) {
+    let env = Env::new(&[("Show", &[1])]).await;
+    let id = env.id("Show").await;
+    env.serve("Show", vec![media(1, "Show", "FINISHED", Some(12))]);
+    refuse(
+        &env,
+        "CREATE TRIGGER refuse BEFORE INSERT ON anilist_entries
+         BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+    )
+    .await;
+    assert_eq!(env.seasons.run_next().await, Some(Ran::Later));
+    let job = env.seasons.store.link(&id, 1).await.unwrap().job.unwrap();
+    assert_eq!(job.attempts, 1);
+    assert!((60_000..65_000).contains(&(job.not_before.unwrap() - env.seasons.now())));
+    let requests = env.requests();
+    assert_eq!(env.seasons.run_next().await, None);
+    assert_eq!(env.requests(), requests);
+
+    refuse(&env, "DROP TRIGGER refuse;").await;
+    env.advance(DAY);
+    assert_eq!(env.drain().await, [Ran::Linked(1)]);
+}
+
+#[tokio::test]
+async fn a_refresh_that_cannot_be_written_waits_an_hour() {
+    let env = Env::new(&[("Show", &[1])]).await;
+    let id = env.id("Show").await;
+    env.drain().await;
+    env.answer(media(1, "Airing", "RELEASING", None));
+    let v = env.seasons.store.link(&id, 1).await.unwrap().version;
+    env.seasons.set_links(&id, 1, v, vec![1]).await.unwrap();
+    refuse(
+        &env,
+        "CREATE TRIGGER refuse BEFORE UPDATE ON anilist_entries
+         WHEN NEW.fetched_at <> OLD.fetched_at
+         BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+    )
+    .await;
+    env.advance(DAY);
+    assert_eq!(env.seasons.run_next().await, Some(Ran::RefreshLater(1)));
+    let requests = env.requests();
+    assert_eq!(env.seasons.run_next().await, None);
+    assert_eq!(env.requests(), requests);
+
+    refuse(&env, "DROP TRIGGER refuse;").await;
+    env.advance(HOUR - 1);
+    assert!(env.drain().await.is_empty());
+    env.advance(1);
+    assert_eq!(env.drain().await, [Ran::Refreshed(1)]);
+}
