@@ -2858,3 +2858,33 @@ async fn a_failure_whose_folder_is_away_stays_a_failure() {
     assert_eq!(s.state_of(&v2()).await, RevisionState::Failed);
     assert_eq!(s.failures().await.len(), 1);
 }
+
+/// `다시 받기` of a `버전 미상` revision while Transmission does not answer:
+/// the episode's video cannot be told, so nothing is added, and the command
+/// says the person can ask again later (nothing tries again by itself).
+#[tokio::test]
+async fn a_retry_that_cannot_look_at_the_episode_says_to_ask_again() {
+    let mut s = Setup::new().await;
+    s.received_v1().await;
+    let v2 = release("v2", None);
+    s.feed(&[(NEW_HASH, &v2), (OLD_HASH, &v1())]);
+    s.cycle().await;
+    let item = s.item(&v2).await;
+    assert_eq!(item.result, HistoryResult::VersionUnknown);
+
+    s.h.tr.stop().await;
+    let id = "00000000-0000-4000-8000-000000000c03";
+    s.retry(item.id, id).await;
+    assert_eq!(s.commands().await, CommandsOutcome::Ran(1));
+    s.h.tr.restart().await;
+    let command = s.command(id).await;
+    assert_eq!(command["state"], "failed", "{command}");
+    let reason = command["outcome"]["reason"].as_str().unwrap();
+    assert!(reason.contains("확인하지 못해서"), "{command}");
+    assert!(
+        reason.contains("다시 받기를 다시 누를 수 있어요"),
+        "{command}"
+    );
+    assert_eq!(s.added(NEW_HASH), 0);
+    assert_eq!(s.state_of(&v2).await, RevisionState::Unknown);
+}

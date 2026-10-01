@@ -100,9 +100,9 @@ use crate::{
 pub const KIND: &str = "receive_once";
 
 /// Why a revision was not received again when the folder's video of its
-/// episode could not be looked at.
-const PLACE_UNREAD: &str =
-    "폴더의 회차 영상이 어떤 수정본인지 확인하지 못해서 받지 않았어요. 잠시 뒤에 다시 받아요.";
+/// episode could not be looked at. Nothing asks again by itself: the person
+/// may, later.
+const PLACE_UNREAD: &str = "폴더의 회차 영상이 어떤 수정본인지 확인하지 못해서 받지 않았어요. 잠시 뒤 다시 받기를 다시 누를 수 있어요.";
 
 /// Longest failure reason kept, in characters.
 const MAX_REASON_CHARS: usize = 300;
