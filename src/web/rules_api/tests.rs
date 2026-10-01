@@ -1440,3 +1440,49 @@ async fn put(
     app.call(Method::PUT, &uri, Some(rule_body(channel, rule, patch)))
         .await
 }
+
+#[tokio::test]
+async fn an_edit_cannot_pause_a_rule_but_a_paused_rule_still_saves_its_fields() {
+    let app = App::new().await;
+    let a = app
+        .channel("a.test", &[], &[("Show", "Show/Season 01")])
+        .await;
+    let rule = app.list().await["rules"][0].clone();
+    let id = rule["id"].as_str().unwrap().to_owned();
+
+    // The switch pauses; an edit that carries another state is refused.
+    let (status, text, _) = app
+        .call(
+            Method::PUT,
+            &format!("/api/rules/{id}"),
+            Some(rule_body(&a.channel, &rule, json!({ "state": "paused" }))),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+
+    let (status, text, paused) = app
+        .call(
+            Method::PUT,
+            &format!("/api/rules/{id}/switch"),
+            Some(json!({ "version": rule["version"], "video": false })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(paused["state"], "paused");
+
+    // A paused rule saves its fields with the state it has.
+    let (status, text, saved) = app
+        .call(
+            Method::PUT,
+            &format!("/api/rules/{id}"),
+            Some(rule_body(
+                &a.channel,
+                &paused,
+                json!({ "episode": 5, "state": "paused" }),
+            )),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(saved["state"], "paused");
+    assert_eq!(saved["episode"], 5);
+}
