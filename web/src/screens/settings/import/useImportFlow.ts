@@ -6,7 +6,9 @@ import { everythingChanged, KEYS } from "@/screens/collect/cache";
 
 import { loadCollection } from "../collection/api";
 
+import { isPicked, pickedRequests, pickKey, standing, type Picks } from "./suggestions";
 import type { ApplyResult, ChoiceRequest, Decision, Preview } from "./types";
+import { useSuggestionLookup, type SuggestionLookup } from "./useSuggestionLookup";
 
 /** The server refuses a request body over 2 MB; say so before sending. */
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
@@ -29,6 +31,15 @@ export interface ImportFlow {
   applyError: { message: string; stale: boolean } | null;
   /** How many channels that already exist still need a choice. */
   undecided: number;
+  /** What Anissia says about the anime of the suggestions; asked in the background. */
+  lookup: SuggestionLookup;
+  /** How many suggestions are checked now. */
+  pickedCount: number;
+  /** Whether the suggestion of rule `rule` of file channel `channel` is checked now. */
+  isPicked(channel: number, rule: number): boolean;
+  pick(channel: number, rule: number, on: boolean): void;
+  /** Checks or unchecks every suggestion of the channel that can be checked. */
+  pickAll(channel: number, on: boolean): void;
   chooseFile(file: File): Promise<void>;
   choose(index: number, decision: Decision): void;
   apply(): Promise<void>;
@@ -51,6 +62,7 @@ export function useImportFlow(): ImportFlow {
   const [preview, setPreview] = useState<Preview | null>(null);
   const [result, setResult] = useState<ApplyResult | null>(null);
   const [choices, setChoices] = useState<Record<number, Decision>>({});
+  const [picks, setPicks] = useState<Picks>({});
   const [reading, setReading] = useState(false);
   const [applying, setApplying] = useState(false);
   const [pickError, setPickError] = useState<string | null>(null);
@@ -59,6 +71,9 @@ export function useImportFlow(): ImportFlow {
   const undecided = preview
     ? preview.channels.filter((channel) => channel.existing && !choices[channel.index]).length
     : 0;
+
+  const lookup = useSuggestionLookup(preview);
+  const pickedCount = preview ? pickedRequests(preview.channels, picks, choices).length : 0;
 
   const review = useCallback(async (text: string, name: string) => {
     setReading(true);
@@ -73,6 +88,7 @@ export function useImportFlow(): ImportFlow {
       setFileName(name);
       setPreview(next);
       setChoices({});
+      setPicks({});
       setStep("review");
     } catch (error) {
       setPickError(error instanceof ApiError ? error.message : "파일을 확인하지 못했어요.");
@@ -104,6 +120,35 @@ export function useImportFlow(): ImportFlow {
     setChoices((previous) => ({ ...previous, [index]: decision }));
   }, []);
 
+  const pick = useCallback((channel: number, rule: number, on: boolean) => {
+    setPicks((previous) => ({ ...previous, [pickKey(channel, rule)]: on }));
+  }, []);
+
+  const pickAll = useCallback(
+    (channel: number, on: boolean) => {
+      const view = preview?.channels.find((candidate) => candidate.index === channel);
+      if (!view) return;
+      setPicks((previous) => {
+        const next = { ...previous };
+        view.rules.forEach((rule, index) => {
+          // The marks of suggestions that cannot be checked are not changed.
+          if (standing(view, rule, undefined) === "pickable") next[pickKey(channel, index)] = on;
+        });
+        return next;
+      });
+    },
+    [preview],
+  );
+
+  const picked = useCallback(
+    (channel: number, rule: number) => {
+      const view = preview?.channels.find((candidate) => candidate.index === channel);
+      const ruleView = view?.rules[rule];
+      return view && ruleView ? isPicked(view, ruleView, rule, picks, choices[channel]) : false;
+    },
+    [preview, picks, choices],
+  );
+
   const apply = useCallback(async () => {
     if (!preview || content === null || undecided > 0) return;
     const body: ChoiceRequest[] = preview.channels.flatMap((channel) =>
@@ -123,7 +168,12 @@ export function useImportFlow(): ImportFlow {
     try {
       const done = await api<ApplyResult>("/import/legacy/apply", {
         method: "POST",
-        body: { content, choices: body, reviewed_collect_folder: preview.collect_folder.current },
+        body: {
+          content,
+          choices: body,
+          reviewed_collect_folder: preview.collect_folder.current,
+          subscriptions: pickedRequests(preview.channels, picks, choices),
+        },
       });
       setResult(done);
       setContent(null);
@@ -144,7 +194,7 @@ export function useImportFlow(): ImportFlow {
         () => undefined,
       );
     }
-  }, [preview, content, choices, undecided]);
+  }, [preview, content, choices, picks, undecided]);
 
   const reviewAgain = useCallback(async () => {
     if (content !== null) await review(content, fileName ?? "");
@@ -157,6 +207,7 @@ export function useImportFlow(): ImportFlow {
     setPreview(null);
     setResult(null);
     setChoices({});
+    setPicks({});
     setPickError(null);
     setApplyError(null);
   }, []);
@@ -172,6 +223,11 @@ export function useImportFlow(): ImportFlow {
     pickError,
     applyError,
     undecided,
+    lookup,
+    pickedCount,
+    isPicked: picked,
+    pick,
+    pickAll,
     chooseFile,
     choose,
     apply,

@@ -18,6 +18,13 @@
 //! disappeared since the preview) is answered `409` with nothing applied, so
 //! the screen can review the file again.
 //!
+//! # Subscription suggestions
+//!
+//! The comment above a rule can name an Anissia anime and a subtitle creator;
+//! the preview offers a subscription for it (`suggestion` on every rule) and
+//! the apply takes the ones the user checked (`subscriptions`). See
+//! [`suggestions`]. Nothing is received by an import, subscriptions included.
+//!
 //! # Folders
 //!
 //! The app has one collect folder and a rule's directory is relative to it, so
@@ -41,12 +48,18 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
+mod suggestions;
+
+use std::collections::HashMap;
+
+use self::suggestions::{Pick, SubscriptionsResult, SuggestionView};
 use super::settings_api::check_folders;
 use super::{ApiError, AppState};
 use crate::import::{
     fit::{fit, Fit, Fitted},
     legacy::{self, LegacyChannel},
     plan::{build_actions, display_url, find_existing, Choice, Decision},
+    suggest::suggest,
 };
 use crate::store::channels::import::{match_rules, ImportChannel, ImportedChannel};
 use crate::store::channels::{ChannelError, ChannelWithRules, Rule, Version};
@@ -74,6 +87,9 @@ struct ApplyRequest {
     /// review stale.
     #[serde(default)]
     reviewed_collect_folder: Option<String>,
+    /// The subscription suggestions the user kept checked.
+    #[serde(default)]
+    subscriptions: Vec<Pick>,
 }
 
 #[derive(Deserialize)]
@@ -108,6 +124,8 @@ struct RuleView {
     /// True when replacing keeps the ID of an existing rule for this one.
     /// Only ever true on a channel that already exists.
     keeps_existing_rule: bool,
+    /// What the comment above the rule offers.
+    suggestion: SuggestionView,
 }
 
 /// An existing rule that a replacement would delete.
@@ -185,11 +203,11 @@ fn invalid_regex(rule: &crate::store::channels::RuleInput) -> bool {
 
 fn channel_view(
     index: usize,
-    folder: &str,
+    legacy: &LegacyChannel,
     fit: &Fit,
-    original: &ImportChannel,
     existing: Option<&ChannelWithRules>,
 ) -> ChannelView {
+    let (folder, original) = (legacy.folder.as_str(), &legacy.channel);
     // A channel that is not imported is shown as the file has it.
     let (channel, not_imported) = match fit {
         Fit::Import(channel) => (channel, None),
@@ -209,6 +227,8 @@ fn channel_view(
         })
         .unwrap_or_default();
 
+    let suggestions = suggestions::views(&legacy.readings, &channel.rules, existing, &kept);
+
     ChannelView {
         index,
         url: display_url(&channel.input.url),
@@ -219,7 +239,8 @@ fn channel_view(
             .rules
             .iter()
             .zip(&kept)
-            .map(|(rule, kept)| RuleView {
+            .zip(suggestions)
+            .map(|((rule, kept), suggestion)| RuleView {
                 r#match: rule.r#match.clone(),
                 regex: rule.regex,
                 case_insensitive: rule.case_insensitive,
@@ -227,6 +248,7 @@ fn channel_view(
                 episode: rule.episode,
                 invalid_regex: invalid_regex(rule),
                 keeps_existing_rule: kept.is_some(),
+                suggestion,
             })
             .collect(),
         existing: existing.map(|e| ExistingView {
@@ -358,13 +380,7 @@ async fn preview(
         .zip(&reviewed.fitted.channels)
         .enumerate()
         .map(|(i, (legacy, fit))| {
-            channel_view(
-                i,
-                &legacy.folder,
-                fit,
-                &legacy.channel,
-                found[i].map(|e| &reviewed.existing[e]),
-            )
+            channel_view(i, legacy, fit, found[i].map(|e| &reviewed.existing[e]))
         })
         .collect();
     Ok(Json(PreviewResponse {
@@ -431,6 +447,8 @@ struct Counts {
     rules_added: usize,
     rules_kept: usize,
     rules_removed: usize,
+    /// Rules that became subscriptions.
+    subscriptions_created: usize,
 }
 
 #[derive(Serialize)]
@@ -441,6 +459,8 @@ struct ApplyResponse {
     not_imported: Vec<NotImportedView>,
     /// The collect folder this import set; `null` when it changed none.
     collect_folder_set: Option<String>,
+    /// What became of the subscription suggestions the user checked.
+    subscriptions: SubscriptionsResult,
     counts: Counts,
 }
 
@@ -486,6 +506,14 @@ async fn apply(
         .iter()
         .map(|c| display_url(&c.channel.input.url))
         .collect();
+    // The suggestions of the imported channels, by their place in the file.
+    let mut suggested = HashMap::new();
+    let mut rules_of = HashMap::new();
+    for (local, channel) in reviewed.importable.iter().enumerate() {
+        let at = reviewed.positions[local];
+        suggested.insert(at, suggest(&reviewed.file[at].readings, &channel.rules));
+        rules_of.insert(at, channel.rules.clone());
+    }
     let Reviewed {
         fitted,
         existing,
@@ -511,6 +539,13 @@ async fn apply(
     let (indexes, actions): (Vec<usize>, Vec<_>) = plan.actions.into_iter().unzip();
     let indexes: Vec<usize> = indexes.into_iter().map(|local| positions[local]).collect();
     let skipped: Vec<usize> = plan.skipped.iter().map(|&local| positions[local]).collect();
+    let picked = suggestions::pick(
+        &request.subscriptions,
+        &suggested,
+        &rules_of,
+        &suggestions::actions_by_channel(&indexes),
+    )
+    .map_err(|_| stale())?;
     // The folder is set together with the channels that need it.
     let collect_folder_set = fitted.collect_folder.filter(|_| !actions.is_empty());
     if let Some(folder) = &collect_folder_set {
@@ -530,11 +565,16 @@ async fn apply(
             .map_err(|e| ApiError::Internal(e.to_string()))?
             .map_err(ApiError::invalid)?;
     }
-    let results = state
+    // Anissia is asked only for the checked suggestions, and never blocks the
+    // import: what it cannot say is left for the worker's daily refresh.
+    let resolved = suggestions::resolve(&state, &picked.anime_nos()).await;
+    let to_subscribe = suggestions::subscriptions(&picked.wanted, &resolved, state.anissia.now());
+    let (results, outcomes) = state
         .channels
-        .import_channels_setting_folder(actions, collect_folder_set.clone())
+        .import_channels_subscribing(actions, collect_folder_set.clone(), to_subscribe)
         .await
         .map_err(store_error)?;
+    let subscriptions = suggestions::result(picked, &resolved, &outcomes);
 
     let mut response = ApplyResponse {
         added: Vec::new(),
@@ -557,7 +597,9 @@ async fn apply(
             rules_added: 0,
             rules_kept: 0,
             rules_removed: 0,
+            subscriptions_created: subscriptions.created_count(),
         },
+        subscriptions,
     };
     for (index, result) in indexes.into_iter().zip(results) {
         let stored = result.channel();
@@ -603,5 +645,7 @@ async fn apply(
     Ok(Json(response))
 }
 
+#[cfg(test)]
+mod subscription_tests;
 #[cfg(test)]
 mod tests;

@@ -19,6 +19,7 @@ use std::fmt;
 use url::Url;
 use yaml_serde::Value;
 
+use super::comments::{rule_comments, Reading};
 use crate::config::ChannelConfig;
 use crate::store::channels::import::ImportChannel;
 use crate::store::channels::{ChannelInput, RuleInput, RuleState};
@@ -52,6 +53,9 @@ impl std::error::Error for ParseError {}
 pub struct LegacyChannel {
     pub folder: String,
     pub channel: ImportChannel,
+    /// What the comment above each rule says, one per rule of
+    /// [`Self::channel`] in order ([`super::comments`]).
+    pub readings: Vec<Reading>,
 }
 
 /// Parses the file into channels in file order, each with its rules in file
@@ -109,11 +113,18 @@ pub fn parse(content: &str) -> Result<Vec<LegacyChannel>, ParseError> {
         ))
     })?;
 
-    configs
+    let mut channels = configs
         .iter()
         .enumerate()
         .map(|(i, config)| convert(i, config))
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // The comments are read from the text: the parser above drops them.
+    let counts: Vec<usize> = channels.iter().map(|c| c.channel.rules.len()).collect();
+    for (channel, readings) in channels.iter_mut().zip(rule_comments(content, &counts)) {
+        channel.readings = readings;
+    }
+    Ok(channels)
 }
 
 /// Ensures the `index`-th item is a mapping holding each of `keys`.
@@ -191,6 +202,7 @@ fn convert(index: usize, config: &ChannelConfig) -> Result<LegacyChannel, ParseE
     Ok(LegacyChannel {
         folder,
         channel: ImportChannel { input, rules },
+        readings: Vec::new(),
     })
 }
 
@@ -241,6 +253,39 @@ mod tests {
         assert_eq!(first.rules[3].directory, "Slime/Season 04");
         assert_eq!(channels[1].channel.input.excludes, Vec::<String>::new());
         assert_eq!(channels[1].channel.rules.len(), 2);
+    }
+
+    #[test]
+    fn the_comments_above_the_rules_are_read_alongside_each_rule() {
+        let sample = include_str!("../../tests/fixtures/legacy_commented.yml");
+        let channels = parse(sample).unwrap();
+        let counts: Vec<_> = channels.iter().map(|c| c.readings.len()).collect();
+        assert_eq!(counts, [5, 2]);
+        assert_eq!(
+            channels[0].readings[0],
+            Reading::Address {
+                anime_no: 1001,
+                creator: Some("Team Alpha".into()),
+                airs: Some(crate::import::comments::Airs {
+                    week: 3,
+                    time: "22:30".into()
+                })
+            }
+        );
+        assert_eq!(channels[0].readings[3], Reading::None);
+        // The rules themselves are the same with and without the comments.
+        assert_eq!(channels[0].channel.rules[3].episode, -12);
+        assert_eq!(
+            channels[1].channel.rules[1].directory,
+            "Zeta Show/Season 01"
+        );
+
+        // A file with no comments has none to read.
+        let plain = parse(include_str!("../../tests/fixtures/legacy_channels.yml")).unwrap();
+        assert!(plain
+            .iter()
+            .flat_map(|c| &c.readings)
+            .all(|r| *r == Reading::None));
     }
 
     #[test]

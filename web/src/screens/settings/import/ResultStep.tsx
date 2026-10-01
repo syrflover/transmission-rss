@@ -3,6 +3,66 @@ import { ActionBar, Banner, BTN, Facts, Labeled } from "../parts";
 import { RuleName } from "./ReviewStep";
 import type { ImportFlow } from "./useImportFlow";
 
+/** What became of the subscription suggestions the user checked. */
+function Subscriptions({ flow }: { flow: ImportFlow }) {
+  const subscriptions = flow.result?.subscriptions;
+  const preview = flow.preview;
+  if (!subscriptions || !preview) return null;
+  const { created, not_created: notCreated, unavailable } = subscriptions;
+  if (created.length === 0 && notCreated.length === 0) return null;
+  const phrase = (channel: number, rule: number) =>
+    preview.channels.find((candidate) => candidate.index === channel)?.rules[rule]?.match ?? null;
+  const unknown = created.filter((sub) => !sub.schedule_known).length;
+
+  return (
+    <section aria-labelledby="result-subscriptions" className="flex flex-col gap-3">
+      <h3 id="result-subscriptions" className="m-0 text-base font-bold">
+        구독
+      </h3>
+      {created.length > 0 && (
+        <>
+          <p className="text-[13.5px] leading-relaxed text-text-secondary">
+            체크한 제안 {created.length}개를 구독으로 가져왔어요. 구독으로 가져온 규칙도 아무것도 받지 않았어요. 규칙을
+            만들기 전에 기록된 항목은 지난 항목이라 자동으로 받지 않고, 규칙 상세의 지난 회차에서 직접 확인해 받을 수
+            있어요.
+          </p>
+          <ul aria-label="구독으로 가져온 규칙" className="m-0 flex list-none flex-col gap-1.5 p-0 text-[13.5px]">
+            {created.map((sub) => (
+              <li key={`${sub.channel}:${sub.rule}`} className="flex flex-wrap items-baseline gap-x-2.5 gap-y-0.5">
+                <RuleName phrase={phrase(sub.channel, sub.rule)} />
+                <span className="text-xs text-text-muted">
+                  {sub.subject ?? "요일·시간 미정"} · {sub.creator ? `${sub.creator} 따라 받기` : "제작자 미정"}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      {unknown > 0 && (
+        <p className="text-[13.5px] leading-relaxed text-text-secondary">
+          {unavailable ?? "Anissia 편성표에서 찾지 못한 작품이 있어요."} 방영 요일과 시간을 읽지 못한 구독 {unknown}개는
+          그대로 만들고, 앱이 Anissia에서 다시 읽어 채울 때까지 요일 자리에 기타로 보여요.
+        </p>
+      )}
+      {notCreated.length > 0 && (
+        <>
+          <p className="text-[13.5px] leading-relaxed text-text-secondary">
+            체크했지만 구독으로 만들지 않은 제안 {notCreated.length}개는 규칙만 가져왔어요.
+          </p>
+          <ul aria-label="구독으로 만들지 않은 제안" className="m-0 flex list-none flex-col gap-1.5 p-0 text-[13.5px]">
+            {notCreated.map((sub) => (
+              <li key={`${sub.channel}:${sub.rule}`} className="flex flex-wrap items-baseline gap-x-2.5 gap-y-0.5">
+                <RuleName phrase={phrase(sub.channel, sub.rule)} />
+                <span className="text-xs text-text-muted">{sub.reason}</span>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </section>
+  );
+}
+
 export function ResultStep({ flow }: { flow: ImportFlow }) {
   const result = flow.result;
   if (!result) return null;
@@ -12,8 +72,8 @@ export function ResultStep({ flow }: { flow: ImportFlow }) {
   return (
     <div className="flex flex-col gap-6">
       <Banner tone="done" role="status" title="가져오기를 마쳤어요">
-        채널과 규칙만 앱에 저장했어요. 가져오기는 다운로드를 시작하거나, 자막을 적용하거나, 파일을 바꾸거나 정리하지
-        않아요.
+        채널과 규칙, 체크한 구독만 앱에 저장했어요. 아무것도 받지 않았고, 다운로드를 시작하거나 자막을 적용하거나 파일을
+        바꾸거나 정리하지 않았으며, 과거 승인도 되살리지 않았어요.
       </Banner>
 
       <section aria-labelledby="result-counts" className="flex flex-col gap-3">
@@ -31,6 +91,7 @@ export function ResultStep({ flow }: { flow: ImportFlow }) {
           <Labeled label="추가한 규칙">{counts.rules_added}개</Labeled>
           <Labeled label="값만 바꾼 규칙">{counts.rules_kept}개</Labeled>
           <Labeled label="없앤 규칙">{counts.rules_removed}개</Labeled>
+          <Labeled label="구독으로 가져온 규칙">{counts.subscriptions_created}개</Labeled>
         </Facts>
         <ul className="m-0 flex list-none flex-col gap-2 p-0 text-[13.5px] leading-relaxed text-text-secondary">
           {result.added.map((channel) => (
@@ -64,6 +125,8 @@ export function ResultStep({ flow }: { flow: ImportFlow }) {
           ))}
         </ul>
       </section>
+
+      <Subscriptions flow={flow} />
 
       {removedChannels.length > 0 && (
         <section aria-labelledby="result-removed" className="flex flex-col gap-3">

@@ -120,7 +120,16 @@ Each watched directory (a watch folder, each work folder, each `Season NN` folde
 
 ### Channels and the collect folder
 
-Channels and rules live in the app database and are edited in the web. To bring over a channel configuration of the old binary (the YAML at `CHANNELS_CONFIG_URL`), use Settings → Data → Import in the web. Importing only writes channels and rules (and the collect folder, below); it adds, renames and removes nothing.
+Channels and rules live in the app database and are edited in the web. To bring over a channel configuration of the old binary (the YAML at `CHANNELS_CONFIG_URL`), use Settings → Data → Import in the web. Importing only writes channels and rules (and the collect folder, below) and the subscriptions you check; it adds, renames and removes nothing.
+
+The review step also reads the two comment lines directly above each rule (no blank line between) and suggests a subscription for that rule:
+
+```yaml
+# Mon. 23:30. <creator name>
+# https://anissia.net/anime?animeNo=<number>
+```
+
+The first line is the weekday (`Mon` `Tue` `Wed` `Thu` `Fri` `Sat` `Sun`), the time (`HH:MM`) and the subtitle creator, separated by `. `; the creator is everything after the second separator. The second line is the Anissia address. A suggestion with a creator starts checked. A line 1 that does not fit (or has no creator) leaves an address-only suggestion, unchecked and shown as `제작자 미정`, and a comment with no readable Anissia address shows why it could not be read and imports the rule alone. Checked suggestions become subscriptions in the same import, with the weekday and time Anissia gives (the comment's own weekday and time are shown only while Anissia cannot be reached; the daily refresh fills in the stored ones). The import receives nothing, and the items already in the history count as past ones. The grammar is in `src/import/comments.rs`; adjust it there if your comments are written differently.
 
 A channel has no folder of its own. Every torrent is saved under the app's **collect folder** (Settings → Collection → Collect folder) plus its rule's save folder, so a rule with the save folder `Show/Season 01` saves to `<collect folder>/Show/Season 01`. The settings screen also takes an optional **archive folder**, where the work folders of archived rules go (below).
 

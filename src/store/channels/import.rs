@@ -19,7 +19,10 @@ use rusqlite::{params, Connection, Transaction, TransactionBehavior};
 use uuid::Uuid;
 
 use super::model::{Channel, ChannelInput, ChannelWithRules, Rule, RuleInput, Version};
-use super::{repo, ChannelError, ChannelStore};
+use super::{
+    import_subscriptions::{subscribe, ImportSubscription, SubscriptionOutcome},
+    repo, ChannelError, ChannelStore,
+};
 use crate::store::{
     library::{ensure_automatic_in, LibraryError},
     settings::{set_collect_folder_if_unset, SettingsError},
@@ -61,6 +64,13 @@ pub enum ImportedChannel {
 
 impl ImportedChannel {
     pub fn channel(&self) -> &ChannelWithRules {
+        match self {
+            ImportedChannel::Added(channel) => channel,
+            ImportedChannel::Replaced { channel, .. } => channel,
+        }
+    }
+
+    pub(super) fn channel_mut(&mut self) -> &mut ChannelWithRules {
         match self {
             ImportedChannel::Added(channel) => channel,
             ImportedChannel::Replaced { channel, .. } => channel,
@@ -126,16 +136,23 @@ impl ChannelStore {
         collect_folder: Option<String>,
     ) -> Result<Vec<ImportedChannel>, ChannelError> {
         self.db
-            .run(move |c| apply_import(c, &actions, collect_folder.as_deref()))
+            .run(move |c| {
+                apply_import(c, &actions, collect_folder.as_deref(), &[])
+                    .map(|(channels, _)| channels)
+            })
             .await
     }
 }
 
-fn apply_import(
+/// [`ChannelStore::import_channels_setting_folder`]'s transaction, which also
+/// makes the rules `subscriptions` name subscriptions in the same transaction
+/// ([`super::import_subscriptions`]).
+pub(super) fn apply_import(
     conn: &mut Connection,
     actions: &[ImportAction],
     collect_folder: Option<&str>,
-) -> Result<Vec<ImportedChannel>, ChannelError> {
+    subscriptions: &[ImportSubscription],
+) -> Result<(Vec<ImportedChannel>, Vec<SubscriptionOutcome>), ChannelError> {
     if collect_folder == Some("") {
         return Err(ChannelError::Invalid("collect folder is empty"));
     }
@@ -154,6 +171,9 @@ fn apply_import(
         };
         channel.input.validate()?;
         channel.rules.iter().try_for_each(RuleInput::validate)?;
+    }
+    for subscription in subscriptions {
+        subscription.validate(actions)?;
     }
 
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -187,8 +207,9 @@ fn apply_import(
             } => replace_keeping_rule_ids(&tx, id, *expected_version, channel)?,
         });
     }
+    let outcomes = subscribe(&tx, &mut results, subscriptions)?;
     tx.commit()?;
-    Ok(results)
+    Ok((results, outcomes))
 }
 
 fn new_id() -> String {
@@ -337,7 +358,7 @@ fn replace_keeping_rule_ids(
     })
 }
 
-fn read_channel(conn: &Connection, id: &str) -> Result<ChannelWithRules, ChannelError> {
+pub(super) fn read_channel(conn: &Connection, id: &str) -> Result<ChannelWithRules, ChannelError> {
     let channel: Channel =
         repo::get_channel(conn, id)?.expect("the channel exists in this transaction");
     let rules = repo::list_rules(conn, id)?;
