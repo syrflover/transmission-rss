@@ -872,9 +872,13 @@ async fn remove_old(ctx: &CycleContext, row: &mut Revision, at: Millis, listing:
     // removal below would take with it.
     match (identity, FileIdentity::at(&old)) {
         (Some(seen), Ok(now)) if seen == now => {}
-        (_, Err(err)) if err.kind() != io::ErrorKind::NotFound => {
-            return Next::Later(format!("cannot look at {}: {err}", old.display()))
+        // Gone since it was looked at (a removal Transmission is carrying
+        // out, or the person): the old video is removed, which is the
+        // `!present` case above, with the old video it was claimed for.
+        (_, Err(err)) if err.kind() == io::ErrorKind::NotFound => {
+            return Next::Step(Step::Removed { reason: None })
         }
+        (_, Err(err)) => return Next::Later(format!("cannot look at {}: {err}", old.display())),
         _ => return failed(OLD_CHANGED, None),
     }
 

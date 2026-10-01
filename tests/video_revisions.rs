@@ -169,6 +169,11 @@ impl Setup {
     /// The episode name holds `bytes`, a file of no torrent, and history knows
     /// the release `14` of the channel (seen in its feed earlier).
     async fn untracked_video(&self, bytes: &[u8]) {
+        self.untracked_video_of(bytes, &v1()).await
+    }
+
+    /// [`Setup::untracked_video`] for the release named `title`.
+    async fn untracked_video_of(&self, bytes: &[u8], title: &str) {
         std::fs::write(self.file(EPISODE_NAME), bytes).unwrap();
         self.h
             .history
@@ -178,8 +183,8 @@ impl Setup {
                     channel_id: self.channel_id.clone(),
                     channel_label: "https://feeds.example.test/show".into(),
                     identity_key: "guid:v1".into(),
-                    title: v1(),
-                    link: magnet(OLD_HASH, &v1()),
+                    title: title.to_owned(),
+                    link: magnet(OLD_HASH, title),
                     result: HistoryResult::NoMatch,
                     rule_id: None,
                     torrent_hash: None,
@@ -1389,6 +1394,84 @@ async fn a_file_put_over_the_old_video_while_it_is_read_is_not_deleted() {
     assert_eq!(s.state_of(&v2()).await, RevisionState::Failed);
     let failures = s.failures().await;
     assert_eq!(revision_failure(&failures)["files"][0]["state"], "kept");
+}
+
+/// The old video is gone after the replacement was claimed (`removing` is
+/// written) but before the name is looked at again: Transmission finished an
+/// earlier removal, or the person deleted it. That is the old video removed:
+/// the replacement goes on to name the new video and the old release stays
+/// superseded, instead of failing as changed and being cleared.
+#[tokio::test]
+async fn an_old_video_gone_after_the_claim_still_ends_in_the_replacement() {
+    let s = Setup::new().await;
+    // A file of no torrent whose CRC32 is its name's: an empty file's, so a
+    // pipe the worker reads to its end with nothing written gives it.
+    let old = release("", Some("00000000"));
+    s.untracked_video_of(b"", &old).await;
+    s.feed(&[(NEW_HASH, &v2())]);
+    s.h.tr.content_on_add(NEW_HASH, NEW_BYTES);
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Receiving);
+
+    let episode = s.file(EPISODE_NAME);
+    std::fs::remove_file(&episode).unwrap();
+    rustix::fs::mknodat(
+        rustix::fs::CWD,
+        &episode,
+        rustix::fs::FileType::Fifo,
+        rustix::fs::Mode::from_raw_mode(0o644),
+        0,
+    )
+    .unwrap();
+    s.complete(NEW_HASH);
+
+    let db_path = s.h.db_path();
+    let gone = {
+        let episode = episode.clone();
+        tokio::task::spawn_blocking(move || {
+            use std::os::unix::fs::OpenOptionsExt;
+            let begun = std::time::Instant::now();
+            // Waits for the worker to open the pipe for its read.
+            let pipe = loop {
+                match std::fs::OpenOptions::new()
+                    .write(true)
+                    .custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32)
+                    .open(&episode)
+                {
+                    Ok(pipe) => break pipe,
+                    Err(_) if begun.elapsed() < std::time::Duration::from_secs(30) => {
+                        std::thread::sleep(std::time::Duration::from_millis(5))
+                    }
+                    Err(err) => panic!("the worker never read the old video: {err}"),
+                }
+            };
+            // The worker's writes of the cycle are done up to the claim of the
+            // replacement, the next one; it waits for this lock.
+            let db = rusqlite::Connection::open(&db_path).unwrap();
+            db.busy_timeout(std::time::Duration::from_secs(10)).unwrap();
+            db.execute_batch("BEGIN IMMEDIATE").unwrap();
+            // The end of the pipe ends the worker's read.
+            drop(pipe);
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            std::fs::remove_file(&episode).unwrap();
+            db.execute_batch("COMMIT").unwrap();
+        })
+    };
+    let (_, gone) = tokio::join!(s.cycle(), gone);
+    gone.unwrap();
+    s.cycle().await;
+    s.cycle().await;
+
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Done);
+    assert_eq!(s.names(), vec![EPISODE_NAME]);
+    assert_eq!(read(&episode), NEW_BYTES);
+    assert!(s.failures().await.is_empty());
+    let row = RevisionStore::new(s.h.db.clone())
+        .by_item(s.item(&v2()).await.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.old_item_id, Some(s.item(&old).await.id));
 }
 
 /// Transmission removed the old torrent and its data, but its answer never
