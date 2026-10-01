@@ -14,7 +14,7 @@ const WEEKDAY = ["일", "월", "화", "수", "목", "금", "토"];
 /** The history filter the `실패·중복` link opens. */
 export const PROBLEMS_HREF = "/collect/history?result=add_failed,duplicate";
 
-interface Load {
+export interface Load {
   board: Board | undefined;
   /** The last read failed. With a board shown, it is the previous one. */
   failed: boolean;
@@ -26,7 +26,7 @@ interface Load {
  * The board: the copy from the last visit shows at once and is read again
  * behind it, then every {@link POLL_MS} and when the page becomes visible.
  */
-function useBoard(): Load {
+export function useBoard(): Load {
   const { data, error, slow, reload } = useCached(KEYS.status, loadBoard, "상태를 불러오지 못했어요.");
   useEffect(() => {
     const timer = window.setInterval(reload, POLL_MS);

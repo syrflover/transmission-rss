@@ -1,6 +1,8 @@
 import { api, ApiError } from "@/lib/api";
 import { forgetPrefix } from "@/lib/cached";
 
+import { forgetWeek } from "../schedule/api";
+
 /**
  * The library list (`src/web/library_api.rs`): the works with the summary the
  * list shows, one page at a time. Times are Unix milliseconds, `null` when unknown.
@@ -87,6 +89,8 @@ export const WORK_PREFIX = "library:work:";
 export function forgetLibrary(): void {
   forgetPrefix(LIST_PREFIX);
   forgetPrefix(WORK_PREFIX);
+  // The home screen's checklist ends with the first watch folder, and its cards link to works.
+  forgetWeek();
 }
 
 /** Where a work opens (the work detail screen). */
