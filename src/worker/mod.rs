@@ -84,6 +84,7 @@ pub mod feed;
 pub mod live;
 pub mod lock;
 pub mod plan;
+pub mod revisions;
 pub mod season_link;
 pub mod watch;
 
@@ -106,6 +107,7 @@ use crate::{
         commands::{CommandError, CommandStore},
         history::{HistoryError, HistoryStore, Millis},
         library::LibraryStore,
+        revisions::RevisionStore,
         settings::SettingsStore,
         status::StatusStore,
         Db,
@@ -198,6 +200,7 @@ impl Worker {
                 channels: ChannelStore::new(db.clone()),
                 settings: SettingsStore::new(db.clone()),
                 history: HistoryStore::new(db.clone()),
+                revisions: RevisionStore::new(db.clone()),
                 library: LibraryStore::new(db),
                 scan_cache: watch::ScanCaches::default(),
                 season_link: season_link::Memory::default(),

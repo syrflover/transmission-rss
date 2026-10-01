@@ -14,10 +14,13 @@
 //! # Results
 //!
 //! [`HistoryResult`] has the stable codes `received` (추가함), `no_match`
-//! (규칙 불일치), `excluded` (제외), `duplicate` (중복) and `add_failed`
-//! (추가 실패). When an item is seen again with a different result, the change
-//! is applied by the rules in [`Transition::between`]: `no_match`, `excluded`
-//! and `add_failed` follow the newest evaluation, while `received` (and
+//! (규칙 불일치), `excluded` (제외), `duplicate` (중복), `add_failed`
+//! (추가 실패) and `version_unknown` (버전 미상: a higher revision of a video
+//! the folder holds that the worker did not receive on its own, see
+//! [`crate::worker::revisions`]). When an item is seen again with a different
+//! result, the change is applied by the rules in [`Transition::between`]:
+//! `no_match`, `excluded`, `add_failed` and `version_unknown` follow the newest
+//! evaluation, while `received` (and
 //! `duplicate`, except that it may become `received`) is never undone. Each
 //! applied change updates the record (`result`, `result_at`, rule, reason,
 //! hash) and appends a row to the item's change trail ([`HistoryStore::changes`]),
@@ -94,6 +97,35 @@ impl HistoryStore {
     /// One record by its ID.
     pub async fn get(&self, item_id: i64) -> Result<Option<HistoryItem>, HistoryError> {
         self.db.run(move |c| repo::get(c, item_id)).await
+    }
+
+    /// The record of the item `identity_key` of the channel `channel_id`.
+    pub async fn item_by_key(
+        &self,
+        channel_id: String,
+        identity_key: String,
+    ) -> Result<Option<HistoryItem>, HistoryError> {
+        self.db
+            .run(move |c| repo::item_by_key(c, &channel_id, &identity_key))
+            .await
+    }
+
+    /// The records of the torrent `hash`, newest first: what tells whether trss
+    /// added a torrent (a `received` record) and which release it was.
+    pub async fn items_of_hash(&self, hash: &str) -> Result<Vec<HistoryItem>, HistoryError> {
+        let hash = hash.to_owned();
+        self.db.run(move |c| repo::items_of_hash(c, &hash)).await
+    }
+
+    /// The ID and title of every record of the channel `channel_id`: the
+    /// releases a video of unknown revision is compared with.
+    pub async fn titles_of_channel(
+        &self,
+        channel_id: String,
+    ) -> Result<Vec<(i64, String)>, HistoryError> {
+        self.db
+            .run(move |c| repo::titles_of_channel(c, &channel_id))
+            .await
     }
 
     /// How many records have each result (results with none are left out),

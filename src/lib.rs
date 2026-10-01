@@ -5,6 +5,7 @@ pub mod config;
 pub mod discovery;
 pub mod folders;
 pub mod import;
+pub mod revision;
 pub mod rss;
 pub mod rule;
 pub mod schedule;

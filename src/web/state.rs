@@ -4,7 +4,8 @@ use crate::{
     seasons::Seasons,
     store::{
         channels::ChannelStore, commands::CommandStore, history::HistoryStore,
-        library::LibraryStore, settings::SettingsStore, setup::SetupStore, status::StatusStore, Db,
+        library::LibraryStore, revisions::RevisionStore, settings::SettingsStore,
+        setup::SetupStore, status::StatusStore, Db,
     },
 };
 
@@ -33,6 +34,8 @@ pub struct AppState {
     pub anissia: Anissia,
     /// Which steps of the first run's checklist the user skipped.
     pub setup: SetupStore,
+    /// The replacements of video revisions the worker carries out.
+    pub revisions: RevisionStore,
 }
 
 impl AppState {
@@ -48,6 +51,7 @@ impl AppState {
             settings: SettingsStore::new(db.clone()),
             library: LibraryStore::new(db.clone()),
             setup: SetupStore::new(db.clone()),
+            revisions: RevisionStore::new(db.clone()),
             // No app data folder: covers can be read and changed but no image
             // stored or served until `with_artwork` gives one.
             artwork,

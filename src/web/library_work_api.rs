@@ -16,7 +16,9 @@
 //!     "episodes": [{
 //!       "episode": "01", "sort": 1.0, "air_at": null,
 //!       "video":    [{ "path": "Season 01/… S01E01.mkv", "added_at": null }],
-//!       "subtitle": [{ "path": "Season 01/… S01E01.ko.ass", "added_at": 1760000100000 }]
+//!       "subtitle": [{ "path": "Season 01/… S01E01.ko.ass", "added_at": 1760000100000 }],
+//!       "revision": { "from": "v1", "to": "v2", "replaced_at": 1760000200000 },
+//!       "failure": null
 //!     }]
 //!   }],
 //!   "unrecognized": [{ "path": "Extras/PV.mkv", "reason": "outside_season", "message": "…" }],
@@ -38,6 +40,14 @@
 //!   `sort` is its number, `null` when it is no number (`SP`). `added_at` is
 //!   Unix milliseconds, `null` when unknown (the file was there before the app
 //!   first looked).
+//! - `revision` is the version line of an episode whose video was replaced by
+//!   a higher revision of the same release (the latest such replacement;
+//!   `from` is `null` when the old video's revision was not known), `null`
+//!   otherwise. `failure` is a replacement of the episode's video that failed
+//!   (`받기 실패`), in the shape of [`super::todo_api`]'s `revision` items
+//!   (`at`, `reason`, `files`), `null` otherwise; an episode left with no file
+//!   under its name by such a failure still has a row, with no files. Both
+//!   come from [`crate::store::revisions`], for season folders of the work.
 //! - `native_title` is the first (lowest-numbered, not season 0) season's first
 //!   linked AniList entry's native title, `null` without one.
 //! - `korean_title` is the Anissia title (`subject`) of the anime the work's
@@ -80,13 +90,16 @@ use url::Url;
 use super::{
     artwork_api::image_url,
     seasons_api::{season_view, work_infos, SeasonInfoView},
+    todo_api::{failure_of, RevisionFailure},
     ApiError, AppState,
 };
 use crate::{
+    revision::{season_episode, Release},
     rss::save_path,
     store::{
         channels::ChannelWithRules,
         library::{EpisodeDetail, FileRecord, LibraryError, WorkDetail},
+        revisions::Revision,
     },
     worker::commands::rule_archive::{work_folder, WorkFolder},
 };
@@ -126,6 +139,20 @@ struct EpisodeView {
     air_at: Option<i64>,
     video: Vec<FileView>,
     subtitle: Vec<FileView>,
+    /// The episode's video was replaced by a higher revision: the version line.
+    revision: Option<RevisionView>,
+    /// The replacement of the episode's video failed (`받기 실패`).
+    failure: Option<RevisionFailure>,
+}
+
+#[derive(Serialize)]
+struct RevisionView {
+    /// `v1`; `null` when the old video's revision was not known.
+    from: Option<String>,
+    /// `v2`.
+    to: String,
+    /// When the new video took the episode name, Unix milliseconds.
+    replaced_at: i64,
 }
 
 impl From<EpisodeDetail> for EpisodeView {
@@ -136,6 +163,8 @@ impl From<EpisodeDetail> for EpisodeView {
             air_at: None,
             video: episode.video.into_iter().map(FileView::from).collect(),
             subtitle: episode.subtitle.into_iter().map(FileView::from).collect(),
+            revision: None,
+            failure: None,
         }
     }
 }
@@ -252,6 +281,71 @@ fn rules_of(
     rules
 }
 
+/// Puts each replacement of the work on its episode's row: the version line
+/// of the latest one that is done, and a failure. A failure whose episode has
+/// no row (its old video is gone and the new one does not have the episode
+/// name yet) gets a row of its own with no files. Rows whose folder is not a
+/// season folder of the work, or whose name is no episode, are left out.
+fn attach_revisions(seasons: &mut [SeasonView], rows: Vec<Revision>, work_folder: &FsPath) {
+    for row in rows {
+        let Some((season, episode)) = season_episode(&row.episode_name) else {
+            continue;
+        };
+        if FsPath::new(&row.folder).parent() != Some(work_folder) {
+            continue;
+        }
+        let number = episode.parse::<f64>().ok();
+        let same = |e: &EpisodeView| match (e.sort, number) {
+            (Some(a), Some(b)) => a == b,
+            _ => e.episode == episode,
+        };
+        let failure = row.is_failure();
+        let Some(at) = seasons.iter().position(|s| s.number == season) else {
+            continue;
+        };
+        let episodes = &mut seasons[at].episodes;
+        let index = match episodes.iter().position(same) {
+            Some(index) => index,
+            None if failure => {
+                let index = episodes
+                    .iter()
+                    .position(|e| matches!((e.sort, number), (Some(a), Some(b)) if a > b))
+                    .unwrap_or(episodes.len());
+                episodes.insert(
+                    index,
+                    EpisodeView {
+                        episode: episode.clone(),
+                        sort: number,
+                        air_at: None,
+                        video: Vec::new(),
+                        subtitle: Vec::new(),
+                        revision: None,
+                        failure: None,
+                    },
+                );
+                index
+            }
+            None => continue,
+        };
+        let view = &mut episodes[index];
+        if failure {
+            view.failure = Some(failure_of(&row, Some(work_folder)));
+        } else if let Some(replaced_at) = row.replaced_at {
+            if view
+                .revision
+                .as_ref()
+                .is_none_or(|r| r.replaced_at <= replaced_at)
+            {
+                view.revision = Some(RevisionView {
+                    from: row.old_version.map(Release::label),
+                    to: Release::label(row.new_version),
+                    replaced_at,
+                });
+            }
+        }
+    }
+}
+
 async fn show(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -364,6 +458,13 @@ async fn show(
         .join(&work.dir_name)
         .to_string_lossy()
         .into_owned();
+    let revisions = state
+        .revisions
+        .in_work_folder(folder_path.clone())
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let mut seasons = seasons;
+    attach_revisions(&mut seasons, revisions, FsPath::new(&folder_path));
     Ok(Json(WorkDetailView {
         id: work.id,
         name: work.dir_name,

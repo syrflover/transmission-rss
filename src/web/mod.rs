@@ -34,6 +34,7 @@ pub mod setup_api;
 pub mod state;
 pub mod status_api;
 pub mod subscriptions_api;
+pub mod todo_api;
 pub mod watch_folders_api;
 
 pub use error::ApiError;

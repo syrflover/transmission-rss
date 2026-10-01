@@ -376,6 +376,45 @@ pub fn get(conn: &Connection, id: i64) -> Result<Option<HistoryItem>> {
         .optional()?)
 }
 
+/// The item `identity_key` of the channel `channel_id`.
+pub fn item_by_key(
+    conn: &Connection,
+    channel_id: &str,
+    identity_key: &str,
+) -> Result<Option<HistoryItem>> {
+    Ok(conn
+        .query_row(
+            &format!(
+                "SELECT {ITEM_COLUMNS} FROM history_items
+                  WHERE channel_id = ?1 AND identity_key = ?2"
+            ),
+            [channel_id, identity_key],
+            item_from_row,
+        )
+        .optional()?)
+}
+
+/// The items that record the torrent `hash`, newest record first.
+pub fn items_of_hash(conn: &Connection, hash: &str) -> Result<Vec<HistoryItem>> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {ITEM_COLUMNS} FROM history_items WHERE torrent_hash = ?1 ORDER BY id DESC"
+    ))?;
+    let items = stmt
+        .query_map([hash], item_from_row)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(items)
+}
+
+/// The ID and title of every item of the channel `channel_id`.
+pub fn titles_of_channel(conn: &Connection, channel_id: &str) -> Result<Vec<(i64, String)>> {
+    let mut stmt =
+        conn.prepare("SELECT id, title FROM history_items WHERE channel_id = ?1 ORDER BY id")?;
+    let titles = stmt
+        .query_map([channel_id], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(titles)
+}
+
 /// How many items have each result, optionally within one channel.
 pub fn counts(conn: &Connection, channel_id: Option<&str>) -> Result<Vec<(HistoryResult, i64)>> {
     let mut stmt = conn.prepare(
