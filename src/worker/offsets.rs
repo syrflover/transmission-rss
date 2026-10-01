@@ -12,9 +12,9 @@
 //!
 //! The offset is stored with the version the cycle read the rule at. When the
 //! user saved the rule meanwhile, it is read again and decided once more if
-//! its offset is still one the app may set and the save did not change it; a
-//! save that touched the offset is left as the user made it, and the rule's
-//! items are named without an offset.
+//! its offset is still one the app may set and the save changed neither it nor
+//! what picked and places the items ([`same_choice`]); otherwise the rule is
+//! left as the user made it, and its items are named without an offset.
 //!
 //! Anything that cannot be read (the library, the season info, the history)
 //! leaves the rule as it is, with a line in the log: a rule is received without
@@ -126,7 +126,7 @@ async fn settle_rule(
                 return Some(offset);
             }
             Ok(None) => match ctx.channels.get_rule(&rule.id).await {
-                Ok(Some(now)) if is_open(&now) && now.episode == rule.episode => rule = now,
+                Ok(Some(now)) if is_open(&now) && same_choice(&now, &rule) => rule = now,
                 Ok(_) => {
                     println!(
                         "Episode offset: rule {} was changed meanwhile and is left as it is",
@@ -153,4 +153,16 @@ async fn settle_rule(
         rule.id
     );
     None
+}
+
+/// Whether a save left what the cycle decided from as it was: the offset, and
+/// what picked the titles and names the folder they go to. The cycle's items
+/// were chosen and placed by the rule it read, so another choice is not
+/// decided from them.
+fn same_choice(now: &Rule, read: &Rule) -> bool {
+    now.episode == read.episode
+        && now.r#match == read.r#match
+        && now.regex == read.regex
+        && now.case_insensitive == read.case_insensitive
+        && now.directory == read.directory
 }

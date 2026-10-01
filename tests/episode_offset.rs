@@ -633,14 +633,15 @@ async fn a_rule_saved_while_its_first_release_is_read_still_gets_the_offset() {
 
     s.feed(&[&show(25)]);
     cycle_while(&s, async {
-        // A save that leaves the offset alone.
+        // A save that changes nothing the decision rests on (the form saved
+        // as it was); it still makes a new version.
         let now = s.rule(&rule).await;
-        let mut input = now.to_input();
-        input.case_insensitive = !input.case_insensitive;
-        s.h.channels
-            .update_rule(&now.id, now.version, &s.channel, input)
-            .await
-            .unwrap();
+        let saved =
+            s.h.channels
+                .update_rule(&now.id, now.version, &s.channel, now.to_input())
+                .await
+                .unwrap();
+        assert_ne!(saved.version, now.version);
     })
     .await;
 
@@ -672,5 +673,32 @@ async fn an_offset_the_user_saves_while_the_first_release_is_read_is_kept() {
 
     let stored = s.rule(&rule).await;
     assert_eq!((stored.episode, stored.episode_auto), (0, false));
+    assert_eq!(s.names(), ["Show S03E25.mkv"]);
+}
+
+#[tokio::test]
+async fn a_rule_whose_match_changes_while_its_first_release_is_read_is_not_decided() {
+    let s = Scene::new().await;
+    s.link_earlier_seasons([Some(12), Some(12)]).await;
+    s.h.advance(1_000);
+    let rule = s.subscribe("Show", "Show/Season 03", 7, 1).await;
+    s.feed(&[]);
+    s.cycle().await;
+
+    s.feed(&[&show(25)]);
+    cycle_while(&s, async {
+        // The items of this cycle were picked by the phrase the cycle read.
+        let now = s.rule(&rule).await;
+        let mut input = now.to_input();
+        input.r#match = Some("Show -".to_owned());
+        s.h.channels
+            .update_rule(&now.id, now.version, &s.channel, input)
+            .await
+            .unwrap();
+    })
+    .await;
+
+    let stored = s.rule(&rule).await;
+    assert_eq!((stored.episode, stored.episode_auto), (1, false));
     assert_eq!(s.names(), ["Show S03E25.mkv"]);
 }
