@@ -1,33 +1,23 @@
 //! Judging image bytes: the format from the bytes themselves (never a file
-//! name, an extension or a declared MIME type), then a full decode under the
-//! limits of [`super`], so a damaged file, a non-image or one too large to
-//! decode safely is refused before it is stored.
+//! name, an extension or a declared MIME type), then the size the header
+//! states, under the limits of [`super`], so a non-image, a file whose header
+//! cannot be read and one too large to show is refused before it is stored
+//! (`docs/specs/library.md`, 이미지 파일의 수명).
 //!
-//! # Decode memory
+//! Nothing is decoded (user decision, 2026-10-01). The app stores and serves
+//! the bytes as they came, so decoding would only have found files damaged
+//! after the header, at the cost of tens of MiB of memory for one image (the
+//! output, the decoders' copies, a PNG's inflated colour profile). A file
+//! damaged after its header is accepted and shows as an empty place on the
+//! screen; the user uploads it again.
 //!
-//! The pixel limit alone does not bound what a decode allocates: a 16-bit
-//! RGBA PNG takes 8 bytes a pixel, and a progressive JPEG (or a sequential one
-//! written a scan a component) keeps every DCT coefficient (2 bytes a sample)
-//! besides its output. Before decoding,
-//! [`decode_cost`] adds up from the headers what the decoders of the `image`
-//! crate allocate: the output buffer ([`ImageDecoder::total_bytes`]), the JPEG
-//! decoder's copy of the input and the coefficients of such a JPEG, and the
-//! WebP decoder's intermediate frame. An image whose cost is over
-//! [`DECODE_MAX_ALLOC`] is refused without being decoded
-//! ([`Rejected::TooCostly`]).
-//!
-//! A PNG's embedded colour profile (iCCP) is inflated by the decoder while it
-//! reads the header, before the output exists, and kept beside it. The header
-//! is therefore read with a limit of what [`DECODE_MAX_ALLOC`] leaves after
-//! the output the IHDR (and tRNS) announce ([`png_header_budget`]): a profile
-//! that inflates past it is dropped by the decoder, not allocated. The app
-//! keeps the file as it came and reads no profile.
+//! The header is read by hand, from the first bytes only: the PNG's IHDR, the
+//! JPEG's first frame header (SOFn, found by stepping over the segments before
+//! it), the WebP's first chunk (`VP8 `, `VP8L` or `VP8X`). No chunk or segment
+//! is read or inflated, so what this costs in memory is a few locals whatever
+//! the file or the pixels it claims.
 
-use std::io::Cursor;
-
-use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader, Limits};
-
-use super::{DECODE_MAX_ALLOC, MAX_IMAGE_BYTES, MAX_IMAGE_PIXELS, MAX_IMAGE_SIDE};
+use super::{MAX_IMAGE_BYTES, MAX_IMAGE_PIXELS, MAX_IMAGE_SIDE};
 use crate::store::artwork::Format;
 
 /// Why bytes are not an image the app keeps. Each has a sentence for the user.
@@ -42,13 +32,9 @@ pub enum Rejected {
     NotImage,
     #[error("larger than the pixel limit")]
     TooManyPixels,
-    /// Within the pixel limit, but decoding it would take more memory than
-    /// [`DECODE_MAX_ALLOC`] (16 bits a channel, a large progressive JPEG, ...).
-    #[error("too costly to decode")]
-    TooCostly,
-    /// Starts like an image but does not decode (damaged, cut short, or too
-    /// costly to decode).
-    #[error("does not decode")]
+    /// Starts like an image but its header cannot be read (cut short, or not
+    /// the header its format has).
+    #[error("the header cannot be read")]
     Damaged,
 }
 
@@ -68,36 +54,32 @@ impl Rejected {
                 "이미지가 너무 커요. 가로·세로 {MAX_IMAGE_SIDE}픽셀, 전체 {}만 픽셀까지 받아요.",
                 MAX_IMAGE_PIXELS / 10_000
             ),
-            Rejected::TooCostly => {
-                "이미지를 확인하는 데 메모리가 너무 많이 들어요. 크기를 줄이거나 8비트 일반 JPEG·PNG로 저장해 올려 주세요."
-                    .to_owned()
-            }
             Rejected::Damaged => {
-                "이미지를 끝까지 읽지 못했어요. 손상된 파일일 수 있어요.".to_owned()
+                "이미지의 머리 부분을 읽지 못했어요. 손상된 파일일 수 있어요.".to_owned()
             }
         }
     }
 }
 
+const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+
 /// The format the first bytes say, among the accepted ones.
 pub fn sniff(bytes: &[u8]) -> Option<Format> {
-    match image::guess_format(bytes).ok()? {
-        ImageFormat::Jpeg => Some(Format::Jpeg),
-        ImageFormat::Png => Some(Format::Png),
-        ImageFormat::WebP => Some(Format::Webp),
-        _ => None,
+    if bytes.starts_with(&PNG_SIGNATURE) {
+        Some(Format::Png)
+    } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some(Format::Jpeg)
+    } else if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some(Format::Webp)
+    } else {
+        None
     }
 }
 
-/// Checks that `bytes` are a whole JPEG, PNG or WebP image within the limits,
-/// and says which. Decodes the whole image, so it is for a blocking thread.
+/// Checks that `bytes` are a JPEG, PNG or WebP whose header can be read and
+/// states a size within the limits, and says which format. Reads the header
+/// only (see the module docs).
 pub fn verify(bytes: &[u8]) -> Result<Format, Rejected> {
-    verify_within(bytes, DECODE_MAX_ALLOC)
-}
-
-/// [`verify`] with `budget` bytes for the decode in place of
-/// [`DECODE_MAX_ALLOC`] (tests use small images and a small budget).
-pub(crate) fn verify_within(bytes: &[u8], budget: u64) -> Result<Format, Rejected> {
     if bytes.is_empty() {
         return Err(Rejected::Empty);
     }
@@ -105,97 +87,12 @@ pub(crate) fn verify_within(bytes: &[u8], budget: u64) -> Result<Format, Rejecte
         return Err(Rejected::TooLarge);
     }
     let format = sniff(bytes).ok_or(Rejected::NotImage)?;
-    let image_format = match format {
-        Format::Jpeg => ImageFormat::Jpeg,
-        Format::Png => ImageFormat::Png,
-        Format::Webp => ImageFormat::WebP,
-    };
-
-    let mut reader = ImageReader::with_format(Cursor::new(bytes), image_format);
-    // The PNG decoder inflates compressed ancillary chunks (an ICC profile,
-    // compressed text) while it reads the header, bounded only by this limit,
-    // and keeps them while it decodes: the header gets what the output leaves.
-    let header_alloc = match format {
-        Format::Png => png_header_budget(bytes, budget)?,
-        _ => budget,
-    };
-    let mut limits = Limits::default();
-    limits.max_image_width = Some(MAX_IMAGE_SIDE);
-    limits.max_image_height = Some(MAX_IMAGE_SIDE);
-    limits.max_alloc = Some(header_alloc);
-    reader.limits(limits);
-
-    let decoder = reader.into_decoder().map_err(|e| match e {
-        image::ImageError::Limits(l) => match l.kind() {
-            image::error::LimitErrorKind::InsufficientMemory => Rejected::TooCostly,
-            _ => Rejected::TooManyPixels,
-        },
-        _ => Rejected::Damaged,
-    })?;
-    let (width, height) = decoder.dimensions();
-    if width == 0 || height == 0 {
-        return Err(Rejected::Damaged);
+    let (width, height) = match format {
+        Format::Png => png_size(bytes),
+        Format::Jpeg => jpeg_size(bytes),
+        Format::Webp => webp_size(bytes),
     }
-    if u64::from(width) * u64::from(height) > MAX_IMAGE_PIXELS {
-        return Err(Rejected::TooManyPixels);
-    }
-    // `from_decoder` allocates the output without asking the limits, and the
-    // JPEG decoder keeps its own buffers: the whole cost is checked first.
-    if decode_cost(format, bytes, decoder.total_bytes(), width, height)? > budget {
-        return Err(Rejected::TooCostly);
-    }
-    match DynamicImage::from_decoder(decoder) {
-        Ok(_) => Ok(format),
-        Err(image::ImageError::Limits(_)) => Err(Rejected::TooCostly),
-        Err(_) => Err(Rejected::Damaged),
-    }
-}
-
-/// The bytes a decode of `bytes` allocates at its peak, from the headers:
-/// `output` (the decoded image), plus for JPEG the decoder's copy of the input
-/// and, when it keeps them ([`JpegFrame::keeps_coefficients`]), the
-/// coefficients of every component; for WebP the
-/// frame the decoder fills before the output (and the canvas of an animation).
-pub(crate) fn decode_cost(
-    format: Format,
-    bytes: &[u8],
-    output: u64,
-    width: u32,
-    height: u32,
-) -> Result<u64, Rejected> {
-    let pixels = u64::from(width) * u64::from(height);
-    let extra = match format {
-        Format::Png => 0,
-        Format::Jpeg => {
-            let frame = jpeg_frame(bytes).ok_or(Rejected::Damaged)?;
-            let coefficients = if frame.keeps_coefficients() {
-                frame.coefficient_bytes()
-            } else {
-                0
-            };
-            bytes.len() as u64 + coefficients
-        }
-        Format::Webp => {
-            let animated = bytes.len() > 20 && &bytes[12..16] == b"VP8X" && bytes[20] & 0x02 != 0;
-            pixels * 4 + if animated { pixels * 8 } else { 0 }
-        }
-    };
-    Ok(output.saturating_add(extra))
-}
-
-/// What the PNG decoder may allocate for the header's chunks, from the file's
-/// IHDR (and tRNS): `budget` less the decoded image, which it allocates beside
-/// them. A header that already claims an image too large or too costly is
-/// refused here, before any chunk is read.
-fn png_header_budget(bytes: &[u8], budget: u64) -> Result<u64, Rejected> {
-    // Signature (8), then IHDR: length (4), "IHDR", 13 bytes of fields.
-    let ihdr = bytes.get(8..33).ok_or(Rejected::Damaged)?;
-    if &ihdr[4..8] != b"IHDR" {
-        return Err(Rejected::Damaged);
-    }
-    let width = u32::from_be_bytes([ihdr[8], ihdr[9], ihdr[10], ihdr[11]]);
-    let height = u32::from_be_bytes([ihdr[12], ihdr[13], ihdr[14], ihdr[15]]);
-    let (depth, color) = (ihdr[16], ihdr[17]);
+    .ok_or(Rejected::Damaged)?;
     if width == 0 || height == 0 {
         return Err(Rejected::Damaged);
     }
@@ -205,85 +102,35 @@ fn png_header_budget(bytes: &[u8], budget: u64) -> Result<u64, Rejected> {
     {
         return Err(Rejected::TooManyPixels);
     }
-    // The decoder expands palettes and low bit depths to 8 bits, and a tRNS
-    // chunk adds an alpha channel (`image` reads them with `EXPAND`).
-    let transparent = png_has_transparency(&bytes[33..]);
-    let channels: u64 = match (color, transparent) {
-        (0, false) => 1,
-        (0, true) | (4, _) => 2,
-        (2, false) | (3, false) => 3,
-        (2, true) | (3, true) | (6, _) => 4,
-        _ => return Err(Rejected::Damaged),
-    };
-    let sample = if depth == 16 { 2 } else { 1 };
-    let output = u64::from(width) * u64::from(height) * channels * sample;
-    budget.checked_sub(output).ok_or(Rejected::TooCostly)
+    Ok(format)
 }
 
-/// Whether a tRNS chunk comes among the chunks `chunks` (the PNG after its
-/// IHDR) before the first IDAT. Stops at anything that is not a chunk.
-fn png_has_transparency(mut chunks: &[u8]) -> bool {
-    while let Some(head) = chunks.get(..8) {
-        let length = u32::from_be_bytes([head[0], head[1], head[2], head[3]]) as usize;
-        match &head[4..8] {
-            b"tRNS" => return true,
-            b"IDAT" | b"IEND" => return false,
-            _ => {}
-        }
-        // The data and the CRC after the head.
-        match chunks.get(8usize.saturating_add(length).saturating_add(4)..) {
-            Some(rest) => chunks = rest,
-            None => return false,
-        }
-    }
-    false
-}
-
-/// A JPEG frame header (SOF): what the decoder's buffers depend on.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct JpegFrame {
-    progressive: bool,
-    width: u32,
-    height: u32,
-    /// Each component's horizontal and vertical sampling factors.
-    sampling: Vec<(u32, u32)>,
-    /// How many components the first scan (SOS) lists.
-    first_scan_components: usize,
-}
-
-impl JpegFrame {
-    /// Whether the decoder keeps every coefficient of the image before it
-    /// writes any output: a progressive file always does, and so does a
-    /// sequential one whose first scan lists fewer components than the frame
-    /// (one scan a component, `cjpeg -scans`), because the other components
-    /// arrive only in the scans after it.
-    fn keeps_coefficients(&self) -> bool {
-        self.progressive || self.first_scan_components != self.sampling.len()
-    }
-
-    /// The coefficients such a decode keeps for the whole image: 64
-    /// two-byte coefficients for every block of every component, blocks
-    /// padded to whole MCUs.
-    fn coefficient_bytes(&self) -> u64 {
-        let h_max = self.sampling.iter().map(|s| s.0).max().unwrap_or(1).max(1);
-        let v_max = self.sampling.iter().map(|s| s.1).max().unwrap_or(1).max(1);
-        let mcus_x = u64::from(self.width.div_ceil(8 * h_max));
-        let mcus_y = u64::from(self.height.div_ceil(8 * v_max));
-        self.sampling
-            .iter()
-            .map(|&(h, v)| mcus_x * u64::from(h) * mcus_y * u64::from(v) * 64 * 2)
-            .sum()
-    }
-}
-
-/// The frame header of a JPEG and the component count of its first scan, read
-/// from the markers before the first scan's data.
-fn jpeg_frame(bytes: &[u8]) -> Option<JpegFrame> {
-    if bytes.get(..2)? != [0xFF, 0xD8] {
+/// The size in the PNG's IHDR, which must be the first chunk: signature (8),
+/// then length (4, 13), `IHDR` and its 13 bytes of fields.
+fn png_size(bytes: &[u8]) -> Option<(u32, u32)> {
+    let ihdr = bytes.get(8..33)?;
+    if ihdr[..8] != *b"\0\0\0\x0dIHDR" {
         return None;
     }
-    let mut at = 2;
-    let mut frame = None;
+    let width = u32::from_be_bytes(ihdr[8..12].try_into().ok()?);
+    let height = u32::from_be_bytes(ihdr[12..16].try_into().ok()?);
+    let (depth, color) = (ihdr[16], ihdr[17]);
+    let depths: &[u8] = match color {
+        0 => &[1, 2, 4, 8, 16],
+        3 => &[1, 2, 4, 8],
+        2 | 4 | 6 => &[8, 16],
+        _ => return None,
+    };
+    // Compression and filter methods have one value each; interlace two.
+    (depths.contains(&depth) && ihdr[18] == 0 && ihdr[19] == 0 && ihdr[20] <= 1)
+        .then_some((width, height))
+}
+
+/// The size in the first frame header (SOFn) of a JPEG, found by stepping over
+/// the segments before it by their lengths. Gives up at the first scan or the
+/// end of the image (no frame came), and at anything that is not a marker.
+fn jpeg_size(bytes: &[u8]) -> Option<(u32, u32)> {
+    let mut at = 2; // After SOI.
     loop {
         if *bytes.get(at)? != 0xFF {
             return None;
@@ -295,10 +142,10 @@ fn jpeg_frame(bytes: &[u8]) -> Option<JpegFrame> {
         let marker = *bytes.get(at + 1)?;
         at += 2;
         match marker {
+            // Not a marker (a stuffed byte), a second SOI, the end, the scan.
+            0x00 | 0xD8 | 0xD9 | 0xDA => return None,
             // Markers without a segment.
             0x01 | 0xD0..=0xD7 => continue,
-            // The end before the first scan.
-            0xD9 => return None,
             _ => {}
         }
         let length = usize::from(u16::from_be_bytes([*bytes.get(at)?, *bytes.get(at + 1)?]));
@@ -306,31 +153,65 @@ fn jpeg_frame(bytes: &[u8]) -> Option<JpegFrame> {
             return None;
         }
         let segment = bytes.get(at + 2..at + length)?;
-        if marker == 0xDA {
-            // The first scan: a scan before any frame header is no JPEG.
-            let mut frame: JpegFrame = frame?;
-            frame.first_scan_components = usize::from(*segment.first()?);
-            return Some(frame);
-        }
-        if frame.is_none() && matches!(marker, 0xC0..=0xCF) && !matches!(marker, 0xC4 | 0xC8 | 0xCC)
-        {
-            let height = u32::from(u16::from_be_bytes([*segment.get(1)?, *segment.get(2)?]));
-            let width = u32::from(u16::from_be_bytes([*segment.get(3)?, *segment.get(4)?]));
-            let count = usize::from(*segment.get(5)?);
-            let mut sampling = Vec::with_capacity(count);
-            for i in 0..count {
-                let factors = *segment.get(6 + i * 3 + 1)?;
-                sampling.push((u32::from(factors >> 4), u32::from(factors & 0x0F)));
+        // SOF0..SOF15 except DHT (C4), JPG (C8) and DAC (CC).
+        if matches!(marker, 0xC0..=0xCF) && !matches!(marker, 0xC4 | 0xC8 | 0xCC) {
+            // Precision (1), height (2), width (2), components (1), and each
+            // component's three bytes.
+            let components = usize::from(*segment.get(5)?);
+            if components == 0 || segment.len() < 6 + 3 * components {
+                return None;
             }
-            frame = Some(JpegFrame {
-                progressive: matches!(marker, 0xC2 | 0xC6 | 0xCA | 0xCE),
-                width,
-                height,
-                sampling,
-                first_scan_components: 0,
-            });
+            let height = u32::from(u16::from_be_bytes([segment[1], segment[2]]));
+            let width = u32::from(u16::from_be_bytes([segment[3], segment[4]]));
+            return Some((width, height));
         }
         at += length;
+    }
+}
+
+/// The size in the first chunk of a WebP: the frame header of a lossy
+/// `VP8 `, the 14-bit fields of a lossless `VP8L`, or the canvas of an
+/// extended `VP8X` (an animation too). After `RIFF`, the file size and `WEBP`
+/// (12 bytes) comes the chunk's tag (4) and size (4).
+fn webp_size(bytes: &[u8]) -> Option<(u32, u32)> {
+    let size = u32::from_le_bytes(bytes.get(16..20)?.try_into().ok()?) as usize;
+    match bytes.get(12..16)? {
+        b"VP8 " => {
+            // Frame tag (3, bit 0 clear for a key frame), start code, then
+            // width and height with a 2-bit scale each above 14 bits.
+            let head = bytes.get(20..30)?;
+            if size < 10 || head[0] & 1 != 0 || head[3..6] != [0x9D, 0x01, 0x2A] {
+                return None;
+            }
+            let width = u32::from(u16::from_le_bytes([head[6], head[7]]) & 0x3FFF);
+            let height = u32::from(u16::from_le_bytes([head[8], head[9]]) & 0x3FFF);
+            Some((width, height))
+        }
+        b"VP8L" => {
+            // Signature byte 0x2F, then 14 bits of width − 1, 14 of height − 1,
+            // an alpha flag and a 3-bit version (0).
+            let head = bytes.get(20..25)?;
+            if size < 5 || head[0] != 0x2F {
+                return None;
+            }
+            let fields = u32::from_le_bytes(head[1..5].try_into().ok()?);
+            if fields >> 29 != 0 {
+                return None;
+            }
+            Some(((fields & 0x3FFF) + 1, ((fields >> 14) & 0x3FFF) + 1))
+        }
+        b"VP8X" => {
+            // Flags (1), reserved (3), then canvas width − 1 and height − 1
+            // in 24 bits each.
+            let head = bytes.get(20..30)?;
+            if size < 10 {
+                return None;
+            }
+            let width = u32::from_le_bytes([head[4], head[5], head[6], 0]) + 1;
+            let height = u32::from_le_bytes([head[7], head[8], head[9], 0]) + 1;
+            Some((width, height))
+        }
+        _ => None,
     }
 }
 
@@ -359,39 +240,12 @@ pub(crate) mod samples {
         encoded(46, 65, ImageFormat::Png)
     }
 
+    /// A lossless WebP (`VP8L`), which is what the `image` crate writes.
     pub fn webp() -> Vec<u8> {
         encoded(46, 65, ImageFormat::WebP)
     }
 
-    /// A PNG of `width` × `height` with 16 bits a channel and alpha (8 bytes
-    /// a pixel decoded).
-    pub fn png16(width: u32, height: u32) -> Vec<u8> {
-        let image =
-            image::ImageBuffer::<image::Rgba<u16>, Vec<u16>>::from_fn(width, height, |x, y| {
-                image::Rgba([x as u16 * 997, y as u16 * 991, 4000, 65535])
-            });
-        let mut out = Cursor::new(Vec::new());
-        image.write_to(&mut out, ImageFormat::Png).unwrap();
-        out.into_inner()
-    }
-
-    /// A `width` × `height` 8-bit RGBA PNG with an ICC profile chunk (iCCP)
-    /// that inflates to `profile_len` bytes of zeros. It compresses to a few
-    /// kilobytes whatever its length.
-    pub fn png_with_profile(width: u32, height: u32, profile_len: usize) -> Vec<u8> {
-        use image::{ExtendedColorType, ImageEncoder};
-
-        let pixels = vec![0x80u8; width as usize * height as usize * 4];
-        let mut out = Vec::new();
-        let mut encoder = image::codecs::png::PngEncoder::new(&mut out);
-        encoder.set_icc_profile(vec![0; profile_len]).unwrap();
-        encoder
-            .write_image(&pixels, width, height, ExtendedColorType::Rgba8)
-            .unwrap();
-        out
-    }
-
-    /// A 64 × 64 progressive JPEG without chroma subsampling (made with
+    /// A 64 × 64 progressive JPEG (SOF2) without chroma subsampling (made with
     /// `cjpeg -progressive -sample 1x1`; the `image` crate writes only
     /// baseline JPEG).
     pub fn progressive_jpeg() -> Vec<u8> {
@@ -399,48 +253,51 @@ pub(crate) mod samples {
     }
 
     /// The start of a JPEG whose frame header (`sof`, e.g. `0xC2` for
-    /// progressive) claims `width` × `height` with the components' sampling
-    /// factors `sampling` (`0x11` is 1×1), and a first scan listing every
-    /// component, with no scan data after it.
-    pub fn jpeg_header(sof: u8, width: u16, height: u16, sampling: &[u8]) -> Vec<u8> {
-        jpeg_header_scanning(sof, width, height, sampling, sampling.len())
-    }
-
-    /// [`jpeg_header`] whose first scan lists `scan_components` components
-    /// (one in a file written a scan a component).
-    pub fn jpeg_header_scanning(
-        sof: u8,
-        width: u16,
-        height: u16,
-        sampling: &[u8],
-        scan_components: usize,
-    ) -> Vec<u8> {
+    /// progressive) claims `width` × `height` with `components` components,
+    /// then the start of a scan and no scan data.
+    pub fn jpeg_header(sof: u8, width: u16, height: u16, components: u8) -> Vec<u8> {
         let mut out = vec![0xFF, 0xD8, 0xFF, sof];
-        let length = 8 + 3 * sampling.len() as u16;
-        out.extend_from_slice(&length.to_be_bytes());
+        out.extend_from_slice(&(8 + 3 * u16::from(components)).to_be_bytes());
         out.push(8);
         out.extend_from_slice(&height.to_be_bytes());
         out.extend_from_slice(&width.to_be_bytes());
-        out.push(sampling.len() as u8);
-        for (i, factors) in sampling.iter().enumerate() {
-            out.extend_from_slice(&[i as u8 + 1, *factors, 0]);
+        out.push(components);
+        for i in 0..components {
+            out.extend_from_slice(&[i + 1, 0x11, 0]);
         }
-        // SOS: length, Ns, (component, tables) for each, Ss, Se, Ah/Al.
-        out.extend_from_slice(&[0xFF, 0xDA]);
-        out.extend_from_slice(&(6 + 2 * scan_components as u16).to_be_bytes());
-        out.push(scan_components as u8);
-        for i in 0..scan_components {
-            out.extend_from_slice(&[i as u8 + 1, 0]);
-        }
-        out.extend_from_slice(&[0, 63, 0]);
+        out.extend_from_slice(&[0xFF, 0xDA, 0, 3, 1, 0]);
         out
     }
 
-    /// A 64 × 64 sequential JPEG without chroma subsampling written a scan a
-    /// component (`cjpeg -baseline -sample 1x1 -scans`): its first scan lists
-    /// one of the three components, so the decoder keeps every coefficient.
-    pub fn sequential_scans_jpeg() -> Vec<u8> {
-        include_bytes!("../../tests/fixtures/sequential_scans_444.jpg").to_vec()
+    /// The start of a WebP whose first chunk is `kind` (`VP8 `, `VP8L` or
+    /// `VP8X`) and claims `width` × `height`, with no image data.
+    pub fn webp_header(kind: &[u8; 4], width: u32, height: u32) -> Vec<u8> {
+        let mut data = Vec::new();
+        match kind {
+            b"VP8 " => {
+                // Frame tag of a key frame, the start code, 14-bit sizes.
+                data.extend_from_slice(&[0, 0, 0, 0x9D, 0x01, 0x2A]);
+                data.extend_from_slice(&(width as u16).to_le_bytes());
+                data.extend_from_slice(&(height as u16).to_le_bytes());
+            }
+            b"VP8L" => {
+                data.push(0x2F);
+                data.extend_from_slice(&((width - 1) | ((height - 1) << 14)).to_le_bytes());
+            }
+            _ => {
+                // VP8X: flags and reserved bytes, then the canvas − 1.
+                data.extend_from_slice(&[0, 0, 0, 0]);
+                data.extend_from_slice(&(width - 1).to_le_bytes()[..3]);
+                data.extend_from_slice(&(height - 1).to_le_bytes()[..3]);
+            }
+        }
+        let mut out = b"RIFF".to_vec();
+        out.extend_from_slice(&(4 + 8 + data.len() as u32).to_le_bytes());
+        out.extend_from_slice(b"WEBP");
+        out.extend_from_slice(kind);
+        out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        out.extend_from_slice(&data);
+        out
     }
 
     /// The start of a GIF (a format the app does not take).
@@ -481,206 +338,201 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_format_comes_from_the_bytes() {
+    fn jpeg_png_and_webp_are_known_by_their_bytes() {
         assert_eq!(verify(&samples::jpeg()), Ok(Format::Jpeg));
         assert_eq!(verify(&samples::png()), Ok(Format::Png));
         assert_eq!(verify(&samples::webp()), Ok(Format::Webp));
+        assert_eq!(verify(&samples::progressive_jpeg()), Ok(Format::Jpeg));
     }
 
     #[test]
-    fn text_damage_and_other_formats_are_refused() {
+    fn every_frame_marker_of_a_jpeg_gives_its_size() {
+        for sof in [
+            0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF,
+        ] {
+            assert_eq!(
+                verify(&samples::jpeg_header(sof, 4000, 3000, 3)),
+                Ok(Format::Jpeg),
+                "{sof:#x}"
+            );
+            assert_eq!(
+                verify(&samples::jpeg_header(sof, 4001, 3000, 3)),
+                Err(Rejected::TooManyPixels),
+                "{sof:#x}"
+            );
+        }
+    }
+
+    #[test]
+    fn segments_before_the_frame_header_are_stepped_over() {
+        // APP1 (EXIF-sized), a comment, a fill byte and a restart marker
+        // before the frame header, which may hold anything.
+        let jpeg = samples::jpeg();
+        let mut with = vec![0xFF, 0xD8];
+        with.extend_from_slice(&[0xFF, 0xE1]);
+        with.extend_from_slice(&(60_000u16).to_be_bytes());
+        with.extend(std::iter::repeat_n(0xFF, 60_000 - 2));
+        with.extend_from_slice(&[0xFF, 0xFE, 0, 6, b'h', b'i', b'!', b'!']);
+        with.extend_from_slice(&[0xFF, 0xFF, 0xFF, 0x01]);
+        with.extend_from_slice(&jpeg[2..]);
+        assert_eq!(verify(&with), Ok(Format::Jpeg));
+        // The same file with the frame header gone reaches the scan first.
+        let mut no_frame = vec![0xFF, 0xD8, 0xFF, 0xDA, 0, 3, 1, 0];
+        no_frame.extend_from_slice(&[0; 100]);
+        assert_eq!(verify(&no_frame), Err(Rejected::Damaged));
+    }
+
+    #[test]
+    fn what_is_not_an_image_is_refused_by_its_first_bytes() {
         assert_eq!(verify(b""), Err(Rejected::Empty));
         assert_eq!(verify(b"hello, this is text\n"), Err(Rejected::NotImage));
         assert_eq!(verify(&samples::gif()), Err(Rejected::NotImage));
-        // A JPEG cut short starts like one and does not decode.
-        let jpeg = samples::jpeg();
-        assert_eq!(verify(&jpeg[..jpeg.len() / 2]), Err(Rejected::Damaged));
-        let png = samples::png();
-        assert_eq!(verify(&png[..png.len() - 20]), Err(Rejected::Damaged));
-    }
-
-    #[test]
-    fn the_limits_are_kept_at_their_bounds() {
-        // Over the side limit, and over the pixel limit within the sides.
-        assert_eq!(
-            verify(&samples::encoded(MAX_IMAGE_SIDE + 1, 1, ImageFormat::Png)),
-            Err(Rejected::TooManyPixels)
-        );
-        let side = (MAX_IMAGE_PIXELS as f64).sqrt() as u32 + 1;
-        assert_eq!(
-            verify(&samples::png_claiming(side, side)),
-            Err(Rejected::TooManyPixels)
-        );
-        // The longest side allowed decodes.
-        assert_eq!(
-            verify(&samples::encoded(MAX_IMAGE_SIDE, 1, ImageFormat::Png)),
-            Ok(Format::Png)
-        );
-        // Bytes over the limit are refused before decoding.
+        // A RIFF file that is not WebP, and a PNG signature cut short.
+        assert_eq!(verify(b"RIFF\x04\0\0\0WAVEfmt "), Err(Rejected::NotImage));
+        assert_eq!(verify(&samples::png()[..7]), Err(Rejected::NotImage));
+        // Bytes over the limit are refused before anything is read.
         let mut big = samples::png();
         big.resize(MAX_IMAGE_BYTES + 1, 0);
         assert_eq!(verify(&big), Err(Rejected::TooLarge));
+        big.truncate(MAX_IMAGE_BYTES);
+        assert_eq!(verify(&big), Ok(Format::Png));
     }
 
     #[test]
-    fn what_a_decode_would_allocate_is_kept_under_the_budget() {
-        // 64 × 64: 16 KiB decoded as 8-bit RGBA, 32 KiB as 16-bit RGBA; 12 KiB
-        // as an RGB JPEG, plus 24 KiB of coefficients when progressive 4:4:4.
-        let budget = 20_000;
-        let rgba8 = samples::encoded(64, 64, ImageFormat::Png);
-        assert_eq!(verify_within(&rgba8, budget), Ok(Format::Png));
+    fn a_header_that_cannot_be_read_is_damaged() {
+        let png = samples::png();
+        let jpeg = samples::jpeg();
+        let webp = samples::webp();
+        // Cut inside the header.
+        assert_eq!(verify(&png[..20]), Err(Rejected::Damaged));
+        assert_eq!(verify(&png[..8]), Err(Rejected::Damaged));
+        assert_eq!(verify(&jpeg[..10]), Err(Rejected::Damaged));
+        assert_eq!(verify(&jpeg[..4]), Err(Rejected::Damaged));
+        assert_eq!(verify(&webp[..14]), Err(Rejected::Damaged));
+        assert_eq!(verify(&webp[..24]), Err(Rejected::Damaged));
         assert_eq!(
-            verify_within(&samples::png16(64, 64), budget),
-            Err(Rejected::TooCostly)
+            verify(&samples::jpeg_header(0xC0, 10, 10, 3)[..14]),
+            Err(Rejected::Damaged)
         );
-        let baseline = samples::encoded(64, 64, ImageFormat::Jpeg);
-        assert_eq!(verify_within(&baseline, budget), Ok(Format::Jpeg));
-        let progressive = samples::progressive_jpeg();
-        assert_eq!(
-            verify_within(&progressive, budget),
-            Err(Rejected::TooCostly)
-        );
-        // A sequential JPEG written a scan a component keeps the same
-        // coefficients as a progressive one.
-        let scans = samples::sequential_scans_jpeg();
-        assert_eq!(verify_within(&scans, budget), Err(Rejected::TooCostly));
-        // Each decodes within a budget that covers it.
-        assert_eq!(
-            verify_within(&samples::png16(64, 64), 40_000),
-            Ok(Format::Png)
-        );
-        assert_eq!(verify_within(&progressive, 40_000), Ok(Format::Jpeg));
-        assert_eq!(verify_within(&scans, 40_000), Ok(Format::Jpeg));
-    }
 
-    #[test]
-    fn a_png_profile_over_what_the_output_leaves_is_dropped_not_refused() {
-        // 512 × 512 8-bit RGBA is 1 MiB decoded: with a 2 MiB budget, 1 MiB
-        // is left for the header's chunks. The profile is metadata, so an
-        // image whose profile inflates past that is still taken, and the
-        // decoder never holds the profile (`tests/artwork_decode_peak.rs`
-        // measures the memory).
-        let budget = 2 * 1024 * 1024;
-        let small = samples::png_with_profile(512, 512, 3 * 1024);
-        assert_eq!(verify_within(&small, budget), Ok(Format::Png));
-        let big = samples::png_with_profile(512, 512, 1536 * 1024);
-        // Its bytes are tiny; only what it inflates to is large.
-        assert!(big.len() < 64 * 1024, "{}", big.len());
-        assert_eq!(verify_within(&big, budget), Ok(Format::Png));
-        let mut limits = Limits::default();
-        limits.max_alloc = Some(png_header_budget(&big, budget).unwrap());
-        let mut kept =
-            image::codecs::png::PngDecoder::with_limits(Cursor::new(&big[..]), limits).unwrap();
-        assert_eq!(kept.icc_profile().unwrap(), None);
-        let mut limits = Limits::default();
-        limits.max_alloc = Some(png_header_budget(&small, budget).unwrap());
-        let mut kept =
-            image::codecs::png::PngDecoder::with_limits(Cursor::new(&small[..]), limits).unwrap();
-        assert_eq!(kept.icc_profile().unwrap().map(|p| p.len()), Some(3 * 1024));
-    }
-
-    #[test]
-    fn the_png_header_budget_is_what_the_decoded_image_leaves() {
-        let png = |depth: u8, color: u8| {
-            let mut out = samples::png();
-            out[16..20].copy_from_slice(&100u32.to_be_bytes());
-            out[20..24].copy_from_slice(&10u32.to_be_bytes());
-            out[24] = depth;
-            out[25] = color;
-            out
-        };
-        // 1,000 pixels: 8-bit gray, RGB, RGBA, and 16-bit RGBA.
-        assert_eq!(png_header_budget(&png(8, 0), 10_000), Ok(9_000));
-        assert_eq!(png_header_budget(&png(8, 2), 10_000), Ok(7_000));
-        assert_eq!(png_header_budget(&png(8, 6), 10_000), Ok(6_000));
-        assert_eq!(png_header_budget(&png(16, 6), 10_000), Ok(2_000));
-        // Low bit depths and palettes are expanded to 8 bits a sample.
-        assert_eq!(png_header_budget(&png(4, 0), 10_000), Ok(9_000));
-        assert_eq!(png_header_budget(&png(8, 3), 10_000), Ok(7_000));
+        // Not the header the format has: IHDR not first, a colour type or
+        // depth that does not exist, a frame without components, a first
+        // chunk that is not an image's.
+        let mut not_first = png.clone();
+        not_first[12..16].copy_from_slice(b"iCCP");
+        assert_eq!(verify(&not_first), Err(Rejected::Damaged));
+        let mut bad_color = png.clone();
+        bad_color[25] = 5;
+        assert_eq!(verify(&bad_color), Err(Rejected::Damaged));
+        let mut bad_depth = png.clone();
+        bad_depth[24] = 3;
+        assert_eq!(verify(&bad_depth), Err(Rejected::Damaged));
         assert_eq!(
-            png_header_budget(&png(16, 6), 7_000),
-            Err(Rejected::TooCostly)
+            verify(&samples::jpeg_header(0xC0, 10, 10, 0)),
+            Err(Rejected::Damaged)
         );
+        let mut other_chunk = samples::webp_header(b"VP8L", 10, 10);
+        other_chunk[12..16].copy_from_slice(b"ANIM");
+        assert_eq!(verify(&other_chunk), Err(Rejected::Damaged));
+        let mut bad_signature = samples::webp_header(b"VP8L", 10, 10);
+        bad_signature[20] = 0;
+        assert_eq!(verify(&bad_signature), Err(Rejected::Damaged));
+        let mut delta_frame = samples::webp_header(b"VP8 ", 10, 10);
+        delta_frame[20] |= 1;
+        assert_eq!(verify(&delta_frame), Err(Rejected::Damaged));
+
+        // A size of nothing.
+        assert_eq!(verify(&samples::png_claiming(0, 5)), Err(Rejected::Damaged));
+        assert_eq!(verify(&samples::png_claiming(5, 0)), Err(Rejected::Damaged));
         assert_eq!(
-            png_header_budget(&png(8, 9), 10_000),
+            verify(&samples::jpeg_header(0xC0, 0, 5, 3)),
             Err(Rejected::Damaged)
         );
         assert_eq!(
-            png_header_budget(&[0x89, b'P'], 10_000),
+            verify(&samples::jpeg_header(0xC0, 5, 0, 3)),
+            Err(Rejected::Damaged)
+        );
+        assert_eq!(
+            verify(&samples::webp_header(b"VP8 ", 0, 5)),
             Err(Rejected::Damaged)
         );
     }
 
     #[test]
-    fn a_png_transparency_chunk_adds_an_alpha_channel_to_the_estimate() {
-        let chunk = |kind: &[u8; 4], data: &[u8]| {
-            let mut out = (data.len() as u32).to_be_bytes().to_vec();
-            out.extend_from_slice(kind);
-            out.extend_from_slice(data);
-            out.extend_from_slice(&[0; 4]);
-            out
-        };
-        let mut with = chunk(b"gAMA", &[0; 4]);
-        with.extend(chunk(b"tRNS", &[0, 0]));
-        with.extend(chunk(b"IDAT", &[0]));
-        assert!(png_has_transparency(&with));
-        // After the image data, or cut short, it does not count.
-        let mut after = chunk(b"IDAT", &[0]);
-        after.extend(chunk(b"tRNS", &[0, 0]));
-        assert!(!png_has_transparency(&after));
-        assert!(!png_has_transparency(&with[..14]));
-        // A chunk claiming more than the file has ends the walk.
-        let mut long = u32::MAX.to_be_bytes().to_vec();
-        long.extend_from_slice(b"zTXt");
-        assert!(!png_has_transparency(&long));
+    fn the_side_and_pixel_limits_hold_at_their_edges_in_every_format() {
+        let side = MAX_IMAGE_SIDE;
+        let png = |w, h| verify(&samples::png_claiming(w, h));
+        assert_eq!(png(side, 1), Ok(Format::Png));
+        assert_eq!(png(side + 1, 1), Err(Rejected::TooManyPixels));
+        assert_eq!(png(1, side + 1), Err(Rejected::TooManyPixels));
+        assert_eq!(png(4000, 3000), Ok(Format::Png));
+        assert_eq!(png(4001, 3000), Err(Rejected::TooManyPixels));
+        assert_eq!(png(u32::MAX, u32::MAX), Err(Rejected::TooManyPixels));
+
+        let jpeg = |w, h| verify(&samples::jpeg_header(0xC0, w, h, 3));
+        assert_eq!(jpeg(side as u16, 1), Ok(Format::Jpeg));
+        assert_eq!(jpeg(side as u16 + 1, 1), Err(Rejected::TooManyPixels));
+        assert_eq!(jpeg(u16::MAX, u16::MAX), Err(Rejected::TooManyPixels));
+
+        for kind in [b"VP8L", b"VP8X"] {
+            let webp = |w, h| verify(&samples::webp_header(kind, w, h));
+            assert_eq!(webp(side, 1), Ok(Format::Webp), "{kind:?}");
+            assert_eq!(webp(side + 1, 1), Err(Rejected::TooManyPixels), "{kind:?}");
+            assert_eq!(webp(4000, 3000), Ok(Format::Webp), "{kind:?}");
+            assert_eq!(webp(4001, 3000), Err(Rejected::TooManyPixels), "{kind:?}");
+        }
+        // The widest a canvas or a lossless image can say.
+        assert_eq!(
+            verify(&samples::webp_header(b"VP8X", 1 << 24, 1 << 24)),
+            Err(Rejected::TooManyPixels)
+        );
+        assert_eq!(
+            verify(&samples::webp_header(b"VP8L", 1 << 14, 1 << 14)),
+            Err(Rejected::TooManyPixels)
+        );
+        let lossy = |w, h| verify(&samples::webp_header(b"VP8 ", w, h));
+        assert_eq!(lossy(side, 1), Ok(Format::Webp));
+        assert_eq!(lossy(side + 1, 1), Err(Rejected::TooManyPixels));
     }
 
     #[test]
-    fn the_cost_of_the_largest_images_follows_their_kind() {
-        let (w, h) = (4000u16, 3000u16);
-        let pixels = 12_000_000u64;
-        // A 12 MP progressive JPEG keeps 2 bytes a sample besides its RGB
-        // output: 4:4:4 is over the budget, a baseline one is not.
-        let sof2 = samples::jpeg_header(0xC2, w, h, &[0x11, 0x11, 0x11]);
-        let cost = decode_cost(Format::Jpeg, &sof2, pixels * 3, 4000, 3000).unwrap();
-        assert_eq!(cost, pixels * 3 + sof2.len() as u64 + pixels * 3 * 2);
-        assert!(cost > DECODE_MAX_ALLOC);
-        let sof0 = samples::jpeg_header(0xC0, w, h, &[0x22, 0x11, 0x11]);
-        let cost = decode_cost(Format::Jpeg, &sof0, pixels * 3, 4000, 3000).unwrap();
-        assert!(cost <= DECODE_MAX_ALLOC);
-        // A sequential file whose first scan lists one component of three
-        // (a scan a component) keeps the coefficients like a progressive one,
-        // whatever its size on disk (cjpeg wrote 3.2 MB for 4000 × 3000).
-        let scans = samples::jpeg_header_scanning(0xC0, w, h, &[0x11, 0x11, 0x11], 1);
-        let cost = decode_cost(Format::Jpeg, &scans, pixels * 3, 4000, 3000).unwrap();
-        assert_eq!(cost, pixels * 3 + scans.len() as u64 + pixels * 3 * 2);
-        assert!(cost > DECODE_MAX_ALLOC);
-        // Every component in the first scan (interleaved) keeps none, also
-        // in extended sequential (SOF1).
-        let sof1 = samples::jpeg_header(0xC1, w, h, &[0x11, 0x11, 0x11]);
-        let cost = decode_cost(Format::Jpeg, &sof1, pixels * 3, 4000, 3000).unwrap();
-        assert_eq!(cost, pixels * 3 + sof1.len() as u64);
-        // 4:2:0 progressive: the chroma planes are a quarter each, and the
-        // 16-pixel MCUs pad 3000 rows to 3008.
-        let frame = jpeg_frame(&samples::jpeg_header(0xC2, w, h, &[0x22, 0x11, 0x11])).unwrap();
-        assert!(frame.progressive);
+    fn a_file_broken_after_its_header_is_accepted() {
+        // Cut in the middle of the data, and the data overwritten.
+        for bytes in [samples::png(), samples::jpeg(), samples::webp()] {
+            let format = sniff(&bytes).unwrap();
+            let cut = bytes.len() / 2;
+            assert!(cut > 40);
+            assert_eq!(verify(&bytes[..cut]), Ok(format));
+            let mut garbage = bytes.clone();
+            garbage[40..].fill(0x5A);
+            assert_eq!(verify(&garbage), Ok(format));
+        }
+        // A PNG with nothing but its header, and with a colour profile chunk
+        // whose bytes are not even zlib: no chunk is read.
+        let mut png = samples::png()[..33].to_vec();
+        assert_eq!(verify(&png), Ok(Format::Png));
+        png.extend_from_slice(&(2_000_000u32).to_be_bytes());
+        png.extend_from_slice(b"iCCP");
+        png.extend(std::iter::repeat_n(0xA5, 2_000_000));
+        assert_eq!(verify(&png), Ok(Format::Png));
+        // A JPEG with its frame header and a scan with no data, a WebP with
+        // its first chunk header and nothing after.
         assert_eq!(
-            frame.coefficient_bytes(),
-            (4000 * 3008 + 2 * 2000 * 1504) * 2
+            verify(&samples::jpeg_header(0xC2, 64, 64, 3)),
+            Ok(Format::Jpeg)
         );
-        // 16-bit RGBA at 12 MP is 96 MB of output.
-        assert!(decode_cost(Format::Png, &[], pixels * 8, 4000, 3000).unwrap() > DECODE_MAX_ALLOC);
-        // A JPEG without a frame header before its scan does not decode, nor
-        // does one that ends before its first scan.
         assert_eq!(
-            decode_cost(Format::Jpeg, &[0xFF, 0xD8, 0xFF, 0xDA, 0, 3, 1], 3, 1, 1),
-            Err(Rejected::Damaged)
+            verify(&samples::webp_header(b"VP8L", 64, 64)),
+            Ok(Format::Webp)
         );
-        let mut cut = samples::jpeg_header(0xC0, w, h, &[0x11, 0x11, 0x11]);
-        cut.truncate(cut.len() - 14);
-        assert_eq!(
-            decode_cost(Format::Jpeg, &cut, 3, 1, 1),
-            Err(Rejected::Damaged)
-        );
+    }
+
+    #[test]
+    fn sniffing_agrees_with_what_verify_accepts() {
+        for bytes in [samples::jpeg(), samples::png(), samples::webp()] {
+            assert_eq!(sniff(&bytes), verify(&bytes).ok());
+        }
+        assert_eq!(sniff(&samples::gif()), None);
+        assert_eq!(sniff(b""), None);
     }
 }

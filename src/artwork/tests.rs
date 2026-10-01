@@ -23,7 +23,7 @@ use super::{
 use crate::{
     discovery::{Scan, ScannedWork, WorkRead},
     store::{
-        artwork::{JobKind, Mode, Note, Selection, Source, UserChange},
+        artwork::{Format, JobKind, Mode, Note, Selection, Source, UserChange},
         library::{LibraryStore, ListQuery},
         DbError,
     },
@@ -856,7 +856,7 @@ async fn an_upload_is_judged_by_its_bytes_and_a_refusal_keeps_the_cover() {
         (b"just text, named .jpg".to_vec(), Rejected::NotImage),
         (too_big, Rejected::TooLarge),
         (samples::png_claiming(5000, 5000), Rejected::TooManyPixels),
-        (jpeg[..jpeg.len() / 2].to_vec(), Rejected::Damaged),
+        (jpeg[..12].to_vec(), Rejected::Damaged),
         (samples::gif(), Rejected::NotImage),
     ] {
         match env.art.upload(&id, kept.version, bytes, None).await {
@@ -867,6 +867,63 @@ async fn an_upload_is_judged_by_its_bytes_and_a_refusal_keeps_the_cover() {
         assert_eq!(env.files(), file);
         assert!(env.staging().is_empty());
     }
+}
+
+#[tokio::test]
+async fn a_picture_broken_after_its_header_is_stored_and_served_as_it_came() {
+    let env = Env::new(&["A", "B"]).await;
+    let id = env.id("A").await;
+    let v = env.selection("A").await.version;
+    // Cut in the middle of its data: nothing decodes it, so nothing finds out.
+    let jpeg = samples::jpeg();
+    let cut = jpeg[..jpeg.len() / 2].to_vec();
+    let s = env.art.upload(&id, v, cut.clone(), None).await.unwrap();
+    let image = image_of(&s).clone();
+    assert_eq!(
+        (image.format, image.byte_size),
+        (Format::Jpeg, cut.len() as u64)
+    );
+    assert_eq!(env.art.image(image).await, Ok(Bytes::from(cut)));
+
+    // The same from AniList: the automatic fetch takes it.
+    let mut garbage = samples::png();
+    garbage[40..].fill(0x5A);
+    env.fake
+        .add_search("B", vec![env.fake.entry(2, "B", &[])], &garbage);
+    env.drain().await;
+    let s = env.selection("B").await;
+    assert_eq!((s.mode, s.source), (Mode::Auto, Some(Source::Anilist)));
+    assert_eq!(image_of(&s).format, Format::Png);
+}
+
+#[tokio::test]
+async fn an_image_that_ends_short_of_its_announced_length_is_not_taken() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    // A server that announces 100 bytes, sends 3 and closes.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        loop {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0u8; 1024];
+            let _ = socket.read(&mut request).await;
+            let _ = socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nabc")
+                .await;
+        }
+    });
+    let env = Env::new(&["A"]).await;
+    let config = AnilistConfig {
+        image_origins: vec![origin.clone()],
+        ..env.fake.config()
+    };
+    let anilist = Anilist::new(config, env.art.store.clone(), system_clock());
+    let fetched = anilist.fetch_image(&format!("{origin}/img/1.jpg")).await;
+    assert!(
+        matches!(fetched, Err(ImageFetchError::Unreachable(_))),
+        "{fetched:?}"
+    );
 }
 
 // --- files --------------------------------------------------------------------------------
@@ -1473,36 +1530,18 @@ impl Artwork {
     }
 }
 
-/// An image that takes a while to decode in a test build.
-fn slow_image() -> bytes::Bytes {
-    samples::encoded(1600, 1600, ::image::ImageFormat::Png).into()
-}
-
-#[tokio::test]
-async fn a_decode_keeps_its_turn_after_its_caller_stops_waiting() {
-    let env = Env::new(&["A"]).await;
-    let bytes = slow_image();
-    // The caller gives up while the decode runs on its blocking thread.
-    let gave_up = tokio::time::timeout(Duration::from_millis(5), env.art.verify(bytes)).await;
-    assert!(gave_up.is_err(), "the decode should take longer than 5 ms");
-    // The decode still runs, so no other decode may start beside it.
-    assert_eq!(env.art.decoding.available_permits(), 0);
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while env.art.decoding.available_permits() == 0 {
-        assert!(Instant::now() < deadline, "the decode never ended");
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-}
-
 #[tokio::test]
 async fn an_image_whose_caller_went_away_is_stored_whole_and_then_cleaned_up() {
     let env = Env::new(&["A"]).await;
-    let stored = tokio::time::timeout(
-        Duration::from_millis(5),
-        env.art.store_image(slow_image(), Source::Upload, None),
-    )
-    .await;
-    assert!(stored.is_err(), "storing should take longer than 5 ms");
+    // The caller goes away as soon as the storing is under way.
+    let art = env.art.clone();
+    let caller = tokio::spawn(async move {
+        art.store_image(samples::png().into(), Source::Upload, None)
+            .await
+    });
+    tokio::task::yield_now().await;
+    caller.abort();
+    assert!(caller.await.unwrap_err().is_cancelled());
     // The storing goes on to a published file whose identity is recorded,
     // never a staged file nobody can claim.
     let deadline = Instant::now() + Duration::from_secs(30);

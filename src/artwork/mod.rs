@@ -21,24 +21,21 @@
 //!
 //! # Limits
 //!
-//! The image limits hold for uploads and AniList images alike. They are set
-//! for the containers' 256M memory limit: before an image is decoded, what the
-//! decode would allocate (output, the JPEG decoder's input copy and the
-//! coefficients of a progressive JPEG or one written a scan a component, the
-//! WebP decoder's frame) is added up from its headers and must stay under
-//! [`DECODE_MAX_ALLOC`] (see [`image`], which also bounds what a PNG's colour
-//! profile may inflate to), and one decode runs at a time in a process,
-//! keeping its turn until it ends even when its caller went away.
+//! The image limits hold for uploads and AniList images alike: at most
+//! [`MAX_IMAGE_BYTES`] bytes, [`MAX_IMAGE_SIDE`] pixels a side and
+//! [`MAX_IMAGE_PIXELS`] pixels, judged from the bytes' own header (see
+//! [`image`]). Nothing is decoded, so the memory an image takes is its bytes
+//! and not its pixels: a 12 MP image is no more than 10 MiB here.
 //!
 //! An image's bytes are held in one buffer from where they arrive to where
 //! the file is published, and that buffer is shared ([`Bytes`]) with the
-//! decode and the file, never copied; the decoders' own copies are what the
-//! cost above counts. An upload's body is collected into a buffer reserved
-//! from `Content-Length` within [`MAX_IMAGE_BYTES`], and a body that takes
-//! longer than [`UPLOAD_BODY_TIMEOUT`] to arrive is dropped and gives its slot
-//! back. The cover of a picked AniList entry is fetched into a buffer reserved
-//! once the same way. At most [`UPLOAD_SLOTS`] uploads and picks are taken in
-//! at once: each holds its slot from before the first byte arrives until the
+//! check and the file, never copied. An upload's body is collected into a
+//! buffer reserved from `Content-Length` within [`MAX_IMAGE_BYTES`], and a
+//! body that takes longer than [`UPLOAD_BODY_TIMEOUT`] to arrive is dropped
+//! and gives its slot back. The cover of a picked AniList entry is fetched
+//! into a buffer reserved once the same way, and must be as long as the
+//! response said. At most [`UPLOAD_SLOTS`] uploads and picks are taken in at
+//! once: each holds its slot from before the first byte arrives until the
 //! file is published ([`Artwork::pick`], [`Artwork::upload`]).
 //!
 //! Serving is bounded by bytes. Before a file is read to serve or check it,
@@ -56,30 +53,26 @@
 //!
 //! | what | bound | MiB |
 //! | --- | --- | --- |
-//! | one decode | [`DECODE_MAX_ALLOC`] | 64 |
 //! | uploads and picks | [`UPLOAD_SLOTS`] × [`MAX_IMAGE_BYTES`] | 20 |
 //! | cover files read or being sent | [`SERVING_BUDGET`] | 32 |
 //!
-//! 116 MiB, plus about 14 MiB for an idle web process with an empty database:
-//! 130 MiB against the container's 256 MiB limit, leaving about 126 MiB for
-//! the rest (the database's pages, rule previews, requests in flight).
-//! (At 128 MiB the first two rows and a 10 MiB file read at a time left 34
-//! MiB, which is why serving first got one slot and then a byte budget.)
+//! 52 MiB, plus about 14 MiB for an idle web process with an empty database:
+//! 66 MiB against the container's 128 MiB limit, leaving about 62 MiB for the
+//! rest (the database's pages, rule previews, requests in flight).
 //!
-//! Not counted, all outside the web's own budgets: the kernel's socket buffers
-//! of a response, and the bytes a body holds beyond a declared length (an
-//! upload without `Content-Length` grows its buffer by doubling, up to about
-//! twice its size while it does).
+//! Not counted: the kernel's socket buffers of a response, and the bytes an
+//! upload body holds beyond a declared length (an upload without
+//! `Content-Length` grows its buffer by doubling, up to about twice its size
+//! while it does).
 //!
 //! # Memory of the worker process
 //!
 //! The worker takes no uploads and serves no files. Its artwork queue runs one
-//! job at a time: the bytes it fetched ([`MAX_IMAGE_BYTES`], 10 MiB) are held
-//! until the file is published, and one decode ([`DECODE_MAX_ALLOC`], 64 MiB)
-//! runs on them: 74 MiB. The cycle (feeds, Transmission), the command loop
-//! and the directory watches come on top of it: a library of about 1,500
-//! folders measured 29 MB resident with its watches (ticket 0016), so 128M
-//! left about 25 MiB for the feeds and the database; the container has 256M.
+//! job at a time and holds the bytes it fetched ([`MAX_IMAGE_BYTES`], 10 MiB)
+//! until the file is published. The cycle (feeds, Transmission), the command
+//! loop and the directory watches come on top of it: a library of about 1,500
+//! folders measured 29 MB resident with its watches (ticket 0016), so about
+//! 40 MiB with a cover, far from 128 MiB.
 
 pub mod anilist;
 pub mod files;
@@ -98,7 +91,7 @@ pub use image::Rejected;
 
 use crate::{
     store::{
-        artwork::{ArtworkError, ArtworkStore, Format, ImageRef, Selection, Source, UserChange},
+        artwork::{ArtworkError, ArtworkStore, ImageRef, Selection, Source, UserChange},
         Db,
     },
     worker::{system_clock, Clock},
@@ -109,13 +102,8 @@ pub const MAX_IMAGE_BYTES: usize = 10 * 1024 * 1024;
 /// The longest side of an accepted image, in pixels.
 pub const MAX_IMAGE_SIDE: u32 = 8192;
 /// The most pixels an accepted image may have: 12 million (a 4000 × 3000
-/// photo). Within it, [`DECODE_MAX_ALLOC`] still refuses the kinds that cost
-/// more to decode (16 bits a channel, large progressive JPEGs).
+/// photo), as its header states.
 pub const MAX_IMAGE_PIXELS: u64 = 12_000_000;
-/// The most memory one decode may allocate, all buffers counted: 64 MiB. A
-/// 12 MP baseline JPEG (36 MB of RGB) or 8-bit RGBA PNG (48 MB) fits; a 12 MP
-/// 16-bit RGBA PNG (96 MB) or progressive JPEG (72 MB and more) does not.
-pub const DECODE_MAX_ALLOC: u64 = 64 * 1024 * 1024;
 /// How long fetching one image may take in total.
 pub const FETCH_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long a user's AniList request may wait for its turn before the web
@@ -189,7 +177,6 @@ pub struct Artwork {
     pub anilist: Anilist,
     app_data: Option<AppData>,
     clock: Clock,
-    decoding: Arc<Semaphore>,
     uploads: Arc<Semaphore>,
     serving: Arc<Semaphore>,
     verified: Arc<files::Verified>,
@@ -213,7 +200,6 @@ impl Artwork {
             store,
             app_data,
             clock,
-            decoding: Arc::new(Semaphore::new(1)),
             uploads: Arc::new(Semaphore::new(UPLOAD_SLOTS)),
             serving: Arc::new(Semaphore::new(SERVING_BUDGET)),
             verified: Arc::default(),
@@ -246,23 +232,6 @@ impl Artwork {
         (self.clock)()
     }
 
-    /// Verifies `bytes` on a blocking thread, one decode at a time. The decode
-    /// keeps its turn until it ends, even when the caller stops waiting.
-    pub async fn verify(&self, bytes: Bytes) -> Result<Format, Rejected> {
-        let permit = self
-            .decoding
-            .clone()
-            .acquire_owned()
-            .await
-            .expect("never closed");
-        tokio::task::spawn_blocking(move || {
-            let _permit = permit;
-            image::verify(&bytes)
-        })
-        .await
-        .unwrap_or(Err(Rejected::Damaged))
-    }
-
     /// A turn to take in one upload ([`UPLOAD_SLOTS`]); the web takes it before
     /// it reads the body and hands it to [`Artwork::upload`], which keeps it
     /// until the file is stored.
@@ -274,7 +243,7 @@ impl Artwork {
             .expect("never closed")
     }
 
-    /// Verifies and publishes `bytes`, returning the reference a selection
+    /// Judges (header only, see [`image::verify`]) and publishes `bytes`, returning the reference a selection
     /// takes. The file is `staging` until then.
     ///
     /// It runs as its own task to the end, holding `hold` (an upload's slot)
@@ -291,10 +260,7 @@ impl Artwork {
         let this = self.clone();
         tokio::spawn(async move {
             let _hold = hold;
-            let format = this
-                .verify(bytes.clone())
-                .await
-                .map_err(ActionError::Rejected)?;
+            let format = image::verify(&bytes).map_err(ActionError::Rejected)?;
             let path = files::publish(&app, &this.store, bytes.clone(), format, this.now()).await?;
             Ok(files::image_ref(origin, path, &bytes, format))
         })

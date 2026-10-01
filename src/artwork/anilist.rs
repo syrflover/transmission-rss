@@ -485,11 +485,8 @@ impl Anilist {
             // Reserved once (the declared length, else the limit, of which only
             // what arrives is touched), so the buffer is never grown by
             // copying into a larger one beside the old.
-            let mut bytes = Vec::with_capacity(
-                response
-                    .content_length()
-                    .map_or(MAX_IMAGE_BYTES, |n| n as usize),
-            );
+            let declared = response.content_length();
+            let mut bytes = Vec::with_capacity(declared.map_or(MAX_IMAGE_BYTES, |n| n as usize));
             while let Some(chunk) = response
                 .chunk()
                 .await
@@ -499,6 +496,13 @@ impl Anilist {
                     return Err(ImageFetchError::TooLarge);
                 }
                 bytes.extend_from_slice(&chunk);
+            }
+            // A body that ended short of the length the response announced is
+            // a cut image, not a smaller one.
+            if declared.is_some_and(|n| n != bytes.len() as u64) {
+                return Err(ImageFetchError::Unreachable(
+                    "the body is not as long as announced".to_owned(),
+                ));
             }
             Ok(bytes)
         };
