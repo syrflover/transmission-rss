@@ -38,7 +38,9 @@
 //!    revision the worker did not receive) is not renamed either: receiving it
 //!    is the confirmation that starts its replacement
 //!    ([`crate::worker::revisions::confirm`]), which names it once the old
-//!    video is gone.
+//!    video is gone. The confirmation is written in step 3, before the
+//!    item's result: a rerun of a command whose item is `received` already
+//!    ends at once, so it could not confirm any more.
 //!
 //! The worker ends the command after step 4. The result lands on the history
 //! item (`received`, `duplicate` or `add_failed` with a reason) and on the
@@ -457,16 +459,7 @@ pub async fn execute_with(
         finished.add_unconfirmed |= command.add_unconfirmed;
         finished
     };
-    // An end before this start adds anything. A torrent may still carry the
-    // command's label when an earlier start ran (it is claimed again after
-    // its first start), so the label comes off whatever ends the command; the
-    // item is left as it is.
-    let ended_early = |mut finished: Finished| {
-        if command.add_unconfirmed || command.attempts > 1 {
-            finished.unlabel = Some(ctx.redactor.clone());
-        }
-        unaccounted(finished)
-    };
+    let ended_early = |finished: Finished| end_early(ctx, command, finished);
 
     let Ok(payload) = serde_json::from_str::<ReceiveOnce>(&command.payload) else {
         return Ok(ended_early(failed("요청 내용을 읽지 못했어요.", None)));
@@ -583,6 +576,20 @@ pub async fn execute_with(
             } else {
                 HistoryResult::Duplicate
             };
+            // A `버전 미상` revision received this way replaces the folder's
+            // video: the request is the person's confirmation. Its torrent
+            // keeps its received name until the old video is gone. The
+            // confirmation is written before the item's result: once the item
+            // is `received` a rerun of this command ends at once, so a
+            // confirmation not written yet would never be. One that cannot be
+            // written leaves the command to be run again.
+            let replacing = if item.result == HistoryResult::VersionUnknown {
+                revisions::confirm(ctx, item.id, &item.title, now(), &torrent.hash)
+                    .await
+                    .map_err(Retry::Store)?
+            } else {
+                false
+            };
             let stored = ctx
                 .history
                 .record_outcome(
@@ -596,11 +603,6 @@ pub async fn execute_with(
                 .await
                 .map_err(Retry::store)?
                 .unwrap_or(result);
-            // A `버전 미상` revision received this way replaces the folder's
-            // video: the request is the person's confirmation. Its torrent
-            // keeps its received name until the old video is gone.
-            let replacing = item.result == HistoryResult::VersionUnknown
-                && revisions::confirm(ctx, item.id, &item.title, now(), &torrent.hash).await;
             // Only a torrent this command put in is renamed. One that was there
             // already keeps its name and gets no note.
             let rename = (own && !replacing).then_some(Rename {
@@ -630,6 +632,19 @@ pub async fn execute_with(
             Ok(finished)
         }
     }
+}
+
+/// A command that ends before this start adds anything. A torrent may still
+/// carry the command's label when an earlier start ran (it is claimed again
+/// after its first start), so the label comes off whatever ends the command,
+/// and an earlier start's add that got no answer stays recorded; the item is
+/// left as it is.
+pub(super) fn end_early(ctx: &CycleContext, command: &Command, mut finished: Finished) -> Finished {
+    if command.add_unconfirmed || command.attempts > 1 {
+        finished.unlabel = Some(ctx.redactor.clone());
+    }
+    finished.add_unconfirmed |= command.add_unconfirmed;
+    finished
 }
 
 /// Why a command stored with a folder chosen by hand is not run.

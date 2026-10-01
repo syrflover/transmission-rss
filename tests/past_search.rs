@@ -815,3 +815,220 @@ async fn a_revision_chosen_in_the_preview_replaces_the_video_after_it_is_receive
         .unwrap();
     assert_eq!(revision.state, RevisionState::Done);
 }
+
+// --- revisions received from a search and the feed together --------------------------
+
+/// Release `14` of `[SubsPlease] Show` at `version` (1 for the first release)
+/// with the CRC32 of `bytes`.
+fn show_14(version: u32, bytes: &[u8]) -> String {
+    let revision = if version > 1 {
+        format!("v{version}")
+    } else {
+        String::new()
+    };
+    format!(
+        "[SubsPlease] Show - 14{revision} (1080p) [{}].mkv",
+        crc(bytes)
+    )
+}
+
+const V1: &[u8] = b"episode 14, first release";
+const V2: &[u8] = b"episode 14, second release";
+const V3: &[u8] = b"episode 14, third release";
+
+impl Setup {
+    /// v1 of episode 14 received through the feed and seeding as
+    /// `Show S01E14.mkv`.
+    async fn first_release(&self) -> String {
+        let v1 = show_14(1, V1);
+        self.nyaa.set_releases(std::slice::from_ref(&v1));
+        self.h.tr.content_on_add(&FakeNyaa::hash_for(&v1), V1);
+        self.cycle().await;
+        self.seed(&v1);
+        assert_eq!(self.episode_14(), V1);
+        v1
+    }
+
+    /// The torrent of `title` has finished and seeds.
+    fn seed(&self, title: &str) {
+        let hash = FakeNyaa::hash_for(title);
+        self.h.tr.finish(&hash);
+        self.h.tr.set_status(&hash, 6);
+    }
+
+    /// The next add of `title` gives `bytes`, left unfinished.
+    fn on_add(&self, title: &str, bytes: &[u8]) {
+        let hash = FakeNyaa::hash_for(title);
+        self.h.tr.content_on_add(&hash, bytes);
+        self.h.tr.unfinished_on_add(&hash);
+    }
+
+    /// `receive_past` of the result titled `title` of `poll`, run; returns the
+    /// command.
+    async fn receive_title(&self, poll: &Value, title: &str) -> Value {
+        let key = item(poll, title)["key"].as_str().unwrap().to_owned();
+        let id = self.receive(poll, &key).await;
+        self.run_commands().await;
+        self.command(&id).await
+    }
+
+    fn episode_14(&self) -> Vec<u8> {
+        std::fs::read(self.folder.join("Show S01E14.mkv")).unwrap()
+    }
+
+    async fn revision_of(&self, title: &str) -> Option<RevisionState> {
+        let item = self
+            .h
+            .history_items()
+            .await
+            .into_iter()
+            .find(|i| i.title == title)?;
+        RevisionStore::new(self.h.db.clone())
+            .by_item(item.id)
+            .await
+            .unwrap()
+            .map(|r| r.state)
+    }
+}
+
+/// Two revisions of an episode chosen from a search: the lower one finishing
+/// first does not take the episode name, and the higher one replaces the video.
+#[tokio::test]
+async fn two_searched_revisions_of_an_episode_leave_the_higher_one() {
+    let s = Setup::new(Options::show()).await;
+    let v1 = s.first_release().await;
+    let (v2, v3) = (show_14(2, V2), show_14(3, V3));
+    s.nyaa.set_releases(&[v3.clone(), v2.clone(), v1.clone()]);
+    s.on_add(&v2, V2);
+    s.on_add(&v3, V3);
+    let poll = s.search("[SubsPlease] Show 1080p", 14, 14).await;
+    for title in [&v3, &v2] {
+        let command = s.receive_title(&poll, title).await;
+        assert_eq!(command["outcome"]["result"], "received", "{command}");
+    }
+
+    s.seed(&v2);
+    s.cycle().await;
+    assert_eq!(
+        s.episode_14(),
+        V1,
+        "the lower revision does not take the name"
+    );
+    assert_eq!(s.revision_of(&v2).await, Some(RevisionState::Skipped));
+
+    s.seed(&v3);
+    s.cycle().await;
+    assert_eq!(s.episode_14(), V3);
+    assert_eq!(s.revision_of(&v3).await, Some(RevisionState::Done));
+    assert_eq!(s.revision_of(&v2).await, Some(RevisionState::Skipped));
+    // v2 keeps its own name; only the episode name was replaced.
+    assert_eq!(std::fs::read(s.folder.join(&v2)).unwrap(), V2);
+}
+
+/// A revision chosen from a search while the feed's lower revision is on its
+/// way: the feed's one finishing first is skipped and the searched one
+/// replaces the video.
+#[tokio::test]
+async fn a_searched_revision_higher_than_the_feeds_open_one_is_the_one_that_replaces() {
+    let s = Setup::new(Options::show()).await;
+    let v1 = s.first_release().await;
+    let (v2, v3) = (show_14(2, V2), show_14(3, V3));
+    s.nyaa.set_releases(&[v2.clone(), v1.clone()]);
+    s.on_add(&v2, V2);
+    s.cycle().await;
+    assert_eq!(s.revision_of(&v2).await, Some(RevisionState::Receiving));
+
+    s.nyaa.set_releases(&[v3.clone(), v2.clone(), v1.clone()]);
+    s.on_add(&v3, V3);
+    let poll = s.search("[SubsPlease] Show 1080p", 14, 14).await;
+    let command = s.receive_title(&poll, &v3).await;
+    assert_eq!(command["outcome"]["result"], "received", "{command}");
+    assert_eq!(s.revision_of(&v3).await, Some(RevisionState::Receiving));
+
+    s.seed(&v2);
+    s.cycle().await;
+    assert_eq!(s.episode_14(), V1);
+    assert_eq!(s.revision_of(&v2).await, Some(RevisionState::Skipped));
+
+    s.seed(&v3);
+    s.cycle().await;
+    assert_eq!(s.episode_14(), V3);
+    assert_eq!(s.revision_of(&v3).await, Some(RevisionState::Done));
+}
+
+/// A lower revision chosen from a search after a higher one replaced the
+/// video is not added.
+#[tokio::test]
+async fn a_searched_revision_lower_than_the_one_that_replaced_the_video_is_not_added() {
+    let s = Setup::new(Options::show()).await;
+    let v1 = s.first_release().await;
+    let (v2, v3) = (show_14(2, V2), show_14(3, V3));
+    s.nyaa.set_releases(&[v3.clone(), v1.clone()]);
+    s.on_add(&v3, V3);
+    let poll = s.search("[SubsPlease] Show 1080p", 14, 14).await;
+    let command = s.receive_title(&poll, &v3).await;
+    assert_eq!(command["outcome"]["result"], "received", "{command}");
+    s.seed(&v3);
+    s.cycle().await;
+    assert_eq!(s.episode_14(), V3);
+
+    s.nyaa.set_releases(&[v3.clone(), v2.clone(), v1.clone()]);
+    let poll = s.search("[SubsPlease] Show 1080p", 14, 14).await;
+    let command = s.receive_title(&poll, &v2).await;
+    assert_eq!(command["outcome"]["result"], "duplicate", "{command}");
+    let v2_hash = FakeNyaa::hash_for(&v2);
+    assert!(!s.added().iter().any(|link| link.contains(&v2_hash)));
+    assert_eq!(s.episode_14(), V3);
+}
+
+// --- a `받기` whose add got no answer -----------------------------------------------
+
+/// A `받기` whose add got no answer though Transmission took the torrent, and
+/// whose rule is paused before the next start: the command ends at once, the
+/// torrent stays unaccounted for so the next cycle removes nothing, and the
+/// command's label comes off it.
+#[tokio::test]
+async fn a_paused_rule_after_an_unanswered_add_ends_the_command_and_holds_the_next_cleanup() {
+    let s = Setup::new(Options::show()).await;
+    let title = episode("SubsPlease", "Show", 3, "");
+    s.nyaa.set_releases(std::slice::from_ref(&title));
+    let poll = s.search("[SubsPlease] Show 1080p", 3, 3).await;
+    let key = item(&poll, &title)["key"].as_str().unwrap().to_owned();
+    let id = s.receive(&poll, &key).await;
+
+    let late = s.h.tr.hold_answer("torrent-add");
+    let impatient =
+        s.h.worker()
+            .with_transmission_timeout(Duration::from_millis(300));
+    let cancel = CancellationToken::new();
+    assert_eq!(
+        impatient.run_commands(&cancel).await.unwrap(),
+        CommandsOutcome::Ran(0)
+    );
+    late.release_all();
+    assert_eq!(s.command(&id).await["state"], "running");
+    let label = transmission_rss::transmission::command_label(&id);
+    assert!(s.h.tr.torrents()[0].labels.contains(&label));
+
+    s.h.channels
+        .set_rule_state(&s.rule_id, RuleState::Paused, 1)
+        .await
+        .unwrap();
+    assert_eq!(
+        impatient.run_commands(&cancel).await.unwrap(),
+        CommandsOutcome::Ran(1)
+    );
+    let command = s.command(&id).await;
+    assert_eq!(command["state"], "failed", "{command}");
+    assert!(!s.h.tr.torrents()[0].labels.contains(&label));
+
+    // The search's result is in no feed, and the torrent's hash was never
+    // learned: only the unanswered add keeps it from the cleanup.
+    s.nyaa.set_releases(&[]);
+    let TickOutcome::Ran(report) = s.h.worker().tick(&cancel).await.unwrap() else {
+        panic!("expected a cycle");
+    };
+    assert_eq!(report.commands_unconfirmed, 1);
+    assert!(report.removed.is_empty(), "{:?}", report.removed);
+    assert_eq!(s.h.tr.torrents().len(), 1);
+}

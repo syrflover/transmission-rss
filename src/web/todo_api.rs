@@ -23,11 +23,13 @@
 //!   ([`crate::store::revisions::Revision::is_failure`]). `files` are the two
 //!   videos with what became of each: the old one `kept` (still there) or
 //!   `removed`; the new one under the name it was received with
-//!   (`received_name`), or `not_received` (its download did not complete, so
-//!   `path` is `null`). Paths are relative to the work folder; `work` is
-//!   `null` when the library has no work at that folder, and the paths are
-//!   then absolute. An item goes away once the worker sees one of the two
-//!   files gone, or the rename go through.
+//!   (`received_name`), or `not_received` (its download did not complete or
+//!   is not in the rule's folder, so `path` is `null`). Paths are relative to
+//!   the work folder; `work` is `null` when the library has no work at that
+//!   folder, and the paths are then absolute. An item goes away once the
+//!   worker sees one of the two files gone, or the rename go through; a
+//!   `not_received` one also once its torrent is right again or a cycle
+//!   receives its item again.
 //! - `add_failed` items are the history items a rule picked and Transmission
 //!   did not add (`추가 실패`), the newest 200; `다시 받기` is on the history
 //!   item.

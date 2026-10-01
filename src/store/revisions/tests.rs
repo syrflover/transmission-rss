@@ -44,6 +44,7 @@ fn new(item_id: i64, old_item_id: Option<i64>, state: RevisionState) -> NewRevis
         episode_name: "Show S01E14.mkv".into(),
         old_version: Some(1),
         new_version: 2,
+        old_crc: None,
         expected_crc: Some("1A2B3C4D".into()),
         torrent_hash: Some("hash-14v2".into()),
         state,
@@ -146,27 +147,19 @@ async fn marks_say_which_items_a_cycle_leaves_to_the_replacement() {
 async fn failures_are_failed_rows_and_renames_still_waiting() {
     let (_dir, db) = db().await;
     let store = RevisionStore::new(db.clone());
-    let a = store
-        .create(
-            10,
-            new(item(&db, "14v2").await, None, RevisionState::Receiving),
-        )
-        .await
-        .unwrap();
-    let b = store
-        .create(
-            10,
-            new(item(&db, "15v2").await, None, RevisionState::Receiving),
-        )
-        .await
-        .unwrap();
-    let c = store
-        .create(
-            10,
-            new(item(&db, "16v2").await, None, RevisionState::Receiving),
-        )
-        .await
-        .unwrap();
+    // Three episodes, each with its own torrent.
+    let mut rows = Vec::new();
+    for episode in ["14", "15", "16"] {
+        let mut row = new(
+            item(&db, &format!("{episode}v2")).await,
+            None,
+            RevisionState::Receiving,
+        );
+        row.episode_name = format!("Show S01E{episode}.mkv");
+        row.torrent_hash = Some(format!("hash-{episode}v2"));
+        rows.push(store.create(10, row).await.unwrap());
+    }
+    let [a, b, c] = <[Revision; 3]>::try_from(rows).unwrap();
     store
         .advance(
             a.id,
@@ -219,4 +212,217 @@ async fn failures_are_failed_rows_and_renames_still_waiting() {
         (RevisionState::Done, Some(50))
     );
     assert_eq!(store.open().await.unwrap().len(), 1);
+}
+
+/// A row of `key` (`14v2`, `14v3`) for the episode `Show S01E14.mkv`, with
+/// its own torrent `hash-<key>`.
+fn of_episode(item_id: i64, key: &str, version: u32) -> NewRevision {
+    let mut row = new(item_id, None, RevisionState::Receiving);
+    row.new_version = version;
+    row.torrent_hash = Some(format!("hash-{key}"));
+    row
+}
+
+fn old() -> OldVideo {
+    OldVideo {
+        item_id: None,
+        version: Some(1),
+        torrent_hash: Some("hash-14".into()),
+    }
+}
+
+async fn verified(store: &RevisionStore, id: i64) {
+    let step = Step::Verified {
+        received_name: format!("v{id}.mkv"),
+        file_crc: "1A2B3C4D".into(),
+    };
+    store.advance(id, 15, step).await.unwrap();
+}
+
+#[tokio::test]
+async fn one_replacement_of_an_episode_removes_the_old_video_at_a_time() {
+    let (_dir, db) = db().await;
+    let store = RevisionStore::new(db.clone());
+    let v2 = store
+        .create(10, of_episode(item(&db, "14v2").await, "14v2", 2))
+        .await
+        .unwrap();
+    let v3 = store
+        .create(10, of_episode(item(&db, "14v3").await, "14v3", 3))
+        .await
+        .unwrap();
+    verified(&store, v2.id).await;
+    verified(&store, v3.id).await;
+
+    // A higher revision on its way overtakes the lower one.
+    assert_eq!(store.verdict(v2.id).await.unwrap(), Claim::Overtaken);
+    assert_eq!(
+        store.claim(v2.id, 20, old()).await.unwrap(),
+        Claim::Overtaken
+    );
+    assert_eq!(
+        store.by_item(v2.item_id).await.unwrap().unwrap().state,
+        RevisionState::Verified,
+        "the caller writes the skip"
+    );
+
+    assert_eq!(store.claim(v3.id, 20, old()).await.unwrap(), Claim::Go);
+    let row = store.by_item(v3.item_id).await.unwrap().unwrap();
+    assert_eq!(row.state, RevisionState::Removing);
+    assert_eq!(row.old_torrent_hash.as_deref(), Some("hash-14"));
+    assert_eq!(row.old_version, Some(1));
+    // Claimed again after a restart: still its own.
+    assert_eq!(store.claim(v3.id, 21, old()).await.unwrap(), Claim::Go);
+
+    // Another `14v3` (another torrent) waits while the first one removes.
+    let other = store
+        .create(10, of_episode(item(&db, "14v3b").await, "14v3b", 3))
+        .await
+        .unwrap();
+    verified(&store, other.id).await;
+    assert_eq!(store.claim(other.id, 22, old()).await.unwrap(), Claim::Wait);
+    store
+        .advance(v3.id, 23, Step::Removed { reason: None })
+        .await
+        .unwrap();
+    assert_eq!(store.verdict(other.id).await.unwrap(), Claim::Wait);
+
+    // Done: the lower and equal revisions still checked are skipped.
+    store.advance(v3.id, 30, Step::Done).await.unwrap();
+    for id in [v2.item_id, other.item_id] {
+        let row = store.by_item(id).await.unwrap().unwrap();
+        assert_eq!(row.state, RevisionState::Skipped);
+        assert_eq!(row.reason.as_deref(), Some(OVERTAKEN));
+    }
+}
+
+#[tokio::test]
+async fn a_row_whose_torrent_another_row_has_is_skipped() {
+    let (_dir, db) = db().await;
+    let store = RevisionStore::new(db.clone());
+    let first = store
+        .create(10, of_episode(item(&db, "14v2").await, "14v2", 2))
+        .await
+        .unwrap();
+    assert_eq!(first.state, RevisionState::Receiving);
+    // The same torrent through another item (another channel).
+    let second = store
+        .create(11, of_episode(item(&db, "14v2b").await, "14v2", 2))
+        .await
+        .unwrap();
+    assert_eq!(second.state, RevisionState::Skipped);
+    assert_eq!(second.reason.as_deref(), Some(SAME_TORRENT));
+
+    // `다시 받기` of a `버전 미상` row with that torrent is skipped too.
+    let mut unknown = of_episode(item(&db, "14v2c").await, "x", 2);
+    unknown.state = RevisionState::Unknown;
+    unknown.torrent_hash = None;
+    store.create(12, unknown.clone()).await.unwrap();
+    let row = store
+        .confirm(unknown.item_id, 13, "hash-14v2".into(), None)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.state, RevisionState::Skipped);
+    assert_eq!(store.held_hashes().await.unwrap(), vec!["hash-14v2"]);
+}
+
+#[tokio::test]
+async fn a_failure_before_the_video_was_received_is_received_again() {
+    let (_dir, db) = db().await;
+    let store = RevisionStore::new(db.clone());
+    let v2 = item(&db, "14v2").await;
+    let row = store.create(10, of_episode(v2, "14v2", 2)).await.unwrap();
+    let stopped = Step::Failed {
+        reason: "stopped".into(),
+        received_name: None,
+    };
+    store.advance(row.id, 20, stopped).await.unwrap();
+
+    let marks = store.marks("c1".into(), vec!["14v2".into()]).await.unwrap();
+    let Some(Mark::Retry(failed)) = marks.get("14v2") else {
+        panic!("{marks:?}")
+    };
+    assert!(failed.not_received());
+
+    let row = store
+        .reopen(row.id, 30, "hash-again".into())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.state, RevisionState::Receiving);
+    assert_eq!(
+        (row.torrent_hash.as_deref(), row.reason),
+        (Some("hash-again"), None)
+    );
+
+    // A failure with the new video received is not reopened.
+    let crc = Step::Failed {
+        reason: "crc".into(),
+        received_name: Some("v2.mkv".into()),
+    };
+    store.advance(row.id, 40, crc).await.unwrap();
+    let row = store
+        .reopen(row.id, 50, "hash-3".into())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.state, RevisionState::Failed);
+    let marks = store.marks("c1".into(), vec!["14v2".into()]).await.unwrap();
+    assert_eq!(
+        marks.get("14v2"),
+        Some(&Mark::Revision(RevisionState::Failed))
+    );
+}
+
+#[tokio::test]
+async fn every_item_of_the_removed_torrent_is_superseded() {
+    let (_dir, db) = db().await;
+    let store = RevisionStore::new(db.clone());
+    let v1 = item(&db, "14").await;
+    // The same torrent in channel `c2`.
+    HistoryStore::new(db.clone())
+        .record(
+            1,
+            vec![Observation {
+                channel_id: "c2".into(),
+                channel_label: "https://y/".into(),
+                identity_key: "other-14".into(),
+                title: "[SubsPlease] Show - 14 (1080p).mkv".into(),
+                link: "magnet:?".into(),
+                result: HistoryResult::Duplicate,
+                rule_id: Some("r2".into()),
+                torrent_hash: Some("hash-14".into()),
+                reason: None,
+            }],
+        )
+        .await
+        .unwrap();
+    let row = store
+        .create(10, of_episode(item(&db, "14v2").await, "14v2", 2))
+        .await
+        .unwrap();
+    verified(&store, row.id).await;
+    let old = OldVideo {
+        item_id: Some(v1),
+        version: Some(1),
+        torrent_hash: Some("hash-14".into()),
+    };
+    assert_eq!(store.claim(row.id, 20, old).await.unwrap(), Claim::Go);
+
+    let marks = store
+        .marks("c2".into(), vec!["other-14".into()])
+        .await
+        .unwrap();
+    assert_eq!(marks.get("other-14"), Some(&Mark::Superseded));
+    let marks = store.marks("c1".into(), vec!["14".into()]).await.unwrap();
+    assert_eq!(marks.get("14"), Some(&Mark::Superseded));
+
+    let replacements = store.replacements().await.unwrap();
+    assert_eq!(replacements.len(), 1);
+    assert_eq!(
+        replacements[0].title,
+        "[SubsPlease] Show - 14v2 (1080p).mkv"
+    );
+    assert_eq!(replacements[0].new_version, 2);
 }
