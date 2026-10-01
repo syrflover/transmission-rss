@@ -35,6 +35,8 @@ export interface LibraryWork {
   /** The latest known time a video / subtitle was added, over every season. */
   video_added_at: number | null;
   subtitle_added_at: number | null;
+  /** Where the cover image is served while the work has one; it may still fail (the placeholder stays). */
+  cover_url: string | null;
 }
 
 /** How a page is ordered (`sort=` of the request). */
@@ -143,6 +145,8 @@ export interface WorkDetail {
   seasons: WorkSeason[];
   unrecognized: UnrecognizedFile[];
   rules: WorkRule[];
+  /** Where the cover image is served while the work has one. */
+  cover_url: string | null;
 }
 
 /** The cache key of one work's page. */
@@ -156,4 +160,80 @@ export async function loadWork(id: string, signal?: AbortSignal): Promise<WorkDe
     if (e instanceof ApiError && e.code === "not_found") return null;
     throw e;
   }
+}
+
+// --- a work's cover (`src/web/artwork_api.rs`) ----------------------------------------
+
+/** `auto`: the app picks a clear AniList match; `manual`: the user chose; `disabled`: no cover, no search. */
+export type ArtworkMode = "auto" | "manual" | "disabled";
+/** The image file, checked when the state was read. Only `available` is shown. */
+export type ImageStatus = "available" | "missing" | "mismatch" | "unverified";
+
+export interface ArtworkImage {
+  id: string;
+  origin: "anilist" | "upload";
+  format: "jpeg" | "png" | "webp";
+  byte_size: number;
+  status: ImageStatus;
+  url: string;
+}
+
+export interface ArtworkState {
+  mode: ArtworkMode;
+  source: "anilist" | "upload" | null;
+  anilist_media_id: number | null;
+  /** Sent back with a change; a change from an older version is a `conflict`. */
+  version: number;
+  image: ArtworkImage | null;
+  /** Automatic work still to do: looking the title up, or receiving the image. */
+  pending: "search" | "fetch" | null;
+  /** Why the last automatic attempt left the cover as it is. */
+  note: { code: string; message: string } | null;
+}
+
+/** One AniList entry of a search. `thumb_url` is AniList's own image address. */
+export interface AnilistCandidate {
+  id: number;
+  title: string;
+  titles: string[];
+  format: string | null;
+  season_year: number | null;
+  thumb_url: string | null;
+}
+
+export interface AnilistPage {
+  items: AnilistCandidate[];
+  has_next: boolean;
+  page: number;
+}
+
+const artworkPath = (id: string) => `/library/works/${encodeURIComponent(id)}/artwork`;
+
+export function loadArtwork(id: string, signal?: AbortSignal): Promise<ArtworkState> {
+  return api<ArtworkState>(artworkPath(id), { signal });
+}
+
+export function searchAnilist(id: string, q: string, page: number, signal?: AbortSignal): Promise<AnilistPage> {
+  return api<AnilistPage>(`${artworkPath(id)}/search`, { method: "POST", body: { q, page }, signal });
+}
+
+export function pickArtwork(id: string, version: number, anilistMediaId: number): Promise<ArtworkState> {
+  return api<ArtworkState>(`${artworkPath(id)}/pick`, {
+    method: "POST",
+    body: { version, anilist_media_id: anilistMediaId },
+  });
+}
+
+export function uploadArtwork(id: string, version: number, file: File): Promise<ArtworkState> {
+  return api<ArtworkState>(`${artworkPath(id)}/upload?version=${version}`, { method: "POST", body: file });
+}
+
+/** `clear`: no cover and no automatic search; `auto`: back to automatic with a new search; `repair`: the chosen AniList entry's image again. */
+export function changeArtwork(id: string, version: number, action: "clear" | "auto" | "repair"): Promise<ArtworkState> {
+  return api<ArtworkState>(`${artworkPath(id)}/${action}`, { method: "POST", body: { version } });
+}
+
+/** The cover URL the list and the detail show for a state. */
+export function coverUrlOf(state: ArtworkState): string | null {
+  return state.image?.url ?? null;
 }

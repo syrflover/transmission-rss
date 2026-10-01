@@ -30,23 +30,25 @@ const UNKNOWN_MESSAGE = "서버가 알 수 없는 응답을 보냈어요. 잠시
 
 /**
  * Sends a request to `/api{path}` and returns the parsed JSON body.
- * A `body` object is sent as JSON. A 204 response resolves to `undefined`.
+ * A `body` object is sent as JSON, a `Blob` (a chosen file) as its bytes.
+ * A 204 response resolves to `undefined`.
  */
 export async function api<T>(
   path: string,
   init: Omit<RequestInit, "body"> & { body?: unknown } = {},
 ): Promise<T> {
   const { body, headers, ...rest } = init;
+  const raw = body instanceof Blob;
   let response: Response;
   try {
     response = await fetch(`/api${path}`, {
       ...rest,
       headers: {
         Accept: "application/json",
-        ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+        ...(body === undefined ? {} : { "Content-Type": raw ? "application/octet-stream" : "application/json" }),
         ...headers,
       },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: body === undefined ? undefined : raw ? body : JSON.stringify(body),
     });
   } catch {
     throw new ApiError("network", NETWORK_MESSAGE, 0);

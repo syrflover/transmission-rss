@@ -2,12 +2,13 @@ import { useEffect, useRef, useState, type MouseEvent } from "react";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
-import { useCached } from "@/lib/cached";
+import { forgetPrefix, useCached } from "@/lib/cached";
 import { useMediaQuery, PHONE_QUERY } from "@/lib/media";
 
 import { EmptyState, ScreenFrame, usePageTitle } from "../ScreenFrame";
 import { btnNeutral } from "../collect/channels/styles";
-import { loadWork, workKey, type WorkDetail } from "./api";
+import { LIST_PREFIX, loadWork, workKey, type WorkDetail } from "./api";
+import { CoverDialog } from "./detail/CoverDialog";
 import { EpisodeList } from "./detail/EpisodeList";
 import { defaultSeason, rowId } from "./detail/model";
 import { useEpisodeOrder } from "./detail/prefs";
@@ -56,8 +57,16 @@ function WorkPage({ workId }: { workId: string }) {
     </Link>
   );
 
+  // A new cover shows in the head at once; the list reads its pages again.
+  const coverChanged = (coverUrl: string | null) => {
+    if (work.data && work.data.cover_url !== coverUrl) {
+      work.update((w) => (w ? { ...w, cover_url: coverUrl } : w));
+      forgetPrefix(LIST_PREFIX);
+    }
+  };
+
   if (work.data) {
-    return <Loaded work={work.data} backLink={backLink} />;
+    return <Loaded work={work.data} backLink={backLink} onCoverChanged={coverChanged} />;
   }
   return (
     <ScreenFrame title="작품">
@@ -82,8 +91,17 @@ function WorkPage({ workId }: { workId: string }) {
   );
 }
 
-function Loaded({ work, backLink }: { work: WorkDetail; backLink: React.ReactNode }) {
+function Loaded({
+  work,
+  backLink,
+  onCoverChanged,
+}: {
+  work: WorkDetail;
+  backLink: React.ReactNode;
+  onCoverChanged: (coverUrl: string | null) => void;
+}) {
   const cover = coverOf(work.name);
+  const [coverOpen, setCoverOpen] = useState(false);
   usePageTitle(cover.title);
   const phone = useMediaQuery(PHONE_QUERY);
   const wide = useMediaQuery(WIDE_QUERY);
@@ -123,7 +141,28 @@ function Loaded({ work, backLink }: { work: WorkDetail; backLink: React.ReactNod
       <div className="pt-4">{backLink}</div>
 
       <div className="flex items-start gap-[22px] pt-3 pb-5 max-[720px]:gap-3.5">
-        <Cover work={cover} className="w-28 aspect-[2/3] max-[720px]:w-20" letterClass="text-5xl max-[720px]:text-3xl" />
+        <button
+          type="button"
+          aria-label="표지 크게 보기와 바꾸기"
+          aria-haspopup="dialog"
+          onClick={() => setCoverOpen(true)}
+          className="flex-none cursor-zoom-in rounded-lg focus-visible:outline-2 focus-visible:outline-offset-3 focus-visible:outline-focus"
+        >
+          <Cover
+            work={cover}
+            imageUrl={work.cover_url}
+            className="w-28 aspect-[2/3] max-[720px]:w-20"
+            letterClass="text-5xl max-[720px]:text-3xl"
+          />
+        </button>
+        <CoverDialog
+          workId={work.id}
+          work={cover}
+          coverUrl={work.cover_url}
+          open={coverOpen}
+          onOpenChange={setCoverOpen}
+          onChanged={onCoverChanged}
+        />
         <div className="min-w-0 flex-1">
           <h1 className="text-[26px] leading-[1.28] font-bold tracking-[-0.005em] max-[720px]:text-xl">{cover.title}</h1>
           {hasSubtitles && (

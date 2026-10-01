@@ -1,4 +1,4 @@
-import { memo } from "react";
+import { memo, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { cn } from "@/lib/utils";
@@ -15,11 +15,12 @@ import type { ViewKey } from "./prefs";
 export const FROM_LIBRARY = { from: "library" } as const;
 
 /**
- * The cover until artwork exists: the first letter of the title on a block
- * tinted by the title, so the same work looks the same every time. Decorative
- * (the title is next to it as text). An `imageUrl` (no work has one yet) is
- * read lazily, only once the cover is near the viewport, and covers the
- * placeholder, which stays underneath while it loads or if it fails.
+ * A work's cover: the image when the work has one, over a placeholder (the
+ * first letter of the title on a block tinted by the title, so the same work
+ * looks the same every time). Decorative (the title is next to it as text).
+ * The image is read lazily, only once the cover is near the viewport; the
+ * placeholder stays underneath while it loads, and alone if it fails (the
+ * server answers `404` for a file that is gone or changed).
  */
 export function Cover({
   work,
@@ -42,10 +43,23 @@ export function Cover({
       }}
     >
       <span className={cn("font-bold select-none", letterClass)}>{work.initial}</span>
-      {imageUrl && (
-        <img src={imageUrl} alt="" loading="lazy" decoding="async" className="absolute inset-0 size-full object-cover" />
-      )}
+      {imageUrl && <CoverImage key={imageUrl} url={imageUrl} />}
     </span>
+  );
+}
+
+function CoverImage({ url }: { url: string }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return null;
+  return (
+    <img
+      src={url}
+      alt=""
+      loading="lazy"
+      decoding="async"
+      onError={() => setFailed(true)}
+      className="absolute inset-0 size-full object-cover"
+    />
   );
 }
 
@@ -88,7 +102,7 @@ export const GridItem = memo(function GridItem({ work }: { work: Work }) {
   return (
     <li className="min-w-0">
       <Link to={workPath(work.id)} state={FROM_LIBRARY} className={cn(item, "flex h-full flex-col gap-2.5 p-2.5")}>
-        <Cover work={work} className="aspect-[2/3] w-full" letterClass="text-5xl" />
+        <Cover work={work} className="aspect-[2/3] w-full" letterClass="text-5xl" imageUrl={work.cover_url} />
         <span className="flex min-w-0 flex-col gap-1 px-0.5 pb-0.5">
           <span className="line-clamp-2 min-w-0 text-sm leading-snug font-semibold">{work.title}</span>
           <VideoLine work={work} />
@@ -112,7 +126,12 @@ export const ListItem = memo(function ListItem({ work }: { work: Work }) {
           "max-[720px]:grid-cols-[48px_minmax(0,1fr)] max-[720px]:gap-x-3",
         )}
       >
-        <Cover work={work} className="h-[72px] w-12 rounded-md max-[720px]:row-span-3" letterClass="text-xl" />
+        <Cover
+          work={work}
+          className="h-[72px] w-12 rounded-md max-[720px]:row-span-3"
+          letterClass="text-xl"
+          imageUrl={work.cover_url}
+        />
         <span className="line-clamp-2 min-w-0 text-[14.5px] leading-snug font-semibold">{work.title}</span>
         <VideoLine work={work} />
         <SubtitleLine work={work} />
