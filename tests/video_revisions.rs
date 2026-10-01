@@ -2620,6 +2620,64 @@ async fn a_new_video_found_between_two_misses_keeps_its_replacement() {
     assert_eq!(read(&s.file(EPISODE_NAME)), NEW_BYTES);
 }
 
+/// `14v2`'s file is missing on one look and there on the next, which goes no
+/// further (Transmission does not answer): the miss and its reason go, so
+/// the replacement is no `받기 실패` any more.
+#[tokio::test]
+async fn a_new_video_found_by_a_look_that_goes_no_further_is_no_failure() {
+    let mut s = Setup::new().await;
+    s.v2_waits_for_its_name().await;
+
+    std::fs::rename(s.file(&v2()), s.away()).unwrap();
+    s.cycle().await;
+    assert_eq!(s.failures().await.len(), 1);
+    std::fs::rename(s.away(), s.file(&v2())).unwrap();
+    s.h.tr.stop().await;
+    s.cycle().await;
+    s.h.tr.restart().await;
+    let row = s.row_of(&v2()).await;
+    assert_eq!(row.state, RevisionState::Removed);
+    assert_eq!(row.new_missing_at, None);
+    assert_eq!(row.reason, None, "{row:?}");
+    assert!(s.failures().await.is_empty());
+}
+
+/// `14v2`'s file is missing on one look; on the next it is back, but another
+/// file holds the episode name, so the rename waits. That look found the
+/// file: the file missing once more after the name is free again is a first
+/// miss, not the second in a row.
+#[tokio::test]
+async fn a_new_video_found_while_its_name_is_taken_breaks_the_run() {
+    let s = Setup::new().await;
+    s.v2_waits_for_its_name().await;
+
+    std::fs::rename(s.file(&v2()), s.away()).unwrap();
+    s.cycle().await;
+    std::fs::rename(s.away(), s.file(&v2())).unwrap();
+    std::fs::write(s.file(EPISODE_NAME), b"someone else's file").unwrap();
+    s.cycle().await;
+    let row = s.row_of(&v2()).await;
+    assert_eq!(row.state, RevisionState::Removed);
+    assert!(
+        row.reason
+            .as_deref()
+            .unwrap()
+            .contains("다른 파일이 있어서"),
+        "{row:?}"
+    );
+
+    std::fs::remove_file(s.file(EPISODE_NAME)).unwrap();
+    std::fs::rename(s.file(&v2()), s.away()).unwrap();
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Removed);
+
+    std::fs::rename(s.away(), s.file(&v2())).unwrap();
+    s.h.tr.reject_rename_of(NEW_HASH, None);
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Done);
+    assert_eq!(read(&s.file(EPISODE_NAME)), NEW_BYTES);
+}
+
 /// `14v2`'s file is missing on one look, and on the next its whole folder is
 /// away (a mount): that look decides nothing and breaks the run, so the file
 /// missing once more after the folder is back is a first miss again.

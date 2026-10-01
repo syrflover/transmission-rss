@@ -947,15 +947,18 @@ async fn new_video_found(
 }
 
 /// A look found the row's folder away (`why`): it decides nothing, and an
-/// earlier miss no longer counts toward two in a row.
-async fn folder_away(ctx: &CycleContext, row: &mut Revision, why: String) -> Next {
-    if row.new_missing_at.is_some() {
-        if let Err(err) = ctx.revisions.forget_miss(row.id, None).await {
-            return Next::Later(err.to_string());
-        }
-        row.new_missing_at = None;
+/// earlier miss no longer counts toward two in a row; its reason
+/// `miss_reason` goes with it, as when the video is found.
+async fn folder_away(
+    ctx: &CycleContext,
+    row: &mut Revision,
+    why: String,
+    miss_reason: Option<&str>,
+) -> Next {
+    match new_video_found(ctx, row, miss_reason).await {
+        Ok(()) => Next::Later(why),
+        Err(next) => next,
     }
-    Next::Later(why)
 }
 
 /// What a look at the row's new video, before the old video is removed for
@@ -1030,7 +1033,7 @@ async fn remove_old(ctx: &CycleContext, row: &mut Revision, at: Millis, listing:
     }
     // A folder that is away tells nothing about the old video either.
     if let Err(why) = folder_there(row) {
-        return folder_away(ctx, row, why).await;
+        return folder_away(ctx, row, why, Some(NEW_UNCHECKED_OLD_KEPT)).await;
     }
     let old = Path::new(&row.folder).join(&row.episode_name);
     let present = match exists(&old) {
@@ -1059,8 +1062,9 @@ async fn remove_old(ctx: &CycleContext, row: &mut Revision, at: Millis, listing:
                         Err(next) => next,
                     },
                     Ok(true) => new_video_missed(row, NEW_GONE_OLD_LEFT, None),
-                    Err(why) => folder_away(ctx, row, why).await,
-                }
+                    // The reason stays: the old file is still there to wait for.
+                    Err(why) => folder_away(ctx, row, why, None).await,
+                };
             }
             Err(err) => return Next::Later(err.to_string()),
         }
@@ -1089,7 +1093,9 @@ async fn remove_old(ctx: &CycleContext, row: &mut Revision, at: Millis, listing:
                 Some(now)
             }
             NewLook::Missed => return new_video_missed(row, NEW_UNCHECKED_OLD_KEPT, None),
-            NewLook::FolderAway(why) => return folder_away(ctx, row, why).await,
+            NewLook::FolderAway(why) => {
+                return folder_away(ctx, row, why, Some(NEW_UNCHECKED_OLD_KEPT)).await
+            }
             NewLook::Unread(why) => return Next::Later(why),
         }
     } else {
@@ -1356,25 +1362,34 @@ async fn rename(ctx: &CycleContext, row: &mut Revision, listing: &Listing) -> Ne
         Ok(true) => {
             return match renamed_already(ctx, row, &target).await {
                 Ok(true) => Next::Step(Step::Done),
-                Ok(false) => Next::Step(Step::Removed {
-                    reason: Some(DESTINATION_TAKEN.to_owned()),
-                }),
+                Ok(false) => {
+                    // The received file there is a look that found it.
+                    if matches!(new_video_gone(row), Ok(false)) {
+                        if let Err(next) = new_video_found(ctx, row, Some(NEW_FILE_MISSING)).await {
+                            return next;
+                        }
+                    }
+                    Next::Step(Step::Removed {
+                        reason: Some(DESTINATION_TAKEN.to_owned()),
+                    })
+                }
                 Err(why) => Next::Later(why),
-            }
+            };
         }
         Err(err) => return Next::Later(format!("cannot look at {}: {err}", target.display())),
     }
     // The new video missing on two looks in a row (one per cycle) ends the
-    // replacement: the first may be a mount that was away for a moment. The
-    // reason of a miss stays until the rename goes through or says why not.
+    // replacement: the first may be a mount that was away for a moment. A
+    // look that finds it, or finds the folder away, takes the miss and its
+    // reason away, however far it goes after.
     match new_video_gone(row) {
         Ok(false) => {
-            if let Err(next) = new_video_found(ctx, row, None).await {
+            if let Err(next) = new_video_found(ctx, row, Some(NEW_FILE_MISSING)).await {
                 return next;
             }
         }
         Ok(true) => return new_video_missed(row, NEW_FILE_MISSING, Some(NO_VIDEO_LEFT)),
-        Err(why) => return folder_away(ctx, row, why).await,
+        Err(why) => return folder_away(ctx, row, why, Some(NEW_FILE_MISSING)).await,
     }
     let Some(received_name) = row.received_name.clone() else {
         return Next::Step(Step::Removed {
