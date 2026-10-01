@@ -247,8 +247,8 @@ async fn a_channel_without_a_waiting_subscription_has_no_candidates() {
     assert_eq!(status, StatusCode::OK, "{paused}");
     assert!(app.candidates().await.is_empty(), "paused offers nothing");
 
-    // Turned back on, what appeared while it was off stays out, and what
-    // appears afterwards is offered.
+    // Turned back on, the candidate first seen while it waited is offered again,
+    // and so is what appears afterwards.
     app.now.fetch_add(10_000, Ordering::SeqCst);
     let (_, resumed) = app
         .call(
@@ -258,7 +258,9 @@ async fn a_channel_without_a_waiting_subscription_has_no_candidates() {
         )
         .await;
     assert_eq!(resumed["state"], "active");
-    assert!(app.candidates().await.is_empty());
+    let kept = app.candidates().await;
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0]["work"], "New Work");
     app.record(
         &channel,
         NOW + 20_000,
@@ -266,8 +268,9 @@ async fn a_channel_without_a_waiting_subscription_has_no_candidates() {
     )
     .await;
     let candidates = app.candidates().await;
-    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates.len(), 2);
     assert_eq!(candidates[0]["work"], "Later Work");
+    assert_eq!(candidates[1]["work"], "New Work");
 }
 
 #[tokio::test]

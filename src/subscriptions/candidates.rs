@@ -11,12 +11,14 @@
 //!   the last such subscription is paused, archived, given its title or
 //!   deleted.
 //! - History recorded the work first at or after the moment that subscription
-//!   began to wait: the later of when it was subscribed, last turned back on or
-//!   given a title ([`crate::worker::plan::PastSince::until`]). A work already
-//!   in the history by then is not new, and one that first showed up while
-//!   nothing waited, or while the subscription was paused, never becomes a
-//!   candidate. The items of the work are compared by their first sighting, of
-//!   any result, so an excluded batch seen earlier makes the work old.
+//!   began to wait: the later of when it was subscribed and when its phrase
+//!   was last given or cleared ([`began_waiting`]). Turning the subscription
+//!   back on after a pause does not move that moment, so a candidate first seen
+//!   while it waited stays one across a pause. A work already in the history
+//!   by then is not new, and one that first showed up while nothing waited
+//!   never becomes a candidate. The items of the work are compared by their
+//!   first sighting, of any result, so an excluded batch seen earlier makes the
+//!   work old.
 //! - At least one item of the work was recorded as matching no rule
 //!   (`no_match`), and no item of it was taken by a rule: none was added,
 //!   found a duplicate or failed to add, and no rule of the channel, in any
@@ -37,7 +39,7 @@ use crate::{
         channels::{ChannelWithRules, Rule, RuleState},
         history::{HistoryItem, HistoryResult, Millis},
     },
-    worker::plan::{past_since, ChannelPlan, Judgement},
+    worker::plan::{ChannelPlan, Judgement},
 };
 
 use super::{parse_release, work_key};
@@ -68,6 +70,21 @@ pub fn is_waiting(rule: &Rule) -> bool {
     rule.state == RuleState::Active && rule.r#match.is_none() && rule.subscription.is_some()
 }
 
+/// When `rule`, a subscription, began to wait for its title: the later of when
+/// it was subscribed and when its phrase was last given or cleared. Unlike the
+/// boundary of its past items, a resume does not count: the work is new if it
+/// first appeared after the subscription began waiting, paused or not.
+fn began_waiting(rule: &Rule) -> Option<Millis> {
+    let subscription = rule.subscription.as_ref()?;
+    Some(
+        subscription
+            .titled_at
+            .map_or(subscription.subscribed_at, |titled| {
+                titled.max(subscription.subscribed_at)
+            }),
+    )
+}
+
 /// The channel's title candidates, the work with the newest item first. `items`
 /// are the channel's recorded items, `rejected` the [`work_key`]s the user
 /// turned down for this channel.
@@ -79,11 +96,7 @@ pub fn title_candidates(
     let waiting: Vec<&Rule> = channel.rules.iter().filter(|r| is_waiting(r)).collect();
     // A work must be new at the moment the earliest waiting subscription began
     // to wait.
-    let Some(since) = waiting
-        .iter()
-        .filter_map(|rule| past_since(rule).map(|p| p.until()))
-        .min()
-    else {
+    let Some(since) = waiting.iter().filter_map(|rule| began_waiting(rule)).min() else {
         return Vec::new();
     };
 

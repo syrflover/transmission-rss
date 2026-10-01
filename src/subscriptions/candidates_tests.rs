@@ -194,7 +194,7 @@ fn a_title_naming_the_waiting_subscription_itself_ends_the_candidate() {
 }
 
 #[test]
-fn a_paused_or_archived_subscription_offers_nothing_and_a_resume_starts_afresh() {
+fn a_paused_or_archived_subscription_offers_nothing_and_a_resume_keeps_the_boundary() {
     let items = [unmatched(1, NEW_1, 3_000)];
     for state in [RuleState::Paused, RuleState::Archived] {
         let mut off = waiting();
@@ -202,14 +202,23 @@ fn a_paused_or_archived_subscription_offers_nothing_and_a_resume_starts_afresh()
         assert!(found(vec![off], &items, &[]).is_empty(), "{state:?}");
     }
 
-    // Turned back on after the work appeared: it appeared while off.
+    // Pausing and turning the subscription back on does not move the boundary: a
+    // work first seen while it waited stays a candidate across the pause.
+    for resumed_at in [2_000, 4_000] {
+        let mut resumed = waiting();
+        resumed.resumed_at = Some(resumed_at);
+        assert_eq!(
+            found(vec![resumed], &items, &[]).len(),
+            1,
+            "resumed at {resumed_at}"
+        );
+    }
+    // A work first seen before the subscription began to wait is not new, however
+    // late it was turned back on.
+    let before = [unmatched(1, NEW_1, SINCE - 1)];
     let mut resumed = waiting();
     resumed.resumed_at = Some(4_000);
-    assert!(found(vec![resumed], &items, &[]).is_empty());
-    // Turned back on before it: a candidate.
-    let mut resumed = waiting();
-    resumed.resumed_at = Some(2_000);
-    assert_eq!(found(vec![resumed], &items, &[]).len(), 1);
+    assert!(found(vec![resumed], &before, &[]).is_empty());
 
     // Another subscription that waits since later does not make the work new
     // for it; one that waits since before the work does.
