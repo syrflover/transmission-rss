@@ -6,11 +6,12 @@
 //! # Decode memory
 //!
 //! The pixel limit alone does not bound what a decode allocates: a 16-bit
-//! RGBA PNG takes 8 bytes a pixel, and a progressive JPEG keeps every DCT
-//! coefficient (2 bytes a sample) besides its output. Before decoding,
+//! RGBA PNG takes 8 bytes a pixel, and a progressive JPEG (or a sequential one
+//! written a scan a component) keeps every DCT coefficient (2 bytes a sample)
+//! besides its output. Before decoding,
 //! [`decode_cost`] adds up from the headers what the decoders of the `image`
 //! crate allocate: the output buffer ([`ImageDecoder::total_bytes`]), the JPEG
-//! decoder's copy of the input and a progressive JPEG's coefficients, and the
+//! decoder's copy of the input and the coefficients of such a JPEG, and the
 //! WebP decoder's intermediate frame. An image whose cost is over
 //! [`DECODE_MAX_ALLOC`] is refused without being decoded
 //! ([`Rejected::TooCostly`]).
@@ -135,7 +136,8 @@ pub(crate) fn verify_within(bytes: &[u8], budget: u64) -> Result<Format, Rejecte
 
 /// The bytes a decode of `bytes` allocates at its peak, from the headers:
 /// `output` (the decoded image), plus for JPEG the decoder's copy of the input
-/// and, when progressive, the coefficients of every component; for WebP the
+/// and, when it keeps them ([`JpegFrame::keeps_coefficients`]), the
+/// coefficients of every component; for WebP the
 /// frame the decoder fills before the output (and the canvas of an animation).
 pub(crate) fn decode_cost(
     format: Format,
@@ -149,7 +151,7 @@ pub(crate) fn decode_cost(
         Format::Png => 0,
         Format::Jpeg => {
             let frame = jpeg_frame(bytes).ok_or(Rejected::Damaged)?;
-            let coefficients = if frame.progressive {
+            let coefficients = if frame.keeps_coefficients() {
                 frame.coefficient_bytes()
             } else {
                 0
@@ -172,10 +174,21 @@ struct JpegFrame {
     height: u32,
     /// Each component's horizontal and vertical sampling factors.
     sampling: Vec<(u32, u32)>,
+    /// How many components the first scan (SOS) lists.
+    first_scan_components: usize,
 }
 
 impl JpegFrame {
-    /// The coefficients a progressive decode keeps for the whole image: 64
+    /// Whether the decoder keeps every coefficient of the image before it
+    /// writes any output: a progressive file always does, and so does a
+    /// sequential one whose first scan lists fewer components than the frame
+    /// (one scan a component, `cjpeg -scans`), because the other components
+    /// arrive only in the scans after it.
+    fn keeps_coefficients(&self) -> bool {
+        self.progressive || self.first_scan_components != self.sampling.len()
+    }
+
+    /// The coefficients such a decode keeps for the whole image: 64
     /// two-byte coefficients for every block of every component, blocks
     /// padded to whole MCUs.
     fn coefficient_bytes(&self) -> u64 {
@@ -190,12 +203,14 @@ impl JpegFrame {
     }
 }
 
-/// The frame header of a JPEG, read from the markers before the first scan.
+/// The frame header of a JPEG and the component count of its first scan, read
+/// from the markers before the first scan's data.
 fn jpeg_frame(bytes: &[u8]) -> Option<JpegFrame> {
     if bytes.get(..2)? != [0xFF, 0xD8] {
         return None;
     }
     let mut at = 2;
+    let mut frame = None;
     loop {
         if *bytes.get(at)? != 0xFF {
             return None;
@@ -209,8 +224,8 @@ fn jpeg_frame(bytes: &[u8]) -> Option<JpegFrame> {
         match marker {
             // Markers without a segment.
             0x01 | 0xD0..=0xD7 => continue,
-            // The end, or a scan, before any frame header.
-            0xD9 | 0xDA => return None,
+            // The end before the first scan.
+            0xD9 => return None,
             _ => {}
         }
         let length = usize::from(u16::from_be_bytes([*bytes.get(at)?, *bytes.get(at + 1)?]));
@@ -218,7 +233,14 @@ fn jpeg_frame(bytes: &[u8]) -> Option<JpegFrame> {
             return None;
         }
         let segment = bytes.get(at + 2..at + length)?;
-        if matches!(marker, 0xC0..=0xCF) && !matches!(marker, 0xC4 | 0xC8 | 0xCC) {
+        if marker == 0xDA {
+            // The first scan: a scan before any frame header is no JPEG.
+            let mut frame: JpegFrame = frame?;
+            frame.first_scan_components = usize::from(*segment.first()?);
+            return Some(frame);
+        }
+        if frame.is_none() && matches!(marker, 0xC0..=0xCF) && !matches!(marker, 0xC4 | 0xC8 | 0xCC)
+        {
             let height = u32::from(u16::from_be_bytes([*segment.get(1)?, *segment.get(2)?]));
             let width = u32::from(u16::from_be_bytes([*segment.get(3)?, *segment.get(4)?]));
             let count = usize::from(*segment.get(5)?);
@@ -227,11 +249,12 @@ fn jpeg_frame(bytes: &[u8]) -> Option<JpegFrame> {
                 let factors = *segment.get(6 + i * 3 + 1)?;
                 sampling.push((u32::from(factors >> 4), u32::from(factors & 0x0F)));
             }
-            return Some(JpegFrame {
+            frame = Some(JpegFrame {
                 progressive: matches!(marker, 0xC2 | 0xC6 | 0xCA | 0xCE),
                 width,
                 height,
                 sampling,
+                first_scan_components: 0,
             });
         }
         at += length;
@@ -288,8 +311,21 @@ pub(crate) mod samples {
 
     /// The start of a JPEG whose frame header (`sof`, e.g. `0xC2` for
     /// progressive) claims `width` × `height` with the components' sampling
-    /// factors `sampling` (`0x11` is 1×1), and nothing after it.
+    /// factors `sampling` (`0x11` is 1×1), and a first scan listing every
+    /// component, with no scan data after it.
     pub fn jpeg_header(sof: u8, width: u16, height: u16, sampling: &[u8]) -> Vec<u8> {
+        jpeg_header_scanning(sof, width, height, sampling, sampling.len())
+    }
+
+    /// [`jpeg_header`] whose first scan lists `scan_components` components
+    /// (one in a file written a scan a component).
+    pub fn jpeg_header_scanning(
+        sof: u8,
+        width: u16,
+        height: u16,
+        sampling: &[u8],
+        scan_components: usize,
+    ) -> Vec<u8> {
         let mut out = vec![0xFF, 0xD8, 0xFF, sof];
         let length = 8 + 3 * sampling.len() as u16;
         out.extend_from_slice(&length.to_be_bytes());
@@ -300,7 +336,22 @@ pub(crate) mod samples {
         for (i, factors) in sampling.iter().enumerate() {
             out.extend_from_slice(&[i as u8 + 1, *factors, 0]);
         }
+        // SOS: length, Ns, (component, tables) for each, Ss, Se, Ah/Al.
+        out.extend_from_slice(&[0xFF, 0xDA]);
+        out.extend_from_slice(&(6 + 2 * scan_components as u16).to_be_bytes());
+        out.push(scan_components as u8);
+        for i in 0..scan_components {
+            out.extend_from_slice(&[i as u8 + 1, 0]);
+        }
+        out.extend_from_slice(&[0, 63, 0]);
         out
+    }
+
+    /// A 64 × 64 sequential JPEG without chroma subsampling written a scan a
+    /// component (`cjpeg -baseline -sample 1x1 -scans`): its first scan lists
+    /// one of the three components, so the decoder keeps every coefficient.
+    pub fn sequential_scans_jpeg() -> Vec<u8> {
+        include_bytes!("../../tests/fixtures/sequential_scans_444.jpg").to_vec()
     }
 
     /// The start of a GIF (a format the app does not take).
@@ -400,12 +451,17 @@ mod tests {
             verify_within(&progressive, budget),
             Err(Rejected::TooCostly)
         );
+        // A sequential JPEG written a scan a component keeps the same
+        // coefficients as a progressive one.
+        let scans = samples::sequential_scans_jpeg();
+        assert_eq!(verify_within(&scans, budget), Err(Rejected::TooCostly));
         // Each decodes within a budget that covers it.
         assert_eq!(
             verify_within(&samples::png16(64, 64), 40_000),
             Ok(Format::Png)
         );
         assert_eq!(verify_within(&progressive, 40_000), Ok(Format::Jpeg));
+        assert_eq!(verify_within(&scans, 40_000), Ok(Format::Jpeg));
     }
 
     #[test]
@@ -421,6 +477,18 @@ mod tests {
         let sof0 = samples::jpeg_header(0xC0, w, h, &[0x22, 0x11, 0x11]);
         let cost = decode_cost(Format::Jpeg, &sof0, pixels * 3, 4000, 3000).unwrap();
         assert!(cost <= DECODE_MAX_ALLOC);
+        // A sequential file whose first scan lists one component of three
+        // (a scan a component) keeps the coefficients like a progressive one,
+        // whatever its size on disk (cjpeg wrote 3.2 MB for 4000 × 3000).
+        let scans = samples::jpeg_header_scanning(0xC0, w, h, &[0x11, 0x11, 0x11], 1);
+        let cost = decode_cost(Format::Jpeg, &scans, pixels * 3, 4000, 3000).unwrap();
+        assert_eq!(cost, pixels * 3 + scans.len() as u64 + pixels * 3 * 2);
+        assert!(cost > DECODE_MAX_ALLOC);
+        // Every component in the first scan (interleaved) keeps none, also
+        // in extended sequential (SOF1).
+        let sof1 = samples::jpeg_header(0xC1, w, h, &[0x11, 0x11, 0x11]);
+        let cost = decode_cost(Format::Jpeg, &sof1, pixels * 3, 4000, 3000).unwrap();
+        assert_eq!(cost, pixels * 3 + sof1.len() as u64);
         // 4:2:0 progressive: the chroma planes are a quarter each, and the
         // 16-pixel MCUs pad 3000 rows to 3008.
         let frame = jpeg_frame(&samples::jpeg_header(0xC2, w, h, &[0x22, 0x11, 0x11])).unwrap();
@@ -431,9 +499,16 @@ mod tests {
         );
         // 16-bit RGBA at 12 MP is 96 MB of output.
         assert!(decode_cost(Format::Png, &[], pixels * 8, 4000, 3000).unwrap() > DECODE_MAX_ALLOC);
-        // A JPEG without a frame header before its scan does not decode.
+        // A JPEG without a frame header before its scan does not decode, nor
+        // does one that ends before its first scan.
         assert_eq!(
-            decode_cost(Format::Jpeg, &[0xFF, 0xD8, 0xFF, 0xDA, 0, 2], 3, 1, 1),
+            decode_cost(Format::Jpeg, &[0xFF, 0xD8, 0xFF, 0xDA, 0, 3, 1], 3, 1, 1),
+            Err(Rejected::Damaged)
+        );
+        let mut cut = samples::jpeg_header(0xC0, w, h, &[0x11, 0x11, 0x11]);
+        cut.truncate(cut.len() - 14);
+        assert_eq!(
+            decode_cost(Format::Jpeg, &cut, 3, 1, 1),
             Err(Rejected::Damaged)
         );
     }

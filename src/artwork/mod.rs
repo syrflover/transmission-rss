@@ -23,8 +23,9 @@
 //!
 //! The image limits hold for uploads and AniList images alike. They are set
 //! for the containers' 128M memory limit: before an image is decoded, what the
-//! decode would allocate (output, the JPEG decoder's input copy and a
-//! progressive JPEG's coefficients, the WebP decoder's frame) is added up from
+//! decode would allocate (output, the JPEG decoder's input copy and the
+//! coefficients of a progressive JPEG or one written a scan a component, the
+//! WebP decoder's frame) is added up from
 //! its headers and must stay under [`DECODE_MAX_ALLOC`] (see [`image`]), and
 //! one decode runs at a time in a process, keeping its turn until it ends even
 //! when its caller went away. The bytes are shared ([`Bytes`]), never copied,
