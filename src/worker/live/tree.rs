@@ -520,7 +520,7 @@ impl WatchTree {
         }
         match &event.name {
             Some(name) => self.in_dir(&dir, name, event.mask, now),
-            None => self.of_dir(&dir, event.mask, now),
+            None => self.of_dir(event.wd, &dir, event.mask, now),
         }
     }
 
@@ -569,7 +569,7 @@ impl WatchTree {
     }
 
     /// Something happened to a watched directory itself.
-    fn of_dir(&mut self, dir: &Dir, mask: ReadFlags, now: Instant) {
+    fn of_dir(&mut self, wd: i32, dir: &Dir, mask: ReadFlags, now: Instant) {
         if !mask.intersects(ReadFlags::DELETE_SELF | ReadFlags::MOVE_SELF | ReadFlags::UNMOUNT) {
             return;
         }
@@ -582,7 +582,13 @@ impl WatchTree {
                 self.mark_folder(now);
             }
             Role::Work(work) | Role::Season(work) => {
-                self.drop_subtree(&dir.path);
+                // Only this inode's watch goes: another directory may already
+                // be at the same path (renamed over an empty one, which the
+                // kernel reports before the old one's end), and the work is
+                // brought to the disk again.
+                let _ = inotify::remove_watch(&*self.fd, wd);
+                self.forget(wd);
+                self.sync_work(work, Some(now));
                 self.mark_work(work, now);
             }
         }
@@ -833,6 +839,21 @@ mod tests {
         // What happens to the moved folder is not reported under its old name.
         fs::write(outside.path().join("B/Season 01/B S01E02.mkv"), "x").unwrap();
         assert_eq!(f.due(), Due::default());
+    }
+
+    #[test]
+    fn a_work_renamed_over_an_empty_one_keeps_watches_for_the_new_folder() {
+        let mut f = fixture(None);
+        fs::create_dir_all(f.path("A")).unwrap();
+        f.tree.sync_all(None);
+        f.touch("A.new/Season 01/A S01E01.mkv");
+        fs::rename(f.path("A.new"), f.path("A")).unwrap();
+        assert!(f.due().works.contains(&"A".to_owned()));
+        // The root, the new A and its season.
+        assert_eq!(f.tree.status().watches, 3);
+        assert_eq!(f.tree.status().unwatched_dirs, 0);
+        f.touch("A/Season 01/A S01E02.mkv");
+        assert_eq!(f.due().works, vec!["A".to_owned()]);
     }
 
     #[test]
