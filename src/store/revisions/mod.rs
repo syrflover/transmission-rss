@@ -44,6 +44,11 @@
 //! release stays superseded (its torrent was removed for this replacement,
 //! or is still there with its video).
 //!
+//! A rule folder that is away decides nothing; one away for
+//! [`FOLDER_GONE_AFTER`] ([`Revision::folder_away_since`]) is not waited for
+//! any more: failures leave the list, and replacements under way say so
+//! ([`Step::FolderGone`]) until it is back.
+//!
 //! A step is written only from the state it was decided from
 //! ([`RevisionStore::advance`]), and a row the worker decides together with
 //! its history item's result is written in the same transaction
@@ -106,6 +111,16 @@ pub const SAME_TORRENT: &str = "같은 토렌트가 이미 이 회차를 대체�
 /// the new video gone: no failure while that file is there, but the worker
 /// watches it, and the row becomes one if the file goes too.
 pub const OLD_FILE_WATCHED: &str = "이전 영상의 토렌트를 지운 뒤 받은 새 영상 파일이 없어져서 대체를 끝냈어요. 회차 이름에 남은 이전 영상 파일이 없어지면 알려요.";
+/// How long the rule's folder of a row may be away (a mount that is not
+/// there) before the worker stops waiting for it: a failure, or a
+/// replacement that ended with no video, is no failure any more
+/// ([`RevisionState::Cleared`], [`Step::Abandoned`] without a reason), and a
+/// replacement under way, which still holds its torrent, is listed as a
+/// failure with [`FOLDER_AWAY`] until the folder is back. A week.
+pub const FOLDER_GONE_AFTER: Millis = 7 * 24 * 60 * 60 * 1000;
+/// Why a replacement under way waits: its folder has been away for
+/// [`FOLDER_GONE_AFTER`].
+pub const FOLDER_AWAY: &str = "작품 폴더가 보이지 않아요. 저장 폴더를 7일 넘게 찾지 못해서 대체가 멈춰 있어요. 폴더가 돌아오면 이어가요.";
 /// Why a row was skipped because a higher revision of the episode replaced
 /// the old video, or is about to.
 pub const OVERTAKEN: &str =
@@ -223,6 +238,10 @@ pub struct Revision {
     /// away ([`RevisionStore::forget_miss`]). The next such look in a row
     /// ends the replacement.
     pub new_missing_at: Option<Millis>,
+    /// When a look first found the rule's folder itself away (a mount that
+    /// is not there); `None` once a look finds it
+    /// ([`RevisionStore::folder_looked_at`]). See [`FOLDER_GONE_AFTER`].
+    pub folder_away_since: Option<Millis>,
     pub state: RevisionState,
     /// Why the replacement failed or waits; free of secret values.
     pub reason: Option<String>,
@@ -239,7 +258,8 @@ pub struct Revision {
 impl Revision {
     /// A `받기 실패`: a failure that holds, a rename after the old video was
     /// removed that has not gone through yet, a removal that waits
-    /// ([`Step::RemovalWaits`], [`Step::NewMissing`]), or a replacement that
+    /// ([`Step::RemovalWaits`], [`Step::NewMissing`]), a replacement under
+    /// way whose folder has been away for long ([`FOLDER_AWAY`]), or one that
     /// ended after the old video was removed while the episode has no video
     /// under its name ([`Step::Abandoned`] with a reason other than
     /// [`OLD_FILE_WATCHED`]).
@@ -249,6 +269,8 @@ impl Revision {
             RevisionState::Verified | RevisionState::Removed | RevisionState::Removing => {
                 self.reason.is_some()
             }
+            // Only its folder away for long has a reason ([`FOLDER_AWAY`]).
+            RevisionState::Receiving => self.reason.is_some(),
             RevisionState::Abandoned => self
                 .reason
                 .as_deref()
@@ -349,6 +371,11 @@ pub enum Step {
     Abandoned {
         reason: Option<String>,
     },
+    /// A replacement under way whose folder has been away for
+    /// [`FOLDER_GONE_AFTER`]: it keeps its state (and its torrent), and the
+    /// reason [`FOLDER_AWAY`] lists it with the failures until a look finds
+    /// the folder ([`RevisionStore::folder_looked_at`]).
+    FolderGone,
 }
 
 /// A history write that goes with a row's write, in one transaction
@@ -453,7 +480,7 @@ pub struct WorkRef {
 const COLUMNS: &str = "id, item_id, old_item_id, rule_id, folder, episode_name, old_version, \
      new_version, expected_crc, torrent_hash, received_name, file_crc, state, reason, \
      created_at, updated_at, replaced_at, old_crc, old_torrent_hash, overtaken_by, \
-     file_identity, new_missing_at";
+     file_identity, new_missing_at, folder_away_since";
 
 fn from_row(row: &Row<'_>) -> rusqlite::Result<Revision> {
     from_row_at(row, 0)
@@ -492,6 +519,7 @@ fn from_row_at(row: &Row<'_>, at: usize) -> rusqlite::Result<Revision> {
         overtaken_by: row.get(at + 19)?,
         file_identity: row.get(at + 20)?,
         new_missing_at: row.get(at + 21)?,
+        folder_away_since: row.get(at + 22)?,
     })
 }
 
@@ -1196,6 +1224,11 @@ impl RevisionStore {
                           WHERE id = ?1 AND state = 'removing'",
                         params![id, reason, at],
                     )?,
+                    Step::FolderGone => tx.execute(
+                        "UPDATE video_revisions SET reason = ?2, updated_at = ?3
+                          WHERE id = ?1",
+                        params![id, FOLDER_AWAY, at],
+                    )?,
                     Step::NewMissing { reason } => tx.execute(
                         "UPDATE video_revisions SET reason = ?2, new_missing_at = ?3,
                              updated_at = ?3 WHERE id = ?1",
@@ -1244,6 +1277,32 @@ impl RevisionStore {
             .await
     }
 
+    /// A look at the row `id` found its folder there (`away` `None`), or away
+    /// at `away`: [`Revision::folder_away_since`] is the first look of a run
+    /// that found it away. A folder found there takes [`FOLDER_AWAY`] away
+    /// too; the next look says why the row waits, if it does.
+    pub async fn folder_looked_at(&self, id: i64, away: Option<Millis>) -> Result<()> {
+        self.db
+            .run(move |c| {
+                match away {
+                    Some(at) => c.execute(
+                        "UPDATE video_revisions SET folder_away_since = ?2
+                          WHERE id = ?1 AND folder_away_since IS NULL",
+                        params![id, at],
+                    )?,
+                    None => c.execute(
+                        "UPDATE video_revisions
+                            SET folder_away_since = NULL,
+                                reason = CASE WHEN reason = ?2 THEN NULL ELSE reason END
+                          WHERE id = ?1 AND folder_away_since IS NOT NULL",
+                        params![id, FOLDER_AWAY],
+                    )?,
+                };
+                Ok(())
+            })
+            .await
+    }
+
     /// The `받기 실패` of replacements (see [`Revision::is_failure`]), newest first.
     pub async fn failures(&self) -> Result<Vec<Revision>> {
         self.db
@@ -1251,7 +1310,8 @@ impl RevisionStore {
                 let mut rows: Vec<Revision> = query(
                     c,
                     "WHERE state = 'failed'
-                        OR (state IN ('verified', 'removed', 'removing', 'abandoned')
+                        OR (state IN ('receiving', 'verified', 'removed', 'removing',
+                                      'abandoned')
                             AND reason IS NOT NULL)",
                     &[],
                 )?
@@ -1272,8 +1332,8 @@ impl RevisionStore {
                 let prefix = format!("{}/", work_folder.trim_end_matches('/'));
                 let rows = query(
                     c,
-                    "WHERE state IN ('done', 'failed', 'verified', 'removed', 'removing',
-                                     'abandoned')
+                    "WHERE state IN ('done', 'failed', 'receiving', 'verified', 'removed',
+                                     'removing', 'abandoned')
                        AND substr(folder, 1, length(?1)) = ?1",
                     &[&prefix],
                 )?;

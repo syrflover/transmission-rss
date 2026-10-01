@@ -3070,3 +3070,107 @@ async fn a_retry_that_cannot_look_at_the_episode_says_to_ask_again() {
     assert_eq!(s.added(NEW_HASH), 0);
     assert_eq!(s.state_of(&v2).await, RevisionState::Unknown);
 }
+
+// --- A rule folder away for a long time -----------------------------------------------
+
+const DAY: i64 = 24 * 60 * 60 * 1000;
+
+/// `14v2` is still downloading when the rule's folder goes away and does not
+/// come back. A week after the first look found it away, the replacement,
+/// which still holds its torrent, stays but is a `받기 실패` that says the
+/// work's folder is not seen. Once the folder is back that goes, and the
+/// replacement goes on.
+#[tokio::test]
+async fn a_replacement_whose_folder_is_away_for_a_week_says_so() {
+    let s = Setup::new().await;
+    s.received_v1().await;
+    s.feed(&[(NEW_HASH, &v2()), (OLD_HASH, &v1())]);
+    s.h.tr.content_on_add(NEW_HASH, NEW_BYTES);
+    s.h.tr.unfinished_on_add(NEW_HASH);
+    s.cycle().await;
+    let elsewhere = s.folder_away();
+    s.cycle().await;
+    s.h.advance(7 * DAY - 1);
+    s.cycle().await;
+    assert!(s.failures().await.is_empty());
+
+    s.h.advance(1);
+    s.cycle().await;
+    let row = s.row_of(&v2()).await;
+    assert_eq!(row.state, RevisionState::Receiving);
+    let failures = s.failures().await;
+    let failure = revision_failure(&failures);
+    assert!(
+        failure["reason"]
+            .as_str()
+            .unwrap()
+            .contains("작품 폴더가 보이지 않아요"),
+        "{failure}"
+    );
+    assert!(s.h.tr.torrents().iter().any(|t| t.hash == NEW_HASH));
+
+    s.folder_back(&elsewhere);
+    s.cycle().await;
+    assert!(s.failures().await.is_empty());
+    assert_eq!(s.row_of(&v2()).await.reason, None);
+    s.complete(NEW_HASH);
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Done);
+    assert_eq!(read(&s.file(EPISODE_NAME)), NEW_BYTES);
+}
+
+/// A failure that keeps both files, whose folder is away a week after the
+/// first look found it away, is cleared: it leaves the list, and stays
+/// cleared when the folder comes back. A folder that came back in between
+/// starts the week over.
+#[tokio::test]
+async fn a_failure_whose_folder_is_away_for_a_week_is_cleared() {
+    let s = Setup::new().await;
+    s.received_v1().await;
+    s.feed(&[(NEW_HASH, &v2()), (OLD_HASH, &v1())]);
+    s.h.tr.content_on_add(NEW_HASH, b"not what the name says");
+    s.cycle().await;
+    s.complete(NEW_HASH);
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Failed);
+
+    let elsewhere = s.folder_away();
+    s.cycle().await;
+    s.h.advance(4 * DAY);
+    s.folder_back(&elsewhere);
+    s.cycle().await;
+    let elsewhere = s.folder_away();
+    s.cycle().await;
+    s.h.advance(4 * DAY);
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Failed);
+    assert_eq!(s.failures().await.len(), 1);
+
+    s.h.advance(3 * DAY);
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Cleared);
+    assert!(s.failures().await.is_empty());
+    s.folder_back(&elsewhere);
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Cleared);
+    assert_eq!(s.names(), sorted(vec![EPISODE_NAME.to_owned(), v2()]));
+}
+
+/// A replacement that ended with no video under the episode name, whose
+/// folder is away for a week, is no failure any more.
+#[tokio::test]
+async fn an_ended_replacement_whose_folder_is_away_for_a_week_is_cleared() {
+    let s = Setup::new().await;
+    s.v2_waits_for_its_name().await;
+    std::fs::remove_file(s.file(&v2())).unwrap();
+    s.cycle().await;
+    s.cycle().await;
+    assert_eq!(s.failures().await.len(), 1);
+
+    let _elsewhere = s.folder_away();
+    s.cycle().await;
+    s.h.advance(7 * DAY);
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await.code(), "abandoned");
+    assert!(s.failures().await.is_empty());
+}

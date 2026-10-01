@@ -102,7 +102,8 @@ use crate::{
     store::{
         history::{HistoryItem, HistoryResult, Millis},
         revisions::{
-            Claim, OldVideo, Replacement, Revision, RevisionState, RowWrite, Step, OLD_FILE_WATCHED,
+            Claim, OldVideo, Replacement, Revision, RevisionState, RowWrite, Step, FOLDER_AWAY,
+            FOLDER_GONE_AFTER, OLD_FILE_WATCHED,
         },
     },
     transmission::{get_torrent, torrent_places, Redactor, TorrentPlace},
@@ -647,17 +648,21 @@ async fn drive(
     redactor: &Redactor,
     listing: &Listing,
 ) {
+    let mut first = folder_watch(ctx, &mut row, at).await;
     loop {
-        let next = match row.state {
-            RevisionState::Receiving => received(ctx, &row).await,
-            RevisionState::Verified | RevisionState::Removing => {
-                remove_old(ctx, &mut row, at, listing).await
-            }
-            RevisionState::Removed => rename(ctx, &mut row, listing).await,
-            RevisionState::Failed if row.not_received() => recover(ctx, &row).await,
-            RevisionState::Failed => cleared(&row),
-            RevisionState::Abandoned if row.reason.is_some() => ended_watch(&row),
-            _ => return,
+        let next = match first.take() {
+            Some(next) => next,
+            None => match row.state {
+                RevisionState::Receiving => received(ctx, &row).await,
+                RevisionState::Verified | RevisionState::Removing => {
+                    remove_old(ctx, &mut row, at, listing).await
+                }
+                RevisionState::Removed => rename(ctx, &mut row, listing).await,
+                RevisionState::Failed if row.not_received() => recover(ctx, &row).await,
+                RevisionState::Failed => cleared(&row),
+                RevisionState::Abandoned if row.reason.is_some() => ended_watch(&row),
+                _ => return,
+            },
         };
         let step = match next {
             Next::Step(step) => cleaned(step, redactor),
@@ -727,6 +732,10 @@ async fn drive(
                 if tried {
                     return;
                 }
+            }
+            Step::FolderGone => {
+                row.reason = Some(FOLDER_AWAY.to_owned());
+                return;
             }
             Step::Done
             | Step::Failed { .. }
@@ -895,6 +904,48 @@ async fn recover(ctx: &CycleContext, row: &Revision) -> Next {
     match received(ctx, row).await {
         Next::Wait => Next::Step(Step::Receiving),
         other => other,
+    }
+}
+
+/// The rule's folder of `row`, looked at before its step, which decides
+/// nothing while the folder is away ([`folder_there`]). The first look of a
+/// run that finds it away is kept ([`Revision::folder_away_since`]), and a
+/// look that finds it ends the run. Away for [`FOLDER_GONE_AFTER`], the
+/// folder is not waited for any more: a failure, or a replacement that
+/// ended with no video, is no failure any more, and a replacement under way
+/// (which still holds its torrent) says so ([`Step::FolderGone`]) until the
+/// folder is back. Nothing is removed. `Some` is what to do instead of the
+/// row's step.
+async fn folder_watch(ctx: &CycleContext, row: &mut Revision, at: Millis) -> Option<Next> {
+    if folder_there(row).is_ok() {
+        if row.folder_away_since.is_some() {
+            if let Err(err) = ctx.revisions.folder_looked_at(row.id, None).await {
+                return Some(Next::Later(err.to_string()));
+            }
+            row.folder_away_since = None;
+            if row.reason.as_deref() == Some(FOLDER_AWAY) {
+                row.reason = None;
+            }
+        }
+        return None;
+    }
+    let Some(since) = row.folder_away_since else {
+        if let Err(err) = ctx.revisions.folder_looked_at(row.id, Some(at)).await {
+            return Some(Next::Later(err.to_string()));
+        }
+        row.folder_away_since = Some(at);
+        return None;
+    };
+    if at - since < FOLDER_GONE_AFTER {
+        return None;
+    }
+    match row.state {
+        RevisionState::Failed => Some(Next::Step(Step::Cleared)),
+        RevisionState::Abandoned => Some(Next::Step(Step::Abandoned { reason: None })),
+        state if state.holds_torrent() && row.reason.as_deref() != Some(FOLDER_AWAY) => {
+            Some(Next::Step(Step::FolderGone))
+        }
+        _ => None,
     }
 }
 
