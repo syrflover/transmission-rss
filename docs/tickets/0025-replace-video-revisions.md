@@ -36,14 +36,19 @@ worker는 `14v2`를 추가하고 곧바로 `Show S01E14.mkv`로 이름을 바꿨
 
 ### 구현한 것
 
-- 판정(`src/revision.rs`, `src/worker/revisions.rs`의 `plan`): 이름의 `14v2`에서 수정본 번호를, 확장자 앞의 8자리 16진수 대괄호에서 CRC 값을 읽고, 두 값을 뺀 나머지(그룹·제목·회차·화질)가 같으면 같은 릴리스로 봐요. 규칙이 고른 수정본(2 이상)의 회차 이름에 파일이 있으면, 그 파일이 들어 있는 토렌트를 Transmission의 모든 파일 목록에서 경로로 찾아 이력의 해시와 원래 이름으로 버전을 알아요. 버전을 모르면(토렌트가 없거나 이력이 모르는 토렌트) 파일의 CRC32를 1 MiB씩 읽어 계산하고 새 이름과 채널 이력의 낮은 수정본 이름의 값에 대조해요(구버전 → 대체, 최신 → 건너뜀, 어느 것도 아님 → `버전 미상`).
-- 수신: 대체할 수정본은 추가하되 추가 직후의 이름 변경을 건너뛰어요. 이름에 CRC 값이 없거나 버전을 모르면 추가하지 않고 이력에 새 결과 `version_unknown`(`버전 미상`)으로 남기고, `다시 받기`로 받으면 그 요청을 확인으로 삼아요(이름에 CRC 값이 없으면 수신 뒤 확인을 건너뛰어요). 이미 같은 수정본이 있거나 더 높은 수정본이 있으면 이력에 `duplicate`와 까닭으로 남겨요.
-- 대체(`src/worker/revisions.rs`의 `advance`, 주기마다): 수신 완료(단일 파일, 규칙 폴더) → CRC32 확인 → 이전 영상 제거(trss가 추가한 단일 파일 토렌트는 데이터와 함께 제거, 토렌트가 없는 파일은 삭제, 배치·다파일·trss가 추가하지 않은 토렌트는 실패) → 목적지가 비어 있을 때만 Transmission의 이름 변경(새 토렌트가 없어졌으면 `RENAME_NOREPLACE`). 각 단계는 실행 전에 저장해요(마이그레이션 25, `video_revisions`). 대체가 진행 중이거나 끝난 이전 항목은 피드에 남아 있어도 다시 받지 않고, 대체 중인 토렌트는 피드를 떠나도 정리하지 않아요.
+- 판정(`src/revision.rs`, `src/worker/revisions.rs`의 `plan`): 이름의 `14v2`에서 수정본 번호를, 확장자 앞의 8자리 16진수 대괄호에서 CRC 값을 읽고, 두 값을 뺀 나머지(그룹·제목·회차·화질)가 같으면 같은 릴리스로 봐요. 회차 이름은 수정본 표시를 뺀 이름(`14v2` → `14`)으로 trname이 주는 이름이에요(아래 남은 일의 Erai-raws 이름). 규칙이 고른 수정본(2 이상)의 회차 이름에 파일이 있으면, 그 파일이 들어 있는 토렌트를 찾아 이력의 해시와 원래 이름으로 버전을 알아요. 항목 자신의 토렌트를 먼저 그 토렌트만 물어 보고, 아니면 Transmission의 모든 파일 목록을 읽어요. 모든 파일 목록은 한 주기의 판정이 함께 쓰도록 주기마다 많아야 한 번 읽어요. 토렌트의 파일은 이름이 같고 장치·inode가 같을 때만 그 파일로 봐서, Transmission이 폴더를 심볼릭 링크로 적어도 맞게 찾고, 토렌트 둘이 같은 파일을 가리키면 `버전 미상`으로 두고 받지 않아요. 버전을 모르면(토렌트가 없거나 이력이 모르는 토렌트) 파일의 CRC32를 1 MiB씩, 한 번에 한 파일만 읽어 계산하고 새 이름, 채널 이력의 같은 릴리스 수정본 이름, 그 회차에서 끝난 대체의 새 영상 값에 대조해요(낮은 수정본 → 대체, 같거나 높은 수정본 → 건너뜀, 어느 것도 아님 → `버전 미상`). 읽은 값은 행에 남겨(`old_crc`) 나중에 그 파일인지 다시 확인하는 데 써요.
+- 수신: 대체할 수정본은 추가하되 추가 직후의 이름 변경을 건너뛰어요. 이름에 CRC 값이 없거나 버전을 모르면 추가하지 않고 이력에 새 결과 `version_unknown`(`버전 미상`)으로 남기고, `다시 받기`로 받으면 그 요청을 확인으로 삼아요(이름에 CRC 값이 없으면 수신 뒤 확인을 건너뛰어요). 확인은 항목의 결과를 `received`로 쓰기 전에 저장해요. 결과를 먼저 쓰면 그사이 worker가 멈추거나 확인을 쓰지 못했을 때 다시 실행된 명령이 곧바로 끝나 대체가 영영 시작되지 않았어요. 확인을 쓰지 못하면 명령은 끝나지 않고 다음에 다시 실행돼요. 이미 같은 수정본이 있거나 더 높은 수정본이 있으면 이력에 `duplicate`와 까닭으로 남기고, 폴더에서 대체를 마쳤거나 대체 중인 릴리스의 낮은 수정본은 판정 없이 같은 까닭의 `duplicate`로 남겨요.
+- 대체(`src/worker/revisions.rs`의 `advance`, 주기마다): 수신 완료(단일 파일, 규칙 폴더, 다 받았고 비어 있지 않으며 회차 이름이 아닌 자기 이름) → CRC32 확인 → 이전 영상 제거 → 목적지가 비어 있을 때만 Transmission의 이름 변경(새 토렌트가 없어졌으면 `RENAME_NOREPLACE`). 각 단계는 실행 전에 저장해요(마이그레이션 25, `video_revisions`).
+  - 제거 직전에 회차 이름의 파일을 다시 확인해요. 토렌트의 파일이면 그 토렌트가 trss가 추가한 단일 파일 토렌트이고 이력상 같은 릴리스의 더 낮은 수정본일 때만 데이터와 함께 제거해요(같거나 높으면 건너뜀). 토렌트가 없는 파일은 CRC32를 다시 읽어, 판정 때 읽은 값이나 이전 항목 이름의 값, 그 회차에서 끝난 대체의 새 영상 값과 같을 때만 지워요. 배치·다파일·trss가 추가하지 않은 토렌트·토렌트 둘이 함께 가리키는 파일·달라진 파일은 실패로 남기고 지우지 않아요.
+  - 한 회차의 이전 영상은 한 번에 한 대체만 지워요(`RevisionStore::claim`이 한 트랜잭션에서 같은 회차의 다른 행을 보고 `removing`을 써요). 같은 회차에 더 높은 수정본이 끝났거나 오는 중이면 낮은 수정본은 `skipped`가 되고 받은 이름 그대로 남아요. 다른 대체가 지우거나 이름을 붙이는 중이면 기다려요. 대체가 끝나면 같은 회차의 같거나 낮은 수정본 중 아직 받는 중이거나 확인된 행을 `skipped`로 바꿔요.
+  - 같은 토렌트(다른 채널의 같은 릴리스)에 대한 두 번째 행은 처음부터 `skipped`로 써서, 이미 이름을 가져간 토렌트를 두고 실패로 남지 않게 해요. 이전 영상의 토렌트를 지우는 대체가 진행 중이거나 끝나면 그 토렌트 해시를 가진 모든 항목(어느 채널이든)을 다시 받지 않아요.
+  - 새 영상을 받기 전의 실패(토렌트가 사라짐, Transmission의 로컬 오류, 규칙 폴더가 아닌 곳, 파일 여러 개, 다 받지 않음)는 `받기 실패`로 보이되 끝난 실패가 아니에요. 주기마다 그 토렌트를 다시 보고 괜찮아지면 이어가고, 토렌트가 사라졌고 항목이 피드에 남아 있으면 규칙의 다른 항목처럼 다시 추가해 처음부터 이어가요(판정은 행에 남은 것을 써요). 같은 까닭의 실패는 한 번만 써요.
+  - 대체 중인 토렌트는 피드를 떠나도 정리하지 않아요. 까닭은 이력의 까닭처럼 비밀 값을 가리고 300자로 잘라 남겨요.
 - 이름 변경 보호(`src/transmission/mod.rs`, `src/worker/commands/receive_once.rs`): 모든 이름 변경(추가 직후, `다시 받기`, 대체)이 폴더에 목적지 이름이 있으면 바꾸지 않아요. 옛 바이너리도 같은 함수를 써요.
 - `받기 실패` 원천: `GET /api/todo/receive-failures`(`src/web/todo_api.rs`)가 대체 실패(두 파일의 상태 `kept`·`removed`·`received_name`·`not_received`와 까닭, 작품·시즌·회차)와 규칙이 고른 `추가 실패` 항목(최근 200개)을 돌려줘요. 대체 실패는 두 파일 중 하나가 없어지면 사라져요.
 - 작품 상세(`src/web/library_work_api.rs`, `EpisodeList.tsx`): 회차에 `revision`(버전 줄)과 `failure`를 더했어요. 회차 줄에 `받기 실패` 배지, 펼친 자리에 까닭과 두 파일, 대체가 끝난 회차에 `v1 › v2` 태그와 흐린 `9월 2일 02:05 수정본으로 교체`가 보여요. 이전 영상이 지워져 회차 이름의 파일이 없는 동안에도 그 회차 줄은 남아요.
 - 수집 이력 화면: `버전 미상` 이름표, 개수, `다시 받기`.
-- 운영 안내: `readme.md`의 Video revisions(삭제 동작, CRC32 비용, 이름 변경 보호).
+- 운영 안내: `readme.md`의 Video revisions(삭제 동작과 삭제 직전 확인, 한 회차에 한 대체, CRC32 비용, Transmission 전체 파일 목록, 이름 변경 보호).
 
 ### 결정
 
@@ -53,6 +58,10 @@ worker는 `14v2`를 추가하고 곧바로 `Show S01E14.mkv`로 이름을 바꿨
 - 다른 그룹의 같은 회차와 다른 화질의 수정본은 수정본이 아니라고 보고 지금처럼 받아요. 이름 변경 보호 때문에 받은 이름 그대로 남아 두 파일이 함께 있어요.
 - 수신 완료 판정은 토렌트의 파일이 하나이고 다운로드 폴더가 규칙 폴더와 같을 때만 해요. 그 밖의 모양은 이전 영상을 남기고 실패로 알려요.
 - `다시 받기`로 받은 버전 미상 수정본도 이름에 CRC 값이 있으면 수신 뒤 CRC32를 확인해요. 건너뛰는 것은 이름에 값이 없을 때뿐이에요.
+- 같은 회차에 수정본 둘(`14v2`, `14v3`)이 함께 오면 둘 다 받되 이전 영상은 한 번에 하나만 지우고, 낮은 수정본은 높은 수정본이 오는 중이기만 해도 건너뛰어요. 높은 수정본이 그 뒤 CRC32 불일치 등으로 실패하면 이전 영상이 남고 낮은 수정본은 받은 이름 그대로 있어요(지우지 않는 쪽을 골랐어요. 아래 남은 일).
+- 받기 전 실패는 항목이 피드에 있는 동안 다시 추가해요. 주기마다 피드의 선택 항목을 모두 추가하는 지금의 동작과 같아요. 항목이 피드를 떠난 뒤 토렌트가 없으면 실패로 남고 그 항목에는 `다시 받기`가 없어요(이력은 `received`예요. 아래 남은 일).
+- 토렌트가 없는 이전 영상은 지우기 직전에 CRC32를 한 번 더 읽어요. 장치·inode를 남기는 쪽은 FUSE·네트워크 파일 시스템에서 재시작 사이에 바뀔 수 있어 고르지 않았어요.
+- 토렌트 둘이 가리키는 이전 영상은 판정 때는 `버전 미상`(까닭은 토렌트 여러 개), 제거 단계에서는 실패로 남겨요.
 
 ### 검증한 것
 
@@ -68,7 +77,15 @@ worker는 `14v2`를 추가하고 곧바로 `Show S01E14.mkv`로 이름을 바꿨
   8. 버전 모르는 기존 영상: `row_8_…_equal_to_the_old_release_is_replaced`, `…_equal_to_the_newest_is_skipped`, `…_equal_to_neither_is_version_unknown`.
   9. 다른 그룹의 같은 회차(와 다른 화질의 `14v2`): `row_9_…`.
 - 티켓의 행: CRC 값 없는 `14v2`의 `다시 받기` → `a_revision_without_a_crc_received_with_retry_replaces_without_the_check`. 1 GiB CRC32 → `tests/revision_crc_peak.rs`(성긴 1 GiB 파일, 할당을 세는 전역 할당기로 읽는 동안의 최대 할당이 1 MiB 버퍼와 64 KiB 안쪽인지, 값이 Python `zlib.crc32`의 값과 같은지). 버전 줄과 실패 표시 → 1·2·4·7행 시험의 작품 상세 응답. 추가 실패도 원천에 있음 → `an_add_failure_is_in_the_receive_failure_source_too`.
-- 그 밖: 이름 파싱과 파일 CRC(`src/revision.rs` 7개), 저장소(`src/store/revisions/tests.rs` 4개), 옛 DB(24) 올림 시험 `a_history_from_before_revisions_keeps_its_items_and_takes_revisions_of_them`, 이력 결과 코드·전이 표.
+- 리뷰에서 나온 결함(`tests/video_revisions.rs`의 뒤쪽 절, 모두 고치기 전 코드에서 실패하는 것을 봤어요):
+  - 낮은 수정본이 높은 수정본을 지움: `a_lower_revision_finishing_after_a_higher_one_never_replaces_it`(고치기 전 회차 이름에 `14v2`의 내용이 남음), `two_revisions_finishing_together_leave_the_higher_one`(같음), `a_lower_revision_after_a_higher_one_is_skipped_without_its_torrent_too`(고치기 전 `버전 미상`이 되어 `다시 받기`가 높은 수정본을 지울 수 있었음).
+  - 다른 채널의 같은 릴리스: `the_old_release_in_another_channel_is_not_received_again`(고치기 전 대체가 끝난 뒤에도 다른 채널의 `14`를 주기마다 다시 추가하라고 요청함), `the_same_revision_in_two_channels_replaces_once_without_a_failure`(고치기 전 옛 영상이 두 번째 파일로 돌아옴).
+  - `다시 받기` 확인: `a_retry_whose_confirmation_is_not_written_runs_again_and_replaces`(SQLite 트리거로 확인 쓰기를 실패시킴. 고치기 전 명령이 끝나고 행이 `unknown`으로 남아 대체되지 않음), `a_retry_whose_result_is_not_written_runs_again_and_replaces`(결과 쓰기를 실패시킴. 순서를 바꾼 뒤에도 다시 실행되어 대체되는지 보는 시험으로, 고치기 전에도 통과했어요).
+  - 전체 파일 목록: `a_cycle_reads_transmissions_whole_file_list_at_most_once`(수정본 셋을 판정하는 주기의 전체 목록 요청이 고치기 전 3번, 고친 뒤 1번 이하. 자기 토렌트가 회차 이름을 가진 수정본만 있는 주기는 0번).
+  - 받기 전 실패: `row_2_a_revision_whose_download_stops_leaves_the_old_video`의 뒷부분(피드에 남은 항목을 다시 추가해 대체까지 감. 고치기 전 추가 1번에 멈춤), `a_revision_whose_torrent_reports_a_local_error_goes_on_once_it_clears`(고치기 전 `failed`에 머묾), `a_revision_received_outside_the_rule_folder_stays_a_failure`(고치기 전 다음 주기에 `cleared`).
+  - 토렌트 소속과 받은 파일: `an_old_torrent_whose_folder_is_spelled_another_way_is_removed_with_its_file`(고치기 전 토렌트를 남기고 파일만 지움), `an_old_video_two_torrents_hold_is_not_removed`(고치기 전 첫 토렌트를 데이터와 함께 지움), `an_empty_revision_does_not_replace_the_old_video`(고치기 전 빈 파일이 이전 영상을 대체함), `a_revision_whose_torrent_names_the_episode_file_removes_nothing`(고치기 전 이전 토렌트를 지움).
+  - 단위 시험: 장치·inode로 찾는 소속(`a_file_is_held_by_the_torrents_whose_file_it_is_however_spelled`), 까닭의 비밀 값 가림과 300자 제한(`a_kept_reason_is_redacted_and_capped`), Erai-raws 회차 이름(`a_revisions_episode_name_is_its_first_releases`, `a_name_without_its_revision_keeps_everything_else`), 저장소의 한 회차 한 대체·같은 토렌트·받기 전 실패 다시 열기·해시로 다시 받지 않기(`src/store/revisions/tests.rs` 4개 추가).
+- 그 밖: 이름 파싱과 파일 CRC(`src/revision.rs` 8개), 저장소(`src/store/revisions/tests.rs` 8개), 옛 DB(24) 올림 시험 `a_history_from_before_revisions_keeps_its_items_and_takes_revisions_of_them`, 이력 결과 코드·전이 표.
 - 시험이 실패하는 것을 본 것: 재현 시험(1행의 앞부분)은 고치기 전 worker에서 실패했고 고친 뒤 통과했어요. 나머지 새 시험은 새 동작에 대한 것이라 고치기 전 실패를 따로 보지 않았어요.
 - 브라우저(로컬 `trss-web`, 위 시험 흐름으로 만든 임시 DB와 미디어 폴더, 데스크톱 900px과 375px, 2026-10-01): 14화 줄의 `v1 › v2` 태그와 흐린 `9월 2일 02:05 수정본으로 교체`, 13화 줄의 `받기 실패` 배지, 펼친 자리의 까닭과 `이전 영상 · 그대로 있음`·`새 영상 · 받은 이름 그대로`, 375px에서 `scrollWidth == innerWidth`.
 
@@ -83,3 +100,7 @@ worker는 `14v2`를 추가하고 곧바로 `Show S01E14.mkv`로 이름을 바꿨
 
 - 명세의 "받은 영상의 버전은 수집 이력의 원래 릴리스 이름과 파일의 CRC32로 알아요"에서, 받은 모든 영상의 CRC32를 이력에 남기지는 않아요. 버전은 원래 이름과 토렌트 해시로 알고, CRC32는 수정본 대체와 버전 모르는 영상에서만 계산해 `video_revisions`에 남겨요. 모든 수신 파일을 다시 읽을지는 사용자 결정이에요.
 - 지난 회차 검색의 수정본·`버전 미상` 표시(명세의 지난 회차 검색)는 [0026](0026-past-episode-search.md)의 일이에요.
+- trname은 Erai-raws의 수정본 이름에서 회차를 잘못 읽어요. `[Erai-raws] Show - 06v2 [1080p CR WEBRip HEVC AAC][MultiSub][1BBD34E6].mkv`는 `Show S01E34.mkv`(CRC 대괄호의 숫자)가 돼요. 대체 판정은 수정본 표시를 뺀 이름으로 회차를 읽어 `S01E06`을 찾게 고쳤지만, 회차 영상이 없을 때 그런 수정본을 보통 항목으로 받으면 추가 직후 이름 변경이 여전히 토렌트 이름 그대로 trname을 써서 `S01E34`로 붙여요. trname이나 그 이름 변경을 고칠지는 정할 일이에요.
+- RSS 제목에 확장자가 없으면(`… [8F2EFECC]`) trname이 이름을 주지 않아 수정본을 판정하지 않고 보통 항목으로 받아요. 이름 변경 보호 때문에 이전 영상은 그대로이고 새 영상은 받은 이름으로 남아요. 확장자를 짐작해 붙이지는 않았어요.
+- 받기 전 실패에서 항목이 피드를 떠나고 토렌트도 없으면 `받기 실패`가 이전 영상을 지우기 전까지 남고 `다시 받기`가 없어요. 그런 실패에 `다시 받기`를 열지(이력은 `received`라 지금의 다시 받기 조건 밖이에요) 정할 일이에요.
+- 높은 수정본이 오는 중이라 건너뛴 낮은 수정본은, 높은 수정본이 나중에 실패해도 다시 시도하지 않아요. 그때 낮은 수정본으로라도 대체할지 정할 일이에요.

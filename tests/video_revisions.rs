@@ -23,7 +23,7 @@ use transmission_rss::{
         revisions::{RevisionState, RevisionStore},
         settings::SettingsStore,
     },
-    worker::{CommandsOutcome, CycleReport, TickOutcome},
+    worker::{revisions, CommandsOutcome, CycleReport, TickOutcome},
 };
 
 const OLD_HASH: &str = "1111000000000000000000000000000000000014";
@@ -411,9 +411,17 @@ async fn row_2_a_revision_whose_download_stops_leaves_the_old_video() {
         failure["files"][1],
         json!({ "role": "new", "path": null, "state": "not_received" })
     );
-    // The item is not added again while it stays in the feed.
+    // While it stays in the feed the item is received again, as any item a
+    // rule picked and Transmission does not hold, and the replacement goes on.
+    s.h.tr.content_on_add(NEW_HASH, NEW_BYTES);
     s.cycle().await;
-    assert_eq!(s.added(NEW_HASH), 1);
+    assert_eq!(s.added(NEW_HASH), 2);
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Receiving);
+    assert!(s.failures().await.is_empty());
+    s.complete(NEW_HASH);
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Done);
+    assert_eq!(read(&s.file(EPISODE_NAME)), NEW_BYTES);
 }
 
 #[tokio::test]
@@ -745,9 +753,60 @@ async fn an_add_failure_is_in_the_receive_failure_source_too() {
     assert!(items[0]["reason"].as_str().unwrap().contains("refused"));
 }
 
-// --- `다시 받기` that is cut short -------------------------------------------------
+// --- several revisions, several channels, and what a check cannot vouch for -------
+
+const V3_HASH: &str = "5555000000000000000000000000000000000014";
+const V3_BYTES: &[u8] = b"episode 14, third release";
+
+fn v3() -> String {
+    release("v3", Some(&crc(V3_BYTES)))
+}
+
+fn sorted(mut names: Vec<String>) -> Vec<String> {
+    names.sort();
+    names
+}
+
+/// A feed of owned `(hash, title)` items.
+fn feed_of(items: &[(String, String)]) -> String {
+    feed(
+        &items
+            .iter()
+            .map(|(h, t)| (h.as_str(), t.as_str()))
+            .collect::<Vec<_>>(),
+    )
+}
 
 impl Setup {
+    /// A second channel whose rule saves the same release to the same folder,
+    /// reading the feed `path` (empty until set).
+    async fn second_channel(&self, path: &str) -> String {
+        self.h.feeds.set_xml(path, &feed(&[]));
+        let url = format!("{}?token={SECRET}", self.h.feeds.url(path));
+        self.h
+            .channels
+            .create_channel_with_rules(
+                ChannelInput::new(url),
+                vec![RuleInput {
+                    r#match: Some("[SubsPlease] Show - ".to_owned()),
+                    directory: "Show/Season 01".to_owned(),
+                    ..Default::default()
+                }],
+            )
+            .await
+            .unwrap()
+            .channel
+            .id
+    }
+
+    fn removed(&self, hash: &str) -> bool {
+        self.h
+            .tr
+            .calls_of("torrent-remove")
+            .iter()
+            .any(|c| c.args["ids"] == json!([hash]))
+    }
+
     /// Runs the pending commands.
     async fn commands(&self) -> CommandsOutcome {
         self.h
@@ -782,6 +841,149 @@ impl Setup {
             .execute_batch(sql)
             .unwrap();
     }
+}
+
+/// Two revisions of one release, both selected while `14` is in place: the
+/// higher one finishes first and takes the episode name. The lower one,
+/// finishing later, must not remove it (its row was decided against `14`).
+#[tokio::test]
+async fn a_lower_revision_finishing_after_a_higher_one_never_replaces_it() {
+    let s = Setup::new().await;
+    s.received_v1().await;
+    s.feed(&[(NEW_HASH, &v2()), (V3_HASH, &v3()), (OLD_HASH, &v1())]);
+    s.h.tr.content_on_add(NEW_HASH, NEW_BYTES);
+    s.h.tr.content_on_add(V3_HASH, V3_BYTES);
+    s.h.tr.unfinished_on_add(NEW_HASH);
+    s.h.tr.unfinished_on_add(V3_HASH);
+    s.cycle().await;
+    assert_eq!((s.added(NEW_HASH), s.added(V3_HASH)), (1, 1));
+
+    s.complete(V3_HASH);
+    s.cycle().await;
+    assert_eq!(read(&s.file(EPISODE_NAME)), V3_BYTES);
+    assert_eq!(s.state_of(&v3()).await, RevisionState::Done);
+
+    s.complete(NEW_HASH);
+    s.cycle().await;
+    s.cycle().await;
+
+    assert_eq!(
+        read(&s.file(EPISODE_NAME)),
+        V3_BYTES,
+        "the newest video stays"
+    );
+    assert!(s.h.tr.torrents().iter().any(|t| t.hash == V3_HASH));
+    assert!(!s.removed(V3_HASH));
+    assert_eq!(s.names(), sorted(vec![EPISODE_NAME.to_owned(), v2()]));
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Skipped);
+    assert!(s.failures().await.is_empty());
+}
+
+/// Both revisions finish in the same cycle: whichever the worker looks at
+/// first, the higher one ends under the episode name.
+#[tokio::test]
+async fn two_revisions_finishing_together_leave_the_higher_one() {
+    let s = Setup::new().await;
+    s.received_v1().await;
+    s.feed(&[(NEW_HASH, &v2()), (V3_HASH, &v3()), (OLD_HASH, &v1())]);
+    s.h.tr.content_on_add(NEW_HASH, NEW_BYTES);
+    s.h.tr.content_on_add(V3_HASH, V3_BYTES);
+    s.cycle().await;
+    s.complete(NEW_HASH);
+    s.complete(V3_HASH);
+    s.cycle().await;
+    s.cycle().await;
+
+    assert_eq!(read(&s.file(EPISODE_NAME)), V3_BYTES);
+    assert_eq!(s.state_of(&v3()).await, RevisionState::Done);
+    assert!(s.h.tr.torrents().iter().any(|t| t.hash == V3_HASH));
+    assert!(s.failures().await.is_empty());
+}
+
+/// `14v3` replaced `14`, and its torrent has since left Transmission. `14v2`
+/// appearing now is lower than the folder's video: it is skipped, not left
+/// to `다시 받기` as a video of unknown revision.
+#[tokio::test]
+async fn a_lower_revision_after_a_higher_one_is_skipped_without_its_torrent_too() {
+    let s = Setup::new().await;
+    s.received_v1().await;
+    s.feed(&[(V3_HASH, &v3()), (OLD_HASH, &v1())]);
+    s.h.tr.content_on_add(V3_HASH, V3_BYTES);
+    s.cycle().await;
+    s.complete(V3_HASH);
+    s.cycle().await;
+    assert_eq!(read(&s.file(EPISODE_NAME)), V3_BYTES);
+
+    s.h.tr.remove(V3_HASH);
+    s.feed(&[(NEW_HASH, &v2())]);
+    s.cycle().await;
+    s.cycle().await;
+
+    assert_eq!(s.added(NEW_HASH), 0);
+    let item = s.item(&v2()).await;
+    assert_eq!(item.result, HistoryResult::Duplicate);
+    assert_eq!(item.reason.as_deref(), Some(revisions::NOT_HIGHER));
+    assert!(RevisionStore::new(s.h.db.clone())
+        .by_item(item.id)
+        .await
+        .unwrap()
+        .is_none_or(|row| row.state == RevisionState::Skipped));
+    assert_eq!(read(&s.file(EPISODE_NAME)), V3_BYTES);
+}
+
+/// The same release reaches the folder through two channels (one torrent).
+/// Once `14v2` replaced it, neither channel's `14` brings it back.
+#[tokio::test]
+async fn the_old_release_in_another_channel_is_not_received_again() {
+    let s = Setup::new().await;
+    s.second_channel("show2").await;
+    s.received_v1().await;
+    s.h.feeds.set_xml("show2", &feed(&[(OLD_HASH, &v1())]));
+    s.cycle().await;
+    let firsts = s.h.history_items().await;
+    assert_eq!(firsts.iter().filter(|i| i.title == v1()).count(), 2);
+
+    s.feed(&[(NEW_HASH, &v2()), (OLD_HASH, &v1())]);
+    s.h.tr.content_on_add(NEW_HASH, NEW_BYTES);
+    s.cycle().await;
+    s.complete(NEW_HASH);
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Done);
+    assert!(s.h.tr.torrents().iter().all(|t| t.hash != OLD_HASH));
+
+    let adds = s.added(OLD_HASH);
+    s.cycle().await;
+    s.cycle().await;
+    assert_eq!(
+        s.added(OLD_HASH),
+        adds,
+        "the old release is not added again"
+    );
+    assert!(s.h.tr.torrents().iter().all(|t| t.hash != OLD_HASH));
+    assert_eq!(s.names(), vec![EPISODE_NAME]);
+}
+
+/// `14v2` in two channels is one torrent: it replaces `14` once, and the
+/// other channel's item is no failure.
+#[tokio::test]
+async fn the_same_revision_in_two_channels_replaces_once_without_a_failure() {
+    let s = Setup::new().await;
+    s.second_channel("show2").await;
+    s.received_v1().await;
+    let both = vec![(NEW_HASH.to_owned(), v2()), (OLD_HASH.to_owned(), v1())];
+    s.h.feeds.set_xml("show", &feed_of(&both));
+    s.h.feeds.set_xml("show2", &feed_of(&both));
+    s.h.tr.content_on_add(NEW_HASH, NEW_BYTES);
+    s.cycle().await;
+    s.complete(NEW_HASH);
+    s.cycle().await;
+    s.cycle().await;
+    s.cycle().await;
+
+    assert_eq!(s.names(), vec![EPISODE_NAME]);
+    assert_eq!(read(&s.file(EPISODE_NAME)), NEW_BYTES);
+    let failures = s.failures().await;
+    assert!(failures.is_empty(), "{failures:?}");
 }
 
 /// `다시 받기` of a `버전 미상` revision whose confirmation cannot be written:
@@ -844,4 +1046,220 @@ async fn a_retry_whose_result_is_not_written_runs_again_and_replaces() {
     assert_eq!(s.state_of(&v2).await, RevisionState::Done);
     assert_eq!(read(&s.file(EPISODE_NAME)), NEW_BYTES);
     assert_eq!(s.item(&v2).await.result, HistoryResult::Received);
+}
+
+/// `[SubsPlease] Show - <episode><version> (1080p) [<crc>].mkv` and its hash.
+fn episode_release(episode: u32, version: &str, bytes: &[u8]) -> String {
+    format!(
+        "[SubsPlease] Show - {episode}{version} (1080p) [{}].mkv",
+        crc(bytes)
+    )
+}
+
+/// Transmission's whole file list grows with everything it holds; a cycle
+/// asks for it at most once, and not at all for revisions whose own torrent
+/// holds the episode name.
+#[tokio::test]
+async fn a_cycle_reads_transmissions_whole_file_list_at_most_once() {
+    let episodes = [11_u32, 12, 13];
+    let release_of = |prefix: &str, episode: u32, version: &str| {
+        let bytes = format!("episode {episode}, {version}");
+        (
+            format!("{prefix}{episode:0>36}"),
+            episode_release(episode, version, bytes.as_bytes()),
+            bytes,
+        )
+    };
+    let firsts: Vec<_> = episodes
+        .iter()
+        .map(|&e| release_of("1111", e, ""))
+        .collect();
+    let seconds: Vec<_> = episodes
+        .iter()
+        .map(|&e| release_of("2222", e, "v2"))
+        .collect();
+    let items = |of: &[&Vec<(String, String, String)>]| -> Vec<(String, String)> {
+        of.iter()
+            .flat_map(|v| v.iter().map(|(h, t, _)| (h.clone(), t.clone())))
+            .collect()
+    };
+
+    let s = Setup::new().await;
+    for (hash, _, bytes) in firsts.iter().chain(&seconds) {
+        s.h.tr.content_on_add(hash, bytes.as_bytes());
+    }
+    for (hash, _, _) in &seconds {
+        s.h.tr.unfinished_on_add(hash);
+    }
+    s.h.feeds.set_xml("show", &feed_of(&items(&[&firsts])));
+    s.cycle().await;
+    for (hash, _, _) in &firsts {
+        s.complete(hash);
+    }
+    assert_eq!(s.names().len(), 3);
+
+    // Three revisions to decide in one cycle.
+    s.h.feeds
+        .set_xml("show", &feed_of(&items(&[&seconds, &firsts])));
+    s.h.tr.clear_calls();
+    s.cycle().await;
+    for (hash, _, _) in &seconds {
+        assert_eq!(s.added(hash), 1);
+    }
+    let listings = s.h.tr.full_file_listings();
+    assert!(listings <= 1, "{listings} full listings in one cycle");
+
+    // Steady state: revisions received while their episode had no video hold
+    // the name with their own torrent.
+    let s = Setup::new().await;
+    for (hash, _, bytes) in &seconds {
+        s.h.tr.content_on_add(hash, bytes.as_bytes());
+    }
+    s.h.feeds.set_xml("show", &feed_of(&items(&[&seconds])));
+    s.cycle().await;
+    for (hash, _, _) in &seconds {
+        s.complete(hash);
+    }
+    assert_eq!(s.names().len(), 3);
+    s.h.tr.clear_calls();
+    s.cycle().await;
+    assert_eq!(s.h.tr.full_file_listings(), 0);
+}
+
+#[tokio::test]
+async fn a_revision_whose_torrent_reports_a_local_error_goes_on_once_it_clears() {
+    let s = Setup::new().await;
+    s.received_v1().await;
+    s.feed(&[(NEW_HASH, &v2()), (OLD_HASH, &v1())]);
+    s.h.tr.content_on_add(NEW_HASH, NEW_BYTES);
+    s.h.tr.unfinished_on_add(NEW_HASH);
+    s.cycle().await;
+    s.h.tr
+        .set_local_error(NEW_HASH, Some("No space left on device"));
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Failed);
+    assert_eq!(read(&s.file(EPISODE_NAME)), OLD_BYTES);
+    let failures = s.failures().await;
+    assert!(revision_failure(&failures)["reason"]
+        .as_str()
+        .unwrap()
+        .contains("No space left"));
+
+    s.h.tr.set_local_error(NEW_HASH, None);
+    s.complete(NEW_HASH);
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Done);
+    assert_eq!(read(&s.file(EPISODE_NAME)), NEW_BYTES);
+    assert!(s.failures().await.is_empty());
+}
+
+#[tokio::test]
+async fn a_revision_received_outside_the_rule_folder_stays_a_failure() {
+    let s = Setup::new().await;
+    s.received_v1().await;
+    s.feed(&[(NEW_HASH, &v2()), (OLD_HASH, &v1())]);
+    s.h.tr.content_on_add(NEW_HASH, NEW_BYTES);
+    s.h.tr.unfinished_on_add(NEW_HASH);
+    s.cycle().await;
+    let elsewhere = s.season.parent().unwrap().join("Elsewhere");
+    s.h.tr.relocate(NEW_HASH, &elsewhere);
+    s.complete(NEW_HASH);
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Failed);
+    s.cycle().await;
+    s.cycle().await;
+
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Failed);
+    assert_eq!(s.failures().await.len(), 1);
+    assert_eq!(read(&s.file(EPISODE_NAME)), OLD_BYTES);
+}
+
+/// Transmission names the old video's folder another way (through a
+/// symbolic link): the torrent is still found to hold the file, and removed
+/// with it, instead of the file being deleted under it.
+#[tokio::test]
+async fn an_old_torrent_whose_folder_is_spelled_another_way_is_removed_with_its_file() {
+    let s = Setup::new().await;
+    s.received_v1().await;
+    let link = s.season.parent().unwrap().join("Season 01 link");
+    std::os::unix::fs::symlink(&s.season, &link).unwrap();
+    s.h.tr.set_download_dir(OLD_HASH, &link);
+    s.feed(&[(NEW_HASH, &v2()), (OLD_HASH, &v1())]);
+    s.h.tr.content_on_add(NEW_HASH, NEW_BYTES);
+    s.cycle().await;
+    s.complete(NEW_HASH);
+    s.cycle().await;
+
+    assert!(s.removed(OLD_HASH), "the old torrent is removed");
+    assert!(s.h.tr.torrents().iter().all(|t| t.hash != OLD_HASH));
+    assert_eq!(read(&s.file(EPISODE_NAME)), NEW_BYTES);
+}
+
+/// Two torrents name the old video's file: removing either could take the
+/// other's data, so the old video is not replaced.
+#[tokio::test]
+async fn an_old_video_two_torrents_hold_is_not_removed() {
+    let s = Setup::new().await;
+    s.received_v1().await;
+    s.h.tr.preload(
+        FakeTorrent::new(OTHER_HASH, EPISODE_NAME)
+            .in_dir(&s.season)
+            .status(6),
+    );
+    s.feed(&[(NEW_HASH, &v2()), (OLD_HASH, &v1())]);
+    s.h.tr.content_on_add(NEW_HASH, NEW_BYTES);
+    s.cycle().await;
+    s.complete(NEW_HASH);
+    s.cycle().await;
+
+    assert!(s.h.tr.calls_of("torrent-remove").is_empty());
+    assert_eq!(read(&s.file(EPISODE_NAME)), OLD_BYTES);
+    assert!(s.h.tr.torrents().iter().any(|t| t.hash == OLD_HASH));
+}
+
+/// A revision whose received file is empty does not replace the old video,
+/// even though the name's CRC32 (`00000000`) matches.
+#[tokio::test]
+async fn an_empty_revision_does_not_replace_the_old_video() {
+    let s = Setup::new().await;
+    s.received_v1().await;
+    let empty = release("v2", Some(&crc(b"")));
+    s.feed(&[(NEW_HASH, &empty), (OLD_HASH, &v1())]);
+    s.h.tr.content_on_add(NEW_HASH, b"");
+    s.cycle().await;
+    s.complete(NEW_HASH);
+    s.cycle().await;
+
+    assert_eq!(read(&s.file(EPISODE_NAME)), OLD_BYTES);
+    assert!(s.h.tr.calls_of("torrent-remove").is_empty());
+    assert_eq!(s.state_of(&empty).await, RevisionState::Failed);
+}
+
+/// A confirmed revision whose torrent names the episode file itself (the old
+/// video, as a rename before ticket 0025 left such torrents) is not a new
+/// video: nothing is removed.
+#[tokio::test]
+async fn a_revision_whose_torrent_names_the_episode_file_removes_nothing() {
+    let s = Setup::new().await;
+    s.received_v1().await;
+    let v2 = release("v2", None);
+    let link = magnet(NEW_HASH, EPISODE_NAME).replace('&', "&amp;");
+    let item = format!(
+        r#"<item><title>{v2}</title><link>{link}</link><guid isPermaLink="false">guid-{NEW_HASH}</guid></item>"#
+    );
+    // `14` stays in the feed, so its torrent is not removed as departed.
+    let xml = feed(&[(OLD_HASH, &v1())]).replace("</channel>", &format!("{item}</channel>"));
+    s.h.feeds.set_xml("show", &xml);
+    s.cycle().await;
+    let item = s.item(&v2).await;
+    assert_eq!(item.result, HistoryResult::VersionUnknown);
+    s.retry(item.id, "00000000-0000-4000-8000-000000000253")
+        .await;
+    s.commands().await;
+    s.complete(NEW_HASH);
+    s.cycle().await;
+
+    assert!(s.h.tr.calls_of("torrent-remove").is_empty());
+    assert_eq!(read(&s.file(EPISODE_NAME)), OLD_BYTES);
+    assert!(s.h.tr.torrents().iter().any(|t| t.hash == OLD_HASH));
 }

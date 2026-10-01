@@ -12,7 +12,8 @@
 //! - [`RevisionState::Unknown`] (버전 미상): not received; the history item is
 //!   `version_unknown`, and `다시 받기` turns the row into `receiving`.
 //! - [`RevisionState::Skipped`]: the folder holds this revision (or a higher
-//!   one) already; nothing is received.
+//!   one) already, or the torrent is another row's (the same release through
+//!   another channel); nothing is replaced.
 //! - [`RevisionState::Receiving`]: the new torrent is in Transmission and
 //!   keeps the name it was received under.
 //!
@@ -26,13 +27,26 @@
 //! since resolved (one of the two files is gone) becomes
 //! [`RevisionState::Cleared`]. A `removed` row with a reason is a rename that
 //! did not go through yet; the worker tries again while the name is free.
+//!
+//! A failure before the new video was received (no `received_name`, see
+//! [`Revision::not_received`]) is not final: the worker looks at its torrent
+//! again every cycle, and a cycle that receives its item again (the torrent
+//! had gone) starts it over ([`RevisionStore::reopen`]).
+//!
+//! # One episode, one replacement at a time
+//!
+//! Rows are unique per history item, so two revisions of one release (`14v2`
+//! and `14v3`) can each have a row for the same episode file. Only one of them
+//! removes the old video at a time ([`RevisionStore::claim`]), a lower one
+//! never replaces a higher one, and a row whose torrent is another row's is
+//! skipped when it is written.
 
 #[cfg(test)]
 mod tests;
 
 use std::collections::HashMap;
 
-use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Row};
+use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Row, TransactionBehavior};
 
 use super::{
     db::{Db, DbError},
@@ -52,6 +66,14 @@ impl From<rusqlite::Error> for RevisionError {
 }
 
 type Result<T> = std::result::Result<T, RevisionError>;
+
+/// Why a row was skipped because another row of the episode has the same
+/// torrent: the same release through another channel.
+pub const SAME_TORRENT: &str = "같은 토렌트가 이미 이 회차를 대체하고 있어요.";
+/// Why a row was skipped because a higher revision of the episode replaced
+/// the old video, or is about to.
+pub const OVERTAKEN: &str =
+    "같은 회차의 더 높은 수정본이 이전 영상을 대체해서 이 수정본은 받은 이름 그대로 뒀어요.";
 
 /// Where a replacement is (see the module docs).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -136,6 +158,11 @@ pub struct Revision {
     /// The old video's revision, when known.
     pub old_version: Option<u32>,
     pub new_version: u32,
+    /// The CRC32 of the episode's file when the worker decided, if it read it
+    /// then (a file no torrent of known revision holds).
+    pub old_crc: Option<String>,
+    /// The torrent removed with the old video, once removed.
+    pub old_torrent_hash: Option<String>,
     /// The CRC32 the new release's name carries; `None` when the person
     /// confirmed the replacement with `다시 받기` instead.
     pub expected_crc: Option<String>,
@@ -160,6 +187,13 @@ impl Revision {
         self.state == RevisionState::Failed
             || (self.state == RevisionState::Removed && self.reason.is_some())
     }
+
+    /// A failure before the new video was received in the rule's folder: its
+    /// torrent stopped, reported an error, is elsewhere or is not one file.
+    /// The worker keeps looking at it (see the module docs).
+    pub fn not_received(&self) -> bool {
+        self.state == RevisionState::Failed && self.received_name.is_none()
+    }
 }
 
 /// A row to create.
@@ -172,6 +206,7 @@ pub struct NewRevision {
     pub episode_name: String,
     pub old_version: Option<u32>,
     pub new_version: u32,
+    pub old_crc: Option<String>,
     pub expected_crc: Option<String>,
     pub torrent_hash: Option<String>,
     /// [`RevisionState::Unknown`], [`RevisionState::Skipped`] or
@@ -183,6 +218,9 @@ pub struct NewRevision {
 /// One step of a replacement (see the module docs).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Step {
+    /// A failure before the new video was received is under way again: its
+    /// torrent is back without an error, in the rule's folder.
+    Receiving,
     Verified {
         received_name: String,
         file_crc: String,
@@ -201,17 +239,59 @@ pub enum Step {
         received_name: Option<String>,
     },
     Cleared,
+    /// Before the old video was touched: the folder holds this revision or a
+    /// higher one by now, or a higher one is replacing it.
+    Skipped {
+        reason: String,
+    },
 }
 
 /// What a history item is to a cycle that would receive it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Mark {
     /// A replacement row exists for it: the worker decided about it already,
     /// and the replacement steps (not the cycle's add) carry it on.
     Revision(RevisionState),
     /// It is the old video of a replacement that removed (or is removing) its
-    /// torrent: receiving it again would bring the old video back.
+    /// torrent, or the same torrent through another channel: receiving it
+    /// again would bring the old video back.
     Superseded,
+    /// Its replacement failed before the new video was received
+    /// ([`Revision::not_received`]): the cycle receives it again as decided
+    /// in the row.
+    Retry(Box<Revision>),
+}
+
+/// A release that replaced (or is replacing) the video of an episode: the
+/// lower revisions of it are not received into `folder` again.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Replacement {
+    pub folder: String,
+    /// The new revision's release name.
+    pub title: String,
+    pub new_version: u32,
+}
+
+/// Whether a replacement may remove the old video now ([`RevisionStore::claim`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Claim {
+    /// It may: the row is `removing` now.
+    Go,
+    /// Another replacement of the episode is removing the old video or
+    /// naming its new one; this one waits for it.
+    Wait,
+    /// A higher revision of the episode is in place or on its way, or the same
+    /// one is in place: this one is to be skipped ([`OVERTAKEN`]).
+    Overtaken,
+}
+
+/// The old video a replacement removes, as the worker found it just before.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OldVideo {
+    pub item_id: Option<i64>,
+    pub version: Option<u32>,
+    /// The torrent removed with it; `None` for a file of no torrent.
+    pub torrent_hash: Option<String>,
 }
 
 /// A work the library knows at a folder.
@@ -223,35 +303,42 @@ pub struct WorkRef {
 
 const COLUMNS: &str = "id, item_id, old_item_id, rule_id, folder, episode_name, old_version, \
      new_version, expected_crc, torrent_hash, received_name, file_crc, state, reason, \
-     created_at, updated_at, replaced_at";
+     created_at, updated_at, replaced_at, old_crc, old_torrent_hash";
 
 fn from_row(row: &Row<'_>) -> rusqlite::Result<Revision> {
-    let state: String = row.get(12)?;
+    from_row_at(row, 0)
+}
+
+/// A row whose [`COLUMNS`] start at column `at`.
+fn from_row_at(row: &Row<'_>, at: usize) -> rusqlite::Result<Revision> {
+    let state: String = row.get(at + 12)?;
     let state = RevisionState::parse(&state).ok_or_else(|| {
         rusqlite::Error::FromSqlConversionFailure(
-            12,
+            at + 12,
             rusqlite::types::Type::Text,
             format!("unknown revision state {state:?}").into(),
         )
     })?;
     Ok(Revision {
-        id: row.get(0)?,
-        item_id: row.get(1)?,
-        old_item_id: row.get(2)?,
-        rule_id: row.get(3)?,
-        folder: row.get(4)?,
-        episode_name: row.get(5)?,
-        old_version: row.get(6)?,
-        new_version: row.get(7)?,
-        expected_crc: row.get(8)?,
-        torrent_hash: row.get(9)?,
-        received_name: row.get(10)?,
-        file_crc: row.get(11)?,
+        id: row.get(at)?,
+        item_id: row.get(at + 1)?,
+        old_item_id: row.get(at + 2)?,
+        rule_id: row.get(at + 3)?,
+        folder: row.get(at + 4)?,
+        episode_name: row.get(at + 5)?,
+        old_version: row.get(at + 6)?,
+        new_version: row.get(at + 7)?,
+        expected_crc: row.get(at + 8)?,
+        torrent_hash: row.get(at + 9)?,
+        received_name: row.get(at + 10)?,
+        file_crc: row.get(at + 11)?,
         state,
-        reason: row.get(13)?,
-        created_at: row.get(14)?,
-        updated_at: row.get(15)?,
-        replaced_at: row.get(16)?,
+        reason: row.get(at + 13)?,
+        created_at: row.get(at + 14)?,
+        updated_at: row.get(at + 15)?,
+        replaced_at: row.get(at + 16)?,
+        old_crc: row.get(at + 17)?,
+        old_torrent_hash: row.get(at + 18)?,
     })
 }
 
@@ -269,6 +356,46 @@ fn query(
     Ok(rows)
 }
 
+fn by_id(conn: &Connection, id: i64) -> Result<Option<Revision>> {
+    Ok(query(conn, "WHERE id = ?1", &[&id])?.pop())
+}
+
+/// Whether another row than `id` that is under way or done has the torrent
+/// `hash`: the same release reached the worker through another channel.
+fn torrent_taken(conn: &Connection, id: Option<i64>, hash: &str) -> Result<bool> {
+    Ok(conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM video_revisions
+           WHERE torrent_hash = ?1 AND id IS NOT ?2
+             AND state IN ('receiving', 'verified', 'removing', 'removed', 'done'))",
+        params![hash, id],
+        |row| row.get(0),
+    )?)
+}
+
+/// What the other rows of `row`'s episode say about it removing the old video.
+fn verdict(conn: &Connection, row: &Revision) -> Result<Claim> {
+    let siblings = query(
+        conn,
+        "WHERE folder = ?1 AND episode_name = ?2 AND id <> ?3
+           AND state IN ('receiving', 'verified', 'removing', 'removed', 'done')",
+        &[&row.folder, &row.episode_name, &row.id],
+    )?;
+    let overtaken = siblings.iter().any(|s| match s.state {
+        RevisionState::Done => s.new_version >= row.new_version,
+        _ => s.new_version > row.new_version,
+    });
+    if overtaken {
+        return Ok(Claim::Overtaken);
+    }
+    if siblings
+        .iter()
+        .any(|s| matches!(s.state, RevisionState::Removing | RevisionState::Removed))
+    {
+        return Ok(Claim::Wait);
+    }
+    Ok(Claim::Go)
+}
+
 /// Async access to the replacements. Cheap to clone.
 #[derive(Clone)]
 pub struct RevisionStore {
@@ -282,16 +409,29 @@ impl RevisionStore {
 
     /// Creates the row of `new.item_id` at `at`. A row that exists already for
     /// the item is kept as it is and returned: the worker decides about an
-    /// item once.
+    /// item once. A replacement under way whose torrent another row under way
+    /// or done has is written as [`RevisionState::Skipped`] ([`SAME_TORRENT`]).
     pub async fn create(&self, at: Millis, new: NewRevision) -> Result<Revision> {
         self.db
             .run(move |c| {
-                c.execute(
+                let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                if let Some(row) = query(&tx, "WHERE item_id = ?1", &[&new.item_id])?.pop() {
+                    return Ok(row);
+                }
+                let (state, reason) = match &new.torrent_hash {
+                    Some(hash)
+                        if new.state == RevisionState::Receiving
+                            && torrent_taken(&tx, None, hash)? =>
+                    {
+                        (RevisionState::Skipped, Some(SAME_TORRENT.to_owned()))
+                    }
+                    _ => (new.state, new.reason),
+                };
+                tx.execute(
                     "INSERT INTO video_revisions (item_id, old_item_id, rule_id, folder,
-                         episode_name, old_version, new_version, expected_crc, torrent_hash,
-                         state, reason, created_at, updated_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)
-                     ON CONFLICT (item_id) DO NOTHING",
+                         episode_name, old_version, new_version, old_crc, expected_crc,
+                         torrent_hash, state, reason, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13)",
                     params![
                         new.item_id,
                         new.old_item_id,
@@ -300,16 +440,19 @@ impl RevisionStore {
                         new.episode_name,
                         new.old_version,
                         new.new_version,
+                        new.old_crc,
                         new.expected_crc,
                         new.torrent_hash,
-                        new.state.code(),
-                        new.reason,
+                        state.code(),
+                        reason,
                         at
                     ],
                 )?;
-                Ok(query(c, "WHERE item_id = ?1", &[&new.item_id])?
+                let row = query(&tx, "WHERE item_id = ?1", &[&new.item_id])?
                     .pop()
-                    .expect("the row just written"))
+                    .expect("the row just written");
+                tx.commit()?;
+                Ok(row)
             })
             .await
     }
@@ -321,10 +464,38 @@ impl RevisionStore {
             .await
     }
 
+    /// A cycle added the torrent `hash` again for the row `id`, a failure
+    /// before its new video was received ([`Revision::not_received`]): the
+    /// replacement starts over (or is skipped when another row has that
+    /// torrent). Returns the row afterwards; a row in any other state is left
+    /// alone.
+    pub async fn reopen(&self, id: i64, at: Millis, hash: String) -> Result<Option<Revision>> {
+        self.db
+            .run(move |c| {
+                let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                let (state, reason) = if torrent_taken(&tx, Some(id), &hash)? {
+                    ("skipped", Some(SAME_TORRENT))
+                } else {
+                    ("receiving", None)
+                };
+                tx.execute(
+                    "UPDATE video_revisions
+                        SET state = ?2, torrent_hash = ?3, reason = ?4, updated_at = ?5
+                      WHERE id = ?1 AND state = 'failed' AND received_name IS NULL",
+                    params![id, state, hash, reason, at],
+                )?;
+                let row = by_id(&tx, id)?;
+                tx.commit()?;
+                Ok(row)
+            })
+            .await
+    }
+
     /// The person received the item `item_id` with `다시 받기`: a `버전 미상`
-    /// row becomes a replacement under way with the torrent `hash`. The CRC32
-    /// check is skipped when the name carries none (`expected_crc` `None`).
-    /// Returns the row afterwards; a row in any other state is left alone.
+    /// row becomes a replacement under way with the torrent `hash` (or is
+    /// skipped when another row has that torrent). The CRC32 check is skipped
+    /// when the name carries none (`expected_crc` `None`). Returns the row
+    /// afterwards; a row in any other state is left alone.
     pub async fn confirm(
         &self,
         item_id: i64,
@@ -334,14 +505,71 @@ impl RevisionStore {
     ) -> Result<Option<Revision>> {
         self.db
             .run(move |c| {
-                c.execute(
-                    "UPDATE video_revisions
-                        SET state = 'receiving', torrent_hash = ?2, expected_crc = ?3,
-                            reason = NULL, updated_at = ?4
-                      WHERE item_id = ?1 AND state = 'unknown'",
-                    params![item_id, hash, expected_crc, at],
-                )?;
-                Ok(query(c, "WHERE item_id = ?1", &[&item_id])?.pop())
+                let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                let Some(row) = query(&tx, "WHERE item_id = ?1", &[&item_id])?.pop() else {
+                    return Ok(None);
+                };
+                if row.state == RevisionState::Unknown {
+                    let (state, reason) = if torrent_taken(&tx, Some(row.id), &hash)? {
+                        ("skipped", Some(SAME_TORRENT))
+                    } else {
+                        ("receiving", None)
+                    };
+                    tx.execute(
+                        "UPDATE video_revisions
+                            SET state = ?2, torrent_hash = ?3, expected_crc = ?4,
+                                reason = ?5, updated_at = ?6
+                          WHERE id = ?1",
+                        params![row.id, state, hash, expected_crc, reason, at],
+                    )?;
+                }
+                let row = by_id(&tx, row.id)?;
+                tx.commit()?;
+                Ok(row)
+            })
+            .await
+    }
+
+    /// What the other rows of the episode say about the row `id` removing
+    /// the old video, without writing anything ([`RevisionStore::claim`]
+    /// decides for good).
+    pub async fn verdict(&self, id: i64) -> Result<Claim> {
+        self.db
+            .run(move |c| match by_id(c, id)? {
+                Some(row) => verdict(c, &row),
+                None => Ok(Claim::Wait),
+            })
+            .await
+    }
+
+    /// The row `id` (`verified`, or `removing` after a restart) is about to
+    /// remove `old`: written as `removing` with what it removes, unless the
+    /// other rows of the episode say otherwise ([`Claim`]). Only one row of an
+    /// episode is past `verified` and not `done` at a time.
+    pub async fn claim(&self, id: i64, at: Millis, old: OldVideo) -> Result<Claim> {
+        self.db
+            .run(move |c| {
+                let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                let Some(row) = by_id(&tx, id)? else {
+                    return Ok(Claim::Wait);
+                };
+                let claim = match row.state {
+                    RevisionState::Removing => Claim::Go,
+                    RevisionState::Verified => verdict(&tx, &row)?,
+                    _ => Claim::Wait,
+                };
+                if claim == Claim::Go {
+                    tx.execute(
+                        "UPDATE video_revisions
+                            SET state = 'removing', old_item_id = COALESCE(?2, old_item_id),
+                                old_version = COALESCE(?3, old_version),
+                                old_torrent_hash = ?4, updated_at = ?5
+                          WHERE id = ?1",
+                        params![id, old.item_id, old.version, old.torrent_hash, at],
+                    )?;
+                }
+                tx.commit()?;
+                Ok(claim)
             })
             .await
     }
@@ -358,33 +586,86 @@ impl RevisionStore {
         }
         self.db
             .run(move |c| {
-                let mut out = HashMap::new();
-                let mut stmt = c.prepare(
-                    "SELECT h.identity_key, r.state, 1 FROM video_revisions r
-                       JOIN history_items h ON h.id = r.item_id WHERE h.channel_id = ?1
-                     UNION ALL
-                     SELECT h.identity_key, r.state, 0 FROM video_revisions r
-                       JOIN history_items h ON h.id = r.old_item_id WHERE h.channel_id = ?1",
-                )?;
                 let wanted: std::collections::HashSet<&String> = keys.iter().collect();
+                let mut out = HashMap::new();
+                let mut stmt = c.prepare(&format!(
+                    "SELECT h.identity_key, {} FROM video_revisions r
+                       JOIN history_items h ON h.id = r.item_id WHERE h.channel_id = ?1",
+                    COLUMNS
+                        .split(", ")
+                        .map(|column| format!("r.{}", column.trim()))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ))?;
                 let mut rows = stmt.query([&channel_id])?;
                 while let Some(row) = rows.next()? {
                     let key: String = row.get(0)?;
                     if !wanted.contains(&key) {
                         continue;
                     }
-                    let state: String = row.get(1)?;
-                    let Some(state) = RevisionState::parse(&state) else {
-                        continue;
+                    let revision = from_row_at(row, 1)?;
+                    let mark = if revision.not_received() {
+                        Mark::Retry(Box::new(revision))
+                    } else {
+                        Mark::Revision(revision.state)
                     };
-                    let is_new: bool = row.get(2)?;
-                    if is_new {
-                        out.insert(key, Mark::Revision(state));
-                    } else if state.supersedes_old() {
+                    out.insert(key, mark);
+                }
+                // The old video's item, and every item of the torrent removed
+                // with it (the same release through another channel).
+                let mut stmt = c.prepare(
+                    "SELECT h.identity_key FROM video_revisions r
+                       JOIN history_items h
+                         ON h.id = r.old_item_id
+                         OR (r.old_torrent_hash IS NOT NULL AND h.torrent_hash = r.old_torrent_hash)
+                      WHERE h.channel_id = ?1
+                        AND r.state IN ('removing', 'removed', 'done')",
+                )?;
+                let mut rows = stmt.query([&channel_id])?;
+                while let Some(row) = rows.next()? {
+                    let key: String = row.get(0)?;
+                    if wanted.contains(&key) {
                         out.entry(key).or_insert(Mark::Superseded);
                     }
                 }
                 Ok(out)
+            })
+            .await
+    }
+
+    /// The releases that replaced (or are replacing) a video: their lower
+    /// revisions are not received into the folder again.
+    pub async fn replacements(&self) -> Result<Vec<Replacement>> {
+        self.db
+            .run(|c| {
+                let mut stmt = c.prepare(
+                    "SELECT r.folder, h.title, r.new_version FROM video_revisions r
+                       JOIN history_items h ON h.id = r.item_id
+                      WHERE r.state IN ('removing', 'removed', 'done')",
+                )?;
+                let rows = stmt
+                    .query_map([], |row| {
+                        Ok(Replacement {
+                            folder: row.get(0)?,
+                            title: row.get(1)?,
+                            new_version: row.get(2)?,
+                        })
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(rows)
+            })
+            .await
+    }
+
+    /// The rows of the episode file `episode_name` in `folder`.
+    pub async fn of_episode(&self, folder: String, episode_name: String) -> Result<Vec<Revision>> {
+        self.db
+            .run(move |c| {
+                query(
+                    c,
+                    "WHERE folder = ?1 AND episode_name = ?2",
+                    &[&folder, &episode_name],
+                )
             })
             .await
     }
@@ -420,49 +701,76 @@ impl RevisionStore {
             .await
     }
 
-    /// Writes `step` on the row `id` at `at`.
+    /// Writes `step` on the row `id` at `at`. `done` also skips the lower (or
+    /// equal) revisions of the episode still receiving or checked: they would
+    /// replace the video that just took the name.
     pub async fn advance(&self, id: i64, at: Millis, step: Step) -> Result<()> {
         self.db
             .run(move |c| {
+                let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
                 match step {
+                    Step::Receiving => tx.execute(
+                        "UPDATE video_revisions SET state = 'receiving', reason = NULL,
+                             updated_at = ?2 WHERE id = ?1",
+                        params![id, at],
+                    )?,
                     Step::Verified {
                         received_name,
                         file_crc,
-                    } => c.execute(
+                    } => tx.execute(
                         "UPDATE video_revisions SET state = 'verified', received_name = ?2,
                              file_crc = ?3, reason = NULL, updated_at = ?4 WHERE id = ?1",
                         params![id, received_name, file_crc, at],
                     )?,
-                    Step::Removing => c.execute(
+                    Step::Removing => tx.execute(
                         "UPDATE video_revisions SET state = 'removing', updated_at = ?2
                           WHERE id = ?1",
                         params![id, at],
                     )?,
-                    Step::Removed { reason } => c.execute(
+                    Step::Removed { reason } => tx.execute(
                         "UPDATE video_revisions SET state = 'removed', reason = ?2,
                              updated_at = ?3 WHERE id = ?1",
                         params![id, reason, at],
                     )?,
-                    Step::Done => c.execute(
-                        "UPDATE video_revisions SET state = 'done', reason = NULL,
-                             replaced_at = ?2, updated_at = ?2 WHERE id = ?1",
-                        params![id, at],
-                    )?,
+                    Step::Done => {
+                        tx.execute(
+                            "UPDATE video_revisions
+                                SET state = 'skipped', reason = ?2, updated_at = ?3
+                              WHERE id IN (
+                                SELECT o.id FROM video_revisions o, video_revisions r
+                                 WHERE r.id = ?1 AND o.id <> r.id
+                                   AND o.folder = r.folder AND o.episode_name = r.episode_name
+                                   AND o.new_version <= r.new_version
+                                   AND o.state IN ('receiving', 'verified'))",
+                            params![id, OVERTAKEN, at],
+                        )?;
+                        tx.execute(
+                            "UPDATE video_revisions SET state = 'done', reason = NULL,
+                                 replaced_at = ?2, updated_at = ?2 WHERE id = ?1",
+                            params![id, at],
+                        )?
+                    }
                     Step::Failed {
                         reason,
                         received_name,
-                    } => c.execute(
+                    } => tx.execute(
                         "UPDATE video_revisions SET state = 'failed', reason = ?2,
                              received_name = COALESCE(?4, received_name), updated_at = ?3
                           WHERE id = ?1",
                         params![id, reason, at, received_name],
                     )?,
-                    Step::Cleared => c.execute(
+                    Step::Cleared => tx.execute(
                         "UPDATE video_revisions SET state = 'cleared', updated_at = ?2
                           WHERE id = ?1",
                         params![id, at],
                     )?,
+                    Step::Skipped { reason } => tx.execute(
+                        "UPDATE video_revisions SET state = 'skipped', reason = ?2,
+                             updated_at = ?3 WHERE id = ?1",
+                        params![id, reason, at],
+                    )?,
                 };
+                tx.commit()?;
                 Ok(())
             })
             .await

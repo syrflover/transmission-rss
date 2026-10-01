@@ -4,6 +4,7 @@
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use futures::{stream, StreamExt};
@@ -16,15 +17,16 @@ use super::{
     commands::rule_archive::work_folder::MovePolicy,
     feed::{self, FeedItem},
     plan::{ChannelPlan, Judgement},
-    revisions::{self, Decided, Plan, Selected},
+    revisions::{self, Decided, Listing, Plan, Selected},
 };
 use crate::{
     episode_offset::is_open,
+    revision::Release,
     store::{
         channels::{ChannelError, ChannelStore, ChannelWithRules, RuleState},
         history::{HistoryResult, HistoryStore, Millis, Observation, Recorded},
         library::LibraryStore,
-        revisions::{NewRevision, RevisionState, RevisionStore},
+        revisions::{Mark, NewRevision, Revision, RevisionState, RevisionStore},
         seasons::SeasonStore,
         settings::{SettingsError, SettingsStore},
         status::{ChannelReadResult, StatusStore, TransmissionCounts},
@@ -40,7 +42,7 @@ const ADD_CONCURRENCY: usize = 100;
 /// How many feeds are read at the same time.
 const FETCH_CONCURRENCY: usize = 5;
 /// Longest failure reason kept in history, in characters.
-const MAX_REASON_CHARS: usize = 300;
+pub(super) const MAX_REASON_CHARS: usize = 300;
 
 /// What a cycle needs. Cheap to clone.
 #[derive(Clone)]
@@ -226,6 +228,9 @@ struct Job {
     save_path: PathBuf,
     episode: isize,
     channel_label: String,
+    /// The replacement of this revision failed before it was received, and
+    /// receiving the item again carries it on as the row decided.
+    retry: Option<Box<Revision>>,
 }
 
 /// What happened to a [`Job`].
@@ -459,6 +464,7 @@ pub async fn run_cycle(
                     save_path,
                     episode,
                     channel_label: label.clone(),
+                    retry: None,
                 }),
                 Judgement::Excluded => {
                     report.excluded += 1;
@@ -490,7 +496,7 @@ pub async fn run_cycle(
     }
 
     // Items a revision replacement has decided about are left to it.
-    let mut jobs = leave_revisions(ctx, jobs, &mut report).await;
+    let mut jobs = leave_revisions(ctx, jobs, at, &mut report).await;
 
     // A new season's rule gets its episode offset before its first item is
     // named, so that item is named with it.
@@ -715,6 +721,9 @@ async fn add_jobs(
     let mut tasks: JoinSet<(JobOutcome, bool)> = JoinSet::new();
     let mut fallbacks: HashMap<task::Id, Fallback> = HashMap::new();
     let mut waiting = jobs.into_iter();
+    // Transmission's whole file list, read at most once for the revisions
+    // among the items.
+    let listing = Arc::new(Listing::new());
     let mut added = Added {
         kept: HashSet::new(),
         panicked: 0,
@@ -735,6 +744,7 @@ async fn add_jobs(
                 at,
                 redactor.clone(),
                 cancel.clone(),
+                listing.clone(),
             ));
             fallbacks.insert(handle.id(), fallback);
         }
@@ -820,12 +830,16 @@ async fn process_job(
     at: Millis,
     redactor: Redactor,
     cancel: CancellationToken,
+    listing: Arc<Listing>,
 ) -> (JobOutcome, bool) {
     if cancel.is_cancelled() {
         return (JobOutcome::NotStarted, false);
     }
 
-    let plan = if revisions::is_revision(&job.title) {
+    let plan = if let Some(row) = &job.retry {
+        // Decided before; receiving it again goes on with that.
+        Plan::Replace(Decided::of(row))
+    } else if revisions::is_revision(&job.title) {
         revisions::plan(
             &ctx,
             &Selected {
@@ -835,6 +849,7 @@ async fn process_job(
                 save_path: &job.save_path,
                 episode: job.episode,
             },
+            &listing,
         )
         .await
     } else {
@@ -927,7 +942,7 @@ async fn process_job(
     if let (Ok(torrent), Some(decided)) = (&added, replacing) {
         // A revision keeps its received name until the old video is gone
         // (see [`revisions::advance`]).
-        start_replacement(&ctx, &job, at, decided, &torrent.hash).await;
+        start_replacement(&ctx, &job, at, decided, torrent.kind, &torrent.hash).await;
         return (outcome, was_new);
     }
 
@@ -986,6 +1001,7 @@ fn new_revision(
         episode_name: decided.episode_name,
         old_version: decided.old_version,
         new_version: decided.version,
+        old_crc: decided.old_crc,
         expected_crc: decided.crc,
         torrent_hash: hash,
         state,
@@ -1029,14 +1045,18 @@ async fn withhold(
     (JobOutcome::Withheld, was_new)
 }
 
-/// Starts the replacement of a revision Transmission now holds as `hash`.
-/// Without its row the next cycle decides again, and the torrent keeps its
-/// received name meanwhile.
+/// Starts the replacement of a revision Transmission now holds as `hash`
+/// (`kind` says whether it was added now). Without its row the next cycle
+/// decides again, and the torrent keeps its received name meanwhile. A row
+/// that failed before its video was received starts over when the torrent
+/// was added again (it had gone); one Transmission still holds is looked at
+/// by the replacement steps.
 async fn start_replacement(
     ctx: &CycleContext,
     job: &Job,
     at: Millis,
     decided: Decided,
+    kind: AddKind,
     hash: &str,
 ) {
     let Some(id) = item_id(ctx, job).await else {
@@ -1050,12 +1070,20 @@ async fn start_replacement(
         None,
         Some(hash.to_owned()),
     );
-    match ctx.revisions.create(at, row).await {
-        Ok(_) => println!(
+    let row = match ctx.revisions.create(at, row).await {
+        Ok(row) => row,
+        Err(err) => return eprintln!("Cannot record the revision of {}: {err}", job.title),
+    };
+    if row.not_received() && kind == AddKind::Added {
+        if let Err(err) = ctx.revisions.reopen(row.id, at, hash.to_owned()).await {
+            return eprintln!("Cannot record the revision of {}: {err}", job.title);
+        }
+        println!("Receiving {} again for its replacement", job.title);
+    } else if row.state == RevisionState::Receiving {
+        println!(
             "Replacing with {}: received under its own name until checked",
             job.title
-        ),
-        Err(err) => eprintln!("Cannot record the revision of {}: {err}", job.title),
+        );
     }
 }
 
@@ -1163,18 +1191,25 @@ async fn record_transmission_counts(ctx: &CycleContext, at: Millis, redactor: &R
 
 /// The jobs a cycle adds: those of `jobs` that no video revision replacement
 /// has decided about (see [`super::revisions`]). A revision with a row is the
-/// replacement's to carry on, and the old video of a replacement that removed
-/// its torrent is not received again. Without the rows a channel's jobs wait
-/// for the next cycle: adding the old video's item again could bring it back.
-async fn leave_revisions(ctx: &CycleContext, jobs: Vec<Job>, report: &mut CycleReport) -> Vec<Job> {
+/// replacement's to carry on, unless its replacement failed before the new
+/// video was received: then the item is received again, as the row decided.
+/// The old video of a replacement that removed its torrent is not received
+/// again, through any channel, nor is a lower revision of a release that
+/// replaced a video in the same folder. Without the rows the jobs wait for
+/// the next cycle: adding the old video's item again could bring it back.
+async fn leave_revisions(
+    ctx: &CycleContext,
+    jobs: Vec<Job>,
+    at: Millis,
+    report: &mut CycleReport,
+) -> Vec<Job> {
     let mut keys: HashMap<String, Vec<String>> = HashMap::new();
     for job in &jobs {
         keys.entry(job.observation.channel_id.clone())
             .or_default()
             .push(job.observation.identity_key.clone());
     }
-    let mut marks: HashMap<String, Option<HashMap<String, crate::store::revisions::Mark>>> =
-        HashMap::new();
+    let mut marks: HashMap<String, Option<HashMap<String, Mark>>> = HashMap::new();
     for (channel, keys) in keys {
         let read = match ctx.revisions.marks(channel.clone(), keys).await {
             Ok(found) => Some(found),
@@ -1185,16 +1220,65 @@ async fn leave_revisions(ctx: &CycleContext, jobs: Vec<Job>, report: &mut CycleR
         };
         marks.insert(channel, read);
     }
-    jobs.into_iter()
-        .filter(|job| {
-            let keep = match marks.get(&job.observation.channel_id) {
-                Some(Some(found)) => !found.contains_key(&job.observation.identity_key),
-                _ => false,
-            };
-            if !keep {
-                report.revisions_left += 1;
-            }
-            keep
+    let replacements: Vec<(String, String, u32)> = match ctx.revisions.replacements().await {
+        Ok(found) => found
+            .into_iter()
+            .map(|r| (r.folder, Release::parse(&r.title).stem, r.new_version))
+            .collect(),
+        Err(err) => {
+            eprintln!("Cannot read the video revisions; the selected items wait: {err}");
+            report.revisions_left += jobs.len();
+            return Vec::new();
+        }
+    };
+    // A lower revision of a release that replaced a video in the job's folder.
+    let replaced = |job: &Job| {
+        if replacements.is_empty() {
+            return false;
+        }
+        let release = Release::parse(&job.title);
+        let folder = job.save_path.to_string_lossy();
+        replacements.iter().any(|(at, stem, version)| {
+            *at == folder && *stem == release.stem && release.version < *version
         })
-        .collect()
+    };
+    let mut kept = Vec::new();
+    // Lower revisions of a release in place, recorded as the folder's
+    // duplicates as `plan` records them.
+    let mut lower = Vec::new();
+    for mut job in jobs {
+        let mark = match marks.get(&job.observation.channel_id) {
+            Some(Some(found)) => Ok(found.get(&job.observation.identity_key)),
+            _ => Err(()),
+        };
+        match mark {
+            Ok(None) if replaced(&job) => {
+                println!(
+                    "Not adding {} ({}): {}",
+                    job.title,
+                    job.channel_label,
+                    revisions::NOT_HIGHER
+                );
+                report.revisions_withheld += 1;
+                lower.push(Observation {
+                    result: HistoryResult::Duplicate,
+                    reason: Some(revisions::NOT_HIGHER.to_owned()),
+                    ..job.observation
+                });
+            }
+            Ok(None) => kept.push(job),
+            Ok(Some(Mark::Retry(row))) => {
+                job.retry = Some(row.clone());
+                kept.push(job);
+            }
+            _ => report.revisions_left += 1,
+        }
+    }
+    match ctx.history.record(at, lower).await {
+        Ok(recorded) => {
+            report.items_new += recorded.iter().filter(|r| **r == Recorded::New).count();
+        }
+        Err(err) => eprintln!("Cannot record history for the lower revisions: {err}"),
+    }
+    kept
 }
