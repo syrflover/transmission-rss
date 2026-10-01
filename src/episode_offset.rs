@@ -42,7 +42,8 @@
 //! | `f = 1`, `P = 0`                          | offset `0` is set whatever the folder holds |
 //! | `f = P + 1`, `P > 0`, the folder has videos | suggestion without a value: a video of the season exists, so which episode `f` is cannot be told (a split cour numbered on in the same folder) |
 //! | `f > P + 1`, `P > 0`                      | suggestion `−P`                     |
-//! | `f ≤ P` (not `P = 0`, `f = 1`)            | nothing: the numbers restart in the season |
+//! | `f ≤ P`, `f − 1` is the sum of seasons `k..N−1` for some `k ≥ 2` | suggestion `−(f − 1)`: the numbers run on from season `k` (user decision, 2026-10-02) |
+//! | `f ≤ P` otherwise (not `P = 0`, `f = 1`)  | nothing: the numbers restart in the season |
 //! | `P` unknown, `f > 1`                      | suggestion without a value, with the reason |
 //! | `P` unknown, `f = 1`                      | nothing                             |
 //! | `P = 0`, `f > 1`                          | nothing: the numbers already are the season's |
@@ -61,6 +62,18 @@
 //!
 //! Suggestions are made only for a rule whose field still leaves numbers as
 //! they are (`0` or `1`, [`is_plain`]) and that the app has not decided.
+//!
+//! Some groups number a season on from a later season rather than from the
+//! first: a third season after two of 24 that starts at `- 25` counts from
+//! season 2. That is never set by itself, because `f ≤ P` is also what a
+//! season whose numbers restart looks like; it is offered when `f − 1` is
+//! exactly the episodes of the seasons right before the rule's, counted back
+//! from season `N − 1` (`2기부터 이어 센 번호로 보여요. 회차 변환을 −24로
+//! 할까요?`). When several such runs match (an earlier season of 0 episodes),
+//! the shortest is offered and the grounds say the others match too. Like the
+//! `f > P + 1` suggestion it does not look at the season folder: by the time
+//! the rule's detail offers it, the folder holds the videos the rule received
+//! unconverted.
 
 use std::path::{Component, Path};
 
@@ -100,6 +113,9 @@ pub struct Basis {
     /// The season number of the video's folder.
     pub season: u32,
     pub previous: Previous,
+    /// The AniList episodes of each season before the rule's, from season 1,
+    /// when all are known (empty otherwise, and for season 1).
+    pub earlier: Vec<u32>,
     /// The episodes of that season that already have a video, ascending.
     pub held: Vec<u32>,
 }
@@ -230,7 +246,7 @@ pub fn decide(first: u32, basis: &Basis) -> Verdict {
                     ),
                 }
             } else {
-                Verdict::Nothing
+                run_on(first, basis)
             }
         }
         Previous::Unknown(missing) if first > 1 => Verdict::Suggest {
@@ -242,6 +258,48 @@ pub fn decide(first: u32, basis: &Basis) -> Verdict {
             ),
         },
         Previous::Unknown(_) => Verdict::Nothing,
+    }
+}
+
+/// A first release `f ≤ P` whose `f − 1` is the episodes of the seasons right
+/// before the rule's, counted back from the last of them: a suggestion
+/// `−(f − 1)` (see the module docs). The whole run (from season 1) is the
+/// `f = P + 1` case and is not looked at here.
+fn run_on(first: u32, basis: &Basis) -> Verdict {
+    if first <= 1 {
+        return Verdict::Nothing;
+    }
+    let want = u64::from(first - 1);
+    // Season numbers `k` whose run `k..N−1` adds up to `f − 1`, nearest first.
+    let mut starts: Vec<usize> = Vec::new();
+    let mut sum: u64 = 0;
+    for k in (2..=basis.earlier.len()).rev() {
+        sum += u64::from(basis.earlier[k - 1]);
+        if sum == want {
+            starts.push(k);
+        }
+        if sum > want {
+            break;
+        }
+    }
+    let Some(&nearest) = starts.first() else {
+        return Verdict::Nothing;
+    };
+    let offset = -i64::from(first - 1);
+    let mut text = format!(
+        "{nearest}기부터 이어 센 번호로 보여요. 회차 변환을 {}로 할까요?",
+        signed(offset)
+    );
+    if starts.len() > 1 {
+        let others: Vec<String> = starts[1..].iter().map(|k| format!("{k}기")).collect();
+        text.push_str(&format!(
+            " {}부터 센 것으로도 맞아서 가장 가까운 시즌부터 센 것으로 봤어요.",
+            others.join("·")
+        ));
+    }
+    Verdict::Suggest {
+        value: Some(offset),
+        basis: text,
     }
 }
 
@@ -351,14 +409,15 @@ pub async fn gather(
             .unwrap_or_default(),
         None => Vec::new(),
     };
-    let previous = match &work_id {
-        _ if season == 1 => Previous::Known(0),
-        None => Previous::Unknown(Missing::NoWork),
+    let (previous, earlier) = match &work_id {
+        _ if season == 1 => (Previous::Known(0), Vec::new()),
+        None => (Previous::Unknown(Missing::NoWork), Vec::new()),
         Some(id) => previous_total(seasons, id, season).await?,
     };
     Ok(Some(Basis {
         season,
         previous,
+        earlier,
         held,
     }))
 }
@@ -389,33 +448,37 @@ pub async fn season_total(
     Ok(Some((season, total)))
 }
 
-/// The AniList episodes of seasons `1..season` of the work.
+/// The AniList episodes of seasons `1..season` of the work: their sum, and
+/// each season's count when all are known.
 async fn previous_total(
     seasons: &SeasonStore,
     work_id: &str,
     season: u32,
-) -> Result<Previous, SeasonError> {
+) -> Result<(Previous, Vec<u32>), SeasonError> {
     let before: Vec<u32> = (1..season).collect();
     let links = seasons
         .links_of_seasons(before.iter().map(|s| (work_id.to_owned(), *s)).collect())
         .await?;
+    let unknown = |missing| Ok((Previous::Unknown(missing), Vec::new()));
     let mut total: u32 = 0;
+    let mut counts = Vec::new();
     for (number, link) in before.into_iter().zip(links) {
         let Some(link) = link else {
-            return Ok(Previous::Unknown(Missing::NoSeason(number)));
+            return unknown(Missing::NoSeason(number));
         };
         if link.entries.is_empty() {
-            return Ok(Previous::Unknown(Missing::NoLink(number)));
+            return unknown(Missing::NoLink(number));
         }
         let Some(count) = combine(&link.entries).and_then(|c| c.episodes) else {
-            return Ok(Previous::Unknown(Missing::NoCount(number)));
+            return unknown(Missing::NoCount(number));
         };
         let Some(sum) = total.checked_add(count) else {
-            return Ok(Previous::Unknown(Missing::NoCount(number)));
+            return unknown(Missing::NoCount(number));
         };
         total = sum;
+        counts.push(count);
     }
-    Ok(Previous::Known(total))
+    Ok((Previous::Known(total), counts))
 }
 
 #[cfg(test)]
@@ -426,6 +489,17 @@ mod tests {
         Basis {
             season: 3,
             previous,
+            earlier: Vec::new(),
+            held: held.to_vec(),
+        }
+    }
+
+    /// Season `counts.len() + 1`, after seasons of these counts.
+    fn after(counts: &[u32], held: &[u32]) -> Basis {
+        Basis {
+            season: counts.len() as u32 + 1,
+            previous: Previous::Known(counts.iter().sum()),
+            earlier: counts.to_vec(),
             held: held.to_vec(),
         }
     }
@@ -452,6 +526,7 @@ mod tests {
         let first = Basis {
             season: 1,
             previous: Previous::Known(0),
+            earlier: vec![],
             held: vec![],
         };
         assert_eq!(offset_of(&decide(1, &first)), Some(0));
@@ -516,6 +591,58 @@ mod tests {
             decide(1, &basis_unknown()),
             Verdict::Nothing,
             "a first release numbered 1 needs no sum"
+        );
+    }
+
+    #[test]
+    fn numbers_run_on_from_a_later_season_are_suggested_not_set() {
+        // Two seasons of 24, a third that starts at `- 25`: counted from
+        // season 2.
+        let verdict = decide(25, &after(&[24, 24], &[]));
+        assert_eq!(
+            verdict,
+            Verdict::Suggest {
+                value: Some(-24),
+                basis: "2기부터 이어 센 번호로 보여요. 회차 변환을 −24로 할까요?".to_owned(),
+            }
+        );
+        // Seasons 2 and 3 of a fourth: `- 25` after 12, 12, 12.
+        let verdict = decide(25, &after(&[12, 12, 12], &[]));
+        assert_eq!(
+            verdict.as_suggestion().map(|(value, _)| value),
+            Some(Some(-24))
+        );
+        // A number that matches no run back from the season before is nothing.
+        assert_eq!(decide(13, &after(&[24, 24], &[])), Verdict::Nothing);
+        // Only runs that end at the season right before count: 13 after
+        // 12, 24 would follow season 1 alone.
+        assert_eq!(decide(13, &after(&[12, 24], &[])), Verdict::Nothing);
+        // Numbers that restart are nothing.
+        assert_eq!(decide(1, &after(&[24, 24], &[])), Verdict::Nothing);
+    }
+
+    #[test]
+    fn several_runs_that_match_offer_the_shortest_and_say_so() {
+        // Season 2 has no episodes, so seasons 3 and 2..3 both add up to 12.
+        let verdict = decide(13, &after(&[12, 0, 12], &[]));
+        let Verdict::Suggest { value, basis } = verdict else {
+            panic!("{verdict:?}")
+        };
+        assert_eq!(value, Some(-12));
+        assert!(
+            basis.starts_with("3기부터 이어 센 번호로 보여요."),
+            "{basis}"
+        );
+        assert!(basis.contains("2기부터 센 것으로도 맞아서"), "{basis}");
+    }
+
+    #[test]
+    fn numbers_run_on_are_still_offered_once_the_folder_has_their_videos() {
+        // The rule received `- 25` unconverted, as `S03E25`.
+        let verdict = decide(25, &after(&[24, 24], &[25]));
+        assert_eq!(
+            verdict.as_suggestion().map(|(value, _)| value),
+            Some(Some(-24))
         );
     }
 

@@ -1084,3 +1084,50 @@ async fn an_undo_of_a_value_that_is_no_longer_there_is_refused() {
     assert_eq!(s.names(), ["Show S03E01.mkv", "Show S03E02.mkv"]);
     assert_eq!(s.rule(&rule).await.episode, -40);
 }
+
+// --- numbers run on from a later season (user decision, 2026-10-02) ---------------
+
+#[tokio::test]
+async fn numbers_run_on_from_the_season_before_are_offered_and_never_set() {
+    let s = Scene::new().await;
+    s.link_earlier_seasons([Some(24), Some(24)]).await;
+    s.h.advance(1_000);
+    let rule = s.subscribe("Show", "Show/Season 03", 7, 0).await;
+
+    s.feed(&[]);
+    s.cycle().await;
+    // Season 3 after two of 24 starts at `- 25`: counted on from season 2.
+    s.feed(&[&show(25)]);
+    s.cycle().await;
+
+    // Not set by the app: `- 25` could as well be a season that restarts.
+    assert_eq!(s.names(), ["Show S03E25.mkv"]);
+    let stored = s.rule(&rule).await;
+    assert_eq!((stored.episode, stored.episode_auto), (0, false));
+    let view = s.view(&rule).await;
+    assert_eq!(view["episode_basis"], Value::Null);
+    assert_eq!(
+        view["episode_suggestion"],
+        json!({
+            "value": -24,
+            "basis": "2기부터 이어 센 번호로 보여요. 회차 변환을 −24로 할까요?",
+        })
+    );
+
+    // `적용` makes it the user's value, and the next release is named with it.
+    let (status, _, applied) = s
+        .api
+        .call(
+            "PUT",
+            &format!("/api/rules/{}/episode", rule.id),
+            Some(json!({ "version": view["version"], "episode": -24 })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    assert_eq!(applied["episode"], -24);
+    assert_eq!(applied["episode_auto"], false);
+    assert_eq!(applied["episode_suggestion"], Value::Null);
+    s.feed(&[&show(25), &show(26)]);
+    s.cycle().await;
+    assert_eq!(s.names(), ["Show S03E02.mkv", "Show S03E25.mkv"]);
+}
