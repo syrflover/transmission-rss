@@ -41,8 +41,17 @@ export function RuleName({ phrase }: { phrase: string | null }) {
 
 function RemovedRules({ channel }: { channel: ChannelView }) {
   const removed = channel.existing?.removed_rules ?? [];
+  const waiting = channel.existing?.title_waiting_kept ?? 0;
+  const keptNote = waiting > 0 && (
+    <p className="text-[13px] text-text-secondary">제목 대기 구독 {waiting}개는 그대로 남겨요.</p>
+  );
   if (removed.length === 0) {
-    return <p className="text-[13px] text-text-muted">교체해도 없어지는 규칙은 없어요.</p>;
+    return (
+      <>
+        <p className="text-[13px] text-text-muted">교체해도 없어지는 규칙은 없어요.</p>
+        {keptNote}
+      </>
+    );
   }
   return (
     <div className="rounded-lg border border-hairline bg-surface-2 p-3">
@@ -55,6 +64,7 @@ function RemovedRules({ channel }: { channel: ChannelView }) {
           </li>
         ))}
       </ul>
+      {keptNote && <div className="mt-2">{keptNote}</div>}
     </div>
   );
 }

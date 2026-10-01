@@ -111,6 +111,8 @@ export function ResultStep({ flow }: { flow: ImportFlow }) {
               <b className="text-text-primary break-all">{channel.url}</b> 채널을 파일 내용으로 바꿨어요. 규칙{" "}
               {channel.kept_rules}개는 지금 규칙의 ID를 유지한 채 값만 바꿨고, {channel.added_rules}개를 새로 더했고,{" "}
               {channel.removed_rules.length}개를 없앴어요.
+              {channel.title_waiting_kept > 0 &&
+                ` 제목 대기 구독 ${channel.title_waiting_kept}개는 그대로 남겼어요.`}
             </li>
           ))}
           {result.collect_folder_set !== null && (

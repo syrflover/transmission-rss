@@ -51,6 +51,8 @@ export interface ExistingView {
   rule_count: number;
   /** What a replacement would delete. */
   removed_rules: RemovedRule[];
+  /** Title-waiting subscriptions of the channel, which a replacement leaves as they are. */
+  title_waiting_kept: number;
 }
 
 export interface ChannelView {
@@ -104,6 +106,8 @@ export interface ApplyResult {
     kept_rules: number;
     added_rules: number;
     removed_rules: RemovedRule[];
+    /** Title-waiting subscriptions the replacement left as they were. */
+    title_waiting_kept: number;
   }[];
   skipped: { index: number; url: string }[];
   not_imported: { index: number; url: string; reason: string }[];
@@ -136,6 +140,7 @@ export interface ApplyResult {
     rules_added: number;
     rules_kept: number;
     rules_removed: number;
+    title_waiting_kept: number;
     subscriptions_created: number;
   };
 }

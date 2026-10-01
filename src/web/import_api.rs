@@ -25,6 +25,15 @@
 //! the apply takes the ones the user checked (`subscriptions`). See
 //! [`suggestions`]. Nothing is received by an import, subscriptions included.
 //!
+//! # Title-waiting subscriptions
+//!
+//! A file cannot express a subscription still waiting for its title (a rule
+//! with `match: null` and a subscription). Replacing a channel therefore leaves
+//! every such subscription of it as it is, after the file's rules, instead of
+//! deleting it with the rules the file lacks; the preview says how many
+//! (`existing.title_waiting_kept`) and the result counts them
+//! (`title_waiting_kept`).
+//!
 //! # Folders
 //!
 //! The app has one collect folder and a rule's directory is relative to it, so
@@ -61,7 +70,9 @@ use crate::import::{
     plan::{build_actions, display_url, find_existing, Choice, Decision},
     suggest::suggest,
 };
-use crate::store::channels::import::{match_rules, ImportChannel, ImportedChannel};
+use crate::store::channels::import::{
+    is_title_waiting_subscription, match_rules, ImportChannel, ImportedChannel,
+};
 use crate::store::channels::{ChannelError, ChannelWithRules, Rule, Version};
 
 const STALE_MESSAGE: &str = "검토한 뒤에 채널이 바뀌었어요. 파일을 다시 검토한 다음 선택해 주세요.";
@@ -155,6 +166,9 @@ struct ExistingView {
     rule_count: usize,
     /// What a replacement would delete, in the channel's current order.
     removed_rules: Vec<RemovedRule>,
+    /// Title-waiting subscriptions of the channel: a replacement leaves them as
+    /// they are, because the file cannot express them.
+    title_waiting_kept: usize,
 }
 
 #[derive(Serialize)]
@@ -221,7 +235,9 @@ fn channel_view(
             e.rules
                 .iter()
                 .enumerate()
-                .filter(|(i, _)| !kept.contains(&Some(*i)))
+                .filter(|(i, rule)| {
+                    !kept.contains(&Some(*i)) && !is_title_waiting_subscription(rule)
+                })
                 .map(|(_, rule)| RemovedRule::from(rule))
                 .collect()
         })
@@ -257,6 +273,11 @@ fn channel_view(
             url: display_url(&e.channel.url),
             rule_count: e.rules.len(),
             removed_rules,
+            title_waiting_kept: e
+                .rules
+                .iter()
+                .filter(|rule| is_title_waiting_subscription(rule))
+                .count(),
         }),
     }
 }
@@ -416,6 +437,8 @@ struct ReplacedView {
     /// Rules of the file that got a new ID.
     added_rules: usize,
     removed_rules: Vec<RemovedRule>,
+    /// Title-waiting subscriptions the replacement left as they were.
+    title_waiting_kept: usize,
 }
 
 #[derive(Serialize)]
@@ -447,6 +470,8 @@ struct Counts {
     rules_added: usize,
     rules_kept: usize,
     rules_removed: usize,
+    /// Title-waiting subscriptions that replaced channels kept as they were.
+    title_waiting_kept: usize,
     /// Rules that became subscriptions.
     subscriptions_created: usize,
 }
@@ -619,6 +644,7 @@ async fn apply(
             rules_added: 0,
             rules_kept: 0,
             rules_removed: 0,
+            title_waiting_kept: 0,
             subscriptions_created: subscriptions.created_count(),
         },
         subscriptions,
@@ -643,19 +669,23 @@ async fn apply(
             ImportedChannel::Replaced {
                 kept_rules,
                 removed_rules,
+                waiting_kept,
                 ..
             } => {
-                response.counts.rules_added += rule_count - kept_rules;
+                let added_rules = rule_count - kept_rules - waiting_kept;
+                response.counts.rules_added += added_rules;
                 response.counts.rules_kept += kept_rules;
                 response.counts.rules_removed += removed_rules.len();
+                response.counts.title_waiting_kept += waiting_kept;
                 response.replaced.push(ReplacedView {
                     index,
                     id,
                     url,
                     rule_count,
                     kept_rules,
-                    added_rules: rule_count - kept_rules,
+                    added_rules,
                     removed_rules: removed_rules.iter().map(RemovedRule::from).collect(),
+                    title_waiting_kept: waiting_kept,
                 });
             }
         }

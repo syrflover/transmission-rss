@@ -371,6 +371,105 @@ async fn replace_shows_the_rules_that_go_and_reports_them_separately() {
 }
 
 #[tokio::test]
+async fn replacing_keeps_the_title_waiting_subscriptions_of_the_channel() {
+    use crate::store::anissia::Anime;
+    use crate::store::channels::{NewSubscription, SubtitleMode};
+
+    let t = app().await;
+    t.set_folder("/media").await;
+    let a = t
+        .store
+        .create_channel_with_rules(
+            ChannelInput::new("https://feeds.example.test/a?filter=1080p&token=old"),
+            vec![RuleInput {
+                r#match: Some("Gone".into()),
+                directory: "gone".into(),
+                ..RuleInput::default()
+            }],
+        )
+        .await
+        .unwrap();
+    // A subscription created in the app for a work that has not aired yet.
+    let waiting = t
+        .store
+        .create_subscription_rule(
+            &a.channel.id,
+            RuleInput {
+                r#match: None,
+                directory: "Waiting Work".into(),
+                ..RuleInput::default()
+            },
+            NewSubscription {
+                anime: Anime {
+                    anime_no: 77,
+                    subject: "Waiting Work".into(),
+                    original_subject: None,
+                    week: 3,
+                    air_time: Some("22:00".into()),
+                    start_date: None,
+                    end_date: None,
+                    status: "ON".into(),
+                    fetched_at: 1,
+                },
+                subtitles: SubtitleMode::Undecided,
+                creator: None,
+                subscribed_at: 100,
+            },
+        )
+        .await
+        .unwrap();
+    let a = t.all().await.remove(0);
+    assert_eq!(a.rules.len(), 2);
+
+    let content = format!(
+        "- url: https://feeds.example.test/a?filter=1080p&token={TOKEN_A}
+  directory: /media/a
+  rules:
+    - match: Fresh
+      directory: A/fresh
+"
+    );
+    // The preview says the subscription stays and does not list it as lost.
+    let (status, text, review) = t.preview(&content).await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let existing = &review["channels"][0]["existing"];
+    assert_eq!(existing["rule_count"], 2);
+    assert_eq!(existing["title_waiting_kept"], 1);
+    assert_eq!(
+        existing["removed_rules"],
+        json!([{ "match": "Gone", "directory": "gone" }])
+    );
+
+    let (status, text, result) = t.apply(&content, json!([choice(0, &a, "replace")])).await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(result["counts"]["rules_removed"], 1);
+    assert_eq!(result["counts"]["rules_added"], 1);
+    assert_eq!(result["counts"]["title_waiting_kept"], 1);
+    assert_eq!(result["replaced"][0]["title_waiting_kept"], 1);
+    assert_eq!(result["replaced"][0]["added_rules"], 1);
+
+    // The ordinary rule was replaced; the waiting subscription is the same
+    // rule, with the same subscription row, after the file's rule.
+    let stored = t.all().await.remove(0);
+    assert_eq!(stored.rules.len(), 2);
+    assert_eq!(stored.rules[0].r#match.as_deref(), Some("Fresh"));
+    assert_eq!(stored.rules[0].directory, "a/A/fresh");
+    assert_ne!(stored.rules[0].id, a.rules[0].id);
+    assert_eq!(stored.rules[1], waiting_after(&waiting, 1));
+}
+
+/// `rule` as it is stored after it moved to `position`.
+fn waiting_after(
+    rule: &crate::store::channels::Rule,
+    position: i64,
+) -> crate::store::channels::Rule {
+    crate::store::channels::Rule {
+        position,
+        ..rule.clone()
+    }
+}
+
+#[tokio::test]
 async fn add_copies_the_channel_with_new_ids_and_leaves_the_existing_one_alone() {
     let t = app().await;
     let (input, rules) = existing_a();
