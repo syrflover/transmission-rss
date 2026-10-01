@@ -1,5 +1,6 @@
 //! The library list: one summary per work, read with a fixed number of queries
-//! (works, media files, unrecognized files) however many works there are.
+//! (works, media files, unrecognized files, linked season entries) however many
+//! works there are.
 //!
 //! What a summary says (`docs/specs/library.md`, 라이브러리 화면):
 //!
@@ -17,6 +18,10 @@
 //! - **`subtitle_check_needed`** is true when an unrecognized file of the work
 //!   is a subtitle (`.ass`, `.srt`, …) the scan could not attach to an episode.
 //!   A download in progress (`.part`) is not one.
+//! - **Airing** comes from the AniList entries the work's *latest local season*
+//!   links: its year is the first entry's start year (`None` when unlinked or
+//!   unknown), it is airing while any of its entries is releasing, and the
+//!   titles of every linked entry of every season are kept for the search.
 //! - **Added times** are `None` when unknown. The latest video / subtitle time
 //!   is the latest *known* time of any season; it is unknown only when no file
 //!   of that kind has a known time.
@@ -27,7 +32,7 @@ use rusqlite::Connection;
 
 use crate::{
     discovery::{kind_of, FileKind, Reason},
-    store::history::Millis,
+    store::{history::Millis, seasons},
 };
 
 /// A run of consecutive episodes, as written (`first` and `last` are the
@@ -82,6 +87,14 @@ pub struct WorkOverview {
     pub video_added_at: Option<Millis>,
     /// The latest known time a subtitle was added, over every season.
     pub subtitle_added_at: Option<Millis>,
+    /// The year the latest season's first linked AniList entry started
+    /// airing; `None`: unknown (no link, or the entry has no start year).
+    pub airing_year: Option<i32>,
+    /// Whether an entry linked to the latest season is airing now.
+    pub airing: bool,
+    /// The native, English and romaji titles of the entries linked to the
+    /// work's recorded seasons, for the search.
+    pub linked_titles: Vec<String>,
 }
 
 /// An episode as a key: whole numbers by value, anything else by its text.
@@ -245,9 +258,23 @@ pub(super) fn overview(conn: &Connection) -> rusqlite::Result<Vec<WorkOverview>>
         }
     }
 
+    let mut linked = seasons::library_facts(conn)?;
+
     Ok(rows
         .into_iter()
         .map(|row| {
+            let facts = linked.remove(&row.id).unwrap_or_default();
+            let latest = |fact: &&seasons::LinkedFact| Some(fact.season) == row.latest_season;
+            let airing_year = facts
+                .iter()
+                .filter(latest)
+                .find(|fact| fact.position == 0)
+                .and_then(|fact| fact.start_year);
+            let airing = facts
+                .iter()
+                .filter(latest)
+                .any(|fact| fact.status.as_deref() == Some("RELEASING"));
+            let linked_titles = facts.into_iter().flat_map(|fact| fact.titles).collect();
             let held = holdings(
                 row.latest_season,
                 files.get(&row.id).map_or(&[][..], Vec::as_slice),
@@ -271,6 +298,9 @@ pub(super) fn overview(conn: &Connection) -> rusqlite::Result<Vec<WorkOverview>>
                 subtitle_coverage: coverage,
                 video_added_at: held.video_added_at,
                 subtitle_added_at: held.subtitle_added_at,
+                airing_year,
+                airing,
+                linked_titles,
             }
         })
         .collect())

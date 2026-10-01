@@ -62,6 +62,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("artwork/schema.sql")),
     // 12: what the worker's inotify watches could not cover in a watch folder
     Migration::Sql(include_str!("library/watch_note.sql")),
+    // 13: season info: the AniList entries linked to each local season
+    Migration::Sql(include_str!("seasons/schema.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]

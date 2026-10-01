@@ -10,8 +10,9 @@
 //! - **Order.** A sort is a key of three parts: the sort's time (latest first,
 //!   an unknown time after every known one), the title, and the work's ID.
 //!   Title and ID make the key unique, so two works are never in doubt about
-//!   which comes first. The sorts by title and by airing year have no time (no
-//!   work has an airing year yet), so they are the title order.
+//!   which comes first. The sort by title has no time, so it is the title
+//!   order; the sort by airing year has the year the latest season's first
+//!   linked AniList entry started, latest first and unknown after every known one.
 //! - **Title** is compared as NFC text without regard to case: a folder name
 //!   made on macOS may be decomposed, and `a` and `A` are the same letter to a
 //!   reader. Code point order after that, so digits come before Latin letters
@@ -24,7 +25,8 @@
 //!   moved its time) can be seen twice or missed, and the next first page
 //!   shows it where it belongs now.
 //! - **Search** is a case-insensitive match of the NFC text in the work's
-//!   title (the folder name).
+//!   title (the folder name) or in any native, English or romaji title of the
+//!   AniList entries linked to its seasons.
 
 use serde::{Deserialize, Serialize};
 use unicode_normalization::UnicodeNormalization;
@@ -35,7 +37,7 @@ use super::overview::{SubtitleCoverage, WorkOverview};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Sort {
     Title,
-    /// By airing year, which no work has yet: the same as [`Sort::Title`].
+    /// The latest season's first linked entry's start year, latest first.
     Year,
     /// Latest added work first.
     Added,
@@ -71,7 +73,8 @@ impl Sort {
     /// The time this sort looks at, `None` for an unknown one.
     fn time_of(self, work: &WorkOverview) -> Option<i64> {
         match self {
-            Sort::Title | Sort::Year => None,
+            Sort::Title => None,
+            Sort::Year => work.airing_year.map(i64::from),
             Sort::Added => work.first_seen_at,
             Sort::Video => work.video_added_at,
             Sort::Subtitle => work.subtitle_added_at,
@@ -83,7 +86,7 @@ impl Sort {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Filter {
     All,
-    /// Matches nothing until a season is linked to an entry that knows when it airs.
+    /// An entry linked to the latest season is airing now.
     Airing,
     /// Subtitles for every episode that has a video.
     Complete,
@@ -121,7 +124,7 @@ impl Filter {
     fn admits(self, work: &WorkOverview) -> bool {
         match self {
             Filter::All => true,
-            Filter::Airing => false,
+            Filter::Airing => work.airing,
             Filter::Complete => work.subtitle_coverage == Some(SubtitleCoverage::All),
             Filter::Partial => work.subtitle_coverage == Some(SubtitleCoverage::Some),
             Filter::None => work.subtitle_coverage == Some(SubtitleCoverage::None),
@@ -253,7 +256,10 @@ pub fn page(works: Vec<WorkOverview>, query: &ListQuery) -> Page {
         .filter(|work| query.filter.admits(work))
         .filter_map(|work| {
             let title = fold(&work.dir_name);
-            if !needle.is_empty() && !title.contains(&needle) {
+            if !needle.is_empty()
+                && !title.contains(&needle)
+                && !work.linked_titles.iter().any(|t| fold(t).contains(&needle))
+            {
                 return None;
             }
             let key = Key {
@@ -307,6 +313,9 @@ mod tests {
             subtitle_check_needed: false,
             video_added_at: None,
             subtitle_added_at: None,
+            airing_year: None,
+            airing: false,
+            linked_titles: Vec::new(),
         }
     }
 
