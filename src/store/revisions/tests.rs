@@ -780,3 +780,49 @@ async fn a_found_new_video_forgets_the_miss_and_its_reason() {
     let row = store.by_item(v2.item_id).await.unwrap().unwrap();
     assert_eq!((row.new_missing_at, row.reason), (None, None));
 }
+
+/// Two rows of one torrent (the same release through two channels) were both
+/// skipped for `14v3` on its way. When it fails, one of them starts over and
+/// the other is skipped as that torrent's, as it would be when written.
+#[tokio::test]
+async fn rows_of_one_torrent_that_come_back_start_over_once() {
+    let (_dir, db) = db().await;
+    let store = RevisionStore::new(db.clone());
+    let v3 = store
+        .create(10, of_episode(item(&db, "14v3").await, "14v3", 3))
+        .await
+        .unwrap();
+    let mut rows = Vec::new();
+    for key in ["14v2", "14v2-other-channel"] {
+        let mut new = of_episode(item(&db, key).await, key, 2);
+        new.torrent_hash = Some("hash-14v2".into());
+        let row = store.create(10, new).await.unwrap();
+        assert_eq!(row.state, RevisionState::Receiving);
+        assert!(store
+            .advance(row.id, 20, RevisionState::Receiving, Step::Overtaken)
+            .await
+            .unwrap());
+        rows.push(row);
+    }
+
+    let failed = Step::Failed {
+        reason: "stopped".into(),
+        received_name: None,
+    };
+    assert!(store
+        .advance(v3.id, 30, RevisionState::Receiving, failed)
+        .await
+        .unwrap());
+    let mut states = Vec::new();
+    for row in &rows {
+        let row = store.by_item(row.item_id).await.unwrap().unwrap();
+        states.push((row.state, row.reason, row.overtaken_by));
+    }
+    assert_eq!(
+        states,
+        vec![
+            (RevisionState::Receiving, None, None),
+            (RevisionState::Skipped, Some(SAME_TORRENT.to_owned()), None),
+        ]
+    );
+}

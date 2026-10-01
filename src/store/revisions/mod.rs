@@ -500,6 +500,38 @@ fn torrent_taken(conn: &Connection, id: Option<i64>, hash: &str) -> Result<bool>
     )?)
 }
 
+/// The rows skipped for the row `id` while it was on its way
+/// ([`Revision::overtaken_by`]), which has failed: each starts over as
+/// `receiving`, having forgotten what it found, unless another row under way
+/// or done has its torrent by now (the same release through another channel,
+/// or another row skipped for `id` that started over first), which skips it
+/// as that torrent's ([`SAME_TORRENT`]), as [`create_in`] would.
+fn revive_overtaken(tx: &Connection, id: i64, at: Millis) -> Result<()> {
+    for row in query(tx, "WHERE state = 'skipped' AND overtaken_by = ?1", &[&id])? {
+        let taken = match &row.torrent_hash {
+            Some(hash) => torrent_taken(tx, Some(row.id), hash)?,
+            None => false,
+        };
+        if taken {
+            tx.execute(
+                "UPDATE video_revisions SET reason = ?2, overtaken_by = NULL, updated_at = ?3
+                  WHERE id = ?1",
+                params![row.id, SAME_TORRENT, at],
+            )?;
+        } else {
+            tx.execute(
+                "UPDATE video_revisions
+                    SET state = 'receiving', reason = NULL, received_name = NULL,
+                        file_crc = NULL, file_identity = NULL, overtaken_by = NULL,
+                        new_missing_at = NULL, updated_at = ?2
+                  WHERE id = ?1",
+                params![row.id, at],
+            )?;
+        }
+    }
+    Ok(())
+}
+
 /// [`RevisionStore::create`] inside the transaction `tx`.
 fn create_in(tx: &Connection, at: Millis, new: NewRevision) -> Result<Revision> {
     if let Some(row) = query(tx, "WHERE item_id = ?1", &[&new.item_id])?.pop() {
@@ -1071,21 +1103,14 @@ impl RevisionStore {
                         reason,
                         received_name,
                     } => {
-                        tx.execute(
+                        let written = tx.execute(
                             "UPDATE video_revisions SET state = 'failed', reason = ?2,
                                  received_name = COALESCE(?4, received_name), updated_at = ?3
                               WHERE id = ?1",
                             params![id, reason, at, received_name],
                         )?;
-                        tx.execute(
-                            "UPDATE video_revisions
-                                SET state = 'receiving', reason = NULL, received_name = NULL,
-                                    file_crc = NULL, file_identity = NULL, overtaken_by = NULL,
-                                    new_missing_at = NULL,
-                                    updated_at = ?2
-                              WHERE state = 'skipped' AND overtaken_by = ?1",
-                            params![id, at],
-                        )?
+                        revive_overtaken(&tx, id, at)?;
+                        written
                     }
                     Step::Cleared => tx.execute(
                         "UPDATE video_revisions SET state = 'cleared', updated_at = ?2
