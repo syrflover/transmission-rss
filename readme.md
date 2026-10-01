@@ -37,7 +37,7 @@ SEED_QUEUE_SIZE=1
 ```
 
 - `MEDIA_DIR` is mounted to `/downloads` in Transmission and in both trss containers, so all of them spell folders the same way: read-write in `trss-worker`, which moves work folders when rules are archived and restored (see below), and read-only in `trss-web`, which only reads it. Transmission downloads to `/downloads/downloads` (`$MEDIA_DIR/downloads` on the host) unless a rule says otherwise.
-- `TRSS_DATA_DIR` holds `trss.db`, the worker's lock files `trss.db.worker.lock` and `trss.db.artwork.lock`, and `artwork/`, the work covers (see [Work covers](#work-covers)). Keep it on a local disk, not an SMB or NFS share: SQLite and the locks rely on local file locking.
+- `TRSS_DATA_DIR` holds `trss.db`, the worker's lock files `trss.db.worker.lock`, `trss.db.artwork.lock` and `trss.db.seasons.lock`, and `artwork/`, the work covers (see [Work covers](#work-covers)). Keep it on a local disk, not an SMB or NFS share: SQLite and the locks rely on local file locking.
 - The web has no sign-in of its own. `TRSS_WEB_HOST_IP` binds its port to the LAN address only; reach it from outside through a VPN, never by forwarding the port.
 
 On a host whose Docker uses the systemd cgroup driver, install the slice the Transmission container runs in once (see [Resource limits](#resource-limits)):
@@ -84,6 +84,14 @@ Each work in the library has one cover: an AniList entry's cover image or a file
 - The worker sends at most one AniList request every 2 seconds, together with the web's searches, and waits as long as AniList asks when it answers `429`. Adding a watch folder with 500 works therefore takes about 20 minutes of searching in the background; collection and the web go on meanwhile. The queue lives in the database, so a restart continues it.
 - Images are judged by their bytes (JPEG, PNG or WebP), up to 10 MiB and 12 million pixels (8192 pixels a side), and stored under new names in `TRSS_DATA_DIR/artwork/`. Images are only fetched from AniList's image host, from addresses AniList's own answers give.
 - `TRSS_ANILIST_URL` and `TRSS_ANILIST_IMAGE_ORIGINS` (comma-separated origins) override AniList's addresses, for local testing only.
+
+### Season info
+
+A season's air dates, episode count, studios, genres, original title and synopsis come from the AniList entries linked to the local season (one or more, in order). Both containers use the same outbound access as the covers (`graphql.anilist.co`); nothing new is needed.
+
+- When the app records a work (or a first season) for the first time, `trss-worker` searches AniList for the folder name and links the entry only on the same exact, unique title match and complete search as for covers (up to four search requests, then one request for the entry). The link is marked `자동` and the user can change it. Works and seasons recorded before this version are not searched for; open the season and use `연결 바꾸기`. Later seasons are never linked by the app: the previous season's last entry's sequels are offered and the user confirms one.
+- Entries that are not yet released or are releasing are received again once a day by the worker (one request each, at the same pace as the covers, `429` waits included). Finished entries are received again only from `정보 다시 받기`.
+- The queue takes its own lock, `trss.db.seasons.lock`, so it never holds up collection or the cover queue. Descriptions are shown as plain text only.
 
 ### Watch folders and inotify
 
