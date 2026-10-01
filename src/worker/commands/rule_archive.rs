@@ -327,27 +327,56 @@ pub async fn run_on(
     }
 }
 
+/// Why a rule's work folder is not moved at all (the command then ends with
+/// that reason, `kept`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NoMove {
+    NoCollectFolder,
+    NoArchiveFolder,
+    CollectItself,
+    Outside,
+}
+
+impl NoMove {
+    /// The sentence a command ends with.
+    fn reason(self) -> String {
+        match self {
+            NoMove::NoCollectFolder => "수집 폴더를 정하지 않아서 폴더는 옮기지 않았어요.",
+            NoMove::NoArchiveFolder => "보관 폴더를 정하지 않아서 폴더는 옮기지 않았어요.",
+            NoMove::CollectItself => "저장 폴더가 수집 폴더 자체라서 옮길 작품 폴더가 없어요.",
+            NoMove::Outside => "저장 폴더가 수집 폴더 밖이라서 옮기지 않았어요.",
+        }
+        .to_owned()
+    }
+
+    /// The same, said before the rule is archived.
+    fn forecast(self) -> &'static str {
+        match self {
+            NoMove::NoCollectFolder => "수집 폴더를 정하지 않아서 폴더는 옮기지 않아요.",
+            NoMove::NoArchiveFolder => "보관 폴더를 정하지 않아서 폴더는 옮기지 않아요.",
+            NoMove::CollectItself => "저장 폴더가 수집 폴더 자체라서 옮길 작품 폴더가 없어요.",
+            NoMove::Outside => "저장 폴더가 수집 폴더 밖이라서 옮기지 않아요.",
+        }
+    }
+}
+
 /// What the move of a rule's work folder would be, or why there is none (the
 /// command then ends with that reason, `kept`).
 fn plan_move(
     settings: Option<(String, Option<String>)>,
     rule: &Rule,
     direction: Direction,
-) -> Result<Request, String> {
+) -> Result<Request, NoMove> {
     let Some((collect, archive)) = settings else {
-        return Err("수집 폴더를 정하지 않아서 폴더는 옮기지 않았어요.".to_owned());
+        return Err(NoMove::NoCollectFolder);
     };
     let Some(archive) = archive else {
-        return Err("보관 폴더를 정하지 않아서 폴더는 옮기지 않았어요.".to_owned());
+        return Err(NoMove::NoArchiveFolder);
     };
     let name = match work_folder(Path::new(&collect), &rule.directory) {
         WorkFolder::Named(name) => name,
-        WorkFolder::CollectItself => {
-            return Err("저장 폴더가 수집 폴더 자체라서 옮길 작품 폴더가 없어요.".to_owned())
-        }
-        WorkFolder::Outside => {
-            return Err("저장 폴더가 수집 폴더 밖이라서 옮기지 않았어요.".to_owned())
-        }
+        WorkFolder::CollectItself => return Err(NoMove::CollectItself),
+        WorkFolder::Outside => return Err(NoMove::Outside),
     };
     let (collect, archive) = (PathBuf::from(collect), PathBuf::from(archive));
     Ok(match direction {
@@ -366,6 +395,41 @@ fn plan_move(
             name,
         },
     })
+}
+
+/// What archiving `rule` would do with its work folder as of now, in a
+/// sentence for the screen to say before the user archives: the folder moves,
+/// or stays and why. It asks what the command asks (where the folders are,
+/// which other rules still use the work folder), but the command decides again
+/// when it runs. `rules` are the rules of every channel; `settings` the collect
+/// folder and the archive folder.
+pub fn forecast_archive(
+    settings: Option<(String, Option<String>)>,
+    rules: &[Rule],
+    rule: &Rule,
+) -> String {
+    let request = match plan_move(settings, rule, Direction::Archive) {
+        Ok(request) => request,
+        Err(no_move) => return no_move.forecast().to_owned(),
+    };
+    let holding = holders(rules, rule, &request.from_root, &request.name);
+    if holding.is_empty() {
+        return format!(
+            "작품 폴더(`{}`)를 {}로 옮겨요.",
+            request.name,
+            request.to.name()
+        );
+    }
+    let first = &holding[0].directory;
+    let who = match holding.len() {
+        1 => format!("‘{first}’ 규칙이"),
+        n => format!("‘{first}’ 규칙 외 {}개가", n - 1),
+    };
+    if holding[0].state == RuleState::Paused {
+        format!("{who} 멈춰 있지만 다시 켜면 이 작품 폴더에 받아서 폴더는 옮기지 않아요. 남은 규칙까지 보관할 때 옮겨요.")
+    } else {
+        format!("{who} 아직 이 작품 폴더에 받고 있어서 폴더는 옮기지 않아요. 남은 규칙까지 보관할 때 옮겨요.")
+    }
 }
 
 async fn settings(ctx: &CycleContext) -> Result<Option<(String, Option<String>)>, Retry> {
@@ -457,7 +521,7 @@ async fn archive(start: &Start<'_>, rule: Rule) -> Result<Finished, Retry> {
     let settings = settings(ctx).await?;
     let request = match plan_move(settings.clone(), &rule, Direction::Archive) {
         Ok(request) => request,
-        Err(reason) => return Ok(done(KEPT, Some(reason))),
+        Err(no_move) => return Ok(done(KEPT, Some(no_move.reason()))),
     };
 
     let rules: Vec<Rule> = ctx
@@ -487,7 +551,7 @@ async fn restore(start: &Start<'_>, rule: Rule) -> Result<Finished, Retry> {
             // The rule stays archived: the folder is not back.
             Err(failed) => return Ok(failed),
         },
-        Err(reason) => done(KEPT, Some(reason)),
+        Err(no_move) => done(KEPT, Some(no_move.reason())),
     };
 
     // On only once the folder is back.
@@ -619,6 +683,62 @@ mod tests {
         assert_eq!(
             ids,
             [one.id.as_str(), dotted.id.as_str(), paused.id.as_str()]
+        );
+    }
+
+    #[test]
+    fn the_forecast_says_whether_the_folder_would_move_and_if_not_why() {
+        let rule = |directory: &str, state: RuleState| Rule {
+            id: directory.into(),
+            channel_id: "c".into(),
+            position: 0,
+            version: 1,
+            r#match: Some("x".into()),
+            regex: false,
+            case_insensitive: false,
+            directory: directory.into(),
+            episode: 1,
+            episode_auto: false,
+            state,
+            subscription: None,
+            resumed_at: None,
+        };
+        let both = Some(("/c".to_owned(), Some("/a".to_owned())));
+        let alone = rule("Alone/Season 01", RuleState::Active);
+        let shared = rule("Shared/Season 01", RuleState::Active);
+        let sibling = rule("Shared/Season 02", RuleState::Active);
+        let mut sleeping = rule("Shared/Season 03", RuleState::Paused);
+        let rules = [alone.clone(), shared.clone(), sibling.clone()];
+
+        assert_eq!(
+            forecast_archive(both.clone(), &rules, &alone),
+            "작품 폴더(`Alone`)를 보관 폴더로 옮겨요."
+        );
+        assert_eq!(
+            forecast_archive(both.clone(), &rules, &shared),
+            "‘Shared/Season 02’ 규칙이 아직 이 작품 폴더에 받고 있어서 폴더는 옮기지 않아요. 남은 규칙까지 보관할 때 옮겨요."
+        );
+        sleeping.id = "sleeping".into();
+        let paused_only = [shared.clone(), sleeping];
+        assert_eq!(
+            forecast_archive(both.clone(), &paused_only, &shared),
+            "‘Shared/Season 03’ 규칙이 멈춰 있지만 다시 켜면 이 작품 폴더에 받아서 폴더는 옮기지 않아요. 남은 규칙까지 보관할 때 옮겨요."
+        );
+        assert_eq!(
+            forecast_archive(Some(("/c".into(), None)), &rules, &alone),
+            "보관 폴더를 정하지 않아서 폴더는 옮기지 않아요."
+        );
+        assert_eq!(
+            forecast_archive(None, &rules, &alone),
+            "수집 폴더를 정하지 않아서 폴더는 옮기지 않아요."
+        );
+        assert_eq!(
+            forecast_archive(both.clone(), &[], &rule("", RuleState::Active)),
+            "저장 폴더가 수집 폴더 자체라서 옮길 작품 폴더가 없어요."
+        );
+        assert_eq!(
+            forecast_archive(both, &[], &rule("../Elsewhere", RuleState::Active)),
+            "저장 폴더가 수집 폴더 밖이라서 옮기지 않아요."
         );
     }
 }

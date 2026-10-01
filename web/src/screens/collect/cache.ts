@@ -2,6 +2,7 @@ import { forget, forgetPrefix, patch } from "@/lib/cached";
 import { forgetLibrary, WORK_PREFIX } from "@/screens/library/api";
 import { forgetWeek } from "@/screens/schedule/api";
 
+import type { ArchiveSuggestion } from "./archive/api";
 import type { Channel } from "./channels/api";
 import type { RuleList } from "./rules/api";
 
@@ -31,6 +32,8 @@ export const KEYS = {
   subscriptions: "collect:subscriptions",
   /** The title candidates (`/api/subscriptions/candidates`). */
   candidates: "collect:candidates",
+  /** The archive suggestions (`/api/archive-suggestions`). */
+  archiveSuggestions: "collect:archive-suggestions",
   /** One week of Anissia's schedule (`/api/anissia/schedule/<week>`). */
   schedule: (week: number) => `collect:schedule:${week}`,
 } as const;
@@ -125,6 +128,26 @@ export function subscriptionAdded(channelId: string): void {
  */
 export function candidatesChanged(): void {
   subscriptionChanged();
+  forget(KEYS.rules);
+  forgetPrefix(HISTORY_PREFIX);
+  forgetPrefix(PREVIEW_PREFIX);
+}
+
+/** The rule `ruleId` is no longer suggested (archived, or `수집 유지`): the cached suggestions leave it out. */
+export function suggestionGone(ruleId: string): void {
+  patch<ArchiveSuggestion[]>(KEYS.archiveSuggestions, (list) => list.filter((s) => s.rule_id !== ruleId));
+}
+
+/**
+ * A rule was archived: the lists that show it (its state, its folder, the work
+ * pages, the previews) read the server again. The subscription list and the
+ * title candidates are left to the caller: the 구독 tab shows them at this
+ * very moment and reloads them in place, while the rule detail drops them with
+ * {@link subscriptionChanged}.
+ */
+export function ruleArchived(): void {
+  forgetWeek();
+  forgetPrefix(WORK_PREFIX);
   forget(KEYS.rules);
   forgetPrefix(HISTORY_PREFIX);
   forgetPrefix(PREVIEW_PREFIX);

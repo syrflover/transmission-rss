@@ -12,6 +12,9 @@
 mod db_handle;
 mod delete;
 mod delete_rule;
+mod episode;
+#[cfg(test)]
+mod episode_tests;
 pub mod import;
 pub mod import_subscriptions;
 #[cfg(test)]
@@ -20,6 +23,9 @@ mod import_subscriptions_tests;
 mod import_tests;
 mod model;
 mod repo;
+mod suggestion;
+#[cfg(test)]
+mod suggestion_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
@@ -32,7 +38,7 @@ pub use model::{
     RuleState, SeasonRef, Subscription, SubtitleMode, Version, MASK,
 };
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use super::db::{Db, DbError};
 use super::history::Millis;
@@ -283,6 +289,33 @@ impl ChannelStore {
     /// The titles the user turned down, as `(channel ID, title key)`.
     pub async fn rejected_titles(&self) -> Result<HashSet<(String, String)>, ChannelError> {
         self.db.run(|c| repo::rejected_titles(c)).await
+    }
+
+    /// When the app first had each rule (Unix ms), by rule ID: what the 4 weeks
+    /// of an archive suggestion count from for a rule that never received
+    /// anything. A rule from before the stamp was added is absent.
+    pub async fn rule_starts(&self) -> Result<HashMap<String, Millis>, ChannelError> {
+        self.db.run(|c| suggestion::rule_starts(c)).await
+    }
+
+    /// `수집 유지`: remembers that the user chose to keep collecting for the
+    /// rule on each of `grounds` (see `archive_suggestions`), so they do not
+    /// suggest archiving it again.
+    pub async fn keep_archive_grounds(
+        &self,
+        rule_id: &str,
+        grounds: Vec<String>,
+        at: Millis,
+    ) -> Result<(), ChannelError> {
+        let rule_id = rule_id.to_owned();
+        self.db
+            .run(move |c| suggestion::keep_archive_grounds(c, &rule_id, &grounds, at))
+            .await
+    }
+
+    /// The grounds the user chose to keep collecting on, as `(rule ID, ground)`.
+    pub async fn kept_archive_grounds(&self) -> Result<HashSet<(String, String)>, ChannelError> {
+        self.db.run(|c| suggestion::kept_archive_grounds(c)).await
     }
 
     /// Archives or restores a rule, whatever version it is at: only the worker

@@ -90,10 +90,10 @@ const MIGRATIONS: &[Migration] = &[
         include_str!("anissia/unlisted.sql"),
         include_str!("setup/ended.sql")
     )),
-    // 23: reserved for ticket 0023, developed alongside; empty until it lands
-    Migration::Sql(""),
-    // 24: reserved for ticket 0024, developed alongside; empty until it lands
-    Migration::Sql(""),
+    // 23: the grounds of a rule's automatic episode offset
+    Migration::Sql(include_str!("channels/episode_basis.sql")),
+    // 24: when a rule started and which archive suggestion grounds the user chose to keep collecting
+    Migration::Sql(include_str!("channels/archive_suggestion.sql")),
     // 25: the replacement of video revisions and how far each has come
     Migration::Sql(include_str!("revisions/schema.sql")),
 ];
@@ -869,6 +869,81 @@ mod tests {
         assert_eq!((before, after), (None, Some(5)));
     }
 
+    /// The migration that added archive suggestions' tables is number 24.
+    const BEFORE_ARCHIVE_SUGGESTIONS: usize = 23;
+
+    #[tokio::test]
+    async fn a_database_from_before_archive_suggestions_keeps_its_rows_and_stamps_new_rules() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        {
+            // A database as the build with twenty-three migrations left it: a
+            // rule that received an item.
+            let conn = database_at(&path, BEFORE_ARCHIVE_SUGGESTIONS);
+            conn.execute_batch(
+                "INSERT INTO channels (id, position, url, excludes, secret_query, version)
+                     VALUES ('c1', 0, 'http://x/feed', '[]', '[]', 1);
+                 INSERT INTO rules (id, channel_id, position, match_text, regex,
+                         case_insensitive, directory, episode, episode_auto, state, version)
+                     VALUES ('r1', 'c1', 0, 'Clevatess', 0, 0, 'Clevatess', 1, 0, 'active', 3);
+                 INSERT INTO history_items (channel_id, channel_label, identity_key, title, link,
+                         first_seen_at, last_seen_at, result, result_at, rule_id)
+                     VALUES ('c1', 'feed', 'title:a', 'Clevatess - 01', 'x', 10, 10, 'received',
+                         20, 'r1');",
+            )
+            .unwrap();
+        }
+
+        let db = Db::open(&path).await.unwrap();
+
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+        let (rule, received, stamps, kept) = db
+            .run::<_, DbError, _>(|c| {
+                // A rule made after the upgrade is stamped; the old one is not.
+                c.execute(
+                    "INSERT INTO rules (id, channel_id, position, match_text, regex,
+                            case_insensitive, directory, episode, episode_auto, state, version)
+                     VALUES ('r2', 'c1', 1, 'Other', 0, 0, 'Other', 1, 0, 'active', 1)",
+                    [],
+                )?;
+                c.execute(
+                    "INSERT INTO archive_suggestion_kept (rule_id, ground, kept_at)
+                     VALUES ('r1', 'quiet:1', 5)",
+                    [],
+                )?;
+                let rule: String = c.query_row(
+                    "SELECT match_text || '|' || version FROM rules WHERE id = 'r1'",
+                    [],
+                    |r| r.get(0),
+                )?;
+                let received: String = c.query_row(
+                    "SELECT rule_id || '|' || result_at FROM history_items",
+                    [],
+                    |r| r.get(0),
+                )?;
+                let stamps: String = c.query_row(
+                    "SELECT group_concat(rule_id, ',') FROM rule_started",
+                    [],
+                    |r| r.get(0),
+                )?;
+                // The keep and the stamp go with the rule.
+                c.execute("DELETE FROM rules", [])?;
+                let kept: (i64, i64) = c.query_row(
+                    "SELECT (SELECT count(*) FROM archive_suggestion_kept),
+                            (SELECT count(*) FROM rule_started)",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?;
+                Ok((rule, received, stamps, kept))
+            })
+            .await
+            .unwrap();
+        assert_eq!(rule, "Clevatess|3");
+        assert_eq!(received, "r1|20");
+        assert_eq!(stamps, "r2");
+        assert_eq!(kept, (0, 0));
+    }
+
     #[tokio::test]
     async fn an_install_that_was_not_a_first_run_still_is_not_one() {
         let dir = tempfile::tempdir().unwrap();
@@ -883,6 +958,72 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(first_run_rows(&db).await, 0);
+    }
+
+    /// The migration that added the grounds of an automatic episode offset
+    /// follows the first run's end (22).
+    const BEFORE_EPISODE_BASIS: usize = 22;
+
+    #[tokio::test]
+    async fn rules_from_before_episode_grounds_keep_their_offsets_and_take_grounds() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        {
+            let conn = database_at(&path, BEFORE_EPISODE_BASIS);
+            conn.execute_batch(
+                "INSERT INTO channels (id, position, url, excludes, secret_query, version)
+                 VALUES ('c1', 0, 'https://a.example/rss', '[]', '[]', 1);
+                 INSERT INTO rules (id, channel_id, position, match_text, regex, case_insensitive,
+                                    directory, episode, episode_auto, state, version)
+                 VALUES ('typed', 'c1', 0, 'A', 0, 0, 'A/Season 01', -12, 0, 'active', 4),
+                        ('derived', 'c1', 1, 'B', 0, 0, 'B/Season 01', -24, 1, 'active', 2);",
+            )
+            .unwrap();
+        }
+
+        let db = Db::open(&path).await.unwrap();
+
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+        let rows: Vec<(String, i64, bool, Option<String>, i64)> = db
+            .run::<_, DbError, _>(|c| {
+                c.execute(
+                    "UPDATE rules SET episode_basis = '이전 시즌이 24화까지예요.' WHERE id = 'derived'",
+                    [],
+                )?;
+                let mut stmt = c.prepare(
+                    "SELECT id, episode, episode_auto, episode_basis, version FROM rules ORDER BY id",
+                )?;
+                let rows = stmt.query_map([], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+                })?;
+                Ok(rows.collect::<rusqlite::Result<_>>()?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                (
+                    "derived".to_owned(),
+                    -24,
+                    true,
+                    Some("이전 시즌이 24화까지예요.".to_owned()),
+                    2
+                ),
+                ("typed".to_owned(), -12, false, None, 4),
+            ]
+        );
+        // A blank sentence is not a ground.
+        let blank = db
+            .run::<_, DbError, _>(|c| {
+                Ok(
+                    c.execute("UPDATE rules SET episode_basis = '' WHERE id = 'typed'", [])
+                        .is_err(),
+                )
+            })
+            .await
+            .unwrap();
+        assert!(blank);
     }
 
     /// The last version before the replacement of video revisions.

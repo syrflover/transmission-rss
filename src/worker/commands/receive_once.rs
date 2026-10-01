@@ -67,6 +67,7 @@ use crate::{
         AddLabels, Redactor,
     },
     worker::{
+        offsets,
         plan::{picks, rule_destination, ChannelPlan},
         revisions, CycleContext,
     },
@@ -488,7 +489,17 @@ pub async fn execute(
     let Some(collect_folder) = ctx.settings.collection().await.map_err(Retry::store)? else {
         return Ok(ended_early(failed(NO_COLLECT_FOLDER, None)));
     };
-    let (save_path, episode) = rule_destination(Path::new(&collect_folder.folder), plan.rule);
+    // A past item given to a rule that has picked nothing is the rule's first
+    // item: the rule's episode offset is decided before the item is named
+    // (`worker::offsets`).
+    let settled = match payload.rule_id {
+        Some(_) => offsets::settle_one(ctx, &collect_folder.folder, plan.rule, &item.title).await,
+        None => None,
+    };
+    let (save_path, episode) = rule_destination(
+        Path::new(&collect_folder.folder),
+        settled.as_ref().unwrap_or(plan.rule),
+    );
     let rule_id = plan.rule.id.clone();
 
     let redactor = redactor_for(ctx, &channel);

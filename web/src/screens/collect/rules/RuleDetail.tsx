@@ -8,7 +8,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-import { KEYS, subscriptionChanged } from "../cache";
+import { ArchiveBanner } from "../archive/ArchiveBanner";
+import { KEYS, subscriptionChanged, suggestionGone } from "../cache";
 import { changeCreator } from "../subs/api";
 import { useReceive } from "../subs/add/useReceive";
 import { CreatorPicker } from "../subs/CreatorPicker";
@@ -31,6 +32,7 @@ import {
   type Rule,
 } from "./api";
 import { ArchiveMoveNotice } from "./ArchiveMoveNotice";
+import { EpisodeGrounds } from "./EpisodeGrounds";
 import { BLANK_DRAFT, draftOf, fieldsOf, parseEpisode, sameDraft, type Draft } from "./draft";
 import { LinkToSchedule } from "./LinkToSchedule";
 import { ChannelTag, StateBadge } from "./RuleList";
@@ -252,6 +254,11 @@ export function RuleDetail({
     setKnown(fresh);
     setConflict(null);
     onChanged(fresh);
+    if (fresh.state === "archived") {
+      // An archived rule is no longer suggested, and the subscription cards no longer show it.
+      suggestionGone(fresh.id);
+      subscriptionChanged();
+    }
   });
   const movingDirection =
     move.phase.kind === "sending" || move.phase.kind === "waiting" || move.phase.kind === "unconfirmed"
@@ -411,6 +418,9 @@ export function RuleDetail({
           이 규칙은 보관했어요. 새 항목을 받지 않고, 수집 기록은 그대로예요. 복원하면 작품 폴더를 수집 폴더로 되돌린 뒤 다음 RSS 확인부터 새 항목을 받아요. 보관된 동안 올라온 항목은 지난 회차로 남아요.
         </p>
       )}
+      {known && known.state !== "archived" && (
+        <ArchiveBanner ruleId={known.id} busy={busy || moving} onArchive={() => move.submit("archive")} />
+      )}
       {known && (
         <ArchiveMoveNotice
           rule={known}
@@ -550,6 +560,18 @@ export function RuleDetail({
             </p>
           </div>
         </div>
+        {known && (
+          <EpisodeGrounds
+            rule={known}
+            shown={episodeValue === known.episode}
+            disabled={busy || moving}
+            onChanged={(fresh) => {
+              taken(fresh);
+              // The other edits stay; the field takes the stored offset.
+              setDraft((d) => ({ ...d, episode: String(fresh.episode) }));
+            }}
+          />
+        )}
 
         {!isNew && siblings.length > 1 && (
           <OrderRow siblings={siblings} position={position} onMove={setPosition} />

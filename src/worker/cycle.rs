@@ -19,11 +19,13 @@ use super::{
     revisions::{self, Decided, Plan, Selected},
 };
 use crate::{
+    episode_offset::is_open,
     store::{
         channels::{ChannelError, ChannelStore, ChannelWithRules, RuleState},
         history::{HistoryResult, HistoryStore, Millis, Observation, Recorded},
         library::LibraryStore,
         revisions::{NewRevision, RevisionState, RevisionStore},
+        seasons::SeasonStore,
         settings::{SettingsError, SettingsStore},
         status::{ChannelReadResult, StatusStore, TransmissionCounts},
     },
@@ -51,6 +53,9 @@ pub struct CycleContext {
     pub revisions: RevisionStore,
     /// The watch folders the worker rescans (see [`crate::worker::watch`]).
     pub library: LibraryStore,
+    /// The AniList entries linked to the library's seasons (the episodes of
+    /// the seasons before a rule's: [`crate::episode_offset`]).
+    pub seasons: SeasonStore,
     /// What the worker remembers of each watch folder's directories between
     /// scans (see [`crate::worker::watch`]).
     pub scan_cache: super::watch::ScanCaches,
@@ -268,6 +273,14 @@ pub async fn run_cycle(
         .collection()
         .await?
         .map(|settings| PathBuf::from(settings.folder));
+    // The rules whose episode offset the app may still set (see
+    // `offsets::settle`), before the snapshot goes into the plans.
+    let open_rules: HashMap<String, crate::store::channels::Rule> = snapshot
+        .iter()
+        .flat_map(|cwr| &cwr.rules)
+        .filter(|rule| rule.state == RuleState::Active && is_open(rule))
+        .map(|rule| (rule.id.clone(), rule.clone()))
+        .collect();
     // Without a collect folder the items are still judged (and the ones no rule
     // takes recorded), but nothing is added: see `Judgement::Selected` below.
     let plans = make_plans(
@@ -477,7 +490,34 @@ pub async fn run_cycle(
     }
 
     // Items a revision replacement has decided about are left to it.
-    let jobs = leave_revisions(ctx, jobs, &mut report).await;
+    let mut jobs = leave_revisions(ctx, jobs, &mut report).await;
+
+    // A new season's rule gets its episode offset before its first item is
+    // named, so that item is named with it.
+    if let Some(folder) = collect_folder.as_deref().and_then(Path::to_str) {
+        let mut firsts: HashMap<String, Vec<String>> = HashMap::new();
+        for job in &jobs {
+            if let Some(rule_id) = &job.observation.rule_id {
+                if open_rules.contains_key(rule_id) {
+                    firsts
+                        .entry(rule_id.clone())
+                        .or_default()
+                        .push(job.title.clone());
+                }
+            }
+        }
+        let offsets = super::offsets::settle(ctx, folder, &open_rules, &firsts).await;
+        for job in &mut jobs {
+            if let Some(offset) = job
+                .observation
+                .rule_id
+                .as_ref()
+                .and_then(|id| offsets.get(id))
+            {
+                job.episode = *offset as isize;
+            }
+        }
+    }
 
     // Add the selected items.
     let Added {
