@@ -211,7 +211,18 @@ function SuggestionBlock({
         <Labeled label="Anissia 작품">
           {found ? found.subject : unknown} <span className="text-xs text-text-muted">#{animeNo}</span>
         </Labeled>
-        <Labeled label="방영">{found ? weekLabel(found.week, found.air_time) : unknown}</Labeled>
+        <Labeled label="방영">
+          {found ? (
+            weekLabel(found.week, found.air_time)
+          ) : suggestion.comment_airs !== null && !looking ? (
+            <>
+              {weekLabel(suggestion.comment_airs.week, suggestion.comment_airs.time)}{" "}
+              <span className="text-xs text-text-muted">(주석에 적힌 값)</span>
+            </>
+          ) : (
+            unknown
+          )}
+        </Labeled>
         {suggestion.creator !== null ? (
           <Labeled label="자막 제작자">{suggestion.creator}</Labeled>
         ) : (
@@ -357,7 +368,7 @@ function LookupNote({ flow }: { flow: ImportFlow }) {
   if (problem !== null) {
     return (
       <Banner tone="fail" role="status" title="Anissia에서 읽지 못한 값이 있어요">
-        {problem} 읽지 못한 방영 요일·시간은 미정으로 두고, 구독은 그대로 가져올 수 있어요. 체크한 구독의 요일과 시간은
+        {problem} 읽지 못한 방영 요일·시간은 주석에 적힌 값(없으면 미정)으로 두고, 구독은 그대로 가져올 수 있어요. 체크한 구독의 요일과 시간은
         앱이 나중에 Anissia에서 다시 읽어 채워요.
       </Banner>
     );
@@ -493,7 +504,7 @@ export function ReviewStep({ flow }: { flow: ImportFlow }) {
         <p className="text-[13.5px] leading-relaxed text-text-secondary">
           규칙 위 주석에서 Anissia 작품 주소와 자막 제작자를 읽어 구독 제안을 만들었어요. 주석은 사람이 쓴 형식이라
           틀릴 수 있어서, 체크한 제안만 구독으로 가져오고 나머지는 규칙만 가져와요. 방영 요일과 시간은 주석이 아니라
-          Anissia에서 읽어 보여줘요.
+          Anissia에서 읽어 보여주고, Anissia에 닿지 못할 때만 주석에 적힌 값을 그렇다고 밝혀서 보여줘요.
         </p>
         <LookupNote flow={flow} />
         <div className="flex flex-col gap-3">

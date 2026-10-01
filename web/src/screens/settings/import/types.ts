@@ -9,6 +9,11 @@ export interface SuggestionView {
   anime_no: number | null;
   /** The creator the comment names; null is `제작자 미정`. */
   creator: string | null;
+  /**
+   * The weekday (0 is Sunday) and `HH:MM` the comment gives. Shown only while
+   * Anissia has not answered: Anissia's own values win.
+   */
+  comment_airs: { week: number; time: string } | null;
   /** Why an unreadable comment could not be read. */
   reason: string | null;
   /** Why a suggestion that was read cannot become a subscription. */
