@@ -119,6 +119,8 @@ export interface ApplyResult {
       creator: string | null;
       /** False leaves the weekday and time for the app's daily re-read. */
       schedule_known: boolean;
+      /** While the schedule is unknown: the subscription sits on the weekday and time the comment gave (`기타` when it gave none). */
+      schedule_from_comment: boolean;
     }[];
     /** Checked suggestions that did not become subscriptions, with the reason. */
     not_created: { channel: number; rule: number; reason: string }[];

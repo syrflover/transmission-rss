@@ -432,14 +432,65 @@ async fn when_anissia_cannot_be_reached_the_subscription_is_kept_with_an_unknown
     assert_eq!(created["schedule_known"], false);
     assert_eq!(created["subject"], Value::Null);
     assert_eq!(created["creator"], "Team Alpha");
+    assert_eq!(created["schedule_from_comment"], true);
 
     assert_eq!(app.followed().await.len(), 1);
-    // A stand-in snapshot the worker's daily refresh finds due at once.
+    // A stand-in snapshot the worker's daily refresh finds due at once. The
+    // comment above the rule said `Wed. 22:30.`, so until then the anime sits
+    // on Wednesday (Anissia's weekday 3) at that time.
     let snapshot = app.state.anissia.store.anime(1001).await.unwrap().unwrap();
     assert_eq!(snapshot.fetched_at, 0);
-    assert_eq!(snapshot.air_time, None);
+    assert_eq!(snapshot.week, 3);
+    assert_eq!(snapshot.air_time.as_deref(), Some("22:30"));
     let due = app.state.anissia.store.due(NOW).await.unwrap();
     assert_eq!(due.iter().map(|d| d.anime_no).collect::<Vec<_>>(), [1001]);
+}
+
+#[tokio::test]
+async fn a_stand_in_without_a_weekday_in_the_comment_stays_in_the_other_tab() {
+    let app = App::new().await;
+    // The comment names the anime but gives no weekday and time.
+    let content = app.real(
+        "- url: https://feeds.example.test/subsplease?token=REDACTED
+  directory: /media/anime
+  rules:
+    # 알파 쇼
+    # https://anissia.net/anime?animeNo=1001
+    - match: \"[SubsPlease] Alpha Show - \"
+      directory: Alpha Show/Season 01
+",
+    );
+    app.fake.state.lock().unwrap().failing = 100;
+
+    let (status, done) = app.apply(&content, json!([]), json!([pick(0, 0)])).await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    let created = &done["subscriptions"]["created"][0];
+    assert_eq!(created["schedule_known"], false);
+    assert_eq!(created["schedule_from_comment"], false);
+    let snapshot = app.state.anissia.store.anime(1001).await.unwrap().unwrap();
+    assert_eq!(snapshot.fetched_at, 0);
+    assert_eq!(snapshot.week, crate::store::anissia::WEEK_OTHER);
+    assert_eq!(snapshot.air_time, None);
+}
+
+#[tokio::test]
+async fn the_comments_weekday_is_not_used_when_anissia_answered() {
+    let app = App::new().await;
+    let content = app.real(COMMENTED);
+    // Anissia lists Alpha on its Wednesday list; the comment of rule (0, 4)
+    // says Saturday 01:00 for the same anime. Anissia's word stands, and no
+    // stand-in is written.
+    let (status, done) = app.apply(&content, json!([]), json!([pick(0, 0)])).await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    let created = &done["subscriptions"]["created"][0];
+    assert_eq!(created["schedule_known"], true);
+    assert_eq!(created["schedule_from_comment"], false);
+    let snapshot = app.state.anissia.store.anime(1001).await.unwrap().unwrap();
+    assert!(snapshot.fetched_at > 0);
+    assert_eq!(
+        (snapshot.week, snapshot.air_time.as_deref()),
+        (3, Some("22:30"))
+    );
 }
 
 #[tokio::test]

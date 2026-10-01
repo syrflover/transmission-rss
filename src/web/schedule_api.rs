@@ -43,9 +43,11 @@
 //! - an anime the stored Anissia snapshot marks `OFF` is `video: "off"`
 //!   (`결방`) with no subtitle line, whatever the library holds; a paused rule
 //!   says `paused` instead. The stand-in snapshot an import keeps while Anissia
-//!   could not be asked (week `기타`, status `OFF`, `fetched_at` 0) is not
-//!   Anissia's word: it has no weekday so it makes no card, and it would not be
-//!   read as `OFF` if it had.
+//!   could not be asked (status `OFF`, `fetched_at` 0) is not
+//!   Anissia's word and is never read as `OFF`. It sits on the weekday and time
+//!   the legacy comment gave, so its card shows on that weekday until the
+//!   daily refresh replaces it; without a weekday in the comment it is in `기타`
+//!   and makes no card.
 //! - `video_held` / `subtitle_held`: the season the subscription follows holds a
 //!   video / a subtitle for the episode. A subscription whose season is not
 //!   connected holds nothing.
