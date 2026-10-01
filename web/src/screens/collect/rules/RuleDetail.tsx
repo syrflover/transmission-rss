@@ -390,7 +390,7 @@ export function RuleDetail({
           data-testid="paused-banner"
           className="rounded-xl border border-hairline bg-surface-2 px-3.5 py-3 text-[13px] leading-normal text-text-secondary"
         >
-          영상 받기를 꺼서 멈춰 있어요. 새 항목을 받지 않고 작품 폴더는 그대로 두어요. 다시 켜면 다음 RSS 확인부터 맞는 항목을 받아요.
+          영상 받기를 꺼서 멈춰 있어요. 새 항목을 받지 않고 작품 폴더는 그대로 두어요. 다시 켜면 다음 RSS 확인부터 새로 올라오는 항목을 받아요. 멈춘 동안 올라온 항목은 지난 회차로 남아서 직접 골라 받아요.
         </p>
       )}
       {known?.season_blocked && (
@@ -407,7 +407,7 @@ export function RuleDetail({
 
       {known?.state === "archived" && (
         <p className="rounded-xl border border-hairline bg-surface-2 px-3.5 py-3 text-[13px] leading-normal text-text-secondary">
-          이 규칙은 보관했어요. 새 항목을 받지 않고, 수집 기록은 그대로예요. 복원하면 작품 폴더를 수집 폴더로 되돌린 뒤 다음 RSS 확인부터 다시 받아요.
+          이 규칙은 보관했어요. 새 항목을 받지 않고, 수집 기록은 그대로예요. 복원하면 작품 폴더를 수집 폴더로 되돌린 뒤 다음 RSS 확인부터 새 항목을 받아요. 보관된 동안 올라온 항목은 지난 회차로 남아요.
         </p>
       )}
       {known && (

@@ -1219,7 +1219,9 @@ pub fn build_preview(
                 // The cycle's own test, on the same record of the item.
                 let known = Some((item.first_seen_at, item.result));
                 let kind = if plan.is_past(&id, known) {
-                    past_cause = plan.past_cause(&id).map(PastCause::code);
+                    past_cause = plan
+                        .past_cause(&id, item.first_seen_at)
+                        .map(PastCause::code);
                     Kind::Past
                 } else {
                     Kind::Mine

@@ -58,12 +58,20 @@ pub struct ChannelPlan {
     past_since: HashMap<String, PastSince>,
 }
 
-/// Why a rule holds back the items history recorded before some moment, and
-/// that moment.
+/// The moments before which a rule leaves unpicked items to the user: when it
+/// became a subscription and when it was last turned back on. At least one is
+/// set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PastSince {
-    pub at: Millis,
-    pub cause: PastCause,
+    pub subscribed: Option<Millis>,
+    pub resumed: Option<Millis>,
+}
+
+impl PastSince {
+    /// The later moment: what history first saw before it is past.
+    fn until(self) -> Millis {
+        self.subscribed.max(self.resumed).unwrap_or(Millis::MIN)
+    }
 }
 
 /// What made an item past for a rule.
@@ -85,22 +93,13 @@ impl PastCause {
     }
 }
 
-/// The moment before which a rule leaves unpicked items to the user: the later
-/// of the subscription's start and the last time the rule was turned back on.
 /// `None` for a rule that is no subscription and was never turned back on.
 fn past_since(rule: &Rule) -> Option<PastSince> {
-    let subscribed = rule.subscription.as_ref().map(|s| PastSince {
-        at: s.subscribed_at,
-        cause: PastCause::Subscribed,
-    });
-    let resumed = rule.resumed_at.map(|at| PastSince {
-        at,
-        cause: PastCause::Resumed,
-    });
-    match (subscribed, resumed) {
-        (Some(s), Some(r)) => Some(if r.at >= s.at { r } else { s }),
-        (s, r) => s.or(r),
-    }
+    let subscribed = rule.subscription.as_ref().map(|s| s.subscribed_at);
+    (subscribed.is_some() || rule.resumed_at.is_some()).then_some(PastSince {
+        subscribed,
+        resumed: rule.resumed_at,
+    })
 }
 
 impl ChannelPlan {
@@ -152,9 +151,16 @@ impl ChannelPlan {
         !self.past_since.is_empty()
     }
 
-    /// Why `rule_id` holds back past items, if it does.
-    pub fn past_cause(&self, rule_id: &str) -> Option<PastCause> {
-        self.past_since.get(rule_id).map(|since| since.cause)
+    /// Why an item of `rule_id` first seen at `first_seen_at` is past: it came
+    /// before the subscription, or else while the rule was off. `None` when the
+    /// rule holds nothing back.
+    pub fn past_cause(&self, rule_id: &str, first_seen_at: Millis) -> Option<PastCause> {
+        let since = self.past_since.get(rule_id)?;
+        Some(if since.subscribed.is_some_and(|at| first_seen_at < at) {
+            PastCause::Subscribed
+        } else {
+            PastCause::Resumed
+        })
     }
 
     /// Whether `rule_id` must leave an item alone because the item is past:
@@ -173,7 +179,7 @@ impl ChannelPlan {
         matches!(
             known,
             Some((first_seen_at, HistoryResult::NoMatch | HistoryResult::Excluded))
-                if first_seen_at < since.at
+                if first_seen_at < since.until()
         )
     }
 
@@ -425,18 +431,20 @@ mod tests {
         let resumed = held(None, Some(100));
         assert!(resumed.is_past("r", seen(99)));
         assert!(!resumed.is_past("r", seen(100)));
-        assert_eq!(resumed.past_cause("r"), Some(PastCause::Resumed));
+        assert_eq!(resumed.past_cause("r", 99), Some(PastCause::Resumed));
 
-        // A subscription that resumed later is held back to the resume.
+        // A subscription that resumed later is held back to the resume; an
+        // item from before the subscription says so.
         let both = held(Some(50), Some(100));
         assert!(both.is_past("r", seen(99)));
-        assert_eq!(both.past_cause("r"), Some(PastCause::Resumed));
+        assert_eq!(both.past_cause("r", 99), Some(PastCause::Resumed));
+        assert_eq!(both.past_cause("r", 49), Some(PastCause::Subscribed));
         // One that resumed before it subscribed, to the subscription.
         let subscribed_later = held(Some(100), Some(50));
         assert!(subscribed_later.is_past("r", seen(99)));
         assert!(!subscribed_later.is_past("r", seen(100)));
         assert_eq!(
-            subscribed_later.past_cause("r"),
+            subscribed_later.past_cause("r", 99),
             Some(PastCause::Subscribed)
         );
 
