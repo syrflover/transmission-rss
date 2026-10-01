@@ -81,7 +81,7 @@ DB 테이블을 그대로 덤프하는 형식이 아니며, YAML의 버전은 �
 | `rules[].state` | `active`·`paused`·`archived`이에요. `paused`는 `영상 받기`를 끈 규칙이고 `archived`는 보관한 규칙이며, 둘 다 순서를 유지한 채 수집하지 않아요([방영작 구독](collection.md#방영작-구독), [규칙 보관](collection.md#규칙-보관)). |
 | `rules[].match` | 제목 대기 구독은 빈 문자열이 아니라 `null`이에요. `null`인 규칙은 어떤 항목에도 맞지 않아요. |
 | `rules[].episode_auto` | 회차 변환을 자동으로 정했으면 `true`이고, 사용자가 직접 넣었으면 `false`예요([영상 회차 변환](collection.md#영상-회차-변환)). |
-| `rules[].subscription` | 방영작 구독이면 `anissia_anime_no`, 자막을 받는 방식 `subtitles`(`follow`·`undecided`·`none`, 각각 제작자 따라 받기·제작자 미정·받지 않음), 따라갈 자막 제작자 `creator`(`follow`일 때만 값이 있고 나머지는 `null`), 규칙이 받은 영상이 속하는 `season_id`(아직 없으면 `null`)를 담고, 구독이 아닌 규칙은 `null`이에요. `season_id`가 있으면 그 시즌의 `anissia_anime_no`와 같아야 하며, 다르면 가져오기를 거부해요. |
+| `rules[].subscription` | 방영작 구독이면 `anissia_anime_no`, 자막을 받는 방식 `subtitles`(`follow`·`undecided`·`none`, 각각 제작자 따라 받기·제작자 미정·받지 않음), 따라갈 자막 제작자 `creator`(`follow`면 값이 있고 `undecided`면 `null`이며, `none`이면 `자막 받기`를 끄기 전의 제작자를 남겨 다시 켤 때 되돌려요), 규칙이 받은 영상이 속하는 `season_id`(아직 없으면 `null`)를 담고, 구독이 아닌 규칙은 `null`이에요. `season_id`가 있으면 그 시즌의 `anissia_anime_no`와 같아야 하며, 다르면 가져오기를 거부해요. |
 
 기존 `episode`는 영상 이름 변경에 전달하는 값이며, 자막 출처의 회차 대응으로 전용하거나 복사하지 않아요.
 ID가 없는 기존 YAML에서 새 앱 항목을 추가할 때도 새 ID를 발급하고, 기존 파일에 없는 작품 연결·회차 대응을 추측해 생성하지 않아요.
