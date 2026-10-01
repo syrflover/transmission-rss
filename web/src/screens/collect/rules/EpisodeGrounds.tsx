@@ -194,7 +194,8 @@ function pendingLines(undo: EpisodeUndo): string[] {
 /**
  * What the undo box says: the undo under way and its files so far, or the last
  * one that ended. One that stopped with files still to rename shows them,
- * whatever the rule's mark, until it is carried on. A finished undo keeps
+ * whatever the rule's mark, until it is carried on; `이어서 되돌리기` only while
+ * the rule is not automatic, as the server accepts it. A finished undo keeps
  * saying which files it could not rename; its summary shows only right after
  * this screen followed it. A failed one shows while the value it was about is
  * still the rule's.
@@ -249,6 +250,20 @@ function undoOutcome(phase: UndoPhase, last: EpisodeUndo | null, undone: boolean
   }
   if (last === null) return null;
   const pending = pendingLines(last);
+  if (pending.length > 0 && last.from !== null && rule.episode_auto) {
+    // The rule is automatic again (an import marked it so): the server
+    // carries this undo on no more, and a new `되돌리기` plans the files anew.
+    return {
+      title: "되돌리다 멈췄어요.",
+      detail:
+        `영상 ${pending.length}개는 이름을 바꾸지 않은 채 남았어요. ` +
+        "그 뒤 규칙이 다시 자동 값이 되어 이 되돌리기는 이어갈 수 없어요. " +
+        "되돌리려면 `되돌리기`를 눌러 주세요. 지금 값으로 영상을 다시 살펴봐요.",
+      kept: [...pending, ...keptLines(last)],
+      failed: true,
+      resume: null,
+    };
+  }
   if (pending.length > 0 && last.from !== null) {
     // A paused undo says itself why it stopped; a failed one (an internal
     // error) gets the reason after the summary.
