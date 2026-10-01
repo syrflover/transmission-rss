@@ -59,6 +59,7 @@ const NO_COUNTS: HistoryCounts = {
   excluded: 0,
   duplicate: 0,
   add_failed: 0,
+  version_unknown: 0,
 };
 
 /**

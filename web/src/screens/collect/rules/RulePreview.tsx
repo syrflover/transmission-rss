@@ -20,6 +20,7 @@ const STORED: Record<string, string> = {
   excluded: "제외",
   duplicate: "중복",
   add_failed: "추가 실패",
+  version_unknown: "버전 미상",
 };
 
 /**

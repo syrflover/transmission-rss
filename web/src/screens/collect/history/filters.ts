@@ -13,6 +13,7 @@ export const RESULT_LABEL: Record<HistoryResult, string> = {
   excluded: "제외",
   duplicate: "중복",
   add_failed: "추가 실패",
+  version_unknown: "버전 미상",
 };
 
 export interface ResultChip {
