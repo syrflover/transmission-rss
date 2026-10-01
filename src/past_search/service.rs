@@ -51,10 +51,14 @@ pub struct Spec {
     pub save_path: std::path::PathBuf,
     pub offset: i64,
     pub season: Option<u32>,
-    /// The channel's items history says Transmission holds.
+    /// The channel's items history says Transmission holds. Dropped once the
+    /// search has built its picture of the work.
     pub settled: Vec<HistoryItem>,
-    /// Every title history holds for the channel.
+    /// The titles history holds for the channel. Dropped like `settled`.
     pub titles: Vec<String>,
+    /// Whether the channel's history is longer than what `settled` and
+    /// `titles` hold (the newest are held).
+    pub history_cut: bool,
     /// Redacts the channel's secret values from what is reported.
     pub redactor: Redactor,
 }
@@ -315,14 +319,25 @@ impl PastSearch {
             season,
             settled,
             titles,
+            history_cut,
             redactor,
         } = spec;
 
-        let files = tokio::task::spawn_blocking(move || world::read_folder(&save_path))
+        // Reading the folder and going through the history are blocking work
+        // on as much as a few thousand records; `settled` and `titles` are
+        // dropped with the closure, not held for the minute a search can take.
+        let world = {
+            let rule_id = rule.id.clone();
+            tokio::task::spawn_blocking(move || {
+                let files = world::read_folder(&save_path)?;
+                Ok(world::build(
+                    offset, season, files, &rule_id, &settled, &titles,
+                ))
+            })
             .await
             .map_err(|_| "작품 폴더를 읽는 중 오류가 났어요.".to_owned())?
-            .map_err(|err| format!("작품 폴더를 읽지 못했어요: {}", err.kind()))?;
-        let world = world::build(offset, season, files, &rule.id, &settled, &titles);
+            .map_err(|err: std::io::Error| format!("작품 폴더를 읽지 못했어요: {}", err.kind()))?
+        };
 
         let judging: Arc<dyn Fn(&str) -> bool + Send + Sync> = {
             let (channel, rule) = (channel.clone(), rule.clone());
@@ -393,11 +408,18 @@ impl PastSearch {
                 })
             })
             .collect();
+        let mut notes = found.notes;
+        if history_cut {
+            notes.push(
+                "채널의 기록이 많아서 최근 기록만 살폈어요. 오래전에 받은 항목은 받은 것으로 보이지 않을 수 있어요."
+                    .to_owned(),
+            );
+        }
         Ok(Outcome {
             range,
             query,
             preview,
-            notes: found.notes,
+            notes,
             first_full: found.first_full,
             extra_sent: found.extra_sent,
             extra_needed: found.extra_needed,

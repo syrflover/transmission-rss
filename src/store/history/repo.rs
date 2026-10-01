@@ -415,6 +415,23 @@ pub fn titles_of_channel(conn: &Connection, channel_id: &str) -> Result<Vec<(i64
     Ok(titles)
 }
 
+/// The ID and title of the `limit` newest records of the channel, newest first.
+pub fn recent_titles_of_channel(
+    conn: &Connection,
+    channel_id: &str,
+    limit: usize,
+) -> Result<Vec<(i64, String)>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, title FROM history_items WHERE channel_id = ?1 ORDER BY id DESC LIMIT ?2",
+    )?;
+    let titles = stmt
+        .query_map(params![channel_id, limit as i64], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(titles)
+}
+
 /// How many items have each result, optionally within one channel.
 pub fn counts(conn: &Connection, channel_id: Option<&str>) -> Result<Vec<(HistoryResult, i64)>> {
     let mut stmt = conn.prepare(

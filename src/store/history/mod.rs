@@ -129,6 +129,19 @@ impl HistoryStore {
             .await
     }
 
+    /// The ID and title of the `limit` newest records of the channel
+    /// `channel_id`, newest first: [`Self::titles_of_channel`] for a channel
+    /// whose history may be long.
+    pub async fn recent_titles_of_channel(
+        &self,
+        channel_id: String,
+        limit: usize,
+    ) -> Result<Vec<(i64, String)>, HistoryError> {
+        self.db
+            .run(move |c| repo::recent_titles_of_channel(c, &channel_id, limit))
+            .await
+    }
+
     /// How many records have each result (results with none are left out),
     /// optionally within one channel.
     pub async fn counts(

@@ -53,8 +53,11 @@ pub fn routes() -> Router<AppState> {
         .route("/past-searches/{search_id}", delete(cancel).get(poll))
 }
 
-/// The most history items read for a search's picture of the work.
+/// The most history items read for a search's picture of the work, and the
+/// most titles read to tell a video's revision. The newest are read; a longer
+/// history is told in the search's notes.
 const MAX_SETTLED: usize = 20_000;
+const MAX_TITLES: usize = 20_000;
 /// The longest search words.
 const MAX_QUERY_CHARS: usize = 300;
 
@@ -216,9 +219,14 @@ fn body<T>(parsed: Result<Json<T>, JsonRejection>) -> Result<T, ApiError> {
 }
 
 /// The channel's items that history says Transmission holds.
-async fn settled_items(state: &AppState, channel_id: &str) -> Result<Vec<HistoryItem>, ApiError> {
+/// Returns the items, newest first, and whether older ones were left out.
+async fn settled_items(
+    state: &AppState,
+    channel_id: &str,
+) -> Result<(Vec<HistoryItem>, bool), ApiError> {
     let mut items = Vec::new();
     let mut after = None;
+    let mut cut = false;
     loop {
         let page = state
             .history
@@ -234,10 +242,14 @@ async fn settled_items(state: &AppState, channel_id: &str) -> Result<Vec<History
         items.extend(page.items);
         match page.next {
             Some(next) if items.len() < MAX_SETTLED => after = Some(next),
-            _ => break,
+            Some(_) => {
+                cut = true;
+                break;
+            }
+            None => break,
         }
     }
-    Ok(items)
+    Ok((items, cut))
 }
 
 async fn start(
@@ -274,15 +286,19 @@ async fn start(
     }
 
     let (save_path, episode) = rule_destination(FsPath::new(&collect), &rule);
-    let settled = settled_items(&state, &channel.id).await?;
-    let titles = state
+    let (settled, settled_cut) = settled_items(&state, &channel.id).await?;
+    // One more than the cap is asked for, to tell a history of exactly that
+    // length from a longer one.
+    let mut titles: Vec<String> = state
         .history
-        .titles_of_channel(channel.id.clone())
+        .recent_titles_of_channel(channel.id.clone(), MAX_TITLES + 1)
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?
         .into_iter()
         .map(|(_, title)| title)
         .collect();
+    let history_cut = settled_cut || titles.len() > MAX_TITLES;
+    titles.truncate(MAX_TITLES);
     let redactor = ChannelPlan::new(
         crate::store::channels::ChannelWithRules {
             channel: channel.clone(),
@@ -298,6 +314,7 @@ async fn start(
         save_path,
         settled,
         titles,
+        history_cut,
         redactor,
         range: Range {
             from: b.from,
