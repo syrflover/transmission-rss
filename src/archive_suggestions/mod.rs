@@ -215,7 +215,8 @@ pub struct Facts<'a> {
     pub last_received: &'a HashMap<String, Millis>,
     /// When the app first had each rule, by rule ID.
     pub started: &'a HashMap<String, Millis>,
-    /// When history first saw an item of each channel, by channel ID.
+    /// When each channel was first read (the time of its first history record,
+    /// stored once), by channel ID.
     pub first_read: &'a HashMap<String, Millis>,
     /// The [`read_day`] of the oldest of each channel's newest [`QUIET_DAYS`]
     /// days on which the worker read its feed, by channel ID. A channel with
@@ -251,7 +252,11 @@ impl Facts<'_> {
             rule.resumed_at,
             subscription.map(|s| s.subscribed_at),
             subscription.and_then(|s| s.titled_at),
-            self.first_read.get(&rule.channel_id).copied(),
+            // A first read stamped by a clock that was ahead is no start.
+            self.first_read
+                .get(&rule.channel_id)
+                .copied()
+                .filter(|&at| at <= self.now),
         ]
         .into_iter()
         .flatten()

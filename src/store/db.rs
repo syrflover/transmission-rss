@@ -1154,21 +1154,32 @@ mod tests {
         assert!(refused.is_err());
     }
 
-    /// The migration that stored when each channel was first read is number 27.
-    const BEFORE_FIRST_READS: usize = 26;
+    /// How many migrations come before the one that stored the first read of
+    /// each channel (found by what it creates, so it stays right when other
+    /// migrations are numbered ahead of it).
+    fn before_first_reads() -> usize {
+        MIGRATIONS
+            .iter()
+            .position(|m| {
+                matches!(m, Migration::Sql(sql) if sql.contains("CREATE TABLE history_first_reads"))
+            })
+            .expect("the migration of the first reads")
+    }
 
     #[tokio::test]
-    async fn a_history_from_before_first_reads_takes_each_channels_earliest_first_seen_time() {
+    async fn a_history_from_before_first_reads_takes_the_items_first_seen_earliest_as_the_first_read(
+    ) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("app.db");
         {
-            let conn = database_at(&path, BEFORE_FIRST_READS);
+            let conn = database_at(&path, before_first_reads());
             conn.execute_batch(
                 "INSERT INTO history_items (channel_id, channel_label, identity_key, title, link,
                          first_seen_at, last_seen_at, result, result_at) VALUES
                      ('c1', 'feed', 'guid:a', 'A', 'x', 300, 900, 'no_match', 300),
                      ('c1', 'feed', 'guid:b', 'B', 'x', 100, 900, 'no_match', 100),
                      ('c1', 'feed', 'guid:c', 'C', 'x', 200, 900, 'no_match', 200),
+                     ('c1', 'feed', 'guid:e', 'E', 'x', 100, 900, 'no_match', 100),
                      ('c2', 'feed', 'guid:d', 'D', 'x', 50, 50, 'no_match', 50);",
             )
             .unwrap();
@@ -1177,7 +1188,7 @@ mod tests {
         let db = Db::open(&path).await.unwrap();
 
         assert_eq!(version_of(&db).await, MIGRATIONS.len());
-        let (found, items) = db
+        let found = db
             .run::<_, DbError, _>(|c| {
                 let mut stmt = c.prepare(
                     "SELECT channel_id || '=' || first_read_at FROM history_first_reads
@@ -1188,12 +1199,23 @@ mod tests {
                     .collect::<rusqlite::Result<Vec<_>>>()?;
                 let items: i64 =
                     c.query_row("SELECT count(*) FROM history_items", [], |r| r.get(0))?;
-                Ok((found, items))
+                let marked: String = c.query_row(
+                    "SELECT group_concat(identity_key, ',') FROM
+                         (SELECT identity_key FROM history_items WHERE first_read = 1
+                          ORDER BY identity_key)",
+                    [],
+                    |r| r.get(0),
+                )?;
+                Ok((found, items, marked))
             })
             .await
             .unwrap();
-        assert_eq!(found, ["c1=100", "c2=50"]);
-        assert_eq!(items, 4, "the records are untouched");
+        assert_eq!(found.0, ["c1=100", "c2=50"]);
+        assert_eq!(found.1, 5, "the records are untouched");
+        assert_eq!(
+            found.2, "guid:b,guid:d,guid:e",
+            "the items first seen at the channel's earliest time are its first read's"
+        );
     }
 
     #[tokio::test]

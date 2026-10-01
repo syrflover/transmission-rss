@@ -325,6 +325,67 @@ async fn a_clock_that_goes_back_does_not_move_the_first_read_boundary() {
     }
 }
 
+/// A subscription that took nothing of the first read leaves the items the feed
+/// held then to the user, whatever the clock did afterwards. An item that came
+/// after the first read and that no rule wanted at the time is not one of them:
+/// when the subscription's phrase is changed to match it, the cycle receives it.
+/// The clock is moved by `before_first_read` before the first read and by
+/// `after_first_read` after it, so the later item is first seen before the time
+/// the first read was stamped with.
+async fn a_later_item_is_not_the_first_reads_whatever_the_clock_did(
+    before_first_read: i64,
+    after_first_read: i64,
+) {
+    let (n1, other) = (
+        nova(1),
+        release(301, "[SubsPlease] Other Show - 01 (1080p) [IJKL0001].mkv"),
+    );
+    let s = Scene::new(&[&n1]).await;
+    s.h.advance(1_000);
+    let subscription = s.subscribe().await;
+
+    s.h.advance(before_first_read);
+    s.cycle().await;
+    assert!(s.hashes().is_empty());
+
+    s.h.advance(after_first_read);
+    s.feed(&[&n1, &other]);
+    s.cycle().await;
+    assert!(s.hashes().is_empty());
+    let first_read = s.h.item("Nova Quest - 01").await.first_seen_at;
+    let later = s.h.item("Other Show - 01").await;
+    assert!(later.first_seen_at < first_read, "the clock went back");
+    assert_eq!(later.result, HistoryResult::NoMatch);
+
+    // The subscription now follows Other Show: its item came after the
+    // subscription began and was not on the feed at the first read.
+    let mut input = subscription.to_input();
+    input.r#match = Some("Other Show".to_owned());
+    s.h.channels
+        .update_rule(
+            &subscription.id,
+            subscription.version,
+            &s.channel.channel.id,
+            input,
+        )
+        .await
+        .unwrap();
+    let report = s.cycle().await;
+    assert_eq!(report.added, 1, "{report:?}");
+    assert_eq!(s.hashes(), vec![hash(301)]);
+}
+
+#[tokio::test]
+async fn a_first_read_stamped_by_a_clock_that_was_ahead_is_not_a_boundary_for_later_items() {
+    const DAY: i64 = 86_400_000;
+    a_later_item_is_not_the_first_reads_whatever_the_clock_did(DAY, -(DAY - 3_600_000)).await;
+}
+
+#[tokio::test]
+async fn an_item_first_seen_before_the_first_reads_time_but_after_it_in_truth_is_not_past() {
+    a_later_item_is_not_the_first_reads_whatever_the_clock_did(2 * 3_600_000, -3_600_000).await;
+}
+
 #[tokio::test]
 async fn a_subscription_added_to_a_channel_that_has_history_keeps_its_own_boundary() {
     let (n1, n2) = (nova(1), nova(2));
@@ -402,12 +463,18 @@ async fn a_history_that_cannot_say_when_the_channel_was_first_read_holds_its_sub
     assert_eq!(report.added, 1, "{report:?}");
     assert_eq!(s.hashes(), vec![hash(201)]);
 
-    // Once history can be read again, what the subscription sat out is past.
+    // Once history can be read again (the stored time mended, and the items of
+    // that first cycle marked as the first read's, which a read that had worked
+    // would have done), what the subscription sat out is past.
     let first_read = s.h.item("Nova Quest - 01").await.first_seen_at;
     s.h.db
         .run::<_, transmission_rss::store::DbError, _>(move |c| {
             c.execute(
                 "UPDATE history_first_reads SET first_read_at = ?1",
+                [first_read],
+            )?;
+            c.execute(
+                "UPDATE history_items SET first_read = 1 WHERE first_seen_at = ?1",
                 [first_read],
             )?;
             Ok(())

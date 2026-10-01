@@ -24,7 +24,7 @@ use crate::{
     anissia::{fake::Fake, Anissia},
     store::{
         channels::{ChannelInput, NewSubscription, RuleInput, SubtitleMode},
-        history::{HistoryQuery, HistoryResult, Observation},
+        history::{HistoryQuery, HistoryResult, KnownItem, Observation},
         Db,
     },
     worker::{plan::ChannelPlan, Clock},
@@ -567,12 +567,27 @@ async fn items_history_recorded_before_the_import_are_past_for_the_new_subscript
         .await
         .unwrap();
     let known = known.get(&format!("title:{title}")).copied();
-    assert_eq!(known, Some((seen, HistoryResult::NoMatch)));
+    assert_eq!(
+        known,
+        Some(KnownItem {
+            first_seen_at: seen,
+            result: HistoryResult::NoMatch,
+            // The first record of a channel the import made.
+            first_read: true
+        })
+    );
     let rule_id = channel.rules[0].id.clone();
     let plan = ChannelPlan::new(channel, std::path::Path::new(&folder));
     assert!(plan.is_past(&rule_id, known));
     // An item first seen after the import is not past.
-    assert!(!plan.is_past(&rule_id, Some((NOW + 1, HistoryResult::NoMatch))));
+    assert!(!plan.is_past(
+        &rule_id,
+        Some(KnownItem {
+            first_seen_at: NOW + 1,
+            result: HistoryResult::NoMatch,
+            first_read: false
+        })
+    ));
 }
 
 #[tokio::test]

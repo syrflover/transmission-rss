@@ -45,7 +45,8 @@ mod tests;
 pub use identity::{identity_key, stored_link};
 pub use model::{
     CycleState, HistoryChange, HistoryCursor, HistoryItem, HistoryPage, HistoryQuery,
-    HistoryResult, Millis, Observation, Recorded, Transition, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE,
+    HistoryResult, KnownItem, Millis, Observation, Recorded, Transition, DEFAULT_PAGE_SIZE,
+    MAX_PAGE_SIZE,
 };
 
 use std::collections::HashSet;
@@ -172,14 +173,15 @@ impl HistoryStore {
             .map(|hashes| hashes.into_iter().collect())
     }
 
-    /// When each of the given items of a channel was first seen and what became
-    /// of it, by identity key: what a cycle needs to tell the items a rule has
-    /// not seen yet from the ones already in history.
+    /// When each of the given items of a channel was first seen, what became of
+    /// it and whether the channel's first read recorded it, by identity key:
+    /// what a cycle needs to tell the items a rule has not seen yet from the
+    /// ones already in history.
     pub async fn known_items(
         &self,
         channel_id: String,
         keys: Vec<String>,
-    ) -> Result<std::collections::HashMap<String, (Millis, HistoryResult)>, HistoryError> {
+    ) -> Result<std::collections::HashMap<String, KnownItem>, HistoryError> {
         if keys.is_empty() {
             return Ok(Default::default());
         }
@@ -192,9 +194,10 @@ impl HistoryStore {
     /// with no record is left out. A channel's first record is its first read,
     /// whose time is stored when it is written and never moves afterwards, not
     /// even when a later record carries an earlier time (the clock went back).
-    /// It is what the past-items rule tells the items the
-    /// feed already held from the later ones
-    /// ([`crate::worker::plan::ChannelPlan::with_first_read_at`]).
+    /// A channel without one is read for the first time by the next cycle
+    /// ([`crate::worker::plan::ChannelPlan::for_first_read`]). Which items the
+    /// feed already held then is told by the items themselves
+    /// ([`HistoryItem::first_read`]), not by comparing times with this one.
     pub async fn first_sightings(
         &self,
         channel_ids: Vec<String>,

@@ -418,6 +418,16 @@ fn a_rule_from_before_the_stamp_counts_from_when_its_channel_was_first_read() {
 }
 
 #[test]
+fn a_first_read_stamped_in_the_future_does_not_start_the_weeks() {
+    let mut world = World::with(vec![rule("r1", Some("Work"))]);
+    world.started.insert("r1".into(), NOW - 9 * WEEK);
+    // The channel's first read has a time ahead of now (a clock that was ahead
+    // then): the rule counts from when it started instead.
+    world.first_read.insert("c1".into(), NOW + 20 * WEEK);
+    assert_eq!(world.quiet_rules(&[]), ["r1"]);
+}
+
+#[test]
 fn a_window_that_was_cut_short_or_a_broken_regex_gives_no_quiet_ground() {
     let mut broken = rule("broken", Some("(unclosed"));
     broken.regex = true;

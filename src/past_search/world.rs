@@ -135,6 +135,7 @@ mod tests {
 
     fn item(key: &str, title: &str, rule: Option<&str>, result: HistoryResult) -> HistoryItem {
         HistoryItem {
+            first_read: false,
             id: 1,
             channel_id: "c".into(),
             channel_label: "c".into(),

@@ -232,7 +232,7 @@ async fn first_sighting_creates_a_record() {
 }
 
 #[tokio::test]
-async fn a_channels_first_sighting_is_its_earliest_first_seen_time() {
+async fn a_channels_first_sighting_is_the_time_of_its_first_record() {
     let (_dir, _db, history) = store().await;
     history
         .record(2_000, vec![obs("a", HistoryResult::NoMatch)])
@@ -268,6 +268,56 @@ async fn a_channels_first_sighting_is_its_earliest_first_seen_time() {
     assert_eq!(found.get("c2"), Some(&1_000));
     assert!(!found.contains_key("unknown"), "{found:?}");
     assert!(history.first_sightings(vec![]).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn the_items_of_a_channels_first_read_are_marked_whatever_the_clock_does_after() {
+    let (_dir, _db, history) = store().await;
+    let first = |key: &str| {
+        let history = history.clone();
+        let key = key.to_owned();
+        async move {
+            history
+                .item_by_key("c1".into(), key)
+                .await
+                .unwrap()
+                .unwrap()
+                .first_read
+        }
+    };
+    // The first cycle writes in two calls with one time; the first read is both.
+    history
+        .record(2_000, vec![obs("a", HistoryResult::NoMatch)])
+        .await
+        .unwrap();
+    history
+        .record(2_000, vec![obs("b", HistoryResult::Received)])
+        .await
+        .unwrap();
+    // A later cycle, and ones whose time is before or far after the first.
+    for (at, key) in [(3_000, "next"), (500, "back"), (9_999_999, "ahead")] {
+        history
+            .record(at, vec![obs(key, HistoryResult::NoMatch)])
+            .await
+            .unwrap();
+    }
+    // Seeing a first-read item again keeps it marked.
+    history
+        .record(5_000, vec![obs("a", HistoryResult::NoMatch)])
+        .await
+        .unwrap();
+
+    assert!(first("a").await && first("b").await);
+    for key in ["next", "back", "ahead"] {
+        assert!(!first(key).await, "{key}");
+    }
+    let known = history
+        .known_items("c1".into(), vec!["a".into(), "back".into(), "none".into()])
+        .await
+        .unwrap();
+    assert_eq!(known.len(), 2);
+    assert!(known["a"].first_read && !known["back"].first_read);
+    assert_eq!(known["back"].first_seen_at, 500);
 }
 
 #[tokio::test]

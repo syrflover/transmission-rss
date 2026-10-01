@@ -213,6 +213,7 @@ async fn ended(
 /// The history item a result would be.
 pub fn past_item(payload: &ReceivePast, channel_id: &str, id: i64) -> HistoryItem {
     HistoryItem {
+        first_read: false,
         id,
         channel_id: channel_id.to_owned(),
         channel_label: String::new(),

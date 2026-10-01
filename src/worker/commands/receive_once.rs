@@ -1303,6 +1303,7 @@ mod tests {
 
     fn item(result: HistoryResult, rule_id: Option<&str>) -> HistoryItem {
         HistoryItem {
+            first_read: false,
             id: 1,
             channel_id: "c1".into(),
             channel_label: "https://feed.test/rss".into(),
