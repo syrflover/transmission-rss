@@ -33,7 +33,12 @@
 //!    its result;
 //! 4. when this command's add put the torrent in, give the file its `trname`
 //!    name with the rule's episode conversion and take the command's label off.
-//!    A torrent Transmission already had from elsewhere is not renamed.
+//!    A torrent Transmission already had from elsewhere is not renamed, nor is
+//!    one whose name is taken by another file. A `버전 미상` item (a higher
+//!    revision the worker did not receive) is not renamed either: receiving it
+//!    is the confirmation that starts its replacement
+//!    ([`crate::worker::revisions::confirm`]), which names it once the old
+//!    video is gone.
 //!
 //! The worker ends the command after step 4. The result lands on the history
 //! item (`received`, `duplicate` or `add_failed` with a reason) and on the
@@ -64,7 +69,7 @@ use crate::{
     worker::{
         offsets,
         plan::{picks, rule_destination, ChannelPlan},
-        CycleContext,
+        revisions, CycleContext,
     },
 };
 
@@ -139,11 +144,15 @@ impl ReceiveOnce {
 }
 
 /// Whether a retry may repair an item with this result. The one place that
-/// says which results are offered `다시 받기`: `add_failed` now, and `버전 미상`
-/// (a revision without a CRC32 that was not received automatically) once that
-/// result exists.
+/// says which results are offered `다시 받기`: `add_failed`, and `버전 미상`
+/// (`version_unknown`: a higher revision the worker did not receive because it
+/// could not tell the revisions apart; receiving it is the person's
+/// confirmation, see [`crate::worker::revisions`]).
 pub fn is_retryable_result(result: HistoryResult) -> bool {
-    matches!(result, HistoryResult::AddFailed)
+    matches!(
+        result,
+        HistoryResult::AddFailed | HistoryResult::VersionUnknown
+    )
 }
 
 /// Why a history item cannot be retried.
@@ -276,10 +285,12 @@ pub fn adoption_plan<'a>(
     }
     inactive(rule)?;
     match item.result {
-        HistoryResult::AddFailed if item.rule_id.as_deref() == Some(rule.id.as_str()) => {}
-        // A failure that no rule is recorded on belongs to no rule at all.
-        HistoryResult::AddFailed if item.rule_id.is_none() => return Err(NotRetryable::NoRule),
-        HistoryResult::AddFailed => return Err(NotRetryable::OtherRule),
+        result if is_retryable_result(result) => match item.rule_id.as_deref() {
+            Some(id) if id == rule.id => {}
+            // A failure that no rule is recorded on belongs to no rule at all.
+            None => return Err(NotRetryable::NoRule),
+            Some(_) => return Err(NotRetryable::OtherRule),
+        },
         _ if picks(channel, rule, &item.title) => {}
         _ => return Err(NotRetryable::NotMatching),
     }
@@ -552,9 +563,14 @@ pub async fn execute(
                 .await
                 .map_err(Retry::store)?
                 .unwrap_or(result);
+            // A `버전 미상` revision received this way replaces the folder's
+            // video: the request is the person's confirmation. Its torrent
+            // keeps its received name until the old video is gone.
+            let replacing = item.result == HistoryResult::VersionUnknown
+                && revisions::confirm(ctx, item.id, &item.title, now(), &torrent.hash).await;
             // Only a torrent this command put in is renamed. One that was there
             // already keeps its name and gets no note.
-            let rename = own.then_some(Rename {
+            let rename = (own && !replacing).then_some(Rename {
                 item_id: item.id,
                 hash: torrent.hash,
                 save_path,
@@ -709,6 +725,8 @@ pub const NAME_NOT_DERIVED: &str =
     "파일 이름에서 작품과 회차를 알아내지 못해서 원래 이름 그대로 뒀어요.";
 /// The torrent has more than one file; `trname` names a single file.
 pub const SEVERAL_FILES: &str = "파일이 여러 개인 토렌트라 이름을 바꾸지 않았어요.";
+/// The name `trname` gives is taken by another file in the folder.
+pub const NAME_TAKEN: &str = "같은 회차 이름의 파일이 이미 있어서 원래 이름 그대로 뒀어요.";
 /// Renaming was tried and did not go through.
 pub const NAME_NOT_CHANGED: &str = "이름을 바꾸지 못해서 원래 이름 그대로 뒀어요.";
 
@@ -759,6 +777,14 @@ pub async fn rename(
         };
         if new_name == old_name {
             return RenameResult::Unchanged;
+        }
+        // Never onto a name that is taken (see `transmission::rename_torrent`).
+        let folder = torrent
+            .download_dir
+            .as_deref()
+            .map_or(rename.save_path.as_path(), Path::new);
+        if std::fs::symlink_metadata(folder.join(&new_name)).is_ok() {
+            return RenameResult::Kept(NAME_TAKEN);
         }
         match transmission
             .torrent_rename_path(vec![Id::Hash(rename.hash.clone())], old_name, new_name)

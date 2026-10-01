@@ -159,7 +159,10 @@ pub fn title_candidates(
         let key = work_key(&release.work);
         let taken = matches!(
             item.result,
-            HistoryResult::Received | HistoryResult::Duplicate | HistoryResult::AddFailed
+            HistoryResult::Received
+                | HistoryResult::Duplicate
+                | HistoryResult::AddFailed
+                | HistoryResult::VersionUnknown
         ) || matches!(plan.judge(&item.title), Judgement::Selected { .. });
         let unmatched = item.result == HistoryResult::NoMatch;
         match index.get(&key) {

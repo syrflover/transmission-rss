@@ -3,7 +3,7 @@ import { useState } from "react";
 import { cn } from "@/lib/utils";
 import { dateTime } from "@/lib/time";
 
-import type { WorkEpisode, WorkFile, WorkSeason } from "../api";
+import type { EpisodeFailure, EpisodeRevision, FailureFile, WorkEpisode, WorkFile, WorkSeason } from "../api";
 import { CheckIcon, ChevronIcon, MinusIcon } from "../icons";
 import { airDay, baseName, episodeLabel, inOrder, ORDERS, rowId, type EpisodeOrder } from "./model";
 import { EmptyState } from "../../ScreenFrame";
@@ -46,12 +46,65 @@ function Files({ files }: { files: WorkFile[] }) {
   ));
 }
 
+/** What became of each file of a failed replacement, as the expanded row says it. */
+const FAILURE_FILE: Record<FailureFile["role"], string> = { old: "이전 영상", new: "새 영상" };
+const FAILURE_STATE: Record<FailureFile["state"], string> = {
+  kept: "그대로 있음",
+  removed: "지움",
+  received_name: "받은 이름 그대로",
+  not_received: "받지 못함",
+};
+
+/**
+ * A replacement of the episode's video that failed: why, and the two files with
+ * what became of each. Neither file is taken as the episode's video here.
+ */
+function Failure({ failure }: { failure: EpisodeFailure }) {
+  return (
+    <div className="col-span-full min-w-0">
+      <dt className="text-[12px] font-semibold text-urgent">받기 실패 · {dateTime(failure.at)}</dt>
+      <dd className="m-0 mt-1 flex flex-col gap-1.5 text-[12.5px] leading-snug text-text-primary">
+        <span className="[overflow-wrap:anywhere]">{failure.reason}</span>
+        <ul className="m-0 flex list-none flex-col gap-1 p-0">
+          {failure.files.map((file) => (
+            <li key={file.role} className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+              <span className="font-semibold text-text-secondary">{FAILURE_FILE[file.role]}</span>
+              <span className="text-text-muted">{FAILURE_STATE[file.state]}</span>
+              {file.path !== null && (
+                <span title={file.path} className="min-w-0 font-mono text-[12px] break-all">
+                  {baseName(file.path)}
+                </span>
+              )}
+            </li>
+          ))}
+        </ul>
+      </dd>
+    </div>
+  );
+}
+
+/**
+ * The quiet version line of a video replaced by a higher revision: `v1 › v2`
+ * and when, dimmed, with no warning words or colour.
+ */
+function VersionLine({ revision }: { revision: EpisodeRevision }) {
+  return (
+    <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[12px] text-text-muted">
+      <span className="rounded-full border border-hairline px-1.5 font-mono text-[11.5px] leading-[1.5] text-text-secondary">
+        {revision.from === null ? revision.to : `${revision.from} › ${revision.to}`}
+      </span>
+      <span>{dateTime(revision.replaced_at)} 수정본으로 교체</span>
+    </span>
+  );
+}
+
 /** The time a file was added, or `미상` when it was there before the app first looked. */
 const addedAt = (file: WorkFile) => (file.added_at === null ? "미상" : dateTime(file.added_at));
 
 function Details({ id, episode }: { id: string; episode: WorkEpisode }) {
   return (
     <dl id={id} className="m-0 grid grid-cols-[repeat(auto-fit,minmax(170px,1fr))] gap-x-4 gap-y-3 px-4 pt-1 pb-4 max-[720px]:px-3">
+      {episode.failure !== null && <Failure failure={episode.failure} />}
       <Cell label="영상 파일">
         <Files files={episode.video} />
       </Cell>
@@ -103,9 +156,17 @@ function Row({
         )}
       >
         <span className="text-sm font-bold">{episodeLabel(episode.episode)}</span>
-        <span className="flex flex-wrap items-center gap-x-4 gap-y-1">
-          <Hold label="영상" on={episode.video.length > 0} missing={missing} />
-          <Hold label="자막" on={episode.subtitle.length > 0} missing={missing} />
+        <span className="flex min-w-0 flex-col gap-1">
+          <span className="flex flex-wrap items-center gap-x-4 gap-y-1">
+            <Hold label="영상" on={episode.video.length > 0} missing={missing} />
+            <Hold label="자막" on={episode.subtitle.length > 0} missing={missing} />
+            {episode.failure !== null && (
+              <span className="inline-flex items-center rounded-full border border-urgent px-2 py-px text-xs font-bold whitespace-nowrap text-urgent">
+                받기 실패
+              </span>
+            )}
+          </span>
+          {episode.revision !== null && <VersionLine revision={episode.revision} />}
         </span>
         {/* The air day is AniList's schedule of a releasing entry; blank when there is none. */}
         <span className="text-[12.5px] text-text-muted">{episode.air_at === null ? null : airDay(episode.air_at)}</span>
@@ -127,8 +188,11 @@ interface EpisodeListProps {
 
 /**
  * The episodes of the chosen season, latest first unless `1화부터` is chosen.
- * A row says whether a video and a subtitle file are recorded for the episode;
- * pressing it opens the files and when each was added.
+ * A row says whether a video and a subtitle file are recorded for the episode,
+ * with a `받기 실패` badge while a replacement of its video by a higher
+ * revision has failed and a quiet version line once one went through; pressing
+ * it opens the files and when each was added, and the failed replacement's two
+ * files with why.
  */
 export function EpisodeList({ season, seasonCount, missing, order, onOrder }: EpisodeListProps) {
   const [opened, setOpened] = useState<ReadonlySet<string>>(new Set());

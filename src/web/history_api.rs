@@ -82,7 +82,8 @@ pub struct HistoryItemView {
     pub title: String,
     /// Unix milliseconds.
     pub first_seen_at: i64,
-    /// A result code: `received` (`추가함`), `no_match`, `excluded`, `duplicate` or `add_failed`.
+    /// A result code: `received` (`추가함`), `no_match`, `excluded`, `duplicate`,
+    /// `add_failed` or `version_unknown` (`버전 미상`).
     pub result: &'static str,
     pub result_label: &'static str,
     /// When the result was decided, Unix milliseconds.
@@ -125,6 +126,7 @@ pub struct Counts {
     pub excluded: i64,
     pub duplicate: i64,
     pub add_failed: i64,
+    pub version_unknown: i64,
 }
 
 #[derive(Serialize)]
@@ -361,6 +363,7 @@ async fn list_history(
             HistoryResult::Excluded => counts.excluded = count,
             HistoryResult::Duplicate => counts.duplicate = count,
             HistoryResult::AddFailed => counts.add_failed = count,
+            HistoryResult::VersionUnknown => counts.version_unknown = count,
         }
     }
 

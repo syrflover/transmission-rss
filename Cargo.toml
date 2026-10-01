@@ -22,6 +22,8 @@ rss = { version = "2.0", features = ["with-serde"] }
 rustix = { version = "1", features = ["fs"] }
 serde = "1"
 sha2 = "0.10"
+# The CRC32 of a received video, read as a stream, to check a revision against its name.
+crc32fast = "1"
 serde_json = "1"
 yaml_serde = "0.10"
 thiserror = "2"

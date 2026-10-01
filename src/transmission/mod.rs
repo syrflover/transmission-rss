@@ -557,8 +557,9 @@ pub enum RenameMode {
 pub enum Renamed {
     /// The file has the new name now.
     To(String),
-    /// Nothing more to do: the torrent was removed or is gone, or (in
-    /// [`RenameMode::Existing`]) its name is to be left as it is.
+    /// Nothing more to do: the torrent was removed or is gone, the name it
+    /// would take is taken by another file, or (in [`RenameMode::Existing`])
+    /// its name is to be left as it is.
     Finished,
     /// Not now: the metadata or the rename is not there yet; try again later.
     NotYet,
@@ -567,7 +568,9 @@ pub enum Renamed {
 /// Renames the torrent's single file to the `trname` name for `download_dir`
 /// (`.../<title>/Season NN`). What happens when the name cannot be derived, or
 /// is in that form already, depends on `mode`. Torrents with more than one
-/// file are left alone.
+/// file are left alone, and so is a torrent whose new name is taken by a file
+/// in its folder (looked up on this host's disk, which sees the folders at the
+/// paths Transmission reports).
 pub async fn rename_torrent(
     transmission: &mut TransClient,
     hash: &str,
@@ -602,6 +605,24 @@ pub async fn rename_torrent(
                 return Ok(Renamed::Finished);
             }
             (_, Some((_, _, new_file_name))) => {
+                // Never onto a name that is taken: Transmission would answer
+                // success and point the torrent at the other file, leaving its
+                // own under the old name (libtransmission's `renamePath`
+                // renames on disk only when the target is not there). That is
+                // the old video when a higher revision of a received episode
+                // comes in; its replacement is the worker's (see
+                // `crate::worker::revisions`).
+                let folder = torrent
+                    .download_dir
+                    .as_deref()
+                    .map_or(download_dir, Path::new);
+                if std::fs::symlink_metadata(folder.join(&new_file_name)).is_ok() {
+                    println!(
+                        "Not renaming {old_file_name}: {new_file_name} is taken in {}",
+                        folder.display()
+                    );
+                    return Ok(Renamed::Finished);
+                }
                 let res = transmission
                     .torrent_rename_path(
                         vec![Id::Hash(hash.to_owned())],
@@ -697,10 +718,8 @@ pub async fn rename_with_retries(
             .await
             .inspect_err(|err| println!("{}", redactor.apply(&err.to_string())));
 
-        match res {
-            Ok(Renamed::To(_)) => break,
-            Ok(Renamed::Finished) if mode == RenameMode::Existing => break,
-            _ => {}
+        if let Ok(Renamed::To(_) | Renamed::Finished) = res {
+            break;
         }
     }
 }

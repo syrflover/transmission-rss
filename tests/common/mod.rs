@@ -17,6 +17,10 @@
 //! answered; [`FakeTransmission::fail_location_of`] makes that background move
 //! fail the way Transmission shows it: the old folder stays and the torrent
 //! reports a local error (`error` 3 and `errorString`).
+//!
+//! Only under a folder given to [`FakeTransmission::on_disk`] does the fake
+//! also add, rename and delete files the way Transmission does; elsewhere it
+//! never touches the disk.
 
 #![allow(dead_code)]
 
@@ -243,6 +247,17 @@ struct TrState {
     async_locations: bool,
     /// Background moves that fail with this `errorString`, by hash.
     failing_locations: HashMap<String, String>,
+    /// The only folder under which the fake touches the disk (see
+    /// [`FakeTransmission::on_disk`]); `None` touches nothing.
+    disk_root: Option<std::path::PathBuf>,
+    /// What `torrent-add` writes as the torrent's single file, by hash.
+    contents: HashMap<String, Vec<u8>>,
+    /// Torrents `torrent-add` takes as still downloading, by hash.
+    unfinished_on_add: std::collections::HashSet<String>,
+    /// `torrent-remove` refusals for single torrents, by hash.
+    rejected_removes: HashMap<String, String>,
+    /// `torrent-rename-path` refusals for single torrents, by hash.
+    rejected_renames: HashMap<String, String>,
     next_id: i64,
 }
 
@@ -427,6 +442,63 @@ impl FakeTransmission {
                 .failing_locations
                 .insert(hash.to_owned(), text.to_owned()),
             None => st.failing_locations.remove(hash),
+        };
+    }
+
+    /// Lets the fake act on the disk under `root` (a temporary folder) the
+    /// way Transmission does: `torrent-add` writes the file given with
+    /// [`FakeTransmission::content_on_add`], `torrent-rename-path` renames the
+    /// file on disk, and `torrent-remove` with `delete-local-data` deletes the
+    /// torrent's files. Paths outside `root` are never touched.
+    ///
+    /// A rename onto a name that exists leaves both files where they are and
+    /// still answers `success` with the torrent's file renamed, as
+    /// libtransmission's `renamePath` does (read in its source, main branch,
+    /// 2026-10-01; no real daemon was run).
+    pub fn on_disk(&self, root: impl AsRef<std::path::Path>) {
+        self.state.lock().unwrap().disk_root = Some(root.as_ref().to_owned());
+    }
+
+    /// The bytes `torrent-add` writes as the single file of the torrent `hash`.
+    pub fn content_on_add(&self, hash: &str, bytes: &[u8]) {
+        self.state
+            .lock()
+            .unwrap()
+            .contents
+            .insert(hash.to_owned(), bytes.to_vec());
+    }
+
+    /// Makes `torrent-add` take the torrent `hash` as still downloading;
+    /// [`FakeTransmission::finish`] ends it.
+    pub fn unfinished_on_add(&self, hash: &str) {
+        self.state
+            .lock()
+            .unwrap()
+            .unfinished_on_add
+            .insert(hash.to_owned());
+    }
+
+    /// Makes a `torrent-remove` of the torrent `hash` answer with this refusal
+    /// text and remove nothing (`None` takes it back).
+    pub fn reject_remove_of(&self, hash: &str, result: Option<&str>) {
+        let mut st = self.state.lock().unwrap();
+        match result {
+            Some(result) => st
+                .rejected_removes
+                .insert(hash.to_owned(), result.to_owned()),
+            None => st.rejected_removes.remove(hash),
+        };
+    }
+
+    /// Makes a `torrent-rename-path` of the torrent `hash` answer with this
+    /// refusal text and rename nothing (`None` takes it back).
+    pub fn reject_rename_of(&self, hash: &str, result: Option<&str>) {
+        let mut st = self.state.lock().unwrap();
+        match result {
+            Some(result) => st
+                .rejected_renames
+                .insert(hash.to_owned(), result.to_owned()),
+            None => st.rejected_renames.remove(hash),
         };
     }
 
@@ -634,6 +706,16 @@ async fn tr_rpc_answer(
                 metadata: 1.0,
                 file_length: None,
             });
+            if st.unfinished_on_add.contains(&hash) {
+                st.torrents.last_mut().unwrap().left_until_done = 1 << 20;
+            }
+            if let Some(bytes) = st.contents.get(&hash).cloned() {
+                let dir = st.torrents.last().unwrap().download_dir.clone();
+                if let Some(path) = on_disk(&st, std::path::Path::new(&dir).join(&name)) {
+                    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                    std::fs::write(path, bytes).unwrap();
+                }
+            }
             ok(json!({ "torrent-added": { "id": id, "hashString": hash, "name": name } }))
                 .into_response()
         }
@@ -675,8 +757,21 @@ async fn tr_rpc_answer(
             let hash = ids(&args).into_iter().next().unwrap_or_default();
             let path = args["path"].as_str().unwrap_or_default();
             let name = args["name"].as_str().unwrap_or_default();
+            if let Some(reason) = st.rejected_renames.get(&hash) {
+                return err(&reason.clone()).into_response();
+            }
+            let root = st.disk_root.clone();
             match st.torrents.iter_mut().find(|t| t.hash == hash) {
                 Some(t) if t.name == path && name != path => {
+                    let dir = std::path::Path::new(&t.download_dir);
+                    let (src, tgt) = (dir.join(path), dir.join(name));
+                    let inside =
+                        |p: &std::path::Path| root.as_ref().is_some_and(|r| p.starts_with(r));
+                    // libtransmission renames on disk only when the source is
+                    // there and the target is not, and answers success either way.
+                    if inside(&src) && inside(&tgt) && src.exists() && !tgt.exists() {
+                        std::fs::rename(&src, &tgt).unwrap();
+                    }
                     t.name = name.to_owned();
                     ok(json!({ "path": path, "name": name, "id": t.id })).into_response()
                 }
@@ -687,6 +782,30 @@ async fn tr_rpc_answer(
 
         "torrent-remove" => {
             let wanted = ids(&args);
+            if let Some(reason) = wanted.iter().find_map(|h| st.rejected_removes.get(h)) {
+                return err(&reason.clone()).into_response();
+            }
+            if args["delete-local-data"].as_bool() == Some(true) {
+                let doomed: Vec<std::path::PathBuf> = st
+                    .torrents
+                    .iter()
+                    .filter(|t| wanted.contains(&t.hash))
+                    .flat_map(|t| {
+                        let names = if t.files.is_empty() {
+                            vec![t.name.clone()]
+                        } else {
+                            t.files.clone()
+                        };
+                        let dir = std::path::PathBuf::from(&t.download_dir);
+                        names.into_iter().map(move |n| dir.join(n))
+                    })
+                    .collect();
+                for path in doomed {
+                    if let Some(path) = on_disk(&st, path) {
+                        let _ = std::fs::remove_file(path);
+                    }
+                }
+            }
             st.torrents.retain(|t| !wanted.contains(&t.hash));
             ok(json!({})).into_response()
         }
@@ -751,6 +870,15 @@ async fn tr_rpc_answer(
 
         other => err(&format!("method {other} not supported by the fake")).into_response(),
     }
+}
+
+/// `path` when the fake may touch it: inside the folder given to
+/// [`FakeTransmission::on_disk`].
+fn on_disk(st: &TrState, path: std::path::PathBuf) -> Option<std::path::PathBuf> {
+    st.disk_root
+        .as_ref()
+        .is_some_and(|root| path.starts_with(root))
+        .then_some(path)
 }
 
 /// Ends the background move of `t` to `location`: fails it when `failing`

@@ -2475,6 +2475,7 @@ dependencies = [
  "axum",
  "bytes",
  "caseless",
+ "crc32fast",
  "dotenv",
  "futures",
  "http-body-util",

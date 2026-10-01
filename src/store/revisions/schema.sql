@@ -1,0 +1,39 @@
+-- The replacement of video revisions (`store::revisions`): one row per
+-- history item that a rule selected as a higher revision (`14v2`) of an
+-- episode whose folder already holds a video.
+--
+-- `item_id` is the new revision's history item and `old_item_id` the item of
+-- the video it replaces, when the worker could tell which. `folder` is the
+-- rule's save folder and `episode_name` the episode's file name in it (the
+-- name `trname` gives, which the old video holds). `expected_crc` is the
+-- CRC32 the new release's name carries, eight upper-case hex digits; NULL
+-- when the person received it with `다시 받기` and that request is the
+-- confirmation. `received_name` and `file_crc` are the new file's name as
+-- received and its CRC32 as read, once it has been checked. `state` is where
+-- the replacement is; the worker writes each step before it takes the next
+-- (see `RevisionState`). Times are Unix milliseconds; `replaced_at` is when
+-- the new video got the episode name.
+
+CREATE TABLE video_revisions (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id       INTEGER NOT NULL UNIQUE REFERENCES history_items (id),
+    old_item_id   INTEGER REFERENCES history_items (id),
+    rule_id       TEXT    NOT NULL,
+    folder        TEXT    NOT NULL CHECK (folder <> ''),
+    episode_name  TEXT    NOT NULL CHECK (episode_name <> ''),
+    old_version   INTEGER,
+    new_version   INTEGER NOT NULL,
+    expected_crc  TEXT,
+    torrent_hash  TEXT,
+    received_name TEXT,
+    file_crc      TEXT,
+    state         TEXT    NOT NULL CHECK (state IN ('unknown', 'skipped', 'receiving',
+                      'verified', 'removing', 'removed', 'done', 'failed', 'cleared')),
+    reason        TEXT,
+    created_at    INTEGER NOT NULL,
+    updated_at    INTEGER NOT NULL,
+    replaced_at   INTEGER
+);
+
+CREATE INDEX video_revisions_old_item ON video_revisions (old_item_id);
+CREATE INDEX video_revisions_state ON video_revisions (state);

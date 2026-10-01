@@ -12,7 +12,7 @@ export { getCommand, newCommandId, type Command, type CommandOutcome, type Comma
  * kept there is masked and nothing on the screen needs it.
  */
 
-export type HistoryResult = "received" | "no_match" | "excluded" | "duplicate" | "add_failed";
+export type HistoryResult = "received" | "no_match" | "excluded" | "duplicate" | "add_failed" | "version_unknown";
 
 export const HISTORY_RESULTS: readonly HistoryResult[] = [
   "received",
@@ -20,6 +20,7 @@ export const HISTORY_RESULTS: readonly HistoryResult[] = [
   "excluded",
   "duplicate",
   "add_failed",
+  "version_unknown",
 ];
 
 
@@ -37,7 +38,10 @@ export interface HistoryItem {
   rule_label: string | null;
   by_hand: boolean;
   reason: string | null;
-  /** Whether `다시 받기` is offered: the item failed to be added, and the rule that picked it still exists and is active. */
+  /**
+   * Whether `다시 받기` is offered: the item failed to be added, or is a video revision held as `version_unknown`,
+   * and the rule that picked it still exists and is active.
+   */
   can_retry: boolean;
   /** Why `다시 받기` is missing on an item a rule picked and failed to add, as a sentence. */
   retry_blocked: string | null;
@@ -63,6 +67,7 @@ export interface HistoryCounts {
   excluded: number;
   duplicate: number;
   add_failed: number;
+  version_unknown: number;
 }
 
 export interface HistoryPage {

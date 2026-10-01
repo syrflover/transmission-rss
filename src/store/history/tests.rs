@@ -134,7 +134,8 @@ fn result_codes_are_stable() {
             "no_match",
             "excluded",
             "duplicate",
-            "add_failed"
+            "add_failed",
+            "version_unknown"
         ]
     );
     for r in HistoryResult::ALL {
@@ -144,7 +145,14 @@ fn result_codes_are_stable() {
     let labels: Vec<_> = HistoryResult::ALL.iter().map(|r| r.label()).collect();
     assert_eq!(
         labels,
-        ["추가함", "규칙 불일치", "제외", "중복", "추가 실패"]
+        [
+            "추가함",
+            "규칙 불일치",
+            "제외",
+            "중복",
+            "추가 실패",
+            "버전 미상"
+        ]
     );
 }
 
@@ -178,6 +186,13 @@ fn transition_table() {
         (AddFailed, Duplicate, Change),
         (AddFailed, NoMatch, Change),
         (AddFailed, Excluded, Change),
+        (Received, VersionUnknown, Keep),
+        (Duplicate, VersionUnknown, Keep),
+        (NoMatch, VersionUnknown, Change),
+        (VersionUnknown, VersionUnknown, Refresh),
+        (VersionUnknown, Received, Change),
+        (VersionUnknown, Duplicate, Change),
+        (VersionUnknown, NoMatch, Change),
     ];
     for (stored, new, transition) in expected {
         assert_eq!(

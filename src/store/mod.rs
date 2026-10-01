@@ -11,6 +11,7 @@ pub mod commands;
 pub mod db;
 pub mod history;
 pub mod library;
+pub mod revisions;
 pub mod seasons;
 pub mod settings;
 pub mod setup;

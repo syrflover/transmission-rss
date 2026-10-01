@@ -94,6 +94,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("channels/episode_basis.sql")),
     // 24: when a rule started and which archive suggestion grounds the user chose to keep collecting
     Migration::Sql(include_str!("channels/archive_suggestion.sql")),
+    // 25: the replacement of video revisions and how far each has come
+    Migration::Sql(include_str!("revisions/schema.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -1022,6 +1024,60 @@ mod tests {
             .await
             .unwrap();
         assert!(blank);
+    }
+
+    /// The last version before the replacement of video revisions.
+    const BEFORE_REVISIONS: usize = 24;
+
+    #[tokio::test]
+    async fn a_history_from_before_revisions_keeps_its_items_and_takes_revisions_of_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        {
+            let conn = database_at(&path, BEFORE_REVISIONS);
+            conn.execute(
+                "INSERT INTO history_items (id, channel_id, channel_label, identity_key, title,
+                     link, first_seen_at, last_seen_at, result, result_at, rule_id, torrent_hash)
+                 VALUES (7, 'c1', 'https://x/', 'guid:k', '[SubsPlease] Show - 14 (1080p).mkv',
+                     'magnet:?', 1, 1, 'received', 1, 'r1', 'h1')",
+                [],
+            )
+            .unwrap();
+        }
+
+        let db = Db::open(&path).await.unwrap();
+
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+        let (title, rows): (String, i64) = db
+            .run::<_, DbError, _>(|c| {
+                c.execute(
+                    "INSERT INTO video_revisions (item_id, old_item_id, rule_id, folder,
+                         episode_name, new_version, state, created_at, updated_at)
+                     VALUES (7, NULL, 'r1', '/m/Show/Season 01', 'Show S01E14.mkv', 2,
+                         'receiving', 1, 1)",
+                    [],
+                )?;
+                Ok(c.query_row(
+                    "SELECT (SELECT title || '|' || result FROM history_items WHERE id = 7),
+                            (SELECT count(*) FROM video_revisions)",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(title, "[SubsPlease] Show - 14 (1080p).mkv|received");
+        assert_eq!(rows, 1);
+        // A state the table does not know is refused.
+        let refused = db
+            .run::<_, DbError, _>(|c| {
+                Ok(c.execute(
+                    "UPDATE video_revisions SET state = 'gone' WHERE item_id = 7",
+                    [],
+                )?)
+            })
+            .await;
+        assert!(refused.is_err());
     }
 
     #[tokio::test]

@@ -26,6 +26,8 @@ function whyNot(item: HistoryItem): string {
       return "채널의 제외 단어에 걸려서 받지 않았어요.";
     case "add_failed":
       return "Transmission에 넣지 못해서 받지 못했어요.";
+    case "version_unknown":
+      return "이미 있는 영상의 수정본인데 버전을 확인할 수 없어서 자동으로 받지 않았어요.";
     default:
       return "";
   }
@@ -67,6 +69,8 @@ function statusLine(item: HistoryItem, phase: RetryPhase): { text: string; urgen
       return { text: item.reason ?? "Transmission에 이미 있어요.", urgent: false };
     case "add_failed":
       return item.reason ? { text: item.reason, urgent: true } : null;
+    case "version_unknown":
+      return item.reason ? { text: item.reason, urgent: false } : null;
     default:
       return null;
   }

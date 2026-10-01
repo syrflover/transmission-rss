@@ -21,15 +21,22 @@ pub enum HistoryResult {
     /// `add_failed` (추가 실패): a rule selected the item but adding it to
     /// Transmission failed; the reason is kept next to it.
     AddFailed,
+    /// `version_unknown` (버전 미상): a rule selected a higher revision of an
+    /// episode the folder holds, and the worker could not tell the revisions
+    /// apart (the name carries no CRC32, or the video in the folder matches no
+    /// known release), so it did not receive it. `다시 받기` receives it and
+    /// replaces the video (see [`crate::worker::revisions`]).
+    VersionUnknown,
 }
 
 impl HistoryResult {
-    pub const ALL: [HistoryResult; 5] = [
+    pub const ALL: [HistoryResult; 6] = [
         HistoryResult::Received,
         HistoryResult::NoMatch,
         HistoryResult::Excluded,
         HistoryResult::Duplicate,
         HistoryResult::AddFailed,
+        HistoryResult::VersionUnknown,
     ];
 
     /// The stable code stored in the database.
@@ -40,6 +47,7 @@ impl HistoryResult {
             HistoryResult::Excluded => "excluded",
             HistoryResult::Duplicate => "duplicate",
             HistoryResult::AddFailed => "add_failed",
+            HistoryResult::VersionUnknown => "version_unknown",
         }
     }
 
@@ -50,6 +58,7 @@ impl HistoryResult {
             HistoryResult::Excluded => "제외",
             HistoryResult::Duplicate => "중복",
             HistoryResult::AddFailed => "추가 실패",
+            HistoryResult::VersionUnknown => "버전 미상",
         }
     }
 
@@ -92,20 +101,20 @@ pub enum Transition {
 impl Transition {
     /// The rules for an item seen again:
     ///
-    /// - The same result again is no change. For `add_failed` the latest
-    ///   reason replaces the old one.
+    /// - The same result again is no change. For `add_failed` and
+    ///   `version_unknown` the latest reason replaces the old one.
     /// - `received` is final: a later duplicate answer (the worker asks
     ///   Transmission again every cycle), a failed retry, or an edited rule that
     ///   no longer matches does not undo the fact that the torrent was added.
     /// - `duplicate` only ever becomes `received` (the torrent had gone and was
     ///   added again); other later evaluations leave it alone.
-    /// - `no_match`, `excluded` and `add_failed` follow the newest evaluation,
-    ///   and each such move is a change.
+    /// - `no_match`, `excluded`, `add_failed` and `version_unknown` follow the
+    ///   newest evaluation, and each such move is a change.
     pub fn between(stored: HistoryResult, new: HistoryResult) -> Transition {
         use HistoryResult::*;
 
         if stored == new {
-            return if stored == AddFailed {
+            return if matches!(stored, AddFailed | VersionUnknown) {
                 Transition::Refresh
             } else {
                 Transition::Keep

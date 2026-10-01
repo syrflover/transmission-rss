@@ -104,6 +104,31 @@ export interface WorkFile {
   added_at: number | null;
 }
 
+/** The episode's video was replaced by a higher revision of the same release: the quiet version line. */
+export interface EpisodeRevision {
+  /** `v1`; `null` when the old video's revision was not known. */
+  from: string | null;
+  /** `v2`. */
+  to: string;
+  /** When the new video took the episode name (Unix milliseconds). */
+  replaced_at: number;
+}
+
+/** One of the two videos of a replacement that failed, and what became of it. */
+export interface FailureFile {
+  role: "old" | "new";
+  /** Relative to the work folder; `null` for a new video that was not received. */
+  path: string | null;
+  state: "kept" | "removed" | "received_name" | "not_received";
+}
+
+/** A replacement of the episode's video that failed (`받기 실패`), with why and both files. */
+export interface EpisodeFailure {
+  at: number;
+  reason: string;
+  files: FailureFile[];
+}
+
 export interface WorkEpisode {
   /** As written in the file names; `01` and `13`/`013` are one episode. */
   episode: string;
@@ -113,6 +138,10 @@ export interface WorkEpisode {
   air_at: number | null;
   video: WorkFile[];
   subtitle: WorkFile[];
+  /** Set when the video was replaced by a higher revision; `null` otherwise. */
+  revision: EpisodeRevision | null;
+  /** Set while a replacement of the video has failed; `null` otherwise. */
+  failure: EpisodeFailure | null;
 }
 
 export interface WorkSeason {
