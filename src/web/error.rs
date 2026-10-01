@@ -9,6 +9,7 @@
 //! | `not_found` | 404    | the addressed item does not exist (any more)              |
 //! | `conflict`  | 409    | someone saved first; `current` carries the server's value |
 //! |             |        | when the handler has it, so the screen can compare        |
+//! | `unavailable` | 502  | a service the call needs (Anissia) did not answer; `message` says why |
 //! | `internal`  | 500    | a server-side failure; details go to the log, not here    |
 //!
 //! `message` is shown to the user as is, so it is a full Korean sentence and
@@ -32,6 +33,9 @@ pub enum ApiError {
         message: String,
         current: Option<Value>,
     },
+    /// A service outside the app that the call needs cannot be used now; the
+    /// message says why, for the screen to show with a retry.
+    Unavailable(String),
     /// The detail is logged, never sent.
     Internal(String),
 }
@@ -76,6 +80,10 @@ impl IntoResponse for ApiError {
                 }
                 (StatusCode::CONFLICT, body)
             }
+            ApiError::Unavailable(message) => (
+                StatusCode::BAD_GATEWAY,
+                json!({ "error": "unavailable", "message": message }),
+            ),
             ApiError::Internal(detail) => {
                 eprintln!("trss-web: internal error: {detail}");
                 (

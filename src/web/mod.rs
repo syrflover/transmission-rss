@@ -31,6 +31,7 @@ pub mod seasons_api;
 pub mod settings_api;
 pub mod state;
 pub mod status_api;
+pub mod subscriptions_api;
 pub mod watch_folders_api;
 
 pub use error::ApiError;
