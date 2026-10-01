@@ -132,6 +132,21 @@ pub(super) fn image_ids(conn: &Connection) -> rusqlite::Result<HashMap<String, S
     rows.collect()
 }
 
+pub(super) fn image_ids_of(
+    conn: &Connection,
+    work_ids: &[String],
+) -> rusqlite::Result<HashMap<String, String>> {
+    let mut stmt = conn
+        .prepare("SELECT image_id FROM work_artwork WHERE work_id = ?1 AND image_id IS NOT NULL")?;
+    let mut out = HashMap::new();
+    for id in work_ids {
+        if let Some(image_id) = stmt.query_row([id], |r| r.get(0)).optional()? {
+            out.insert(id.clone(), image_id);
+        }
+    }
+    Ok(out)
+}
+
 /// Reads the selection inside `tx` and checks it is at `expected`.
 fn current(tx: &Transaction<'_>, work_id: &str, expected: i64) -> Result<Selection, ArtworkError> {
     ensure_row(tx, work_id)?;

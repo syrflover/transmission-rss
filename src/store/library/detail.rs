@@ -516,6 +516,23 @@ mod tests {
             store.season_episodes("no-such-work", 1).await.unwrap(),
             None
         );
+
+        // Several seasons at once read the same, in the order asked.
+        let many = store
+            .seasons_episodes(vec![
+                ("no-such-work".into(), 1),
+                (id.clone(), 2),
+                (id.clone(), 1),
+            ])
+            .await
+            .unwrap();
+        assert_eq!(many.len(), 3);
+        assert_eq!(many[0], None);
+        assert_eq!(many[1].as_ref().unwrap().keys().collect::<Vec<_>>(), [&1]);
+        assert_eq!(
+            many[2].as_ref().unwrap().keys().collect::<Vec<_>>(),
+            [&1, &2, &13]
+        );
     }
 
     #[tokio::test]

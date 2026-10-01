@@ -17,12 +17,18 @@
 //! the checklist is up and the schedule once it is not.
 //!
 //! The steps are `folder` (`감시 폴더 등록`) and `import` (`기존 설정 가져오기`).
-//! A step is `done` when its result exists: a registered watch folder, a
-//! channel. That is read from the data every time, so nothing has to mark it
-//! (the folder may be added in the settings and the import applied from any
-//! device). What the data cannot say is a skip, which the server keeps so every
-//! device shows the same checklist ([`crate::store::setup`]). The checklist is
-//! `active` while a step is neither done nor skipped.
+//! A step is `done` once it happened: a watch folder was registered, an import
+//! was applied (a channel that exists for another reason does not count). The
+//! store latches both when they happen ([`crate::store::setup`]), so removing
+//! the folder or the channels later does not undo them, and a skip, which the
+//! data cannot say, is kept there as well so every device shows the same
+//! checklist. The checklist is `active` while a step is neither done nor
+//! skipped.
+//!
+//! When both steps are done or skipped the checklist ends, and the end is kept:
+//! it does not come back when folders or channels are removed afterwards. Only
+//! taking back the skip of a step that is not done brings it back; the web
+//! offers that in the notice shown right after the checklist disappears.
 //!
 //! Only an install that began empty has a first run. For any other, `PUT` is
 //! `404`: there is no checklist to skip a step of.
@@ -51,7 +57,8 @@ pub struct StepView {
 
 #[derive(Debug, Serialize)]
 pub struct FirstRunView {
-    /// A step is neither done nor skipped, so the checklist is shown.
+    /// The checklist is shown: it has not ended and a step is neither done nor
+    /// skipped.
     pub active: bool,
     pub steps: Vec<StepView>,
 }
@@ -60,33 +67,28 @@ fn internal(e: impl std::fmt::Display) -> ApiError {
     ApiError::Internal(e.to_string())
 }
 
-async fn view_of(state: &AppState, run: FirstRun) -> Result<FirstRunView, ApiError> {
-    let folders = state.library.folders().await.map_err(internal)?;
-    let channels = state.channels.list_channels().await.map_err(internal)?;
-    let steps: Vec<StepView> = Step::ALL
-        .into_iter()
-        .map(|step| StepView {
-            step: step.code(),
-            done: match step {
-                Step::Folder => !folders.is_empty(),
-                Step::Import => !channels.is_empty(),
-            },
-            skipped: run.skipped(step),
-        })
-        .collect();
-    Ok(FirstRunView {
-        active: steps.iter().any(|s| !s.done && !s.skipped),
-        steps,
-    })
+fn view_of(run: FirstRun) -> FirstRunView {
+    FirstRunView {
+        active: run.active(),
+        steps: Step::ALL
+            .into_iter()
+            .map(|step| StepView {
+                step: step.code(),
+                done: run.done(step),
+                skipped: run.skipped(step),
+            })
+            .collect(),
+    }
 }
 
-/// The checklist while it is up: the install began empty and a step is neither
-/// done nor skipped. `None` otherwise (the weekly schedule shows).
+/// The checklist while it is up: the install began empty, it has not ended, and
+/// a step is neither done nor skipped. `None` otherwise (the weekly schedule
+/// shows). This is where a checklist whose steps are all settled ends for good.
 pub async fn checklist(state: &AppState) -> Result<Option<FirstRunView>, ApiError> {
-    let Some(run) = state.setup.first_run().await.map_err(internal)? else {
+    let Some(run) = state.setup.settle(now_millis()).await.map_err(internal)? else {
         return Ok(None);
     };
-    let view = view_of(state, run).await?;
+    let view = view_of(run);
     Ok(view.active.then_some(view))
 }
 
@@ -117,7 +119,7 @@ async fn skip(
         .await
         .map_err(internal)?
         .ok_or_else(|| ApiError::not_found("처음 설정 중이 아니에요."))?;
-    Ok(Json(view_of(&state, run).await?))
+    Ok(Json(view_of(run)))
 }
 
 #[cfg(test)]

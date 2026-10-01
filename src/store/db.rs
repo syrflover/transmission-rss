@@ -84,6 +84,12 @@ const MIGRATIONS: &[Migration] = &[
         include_str!("status/week.sql"),
         include_str!("setup/schema.sql")
     )),
+    // 22: when Anissia was found not to list an anime any more; the first run's steps and end
+    //     kept, instead of read from the data each time
+    Migration::Sql(concat!(
+        include_str!("anissia/unlisted.sql"),
+        include_str!("setup/ended.sql")
+    )),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -211,6 +217,7 @@ fn user_version(conn: &Connection) -> Result<usize, rusqlite::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rusqlite::OptionalExtension;
 
     const INSERT_CHANNEL: &str =
         "INSERT INTO channels (id, position, url, excludes, secret_query, version)
@@ -743,6 +750,133 @@ mod tests {
             .await
             .unwrap();
         assert_eq!((hashes, interval), (1, 300_000));
+    }
+
+    /// The migration that kept the first run's steps and end is number 22.
+    const BEFORE_ENDED: usize = 21;
+
+    /// `(folder added, import applied, ended)` of the first run's row after the
+    /// database from before the end was kept got `setup` done and was migrated.
+    async fn first_run_after(setup: &[&str]) -> Option<(bool, bool, bool)> {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        {
+            let conn = database_at(&path, BEFORE_ENDED);
+            for sql in setup {
+                conn.execute(sql, []).unwrap();
+            }
+        }
+        let db = Db::open(&path).await.unwrap();
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+        db.run::<_, DbError, _>(|c| {
+            Ok(c.query_row(
+                "SELECT folder_added_at IS NOT NULL, import_applied_at IS NOT NULL,
+                        ended_at IS NOT NULL
+                   FROM first_run",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?)
+        })
+        .await
+        .unwrap()
+    }
+
+    const INSERT_FOLDER: &str =
+        "INSERT INTO watch_folders (id, path, created_at) VALUES ('w', '/w', 1)";
+    const SKIP_IMPORT: &str = "UPDATE first_run SET import_skipped_at = 1";
+
+    #[tokio::test]
+    async fn a_first_run_that_had_not_started_is_untouched_by_the_kept_end() {
+        assert_eq!(first_run_after(&[]).await, Some((false, false, false)));
+    }
+
+    #[tokio::test]
+    async fn a_first_run_past_its_checklist_by_the_old_reading_stays_past_it() {
+        // A folder and a channel were what ended the checklist: both steps are
+        // done and the checklist is ended.
+        assert_eq!(
+            first_run_after(&[INSERT_FOLDER, INSERT_CHANNEL]).await,
+            Some((true, true, true))
+        );
+        // A folder and a skipped import ended it too.
+        assert_eq!(
+            first_run_after(&[INSERT_FOLDER, SKIP_IMPORT]).await,
+            Some((true, false, true))
+        );
+        // Both skipped.
+        assert_eq!(
+            first_run_after(&["UPDATE first_run SET import_skipped_at = 1, folder_skipped_at = 1"])
+                .await,
+            Some((false, false, true))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_first_run_still_in_its_checklist_stays_in_it_with_the_steps_it_has() {
+        assert_eq!(
+            first_run_after(&[INSERT_FOLDER]).await,
+            Some((true, false, false))
+        );
+        assert_eq!(
+            first_run_after(&[INSERT_CHANNEL]).await,
+            Some((false, true, false))
+        );
+        assert_eq!(
+            first_run_after(&[SKIP_IMPORT]).await,
+            Some((false, false, false))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_snapshot_from_before_unlisted_is_listed_and_can_be_marked() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        {
+            let conn = database_at(&path, BEFORE_ENDED);
+            conn.execute(
+                "INSERT INTO anissia_anime (anime_no, subject, week, status, fetched_at)
+                 VALUES (7, '작품', 3, 'ON', 100)",
+                [],
+            )
+            .unwrap();
+        }
+
+        let db = Db::open(&path).await.unwrap();
+
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+        let (before, after): (Option<i64>, Option<i64>) = db
+            .run::<_, DbError, _>(|c| {
+                let read = |c: &Connection| {
+                    c.query_row(
+                        "SELECT unlisted_at FROM anissia_anime WHERE anime_no = 7",
+                        [],
+                        |r| r.get(0),
+                    )
+                };
+                let before = read(c)?;
+                c.execute("UPDATE anissia_anime SET unlisted_at = 5", [])?;
+                Ok((before, read(c)?))
+            })
+            .await
+            .unwrap();
+        assert_eq!((before, after), (None, Some(5)));
+    }
+
+    #[tokio::test]
+    async fn an_install_that_was_not_a_first_run_still_is_not_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        {
+            let conn = database_at(&path, BEFORE_ENDED);
+            conn.execute("DELETE FROM first_run", []).unwrap();
+        }
+        let db = Db::open(&path).await.unwrap();
+        // Registering a folder later leaves no row behind.
+        db.run::<_, DbError, _>(|c| Ok(c.execute(INSERT_FOLDER, []).map(|_| ())?))
+            .await
+            .unwrap();
+        assert_eq!(first_run_rows(&db).await, 0);
     }
 
     #[tokio::test]

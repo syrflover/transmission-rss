@@ -435,6 +435,9 @@ async fn an_anime_that_moved_from_the_upcoming_list_to_its_weekday_is_found_ther
 async fn an_anime_no_week_lists_keeps_its_snapshot_and_is_looked_for_a_day_later() {
     let env = Env::new().await;
     env.subscribe(9, 3, 10 * DAY - DAY).await;
+    // The schedule lists other anime, but not this one.
+    env.fake
+        .set_week(5, vec![env.fake.entry(5, 5000, "22:00", "남", "")]);
 
     let ran = env.anissia.run_next().await.unwrap();
     assert_eq!(
@@ -452,11 +455,90 @@ async fn an_anime_no_week_lists_keeps_its_snapshot_and_is_looked_for_a_day_later
     let snapshot = env.anissia.store.anime(9).await.unwrap().unwrap();
     assert_eq!(snapshot.subject, "작품 9");
     assert_eq!(snapshot.fetched_at, 10 * DAY - DAY);
+    // Anissia answered everywhere and the anime was not there: it is recorded.
+    assert_eq!(unlisted(&env, &[9]).await, [9]);
 
     assert!(env.anissia.run_next().await.is_none());
     env.advance(DAY - 1);
     assert!(env.anissia.run_next().await.is_none());
     env.advance(1);
+    assert!(env.anissia.run_next().await.is_some());
+}
+
+async fn unlisted(env: &Env, nos: &[i64]) -> Vec<i64> {
+    let mut found: Vec<i64> = env
+        .anissia
+        .store
+        .unlisted(nos.to_vec())
+        .await
+        .unwrap()
+        .into_iter()
+        .collect();
+    found.sort();
+    found
+}
+
+#[tokio::test]
+async fn an_unlisted_anime_is_listed_again_when_a_later_refresh_finds_it() {
+    let env = Env::new().await;
+    env.subscribe(9, 3, 10 * DAY - DAY).await;
+    env.fake
+        .set_week(5, vec![env.fake.entry(5, 5000, "22:00", "남", "")]);
+    env.anissia.run_next().await.unwrap();
+    assert_eq!(unlisted(&env, &[9]).await, [9]);
+
+    // Anissia lists it again (on another weekday) by the next refresh.
+    env.advance(DAY);
+    env.fake
+        .set_week(6, vec![env.fake.entry(6, 9, "21:00", "작품 9", "")]);
+    assert_eq!(env.anissia.run_next().await.unwrap().refreshed, 1);
+    assert_eq!(unlisted(&env, &[9]).await, Vec::<i64>::new());
+    assert_eq!(env.anissia.store.anime(9).await.unwrap().unwrap().week, 6);
+}
+
+#[tokio::test]
+async fn a_refresh_that_fails_or_stops_halfway_never_records_an_anime_as_unlisted() {
+    let env = Env::new().await;
+    env.subscribe(9, 3, 10 * DAY - DAY).await;
+    env.fake
+        .set_week(1, vec![env.fake.entry(1, 5000, "22:00", "남", "")]);
+
+    // Week 6 cannot be read: the weeks before it listed nothing of the anime,
+    // but the weeks after were never asked.
+    env.fake
+        .state
+        .lock()
+        .unwrap()
+        .failing_paths
+        .insert("/anime/schedule/6".into());
+    let ran = env.anissia.run_next().await.unwrap();
+    assert_eq!(ran.failed, 1);
+    assert_eq!(unlisted(&env, &[9]).await, Vec::<i64>::new());
+
+    // A 429 at the first request.
+    env.advance(queue::REFRESH_RETRY.as_millis() as i64);
+    env.fake.state.lock().unwrap().failing_paths.clear();
+    {
+        let mut state = env.fake.state.lock().unwrap();
+        state.rate_limited = 1;
+        state.retry_after = Some(30);
+    }
+    assert_eq!(env.anissia.run_next().await.unwrap().failed, 1);
+    assert_eq!(unlisted(&env, &[9]).await, Vec::<i64>::new());
+}
+
+#[tokio::test]
+async fn a_schedule_that_lists_nothing_at_all_does_not_make_an_anime_unlisted() {
+    let env = Env::new().await;
+    env.subscribe(9, 3, 10 * DAY - DAY).await;
+
+    let ran = env.anissia.run_next().await.unwrap();
+    assert_eq!(ran.missing, 1);
+    assert_eq!(env.schedule_requests().len(), 9);
+    assert_eq!(unlisted(&env, &[9]).await, Vec::<i64>::new());
+    // Still looked for a day later.
+    assert!(env.anissia.run_next().await.is_none());
+    env.advance(DAY);
     assert!(env.anissia.run_next().await.is_some());
 }
 

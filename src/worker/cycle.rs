@@ -146,6 +146,14 @@ pub struct CommandsAtStart {
 /// ([`ChannelPlan::for_first_read`]); otherwise the plan learns when the first
 /// read was, to tell what the feed held then ([`ChannelPlan::with_first_read_at`]).
 /// Channels without a subscription need neither, and cost no query.
+///
+/// When history cannot be read for that, a channel with a subscription is
+/// planned as if it were read for the first time: its subscriptions sit out
+/// this cycle. Without the first read there is no telling what the feed
+/// already held from what is new, and a subscription that took the whole feed
+/// cannot be undone. A channel that did have a history only waits: what the
+/// subscription sat out is recorded as no match after the first read, so the
+/// next cycle, which can read the history, receives it.
 async fn make_plans(
     ctx: &CycleContext,
     snapshot: Vec<ChannelWithRules>,
@@ -160,13 +168,13 @@ async fn make_plans(
         })
         .map(|cwr| cwr.channel.id.clone())
         .collect();
-    // When history cannot be read the plans are the ordinary ones. The channel
-    // loop reads the same history for `known` and leaves the items a
-    // subscription would take to the next cycle when that fails as well.
     let first_reads = match ctx.history.first_sightings(subscribed.clone()).await {
         Ok(found) => Some(found),
         Err(err) => {
-            eprintln!("Cannot read the first reads of the channels from history: {err}");
+            eprintln!(
+                "Cannot read the first reads of the channels from history; \
+                 their subscriptions sit this cycle out: {err}"
+            );
             None
         }
     };
@@ -174,15 +182,17 @@ async fn make_plans(
     snapshot
         .into_iter()
         .map(|cwr| {
-            let first_read = first_reads
+            if !subscribed.contains(&cwr.channel.id) {
+                return ChannelPlan::new(cwr, collect_folder);
+            }
+            match first_reads
                 .as_ref()
-                .filter(|_| subscribed.contains(&cwr.channel.id))
-                .map(|found| found.get(&cwr.channel.id).copied());
-            match first_read {
-                // No record yet: this cycle's read is the first.
-                Some(None) => ChannelPlan::for_first_read(cwr, collect_folder),
+                .map(|found| found.get(&cwr.channel.id).copied())
+            {
+                // No record yet, or none could be read: this cycle's read is
+                // taken as the first.
+                None | Some(None) => ChannelPlan::for_first_read(cwr, collect_folder),
                 Some(at) => ChannelPlan::new(cwr, collect_folder).with_first_read_at(at),
-                None => ChannelPlan::new(cwr, collect_folder),
             }
         })
         .collect()

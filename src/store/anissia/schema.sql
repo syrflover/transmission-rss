@@ -10,7 +10,8 @@
 -- `YYYY-MM-DD`, or `YYYY-MM` when Anissia knows the month only; NULL when
 -- unknown. `status` is Anissia's `ON`/`OFF`. `fetched_at` is when the row was
 -- last received (Unix ms); `refresh_not_before` delays the next daily refresh
--- after a failed one or when Anissia no longer lists the anime.
+-- after a failed one or when Anissia no longer lists the anime (`unlisted.sql`
+-- adds when Anissia was found not to list it).
 --
 -- `rule_subscriptions` is the subscription of a rule: a rule without a row here
 -- is not a subscription. `subtitles` is how the subscription gets subtitles:

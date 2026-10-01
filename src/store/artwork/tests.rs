@@ -222,6 +222,28 @@ async fn the_table_refuses_states_the_spec_does_not_allow() {
 }
 
 #[tokio::test]
+async fn the_image_ids_of_some_works_are_read_without_the_others() {
+    let (db, _, _, ids) = library(&["A", "B", "C"]).await;
+    let store = ArtworkStore::new(db);
+    for (id, path) in [(&ids[0], "artwork/a.png"), (&ids[1], "artwork/b.png")] {
+        let version = store.selection(id).await.unwrap().version;
+        let image = staged_image(&store, path, Source::Upload).await;
+        store.select_manual(id, version, None, image).await.unwrap();
+    }
+    let all = store.image_ids().await.unwrap();
+    assert_eq!(all.len(), 2);
+
+    // Only the works asked about; one with no image and an unknown one are absent.
+    let some = store
+        .image_ids_of(vec![ids[0].clone(), ids[2].clone(), "no-such".into()])
+        .await
+        .unwrap();
+    assert_eq!(some.len(), 1);
+    assert_eq!(some[&ids[0]], all[&ids[0]]);
+    assert!(store.image_ids_of(vec![]).await.unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn a_change_from_an_old_version_changes_nothing() {
     let (db, _, _, ids) = library(&["A"]).await;
     let store = ArtworkStore::new(db);

@@ -8,7 +8,13 @@
 //! snapshots were listed in (an anime moves from `신작` to its weekday once it
 //! starts), and for the other weeks only while some anime is still not found.
 //! An anime that no week lists any more keeps its snapshot and is looked for
-//! again a day later.
+//! again a day later. When every week was asked, all answered, and the
+//! schedule listed something, that anime is recorded as unlisted
+//! ([`AnissiaStore::mark_unlisted`]), which is how the weekly schedule learns
+//! that an anime without an end date has ended. A refresh that failed, was
+//! refused or was cut short records nothing of the kind, and neither does one
+//! whose every week came back empty (an answer that lists nothing at all says
+//! more about Anissia than about the anime).
 //!
 //! A failure to reach Anissia puts every anime that was still to be found off
 //! for an hour, and `429` for as long as Anissia says. One process runs the
@@ -59,6 +65,17 @@ impl Anissia {
         }
     }
 
+    /// Records that Anissia answered for every week and listed none of
+    /// `anime_nos`, and puts their refresh off by `wait`.
+    async fn leave_unlisted(&self, anime_nos: Vec<i64>, wait: Duration) {
+        let at = self.now();
+        let until = at + wait.as_millis() as i64;
+        if let Err(e) = self.store.mark_unlisted(anime_nos, at, until).await {
+            eprintln!("Anissia queue: cannot record the unlisted anime: {e}");
+            tokio::time::sleep(POLL).await;
+        }
+    }
+
     /// Receives the snapshots of `due` again.
     pub async fn refresh(&self, due: Vec<Due>) -> Ran {
         let mut pending: Vec<i64> = due.iter().map(|d| d.anime_no).collect();
@@ -75,6 +92,8 @@ impl Anissia {
         }
 
         let mut refreshed = 0;
+        // Whether any week listed any anime at all.
+        let mut anything_listed = false;
         for week in weeks {
             if pending.is_empty() {
                 break;
@@ -97,6 +116,7 @@ impl Anissia {
                 }
             };
             let at = self.now();
+            anything_listed |= !entries.is_empty();
             for entry in entries {
                 let Some(index) = pending.iter().position(|no| *no == entry.anime_no) else {
                     continue;
@@ -124,8 +144,13 @@ impl Anissia {
 
         let missing = pending.len();
         if missing > 0 {
-            self.put_off(pending, Duration::from_millis(REFRESH_AFTER_MS as u64))
-                .await;
+            let wait = Duration::from_millis(REFRESH_AFTER_MS as u64);
+            if anything_listed {
+                // Every week answered and these were in none of them.
+                self.leave_unlisted(pending, wait).await;
+            } else {
+                self.put_off(pending, wait).await;
+            }
         }
         Ran {
             refreshed,

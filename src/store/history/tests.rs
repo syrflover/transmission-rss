@@ -1387,7 +1387,10 @@ async fn the_titles_of_what_rules_received_come_back_with_their_torrents() {
         .unwrap();
 
     let got = history
-        .received_titles_of_rules(vec!["rule-1".into(), "rule-3".into()])
+        .received_titles_of_rules(
+            vec!["rule-1".into(), "rule-3".into()],
+            vec!["hash-a".into(), "hash-b".into(), "hash-c".into()],
+        )
         .await
         .unwrap();
 
@@ -1401,4 +1404,19 @@ async fn the_titles_of_what_rules_received_come_back_with_their_torrents() {
             ("hash-b".to_owned(), "title of b".to_owned()),
         ]
     );
+
+    // Only the torrents asked about are read, and none asked about reads none.
+    let only_b = history
+        .received_titles_of_rules(vec!["rule-1".into()], vec!["hash-b".into(), "other".into()])
+        .await
+        .unwrap();
+    assert_eq!(
+        only_b["rule-1"],
+        [("hash-b".to_owned(), "title of b".to_owned())]
+    );
+    let none = history
+        .received_titles_of_rules(vec!["rule-1".into()], vec![])
+        .await
+        .unwrap();
+    assert!(none.is_empty());
 }

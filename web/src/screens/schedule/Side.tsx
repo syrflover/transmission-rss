@@ -1,10 +1,10 @@
 import { useId, useState } from "react";
 import { Link } from "react-router-dom";
 
-import { clock, when } from "@/lib/time";
+import { when } from "@/lib/time";
 import { cn } from "@/lib/utils";
 
-import { useBoard } from "../collect/status/StatusBoard";
+import { useBoard, type Load } from "../collect/status/StatusBoard";
 import type { Board } from "../collect/status/api";
 import type { Week } from "./api";
 import { quarterName } from "./format";
@@ -30,8 +30,8 @@ function Row({ label, children, muted }: { label: string; children: React.ReactN
 }
 
 /** The collection's state: feeds first, then what was added and what Transmission is doing. */
-function CollectStatus() {
-  const { board, failed, slow } = useBoard();
+function CollectStatus({ load }: { load: Load }) {
+  const { board, failed, slow } = load;
   return (
     <section aria-label="수집 상태" data-testid="week-collect-status" className="min-w-0 rounded-card border border-hairline-soft bg-surface-1 p-4 shadow-(--card-shadow)">
       <h2 className="mb-2.5 text-[13px] font-bold">수집 상태</h2>
@@ -69,6 +69,12 @@ function CollectStatus() {
             <Row label="시딩" muted={!board.transmission}>
               {board.transmission ? `${board.transmission.seeding}개` : "아직 없음"}
             </Row>
+            {/* The counts are the worker's last look; when it was shows as on the collect screen's board. */}
+            {board.transmission && (
+              <Row label="Transmission 확인" muted>
+                {when(board.transmission.taken_at, board.now)}
+              </Row>
+            )}
           </dl>
           {failed && <p className="mt-2 text-xs text-urgent">최신 상태를 불러오지 못해 이전 값을 보여줘요.</p>}
         </>
@@ -102,9 +108,10 @@ function NextQuarter({ week }: { week: Week }) {
 
 /** The narrow column beside the schedule on a wide screen. */
 export function SideColumn({ week }: { week: Week }) {
+  const load = useBoard();
   return (
     <aside aria-label="수집 상태와 다음 분기" className="flex min-w-0 flex-col gap-3 max-[979px]:hidden">
-      <CollectStatus />
+      <CollectStatus load={load} />
       <NextQuarter week={week} />
     </aside>
   );
@@ -116,7 +123,9 @@ export function SideColumn({ week }: { week: Week }) {
  * It opens to the two panels the wide screen shows beside the schedule.
  */
 export function SummaryLine({ week }: { week: Week }) {
-  const { board } = useBoard();
+  // One board, read once, for the line and for the panel it opens.
+  const load = useBoard();
+  const { board } = load;
   const [open, setOpen] = useState(false);
   const panelId = useId();
   const read = board ? lastRead(board) : null;
@@ -138,8 +147,8 @@ export function SummaryLine({ week }: { week: Week }) {
         <span className="block min-w-0 flex-1 truncate">
           {board ? (
             <>
-              {read !== null && item("read", "확인", clock(read))}
-              {board.cycle?.next_at ? item("next", "다음", clock(board.cycle.next_at)) : null}
+              {read !== null && item("read", "확인", when(read, board.now))}
+              {board.cycle?.next_at ? item("next", "다음", when(board.cycle.next_at, board.now)) : null}
               {item("seven", "7일", String(board.received.total))}
               {board.transmission ? item("down", "받는 중", String(board.transmission.downloading)) : null}
               {board.transmission ? item("seed", "시딩", String(board.transmission.seeding)) : null}
@@ -158,7 +167,7 @@ export function SummaryLine({ week }: { week: Week }) {
       <div id={panelId} className={cn("mt-2 flex-col gap-3", open ? "flex" : "hidden")}>
         {open && (
           <>
-            <CollectStatus />
+            <CollectStatus load={load} />
             <NextQuarter week={week} />
           </>
         )}

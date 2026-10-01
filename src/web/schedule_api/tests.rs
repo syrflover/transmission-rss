@@ -102,6 +102,7 @@ impl App {
             ))
             .await
             .unwrap();
+        state.setup.mark_import_applied(100).await.unwrap();
         App {
             state,
             now,
@@ -399,7 +400,7 @@ async fn a_paused_subscription_keeps_its_card_and_one_without_subtitles_has_no_s
 }
 
 #[tokio::test]
-async fn an_archived_subscription_and_an_anime_anissia_stopped_listing_have_no_card() {
+async fn an_archived_subscription_has_no_card() {
     let app = App::new().await;
     let archived = app
         .subscribe(
@@ -414,10 +415,6 @@ async fn an_archived_subscription_and_an_anime_anissia_stopped_listing_have_no_c
         .set_rule_state(&archived.id, RuleState::Archived, NOW)
         .await
         .unwrap();
-    let mut stale = anime(2, "끝남", 4, Some("10:00"), Some("2026-07-02"));
-    stale.fetched_at = NOW - 15 * 24 * 60 * 60 * 1000;
-    app.subscribe(stale, rule("O"), SubtitleMode::None, None)
-        .await;
     app.subscribe(
         anime(3, "방영 중", 4, Some("10:00"), Some("2026-07-02")),
         rule("L"),
@@ -428,6 +425,140 @@ async fn an_archived_subscription_and_an_anime_anissia_stopped_listing_have_no_c
 
     let body = app.week().await;
     assert_eq!(card_titles(&body["week"]["days"][3]), ["방영 중"]);
+}
+
+#[tokio::test]
+async fn an_anime_anissia_marks_off_has_a_quiet_off_card_in_place_of_the_video_and_subtitle_lines()
+{
+    let app = App::new().await;
+    let mut off = anime(1, "결방 작품", 4, Some("10:00"), Some("2026-07-02"));
+    off.status = "OFF".into();
+    // The library holds the 14th, which still does not make it a received card.
+    app.subscribe(off, rule("O"), SubtitleMode::Follow, Some("Both"))
+        .await;
+    // A paused rule of an off anime says it is paused.
+    let mut paused = anime(2, "멈춘 결방", 4, Some("10:00"), Some("2026-07-02"));
+    paused.status = "OFF".into();
+    app.subscribe(
+        paused,
+        RuleInput {
+            state: RuleState::Paused,
+            ..rule("P")
+        },
+        SubtitleMode::Follow,
+        None,
+    )
+    .await;
+    app.subscribe(
+        anime(3, "방영", 4, Some("10:00"), Some("2026-07-02")),
+        rule("N"),
+        SubtitleMode::Follow,
+        Some("VideoOnly"),
+    )
+    .await;
+
+    let body = app.week().await;
+    let cards = body["week"]["days"][3]["cards"].as_array().unwrap();
+    let by_title = |title: &str| cards.iter().find(|c| c["title"] == title).unwrap();
+
+    let off = by_title("결방 작품");
+    assert_eq!(off["video"], "off");
+    assert_eq!(off["subtitle"], Value::Null);
+    assert_eq!(off["episode"], Value::Null);
+    assert_eq!(off["time"], "10:00");
+    assert_eq!(by_title("멈춘 결방")["video"], "paused");
+    assert_eq!(by_title("방영")["video"], "received");
+    assert_eq!(by_title("방영")["subtitle"], "waiting");
+}
+
+#[tokio::test]
+async fn the_stand_in_an_import_keeps_is_not_anissias_off() {
+    let app = App::new().await;
+    // What an import stores while Anissia cannot be asked: `기타`, `OFF`, never
+    // received. It has no weekday, so no card; and if it were moved to a weekday
+    // without being received, it is still not read as `OFF`.
+    let stand_in =
+        crate::store::channels::import_subscriptions::ImportSubscription::stand_in(1, "대역");
+    assert_eq!(stand_in.status, "OFF");
+    app.subscribe(stand_in.clone(), rule("S"), SubtitleMode::None, None)
+        .await;
+    let body = app.week().await;
+    assert!(body["week"]["days"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|d| d["cards"].as_array().unwrap().is_empty()));
+
+    let weekday = Anime {
+        week: 4,
+        air_time: Some("10:00".into()),
+        start_date: Some("2026-07-02".into()),
+        ..stand_in
+    };
+    app.state.anissia.store.put_anime(weekday).await.unwrap();
+    let body = app.week().await;
+    let card = &body["week"]["days"][3]["cards"][0];
+    assert_eq!(card["video"], "waiting");
+}
+
+#[tokio::test]
+async fn a_card_leaves_once_the_end_date_has_passed() {
+    let app = App::new().await;
+    let mut ended = anime(1, "종영", 4, Some("10:00"), Some("2026-07-02"));
+    ended.end_date = Some("2026-09-24".into());
+    app.subscribe(ended, rule("E"), SubtitleMode::None, None)
+        .await;
+    let mut last = anime(2, "마지막 주", 4, Some("10:00"), Some("2026-07-02"));
+    last.end_date = Some("2026-10-01".into());
+    app.subscribe(last, rule("L"), SubtitleMode::None, None)
+        .await;
+
+    let body = app.week().await;
+    assert_eq!(card_titles(&body["week"]["days"][3]), ["마지막 주"]);
+}
+
+#[tokio::test]
+async fn an_anime_without_an_end_date_leaves_once_anissia_is_found_not_to_list_it_and_comes_back_if_listed(
+) {
+    let app = App::new().await;
+    // A snapshot a month old: Anissia could not be reached since, so the card stays.
+    let mut old = anime(1, "오래됨", 4, Some("10:00"), Some("2026-07-02"));
+    old.fetched_at = NOW - 30 * 24 * 60 * 60 * 1000;
+    app.subscribe(old, rule("O"), SubtitleMode::None, None)
+        .await;
+    app.subscribe(
+        anime(2, "빠짐", 4, Some("10:00"), Some("2026-07-02")),
+        rule("G"),
+        SubtitleMode::None,
+        None,
+    )
+    .await;
+
+    let titles = |body: &Value| -> Vec<String> {
+        card_titles(&body["week"]["days"][3])
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
+    };
+    assert_eq!(titles(&app.week().await), ["빠짐", "오래됨"]);
+
+    // The refresh asked every week and the anime was in none of them.
+    app.state
+        .anissia
+        .store
+        .mark_unlisted(vec![2], NOW, NOW + 24 * 60 * 60 * 1000)
+        .await
+        .unwrap();
+    assert_eq!(titles(&app.week().await), ["오래됨"]);
+
+    // Anissia lists it again.
+    app.state
+        .anissia
+        .store
+        .put_anime(anime(2, "빠짐", 4, Some("10:00"), Some("2026-07-02")))
+        .await
+        .unwrap();
+    assert_eq!(titles(&app.week().await), ["빠짐", "오래됨"]);
 }
 
 #[tokio::test]
@@ -465,6 +596,11 @@ async fn an_episode_in_transmission_is_downloading_until_the_library_holds_it() 
         .await
         .unwrap();
 
+    app.state
+        .status
+        .record_cycle_interval(5 * 60_000)
+        .await
+        .unwrap();
     // Nothing is downloading: the 14th has aired and not come.
     let video = |body: &Value| body["week"]["days"][3]["cards"][0]["video"].clone();
     assert_eq!(video(&app.week().await), "waiting");
@@ -485,6 +621,60 @@ async fn an_episode_in_transmission_is_downloading_until_the_library_holds_it() 
     assert_eq!(video(&app.week().await), "waiting");
 
     // The 14th is (a revision of it counts as the episode).
+    let record = |taken_at: i64| {
+        app.state.status.record_transmission(
+            TransmissionCounts {
+                downloading: 1,
+                seeding: 0,
+                taken_at,
+            },
+            vec!["bb".into()],
+        )
+    };
+    record(NOW).await.unwrap();
+    assert_eq!(video(&app.week().await), "downloading");
+
+    // The look is as old as three cycles: still believed. Older: the worker is
+    // not looking any more, so the episode is not shown as downloading.
+    let cycle = 5 * 60_000;
+    record(NOW - 3 * cycle).await.unwrap();
+    assert_eq!(video(&app.week().await), "downloading");
+    record(NOW - 3 * cycle - 1).await.unwrap();
+    assert_eq!(video(&app.week().await), "waiting");
+    // A worker that comes back and looks again shows it once more.
+    record(NOW).await.unwrap();
+    assert_eq!(video(&app.week().await), "downloading");
+}
+
+#[tokio::test]
+async fn nothing_is_downloading_without_a_recorded_cycle_interval() {
+    let app = App::new().await;
+    let rule = app
+        .subscribe(
+            anime(1, "받는 중", 4, Some("10:00"), Some("2026-07-02")),
+            self::rule("Work"),
+            SubtitleMode::None,
+            Some("Empty"),
+        )
+        .await;
+    app.state
+        .history
+        .record(
+            NOW - 1000,
+            vec![Observation {
+                channel_id: app.channel.id.clone(),
+                channel_label: app.channel.masked_url(),
+                identity_key: "title:x".into(),
+                title: "[G] Work - 14 (1080p) [AAAA1111].mkv".into(),
+                link: "https://feed.test/item".into(),
+                result: HistoryResult::Received,
+                rule_id: Some(rule.id.clone()),
+                torrent_hash: Some("aa".into()),
+                reason: None,
+            }],
+        )
+        .await
+        .unwrap();
     app.state
         .status
         .record_transmission(
@@ -493,11 +683,13 @@ async fn an_episode_in_transmission_is_downloading_until_the_library_holds_it() 
                 seeding: 0,
                 taken_at: NOW,
             },
-            vec!["bb".into()],
+            vec!["aa".into()],
         )
         .await
         .unwrap();
-    assert_eq!(video(&app.week().await), "downloading");
+    // Without the interval, how old a look may be cannot be told.
+    let body = app.week().await;
+    assert_eq!(body["week"]["days"][3]["cards"][0]["video"], "waiting");
 }
 
 #[tokio::test]

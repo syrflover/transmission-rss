@@ -109,6 +109,54 @@ async fn a_snapshot_is_replaced_by_the_newer_one_and_forgets_a_held_back_refresh
 }
 
 #[tokio::test]
+async fn an_anime_found_unlisted_is_marked_until_a_snapshot_is_received_again() {
+    let env = Env::new().await;
+    env.anissia.put_anime(anime(7, 100)).await.unwrap();
+    env.anissia.put_anime(anime(8, 100)).await.unwrap();
+    let unlisted = |nos: Vec<i64>| env.anissia.unlisted(nos);
+    assert!(unlisted(vec![7, 8, 9]).await.unwrap().is_empty());
+
+    env.anissia
+        .mark_unlisted(vec![7], 500, 1_000)
+        .await
+        .unwrap();
+    assert_eq!(unlisted(vec![7, 8, 9]).await.unwrap(), HashSet::from([7]));
+    // The snapshot is kept, and the next refresh waits.
+    assert_eq!(env.anissia.anime(7).await.unwrap(), Some(anime(7, 100)));
+    let at = |column: &'static str| {
+        env.db.run::<_, AnissiaStoreError, _>(move |c| {
+            Ok(c.query_row(
+                &format!("SELECT {column} FROM anissia_anime WHERE anime_no = 7"),
+                [],
+                |r| r.get::<_, Option<i64>>(0),
+            )?)
+        })
+    };
+    assert_eq!(at("refresh_not_before").await.unwrap(), Some(1_000));
+    assert_eq!(at("unlisted_at").await.unwrap(), Some(500));
+
+    // Found unlisted again: the first time stays.
+    env.anissia
+        .mark_unlisted(vec![7], 900, 2_000)
+        .await
+        .unwrap();
+    assert_eq!(at("unlisted_at").await.unwrap(), Some(500));
+    assert_eq!(at("refresh_not_before").await.unwrap(), Some(2_000));
+
+    // An anime without a snapshot has nothing to mark.
+    env.anissia
+        .mark_unlisted(vec![9], 900, 2_000)
+        .await
+        .unwrap();
+    assert!(!unlisted(vec![9]).await.unwrap().contains(&9));
+
+    // Anissia lists it again.
+    env.anissia.put_anime(anime(7, 3_000)).await.unwrap();
+    assert!(unlisted(vec![7]).await.unwrap().is_empty());
+    assert_eq!(at("unlisted_at").await.unwrap(), None);
+}
+
+#[tokio::test]
 async fn a_subscription_rule_is_stored_with_its_snapshot_and_a_plain_rule_has_none() {
     let env = Env::new().await;
     let plain = env
