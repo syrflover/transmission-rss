@@ -56,13 +56,11 @@ services:
     # The worker winds down within 5 seconds of SIGTERM (a cycle or command in
     # flight is abandoned and picked up again at the next start).
     stop_grace_period: 15s
-    # 256M, not 128M: the artwork queue decodes a cover of up to 64 MiB beside
-    # the 10 MiB it fetched, on top of the feeds and the watches.
     deploy:
       resources:
         limits:
           cpus: "0.25"
-          memory: 256M
+          memory: 128M
 
   trss-web:
     <<: *trss
@@ -71,14 +69,11 @@ services:
     # Only on the LAN address of this host: the web has no sign-in of its own.
     ports:
       - "${TRSS_WEB_HOST_IP:?Set TRSS_WEB_HOST_IP in .env to this host's LAN address}:${TRSS_WEB_HOST_PORT:-8080}:8080"
-    # 256M, not 128M: the web decodes an image of up to 64 MiB, takes in two
-    # uploads or picks of 10 MiB and holds the cover files being served
-    # (src/artwork/mod.rs adds them up).
     deploy:
       resources:
         limits:
           cpus: "0.25"
-          memory: 256M
+          memory: 128M
 
   # The cron run of the legacy binary, kept for rolling back while switching
   # (`scripts/cron.sh install`). `docker compose up` does not start it.

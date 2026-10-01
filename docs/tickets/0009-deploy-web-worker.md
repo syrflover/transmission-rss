@@ -50,7 +50,7 @@
 - `docker-compose.trss.yml`에 상시 서비스 `trss-worker`·`trss-web`을 두었어요. 둘 다 `ghcr.io/syrflover/transmission-rss:${TRSS_VERSION}`(같은 릴리스), `restart: unless-stopped`, 로그 회전(10m×3)이고, 실행 파일은 `entrypoint`로 명시해요.
   DB는 `TRSS_DATA_DIR`(기본 `./data`)의 `/data/trss.db`예요. 미디어는 Transmission과 같은 `/downloads`에 읽기 전용으로 붙여, 폴더 링크 검사와 Transmission `downloadDir` 비교가 같은 경로 표기를 봐요.
 - 옛 cron 서비스 `trss`는 되돌리기용으로 `legacy` 프로필에 남겼고, `scripts/cron.sh`가 `--profile legacy`로 불러요. `CHANNELS_CONFIG_URL`은 전환 뒤 `.env`에서 빠져도 파일 전체가 풀리도록 필수에서 뺐어요. ENTRYPOINT(`transmission-rss`)는 되돌리기가 필요 없어질 때 다시 정해요.
-- 자원 한도는 컨테이너마다 0.25 CPU·128M으로 시작했어요. 근거와 재검토 계획은 [readme](../../readme.md#resource-limits)에 있어요. 작품 표지(0015)의 이미지 디코딩이 한 번에 최대 64 MiB를 쓰게 되어, 사용자가 2026-10-01에 `trss-web`과 `trss-worker`의 메모리 한도를 둘 다 256M으로 올리기로 결정했어요(Transmission 한도는 그대로예요). 합은 [0015 결과](0015-work-artwork.md)와 `src/artwork/mod.rs`에 있어요. 로컬 유휴 상태는 worker 3.4MiB·web 1.2MiB였어요(피드와 Transmission 없이, 실제 부하가 아님).
+- 자원 한도는 컨테이너마다 0.25 CPU·128M으로 시작해요. 근거와 재검토 계획은 [readme](../../readme.md#resource-limits)에 있어요. 로컬 유휴 상태는 worker 3.4MiB·web 1.2MiB였어요(피드와 Transmission 없이, 실제 부하가 아님).
 - 운영 안내([readme](../../readme.md))에 설정, 실행·중지·업데이트·로그·백업, cron에서 옮기는 순서(토렌트 목록 저장 → cron 해제 → web → 가져오기 → worker), 되돌리기를 적었어요.
 
 ### 로컬 확인 (2026-09-30, `--locked`로 빌드한 이미지, 연결할 수 없는 Transmission 주소)
