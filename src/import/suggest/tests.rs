@@ -67,6 +67,28 @@ fn a_rule_saving_into_the_collect_folder_itself_cannot_be_a_subscription() {
 }
 
 #[test]
+fn a_rule_saving_through_a_parent_folder_cannot_be_a_subscription() {
+    let readings = vec![address(1, Some("Team")), address(2, None), address(3, None)];
+    let rules = [
+        rule("../Elsewhere"),
+        rule("Show/../../Out"),
+        rule("Show/Season 01"),
+    ];
+    let out = suggest(&readings, &rules);
+    for suggestion in &out[..2] {
+        let reason = suggestion.blocked.as_deref().unwrap();
+        assert!(reason.contains(".."), "{reason}");
+        assert!(!suggestion.checked_at_first());
+        assert_eq!(suggestion.offer(), None);
+        assert_ne!(suggestion.kind(), Kind::None);
+    }
+    // A name that only contains dots is no parent folder.
+    assert_eq!(out[2].blocked, None);
+    let out = suggest(&[address(4, None)], &[rule("Re..Zero/Season 01")]);
+    assert_eq!(out[0].blocked, None);
+}
+
+#[test]
 fn a_channel_follows_an_anime_with_its_first_rule_only() {
     let readings = [
         address(1, Some("Team")),

@@ -628,6 +628,43 @@ async fn a_rule_saving_into_the_collect_folder_itself_is_offered_but_blocked() {
 }
 
 #[tokio::test]
+async fn a_rule_saving_through_a_parent_folder_is_blocked_in_the_preview_and_refused_on_apply() {
+    let app = App::new().await;
+    let file = "\
+- url: https://feeds.example.test/x?token=t
+  directory: /media
+  rules:
+    # Wed. 22:30. Team
+    # https://anissia.net/anime?animeNo=1001
+    - match: Up
+      directory: ../Elsewhere
+";
+    let content = app.real(file);
+    app.state
+        .settings
+        .put_collection(0, format!("{}/media", app.root()), None)
+        .await
+        .unwrap();
+    let preview = app.preview(&content).await;
+    let s = suggestion(&preview, 0, 0);
+    assert_eq!(s["checked"], false);
+    assert!(s["blocked"].as_str().unwrap().contains(".."), "{s}");
+
+    // A client that checks it anyway gets the rule without a subscription.
+    let (status, done) = app.apply(&content, json!([]), json!([pick(0, 0)])).await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    assert_eq!(done["counts"]["subscriptions_created"], 0);
+    assert_eq!(
+        done["subscriptions"]["not_created"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(app.followed().await.is_empty());
+}
+
+#[tokio::test]
 async fn a_replaced_rule_that_follows_an_anime_already_keeps_it_and_the_preview_says_so() {
     let app = App::new().await;
     let content = app.real(COMMENTED);

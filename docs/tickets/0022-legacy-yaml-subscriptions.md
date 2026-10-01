@@ -31,7 +31,7 @@
 ### 구현한 것
 
 - 주석 읽기(`src/import/comments.rs`): YAML 파서가 주석을 버리므로 줄 단위로 훑어서 규칙의 `- ` 줄 바로 위(빈 줄 없는) 주석 덩어리를 찾고, 그 덩어리의 마지막 두 줄만 그 규칙의 주석으로 읽어요. 주소 줄은 규칙 바로 윗줄이어야 해요. 읽은 결과는 `Reading`(`None`, `Unreadable{reason}`, `Address{anime_no, creator, airs}`)이고 `LegacyChannel.readings`에 규칙 순서대로 담겨요. 줄 훑기가 센 규칙 수가 파서가 읽은 수와 다르면 주석이 있는 파일의 모든 규칙을 `주석이 어느 규칙 것인지 찾지 못해서`로 두고, 주석이 하나도 없으면 모두 `주석 없음`이에요.
-- 제안(`src/import/suggest.rs`): 네 경우(`with_creator`, `address_only`, `unreadable`, `none`)와 처음 체크 상태(제작자가 있을 때만 체크)를 정해요. 저장 폴더가 수집 폴더 자체인 규칙, 같은 채널에서 이미 앞선 규칙이 구독한 작품의 규칙은 제안이 `blocked`(까닭과 함께)라 체크할 수 없어요.
+- 제안(`src/import/suggest.rs`): 네 경우(`with_creator`, `address_only`, `unreadable`, `none`)와 처음 체크 상태(제작자가 있을 때만 체크)를 정해요. 저장 폴더가 수집 폴더 자체이거나 `..` 구성 요소를 가진 규칙(`POST /api/subscriptions`가 거절하는 폴더와 같아요), 같은 채널에서 이미 앞선 규칙이 구독한 작품의 규칙은 제안이 `blocked`(까닭과 함께)라 체크할 수 없어요.
 - 미리보기(`src/web/import_api.rs`, `import_api/suggestions.rs`): 규칙마다 `suggestion`을 실어요. 미리보기는 Anissia를 기다리지 않아요.
 - 적용: 요청에 체크한 제안(`subscriptions: [{channel, rule}]`)을 받아 가져오기와 같은 트랜잭션에서 구독을 만들어요(`src/store/channels/import_subscriptions.rs`). 서버가 다시 주석을 읽어 확인하고(파일이 바뀌었으면 `409`), 제작자가 있으면 `follow`, 없으면 `undecided`, `subscribed_at`은 가져온 시각이에요. 가져오기는 명령을 만들지 않아서 아무것도 받지 않고, 이미 있는 기록은 0018의 `is_past`로 지난 항목이 돼요. `건너뛰기`한 채널의 제안은 빠지고, 처음 실행(모든 채널을 묻지 않고 추가)에도 제안은 똑같이 보여요. 구독을 만들지 못한 규칙(이미 구독, 같은 채널에서 작품이 겹침)은 규칙만 가져오고 결과에 까닭을 남겨요.
 - Anissia에 닿지 않을 때: 서버가 8초까지 물어 보고 못 찾으면 규칙의 일치 문구를 제목으로 하는 임시 편성 값(`기타`, `fetched_at` 0, 상태 `OFF`)을 넣어 구독을 만들어요. 하루 갱신(`due()`)이 곧바로 진짜 값으로 바꿔요. 화면에서는 요일·시간이 `미정`이에요.

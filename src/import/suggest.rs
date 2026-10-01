@@ -9,7 +9,10 @@
 use std::{collections::HashMap, path::Path};
 
 use super::comments::Reading;
-use crate::{folders::is_collect_folder_itself, store::channels::RuleInput};
+use crate::{
+    folders::{has_parent_dir, is_collect_folder_itself},
+    store::channels::RuleInput,
+};
 
 /// The four cases of the spec's suggestion table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,8 +83,9 @@ impl Suggestion {
 /// `rules` run side by side; `rules` carry the directories as they will be
 /// stored (below the collect folder).
 ///
-/// A rule saving into the collect folder itself cannot be a subscription, and a
-/// channel follows one anime with one rule: the first rule that offers an anime
+/// A rule saving into the collect folder itself, or through a `..` component
+/// (which `POST /api/subscriptions` refuses as well), cannot be a subscription,
+/// and a channel follows one anime with one rule: the first rule that offers an anime
 /// keeps it, a later rule that offers the same anime is blocked.
 pub fn suggest(readings: &[Reading], rules: &[RuleInput]) -> Vec<Suggestion> {
     let mut first_of: HashMap<i64, usize> = HashMap::new();
@@ -95,6 +99,11 @@ pub fn suggest(readings: &[Reading], rules: &[RuleInput]) -> Vec<Suggestion> {
                 if is_collect_folder_itself(Path::new(&rule.directory)) {
                     blocked = Some(
                         "이 규칙은 수집 폴더 자체에 받아서 구독으로 만들 수 없어요. 저장 폴더를 작품 폴더로 고친 뒤 구독해 주세요."
+                            .to_owned(),
+                    );
+                } else if has_parent_dir(Path::new(&rule.directory)) {
+                    blocked = Some(
+                        "이 규칙의 저장 폴더에 `..`가 있어서 구독으로 만들 수 없어요. 저장 폴더를 `..` 없는 작품 폴더로 고친 뒤 구독해 주세요."
                             .to_owned(),
                     );
                 } else if let Some(first) = first_of.get(anime_no) {
