@@ -159,6 +159,7 @@ function FolderRow({
           {folder.error} 이전에 찾은 작품은 그대로 두었어요.
         </p>
       )}
+      {folder.watch_note && <p className="m-0 text-[13px] leading-normal text-text-secondary">{folder.watch_note}</p>}
       {rescan.phase.kind === "idle" && rescan.phase.message && rescan.phase.message !== folder.error && (
         <p role="alert" className="m-0 text-[13px] leading-normal font-semibold text-urgent">
           {rescan.phase.message}

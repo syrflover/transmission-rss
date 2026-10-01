@@ -21,6 +21,8 @@ export interface WatchFolder {
   new_works: number;
   checked_at: number | null;
   error: string | null;
+  /** A sentence while the worker could not watch every directory for changes (how many and why); it then checks those itself every cycle. */
+  watch_note: string | null;
 }
 
 export interface WatchFolderList {
