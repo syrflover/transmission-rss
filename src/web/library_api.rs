@@ -10,7 +10,7 @@
 //! | --------- | -------------------------------------------------------------------- |
 //! | `sort`    | `title`, `year`, `added`, `video`, `subtitle` (default `subtitle`)  |
 //! | `filter`  | `all`, `airing`, `complete`, `partial`, `none`, `check` (default `all`) |
-//! | `q`       | text the work's title (its folder name) contains, without regard to case; NFC-normalized |
+//! | `q`       | text the work's title (its folder name) or a linked AniList entry's native, English or romaji title contains, without regard to case; NFC-normalized |
 //! | `after`   | the `next` of the previous page; leave out for the first page        |
 //! | `limit`   | 1 to 200 works, default 60                                           |
 //!
@@ -40,11 +40,12 @@
 //! - Order: the sort's time latest first (`added`: the work's, `video` /
 //!   `subtitle`: the latest known video / subtitle over every season), an
 //!   unknown time after every known one, then the title (NFC, case ignored),
-//!   then the ID. `title` and `year` are the title order (no work has an airing
-//!   year yet).
+//!   then the ID. `title` is the title order; `year` is the start year of the
+//!   latest local season's first AniList entry, latest first, unknown last.
 //! - Filters: `complete`, `partial` and `none` are the subtitle coverage of the
 //!   latest season; `check` is a subtitle file that could not be placed or a
-//!   work whose folder is gone; `airing` matches nothing until airing is known.
+//!   work whose folder is gone; `airing` matches the works whose latest local season links an
+//!   entry that is releasing.
 //! - `name` is the work's folder name. `latest_season` is the highest season
 //!   number recorded for the work (`null` without a season folder); `video` and
 //!   `subtitle` are the episodes of that season that have a file, as ranges of

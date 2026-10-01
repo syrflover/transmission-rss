@@ -1,5 +1,6 @@
 use crate::{
     artwork::{AnilistConfig, Artwork},
+    seasons::Seasons,
     store::{
         channels::ChannelStore, commands::CommandStore, history::HistoryStore,
         library::LibraryStore, settings::SettingsStore, status::StatusStore, Db,
@@ -24,11 +25,16 @@ pub struct AppState {
     /// Work covers: their state, AniList, and the image files of the app
     /// data folder.
     pub artwork: Artwork,
+    /// The AniList entries linked to each season, and the user's choices
+    /// about them.
+    pub seasons: Seasons,
 }
 
 impl AppState {
     pub fn new(db: Db) -> Self {
+        let artwork = Artwork::new(db.clone(), None, AnilistConfig::default());
         AppState {
+            seasons: Seasons::over(db.clone(), &artwork),
             channels: ChannelStore::new(db.clone()),
             history: HistoryStore::new(db.clone()),
             status: StatusStore::new(db.clone()),
@@ -37,12 +43,13 @@ impl AppState {
             library: LibraryStore::new(db.clone()),
             // No app data folder: covers can be read and changed but no image
             // stored or served until `with_artwork` gives one.
-            artwork: Artwork::new(db, None, AnilistConfig::default()),
+            artwork,
         }
     }
 
     /// Replaces the artwork services (the app data folder and AniList's address).
     pub fn with_artwork(mut self, artwork: Artwork) -> Self {
+        self.seasons = self.seasons.alongside(&artwork);
         self.artwork = artwork;
         self
     }

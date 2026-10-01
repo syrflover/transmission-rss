@@ -8,10 +8,12 @@
 //!   "watch_folder": { "id": "…", "path": "/media/anime" },
 //!   "folder_path": "/media/anime/Lycoris Recoil",
 //!   "added_at": null,
+//!   "native_title": "リコリス・リコイル",
 //!   "seasons": [{
 //!     "number": 1,
+//!     "info": { "version": 2, "entries": [ … ], … },
 //!     "episodes": [{
-//!       "episode": "01", "sort": 1.0,
+//!       "episode": "01", "sort": 1.0, "air_at": null,
 //!       "video":    [{ "path": "Season 01/… S01E01.mkv", "added_at": null }],
 //!       "subtitle": [{ "path": "Season 01/… S01E01.ko.ass", "added_at": 1760000100000 }]
 //!     }]
@@ -35,6 +37,13 @@
 //!   `sort` is its number, `null` when it is no number (`SP`). `added_at` is
 //!   Unix milliseconds, `null` when unknown (the file was there before the app
 //!   first looked).
+//! - `native_title` is the first (lowest-numbered, not season 0) season's first
+//!   linked AniList entry's native title, `null` without one.
+//! - `info` is the season's info, the linked AniList entries taken together
+//!   (see [`super::seasons_api`]); a season with no link has version 0 and no
+//!   values, which the screen shows as unknown. `air_at` is when AniList
+//!   schedules the episode (Unix milliseconds), only while the entry is
+//!   releasing and has a per-episode schedule, `null` otherwise.
 //! - `unrecognized` are the files that could not be attached to an episode,
 //!   with the reason's code and a sentence for it.
 //! - `rules` are the rules whose save folder is in this work's folder: the
@@ -58,7 +67,11 @@ use axum::{
 use serde::Serialize;
 use url::Url;
 
-use super::{artwork_api::image_url, ApiError, AppState};
+use super::{
+    artwork_api::image_url,
+    seasons_api::{season_view, work_infos, SeasonInfoView},
+    ApiError, AppState,
+};
 use crate::{
     rss::save_path,
     store::{
@@ -100,6 +113,7 @@ impl From<FileRecord> for FileView {
 struct EpisodeView {
     episode: String,
     sort: Option<f64>,
+    air_at: Option<i64>,
     video: Vec<FileView>,
     subtitle: Vec<FileView>,
 }
@@ -109,6 +123,7 @@ impl From<EpisodeDetail> for EpisodeView {
         EpisodeView {
             episode: episode.episode,
             sort: episode.number,
+            air_at: None,
             video: episode.video.into_iter().map(FileView::from).collect(),
             subtitle: episode.subtitle.into_iter().map(FileView::from).collect(),
         }
@@ -118,6 +133,7 @@ impl From<EpisodeDetail> for EpisodeView {
 #[derive(Serialize)]
 struct SeasonView {
     number: u32,
+    info: SeasonInfoView,
     episodes: Vec<EpisodeView>,
 }
 
@@ -153,6 +169,7 @@ struct WorkDetailView {
     watch_folder: WatchFolderRef,
     folder_path: String,
     added_at: Option<i64>,
+    native_title: Option<String>,
     seasons: Vec<SeasonView>,
     unrecognized: Vec<UnrecognizedView>,
     rules: Vec<RuleRef>,
@@ -240,6 +257,47 @@ async fn show(
         Err(e) => return Err(ApiError::Internal(e.to_string())),
     };
 
+    let numbers: Vec<u32> = work.seasons.iter().map(|s| s.number).collect();
+    let (links, first) = work_infos(&state, &work.id, &numbers).await?;
+    let native_title = first
+        .and_then(|first| links.get(&first))
+        .and_then(|link| link.entries.first())
+        .and_then(|entry| entry.native.clone());
+    let seasons: Vec<SeasonView> = work
+        .seasons
+        .into_iter()
+        .map(|season| {
+            let link = &links[&season.number];
+            let previous = season
+                .number
+                .checked_sub(1)
+                .filter(|p| *p >= 1)
+                .and_then(|p| links.get(&p))
+                // Only a season the work has can be followed from.
+                .filter(|_| numbers.contains(&(season.number - 1)));
+            let air_times = crate::seasons::combine::air_times(&link.entries);
+            let info = season_view(link, previous, first);
+            SeasonView {
+                number: season.number,
+                info,
+                episodes: season
+                    .episodes
+                    .into_iter()
+                    .map(|episode| {
+                        let air_at = episode
+                            .number
+                            .filter(|n| n.fract() == 0.0 && *n >= 1.0 && *n <= f64::from(u32::MAX))
+                            .and_then(|n| air_times.get(&(n as u32)).copied());
+                        EpisodeView {
+                            air_at,
+                            ..EpisodeView::from(episode)
+                        }
+                    })
+                    .collect(),
+            }
+        })
+        .collect();
+
     let folder_path = FsPath::new(&work.watch_folder_path)
         .join(&work.dir_name)
         .to_string_lossy()
@@ -254,14 +312,8 @@ async fn show(
         },
         folder_path,
         added_at: work.first_seen_at,
-        seasons: work
-            .seasons
-            .into_iter()
-            .map(|season| SeasonView {
-                number: season.number,
-                episodes: season.episodes.into_iter().map(EpisodeView::from).collect(),
-            })
-            .collect(),
+        native_title,
+        seasons,
         unrecognized: work
             .unrecognized
             .into_iter()
