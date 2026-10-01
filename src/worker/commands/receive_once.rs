@@ -236,7 +236,9 @@ pub enum NotRetryable {
     /// The item is a revision whose replacement waits for `다시 받기` (its
     /// download stopped, or `버전 미상`), and the folder's video of its
     /// episode is that revision or a higher one already
-    /// ([`revisions::holds_same_or_higher`]). Only the worker can tell.
+    /// ([`revisions::holds_same_or_higher`]). The worker is the authority; the
+    /// web tells the cases its own evidence settles beforehand
+    /// ([`crate::web::in_place`]) and leaves the rest to this.
     InPlace,
 }
 
@@ -368,6 +370,25 @@ pub async fn revision_retry(
     Ok(match store.verdict(row.id).await? {
         Claim::Overtaken => RevisionRetry::Overtaken,
         _ => RevisionRetry::Again(Box::new(row)),
+    })
+}
+
+/// The row of the replacement that waits for `다시 받기` of `item`: the
+/// revision received again or overtaken by a higher one (`revision`), or the
+/// `버전 미상` row of an item a retry may repair. `None` for any other item.
+pub async fn waiting_revision(
+    store: &RevisionStore,
+    item: &HistoryItem,
+    revision: &RevisionRetry,
+) -> Result<Option<Revision>, RevisionError> {
+    Ok(match revision {
+        RevisionRetry::Again(row) => Some((**row).clone()),
+        RevisionRetry::Overtaken => store.by_item(item.id).await?,
+        RevisionRetry::None if is_retryable_result(item.result) => store
+            .by_item(item.id)
+            .await?
+            .filter(|row| row.state == RevisionState::Unknown),
+        RevisionRetry::None => None,
     })
 }
 
@@ -705,16 +726,9 @@ pub async fn execute_with(
     // so. A replacement stopped before its video was received could replace
     // nothing now, and ends as skipped; a `버전 미상` one is left as it is,
     // so a later request looks at the folder again.
-    let waiting = match &revision {
-        RevisionRetry::Again(row) => Some((**row).clone()),
-        RevisionRetry::None if is_retryable_result(item.result) => ctx
-            .revisions
-            .by_item(item.id)
-            .await
-            .map_err(Retry::store)?
-            .filter(|row| row.state == RevisionState::Unknown),
-        _ => None,
-    };
+    let waiting = waiting_revision(&ctx.revisions, &item, &revision)
+        .await
+        .map_err(Retry::store)?;
     if let Some(row) = waiting {
         match revisions::holds_same_or_higher(ctx, &item, &row).await {
             Ok(false) => {}

@@ -40,7 +40,9 @@
 //!   from a past episode search, while the rule recorded on it is active and
 //!   no higher revision of the episode is in the folder or on its way
 //!   ([`receive_once::RevisionRetry`]) and the rule's folder is the one the
-//!   replacement was decided for ([`receive_once::same_destination`]). `retry_blocked` says why it is
+//!   replacement was decided for ([`receive_once::same_destination`]), and
+//!   the episode's place is not known to hold the same or a higher revision
+//!   already ([`super::in_place`]). `retry_blocked` says why it is
 //!   missing on such a revision, and `command` is its command that has not
 //!   ended yet. The link it receives comes from the history record, never
 //!   from the screen.
@@ -55,7 +57,7 @@ use std::{collections::HashMap, path::Path as FsPath};
 use axum::{extract::State, routing::get, Json, Router};
 use serde::Serialize;
 
-use super::{commands_api::CommandView, ApiError, AppState};
+use super::{commands_api::CommandView, in_place::Evidence, ApiError, AppState};
 use crate::{
     revision::season_episode,
     store::{
@@ -100,7 +102,7 @@ pub struct RevisionFailure {
 #[derive(Debug, Clone, Default, Serialize, PartialEq)]
 pub struct RetryOffer {
     pub can_retry: bool,
-    pub retry_blocked: Option<&'static str>,
+    pub retry_blocked: Option<String>,
     pub command: Option<CommandView>,
 }
 
@@ -132,6 +134,7 @@ pub async fn retry_offers(
         .await
         .map_err(|e| internal(&e))?
         .map(|collect| collect.folder);
+    let mut evidence = Evidence::load(state).await?;
     for row in stopped {
         let Some(item) = state
             .history
@@ -141,6 +144,21 @@ pub async fn retry_offers(
         else {
             continue;
         };
+        let command = open.get(&item.id.to_string()).map(CommandView::from);
+        // The episode's place holds this revision or a higher one already:
+        // told first, as it is what makes the button pointless whatever else
+        // is the matter.
+        if let Some(place) = evidence.held(&item, row).await? {
+            offers.insert(
+                item.id,
+                RetryOffer {
+                    can_retry: false,
+                    retry_blocked: Some(place.message()),
+                    command,
+                },
+            );
+            continue;
+        }
         let revision = receive_once::revision_retry(&state.revisions, item.id)
             .await
             .map_err(|e| internal(&e))?;
@@ -164,8 +182,8 @@ pub async fn retry_offers(
                 retry_blocked: plan
                     .err()
                     .filter(|why| why.explains_missing_button())
-                    .map(|why| why.message()),
-                command: open.get(&item.id.to_string()).map(CommandView::from),
+                    .map(|why| why.message().to_owned()),
+                command,
             },
         );
     }
