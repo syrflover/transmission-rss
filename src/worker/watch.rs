@@ -14,10 +14,22 @@
 //!
 //! The duration of every scan is logged, since a large library (hundreds of
 //! works, thousands of files) is read in the cycle's own time.
+//!
+//! # A folder that hangs
+//!
+//! Every scan runs on a blocking thread, and the cycle waits for it under its
+//! lock. A mount that stops answering (NFS, SMB) would hold the lock for good,
+//! so a scan gets [`SCAN_TIMEOUT`]; past it the folder is recorded as unreadable
+//! and the cycle goes on. The thread cannot be stopped, but a scan only reads, so
+//! leaving it to finish (or hang) harms nothing. While it still runs, the folder
+//! is not scanned again (the next attempts fail at once with a sentence saying
+//! so), so a hung mount costs one thread, not one per cycle.
 
 use std::{
+    collections::HashSet,
     path::{Path, PathBuf},
-    time::Instant,
+    sync::{LazyLock, Mutex},
+    time::{Duration, Instant},
 };
 
 use tokio_util::sync::CancellationToken;
@@ -27,6 +39,71 @@ use crate::{
     discovery,
     store::library::{Followed, LibraryError, ScanReport, WatchFolder},
 };
+
+/// How long reading one watch folder may take before it is given up on.
+pub const SCAN_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// The folders (by path) whose scan thread has not returned yet.
+static SCANNING: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(Mutex::default);
+
+/// Takes `path` out of [`SCANNING`] when the scan thread returns.
+struct Scanning(String);
+
+impl Drop for Scanning {
+    fn drop(&mut self) {
+        SCANNING
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&self.0);
+    }
+}
+
+/// Runs `read` for the folder at `path` on a blocking thread and waits at most
+/// `timeout`. A panic, a timeout, and a scan of the folder that is still running
+/// from an earlier timeout are each a [`discovery::ScanError`] with a sentence.
+async fn read_with_timeout<F>(
+    path: &str,
+    timeout: Duration,
+    read: F,
+) -> Result<discovery::Scan, discovery::ScanError>
+where
+    F: FnOnce() -> Result<discovery::Scan, discovery::ScanError> + Send + 'static,
+{
+    let claimed = SCANNING
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(path.to_owned());
+    if !claimed {
+        return Err(discovery::ScanError {
+            message: "이전 확인이 아직 끝나지 않았어요. 마운트가 응답하지 않는 것 같으니 연결을 확인해 주세요."
+                .to_owned(),
+            detail: "an earlier scan of the folder has not returned".to_owned(),
+        });
+    }
+    let guard = Scanning(path.to_owned());
+    let task = tokio::task::spawn_blocking(move || {
+        let _guard = guard;
+        read()
+    });
+    match tokio::time::timeout(timeout, task).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(err)) => {
+            // The scan panicked: nothing is known about the folder.
+            eprintln!("Watch folder {path}: the scan ended with {err}");
+            Err(discovery::ScanError {
+                message: "폴더를 읽다가 내부 오류가 났어요.".to_owned(),
+                detail: err.to_string(),
+            })
+        }
+        Err(_) => Err(discovery::ScanError {
+            message: format!(
+                "폴더를 읽는 데 {}초가 넘게 걸려서 멈췄어요. 마운트(NFS·SMB)가 응답하지 않는지 확인해 주세요.",
+                timeout.as_secs()
+            ),
+            detail: format!("timed out after {} s", timeout.as_secs()),
+        }),
+    }
+}
 
 /// What reading one folder came to.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,17 +125,10 @@ pub async fn scan_folder(
 ) -> Result<Scanned, LibraryError> {
     let started = Instant::now();
     let path = folder.path.clone();
-    let result = match tokio::task::spawn_blocking(move || discovery::scan(path.as_ref())).await {
-        Ok(result) => result,
-        Err(err) => {
-            // The scan panicked: nothing is known about the folder.
-            eprintln!("Watch folder {}: the scan ended with {err}", folder.path);
-            Err(discovery::ScanError {
-                message: "폴더를 읽다가 내부 오류가 났어요.".to_owned(),
-                detail: err.to_string(),
-            })
-        }
-    };
+    let result = read_with_timeout(&folder.path, SCAN_TIMEOUT, move || {
+        discovery::scan(path.as_ref())
+    })
+    .await;
     let read_in = started.elapsed();
     let failure = result.as_ref().err().cloned();
     let recorded = ctx.library.record_scan(&folder.id, result, now).await?;
@@ -158,4 +228,66 @@ pub async fn follow_move(
         return Ok(Followed::NotTracked);
     };
     ctx.library.follow_move(&from, &to, &name).await
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn a_scan_that_hangs_times_out_and_is_not_started_again_until_it_returns() {
+        let (release, wait) = mpsc::channel::<()>();
+        let timeout = Duration::from_millis(50);
+
+        let hung = read_with_timeout("/hang", timeout, move || {
+            let _ = wait.recv();
+            Ok(discovery::Scan::default())
+        })
+        .await;
+        let error = hung.unwrap_err();
+        assert!(error.message.contains("멈췄어요"), "{error}");
+
+        // The first thread is still running: no second scan of the folder starts.
+        let started = Instant::now();
+        let again = read_with_timeout("/hang", timeout, || {
+            panic!("a second scan of a folder whose scan has not returned must not start")
+        })
+        .await;
+        assert!(again.unwrap_err().message.contains("아직 끝나지 않았어요"));
+        assert!(started.elapsed() < timeout);
+
+        // Another folder is not held back.
+        let other = read_with_timeout("/other", timeout, || Ok(discovery::Scan::default())).await;
+        assert!(other.is_ok());
+
+        // Once the thread returns, the folder can be scanned again.
+        release.send(()).unwrap();
+        for _ in 0..100 {
+            if !SCANNING.lock().unwrap().contains("/hang") {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let after = read_with_timeout("/hang", timeout, || Ok(discovery::Scan::default())).await;
+        assert!(after.is_ok(), "{after:?}");
+    }
+
+    #[tokio::test]
+    async fn a_scan_within_the_time_is_returned_as_it_is() {
+        let ok = read_with_timeout("/ok", Duration::from_secs(5), || {
+            Ok(discovery::Scan::default())
+        })
+        .await;
+        assert_eq!(ok, Ok(discovery::Scan::default()));
+        let failed = read_with_timeout("/failed", Duration::from_secs(5), || {
+            Err(discovery::ScanError {
+                message: "m".into(),
+                detail: "d".into(),
+            })
+        })
+        .await;
+        assert_eq!(failed.unwrap_err().message, "m");
+    }
 }
