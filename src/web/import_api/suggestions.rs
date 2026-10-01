@@ -45,7 +45,6 @@ use crate::{
             import_subscriptions::{ImportSubscription, SubscriptionOutcome},
             ChannelWithRules, NewSubscription, RuleInput, SubtitleMode,
         },
-        history::Millis,
     },
 };
 
@@ -301,11 +300,7 @@ pub(super) async fn resolve(state: &AppState, anime_nos: &[i64]) -> Resolved {
 }
 
 /// The subscriptions to write with the import, given what Anissia said.
-pub(super) fn subscriptions(
-    wanted: &[Wanted],
-    resolved: &Resolved,
-    at: Millis,
-) -> Vec<ImportSubscription> {
+pub(super) fn subscriptions(wanted: &[Wanted], resolved: &Resolved) -> Vec<ImportSubscription> {
     wanted
         .iter()
         .map(|w| {
@@ -324,7 +319,8 @@ pub(super) fn subscriptions(
                         SubtitleMode::Undecided
                     },
                     creator: w.creator.clone(),
-                    subscribed_at: at,
+                    // The store stamps the import time inside its transaction.
+                    subscribed_at: 0,
                 },
                 placeholder,
             }

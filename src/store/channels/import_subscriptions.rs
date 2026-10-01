@@ -23,7 +23,7 @@ use super::{
     repo::{check_creator, check_not_subscribed, NewSubscription},
     ChannelError, ChannelStore,
 };
-use crate::store::anissia;
+use crate::store::{anissia, history::Millis};
 
 /// A rule of an import that becomes a subscription.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,6 +32,8 @@ pub struct ImportSubscription {
     pub action: usize,
     /// The rule's place among that action's channel's rules.
     pub rule: usize,
+    /// What to make of the rule. Its `subscribed_at` is not used: the import
+    /// stamps the time itself, inside its transaction.
     pub subscription: NewSubscription,
     /// Whether `subscription.anime` is a stand-in because Anissia could not be
     /// asked (see [`ImportSubscription::stand_in`]): it never replaces a
@@ -91,15 +93,19 @@ pub enum SubscriptionOutcome {
 impl ChannelStore {
     /// [`ChannelStore::import_channels_setting_folder`] that also makes the
     /// rules `subscriptions` name subscriptions, in the same transaction. The
-    /// outcomes run in the order of `subscriptions`.
+    /// outcomes run in the order of `subscriptions`. `now` gives the import time
+    /// (Unix ms) every subscription is stamped with; it is called once, after the
+    /// transaction took the write lock, so a subscription is never dated before a
+    /// write that the lock made the import wait for.
     pub async fn import_channels_subscribing(
         &self,
         actions: Vec<ImportAction>,
         collect_folder: Option<String>,
         subscriptions: Vec<ImportSubscription>,
+        now: impl FnOnce() -> Millis + Send + 'static,
     ) -> Result<(Vec<ImportedChannel>, Vec<SubscriptionOutcome>), ChannelError> {
         self.db
-            .run(move |c| apply_import(c, &actions, collect_folder.as_deref(), &subscriptions))
+            .run(move |c| apply_import(c, &actions, collect_folder.as_deref(), &subscriptions, now))
             .await
     }
 }
@@ -110,6 +116,7 @@ pub(super) fn subscribe(
     tx: &Transaction<'_>,
     results: &mut [ImportedChannel],
     subscriptions: &[ImportSubscription],
+    at: Millis,
 ) -> Result<Vec<SubscriptionOutcome>, ChannelError> {
     let mut outcomes = Vec::with_capacity(subscriptions.len());
     for import in subscriptions {
@@ -148,7 +155,7 @@ pub(super) fn subscribe(
                 new.anime.anime_no,
                 new.subtitles.as_str(),
                 new.creator,
-                new.subscribed_at,
+                at,
             ],
         )?;
         *results[import.action].channel_mut() = read_channel(tx, &channel_id)?;

@@ -85,7 +85,8 @@ fn follow(action: usize, rule: usize, anime: Anime, creator: Option<&str>) -> Im
                 SubtitleMode::Undecided
             },
             creator: creator.map(str::to_owned),
-            subscribed_at: 5_000,
+            // The import stamps its own time.
+            subscribed_at: 0,
         },
         placeholder: false,
     }
@@ -118,7 +119,7 @@ async fn checked_rules_become_subscriptions_with_the_import_time_and_the_others_
     ];
     let (results, outcomes) = f
         .store
-        .import_channels_subscribing(actions, None, subs)
+        .import_channels_subscribing(actions, None, subs, || 5_000)
         .await
         .unwrap();
     assert_eq!(outcomes, vec![SubscriptionOutcome::Created; 3]);
@@ -166,7 +167,7 @@ async fn nothing_of_the_import_stays_when_a_later_part_fails() {
     let subs = vec![follow(0, 0, anime(10, "에이", 3, 1_000), Some("Team"))];
     let error = f
         .store
-        .import_channels_subscribing(actions, None, subs)
+        .import_channels_subscribing(actions, None, subs, || 5_000)
         .await
         .unwrap_err();
     assert!(error.is_conflict(), "{error}");
@@ -213,7 +214,7 @@ async fn a_replaced_rule_that_is_a_subscription_stays_as_it_is() {
     ];
     let (results, outcomes) = f
         .store
-        .import_channels_subscribing(actions, None, subs)
+        .import_channels_subscribing(actions, None, subs, || 5_000)
         .await
         .unwrap();
     assert_eq!(
@@ -244,7 +245,7 @@ async fn a_channel_follows_an_anime_with_one_rule() {
     ];
     let (results, outcomes) = f
         .store
-        .import_channels_subscribing(actions, None, subs)
+        .import_channels_subscribing(actions, None, subs, || 5_000)
         .await
         .unwrap();
     let first_rule = results[0].channel().rules[0].id.clone();
@@ -282,6 +283,7 @@ async fn a_stand_in_snapshot_never_replaces_one_the_app_has_and_a_real_one_does(
             vec![ImportAction::Add(channel("https://a.example/rss", &["A"]))],
             None,
             vec![stand_in(10)],
+            || 5_000,
         )
         .await
         .unwrap();
@@ -297,6 +299,7 @@ async fn a_stand_in_snapshot_never_replaces_one_the_app_has_and_a_real_one_does(
             vec![ImportAction::Add(channel("https://b.example/rss", &["A"]))],
             None,
             vec![follow(0, 0, anime(10, "에이", 3, 2_000), None)],
+            || 5_000,
         )
         .await
         .unwrap();
@@ -308,6 +311,7 @@ async fn a_stand_in_snapshot_never_replaces_one_the_app_has_and_a_real_one_does(
             vec![ImportAction::Add(channel("https://c.example/rss", &["A"]))],
             None,
             vec![stand_in(10)],
+            || 5_000,
         )
         .await
         .unwrap();
@@ -322,7 +326,7 @@ async fn a_subscription_that_does_not_fit_the_import_is_refused_before_anything_
         let store = f.store.clone();
         async move {
             store
-                .import_channels_subscribing(add(), None, subs)
+                .import_channels_subscribing(add(), None, subs, || 5_000)
                 .await
                 .unwrap_err()
         }
@@ -346,4 +350,44 @@ async fn a_subscription_that_does_not_fit_the_import_is_refused_before_anything_
         ChannelError::Invalid(_)
     ));
     assert!(f.store.list_channels_with_rules().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn the_import_time_is_read_while_the_transaction_holds_the_write_lock() {
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+
+    let f = fixture().await;
+    let held = Arc::new(AtomicBool::new(false));
+    let probe = {
+        let (path, held) = (f.path.clone(), held.clone());
+        move || {
+            // Nobody else can start a write while the import is writing.
+            let other = rusqlite::Connection::open(&path).unwrap();
+            other.busy_timeout(std::time::Duration::ZERO).unwrap();
+            held.store(
+                other.execute_batch("BEGIN IMMEDIATE").is_err(),
+                Ordering::SeqCst,
+            );
+            7_000
+        }
+    };
+    let (results, _) = f
+        .store
+        .import_channels_subscribing(
+            vec![ImportAction::Add(channel("https://a.example/rss", &["A"]))],
+            None,
+            vec![follow(0, 0, anime(10, "에이", 3, 1_000), None)],
+            probe,
+        )
+        .await
+        .unwrap();
+    assert!(
+        held.load(Ordering::SeqCst),
+        "the clock was read outside the transaction"
+    );
+    let stored = results[0].channel().rules[0].subscription.as_ref().unwrap();
+    assert_eq!(stored.subscribed_at, 7_000);
 }
