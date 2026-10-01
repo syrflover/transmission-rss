@@ -1,6 +1,6 @@
 # 0020 첫 화 전에 구독하고 제목 후보로 규칙을 완성해요
 
-- 상태: 대기
+- 상태: 완료 (실제 Anissia·실제 Transmission·worker와 함께 도는 화면 확인은 남았어요)
 - 출처: [방영작 구독](../specs/collection.md#방영작-구독)(제목 대기·제목 후보), [수집 화면](../specs/collection.md#수집-화면)(구독 탭, 상태 배너), [할 일](../specs/jobs.md#할-일)(`제목 후보`), [채널과 규칙 필드](../specs/settings.md#채널과-규칙-필드)(`match: null`)
 - 막는 티켓: [0018](0018-subscribe-from-schedule.md)
 
@@ -26,3 +26,46 @@
 | 기록 탭의 `no_match` 줄 | 제목 대기 구독이 있으면 그 줄에 잇는 동작이 바로 보이고, 없으면 보이지 않아요. |
 | 이미 다른 규칙이 받은 제목 | 제목 후보가 되지 않아요. |
 | 휴대폰 너비 | 구독 탭의 후보 줄과 미리보기에 가로 스크롤이 없어요. |
+
+## 결과
+
+### 구현한 것
+
+- 마이그레이션 20(`src/store/channels/title_waiting.sql`): `rule_subscriptions.titled_at`(제목 대기였던 구독이 일치 문구를 받은 시각)과 채널별로 거절한 제목을 담는 `rejected_titles`(채널 삭제와 함께 지워져요). 옛 DB가 구독을 그대로 두고 `titled_at`을 비워 두는 것은 `src/store/db.rs`의 시험이 봐요.
+- 지난 항목: 구독의 "지난 항목" 경계는 `subscribed_at`·`titled_at`·`resumed_at` 중 가장 늦은 시각이에요(`src/worker/plan.rs`의 `PastSince`). 그 경계 전에 기록된 항목은 주기가 받지 않고 미리보기가 `지난 회차`(까닭 `titled`)로 보여요. 주기와 미리보기, `receive_once`가 같은 판정을 쓰고, 제목을 정하는 저장(`give_title`)과 규칙 편집으로 일치 문구를 처음 적는 저장이 모두 `titled_at`을 남겨요. 미리보기는 일치 문구가 없던 구독에 문구를 적어 보면 제목을 정한 것으로 보고 그 항목들을 지난 회차로 보여요.
+- 제목 후보(`src/subscriptions/candidates.rs`): 읽을 때 규칙·기록·거절 목록에서 계산해요(저장하지 않아요). 한 채널에서 ① 활성 제목 대기 구독이 있고 ② 작품 부분(`parse_release`)이 가장 이른 제목 대기 구독의 경계 뒤에 처음 나타났고 ③ `no_match` 항목이 있으며 ④ 어떤 규칙(상태 무관)도 그 제목에 맞지 않고 받은·중복·추가 실패 항목이 없고 ⑤ 거절하지 않은 작품이 후보예요. 같은 작품(대소문자와 공백 모양을 무시한 키)은 하나로 모아 항목 수·처음·마지막 기록 시각을 담아요. 구독이 멈추거나 보관돼 활성 제목 대기가 없으면 후보가 없고, 제목을 정하거나 거절하면 사라져요.
+- API(`src/web/subscriptions_api.rs`): `GET /api/subscriptions/candidates`(후보와 그 채널의 제목 대기 구독), `POST /api/subscriptions/candidates/reject`(`{channel_id, work}`), `POST /api/rules/{id}/title`(`{version, work, directory?}`: 제목 대기·활성 구독에 일치 문구를 주고 저장 폴더를 바꾸되 아무것도 받지 않아요. 버전이 어긋나면 `409`). `POST /api/subscriptions`는 `work: null`로 제목 대기 구독을 만들어요. 기록 항목 응답에는 `no_match` 항목에 `name_title`(작품·폴더 제안·잇을 수 있는 구독)이 붙어요.
+- 할 일의 원천: `subscriptions_api::title_candidates(&AppState)`와 `GET /api/subscriptions/candidates`가 현재 후보를 줘요. 생기는 조건은 위 ①–⑤를 모두 만족할 때, 사라지는 조건은 제목을 정함·거절·그 채널의 마지막 활성 제목 대기 구독이 멈춤·보관·삭제되거나 어떤 규칙이 그 제목에 맞게 됨이에요. 할 일 화면과 메뉴 배지는 만들지 않았고 후보를 세는 곳도 없어요.
+- 웹: 구독 흐름의 릴리스 제목 단계에 `아직 첫 화 전이에요`(채널에 기록이 없으면 비활성과 까닭), 저장 폴더 단계의 제안 없음 안내, 확인 단계의 제목 대기 변형(미리보기·체크 없이 `구독`). 구독 탭 맨 위의 파란 강조 `제목 후보` 묶음(제목·최신 항목·채널·항목 수·처음 기록 시각, `정하기`·`거절`), `/collect/subs/title`(구독 고르기, 지금 폴더 유지 또는 제목으로 만든 폴더로 바꾸기, 지난 항목 체크 목록, `제목 정하고 N개 받기`와 진행 표시; 체크 목록·진행 표시는 구독 흐름과 같은 구성 요소), 다음 분기 묶음의 설명·`신작에서 추가`(`/collect/subs/add?week=8`)·카드의 `제목 대기` 배지와 설명, 규칙 상세의 제목 대기·제목 후보 배너, 미리보기의 `titled` 까닭 문장, 기록 탭 `no_match` 줄의 `제목 대기 구독에 잇기`(그 채널에 활성 제목 대기 구독이 있을 때만).
+- `readme.md`에 `Title waiting` 절을 더했어요.
+
+### 결정
+
+- 제목 대기 구독은 채널에 수집 기록이 하나라도 있어야 만들 수 있어요. 기록이 없는 채널에서는 첫 주기에 있던 모든 작품이 새 제목처럼 보여서 후보가 한꺼번에 쏟아지기 때문이에요(`POST /api/subscriptions`가 `400`으로 까닭을 말해요).
+- 후보는 그 작품의 가장 이른 기록이 경계 뒤여야 해요. 구독 전에 이미 기록이 있던 작품에 새 회차가 올라와도 후보가 되지 않아요.
+- 후보를 어느 구독에 줄지는 사용자가 고르고 Anissia 작품과 제목의 연결은 단정하지 않아요. 구독이 하나뿐이면 미리 골라 둬요.
+- 제목을 정하기 전에 기록된 그 작품의 항목은 `titled_at` 때문에 지난 항목이에요(구독 시각 전의 항목과 같은 방식). 사용자가 미리보기에서 체크한 것만 받아요.
+
+### 검증한 것
+
+- `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`(합계 882개 통과, 실패 0개, 무시 2개), 웹 `bun run typecheck`, `bun run build`가 통과했어요.
+- 완료 기준의 행과 자동 시험:
+  - 첫 화 전 작품을 `아직 첫 화 전이에요`로 구독(`match: null`, 아무것도 받지 않음): `a_subscription_without_a_work_waits_for_a_title_and_receives_nothing`(API), `a_waiting_subscription_has_no_phrase_and_no_title_time`(저장소), `tests/title_waiting.rs`의 `a_title_waiting_subscription_receives_nothing_and_offers_the_new_title_as_a_candidate`. 다음 분기 묶음의 표시는 브라우저로 봤어요.
+  - 새 제목이 후보 하나로 생기고 2화가 나타나도 하나: `src/subscriptions/candidates_tests.rs`(작품 모으기·항목 수 시험)와 위 통합 시험. 메뉴 배지에 세지 않는 것은 코드에 세는 곳이 없음으로만 확인했어요.
+  - 제목 대기 구독이 없는 동안 나타난 제목은 후보 아님, 구독 전에 이미 기록된 작품도 후보 아님, 멈춘·보관된 구독은 후보 없음, 다른 규칙이 받은·맞는 제목은 후보 아님, 거절한 작품은 다시 나타나지 않음: `candidates_tests.rs`의 시험들과 `a_paused_waiting_subscription_offers_no_candidate`(통합).
+  - 후보를 고르고 `[Batch]`를 빼고 확인: `items_seen_before_the_title_are_past_and_what_comes_after_is_received_by_the_cycle`(주기가 제목 전 항목을 받지 않음, 미리보기가 `past/titled`, `receive_once`가 체크한 항목만 규칙 폴더로 받음, 제목 뒤에 처음 본 항목은 주기가 받음)와 API 시험(`naming_a_title_…` 계열). 브라우저에서 체크한 두 항목만 명령이 만들어지고 `[Batch]`는 만들어지지 않는 것을 DB로 확인했어요.
+  - 거절: 저장소 시험, API 시험, 통합 시험, 브라우저(후보가 사라지고 다시 읽어도 나타나지 않으며 구독은 제목 대기 그대로).
+  - 기록 탭 `no_match` 줄: 기록 API 시험(`name_title`은 활성 제목 대기가 있는 채널의 `no_match` 줄에만)과 브라우저(그 채널의 줄에만 링크, 다른 채널과 `received` 줄에는 없음).
+  - 휴대폰 너비: 구독 탭의 후보 줄(긴 제목 포함), 제목 정하기 화면, 기록 탭, 규칙 상세 배너·미리보기를 375px에서 열어 `scrollWidth == innerWidth`였어요.
+- 브라우저(로컬 `trss-web`, 스크래치 DB, 가짜 Anissia(`TRSS_ANISSIA_URL`), 데스크톱과 375px, 2026-10-01): 후보 묶음의 파란 강조와 버튼, 제목 정하기(구독 고르기·폴더 바꾸기·체크 목록·`제목 정하고 2개 받기`·진행 표시), 구독 흐름의 제목 대기 변형(기록 없는 채널은 비활성과 까닭), 규칙 상세의 제목 후보 배너와 정한 뒤 미리보기의 `제목을 정하기 전에 올라온 항목` 문장.
+
+### 검증하지 못한 것
+
+- worker와 Transmission을 띄운 실제 흐름: 브라우저에서는 worker를 띄우지 않아 체크한 항목의 명령이 `pending`으로 남았어요. 실제 추가는 `tests/title_waiting.rs`(가짜 Transmission)로만 봤어요.
+- 실제 Anissia·실제 RSS 채널, 다크 모드, 실제 휴대폰·스크린 리더. 자동 화면 시험은 없어요(이 저장소에 웹 시험 도구가 없어요).
+- 후보 계산은 요청마다 제목 대기 구독이 있는 채널의 기록을 읽어요(채널당 최대 2만 건). 기록이 아주 큰 채널에서의 비용은 재지 않았어요.
+
+### 남은 일
+
+- 할 일 화면이 생기면 그 제안 줄이 `subscriptions_api::title_candidates`를 읽어요(위 원천 항목).
+- 마이그레이션 번호 20은 0022와 겹칠 수 있어요. 병합 때 번호를 다시 매겨야 하면 `src/store/db.rs`의 목록 순서와 파일 이름만 바꾸면 돼요.
