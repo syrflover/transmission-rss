@@ -52,7 +52,7 @@ export function LibraryScreen() {
   } else if (data.works.length === 0 && !pages.stale) {
     body =
       prefs.filter === "airing" ? (
-        <EmptyState>방영 정보를 아직 알 수 없어서 방영 중인 작품을 가려낼 수 없어요.</EmptyState>
+        <EmptyState>방영 중인 작품이 없어요. 최신 시즌에 방영 중인 AniList 항목을 연결한 작품만 여기에 나와요.</EmptyState>
       ) : (
         <div className="flex flex-col items-start gap-2.5">
           <EmptyState>조건에 맞는 작품이 없어요.</EmptyState>
