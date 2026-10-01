@@ -39,8 +39,9 @@
 //! `PUT /rules/{id}/episode` (`{ version, episode }`) is `적용` of the episode
 //! offset the rule detail suggests, and saves it as the user's own value (see
 //! [`episode`]). A view carries `episode_basis` (why the app set the offset it
-//! did, when it did) and `episode_suggestion` (`{ value, basis }`, what the
-//! app offers when it did not).
+//! did, when it did), `episode_previous` (the offset it replaced) and
+//! `episode_suggestion` (`{ value, basis }`, what the app offers when it did
+//! not).
 //!
 //! A subscription's view also tells where it stands in the library:
 //! `season` (the season its received videos appeared in, with the work's name,
@@ -215,8 +216,14 @@ pub struct RuleView {
     /// Why the app set the offset by itself, when it did and the rule has the
     /// sentence (see [`crate::episode_offset`]).
     pub episode_basis: Option<String>,
+    /// The offset the rule had before the app set its own, while the offset
+    /// is the app's and the value it replaced is known.
+    pub episode_previous: Option<i64>,
     /// What the app offers for the offset of a rule it did not set one for.
     pub episode_suggestion: Option<episode::EpisodeSuggestion>,
+    /// The last `되돌리기` of the rule's automatic offset (an `episode_undo`
+    /// command), open or ended; `null` when it never had one.
+    pub episode_undo: Option<episode::EpisodeUndoView>,
     /// `active`, `paused` or `archived`.
     pub state: &'static str,
     /// An earlier rule takes an item that this rule also matches.
@@ -683,7 +690,9 @@ fn views(
             episode: rule.episode,
             episode_auto: rule.episode_auto,
             episode_basis: analysis.episodes.basis.get(&rule.id).cloned(),
+            episode_previous: analysis.episodes.previous.get(&rule.id).copied(),
             episode_suggestion: analysis.episodes.suggestion.get(&rule.id).cloned(),
+            episode_undo: analysis.episodes.undo.get(&rule.id).cloned(),
             state: rule.state.as_str(),
             overlap: analysis.overlap.contains(&rule.id),
             error: analysis.errors.get(&rule.id).cloned(),

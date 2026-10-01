@@ -69,6 +69,36 @@ export interface EpisodeSuggestion {
   basis: string;
 }
 
+/**
+ * One video of a `되돌리기`: `kept` is left as it is, for the `reason`. A
+ * `pending` one with a `reason` waits (still downloading, a replacement under
+ * way) for `이어서 되돌리기`.
+ */
+export interface EpisodeUndoFile {
+  from_name: string;
+  to_name: string;
+  state: "pending" | "renamed" | "kept";
+  reason: string | null;
+}
+
+/**
+ * The last `되돌리기` of a rule's automatic offset (the `episode_undo`
+ * command). The command ends `done` once the value is back, whatever became of
+ * the files (`paused` in its outcome when some still wait), or `failed` with
+ * the reason nothing changed. `from`, `to` and
+ * `files` are set once the worker began. An undo whose command ended with files
+ * still `pending` stopped half done (the value is back already); a new
+ * `episode_undo` for its `from` carries it on.
+ */
+export interface EpisodeUndo {
+  command: Command;
+  /** The automatic value undone. */
+  from: number | null;
+  /** The value put back. */
+  to: number | null;
+  files: EpisodeUndoFile[];
+}
+
 export interface Rule {
   id: string;
   channel_id: string;
@@ -85,8 +115,12 @@ export interface Rule {
   episode_auto: boolean;
   /** Why the app set `episode` (a sentence); `null` unless `episode_auto` and the grounds are known. */
   episode_basis: string | null;
+  /** The offset the rule had before the app set its own; `null` unless `episode_auto` and it is known. */
+  episode_previous: number | null;
   /** What the app offers while `episode` is still the plain one; `null` when it has nothing to say. */
   episode_suggestion: EpisodeSuggestion | null;
+  /** The last `되돌리기` of the app's offset, open or ended; `null` when it never had one. */
+  episode_undo: EpisodeUndo | null;
   state: RuleState;
   /** An earlier rule takes an item this rule also matches. */
   overlap: boolean;
@@ -189,6 +223,11 @@ export function getRule(id: string): Promise<Rule> {
  */
 export function sendArchive(id: string, ruleId: string, direction: ArchiveDirection): Promise<Command> {
   return sendCommand(id, "rule_archive", { rule_id: ruleId, direction });
+}
+
+/** `되돌리기` of the app's offset `episode`, as the screen showed it. */
+export function sendEpisodeUndo(id: string, ruleId: string, episode: number): Promise<Command> {
+  return sendCommand(id, "episode_undo", { rule_id: ruleId, episode });
 }
 
 export function createRule(channelId: string, fields: RuleFields): Promise<Rule> {

@@ -362,6 +362,16 @@ impl FakeTransmission {
         }
     }
 
+    /// Makes `hash` download again (a verify that found pieces missing, say).
+    #[allow(dead_code)]
+    pub fn unfinish(&self, hash: &str) {
+        for t in self.state.lock().unwrap().torrents.iter_mut() {
+            if t.hash == hash {
+                t.left_until_done = 1 << 20;
+            }
+        }
+    }
+
     pub fn calls(&self) -> Vec<Call> {
         self.state.lock().unwrap().calls.clone()
     }

@@ -243,7 +243,7 @@ impl Listing {
 
 /// Which torrents hold a file.
 #[derive(Debug)]
-enum Owner<'a> {
+pub(crate) enum Owner<'a> {
     Nobody,
     One(&'a TorrentPlace),
     Several(Vec<&'a TorrentPlace>),
@@ -255,7 +255,7 @@ enum Owner<'a> {
 /// file of the same name whose device and inode are `path`'s, so a folder
 /// Transmission spells another way (a symbolic link, a doubled slash) is
 /// still the same file.
-fn owner_of<'a>(places: &'a [TorrentPlace], path: &Path) -> io::Result<Owner<'a>> {
+pub(crate) fn owner_of<'a>(places: &'a [TorrentPlace], path: &Path) -> io::Result<Owner<'a>> {
     let file = std::fs::metadata(path)?;
     let mut owners: Vec<&TorrentPlace> = Vec::new();
     let mut unsure = false;

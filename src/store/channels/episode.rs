@@ -2,14 +2,17 @@
 //! 영상 회차 변환), and the user's `적용` of a suggestion.
 //!
 //! The offset is `rules.episode`, and `rules.episode_auto` says the app chose
-//! it. The sentence that says why is kept beside it (`episode_basis`, see the
-//! migration), not on [`Rule`]: only the rule's detail reads it.
+//! it. What goes with an automatic value is kept beside it (see the
+//! migration), not on [`Rule`]: the sentence that says why
+//! (`episode_basis`), the value it replaced (`episode_previous`, for
+//! `되돌리기`), and that the app has decided the rule once
+//! (`episode_decided`). Only the rule's detail and the worker read them.
 //!
-//! The app sets an offset only on a rule that still has the value a new rule
-//! has (`0` or `1`, both of which leave a release's number as it is) and was
-//! not set by the app already, and only if the rule is at the version the
-//! caller read. A rule the user has edited since is left alone: the user's
-//! value is never overwritten by the app's logic.
+//! The app decides a rule once: it sets an offset only on a rule whose offset
+//! it has never set ([`EpisodeMark::decided`]) and that is not automatic
+//! already, whatever value the field holds, and only if the rule is at the
+//! version the caller read. A rule the user has saved since is left alone, and
+//! a value the user changed or undid after the app set one is never replaced.
 
 use std::collections::HashMap;
 
@@ -22,9 +25,21 @@ type Result<T> = std::result::Result<T, ChannelError>;
 /// How many rule IDs one query binds.
 const CHUNK: usize = 400;
 
+/// What is kept of a rule's offset beside the value (see the module docs).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EpisodeMark {
+    /// Why the app set the offset; only while it is automatic.
+    pub basis: Option<String>,
+    /// The offset before the app set its own; only while it is automatic.
+    pub previous: Option<i64>,
+    /// The app has set the rule's offset once and does not decide it again.
+    pub decided: bool,
+}
+
 /// Sets the offset of rule `id` as the app's own if the rule is still at
-/// `expected`, has not had an offset set by the app and still has an offset
-/// that changes nothing. `None` when any of that is not so.
+/// `expected`, is not automatic and the app has not decided it before; the
+/// value it had is kept as the one `되돌리기` puts back. `None` when any of
+/// that is not so.
 fn set_auto(
     conn: &mut Connection,
     id: &str,
@@ -35,8 +50,9 @@ fn set_auto(
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let changed = tx.execute(
         "UPDATE rules
-            SET episode = ?3, episode_auto = 1, episode_basis = ?4, version = version + 1
-          WHERE id = ?1 AND version = ?2 AND episode_auto = 0 AND episode IN (0, 1)",
+            SET episode_previous = episode, episode = ?3, episode_auto = 1, episode_decided = 1,
+                episode_basis = ?4, version = version + 1
+          WHERE id = ?1 AND version = ?2 AND episode_auto = 0 AND episode_decided = 0",
         params![id, expected, offset, basis],
     )?;
     let rule = if changed == 1 {
@@ -49,7 +65,7 @@ fn set_auto(
 }
 
 /// The user's offset for rule `id`, if the rule is still at `expected`: it is
-/// the user's own value from then on (`episode_auto` off, no grounds kept).
+/// the user's own value from then on (`episode_auto` off, nothing kept with it).
 fn set_manual(conn: &mut Connection, id: &str, expected: Version, episode: i64) -> Result<Rule> {
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let rule = repo::get_rule(&tx, id)?.ok_or_else(|| ChannelError::NotFound {
@@ -67,7 +83,8 @@ fn set_manual(conn: &mut Connection, id: &str, expected: Version, episode: i64) 
     if rule.episode != episode || rule.episode_auto {
         tx.execute(
             "UPDATE rules
-                SET episode = ?2, episode_auto = 0, episode_basis = NULL, version = version + 1
+                SET episode = ?2, episode_auto = 0, episode_basis = NULL, episode_previous = NULL,
+                    version = version + 1
               WHERE id = ?1",
             params![id, episode],
         )?;
@@ -77,18 +94,27 @@ fn set_manual(conn: &mut Connection, id: &str, expected: Version, episode: i64) 
     Ok(updated)
 }
 
-/// The grounds kept for the automatic offsets of the given rules, by rule ID.
-fn bases(conn: &Connection, rule_ids: &[String]) -> Result<HashMap<String, String>> {
+/// What is kept of the offsets of the given rules, by rule ID. A rule that is
+/// not stored is absent.
+fn marks(conn: &Connection, rule_ids: &[String]) -> Result<HashMap<String, EpisodeMark>> {
     let mut found = HashMap::new();
     for chunk in rule_ids.chunks(CHUNK) {
         let marks = vec!["?"; chunk.len()].join(", ");
         let mut stmt = conn.prepare(&format!(
-            "SELECT id, episode_basis FROM rules
-              WHERE episode_basis IS NOT NULL AND episode_auto = 1 AND id IN ({marks})"
+            "SELECT id, episode_auto, episode_basis, episode_previous, episode_decided FROM rules
+              WHERE id IN ({marks})"
         ))?;
         let rows = stmt
             .query_map(params_from_iter(chunk), |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                let auto: bool = row.get(1)?;
+                Ok((
+                    row.get::<_, String>(0)?,
+                    EpisodeMark {
+                        basis: if auto { row.get(2)? } else { None },
+                        previous: if auto { row.get(3)? } else { None },
+                        decided: row.get(4)?,
+                    },
+                ))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         found.extend(rows);
@@ -98,9 +124,10 @@ fn bases(conn: &Connection, rule_ids: &[String]) -> Result<HashMap<String, Strin
 
 impl ChannelStore {
     /// Sets the episode offset of rule `id` for the app, with the sentence that
-    /// says why: only a rule at `expected_version` whose offset the app has
-    /// not set and that still changes nothing (`0` or `1`) takes it. The
-    /// rule as it is now, or `None` when it was not taken.
+    /// says why: only a rule at `expected_version` that is not automatic and
+    /// that the app has not decided before takes it, whatever value it holds
+    /// (which is kept for `되돌리기`). The rule as it is now, or `None` when it
+    /// was not taken.
     pub async fn set_auto_episode(
         &self,
         id: &str,
@@ -128,9 +155,12 @@ impl ChannelStore {
             .await
     }
 
-    /// The sentences that say why the app set the offsets of the given rules,
-    /// by rule ID. A rule whose offset the app did not set is absent.
-    pub async fn episode_bases(&self, rule_ids: Vec<String>) -> Result<HashMap<String, String>> {
-        self.db.run(move |c| bases(c, &rule_ids)).await
+    /// What is kept of the offsets of the given rules, by rule ID (see
+    /// [`EpisodeMark`]).
+    pub async fn episode_marks(
+        &self,
+        rule_ids: Vec<String>,
+    ) -> Result<HashMap<String, EpisodeMark>> {
+        self.db.run(move |c| marks(c, &rule_ids)).await
     }
 }
