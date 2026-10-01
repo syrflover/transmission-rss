@@ -1160,3 +1160,33 @@ async fn an_image_whose_caller_went_away_is_stored_whole_and_then_cleaned_up() {
     env.art.tidy().await;
     assert!(env.files().is_empty());
 }
+
+#[tokio::test]
+async fn an_unregistered_works_cover_file_is_kept_and_served_again_when_it_comes_back() {
+    let env = Env::new(&["A"]).await;
+    let id = env.id("A").await;
+    let v = env.selection("A").await.version;
+    let uploaded = env.art.upload(&id, v, samples::png(), None).await.unwrap();
+    let files = env.files();
+    assert_eq!(files.len(), 1);
+
+    env.library.remove_folder(&env.folder, 200).await.unwrap();
+    // The cleanup counts the unregistered work's reference as live.
+    env.art.maintain().await;
+    assert_eq!(env.files(), files);
+    // Its queue has nothing for it either way.
+    assert_eq!(env.art.run_next().await, None);
+
+    env.library
+        .add_folder("/w".into(), scan(&["A"]), 300, &[])
+        .await
+        .unwrap();
+    assert_eq!(env.id("A").await, id);
+    let back = env.art.store.selection(&id).await.unwrap();
+    assert_eq!(back, uploaded);
+    assert_eq!(
+        env.art.image(back.image.unwrap()).await.unwrap(),
+        samples::png()
+    );
+    assert_eq!(env.art.run_next().await, None);
+}

@@ -466,11 +466,11 @@ async fn requests_take_turns_and_a_block_holds_them_all() {
 }
 
 #[tokio::test]
-async fn removing_a_work_removes_its_selection_but_not_its_file_record() {
+async fn an_unregistered_works_selection_is_hidden_kept_and_still_referenced() {
     let (db, library, folder, ids) = library(&["A"]).await;
     let store = ArtworkStore::new(db.clone());
     let v = store.selection(&ids[0]).await.unwrap().version;
-    store
+    let chosen = store
         .select_manual(
             &ids[0],
             v,
@@ -479,20 +479,27 @@ async fn removing_a_work_removes_its_selection_but_not_its_file_record() {
         )
         .await
         .unwrap();
-    library.remove_folder(&folder).await.unwrap();
+    library.remove_folder(&folder, 200).await.unwrap();
+    // Out of the library: not shown, not changed.
     assert!(matches!(
         store.selection(&ids[0]).await,
         Err(ArtworkError::NotFound)
     ));
-    // The file stays on record (published, unreferenced) for the cleanup.
-    let published = store
-        .run(|c| Ok(files_of_state(c, "published")?))
+    assert!(matches!(
+        store
+            .change(&ids[0], chosen.version, UserChange::Clear, 5)
+            .await,
+        Err(ArtworkError::NotFound)
+    ));
+    // Its file stays referenced, so the cleanup keeps it.
+    assert_eq!(
+        store.run(|c| Ok(referenced_paths(c)?)).await.unwrap(),
+        ["artwork/a.png"]
+    );
+    // The same path registered again brings the work and its choice back.
+    library
+        .add_folder("/w".into(), scan(&["A"]), 300, &[])
         .await
         .unwrap();
-    assert_eq!(published.len(), 1);
-    assert!(store
-        .run(|c| Ok(referenced_paths(c)?))
-        .await
-        .unwrap()
-        .is_empty());
+    assert_eq!(store.selection(&ids[0]).await.unwrap(), chosen);
 }

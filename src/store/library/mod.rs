@@ -39,8 +39,13 @@
 //! A folder moved by hand is not recognized by its name: the old work goes
 //! missing and the new place is a new work.
 //!
-//! Removing a watch folder removes its works from the library and touches no
-//! file.
+//! Unregistering a watch folder takes its works out of the library and touches
+//! no file, but forgets nothing: the folder's row stays, marked unregistered,
+//! with its works and everything linked to them by ID (covers, season links).
+//! An unregistered folder is not read or listed, and its works are in no list,
+//! screen or queue. Registering the same path again (by hand or as the collect
+//! or archive folder) brings the folder back under its ID, so its works are
+//! found again by folder name with their IDs, and nothing new is searched for.
 //!
 //! # Automatic watch folders
 //!
@@ -52,7 +57,7 @@
 //! settings call for: a folder the user had registered at the same place turns
 //! automatic and keeps its records, a new one is registered (with its first
 //! scan when the caller has one), and an automatic folder at a path the
-//! settings no longer use is removed like an unregistered one. A plan is made
+//! settings no longer use is unregistered like one the user unregisters. A plan is made
 //! from the folders as they were read, and applying it fails with
 //! [`LibraryError::Changed`] if they are not the registered folders any more.
 
@@ -176,7 +181,7 @@ pub struct AutomaticPlan {
     pub(crate) based_on: Vec<(String, String, bool)>,
     /// Folders that become automatic, with the path the settings give them.
     pub keep: Vec<(String, String)>,
-    /// Automatic folders whose path the settings no longer use.
+    /// Automatic folders whose path the settings no longer use: unregistered.
     pub remove: Vec<String>,
     pub add: Vec<NewAutomatic>,
 }
@@ -207,7 +212,7 @@ pub struct AutomaticApplied {
     /// Folders that were registered by hand and became automatic, or whose
     /// path text changed.
     pub converted: usize,
-    /// Folders removed, and the works that went with them.
+    /// Folders unregistered, and the works that left the library with them.
     pub removed: usize,
     pub removed_works: usize,
 }
@@ -350,12 +355,18 @@ impl LibraryStore {
             .await
     }
 
-    /// Removes the folder and its works from the library (no file is touched)
-    /// and returns how many works went. `None` when there is no such folder;
-    /// [`LibraryError::Automatic`] for the collect or archive folder.
-    pub async fn remove_folder(&self, id: &str) -> Result<Option<usize>, LibraryError> {
+    /// Unregisters the folder at `now`: its works leave the library, kept with
+    /// everything linked to them for the folder's return (see the module docs;
+    /// no file is touched). Returns how many works left. `None` when no such
+    /// folder is registered; [`LibraryError::Automatic`] for the collect or
+    /// archive folder.
+    pub async fn remove_folder(
+        &self,
+        id: &str,
+        now: Millis,
+    ) -> Result<Option<usize>, LibraryError> {
         let id = id.to_owned();
-        self.db.run(move |c| repo::remove_folder(c, &id)).await
+        self.db.run(move |c| repo::remove_folder(c, &id, now)).await
     }
 
     /// Applies `plan` in one transaction, provided the collection settings are

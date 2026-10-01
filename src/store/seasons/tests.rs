@@ -478,7 +478,7 @@ async fn only_linked_entries_that_are_not_finished_are_due_a_day_after_they_were
 }
 
 #[tokio::test]
-async fn an_entry_round_trips_and_a_work_takes_its_links_with_it() {
+async fn an_entry_round_trips_and_an_unregistered_work_keeps_its_links() {
     let env = Env::new(&[("Show", &[1])]).await;
     let id = env.id("Show").await;
     let stored = entry(7, "RELEASING", 42);
@@ -494,8 +494,15 @@ async fn an_entry_round_trips_and_a_work_takes_its_links_with_it() {
     env.store.put_entry(changed.clone()).await.unwrap();
     assert_eq!(env.store.entry(7).await.unwrap(), Some(changed));
     env.store.set_links(&id, 1, 1, vec![7]).await.unwrap();
-    // Removing the watch folder removes the work and its link; the cached entry stays.
-    env.library.remove_folder(&env.folder).await.unwrap();
-    assert_eq!(env.rows().await, 0);
+    // Unregistering the watch folder hides the work and keeps its link; the
+    // daily refresh leaves the entry alone meanwhile.
+    let rows = env.rows().await;
+    env.library.remove_folder(&env.folder, 3_000).await.unwrap();
+    assert_eq!(env.rows().await, rows);
+    assert!(matches!(
+        env.store.link(&id, 1).await,
+        Err(SeasonError::NotFound)
+    ));
+    assert_eq!(env.store.next_refresh(i64::MAX / 2).await.unwrap(), None);
     assert!(env.store.entry(7).await.unwrap().is_some());
 }

@@ -212,6 +212,7 @@ pub(super) fn overview(conn: &Connection) -> rusqlite::Result<Vec<WorkOverview>>
             "SELECT w.id, w.dir_name, w.missing, w.first_seen_at, f.id, f.path,
                     (SELECT max(s.number) FROM seasons s WHERE s.work_id = w.id)
                FROM works w JOIN watch_folders f ON f.id = w.watch_folder_id
+              WHERE f.unregistered_at IS NULL
               ORDER BY w.dir_name, w.id",
         )?;
         let rows = stmt.query_map([], |row| {

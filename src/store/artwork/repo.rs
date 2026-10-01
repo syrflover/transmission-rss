@@ -77,10 +77,7 @@ fn from_row(work_id: String, row: &rusqlite::Row<'_>, at: usize) -> rusqlite::Re
 /// A work recorded before its row could exist (none should be) gets the
 /// unselected `auto` row, without a search: only registration starts one.
 fn ensure_row(tx: &Transaction<'_>, work_id: &str) -> Result<(), ArtworkError> {
-    let exists: Option<i64> = tx
-        .query_row("SELECT 1 FROM works WHERE id = ?1", [work_id], |r| r.get(0))
-        .optional()?;
-    if exists.is_none() {
+    if !in_library(tx, work_id)? {
         return Err(ArtworkError::NotFound);
     }
     tx.execute(
@@ -99,7 +96,25 @@ fn read(conn: &Connection, work_id: &str) -> rusqlite::Result<Option<Selection>>
     .optional()
 }
 
+/// Whether `work_id` is a work in the library: recorded, and its watch folder
+/// registered. A work of an unregistered folder keeps its selection, but it
+/// is neither shown nor changed until the folder is registered again.
+fn in_library(conn: &Connection, work_id: &str) -> rusqlite::Result<bool> {
+    Ok(conn
+        .query_row(
+            "SELECT 1 FROM works w JOIN watch_folders f ON f.id = w.watch_folder_id
+              WHERE w.id = ?1 AND f.unregistered_at IS NULL",
+            [work_id],
+            |r| r.get::<_, i64>(0),
+        )
+        .optional()?
+        .is_some())
+}
+
 pub(super) fn selection(conn: &mut Connection, work_id: &str) -> Result<Selection, ArtworkError> {
+    if !in_library(conn, work_id)? {
+        return Err(ArtworkError::NotFound);
+    }
     if let Some(selection) = read(conn, work_id)? {
         return Ok(selection);
     }
@@ -262,6 +277,7 @@ pub(super) fn next_job(conn: &Connection, now: Millis) -> rusqlite::Result<Optio
         "SELECT a.work_id, w.dir_name, a.version, a.job, a.anilist_media_id,
                 a.job_image_url, a.job_attempts
            FROM work_artwork a JOIN works w ON w.id = a.work_id
+           JOIN watch_folders f ON f.id = w.watch_folder_id AND f.unregistered_at IS NULL
           WHERE a.job IS NOT NULL AND (a.job_not_before IS NULL OR a.job_not_before <= ?1)
           ORDER BY a.job = 'search', a.job_requested_at, a.work_id
           LIMIT 1",

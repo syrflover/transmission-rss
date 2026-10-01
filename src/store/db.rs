@@ -64,6 +64,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("library/watch_note.sql")),
     // 13: season info: the AniList entries linked to each local season
     Migration::Sql(include_str!("seasons/schema.sql")),
+    // 14: unregistered watch folders keep their works instead of deleting them
+    Migration::Sql(include_str!("library/unregistered.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]

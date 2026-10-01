@@ -434,12 +434,15 @@ async fn a_recorded_work_that_becomes_unreadable_keeps_its_records_and_times() {
 }
 
 #[tokio::test]
-async fn adding_the_same_path_twice_is_refused_and_removing_takes_the_works_along() {
+async fn unregistering_keeps_the_works_out_of_the_library_until_the_same_path_comes_back() {
     let store = store();
     let (folder, _) = store
         .add_folder(
             "/w".into(),
-            scan(vec![work("A", vec![video(1, "01", "A S01E01.mkv")])]),
+            scan(vec![
+                work("A", vec![video(1, "01", "A S01E01.mkv")]),
+                work("B", vec![video(1, "01", "B S01E01.mkv")]),
+            ]),
             100,
             &[],
         )
@@ -450,24 +453,67 @@ async fn adding_the_same_path_twice_is_refused_and_removing_takes_the_works_alon
         Err(LibraryError::Duplicate)
     ));
     assert_eq!(store.folders().await.unwrap().len(), 1);
+    let before = store.works(&folder.id).await.unwrap();
 
-    assert_eq!(store.remove_folder(&folder.id).await.unwrap(), Some(1));
-    assert_eq!(store.remove_folder(&folder.id).await.unwrap(), None);
+    assert_eq!(store.remove_folder(&folder.id, 200).await.unwrap(), Some(2));
+    assert_eq!(store.remove_folder(&folder.id, 200).await.unwrap(), None);
+    // Not a watch folder: not listed, not read, its works in no list or screen.
     assert!(store.folders().await.unwrap().is_empty());
-    let left: i64 = store
-        .db
-        .run::<_, DbError, _>(|c| {
-            Ok(c.query_row(
-                "SELECT (SELECT count(*) FROM works) + (SELECT count(*) FROM seasons)
-                      + (SELECT count(*) FROM episodes) + (SELECT count(*) FROM media_files)
-                      + (SELECT count(*) FROM unrecognized_files)",
-                [],
-                |r| r.get(0),
-            )?)
-        })
+    assert!(store.folder(&folder.id).await.unwrap().is_none());
+    assert!(store.summaries(0).await.unwrap().is_empty());
+    assert!(store.overview().await.unwrap().is_empty());
+    assert!(store.work_detail(&before[0].id).await.unwrap().is_none());
+    assert_eq!(
+        store
+            .record_scan(&folder.id, Ok(scan(vec![])), 250)
+            .await
+            .unwrap(),
+        None
+    );
+    // But nothing is forgotten.
+    assert_eq!(store.works(&folder.id).await.unwrap(), before);
+
+    // Another path does not bring them back.
+    let (other, _) = store
+        .add_folder("/v".into(), scan(vec![work("A", vec![])]), 300, &[])
         .await
         .unwrap();
-    assert_eq!(left, 0);
+    assert_ne!(other.id, folder.id);
+    assert_ne!(store.works(&other.id).await.unwrap()[0].id, before[0].id);
+
+    // The same path does: same folder, same works, read anew. A file that
+    // appeared meanwhile may have been there long, so it has no time.
+    let (back, report) = store
+        .add_folder(
+            "/w".into(),
+            scan(vec![
+                work(
+                    "A",
+                    vec![
+                        video(1, "01", "A S01E01.mkv"),
+                        video(1, "02", "A S01E02.mkv"),
+                    ],
+                ),
+                work("C", vec![video(1, "01", "C S01E01.mkv")]),
+            ]),
+            400,
+            &store.folders().await.unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(back.id, folder.id);
+    assert!(report.baseline);
+    assert_eq!(report.works_added, 1);
+    let after = store.works(&folder.id).await.unwrap();
+    assert_eq!(find(&after, "A").id, before[0].id);
+    assert_eq!(
+        find(&after, "A").files()["Season 01/A S01E02.mkv"].added_at,
+        None
+    );
+    assert!(find(&after, "B").missing);
+    assert_eq!(find(&after, "B").id, before[1].id);
+    assert_eq!(find(&after, "C").first_seen_at, None);
+    assert_eq!(store.overview().await.unwrap().len(), 4);
 }
 
 #[tokio::test]
@@ -1149,7 +1195,7 @@ async fn a_folder_registered_by_hand_becomes_automatic_and_keeps_its_records() {
 }
 
 #[tokio::test]
-async fn an_automatic_folder_that_is_not_called_for_any_more_goes_with_its_works() {
+async fn an_automatic_folder_that_is_not_called_for_any_more_is_unregistered_with_its_works() {
     let store = store();
     let mut plan = plan_over(&store).await;
     plan.add.push(NewAutomatic {
@@ -1173,7 +1219,21 @@ async fn an_automatic_folder_that_is_not_called_for_any_more_goes_with_its_works
     let folders = store.folders().await.unwrap();
     assert_eq!(folders.len(), 1);
     assert_eq!(folders[0].path, "/c");
-    assert!(store.works(&a.id).await.unwrap().is_empty());
+    // Its work is out of the library but kept, and comes back with the path.
+    let kept = store.works(&a.id).await.unwrap();
+    assert_eq!(kept.len(), 1);
+    assert!(store.overview().await.unwrap().is_empty());
+    let mut plan = plan_over(&store).await;
+    plan.add.push(NewAutomatic {
+        path: "/a".into(),
+        scan: Some(scan(vec![work("A", vec![video(1, "01", "A S01E01.mkv")])])),
+    });
+    store.sync_automatic(plan, 0, 300).await.unwrap();
+    let back = store.folders().await.unwrap();
+    let back = back.iter().find(|f| f.path == "/a").unwrap();
+    assert_eq!(back.id, a.id);
+    assert!(back.automatic);
+    assert_eq!(store.works(&a.id).await.unwrap()[0].id, kept[0].id);
 }
 
 #[tokio::test]
@@ -1192,11 +1252,11 @@ async fn an_automatic_folder_cannot_be_removed_by_hand_but_a_manual_one_can() {
     let auto = store.folders().await.unwrap().remove(1);
 
     assert!(matches!(
-        store.remove_folder(&auto.id).await,
+        store.remove_folder(&auto.id, 200).await,
         Err(LibraryError::Automatic)
     ));
     assert_eq!(store.folders().await.unwrap().len(), 2);
-    assert_eq!(store.remove_folder(&manual.id).await.unwrap(), Some(0));
+    assert_eq!(store.remove_folder(&manual.id, 200).await.unwrap(), Some(0));
 }
 
 #[tokio::test]
@@ -1387,4 +1447,35 @@ async fn the_watch_note_is_kept_until_it_is_cleared() {
         store.folder(&folder.id).await.unwrap().unwrap().watch_note,
         None
     );
+}
+
+#[tokio::test]
+async fn a_folder_kept_by_a_plan_leaves_its_path_to_an_unregistered_folder_holding_it() {
+    // `/w` (unregistered) holds the path the plan would give the folder at
+    // `/w/` (the same place written otherwise): the folder keeps its own text
+    // and becomes automatic, and `/w` stays waiting for that path.
+    let store = store();
+    let (gone, _) = store
+        .add_folder("/w".into(), scan(vec![work("A", vec![])]), 100, &[])
+        .await
+        .unwrap();
+    store.remove_folder(&gone.id, 150).await.unwrap();
+    let (kept, _) = store
+        .add_folder("/w/".into(), scan(vec![]), 200, &[])
+        .await
+        .unwrap();
+    let mut plan = plan_over(&store).await;
+    plan.keep.push((kept.id.clone(), "/w".into()));
+    store.sync_automatic(plan, 0, 300).await.unwrap();
+    let folders = store.folders().await.unwrap();
+    assert_eq!(folders.len(), 1);
+    assert_eq!(
+        (
+            folders[0].id.as_str(),
+            folders[0].path.as_str(),
+            folders[0].automatic
+        ),
+        (kept.id.as_str(), "/w/", true)
+    );
+    assert_eq!(store.works(&gone.id).await.unwrap().len(), 1);
 }

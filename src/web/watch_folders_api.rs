@@ -33,8 +33,10 @@
 //!   reads it once, in the web, read-only, and answers how many works it found.
 //!   The worker reads it again every cycle and on `다시 확인` (the `watch_rescan`
 //!   command, see [`super::commands_api`]).
-//! - `DELETE` removes the folder and its works from the library. No file on the
-//!   disk is touched.
+//! - `DELETE` unregisters the folder: its works leave the library, but their
+//!   records (covers, season links, ...) are kept, and adding the same path
+//!   again brings the works back under the same IDs. No file on the disk is
+//!   touched.
 //!
 //! Folders are compared after resolving links (`canonicalize`), so a link cannot
 //! hide that two folders overlap; the path is stored as typed (trailing slashes
@@ -230,7 +232,7 @@ async fn remove(
 ) -> Result<Json<Removed>, ApiError> {
     match state
         .library
-        .remove_folder(&id)
+        .remove_folder(&id, now_millis())
         .await
         .map_err(store_error)?
     {

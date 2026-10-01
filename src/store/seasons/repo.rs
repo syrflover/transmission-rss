@@ -120,10 +120,15 @@ fn to_json<T: serde::Serialize>(list: &T) -> String {
     serde_json::to_string(list).expect("plain data serializes")
 }
 
+/// Whether the season is recorded for a work in the library (one whose watch
+/// folder is registered).
 fn season_exists(conn: &Connection, work_id: &str, season: u32) -> rusqlite::Result<bool> {
     Ok(conn
         .query_row(
-            "SELECT 1 FROM seasons WHERE work_id = ?1 AND number = ?2",
+            "SELECT 1 FROM seasons s
+               JOIN works w ON w.id = s.work_id
+               JOIN watch_folders f ON f.id = w.watch_folder_id AND f.unregistered_at IS NULL
+              WHERE s.work_id = ?1 AND s.number = ?2",
             params![work_id, season],
             |r| r.get::<_, i64>(0),
         )
@@ -417,6 +422,7 @@ pub(super) fn next_search(
             .query_row(
                 "SELECT i.work_id, i.season, w.dir_name, i.version, i.job_attempts
                    FROM season_info i JOIN works w ON w.id = i.work_id
+                   JOIN watch_folders f ON f.id = w.watch_folder_id AND f.unregistered_at IS NULL
                   WHERE i.job = 'search' AND (i.job_not_before IS NULL OR i.job_not_before <= ?1)
                   ORDER BY i.job_requested_at, i.work_id, i.season LIMIT 1",
                 [now],
@@ -524,7 +530,10 @@ pub(super) fn next_refresh(conn: &Connection, now: Millis) -> rusqlite::Result<O
           WHERE e.status IN ('RELEASING', 'NOT_YET_RELEASED')
             AND e.fetched_at <= ?1 - ?2
             AND (e.refresh_not_before IS NULL OR e.refresh_not_before <= ?1)
-            AND EXISTS (SELECT 1 FROM season_entries l WHERE l.anilist_id = e.id)
+            AND EXISTS (SELECT 1 FROM season_entries l
+                          JOIN works w ON w.id = l.work_id
+                          JOIN watch_folders f ON f.id = w.watch_folder_id
+                         WHERE l.anilist_id = e.id AND f.unregistered_at IS NULL)
           ORDER BY e.fetched_at, e.id LIMIT 1",
         params![now, DAY_MS],
         |r| r.get(0),

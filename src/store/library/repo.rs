@@ -43,7 +43,7 @@ fn folder_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WatchFolder> {
 
 pub(super) fn folders(conn: &Connection) -> rusqlite::Result<Vec<WatchFolder>> {
     let mut stmt = conn.prepare(&format!(
-        "SELECT {FOLDER_COLUMNS} FROM watch_folders ORDER BY rowid"
+        "SELECT {FOLDER_COLUMNS} FROM watch_folders WHERE unregistered_at IS NULL ORDER BY rowid"
     ))?;
     let rows = stmt.query_map([], folder_from_row)?;
     rows.collect()
@@ -51,7 +51,9 @@ pub(super) fn folders(conn: &Connection) -> rusqlite::Result<Vec<WatchFolder>> {
 
 pub(super) fn folder(conn: &Connection, id: &str) -> rusqlite::Result<Option<WatchFolder>> {
     conn.query_row(
-        &format!("SELECT {FOLDER_COLUMNS} FROM watch_folders WHERE id = ?1"),
+        &format!(
+            "SELECT {FOLDER_COLUMNS} FROM watch_folders WHERE id = ?1 AND unregistered_at IS NULL"
+        ),
         [id],
         folder_from_row,
     )
@@ -69,7 +71,7 @@ pub(super) fn summaries(
                 (SELECT count(*) FROM works w
                   WHERE w.watch_folder_id = f.id AND w.missing = 0
                     AND w.first_seen_at IS NOT NULL AND w.first_seen_at >= ?1)
-           FROM watch_folders f ORDER BY f.rowid",
+           FROM watch_folders f WHERE f.unregistered_at IS NULL ORDER BY f.rowid",
     )?;
     let rows = stmt.query_map([new_since], |row| {
         Ok(FolderSummary {
@@ -118,12 +120,29 @@ pub(super) fn add_folder(
     Ok((folder, report))
 }
 
+/// Registers the folder at `path`. A folder unregistered at the same path comes
+/// back with its ID and its works (see [`detach_folder`]); it reads as never
+/// read, so what its next reading finds that was not recorded has no added
+/// time, like a new folder's first reading.
 fn insert_folder(
     tx: &Transaction<'_>,
     path: &str,
     automatic: bool,
     now: Millis,
 ) -> Result<String, LibraryError> {
+    let back: Option<String> = tx
+        .query_row(
+            "UPDATE watch_folders SET unregistered_at = NULL, automatic = ?2, created_at = ?3,
+                    baselined = 0, error = NULL, watch_note = NULL
+              WHERE path = ?1 AND unregistered_at IS NOT NULL
+             RETURNING id",
+            params![path, automatic, now],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if let Some(id) = back {
+        return Ok(id);
+    }
     let id = new_id();
     let inserted = tx.execute(
         "INSERT INTO watch_folders (id, path, created_at, automatic) VALUES (?1, ?2, ?3, ?4)",
@@ -140,26 +159,39 @@ fn insert_folder(
     }
 }
 
-/// Deletes folder `id` with its works; how many works went.
-fn delete_folder(tx: &Transaction<'_>, id: &str) -> rusqlite::Result<Option<usize>> {
+/// Unregisters folder `id`: it stops being a watch folder, and its works leave
+/// the library, but the folder's row stays with every work and what is linked
+/// to them, so registering the same path again finds them under the same IDs.
+/// How many works left the library; `None` when no such folder is registered.
+fn detach_folder(tx: &Transaction<'_>, id: &str, now: Millis) -> rusqlite::Result<Option<usize>> {
     let works: i64 = tx.query_row(
         "SELECT count(*) FROM works WHERE watch_folder_id = ?1",
         [id],
         |row| row.get(0),
     )?;
-    let removed = tx.execute("DELETE FROM watch_folders WHERE id = ?1", [id])?;
-    Ok((removed > 0).then_some(works as usize))
+    let detached = tx.execute(
+        "UPDATE watch_folders SET unregistered_at = ?2, automatic = 0, watch_note = NULL
+          WHERE id = ?1 AND unregistered_at IS NULL",
+        params![id, now],
+    )?;
+    if detached == 0 {
+        return Ok(None);
+    }
+    // Work folders waiting to be readable are a reading's state, not a record.
+    tx.execute("DELETE FROM unread_works WHERE watch_folder_id = ?1", [id])?;
+    Ok(Some(works as usize))
 }
 
 pub(super) fn remove_folder(
     conn: &mut Connection,
     id: &str,
+    now: Millis,
 ) -> Result<Option<usize>, LibraryError> {
     let tx = begin(conn)?;
     if folder(&tx, id)?.is_some_and(|f| f.automatic) {
         return Err(LibraryError::Automatic);
     }
-    let removed = delete_folder(&tx, id)?;
+    let removed = detach_folder(&tx, id, now)?;
     tx.commit()?;
     Ok(removed)
 }
@@ -173,14 +205,20 @@ pub(super) fn apply_automatic(
     let mut applied = AutomaticApplied::default();
     // Removals first, so that a path given up can be taken by another folder.
     for id in &plan.remove {
-        if let Some(works) = delete_folder(tx, id)? {
+        if let Some(works) = detach_folder(tx, id, now)? {
             applied.removed += 1;
             applied.removed_works += works;
         }
     }
     for (id, path) in &plan.keep {
+        // An unregistered folder holding the path keeps it (it is that path's
+        // to come back to); this folder then keeps the path it has, which is
+        // the same place written otherwise.
         tx.execute(
-            "UPDATE watch_folders SET automatic = 1, path = ?2,
+            "UPDATE watch_folders SET automatic = 1,
+                    path = CASE WHEN EXISTS (SELECT 1 FROM watch_folders o
+                                              WHERE o.path = ?2 AND o.id <> ?1)
+                                THEN path ELSE ?2 END,
                     watch_note = CASE WHEN path = ?2 THEN watch_note END
               WHERE id = ?1",
             params![id, path],
@@ -225,9 +263,15 @@ pub(super) fn ensure_automatic(
     path: &str,
     now: Millis,
 ) -> rusqlite::Result<()> {
+    // A folder unregistered at the path comes back with its works, read anew.
     let updated = tx.execute(
-        "UPDATE watch_folders SET automatic = 1 WHERE path = ?1",
-        [path],
+        "UPDATE watch_folders SET automatic = 1,
+                baselined = CASE WHEN unregistered_at IS NULL THEN baselined ELSE 0 END,
+                error = CASE WHEN unregistered_at IS NULL THEN error END,
+                created_at = CASE WHEN unregistered_at IS NULL THEN created_at ELSE ?2 END,
+                unregistered_at = NULL
+          WHERE path = ?1",
+        params![path, now],
     )?;
     if updated == 0 {
         tx.execute(
@@ -271,7 +315,7 @@ pub(super) fn set_watch_note(
     note: Option<&str>,
 ) -> rusqlite::Result<()> {
     conn.execute(
-        "UPDATE watch_folders SET watch_note = ?2 WHERE id = ?1",
+        "UPDATE watch_folders SET watch_note = ?2 WHERE id = ?1 AND unregistered_at IS NULL",
         params![id, note],
     )?;
     Ok(())
@@ -298,7 +342,7 @@ fn apply(
     let in_scope = |name: &str| scope.is_none_or(|names| names.contains(name));
     let baselined: Option<i64> = tx
         .query_row(
-            "SELECT baselined FROM watch_folders WHERE id = ?1",
+            "SELECT baselined FROM watch_folders WHERE id = ?1 AND unregistered_at IS NULL",
             [folder_id],
             |row| row.get(0),
         )

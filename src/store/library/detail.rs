@@ -96,7 +96,7 @@ pub(super) fn detail(conn: &Connection, id: &str) -> rusqlite::Result<Option<Wor
         .query_row(
             "SELECT w.id, w.dir_name, w.missing, w.first_seen_at, f.id, f.path
                FROM works w JOIN watch_folders f ON f.id = w.watch_folder_id
-              WHERE w.id = ?1",
+              WHERE w.id = ?1 AND f.unregistered_at IS NULL",
             [id],
             |row| {
                 Ok(WorkDetail {

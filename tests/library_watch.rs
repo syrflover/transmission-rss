@@ -25,6 +25,7 @@ use transmission_rss::{
     store::{
         channels::{ChannelInput, ChannelWithRules, RuleInput},
         library::{LibraryStore, WatchFolder, WorkRecord},
+        seasons::{Entry, FuzzyDate, SeasonStore},
         settings::SettingsStore,
     },
     worker::{CommandsOutcome, CycleReport, MovePolicy, TickOutcome, Worker},
@@ -569,8 +570,22 @@ async fn an_unreadable_watch_folder_shows_its_reason_and_stops_neither_the_other
 
 // --- unregistering -------------------------------------------------------------------
 
+/// The automatic jobs waiting in the database: cover and season searches.
+async fn queued_jobs(db: &transmission_rss::store::Db) -> i64 {
+    db.run::<_, transmission_rss::store::DbError, _>(|c| {
+        Ok(c.query_row(
+            "SELECT (SELECT count(*) FROM work_artwork WHERE job IS NOT NULL)
+                  + (SELECT count(*) FROM season_info WHERE job IS NOT NULL)",
+            [],
+            |r| r.get(0),
+        )?)
+    })
+    .await
+    .unwrap()
+}
+
 #[tokio::test]
-async fn unregistering_removes_the_folders_works_and_leaves_the_files_alone() {
+async fn unregistering_takes_the_works_out_and_the_same_path_brings_them_back_as_they_were() {
     let lib = Lib::new().await;
     let (a, b) = (lib.folder("a"), lib.folder("b"));
     lycoris(&a);
@@ -594,36 +609,107 @@ async fn unregistering_removes_the_folders_works_and_leaves_the_files_alone() {
     };
     let files_before = on_disk(&a);
 
-    let (status, _, body) = lib
+    // What the user chose for the work: no cover, and season 1 linked.
+    let work = lib.work(&fa, "Lycoris Recoil").await;
+    let (status, _, cover) = lib
         .api
         .call(
-            "DELETE",
-            &format!("/api/library/watch-folders/{}", fa.id),
+            "GET",
+            &format!("/api/library/works/{}/artwork", work.id),
             None,
         )
         .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["removed_works"], 1);
-
-    assert_eq!(lib.list().await.len(), 1);
-    assert!(lib.library.works(&fa.id).await.unwrap().is_empty());
-    assert_eq!(lib.works(&fb).await.len(), 1);
-    assert_eq!(on_disk(&a), files_before);
-
-    let (status, _, body) = lib
+    let (status, _, cleared) = lib
         .api
         .call(
-            "DELETE",
-            &format!("/api/library/watch-folders/{}", fa.id),
+            "POST",
+            &format!("/api/library/works/{}/artwork/clear", work.id),
+            Some(json!({ "version": cover["version"] })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{cleared}");
+    let seasons = SeasonStore::new(lib.h.db.clone());
+    seasons
+        .put_entry(Entry {
+            id: 143270,
+            romaji: Some("Lycoris Recoil".into()),
+            english: None,
+            native: None,
+            format: Some("TV".into()),
+            status: Some("FINISHED".into()),
+            episodes: Some(13),
+            start: FuzzyDate::default(),
+            end: FuzzyDate::default(),
+            studios: Vec::new(),
+            genres: Vec::new(),
+            description: None,
+            airing: Vec::new(),
+            sequels: Vec::new(),
+            fetched_at: 1,
+        })
+        .await
+        .unwrap();
+    let link = seasons.link(&work.id, 1).await.unwrap();
+    let linked = seasons
+        .set_links(&work.id, 1, link.version, vec![143270])
+        .await
+        .unwrap();
+    // Only Keep's cover and first season searches are waiting.
+    assert_eq!(queued_jobs(&lib.h.db).await, 2);
+
+    let (status, body) = lib.unregister(&fa).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["removed_works"], 1);
+
+    // Out of the library: the folder list, the work list, the work's screens.
+    assert_eq!(lib.list().await.len(), 1);
+    assert!(lib.folder_at(&a).await.is_none());
+    let (_, _, works) = lib.api.call("GET", "/api/library/works", None).await;
+    let names: Vec<&str> = works["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|w| w["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["Keep"]);
+    for uri in [
+        format!("/api/library/works/{}", work.id),
+        format!("/api/library/works/{}/artwork", work.id),
+    ] {
+        let (status, _, _) = lib.api.call("GET", &uri, None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{uri}");
+    }
+    assert_eq!(lib.works(&fb).await.len(), 1);
+    assert_eq!(on_disk(&a), files_before);
+    // A cycle does not read it.
+    lib.tick().await;
+    assert_eq!(
+        lib.library.works(&fa.id).await.unwrap(),
+        std::slice::from_ref(&work)
+    );
+
+    let (status, body) = lib.unregister(&fa).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+
+    // The same path again: the same folder and work, with what was chosen,
+    // and no new search.
+    let again = lib.register(&a).await;
+    assert_eq!(again.id, fa.id);
+    assert_eq!(lib.work(&again, "Lycoris Recoil").await.id, work.id);
+    let (status, _, cover) = lib
+        .api
+        .call(
+            "GET",
+            &format!("/api/library/works/{}/artwork", work.id),
             None,
         )
         .await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
-
-    // It can be registered again, and is read from scratch.
-    let again = lib.register(&a).await;
-    assert_ne!(again.id, fa.id);
-    assert_eq!(lib.works(&again).await.len(), 1);
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(cover, cleared);
+    assert_eq!(seasons.link(&work.id, 1).await.unwrap(), linked);
+    assert_eq!(queued_jobs(&lib.h.db).await, 2);
+    assert_eq!(on_disk(&a), files_before);
 }
 
 #[tokio::test]
@@ -765,11 +851,23 @@ async fn changing_the_collect_folder_swaps_its_watch_folder_and_adopts_one_regis
     let in_c = lib.work(&by_hand, "InC").await;
     assert!(!by_hand.automatic);
 
-    // /c replaces /a: /a goes like an unregistered folder, /c keeps its records.
+    // /c replaces /a: /a is unregistered (its work leaves the library but is
+    // kept), /c keeps its records.
+    let old_work = lib.work(&fa, "Old").await;
     let (status, body) = lib.save_collection(1, &c, Some(&b)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert!(lib.folder_at(&a).await.is_none());
-    assert!(lib.library.works(&fa.id).await.unwrap().is_empty());
+    assert_eq!(
+        lib.library.works(&fa.id).await.unwrap(),
+        std::slice::from_ref(&old_work)
+    );
+    assert!(lib
+        .library
+        .overview()
+        .await
+        .unwrap()
+        .iter()
+        .all(|w| w.id != old_work.id));
     let adopted = lib.folder_at(&c).await.unwrap();
     assert_eq!(adopted.id, by_hand.id);
     assert!(adopted.automatic);
@@ -788,9 +886,12 @@ async fn changing_the_collect_folder_swaps_its_watch_folder_and_adopts_one_regis
     assert!(lib.folder_at(&b).await.is_none());
     assert_eq!(lib.list().await.len(), 1);
 
-    // A folder that went can be registered by hand afterwards.
+    // A folder that went can be registered by hand afterwards, and brings its
+    // work back.
     let again = lib.register(&a).await;
     assert!(!again.automatic);
+    assert_eq!(again.id, fa.id);
+    assert_eq!(lib.work(&again, "Old").await.id, old_work.id);
 }
 
 #[tokio::test]

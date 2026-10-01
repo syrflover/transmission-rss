@@ -192,8 +192,9 @@ function FolderRow({
             이 감시 폴더의 등록을 해제할까요?
           </p>
           <p className="m-0 text-[13px] leading-normal text-text-secondary">
-            디스크의 파일은 그대로 두고, 이 폴더의 작품 {folder.works}개만 라이브러리에서 빼요. 나중에 같은 폴더를
-            다시 등록하면 처음부터 다시 찾고, 그때는 모든 파일의 추가 시각이 미상이에요.
+            디스크의 파일은 그대로 두고, 이 폴더의 작품 {folder.works}개만 라이브러리에서 빼요. 자막·표지·시즌 정보
+            기록은 남겨 두어서 나중에 같은 경로를 다시 등록하면 그대로 돌아오고, 그사이에 생긴 파일의 추가 시각은
+            미상이에요.
           </p>
           <div className="flex flex-wrap gap-2">
             <button type="button" className={BTN.main} disabled={removing} onClick={() => void remove()}>
