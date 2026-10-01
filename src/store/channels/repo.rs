@@ -511,7 +511,8 @@ fn note_titled(tx: &Transaction<'_>, id: &str, at: Millis) -> Result<()> {
 
 /// Gives a collecting subscription that waits for its title (no match phrase)
 /// the phrase `title`, and, when `directory` is given, a new save folder, if it
-/// is still at `expected`. The subscription is noted as titled at `at`, so what
+/// is still at `expected`. A title is a work's name, taken literally: the
+/// rule's regex flag is cleared, its case flag kept. The subscription is noted as titled at `at`, so what
 /// history recorded before is left to the user.
 pub fn give_title(
     conn: &mut Connection,
@@ -538,7 +539,8 @@ pub fn give_title(
     }
     tx.execute(
         "UPDATE rules
-         SET match_text = ?2, directory = COALESCE(?3, directory), version = version + 1
+         SET match_text = ?2, regex = 0, directory = COALESCE(?3, directory),
+             version = version + 1
          WHERE id = ?1",
         params![id, title, directory],
     )?;

@@ -369,3 +369,39 @@ async fn clearing_the_phrase_of_a_subscription_notes_the_time_it_began_to_wait_a
         .unwrap();
     assert!(plain.subscription.is_none());
 }
+
+#[tokio::test]
+async fn a_title_is_a_literal_work_name_so_giving_it_clears_the_regex_flag() {
+    let env = Env::new().await;
+    let rule = env
+        .store
+        .create_subscription_rule(
+            &env.channel,
+            RuleInput {
+                r#match: None,
+                regex: true,
+                case_insensitive: true,
+                directory: "작품".into(),
+                ..RuleInput::default()
+            },
+            NewSubscription {
+                anime: anime(7),
+                subtitles: SubtitleMode::Undecided,
+                creator: None,
+                subscribed_at: 100,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(rule.regex);
+
+    // A work name like this one is a pattern if the flag stays.
+    let titled = env
+        .store
+        .give_title(&rule.id, rule.version, "Re:Zero (2nd) + More", None, 300)
+        .await
+        .unwrap();
+    assert_eq!(titled.r#match.as_deref(), Some("Re:Zero (2nd) + More"));
+    assert!(!titled.regex);
+    assert!(titled.case_insensitive, "the case flag is the user's");
+}
