@@ -57,7 +57,9 @@ function ended(command: Command): ReceivePhase {
  * worker checks that the rule would pick each one.
  *
  * Commands are sent one after another in the order given, so the worker, which
- * runs the oldest first, adds them in that order.
+ * runs the oldest first, adds them in that order. Every ticked item is sent
+ * even when the screen is left meanwhile (what the person asked for is not
+ * dropped half way); only the state of a screen that is gone is not updated.
  */
 export function useCommandRows<K extends string | number>(
   scope: string | null,
@@ -106,7 +108,6 @@ export function useCommandRows<K extends string | number>(
       setRows(next);
       void (async () => {
         for (const row of next) {
-          if (!alive.current) return;
           await post(forScope, row.key, row.commandId);
         }
       })();
