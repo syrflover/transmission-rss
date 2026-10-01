@@ -73,7 +73,7 @@
 
 ### 검증한 것
 
-- `cargo fmt --check`와 `cargo clippy --all-targets -- -D warnings`가 통과했고, `cargo test --no-fail-fast`는 1345개 통과, 실패 0개, 무시 2개였어요(2026-10-02 결정과 제안 범위 확장까지 넣고 master를 병합한 뒤, 문서 시험을 포함한 27개 실행). 처음 구현 때 첫 `cargo test` 실행에서 `tests/live_watch.rs`의 `a_quiet_hour_reads_no_folder_but_the_safety_net`이 한 번 실패했고, 이 변경이 건드리지 않은 시험이에요. 이어진 `--no-fail-fast` 전체 실행에서는 통과했어요(원인은 따로 조사 중이에요). 웹은 `bun install --frozen-lockfile`, `bun run typecheck`, `bun run build`가 통과했어요.
+- `cargo fmt --check`와 `cargo clippy --all-targets -- -D warnings`가 통과했고, `cargo test --no-fail-fast`는 1358개 통과, 실패 0개, 무시 2개였어요(2026-10-02 결정, 제안 범위 확장, 검토에 따른 `되돌리기` 수정까지 넣고 master(92a3e32)를 병합한 상태에서, 문서 시험을 포함한 27개 실행). 처음 구현 때 첫 `cargo test` 실행에서 `tests/live_watch.rs`의 `a_quiet_hour_reads_no_folder_but_the_safety_net`이 한 번 실패했고, 이 변경이 건드리지 않은 시험이에요. 이어진 `--no-fail-fast` 전체 실행에서는 통과했어요(원인은 따로 조사 중이에요). 웹은 `bun install --frozen-lockfile`, `bun run typecheck`, `bun run build`가 통과했어요.
 - 완료 기준의 행과 자동 시험(주기를 통과하는 통합 시험 `tests/episode_offset.rs`는 실제 임시 수집 폴더, 가짜 RSS, 가짜 Transmission, AniList 항목이 이어진 시즌을 써요):
   - 1·2기 합계 24화 → `−24`, `자동`과 근거, 첫 항목 `S03E01`: `the_first_item_of_a_third_season_is_named_from_the_sum_of_the_earlier_ones`(Transmission이 받은 이름과 규칙 응답의 `episode_basis`, 다음 `- 26`이 `S03E02`가 되는 것까지). 판단 자체는 `a_first_release_that_follows_the_earlier_seasons_is_converted_by_their_sum`.
   - 새 작품 `- 01` → 0, 묻지 않아요: `a_new_works_first_release_is_not_converted_and_nobody_is_asked`.
