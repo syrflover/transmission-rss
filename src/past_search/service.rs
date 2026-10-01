@@ -31,6 +31,7 @@ use crate::{
         channels::{Channel, Rule},
         history::HistoryItem,
         search_pace::SearchPace,
+        status::TorrentListing,
     },
     transmission::Redactor,
     worker::{feed::FeedItem, plan::picks},
@@ -54,6 +55,9 @@ pub struct Spec {
     /// The channel's items history says Transmission holds. Dropped once the
     /// search has built its picture of the work.
     pub settled: Vec<HistoryItem>,
+    /// The torrents Transmission held when the worker last looked, if it has;
+    /// they tell which of `settled` were removed since.
+    pub listing: Option<TorrentListing>,
     /// The titles history holds for the channel. Dropped like `settled`.
     pub titles: Vec<String>,
     /// Whether the channel's history is longer than what `settled` and
@@ -83,6 +87,10 @@ pub struct Outcome {
 pub struct Stored {
     pub title: String,
     pub link: String,
+    /// Whether history says Transmission took the item and it had gone from the
+    /// work when the search looked ([`world::departed`]): it is received again
+    /// though its result says `received`.
+    pub departed: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -318,6 +326,7 @@ impl PastSearch {
             offset,
             season,
             settled,
+            listing,
             titles,
             history_cut,
             redactor,
@@ -329,9 +338,15 @@ impl PastSearch {
         let world = {
             let rule_id = rule.id.clone();
             tokio::task::spawn_blocking(move || {
-                let files = world::read_folder(&save_path)?;
+                let folder = world::read_folder(&save_path)?;
                 Ok(world::build(
-                    offset, season, files, &rule_id, &settled, &titles,
+                    offset,
+                    season,
+                    folder,
+                    &rule_id,
+                    &settled,
+                    listing.as_ref(),
+                    &titles,
                 ))
             })
             .await
@@ -380,6 +395,7 @@ impl PastSearch {
             })
             .collect();
         let judged = judging.clone();
+        let departed = world.departed.clone();
         let preview = tokio::task::spawn_blocking(move || {
             judge(&results, range, &world, &*judged, &mut |path| {
                 file_crc32(path)
@@ -403,6 +419,7 @@ impl PastSearch {
                         Stored {
                             title: item.stored_title.clone(),
                             link: item.stored_link.clone(),
+                            departed: departed.contains(&listed.key),
                         },
                     )
                 })
@@ -474,6 +491,7 @@ mod tests {
                 Stored {
                     title: "Show - 01".into(),
                     link: "magnet:?xt=urn:btih:a".into(),
+                    departed: false,
                 },
             )]),
             rule_id: "r".into(),

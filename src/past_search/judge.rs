@@ -13,7 +13,7 @@
 //! | `Missing`        | an episode the folder and Transmission do not have          | the highest revision of an episode only |
 //! | `Replace`        | a higher revision of a video the folder has                 | no       |
 //! | `VersionUnknown` | a revision whose video in the folder cannot be told apart   | no       |
-//! | `Have`           | an episode the work has (or an item already received)       | no       |
+//! | `Have`           | an episode the work has (or an item whose torrent is still there) | no |
 //! | `Superseded`     | a lower revision of an episode with a higher one in the list | no       |
 //! | `Alternate`      | another release of an episode a different result is selected for | no  |
 //! | `Batch`          | several episodes in one torrent                             | no       |
@@ -27,8 +27,14 @@
 //! release is a different torrent with the same number. The work has an
 //! episode when the folder holds a video of it (or a download in progress,
 //! `.part`) or when history says a torrent of the rule got it into
-//! Transmission. The web cannot ask Transmission, so history is its record of
-//! what Transmission holds.
+//! Transmission and that torrent is still there. The web cannot ask
+//! Transmission, so it reads history, and the worker's last list of the
+//! torrents in Transmission ([`crate::store::status::TorrentListing`]) tells
+//! which of them were removed since. An episode whose video was deleted and
+//! whose torrent was removed is missing again, and so is a result that history
+//! says was received for it ([`World::held`]); a torrent that is still in
+//! Transmission keeps both, even before its video is placed in the folder.
+//! Without a list, every torrent history knows is taken to be there.
 //!
 //! # Revisions
 //!
@@ -117,8 +123,20 @@ impl Known {
 pub struct Present {
     /// A video (or download in progress) of the episode in the work folder.
     pub file: Option<PathBuf>,
-    /// The releases history says torrents of the rule got in for the episode.
+    /// The releases history says torrents of the rule got in for the episode,
+    /// removed since or not. They tell which release a video in the folder is.
     pub records: Vec<Known>,
+    /// Whether one of those torrents is (taken to be) in Transmission still.
+    pub in_transmission: bool,
+}
+
+impl Present {
+    /// Whether the work has the episode now: a video of it in the folder, or a
+    /// torrent of it in Transmission. History alone is not that: the video may
+    /// have been deleted and the torrent removed.
+    pub fn there(&self) -> bool {
+        self.file.is_some() || self.in_transmission
+    }
 }
 
 /// What the work has, as far as the web can tell.
@@ -130,8 +148,13 @@ pub struct World {
     pub season: Option<u32>,
     pub present: BTreeMap<Episode, Present>,
     /// Identity keys of the channel's items that history says Transmission
-    /// holds (`received`, `duplicate`).
+    /// took (`received`, `duplicate`) and that are not gone from the work
+    /// ([`super::world::departed`]); such a result is not chosen again.
     pub held: HashSet<String>,
+    /// Identity keys of the channel's items that history says Transmission
+    /// took and that are gone from the work ([`super::world::departed`]):
+    /// offered again, though history has them as received.
+    pub departed: HashSet<String>,
     /// Other releases of the channel's history, to find which revision a video
     /// of unknown version is by its CRC32.
     pub releases: Vec<Known>,
@@ -141,6 +164,11 @@ impl World {
     /// The folder episode of a release number.
     pub fn folder_of(&self, release: Episode) -> Episode {
         folder_episode(release, self.offset)
+    }
+
+    /// What the work has of `folder`, if it has the episode.
+    fn has(&self, folder: &Episode) -> Option<&Present> {
+        self.present.get(folder).filter(|present| present.there())
     }
 
     /// `S02E05`, or `5화` when the work folder has no season.
@@ -157,8 +185,7 @@ impl World {
 
     /// Whether the work has the episode of release number `number`.
     pub fn has_release(&self, number: u32) -> bool {
-        self.present
-            .contains_key(&self.folder_of(Episode::whole(number)))
+        self.has(&self.folder_of(Episode::whole(number))).is_some()
     }
 }
 
@@ -454,7 +481,7 @@ fn state_of(
     if world.held.contains(&entry.result.key) {
         return (State::Have, Some("이미 받은 항목이에요.".to_owned()));
     }
-    let Some(present) = world.present.get(&folder) else {
+    let Some(present) = world.has(&folder) else {
         return (State::Missing, None);
     };
     let release = &entry.read.release;
