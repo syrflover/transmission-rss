@@ -14,8 +14,11 @@
 -- confirmation. `received_name` and `file_crc` are the new file's name as
 -- received and its CRC32 as read, once it has been checked. `state` is where
 -- the replacement is; the worker writes each step before it takes the next
--- (see `RevisionState`). Times are Unix milliseconds; `replaced_at` is when
--- the new video got the episode name.
+-- (see `RevisionState`). `overtaken_by` is the row of the higher revision a
+-- `skipped` row was skipped for while that one was on its way; when that row
+-- fails, this one goes back to `receiving`. NULL for any other skip. Times
+-- are Unix milliseconds; `replaced_at` is when the new video got the episode
+-- name.
 
 CREATE TABLE video_revisions (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -37,10 +40,12 @@ CREATE TABLE video_revisions (
     reason        TEXT,
     created_at    INTEGER NOT NULL,
     updated_at    INTEGER NOT NULL,
-    replaced_at   INTEGER
+    replaced_at   INTEGER,
+    overtaken_by  INTEGER REFERENCES video_revisions (id)
 );
 
 CREATE INDEX video_revisions_old_item ON video_revisions (old_item_id);
 CREATE INDEX video_revisions_state ON video_revisions (state);
 CREATE INDEX video_revisions_episode ON video_revisions (folder, episode_name);
 CREATE INDEX video_revisions_hash ON video_revisions (torrent_hash);
+CREATE INDEX video_revisions_overtaken_by ON video_revisions (overtaken_by);

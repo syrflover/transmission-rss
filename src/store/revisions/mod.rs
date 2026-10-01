@@ -48,6 +48,12 @@
 //! removes the old video at a time ([`RevisionStore::claim`]), a lower one
 //! never replaces a higher one, and a row whose torrent is another row's is
 //! skipped when it is written.
+//!
+//! A lower revision skipped while a higher one was on its way
+//! ([`Step::Overtaken`]) keeps that row ([`Revision::overtaken_by`]). If the
+//! higher one fails, the lower one goes back to `receiving` in the same
+//! transaction and replaces the video after all, from its first step; a
+//! lower revision skipped for any other reason stays skipped.
 
 #[cfg(test)]
 mod tests;
@@ -188,6 +194,10 @@ pub struct Revision {
     pub updated_at: Millis,
     /// When the new video got the episode name.
     pub replaced_at: Option<Millis>,
+    /// The row of the higher revision this `skipped` row was skipped for
+    /// while that one was on its way ([`Step::Overtaken`]); `None` for any
+    /// other skip.
+    pub overtaken_by: Option<i64>,
 }
 
 impl Revision {
@@ -252,10 +262,19 @@ pub enum Step {
     },
     Cleared,
     /// Before the old video was touched: the folder holds this revision or a
-    /// higher one by now, or a higher one is replacing it.
+    /// higher one by now. Not for a higher revision of the episode in a row
+    /// (that is [`Step::Overtaken`]).
     Skipped {
         reason: String,
     },
+    /// Before the old video was touched: a higher revision of the episode
+    /// is on its way or replaced the video ([`Claim::Overtaken`]), so the
+    /// row is `skipped` ([`OVERTAKEN`]). The store works out which, in the
+    /// same transaction: a row skipped for one on its way keeps that row
+    /// ([`Revision::overtaken_by`]) and goes back to `receiving` if it fails
+    /// ([`Step::Failed`]). Not written when nothing overtakes the row any
+    /// more.
+    Overtaken,
     /// A `removing` row whose old torrent Transmission took out while the
     /// old video's file is still there: it stays `removing` (the old release
     /// stays superseded) and `reason` says why it waits.
@@ -365,7 +384,7 @@ pub struct WorkRef {
 
 const COLUMNS: &str = "id, item_id, old_item_id, rule_id, folder, episode_name, old_version, \
      new_version, expected_crc, torrent_hash, received_name, file_crc, state, reason, \
-     created_at, updated_at, replaced_at, old_crc, old_torrent_hash";
+     created_at, updated_at, replaced_at, old_crc, old_torrent_hash, overtaken_by";
 
 fn from_row(row: &Row<'_>) -> rusqlite::Result<Revision> {
     from_row_at(row, 0)
@@ -401,6 +420,7 @@ fn from_row_at(row: &Row<'_>, at: usize) -> rusqlite::Result<Revision> {
         replaced_at: row.get(at + 16)?,
         old_crc: row.get(at + 17)?,
         old_torrent_hash: row.get(at + 18)?,
+        overtaken_by: row.get(at + 19)?,
     })
 }
 
@@ -526,19 +546,44 @@ fn item_of(tx: &Connection, observation: &Observation) -> Result<Option<i64>> {
         .optional()?)
 }
 
-/// What the other rows of `row`'s episode say about it removing the old video.
-fn verdict(conn: &Connection, row: &Revision) -> Result<Claim> {
-    let siblings = query(
+/// The other rows of `row`'s episode that are under way or done.
+fn siblings(conn: &Connection, row: &Revision) -> Result<Vec<Revision>> {
+    query(
         conn,
         "WHERE folder = ?1 AND episode_name = ?2 AND id <> ?3
            AND state IN ('receiving', 'verified', 'removing', 'removed', 'done')",
         &[&row.folder, &row.episode_name, &row.id],
-    )?;
-    let overtaken = siblings.iter().any(|s| match s.state {
-        RevisionState::Done => s.new_version >= row.new_version,
-        _ => s.new_version > row.new_version,
-    });
-    if overtaken {
+    )
+}
+
+/// What keeps a row from replacing the video, of its `siblings`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Overtaker {
+    None,
+    /// A replacement of the same or a higher revision is done.
+    InPlace,
+    /// A higher revision is on its way: the row of the highest one.
+    OnItsWay(i64),
+}
+
+fn overtaker(siblings: &[Revision], row: &Revision) -> Overtaker {
+    if siblings
+        .iter()
+        .any(|s| s.state == RevisionState::Done && s.new_version >= row.new_version)
+    {
+        return Overtaker::InPlace;
+    }
+    siblings
+        .iter()
+        .filter(|s| s.state != RevisionState::Done && s.new_version > row.new_version)
+        .max_by_key(|s| (s.new_version, s.id))
+        .map_or(Overtaker::None, |s| Overtaker::OnItsWay(s.id))
+}
+
+/// What the other rows of `row`'s episode say about it removing the old video.
+fn verdict(conn: &Connection, row: &Revision) -> Result<Claim> {
+    let siblings = siblings(conn, row)?;
+    if overtaker(&siblings, row) != Overtaker::None {
         return Ok(Claim::Overtaken);
     }
     if siblings
@@ -901,10 +946,14 @@ impl RevisionStore {
     /// Writes `step` on the row `id` at `at` if the row is still in the state
     /// `from` the step was decided on, and returns whether it was written. A
     /// row another write moved on since (a higher revision's `done` skipped it
-    /// earlier in the same pass, say) keeps what that write made of it. `done`
+    /// earlier in the same pass, say) keeps what that write made of it, and
+    /// [`Step::Overtaken`] is not written once nothing overtakes the row. `done`
     /// also skips the lower (or equal) revisions of the episode still
     /// receiving or checked: they would replace the video that just took the
-    /// name.
+    /// name. `failed` puts the rows skipped for this one while it was on its
+    /// way ([`Revision::overtaken_by`]) back to `receiving`, with what they
+    /// had checked forgotten: the lower revision replaces the video after
+    /// all, from its first step, unless another higher one is on its way.
     pub async fn advance(
         &self,
         id: i64,
@@ -952,7 +1001,8 @@ impl RevisionStore {
                     Step::Done => {
                         tx.execute(
                             "UPDATE video_revisions
-                                SET state = 'skipped', reason = ?2, updated_at = ?3
+                                SET state = 'skipped', reason = ?2, overtaken_by = NULL,
+                                    updated_at = ?3
                               WHERE id IN (
                                 SELECT o.id FROM video_revisions o, video_revisions r
                                  WHERE r.id = ?1 AND o.id <> r.id
@@ -970,12 +1020,21 @@ impl RevisionStore {
                     Step::Failed {
                         reason,
                         received_name,
-                    } => tx.execute(
-                        "UPDATE video_revisions SET state = 'failed', reason = ?2,
-                             received_name = COALESCE(?4, received_name), updated_at = ?3
-                          WHERE id = ?1",
-                        params![id, reason, at, received_name],
-                    )?,
+                    } => {
+                        tx.execute(
+                            "UPDATE video_revisions SET state = 'failed', reason = ?2,
+                                 received_name = COALESCE(?4, received_name), updated_at = ?3
+                              WHERE id = ?1",
+                            params![id, reason, at, received_name],
+                        )?;
+                        tx.execute(
+                            "UPDATE video_revisions
+                                SET state = 'receiving', reason = NULL, received_name = NULL,
+                                    file_crc = NULL, overtaken_by = NULL, updated_at = ?2
+                              WHERE state = 'skipped' AND overtaken_by = ?1",
+                            params![id, at],
+                        )?
+                    }
                     Step::Cleared => tx.execute(
                         "UPDATE video_revisions SET state = 'cleared', updated_at = ?2
                           WHERE id = ?1",
@@ -983,9 +1042,22 @@ impl RevisionStore {
                     )?,
                     Step::Skipped { reason } => tx.execute(
                         "UPDATE video_revisions SET state = 'skipped', reason = ?2,
-                             updated_at = ?3 WHERE id = ?1",
+                             overtaken_by = NULL, updated_at = ?3 WHERE id = ?1",
                         params![id, reason, at],
                     )?,
+                    Step::Overtaken => {
+                        let row = by_id(&tx, id)?.expect("the row whose state was read");
+                        let by = match overtaker(&siblings(&tx, &row)?, &row) {
+                            Overtaker::None => return Ok(false),
+                            Overtaker::InPlace => None,
+                            Overtaker::OnItsWay(by) => Some(by),
+                        };
+                        tx.execute(
+                            "UPDATE video_revisions SET state = 'skipped', reason = ?2,
+                                 overtaken_by = ?3, updated_at = ?4 WHERE id = ?1",
+                            params![id, OVERTAKEN, by, at],
+                        )?
+                    }
                     Step::RemovalWaits { reason } => tx.execute(
                         "UPDATE video_revisions SET reason = ?2, updated_at = ?3
                           WHERE id = ?1 AND state = 'removing'",

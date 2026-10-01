@@ -20,7 +20,7 @@ use transmission_rss::{
     store::{
         channels::{ChannelInput, RuleInput},
         history::{HistoryItem, HistoryResult, Observation},
-        revisions::{RevisionState, RevisionStore},
+        revisions::{Revision, RevisionState, RevisionStore},
         settings::SettingsStore,
     },
     worker::{revisions, CommandsOutcome, CycleReport, TickOutcome},
@@ -2017,4 +2017,175 @@ async fn a_revision_of_a_show_named_with_a_number_v_number_replaces_its_first_re
     assert_eq!(s.names(), vec![episode]);
     assert_eq!(read(&s.file(episode)), NEW_BYTES);
     assert!(s.removed(OLD_HASH));
+}
+
+// --- a lower revision when the higher one it was skipped for fails ---------------
+
+impl Setup {
+    /// `14` in place; `14v2` and `14v3` both received, `14v2` complete and
+    /// skipped because `14v3` is still on its way.
+    async fn v2_skipped_for_v3(&self) {
+        self.received_v1().await;
+        self.feed(&[(NEW_HASH, &v2()), (V3_HASH, &v3()), (OLD_HASH, &v1())]);
+        self.h.tr.content_on_add(NEW_HASH, NEW_BYTES);
+        self.h.tr.content_on_add(V3_HASH, V3_BYTES);
+        self.h.tr.unfinished_on_add(NEW_HASH);
+        self.h.tr.unfinished_on_add(V3_HASH);
+        self.cycle().await;
+        self.complete(NEW_HASH);
+        self.cycle().await;
+        assert_eq!(self.state_of(&v2()).await, RevisionState::Skipped);
+        assert_eq!(self.state_of(&v3()).await, RevisionState::Receiving);
+        assert_eq!(read(&self.file(EPISODE_NAME)), OLD_BYTES);
+    }
+
+    async fn row_of(&self, title: &str) -> Revision {
+        let item = self.item(title).await;
+        RevisionStore::new(self.h.db.clone())
+            .by_item(item.id)
+            .await
+            .unwrap()
+            .expect("a revision row")
+    }
+}
+
+/// `14v2` was skipped because `14v3` was on its way; `14v3` then stops (its
+/// torrent is gone and it left the feed). `14v2` replaces `14` on a
+/// following cycle, `14v3` stays `받기 실패` with `다시 받기`, and `14v3`
+/// received with it later replaces `14v2` as any higher revision does.
+#[tokio::test]
+async fn a_lower_revision_skipped_for_a_higher_one_that_fails_replaces_the_video() {
+    let s = Setup::new().await;
+    s.v2_skipped_for_v3().await;
+
+    s.h.tr.remove(V3_HASH);
+    s.feed(&[(NEW_HASH, &v2()), (OLD_HASH, &v1())]);
+    s.cycle().await;
+    assert_eq!(s.state_of(&v3()).await, RevisionState::Failed);
+    assert_eq!(read(&s.file(EPISODE_NAME)), OLD_BYTES);
+
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Done);
+    assert_eq!(read(&s.file(EPISODE_NAME)), NEW_BYTES);
+    assert!(s.removed(OLD_HASH));
+    assert!(!s.h.tr.torrents().iter().any(|t| t.hash == OLD_HASH));
+    assert_eq!(s.state_of(&v3()).await, RevisionState::Failed);
+    let failures = s.failures().await;
+    let failure = revision_failure(&failures);
+    assert_eq!(failure["history_item_id"], s.item(&v3()).await.id);
+    assert_eq!(failure["can_retry"], true);
+    assert_eq!(s.episode_row().await["revision"]["to"], "v2");
+
+    // `다시 받기` of `14v3`: it replaces `14v2` by the usual steps.
+    s.h.tr.content_on_add(V3_HASH, V3_BYTES);
+    s.h.tr.unfinished_on_add(V3_HASH);
+    s.retry(
+        s.item(&v3()).await.id,
+        "00000000-0000-4000-8000-000000000b01",
+    )
+    .await;
+    assert_eq!(s.commands().await, CommandsOutcome::Ran(1));
+    assert_eq!(s.state_of(&v3()).await, RevisionState::Receiving);
+    s.cycle().await;
+    assert_eq!(read(&s.file(EPISODE_NAME)), NEW_BYTES);
+    s.complete(V3_HASH);
+    s.cycle().await;
+    assert_eq!(s.state_of(&v3()).await, RevisionState::Done);
+    assert_eq!(read(&s.file(EPISODE_NAME)), V3_BYTES);
+    let removes = s.h.tr.calls_of("torrent-remove");
+    let v2_removal = removes
+        .iter()
+        .find(|c| c.args["ids"] == json!([NEW_HASH]))
+        .expect("14v2's torrent is removed");
+    assert_eq!(v2_removal.args["delete-local-data"], true);
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Done);
+    assert!(s.failures().await.is_empty());
+}
+
+/// The same when the higher revision fails after it was received, on its
+/// CRC32 check (a failure that is final).
+#[tokio::test]
+async fn a_lower_revision_skipped_for_a_higher_one_whose_check_fails_replaces_the_video() {
+    let s = Setup::new().await;
+    s.received_v1().await;
+    s.feed(&[(NEW_HASH, &v2()), (V3_HASH, &v3()), (OLD_HASH, &v1())]);
+    s.h.tr.content_on_add(NEW_HASH, NEW_BYTES);
+    s.h.tr.content_on_add(V3_HASH, b"not what the name says");
+    s.h.tr.unfinished_on_add(NEW_HASH);
+    s.h.tr.unfinished_on_add(V3_HASH);
+    s.cycle().await;
+    s.complete(NEW_HASH);
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Skipped);
+
+    s.complete(V3_HASH);
+    s.cycle().await;
+    assert_eq!(s.state_of(&v3()).await, RevisionState::Failed);
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Done);
+    assert_eq!(read(&s.file(EPISODE_NAME)), NEW_BYTES);
+}
+
+/// `14v3` fails after `14v2`, skipped for it, left the feed and the cycle
+/// took its torrent out of Transmission: `14v2` comes back but cannot be
+/// checked, so it is a failure before it was received (with `다시 받기`),
+/// written once; `14` stays and nothing is added or removed again.
+#[tokio::test]
+async fn a_lower_revision_whose_item_is_gone_when_the_higher_one_fails_stays_a_failure() {
+    let s = Setup::new().await;
+    s.v2_skipped_for_v3().await;
+    // `14v2` leaves the feed; the cycle takes its finished torrent out.
+    s.feed(&[(V3_HASH, &v3()), (OLD_HASH, &v1())]);
+    s.cycle().await;
+    assert!(!s.h.tr.torrents().iter().any(|t| t.hash == NEW_HASH));
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Skipped);
+
+    s.h.tr.remove(V3_HASH);
+    s.feed(&[(OLD_HASH, &v1())]);
+    s.cycle().await;
+    assert_eq!(s.state_of(&v3()).await, RevisionState::Failed);
+    s.cycle().await;
+    let row = s.row_of(&v2()).await;
+    assert_eq!(row.state, RevisionState::Failed);
+    assert!(row.not_received(), "{row:?}");
+
+    let adds = (s.added(NEW_HASH), s.added(V3_HASH));
+    for _ in 0..3 {
+        s.h.advance(60_000);
+        s.cycle().await;
+    }
+    assert_eq!(s.row_of(&v2()).await, row, "written once");
+    assert_eq!(s.state_of(&v3()).await, RevisionState::Failed);
+    assert_eq!((s.added(NEW_HASH), s.added(V3_HASH)), adds);
+    assert!(!s.removed(OLD_HASH));
+    assert_eq!(read(&s.file(EPISODE_NAME)), OLD_BYTES);
+    let failures = s.failures().await;
+    let v2_id = s.item(&v2()).await.id;
+    let v2_failure = failures
+        .iter()
+        .find(|f| f["history_item_id"] == v2_id)
+        .expect("14v2 is a failure");
+    assert_eq!(v2_failure["can_retry"], true);
+}
+
+/// A lower revision skipped for another reason (the folder's video was this
+/// revision or a higher one already) does not come back when a higher
+/// revision of the episode fails.
+#[tokio::test]
+async fn a_lower_revision_skipped_for_another_reason_stays_skipped() {
+    let s = Setup::new().await;
+    s.v2_skipped_for_v3().await;
+    // Made by hand into a skip of another reason than `14v3`.
+    s.sql(&format!(
+        "UPDATE video_revisions SET overtaken_by = NULL, reason = 'other'
+          WHERE item_id = {}",
+        s.item(&v2()).await.id
+    ));
+    s.h.tr.remove(V3_HASH);
+    s.feed(&[(NEW_HASH, &v2()), (OLD_HASH, &v1())]);
+    s.cycle().await;
+    s.cycle().await;
+    assert_eq!(s.state_of(&v3()).await, RevisionState::Failed);
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Skipped);
+    assert_eq!(read(&s.file(EPISODE_NAME)), OLD_BYTES);
 }

@@ -59,6 +59,9 @@
 //!    time ([`RevisionStore::claim`](crate::store::revisions::RevisionStore::claim));
 //!    a replacement whose revision is lower than one in place, or than one
 //!    on its way, is skipped instead and its video keeps its received name.
+//!    If the one on its way then fails, the skipped one starts over from
+//!    step 1 on a later cycle and replaces the video after all
+//!    ([`Step::Overtaken`]).
 //!    What is at the episode name is looked at again just before: if it is the
 //!    single file of a torrent trss added (a `received` record in history) of
 //!    a lower revision of the release, that torrent is removed with its data
@@ -95,9 +98,7 @@ use crate::{
     revision::{crc_text, file_crc32_identified, FileIdentity, Release},
     store::{
         history::{HistoryResult, Millis},
-        revisions::{
-            Claim, OldVideo, Replacement, Revision, RevisionState, RowWrite, Step, OVERTAKEN,
-        },
+        revisions::{Claim, OldVideo, Replacement, Revision, RevisionState, RowWrite, Step},
     },
     transmission::{get_torrent, torrent_places, Redactor, TorrentPlace},
 };
@@ -661,6 +662,7 @@ async fn drive(
             | Step::Failed { .. }
             | Step::Cleared
             | Step::Skipped { .. }
+            | Step::Overtaken
             | Step::RemovalWaits { .. } => return,
         }
     }
@@ -768,7 +770,7 @@ async fn received(ctx: &CycleContext, row: &Revision) -> Next {
 /// removing the old video and naming its new one, is not the old video gone.
 async fn recover(ctx: &CycleContext, row: &Revision) -> Next {
     match ctx.revisions.verdict(row.id).await {
-        Ok(Claim::Overtaken) => return skipped(OVERTAKEN),
+        Ok(Claim::Overtaken) => return Next::Step(Step::Overtaken),
         Ok(_) => {}
         Err(err) => return Next::Later(err.to_string()),
     }
@@ -817,7 +819,7 @@ async fn remove_old(ctx: &CycleContext, row: &mut Revision, at: Millis, listing:
         match ctx.revisions.verdict(row.id).await {
             Ok(Claim::Go) => {}
             Ok(Claim::Wait) => return Next::Wait,
-            Ok(Claim::Overtaken) => return skipped(OVERTAKEN),
+            Ok(Claim::Overtaken) => return Next::Step(Step::Overtaken),
             Err(err) => return Next::Later(err.to_string()),
         }
     }
@@ -861,7 +863,7 @@ async fn remove_old(ctx: &CycleContext, row: &mut Revision, at: Millis, listing:
     match ctx.revisions.claim(row.id, at, found.clone()).await {
         Ok(Claim::Go) => row.state = RevisionState::Removing,
         Ok(Claim::Wait) => return Next::Wait,
-        Ok(Claim::Overtaken) => return skipped(OVERTAKEN),
+        Ok(Claim::Overtaken) => return Next::Step(Step::Overtaken),
         Err(err) => return Next::Later(err.to_string()),
     }
     if !present {

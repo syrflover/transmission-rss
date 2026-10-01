@@ -329,6 +329,150 @@ async fn one_replacement_of_an_episode_removes_the_old_video_at_a_time() {
     }
 }
 
+/// A lower revision skipped for a higher one on its way keeps that row, and
+/// goes back to its first step when that row fails; one skipped for another
+/// reason, or for a replacement that is done, does not.
+#[tokio::test]
+async fn a_revision_skipped_for_a_higher_one_comes_back_when_that_one_fails() {
+    let (_dir, db) = db().await;
+    let store = RevisionStore::new(db.clone());
+    let v2 = store
+        .create(10, of_episode(item(&db, "14v2").await, "14v2", 2))
+        .await
+        .unwrap();
+    let v3 = store
+        .create(10, of_episode(item(&db, "14v3").await, "14v3", 3))
+        .await
+        .unwrap();
+    let v4 = store
+        .create(10, of_episode(item(&db, "14v4").await, "14v4", 4))
+        .await
+        .unwrap();
+    let other = store
+        .create(10, of_episode(item(&db, "14v2b").await, "14v2b", 2))
+        .await
+        .unwrap();
+    verified(&store, v2.id).await;
+    verified(&store, other.id).await;
+
+    // Skipped for the highest revision on its way.
+    assert!(store
+        .advance(v2.id, 20, RevisionState::Verified, Step::Overtaken)
+        .await
+        .unwrap());
+    let row = store.by_item(v2.item_id).await.unwrap().unwrap();
+    assert_eq!(row.state, RevisionState::Skipped);
+    assert_eq!(row.reason.as_deref(), Some(OVERTAKEN));
+    assert_eq!(row.overtaken_by, Some(v4.id));
+    let skip = Step::Skipped {
+        reason: "the folder holds it".into(),
+    };
+    assert!(store
+        .advance(other.id, 20, RevisionState::Verified, skip)
+        .await
+        .unwrap());
+    // `14v3` is skipped for `14v4` too.
+    assert!(store
+        .advance(v3.id, 20, RevisionState::Receiving, Step::Overtaken)
+        .await
+        .unwrap());
+
+    // `14v4` fails: the rows skipped for it start over, the other one stays.
+    let failed = Step::Failed {
+        reason: "stopped".into(),
+        received_name: None,
+    };
+    assert!(store
+        .advance(v4.id, 30, RevisionState::Receiving, failed.clone())
+        .await
+        .unwrap());
+    for id in [v2.item_id, v3.item_id] {
+        let row = store.by_item(id).await.unwrap().unwrap();
+        assert_eq!(row.state, RevisionState::Receiving, "{row:?}");
+        assert_eq!(
+            (
+                row.reason,
+                row.received_name,
+                row.file_crc,
+                row.overtaken_by
+            ),
+            (None, None, None, None)
+        );
+        assert_eq!(row.updated_at, 30);
+    }
+    let row = store.by_item(other.item_id).await.unwrap().unwrap();
+    assert_eq!(row.state, RevisionState::Skipped);
+
+    // `14v2` is overtaken again, now by `14v3`; with nothing overtaking it
+    // the skip is not written.
+    assert!(store
+        .advance(v2.id, 40, RevisionState::Receiving, Step::Overtaken)
+        .await
+        .unwrap());
+    assert_eq!(
+        store
+            .by_item(v2.item_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .overtaken_by,
+        Some(v3.id)
+    );
+    assert!(store
+        .advance(v3.id, 50, RevisionState::Receiving, failed)
+        .await
+        .unwrap());
+    assert!(!store
+        .advance(v2.id, 60, RevisionState::Receiving, Step::Overtaken)
+        .await
+        .unwrap());
+    assert_eq!(
+        store.by_item(v2.item_id).await.unwrap().unwrap().state,
+        RevisionState::Receiving
+    );
+}
+
+/// A revision skipped for a replacement that is done does not come back.
+#[tokio::test]
+async fn a_revision_skipped_for_a_done_one_is_not_bound_to_it() {
+    let (_dir, db) = db().await;
+    let store = RevisionStore::new(db.clone());
+    let v2 = store
+        .create(10, of_episode(item(&db, "14v2").await, "14v2", 2))
+        .await
+        .unwrap();
+    let v3 = store
+        .create(10, of_episode(item(&db, "14v3").await, "14v3", 3))
+        .await
+        .unwrap();
+    for (from, step) in [
+        (RevisionState::Receiving, Step::Removing),
+        (RevisionState::Removing, Step::Removed { reason: None }),
+        (RevisionState::Removed, Step::Done),
+    ] {
+        assert!(store.advance(v3.id, 20, from, step).await.unwrap());
+    }
+    let row = store.by_item(v2.item_id).await.unwrap().unwrap();
+    assert_eq!(
+        (row.state, row.overtaken_by),
+        (RevisionState::Skipped, None)
+    );
+    // Written by `Overtaken` too, the skip is bound to no row.
+    let v2b = store
+        .create(10, of_episode(item(&db, "14v2b").await, "14v2b", 2))
+        .await
+        .unwrap();
+    assert!(store
+        .advance(v2b.id, 30, RevisionState::Receiving, Step::Overtaken)
+        .await
+        .unwrap());
+    let row = store.by_item(v2b.item_id).await.unwrap().unwrap();
+    assert_eq!(
+        (row.state, row.overtaken_by),
+        (RevisionState::Skipped, None)
+    );
+}
+
 #[tokio::test]
 async fn a_claim_after_a_restart_keeps_the_old_torrent_it_found_first() {
     let (_dir, db) = db().await;
