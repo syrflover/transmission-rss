@@ -13,6 +13,9 @@ mod db_handle;
 mod delete;
 mod delete_rule;
 pub mod import;
+pub mod import_subscriptions;
+#[cfg(test)]
+mod import_subscriptions_tests;
 #[cfg(test)]
 mod import_tests;
 mod model;

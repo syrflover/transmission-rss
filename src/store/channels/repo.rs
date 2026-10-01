@@ -344,7 +344,7 @@ pub struct NewSubscription {
 }
 
 /// The creator of a new subscription fits its subtitle mode.
-fn check_creator(subscription: &NewSubscription) -> Result<()> {
+pub(super) fn check_creator(subscription: &NewSubscription) -> Result<()> {
     let creator_fits = match subscription.subtitles {
         SubtitleMode::Follow => subscription
             .creator
@@ -366,7 +366,11 @@ fn check_creator(subscription: &NewSubscription) -> Result<()> {
 }
 
 /// A channel keeps one rule per subscribed anime.
-fn check_not_subscribed(tx: &Transaction<'_>, channel_id: &str, anime_no: i64) -> Result<()> {
+pub(super) fn check_not_subscribed(
+    tx: &Transaction<'_>,
+    channel_id: &str,
+    anime_no: i64,
+) -> Result<()> {
     let existing: Option<String> = tx
         .query_row(
             "SELECT s.rule_id FROM rule_subscriptions s JOIN rules r ON r.id = s.rule_id
