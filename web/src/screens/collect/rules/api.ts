@@ -85,6 +85,8 @@ export interface Rule {
   episode_auto: boolean;
   /** Why the app set `episode` (a sentence); `null` unless `episode_auto` and the grounds are known. */
   episode_basis: string | null;
+  /** The offset the rule had before the app set its own; `null` unless `episode_auto` and it is known. */
+  episode_previous: number | null;
   /** What the app offers while `episode` is still the plain one; `null` when it has nothing to say. */
   episode_suggestion: EpisodeSuggestion | null;
   state: RuleState;

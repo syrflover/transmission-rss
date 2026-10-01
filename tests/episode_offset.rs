@@ -336,6 +336,8 @@ async fn the_first_item_of_a_third_season_is_named_from_the_sum_of_the_earlier_o
     assert_eq!(view["episode_auto"], true);
     let basis = view["episode_basis"].as_str().unwrap();
     assert!(basis.contains("24화") && basis.contains("25화"), "{basis}");
+    assert!(basis.ends_with("(전에는 변환 없음)."), "{basis}");
+    assert_eq!(view["episode_previous"], 1);
     assert_eq!(view["episode_suggestion"], Value::Null);
 
     // The decision is made once: the next release is converted by the same
@@ -357,12 +359,66 @@ async fn a_new_works_first_release_is_not_converted_and_nobody_is_asked() {
     s.feed(&[&fresh(1)]);
     s.cycle().await;
 
+    // The field's `1` names the release as `0` would: nothing changes, and
+    // there is nothing to tell (decision of 2026-10-02: a field that already
+    // has the value is left alone).
     assert_eq!(s.names(), ["Fresh S01E01.mkv"]);
     let stored = s.rule(&rule).await;
-    assert_eq!((stored.episode, stored.episode_auto), (0, true));
+    assert_eq!((stored.episode, stored.episode_auto), (1, false));
     let view = s.view(&rule).await;
-    assert!(view["episode_basis"].as_str().unwrap().contains("1화"));
+    assert_eq!(view["episode_basis"], Value::Null);
+    assert_eq!(view["episode_previous"], Value::Null);
     assert_eq!(view["episode_suggestion"], Value::Null);
+}
+
+/// A third season's rule copied from the second keeps the second's `−24`;
+/// its first release `- 49` follows the 48 episodes of seasons 1 and 2.
+#[tokio::test]
+async fn a_value_carried_over_from_the_previous_season_gives_way_to_the_whole_sum() {
+    let s = Scene::new().await;
+    s.link_earlier_seasons([Some(24), Some(24)]).await;
+    s.h.advance(1_000);
+    let rule = s.subscribe("Show", "Show/Season 03", 7, -24).await;
+
+    s.feed(&[]);
+    s.cycle().await;
+    s.feed(&[&show(49)]);
+    s.cycle().await;
+
+    assert_eq!(s.names(), ["Show S03E01.mkv"]);
+    let stored = s.rule(&rule).await;
+    assert_eq!((stored.episode, stored.episode_auto), (-48, true));
+    let view = s.view(&rule).await;
+    assert_eq!(view["episode_previous"], -24);
+    let basis = view["episode_basis"].as_str().unwrap();
+    assert!(
+        basis.contains("49화") && basis.contains("−48") && basis.contains("(전에는 −24)"),
+        "{basis}"
+    );
+    assert_eq!(view["episode_suggestion"], Value::Null);
+}
+
+#[tokio::test]
+async fn a_field_that_holds_the_sum_already_is_left_as_it_is() {
+    let s = Scene::new().await;
+    s.link_earlier_seasons([Some(24), Some(24)]).await;
+    s.h.advance(1_000);
+    let rule = s.subscribe("Show", "Show/Season 03", 7, -48).await;
+
+    s.feed(&[]);
+    s.cycle().await;
+    s.feed(&[&show(49)]);
+    s.cycle().await;
+
+    assert_eq!(s.names(), ["Show S03E01.mkv"]);
+    let stored = s.rule(&rule).await;
+    assert_eq!(
+        (stored.episode, stored.episode_auto, stored.version),
+        (-48, false, rule.version)
+    );
+    let view = s.view(&rule).await;
+    assert_eq!(view["episode_basis"], Value::Null);
+    assert_eq!(view["episode_previous"], Value::Null);
 }
 
 #[tokio::test]
@@ -477,8 +533,11 @@ async fn a_season_folder_that_has_videos_already_keeps_the_app_from_choosing() {
         .contains("1–2화"));
 }
 
+/// Before the first item the app decides whatever the field holds (user
+/// decision, 2026-10-02): a `−12` the user typed gives way to the sum, and the
+/// grounds say what it was.
 #[tokio::test]
-async fn an_offset_the_user_typed_is_never_overwritten() {
+async fn an_offset_typed_before_the_first_item_gives_way_to_the_sum() {
     let s = Scene::new().await;
     s.link_earlier_seasons([Some(12), Some(12)]).await;
     s.h.advance(1_000);
@@ -489,11 +548,15 @@ async fn an_offset_the_user_typed_is_never_overwritten() {
     s.feed(&[&show(25)]);
     s.cycle().await;
 
-    // The user's -12 names the release as the user said.
-    assert_eq!(s.names(), ["Show S03E13.mkv"]);
+    assert_eq!(s.names(), ["Show S03E01.mkv"]);
     let stored = s.rule(&rule).await;
-    assert_eq!((stored.episode, stored.episode_auto), (-12, false));
-    assert_eq!(s.view(&rule).await["episode_suggestion"], Value::Null);
+    assert_eq!((stored.episode, stored.episode_auto), (-24, true));
+    let view = s.view(&rule).await;
+    assert_eq!(view["episode_previous"], -12);
+    assert!(view["episode_basis"]
+        .as_str()
+        .unwrap()
+        .contains("(전에는 −12)"));
 }
 
 #[tokio::test]

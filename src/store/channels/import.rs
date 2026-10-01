@@ -233,8 +233,8 @@ fn insert_rule(
 ) -> Result<(), ChannelError> {
     tx.execute(
         "INSERT INTO rules (id, channel_id, position, match_text, regex, case_insensitive,
-                            directory, episode, episode_auto, state, version)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1)",
+                            directory, episode, episode_auto, episode_decided, state, version)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?10, 1)",
         params![
             new_id(),
             channel_id,
@@ -330,6 +330,9 @@ fn replace_keeping_rule_ids(
                      SET position = ?2, match_text = ?3, regex = ?4, case_insensitive = ?5,
                          directory = ?6,
                          episode_basis = CASE WHEN ?8 AND episode = ?7 THEN episode_basis END,
+                         episode_previous = CASE WHEN ?8 AND episode = ?7
+                                                 THEN episode_previous END,
+                         episode_decided = episode_decided OR ?8,
                          episode = ?7, episode_auto = ?8, state = ?9,
                          version = version + 1
                      WHERE id = ?1",

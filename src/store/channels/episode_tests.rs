@@ -81,44 +81,53 @@ impl Env {
     }
 }
 
-const BASIS: &str = "이전 시즌이 24화까지이고 첫 릴리스가 25화라서 −24로 정했어요.";
+const BASIS: &str = "이전 시즌이 24화까지이고 첫 화가 25화라서 회차 변환을 −24로 정했어요.";
 
+impl Env {
+    async fn mark(&self, rule: &Rule) -> EpisodeMark {
+        self.store
+            .episode_marks(vec![rule.id.clone()])
+            .await
+            .unwrap()
+            .remove(&rule.id)
+            .unwrap()
+    }
+}
+
+/// The app's value replaces whatever a rule it has not decided holds: the
+/// neutral `0` and `1`, a value carried over from the previous season, one
+/// the user typed (user decision, 2026-10-02). The value it replaced is kept.
 #[tokio::test]
-async fn a_rule_with_a_neutral_offset_takes_the_apps_value_with_its_grounds() {
-    for neutral in [0, 1] {
+async fn a_rule_the_app_has_not_decided_takes_its_value_whatever_it_held() {
+    for held in [0, 1, -24, -12] {
         let env = Env::new().await;
-        let rule = env.subscription(neutral).await;
+        let rule = env.subscription(held).await;
+        assert_eq!(env.mark(&rule).await, EpisodeMark::default());
 
         let set = env
             .store
-            .set_auto_episode(&rule.id, rule.version, -24, BASIS)
+            .set_auto_episode(&rule.id, rule.version, -48, BASIS)
             .await
             .unwrap()
             .expect("the rule takes it");
 
-        assert_eq!((set.episode, set.episode_auto), (-24, true));
+        assert_eq!((set.episode, set.episode_auto), (-48, true));
         assert_eq!(set.version, rule.version + 1);
-        let bases = env
-            .store
-            .episode_bases(vec![rule.id.clone()])
-            .await
-            .unwrap();
-        assert_eq!(bases.get(&rule.id).map(String::as_str), Some(BASIS));
+        assert_eq!(
+            env.mark(&rule).await,
+            EpisodeMark {
+                basis: Some(BASIS.to_owned()),
+                previous: Some(held),
+                decided: true,
+            },
+            "{held}"
+        );
     }
 }
 
 #[tokio::test]
-async fn the_app_never_replaces_what_the_user_set_or_saw_change() {
+async fn the_app_decides_once_and_never_at_a_version_it_did_not_read() {
     let env = Env::new().await;
-
-    // A value the user typed.
-    let typed = env.subscription(-12).await;
-    assert!(env
-        .store
-        .set_auto_episode(&typed.id, typed.version, -24, BASIS)
-        .await
-        .unwrap()
-        .is_none());
 
     // A rule edited since the app read it.
     let edited = env.subscription(1).await;
@@ -149,6 +158,40 @@ async fn the_app_never_replaces_what_the_user_set_or_saw_change() {
         env.store.get_rule(&once.id).await.unwrap().unwrap().episode,
         -24
     );
+
+    // Nor after the user changed it: the app has decided the rule.
+    let changed = env.save(&first, -12, false).await;
+    assert!(env
+        .store
+        .set_auto_episode(&once.id, changed.version, -24, BASIS)
+        .await
+        .unwrap()
+        .is_none());
+    let mark = env.mark(&once).await;
+    assert_eq!(
+        (mark.basis, mark.previous, mark.decided),
+        (None, None, true)
+    );
+
+    // Nor after `적용` turned it into the user's.
+    let applied = env.subscription(1).await;
+    let auto = env
+        .store
+        .set_auto_episode(&applied.id, applied.version, -24, BASIS)
+        .await
+        .unwrap()
+        .unwrap();
+    let own = env
+        .store
+        .set_episode(&applied.id, auto.version, 0)
+        .await
+        .unwrap();
+    assert!(env
+        .store
+        .set_auto_episode(&applied.id, own.version, -24, BASIS)
+        .await
+        .unwrap()
+        .is_none());
 }
 
 #[tokio::test]
@@ -164,23 +207,19 @@ async fn a_save_keeps_the_grounds_of_an_unchanged_value_and_drops_them_with_a_ch
 
     let kept = env.save(&auto, -24, true).await;
     assert!(kept.episode_auto);
+    let mark = env.mark(&rule).await;
     assert_eq!(
-        env.store
-            .episode_bases(vec![rule.id.clone()])
-            .await
-            .unwrap()
-            .len(),
-        1
+        (mark.basis.as_deref(), mark.previous),
+        (Some(BASIS), Some(1))
     );
 
     let changed = env.save(&kept, -12, false).await;
     assert!(!changed.episode_auto);
-    assert!(env
-        .store
-        .episode_bases(vec![rule.id.clone()])
-        .await
-        .unwrap()
-        .is_empty());
+    let mark = env.mark(&rule).await;
+    assert_eq!(
+        (mark.basis, mark.previous, mark.decided),
+        (None, None, true)
+    );
 }
 
 #[tokio::test]
@@ -201,12 +240,8 @@ async fn applying_a_suggestion_is_the_users_value_at_the_version_they_saw() {
         .await
         .unwrap();
     assert_eq!((applied.episode, applied.episode_auto), (-24, false));
-    assert!(env
-        .store
-        .episode_bases(vec![rule.id.clone()])
-        .await
-        .unwrap()
-        .is_empty());
+    let mark = env.mark(&rule).await;
+    assert_eq!((mark.basis, mark.previous), (None, None));
 
     // The same value again changes nothing, version included.
     let same = env
@@ -258,12 +293,11 @@ async fn an_import_keeps_the_grounds_of_an_automatic_value_it_leaves_as_it_is() 
         .import_channels(vec![replace(-24, true)])
         .await
         .unwrap();
-    let bases = env
-        .store
-        .episode_bases(vec![rule.id.clone()])
-        .await
-        .unwrap();
-    assert_eq!(bases.get(&rule.id).map(String::as_str), Some(BASIS));
+    let mark = env.mark(&rule).await;
+    assert_eq!(
+        (mark.basis.as_deref(), mark.previous),
+        (Some(BASIS), Some(1))
+    );
 
     // A file with another value, or one the user typed, carries no grounds.
     let channel = env.store.get_channel(&env.channel).await.unwrap().unwrap();
@@ -283,12 +317,8 @@ async fn an_import_keeps_the_grounds_of_an_automatic_value_it_leaves_as_it_is() 
         .import_channels(vec![replace_again(-12, true)])
         .await
         .unwrap();
-    assert!(env
-        .store
-        .episode_bases(vec![rule.id.clone()])
-        .await
-        .unwrap()
-        .is_empty());
+    let mark = env.mark(&rule).await;
+    assert_eq!((mark.basis, mark.previous), (None, None));
     let after = env.store.get_rule(&rule.id).await.unwrap().unwrap();
     assert_eq!((after.episode, after.episode_auto), (-12, true));
 }

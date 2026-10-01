@@ -31,6 +31,7 @@ mod tests;
 #[cfg(test)]
 mod title_tests;
 
+pub use episode::EpisodeMark;
 pub use repo::{NewSubscription, SeasonLinked};
 
 pub use model::{

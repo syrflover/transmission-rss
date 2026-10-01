@@ -47,11 +47,20 @@
 //! | `P` unknown, `f = 1`                      | nothing                             |
 //! | `P = 0`, `f > 1`                          | nothing: the numbers already are the season's |
 //!
-//! Only a subscription whose offset is still `0` or `1` (both leave a number
-//! as it is) and not set by the app is looked at, and only before it has
-//! picked any item. A value the user typed is never replaced; typing `0` or `1`
-//! on a rule that has picked nothing is not told apart from not having typed
-//! anything.
+//! The app sets an offset only on a subscription that has not picked any item
+//! yet, whose offset is not automatic and which the app has never decided
+//! before ([`may_decide`], and
+//! [`EpisodeMark::decided`](crate::store::channels::EpisodeMark)), whatever
+//! value its field holds: a value carried over from the previous season's
+//! rule (`−24` for a third season that starts at `- 49`) is replaced by `−48`
+//! as `0` or `1` is (user decision, 2026-10-02). The value it replaced is
+//! kept with it. A field that already names the
+//! releases as the offset would ([`same_effect`]) is left alone. After the
+//! user changed or undid the app's value, the app never decides the rule
+//! again.
+//!
+//! Suggestions are made only for a rule whose field still leaves numbers as
+//! they are (`0` or `1`, [`is_plain`]) and that the app has not decided.
 
 use std::path::{Component, Path};
 
@@ -190,8 +199,8 @@ pub fn decide(first: u32, basis: &Basis) -> Verdict {
                     "첫 릴리스가 1화라서 회차를 바꾸지 않아요.".to_owned()
                 } else {
                     format!(
-                        "AniList 기준 이전 시즌이 {total}화까지이고 첫 릴리스가 {first}화라서 \
-                         {}로 정했어요.",
+                        "AniList 기준 이전 시즌이 {total}화까지이고 첫 화가 {first}화라서 \
+                         회차 변환을 {}로 정했어요.",
                         signed(-total_i)
                     )
                 };
@@ -241,10 +250,26 @@ pub fn first_release(titles: &[String]) -> Option<u32> {
     titles.iter().filter_map(|t| whole_episode(t)).min()
 }
 
-/// Whether the app may look at the rule's offset at all: a subscription whose
-/// offset leaves numbers as they are and was not set by the app.
-pub fn is_open(rule: &Rule) -> bool {
-    rule.subscription.is_some() && !rule.episode_auto && matches!(rule.episode, 0 | 1)
+/// Whether the app may set the rule's offset, as far as the rule itself
+/// tells: a subscription whose offset is not automatic, whatever value it
+/// holds. The rule must also not have been decided before (kept beside it,
+/// [`crate::store::channels::EpisodeMark::decided`]) and must not have picked
+/// any item yet.
+pub fn may_decide(rule: &Rule) -> bool {
+    rule.subscription.is_some() && !rule.episode_auto
+}
+
+/// Whether the app may suggest an offset for the rule: one it may decide
+/// whose offset still leaves numbers as they are (`0` or `1`), so that the
+/// user has not written anything a suggestion would argue with.
+pub fn is_plain(rule: &Rule) -> bool {
+    may_decide(rule) && matches!(rule.episode, 0 | 1)
+}
+
+/// Whether two offsets name every release alike: equal, or both `0` and `1`,
+/// which leave numbers as they are.
+pub fn same_effect(a: i64, b: i64) -> bool {
+    a == b || (matches!(a, 0 | 1) && matches!(b, 0 | 1))
 }
 
 /// The work folder and season number of a rule's save folder, which must be

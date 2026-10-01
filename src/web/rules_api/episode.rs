@@ -7,11 +7,15 @@
 //! logic never sets it again. A version that is not the stored one answers
 //! `409` with the current view.
 //!
+//! The grounds of an automatic offset say the value it replaced, when that is
+//! known: `… 정했어요 (전에는 −24).`
+//!
 //! The suggestion is read from what is known now (the rule's first items in
 //! history, the library and the AniList counts), so it appears when the user
 //! links the seasons the sum needs, and goes when the user sets an offset. It
 //! is offered only to a subscription whose offset still leaves numbers as they
-//! are ([`crate::episode_offset::is_open`]) and that has picked an item.
+//! are ([`crate::episode_offset::is_plain`]), that the app has never decided
+//! and that has picked an item.
 
 use std::collections::HashMap;
 
@@ -23,7 +27,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{body, rule_conflict, rule_view, store_error, RuleView};
 use crate::{
-    episode_offset::{decide, first_release, gather, is_open},
+    episode_offset::{decide, first_release, gather, is_plain, signed},
     store::channels::{ChannelError, Rule},
     web::{ApiError, AppState},
 };
@@ -43,6 +47,8 @@ pub struct EpisodeSuggestion {
 pub(super) struct Episodes {
     /// The grounds of the offsets the app set.
     pub basis: HashMap<String, String>,
+    /// The offsets the app's own replaced, while the app's are in force.
+    pub previous: HashMap<String, i64>,
     pub suggestion: HashMap<String, EpisodeSuggestion>,
 }
 
@@ -51,19 +57,34 @@ pub(super) struct Episodes {
 /// so the rule list still answers.
 pub(super) async fn analyze(state: &AppState, rules: &[Rule]) -> Episodes {
     let mut out = Episodes::default();
-    let auto: Vec<String> = rules
-        .iter()
-        .filter(|r| r.episode_auto)
-        .map(|r| r.id.clone())
-        .collect();
-    if !auto.is_empty() {
-        match state.channels.episode_bases(auto).await {
-            Ok(basis) => out.basis = basis,
-            Err(err) => eprintln!("Episode offset: cannot read the grounds: {err}"),
+    let ids: Vec<String> = rules.iter().map(|r| r.id.clone()).collect();
+    let marks = match state.channels.episode_marks(ids).await {
+        Ok(marks) => marks,
+        Err(err) => {
+            eprintln!("Episode offset: cannot read the grounds: {err}");
+            return out;
+        }
+    };
+    for rule in rules.iter().filter(|r| r.episode_auto) {
+        let Some(mark) = marks.get(&rule.id) else {
+            continue;
+        };
+        if let Some(previous) = mark.previous {
+            out.previous.insert(rule.id.clone(), previous);
+        }
+        if let Some(basis) = &mark.basis {
+            let basis = match mark.previous {
+                Some(previous) => with_previous(basis, previous),
+                None => basis.clone(),
+            };
+            out.basis.insert(rule.id.clone(), basis);
         }
     }
 
-    let open: Vec<&Rule> = rules.iter().filter(|r| is_open(r)).collect();
+    let open: Vec<&Rule> = rules
+        .iter()
+        .filter(|r| is_plain(r) && marks.get(&r.id).is_some_and(|m| !m.decided))
+        .collect();
     if open.is_empty() {
         return out;
     }
@@ -103,6 +124,21 @@ pub(super) async fn analyze(state: &AppState, rules: &[Rule]) -> Episodes {
     out
 }
 
+/// The grounds of an automatic offset with the value it replaced:
+/// `… 정했어요 (전에는 −24).`, or `(전에는 변환 없음)` for a value that left
+/// numbers as they were.
+fn with_previous(basis: &str, previous: i64) -> String {
+    let before = if matches!(previous, 0 | 1) {
+        "변환 없음".to_owned()
+    } else {
+        signed(previous)
+    };
+    format!(
+        "{} (전에는 {before}).",
+        basis.trim_end().trim_end_matches('.')
+    )
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct EpisodeBody {
@@ -133,5 +169,23 @@ pub(super) async fn put_episode(
         Ok(_) => Ok(Json(rule_view(&state, &id).await?)),
         Err(e) if e.is_conflict() => Err(rule_conflict(&state, &id).await),
         Err(e) => Err(store_error(e)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::with_previous;
+
+    #[test]
+    fn the_grounds_say_the_value_they_replaced() {
+        let basis = "첫 화가 49화라서 회차 변환을 −48로 정했어요.";
+        assert_eq!(
+            with_previous(basis, -24),
+            "첫 화가 49화라서 회차 변환을 −48로 정했어요 (전에는 −24)."
+        );
+        assert_eq!(
+            with_previous(basis, 1),
+            "첫 화가 49화라서 회차 변환을 −48로 정했어요 (전에는 변환 없음)."
+        );
     }
 }

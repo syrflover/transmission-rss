@@ -1009,22 +1009,35 @@ mod tests {
         let db = Db::open(&path).await.unwrap();
 
         assert_eq!(version_of(&db).await, MIGRATIONS.len());
-        let rows: Vec<(String, i64, bool, Option<String>, i64)> = db
+        type Row = (String, i64, bool, Option<String>, Option<i64>, bool, i64);
+        let rows: Vec<Row> = db
             .run::<_, DbError, _>(|c| {
                 c.execute(
                     "UPDATE rules SET episode_basis = '이전 시즌이 24화까지예요.' WHERE id = 'derived'",
                     [],
                 )?;
                 let mut stmt = c.prepare(
-                    "SELECT id, episode, episode_auto, episode_basis, version FROM rules ORDER BY id",
+                    "SELECT id, episode, episode_auto, episode_basis, episode_previous,
+                            episode_decided, version
+                       FROM rules ORDER BY id",
                 )?;
                 let rows = stmt.query_map([], |r| {
-                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                        r.get(6)?,
+                    ))
                 })?;
                 Ok(rows.collect::<rusqlite::Result<_>>()?)
             })
             .await
             .unwrap();
+        // An automatic value from before has been decided; what it replaced
+        // is not known, so it cannot be undone.
         assert_eq!(
             rows,
             vec![
@@ -1033,9 +1046,11 @@ mod tests {
                     -24,
                     true,
                     Some("이전 시즌이 24화까지예요.".to_owned()),
+                    None,
+                    true,
                     2
                 ),
-                ("typed".to_owned(), -12, false, None, 4),
+                ("typed".to_owned(), -12, false, None, None, false, 4),
             ]
         );
         // A blank sentence is not a ground.

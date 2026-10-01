@@ -30,10 +30,10 @@
 ### 구현한 것
 
 - 마이그레이션(`src/store/channels/episode_basis.sql`): `rules.episode_basis`(자동으로 정한 값의 근거 문장)를 더했어요. 23번 마이그레이션이에요(0023의 것은 그 뒤 24번). 옛 DB가 규칙을 그대로 두고 올라오는 것은 `src/store/db.rs`의 시험이 봐요. 근거는 값이 그대로일 때만 남아요. 규칙 저장과 가져오기에서 값이 바뀌거나 `episode_auto`가 꺼지면 같이 지워져요(`src/store/channels/repo.rs`, `import.rs`).
-- 저장소(`src/store/channels/episode.rs`): `set_auto_episode`는 오프셋이 아직 `0` 또는 `1`이고 앱이 정한 값이 아니며 읽은 버전 그대로일 때만 값·`episode_auto`·근거를 한 번에 써요. 사용자가 적었거나 고친 값은 덮지 않아요. `set_episode`는 `적용`처럼 사용자 값을 저장하고 `자동`을 꺼요.
-- 판단(`src/episode_offset.rs`): 처음 본 릴리스 `f`, 이전 시즌 합계 `P`, 시즌 폴더가 이미 가진 영상으로 표로 정해요(표는 모듈 문서에 있어요). `f = P + 1`이고 폴더에 영상이 없으면 `−P`(`f = 1`이면 0)를 자동으로 정해요. `f > P + 1`이면 `−P` 제안, 이전 시즌 합계를 모르거나 폴더에 영상이 있어 어느 회차인지 말할 수 없으면 값 없는 안내만 해요. 번호가 시즌 안에서 다시 시작하는 경우(`f ≤ P`)와 `P = 0`에 `f > 1`인 경우는 아무것도 하지 않아요.
-- 주기(`src/worker/cycle.rs`, `src/worker/offsets.rs`): 항목을 Transmission에 보내기 전에, 아직 아무 항목도 고르지 않은 구독 규칙마다 그 주기의 가장 낮은 정수 회차로 판단하고 값을 정하면 그 주기의 작업에 바로 써요. 이미 받은 항목의 이름은 바꾸지 않아요. 사용자가 지난 항목 하나를 먼저 골라 받는 `receive_once`도 같은 판단을 거쳐요(`src/worker/commands/receive_once.rs`).
-- 웹 API: 규칙 응답에 `episode_basis`와 `episode_suggestion { value, basis }`, `PUT /api/rules/{id}/episode`(`{ version, episode }`, 버전이 어긋나면 `409`와 `current`). 제안은 열 때마다 수집 이력·라이브러리·AniList 합계에서 읽어서, 사용자가 시즌을 이은 뒤에 나타나고 오프셋을 정하면 사라져요.
+- 저장소(`src/store/channels/episode.rs`): `set_auto_episode`는 앱이 정한 값이 아니고, 앱이 그 규칙을 한 번도 정한 적이 없으며(`rules.episode_decided`), 읽은 버전 그대로일 때만 값·`episode_auto`·근거와 그 전 값(`rules.episode_previous`)을 한 번에 써요. 칸의 값은 따지지 않아요(2026-10-02 결정, 아래). `set_episode`는 `적용`처럼 사용자 값을 저장하고 `자동`을 꺼요. 저장·`적용`으로 값이 사용자의 것이 되면 근거와 그 전 값은 지워지고, 정한 적이 있다는 표시는 남아요.
+- 판단(`src/episode_offset.rs`): 처음 본 릴리스 `f`, 이전 시즌 합계 `P`, 시즌 폴더가 이미 가진 영상으로 표로 정해요(표는 모듈 문서에 있어요). `f = P + 1`이고 폴더에 영상이 없으면 `−P`(`f = 1`이면 0)를 자동으로 정해요. 칸이 이미 그 값이면(0과 1은 같은 값으로 봐요, `same_effect`) 바꾸지 않아요. `f > P + 1`이면 `−P` 제안, 이전 시즌 합계를 모르거나 폴더에 영상이 있어 어느 회차인지 말할 수 없으면 값 없는 안내만 해요. 번호가 시즌 안에서 다시 시작하는 경우(`f ≤ P`)와 `P = 0`에 `f > 1`인 경우는 아무것도 하지 않아요.
+- 주기(`src/worker/cycle.rs`, `src/worker/offsets.rs`): 항목을 Transmission에 보내기 전에, 아직 아무 항목도 고르지 않았고 앱이 정한 적이 없는 구독 규칙마다 그 주기의 가장 낮은 정수 회차로 판단하고 값을 정하면 그 주기의 작업에 바로 써요. 이미 받은 항목의 이름은 바꾸지 않아요. 사용자가 지난 항목 하나를 먼저 골라 받는 `receive_once`도 같은 판단을 거쳐요(`src/worker/commands/receive_once.rs`).
+- 웹 API: 규칙 응답에 `episode_basis`(그 전 값을 아는 자동 값이면 `… 정했어요 (전에는 −24).`처럼 끝에 붙여요), `episode_previous`와 `episode_suggestion { value, basis }`, `PUT /api/rules/{id}/episode`(`{ version, episode }`, 버전이 어긋나면 `409`와 `current`). 제안은 열 때마다 수집 이력·라이브러리·AniList 합계에서 읽어서, 사용자가 시즌을 이은 뒤에 나타나고 오프셋을 정하면 사라져요.
 - 웹 화면(`EpisodeGrounds.tsx`, `RuleDetail.tsx`): `자동` 표시 아래에 근거 문장, 제안(근거 문장, 값, `적용`)을 보여요. 값을 적을 수 없는 안내에는 `적용`이 없어요. 필드를 고치면 둘 다 숨고, `적용`은 스위치처럼 바로 저장해요.
 
 ### 결정
@@ -41,7 +41,8 @@
 - "그 규칙이 처음 본 릴리스"는 그 규칙이 처음 고른 항목들 중 가장 낮은 정수 회차예요. 수집 이력에서는 `result_at`이 가장 이른 항목이에요. 주기는 항목을 보내기 전에 같은 주기의 항목 중에서 정해요.
 - 시즌은 이어진 시즌이 있으면 그것이고, 없으면 규칙의 저장 폴더(`<작품>/Season NN`)가 가리키는 시즌이에요. 티켓의 "구독이 이어진 시즌(0019)"은 규칙이 영상을 받은 뒤에야 생기므로, 그대로면 새 구독의 첫 항목을 `S03E01`로 받는다는 완료 기준의 첫 행이 이뤄질 수 없어서 저장 폴더를 근거로 더했어요. 작품은 수집 폴더 밑에 있는 라이브러리의 작품(수집 폴더는 자동 감시 폴더예요)이고, 이전 시즌 폴더가 라이브러리에 없거나 AniList가 이어지지 않았거나 회차 수가 비면 합계를 모르는 것으로 보고 짐작하지 않아요.
 - 아직 이어지지 않은 구독에서 이어짐을 기다리는 보수적인 방식 대신 이 방식을 골랐고, 되돌리려면 `src/episode_offset.rs`의 `gather`에서 저장 폴더 분기를 빼면 돼요.
-- `episode_auto = false`는 "아직 안 건드림"과 "사용자가 0이나 1을 적음"을 가르지 못해요(명세의 데이터 모델에 그 구분이 없어요). 그래서 오프셋이 `0`·`1`이고 앱이 정한 값이 아니며 아직 고른 항목이 없는 규칙만 판단해요. 사용자가 고른 항목이 생기기 전에 `0`이나 `1`을 직접 적어 두었는데 첫 릴리스가 정확히 `P + 1`이면 앱이 덮을 수 있어요.
+- (2026-10-02 사용자 결정) 아직 고른 항목이 없는 규칙은 칸의 값과 상관없이 판단해요. 처음에는 오프셋이 `0`·`1`인 규칙만 판단했는데, 이전 시즌 규칙을 복사해 −24가 남은 3기 규칙이 `- 49`로 시작하면 `S03E25`로 받았어요. 이제는 그 −24도 −48로 바꾸고 첫 항목이 `S03E01`이에요(`a_value_carried_over_from_the_previous_season_gives_way_to_the_whole_sum`). 사용자가 첫 항목 전에 적어 둔 값도 같아서, 예전의 "사용자가 적은 값은 덮지 않는다"는 시험은 `an_offset_typed_before_the_first_item_gives_way_to_the_sum`으로 바꿨어요. 대신 그 전 값을 근거 문장에 보여요. 칸이 이미 그 값이면 바꾸지 않아요(`a_field_that_holds_the_sum_already_is_left_as_it_is`). 0과 1은 둘 다 번호를 그대로 두므로 같은 값으로 봐서, 새 작품의 `- 01`은 이제 `1`인 칸을 그대로 두고 `자동` 표시도 없어요(`a_new_works_first_release_is_not_converted_and_nobody_is_asked`의 기대가 바뀌었어요).
+- 앱은 규칙 하나를 한 번만 정해요(`rules.episode_decided`). 칸의 값으로 "사용자가 정함"을 가를 수 없게 됐으므로, 앱이 정한 값을 사용자가 고친 뒤에는 아직 받은 항목이 없어도 다시 정하지 않게 하는 표시가 따로 필요했어요(`the_app_decides_once_and_never_at_a_version_it_did_not_read`). 이 마이그레이션 전에 자동으로 정한 규칙은 정한 것으로 올라오고, 그 전 값은 몰라요.
 - 이미 받기 시작한 규칙은 앱이 값을 바꾸지 않고, 규칙의 처음 항목과 지금 알려진 시즌 정보에서 맞는 값이 나오면 제안으로만 보여요(0인 값은 제안하지 않아요). `적용`해도 이미 받은 항목의 이름은 바뀌지 않아요.
 - 분할 방영처럼 번호가 이어지는 경우의 양수 오프셋은 계산하지 않아요(값 없는 안내만 해요).
 - 재시도(실패한 항목을 다시 보내기)는 저장된 오프셋을 그대로 써요. 판단은 주기와 `receive_once`에서만 해요.
@@ -56,7 +57,7 @@
   - 새 작품 `- 01` → 0, 묻지 않아요: `a_new_works_first_release_is_not_converted_and_nobody_is_asked`.
   - 처음 본 릴리스 `- 27` → 제안, `적용` 전에는 변환 없이 받아요: `a_first_release_in_the_middle_of_a_season_is_suggested_and_received_unconverted`(`적용` 호출, 오래된 버전의 `409` 포함).
   - 이전 시즌 회차 수를 모름 → 제안·직접 입력으로 남아요: `earlier_seasons_without_a_known_count_are_never_guessed`. 영상이 이미 있는 시즌 폴더: `a_season_folder_that_has_videos_already_keeps_the_app_from_choosing`.
-  - 자동 값을 `−12`로 고침 → `자동`이 사라지고 덮지 않아요: `an_automatic_value_the_user_changes_loses_its_mark_and_stays_changed`, `an_offset_the_user_typed_is_never_overwritten`, 저장소의 `the_app_never_replaces_what_the_user_set_or_saw_change`·`a_save_keeps_the_grounds_of_an_unchanged_value_and_drops_them_with_a_changed_one`.
+  - 자동 값을 `−12`로 고침 → `자동`이 사라지고 덮지 않아요: `an_automatic_value_the_user_changes_loses_its_mark_and_stays_changed`, 저장소의 `the_app_decides_once_and_never_at_a_version_it_did_not_read`·`a_save_keeps_the_grounds_of_an_unchanged_value_and_drops_them_with_a_changed_one`.
   - 이미 받기 시작한 규칙, 지난 항목 하나를 먼저 고른 경우: `a_rule_that_picked_items_before_is_not_decided_by_later_ones`, `a_past_item_the_user_picks_first_is_named_with_the_decided_offset`.
   - 설정 교환: 앱의 내보내기가 아직 없어서(설정 명세의 목표 5) 저장소의 가져오기 경로로만 봤어요: `an_import_keeps_the_grounds_of_an_automatic_value_it_leaves_as_it_is`. 마이그레이션: `rules_from_before_episode_grounds_keep_their_offsets_and_take_grounds`.
 - 시험이 실패하는 것을 본 것: 주기의 판단 연결을 꺼 둔 채 통합 시험을 돌렸을 때 세 시험이 실패했고(연결을 되돌리면 통과), 나머지 새 시험은 새 기능에 대한 것이라 고치기 전 실패를 따로 보지 않았어요.
@@ -71,5 +72,5 @@
 
 ### 남은 일
 
-- 사용자가 `0`·`1`을 직접 적은 규칙과 건드리지 않은 규칙을 가르는 상태가 데이터 모델에 없어요. 구분이 필요하면 명세의 `episode_auto`를 세 상태로 늘리거나 "사용자가 정함" 표시를 더해야 해요(명세 변경이라 사용자 결정이에요).
+- 사용자가 `0`·`1`을 직접 적은 규칙과 건드리지 않은 규칙을 가르지 못하는 한계는 2026-10-02 결정으로 풀렸어요. 첫 항목 전에는 칸의 값과 상관없이 판단하므로 구분할 필요가 없어졌어요.
 - 분할 방영처럼 번호가 이어지는 시즌의 양수 오프셋 제안은 계산하지 않아요([0026](0026-past-episode-search.md)의 범위 제안이 이 근거를 쓸 수 있어요).

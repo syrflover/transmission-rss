@@ -189,8 +189,8 @@ fn insert_rule(
     let id = new_id();
     tx.execute(
         "INSERT INTO rules (id, channel_id, position, match_text, regex, case_insensitive,
-                            directory, episode, episode_auto, state, version)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1)",
+                            directory, episode, episode_auto, episode_decided, state, version)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?10, 1)",
         params![
             id,
             channel_id,
@@ -477,6 +477,8 @@ pub fn update_rule_at(
         "UPDATE rules
          SET match_text = ?2, regex = ?3, case_insensitive = ?4, directory = ?5,
              episode_basis = CASE WHEN ?7 AND episode = ?6 THEN episode_basis END,
+             episode_previous = CASE WHEN ?7 AND episode = ?6 THEN episode_previous END,
+             episode_decided = episode_decided OR ?7,
              episode = ?6, episode_auto = ?7, state = ?8, version = version + 1
          WHERE id = ?1",
         params![
