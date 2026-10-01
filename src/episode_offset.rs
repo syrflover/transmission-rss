@@ -61,8 +61,12 @@
 //! user changed or undid the app's value, the app never decides the rule
 //! again.
 //!
-//! Suggestions are made only for a rule whose field still leaves numbers as
-//! they are (`0` or `1`, [`is_plain`]) and that the app has not decided.
+//! Suggestions are made to a rule the app has not decided, whatever its field
+//! holds, when the value differs from it ([`worth_offering`], user direction,
+//! 2026-10-02): a third season that started receiving with a carried-over
+//! `−12` is offered `−24` once the earlier seasons are linked. A note without
+//! a value is shown only while the field leaves numbers as they are (`0` or
+//! `1`): it asks the user to write a value, and one is written already.
 //!
 //! Some groups number a season on from a later season rather than from the
 //! first: a third season after two of 24 that starts at `- 25` counts from
@@ -386,11 +390,15 @@ pub fn may_decide(rule: &Rule) -> bool {
     rule.subscription.is_some() && !rule.episode_auto
 }
 
-/// Whether the app may suggest an offset for the rule: one it may decide
-/// whose offset still leaves numbers as they are (`0` or `1`), so that the
-/// user has not written anything a suggestion would argue with.
-pub fn is_plain(rule: &Rule) -> bool {
-    may_decide(rule) && matches!(rule.episode, 0 | 1)
+/// Whether a suggestion of `value` says something to the rule: a value that
+/// names releases otherwise than its field does, or, without a value, a field
+/// that still leaves numbers as they are (`0` or `1`). The rule must also be
+/// one the app may decide and has not decided.
+pub fn worth_offering(rule: &Rule, value: Option<i64>) -> bool {
+    match value {
+        Some(value) => !same_effect(value, rule.episode),
+        None => matches!(rule.episode, 0 | 1),
+    }
 }
 
 /// Whether two offsets name every release alike: equal, or both `0` and `1`,

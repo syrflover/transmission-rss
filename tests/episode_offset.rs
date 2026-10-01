@@ -1246,3 +1246,63 @@ async fn a_restart_without_every_episode_of_the_first_cour_is_offered_nothing() 
     assert_eq!(s.view(&rule).await["episode_suggestion"], Value::Null);
     assert_eq!(s.rule(&rule).await.episode, 0);
 }
+
+/// A rule that picked items before the grounds were known keeps its value
+/// (the app sets nothing after the first item), but the suggestion is shown
+/// whatever the field holds once it differs (user direction, 2026-10-02).
+#[tokio::test]
+async fn a_rule_that_started_with_a_carried_over_value_is_offered_the_sum() {
+    let s = Scene::new().await;
+    s.h.advance(1_000);
+    // Season 3's rule copied from season 2's, which held −12.
+    let rule = s.subscribe("Show", "Show/Season 03", 7, -12).await;
+    s.feed(&[]);
+    s.cycle().await;
+    // The earlier seasons are not linked yet: nothing is decided.
+    s.feed(&[&show(25)]);
+    s.cycle().await;
+    assert_eq!(s.names(), ["Show S03E13.mkv"]);
+    let stored = s.rule(&rule).await;
+    assert_eq!((stored.episode, stored.episode_auto), (-12, false));
+    // A note without a value says nothing to a field the user filled.
+    assert_eq!(s.view(&rule).await["episode_suggestion"], Value::Null);
+
+    // Linked later: the sum says −24, which the field does not hold.
+    s.link_earlier_seasons([Some(12), Some(12)]).await;
+    let view = s.view(&rule).await;
+    assert_eq!(view["episode_suggestion"]["value"], -24, "{view}");
+    assert_eq!(s.rule(&rule).await.episode, -12);
+
+    let (status, _, applied) = s
+        .api
+        .call(
+            "PUT",
+            &format!("/api/rules/{}/episode", rule.id),
+            Some(json!({ "version": view["version"], "episode": -24 })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    assert_eq!(applied["episode"], -24);
+    assert_eq!(applied["episode_suggestion"], Value::Null);
+    s.feed(&[&show(25), &show(26)]);
+    s.cycle().await;
+    assert!(
+        s.names().contains(&"Show S03E02.mkv".to_owned()),
+        "{:?}",
+        s.names()
+    );
+}
+
+/// A field that already holds what the grounds say is offered nothing.
+#[tokio::test]
+async fn a_rule_whose_field_already_holds_the_suggestion_is_offered_nothing() {
+    let s = Scene::new().await;
+    s.h.advance(1_000);
+    let rule = s.subscribe("Show", "Show/Season 03", 7, -24).await;
+    s.feed(&[]);
+    s.cycle().await;
+    s.feed(&[&show(27)]);
+    s.cycle().await;
+    s.link_earlier_seasons([Some(12), Some(12)]).await;
+    assert_eq!(s.view(&rule).await["episode_suggestion"], Value::Null);
+}

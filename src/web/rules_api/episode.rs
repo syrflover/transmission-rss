@@ -16,10 +16,10 @@
 //!
 //! The suggestion is read from what is known now (the rule's first items in
 //! history, the library and the AniList counts), so it appears when the user
-//! links the seasons the sum needs, and goes when the user sets an offset. It
-//! is offered only to a subscription whose offset still leaves numbers as they
-//! are ([`crate::episode_offset::is_plain`]), that the app has never decided
-//! and that has picked an item.
+//! links the seasons the sum needs, and goes when the user sets the offset it
+//! offers. It is offered to a subscription that the app has never decided and
+//! that has picked an item, whatever its field holds, when the value differs
+//! from it ([`crate::episode_offset::worth_offering`]).
 
 use std::collections::HashMap;
 
@@ -31,7 +31,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{body, rule_conflict, rule_view, store_error, RuleView};
 use crate::{
-    episode_offset::{decide, first_release, gather, is_plain, signed},
+    episode_offset::{decide, first_release, gather, may_decide, signed, worth_offering},
     store::channels::{ChannelError, Rule},
     web::{commands_api::CommandView, ApiError, AppState},
     worker::commands::episode_undo,
@@ -113,7 +113,7 @@ pub(super) async fn analyze(state: &AppState, rules: &[Rule]) -> Episodes {
 
     let open: Vec<&Rule> = rules
         .iter()
-        .filter(|r| is_plain(r) && marks.get(&r.id).is_some_and(|m| !m.decided))
+        .filter(|r| may_decide(r) && marks.get(&r.id).is_some_and(|m| !m.decided))
         .collect();
     if open.is_empty() {
         return out;
@@ -146,7 +146,10 @@ pub(super) async fn analyze(state: &AppState, rules: &[Rule]) -> Episodes {
                 continue;
             }
         };
-        if let Some((value, basis)) = decide(first, &basis).as_suggestion() {
+        let Some((value, basis)) = decide(first, &basis).as_suggestion() else {
+            continue;
+        };
+        if worth_offering(rule, value) {
             out.suggestion
                 .insert(rule.id.clone(), EpisodeSuggestion { value, basis });
         }
