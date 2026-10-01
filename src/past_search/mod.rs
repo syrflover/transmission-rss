@@ -10,6 +10,8 @@
 //! - [`client`]: one request for one page, paced for the host across processes.
 //! - [`range`]: the release range the search starts with.
 //! - [`run`]: the search itself, first page and the extra ones.
+//! - [`world`]: what the work folder and history hold, for the judgment.
+//! - [`service`]: the searches running and finished in this process.
 //!
 //! A search leaves no channel and no history behind. Only the items the person
 //! chooses to receive are recorded, by the worker, when it adds them.
@@ -32,6 +34,8 @@ pub mod query;
 pub mod range;
 pub mod release;
 pub mod run;
+pub mod service;
+pub mod world;
 
 /// How many results the tracker's search RSS returns at the most.
 pub const PAGE_LIMIT: usize = 75;

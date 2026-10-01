@@ -110,7 +110,7 @@ pub async fn run(
     phrase: &str,
     range: Range,
     world: &World,
-    picks: &dyn Fn(&str) -> bool,
+    picks: &(dyn Fn(&str) -> bool + Sync),
     limits: Limits,
     progress: &(dyn Fn(usize, usize) + Sync),
 ) -> Result<Found, SearchError> {
@@ -217,4 +217,64 @@ pub async fn run(
     }
     found.items = merged.items;
     Ok(found)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn item(key: &str, title: &str) -> FeedItem {
+        FeedItem {
+            identity_key: key.to_owned(),
+            title: title.to_owned(),
+            stored_title: title.to_owned(),
+            link: String::new(),
+            stored_link: String::new(),
+        }
+    }
+
+    fn merge() -> Merge {
+        Merge {
+            items: Vec::new(),
+            seen: HashSet::new(),
+            full: false,
+        }
+    }
+
+    #[test]
+    fn an_item_two_pages_return_is_kept_once_in_its_first_place() {
+        let mut merged = merge();
+        merged.add(vec![item("a", "One - 03"), item("b", "One - 02")]);
+        merged.add(vec![item("b", "One - 02"), item("c", "One - 01")]);
+        let keys: Vec<_> = merged
+            .items
+            .iter()
+            .map(|i| i.identity_key.as_str())
+            .collect();
+        assert_eq!(keys, ["a", "b", "c"]);
+        assert!(!merged.full);
+    }
+
+    #[test]
+    fn the_results_kept_are_bounded() {
+        let mut merged = merge();
+        merged.add(
+            (0..MAX_RESULTS + 5)
+                .map(|n| item(&format!("k{n}"), "One - 01"))
+                .collect(),
+        );
+        assert_eq!(merged.items.len(), MAX_RESULTS);
+        assert!(merged.full);
+    }
+
+    #[test]
+    fn the_notation_most_titles_use_is_the_one_searched_with() {
+        let titles = [
+            "[A] Show - 1001 (1080p)",
+            "[A] Show - 1002 (1080p)",
+            "[B] Show S02E03 [1080p]",
+        ];
+        assert_eq!(common_notation(&titles), Some(Notation::Dash { width: 4 }));
+        assert_eq!(common_notation(&["Show Movie"]), None);
+    }
 }
