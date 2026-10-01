@@ -651,6 +651,9 @@ pub(super) fn follow_move(
         }
         Some((kept, kept_seen)) => {
             merge_work(&tx, &moved, &kept)?;
+            // What the user chose for the moved work is not lost with its row.
+            crate::store::artwork::merge_selection(&tx, &moved, &kept)?;
+            crate::store::seasons::merge_links(&tx, &moved, &kept)?;
             // Unknown is the older: the work was there before the app looked.
             let seen = match (moved_seen, kept_seen) {
                 (Some(a), Some(b)) => Some(a.min(b)),

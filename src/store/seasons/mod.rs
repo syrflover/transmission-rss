@@ -412,4 +412,4 @@ impl SeasonStore {
     }
 }
 
-pub(crate) use repo::facts as library_facts;
+pub(crate) use repo::{facts as library_facts, merge_links};

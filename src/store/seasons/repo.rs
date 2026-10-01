@@ -312,6 +312,60 @@ fn replace_entries(
     Ok(())
 }
 
+/// Carries work `from`'s season links over to work `into` when an archive
+/// move merges `from` into `into` (`from`'s rows are about to go): each season
+/// of `from` that links entries, where `into`'s same season links none. Who
+/// linked them comes along; the version moves past both, and a pending search
+/// of `into`'s season is dropped (the season is linked now). Seasons `into`
+/// has linked keep their links.
+pub(crate) fn merge_links(tx: &Transaction<'_>, from: &str, into: &str) -> rusqlite::Result<()> {
+    let seasons: Vec<(u32, i64, String)> = {
+        let mut stmt = tx.prepare(
+            "SELECT i.season, i.version, i.origin FROM season_info i
+              WHERE i.work_id = ?1
+                AND EXISTS (SELECT 1 FROM season_entries l
+                             WHERE l.work_id = i.work_id AND l.season = i.season)
+              ORDER BY i.season",
+        )?;
+        let rows = stmt.query_map([from], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        rows.collect::<rusqlite::Result<_>>()?
+    };
+    for (season, moved_version, origin) in seasons {
+        let linked: i64 = tx.query_row(
+            "SELECT count(*) FROM season_entries WHERE work_id = ?1 AND season = ?2",
+            params![into, season],
+            |r| r.get(0),
+        )?;
+        if linked > 0 {
+            continue;
+        }
+        let kept_version: Option<i64> = tx
+            .query_row(
+                "SELECT version FROM season_info WHERE work_id = ?1 AND season = ?2",
+                params![into, season],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let version = kept_version.unwrap_or(0).max(moved_version) + 1;
+        tx.execute(
+            "INSERT INTO season_info (work_id, season, version, origin)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT (work_id, season) DO UPDATE SET
+                 version = excluded.version, origin = excluded.origin, job = NULL,
+                 job_requested_at = NULL, job_attempts = 0, job_not_before = NULL,
+                 note = NULL",
+            params![into, season, version, origin],
+        )?;
+        tx.execute(
+            "INSERT INTO season_entries (work_id, season, position, anilist_id)
+             SELECT ?2, season, position, anilist_id FROM season_entries
+              WHERE work_id = ?1 AND season = ?3",
+            params![from, into, season],
+        )?;
+    }
+    Ok(())
+}
+
 pub(super) fn set_links(
     conn: &mut Connection,
     work_id: &str,

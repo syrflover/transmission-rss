@@ -584,6 +584,182 @@ async fn following_a_move_keeps_the_id_and_a_merge_keeps_the_destinations() {
 }
 
 #[tokio::test]
+async fn a_merge_carries_the_moved_works_choices_where_the_kept_work_has_none() {
+    let store = store();
+    let names = ["A", "B", "C"];
+    let works = |n: u32| {
+        names
+            .iter()
+            .map(|name| work(name, vec![video(n, "01", &format!("{name} {n}.mkv"))]))
+            .collect::<Vec<_>>()
+    };
+    let (from, _) = store
+        .add_folder("/from".into(), scan(works(1)), 100, &[])
+        .await
+        .unwrap();
+    let (to, _) = store
+        .add_folder(
+            "/to".into(),
+            scan(works(1)),
+            100,
+            std::slice::from_ref(&from),
+        )
+        .await
+        .unwrap();
+    let id = |folder: &str, name: &str| {
+        let (store, folder, name) = (store.clone(), folder.to_owned(), name.to_owned());
+        async move {
+            store
+                .works(&folder)
+                .await
+                .unwrap()
+                .into_iter()
+                .find(|w| w.dir_name == name)
+                .unwrap()
+                .id
+        }
+    };
+    let (a_from, a_to) = (id(&from.id, "A").await, id(&to.id, "A").await);
+    let (b_from, b_to) = (id(&from.id, "B").await, id(&to.id, "B").await);
+    let (c_from, c_to) = (id(&from.id, "C").await, id(&to.id, "C").await);
+    let sql = |sql: String| {
+        let db = store.db.clone();
+        async move {
+            db.run::<_, DbError, _>(move |c| Ok(c.execute_batch(&sql)?))
+                .await
+                .unwrap()
+        }
+    };
+    let manual = |work: &str, file: &str| {
+        format!(
+            "UPDATE work_artwork SET mode = 'manual', source = 'upload', image_id = '{file}',
+                 image_origin = 'upload', image_path = 'artwork/{file}.png', image_size = 3,
+                 image_sha256 = '{sha}', image_format = 'png', version = version + 1,
+                 job = NULL, job_requested_at = NULL
+              WHERE work_id = '{work}';",
+            sha = "0".repeat(64)
+        )
+    };
+    // A: an upload on the moved work, nothing chosen on the kept one.
+    sql(manual(&a_from, "a")).await;
+    // B: a choice on both; the kept one's stays.
+    sql(manual(&b_from, "b-moved")).await;
+    sql(manual(&b_to, "b-kept")).await;
+    // C: the moved work's automatic entry has no image yet: nothing to carry.
+    sql(format!(
+        "UPDATE work_artwork SET source = 'anilist', anilist_media_id = 7, job = 'fetch',
+             version = version + 1 WHERE work_id = '{c_from}';"
+    ))
+    .await;
+    // Season links of A: season 1 linked on the moved work only (the kept
+    // one still searching), season 2 linked on both.
+    sql(format!(
+        "INSERT INTO anilist_entries (id, fetched_at) VALUES (10, 1), (11, 1), (12, 1), (13, 1);
+         INSERT OR REPLACE INTO season_info (work_id, season, version, origin)
+             VALUES ('{a_from}', 1, 4, 'user'), ('{a_from}', 2, 1, 'auto'),
+                    ('{a_to}', 2, 1, 'user');
+         INSERT INTO season_entries (work_id, season, position, anilist_id)
+             VALUES ('{a_from}', 1, 0, 10), ('{a_from}', 1, 1, 11), ('{a_from}', 2, 0, 12),
+                    ('{a_to}', 2, 0, 13);
+         UPDATE season_info SET job = 'search', job_requested_at = 1
+          WHERE work_id = '{a_to}' AND season = 1;"
+    ))
+    .await;
+    let kept_before = |work: String| {
+        let db = store.db.clone();
+        async move {
+            db.run::<_, DbError, _>(move |c| {
+                Ok(c.query_row(
+                    "SELECT version FROM work_artwork WHERE work_id = ?1",
+                    [&work],
+                    |r| r.get::<_, i64>(0),
+                )?)
+            })
+            .await
+            .unwrap()
+        }
+    };
+    let a_version = kept_before(a_from.clone())
+        .await
+        .max(kept_before(a_to.clone()).await);
+
+    for name in names {
+        assert_eq!(
+            store.follow_move(&from.id, &to.id, name).await.unwrap(),
+            Followed::Merged
+        );
+    }
+
+    let cover = |work: String| {
+        let db = store.db.clone();
+        async move {
+            db.run::<_, DbError, _>(move |c| {
+                Ok(c.query_row(
+                    "SELECT mode, source, image_path, version FROM work_artwork WHERE work_id = ?1",
+                    [&work],
+                    |r| {
+                        Ok((
+                            r.get::<_, String>(0)?,
+                            r.get::<_, Option<String>>(1)?,
+                            r.get::<_, Option<String>>(2)?,
+                            r.get::<_, i64>(3)?,
+                        ))
+                    },
+                )?)
+            })
+            .await
+            .unwrap()
+        }
+    };
+    let (mode, source, path, version) = cover(a_to.clone()).await;
+    assert_eq!(
+        (mode.as_str(), source.as_deref(), path.as_deref()),
+        ("manual", Some("upload"), Some("artwork/a.png"))
+    );
+    assert!(version > a_version);
+    let (mode, _, path, _) = cover(b_to.clone()).await;
+    assert_eq!(
+        (mode.as_str(), path.as_deref()),
+        ("manual", Some("artwork/b-kept.png"))
+    );
+    let (mode, source, path, _) = cover(c_to.clone()).await;
+    assert_eq!((mode.as_str(), source, path), ("auto", None, None));
+
+    let links = store
+        .db
+        .run::<_, DbError, _>({
+            let a_to = a_to.clone();
+            move |c| {
+                let mut stmt = c.prepare(
+                    "SELECT i.season, i.origin, i.job, group_concat(l.anilist_id, ',')
+                       FROM season_info i
+                       LEFT JOIN season_entries l
+                         ON l.work_id = i.work_id AND l.season = i.season
+                      WHERE i.work_id = ?1 GROUP BY i.season ORDER BY i.season",
+                )?;
+                let rows = stmt.query_map([&a_to], |r| {
+                    Ok((
+                        r.get::<_, u32>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, Option<String>>(2)?,
+                        r.get::<_, Option<String>>(3)?,
+                    ))
+                })?;
+                Ok(rows.collect::<Result<Vec<_>, _>>()?)
+            }
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        links,
+        [
+            (1, "user".to_owned(), None, Some("10,11".to_owned())),
+            (2, "user".to_owned(), None, Some("13".to_owned())),
+        ]
+    );
+}
+
+#[tokio::test]
 async fn unrecognized_files_are_replaced_by_each_scan() {
     let store = store();
     let mut scanned = ScannedWork {

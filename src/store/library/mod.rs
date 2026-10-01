@@ -244,7 +244,10 @@ pub enum Followed {
     /// The work now belongs to the destination folder, same ID.
     Moved,
     /// The destination had a work of that name; the moved work's records were
-    /// merged into it and its row is gone.
+    /// merged into it and its row is gone. The moved work's cover choice and
+    /// season links were carried over where the kept work had none (see
+    /// [`crate::store::artwork::merge_selection`] and
+    /// [`crate::store::seasons::merge_links`]).
     Merged,
 }
 

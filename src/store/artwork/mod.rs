@@ -526,4 +526,4 @@ impl ArtworkStore {
     }
 }
 
-pub(crate) use repo::{delete_file_row, files_of_state, new_id, referenced_paths};
+pub(crate) use repo::{delete_file_row, files_of_state, merge_selection, new_id, referenced_paths};

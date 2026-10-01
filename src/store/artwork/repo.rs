@@ -410,6 +410,46 @@ pub(super) fn job_later(
     tx.commit()
 }
 
+/// Carries work `from`'s selection over to work `into` when an archive move
+/// merges `from` into `into` (`from`'s row is about to go): only when `into`
+/// is `auto` with nothing selected (or has no row yet) and `from` has
+/// something chosen, `manual` or `auto` with an image. The image reference
+/// comes along, so the file stays referenced. Otherwise `into` keeps its own.
+/// The version moves past both, so no job or screen of either applies to it.
+pub(crate) fn merge_selection(
+    tx: &Transaction<'_>,
+    from: &str,
+    into: &str,
+) -> rusqlite::Result<()> {
+    let Some(moved) = read(tx, from)? else {
+        return Ok(());
+    };
+    let chosen = moved.mode == Mode::Manual || (moved.mode == Mode::Auto && moved.image.is_some());
+    if !chosen {
+        return Ok(());
+    }
+    let kept = read(tx, into)?;
+    let open = kept
+        .as_ref()
+        .is_none_or(|k| k.mode == Mode::Auto && k.source.is_none());
+    if !open {
+        return Ok(());
+    }
+    let version = kept.map_or(0, |k| k.version).max(moved.version) + 1;
+    tx.execute(
+        "INSERT OR REPLACE INTO work_artwork
+             (work_id, mode, source, anilist_media_id, image_id, image_origin, image_path,
+              image_size, image_sha256, image_format, version, job, job_requested_at,
+              job_attempts, job_not_before, job_image_url, note, note_at)
+         SELECT ?2, mode, source, anilist_media_id, image_id, image_origin, image_path,
+                image_size, image_sha256, image_format, ?3, job, job_requested_at,
+                job_attempts, job_not_before, job_image_url, note, note_at
+           FROM work_artwork WHERE work_id = ?1",
+        params![from, into, version],
+    )?;
+    Ok(())
+}
+
 // --- files -----------------------------------------------------------------------------
 
 /// A file the app recorded in `artwork_files`.
