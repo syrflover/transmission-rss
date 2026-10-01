@@ -27,9 +27,9 @@
 //!
 //! `episode_undo` is accepted while the rule's offset is the automatic one the
 //! request names and the value it replaced is known; the worker puts that
-//! value back and renames the videos ([`episode_undo`]). It is accepted too
-//! for an undo of that value that ended with files still to rename, which it
-//! carries on.
+//! value back and renames the videos ([`episode_undo`]). On a rule that is
+//! not automatic it is accepted too for an undo of that value that ended with
+//! files still to rename, which it carries on.
 //!
 //! A rule is archived and restored only through `rule_archive`: the worker
 //! turns the rule off before its folder moves and on after it moved back.
@@ -411,13 +411,14 @@ async fn check_episode_undo(
         .get_rule(&payload.rule_id)
         .await?
         .ok_or_else(|| ApiError::not_found("규칙을 찾지 못했어요. 삭제됐을 수 있어요."))?;
-    // An undo of this value that ended half done is carried on, whatever the
-    // rule's offset is now.
-    if state
-        .channels
-        .unfinished_episode_undo(&rule.id)
-        .await?
-        .is_some_and(|undo| undo.from == payload.episode)
+    // The value is back already: an undo of it with files left is carried on
+    // (`이어서 되돌리기`), whatever the rule's offset is now.
+    if !rule.episode_auto
+        && state
+            .channels
+            .unfinished_episode_undo(&rule.id)
+            .await?
+            .is_some_and(|undo| undo.from == payload.episode)
     {
         return Ok(());
     }

@@ -90,7 +90,10 @@
 //! the files left ([`ChannelStore::adopt_episode_undo`](crate::store::channels::ChannelStore::adopt_episode_undo)),
 //! and the rule detail shows them with `이어서 되돌리기`. So does an undo that
 //! ended half done otherwise (a panic, or a database that failed for every
-//! start).
+//! start). Only while the rule is not automatic: on a rule that is automatic
+//! again (an import marked it so), `되돌리기` plans a new undo of the rule as
+//! it is, and the files an older undo left wait no more
+//! (`SUPERSEDED`, kept).
 //!
 //! A user who saves the rule while an undo is unfinished does not change it:
 //! the files still `pending` take the names of the value put back (the
@@ -209,6 +212,50 @@ fn transmission(err: impl std::fmt::Display) -> Retry {
     Retry::Transmission(err.to_string())
 }
 
+/// Plans and begins a new undo of the automatic value `from` of `rule`:
+/// the undo as begun, or how the command ends without one.
+async fn begin(
+    ctx: &CycleContext,
+    command: &Command,
+    rule: &Rule,
+    from: i64,
+    clock: &Clock,
+) -> Result<Result<crate::store::channels::EpisodeUndo, Finished>, Retry> {
+    if rule.episode != from {
+        return Ok(Err(failed(RULE_CHANGED)));
+    }
+    let marks = ctx
+        .channels
+        .episode_marks(vec![rule.id.clone()])
+        .await
+        .map_err(store)?;
+    let Some(to) = marks.get(&rule.id).and_then(|m| m.previous) else {
+        return Ok(Err(failed(
+            "앱이 정하기 전 값을 몰라서 되돌릴 수 없어요. 회차 변환을 직접 적어 주세요.",
+        )));
+    };
+    let Some(collect) = ctx.settings.collection().await.map_err(store)? else {
+        return Ok(Err(failed(NO_COLLECT_FOLDER)));
+    };
+    let files = plan(ctx, rule, &collect.folder, from, to).await?;
+    Ok(
+        match ctx
+            .channels
+            .begin_episode_undo(&command.id, &rule.id, from, to, files, clock())
+            .await
+            .map_err(store)?
+        {
+            UndoBegun::Begun(undo) => Ok(undo),
+            UndoBegun::Changed => Err(failed(RULE_CHANGED)),
+            UndoBegun::Busy(names) => Err(failed(format!(
+                "수정본으로 대체하는 중인 영상이 있어서 되돌리지 않았어요: {}. \
+                 대체가 끝난 뒤 다시 되돌려 주세요.",
+                names.join(", ")
+            ))),
+        },
+    )
+}
+
 /// The value is back and `left` files are still to rename, for `why`.
 fn paused(to: i64, left: usize, why: &str) -> Finished {
     Finished {
@@ -309,64 +356,42 @@ pub async fn run(ctx: &CycleContext, command: &Command, clock: &Clock) -> Result
     {
         // Begun by an earlier start of this command.
         Some(undo) => undo,
-        None => match ctx
-            .channels
-            .unfinished_episode_undo(&payload.rule_id)
-            .await
-            .map_err(store)?
-            .filter(|undo| undo.from == payload.episode)
-        {
-            // An undo of this value that ended half done: carried on.
-            Some(earlier) => ctx
+        None => {
+            let Some(rule) = ctx
                 .channels
-                .adopt_episode_undo(&earlier.command_id, &command.id)
+                .get_rule(&payload.rule_id)
                 .await
                 .map_err(store)?
-                .unwrap_or(earlier),
-            None => {
-                let Some(rule) = ctx
-                    .channels
-                    .get_rule(&payload.rule_id)
-                    .await
-                    .map_err(store)?
-                else {
-                    return Ok(failed("규칙을 찾지 못했어요. 삭제됐을 수 있어요."));
-                };
-                if !rule.episode_auto || rule.episode != payload.episode {
-                    return Ok(failed(RULE_CHANGED));
-                }
-                let marks = ctx
-                    .channels
-                    .episode_marks(vec![rule.id.clone()])
-                    .await
-                    .map_err(store)?;
-                let Some(to) = marks.get(&rule.id).and_then(|m| m.previous) else {
-                    return Ok(failed(
-                    "앱이 정하기 전 값을 몰라서 되돌릴 수 없어요. 회차 변환을 직접 적어 주세요.",
-                ));
-                };
-                let Some(collect) = ctx.settings.collection().await.map_err(store)? else {
-                    return Ok(failed(NO_COLLECT_FOLDER));
-                };
-                let files = plan(ctx, &rule, &collect.folder, payload.episode, to).await?;
+            else {
+                return Ok(failed("규칙을 찾지 못했어요. 삭제됐을 수 있어요."));
+            };
+            let begun = if rule.episode_auto {
+                // A new undo of the rule as it is.
+                begin(ctx, command, &rule, payload.episode, clock).await?
+            } else {
+                // The value is back already: an undo of it with files left
+                // (`이어서 되돌리기`) is carried on.
                 match ctx
                     .channels
-                    .begin_episode_undo(&command.id, &rule.id, payload.episode, to, files, clock())
+                    .unfinished_episode_undo(&rule.id)
                     .await
                     .map_err(store)?
+                    .filter(|undo| undo.from == payload.episode)
                 {
-                    UndoBegun::Begun(undo) => undo,
-                    UndoBegun::Changed => return Ok(failed(RULE_CHANGED)),
-                    UndoBegun::Busy(names) => {
-                        return Ok(failed(format!(
-                            "수정본으로 대체하는 중인 영상이 있어서 되돌리지 않았어요: {}. \
-                         대체가 끝난 뒤 다시 되돌려 주세요.",
-                            names.join(", ")
-                        )))
-                    }
+                    Some(earlier) => Ok(ctx
+                        .channels
+                        .adopt_episode_undo(&earlier.command_id, &command.id)
+                        .await
+                        .map_err(store)?
+                        .unwrap_or(earlier)),
+                    None => Err(failed(RULE_CHANGED)),
                 }
+            };
+            match begun {
+                Ok(undo) => undo,
+                Err(ended) => return Ok(ended),
             }
-        },
+        }
     };
 
     let mut listing = Listing::default();

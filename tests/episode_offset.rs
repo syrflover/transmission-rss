@@ -1724,6 +1724,55 @@ async fn a_file_renamed_before_a_start_was_cut_short_is_recorded_renamed() {
     assert_eq!(s.names(), ["Show S03E25.mkv", "Show S03E26.mkv"]);
 }
 
+/// On a rule that is automatic again (an import marked it so), `되돌리기` is a
+/// new undo of the rule as it is: it does not carry on an older one.
+#[tokio::test]
+async fn an_automatic_rule_starts_a_new_undo_instead_of_carrying_on_an_old_one() {
+    use transmission_rss::store::{
+        commands::{CommandState, CommandStore, Outcome},
+        DbError,
+    };
+    let (s, rule) = Scene::third_season_received().await;
+    s.undo_cut_short(&rule, "undo-0304-a").await;
+    CommandStore::new(s.h.db.clone())
+        .finish(
+            "undo-0304-a",
+            CommandState::Failed,
+            Outcome {
+                result: "failed".into(),
+                reason: Some("처리하다 내부 오류가 났어요.".into()),
+            },
+            s.h.now(),
+        )
+        .await
+        .unwrap();
+    // The rule is automatic again, at −48 over −24.
+    let id = rule.id.clone();
+    s.h.db
+        .run::<_, DbError, _>(move |c| {
+            c.execute(
+                "UPDATE rules SET episode = -48, episode_auto = 1, episode_previous = -24,
+                        version = version + 1 WHERE id = ?1",
+                rusqlite::params![id],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+    let command = s.undo(&rule, "undo-0304-b", -48).await;
+
+    assert_eq!(command["outcome"]["result"], "undone", "{command}");
+    let now = s.rule(&rule).await;
+    assert_eq!((now.episode, now.episode_auto), (-24, false));
+    assert_eq!(s.names(), ["Show S03E25.mkv", "Show S03E26.mkv"]);
+    let view = s.view(&rule).await;
+    assert_eq!(view["episode_undo"]["command"]["id"], "undo-0304-b");
+    // Nothing is left to carry on.
+    let (status, body) = s.ask_undo(&rule, "undo-0304-c", -48).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+}
+
 #[tokio::test]
 async fn an_undo_that_ended_half_done_is_shown_and_carried_on_when_asked_again() {
     use transmission_rss::store::commands::{CommandState, CommandStore, Outcome};

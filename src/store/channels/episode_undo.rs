@@ -135,6 +135,10 @@ pub const REVISION_UNDER_WAY: &str =
 pub const REVISION_ROWS_THERE: &str =
     "새 이름에 다른 영상의 수정본 기록이 있어서 이름을 바꾸지 않았어요.";
 
+/// Why a file of an older undo of the rule keeps its name: a new undo of the
+/// rule planned its files anew.
+pub const SUPERSEDED: &str = "같은 규칙의 새 되돌리기가 영상을 다시 살펴봤어요.";
+
 /// The states of a replacement still acting on its episode's files.
 fn under_way() -> Vec<&'static str> {
     RevisionState::ALL
@@ -251,6 +255,14 @@ fn begin(
                 version = version + 1
           WHERE id = ?1",
         params![rule_id, to],
+    )?;
+    // The files an older undo of the rule left wait no more: this one
+    // planned the rule's files anew.
+    tx.execute(
+        "UPDATE episode_undo_files SET state = 'kept', reason = ?2
+          WHERE state = 'pending'
+            AND command_id IN (SELECT command_id FROM episode_undos WHERE rule_id = ?1)",
+        params![rule_id, SUPERSEDED],
     )?;
     tx.execute(
         "INSERT INTO episode_undos (command_id, rule_id, from_offset, to_offset, started_at)
