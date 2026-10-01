@@ -502,6 +502,50 @@ impl FakeTransmission {
         };
     }
 
+    /// Makes the torrent `hash` report a local error (`error` 3) with this
+    /// text, or none (`None`).
+    pub fn set_local_error(&self, hash: &str, text: Option<&str>) {
+        let mut st = self.state.lock().unwrap();
+        if let Some(t) = st.torrents.iter_mut().find(|t| t.hash == hash) {
+            t.error = if text.is_some() { 3 } else { 0 };
+            t.error_string = text.unwrap_or_default().to_owned();
+        }
+    }
+
+    /// Reports the torrent `hash` in `dir` from now on, moving nothing: the
+    /// same folder spelled another way (a symbolic link), say.
+    pub fn set_download_dir(&self, hash: &str, dir: impl AsRef<std::path::Path>) {
+        let mut st = self.state.lock().unwrap();
+        if let Some(t) = st.torrents.iter_mut().find(|t| t.hash == hash) {
+            t.download_dir = dir.as_ref().to_str().unwrap().to_owned();
+        }
+    }
+
+    /// Moves the single file of the torrent `hash` to `dir` and reports the
+    /// torrent there, as a person moving it in Transmission would.
+    pub fn relocate(&self, hash: &str, dir: impl AsRef<std::path::Path>) {
+        let mut st = self.state.lock().unwrap();
+        let t = st.torrents.iter_mut().find(|t| t.hash == hash).unwrap();
+        let from = std::path::Path::new(&t.download_dir).join(&t.name);
+        std::fs::create_dir_all(dir.as_ref()).unwrap();
+        std::fs::rename(from, dir.as_ref().join(&t.name)).unwrap();
+        t.download_dir = dir.as_ref().to_str().unwrap().to_owned();
+    }
+
+    /// How many `torrent-get` requests asked for every torrent with its file
+    /// list: the request whose answer grows with everything Transmission holds.
+    pub fn full_file_listings(&self) -> usize {
+        self.calls_of("torrent-get")
+            .iter()
+            .filter(|c| {
+                c.args["ids"].is_null()
+                    && c.args["fields"]
+                        .as_array()
+                        .is_some_and(|fields| fields.iter().any(|f| f == "files"))
+            })
+            .count()
+    }
+
     /// The torrent `hash` as the fake holds it.
     pub fn torrent(&self, hash: &str) -> FakeTorrent {
         self.torrents()

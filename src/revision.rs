@@ -66,6 +66,29 @@ impl Release {
         }
     }
 
+    /// `name` without its revision (`14v2` becomes `14`), everything else as
+    /// it is: what the episode's file name is derived from. `trname` does not
+    /// read `06v2` as episode 6 in every name (Erai-raws' `… - 06v2 [1080p CR
+    /// WEBRip HEVC AAC][MultiSub][1BBD34E6].mkv` gives episode 34).
+    pub fn without_version(name: &str) -> String {
+        let name = name.trim();
+        let mut end = name.len();
+        if let Some(found) = EXTENSION.find(name) {
+            end = found.start();
+        }
+        if let Some(found) = CRC.captures(&name[..end]) {
+            end = found.get(0).unwrap().start();
+        }
+        match VERSION.captures(&name[..end]) {
+            Some(c) => {
+                let mut out = name.to_owned();
+                out.replace_range(c.get(1).unwrap().end()..c.get(0).unwrap().end(), "");
+                out
+            }
+            None => name.to_owned(),
+        }
+    }
+
     /// `v2`, as the version line writes a revision.
     pub fn label(version: u32) -> String {
         format!("v{version}")
@@ -156,6 +179,22 @@ mod tests {
             "[Erai-raws] Kimi to Idol Precure - 06v2 [1080p CR WEBRip HEVC AAC][MultiSub][1BBD34E6]",
         );
         assert_eq!(title, release);
+    }
+
+    #[test]
+    fn a_name_without_its_revision_keeps_everything_else() {
+        assert_eq!(
+            Release::without_version(
+                "[Erai-raws] Show - 06v2 [1080p CR WEBRip HEVC AAC][MultiSub][1BBD34E6].mkv"
+            ),
+            "[Erai-raws] Show - 06 [1080p CR WEBRip HEVC AAC][MultiSub][1BBD34E6].mkv"
+        );
+        assert_eq!(
+            Release::without_version("[SubsPlease] Show - 14v2 (1080p) [8F2EFECC].mkv"),
+            "[SubsPlease] Show - 14 (1080p) [8F2EFECC].mkv"
+        );
+        let first = "[SubsPlease] Show - 14 (1080p) [8F2EFECC].mkv";
+        assert_eq!(Release::without_version(first), first);
     }
 
     #[test]

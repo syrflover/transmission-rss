@@ -68,7 +68,7 @@ RSS에서 빠진 지난 회차를 규칙 조건으로 만든 nyaa 검색 RSS를 
 
 ### 검증한 것
 
-`tests/past_search.rs`(웹 API를 실제로 띄우고, 가짜 nyaa·가짜 Transmission·임시 폴더·실제 worker 명령 실행을 써요) 13개와 `src/past_search/` 단위 시험, `src/store/search_pace/` 시험이에요. 가짜 nyaa는 검색어를 단어로 맞추고 75개에서 자르고 요청 순서·시각을 기록해요.
+`tests/past_search.rs`(웹 API를 실제로 띄우고, 가짜 nyaa·가짜 Transmission·임시 폴더·실제 worker 명령 실행을 써요) 17개와 `src/past_search/` 단위 시험, `src/store/search_pace/` 시험이에요. 가짜 nyaa는 검색어를 단어로 맞추고 75개에서 자르고 요청 순서·시각을 기록해요.
 
 | 기준 행 | 시험 |
 | --- | --- |
@@ -82,6 +82,8 @@ RSS에서 빠진 지난 회차를 규칙 조건으로 만든 nyaa 검색 RSS를 
 | 8 휴대폰 너비 | 브라우저(아래) |
 
 - 그 밖: 거절되는 요청(`a_request_that_cannot_be_searched_is_refused_before_any_request_is_sent`), `429`(`a_tracker_that_asks_to_wait_fails_the_search_and_says_for_how_long`), 새 검색이 이전 검색을 끝냄, 규칙이 고르지 않은 결과의 거절, 수정본을 골라 받아 확인한 뒤 대체(`a_revision_chosen_in_the_preview_replaces_the_video_after_it_is_received_and_checked`).
+- 추가 요청에 응답이 없었던 `받기`가 다음 시작에서 추가 전에 끝나면(규칙을 멈춤, 수집 폴더를 뺌, 폴더에 이미 그 수정본이 있음 등) `receive_once`와 같게 응답 없는 추가를 명령에 남기고 명령 라벨을 떼요. `a_paused_rule_after_an_unanswered_add_ends_the_command_and_holds_the_next_cleanup`은 고치기 전 라벨이 남고, 고치기 전 다음 주기의 `commands_unconfirmed`가 0이라 피드에 없는 그 토렌트를 지울 수 있었어요(검사를 하나씩 빼서 둘 다 실패하는 것을 봤어요).
+- 0025 수정본 대체의 보완과 합친 뒤 다시 본 것: 검색으로 받은 수정본도 피드의 수정본과 같은 대체 상태 기계를 지나므로, 한 회차의 대체는 한 번에 하나이고 낮은 수정본이 높은 수정본을 대체하지 않아요. 같은 회차의 `v2`·`v3`를 검색으로 함께 받고 `v2`가 먼저 끝난 경우(`two_searched_revisions_of_an_episode_leave_the_higher_one`)와 피드의 `v2`가 받는 중일 때 검색으로 `v3`를 받은 경우(`a_searched_revision_higher_than_the_feeds_open_one_is_the_one_that_replaces`)는 그 보완 전 코드에서 `v2`가 회차 이름을 차지해 실패했고, 보완 뒤 `v3`만 대체해요. 이미 더 높은 수정본이 대체한 회차의 낮은 수정본은 검색으로 골라도 추가하지 않고 `중복`으로 끝나요(`a_searched_revision_lower_than_the_one_that_replaced_the_video_is_not_added`, 피드 주기와 같은 판단을 써요).
 - 5행의 간격 검사는 간격을 0으로 바꿨을 때 실패하는 것을 봤어요. 간격 시험은 처음에 60 ms 간격에 여유 5 ms로 두어, 병렬 실행에서 한 번 54.9 ms로 실패했어요(도착 시각을 재므로 스케줄링 흔들림이 들어가요). 150 ms에 여유 60 ms로 고쳐 다섯 번 연속 통과했어요.
 - 브라우저(로컬 `trss-web`, 가짜 nyaa, 임시 DB·폴더): 범위 입력 → 검색 → 미리보기(1–24, 결과 27개, 22개 기본 선택, 폴더에 있는 3·4화는 `이미 있어요`로 해제) → 2개를 골라 `선택한 2개 받기` → 세 번째 단계에서 `추가하는 중`(worker가 없어 명령이 열려 있는 상태)까지 봤어요. 375 px에서 세 단계와 미리보기 모두 `scrollWidth`가 `clientWidth`와 같았어요(가로 스크롤 없음, 가로로 넘치는 요소 없음).
 - `cargo fmt --check` 통과, `cargo clippy --all-targets -- -D warnings` 통과, `cargo test --no-fail-fast`는 1193개 통과·실패 0개·무시 2개(27개 실행 파일), 웹은 `bun install --frozen-lockfile`·`bun run typecheck`·`bun run build` 통과.
@@ -96,7 +98,6 @@ RSS에서 빠진 지난 회차를 규칙 조건으로 만든 nyaa 검색 RSS를 
 
 ### 남은 일
 
-- 0025의 수정본 대체를 병행해 고치는 작업이 합쳐지면 `receive_past.rs`의 수정본 판정(`decide_revision`)과 `receive_once.rs`의 실행 분리가 그 변경과 맞는지 다시 봐야 해요.
 - 마스크된 링크(다른 호스트의 비밀 값)를 가진 검색 결과의 원래 링크 복원은 nyaa 링크로만 확인했어요.
 - 알려진 한계(코드는 그대로 두었어요):
   - 링크에 가려진 값이 있는 검색 결과는 그 값을 채널에 저장된 비밀 값으로 채울 수 있을 때만 받을 수 있어요(`fill_masked_values`, `src/worker/commands/link.rs`). 채울 수 없으면 받기가 실패해요.

@@ -3,7 +3,10 @@
 -- episode whose folder already holds a video.
 --
 -- `item_id` is the new revision's history item and `old_item_id` the item of
--- the video it replaces, when the worker could tell which. `folder` is the
+-- the video it replaces, when the worker could tell which. `old_crc` is the
+-- CRC32 of the episode's file as the worker read it when it decided (only
+-- when it had to read it), and `old_torrent_hash` the torrent removed with
+-- the old video, once the worker removes it. `folder` is the
 -- rule's save folder and `episode_name` the episode's file name in it (the
 -- name `trname` gives, which the old video holds). `expected_crc` is the
 -- CRC32 the new release's name carries, eight upper-case hex digits; NULL
@@ -22,6 +25,8 @@ CREATE TABLE video_revisions (
     folder        TEXT    NOT NULL CHECK (folder <> ''),
     episode_name  TEXT    NOT NULL CHECK (episode_name <> ''),
     old_version   INTEGER,
+    old_crc       TEXT,
+    old_torrent_hash TEXT,
     new_version   INTEGER NOT NULL,
     expected_crc  TEXT,
     torrent_hash  TEXT,
@@ -37,3 +42,5 @@ CREATE TABLE video_revisions (
 
 CREATE INDEX video_revisions_old_item ON video_revisions (old_item_id);
 CREATE INDEX video_revisions_state ON video_revisions (state);
+CREATE INDEX video_revisions_episode ON video_revisions (folder, episode_name);
+CREATE INDEX video_revisions_hash ON video_revisions (torrent_hash);
