@@ -62,6 +62,7 @@
 //! [`LibraryError::Changed`] if they are not the registered folders any more.
 
 mod detail;
+mod folder_work;
 mod overview;
 mod page;
 mod repo;

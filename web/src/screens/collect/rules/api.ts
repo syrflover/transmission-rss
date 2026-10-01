@@ -59,6 +59,16 @@ export interface SeasonBlocked {
   holder_subject: string | null;
 }
 
+/**
+ * What the app offers for the episode offset of a rule that has none yet:
+ * `value` is what `적용` saves, `null` when the grounds do not say one and the
+ * user has to write it. `basis` is the reason as a sentence.
+ */
+export interface EpisodeSuggestion {
+  value: number | null;
+  basis: string;
+}
+
 export interface Rule {
   id: string;
   channel_id: string;
@@ -73,6 +83,10 @@ export interface Rule {
   directory: string;
   episode: number;
   episode_auto: boolean;
+  /** Why the app set `episode` (a sentence); `null` unless `episode_auto` and the grounds are known. */
+  episode_basis: string | null;
+  /** What the app offers while `episode` is still the plain one; `null` when it has nothing to say. */
+  episode_suggestion: EpisodeSuggestion | null;
   state: RuleState;
   /** An earlier rule takes an item this rule also matches. */
   overlap: boolean;
@@ -196,6 +210,14 @@ export function switchRule(rule: Rule, change: { video: boolean } | { subtitles:
   return api<Rule>(`/rules/${encodeURIComponent(rule.id)}/switch`, {
     method: "PUT",
     body: { version: rule.version, ...change },
+  });
+}
+
+/** `적용` of the app's episode suggestion: the offset becomes the user's own, at once. */
+export function applyEpisode(rule: Rule, episode: number): Promise<Rule> {
+  return api<Rule>(`/rules/${encodeURIComponent(rule.id)}/episode`, {
+    method: "PUT",
+    body: { version: rule.version, episode },
   });
 }
 

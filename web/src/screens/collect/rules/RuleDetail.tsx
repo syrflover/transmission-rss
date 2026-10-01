@@ -32,6 +32,7 @@ import {
   type Rule,
 } from "./api";
 import { ArchiveMoveNotice } from "./ArchiveMoveNotice";
+import { EpisodeGrounds } from "./EpisodeGrounds";
 import { BLANK_DRAFT, draftOf, fieldsOf, parseEpisode, sameDraft, type Draft } from "./draft";
 import { LinkToSchedule } from "./LinkToSchedule";
 import { ChannelTag, StateBadge } from "./RuleList";
@@ -559,6 +560,18 @@ export function RuleDetail({
             </p>
           </div>
         </div>
+        {known && (
+          <EpisodeGrounds
+            rule={known}
+            shown={episodeValue === known.episode}
+            disabled={busy || moving}
+            onChanged={(fresh) => {
+              taken(fresh);
+              // The other edits stay; the field takes the stored offset.
+              setDraft((d) => ({ ...d, episode: String(fresh.episode) }));
+            }}
+          />
+        )}
 
         {!isNew && siblings.length > 1 && (
           <OrderRow siblings={siblings} position={position} onMove={setPosition} />

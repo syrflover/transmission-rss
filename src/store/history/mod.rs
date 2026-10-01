@@ -33,6 +33,7 @@
 mod identity;
 mod model;
 mod repo;
+mod rule_items;
 #[cfg(test)]
 mod tests;
 

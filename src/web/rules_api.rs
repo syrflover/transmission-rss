@@ -10,6 +10,7 @@
 //! | `DELETE /rules/{id}?version=N`         | `200 { removed: true }`                   |
 //! | `PUT /rules/order`                     | `200 { rules: [RuleView] }` (the channel's) |
 //! | `PUT /rules/{id}/switch`               | `200 RuleView`                            |
+//! | `PUT /rules/{id}/episode`              | `200 RuleView`                            |
 //! | `POST /rules/preview`                  | `200 Preview`                             |
 //!
 //! Failures use the shape in [`super::error`]. A version that is not the
@@ -34,6 +35,12 @@
 //! Turning `영상 받기` on notes the time on the rule (`resumed_at`), as does a
 //! restore: the items first seen before then are left to the user (see the
 //! preview below).
+//!
+//! `PUT /rules/{id}/episode` (`{ version, episode }`) is `적용` of the episode
+//! offset the rule detail suggests, and saves it as the user's own value (see
+//! [`episode`]). A view carries `episode_basis` (why the app set the offset it
+//! did, when it did) and `episode_suggestion` (`{ value, basis }`, what the
+//! app offers when it did not).
 //!
 //! A subscription's view also tells where it stands in the library:
 //! `season` (the season its received videos appeared in, with the work's name,
@@ -124,6 +131,7 @@ use crate::store::history::{
 use crate::worker::commands::rule_archive::{self, RuleArchive};
 use crate::worker::plan::{ChannelPlan, Judgement, PastCause, PlanEvaluation};
 
+mod episode;
 #[cfg(test)]
 mod tests;
 
@@ -133,6 +141,7 @@ pub fn routes() -> Router<AppState> {
         .route("/rules/preview", post(preview))
         .route("/rules/order", put(reorder_rules))
         .route("/rules/{id}/switch", put(switch_rule))
+        .route("/rules/{id}/episode", put(episode::put_episode))
         .route(
             "/rules/{id}",
             get(read_rule).put(update_rule).delete(delete_rule),
@@ -203,6 +212,11 @@ pub struct RuleView {
     pub directory: String,
     pub episode: i64,
     pub episode_auto: bool,
+    /// Why the app set the offset by itself, when it did and the rule has the
+    /// sentence (see [`crate::episode_offset`]).
+    pub episode_basis: Option<String>,
+    /// What the app offers for the offset of a rule it did not set one for.
+    pub episode_suggestion: Option<episode::EpisodeSuggestion>,
     /// `active`, `paused` or `archived`.
     pub state: &'static str,
     /// An earlier rule takes an item that this rule also matches.
@@ -494,6 +508,8 @@ struct Analysis {
     seasons: HashMap<String, RuleSeasonView>,
     /// The season that kept a subscription rule from connecting.
     blocked: HashMap<String, SeasonBlockedView>,
+    /// The grounds and suggestions for the rules' episode offsets.
+    episodes: episode::Episodes,
 }
 
 /// The season of `season_id` as a subscription's progress shows it, if the
@@ -592,6 +608,7 @@ async fn analyze(state: &AppState, cwr: &ChannelWithRules) -> Result<Analysis, A
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?;
     }
+    analysis.episodes = episode::analyze(state, &cwr.rules).await?;
     // Only the judgement is used here, never a save path.
     let plan = ChannelPlan::new(cwr.clone(), FsPath::new(""));
     for rule in &cwr.rules {
@@ -665,6 +682,8 @@ fn views(
             directory: rule.directory.clone(),
             episode: rule.episode,
             episode_auto: rule.episode_auto,
+            episode_basis: analysis.episodes.basis.get(&rule.id).cloned(),
+            episode_suggestion: analysis.episodes.suggestion.get(&rule.id).cloned(),
             state: rule.state.as_str(),
             overlap: analysis.overlap.contains(&rule.id),
             error: analysis.errors.get(&rule.id).cloned(),

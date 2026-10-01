@@ -90,7 +90,9 @@ const MIGRATIONS: &[Migration] = &[
         include_str!("anissia/unlisted.sql"),
         include_str!("setup/ended.sql")
     )),
-    // 23: when a rule started and which archive suggestion grounds the user chose to keep collecting
+    // 23: the grounds of a rule's automatic episode offset
+    Migration::Sql(include_str!("channels/episode_basis.sql")),
+    // 24: when a rule started and which archive suggestion grounds the user chose to keep collecting
     Migration::Sql(include_str!("channels/archive_suggestion.sql")),
 ];
 
@@ -865,15 +867,15 @@ mod tests {
         assert_eq!((before, after), (None, Some(5)));
     }
 
-    /// The migration that added archive suggestions' tables is number 23.
-    const BEFORE_ARCHIVE_SUGGESTIONS: usize = 22;
+    /// The migration that added archive suggestions' tables is number 24.
+    const BEFORE_ARCHIVE_SUGGESTIONS: usize = 23;
 
     #[tokio::test]
     async fn a_database_from_before_archive_suggestions_keeps_its_rows_and_stamps_new_rules() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("app.db");
         {
-            // A database as the build with twenty-two migrations left it: a
+            // A database as the build with twenty-three migrations left it: a
             // rule that received an item.
             let conn = database_at(&path, BEFORE_ARCHIVE_SUGGESTIONS);
             conn.execute_batch(
@@ -954,6 +956,72 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(first_run_rows(&db).await, 0);
+    }
+
+    /// The migration that added the grounds of an automatic episode offset
+    /// follows the first run's end (22).
+    const BEFORE_EPISODE_BASIS: usize = 22;
+
+    #[tokio::test]
+    async fn rules_from_before_episode_grounds_keep_their_offsets_and_take_grounds() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        {
+            let conn = database_at(&path, BEFORE_EPISODE_BASIS);
+            conn.execute_batch(
+                "INSERT INTO channels (id, position, url, excludes, secret_query, version)
+                 VALUES ('c1', 0, 'https://a.example/rss', '[]', '[]', 1);
+                 INSERT INTO rules (id, channel_id, position, match_text, regex, case_insensitive,
+                                    directory, episode, episode_auto, state, version)
+                 VALUES ('typed', 'c1', 0, 'A', 0, 0, 'A/Season 01', -12, 0, 'active', 4),
+                        ('derived', 'c1', 1, 'B', 0, 0, 'B/Season 01', -24, 1, 'active', 2);",
+            )
+            .unwrap();
+        }
+
+        let db = Db::open(&path).await.unwrap();
+
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+        let rows: Vec<(String, i64, bool, Option<String>, i64)> = db
+            .run::<_, DbError, _>(|c| {
+                c.execute(
+                    "UPDATE rules SET episode_basis = '이전 시즌이 24화까지예요.' WHERE id = 'derived'",
+                    [],
+                )?;
+                let mut stmt = c.prepare(
+                    "SELECT id, episode, episode_auto, episode_basis, version FROM rules ORDER BY id",
+                )?;
+                let rows = stmt.query_map([], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+                })?;
+                Ok(rows.collect::<rusqlite::Result<_>>()?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                (
+                    "derived".to_owned(),
+                    -24,
+                    true,
+                    Some("이전 시즌이 24화까지예요.".to_owned()),
+                    2
+                ),
+                ("typed".to_owned(), -12, false, None, 4),
+            ]
+        );
+        // A blank sentence is not a ground.
+        let blank = db
+            .run::<_, DbError, _>(|c| {
+                Ok(
+                    c.execute("UPDATE rules SET episode_basis = '' WHERE id = 'typed'", [])
+                        .is_err(),
+                )
+            })
+            .await
+            .unwrap();
+        assert!(blank);
     }
 
     #[tokio::test]

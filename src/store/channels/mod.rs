@@ -12,6 +12,9 @@
 mod db_handle;
 mod delete;
 mod delete_rule;
+mod episode;
+#[cfg(test)]
+mod episode_tests;
 pub mod import;
 pub mod import_subscriptions;
 #[cfg(test)]
