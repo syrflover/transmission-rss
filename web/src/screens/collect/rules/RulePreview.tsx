@@ -8,6 +8,7 @@ const KIND: Record<PreviewKind, { label: string; badge: string }> = {
   mine: { label: "이 규칙이 받아요", badge: "border-ok text-ok" },
   earlier: { label: "앞 규칙이 가져가요", badge: "border-arch text-arch" },
   excluded: { label: "채널 제외 조건", badge: "border-hairline text-text-muted" },
+  past: { label: "지난 회차", badge: "border-hairline text-text-secondary" },
 };
 
 const STORED: Record<string, string> = {
@@ -46,6 +47,12 @@ function Row({ item }: { item: PreviewItem }) {
       {item.kind === "mine" && item.save_path && (
         <p className="min-w-0 font-mono text-xs break-all text-text-secondary">→ {item.save_path}</p>
       )}
+      {item.kind === "past" && (
+        <p className="min-w-0 text-xs text-text-secondary">
+          구독하기 전에 올라온 항목이라 고르기 전에는 받지 않아요.
+          {item.save_path && <span className="block font-mono break-all text-text-muted">→ {item.save_path}</span>}
+        </p>
+      )}
       {item.kind === "earlier" && item.taken_by && (
         <p className="min-w-0 text-xs break-all text-text-secondary">
           {item.taken_by.match ?? "제목 대기"} 규칙이 먼저 맞아서 그쪽 폴더로 가요.
@@ -75,7 +82,8 @@ function Summary({ preview }: { preview: Preview }) {
       기록된 항목 {counts.total}개 중 이 규칙이 받는 항목 <strong>{counts.mine}개</strong>
       {counts.earlier > 0 && <>, 앞 규칙이 가져가는 항목 {counts.earlier}개</>}
       {counts.excluded > 0 && <>, 제외 조건에 걸리는 항목 {counts.excluded}개</>}
-      {counts.mine + counts.earlier + counts.excluded === 0 && <>. 맞는 항목이 없어요</>}
+      {counts.past > 0 && <>, 구독하기 전의 지난 회차 {counts.past}개</>}
+      {counts.mine + counts.earlier + counts.excluded + counts.past === 0 && <>. 맞는 항목이 없어요</>}
       {"."}
     </p>
   );

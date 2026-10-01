@@ -412,7 +412,8 @@ async fn subscribing_creates_the_rule_with_the_chosen_work_and_receives_nothing(
     let (_, listed) = app.get("/api/rules").await;
     assert_eq!(listed["rules"][0]["subscription"]["anissia_anime_no"], 3320);
 
-    // The past items the user may pick are the ones the new rule matches.
+    // The past items the user may pick are the ones the rule matches: the
+    // stored rule is a subscription now, so they read as past, not as taken.
     let (status, preview) = app
         .call(
             Method::POST,
@@ -424,12 +425,13 @@ async fn subscribing_creates_the_rule_with_the_chosen_work_and_receives_nothing(
         )
         .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(preview["counts"]["mine"], 3);
+    assert_eq!(preview["counts"]["past"], 3);
+    assert_eq!(preview["counts"]["mine"], 0);
     assert!(preview["items"]
         .as_array()
         .unwrap()
         .iter()
-        .all(|i| i["kind"] == "mine" && i["stored_result"] == "no_match"));
+        .all(|i| i["kind"] == "past" && i["stored_result"] == "no_match"));
 }
 
 #[tokio::test]
@@ -1064,9 +1066,10 @@ mod rule_detail {
         let (_, view) = preview(&later).await;
         assert_eq!(view["counts"]["mine"], 2, "{view}");
         assert_eq!(view["counts"]["earlier"], 0, "{view}");
-        // The paused rule's own preview shows what it would take once on.
+        // The paused rule's own preview shows what it would do once on: both
+        // items were recorded before the subscription, so they are past.
         let (_, view) = preview(&rule).await;
-        assert_eq!(view["counts"]["mine"], 2, "{view}");
+        assert_eq!(view["counts"]["past"], 2, "{view}");
     }
 
     #[tokio::test]

@@ -113,7 +113,7 @@ export interface RuleFields {
   state: RuleState;
 }
 
-export type PreviewKind = "mine" | "earlier" | "excluded";
+export type PreviewKind = "mine" | "earlier" | "excluded" | "past";
 
 export interface PreviewItem {
   id: number;
@@ -130,7 +130,7 @@ export interface PreviewItem {
 
 export interface Preview {
   error: RegexProblem | null;
-  counts: { total: number; mine: number; earlier: number; excluded: number; unmatched: number };
+  counts: { total: number; mine: number; earlier: number; excluded: number; past: number; unmatched: number };
   masked_total: number;
   items: PreviewItem[];
   truncated: boolean;

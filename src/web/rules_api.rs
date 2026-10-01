@@ -65,6 +65,12 @@
 //! the worker, which saw the original. Items whose stored title contains the
 //! mask are flagged `masked`.
 //!
+//! A subscription rule leaves alone the items history recorded, without a
+//! rule taking them, before the subscription began. The preview applies the
+//! cycle's own test ([`ChannelPlan::is_past`]) to the item's history record and
+//! lists such an item as `past` (with the folder that `받기` would save it to)
+//! rather than `mine`; a `receive_once` command naming the rule receives it.
+//!
 //! # Overlap
 //!
 //! A rule is `overlap` when some recorded item is taken by an earlier rule
@@ -1016,6 +1022,10 @@ pub enum Kind {
     Earlier,
     /// The edited rule matches, but a channel exclude keeps the item out.
     Excluded,
+    /// The edited rule is a subscription and would take the item, but history
+    /// recorded it before the subscription began, so the cycle leaves it alone
+    /// until the user receives it ([`ChannelPlan::is_past`]).
+    Past,
 }
 
 #[derive(Debug, Serialize)]
@@ -1053,6 +1063,9 @@ pub struct PreviewCounts {
     pub mine: usize,
     pub earlier: usize,
     pub excluded: usize,
+    /// Items of a subscription rule that were recorded before the subscription
+    /// and wait for the user to receive them.
+    pub past: usize,
     /// Items the edited rule does not match (taken by other rules or by none).
     pub unmatched: usize,
 }
@@ -1177,12 +1190,16 @@ pub fn build_preview(
         let (kind, save_path, taken_by, excluded_by) = match &judgement {
             Judgement::Selected {
                 rule_id, save_path, ..
-            } if rule_id == &id => (
-                Kind::Mine,
-                Some(save_path.display().to_string()),
-                None,
-                None,
-            ),
+            } if rule_id == &id => {
+                // The cycle's own test, on the same record of the item.
+                let known = Some((item.first_seen_at, item.result));
+                let kind = if plan.is_past(&id, known) {
+                    Kind::Past
+                } else {
+                    Kind::Mine
+                };
+                (kind, Some(save_path.display().to_string()), None, None)
+            }
             Judgement::Selected {
                 rule_id, save_path, ..
             } if overlapping.iter().any(|r| r == &id) => (
@@ -1223,6 +1240,7 @@ pub fn build_preview(
             Kind::Mine => counts.mine += 1,
             Kind::Earlier => counts.earlier += 1,
             Kind::Excluded => counts.excluded += 1,
+            Kind::Past => counts.past += 1,
         }
         if listed.len() < PREVIEW_LIST_LIMIT {
             listed.push(PreviewItem {
@@ -1239,7 +1257,7 @@ pub fn build_preview(
         }
     }
 
-    let matching = counts.mine + counts.earlier + counts.excluded;
+    let matching = counts.mine + counts.earlier + counts.excluded + counts.past;
     Ok(Preview {
         error,
         counts,

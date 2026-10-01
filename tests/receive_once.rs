@@ -2417,3 +2417,114 @@ async fn a_repeat_of_a_request_is_not_stored_twice_and_an_archived_rule_receives
         HistoryResult::NoMatch
     );
 }
+
+// --- the rule detail's view of the past items ----------------------------------------------
+
+/// What the rule detail sends to preview the stored rule as it is.
+fn preview_of(channel_id: &str, rule: &transmission_rss::store::channels::Rule) -> Value {
+    json!({
+        "channel_id": channel_id,
+        "rule_id": rule.id,
+        "rule": {
+            "match": rule.r#match,
+            "regex": rule.regex,
+            "case_insensitive": rule.case_insensitive,
+            "directory": rule.directory,
+            "episode": rule.episode,
+        },
+    })
+}
+
+fn kind_of<'a>(preview: &'a Value, title_part: &str) -> &'a str {
+    preview["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["title"].as_str().unwrap().contains(title_part))
+        .unwrap_or_else(|| panic!("the preview lists no {title_part}: {preview}"))["kind"]
+        .as_str()
+        .unwrap()
+}
+
+async fn preview_rule(s: &Scene, rule: &transmission_rss::store::channels::Rule) -> Value {
+    let (status, preview) = s
+        .call(
+            "POST",
+            "/api/rules/preview",
+            Some(preview_of(&s.channel.channel.id, rule)),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    preview
+}
+
+#[tokio::test]
+async fn the_preview_calls_the_items_the_cycle_leaves_alone_past() {
+    let (liar25, liar26) = (liar(25), liar(26));
+    let s = Scene::new(&[&liar25, &liar26], unrelated_rule()).await;
+    s.h.advance(1_000);
+    let sub = subscribe(&s, "LIAR GAME", "anime/LIAR GAME/Season 01").await;
+
+    // The cycle leaves both alone ...
+    s.cycle().await;
+    assert!(s.adds().is_empty());
+
+    // ... and the rule detail says the same of them, with the folder `받기`
+    // would use.
+    let preview = preview_rule(&s, &sub).await;
+    assert_eq!(kind_of(&preview, "LIAR GAME - 25"), "past", "{preview}");
+    assert_eq!(kind_of(&preview, "LIAR GAME - 26"), "past", "{preview}");
+    assert_eq!(preview["counts"]["past"], 2, "{preview}");
+    assert_eq!(preview["counts"]["mine"], 0, "{preview}");
+    assert_eq!(
+        preview["items"][0]["save_path"],
+        "/media/anime/LIAR GAME/Season 01"
+    );
+
+    // A release first seen after the subscription is the rule's own.
+    let liar27 = liar(27);
+    s.feed(&[&liar25, &liar26, &liar27]);
+    s.cycle().await;
+    assert_eq!(s.h.tr.torrents().len(), 1);
+    let preview = preview_rule(&s, &sub).await;
+    assert_eq!(kind_of(&preview, "LIAR GAME - 27"), "mine", "{preview}");
+    assert_eq!(kind_of(&preview, "LIAR GAME - 26"), "past", "{preview}");
+}
+
+#[tokio::test]
+async fn a_past_item_of_the_rule_detail_is_received_by_that_rule_and_then_reads_as_received() {
+    let (liar25, liar26) = (liar(25), liar(26));
+    let s = Scene::new(&[&liar25, &liar26], unrelated_rule()).await;
+    s.h.advance(1_000);
+    let sub = subscribe(&s, "LIAR GAME", "anime/LIAR GAME/Season 01").await;
+    s.cycle().await;
+
+    let preview = preview_rule(&s, &sub).await;
+    let id = preview["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["kind"] == "past" && i["title"].as_str().unwrap().contains("LIAR GAME - 25"))
+        .expect("a past item to receive")["id"]
+        .as_i64()
+        .unwrap();
+
+    // `받기` of that row, long after the subscribe flow ended.
+    let (status, _) = s
+        .post_payload(CMD, json!({ "item_id": id, "rule_id": sub.id }))
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
+    assert_eq!(s.command(CMD).await.1["outcome"]["result"], "received");
+    assert_eq!(s.h.tr.torrents().len(), 1);
+    assert_eq!(
+        s.h.tr.torrents()[0].download_dir,
+        "/media/anime/LIAR GAME/Season 01"
+    );
+
+    // The row stops being past: the rule received it. The other still is.
+    let after = preview_rule(&s, &sub).await;
+    assert_eq!(kind_of(&after, "LIAR GAME - 25"), "mine", "{after}");
+    assert_eq!(kind_of(&after, "LIAR GAME - 26"), "past", "{after}");
+    assert_eq!(after["counts"]["past"], 1);
+}
