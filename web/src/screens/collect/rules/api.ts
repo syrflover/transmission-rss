@@ -69,6 +69,26 @@ export interface EpisodeSuggestion {
   basis: string;
 }
 
+/** One video of a `되돌리기`: `kept` is left as it is, for the `reason`. */
+export interface EpisodeUndoFile {
+  from_name: string;
+  to_name: string;
+  state: "pending" | "renamed" | "kept";
+  reason: string | null;
+}
+
+/**
+ * The last `되돌리기` of a rule's automatic offset (the `episode_undo`
+ * command). The command ends `done` once the value is back, whatever became of
+ * the files, or `failed` with the reason nothing changed. `to` and `files` are
+ * set once the worker began.
+ */
+export interface EpisodeUndo {
+  command: Command;
+  to: number | null;
+  files: EpisodeUndoFile[];
+}
+
 export interface Rule {
   id: string;
   channel_id: string;
@@ -89,6 +109,8 @@ export interface Rule {
   episode_previous: number | null;
   /** What the app offers while `episode` is still the plain one; `null` when it has nothing to say. */
   episode_suggestion: EpisodeSuggestion | null;
+  /** The last `되돌리기` of the app's offset, open or ended; `null` when it never had one. */
+  episode_undo: EpisodeUndo | null;
   state: RuleState;
   /** An earlier rule takes an item this rule also matches. */
   overlap: boolean;
@@ -191,6 +213,11 @@ export function getRule(id: string): Promise<Rule> {
  */
 export function sendArchive(id: string, ruleId: string, direction: ArchiveDirection): Promise<Command> {
   return sendCommand(id, "rule_archive", { rule_id: ruleId, direction });
+}
+
+/** `되돌리기` of the app's offset `episode`, as the screen showed it. */
+export function sendEpisodeUndo(id: string, ruleId: string, episode: number): Promise<Command> {
+  return sendCommand(id, "episode_undo", { rule_id: ruleId, episode });
 }
 
 export function createRule(channelId: string, fields: RuleFields): Promise<Rule> {

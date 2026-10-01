@@ -158,6 +158,44 @@ impl FileIdentity {
     pub fn at(path: &Path) -> io::Result<FileIdentity> {
         std::fs::symlink_metadata(path).map(|meta| FileIdentity::of(&meta))
     }
+
+    /// Whether `other` is the same file on disk (device and inode), whatever
+    /// happened to it since: a rename changes its status-change time.
+    pub fn same_file(&self, other: &FileIdentity) -> bool {
+        self.dev == other.dev && self.ino == other.ino
+    }
+
+    /// The identity as text, to keep in the database ([`FileIdentity::parse`]
+    /// reads it back).
+    pub fn to_text(&self) -> String {
+        format!(
+            "{}:{}:{}:{}.{}:{}.{}",
+            self.dev, self.ino, self.len, self.mtime, self.mtime_nsec, self.ctime, self.ctime_nsec
+        )
+    }
+
+    /// The identity [`FileIdentity::to_text`] wrote, or `None` for other text.
+    pub fn parse(text: &str) -> Option<FileIdentity> {
+        let mut parts = text.split(':');
+        let mut next = || parts.next();
+        let dev = next()?.parse().ok()?;
+        let ino = next()?.parse().ok()?;
+        let len = next()?.parse().ok()?;
+        let (mtime, mtime_nsec) = next()?.split_once('.')?;
+        let (ctime, ctime_nsec) = next()?.split_once('.')?;
+        if next().is_some() {
+            return None;
+        }
+        Some(FileIdentity {
+            dev,
+            ino,
+            len,
+            mtime: mtime.parse().ok()?,
+            mtime_nsec: mtime_nsec.parse().ok()?,
+            ctime: ctime.parse().ok()?,
+            ctime_nsec: ctime_nsec.parse().ok()?,
+        })
+    }
 }
 
 /// [`file_crc32`], with the identity of the file that was read, taken from
@@ -331,6 +369,26 @@ mod tests {
         drop(file);
         assert_eq!(std::fs::metadata(&path).unwrap().len(), 4);
         assert_ne!(FileIdentity::at(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn an_identity_kept_as_text_reads_back_and_a_rename_keeps_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.mkv");
+        std::fs::write(&path, b"aaaa").unwrap();
+        let before = FileIdentity::at(&path).unwrap();
+        assert_eq!(FileIdentity::parse(&before.to_text()), Some(before));
+        assert_eq!(FileIdentity::parse("1:2:3"), None);
+        assert_eq!(
+            FileIdentity::parse(&format!("{}:9", before.to_text())),
+            None
+        );
+
+        let moved = dir.path().join("b.mkv");
+        std::fs::rename(&path, &moved).unwrap();
+        assert!(FileIdentity::at(&moved).unwrap().same_file(&before));
+        std::fs::write(&path, b"aaaa").unwrap();
+        assert!(!FileIdentity::at(&path).unwrap().same_file(&before));
     }
 
     #[test]

@@ -47,6 +47,34 @@ fn first_titles(conn: &Connection, rule_id: &str) -> Result<Vec<String>> {
     Ok(titles)
 }
 
+/// An item a rule received: its ID, release title and torrent hash.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReceivedItem {
+    pub id: i64,
+    pub title: String,
+    pub torrent_hash: String,
+}
+
+/// The items the rule received (`received` with the rule recorded and a
+/// torrent hash), oldest first. Reads through `history_items_by_rule`.
+fn received_of_rule(conn: &Connection, rule_id: &str) -> Result<Vec<ReceivedItem>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, title, torrent_hash FROM history_items
+          WHERE rule_id = ?1 AND result = 'received' AND torrent_hash IS NOT NULL
+          ORDER BY id",
+    )?;
+    let items = stmt
+        .query_map(params![rule_id], |row| {
+            Ok(ReceivedItem {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                torrent_hash: row.get(2)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(items)
+}
+
 impl HistoryStore {
     /// The rules among `rule_ids` that have picked an item, of any result.
     pub async fn rules_with_items(&self, rule_ids: Vec<String>) -> Result<HashSet<String>> {
@@ -58,5 +86,11 @@ impl HistoryStore {
     pub async fn first_titles_of_rule(&self, rule_id: &str) -> Result<Vec<String>> {
         let rule_id = rule_id.to_owned();
         self.db.run(move |c| first_titles(c, &rule_id)).await
+    }
+
+    /// The items the rule received, oldest first (see [`ReceivedItem`]).
+    pub async fn received_of_rule(&self, rule_id: &str) -> Result<Vec<ReceivedItem>> {
+        let rule_id = rule_id.to_owned();
+        self.db.run(move |c| received_of_rule(c, &rule_id)).await
     }
 }

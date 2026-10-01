@@ -765,3 +765,322 @@ async fn a_rule_whose_match_changes_while_its_first_release_is_read_is_not_decid
     assert_eq!((stored.episode, stored.episode_auto), (1, false));
     assert_eq!(s.names(), ["Show S03E25.mkv"]);
 }
+
+// --- `되돌리기` of an automatic offset (user decision, 2026-10-02) ---------------
+
+impl Scene {
+    /// The season 3 folder of `Show`.
+    fn season3(&self) -> std::path::PathBuf {
+        self.shows.join("Show/Season 03")
+    }
+
+    /// The names of the files in the season 3 folder, sorted.
+    fn on_disk(&self) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(self.season3())
+            .map(|dir| {
+                dir.map(|e| e.unwrap().file_name().into_string().unwrap())
+                    .collect()
+            })
+            .unwrap_or_default();
+        names.sort();
+        names
+    }
+
+    /// Seasons 1 and 2 of 24 episodes, a third season's rule carried over
+    /// with `−24`, and its first releases `- 49` and `- 50` received under the
+    /// app's `−48`. The fake Transmission writes and renames the files.
+    async fn third_season_received() -> (Scene, Rule) {
+        let s = Scene::new().await;
+        s.h.tr.on_disk(&s.shows);
+        for n in [49, 50, 51] {
+            s.h.tr
+                .content_on_add(&hash(n), format!("video {n}").as_bytes());
+        }
+        s.link_earlier_seasons([Some(24), Some(24)]).await;
+        s.h.advance(1_000);
+        let rule = s.subscribe("Show", "Show/Season 03", 7, -24).await;
+        s.feed(&[]);
+        s.cycle().await;
+        s.feed(&[&show(49)]);
+        s.cycle().await;
+        s.feed(&[&show(49), &show(50)]);
+        s.cycle().await;
+        assert_eq!(s.names(), ["Show S03E01.mkv", "Show S03E02.mkv"]);
+        assert_eq!(s.on_disk(), ["Show S03E01.mkv", "Show S03E02.mkv"]);
+        (s, rule)
+    }
+
+    /// Asks for `되돌리기` of `episode`.
+    async fn ask_undo(&self, rule: &Rule, id: &str, episode: i64) -> (StatusCode, Value) {
+        let (status, _, body) = self
+            .api
+            .call(
+                "POST",
+                "/api/commands",
+                Some(json!({
+                    "id": id,
+                    "kind": "episode_undo",
+                    "payload": { "rule_id": rule.id, "episode": episode },
+                })),
+            )
+            .await;
+        (status, body)
+    }
+
+    /// `되돌리기` of `episode`, run by the worker: the command as it ended.
+    async fn undo(&self, rule: &Rule, id: &str, episode: i64) -> Value {
+        let (status, body) = self.ask_undo(rule, id, episode).await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+        assert_eq!(
+            self.h
+                .worker()
+                .run_commands(&CancellationToken::new())
+                .await
+                .unwrap(),
+            CommandsOutcome::Ran(1)
+        );
+        let (status, _, command) = self
+            .api
+            .call("GET", &format!("/api/commands/{id}"), None)
+            .await;
+        assert_eq!(status, StatusCode::OK, "{command}");
+        command
+    }
+}
+
+/// The files of the rule's last undo: `(from, to, state)`.
+fn undo_files(view: &Value) -> Vec<(String, String, String)> {
+    view["episode_undo"]["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| {
+            (
+                f["from_name"].as_str().unwrap().to_owned(),
+                f["to_name"].as_str().unwrap().to_owned(),
+                f["state"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect()
+}
+
+fn file(from: &str, to: &str, state: &str) -> (String, String, String) {
+    (from.to_owned(), to.to_owned(), state.to_owned())
+}
+
+#[tokio::test]
+async fn undoing_puts_the_previous_value_back_and_renames_what_it_named() {
+    let (s, rule) = Scene::third_season_received().await;
+    let view = s.view(&rule).await;
+    assert_eq!(view["episode_previous"], -24);
+    assert_eq!(view["episode_undo"], Value::Null);
+
+    let command = s.undo(&rule, "undo-0001-a", -48).await;
+
+    assert_eq!(command["state"], "done", "{command}");
+    assert_eq!(command["outcome"]["result"], "undone");
+    let stored = s.rule(&rule).await;
+    assert_eq!((stored.episode, stored.episode_auto), (-24, false));
+    let view = s.view(&rule).await;
+    assert_eq!(view["episode_basis"], Value::Null);
+    assert_eq!(view["episode_previous"], Value::Null);
+    assert_eq!(view["episode_suggestion"], Value::Null);
+    assert_eq!(view["episode_undo"]["command"]["state"], "done");
+    assert_eq!(view["episode_undo"]["to"], -24);
+    assert_eq!(
+        undo_files(&view),
+        [
+            file("Show S03E01.mkv", "Show S03E25.mkv", "renamed"),
+            file("Show S03E02.mkv", "Show S03E26.mkv", "renamed"),
+        ]
+    );
+    // Renamed through Transmission: both torrents are still there, seeding
+    // the files under their new names.
+    assert_eq!(s.names(), ["Show S03E25.mkv", "Show S03E26.mkv"]);
+    assert_eq!(s.on_disk(), ["Show S03E25.mkv", "Show S03E26.mkv"]);
+    assert_eq!(
+        fs::read(s.season3().join("Show S03E25.mkv")).unwrap(),
+        b"video 49"
+    );
+
+    // The value is the user's now: the next release is named with it, and
+    // the app does not decide the rule again.
+    s.feed(&[&show(49), &show(50), &show(51)]);
+    s.cycle().await;
+    assert_eq!(
+        s.names(),
+        ["Show S03E25.mkv", "Show S03E26.mkv", "Show S03E27.mkv"]
+    );
+    let stored = s.rule(&rule).await;
+    assert_eq!((stored.episode, stored.episode_auto), (-24, false));
+}
+
+#[tokio::test]
+async fn a_name_that_is_taken_is_never_renamed_onto_and_the_others_go_on() {
+    let (s, rule) = Scene::third_season_received().await;
+    // Something of the person's has the name `S03E02` would go back to.
+    fs::write(s.season3().join("Show S03E26.mkv"), "the person's").unwrap();
+
+    let command = s.undo(&rule, "undo-0002-a", -48).await;
+
+    assert_eq!(command["state"], "done", "{command}");
+    assert_eq!(s.names(), ["Show S03E02.mkv", "Show S03E25.mkv"]);
+    assert_eq!(
+        s.on_disk(),
+        ["Show S03E02.mkv", "Show S03E25.mkv", "Show S03E26.mkv"]
+    );
+    assert_eq!(
+        fs::read(s.season3().join("Show S03E26.mkv")).unwrap(),
+        b"the person's"
+    );
+    assert_eq!(
+        fs::read(s.season3().join("Show S03E02.mkv")).unwrap(),
+        b"video 50"
+    );
+    let view = s.view(&rule).await;
+    assert_eq!(
+        undo_files(&view),
+        [
+            file("Show S03E01.mkv", "Show S03E25.mkv", "renamed"),
+            file("Show S03E02.mkv", "Show S03E26.mkv", "kept"),
+        ]
+    );
+    let reason = view["episode_undo"]["files"][1]["reason"].as_str().unwrap();
+    assert!(reason.contains("이미 있어요"), "{reason}");
+    assert_eq!(s.rule(&rule).await.episode, -24);
+}
+
+#[tokio::test]
+async fn a_video_whose_torrent_is_gone_is_renamed_on_disk_without_replacing() {
+    let (s, rule) = Scene::third_season_received().await;
+    // The person removed the torrent of `- 50` and kept its file.
+    s.h.tr.remove(&hash(50));
+
+    let command = s.undo(&rule, "undo-0003-a", -48).await;
+
+    assert_eq!(command["state"], "done", "{command}");
+    assert_eq!(s.names(), ["Show S03E25.mkv"]);
+    assert_eq!(s.on_disk(), ["Show S03E25.mkv", "Show S03E26.mkv"]);
+    assert_eq!(
+        fs::read(s.season3().join("Show S03E26.mkv")).unwrap(),
+        b"video 50"
+    );
+}
+
+#[tokio::test]
+async fn an_undo_waits_for_a_revision_replacement_under_way_and_moves_finished_ones() {
+    use transmission_rss::store::{
+        revisions::{NewRevision, RevisionState, RevisionStore},
+        DbError,
+    };
+    let (s, rule) = Scene::third_season_received().await;
+    // A replacement of `S03E02` by a higher revision is under way.
+    let revisions = RevisionStore::new(s.h.db.clone());
+    let item = s.h.item("Show - 50").await;
+    let folder = s.season3().to_str().unwrap().to_owned();
+    let row = revisions
+        .create(
+            s.h.now(),
+            NewRevision {
+                item_id: item.id,
+                old_item_id: None,
+                rule_id: rule.id.clone(),
+                folder: folder.clone(),
+                episode_name: "Show S03E02.mkv".into(),
+                old_version: Some(1),
+                new_version: 2,
+                old_crc: None,
+                expected_crc: None,
+                torrent_hash: None,
+                state: RevisionState::Receiving,
+                reason: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    // Refused before anything changes.
+    let command = s.undo(&rule, "undo-0004-a", -48).await;
+    assert_eq!(command["state"], "failed", "{command}");
+    let reason = command["outcome"]["reason"].as_str().unwrap();
+    assert!(reason.contains("Show S03E02.mkv"), "{reason}");
+    let stored = s.rule(&rule).await;
+    assert_eq!((stored.episode, stored.episode_auto), (-48, true));
+    assert_eq!(s.names(), ["Show S03E01.mkv", "Show S03E02.mkv"]);
+    assert_eq!(s.view(&rule).await["episode_previous"], -24);
+
+    // Once the replacement has ended, the undo goes through and the row
+    // follows its episode's file to the new name.
+    let id = row.id;
+    s.h.db
+        .run::<_, DbError, _>(move |c| {
+            c.execute(
+                "UPDATE video_revisions SET state = 'done' WHERE id = ?1",
+                [id],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let command = s.undo(&rule, "undo-0004-b", -48).await;
+    assert_eq!(command["state"], "done", "{command}");
+    assert_eq!(s.names(), ["Show S03E25.mkv", "Show S03E26.mkv"]);
+    let moved = revisions
+        .of_episode(folder.clone(), "Show S03E26.mkv".into())
+        .await
+        .unwrap();
+    assert_eq!(moved.iter().map(|r| r.id).collect::<Vec<_>>(), [row.id]);
+    let left = revisions
+        .of_episode(folder, "Show S03E02.mkv".into())
+        .await
+        .unwrap();
+    assert!(left.is_empty(), "{left:?}");
+}
+
+#[tokio::test]
+async fn an_undo_before_any_item_keeps_the_app_from_deciding_again() {
+    let s = Scene::new().await;
+    s.link_earlier_seasons([Some(24), Some(24)]).await;
+    s.h.advance(1_000);
+    let rule = s.subscribe("Show", "Show/Season 03", 7, -24).await;
+    // The app decided, and nothing was received yet.
+    s.h.channels
+        .set_auto_episode(
+            &rule.id,
+            rule.version,
+            -48,
+            "첫 화가 49화라서 −48로 정했어요.",
+        )
+        .await
+        .unwrap()
+        .expect("the rule was at the version read");
+    assert_eq!(s.view(&rule).await["episode_previous"], -24);
+
+    let command = s.undo(&rule, "undo-0005-a", -48).await;
+    assert_eq!(command["state"], "done", "{command}");
+    assert_eq!(undo_files(&s.view(&rule).await), []);
+    assert_eq!(s.rule(&rule).await.episode, -24);
+
+    s.feed(&[]);
+    s.cycle().await;
+    s.feed(&[&show(49)]);
+    s.cycle().await;
+    assert_eq!(s.names(), ["Show S03E25.mkv"]);
+    let stored = s.rule(&rule).await;
+    assert_eq!((stored.episode, stored.episode_auto), (-24, false));
+}
+
+#[tokio::test]
+async fn an_undo_of_a_value_that_is_no_longer_there_is_refused() {
+    let (s, rule) = Scene::third_season_received().await;
+    // The user typed another value meanwhile: nothing automatic is left.
+    let view = s.view(&rule).await;
+    let (status, saved) = save(&s, &rule, &view["version"], -40).await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+
+    let (status, body) = s.ask_undo(&rule, "undo-0006-a", -48).await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(s.names(), ["Show S03E01.mkv", "Show S03E02.mkv"]);
+    assert_eq!(s.rule(&rule).await.episode, -40);
+}

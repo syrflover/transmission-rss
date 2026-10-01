@@ -221,6 +221,9 @@ pub struct RuleView {
     pub episode_previous: Option<i64>,
     /// What the app offers for the offset of a rule it did not set one for.
     pub episode_suggestion: Option<episode::EpisodeSuggestion>,
+    /// The last `되돌리기` of the rule's automatic offset (an `episode_undo`
+    /// command), open or ended; `null` when it never had one.
+    pub episode_undo: Option<episode::EpisodeUndoView>,
     /// `active`, `paused` or `archived`.
     pub state: &'static str,
     /// An earlier rule takes an item that this rule also matches.
@@ -689,6 +692,7 @@ fn views(
             episode_basis: analysis.episodes.basis.get(&rule.id).cloned(),
             episode_previous: analysis.episodes.previous.get(&rule.id).copied(),
             episode_suggestion: analysis.episodes.suggestion.get(&rule.id).cloned(),
+            episode_undo: analysis.episodes.undo.get(&rule.id).cloned(),
             state: rule.state.as_str(),
             overlap: analysis.overlap.contains(&rule.id),
             error: analysis.errors.get(&rule.id).cloned(),

@@ -24,3 +24,40 @@ ALTER TABLE rules ADD COLUMN episode_previous INTEGER;
 ALTER TABLE rules ADD COLUMN episode_decided INTEGER NOT NULL DEFAULT 0
     CHECK (episode_decided IN (0, 1));
 UPDATE rules SET episode_decided = 1 WHERE episode_auto = 1;
+
+-- `되돌리기` of an automatic offset (`episode_undo` commands): the worker puts
+-- the previous value back and renames the videos the rule received under the
+-- automatic one. `episode_undos` is written together with that value, in one
+-- transaction, so a command that stopped half-way knows it already began and
+-- carries on with its files instead of finding the rule changed. `from_offset`
+-- is the automatic value and `to_offset` the value put back. Times are Unix ms.
+--
+-- `episode_undo_files` is one row per video to rename, planned at that moment:
+-- the history item it was received for, its folder, the name it has under the
+-- automatic value and the one it takes, the torrent that held it then (renamed
+-- through Transmission while that torrent is there) and the file's identity
+-- (`revision::FileIdentity`, checked before a rename on disk). `state` is
+-- `pending` until the worker renamed it (`renamed`) or left it as it is
+-- (`kept`, with the `reason` the screen shows). A rename's row and the
+-- `video_revisions` rows of the episode, which move to the new name with it,
+-- are written in one transaction.
+CREATE TABLE episode_undos (
+    command_id  TEXT    PRIMARY KEY CHECK (command_id <> ''),
+    rule_id     TEXT    NOT NULL,
+    from_offset INTEGER NOT NULL,
+    to_offset   INTEGER NOT NULL,
+    started_at  INTEGER NOT NULL
+) WITHOUT ROWID;
+
+CREATE TABLE episode_undo_files (
+    command_id   TEXT    NOT NULL REFERENCES episode_undos (command_id),
+    item_id      INTEGER NOT NULL,
+    folder       TEXT    NOT NULL CHECK (folder <> ''),
+    from_name    TEXT    NOT NULL CHECK (from_name <> ''),
+    to_name      TEXT    NOT NULL CHECK (to_name <> ''),
+    torrent_hash TEXT,
+    identity     TEXT,
+    state        TEXT    NOT NULL CHECK (state IN ('pending', 'renamed', 'kept')),
+    reason       TEXT,
+    PRIMARY KEY (command_id, item_id)
+);

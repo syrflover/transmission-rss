@@ -13,12 +13,17 @@
 //! | `rule_archive` | `보관`·`복원` | `{ "rule_id": <rule>, "direction": "archive" \| "restore" }` |
 //! | `receive_past` | `받기`       | `{ "rule_id": <rule>, "search_id": <past episode search>, "key": <result's key> }` |
 //! | `watch_rescan` | `다시 확인`  | `{ "folder_id": <watch folder> }`                              |
+//! | `episode_undo` | `되돌리기`   | `{ "rule_id": <rule>, "episode": <the automatic offset seen> }` |
 //!
 //! `receive_past` adds one result of a finished past episode search
 //! ([`super::past_search_api`]). The web resolves the result from the search it
 //! keeps and stores its title and link as history would; the browser supplies
 //! neither. A repeat of the request is the same rule and result, whatever search
 //! it names, so a lost answer can be asked again after the search is gone.
+//!
+//! `episode_undo` is accepted only while the rule's offset is the automatic
+//! one the request names and the value it replaced is known; the worker puts
+//! that value back and renames the videos ([`episode_undo`]).
 //!
 //! A rule is archived and restored only through `rule_archive`: the worker
 //! turns the rule off before its folder moves and on after it moved back.
@@ -59,7 +64,7 @@ use crate::{
     past_search::service::Resolve,
     store::channels::RuleState,
     store::commands::{Accepted, Command, CommandState, NewCommand},
-    worker::commands::{receive_once, receive_past, rule_archive, watch_rescan},
+    worker::commands::{episode_undo, receive_once, receive_past, rule_archive, watch_rescan},
 };
 
 #[cfg(test)]
@@ -135,6 +140,8 @@ const RULE_BUSY: &str =
     "이 규칙은 이미 보관하거나 복원하는 중이에요. 그 결과가 나올 때까지 기다려 주세요.";
 const FOLDER_BUSY: &str =
     "이 폴더는 이미 다시 확인하는 중이에요. 그 결과가 나올 때까지 기다려 주세요.";
+const UNDO_BUSY: &str =
+    "이 규칙의 회차 변환은 이미 되돌리는 중이에요. 그 결과가 나올 때까지 기다려 주세요.";
 
 /// The shortest and longest command ID.
 const ID_LEN: std::ops::RangeInclusive<usize> = 8..=64;
@@ -159,6 +166,7 @@ enum Request {
     ReceivePast(PastRequest),
     RuleArchive(rule_archive::RuleArchive),
     WatchRescan(watch_rescan::WatchRescan),
+    EpisodeUndo(episode_undo::EpisodeUndo),
 }
 
 /// What the browser sends to receive a result of a past episode search.
@@ -193,6 +201,11 @@ impl Request {
                     serde_json::from_value(payload).map_err(|_| ApiError::invalid(BAD_BODY))?;
                 Ok(Request::WatchRescan(payload))
             }
+            episode_undo::KIND => {
+                let payload: episode_undo::EpisodeUndo =
+                    serde_json::from_value(payload).map_err(|_| ApiError::invalid(BAD_BODY))?;
+                Ok(Request::EpisodeUndo(payload))
+            }
             _ => Err(ApiError::invalid("모르는 종류의 명령이에요.")),
         }
     }
@@ -203,6 +216,7 @@ impl Request {
             Request::ReceivePast(_) => receive_past::KIND,
             Request::RuleArchive(_) => rule_archive::KIND,
             Request::WatchRescan(_) => watch_rescan::KIND,
+            Request::EpisodeUndo(_) => episode_undo::KIND,
         }
     }
 
@@ -212,6 +226,7 @@ impl Request {
             Request::ReceiveOnce(_) | Request::ReceivePast(_) => BUSY,
             Request::RuleArchive(_) => RULE_BUSY,
             Request::WatchRescan(_) => FOLDER_BUSY,
+            Request::EpisodeUndo(_) => UNDO_BUSY,
         }
     }
 
@@ -239,6 +254,10 @@ impl Request {
                 serde_json::from_str::<watch_rescan::WatchRescan>(&stored.payload)
                     .is_ok_and(|stored| stored == *payload)
             }
+            Request::EpisodeUndo(payload) => {
+                serde_json::from_str::<episode_undo::EpisodeUndo>(&stored.payload)
+                    .is_ok_and(|stored| stored == *payload)
+            }
         }
     }
 
@@ -253,7 +272,8 @@ impl Request {
             Request::ReceiveOnce(_)
             | Request::ReceivePast(_)
             | Request::RuleArchive(_)
-            | Request::WatchRescan(_) => Ok(()),
+            | Request::WatchRescan(_)
+            | Request::EpisodeUndo(_) => Ok(()),
         }
     }
 
@@ -287,6 +307,12 @@ impl Request {
                 payload: payload.canonical(),
                 subject: Some(payload.subject()),
             },
+            Request::EpisodeUndo(payload) => NewCommand {
+                id,
+                kind: episode_undo::KIND.to_owned(),
+                payload: payload.canonical(),
+                subject: Some(payload.subject()),
+            },
         }
     }
 
@@ -303,6 +329,9 @@ impl Request {
             }
             Request::WatchRescan(payload) => {
                 check_watch_rescan(payload, state).await.map(|()| None)
+            }
+            Request::EpisodeUndo(payload) => {
+                check_episode_undo(payload, state).await.map(|()| None)
             }
         }
     }
@@ -351,6 +380,31 @@ async fn check_receive_past(
     receive_once::adoption_plan(&probe, channel.as_ref(), Some(&rule))
         .map_err(|why| ApiError::invalid(why.message()))?;
     Ok(payload)
+}
+
+/// The rule's offset must be the automatic one the request names, with the
+/// value it replaced known.
+async fn check_episode_undo(
+    payload: &episode_undo::EpisodeUndo,
+    state: &AppState,
+) -> Result<(), ApiError> {
+    let rule = state
+        .channels
+        .get_rule(&payload.rule_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("규칙을 찾지 못했어요. 삭제됐을 수 있어요."))?;
+    let previous = state
+        .channels
+        .episode_marks(vec![rule.id.clone()])
+        .await?
+        .remove(&rule.id)
+        .and_then(|mark| mark.previous);
+    if !rule.episode_auto || rule.episode != payload.episode || previous.is_none() {
+        return Err(ApiError::invalid(
+            "되돌릴 자동 회차 변환이 없어요. 화면을 새로고침해 주세요.",
+        ));
+    }
+    Ok(())
 }
 
 /// The watch folder must be registered.
