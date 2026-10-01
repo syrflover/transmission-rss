@@ -2,7 +2,7 @@ import { useEffect, useId, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 
 import { useCached } from "@/lib/cached";
-import { ago } from "@/lib/time";
+import { when } from "@/lib/time";
 import { cn } from "@/lib/utils";
 
 import { KEYS } from "../cache";
@@ -77,7 +77,7 @@ function Feeds({ board }: { board: Board }) {
         {failing.length > 0
           ? `읽지 못함: ${failing.map(channelName).join(", ")}`
           : latest !== null
-            ? `마지막 확인 ${ago(latest, board.now)}`
+            ? `마지막 확인 ${when(latest, board.now)}`
             : "worker가 확인하면 여기에 보여요."}
       </p>
     </>
@@ -130,7 +130,7 @@ function Transmission({ board }: { board: Board }) {
       <p className="text-[15px] font-bold">
         받는 중 {t.downloading}개 · 시딩 {t.seeding}개
       </p>
-      <p className="text-xs text-text-muted">확인 {ago(t.taken_at, board.now)}</p>
+      <p className="text-xs text-text-muted">확인 {when(t.taken_at, board.now)}</p>
     </>
   );
 }
