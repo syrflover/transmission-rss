@@ -330,3 +330,53 @@ async fn a_failed_first_read_leaves_the_first_read_to_the_next_cycle() {
     assert_eq!(report.no_match, 2, "{report:?}");
     assert!(s.h.tr.torrents().is_empty());
 }
+
+#[tokio::test]
+async fn a_history_that_cannot_say_when_the_channel_was_first_read_holds_its_subscription_back() {
+    let (p1, n1, n2, n3) = (plain(1), nova(1), nova(2), nova(3));
+    let s = Scene::new(&[&p1, &n1, &n2]).await;
+    s.h.advance(1_000);
+    s.subscribe().await;
+
+    // The channel's earliest record has a time history cannot read, so the
+    // question "when was this channel first read" fails, while the feed's
+    // items are still looked up one by one.
+    let channel_id = s.channel.channel.id.clone();
+    s.h.db
+        .run::<_, transmission_rss::store::DbError, _>(move |c| {
+            c.execute(
+                "INSERT INTO history_items (channel_id, channel_label, identity_key, title,
+                                            link, first_seen_at, last_seen_at, result, result_at)
+                 VALUES (?1, 'x', 'guid:old', 'old', 'l', 'unreadable', 0, 'no_match', 0)",
+                [&channel_id],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+    // Nothing says what the feed already held: the subscription does not take
+    // it. The plain rule is unaffected.
+    let report = s.cycle().await;
+    assert_eq!(report.added, 1, "{report:?}");
+    assert_eq!(s.hashes(), vec![hash(201)]);
+
+    // Once history can be read again, what the subscription sat out is past.
+    s.h.db
+        .run::<_, transmission_rss::store::DbError, _>(|c| {
+            c.execute(
+                "DELETE FROM history_items WHERE identity_key = 'guid:old'",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    s.cycle().await;
+    assert_eq!(s.hashes(), vec![hash(201)]);
+
+    // An episode that appears later is the subscription's own.
+    s.feed(&[&p1, &n1, &n2, &n3]);
+    s.cycle().await;
+    assert_eq!(s.hashes(), vec![hash(103), hash(201)]);
+}
