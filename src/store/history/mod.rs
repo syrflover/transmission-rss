@@ -48,6 +48,7 @@ pub use model::{
     HistoryResult, KnownItem, Millis, Observation, Recorded, Transition, DEFAULT_PAGE_SIZE,
     MAX_PAGE_SIZE,
 };
+pub use rule_items::ReceivedItem;
 
 use std::collections::HashSet;
 

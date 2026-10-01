@@ -20,7 +20,7 @@ use super::{
     revisions::{self, Decided, Listing, Plan, Replaced, Selected},
 };
 use crate::{
-    episode_offset::is_open,
+    episode_offset::may_decide,
     store::{
         channels::{ChannelError, ChannelStore, ChannelWithRules, RuleState},
         history::{HistoryResult, HistoryStore, KnownItem, Millis, Observation, Recorded},
@@ -286,7 +286,7 @@ pub async fn run_cycle(
     let open_rules: HashMap<String, crate::store::channels::Rule> = snapshot
         .iter()
         .flat_map(|cwr| &cwr.rules)
-        .filter(|rule| rule.state == RuleState::Active && is_open(rule))
+        .filter(|rule| rule.state == RuleState::Active && may_decide(rule))
         .map(|rule| (rule.id.clone(), rule.clone()))
         .collect();
     // Without a collect folder the items are still judged (and the ones no rule

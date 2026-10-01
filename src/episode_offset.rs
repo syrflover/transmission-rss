@@ -42,16 +42,56 @@
 //! | `f = 1`, `P = 0`                          | offset `0` is set whatever the folder holds |
 //! | `f = P + 1`, `P > 0`, the folder has videos | suggestion without a value: a video of the season exists, so which episode `f` is cannot be told (a split cour numbered on in the same folder) |
 //! | `f > P + 1`, `P > 0`                      | suggestion `−P`                     |
-//! | `f ≤ P` (not `P = 0`, `f = 1`)            | nothing: the numbers restart in the season |
+//! | `f ≤ P`, `f − 1` is the sum of seasons `k..N−1` for some `k ≥ 2` | suggestion `−(f − 1)`: the numbers run on from season `k` (user decision, 2026-10-02) |
+//! | `f ≤ P` otherwise (not `P = 0`, `f = 1`)  | nothing: the numbers restart in the season |
 //! | `P` unknown, `f > 1`                      | suggestion without a value, with the reason |
 //! | `P` unknown, `f = 1`                      | nothing                             |
 //! | `P = 0`, `f > 1`                          | nothing: the numbers already are the season's |
+//! | `f = 1`, the season's cours `1..C` are all in the folder | suggestion `C + 1`, before all of the above (see below) |
 //!
-//! Only a subscription whose offset is still `0` or `1` (both leave a number
-//! as it is) and not set by the app is looked at, and only before it has
-//! picked any item. A value the user typed is never replaced; typing `0` or `1`
-//! on a rule that has picked nothing is not told apart from not having typed
-//! anything.
+//! The app sets an offset only on a subscription that has not picked any item
+//! yet, whose offset is not automatic and which the app has never decided
+//! before ([`may_decide`], and
+//! [`EpisodeMark::decided`](crate::store::channels::EpisodeMark)), whatever
+//! value its field holds: a value carried over from the previous season's
+//! rule (`−24` for a third season that starts at `- 49`) is replaced by `−48`
+//! as `0` or `1` is (user decision, 2026-10-02). The value it replaced is
+//! kept with it. A field that already names the
+//! releases as the offset would ([`same_effect`]) is left alone. After the
+//! user changed or undid the app's value, the app never decides the rule
+//! again.
+//!
+//! Suggestions are made to a rule the app has not decided, whatever its field
+//! holds, when the value differs from it ([`worth_offering`], user direction,
+//! 2026-10-02): a third season that started receiving with a carried-over
+//! `−12` is offered `−24` once the earlier seasons are linked. A note without
+//! a value is shown only while the field leaves numbers as they are (`0` or
+//! `1`): it asks the user to write a value, and one is written already.
+//!
+//! Some groups number a season on from a later season rather than from the
+//! first: a third season after two of 24 that starts at `- 25` counts from
+//! season 2. That is never set by itself, because `f ≤ P` is also what a
+//! season whose numbers restart looks like; it is offered when `f − 1` is
+//! exactly the episodes of the seasons right before the rule's, counted back
+//! from season `N − 1` (`2기부터 이어 센 번호로 보여요. 회차 변환을 −24로
+//! 할까요?`). When several such runs match (an earlier season of 0 episodes),
+//! the shortest is offered and the grounds say the others match too. Like the
+//! `f > P + 1` suggestion it does not look at the season folder: by the time
+//! the rule's detail offers it, the folder holds the videos the rule received
+//! unconverted.
+//!
+//! A split cour whose second part restarts at `- 01` in the same season folder
+//! (user decision, 2026-10-02) is offered a positive offset: the season has two
+//! or more linked AniList entries, all with episode counts (its cours, in the
+//! order they are linked); the folder holds every episode of the first `C`
+//! episodes, the cours before a later one, and none after them; and the first
+//! release is `1`. The offer is `C + 1`, which makes `- 01` episode `C + 1`
+//! (a positive offset is where the numbering starts, `starts_episode_at`):
+//! `2쿨을 1화부터 센 번호로 보여요. 1화를 13화로 받도록 회차 변환을 13으로
+//! 할까요?` after a cour of 12. The sentence says what the value does, and
+//! writes it without a sign, as the field shows it: `+13` would read as
+//! "add 13". It is never set by the app. A folder missing an episode of those cours,
+//! or holding one past them, offers nothing: which cour restarted is not clear.
 
 use std::path::{Component, Path};
 
@@ -91,6 +131,13 @@ pub struct Basis {
     /// The season number of the video's folder.
     pub season: u32,
     pub previous: Previous,
+    /// The AniList episodes of each season before the rule's, from season 1,
+    /// when all are known (empty otherwise, and for season 1).
+    pub earlier: Vec<u32>,
+    /// The AniList episodes of each entry linked to that season, in the order
+    /// they are linked, when there are two or more and all are known (empty
+    /// otherwise).
+    pub cours: Vec<u32>,
     /// The episodes of that season that already have a video, ascending.
     pub held: Vec<u32>,
 }
@@ -129,8 +176,9 @@ impl Verdict {
                 Some(offset),
                 format!(
                     "처음 받은 릴리스가 {first}화예요. AniList 기준 이전 시즌이 {total}화까지라 \
-                     번호가 이어지니 {}로 시즌 1화가 돼요.",
-                    signed(offset)
+                     번호가 이어지니 {}{} 시즌 1화가 돼요.",
+                    signed(offset),
+                    particle_ro(offset)
                 ),
             )),
             Verdict::Suggest { value, basis } => Some((value, basis)),
@@ -180,6 +228,9 @@ impl Missing {
 
 /// What the grounds come to for `first`, the first release's number.
 pub fn decide(first: u32, basis: &Basis) -> Verdict {
+    if let Some(verdict) = restarted_cour(first, basis) {
+        return verdict;
+    }
     let held = !basis.held.is_empty();
     let first_i = i64::from(first);
     match basis.previous {
@@ -190,9 +241,10 @@ pub fn decide(first: u32, basis: &Basis) -> Verdict {
                     "첫 릴리스가 1화라서 회차를 바꾸지 않아요.".to_owned()
                 } else {
                     format!(
-                        "AniList 기준 이전 시즌이 {total}화까지이고 첫 릴리스가 {first}화라서 \
-                         {}로 정했어요.",
-                        signed(-total_i)
+                        "AniList 기준 이전 시즌이 {total}화까지이고 첫 화가 {first}화라서 \
+                         회차 변환을 {}{} 정했어요.",
+                        signed(-total_i),
+                        particle_ro(-total_i)
                     )
                 };
                 Verdict::Auto {
@@ -215,13 +267,14 @@ pub fn decide(first: u32, basis: &Basis) -> Verdict {
                     value: Some(-total_i),
                     basis: format!(
                         "처음 본 릴리스가 {first}화예요. AniList 기준 이전 시즌이 {total}화까지라, \
-                         번호가 이어진다면 {}로 시즌 {}화가 돼요.",
+                         번호가 이어진다면 {}{} 시즌 {}화가 돼요.",
                         signed(-total_i),
+                        particle_ro(-total_i),
                         first_i - total_i
                     ),
                 }
             } else {
-                Verdict::Nothing
+                run_on(first, basis)
             }
         }
         Previous::Unknown(missing) if first > 1 => Verdict::Suggest {
@@ -236,15 +289,122 @@ pub fn decide(first: u32, basis: &Basis) -> Verdict {
     }
 }
 
+/// A first release `f ≤ P` whose `f − 1` is the episodes of the seasons right
+/// before the rule's, counted back from the last of them: a suggestion
+/// `−(f − 1)` (see the module docs). The whole run (from season 1) is the
+/// `f = P + 1` case and is not looked at here.
+fn run_on(first: u32, basis: &Basis) -> Verdict {
+    if first <= 1 {
+        return Verdict::Nothing;
+    }
+    let want = u64::from(first - 1);
+    // Season numbers `k` whose run `k..N−1` adds up to `f − 1`, nearest first.
+    let mut starts: Vec<usize> = Vec::new();
+    let mut sum: u64 = 0;
+    for k in (2..=basis.earlier.len()).rev() {
+        sum += u64::from(basis.earlier[k - 1]);
+        if sum == want {
+            starts.push(k);
+        }
+        if sum > want {
+            break;
+        }
+    }
+    let Some(&nearest) = starts.first() else {
+        return Verdict::Nothing;
+    };
+    let offset = -i64::from(first - 1);
+    let mut text = format!(
+        "{nearest}기부터 이어 센 번호로 보여요. 회차 변환을 {}{} 할까요?",
+        signed(offset),
+        particle_ro(offset)
+    );
+    if starts.len() > 1 {
+        let others: Vec<String> = starts[1..].iter().map(|k| format!("{k}기")).collect();
+        text.push_str(&format!(
+            " {}부터 센 것으로도 맞아서 가장 가까운 시즌부터 센 것으로 봤어요.",
+            others.join("·")
+        ));
+    }
+    Verdict::Suggest {
+        value: Some(offset),
+        basis: text,
+    }
+}
+
+/// A later cour of the season that restarts at `- 01`, offered `C + 1` (see
+/// the module docs), or `None` when the grounds do not say so.
+fn restarted_cour(first: u32, basis: &Basis) -> Option<Verdict> {
+    if first != 1 || basis.cours.len() < 2 {
+        return None;
+    }
+    let held: std::collections::BTreeSet<u32> = basis.held.iter().copied().collect();
+    // The cours before the last one whose episodes are all in the folder.
+    let mut whole = None;
+    let mut sum: u32 = 0;
+    for (index, count) in basis.cours[..basis.cours.len() - 1].iter().enumerate() {
+        let end = sum.checked_add(*count)?;
+        if *count == 0 || !(sum + 1..=end).all(|e| held.contains(&e)) {
+            break;
+        }
+        sum = end;
+        whole = Some(index + 1);
+    }
+    let cours = whole?;
+    // Episodes past them: part of the next cour is there already, so which
+    // cour restarted cannot be told.
+    if held.range(sum + 1..).next().is_some() {
+        return None;
+    }
+    let value = i64::from(sum) + 1;
+    Some(Verdict::Suggest {
+        value: Some(value),
+        basis: format!(
+            "{}쿨을 1화부터 센 번호로 보여요. 1화를 {value}화로 받도록 회차 변환을 \
+             {value}{} 할까요?",
+            cours + 1,
+            particle_ro(value)
+        ),
+    })
+}
+
+/// `으로` or `로` after a number read in Sino-Korean, by its last digit.
+fn particle_ro(value: i64) -> &'static str {
+    match value.unsigned_abs() % 10 {
+        0 | 3 | 6 => "으로",
+        _ => "로",
+    }
+}
+
 /// The lowest whole episode among the release titles, if any has one.
 pub fn first_release(titles: &[String]) -> Option<u32> {
     titles.iter().filter_map(|t| whole_episode(t)).min()
 }
 
-/// Whether the app may look at the rule's offset at all: a subscription whose
-/// offset leaves numbers as they are and was not set by the app.
-pub fn is_open(rule: &Rule) -> bool {
-    rule.subscription.is_some() && !rule.episode_auto && matches!(rule.episode, 0 | 1)
+/// Whether the app may set the rule's offset, as far as the rule itself
+/// tells: a subscription whose offset is not automatic, whatever value it
+/// holds. The rule must also not have been decided before (kept beside it,
+/// [`crate::store::channels::EpisodeMark::decided`]) and must not have picked
+/// any item yet.
+pub fn may_decide(rule: &Rule) -> bool {
+    rule.subscription.is_some() && !rule.episode_auto
+}
+
+/// Whether a suggestion of `value` says something to the rule: a value that
+/// names releases otherwise than its field does, or, without a value, a field
+/// that still leaves numbers as they are (`0` or `1`). The rule must also be
+/// one the app may decide and has not decided.
+pub fn worth_offering(rule: &Rule, value: Option<i64>) -> bool {
+    match value {
+        Some(value) => !same_effect(value, rule.episode),
+        None => matches!(rule.episode, 0 | 1),
+    }
+}
+
+/// Whether two offsets name every release alike: equal, or both `0` and `1`,
+/// which leave numbers as they are.
+pub fn same_effect(a: i64, b: i64) -> bool {
+    a == b || (matches!(a, 0 | 1) && matches!(b, 0 | 1))
 }
 
 /// The work folder and season number of a rule's save folder, which must be
@@ -326,14 +486,20 @@ pub async fn gather(
             .unwrap_or_default(),
         None => Vec::new(),
     };
-    let previous = match &work_id {
-        _ if season == 1 => Previous::Known(0),
-        None => Previous::Unknown(Missing::NoWork),
+    let (previous, earlier) = match &work_id {
+        _ if season == 1 => (Previous::Known(0), Vec::new()),
+        None => (Previous::Unknown(Missing::NoWork), Vec::new()),
         Some(id) => previous_total(seasons, id, season).await?,
+    };
+    let cours = match &work_id {
+        Some(id) => cours_of(seasons, id, season).await?,
+        None => Vec::new(),
     };
     Ok(Some(Basis {
         season,
         previous,
+        earlier,
+        cours,
         held,
     }))
 }
@@ -364,33 +530,61 @@ pub async fn season_total(
     Ok(Some((season, total)))
 }
 
-/// The AniList episodes of seasons `1..season` of the work.
+/// The AniList episodes of each entry linked to the season, when two or more
+/// are and all counts are known.
+async fn cours_of(
+    seasons: &SeasonStore,
+    work_id: &str,
+    season: u32,
+) -> Result<Vec<u32>, SeasonError> {
+    let link = seasons
+        .links_of_seasons(vec![(work_id.to_owned(), season)])
+        .await?
+        .into_iter()
+        .next()
+        .flatten();
+    let Some(link) = link.filter(|link| link.entries.len() >= 2) else {
+        return Ok(Vec::new());
+    };
+    Ok(link
+        .entries
+        .iter()
+        .map(|e| e.episodes)
+        .collect::<Option<Vec<u32>>>()
+        .unwrap_or_default())
+}
+
+/// The AniList episodes of seasons `1..season` of the work: their sum, and
+/// each season's count when all are known.
 async fn previous_total(
     seasons: &SeasonStore,
     work_id: &str,
     season: u32,
-) -> Result<Previous, SeasonError> {
+) -> Result<(Previous, Vec<u32>), SeasonError> {
     let before: Vec<u32> = (1..season).collect();
     let links = seasons
         .links_of_seasons(before.iter().map(|s| (work_id.to_owned(), *s)).collect())
         .await?;
+    let unknown = |missing| Ok((Previous::Unknown(missing), Vec::new()));
     let mut total: u32 = 0;
+    let mut counts = Vec::new();
     for (number, link) in before.into_iter().zip(links) {
         let Some(link) = link else {
-            return Ok(Previous::Unknown(Missing::NoSeason(number)));
+            return unknown(Missing::NoSeason(number));
         };
         if link.entries.is_empty() {
-            return Ok(Previous::Unknown(Missing::NoLink(number)));
+            return unknown(Missing::NoLink(number));
         }
         let Some(count) = combine(&link.entries).and_then(|c| c.episodes) else {
-            return Ok(Previous::Unknown(Missing::NoCount(number)));
+            return unknown(Missing::NoCount(number));
         };
         let Some(sum) = total.checked_add(count) else {
-            return Ok(Previous::Unknown(Missing::NoCount(number)));
+            return unknown(Missing::NoCount(number));
         };
         total = sum;
+        counts.push(count);
     }
-    Ok(Previous::Known(total))
+    Ok((Previous::Known(total), counts))
 }
 
 #[cfg(test)]
@@ -401,6 +595,19 @@ mod tests {
         Basis {
             season: 3,
             previous,
+            earlier: Vec::new(),
+            cours: Vec::new(),
+            held: held.to_vec(),
+        }
+    }
+
+    /// Season `counts.len() + 1`, after seasons of these counts.
+    fn after(counts: &[u32], held: &[u32]) -> Basis {
+        Basis {
+            season: counts.len() as u32 + 1,
+            previous: Previous::Known(counts.iter().sum()),
+            earlier: counts.to_vec(),
+            cours: Vec::new(),
             held: held.to_vec(),
         }
     }
@@ -427,6 +634,8 @@ mod tests {
         let first = Basis {
             season: 1,
             previous: Previous::Known(0),
+            earlier: vec![],
+            cours: vec![],
             held: vec![],
         };
         assert_eq!(offset_of(&decide(1, &first)), Some(0));
@@ -492,6 +701,131 @@ mod tests {
             Verdict::Nothing,
             "a first release numbered 1 needs no sum"
         );
+    }
+
+    #[test]
+    fn numbers_run_on_from_a_later_season_are_suggested_not_set() {
+        // Two seasons of 24, a third that starts at `- 25`: counted from
+        // season 2.
+        let verdict = decide(25, &after(&[24, 24], &[]));
+        assert_eq!(
+            verdict,
+            Verdict::Suggest {
+                value: Some(-24),
+                basis: "2기부터 이어 센 번호로 보여요. 회차 변환을 −24로 할까요?".to_owned(),
+            }
+        );
+        // Seasons 2 and 3 of a fourth: `- 25` after 12, 12, 12.
+        let verdict = decide(25, &after(&[12, 12, 12], &[]));
+        assert_eq!(
+            verdict.as_suggestion().map(|(value, _)| value),
+            Some(Some(-24))
+        );
+        // A number that matches no run back from the season before is nothing.
+        assert_eq!(decide(13, &after(&[24, 24], &[])), Verdict::Nothing);
+        // Only runs that end at the season right before count: 13 after
+        // 12, 24 would follow season 1 alone.
+        assert_eq!(decide(13, &after(&[12, 24], &[])), Verdict::Nothing);
+        // Numbers that restart are nothing.
+        assert_eq!(decide(1, &after(&[24, 24], &[])), Verdict::Nothing);
+    }
+
+    #[test]
+    fn several_runs_that_match_offer_the_shortest_and_say_so() {
+        // Season 2 has no episodes, so seasons 3 and 2..3 both add up to 12.
+        let verdict = decide(13, &after(&[12, 0, 12], &[]));
+        let Verdict::Suggest { value, basis } = verdict else {
+            panic!("{verdict:?}")
+        };
+        assert_eq!(value, Some(-12));
+        assert!(
+            basis.starts_with("3기부터 이어 센 번호로 보여요."),
+            "{basis}"
+        );
+        assert!(basis.contains("2기부터 센 것으로도 맞아서"), "{basis}");
+    }
+
+    #[test]
+    fn numbers_run_on_are_still_offered_once_the_folder_has_their_videos() {
+        // The rule received `- 25` unconverted, as `S03E25`.
+        let verdict = decide(25, &after(&[24, 24], &[25]));
+        assert_eq!(
+            verdict.as_suggestion().map(|(value, _)| value),
+            Some(Some(-24))
+        );
+    }
+
+    /// Season 2 after a season of 12, made of cours of these counts, with
+    /// these episodes in its folder.
+    fn split(cours: &[u32], held: impl IntoIterator<Item = u32>) -> Basis {
+        Basis {
+            season: 2,
+            previous: Previous::Known(12),
+            earlier: vec![12],
+            cours: cours.to_vec(),
+            held: held.into_iter().collect(),
+        }
+    }
+
+    #[test]
+    fn a_second_cour_that_restarts_at_one_is_offered_where_the_first_ended() {
+        let verdict = decide(1, &split(&[12, 12], 1..=12));
+        assert_eq!(
+            verdict,
+            Verdict::Suggest {
+                value: Some(13),
+                basis:
+                    "2쿨을 1화부터 센 번호로 보여요. 1화를 13화로 받도록 회차 변환을 13으로 할까요?"
+                        .to_owned(),
+            }
+        );
+        // The value makes `- 01` episode 13, as the rename reads it.
+        let folder = std::path::Path::new("/shows/Show/Season 02");
+        assert_eq!(
+            crate::worker::revisions::episode_name(
+                folder,
+                "[SubsPlease] Show - 01 (1080p) [ABCD0001].mkv",
+                13
+            )
+            .as_deref(),
+            Some("Show S02E13.mkv")
+        );
+        // A third cour after two whole ones.
+        let verdict = decide(1, &split(&[12, 11, 13], 1..=23));
+        let Verdict::Suggest { value, basis } = verdict else {
+            panic!("{verdict:?}")
+        };
+        assert_eq!(value, Some(24));
+        assert!(basis.starts_with("3쿨을"), "{basis}");
+    }
+
+    #[test]
+    fn a_restart_is_offered_nothing_unless_the_earlier_cours_are_whole() {
+        // Episode 7 of the first cour is missing.
+        let missing = (1..=12).filter(|e| *e != 7);
+        assert_eq!(decide(1, &split(&[12, 12], missing)), Verdict::Nothing);
+        // Part of the second cour is there already.
+        assert_eq!(decide(1, &split(&[12, 12], 1..=14)), Verdict::Nothing);
+        // Nothing of the season is there.
+        assert_eq!(decide(1, &split(&[12, 12], [])), Verdict::Nothing);
+        // One entry: no cours to tell apart.
+        assert_eq!(decide(1, &split(&[], 1..=12)), Verdict::Nothing);
+        // A release that does not restart.
+        assert_eq!(restarted_cour(13, &split(&[12, 12], 1..=12)), None);
+    }
+
+    #[test]
+    fn a_number_takes_the_particle_its_reading_ends_with() {
+        assert_eq!(particle_ro(13), "으로");
+        assert_eq!(particle_ro(10), "으로");
+        assert_eq!(particle_ro(-26), "으로");
+        assert_eq!(particle_ro(25), "로");
+        assert_eq!(particle_ro(-24), "로");
+        assert_eq!(particle_ro(7), "로");
+        let Verdict::Auto { basis, .. } = decide(31, &basis(Previous::Known(30), &[])) else {
+            panic!("a sum of 30 and a first release of 31 set −30")
+        };
+        assert!(basis.contains("−30으로 정했어요"), "{basis}");
     }
 
     fn basis_unknown() -> Basis {

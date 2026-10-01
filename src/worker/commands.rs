@@ -56,8 +56,18 @@
 //! A `watch_rescan` command (`다시 확인` of a watch folder) reads the folder
 //! again, like the cycles do, and only reads ([`watch_rescan`]).
 //!
+//! An `episode_undo` command (`되돌리기` of an episode offset the app set) puts
+//! the rule's previous offset back and renames the videos it named, through
+//! Transmission or on disk without replacing anything ([`episode_undo`]). A
+//! start cut short leaves it `running`, and the next start carries on with the
+//! files still to rename. A start that cannot reach Transmission or the
+//! database once the value is back ends the command with those files still
+//! to rename, rather than holding up the commands behind it; a new request
+//! (`이어서 되돌리기`) carries them on.
+//!
 //! Each command kind has its own module below.
 
+pub mod episode_undo;
 pub mod link;
 pub mod receive_once;
 pub mod receive_past;
@@ -205,6 +215,18 @@ impl Worker {
             watch_rescan::KIND => {
                 task.spawn(async move {
                     match watch_rescan::run(&ctx, &owned, &clock).await {
+                        Ok(finished) => Ran::Ended {
+                            state: finished.state,
+                            outcome: finished.outcome,
+                            add_unconfirmed: false,
+                        },
+                        Err(err) => Ran::NotNow(err.to_string()),
+                    }
+                });
+            }
+            episode_undo::KIND => {
+                task.spawn(async move {
+                    match episode_undo::run(&ctx, &owned, &clock).await {
                         Ok(finished) => Ran::Ended {
                             state: finished.state,
                             outcome: finished.outcome,

@@ -15,6 +15,7 @@ mod delete_rule;
 mod episode;
 #[cfg(test)]
 mod episode_tests;
+mod episode_undo;
 pub mod import;
 pub mod import_subscriptions;
 #[cfg(test)]
@@ -31,6 +32,10 @@ mod tests;
 #[cfg(test)]
 mod title_tests;
 
+pub use episode::EpisodeMark;
+pub use episode_undo::{
+    EpisodeUndo, NewUndoFile, UndoBegun, UndoFile, UndoFileState, REVISION_UNDER_WAY,
+};
 pub use repo::{NewSubscription, SeasonLinked};
 
 pub use model::{
