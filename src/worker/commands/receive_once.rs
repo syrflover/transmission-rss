@@ -28,7 +28,7 @@
 //! with the item's result, in one transaction; a torrent Transmission still
 //! had is started again. A revision whose replacement ended after the old
 //! video was removed, with no video left under the episode name
-//! ([`revisions::ended_with_no_video`]), is received again the same way;
+//! ([`revisions::ended_with_no_video`], or received so and whole with no file, [`revisions::checked_on_retry`]), is received again the same way;
 //! a torrent Transmission still has is checked (`torrent-verify`) before it
 //! is started, so it downloads the file that went missing. It is never renamed here, and an add that fails
 //! leaves the item and the replacement as they were: the command alone says
@@ -740,8 +740,7 @@ pub async fn execute_with(
     }
     // A replacement that ended with no video left: its torrent's data is
     // checked again, which must not find another file under its name.
-    let ended =
-        matches!(&revision, RevisionRetry::Again(row) if revisions::ended_with_no_video(row));
+    let ended = matches!(&revision, RevisionRetry::Again(row) if revisions::checked_on_retry(row));
     if let (true, RevisionRetry::Again(row)) = (ended, &revision) {
         match revisions::received_name_free(row).await {
             Ok(true) => {}

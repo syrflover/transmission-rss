@@ -559,6 +559,10 @@ const ELSEWHERE: &str =
 const NOT_COMPLETE: &str = "새 영상 파일을 다 받지 않았어요. 이전 영상은 그대로 있어요.";
 const EMPTY: &str = "받은 새 영상 파일이 비어 있어서 대체하지 않았어요. 이전 영상은 그대로 있어요.";
 const NEW_FILE_GONE: &str = "받은 새 영상 파일이 없어요. 이전 영상은 그대로 있어요.";
+/// Why a replacement received again after it removed the old video (and
+/// ended with no video left) failed before its video was received: the
+/// torrent is whole by Transmission's account, and no file is there.
+const NOT_THERE_AGAIN: &str = "다시 받은 새 영상의 토렌트는 다 받았다는데 파일이 없어요. 다시 받기로 받으면 Transmission이 데이터를 다시 확인해요. 회차 이름에 영상이 없어요.";
 const UNKNOWN_TORRENT: &str = "새 영상의 토렌트를 알 수 없어요. 이전 영상은 그대로 있어요.";
 const NAME_TAKEN_BY_NEW: &str =
     "새 영상의 토렌트가 이미 회차 이름의 파일을 가리키고 있어서 대체하지 않았어요. 두 파일을 그대로 뒀어요.";
@@ -751,16 +755,28 @@ async fn drive(
 
 /// Whether `row` failed because its download stopped before the new video
 /// was received: its torrent left Transmission, or Transmission reported an
-/// error on it. `다시 받기` receives such a revision again (and starts its
-/// torrent when Transmission still has it); the other failures before the
+/// error on it, or, received again after it removed the old video, it was
+/// whole with no file ([`NOT_THERE_AGAIN`]). `다시 받기` receives such a
+/// revision again (and starts its torrent when Transmission still has it,
+/// [`checked_on_retry`]); the other failures before the
 /// video was received (several files, another folder, the episode's own
 /// file) would end the same way again.
 pub fn stopped_before_received(row: &Revision) -> bool {
     row.not_received()
-        && row
-            .reason
-            .as_deref()
-            .is_some_and(|reason| reason == RECEIVE_STOPPED || reason.starts_with(LOCAL_ERROR))
+        && row.reason.as_deref().is_some_and(|reason| {
+            reason == RECEIVE_STOPPED
+                || reason.starts_with(LOCAL_ERROR)
+                || reason == NOT_THERE_AGAIN
+        })
+}
+
+/// Whether `다시 받기` of `row` has Transmission check the torrent's data
+/// before it starts it: a replacement whose video went missing after
+/// Transmission had it all ([`ended_with_no_video`], or one received again
+/// that found no file, [`NOT_THERE_AGAIN`]).
+pub fn checked_on_retry(row: &Revision) -> bool {
+    ended_with_no_video(row)
+        || (row.not_received() && row.reason.as_deref() == Some(NOT_THERE_AGAIN))
 }
 
 /// Whether the replacement of `row` ended after the old video was removed
@@ -870,6 +886,12 @@ async fn received(ctx: &CycleContext, row: &Revision) -> Next {
     // received name still holds that file.
     let (crc, identity) = match identified_crc_of(path.clone()).await {
         Ok((crc, identity)) => (crc_text(crc), identity),
+        // Received again after it removed the old video: no failure the
+        // person resolves by deleting the new file, as the old video is
+        // gone; it stays one before the video was received, with 다시 받기.
+        Err(err) if err.kind() == io::ErrorKind::NotFound && row.claimed_at.is_some() => {
+            return failed(NOT_THERE_AGAIN, None)
+        }
         Err(err) if err.kind() == io::ErrorKind::NotFound => {
             return failed(NEW_FILE_GONE, Some(file.name.clone()))
         }
@@ -908,7 +930,8 @@ async fn recover(ctx: &CycleContext, row: &Revision) -> Next {
         return Next::Later(why);
     }
     let old = Path::new(&row.folder).join(&row.episode_name);
-    if matches!(exists(&old), Ok(false)) {
+    // A replacement that removed the old video itself left the name empty.
+    if row.claimed_at.is_none() && matches!(exists(&old), Ok(false)) {
         let rows = match ctx
             .revisions
             .of_episode(row.folder.clone(), row.episode_name.clone())

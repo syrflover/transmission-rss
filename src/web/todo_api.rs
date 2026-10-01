@@ -185,7 +185,11 @@ pub fn failure_of(row: &Revision, base: Option<&FsPath>) -> RevisionFailure {
     let old = FailureFile {
         role: "old",
         path: Some(path(&row.episode_name)),
-        state: if matches!(row.state, RevisionState::Removed | RevisionState::Abandoned) {
+        // A replacement received again that has not got its video yet
+        // removed the old one before.
+        state: if matches!(row.state, RevisionState::Removed | RevisionState::Abandoned)
+            || (row.not_received() && row.claimed_at.is_some())
+        {
             "removed"
         } else {
             "kept"

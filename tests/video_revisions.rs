@@ -3279,3 +3279,57 @@ async fn a_retry_whose_torrent_check_fails_starts_nothing_and_can_be_asked_again
     assert_eq!(s.state_of(&v2()).await, RevisionState::Receiving);
     assert_eq!(s.starts(), 1);
 }
+
+/// `14v2`'s torrent had left Transmission when it was received again, and
+/// Transmission says the new torrent is complete with no file under its
+/// name. The replacement removed `14` itself, so the empty episode name is
+/// no sign the failure was resolved: it stays a failure before the video
+/// was received, with `다시 받기`, which has Transmission check the torrent
+/// and download the file.
+#[tokio::test]
+async fn a_replacement_received_again_whose_file_is_not_there_stays_a_failure() {
+    let s = Setup::new().await;
+    s.v2_ended_with_no_video().await;
+    s.h.tr.remove(NEW_HASH);
+    s.retry(
+        s.item(&v2()).await.id,
+        "00000000-0000-4000-8000-000000000d06",
+    )
+    .await;
+    assert_eq!(s.commands().await, CommandsOutcome::Ran(1));
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Receiving);
+    // Transmission says it is whole and seeds it; its file is gone again.
+    s.complete(NEW_HASH);
+    std::fs::remove_file(s.file(&v2())).unwrap();
+
+    s.cycle().await;
+    s.cycle().await;
+    let row = s.row_of(&v2()).await;
+    assert_eq!(row.state, RevisionState::Failed, "{row:?}");
+    assert_eq!(row.received_name, None);
+    let failures = s.failures().await;
+    let failure = revision_failure(&failures);
+    assert_eq!(failure["can_retry"], true);
+    // The replacement removed the old video before it was received again.
+    assert_eq!(
+        failure["files"],
+        json!([
+            { "role": "old", "path": format!("Season 01/{EPISODE_NAME}"), "state": "removed" },
+            { "role": "new", "path": null, "state": "not_received" },
+        ])
+    );
+
+    s.retry(
+        s.item(&v2()).await.id,
+        "00000000-0000-4000-8000-000000000d07",
+    )
+    .await;
+    assert_eq!(s.commands().await, CommandsOutcome::Ran(1));
+    assert_eq!(s.verifies(), 1);
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Receiving);
+    std::fs::write(s.file(&v2()), NEW_BYTES).unwrap();
+    s.complete(NEW_HASH);
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Done);
+    assert_eq!(read(&s.file(EPISODE_NAME)), NEW_BYTES);
+}
