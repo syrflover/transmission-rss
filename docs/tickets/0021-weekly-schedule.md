@@ -40,6 +40,7 @@
 - API: `GET /api/schedule/week`(이번 주 일곱 날의 카드, 다음 분기 구독·제목 대기 수. 처음 실행 중이면 `first_run`만 보내고 `week`는 `null`), `PUT /api/first-run/{step}`(`{skipped}`; 처음 실행이 아닌 설치는 `404`). 자세한 계약은 `src/web/schedule_api.rs`, `src/web/setup_api.rs`의 머리 문서에 있어요.
 - 웹(`web/src/screens/ScheduleScreen.tsx`, `web/src/screens/schedule/`): 요일 줄과 카드, 방영 없는 날의 얇은 줄, `오늘로 이동`, 제목 아래의 범위·분기·기준 시각, 980px 이상에서 편성 옆 좁은 열(수집 상태, 다음 분기 구독과 `편성표에서 추가`), 그보다 좁으면 편성 위의 한 줄 요약(눌러서 두 묶음을 펼쳐요), `처음 설정` 체크리스트(`건너뛰기`·`건너뛰기 취소`). 폴더·채널·구독이 바뀌는 곳(`forgetLibrary`, `channelsChanged`, `subscriptionChanged`, `ruleCountChanged`)이 홈 캐시를 비워요.
 - `readme.md`에 `Weekly schedule and the first run` 절을 더했어요.
+- worker가 멈춘 때: `/api/collect/status`의 `cycle.stalled`는 다음 확인 시각이 한 주기 넘게 지났을 때 참이에요. 그때 편성 옆 열의 `다음` 자리와 수집 화면 상태판의 RSS 칸은 `RSS 확인이 멈췄어요. worker가 돌고 있는지 확인해 주세요.`를 강조 색으로, 두 휴대폰 요약은 `RSS 멈춤`을 보여요([이번 주 편성](../specs/web-app.md#이번-주-편성)의 사용자 결정, 2026-10-01). 시험은 `a_next_check_more_than_one_interval_overdue_is_stalled`이고, 브라우저에서 3시간 전에 멈춘 주기로 세 곳(데스크톱 옆 열, 375px 편성 요약, 375px 수집 상태판)을 봤어요(`scrollWidth == innerWidth`).
 
 ### 결정
 
@@ -88,6 +89,5 @@
 
 ### 남은 일
 
-- worker가 멈췄을 때(`다음`이 지났을 때) 옆 열에 보여줄 문구는 `StatusBoard`에도 없어서 만들지 않았어요. 시각이 지난 `다음`·`확인`이 그대로 보여요. 문구가 필요하면 정해야 해요.
 - 자막 쪽 티켓(목표 3·4)이 `자막 받는 중`·`인증 필요`·`회차 확인 필요`를 서버에서 보내면 카드가 그대로 그려요(`SubtitleState`, `WeekCard.tsx`의 줄 표).
 - 할 일 화면이 배지 개수를 내면 처음 실행 중에는 개수를 내지 않아야 해요(`web/src/app/todo-count.ts`).

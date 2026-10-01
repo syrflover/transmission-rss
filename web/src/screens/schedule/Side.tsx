@@ -5,7 +5,7 @@ import { when } from "@/lib/time";
 import { cn } from "@/lib/utils";
 
 import { useBoard, type Load } from "../collect/status/StatusBoard";
-import type { Board } from "../collect/status/api";
+import { STALLED, STALLED_SHORT, type Board } from "../collect/status/api";
 import type { Week } from "./api";
 import { quarterName } from "./format";
 
@@ -20,11 +20,20 @@ function lastRead(board: Board): number | null {
   );
 }
 
-function Row({ label, children, muted }: { label: string; children: React.ReactNode; muted?: boolean }) {
+function Row({ label, children, muted, urgent }: { label: string; children: React.ReactNode; muted?: boolean; urgent?: boolean }) {
   return (
     <div className="flex min-w-0 items-baseline justify-between gap-3 text-[13px]">
       <dt className="flex-none text-text-muted">{label}</dt>
-      <dd className={cn("m-0 min-w-0 text-right font-semibold", muted && "font-normal text-text-muted")}>{children}</dd>
+      <dd
+        role={urgent ? "status" : undefined}
+        className={cn(
+          "m-0 min-w-0 text-right font-semibold",
+          muted && "font-normal text-text-muted",
+          urgent && "text-left leading-normal text-urgent",
+        )}
+      >
+        {children}
+      </dd>
     </div>
   );
 }
@@ -57,9 +66,15 @@ function CollectStatus({ load }: { load: Load }) {
                 <Row label="확인" muted={lastRead(board) === null}>
                   {lastRead(board) === null ? "아직 없음" : when(lastRead(board)!, board.now)}
                 </Row>
-                <Row label="다음" muted={!board.cycle?.next_at}>
-                  {board.cycle?.next_at ? when(board.cycle.next_at, board.now) : "아직 없음"}
-                </Row>
+                {board.cycle?.stalled ? (
+                  <Row label="다음" urgent>
+                    {STALLED}
+                  </Row>
+                ) : (
+                  <Row label="다음" muted={!board.cycle?.next_at}>
+                    {board.cycle?.next_at ? when(board.cycle.next_at, board.now) : "아직 없음"}
+                  </Row>
+                )}
               </>
             )}
             <Row label="최근 7일 추가">{board.received.total}개</Row>
@@ -148,7 +163,13 @@ export function SummaryLine({ week }: { week: Week }) {
           {board ? (
             <>
               {read !== null && item("read", "확인", when(read, board.now))}
-              {board.cycle?.next_at ? item("next", "다음", when(board.cycle.next_at, board.now)) : null}
+              {board.cycle?.stalled ? (
+                <span key="stalled" className="mr-2.5 font-semibold whitespace-nowrap text-urgent">
+                  {STALLED_SHORT}
+                </span>
+              ) : board.cycle?.next_at ? (
+                item("next", "다음", when(board.cycle.next_at, board.now))
+              ) : null}
               {item("seven", "7일", String(board.received.total))}
               {board.transmission ? item("down", "받는 중", String(board.transmission.downloading)) : null}
               {board.transmission ? item("seed", "시딩", String(board.transmission.seeding)) : null}

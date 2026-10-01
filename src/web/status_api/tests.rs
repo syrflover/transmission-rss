@@ -259,6 +259,43 @@ async fn transmission_counts_and_the_last_cycle_are_reported_with_their_time() {
 }
 
 #[tokio::test]
+async fn a_next_check_more_than_one_interval_overdue_is_stalled() {
+    let (state, _router) = app();
+    assert!(state.history.try_begin_cycle(NOON - HOUR, 0).await.unwrap());
+    state
+        .history
+        .finish_cycle(NOON - HOUR + 1_000)
+        .await
+        .unwrap();
+    let stalled = |board: Board| board.cycle.unwrap().stalled;
+
+    // Without a recorded interval nothing is known to be late.
+    assert!(!stalled(board(&state, NOON, 0).await.unwrap()));
+
+    state
+        .status
+        .record_cycle_interval(20 * 60_000)
+        .await
+        .unwrap();
+    // Due at 11:20; late but within one more interval until 11:40.
+    assert!(!stalled(
+        board(&state, NOON - 20 * 60_000, 0).await.unwrap()
+    ));
+    assert!(stalled(
+        board(&state, NOON - 20 * 60_000 + 1, 0).await.unwrap()
+    ));
+    assert!(stalled(board(&state, NOON, 0).await.unwrap()));
+
+    // A new cycle starting puts it back on time.
+    assert!(state
+        .history
+        .try_begin_cycle(NOON - 60_000, 0)
+        .await
+        .unwrap());
+    assert!(!stalled(board(&state, NOON, 0).await.unwrap()));
+}
+
+#[tokio::test]
 async fn a_bad_offset_is_refused_and_a_huge_one_is_clamped() {
     let (state, router) = app();
     let (status, json) = get(&router, "/api/collect/status?tz_offset=abc").await;

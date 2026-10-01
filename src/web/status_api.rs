@@ -8,7 +8,7 @@
 //!   "received": { "total": 12, "days": [{ "date": "2026-09-24", "count": 3 }, ...7] },
 //!   "problems": 2,
 //!   "transmission": { "downloading": 1, "seeding": 3, "taken_at": 1790000000000 } | null,
-//!   "cycle": { "started_at", "finished_at", "next_at" } | null,
+//!   "cycle": { "started_at", "finished_at", "next_at", "stalled" } | null,
 //!   "collect_folder_set": true|false
 //! }
 //! ```
@@ -105,6 +105,9 @@ pub struct CycleStatus {
     /// When the next cycle is due: the start plus the interval the worker
     /// recorded when it started. `null` while no worker has recorded one.
     pub next_at: Option<Millis>,
+    /// The next cycle is more than one interval overdue: the worker is not
+    /// checking the feeds, and the board says so instead of a past time.
+    pub stalled: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -208,6 +211,8 @@ pub async fn board(state: &AppState, now: Millis, tz_offset: i64) -> Result<Boar
             started_at: c.started_at,
             finished_at: c.finished_at,
             next_at: interval.map(|ms| c.started_at.saturating_add(ms)),
+            stalled: interval
+                .is_some_and(|ms| now > c.started_at.saturating_add(ms.saturating_mul(2))),
         });
 
     let collect_folder_set = state

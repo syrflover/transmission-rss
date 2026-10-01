@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 
 import { KEYS } from "../cache";
 import { channelName } from "../rules/api";
-import { loadBoard, type Board } from "./api";
+import { loadBoard, STALLED, STALLED_SHORT, type Board } from "./api";
 
 const POLL_MS = 30_000;
 const WEEKDAY = ["일", "월", "화", "수", "목", "금", "토"];
@@ -80,6 +80,11 @@ function Feeds({ board }: { board: Board }) {
             ? `마지막 확인 ${when(latest, board.now)}`
             : "worker가 확인하면 여기에 보여요."}
       </p>
+      {board.cycle?.stalled && (
+        <p role="status" className="text-xs leading-normal font-semibold text-urgent">
+          {STALLED}
+        </p>
+      )}
     </>
   );
 }
@@ -176,6 +181,7 @@ function summaryOf(board: Board): string {
   const t = board.transmission;
   return [
     ...(board.collect_folder_set ? [] : ["수집 폴더 없음"]),
+    ...(board.cycle?.stalled ? [STALLED_SHORT] : []),
     feeds,
     `7일 ${board.received.total}개`,
     t ? `받는 중 ${t.downloading} · 시딩 ${t.seeding}` : "Transmission 아직 없음",

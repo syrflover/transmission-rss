@@ -29,8 +29,11 @@ export interface Board {
   /** Items that ended as failed or duplicate in those seven days. */
   problems: number;
   transmission: { downloading: number; seeding: number; taken_at: number } | null;
-  /** `next_at` is when the next cycle is due; `null` until a worker has recorded its interval. */
-  cycle: { started_at: number; finished_at: number | null; next_at: number | null } | null;
+  /**
+   * `next_at` is when the next cycle is due; `null` until a worker has recorded its interval.
+   * `stalled` is true once it is more than one interval overdue: the worker is not checking.
+   */
+  cycle: { started_at: number; finished_at: number | null; next_at: number | null; stalled: boolean } | null;
   /** False until the collect folder is chosen; the worker adds no torrent before that. */
   collect_folder_set: boolean;
 }
@@ -40,3 +43,8 @@ export function loadBoard(signal?: AbortSignal): Promise<Board> {
   const offset = -new Date().getTimezoneOffset();
   return api<Board>(`/collect/status?tz_offset=${offset}`, { signal });
 }
+
+/** What the status says in place of a past next-check time when the worker has stopped checking. */
+export const STALLED = "RSS 확인이 멈췄어요. worker가 돌고 있는지 확인해 주세요.";
+/** The same on a phone's one-line summary. */
+export const STALLED_SHORT = "RSS 멈춤";
