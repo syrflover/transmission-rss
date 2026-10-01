@@ -3,6 +3,7 @@ pub mod artwork;
 pub mod automatic_watch;
 pub mod config;
 pub mod discovery;
+pub mod episode_offset;
 pub mod folders;
 pub mod import;
 pub mod rss;
