@@ -210,6 +210,7 @@ async fn history_questions_count_by_result_time() {
                 observation("new-duplicate", HistoryResult::Duplicate),
                 observation("new-failed", HistoryResult::AddFailed),
                 observation("new-nomatch", HistoryResult::NoMatch),
+                observation("new-version-unknown", HistoryResult::VersionUnknown),
             ],
         )
         .await
@@ -223,7 +224,7 @@ async fn history_questions_count_by_result_time() {
         store.received_since(2_000).await.unwrap(),
         vec![5_000, 5_000]
     );
-    assert_eq!(store.problems_since(2_000).await.unwrap(), 2);
-    assert_eq!(store.problems_since(0).await.unwrap(), 3);
+    assert_eq!(store.problems_since(2_000).await.unwrap(), 3);
+    assert_eq!(store.problems_since(0).await.unwrap(), 4);
     assert_eq!(store.problems_since(9_000).await.unwrap(), 0);
 }

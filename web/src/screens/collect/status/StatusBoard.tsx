@@ -12,7 +12,7 @@ import { loadBoard, STALLED, STALLED_SHORT, type Board } from "./api";
 const POLL_MS = 30_000;
 const WEEKDAY = ["일", "월", "화", "수", "목", "금", "토"];
 /** The history filter the `실패·중복` link opens. */
-export const PROBLEMS_HREF = "/collect/history?result=add_failed,duplicate";
+export const PROBLEMS_HREF = "/collect/history?result=add_failed,version_unknown,duplicate";
 
 export interface Load {
   board: Board | undefined;

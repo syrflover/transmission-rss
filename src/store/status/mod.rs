@@ -215,13 +215,14 @@ impl StatusStore {
             .await
     }
 
-    /// How many items ended as `add_failed` or `duplicate` at or after `since`.
+    /// How many items ended as `add_failed`, `version_unknown` or `duplicate`
+    /// at or after `since`.
     pub async fn problems_since(&self, since: Millis) -> Result<u32, StatusError> {
         self.db
             .run(move |c| {
                 Ok::<_, StatusError>(c.query_row(
                     "SELECT count(*) FROM history_items
-                     WHERE result IN ('add_failed', 'duplicate') AND result_at >= ?1",
+                     WHERE result IN ('add_failed', 'version_unknown', 'duplicate') AND result_at >= ?1",
                     [since],
                     |r| r.get(0),
                 )?)

@@ -28,7 +28,7 @@ export const RESULT_CHIPS: readonly ResultChip[] = [
   { id: "received", label: "추가함", results: ["received"] },
   { id: "no_match", label: "규칙 불일치", results: ["no_match"] },
   { id: "excluded", label: "제외", results: ["excluded"] },
-  { id: "failed", label: "실패·중복", results: ["add_failed", "duplicate"] },
+  { id: "failed", label: "실패·중복", results: ["add_failed", "version_unknown", "duplicate"] },
 ];
 
 /** The result codes of a `result` query value, in a fixed order; unknown codes are dropped. */

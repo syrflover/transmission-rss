@@ -22,8 +22,8 @@
 //! `tz_offset` is the viewer's offset from UTC in minutes, east positive, and
 //! decides where a day begins for the seven bars (the seven days ending with
 //! today, oldest first). `received.total` is the sum of the bars and
-//! `problems` counts items that ended as failed or duplicate within the same
-//! seven days.
+//! `problems` counts items that ended as failed, of unknown version or
+//! duplicate within the same seven days.
 //!
 //! `collect_folder_set` is false while the app's collect folder has not been
 //! chosen. The worker then adds no torrent, and the board says so: a rule's
