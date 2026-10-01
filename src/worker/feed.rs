@@ -13,6 +13,15 @@ use crate::{
 /// limit, which a process that never exits cannot afford.
 pub const FETCH_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// The most bytes of a feed body that are read. Real feeds are far smaller (a
+/// tracker's RSS of 75 to 100 items is 50 to 300 KB), so 2 MiB leaves a wide
+/// margin, as [`crate::anissia::MAX_ANSWER_BYTES`] does for its answers. The
+/// worker container has 128M, up to `FETCH_CONCURRENCY` feeds are held at once
+/// and each is parsed into a structure several times its size, so a bigger cap
+/// would let a few oversized or endless bodies exhaust it. The cap counts the
+/// bytes after any content decoding, so a compressed bomb is stopped too.
+pub const MAX_FEED_BYTES: usize = 2 * 1024 * 1024;
+
 /// A failure to read a feed. Its text never contains the request URL, because
 /// the URL carries the channel's secret query values.
 #[derive(Debug, thiserror::Error)]
@@ -21,6 +30,8 @@ pub enum FetchError {
     Http(reqwest::Error),
     #[error("HTTP status {0}")]
     Status(u16),
+    #[error("the feed is larger than {MAX_FEED_BYTES} bytes")]
+    TooLarge,
     #[error("not a valid RSS feed: {0}")]
     Parse(rss::Error),
 }
@@ -45,12 +56,34 @@ pub async fn fetch(client: &reqwest::Client, url: &str) -> Result<rss::Channel, 
         return Err(FetchError::Status(status.as_u16()));
     }
 
-    let body = response
-        .bytes()
-        .await
-        .map_err(|e| FetchError::Http(e.without_url()))?;
+    let body = read_body(response).await?;
 
     rss::Channel::read_from(&body[..]).map_err(FetchError::Parse)
+}
+
+/// The body of a feed response, refused once it passes [`MAX_FEED_BYTES`]: at
+/// once when the response announces a longer body, otherwise as soon as the
+/// chunks read so far do. (The announced length is not trusted to be true, so
+/// the chunks are counted either way.)
+async fn read_body(mut response: reqwest::Response) -> Result<Vec<u8>, FetchError> {
+    if response
+        .content_length()
+        .is_some_and(|n| n > MAX_FEED_BYTES as u64)
+    {
+        return Err(FetchError::TooLarge);
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|e| FetchError::Http(e.without_url()))?
+    {
+        if body.len() + chunk.len() > MAX_FEED_BYTES {
+            return Err(FetchError::TooLarge);
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
 }
 
 /// One RSS item as the worker sees it.
@@ -130,6 +163,118 @@ mod tests {
             <link>http://x/</link><description>d</description>{items}</channel></rss>"#
         );
         rss::Channel::read_from(xml.as_bytes()).unwrap()
+    }
+
+    /// A feed server for the fetch tests: `/ok` is a normal feed, `/exact` a
+    /// feed of exactly [`MAX_FEED_BYTES`], `/big` a feed followed by padding
+    /// that makes it one byte over, streamed without a length, and `/declared`
+    /// declares a length over the cap and then sends nothing more.
+    async fn serve() -> (String, tokio::task::JoinHandle<()>) {
+        use axum::{
+            body::{Body, Bytes},
+            http::header,
+            response::IntoResponse,
+            routing::get,
+            Router,
+        };
+
+        const ITEM: &str = "<item><title>A</title><guid>a</guid></item>";
+
+        fn padded(total: usize) -> Vec<u8> {
+            let mut body = format!(
+                r#"<?xml version="1.0"?><rss version="2.0"><channel><title>t</title>
+                <link>http://x/</link><description>d</description>{ITEM}</channel></rss><!--"#
+            )
+            .into_bytes();
+            let rest = total - body.len() - "-->".len();
+            body.extend(std::iter::repeat_n(b' ', rest));
+            body.extend_from_slice(b"-->");
+            assert_eq!(body.len(), total);
+            body
+        }
+        fn chunks(body: Vec<u8>) -> Body {
+            let parts: Vec<Result<Bytes, std::convert::Infallible>> = body
+                .chunks(64 * 1024)
+                .map(|c| Ok(Bytes::copy_from_slice(c)))
+                .collect();
+            Body::from_stream(futures::stream::iter(parts))
+        }
+
+        let app = Router::new()
+            .route("/ok", get(|| async { chunks(padded(4096)) }))
+            .route("/exact", get(|| async { chunks(padded(MAX_FEED_BYTES)) }))
+            .route("/big", get(|| async { chunks(padded(MAX_FEED_BYTES + 1)) }))
+            .route(
+                "/declared",
+                get(|| async {
+                    let pending =
+                        futures::stream::pending::<Result<Bytes, std::convert::Infallible>>();
+                    (
+                        [(header::CONTENT_LENGTH, (MAX_FEED_BYTES + 1).to_string())],
+                        Body::from_stream(pending),
+                    )
+                        .into_response()
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app).await.ok();
+        });
+        (base, task)
+    }
+
+    #[tokio::test]
+    async fn a_normal_feed_is_read_and_parsed() {
+        let (base, server) = serve().await;
+        let channel = fetch(&client().unwrap(), &format!("{base}/ok"))
+            .await
+            .unwrap();
+        assert_eq!(channel.items().len(), 1);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn a_feed_of_exactly_the_cap_is_still_read() {
+        let (base, server) = serve().await;
+        let channel = fetch(&client().unwrap(), &format!("{base}/exact"))
+            .await
+            .unwrap();
+        assert_eq!(channel.items().len(), 1);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn a_body_over_the_cap_is_refused_as_too_large() {
+        let (base, server) = serve().await;
+        let err = fetch(&client().unwrap(), &format!("{base}/big"))
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("larger than"),
+            "unexpected failure: {err}"
+        );
+        assert!(!err.to_string().contains(&base));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn a_declared_length_over_the_cap_is_refused_before_reading() {
+        let (base, server) = serve().await;
+        // The server never sends the body, so a client that reads it waits
+        // for the whole request timeout.
+        let err = tokio::time::timeout(
+            Duration::from_secs(10),
+            fetch(&client().unwrap(), &format!("{base}/declared")),
+        )
+        .await
+        .expect("refused without reading the body")
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("larger than"),
+            "unexpected failure: {err}"
+        );
+        server.abort();
     }
 
     #[test]

@@ -849,6 +849,9 @@ fn parse_magnet(link: &str) -> Option<(String, String)> {
 enum Route {
     Xml(String),
     Status(u16),
+    /// An empty feed padded with a comment to this many bytes, streamed
+    /// without a length.
+    Large(usize),
 }
 
 #[derive(Default)]
@@ -891,6 +894,16 @@ impl FeedServer {
             .unwrap()
             .routes
             .insert(path.to_owned(), Route::Xml(xml.to_owned()));
+    }
+
+    /// Serves a body of `len` bytes, which a feed read must refuse when it is
+    /// over its cap.
+    pub fn set_large(&self, path: &str, len: usize) {
+        self.state
+            .lock()
+            .unwrap()
+            .routes
+            .insert(path.to_owned(), Route::Large(len));
     }
 
     pub fn set_status(&self, path: &str, status: u16) {
@@ -952,6 +965,22 @@ async fn serve_feed(
             ([("content-type", "application/rss+xml")], xml.clone()).into_response()
         }
         Some(Route::Status(code)) => StatusCode::from_u16(*code).unwrap().into_response(),
+        Some(Route::Large(len)) => {
+            // An empty feed, so that a reader without a cap would see every
+            // item as gone, followed by a comment as long as needed.
+            let mut body = br#"<?xml version="1.0"?><rss version="2.0"><channel><title>t</title><link>http://x/</link><description>d</description></channel></rss><!--"#.to_vec();
+            body.resize(len - 3, b' ');
+            body.extend_from_slice(b"-->");
+            let parts: Vec<Result<Bytes, std::convert::Infallible>> = body
+                .chunks(64 * 1024)
+                .map(|c| Ok(Bytes::copy_from_slice(c)))
+                .collect();
+            (
+                [("content-type", "application/rss+xml")],
+                axum::body::Body::from_stream(futures::stream::iter(parts)),
+            )
+                .into_response()
+        }
         None => StatusCode::NOT_FOUND.into_response(),
     }
 }

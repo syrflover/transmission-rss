@@ -10,7 +10,7 @@ use transmission_rss::{
         channels::{RuleInput, RuleState},
         history::{HistoryQuery, HistoryResult, MAX_PAGE_SIZE},
     },
-    worker::{CycleReport, TickOutcome, Worker},
+    worker::{feed::MAX_FEED_BYTES, CycleReport, TickOutcome, Worker},
 };
 
 async fn run(worker: &Worker) -> CycleReport {
@@ -767,6 +767,50 @@ async fn torrents_of_a_channel_whose_feed_failed_stay_while_the_stale_ones_of_a_
     let report = run(&worker).await;
     assert_eq!(report.channels_failed, 0);
     assert_eq!(torrent_hashes(&h), [hash_of('1'), hash_of('3')]);
+}
+
+#[tokio::test]
+async fn torrents_of_a_channel_whose_feed_was_over_the_size_cap_stay() {
+    let h = Harness::new().await;
+    let worker = two_channels_with_their_torrents(&h).await;
+    h.tr.clear_calls();
+
+    // X's feed has grown past the cap (and, read without one, would list
+    // nothing). Y is read, and its second show has left the feed.
+    h.feeds.set_large("feed-x", MAX_FEED_BYTES + 1);
+    h.feeds
+        .set_xml("feed-y", &feed_of(&[("[G] Show Y1 - 01", '3')]));
+    h.advance(300_000);
+    let report = run(&worker).await;
+
+    assert_eq!((report.channels_read, report.channels_failed), (1, 1));
+    assert_eq!(
+        report
+            .removed
+            .iter()
+            .map(|t| t.hash.as_str())
+            .collect::<Vec<_>>(),
+        [hash_of('4')]
+    );
+    assert_eq!(
+        torrent_hashes(&h),
+        [hash_of('1'), hash_of('2'), hash_of('3')]
+    );
+}
+
+#[tokio::test]
+async fn nothing_is_removed_when_every_feed_was_over_the_size_cap() {
+    let h = Harness::new().await;
+    let worker = two_channels_with_their_torrents(&h).await;
+    h.tr.preload(FakeTorrent::new(STALE_HASH, "Old Show").bot());
+
+    h.feeds.set_large("feed-x", MAX_FEED_BYTES + 1);
+    h.feeds.set_large("feed-y", MAX_FEED_BYTES + 1);
+    h.advance(300_000);
+    let report = run(&worker).await;
+
+    assert_eq!((report.channels_read, report.channels_failed), (0, 2));
+    assert!(h.tr.calls_of("torrent-remove").is_empty());
 }
 
 #[tokio::test]
