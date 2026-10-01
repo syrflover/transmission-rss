@@ -448,9 +448,10 @@ pub fn update_rule(
     update_rule_at(conn, id, expected, channel_id, input, at)
 }
 
-/// [`update_rule`] at a moment the caller's clock gives. A subscription that
-/// waited for its title and gets one here is noted as titled at `at`
-/// ([`Subscription::titled_at`]): what history recorded before is past for it.
+/// [`update_rule`] at a moment the caller's clock gives. A subscription whose
+/// phrase is given here, or cleared so that it waits for a title again, is
+/// noted as titled at `at` ([`Subscription::titled_at`]): what history recorded
+/// before is past for it, and a title candidate must be newer.
 pub fn update_rule_at(
     conn: &mut Connection,
     id: &str,
@@ -488,7 +489,9 @@ pub fn update_rule_at(
             input.state.as_str(),
         ],
     )?;
-    if current.subscription.is_some() && current.r#match.is_none() && input.r#match.is_some() {
+    // The phrase of a subscription changes hands: given, or cleared so that it
+    // waits for a title again. Either way what happens next is judged from now.
+    if current.subscription.is_some() && current.r#match.is_none() != input.r#match.is_none() {
         note_titled(&tx, id, at)?;
     }
     let updated = fetch_rule(&tx, id)?.expect("the rule still exists");
@@ -496,7 +499,8 @@ pub fn update_rule_at(
     Ok(updated)
 }
 
-/// Notes that the subscription of rule `id` got its title at `at`.
+/// Notes that the phrase of the subscription of rule `id` was given or cleared
+/// at `at`.
 fn note_titled(tx: &Transaction<'_>, id: &str, at: Millis) -> Result<()> {
     tx.execute(
         "UPDATE rule_subscriptions SET titled_at = ?2 WHERE rule_id = ?1",

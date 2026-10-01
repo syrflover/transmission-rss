@@ -1,8 +1,9 @@
 -- Title-waiting subscriptions (docs/specs/collection.md, 방영작 구독).
 --
--- `rule_subscriptions.titled_at` (Unix ms) is when a subscription that waited
--- for its title (a rule whose match phrase was NULL) was given one. What
--- history first saw before then, without any rule taking it, is past for the
+-- `rule_subscriptions.titled_at` (Unix ms) is when the match phrase of a
+-- subscription was last given or cleared: a subscription that waited for its
+-- title (a rule whose match phrase was NULL) was given one, or one that had a
+-- phrase was blanked to wait again. What history first saw before then, without any rule taking it, is past for the
 -- rule, as it is for what came before `subscribed_at` or while the rule was
 -- paused: the cycle leaves it alone and only the user receives it
 -- (`ChannelPlan::is_past`). NULL for a subscription that had its phrase from the
