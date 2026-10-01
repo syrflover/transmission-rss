@@ -40,6 +40,7 @@ export function SubscriptionCard({ item }: { item: SubscriptionItem }) {
       <div className="flex min-w-0 flex-wrap items-center gap-1.5">
         {anime && <span className={tag}>{airing(anime)}</span>}
         {start && <span className="text-xs text-text-muted">{start} 시작</span>}
+        {item.state === "paused" && <span className={`${tag} text-text-primary`}>멈춤</span>}
         <span className={`${tag} break-all`}>{item.channel_name ?? item.channel_host}</span>
       </div>
 

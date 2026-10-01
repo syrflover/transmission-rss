@@ -127,6 +127,19 @@ export interface UnrecognizedFile {
   message: string;
 }
 
+/** A subscription rule connected to a season of the work. */
+export interface WorkSubscription {
+  season: number;
+  rule_id: string;
+  rule_version: number;
+  rule_state: "active" | "paused" | "archived";
+  anime_no: number;
+  /** Anissia's title; `null` when the app has no snapshot of the anime. */
+  subject: string | null;
+  subtitles: "follow" | "undecided" | "none";
+  creator: string | null;
+}
+
 /** A rule that saves into the work's folder. */
 export interface WorkRule {
   id: string;
@@ -135,7 +148,7 @@ export interface WorkRule {
   /** Relative to the collect folder. */
   directory: string;
   save_path: string;
-  state: "active" | "archived";
+  state: "active" | "paused" | "archived";
 }
 
 export interface WorkDetail {
@@ -147,6 +160,10 @@ export interface WorkDetail {
   added_at: number | null;
   /** The first season's first linked AniList entry's native title. */
   native_title: string | null;
+  /** Anissia's title of the anime the work's first connected season follows; `null` without one. */
+  korean_title: string | null;
+  /** The subscription rules connected to a season of this work, by season. */
+  subscriptions: WorkSubscription[];
   /** Ascending by season number. */
   seasons: WorkSeason[];
   unrecognized: UnrecognizedFile[];

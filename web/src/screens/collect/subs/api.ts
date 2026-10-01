@@ -36,6 +36,8 @@ export interface SubscriptionBrief {
   season_id: string | null;
   subscribed_at: number;
   anime: Anime | null;
+  /** The quarter the anime started in (or the subscription began in). */
+  quarter: Quarter;
 }
 
 export interface SubscribedRule {
@@ -85,6 +87,8 @@ export interface Quarter {
 
 export interface SubscriptionItem {
   rule_id: string;
+  /** `paused` while `영상 받기` is off. */
+  state: "active" | "paused";
   rule_version: number;
   channel_id: string;
   channel_name: string | null;
@@ -153,6 +157,30 @@ export interface NewSubscription {
 export async function subscribe(body: NewSubscription): Promise<Rule> {
   const { rule } = await api<{ rule: Rule }>("/subscriptions", { method: "POST", body });
   return rule;
+}
+
+/** Changes the creator a subscription follows; `null` is `제작자 미정`. */
+export function changeCreator(rule: Pick<Rule, "id" | "version">, creator: string | null): Promise<Rule> {
+  return api<Rule>(`/rules/${encodeURIComponent(rule.id)}/creator`, {
+    method: "PUT",
+    body: { version: rule.version, creator },
+  });
+}
+
+export interface ScheduleLink {
+  anissia_anime_no: number;
+  /** The schedule week the anime was picked from. */
+  week: number;
+  subtitles: SubtitleMode;
+  creator: string | null;
+}
+
+/** `편성표와 연결`: turns an existing rule into a subscription, keeping its phrase, folder and order. */
+export function linkToSchedule(rule: Pick<Rule, "id" | "version">, link: ScheduleLink): Promise<Rule> {
+  return api<Rule>(`/rules/${encodeURIComponent(rule.id)}/subscription`, {
+    method: "POST",
+    body: { version: rule.version, ...link },
+  });
 }
 
 /**

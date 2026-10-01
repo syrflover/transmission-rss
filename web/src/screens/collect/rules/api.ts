@@ -15,7 +15,12 @@ export interface RegexProblem {
   detail: string;
 }
 
-export type RuleState = "active" | "archived";
+/**
+ * `active` collects; `paused` (`영상 받기` off) collects nothing and keeps its
+ * work folder in place; `archived` (`보관`) has its folder moved to the archive
+ * folder.
+ */
+export type RuleState = "active" | "paused" | "archived";
 
 /** `보관` (`archive`) or `복원` (`restore`) of a rule: the `rule_archive` command. */
 export type ArchiveDirection = "archive" | "restore";
@@ -28,6 +33,30 @@ export type ArchiveDirection = "archive" | "restore";
 export interface ArchiveMove {
   direction: ArchiveDirection;
   command: Command;
+}
+
+/** The season a subscription is connected to and how far it has come. */
+export interface RuleSeason {
+  season_id: string;
+  work_id: string;
+  /** The work's folder name. */
+  work_name: string;
+  number: number;
+  /** Where the work's cover is served, if it has one. */
+  cover_url: string | null;
+  /** How many episodes of the season have a video. */
+  videos: number;
+  /** The season's episode count by AniList; `null` when unknown. */
+  episodes: number | null;
+}
+
+/** Why a subscription was not connected: the season its videos are in is held by another anime. */
+export interface SeasonBlocked {
+  work_id: string;
+  work_name: string | null;
+  number: number;
+  holder_anime_no: number | null;
+  holder_subject: string | null;
 }
 
 export interface Rule {
@@ -53,6 +82,10 @@ export interface Rule {
   archive_move: ArchiveMove | null;
   /** Set when the rule follows an anime of Anissia's schedule. */
   subscription: SubscriptionBrief | null;
+  /** The season a subscription is connected to; `null` before it is. */
+  season: RuleSeason | null;
+  /** Set when the season the rule's videos are in is held by another anime. */
+  season_blocked: SeasonBlocked | null;
 }
 
 export interface ChannelBrief {
@@ -147,6 +180,17 @@ export function saveRule(rule: Rule, fields: RuleFields): Promise<Rule> {
   return api<Rule>(`/rules/${encodeURIComponent(rule.id)}`, {
     method: "PUT",
     body: { version: rule.version, channel_id: rule.channel_id, ...body(fields) },
+  });
+}
+
+/**
+ * The rule detail's switches, applied at once: `video` is `영상 받기` (off pauses
+ * the rule) and `subtitles` is `자막 받기` of a subscription. Send one.
+ */
+export function switchRule(rule: Rule, change: { video: boolean } | { subtitles: boolean }): Promise<Rule> {
+  return api<Rule>(`/rules/${encodeURIComponent(rule.id)}/switch`, {
+    method: "PUT",
+    body: { version: rule.version, ...change },
   });
 }
 

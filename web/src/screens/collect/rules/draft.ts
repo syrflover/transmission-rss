@@ -46,8 +46,8 @@ export function sameDraft(a: Draft, b: Draft): boolean {
     a.case_insensitive === b.case_insensitive &&
     a.directory.trim() === b.directory.trim() &&
     parseEpisode(a.episode) === parseEpisode(b.episode) &&
-    a.episode.trim() === b.episode.trim() &&
-    a.state === b.state
+    a.episode.trim() === b.episode.trim()
+    // The state is not typed: the switches and the worker change it, and the draft follows.
   );
 }
 
