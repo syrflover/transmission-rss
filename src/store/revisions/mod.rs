@@ -242,6 +242,13 @@ pub struct Revision {
     /// is not there); `None` once a look finds it
     /// ([`RevisionStore::folder_looked_at`]). See [`FOLDER_GONE_AFTER`].
     pub folder_away_since: Option<Millis>,
+    /// When the replacement first went ahead to remove the old video
+    /// ([`RevisionStore::claim`]); kept when it is received again after it
+    /// ended ([`RevisionStore::reopen`]): the old release stays superseded.
+    pub claimed_at: Option<Millis>,
+    /// The last old torrent a claim of the replacement found, kept like
+    /// `claimed_at`; [`Revision::old_torrent_hash`] is the current claim's.
+    pub superseded_hash: Option<String>,
     pub state: RevisionState,
     /// Why the replacement failed or waits; free of secret values.
     pub reason: Option<String>,
@@ -480,7 +487,7 @@ pub struct WorkRef {
 const COLUMNS: &str = "id, item_id, old_item_id, rule_id, folder, episode_name, old_version, \
      new_version, expected_crc, torrent_hash, received_name, file_crc, state, reason, \
      created_at, updated_at, replaced_at, old_crc, old_torrent_hash, overtaken_by, \
-     file_identity, new_missing_at, folder_away_since";
+     file_identity, new_missing_at, folder_away_since, claimed_at, superseded_hash";
 
 fn from_row(row: &Row<'_>) -> rusqlite::Result<Revision> {
     from_row_at(row, 0)
@@ -520,6 +527,8 @@ fn from_row_at(row: &Row<'_>, at: usize) -> rusqlite::Result<Revision> {
         file_identity: row.get(at + 20)?,
         new_missing_at: row.get(at + 21)?,
         folder_away_since: row.get(at + 22)?,
+        claimed_at: row.get(at + 23)?,
+        superseded_hash: row.get(at + 24)?,
     })
 }
 
@@ -941,14 +950,23 @@ impl RevisionStore {
                     _ => Claim::Wait,
                 };
                 if claim == Claim::Go {
+                    // From `verified` the claim is for what was found now
+                    // (a row received again may hold the torrent an earlier
+                    // claim removed); again after a restart, `removing`
+                    // keeps the torrent the first look found, which may be
+                    // gone by now.
+                    let fresh = row.state == RevisionState::Verified;
                     tx.execute(
                         "UPDATE video_revisions
                             SET state = 'removing', old_item_id = COALESCE(?2, old_item_id),
                                 old_version = COALESCE(?3, old_version),
-                                old_torrent_hash = COALESCE(?4, old_torrent_hash),
+                                old_torrent_hash = CASE WHEN ?6 THEN ?4
+                                                        ELSE COALESCE(?4, old_torrent_hash) END,
+                                superseded_hash = COALESCE(?4, superseded_hash),
+                                claimed_at = COALESCE(claimed_at, ?5),
                                 updated_at = ?5
                           WHERE id = ?1",
-                        params![id, old.item_id, old.version, old.torrent_hash, at],
+                        params![id, old.item_id, old.version, old.torrent_hash, at, fresh],
                     )?;
                 }
                 tx.commit()?;
@@ -997,16 +1015,18 @@ impl RevisionStore {
                 // The old video's item, and every item of the torrent removed
                 // with it (the same release through another channel). A
                 // replacement received again after it ended with no video
-                // ([`RevisionStore::reopen`]) removed that torrent already.
+                // ([`RevisionStore::reopen`]) went ahead before
+                // ([`Revision::claimed_at`]).
                 let mut stmt = c.prepare(
                     "SELECT h.identity_key FROM video_revisions r
                        JOIN history_items h
                          ON h.id = r.old_item_id
                          OR (r.old_torrent_hash IS NOT NULL AND h.torrent_hash = r.old_torrent_hash)
+                         OR (r.superseded_hash IS NOT NULL AND h.torrent_hash = r.superseded_hash)
                       WHERE h.channel_id = ?1
                         AND (r.state IN ('removing', 'removed', 'done', 'abandoned')
                              OR (r.state IN ('receiving', 'verified')
-                                 AND r.old_torrent_hash IS NOT NULL))",
+                                 AND r.claimed_at IS NOT NULL))",
                 )?;
                 let mut rows = stmt.query([&channel_id])?;
                 while let Some(row) = rows.next()? {

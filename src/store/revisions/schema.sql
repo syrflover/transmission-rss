@@ -22,7 +22,11 @@
 -- a row ends the replacement. `folder_away_since` is when a look first found
 -- `folder` itself away (a mount that is not there), NULL once a look finds
 -- it: a folder away for a week ends the failures and says so on the
--- replacements under way. `state` is where
+-- replacements under way. `claimed_at` is when the replacement first went
+-- ahead to remove the old video (a claim), and `superseded_hash` the last
+-- old torrent a claim of it found: neither is cleared when the replacement
+-- is received again after it ended (`old_torrent_hash` is the torrent the
+-- current claim removes), so the old release stays superseded. `state` is where
 -- the replacement is; the worker writes each step before it takes the next
 -- (see `RevisionState`). `overtaken_by` is the row of the higher revision a
 -- `skipped` row was skipped for while that one was on its way; when that row
@@ -55,7 +59,9 @@ CREATE TABLE video_revisions (
     replaced_at   INTEGER,
     overtaken_by  INTEGER REFERENCES video_revisions (id),
     new_missing_at INTEGER,
-    folder_away_since INTEGER
+    folder_away_since INTEGER,
+    claimed_at    INTEGER,
+    superseded_hash TEXT
 );
 
 CREATE INDEX video_revisions_old_item ON video_revisions (old_item_id);

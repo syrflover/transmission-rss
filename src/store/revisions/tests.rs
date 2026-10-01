@@ -826,3 +826,83 @@ async fn rows_of_one_torrent_that_come_back_start_over_once() {
         ]
     );
 }
+
+/// A replacement that removed the old torrent, ended with no video left and
+/// was received again claims what it finds this time: the old torrent it
+/// removed before is no longer the one it removes (a restart would wait for
+/// it to go), while the release it removed stays superseded, through every
+/// channel, from the moment it is received again.
+#[tokio::test]
+async fn a_replacement_received_again_claims_what_it_finds_and_keeps_the_old_release_superseded() {
+    let (_dir, db) = db().await;
+    let store = RevisionStore::new(db.clone());
+    let v1 = item(&db, "14").await;
+    HistoryStore::new(db.clone())
+        .record(
+            1,
+            vec![Observation {
+                channel_id: "c2".into(),
+                channel_label: "https://y/".into(),
+                identity_key: "other-14".into(),
+                title: "[SubsPlease] Show - 14 (1080p).mkv".into(),
+                link: "magnet:?".into(),
+                result: HistoryResult::Duplicate,
+                rule_id: Some("r2".into()),
+                torrent_hash: Some("hash-14".into()),
+                reason: None,
+            }],
+        )
+        .await
+        .unwrap();
+    let v2 = store
+        .create(10, of_episode(item(&db, "14v2").await, "14v2", 2))
+        .await
+        .unwrap();
+    verified(&store, v2.id).await;
+    let found = OldVideo {
+        item_id: Some(v1),
+        version: Some(1),
+        torrent_hash: Some("hash-14".into()),
+    };
+    assert_eq!(store.claim(v2.id, 20, found).await.unwrap(), Claim::Go);
+    let step = Step::Abandoned {
+        reason: Some("no video".into()),
+    };
+    assert!(store
+        .advance(v2.id, 30, RevisionState::Removing, step)
+        .await
+        .unwrap());
+    let row = store
+        .reopen(v2.id, 40, "hash-14v2".into())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.state, RevisionState::Receiving);
+    let superseded = |store: RevisionStore| async move {
+        let other = store
+            .marks("c2".into(), vec!["other-14".into()])
+            .await
+            .unwrap();
+        let own = store.marks("c1".into(), vec!["14".into()]).await.unwrap();
+        (other.get("other-14").cloned(), own.get("14").cloned())
+    };
+    assert_eq!(
+        superseded(store.clone()).await,
+        (Some(Mark::Superseded), Some(Mark::Superseded))
+    );
+
+    // A file of no torrent is at the episode name now.
+    verified(&store, v2.id).await;
+    let found = OldVideo {
+        item_id: Some(v1),
+        version: Some(1),
+        torrent_hash: None,
+    };
+    assert_eq!(store.claim(v2.id, 50, found).await.unwrap(), Claim::Go);
+    let row = store.by_item(v2.item_id).await.unwrap().unwrap();
+    assert_eq!(row.old_torrent_hash, None);
+    assert_eq!(
+        superseded(store.clone()).await,
+        (Some(Mark::Superseded), Some(Mark::Superseded))
+    );
+}
