@@ -29,7 +29,9 @@
 //! one decode runs at a time in a process, keeping its turn until it ends even
 //! when its caller went away. The bytes are shared ([`Bytes`]), never copied,
 //! from the upload's body to the decode and the file, and at most
-//! [`UPLOAD_SLOTS`] uploads are taken in at once.
+//! [`UPLOAD_SLOTS`] uploads are taken in at once. At most [`SERVING_SLOTS`]
+//! image files are read at once to serve or check them, and a file checked
+//! before is read again only when it changed ([`files::Verified`]).
 
 pub mod anilist;
 pub mod files;
@@ -74,6 +76,9 @@ pub const USER_MAX_WAIT: Duration = Duration::from_secs(10);
 /// How many uploads a process takes in at once, from reading the body to the
 /// published file: at most this many bodies of [`MAX_IMAGE_BYTES`] are held.
 pub const UPLOAD_SLOTS: usize = 2;
+/// Image files read at once to serve or check them, each up to
+/// [`MAX_IMAGE_BYTES`].
+pub const SERVING_SLOTS: usize = 2;
 
 /// Why a user's artwork action did not happen. Nothing was changed.
 #[derive(Debug, thiserror::Error)]
@@ -118,6 +123,8 @@ pub struct Artwork {
     clock: Clock,
     decoding: Arc<Semaphore>,
     uploads: Arc<Semaphore>,
+    serving: Arc<Semaphore>,
+    verified: Arc<files::Verified>,
 }
 
 impl Artwork {
@@ -139,6 +146,8 @@ impl Artwork {
             clock,
             decoding: Arc::new(Semaphore::new(1)),
             uploads: Arc::new(Semaphore::new(UPLOAD_SLOTS)),
+            serving: Arc::new(Semaphore::new(SERVING_SLOTS)),
+            verified: Arc::default(),
         }
     }
 
@@ -311,15 +320,36 @@ impl Artwork {
         Ok(selection)
     }
 
-    /// The bytes of the work's current image, checked (see
-    /// [`files::read_verified`]).
+    /// The bytes of the work's current image, checked (see [`files::check`]).
     pub async fn image(&self, image: ImageRef) -> Result<Vec<u8>, Unavailable> {
+        self.check(image, true).await.map(Option::unwrap_or_default)
+    }
+
+    /// Whether the image's file is the one recorded, without reading it again
+    /// when it did not change since it was last checked.
+    pub async fn image_state(&self, image: ImageRef) -> Result<(), Unavailable> {
+        self.check(image, false).await.map(|_| ())
+    }
+
+    /// Checks on a blocking thread, at most [`SERVING_SLOTS`] at a time; a
+    /// check keeps its turn until it ends, even when the caller stops waiting.
+    async fn check(&self, image: ImageRef, read: bool) -> Result<Option<Vec<u8>>, Unavailable> {
         let Some(app) = self.app_data.clone() else {
             return Err(Unavailable::Unverified);
         };
-        tokio::task::spawn_blocking(move || files::read_verified(&app, &image))
+        let permit = self
+            .serving
+            .clone()
+            .acquire_owned()
             .await
-            .unwrap_or(Err(Unavailable::Unverified))
+            .expect("never closed");
+        let verified = self.verified.clone();
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            files::check(&app, &image, &verified, read)
+        })
+        .await
+        .unwrap_or(Err(Unavailable::Unverified))
     }
 
     /// Removes the image files nothing refers to any more; failures are logged.

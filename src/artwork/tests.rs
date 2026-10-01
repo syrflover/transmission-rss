@@ -1033,6 +1033,79 @@ async fn an_image_is_served_only_while_its_file_is_the_recorded_one() {
 }
 
 #[tokio::test]
+async fn a_file_checked_before_is_hashed_again_only_when_it_changed() {
+    let env = Env::new(&["A"]).await;
+    let id = env.id("A").await;
+    let v = env.selection("A").await.version;
+    let s = env.art.upload(&id, v, samples::png(), None).await.unwrap();
+    let image = image_of(&s).clone();
+    let path = env.path(&image.relative_path);
+    let good = fs::read(&path).unwrap();
+
+    let hashed = env.art.verified.hashed();
+    assert_eq!(env.art.image(image.clone()).await, Ok(good.clone()));
+    assert_eq!(env.art.verified.hashed(), hashed + 1);
+    // Served and told again: nothing is hashed while the file is as it was.
+    for _ in 0..3 {
+        assert_eq!(env.art.image(image.clone()).await, Ok(good.clone()));
+        assert_eq!(env.art.image_state(image.clone()).await, Ok(()));
+    }
+    assert_eq!(env.art.verified.hashed(), hashed + 1);
+
+    // Other bytes of the same size in the same file: found at the next check.
+    let mut other = good.clone();
+    let last = other.len() - 1;
+    other[last] ^= 0xff;
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .and_then(|mut f| std::io::Write::write_all(&mut f, &other))
+        .unwrap();
+    assert_eq!(
+        env.art.image_state(image.clone()).await,
+        Err(Unavailable::Mismatch)
+    );
+    assert_eq!(
+        env.art.image(image.clone()).await,
+        Err(Unavailable::Mismatch)
+    );
+    // The right bytes back (another file in its place): hashed once more.
+    let hashed = env.art.verified.hashed();
+    let back = env.path("back.png");
+    fs::write(&back, &good).unwrap();
+    fs::rename(&back, &path).unwrap();
+    assert_eq!(env.art.image_state(image.clone()).await, Ok(()));
+    assert_eq!(env.art.image(image).await, Ok(good));
+    assert_eq!(env.art.verified.hashed(), hashed + 1);
+}
+
+#[tokio::test]
+async fn image_files_are_read_a_few_at_a_time() {
+    let env = Env::new(&["A"]).await;
+    let id = env.id("A").await;
+    let v = env.selection("A").await.version;
+    let s = env.art.upload(&id, v, samples::png(), None).await.unwrap();
+    let image = image_of(&s).clone();
+
+    let taken = env
+        .art
+        .serving
+        .clone()
+        .acquire_many_owned(super::SERVING_SLOTS as u32)
+        .await
+        .unwrap();
+    let art = env.art.clone();
+    let served = tokio::spawn({
+        let image = image.clone();
+        async move { art.image(image).await }
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(!served.is_finished(), "a read waits for a turn");
+    drop(taken);
+    assert!(served.await.unwrap().is_ok());
+}
+
+#[tokio::test]
 async fn the_cleanup_keeps_files_other_references_lead_to() {
     let env = Env::new(&["A", "B", "C", "D", "E"]).await;
     let (a, b, c, d, e) = (

@@ -68,7 +68,7 @@ docker compose -f docker-compose.trss.yml up -d
 
 Restarting one container leaves the other running: `docker compose -f docker-compose.trss.yml restart trss-web` does not pause collection.
 
-To back up, copy `TRSS_DATA_DIR/trss.db` and `TRSS_DATA_DIR/artwork/` together while the containers are stopped (or use `sqlite3 trss.db ".backup copy.db"` while they run, then copy `artwork/`). The database records which cover file each work uses and checks the file's size and SHA-256 before showing it, so a database restored without its `artwork/` folder shows no covers until the files are back. The containers run as root, so the files there belong to root.
+To back up, copy `TRSS_DATA_DIR/trss.db` and `TRSS_DATA_DIR/artwork/` together while the containers are stopped (or use `sqlite3 trss.db ".backup copy.db"` while they run, then copy `artwork/`). The database records which cover file each work uses and checks the file's size and SHA-256 before showing it (again whenever the file changed), so a database restored without its `artwork/` folder shows no covers until the files are back. The containers run as root, so the files there belong to root.
 
 ### Resource limits
 

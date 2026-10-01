@@ -222,8 +222,21 @@ async fn an_image_whose_file_changed_is_not_served_and_its_state_says_why() {
         .unwrap()
         .root()
         .join(&selection.image.unwrap().relative_path);
+    let (status, headers, _) = call(&env.state, Method::GET, &url, Body::empty(), &[]).await;
+    assert_eq!(status, StatusCode::OK);
+    let etag = headers[header::ETAG].to_str().unwrap().to_owned();
     std::fs::write(&path, b"not the image").unwrap();
     let (status, _, _) = call(&env.state, Method::GET, &url, Body::empty(), &[]).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    // A browser holding the old image is not told it is still good.
+    let (status, _, _) = call(
+        &env.state,
+        Method::GET,
+        &url,
+        Body::empty(),
+        &[(header::IF_NONE_MATCH, &etag)],
+    )
+    .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     let (_, now) = json_call(&env.state, Method::GET, &base(&env), None).await;
     assert_eq!(now["image"]["status"], "mismatch");

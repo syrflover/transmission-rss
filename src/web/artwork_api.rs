@@ -131,7 +131,7 @@ async fn view(artwork: &Artwork, selection: Selection) -> ArtworkView {
     let image = match selection.image {
         None => None,
         Some(image) => {
-            let status = match artwork.image(image.clone()).await {
+            let status = match artwork.image_state(image.clone()).await {
                 Ok(_) => "available",
                 Err(unavailable) => unavailable.code(),
             };
@@ -235,20 +235,23 @@ async fn image(
     let Some(image) = selection.image else {
         return not_found();
     };
-    let (format, sha256) = (image.format, image.sha256.clone());
-    let bytes = match state.artwork.image(image).await {
-        Ok(bytes) => bytes,
-        Err(_) => return not_found(),
-    };
-    let etag = format!("\"{sha256}\"");
-    let mut response = if headers
+    let format = image.format;
+    let etag = format!("\"{}\"", image.sha256);
+    let cached = headers
         .get(header::IF_NONE_MATCH)
         .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| v.split(',').any(|t| t.trim() == etag))
-    {
-        StatusCode::NOT_MODIFIED.into_response()
+        .is_some_and(|v| v.split(',').any(|t| t.trim() == etag));
+    // A browser holding the image needs only to know it is still there.
+    let mut response = if cached {
+        match state.artwork.image_state(image).await {
+            Ok(()) => StatusCode::NOT_MODIFIED.into_response(),
+            Err(_) => return not_found(),
+        }
     } else {
-        (StatusCode::OK, Body::from(bytes)).into_response()
+        match state.artwork.image(image).await {
+            Ok(bytes) => (StatusCode::OK, Body::from(bytes)).into_response(),
+            Err(_) => return not_found(),
+        }
     };
     let headers = response.headers_mut();
     headers.insert(

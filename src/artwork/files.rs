@@ -21,10 +21,19 @@
 //!
 //! # Serving
 //!
-//! [`read_verified`] opens the referenced path one component at a time
-//! without following links, from the app data folder down, and hands out the
-//! bytes only when the size, the SHA-256 and the format's first bytes are the
-//! ones recorded. Whatever it finds is reported, never fixed up.
+//! [`check`] opens the referenced path one component at a time without
+//! following links, from the app data folder down, and hands out the bytes
+//! only when the size, the SHA-256 and the format's first bytes are the ones
+//! recorded. Whatever it finds is reported, never fixed up.
+//!
+//! A file whose hash matched is remembered by its [`Stamp`] (device, inode,
+//! size, modification and change times in nanoseconds; [`Verified`]). While
+//! the opened file has the same stamp, it is not read again to tell its state
+//! (a status, a `304`) or hashed again to serve it: a write changes its change
+//! time and a replacement its inode. Kernels before multigrain timestamps
+//! (Linux 6.13) can give a write within the same clock tick (a few
+//! milliseconds) after a check the same change time, so such a write can go
+//! unnoticed until the next change.
 //!
 //! # Cleanup
 //!
@@ -38,11 +47,15 @@
 //! selection took, again only by recorded identity.
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs::{self, File, OpenOptions},
     io::{self, Read, Write},
     os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Component, Path, PathBuf},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Mutex,
+    },
     time::Duration,
 };
 
@@ -295,9 +308,84 @@ fn open_inside(root: &Path, relative: &str) -> Result<File, Unavailable> {
     Ok(File::from(fd))
 }
 
-/// The bytes of `image` from the app data folder, checked against the
-/// reference. Blocking.
-pub fn read_verified(app: &AppData, image: &ImageRef) -> Result<Vec<u8>, Unavailable> {
+/// What tells a file's contents apart without reading them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Stamp {
+    dev: u64,
+    ino: u64,
+    size: u64,
+    mtime_ns: i128,
+    ctime_ns: i128,
+}
+
+impl Stamp {
+    fn of(meta: &fs::Metadata) -> Stamp {
+        let ns = |s: i64, n: i64| s as i128 * 1_000_000_000 + n as i128;
+        Stamp {
+            dev: meta.dev(),
+            ino: meta.ino(),
+            size: meta.size(),
+            mtime_ns: ns(meta.mtime(), meta.mtime_nsec()),
+            ctime_ns: ns(meta.ctime(), meta.ctime_nsec()),
+        }
+    }
+}
+
+/// Files whose bytes matched their reference, by path, with the stamp they
+/// had then. At most [`VERIFIED_ENTRIES`]; past that it starts over.
+#[derive(Default)]
+pub struct Verified {
+    known: Mutex<HashMap<String, (Stamp, String, Format)>>,
+    hashed: AtomicUsize,
+}
+
+/// How many verified files are remembered.
+pub const VERIFIED_ENTRIES: usize = 4096;
+
+impl Verified {
+    fn holds(&self, image: &ImageRef, stamp: Stamp) -> bool {
+        let known = self.known.lock().unwrap_or_else(|e| e.into_inner());
+        known
+            .get(&image.relative_path)
+            .is_some_and(|(s, sha256, format)| {
+                *s == stamp && *sha256 == image.sha256 && *format == image.format
+            })
+    }
+
+    fn remember(&self, image: &ImageRef, stamp: Option<Stamp>) {
+        let mut known = self.known.lock().unwrap_or_else(|e| e.into_inner());
+        match stamp {
+            Some(stamp) => {
+                if known.len() >= VERIFIED_ENTRIES {
+                    known.clear();
+                }
+                known.insert(
+                    image.relative_path.clone(),
+                    (stamp, image.sha256.clone(), image.format),
+                );
+            }
+            None => {
+                known.remove(&image.relative_path);
+            }
+        }
+    }
+
+    /// How many times a file was hashed.
+    pub fn hashed(&self) -> usize {
+        self.hashed.load(Ordering::Relaxed)
+    }
+}
+
+/// Checks `image`'s file in the app data folder against the reference and,
+/// with `read`, hands out its bytes (`None` without). A file verified before
+/// with the same [`Stamp`] is neither read to tell its state nor hashed again.
+/// Blocking.
+pub fn check(
+    app: &AppData,
+    image: &ImageRef,
+    verified: &Verified,
+    read: bool,
+) -> Result<Option<Vec<u8>>, Unavailable> {
     let mut file = open_inside(&app.root, &image.relative_path)?;
     let meta = file.metadata().map_err(|_| Unavailable::Unverified)?;
     if !meta.file_type().is_file() {
@@ -309,18 +397,32 @@ pub fn read_verified(app: &AppData, image: &ImageRef) -> Result<Vec<u8>, Unavail
     if meta.len() > MAX_IMAGE_BYTES as u64 {
         return Err(Unavailable::Unverified);
     }
+    let before = Stamp::of(&meta);
+    let known = verified.holds(image, before);
+    if known && !read {
+        return Ok(None);
+    }
     let mut bytes = Vec::with_capacity(meta.len() as usize);
     (&mut file)
         .take(MAX_IMAGE_BYTES as u64 + 1)
         .read_to_end(&mut bytes)
         .map_err(|_| Unavailable::Unverified)?;
-    if bytes.len() as u64 != image.byte_size
-        || sha256_hex(&bytes) != image.sha256
-        || sniff(&bytes) != Some(image.format)
-    {
+    // The bytes read are the stamped ones only when nothing changed meanwhile.
+    let after = file.metadata().ok().map(|m| Stamp::of(&m));
+    let unchanged = (after == Some(before)).then_some(before);
+    if bytes.len() as u64 != image.byte_size || sniff(&bytes) != Some(image.format) {
+        verified.remember(image, None);
         return Err(Unavailable::Mismatch);
     }
-    Ok(bytes)
+    if !(known && unchanged.is_some()) {
+        verified.hashed.fetch_add(1, Ordering::Relaxed);
+        if sha256_hex(&bytes) != image.sha256 {
+            verified.remember(image, None);
+            return Err(Unavailable::Mismatch);
+        }
+        verified.remember(image, unchanged);
+    }
+    Ok(read.then_some(bytes))
 }
 
 /// The path a reference names, spelled out lexically (`.` and `..` resolved
