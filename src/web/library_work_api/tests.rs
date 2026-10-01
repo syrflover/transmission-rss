@@ -139,7 +139,7 @@ async fn the_list_route_is_not_taken_by_the_detail_route() {
     let (state, id) = state_with_work().await;
     let (status, body) = get(&state, "/library/works").await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["works"][0]["id"], id.as_str());
+    assert_eq!(body["items"][0]["id"], id.as_str());
 }
 
 #[tokio::test]

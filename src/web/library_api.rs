@@ -1,9 +1,21 @@
-//! `GET /api/library/works`: the library list (`docs/specs/library.md`, 라이브러리
-//! 화면). One answer carries every work, so the screen sorts, filters and
-//! searches without asking again.
+//! `GET /api/library/works`: the library list, one page at a time
+//! (`docs/specs/library.md`, 라이브러리 화면). The server sorts, filters and
+//! searches; the screen asks for the next page when it reaches the end.
+//!
+//! ```text
+//! GET /api/library/works?sort=subtitle&filter=all&q=lycoris&after=<cursor>&limit=60
+//! ```
+//!
+//! | parameter | meaning                                                              |
+//! | --------- | -------------------------------------------------------------------- |
+//! | `sort`    | `title`, `year`, `added`, `video`, `subtitle` (default `subtitle`)  |
+//! | `filter`  | `all`, `airing`, `complete`, `partial`, `none`, `check` (default `all`) |
+//! | `q`       | text the work's title (its folder name) contains, without regard to case; NFC-normalized |
+//! | `after`   | the `next` of the previous page; leave out for the first page        |
+//! | `limit`   | 1 to 200 works, default 60                                           |
 //!
 //! ```json
-//! { "works": [{
+//! { "items": [{
 //!     "id": "…", "name": "Lycoris Recoil", "missing": false,
 //!     "watch_folder": { "id": "…", "path": "/media/anime" },
 //!     "latest_season": 2,
@@ -14,9 +26,24 @@
 //!     "added_at": 1760000000000,
 //!     "video_added_at": null,
 //!     "subtitle_added_at": 1760000100000
-//! }] }
+//!   }],
+//!   "next": "7b2273…", "total": 520, "library_count": 520 }
 //! ```
 //!
+//! - `next` is an opaque cursor, `null` after the last page. It continues
+//!   *after the last item of this page*, so a work added while the client pages
+//!   never makes it see an item twice. A cursor goes with the same `sort` as
+//!   the page it came from (another sort is a `400`); the filter and the search
+//!   are sent again each time. `total` is how many works the filter and the
+//!   search match, `library_count` how many the library has.
+//! - Order: the sort's time latest first (`added`: the work's, `video` /
+//!   `subtitle`: the latest known video / subtitle over every season), an
+//!   unknown time after every known one, then the title (NFC, case ignored),
+//!   then the ID. `title` and `year` are the title order (no work has an airing
+//!   year yet).
+//! - Filters: `complete`, `partial` and `none` are the subtitle coverage of the
+//!   latest season; `check` is a subtitle file that could not be placed or a
+//!   work whose folder is gone; `airing` matches nothing until airing is known.
 //! - `name` is the work's folder name. `latest_season` is the highest season
 //!   number recorded for the work (`null` without a season folder); `video` and
 //!   `subtitle` are the episodes of that season that have a file, as ranges of
@@ -31,13 +58,18 @@
 //! - Times are Unix milliseconds, `null` when unknown: `added_at` is when the
 //!   work first appeared, `video_added_at` / `subtitle_added_at` the latest
 //!   known time a video / subtitle was added over every season.
-//! - Works come by folder name; the order the screen shows is the screen's.
 
-use axum::{extract::State, routing::get, Json, Router};
-use serde::Serialize;
+use axum::{
+    extract::{rejection::QueryRejection, Query, State},
+    routing::get,
+    Json, Router,
+};
+use serde::{Deserialize, Serialize};
 
 use super::{ApiError, AppState};
-use crate::store::library::{EpisodeRange, LibraryError, WorkOverview};
+use crate::store::library::{
+    Cursor, EpisodeRange, Filter, LibraryError, ListQuery, Sort, WorkOverview,
+};
 
 pub fn routes() -> Router<AppState> {
     Router::new().route("/library/works", get(list))
@@ -103,16 +135,95 @@ impl From<WorkOverview> for WorkView {
 }
 
 #[derive(Serialize)]
-struct WorkList {
-    works: Vec<WorkView>,
+struct WorkPage {
+    items: Vec<WorkView>,
+    next: Option<String>,
+    total: usize,
+    library_count: usize,
 }
 
-async fn list(State(state): State<AppState>) -> Result<Json<WorkList>, ApiError> {
-    let works = state.library.overview().await.map_err(|e| match e {
+const DEFAULT_LIMIT: usize = 60;
+const MAX_LIMIT: usize = 200;
+
+/// The parameters as sent; each is checked in [`ListQuery`]'s constructor so a
+/// bad one answers with a sentence instead of the extractor's plain text.
+#[derive(Deserialize, Default)]
+struct Params {
+    sort: Option<String>,
+    filter: Option<String>,
+    q: Option<String>,
+    after: Option<String>,
+    limit: Option<String>,
+}
+
+fn parse(params: Params) -> Result<ListQuery, ApiError> {
+    let sort = match params.sort.as_deref() {
+        None | Some("") => Sort::Subtitle,
+        Some(code) => Sort::from_code(code).ok_or_else(|| {
+            ApiError::invalid("알 수 없는 정렬이에요. 제목순·방영연도순·최근 작품 추가순·최근 영상 추가순·최근 자막 추가순 중에서 골라 주세요.")
+        })?,
+    };
+    let filter = match params.filter.as_deref() {
+        None | Some("") => Filter::All,
+        Some(code) => Filter::from_code(code).ok_or_else(|| {
+            ApiError::invalid("알 수 없는 필터예요. 전체·방영 중·자막 다 갖춤·자막 일부·자막 없음·확인 필요 중에서 골라 주세요.")
+        })?,
+    };
+    let after = match params.after.as_deref() {
+        None | Some("") => None,
+        Some(text) => {
+            let cursor = Cursor::decode(text).ok_or_else(|| {
+                ApiError::invalid(
+                    "이어서 받을 위치를 알 수 없어요. 목록을 처음부터 다시 불러와 주세요.",
+                )
+            })?;
+            if cursor.sort() != sort {
+                return Err(ApiError::invalid(
+                    "이어서 받을 위치가 다른 정렬의 것이에요. 목록을 처음부터 다시 불러와 주세요.",
+                ));
+            }
+            Some(cursor)
+        }
+    };
+    let limit = match params.limit.as_deref() {
+        None | Some("") => DEFAULT_LIMIT,
+        Some(text) => match text.parse::<usize>() {
+            Ok(n) if (1..=MAX_LIMIT).contains(&n) => n,
+            _ => {
+                return Err(ApiError::invalid(format!(
+                    "한 번에 받을 작품 수는 1에서 {MAX_LIMIT} 사이로 정해 주세요."
+                )))
+            }
+        },
+    };
+    Ok(ListQuery {
+        sort,
+        filter,
+        search: params.q.unwrap_or_default(),
+        after,
+        limit,
+    })
+}
+
+async fn list(
+    State(state): State<AppState>,
+    params: Result<Query<Params>, QueryRejection>,
+) -> Result<Json<WorkPage>, ApiError> {
+    let Query(params) = params.map_err(|_| {
+        ApiError::invalid("목록을 받을 조건을 읽지 못했어요. 주소를 확인해 주세요.")
+    })?;
+    let query = parse(params)?;
+    let page = state.library.list(query).await.map_err(|e| match e {
         LibraryError::Db(e) => ApiError::Internal(e.to_string()),
         other => ApiError::Internal(other.to_string()),
     })?;
-    Ok(Json(WorkList {
-        works: works.into_iter().map(WorkView::from).collect(),
+    Ok(Json(WorkPage {
+        items: page.items.into_iter().map(WorkView::from).collect(),
+        next: page.next.map(|cursor| cursor.encode()),
+        total: page.total,
+        library_count: page.library_count,
     }))
 }
+
+#[cfg(test)]
+mod tests;

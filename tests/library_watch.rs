@@ -1179,10 +1179,20 @@ async fn a_folder_moved_by_hand_is_a_new_work_and_the_old_one_is_missing() {
 // --- the library list ----------------------------------------------------------------
 
 impl Lib {
+    /// Every work, by title, read page by page as the screen does.
     async fn library_list(&self) -> Vec<Value> {
-        let (status, text, body) = self.api.call("GET", "/api/library/works", None).await;
-        assert_eq!(status, StatusCode::OK, "{text}");
-        body["works"].as_array().unwrap().clone()
+        let mut works = Vec::new();
+        let mut after = String::new();
+        loop {
+            let uri = format!("/api/library/works?sort=title&limit=200&after={after}");
+            let (status, text, body) = self.api.call("GET", &uri, None).await;
+            assert_eq!(status, StatusCode::OK, "{text}");
+            works.extend(body["items"].as_array().unwrap().iter().cloned());
+            match body["next"].as_str() {
+                Some(next) => after = next.to_owned(),
+                None => return works,
+            }
+        }
     }
 }
 
@@ -1345,7 +1355,7 @@ async fn a_library_of_520_works_and_10_000_files_is_read_and_recorded() {
     assert_eq!(seven["subtitle_coverage"], "some");
 
     eprintln!(
-        "library list (GET /api/library/works, {} works): {list_time:?}",
+        "library list (GET /api/library/works in pages of 200, {} works): {list_time:?}",
         works.len()
     );
     eprintln!(

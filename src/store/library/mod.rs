@@ -50,6 +50,7 @@
 
 mod detail;
 mod overview;
+mod page;
 mod repo;
 #[cfg(test)]
 mod tests;
@@ -60,6 +61,7 @@ pub use detail::{EpisodeDetail, SeasonDetail, WorkDetail};
 use rusqlite::Transaction;
 
 pub use overview::{EpisodeRange, SubtitleCoverage, WorkOverview};
+pub use page::{Cursor, Filter, ListQuery, Page, Sort};
 
 use crate::{
     discovery::{FileKind, Reason, Scan, ScanError},
@@ -394,6 +396,14 @@ impl LibraryStore {
     /// shows (see [`WorkOverview`]), by folder name, in a fixed number of queries.
     pub async fn overview(&self) -> Result<Vec<WorkOverview>, LibraryError> {
         self.db.run(|c| Ok(overview::overview(c)?)).await
+    }
+
+    /// One page of the library list: the works that pass the query's filter and
+    /// search, in its sort's order, after its cursor (see [`Page`]).
+    pub async fn list(&self, query: ListQuery) -> Result<Page, LibraryError> {
+        self.db
+            .run(move |c| Ok(page::page(overview::overview(c)?, &query)))
+            .await
     }
 
     /// One work with its seasons, episodes and files (see [`WorkDetail`]), or
