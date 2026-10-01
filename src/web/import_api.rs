@@ -25,6 +25,26 @@
 //! the apply takes the ones the user checked (`subscriptions`). See
 //! [`suggestions`]. Nothing is received by an import, subscriptions included.
 //!
+//! # Save folders of subscriptions
+//!
+//! A subscription saves into a work folder below the collect folder, which the
+//! rule screen checks when it saves ([`crate::folders::is_work_folder`]). A
+//! replacement that would give a subscription's rule a folder that fails that
+//! check (the channel's folder is the collect folder itself and the file's
+//! rule names no folder of its own, or the folder has `..`) keeps the
+//! subscription's folder instead; the rule is replaced otherwise. The preview
+//! says so per rule (`folder_kept`) and the result lists the subscriptions
+//! (`folders_kept`). It never fails the import.
+//!
+//! # Title-waiting subscriptions
+//!
+//! A file cannot express a subscription still waiting for its title (a rule
+//! with `match: null` and a subscription). Replacing a channel therefore leaves
+//! every such subscription of it as it is, after the file's rules, instead of
+//! deleting it with the rules the file lacks; the preview says how many
+//! (`existing.title_waiting_kept`) and the result counts them
+//! (`title_waiting_kept`).
+//!
 //! # Folders
 //!
 //! The app has one collect folder and a rule's directory is relative to it, so
@@ -58,10 +78,14 @@ use super::{ApiError, AppState};
 use crate::import::{
     fit::{fit, Fit, Fitted},
     legacy::{self, LegacyChannel},
-    plan::{build_actions, display_url, find_existing, Choice, Decision},
+    plan::{
+        build_actions, display_url, find_existing, keep_subscription_folders, Choice, Decision,
+    },
     suggest::suggest,
 };
-use crate::store::channels::import::{match_rules, ImportChannel, ImportedChannel};
+use crate::store::channels::import::{
+    is_title_waiting_subscription, match_rules, ImportChannel, ImportedChannel,
+};
 use crate::store::channels::{ChannelError, ChannelWithRules, Rule, Version};
 
 const STALE_MESSAGE: &str = "검토한 뒤에 채널이 바뀌었어요. 파일을 다시 검토한 다음 선택해 주세요.";
@@ -124,6 +148,10 @@ struct RuleView {
     /// True when replacing keeps the ID of an existing rule for this one.
     /// Only ever true on a channel that already exists.
     keeps_existing_rule: bool,
+    /// The save folder that stays when the channel is replaced, because the
+    /// rule is a subscription and the file's folder for it is no work folder
+    /// (empty, only `.`, or with `..`). `null` when the file's folder is used.
+    folder_kept: Option<String>,
     /// What the comment above the rule offers.
     suggestion: SuggestionView,
 }
@@ -155,6 +183,9 @@ struct ExistingView {
     rule_count: usize,
     /// What a replacement would delete, in the channel's current order.
     removed_rules: Vec<RemovedRule>,
+    /// Title-waiting subscriptions of the channel: a replacement leaves them as
+    /// they are, because the file cannot express them.
+    title_waiting_kept: usize,
 }
 
 #[derive(Serialize)]
@@ -216,12 +247,17 @@ fn channel_view(
     let kept: Vec<Option<usize>> = existing
         .map(|e| match_rules(&e.rules, &channel.rules))
         .unwrap_or_else(|| vec![None; channel.rules.len()]);
+    let kept_folders = existing
+        .map(|e| keep_subscription_folders(&mut channel.clone(), e))
+        .unwrap_or_default();
     let removed_rules = existing
         .map(|e| {
             e.rules
                 .iter()
                 .enumerate()
-                .filter(|(i, _)| !kept.contains(&Some(*i)))
+                .filter(|(i, rule)| {
+                    !kept.contains(&Some(*i)) && !is_title_waiting_subscription(rule)
+                })
                 .map(|(_, rule)| RemovedRule::from(rule))
                 .collect()
         })
@@ -240,7 +276,8 @@ fn channel_view(
             .iter()
             .zip(&kept)
             .zip(suggestions)
-            .map(|((rule, kept), suggestion)| RuleView {
+            .enumerate()
+            .map(|(index, ((rule, kept), suggestion))| RuleView {
                 r#match: rule.r#match.clone(),
                 regex: rule.regex,
                 case_insensitive: rule.case_insensitive,
@@ -248,6 +285,10 @@ fn channel_view(
                 episode: rule.episode,
                 invalid_regex: invalid_regex(rule),
                 keeps_existing_rule: kept.is_some(),
+                folder_kept: kept_folders
+                    .iter()
+                    .find(|f| f.rule == index)
+                    .map(|f| f.directory.clone()),
                 suggestion,
             })
             .collect(),
@@ -257,6 +298,11 @@ fn channel_view(
             url: display_url(&e.channel.url),
             rule_count: e.rules.len(),
             removed_rules,
+            title_waiting_kept: e
+                .rules
+                .iter()
+                .filter(|rule| is_title_waiting_subscription(rule))
+                .count(),
         }),
     }
 }
@@ -416,6 +462,21 @@ struct ReplacedView {
     /// Rules of the file that got a new ID.
     added_rules: usize,
     removed_rules: Vec<RemovedRule>,
+    /// Title-waiting subscriptions the replacement left as they were.
+    title_waiting_kept: usize,
+    /// Subscriptions whose save folder stayed because the file's folder for
+    /// their rule is no work folder.
+    folders_kept: Vec<FolderKept>,
+}
+
+/// A subscription whose save folder a replacement kept.
+#[derive(Serialize)]
+struct FolderKept {
+    /// The rule's place in the file channel.
+    rule: usize,
+    r#match: Option<String>,
+    /// The folder the subscription keeps.
+    directory: String,
 }
 
 #[derive(Serialize)]
@@ -447,6 +508,10 @@ struct Counts {
     rules_added: usize,
     rules_kept: usize,
     rules_removed: usize,
+    /// Title-waiting subscriptions that replaced channels kept as they were.
+    title_waiting_kept: usize,
+    /// Subscriptions whose save folder stayed (see [`FolderKept`]).
+    folders_kept: usize,
     /// Rules that became subscriptions.
     subscriptions_created: usize,
 }
@@ -536,6 +601,22 @@ async fn apply(
         .collect();
     let plan = build_actions(importable, &existing, &choices).map_err(|_| stale())?;
 
+    // The subscriptions whose folder the replacement keeps, by the channel's
+    // place in the file.
+    let mut folders_kept: HashMap<usize, Vec<FolderKept>> = HashMap::new();
+    for (local, kept) in plan.kept_folders {
+        let at = positions[local];
+        folders_kept.insert(
+            at,
+            kept.into_iter()
+                .map(|f| FolderKept {
+                    rule: f.rule,
+                    r#match: rules_of[&at][f.rule].r#match.clone(),
+                    directory: f.directory,
+                })
+                .collect(),
+        );
+    }
     let (indexes, actions): (Vec<usize>, Vec<_>) = plan.actions.into_iter().unzip();
     let indexes: Vec<usize> = indexes.into_iter().map(|local| positions[local]).collect();
     let skipped: Vec<usize> = plan.skipped.iter().map(|&local| positions[local]).collect();
@@ -582,15 +663,19 @@ async fn apply(
         )
         .await
         .map_err(store_error)?;
-    // The first run's import step is done once an import has been applied. The
-    // import itself is committed, so a failure here is only logged: the user
-    // can still skip the step.
-    if let Err(e) = state
-        .setup
-        .mark_import_applied(super::commands_api::now_millis())
-        .await
-    {
-        eprintln!("import: cannot record that the import was applied: {e}");
+    // The first run's import step is done once an import has created or
+    // changed a channel (its rules and subscriptions come with one). An apply
+    // that skipped every channel or left every channel out did nothing, so the
+    // step stays open. The import itself is committed, so a failure here is
+    // only logged: the user can still skip the step.
+    if !results.is_empty() {
+        if let Err(e) = state
+            .setup
+            .mark_import_applied(super::commands_api::now_millis())
+            .await
+        {
+            eprintln!("import: cannot record that the import was applied: {e}");
+        }
     }
     let subscriptions = suggestions::result(picked, &resolved, &outcomes);
 
@@ -615,6 +700,8 @@ async fn apply(
             rules_added: 0,
             rules_kept: 0,
             rules_removed: 0,
+            title_waiting_kept: 0,
+            folders_kept: 0,
             subscriptions_created: subscriptions.created_count(),
         },
         subscriptions,
@@ -639,19 +726,26 @@ async fn apply(
             ImportedChannel::Replaced {
                 kept_rules,
                 removed_rules,
+                waiting_kept,
                 ..
             } => {
-                response.counts.rules_added += rule_count - kept_rules;
+                let added_rules = rule_count - kept_rules - waiting_kept;
+                response.counts.rules_added += added_rules;
                 response.counts.rules_kept += kept_rules;
                 response.counts.rules_removed += removed_rules.len();
+                response.counts.title_waiting_kept += waiting_kept;
+                let folders_kept = folders_kept.remove(&index).unwrap_or_default();
+                response.counts.folders_kept += folders_kept.len();
                 response.replaced.push(ReplacedView {
                     index,
                     id,
                     url,
                     rule_count,
                     kept_rules,
-                    added_rules: rule_count - kept_rules,
+                    added_rules,
                     removed_rules: removed_rules.iter().map(RemovedRule::from).collect(),
+                    title_waiting_kept: waiting_kept,
+                    folders_kept,
                 });
             }
         }

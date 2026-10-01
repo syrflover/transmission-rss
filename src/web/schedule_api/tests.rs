@@ -478,7 +478,7 @@ async fn the_stand_in_an_import_keeps_is_not_anissias_off() {
     // received. It has no weekday, so no card; and if it were moved to a weekday
     // without being received, it is still not read as `OFF`.
     let stand_in =
-        crate::store::channels::import_subscriptions::ImportSubscription::stand_in(1, "대역");
+        crate::store::channels::import_subscriptions::ImportSubscription::stand_in(1, "대역", None);
     assert_eq!(stand_in.status, "OFF");
     app.subscribe(stand_in.clone(), rule("S"), SubtitleMode::None, None)
         .await;
@@ -499,6 +499,30 @@ async fn the_stand_in_an_import_keeps_is_not_anissias_off() {
     let body = app.week().await;
     let card = &body["week"]["days"][3]["cards"][0];
     assert_eq!(card["video"], "waiting");
+}
+
+#[tokio::test]
+async fn a_stand_in_with_the_comments_weekday_shows_its_card_on_that_weekday() {
+    let app = App::new().await;
+    // What an import stores while Anissia cannot be asked, when the comment
+    // above the rule gave a weekday and time (Anissia's 4 is Thursday): the
+    // card sits on that weekday right away, and the stand-in is not read as
+    // `OFF` (it is not Anissia's word).
+    let stand_in = crate::store::channels::import_subscriptions::ImportSubscription::stand_in(
+        1,
+        "주석의 요일",
+        Some((4, "10:00")),
+    );
+    assert_eq!((stand_in.fetched_at, stand_in.status.as_str()), (0, "OFF"));
+    app.subscribe(stand_in, rule("T"), SubtitleMode::None, None)
+        .await;
+
+    let body = app.week().await;
+    let cards = body["week"]["days"][3]["cards"].as_array().unwrap();
+    assert_eq!(cards.len(), 1);
+    assert_eq!(cards[0]["title"], "주석의 요일");
+    assert_eq!(cards[0]["time"], "10:00");
+    assert_eq!(cards[0]["video"], "waiting");
 }
 
 #[tokio::test]

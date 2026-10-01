@@ -147,6 +147,16 @@ pub fn is_collect_folder_itself(path: &Path) -> bool {
     path.components().all(|c| c == Component::CurDir)
 }
 
+/// Whether `directory` can be the save folder of a subscription: it names a
+/// folder below the collect folder (it is not empty and not only `.`) and has
+/// no `..` component. This is what saving a subscription's rule asks of its
+/// folder (`rules_api::check_work_folder`, and the `..` rule of
+/// `rules_api::check_directory`), here as a yes or no.
+pub fn is_work_folder(directory: &str) -> bool {
+    let path = Path::new(directory.trim());
+    !directory.trim().is_empty() && !is_collect_folder_itself(path) && !has_parent_dir(path)
+}
+
 /// The folder every path is inside (or is), by whole components, or `None` when
 /// they share no leading component or there are no paths. The folder never
 /// contains a `..` component: the shared part stops before the first one.
@@ -313,6 +323,16 @@ mod tests {
         }
         for below in ["a", "./a", "a/.", "..", ".a", "..."] {
             assert!(!is_collect_folder_itself(Path::new(below)), "{below:?}");
+        }
+    }
+
+    #[test]
+    fn a_work_folder_is_a_folder_below_the_collect_folder_without_parent_components() {
+        for fine in ["a", "Show/Season 01", "./a", " a "] {
+            assert!(is_work_folder(fine), "{fine:?}");
+        }
+        for not in ["", " ", ".", "./", "././", "..", "../a", "a/../b"] {
+            assert!(!is_work_folder(not), "{not:?}");
         }
     }
 
