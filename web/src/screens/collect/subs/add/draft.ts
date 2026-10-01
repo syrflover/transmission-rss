@@ -8,6 +8,8 @@ export interface Draft {
   anime: ScheduleEntry | null;
   channel: Channel | null;
   work: TitleGroup | null;
+  /** `아직 첫 화 전이에요`: subscribe with no release title, waiting for one. */
+  waiting: boolean;
   subtitles: SubtitleMode;
   /** The creator followed; kept as chosen while `subtitles` is not `follow`. */
   creator: string | null;

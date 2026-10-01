@@ -22,16 +22,23 @@ const DEBOUNCE_MS = 250;
 /**
  * Step 3: the release title, chosen from the works the channel's history
  * records. There is no free text field: the match phrase is always one a real
- * item of this channel carries.
+ * item of this channel carries. `아직 첫 화 전이에요` subscribes with no phrase
+ * instead, to be completed by a title candidate; it needs a channel the worker
+ * has read, so a title that appears later is told from the ones already there.
  */
 export function PickTitle({
   channel,
   selected,
+  waiting,
   onPick,
+  onPickWaiting,
 }: {
   channel: Channel;
   selected: TitleGroup | null;
+  /** `아직 첫 화 전이에요` is the current choice. */
+  waiting: boolean;
   onPick: (work: TitleGroup) => void;
+  onPickWaiting: () => void;
 }) {
   const uid = useId();
   const [filter, setFilter] = useState("");
@@ -85,6 +92,22 @@ export function PickTitle({
         </p>
       </div>
 
+      <div className="flex min-w-0 flex-col gap-1.5">
+        <button
+          type="button"
+          aria-pressed={waiting}
+          disabled={titles === null || empty}
+          onClick={onPickWaiting}
+          className={cn(optionClass, waiting ? "border-focus" : "border-hairline-soft")}
+        >
+          <span className="min-w-0 text-[14.5px] leading-snug font-semibold">아직 첫 화 전이에요</span>
+          <span className="min-w-0 text-xs leading-snug text-text-secondary">
+            이 채널에 아직 올라오지 않은 작품이에요. 일치 문구 없이 구독해 두면 아무것도 받지 않다가, 새 작품 제목이 처음 나타날 때 제목
+            후보로 알려요.
+          </span>
+        </button>
+      </div>
+
       {titles !== null && !empty && !nothingFits && (
         <div className="flex min-w-0 flex-col gap-1.5">
           <Label htmlFor={`${uid}-filter`} className={labelClass}>
@@ -119,7 +142,8 @@ export function PickTitle({
 
       {empty && (
         <p role="status" className="text-[13px] leading-normal font-semibold text-text-secondary">
-          이 채널에는 수집 기록이 아직 없어서 릴리스 제목을 고를 수 없어요. worker가 채널을 한 번 읽은 뒤에 다시 와요.
+          이 채널에는 수집 기록이 아직 없어서 릴리스 제목을 고를 수도, 제목 대기로 구독할 수도 없어요. 기록이 있어야 새 작품이 나타난 것을 알 수
+          있어요. worker가 채널을 한 번 읽은 뒤에 다시 와요.
         </p>
       )}
 
@@ -144,9 +168,9 @@ export function PickTitle({
                 <li key={group.work}>
                   <button
                     type="button"
-                    aria-pressed={on}
+                    aria-pressed={on && !waiting}
                     onClick={() => onPick(group)}
-                    className={cn(optionClass, on ? "border-focus" : "border-hairline-soft")}
+                    className={cn(optionClass, on && !waiting ? "border-focus" : "border-hairline-soft")}
                   >
                     <span className="min-w-0 text-[14.5px] leading-snug font-semibold break-all">{group.work}</span>
                     <span className="min-w-0 text-xs leading-snug break-all text-text-muted">

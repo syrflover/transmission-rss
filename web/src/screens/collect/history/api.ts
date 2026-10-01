@@ -1,6 +1,8 @@
 import { api } from "@/lib/api";
 import { sendCommand, type Command } from "@/lib/commands";
 
+import type { WaitingSub } from "../subs/api";
+
 // The command API is shared with other screens; these were first defined here.
 export { getCommand, newCommandId, type Command, type CommandOutcome, type CommandState } from "@/lib/commands";
 
@@ -41,6 +43,17 @@ export interface HistoryItem {
   retry_blocked: string | null;
   /** The retry command (`receive_once`) that has not ended yet. */
   command: Command | null;
+  /** Set on a `no_match` item whose channel has a subscription waiting for a title. */
+  name_title: NameTitle | null;
+}
+
+/** What a `no_match` item offers when the channel has subscriptions waiting for a title. */
+export interface NameTitle {
+  /** The work part of the item's title: the match phrase it would give. */
+  work: string;
+  /** The save folder made from the work. */
+  folder: string | null;
+  waiting: WaitingSub[];
 }
 
 export interface HistoryCounts {

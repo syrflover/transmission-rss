@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 
 import { btnAction } from "../channels/styles";
+import { nameTitleLink } from "../subs/Candidates";
 import type { HistoryItem } from "./api";
 import { RESULT_LABEL } from "./filters";
 import { clock } from "./format";
@@ -134,6 +135,17 @@ export function HistoryRow({ item, onItem }: HistoryRowProps) {
         <p className="line-clamp-2 text-[13px] leading-[1.45] font-medium [overflow-wrap:anywhere] text-text-primary">
           {item.title}
         </p>
+        {item.name_title !== null && (
+          <p className="mt-1">
+            <Link
+              to={nameTitleLink(item.channel_id, item.name_title.work, item.name_title.folder)}
+              data-testid="name-title-link"
+              className="inline-flex min-h-6 items-center rounded-sm text-xs font-semibold text-focus underline-offset-4 outline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-focus"
+            >
+              제목 대기 구독에 잇기
+            </Link>
+          </p>
+        )}
         <p
           role={phase.kind === "idle" ? undefined : "status"}
           className={`mt-0.5 text-xs leading-[1.45] [overflow-wrap:anywhere] empty:hidden ${

@@ -8,19 +8,24 @@ import { KEYS } from "../cache";
 import { btnAction, btnNeutral } from "../channels/styles";
 import { PlusIcon } from "../icons";
 import { AddSubscription } from "./add/AddSubscription";
+import { Candidates } from "./Candidates";
+import { NameTitle } from "./title/NameTitle";
 import { listSubscriptions, type SubscriptionItem, type SubscriptionList } from "./api";
 import { SubscriptionCard } from "./SubscriptionCard";
 
 const grid = "m-0 grid list-none grid-cols-[repeat(auto-fill,minmax(min(100%,300px),1fr))] gap-3.5 p-0";
 
 /**
- * The 구독 tab: the subscriptions of this quarter with the way in from the
- * schedule. `/collect/subs/add` is the subscribe flow.
+ * The 구독 tab: the title candidates at the top, the subscriptions of this
+ * quarter with the way in from the schedule, and the coming quarter's below.
+ * `/collect/subs/add` is the subscribe flow and `/collect/subs/title` gives a
+ * candidate to a subscription waiting for its title.
  */
 export function SubsTab() {
   return (
     <Routes>
       <Route path="add" element={<AddSubscription />} />
+      <Route path="title" element={<NameTitle />} />
       <Route path="*" element={<SubscriptionsView />} />
     </Routes>
   );
@@ -49,6 +54,8 @@ function SubscriptionsView() {
           </Link>
         </Button>
       </div>
+
+      <Candidates />
 
       {data === undefined && list.error === null && list.slow && (
         <p className="text-[13px] text-text-muted">구독을 불러오는 중이에요.</p>
@@ -85,9 +92,18 @@ function SubscriptionsView() {
 
       {later.length > 0 && (
         <section aria-labelledby="later-subs-heading" className="flex min-w-0 flex-col gap-3">
-          <h2 id="later-subs-heading" className="text-[15px] font-bold">
-            다음 분기 구독
-          </h2>
+          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+            <h2 id="later-subs-heading" className="text-[15px] font-bold">
+              다음 분기 구독
+            </h2>
+            <Button asChild type="button" variant="ghost" className={btnNeutral}>
+              <Link to="/collect/subs/add?week=8">신작에서 추가</Link>
+            </Button>
+          </div>
+          <p className="min-w-0 text-[13px] leading-normal text-text-muted">
+            다음 분기 작품은 Anissia의 신작에서 골라요. 첫 화가 채널에 올라오기 전이면 제목 대기로 구독해 두고, 새 작품 제목이 나타나면 위에
+            제목 후보로 알려요.
+          </p>
           <ul className={grid}>
             {later.map((item) => (
               <SubscriptionCard key={item.rule_id} item={item} />

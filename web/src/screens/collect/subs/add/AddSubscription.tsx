@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -25,7 +25,7 @@ function ready(step: number, draft: Draft): boolean {
     case 1:
       return draft.channel !== null;
     case 2:
-      return draft.work !== null;
+      return draft.work !== null || draft.waiting;
     case 3:
       return draft.subtitles !== "follow" || (draft.creator !== null && draft.creator !== "");
     case 4:
@@ -33,6 +33,12 @@ function ready(step: number, draft: Draft): boolean {
     default:
       return false;
   }
+}
+
+/** The schedule tab to open on: the one the link names, else today's weekday. */
+function startWeek(param: string | null): number {
+  const week = param === null || param === "" ? NaN : Number(param);
+  return Number.isInteger(week) && week >= 0 && week <= 8 ? week : todayWeek();
 }
 
 /**
@@ -44,11 +50,14 @@ function ready(step: number, draft: Draft): boolean {
  */
 export function AddSubscription() {
   const [step, setStep] = useState(0);
+  // `?week=8` opens the schedule on `신작`, where the next quarter's works are.
+  const [params] = useSearchParams();
   const [draft, setDraft] = useState<Draft>(() => ({
-    week: todayWeek(),
+    week: startWeek(params.get("week")),
     anime: null,
     channel: null,
     work: null,
+    waiting: false,
     subtitles: "undecided",
     creator: null,
     directory: "",
@@ -112,7 +121,7 @@ export function AddSubscription() {
                   anime,
                   subtitles: "undecided",
                   creator: null,
-                  ...(taken ? { channel: null, work: null, directory: "" } : {}),
+                  ...(taken ? { channel: null, work: null, waiting: false, directory: "" } : {}),
                 });
               }
               go(1);
@@ -124,7 +133,7 @@ export function AddSubscription() {
             anime={draft.anime}
             selected={draft.channel}
             onPick={(channel) => {
-              if (channel.id !== draft.channel?.id) change({ channel, work: null, directory: "" });
+              if (channel.id !== draft.channel?.id) change({ channel, work: null, waiting: false, directory: "" });
               go(2);
             }}
           />
@@ -133,8 +142,16 @@ export function AddSubscription() {
           <PickTitle
             channel={draft.channel}
             selected={draft.work}
+            waiting={draft.waiting}
             onPick={(work) => {
-              if (work.work !== draft.work?.work) change({ work, directory: work.folder ?? "" });
+              if (draft.waiting || work.work !== draft.work?.work) {
+                change({ work, waiting: false, directory: work.folder ?? "" });
+              }
+              go(3);
+            }}
+            onPickWaiting={() => {
+              // No release title, so no suggested folder: a folder made for another pick is dropped.
+              if (!draft.waiting) change({ work: null, waiting: true, directory: "" });
               go(3);
             }}
           />
@@ -148,9 +165,13 @@ export function AddSubscription() {
           />
         )}
         {step === 4 && (
-          <PickFolder directory={draft.directory} onChange={(directory) => change({ directory })} />
+          <PickFolder
+            directory={draft.directory}
+            waiting={draft.waiting}
+            onChange={(directory) => change({ directory })}
+          />
         )}
-        {step === LAST && draft.anime && draft.channel && draft.work && (
+        {step === LAST && draft.anime && draft.channel && (draft.work || draft.waiting) && (
           <Confirm draft={draft} anime={draft.anime} channel={draft.channel} work={draft.work} onCreated={() => setCreated(true)} />
         )}
       </div>

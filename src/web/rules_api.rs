@@ -69,9 +69,11 @@
 //! mask are flagged `masked`.
 //!
 //! A subscription rule leaves alone the items history recorded, without a
-//! rule taking them, before the subscription began, and any rule leaves alone
-//! those it recorded while the rule was paused or archived (before it was last
-//! turned back on). The preview applies the cycle's own test
+//! rule taking them, before the subscription began, before a subscription that
+//! waited for its title was given one (a save that fills the empty match phrase
+//! of one is previewed as if it were saved after everything recorded so far),
+//! and any rule leaves alone those it recorded while the rule was paused or
+//! archived (before it was last turned back on). The preview applies the cycle's own test
 //! ([`ChannelPlan::is_past`]) to the item's history record and lists such an
 //! item as `past` (with `past_cause` and the folder that `받기` would save it
 //! to) rather than `mine`; a `receive_once` command naming the rule receives
@@ -910,7 +912,7 @@ async fn update_rule(
     check_directory(&state, Some(&stored), &input.directory).await?;
     match state
         .channels
-        .update_rule(&id, b.version, &b.channel_id, input)
+        .update_rule_at(&id, b.version, &b.channel_id, input, state.anissia.now())
         .await
     {
         Ok(_) => Ok(Json(rule_view(&state, &id).await?)),
@@ -1068,9 +1070,10 @@ pub struct PreviewItem {
     pub taken_by: Option<TakenBy>,
     /// The channel exclude that keeps the item out (only for [`Kind::Excluded`]).
     pub excluded_by: Option<String>,
-    /// Why the item is past: `subscribed` (it came before the subscription) or
-    /// `resumed` (it came while the rule was paused or archived). Only for
-    /// [`Kind::Past`].
+    /// Why the item is past: `subscribed` (it came before the subscription),
+    /// `titled` (it came before the subscription, which waited for its title,
+    /// was given one) or `resumed` (it came while the rule was paused or
+    /// archived). Only for [`Kind::Past`].
     pub past_cause: Option<&'static str>,
     /// What history recorded for the item so far, as its stable code.
     pub stored_result: &'static str,
@@ -1140,6 +1143,13 @@ fn substitute(
             resumed_at: None,
         },
     };
+    // A subscription that waits for its title is given one by a save, and what
+    // history recorded before is past for it, as the store notes it.
+    if rule.r#match.is_none() && edited.r#match.is_some() {
+        if let Some(subscription) = rule.subscription.as_mut() {
+            subscription.titled_at = Some(i64::MAX);
+        }
+    }
     rule.r#match = edited.r#match.clone();
     rule.regex = edited.regex;
     rule.case_insensitive = edited.case_insensitive;

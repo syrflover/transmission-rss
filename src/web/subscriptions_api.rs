@@ -8,8 +8,11 @@
 //! | `GET /subscriptions`                         | `200 { quarter, subscriptions: [SubscriptionItem] }` |
 //! | `GET /subscriptions/titles?channel_id=&q=`   | `200 Titles`                                   |
 //! | `POST /subscriptions`                        | `201 { rule: RuleView }`                       |
+//! | `GET /subscriptions/candidates`              | `200 { candidates: [CandidateView] }`          |
+//! | `POST /subscriptions/candidates/reject`      | `200 { rejected: true }`                       |
 //! | `PUT /rules/{id}/creator`                    | `200 RuleView` (`제작자 변경`)                 |
 //! | `POST /rules/{id}/subscription`              | `200 RuleView` (`편성표와 연결`)               |
+//! | `POST /rules/{id}/title`                     | `200 RuleView` (`제목 정하기`)                 |
 //!
 //! Anissia is a third party: a call that needs it and cannot get an answer
 //! fails with `502 { error: "unavailable", message }` and a sentence that says
@@ -25,6 +28,23 @@
 //! data and Anissia, not trusted from the request: the release title must be
 //! one the channel's history holds, the anime one the schedule lists, and a
 //! subtitle creator one of the anime's captions names.
+//!
+//! A subscription made without a `work` waits for its title (`제목 대기`): the
+//! rule has no match phrase and receives nothing. It needs a channel whose
+//! history has been recorded already, because a work is new only against what
+//! history held when the subscription began to wait.
+//!
+//! `GET /subscriptions/candidates` lists the title candidates
+//! ([`title_candidates`]; the conditions under which one appears and goes are in
+//! [`crate::subscriptions::candidates`]). It is the source the 할 일 list reads
+//! for its `제목 후보` suggestions, and it is not counted in any menu badge.
+//! `POST /subscriptions/candidates/reject` (`{ channel_id, work }`) turns a
+//! work down for good: it is not offered again and the subscriptions stay as
+//! they are. `POST /rules/{id}/title` (`{ version, work, directory? }`) gives a
+//! collecting subscription that waits for its title the phrase of a work the
+//! channel's history holds, and, when `directory` is sent, a new save folder.
+//! It receives nothing: what history recorded before is past, left to the user
+//! to pick with `receive_once` and the rule's ID.
 //!
 //! `PUT /rules/{id}/creator` (`{ version, creator }`, `creator` a name or
 //! `null` for `제작자 미정`) changes whom a subscription follows, for a
@@ -53,11 +73,15 @@ use crate::{
     store::{
         anissia::{Anime, WEEK_OTHER, WEEK_UPCOMING},
         channels::{
-            ChannelError, NewSubscription, RuleInput, RuleState, Subscription, SubtitleMode,
+            ChannelError, ChannelWithRules, NewSubscription, RuleInput, RuleState, Subscription,
+            SubtitleMode,
         },
         history::Millis,
     },
-    subscriptions::{folder_suggestion, title_groups, work_key, Quarter},
+    subscriptions::{
+        candidates::{self, TitleCandidate},
+        folder_suggestion, title_groups, work_key, Quarter,
+    },
 };
 
 pub fn routes() -> Router<AppState> {
@@ -66,6 +90,9 @@ pub fn routes() -> Router<AppState> {
         .route("/anissia/anime/{no}/creators", get(creators))
         .route("/subscriptions", get(list).post(subscribe))
         .route("/subscriptions/titles", get(titles))
+        .route("/subscriptions/candidates", get(candidates))
+        .route("/subscriptions/candidates/reject", post(reject_candidate))
+        .route("/rules/{id}/title", post(name_title))
         .route("/rules/{id}/creator", put(change_creator))
         .route("/rules/{id}/subscription", post(link_rule))
 }
@@ -529,6 +556,276 @@ async fn titles(
     }))
 }
 
+/// The way the channel's newest record of the work `work` writes it: the match
+/// phrase it gives. The work must be one the channel's history holds.
+fn recorded_work(
+    items: &[crate::store::history::HistoryItem],
+    work: &str,
+) -> Result<String, ApiError> {
+    let wanted = work_key(work);
+    title_groups(items)
+        .into_iter()
+        .find(|g| work_key(&g.work) == wanted)
+        .map(|g| g.work)
+        .ok_or_else(|| {
+            ApiError::invalid(
+                "이 채널의 수집 기록에 없는 릴리스 제목이에요. 기록에 있는 제목에서 골라 주세요.",
+            )
+        })
+}
+
+// ---------------------------------------------------------------------------
+// Title candidates
+// ---------------------------------------------------------------------------
+
+/// The title candidates of every channel, the newest work first, as they are
+/// now. A candidate is read off the rules and the history each time (see
+/// [`crate::subscriptions::candidates`]), so it goes the moment its conditions
+/// fail: the work gets a rule, the last subscription waiting for a title is
+/// paused, archived, given a title or deleted, or the user rejects the work.
+///
+/// This is what the 할 일 list reads for its `제목 후보` suggestions. A
+/// suggestion is not something that needs doing, so nothing counts these in a
+/// menu badge.
+pub async fn title_candidates(state: &AppState) -> Result<Vec<TitleCandidate>, ApiError> {
+    let all = state
+        .channels
+        .list_channels_with_rules()
+        .await
+        .map_err(ApiError::from)?;
+    if !all
+        .iter()
+        .any(|c| c.rules.iter().any(candidates::is_waiting))
+    {
+        return Ok(Vec::new());
+    }
+    let rejected = state
+        .channels
+        .rejected_titles()
+        .await
+        .map_err(ApiError::from)?;
+    let mut found = Vec::new();
+    for cwr in &all {
+        if !cwr.rules.iter().any(candidates::is_waiting) {
+            continue;
+        }
+        let items = rules_api::channel_items(&state.history, &cwr.channel.id).await?;
+        let rejected_here = rejected
+            .iter()
+            .filter(|(channel_id, _)| channel_id == &cwr.channel.id)
+            .map(|(_, key)| key.clone())
+            .collect();
+        found.extend(candidates::title_candidates(cwr, &items, &rejected_here));
+    }
+    found.sort_by(|a, b| {
+        b.latest_seen_at
+            .cmp(&a.latest_seen_at)
+            .then_with(|| a.work.cmp(&b.work))
+    });
+    Ok(found)
+}
+
+/// A subscription that waits for a title, as the work is offered to it.
+#[derive(Debug, Clone, Serialize)]
+pub struct WaitingView {
+    pub rule_id: String,
+    pub rule_version: i64,
+    /// The anime it follows, as the stored schedule snapshot lists it.
+    pub anime: Option<AnimeView>,
+    /// The save folder the subscription has now.
+    pub directory: String,
+}
+
+#[derive(Debug, Serialize)]
+struct CandidateView {
+    channel_id: String,
+    channel_name: Option<String>,
+    channel_host: String,
+    /// What identifies the candidate within its channel.
+    key: String,
+    /// The work as the newest item writes it: the match phrase it would give.
+    work: String,
+    latest_title: String,
+    items: usize,
+    first_seen_at: Millis,
+    latest_seen_at: Millis,
+    /// The save folder made from the work, to offer in place of the folder the
+    /// subscription has.
+    folder: Option<String>,
+    /// The channel's subscriptions waiting for a title, to pick one from. The
+    /// link between an anime and the work is only a suggestion.
+    waiting: Vec<WaitingView>,
+}
+
+/// The waiting subscriptions of a channel as the screen picks among them.
+pub fn waiting_views(cwr: &ChannelWithRules, animes: &HashMap<i64, Anime>) -> Vec<WaitingView> {
+    cwr.rules
+        .iter()
+        .filter(|rule| candidates::is_waiting(rule))
+        .map(|rule| WaitingView {
+            rule_id: rule.id.clone(),
+            rule_version: rule.version,
+            anime: rule
+                .subscription
+                .as_ref()
+                .and_then(|s| animes.get(&s.anissia_anime_no))
+                .map(AnimeView::from),
+            directory: rule.directory.clone(),
+        })
+        .collect()
+}
+
+#[derive(Serialize)]
+struct CandidateList {
+    candidates: Vec<CandidateView>,
+}
+
+async fn candidates(State(state): State<AppState>) -> Result<Json<CandidateList>, ApiError> {
+    let found = title_candidates(&state).await?;
+    if found.is_empty() {
+        return Ok(Json(CandidateList {
+            candidates: Vec::new(),
+        }));
+    }
+    let all = state
+        .channels
+        .list_channels_with_rules()
+        .await
+        .map_err(ApiError::from)?;
+    let nos: Vec<i64> = all
+        .iter()
+        .flat_map(|c| &c.rules)
+        .filter_map(|r| r.subscription.as_ref().map(|s| s.anissia_anime_no))
+        .collect();
+    let animes = state
+        .anissia
+        .store
+        .animes(nos)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let views = found
+        .into_iter()
+        .filter_map(|candidate| {
+            let cwr = all.iter().find(|c| c.channel.id == candidate.channel_id)?;
+            let host = Url::parse(&cwr.channel.url)
+                .ok()
+                .and_then(|u| u.host_str().map(str::to_owned))
+                .unwrap_or_default();
+            Some(CandidateView {
+                channel_name: cwr.channel.name.clone(),
+                channel_host: host,
+                folder: folder_suggestion(&candidate.work),
+                waiting: waiting_views(cwr, &animes),
+                channel_id: candidate.channel_id,
+                key: candidate.key,
+                work: candidate.work,
+                latest_title: candidate.latest_title,
+                items: candidate.items,
+                first_seen_at: candidate.first_seen_at,
+                latest_seen_at: candidate.latest_seen_at,
+            })
+        })
+        .collect();
+    Ok(Json(CandidateList { candidates: views }))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RejectBody {
+    channel_id: String,
+    /// The work of the candidate, as the candidate lists it.
+    work: String,
+}
+
+#[derive(Serialize)]
+struct Rejected {
+    rejected: bool,
+}
+
+async fn reject_candidate(
+    State(state): State<AppState>,
+    parsed: Result<Json<RejectBody>, JsonRejection>,
+) -> Result<Json<Rejected>, ApiError> {
+    let Json(b) = parsed.map_err(|_| ApiError::invalid(BAD_BODY))?;
+    state
+        .channels
+        .get_channel(&b.channel_id)
+        .await
+        .map_err(ApiError::from)?
+        .ok_or_else(|| ApiError::not_found("채널을 찾지 못했어요. 이미 삭제됐을 수 있어요."))?;
+    let items = rules_api::channel_items(&state.history, &b.channel_id).await?;
+    let work = recorded_work(&items, &b.work)?;
+    state
+        .channels
+        .reject_title(&b.channel_id, &work_key(&work), &work, state.anissia.now())
+        .await
+        .map_err(ApiError::from)?;
+    Ok(Json(Rejected { rejected: true }))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TitleBody {
+    /// The version the client saw.
+    version: i64,
+    /// The work of a release title the channel's history holds.
+    work: String,
+    /// A new save folder; absent keeps the subscription's.
+    #[serde(default)]
+    directory: Option<String>,
+}
+
+async fn name_title(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    parsed: Result<Json<TitleBody>, JsonRejection>,
+) -> Result<Json<RuleView>, ApiError> {
+    let Json(b) = parsed.map_err(|_| ApiError::invalid(BAD_BODY))?;
+    let rule = rule_at(&state, &id, b.version).await?;
+    if rule.subscription.is_none() || rule.r#match.is_some() {
+        return Err(ApiError::invalid(
+            "제목을 기다리는 구독만 제목을 정해요. 화면을 새로고침해 주세요.",
+        ));
+    }
+    if rule.state != RuleState::Active {
+        return Err(ApiError::invalid(
+            "영상 받기를 켠 구독에만 제목을 정할 수 있어요. 영상 받기를 켠 뒤 다시 시도해 주세요.",
+        ));
+    }
+    let directory = match b.directory.as_deref().map(str::trim) {
+        None => None,
+        Some(directory) => {
+            if directory.is_empty() {
+                return Err(ApiError::invalid("저장 폴더를 적어 주세요."));
+            }
+            if std::path::Path::new(directory).is_absolute() {
+                return Err(ApiError::invalid(
+                    "저장 폴더는 수집 폴더 아래 경로로 적어 주세요. /로 시작하면 안 돼요.",
+                ));
+            }
+            if crate::folders::is_collect_folder_itself(std::path::Path::new(directory)) {
+                return Err(ApiError::invalid(
+                    "저장 폴더로 `.`만 적을 수는 없어요. 수집 폴더 자체에 받게 되니, 그 아래의 작품 폴더 이름을 적어 주세요.",
+                ));
+            }
+            rules_api::check_directory(&state, Some(&rule), directory).await?;
+            Some(directory)
+        }
+    };
+    let items = rules_api::channel_items(&state.history, &rule.channel_id).await?;
+    let phrase = recorded_work(&items, &b.work)?;
+    let written = state
+        .channels
+        .give_title(&id, b.version, &phrase, directory, state.anissia.now())
+        .await;
+    match written {
+        Err(ChannelError::Invalid(_)) => Err(ApiError::invalid(
+            "입력한 값으로는 제목을 정할 수 없어요. 화면을 새로고침해 주세요.",
+        )),
+        written => rule_after(&state, &id, written).await,
+    }
+}
+
 /// The anime of the schedule's week `week` numbered `anime_no`, as the
 /// snapshot to keep: the request names an anime the schedule really lists.
 async fn scheduled_anime(state: &AppState, week: u8, anime_no: i64) -> Result<Anime, ApiError> {
@@ -596,8 +893,10 @@ struct SubscribeBody {
     /// The schedule week the anime was picked from, to find its entry.
     week: u8,
     /// The work of a release title the channel's history holds (a
-    /// [`TitleView::work`]): the rule's match phrase.
-    work: String,
+    /// [`TitleView::work`]): the rule's match phrase. Absent, the subscription
+    /// waits for its title (`아직 첫 화 전이에요`).
+    #[serde(default)]
+    work: Option<String>,
     /// `follow`, `undecided` or `none`.
     subtitles: String,
     /// The creator to follow; only with `follow`, and one of the anime's.
@@ -642,24 +941,25 @@ async fn subscribe(
         .map_err(ApiError::from)?
         .ok_or_else(|| ApiError::not_found("채널을 찾지 못했어요. 이미 삭제됐을 수 있어요."))?;
 
-    // The release title is one this channel's history holds.
+    // The release title is one this channel's history holds. A subscription
+    // that waits for its title has none, and needs a history to be new against.
     let items = rules_api::channel_items(&state.history, &channel.id).await?;
-    let wanted = work_key(&b.work);
-    let group = title_groups(&items)
-        .into_iter()
-        .find(|g| work_key(&g.work) == wanted)
-        .ok_or_else(|| {
-            ApiError::invalid(
-                "이 채널의 수집 기록에 없는 릴리스 제목이에요. 기록에 있는 제목에서 골라 주세요.",
-            )
-        })?;
+    let phrase = match &b.work {
+        Some(work) => Some(recorded_work(&items, work)?),
+        None if items.is_empty() => {
+            return Err(ApiError::invalid(
+                "이 채널에는 수집 기록이 아직 없어요. worker가 채널을 한 번 읽은 뒤에 첫 화 전 작품을 구독해 주세요. 그 기록보다 나중에 올라온 제목만 제목 후보가 돼요.",
+            ))
+        }
+        None => None,
+    };
 
     let anime = scheduled_anime(&state, b.week, b.anissia_anime_no).await?;
     let creator =
         chosen_creator(&state, subtitles, b.creator.as_deref(), b.anissia_anime_no).await?;
 
     let input = RuleInput {
-        r#match: Some(group.work),
+        r#match: phrase,
         directory,
         ..RuleInput::default()
     };

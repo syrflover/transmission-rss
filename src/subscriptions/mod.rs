@@ -3,6 +3,8 @@
 //! the titles a channel's history offers, the folder suggested for it, and the
 //! quarter a subscription belongs to.
 
+pub mod candidates;
+
 use std::{collections::HashMap, sync::OnceLock};
 
 use regex::Regex;

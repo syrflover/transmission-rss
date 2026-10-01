@@ -96,7 +96,9 @@ function Row({ item, receive }: { item: PreviewItem; receive?: PastReceive }) {
         <p className="min-w-0 text-xs text-text-secondary">
           {item.past_cause === "resumed"
             ? "규칙이 멈춰 있는 동안 올라온 항목이라 고르기 전에는 받지 않아요."
-            : "구독하기 전에 올라온 항목이라 고르기 전에는 받지 않아요."}
+            : item.past_cause === "titled"
+              ? "제목을 정하기 전에 올라온 항목이라 고르기 전에는 받지 않아요."
+              : "구독하기 전에 올라온 항목이라 고르기 전에는 받지 않아요."}
           {item.save_path && <span className="block font-mono break-all text-text-muted">→ {item.save_path}</span>}
         </p>
       )}

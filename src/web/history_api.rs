@@ -25,6 +25,11 @@
 //! offered (see [`receive_once::retry_plan`]); for an item a rule picked and
 //! failed to add but cannot retry, `retry_blocked` says why. The item's own link is never sent: it
 //! is only a masked copy, and nothing on the screen needs it.
+//!
+//! An item that matched no rule carries `name_title` when its channel has a
+//! subscription waiting for a title: the work part of its title and those
+//! subscriptions, so that the row can lead straight to naming one of them (see
+//! `/api/rules/{id}/title`). Without such a subscription it has none.
 
 use std::collections::HashMap;
 
@@ -36,12 +41,18 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use super::{commands_api::CommandView, ApiError, AppState};
+use super::{
+    commands_api::CommandView,
+    subscriptions_api::{waiting_views, WaitingView},
+    ApiError, AppState,
+};
 use crate::{
     store::{
+        anissia::Anime,
         channels::{Channel, ChannelWithRules, Rule},
         history::{HistoryCursor, HistoryItem, HistoryQuery, HistoryResult, DEFAULT_PAGE_SIZE},
     },
+    subscriptions::{candidates, folder_suggestion, parse_release},
     worker::commands::receive_once,
 };
 
@@ -91,6 +102,19 @@ pub struct HistoryItemView {
     pub retry_blocked: Option<&'static str>,
     /// The `receive_once` command for this item that has not ended yet.
     pub command: Option<CommandView>,
+    /// For an item no rule matched, in a channel with a subscription waiting
+    /// for a title: what naming one of them after this item needs.
+    pub name_title: Option<NameTitleView>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct NameTitleView {
+    /// The work part of the item's title: the match phrase it would give.
+    pub work: String,
+    /// The save folder made from the work.
+    pub folder: Option<String>,
+    /// The channel's subscriptions waiting for a title.
+    pub waiting: Vec<WaitingView>,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -120,6 +144,8 @@ struct Directory {
     channels: HashMap<String, Channel>,
     /// Rule ID to the rule.
     rules: HashMap<String, Rule>,
+    /// The channels' waiting subscriptions, by channel ID, once for the page.
+    waiting: HashMap<String, Vec<WaitingView>>,
 }
 
 impl Directory {
@@ -133,20 +159,57 @@ impl Directory {
 
     async fn load(state: &AppState) -> Result<Directory, ApiError> {
         let all = state.channels.list_channels_with_rules().await?;
+        let nos: Vec<i64> = all
+            .iter()
+            .flat_map(|c| &c.rules)
+            .filter(|r| candidates::is_waiting(r))
+            .filter_map(|r| r.subscription.as_ref().map(|s| s.anissia_anime_no))
+            .collect();
+        let animes: HashMap<i64, Anime> = if nos.is_empty() {
+            HashMap::new()
+        } else {
+            state
+                .anissia
+                .store
+                .animes(nos)
+                .await
+                .map_err(|e| ApiError::Internal(e.to_string()))?
+        };
         let mut channels = HashMap::new();
         let mut rules = HashMap::new();
-        for ChannelWithRules {
-            channel,
-            rules: channel_rules,
-        } in all
-        {
+        let mut waiting = HashMap::new();
+        for cwr in all {
+            let views = waiting_views(&cwr, &animes);
+            if !views.is_empty() {
+                waiting.insert(cwr.channel.id.clone(), views);
+            }
+            let ChannelWithRules {
+                channel,
+                rules: channel_rules,
+            } = cwr;
             for rule in channel_rules {
                 rules.insert(rule.id.clone(), rule);
             }
             channels.insert(channel.id.clone(), channel);
         }
-        Ok(Directory { channels, rules })
+        Ok(Directory {
+            channels,
+            rules,
+            waiting,
+        })
     }
+}
+
+/// What naming a waiting subscription after the item needs, when the item's
+/// channel has one and the item's title has a work.
+fn name_title_of(item: &HistoryItem, directory: &Directory) -> Option<NameTitleView> {
+    let waiting = directory.waiting.get(&item.channel_id)?;
+    let work = parse_release(&item.title)?.work;
+    Some(NameTitleView {
+        folder: folder_suggestion(&work),
+        work,
+        waiting: waiting.clone(),
+    })
 }
 
 fn host_of(url: &str) -> Option<String> {
@@ -175,7 +238,11 @@ fn views(
                 .as_ref()
                 .and_then(|rule| directory.rules.get(rule));
             let retry = receive_once::retry_plan(&item, channel, rule);
+            let name_title = (item.result == HistoryResult::NoMatch)
+                .then(|| name_title_of(&item, directory))
+                .flatten();
             HistoryItemView {
+                name_title,
                 id: item.id,
                 channel_name,
                 channel_deleted: channel.is_none(),

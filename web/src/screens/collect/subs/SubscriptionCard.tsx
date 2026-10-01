@@ -16,6 +16,7 @@ export function SubscriptionCard({ item }: { item: SubscriptionItem }) {
   const { subscription } = item;
   const anime = subscription.anime;
   const title = anime?.subject ?? item.title ?? "이름 없는 작품";
+  const waitingForTitle = item.title === null;
   const start = anime?.week === 8 || item.upcoming ? startDate(anime?.start_date ?? null) : null;
 
   return (
@@ -40,6 +41,7 @@ export function SubscriptionCard({ item }: { item: SubscriptionItem }) {
       <div className="flex min-w-0 flex-wrap items-center gap-1.5">
         {anime && <span className={tag}>{airing(anime)}</span>}
         {start && <span className="text-xs text-text-muted">{start} 시작</span>}
+        {waitingForTitle && <span className={`${tag} border-focus text-focus`}>제목 대기</span>}
         {item.state === "paused" && <span className={`${tag} text-text-primary`}>멈춤</span>}
         <span className={`${tag} break-all`}>{item.channel_name ?? item.channel_host}</span>
       </div>
@@ -50,6 +52,14 @@ export function SubscriptionCard({ item }: { item: SubscriptionItem }) {
         <dt className="font-semibold text-text-muted">저장 폴더</dt>
         <dd className="m-0 min-w-0 break-all text-text-secondary">{item.directory || "수집 폴더"}</dd>
       </dl>
+
+      {waitingForTitle && (
+        <p className="min-w-0 text-xs leading-normal text-text-secondary">
+          {item.state === "paused"
+            ? "영상 받기가 꺼져 있어서 제목 후보도 알리지 않아요."
+            : "일치 문구가 없어서 아직 아무것도 받지 않아요. 이 채널에 새 작품 제목이 나타나면 제목 후보로 알려요."}
+        </p>
+      )}
     </li>
   );
 }

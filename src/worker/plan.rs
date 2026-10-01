@@ -59,18 +59,24 @@ pub struct ChannelPlan {
 }
 
 /// The moments before which a rule leaves unpicked items to the user: when it
-/// became a subscription and when it was last turned back on. At least one is
-/// set.
+/// became a subscription, when it was given the title it had waited for, and
+/// when it was last turned back on. At least one is set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PastSince {
     pub subscribed: Option<Millis>,
+    pub titled: Option<Millis>,
     pub resumed: Option<Millis>,
 }
 
 impl PastSince {
-    /// The later moment: what history first saw before it is past.
-    fn until(self) -> Millis {
-        self.subscribed.max(self.resumed).unwrap_or(Millis::MIN)
+    /// The latest moment: what history first saw before it is past.
+    pub fn until(self) -> Millis {
+        self.subscribed
+            .into_iter()
+            .chain(self.titled)
+            .chain(self.resumed)
+            .max()
+            .unwrap_or(Millis::MIN)
     }
 }
 
@@ -79,6 +85,9 @@ impl PastSince {
 pub enum PastCause {
     /// The item was recorded before the rule became a subscription.
     Subscribed,
+    /// The item was recorded before the subscription, which had waited for its
+    /// title, was given one.
+    Titled,
     /// The item was first seen while the rule was paused or archived.
     Resumed,
 }
@@ -88,16 +97,19 @@ impl PastCause {
     pub fn code(self) -> &'static str {
         match self {
             PastCause::Subscribed => "subscribed",
+            PastCause::Titled => "titled",
             PastCause::Resumed => "resumed",
         }
     }
 }
 
 /// `None` for a rule that is no subscription and was never turned back on.
-fn past_since(rule: &Rule) -> Option<PastSince> {
+pub fn past_since(rule: &Rule) -> Option<PastSince> {
     let subscribed = rule.subscription.as_ref().map(|s| s.subscribed_at);
+    let titled = rule.subscription.as_ref().and_then(|s| s.titled_at);
     (subscribed.is_some() || rule.resumed_at.is_some()).then_some(PastSince {
         subscribed,
+        titled,
         resumed: rule.resumed_at,
     })
 }
@@ -152,12 +164,14 @@ impl ChannelPlan {
     }
 
     /// Why an item of `rule_id` first seen at `first_seen_at` is past: it came
-    /// before the subscription, or else while the rule was off. `None` when the
-    /// rule holds nothing back.
+    /// before the subscription, else before the subscription got its title,
+    /// or else while the rule was off. `None` when the rule holds nothing back.
     pub fn past_cause(&self, rule_id: &str, first_seen_at: Millis) -> Option<PastCause> {
         let since = self.past_since.get(rule_id)?;
         Some(if since.subscribed.is_some_and(|at| first_seen_at < at) {
             PastCause::Subscribed
+        } else if since.titled.is_some_and(|at| first_seen_at < at) {
+            PastCause::Titled
         } else {
             PastCause::Resumed
         })
@@ -165,10 +179,11 @@ impl ChannelPlan {
 
     /// Whether `rule_id` must leave an item alone because the item is past:
     /// history recorded it, without any rule taking it, before the rule became
-    /// a subscription, or while the rule was paused or archived (before it was
-    /// last turned back on). Only the user receives those, after looking at
-    /// them (`docs/specs/collection.md`, 방영작 구독 and `영상 받기`). A rule
-    /// that is no subscription and was never turned back on has no past.
+    /// a subscription, before a subscription that waited for its title was
+    /// given one, or while the rule was paused or archived (before it was last
+    /// turned back on). Only the user receives those, after looking at them
+    /// (`docs/specs/collection.md`, 방영작 구독 and `영상 받기`). A rule that is
+    /// no subscription and was never turned back on has no past.
     /// `known` is the item's history record: when it was first seen and its
     /// result. An item a rule picked and failed to add is not past, nor is one
     /// first seen after the rule began or resumed collecting.
@@ -413,6 +428,7 @@ mod tests {
             season_id: None,
             subscribed_at: at,
             season_blocked: None,
+            titled_at: None,
         };
         let held = |subscribed_at: Option<i64>, resumed_at: Option<i64>| {
             let mut r = rule("r", 0, Some("Show"), RuleState::Active);
@@ -459,6 +475,45 @@ mod tests {
         assert!(both.is_past("r", Some((1, HistoryResult::Excluded))));
         // An item history does not know is not past.
         assert!(!both.is_past("r", None));
+    }
+
+    #[test]
+    fn a_title_given_late_holds_back_what_history_recorded_before_it() {
+        use crate::store::channels::{Subscription, SubtitleMode};
+        let titled = |subscribed: i64, titled: Option<i64>, resumed: Option<i64>| {
+            let mut r = rule("r", 0, Some("Show"), RuleState::Active);
+            r.subscription = Some(Subscription {
+                anissia_anime_no: 1,
+                subtitles: SubtitleMode::None,
+                creator: None,
+                season_id: None,
+                subscribed_at: subscribed,
+                season_blocked: None,
+                titled_at: titled,
+            });
+            r.resumed_at = resumed;
+            plan(vec![r])
+        };
+        let seen = |at| Some((at, HistoryResult::NoMatch));
+
+        // Subscribed at 50, given its title at 200: what came before 200 is
+        // past, and says it came before the title, or before the subscription.
+        let p = titled(50, Some(200), None);
+        assert!(p.is_past("r", seen(199)));
+        assert!(!p.is_past("r", seen(200)));
+        assert_eq!(p.past_cause("r", 199), Some(PastCause::Titled));
+        assert_eq!(p.past_cause("r", 49), Some(PastCause::Subscribed));
+        assert_eq!(PastCause::Titled.code(), "titled");
+
+        // A subscription that had its title from the start holds back to the
+        // subscription only.
+        let p = titled(50, None, None);
+        assert!(p.is_past("r", seen(49)) && !p.is_past("r", seen(50)));
+
+        // The latest of the moments rules: a resume after the title.
+        let p = titled(50, Some(200), Some(300));
+        assert!(p.is_past("r", seen(299)) && !p.is_past("r", seen(300)));
+        assert_eq!(p.past_cause("r", 250), Some(PastCause::Resumed));
     }
 
     #[test]

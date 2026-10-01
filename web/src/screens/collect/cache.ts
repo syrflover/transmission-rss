@@ -28,6 +28,8 @@ export const KEYS = {
   ruleSort: "collect:rule-sort",
   /** The subscriptions of this and a coming quarter (`/api/subscriptions`). */
   subscriptions: "collect:subscriptions",
+  /** The title candidates (`/api/subscriptions/candidates`). */
+  candidates: "collect:candidates",
   /** One week of Anissia's schedule (`/api/anissia/schedule/<week>`). */
   schedule: (week: number) => `collect:schedule:${week}`,
 } as const;
@@ -95,6 +97,7 @@ export function withoutRule(list: RuleList, ruleId: string): RuleList {
  */
 export function subscriptionChanged(): void {
   forget(KEYS.subscriptions);
+  forget(KEYS.candidates);
   forgetPrefix(WORK_PREFIX);
 }
 
@@ -107,4 +110,17 @@ export function subscriptionAdded(channelId: string): void {
   forget(KEYS.rules);
   forgetPrefix(SCHEDULE_PREFIX);
   ruleCountChanged(channelId, 1);
+}
+
+/**
+ * A title candidate was named or rejected: the candidates, the subscription
+ * list and the rule list (a waiting rule got its phrase) read the server again,
+ * and so do the history rows, which offer a waiting subscription only while one
+ * is left.
+ */
+export function candidatesChanged(): void {
+  subscriptionChanged();
+  forget(KEYS.rules);
+  forgetPrefix(HISTORY_PREFIX);
+  forgetPrefix(PREVIEW_PREFIX);
 }
