@@ -88,6 +88,7 @@ RSS에서 빠진 지난 회차를 규칙 조건으로 만든 nyaa 검색 RSS를 
 - 브라우저(로컬 `trss-web`, 가짜 nyaa, 임시 DB·폴더): 범위 입력 → 검색 → 미리보기(1–24, 결과 27개, 22개 기본 선택, 폴더에 있는 3·4화는 `이미 있어요`로 해제) → 2개를 골라 `선택한 2개 받기` → 세 번째 단계에서 `추가하는 중`(worker가 없어 명령이 열려 있는 상태)까지 봤어요. 375 px에서 세 단계와 미리보기 모두 `scrollWidth`가 `clientWidth`와 같았어요(가로 스크롤 없음, 가로로 넘치는 요소 없음).
 - `cargo fmt --check` 통과, `cargo clippy --all-targets -- -D warnings` 통과, `cargo test --no-fail-fast`는 1193개 통과·실패 0개·무시 2개(27개 실행 파일), 웹은 `bun install --frozen-lockfile`·`bun run typecheck`·`bun run build` 통과.
 - 실제 nyaa는 검색 RSS를 한 번만 읽어 응답 모양을 확인했어요.
+- 검토 뒤 고친 것의 시험(고치기 전에는 실패하는 것을 봤어요): 한 시간 막힌 호스트의 검색이 바로 실패함(`a_host_blocked_for_an_hour_fails_the_search_at_once`), 기다리는 동안 생긴 막힘에는 요청을 보내지 않음(`a_block_that_comes_while_a_request_waits_for_its_slot_stops_the_request`), 한계를 넘는 자리는 받지 않음(`a_slot_further_away_than_the_longest_wait_is_not_taken`), 보관 시간이 지난 검색은 받을 수 없고 사라질 때 중단됨(`a_search_past_its_keep_cannot_be_received_even_before_anything_sweeps`, `a_search_dropped_for_its_age_is_aborted_as_by_every_other_removal`), CRC32가 없는 제목은 수정본 판정에 올리지 않음(`of_the_channels_titles_only_those_a_crc_can_be_matched_to_are_kept`). 합친 뒤 `cargo test --no-fail-fast`는 1228개 통과·실패 0개·무시 2개(27개 실행 파일), `cargo fmt --check`와 `cargo clippy --all-targets -- -D warnings`, 웹의 `bun run typecheck`·`bun run build`가 통과했어요.
 
 ### 검증하지 못한 것
 
@@ -95,6 +96,8 @@ RSS에서 빠진 지난 회차를 규칙 조건으로 만든 nyaa 검색 RSS를 
 - 실제 nyaa의 `429`와 여러 번의 묶음 검색(가짜 nyaa로만 봤어요).
 - 브라우저에서는 worker가 없어 받기가 끝나는 모습(`추가됨`, `받기 실패`와 `다시 받기`)을 보지 못했어요. 그 흐름은 `tests/past_search.rs`가 웹 API와 worker 명령 실행으로 확인해요.
 - 데스크톱 너비는 900 px 부근에서만 보았고 태블릿 너비는 보지 않았어요.
+- 이력이 20000개를 넘을 때 안내가 붙는 것, 판정을 `spawn_blocking`으로 옮겨 런타임 스레드를 막지 않는 것은 시험으로 확인하지 못했어요(긴 이력을 만들어 보지 않았어요).
+- 웹의 두 고침(화면을 떠나도 고른 항목을 끝까지 보냄, 받기로 넘긴 검색만 남기고 나머지는 떠날 때 끝냄)은 웹에 시험 틀이 없어 타입 검사와 빌드로만 확인했고 브라우저에서 눌러 보지는 않았어요.
 
 ### 남은 일
 
