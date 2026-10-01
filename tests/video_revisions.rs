@@ -2189,3 +2189,73 @@ async fn a_lower_revision_skipped_for_another_reason_stays_skipped() {
     assert_eq!(s.state_of(&v2()).await, RevisionState::Skipped);
     assert_eq!(read(&s.file(EPISODE_NAME)), OLD_BYTES);
 }
+
+// --- a replacement whose new video is gone after the old torrent was removed -----
+
+impl Setup {
+    /// `14` in place; `14v2` removed `14`'s torrent but Transmission left its
+    /// file, so `14v2` waits as removing.
+    async fn removal_waits(&self) {
+        self.received_v1().await;
+        self.feed(&[(NEW_HASH, &v2()), (OLD_HASH, &v1())]);
+        self.h.tr.content_on_add(NEW_HASH, NEW_BYTES);
+        self.cycle().await;
+        self.complete(NEW_HASH);
+        self.h.tr.keep_data_on_remove_of(OLD_HASH);
+        self.cycle().await;
+        self.cycle().await;
+        assert_eq!(self.state_of(&v2()).await, RevisionState::Removing);
+        assert!(!self.h.tr.torrents().iter().any(|t| t.hash == OLD_HASH));
+        assert_eq!(read(&self.file(EPISODE_NAME)), OLD_BYTES);
+    }
+
+    /// `14v3` appears and is received and checked.
+    async fn v3_received(&self) {
+        self.feed(&[(V3_HASH, &v3()), (OLD_HASH, &v1())]);
+        self.h.tr.content_on_add(V3_HASH, V3_BYTES);
+        self.h.tr.unfinished_on_add(V3_HASH);
+        self.cycle().await;
+        assert_eq!(self.state_of(&v3()).await, RevisionState::Receiving);
+        self.complete(V3_HASH);
+    }
+}
+
+/// While `14v2` waits for the old file to go, the person deletes the new
+/// video instead. Seen gone on two looks, the replacement ends: nothing is
+/// deleted, the old file stays (and its release is not received again), it
+/// is no failure, and a later revision of the episode is not held up.
+#[tokio::test]
+async fn a_new_video_deleted_while_the_old_file_is_left_ends_the_replacement() {
+    let s = Setup::new().await;
+    s.removal_waits().await;
+    let removes = s.h.tr.calls_of("torrent-remove").len();
+    let adds = s.added(OLD_HASH);
+
+    std::fs::remove_file(s.file(&v2())).unwrap();
+    s.cycle().await;
+    assert_eq!(
+        s.state_of(&v2()).await,
+        RevisionState::Removing,
+        "seen gone once"
+    );
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await.code(), "abandoned");
+    assert!(s.failures().await.is_empty());
+    s.cycle().await;
+    s.cycle().await;
+    assert_eq!(s.names(), vec![EPISODE_NAME]);
+    assert_eq!(read(&s.file(EPISODE_NAME)), OLD_BYTES);
+    assert_eq!(s.h.tr.calls_of("torrent-remove").len(), removes);
+    assert_eq!(
+        s.added(OLD_HASH),
+        adds,
+        "the old release is not received again"
+    );
+
+    // `14v3` replaces the old file.
+    s.v3_received().await;
+    s.cycle().await;
+    assert_eq!(s.state_of(&v3()).await, RevisionState::Done);
+    assert_eq!(s.names(), vec![EPISODE_NAME]);
+    assert_eq!(read(&s.file(EPISODE_NAME)), V3_BYTES);
+}

@@ -685,3 +685,48 @@ async fn every_item_of_the_removed_torrent_is_superseded() {
     );
     assert_eq!(replacements[0].new_version, 2);
 }
+
+/// A replacement that removed the old torrent and then lost its new video
+/// ends as abandoned: it holds up no other replacement of the episode, is no
+/// failure and no longer acted on, and the old release stays superseded.
+#[tokio::test]
+async fn an_abandoned_replacement_keeps_the_old_release_superseded_and_holds_nothing_up() {
+    let (_dir, db) = db().await;
+    let store = RevisionStore::new(db.clone());
+    let v1 = item(&db, "14").await;
+    let v2 = store
+        .create(10, of_episode(item(&db, "14v2").await, "14v2", 2))
+        .await
+        .unwrap();
+    verified(&store, v2.id).await;
+    let old = OldVideo {
+        item_id: Some(v1),
+        version: Some(1),
+        torrent_hash: Some("hash-14".into()),
+    };
+    assert_eq!(store.claim(v2.id, 20, old).await.unwrap(), Claim::Go);
+    // `14v3`, decided while the old file was still there, waits for it.
+    let v3 = store
+        .create(25, of_episode(item(&db, "14v3").await, "14v3", 3))
+        .await
+        .unwrap();
+    verified(&store, v3.id).await;
+    assert_eq!(store.verdict(v3.id).await.unwrap(), Claim::Wait);
+
+    let step = Step::Abandoned {
+        reason: "gone".into(),
+    };
+    assert!(store
+        .advance(v2.id, 30, RevisionState::Removing, step)
+        .await
+        .unwrap());
+    let row = store.by_item(v2.item_id).await.unwrap().unwrap();
+    assert_eq!(row.state, RevisionState::Abandoned);
+    assert!(!row.is_failure());
+    assert!(store.failures().await.unwrap().is_empty());
+    assert!(store.open().await.unwrap().iter().all(|r| r.id != v2.id));
+    assert_eq!(store.verdict(v3.id).await.unwrap(), Claim::Go);
+    let marks = store.marks("c1".into(), vec!["14".into()]).await.unwrap();
+    assert_eq!(marks.get("14"), Some(&Mark::Superseded));
+    assert_eq!(store.replacements().await.unwrap().len(), 1);
+}

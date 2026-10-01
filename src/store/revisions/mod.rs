@@ -29,7 +29,11 @@
 //! did not go through yet; the worker tries again while the name is free. A
 //! `removing` row with a reason ([`Step::RemovalWaits`]) removed the old
 //! torrent but the episode's file is still there; it waits for that file to
-//! go. Both are listed with the failures.
+//! go. Both are listed with the failures. A `removing` row whose old torrent
+//! is gone, or a `removed` one, whose new video is then gone too ends as
+//! [`RevisionState::Abandoned`]: nothing is renamed, it holds up no other
+//! replacement of the episode, and the old release stays superseded (its
+//! torrent was removed for this replacement).
 //!
 //! A step is written only from the state it was decided from
 //! ([`RevisionStore::advance`]), and a row the worker decides together with
@@ -103,10 +107,11 @@ pub enum RevisionState {
     Done,
     Failed,
     Cleared,
+    Abandoned,
 }
 
 impl RevisionState {
-    pub const ALL: [RevisionState; 9] = [
+    pub const ALL: [RevisionState; 10] = [
         RevisionState::Unknown,
         RevisionState::Skipped,
         RevisionState::Receiving,
@@ -116,6 +121,7 @@ impl RevisionState {
         RevisionState::Done,
         RevisionState::Failed,
         RevisionState::Cleared,
+        RevisionState::Abandoned,
     ];
 
     pub fn code(self) -> &'static str {
@@ -129,6 +135,7 @@ impl RevisionState {
             RevisionState::Done => "done",
             RevisionState::Failed => "failed",
             RevisionState::Cleared => "cleared",
+            RevisionState::Abandoned => "abandoned",
         }
     }
 
@@ -153,7 +160,10 @@ impl RevisionState {
     pub fn supersedes_old(self) -> bool {
         matches!(
             self,
-            RevisionState::Removing | RevisionState::Removed | RevisionState::Done
+            RevisionState::Removing
+                | RevisionState::Removed
+                | RevisionState::Done
+                | RevisionState::Abandoned
         )
     }
 }
@@ -279,6 +289,12 @@ pub enum Step {
     /// old video's file is still there: it stays `removing` (the old release
     /// stays superseded) and `reason` says why it waits.
     RemovalWaits {
+        reason: String,
+    },
+    /// A `removing` row whose old torrent is gone, or a `removed` one, whose
+    /// new video is gone too: the replacement ends as
+    /// [`RevisionState::Abandoned`], and `reason` says why.
+    Abandoned {
         reason: String,
     },
 }
@@ -855,7 +871,7 @@ impl RevisionStore {
                          ON h.id = r.old_item_id
                          OR (r.old_torrent_hash IS NOT NULL AND h.torrent_hash = r.old_torrent_hash)
                       WHERE h.channel_id = ?1
-                        AND r.state IN ('removing', 'removed', 'done')",
+                        AND r.state IN ('removing', 'removed', 'done', 'abandoned')",
                 )?;
                 let mut rows = stmt.query([&channel_id])?;
                 while let Some(row) = rows.next()? {
@@ -869,15 +885,16 @@ impl RevisionStore {
             .await
     }
 
-    /// The releases that replaced (or are replacing) a video: their lower
-    /// revisions are not received into the folder again.
+    /// The releases that replaced (or are replacing) a video, or removed its
+    /// torrent and then lost their own ([`RevisionState::Abandoned`]): their
+    /// lower revisions are not received into the folder again.
     pub async fn replacements(&self) -> Result<Vec<Replacement>> {
         self.db
             .run(|c| {
                 let mut stmt = c.prepare(
                     "SELECT r.folder, h.title, r.new_version FROM video_revisions r
                        JOIN history_items h ON h.id = r.item_id
-                      WHERE r.state IN ('removing', 'removed', 'done')",
+                      WHERE r.state IN ('removing', 'removed', 'done', 'abandoned')",
                 )?;
                 let rows = stmt
                     .query_map([], |row| {
@@ -1058,6 +1075,11 @@ impl RevisionStore {
                             params![id, OVERTAKEN, by, at],
                         )?
                     }
+                    Step::Abandoned { reason } => tx.execute(
+                        "UPDATE video_revisions SET state = 'abandoned', reason = ?2,
+                             updated_at = ?3 WHERE id = ?1",
+                        params![id, reason, at],
+                    )?,
                     Step::RemovalWaits { reason } => tx.execute(
                         "UPDATE video_revisions SET reason = ?2, updated_at = ?3
                           WHERE id = ?1 AND state = 'removing'",

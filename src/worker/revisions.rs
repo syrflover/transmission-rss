@@ -521,6 +521,10 @@ const DESTINATION_TAKEN: &str =
     "회차 이름에 다른 파일이 있어서 새 영상의 이름을 바꾸지 않았어요. 그 이름이 비면 다시 바꿔요.";
 const NEW_FILE_MISSING: &str = "받은 새 영상 파일을 찾지 못해 회차 이름을 붙이지 못했어요.";
 const OLD_FILE_LEFT: &str = "이전 영상의 토렌트는 Transmission에서 지웠지만 회차 이름의 파일이 아직 있어요. 그 파일이 없어지면 새 영상에 회차 이름을 붙여요.";
+const NEW_GONE_OLD_LEFT: &str = "이전 영상의 토렌트는 Transmission에서 지웠지만 회차 이름의 파일이 아직 있고, 받은 새 영상 파일은 없어요. 다음 확인에도 없으면 이 대체를 끝내요.";
+/// Why a replacement whose new video is gone was ended (not shown).
+const ABANDONED: &str =
+    "받은 새 영상 파일이 이어진 두 번의 확인에서 모두 없어서 대체를 끝냈어요. 아무 파일도 지우지 않았어요.";
 
 /// Carries every replacement under way as far as it goes now. `at` stamps
 /// what is written.
@@ -567,6 +571,9 @@ fn cleaned(step: Step, redactor: &Redactor) -> Step {
             reason: reason.map(|reason| clean(&reason, redactor)),
         },
         Step::Skipped { reason } => Step::Skipped {
+            reason: clean(&reason, redactor),
+        },
+        Step::Abandoned { reason } => Step::Abandoned {
             reason: clean(&reason, redactor),
         },
         other => other,
@@ -663,6 +670,7 @@ async fn drive(
             | Step::Cleared
             | Step::Skipped { .. }
             | Step::Overtaken
+            | Step::Abandoned { .. }
             | Step::RemovalWaits { .. } => return,
         }
     }
@@ -801,6 +809,25 @@ async fn recover(ctx: &CycleContext, row: &Revision) -> Next {
     }
 }
 
+/// Whether the row's new video is gone: its received name is not in the
+/// folder. A folder that is not there is a mount that is away, not a video
+/// that was deleted: that is an error, and the look is tried again later.
+fn new_video_gone(row: &Revision) -> Result<bool, String> {
+    let folder = Path::new(&row.folder);
+    match std::fs::metadata(folder) {
+        Ok(meta) if meta.is_dir() => {}
+        Ok(_) => return Err(format!("{} is not a folder", folder.display())),
+        Err(err) => return Err(format!("cannot look at {}: {err}", folder.display())),
+    }
+    let Some(name) = &row.received_name else {
+        return Ok(true);
+    };
+    let path = folder.join(name);
+    exists(&path)
+        .map(|present| !present)
+        .map_err(|err| format!("cannot look at {}: {err}", path.display()))
+}
+
 fn exists(path: &Path) -> io::Result<bool> {
     match std::fs::symlink_metadata(path) {
         Ok(_) => Ok(true),
@@ -832,7 +859,9 @@ async fn remove_old(ctx: &CycleContext, row: &mut Revision, at: Millis, listing:
     // Transmission no longer holds it, its file is the old video's data,
     // which Transmission deletes after it answers, or could not delete. It is
     // not looked at as an old video again (the torrent that told its revision
-    // is gone); the replacement waits, as removing, for the file to go.
+    // is gone); the replacement waits, as removing, for the file to go. If
+    // the new video is gone instead (the person deleted it, keeping the old
+    // one), the replacement ends once a second look finds it gone too.
     if let (true, RevisionState::Removing, Some(hash)) =
         (present, row.state, row.old_torrent_hash.as_ref())
     {
@@ -840,9 +869,20 @@ async fn remove_old(ctx: &CycleContext, row: &mut Revision, at: Millis, listing:
         match get_torrent(&mut transmission, hash).await {
             Ok(Some(_)) => {}
             Ok(None) => {
-                return Next::Step(Step::RemovalWaits {
-                    reason: OLD_FILE_LEFT.to_owned(),
-                })
+                return match new_video_gone(row) {
+                    Ok(false) => Next::Step(Step::RemovalWaits {
+                        reason: OLD_FILE_LEFT.to_owned(),
+                    }),
+                    Ok(true) if row.reason.as_deref() == Some(NEW_GONE_OLD_LEFT) => {
+                        Next::Step(Step::Abandoned {
+                            reason: ABANDONED.to_owned(),
+                        })
+                    }
+                    Ok(true) => Next::Step(Step::RemovalWaits {
+                        reason: NEW_GONE_OLD_LEFT.to_owned(),
+                    }),
+                    Err(why) => Next::Later(why),
+                }
             }
             Err(err) => return Next::Later(err.to_string()),
         }
