@@ -10,9 +10,11 @@
 //! The `다시 받기` of a past item for a rule that has picked nothing does the
 //! same with its one item ([`settle_one`]).
 //!
-//! The offset is stored with the version the cycle read the rule at, so a rule
-//! the user edited meanwhile is left as the user made it, and its items are
-//! named without an offset this time.
+//! The offset is stored with the version the cycle read the rule at. When the
+//! user saved the rule meanwhile, it is read again and decided once more if
+//! its offset is still one the app may set and the save did not change it; a
+//! save that touched the offset is left as the user made it, and the rule's
+//! items are named without an offset.
 //!
 //! Anything that cannot be read (the library, the season info, the history)
 //! leaves the rule as it is, with a line in the log: a rule is received without
@@ -93,41 +95,62 @@ async fn settle_rule(
     titles: &[String],
 ) -> Option<i64> {
     let first = first_release(titles)?;
-    let basis = match gather(&ctx.library, &ctx.seasons, collect_folder, rule).await {
-        Ok(Some(basis)) => basis,
-        Ok(None) => return None,
-        Err(err) => {
-            eprintln!(
-                "Episode offset: rule {} is received without one: {err}",
-                rule.id
-            );
+    let mut rule = rule.clone();
+    // The second try is for a rule the user saved while the cycle ran.
+    for _ in 0..2 {
+        let basis = match gather(&ctx.library, &ctx.seasons, collect_folder, &rule).await {
+            Ok(Some(basis)) => basis,
+            Ok(None) => return None,
+            Err(err) => {
+                eprintln!(
+                    "Episode offset: rule {} is received without one: {err}",
+                    rule.id
+                );
+                return None;
+            }
+        };
+        let Verdict::Auto { offset, basis, .. } = decide(first, &basis) else {
             return None;
-        }
-    };
-    let Verdict::Auto { offset, basis, .. } = decide(first, &basis) else {
-        return None;
-    };
-    match ctx
-        .channels
-        .set_auto_episode(&rule.id, rule.version, offset, &basis)
-        .await
-    {
-        Ok(Some(_)) => {
-            println!(
-                "Episode offset: rule {} gets {} from its first release, {first}",
-                rule.id,
-                signed(offset)
-            );
-            Some(offset)
-        }
-        // The user edited the rule since the cycle read it, or it is gone.
-        Ok(None) => None,
-        Err(err) => {
-            eprintln!(
-                "Episode offset: cannot save the offset of rule {}: {err}",
-                rule.id
-            );
-            None
+        };
+        match ctx
+            .channels
+            .set_auto_episode(&rule.id, rule.version, offset, &basis)
+            .await
+        {
+            Ok(Some(_)) => {
+                println!(
+                    "Episode offset: rule {} gets {} from its first release, {first}",
+                    rule.id,
+                    signed(offset)
+                );
+                return Some(offset);
+            }
+            Ok(None) => match ctx.channels.get_rule(&rule.id).await {
+                Ok(Some(now)) if is_open(&now) && now.episode == rule.episode => rule = now,
+                Ok(_) => {
+                    println!(
+                        "Episode offset: rule {} was changed meanwhile and is left as it is",
+                        rule.id
+                    );
+                    return None;
+                }
+                Err(err) => {
+                    eprintln!("Episode offset: cannot read rule {} again: {err}", rule.id);
+                    return None;
+                }
+            },
+            Err(err) => {
+                eprintln!(
+                    "Episode offset: cannot save the offset of rule {}: {err}",
+                    rule.id
+                );
+                return None;
+            }
         }
     }
+    println!(
+        "Episode offset: rule {} kept changing and is received without one",
+        rule.id
+    );
+    None
 }

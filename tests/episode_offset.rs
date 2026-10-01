@@ -605,3 +605,72 @@ async fn a_suggestion_that_cannot_be_read_leaves_the_rule_list_answering() {
         .await;
     assert_eq!(status, StatusCode::OK, "{text}");
 }
+
+/// Runs a cycle whose feed read waits until `meanwhile` is done, so that the
+/// cycle judges the rules as they were before it.
+async fn cycle_while<F: std::future::Future<Output = ()>>(s: &Scene, meanwhile: F) {
+    s.h.advance(300_000);
+    let gate = s.h.feeds.hold(FEED);
+    let worker = s.h.worker();
+    let tick = tokio::spawn(async move { worker.tick(&CancellationToken::new()).await });
+    gate.wait_arrived().await;
+    meanwhile.await;
+    gate.release_one();
+    match tick.await.unwrap().unwrap() {
+        TickOutcome::Ran(_) => {}
+        other => panic!("expected a cycle, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_rule_saved_while_its_first_release_is_read_still_gets_the_offset() {
+    let s = Scene::new().await;
+    s.link_earlier_seasons([Some(12), Some(12)]).await;
+    s.h.advance(1_000);
+    let rule = s.subscribe("Show", "Show/Season 03", 7, 1).await;
+    s.feed(&[]);
+    s.cycle().await;
+
+    s.feed(&[&show(25)]);
+    cycle_while(&s, async {
+        // A save that leaves the offset alone.
+        let now = s.rule(&rule).await;
+        let mut input = now.to_input();
+        input.case_insensitive = !input.case_insensitive;
+        s.h.channels
+            .update_rule(&now.id, now.version, &s.channel, input)
+            .await
+            .unwrap();
+    })
+    .await;
+
+    assert_eq!(s.names(), ["Show S03E01.mkv"]);
+    let stored = s.rule(&rule).await;
+    assert_eq!((stored.episode, stored.episode_auto), (-24, true));
+}
+
+#[tokio::test]
+async fn an_offset_the_user_saves_while_the_first_release_is_read_is_kept() {
+    let s = Scene::new().await;
+    s.link_earlier_seasons([Some(12), Some(12)]).await;
+    s.h.advance(1_000);
+    let rule = s.subscribe("Show", "Show/Season 03", 7, 1).await;
+    s.feed(&[]);
+    s.cycle().await;
+
+    s.feed(&[&show(25)]);
+    cycle_while(&s, async {
+        let now = s.rule(&rule).await;
+        let mut input = now.to_input();
+        input.episode = 0;
+        s.h.channels
+            .update_rule(&now.id, now.version, &s.channel, input)
+            .await
+            .unwrap();
+    })
+    .await;
+
+    let stored = s.rule(&rule).await;
+    assert_eq!((stored.episode, stored.episode_auto), (0, false));
+    assert_eq!(s.names(), ["Show S03E25.mkv"]);
+}
