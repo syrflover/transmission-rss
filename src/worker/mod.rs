@@ -183,6 +183,7 @@ impl Worker {
                 settings: SettingsStore::new(db.clone()),
                 history: HistoryStore::new(db.clone()),
                 library: LibraryStore::new(db),
+                scan_cache: watch::ScanCaches::default(),
                 transmission_url: env.transmission_url.clone(),
                 transmission_http: crate::transmission::http_client(
                     crate::transmission::REQUEST_TIMEOUT,

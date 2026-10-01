@@ -35,6 +35,23 @@ fn touch(path: &Path) {
     fs::write(path, "x").unwrap();
 }
 
+/// Gives every directory under `root` (and `root`) a modification time in 2001,
+/// as a folder nobody has touched for a long time has. The periodic scan does
+/// not trust a directory changed moments before it listed it, so the trees
+/// these tests build must look settled before it can skip them.
+fn age_dirs(root: &Path) {
+    for entry in fs::read_dir(root).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() && !path.is_symlink() {
+            age_dirs(&path);
+        }
+    }
+    fs::File::open(root)
+        .unwrap()
+        .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000_000))
+        .unwrap();
+}
+
 fn text(path: impl AsRef<Path>) -> String {
     path.as_ref().to_str().unwrap().to_owned()
 }
@@ -48,6 +65,9 @@ fn age(path: &Path) {
 
 struct Lib {
     h: Harness,
+    /// The one worker of the test, as a process has one: what it remembers
+    /// between scans (see `worker::watch`) lives as long as it does.
+    worker: Worker,
     api: WebApi,
     library: LibraryStore,
     /// A folder under the harness's temporary directory that watch folders go in.
@@ -62,6 +82,10 @@ impl Lib {
         Lib {
             api: h.web_api(),
             library: LibraryStore::new(h.db.clone()),
+            worker: h.worker().with_move_policy(MovePolicy {
+                poll: Duration::from_millis(10),
+                timeout: Duration::from_secs(5),
+            }),
             h,
             media,
         }
@@ -165,23 +189,14 @@ impl Lib {
 
     /// One worker cycle (which rescans every watch folder after the RSS work).
     async fn tick(&self) -> CycleReport {
-        match self
-            .h
-            .worker()
-            .tick(&CancellationToken::new())
-            .await
-            .unwrap()
-        {
+        match self.worker.tick(&CancellationToken::new()).await.unwrap() {
             TickOutcome::Ran(report) => report,
             other => panic!("expected a cycle, got {other:?}"),
         }
     }
 
     fn worker(&self) -> Worker {
-        self.h.worker().with_move_policy(MovePolicy {
-            poll: Duration::from_millis(10),
-            timeout: Duration::from_secs(5),
-        })
+        self.worker.clone()
     }
 
     async fn send(&self, id: &str, kind: &str, payload: Value) -> (StatusCode, Value) {
@@ -609,6 +624,67 @@ async fn unregistering_removes_the_folders_works_and_leaves_the_files_alone() {
     let again = lib.register(&a).await;
     assert_ne!(again.id, fa.id);
     assert_eq!(lib.works(&again).await.len(), 1);
+}
+
+#[tokio::test]
+async fn the_periodic_scan_skips_unchanged_directories_and_rescan_reads_everything() {
+    let lib = Lib::new().await;
+    let root = lib.folder("anime");
+    lycoris(&root);
+    let folder = lib.register(&root).await;
+    age_dirs(&root);
+    let season = root.join("Lycoris Recoil/Season 01");
+    let work = || lib.work(&folder, "Lycoris Recoil");
+
+    // The first scan after the worker starts reads everything and remembers it.
+    lib.h.advance(1000);
+    lib.tick().await;
+    assert_eq!(work().await.files().len(), 4);
+
+    // A change that leaves the season folder's modification time as it was (a
+    // coarse clock) is not seen by the periodic scan...
+    touch(&season.join("Lycoris Recoil S01E03.mkv"));
+    age_dirs(&season);
+    lib.h.advance(1000);
+    lib.tick().await;
+    assert!(!work()
+        .await
+        .files()
+        .contains_key("Season 01/Lycoris Recoil S01E03.mkv"));
+
+    // ...but `다시 확인` reads every directory, and the file gets that time.
+    lib.h.advance(1000);
+    let (status, body) = lib
+        .send(
+            "rescan-full",
+            "watch_rescan",
+            json!({ "folder_id": folder.id }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    assert_eq!(lib.run_commands().await, CommandsOutcome::Ran(1));
+    assert_eq!(
+        work().await.files()["Season 01/Lycoris Recoil S01E03.mkv"].added_at,
+        Some(lib.h.now())
+    );
+
+    // An ordinary change (the folder's time moves) is found by the next cycle,
+    // while the folders around it are not listed again.
+    touch(&season.join("Lycoris Recoil S01E04.mkv"));
+    lib.h.advance(1000);
+    lib.tick().await;
+    assert_eq!(
+        work().await.files()["Season 01/Lycoris Recoil S01E04.mkv"].added_at,
+        Some(lib.h.now())
+    );
+    // The time of a file's modification is not an added time.
+    age(&season.join("Lycoris Recoil S01E04.mkv"));
+    lib.h.advance(1000);
+    lib.tick().await;
+    assert_eq!(
+        work().await.files()["Season 01/Lycoris Recoil S01E04.mkv"].added_at,
+        Some(lib.h.now() - 1000)
+    );
 }
 
 // --- the collect and archive folders are always watched ---------------------------------
@@ -1212,15 +1288,37 @@ async fn a_library_of_520_works_and_10_000_files_is_read_and_recorded() {
         build.elapsed()
     );
 
+    // As a library that has been there a while: the periodic scan does not
+    // skip directories modified moments ago.
+    age_dirs(&root);
+
     let read = std::time::Instant::now();
-    let scan = discovery::scan(&root).unwrap();
+    let full = discovery::scan_incremental(&root, None);
     let read_time = read.elapsed();
-    assert_eq!(scan.works.len(), WORKS);
+    let dirs = full.stats.dirs_read;
+    assert_eq!(full.result.unwrap().works.len(), WORKS);
+    assert_eq!(dirs, 1 + 2 * WORKS);
+    let again = std::time::Instant::now();
+    let unchanged = discovery::scan_incremental(&root, Some(full.cache));
+    let unchanged_time = again.elapsed();
+    assert_eq!(unchanged.stats.dirs_read, 0);
+    assert_eq!(unchanged.stats.dirs_reused, dirs);
 
     let first = std::time::Instant::now();
     let folder = lib.register(&root).await;
     let first_time = first.elapsed();
     assert_eq!(lib.works(&folder).await.len(), WORKS);
+
+    // The first cycle after the worker starts reads everything; the next finds
+    // nothing changed.
+    lib.h.advance(1000);
+    let cold = std::time::Instant::now();
+    lib.tick().await;
+    let cold_time = cold.elapsed();
+    lib.h.advance(1000);
+    let quiet = std::time::Instant::now();
+    lib.tick().await;
+    let quiet_time = quiet.elapsed();
 
     touch(&root.join("Work 007/Season 01/Work 007 S01E14.mkv"));
     lib.h.advance(1000);
@@ -1251,7 +1349,9 @@ async fn a_library_of_520_works_and_10_000_files_is_read_and_recorded() {
         works.len()
     );
     eprintln!(
-        "scan only: {read_time:?}; first registration (scan, web checks and record): {first_time:?}; \
-         worker cycle with one new file (scan and record): {second_time:?}"
+        "scan only ({dirs} directories): all listed {read_time:?}, none changed {unchanged_time:?}; \
+         first registration (scan, web checks and record): {first_time:?}; worker cycles (scan \
+         and record): first after start {cold_time:?}, nothing changed {quiet_time:?}, \
+         one new file {second_time:?}"
     );
 }

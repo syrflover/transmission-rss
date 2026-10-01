@@ -15,6 +15,18 @@
 //! The duration of every scan is logged, since a large library (hundreds of
 //! works, thousands of files) is read in the cycle's own time.
 //!
+//! # Directories that have not changed
+//!
+//! A periodic scan lists only the directories whose modification time or
+//! identity changed since the worker last read them
+//! ([`discovery::scan_incremental`]); the rest of the tree costs one `stat` per
+//! directory. What the worker remembers lives in memory, per watch folder
+//! ([`ScanCaches`]), so the first scan after the worker starts, `다시 확인`
+//! ([`ScanMode::Full`]) and a folder that could not be read are full reads. A
+//! change that leaves a directory's modification time as it was (a file system
+//! with coarse times) is found by `다시 확인` or after a restart. The time only
+//! decides what to list again: it never becomes an added time.
+//!
 //! # The collect and archive folders
 //!
 //! The collect folder and the archive folder are always watch folders. The web
@@ -34,9 +46,9 @@
 //! so), so a hung mount costs one thread, not one per cycle.
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
-    sync::{LazyLock, Mutex},
+    sync::{Arc, LazyLock, Mutex},
     time::{Duration, Instant},
 };
 
@@ -48,6 +60,19 @@ use crate::{
     discovery,
     store::library::{Followed, LibraryError, ScanReport, WatchFolder},
 };
+
+/// What the worker remembers of each watch folder's directories (by folder
+/// ID) to skip the unchanged ones the next time. Cheap to clone.
+pub type ScanCaches = Arc<Mutex<HashMap<String, discovery::DirCache>>>;
+
+/// How much of a watch folder a scan reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScanMode {
+    /// The periodic scan: directories that have not changed are skipped.
+    Periodic,
+    /// Every directory is listed (`다시 확인`).
+    Full,
+}
 
 /// How long reading one watch folder may take before it is given up on.
 pub const SCAN_TIMEOUT: Duration = Duration::from_secs(60);
@@ -70,13 +95,14 @@ impl Drop for Scanning {
 /// Runs `read` for the folder at `path` on a blocking thread and waits at most
 /// `timeout`. A panic, a timeout, and a scan of the folder that is still running
 /// from an earlier timeout are each a [`discovery::ScanError`] with a sentence.
-async fn read_with_timeout<F>(
+async fn read_with_timeout<T, F>(
     path: &str,
     timeout: Duration,
     read: F,
-) -> Result<discovery::Scan, discovery::ScanError>
+) -> Result<T, discovery::ScanError>
 where
-    F: FnOnce() -> Result<discovery::Scan, discovery::ScanError> + Send + 'static,
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
 {
     let claimed = SCANNING
         .lock()
@@ -95,7 +121,7 @@ where
         read()
     });
     match tokio::time::timeout(timeout, task).await {
-        Ok(Ok(result)) => result,
+        Ok(Ok(result)) => Ok(result),
         Ok(Err(err)) => {
             // The scan panicked: nothing is known about the folder.
             eprintln!("Watch folder {path}: the scan ended with {err}");
@@ -131,13 +157,36 @@ pub async fn scan_folder(
     ctx: &CycleContext,
     folder: &WatchFolder,
     now: crate::store::history::Millis,
+    mode: ScanMode,
 ) -> Result<Scanned, LibraryError> {
     let started = Instant::now();
     let path = folder.path.clone();
-    let result = read_with_timeout(&folder.path, SCAN_TIMEOUT, move || {
-        discovery::scan(path.as_ref())
+    // What the last scan saw goes with the scan; a scan that does not finish
+    // leaves nothing behind, so the next one reads everything.
+    let previous = {
+        let mut caches = ctx.scan_cache.lock().unwrap_or_else(|e| e.into_inner());
+        let remembered = caches.remove(&folder.id);
+        match mode {
+            ScanMode::Periodic => remembered,
+            ScanMode::Full => None,
+        }
+    };
+    let scanned = read_with_timeout(&folder.path, SCAN_TIMEOUT, move || {
+        discovery::scan_incremental(path.as_ref(), previous)
     })
     .await;
+    let (result, stats) = match scanned {
+        Ok(scanned) => {
+            if scanned.result.is_ok() {
+                ctx.scan_cache
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .insert(folder.id.clone(), scanned.cache);
+            }
+            (scanned.result, Some(scanned.stats))
+        }
+        Err(error) => (Err(error), None),
+    };
     let read_in = started.elapsed();
     let failure = result.as_ref().err().cloned();
     let recorded = ctx.library.record_scan(&folder.id, result, now).await?;
@@ -154,9 +203,15 @@ pub async fn scan_folder(
             Scanned::Failed(error.message)
         }
         (Some(report), None) => {
+            let listed = stats.map_or(String::new(), |s| {
+                format!(
+                    "{} directories listed, {} unchanged; ",
+                    s.dirs_read, s.dirs_reused
+                )
+            });
             println!(
                 "Watch folder {}: {} works, {} new, {} files added, {} removed, {} missing; \
-                 read in {} ms, scan took {} ms in all",
+                 {listed}read in {} ms, scan took {} ms in all",
                 folder.path,
                 report.works_found,
                 report.works_added,
@@ -250,11 +305,16 @@ pub async fn scan_all(ctx: &CycleContext, clock: &Clock, cancel: &CancellationTo
             return;
         }
     };
+    // Nothing is remembered of a folder that is not registered any more.
+    ctx.scan_cache
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .retain(|id, _| folders.iter().any(|f| &f.id == id));
     for folder in folders {
         if cancel.is_cancelled() {
             break;
         }
-        if let Err(err) = scan_folder(ctx, &folder, clock()).await {
+        if let Err(err) = scan_folder(ctx, &folder, clock(), ScanMode::Periodic).await {
             eprintln!(
                 "Watch folder {}: cannot record the scan: {err}",
                 folder.path
@@ -318,7 +378,6 @@ mod tests {
 
         let hung = read_with_timeout("/hang", timeout, move || {
             let _ = wait.recv();
-            Ok(discovery::Scan::default())
         })
         .await;
         let error = hung.unwrap_err();
@@ -334,7 +393,7 @@ mod tests {
         assert!(started.elapsed() < timeout);
 
         // Another folder is not held back.
-        let other = read_with_timeout("/other", timeout, || Ok(discovery::Scan::default())).await;
+        let other = read_with_timeout("/other", timeout, || ()).await;
         assert!(other.is_ok());
 
         // Once the thread returns, the folder can be scanned again.
@@ -345,24 +404,13 @@ mod tests {
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        let after = read_with_timeout("/hang", timeout, || Ok(discovery::Scan::default())).await;
+        let after = read_with_timeout("/hang", timeout, || ()).await;
         assert!(after.is_ok(), "{after:?}");
     }
 
     #[tokio::test]
-    async fn a_scan_within_the_time_is_returned_as_it_is() {
-        let ok = read_with_timeout("/ok", Duration::from_secs(5), || {
-            Ok(discovery::Scan::default())
-        })
-        .await;
-        assert_eq!(ok, Ok(discovery::Scan::default()));
-        let failed = read_with_timeout("/failed", Duration::from_secs(5), || {
-            Err(discovery::ScanError {
-                message: "m".into(),
-                detail: "d".into(),
-            })
-        })
-        .await;
-        assert_eq!(failed.unwrap_err().message, "m");
+    async fn what_a_scan_within_the_time_returns_is_returned_as_it_is() {
+        let ok = read_with_timeout("/ok", Duration::from_secs(5), || 7).await;
+        assert_eq!(ok.unwrap(), 7);
     }
 }

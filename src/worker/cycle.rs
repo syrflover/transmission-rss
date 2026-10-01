@@ -47,6 +47,9 @@ pub struct CycleContext {
     pub history: HistoryStore,
     /// The watch folders the worker rescans (see [`crate::worker::watch`]).
     pub library: LibraryStore,
+    /// What the worker remembers of each watch folder's directories between
+    /// scans (see [`crate::worker::watch`]).
+    pub scan_cache: super::watch::ScanCaches,
     pub transmission_url: Url,
     /// The client for Transmission's requests; they time out
     /// (see [`crate::transmission::http_client`]).

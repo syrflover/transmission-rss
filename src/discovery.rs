@@ -2,7 +2,7 @@
 //! (`docs/specs/library.md`, 작품 발견과 감시 폴더).
 //!
 //! The web (when a watch folder is added) and the worker (every cycle, and on
-//! `다시 확인`) read a folder with the same [`scan`], which only looks: it never
+//! `다시 확인`) read a folder with the same scan, which only looks: it never
 //! creates, moves, renames or deletes anything, and it does not touch the
 //! database. What a scan found is handed to [`crate::store::library`], which
 //! decides what is new and what has gone.
@@ -43,6 +43,16 @@
 //! would be a work: that one is [`WorkRead::Unreadable`], so that the folder's
 //! row says a work folder could not be read.
 //!
+//! # Unchanged directories
+//!
+//! The worker's periodic scan uses [`scan_incremental`]: it keeps what the last
+//! scan listed in each directory ([`DirCache`]) and lists a directory again only
+//! when its modification time or identity changed (or it was modified moments
+//! before the last listing, or it holds a link). Entries are classified from
+//! `readdir`'s own file type, so listing costs no call per file; only a link
+//! needs more. The web's first reading of a folder and `다시 확인` list
+//! everything. See [`scan_incremental`] for what this can miss.
+//!
 //! # Failures
 //!
 //! A watch folder that cannot be read is a [`ScanError`] and says nothing about
@@ -53,7 +63,14 @@
 //! not look like a file that vanished. Neither may make a caller forget what it
 //! knew.
 
-use std::{collections::BTreeSet, fs, io, path::Path, sync::LazyLock};
+use std::{
+    collections::{BTreeSet, HashMap},
+    ffi::OsString,
+    fs, io,
+    path::{Path, PathBuf},
+    sync::{Arc, LazyLock},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use regex::Regex;
 
@@ -260,49 +277,448 @@ fn entry_name(entry: &fs::DirEntry) -> (String, bool) {
     }
 }
 
-/// Reads the watch folder at `root`. See the module docs.
-pub fn scan(root: &Path) -> Result<Scan, ScanError> {
-    let real_root = fs::canonicalize(root).map_err(|e| scan_error(&e))?;
-    let entries = sorted_entries(&real_root).map_err(|e| scan_error(&e))?;
+/// How many directories a scan read and how many it did not need to.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ScanStats {
+    /// Directories listed from the file system.
+    pub dirs_read: usize,
+    /// Directories whose listing was taken from the earlier scan because they
+    /// had not changed.
+    pub dirs_reused: usize,
+}
 
-    let mut works = Vec::new();
-    for entry in entries {
-        let (name, valid) = entry_name(&entry);
-        if skipped(&name) {
-            continue;
+/// What an earlier scan saw of each directory it listed, to skip the directories
+/// that have not changed since (see [`scan_incremental`]).
+#[derive(Debug, Clone, Default)]
+pub struct DirCache {
+    dirs: HashMap<PathBuf, CachedDir>,
+}
+
+impl DirCache {
+    /// How many directories the cache holds.
+    pub fn len(&self) -> usize {
+        self.dirs.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.dirs.is_empty()
+    }
+}
+
+/// The identity and modification time of a directory when it was listed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Stamp {
+    dev: u64,
+    ino: u64,
+    /// Nanoseconds since the Unix epoch.
+    mtime_ns: i128,
+}
+
+#[cfg(unix)]
+fn stamp_of(metadata: &fs::Metadata) -> Option<Stamp> {
+    use std::os::unix::fs::MetadataExt;
+    Some(Stamp {
+        dev: metadata.dev(),
+        ino: metadata.ino(),
+        mtime_ns: i128::from(metadata.mtime()) * 1_000_000_000 + i128::from(metadata.mtime_nsec()),
+    })
+}
+
+#[cfg(not(unix))]
+fn stamp_of(_: &fs::Metadata) -> Option<Stamp> {
+    None
+}
+
+/// A directory modified this close to the moment it was listed cannot be told
+/// from an unchanged one by its modification time: a change in the same clock
+/// tick (or the same two seconds, on a file system with coarse times) leaves the
+/// time as it was. Such a listing is not reused; the next scan lists it again.
+const RACY_WINDOW_NS: i128 = 5_000_000_000;
+
+fn now_ns() -> i128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos() as i128)
+}
+
+#[derive(Debug, Clone)]
+struct CachedDir {
+    stamp: Stamp,
+    /// When the listing was made (nanoseconds since the Unix epoch).
+    listed_at_ns: i128,
+    entries: Arc<Vec<Listed>>,
+}
+
+impl CachedDir {
+    /// Whether the listing can stand for the directory as `now` is (see [`RACY_WINDOW_NS`]).
+    fn is_valid_for(&self, now: Stamp) -> bool {
+        self.stamp == now && self.stamp.mtime_ns < self.listed_at_ns - RACY_WINDOW_NS
+    }
+}
+
+/// One entry of a listed directory.
+#[derive(Debug, Clone)]
+struct Listed {
+    /// The name, with invalid UTF-8 replaced.
+    name: String,
+    /// The raw name when it was not valid UTF-8.
+    raw: Option<OsString>,
+    /// What the entry is, or why it could not be examined (a sentence).
+    node: Result<Node, String>,
+    /// The entry is a link.
+    link: bool,
+}
+
+impl Listed {
+    fn valid(&self) -> bool {
+        self.raw.is_none()
+    }
+
+    fn path_in(&self, dir: &Path) -> PathBuf {
+        match &self.raw {
+            Some(raw) => dir.join(raw),
+            None => dir.join(&self.name),
         }
-        // An entry that cannot be examined may be a work: say so, so that the
-        // record of a work by that name is kept.
-        let node = match classify(&entry, &real_root) {
-            Ok(node) => node,
-            Err(error) => {
+    }
+}
+
+/// What [`scan_incremental`] returns.
+#[derive(Debug)]
+pub struct Scanned {
+    pub result: Result<Scan, ScanError>,
+    /// What this scan saw, for the next one. Empty when the scan failed.
+    pub cache: DirCache,
+    pub stats: ScanStats,
+}
+
+/// Reads the watch folder at `root`, listing every directory. See the module docs.
+pub fn scan(root: &Path) -> Result<Scan, ScanError> {
+    scan_incremental(root, None).result
+}
+
+/// Reads the watch folder at `root`, taking the listing of a directory from
+/// `previous` (what the scan before saw) when the directory has not changed
+/// since: same device and inode, same modification time, and not modified
+/// within [`RACY_WINDOW_NS`] of that listing. A directory's modification time
+/// changes when an entry is added, removed or renamed directly in it, so a new
+/// file in one season folder is found, and only that folder is listed again.
+/// Nothing else is taken from `previous`: the directories below an unchanged
+/// one are each checked on their own.
+///
+/// A directory is always listed when `previous` is `None`, when it holds a link
+/// (a link's target can change without the directory changing), when it is
+/// reached through a link, and when its modification time cannot be read. The
+/// modification time only decides whether to list again; it never reaches an
+/// added time, which the library takes from the scan's own time.
+pub fn scan_incremental(root: &Path, previous: Option<DirCache>) -> Scanned {
+    let mut walker = Walker {
+        real_root: PathBuf::new(),
+        previous: previous.unwrap_or_default(),
+        next: DirCache::default(),
+        stats: ScanStats::default(),
+    };
+    let result = walker.scan(root);
+    let cache = if result.is_ok() {
+        walker.next
+    } else {
+        DirCache::default()
+    };
+    Scanned {
+        result,
+        cache,
+        stats: walker.stats,
+    }
+}
+
+struct Walker {
+    real_root: PathBuf,
+    previous: DirCache,
+    next: DirCache,
+    stats: ScanStats,
+}
+
+impl Walker {
+    fn scan(&mut self, root: &Path) -> Result<Scan, ScanError> {
+        self.real_root = fs::canonicalize(root).map_err(|e| scan_error(&e))?;
+        let real_root = self.real_root.clone();
+        let entries = self
+            .listing(&real_root, false)
+            .map_err(|e| scan_error(&e))?;
+
+        let mut works = Vec::new();
+        for listed in entries.iter() {
+            if skipped(&listed.name) {
+                continue;
+            }
+            // An entry that cannot be examined may be a work: say so, so that
+            // the record of a work by that name is kept.
+            let node = match &listed.node {
+                Ok(node) => *node,
+                Err(reason) => {
+                    works.push(WorkRead::Unreadable {
+                        dir_name: listed.name.clone(),
+                        reason: reason.clone(),
+                    });
+                    continue;
+                }
+            };
+            if node != Node::Dir {
+                continue;
+            }
+            if !listed.valid() {
                 works.push(WorkRead::Unreadable {
-                    dir_name: name,
-                    reason: unreadable_reason(&error),
+                    dir_name: listed.name.clone(),
+                    reason: "폴더 이름이 UTF-8이 아니라서 읽지 못했어요.".to_owned(),
                 });
                 continue;
             }
-        };
-        if node != Node::Dir {
-            continue;
+            let read = match self.read_work(&listed.path_in(&real_root), &listed.name, listed.link)
+            {
+                Ok(work) => WorkRead::Read(work),
+                Err(reason) => WorkRead::Unreadable {
+                    dir_name: listed.name.clone(),
+                    reason,
+                },
+            };
+            works.push(read);
         }
-        if !valid {
-            works.push(WorkRead::Unreadable {
-                dir_name: name,
-                reason: "폴더 이름이 UTF-8이 아니라서 읽지 못했어요.".to_owned(),
-            });
-            continue;
-        }
-        let read = match read_work(&entry.path(), &name, &real_root) {
-            Ok(work) => WorkRead::Read(work),
-            Err(error) => WorkRead::Unreadable {
-                dir_name: name,
-                reason: unreadable_reason(&error),
-            },
-        };
-        works.push(read);
+        Ok(Scan { works })
     }
-    Ok(Scan { works })
+
+    /// The entries of `dir`: from the earlier scan when `dir` has not changed,
+    /// else from the file system. `via_link`: `dir` is a link or inside one.
+    fn listing(&mut self, dir: &Path, via_link: bool) -> io::Result<Arc<Vec<Listed>>> {
+        let stamp = if via_link {
+            None
+        } else {
+            fs::metadata(dir).ok().and_then(|m| stamp_of(&m))
+        };
+        if let (Some(stamp), Some(cached)) = (stamp, self.previous.dirs.get(dir)) {
+            if cached.is_valid_for(stamp) {
+                self.stats.dirs_reused += 1;
+                let entries = cached.entries.clone();
+                self.next.dirs.insert(dir.to_path_buf(), cached.clone());
+                return Ok(entries);
+            }
+        }
+
+        let listed_at_ns = now_ns();
+        self.stats.dirs_read += 1;
+        let mut listed = Vec::new();
+        for entry in sorted_entries(dir)? {
+            let (name, valid) = entry_name(&entry);
+            let raw = (!valid).then(|| entry.file_name());
+            // What is skipped is not looked at, so no error of its own matters.
+            let (node, link) = if skipped(&name) {
+                (Ok(Node::Skip), false)
+            } else {
+                (
+                    classify(&entry, &self.real_root).map_err(|e| unreadable_reason(&e)),
+                    entry.file_type().is_ok_and(|t| t.is_symlink()),
+                )
+            };
+            listed.push(Listed {
+                name,
+                raw,
+                node,
+                link,
+            });
+        }
+        let cacheable = listed.iter().all(|l| l.node.is_ok() && !l.link);
+        let entries = Arc::new(listed);
+        if let (Some(stamp), true) = (stamp, cacheable) {
+            self.next.dirs.insert(
+                dir.to_path_buf(),
+                CachedDir {
+                    stamp,
+                    listed_at_ns,
+                    entries: entries.clone(),
+                },
+            );
+        }
+        Ok(entries)
+    }
+
+    /// Reads one work folder. The error is a sentence for the folder's row.
+    fn read_work(&mut self, dir: &Path, name: &str, via_link: bool) -> Result<ScannedWork, String> {
+        let mut work = ScannedWork {
+            dir_name: name.to_owned(),
+            ..ScannedWork::default()
+        };
+        let entries = self
+            .listing(dir, via_link)
+            .map_err(|e| unreadable_reason(&e))?;
+        for listed in entries.iter() {
+            if skipped(&listed.name) {
+                continue;
+            }
+            match listed.node.clone()? {
+                Node::Skip => {}
+                Node::File => {
+                    if is_media_or_partial(&listed.name) {
+                        let reason = if !listed.valid() {
+                            Reason::InvalidName
+                        } else if is_partial(&listed.name) {
+                            Reason::Partial
+                        } else {
+                            Reason::OutsideSeason
+                        };
+                        work.unrecognized.push(Unrecognized {
+                            path: listed.name.clone(),
+                            reason,
+                        });
+                    }
+                }
+                Node::Dir => {
+                    let path = listed.path_in(dir);
+                    let via_link = via_link || listed.link;
+                    match season_of_folder(&listed.name) {
+                        Some(season) => {
+                            work.seasons.insert(season);
+                            self.read_season(&path, &listed.name, season, via_link, &mut work)?;
+                        }
+                        None => self.collect_all(
+                            &path,
+                            &listed.name,
+                            Reason::OutsideSeason,
+                            1,
+                            via_link,
+                            &mut work,
+                        )?,
+                    }
+                }
+            }
+        }
+        Ok(work)
+    }
+
+    /// Reads the files directly in a season folder; what is in folders below it
+    /// is all unrecognized.
+    fn read_season(
+        &mut self,
+        dir: &Path,
+        folder: &str,
+        season: u32,
+        via_link: bool,
+        work: &mut ScannedWork,
+    ) -> Result<(), String> {
+        let entries = self
+            .listing(dir, via_link)
+            .map_err(|e| unreadable_reason(&e))?;
+        for listed in entries.iter() {
+            if skipped(&listed.name) {
+                continue;
+            }
+            let name = &listed.name;
+            let path = format!("{folder}/{name}");
+            match listed.node.clone()? {
+                Node::Skip => {}
+                Node::Dir => self.collect_all(
+                    &listed.path_in(dir),
+                    &path,
+                    Reason::InSubfolder,
+                    1,
+                    via_link || listed.link,
+                    work,
+                )?,
+                Node::File => {
+                    if !listed.valid() {
+                        if is_media_or_partial(name) {
+                            work.unrecognized.push(Unrecognized {
+                                path,
+                                reason: Reason::InvalidName,
+                            });
+                        }
+                        continue;
+                    }
+                    if is_partial(name) {
+                        work.unrecognized.push(Unrecognized {
+                            path,
+                            reason: Reason::Partial,
+                        });
+                        continue;
+                    }
+                    let Some(kind) = kind_of(name) else {
+                        continue;
+                    };
+                    match episode_of(name, kind) {
+                        None => work.unrecognized.push(Unrecognized {
+                            path,
+                            reason: Reason::NoEpisode,
+                        }),
+                        Some((found, _)) if found != season => {
+                            work.unrecognized.push(Unrecognized {
+                                path,
+                                reason: Reason::SeasonMismatch,
+                            })
+                        }
+                        Some((_, episode)) => work.files.push(EpisodeFile {
+                            path,
+                            kind,
+                            season,
+                            episode,
+                        }),
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Every video, subtitle and `.part` file below `dir`, as unrecognized for
+    /// `reason` (a `.part` file is always [`Reason::Partial`]).
+    fn collect_all(
+        &mut self,
+        dir: &Path,
+        shown: &str,
+        reason: Reason,
+        depth: usize,
+        via_link: bool,
+        work: &mut ScannedWork,
+    ) -> Result<(), String> {
+        if depth > MAX_DEPTH {
+            return Ok(());
+        }
+        let entries = self
+            .listing(dir, via_link)
+            .map_err(|e| unreadable_reason(&e))?;
+        for listed in entries.iter() {
+            if skipped(&listed.name) {
+                continue;
+            }
+            let name = &listed.name;
+            let path = format!("{shown}/{name}");
+            match listed.node.clone()? {
+                Node::Skip => {}
+                Node::Dir => self.collect_all(
+                    &listed.path_in(dir),
+                    &path,
+                    reason,
+                    depth + 1,
+                    via_link || listed.link,
+                    work,
+                )?,
+                Node::File => {
+                    if !listed.valid() {
+                        if is_media_or_partial(name) {
+                            work.unrecognized.push(Unrecognized {
+                                path,
+                                reason: Reason::InvalidName,
+                            });
+                        }
+                    } else if is_partial(name) {
+                        work.unrecognized.push(Unrecognized {
+                            path,
+                            reason: Reason::Partial,
+                        });
+                    } else if kind_of(name).is_some() {
+                        work.unrecognized.push(Unrecognized { path, reason });
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 fn skipped(name: &str) -> bool {
@@ -312,7 +728,7 @@ fn skipped(name: &str) -> bool {
 /// The entries of `dir`, by name.
 fn sorted_entries(dir: &Path) -> io::Result<Vec<fs::DirEntry>> {
     let mut entries = fs::read_dir(dir)?.collect::<io::Result<Vec<_>>>()?;
-    entries.sort_by_key(|entry| entry.file_name());
+    entries.sort_by_cached_key(|entry| entry.file_name());
     Ok(entries)
 }
 
@@ -440,164 +856,6 @@ pub fn episode_of(name: &str, kind: FileKind) -> Option<(u32, String)> {
         stem = &stem[..dot];
         fragments += 1;
     }
-}
-
-/// Reads one work folder.
-fn read_work(dir: &Path, name: &str, real_root: &Path) -> io::Result<ScannedWork> {
-    let mut work = ScannedWork {
-        dir_name: name.to_owned(),
-        ..ScannedWork::default()
-    };
-    for entry in sorted_entries(dir)? {
-        let (entry_name, valid) = entry_name(&entry);
-        if skipped(&entry_name) {
-            continue;
-        }
-        match classify(&entry, real_root)? {
-            Node::Skip => {}
-            Node::File => {
-                if is_media_or_partial(&entry_name) {
-                    let reason = if !valid {
-                        Reason::InvalidName
-                    } else if is_partial(&entry_name) {
-                        Reason::Partial
-                    } else {
-                        Reason::OutsideSeason
-                    };
-                    work.unrecognized.push(Unrecognized {
-                        path: entry_name,
-                        reason,
-                    });
-                }
-            }
-            Node::Dir => match season_of_folder(&entry_name) {
-                Some(season) => {
-                    work.seasons.insert(season);
-                    read_season(&entry.path(), &entry_name, season, real_root, &mut work)?;
-                }
-                None => collect_all(
-                    &entry.path(),
-                    &entry_name,
-                    Reason::OutsideSeason,
-                    real_root,
-                    1,
-                    &mut work,
-                )?,
-            },
-        }
-    }
-    Ok(work)
-}
-
-/// Reads the files directly in a season folder; what is in folders below it
-/// is all unrecognized.
-fn read_season(
-    dir: &Path,
-    folder: &str,
-    season: u32,
-    real_root: &Path,
-    work: &mut ScannedWork,
-) -> io::Result<()> {
-    for entry in sorted_entries(dir)? {
-        let (name, valid) = entry_name(&entry);
-        if skipped(&name) {
-            continue;
-        }
-        let path = format!("{folder}/{name}");
-        match classify(&entry, real_root)? {
-            Node::Skip => {}
-            Node::Dir => collect_all(
-                &entry.path(),
-                &path,
-                Reason::InSubfolder,
-                real_root,
-                1,
-                work,
-            )?,
-            Node::File => {
-                if !valid {
-                    if is_media_or_partial(&name) {
-                        work.unrecognized.push(Unrecognized {
-                            path,
-                            reason: Reason::InvalidName,
-                        });
-                    }
-                    continue;
-                }
-                if is_partial(&name) {
-                    work.unrecognized.push(Unrecognized {
-                        path,
-                        reason: Reason::Partial,
-                    });
-                    continue;
-                }
-                let Some(kind) = kind_of(&name) else {
-                    continue;
-                };
-                match episode_of(&name, kind) {
-                    None => work.unrecognized.push(Unrecognized {
-                        path,
-                        reason: Reason::NoEpisode,
-                    }),
-                    Some((found, _)) if found != season => work.unrecognized.push(Unrecognized {
-                        path,
-                        reason: Reason::SeasonMismatch,
-                    }),
-                    Some((_, episode)) => work.files.push(EpisodeFile {
-                        path,
-                        kind,
-                        season,
-                        episode,
-                    }),
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Every video, subtitle and `.part` file below `dir`, as unrecognized for
-/// `reason` (a `.part` file is always [`Reason::Partial`]).
-fn collect_all(
-    dir: &Path,
-    shown: &str,
-    reason: Reason,
-    real_root: &Path,
-    depth: usize,
-    work: &mut ScannedWork,
-) -> io::Result<()> {
-    if depth > MAX_DEPTH {
-        return Ok(());
-    }
-    for entry in sorted_entries(dir)? {
-        let (name, valid) = entry_name(&entry);
-        if skipped(&name) {
-            continue;
-        }
-        let path = format!("{shown}/{name}");
-        match classify(&entry, real_root)? {
-            Node::Skip => {}
-            Node::Dir => collect_all(&entry.path(), &path, reason, real_root, depth + 1, work)?,
-            Node::File => {
-                if !valid {
-                    if is_media_or_partial(&name) {
-                        work.unrecognized.push(Unrecognized {
-                            path,
-                            reason: Reason::InvalidName,
-                        });
-                    }
-                } else if is_partial(&name) {
-                    work.unrecognized.push(Unrecognized {
-                        path,
-                        reason: Reason::Partial,
-                    });
-                } else if kind_of(&name).is_some() {
-                    work.unrecognized.push(Unrecognized { path, reason });
-                }
-            }
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -904,6 +1162,247 @@ mod tests {
         let names: Vec<_> = scan.works.iter().map(WorkRead::dir_name).collect();
         assert_eq!(names, ["Bad \u{fffd}", "W"]);
         assert!(matches!(scan.works[0], WorkRead::Unreadable { .. }));
+    }
+
+    // --- skipping directories that have not changed ---------------------------------
+
+    /// Gives every directory under `root` (and `root`) a modification time in
+    /// 2001, as a folder that has not been touched for a long time has.
+    fn age_dirs(root: &Path) {
+        fn walk(dir: &Path) {
+            for entry in fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() && !path.is_symlink() {
+                    walk(&path);
+                }
+            }
+            set_mtime(dir, 1_000_000_000);
+        }
+        walk(root);
+    }
+
+    fn set_mtime(dir: &Path, secs: u64) {
+        fs::File::open(dir)
+            .unwrap()
+            .set_modified(UNIX_EPOCH + std::time::Duration::from_secs(secs))
+            .unwrap();
+    }
+
+    fn file_paths(scan: &Scan, name: &str) -> Vec<String> {
+        work(scan, name)
+            .files
+            .iter()
+            .map(|f| f.path.clone())
+            .collect()
+    }
+
+    /// 2 works, 3 seasons: the root, 2 work folders and 3 season folders are 6 directories.
+    fn two_works(root: &Path) {
+        for file in [
+            "A/Season 01/A S01E01.mkv",
+            "A/Season 01/A S01E02.mkv",
+            "A/Season 02/A S02E01.mkv",
+            "B/Season 01/B S01E01.mkv",
+        ] {
+            touch(root, file);
+        }
+        age_dirs(root);
+    }
+
+    #[test]
+    fn an_unchanged_tree_is_not_listed_again_and_reads_the_same() {
+        let dir = tempfile::tempdir().unwrap();
+        two_works(dir.path());
+
+        let first = scan_incremental(dir.path(), None);
+        assert_eq!(
+            first.stats,
+            ScanStats {
+                dirs_read: 6,
+                dirs_reused: 0
+            }
+        );
+        assert_eq!(first.cache.len(), 6);
+
+        let second = scan_incremental(dir.path(), Some(first.cache));
+        assert_eq!(
+            second.stats,
+            ScanStats {
+                dirs_read: 0,
+                dirs_reused: 6
+            },
+            "nothing changed, so nothing is listed"
+        );
+        assert_eq!(second.result.unwrap(), first.result.unwrap());
+        // And the cache it leaves is as good for the next time.
+        let third = scan_incremental(dir.path(), Some(second.cache));
+        assert_eq!(third.stats.dirs_read, 0);
+    }
+
+    #[test]
+    fn a_file_added_or_removed_in_one_season_folder_is_found_and_only_that_folder_is_listed() {
+        let dir = tempfile::tempdir().unwrap();
+        two_works(dir.path());
+        let first = scan_incremental(dir.path(), None);
+
+        touch(dir.path(), "A/Season 01/A S01E03.mkv");
+        let second = scan_incremental(dir.path(), Some(first.cache));
+        assert_eq!(
+            second.stats,
+            ScanStats {
+                dirs_read: 1,
+                dirs_reused: 5
+            }
+        );
+        let scan = second.result.unwrap();
+        assert_eq!(
+            file_paths(&scan, "A"),
+            [
+                "Season 01/A S01E01.mkv",
+                "Season 01/A S01E02.mkv",
+                "Season 01/A S01E03.mkv",
+                "Season 02/A S02E01.mkv"
+            ]
+        );
+        assert_eq!(file_paths(&scan, "B").len(), 1);
+
+        // Back to old, as a folder that has settled: the removal is found too.
+        set_mtime(&dir.path().join("A/Season 01"), 1_000_000_000);
+        let third = scan_incremental(dir.path(), Some(second.cache));
+        // The change was within the window of the last listing, so it was listed again.
+        assert_eq!(third.stats.dirs_read, 1);
+        fs::remove_file(dir.path().join("A/Season 01/A S01E01.mkv")).unwrap();
+        let fourth = scan_incremental(dir.path(), Some(third.cache));
+        assert_eq!(fourth.stats.dirs_read, 1);
+        assert_eq!(
+            file_paths(&fourth.result.unwrap(), "A"),
+            [
+                "Season 01/A S01E02.mkv",
+                "Season 01/A S01E03.mkv",
+                "Season 02/A S02E01.mkv"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_new_season_folder_and_a_new_work_are_found() {
+        let dir = tempfile::tempdir().unwrap();
+        two_works(dir.path());
+        let first = scan_incremental(dir.path(), None);
+
+        touch(dir.path(), "A/Season 03/A S03E01.mkv");
+        touch(dir.path(), "C/Season 01/C S01E01.mkv");
+        let second = scan_incremental(dir.path(), Some(first.cache));
+        let scan = second.result.unwrap();
+        assert_eq!(work(&scan, "A").seasons, BTreeSet::from([1, 2, 3]));
+        assert_eq!(file_paths(&scan, "C"), ["Season 01/C S01E01.mkv"]);
+        // The root, A, its new season, and the new work's two folders were
+        // listed; A's other two seasons, B and B's season were not.
+        assert_eq!(
+            second.stats,
+            ScanStats {
+                dirs_read: 5,
+                dirs_reused: 4
+            }
+        );
+    }
+
+    #[test]
+    fn a_file_renamed_in_place_is_found() {
+        let dir = tempfile::tempdir().unwrap();
+        two_works(dir.path());
+        let first = scan_incremental(dir.path(), None);
+
+        fs::rename(
+            dir.path().join("B/Season 01/B S01E01.mkv"),
+            dir.path().join("B/Season 01/B S01E05.mkv"),
+        )
+        .unwrap();
+        let second = scan_incremental(dir.path(), Some(first.cache));
+        assert_eq!(second.stats.dirs_read, 1);
+        assert_eq!(
+            file_paths(&second.result.unwrap(), "B"),
+            ["Season 01/B S01E05.mkv"]
+        );
+    }
+
+    #[test]
+    fn a_full_read_lists_everything_and_finds_a_change_that_kept_the_modification_time() {
+        let dir = tempfile::tempdir().unwrap();
+        two_works(dir.path());
+        let first = scan_incremental(dir.path(), None);
+
+        // A change that leaves the directory's time as it was (a coarse clock):
+        // an incremental scan cannot see it, a full read can.
+        touch(dir.path(), "B/Season 01/B S01E02.mkv");
+        set_mtime(&dir.path().join("B/Season 01"), 1_000_000_000);
+        let periodic = scan_incremental(dir.path(), Some(first.cache.clone()));
+        assert_eq!(periodic.stats.dirs_read, 0);
+        assert_eq!(file_paths(&periodic.result.unwrap(), "B").len(), 1);
+
+        let full = scan_incremental(dir.path(), None);
+        assert_eq!(
+            full.stats,
+            ScanStats {
+                dirs_read: 6,
+                dirs_reused: 0
+            }
+        );
+        assert_eq!(file_paths(&full.result.unwrap(), "B").len(), 2);
+    }
+
+    #[test]
+    fn a_directory_changed_within_the_window_of_its_listing_is_listed_again() {
+        let dir = tempfile::tempdir().unwrap();
+        touch(dir.path(), "A/Season 01/A S01E01.mkv");
+        // Not aged: every directory was modified a moment ago.
+        let first = scan_incremental(dir.path(), None);
+        let second = scan_incremental(dir.path(), Some(first.cache));
+        assert_eq!(second.stats.dirs_reused, 0, "{:?}", second.stats);
+        assert_eq!(second.stats.dirs_read, 3);
+    }
+
+    #[test]
+    fn links_are_always_listed_and_so_is_what_is_below_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let watch = dir.path().join("watch");
+        touch(&watch, "Real/Season 01/Real S01E01.mkv");
+        touch(&watch, "Plain/Season 01/Plain S01E01.mkv");
+        std::os::unix::fs::symlink(watch.join("Real"), watch.join("Alias")).unwrap();
+        age_dirs(&watch);
+
+        let first = scan_incremental(&watch, None);
+        let second = scan_incremental(&watch, Some(first.cache));
+        // The watch folder holds a link, so it is listed; Alias is a link, so it
+        // and its season folder are; Real and Plain are not.
+        assert_eq!(second.stats.dirs_read, 3, "{:?}", second.stats);
+        assert_eq!(second.stats.dirs_reused, 4, "{:?}", second.stats);
+        assert_eq!(second.result.unwrap().works.len(), 3);
+    }
+
+    #[test]
+    fn a_failed_scan_leaves_no_cache_and_an_unreadable_work_is_tried_again() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        two_works(dir.path());
+        let missing = scan_incremental(&dir.path().join("nope"), None);
+        assert!(missing.result.is_err() && missing.cache.is_empty());
+
+        let locked = dir.path().join("B");
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+        let first = scan_incremental(dir.path(), None);
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+        set_mtime(&locked, 1_000_000_000);
+        assert!(first
+            .result
+            .as_ref()
+            .unwrap()
+            .works
+            .iter()
+            .any(|w| matches!(w, WorkRead::Unreadable { .. })));
+        // B was not cached, so it is read now that it can be.
+        let second = scan_incremental(dir.path(), Some(first.cache));
+        assert_eq!(file_paths(&second.result.unwrap(), "B").len(), 1);
     }
 
     #[test]

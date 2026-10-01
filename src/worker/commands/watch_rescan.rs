@@ -85,7 +85,7 @@ pub async fn run(ctx: &CycleContext, command: &Command, clock: &Clock) -> Result
             "감시 폴더를 찾지 못했어요. 등록이 해제됐을 수 있어요.",
         ));
     };
-    match watch::scan_folder(ctx, &folder, clock())
+    match watch::scan_folder(ctx, &folder, clock(), watch::ScanMode::Full)
         .await
         .map_err(|e| Retry(e.to_string()))?
     {
