@@ -82,7 +82,7 @@ Each work in the library has one cover: an AniList entry's cover image or a file
 
 - When the app records a work for the first time (a new folder in a watch folder, or every work of a watch folder that is added), `trss-worker` searches AniList for the work's folder name and selects an entry only when exactly one entry has that title (ignoring case and spacing) and the search was read to its end. Anything less clear stays empty for the user to choose. A rescan, a restart or opening a page never searches again.
 - The worker sends at most one AniList request every 2 seconds, together with the web's searches, and waits as long as AniList asks when it answers `429`. Adding a watch folder with 500 works therefore takes about 20 minutes of searching in the background; collection and the web go on meanwhile. The queue lives in the database, so a restart continues it.
-- Images are judged by their bytes (JPEG, PNG or WebP), up to 10 MiB and 12 million pixels (8192 pixels a side), and stored under new names in `TRSS_DATA_DIR/artwork/`. Images are only fetched from AniList's image host, from addresses AniList's own answers give.
+- Images are judged by their bytes (JPEG, PNG or WebP), up to 10 MiB and 12 million pixels (8192 pixels a side), and refused without decoding when decoding them would take more than 64 MiB (a large 16-bit PNG or progressive JPEG); they are stored under new names in `TRSS_DATA_DIR/artwork/`. Images are only fetched from AniList's image host, from addresses AniList's own answers give.
 - `TRSS_ANILIST_URL` and `TRSS_ANILIST_IMAGE_ORIGINS` (comma-separated origins) override AniList's addresses, for local testing only.
 
 ### Season info

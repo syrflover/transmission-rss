@@ -22,9 +22,11 @@
 //! # Limits
 //!
 //! The image limits hold for uploads and AniList images alike. They are set
-//! for the containers' 128M memory limit: the decode of the largest image
-//! allowed stays under [`DECODE_MAX_ALLOC`], and one decode runs at a time in
-//! a process.
+//! for the containers' 128M memory limit: before an image is decoded, what the
+//! decode would allocate (output, the JPEG decoder's input copy and a
+//! progressive JPEG's coefficients, the WebP decoder's frame) is added up from
+//! its headers and must stay under [`DECODE_MAX_ALLOC`] (see [`image`]), and
+//! one decode runs at a time in a process.
 
 pub mod anilist;
 pub mod files;
@@ -53,10 +55,12 @@ pub const MAX_IMAGE_BYTES: usize = 10 * 1024 * 1024;
 /// The longest side of an accepted image, in pixels.
 pub const MAX_IMAGE_SIDE: u32 = 8192;
 /// The most pixels an accepted image may have: 12 million (a 4000 × 3000
-/// photo).
+/// photo). Within it, [`DECODE_MAX_ALLOC`] still refuses the kinds that cost
+/// more to decode (16 bits a channel, large progressive JPEGs).
 pub const MAX_IMAGE_PIXELS: u64 = 12_000_000;
-/// The most memory one decode may allocate: 64 MiB (12 million RGBA pixels
-/// are 48 MiB).
+/// The most memory one decode may allocate, all buffers counted: 64 MiB. A
+/// 12 MP baseline JPEG (36 MB of RGB) or 8-bit RGBA PNG (48 MB) fits; a 12 MP
+/// 16-bit RGBA PNG (96 MB) or progressive JPEG (72 MB and more) does not.
 pub const DECODE_MAX_ALLOC: u64 = 64 * 1024 * 1024;
 /// How long fetching one image may take in total.
 pub const FETCH_TIMEOUT: Duration = Duration::from_secs(30);
