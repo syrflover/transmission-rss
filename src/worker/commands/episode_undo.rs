@@ -21,7 +21,8 @@
 //! automatic name:
 //!
 //! - **Its torrent is in Transmission**, with one file of that name: renamed by
-//!   Transmission's rename, so it keeps seeding under the new name.
+//!   Transmission's rename, so it keeps seeding under the new name. The file's
+//!   identity is kept with the plan too.
 //! - **Its torrent is gone** and a file of that name is in the folder that no
 //!   torrent holds: renamed on disk with `RENAME_NOREPLACE`, and only if it is
 //!   still the file planned ([`FileIdentity`]: device, inode, size and times).
@@ -40,6 +41,19 @@
 //! appeared in between leaves the source in place, and the torrent's name is
 //! then put back. A rename on disk refuses an existing target by itself.
 //!
+//! Transmission renames by name, whatever file is there, so right before it
+//! the torrent must be finished (not downloading or verifying), still in the
+//! folder, and the file at its name must be the one planned (same device and
+//! inode); otherwise it keeps its name with the reason. A name another
+//! torrent lists in the folder is not taken either, even while its file is
+//! missing or still being written: Transmission would write that torrent's
+//! file there.
+//!
+//! The undo's own names overlap when the values differ by less than the
+//! numbers it renames (`−36` back to `−24`: `S03E01` becomes `S03E13`, which
+//! `S03E13` leaves for `S03E25`). The files go in an order that frees a name
+//! before a file takes it ([`next`]).
+//!
 //! # Order, and a start cut short
 //!
 //! The previous value goes back, together with the plan, in one transaction
@@ -50,8 +64,10 @@
 //! with the revision rows of its episode, which move to the new name. A start
 //! cut short (the worker stopped, Transmission did not answer) leaves the
 //! command `running`; the next start finds the undo begun and carries on with
-//! the files still `pending`, taking a file that has the new name already as
-//! renamed.
+//! the files still `pending`. A torrent that has the new name already counts
+//! as renamed only when its planned file is at the new name and nothing at the
+//! old; when the file is still at the old name (Transmission named the torrent
+//! without moving it), the torrent gets its old name back first.
 //!
 //! Once undone, the offset is the user's own: `자동` is off, and the app never
 //! decides the rule again, even when the rule has not received anything.
@@ -73,7 +89,7 @@ use crate::{
         channels::{NewUndoFile, Rule, UndoBegun, UndoFileState},
         commands::{Command, CommandState, Outcome},
     },
-    transmission::{get_torrent, torrent_places, TorrentPlace},
+    transmission::{torrent_places, TorrentPlace},
     worker::{
         commands::rule_archive::work_folder::rename_noreplace,
         revisions::{episode_name, owner_of, same_folder, Owner},
@@ -97,6 +113,12 @@ pub const NAME_CHANGED: &str = "토렌트 파일의 이름이 그사이 바뀌�
 pub const FILE_CHANGED: &str = "되돌리기를 시작한 뒤 파일이 바뀌었어요.";
 /// Why a file keeps its name: it is not there.
 pub const MISSING: &str = "파일을 찾지 못했어요.";
+/// Why a file keeps its name: Transmission is still writing it.
+pub const UNFINISHED: &str = "토렌트를 아직 받는 중이에요. 다 받은 뒤 다시 되돌려 주세요.";
+/// Why a file keeps its name: another torrent's file has the name it would take.
+pub const CLAIMED: &str = "다른 토렌트가 그 이름을 쓰고 있어요.";
+/// Why a file keeps its name: its torrent is in another folder now.
+pub const MOVED: &str = "토렌트가 다른 폴더로 옮겨졌어요.";
 
 const NO_COLLECT_FOLDER: &str =
     "수집 폴더가 정해지지 않아서 영상이 어디 있는지 알 수 없어 되돌리지 않았어요.";
@@ -219,24 +241,28 @@ pub async fn run(ctx: &CycleContext, command: &Command, clock: &Clock) -> Result
         }
     };
 
-    for file in undo
+    let mut listing = Listing::default();
+    let mut pending: Vec<&NewUndoFile> = undo
         .files
         .iter()
         .filter(|f| f.state == UndoFileState::Pending)
-    {
-        let kept = rename(ctx, &file.file).await?;
+        .map(|f| &f.file)
+        .collect();
+    while !pending.is_empty() {
+        let file = pending.remove(next(&pending));
+        let kept = rename(ctx, file, &mut listing).await?;
         match &kept {
             None => println!(
                 "Episode undo {}: {} is now {}",
-                command.id, file.file.from_name, file.file.to_name
+                command.id, file.from_name, file.to_name
             ),
             Some(why) => println!(
                 "Episode undo {}: {} keeps its name: {why}",
-                command.id, file.file.from_name
+                command.id, file.from_name
             ),
         }
         ctx.channels
-            .finish_undo_file(&command.id, file.file.item_id, kept, clock())
+            .finish_undo_file(&command.id, file.item_id, kept, clock())
             .await
             .map_err(store)?;
     }
@@ -391,82 +417,230 @@ fn exists(path: &Path) -> io::Result<bool> {
     }
 }
 
+/// Which of the `pending` files to rename next: the first whose new name is
+/// not the old name of another one still to rename, so that a name the undo
+/// frees is free before a file takes it (`S03E13` goes to `S03E25` before
+/// `S03E01` takes `S03E13`). When every one waits for another (names that
+/// swap), the first goes, and is kept for the name being taken.
+fn next(pending: &[&NewUndoFile]) -> usize {
+    pending
+        .iter()
+        .position(|file| {
+            !pending.iter().any(|other| {
+                !std::ptr::eq(*other, *file)
+                    && other.folder == file.folder
+                    && other.from_name == file.to_name
+            })
+        })
+        .unwrap_or(0)
+}
+
+/// Transmission's torrents with their files, read when first needed and read
+/// again after a rename through Transmission changed them.
+#[derive(Default)]
+struct Listing {
+    places: Option<Vec<TorrentPlace>>,
+}
+
+impl Listing {
+    async fn get(&mut self, ctx: &CycleContext) -> Result<&[TorrentPlace], Retry> {
+        if self.places.is_none() {
+            let mut client = ctx.transmission();
+            let places = torrent_places(&mut client, None, true)
+                .await
+                .map_err(transmission)?;
+            self.places = Some(places);
+        }
+        Ok(self.places.as_deref().unwrap_or_default())
+    }
+
+    fn changed(&mut self) {
+        self.places = None;
+    }
+}
+
+/// Whether a torrent other than `hash` lists a file named `name` in `folder`:
+/// that name is the torrent's, whether its file is there or not (still to be
+/// written, or deleted), and Transmission would write it there.
+fn claimed(places: &[TorrentPlace], hash: Option<&str>, folder: &Path, name: &str) -> bool {
+    places.iter().any(|place| {
+        Some(place.hash.as_str()) != hash
+            && place.files.iter().any(|f| f.name == name)
+            && same_folder(Path::new(&place.download_dir), folder)
+    })
+}
+
+/// What a torrent that has the new name already is, by the files at its old
+/// and new names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NewName {
+    /// The planned file is at the new name and nothing at the old: an earlier
+    /// start renamed it and stopped before recording it.
+    Done,
+    /// The planned file is still at the old name: Transmission named the
+    /// torrent without moving the file (the new name was taken). The torrent
+    /// gets its old name back before anything else.
+    Back,
+    /// Neither: the file is not the one planned.
+    Changed,
+}
+
+fn new_name(
+    source: Option<FileIdentity>,
+    target: Option<FileIdentity>,
+    planned: &FileIdentity,
+) -> NewName {
+    match (source, target) {
+        (None, Some(target)) if target.same_file(planned) => NewName::Done,
+        (Some(source), _) if source.same_file(planned) => NewName::Back,
+        _ => NewName::Changed,
+    }
+}
+
+/// The file at `path`, `None` when nothing is there.
+fn identity_at(path: &Path) -> io::Result<Option<FileIdentity>> {
+    match FileIdentity::at(path) {
+        Ok(identity) => Ok(Some(identity)),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err),
+    }
+}
+
 /// Renames one planned video. `None` when it has the new name, else why it
 /// keeps its old one.
-async fn rename(ctx: &CycleContext, file: &NewUndoFile) -> Result<Option<String>, Retry> {
+async fn rename(
+    ctx: &CycleContext,
+    file: &NewUndoFile,
+    listing: &mut Listing,
+) -> Result<Option<String>, Retry> {
     let folder = Path::new(&file.folder);
     let source = folder.join(&file.from_name);
     let target = folder.join(&file.to_name);
     let looked = |err: io::Error| Some(format!("파일을 살펴보지 못했어요({err})."));
-
-    if let Some(hash) = &file.torrent_hash {
-        let mut client = ctx.transmission();
-        if let Some(torrent) = get_torrent(&mut client, hash).await.map_err(transmission)? {
-            let name = torrent.name.unwrap_or_default();
-            if name == file.to_name {
-                // An earlier start renamed it and stopped before recording it.
-                return Ok(None);
-            }
-            if name != file.from_name {
-                return Ok(Some(NAME_CHANGED.to_owned()));
-            }
-            match exists(&target) {
-                Ok(false) => {}
-                Ok(true) => return Ok(Some(TAKEN.to_owned())),
-                Err(err) => return Ok(looked(err)),
-            }
-            let answer = client
-                .torrent_rename_path(
-                    vec![Id::Hash(hash.clone())],
-                    file.from_name.clone(),
-                    file.to_name.clone(),
-                )
-                .await
-                .map_err(transmission)?;
-            if !answer.is_ok() {
-                return Ok(Some(format!(
-                    "Transmission이 이름 바꾸기를 거절했어요({}).",
-                    answer.result
-                )));
-            }
-            // Transmission answers success without moving the file when the
-            // target appeared meanwhile: both files are there, and the
-            // torrent's name goes back to its own file.
-            if matches!(exists(&source), Ok(true)) && matches!(exists(&target), Ok(true)) {
-                let back = client
-                    .torrent_rename_path(
-                        vec![Id::Hash(hash.clone())],
-                        file.to_name.clone(),
-                        file.from_name.clone(),
-                    )
-                    .await;
-                if let Err(err) = back {
-                    eprintln!(
-                        "Episode undo: cannot give torrent {hash} its name {} back: {err}",
-                        file.from_name
-                    );
-                }
-                return Ok(Some(TAKEN.to_owned()));
-            }
-            return Ok(None);
-        }
-        // The torrent is gone: its file is renamed on disk below.
-    }
-
     let Some(planned) = file.identity.as_deref().and_then(FileIdentity::parse) else {
+        // Nothing was at the name when the undo was planned.
         return Ok(Some(MISSING.to_owned()));
     };
-    match FileIdentity::at(&source) {
-        Ok(now) if now == planned => {}
-        Ok(_) => return Ok(Some(FILE_CHANGED.to_owned())),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+    let hash = file.torrent_hash.as_deref();
+
+    let place = match hash {
+        Some(hash) => listing
+            .get(ctx)
+            .await?
+            .iter()
+            .find(|p| p.hash.eq_ignore_ascii_case(hash))
+            .cloned(),
+        None => None,
+    };
+    if let (Some(place), Some(hash)) = (place, hash) {
+        if place.unfinished {
+            return Ok(Some(UNFINISHED.to_owned()));
+        }
+        if !matches!(&place.files[..], [only] if only.name == place.name) {
+            return Ok(Some(NAME_CHANGED.to_owned()));
+        }
+        if !same_folder(Path::new(&place.download_dir), folder) {
+            return Ok(Some(MOVED.to_owned()));
+        }
+        let mut client = ctx.transmission();
+        if place.name == file.to_name {
+            let (from, to) = match (identity_at(&source), identity_at(&target)) {
+                (Ok(from), Ok(to)) => (from, to),
+                (Err(err), _) | (_, Err(err)) => return Ok(looked(err)),
+            };
+            match new_name(from, to, &planned) {
+                NewName::Done => return Ok(None),
+                NewName::Changed => return Ok(Some(FILE_CHANGED.to_owned())),
+                NewName::Back => {
+                    let answer = client
+                        .torrent_rename_path(
+                            vec![Id::Hash(hash.to_owned())],
+                            file.to_name.clone(),
+                            file.from_name.clone(),
+                        )
+                        .await
+                        .map_err(transmission)?;
+                    listing.changed();
+                    if !answer.is_ok() {
+                        return Ok(Some(format!(
+                            "Transmission이 이름 바꾸기를 거절했어요({}).",
+                            answer.result
+                        )));
+                    }
+                }
+            }
+        } else if place.name != file.from_name {
+            return Ok(Some(NAME_CHANGED.to_owned()));
+        }
+        // Transmission renames by name: the file there must be the torrent's
+        // own, as planned, or another file would be moved under its name.
+        match identity_at(&source) {
+            Ok(Some(now)) if now.same_file(&planned) => {}
+            Ok(Some(_)) => return Ok(Some(FILE_CHANGED.to_owned())),
+            Ok(None) => return Ok(Some(MISSING.to_owned())),
+            Err(err) => return Ok(looked(err)),
+        }
+        match exists(&target) {
+            Ok(false) => {}
+            Ok(true) => return Ok(Some(TAKEN.to_owned())),
+            Err(err) => return Ok(looked(err)),
+        }
+        if claimed(listing.get(ctx).await?, Some(hash), folder, &file.to_name) {
+            return Ok(Some(CLAIMED.to_owned()));
+        }
+        let answer = client
+            .torrent_rename_path(
+                vec![Id::Hash(hash.to_owned())],
+                file.from_name.clone(),
+                file.to_name.clone(),
+            )
+            .await
+            .map_err(transmission)?;
+        listing.changed();
+        if !answer.is_ok() {
+            return Ok(Some(format!(
+                "Transmission이 이름 바꾸기를 거절했어요({}).",
+                answer.result
+            )));
+        }
+        // Transmission answers success without moving the file when the
+        // target appeared meanwhile: both files are there, and the torrent's
+        // name goes back to its own file.
+        if matches!(exists(&source), Ok(true)) && matches!(exists(&target), Ok(true)) {
+            let back = client
+                .torrent_rename_path(
+                    vec![Id::Hash(hash.to_owned())],
+                    file.to_name.clone(),
+                    file.from_name.clone(),
+                )
+                .await;
+            if let Err(err) = back {
+                eprintln!(
+                    "Episode undo: cannot give torrent {hash} its name {} back: {err}",
+                    file.from_name
+                );
+            }
+            return Ok(Some(TAKEN.to_owned()));
+        }
+        return Ok(None);
+    }
+
+    // No torrent holds it (any more): renamed on disk, if it is still the
+    // file planned.
+    match identity_at(&source) {
+        Ok(Some(now)) if now == planned => {}
+        Ok(Some(_)) => return Ok(Some(FILE_CHANGED.to_owned())),
+        Ok(None) => {
             // An earlier start renamed it and stopped before recording it.
-            return Ok(match FileIdentity::at(&target) {
-                Ok(there) if there.same_file(&planned) => None,
+            return Ok(match identity_at(&target) {
+                Ok(Some(there)) if there.same_file(&planned) => None,
                 _ => Some(MISSING.to_owned()),
             });
         }
         Err(err) => return Ok(looked(err)),
+    }
+    if claimed(listing.get(ctx).await?, None, folder, &file.to_name) {
+        return Ok(Some(CLAIMED.to_owned()));
     }
     Ok(match rename_noreplace(&source, &target) {
         Ok(()) => None,
@@ -491,6 +665,62 @@ mod tests {
             r#"{"rule_id":"r1","episode":-48,"files":[]}"#
         )
         .is_err());
+    }
+
+    fn planned(from: &str, to: &str) -> NewUndoFile {
+        NewUndoFile {
+            item_id: 1,
+            folder: "/shows/Show/Season 03".into(),
+            from_name: from.into(),
+            to_name: to.into(),
+            torrent_hash: None,
+            identity: None,
+        }
+    }
+
+    #[test]
+    fn a_name_the_undo_frees_is_freed_before_it_is_taken() {
+        let (a, b, c) = (
+            planned("S03E01.mkv", "S03E13.mkv"),
+            planned("S03E13.mkv", "S03E25.mkv"),
+            planned("S03E25.mkv", "S03E37.mkv"),
+        );
+        // Names shift up: the last in the chain goes first.
+        assert_eq!(next(&[&a, &b, &c]), 2);
+        assert_eq!(next(&[&a, &b]), 1);
+        assert_eq!(next(&[&a]), 0);
+        // Names shift down: in the order planned.
+        let (d, e) = (
+            planned("S03E25.mkv", "S03E13.mkv"),
+            planned("S03E13.mkv", "S03E01.mkv"),
+        );
+        assert_eq!(next(&[&d, &e]), 1);
+        // A swap waits on itself: the first goes.
+        let (f, g) = (
+            planned("S03E01.mkv", "S03E02.mkv"),
+            planned("S03E02.mkv", "S03E01.mkv"),
+        );
+        assert_eq!(next(&[&f, &g]), 0);
+    }
+
+    #[test]
+    fn a_torrent_named_anew_already_is_done_only_when_its_file_moved_with_it() {
+        let planned = FileIdentity::parse("1:10:5:1.0:1.0").unwrap();
+        let moved = FileIdentity::parse("1:10:5:1.0:2.0").unwrap();
+        let other = FileIdentity::parse("1:11:5:1.0:1.0").unwrap();
+        // The file moved (its status-change time with it): done.
+        assert_eq!(new_name(None, Some(moved), &planned), NewName::Done);
+        // Still at the old name, whatever is at the new one: the torrent's
+        // name goes back first.
+        assert_eq!(
+            new_name(Some(planned), Some(other), &planned),
+            NewName::Back
+        );
+        assert_eq!(new_name(Some(planned), None, &planned), NewName::Back);
+        // Another file at the new name, nothing at the old: not done.
+        assert_eq!(new_name(None, Some(other), &planned), NewName::Changed);
+        assert_eq!(new_name(None, None, &planned), NewName::Changed);
+        assert_eq!(new_name(Some(other), None, &planned), NewName::Changed);
     }
 
     #[test]

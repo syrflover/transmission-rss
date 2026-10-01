@@ -807,6 +807,7 @@ impl Scene {
         s.cycle().await;
         assert_eq!(s.names(), ["Show S03E01.mkv", "Show S03E02.mkv"]);
         assert_eq!(s.on_disk(), ["Show S03E01.mkv", "Show S03E02.mkv"]);
+        s.seeding();
         (s, rule)
     }
 
@@ -825,6 +826,13 @@ impl Scene {
             )
             .await;
         (status, body)
+    }
+
+    /// Every torrent has been received and is seeding.
+    fn seeding(&self) {
+        for t in self.h.tr.torrents() {
+            self.h.tr.set_status(&t.hash, 6);
+        }
     }
 
     /// `되돌리기` of `episode`, run by the worker: the command as it ended.
@@ -1334,4 +1342,97 @@ async fn the_first_items_take_the_value_the_user_saves_meanwhile_not_the_one_rea
     let stored = s.rule(&rule).await;
     assert_eq!((stored.episode, stored.episode_auto), (-20, false));
     assert_eq!(s.names(), ["Show S03E05.mkv"]);
+}
+
+// --- an undo whose new names are its own old names --------------------------------
+
+impl Scene {
+    /// Seasons 1 and 2 of 18, a third season's rule carried over with `−24`,
+    /// `- 37` received as `S03E01` under the app's `−36` and `- 49` as
+    /// `S03E13`, which is the name `- 37` goes back to.
+    async fn overlapping_names() -> (Scene, Rule) {
+        let s = Scene::new().await;
+        s.h.tr.on_disk(&s.shows);
+        for n in [37, 49] {
+            s.h.tr
+                .content_on_add(&hash(n), format!("video {n}").as_bytes());
+        }
+        s.link_earlier_seasons([Some(18), Some(18)]).await;
+        s.h.advance(1_000);
+        let rule = s.subscribe("Show", "Show/Season 03", 7, -24).await;
+        s.feed(&[]);
+        s.cycle().await;
+        s.feed(&[&show(37)]);
+        s.cycle().await;
+        s.feed(&[&show(37), &show(49)]);
+        s.cycle().await;
+        assert_eq!(s.names(), ["Show S03E01.mkv", "Show S03E13.mkv"]);
+        assert_eq!(s.rule(&rule).await.episode, -36);
+        s.seeding();
+        (s, rule)
+    }
+}
+
+#[tokio::test]
+async fn names_an_undo_frees_for_itself_are_taken_in_turn_and_nothing_is_kept() {
+    let (s, rule) = Scene::overlapping_names().await;
+
+    let command = s.undo(&rule, "undo-0101-a", -36).await;
+
+    assert_eq!(command["state"], "done", "{command}");
+    let view = s.view(&rule).await;
+    let mut files = undo_files(&view);
+    files.sort();
+    assert_eq!(
+        files,
+        [
+            file("Show S03E01.mkv", "Show S03E13.mkv", "renamed"),
+            file("Show S03E13.mkv", "Show S03E25.mkv", "renamed"),
+        ]
+    );
+    assert_eq!(s.names(), ["Show S03E13.mkv", "Show S03E25.mkv"]);
+    assert_eq!(
+        fs::read(s.season3().join("Show S03E13.mkv")).unwrap(),
+        b"video 37"
+    );
+    assert_eq!(
+        fs::read(s.season3().join("Show S03E25.mkv")).unwrap(),
+        b"video 49"
+    );
+}
+
+#[tokio::test]
+async fn a_torrent_whose_file_is_not_at_its_name_is_never_renamed_onto_another_file() {
+    let (s, rule) = Scene::overlapping_names().await;
+    // `- 49`'s file is not there (the person deleted it; Transmission still
+    // names its torrent `S03E13`).
+    fs::remove_file(s.season3().join("Show S03E13.mkv")).unwrap();
+
+    let command = s.undo(&rule, "undo-0102-a", -36).await;
+
+    assert_eq!(command["state"], "done", "{command}");
+    // Neither moves: `- 49`'s torrent has no file to rename, and its torrent
+    // still claims the name `- 37` would take.
+    assert_eq!(s.names(), ["Show S03E01.mkv", "Show S03E13.mkv"]);
+    assert_eq!(s.on_disk(), ["Show S03E01.mkv"]);
+    assert_eq!(
+        fs::read(s.season3().join("Show S03E01.mkv")).unwrap(),
+        b"video 37"
+    );
+    let view = s.view(&rule).await;
+    let states: Vec<String> = undo_files(&view).into_iter().map(|f| f.2).collect();
+    assert_eq!(states, ["kept", "kept"]);
+}
+
+#[tokio::test]
+async fn a_torrent_still_downloading_is_not_renamed() {
+    let (s, rule) = Scene::third_season_received().await;
+    s.h.tr.unfinish(&hash(50));
+
+    let command = s.undo(&rule, "undo-0103-a", -48).await;
+
+    assert_eq!(command["state"], "done", "{command}");
+    assert_eq!(s.names(), ["Show S03E02.mkv", "Show S03E25.mkv"]);
+    let view = s.view(&rule).await;
+    assert_eq!(view["episode_undo"]["files"][1]["state"], "kept");
 }
