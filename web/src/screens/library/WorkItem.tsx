@@ -19,7 +19,15 @@ export const FROM_LIBRARY = { from: "library" } as const;
  * tinted by the title, so the same work looks the same every time. Decorative
  * (the title is next to it as text).
  */
-function Cover({ work, className, letterClass }: { work: Work; className: string; letterClass: string }) {
+export function Cover({
+  work,
+  className,
+  letterClass,
+}: {
+  work: Pick<Work, "hue" | "initial">;
+  className: string;
+  letterClass: string;
+}) {
   return (
     <span
       aria-hidden="true"

@@ -48,6 +48,7 @@
 //! from the folders as they were read, and applying it fails with
 //! [`LibraryError::Changed`] if they are not the registered folders any more.
 
+mod detail;
 mod overview;
 mod repo;
 #[cfg(test)]
@@ -55,6 +56,7 @@ mod tests;
 
 use std::collections::BTreeMap;
 
+pub use detail::{EpisodeDetail, SeasonDetail, WorkDetail};
 use rusqlite::Transaction;
 
 pub use overview::{EpisodeRange, SubtitleCoverage, WorkOverview};
@@ -392,5 +394,12 @@ impl LibraryStore {
     /// shows (see [`WorkOverview`]), by folder name, in a fixed number of queries.
     pub async fn overview(&self) -> Result<Vec<WorkOverview>, LibraryError> {
         self.db.run(|c| Ok(overview::overview(c)?)).await
+    }
+
+    /// One work with its seasons, episodes and files (see [`WorkDetail`]), or
+    /// `None` when there is no work with this ID.
+    pub async fn work_detail(&self, id: &str) -> Result<Option<WorkDetail>, LibraryError> {
+        let id = id.to_owned();
+        self.db.run(move |c| Ok(detail::detail(c, &id)?)).await
     }
 }
