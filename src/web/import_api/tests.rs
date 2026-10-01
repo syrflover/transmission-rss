@@ -10,6 +10,7 @@ use tower::ServiceExt;
 use crate::store::channels::{ChannelInput, ChannelStore, RuleInput};
 use crate::store::library::LibraryStore;
 use crate::store::settings::{CollectionSettings, SettingsStore};
+use crate::store::setup::{SetupStore, Step};
 use crate::store::Db;
 
 use super::*;
@@ -23,6 +24,7 @@ struct App {
     store: ChannelStore,
     settings: SettingsStore,
     library: LibraryStore,
+    setup: SetupStore,
     app: Router,
 }
 
@@ -37,6 +39,7 @@ async fn app() -> App {
         store: state.channels.clone(),
         settings: state.settings.clone(),
         library: state.library.clone(),
+        setup: state.setup.clone(),
         app: Router::new().nest("/api", crate::web::api::router().with_state(state)),
     }
 }
@@ -365,6 +368,233 @@ async fn replace_shows_the_rules_that_go_and_reports_them_separately() {
         stored[1].channel.url.contains(TOKEN_B),
         "the new channel came last"
     );
+}
+
+#[tokio::test]
+async fn replacing_keeps_the_title_waiting_subscriptions_of_the_channel() {
+    use crate::store::anissia::Anime;
+    use crate::store::channels::{NewSubscription, SubtitleMode};
+
+    let t = app().await;
+    t.set_folder("/media").await;
+    let a = t
+        .store
+        .create_channel_with_rules(
+            ChannelInput::new("https://feeds.example.test/a?filter=1080p&token=old"),
+            vec![RuleInput {
+                r#match: Some("Gone".into()),
+                directory: "gone".into(),
+                ..RuleInput::default()
+            }],
+        )
+        .await
+        .unwrap();
+    // A subscription created in the app for a work that has not aired yet.
+    let waiting = t
+        .store
+        .create_subscription_rule(
+            &a.channel.id,
+            RuleInput {
+                r#match: None,
+                directory: "Waiting Work".into(),
+                ..RuleInput::default()
+            },
+            NewSubscription {
+                anime: Anime {
+                    anime_no: 77,
+                    subject: "Waiting Work".into(),
+                    original_subject: None,
+                    week: 3,
+                    air_time: Some("22:00".into()),
+                    start_date: None,
+                    end_date: None,
+                    status: "ON".into(),
+                    fetched_at: 1,
+                },
+                subtitles: SubtitleMode::Undecided,
+                creator: None,
+                subscribed_at: 100,
+            },
+        )
+        .await
+        .unwrap();
+    let a = t.all().await.remove(0);
+    assert_eq!(a.rules.len(), 2);
+
+    let content = format!(
+        "- url: https://feeds.example.test/a?filter=1080p&token={TOKEN_A}
+  directory: /media/a
+  rules:
+    - match: Fresh
+      directory: A/fresh
+"
+    );
+    // The preview says the subscription stays and does not list it as lost.
+    let (status, text, review) = t.preview(&content).await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let existing = &review["channels"][0]["existing"];
+    assert_eq!(existing["rule_count"], 2);
+    assert_eq!(existing["title_waiting_kept"], 1);
+    assert_eq!(
+        existing["removed_rules"],
+        json!([{ "match": "Gone", "directory": "gone" }])
+    );
+
+    let (status, text, result) = t.apply(&content, json!([choice(0, &a, "replace")])).await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(result["counts"]["rules_removed"], 1);
+    assert_eq!(result["counts"]["rules_added"], 1);
+    assert_eq!(result["counts"]["title_waiting_kept"], 1);
+    assert_eq!(result["replaced"][0]["title_waiting_kept"], 1);
+    assert_eq!(result["replaced"][0]["added_rules"], 1);
+
+    // The ordinary rule was replaced; the waiting subscription is the same
+    // rule, with the same subscription row, after the file's rule.
+    let stored = t.all().await.remove(0);
+    assert_eq!(stored.rules.len(), 2);
+    assert_eq!(stored.rules[0].r#match.as_deref(), Some("Fresh"));
+    assert_eq!(stored.rules[0].directory, "a/A/fresh");
+    assert_ne!(stored.rules[0].id, a.rules[0].id);
+    assert_eq!(stored.rules[1], waiting_after(&waiting, 1));
+}
+
+#[tokio::test]
+async fn replacing_keeps_the_folder_of_a_subscription_when_the_files_folder_is_no_work_folder() {
+    use crate::store::anissia::Anime;
+    use crate::store::channels::{NewSubscription, SubtitleMode};
+
+    let t = app().await;
+    t.set_folder("/media").await;
+    let subscribe = |channel: &str, no: i64, phrase: &str, directory: &str| {
+        let store = t.store.clone();
+        let (channel, phrase, directory) =
+            (channel.to_owned(), phrase.to_owned(), directory.to_owned());
+        async move {
+            store
+                .create_subscription_rule(
+                    &channel,
+                    RuleInput {
+                        r#match: Some(phrase),
+                        directory,
+                        ..RuleInput::default()
+                    },
+                    NewSubscription {
+                        anime: Anime {
+                            anime_no: no,
+                            subject: format!("작품 {no}"),
+                            original_subject: None,
+                            week: 3,
+                            air_time: Some("22:00".into()),
+                            start_date: None,
+                            end_date: None,
+                            status: "ON".into(),
+                            fetched_at: 1,
+                        },
+                        subtitles: SubtitleMode::Undecided,
+                        creator: None,
+                        subscribed_at: 100,
+                    },
+                )
+                .await
+                .unwrap()
+        }
+    };
+    let a = t
+        .store
+        .create_channel_with_rules(
+            ChannelInput::new("https://feeds.example.test/a?filter=1080p&token=old"),
+            vec![RuleInput {
+                r#match: Some("Plain".into()),
+                directory: "plain old".into(),
+                ..RuleInput::default()
+            }],
+        )
+        .await
+        .unwrap();
+    subscribe(&a.channel.id, 1, "Sub", "Sub Work").await;
+    subscribe(&a.channel.id, 2, "Climb", "Climb Work").await;
+    subscribe(&a.channel.id, 3, "Fine", "Fine Old").await;
+    let a = t.all().await.remove(0);
+
+    // The channel's folder is the collect folder itself. The file gives `Sub`
+    // no folder of its own (`.`), `Climb` a `..` folder and `Fine` a work
+    // folder; the plain rule `Plain` has no folder either.
+    let content = format!(
+        "- url: https://feeds.example.test/a?filter=1080p&token={TOKEN_A}
+  directory: /media
+  rules:
+    - match: Plain
+      directory: .
+    - match: Sub
+      directory: .
+    - match: Climb
+      directory: ../elsewhere
+    - match: Fine
+      directory: Fine New
+"
+    );
+
+    // The preview names the subscriptions whose folder stays.
+    let (status, text, review) = t.preview(&content).await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let kept: Vec<_> = review["channels"][0]["rules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["folder_kept"].clone())
+        .collect();
+    assert_eq!(
+        kept,
+        [
+            Value::Null,
+            json!("Sub Work"),
+            json!("Climb Work"),
+            Value::Null
+        ]
+    );
+
+    let (status, text, result) = t.apply(&content, json!([choice(0, &a, "replace")])).await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(result["counts"]["folders_kept"], 2);
+    assert_eq!(
+        result["replaced"][0]["folders_kept"],
+        json!([
+            { "rule": 1, "match": "Sub", "directory": "Sub Work" },
+            { "rule": 2, "match": "Climb", "directory": "Climb Work" },
+        ])
+    );
+
+    let stored = t.all().await.remove(0);
+    let folders: Vec<_> = stored
+        .rules
+        .iter()
+        .map(|r| (r.r#match.as_deref().unwrap(), r.directory.as_str()))
+        .collect();
+    // The rule without a subscription took the file's folder, as before; the
+    // subscriptions kept theirs, except the one with a work folder in the file.
+    assert_eq!(
+        folders,
+        [
+            ("Plain", "."),
+            ("Sub", "Sub Work"),
+            ("Climb", "Climb Work"),
+            ("Fine", "Fine New"),
+        ]
+    );
+    // They are still subscriptions, and the rule screen can save them.
+    assert!(stored.rules[1..].iter().all(|r| r.subscription.is_some()));
+    assert!(crate::folders::is_work_folder(&stored.rules[1].directory));
+}
+
+/// `rule` as it is stored after it moved to `position`.
+fn waiting_after(
+    rule: &crate::store::channels::Rule,
+    position: i64,
+) -> crate::store::channels::Rule {
+    crate::store::channels::Rule {
+        position,
+        ..rule.clone()
+    }
 }
 
 #[tokio::test]
@@ -776,6 +1006,83 @@ async fn skipping_every_channel_does_not_set_the_collect_folder() {
     assert_eq!(status, StatusCode::OK, "{text}");
     assert_eq!(result["collect_folder_set"], Value::Null);
     assert_eq!(t.collection().await, None);
+}
+
+#[tokio::test]
+async fn an_apply_that_creates_or_changes_nothing_does_not_finish_the_import_step() {
+    let t = app().await;
+    let (input, rules) = existing_a();
+    let a = t
+        .store
+        .create_channel_with_rules(input, rules)
+        .await
+        .unwrap();
+    t.set_folder(&t.root()).await;
+    let content = t.real(&format!(
+        "- url: https://feeds.example.test/a?filter=1080p&token={TOKEN_A}
+  directory: /media/a
+  rules:
+    - match: Keep1
+      directory: X
+"
+    ));
+    let done = || async {
+        t.setup
+            .first_run()
+            .await
+            .unwrap()
+            .unwrap()
+            .done(Step::Import)
+    };
+    assert!(!done().await);
+
+    // Every channel skipped: nothing was created or changed.
+    let (status, text, result) = t.apply(&content, json!([choice(0, &a, "skip")])).await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(result["counts"]["channels_skipped"], 1);
+    assert!(!done().await);
+
+    // A channel that is added counts.
+    let (status, text, result) = t.apply(&content, json!([choice(0, &a, "add")])).await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(result["counts"]["channels_added"], 1);
+    assert!(done().await);
+}
+
+#[tokio::test]
+async fn replacing_a_channel_finishes_the_import_step() {
+    let t = app().await;
+    let (input, rules) = existing_a();
+    let a = t
+        .store
+        .create_channel_with_rules(input, rules)
+        .await
+        .unwrap();
+    t.set_folder(&t.root()).await;
+    let content = t.real(&format!(
+        "- url: https://feeds.example.test/a?filter=1080p&token={TOKEN_A}
+  directory: /media/a
+  rules:
+    - match: Other
+      directory: X
+"
+    ));
+    assert!(!t
+        .setup
+        .first_run()
+        .await
+        .unwrap()
+        .unwrap()
+        .done(Step::Import));
+    let (status, text, _) = t.apply(&content, json!([choice(0, &a, "replace")])).await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert!(t
+        .setup
+        .first_run()
+        .await
+        .unwrap()
+        .unwrap()
+        .done(Step::Import));
 }
 
 /// A one-channel file whose folder is `folder`.

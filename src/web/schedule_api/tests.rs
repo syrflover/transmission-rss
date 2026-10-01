@@ -478,7 +478,7 @@ async fn the_stand_in_an_import_keeps_is_not_anissias_off() {
     // received. It has no weekday, so no card; and if it were moved to a weekday
     // without being received, it is still not read as `OFF`.
     let stand_in =
-        crate::store::channels::import_subscriptions::ImportSubscription::stand_in(1, "대역");
+        crate::store::channels::import_subscriptions::ImportSubscription::stand_in(1, "대역", None);
     assert_eq!(stand_in.status, "OFF");
     app.subscribe(stand_in.clone(), rule("S"), SubtitleMode::None, None)
         .await;
@@ -499,6 +499,30 @@ async fn the_stand_in_an_import_keeps_is_not_anissias_off() {
     let body = app.week().await;
     let card = &body["week"]["days"][3]["cards"][0];
     assert_eq!(card["video"], "waiting");
+}
+
+#[tokio::test]
+async fn a_stand_in_with_the_comments_weekday_shows_its_card_on_that_weekday() {
+    let app = App::new().await;
+    // What an import stores while Anissia cannot be asked, when the comment
+    // above the rule gave a weekday and time (Anissia's 4 is Thursday): the
+    // card sits on that weekday right away, and the stand-in is not read as
+    // `OFF` (it is not Anissia's word).
+    let stand_in = crate::store::channels::import_subscriptions::ImportSubscription::stand_in(
+        1,
+        "주석의 요일",
+        Some((4, "10:00")),
+    );
+    assert_eq!((stand_in.fetched_at, stand_in.status.as_str()), (0, "OFF"));
+    app.subscribe(stand_in, rule("T"), SubtitleMode::None, None)
+        .await;
+
+    let body = app.week().await;
+    let cards = body["week"]["days"][3]["cards"].as_array().unwrap();
+    assert_eq!(cards.len(), 1);
+    assert_eq!(cards[0]["title"], "주석의 요일");
+    assert_eq!(cards[0]["time"], "10:00");
+    assert_eq!(cards[0]["video"], "waiting");
 }
 
 #[tokio::test]
@@ -662,6 +686,84 @@ async fn an_episode_in_transmission_is_downloading_until_the_library_holds_it() 
     // A worker that comes back and looks again shows it once more.
     record(NOW).await.unwrap();
     assert_eq!(video(&app.week().await), "downloading");
+}
+
+#[tokio::test]
+async fn an_episode_stays_downloading_while_a_long_cycle_is_running() {
+    let app = App::new().await;
+    let rule = app
+        .subscribe(
+            anime(1, "받는 중", 4, Some("10:00"), Some("2026-07-02")),
+            self::rule("Work"),
+            SubtitleMode::None,
+            Some("Empty"),
+        )
+        .await;
+    app.state
+        .history
+        .record(
+            NOW - 1000,
+            vec![Observation {
+                channel_id: app.channel.id.clone(),
+                channel_label: app.channel.masked_url(),
+                identity_key: "title:x".into(),
+                title: "[G] Work - 14 (1080p) [AAAA1111].mkv".into(),
+                link: "https://feed.test/item".into(),
+                result: HistoryResult::Received,
+                rule_id: Some(rule.id.clone()),
+                torrent_hash: Some("aa".into()),
+                reason: None,
+            }],
+        )
+        .await
+        .unwrap();
+    let minute = 60_000;
+    app.state
+        .status
+        .record_cycle_interval(minute)
+        .await
+        .unwrap();
+    // The worker looked at Transmission four minutes ago, during the cycle
+    // before this one.
+    app.state
+        .status
+        .record_transmission(
+            TransmissionCounts {
+                downloading: 1,
+                seeding: 0,
+                taken_at: NOW - 4 * minute,
+            },
+            vec!["aa".into()],
+        )
+        .await
+        .unwrap();
+    let video = |body: &Value| body["week"]["days"][3]["cards"][0]["video"].clone();
+
+    // Between cycles that look is more than three intervals old.
+    assert_eq!(video(&app.week().await), "waiting");
+
+    // A cycle began a minute after that look and is still running: the worker is
+    // alive, so what it saw is kept until the cycle ends.
+    assert!(app
+        .state
+        .history
+        .try_begin_cycle(NOW - 3 * minute, 0)
+        .await
+        .unwrap());
+    assert_eq!(video(&app.week().await), "downloading");
+
+    // Once it ends without a newer look, the look is old again.
+    app.state.history.finish_cycle(NOW - 1000).await.unwrap();
+    assert_eq!(video(&app.week().await), "waiting");
+
+    // A cycle running past the bound is a hung worker: not believed.
+    assert!(app
+        .state
+        .history
+        .try_begin_cycle(NOW - 31 * minute, 0)
+        .await
+        .unwrap());
+    assert_eq!(video(&app.week().await), "waiting");
 }
 
 #[tokio::test]

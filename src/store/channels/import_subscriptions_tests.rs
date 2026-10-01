@@ -272,7 +272,7 @@ async fn a_stand_in_snapshot_never_replaces_one_the_app_has_and_a_real_one_does(
         ..follow(
             0,
             0,
-            ImportSubscription::stand_in(no, "[SubsPlease] A - "),
+            ImportSubscription::stand_in(no, "[SubsPlease] A - ", None),
             None,
         )
     };
@@ -390,4 +390,26 @@ async fn the_import_time_is_read_while_the_transaction_holds_the_write_lock() {
     );
     let stored = results[0].channel().rules[0].subscription.as_ref().unwrap();
     assert_eq!(stored.subscribed_at, 7_000);
+}
+
+#[test]
+fn a_stand_in_sits_on_the_comments_weekday_or_in_the_other_tab() {
+    use crate::store::anissia::WEEK_OTHER;
+
+    let on_wednesday = ImportSubscription::stand_in(10, "A", Some((3, "22:30")));
+    assert_eq!(
+        (on_wednesday.week, on_wednesday.air_time.as_deref()),
+        (3, Some("22:30"))
+    );
+    // Never received, so the daily refresh finds it due and replaces it.
+    assert_eq!(
+        (on_wednesday.fetched_at, on_wednesday.status.as_str()),
+        (0, "OFF")
+    );
+
+    let without = ImportSubscription::stand_in(10, "A", None);
+    assert_eq!((without.week, without.air_time), (WEEK_OTHER, None));
+    // A number that is not one of the seven weekdays stays in `기타`.
+    let odd = ImportSubscription::stand_in(10, "A", Some((7, "22:30")));
+    assert_eq!((odd.week, odd.air_time), (WEEK_OTHER, None));
 }

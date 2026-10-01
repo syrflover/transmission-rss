@@ -33,7 +33,8 @@
 //! - the worker's daily refresh found that Anissia no longer lists the anime
 //!   (`unlisted_at`, see [`crate::store::anissia`]): an anime without an end
 //!   date leaves this way. While Anissia cannot be reached that is not found
-//!   out, so the card stays.
+//!   out, so the card stays; nor is it found out from a weekday whose list came
+//!   back empty although the anime was last listed in it.
 //!
 //! The card's `episode` is the season's episode that airs in the slot
 //! ([`crate::schedule::slot::episode_on`]); it is `null` when that cannot be
@@ -43,9 +44,11 @@
 //! - an anime the stored Anissia snapshot marks `OFF` is `video: "off"`
 //!   (`결방`) with no subtitle line, whatever the library holds; a paused rule
 //!   says `paused` instead. The stand-in snapshot an import keeps while Anissia
-//!   could not be asked (week `기타`, status `OFF`, `fetched_at` 0) is not
-//!   Anissia's word: it has no weekday so it makes no card, and it would not be
-//!   read as `OFF` if it had.
+//!   could not be asked (status `OFF`, `fetched_at` 0) is not
+//!   Anissia's word and is never read as `OFF`. It sits on the weekday and time
+//!   the legacy comment gave, so its card shows on that weekday until the
+//!   daily refresh replaces it; without a weekday in the comment it is in `기타`
+//!   and makes no card.
 //! - `video_held` / `subtitle_held`: the season the subscription follows holds a
 //!   video / a subtitle for the episode. A subscription whose season is not
 //!   connected holds nothing.
@@ -69,6 +72,7 @@ use serde::Serialize;
 use super::{
     artwork_api::image_url,
     setup_api::{self, FirstRunView},
+    status_api::cycle_running,
     subscriptions_api::{quarter_of, QuarterView},
     ApiError, AppState,
 };
@@ -271,6 +275,12 @@ const DOWNLOADING_FRESH_CYCLES: i64 = 3;
 /// last, provided that look is not older than [`DOWNLOADING_FRESH_CYCLES`]
 /// cycle intervals. Without a recorded interval (no worker of this version has
 /// run) nothing is believed.
+///
+/// While a cycle is running the worker is alive, and the look it left is the
+/// one before this cycle; a cycle longer than the allowance would otherwise age
+/// it out before the cycle can leave a newer one. So the look's age is counted
+/// up to the cycle's start. A cycle that has run past the bound of
+/// [`cycle_running`] is a hung worker and does not hold the look.
 async fn downloading_hashes(state: &AppState, now: Millis) -> Result<HashSet<String>, ApiError> {
     let Some(counts) = state.status.transmission().await.map_err(internal)? else {
         return Ok(HashSet::new());
@@ -278,7 +288,14 @@ async fn downloading_hashes(state: &AppState, now: Millis) -> Result<HashSet<Str
     let Some(interval) = state.status.cycle_interval().await.map_err(internal)? else {
         return Ok(HashSet::new());
     };
-    if now.saturating_sub(counts.taken_at) > interval.saturating_mul(DOWNLOADING_FRESH_CYCLES) {
+    let running = state.history.last_cycle().await.map_err(internal)?;
+    let seen_until = match running {
+        Some(cycle) if cycle_running(&cycle, interval, now) => cycle.started_at.min(now),
+        _ => now,
+    };
+    if seen_until.saturating_sub(counts.taken_at)
+        > interval.saturating_mul(DOWNLOADING_FRESH_CYCLES)
+    {
         return Ok(HashSet::new());
     }
     state.status.downloading_hashes().await.map_err(internal)

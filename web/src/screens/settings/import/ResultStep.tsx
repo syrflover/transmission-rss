@@ -13,6 +13,7 @@ function Subscriptions({ flow }: { flow: ImportFlow }) {
   const phrase = (channel: number, rule: number) =>
     preview.channels.find((candidate) => candidate.index === channel)?.rules[rule]?.match ?? null;
   const unknown = created.filter((sub) => !sub.schedule_known).length;
+  const unknownInOther = created.filter((sub) => !sub.schedule_known && !sub.schedule_from_comment).length;
 
   return (
     <section aria-labelledby="result-subscriptions" className="flex flex-col gap-3">
@@ -31,7 +32,7 @@ function Subscriptions({ flow }: { flow: ImportFlow }) {
               <li key={`${sub.channel}:${sub.rule}`} className="flex flex-wrap items-baseline gap-x-2.5 gap-y-0.5">
                 <RuleName phrase={phrase(sub.channel, sub.rule)} />
                 <span className="text-xs text-text-muted">
-                  {sub.subject ?? "요일·시간 미정"} · {sub.creator ? `${sub.creator} 따라 받기` : "제작자 미정"}
+                  {sub.subject ?? (sub.schedule_from_comment ? "주석의 요일·시간" : "요일·시간 미정")} ·{sub.creator ? `${sub.creator} 따라 받기` : "제작자 미정"}
                 </span>
               </li>
             ))}
@@ -41,7 +42,12 @@ function Subscriptions({ flow }: { flow: ImportFlow }) {
       {unknown > 0 && (
         <p className="text-[13.5px] leading-relaxed text-text-secondary">
           {unavailable ?? "Anissia 편성표에서 찾지 못한 작품이 있어요."} 방영 요일과 시간을 읽지 못한 구독 {unknown}개는
-          그대로 만들고, 앱이 Anissia에서 다시 읽어 채울 때까지 요일 자리에 기타로 보여요.
+          그대로 만들고, 앱이 Anissia에서 다시 읽어 채울 때까지{" "}
+          {unknownInOther === 0
+            ? "주석에 적힌 요일과 시간으로 보여요."
+            : unknownInOther === unknown
+              ? "요일 자리에 기타로 보여요."
+              : `주석에 적힌 요일과 시간으로 보여요(주석에 요일이 없는 ${unknownInOther}개는 기타).`}
         </p>
       )}
       {notCreated.length > 0 && (
@@ -105,6 +111,10 @@ export function ResultStep({ flow }: { flow: ImportFlow }) {
               <b className="text-text-primary break-all">{channel.url}</b> 채널을 파일 내용으로 바꿨어요. 규칙{" "}
               {channel.kept_rules}개는 지금 규칙의 ID를 유지한 채 값만 바꿨고, {channel.added_rules}개를 새로 더했고,{" "}
               {channel.removed_rules.length}개를 없앴어요.
+              {channel.title_waiting_kept > 0 &&
+                ` 제목 대기 구독 ${channel.title_waiting_kept}개는 그대로 남겼어요.`}
+              {channel.folders_kept.length > 0 &&
+                ` 파일의 저장 폴더가 작품 폴더가 아니라서 구독 ${channel.folders_kept.length}개는 지금 저장 폴더를 그대로 뒀어요.`}
             </li>
           ))}
           {result.collect_folder_set !== null && (
