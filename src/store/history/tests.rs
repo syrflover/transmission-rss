@@ -1420,3 +1420,73 @@ async fn the_titles_of_what_rules_received_come_back_with_their_torrents() {
         .unwrap();
     assert!(none.is_empty());
 }
+
+// --- the items a rule picked first (ticket 0024) -----------------------------
+
+#[tokio::test]
+async fn the_rules_that_picked_something_are_found_whatever_the_result() {
+    let (_dir, _db, history) = store().await;
+    history
+        .record(
+            100,
+            vec![
+                received("a", "rule-a", "h1"),
+                Observation {
+                    rule_id: Some("rule-b".into()),
+                    ..obs("b", HistoryResult::AddFailed)
+                },
+                // Nobody picked it: no rule behind it.
+                obs("c", HistoryResult::NoMatch),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let found = history
+        .rules_with_items(vec!["rule-a".into(), "rule-b".into(), "rule-c".into()])
+        .await
+        .unwrap();
+
+    assert_eq!(
+        found,
+        HashSet::from(["rule-a".to_owned(), "rule-b".to_owned()])
+    );
+    assert!(history
+        .rules_with_items(Vec::new())
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+async fn a_rules_first_titles_are_those_recorded_at_its_earliest_moment() {
+    let (_dir, _db, history) = store().await;
+    history
+        .record(
+            100,
+            vec![received("a", "rule-a", "h1"), received("b", "rule-a", "h2")],
+        )
+        .await
+        .unwrap();
+    history
+        .record(
+            200,
+            vec![received("c", "rule-a", "h3"), received("d", "rule-b", "h4")],
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        history.first_titles_of_rule("rule-a").await.unwrap(),
+        ["title of a", "title of b"]
+    );
+    assert_eq!(
+        history.first_titles_of_rule("rule-b").await.unwrap(),
+        ["title of d"]
+    );
+    assert!(history
+        .first_titles_of_rule("rule-c")
+        .await
+        .unwrap()
+        .is_empty());
+}
