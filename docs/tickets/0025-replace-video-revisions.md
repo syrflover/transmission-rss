@@ -65,7 +65,7 @@ worker는 `14v2`를 추가하고 곧바로 `Show S01E14.mkv`로 이름을 바꿨
 
 ### 검증한 것
 
-- `cargo fmt --check`: 이 티켓이 바꾼 파일은 통과했어요. master에서 온 `src/web/rules_api/episode.rs` 한 곳만 다르게 나와요(이 브랜치는 그 파일을 바꾸지 않았어요). `cargo clippy --all-targets -- -D warnings`는 통과했어요. master를 합친 뒤 `cargo test --no-fail-fast`는 1130개 통과, 실패 0개, 무시 2개였어요(26개 실행 파일). 웹은 `bun install --frozen-lockfile`, `bun run typecheck`, `bun run build`가 통과했어요.
+- 리뷰 결함을 고치고 0026(지난 회차 검색)이 들어온 master를 합친 뒤: `cargo fmt --check`와 `cargo clippy --all-targets -- -D warnings`가 통과했고, `cargo test --no-fail-fast`는 1219개 통과, 실패 0개, 무시 2개였어요(27개 실행 파일). 웹은 `bun run typecheck`, `bun run build`가 통과했어요(이 보완은 웹 파일을 바꾸지 않았어요).
 - 명세 표 아홉 행(`tests/video_revisions.rs`, 가짜 Transmission이 임시 미디어 폴더에서 실제로 파일을 쓰고, 지우고, 이름을 바꿔요):
   1. 단일 파일 토렌트의 `14`와 `14v2`: `row_1_…`(받는 동안 받은 이름 그대로, 확인 뒤 이전 토렌트를 데이터와 함께 제거하고 이름 변경, 작품 상세의 버전 줄, 피드에 남은 `14`를 다시 받지 않음).
   2. CRC32 불일치 / 수신 중단: `row_2_a_revision_whose_crc_differs_…`(원천 API와 회차 줄의 두 파일·까닭, 새 파일을 지우면 실패가 사라짐), `row_2_a_revision_whose_download_stops_…`.
