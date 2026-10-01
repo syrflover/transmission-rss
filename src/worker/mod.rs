@@ -260,6 +260,13 @@ impl Worker {
         self.ctx.live.sync_folders().await;
     }
 
+    /// One pass of the season link, which a cycle runs after the watch folder
+    /// scan (see [`season_link`]). It takes no lock, so it is for callers that
+    /// know no cycle is running, such as tests.
+    pub async fn link_seasons(&self) -> season_link::Linked {
+        season_link::link_seasons(&self.ctx).await
+    }
+
     /// Ends every watch.
     pub fn stop_watching(&self) {
         self.ctx.live.stop();

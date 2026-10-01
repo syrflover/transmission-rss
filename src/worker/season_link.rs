@@ -59,6 +59,9 @@ pub struct Linked {
     pub linked: usize,
     /// Rules whose season another Anissia anime holds.
     pub taken: usize,
+    /// Rules this pass reported as having torrents in Transmission with none
+    /// of their videos in the library (see [`link_seasons`]).
+    pub unmatched: Vec<String>,
 }
 
 /// The inputs of an attempt that left a rule unconnected.
@@ -76,6 +79,9 @@ struct Attempt {
 pub struct Remembered {
     /// The last attempt that left the rule unconnected, by rule ID.
     attempts: HashMap<String, Attempt>,
+    /// The rules reported as unmatched since the worker started, so that a
+    /// rule is reported once, not on every attempt.
+    reported: HashSet<String>,
 }
 
 pub type Memory = Arc<Mutex<Remembered>>;
@@ -84,6 +90,7 @@ impl Remembered {
     /// Keeps only what is about the given rules.
     fn retain(&mut self, rule_ids: &HashSet<&str>) {
         self.attempts.retain(|id, _| rule_ids.contains(id.as_str()));
+        self.reported.retain(|id| rule_ids.contains(id.as_str()));
     }
 
     fn forget(&mut self, rule_id: &str) {
@@ -107,6 +114,8 @@ fn lock(memory: &Memory) -> std::sync::MutexGuard<'_, Remembered> {
 struct Found {
     /// The seasons (work and number, from 1) that hold a video of them.
     seasons: BTreeSet<(String, u32)>,
+    /// Whether the library has any of the files as a video, in any season.
+    any: bool,
 }
 
 /// What the library holds at the files of the given torrents, or `None` when
@@ -131,6 +140,7 @@ async fn find(ctx: &CycleContext, places: &[&TorrentPlace]) -> Option<Found> {
     };
     let mut found = Found::default();
     for (work_id, season) in videos.into_iter().flatten() {
+        found.any = true;
         if season >= 1 {
             found.seasons.insert((work_id, season));
         }
@@ -143,6 +153,11 @@ async fn find(ctx: &CycleContext, places: &[&TorrentPlace]) -> Option<Found> {
 /// waiting for a season and something it depends on is new (see the module's
 /// `What a pass does not repeat`). Failures are logged and leave the rules for
 /// the next cycle.
+///
+/// A rule whose torrents Transmission has but none of whose videos the library
+/// has under the path Transmission reports is logged once per worker start: it
+/// is what a download folder that is mounted at another path for the worker
+/// than for Transmission looks like. The log names the rule's ID only.
 pub async fn link_seasons(ctx: &CycleContext) -> Linked {
     let mut done = Linked::default();
     // Read before anything the attempt depends on, so that a change during the
@@ -268,6 +283,17 @@ pub async fn link_seasons(ctx: &CycleContext) -> Linked {
                 generation,
             },
         );
+        let has_files = own.iter().any(|place| !place.files.is_empty());
+        if has_files && !found.any && memory.reported.insert(rule.id.clone()) {
+            eprintln!(
+                "Season link: rule {} has {} torrent(s) in Transmission, but none of their videos \
+                 is in the library at the path Transmission reports. If the download folder is \
+                 mounted at another path here than in Transmission, the rule cannot be connected.",
+                rule.id,
+                own.len()
+            );
+            done.unmatched.push(rule.id.clone());
+        }
     }
     done
 }

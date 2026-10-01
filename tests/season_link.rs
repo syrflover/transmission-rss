@@ -325,6 +325,16 @@ impl Scene {
             })
             .count()
     }
+
+    /// The torrent the last `received` added is saved in `dir` for
+    /// Transmission, not where the library has the file.
+    fn saved_elsewhere(&self, dir: &Path, file: &str) {
+        let hash = format!("{:040x}", self.next_hash);
+        self.h.tr.remove(&hash);
+        self.h
+            .tr
+            .preload(FakeTorrent::new(&hash, "name").in_dir(dir).files(&[file]));
+    }
 }
 
 #[tokio::test]
@@ -408,4 +418,37 @@ async fn a_rule_with_videos_in_several_seasons_and_a_rule_whose_season_is_taken_
     assert_eq!(season_of(&scene.rule(&several).await), None);
     // The note on the taken rule is not written again either.
     assert_eq!(scene.rule(&taken).await.version, blocked.version);
+}
+
+// --- a path Transmission and the library do not agree on -------------------------
+
+#[tokio::test]
+async fn a_rule_whose_torrents_are_found_nowhere_in_the_library_is_reported_once() {
+    let mut scene = Scene::new().await;
+    let mapped = scene.subscription(7, "Mapped").await;
+    let fine = scene.subscription(8, "Fine").await;
+    scene
+        .received(&mapped, "Mapped/Season 01/Mapped - S01E01.mkv")
+        .await;
+    // Transmission keeps its data where this app sees other folders.
+    let elsewhere = scene.h.dir.path().join("downloads/Mapped/Season 01");
+    scene.saved_elsewhere(&elsewhere, "Mapped - S01E01.mkv");
+    scene
+        .received(&fine, "Fine/Season 01/Fine - S01E01.mkv")
+        .await;
+    scene.register().await;
+
+    let first = scene.worker.link_seasons().await;
+    assert_eq!(first.unmatched, std::slice::from_ref(&mapped.id));
+    assert_eq!((first.linked, first.taken), (1, 0));
+    assert_eq!(season_of(&scene.rule(&mapped).await), None);
+
+    // It is tried again when it receives something new, and says nothing again.
+    scene
+        .received(&mapped, "Mapped/Season 01/Mapped - S01E02.mkv")
+        .await;
+    scene.saved_elsewhere(&elsewhere, "Mapped - S01E02.mkv");
+    let again = scene.worker.link_seasons().await;
+    assert_eq!(scene.file_reads(), 2, "the new item makes it a candidate");
+    assert!(again.unmatched.is_empty(), "{again:?}");
 }
