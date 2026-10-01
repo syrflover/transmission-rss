@@ -27,6 +27,10 @@
 //!   says what it left out.
 //! - Requests to one host start [`client::REQUEST_SPACING`] (3 s) apart, so a
 //!   search with all its extras takes about a minute at the longest.
+//! - A request waits [`client::MAX_WAIT`] (60 s) for its turn at the most. When
+//!   the host asked for no request for longer (a `429`), or the pace row is
+//!   further ahead than that, the search fails at once and says when to try
+//!   again; a block that comes while a request waits stops that request.
 
 pub mod client;
 pub mod judge;

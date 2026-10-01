@@ -59,13 +59,27 @@ pub fn read_folder(folder: &Path) -> io::Result<Vec<(Episode, PathBuf)>> {
     Ok(found)
 }
 
+/// The releases of `titles` that a video can be told from by its CRC32: the ones
+/// that name one, once each. Nothing else of them is looked at (see
+/// [`super::judge::World::releases`]), so a long history leaves a short list.
+fn releases(titles: &[String]) -> Vec<Known> {
+    let mut seen = HashSet::new();
+    titles
+        .iter()
+        .map(|title| Known::of(title))
+        .filter(|known| known.crc.is_some())
+        .filter(|known| seen.insert((known.stem.clone(), known.version, known.crc)))
+        .collect()
+}
+
 /// The world of a rule whose episode conversion is `offset`.
 ///
 /// - `files`: the folder's videos ([`read_folder`]);
 /// - `settled`: the channel's items that history says Transmission holds
 ///   (`received`, `duplicate`); the ones `rule_id` picked also tell which
 ///   release the folder's episode came from;
-/// - `titles`: every title history holds for the channel.
+/// - `titles`: the titles history holds for the channel; only those that name a
+///   CRC32 are kept.
 pub fn build(
     offset: i64,
     season: Option<u32>,
@@ -109,7 +123,7 @@ pub fn build(
         world.present.entry(folder).or_default().records = known;
     }
     world.held = held;
-    world.releases = titles.iter().map(|t| Known::of(t)).collect();
+    world.releases = releases(titles);
     world
 }
 
@@ -200,5 +214,22 @@ mod tests {
         assert_eq!(present.records[0].stem, "[SubsPlease] Show - 14 (1080p)");
         assert!(present.file.is_none());
         assert_eq!(world.present.len(), 1);
+    }
+
+    #[test]
+    fn of_the_channels_titles_only_those_a_crc_can_be_matched_to_are_kept() {
+        let titles: Vec<String> = [
+            "[SubsPlease] Show - 05 (1080p) [AAAA0005].mkv",
+            "[SubsPlease] Show - 05 (1080p) [AAAA0005].mkv",
+            "[SubsPlease] Show - 05v2 (1080p) [BBBB0005].mkv",
+            "[SubsPlease] Show - 06 (1080p).mkv",
+            "[SubsPlease] Show - 07 (1080p).mkv",
+        ]
+        .map(str::to_owned)
+        .to_vec();
+        let world = build(0, None, vec![], "r", &[], &titles);
+        let versions: Vec<(u32, Option<u32>)> =
+            world.releases.iter().map(|k| (k.version, k.crc)).collect();
+        assert_eq!(versions, vec![(1, Some(0xAAAA0005)), (2, Some(0xBBBB0005))]);
     }
 }

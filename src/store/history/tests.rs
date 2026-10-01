@@ -1656,3 +1656,42 @@ async fn a_rules_first_titles_are_those_recorded_at_its_earliest_moment() {
         .unwrap()
         .is_empty());
 }
+
+#[tokio::test]
+async fn the_newest_titles_of_a_channel_are_read_up_to_the_limit() {
+    let (_dir, _db, history) = store().await;
+    history
+        .record(
+            1_000,
+            vec![
+                obs("a", HistoryResult::NoMatch),
+                obs("b", HistoryResult::NoMatch),
+                obs("c", HistoryResult::NoMatch),
+            ],
+        )
+        .await
+        .unwrap();
+    let titles = |rows: Vec<(i64, String)>| rows.into_iter().map(|(_, t)| t).collect::<Vec<_>>();
+    assert_eq!(
+        titles(
+            history
+                .recent_titles_of_channel("c1".into(), 2)
+                .await
+                .unwrap()
+        ),
+        vec!["title of c", "title of b"]
+    );
+    assert_eq!(
+        history
+            .recent_titles_of_channel("c1".into(), 10)
+            .await
+            .unwrap()
+            .len(),
+        3
+    );
+    assert!(history
+        .recent_titles_of_channel("other".into(), 10)
+        .await
+        .unwrap()
+        .is_empty());
+}

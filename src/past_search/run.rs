@@ -18,7 +18,7 @@
 use std::collections::HashSet;
 
 use super::{
-    client::{SearchClient, SearchError},
+    client::{wait_phrase, SearchClient, SearchError},
     judge::{Range, World},
     query::batch_query,
     release::{read, Kind, Notation},
@@ -193,6 +193,11 @@ pub async fn run(
                     SearchError::Busy(wait) => format!(
                         "추가 검색 중 서버가 {}초 기다리라고 해서 {}번째부터는 보내지 않았어요.",
                         wait.as_secs(),
+                        index + 1
+                    ),
+                    SearchError::Wait(wait) => format!(
+                        "추가 검색을 보낼 차례가 {} 뒤여서 {}번째부터는 보내지 않았어요.",
+                        wait_phrase(wait),
                         index + 1
                     ),
                     _ => format!(

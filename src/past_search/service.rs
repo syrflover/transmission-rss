@@ -20,7 +20,7 @@ use std::{
 use tokio::task::AbortHandle;
 
 use super::{
-    client::{SearchClient, SearchError, REQUEST_SPACING},
+    client::{wait_phrase, SearchClient, SearchError, REQUEST_SPACING},
     judge::{judge, Preview, Range, Result as Judged},
     run::{run, Limits},
     world,
@@ -51,10 +51,14 @@ pub struct Spec {
     pub save_path: std::path::PathBuf,
     pub offset: i64,
     pub season: Option<u32>,
-    /// The channel's items history says Transmission holds.
+    /// The channel's items history says Transmission holds. Dropped once the
+    /// search has built its picture of the work.
     pub settled: Vec<HistoryItem>,
-    /// Every title history holds for the channel.
+    /// The titles history holds for the channel. Dropped like `settled`.
     pub titles: Vec<String>,
+    /// Whether the channel's history is longer than what `settled` and
+    /// `titles` hold (the newest are held).
+    pub history_cut: bool,
     /// Redacts the channel's secret values from what is reported.
     pub redactor: Redactor,
 }
@@ -105,9 +109,18 @@ struct Registry {
 }
 
 impl Registry {
+    /// Forgets the searches past [`KEEP`], and the oldest ones beyond
+    /// [`MAX_SEARCHES`]; the task of each is aborted.
     fn sweep(&mut self) {
-        self.searches
-            .retain(|_, entry| entry.started.elapsed() < KEEP);
+        let expired: Vec<String> = self
+            .searches
+            .iter()
+            .filter(|(_, entry)| entry.started.elapsed() >= KEEP)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in expired {
+            self.remove(&id);
+        }
         while self.searches.len() > MAX_SEARCHES {
             let oldest = self
                 .searches
@@ -115,14 +128,16 @@ impl Registry {
                 .min_by_key(|(_, e)| e.started)
                 .map(|(id, _)| id.clone());
             match oldest {
-                Some(id) => {
-                    if let Some(entry) = self.searches.remove(&id) {
-                        if let Some(abort) = entry.abort {
-                            abort.abort();
-                        }
-                    }
-                }
+                Some(id) => self.remove(&id),
                 None => break,
+            }
+        }
+    }
+
+    fn remove(&mut self, id: &str) {
+        if let Some(entry) = self.searches.remove(id) {
+            if let Some(abort) = entry.abort {
+                abort.abort();
             }
         }
     }
@@ -278,7 +293,10 @@ impl PastSearch {
     /// The item `key` of the finished search `id` of rule `rule_id`, as history
     /// stores it.
     pub fn resolve(&self, id: &str, rule_id: &str, key: &str) -> Result<Stored, Resolve> {
-        let registry = self.lock();
+        let mut registry = self.lock();
+        // A search is kept for [`KEEP`] and no longer, whether or not
+        // anything polled it in the meantime.
+        registry.sweep();
         let entry = registry.searches.get(id).ok_or(Resolve::Gone)?;
         if entry.rule_id != rule_id {
             return Err(Resolve::OtherRule);
@@ -301,14 +319,25 @@ impl PastSearch {
             season,
             settled,
             titles,
+            history_cut,
             redactor,
         } = spec;
 
-        let files = tokio::task::spawn_blocking(move || world::read_folder(&save_path))
+        // Reading the folder and going through the history are blocking work
+        // on as much as a few thousand records; `settled` and `titles` are
+        // dropped with the closure, not held for the minute a search can take.
+        let world = {
+            let rule_id = rule.id.clone();
+            tokio::task::spawn_blocking(move || {
+                let files = world::read_folder(&save_path)?;
+                Ok(world::build(
+                    offset, season, files, &rule_id, &settled, &titles,
+                ))
+            })
             .await
             .map_err(|_| "작품 폴더를 읽는 중 오류가 났어요.".to_owned())?
-            .map_err(|err| format!("작품 폴더를 읽지 못했어요: {}", err.kind()))?;
-        let world = world::build(offset, season, files, &rule.id, &settled, &titles);
+            .map_err(|err: std::io::Error| format!("작품 폴더를 읽지 못했어요: {}", err.kind()))?
+        };
 
         let judging: Arc<dyn Fn(&str) -> bool + Send + Sync> = {
             let (channel, rule) = (channel.clone(), rule.clone());
@@ -379,11 +408,18 @@ impl PastSearch {
                 })
             })
             .collect();
+        let mut notes = found.notes;
+        if history_cut {
+            notes.push(
+                "채널의 기록이 많아서 최근 기록만 살폈어요. 오래전에 받은 항목은 받은 것으로 보이지 않을 수 있어요."
+                    .to_owned(),
+            );
+        }
         Ok(Outcome {
             range,
             query,
             preview,
-            notes: found.notes,
+            notes,
             first_full: found.first_full,
             extra_sent: found.extra_sent,
             extra_needed: found.extra_needed,
@@ -401,10 +437,92 @@ fn search_error(err: SearchError) -> String {
         SearchError::Pace(_) => {
             "검색 요청 간격을 확인하지 못했어요. 잠시 뒤 다시 시도해 주세요.".to_owned()
         }
+        SearchError::Wait(wait) => format!(
+            "검색 서버에 요청을 보내는 간격 제한이 걸려 있어서 지금은 검색하지 못했어요. {} 뒤에 다시 검색해 주세요.",
+            wait_phrase(wait)
+        ),
         SearchError::Busy(wait) => format!(
             "검색 서버가 {}초 뒤에 다시 요청해 달라고 해서 검색하지 못했어요.",
             wait.as_secs()
         ),
         SearchError::Read(why) => format!("검색 결과를 읽지 못했어요: {why}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::Db;
+
+    async fn service() -> (PastSearch, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open(dir.path().join("app.db")).await.unwrap();
+        (PastSearch::new(SearchPace::new(db)), dir)
+    }
+
+    fn outcome() -> Outcome {
+        Outcome {
+            range: Range { from: 1, to: 1 },
+            query: "Show".into(),
+            preview: Preview::default(),
+            notes: Vec::new(),
+            first_full: false,
+            extra_sent: 0,
+            extra_needed: 0,
+            storable: HashMap::from([(
+                "k".to_owned(),
+                Stored {
+                    title: "Show - 01".into(),
+                    link: "magnet:?xt=urn:btih:a".into(),
+                },
+            )]),
+            rule_id: "r".into(),
+        }
+    }
+
+    /// A task that never ends on its own, and an entry that holds it.
+    fn entry(age: Duration, status: Status) -> (Entry, tokio::task::JoinHandle<()>) {
+        let task = tokio::spawn(std::future::pending::<()>());
+        let entry = Entry {
+            rule_id: "r".into(),
+            started: Instant::now().checked_sub(age).unwrap(),
+            status,
+            abort: Some(task.abort_handle()),
+        };
+        (entry, task)
+    }
+
+    async fn ended(task: tokio::task::JoinHandle<()>) -> bool {
+        match tokio::time::timeout(Duration::from_secs(1), task).await {
+            Ok(joined) => joined.unwrap_err().is_cancelled(),
+            Err(_) => false,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_search_dropped_for_its_age_is_aborted_as_by_every_other_removal() {
+        let (service, _dir) = service().await;
+        let (old, task) = entry(
+            KEEP + Duration::from_secs(1),
+            Status::Running { sent: 0, needed: 0 },
+        );
+        service.lock().searches.insert("old".into(), old);
+        assert!(service.status("old").is_none());
+        assert!(ended(task).await, "the dropped search's task still runs");
+    }
+
+    #[tokio::test]
+    async fn a_search_past_its_keep_cannot_be_received_even_before_anything_sweeps() {
+        let (service, _dir) = service().await;
+        let (old, _task) = entry(
+            KEEP + Duration::from_secs(1),
+            Status::Done(Arc::new(outcome())),
+        );
+        service.lock().searches.insert("old".into(), old);
+        assert_eq!(service.resolve("old", "r", "k"), Err(Resolve::Gone));
+
+        let (fresh, _task) = entry(Duration::from_secs(1), Status::Done(Arc::new(outcome())));
+        service.lock().searches.insert("fresh".into(), fresh);
+        assert!(service.resolve("fresh", "r", "k").is_ok());
     }
 }
