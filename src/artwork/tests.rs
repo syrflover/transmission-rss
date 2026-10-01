@@ -564,7 +564,7 @@ async fn hundreds_of_new_works_are_searched_one_at_a_time_at_the_pace() {
     let names: Vec<String> = (0..520).map(|i| format!("Work {i:03}")).collect();
     let refs: Vec<&str> = names.iter().map(String::as_str).collect();
     let env = Env::new(&refs).await;
-    let spacing = Duration::from_millis(40);
+    let spacing = Duration::from_millis(100);
 
     // Two processes (two connections to one database) share one pace.
     let other_db = Db::open(env.dir.path().join("trss.db")).await.unwrap();
@@ -631,10 +631,18 @@ async fn hundreds_of_new_works_are_searched_one_at_a_time_at_the_pace() {
         .collect();
     times.sort();
     assert!(times.len() >= 6, "{}", times.len());
+    // The times are taken where the requests arrive, and a request can arrive
+    // a few milliseconds late under load, which shortens the gap after it by
+    // as much (gaps of 34 ms were seen for a 40 ms spacing). Each gap must
+    // still be well beyond what unspaced requests leave, and the whole run
+    // must take the spacing for every request after the first.
     for pair in times.windows(2) {
         let gap = pair[1] - pair[0];
-        assert!(gap >= spacing - Duration::from_millis(5), "{gap:?}");
+        assert!(gap >= spacing / 2, "{gap:?}");
     }
+    let span = times[times.len() - 1] - times[0];
+    let wanted = spacing * (times.len() as u32 - 1);
+    assert!(span >= wanted - spacing / 2, "{span:?} < {wanted:?}");
     // Jobs ran oldest first; the rest wait, none was lost.
     let left = env
         .db
