@@ -1,4 +1,4 @@
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 
 /**
  * The library list (`src/web/library_api.rs`): every work with the summary the
@@ -49,3 +49,71 @@ export function loadWorks(signal?: AbortSignal): Promise<LibraryWorkList> {
 
 /** Where a work opens (the work detail screen). */
 export const workPath = (id: string) => `/library/${encodeURIComponent(id)}`;
+
+// --- one work (`src/web/library_work_api.rs`) ---------------------------------------
+
+/** A recorded file, by its path relative to the work folder. `added_at` is `null` when unknown. */
+export interface WorkFile {
+  path: string;
+  added_at: number | null;
+}
+
+export interface WorkEpisode {
+  /** As written in the file names; `01` and `13`/`013` are one episode. */
+  episode: string;
+  /** The episode as a number, `null` when it is no number. */
+  sort: number | null;
+  video: WorkFile[];
+  subtitle: WorkFile[];
+}
+
+export interface WorkSeason {
+  number: number;
+  /** Ascending. */
+  episodes: WorkEpisode[];
+}
+
+/** A file the scan could not attach to an episode, with why. */
+export interface UnrecognizedFile {
+  path: string;
+  reason: string;
+  /** The reason as a sentence. */
+  message: string;
+}
+
+/** A rule that saves into the work's folder. */
+export interface WorkRule {
+  id: string;
+  channel: { id: string; name: string | null; host: string };
+  match: string | null;
+  /** Relative to the collect folder. */
+  directory: string;
+  save_path: string;
+  state: "active" | "archived";
+}
+
+export interface WorkDetail {
+  id: string;
+  name: string;
+  missing: boolean;
+  watch_folder: { id: string; path: string };
+  folder_path: string;
+  added_at: number | null;
+  /** Ascending by season number. */
+  seasons: WorkSeason[];
+  unrecognized: UnrecognizedFile[];
+  rules: WorkRule[];
+}
+
+/** The cache key of one work's page. */
+export const workKey = (id: string) => `library:work:${id}`;
+
+/** One work, or `null` when the library has no work with this ID. */
+export async function loadWork(id: string, signal?: AbortSignal): Promise<WorkDetail | null> {
+  try {
+    return await api<WorkDetail>(`/library/works/${encodeURIComponent(id)}`, { signal });
+  } catch (e) {
+    if (e instanceof ApiError && e.code === "not_found") return null;
+    throw e;
+  }
+}

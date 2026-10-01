@@ -39,6 +39,33 @@ export function ListIcon(props: ComponentProps<"svg">) {
   );
 }
 
+/** A check: the file is there, or the season is the chosen one. */
+export function CheckIcon(props: ComponentProps<"svg">) {
+  return (
+    <Icon {...props} strokeWidth={2.6}>
+      <path d="M5 12.5l4.5 4.5L19 7.5" />
+    </Icon>
+  );
+}
+
+/** A dash: there is no such file. */
+export function MinusIcon(props: ComponentProps<"svg">) {
+  return (
+    <Icon {...props} strokeWidth={2.6}>
+      <path d="M6 12h12" />
+    </Icon>
+  );
+}
+
+/** A chevron pointing right; turned down with CSS when its section is open. */
+export function ChevronIcon(props: ComponentProps<"svg">) {
+  return (
+    <Icon {...props}>
+      <path d="M9 6l6 6-6 6" />
+    </Icon>
+  );
+}
+
 /** The question mark that marks `확인 필요`. */
 export function QuestionIcon(props: ComponentProps<"svg">) {
   return (

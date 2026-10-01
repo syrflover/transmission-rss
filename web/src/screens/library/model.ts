@@ -34,6 +34,12 @@ function initialOf(title: string): string {
   return (letter ? letter[0] : (Array.from(title)[0] ?? "?")).toLocaleUpperCase();
 }
 
+/** The title in NFC and what its cover placeholder is made of. */
+export function coverOf(name: string): Pick<Work, "title" | "hue" | "initial"> {
+  const title = normalize(name);
+  return { title, initial: initialOf(title), hue: hueOf(title) };
+}
+
 export function prepare(works: LibraryWork[]): Work[] {
   return works.map((work) => {
     const title = normalize(work.name);
