@@ -32,7 +32,10 @@
 //! title ([`parse_release`]). Which subscription the work belongs to is only
 //! the user's call; the candidate lists the waiting subscriptions to pick from.
 
-use std::{collections::HashSet, path::Path};
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+};
 
 use crate::{
     store::{
@@ -118,6 +121,7 @@ pub fn title_candidates(
         taken: bool,
     }
     let mut groups: Vec<Group> = Vec::new();
+    let mut index: HashMap<String, usize> = HashMap::new();
     for item in items {
         let Some(release) = parse_release(&item.title) else {
             continue;
@@ -128,8 +132,9 @@ pub fn title_candidates(
             HistoryResult::Received | HistoryResult::Duplicate | HistoryResult::AddFailed
         ) || matches!(plan.judge(&item.title), Judgement::Selected { .. });
         let unmatched = item.result == HistoryResult::NoMatch;
-        match groups.iter_mut().find(|g| g.key == key) {
-            Some(group) => {
+        match index.get(&key) {
+            Some(&at) => {
+                let group = &mut groups[at];
                 group.items += 1;
                 group.first_seen_at = group.first_seen_at.min(item.first_seen_at);
                 group.taken |= taken;
@@ -140,16 +145,19 @@ pub fn title_candidates(
                     group.latest_seen_at = item.first_seen_at;
                 }
             }
-            None => groups.push(Group {
-                key,
-                work: release.work,
-                latest_title: item.title.clone(),
-                items: 1,
-                first_seen_at: item.first_seen_at,
-                latest_seen_at: item.first_seen_at,
-                unmatched,
-                taken,
-            }),
+            None => {
+                index.insert(key.clone(), groups.len());
+                groups.push(Group {
+                    key,
+                    work: release.work,
+                    latest_title: item.title.clone(),
+                    items: 1,
+                    first_seen_at: item.first_seen_at,
+                    latest_seen_at: item.first_seen_at,
+                    unmatched,
+                    taken,
+                });
+            }
         }
     }
 
