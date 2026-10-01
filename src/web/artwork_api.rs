@@ -44,7 +44,9 @@
 //!   for the entry, fetches its cover from AniList's image host and verifies
 //!   it before anything changes.
 //! - `upload` takes the file's bytes as the body; the format is judged from
-//!   the bytes, never the name or the content type.
+//!   the bytes, never the name or the content type. At most
+//!   [`crate::artwork::UPLOAD_SLOTS`] uploads are taken in at once; another
+//!   waits for its turn before its body is read.
 //! - `clear` makes the work `disabled` (no cover, no automatic search),
 //!   `auto` goes back to automatic with a new search, `repair` asks for the
 //!   selected AniList entry's image again.
@@ -396,10 +398,12 @@ async fn upload(
         .ok()
         .and_then(|Query(p)| p.version)
         .ok_or_else(|| ApiError::invalid("표지의 버전이 빠졌어요. 화면을 새로 고쳐 주세요."))?;
+    // The turn comes first, so only so many bodies are held at once.
+    let slot = state.artwork.upload_slot().await;
     let bytes = axum::body::to_bytes(body, MAX_IMAGE_BYTES)
         .await
         .map_err(|_| ApiError::invalid(crate::artwork::Rejected::TooLarge.message()))?;
-    let result = state.artwork.upload(&id, version, bytes.to_vec()).await;
+    let result = state.artwork.upload(&id, version, bytes, Some(slot)).await;
     answer(&state, result).await
 }
 

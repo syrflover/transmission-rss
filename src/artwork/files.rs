@@ -46,6 +46,7 @@ use std::{
     time::Duration,
 };
 
+use bytes::Bytes;
 use rusqlite::TransactionBehavior;
 use sha2::{Digest, Sha256};
 
@@ -144,7 +145,7 @@ fn write_staged(root: &Path, staging: &str, bytes: &[u8]) -> io::Result<(u64, u6
 pub async fn publish(
     app: &AppData,
     store: &ArtworkStore,
-    bytes: &[u8],
+    bytes: Bytes,
     format: Format,
     now: Millis,
 ) -> Result<String, PublishError> {
@@ -159,18 +160,18 @@ pub async fn publish(
 pub(crate) async fn publish_at(
     app: &AppData,
     store: &ArtworkStore,
-    bytes: &[u8],
+    bytes: Bytes,
     target: &str,
     staging: &str,
     now: Millis,
 ) -> Result<(), PublishError> {
     store.reserve_file(target, staging, now).await?;
     let root = app.root.clone();
-    let (staging_owned, bytes_owned) = (staging.to_owned(), bytes.to_vec());
+    let staging_owned = staging.to_owned();
     let staged = tokio::task::spawn_blocking(move || -> io::Result<(u64, u64)> {
         ensure_dir(&root, ARTWORK_DIR)?;
         ensure_dir(&root, STAGING_DIR)?;
-        write_staged(&root, &staging_owned, &bytes_owned)
+        write_staged(&root, &staging_owned, &bytes)
     })
     .await
     .map_err(|e| io::Error::other(e.to_string()))?;

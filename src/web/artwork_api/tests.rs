@@ -388,3 +388,43 @@ async fn search_and_pick_go_through_anilist_and_its_image_host_only() {
         "{body}"
     );
 }
+
+#[tokio::test]
+async fn an_upload_waits_for_a_slot_before_it_reads_its_body() {
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+
+    let env = env().await;
+    let held: Vec<_> = futures::future::join_all(
+        (0..crate::artwork::UPLOAD_SLOTS).map(|_| env.state.artwork.upload_slot()),
+    )
+    .await;
+    let read = Arc::new(AtomicBool::new(false));
+    let flag = read.clone();
+    let body = Body::from_stream(futures::stream::once(async move {
+        flag.store(true, Ordering::SeqCst);
+        Ok::<_, std::io::Error>(bytes::Bytes::from(samples::png()))
+    }));
+    let uri = format!("{}/upload?version=1", base(&env));
+    let request = call(
+        &env.state,
+        Method::POST,
+        &uri,
+        body,
+        &[(header::CONTENT_TYPE, "image/png")],
+    );
+    tokio::pin!(request);
+    // Every slot is taken: the body is not read, nothing is stored.
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), &mut request)
+            .await
+            .is_err()
+    );
+    assert!(!read.load(Ordering::SeqCst));
+    drop(held);
+    let (status, _, body) = request.await;
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    assert!(read.load(Ordering::SeqCst));
+}

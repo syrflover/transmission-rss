@@ -556,7 +556,7 @@ async fn a_late_automatic_image_never_undoes_an_upload_a_pick_or_a_clear() {
     let s = env.selection("Up").await;
     let uploaded = env
         .art
-        .upload(&env.id("Up").await, s.version, samples::png())
+        .upload(&env.id("Up").await, s.version, samples::png(), None)
         .await
         .unwrap();
     env.fake.release("1.jpg");
@@ -621,7 +621,7 @@ async fn an_image_that_arrives_first_does_not_stop_a_choice_made_before_it() {
     // from it applies (the arrival changed no choice).
     let uploaded = env
         .art
-        .upload(&env.id("A").await, seen.version, samples::png())
+        .upload(&env.id("A").await, seen.version, samples::png(), None)
         .await
         .unwrap();
     assert_eq!(uploaded.source, Some(Source::Upload));
@@ -633,8 +633,8 @@ async fn of_two_screens_changing_from_the_same_version_the_first_stays() {
     let env = Env::new(&["A"]).await;
     let id = env.id("A").await;
     let v = env.selection("A").await.version;
-    let first = env.art.upload(&id, v, samples::png()).await.unwrap();
-    match env.art.upload(&id, v, samples::jpeg()).await {
+    let first = env.art.upload(&id, v, samples::png(), None).await.unwrap();
+    match env.art.upload(&id, v, samples::jpeg(), None).await {
         Err(ActionError::Store(ArtworkError::Conflict(current))) => assert_eq!(*current, first),
         other => panic!("expected a conflict, got {other:?}"),
     }
@@ -652,7 +652,7 @@ async fn an_upload_is_judged_by_its_bytes_and_a_refusal_keeps_the_cover() {
     let id = env.id("A").await;
     let v = env.selection("A").await.version;
     // A JPEG (whatever it was called) is a JPEG.
-    let kept = env.art.upload(&id, v, samples::jpeg()).await.unwrap();
+    let kept = env.art.upload(&id, v, samples::jpeg(), None).await.unwrap();
     assert_eq!(image_of(&kept).format, Format::Jpeg);
     let file = env.files();
 
@@ -666,7 +666,7 @@ async fn an_upload_is_judged_by_its_bytes_and_a_refusal_keeps_the_cover() {
         (jpeg[..jpeg.len() / 2].to_vec(), Rejected::Damaged),
         (samples::gif(), Rejected::NotImage),
     ] {
-        match env.art.upload(&id, kept.version, bytes).await {
+        match env.art.upload(&id, kept.version, bytes, None).await {
             Err(ActionError::Rejected(r)) => assert_eq!(r, why),
             other => panic!("expected {why:?}, got {other:?}"),
         }
@@ -688,7 +688,7 @@ async fn an_interrupted_publish_is_finished_by_the_files_identity() {
     files::publish_at(
         &app,
         &env.art.store,
-        &samples::png(),
+        samples::png().into(),
         "artwork/x.png",
         "artwork/.staging/x.tmp",
         1_000,
@@ -742,7 +742,7 @@ async fn a_taken_place_is_never_overwritten() {
     let result = files::publish_at(
         &app,
         &env.art.store,
-        &samples::png(),
+        samples::png().into(),
         "artwork/taken.png",
         "artwork/.staging/taken.tmp",
         1,
@@ -770,7 +770,7 @@ async fn an_image_is_served_only_while_its_file_is_the_recorded_one() {
     let env = Env::new(&["A"]).await;
     let id = env.id("A").await;
     let v = env.selection("A").await.version;
-    let s = env.art.upload(&id, v, samples::png()).await.unwrap();
+    let s = env.art.upload(&id, v, samples::png(), None).await.unwrap();
     let image = image_of(&s).clone();
     let path = env.path(&image.relative_path);
     let good = fs::read(&path).unwrap();
@@ -850,7 +850,7 @@ async fn the_cleanup_keeps_files_other_references_lead_to() {
         env.id("E").await,
     );
     let va = env.selection("A").await.version;
-    let sa = env.art.upload(&a, va, samples::png()).await.unwrap();
+    let sa = env.art.upload(&a, va, samples::png(), None).await.unwrap();
     let path_a = image_of(&sa).relative_path.clone();
     // B is a copy of A with another image ID and the same file; C names the
     // same file another way. (A YAML import will make such references.)
@@ -902,7 +902,7 @@ async fn the_cleanup_keeps_files_other_references_lead_to() {
 
     // A hard link is the same file.
     let vd = env.selection("D").await.version;
-    let sd = env.art.upload(&d, vd, samples::jpeg()).await.unwrap();
+    let sd = env.art.upload(&d, vd, samples::jpeg(), None).await.unwrap();
     let path_d = image_of(&sd).relative_path.clone();
     fs::hard_link(env.path(&path_d), env.path("artwork/alias.jpg")).unwrap();
     {
@@ -1054,4 +1054,61 @@ impl Artwork {
         }
         n
     }
+}
+
+/// An image that takes a while to decode in a test build.
+fn slow_image() -> bytes::Bytes {
+    samples::encoded(1600, 1600, ::image::ImageFormat::Png).into()
+}
+
+#[tokio::test]
+async fn a_decode_keeps_its_turn_after_its_caller_stops_waiting() {
+    let env = Env::new(&["A"]).await;
+    let bytes = slow_image();
+    // The caller gives up while the decode runs on its blocking thread.
+    let gave_up = tokio::time::timeout(Duration::from_millis(5), env.art.verify(bytes)).await;
+    assert!(gave_up.is_err(), "the decode should take longer than 5 ms");
+    // The decode still runs, so no other decode may start beside it.
+    assert_eq!(env.art.decoding.available_permits(), 0);
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while env.art.decoding.available_permits() == 0 {
+        assert!(Instant::now() < deadline, "the decode never ended");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+#[tokio::test]
+async fn an_image_whose_caller_went_away_is_stored_whole_and_then_cleaned_up() {
+    let env = Env::new(&["A"]).await;
+    let stored = tokio::time::timeout(
+        Duration::from_millis(5),
+        env.art.store_image(slow_image(), Source::Upload, None),
+    )
+    .await;
+    assert!(stored.is_err(), "storing should take longer than 5 ms");
+    // The storing goes on to a published file whose identity is recorded,
+    // never a staged file nobody can claim.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let row = loop {
+        let rows = env
+            .art
+            .store
+            .run(|c| Ok(crate::store::artwork::files_of_state(c, "staging")?))
+            .await
+            .unwrap();
+        if let Some(row) = rows.into_iter().find(|r| r.dev.is_some()) {
+            if env.files().len() == 1 {
+                break row;
+            }
+        }
+        assert!(Instant::now() < deadline, "the image was never stored");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    };
+    assert!(env.staging().is_empty());
+    // Nothing took it: the recovery hands it to the cleanup.
+    let late = row.created_at + STALE_STAGING.as_millis() as i64 + 1;
+    let app = AppData::new(env.dir.path());
+    assert_eq!(files::recover(&app, &env.art.store, late).await.unwrap(), 1);
+    env.art.tidy().await;
+    assert!(env.files().is_empty());
 }

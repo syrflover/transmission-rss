@@ -26,7 +26,10 @@
 //! decode would allocate (output, the JPEG decoder's input copy and a
 //! progressive JPEG's coefficients, the WebP decoder's frame) is added up from
 //! its headers and must stay under [`DECODE_MAX_ALLOC`] (see [`image`]), and
-//! one decode runs at a time in a process.
+//! one decode runs at a time in a process, keeping its turn until it ends even
+//! when its caller went away. The bytes are shared ([`Bytes`]), never copied,
+//! from the upload's body to the decode and the file, and at most
+//! [`UPLOAD_SLOTS`] uploads are taken in at once.
 
 pub mod anilist;
 pub mod files;
@@ -36,7 +39,8 @@ pub mod title;
 
 use std::{sync::Arc, time::Duration};
 
-use tokio::sync::Semaphore;
+use bytes::Bytes;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 pub use anilist::{Anilist, AnilistConfig, AnilistError, ImageFetchError};
 pub use files::{AppData, Unavailable};
@@ -67,6 +71,9 @@ pub const FETCH_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long a user's AniList request may wait for its turn before the web
 /// answers that AniList is busy.
 pub const USER_MAX_WAIT: Duration = Duration::from_secs(10);
+/// How many uploads a process takes in at once, from reading the body to the
+/// published file: at most this many bodies of [`MAX_IMAGE_BYTES`] are held.
+pub const UPLOAD_SLOTS: usize = 2;
 
 /// Why a user's artwork action did not happen. Nothing was changed.
 #[derive(Debug, thiserror::Error)]
@@ -110,6 +117,7 @@ pub struct Artwork {
     app_data: Option<AppData>,
     clock: Clock,
     decoding: Arc<Semaphore>,
+    uploads: Arc<Semaphore>,
 }
 
 impl Artwork {
@@ -130,6 +138,7 @@ impl Artwork {
             app_data,
             clock,
             decoding: Arc::new(Semaphore::new(1)),
+            uploads: Arc::new(Semaphore::new(UPLOAD_SLOTS)),
         }
     }
 
@@ -147,29 +156,60 @@ impl Artwork {
         (self.clock)()
     }
 
-    /// Verifies `bytes` on a blocking thread, one decode at a time.
-    pub async fn verify(&self, bytes: Arc<Vec<u8>>) -> Result<Format, Rejected> {
-        let _permit = self.decoding.acquire().await.expect("never closed");
-        tokio::task::spawn_blocking(move || image::verify(&bytes))
+    /// Verifies `bytes` on a blocking thread, one decode at a time. The decode
+    /// keeps its turn until it ends, even when the caller stops waiting.
+    pub async fn verify(&self, bytes: Bytes) -> Result<Format, Rejected> {
+        let permit = self
+            .decoding
+            .clone()
+            .acquire_owned()
             .await
-            .unwrap_or(Err(Rejected::Damaged))
+            .expect("never closed");
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            image::verify(&bytes)
+        })
+        .await
+        .unwrap_or(Err(Rejected::Damaged))
+    }
+
+    /// A turn to take in one upload ([`UPLOAD_SLOTS`]); the web takes it before
+    /// it reads the body and hands it to [`Artwork::upload`], which keeps it
+    /// until the file is stored.
+    pub async fn upload_slot(&self) -> OwnedSemaphorePermit {
+        self.uploads
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("never closed")
     }
 
     /// Verifies and publishes `bytes`, returning the reference a selection
     /// takes. The file is `staging` until then.
+    ///
+    /// It runs as its own task to the end, holding `hold` (an upload's slot)
+    /// until then: a caller that stops waiting (a client that went away) leaves
+    /// no half-made file, only a published one no selection takes, which the
+    /// recovery hands to the cleanup.
     pub async fn store_image(
         &self,
-        bytes: Vec<u8>,
+        bytes: Bytes,
         origin: Source,
+        hold: Option<OwnedSemaphorePermit>,
     ) -> Result<ImageRef, ActionError> {
-        let app = self.app_data.as_ref().ok_or(ActionError::NoAppData)?;
-        let bytes = Arc::new(bytes);
-        let format = self
-            .verify(bytes.clone())
-            .await
-            .map_err(ActionError::Rejected)?;
-        let path = files::publish(app, &self.store, &bytes, format, self.now()).await?;
-        Ok(files::image_ref(origin, path, &bytes, format))
+        let app = self.app_data.clone().ok_or(ActionError::NoAppData)?;
+        let this = self.clone();
+        tokio::spawn(async move {
+            let _hold = hold;
+            let format = this
+                .verify(bytes.clone())
+                .await
+                .map_err(ActionError::Rejected)?;
+            let path = files::publish(&app, &this.store, bytes.clone(), format, this.now()).await?;
+            Ok(files::image_ref(origin, path, &bytes, format))
+        })
+        .await
+        .unwrap_or_else(|e| Err(ActionError::Publish(e.to_string())))
     }
 
     /// Fails with a conflict before any work when the selection is not at
@@ -210,14 +250,23 @@ impl Artwork {
     }
 
     /// The user's uploaded file becomes the work's cover (`manual`, upload).
+    /// `slot` is the upload's turn ([`Artwork::upload_slot`]), taken before the
+    /// body was read; without one, one is taken here.
     pub async fn upload(
         &self,
         work_id: &str,
         expected: i64,
-        bytes: Vec<u8>,
+        bytes: impl Into<Bytes>,
+        slot: Option<OwnedSemaphorePermit>,
     ) -> Result<Selection, ActionError> {
+        let slot = match slot {
+            Some(slot) => slot,
+            None => self.upload_slot().await,
+        };
         self.check_version(work_id, expected).await?;
-        let image = self.store_image(bytes, Source::Upload).await?;
+        let image = self
+            .store_image(bytes.into(), Source::Upload, Some(slot))
+            .await?;
         self.take(work_id, expected, None, image).await
     }
 
@@ -240,7 +289,9 @@ impl Artwork {
             .ok_or(ActionError::NoEntry)?;
         let url = entry.cover_url.ok_or(ActionError::NoCover)?;
         let bytes = self.anilist.fetch_image(&url).await?;
-        let image = self.store_image(bytes, Source::Anilist).await?;
+        let image = self
+            .store_image(bytes.into(), Source::Anilist, None)
+            .await?;
         self.take(work_id, expected, Some(anilist_media_id), image)
             .await
     }

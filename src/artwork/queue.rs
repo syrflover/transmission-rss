@@ -161,7 +161,7 @@ impl Artwork {
                     .await
             }
         };
-        let image = match self.store_image(bytes, Source::Anilist).await {
+        let image = match self.store_image(bytes.into(), Source::Anilist, None).await {
             Ok(image) => image,
             Err(ActionError::Rejected(_)) => return self.give_up(job, Note::Rejected).await,
             Err(e) => {
