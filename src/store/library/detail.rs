@@ -16,7 +16,7 @@
 
 use std::collections::BTreeMap;
 
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension};
 
 use super::{FileRecord, UnrecognizedRecord};
 use crate::{
@@ -181,6 +181,69 @@ pub(super) fn detail(conn: &Connection, id: &str) -> rusqlite::Result<Option<Wor
         })?
         .collect::<rusqlite::Result<_>>()?;
     Ok(Some(work))
+}
+
+/// What a season of a work holds, without the files: for the places that show
+/// only how far a season has come.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SeasonHoldings {
+    /// The work's folder name.
+    pub dir_name: String,
+    /// The work's folder is gone; the counts are the last record.
+    pub missing: bool,
+    /// How many episodes of the season have a video (`013` and `13` are one).
+    pub videos: u32,
+}
+
+/// The holdings of season `season` of the work `id` (zero videos for a season
+/// with none), or `None` when there is no such work in a registered folder.
+pub(super) fn season_holdings(
+    conn: &Connection,
+    id: &str,
+    season: u32,
+) -> rusqlite::Result<Option<SeasonHoldings>> {
+    let head: Option<(String, bool)> = conn
+        .query_row(
+            "SELECT w.dir_name, w.missing FROM works w
+               JOIN watch_folders f ON f.id = w.watch_folder_id
+              WHERE w.id = ?1 AND f.unregistered_at IS NULL",
+            [id],
+            |row| Ok((row.get(0)?, row.get::<_, i64>(1)? != 0)),
+        )
+        .optional()?;
+    let Some((dir_name, missing)) = head else {
+        return Ok(None);
+    };
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT episode FROM media_files
+          WHERE work_id = ?1 AND season = ?2 AND kind = 'video'",
+    )?;
+    let episodes: std::collections::BTreeSet<EpisodeKey> = stmt
+        .query_map(params![id, season], |row| {
+            Ok(key_of(&row.get::<_, String>(0)?))
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(Some(SeasonHoldings {
+        dir_name,
+        missing,
+        videos: u32::try_from(episodes.len()).unwrap_or(u32::MAX),
+    }))
+}
+
+/// The work and season number of the video recorded at `path` (an absolute
+/// path: a watch folder, a work folder, then the file's path below it), if the
+/// library has such a file in a registered folder.
+pub(super) fn find_video(conn: &Connection, path: &str) -> rusqlite::Result<Option<(String, u32)>> {
+    conn.query_row(
+        "SELECT m.work_id, m.season FROM media_files m
+           JOIN works w ON w.id = m.work_id
+           JOIN watch_folders f ON f.id = w.watch_folder_id
+          WHERE m.kind = 'video' AND f.unregistered_at IS NULL
+            AND f.path || '/' || w.dir_name || '/' || m.path = ?1",
+        [path],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .optional()
 }
 
 #[cfg(test)]

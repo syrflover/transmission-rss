@@ -46,6 +46,10 @@
 //! for an hour, and, when it is not watching at all, every folder. Reading only
 //! looks at the disk and changes nothing.
 //!
+//! After the watch folders, the worker connects the subscriptions that have no
+//! season yet to the season their received videos appeared in
+//! ([`season_link`]).
+//!
 //! # Commands
 //!
 //! Between cycles the loop also looks, every few seconds, for commands the web
@@ -80,6 +84,7 @@ pub mod feed;
 pub mod live;
 pub mod lock;
 pub mod plan;
+pub mod season_link;
 pub mod watch;
 
 use std::{
@@ -313,6 +318,8 @@ impl Worker {
         // and one that cannot be read neither stops the others nor fails the tick.
         if !report.interrupted && !cancel.is_cancelled() {
             watch::scan_all(&self.ctx, &self.clock, cancel).await;
+            // The videos the rules received are in the library now (or not yet).
+            season_link::link_seasons(&self.ctx).await;
         }
 
         Ok(TickOutcome::Ran(report))

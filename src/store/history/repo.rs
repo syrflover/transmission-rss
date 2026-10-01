@@ -254,6 +254,30 @@ pub fn torrent_hashes_of_channels(
     Ok(hashes)
 }
 
+/// The torrent hashes of the items each of the given rules received
+/// (`received` with the rule recorded), by rule ID. A rule that received
+/// nothing is not in the map.
+pub fn received_hashes_of_rules(
+    conn: &Connection,
+    rule_ids: &[String],
+) -> Result<std::collections::HashMap<String, Vec<String>>> {
+    let mut by_rule: std::collections::HashMap<String, Vec<String>> = Default::default();
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT torrent_hash FROM history_items
+          WHERE rule_id = ?1 AND result = 'received' AND torrent_hash IS NOT NULL
+          ORDER BY torrent_hash",
+    )?;
+    for rule_id in rule_ids {
+        let hashes = stmt
+            .query_map([rule_id], |row| row.get(0))?
+            .collect::<rusqlite::Result<Vec<String>>>()?;
+        if !hashes.is_empty() {
+            by_rule.insert(rule_id.clone(), hashes);
+        }
+    }
+    Ok(by_rule)
+}
+
 /// Marks a cycle as started unless the previous one started less than
 /// `min_gap` ago. The check and the mark are one write transaction.
 pub fn try_begin_cycle(conn: &mut Connection, now: Millis, min_gap: Millis) -> Result<bool> {
