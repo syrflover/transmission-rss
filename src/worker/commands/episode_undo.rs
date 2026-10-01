@@ -73,6 +73,11 @@
 //! old; when the file is still at the old name (Transmission named the torrent
 //! without moving it), the torrent gets its old name back first.
 //!
+//! A start that finds a file renamed already (an earlier start renamed it
+//! and stopped before recording it: nothing at the old name, the planned
+//! file at the new one) records it renamed before anything else, so a
+//! replacement that began on its names since does not hold it.
+//!
 //! A file that cannot be renamed yet waits, still `pending` with why: its
 //! torrent is still downloading ([`UNFINISHED`]; one planned before its file
 //! had its name gets its identity once complete), or a replacement acts on
@@ -234,6 +239,19 @@ async fn carry_on(
     listing: &mut Listing,
     clock: &Clock,
 ) -> Result<bool, Retry> {
+    // Renamed by a start cut short before it recorded the file: that is how
+    // the file is, whatever a cycle began on its names since.
+    if renamed_before(ctx, file, listing).await? {
+        println!(
+            "Episode undo {command_id}: {} was {} already",
+            file.to_name, file.from_name
+        );
+        ctx.channels
+            .finish_undo_file(command_id, file.item_id, None, clock())
+            .await
+            .map_err(store)?;
+        return Ok(true);
+    }
     // A cycle may have run since the undo began (see the store's docs).
     let held = ctx
         .channels
@@ -679,6 +697,35 @@ fn new_name(
         (Some(source), _) if source.same_file(planned) => NewName::Back,
         _ => NewName::Changed,
     }
+}
+
+/// Whether an earlier start renamed the planned file and stopped before
+/// recording it: nothing is at the old name and the planned file is at the
+/// new one, and a torrent that still holds it has the new name.
+async fn renamed_before(
+    ctx: &CycleContext,
+    file: &NewUndoFile,
+    listing: &mut Listing,
+) -> Result<bool, Retry> {
+    let Some(planned) = file.identity.as_deref().and_then(FileIdentity::parse) else {
+        return Ok(false);
+    };
+    let folder = Path::new(&file.folder);
+    if let Some(hash) = file.torrent_hash.as_deref() {
+        let places = listing.get(ctx).await?;
+        if let Some(place) = places.iter().find(|p| p.hash.eq_ignore_ascii_case(hash)) {
+            if place.name != file.to_name || !same_folder(Path::new(&place.download_dir), folder) {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(matches!(
+        (
+            identity_at(&folder.join(&file.from_name)),
+            identity_at(&folder.join(&file.to_name)),
+        ),
+        (Ok(None), Ok(Some(there))) if there.same_file(&planned)
+    ))
 }
 
 /// The file at `path`, `None` when nothing is there.

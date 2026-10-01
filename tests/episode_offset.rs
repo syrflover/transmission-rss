@@ -1696,6 +1696,34 @@ async fn an_undo_that_cannot_reach_transmission_stops_and_is_carried_on_later() 
     assert_eq!(states, ["renamed", "renamed"]);
 }
 
+/// A file an earlier start renamed and did not record is recorded renamed,
+/// though a replacement began on its name between the starts.
+#[tokio::test]
+async fn a_file_renamed_before_a_start_was_cut_short_is_recorded_renamed() {
+    let (s, rule) = Scene::third_season_received().await;
+    s.undo_cut_short(&rule, "undo-0303-a").await;
+    assert_eq!(s.names(), ["Show S03E02.mkv", "Show S03E25.mkv"]);
+    s.revision_row(&rule, "Show - 49", "Show S03E01.mkv", true)
+        .await;
+
+    assert_eq!(
+        s.h.worker()
+            .run_commands(&CancellationToken::new())
+            .await
+            .unwrap(),
+        CommandsOutcome::Ran(1)
+    );
+
+    assert_eq!(
+        undo_files(&s.view(&rule).await),
+        [
+            file("Show S03E01.mkv", "Show S03E25.mkv", "renamed"),
+            file("Show S03E02.mkv", "Show S03E26.mkv", "renamed"),
+        ]
+    );
+    assert_eq!(s.names(), ["Show S03E25.mkv", "Show S03E26.mkv"]);
+}
+
 #[tokio::test]
 async fn an_undo_that_ended_half_done_is_shown_and_carried_on_when_asked_again() {
     use transmission_rss::store::commands::{CommandState, CommandStore, Outcome};
