@@ -21,9 +21,10 @@
 //!
 //! Once connected a rule stays connected. When the season is held by another
 //! Anissia anime already the rule is not connected and notes the season, which
-//! its detail explains ([`crate::store::channels::Subscription::season_blocked`]).
-//! The season ID is `<work id>:<number>` ([`SeasonRef`]); season 0 (specials) is
-//! no season of an airing anime and is never connected.
+//! its detail explains ([`crate::store::channels::Subscription::season_blocked`]);
+//! the note goes when no other anime holds that season any more. The season ID is
+//! `<work id>:<number>` ([`SeasonRef`]); season 0 (specials) is no season of an
+//! airing anime and is never connected.
 //!
 //! # What a pass does not repeat
 //!
@@ -36,7 +37,9 @@
 //! library then notes. So the pass remembers, per rule, the torrents and the
 //! library's generation ([`crate::store::library::LibraryStore::generation`]) of
 //! its last attempt that did not connect it, and tries again only when either
-//! differs.
+//! differs. A taken season is the one more input: its holder can leave without
+//! touching the library, which is why [`link_seasons`] first lets the store clear
+//! the notes of seasons nobody holds and forgets those rules' attempts.
 //!
 //! The memory is in the worker's process ([`Memory`]), not the database: it only
 //! saves work, a restart costs one attempt per rule, and nothing else reads it.
@@ -169,6 +172,19 @@ pub async fn link_seasons(ctx: &CycleContext) -> Linked {
             return done;
         }
     };
+
+    match ctx.channels.release_unheld_seasons().await {
+        Ok(released) => {
+            let mut memory = lock(&ctx.season_link);
+            for rule_id in released {
+                println!(
+                    "Season link: rule {rule_id} no longer waits for a season another anime held"
+                );
+                memory.forget(&rule_id);
+            }
+        }
+        Err(err) => eprintln!("Season link: cannot release the notes of seasons: {err}"),
+    }
 
     let rules: Vec<Rule> = match ctx.channels.list_channels_with_rules().await {
         Ok(all) => all

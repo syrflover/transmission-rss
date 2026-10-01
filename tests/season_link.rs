@@ -452,3 +452,43 @@ async fn a_rule_whose_torrents_are_found_nowhere_in_the_library_is_reported_once
     assert_eq!(scene.file_reads(), 2, "the new item makes it a candidate");
     assert!(again.unmatched.is_empty(), "{again:?}");
 }
+
+// --- a note on a season that is not held any more ---------------------------------
+
+#[tokio::test]
+async fn the_note_of_a_taken_season_goes_when_nothing_holds_the_season_any_more() {
+    let mut scene = Scene::new().await;
+    let first = scene.subscription(7, "First").await;
+    let second = scene.subscription(8, "Second").await;
+    scene
+        .received(&first, "Work/Season 01/Work - S01E01.mkv")
+        .await;
+    scene
+        .received(&second, "Work/Season 01/Work - S01E02.mkv")
+        .await;
+    scene.register().await;
+    scene.tick().await;
+    let work = scene.work_id("Work").await;
+    let noted = scene.rule(&second).await;
+    assert_eq!(blocked_of(&noted), Some(format!("{work}:1").as_str()));
+
+    // The holder goes, and the second rule's torrent is gone from Transmission
+    // too, so the rule cannot take the season itself.
+    scene.h.tr.remove(&format!("{:040x}", 2));
+    let holder = scene.rule(&first).await;
+    scene
+        .h
+        .channels
+        .delete_rule(&holder.id, holder.version)
+        .await
+        .unwrap();
+    scene.tick().await;
+
+    let released = scene.rule(&second).await;
+    assert_eq!(season_of(&released), None);
+    assert_eq!(blocked_of(&released), None, "nothing holds the season");
+    assert!(released.version > noted.version);
+    // Once cleared it stays as it is.
+    scene.tick().await;
+    assert_eq!(scene.rule(&second).await.version, released.version);
+}

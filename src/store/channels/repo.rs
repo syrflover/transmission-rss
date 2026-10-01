@@ -710,6 +710,39 @@ pub fn season_holder(conn: &Connection, season_id: &str) -> Result<Option<i64>> 
         .optional()?)
 }
 
+/// Clears `season_blocked` where no other Anissia anime holds the noted season
+/// any more (the holder's rule was deleted, or stopped being a subscription),
+/// so a rule's detail does not go on explaining a block that is gone. A rule
+/// that changes gets a new version; one whose note stays is left alone. The
+/// rules cleared, by ID.
+pub fn release_unheld_seasons(conn: &mut Connection) -> Result<Vec<String>> {
+    // The same condition `link_season` refuses a season by, negated.
+    const UNHELD: &str = "SELECT s.rule_id FROM rule_subscriptions s
+         WHERE s.season_blocked IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM rule_subscriptions h
+                            WHERE h.season_id = s.season_blocked
+                              AND h.anissia_anime_no <> s.anissia_anime_no)
+         ORDER BY s.rule_id";
+    // Most passes find nothing: look before taking the write lock.
+    let ids = |conn: &Connection| -> rusqlite::Result<Vec<String>> {
+        conn.prepare(UNHELD)?.query_map([], |r| r.get(0))?.collect()
+    };
+    if ids(conn)?.is_empty() {
+        return Ok(Vec::new());
+    }
+    let tx = begin(conn)?;
+    let released = ids(&tx)?;
+    for id in &released {
+        tx.execute(
+            "UPDATE rule_subscriptions SET season_blocked = NULL WHERE rule_id = ?1",
+            [id],
+        )?;
+        bump_version(&tx, id)?;
+    }
+    tx.commit()?;
+    Ok(released)
+}
+
 /// The rules whose subscription is connected to a season of the work
 /// `work_id`, with the season's number, in channel and rule order.
 pub fn subscriptions_of_work(conn: &Connection, work_id: &str) -> Result<Vec<(u32, Rule)>> {
