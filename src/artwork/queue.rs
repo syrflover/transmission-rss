@@ -159,31 +159,58 @@ impl Artwork {
         }
     }
 
+    /// The cover URL AniList gives for `media_id` now; `Err` is how the job
+    /// ended when there is none.
+    async fn cover_url(&self, job: &ClaimedJob, media_id: i64) -> Result<String, Ran> {
+        match self.anilist.media(media_id, None).await {
+            Ok(Some(entry)) => match entry.cover_url {
+                Some(url) => Ok(url),
+                None => Err(self.give_up(job, Note::NoImage).await),
+            },
+            Ok(None) => Err(self.give_up(job, Note::Gone).await),
+            Err(e) => Err(self.later(job, &e).await),
+        }
+    }
+
+    /// How the job ends when its image could not be had.
+    async fn not_fetched(&self, job: &ClaimedJob, error: ImageFetchError) -> Ran {
+        match error {
+            ImageFetchError::NotAllowed | ImageFetchError::TooLarge => {
+                self.give_up(job, Note::Rejected).await
+            }
+            e => {
+                self.later(job, &AnilistError::Unreachable(e.to_string()))
+                    .await
+            }
+        }
+    }
+
     async fn run_fetch(&self, job: &ClaimedJob) -> Ran {
         let Some(media_id) = job.anilist_media_id else {
             return self.give_up(job, Note::Gone).await;
         };
-        let url = match &job.image_url {
-            Some(url) => url.clone(),
-            None => match self.anilist.media(media_id, None).await {
-                Ok(Some(entry)) => match entry.cover_url {
-                    Some(url) => url,
-                    None => return self.give_up(job, Note::NoImage).await,
-                },
-                Ok(None) => return self.give_up(job, Note::Gone).await,
-                Err(e) => return self.later(job, &e).await,
+        let fetched = match &job.image_url {
+            // The URL the search's answer gave. AniList moves cover images
+            // now and then; when it is gone, the entry is asked for its
+            // current URL, once.
+            Some(stored) => match self.anilist.fetch_image(stored).await {
+                Err(ImageFetchError::Status(404 | 410)) => {
+                    match self.cover_url(job, media_id).await {
+                        Ok(fresh) if &fresh != stored => self.anilist.fetch_image(&fresh).await,
+                        Ok(_) => Err(ImageFetchError::Status(404)),
+                        Err(ran) => return ran,
+                    }
+                }
+                other => other,
+            },
+            None => match self.cover_url(job, media_id).await {
+                Ok(url) => self.anilist.fetch_image(&url).await,
+                Err(ran) => return ran,
             },
         };
-        let bytes = match self.anilist.fetch_image(&url).await {
+        let bytes = match fetched {
             Ok(bytes) => bytes,
-            Err(ImageFetchError::NotAllowed | ImageFetchError::TooLarge) => {
-                return self.give_up(job, Note::Rejected).await
-            }
-            Err(e) => {
-                return self
-                    .later(job, &AnilistError::Unreachable(e.to_string()))
-                    .await
-            }
+            Err(e) => return self.not_fetched(job, e).await,
         };
         let image = match self.store_image(bytes.into(), Source::Anilist, None).await {
             Ok(image) => image,

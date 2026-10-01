@@ -233,6 +233,59 @@ async fn a_work_of_several_seasons_takes_the_entry_named_like_its_folder() {
 }
 
 #[tokio::test]
+async fn an_image_url_that_is_gone_is_asked_for_again_by_the_entrys_id() {
+    let env = Env::new(&["A"]).await;
+    env.fake
+        .add_search("A", vec![env.fake.entry(1, "A", &[])], &samples::jpeg());
+    // The search selects; the image is not fetched yet.
+    assert_eq!(env.art.run_next().await, Some(Ran::Recorded));
+    assert_eq!(env.selection("A").await.job.unwrap().kind, JobKind::Fetch);
+
+    // AniList moved the cover: the old URL answers 404, the entry the new one.
+    {
+        let mut state = env.fake.state.lock().unwrap();
+        state.images.remove("1.jpg");
+        state.images.insert("1-moved.png".into(), samples::png());
+        let moved = format!("{}/img/1-moved.png", env.fake.origin);
+        let entry = state.media.get_mut(&1).unwrap();
+        entry["coverImage"]["extraLarge"] = moved.clone().into();
+        entry["coverImage"]["large"] = moved.into();
+    }
+    let requests = env.fake.api_requests().len();
+    assert_eq!(env.art.run_next().await, Some(Ran::Recorded));
+    let a = env.selection("A").await;
+    assert_eq!(
+        env.art.image(image_of(&a).clone()).await.unwrap(),
+        samples::png()
+    );
+    let asked: Vec<_> = env.fake.api_requests()[requests..]
+        .iter()
+        .map(|(_, v)| v.clone())
+        .collect();
+    assert_eq!(asked, [json!({ "id": 1 })]);
+}
+
+#[tokio::test]
+async fn an_image_that_is_gone_where_the_entry_still_points_waits_like_a_failure() {
+    let env = Env::new(&["B"]).await;
+    env.fake
+        .add_search("B", vec![env.fake.entry(2, "B", &[])], &samples::jpeg());
+    assert_eq!(env.art.run_next().await, Some(Ran::Recorded));
+    env.fake.state.lock().unwrap().images.remove("2.jpg");
+    assert_eq!(env.art.run_next().await, Some(Ran::Later));
+    let job = env.selection("B").await.job.unwrap();
+    assert_eq!((job.kind, job.attempts), (JobKind::Fetch, 1));
+    // The URL is fetched once in the run, not again after the entry named it.
+    let state = env.fake.state.lock().unwrap();
+    let tries = state
+        .image_requests
+        .iter()
+        .filter(|n| *n == "2.jpg")
+        .count();
+    assert_eq!(tries, 1);
+}
+
+#[tokio::test]
 async fn an_entry_whose_image_is_not_an_image_selects_the_id_but_shows_nothing() {
     let env = Env::new(&["Lycoris Recoil"]).await;
     env.fake.add_search(
