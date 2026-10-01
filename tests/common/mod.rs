@@ -258,6 +258,8 @@ struct TrState {
     rejected_removes: HashMap<String, String>,
     /// `torrent-rename-path` refusals for single torrents, by hash.
     rejected_renames: HashMap<String, String>,
+    /// `torrent-verify` answers by torrent hash, instead of `success`.
+    rejected_verifies: HashMap<String, String>,
     /// Torrents whose `torrent-remove` is carried out and then answered with
     /// a broken response, as a timeout after Transmission acted would be.
     broken_remove_answers: std::collections::HashSet<String>,
@@ -524,6 +526,18 @@ impl FakeTransmission {
 
     /// Makes a `torrent-rename-path` of the torrent `hash` answer with this
     /// refusal text and rename nothing (`None` takes it back).
+    /// Answers a `torrent-verify` of `hash` with `result` instead of
+    /// checking it, or checks it again (`None`).
+    pub fn reject_verify_of(&self, hash: &str, result: Option<&str>) {
+        let mut st = self.state.lock().unwrap();
+        match result {
+            Some(result) => st
+                .rejected_verifies
+                .insert(hash.to_owned(), result.to_owned()),
+            None => st.rejected_verifies.remove(hash),
+        };
+    }
+
     pub fn reject_rename_of(&self, hash: &str, result: Option<&str>) {
         let mut st = self.state.lock().unwrap();
         match result {
@@ -955,6 +969,9 @@ async fn tr_rpc_answer(
 
         "torrent-verify" => {
             let wanted = ids(&args);
+            if let Some(reason) = wanted.iter().find_map(|h| st.rejected_verifies.get(h)) {
+                return err(&reason.clone()).into_response();
+            }
             for t in st.torrents.iter_mut().filter(|t| wanted.contains(&t.hash)) {
                 // A file missing from its folder is data to download again.
                 let names = if t.files.is_empty() {

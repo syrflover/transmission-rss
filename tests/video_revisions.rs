@@ -3174,3 +3174,108 @@ async fn an_ended_replacement_whose_folder_is_away_for_a_week_is_cleared() {
     assert_eq!(s.state_of(&v2()).await.code(), "abandoned");
     assert!(s.failures().await.is_empty());
 }
+
+// --- `다시 받기` of a replacement that ended with no video left ---------------------
+
+impl Setup {
+    /// `14v2` removed `14`, then lost its video before it took the name; its
+    /// torrent is still in Transmission, its rename no longer refused.
+    async fn v2_ended_with_no_video(&self) {
+        self.v2_waits_for_its_name().await;
+        std::fs::remove_file(self.file(&v2())).unwrap();
+        self.cycle().await;
+        self.cycle().await;
+        assert_eq!(self.state_of(&v2()).await.code(), "abandoned");
+        assert_eq!(revision_failure(&self.failures().await)["can_retry"], true);
+        self.h.tr.reject_rename_of(NEW_HASH, None);
+    }
+
+    fn verifies(&self) -> usize {
+        self.h.tr.calls_of("torrent-verify").len()
+    }
+
+    fn starts(&self) -> usize {
+        self.h.tr.calls_of("torrent-start").len()
+    }
+}
+
+/// Another file has taken `14v2`'s received name since its replacement
+/// ended. Checking the torrent would have Transmission take that file for
+/// its own and write over it: `다시 받기` is refused with the reason, nothing
+/// is asked of Transmission, the file stays, and the failure keeps
+/// `다시 받기`.
+#[tokio::test]
+async fn a_retry_whose_received_name_holds_another_file_is_refused() {
+    let s = Setup::new().await;
+    s.v2_ended_with_no_video().await;
+    std::fs::write(s.file(&v2()), b"someone else's file").unwrap();
+
+    let id = "00000000-0000-4000-8000-000000000d02";
+    s.retry(s.item(&v2()).await.id, id).await;
+    assert_eq!(s.commands().await, CommandsOutcome::Ran(1));
+    let command = s.command(id).await;
+    assert_eq!(command["state"], "failed", "{command}");
+    assert!(
+        command["outcome"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("다른 파일이 있어서"),
+        "{command}"
+    );
+    assert_eq!((s.verifies(), s.starts()), (0, 0));
+    assert_eq!(read(&s.file(&v2())), b"someone else's file");
+    assert_eq!(s.state_of(&v2()).await.code(), "abandoned");
+    assert_eq!(revision_failure(&s.failures().await)["can_retry"], true);
+}
+
+/// `14v2`'s own video is back under its received name (the CRC32 checked
+/// before): `다시 받기` goes ahead, and the replacement takes the name.
+#[tokio::test]
+async fn a_retry_whose_received_name_holds_the_checked_video_goes_ahead() {
+    let s = Setup::new().await;
+    s.v2_ended_with_no_video().await;
+    let copy = s.season.parent().unwrap().join("copy.mkv");
+    std::fs::write(&copy, NEW_BYTES).unwrap();
+    std::fs::rename(&copy, s.file(&v2())).unwrap();
+
+    s.retry(
+        s.item(&v2()).await.id,
+        "00000000-0000-4000-8000-000000000d03",
+    )
+    .await;
+    assert_eq!(s.commands().await, CommandsOutcome::Ran(1));
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Receiving);
+    // Transmission finds the data whole and seeds it.
+    s.complete(NEW_HASH);
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Done);
+    assert_eq!(read(&s.file(EPISODE_NAME)), NEW_BYTES);
+}
+
+/// Transmission refuses to check `14v2`'s torrent: it is not started (it
+/// would seed a file that is not there), the command fails, and the
+/// failure keeps `다시 받기`, which goes through once the check does.
+#[tokio::test]
+async fn a_retry_whose_torrent_check_fails_starts_nothing_and_can_be_asked_again() {
+    let s = Setup::new().await;
+    s.v2_ended_with_no_video().await;
+    s.h.tr.reject_verify_of(NEW_HASH, Some("busy"));
+
+    let id = "00000000-0000-4000-8000-000000000d04";
+    s.retry(s.item(&v2()).await.id, id).await;
+    assert_eq!(s.commands().await, CommandsOutcome::Ran(1));
+    assert_eq!(s.command(id).await["state"], "failed");
+    assert_eq!(s.starts(), 0);
+    assert_eq!(s.state_of(&v2()).await.code(), "abandoned");
+    assert_eq!(revision_failure(&s.failures().await)["can_retry"], true);
+
+    s.h.tr.reject_verify_of(NEW_HASH, None);
+    s.retry(
+        s.item(&v2()).await.id,
+        "00000000-0000-4000-8000-000000000d05",
+    )
+    .await;
+    assert_eq!(s.commands().await, CommandsOutcome::Ran(1));
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Receiving);
+    assert_eq!(s.starts(), 1);
+}

@@ -106,6 +106,14 @@ pub const KIND: &str = "receive_once";
 /// Why a revision was not received again when the folder's video of its
 /// episode could not be looked at. Nothing asks again by itself: the person
 /// may, later.
+/// Why a replacement that ended with no video left was not received again:
+/// another file holds its received name, which Transmission would take for
+/// the torrent's data and write over.
+const RECEIVED_NAME_TAKEN: &str = "받은 이름에 확인한 새 영상이 아닌 다른 파일이 있어서 다시 받지 않았어요. Transmission이 그 파일을 덮어쓸 수 있어요. 그 파일을 옮기거나 지운 뒤 다시 받기를 누를 수 있어요.";
+/// Why it was not received again: its received name could not be looked at.
+const RECEIVED_NAME_UNREAD: &str = "받은 이름의 파일을 확인하지 못해서 다시 받지 않았어요. 잠시 뒤 다시 받기를 다시 누를 수 있어요.";
+/// Why it was not started: Transmission did not check the torrent's data.
+const NOT_VERIFIED: &str = "Transmission이 토렌트의 데이터를 다시 확인하지 않아서 시작하지 않았어요. 잠시 뒤 다시 받기를 다시 누를 수 있어요: ";
 const PLACE_UNREAD: &str = "폴더의 회차 영상이 어떤 수정본인지 확인하지 못해서 받지 않았어요. 잠시 뒤 다시 받기를 다시 누를 수 있어요.";
 
 /// Longest failure reason kept, in characters.
@@ -730,6 +738,23 @@ pub async fn execute_with(
             }
         }
     }
+    // A replacement that ended with no video left: its torrent's data is
+    // checked again, which must not find another file under its name.
+    let ended =
+        matches!(&revision, RevisionRetry::Again(row) if revisions::ended_with_no_video(row));
+    if let (true, RevisionRetry::Again(row)) = (ended, &revision) {
+        match revisions::received_name_free(row).await {
+            Ok(true) => {}
+            Ok(false) => return Ok(ended_early(failed(RECEIVED_NAME_TAKEN, None))),
+            Err(why) => {
+                eprintln!(
+                    "Cannot look at the received name of item {} before receiving it again: {why}",
+                    item.id
+                );
+                return Ok(ended_early(failed(RECEIVED_NAME_UNREAD, None)));
+            }
+        }
+    }
     let rule_id = plan.rule.id.clone();
 
     let redactor = redactor_for(ctx, &channel);
@@ -779,6 +804,30 @@ pub async fn execute_with(
             // cycle may have met it in between and recorded it as a
             // `duplicate`; it is still this command's.
             let own = torrent.kind == AddKind::Added || torrent.has_label(&command_label);
+            // Transmission still has the torrent of a replacement that ended
+            // with no video left: it checks the data first, so it downloads
+            // the file that went missing. Unchecked, the torrent is not
+            // started (nor the row written): the failure stays, with
+            // `다시 받기`.
+            let check = ended && torrent.kind != AddKind::Added;
+            if check {
+                let verified = transmission
+                    .torrent_action(TorrentAction::Verify, vec![Id::Hash(torrent.hash.clone())])
+                    .await;
+                let failure = match verified {
+                    Ok(response) if response.is_ok() => None,
+                    Ok(response) => Some(response.result),
+                    Err(err) => Some(err.to_string()),
+                };
+                if let Some(failure) = failure {
+                    let failure = redactor.apply(&failure);
+                    eprintln!("Cannot check the torrent of item {}: {failure}", item.id);
+                    return Ok(ended_early(failed(
+                        &format!("{NOT_VERIFIED}{failure}"),
+                        None,
+                    )));
+                }
+            }
             // A revision received again is the item's own torrent, as it was
             // when it was first received.
             let result = if own || again {
@@ -858,23 +907,8 @@ pub async fn execute_with(
             let stored = stored.unwrap_or(result);
             // Transmission still had the revision's torrent, stopped on an
             // error: it is started again, and the replacement looks at it.
-            // One whose video went missing after it was received is checked
-            // first, so Transmission downloads the file again (a check asked
-            // for first, Transmission starts the torrent once it is done).
+            // One checked above starts once the check is done.
             if again && torrent.kind != AddKind::Added {
-                let ended = matches!(&revision, RevisionRetry::Again(row) if revisions::ended_with_no_video(row));
-                if ended {
-                    let verified = transmission
-                        .torrent_action(TorrentAction::Verify, vec![Id::Hash(torrent.hash.clone())])
-                        .await;
-                    if let Err(err) = verified {
-                        eprintln!(
-                            "Cannot check the torrent of item {}: {}",
-                            item.id,
-                            redactor.apply(&err.to_string())
-                        );
-                    }
-                }
                 let started = transmission
                     .torrent_action(TorrentAction::Start, vec![Id::Hash(torrent.hash.clone())])
                     .await;

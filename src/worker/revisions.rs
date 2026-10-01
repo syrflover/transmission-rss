@@ -770,6 +770,33 @@ pub fn ended_with_no_video(row: &Revision) -> bool {
     row.state == RevisionState::Abandoned && row.is_failure()
 }
 
+/// Whether the received name of `row`, a replacement that ended with no video
+/// left, holds nothing but its checked video: no file, or the file whose
+/// identity was kept, or one whose CRC32 is the one read then. Any other
+/// file there would be taken by Transmission, checking the torrent, for the
+/// torrent's own data and written over. `Err` when that cannot be told now
+/// (the folder is away, the file cannot be read).
+pub async fn received_name_free(row: &Revision) -> Result<bool, String> {
+    folder_there(row)?;
+    let Some(name) = &row.received_name else {
+        return Ok(true);
+    };
+    let path = Path::new(&row.folder).join(name);
+    let now = match FileIdentity::at(&path) {
+        Ok(now) => now,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(true),
+        Err(err) => return Err(format!("cannot look at {}: {err}", path.display())),
+    };
+    if row.file_identity.as_deref().and_then(FileIdentity::parse) == Some(now) {
+        return Ok(true);
+    }
+    match crc_of(path.clone()).await {
+        Ok(crc) => Ok(row.file_crc.as_deref() == Some(crc_text(crc).as_str())),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(true),
+        Err(err) => Err(format!("cannot read {}: {err}", path.display())),
+    }
+}
+
 /// Whether `다시 받기` receives the revision of `row` again: its download
 /// stopped before it was received ([`stopped_before_received`]), or its
 /// replacement ended with no video left ([`ended_with_no_video`]), which
