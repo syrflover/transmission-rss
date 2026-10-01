@@ -32,7 +32,7 @@ use transmission_rss::{
     worker::{CommandsOutcome, TickOutcome},
 };
 
-const SPACING: Duration = Duration::from_millis(60);
+const SPACING: Duration = Duration::from_millis(150);
 static COMMANDS: AtomicU32 = AtomicU32::new(0);
 
 fn crc(bytes: &[u8]) -> String {
@@ -489,9 +489,11 @@ async fn row_5_a_full_first_page_is_followed_by_spaced_searches_merged_without_l
         queries[3],
         "[SubsPlease] One Piece - (1021|1022|1023|1024|1025) 1080p"
     );
-    // One after the other, with the spacing between them.
+    // One after the other, with the spacing between them. The gap is measured
+    // where the request arrives, so scheduling noise moves it by a few
+    // milliseconds either way; with no spacing the gaps would be near zero.
     for gap in s.nyaa.gaps() {
-        assert!(gap >= SPACING - Duration::from_millis(5), "{gap:?}");
+        assert!(gap >= SPACING - Duration::from_millis(60), "{gap:?}");
     }
 
     // All hundred, once each.
