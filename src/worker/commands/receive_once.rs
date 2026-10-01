@@ -965,6 +965,7 @@ mod tests {
             episode_auto: false,
             state,
             subscription: None,
+            resumed_at: None,
         }
     }
 

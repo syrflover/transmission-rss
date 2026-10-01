@@ -294,7 +294,7 @@ async fn a_paused_rule_that_received_videos_is_connected_too() {
     scene
         .h
         .channels
-        .set_video_receiving(&rule.id, rule.version, false)
+        .set_video_receiving(&rule.id, rule.version, false, 0)
         .await
         .unwrap();
     scene.register().await;

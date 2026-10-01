@@ -31,6 +31,9 @@
 //! switch is refused (`400`) for an archived rule, for `subtitles` while
 //! `영상 받기` is off, and for `subtitles` of a rule that is no subscription.
 //! A version that is not the stored one answers `409` with the current view.
+//! Turning `영상 받기` on notes the time on the rule (`resumed_at`), as does a
+//! restore: the items first seen before then are left to the user (see the
+//! preview below).
 //!
 //! A subscription's view also tells where it stands in the library:
 //! `season` (the season its received videos appeared in, with the work's name,
@@ -66,10 +69,14 @@
 //! mask are flagged `masked`.
 //!
 //! A subscription rule leaves alone the items history recorded, without a
-//! rule taking them, before the subscription began. The preview applies the
-//! cycle's own test ([`ChannelPlan::is_past`]) to the item's history record and
-//! lists such an item as `past` (with the folder that `받기` would save it to)
-//! rather than `mine`; a `receive_once` command naming the rule receives it.
+//! rule taking them, before the subscription began, and any rule leaves alone
+//! those it recorded while the rule was paused or archived (before it was last
+//! turned back on). The preview applies the cycle's own test
+//! ([`ChannelPlan::is_past`]) to the item's history record and lists such an
+//! item as `past` (with `past_cause` and the folder that `받기` would save it
+//! to) rather than `mine`; a `receive_once` command naming the rule receives
+//! it. A rule that is paused now is previewed as if turned on after the
+//! recorded items.
 //!
 //! # Overlap
 //!
@@ -109,7 +116,7 @@ use crate::store::history::{
     HistoryError, HistoryItem, HistoryQuery, HistoryResult, HistoryStore, MAX_PAGE_SIZE,
 };
 use crate::worker::commands::rule_archive::{self, RuleArchive};
-use crate::worker::plan::{ChannelPlan, Judgement, PlanEvaluation};
+use crate::worker::plan::{ChannelPlan, Judgement, PastCause, PlanEvaluation};
 
 #[cfg(test)]
 mod tests;
@@ -959,7 +966,12 @@ async fn switch_rule(
         ));
     }
     let written = match (b.video, b.subtitles) {
-        (Some(on), None) => state.channels.set_video_receiving(&id, b.version, on).await,
+        (Some(on), None) => {
+            state
+                .channels
+                .set_video_receiving(&id, b.version, on, state.anissia.now())
+                .await
+        }
         (None, Some(on)) => {
             if stored.subscription.is_none() {
                 return Err(ApiError::invalid(
@@ -1022,9 +1034,10 @@ pub enum Kind {
     Earlier,
     /// The edited rule matches, but a channel exclude keeps the item out.
     Excluded,
-    /// The edited rule is a subscription and would take the item, but history
-    /// recorded it before the subscription began, so the cycle leaves it alone
-    /// until the user receives it ([`ChannelPlan::is_past`]).
+    /// The edited rule would take the item, but history recorded it before the
+    /// rule became a subscription or while it was paused or archived, so the
+    /// cycle leaves it alone until the user receives it
+    /// ([`ChannelPlan::is_past`]).
     Past,
 }
 
@@ -1052,6 +1065,10 @@ pub struct PreviewItem {
     pub taken_by: Option<TakenBy>,
     /// The channel exclude that keeps the item out (only for [`Kind::Excluded`]).
     pub excluded_by: Option<String>,
+    /// Why the item is past: `subscribed` (it came before the subscription) or
+    /// `resumed` (it came while the rule was paused or archived). Only for
+    /// [`Kind::Past`].
+    pub past_cause: Option<&'static str>,
     /// What history recorded for the item so far, as its stable code.
     pub stored_result: &'static str,
 }
@@ -1117,6 +1134,7 @@ fn substitute(
             episode_auto: false,
             state: RuleState::Active,
             subscription: None,
+            resumed_at: None,
         },
     };
     rule.r#match = edited.r#match.clone();
@@ -1124,6 +1142,12 @@ fn substitute(
     rule.case_insensitive = edited.case_insensitive;
     rule.directory = edited.directory.clone();
     rule.episode = edited.episode;
+    // The preview shows the rule collecting. One that is off now would be
+    // turned back on after everything recorded so far, so what it has not
+    // taken is past for it.
+    if rule.state != RuleState::Active {
+        rule.resumed_at = Some(i64::MAX);
+    }
     rule.state = RuleState::Active;
 
     let at = position
@@ -1187,6 +1211,7 @@ pub fn build_preview(
         let matches_edited = |applied: Option<&str>, overlapping: &[String]| {
             applied == Some(id.as_str()) || overlapping.iter().any(|r| r == &id)
         };
+        let mut past_cause = None;
         let (kind, save_path, taken_by, excluded_by) = match &judgement {
             Judgement::Selected {
                 rule_id, save_path, ..
@@ -1194,6 +1219,7 @@ pub fn build_preview(
                 // The cycle's own test, on the same record of the item.
                 let known = Some((item.first_seen_at, item.result));
                 let kind = if plan.is_past(&id, known) {
+                    past_cause = plan.past_cause(&id).map(PastCause::code);
                     Kind::Past
                 } else {
                     Kind::Mine
@@ -1252,6 +1278,7 @@ pub fn build_preview(
                 save_path,
                 taken_by,
                 excluded_by,
+                past_cause,
                 stored_result: item.result.code(),
             });
         }

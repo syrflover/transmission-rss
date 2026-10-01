@@ -284,10 +284,11 @@ pub async fn run_cycle(
         let channel_redactor = plan.redactor();
 
         let feed_items = feed::items(&feed, &channel.secret_query, &channel_redactor);
-        // What history already knows of the items, read only when a
-        // subscription rule could take one of them: the items it recorded
-        // before the subscription began are past, and are not received.
-        let known = if plan.has_subscriptions() {
+        // What history already knows of the items, read only when a rule that
+        // holds back past items could take one of them: the items it recorded
+        // before the subscription began, or while the rule was paused, are
+        // past, and are not received.
+        let known = if plan.has_past_holders() {
             let keys = feed_items.iter().map(|i| i.identity_key.clone()).collect();
             match ctx.history.known_items(channel.id.clone(), keys).await {
                 Ok(known) => Some(known),
@@ -327,9 +328,9 @@ pub async fn run_cycle(
             if let Judgement::Selected { rule_id, .. } = &judgement {
                 match &known {
                     // Without history there is no telling a past item from a
-                    // new one: a subscription rule leaves the item for the
+                    // new one: a rule that holds back past items leaves the item for the
                     // next cycle.
-                    None if plan.is_subscription(rule_id) => continue,
+                    None if plan.holds_past(rule_id) => continue,
                     Some(known) => {
                         let record = known.get(&observation.identity_key).copied();
                         if plan.is_past(rule_id, record) {

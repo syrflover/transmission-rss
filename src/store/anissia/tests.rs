@@ -348,7 +348,7 @@ async fn only_the_snapshots_a_day_old_of_active_rules_are_due_and_held_ones_wait
     // An archived rule's anime is not refreshed.
     let archived = env.subscribe("Archived", 4, now - 3 * DAY).await;
     env.channels
-        .set_rule_state(&archived.id, RuleState::Archived)
+        .set_rule_state(&archived.id, RuleState::Archived, 0)
         .await
         .unwrap();
 
@@ -454,33 +454,44 @@ async fn turning_video_receiving_off_pauses_the_rule_and_on_collects_again() {
 
     let off = env
         .channels
-        .set_video_receiving(&rule.id, rule.version, false)
+        .set_video_receiving(&rule.id, rule.version, false, 0)
         .await
         .unwrap();
     assert_eq!(off.state, RuleState::Paused);
     assert_eq!(off.version, rule.version + 1);
+    // Pausing notes nothing: only a rule turned back on has a resume time.
+    assert_eq!(off.resumed_at, None);
     // The subscription and its subtitle setting stay as they were.
     assert_eq!(off.subscription, rule.subscription);
 
     // Off again changes nothing, not even the version.
     let again = env
         .channels
-        .set_video_receiving(&rule.id, off.version, false)
+        .set_video_receiving(&rule.id, off.version, false, 0)
         .await
         .unwrap();
     assert_eq!(again, off);
 
     let on = env
         .channels
-        .set_video_receiving(&rule.id, off.version, true)
+        .set_video_receiving(&rule.id, off.version, true, 5_000)
         .await
         .unwrap();
     assert_eq!(on.state, RuleState::Active);
+    assert_eq!(on.resumed_at, Some(5_000));
+
+    // On again changes nothing, so the resume time stays the first one.
+    let still_on = env
+        .channels
+        .set_video_receiving(&rule.id, on.version, true, 9_000)
+        .await
+        .unwrap();
+    assert_eq!(still_on, on);
 
     // A version the client did not see is a conflict, and nothing changed.
     let stale = env
         .channels
-        .set_video_receiving(&rule.id, rule.version, false)
+        .set_video_receiving(&rule.id, rule.version, false, 0)
         .await;
     assert!(stale.unwrap_err().is_conflict());
     assert_eq!(
@@ -500,16 +511,47 @@ async fn an_archived_rule_is_restored_not_switched() {
     let rule = env.subscribe("Work", 7, 1_000).await;
     let archived = env
         .channels
-        .set_rule_state(&rule.id, RuleState::Archived)
+        .set_rule_state(&rule.id, RuleState::Archived, 0)
         .await
         .unwrap()
         .unwrap();
 
     let refused = env
         .channels
-        .set_video_receiving(&rule.id, archived.version, true)
+        .set_video_receiving(&rule.id, archived.version, true, 0)
         .await;
     assert!(matches!(refused, Err(ChannelError::Invalid(_))));
+}
+
+#[tokio::test]
+async fn a_restored_rule_notes_when_it_was_turned_back_on() {
+    let env = Env::new().await;
+    let rule = env.subscribe("Work", 7, 1_000).await;
+    let archived = env
+        .channels
+        .set_rule_state(&rule.id, RuleState::Archived, 3_000)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(archived.resumed_at, None);
+
+    let restored = env
+        .channels
+        .set_rule_state(&rule.id, RuleState::Active, 4_000)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(restored.state, RuleState::Active);
+    assert_eq!(restored.resumed_at, Some(4_000));
+
+    // Setting the state it has already changes nothing.
+    let same = env
+        .channels
+        .set_rule_state(&rule.id, RuleState::Active, 8_000)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(same, restored);
 }
 
 #[tokio::test]
@@ -586,7 +628,7 @@ async fn subtitles_are_switched_only_for_a_collecting_subscription() {
     let sub = env.subscribe("Work", 7, 1_000).await;
     let paused = env
         .channels
-        .set_video_receiving(&sub.id, sub.version, false)
+        .set_video_receiving(&sub.id, sub.version, false, 0)
         .await
         .unwrap();
     let refused = env
@@ -810,11 +852,11 @@ async fn a_paused_rule_keeps_its_anime_snapshot_refreshed_and_an_archived_one_do
     let paused = env.subscribe("Paused", 7, 1_000).await;
     let archived = env.subscribe("Archived", 8, 1_000).await;
     env.channels
-        .set_video_receiving(&paused.id, paused.version, false)
+        .set_video_receiving(&paused.id, paused.version, false, 0)
         .await
         .unwrap();
     env.channels
-        .set_rule_state(&archived.id, RuleState::Archived)
+        .set_rule_state(&archived.id, RuleState::Archived, 0)
         .await
         .unwrap();
     env.db

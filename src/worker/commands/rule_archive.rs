@@ -64,7 +64,7 @@ use crate::{
         commands::{Command, CommandState, Outcome, MAX_ATTEMPTS},
     },
     transmission,
-    worker::{watch, CycleContext},
+    worker::{watch, Clock, CycleContext},
 };
 
 use work_folder::{move_work_folder, Disk, Hold, MoveError, Moved, RealDisk, Request, Side};
@@ -276,6 +276,8 @@ struct Start<'a> {
     /// The last start the command gets: a move not finished yet ends it.
     last: bool,
     cancel: &'a CancellationToken,
+    /// Notes when a restored rule was turned back on.
+    clock: &'a Clock,
 }
 
 /// Runs a `rule_archive` command to its end. See the module docs. `hold` is
@@ -284,9 +286,10 @@ pub async fn run(
     ctx: &CycleContext,
     command: &Command,
     hold: Hold,
+    clock: &Clock,
     cancel: &CancellationToken,
 ) -> Result<Finished, Retry> {
-    run_on(ctx, command, Arc::new(RealDisk), hold, cancel).await
+    run_on(ctx, command, Arc::new(RealDisk), hold, clock, cancel).await
 }
 
 /// [`run`] with the filesystems told by `disk`.
@@ -295,6 +298,7 @@ pub async fn run_on(
     command: &Command,
     disk: Arc<dyn Disk>,
     hold: Hold,
+    clock: &Clock,
     cancel: &CancellationToken,
 ) -> Result<Finished, Retry> {
     let start = Start {
@@ -303,6 +307,7 @@ pub async fn run_on(
         hold,
         last: command.attempts >= MAX_ATTEMPTS,
         cancel,
+        clock,
     };
     let Ok(payload) = serde_json::from_str::<RuleArchive>(&command.payload) else {
         return Ok(failed("요청 내용을 읽지 못했어요."));
@@ -442,7 +447,7 @@ async fn archive(start: &Start<'_>, rule: Rule) -> Result<Finished, Retry> {
     // Off first: no new episode arrives at the old place while it moves.
     let Some(rule) = ctx
         .channels
-        .set_rule_state(&rule.id, RuleState::Archived)
+        .set_rule_state(&rule.id, RuleState::Archived, (start.clock)())
         .await
         .map_err(Retry::store)?
     else {
@@ -488,7 +493,7 @@ async fn restore(start: &Start<'_>, rule: Rule) -> Result<Finished, Retry> {
     // On only once the folder is back.
     match ctx
         .channels
-        .set_rule_state(&rule.id, RuleState::Active)
+        .set_rule_state(&rule.id, RuleState::Active, (start.clock)())
         .await
         .map_err(Retry::store)?
     {
@@ -570,6 +575,7 @@ mod tests {
             episode_auto: false,
             state: RuleState::Active,
             subscription: None,
+            resumed_at: None,
         };
         let one = rule("Clevatess/Season 03");
         assert_eq!(

@@ -814,10 +814,14 @@ mod rule_detail {
         let (_, list) = app.get("/api/subscriptions").await;
         assert_eq!(list["subscriptions"][0]["state"], "paused");
 
+        // Pausing notes no resume; turning it back on notes when.
         let stored = app.fresh(&rule).await;
+        assert_eq!(stored.resumed_at, None);
+        app.now.fetch_add(60_000, Ordering::SeqCst);
         let (status, on) = app.put(&stored, "switch", json!({ "video": true })).await;
         assert_eq!(status, StatusCode::OK, "{on}");
         assert_eq!(on["state"], "active");
+        assert_eq!(app.fresh(&rule).await.resumed_at, Some(NOW + 60_000));
         let (_, list) = app.get("/api/subscriptions").await;
         assert_eq!(list["subscriptions"][0]["state"], "active");
     }
@@ -900,7 +904,7 @@ mod rule_detail {
         let archived = app
             .state
             .channels
-            .set_rule_state(&rule.id, RuleState::Archived)
+            .set_rule_state(&rule.id, RuleState::Archived, 0)
             .await
             .unwrap()
             .unwrap();

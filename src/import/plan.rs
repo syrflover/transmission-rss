@@ -238,6 +238,7 @@ mod tests {
                 episode_auto: false,
                 state: RuleState::Active,
                 subscription: None,
+                resumed_at: None,
             }],
         }
     }

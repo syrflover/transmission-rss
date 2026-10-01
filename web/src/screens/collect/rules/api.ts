@@ -125,6 +125,8 @@ export interface PreviewItem {
   save_path: string | null;
   taken_by: { rule_id: string | null; match: string | null } | null;
   excluded_by: string | null;
+  /** Why a `past` item is held back: it came before the subscription, or while the rule was off. */
+  past_cause: "subscribed" | "resumed" | null;
   stored_result: string;
 }
 
