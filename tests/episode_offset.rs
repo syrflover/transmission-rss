@@ -575,3 +575,33 @@ async fn a_past_item_the_user_picks_first_is_named_with_the_decided_offset() {
     let stored = s.rule(&rule).await;
     assert_eq!((stored.episode, stored.episode_auto), (-24, true));
 }
+
+#[tokio::test]
+async fn a_suggestion_that_cannot_be_read_leaves_the_rule_list_answering() {
+    let s = Scene::new().await;
+    s.link_earlier_seasons([Some(12), Some(12)]).await;
+    s.h.advance(1_000);
+    let rule = s.subscribe("Show", "Show/Season 03", 7, 1).await;
+    s.feed(&[]);
+    s.cycle().await;
+    s.feed(&[&show(27)]);
+    s.cycle().await;
+    assert_eq!(s.view(&rule).await["episode_suggestion"]["value"], -24);
+
+    // The AniList counts the suggestion needs cannot be read any more.
+    s.h.db
+        .run(|c| {
+            c.execute_batch("ALTER TABLE season_info RENAME TO season_info_gone")
+                .map_err(transmission_rss::store::db::DbError::from)
+        })
+        .await
+        .unwrap();
+
+    let view = s.view(&rule).await;
+    assert_eq!(view["episode_suggestion"], Value::Null);
+    let (status, text, _) = s
+        .api
+        .call("GET", &format!("/api/channels/{}", s.channel), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+}

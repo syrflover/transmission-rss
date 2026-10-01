@@ -608,7 +608,7 @@ async fn analyze(state: &AppState, cwr: &ChannelWithRules) -> Result<Analysis, A
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?;
     }
-    analysis.episodes = episode::analyze(state, &cwr.rules).await?;
+    analysis.episodes = episode::analyze(state, &cwr.rules).await;
     // Only the judgement is used here, never a save path.
     let plan = ChannelPlan::new(cwr.clone(), FsPath::new(""));
     for rule in &cwr.rules {

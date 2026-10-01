@@ -47,8 +47,9 @@ pub(super) struct Episodes {
 }
 
 /// The grounds and suggestions of the given rules. What cannot be read leaves
-/// the rule without a suggestion: the detail then offers nothing, as before.
-pub(super) async fn analyze(state: &AppState, rules: &[Rule]) -> Result<Episodes, ApiError> {
+/// the rule without them, with a line in the log: they only explain and offer,
+/// so the rule list still answers.
+pub(super) async fn analyze(state: &AppState, rules: &[Rule]) -> Episodes {
     let mut out = Episodes::default();
     let auto: Vec<String> = rules
         .iter()
@@ -56,47 +57,50 @@ pub(super) async fn analyze(state: &AppState, rules: &[Rule]) -> Result<Episodes
         .map(|r| r.id.clone())
         .collect();
     if !auto.is_empty() {
-        out.basis = state
-            .channels
-            .episode_bases(auto)
-            .await
-            .map_err(store_error)?;
+        match state.channels.episode_bases(auto).await {
+            Ok(basis) => out.basis = basis,
+            Err(err) => eprintln!("Episode offset: cannot read the grounds: {err}"),
+        }
     }
 
     let open: Vec<&Rule> = rules.iter().filter(|r| is_open(r)).collect();
     if open.is_empty() {
-        return Ok(out);
+        return out;
     }
-    let internal = |e: &dyn std::fmt::Display| ApiError::Internal(e.to_string());
-    let Some(collect) = state
-        .settings
-        .collection()
-        .await
-        .map_err(|e| internal(&e))?
-    else {
-        return Ok(out);
+    let collect = match state.settings.collection().await {
+        Ok(Some(collect)) => collect,
+        Ok(None) => return out,
+        Err(err) => {
+            eprintln!("Episode offset: cannot read the collect folder: {err}");
+            return out;
+        }
     };
     for rule in open {
-        let titles = state
-            .history
-            .first_titles_of_rule(&rule.id)
-            .await
-            .map_err(|e| internal(&e))?;
+        let titles = match state.history.first_titles_of_rule(&rule.id).await {
+            Ok(titles) => titles,
+            Err(err) => {
+                eprintln!("Episode offset: no suggestion for rule {}: {err}", rule.id);
+                continue;
+            }
+        };
         let Some(first) = first_release(&titles) else {
             continue;
         };
-        let Some(basis) = gather(&state.library, &state.seasons.store, &collect.folder, rule)
-            .await
-            .map_err(|e| internal(&e))?
-        else {
-            continue;
-        };
+        let basis =
+            match gather(&state.library, &state.seasons.store, &collect.folder, rule).await {
+                Ok(Some(basis)) => basis,
+                Ok(None) => continue,
+                Err(err) => {
+                    eprintln!("Episode offset: no suggestion for rule {}: {err}", rule.id);
+                    continue;
+                }
+            };
         if let Some((value, basis)) = decide(first, &basis).as_suggestion() {
             out.suggestion
                 .insert(rule.id.clone(), EpisodeSuggestion { value, basis });
         }
     }
-    Ok(out)
+    out
 }
 
 #[derive(Deserialize)]
