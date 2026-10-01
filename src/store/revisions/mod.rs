@@ -29,14 +29,15 @@
 //! did not go through yet; the worker tries again while the name is free. A
 //! `removing` row with a reason ([`Step::RemovalWaits`]) removed the old
 //! torrent but the episode's file is still there, and waits for that file to
-//! go; or it found, right before removing the old video, that the new video
-//! was not the file whose CRC32 was checked ([`Revision::file_identity`]),
-//! and removed nothing. Both are listed with the failures. A `removing` or
-//! `removed` row whose new video is gone (or not the checked one) on two
-//! looks in a row ends as [`RevisionState::Abandoned`]: nothing is removed
-//! or renamed, it holds up no other replacement of the episode, and the old
-//! release stays superseded (its torrent was removed for this replacement,
-//! or is still there with its video).
+//! go. A `verified` or `removing` row with a reason ([`Step::NewMissing`])
+//! found, before removing the old video, that the new video was not the one
+//! whose CRC32 was checked, and removed nothing. All of them are listed with
+//! the failures. A row whose new video is gone (or not the checked one) on
+//! two looks in a row ([`Revision::new_missing_at`]) ends as
+//! [`RevisionState::Abandoned`]: nothing is removed or renamed, it holds up
+//! no other replacement of the episode, and the old release stays superseded
+//! (its torrent was removed for this replacement, or is still there with its
+//! video).
 //!
 //! A step is written only from the state it was decided from
 //! ([`RevisionStore::advance`]), and a row the worker decides together with
@@ -226,11 +227,13 @@ pub struct Revision {
 impl Revision {
     /// A `받기 실패`: a failure that holds, a rename after the old video was
     /// removed that has not gone through yet, or a removal that waits
-    /// ([`Step::RemovalWaits`]).
+    /// ([`Step::RemovalWaits`], [`Step::NewMissing`]).
     pub fn is_failure(&self) -> bool {
         self.state == RevisionState::Failed
-            || (matches!(self.state, RevisionState::Removed | RevisionState::Removing)
-                && self.reason.is_some())
+            || (matches!(
+                self.state,
+                RevisionState::Verified | RevisionState::Removed | RevisionState::Removing
+            ) && self.reason.is_some())
     }
 
     /// A failure before the new video was received in the rule's folder: its
@@ -1155,7 +1158,7 @@ impl RevisionStore {
                 let mut rows = query(
                     c,
                     "WHERE state = 'failed'
-                        OR (state IN ('removed', 'removing') AND reason IS NOT NULL)",
+                        OR (state IN ('verified', 'removed', 'removing') AND reason IS NOT NULL)",
                     &[],
                 )?;
                 rows.sort_by_key(|r| std::cmp::Reverse((r.updated_at, r.id)));
@@ -1172,7 +1175,7 @@ impl RevisionStore {
                 let prefix = format!("{}/", work_folder.trim_end_matches('/'));
                 let rows = query(
                     c,
-                    "WHERE state IN ('done', 'failed', 'removed', 'removing')
+                    "WHERE state IN ('done', 'failed', 'verified', 'removed', 'removing')
                        AND substr(folder, 1, length(?1)) = ?1",
                     &[&prefix],
                 )?;

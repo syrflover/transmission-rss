@@ -942,43 +942,52 @@ async fn folder_away(ctx: &CycleContext, row: &mut Revision, why: String) -> Nex
     Next::Later(why)
 }
 
-/// Whether the row's new video is still the file whose CRC32 was checked
-/// ([`Revision::file_identity`]): under its received name in the folder,
-/// with the same identity. A row checked before identities were kept needs
-/// the file there with the length its torrent gives it in the folder.
-/// `Err` when the folder, the file or Transmission could not be looked at.
-async fn new_video_kept(ctx: &CycleContext, row: &Revision) -> Result<bool, String> {
-    if new_video_gone(row)? {
-        return Ok(false);
+/// What a look at the row's new video, before the old video is removed for
+/// it, found.
+enum NewLook {
+    /// The file whose CRC32 was checked is under its received name; the
+    /// identity it has now.
+    Kept(FileIdentity),
+    /// It is not there, or another video is.
+    Missed,
+    /// The rule's folder is away: nothing is decided.
+    FolderAway(String),
+    /// The file could not be looked at or read now.
+    Unread(String),
+}
+
+/// Whether the row's new video is still the file whose CRC32 was checked:
+/// under its received name in the folder, with the identity kept when it was
+/// read ([`Revision::file_identity`]). An identity that differs (a remount
+/// may give the same file another device or inode, and a copy put back
+/// another inode) is no answer by itself: the file is read again, and it is
+/// the checked video when its CRC32 is the one read then.
+async fn new_video_kept(row: &Revision) -> NewLook {
+    match new_video_gone(row) {
+        Ok(false) => {}
+        Ok(true) => return NewLook::Missed,
+        Err(why) => return NewLook::FolderAway(why),
     }
     let Some(name) = &row.received_name else {
-        return Ok(false);
+        return NewLook::Missed;
     };
     let path = Path::new(&row.folder).join(name);
     let now = match FileIdentity::at(&path) {
         Ok(now) => now,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(false),
-        Err(err) => return Err(format!("cannot look at {}: {err}", path.display())),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return NewLook::Missed,
+        Err(err) => return NewLook::Unread(format!("cannot look at {}: {err}", path.display())),
     };
-    if let Some(seen) = row.file_identity.as_deref().and_then(FileIdentity::parse) {
-        return Ok(seen == now);
+    if row.file_identity.as_deref().and_then(FileIdentity::parse) == Some(now) {
+        return NewLook::Kept(now);
     }
-    let Some(hash) = row.torrent_hash.clone() else {
-        return Ok(false);
-    };
-    let mut transmission = ctx.transmission();
-    let place = match torrent_places(&mut transmission, Some(&[hash]), true).await {
-        Ok(places) => places.into_iter().next(),
-        Err(err) => return Err(err.to_string()),
-    };
-    Ok(place.is_some_and(|place| {
-        same_folder(Path::new(&place.download_dir), Path::new(&row.folder))
-            && place.files.iter().any(|file| {
-                file.name == *name
-                    && file.complete
-                    && u64::try_from(file.length).is_ok_and(|length| length == now.size())
-            })
-    }))
+    match identified_crc_of(path.clone()).await {
+        Ok((crc, read)) if row.file_crc.as_deref() == Some(crc_text(crc).as_str()) => {
+            NewLook::Kept(read)
+        }
+        Ok(_) => NewLook::Missed,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => NewLook::Missed,
+        Err(err) => NewLook::Unread(format!("cannot read {}: {err}", path.display())),
+    }
 }
 
 fn exists(path: &Path) -> io::Result<bool> {
@@ -1036,6 +1045,27 @@ async fn remove_old(ctx: &CycleContext, row: &mut Revision, at: Millis, listing:
             Err(err) => return Next::Later(err.to_string()),
         }
     }
+    // The new video first, before the old one is looked at (which may read
+    // a whole file): it must still be the file whose CRC32 was checked, or
+    // the removal would leave the episode with neither. Not that file on two
+    // looks in a row (one per cycle), the replacement ends; the first may be
+    // a mount that was away for a moment. Only an old video still there is
+    // removed: one gone already goes on to the rename, which looks again.
+    let new_now = if present {
+        match new_video_kept(row).await {
+            NewLook::Kept(now) => {
+                if let Err(next) = new_video_found(ctx, row, Some(NEW_UNCHECKED_OLD_KEPT)).await {
+                    return next;
+                }
+                Some(now)
+            }
+            NewLook::Missed => return new_video_missed(row, NEW_UNCHECKED_OLD_KEPT),
+            NewLook::FolderAway(why) => return folder_away(ctx, row, why).await,
+            NewLook::Unread(why) => return Next::Later(why),
+        }
+    } else {
+        None
+    };
     let (found, identity) = if present {
         match old_video(ctx, row, &old, listing).await {
             Ok(found) => found,
@@ -1072,18 +1102,17 @@ async fn remove_old(ctx: &CycleContext, row: &mut Revision, at: Millis, listing:
         (_, Err(err)) => return Next::Later(format!("cannot look at {}: {err}", old.display())),
         _ => return failed(OLD_CHANGED, None),
     }
-    // And the new video must still be the file whose CRC32 was checked: one
-    // deleted or put over since would leave the episode with neither. Not
-    // the checked one on two looks in a row (one per cycle), the replacement
-    // ends; the first may be a mount that was away for a moment.
-    match new_video_kept(ctx, row).await {
-        Ok(true) => {
-            if let Err(next) = new_video_found(ctx, row, Some(NEW_UNCHECKED_OLD_KEPT)).await {
-                return next;
+    // And the new video must still be the file looked at first.
+    if let (Some(seen), Some(name)) = (new_now, &row.received_name) {
+        let new = Path::new(&row.folder).join(name);
+        match FileIdentity::at(&new) {
+            Ok(now) if now == seen => {}
+            Ok(_) => return new_video_missed(row, NEW_UNCHECKED_OLD_KEPT),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                return new_video_missed(row, NEW_UNCHECKED_OLD_KEPT)
             }
+            Err(err) => return Next::Later(format!("cannot look at {}: {err}", new.display())),
         }
-        Ok(false) => return new_video_missed(row, NEW_UNCHECKED_OLD_KEPT),
-        Err(why) => return folder_away(ctx, row, why).await,
     }
 
     match &found.torrent_hash {

@@ -184,11 +184,6 @@ impl FileIdentity {
         std::fs::symlink_metadata(path).map(|meta| FileIdentity::of(&meta))
     }
 
-    /// The file's size in bytes.
-    pub fn size(&self) -> u64 {
-        self.len
-    }
-
     /// The identity as a row keeps it: its numbers joined by `:`.
     pub fn to_text(&self) -> String {
         format!(
@@ -274,7 +269,6 @@ mod tests {
         std::fs::write(&path, b"video").unwrap();
         let identity = FileIdentity::at(&path).unwrap();
         assert_eq!(FileIdentity::parse(&identity.to_text()), Some(identity));
-        assert_eq!(identity.size(), 5);
         assert_eq!(FileIdentity::parse("1:2:3"), None);
         assert_eq!(
             FileIdentity::parse(&format!("{}:9", identity.to_text())),

@@ -2492,8 +2492,13 @@ async fn a_new_video_deleted_after_its_check_removes_no_old_video() {
         "the old video stays"
     );
     let row = s.row_of(&v3()).await;
-    assert_eq!(row.state, RevisionState::Removing, "seen missing once");
+    assert_eq!(row.state, RevisionState::Verified, "seen missing once");
     assert!(row.reason.is_some(), "{row:?}");
+    assert!(row.new_missing_at.is_some(), "{row:?}");
+    assert_eq!(
+        revision_failure(&s.failures().await)["files"][0]["state"],
+        "kept"
+    );
 
     s.cycle().await;
     assert_eq!(s.state_of(&v3()).await.code(), "abandoned");
@@ -2523,7 +2528,7 @@ async fn a_new_video_replaced_after_its_check_removes_no_old_video() {
         NEW_BYTES,
         "the old video stays"
     );
-    assert_eq!(s.state_of(&v3()).await, RevisionState::Removing);
+    assert_eq!(s.state_of(&v3()).await, RevisionState::Verified);
     s.cycle().await;
     assert_eq!(s.state_of(&v3()).await.code(), "abandoned");
     assert_eq!(read(&s.file(EPISODE_NAME)), NEW_BYTES);
@@ -2533,9 +2538,9 @@ async fn a_new_video_replaced_after_its_check_removes_no_old_video() {
 
 /// A row checked without the new file's identity kept (made so by hand)
 /// removes the old video while the file under its received name has the
-/// length its torrent gives it, and not otherwise.
+/// CRC32 that was checked, and not otherwise.
 #[tokio::test]
-async fn a_new_video_without_its_identity_kept_is_told_by_its_length() {
+async fn a_new_video_without_its_identity_kept_is_told_by_its_crc() {
     let s = Setup::new().await;
     s.v3_verified_behind_v2().await;
     let forget = format!(
@@ -2543,12 +2548,11 @@ async fn a_new_video_without_its_identity_kept_is_told_by_its_length() {
         s.item(&v3()).await.id
     );
     s.sql(&forget);
-    s.h.tr.set_file_length(V3_HASH, V3_BYTES.len() as i64);
     std::fs::write(s.file(&v3()), b"episode 14, third release and more").unwrap();
     s.h.tr.reject_rename_of(NEW_HASH, None);
     s.cycle().await;
     assert_eq!(s.state_of(&v2()).await, RevisionState::Done);
-    assert_eq!(s.state_of(&v3()).await, RevisionState::Removing);
+    assert_eq!(s.state_of(&v3()).await, RevisionState::Verified);
     assert_eq!(
         read(&s.file(EPISODE_NAME)),
         NEW_BYTES,
@@ -2634,4 +2638,78 @@ async fn a_folder_away_between_two_misses_keeps_the_replacement() {
     s.cycle().await;
     assert_eq!(s.state_of(&v2()).await, RevisionState::Done);
     assert_eq!(read(&s.file(EPISODE_NAME)), NEW_BYTES);
+}
+
+// --- The new video is told by its CRC32 when its identity changed -----------------
+
+/// `14v3`'s file is copied over itself after its check (as a remount or a
+/// copy back from elsewhere would leave it): another inode, the same video.
+/// Its CRC32, read again, is the checked one, so it replaces `14v2`.
+#[tokio::test]
+async fn a_new_video_whose_identity_changed_is_told_by_its_crc() {
+    let s = Setup::new().await;
+    s.v3_verified_behind_v2().await;
+    let copy = s.season.parent().unwrap().join("copy.mkv");
+    std::fs::copy(s.file(&v3()), &copy).unwrap();
+    std::fs::rename(&copy, s.file(&v3())).unwrap();
+
+    s.h.tr.reject_rename_of(NEW_HASH, None);
+    s.cycle().await;
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Done);
+    assert_eq!(s.state_of(&v3()).await, RevisionState::Done);
+    assert_eq!(s.names(), vec![EPISODE_NAME]);
+    assert_eq!(read(&s.file(EPISODE_NAME)), V3_BYTES);
+}
+
+/// `14v3`'s file is gone when it is to remove `14v2`, a file no torrent holds
+/// that it would read whole to tell. The new video is looked at first: the
+/// old one is never read for a replacement that cannot go on.
+#[tokio::test]
+async fn a_missing_new_video_is_seen_before_the_old_video_is_read() {
+    let s = Setup::new().await;
+    s.v3_verified_behind_v2().await;
+    // `14v2` takes the name on disk once its torrent is gone.
+    s.h.tr.remove(NEW_HASH);
+    std::fs::remove_file(s.file(&v3())).unwrap();
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Done);
+    assert_eq!(read(&s.file(EPISODE_NAME)), NEW_BYTES);
+    assert_ne!(s.state_of(&v3()).await.code(), "abandoned");
+
+    // The episode name becomes a pipe, which tells whether anyone opens it.
+    let episode = s.file(EPISODE_NAME);
+    std::fs::remove_file(&episode).unwrap();
+    rustix::fs::mknodat(
+        rustix::fs::CWD,
+        &episode,
+        rustix::fs::FileType::Fifo,
+        rustix::fs::Mode::from_raw_mode(0o644),
+        0,
+    )
+    .unwrap();
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let probe = {
+        let (episode, stop) = (episode.clone(), stop.clone());
+        tokio::task::spawn_blocking(move || {
+            use std::{io::Write, os::unix::fs::OpenOptionsExt, sync::atomic::Ordering};
+            while !stop.load(Ordering::SeqCst) {
+                // Opens only while someone has it open for reading.
+                if let Ok(mut pipe) = std::fs::OpenOptions::new()
+                    .write(true)
+                    .custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32)
+                    .open(&episode)
+                {
+                    let _ = pipe.write_all(NEW_BYTES);
+                    return true;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            false
+        })
+    };
+    s.cycle().await;
+    stop.store(true, std::sync::atomic::Ordering::SeqCst);
+    assert!(!probe.await.unwrap(), "the old video was read");
+    assert_eq!(s.state_of(&v3()).await.code(), "abandoned");
 }
