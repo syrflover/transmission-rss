@@ -25,6 +25,12 @@
 //! `received`, `duplicate` or `add_failed`. An item whose add failed stays in
 //! history as `add_failed` with the rule on it, so `다시 받기` repeats it.
 //!
+//! A start after one whose add got no answer that ends before it adds anything
+//! (the rule was paused, the folder holds the revision) ends as `receive_once`'s
+//! does ([`receive_once::end_early`]): the unanswered add stays recorded on the
+//! command, so the next cycle removes no departed torrents, and the command's
+//! label comes off the torrent.
+//!
 //! The step that reads the revisions' records is the one place that knows how
 //! [`revisions`] keeps them ([`decide_revision`]).
 
@@ -90,7 +96,13 @@ pub async fn run(
     cancel: &CancellationToken,
 ) -> Result<Finished, Retry> {
     let Ok(payload) = serde_json::from_str::<ReceivePast>(&command.payload) else {
-        return Ok(failed("요청 내용을 읽지 못했어요.", None));
+        return ended(
+            ctx,
+            command,
+            failed("요청 내용을 읽지 못했어요.", None),
+            cancel,
+        )
+        .await;
     };
     let rule = ctx
         .channels
@@ -121,14 +133,18 @@ pub async fn run(
         .unwrap_or_else(|| past_item(&payload, channel.as_ref().map_or("", |c| c.id.as_str()), 0));
     match receive_once::adoption_plan(&probe, channel.as_ref(), rule.as_ref()) {
         Ok(_) => {}
-        Err(NotRetryable::Held) => return Ok(held(probe.result, None)),
-        Err(reason) => return Ok(failed(reason.message(), None)),
+        Err(NotRetryable::Held) => {
+            return ended(ctx, command, held(probe.result, None), cancel).await
+        }
+        Err(reason) => return ended(ctx, command, failed(reason.message(), None), cancel).await,
     }
     let (Some(rule), Some(channel)) = (rule, channel) else {
-        return Ok(failed(NotRetryable::RuleMissing.message(), None));
+        let finished = failed(NotRetryable::RuleMissing.message(), None);
+        return ended(ctx, command, finished, cancel).await;
     };
     let Some(collect) = ctx.settings.collection().await.map_err(store)? else {
-        return Ok(failed(receive_once::NO_COLLECT_FOLDER, None));
+        let finished = failed(receive_once::NO_COLLECT_FOLDER, None);
+        return ended(ctx, command, finished, cancel).await;
     };
     let (save_path, episode) = rule_destination(Path::new(&collect.folder), &rule);
 
@@ -153,7 +169,7 @@ pub async fn run(
                     .map_err(store)?
                     .unwrap_or(item);
             }
-            Revision::Held(finished) => return Ok(finished),
+            Revision::Held(finished) => return ended(ctx, command, finished, cancel).await,
         }
     }
 
@@ -181,6 +197,19 @@ pub async fn run(
         }
     }
     receive_once::finish(ctx, &delegated, finished, cancel).await
+}
+
+/// A command that ends before anything is added ([`receive_once::end_early`]):
+/// an earlier start's add that got no answer stays recorded, so the next cycle
+/// removes no departed torrents, and the command's label comes off.
+async fn ended(
+    ctx: &CycleContext,
+    command: &Command,
+    finished: Finished,
+    cancel: &CancellationToken,
+) -> Result<Finished, Retry> {
+    let finished = receive_once::end_early(ctx, command, finished);
+    receive_once::finish(ctx, command, finished, cancel).await
 }
 
 /// The history item a result would be.

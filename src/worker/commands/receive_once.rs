@@ -459,16 +459,7 @@ pub async fn execute_with(
         finished.add_unconfirmed |= command.add_unconfirmed;
         finished
     };
-    // An end before this start adds anything. A torrent may still carry the
-    // command's label when an earlier start ran (it is claimed again after
-    // its first start), so the label comes off whatever ends the command; the
-    // item is left as it is.
-    let ended_early = |mut finished: Finished| {
-        if command.add_unconfirmed || command.attempts > 1 {
-            finished.unlabel = Some(ctx.redactor.clone());
-        }
-        unaccounted(finished)
-    };
+    let ended_early = |finished: Finished| end_early(ctx, command, finished);
 
     let Ok(payload) = serde_json::from_str::<ReceiveOnce>(&command.payload) else {
         return Ok(ended_early(failed("요청 내용을 읽지 못했어요.", None)));
@@ -641,6 +632,19 @@ pub async fn execute_with(
             Ok(finished)
         }
     }
+}
+
+/// A command that ends before this start adds anything. A torrent may still
+/// carry the command's label when an earlier start ran (it is claimed again
+/// after its first start), so the label comes off whatever ends the command,
+/// and an earlier start's add that got no answer stays recorded; the item is
+/// left as it is.
+pub(super) fn end_early(ctx: &CycleContext, command: &Command, mut finished: Finished) -> Finished {
+    if command.add_unconfirmed || command.attempts > 1 {
+        finished.unlabel = Some(ctx.redactor.clone());
+    }
+    finished.add_unconfirmed |= command.add_unconfirmed;
+    finished
 }
 
 /// Why a command stored with a folder chosen by hand is not run.

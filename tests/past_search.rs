@@ -980,3 +980,55 @@ async fn a_searched_revision_lower_than_the_one_that_replaced_the_video_is_not_a
     assert!(!s.added().iter().any(|link| link.contains(&v2_hash)));
     assert_eq!(s.episode_14(), V3);
 }
+
+// --- a `받기` whose add got no answer -----------------------------------------------
+
+/// A `받기` whose add got no answer though Transmission took the torrent, and
+/// whose rule is paused before the next start: the command ends at once, the
+/// torrent stays unaccounted for so the next cycle removes nothing, and the
+/// command's label comes off it.
+#[tokio::test]
+async fn a_paused_rule_after_an_unanswered_add_ends_the_command_and_holds_the_next_cleanup() {
+    let s = Setup::new(Options::show()).await;
+    let title = episode("SubsPlease", "Show", 3, "");
+    s.nyaa.set_releases(std::slice::from_ref(&title));
+    let poll = s.search("[SubsPlease] Show 1080p", 3, 3).await;
+    let key = item(&poll, &title)["key"].as_str().unwrap().to_owned();
+    let id = s.receive(&poll, &key).await;
+
+    let late = s.h.tr.hold_answer("torrent-add");
+    let impatient =
+        s.h.worker()
+            .with_transmission_timeout(Duration::from_millis(300));
+    let cancel = CancellationToken::new();
+    assert_eq!(
+        impatient.run_commands(&cancel).await.unwrap(),
+        CommandsOutcome::Ran(0)
+    );
+    late.release_all();
+    assert_eq!(s.command(&id).await["state"], "running");
+    let label = transmission_rss::transmission::command_label(&id);
+    assert!(s.h.tr.torrents()[0].labels.contains(&label));
+
+    s.h.channels
+        .set_rule_state(&s.rule_id, RuleState::Paused, 1)
+        .await
+        .unwrap();
+    assert_eq!(
+        impatient.run_commands(&cancel).await.unwrap(),
+        CommandsOutcome::Ran(1)
+    );
+    let command = s.command(&id).await;
+    assert_eq!(command["state"], "failed", "{command}");
+    assert!(!s.h.tr.torrents()[0].labels.contains(&label));
+
+    // The search's result is in no feed, and the torrent's hash was never
+    // learned: only the unanswered add keeps it from the cleanup.
+    s.nyaa.set_releases(&[]);
+    let TickOutcome::Ran(report) = s.h.worker().tick(&cancel).await.unwrap() else {
+        panic!("expected a cycle");
+    };
+    assert_eq!(report.commands_unconfirmed, 1);
+    assert!(report.removed.is_empty(), "{:?}", report.removed);
+    assert_eq!(s.h.tr.torrents().len(), 1);
+}
