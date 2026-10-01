@@ -665,7 +665,7 @@ async fn drive(
                 RevisionState::Removed => rename(ctx, &mut row, listing).await,
                 RevisionState::Failed if row.not_received() => recover(ctx, &row).await,
                 RevisionState::Failed => cleared(&row),
-                RevisionState::Abandoned if row.reason.is_some() => ended_watch(&row),
+                RevisionState::Abandoned if row.reason.is_some() => ended_watch(ctx, &row).await,
                 _ => return,
             },
         };
@@ -933,29 +933,34 @@ async fn recover(ctx: &CycleContext, row: &Revision) -> Next {
     let old = Path::new(&row.folder).join(&row.episode_name);
     // A replacement that removed the old video itself left the name empty.
     if row.claimed_at.is_none() && matches!(exists(&old), Ok(false)) {
-        let rows = match ctx
-            .revisions
-            .of_episode(row.folder.clone(), row.episode_name.clone())
-            .await
-        {
-            Ok(rows) => rows,
-            Err(err) => return Next::Later(err.to_string()),
-        };
-        let naming = rows.iter().any(|other| {
-            other.id != row.id
-                && matches!(
-                    other.state,
-                    RevisionState::Removing | RevisionState::Removed
-                )
-        });
-        if !naming {
-            return Next::Step(Step::Cleared);
+        match another_naming(ctx, row).await {
+            Ok(true) => {}
+            Ok(false) => return Next::Step(Step::Cleared),
+            Err(err) => return Next::Later(err),
         }
     }
     match received(ctx, row).await {
         Next::Wait => Next::Step(Step::Receiving),
         other => other,
     }
+}
+
+/// Whether another replacement of `row`'s episode removed the file under
+/// the episode name and is on its way to the name (`removing`, `removed`):
+/// the name is empty for it, not for want of a video.
+async fn another_naming(ctx: &CycleContext, row: &Revision) -> Result<bool, String> {
+    let rows = ctx
+        .revisions
+        .of_episode(row.folder.clone(), row.episode_name.clone())
+        .await
+        .map_err(|err| err.to_string())?;
+    Ok(rows.iter().any(|other| {
+        other.id != row.id
+            && matches!(
+                other.state,
+                RevisionState::Removing | RevisionState::Removed
+            )
+    }))
 }
 
 /// The rule's folder of `row`, looked at before its step, which decides
@@ -1629,17 +1634,26 @@ async fn renamed_already(
 /// torrent was removed ([`OLD_FILE_WATCHED`]) becomes a failure once that
 /// file goes too: the episode has no video. One that ended with no video
 /// under the episode name is no failure any more once a video is there again
-/// (the person put one, or another release came).
-fn ended_watch(row: &Revision) -> Next {
+/// (the person put one, or another release came). A name emptied by another
+/// replacement of the episode that removed the file and is on its way to the
+/// name (`removing`, `removed`) is no failure: that one says so if it fails.
+async fn ended_watch(ctx: &CycleContext, row: &Revision) -> Next {
     if folder_there(row).is_err() {
         return Next::Wait;
     }
     let held = exists(&Path::new(&row.folder).join(&row.episode_name));
     let watched = row.reason.as_deref() == Some(OLD_FILE_WATCHED);
     match (watched, held) {
-        (true, Ok(false)) => Next::Step(Step::Abandoned {
-            reason: Some(OLD_FILE_GONE_TOO.to_owned()),
-        }),
+        (true, Ok(false)) => {
+            match another_naming(ctx, row).await {
+                Ok(true) => return Next::Wait,
+                Ok(false) => {}
+                Err(err) => return Next::Later(err),
+            }
+            Next::Step(Step::Abandoned {
+                reason: Some(OLD_FILE_GONE_TOO.to_owned()),
+            })
+        }
         (false, Ok(true)) => Next::Step(Step::Abandoned { reason: None }),
         _ => Next::Wait,
     }

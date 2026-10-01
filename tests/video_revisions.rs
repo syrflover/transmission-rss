@@ -21,7 +21,7 @@ use transmission_rss::{
     store::{
         channels::{ChannelInput, RuleInput, RuleState},
         history::{HistoryItem, HistoryResult, Observation},
-        revisions::{Revision, RevisionState, RevisionStore},
+        revisions::{Revision, RevisionState, RevisionStore, OLD_FILE_WATCHED},
         settings::SettingsStore,
     },
     worker::{revisions, CommandsOutcome, CycleReport, TickOutcome},
@@ -2895,6 +2895,43 @@ async fn a_replacement_ended_beside_a_left_old_file_is_a_failure_once_that_file_
     assert!(s.failures().await.is_empty());
     assert_eq!(s.state_of(&v2()).await.code(), "abandoned");
     assert_eq!(read(&s.file(EPISODE_NAME)), b"put back by hand");
+}
+
+/// `14v2` was skipped because `14v3` was on its way. `14v3` removed `14`'s
+/// torrent, whose file Transmission left, and then lost its own video: it
+/// ended watching `14`'s file, and `14v2` started over. `14v2` removes that
+/// file and waits a cycle for its name. The name is empty only on its way to
+/// `14v2`, so `14v3` does not say the episode has no video.
+#[tokio::test]
+async fn a_lower_revision_taking_the_name_from_a_watched_old_file_is_no_failure_of_the_watcher() {
+    let s = Setup::new().await;
+    s.v2_skipped_for_v3().await;
+    s.h.tr.keep_data_on_remove_of(OLD_HASH);
+    s.complete(V3_HASH);
+    s.cycle().await;
+    s.cycle().await;
+    assert_eq!(s.state_of(&v3()).await, RevisionState::Removing);
+    std::fs::remove_file(s.file(&v3())).unwrap();
+    s.cycle().await;
+    s.cycle().await;
+    let row = s.row_of(&v3()).await;
+    assert_eq!(row.state.code(), "abandoned", "{row:?}");
+    assert_eq!(row.reason.as_deref(), Some(OLD_FILE_WATCHED));
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Receiving);
+
+    s.h.tr.reject_rename_of(NEW_HASH, Some("busy"));
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Removed);
+    assert_eq!(s.names(), vec![v2()]);
+    let row = s.row_of(&v3()).await;
+    assert_eq!(row.reason.as_deref(), Some(OLD_FILE_WATCHED), "{row:?}");
+
+    s.h.tr.reject_rename_of(NEW_HASH, None);
+    s.cycle().await;
+    assert_eq!(s.state_of(&v2()).await, RevisionState::Done);
+    assert_eq!(read(&s.file(EPISODE_NAME)), NEW_BYTES);
+    s.cycle().await;
+    assert!(s.failures().await.is_empty());
 }
 
 /// `14v2` removed `14` and then lost its video, while its torrent is still
