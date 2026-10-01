@@ -3,9 +3,10 @@ import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ApiError } from "@/lib/api";
-import { useCached } from "@/lib/cached";
+import { forget, useCached } from "@/lib/cached";
 import { ago, dateTime } from "@/lib/time";
 import { KEYS } from "@/screens/collect/cache";
+import { WORKS_KEY } from "@/screens/library/api";
 import { hintClass, inputClass, labelClass } from "@/screens/collect/channels/styles";
 
 import { Labeled, BTN, Facts } from "../parts";
@@ -28,6 +29,11 @@ const LOAD_FAILED = "감시 폴더를 불러오지 못했어요.";
 export function FoldersPanel() {
   const folders = useCached<WatchFolderList>(KEYS.watchFolders, loadWatchFolders, LOAD_FAILED);
   const data = folders.data;
+  // The library list carries the works of these folders: it is read again the next time it opens.
+  const reload = () => {
+    forget(WORKS_KEY);
+    folders.reload();
+  };
 
   return (
     <div className="flex flex-col gap-5 p-5 max-[720px]:p-4">
@@ -67,17 +73,21 @@ export function FoldersPanel() {
                 <li key={folder.id}>
                   <FolderRow
                     folder={folder}
-                    onReload={folders.reload}
-                    onRemoved={() =>
-                      folders.update((list) => ({ folders: list.folders.filter((f) => f.id !== folder.id) }))
-                    }
+                    onReload={reload}
+                    onRemoved={() => {
+                      forget(WORKS_KEY);
+                      folders.update((list) => ({ folders: list.folders.filter((f) => f.id !== folder.id) }));
+                    }}
                   />
                 </li>
               ))}
             </ul>
           )}
           <AddFolder
-            onAdded={(folder) => folders.update((list) => ({ folders: [...list.folders, folder] }))}
+            onAdded={(folder) => {
+              forget(WORKS_KEY);
+              folders.update((list) => ({ folders: [...list.folders, folder] }));
+            }}
           />
         </>
       )}
