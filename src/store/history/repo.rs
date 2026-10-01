@@ -254,28 +254,46 @@ pub fn torrent_hashes_of_channels(
     Ok(hashes)
 }
 
+/// How many rule IDs one query of [`received_hashes_of_rules`] binds, which
+/// keeps the bound values well under SQLite's limit.
+const RECEIVED_HASHES_CHUNK: usize = 400;
+
+/// The query of [`received_hashes_of_rules`] for `rules` rule IDs. It reads
+/// through `history_items_by_rule`, so its cost follows the rules asked about,
+/// not the whole history.
+pub(super) fn received_hashes_sql(rules: usize) -> String {
+    let placeholders = vec!["?"; rules].join(", ");
+    format!(
+        "SELECT rule_id, torrent_hash FROM history_items
+          WHERE result = 'received' AND torrent_hash IS NOT NULL
+            AND rule_id IN ({placeholders})"
+    )
+}
+
 /// The torrent hashes of the items each of the given rules received
-/// (`received` with the rule recorded), by rule ID. A rule that received
-/// nothing is not in the map.
+/// (`received` with the rule recorded), by rule ID, each rule's hashes sorted
+/// and without repeats. A rule that received nothing is not in the map.
 pub fn received_hashes_of_rules(
     conn: &Connection,
     rule_ids: &[String],
 ) -> Result<std::collections::HashMap<String, Vec<String>>> {
-    let mut by_rule: std::collections::HashMap<String, Vec<String>> = Default::default();
-    let mut stmt = conn.prepare(
-        "SELECT DISTINCT torrent_hash FROM history_items
-          WHERE rule_id = ?1 AND result = 'received' AND torrent_hash IS NOT NULL
-          ORDER BY torrent_hash",
-    )?;
-    for rule_id in rule_ids {
-        let hashes = stmt
-            .query_map([rule_id], |row| row.get(0))?
-            .collect::<rusqlite::Result<Vec<String>>>()?;
-        if !hashes.is_empty() {
-            by_rule.insert(rule_id.clone(), hashes);
+    let mut by_rule: std::collections::HashMap<String, std::collections::BTreeSet<String>> =
+        Default::default();
+    for chunk in rule_ids.chunks(RECEIVED_HASHES_CHUNK) {
+        let mut stmt = conn.prepare(&received_hashes_sql(chunk.len()))?;
+        let rows = stmt
+            .query_map(params_from_iter(chunk), |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for (rule_id, hash) in rows {
+            by_rule.entry(rule_id).or_default().insert(hash);
         }
     }
-    Ok(by_rule)
+    Ok(by_rule
+        .into_iter()
+        .map(|(rule, hashes)| (rule, hashes.into_iter().collect()))
+        .collect())
 }
 
 /// Marks a cycle as started unless the previous one started less than

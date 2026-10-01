@@ -230,20 +230,55 @@ pub(super) fn season_holdings(
     }))
 }
 
-/// The work and season number of the video recorded at `path` (an absolute
-/// path: a watch folder, a work folder, then the file's path below it), if the
-/// library has such a file in a registered folder.
-pub(super) fn find_video(conn: &Connection, path: &str) -> rusqlite::Result<Option<(String, u32)>> {
-    conn.query_row(
-        "SELECT m.work_id, m.season FROM media_files m
-           JOIN works w ON w.id = m.work_id
-           JOIN watch_folders f ON f.id = w.watch_folder_id
-          WHERE m.kind = 'video' AND f.unregistered_at IS NULL
-            AND f.path || '/' || w.dir_name || '/' || m.path = ?1",
-        [path],
-        |row| Ok((row.get(0)?, row.get(1)?)),
-    )
-    .optional()
+/// The video at one place of one work, by the keys of `works`
+/// (`watch_folder_id`, `dir_name`) and `media_files` (`work_id`, `path`).
+const FIND_VIDEO_SQL: &str = "SELECT m.work_id, m.season FROM works w
+           JOIN media_files m ON m.work_id = w.id AND m.path = ?3
+          WHERE w.watch_folder_id = ?1 AND w.dir_name = ?2 AND m.kind = 'video'";
+
+/// The work and season number of the video recorded at each of the absolute
+/// `paths` (a watch folder, a work folder, then the file's path below it), in
+/// the order given: `None` for a path with no such file in a registered folder.
+///
+/// A path is cut at the registered watch folders it starts with and at the
+/// first `/` after them (the work folder), and the rest is looked up by key,
+/// so the cost of a lookup does not grow with the files of the library.
+pub(super) fn find_videos(
+    conn: &Connection,
+    paths: &[String],
+) -> rusqlite::Result<Vec<Option<(String, u32)>>> {
+    let mut folders =
+        conn.prepare("SELECT id, path FROM watch_folders WHERE unregistered_at IS NULL")?;
+    let folders: Vec<(String, String)> = folders
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    let mut find = conn.prepare(FIND_VIDEO_SQL)?;
+
+    let mut found = Vec::with_capacity(paths.len());
+    for path in paths {
+        let mut hit = None;
+        for (folder_id, folder_path) in &folders {
+            let Some(below) = path
+                .strip_prefix(folder_path.as_str())
+                .and_then(|rest| rest.strip_prefix('/'))
+            else {
+                continue;
+            };
+            let Some((dir_name, relative)) = below.split_once('/') else {
+                continue;
+            };
+            hit = find
+                .query_row(params![folder_id, dir_name, relative], |row| {
+                    Ok((row.get(0)?, row.get(1)?))
+                })
+                .optional()?;
+            if hit.is_some() {
+                break;
+            }
+        }
+        found.push(hit);
+    }
+    Ok(found)
 }
 
 #[cfg(test)]
@@ -384,5 +419,96 @@ mod tests {
         let detail = store.work_detail(&id).await.unwrap().unwrap();
         assert!(detail.missing);
         assert_eq!(detail.seasons[0].episodes.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn videos_are_found_by_their_absolute_path_in_registered_folders_only() {
+        use FileKind::{Subtitle, Video};
+        let (store, id) = store_with(scan(
+            "Show",
+            &[0, 1, 2],
+            vec![
+                file(1, "01", "S01E01.mkv", Video),
+                file(1, "01", "S01E01.ko.ass", Subtitle),
+                file(2, "01", "S02E01.mkv", Video),
+                file(0, "01", "SP01.mkv", Video),
+            ],
+            Vec::new(),
+        ))
+        .await;
+        let ask = |paths: &[&str]| paths.iter().map(|p| (*p).to_owned()).collect::<Vec<_>>();
+        let paths = ask(&[
+            "/w/Show/Season 01/S01E01.mkv",
+            "/w/Show/Season 02/S02E01.mkv",
+            "/w/Show/Season 00/SP01.mkv",
+            // A subtitle, another folder, another work, a folder of no work,
+            // a path above a work folder, and one that only starts alike.
+            "/w/Show/Season 01/S01E01.ko.ass",
+            "/other/Show/Season 01/S01E01.mkv",
+            "/w/Nope/Season 01/S01E01.mkv",
+            "/w/Show",
+            "/w/Show/",
+            "/w/Show/S01E01.mkv",
+            "/wShow/Season 01/S01E01.mkv",
+            "",
+        ]);
+
+        let found = store.find_videos(paths.clone()).await.unwrap();
+
+        assert_eq!(
+            found,
+            [
+                Some((id.clone(), 1)),
+                Some((id.clone(), 2)),
+                Some((id.clone(), 0)),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            ]
+        );
+
+        // A folder that is not registered any more holds nothing.
+        let folder = store.folders().await.unwrap().remove(0);
+        store.remove_folder(&folder.id, 300).await.unwrap();
+        let found = store.find_videos(paths).await.unwrap();
+        assert!(found.iter().all(Option::is_none), "{found:?}");
+    }
+
+    /// Looking a video up by its path must go through the keys of `works` and
+    /// `media_files`; comparing a built-up path scans every file of the
+    /// library for every lookup.
+    #[tokio::test]
+    async fn a_video_is_looked_up_by_keys_not_by_scanning_the_files() {
+        let (store, _id) = store_with(scan(
+            "Show",
+            &[1],
+            vec![file(1, "01", "S01E01.mkv", FileKind::Video)],
+            Vec::new(),
+        ))
+        .await;
+        let plan: Vec<String> = store
+            .db
+            .run::<_, crate::store::db::DbError, _>(|c| {
+                let mut stmt = c.prepare(&format!("EXPLAIN QUERY PLAN {FIND_VIDEO_SQL}"))?;
+                let args = vec!["/w"; stmt.parameter_count()];
+                let rows = stmt
+                    .query_map(rusqlite::params_from_iter(args), |row| {
+                        row.get::<_, String>(3)
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(rows)
+            })
+            .await
+            .unwrap();
+
+        assert!(
+            plan.iter().all(|step| !step.starts_with("SCAN")),
+            "{plan:?}"
+        );
     }
 }

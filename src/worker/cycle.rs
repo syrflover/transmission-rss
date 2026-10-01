@@ -50,6 +50,9 @@ pub struct CycleContext {
     /// What the worker remembers of each watch folder's directories between
     /// scans (see [`crate::worker::watch`]).
     pub scan_cache: super::watch::ScanCaches,
+    /// What the season link remembers between cycles (see
+    /// [`crate::worker::season_link`]).
+    pub season_link: super::season_link::Memory,
     /// The inotify watches of the watch folders, which say what the cycle has
     /// to read of them (see [`crate::worker::live`]).
     pub live: super::live::LiveWatch,

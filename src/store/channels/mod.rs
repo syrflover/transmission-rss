@@ -307,6 +307,12 @@ impl ChannelStore {
             .await
     }
 
+    /// Clears the notes of seasons that no other Anissia anime holds any more
+    /// (see [`Subscription::season_blocked`]); the rules cleared, by ID.
+    pub async fn release_unheld_seasons(&self) -> Result<Vec<String>, ChannelError> {
+        self.db.run(repo::release_unheld_seasons).await
+    }
+
     /// The Anissia anime whose subscriptions hold the season, if any.
     pub async fn season_holder(&self, season_id: &str) -> Result<Option<i64>, ChannelError> {
         let season_id = season_id.to_owned();

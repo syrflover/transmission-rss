@@ -1479,3 +1479,66 @@ async fn a_folder_kept_by_a_plan_leaves_its_path_to_an_unregistered_folder_holdi
     );
     assert_eq!(store.works(&gone.id).await.unwrap().len(), 1);
 }
+
+#[tokio::test]
+async fn the_generation_changes_with_what_a_video_lookup_can_answer_and_only_then() {
+    let store = store();
+    let first = store.generation().await.unwrap();
+    let (folder, _) = store
+        .add_folder(
+            "/w".into(),
+            scan(vec![work("A", vec![video(1, "01", "A S01E01.mkv")])]),
+            100,
+            &[],
+        )
+        .await
+        .unwrap();
+    let added = store.generation().await.unwrap();
+    assert_ne!(added, first, "a file recorded");
+
+    // A scan that finds everything as it was changes nothing (it only notes
+    // that it looked).
+    let same = scan(vec![work("A", vec![video(1, "01", "A S01E01.mkv")])]);
+    store.record_scan(&folder.id, Ok(same), 200).await.unwrap();
+    assert_eq!(store.generation().await.unwrap(), added);
+
+    // A new file, a forgotten file, a work folder gone and back.
+    let two = scan(vec![work(
+        "A",
+        vec![
+            video(1, "01", "A S01E01.mkv"),
+            video(1, "02", "A S01E02.mkv"),
+        ],
+    )]);
+    store.record_scan(&folder.id, Ok(two), 300).await.unwrap();
+    let two_files = store.generation().await.unwrap();
+    assert_ne!(two_files, added, "a file found");
+
+    let one = scan(vec![work("A", vec![video(1, "01", "A S01E01.mkv")])]);
+    store.record_scan(&folder.id, Ok(one), 400).await.unwrap();
+    let one_file = store.generation().await.unwrap();
+    assert_ne!(one_file, two_files, "a file forgotten");
+
+    // A folder moved on to another watch folder changes the paths.
+    let (to, _) = store
+        .add_folder(
+            "/to".into(),
+            scan(Vec::new()),
+            500,
+            std::slice::from_ref(&folder),
+        )
+        .await
+        .unwrap();
+    let before_move = store.generation().await.unwrap();
+    store.follow_move(&folder.id, &to.id, "A").await.unwrap();
+    assert_ne!(store.generation().await.unwrap(), before_move, "a move");
+
+    // A watch folder no longer registered holds no videos.
+    let before_removal = store.generation().await.unwrap();
+    store.remove_folder(&to.id, 600).await.unwrap();
+    assert_ne!(
+        store.generation().await.unwrap(),
+        before_removal,
+        "a folder unregistered"
+    );
+}

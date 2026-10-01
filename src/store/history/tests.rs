@@ -1266,3 +1266,64 @@ async fn a_torrent_is_received_by_hand_when_a_received_item_without_a_rule_holds
     assert!(!history.received_by_hand("hash-cmd-dup").await.unwrap());
     assert!(!history.received_by_hand("hash-unknown").await.unwrap());
 }
+
+// --- the hashes a rule received --------------------------------------------
+
+#[tokio::test]
+async fn the_hashes_of_many_rules_come_back_per_rule_in_chunks() {
+    let (_dir, _db, history) = store().await;
+    // More rules than one query binds, so the chunks are all exercised.
+    let rules: Vec<String> = (0..850).map(|n| format!("rule-{n}")).collect();
+    let mut observations = Vec::new();
+    for (n, rule) in rules.iter().enumerate() {
+        if n % 2 == 0 {
+            // Two items of the rule name the same torrent, and another a second one.
+            observations.push(received(&format!("a{n}"), rule, &format!("hash-{n}-b")));
+            observations.push(received(&format!("b{n}"), rule, &format!("hash-{n}-b")));
+            observations.push(received(&format!("c{n}"), rule, &format!("hash-{n}-a")));
+        }
+    }
+    // Not received: not what the rule brought in.
+    observations.push(Observation {
+        rule_id: Some("rule-1".into()),
+        torrent_hash: Some("hash-failed".into()),
+        ..obs("failed", HistoryResult::AddFailed)
+    });
+    history.record(1_000, observations).await.unwrap();
+
+    let got = history.received_hashes_of_rules(rules).await.unwrap();
+
+    assert_eq!(got.len(), 425);
+    assert_eq!(got["rule-0"], ["hash-0-a", "hash-0-b"]);
+    assert_eq!(got["rule-848"], ["hash-848-a", "hash-848-b"]);
+    assert!(!got.contains_key("rule-1"));
+}
+
+/// The plan of the query that reads the hashes must search by rule through an
+/// index: a scan would read every received item of the history for every
+/// cycle, and the history is kept indefinitely.
+#[tokio::test]
+async fn the_hashes_of_rules_are_read_through_an_index_on_the_rule() {
+    let (_dir, db, _history) = store().await;
+    let plan: Vec<String> = db
+        .run::<_, DbError, _>(|c| {
+            let sql = format!("EXPLAIN QUERY PLAN {}", repo::received_hashes_sql(3));
+            let mut stmt = c.prepare(&sql)?;
+            let rows = stmt
+                .query_map(["a", "b", "c"], |row| row.get::<_, String>(3))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+        .await
+        .unwrap();
+
+    assert!(
+        plan.iter()
+            .any(|step| step.contains("SEARCH history_items USING INDEX history_items_by_rule")),
+        "{plan:?}"
+    );
+    assert!(
+        plan.iter().all(|step| !step.starts_with("SCAN")),
+        "{plan:?}"
+    );
+}
