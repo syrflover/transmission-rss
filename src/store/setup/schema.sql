@@ -7,8 +7,8 @@
 -- either is not a first run, so the checklist never shows for it. The row keeps
 -- the steps the user skipped (Unix milliseconds; `folder` is `감시 폴더 등록`
 -- and `import` is `기존 설정 가져오기`; NULL when not skipped), on the server
--- so every device sees the same checklist. Whether a step is done is not
--- stored: it follows from the data (a registered watch folder; a channel).
+-- so every device sees the same checklist. (`ended.sql` later keeps the steps
+-- that were done and the end of the checklist as well.)
 CREATE TABLE first_run (
     id                INTEGER PRIMARY KEY CHECK (id = 1),
     folder_skipped_at INTEGER,

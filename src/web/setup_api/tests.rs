@@ -245,13 +245,15 @@ async fn importing_the_legacy_file_into_a_new_install_adds_every_channel_without
 
     // The import was applied (and set the collect folder, a watch folder):
     // both steps are done and the schedule is up.
+    let run = app.state.setup.first_run().await.unwrap().unwrap();
+    assert!(run.done(Step::Import) && run.done(Step::Folder));
     let home = app.home().await;
     assert_eq!(home["first_run"], Value::Null);
     assert!(home["week"].is_object());
 }
 
 #[tokio::test]
-async fn a_channel_ends_the_import_step_without_the_import() {
+async fn a_channel_that_was_not_imported_does_not_end_the_import_step() {
     let app = App::new().await;
     app.state
         .channels
@@ -263,7 +265,78 @@ async fn a_channel_ends_the_import_step_without_the_import() {
         steps(&home["first_run"]),
         [
             ("folder".to_owned(), false, false),
-            ("import".to_owned(), true, false)
+            ("import".to_owned(), false, false)
         ]
     );
+}
+
+#[tokio::test]
+async fn a_checklist_that_ended_stays_away_when_the_folders_and_channels_go() {
+    let app = App::new().await;
+    app.add_folder().await;
+    app.skip("import", true).await;
+    // The schedule is up. (This read is the one that ends the checklist for
+    // good, were it not ended by the skip already.)
+    assert_eq!(app.home().await["first_run"], Value::Null);
+
+    let folders = app.state.library.folders().await.unwrap();
+    app.state
+        .library
+        .remove_folder(&folders[0].id, 200)
+        .await
+        .unwrap();
+    assert!(app.state.library.folders().await.unwrap().is_empty());
+
+    let home = app.home().await;
+    assert_eq!(
+        home["first_run"],
+        Value::Null,
+        "the checklist does not return"
+    );
+    assert!(home["week"].is_object());
+}
+
+#[tokio::test]
+async fn unregistering_the_last_folder_does_not_bring_back_a_checklist_finished_by_the_data() {
+    let app = App::new().await;
+    app.add_folder().await;
+    // The import is applied, but nobody has asked for the home screen yet.
+    app.state.setup.mark_import_applied(150).await.unwrap();
+    let folders = app.state.library.folders().await.unwrap();
+    app.state
+        .library
+        .remove_folder(&folders[0].id, 200)
+        .await
+        .unwrap();
+    // Both steps happened, whatever has been removed since.
+    let home = app.home().await;
+    assert_eq!(home["first_run"], Value::Null);
+    assert!(home["week"].is_object());
+}
+
+#[tokio::test]
+async fn the_last_skip_can_be_undone_after_the_checklist_ended_and_brings_it_back() {
+    let app = App::new().await;
+    app.add_folder().await;
+    let (_, view) = app.skip("import", true).await;
+    assert_eq!(view["active"], false);
+    // The folder goes; the notice's undo still brings the checklist back, with
+    // the folder step as it was (done).
+    let folders = app.state.library.folders().await.unwrap();
+    app.state
+        .library
+        .remove_folder(&folders[0].id, 200)
+        .await
+        .unwrap();
+    let (status, view) = app.skip("import", false).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(view["active"], true);
+    assert_eq!(
+        steps(&view),
+        [
+            ("folder".to_owned(), true, false),
+            ("import".to_owned(), false, false)
+        ]
+    );
+    assert_eq!(app.home().await["first_run"]["active"], true);
 }

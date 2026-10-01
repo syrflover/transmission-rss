@@ -102,6 +102,7 @@ impl App {
             ))
             .await
             .unwrap();
+        state.setup.mark_import_applied(100).await.unwrap();
         App {
             state,
             now,
