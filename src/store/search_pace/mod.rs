@@ -1,10 +1,11 @@
-//! The pace of search requests to a feed host, shared by the web and the
-//! worker through the database (ticket 0026).
+//! The pace of search requests to a feed host, shared through the database
+//! (ticket 0026).
 //!
-//! Two processes cannot share an in-memory timer, so the next allowed time of
-//! each host is a row. [`SearchPace::take_slot`] reads it and moves it
-//! forward in one write transaction, so the requests of both processes, and of
+//! Processes cannot share an in-memory timer, so the next allowed time of each
+//! host is a row. [`SearchPace::take_slot`] reads it and moves it forward in
+//! one write transaction, so the requests of every web process, and of
 //! searches running at the same time in one, start at least `spacing` apart.
+//! Only searches take slots; the worker's feed reads do not use the row.
 //! The caller sleeps until the slot it was given before it sends.
 
 #[cfg(test)]

@@ -1,12 +1,11 @@
 //! Sending a search to the tracker: one request for one page of its search
 //! RSS, after the request pace of the host allows it.
 //!
-//! This is the one place that requests a search page, whichever process asks
-//! (the web today; the worker may later), and the one place the pace is kept:
-//! every request takes its slot from the database
-//! ([`SearchPace::take_slot`]) and waits for it, so the requests of the two
-//! processes and of searches running side by side stay [`REQUEST_SPACING`]
-//! apart. A `429` answer blocks the host for as long as it asks.
+//! This is the one place that requests a search page (only the web asks), and
+//! the one place the pace is kept: every request takes its slot from the
+//! database ([`SearchPace::take_slot`]) and waits for it, so the requests of
+//! the web processes and of searches running side by side stay
+//! [`REQUEST_SPACING`] apart. A `429` answer blocks the host for as long as it asks.
 //!
 //! A search reads the RSS only. The page's HTML is never requested.
 
