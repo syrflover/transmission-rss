@@ -125,8 +125,9 @@ pub fn file_crc32(path: &Path) -> io::Result<u32> {
 }
 
 /// What tells a file apart from another one put under its name: its device
-/// and inode, and its size and modification time (which a write into it
-/// changes).
+/// and inode, its size, and its modification and status-change times (a
+/// write into it changes the first; the second also catches a write that put
+/// the modification time back, and any change of mode or owner).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FileIdentity {
     dev: u64,
@@ -134,6 +135,8 @@ pub struct FileIdentity {
     len: u64,
     mtime: i64,
     mtime_nsec: i64,
+    ctime: i64,
+    ctime_nsec: i64,
 }
 
 impl FileIdentity {
@@ -145,6 +148,8 @@ impl FileIdentity {
             len: meta.len(),
             mtime: meta.mtime(),
             mtime_nsec: meta.mtime_nsec(),
+            ctime: meta.ctime(),
+            ctime_nsec: meta.ctime_nsec(),
         }
     }
 
@@ -191,6 +196,8 @@ pub fn season_episode(name: &str) -> Option<(u32, String)> {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::FileExt;
+
     use super::*;
 
     #[test]
@@ -307,6 +314,23 @@ mod tests {
         assert_eq!(crc_text(0x5), "00000005");
         assert_eq!(parse_crc("1BBD34E6"), Some(0x1BBD34E6));
         assert_eq!(parse_crc("1BBD34E"), None);
+    }
+
+    #[test]
+    fn a_rewrite_that_restores_the_modification_time_changes_the_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.mkv");
+        std::fs::write(&path, b"aaaa").unwrap();
+        let before = FileIdentity::at(&path).unwrap();
+        let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+        // The kernel's clock ticks coarsely: let the rewrite fall in another.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        file.write_all_at(b"bbbb", 0).unwrap();
+        file.set_modified(modified).unwrap();
+        drop(file);
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), 4);
+        assert_ne!(FileIdentity::at(&path).unwrap(), before);
     }
 
     #[test]
