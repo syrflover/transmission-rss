@@ -119,6 +119,7 @@
 
 use std::{
     collections::HashMap,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
@@ -198,6 +199,15 @@ impl Kind {
     }
 }
 
+/// A command a look claimed, with its place in line for its folders and its
+/// entry in the in-flight set.
+struct Claim {
+    command: Command,
+    kind: Kind,
+    turn: Reservation,
+    entry: removal::Entry,
+}
+
 /// How a command's task came out, for the look that started it.
 enum Carried {
     /// The command ended (its end is written).
@@ -206,13 +216,38 @@ enum Carried {
     Later(String),
 }
 
+/// Commands left for a later look, and since when: the claims of the look
+/// that started them pass over them until [`Deferred::forget`] lets them go.
+/// Shared with the look's tasks, which note a command here before it leaves
+/// the in-flight set ([`removal::InFlight`]), so no claim in between finds it
+/// in neither and takes it again at once.
+#[derive(Clone, Default)]
+struct Deferred(Arc<Mutex<HashMap<String, Instant>>>);
+
+impl Deferred {
+    fn note(&self, id: &str) {
+        self.map().insert(id.to_owned(), Instant::now());
+    }
+
+    fn ids(&self) -> Vec<String> {
+        self.map().keys().cloned().collect()
+    }
+
+    /// Lets the commands left for later at least `after` ago be claimed again.
+    fn forget(&self, after: Duration) {
+        self.map().retain(|_, since| since.elapsed() < after);
+    }
+
+    fn map(&self) -> std::sync::MutexGuard<'_, HashMap<String, Instant>> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
 /// The commands one look (or the worker's long-running loop) has started.
 #[derive(Default)]
 struct Batch {
     tasks: JoinSet<Carried>,
-    /// Commands left for a later look, and since when. Passed over by the
-    /// claims until [`Batch::forget_deferred`] lets them go.
-    deferred: HashMap<String, Instant>,
+    deferred: Deferred,
     /// How many commands ended.
     ended: usize,
 }
@@ -221,18 +256,12 @@ impl Batch {
     fn settle(&mut self, joined: Result<Carried, tokio::task::JoinError>) {
         match joined {
             Ok(Carried::Ended) => self.ended += 1,
-            Ok(Carried::Later(id)) => {
-                self.deferred.insert(id, Instant::now());
-            }
+            // Noted by the task already.
+            Ok(Carried::Later(_)) => {}
             // The task records its own end; a panic outside the command's
             // own task leaves the command `running` for the next start.
             Err(err) => eprintln!("Command task ended with an internal error: {err}"),
         }
-    }
-
-    /// Lets the commands left for later at least `after` ago be claimed again.
-    fn forget_deferred(&mut self, after: Duration) {
-        self.deferred.retain(|_, since| since.elapsed() < after);
     }
 }
 
@@ -327,7 +356,7 @@ impl Worker {
                         wake = None;
                     }
                 }
-                _ = ticker.tick() => batch.forget_deferred(self.command_poll),
+                _ = ticker.tick() => batch.deferred.forget(self.command_poll),
             }
             if let Err(err) = self.look(&mut batch, &cancel).await {
                 eprintln!("Commands failed: {err}");
@@ -380,7 +409,7 @@ impl Worker {
     ) -> Result<(), WorkerError> {
         while batch.tasks.len() < MAX_COMMANDS_AT_ONCE && !cancel.is_cancelled() {
             let mut excluded = self.in_flight.ids();
-            excluded.extend(batch.deferred.keys().cloned());
+            excluded.extend(batch.deferred.ids());
             let Some(command) = self
                 .commands
                 .claim_next_excluding((self.clock)(), excluded)
@@ -410,16 +439,20 @@ impl Worker {
                 Ok(section) => section,
                 Err(err) => {
                     eprintln!("Command {} not finished: {err}", command.id);
-                    batch.deferred.insert(command.id.clone(), Instant::now());
+                    batch.deferred.note(&command.id);
                     continue;
                 }
             };
             let turn = self.ctx.folders.reserve(section);
-            batch.tasks.spawn(self.clone().carry_out(
+            let claim = Claim {
                 command,
                 kind,
                 turn,
                 entry,
+            };
+            batch.tasks.spawn(self.clone().carry_out(
+                claim,
+                batch.deferred.clone(),
                 hold.clone(),
                 cancel.clone(),
             ));
@@ -453,14 +486,18 @@ impl Worker {
     /// runs the command, and writes how it came out.
     async fn carry_out(
         self,
-        command: Command,
-        kind: Kind,
-        turn: Reservation,
-        entry: removal::Entry,
+        claim: Claim,
+        deferred: Deferred,
         hold: WorkerHold,
         cancel: CancellationToken,
     ) -> Carried {
-        let _turn = turn.ready().await;
+        let Claim {
+            command,
+            kind,
+            turn,
+            entry,
+        } = claim;
+        let turn = turn.ready().await;
         let gate = match kind.touches_torrents() {
             true => Some(self.torrents.command().await),
             false => None,
@@ -478,8 +515,11 @@ impl Worker {
                 Carried::Later(command.id.clone())
             }
         };
+        if let Carried::Later(id) = &carried {
+            deferred.note(id);
+        }
         drop(started);
-        drop(_turn);
+        drop(turn);
         hold.release().await;
         carried
     }
