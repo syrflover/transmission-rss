@@ -435,14 +435,17 @@ mod tests {
             // A database as the build with 30 migrations left it: a work with
             // two seasons, one of them subscribed (by two channels' rules); a
             // second work with a season nobody subscribes to; a subscription
-            // that has no season yet; one whose work is gone; a plain rule.
+            // that has no season yet; one whose work is gone; a plain rule;
+            // two subscriptions of different anime on one season; an archived
+            // rule's subscription; a subscription whose season has no row.
             let conn = database_at(&path, 30);
             conn.execute_batch(
                 "INSERT INTO watch_folders (id, path, created_at) VALUES ('f1', '/media', 1);
                  INSERT INTO works (id, watch_folder_id, dir_name)
-                     VALUES ('w1', 'f1', 'Clevatess'), ('w2', 'f1', 'Plain');
+                     VALUES ('w1', 'f1', 'Clevatess'), ('w2', 'f1', 'Plain'),
+                            ('w3', 'f1', 'Twin'), ('w4', 'f1', 'Old'), ('w5', 'f1', 'Bare');
                  INSERT INTO seasons (work_id, number)
-                     VALUES ('w1', 1), ('w1', 2), ('w2', 1);
+                     VALUES ('w1', 1), ('w1', 2), ('w2', 1), ('w3', 1), ('w4', 1);
                  INSERT INTO channels (id, position, url, excludes, secret_query, version)
                      VALUES ('c1', 0, 'http://x/feed', '[]', '[]', 1),
                             ('c2', 1, 'http://y/feed', '[]', '[]', 1);
@@ -454,7 +457,11 @@ mod tests {
                             ('r3', 'c1', 2, 'Gone', 0, 1, 'Gone', 1, 0, 'active', 1),
                             ('r4', 'c1', 3, 'Plain', 0, 1, 'Plain', 1, 0, 'active', 1),
                             ('r5', 'c2', 0, 'Clevatess', 0, 1, 'Clevatess/Season 02', 1, 0,
-                                'paused', 1);
+                                'paused', 1),
+                            ('r6', 'c2', 1, 'Twin', 0, 1, 'Twin/Season 01', 1, 0, 'active', 1),
+                            ('r7', 'c2', 2, 'Twin B', 0, 1, 'Twin/Season 01', 1, 0, 'active', 1),
+                            ('r8', 'c2', 3, 'Old', 0, 1, 'Old/Season 01', 1, 0, 'archived', 1),
+                            ('r9', 'c2', 4, 'Bare', 0, 1, 'Bare/Season 03', 1, 0, 'active', 1);
                  INSERT INTO anissia_anime (anime_no, subject, week, status, fetched_at)
                      VALUES (7, '클레바테스', 1, 'ON', 10), (8, '기다림', 2, 'ON', 10),
                             (9, '사라진 작품', 3, 'OFF', 10);
@@ -463,7 +470,11 @@ mod tests {
                      VALUES ('r1', 7, 'follow', 'SubKor', 'w1:2', 99),
                             ('r2', 8, 'undecided', NULL, NULL, 98),
                             ('r3', 9, 'none', NULL, 'removed-work:1', 97),
-                            ('r5', 7, 'undecided', NULL, 'w1:2', 96);",
+                            ('r5', 7, 'undecided', NULL, 'w1:2', 96),
+                            ('r6', 8, 'none', NULL, 'w3:1', 95),
+                            ('r7', 9, 'none', NULL, 'w3:1', 94),
+                            ('r8', 7, 'none', NULL, 'w4:1', 93),
+                            ('r9', 7, 'none', NULL, 'w5:3', 92);",
             )
             .unwrap();
             conn.query_row(summary, [], |r| r.get(0)).unwrap()
@@ -490,10 +501,13 @@ mod tests {
             })
             .await
             .unwrap();
-        // Only the subscribed season is linked, to the subscription's anime, once;
-        // the unsubscribed season, the waiting subscription and the one whose
-        // work is gone add nothing. The subscriptions are as they were.
-        assert_eq!(links, "w1:2=7@1");
+        // Each subscribed season is linked to the subscription's anime, once: the
+        // two subscriptions of one season give the anime of the first rule by ID
+        // (8, not 9), an archived rule's subscription and one whose season has no
+        // row of its own link too. The unsubscribed season, the waiting
+        // subscription and the one whose work is gone add nothing. The
+        // subscriptions are as they were.
+        assert_eq!(links, "w1:2=7@1,w3:1=8@1,w4:1=7@1,w5:3=7@1");
         assert_eq!(after, before);
         assert_eq!(broken, 0);
 
@@ -501,7 +515,11 @@ mod tests {
         let left: i64 = db
             .run::<_, DbError, _>(|c| {
                 c.execute("DELETE FROM works WHERE id = 'w1'", [])?;
-                Ok(c.query_row("SELECT count(*) FROM season_anissia", [], |r| r.get(0))?)
+                Ok(c.query_row(
+                    "SELECT count(*) FROM season_anissia WHERE work_id = 'w1'",
+                    [],
+                    |r| r.get(0),
+                )?)
             })
             .await
             .unwrap();

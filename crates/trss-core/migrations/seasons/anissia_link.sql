@@ -10,10 +10,10 @@
 -- has version 0), so a change made from an older version changes nothing.
 --
 -- A season that a subscription is connected to (`rule_subscriptions.season_id`,
--- `<work id>:<season number>`) holds that subscription's anime, and only the
--- subscription side changes it: the connection of a subscription writes the
--- link in its own transaction, and the work detail refuses to change a link a
--- subscription holds.
+-- `<work id>:<season number>`) holds that subscription's anime: the
+-- connection of a subscription writes the link in its own transaction, and the
+-- work detail refuses to change a link a subscription holds (the subscription
+-- is deleted first; the link stays after that).
 --
 -- As with `season_info`, a season's link outlives the season's row in `seasons`
 -- (a season folder that is moved away for a moment must not lose what the user
