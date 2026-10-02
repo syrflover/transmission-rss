@@ -10,6 +10,9 @@ import { EmptyState } from "../../ScreenFrame";
 import { inputClass } from "../../collect/channels/styles";
 import { RetryActions } from "../../collect/history/RetryActions";
 import { retryStatus, useItemRetry } from "../../collect/history/useRetry";
+import type { Candidate } from "../api";
+import { candidatesOf } from "./candidates";
+import { candidateNote, EpisodePicks, type EpisodeCandidateSource } from "./EpisodeCandidates";
 
 /**
  * One kind of file of an episode: `영상 ✓` or `자막 −`. The label is the same
@@ -132,7 +135,22 @@ function VersionLine({ revision }: { revision: EpisodeRevision }) {
 /** The time a file was added, or `미상` when it was there before the app first looked. */
 const addedAt = (file: WorkFile) => (file.added_at === null ? "미상" : dateTime(file.added_at));
 
-function Details({ id, episode, onRetried }: { id: string; episode: WorkEpisode; onRetried: () => Promise<void> }) {
+function Details({
+  id,
+  season,
+  episode,
+  picks,
+  source,
+  onRetried,
+}: {
+  id: string;
+  season: number;
+  episode: WorkEpisode;
+  /** The subtitle candidates of the episode, none without a source. */
+  picks: readonly Candidate[];
+  source: EpisodeCandidateSource | undefined;
+  onRetried: () => Promise<void>;
+}) {
   return (
     <dl id={id} className="m-0 grid grid-cols-[repeat(auto-fit,minmax(170px,1fr))] gap-x-4 gap-y-3 px-4 pt-1 pb-4 max-[720px]:px-3">
       {episode.failure !== null && <Failure failure={episode.failure} onRetried={onRetried} />}
@@ -154,6 +172,7 @@ function Details({ id, episode, onRetried }: { id: string; episode: WorkEpisode;
           </span>
         ))}
       </Cell>
+      {source && picks.length > 0 && <EpisodePicks candidates={picks} season={season} source={source} />}
     </dl>
   );
 }
@@ -162,6 +181,8 @@ function Row({
   season,
   episode,
   missing,
+  picks,
+  source,
   open,
   onToggle,
   onRetried,
@@ -169,6 +190,8 @@ function Row({
   season: number;
   episode: WorkEpisode;
   missing: boolean;
+  picks: readonly Candidate[];
+  source: EpisodeCandidateSource | undefined;
   open: boolean;
   onToggle: () => void;
   onRetried: () => Promise<void>;
@@ -198,6 +221,8 @@ function Row({
                 받기 실패
               </span>
             )}
+            {/* Quiet and uncoloured: a candidate to look at, not a to-do. */}
+            {picks.length > 0 && <span className="text-xs text-text-muted [overflow-wrap:anywhere]">{candidateNote(picks)}</span>}
           </span>
           {episode.revision !== null && <VersionLine revision={episode.revision} />}
         </span>
@@ -205,10 +230,12 @@ function Row({
         <span className="text-[12.5px] text-text-muted">{episode.air_at === null ? null : airDay(episode.air_at)}</span>
         <ChevronIcon className={cn("size-4 text-text-muted transition-transform", open && "rotate-90")} />
       </button>
-      {open && <Details id={detailId} episode={episode} onRetried={onRetried} />}
+      {open && <Details id={detailId} season={season} episode={episode} picks={picks} source={source} onRetried={onRetried} />}
     </li>
   );
 }
+
+const NO_PICKS: readonly Candidate[] = [];
 
 interface EpisodeListProps {
   season: WorkSeason;
@@ -219,6 +246,8 @@ interface EpisodeListProps {
   onOrder: (order: EpisodeOrder) => void;
   /** Reads the work again after a `다시 받기` of a failed replacement ended. */
   onRetried: () => Promise<void>;
+  /** The season's subtitle candidates; without them the rows say nothing about candidates. */
+  candidates?: EpisodeCandidateSource;
 }
 
 /**
@@ -227,9 +256,11 @@ interface EpisodeListProps {
  * with a `받기 실패` badge while a replacement of its video by a higher
  * revision has failed and a quiet version line once one went through; pressing
  * it opens the files and when each was added, and the failed replacement's two
- * files with why (and `다시 받기` when its download stopped).
+ * files with why (and `다시 받기` when its download stopped). An episode with
+ * no subtitle that other creators have a candidate for says so quietly, and its
+ * opened row has `받기` for each.
  */
-export function EpisodeList({ season, seasonCount, missing, order, onOrder, onRetried }: EpisodeListProps) {
+export function EpisodeList({ season, seasonCount, missing, order, onOrder, onRetried, candidates }: EpisodeListProps) {
   const [opened, setOpened] = useState<ReadonlySet<string>>(new Set());
   const toggle = (episode: string) =>
     setOpened((prev) => {
@@ -271,6 +302,8 @@ export function EpisodeList({ season, seasonCount, missing, order, onOrder, onRe
               season={season.number}
               episode={episode}
               missing={missing}
+              picks={candidates ? candidatesOf(candidates.list, episode, candidates.subscribed) : NO_PICKS}
+              source={candidates}
               open={opened.has(episode.episode)}
               onToggle={() => toggle(episode.episode)}
               onRetried={onRetried}

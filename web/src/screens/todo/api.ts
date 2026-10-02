@@ -227,6 +227,27 @@ export function fetchJob(id: string, signal?: AbortSignal): Promise<JobDetail> {
   return api<JobDetail>(`/subtitle-jobs/${encodeURIComponent(id)}`, { signal });
 }
 
+/** The most candidates one job takes, as the server (`MAX_CANDIDATES` in `jobs_api.rs`) does. */
+export const MAX_JOB_CANDIDATES = 200;
+
+/** What creates a job: the candidates are the observation IDs of one creator, in the order the job lists them. */
+export interface NewSubtitleJob {
+  /** Made by the browser for one action; the same ID with the same content is the same job. */
+  id: string;
+  work_id: string;
+  season: number;
+  candidates: number[];
+}
+
+/**
+ * Creates a subtitle job for the candidates. `202` when it was made now and
+ * `200` when the same ID with the same content was made before: both give the
+ * job's ID. The same ID with other content is a `conflict`.
+ */
+export function createSubtitleJob(job: NewSubtitleJob): Promise<{ id: string }> {
+  return api<{ id: string }>("/subtitle-jobs", { method: "POST", body: job });
+}
+
 /** Where a job's detail is. */
 export function jobPath(id: string): string {
   return `/todo/job/${encodeURIComponent(id)}`;

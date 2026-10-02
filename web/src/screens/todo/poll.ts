@@ -115,8 +115,9 @@ export function usePolled<T>(
     };
 
     gone.current = false;
+    // A new value can change the interval (a rule that turns fast once a job starts), so the wait starts over.
     resume.current = () => {
-      if (!pending && timer === undefined) schedule();
+      if (!pending) schedule();
     };
     document.addEventListener("visibilitychange", onVisibility);
     setStatus((prev) => (prev.key === key ? prev : { key, error: null, code: null }));

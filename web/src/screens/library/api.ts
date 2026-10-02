@@ -471,3 +471,68 @@ export function searchAnissia(id: string, season: number, q: string, page: numbe
 export function setAnissiaLink(id: string, season: number, version: number, animeNo: number | null, source?: AnissiaSource): Promise<AnissiaLink> {
   return api<AnissiaLink>(`${anissiaPath(id, season)}/link`, { method: "POST", body: { version, anime_no: animeNo, ...source } });
 }
+
+// --- a season's subtitle candidates (`src/web/seasons_anissia_api.rs`) -----------------
+
+/** How a subtitle job stands for one candidate: the job's item for it. */
+export interface CandidateJob {
+  /** The job whose page `/todo/job/<id>` shows it. */
+  id: string;
+  state: "pending" | "running" | "waiting" | "held" | "failed" | "done";
+  /** What a `waiting` item waits for: a person's check or a source it cannot read yet. */
+  wait: "auth" | "subtitle" | null;
+}
+
+/** A revision candidate: the same creator's subtitle of the episode was received from an earlier observation. */
+export interface CandidateRevision {
+  /** The earlier observation. */
+  of: number;
+  /** The earlier observation had the same post address: the post was fixed, not posted again. */
+  same_post: boolean;
+}
+
+/**
+ * One observation of a creator's Anissia line. A creator can have several
+ * observations of one episode (the post was fixed or posted again); the IDs
+ * grow with the time they were observed.
+ */
+export interface Candidate {
+  id: number;
+  /** The app's ID of the creator's lines of the anime; `creator` is only the display name. */
+  source_id: string;
+  creator: string;
+  post_url: string;
+  /** Anissia's text as written (`12`, `13.5`, `0`): not a number to compute with. */
+  episode: string;
+  /** Anissia's `updDt` as received. */
+  updated: string;
+  updated_at: number | null;
+  updated_parse_failed: boolean;
+  first_seen_at: number;
+  sort_at: number;
+  revision: CandidateRevision | null;
+  job: CandidateJob | null;
+}
+
+export interface CandidateList {
+  season: number;
+  /** `null` for a season with no Anissia link (no candidates). */
+  anime_no: number | null;
+  /** When the 30-minute reading last read Anissia's whole recent list. */
+  read_at: number | null;
+  /** The latest `새로고침` of the anime. */
+  refresh: Command | null;
+  /** Newest first. */
+  candidates: Candidate[];
+}
+
+/** The cache key of one season's candidates (the anime is in it, so a new link never shows the old one's list). */
+export const candidatesKey = (id: string, season: number, animeNo: number | null) =>
+  `library:candidates:${id}:${season}:${animeNo ?? "none"}`;
+
+export function loadCandidates(id: string, season: number, signal?: AbortSignal): Promise<CandidateList> {
+  return api<CandidateList>(`${anissiaPath(id, season)}/candidates`, { signal });
+}
+
+/** The command `새로고침` sends: reads the anime's subtitle lines now. */
+export const ANISSIA_CAPTIONS_KIND = "anissia_captions";

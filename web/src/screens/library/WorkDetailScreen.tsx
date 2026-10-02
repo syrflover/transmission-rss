@@ -21,6 +21,8 @@ import {
   type WorkDetail,
   type WorkSubscription,
 } from "./api";
+import { CandidateSection } from "./detail/CandidateSection";
+import { useCandidates } from "./detail/candidates";
 import { CoverDialog } from "./detail/CoverDialog";
 import { EpisodeList } from "./detail/EpisodeList";
 import { defaultSeason, rowId } from "./detail/model";
@@ -241,6 +243,11 @@ function Loaded({
     forSeason[0];
   const [creatorOpen, setCreatorOpen] = useState(false);
 
+  // The chosen season's subtitle candidates: read only for a season linked to an Anissia anime, and shared by the
+  // `자막 후보` section and the episode rows, so both name the same candidates.
+  const candidates = useCandidates(work.id, season?.number ?? 0, season?.anissia.anime?.anime_no ?? null);
+  const subscribedCreator = subscription?.creator ?? null;
+
   return (
     <section className="mx-auto pb-4 max-[1099px]:max-w-[900px]">
       <div className="pt-4">{backLink}</div>
@@ -368,6 +375,19 @@ function Loaded({
               onChanged={onAnissiaChanged}
             />
           )}
+          {season && (
+            <CandidateSection
+              key={`candidates-${season.number}`}
+              workId={work.id}
+              link={season.anissia}
+              seasonCount={work.seasons.length}
+              onAnissiaChanged={onAnissiaChanged}
+              episodes={season.episodes}
+              order={order}
+              subscribed={subscribedCreator}
+              candidates={candidates}
+            />
+          )}
           {season ? (
             <EpisodeList
               key={`episodes-${season.number}`}
@@ -377,6 +397,11 @@ function Loaded({
               order={order}
               onOrder={setOrder}
               onRetried={onRetried}
+              candidates={
+                candidates.data
+                  ? { list: candidates.data, workId: work.id, subscribed: subscribedCreator, onMade: candidates.taken }
+                  : undefined
+              }
             />
           ) : (
             <EmptyState>아직 회차로 읽은 파일이 없어요.</EmptyState>
