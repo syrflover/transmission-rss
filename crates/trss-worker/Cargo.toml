@@ -30,10 +30,8 @@ trss-library = { path = "../trss-library", features = ["test-support"] }
 trss-collect = { path = "../trss-collect" }
 trss-web = { path = "../trss-web" }
 axum = "0.8.9"
-bytes = "1"
 crc32fast = "1"
 http-body-util = "0.1.5"
-image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 rusqlite = { version = "0.40", features = ["bundled"] }
 rustix = { version = "1", features = ["fs"] }
 serde_json = "1"
