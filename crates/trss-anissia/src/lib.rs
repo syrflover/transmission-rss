@@ -6,6 +6,9 @@
 //!   and `8` (`신작`, not started yet). Times are Asia/Seoul.
 //! - `GET /anime/caption/animeNo/<n>`: the captions (subtitle releases) of an
 //!   anime, with the creator's name.
+//! - `GET /anime/list/<page>?q=<text>`: the full anime list, searched by title
+//!   (not in Anissia's documentation, see [`parse::anime_page`]). `page` counts
+//!   from 0, a page has up to 30 anime, and finished anime are in it.
 //!
 //! [`parse`] reads the answers. [`Anissia`] asks for them:
 //!
@@ -17,8 +20,10 @@
 //!   one is refused before it is parsed. Redirects are not followed.
 //! - **Short cache.** The web asks Anissia when the user looks at a schedule,
 //!   and keeps what it was told for [`CACHE_TTL`] in memory, so tabs flipped
-//!   back and forth cost no request. The cache is per process and never read
-//!   by the worker.
+//!   back and forth cost no request. The pages of a title search are kept the
+//!   same way (the last [`MAX_CACHED_PAGES`] of them), so that saving the anime
+//!   a user picked from a page is checked against that page without asking
+//!   again. The cache is per process and never read by the worker.
 //! - **Configurable for tests.** The base URL comes from [`AnissiaConfig`]
 //!   (`TRSS_ANISSIA_URL`), so tests point it at a local fake.
 //!
@@ -51,7 +56,7 @@ use std::{
 use reqwest::{header, redirect, StatusCode};
 use url::Url;
 
-pub use parse::{Caption, Creator, ScheduleEntry};
+pub use parse::{AnimePage, Caption, Creator, ScheduleEntry};
 
 use pace::RequestPace;
 use trss_core::{system_clock, Clock, Db, DbError, Millis};
@@ -71,6 +76,8 @@ pub const API_TIMEOUT: Duration = Duration::from_secs(20);
 pub const MAX_ANSWER_BYTES: usize = 2 * 1024 * 1024;
 /// How long the web keeps an answer it was given.
 pub const CACHE_TTL: Duration = Duration::from_secs(5 * 60);
+/// How many pages of title searches the client keeps.
+pub const MAX_CACHED_PAGES: usize = 32;
 /// How long to wait when a `429` answer names no time.
 const DEFAULT_RETRY_AFTER: Duration = Duration::from_secs(60);
 /// The longest `Retry-After` honoured as given.
@@ -144,6 +151,20 @@ pub struct Fetched<T> {
     pub cached: bool,
 }
 
+/// A page of the full anime list as the client asked for it.
+#[derive(Debug, Clone)]
+pub struct FetchedPage {
+    pub page: Arc<AnimePage>,
+    /// When Anissia was asked (Unix ms).
+    pub fetched_at: Millis,
+    /// Whether this is the cached answer of an earlier request.
+    pub cached: bool,
+}
+
+/// The pages of title searches kept, by what was asked (the title text and the
+/// page, from 0).
+type Pages = Mutex<HashMap<(String, u32), (Millis, Arc<AnimePage>)>>;
+
 type Slot<V> = Arc<tokio::sync::Mutex<Option<(Millis, Arc<Vec<V>>)>>>;
 
 /// What a process remembers of Anissia's answers, by what was asked.
@@ -176,6 +197,7 @@ pub struct Anissia {
     spacing: Duration,
     schedules: Arc<Slots<u8, ScheduleEntry>>,
     captions: Arc<Slots<i64, Caption>>,
+    pages: Arc<Pages>,
 }
 
 impl Anissia {
@@ -194,6 +216,7 @@ impl Anissia {
             spacing: REQUEST_SPACING,
             schedules: Arc::default(),
             captions: Arc::default(),
+            pages: Arc::default(),
         }
     }
 
@@ -241,16 +264,22 @@ impl Anissia {
         }
     }
 
-    /// Sends one request and reads the list of its answer.
-    async fn get_list(
+    /// Sends one request and returns its answer's body.
+    async fn get_body(
         &self,
         path: &str,
+        query: &[(&str, &str)],
         max_wait: Option<Duration>,
-    ) -> Result<Vec<serde_json::Value>, AnissiaError> {
+    ) -> Result<Vec<u8>, AnissiaError> {
+        let mut url = Url::parse(&self.config.url(path))
+            .map_err(|e| AnissiaError::Unreachable(e.to_string()))?;
+        if !query.is_empty() {
+            url.query_pairs_mut().extend_pairs(query);
+        }
         self.turn(max_wait).await?;
         let response = self
             .http
-            .get(self.config.url(path))
+            .get(url)
             .header(header::ACCEPT, "application/json")
             .send()
             .await
@@ -273,7 +302,16 @@ impl Anissia {
         if !status.is_success() {
             return Err(AnissiaError::Status(status.as_u16()));
         }
-        let body = read_answer(response).await?;
+        read_answer(response).await
+    }
+
+    /// Sends one request and reads the list of its answer.
+    async fn get_list(
+        &self,
+        path: &str,
+        max_wait: Option<Duration>,
+    ) -> Result<Vec<serde_json::Value>, AnissiaError> {
+        let body = self.get_body(path, &[], max_wait).await?;
         parse::list_of(&body).map_err(|e| AnissiaError::Invalid(e.0))
     }
 
@@ -302,6 +340,21 @@ impl Anissia {
             .get_list(&format!("/anime/caption/animeNo/{anime_no}"), max_wait)
             .await?;
         Ok(parse::captions(&list))
+    }
+
+    /// Asks Anissia for page `page` (from 0) of the full anime list matching
+    /// `q`, bypassing the cache. A search text is sent as it is; the caller
+    /// decides what is worth asking.
+    pub async fn fetch_anime_page(
+        &self,
+        q: &str,
+        page: u32,
+        max_wait: Option<Duration>,
+    ) -> Result<AnimePage, AnissiaError> {
+        let body = self
+            .get_body(&format!("/anime/list/{page}"), &[("q", q)], max_wait)
+            .await?;
+        parse::anime_page(&body).map_err(|e| AnissiaError::Invalid(e.0))
     }
 
     /// The cached answer for `key`, or the one `load` gets and caches. Two
@@ -364,6 +417,57 @@ impl Anissia {
             self.fetch_captions(anime_no, max_wait)
         })
         .await
+    }
+
+    /// Page `page` (from 0) of the full anime list matching `q`: the cached
+    /// answer while it is younger than [`CACHE_TTL`], otherwise Anissia's.
+    pub async fn search_anime(
+        &self,
+        q: &str,
+        page: u32,
+        max_wait: Option<Duration>,
+    ) -> Result<FetchedPage, AnissiaError> {
+        let key = (q.to_owned(), page);
+        let now = self.now();
+        if let Some((at, value)) = self.kept_page(&key, now) {
+            return Ok(FetchedPage {
+                page: value,
+                fetched_at: at,
+                cached: true,
+            });
+        }
+        let value = Arc::new(self.fetch_anime_page(q, page, max_wait).await?);
+        let at = self.now();
+        self.keep_page(key, at, value.clone());
+        Ok(FetchedPage {
+            page: value,
+            fetched_at: at,
+            cached: false,
+        })
+    }
+
+    fn kept_page(&self, key: &(String, u32), now: Millis) -> Option<(Millis, Arc<AnimePage>)> {
+        let pages = self.pages.lock().unwrap_or_else(|e| e.into_inner());
+        pages
+            .get(key)
+            .filter(|(at, _)| now - *at < CACHE_TTL.as_millis() as i64)
+            .cloned()
+    }
+
+    fn keep_page(&self, key: (String, u32), at: Millis, value: Arc<AnimePage>) {
+        let mut pages = self.pages.lock().unwrap_or_else(|e| e.into_inner());
+        pages.retain(|_, (kept, _)| at - *kept < CACHE_TTL.as_millis() as i64);
+        while pages.len() >= MAX_CACHED_PAGES {
+            let Some(oldest) = pages
+                .iter()
+                .min_by_key(|(_, (kept, _))| *kept)
+                .map(|(k, _)| k.clone())
+            else {
+                break;
+            };
+            pages.remove(&oldest);
+        }
+        pages.insert(key, (at, value));
     }
 }
 

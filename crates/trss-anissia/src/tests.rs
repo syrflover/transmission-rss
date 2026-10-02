@@ -325,3 +325,176 @@ async fn answers_that_are_not_the_api_s_are_reported_not_trusted() {
         Err(AnissiaError::Unreachable(_))
     ));
 }
+
+fn subjects(page: &AnimePage) -> Vec<&str> {
+    page.entries.iter().map(|e| e.subject.as_str()).collect()
+}
+
+#[tokio::test]
+async fn a_title_search_reads_the_full_list_a_page_at_a_time_and_finished_anime_are_in_it() {
+    let env = Env::new().await;
+    env.fake.set_catalogue(vec![
+        env.fake.entry(1, 30, "21:30", "안녕하세요 마녀", "魔女"),
+        env.fake.finished(1, 29, "안녕, 라라", "さよならララ"),
+        env.fake.finished(0, 19, "안녕, 나의 크라머", ""),
+        env.fake.finished(2, 7, "다른 작품", ""),
+    ]);
+    env.fake.state.lock().unwrap().page_size = 2;
+
+    let first = env.anissia.search_anime("안녕", 0, None).await.unwrap();
+    assert!(!first.cached);
+    assert_eq!(subjects(&first.page), ["안녕하세요 마녀", "안녕, 라라"]);
+    assert!(!first.page.last);
+    // The finished anime keep what Anissia says of them, `END` and the end date.
+    let lara = &first.page.entries[1];
+    assert_eq!(
+        (
+            lara.anime_no,
+            lara.status.as_str(),
+            lara.end_date.as_deref()
+        ),
+        (29, "END", Some("2021-06-27"))
+    );
+
+    let second = env.anissia.search_anime("안녕", 1, None).await.unwrap();
+    assert_eq!(subjects(&second.page), ["안녕, 나의 크라머"]);
+    assert!(second.page.last);
+    // The text is sent as the user wrote it, and the page counts from 0.
+    assert_eq!(env.fake.count("/anime/list/0?q=안녕"), 1);
+    assert_eq!(env.fake.count("/anime/list/1?q=안녕"), 1);
+
+    // No title matches: an empty last page, not an error.
+    let none = env
+        .anissia
+        .search_anime("없는 제목", 0, None)
+        .await
+        .unwrap();
+    assert!(none.page.entries.is_empty() && none.page.last);
+}
+
+#[tokio::test]
+async fn a_searched_page_is_kept_for_five_minutes_and_only_a_few_are() {
+    let env = Env::new().await;
+    env.fake
+        .set_catalogue(vec![env.fake.finished(1, 5, "작품", "")]);
+
+    // A failure is not remembered.
+    env.fake.state.lock().unwrap().failing = 1;
+    assert!(matches!(
+        env.anissia.search_anime("작품", 0, None).await,
+        Err(AnissiaError::Status(500))
+    ));
+    let first = env.anissia.search_anime("작품", 0, None).await.unwrap();
+    env.advance(CACHE_TTL.as_millis() as i64 - 1);
+    let again = env.anissia.search_anime("작품", 0, None).await.unwrap();
+    assert!(again.cached);
+    assert_eq!(again.fetched_at, first.fetched_at);
+    assert_eq!(env.fake.count("/anime/list/0?q=작품"), 2);
+    env.advance(1);
+    assert!(
+        !env.anissia
+            .search_anime("작품", 0, None)
+            .await
+            .unwrap()
+            .cached
+    );
+    assert_eq!(env.fake.count("/anime/list/0?q=작품"), 3);
+
+    // Another text or page is another entry, and the client keeps the latest few.
+    for n in 0..(MAX_CACHED_PAGES + 8) {
+        env.advance(1);
+        env.anissia
+            .search_anime(&format!("q{n}"), 0, None)
+            .await
+            .unwrap();
+    }
+    assert!(env.anissia.pages.lock().unwrap().len() <= MAX_CACHED_PAGES);
+}
+
+#[tokio::test]
+async fn a_search_waits_after_a_429_and_asks_again_only_when_the_wait_is_over() {
+    let env = Env::new().await;
+    env.fake
+        .set_catalogue(vec![env.fake.finished(1, 5, "작품", "")]);
+    {
+        let mut state = env.fake.state.lock().unwrap();
+        state.rate_limited = 1;
+        state.retry_after = Some(30);
+    }
+    match env.anissia.search_anime("작품", 0, None).await {
+        Err(AnissiaError::Busy { retry_after }) => {
+            assert_eq!(retry_after, Duration::from_secs(30))
+        }
+        other => panic!("expected Busy, got {other:?}"),
+    }
+    // The block holds the next request back without sending it.
+    match env
+        .anissia
+        .search_anime("작품", 0, Some(Duration::from_secs(1)))
+        .await
+    {
+        Err(AnissiaError::Busy { retry_after }) => {
+            assert_eq!(retry_after, Duration::from_secs(30))
+        }
+        other => panic!("expected Busy, got {other:?}"),
+    }
+    assert_eq!(env.fake.requests().len(), 1);
+
+    env.advance(30_000);
+    let page = env
+        .anissia
+        .search_anime("작품", 0, Some(Duration::from_secs(1)))
+        .await
+        .unwrap();
+    assert_eq!(subjects(&page.page), ["작품"]);
+    assert_eq!(env.fake.requests().len(), 2);
+}
+
+#[tokio::test]
+async fn a_search_answer_that_is_not_the_lists_is_refused() {
+    let env = Env::new().await;
+    for (raw, expect) in [
+        ("<html>maintenance</html>", "unexpected shape"),
+        (r#"{"code":"fail","message":"nope"}"#, "not ok"),
+        (r#"{"code":"ok"}"#, "not a page"),
+        // A plain list is a schedule's shape, not a page.
+        (r#"{"code":"ok","data":[]}"#, "not a page"),
+        (r#"{"code":"ok","data":{"last":true}}"#, "no content"),
+        (
+            r#"{"code":"ok","data":{"content":{},"last":true}}"#,
+            "no content",
+        ),
+        (r#"{"code":"ok","data":{"content":[]}}"#, "last"),
+        (
+            r#"{"code":"ok","data":{"content":[],"last":"yes"}}"#,
+            "last",
+        ),
+        (
+            r#"{"code":"ok","data":{"content":[{"nothing":1}],"last":true}}"#,
+            "usable",
+        ),
+    ] {
+        env.fake.state.lock().unwrap().raw = Some(raw.to_owned());
+        match env.anissia.search_anime("작품", 0, None).await {
+            Err(AnissiaError::Invalid(why)) => assert!(why.contains(expect), "{raw}: {why}"),
+            other => panic!("{raw}: expected Invalid, got {other:?}"),
+        }
+    }
+    // Nothing unreadable was kept.
+    assert!(env.anissia.pages.lock().unwrap().is_empty());
+
+    // A server error, and an answer over the cap, are refused too.
+    env.fake.state.lock().unwrap().raw = None;
+    env.fake.state.lock().unwrap().failing = 1;
+    assert!(matches!(
+        env.anissia.search_anime("작품", 0, None).await,
+        Err(AnissiaError::Status(500))
+    ));
+    env.fake.state.lock().unwrap().padding = MAX_ANSWER_BYTES + 1;
+    env.fake
+        .set_catalogue(vec![env.fake.finished(1, 5, "작품", "")]);
+    match env.anissia.search_anime("작품", 0, None).await {
+        Err(AnissiaError::Invalid(why)) => assert!(why.contains("larger"), "{why}"),
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+}

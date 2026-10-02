@@ -8,6 +8,9 @@
 //! `website` and `captionCount`; a caption has `episode`, `updDt`, `website`
 //! and `name`. Unknown fields are ignored, and `data` may also be an object
 //! with the list in `content` (the shape of the paged `recent` endpoint).
+//! The full anime list (`/anime/list/<page>?q=`, observed 2026-10-02) is that
+//! paged shape with the page's `last` flag, read by [`anime_page`]; its entries
+//! are schedule entries whose `status` may be `END`.
 //!
 //! The values are tolerated, not trusted: an entry without a number or a
 //! title is left out, a date that is not one is unknown, and a website that is
@@ -17,7 +20,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use url::Url;
 
-use crate::{Anime, WEEK_UPCOMING};
+use crate::{Anime, WEEK_OTHER, WEEK_UPCOMING};
 use trss_core::Millis;
 
 /// An entry of a week's schedule, as the schedule screen shows it.
@@ -123,8 +126,8 @@ struct Envelope {
     data: Option<Value>,
 }
 
-/// The list in an answer's `data`, if the answer says it is `ok`.
-pub fn list_of(body: &[u8]) -> Result<Vec<Value>, Unreadable> {
+/// The `data` of an answer that says it is `ok`.
+fn data_of(body: &[u8]) -> Result<Option<Value>, Unreadable> {
     let envelope: Envelope =
         serde_json::from_slice(body).map_err(|e| Unreadable(format!("unexpected shape: {e}")))?;
     if envelope.code.as_deref() != Some("ok") {
@@ -137,7 +140,12 @@ pub fn list_of(body: &[u8]) -> Result<Vec<Value>, Unreadable> {
             envelope.code.unwrap_or_default()
         )));
     }
-    match envelope.data {
+    Ok(envelope.data)
+}
+
+/// The list in an answer's `data`, if the answer says it is `ok`.
+pub fn list_of(body: &[u8]) -> Result<Vec<Value>, Unreadable> {
+    match data_of(body)? {
         Some(Value::Array(list)) => Ok(list),
         Some(Value::Object(mut object)) => match object.remove("content") {
             Some(Value::Array(list)) => Ok(list),
@@ -274,6 +282,42 @@ pub fn schedule(list: &[Value], asked: u8) -> Result<Vec<ScheduleEntry>, Unreada
     Ok(out)
 }
 
+/// One page of Anissia's full anime list (`/anime/list/<page>?q=`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AnimePage {
+    /// The usable entries of the page. A finished anime is listed with the
+    /// status `END`, and a week that is its last one on the schedule.
+    pub entries: Vec<ScheduleEntry>,
+    /// Whether this is the last page.
+    pub last: bool,
+}
+
+/// The page an answer of the full anime list holds.
+///
+/// That endpoint is not in Anissia's documentation. What is relied on was
+/// observed on 2026-10-02: `data` is an object with the page's entries in
+/// `content` (30 at most, the shape of a schedule entry) and the page's place
+/// in `last` (and `number`, `totalPages`, ...). An answer without a `content`
+/// list or a boolean `last`, or one whose entries are all unusable, is not
+/// this page and is refused rather than guessed at.
+pub fn anime_page(body: &[u8]) -> Result<AnimePage, Unreadable> {
+    let Some(Value::Object(mut data)) = data_of(body)? else {
+        return Err(Unreadable("the answer's data is not a page".to_owned()));
+    };
+    let Some(Value::Array(content)) = data.remove("content") else {
+        return Err(Unreadable("the page has no content list".to_owned()));
+    };
+    let Some(Value::Bool(last)) = data.remove("last") else {
+        return Err(Unreadable(
+            "the page does not say if it is the last".to_owned(),
+        ));
+    };
+    Ok(AnimePage {
+        entries: schedule(&content, WEEK_OTHER)?,
+        last,
+    })
+}
+
 fn updated_at(value: Option<&Value>) -> Option<String> {
     let text = text(value)?;
     let bytes = text.as_bytes();
@@ -332,6 +376,27 @@ mod tests {
         ] {
             assert_eq!(normalize_date(bad), None, "{bad:?}");
         }
+    }
+
+    #[test]
+    fn a_page_of_the_full_list_is_read_as_observed_and_a_finished_anime_keeps_its_status() {
+        // Shortened from an answer of `/anime/list/0?q=안녕` of 2026-10-02.
+        let body = r#"{"code":"ok","data":{"content":[
+            {"animeNo":2969,"status":"END","week":"1","time":"00:30","subject":"안녕, 라라",
+             "originalSubject":"さよならララ","captionCount":1,"genres":"로맨스,모험",
+             "startDate":"2026-07-06","endDate":"2026-09-21","website":"https://x.test/l",
+             "x":"","note":"","agendaNo":0,"captions":[]}],
+            "empty":false,"first":true,"last":true,"number":0,"size":30,"totalPages":1}}"#;
+        let page = anime_page(body.as_bytes()).unwrap();
+        assert!(page.last);
+        assert_eq!(page.entries.len(), 1);
+        let lara = &page.entries[0];
+        assert_eq!(
+            (lara.anime_no, lara.status.as_str(), lara.week),
+            (2969, "END", 1)
+        );
+        assert_eq!(lara.end_date.as_deref(), Some("2026-09-21"));
+        assert_eq!(lara.original_subject.as_deref(), Some("さよならララ"));
     }
 
     #[test]

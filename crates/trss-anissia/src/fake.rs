@@ -1,4 +1,4 @@
-//! A stand-in for Anissia in tests: a local HTTP server answering the two
+//! A stand-in for Anissia in tests: a local HTTP server answering the three
 //! requests the client sends, with knobs for `429`s, failures, padding and
 //! answers that are not the API's. No test reaches the real Anissia.
 
@@ -10,7 +10,7 @@ use std::{
 
 use axum::{
     body::Bytes,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{header, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
@@ -26,6 +26,10 @@ pub struct FakeState {
     pub schedules: HashMap<u8, Vec<Value>>,
     /// The captions of each anime.
     pub captions: HashMap<i64, Vec<Value>>,
+    /// Every anime of the full list, newest first, as Anissia lists them.
+    pub catalogue: Vec<Value>,
+    /// How many anime a page of the full list has (Anissia's is 30).
+    pub page_size: usize,
     /// The next this many requests answer `429` with this `Retry-After`.
     pub rate_limited: u32,
     /// `None` sends no `Retry-After`.
@@ -55,12 +59,16 @@ impl Fake {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let origin = format!("http://{}", listener.local_addr().unwrap());
         let fake = Fake {
-            state: Arc::new(Mutex::new(FakeState::default())),
+            state: Arc::new(Mutex::new(FakeState {
+                page_size: 30,
+                ..FakeState::default()
+            })),
             origin,
         };
         let app = Router::new()
             .route("/anime/schedule/{week}", get(schedule))
             .route("/anime/caption/animeNo/{no}", get(captions))
+            .route("/anime/list/{page}", get(list))
             .with_state(fake.clone());
         tokio::spawn(async move {
             axum::serve(listener, app).await.unwrap();
@@ -87,6 +95,23 @@ impl Fake {
     /// Makes `entries` the schedule of `week`.
     pub fn set_week(&self, week: u8, entries: Vec<Value>) {
         self.state.lock().unwrap().schedules.insert(week, entries);
+    }
+
+    /// A finished anime as the full list gives it (`status` is `END`, with an
+    /// end date), which no week's schedule lists any more.
+    pub fn finished(&self, week: u8, no: i64, subject: &str, original: &str) -> Value {
+        json!({
+            "animeNo": no, "status": "END", "week": week.to_string(), "time": "23:30",
+            "subject": subject, "originalSubject": original, "captionCount": 1,
+            "genres": "판타지", "startDate": "2021-04-04", "endDate": "2021-06-27",
+            "website": "https://example.test/finished", "x": "", "note": "", "agendaNo": 0,
+            "captions": [],
+        })
+    }
+
+    /// Makes `entries` the full list, which searches filter and page.
+    pub fn set_catalogue(&self, entries: Vec<Value>) {
+        self.state.lock().unwrap().catalogue = entries;
     }
 
     /// Makes `captions` the captions of anime `no`.
@@ -197,4 +222,52 @@ async fn captions(State(fake): State<Fake>, Path(no): Path<String>) -> Response 
             .unwrap_or_default(),
     );
     answer(&fake, format!("/anime/caption/animeNo/{no}"), Some(data))
+}
+
+#[derive(serde::Deserialize)]
+struct ListQuery {
+    q: Option<String>,
+}
+
+/// `GET /anime/list/<page>?q=`: the anime of the full list whose title or
+/// original title contains every word of `q`, thirty (`page_size`) to a page,
+/// in the paged shape Anissia answers with.
+async fn list(
+    State(fake): State<Fake>,
+    Path(page): Path<String>,
+    Query(query): Query<ListQuery>,
+) -> Response {
+    let q = query.q.unwrap_or_default();
+    let data = page.parse::<usize>().ok().map(|index| {
+        let state = fake.state.lock().unwrap();
+        let words: Vec<String> = q.split_whitespace().map(str::to_lowercase).collect();
+        let matching: Vec<&Value> = state
+            .catalogue
+            .iter()
+            .filter(|entry| {
+                let text = format!(
+                    "{} {}",
+                    entry["subject"].as_str().unwrap_or(""),
+                    entry["originalSubject"].as_str().unwrap_or("")
+                )
+                .to_lowercase();
+                words.iter().all(|w| text.contains(w))
+            })
+            .collect();
+        let size = state.page_size.max(1);
+        let total_pages = matching.len().div_ceil(size);
+        let content: Vec<Value> = matching
+            .iter()
+            .skip(index * size)
+            .take(size)
+            .map(|v| (*v).clone())
+            .collect();
+        json!({
+            "content": content, "empty": content.is_empty(), "first": index == 0,
+            "last": index + 1 >= total_pages, "number": index, "size": size,
+            "numberOfElements": content.len(), "totalElements": matching.len(),
+            "totalPages": total_pages,
+        })
+    });
+    answer(&fake, format!("/anime/list/{page}?q={q}"), data)
 }
