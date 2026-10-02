@@ -527,9 +527,11 @@ pub struct Rename {
     /// The name the torrent's file had before an earlier start of the command
     /// renamed it ([`Command::original_name`]), as the command was claimed.
     pub original_name: Option<String>,
-    /// Whether a worker started the command before: a torrent it put in then
-    /// may have been renamed since, by that start or by a cycle.
-    pub rerun: bool,
+    /// Whether the torrent was put in by an earlier start of the command
+    /// (Transmission had it already, under the command's label): it may have
+    /// been renamed since, by that start or by a cycle. A torrent this start
+    /// put in has the name it came with.
+    pub added_before: bool,
     /// The rule's episode conversion.
     pub episode: isize,
     pub redactor: Redactor,
@@ -1033,7 +1035,7 @@ pub async fn execute_with(
                 save_path,
                 command_id: command.id.clone(),
                 original_name: command.original_name.clone(),
-                rerun: command.attempts > 1,
+                added_before: torrent.kind != AddKind::Added,
                 episode,
                 redactor,
             });
@@ -1216,9 +1218,9 @@ pub const NAME_NOT_CHANGED: &str = "이름을 바꾸지 못해서 원래 이름 
 /// saved in, with the rule's episode conversion, derived from the name the
 /// file had before the command first renamed it, which the command records
 /// ([`Command::original_name`]): run again over a file it named already, it
-/// finds the same name and leaves it. A rerun with no name recorded leaves a
-/// name in the `trname` form. A torrent with several files is left as it is
-/// at once, as the rule cycle leaves it.
+/// finds the same name and leaves it. A torrent an earlier start put in with
+/// no name recorded keeps a name in the `trname` form. A torrent with several
+/// files is left as it is at once, as the rule cycle leaves it.
 ///
 /// Unlike the renaming after a rule's add, a torrent whose name cannot be
 /// derived is left alone: that path removes the torrent and its data, which is
@@ -1267,9 +1269,10 @@ pub async fn rename(
         let original = match &original {
             Some(name) => name.clone(),
             None => {
-                // An earlier start put the torrent in and recorded no name: a
-                // name in the `trname` form may be one it or a cycle gave.
-                if rename.rerun
+                // An earlier start put the torrent in and recorded no name (the
+                // worker died between the two): a name in the `trname` form
+                // may be one it or a cycle gave.
+                if rename.added_before
                     && has_trname_form(
                         &old_name,
                         &rename.save_path,

@@ -3044,8 +3044,12 @@ fn show() -> Release {
     }
 }
 
+/// With an episode conversion of 12: release 5 is named episode 16.
 fn show_rules() -> Vec<RuleInput> {
-    vec![rule("Show", "Show/Season 01")]
+    vec![RuleInput {
+        episode: 12,
+        ..rule("Show", "Show/Season 01")
+    }]
 }
 
 #[tokio::test]
@@ -3057,7 +3061,7 @@ async fn a_retry_names_the_file_as_the_cycle_does_when_the_feed_title_is_not_the
 
     let by_cycle = &cycled.h.tr.torrents()[0];
     let by_retry = &retried.h.tr.torrents()[0];
-    assert_eq!(by_cycle.name, "Show S01E05.mkv");
+    assert_eq!(by_cycle.name, "Show S01E16.mkv");
     assert_eq!(by_retry.name, by_cycle.name);
     // The command recorded the name the file came with.
     let store = CommandStore::new(retried.h.db.clone());
@@ -3096,14 +3100,15 @@ async fn rerun_over(name: &str) -> Scene {
 
 #[tokio::test]
 async fn a_rerun_after_a_cycle_renamed_the_torrent_leaves_its_name() {
-    // A cycle that met the torrent renamed it meanwhile.
-    let s = rerun_over("Show S01E05.mkv").await;
+    // A cycle that met the torrent renamed it meanwhile. Read as a release,
+    // that name would be converted again, to episode 27.
+    let s = rerun_over("Show S01E16.mkv").await;
 
     assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
 
     assert_eq!(s.command(CMD).await.1["outcome"]["result"], "received");
     assert!(s.h.tr.calls_of("torrent-rename-path").is_empty());
-    assert_eq!(s.h.tr.torrent(&hash(5)).name, "Show S01E05.mkv");
+    assert_eq!(s.h.tr.torrent(&hash(5)).name, "Show S01E16.mkv");
 }
 
 #[tokio::test]
@@ -3113,7 +3118,33 @@ async fn a_rerun_renames_from_the_recorded_name_a_file_the_earlier_start_did_not
     assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
 
     assert_eq!(s.command(CMD).await.1["outcome"]["result"], "received");
-    assert_eq!(s.h.tr.torrent(&hash(5)).name, "Show S01E05.mkv");
+    assert_eq!(s.h.tr.torrent(&hash(5)).name, "Show S01E16.mkv");
+}
+
+#[tokio::test]
+async fn a_start_after_one_that_added_nothing_converts_a_release_in_another_seasons_form() {
+    let title = "Sono Bisque Doll S01E25.mkv";
+    let sono = release("guid-sono-25", 25, title, "");
+    let rules = vec![RuleInput {
+        episode: -24,
+        ..rule("Sono Bisque Doll", "Sono Bisque Doll/Season 02")
+    }];
+    let s = Scene::failing(&[&sono], rules).await;
+    let item = s.item("Sono Bisque Doll S01E25").await;
+    s.post(CMD, &item).await;
+    // An earlier start ended before it added anything, and recorded no name.
+    CommandStore::new(s.h.db.clone())
+        .claim_next(s.h.now())
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
+
+    assert_eq!(s.command(CMD).await.1["outcome"]["result"], "received");
+    let torrents = s.h.tr.torrents();
+    assert_eq!(torrents.len(), 1);
+    assert_eq!(torrents[0].name, "Sono Bisque Doll S02E01.mkv");
 }
 
 #[tokio::test]
