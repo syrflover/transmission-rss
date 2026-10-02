@@ -11,8 +11,10 @@ use trss_core::{
     Millis,
 };
 
-use super::calendar::{weekday_of_anissia, PartialDate};
-use crate::store::anissia::{Anime, WEEK_UPCOMING};
+use crate::{
+    calendar::{weekday_of_anissia, PartialDate},
+    Anime, WEEK_UPCOMING,
+};
 
 /// The most an AniList air time may differ from the schedule's for the two to
 /// be the same broadcast: a broadcast a day late is still that week's episode,
@@ -98,9 +100,9 @@ pub fn run_over(anime: &Anime, unlisted: bool, today: i64) -> Option<Over> {
 ///
 /// - If the season's AniList entries know when each episode airs
 ///   (`air_times`: the season's episode number to its Unix ms, see
-///   [`crate::seasons::combine::air_times`]), the episode that airs at the slot
-///   (within [`SAME_BROADCAST_MS`], the nearest) is it. This follows breaks and
-///   a second cour that goes on counting.
+///   `seasons::combine::air_times` in `trss-library`), the episode that airs
+///   at the slot (within [`SAME_BROADCAST_MS`], the nearest) is it. This
+///   follows breaks and a second cour that goes on counting.
 /// - Otherwise it is counted from Anissia's start date: the first airing is the
 ///   first day on the anime's weekday on or after it, and each week after it is
 ///   one episode more. A break week or a double episode makes this count wrong
@@ -130,7 +132,7 @@ pub fn episode_on(anime: &Anime, slot: &Slot, air_times: &BTreeMap<u32, i64>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::anissia::WEEK_OTHER;
+    use crate::WEEK_OTHER;
     use trss_core::calendar::days_from_civil;
 
     fn anime(week: u8, time: Option<&str>, start: Option<&str>, end: Option<&str>) -> Anime {

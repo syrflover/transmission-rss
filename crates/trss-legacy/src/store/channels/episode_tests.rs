@@ -2,7 +2,7 @@
 //! may set it, what a save or an import does to its grounds, and `적용`.
 
 use super::*;
-use crate::store::anissia::Anime;
+use trss_anissia::Anime;
 
 fn anime(no: i64) -> Anime {
     Anime {

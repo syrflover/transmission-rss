@@ -22,7 +22,7 @@
 //!
 //! A card is one subscription that airs in the week. Which subscriptions have
 //! one, on which day and at what time, is read from the stored Anissia
-//! snapshot in Asia/Seoul ([`trss_legacy::schedule::slot`]); the web neither asks
+//! snapshot in Asia/Seoul ([`trss_anissia::slot`]); the web neither asks
 //! Anissia nor Transmission. A subscription has no card when
 //!
 //! - its rule is archived (a subscription that is no longer followed; the spec
@@ -37,7 +37,7 @@
 //!   back empty although the anime was last listed in it.
 //!
 //! The card's `episode` is the season's episode that airs in the slot
-//! ([`trss_legacy::schedule::slot::episode_on`]); it is `null` when that cannot be
+//! ([`trss_anissia::slot::episode_on`]); it is `null` when that cannot be
 //! told, and for a `결방` card. The status lines come from
 //! [`trss_legacy::schedule::state`]:
 //!
@@ -76,18 +76,18 @@ use super::{
     subscriptions_api::{quarter_of, QuarterView},
     ApiError, AppState,
 };
+use trss_anissia::{
+    slot::{episode_on, slot_in_week, Slot},
+    Anime,
+};
 use trss_core::{
     calendar::{date_text, day_of, week_start, weekday},
     Millis,
 };
 use trss_legacy::{
-    schedule::{
-        slot::{episode_on, slot_in_week, Slot},
-        state::{self, Facts, SubtitleState, VideoState},
-    },
+    schedule::state::{self, Facts, SubtitleState, VideoState},
     seasons::combine::air_times,
     store::{
-        anissia::Anime,
         channels::{Rule, RuleState, SeasonRef, SubtitleMode},
         library::Held,
     },
@@ -367,12 +367,11 @@ pub async fn week_at(state: &AppState, now: Millis) -> Result<WeekView, ApiError
         .filter_map(|r| r.subscription.as_ref().map(|s| s.anissia_anime_no))
         .collect();
     let animes = state
-        .anissia
-        .store
+        .anissia_store
         .animes(nos.clone())
         .await
         .map_err(internal)?;
-    let unlisted = state.anissia.store.unlisted(nos).await.map_err(internal)?;
+    let unlisted = state.anissia_store.unlisted(nos).await.map_err(internal)?;
 
     let (mut coming, mut title_waiting) = (0, 0);
     let mut airings = Vec::new();

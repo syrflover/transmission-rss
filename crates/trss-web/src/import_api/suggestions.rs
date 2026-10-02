@@ -34,18 +34,15 @@ use std::{collections::HashMap, time::Duration};
 use serde::{Deserialize, Serialize};
 
 use super::super::AppState;
+use trss_anissia::{Anime, AnissiaError, LAST_WEEK};
 use trss_legacy::{
-    anissia::{AnissiaError, LAST_WEEK},
     import::{
         comments::{Airs, Reading},
         suggest::{suggest, Suggestion},
     },
-    store::{
-        anissia::Anime,
-        channels::{
-            import_subscriptions::{ImportSubscription, SubscriptionOutcome},
-            ChannelWithRules, NewSubscription, RuleInput, SubtitleMode,
-        },
+    store::channels::{
+        import_subscriptions::{ImportSubscription, SubscriptionOutcome},
+        ChannelWithRules, NewSubscription, RuleInput, SubtitleMode,
     },
 };
 

@@ -14,8 +14,8 @@ use axum::http::StatusCode;
 use common::*;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
+use trss_anissia::Anime;
 use trss_legacy::store::{
-    anissia::Anime,
     channels::{ChannelInput, NewSubscription, Rule, RuleInput, SubtitleMode},
     library::LibraryStore,
     seasons::{Entry, FuzzyDate, SeasonStore},

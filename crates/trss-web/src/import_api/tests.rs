@@ -376,7 +376,7 @@ async fn replace_shows_the_rules_that_go_and_reports_them_separately() {
 
 #[tokio::test]
 async fn replacing_keeps_the_title_waiting_subscriptions_of_the_channel() {
-    use trss_legacy::store::anissia::Anime;
+    use trss_anissia::Anime;
     use trss_legacy::store::channels::{NewSubscription, SubtitleMode};
 
     let t = app().await;
@@ -464,7 +464,7 @@ async fn replacing_keeps_the_title_waiting_subscriptions_of_the_channel() {
 
 #[tokio::test]
 async fn replacing_keeps_the_folder_of_a_subscription_when_the_files_folder_is_no_work_folder() {
-    use trss_legacy::store::anissia::Anime;
+    use trss_anissia::Anime;
     use trss_legacy::store::channels::{NewSubscription, SubtitleMode};
 
     let t = app().await;

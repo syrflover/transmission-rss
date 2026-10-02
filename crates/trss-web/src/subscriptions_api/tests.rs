@@ -15,12 +15,10 @@ use tower::ServiceExt;
 use trss_core::{Clock, Db};
 
 use super::*;
-use trss_legacy::{
-    anissia::{fake::Fake, Anissia},
-    store::{
-        channels::{Channel, ChannelInput},
-        history::{HistoryResult, Observation},
-    },
+use trss_anissia::{fake::Fake, Anissia};
+use trss_legacy::store::{
+    channels::{Channel, ChannelInput},
+    history::{HistoryResult, Observation},
 };
 
 /// 2026-10-01 12:00 in Seoul: 4분기.

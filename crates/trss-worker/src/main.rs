@@ -1,11 +1,13 @@
 use std::{path::PathBuf, process::ExitCode};
 
 use tokio_util::sync::CancellationToken;
+use trss_anissia::{Anissia, AnissiaConfig};
 use trss_core::{db::DB_PATH_ENV, lock_path_for, Db};
 use trss_legacy::{
-    anissia::{self, Anissia, AnissiaConfig},
+    anissia::{self, AnissiaQueue},
     artwork::{self, AnilistConfig, AppData, Artwork},
     seasons::{self, Seasons},
+    store::anissia::AnissiaStore,
 };
 use trss_worker::{Worker, WorkerEnv};
 
@@ -36,7 +38,10 @@ async fn run() -> Result<(), String> {
 
     let artwork = Artwork::new(db.clone(), Some(AppData::for_database(&db_path)), anilist);
     let season_info = Seasons::over(db.clone(), &artwork);
-    let anissia = Anissia::with_defaults(db.clone(), anissia_config);
+    let anissia = AnissiaQueue::new(
+        Anissia::with_defaults(db.clone(), anissia_config),
+        AnissiaStore::new(db.clone()),
+    );
     let worker = Worker::new(db, &env, lock_path_for(&db_path)).map_err(|e| e.to_string())?;
 
     let cancel = CancellationToken::new();
@@ -62,7 +67,7 @@ async fn run() -> Result<(), String> {
     // Anissia's own pace.
     let anissia_queue = tokio::spawn({
         let cancel = cancel.clone();
-        let lock = anissia::queue::lock_path_for(&db_path);
+        let lock = anissia::lock_path_for(&db_path);
         async move { anissia.run_queue(lock, cancel).await }
     });
 

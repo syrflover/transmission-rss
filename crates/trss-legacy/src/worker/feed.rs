@@ -13,7 +13,7 @@ pub const FETCH_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// The most bytes of a feed body that are read. Real feeds are far smaller (a
 /// tracker's RSS of 75 to 100 items is 50 to 300 KB), so 2 MiB leaves a wide
-/// margin, as [`crate::anissia::MAX_ANSWER_BYTES`] does for its answers. The
+/// margin, as [`trss_anissia::MAX_ANSWER_BYTES`] does for its answers. The
 /// worker container has 128M, up to `FETCH_CONCURRENCY` feeds are held at once
 /// and each is parsed into a structure several times its size, so a bigger cap
 /// would let a few oversized or endless bodies exhaust it. The cap counts the

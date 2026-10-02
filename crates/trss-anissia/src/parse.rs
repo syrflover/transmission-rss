@@ -17,7 +17,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use url::Url;
 
-use crate::store::anissia::{Anime, WEEK_UPCOMING};
+use crate::{Anime, WEEK_UPCOMING};
 use trss_core::Millis;
 
 /// An entry of a week's schedule, as the schedule screen shows it.

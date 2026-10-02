@@ -17,11 +17,10 @@ use tower::ServiceExt;
 use trss_core::{Clock, Db};
 
 use crate::{api, AppState};
+use trss_anissia::{Anime, Anissia};
 use trss_legacy::{
-    anissia::Anissia,
     discovery::{EpisodeFile, FileKind, Scan, ScannedWork, WorkRead},
     store::{
-        anissia::Anime,
         channels::{
             Channel, ChannelInput, NewSubscription, Rule, RuleInput, RuleState, SubtitleMode,
         },
@@ -496,7 +495,7 @@ async fn the_stand_in_an_import_keeps_is_not_anissias_off() {
         start_date: Some("2026-07-02".into()),
         ..stand_in
     };
-    app.state.anissia.store.put_anime(weekday).await.unwrap();
+    app.state.anissia_store.put_anime(weekday).await.unwrap();
     let body = app.week().await;
     let card = &body["week"]["days"][3]["cards"][0];
     assert_eq!(card["video"], "waiting");
@@ -569,8 +568,7 @@ async fn an_anime_without_an_end_date_leaves_once_anissia_is_found_not_to_list_i
 
     // The refresh asked every week and the anime was in none of them.
     app.state
-        .anissia
-        .store
+        .anissia_store
         .mark_unlisted(vec![2], NOW, NOW + 24 * 60 * 60 * 1000, NOW)
         .await
         .unwrap();
@@ -578,8 +576,7 @@ async fn an_anime_without_an_end_date_leaves_once_anissia_is_found_not_to_list_i
 
     // Anissia lists it again.
     app.state
-        .anissia
-        .store
+        .anissia_store
         .put_anime(anime(2, "빠짐", 4, Some("10:00"), Some("2026-07-02")))
         .await
         .unwrap();
@@ -587,8 +584,7 @@ async fn an_anime_without_an_end_date_leaves_once_anissia_is_found_not_to_list_i
 
     // With an end date still ahead, the end date decides, not the listing.
     app.state
-        .anissia
-        .store
+        .anissia_store
         .put_anime(Anime {
             end_date: Some("2026-12-31".into()),
             ..anime(2, "빠짐", 4, Some("10:00"), Some("2026-07-02"))
@@ -596,8 +592,7 @@ async fn an_anime_without_an_end_date_leaves_once_anissia_is_found_not_to_list_i
         .await
         .unwrap();
     app.state
-        .anissia
-        .store
+        .anissia_store
         .mark_unlisted(vec![2], NOW, NOW + 24 * 60 * 60 * 1000, NOW)
         .await
         .unwrap();

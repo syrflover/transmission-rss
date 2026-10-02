@@ -51,12 +51,12 @@ impl ImportSubscription {
     /// `airs` is the weekday (0 for Sunday to 6 for Saturday) and `HH:MM` time
     /// the legacy comment gave: the anime sits on that weekday until the
     /// refresh. Without it the anime sits in `기타` with no air time.
-    pub fn stand_in(anime_no: i64, subject: &str, airs: Option<(u8, &str)>) -> anissia::Anime {
+    pub fn stand_in(anime_no: i64, subject: &str, airs: Option<(u8, &str)>) -> trss_anissia::Anime {
         let (week, air_time) = match airs {
             Some((week, time)) if week <= 6 => (week, Some(time.to_owned())),
-            _ => (anissia::WEEK_OTHER, None),
+            _ => (trss_anissia::WEEK_OTHER, None),
         };
-        anissia::Anime {
+        trss_anissia::Anime {
             anime_no,
             subject: subject.to_owned(),
             original_subject: None,

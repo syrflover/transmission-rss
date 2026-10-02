@@ -1,6 +1,5 @@
-//! The Anissia client and its daily refresh against a fake server
-//! ([`super::fake`]): the pace, the cap, the cache, and the answers that are
-//! not the API's. Nothing here reaches the real Anissia.
+//! The daily refresh of the snapshots against a fake Anissia
+//! ([`trss_anissia::fake`]). Nothing here reaches the real Anissia.
 
 use std::{
     sync::{
@@ -10,10 +9,12 @@ use std::{
     time::Duration,
 };
 
-use super::{fake::Fake, queue::Ran, *};
-use crate::store::{
-    anissia::{Due, REFRESH_AFTER_MS},
-    channels::{ChannelInput, ChannelStore, NewSubscription, RuleInput, SubtitleMode},
+use trss_anissia::{fake::Fake, parse, Anissia};
+use trss_core::{Clock, Db, Millis};
+
+use super::*;
+use crate::store::channels::{
+    ChannelInput, ChannelStore, NewSubscription, RuleInput, SubtitleMode,
 };
 
 const DAY: i64 = REFRESH_AFTER_MS;
@@ -21,12 +22,13 @@ const DAY: i64 = REFRESH_AFTER_MS;
 struct Env {
     db: Db,
     fake: Fake,
-    anissia: Anissia,
+    queue: AnissiaQueue,
+    store: AnissiaStore,
     now: Arc<AtomicI64>,
 }
 
 impl Env {
-    /// A client with no spacing between requests and a clock the test sets.
+    /// A queue with no spacing between requests and a clock the test sets.
     async fn new() -> Env {
         let db = Db::open_blocking(":memory:").unwrap();
         let fake = Fake::start().await;
@@ -36,10 +38,12 @@ impl Env {
             Arc::new(move || now.load(Ordering::SeqCst))
         };
         let anissia = Anissia::new(db.clone(), fake.config(), clock).with_spacing(Duration::ZERO);
+        let store = AnissiaStore::new(db.clone());
         Env {
             db,
             fake,
-            anissia,
+            queue: AnissiaQueue::new(anissia, store.clone()),
+            store,
             now,
         }
     }
@@ -95,287 +99,6 @@ impl Env {
     }
 }
 
-#[test]
-fn the_base_url_comes_from_the_environment_and_a_bad_one_is_refused() {
-    let none = AnissiaConfig::from_lookup(|_| None).unwrap();
-    assert_eq!(none.base_url.as_str(), "https://api.anissia.net/");
-    let blank = AnissiaConfig::from_lookup(|_| Some("  ".into())).unwrap();
-    assert_eq!(blank, none);
-    let local =
-        AnissiaConfig::from_lookup(|k| (k == URL_VAR).then(|| "http://127.0.0.1:9/".into()))
-            .unwrap();
-    assert_eq!(
-        local.url("/anime/schedule/3"),
-        "http://127.0.0.1:9/anime/schedule/3"
-    );
-    assert!(AnissiaConfig::from_lookup(|_| Some("ftp://x.test".into())).is_err());
-    assert!(AnissiaConfig::from_lookup(|_| Some("not a url".into())).is_err());
-}
-
-#[tokio::test]
-async fn a_schedule_and_the_captions_of_an_anime_are_read_from_the_api() {
-    let env = Env::new().await;
-    env.fake
-        .set_week(3, vec![env.fake.entry(3, 3320, "22:00", "작품", "原題")]);
-    env.fake.set_captions(
-        3320,
-        vec![
-            env.fake.caption("1", "2026-10-08T01:00:00", "에텔레로사"),
-            env.fake.caption("2", "2026-10-15T01:00:00", "에텔레로사"),
-        ],
-    );
-
-    let schedule = env.anissia.schedule(3, None).await.unwrap();
-    assert!(!schedule.cached);
-    assert_eq!(schedule.value.len(), 1);
-    assert_eq!(schedule.value[0].anime_no, 3320);
-    assert_eq!(schedule.value[0].week, 3);
-    assert_eq!(schedule.value[0].air_time.as_deref(), Some("22:00"));
-
-    let captions = env.anissia.captions(3320, None).await.unwrap();
-    assert_eq!(captions.value.len(), 2);
-    let creators = parse::creators(&captions.value);
-    assert_eq!(creators.len(), 1);
-    assert_eq!(creators[0].name, "에텔레로사");
-    assert_eq!(creators[0].captions, 2);
-
-    // An anime nobody subtitles has an empty list, not an error.
-    assert!(env
-        .anissia
-        .captions(99, None)
-        .await
-        .unwrap()
-        .value
-        .is_empty());
-    // The weeks are 0 to 8.
-    assert!(matches!(
-        env.anissia.schedule(9, None).await,
-        Err(AnissiaError::NoSuchWeek(9))
-    ));
-    assert_eq!(env.fake.count("/anime/schedule/9"), 0);
-}
-
-#[tokio::test]
-async fn an_answer_is_cached_for_five_minutes_and_a_failure_is_not() {
-    let env = Env::new().await;
-    env.fake
-        .set_week(1, vec![env.fake.entry(1, 1, "01:00", "작품", "")]);
-
-    // A failure is not remembered: the next call asks again.
-    env.fake.state.lock().unwrap().failing = 1;
-    assert!(matches!(
-        env.anissia.schedule(1, None).await,
-        Err(AnissiaError::Status(500))
-    ));
-    let first = env.anissia.schedule(1, None).await.unwrap();
-    assert!(!first.cached);
-
-    env.advance(CACHE_TTL.as_millis() as i64 - 1);
-    let again = env.anissia.schedule(1, None).await.unwrap();
-    assert!(again.cached);
-    assert_eq!(again.fetched_at, first.fetched_at);
-    assert_eq!(env.fake.count("/anime/schedule/1"), 2);
-
-    env.advance(1);
-    let later = env.anissia.schedule(1, None).await.unwrap();
-    assert!(!later.cached);
-    assert_eq!(env.fake.count("/anime/schedule/1"), 3);
-
-    // Another week is another entry.
-    env.anissia.schedule(2, None).await.unwrap();
-    assert_eq!(env.fake.count("/anime/schedule/2"), 1);
-}
-
-#[tokio::test]
-async fn two_calls_at_once_ask_anissia_once() {
-    let env = Env::new().await;
-    env.fake
-        .set_week(4, vec![env.fake.entry(4, 1, "01:00", "작품", "")]);
-    let (a, b) = tokio::join!(env.anissia.schedule(4, None), env.anissia.schedule(4, None));
-    a.unwrap();
-    b.unwrap();
-    assert_eq!(env.fake.count("/anime/schedule/4"), 1);
-}
-
-#[tokio::test]
-async fn requests_keep_their_spacing_across_clients_sharing_a_database() {
-    let env = Env::new().await;
-    // The web and the worker are two clients over one database.
-    let pace = Duration::from_millis(300);
-    let web = env.anissia.clone().with_spacing(pace);
-    let worker = env.anissia.clone().with_spacing(pace);
-    assert!(web.fetch_schedule(1, None).await.unwrap().is_empty());
-    // The clock stands still, so the worker's turn is one spacing away: a
-    // caller that may wait less is told so without a request being sent.
-    match worker
-        .fetch_schedule(2, Some(Duration::from_millis(100)))
-        .await
-    {
-        Err(AnissiaError::Busy { retry_after }) => assert_eq!(retry_after, pace),
-        other => panic!("expected Busy, got {other:?}"),
-    }
-    assert_eq!(env.fake.count("/anime/schedule/2"), 0);
-    // A spacing later it has the turn.
-    env.advance(300);
-    assert!(worker
-        .fetch_schedule(2, Some(Duration::from_millis(100)))
-        .await
-        .unwrap()
-        .is_empty());
-}
-
-#[tokio::test]
-async fn a_caller_that_may_wait_waits_for_its_turn_in_real_time() {
-    let db = Db::open_blocking(":memory:").unwrap();
-    let fake = Fake::start().await;
-    let anissia =
-        Anissia::with_defaults(db, fake.config()).with_spacing(Duration::from_millis(300));
-    anissia.fetch_schedule(1, None).await.unwrap();
-    anissia.fetch_schedule(2, None).await.unwrap();
-    let times: Vec<_> = fake.requests().into_iter().map(|(at, _)| at).collect();
-    let gap = times[1] - times[0];
-    assert!(gap >= Duration::from_millis(250), "{gap:?}");
-}
-
-#[tokio::test]
-async fn a_429_blocks_every_request_until_its_retry_after_has_passed() {
-    let env = Env::new().await;
-    env.fake
-        .set_week(1, vec![env.fake.entry(1, 1, "01:00", "작품", "")]);
-    {
-        let mut state = env.fake.state.lock().unwrap();
-        state.rate_limited = 1;
-        state.retry_after = Some(30);
-    }
-    match env.anissia.fetch_schedule(1, None).await {
-        Err(AnissiaError::Busy { retry_after }) => {
-            assert_eq!(retry_after, Duration::from_secs(30))
-        }
-        other => panic!("expected Busy, got {other:?}"),
-    }
-    // The block holds the next request back without sending it, for another
-    // week too.
-    match env
-        .anissia
-        .fetch_schedule(2, Some(Duration::from_secs(1)))
-        .await
-    {
-        Err(AnissiaError::Busy { retry_after }) => {
-            assert_eq!(retry_after, Duration::from_secs(30))
-        }
-        other => panic!("expected Busy, got {other:?}"),
-    }
-    assert_eq!(env.fake.requests().len(), 1);
-
-    env.advance(30_000);
-    assert_eq!(
-        env.anissia
-            .fetch_schedule(1, Some(Duration::from_secs(1)))
-            .await
-            .unwrap()
-            .len(),
-        1
-    );
-    assert_eq!(env.fake.requests().len(), 2);
-}
-
-#[tokio::test]
-async fn a_429_without_a_retry_after_waits_a_minute_and_a_huge_one_is_cut_to_an_hour() {
-    let env = Env::new().await;
-    {
-        let mut state = env.fake.state.lock().unwrap();
-        state.rate_limited = 1;
-        state.retry_after = None;
-    }
-    match env.anissia.fetch_schedule(1, None).await {
-        Err(AnissiaError::Busy { retry_after }) => {
-            assert_eq!(retry_after, Duration::from_secs(60))
-        }
-        other => panic!("expected Busy, got {other:?}"),
-    }
-    // The minute passes before the next request, or it would wait for it.
-    env.advance(60_000);
-    {
-        let mut state = env.fake.state.lock().unwrap();
-        state.rate_limited = 1;
-        state.retry_after = Some(999_999);
-    }
-    match env.anissia.fetch_schedule(1, None).await {
-        Err(AnissiaError::Busy { retry_after }) => {
-            assert_eq!(retry_after, Duration::from_secs(3600))
-        }
-        other => panic!("expected Busy, got {other:?}"),
-    }
-}
-
-#[tokio::test]
-async fn an_answer_over_the_cap_is_refused_whether_or_not_it_says_its_length() {
-    for chunked in [false, true] {
-        let env = Env::new().await;
-        {
-            let mut state = env.fake.state.lock().unwrap();
-            state.padding = MAX_ANSWER_BYTES + 1;
-            state.chunked = chunked;
-        }
-        env.fake
-            .set_week(1, vec![env.fake.entry(1, 1, "01:00", "작품", "")]);
-        match env.anissia.fetch_schedule(1, None).await {
-            Err(AnissiaError::Invalid(why)) => assert!(why.contains("larger"), "{why}"),
-            other => panic!("chunked={chunked}: expected Invalid, got {other:?}"),
-        }
-    }
-    // An answer under the cap is read whole.
-    let env = Env::new().await;
-    env.fake.state.lock().unwrap().padding = 1024 * 1024;
-    env.fake
-        .set_week(1, vec![env.fake.entry(1, 1, "01:00", "작품", "")]);
-    assert_eq!(env.anissia.fetch_schedule(1, None).await.unwrap().len(), 1);
-}
-
-#[tokio::test]
-async fn answers_that_are_not_the_api_s_are_reported_not_trusted() {
-    let env = Env::new().await;
-    for (raw, expect) in [
-        ("<html>maintenance</html>", "unexpected shape"),
-        (r#"{"code":"fail","message":"nope"}"#, "not ok"),
-        (r#"{"code":"ok"}"#, "no data"),
-        (r#"{"code":"ok","data":"x"}"#, "no data"),
-        (r#"{"code":"ok","data":[{"nothing":1}]}"#, "usable"),
-    ] {
-        env.fake.state.lock().unwrap().raw = Some(raw.to_owned());
-        match env.anissia.fetch_schedule(1, None).await {
-            Err(AnissiaError::Invalid(why)) => assert!(why.contains(expect), "{raw}: {why}"),
-            other => panic!("{raw}: expected Invalid, got {other:?}"),
-        }
-    }
-    // The paged shape (`data.content`) is read too.
-    env.fake.state.lock().unwrap().raw = Some(r#"{"code":"ok","data":{"content":[]}}"#.into());
-    assert!(env
-        .anissia
-        .fetch_schedule(1, None)
-        .await
-        .unwrap()
-        .is_empty());
-
-    // A server error and a server that is not there.
-    env.fake.state.lock().unwrap().raw = None;
-    env.fake.state.lock().unwrap().failing = 1;
-    assert!(matches!(
-        env.anissia.fetch_schedule(1, None).await,
-        Err(AnissiaError::Status(500))
-    ));
-    let gone = Anissia::new(
-        env.db.clone(),
-        AnissiaConfig::from_lookup(|_| Some("http://127.0.0.1:1".into())).unwrap(),
-        env.anissia.clock.clone(),
-    )
-    .with_spacing(Duration::ZERO);
-    assert!(matches!(
-        gone.fetch_schedule(1, None).await,
-        Err(AnissiaError::Unreachable(_))
-    ));
-}
-
 #[tokio::test]
 async fn the_daily_refresh_asks_the_week_of_the_snapshot_and_stops_when_it_has_found_them() {
     let env = Env::new().await;
@@ -390,7 +113,7 @@ async fn the_daily_refresh_asks_the_week_of_the_snapshot_and_stops_when_it_has_f
         ],
     );
 
-    let ran = env.anissia.run_next().await.unwrap();
+    let ran = env.queue.run_next().await.unwrap();
     assert_eq!(
         ran,
         Ran {
@@ -400,12 +123,12 @@ async fn the_daily_refresh_asks_the_week_of_the_snapshot_and_stops_when_it_has_f
         }
     );
     assert_eq!(env.schedule_requests(), ["/anime/schedule/3"]);
-    let snapshot = env.anissia.store.anime(3320).await.unwrap().unwrap();
+    let snapshot = env.store.anime(3320).await.unwrap().unwrap();
     assert_eq!(snapshot.subject, "새 제목");
     assert_eq!(snapshot.air_time.as_deref(), Some("23:30"));
     assert_eq!(snapshot.fetched_at, 10 * DAY);
     // Nothing is due any more.
-    assert!(env.anissia.run_next().await.is_none());
+    assert!(env.queue.run_next().await.is_none());
 }
 
 #[tokio::test]
@@ -415,7 +138,7 @@ async fn an_anime_that_moved_from_the_upcoming_list_to_its_weekday_is_found_ther
     env.fake
         .set_week(2, vec![env.fake.entry(2, 7, "21:00", "작품 7", "")]);
 
-    let ran = env.anissia.run_next().await.unwrap();
+    let ran = env.queue.run_next().await.unwrap();
     assert_eq!(ran.refreshed, 1);
     assert_eq!(
         env.schedule_requests(),
@@ -426,7 +149,7 @@ async fn an_anime_that_moved_from_the_upcoming_list_to_its_weekday_is_found_ther
             "/anime/schedule/2"
         ]
     );
-    let snapshot = env.anissia.store.anime(7).await.unwrap().unwrap();
+    let snapshot = env.store.anime(7).await.unwrap().unwrap();
     assert_eq!(snapshot.week, 2);
     assert_eq!(snapshot.air_time.as_deref(), Some("21:00"));
 }
@@ -439,7 +162,7 @@ async fn an_anime_no_week_lists_keeps_its_snapshot_and_is_looked_for_a_day_later
     env.fake
         .set_week(3, vec![env.fake.entry(3, 5000, "22:00", "남", "")]);
 
-    let ran = env.anissia.run_next().await.unwrap();
+    let ran = env.queue.run_next().await.unwrap();
     assert_eq!(
         ran,
         Ran {
@@ -452,22 +175,21 @@ async fn an_anime_no_week_lists_keeps_its_snapshot_and_is_looked_for_a_day_later
     let asked = env.schedule_requests();
     assert_eq!(asked.len(), 9);
     assert_eq!(asked[0], "/anime/schedule/3");
-    let snapshot = env.anissia.store.anime(9).await.unwrap().unwrap();
+    let snapshot = env.store.anime(9).await.unwrap().unwrap();
     assert_eq!(snapshot.subject, "작품 9");
     assert_eq!(snapshot.fetched_at, 10 * DAY - DAY);
     // Anissia answered everywhere and the anime was not there: it is recorded.
     assert_eq!(unlisted(&env, &[9]).await, [9]);
 
-    assert!(env.anissia.run_next().await.is_none());
+    assert!(env.queue.run_next().await.is_none());
     env.advance(DAY - 1);
-    assert!(env.anissia.run_next().await.is_none());
+    assert!(env.queue.run_next().await.is_none());
     env.advance(1);
-    assert!(env.anissia.run_next().await.is_some());
+    assert!(env.queue.run_next().await.is_some());
 }
 
 async fn unlisted(env: &Env, nos: &[i64]) -> Vec<i64> {
     let mut found: Vec<i64> = env
-        .anissia
         .store
         .unlisted(nos.to_vec())
         .await
@@ -484,16 +206,16 @@ async fn an_unlisted_anime_is_listed_again_when_a_later_refresh_finds_it() {
     env.subscribe(9, 3, 10 * DAY - DAY).await;
     env.fake
         .set_week(3, vec![env.fake.entry(3, 5000, "22:00", "남", "")]);
-    env.anissia.run_next().await.unwrap();
+    env.queue.run_next().await.unwrap();
     assert_eq!(unlisted(&env, &[9]).await, [9]);
 
     // Anissia lists it again (on another weekday) by the next refresh.
     env.advance(DAY);
     env.fake
         .set_week(6, vec![env.fake.entry(6, 9, "21:00", "작품 9", "")]);
-    assert_eq!(env.anissia.run_next().await.unwrap().refreshed, 1);
+    assert_eq!(env.queue.run_next().await.unwrap().refreshed, 1);
     assert_eq!(unlisted(&env, &[9]).await, Vec::<i64>::new());
-    assert_eq!(env.anissia.store.anime(9).await.unwrap().unwrap().week, 6);
+    assert_eq!(env.store.anime(9).await.unwrap().unwrap().week, 6);
 }
 
 #[tokio::test]
@@ -511,19 +233,19 @@ async fn a_refresh_that_fails_or_stops_halfway_never_records_an_anime_as_unliste
         .unwrap()
         .failing_paths
         .insert("/anime/schedule/6".into());
-    let ran = env.anissia.run_next().await.unwrap();
+    let ran = env.queue.run_next().await.unwrap();
     assert_eq!(ran.failed, 1);
     assert_eq!(unlisted(&env, &[9]).await, Vec::<i64>::new());
 
     // A 429 at the first request.
-    env.advance(queue::REFRESH_RETRY.as_millis() as i64);
+    env.advance(REFRESH_RETRY.as_millis() as i64);
     env.fake.state.lock().unwrap().failing_paths.clear();
     {
         let mut state = env.fake.state.lock().unwrap();
         state.rate_limited = 1;
         state.retry_after = Some(30);
     }
-    assert_eq!(env.anissia.run_next().await.unwrap().failed, 1);
+    assert_eq!(env.queue.run_next().await.unwrap().failed, 1);
     assert_eq!(unlisted(&env, &[9]).await, Vec::<i64>::new());
 }
 
@@ -532,14 +254,14 @@ async fn a_schedule_that_lists_nothing_at_all_does_not_make_an_anime_unlisted() 
     let env = Env::new().await;
     env.subscribe(9, 3, 10 * DAY - DAY).await;
 
-    let ran = env.anissia.run_next().await.unwrap();
+    let ran = env.queue.run_next().await.unwrap();
     assert_eq!(ran.missing, 1);
     assert_eq!(env.schedule_requests().len(), 9);
     assert_eq!(unlisted(&env, &[9]).await, Vec::<i64>::new());
     // Still looked for a day later.
-    assert!(env.anissia.run_next().await.is_none());
+    assert!(env.queue.run_next().await.is_none());
     env.advance(DAY);
-    assert!(env.anissia.run_next().await.is_some());
+    assert!(env.queue.run_next().await.is_some());
 }
 
 #[tokio::test]
@@ -555,7 +277,7 @@ async fn a_weekday_that_comes_back_empty_does_not_unlist_the_anime_it_held() {
     env.fake
         .set_week(2, vec![env.fake.entry(2, 21, "22:00", "작품 21", "")]);
 
-    let ran = env.anissia.run_next().await.unwrap();
+    let ran = env.queue.run_next().await.unwrap();
     assert_eq!(ran.refreshed, 1);
     // Monday's answer is not believed, so its anime are not recorded as gone.
     // Tuesday's was a real list, and 22 is not on it.
@@ -563,7 +285,7 @@ async fn a_weekday_that_comes_back_empty_does_not_unlist_the_anime_it_held() {
 
     // Monday's anime are looked for again with the next daily refresh, and a
     // Monday that lists them again leaves them as they were.
-    assert!(env.anissia.run_next().await.is_none());
+    assert!(env.queue.run_next().await.is_none());
     env.advance(DAY);
     env.fake.set_week(
         1,
@@ -573,7 +295,7 @@ async fn a_weekday_that_comes_back_empty_does_not_unlist_the_anime_it_held() {
         ],
     );
     // 21 is a day old by now too, and Tuesday still lists it.
-    assert_eq!(env.anissia.run_next().await.unwrap().refreshed, 3);
+    assert_eq!(env.queue.run_next().await.unwrap().refreshed, 3);
     assert_eq!(unlisted(&env, &[11, 12, 21, 22]).await, [22]);
 }
 
@@ -583,7 +305,7 @@ async fn a_failed_refresh_puts_the_anime_off_for_an_hour_and_a_429_for_as_long_a
     env.subscribe(1, 3, 10 * DAY - DAY).await;
     env.fake.state.lock().unwrap().failing = 1;
 
-    let ran = env.anissia.run_next().await.unwrap();
+    let ran = env.queue.run_next().await.unwrap();
     assert_eq!(
         ran,
         Ran {
@@ -593,13 +315,13 @@ async fn a_failed_refresh_puts_the_anime_off_for_an_hour_and_a_429_for_as_long_a
         }
     );
     assert_eq!(env.schedule_requests().len(), 1);
-    assert!(env.anissia.run_next().await.is_none());
-    env.advance(queue::REFRESH_RETRY.as_millis() as i64 - 1);
-    assert!(env.anissia.run_next().await.is_none());
+    assert!(env.queue.run_next().await.is_none());
+    env.advance(REFRESH_RETRY.as_millis() as i64 - 1);
+    assert!(env.queue.run_next().await.is_none());
     env.advance(1);
     env.fake
         .set_week(3, vec![env.fake.entry(3, 1, "22:00", "작품 1", "")]);
-    assert_eq!(env.anissia.run_next().await.unwrap().refreshed, 1);
+    assert_eq!(env.queue.run_next().await.unwrap().refreshed, 1);
 
     // A 429 holds it for as long as Anissia said.
     env.subscribe(2, 3, env.now.load(Ordering::SeqCst) - DAY)
@@ -609,11 +331,11 @@ async fn a_failed_refresh_puts_the_anime_off_for_an_hour_and_a_429_for_as_long_a
         state.rate_limited = 1;
         state.retry_after = Some(90);
     }
-    assert_eq!(env.anissia.run_next().await.unwrap().failed, 1);
+    assert_eq!(env.queue.run_next().await.unwrap().failed, 1);
     env.advance(89_000);
-    assert!(env.anissia.run_next().await.is_none());
+    assert!(env.queue.run_next().await.is_none());
     env.advance(1_000);
-    let due = env.anissia.store.due(env.anissia.now()).await.unwrap();
+    let due = env.store.due(env.queue.now()).await.unwrap();
     assert_eq!(
         due,
         [Due {
@@ -625,6 +347,6 @@ async fn a_failed_refresh_puts_the_anime_off_for_an_hour_and_a_429_for_as_long_a
 
 #[test]
 fn the_lock_file_sits_next_to_the_database_and_apart_from_the_other_queues() {
-    let path = queue::lock_path_for(std::path::Path::new("/data/trss.db"));
+    let path = lock_path_for(std::path::Path::new("/data/trss.db"));
     assert_eq!(path, std::path::PathBuf::from("/data/trss.db.anissia.lock"));
 }

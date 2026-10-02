@@ -68,15 +68,12 @@ use super::{
     rules_api::{self, RuleView},
     ApiError, AppState,
 };
+use trss_anissia::{Anime, AnissiaError, Fetched, LAST_WEEK, WEEK_OTHER, WEEK_UPCOMING};
 use trss_core::Millis;
 use trss_legacy::{
-    anissia::{AnissiaError, Fetched, LAST_WEEK},
-    store::{
-        anissia::{Anime, WEEK_OTHER, WEEK_UPCOMING},
-        channels::{
-            ChannelError, ChannelWithRules, NewSubscription, RuleInput, RuleState, Subscription,
-            SubtitleMode,
-        },
+    store::channels::{
+        ChannelError, ChannelWithRules, NewSubscription, RuleInput, RuleState, Subscription,
+        SubtitleMode,
     },
     subscriptions::{
         candidates::{self, TitleCandidate},
@@ -350,8 +347,8 @@ async fn schedule(
     }))
 }
 
-fn creators_of(fetched: &Fetched<trss_legacy::anissia::Caption>) -> Vec<CreatorView> {
-    trss_legacy::anissia::parse::creators(&fetched.value)
+fn creators_of(fetched: &Fetched<trss_anissia::Caption>) -> Vec<CreatorView> {
+    trss_anissia::parse::creators(&fetched.value)
         .into_iter()
         .map(|c| CreatorView {
             name: c.name,
@@ -426,8 +423,7 @@ async fn list(State(state): State<AppState>) -> Result<Json<SubscriptionList>, A
         .filter_map(|r| r.subscription.as_ref().map(|s| s.anissia_anime_no))
         .collect();
     let animes = state
-        .anissia
-        .store
+        .anissia_store
         .animes(nos)
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
@@ -704,8 +700,7 @@ async fn candidates(State(state): State<AppState>) -> Result<Json<CandidateList>
         .filter_map(|r| r.subscription.as_ref().map(|s| s.anissia_anime_no))
         .collect();
     let animes = state
-        .anissia
-        .store
+        .anissia_store
         .animes(nos)
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;

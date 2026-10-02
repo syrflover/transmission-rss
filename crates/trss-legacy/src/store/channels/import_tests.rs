@@ -503,7 +503,7 @@ async fn invalid_input_and_double_replacement_are_rejected_before_anything_is_wr
 #[tokio::test]
 async fn replacing_leaves_title_waiting_subscriptions_as_they_are() {
     use super::{NewSubscription, Rule, SubtitleMode};
-    use crate::store::anissia::Anime;
+    use trss_anissia::Anime;
 
     let f = fixture().await;
     let a = existing_channel(&f, vec![rule("Gone", "gone")]).await;

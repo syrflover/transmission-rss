@@ -22,8 +22,8 @@ use tower::ServiceExt;
 use trss_core::{Clock, Db};
 
 use super::*;
+use trss_anissia::{fake::Fake, Anissia};
 use trss_legacy::{
-    anissia::{fake::Fake, Anissia},
     store::{
         channels::{ChannelInput, NewSubscription, RuleInput, SubtitleMode},
         history::{HistoryQuery, HistoryResult, KnownItem, Observation},
@@ -264,7 +264,7 @@ async fn a_first_run_import_adds_everything_unasked_and_the_checked_suggestions_
     let alpha = channels[0].rules[0].subscription.as_ref().unwrap();
     assert_eq!(alpha.subtitles, SubtitleMode::Follow);
     assert_eq!(alpha.subscribed_at, NOW);
-    let snapshot = app.state.anissia.store.anime(1001).await.unwrap().unwrap();
+    let snapshot = app.state.anissia_store.anime(1001).await.unwrap().unwrap();
     assert_eq!(
         (snapshot.week, snapshot.air_time.as_deref()),
         (3, Some("22:30"))
@@ -315,7 +315,7 @@ async fn unchecked_suggestions_import_the_rules_alone_and_ask_nothing_of_anissia
     assert!(app.followed().await.is_empty());
     assert!(app.fake.requests().is_empty());
     // No snapshot either: nothing follows an anime.
-    assert!(app.state.anissia.store.anime(1001).await.unwrap().is_none());
+    assert!(app.state.anissia_store.anime(1001).await.unwrap().is_none());
 }
 
 #[tokio::test]
@@ -412,7 +412,7 @@ async fn skipping_a_channel_drops_its_suggestions_with_it() {
         .unwrap();
     assert_eq!(kept.rules.len(), 1);
     // Epsilon's anime was never looked for.
-    assert!(app.state.anissia.store.anime(1003).await.unwrap().is_none());
+    assert!(app.state.anissia_store.anime(1003).await.unwrap().is_none());
 }
 
 #[tokio::test]
@@ -438,11 +438,11 @@ async fn when_anissia_cannot_be_reached_the_subscription_is_kept_with_an_unknown
     // A stand-in snapshot the worker's daily refresh finds due at once. The
     // comment above the rule said `Wed. 22:30.`, so until then the anime sits
     // on Wednesday (Anissia's weekday 3) at that time.
-    let snapshot = app.state.anissia.store.anime(1001).await.unwrap().unwrap();
+    let snapshot = app.state.anissia_store.anime(1001).await.unwrap().unwrap();
     assert_eq!(snapshot.fetched_at, 0);
     assert_eq!(snapshot.week, 3);
     assert_eq!(snapshot.air_time.as_deref(), Some("22:30"));
-    let due = app.state.anissia.store.due(NOW).await.unwrap();
+    let due = app.state.anissia_store.due(NOW).await.unwrap();
     assert_eq!(due.iter().map(|d| d.anime_no).collect::<Vec<_>>(), [1001]);
 }
 
@@ -467,9 +467,9 @@ async fn a_stand_in_without_a_weekday_in_the_comment_stays_in_the_other_tab() {
     let created = &done["subscriptions"]["created"][0];
     assert_eq!(created["schedule_known"], false);
     assert_eq!(created["schedule_from_comment"], false);
-    let snapshot = app.state.anissia.store.anime(1001).await.unwrap().unwrap();
+    let snapshot = app.state.anissia_store.anime(1001).await.unwrap().unwrap();
     assert_eq!(snapshot.fetched_at, 0);
-    assert_eq!(snapshot.week, trss_legacy::store::anissia::WEEK_OTHER);
+    assert_eq!(snapshot.week, trss_anissia::WEEK_OTHER);
     assert_eq!(snapshot.air_time, None);
 }
 
@@ -485,7 +485,7 @@ async fn the_comments_weekday_is_not_used_when_anissia_answered() {
     let created = &done["subscriptions"]["created"][0];
     assert_eq!(created["schedule_known"], true);
     assert_eq!(created["schedule_from_comment"], false);
-    let snapshot = app.state.anissia.store.anime(1001).await.unwrap().unwrap();
+    let snapshot = app.state.anissia_store.anime(1001).await.unwrap().unwrap();
     assert!(snapshot.fetched_at > 0);
     assert_eq!(
         (snapshot.week, snapshot.air_time.as_deref()),
@@ -532,7 +532,7 @@ async fn an_anime_the_schedule_does_not_list_is_refused_and_its_rule_imported_pl
         )]
     );
     assert_eq!(done["counts"]["rules_added"], 7);
-    assert!(app.state.anissia.store.anime(1004).await.unwrap().is_none());
+    assert!(app.state.anissia_store.anime(1004).await.unwrap().is_none());
     // Every week was looked at before deciding.
     assert_eq!(app.fake.count("/anime/schedule/"), 9);
 }
@@ -783,7 +783,7 @@ async fn a_replaced_rule_that_follows_an_anime_already_keeps_it_and_the_preview_
         .await
         .unwrap();
     let anime = app.fake.entry(2, 9001, "20:00", "이미", "Already");
-    let snapshot = trss_legacy::anissia::parse::schedule(&[anime], 2)
+    let snapshot = trss_anissia::parse::schedule(&[anime], 2)
         .unwrap()
         .remove(0);
     app.state

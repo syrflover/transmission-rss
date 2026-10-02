@@ -35,12 +35,12 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use super::{subscriptions_api::AnimeView, ApiError, AppState};
+use trss_anissia::slot::Over;
 use trss_core::Millis;
 use trss_legacy::{
     archive_suggestions::{
         recent_matches, ArchiveSuggestion, Facts, Ground, Recent, WINDOW_TITLES,
     },
-    schedule::slot::Over,
     store::channels::{ChannelWithRules, Rule, RuleState},
     worker::commands::rule_archive,
 };
@@ -60,7 +60,7 @@ fn internal(e: impl std::fmt::Display) -> ApiError {
 /// What the suggestions were read from, kept for the views.
 struct Gathered {
     all: Vec<ChannelWithRules>,
-    animes: HashMap<i64, trss_legacy::store::anissia::Anime>,
+    animes: HashMap<i64, trss_anissia::Anime>,
     suggestions: Vec<ArchiveSuggestion>,
     last_received: HashMap<String, Millis>,
 }
@@ -100,12 +100,11 @@ async fn gather(state: &AppState) -> Result<Gathered, ApiError> {
         .filter_map(|r| r.subscription.as_ref().map(|s| s.anissia_anime_no))
         .collect();
     let animes = state
-        .anissia
-        .store
+        .anissia_store
         .animes(nos.clone())
         .await
         .map_err(internal)?;
-    let unlisted = state.anissia.store.unlisted(nos).await.map_err(internal)?;
+    let unlisted = state.anissia_store.unlisted(nos).await.map_err(internal)?;
     let last_received = state
         .history
         .last_received_of_rules(rule_ids)

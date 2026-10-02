@@ -338,7 +338,7 @@ pub fn create_rule(conn: &mut Connection, channel_id: &str, input: &RuleInput) -
 /// listed it (stored as the anime's snapshot), how it gets subtitles, and when.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewSubscription {
-    pub anime: anissia::Anime,
+    pub anime: trss_anissia::Anime,
     pub subtitles: SubtitleMode,
     /// The creator: set for `Follow`, empty for `Undecided`, and for `None`
     /// the creator followed before, if any.

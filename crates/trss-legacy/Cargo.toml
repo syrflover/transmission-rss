@@ -10,6 +10,7 @@ test-support = ["trss-core/test-support", "dep:image"]
 
 [dependencies]
 trss-core = { path = "../trss-core" }
+trss-anissia = { path = "../trss-anissia" }
 trss-transmission = { path = "../trss-transmission" }
 
 # trname = { path = "../trname" }
@@ -48,6 +49,7 @@ caseless = "0.2"
 
 [dev-dependencies]
 trss-core = { path = "../trss-core", features = ["test-support"] }
+trss-anissia = { path = "../trss-anissia", features = ["test-support"] }
 # Makes the sample images of the tests; the app reads only headers.
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 tempfile = "3.27.0"

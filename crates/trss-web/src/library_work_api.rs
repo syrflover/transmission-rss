@@ -399,8 +399,7 @@ async fn show(
 
     let connected = state.channels.subscriptions_of_work(&work.id).await?;
     let animes = state
-        .anissia
-        .store
+        .anissia_store
         .animes(
             connected
                 .iter()

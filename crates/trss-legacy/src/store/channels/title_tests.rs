@@ -2,7 +2,7 @@
 //! was given, and the titles the user rejected.
 
 use super::*;
-use crate::store::anissia::Anime;
+use trss_anissia::Anime;
 
 fn anime(no: i64) -> Anime {
     Anime {

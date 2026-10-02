@@ -1,12 +1,13 @@
+use trss_anissia::{Anissia, AnissiaConfig};
 use trss_core::{commands::CommandStore, heartbeat::HeartbeatStore, settings::SettingsStore, Db};
 use trss_legacy::{
-    anissia::{Anissia, AnissiaConfig},
     artwork::{AnilistConfig, Artwork},
     past_search::service::PastSearch,
     seasons::Seasons,
     store::{
-        channels::ChannelStore, history::HistoryStore, library::LibraryStore,
-        revisions::RevisionStore, search_pace::SearchPace, setup::SetupStore, status::StatusStore,
+        anissia::AnissiaStore, channels::ChannelStore, history::HistoryStore,
+        library::LibraryStore, revisions::RevisionStore, search_pace::SearchPace,
+        setup::SetupStore, status::StatusStore,
     },
 };
 
@@ -33,8 +34,10 @@ pub struct AppState {
     /// The AniList entries linked to each season, and the user's choices
     /// about them.
     pub seasons: Seasons,
-    /// Anissia's schedule, and the snapshots of the anime that are subscribed.
+    /// Anissia's schedule.
     pub anissia: Anissia,
+    /// The snapshots of the anime that are subscribed.
+    pub anissia_store: AnissiaStore,
     /// Which steps of the first run's checklist the user skipped.
     pub setup: SetupStore,
     /// The replacements of video revisions the worker carries out.
@@ -49,6 +52,7 @@ impl AppState {
         let artwork = Artwork::new(db.clone(), None, AnilistConfig::default());
         AppState {
             anissia: Anissia::with_defaults(db.clone(), AnissiaConfig::default()),
+            anissia_store: AnissiaStore::new(db.clone()),
             seasons: Seasons::over(db.clone(), &artwork),
             channels: ChannelStore::new(db.clone()),
             history: HistoryStore::new(db.clone()),

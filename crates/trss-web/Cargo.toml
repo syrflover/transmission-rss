@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 trss-core = { path = "../trss-core" }
+trss-anissia = { path = "../trss-anissia" }
 trss-legacy = { path = "../trss-legacy" }
 
 axum = "0.8.9"
@@ -21,6 +22,7 @@ url = "2"
 
 [dev-dependencies]
 trss-core = { path = "../trss-core", features = ["test-support"] }
+trss-anissia = { path = "../trss-anissia", features = ["test-support"] }
 trss-legacy = { path = "../trss-legacy", features = ["test-support"] }
 http-body-util = "0.1.5"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }

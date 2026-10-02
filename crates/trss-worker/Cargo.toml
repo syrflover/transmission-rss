@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 trss-core = { path = "../trss-core" }
+trss-anissia = { path = "../trss-anissia" }
 trss-transmission = { path = "../trss-transmission" }
 trss-legacy = { path = "../trss-legacy" }
 
@@ -21,6 +22,7 @@ url = "2"
 
 [dev-dependencies]
 trss-core = { path = "../trss-core", features = ["test-support"] }
+trss-anissia = { path = "../trss-anissia", features = ["test-support"] }
 trss-web = { path = "../trss-web" }
 axum = "0.8.9"
 bytes = "1"

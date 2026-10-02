@@ -1,6 +1,6 @@
 //! Anissia's schedule as the app keeps it for the anime it subscribes to
 //! (`docs/specs/collection.md`, 방영작 구독): the snapshot of each subscribed
-//! anime, and the pace of requests to Anissia.
+//! anime. (The pace of requests to Anissia is kept by `trss-anissia`.)
 //!
 //! The subscription itself is part of a rule ([`crate::store::channels`]); this
 //! store keeps what the rule's detail and the weekly schedule show of the anime
@@ -12,6 +12,7 @@ mod tests;
 use std::collections::{HashMap, HashSet};
 
 use rusqlite::{params, Connection, OptionalExtension, Row, TransactionBehavior};
+use trss_anissia::Anime;
 
 use trss_core::{
     db::{Db, DbError},
@@ -20,32 +21,6 @@ use trss_core::{
 
 /// A day: how old a snapshot may get before the worker asks Anissia again.
 pub const REFRESH_AFTER_MS: i64 = 24 * 60 * 60 * 1000;
-
-/// The schedule group for anime that air on no weekday (`기타`).
-pub const WEEK_OTHER: u8 = 7;
-/// The schedule group for anime that have not started (`신작`).
-pub const WEEK_UPCOMING: u8 = 8;
-
-/// An anime as Anissia's schedule last listed it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Anime {
-    /// Anissia's `animeNo`.
-    pub anime_no: i64,
-    /// The Korean title.
-    pub subject: String,
-    pub original_subject: Option<String>,
-    /// 0 (Sunday) to 6 (Saturday), [`WEEK_OTHER`] or [`WEEK_UPCOMING`].
-    pub week: u8,
-    /// `HH:MM` in Asia/Seoul.
-    pub air_time: Option<String>,
-    /// `YYYY-MM-DD`, or `YYYY-MM` when only the month is known.
-    pub start_date: Option<String>,
-    pub end_date: Option<String>,
-    /// Anissia's `ON` or `OFF`.
-    pub status: String,
-    /// When the row was received.
-    pub fetched_at: Millis,
-}
 
 /// A subscribed anime whose snapshot is due to be received again.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,7 +44,7 @@ impl From<rusqlite::Error> for AnissiaStoreError {
 
 type Result<T> = std::result::Result<T, AnissiaStoreError>;
 
-/// Async access to the snapshots and the request pace. Cheap to clone.
+/// Async access to the snapshots. Cheap to clone.
 #[derive(Clone)]
 pub struct AnissiaStore {
     db: Db,
@@ -260,61 +235,6 @@ impl AnissiaStore {
                         params![no, at, until, asked_from],
                     )?;
                 }
-                tx.commit()?;
-                Ok::<_, AnissiaStoreError>(())
-            })
-            .await
-    }
-
-    /// Takes the next slot for an Anissia request at or after `now`, keeping
-    /// `spacing_ms` between the requests of both processes. `Err(wait)`
-    /// without taking one when the slot is more than `max_wait_ms` away.
-    pub async fn take_request_slot(
-        &self,
-        now: Millis,
-        spacing_ms: i64,
-        max_wait_ms: Option<i64>,
-    ) -> Result<std::result::Result<Millis, i64>> {
-        self.db
-            .run(move |c| {
-                let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-                let pace: Option<(Millis, Option<Millis>)> = tx
-                    .query_row(
-                        "SELECT next_at, blocked_until FROM anissia_pace WHERE id = 1",
-                        [],
-                        |r| Ok((r.get(0)?, r.get(1)?)),
-                    )
-                    .optional()?;
-                let (next_at, blocked) = pace.unwrap_or((now, None));
-                let slot = now.max(next_at).max(blocked.unwrap_or(now));
-                if let Some(max) = max_wait_ms {
-                    if slot - now > max {
-                        return Ok::<_, AnissiaStoreError>(Err(slot - now));
-                    }
-                }
-                tx.execute(
-                    "INSERT INTO anissia_pace (id, next_at, blocked_until) VALUES (1, ?1, ?2)
-                     ON CONFLICT (id) DO UPDATE SET next_at = excluded.next_at",
-                    params![slot + spacing_ms, blocked],
-                )?;
-                tx.commit()?;
-                Ok(Ok(slot))
-            })
-            .await
-    }
-
-    /// Anissia asked for no request before `until`.
-    pub async fn block_requests(&self, until: Millis) -> Result<()> {
-        self.db
-            .run(move |c| {
-                let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-                tx.execute(
-                    "INSERT INTO anissia_pace (id, next_at, blocked_until) VALUES (1, ?1, ?1)
-                     ON CONFLICT (id) DO UPDATE SET
-                         next_at = max(next_at, excluded.next_at),
-                         blocked_until = max(coalesce(blocked_until, 0), excluded.blocked_until)",
-                    params![until],
-                )?;
                 tx.commit()?;
                 Ok::<_, AnissiaStoreError>(())
             })

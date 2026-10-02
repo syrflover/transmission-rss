@@ -13,7 +13,7 @@
 //!   still waits for its title (no phrase), are not.
 //! - [`Ground::Ended`]: the rule is a subscription and its anime's run is over
 //!   by the rule the weekly schedule drops its card by
-//!   ([`crate::schedule::slot::run_over`]): the end date Anissia gave has
+//!   ([`trss_anissia::slot::run_over`]): the end date Anissia gave has
 //!   passed, or, only when Anissia gave none, the daily refresh found the anime
 //!   no longer listed. Nothing is read from Anissia here: while it cannot be
 //!   reached the refresh finds nothing out, so this ground does not appear.
@@ -69,13 +69,15 @@ use std::{
 };
 
 use crate::{
-    schedule::slot::{run_over, Over},
     store::{
-        anissia::Anime,
         channels::{ChannelWithRules, Rule, RuleState},
         status::{read_day, READ_DAYS_KEPT},
     },
     worker::plan::ChannelPlan,
+};
+use trss_anissia::{
+    slot::{run_over, Over},
+    Anime,
 };
 use trss_core::{
     calendar::{day_of, DAY_MS},

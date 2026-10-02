@@ -461,44 +461,6 @@ async fn only_the_snapshots_a_day_old_of_active_rules_are_due_and_held_ones_wait
     let _ = old;
 }
 
-#[tokio::test]
-async fn request_slots_keep_their_spacing_and_a_block_holds_every_request() {
-    let env = Env::new().await;
-    let store = &env.anissia;
-    assert_eq!(
-        store.take_request_slot(1000, 2000, None).await.unwrap(),
-        Ok(1000)
-    );
-    assert_eq!(
-        store.take_request_slot(1000, 2000, None).await.unwrap(),
-        Ok(3000)
-    );
-    // A caller that may wait 1 s is told the wait instead of taking the slot.
-    assert_eq!(
-        store
-            .take_request_slot(1000, 2000, Some(1000))
-            .await
-            .unwrap(),
-        Err(4000)
-    );
-    assert_eq!(
-        store.take_request_slot(1000, 2000, None).await.unwrap(),
-        Ok(5000)
-    );
-
-    store.block_requests(60_000).await.unwrap();
-    assert_eq!(
-        store.take_request_slot(7000, 2000, None).await.unwrap(),
-        Ok(60_000)
-    );
-    // A shorter block does not shorten a longer one.
-    store.block_requests(10_000).await.unwrap();
-    assert_eq!(
-        store.take_request_slot(8000, 2000, None).await.unwrap(),
-        Ok(62_000)
-    );
-}
-
 // -- The rule detail's switches, the creator and the season connection -----
 
 use crate::store::channels::{SeasonLinked, SeasonRef};

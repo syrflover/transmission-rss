@@ -50,9 +50,9 @@ use super::{
     subscriptions_api::{waiting_views, WaitingView},
     ApiError, AppState,
 };
+use trss_anissia::Anime;
 use trss_legacy::{
     store::{
-        anissia::Anime,
         channels::{Channel, ChannelWithRules, Rule},
         history::{HistoryCursor, HistoryItem, HistoryQuery, HistoryResult, DEFAULT_PAGE_SIZE},
     },
@@ -175,8 +175,7 @@ impl Directory {
             HashMap::new()
         } else {
             state
-                .anissia
-                .store
+                .anissia_store
                 .animes(nos)
                 .await
                 .map_err(|e| ApiError::Internal(e.to_string()))?

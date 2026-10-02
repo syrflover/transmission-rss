@@ -8,7 +8,7 @@ use super::{
     ChannelError, ChannelInput, ChannelStore, ChannelWithRules, Db, NewSubscription, RuleInput,
     SubtitleMode,
 };
-use crate::store::anissia::Anime;
+use trss_anissia::Anime;
 
 struct Fixture {
     _dir: TempDir,
@@ -394,7 +394,7 @@ async fn the_import_time_is_read_while_the_transaction_holds_the_write_lock() {
 
 #[test]
 fn a_stand_in_sits_on_the_comments_weekday_or_in_the_other_tab() {
-    use crate::store::anissia::WEEK_OTHER;
+    use trss_anissia::WEEK_OTHER;
 
     let on_wednesday = ImportSubscription::stand_in(10, "A", Some((3, "22:30")));
     assert_eq!(

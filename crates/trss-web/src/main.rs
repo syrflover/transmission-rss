@@ -3,11 +3,9 @@ use std::process::ExitCode;
 use std::path::PathBuf;
 use tokio::net::TcpListener;
 
+use trss_anissia::{Anissia, AnissiaConfig};
 use trss_core::{db::DB_PATH_ENV, Db};
-use trss_legacy::{
-    anissia::{Anissia, AnissiaConfig},
-    artwork::{AnilistConfig, AppData, Artwork},
-};
+use trss_legacy::artwork::{AnilistConfig, AppData, Artwork};
 use trss_web::{self as web, env::WebEnv, AppState};
 
 #[tokio::main]

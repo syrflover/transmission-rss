@@ -120,11 +120,11 @@ use super::{
     subscriptions_api::{subscription_brief, SubscriptionBrief},
     ApiError, AppState,
 };
+use trss_anissia::Anime;
 use trss_core::commands::Command;
 use trss_legacy::{
     rss::{ChannelEvaluator, ChannelSpec, RuleSpec},
     store::{
-        anissia::Anime,
         channels::{
             Channel, ChannelError, ChannelWithRules, OrderItem, Rule, RuleInput, RuleState,
             SeasonRef, MASK,
@@ -590,8 +590,7 @@ async fn blocked_by(state: &AppState, season_id: &str) -> Result<SeasonBlockedVi
         .map_err(store_error)?;
     let holder_subject = match holder_anime_no {
         Some(no) => state
-            .anissia
-            .store
+            .anissia_store
             .anime(no)
             .await
             .map_err(|e| internal(&e))?
@@ -619,8 +618,7 @@ async fn analyze(state: &AppState, cwr: &ChannelWithRules) -> Result<Analysis, A
         .collect();
     if !subscribed.is_empty() {
         analysis.animes = state
-            .anissia
-            .store
+            .anissia_store
             .animes(subscribed)
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?;

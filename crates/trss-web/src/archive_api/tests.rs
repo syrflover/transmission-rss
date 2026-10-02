@@ -18,14 +18,11 @@ use tower::ServiceExt;
 use trss_core::{Clock, Db};
 
 use super::*;
-use trss_legacy::{
-    anissia::{Anissia, AnissiaConfig},
-    store::{
-        anissia::Anime,
-        channels::{Channel, ChannelInput, NewSubscription, RuleInput, RuleState, SubtitleMode},
-        history::{HistoryResult, Observation},
-        status::{read_day, ChannelReadResult},
-    },
+use trss_anissia::{Anime, Anissia, AnissiaConfig};
+use trss_legacy::store::{
+    channels::{Channel, ChannelInput, NewSubscription, RuleInput, RuleState, SubtitleMode},
+    history::{HistoryResult, Observation},
+    status::{read_day, ChannelReadResult},
 };
 
 /// 2026-10-01 12:00 in Seoul.
@@ -340,8 +337,7 @@ async fn an_anime_without_an_end_date_is_suggested_once_the_refresh_found_it_unl
     );
 
     app.state
-        .anissia
-        .store
+        .anissia_store
         .mark_unlisted(vec![7], NOW - DAY, NOW + DAY, NOW)
         .await
         .unwrap();
@@ -527,8 +523,7 @@ async fn keeping_collecting_hides_the_same_ground_but_not_a_new_one() {
 
     // The anime ends: a new ground, and only that one is listed.
     app.state
-        .anissia
-        .store
+        .anissia_store
         .mark_unlisted(vec![7], NOW, NOW + DAY, NOW + 1)
         .await
         .unwrap();

@@ -2226,10 +2226,8 @@ async fn a_held_item_whose_channel_is_gone_ends_with_its_result_and_the_label_co
 
 /// Makes `phrase` a subscription rule of the scene's channel, as of the harness's clock.
 async fn subscribe(s: &Scene, phrase: &str, directory: &str) -> trss_legacy::store::channels::Rule {
-    use trss_legacy::store::{
-        anissia::Anime,
-        channels::{NewSubscription, SubtitleMode},
-    };
+    use trss_anissia::Anime;
+    use trss_legacy::store::channels::{NewSubscription, SubtitleMode};
     s.h.channels
         .create_subscription_rule(
             &s.channel.channel.id,
