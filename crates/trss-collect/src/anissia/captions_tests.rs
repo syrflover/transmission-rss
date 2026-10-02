@@ -539,3 +539,138 @@ async fn the_queue_holds_its_lock_and_a_second_observer_waits_for_it() {
     assert_eq!(env.candidates(1).await.len(), 1);
     assert_eq!(env.recent_requests(), 2);
 }
+
+// --- follow-ups of the review of ticket 0035 ----------------------------------
+
+#[tokio::test]
+async fn a_reading_cut_short_is_not_started_over_by_a_restart_before_its_period_is_up() {
+    let env = Env::new().await;
+    env.fake.set_recent(env.many(45));
+    // Requests are 5 s apart on the real clock, so the reading is in its pause
+    // after page 0 when it is cut off, as a kill or a shutdown would.
+    let slow = || {
+        let now = env.now.clone();
+        let clock: Clock = Arc::new(move || now.load(Ordering::SeqCst));
+        CaptionObserver::new(
+            Anissia::new(env.db.clone(), env.fake.config(), clock)
+                .with_spacing(Duration::from_secs(5)),
+            env.store.clone(),
+        )
+    };
+    let cut = tokio::time::timeout(Duration::from_millis(400), slow().run_due()).await;
+    assert!(cut.is_err(), "the reading was to be cut short");
+    // Page 0 was observed, the reading never ended, and the next one is already
+    // scheduled a period after it began.
+    assert_eq!(env.candidates(1).await.len(), 1);
+    assert_eq!(env.candidates(21).await.len(), 0);
+    assert_eq!(
+        env.store.caption_poll().await.unwrap(),
+        Some((START + 30 * MIN, None))
+    );
+
+    // A new observer (the restarted worker) waits for the period.
+    let asked = env.fake.requests().len();
+    assert!(slow().run_due().await.is_none());
+    assert_eq!(env.fake.requests().len(), asked);
+    env.advance(30 * MIN);
+    assert_eq!(env.observer.run_due().await.unwrap().end, End::Complete);
+}
+
+#[tokio::test]
+async fn a_schedule_far_beyond_any_wait_is_not_believed_and_one_within_it_is() {
+    let env = Env::new().await;
+    env.fake.set_recent(env.many(2));
+    // The clock jumped back: the schedule is 5 hours ahead of it.
+    env.store
+        .schedule_caption_poll(START + 5 * 60 * MIN, None)
+        .await
+        .unwrap();
+    let read = env.observer.run_due().await.expect("due");
+    assert_eq!(read.end, End::Complete);
+    assert_eq!(
+        env.store.caption_poll().await.unwrap(),
+        Some((START + 30 * MIN, Some(START)))
+    );
+
+    // A schedule a period plus the longest `429` wait away is a real one.
+    let held = Env::new().await;
+    held.fake.set_recent(held.many(2));
+    held.store
+        .schedule_caption_poll(START + 90 * MIN, None)
+        .await
+        .unwrap();
+    assert!(held.observer.run_due().await.is_none());
+    assert_eq!(held.fake.requests().len(), 0);
+}
+
+#[tokio::test]
+async fn two_lines_for_one_creator_in_a_page_observe_the_newest_and_do_not_flap() {
+    let env = Env::new().await;
+    // One page: the same creator twice for anime 1, the older one first.
+    env.fake.set_recent(vec![
+        env.line(
+            1,
+            "3",
+            "2026-10-02T10:00:00",
+            "https://blog.test/old",
+            "에루샤",
+        ),
+        env.line(
+            1,
+            "4",
+            "2026-10-02T11:00:00",
+            "https://blog.test/new",
+            "에루샤",
+        ),
+        env.line(
+            2,
+            "1",
+            "2026-10-02T11:00:00",
+            "https://blog.test/x",
+            "에루샤",
+        ),
+    ]);
+
+    let read = env.observer.run_due().await.unwrap();
+
+    assert_eq!((read.added, read.skipped), (2, 1));
+    let one = env.candidates(1).await;
+    assert_eq!(one.len(), 1);
+    assert_eq!(one[0].post_url, "https://blog.test/new");
+    // Read again, the lines are the same: nothing flaps between the two.
+    env.advance(30 * MIN);
+    let read = env.observer.run_due().await.unwrap();
+    assert_eq!((read.added, read.unchanged), (0, 2));
+    assert_eq!(env.candidates(1).await.len(), 1);
+}
+
+#[tokio::test]
+async fn two_lines_without_a_comparable_moment_keep_the_last_and_the_anime_answer_is_collapsed_too()
+{
+    let env = Env::new().await;
+    env.fake.set_recent(vec![
+        env.line(1, "1", "soon", "https://blog.test/first", "가"),
+        env.line(1, "2", "later", "https://blog.test/last", "가"),
+    ]);
+    env.observer.run_due().await.unwrap();
+    let one = env.candidates(1).await;
+    assert_eq!(one.len(), 1);
+    assert_eq!(one[0].post_url, "https://blog.test/last");
+
+    // The same for one anime's own list: a parsed moment beats an unreadable one.
+    env.fake.set_captions(
+        5,
+        vec![
+            serde_json::json!({"episode": "9", "updDt": "2026-10-02T11:00:00",
+                "website": "https://blog.test/dated", "name": "나"}),
+            serde_json::json!({"episode": "8", "updDt": "unknown",
+                "website": "https://blog.test/undated", "name": "나"}),
+        ],
+    );
+    let read = env.observer.read_anime(5).await;
+    assert_eq!((read.added, read.skipped), (1, 1));
+    assert_eq!(
+        env.candidates(5).await[0].post_url,
+        "https://blog.test/dated"
+    );
+}

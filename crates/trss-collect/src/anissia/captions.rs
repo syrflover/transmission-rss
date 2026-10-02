@@ -23,12 +23,22 @@
 //! A page is observed as soon as it is read, so a failure part way through
 //! keeps what the earlier pages gave. The next reading is due [`OBSERVE_EVERY`]
 //! after this one started whatever came of it (a `429`, a failure, or the end),
-//! and a `429` that asks for longer holds it off until then; the schedule is in
-//! the database, so a restart does not read again within the period.
+//! and a `429` that asks for longer holds it off until then. The schedule is
+//! written to the database *before* the first request, so a reading cut short
+//! (the process killed, or stopped for good) waits for its period instead of
+//! starting over at every restart. A schedule further off than a period plus the
+//! longest wait a `429` can ask for ([`LONGEST_WAIT`]) is not believed (the clock
+//! jumped back): the reading is due.
+//!
+//! When one answer holds two lines of the same anime and creator name, only
+//! the newest is observed ([`collapse`]), so two lines that differ cannot
+//! each count as a change at every reading. Every reading that ends logs one
+//! line with the pages it read and what it added and skipped.
 //! Whatever a reading does not reach (a failed page, or a line that changed
 //! twice between two readings) is seen at the next, as its last state.
 
 use std::{
+    collections::{HashMap, HashSet},
     path::PathBuf,
     sync::{Arc, Mutex},
     time::Duration,
@@ -52,6 +62,9 @@ pub const MAX_RECENT_PAGES: u32 = 200;
 pub const RECENT_MAX_WAIT: Duration = Duration::from_secs(5 * 60);
 /// How long a request of one anime's lines may wait for its turn.
 pub const ANIME_MAX_WAIT: Duration = Duration::from_secs(30);
+/// The longest wait a `429` can make the next reading keep (the client honours
+/// a `Retry-After` up to an hour).
+pub const LONGEST_WAIT: Duration = Duration::from_secs(60 * 60);
 
 /// The lock file's path for a database file.
 pub fn lock_path_for(db_path: &std::path::Path) -> PathBuf {
@@ -82,7 +95,9 @@ pub struct Read {
     pub added: usize,
     /// Lines the previous observation already said.
     pub unchanged: usize,
-    /// Lines that could not be used (no address, a bound passed, ...).
+    /// Lines that were not observed: ones that could not be used (no address,
+    /// a bound passed, ...) and the older of two lines for one creator in one
+    /// answer.
     pub skipped: usize,
     pub end: End,
 }
@@ -111,6 +126,33 @@ impl Read {
         };
         self
     }
+}
+
+/// The lines of one answer with the duplicates taken out: of the lines for one
+/// anime and creator name only the one with the newest update moment stays
+/// (the last of them when moments are missing or equal). The order of the
+/// rest is kept. Also returns how many lines were taken out.
+fn collapse(lines: Vec<Line>) -> (Vec<Line>, usize) {
+    let mut keep: HashMap<(i64, &str), usize> = HashMap::new();
+    for (index, line) in lines.iter().enumerate() {
+        keep.entry((line.anime_no, line.creator.as_str()))
+            .and_modify(|kept| {
+                if line.updated_at >= lines[*kept].updated_at {
+                    *kept = index;
+                }
+            })
+            .or_insert(index);
+    }
+    let kept: HashSet<usize> = keep.into_values().collect();
+    let total = lines.len();
+    let lines: Vec<Line> = lines
+        .into_iter()
+        .enumerate()
+        .filter(|(index, _)| kept.contains(index))
+        .map(|(_, line)| line)
+        .collect();
+    let dropped = total - lines.len();
+    (lines, dropped)
 }
 
 /// A line as the store keeps it.
@@ -167,18 +209,21 @@ impl CaptionObserver {
                 return read;
             }
             read.pages += 1;
-            let skipped = answer.skipped();
+            let mut skipped = answer.skipped();
+            let (lines, dropped) = collapse(
+                answer
+                    .lines
+                    .into_iter()
+                    .filter_map(|l| {
+                        let no = l.anime_no?;
+                        Some(line_of(l, no))
+                    })
+                    .collect(),
+            );
+            skipped += dropped;
             // The list is newest first; observing oldest first gives the
             // observations the order the lines changed in.
-            let lines: Vec<Line> = answer
-                .lines
-                .into_iter()
-                .rev()
-                .filter_map(|l| {
-                    let no = l.anime_no?;
-                    Some(line_of(l, no))
-                })
-                .collect();
+            let lines: Vec<Line> = lines.into_iter().rev().collect();
             match self.store.observe(lines, self.now()).await {
                 Ok(observed) => read.take(observed, skipped),
                 Err(e) => {
@@ -205,12 +250,9 @@ impl CaptionObserver {
             Err(e) => return read.stop(e),
         };
         read.pages = u32::from(rows > 0);
+        let (lines, _) = collapse(lines.into_iter().map(|l| line_of(l, anime_no)).collect());
         let skipped = rows - lines.len();
-        let lines = lines
-            .into_iter()
-            .rev()
-            .map(|l| line_of(l, anime_no))
-            .collect();
+        let lines: Vec<Line> = lines.into_iter().rev().collect();
         match self.store.observe(lines, self.now()).await {
             Ok(observed) => read.take(observed, skipped),
             Err(e) => read.end = End::Failed(e.to_string()),
@@ -218,36 +260,61 @@ impl CaptionObserver {
         read
     }
 
+    /// Whether a reading due at `next_at` is due at `now`. A schedule further
+    /// off than a period plus [`LONGEST_WAIT`] cannot be one this process made
+    /// (the clock went back), so it is due.
+    fn is_due(now: Millis, next_at: Millis) -> bool {
+        let furthest = (OBSERVE_EVERY + LONGEST_WAIT).as_millis() as i64;
+        now >= next_at || next_at - now > furthest
+    }
+
     /// Reads the recent list if it is due, and schedules the next reading.
     /// `None` when it is not due yet.
+    ///
+    /// The next reading is written before the first request, so a reading that
+    /// is cut short is not started over at the next start; a `429` that asks
+    /// for longer pushes it further when the reading ends.
     pub async fn run_due(&self) -> Option<Read> {
         let now = self.now();
         let held = *self.held_until.lock().unwrap_or_else(|e| e.into_inner());
-        if now < held {
+        if !Self::is_due(now, held) {
             return None;
         }
         match self.store.caption_poll().await {
-            Ok(Some((next_at, _))) if now < next_at => return None,
+            Ok(Some((next_at, _))) if !Self::is_due(now, next_at) => return None,
             Ok(_) => {}
             Err(e) => {
                 eprintln!("Anissia caption observation: {e}");
                 return None;
             }
         }
+        let next_at = now + OBSERVE_EVERY.as_millis() as i64;
+        *self.held_until.lock().unwrap_or_else(|e| e.into_inner()) = next_at;
+        if let Err(e) = self.store.schedule_caption_poll(next_at, None).await {
+            eprintln!("Anissia caption observation: cannot write the schedule: {e}");
+        }
+
         let read = self.read_recent().await;
-        let every = OBSERVE_EVERY.as_millis() as i64;
-        let mut next_at = now + every;
+
+        let counts = format!(
+            "{} page(s) read, {} added, {} unchanged, {} skipped",
+            read.pages, read.added, read.unchanged, read.skipped
+        );
+        let mut next_at = next_at;
         let mut read_at = None;
         match &read.end {
-            End::Complete => read_at = Some(self.now()),
+            End::Complete => {
+                read_at = Some(self.now());
+                println!("Anissia caption observation: {counts}");
+            }
             End::Busy(wait) => {
                 eprintln!(
-                    "Anissia caption observation: asked to wait {}s",
+                    "Anissia caption observation: asked to wait {}s; {counts}",
                     wait.as_secs()
                 );
                 next_at = next_at.max(self.now() + wait.as_millis() as i64);
             }
-            End::Failed(why) => eprintln!("Anissia caption observation: {why}"),
+            End::Failed(why) => eprintln!("Anissia caption observation failed: {why}; {counts}"),
         }
         *self.held_until.lock().unwrap_or_else(|e| e.into_inner()) = next_at;
         if let Err(e) = self.store.schedule_caption_poll(next_at, read_at).await {
