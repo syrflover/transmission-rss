@@ -1,9 +1,9 @@
 use super::*;
-use crate::store::status::read_day;
-use crate::{
-    schedule::calendar::date_text,
-    store::channels::{Channel, Subscription, SubtitleMode},
+use crate::store::{
+    channels::{Channel, Subscription, SubtitleMode},
+    status::read_day,
 };
+use trss_core::calendar::date_text;
 
 /// 2026-10-01 12:00 in Seoul.
 const NOW: Millis = 1_790_780_400_000 + 12 * 60 * 60 * 1000;

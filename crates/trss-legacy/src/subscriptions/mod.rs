@@ -8,6 +8,7 @@ pub mod candidates;
 use std::{collections::HashMap, sync::OnceLock};
 
 use regex::Regex;
+use trss_core::calendar::{civil_from_days, DAY_MS, KST_OFFSET_MS};
 
 use crate::store::history::{HistoryItem, Millis};
 
@@ -201,23 +202,6 @@ pub struct Quarter {
     pub year: i32,
     /// 1 to 4.
     pub number: u8,
-}
-
-pub(crate) const KST_OFFSET_MS: i64 = 9 * 60 * 60 * 1000;
-pub(crate) const DAY_MS: i64 = 24 * 60 * 60 * 1000;
-
-/// The civil date of a day count since 1970-01-01 (proleptic Gregorian).
-pub(crate) fn civil_from_days(days: i64) -> (i32, u32, u32) {
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
-    let year = (yoe + era * 400 + i64::from(month <= 2)) as i32;
-    (year, month, day)
 }
 
 impl Quarter {

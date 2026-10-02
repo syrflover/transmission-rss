@@ -14,12 +14,12 @@
 
 use serde::{Deserialize, Serialize};
 
-use trss_core::Clock;
-
-use crate::{
-    store::commands::{Command, CommandState, Outcome},
-    worker::{watch, CycleContext},
+use trss_core::{
+    commands::{Command, CommandState, Outcome},
+    Clock,
 };
+
+use crate::worker::{watch, CycleContext};
 
 /// The `kind` of the command.
 pub const KIND: &str = "watch_rescan";

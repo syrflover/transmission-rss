@@ -76,9 +76,9 @@ use super::{
     subscriptions_api::{quarter_of, QuarterView},
     ApiError, AppState,
 };
+use trss_core::calendar::{date_text, day_of, week_start, weekday};
 use trss_legacy::{
     schedule::{
-        calendar::{date_text, day_of, week_start, weekday},
         slot::{episode_on, slot_in_week, Slot},
         state::{self, Facts, SubtitleState, VideoState},
     },
@@ -290,7 +290,7 @@ async fn downloading_hashes(state: &AppState, now: Millis) -> Result<HashSet<Str
         return Ok(HashSet::new());
     };
     let last = state.history.last_cycle().await.map_err(internal)?;
-    let beat = state.status.heartbeat().await.map_err(internal)?;
+    let beat = state.heartbeat.read().await.map_err(internal)?;
     let seen_until = match last {
         Some(cycle) if worker_busy(&cycle, beat.as_ref(), interval, now) => {
             cycle.started_at.min(now)

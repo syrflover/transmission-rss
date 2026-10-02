@@ -13,9 +13,6 @@
 //!   weeks without a new item in;
 //! - the worker's cycle interval, which the web cannot read from its own
 //!   environment, so it can tell when the next check is due;
-//! - the worker's heartbeat ([`WorkerHeartbeat`]), written every few seconds
-//!   while it holds the cycle lock, so the web can tell a worker that is busy
-//!   from one that died, without touching the lock.
 //!
 //! A snapshot is a fact about the time it was taken, so it carries that time
 //! and the screen shows it; a failed look at Transmission leaves the older
@@ -100,17 +97,6 @@ impl TorrentListing {
     pub fn holds(&self, hash: &str) -> bool {
         self.hashes.contains(&hash.to_ascii_lowercase())
     }
-}
-
-/// The worker's pulse while it holds the cycle lock.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct WorkerHeartbeat {
-    /// The last time the worker wrote it: every few seconds while it holds the
-    /// lock, and once more when it lets go.
-    pub beat_at: Millis,
-    /// When the worker took the lock; `None` once it has let go. A worker that
-    /// died while holding it leaves this set and a `beat_at` that ages.
-    pub held_since: Option<Millis>,
 }
 
 /// Async access to the worker's snapshots. Cheap to clone.
@@ -277,48 +263,6 @@ impl StatusStore {
                         "SELECT cycle_interval_ms FROM worker_info WHERE id = 1",
                         [],
                         |r| r.get(0),
-                    )
-                    .optional()?,
-                )
-            })
-            .await
-    }
-
-    /// Records that the worker is alive at `beat_at` and, with `held_since`, has
-    /// held the cycle lock since then (`None`: it has let go of it).
-    pub async fn record_heartbeat(
-        &self,
-        beat_at: Millis,
-        held_since: Option<Millis>,
-    ) -> Result<(), StatusError> {
-        self.db
-            .run(move |c| {
-                c.execute(
-                    "INSERT INTO worker_heartbeat (id, beat_at, held_since) VALUES (1, ?1, ?2)
-                     ON CONFLICT (id) DO UPDATE
-                     SET beat_at = excluded.beat_at, held_since = excluded.held_since",
-                    params![beat_at, held_since],
-                )?;
-                Ok::<_, StatusError>(())
-            })
-            .await
-    }
-
-    /// The worker's last heartbeat; `None` while no worker of this version has
-    /// run a cycle (an older worker writes none).
-    pub async fn heartbeat(&self) -> Result<Option<WorkerHeartbeat>, StatusError> {
-        self.db
-            .run(|c| {
-                Ok::<_, StatusError>(
-                    c.query_row(
-                        "SELECT beat_at, held_since FROM worker_heartbeat WHERE id = 1",
-                        [],
-                        |r| {
-                            Ok(WorkerHeartbeat {
-                                beat_at: r.get(0)?,
-                                held_since: r.get(1)?,
-                            })
-                        },
                     )
                     .optional()?,
                 )

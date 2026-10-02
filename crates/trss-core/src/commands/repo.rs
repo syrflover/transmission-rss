@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use rusqlite::{params, params_from_iter, Connection, Row, TransactionBehavior};
 
 use super::{Accepted, Command, CommandError, CommandState, NewCommand, Outcome, MAX_ATTEMPTS};
-use crate::store::history::Millis;
+use crate::Millis;
 
 type Result<T> = std::result::Result<T, CommandError>;
 

@@ -1712,7 +1712,7 @@ impl Scene {
 /// `이어서 되돌리기` carries it on later.
 #[tokio::test]
 async fn an_undo_that_cannot_reach_transmission_stops_and_is_carried_on_later() {
-    use trss_legacy::store::commands::{CommandStore, NewCommand};
+    use trss_core::commands::{CommandStore, NewCommand};
     let (s, rule) = Scene::third_season_received().await;
     s.undo_cut_short(&rule, "undo-0301-a").await;
     // Another command waits behind it (an undo of a rule that is gone).
@@ -1788,10 +1788,8 @@ async fn a_file_renamed_before_a_start_was_cut_short_is_recorded_renamed() {
 /// new undo of the rule as it is: it does not carry on an older one.
 #[tokio::test]
 async fn an_automatic_rule_starts_a_new_undo_instead_of_carrying_on_an_old_one() {
-    use trss_legacy::store::{
-        commands::{CommandState, CommandStore, Outcome},
-        DbError,
-    };
+    use trss_core::commands::{CommandState, CommandStore, Outcome};
+    use trss_legacy::store::DbError;
     let (s, rule) = Scene::third_season_received().await;
     s.undo_cut_short(&rule, "undo-0304-a").await;
     CommandStore::new(s.h.db.clone())
@@ -1835,7 +1833,7 @@ async fn an_automatic_rule_starts_a_new_undo_instead_of_carrying_on_an_old_one()
 
 #[tokio::test]
 async fn an_undo_that_ended_half_done_is_shown_and_carried_on_when_asked_again() {
-    use trss_legacy::store::commands::{CommandState, CommandStore, Outcome};
+    use trss_core::commands::{CommandState, CommandStore, Outcome};
     let (s, rule) = Scene::third_season_received().await;
     s.undo_cut_short(&rule, "undo-0302-a").await;
     // It ended there (a panic, say).

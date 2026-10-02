@@ -10,8 +10,13 @@ test-support = []
 
 [dependencies]
 rusqlite = { version = "0.40", features = ["bundled"] }
+# `renameat2` with `RENAME_NOREPLACE`, without `unsafe`.
+rustix = { version = "1", features = ["fs"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 thiserror = "2"
-tokio = { version = "1", features = ["rt"] }
+tokio = { version = "1", features = ["rt", "macros", "time"] }
+tokio-util = "0.7"
 
 [dev-dependencies]
 tempfile = "3.27.0"

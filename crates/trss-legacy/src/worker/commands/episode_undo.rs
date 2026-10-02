@@ -113,20 +113,20 @@ use std::{
 use serde::{Deserialize, Serialize};
 use transmission_rpc::types::Id;
 
-use trss_core::Clock;
+use trss_core::{
+    commands::{Command, CommandState, Outcome},
+    files::rename_noreplace,
+    Clock,
+};
 
 use crate::{
     discovery::VIDEO_EXTENSIONS,
     episode_offset::signed,
     revision::FileIdentity,
     rss::save_path,
-    store::{
-        channels::{NewUndoFile, Rule, UndoBegun, UndoFileState, REVISION_UNDER_WAY},
-        commands::{Command, CommandState, Outcome},
-    },
+    store::channels::{NewUndoFile, Rule, UndoBegun, UndoFileState, REVISION_UNDER_WAY},
     transmission::{torrent_places, TorrentPlace},
     worker::{
-        commands::rule_archive::work_folder::rename_noreplace,
         revisions::{episode_name, owner_of, same_folder, Owner},
         CycleContext,
     },

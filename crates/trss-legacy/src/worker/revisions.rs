@@ -1566,11 +1566,9 @@ async fn rename(ctx: &CycleContext, row: &mut Revision, listing: &Listing) -> Ne
         }
         // Nothing of Transmission's to keep in step with: the file is renamed
         // on disk, never over another.
-        None => {
-            crate::worker::commands::rule_archive::work_folder::rename_noreplace(&source, &target)
-                .err()
-                .map(|err| err.to_string())
-        }
+        None => trss_core::files::rename_noreplace(&source, &target)
+            .err()
+            .map(|err| err.to_string()),
     };
     if let Some(failure) = failure {
         return Next::Step(Step::Removed {

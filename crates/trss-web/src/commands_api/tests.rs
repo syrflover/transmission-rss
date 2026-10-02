@@ -215,7 +215,7 @@ async fn the_same_command_delivered_twice_is_stored_once_and_answered_alike() {
         .finish(
             &claimed.id,
             CommandState::Done,
-            trss_legacy::store::commands::Outcome {
+            trss_core::commands::Outcome {
                 result: "received".into(),
                 reason: None,
             },

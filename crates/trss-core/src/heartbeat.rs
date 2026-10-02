@@ -6,24 +6,87 @@
 //! for (a cycle: the RSS work, then the watch folder reading and the season
 //! link that follow under the same lock; the commands the web accepted; a
 //! reading that a watch folder's alert asked for), a task writes a timestamp to
-//! the database every [`BEAT_EVERY`]
-//! ([`crate::store::status::StatusStore::record_heartbeat`]). Every holder runs
-//! its work through [`while_holding`] once it has the lock.
+//! the database every [`BEAT_EVERY`] ([`HeartbeatStore::record`]). Every holder
+//! runs its work through [`while_holding`] once it has the lock.
 //! A timestamp that stops ageing means the worker is busy; one that has aged
 //! for a minute means it died or is stopped, whatever the cycle's own marker
-//! says. See `crate::web::status_api` for how the web reads it.
+//! says. The web reads it with [`HeartbeatStore::read`] (`status_api` in
+//! `trss-web`).
 
 use std::{future::Future, time::Duration};
 
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use crate::store::{history::Millis, status::StatusStore};
-use trss_core::Clock;
+use rusqlite::OptionalExtension;
+
+use crate::{Clock, Db, DbError, Millis};
 
 /// How often the heartbeat is written. The web calls the worker busy for a
 /// minute after a beat, so this leaves room for three missed beats.
 pub const BEAT_EVERY: Duration = Duration::from_secs(15);
+
+/// The worker's pulse while it holds the cycle lock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WorkerHeartbeat {
+    /// The last time the worker wrote it: every few seconds while it holds the
+    /// lock, and once more when it lets go.
+    pub beat_at: Millis,
+    /// When the worker took the lock; `None` once it has let go. A worker that
+    /// died while holding it leaves this set and a `beat_at` that ages.
+    pub held_since: Option<Millis>,
+}
+
+/// Async access to the heartbeat the worker writes and the web reads. Cheap
+/// to clone.
+#[derive(Clone)]
+pub struct HeartbeatStore {
+    db: Db,
+}
+
+impl HeartbeatStore {
+    pub fn new(db: Db) -> Self {
+        HeartbeatStore { db }
+    }
+
+    /// Records that the worker is alive at `beat_at` and, with `held_since`, has
+    /// held the cycle lock since then (`None`: it has let go of it).
+    pub async fn record(&self, beat_at: Millis, held_since: Option<Millis>) -> Result<(), DbError> {
+        self.db
+            .run(move |c| {
+                c.execute(
+                    "INSERT INTO worker_heartbeat (id, beat_at, held_since) VALUES (1, ?1, ?2)
+                     ON CONFLICT (id) DO UPDATE
+                     SET beat_at = excluded.beat_at, held_since = excluded.held_since",
+                    rusqlite::params![beat_at, held_since],
+                )?;
+                Ok::<_, DbError>(())
+            })
+            .await
+    }
+
+    /// The worker's last heartbeat; `None` while no worker of this version has
+    /// run a cycle (an older worker writes none).
+    pub async fn read(&self) -> Result<Option<WorkerHeartbeat>, DbError> {
+        self.db
+            .run(|c| {
+                Ok::<_, DbError>(
+                    c.query_row(
+                        "SELECT beat_at, held_since FROM worker_heartbeat WHERE id = 1",
+                        [],
+                        |r| {
+                            Ok(WorkerHeartbeat {
+                                beat_at: r.get(0)?,
+                                held_since: r.get(1)?,
+                            })
+                        },
+                    )
+                    .optional()?,
+                )
+            })
+            .await
+    }
+}
 
 /// Runs `work`, which the caller does with the cycle lock held, with the
 /// heartbeat beating, and lets go of the hold when it returns. The caller drops
@@ -31,12 +94,12 @@ pub const BEAT_EVERY: Duration = Duration::from_secs(15);
 /// panics or is dropped the heartbeat is dropped with it: no clean end is
 /// written and the timestamp ages.
 pub async fn while_holding<T>(
-    status: StatusStore,
+    store: HeartbeatStore,
     clock: Clock,
     every: Duration,
     work: impl Future<Output = T>,
 ) -> T {
-    let beat = Heartbeat::start(status, clock, every).await;
+    let beat = Heartbeat::start(store, clock, every).await;
     let out = work.await;
     beat.stop().await;
     out
@@ -48,7 +111,7 @@ pub async fn while_holding<T>(
 /// only stops the beats, so the timestamp ages and the web sees a worker that
 /// has stopped.
 pub struct Heartbeat {
-    status: StatusStore,
+    store: HeartbeatStore,
     clock: Clock,
     stop: CancellationToken,
     task: Option<JoinHandle<()>>,
@@ -58,13 +121,13 @@ impl Heartbeat {
     /// Starts beating for a lock taken now. A beat that cannot be written is
     /// logged and does not fail the cycle: the worst it does is show the worker
     /// as stopped.
-    pub async fn start(status: StatusStore, clock: Clock, every: Duration) -> Heartbeat {
+    pub async fn start(store: HeartbeatStore, clock: Clock, every: Duration) -> Heartbeat {
         let held_since = clock();
-        write(&status, clock(), Some(held_since)).await;
+        write(&store, clock(), Some(held_since)).await;
 
         let stop = CancellationToken::new();
         let task = tokio::spawn({
-            let (status, clock, stop) = (status.clone(), clock.clone(), stop.clone());
+            let (store, clock, stop) = (store.clone(), clock.clone(), stop.clone());
             async move {
                 loop {
                     tokio::select! {
@@ -72,12 +135,12 @@ impl Heartbeat {
                         _ = stop.cancelled() => break,
                         _ = tokio::time::sleep(every) => {}
                     }
-                    write(&status, clock(), Some(held_since)).await;
+                    write(&store, clock(), Some(held_since)).await;
                 }
             }
         });
         Heartbeat {
-            status,
+            store,
             clock,
             stop,
             task: Some(task),
@@ -92,7 +155,7 @@ impl Heartbeat {
             // Wait for a beat in flight, so that it cannot land after this one.
             let _ = task.await;
         }
-        write(&self.status, (self.clock)(), None).await;
+        write(&self.store, (self.clock)(), None).await;
     }
 }
 
@@ -104,8 +167,8 @@ impl Drop for Heartbeat {
     }
 }
 
-async fn write(status: &StatusStore, at: Millis, held_since: Option<Millis>) {
-    if let Err(err) = status.record_heartbeat(at, held_since).await {
+async fn write(store: &HeartbeatStore, at: Millis, held_since: Option<Millis>) {
+    if let Err(err) = store.record(at, held_since).await {
         eprintln!("Cannot record the worker heartbeat: {err}");
     }
 }
@@ -118,7 +181,6 @@ mod tests {
     };
 
     use super::*;
-    use crate::store::{status::WorkerHeartbeat, Db};
 
     /// A clock that moves one second at each reading, so that every beat has its own time.
     fn ticking_clock() -> Clock {
@@ -126,33 +188,59 @@ mod tests {
         Arc::new(move || now.fetch_add(1_000, Ordering::SeqCst))
     }
 
-    async fn heartbeat_of(status: &StatusStore) -> Option<WorkerHeartbeat> {
-        status.heartbeat().await.unwrap()
+    async fn heartbeat_of(store: &HeartbeatStore) -> Option<WorkerHeartbeat> {
+        store.read().await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn the_heartbeat_is_whatever_the_worker_last_wrote() {
+        let store = HeartbeatStore::new(Db::open(":memory:").await.unwrap());
+        assert_eq!(store.read().await.unwrap(), None);
+
+        store.record(1_000, Some(900)).await.unwrap();
+        store.record(16_000, Some(900)).await.unwrap();
+        assert_eq!(
+            store.read().await.unwrap(),
+            Some(WorkerHeartbeat {
+                beat_at: 16_000,
+                held_since: Some(900)
+            })
+        );
+
+        // Letting go of the lock keeps the time and clears the hold.
+        store.record(20_000, None).await.unwrap();
+        assert_eq!(
+            store.read().await.unwrap(),
+            Some(WorkerHeartbeat {
+                beat_at: 20_000,
+                held_since: None
+            })
+        );
     }
 
     #[tokio::test]
     async fn the_first_beat_is_written_before_start_returns() {
-        let status = StatusStore::new(Db::open(":memory:").await.unwrap());
+        let store = HeartbeatStore::new(Db::open(":memory:").await.unwrap());
         let beat =
-            Heartbeat::start(status.clone(), ticking_clock(), Duration::from_secs(3600)).await;
+            Heartbeat::start(store.clone(), ticking_clock(), Duration::from_secs(3600)).await;
 
-        let written = heartbeat_of(&status).await.expect("a first beat");
+        let written = heartbeat_of(&store).await.expect("a first beat");
         assert_eq!(written.held_since, Some(1_000_000));
         beat.stop().await;
     }
 
     #[tokio::test]
     async fn it_beats_while_held_and_clears_the_hold_when_stopped() {
-        let status = StatusStore::new(Db::open(":memory:").await.unwrap());
+        let store = HeartbeatStore::new(Db::open(":memory:").await.unwrap());
         let beat =
-            Heartbeat::start(status.clone(), ticking_clock(), Duration::from_millis(10)).await;
-        let first = heartbeat_of(&status).await.unwrap();
+            Heartbeat::start(store.clone(), ticking_clock(), Duration::from_millis(10)).await;
+        let first = heartbeat_of(&store).await.unwrap();
 
         // The beat moves on while the lock is held, and the hold keeps its start.
         let mut later = first;
         for _ in 0..200 {
             tokio::time::sleep(Duration::from_millis(10)).await;
-            later = heartbeat_of(&status).await.unwrap();
+            later = heartbeat_of(&store).await.unwrap();
             if later.beat_at > first.beat_at {
                 break;
             }
@@ -161,29 +249,29 @@ mod tests {
         assert_eq!(later.held_since, first.held_since);
 
         beat.stop().await;
-        let released = heartbeat_of(&status).await.unwrap();
+        let released = heartbeat_of(&store).await.unwrap();
         assert_eq!(released.held_since, None);
         assert!(released.beat_at >= later.beat_at);
 
         // Nothing beats after the stop.
         tokio::time::sleep(Duration::from_millis(60)).await;
-        assert_eq!(heartbeat_of(&status).await.unwrap(), released);
+        assert_eq!(heartbeat_of(&store).await.unwrap(), released);
     }
 
     #[tokio::test]
     async fn a_dropped_heartbeat_stops_beating_and_keeps_the_hold() {
-        let status = StatusStore::new(Db::open(":memory:").await.unwrap());
+        let store = HeartbeatStore::new(Db::open(":memory:").await.unwrap());
         let beat =
-            Heartbeat::start(status.clone(), ticking_clock(), Duration::from_millis(10)).await;
+            Heartbeat::start(store.clone(), ticking_clock(), Duration::from_millis(10)).await;
         tokio::time::sleep(Duration::from_millis(50)).await;
 
         // The cycle panicked or was aborted: no clean end is written, so the
         // timestamp ages and the web sees a stopped worker.
         drop(beat);
         tokio::time::sleep(Duration::from_millis(30)).await;
-        let stopped = heartbeat_of(&status).await.unwrap();
+        let stopped = heartbeat_of(&store).await.unwrap();
         assert!(stopped.held_since.is_some());
         tokio::time::sleep(Duration::from_millis(60)).await;
-        assert_eq!(heartbeat_of(&status).await.unwrap(), stopped);
+        assert_eq!(heartbeat_of(&store).await.unwrap(), stopped);
     }
 }

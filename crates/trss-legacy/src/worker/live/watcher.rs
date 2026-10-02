@@ -15,15 +15,12 @@ use super::{
     tree::{self, Due, RawEvent, WatchTree},
     FolderStatus, LiveConfig, Runtime,
 };
-use trss_core::CycleLock;
-
-use crate::{
-    store::status::StatusStore,
-    worker::{
-        heartbeat,
-        watch::{self, ScanMode, WorksMode},
-    },
+use trss_core::{
+    heartbeat::{self, HeartbeatStore},
+    CycleLock,
 };
+
+use crate::worker::watch::{self, ScanMode, WorksMode};
 
 /// What the rest of the worker can ask of a folder's task.
 #[derive(Debug)]
@@ -264,7 +261,7 @@ impl Task {
             None
         };
         let next = heartbeat::while_holding(
-            StatusStore::new(ctx.channels.db().clone()),
+            HeartbeatStore::new(ctx.channels.db().clone()),
             self.runtime.clock.clone(),
             self.runtime.heartbeat_every,
             read,

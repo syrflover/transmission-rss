@@ -120,17 +120,25 @@ use super::{
     subscriptions_api::{subscription_brief, SubscriptionBrief},
     ApiError, AppState,
 };
-use trss_legacy::rss::{ChannelEvaluator, ChannelSpec, RuleSpec};
-use trss_legacy::store::anissia::Anime;
-use trss_legacy::store::channels::{
-    Channel, ChannelError, ChannelWithRules, OrderItem, Rule, RuleInput, RuleState, SeasonRef, MASK,
+use trss_core::commands::Command;
+use trss_legacy::{
+    rss::{ChannelEvaluator, ChannelSpec, RuleSpec},
+    store::{
+        anissia::Anime,
+        channels::{
+            Channel, ChannelError, ChannelWithRules, OrderItem, Rule, RuleInput, RuleState,
+            SeasonRef, MASK,
+        },
+        history::{
+            HistoryError, HistoryItem, HistoryQuery, HistoryResult, HistoryStore, KnownItem,
+            MAX_PAGE_SIZE,
+        },
+    },
+    worker::{
+        commands::rule_archive::{self, RuleArchive},
+        plan::{ChannelPlan, Judgement, PastCause, PlanEvaluation},
+    },
 };
-use trss_legacy::store::commands::Command;
-use trss_legacy::store::history::{
-    HistoryError, HistoryItem, HistoryQuery, HistoryResult, HistoryStore, KnownItem, MAX_PAGE_SIZE,
-};
-use trss_legacy::worker::commands::rule_archive::{self, RuleArchive};
-use trss_legacy::worker::plan::{ChannelPlan, Judgement, PastCause, PlanEvaluation};
 
 mod episode;
 #[cfg(test)]

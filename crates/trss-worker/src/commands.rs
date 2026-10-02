@@ -1,4 +1,4 @@
-//! Carrying out the commands the web accepted (see [`trss_legacy::store::commands`]).
+//! Carrying out the commands the web accepted (see [`trss_core::commands`]).
 //!
 //! The worker looks for waiting commands every [`DEFAULT_COMMAND_POLL`] (a few
 //! seconds, not the cycle interval) and runs them **only while holding the
@@ -11,7 +11,7 @@
 //!   progress therefore delays a command until it ends.
 //!
 //! A command claimed by a worker that then died stays `running`; the next
-//! worker to hold the lock claims it again (see [`trss_legacy::store::commands::CommandStore::claim_next`]).
+//! worker to hold the lock claims it again (see [`trss_core::commands::CommandStore::claim_next`]).
 //! Adding a torrent Transmission already has answers `duplicate`, so running
 //! such a command a second time does not add a second torrent.
 //!
@@ -25,7 +25,7 @@
 //!
 //! A request to add a torrent that was sent and got no answer (it timed out,
 //! say) may have been taken all the same. The command is not ended then: it is
-//! marked ([`trss_legacy::store::commands::CommandStore::note_unconfirmed_add`]) and stays `running` for the
+//! marked ([`trss_core::commands::CommandStore::note_unconfirmed_add`]) and stays `running` for the
 //! next look, and cycles in between remove nothing, as above. The next start
 //! adds the item again; Transmission answers `duplicate` with the hash, and a
 //! torrent carrying the command's label counts as this command's own
@@ -35,9 +35,9 @@
 //! channel was deleted, the folder is refused) ends the command at once too;
 //! the torrent's item label keeps it while its item is in a feed.
 //!
-//! The last start ([`trss_legacy::store::commands::MAX_ATTEMPTS`]) ends the command
+//! The last start ([`trss_core::commands::MAX_ATTEMPTS`]) ends the command
 //! instead, and so does a task that ended in a panic, with the unanswered add
-//! recorded ([`trss_legacy::store::commands::CommandStore::finish_with_unconfirmed_add`]): Transmission may
+//! recorded ([`trss_core::commands::CommandStore::finish_with_unconfirmed_add`]): Transmission may
 //! hold its torrent under a hash history never learned, and the next cycle
 //! removes no departed torrents either (see [`crate::CommandsAtStart`]).
 //!
@@ -72,11 +72,13 @@ use std::{sync::Arc, time::Duration};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
-use trss_core::CycleLock;
+use trss_core::{
+    commands::{Command, CommandState, Outcome},
+    CycleLock,
+};
 
-use trss_legacy::{
-    store::commands::{Command, CommandState, Outcome},
-    worker::commands::{episode_undo, receive_once, receive_past, rule_archive, watch_rescan},
+use trss_legacy::worker::commands::{
+    episode_undo, receive_once, receive_past, rule_archive, watch_rescan,
 };
 
 use super::{Worker, WorkerError};

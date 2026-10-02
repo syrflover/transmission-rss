@@ -72,10 +72,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::{in_place::Evidence, ApiError, AppState};
+use trss_core::commands::{Accepted, Command, CommandState, NewCommand};
 use trss_legacy::{
     past_search::service::Resolve,
     store::channels::RuleState,
-    store::commands::{Accepted, Command, CommandState, NewCommand},
     worker::commands::{episode_undo, receive_once, receive_past, rule_archive, watch_rescan},
 };
 
@@ -560,7 +560,7 @@ async fn create_command(
     // is asked of the request: the data it was checked against may have
     // changed since, and a tab that predates an upgrade may send it again in
     // its old form.
-    let store = |e: trss_legacy::store::commands::CommandError| ApiError::Internal(e.to_string());
+    let store = |e: trss_core::commands::CommandError| ApiError::Internal(e.to_string());
     match state.commands.get(&body.id).await.map_err(store)? {
         Some(stored) if request.is_repeat_of(&stored) => {
             return Ok((StatusCode::OK, Json(CommandView::from(&stored))));

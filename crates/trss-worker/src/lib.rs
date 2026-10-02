@@ -90,7 +90,11 @@ pub mod env;
 use std::{path::PathBuf, time::Duration};
 
 use tokio_util::sync::CancellationToken;
-use trss_core::{system_clock, Clock, CycleLock};
+use trss_core::{
+    commands::{CommandError, CommandStore},
+    heartbeat::{self, HeartbeatStore},
+    system_clock, Clock, CycleLock,
+};
 
 pub use commands::{CommandsOutcome, DEFAULT_COMMAND_POLL};
 pub use cycle::{run_cycle, CommandsAtStart, CycleError, CycleReport};
@@ -99,7 +103,6 @@ pub use env::{EnvError, WorkerEnv};
 use trss_legacy::{
     store::{
         channels::ChannelStore,
-        commands::{CommandError, CommandStore},
         history::{HistoryError, HistoryStore},
         library::LibraryStore,
         revisions::RevisionStore,
@@ -109,7 +112,7 @@ use trss_legacy::{
         Db,
     },
     transmission::{Redactor, RenamePolicy},
-    worker::{feed, heartbeat, live, season_link, watch, CycleContext, MovePolicy},
+    worker::{feed, live, season_link, watch, CycleContext, MovePolicy},
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -315,7 +318,7 @@ impl Worker {
     /// work through this.
     pub(crate) async fn beating<T>(&self, work: impl std::future::Future<Output = T>) -> T {
         heartbeat::while_holding(
-            StatusStore::new(self.ctx.channels.db().clone()),
+            HeartbeatStore::new(self.ctx.channels.db().clone()),
             self.clock.clone(),
             self.heartbeat_every,
             work,

@@ -64,13 +64,12 @@ use rusqlite::TransactionBehavior;
 use sha2::{Digest, Sha256};
 
 use super::{image::sniff, MAX_IMAGE_BYTES};
-use crate::{
-    store::{
-        artwork::{self as store, ArtworkError, ArtworkStore, Format, ImageRef, Source},
-        history::Millis,
-    },
-    worker::commands::rule_archive::work_folder::rename_noreplace,
+use crate::store::{
+    artwork as store,
+    artwork::{ArtworkError, ArtworkStore, Format, ImageRef, Source},
+    history::Millis,
 };
+use trss_core::files::rename_noreplace;
 
 /// The folder of the images, relative to the app data folder.
 pub const ARTWORK_DIR: &str = "artwork";

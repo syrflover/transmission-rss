@@ -1,6 +1,6 @@
 use super::*;
 use crate::store::history::{HistoryResult, HistoryStore, Observation};
-use trss_core::db::schema_version;
+use trss_core::{db::schema_version, heartbeat::HeartbeatStore};
 
 async fn db() -> Db {
     Db::open(":memory:").await.unwrap()
@@ -170,32 +170,6 @@ async fn the_cycle_interval_is_whatever_the_worker_last_recorded() {
     store.record_cycle_interval(60_000).await.unwrap();
 
     assert_eq!(store.cycle_interval().await.unwrap(), Some(60_000));
-}
-
-#[tokio::test]
-async fn the_heartbeat_is_whatever_the_worker_last_wrote() {
-    let store = StatusStore::new(db().await);
-    assert_eq!(store.heartbeat().await.unwrap(), None);
-
-    store.record_heartbeat(1_000, Some(900)).await.unwrap();
-    store.record_heartbeat(16_000, Some(900)).await.unwrap();
-    assert_eq!(
-        store.heartbeat().await.unwrap(),
-        Some(WorkerHeartbeat {
-            beat_at: 16_000,
-            held_since: Some(900)
-        })
-    );
-
-    // Letting go of the lock keeps the time and clears the hold.
-    store.record_heartbeat(20_000, None).await.unwrap();
-    assert_eq!(
-        store.heartbeat().await.unwrap(),
-        Some(WorkerHeartbeat {
-            beat_at: 20_000,
-            held_since: None
-        })
-    );
 }
 
 fn observation(key: &str, result: HistoryResult) -> Observation {
@@ -479,9 +453,10 @@ async fn a_database_from_before_the_heartbeat_has_none_until_the_worker_writes_o
     let db = Db::open(&path).await.unwrap();
 
     assert_eq!(schema_version_of(&db).await, schema_version());
-    let status = StatusStore::new(db);
+    let status = StatusStore::new(db.clone());
     assert_eq!(status.cycle_interval().await.unwrap(), Some(300_000));
-    assert_eq!(status.heartbeat().await.unwrap(), None);
-    status.record_heartbeat(500, Some(400)).await.unwrap();
-    assert_eq!(status.heartbeat().await.unwrap().unwrap().beat_at, 500);
+    let heartbeat = HeartbeatStore::new(db);
+    assert_eq!(heartbeat.read().await.unwrap(), None);
+    heartbeat.record(500, Some(400)).await.unwrap();
+    assert_eq!(heartbeat.read().await.unwrap().unwrap().beat_at, 500);
 }

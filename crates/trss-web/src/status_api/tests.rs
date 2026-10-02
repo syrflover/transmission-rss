@@ -395,16 +395,16 @@ async fn a_worker_killed_in_a_cycle_is_stalled_once_its_heartbeat_is_stale() {
 
     // The worker is beating: busy with the cycle.
     state
-        .status
-        .record_heartbeat(NOON - 10_000, Some(NOON - 10 * MINUTE))
+        .heartbeat
+        .record(NOON - 10_000, Some(NOON - 10 * MINUTE))
         .await
         .unwrap();
     assert!(!stalled_at(board(&state, NOON, 0).await.unwrap()));
 
     // It was killed: the beat stopped two minutes ago, and the board says so.
     state
-        .status
-        .record_heartbeat(NOON - 2 * MINUTE, Some(NOON - 10 * MINUTE))
+        .heartbeat
+        .record(NOON - 2 * MINUTE, Some(NOON - 10 * MINUTE))
         .await
         .unwrap();
     assert!(stalled_at(board(&state, NOON, 0).await.unwrap()));
@@ -415,8 +415,8 @@ async fn the_heartbeat_is_fresh_for_a_minute() {
     let (state, _router) = app();
     cycle_of_five_minutes(&state, 10 * MINUTE, false).await;
     state
-        .status
-        .record_heartbeat(NOON, Some(NOON - 10 * MINUTE))
+        .heartbeat
+        .record(NOON, Some(NOON - 10 * MINUTE))
         .await
         .unwrap();
 
@@ -434,15 +434,15 @@ async fn a_long_folder_scan_after_the_cycle_ended_is_not_stalled_while_the_worke
     // folders and beats every few seconds.
     cycle_of_five_minutes(&state, 15 * MINUTE, true).await;
     state
-        .status
-        .record_heartbeat(NOON - 5_000, Some(NOON - 15 * MINUTE))
+        .heartbeat
+        .record(NOON - 5_000, Some(NOON - 15 * MINUTE))
         .await
         .unwrap();
     assert!(!stalled_at(board(&state, NOON, 0).await.unwrap()));
 
     // The scan ends and the worker lets go; the next cycle is about to start,
     // so the board waits a minute before calling the next check overdue.
-    state.status.record_heartbeat(NOON, None).await.unwrap();
+    state.heartbeat.record(NOON, None).await.unwrap();
     assert!(!stalled_at(board(&state, NOON + 30_000, 0).await.unwrap()));
     // But a worker that does not come back is reported.
     assert!(stalled_at(
@@ -458,16 +458,16 @@ async fn a_worker_that_beats_but_holds_the_lock_past_the_bound_is_stalled() {
 
     // Fifty minutes (ten intervals) is the bound for a five-minute interval: still busy.
     state
-        .status
-        .record_heartbeat(NOON - 5_000, Some(held))
+        .heartbeat
+        .record(NOON - 5_000, Some(held))
         .await
         .unwrap();
     assert!(!stalled_at(board(&state, NOON, 0).await.unwrap()));
 
     // Beating on, but hung in the cycle: reported once past it.
     state
-        .status
-        .record_heartbeat(NOON + 1 - 5_000, Some(held))
+        .heartbeat
+        .record(NOON + 1 - 5_000, Some(held))
         .await
         .unwrap();
     assert!(stalled_at(board(&state, NOON + 1, 0).await.unwrap()));
@@ -480,14 +480,14 @@ async fn a_worker_that_beats_but_holds_the_lock_past_the_bound_is_stalled() {
         .unwrap();
     let later = held + 100 * MINUTE;
     state
-        .status
-        .record_heartbeat(later - 5_000, Some(held))
+        .heartbeat
+        .record(later - 5_000, Some(held))
         .await
         .unwrap();
     assert!(!stalled_at(board(&state, later, 0).await.unwrap()));
     state
-        .status
-        .record_heartbeat(later + 1 - 5_000, Some(held))
+        .heartbeat
+        .record(later + 1 - 5_000, Some(held))
         .await
         .unwrap();
     assert!(stalled_at(board(&state, later + 1, 0).await.unwrap()));
@@ -498,8 +498,8 @@ async fn an_idle_worker_with_a_stale_heartbeat_is_stalled_only_when_the_next_che
     let (state, _router) = app();
     cycle_of_five_minutes(&state, 6 * MINUTE, true).await;
     state
-        .status
-        .record_heartbeat(NOON - 5 * MINUTE, None)
+        .heartbeat
+        .record(NOON - 5 * MINUTE, None)
         .await
         .unwrap();
     // Between cycles the heartbeat is old by design; the next check is late
@@ -519,7 +519,7 @@ async fn without_a_heartbeat_an_unfinished_cycle_counts_as_running_until_the_bou
     // A worker older than the heartbeat leaves no row: the cycle's own marker
     // is all there is.
     cycle_of_five_minutes(&state, 10 * MINUTE, false).await;
-    assert!(state.status.heartbeat().await.unwrap().is_none());
+    assert!(state.heartbeat.read().await.unwrap().is_none());
     assert!(!stalled_at(board(&state, NOON, 0).await.unwrap()));
     let start = NOON - 10 * MINUTE;
     assert!(!stalled_at(

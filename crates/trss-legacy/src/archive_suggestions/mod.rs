@@ -69,19 +69,16 @@ use std::{
 };
 
 use crate::{
-    schedule::{
-        calendar::day_of,
-        slot::{run_over, Over},
-    },
+    schedule::slot::{run_over, Over},
     store::{
         anissia::Anime,
         channels::{ChannelWithRules, Rule, RuleState},
         history::Millis,
         status::{read_day, READ_DAYS_KEPT},
     },
-    subscriptions::DAY_MS,
     worker::plan::ChannelPlan,
 };
+use trss_core::calendar::{day_of, DAY_MS};
 
 /// How long a rule must go without a new item before it is suggested: 4 weeks.
 pub const QUIET: Millis = 28 * DAY_MS;

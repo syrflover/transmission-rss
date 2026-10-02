@@ -36,9 +36,9 @@ use std::{collections::HashMap, fmt, str::FromStr};
 
 use serde::{Deserialize, Serialize};
 
-use super::{
+use crate::{
     db::{Db, DbError},
-    history::Millis,
+    Millis,
 };
 
 /// How many times a command may be started. A command that was started this

@@ -832,32 +832,28 @@ async fn an_episode_stays_downloading_while_the_worker_beats_through_a_long_scan
         .await
         .unwrap();
     app.state
-        .status
-        .record_heartbeat(NOW - 5_000, Some(NOW - 3 * minute))
+        .heartbeat
+        .record(NOW - 5_000, Some(NOW - 3 * minute))
         .await
         .unwrap();
     assert_eq!(video(&app.week().await), "downloading");
 
     // It let go a moment ago: the next cycle follows at once.
-    app.state
-        .status
-        .record_heartbeat(NOW - 5_000, None)
-        .await
-        .unwrap();
+    app.state.heartbeat.record(NOW - 5_000, None).await.unwrap();
     assert_eq!(video(&app.week().await), "downloading");
 
     // The beat stopped (the worker died in the scan): the look ages out.
     app.state
-        .status
-        .record_heartbeat(NOW - 2 * minute, Some(NOW - 3 * minute))
+        .heartbeat
+        .record(NOW - 2 * minute, Some(NOW - 3 * minute))
         .await
         .unwrap();
     assert_eq!(video(&app.week().await), "waiting");
 
     // Beating on but holding the lock past the bound is a hung worker.
     app.state
-        .status
-        .record_heartbeat(NOW - 5_000, Some(NOW - 31 * minute))
+        .heartbeat
+        .record(NOW - 5_000, Some(NOW - 31 * minute))
         .await
         .unwrap();
     assert_eq!(video(&app.week().await), "waiting");
@@ -920,16 +916,16 @@ async fn a_worker_killed_in_a_cycle_no_longer_holds_the_downloading_look() {
     let video = |body: &Value| body["week"]["days"][3]["cards"][0]["video"].clone();
 
     app.state
-        .status
-        .record_heartbeat(NOW - 5_000, Some(NOW - 3 * minute))
+        .heartbeat
+        .record(NOW - 5_000, Some(NOW - 3 * minute))
         .await
         .unwrap();
     assert_eq!(video(&app.week().await), "downloading");
 
     // The beat stopped two minutes ago: the worker is gone, not slow.
     app.state
-        .status
-        .record_heartbeat(NOW - 2 * minute, Some(NOW - 3 * minute))
+        .heartbeat
+        .record(NOW - 2 * minute, Some(NOW - 3 * minute))
         .await
         .unwrap();
     assert_eq!(video(&app.week().await), "waiting");

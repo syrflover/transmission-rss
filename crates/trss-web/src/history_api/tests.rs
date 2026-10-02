@@ -10,9 +10,9 @@ use serde_json::Value;
 use tower::ServiceExt;
 
 use super::*;
+use trss_core::commands::{CommandState, NewCommand, Outcome};
 use trss_legacy::store::{
     channels::{ChannelInput, RuleInput, RuleState},
-    commands::{CommandState, NewCommand, Outcome},
     history::Observation,
     Db,
 };

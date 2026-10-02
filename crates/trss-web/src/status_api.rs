@@ -39,9 +39,12 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use super::{ApiError, AppState};
-use trss_legacy::store::channels::ChannelError;
-use trss_legacy::store::history::{CycleState, HistoryError, Millis};
-use trss_legacy::store::status::{StatusError, WorkerHeartbeat};
+use trss_core::heartbeat::WorkerHeartbeat;
+use trss_legacy::store::{
+    channels::ChannelError,
+    history::{CycleState, HistoryError, Millis},
+    status::StatusError,
+};
 
 #[cfg(test)]
 mod tests;
@@ -135,7 +138,7 @@ const RUNNING_INTERVALS: i64 = 10;
 
 /// How old the worker's heartbeat may be and still show it busy. The worker
 /// beats every 15 seconds while it holds the cycle lock
-/// ([`trss_legacy::worker::heartbeat`]); this allows three missed beats, and one
+/// ([`trss_core::heartbeat`]); this allows three missed beats, and one
 /// slow database write, before a worker that died is told from one that works,
 /// which is why a killed worker shows as stalled within about a minute.
 pub(super) const HEARTBEAT_FRESH_MS: i64 = 60_000;
@@ -294,7 +297,7 @@ pub async fn board(state: &AppState, now: Millis, tz_offset: i64) -> Result<Boar
             taken_at: t.taken_at,
         });
     let interval = state.status.cycle_interval().await.map_err(internal)?;
-    let heartbeat = state.status.heartbeat().await.map_err(internal)?;
+    let heartbeat = state.heartbeat.read().await.map_err(internal)?;
     let cycle = state
         .history
         .last_cycle()

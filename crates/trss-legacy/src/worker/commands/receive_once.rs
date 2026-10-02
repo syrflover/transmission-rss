@@ -82,7 +82,6 @@ use crate::{
     revision::Release,
     store::{
         channels::{Channel, ChannelWithRules, Rule, RuleState},
-        commands::{Command, CommandState, Outcome, MAX_ATTEMPTS},
         history::{HistoryItem, HistoryResult, Millis},
         revisions::{
             Claim, HistoryWrite, NewRevision, Revision, RevisionError, RevisionState,
@@ -99,6 +98,7 @@ use crate::{
         revisions, CycleContext,
     },
 };
+use trss_core::commands::{Command, CommandState, Outcome, MAX_ATTEMPTS};
 
 /// The `kind` of the command.
 pub const KIND: &str = "receive_once";

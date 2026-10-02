@@ -57,14 +57,14 @@ use std::{
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
-use trss_core::Clock;
+use trss_core::{
+    commands::{Command, CommandState, Outcome, MAX_ATTEMPTS},
+    Clock,
+};
 
 use crate::{
     folders::has_parent_dir,
-    store::{
-        channels::{Rule, RuleState},
-        commands::{Command, CommandState, Outcome, MAX_ATTEMPTS},
-    },
+    store::channels::{Rule, RuleState},
     transmission,
     worker::{watch, CycleContext},
 };

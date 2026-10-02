@@ -1,12 +1,13 @@
+use trss_core::{commands::CommandStore, heartbeat::HeartbeatStore};
 use trss_legacy::{
     anissia::{Anissia, AnissiaConfig},
     artwork::{AnilistConfig, Artwork},
     past_search::service::PastSearch,
     seasons::Seasons,
     store::{
-        channels::ChannelStore, commands::CommandStore, history::HistoryStore,
-        library::LibraryStore, revisions::RevisionStore, search_pace::SearchPace,
-        settings::SettingsStore, setup::SetupStore, status::StatusStore, Db,
+        channels::ChannelStore, history::HistoryStore, library::LibraryStore,
+        revisions::RevisionStore, search_pace::SearchPace, settings::SettingsStore,
+        setup::SetupStore, status::StatusStore, Db,
     },
 };
 
@@ -19,6 +20,8 @@ pub struct AppState {
     pub channels: ChannelStore,
     pub history: HistoryStore,
     pub status: StatusStore,
+    /// The worker's heartbeat, which says whether it is busy or gone.
+    pub heartbeat: HeartbeatStore,
     /// Commands the web accepts and the worker carries out.
     pub commands: CommandStore,
     /// App-wide settings: the collect and archive folders.
@@ -51,6 +54,7 @@ impl AppState {
             channels: ChannelStore::new(db.clone()),
             history: HistoryStore::new(db.clone()),
             status: StatusStore::new(db.clone()),
+            heartbeat: HeartbeatStore::new(db.clone()),
             commands: CommandStore::new(db.clone()),
             settings: SettingsStore::new(db.clone()),
             library: LibraryStore::new(db.clone()),

@@ -7,7 +7,6 @@
 pub mod anissia;
 pub mod artwork;
 pub mod channels;
-pub mod commands;
 pub mod history;
 pub mod library;
 pub mod revisions;

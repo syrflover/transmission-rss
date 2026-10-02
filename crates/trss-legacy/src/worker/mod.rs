@@ -8,15 +8,13 @@
 //! - [`revisions`] replaces a video with its revision;
 //! - [`commands`] holds each kind of web command and how it is carried out;
 //! - [`watch`] and [`live`] read the watch folders, the second from inotify
-//!   alerts; [`heartbeat`] is what the worker leaves for the web while it
-//!   holds the lock;
+//!   alerts;
 //! - [`season_link`] connects subscriptions to the season their videos appeared in;
 //! - [`offsets`] settles a rule's episode offset.
 
 pub mod commands;
 pub mod context;
 pub mod feed;
-pub mod heartbeat;
 pub mod live;
 pub mod offsets;
 pub mod plan;

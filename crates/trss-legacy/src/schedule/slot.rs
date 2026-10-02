@@ -6,7 +6,9 @@
 
 use std::collections::BTreeMap;
 
-use super::calendar::{day_start, weekday, weekday_of_anissia, PartialDate};
+use trss_core::calendar::{day_start, weekday};
+
+use super::calendar::{weekday_of_anissia, PartialDate};
 use crate::store::{
     anissia::{Anime, WEEK_UPCOMING},
     history::Millis,
@@ -128,8 +130,8 @@ pub fn episode_on(anime: &Anime, slot: &Slot, air_times: &BTreeMap<u32, i64>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schedule::calendar::days_from_civil;
     use crate::store::anissia::WEEK_OTHER;
+    use trss_core::calendar::days_from_civil;
 
     fn anime(week: u8, time: Option<&str>, start: Option<&str>, end: Option<&str>) -> Anime {
         Anime {

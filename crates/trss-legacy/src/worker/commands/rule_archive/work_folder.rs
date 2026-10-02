@@ -68,6 +68,7 @@ use std::{
 
 use tokio_util::sync::CancellationToken;
 use transmission_rpc::TransClient;
+use trss_core::files::rename_noreplace;
 
 use crate::{
     folders::has_parent_dir,
@@ -930,16 +931,6 @@ async fn move_torrents(
 // ---------------------------------------------------------------------------
 // 3. Renames
 // ---------------------------------------------------------------------------
-
-/// Renames `from` to `to` unless `to` exists (an `AlreadyExists` error then),
-/// with `renameat2(RENAME_NOREPLACE)`. Never replaces anything, a directory
-/// included. There is no fallback: a filesystem without the flag answers
-/// `InvalidInput` or `Unsupported`, and the checks refuse such a move before
-/// anything has moved ([`probe_renames`]).
-pub fn rename_noreplace(from: &Path, to: &Path) -> io::Result<()> {
-    use rustix::fs::{renameat_with, RenameFlags, CWD};
-    renameat_with(CWD, from, CWD, to, RenameFlags::NOREPLACE).map_err(io::Error::from)
-}
 
 /// Step 3: moves what is left at `source` to `destination`. Returns whether
 /// anything was renamed. Stops between two entries when `cancel` is set.

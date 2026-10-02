@@ -23,10 +23,10 @@ use axum::http::StatusCode;
 use common::*;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
+use trss_core::commands::{CommandState, CommandStore};
 use trss_legacy::{
     store::{
         channels::{ChannelInput, ChannelWithRules, RuleInput, RuleState},
-        commands::{CommandState, CommandStore},
         settings::SettingsStore,
     },
     worker::MovePolicy,
@@ -1161,7 +1161,7 @@ async fn transmission_that_never_reports_the_new_folder_fails_on_the_last_look_w
     s.h.tr.lag_locations(u32::MAX);
 
     s.send("archive-never-1", &c.rules[0].id, "archive").await;
-    for _ in 0..trss_legacy::store::commands::MAX_ATTEMPTS {
+    for _ in 0..trss_core::commands::MAX_ATTEMPTS {
         s.h.worker()
             .with_move_policy(MovePolicy {
                 poll: Duration::from_millis(20),

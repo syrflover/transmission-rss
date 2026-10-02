@@ -22,16 +22,18 @@ use axum::http::StatusCode;
 use common::*;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
-use trss_core::{lock_path_for, CycleLock};
-use trss_legacy::worker::commands::receive_once::{NAME_NOT_DERIVED, SEVERAL_FILES};
+use trss_core::{
+    commands::{CommandState, CommandStore, NewCommand, MAX_ATTEMPTS},
+    lock_path_for, CycleLock,
+};
 use trss_legacy::{
     store::{
         channels::{ChannelWithRules, RuleInput, RuleState},
-        commands::{CommandState, CommandStore, NewCommand, MAX_ATTEMPTS},
         history::{HistoryItem, HistoryResult},
         Db,
     },
     transmission::item_label,
+    worker::commands::receive_once::{NAME_NOT_DERIVED, SEVERAL_FILES},
 };
 use trss_worker::{CommandsOutcome, CycleReport, TickOutcome, Worker};
 
@@ -2727,6 +2729,7 @@ async fn an_item_first_seen_while_a_rule_was_archived_is_left_to_the_user_after_
 
 #[tokio::test]
 async fn a_long_command_beats_and_the_board_shows_no_stall_meanwhile() {
+    use trss_core::heartbeat::HeartbeatStore;
     use trss_legacy::store::status::StatusStore;
     use trss_web::{status_api::board, AppState};
 
@@ -2735,6 +2738,7 @@ async fn a_long_command_beats_and_the_board_shows_no_stall_meanwhile() {
     let item = s.item("Some Special").await;
     s.post(CMD, &item).await;
     let status = StatusStore::new(s.h.db.clone());
+    let heartbeat = HeartbeatStore::new(s.h.db.clone());
     // The set-up cycle ended; its worker takes five minutes between cycles.
     status.record_cycle_interval(300_000).await.unwrap();
     let state = AppState::new(s.h.db.clone());
@@ -2748,7 +2752,7 @@ async fn a_long_command_beats_and_the_board_shows_no_stall_meanwhile() {
     let running = tokio::spawn(async move { worker.run_commands(&CancellationToken::new()).await });
     gate.wait_arrived().await;
     let started = s.h.now();
-    let held = status.heartbeat().await.unwrap().expect("a beat");
+    let held = heartbeat.read().await.unwrap().expect("a beat");
     assert_eq!(held.held_since, Some(started));
 
     // The command goes on for a quarter of an hour (three intervals since the
@@ -2756,17 +2760,17 @@ async fn a_long_command_beats_and_the_board_shows_no_stall_meanwhile() {
     s.h.advance(15 * 60_000);
     let now = s.h.now();
     for _ in 0..200 {
-        if status.heartbeat().await.unwrap().unwrap().beat_at == now {
+        if heartbeat.read().await.unwrap().unwrap().beat_at == now {
             break;
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    let beat = status.heartbeat().await.unwrap().unwrap();
+    let beat = heartbeat.read().await.unwrap().unwrap();
     assert_eq!((beat.beat_at, beat.held_since), (now, Some(started)));
     assert!(!stalled(now).await);
 
     gate.release_all();
     assert_eq!(running.await.unwrap().unwrap(), CommandsOutcome::Ran(1));
-    let done = status.heartbeat().await.unwrap().unwrap();
+    let done = heartbeat.read().await.unwrap().unwrap();
     assert_eq!(done.held_since, None);
 }
