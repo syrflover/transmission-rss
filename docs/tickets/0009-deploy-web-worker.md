@@ -116,7 +116,11 @@
 - master(`c801731`)를 push하고 `0.5.0` 태그로 Deploy workflow를 돌렸어요. 0.4.1 뒤의 편성표·라이브러리·할 일·구독·보관·수정본 대체·회차 변환·지난 회차 검색이 들어 있어요.
 - DB 형식이 바뀌어요. worker나 web이 처음 뜰 때 마이그레이션 23–29가 적용되고, 옛 이미지로 되돌리려면 올리기 전 DB 사본이 필요해요.
 - `docker-compose.trss.yml`이 바뀌었어요(worker가 미디어 폴더를 읽기·쓰기로 마운트). 서버 저장소를 먼저 갱신해야 보관 이동이 동작해요.
-- Deploy workflow가 성공해 `ghcr.io/syrflover/transmission-rss:0.5.0`과 `:latest`를 게시했어요(경고는 Dockerfile의 `FROM`·`as` 대소문자뿐). 서버 적용과 첫 주기 결과는 아직 기록하지 않았어요.
+- Deploy workflow가 성공해 `ghcr.io/syrflover/transmission-rss:0.5.0`과 `:latest`를 게시했어요(경고는 Dockerfile의 `FROM`·`as` 대소문자뿐).
+- 서버 적용(2026-10-02, 사용자 요청으로 Claude가 SSH로 실행): 서버 저장소를 `4b37f5e`로 갱신하고 `TRSS_VERSION=0.5.0`으로 이미지를 받은 뒤 두 컨테이너를 멈추고 `data/`를 `~/trss-data-before-0.5.0`에 복사했어요(WAL 포함). 되돌릴 때는 이 사본과 `0.4.1`을 써요.
+- 다시 올린 뒤 DB `user_version`이 29였고, `worker_heartbeat`에 박동이 기록됐어요. `collect/status`·`schedule/week`·`archive-suggestions`가 200, 받기 실패 목록은 비어 있었어요.
+- 0.5.0 첫 주기: `250 item(s) seen (0 new), 0 added, 14 already in Transmission, 0 failed, 220 without a rule, 16 excluded, 0 removed`. 이어서 수집 폴더가 감시 폴더로 등록되고 첫 스캔이 작품 29개·파일 1130개를 읽었어요(690ms).
+- 편성표·라이브러리 화면을 브라우저로 보는 것과, 수정본 대체·회차 변환·되돌리기·지난 회차 검색의 실제 동작은 아직 확인하지 않았어요.
 
 ### 남은 일
 
