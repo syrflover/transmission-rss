@@ -162,3 +162,47 @@ async fn the_works_with_their_own_order_are_listed_newest_first_and_go_with_thei
     .unwrap();
     assert_eq!(store.work_format_orders().await.unwrap().len(), 1);
 }
+
+#[tokio::test]
+async fn a_work_of_an_unregistered_folder_is_not_listed_with_its_own_order() {
+    let (db, store) = store().await;
+    db.run::<_, DbError, _>(|c| {
+        c.execute_batch(
+            "INSERT INTO watch_folders (id, path, created_at, unregistered_at)
+                 VALUES ('f1', '/media', 1, NULL), ('f2', '/old', 1, 5);
+             INSERT INTO works (id, watch_folder_id, dir_name) VALUES ('w1', 'f1', 'A'), ('w2', 'f2', 'B');
+             INSERT INTO work_subtitle_policy (work_id, format_order, updated_at)
+                 VALUES ('w1', 'srt,ass,smi', 10), ('w2', 'smi,srt,ass', 20);",
+        )?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+    let listed = store.work_format_orders().await.unwrap();
+    let ids: Vec<&str> = listed.iter().map(|w| w.work_id.as_str()).collect();
+    assert_eq!(ids, ["w1"]);
+}
+
+#[tokio::test]
+async fn a_stored_count_beyond_what_the_app_writes_still_reads_and_can_be_saved_over() {
+    let (db, store) = store().await;
+    db.run::<_, DbError, _>(|c| {
+        c.execute(
+            "INSERT INTO policy_settings
+                 (id, format_order, idle_timeout_seconds, max_concurrent_jobs, version, saved_at)
+             VALUES (1, 'ass,srt,smi', 99999999999, 2, 3, 1)",
+            [],
+        )?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+    let read = store.policy().await.unwrap();
+    assert_eq!(read.idle_timeout_seconds, u32::MAX);
+    assert_eq!(read.max_concurrent_jobs, 2);
+    let saved = store
+        .put_policy(3, order(&["ass", "srt", "smi"]), 300, 1, 2)
+        .await
+        .unwrap();
+    assert_eq!((saved.idle_timeout_seconds, saved.version), (300, 4));
+}

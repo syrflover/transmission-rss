@@ -126,8 +126,16 @@ pub struct WorkFormatOrder {
     pub updated_at: Millis,
 }
 
+/// A stored count as it reads: the table only keeps it positive, so a row
+/// written around [`SettingsStore::put_policy`] may hold more than a `u32`. It
+/// reads as the largest one rather than failing every reading and every save,
+/// and the next save checks it against the supported range.
+fn stored_count(value: i64) -> u32 {
+    u32::try_from(value).unwrap_or(u32::MAX)
+}
+
 fn read_policy(conn: &Connection) -> Result<Policy, SettingsError> {
-    let row: Option<(String, u32, u32, i64, Millis)> = conn
+    let row: Option<(String, i64, i64, i64, Millis)> = conn
         .query_row(
             "SELECT format_order, idle_timeout_seconds, max_concurrent_jobs, version, saved_at
                FROM policy_settings WHERE id = 1",
@@ -141,8 +149,8 @@ fn read_policy(conn: &Connection) -> Result<Policy, SettingsError> {
     Ok(Policy {
         format_order: FormatOrder::parse_stored(&order)
             .ok_or(SettingsError::Invalid("a stored format order is not one"))?,
-        idle_timeout_seconds: idle,
-        max_concurrent_jobs: jobs,
+        idle_timeout_seconds: stored_count(idle),
+        max_concurrent_jobs: stored_count(jobs),
         version,
         saved_at: Some(saved_at),
     })
@@ -215,7 +223,10 @@ impl SettingsStore {
             .run(|c| {
                 let mut stmt = c.prepare(
                     "SELECT p.work_id, w.dir_name, p.format_order, p.updated_at
-                       FROM work_subtitle_policy p JOIN works w ON w.id = p.work_id
+                       FROM work_subtitle_policy p
+                       JOIN works w ON w.id = p.work_id
+                       JOIN watch_folders f ON f.id = w.watch_folder_id
+                      WHERE f.unregistered_at IS NULL
                       ORDER BY p.updated_at DESC, p.work_id",
                 )?;
                 let rows = stmt

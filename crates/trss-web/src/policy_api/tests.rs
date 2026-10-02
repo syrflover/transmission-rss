@@ -118,6 +118,12 @@ async fn an_order_with_a_format_twice_or_a_number_out_of_range_is_refused_and_no
         (body(0, &["ass", "srt", "smi"], 3601, 1), "1분부터 60분까지"),
         (body(0, &["ass", "srt", "smi"], 300, 0), "1개부터 3개까지"),
         (body(0, &["ass", "srt", "smi"], 300, 4), "1개부터 3개까지"),
+        (body(0, &["ass", "srt", "smi"], -300, 1), "1분부터 60분까지"),
+        (body(0, &["ass", "srt", "smi"], 300, -1), "1개부터 3개까지"),
+        (
+            body(0, &["ass", "srt", "smi"], 300, 4_294_967_297),
+            "1개부터 3개까지",
+        ),
     ] {
         let (status, answer) = app.put(bad.clone()).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
@@ -139,6 +145,7 @@ async fn a_save_from_a_version_another_screen_saved_over_is_refused_with_the_sto
     assert_eq!(status, StatusCode::OK);
     let (status, refused) = app.put(body(0, &["smi", "ass", "srt"], 600, 3)).await;
     assert_eq!(status, StatusCode::CONFLICT);
+    assert!(refused["message"].as_str().is_some_and(|m| !m.is_empty()));
     assert_eq!(
         refused["current"]["format_order"],
         json!(["srt", "ass", "smi"])
