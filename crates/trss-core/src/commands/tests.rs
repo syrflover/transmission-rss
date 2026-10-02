@@ -509,3 +509,34 @@ async fn an_unanswered_add_noted_on_a_running_command_stays_through_the_next_sta
         1
     );
 }
+
+#[tokio::test]
+async fn the_first_name_noted_on_a_running_command_stays_through_its_next_start() {
+    let (_dir, _db, commands) = store().await;
+    commands
+        .accept(new("cmd-1", r#"{"item_id":1}"#, Some("1")), 1_000)
+        .await
+        .unwrap();
+    assert_eq!(
+        commands.note_original_name("cmd-1", "a.mkv").await.unwrap(),
+        None,
+        "a waiting command is not running"
+    );
+
+    let first = commands.claim_next(1_100).await.unwrap().unwrap();
+    assert_eq!(first.original_name, None);
+    assert_eq!(
+        commands.note_original_name("cmd-1", "a.mkv").await.unwrap(),
+        Some("a.mkv".to_owned())
+    );
+    // A later name does not replace it.
+    assert_eq!(
+        commands.note_original_name("cmd-1", "b.mkv").await.unwrap(),
+        Some("a.mkv".to_owned())
+    );
+    let unchanged = commands.get("cmd-1").await.unwrap().unwrap();
+    assert_eq!(unchanged.updated_at, first.updated_at);
+
+    let again = commands.claim_next(1_300).await.unwrap().unwrap();
+    assert_eq!(again.original_name.as_deref(), Some("a.mkv"));
+}

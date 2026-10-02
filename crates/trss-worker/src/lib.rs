@@ -257,6 +257,7 @@ impl Worker {
                 settings: SettingsStore::new(db.clone()),
                 history: HistoryStore::new(db.clone()),
                 revisions: RevisionStore::new(db.clone()),
+                commands: CommandStore::new(db.clone()),
                 seasons: SeasonStore::new(db),
                 season_link: season_link::Memory::default(),
                 library,

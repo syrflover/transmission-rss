@@ -16,7 +16,7 @@ use url::Url;
 
 use crate::commands::rule_archive::work_folder::MovePolicy;
 use crate::store::{channels::ChannelStore, history::HistoryStore, revisions::RevisionStore};
-use trss_core::{folder_locks::FolderLocks, settings::SettingsStore};
+use trss_core::{commands::CommandStore, folder_locks::FolderLocks, settings::SettingsStore};
 use trss_library::{
     live::LiveWatch,
     store::{library::LibraryStore, seasons::SeasonStore},
@@ -59,6 +59,9 @@ pub struct CollectContext {
     pub history: HistoryStore,
     /// The replacements of video revisions (see [`super::revisions`]).
     pub revisions: RevisionStore,
+    /// The commands, for what a command records while it runs (the name a
+    /// retried torrent had before its rename).
+    pub commands: CommandStore,
     /// The AniList entries linked to the library's seasons (the episodes of
     /// the seasons before a rule's: [`crate::episode_offset`]).
     pub seasons: SeasonStore,
@@ -93,6 +96,7 @@ impl CollectContext {
             settings: self.settings.clone(),
             history: self.history.clone(),
             revisions: self.revisions.clone(),
+            commands: self.commands.clone(),
             seasons: self.seasons.clone(),
             library: self.library.clone(),
             transmission: self.transmission.clone(),

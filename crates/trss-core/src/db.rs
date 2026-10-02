@@ -106,6 +106,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("../migrations/history/first_read.sql")),
     // 29: the worker's heartbeat while it holds the cycle lock, so the web tells a dead worker from a slow cycle
     Migration::Sql(include_str!("../migrations/status/heartbeat.sql")),
+    // 30: the name a command's torrent had before the command renamed it
+    Migration::Sql(include_str!("../migrations/commands/original_name.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -384,6 +386,39 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(row, ("failed".to_owned(), 0));
+    }
+
+    #[tokio::test]
+    async fn database_from_before_original_names_keeps_its_commands_with_no_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        {
+            // A database as the build with 29 migrations left it, one command running.
+            let conn = database_at(&path, 29);
+            conn.execute(
+                "INSERT INTO commands (id, kind, payload, state, attempts, created_at,
+                     updated_at, add_unconfirmed)
+                 VALUES ('cmd-1', 'receive_once', '{}', 'running', 1, 1, 2, 1)",
+                [],
+            )
+            .unwrap();
+        }
+
+        let db = Db::open(&path).await.unwrap();
+
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+        let row: (String, i64, i64, Option<String>) = db
+            .run::<_, DbError, _>(|c| {
+                Ok(c.query_row(
+                    "SELECT state, attempts, add_unconfirmed, original_name
+                     FROM commands WHERE id = 'cmd-1'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                )?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(row, ("running".to_owned(), 1, 1, None));
     }
 
     #[tokio::test]

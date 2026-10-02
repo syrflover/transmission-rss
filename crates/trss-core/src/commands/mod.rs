@@ -141,6 +141,10 @@ pub struct Command {
     /// not learn. Set on a running command by
     /// [`CommandStore::note_unconfirmed_add`], and kept or cleared when it ends.
     pub add_unconfirmed: bool,
+    /// The name Transmission reported for the single file of the torrent this
+    /// command put in, before the command first renamed it. Set once by
+    /// [`CommandStore::note_original_name`].
+    pub original_name: Option<String>,
 }
 
 /// A command to store.
@@ -300,6 +304,21 @@ impl CommandStore {
         let id = id.to_owned();
         self.db
             .run(move |c| repo::note_unconfirmed_add(c, &id, now))
+            .await
+    }
+
+    /// Records the name `name` the running command's torrent had before the
+    /// command renamed it, unless a name is recorded already, and returns the
+    /// recorded name (`None` when the command is not running). Leaves
+    /// `updated_at` alone: nothing the screen shows changes.
+    pub async fn note_original_name(
+        &self,
+        id: &str,
+        name: &str,
+    ) -> Result<Option<String>, CommandError> {
+        let (id, name) = (id.to_owned(), name.to_owned());
+        self.db
+            .run(move |c| repo::note_original_name(c, &id, &name))
             .await
     }
 

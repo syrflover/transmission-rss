@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use rusqlite::{params, params_from_iter, Connection, Row, TransactionBehavior};
+use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Row, TransactionBehavior};
 
 use super::{Accepted, Command, CommandError, CommandState, NewCommand, Outcome, MAX_ATTEMPTS};
 use crate::Millis;
@@ -11,7 +11,7 @@ use crate::Millis;
 type Result<T> = std::result::Result<T, CommandError>;
 
 const COLUMNS: &str = "id, kind, payload, subject, state, attempts, created_at, updated_at, \
-     finished_at, outcome, add_unconfirmed";
+     finished_at, outcome, add_unconfirmed, original_name";
 
 /// Reason recorded for a command given up after [`MAX_ATTEMPTS`] starts.
 const GIVEN_UP: &str = "worker가 이 명령을 처리하다 여러 번 멈춰서 더는 시도하지 않아요.";
@@ -43,6 +43,7 @@ fn command_from_row(row: &Row<'_>) -> Result<Command> {
         finished_at: row.get(8)?,
         outcome,
         add_unconfirmed: row.get(10)?,
+        original_name: row.get(11)?,
     })
 }
 
@@ -240,6 +241,25 @@ pub fn note_unconfirmed_add(conn: &mut Connection, id: &str, now: Millis) -> Res
     )?;
     tx.commit()?;
     Ok(changed == 1)
+}
+
+pub fn note_original_name(conn: &mut Connection, id: &str, name: &str) -> Result<Option<String>> {
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    tx.execute(
+        "UPDATE commands SET original_name = ?2
+         WHERE id = ?1 AND state = 'running' AND original_name IS NULL",
+        params![id, name],
+    )?;
+    let recorded = tx
+        .query_row(
+            "SELECT original_name FROM commands WHERE id = ?1 AND state = 'running'",
+            params![id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .flatten();
+    tx.commit()?;
+    Ok(recorded)
 }
 
 fn end(

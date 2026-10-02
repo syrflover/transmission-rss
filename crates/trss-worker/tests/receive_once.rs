@@ -3031,6 +3031,91 @@ async fn a_release_that_comes_in_the_form_of_another_season_is_converted() {
     assert_eq!(torrents[0].name, "Sono Bisque Doll S02E01.mkv");
 }
 
+/// A feed whose item title is not its torrent's file name: read alone, the
+/// title's `1080p` would give episode 80.
+const SHOW_TITLE: &str = "Show - 05 [1080p]";
+const SHOW_FILE: &str = "[Group] Show - 05 [1080p].mkv";
+
+fn show() -> Release {
+    Release {
+        guid: "guid-show-05",
+        title: SHOW_TITLE.to_owned(),
+        link: magnet(5, SHOW_FILE, ""),
+    }
+}
+
+fn show_rules() -> Vec<RuleInput> {
+    vec![rule("Show", "Show/Season 01")]
+}
+
+#[tokio::test]
+async fn a_retry_names_the_file_as_the_cycle_does_when_the_feed_title_is_not_the_file_name() {
+    let cycled = Scene::new(&[&show()], show_rules()).await;
+    let retried = Scene::failing(&[&show()], show_rules()).await;
+    retried.post(CMD, &retried.item("Show - 05").await).await;
+    assert_eq!(retried.run_commands().await, CommandsOutcome::Ran(1));
+
+    let by_cycle = &cycled.h.tr.torrents()[0];
+    let by_retry = &retried.h.tr.torrents()[0];
+    assert_eq!(by_cycle.name, "Show S01E05.mkv");
+    assert_eq!(by_retry.name, by_cycle.name);
+    // The command recorded the name the file came with.
+    let store = CommandStore::new(retried.h.db.clone());
+    assert_eq!(
+        store
+            .get(CMD)
+            .await
+            .unwrap()
+            .unwrap()
+            .original_name
+            .as_deref(),
+        Some(SHOW_FILE)
+    );
+}
+
+/// The scene of a rerun: the earlier start put the torrent in, recorded its
+/// file's name `SHOW_FILE`, and the worker died; the file is now `name`.
+async fn rerun_over(name: &str) -> Scene {
+    let s = Scene::failing(&[&show()], show_rules()).await;
+    let item = s.item("Show - 05").await;
+    s.post(CMD, &item).await;
+    let store = CommandStore::new(s.h.db.clone());
+    store.claim_next(s.h.now()).await.unwrap().unwrap();
+    store.note_original_name(CMD, SHOW_FILE).await.unwrap();
+    s.h.tr.preload(FakeTorrent {
+        download_dir: "/media/anime/Show/Season 01".to_owned(),
+        labels: vec![
+            BOT_LABEL.to_owned(),
+            item_label(&item.channel_id, &item.identity_key),
+            format!("trss-cmd:{CMD}"),
+        ],
+        ..FakeTorrent::new(&hash(5), name)
+    });
+    s
+}
+
+#[tokio::test]
+async fn a_rerun_after_a_cycle_renamed_the_torrent_leaves_its_name() {
+    // A cycle that met the torrent renamed it meanwhile.
+    let s = rerun_over("Show S01E05.mkv").await;
+
+    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
+
+    assert_eq!(s.command(CMD).await.1["outcome"]["result"], "received");
+    assert!(s.h.tr.calls_of("torrent-rename-path").is_empty());
+    assert_eq!(s.h.tr.torrent(&hash(5)).name, "Show S01E05.mkv");
+}
+
+#[tokio::test]
+async fn a_rerun_renames_from_the_recorded_name_a_file_the_earlier_start_did_not() {
+    let s = rerun_over(SHOW_FILE).await;
+
+    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
+
+    assert_eq!(s.command(CMD).await.1["outcome"]["result"], "received");
+    assert_eq!(s.h.tr.torrent(&hash(5)).name, "Show S01E05.mkv");
+}
+
 #[tokio::test]
 async fn a_retry_and_the_cycles_add_of_the_same_item_go_in_turn() {
     let sono = release("guid-sono-13", 13, SONO, "");
