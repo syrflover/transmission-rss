@@ -6,9 +6,13 @@ import { MENU, type MenuItem } from "./menu";
 import { NavBadge } from "./NavBadge";
 import { useTodoCount } from "./todo-count";
 
-function useBadgeCount(item: MenuItem): number | undefined {
-  const todoCount = useTodoCount();
-  return item.id === "todo" ? todoCount : undefined;
+/** The count badge of a menu entry. Only 할 일 has one, so only it reads (and polls) the count. */
+function ItemBadge({ item, className }: { item: MenuItem; className?: string }) {
+  return item.id === "todo" ? <TodoBadge className={className} /> : null;
+}
+
+function TodoBadge({ className }: { className?: string }) {
+  return <NavBadge count={useTodoCount()} className={className} />;
 }
 
 /**
@@ -19,7 +23,6 @@ function useBadgeCount(item: MenuItem): number | undefined {
  */
 
 function TopNavLink({ item }: { item: MenuItem }) {
-  const count = useBadgeCount(item);
   const Icon = item.icon;
 
   return (
@@ -38,7 +41,7 @@ function TopNavLink({ item }: { item: MenuItem }) {
       <span className="bold-reserve min-[721px]:max-[979px]:sr-only" data-text={item.label}>
         {item.label}
       </span>
-      <NavBadge count={count} className="min-[721px]:max-[979px]:-ml-[3px]" />
+      <ItemBadge item={item} className="min-[721px]:max-[979px]:-ml-[3px]" />
     </NavLink>
   );
 }
@@ -55,7 +58,6 @@ export function TopNav() {
 }
 
 function BottomNavLink({ item }: { item: MenuItem }) {
-  const count = useBadgeCount(item);
   const Icon = item.icon;
 
   return (
@@ -72,7 +74,7 @@ function BottomNavLink({ item }: { item: MenuItem }) {
       <span className="bold-reserve" data-text={item.label}>
         {item.label}
       </span>
-      <NavBadge count={count} className="absolute top-[3px] right-[calc(50%-20px)]" />
+      <ItemBadge item={item} className="absolute top-[3px] right-[calc(50%-20px)]" />
     </NavLink>
   );
 }

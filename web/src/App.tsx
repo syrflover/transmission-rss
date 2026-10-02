@@ -8,6 +8,7 @@ import { NotFoundScreen } from "@/screens/NotFoundScreen";
 import { ScheduleScreen } from "@/screens/ScheduleScreen";
 import { SettingsScreen } from "@/screens/SettingsScreen";
 import { TodoScreen } from "@/screens/TodoScreen";
+import { JobDetailScreen } from "@/screens/todo/JobDetailScreen";
 
 /**
  * Routes of the five main menus. Detail screens nest under their menu's path
@@ -21,7 +22,9 @@ export function App() {
         <Route path="library" element={<LibraryScreen />} />
         <Route path="library/:workId" element={<WorkDetailScreen />} />
         <Route path="library/*" element={<NotFoundScreen />} />
-        <Route path="todo/*" element={<TodoScreen />} />
+        <Route path="todo" element={<TodoScreen />} />
+        <Route path="todo/job/:jobId" element={<JobDetailScreen />} />
+        <Route path="todo/*" element={<NotFoundScreen />} />
         <Route path="collect/*" element={<CollectScreen />} />
         <Route path="settings/*" element={<SettingsScreen />} />
         <Route path="*" element={<NotFoundScreen />} />

@@ -1,0 +1,233 @@
+import { api } from "@/lib/api";
+
+/**
+ * The 할 일 screen and the job detail (`docs/specs/jobs.md`, 할 일 화면 and
+ * 작업 상세) read these: the to-dos that need the user (`/api/todo`,
+ * `src/web/todo_api.rs`) and the subtitle jobs the worker carries out
+ * (`/api/subtitle-jobs`, `src/web/jobs_api.rs`). The suggestions (`제목 후보`,
+ * `보관 제안`) come from the collect screen's own sources
+ * (`collect/subs/api.ts`, `collect/archive/api.ts`).
+ */
+
+// ---------------------------------------------------------------------------
+// To-dos that need handling (`처리 필요`)
+
+/** The work a to-do or a job is about, when the library has it. */
+export interface WorkRef {
+  id: string;
+  /** The work's folder name. */
+  name: string;
+  /** Where its cover image is served, while it has one. */
+  cover_url: string | null;
+}
+
+/**
+ * `인증 필요`: subtitle jobs of one work wait for a person to solve a site's
+ * check. One to-do per work; it opens the oldest such job.
+ */
+export interface AuthTodo {
+  kind: "auth";
+  /** Stable across reads: what the screen keys the card by. */
+  key: string;
+  /** Since when the oldest of its jobs waits (Unix ms). */
+  at: number;
+  work: WorkRef | null;
+  /** What to call it: the Anissia title of the job's anime, else the work's name. */
+  title: string;
+  season: number | null;
+  /** The episodes that wait, as Anissia writes them (`"11"`, `"13.5"`). */
+  episodes: string[];
+  creator: string | null;
+  /** Why, in a few words (`"CAPTCHA"`). */
+  reason: string;
+  /** The job the card's `인증` opens. */
+  job_id: string;
+  /** How many jobs of the work wait for a check. */
+  jobs: number;
+}
+
+/**
+ * `받기 실패`: collection failures the user has to deal with, one to-do per
+ * work (a failed video revision replacement, `revision`) or per rule (an item
+ * Transmission did not add, `add_failed`).
+ */
+export interface ReceiveFailedTodo {
+  kind: "receive_failed";
+  key: string;
+  /** The newest failure's time (Unix ms). */
+  at: number;
+  context: "revision" | "add_failed";
+  work: WorkRef | null;
+  /** The work's name, or for an `add_failed` with no work the rule's folder. */
+  title: string;
+  /** `revision`: the season of the episodes; `null` when it cannot be read. */
+  season: number | null;
+  /** `revision`: the episodes whose replacement failed. Empty for `add_failed`. */
+  episodes: string[];
+  /** How many failures the to-do gathers. */
+  count: number;
+  /** The newest failure's reason. */
+  reason: string | null;
+  /** `add_failed`: the channel, for the history tab's filter. */
+  channel_id: string | null;
+}
+
+export type Todo = AuthTodo | ReceiveFailedTodo;
+
+export interface TodoList {
+  /** Red kinds first (`인증 필요`, `받기 실패`), each newest first. */
+  needs: Todo[];
+  /** What the menu badge shows: `needs.length`. */
+  count: number;
+}
+
+export function fetchTodos(signal?: AbortSignal): Promise<TodoList> {
+  return api<TodoList>("/todo", { signal });
+}
+
+/** The menu badge's count alone. */
+export function fetchTodoCount(signal?: AbortSignal): Promise<number> {
+  return api<{ count: number }>("/todo/count", { signal }).then((r) => r.count);
+}
+
+// ---------------------------------------------------------------------------
+// Subtitle jobs
+
+/**
+ * Where a job is.
+ *
+ * - `pending`: accepted, no worker has started it (`시작 대기`).
+ * - `running`: a worker is carrying it out (`stage` says where).
+ * - `waiting`: it cannot go on until something happens (`wait` says what).
+ * - `held`: a restart found a file whose receipt cannot be confirmed; it stops
+ *   there rather than receive again or claim success (`보류`).
+ * - `failed`: every item failed; `partial`: some failed and the rest were
+ *   received (`일부 실패`).
+ * - `done`: every item was received.
+ */
+export type JobState = "pending" | "running" | "waiting" | "held" | "failed" | "partial" | "done";
+
+/** What a `waiting` job or item waits for: a person's check (`인증 필요`) or a source it cannot read yet (`자막 대기`). */
+export type Wait = "auth" | "subtitle";
+
+/** The steps a job goes through, in this order. `auth` only when a source asks for it. */
+export type StepKind = "found" | "open" | "auth" | "receive";
+
+export interface JobRow {
+  id: string;
+  state: JobState;
+  wait: Wait | null;
+  /** The step a `running` job is at. */
+  stage: StepKind | null;
+  /** One sentence about the state: why it waits, what failed, what is unclear. */
+  note: string | null;
+  /** Since when the job is in this state (Unix ms); for `done`, `failed` and `partial` when it ended. */
+  state_at: number;
+  created_at: number;
+  work: WorkRef | null;
+  /** What to call it: the Anissia title of the job's anime, else the work's name. */
+  title: string;
+  season: number | null;
+  /** The items' episodes in order, as Anissia writes them. */
+  episodes: string[];
+  creator: string | null;
+  /** The host of the posts (`kairan03.blogspot.com`). */
+  source: string | null;
+  /** Items received, failed, and all of them. */
+  progress: { done: number; failed: number; total: number };
+}
+
+export interface DonePage {
+  /** Newest first. */
+  items: JobRow[];
+  /** What `after` takes for the next page; `null` at the end. */
+  next: string | null;
+  /** How many jobs are done in all. */
+  total: number;
+}
+
+export interface JobGroups {
+  /** `failed` and `partial`, newest first. */
+  failed: JobRow[];
+  /** `waiting` (a person's check first), `held`, `pending`. */
+  waiting: JobRow[];
+  running: JobRow[];
+  /** The first five done jobs. */
+  done: DonePage;
+}
+
+export function fetchJobs(signal?: AbortSignal): Promise<JobGroups> {
+  return api<JobGroups>("/subtitle-jobs", { signal });
+}
+
+/** The done jobs after `after` (a page's `next`). */
+export function fetchDoneJobs(after: string, signal?: AbortSignal): Promise<DonePage> {
+  return api<DonePage>(`/subtitle-jobs/done?after=${encodeURIComponent(after)}&limit=20`, { signal });
+}
+
+/**
+ * A step as the job went through it. Steps it has not reached are `upcoming`
+ * with no time. `waiting` is a step that stopped for something (`인증`
+ * waiting for a person); `partial` a `받기` where some items failed.
+ */
+export interface Step {
+  step: StepKind;
+  state: "upcoming" | "current" | "waiting" | "done" | "failed" | "partial";
+  at: number | null;
+  note: string | null;
+}
+
+export type ItemState = "pending" | "running" | "waiting" | "held" | "failed" | "done";
+
+export interface JobFile {
+  /** The file's name as the site gave it. */
+  name: string;
+  /** `receiving` while bytes come in; `held`: its receipt could not be confirmed after a restart. */
+  state: "receiving" | "done" | "held" | "failed";
+  /** Bytes received. */
+  size: number | null;
+  sha256: string | null;
+  /** Where it is in the receive area (absolute, as the server sees it). */
+  path: string | null;
+  /** The episode of the item that received this same file, when another item of the job did. */
+  shared_with: string | null;
+  reason: string | null;
+}
+
+/** One episode of a job: one candidate the user picked. */
+export interface JobItem {
+  id: number;
+  episode: string;
+  /** The post the candidate names: a public page, never a signed download address. */
+  post_url: string;
+  state: ItemState;
+  wait: Wait | null;
+  reason: string | null;
+  files: JobFile[];
+}
+
+export interface LogEntry {
+  at: number;
+  /** What happened, as a sentence to show as is. */
+  message: string;
+  /** Shown dimmed beside it (a size, a host). */
+  detail: string | null;
+}
+
+export interface JobDetail extends JobRow {
+  steps: Step[];
+  items: JobItem[];
+  /** The job's folder in the receive area (absolute, as the server sees it). */
+  receive_dir: string;
+  /** Newest first. */
+  log: LogEntry[];
+}
+
+export function fetchJob(id: string, signal?: AbortSignal): Promise<JobDetail> {
+  return api<JobDetail>(`/subtitle-jobs/${encodeURIComponent(id)}`, { signal });
+}
+
+/** Where a job's detail is. */
+export function jobPath(id: string): string {
+  return `/todo/job/${encodeURIComponent(id)}`;
+}
