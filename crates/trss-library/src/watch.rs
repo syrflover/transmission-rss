@@ -25,7 +25,7 @@
 //! [`WatchContext::folders`]): one reading of a folder at a time, so a reading
 //! that ended later never records an older picture over a newer one, and none
 //! while a command moves or renames what it reads (a work folder going to the
-//! archive folder, a retry's add and rename). The readings of other folders
+//! archive folder, an undo's renames). The readings of other folders
 //! go on beside it. The cycle's and an alert's readings do not wait in line:
 //! when the turn is taken they are left for later (the cycle reads the folder
 //! at its next run), since a reading waiting behind a long move would hold

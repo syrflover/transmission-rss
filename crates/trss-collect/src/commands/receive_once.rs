@@ -547,14 +547,13 @@ impl Retry {
     }
 }
 
-/// The turn the command takes before it runs: a write of the work folder its
+/// The turn the command takes before it runs: a read of the work folder its
 /// rule saves into ([`rule_work_folder`]), the rule found as [`execute`] finds
-/// it. A write, not a read: the add and the rename of an item are not to meet
-/// another receive's or a cycle's of the same item (the second rename would
-/// apply the episode offset to a name that has it already), so the receives
-/// and the cycle's adds into one work folder go in turn. Empty when the
-/// request, the item, the rule or the collect folder cannot be found: the
-/// command then ends by itself.
+/// it, and the item alone ([`Section::item`]): the add and the rename of an
+/// item are not to meet another receive's or a cycle's of the same item, while
+/// receives of other items and readings of the folder go on beside it. The
+/// folder part is empty when the request, the item, the rule or the collect
+/// folder cannot be found: the command then ends by itself.
 ///
 /// The folder is named when the command is claimed, by its text: a rule or a
 /// collect folder changed before the command runs, or a link to the folder
@@ -563,19 +562,22 @@ pub async fn section(ctx: &ReceiveContext, command: &Command) -> Result<Section,
     let Ok(payload) = serde_json::from_str::<ReceiveOnce>(&command.payload) else {
         return Ok(Section::new());
     };
-    let rule_id = match payload.rule_id {
-        Some(id) => Some(id),
-        None => ctx
-            .history
-            .get(payload.item_id)
-            .await
-            .map_err(Retry::store)?
-            .and_then(|item| item.rule_id),
-    };
-    rule_section(ctx, rule_id.as_deref()).await
+    let item = ctx
+        .history
+        .get(payload.item_id)
+        .await
+        .map_err(Retry::store)?;
+    let rule_id = payload
+        .rule_id
+        .or_else(|| item.as_ref().and_then(|item| item.rule_id.clone()));
+    let section = rule_section(ctx, rule_id.as_deref()).await?;
+    Ok(match item {
+        Some(item) => section.item(&item.channel_id, &item.identity_key),
+        None => section,
+    })
 }
 
-/// A write of the work folder the rule `rule_id` saves into, or nothing when
+/// A read of the work folder the rule `rule_id` saves into, or nothing when
 /// there is no such rule or no collect folder.
 pub(crate) async fn rule_section(
     ctx: &ReceiveContext,
@@ -590,7 +592,7 @@ pub(crate) async fn rule_section(
     let Some(collect) = ctx.settings.collection().await.map_err(Retry::store)? else {
         return Ok(Section::new());
     };
-    Ok(Section::new().write(rule_work_folder(Path::new(&collect.folder), &rule)))
+    Ok(Section::new().read(rule_work_folder(Path::new(&collect.folder), &rule)))
 }
 
 /// Runs a `receive_once` command to its end, with its turn ([`section`])

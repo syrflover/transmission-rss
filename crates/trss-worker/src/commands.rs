@@ -25,16 +25,19 @@
 //!
 //! Before a command starts, the look names the folders it works in and takes
 //! its place in line for them ([`trss_core::folder_locks`]), in the order the
-//! commands were claimed: `receive_once` and `receive_past` write the work
-//! folder of their rule (their add and rename must not meet a cycle's or
-//! another receive's of the same item), `rule_archive` writes the rule's work
+//! commands were claimed: `receive_once` and `receive_past` read the work
+//! folder of their rule and take their item alone
+//! ([`trss_core::folder_locks::Section::item`]: their add and rename must not
+//! meet a cycle's or another receive's of the same item, while receives of
+//! other items into the folder go on beside them), `rule_archive` writes the rule's work
 //! folder in the collect and the archive folder, `episode_undo` writes the
 //! rule's work folder, and `watch_rescan` reads its watch folder as every
 //! reading does. The command waits for its turn and runs; the command modules
 //! take no turn themselves (a task never waits for a second one). So two
 //! commands on one work folder run one after the other in the order they were
-//! accepted, and a cycle's add into a work folder that is moving or receiving
-//! waits for it.
+//! accepted when one of them writes it, and a cycle's add into a work folder
+//! that is moving waits for it, as does a cycle's add of an item a command is
+//! receiving.
 //!
 //! The folders are named when the command is claimed, from the rule and the
 //! collect folder as they are then; a change to either before the command

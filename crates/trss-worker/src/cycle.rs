@@ -850,10 +850,15 @@ async fn process_job(
     }
     // The item's turn at its work folder, for its add and its rename: a
     // command that moves the folder (an archive) or renames in it (an undo)
-    // runs before or after, never during.
+    // runs before or after, never during, and so does a retry of the same
+    // item.
     let _turn = ctx
         .folders
-        .lock(Section::new().read(&job.work_folder))
+        .lock(
+            Section::new()
+                .read(&job.work_folder)
+                .item(&job.observation.channel_id, &job.observation.identity_key),
+        )
         .await;
     if cancel.is_cancelled() {
         return (JobOutcome::NotStarted, false);

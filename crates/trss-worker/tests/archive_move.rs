@@ -1153,6 +1153,111 @@ async fn a_retry_accepted_while_a_move_waits_for_transmission_and_a_cycle_ends_s
     );
 }
 
+#[tokio::test]
+async fn a_retry_passes_a_rescan_of_the_collect_folder_queued_behind_a_move_of_another_rule() {
+    let s = Scene::new(true).await;
+    let c = s
+        .channel(
+            "feed-a",
+            &[
+                ("Clevatess", "Clevatess/Season 02"),
+                ("Other", "Other/Season 01"),
+            ],
+        )
+        .await;
+    s.seeding(
+        1,
+        "Clevatess S02E01.mkv",
+        &s.collect.join("Clevatess/Season 02"),
+    );
+    // Transmission refused the other rule's item: `다시 받기` is offered. The
+    // cycle has also made the collect folder a watch folder.
+    s.h.feeds
+        .set_xml("feed-a", &feed_xml(&[(3, "Other S01E01.mkv")]));
+    s.h.tr.reject_adds(Some("not today"));
+    assert!(matches!(
+        s.worker().tick(&CancellationToken::new()).await.unwrap(),
+        TickOutcome::Ran(_)
+    ));
+    s.h.tr.reject_adds(None);
+    s.h.feeds.set_xml("feed-a", &feed_xml(&[]));
+    let item = s.h.item("Other S01E01").await;
+    let (status, text_, body) = s.api.call("GET", "/api/library/watch-folders", None).await;
+    assert_eq!(status, StatusCode::OK, "{text_}");
+    let collect_folder = body["folders"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["path"] == text(&s.collect))
+        .unwrap_or_else(|| panic!("the collect folder is not watched: {body}"))["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let worker = s.worker();
+
+    // A move of the first rule waits for Transmission.
+    let gate = s.h.tr.hold("torrent-set-location");
+    s.send("archive-pass-001", &c.rules[0].id, "archive").await;
+    let moving = tokio::spawn({
+        let worker = worker.clone();
+        async move { worker.run_commands(&CancellationToken::new()).await }
+    });
+    gate.wait_arrived().await;
+
+    // `다시 확인` of the whole collect folder, then `다시 받기` into the other
+    // rule's work folder inside it.
+    for (id, kind, payload) in [
+        (
+            "rescan-pass-0001",
+            "watch_rescan",
+            json!({ "folder_id": collect_folder }),
+        ),
+        (
+            "retry-pass-00001",
+            "receive_once",
+            json!({ "item_id": item.id }),
+        ),
+    ] {
+        let (status, _, body) = s
+            .api
+            .call(
+                "POST",
+                "/api/commands",
+                Some(json!({ "id": id, "kind": kind, "payload": payload })),
+            )
+            .await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    }
+    let look = tokio::spawn({
+        let worker = worker.clone();
+        async move { worker.run_commands(&CancellationToken::new()).await }
+    });
+
+    // The rescan waits behind the move; the retry does not wait behind it.
+    let mut retry = Value::Null;
+    for _ in 0..1000 {
+        retry = s.command("retry-pass-00001").await;
+        if retry["state"] == "done" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(retry["state"], "done", "the retry waited: {retry}");
+    assert_eq!(retry["outcome"]["result"], "received", "{retry}");
+    assert_eq!(s.command("rescan-pass-0001").await["state"], "running");
+    assert_eq!(s.command("archive-pass-001").await["state"], "running");
+
+    gate.release_all();
+    assert_eq!(moving.await.unwrap().unwrap(), CommandsOutcome::Ran(1));
+    assert_eq!(look.await.unwrap().unwrap(), CommandsOutcome::Ran(2));
+    assert_eq!(
+        s.command("archive-pass-001").await["outcome"]["result"],
+        "moved"
+    );
+    let rescan = s.command("rescan-pass-0001").await;
+    assert_eq!(rescan["outcome"]["result"], "scanned", "{rescan}");
+}
+
 // --- 10. waiting for Transmission ------------------------------------------------------------
 
 #[tokio::test]

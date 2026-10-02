@@ -17,10 +17,17 @@
 //!   later reading must not be overwritten by an earlier one that ends after
 //!   it, and a folder's scan must not be started twice); a reading asks for
 //!   a read of the folders it lists besides.
+//! - **Item** (`item`): the work adds or renames the torrent of one feed
+//!   item. An item is not a folder: it overlaps the same item alone, never a
+//!   folder, so two receives of one item (a retry and the cycle's add of the
+//!   same release) go one after the other while each only reads its work
+//!   folder, and receives of other items and readings of the folder go on
+//!   beside them. The rename of a receive's own torrent is part of its add:
+//!   it touches that item's file alone, which the item keeps apart.
 //!
 //! Two folders overlap when they are the same or one is inside the other, by
 //! whole path components after `.` and `..` are resolved by text (links are
-//! not followed). Two sections conflict when a folder of one overlaps a folder
+//! not followed). Two sections conflict when a place of one overlaps a place
 //! of the other and their kinds exclude each other as above.
 //!
 //! The table knows only the names it is given. A folder reached through a
@@ -67,11 +74,29 @@ impl Access {
     }
 }
 
-/// The folders one piece of work touches, and how. Empty sections wait for
-/// nothing.
+/// What a section names: a folder, or a feed item (see the module docs).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Place {
+    Folder(PathBuf),
+    /// A channel's ID and the item's identity key.
+    Item(String, String),
+}
+
+impl Place {
+    fn overlaps(&self, other: &Place) -> bool {
+        match (self, other) {
+            (Place::Folder(a), Place::Folder(b)) => a.starts_with(b) || b.starts_with(a),
+            (Place::Item(..), Place::Item(..)) => self == other,
+            _ => false,
+        }
+    }
+}
+
+/// The folders and items one piece of work touches, and how. Empty sections
+/// wait for nothing.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Section {
-    parts: Vec<(PathBuf, Access)>,
+    parts: Vec<(Place, Access)>,
 }
 
 impl Section {
@@ -95,20 +120,29 @@ impl Section {
         self.with(folder.as_ref(), Access::Reading)
     }
 
+    /// The work adds or renames the torrent of the item `identity_key` of
+    /// channel `channel_id`: alone, among the work on that item.
+    pub fn item(mut self, channel_id: &str, identity_key: &str) -> Section {
+        self.parts.push((
+            Place::Item(channel_id.to_owned(), identity_key.to_owned()),
+            Access::Write,
+        ));
+        self
+    }
+
     pub fn is_empty(&self) -> bool {
         self.parts.is_empty()
     }
 
     fn with(mut self, folder: &Path, access: Access) -> Section {
-        self.parts.push((lexical(folder), access));
+        self.parts.push((Place::Folder(lexical(folder)), access));
         self
     }
 
     fn conflicts(&self, other: &Section) -> bool {
         self.parts.iter().any(|(mine, access)| {
             other.parts.iter().any(|(theirs, their_access)| {
-                access.excludes(*their_access)
-                    && (mine.starts_with(theirs) || theirs.starts_with(mine))
+                access.excludes(*their_access) && mine.overlaps(theirs)
             })
         })
     }
@@ -318,6 +352,40 @@ mod tests {
         assert!(locks.try_lock(Section::new()).is_some());
         // A refused try leaves no trace in the line.
         assert_eq!(locks.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_item_goes_alone_among_its_own_work_and_meets_no_folder() {
+        let locks = FolderLocks::new();
+        let retry = locks
+            .try_lock(Section::new().read("/media/A").item("ch", "guid:1"))
+            .expect("free");
+        // The cycle's add of the same item waits; another item's goes in.
+        let same = Section::new().read("/media/A").item("ch", "guid:1");
+        assert!(locks.try_lock(same.clone()).is_none());
+        let other = locks.try_lock(Section::new().read("/media/A").item("ch", "guid:2"));
+        assert!(other.is_some());
+        assert!(locks
+            .try_lock(Section::new().read("/media/A").item("other", "guid:1"))
+            .is_some());
+        // Readings of the whole folder go on beside them; a move waits.
+        assert!(locks
+            .try_lock(Section::new().reading("/media").read("/media"))
+            .is_some());
+        assert!(locks.try_lock(Section::new().write("/media/A")).is_none());
+        // No folder overlaps an item, whatever its text.
+        assert!(locks.try_lock(Section::new().write("/")).is_none());
+        assert!(locks
+            .try_lock(
+                Section::new()
+                    .write("ch")
+                    .write("guid:1")
+                    .write("ch/guid:1")
+            )
+            .is_some());
+
+        drop((retry, other));
+        assert!(locks.try_lock(same).is_some());
     }
 
     #[tokio::test]

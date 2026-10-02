@@ -97,8 +97,9 @@ fn store(err: impl std::fmt::Display) -> Retry {
     Retry::Store(err.to_string())
 }
 
-/// The turn the command takes before it runs: a write of the work folder its
-/// rule saves into, as for `receive_once` ([`receive_once::section`]).
+/// The turn the command takes before it runs: a read of the work folder its
+/// rule saves into and the result's item alone, as for `receive_once`
+/// ([`receive_once::section`]).
 pub async fn section(
     ctx: &ReceiveContext,
     command: &Command,
@@ -106,7 +107,16 @@ pub async fn section(
     let Ok(payload) = serde_json::from_str::<ReceivePast>(&command.payload) else {
         return Ok(trss_core::folder_locks::Section::new());
     };
-    receive_once::rule_section(ctx, Some(&payload.rule_id)).await
+    let section = receive_once::rule_section(ctx, Some(&payload.rule_id)).await?;
+    let rule = ctx
+        .channels
+        .get_rule(&payload.rule_id)
+        .await
+        .map_err(store)?;
+    Ok(match rule {
+        Some(rule) => section.item(&rule.channel_id, &payload.key),
+        None => section,
+    })
 }
 
 /// Runs a `receive_past` command to its end (see the module docs), with its
