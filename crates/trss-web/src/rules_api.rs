@@ -47,7 +47,9 @@
 //! `season` (the season its received videos appeared in, with the work's name,
 //! cover, how many episodes have a video and the AniList episode count) and
 //! `season_blocked` (the season they appeared in is held by another Anissia
-//! anime, so the rule was not connected).
+//! anime, so the rule was not connected; `held_by` says whether another
+//! `subscription` holds it, or the season is linked to that anime from the work
+//! detail, `link`).
 //!
 //! A save folder is also refused (`400`, with a sentence) when it is new or
 //! changed and:
@@ -276,6 +278,9 @@ pub struct SeasonBlockedView {
     /// Anissia's `animeNo` of the holder, and its title when the app has one.
     pub holder_anime_no: Option<i64>,
     pub holder_subject: Option<String>,
+    /// What holds the season: another `subscription`, or the anime the season
+    /// was linked to from the work detail (`link`), which the work detail changes.
+    pub held_by: &'static str,
 }
 
 /// An archive or restore of a rule and where it is.
@@ -595,12 +600,24 @@ async fn blocked_by(state: &AppState, season_id: &str) -> Result<SeasonBlockedVi
             .map(|a| a.subject),
         None => None,
     };
+    let held_by_subscription = state
+        .channels
+        .subscriptions_of_work(&work_id)
+        .await
+        .map_err(store_error)?
+        .iter()
+        .any(|(season, _)| *season == number);
     Ok(SeasonBlockedView {
         work_id,
         work_name,
         number,
         holder_anime_no,
         holder_subject,
+        held_by: if held_by_subscription {
+            "subscription"
+        } else {
+            "link"
+        },
     })
 }
 

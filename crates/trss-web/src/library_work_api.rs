@@ -62,6 +62,9 @@
 //!   state, the anime (`anime_no`, `subject`), the subtitle mode and the creator
 //!   followed. The head shows the selected season's creator and changes it
 //!   through `PUT /api/rules/{id}/creator`.
+//! - `anissia` is the season's link to an Anissia anime: its version, the anime
+//!   (name, status and Anissia's page) and the subscription that holds the
+//!   season, if one does (see [`super::seasons_anissia_api`]).
 //! - `info` is the season's info, the linked AniList entries taken together
 //!   (see [`super::seasons_api`]); a season with no link has version 0 and no
 //!   values, which the screen shows as unknown. `air_at` is when AniList
@@ -95,6 +98,7 @@ use url::Url;
 
 use super::{
     artwork_api::image_url,
+    seasons_anissia_api::{link_views, AnissiaLinkView},
     seasons_api::{season_view, work_infos, SeasonInfoView},
     todo_api::{failure_of, retry_offers, RetryOffer, RevisionFailure},
     ApiError, AppState,
@@ -179,6 +183,8 @@ impl From<EpisodeDetail> for EpisodeView {
 struct SeasonView {
     number: u32,
     info: SeasonInfoView,
+    /// The Anissia anime the season is linked to (see [`super::seasons_anissia_api`]).
+    anissia: AnissiaLinkView,
     episodes: Vec<EpisodeView>,
 }
 
@@ -397,6 +403,8 @@ async fn show(
     };
 
     let connected = state.channels.subscriptions_of_work(&work.id).await?;
+    let numbers: Vec<u32> = work.seasons.iter().map(|s| s.number).collect();
+    let mut anissia_links = link_views(&state, &work.id, &numbers, &connected).await?;
     let animes = state
         .anissia_store
         .animes(
@@ -429,7 +437,6 @@ async fn show(
     subscriptions.sort_by_key(|s| s.season);
     let korean_title = subscriptions.iter().find_map(|s| s.subject.clone());
 
-    let numbers: Vec<u32> = work.seasons.iter().map(|s| s.number).collect();
     let (links, first) = work_infos(&state, &work.id, &numbers).await?;
     let native_title = first
         .and_then(|first| links.get(&first))
@@ -452,6 +459,9 @@ async fn show(
             SeasonView {
                 number: season.number,
                 info,
+                anissia: anissia_links
+                    .remove(&season.number)
+                    .expect("a link view is made for every season of the work"),
                 episodes: season
                     .episodes
                     .into_iter()

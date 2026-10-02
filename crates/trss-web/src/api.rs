@@ -27,6 +27,7 @@ pub fn router() -> Router<AppState> {
         .merge(super::past_search_api::routes())
         .merge(super::rules_api::routes())
         .merge(super::schedule_api::routes())
+        .merge(super::seasons_anissia_api::routes())
         .merge(super::seasons_api::routes())
         .merge(super::settings_api::routes())
         .merge(super::setup_api::routes())

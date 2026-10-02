@@ -95,7 +95,7 @@ pub fn routes() -> Router<AppState> {
 }
 
 /// The longest a request of the screen waits for its turn to ask Anissia.
-const USER_MAX_WAIT: Duration = Duration::from_secs(8);
+pub(super) const USER_MAX_WAIT: Duration = Duration::from_secs(8);
 
 /// The most titles one answer lists.
 const TITLE_LIMIT: usize = 200;
@@ -249,7 +249,7 @@ struct Creators {
 // ---------------------------------------------------------------------------
 
 /// The sentence for a failed ask of Anissia.
-fn unavailable(error: AnissiaError) -> ApiError {
+pub(super) fn unavailable(error: AnissiaError) -> ApiError {
     match error {
         AnissiaError::Busy { retry_after } => ApiError::Unavailable(format!(
             "Anissia에 요청이 몰려 있어요. {}초쯤 뒤에 다시 시도해 주세요.",
@@ -826,7 +826,11 @@ async fn name_title(
 
 /// The anime of the schedule's week `week` numbered `anime_no`, as the
 /// snapshot to keep: the request names an anime the schedule really lists.
-async fn scheduled_anime(state: &AppState, week: u8, anime_no: i64) -> Result<Anime, ApiError> {
+pub(super) async fn scheduled_anime(
+    state: &AppState,
+    week: u8,
+    anime_no: i64,
+) -> Result<Anime, ApiError> {
     let listed = state
         .anissia
         .schedule(week, Some(USER_MAX_WAIT))

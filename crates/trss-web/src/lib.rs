@@ -31,6 +31,7 @@ pub mod library_work_api;
 pub mod past_search_api;
 pub mod rules_api;
 pub mod schedule_api;
+pub mod seasons_anissia_api;
 pub mod seasons_api;
 pub mod settings_api;
 pub mod setup_api;

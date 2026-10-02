@@ -1323,14 +1323,35 @@ mod rule_detail {
     async fn the_view_does_not_explain_a_block_that_nothing_holds_any_more() {
         let app = App::new().await;
         let (holder, blocked) = blocked_pair(&app).await;
-        // The worker has not cleared the note yet, but the holder is gone.
+        let (_, view) = app.get(&format!("/api/rules/{}", blocked.id)).await;
+        assert_eq!(view["season_blocked"]["held_by"], "subscription");
+        let season = view["season_blocked"].clone();
+        // The worker has not cleared the note yet, but the holder is gone. The
+        // season keeps the holder's anime as its own link, which still holds it.
         let holder = app.fresh(&holder).await;
         app.state
             .channels
             .delete_rule(&holder.id, holder.version)
             .await
             .unwrap();
+        let (_, view) = app.get(&format!("/api/rules/{}", blocked.id)).await;
+        assert_eq!(view["season"], Value::Null);
+        assert_eq!(view["season_blocked"]["holder_anime_no"], 3320);
+        assert_eq!(view["season_blocked"]["held_by"], "link");
 
+        // Once the link is cut, nothing holds the season.
+        let uri = format!(
+            "/api/library/works/{}/seasons/1/anissia/link",
+            season["work_id"].as_str().unwrap()
+        );
+        let (status, cut) = app
+            .call(
+                Method::POST,
+                &uri,
+                Some(json!({ "version": 1, "anime_no": null })),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{cut}");
         let (_, view) = app.get(&format!("/api/rules/{}", blocked.id)).await;
         assert_eq!(view["season"], Value::Null);
         assert_eq!(view["season_blocked"], Value::Null);
