@@ -155,9 +155,9 @@ async fn a_link_outlives_its_season_row_and_goes_with_its_work() {
     assert_eq!(rows, 1);
 }
 
-#[tokio::test]
-async fn an_archive_move_that_merges_two_works_keeps_the_links_the_kept_work_lacks() {
-    let (db, library, store, collect, moved) = env().await;
+/// Adds the archive folder holding its own work `A`: the folder's ID and the
+/// ID of that (kept) work.
+async fn archive(library: &LibraryStore, moved: &str) -> (String, String) {
     let folders = library.folders().await.unwrap();
     let (archive, _) = library
         .add_folder("/archive".into(), scan(&[("A", &[1, 2])]), 150, &folders)
@@ -165,31 +165,156 @@ async fn an_archive_move_that_merges_two_works_keeps_the_links_the_kept_work_lac
         .unwrap();
     let kept = library.works(&archive.id).await.unwrap()[0].id.clone();
     assert_ne!(kept, moved);
+    (archive.id, kept)
+}
 
-    // The moved work links both seasons; the kept one has season 2 linked to
-    // another anime and season 1 cut.
+fn summary(links: &std::collections::BTreeMap<u32, AnissiaLink>) -> Vec<(u32, i64, Option<i64>)> {
+    links
+        .values()
+        .map(|l| (l.season, l.version, l.anime_no))
+        .collect()
+}
+
+#[tokio::test]
+async fn an_archive_move_that_merges_two_works_fills_only_the_seasons_the_kept_work_has_no_row_for()
+{
+    let (db, library, store, collect, moved) = env().await;
+    let (archive, kept) = archive(&library, &moved).await;
+
+    // The moved work links seasons 1 to 3; the kept one has season 1 cut (a row
+    // with no anime), season 2 linked to another anime and no row for season 3.
     set(&db, &moved, 1, Some(7)).await;
     set(&db, &moved, 2, Some(7)).await;
+    set(&db, &moved, 3, Some(7)).await;
     set(&db, &kept, 1, Some(8)).await;
     set(&db, &kept, 1, None).await;
     set(&db, &kept, 2, Some(8)).await;
 
     assert_eq!(
-        library
-            .follow_move(&collect, &archive.id, "A")
-            .await
-            .unwrap(),
+        library.follow_move(&collect, &archive, "A").await.unwrap(),
         Followed::Merged
     );
 
-    let links = store.anissia_links_of(&kept).await.unwrap();
-    // Season 1 comes over past both versions; season 2 stays as it was.
+    // The cut and the other anime stay as they were; only season 3, which the
+    // kept work had no row for, comes over, with a version past both.
     assert_eq!(
-        links
-            .values()
-            .map(|l| (l.season, l.version, l.anime_no))
-            .collect::<Vec<_>>(),
-        [(1, 3, Some(7)), (2, 1, Some(8))]
+        summary(&store.anissia_links_of(&kept).await.unwrap()),
+        [(1, 2, None), (2, 1, Some(8)), (3, 2, Some(7))]
     );
     assert!(store.anissia_links_of(&moved).await.unwrap().is_empty());
+}
+
+/// A rule `id` on channel `c`, with a subscription to `anime` connected to `season`.
+async fn subscribe(db: &Db, id: &str, anime: i64, season: Option<String>) {
+    let id = id.to_owned();
+    db.run::<_, DbError, _>(move |c| {
+        c.execute_batch(
+            "INSERT OR IGNORE INTO channels (id, position, url, excludes, secret_query, version)
+             VALUES ('c', 0, 'http://x/feed', '[]', '[]', 1);",
+        )?;
+        c.execute(
+            "INSERT INTO rules (id, channel_id, position, match_text, regex, case_insensitive,
+                                directory, episode, episode_auto, state, version)
+             VALUES (?1, 'c', (SELECT count(*) FROM rules), 'A', 0, 1, 'A', 1, 0, 'active', 1)",
+            [&id],
+        )?;
+        c.execute(
+            "INSERT INTO rule_subscriptions (rule_id, anissia_anime_no, subtitles, creator,
+                                             season_id, subscribed_at)
+             VALUES (?1, ?2, 'none', NULL, ?3, 1)",
+            rusqlite::params![id, anime, season],
+        )?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+}
+
+/// A rule's season, its note and its version.
+async fn rule(db: &Db, id: &str) -> (Option<String>, Option<String>, i64) {
+    let id = id.to_owned();
+    db.run::<_, DbError, _>(move |c| {
+        Ok(c.query_row(
+            "SELECT s.season_id, s.season_blocked, r.version
+               FROM rule_subscriptions s JOIN rules r ON r.id = s.rule_id WHERE s.rule_id = ?1",
+            [&id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )?)
+    })
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn an_archive_move_that_merges_two_works_moves_the_subscriptions_with_their_links() {
+    let (db, library, store, collect, moved) = env().await;
+    let (archive, kept) = archive(&library, &moved).await;
+
+    // Season 1 is subscribed (its link is the subscription's); the kept work
+    // has no row for it. Season 2 is subscribed to anime 7 while the kept
+    // work's season 2 was cut by the user.
+    subscribe(&db, "r1", 7, Some(format!("{moved}:1"))).await;
+    set(&db, &moved, 1, Some(7)).await;
+    subscribe(&db, "r2", 7, Some(format!("{moved}:2"))).await;
+    set(&db, &moved, 2, Some(7)).await;
+    set(&db, &kept, 2, Some(8)).await;
+    set(&db, &kept, 2, None).await;
+
+    assert_eq!(
+        library.follow_move(&collect, &archive, "A").await.unwrap(),
+        Followed::Merged
+    );
+
+    // Both subscriptions name the kept work's seasons and the links agree.
+    assert_eq!(rule(&db, "r1").await, (Some(format!("{kept}:1")), None, 2));
+    assert_eq!(rule(&db, "r2").await, (Some(format!("{kept}:2")), None, 2));
+    assert_eq!(
+        summary(&store.anissia_links_of(&kept).await.unwrap()),
+        [(1, 2, Some(7)), (2, 3, Some(7))]
+    );
+}
+
+#[tokio::test]
+async fn a_merged_subscription_whose_season_is_held_by_another_anime_is_noted_not_connected() {
+    let (db, library, store, collect, moved) = env().await;
+    let (archive, kept) = archive(&library, &moved).await;
+
+    // Season 1: the kept work's season is linked to another anime. Season 2:
+    // another subscription of another anime holds the kept work's season.
+    subscribe(&db, "r1", 7, Some(format!("{moved}:1"))).await;
+    set(&db, &moved, 1, Some(7)).await;
+    set(&db, &kept, 1, Some(8)).await;
+    subscribe(&db, "r2", 7, Some(format!("{moved}:2"))).await;
+    set(&db, &moved, 2, Some(7)).await;
+    subscribe(&db, "r3", 8, Some(format!("{kept}:2"))).await;
+    set(&db, &kept, 2, Some(8)).await;
+    // A rule that was already noting a season of the moved work.
+    subscribe(&db, "r4", 8, None).await;
+    db.run::<_, DbError, _>({
+        let note = format!("{moved}:2");
+        move |c| {
+            c.execute(
+                "UPDATE rule_subscriptions SET season_blocked = ?1 WHERE rule_id = 'r4'",
+                [note],
+            )?;
+            Ok(())
+        }
+    })
+    .await
+    .unwrap();
+
+    library.follow_move(&collect, &archive, "A").await.unwrap();
+
+    // Neither is connected to the season it moved to, and both note it; the
+    // worker finds them without a season and says why in the rule's detail.
+    assert_eq!(rule(&db, "r1").await, (None, Some(format!("{kept}:1")), 2));
+    assert_eq!(rule(&db, "r2").await, (None, Some(format!("{kept}:2")), 2));
+    // The holder is untouched, and so are the kept work's links.
+    assert_eq!(rule(&db, "r3").await, (Some(format!("{kept}:2")), None, 1));
+    assert_eq!(
+        summary(&store.anissia_links_of(&kept).await.unwrap()),
+        [(1, 1, Some(8)), (2, 1, Some(8))]
+    );
+    // A note about the moved work's season is about the kept work's now.
+    assert_eq!(rule(&db, "r4").await, (None, Some(format!("{kept}:2")), 2));
 }

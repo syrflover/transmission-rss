@@ -702,6 +702,8 @@ pub(super) fn follow_move(
             crate::store::artwork::merge_selection(&tx, &moved, &kept)?;
             crate::store::seasons::merge_links(&tx, &moved, &kept)?;
             crate::store::seasons::merge_anissia_links(&tx, &moved, &kept)?;
+            // Subscriptions connected to the moved work's seasons follow them.
+            crate::store::seasons::follow_subscriptions(&tx, &moved, &kept)?;
             // Unknown is the older: the work was there before the app looked.
             let seen = match (moved_seen, kept_seen) {
                 (Some(a), Some(b)) => Some(a.min(b)),

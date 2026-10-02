@@ -349,5 +349,5 @@ impl SeasonStore {
     }
 }
 
-pub(crate) use anissia::merge_links as merge_anissia_links;
+pub(crate) use anissia::{follow_subscriptions, merge_links as merge_anissia_links};
 pub(crate) use repo::{cover_target, facts as library_facts, merge_links};
