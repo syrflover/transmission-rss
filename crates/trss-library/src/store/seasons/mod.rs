@@ -14,6 +14,11 @@
 //! was taken at and is dropped the same way, so a late search never undoes a
 //! user's newer choice. A refresh of an entry's data is no change of the link.
 //!
+//! # The Anissia link
+//!
+//! A season also links one Anissia anime, kept apart from the AniList entries
+//! with a version of its own ([`anissia`]).
+//!
 //! # Jobs
 //!
 //! The one automatic job is [`ClaimedSearch`]: look the work's folder name up
@@ -29,6 +34,9 @@
 //! while a season links it ([`SeasonStore::next_refresh`]); a finished one only
 //! when the user asks.
 
+pub mod anissia;
+#[cfg(test)]
+mod anissia_tests;
 mod repo;
 #[cfg(test)]
 mod tests;
@@ -341,4 +349,5 @@ impl SeasonStore {
     }
 }
 
+pub(crate) use anissia::merge_links as merge_anissia_links;
 pub(crate) use repo::{cover_target, facts as library_facts, merge_links};

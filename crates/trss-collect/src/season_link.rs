@@ -19,10 +19,13 @@
 //! folder, and videos other rules received, are no evidence for this rule, even
 //! in a folder of the same name.
 //!
-//! Once connected a rule stays connected. When the season is held by another
-//! Anissia anime already the rule is not connected and notes the season, which
-//! its detail explains ([`crate::store::channels::Subscription::season_blocked`]);
-//! the note goes when no other anime holds that season any more. The season ID is
+//! Once connected a rule stays connected, and the season's Anissia link becomes
+//! the rule's anime in the same transaction (`trss_library::store::seasons::anissia`).
+//! When the season is held by another Anissia anime already (another
+//! subscription's, or the anime the season was linked to from the work detail)
+//! the rule is not connected and notes the season, which its detail explains
+//! ([`crate::store::channels::Subscription::season_blocked`]); the note goes
+//! when no other anime holds that season any more. The season ID is
 //! `<work id>:<number>` ([`SeasonRef`]); season 0 (specials) is no season of an
 //! airing anime and is never connected.
 //!

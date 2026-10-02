@@ -108,6 +108,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("../migrations/status/heartbeat.sql")),
     // 30: the name a command's torrent had before the command renamed it
     Migration::Sql(include_str!("../migrations/commands/original_name.sql")),
+    // 31: the Anissia anime each season is linked to; seasons with a subscription get its anime
+    Migration::Sql(include_str!("../migrations/seasons/anissia_link.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -419,6 +421,91 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(row, ("running".to_owned(), 1, 1, None));
+    }
+
+    #[tokio::test]
+    async fn a_database_from_before_season_anissia_links_gives_subscribed_seasons_their_anime() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        let summary = "SELECT group_concat(rule_id || '|' || anissia_anime_no || '|' || subtitles
+                              || '|' || ifnull(creator, '') || '|' || ifnull(season_id, '') || '|'
+                              || subscribed_at, ';')
+                         FROM (SELECT * FROM rule_subscriptions ORDER BY rule_id)";
+        let before: String = {
+            // A database as the build with 30 migrations left it: a work with
+            // two seasons, one of them subscribed (by two channels' rules); a
+            // second work with a season nobody subscribes to; a subscription
+            // that has no season yet; one whose work is gone; a plain rule.
+            let conn = database_at(&path, 30);
+            conn.execute_batch(
+                "INSERT INTO watch_folders (id, path, created_at) VALUES ('f1', '/media', 1);
+                 INSERT INTO works (id, watch_folder_id, dir_name)
+                     VALUES ('w1', 'f1', 'Clevatess'), ('w2', 'f1', 'Plain');
+                 INSERT INTO seasons (work_id, number)
+                     VALUES ('w1', 1), ('w1', 2), ('w2', 1);
+                 INSERT INTO channels (id, position, url, excludes, secret_query, version)
+                     VALUES ('c1', 0, 'http://x/feed', '[]', '[]', 1),
+                            ('c2', 1, 'http://y/feed', '[]', '[]', 1);
+                 INSERT INTO rules (id, channel_id, position, match_text, regex,
+                         case_insensitive, directory, episode, episode_auto, state, version)
+                     VALUES ('r1', 'c1', 0, 'Clevatess', 0, 1, 'Clevatess/Season 02', 1, 0,
+                                'active', 2),
+                            ('r2', 'c1', 1, 'Waiting', 0, 1, 'Waiting', 1, 0, 'active', 1),
+                            ('r3', 'c1', 2, 'Gone', 0, 1, 'Gone', 1, 0, 'active', 1),
+                            ('r4', 'c1', 3, 'Plain', 0, 1, 'Plain', 1, 0, 'active', 1),
+                            ('r5', 'c2', 0, 'Clevatess', 0, 1, 'Clevatess/Season 02', 1, 0,
+                                'paused', 1);
+                 INSERT INTO anissia_anime (anime_no, subject, week, status, fetched_at)
+                     VALUES (7, '클레바테스', 1, 'ON', 10), (8, '기다림', 2, 'ON', 10),
+                            (9, '사라진 작품', 3, 'OFF', 10);
+                 INSERT INTO rule_subscriptions (rule_id, anissia_anime_no, subtitles, creator,
+                         season_id, subscribed_at)
+                     VALUES ('r1', 7, 'follow', 'SubKor', 'w1:2', 99),
+                            ('r2', 8, 'undecided', NULL, NULL, 98),
+                            ('r3', 9, 'none', NULL, 'removed-work:1', 97),
+                            ('r5', 7, 'undecided', NULL, 'w1:2', 96);",
+            )
+            .unwrap();
+            conn.query_row(summary, [], |r| r.get(0)).unwrap()
+        };
+
+        let db = Db::open(&path).await.unwrap();
+
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+        let (links, after, broken): (String, String, i64) = db
+            .run::<_, DbError, _>(move |c| {
+                let links = c.query_row(
+                    "SELECT ifnull(group_concat(work_id || ':' || season || '=' || anime_no
+                                   || '@' || version, ','), '')
+                       FROM (SELECT * FROM season_anissia ORDER BY work_id, season)",
+                    [],
+                    |r| r.get(0),
+                )?;
+                let after = c.query_row(summary, [], |r| r.get(0))?;
+                let broken =
+                    c.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| {
+                        r.get(0)
+                    })?;
+                Ok((links, after, broken))
+            })
+            .await
+            .unwrap();
+        // Only the subscribed season is linked, to the subscription's anime, once;
+        // the unsubscribed season, the waiting subscription and the one whose
+        // work is gone add nothing. The subscriptions are as they were.
+        assert_eq!(links, "w1:2=7@1");
+        assert_eq!(after, before);
+        assert_eq!(broken, 0);
+
+        // The link goes with its work.
+        let left: i64 = db
+            .run::<_, DbError, _>(|c| {
+                c.execute("DELETE FROM works WHERE id = 'w1'", [])?;
+                Ok(c.query_row("SELECT count(*) FROM season_anissia", [], |r| r.get(0))?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(left, 0);
     }
 
     #[tokio::test]

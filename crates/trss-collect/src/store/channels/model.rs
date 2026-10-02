@@ -264,10 +264,13 @@ pub struct Subscription {
     /// the creator followed before, if any, so switching back restores it.
     pub creator: Option<String>,
     /// The season the rule's videos belong to ([`SeasonRef::id`]); `None`
-    /// until it is connected. Once set it stays.
+    /// until it is connected. Once set it stays. A connected season's Anissia
+    /// link is this subscription's anime, and only the subscription side changes
+    /// it ([`ChannelStore::set_season_anime`](super::ChannelStore::set_season_anime)).
     pub season_id: Option<String>,
     /// The season the rule's videos are in when another Anissia anime holds it
-    /// already, so the rule could not be connected to it. `None` otherwise.
+    /// already (another subscription's, or the anime the season is linked to),
+    /// so the rule could not be connected to it. `None` otherwise.
     pub season_blocked: Option<String>,
     /// When the rule became a subscription (Unix ms). Items the feed held and
     /// history had recorded before are past: the user receives those.

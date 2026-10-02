@@ -121,7 +121,11 @@ fn to_json<T: serde::Serialize>(list: &T) -> String {
 
 /// Whether the season is recorded for a work in the library (one whose watch
 /// folder is registered).
-fn season_exists(conn: &Connection, work_id: &str, season: u32) -> rusqlite::Result<bool> {
+pub(super) fn season_exists(
+    conn: &Connection,
+    work_id: &str,
+    season: u32,
+) -> rusqlite::Result<bool> {
     Ok(conn
         .query_row(
             "SELECT 1 FROM seasons s

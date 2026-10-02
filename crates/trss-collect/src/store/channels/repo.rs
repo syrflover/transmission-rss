@@ -20,6 +20,7 @@ use crate::store::{
     },
 };
 use trss_core::Millis;
+use trss_library::store::seasons::anissia as season_anissia;
 
 type Result<T> = std::result::Result<T, ChannelError>;
 
@@ -795,10 +796,42 @@ pub enum SeasonLinked {
     Gone,
 }
 
+/// The Anissia anime that holds `season_id` against `anime_no`, if one other
+/// than it does: a subscription connected to the season (`season_id` is the
+/// subscription's own) or, without one, the anime the season is linked to
+/// (`season_anissia`, see `trss_library::store::seasons::anissia`). A holder is
+/// found first among the subscriptions.
+fn other_holder(tx: &Connection, season_id: &str, anime_no: i64) -> Result<Option<i64>> {
+    let by_subscription: Option<i64> = tx
+        .query_row(
+            "SELECT anissia_anime_no FROM rule_subscriptions
+              WHERE season_id = ?1 AND anissia_anime_no <> ?2 ORDER BY rule_id LIMIT 1",
+            params![season_id, anime_no],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if by_subscription.is_some() {
+        return Ok(by_subscription);
+    }
+    Ok(tx
+        .query_row(
+            "SELECT anime_no FROM season_anissia
+              WHERE work_id || ':' || season = ?1 AND anime_no IS NOT NULL AND anime_no <> ?2",
+            params![season_id, anime_no],
+            |r| r.get(0),
+        )
+        .optional()?)
+}
+
 /// Connects the subscription of rule `id` to `season_id` unless it has a season
-/// already (it stays) or another Anissia anime holds that season. This is the
-/// worker's doing, so there is no version check; the rule's version goes up
-/// when the subscription changes.
+/// already (it stays) or another Anissia anime holds that season: another
+/// subscription's, or the one the season is linked to. This is the worker's
+/// doing, so there is no version check; the rule's version goes up when the
+/// subscription changes.
+///
+/// The season's Anissia link takes the subscription's anime in the same
+/// transaction (a season the library does not have has none to take), which is
+/// what keeps a subscribed season's link the subscription's.
 pub fn link_season(conn: &mut Connection, id: &str, season_id: &str) -> Result<SeasonLinked> {
     let tx = begin(conn)?;
     let Some(subscription) = fetch_rule(&tx, id)?.and_then(|rule| rule.subscription) else {
@@ -807,13 +840,7 @@ pub fn link_season(conn: &mut Connection, id: &str, season_id: &str) -> Result<S
     if subscription.season_id.is_some() {
         return Ok(SeasonLinked::Kept);
     }
-    let taken: bool = tx.query_row(
-        "SELECT EXISTS (SELECT 1 FROM rule_subscriptions
-                         WHERE season_id = ?1 AND anissia_anime_no <> ?2)",
-        params![season_id, subscription.anissia_anime_no],
-        |r| r.get(0),
-    )?;
-    if taken {
+    if other_holder(&tx, season_id, subscription.anissia_anime_no)?.is_some() {
         if subscription.season_blocked.as_deref() != Some(season_id) {
             tx.execute(
                 "UPDATE rule_subscriptions SET season_blocked = ?2 WHERE rule_id = ?1",
@@ -829,17 +856,44 @@ pub fn link_season(conn: &mut Connection, id: &str, season_id: &str) -> Result<S
         params![id, season_id],
     )?;
     bump_version(&tx, id)?;
+    if let Some(season) = SeasonRef::parse(season_id) {
+        let work_exists: bool = tx.query_row(
+            "SELECT EXISTS (SELECT 1 FROM works WHERE id = ?1)",
+            [&season.work_id],
+            |r| r.get(0),
+        )?;
+        if work_exists {
+            season_anissia::set_in(
+                &tx,
+                &season.work_id,
+                season.number,
+                Some(subscription.anissia_anime_no),
+            )?;
+        }
+    }
     tx.commit()?;
     Ok(SeasonLinked::Linked)
 }
 
-/// The Anissia anime whose subscriptions hold `season_id`, if any: what a rule
-/// that could not take the season names as the reason.
+/// The Anissia anime that holds `season_id`, if any: a subscription connected
+/// to it, else the anime the season is linked to. What a rule that could not
+/// take the season names as the reason.
 pub fn season_holder(conn: &Connection, season_id: &str) -> Result<Option<i64>> {
-    Ok(conn
+    let by_subscription: Option<i64> = conn
         .query_row(
             "SELECT anissia_anime_no FROM rule_subscriptions WHERE season_id = ?1
               ORDER BY rule_id LIMIT 1",
+            [season_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if by_subscription.is_some() {
+        return Ok(by_subscription);
+    }
+    Ok(conn
+        .query_row(
+            "SELECT anime_no FROM season_anissia
+              WHERE work_id || ':' || season = ?1 AND anime_no IS NOT NULL",
             [season_id],
             |r| r.get(0),
         )
@@ -847,10 +901,11 @@ pub fn season_holder(conn: &Connection, season_id: &str) -> Result<Option<i64>> 
 }
 
 /// Clears `season_blocked` where no other Anissia anime holds the noted season
-/// any more (the holder's rule was deleted, or stopped being a subscription),
-/// so a rule's detail does not go on explaining a block that is gone. A rule
-/// that changes gets a new version; one whose note stays is left alone. The
-/// rules cleared, by ID.
+/// any more (the holder's rule was deleted, or stopped being a subscription, or
+/// the season's link was cut or changed to the rule's anime), so a rule's
+/// detail does not go on explaining a block that is gone. A rule that changes
+/// gets a new version; one whose note stays is left alone. The rules cleared,
+/// by ID.
 pub fn release_unheld_seasons(conn: &mut Connection) -> Result<Vec<String>> {
     // The same condition `link_season` refuses a season by, negated.
     const UNHELD: &str = "SELECT s.rule_id FROM rule_subscriptions s
@@ -858,6 +913,10 @@ pub fn release_unheld_seasons(conn: &mut Connection) -> Result<Vec<String>> {
            AND NOT EXISTS (SELECT 1 FROM rule_subscriptions h
                             WHERE h.season_id = s.season_blocked
                               AND h.anissia_anime_no <> s.anissia_anime_no)
+           AND NOT EXISTS (SELECT 1 FROM season_anissia a
+                            WHERE a.work_id || ':' || a.season = s.season_blocked
+                              AND a.anime_no IS NOT NULL
+                              AND a.anime_no <> s.anissia_anime_no)
          ORDER BY s.rule_id";
     // Most passes find nothing: look before taking the write lock.
     let ids = |conn: &Connection| -> rusqlite::Result<Vec<String>> {

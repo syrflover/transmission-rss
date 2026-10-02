@@ -471,13 +471,28 @@ async fn the_note_of_a_taken_season_goes_when_nothing_holds_the_season_any_more(
     assert_eq!(blocked_of(&noted), Some(format!("{work}:1").as_str()));
 
     // The holder goes, and the second rule's torrent is gone from Transmission
-    // too, so the rule cannot take the season itself.
+    // too, so the rule cannot take the season itself. The season keeps the
+    // holder's anime as its own link, which still holds it...
     scene.h.tr.remove(&format!("{:040x}", 2));
     let holder = scene.rule(&first).await;
     scene
         .h
         .channels
         .delete_rule(&holder.id, holder.version)
+        .await
+        .unwrap();
+    scene.tick().await;
+    assert_eq!(
+        blocked_of(&scene.rule(&second).await),
+        Some(format!("{work}:1").as_str()),
+        "the season's link holds it"
+    );
+
+    // ...until the link is cut.
+    scene
+        .h
+        .channels
+        .set_season_anime(&work, 1, 1, None)
         .await
         .unwrap();
     scene.tick().await;

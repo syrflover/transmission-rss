@@ -1,0 +1,195 @@
+use std::collections::BTreeSet;
+
+use rusqlite::TransactionBehavior;
+
+use crate::{
+    discovery::{Scan, ScannedWork, WorkRead},
+    store::{
+        library::{Followed, LibraryStore},
+        seasons::{
+            anissia::{link_in, set_in, AnissiaLink},
+            SeasonError, SeasonStore,
+        },
+    },
+};
+use trss_core::{Db, DbError};
+
+fn scan(works: &[(&str, &[u32])]) -> Scan {
+    Scan {
+        works: works
+            .iter()
+            .map(|(name, seasons)| {
+                WorkRead::Read(ScannedWork {
+                    dir_name: (*name).to_owned(),
+                    seasons: BTreeSet::from_iter(seasons.iter().copied()),
+                    files: Vec::new(),
+                    unrecognized: Vec::new(),
+                })
+            })
+            .collect(),
+    }
+}
+
+/// A library with `/w` holding `A` (seasons 1 and 2), and two Anissia anime.
+async fn env() -> (Db, LibraryStore, SeasonStore, String, String) {
+    let db = Db::open_blocking(":memory:").unwrap();
+    db.run::<_, DbError, _>(|c| {
+        c.execute_batch(
+            "INSERT INTO anissia_anime (anime_no, subject, week, status, fetched_at)
+             VALUES (7, '하나', 1, 'END', 10), (8, '둘', 2, 'ON', 10);",
+        )?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+    let library = LibraryStore::new(db.clone());
+    let (folder, _) = library
+        .add_folder("/w".into(), scan(&[("A", &[1, 2])]), 100, &[])
+        .await
+        .unwrap();
+    let work = library.works(&folder.id).await.unwrap()[0].id.clone();
+    (db.clone(), library, SeasonStore::new(db), folder.id, work)
+}
+
+async fn set(db: &Db, work: &str, season: u32, anime_no: Option<i64>) -> AnissiaLink {
+    let work = work.to_owned();
+    db.run::<_, DbError, _>(move |c| {
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let link = set_in(&tx, &work, season, anime_no)?;
+        tx.commit()?;
+        Ok(link)
+    })
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn a_season_never_linked_has_version_zero_and_each_change_moves_the_version_on() {
+    let (db, _library, store, _folder, work) = env().await;
+
+    let untouched = store.anissia_link(&work, 1).await.unwrap();
+    assert_eq!(
+        untouched,
+        AnissiaLink {
+            work_id: work.clone(),
+            season: 1,
+            version: 0,
+            anime_no: None
+        }
+    );
+
+    assert_eq!(set(&db, &work, 1, Some(7)).await.version, 1);
+    // The same link again changes nothing, not even the version.
+    assert_eq!(set(&db, &work, 1, Some(7)).await.version, 1);
+    assert_eq!(set(&db, &work, 1, Some(8)).await.version, 2);
+    // Cutting the link keeps the row, so the version goes on.
+    let cut = set(&db, &work, 1, None).await;
+    assert_eq!((cut.version, cut.anime_no), (3, None));
+    // Cutting a link that is cut changes nothing.
+    assert_eq!(set(&db, &work, 1, None).await.version, 3);
+    assert_eq!(set(&db, &work, 1, Some(7)).await.version, 4);
+
+    // Another season of the work is its own link.
+    assert_eq!(store.anissia_link(&work, 2).await.unwrap().version, 0);
+    set(&db, &work, 2, Some(8)).await;
+    let links = store.anissia_links_of(&work).await.unwrap();
+    assert_eq!(
+        links
+            .values()
+            .map(|l| (l.season, l.version, l.anime_no))
+            .collect::<Vec<_>>(),
+        [(1, 4, Some(7)), (2, 1, Some(8))]
+    );
+}
+
+#[tokio::test]
+async fn only_a_season_of_the_work_has_a_link_to_read() {
+    let (_db, _library, store, _folder, work) = env().await;
+    assert!(matches!(
+        store.anissia_link(&work, 5).await,
+        Err(SeasonError::NotFound)
+    ));
+    assert!(matches!(
+        store.anissia_link("nobody", 1).await,
+        Err(SeasonError::NotFound)
+    ));
+}
+
+#[tokio::test]
+async fn a_link_outlives_its_season_row_and_goes_with_its_work() {
+    let (db, library, store, folder, work) = env().await;
+    set(&db, &work, 2, Some(7)).await;
+
+    // The season folder is gone for a moment, then back.
+    library
+        .record_scan(&folder, Ok(scan(&[("A", &[1])])), 200)
+        .await
+        .unwrap()
+        .unwrap();
+    let kept = db
+        .run::<_, DbError, _>({
+            let work = work.clone();
+            move |c| Ok(link_in(c, &work, 2)?)
+        })
+        .await
+        .unwrap();
+    assert_eq!((kept.version, kept.anime_no), (1, Some(7)));
+    library
+        .record_scan(&folder, Ok(scan(&[("A", &[1, 2])])), 300)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        store.anissia_link(&work, 2).await.unwrap().anime_no,
+        Some(7)
+    );
+
+    library.remove_folder(&folder, 400).await.unwrap();
+    let rows: i64 = db
+        .run::<_, DbError, _>(|c| {
+            Ok(c.query_row("SELECT count(*) FROM season_anissia", [], |r| r.get(0))?)
+        })
+        .await
+        .unwrap();
+    // Out of the library the work is hidden and kept, its link with it.
+    assert_eq!(rows, 1);
+}
+
+#[tokio::test]
+async fn an_archive_move_that_merges_two_works_keeps_the_links_the_kept_work_lacks() {
+    let (db, library, store, collect, moved) = env().await;
+    let folders = library.folders().await.unwrap();
+    let (archive, _) = library
+        .add_folder("/archive".into(), scan(&[("A", &[1, 2])]), 150, &folders)
+        .await
+        .unwrap();
+    let kept = library.works(&archive.id).await.unwrap()[0].id.clone();
+    assert_ne!(kept, moved);
+
+    // The moved work links both seasons; the kept one has season 2 linked to
+    // another anime and season 1 cut.
+    set(&db, &moved, 1, Some(7)).await;
+    set(&db, &moved, 2, Some(7)).await;
+    set(&db, &kept, 1, Some(8)).await;
+    set(&db, &kept, 1, None).await;
+    set(&db, &kept, 2, Some(8)).await;
+
+    assert_eq!(
+        library
+            .follow_move(&collect, &archive.id, "A")
+            .await
+            .unwrap(),
+        Followed::Merged
+    );
+
+    let links = store.anissia_links_of(&kept).await.unwrap();
+    // Season 1 comes over past both versions; season 2 stays as it was.
+    assert_eq!(
+        links
+            .values()
+            .map(|l| (l.season, l.version, l.anime_no))
+            .collect::<Vec<_>>(),
+        [(1, 3, Some(7)), (2, 1, Some(8))]
+    );
+    assert!(store.anissia_links_of(&moved).await.unwrap().is_empty());
+}

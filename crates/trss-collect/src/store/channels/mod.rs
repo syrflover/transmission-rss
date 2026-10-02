@@ -24,6 +24,9 @@ mod import_subscriptions_tests;
 mod import_tests;
 mod model;
 mod repo;
+mod season_anime;
+#[cfg(test)]
+mod season_anime_tests;
 mod suggestion;
 #[cfg(test)]
 mod suggestion_tests;
@@ -37,6 +40,7 @@ pub use episode_undo::{
     EpisodeUndo, NewUndoFile, UndoBegun, UndoFile, UndoFileState, REVISION_UNDER_WAY,
 };
 pub use repo::{NewSubscription, SeasonLinked};
+pub use season_anime::SeasonAnimeError;
 
 pub use model::{
     mask_url, query_names, Channel, ChannelInput, ChannelWithRules, OrderItem, Rule, RuleInput,
