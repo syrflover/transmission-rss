@@ -748,11 +748,11 @@ async fn the_view_lists_the_titles_to_read_without_empty_or_repeated_ones() {
 
     // The folder name repeats the first entry's romaji title, so it is not listed twice.
     let want = vec![
+        pair("korean", "안녕, 라라"),
+        pair("korean", "라라여 안녕"),
         pair("native", "さよならララ"),
         pair("english", "Goodbye Lara"),
         pair("romaji", "Sayonara Lara"),
-        pair("korean", "안녕, 라라"),
-        pair("korean", "라라여 안녕"),
         pair("romaji", "Sayonara Lara 2"),
     ];
     assert_eq!(reference(&app.get(1).await), want);

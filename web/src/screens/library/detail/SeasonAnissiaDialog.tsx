@@ -257,7 +257,7 @@ function FullList({
           검색
         </Button>
       </form>
-      <p className={hintClass}>방영이 끝난 작품도 찾아요. Anissia는 한국어 제목으로 찾아져서, 일본어나 영어 제목은 거의 맞지 않아요. 위 제목을 참고해 한국어 제목을 직접 써 보세요.</p>
+      <p className={hintClass}>방영이 끝난 작품도 찾아요. Anissia는 한국어 제목으로 찾아져서, 일본어나 영어 제목은 거의 맞지 않아요. 위 제목을 참고해 한국어 제목을 직접 써 보세요. 전에 받아 둔 시즌은 ‘정보 다시 받기’를 하면 AniList의 한국어 별칭도 받아 와요(AniList에 있는 작품만요).</p>
       {error && (
         <p role="alert" className="text-[13px] leading-relaxed font-semibold text-urgent">
           {error}

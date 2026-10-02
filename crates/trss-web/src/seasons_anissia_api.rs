@@ -27,8 +27,9 @@
 //!   request names. The season's anime follows the subscription; to link it to
 //!   another, the subscription is deleted first (the link stays after that).
 //! - `reference_titles` are the titles the user reads to write a search: the
-//!   native, English and romaji titles and the Korean synonyms (the ones with
-//!   Hangul) of the season's linked AniList entries, then the work's folder
+//!   Korean synonyms (the ones with Hangul, first since Anissia matches them)
+//!   and the native, English and romaji titles of the season's linked AniList
+//!   entries, then the work's folder
 //!   name, without empty or repeated ones. They are text to read, nothing is
 //!   searched with them.
 //! - `search` looks `q` up in Anissia's full anime list, finished anime
@@ -139,8 +140,8 @@ pub struct AnissiaLinkView {
     reference_titles: Vec<ReferenceTitle>,
 }
 
-/// The titles to show for a season: each linked entry's native, English and
-/// romaji titles and Korean synonyms, then the folder name, leaving out empty
+/// The titles to show for a season: each linked entry's Korean synonyms and
+/// native, English and romaji titles, then the folder name, leaving out empty
 /// ones and ones already listed (compared without regard to case).
 fn reference_titles(entries: &[trss_anilist::Entry], folder: &str) -> Vec<ReferenceTitle> {
     let mut out: Vec<ReferenceTitle> = Vec::new();
@@ -156,12 +157,13 @@ fn reference_titles(entries: &[trss_anilist::Entry], folder: &str) -> Vec<Refere
         }
     };
     for entry in entries {
-        add("native", entry.native.as_deref());
-        add("english", entry.english.as_deref());
-        add("romaji", entry.romaji.as_deref());
+        // Korean first: Anissia finds an anime by its Korean title.
         for korean in &entry.korean_titles {
             add("korean", Some(korean));
         }
+        add("native", entry.native.as_deref());
+        add("english", entry.english.as_deref());
+        add("romaji", entry.romaji.as_deref());
     }
     add("folder", Some(folder));
     out
