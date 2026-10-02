@@ -72,7 +72,7 @@ export function PickSubtitles({
             onChange={() => onChange("follow", c.name)}
           />
           <span className="flex min-w-0 flex-col gap-0.5">
-            <span className="min-w-0 text-[14.5px] font-semibold break-words">{c.name} 따라 받기</span>
+            <span className="min-w-0 text-[14.5px] font-semibold break-words">{c.name}</span>
             <span className="text-[13px] leading-normal text-text-secondary">{SUBTITLE_NOTES.follow(c.name)}</span>
             <span className="text-xs text-text-muted">
               자막 {c.captions}개{c.last_updated_at ? ` · 마지막 ${c.last_updated_at.slice(0, 10)}` : ""}

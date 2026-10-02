@@ -48,11 +48,11 @@ export const SUBTITLE_NOTES = {
   none: "영상만 받아요. 자막 때문에 할 일을 만들지 않아요.",
 } as const;
 
-/** `〇〇 따라 받기`, `제작자 미정` or `받지 않음`. */
+/** The creator's name, `제작자 미정` or `받지 않음`; the label beside it says it is the creator. */
 export function subtitleChoice(subscription: Pick<SubscriptionBrief, "subtitles" | "creator">): string {
   switch (subscription.subtitles) {
     case "follow":
-      return `${subscription.creator ?? ""} 따라 받기`;
+      return subscription.creator ?? "";
     case "undecided":
       return "제작자 미정";
     case "none":

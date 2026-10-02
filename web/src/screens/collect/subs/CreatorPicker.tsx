@@ -83,7 +83,7 @@ export function CreatorPicker({
             checked={picked === name}
             onChange={() => setPicked(name)}
           />
-          <span className="min-w-0 text-[14px] font-semibold break-words">{name} 따라 받기</span>
+          <span className="min-w-0 text-[14px] font-semibold break-words">{name}</span>
         </label>
       ))}
       <label className={option}>

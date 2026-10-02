@@ -32,7 +32,7 @@ function Subscriptions({ flow }: { flow: ImportFlow }) {
               <li key={`${sub.channel}:${sub.rule}`} className="flex flex-wrap items-baseline gap-x-2.5 gap-y-0.5">
                 <RuleName phrase={phrase(sub.channel, sub.rule)} />
                 <span className="text-xs text-text-muted">
-                  {sub.subject ?? (sub.schedule_from_comment ? "주석의 요일·시간" : "요일·시간 미정")} ·{sub.creator ? `${sub.creator} 따라 받기` : "제작자 미정"}
+                  {sub.subject ?? (sub.schedule_from_comment ? "주석의 요일·시간" : "요일·시간 미정")} ·{sub.creator ? ` 자막 ${sub.creator}` : " 제작자 미정"}
                 </span>
               </li>
             ))}
