@@ -299,7 +299,7 @@ async fn done_jobs_come_newest_first_a_page_at_a_time() {
 #[tokio::test]
 async fn a_shutdown_in_the_middle_of_a_file_leaves_the_job_running_and_the_next_start_ends_it() {
     let s = setup().await;
-    let id = make(&s, "c1", &[("1", "/ok/a?delay_ms=20")]).await;
+    let id = make(&s, "c1", &[("1", "/ok/a?delay_ms=50")]).await;
 
     let cancel = CancellationToken::new();
     let runner = s.runner.clone();
@@ -307,7 +307,13 @@ async fn a_shutdown_in_the_middle_of_a_file_leaves_the_job_running_and_the_next_
         let cancel = cancel.clone();
         async move { runner.run_ready(&cancel).await }
     });
-    tokio::time::sleep(Duration::from_millis(150)).await;
+    // Stop once the file has begun, however slow the machine is: it takes
+    // about 30 × 50ms to come.
+    let waiting = tokio::time::Instant::now();
+    while detail(&s, &id).await.items[0].files.is_empty() {
+        assert!(waiting.elapsed() < Duration::from_secs(10), "no file began");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
     cancel.cancel();
     task.await.unwrap().unwrap();
 

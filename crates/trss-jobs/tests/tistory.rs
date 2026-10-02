@@ -456,7 +456,20 @@ async fn a_shutdown_during_a_retry_wait_stops_the_run_at_once() {
         let cancel = cancel.clone();
         async move { runner.run_ready(&cancel).await }
     });
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // Stop once the run waits to retry, however slow the machine is.
+    let waiting = tokio::time::Instant::now();
+    while !detail(&s, &id)
+        .await
+        .events
+        .iter()
+        .any(|e| e.message.contains("다시 시도해요"))
+    {
+        assert!(
+            waiting.elapsed() < Duration::from_secs(10),
+            "no retry wait began"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
     cancel.cancel();
     tokio::time::timeout(Duration::from_secs(2), task)
         .await
