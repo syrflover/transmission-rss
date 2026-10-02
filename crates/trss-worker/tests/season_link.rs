@@ -554,7 +554,7 @@ async fn connecting_a_subscription_to_a_season_has_the_animes_subtitle_lines_rea
     assert_eq!(command.payload, r#"{"anime_no":7}"#);
     assert_eq!(command.state, trss_core::commands::CommandState::Pending);
     assert_eq!(fake.count("/anime/caption/animeNo/"), 0);
-    assert!(store.candidates(7).await.unwrap().is_empty());
+    assert!(store.candidates(7, Vec::new()).await.unwrap().is_empty());
 
     // The worker reads it, and the older line is a candidate of the anime.
     assert_eq!(
@@ -565,7 +565,7 @@ async fn connecting_a_subscription_to_a_season_has_the_animes_subtitle_lines_rea
             .unwrap(),
         CommandsOutcome::Ran(1)
     );
-    let seen = store.candidates(7).await.unwrap();
+    let seen = store.candidates(7, Vec::new()).await.unwrap();
     assert_eq!(seen.len(), 1);
     assert_eq!(seen[0].episode, "24");
     assert_eq!(fake.count("/anime/caption/animeNo/7"), 1);

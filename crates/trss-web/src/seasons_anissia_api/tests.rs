@@ -1068,7 +1068,7 @@ async fn linking_after_observations_exist_shows_the_earlier_ones_at_once_and_ask
 }
 
 #[tokio::test]
-async fn an_update_only_change_is_a_revision_candidate_in_the_answer() {
+async fn a_fix_of_a_received_post_is_a_revision_and_each_candidate_says_how_its_job_stands() {
     let app = App::new().await;
     app.schedule_3320();
     let line = |updated: &str| {
@@ -1088,9 +1088,43 @@ async fn an_update_only_change_is_a_revision_candidate_in_the_answer() {
     let rows = rows.as_array().unwrap();
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0]["updated"], "2026-10-02T11:50:00");
+    // Observed with the same episode before, but nothing received.
+    assert_eq!(rows[0]["revision"], Value::Null);
+    assert_eq!(rows[1]["job"], Value::Null);
+
+    // The older post is picked: its job stands, nothing is received yet.
+    let older = rows[1]["id"].as_i64().unwrap();
+    let (status, made) = app
+        .call(
+            Method::POST,
+            "/api/subtitle-jobs",
+            Some(
+                json!({ "id": "pick-1", "work_id": app.work, "season": 1, "candidates": [older] }),
+            ),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{made}");
+    let job = made["id"].as_str().unwrap().to_owned();
+    let rows = app.candidates(1).await["candidates"].clone();
+    assert_eq!(
+        rows[1]["job"],
+        json!({ "id": job, "state": "pending", "wait": null })
+    );
+    assert_eq!(rows[0]["revision"], Value::Null);
+    assert_eq!(rows[0]["job"], Value::Null);
+
+    // Once it is received, the fix of the same post revises it.
+    let item = app.state.jobs.items(&job).await.unwrap()[0].id;
+    app.state
+        .jobs
+        .set_item(item, trss_jobs::ItemState::Done, None, None, NOW)
+        .await
+        .unwrap();
+    let rows = app.candidates(1).await["candidates"].clone();
+    assert_eq!(rows[1]["job"]["state"], "done");
     assert_eq!(
         rows[0]["revision"],
-        json!({ "of": rows[1]["id"], "same_post": true })
+        json!({ "of": older, "same_post": true })
     );
     assert_eq!(rows[1]["revision"], Value::Null);
 }

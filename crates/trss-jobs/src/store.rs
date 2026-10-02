@@ -122,6 +122,21 @@ pub struct ItemRow {
     pub files: Vec<FileRow>,
 }
 
+/// A candidate a job took: an item that names its observation, with how the
+/// item and its job stand.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pick {
+    pub observation_id: i64,
+    pub source_id: Option<String>,
+    pub episode: String,
+    pub post_url: String,
+    pub item_state: ItemState,
+    pub item_wait: Option<Wait>,
+    pub job_id: String,
+    pub job_state: JobState,
+    pub updated_at: Millis,
+}
+
 /// One receipt of a file (see the schema's comment).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileRow {
@@ -223,6 +238,39 @@ impl JobStore {
     pub async fn detail(&self, id: &str) -> Result<Option<JobDetail>, JobError> {
         let id = id.to_owned();
         self.db.run(move |c| detail(c, &id)).await
+    }
+
+    /// The candidates the jobs of Anissia anime `anime_no` took, in the order
+    /// they were taken.
+    pub async fn picks_of_anime(&self, anime_no: i64) -> Result<Vec<Pick>, JobError> {
+        self.db
+            .run(move |c| {
+                let mut stmt = c.prepare(
+                    "SELECT i.observation_id, j.source_id, i.episode, i.post_url, i.state,
+                            i.wait, j.id, j.state, i.updated_at
+                       FROM subtitle_job_items i
+                       JOIN subtitle_jobs j ON j.id = i.job_id
+                      WHERE j.anime_no = ?1 AND i.observation_id IS NOT NULL
+                      ORDER BY i.id",
+                )?;
+                let rows = stmt
+                    .query_map([anime_no], |r| {
+                        Ok(Pick {
+                            observation_id: r.get(0)?,
+                            source_id: r.get(1)?,
+                            episode: r.get(2)?,
+                            post_url: r.get(3)?,
+                            item_state: r.get(4)?,
+                            item_wait: r.get(5)?,
+                            job_id: r.get(6)?,
+                            job_state: r.get(7)?,
+                            updated_at: r.get(8)?,
+                        })
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(rows)
+            })
+            .await
     }
 
     // -----------------------------------------------------------------------

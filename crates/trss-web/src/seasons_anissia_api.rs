@@ -63,7 +63,8 @@
 //!       "updated": "2026-09-10T12:10:00", "updated_at": 1789009800000,
 //!       "updated_parse_failed": false, "first_seen_at": 1790780400000,
 //!       "sort_at": 1789009800000,
-//!       "revision": { "of": 7, "same_post": true } } ] }
+//!       "revision": { "of": 7, "same_post": true },
+//!       "job": { "id": "1f0c…", "state": "done", "wait": null } } ] }
 //! ```
 //!
 //! - `candidates` are newest first by `sort_at`: the update time, or the time
@@ -75,15 +76,16 @@
 //!   and no episode of the season. `source_id` is the app's ID of the creator's
 //!   lines of the anime; `creator` is the display name Anissia gives and is not
 //!   an ID.
-//! - `revision` marks a revision candidate and is **provisional**: the creator
-//!   was observed with the
-//!   same `episode` before (`of` is that earlier observation, `same_post` says
-//!   whether it had the same `post_url`: the post was fixed, or the episode was
-//!   posted again). Until received subtitles are recorded this is the app's
-//!   closest reading of `같은 회차에 같은 제작자의 자막이 있으면 수정 후보`, and
-//!   it will be replaced by "a received subtitle from that creator exists for
-//!   the episode" (the field and its shape stay); it is `null` for an episode
-//!   of the creator that is new.
+//! - `revision` marks a revision candidate: a subtitle job received the
+//!   creator's subtitle for the same `episode` from an earlier observation
+//!   (`of` is that observation, the latest such; `same_post` says whether it
+//!   had the same `post_url`: the post was fixed, or the episode was posted
+//!   again). It is `null` otherwise, also when the creator was only observed
+//!   with the episode before ([`trss_collect::store::anissia::revision_of`]).
+//! - `job` is how the latest subtitle job that took the candidate stands, as
+//!   its item for the candidate: `state` `pending`, `running`, `waiting`
+//!   (`wait` `auth` or `subtitle`), `held`, `failed` or `done`, with the job's
+//!   `id` for its page; `null` when no job took it.
 //! - `read_at` is when the 30-minute reading last read the whole recent list
 //!   (`null` before the first); `refresh` is the latest `anissia_captions`
 //!   command for the anime (`pending`, `running`, `done` or `failed` with its
@@ -601,6 +603,14 @@ struct CandidateObservation {
     first_seen_at: i64,
     sort_at: i64,
     revision: Option<RevisionView>,
+    job: Option<PickView>,
+}
+
+#[derive(Serialize)]
+struct PickView {
+    id: String,
+    state: &'static str,
+    wait: Option<&'static str>,
 }
 
 #[derive(Serialize)]
@@ -635,6 +645,7 @@ impl From<&trss_collect::store::anissia::Candidate> for CandidateObservation {
                 of: r.of,
                 same_post: r.same_post,
             }),
+            job: None,
         }
     }
 }
@@ -665,9 +676,29 @@ async fn candidates(
             candidates: Vec::new(),
         }));
     };
+    let picks = state
+        .jobs
+        .picks_of_anime(anime_no)
+        .await
+        .map_err(|e| internal(&e))?;
+    let received = picks
+        .iter()
+        .filter(|p| p.item_state == trss_jobs::ItemState::Done)
+        .filter_map(|p| {
+            Some(trss_collect::store::anissia::Received {
+                source_id: p.source_id.clone()?,
+                episode: p.episode.clone(),
+                observation_id: p.observation_id,
+                post_url: p.post_url.clone(),
+            })
+        })
+        .collect();
+    // The latest job of each candidate (the picks come in the order taken).
+    let latest: HashMap<i64, &trss_jobs::store::Pick> =
+        picks.iter().map(|p| (p.observation_id, p)).collect();
     let observed = state
         .anissia_store
-        .candidates(anime_no)
+        .candidates(anime_no, received)
         .await
         .map_err(|e| internal(&e))?;
     let refresh = state
@@ -684,6 +715,16 @@ async fn candidates(
         anime_no: Some(anime_no),
         read_at,
         refresh: refresh.as_ref().map(CommandView::from),
-        candidates: observed.iter().map(CandidateObservation::from).collect(),
+        candidates: observed
+            .iter()
+            .map(|c| CandidateObservation {
+                job: latest.get(&c.id).map(|p| PickView {
+                    id: p.job_id.clone(),
+                    state: p.item_state.code(),
+                    wait: p.item_wait.map(trss_jobs::Wait::code),
+                }),
+                ..CandidateObservation::from(c)
+            })
+            .collect(),
     }))
 }

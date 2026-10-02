@@ -15,9 +15,8 @@
 //! the anime; it is not an ID, and neither is a post's address.
 //!
 //! [`AnissiaStore::candidates`] reads an anime's observations back with the
-//! revision mark described at [`revision_of`].
-
-use std::collections::HashMap;
+//! revision mark described at [`revision_of`], given what the subtitle jobs
+//! received ([`Received`]).
 
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use uuid::Uuid;
@@ -69,8 +68,8 @@ pub struct Candidate {
     pub updated_at: Option<Millis>,
     /// When the app first saw this state (Unix ms).
     pub first_seen_at: Millis,
-    /// Set when the creator was observed with the same episode text before.
-    /// Provisional: see [`revision_of`].
+    /// Set when a subtitle of the creator for the same episode text was
+    /// received from an earlier observation: see [`revision_of`].
     pub revision: Option<Revision>,
 }
 
@@ -82,38 +81,57 @@ impl Candidate {
     }
 }
 
-/// The earlier observation a candidate revises.
+/// The received observation a candidate revises.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Revision {
-    /// The creator's latest earlier observation with the same episode text.
+    /// The latest earlier observation of the creator with the same episode
+    /// text whose subtitle was received.
     pub of: i64,
     /// Whether that observation had the same post address: the creator fixed
     /// the post (`true`) or posted the episode again elsewhere (`false`).
     pub same_post: bool,
 }
 
-/// The revision mark of an observation, given the creator's earlier ones.
+/// A subtitle a job received from an observation (`trss-jobs` records it; the
+/// caller reads it there and hands it in).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Received {
+    pub source_id: String,
+    /// The episode text as the observation wrote it.
+    pub episode: String,
+    pub observation_id: i64,
+    pub post_url: String,
+}
+
+/// The revision mark of `candidate`, given the subtitles received of its
+/// anime.
 ///
-/// **Provisional.** The rule below is an approximation, to be replaced by "a
-/// received subtitle from that creator exists for the episode" once received
-/// subtitles are recorded; the field and its shape stay.
+/// A candidate is a *revision candidate* when the app holds a subtitle of the
+/// same creator for the same episode (`docs/specs/subtitles.md`, 자막 후보
+/// 조회): a subtitle received from an earlier observation of the creator's
+/// source with the same episode text. Two limits of what is known now:
 ///
-/// **What is decided today.** A candidate is a *revision candidate* when the
-/// app already holds a subtitle of the same creator for the same episode. The
-/// app does not hold subtitles yet (the receiving and the archive come with the
-/// subtitle jobs), so the closest rule it can state is on what it knows: the
-/// creator was observed with the same episode text before. That counts a
-/// post the user never received, so it is the mark a revision *could* be, and
-/// it is the single place to change once received subtitles are recorded.
-fn revision_of(
-    earlier: &HashMap<String, (i64, String)>,
-    episode: &str,
-    post_url: &str,
-) -> Option<Revision> {
-    earlier.get(episode).map(|(of, post)| Revision {
-        of: *of,
-        same_post: post == post_url,
-    })
+/// - The episode is the text Anissia's line had, compared as written; the
+///   episode a received package really holds is decided when it is analysed,
+///   which comes later.
+/// - A subtitle the user put in without a creator, then gave one, does not
+///   count yet: those creators are not recorded.
+///
+/// An observation newer than the candidate is not what it revises, and the
+/// candidate's own receipt is not either.
+pub fn revision_of(candidate: &Candidate, received: &[Received]) -> Option<Revision> {
+    received
+        .iter()
+        .filter(|r| {
+            r.source_id == candidate.source_id
+                && r.episode == candidate.episode
+                && r.observation_id < candidate.id
+        })
+        .max_by_key(|r| r.observation_id)
+        .map(|r| Revision {
+            of: r.observation_id,
+            same_post: r.post_url == candidate.post_url,
+        })
 }
 
 /// Whether an observation says what `line` says. The times are compared as
@@ -196,8 +214,13 @@ impl AnissiaStore {
     }
 
     /// The observations of anime `anime_no`, newest update first (a state
-    /// whose update time is not a date goes by the time it was first seen).
-    pub async fn candidates(&self, anime_no: i64) -> Result<Vec<Candidate>> {
+    /// whose update time is not a date goes by the time it was first seen),
+    /// marked as revisions of what `received` holds.
+    pub async fn candidates(
+        &self,
+        anime_no: i64,
+        received: Vec<Received>,
+    ) -> Result<Vec<Candidate>> {
         self.db
             .run(move |c| {
                 let mut stmt = c.prepare(
@@ -221,18 +244,10 @@ impl AnissiaStore {
                         revision: None,
                     })
                 })?;
-                // Oldest first, so what each creator was observed with before is known.
-                let mut seen: HashMap<String, HashMap<String, (i64, String)>> = HashMap::new();
                 let mut out = Vec::new();
                 for row in rows {
                     let mut candidate = row?;
-                    let earlier = seen.entry(candidate.source_id.clone()).or_default();
-                    candidate.revision =
-                        revision_of(earlier, &candidate.episode, &candidate.post_url);
-                    earlier.insert(
-                        candidate.episode.clone(),
-                        (candidate.id, candidate.post_url.clone()),
-                    );
+                    candidate.revision = revision_of(&candidate, &received);
                     out.push(candidate);
                 }
                 out.sort_by(|a, b| b.sort_at().cmp(&a.sort_at()).then(b.id.cmp(&a.id)));

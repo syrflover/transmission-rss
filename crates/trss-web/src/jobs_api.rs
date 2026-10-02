@@ -458,7 +458,7 @@ async fn create(
     };
     let candidates = state
         .anissia_store
-        .candidates(anime_no)
+        .candidates(anime_no, Vec::new())
         .await
         .map_err(|e| internal(&e))?;
     let by_id: HashMap<i64, _> = candidates.iter().map(|c| (c.id, c)).collect();

@@ -90,7 +90,7 @@ impl Env {
     }
 
     async fn candidates(&self, anime_no: i64) -> Vec<Candidate> {
-        self.store.candidates(anime_no).await.unwrap()
+        self.store.candidates(anime_no, Vec::new()).await.unwrap()
     }
 }
 
@@ -210,7 +210,7 @@ async fn a_creator_moving_to_the_next_episode_leaves_both_candidates() {
 }
 
 #[tokio::test]
-async fn an_update_time_that_alone_changes_is_the_same_post_updated_and_marks_a_revision() {
+async fn an_update_time_that_alone_changes_is_a_new_observation_of_the_same_post() {
     let env = Env::new().await;
     env.fake.set_recent(vec![env.line(
         7,
@@ -238,9 +238,8 @@ async fn an_update_time_that_alone_changes_is_the_same_post_updated_and_marks_a_
     let (newer, older) = (&all[0], &all[1]);
     assert!(newer.updated_at > older.updated_at);
     assert_eq!(newer.post_url, older.post_url);
-    let revision = newer.revision.as_ref().expect("a revision candidate");
-    assert_eq!((revision.of, revision.same_post), (older.id, true));
-    assert_eq!(older.revision, None);
+    // Nothing was received, so neither revises anything.
+    assert!(all.iter().all(|c| c.revision.is_none()));
 }
 
 #[tokio::test]
