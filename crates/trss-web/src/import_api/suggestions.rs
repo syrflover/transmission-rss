@@ -1,7 +1,7 @@
 //! The subscription suggestions of the legacy import, on the wire.
 //!
 //! The preview lists, for every rule, what the comment above it offers
-//! ([`trss_legacy::import::suggest`]): nothing about the anime's weekday and time,
+//! ([`trss_import::suggest`]): nothing about the anime's weekday and time,
 //! which the screen asks Anissia for (`GET /api/anissia/schedule/{week}`) so the
 //! review does not wait for a third party. The apply takes the suggestions the
 //! user checked as `subscriptions: [{ channel, rule }]` (the channel's place in
@@ -39,7 +39,7 @@ use trss_collect::store::channels::{
     import_subscriptions::{ImportSubscription, SubscriptionOutcome},
     ChannelWithRules, NewSubscription, RuleInput, SubtitleMode,
 };
-use trss_legacy::import::{
+use trss_import::{
     comments::{Airs, Reading},
     suggest::{suggest, Suggestion},
 };

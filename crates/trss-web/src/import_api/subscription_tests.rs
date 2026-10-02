@@ -34,7 +34,7 @@ use trss_collect::{
 /// 2026-10-01 12:00 in Seoul.
 const NOW: i64 = 1_790_780_400_000 + 12 * 60 * 60 * 1000;
 
-const COMMENTED: &str = include_str!("../../../trss-legacy/tests/fixtures/legacy_commented.yml");
+const COMMENTED: &str = include_str!("../../../trss-import/tests/fixtures/legacy_commented.yml");
 
 struct App {
     dir: TempDir,

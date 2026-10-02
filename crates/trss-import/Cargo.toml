@@ -1,0 +1,13 @@
+[package]
+name = "trss-import"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+trss-core = { path = "../trss-core" }
+trss-collect = { path = "../trss-collect" }
+
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+yaml_serde = "0.10"
+url = "2"

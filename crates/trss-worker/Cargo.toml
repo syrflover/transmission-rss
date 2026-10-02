@@ -10,7 +10,6 @@ trss-anilist = { path = "../trss-anilist" }
 trss-library = { path = "../trss-library" }
 trss-collect = { path = "../trss-collect" }
 trss-transmission = { path = "../trss-transmission" }
-trss-legacy = { path = "../trss-legacy" }
 
 dotenv = "0.15"
 futures = "0.3"

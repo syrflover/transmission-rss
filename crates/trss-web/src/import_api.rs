@@ -48,7 +48,7 @@
 //! # Folders
 //!
 //! The app has one collect folder and a rule's directory is relative to it, so
-//! the file's channel `directory` is placed under it ([`trss_legacy::import::fit`]).
+//! the file's channel `directory` is placed under it ([`trss_import::fit`]).
 //! While no collect folder is set, the import sets it from the file (the
 //! channels' shared folder, or their common ancestor) in the same transaction
 //! that imports the channels. A channel folder inside the collect folder is
@@ -79,7 +79,7 @@ use trss_collect::store::channels::{
     import::{is_title_waiting_subscription, match_rules, ImportChannel, ImportedChannel},
     ChannelError, ChannelWithRules, Rule, Version,
 };
-use trss_legacy::import::{
+use trss_import::{
     fit::{fit, Fit, Fitted},
     legacy::{self, LegacyChannel},
     plan::{

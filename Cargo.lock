@@ -2247,12 +2247,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tap"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "55937e1799185b12863d447f42597ed69d9928686b8d88a1df17376a097d8369"
-
-[[package]]
 name = "tempfile"
 version = "3.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2517,7 +2511,6 @@ name = "trss-collect"
 version = "0.1.0"
 dependencies = [
  "axum",
- "caseless",
  "crc32fast",
  "futures",
  "regex",
@@ -2559,40 +2552,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "trss-legacy"
+name = "trss-import"
 version = "0.1.0"
 dependencies = [
- "axum",
- "bytes",
- "caseless",
- "crc32fast",
- "futures",
- "image",
  "regex",
- "reqwest 0.12.28",
- "reqwest 0.13.5",
- "rss",
- "rusqlite",
- "rustix",
  "serde",
- "serde_json",
- "sha2",
- "tap",
- "tempfile",
- "thiserror",
- "tokio",
- "tokio-util",
- "transmission-rpc",
- "trname",
- "trss-anilist",
- "trss-anissia",
  "trss-collect",
  "trss-core",
- "trss-library",
- "trss-transmission",
- "unicode-normalization",
  "url",
- "uuid",
  "yaml_serde",
 ]
 
@@ -2655,7 +2622,7 @@ dependencies = [
  "trss-anissia",
  "trss-collect",
  "trss-core",
- "trss-legacy",
+ "trss-import",
  "trss-library",
  "url",
 ]
@@ -2686,7 +2653,6 @@ dependencies = [
  "trss-anissia",
  "trss-collect",
  "trss-core",
- "trss-legacy",
  "trss-library",
  "trss-transmission",
  "trss-web",

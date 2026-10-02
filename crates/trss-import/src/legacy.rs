@@ -217,7 +217,7 @@ mod tests {
 
     #[test]
     fn reads_the_sample_in_file_order_with_every_value() {
-        let sample = include_str!("../../tests/fixtures/legacy_channels.yml");
+        let sample = include_str!("../tests/fixtures/legacy_channels.yml");
         let channels = parse(sample).unwrap();
         assert_eq!(channels.len(), 2);
 
@@ -258,7 +258,7 @@ mod tests {
 
     #[test]
     fn the_comments_above_the_rules_are_read_alongside_each_rule() {
-        let sample = include_str!("../../tests/fixtures/legacy_commented.yml");
+        let sample = include_str!("../tests/fixtures/legacy_commented.yml");
         let channels = parse(sample).unwrap();
         let counts: Vec<_> = channels.iter().map(|c| c.readings.len()).collect();
         assert_eq!(counts, [5, 2]);
@@ -267,7 +267,7 @@ mod tests {
             Reading::Address {
                 anime_no: 1001,
                 creator: Some("Team Alpha".into()),
-                airs: Some(crate::import::comments::Airs {
+                airs: Some(crate::comments::Airs {
                     week: 3,
                     time: "22:30".into()
                 })
@@ -282,7 +282,7 @@ mod tests {
         );
 
         // A file with no comments has none to read.
-        let plain = parse(include_str!("../../tests/fixtures/legacy_channels.yml")).unwrap();
+        let plain = parse(include_str!("../tests/fixtures/legacy_channels.yml")).unwrap();
         assert!(plain
             .iter()
             .flat_map(|c| &c.readings)

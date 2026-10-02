@@ -31,7 +31,6 @@ tokio-util = "0.7"
 transmission-rpc = "0.5"
 url = "2"
 uuid = { version = "1", features = ["v4"] }
-caseless = "0.2"
 
 [dev-dependencies]
 trss-core = { path = "../trss-core", features = ["test-support"] }

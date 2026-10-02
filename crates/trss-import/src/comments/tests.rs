@@ -143,7 +143,7 @@ fn no_comment_text_is_no_comment() {
 
 #[test]
 fn each_rule_gets_the_comment_directly_above_it() {
-    let content = include_str!("../../../tests/fixtures/legacy_commented.yml");
+    let content = include_str!("../../tests/fixtures/legacy_commented.yml");
     let readings = rule_comments(content, &[5, 2]);
     assert_eq!(
         readings,

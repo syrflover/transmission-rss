@@ -1,7 +1,7 @@
 //! Making rules of an import subscriptions, in the import's own transaction.
 //!
 //! The legacy YAML import offers a subscription for a rule whose comment names
-//! an Anissia anime (`trss_legacy::import::suggest`); the rules the user checked are
+//! an Anissia anime (`trss_import::suggest`); the rules the user checked are
 //! passed along with the channels. They are written after the channels, so a
 //! failure anywhere leaves nothing of the import, and the rules exist (with the
 //! IDs they got or kept) when their subscriptions are written.
