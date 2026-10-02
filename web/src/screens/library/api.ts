@@ -160,6 +160,8 @@ export interface WorkSeason {
   number: number;
   /** The AniList entries the season links, taken together. */
   info: SeasonInfo;
+  /** The Anissia anime the season is linked to. */
+  anissia: AnissiaLink;
   /** Ascending. */
   episodes: WorkEpisode[];
 }
@@ -394,4 +396,70 @@ export function restartSeasonAuto(id: string, season: number, version: number): 
 /** Asks AniList again for the season's entries, finished ones too. */
 export function refreshSeason(id: string, season: number): Promise<SeasonInfo> {
   return api<SeasonInfo>(`${seasonPath(id, season)}/refresh`, { method: "POST", body: {} });
+}
+
+// --- a season's Anissia link (`src/web/seasons_anissia_api.rs`) -----------------------
+
+/** The Anissia anime a season is linked to, as Anissia last listed it. */
+export interface AnissiaAnime {
+  anime_no: number;
+  subject: string;
+  original_subject: string | null;
+  /** `ON`, `OFF`, or `END` for an anime that has finished. */
+  status: string;
+  /** The anime's page on Anissia. */
+  url: string;
+}
+
+/** A subscription connected to the season: the season's anime is the subscription's. */
+export interface AnissiaHolder {
+  rule_id: string;
+  anime_no: number;
+  subject: string | null;
+}
+
+export interface AnissiaLink {
+  season: number;
+  /** Sent back with a change; a change from an older version is a `conflict`. A season never linked has 0. */
+  version: number;
+  anime: AnissiaAnime | null;
+  /** Set while a subscription is connected to the season; the link is then changed from the subscription. */
+  subscription: AnissiaHolder | null;
+}
+
+/** An anime of Anissia's full list. */
+export interface AnissiaCandidate {
+  anime_no: number;
+  subject: string;
+  original_subject: string | null;
+  status: string;
+  /** 0 (Sunday) to 6 (Saturday), 7 (`기타`) or 8 (`신작`). */
+  week: number;
+  start_date: string | null;
+  end_date: string | null;
+  genres: string[];
+  url: string;
+}
+
+export interface AnissiaPage {
+  /** The text searched for. */
+  q: string;
+  items: AnissiaCandidate[];
+  has_next: boolean;
+  page: number;
+}
+
+/** Where a picked anime came from: the server checks it against that very list. */
+export type AnissiaSource = { week: number } | { q: string; page: number };
+
+const anissiaPath = (id: string, season: number) => `${seasonPath(id, season)}/anissia`;
+
+/** Searches Anissia's full list (finished anime included); an empty `q` is the work's folder name. */
+export function searchAnissia(id: string, season: number, q: string, page: number, signal?: AbortSignal): Promise<AnissiaPage> {
+  return api<AnissiaPage>(`${anissiaPath(id, season)}/search`, { method: "POST", body: { q, page }, signal });
+}
+
+/** Links the season to `animeNo` (`null` cuts the link). */
+export function setAnissiaLink(id: string, season: number, version: number, animeNo: number | null, source?: AnissiaSource): Promise<AnissiaLink> {
+  return api<AnissiaLink>(`${anissiaPath(id, season)}/link`, { method: "POST", body: { version, anime_no: animeNo, ...source } });
 }

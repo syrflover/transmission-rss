@@ -57,6 +57,8 @@ export interface SeasonBlocked {
   number: number;
   holder_anime_no: number | null;
   holder_subject: string | null;
+  /** What holds the season: another subscription, or the season's own link set from the work detail. */
+  held_by: "subscription" | "link";
 }
 
 /**

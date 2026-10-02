@@ -30,11 +30,14 @@ export function PickAnime({
   selected,
   onWeek,
   onPick,
+  heading = "구독할 작품을 골라요",
 }: {
   week: number;
   selected: ScheduleEntry | null;
   onWeek: (week: number) => void;
   onPick: (entry: ScheduleEntry) => void;
+  /** The step's title; the subscribe flow's by default. */
+  heading?: string;
 }) {
   const uid = useId();
   const [filter, setFilter] = useState("");
@@ -52,7 +55,7 @@ export function PickAnime({
   return (
     <section aria-labelledby={`${uid}-h`} className="flex min-w-0 flex-col gap-3.5">
       <h3 id={`${uid}-h`} className="text-[15px] font-bold">
-        구독할 작품을 골라요
+        {heading}
       </h3>
 
       <div role="group" aria-label="요일" className="flex flex-wrap gap-1.5">

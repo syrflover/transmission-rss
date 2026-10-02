@@ -137,3 +137,17 @@ export function airDay(at: number, now: Date = new Date()): string {
   const year = d.getFullYear() === now.getFullYear() ? "" : `${d.getFullYear()}년 `;
   return `${year}${d.getMonth() + 1}월 ${d.getDate()}일 (${weekday})`;
 }
+
+/** Anissia's `ON`, `OFF` and `END` as words. */
+export function anissiaStatusText(status: string): string {
+  switch (status) {
+    case "ON":
+      return "방영 중";
+    case "OFF":
+      return "휴방";
+    case "END":
+      return "종영";
+    default:
+      return status;
+  }
+}

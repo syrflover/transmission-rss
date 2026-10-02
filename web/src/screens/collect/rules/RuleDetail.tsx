@@ -412,7 +412,10 @@ export function RuleDetail({
         >
           이 규칙이 받은 영상은 ‘{known.season_blocked.work_name ?? "작품"}’ 시즌 {known.season_blocked.number}에 있어요. 그 시즌은 이미{" "}
           {known.season_blocked.holder_subject ? `‘${known.season_blocked.holder_subject}’` : "다른 Anissia 작품"}에 이어져 있어서 이 규칙을
-          잇지 않았어요. 그 구독이 사라지면 다음 확인에서 다시 이어 봐요.
+          잇지 않았어요.{" "}
+          {known.season_blocked.held_by === "link"
+            ? "작품 상세에서 그 시즌의 Anissia 연결을 바꾸거나 끊으면 다음 확인에서 다시 이어 봐요."
+            : "그 구독이 사라져도 시즌의 연결은 남아요. 작품 상세에서 그 연결을 바꾸거나 끊으면 다음 확인에서 다시 이어 봐요."}
         </p>
       )}
 

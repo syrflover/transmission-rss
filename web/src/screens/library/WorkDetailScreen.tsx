@@ -16,6 +16,7 @@ import {
   LIST_PREFIX,
   loadWork,
   workKey,
+  type AnissiaLink,
   type SeasonInfo,
   type WorkDetail,
   type WorkSubscription,
@@ -24,6 +25,7 @@ import { CoverDialog } from "./detail/CoverDialog";
 import { EpisodeList } from "./detail/EpisodeList";
 import { defaultSeason, rowId } from "./detail/model";
 import { useEpisodeOrder } from "./detail/prefs";
+import { SeasonAnissiaSection } from "./detail/SeasonAnissiaSection";
 import { SeasonInfoSection } from "./detail/SeasonInfoSection";
 import { SeasonTiles } from "./detail/SeasonTiles";
 import { CollectCard, FilesCard, InfoCard } from "./detail/SideCards";
@@ -120,6 +122,14 @@ function WorkPage({ workId }: { workId: string }) {
     work.reload();
   };
 
+  // A season's Anissia link after a change shows at once. Nothing else of the page follows it.
+  const anissiaChanged = (link: AnissiaLink) => {
+    work.update((w) => {
+      if (!w) return w;
+      return { ...w, seasons: w.seasons.map((s) => (s.number === link.season ? { ...s, anissia: link } : s)) };
+    });
+  };
+
   // A `다시 받기` of a failed replacement ended: the episode rows show what the worker did.
   const retried = async () => {
     const fresh = await loadWork(workId);
@@ -140,6 +150,7 @@ function WorkPage({ workId }: { workId: string }) {
         backLink={backLink}
         onCoverChanged={coverChanged}
         onInfoChanged={infoChanged}
+        onAnissiaChanged={anissiaChanged}
         onSubscriptionChanged={subscriptionEdited}
         onRetried={retried}
       />
@@ -173,6 +184,7 @@ function Loaded({
   backLink,
   onCoverChanged,
   onInfoChanged,
+  onAnissiaChanged,
   onSubscriptionChanged,
   onRetried,
 }: {
@@ -180,6 +192,7 @@ function Loaded({
   backLink: React.ReactNode;
   onCoverChanged: (coverUrl: string | null) => void;
   onInfoChanged: (info: SeasonInfo) => void;
+  onAnissiaChanged: (link: AnissiaLink) => void;
   onSubscriptionChanged: () => void;
   onRetried: () => Promise<void>;
 }) {
@@ -344,6 +357,16 @@ function Loaded({
               info={season.info}
               seasonCount={work.seasons.length}
               onChanged={onInfoChanged}
+            />
+          )}
+          {season && (
+            <SeasonAnissiaSection
+              key={`anissia-${season.number}`}
+              workId={work.id}
+              workName={work.name}
+              link={season.anissia}
+              seasonCount={work.seasons.length}
+              onChanged={onAnissiaChanged}
             />
           )}
           {season ? (
