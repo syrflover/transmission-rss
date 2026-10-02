@@ -3,11 +3,11 @@
 # with a locally built image, a local Transmission that keeps added torrents
 # stopped, and a copy of a server's data.
 #
-#   dev/dev.sh pull [--force]   copy the server's database, covers and media file names
-#   dev/dev.sh up [--no-build]  build the image and start Transmission, trss-worker, trss-web
-#   dev/dev.sh down             stop and remove the containers (dev/local stays)
-#   dev/dev.sh logs [service]   follow the logs (default: trss-worker)
-#   dev/dev.sh status           show the containers
+#   dev/compose.sh pull [--force]   copy the server's database, covers and media file names
+#   dev/compose.sh up [--no-build]  build the image and start Transmission, trss-worker, trss-web
+#   dev/compose.sh down             stop and remove the containers (dev/local stays)
+#   dev/compose.sh logs [service]   follow the logs (default: trss-worker)
+#   dev/compose.sh status           show the containers
 #
 # `pull` reaches the server over ssh: TRSS_DEV_SERVER (default j4105) and
 # TRSS_DEV_SERVER_DIR, the folder of its compose files relative to the remote
@@ -88,7 +88,7 @@ pull() {
 
 up() {
   prepare
-  [[ -f "$LOCAL/data/trss.db" ]] || echo "No database in dev/local/data: trss starts empty (dev/dev.sh pull copies the server's)" >&2
+  [[ -f "$LOCAL/data/trss.db" ]] || echo "No database in dev/local/data: trss starts empty (dev/compose.sh pull copies the server's)" >&2
   [[ "${1:-}" == "--no-build" ]] || docker build -t "$IMAGE" "$REPO"
   compose -f docker-compose.yml up -d
   compose -f docker-compose.trss.yml up -d

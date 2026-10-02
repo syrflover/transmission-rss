@@ -197,13 +197,13 @@ A rule's detail has a `지난 회차 검색` section for episodes the feed no lo
 
 ## Local development environment
 
-`dev/dev.sh` runs the same two compose files on a development machine, with an image built from the working tree and a copy of a server's data. Its data lives in `dev/local/`, which Git ignores; its settings are `dev/dev.env`.
+`dev/compose.sh` runs the same two compose files on a development machine, with an image built from the working tree and a copy of a server's data. Its data lives in `dev/local/`, which Git ignores; its settings are `dev/dev.env`.
 
 ```sh
-dev/dev.sh pull           # copy the server's data (once; --force replaces it)
-dev/dev.sh up             # build the image, start Transmission, trss-worker, trss-web
-dev/dev.sh logs           # follow trss-worker (or: dev/dev.sh logs trss-web)
-dev/dev.sh down           # stop; dev/local stays for the next up
+dev/compose.sh pull           # copy the server's data (once; --force replaces it)
+dev/compose.sh up             # build the image, start Transmission, trss-worker, trss-web
+dev/compose.sh logs           # follow trss-worker (or: dev/compose.sh logs trss-web)
+dev/compose.sh down           # stop; dev/local stays for the next up
 ```
 
 - `pull` reaches the server over ssh (`TRSS_DEV_SERVER`, default `j4105`; `TRSS_DEV_SERVER_DIR`, the compose folder under the remote home, default `trss`). It stops the server's `trss-worker` and `trss-web` for the few seconds the copy of `/data` takes, so the database is one consistent state, and starts them again. It copies the database and `artwork/`, and only the names of the files under `/downloads`: it recreates them as empty files under `dev/local/media`. Reading a watch folder looks at names and folder metadata only, so the library reads as it does on the server, without the videos.

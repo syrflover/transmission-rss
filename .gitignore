@@ -104,5 +104,5 @@ web/dist/
 .codegraph/
 .scratch/
 
-# dev/dev.sh: the local environment's data
+# dev/compose.sh: the local environment's data
 dev/local/
