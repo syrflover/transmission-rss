@@ -1,5 +1,7 @@
 # 공통 코드를 사용하는 웹·작업 바이너리를 분리해요
 
+공통 라이브러리를 패키지 하나에 둔다는 부분은 [기능별 크레이트 ADR](0011-feature-crate-workspace.md)이 대체했어요: 공통 기반·기능·바이너리 크레이트의 Cargo workspace로 나눠요.
+
 공통 Rust 라이브러리를 재사용하되 `trss-web`과 `trss-worker`를 별도 바이너리로 만들고, 같은 앱 이미지에서 각각 별도 컨테이너로 실행하기로 했어요.
 한 바이너리의 역할별 실행 모드나 한 프로세스에 웹·작업을 합치는 대안보다, 실행 진입점과 재시작 단위를 명확히 나누는 방향을 선택했어요.
 [Cargo의 여러 바이너리와 공통 라이브러리 지원](https://doc.rust-lang.org/cargo/reference/cargo-targets.html#binaries)을 사용하면 저장소나 패키지까지 별개로 나눌 필요는 없어요.
