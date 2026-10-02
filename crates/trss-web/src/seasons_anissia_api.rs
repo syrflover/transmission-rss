@@ -23,10 +23,13 @@
 //! - `subscription` is set (`{ rule_id, anime_no, subject }`) while a
 //!   subscription is connected to the season: the season's anime is the
 //!   subscription's, and `link` refuses (`400`) to change it, whatever the
-//!   request names. It is changed from the subscription.
+//!   request names. The season's anime follows the subscription; to link it to
+//!   another, the subscription is deleted first (the link stays after that).
 //! - `search` looks `q` up in Anissia's full anime list, finished anime
-//!   included (`q` is the work's folder name when left out; the season folder
-//!   of a library is always `Season NN`, which names nothing to search for),
+//!   included (`q`, when left out, is the native title of the season's first
+//!   AniList entry, or the work's folder name for a season with none; the
+//!   season folder of a library is always `Season NN`, which names nothing to
+//!   search for),
 //!   one page of up to 30 at a time. `page` counts from 1. When Anissia does
 //!   not answer, or its answer is not the list's, it answers `502`
 //!   (`unavailable`) with a sentence; the schedule (`GET /anissia/schedule/
@@ -135,15 +138,22 @@ pub async fn link_views(
         .anissia_links_of(work_id)
         .await
         .map_err(|e| internal(&e))?;
-    let held: HashMap<u32, (&Rule, i64)> = connected
-        .iter()
-        .filter_map(|(season, rule)| {
-            Some((
-                *season,
-                (rule, rule.subscription.as_ref()?.anissia_anime_no),
-            ))
-        })
-        .collect();
+    // The holder is the first by rule ID, as the store's checks name it, whatever
+    // order the work's subscriptions are listed in.
+    let mut held: HashMap<u32, (&Rule, i64)> = HashMap::new();
+    for (season, rule) in connected {
+        let Some(subscription) = rule.subscription.as_ref() else {
+            continue;
+        };
+        let entry = (rule, subscription.anissia_anime_no);
+        held.entry(*season)
+            .and_modify(|first| {
+                if rule.id < first.0.id {
+                    *first = entry;
+                }
+            })
+            .or_insert(entry);
+    }
     let wanted: Vec<i64> = links
         .values()
         .filter_map(|l| l.anime_no)
@@ -265,34 +275,73 @@ struct SearchView {
     page: u32,
 }
 
-/// The sentence for a search Anissia did not answer. The full list is an
-/// endpoint Anissia does not document, so an answer that cannot be read says
-/// so, and says that the schedule still works.
+/// The sentence for a search Anissia did not answer, whatever the failure. The
+/// full list is an endpoint Anissia does not document, so an answer that cannot
+/// be read says so; every kind of failure says that the schedule is another
+/// place to pick from (during a `429` wait only the weeks read already).
 fn search_unavailable(error: AnissiaError) -> ApiError {
+    const HINT: &str = " 편성표에서는 고를 수 있어요.";
+    const HINT_WAITING: &str = " 이미 불러온 편성표에서는 고를 수 있어요.";
     match error {
         AnissiaError::Invalid(detail) => {
             eprintln!("trss-web: Anissia's full list: {detail}");
-            ApiError::Unavailable(
-                "Anissia 전체 목록의 응답을 읽지 못해 검색하지 못했어요. 편성표에서는 고를 수 있어요."
-                    .into(),
-            )
+            ApiError::Unavailable(format!(
+                "Anissia 전체 목록의 응답을 읽지 못해 검색하지 못했어요.{HINT}"
+            ))
         }
-        other => unavailable(other),
+        other => match unavailable(other) {
+            ApiError::Unavailable(message) => {
+                let waiting = message.contains("요청이 몰려");
+                ApiError::Unavailable(format!(
+                    "{message}{}",
+                    if waiting { HINT_WAITING } else { HINT }
+                ))
+            }
+            other => other,
+        },
     }
 }
 
-/// The text to search for: `q` as the user wrote it, or the work's folder name.
-async fn query_of(state: &AppState, work_id: &str, q: Option<String>) -> Result<String, ApiError> {
+/// The text to search for: `q` as the user wrote it, or, when it is left out,
+/// the native (Japanese) title of the first AniList entry the season links,
+/// which is what Anissia's titles are written to match; a season with no
+/// entry, or an entry with no native title, is searched by the work's folder
+/// name. The native title is the one stored with the entry already, so
+/// nothing is asked of AniList.
+async fn query_of(
+    state: &AppState,
+    work_id: &str,
+    season: u32,
+    q: Option<String>,
+) -> Result<String, ApiError> {
+    let internal = |e: &dyn std::fmt::Display| ApiError::Internal(e.to_string());
     let q = match q.map(|q| q.trim().to_owned()).filter(|q| !q.is_empty()) {
         Some(q) => q,
         None => {
-            state
-                .library
-                .work_detail(work_id)
+            let native = state
+                .seasons
+                .store
+                .link(work_id, season)
                 .await
-                .map_err(|e| ApiError::Internal(e.to_string()))?
-                .ok_or_else(|| ApiError::not_found(SEASON_NOT_FOUND))?
-                .dir_name
+                .map_err(refused_store)?
+                .entries
+                .into_iter()
+                .next()
+                .and_then(|entry| entry.native)
+                .map(|native| native.trim().to_owned())
+                .filter(|native| !native.is_empty());
+            match native {
+                Some(native) => native,
+                None => {
+                    state
+                        .library
+                        .work_detail(work_id)
+                        .await
+                        .map_err(|e| internal(&e))?
+                        .ok_or_else(|| ApiError::not_found(SEASON_NOT_FOUND))?
+                        .dir_name
+                }
+            }
         }
     };
     if q.chars().count() > 200 {
@@ -324,7 +373,7 @@ async fn search(
         .anissia_link(&id, season)
         .await
         .map_err(refused_store)?;
-    let q = query_of(&state, &id, body.q).await?;
+    let q = query_of(&state, &id, season, body.q).await?;
     let found = state
         .anissia
         .search_anime(&q, page - 1, Some(USER_MAX_WAIT))
@@ -355,6 +404,7 @@ struct LinkBody {
 async fn named_anime(
     state: &AppState,
     work_id: &str,
+    season: u32,
     body: &LinkBody,
     anime_no: i64,
 ) -> Result<Anime, ApiError> {
@@ -362,7 +412,7 @@ async fn named_anime(
         (Some(week), None) => scheduled_anime(state, week, anime_no).await,
         (None, Some(_)) => {
             let page = page_of(body.page)?;
-            let q = query_of(state, work_id, body.q.clone()).await?;
+            let q = query_of(state, work_id, season, body.q.clone()).await?;
             let found = state
                 .anissia
                 .search_anime(&q, page - 1, Some(USER_MAX_WAIT))
@@ -393,7 +443,7 @@ fn subscribed(holder: &HoldingSubscription) -> ApiError {
         .as_deref()
         .map_or_else(String::new, |s| format!(" ‘{s}’"));
     ApiError::invalid(format!(
-        "이 시즌은 구독{name}에 이어져 있어서 작품 상세에서는 연결을 바꿀 수 없어요. 수집 화면의 구독에서 바꿔 주세요."
+        "이 시즌은 구독{name}을 따라가고 있어서 연결을 바꿀 수 없어요. 다른 작품에 잇고 싶으면 그 구독을 먼저 삭제해 주세요. 삭제해도 시즌의 연결은 남고, 그 뒤 여기서 바꾸거나 끊을 수 있어요."
     ))
 }
 
@@ -427,7 +477,7 @@ async fn link(
         return Err(conflict(&state, &id, season).await);
     }
     let anime = match body.anime_no {
-        Some(no) => Some(named_anime(&state, &id, &body, no).await?),
+        Some(no) => Some(named_anime(&state, &id, season, &body, no).await?),
         None => None,
     };
     match state

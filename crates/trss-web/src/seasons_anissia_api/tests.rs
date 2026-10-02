@@ -16,7 +16,7 @@ use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
-use crate::AppState;
+use crate::{ApiError, AppState};
 use trss_anissia::{fake::Fake, Anissia};
 use trss_collect::store::channels::{ChannelInput, NewSubscription, RuleInput, SubtitleMode};
 use trss_core::{Clock, Db};
@@ -25,6 +25,7 @@ use trss_library::discovery::{Scan, ScannedWork, WorkRead};
 const NOW: i64 = 1_790_780_400_000;
 
 struct App {
+    db: Db,
     state: AppState,
     router: Router,
     fake: Fake,
@@ -43,7 +44,7 @@ impl App {
             Arc::new(move || now.load(Ordering::SeqCst))
         };
         let anissia = Anissia::new(db.clone(), fake.config(), clock).with_spacing(Duration::ZERO);
-        let state = AppState::new(db).with_anissia(anissia);
+        let state = AppState::new(db.clone()).with_anissia(anissia);
         let scan = Scan {
             works: vec![WorkRead::Read(ScannedWork {
                 dir_name: "Sayonara Lara".into(),
@@ -60,6 +61,7 @@ impl App {
         let work = state.library.works(&folder.id).await.unwrap().remove(0).id;
         let router = Router::new().nest("/api", crate::api::router().with_state(state.clone()));
         App {
+            db,
             state,
             router,
             fake,
@@ -379,8 +381,12 @@ async fn after_a_429_the_search_waits_and_asks_again_only_when_the_wait_is_over(
     assert_eq!(status, StatusCode::BAD_GATEWAY, "{busy}");
     assert_eq!(app.requests_for("/anime/list/"), asked + 1);
     // The schedule is held by the same wait: one pace for every Anissia request.
-    let (status, _) = app.call(Method::GET, "/api/anissia/schedule/3", None).await;
+    let (status, waiting) = app.call(Method::GET, "/api/anissia/schedule/3", None).await;
     assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert!(waiting["message"]
+        .as_str()
+        .unwrap()
+        .contains("초쯤 뒤에 다시 시도해 주세요"));
     assert_eq!(app.requests_for("/anime/schedule/"), 0);
     assert_eq!(app.get(1).await["anime"]["anime_no"], 2969);
 
@@ -464,7 +470,7 @@ async fn a_season_a_subscription_holds_cannot_be_changed_from_the_work_detail() 
         assert_eq!(status, StatusCode::BAD_REQUEST, "{body}: {refused}");
         let message = refused["message"].as_str().unwrap();
         assert!(
-            message.contains("구독 작품") && message.contains("구독에서 바꿔 주세요"),
+            message.contains("구독 작품") && message.contains("구독을 먼저 삭제해 주세요"),
             "{message}"
         );
     }
@@ -474,6 +480,32 @@ async fn a_season_a_subscription_holds_cannot_be_changed_from_the_work_detail() 
         .link(1, json!({ "version": 0, "anime_no": 3320, "week": 3 }))
         .await;
     assert_eq!(status, StatusCode::OK);
+
+    // The way the message names: delete the subscription, and the season keeps
+    // its link, which can then be changed here.
+    let rule = app
+        .state
+        .channels
+        .get_rule(&rule.id)
+        .await
+        .unwrap()
+        .unwrap();
+    app.state
+        .channels
+        .delete_rule(&rule.id, rule.version)
+        .await
+        .unwrap();
+    let freed = app.detail(2).await;
+    assert_eq!(freed["subscription"], Value::Null);
+    assert_eq!(freed["anime"]["anime_no"], 3320);
+    let (status, changed) = app
+        .link(
+            2,
+            json!({ "version": 1, "anime_no": 2969, "q": "Sayonara Lara", "page": 1 }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    assert_eq!(changed["anime"]["anime_no"], 2969);
 }
 
 #[tokio::test]
@@ -634,4 +666,212 @@ async fn a_rule_blocked_by_a_seasons_link_says_the_link_holds_the_season() {
     assert_eq!(blocked["held_by"], "link");
     // The link is the user's, and still can be changed from the work detail.
     assert_eq!(app.detail(2).await["subscription"], Value::Null);
+}
+
+/// An AniList entry with only the titles that matter here.
+fn entry_with_native(id: i64, native: Option<&str>) -> trss_anilist::Entry {
+    trss_anilist::Entry {
+        id,
+        romaji: Some("Sayonara Lara".into()),
+        english: Some("Goodbye Lara".into()),
+        native: native.map(str::to_owned),
+        format: Some("TV".into()),
+        status: Some("FINISHED".into()),
+        episodes: Some(12),
+        start: Default::default(),
+        end: Default::default(),
+        studios: Vec::new(),
+        genres: Vec::new(),
+        description: None,
+        airing: Vec::new(),
+        sequels: Vec::new(),
+        fetched_at: NOW,
+    }
+}
+
+#[tokio::test]
+async fn the_first_query_is_the_native_title_of_the_seasons_anilist_entry_else_the_folder_name() {
+    let app = App::new().await;
+    // Anissia's titles are Japanese or Korean; the library folder is not.
+    app.fake.set_catalogue(vec![
+        app.fake.finished(1, 2969, "안녕, 라라", "さよならララ"),
+        app.fake
+            .finished(0, 1900, "안녕, 나의 크라머", "Sayonara Cramer"),
+    ]);
+    let store = &app.state.seasons.store;
+    store
+        .put_entry(entry_with_native(5001, Some("さよならララ")))
+        .await
+        .unwrap();
+    store
+        .put_entry(entry_with_native(5002, None))
+        .await
+        .unwrap();
+    store
+        .put_entry(entry_with_native(5003, Some("続編")))
+        .await
+        .unwrap();
+    // Season 1 links an entry with a native title (and a second one that is
+    // not the first); season 2 links an entry with none.
+    let version = |season: u32| {
+        let store = store.clone();
+        let work = app.work.clone();
+        async move { store.link(&work, season).await.unwrap().version }
+    };
+    store
+        .set_links(&app.work, 1, version(1).await, vec![5001, 5003])
+        .await
+        .unwrap();
+    store
+        .set_links(&app.work, 2, version(2).await, vec![5002])
+        .await
+        .unwrap();
+
+    // The linked season starts with the native title and finds the show by it.
+    let (status, found) = app.search(1, json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{found}");
+    assert_eq!(found["q"], "さよならララ");
+    assert_eq!(numbers(&found), [2969]);
+    // Nothing was asked of AniList for it.
+    // The query the user wrote stays theirs.
+    let (_, written) = app.search(1, json!({ "q": "Sayonara" })).await;
+    assert_eq!(written["q"], "Sayonara");
+    assert_eq!(numbers(&written), [1900]);
+
+    // An entry without a native title, and a season with no entry at all, are
+    // searched by the work's folder name.
+    let (_, no_native) = app.search(2, json!({})).await;
+    assert_eq!(no_native["q"], "Sayonara Lara");
+    let (_, unlinked) = app
+        .call(Method::POST, &app.path(0, "/search"), Some(json!({})))
+        .await;
+    assert_eq!(unlinked["error"], "not_found");
+}
+
+#[tokio::test]
+async fn an_unlinked_season_starts_with_the_folder_name() {
+    let app = App::new().await;
+    app.catalogue();
+    let (status, found) = app.search(2, json!({ "q": "  " })).await;
+    assert_eq!(status, StatusCode::OK, "{found}");
+    assert_eq!(found["q"], "Sayonara Lara");
+    assert_eq!(numbers(&found), [2969]);
+}
+
+#[tokio::test]
+async fn the_holder_shown_is_the_first_subscription_by_rule_id_whatever_the_listing_order() {
+    let app = App::new().await;
+    let channel = app
+        .state
+        .channels
+        .create_channel(ChannelInput::new("https://feed.test/rss"))
+        .await
+        .unwrap();
+    let anime = |no: i64, subject: &str| trss_anissia::Anime {
+        anime_no: no,
+        subject: subject.into(),
+        original_subject: None,
+        week: 3,
+        air_time: None,
+        start_date: None,
+        end_date: None,
+        status: "ON".into(),
+        fetched_at: NOW,
+    };
+    // Two rules on one season for one anime, the one that sorts first by ID
+    // listed second (rules list by position).
+    let mut rules = Vec::new();
+    for n in 0..64 {
+        let rule = app
+            .state
+            .channels
+            .create_subscription_rule(
+                &channel.id,
+                RuleInput {
+                    r#match: Some(format!("Sub {n}")),
+                    directory: "Sayonara Lara/Season 02".into(),
+                    ..RuleInput::default()
+                },
+                NewSubscription {
+                    anime: anime(3320 + n, "구독 작품"),
+                    subtitles: SubtitleMode::None,
+                    creator: None,
+                    subscribed_at: NOW,
+                },
+            )
+            .await
+            .unwrap();
+        let lower = rules
+            .first()
+            .is_some_and(|first: &trss_collect::store::channels::Rule| rule.id < first.id);
+        rules.push(rule);
+        if lower {
+            break;
+        }
+    }
+    assert!(
+        rules.len() >= 2,
+        "no rule sorted before the first in 64 tries"
+    );
+    // The connection itself refuses a second anime on a season, so a database
+    // that holds two (one the migration made) is built by hand.
+    let season = format!("{}:2", app.work);
+    let ids: Vec<String> = rules.iter().map(|r| r.id.clone()).collect();
+    app.db
+        .run::<_, trss_core::DbError, _>(move |c| {
+            for id in &ids {
+                c.execute(
+                    "UPDATE rule_subscriptions SET season_id = ?2 WHERE rule_id = ?1",
+                    rusqlite::params![id, season],
+                )?;
+            }
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let first = rules.iter().min_by_key(|r| r.id.clone()).unwrap();
+    assert_ne!(
+        first.id, rules[0].id,
+        "the listing order differs from the ID order"
+    );
+
+    let shown = app.detail(2).await;
+    assert_eq!(shown["subscription"]["rule_id"], first.id.as_str());
+    assert_eq!(
+        shown["subscription"]["anime_no"],
+        first.subscription.as_ref().unwrap().anissia_anime_no
+    );
+}
+
+#[test]
+fn every_kind_of_search_failure_says_the_schedule_is_another_place_to_pick_from() {
+    use trss_anissia::AnissiaError;
+
+    for error in [
+        AnissiaError::Invalid("not a page".into()),
+        AnissiaError::Status(500),
+        AnissiaError::Unreachable("refused".into()),
+    ] {
+        let ApiError::Unavailable(message) = super::search_unavailable(error) else {
+            panic!("not unavailable");
+        };
+        assert!(
+            message.ends_with("편성표에서는 고를 수 있어요."),
+            "{message}"
+        );
+    }
+    // During a 429 wait only the weeks read already can be picked from.
+    let ApiError::Unavailable(message) = super::search_unavailable(AnissiaError::Busy {
+        retry_after: Duration::from_secs(30),
+    }) else {
+        panic!("not unavailable");
+    };
+    assert!(
+        message.contains("30초쯤 뒤에 다시 시도해 주세요"),
+        "{message}"
+    );
+    assert!(
+        message.ends_with("이미 불러온 편성표에서는 고를 수 있어요."),
+        "{message}"
+    );
 }

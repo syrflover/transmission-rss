@@ -31,7 +31,8 @@ pub enum SeasonAnimeError {
     #[error("no such work")]
     NoWork,
     /// A subscription is connected to the season: its anime is the season's,
-    /// and only the subscription's side changes it.
+    /// and it changes only after the subscription is deleted (the link stays
+    /// then).
     #[error("a subscription holds the season")]
     Subscribed {
         /// A rule connected to the season, the first by ID.
