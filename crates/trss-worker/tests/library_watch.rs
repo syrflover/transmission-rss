@@ -71,7 +71,7 @@ fn age(path: &Path) {
 struct Lib {
     h: Harness,
     /// The one worker of the test, as a process has one: what it remembers
-    /// between scans (see `worker::watch`) lives as long as it does.
+    /// between scans (see `trss_library::watch`) lives as long as it does.
     worker: Worker,
     api: WebApi,
     library: LibraryStore,

@@ -9,7 +9,7 @@
 //! continues where the queue stopped.
 //!
 //! A search job looks the work's folder name up and records the decision
-//! ([`super::title::decide`]); a clear match becomes a fetch job for its image.
+//! ([`trss_anilist::title::decide`]); a clear match becomes a fetch job for its image.
 //! A job whose selection changed meanwhile (the user chose, cleared or asked
 //! for something else) is dropped by the store's version check. A failure to
 //! reach AniList is tried again later ([`RETRY_DELAYS`]); AniList's `429`

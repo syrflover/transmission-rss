@@ -3,7 +3,7 @@
 //! point to (`docs/adr/0007-anilist-work-artwork.md`).
 //!
 //! - **Pace.** Every API request takes a slot from the database
-//!   ([`RequestPace::take_request_slot`]), so the web and the worker together
+//!   (`RequestPace::take_request_slot`), so the web and the worker together
 //!   send at most one request every [`REQUEST_SPACING`] (30 a minute, AniList's
 //!   lowest published limit). A `429` answer blocks every request until its
 //!   `Retry-After` has passed.

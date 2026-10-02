@@ -3,7 +3,7 @@
 
 use url::Url;
 
-use super::commands::rule_archive::work_folder::MovePolicy;
+use crate::commands::rule_archive::work_folder::MovePolicy;
 use crate::store::{channels::ChannelStore, history::HistoryStore, revisions::RevisionStore};
 use trss_core::settings::SettingsStore;
 use trss_library::{

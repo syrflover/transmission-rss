@@ -241,7 +241,7 @@ pub enum NotRetryable {
     /// episode is that revision or a higher one already
     /// ([`revisions::holds_same_or_higher`]). The worker is the authority; the
     /// web tells the cases its own evidence settles beforehand
-    /// ([`trss_legacy::web::in_place`]) and leaves the rest to this.
+    /// (`trss_web::in_place`) and leaves the rest to this.
     InPlace,
 }
 
@@ -707,7 +707,7 @@ pub async fn execute_with(
     };
     // A past item given to a rule that has picked nothing is the rule's first
     // item: the rule's episode offset is decided before the item is named
-    // (`worker::offsets`).
+    // (`offsets`).
     let settled = match (payload.rule_id, settle) {
         (Some(_), Settle::Offset) => {
             offsets::settle_one(ctx, &collect_folder.folder, plan.rule, &item.title).await

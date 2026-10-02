@@ -327,7 +327,7 @@ impl ChannelStore {
 
     /// Archives or restores a rule, whatever version it is at: only the worker
     /// does this, in the order its archive and restore need (see
-    /// `worker::commands::rule_archive`). The version goes up when the state
+    /// `commands::rule_archive`). The version goes up when the state
     /// changes. A rule that becomes `active` is noted as resumed at `at`
     /// ([`Rule::resumed_at`]). `None` when the rule is gone.
     pub async fn set_rule_state(

@@ -590,7 +590,7 @@ pub fn rejected_titles(conn: &Connection) -> Result<HashSet<(String, String)>> {
 }
 
 /// Sets a rule's state without a version check (the worker's archive and
-/// restore; see `worker::commands::rule_archive`). The version goes up only
+/// restore; see `commands::rule_archive`). The version goes up only
 /// when the state changes, so an edit made meanwhile from a screen that saw
 /// the old state is answered with a conflict. A rule turned back on is noted as
 /// resumed at `at` (see [`Rule::resumed_at`]). `None` when the rule is gone.

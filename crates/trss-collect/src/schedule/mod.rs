@@ -7,6 +7,6 @@
 //! - [`state`]: the status lines of a card.
 //!
 //! The API that gathers the inputs and answers is
-//! [`trss_legacy::web::schedule_api`].
+//! `trss_web::schedule_api`.
 
 pub mod state;
