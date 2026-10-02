@@ -87,10 +87,14 @@ impl CycleLock {
 /// worker's business (see the `trss-worker` crate).
 ///
 /// The heartbeat beats from the moment the lock is taken until the last
-/// handle is let go with [`WorkerHold::release`], which writes the last beat
-/// (clearing the hold) before the lock is let go. A last handle dropped
-/// without it (its task panicked or was aborted) lets go of the lock all the
-/// same, but only stops the beats, so the web sees a worker that stopped.
+/// handle is let go, which writes the last beat (clearing the hold) before the
+/// lock is let go. [`WorkerHold::release`] does that in place. When the last
+/// one goes some other way (a handle dropped because its task panicked or was
+/// aborted, or what [`WorkerHold::keep`] gave outliving the handles), a task
+/// writes the last beat and then lets go of the lock; a hold taken meanwhile
+/// waits for it. Only without a runtime to run that task (the process is
+/// ending) are the beats merely stopped, so the web sees a worker that
+/// stopped.
 #[derive(Clone)]
 pub struct WorkerLock {
     inner: Arc<Shared>,
@@ -104,13 +108,49 @@ struct Shared {
     /// The hold while anything holds it. Taking a hold and letting go of the
     /// last one happen under this, one at a time.
     held: tokio::sync::Mutex<Weak<Held>>,
+    /// The task that ends a hold whose last handle went without
+    /// [`WorkerHold::release`] (see [`Held`]'s `Drop`). A new hold waits
+    /// for it, so the last beat of the old hold never lands after the first
+    /// of the new one.
+    closing: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 /// The lock while the worker holds it.
 struct Held {
-    // Fields drop in order: the beats end before the lock is let go.
+    /// `None` once the last beat is written.
     beat: Mutex<Option<Heartbeat>>,
-    _lock: CycleLock,
+    /// Always `Some` until the hold is dropped.
+    lock: Option<CycleLock>,
+    shared: Weak<Shared>,
+}
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        let beat = self
+            .beat
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        let lock = self.lock.take();
+        let Some(beat) = beat else {
+            // The last handle was released: the last beat is written.
+            drop(lock);
+            return;
+        };
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            drop(beat);
+            drop(lock);
+            return;
+        };
+        // The lock goes with the task and is let go only after the last beat.
+        let task = runtime.spawn(async move {
+            beat.stop().await;
+            drop(lock);
+        });
+        if let Some(shared) = self.shared.upgrade() {
+            *shared.closing.lock().unwrap_or_else(|e| e.into_inner()) = Some(task);
+        }
+    }
 }
 
 /// One handle to the worker's hold of its lock (see [`WorkerLock`]).
@@ -130,6 +170,7 @@ impl WorkerLock {
                 clock,
                 every,
                 held: tokio::sync::Mutex::new(Weak::new()),
+                closing: Mutex::new(None),
             }),
         }
     }
@@ -150,6 +191,15 @@ impl WorkerLock {
                 lock: self.clone(),
             }));
         }
+        let closing = self
+            .inner
+            .closing
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        if let Some(task) = closing {
+            let _ = task.await;
+        }
         let Some(lock) = CycleLock::try_acquire(&self.inner.path)? else {
             return Ok(None);
         };
@@ -161,7 +211,8 @@ impl WorkerLock {
         .await;
         let new = Arc::new(Held {
             beat: Mutex::new(Some(beat)),
-            _lock: lock,
+            lock: Some(lock),
+            shared: Arc::downgrade(&self.inner),
         });
         *held = Arc::downgrade(&new);
         Ok(Some(WorkerHold {
@@ -201,8 +252,9 @@ impl WorkerHold {
 
     /// Something that keeps the lock held for as long as it lives, for work
     /// that must keep it until it returns even when the task that waits for
-    /// it is aborted (a blocking rename). It counts as a handle, but dropping
-    /// it never writes the last beat: the handle it was made from does.
+    /// it is aborted (a blocking rename). It counts as a handle; when it is
+    /// the last to go, the last beat is written by a task (see
+    /// [`WorkerLock`]).
     pub fn keep(&self) -> Arc<dyn Any + Send + Sync> {
         self.held.clone()
     }
@@ -297,6 +349,17 @@ mod tests {
                     .unwrap()
                     .and_then(|b| b.held_since)
             }
+
+            /// Waits until the last beat cleared the hold.
+            async fn wait_cleared(&self) {
+                for _ in 0..500 {
+                    if self.held_since().await.is_none() {
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                panic!("the hold was never cleared");
+            }
         }
 
         #[tokio::test]
@@ -350,16 +413,58 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn a_last_handle_dropped_without_letting_go_frees_the_lock_but_leaves_the_hold() {
+        async fn a_last_handle_dropped_without_letting_go_still_ends_the_hold() {
             let s = Scene::new().await;
             let worker = s.worker();
             let hold = worker.try_hold().await.unwrap().unwrap();
 
-            // Its task was aborted: the lock is free, and no last beat clears
-            // the hold, so the web sees a worker that stopped.
+            // Its task was aborted: the last beat is written all the same,
+            // and then the lock is free.
             drop(hold);
-            assert_eq!(s.held_since().await, Some(1_000));
+            s.wait_cleared().await;
             assert!(CycleLock::try_acquire(&s.path).unwrap().is_some());
+        }
+
+        #[tokio::test]
+        async fn what_keeps_the_lock_ends_the_hold_when_it_outlives_the_handles() {
+            let s = Scene::new().await;
+            let worker = s.worker();
+            let hold = worker.try_hold().await.unwrap().unwrap();
+            let kept = hold.keep();
+
+            hold.release().await;
+            assert_eq!(s.held_since().await, Some(1_000), "still held");
+
+            // The blocking work returns after its task was let go.
+            s.now.store(9_000, Ordering::SeqCst);
+            drop(kept);
+            s.wait_cleared().await;
+            assert!(CycleLock::try_acquire(&s.path).unwrap().is_some());
+
+            // A new hold starts anew.
+            let again = worker.try_hold().await.unwrap().expect("free");
+            assert_eq!(s.held_since().await, Some(9_000));
+            again.release().await;
+            assert_eq!(s.held_since().await, None);
+        }
+
+        #[tokio::test]
+        async fn a_hold_taken_while_the_last_one_ends_waits_for_its_last_beat() {
+            let s = Scene::new().await;
+            let worker = s.worker();
+            let hold = worker.try_hold().await.unwrap().unwrap();
+            drop(hold);
+
+            // At once, before the ending task has run: not refused, and the
+            // new hold's beat is not cleared by the old one's last.
+            s.now.store(7_000, Ordering::SeqCst);
+            let again = worker
+                .try_hold()
+                .await
+                .unwrap()
+                .expect("waits, not refused");
+            assert_eq!(s.held_since().await, Some(7_000));
+            again.release().await;
         }
 
         #[tokio::test]
@@ -376,8 +481,11 @@ mod tests {
             mine.release().await;
             assert!(s.worker().try_hold().await.unwrap().is_none());
 
+            // Let go once the last beat is written.
             drop(kept);
-            assert!(s.worker().try_hold().await.unwrap().is_some());
+            s.wait_cleared().await;
+            let theirs = s.worker().try_hold().await.unwrap().expect("free");
+            theirs.release().await;
         }
     }
 }
