@@ -3009,6 +3009,29 @@ async fn a_rerun_leaves_the_name_its_earlier_start_gave_and_converts_no_episode_
 }
 
 #[tokio::test]
+async fn a_release_that_comes_in_the_form_of_another_season_is_converted() {
+    // The release is named as a continuing count of the first season; the rule
+    // makes its episode 25 the second season's first.
+    let title = "Sono Bisque Doll S01E25.mkv";
+    let sono = release("guid-sono-25", 25, title, "");
+    let rules = vec![RuleInput {
+        episode: -24,
+        ..rule("Sono Bisque Doll", "Sono Bisque Doll/Season 02")
+    }];
+    let s = Scene::failing(&[&sono], rules).await;
+    let item = s.item("Sono Bisque Doll S01E25").await;
+    assert_eq!(item.result, HistoryResult::AddFailed);
+
+    s.post(CMD, &item).await;
+    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
+
+    assert_eq!(s.command(CMD).await.1["outcome"]["result"], "received");
+    let torrents = s.h.tr.torrents();
+    assert_eq!(torrents.len(), 1);
+    assert_eq!(torrents[0].name, "Sono Bisque Doll S02E01.mkv");
+}
+
+#[tokio::test]
 async fn a_retry_and_the_cycles_add_of_the_same_item_go_in_turn() {
     let sono = release("guid-sono-13", 13, SONO, "");
     // The item stays in the feed, so the cycle adds it again itself.

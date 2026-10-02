@@ -102,8 +102,8 @@ use trss_core::{
 use trss_library::store::{library::LibraryStore, seasons::SeasonStore};
 use trss_transmission as transmission;
 use trss_transmission::{
-    add_item, get_torrent, get_torrents, has_label, has_trname_form, remove_label, AddError,
-    AddKind, AddLabels, Redactor, RenamePolicy,
+    add_item, get_torrent, get_torrents, has_label, remove_label, AddError, AddKind, AddLabels,
+    Redactor, RenamePolicy,
 };
 
 /// What `receive_once` and `receive_past` use (made from
@@ -519,6 +519,9 @@ pub struct Rename {
     pub item_id: i64,
     pub hash: String,
     pub save_path: std::path::PathBuf,
+    /// The release's own name, the item's title: the name is derived from it,
+    /// never from the name the file has now ([`release_file_name`]).
+    pub release: String,
     /// The rule's episode conversion.
     pub episode: isize,
     pub redactor: Redactor,
@@ -1020,6 +1023,7 @@ pub async fn execute_with(
                 item_id: item.id,
                 hash: torrent.hash,
                 save_path,
+                release: item.title.clone(),
                 episode,
                 redactor,
             });
@@ -1199,8 +1203,10 @@ pub const NAME_TAKEN: &str = "같은 회차 이름의 파일이 이미 있어서
 pub const NAME_NOT_CHANGED: &str = "이름을 바꾸지 못해서 원래 이름 그대로 뒀어요.";
 
 /// Gives the torrent's single file its `trname` name for the folder it was
-/// saved in, with the rule's episode conversion. A torrent with several files
-/// is left as it is at once, as the rule cycle leaves it.
+/// saved in, with the rule's episode conversion, derived from the release's
+/// own name ([`Rename::release`]): run again over a file it named already, it
+/// finds the same name and leaves it. A torrent with several files is left as
+/// it is at once, as the rule cycle leaves it.
 ///
 /// Unlike the renaming after a rule's add, a torrent whose name cannot be
 /// derived is left alone: that path removes the torrent and its data, which is
@@ -1239,18 +1245,13 @@ pub async fn rename(
         let Some(old_name) = torrent.name else {
             continue;
         };
-        // A name in the `trname` form was given already, by this command's
-        // earlier start or by a cycle: converting its episode again would
-        // count the rule's conversion twice.
-        if has_trname_form(
-            &old_name,
-            &rename.save_path,
-            rename.episode,
-            Release::without_version,
-        ) {
-            return RenameResult::Unchanged;
-        }
-        let Some(new_name) = derived_name(&rename.save_path, &old_name, rename.episode) else {
+        // The name is derived from the release's own name, never from the
+        // file's: a name this command's earlier start or a cycle gave already
+        // is then the same name again and stays, and an episode is never
+        // converted twice, while a release that comes in the `trname` form of
+        // another season or episode is still converted.
+        let release = release_file_name(&rename.release, &old_name);
+        let Some(new_name) = derived_name(&rename.save_path, &release, rename.episode) else {
             return RenameResult::Kept(NAME_NOT_DERIVED);
         };
         if new_name == old_name {
@@ -1276,6 +1277,25 @@ pub async fn rename(
     RenameResult::Kept(NAME_NOT_CHANGED)
 }
 
+/// The release `title` as a file name for `trname`: with the extension of the
+/// torrent's file `file_name`, which the feed's title may lack and a rename
+/// keeps.
+fn release_file_name(title: &str, file_name: &str) -> String {
+    let ext = Path::new(file_name)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or_default();
+    let has_ext = Path::new(title)
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case(ext));
+    if ext.is_empty() || has_ext {
+        title.to_owned()
+    } else {
+        format!("{title}.{ext}")
+    }
+}
+
 /// The name `trname` gives `file_name` in `save_path` with the rule's `episode`
 /// conversion, as the rule cycle's renaming derives it: read from the name
 /// without its revision ([`Release::without_version`]), because `trname` does
@@ -1288,6 +1308,28 @@ pub fn derived_name(save_path: &Path, file_name: &str, episode: isize) -> Option
 mod tests {
     use super::*;
     use crate::store::channels::{Channel, Rule};
+
+    #[test]
+    fn the_release_is_named_as_a_file_with_the_torrents_extension() {
+        let file = "Show S01E05.mkv";
+        assert_eq!(
+            release_file_name("[Group] Show - 05 (1080p).mkv", file),
+            "[Group] Show - 05 (1080p).mkv"
+        );
+        assert_eq!(
+            release_file_name("[Group] Show - 05 (1080p).MKV", file),
+            "[Group] Show - 05 (1080p).MKV"
+        );
+        assert_eq!(
+            release_file_name("[Group] Show - 05 (1080p)", file),
+            "[Group] Show - 05 (1080p).mkv"
+        );
+        assert_eq!(
+            release_file_name("Show.S01E05.1080p.WEB", file),
+            "Show.S01E05.1080p.WEB.mkv"
+        );
+        assert_eq!(release_file_name("Show - 05", "Show - 05"), "Show - 05");
+    }
 
     #[test]
     fn the_canonical_payload_holds_the_item_alone() {
