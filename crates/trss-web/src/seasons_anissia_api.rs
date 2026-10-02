@@ -75,12 +75,15 @@
 //!   and no episode of the season. `source_id` is the app's ID of the creator's
 //!   lines of the anime; `creator` is the display name Anissia gives and is not
 //!   an ID.
-//! - `revision` marks a revision candidate: the creator was observed with the
+//! - `revision` marks a revision candidate and is **provisional**: the creator
+//!   was observed with the
 //!   same `episode` before (`of` is that earlier observation, `same_post` says
 //!   whether it had the same `post_url`: the post was fixed, or the episode was
 //!   posted again). Until received subtitles are recorded this is the app's
-//!   closest reading of `같은 회차에 같은 제작자의 자막이 있으면 수정 후보`;
-//!   it is `null` for an episode of the creator that is new.
+//!   closest reading of `같은 회차에 같은 제작자의 자막이 있으면 수정 후보`, and
+//!   it will be replaced by "a received subtitle from that creator exists for
+//!   the episode" (the field and its shape stay); it is `null` for an episode
+//!   of the creator that is new.
 //! - `read_at` is when the 30-minute reading last read the whole recent list
 //!   (`null` before the first); `refresh` is the latest `anissia_captions`
 //!   command for the anime (`pending`, `running`, `done` or `failed` with its

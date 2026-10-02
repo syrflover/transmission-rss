@@ -70,6 +70,7 @@ pub struct Candidate {
     /// When the app first saw this state (Unix ms).
     pub first_seen_at: Millis,
     /// Set when the creator was observed with the same episode text before.
+    /// Provisional: see [`revision_of`].
     pub revision: Option<Revision>,
 }
 
@@ -92,6 +93,10 @@ pub struct Revision {
 }
 
 /// The revision mark of an observation, given the creator's earlier ones.
+///
+/// **Provisional.** The rule below is an approximation, to be replaced by "a
+/// received subtitle from that creator exists for the episode" once received
+/// subtitles are recorded; the field and its shape stay.
 ///
 /// **What is decided today.** A candidate is a *revision candidate* when the
 /// app already holds a subtitle of the same creator for the same episode. The
