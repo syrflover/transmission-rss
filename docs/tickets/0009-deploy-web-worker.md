@@ -1,6 +1,6 @@
 # 0009 웹과 worker를 배포하고 cron을 걷어내요
 
-- 상태: 진행 중 (서버 전환 끝, Transmission OOM은 `memory.high`로 피함, 완료 기준의 실제 확인 남음)
+- 상태: 진행 중 (0.5.0 운영 중, 옛 cron 걷어냄, 휴대폰·LTE 확인과 며칠의 OOM 관찰 남음)
 - 출처: [구현 경계와 실행 순서](../specs/web-app.md#구현-경계와-실행-순서), [접근 경계와 기기](../specs/web-app.md#접근-경계와-기기)
 - 막는 티켓: [0004](0004-worker-collection-history.md), [0005](0005-legacy-yaml-import.md)
 
@@ -122,11 +122,6 @@
 - 0.5.0 첫 주기: `250 item(s) seen (0 new), 0 added, 14 already in Transmission, 0 failed, 220 without a rule, 16 excluded, 0 removed`. 이어서 수집 폴더가 감시 폴더로 등록되고 첫 스캔이 작품 29개·파일 1130개를 읽었어요(690ms).
 - 편성표·라이브러리 화면을 브라우저로 보는 것과, 수정본 대체·회차 변환·되돌리기·지난 회차 검색의 실제 동작은 아직 확인하지 않았어요.
 
-### 남은 일
-
-- 며칠 동안 봇 토렌트 여럿을 받는 사이 `oom_kill`이 0에 머무는지(`transmission.slice` 아래 경로), 봇 토렌트의 이름·항목 라벨이 주기를 넘어 유지되는지 봐요. 되돌림(RHEL-255363)이 들어간 커널이 나오면 올려요.
-- 완료 기준의 나머지 실제 확인: cron과 같은 결과를 주기 수·차이와 함께 기록, 실제 배포 경로의 보호 경계(`ss -ltn`, 휴대폰 LTE에서 공인 IP 접속 불가), 휴대폰에서 0003·0006 수행, `.torrent` 추가 응답 시간, 자원 한도 재검토.
-
 ### 옛 cron 걷어내기 (2026-10-02, 사용자 승인)
 
 서버가 `trss-worker`·`trss-web`으로 바뀌고 0.5.0이 올라가 되돌릴 일이 없어져 옛 실행 경로를 모두 걷어냈어요.
@@ -137,3 +132,17 @@
 - `scripts/cron.sh`(`scripts/` 폴더 포함)와 `docker-compose.trss.yml`의 `legacy` 프로필 서비스 `trss`를 지웠어요.
 - `Dockerfile`은 `transmission-rss`를 이미지에 넣지 않고, ENTRYPOINT를 `/usr/local/bin/trss-worker`로 정했어요. 웹은 Compose처럼 `--entrypoint /usr/local/bin/trss-web`으로 실행해요. `FROM ... as`도 `AS`로 맞춰 빌드 경고를 없앴어요.
 - [readme](../../readme.md)의 `Switching from the cron job`과 `Rolling back`을 걷어냈어요. 서버에 남은 cron 항목은 이미 2026-10-01에 `cron.sh uninstall`로 지웠어요.
+
+### 서버 점검 (2026-10-02, 0.5.0을 올리고 약 40분 뒤)
+
+- Transmission: `transmission.slice`의 `memory.high`가 402653184(384M), 컨테이너의 `oom_kill`이 0이에요. 그 사이 받은 것은 1.4GB 한 회차뿐이라 여럿을 받는 동안의 확인은 아직이에요.
+- 봇 토렌트 15개가 모두 바꾼 이름(`… S01E12.mkv`)과 항목 라벨(`trss-item:…`)을 그대로 갖고 있어요(LAN에서 RPC로 읽음).
+- `docker stats`: worker 7.4MiB, web 3.9MiB(한도 128M), Transmission 16MiB(512M), CPU는 모두 0.1% 아래예요. 커널은 `5.14.0-687.53.1.el9_8`이에요.
+- `ss -ltn`: 웹 8080은 `192.168.1.21`에만 열려 있어요. 호스트의 네트워크 장치는 LAN(`enp3s0`)과 Docker 브리지뿐이에요. Transmission 9091은 `0.0.0.0`에 열려 있고 RPC 인증이 없어(LAN에서 세션 ID만으로 응답) LAN 안에서는 누구나 쓸 수 있어요. 이 저장소의 Transmission 설정 그대로이고 이번 배포가 바꾼 것은 아니에요.
+
+### 남은 일
+
+- 며칠 동안 봇 토렌트 여럿을 받는 사이 `oom_kill`이 0에 머무는지 봐요. 되돌림(RHEL-255363)이 들어간 커널이 나오면 올려요.
+- 휴대폰 LTE에서 공인 IP로 웹(8080)과 Transmission(9091)에 닿지 않는지 봐요. 공유기의 포트 포워딩에 달려 있어 서버 안에서는 확인할 수 없어요.
+- 휴대폰에서 0003·0006 수행, `.torrent` 추가 응답 시간을 봐요.
+- 자원 한도 재검토: 지금 사용량이 128M의 6% 아래라 줄일 수 있지만, 큰 폴더 스캔·표지 업로드 때의 최대치를 보고 정해요.
