@@ -21,8 +21,9 @@
 use serde::{Deserialize, Serialize};
 
 use trss_core::{
-    commands::{Command, CommandState, Outcome},
+    commands::{Accepted, Command, CommandError, CommandState, CommandStore, NewCommand, Outcome},
     folder_locks::Section,
+    Millis,
 };
 
 use crate::anissia::captions::{CaptionObserver, End, Read};
@@ -54,6 +55,30 @@ impl AnissiaCaptions {
     pub fn subject(&self) -> String {
         self.anime_no.to_string()
     }
+}
+
+/// Stores a command that makes the worker read anime `anime_no` now, with an
+/// ID of its own (made by the web when a season is linked, and by the worker
+/// when it connects a subscription to a season: no browser sent one). One anime
+/// has at most one open read, so a read already waiting or running stands for
+/// this one. `true` when a command was stored, so the caller can wake the
+/// worker.
+pub async fn ask(
+    commands: &CommandStore,
+    anime_no: i64,
+    now: Millis,
+) -> Result<bool, CommandError> {
+    let payload = AnissiaCaptions { anime_no };
+    let new = NewCommand {
+        id: format!("captions-{anime_no}-{now}"),
+        kind: KIND.to_owned(),
+        payload: payload.canonical(),
+        subject: Some(payload.subject()),
+    };
+    Ok(matches!(
+        commands.accept(new, now).await?,
+        Accepted::Created(_)
+    ))
 }
 
 /// How an executed command ended.

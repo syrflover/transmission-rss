@@ -505,3 +505,83 @@ async fn the_note_of_a_taken_season_goes_when_nothing_holds_the_season_any_more(
     scene.tick().await;
     assert_eq!(scene.rule(&second).await.version, released.version);
 }
+
+// --- the subscription's anime is read when its season is connected (ticket 0035) ---
+
+#[tokio::test]
+async fn connecting_a_subscription_to_a_season_has_the_animes_subtitle_lines_read_once() {
+    use std::{sync::atomic::Ordering, sync::Arc, time::Duration};
+    use trss_anissia::{fake::Fake, Anissia};
+    use trss_collect::{anissia::captions::CaptionObserver, store::anissia::AnissiaStore};
+    use trss_worker::CommandsOutcome;
+
+    let mut scene = Scene::new().await;
+    let fake = Fake::start().await;
+    let clock = {
+        let now = scene.h.clock.clone();
+        Arc::new(move || now.load(Ordering::SeqCst)) as trss_core::Clock
+    };
+    let anissia =
+        Anissia::new(scene.h.db.clone(), fake.config(), clock).with_spacing(Duration::ZERO);
+    let store = AnissiaStore::new(scene.h.db.clone());
+    scene.worker = scene
+        .h
+        .worker()
+        .with_captions(CaptionObserver::new(anissia, store.clone()));
+    // Anissia's own list for the anime has a line the recent list does not reach.
+    fake.set_captions(
+        7,
+        vec![serde_json::json!({
+            "episode": "24", "updDt": "2026-03-01T00:00:00",
+            "website": "https://blog.test/old", "name": "에루샤"})],
+    );
+    let rule = scene.subscription(7, "Work").await;
+    scene
+        .received(&rule, "Work/Season 01/Work - S01E01.mkv")
+        .await;
+    scene.register().await;
+
+    // The cycle that connects the rule makes the command, and nothing reads yet.
+    scene.tick().await;
+    assert!(season_of(&scene.rule(&rule).await).is_some());
+    let commands = trss_core::commands::CommandStore::new(scene.h.db.clone());
+    let command = commands
+        .latest_for_subjects("anissia_captions", vec!["7".into()])
+        .await
+        .unwrap()
+        .remove("7")
+        .expect("the connection asks for a read");
+    assert_eq!(command.payload, r#"{"anime_no":7}"#);
+    assert_eq!(command.state, trss_core::commands::CommandState::Pending);
+    assert_eq!(fake.count("/anime/caption/animeNo/"), 0);
+    assert!(store.candidates(7).await.unwrap().is_empty());
+
+    // The worker reads it, and the older line is a candidate of the anime.
+    assert_eq!(
+        scene
+            .worker
+            .run_commands(&CancellationToken::new())
+            .await
+            .unwrap(),
+        CommandsOutcome::Ran(1)
+    );
+    let seen = store.candidates(7).await.unwrap();
+    assert_eq!(seen.len(), 1);
+    assert_eq!(seen[0].episode, "24");
+    assert_eq!(fake.count("/anime/caption/animeNo/7"), 1);
+
+    // Cycles that change no link ask for nothing more.
+    scene.h.advance(5_000);
+    scene.tick().await;
+    scene.h.advance(5_000);
+    scene.tick().await;
+    assert!(!commands.has_open().await.unwrap());
+    let latest = commands
+        .latest_for_subjects("anissia_captions", vec!["7".into()])
+        .await
+        .unwrap()
+        .remove("7")
+        .unwrap();
+    assert_eq!(latest.id, command.id);
+    assert_eq!(fake.count("/anime/caption/animeNo/"), 1);
+}

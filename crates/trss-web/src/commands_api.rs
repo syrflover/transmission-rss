@@ -407,27 +407,17 @@ async fn check_anissia_captions(
 }
 
 /// Makes the worker read Anissia anime `anime_no`'s subtitle lines now, as a
-/// command the web makes itself (an ID of its own: no browser sent one). One
-/// anime has at most one open read, so a read already waiting or running
-/// stands for this one. A failure to store it is logged and left: the reading
-/// of the recent list every 30 minutes and the user's `새로고침` still observe
-/// the anime.
+/// command the web makes itself ([`anissia_captions::ask`]). A failure to store
+/// it is logged and left: the reading of the recent list every 30 minutes and
+/// the user's `새로고침` still observe the anime.
 pub(super) async fn ask_anissia_captions(state: &AppState, anime_no: i64) {
-    let payload = anissia_captions::AnissiaCaptions { anime_no };
-    let now = now_millis();
-    let new = NewCommand {
-        id: format!("captions-{anime_no}-{now}"),
-        kind: anissia_captions::KIND.to_owned(),
-        payload: payload.canonical(),
-        subject: Some(payload.subject()),
-    };
-    match state.commands.accept(new, now).await {
-        Ok(Accepted::Created(_)) => {
+    match anissia_captions::ask(&state.commands, anime_no, now_millis()).await {
+        Ok(true) => {
             if let Some(path) = &state.worker_wake {
                 trss_core::wake::wake_worker(path);
             }
         }
-        Ok(_) => {}
+        Ok(false) => {}
         Err(e) => eprintln!("trss-web: cannot ask for the subtitle lines of anime {anime_no}: {e}"),
     }
 }

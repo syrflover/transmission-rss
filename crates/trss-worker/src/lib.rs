@@ -131,6 +131,7 @@ pub use env::{EnvError, WorkerEnv};
 
 use trss_collect::{
     anissia::captions::CaptionObserver,
+    commands::anissia_captions,
     commands::rule_archive::work_folder::MovePolicy,
     context::{CollectContext, TransmissionLink},
     feed, season_link,
@@ -366,7 +367,35 @@ impl Worker {
     /// scan (see [`season_link`]). It takes no lock, so it is for callers that
     /// know no cycle is running, such as tests.
     pub async fn link_seasons(&self) -> season_link::Linked {
-        season_link::link_seasons(&self.ctx.link()).await
+        let linked = season_link::link_seasons(&self.ctx.link()).await;
+        self.ask_captions(&linked).await;
+        linked
+    }
+
+    /// Has the subtitle lines of the anime that seasons were just connected to
+    /// read at once (`anissia_captions`, [`commands`]), like a season linked
+    /// from the work detail. A pass that connected nothing asks for nothing, so
+    /// a cycle that changes no link makes no command. A worker that reads no
+    /// Anissia ([`Worker::with_captions`] not given) asks for nothing, since
+    /// the command could only fail.
+    async fn ask_captions(&self, linked: &season_link::Linked) {
+        if self.captions.is_none() {
+            return;
+        }
+        let mut stored = false;
+        for anime_no in &linked.anime_nos {
+            match anissia_captions::ask(&self.commands, *anime_no, (self.clock)()).await {
+                Ok(created) => stored |= created,
+                Err(err) => eprintln!(
+                    "Season link: cannot ask for the subtitle lines of anime {anime_no}: {err}"
+                ),
+            }
+        }
+        if stored {
+            if let Some(path) = &self.wake_path {
+                trss_core::wake::wake_worker(path);
+            }
+        }
     }
 
     /// Ends every watch.
@@ -459,7 +488,7 @@ impl Worker {
         if !report.interrupted && !cancel.is_cancelled() {
             watch::scan_all(&self.watch, &self.clock, cancel).await;
             // The videos the rules received are in the library now (or not yet).
-            season_link::link_seasons(&self.ctx.link()).await;
+            self.link_seasons().await;
         }
 
         Ok(TickOutcome::Ran(report))

@@ -21,6 +21,9 @@
 //!
 //! Once connected a rule stays connected, and the season's Anissia link becomes
 //! the rule's anime in the same transaction (`trss_library::store::seasons::anissia`).
+//! The pass reports the anime of the rules it connected ([`Linked::anime_nos`]),
+//! and the worker has its own subtitle lines read at once, as it does when a
+//! season is linked from the work detail.
 //! When the season is held by another Anissia anime already (another
 //! subscription's, or the anime the season was linked to from the work detail)
 //! the rule is not connected and notes the season, which its detail explains
@@ -86,6 +89,10 @@ pub struct Linked {
     /// Rules this pass reported as having torrents in Transmission with none
     /// of their videos in the library (see [`link_seasons`]).
     pub unmatched: Vec<String>,
+    /// The Anissia anime of the rules connected now, in the order they were:
+    /// the anime a season is newly linked to, whose own subtitle lines the
+    /// worker is to read ([`crate::commands::anissia_captions`]).
+    pub anime_nos: Vec<i64>,
 }
 
 /// The inputs of an attempt that left a rule unconnected.
@@ -292,6 +299,9 @@ pub async fn link_seasons(ctx: &LinkContext) -> Linked {
                     Ok(SeasonLinked::Linked) => {
                         println!("Season link: rule {} is in season {number}", rule.id);
                         done.linked += 1;
+                        if let Some(subscription) = &rule.subscription {
+                            done.anime_nos.push(subscription.anissia_anime_no);
+                        }
                         true
                     }
                     Ok(SeasonLinked::Taken) => {
