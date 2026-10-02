@@ -10,6 +10,7 @@ import { foldersSummary, loadWatchFolders, type WatchFolderList } from "./folder
 import { ChevronIcon } from "./icons";
 import { SETTINGS_ITEMS, type SettingsItem, type SettingsItemId } from "./items";
 import { Facts, Tag } from "./parts";
+import { loadPolicy, policySummary, POLICY_KEY, type Policy } from "./policy/api";
 import type { ImportFlow } from "./import/useImportFlow";
 
 /** The collect folder row: the two folders' names, or that none is chosen yet. */
@@ -48,8 +49,24 @@ function FoldersFacts() {
   );
 }
 
+/** The common policy row: the format order, the idle time and the concurrent jobs. */
+function PolicyFacts() {
+  // Shared with the panel: a save there updates this row at once.
+  const { data } = useCached<Policy>(POLICY_KEY, loadPolicy, "");
+  return (
+    <Facts>
+      {data === undefined ? (
+        <Tag>&nbsp;</Tag>
+      ) : (
+        <span className="min-w-0 text-[13px] break-words text-text-secondary">{policySummary(data)}</span>
+      )}
+    </Facts>
+  );
+}
+
 /** What the row shows without opening the item: its current value. */
 function RowFacts({ id, importFlow }: { id: SettingsItemId; importFlow: ImportFlow }) {
+  if (id === "policy") return <PolicyFacts />;
   if (id === "collection") return <CollectionFacts />;
   if (id === "folders") return <FoldersFacts />;
   if (id === "import") {

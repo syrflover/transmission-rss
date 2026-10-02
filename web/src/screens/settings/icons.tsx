@@ -31,13 +31,6 @@ export const CaptionIcon = (p: IconProps) => (
   </Icon>
 );
 
-export const WindowIcon = (p: IconProps) => (
-  <Icon {...p}>
-    <rect x="3" y="4" width="18" height="16" rx="2.5" />
-    <path d="M3 9h18" />
-  </Icon>
-);
-
 export const FolderIcon = (p: IconProps) => (
   <Icon {...p}>
     <path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />

@@ -7,12 +7,10 @@ import {
   FolderIcon,
   LockIcon,
   UploadIcon,
-  WindowIcon,
 } from "./icons";
 
 export type SettingsItemId =
-  | "format"
-  | "browser"
+  | "policy"
   | "collection"
   | "folders"
   | "storage"
@@ -28,27 +26,14 @@ export interface SettingsItem {
   /**
    * Shown in the panel while the item has no content yet. Each item is filled
    * by the result goal that owns it (see docs/specs/settings.md); only the
-   * collect folder, the watch folders and the import are built so far.
+   * common policy, the collect folder, the watch folders and the import are built so far.
    */
   empty?: string;
 }
 
 /** The settings items in list order, grouped as in docs/specs/settings.md#설정-화면. */
 export const SETTINGS_ITEMS: SettingsItem[] = [
-  {
-    id: "format",
-    group: "공통 정책",
-    title: "자막 형식",
-    icon: CaptionIcon,
-    empty: "자막 형식의 우선순위는 아직 바꿀 수 없어요. 자막 기능이 준비되면 여기에서 순서를 바꿔요.",
-  },
-  {
-    id: "browser",
-    group: "공통 정책",
-    title: "브라우저",
-    icon: WindowIcon,
-    empty: "브라우저 유휴 시간과 동시 작업 수는 아직 바꿀 수 없어요. 작업 기능이 준비되면 여기에서 바꿔요.",
-  },
+  { id: "policy", group: "공통 정책", title: "자막 형식·브라우저", icon: CaptionIcon },
   { id: "collection", group: "수집", title: "수집 폴더", icon: FolderIcon },
   { id: "folders", group: "라이브러리", title: "감시 폴더", icon: FolderIcon },
   {
