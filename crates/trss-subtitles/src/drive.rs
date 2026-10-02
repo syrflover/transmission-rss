@@ -1,6 +1,7 @@
 //! Google Drive files linked from a post (`docs/specs/jobs.md`, 공통 수신
 //! 결과와 실패 분류), for every source whose posts link them: Blogger's, and
-//! Tistory's when the subtitle is in the body rather than attached.
+//! Tistory's and Naver's when the subtitle is in the body rather than
+//! attached.
 //!
 //! - A link to a file (`drive.google.com/file/d/<id>/…`, `open?id=<id>`,
 //!   `uc?id=<id>`, each also under `/u/<n>/` or `/a/<domain>/`) names it by its ID. The ID is public and stays the same, so
@@ -174,7 +175,7 @@ pub(crate) fn offered(
 }
 
 /// Receives Drive files. Cheap to clone: the clones share the client and the
-/// pace, so the sources that link Drive files (Blogger's, Tistory's) are
+/// pace, so the sources that link Drive files (Blogger's, Tistory's, Naver's) are
 /// given one and space their requests to Drive's hosts together.
 #[derive(Clone)]
 pub struct Drive {

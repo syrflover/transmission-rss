@@ -15,9 +15,10 @@
 //!
 //! Sources are an enum rather than trait objects: the set is closed and each
 //! one is async. [`tistory::TistorySource`] reads Tistory's attachments over
-//! HTTP, and [`blogger::BloggerSource`] Blogger's posts; both receive the
-//! Google Drive files a post links ([`drive`]), those that serve the
-//! episode ([`episode`]). [`fake::FakeSource`] is a source with no network
+//! HTTP, [`naver::NaverSource`] Naver blogs' attachments, and
+//! [`blogger::BloggerSource`] Blogger's posts; all of them receive the Google
+//! Drive files a post links ([`drive`]). Where a post says which file is
+//! which episode, they offer those that serve the episode ([`episode`]). [`fake::FakeSource`] is a source with no network
 //! that lets a job run from start to end in tests and in the development
 //! environment.
 //!
@@ -35,6 +36,7 @@ pub mod drive;
 pub mod episode;
 pub mod fake;
 pub mod http;
+pub mod naver;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing;
 pub mod tistory;
@@ -47,6 +49,7 @@ use url::Url;
 
 use blogger::BloggerSource;
 use fake::{FakeBody, FakeSource};
+use naver::NaverSource;
 use tistory::TistorySource;
 
 /// The most bytes one file may have: far more than any subtitle or its
@@ -372,6 +375,7 @@ pub enum Source {
     Fake(FakeSource),
     Tistory(TistorySource),
     Blogger(BloggerSource),
+    Naver(NaverSource),
 }
 
 impl Source {
@@ -384,6 +388,7 @@ impl Source {
             Source::Fake(source) => source.open(post).await,
             Source::Tistory(source) => source.open(post, episode).await,
             Source::Blogger(source) => source.open(post, episode).await,
+            Source::Naver(source) => source.open(post, episode).await,
         }
     }
 
@@ -404,6 +409,7 @@ impl Source {
             }
             Source::Tistory(source) => source.fetch(post, file).await,
             Source::Blogger(source) => source.fetch(post, file).await,
+            Source::Naver(source) => source.fetch(post, file).await,
         }
     }
 }
@@ -414,6 +420,7 @@ pub struct Sources {
     fake: Option<FakeSource>,
     tistory: Option<TistorySource>,
     blogger: Option<BloggerSource>,
+    naver: Option<NaverSource>,
 }
 
 impl Sources {
@@ -442,12 +449,19 @@ impl Sources {
         self
     }
 
+    /// Adds the Naver source, for the posts on a blog of [`naver::reads`].
+    pub fn with_naver(mut self, source: NaverSource) -> Sources {
+        self.naver = Some(source);
+        self
+    }
+
     /// The source that reads the post at `post`, if this process knows one.
     pub fn for_post(&self, post: &Url) -> Option<Source> {
         match post.host_str() {
             Some(fake::HOST) => self.fake.clone().map(Source::Fake),
             Some(host) if tistory::reads(host) => self.tistory.clone().map(Source::Tistory),
             Some(host) if blogger::reads(host) => self.blogger.clone().map(Source::Blogger),
+            Some(host) if naver::reads(host) => self.naver.clone().map(Source::Naver),
             _ => None,
         }
     }

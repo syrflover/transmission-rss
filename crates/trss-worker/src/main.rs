@@ -14,7 +14,8 @@ use trss_library::{
     seasons::{self, Seasons},
 };
 use trss_subtitles::{
-    blogger::BloggerSource, drive::Drive, fake::FakeSource, tistory::TistorySource, Sources,
+    blogger::BloggerSource, drive::Drive, fake::FakeSource, naver::NaverSource,
+    tistory::TistorySource, Sources,
 };
 use trss_worker::{env::FAKE_SUBTITLE_SOURCE_VAR, Worker, WorkerEnv};
 
@@ -50,7 +51,8 @@ async fn run() -> Result<(), String> {
     let drive = Drive::new();
     let mut sources = Sources::none()
         .with_tistory(TistorySource::new(drive.clone()))
-        .with_blogger(BloggerSource::new(drive));
+        .with_blogger(BloggerSource::new(drive.clone()))
+        .with_naver(NaverSource::new(drive));
     if std::env::var(FAKE_SUBTITLE_SOURCE_VAR).as_deref() == Ok("1") {
         println!("The fake subtitle source is on ({FAKE_SUBTITLE_SOURCE_VAR})");
         sources = sources.with_fake(FakeSource);

@@ -4,8 +4,8 @@ version.workspace = true
 edition.workspace = true
 
 [features]
-# `testing`: a local HTTP server shaped like Tistory, Blogger and Google
-# Drive, for the tests of the crates above.
+# `testing`: a local HTTP server shaped like Tistory, Blogger, Naver blogs
+# and Google Drive, for the tests of the crates above.
 test-support = ["dep:axum", "dep:futures", "tokio/net", "tokio/rt"]
 
 [dependencies]
@@ -15,7 +15,8 @@ futures = { workspace = true, optional = true }
 percent-encoding.workspace = true
 reqwest.workspace = true
 scraper.workspace = true
-# Reads a Blogger post's JSON-LD (`dateModified`).
+# Reads a Blogger post's JSON-LD (`dateModified`) and a Naver post's
+# attachment list (`aPostFiles`).
 serde_json.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["time", "sync"] }

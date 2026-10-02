@@ -42,7 +42,6 @@
 use std::sync::Arc;
 
 use percent_encoding::percent_decode_str;
-use reqwest::StatusCode;
 use scraper::{Html, Selector};
 use url::Url;
 
@@ -189,40 +188,13 @@ impl TistorySource {
     }
 
     async fn get_file(&self, locator: &Url) -> Result<Fetch, Failure> {
-        self.inner.pace.wait(locator).await;
-        let limits = self.inner.limits;
-        let deadline = tokio::time::Instant::now() + limits.file_deadline;
-        // No cookie (the client keeps none) and no `Referer` (the client is
-        // built with none, which holds for its redirects as well).
-        let response =
-            tokio::time::timeout_at(deadline, self.inner.http.get(locator.clone()).send())
-                .await
-                .map_err(|_| http::deadline_failure(limits.file_deadline))?
-                .map_err(|e| http::network_failure(&e, "파일 주소에 연결하지 못했어요"))?;
-        let status = response.status();
-        if status != StatusCode::OK {
-            let content_type = http::media_type(&response);
-            let html = content_type.as_deref() == Some("text/html");
-            let size = http::error_size(response).await;
-            let (kind, reason) = match status.as_u16() {
-                400 | 403 | 404 | 410 if html => (FailureKind::Expired, "파일 주소가 거절됐어요"),
-                404 | 410 => (FailureKind::Missing, "파일이 없어요"),
-                300..=399 => (
-                    FailureKind::Changed,
-                    "파일 주소가 따라갈 수 없는 곳으로 넘기려 했어요",
-                ),
-                429 | 500..=599 => (FailureKind::Network, "사이트가 파일을 주지 못했어요"),
-                _ => (FailureKind::Changed, "파일 주소가 뜻밖의 답을 줬어요"),
-            };
-            return Err(
-                Failure::new(kind, format!("{reason} (HTTP {})", status.as_u16())).with_response(
-                    Some(status.as_u16()),
-                    content_type,
-                    size,
-                ),
-            );
-        }
-        http::take_file(response, limits, deadline)
+        http::get_file(
+            &self.inner.http,
+            &self.inner.pace,
+            self.inner.limits,
+            locator,
+        )
+        .await
     }
 }
 

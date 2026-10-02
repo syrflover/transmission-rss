@@ -2,7 +2,8 @@
 //! 공통 수신 결과와 실패 분류): a post on Blogger, or a Tistory post whose
 //! subtitle is in Google Drive, links one file per episode, a ZIP of a range
 //! of them, a font, or all of these together, and says which is which only in
-//! the words of each link (`24화`, `1 ~ 12화`, `폰트`, `… 4 24.zip`).
+//! the words of each link (`24화`, `1 ~ 12화`, `폰트`, `… 4 24.zip`). A Naver
+//! post attaches them, and says it in the files' names.
 //!
 //! - A link that names episodes is taken when one of them is the candidate's:
 //!   a single one (`24화`, `제24화`, `EP24`, `고양이와 용 08`) when it is the
@@ -11,7 +12,8 @@
 //!   episode, and `8.5` is never rounded.
 //! - A font (`폰트`, `글꼴`, `font`) that names no episode is always taken: an
 //!   ASS needs it. One that names an episode (`24화 (폰트 포함)`) is that
-//!   episode's.
+//!   episode's. A font file (`.ttf`, `.otf`, `.ttc`, `.woff`, `.woff2`) is a
+//!   font whatever its name's numbers (`H2MPRB.TTF`).
 //! - An archive whose name says no episode (`자막 모음.zip`) is taken: the
 //!   analysis tells what it holds.
 //! - When nothing names the episode and the post has one subtitle link only,
@@ -22,8 +24,8 @@
 //!
 //! Words name an episode only with a number that stands on its own: a number
 //! glued to a letter (`S2`, `4th`, `2기`, `1080p`, `그랑블루3`) is no episode,
-//! but `제24`, `第24`, `EP24` and `E24` are, and one glued by a dot is none
-//! either (`H.264`). A number marked `화` (`話`, `회`) counts before any other;
+//! but `제24`, `第24`, `EP24`, `E24` and `S02E24` are, and one glued by a dot
+//! is none either (`H.264`). A number marked `화` (`話`, `회`) counts before any other;
 //! without one, the last number does (`… 4 24.zip` is 24), leaving out years
 //! and dates, numbers over 1000 and decimals but `.5` ([`mentions`] has the
 //! ranges).
@@ -95,6 +97,9 @@ pub enum Holds {
 
 const DASHES: [char; 5] = ['~', '-', '–', '〜', '～'];
 const EPISODE_MARKS: [char; 3] = ['화', '話', '회'];
+/// The extensions of font files, which Naver posts attach beside the
+/// subtitle.
+const FONT_FILES: [&str; 5] = [".ttf", ".otf", ".ttc", ".woff", ".woff2"];
 
 /// What the words of a link say it holds (see the module docs).
 pub fn holds(text: &str) -> Holds {
@@ -103,6 +108,11 @@ pub fn holds(text: &str) -> Holds {
     // An address as its own words says nothing (its ID has digits).
     if lower.contains("://") || lower.starts_with("drive.google.") {
         return Holds::Nothing;
+    }
+    // A font file is a font whatever numbers its name has (`H2MPRB.TTF`,
+    // `Pretendard 700.otf`): no episode's subtitle is one.
+    if FONT_FILES.iter().any(|e| lower.ends_with(e)) {
+        return Holds::Font;
     }
     let found = mentions(text);
     let marked: Vec<Span> = found
@@ -134,6 +144,8 @@ pub fn holds(text: &str) -> Holds {
 ///   marks a side (`1 - 12화`); `Title 3 - 05` is two numbers, 3 and 5.
 /// - Ends that are equal or descending (`03-03`, `24-12`) are no range: each
 ///   is read on its own.
+/// - After `E` or `EP`, the mark may come again before the last number
+///   (`E01-E12`, `S02E01-E12`).
 /// - A date (`2026-10-03`, `2026.10.03`) is no number.
 /// - Unmarked, a number over 1000 (a year, `[12345678]`) and a decimal other
 ///   than `.5` (`AAC 2.0`) are no episode; `13.5` is one, and so is anything
@@ -167,13 +179,19 @@ fn mentions(text: &str) -> Vec<(Span, bool)> {
         let dotted = |from: usize, to: usize| chars[from..to].contains(&'.');
         let dash = skip_spaces(&chars, after);
         if let Some(&joint) = chars.get(dash).filter(|c| DASHES.contains(c)) {
-            let start = skip_spaces(&chars, dash + 1);
+            let gap = skip_spaces(&chars, dash + 1);
+            // `E01-E12`, `EP01-EP12`, `S02E01-E12`: the mark again before
+            // the last.
+            let start = match marked_by_word(&chars, i) {
+                true => gap + episode_word_at(&chars, gap),
+                false => gap,
+            };
             let last = number_at(&chars, start).and_then(|(last, end_last)| {
                 Some((last, end_last, after_number(&chars, end_last)?))
             });
             if let Some((last, end_last, (marked_last, after_last))) = last {
                 let tilde = !matches!(joint, '-' | '–');
-                let spaced = dash > end || start > dash + 1;
+                let spaced = dash > end || gap > dash + 1;
                 let either = marked || marked_last;
                 if (tilde || !spaced || either) && compare(&first, &last) == Ordering::Less {
                     keep(
@@ -214,6 +232,31 @@ fn mentions(text: &str) -> Vec<(Span, bool)> {
         i = after;
     }
     found
+}
+
+/// Whether `E` or `EP` (any case) is right before the number at `i`.
+fn marked_by_word(chars: &[char], i: usize) -> bool {
+    let at = |back: usize| i.checked_sub(back).and_then(|b| chars.get(b));
+    match at(1) {
+        Some('e' | 'E') => true,
+        Some('p' | 'P') => matches!(at(2), Some('e' | 'E')),
+        _ => false,
+    }
+}
+
+/// How long an `E` or `EP` (any case) at `at` is, when a digit follows it;
+/// otherwise 0.
+fn episode_word_at(chars: &[char], at: usize) -> usize {
+    let is = |i: usize, set: [char; 2]| chars.get(i).is_some_and(|c| set.contains(c));
+    let len = match (is(at, ['e', 'E']), is(at + 1, ['p', 'P'])) {
+        (true, true) => 2,
+        (true, false) => 1,
+        _ => return 0,
+    };
+    match chars.get(at + len).is_some_and(|c| c.is_ascii_digit()) {
+        true => len,
+        false => 0,
+    }
 }
 
 /// Keeps a mention, unless it is unmarked and no episode could be it (see
@@ -282,8 +325,9 @@ fn number_at(chars: &[char], i: usize) -> Option<(String, usize)> {
 }
 
 /// Whether the number at `start` is not glued to a word before it, but for
-/// the words that mark an episode (`제`, `第`, `EP`, `E`, `Episode`). A dot
-/// between them glues them as well (`H.264`, `1.2.3`).
+/// the words that mark an episode (`제`, `第`, `EP`, `E`, `Episode`, and `E`
+/// after a season, `S02E01`). A dot between them glues them as well
+/// (`H.264`, `1.2.3`).
 fn free_before(chars: &[char], start: usize) -> bool {
     let Some(&before) = start.checked_sub(1).and_then(|i| chars.get(i)) else {
         return true;
@@ -311,12 +355,28 @@ fn free_before(chars: &[char], start: usize) -> bool {
         .rev()
         .collect::<String>()
         .to_ascii_lowercase();
+    let before_word = &chars[..word_end - word.chars().count()];
+    // `S02E01`: the episode after the season.
+    let season = word == "e" && {
+        let digits = before_word
+            .iter()
+            .rev()
+            .take_while(|c| c.is_ascii_digit())
+            .count();
+        let s_at = before_word.len().checked_sub(digits + 1);
+        digits > 0
+            && s_at.is_some_and(|at| {
+                matches!(before_word[at], 's' | 'S')
+                    && before_word[..at]
+                        .last()
+                        .is_none_or(|c| !c.is_alphanumeric())
+            })
+    };
     // A word that is not all ASCII letters ends in some other letter or a
     // digit.
-    chars[..word_end - word.chars().count()]
-        .last()
-        .is_none_or(|c| !c.is_alphanumeric())
-        && ["e", "ep", "episode"].contains(&word.as_str())
+    season
+        || (before_word.last().is_none_or(|c| !c.is_alphanumeric())
+            && ["e", "ep", "episode"].contains(&word.as_str()))
 }
 
 /// After the number ending at `end`: whether `화` marks it and where the
@@ -499,6 +559,24 @@ mod tests {
             ),
             ("자막 모음.zip", Holds::Bundle),
             ("Hotori Fonts.zip", Holds::Font),
+            // A season, then the episode.
+            ("Title S02E01 1080p", one("1")),
+            ("Title s2e05.ass", one("5")),
+            ("Title S02", Holds::Nothing),
+            // A range of them, the mark again before the last.
+            (
+                "Title S02E01-E12 1080p",
+                Holds::Episodes(vec![span("1", "12")]),
+            ),
+            ("E01-E12", Holds::Episodes(vec![span("1", "12")])),
+            ("ep01-ep12.zip", Holds::Episodes(vec![span("1", "12")])),
+            ("EP01 - EP12", Holds::Episodes(vec![span("12", "12")])),
+            ("Title 01-E12", one("12")),
+            ("Title XS02E01", Holds::Nothing),
+            // Font files, whatever their numbers.
+            ("H2MPRB.TTF", Holds::Font),
+            ("a옛날목욕탕L.ttf", Holds::Font),
+            ("Pretendard 700.otf", Holds::Font),
             (
                 "https://drive.google.com/file/d/1W0LRBy-gxCLtmDpQBd8kGYb79oh19YRe/view",
                 Holds::Nothing,

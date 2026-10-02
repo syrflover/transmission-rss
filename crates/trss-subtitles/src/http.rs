@@ -181,6 +181,49 @@ pub(crate) async fn get_page(
     Ok(String::from_utf8_lossy(&page).into_owned())
 }
 
+/// Starts receiving the file at the signed address `locator`, with no cookie
+/// (the client keeps none) and no `Referer` (the client sends none, on its
+/// redirects as well), held to `limits`. A refusal with a web page (`400`,
+/// `403`, `404` or `410` with `text/html`) is an expired address
+/// ([`FailureKind::Expired`]), which the source reads its post again for.
+pub(crate) async fn get_file(
+    http: &reqwest::Client,
+    pace: &Pace,
+    limits: Limits,
+    locator: &Url,
+) -> Result<Fetch, Failure> {
+    pace.wait(locator).await;
+    let deadline = tokio::time::Instant::now() + limits.file_deadline;
+    let response = tokio::time::timeout_at(deadline, http.get(locator.clone()).send())
+        .await
+        .map_err(|_| deadline_failure(limits.file_deadline))?
+        .map_err(|e| network_failure(&e, "파일 주소에 연결하지 못했어요"))?;
+    let status = response.status();
+    if status != StatusCode::OK {
+        let content_type = media_type(&response);
+        let html = content_type.as_deref() == Some("text/html");
+        let size = error_size(response).await;
+        let (kind, reason) = match status.as_u16() {
+            400 | 403 | 404 | 410 if html => (FailureKind::Expired, "파일 주소가 거절됐어요"),
+            404 | 410 => (FailureKind::Missing, "파일이 없어요"),
+            300..=399 => (
+                FailureKind::Changed,
+                "파일 주소가 따라갈 수 없는 곳으로 넘기려 했어요",
+            ),
+            429 | 500..=599 => (FailureKind::Network, "사이트가 파일을 주지 못했어요"),
+            _ => (FailureKind::Changed, "파일 주소가 뜻밖의 답을 줬어요"),
+        };
+        return Err(
+            Failure::new(kind, format!("{reason} (HTTP {})", status.as_u16())).with_response(
+                Some(status.as_u16()),
+                content_type,
+                size,
+            ),
+        );
+    }
+    take_file(response, limits, deadline)
+}
+
 /// Takes a `200` answer as the file's bytes, held to `limits` from
 /// `deadline`: refused when it is encoded (its bytes and length would be the
 /// encoding's; the client decodes nothing) or announces more than the file may

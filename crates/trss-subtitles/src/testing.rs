@@ -1,5 +1,6 @@
-//! A local HTTP server shaped like Tistory, Blogger and Google Drive, for the
-//! tests here and of the crates above (feature `test-support`).
+//! A local HTTP server shaped like Tistory, Blogger, Naver blogs and Google
+//! Drive, for the tests here and of the crates above (feature
+//! `test-support`).
 //!
 //! Every name resolves to the server ([`SourceServer::source`]), so the
 //! addresses keep their real shape with the server's port:
@@ -8,11 +9,16 @@
 //! for its files (any CDN host, [`tistory::cdn_host`], serves them),
 //! `http://<blog>.blogspot.com:<port>/<path>` for a Blogger post, and
 //! `http://drive.usercontent.google.com:<port>/download?id=<id>&export=download`
-//! for a Drive file (`drive.google.com/uc` redirects there as Drive does).
+//! for a Drive file (`drive.google.com/uc` redirects there as Drive does),
+//! `http://blog.naver.com:<port>/<blog>/<logNo>` for a Naver post's frame
+//! (its inner page at `/PostView.naver?blogId=…&logNo=…`) and
+//! `http://download.blog.naver.com:<port>/open/<file>/<token>/<name>` for
+//! its attachments.
 //! The posts link Drive files by their real addresses (`https://drive.google.com/file/d/<id>/view`):
 //! the sources take only the ID from them. Each post and file answers from a
 //! script a test sets, one answer per request, the last one again and again.
-//! Every serving of a Tistory post signs its addresses anew, as Tistory does.
+//! Every serving of a Tistory post or a Naver post's inner page signs its
+//! addresses anew, as both sites do.
 //! The sources it gives take plain `http`, which the sources over the network
 //! refuse.
 
@@ -37,6 +43,7 @@ use crate::{
     blogger::BloggerSource,
     drive::Drive,
     http::{Limits, Reach},
+    naver::{self, NaverSource},
     tistory::{self, TistorySource},
 };
 
@@ -52,6 +59,28 @@ pub enum PostAnswer {
     Page(String),
     /// This status with a small web page.
     Status(u16),
+    /// A Naver post's inner page attaching these files, signed anew.
+    Naver(Vec<NaverFile>),
+}
+
+/// A file a Naver post attaches.
+#[derive(Debug, Clone)]
+pub struct NaverFile {
+    pub name: String,
+    /// The size the post gives (`attachFileSize`).
+    pub size: usize,
+    /// `maliciousCodeYn`, and `punishType` (`"0"` for none).
+    pub malicious: bool,
+    pub punish: String,
+}
+
+pub fn naver_file(name: &str, size: usize) -> NaverFile {
+    NaverFile {
+        name: name.to_owned(),
+        size,
+        malicious: false,
+        punish: "0".to_owned(),
+    }
 }
 
 /// A file a post offers.
@@ -250,6 +279,54 @@ impl SourceServer {
     pub fn drive_with(&self, limits: Limits) -> Drive {
         let base = Url::parse(&format!("http://{DRIVE_FILES}:{}/", self.port)).unwrap();
         Drive::over(builder(), limits, REACH, base)
+    }
+
+    /// The Naver source, reaching this server for every name, with no
+    /// spacing between requests.
+    pub fn naver(&self) -> NaverSource {
+        let limits = Limits {
+            spacing: Duration::ZERO,
+            ..Limits::default()
+        };
+        self.naver_over(limits, self.drive_with(limits))
+    }
+
+    /// The Naver source with these limits, receiving Drive files through
+    /// `drive`.
+    pub fn naver_over(&self, limits: Limits, drive: Drive) -> NaverSource {
+        let base = Url::parse(&format!("http://blog.naver.com:{}/", self.port)).unwrap();
+        NaverSource::over(builder(), limits, REACH, drive, base)
+    }
+
+    /// The address of Naver post `log_no` of `blog`: its frame.
+    pub fn naver_url(&self, blog: &str, log_no: &str) -> String {
+        format!("http://blog.naver.com:{}/{blog}/{log_no}", self.port)
+    }
+
+    /// How the inner page of Naver post `log_no` of `blog` answers, request
+    /// after request.
+    pub fn naver_post(&self, blog: &str, log_no: &str, answers: Vec<PostAnswer>) {
+        self.lock().posts.insert(
+            format!("naver:{blog}/{log_no}"),
+            Script { answers, served: 0 },
+        );
+    }
+
+    /// How many times the inner page of Naver post `log_no` was asked for.
+    pub fn naver_read(&self, log_no: &str) -> usize {
+        let number = format!("logNo={log_no}&");
+        self.lock()
+            .seen
+            .iter()
+            .filter(|s| s.path == "/PostView.naver" && s.query.contains(&number))
+            .count()
+    }
+
+    /// How the Naver attachment named `name` answers, request after request.
+    pub fn naver_attachment(&self, name: &str, answers: Vec<FileAnswer>) {
+        self.lock()
+            .files
+            .insert(format!("naver:{name}"), Script { answers, served: 0 });
     }
 
     /// The address of Blogger post `path` (`2026/07/2.html`) of `blog`.
@@ -516,6 +593,73 @@ fn respond(state: &Mutex<State>, request: Request<Body>) -> Response {
         };
     }
 
+    if naver::reads(&host) && path != "/PostView.naver" {
+        // The frame around the post: its inner page, and nothing of it.
+        let mut parts = path.split('/').filter(|p| !p.is_empty());
+        let (blog, log_no) = (
+            parts.next().unwrap_or_default(),
+            parts.next().unwrap_or_default(),
+        );
+        let inner = format!("/PostView.naver?blogId={blog}&amp;logNo={log_no}&amp;redirect=Dlog&amp;widgetTypeCall=true&amp;noTrackingCode=true&amp;directAccess=false");
+        return (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/html;charset=UTF-8")],
+            format!(
+                r#"<html><head><title>네이버 블로그</title></head><body><iframe id="mainFrame" name="mainFrame" src="{inner}"></iframe></body></html>"#
+            ),
+        )
+            .into_response();
+    }
+    if naver::reads(&host) {
+        let pairs: HashMap<String, String> = url::form_urlencoded::parse(query.as_bytes())
+            .into_owned()
+            .collect();
+        let log_no = pairs.get("logNo").cloned().unwrap_or_default();
+        let key = format!(
+            "naver:{}/{log_no}",
+            pairs.get("blogId").map(String::as_str).unwrap_or_default(),
+        );
+        return match state.posts.get_mut(&key).and_then(Script::next) {
+            Some(PostAnswer::Naver(files)) => {
+                state.signed += 1;
+                let html = naver_page(state.port, state.signed, &log_no, &files);
+                (
+                    StatusCode::OK,
+                    [(header::CONTENT_TYPE, "text/html;charset=UTF-8")],
+                    html,
+                )
+                    .into_response()
+            }
+            Some(PostAnswer::Page(html)) => (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, "text/html;charset=UTF-8")],
+                html,
+            )
+                .into_response(),
+            Some(PostAnswer::Status(status)) => page(status, 3228),
+            Some(PostAnswer::Files(_)) | None => page(404, 3228),
+        };
+    }
+    if host == naver::FILE_HOST {
+        let name = path.rsplit('/').next().unwrap_or_default();
+        let name = percent_encoding::percent_decode_str(name).decode_utf8_lossy();
+        return match state
+            .files
+            .get_mut(&format!("naver:{name}"))
+            .and_then(Script::next)
+        {
+            Some(FileAnswer::Bytes(bytes)) => octets(Body::from(bytes)),
+            Some(FileAnswer::Streamed(bytes)) => {
+                octets(Body::from_stream(futures::stream::iter(pieces(bytes))))
+            }
+            Some(FileAnswer::Refused) => page(400, 3452),
+            Some(FileAnswer::Page) => page(200, 0),
+            Some(FileAnswer::Status(status)) => page(status, 0),
+            Some(other) => panic!("not a Naver answer: {other:?}"),
+            None => page(400, 3452),
+        };
+    }
+
     if tistory::cdn_host(&host) {
         let id = path.split('/').nth(2).unwrap_or_default().to_owned();
         return match state.files.get_mut(&id).and_then(Script::next) {
@@ -569,9 +713,72 @@ fn respond(state: &Mutex<State>, request: Request<Body>) -> Response {
         )
             .into_response(),
         Some(PostAnswer::Status(status)) => page(status, 1952),
-        None => page(404, 1952),
+        Some(PostAnswer::Naver(_)) | None => page(404, 1952),
     }
 }
+
+/// A Naver post's inner page as Naver writes it (2026-10-03): the body with a
+/// save button per file, the guestbook's CAPTCHA frame, and the `aPostFiles`
+/// list, each address with a new token.
+fn naver_page(port: u16, signed: u64, log_no: &str, files: &[NaverFile]) -> String {
+    let address = |f: &NaverFile| {
+        format!(
+            "http://{}:{port}/open/F{:x}/T{signed}/{}",
+            naver::FILE_HOST,
+            f.name.len(),
+            utf8_percent_encode(&f.name, NON_ALPHANUMERIC)
+        )
+    };
+    let records: Vec<String> = files
+        .iter()
+        .map(|f| {
+            let size = f.size.to_string();
+            // Thousands with commas, as the page writes them.
+            let mut grouped = String::new();
+            for (i, digit) in size.chars().enumerate() {
+                if i > 0 && (size.len() - i) % 3 == 0 {
+                    grouped.push(',');
+                }
+                grouped.push(digit);
+            }
+            let json = |text: &str| serde_json::to_string(text).unwrap();
+            format!(
+                r#"{{"encodedAttachFileName": {name},"encodedAttachFileNameByTruncate": {name},"encodedAttachFileUrl": {url},"encodedAttachFileUrlByMS949": {url},"licenseyn": "T","maliciousCodeYn": "{malicious}","punishType": "{punish}","attachFileSize": "{grouped}","ahfLicenseYn" : "false"}}"#,
+                name = json(&f.name),
+                url = json(&address(f)),
+                malicious = f.malicious,
+                punish = f.punish,
+            )
+        })
+        .collect();
+    // Inside a JavaScript string in single quotes.
+    let list = format!("[{}]", records.join(" , "))
+        .replace('\\', "\\\\")
+        .replace('\'', "\\'");
+    let buttons: String = files
+        .iter()
+        .map(|f| {
+            format!(
+                r#"<div class="se-module se-module-file"><span class="se-file-name">{}</span><a href="{}" class="se-file-save-button __se_link" role="button" target="_blank">저장</a></div>"#,
+                escape(&f.name),
+                escape(&address(f))
+            )
+        })
+        .collect();
+    format!(
+        r#"<!DOCTYPE html><html><body><div id="postListBody"><div id="post-view{log_no}"><div class="se-main-container"><p>자막이에요.</p>{buttons}</div>
+<span class="se_publishDate pcol2">{NAVER_PUBLISHED}</span>
+</div><div class="frame_wrap"><iframe id="captchalayeredframe" src="about:blank"></iframe></div></div>
+<script>
+var aPostFiles = [];
+		aPostFiles[1] = JSON.parse('{list}'.replace(/\\'/g, ''));
+	aPostBaseInfo[1] = "{log_no}|0|1|1|339|0|false|4|MYLOG";
+</script></body></html>"#
+    )
+}
+
+/// The date every Naver post shows.
+pub const NAVER_PUBLISHED: &str = "2026. 6. 23. 5:19";
 
 fn escape(text: &str) -> String {
     text.replace('&', "&amp;")
@@ -1079,7 +1286,9 @@ mod tests {
         for s in &specs {
             server.file(&s.id, vec![FileAnswer::Bytes(SRT.to_vec())]);
         }
-        let source = Source::Tistory(server.source_spaced(Duration::from_millis(150)));
+        // The server sees each request a little after it is sent, by an
+        // amount a loaded machine can stretch: a wide margin under the spacing.
+        let source = Source::Tistory(server.source_spaced(Duration::from_millis(300)));
         let post = Url::parse(&server.post_url("blog", 1)).unwrap();
         for file in files(&source, &post).await {
             bytes_of(&source, &post, &file).await;
@@ -1093,7 +1302,7 @@ mod tests {
         assert_eq!(cdn.len(), 3);
         assert!(cdn
             .windows(2)
-            .all(|w| w[1] - w[0] >= Duration::from_millis(140)));
+            .all(|w| w[1] - w[0] >= Duration::from_millis(200)));
     }
 
     #[tokio::test]
@@ -1104,7 +1313,7 @@ mod tests {
             ..Limits::default()
         };
         let drive = server.drive_with(Limits {
-            spacing: Duration::from_millis(150),
+            spacing: Duration::from_millis(300),
             ..Limits::default()
         });
         let tistory = Source::Tistory(server.source_over(unspaced, drive.clone()));
@@ -1145,7 +1354,7 @@ mod tests {
         assert_eq!(drive.len(), 4);
         assert!(drive
             .windows(2)
-            .all(|w| w[1] - w[0] >= Duration::from_millis(140)));
+            .all(|w| w[1] - w[0] >= Duration::from_millis(200)));
     }
 
     #[tokio::test]
@@ -1172,5 +1381,227 @@ mod tests {
                 "{cookie}"
             );
         }
+    }
+
+    /// 공룡이's post of 네죽사 8화 (2026-10-03): a ZIP of 1~8화 and the ASS
+    /// of 8화, inside the inner frame.
+    fn elaina(server: &SourceServer) -> (Url, Vec<u8>, Vec<u8>) {
+        let zip = verify::zip_of(&[("네죽사 08.ass", crate::fake::ass("08").as_slice())]);
+        let ass = crate::fake::ass("Kimi ga Shinu 08");
+        server.naver_post(
+            "elainalove1017",
+            "224324105274",
+            vec![PostAnswer::Naver(vec![
+                naver_file("네죽사 1~8화 자막.zip", zip.len()),
+                naver_file(ELAINA_ASS, ass.len()),
+            ])],
+        );
+        (
+            Url::parse(&server.naver_url("elainalove1017", "224324105274")).unwrap(),
+            zip,
+            ass,
+        )
+    }
+
+    const ELAINA_ASS: &str =
+        "[SubsPlease] Kimi ga Shinu made Koi wo Shitai - 08 (1080p) [F3B053C5].ass";
+
+    #[tokio::test]
+    async fn a_naver_posts_attachments_in_its_inner_frame_are_received() {
+        let server = SourceServer::start().await;
+        let (post, zip, ass) = elaina(&server);
+        server.naver_attachment(ELAINA_ASS, vec![FileAnswer::Bytes(ass.clone())]);
+        server.naver_attachment(
+            "네죽사 1~8화 자막.zip",
+            vec![FileAnswer::Bytes(zip.clone())],
+        );
+        let source = Source::Naver(server.naver());
+
+        let Opened::Files(files) = source.open(&post, "8").await.unwrap() else {
+            panic!("files");
+        };
+        let names: Vec<&str> = files.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, ["네죽사 1~8화 자막.zip", ELAINA_ASS]);
+        assert_eq!(
+            files[1].snapshot.entries(),
+            [
+                (naver::PUBLISH_DATE.to_owned(), NAVER_PUBLISHED.to_owned()),
+                (naver::ATTACH_FILE_SIZE.to_owned(), ass.len().to_string()),
+            ]
+        );
+        for (file, bytes) in files.iter().zip([zip, ass]) {
+            let (expected, got) = bytes_of(&source, &post, file).await;
+            assert_eq!((expected, got), (Some(bytes.len() as u64), bytes));
+        }
+        // The inner page was read, never the frame around it; nothing carried
+        // a cookie or a `Referer`.
+        let seen = server.seen();
+        assert_eq!(server.naver_read("224324105274"), 1);
+        assert!(seen
+            .iter()
+            .all(|s| s.path != "/elainalove1017/224324105274"));
+        assert_eq!(
+            seen.iter().filter(|s| s.host == naver::FILE_HOST).count(),
+            2
+        );
+        assert!(seen.iter().all(|s| !s.cookie && !s.referer));
+
+        // Episode 9: neither file.
+        let failure = source.open(&post, "9").await.unwrap_err();
+        assert_eq!(failure.kind, FailureKind::Changed);
+        assert!(failure.reason.contains("9화"));
+    }
+
+    #[tokio::test]
+    async fn a_refused_naver_address_is_read_again_once_then_expired_or_missing() {
+        let server = SourceServer::start().await;
+        let (post, _, ass) = elaina(&server);
+        let source = Source::Naver(server.naver());
+        let Opened::Files(files) = source.open(&post, "8").await.unwrap() else {
+            panic!("files");
+        };
+        let file = &files[1];
+
+        // Refused once: the post is read again, and the new address works.
+        server.naver_attachment(
+            ELAINA_ASS,
+            vec![FileAnswer::Refused, FileAnswer::Bytes(ass.clone())],
+        );
+        let (_, bytes) = bytes_of(&source, &post, file).await;
+        assert_eq!(bytes, ass);
+        assert_eq!(server.naver_read("224324105274"), 2);
+        let tokens: Vec<String> = server
+            .seen()
+            .iter()
+            .filter(|s| s.host == naver::FILE_HOST)
+            .map(|s| s.path.split('/').nth(3).unwrap().to_owned())
+            .collect();
+        assert_eq!(tokens.len(), 2);
+        assert_ne!(tokens[0], tokens[1], "the second address is the new one");
+
+        // Refused again: expired.
+        server.naver_attachment(ELAINA_ASS, vec![FileAnswer::Refused]);
+        let failure = source.fetch(&post, file).await.err().unwrap();
+        assert_eq!(failure.kind, FailureKind::Expired);
+        assert_eq!(failure.status, Some(400));
+        assert!(failure.reason.contains("다시 읽어"));
+        assert!(!failure.reason.contains("open") && !failure.reason.contains("T1"));
+
+        // Gone from the post read again: missing.
+        server.naver_post(
+            "elainalove1017",
+            "224324105274",
+            vec![PostAnswer::Naver(vec![naver_file(
+                "네죽사 1~8화 자막.zip",
+                10,
+            )])],
+        );
+        let failure = source.fetch(&post, file).await.err().unwrap();
+        assert_eq!(failure.kind, FailureKind::Missing);
+        assert!(failure.reason.contains("파일이 없어요"));
+    }
+
+    #[tokio::test]
+    async fn a_flagged_naver_file_is_never_asked_for() {
+        let server = SourceServer::start().await;
+        let mut flagged = naver_file("Title 08.ass", 100);
+        flagged.malicious = true;
+        let mut punished = naver_file("Title 08.smi", 100);
+        punished.punish = "2".to_owned();
+        server.naver_post(
+            "blog",
+            "1",
+            vec![PostAnswer::Naver(vec![flagged, punished])],
+        );
+        let post = Url::parse(&server.naver_url("blog", "1")).unwrap();
+        let source = Source::Naver(server.naver());
+        let Opened::Files(files) = source.open(&post, "8").await.unwrap() else {
+            panic!("files");
+        };
+        let failure = source.fetch(&post, &files[0]).await.err().unwrap();
+        assert_eq!(failure.kind, FailureKind::Missing);
+        assert!(failure.reason.contains("악성 코드"));
+        let failure = source.fetch(&post, &files[1]).await.err().unwrap();
+        assert_eq!(failure.kind, FailureKind::Missing);
+        assert!(failure.reason.contains("제한"));
+        assert!(server.seen().iter().all(|s| s.host != naver::FILE_HOST));
+        assert_eq!(server.naver_read("1"), 1);
+    }
+
+    #[tokio::test]
+    async fn a_naver_answer_is_held_to_the_size_the_post_gave() {
+        let server = SourceServer::start().await;
+        server.naver_post(
+            "blog",
+            "2",
+            vec![PostAnswer::Naver(vec![
+                naver_file("Title 03.srt", SRT.len() + 1),
+                naver_file("Title 04.srt", SRT.len()),
+            ])],
+        );
+        server.naver_attachment("Title 03.srt", vec![FileAnswer::Bytes(SRT.to_vec())]);
+        server.naver_attachment("Title 04.srt", vec![FileAnswer::Streamed(SRT.to_vec())]);
+        let post = Url::parse(&server.naver_url("blog", "2")).unwrap();
+        let source = Source::Naver(server.naver());
+        let open = |episode: &'static str| {
+            let source = source.clone();
+            let post = post.clone();
+            async move {
+                match source.open(&post, episode).await.unwrap() {
+                    Opened::Files(files) => files,
+                    other => panic!("files: {other:?}"),
+                }
+            }
+        };
+        // Another length announced: not the file.
+        let file = &open("3").await[0];
+        let failure = source.fetch(&post, file).await.err().unwrap();
+        assert_eq!(failure.kind, FailureKind::NotAFile);
+        assert!(failure.reason.contains(&format!("{}바이트", SRT.len() + 1)));
+        // No length announced: the post's is the one the bytes are held to.
+        let file = &open("4").await[0];
+        let (expected, bytes) = bytes_of(&source, &post, file).await;
+        assert_eq!((expected, bytes), (Some(SRT.len() as u64), SRT.to_vec()));
+    }
+
+    #[tokio::test]
+    async fn a_page_instead_of_the_naver_post_is_a_classified_failure() {
+        let server = SourceServer::start().await;
+        let source = Source::Naver(server.naver());
+        let cases = [
+            (
+                PostAnswer::Page(
+                    r#"<html><body><form><img id="captchaimg" src="x"><p>자동입력 방지 문자를 입력해 주세요</p></form></body></html>"#
+                        .to_owned(),
+                ),
+                FailureKind::Changed,
+                "CAPTCHA",
+            ),
+            (
+                PostAnswer::Page("<html><body>점검 중이에요</body></html>".to_owned()),
+                FailureKind::Changed,
+                "다른 페이지",
+            ),
+            (PostAnswer::Status(404), FailureKind::Missing, "없어요"),
+            (PostAnswer::Status(503), FailureKind::Network, "주지 못했어요"),
+        ];
+        let post = Url::parse(&server.naver_url("blog", "3")).unwrap();
+        for (answer, kind, says) in cases {
+            server.naver_post("blog", "3", vec![answer.clone()]);
+            let failure = source.open(&post, "1").await.unwrap_err();
+            assert_eq!(failure.kind, kind, "{answer:?}");
+            assert!(
+                failure.reason.contains(says),
+                "{answer:?}: {}",
+                failure.reason
+            );
+        }
+        // An address of no post is asked for nothing.
+        let home = Url::parse(&format!("http://blog.naver.com:{}/blog", server.port)).unwrap();
+        let before = server.seen().len();
+        let failure = source.open(&home, "1").await.unwrap_err();
+        assert_eq!(failure.kind, FailureKind::Changed);
+        assert_eq!(server.seen().len(), before);
+        assert!(server.seen().iter().all(|s| s.host != naver::FILE_HOST));
     }
 }
