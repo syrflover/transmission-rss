@@ -37,7 +37,7 @@
   화살표·Home·End는 초점만 옮기고, Enter·Space·클릭으로 활성화해야 탭(과 주소)이 바뀌어요.
 - `채널` 탭은 채널마다 가린 URL(자물쇠 표시와 쿼리 이름별 `비밀`·`공개` 칩), 기본 저장 폴더, 제외 조건, 지난 회차 검색 형식을 보여줘요. 추가·수정·삭제는 모두 제자리에서 해요.
   처음에는 채널 저장소에 이름이 없어서 카드 제목이 URL의 호스트였고, 뒤에 선택 이름을 더했어요(아래 "worker를 합친 뒤 확인한 것").
-- API는 `src/web/channels_api.rs`예요.
+- API는 `crates/trss-web/src/channels_api.rs`예요.
 
   | 호출 | 요청 | 응답 |
   | --- | --- | --- |
@@ -56,7 +56,7 @@
   4. 비밀 표시를 풀면서 값을 비워 두면 저장된 값이 유지되고 그때부터 보여요. 비밀 값을 빈 값으로 만들려면 쿼리 항목을 URL에서 지워야 해요.
   5. 병합은 클라이언트가 본 버전과 저장된 버전이 같을 때만 해요(다르면 병합 전에 충돌). 저장소가 쓸 때 버전을 다시 확인해요.
 - 채널 삭제는 `ChannelStore::delete_channel(id, version, rules)`예요. 채널과 규칙을 한 트랜잭션으로 지우고, 확인 문장에 쓴 규칙 수가 지금과 다르면(확인 뒤에 규칙이 생겼으면) 거부해요. 받은 파일과 수집 이력은 건드리지 않아요.
-- DB 마이그레이션은 더하지 않았고, `src/store/channels/`에는 새 파일 `delete.rs`·`delete_tests.rs`와 `mod delete;` 한 줄만 더했어요.
+- DB 마이그레이션은 더하지 않았고, `crates/trss-collect/src/store/channels/`에는 새 파일 `delete.rs`·`delete_tests.rs`와 `mod delete;` 한 줄만 더했어요.
 - 충돌하면 입력을 그대로 두고 지금 저장된 값을 옆에 보여주며, 다음 저장은 그 버전으로 보내요.
 - `web/src/components/ui/`에 shadcn CLI로 `input`·`textarea`·`label`을 더했어요. CLI가 `cn`을 npm `cn` 패키지에서 가져오게 써서, 이 세 파일의 import만 프로젝트의 `@/lib/utils`로 고쳤고 `package.json`은 되돌렸어요.
 
@@ -99,7 +99,7 @@
 
 | 완료 기준 | 근거 |
 | --- | --- |
-| 비밀을 비운 채 수정 → 다음 worker 처리가 성공 | 통합 테스트 `a_save_with_the_secret_left_blank_still_fetches_the_feed_with_the_stored_secret`(`tests/channel_edit_then_cycle.rs`)가 실제 `POST`·`PUT /api/channels`로 채널을 만들고, 주소의 비밀을 비운 채(저장 폴더와 이름만 바꿔) 저장한 뒤, 가짜 Transmission과 가짜 피드 서버를 두고 worker 처리 한 번을 돌려요. 피드 서버가 받은 요청은 정확히 `feed-a?filter=1080p&token=<저장한 토큰>` 하나이고 빈 값도 `***`도 아니었어요. 처리는 실패 없이 항목을 추가했고 수정한 저장 폴더를 썼어요. 저장·생성 응답과 수집 이력에는 토큰이 없어요. 병합을 일부러 끄면 이 테스트가 실패하는 것도 확인했어요. |
+| 비밀을 비운 채 수정 → 다음 worker 처리가 성공 | 통합 테스트 `a_save_with_the_secret_left_blank_still_fetches_the_feed_with_the_stored_secret`(`crates/trss-worker/tests/channel_edit_then_cycle.rs`)가 실제 `POST`·`PUT /api/channels`로 채널을 만들고, 주소의 비밀을 비운 채(저장 폴더와 이름만 바꿔) 저장한 뒤, 가짜 Transmission과 가짜 피드 서버를 두고 worker 처리 한 번을 돌려요. 피드 서버가 받은 요청은 정확히 `feed-a?filter=1080p&token=<저장한 토큰>` 하나이고 빈 값도 `***`도 아니었어요. 처리는 실패 없이 항목을 추가했고 수정한 저장 폴더를 썼어요. 저장·생성 응답과 수집 이력에는 토큰이 없어요. 병합을 일부러 끄면 이 테스트가 실패하는 것도 확인했어요. |
 | 제외 조건을 더해 저장 → 다음 worker 처리가 써요 | 통합 테스트 `an_exclude_added_through_the_api_is_used_by_the_next_cycle`이 `PUT`으로 제외 조건을 더한 뒤 worker 처리를 돌려요. 제외한 두 항목(`(720p)`, `[Batch]`)이 이력에 `제외`로 남고 Transmission에는 추가되지 않았어요. 제외 조건이 없는 같은 채널·규칙은 720p 항목을 추가하는 대조 처리도 같은 테스트에서 확인했어요. |
 
 - 규칙은 API가 아직 없어서 저장소에 바로 넣었어요. 채널은 전부 HTTP API로 다뤘어요.

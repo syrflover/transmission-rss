@@ -37,7 +37,7 @@ worker의 실제 처리와 웹의 미리보기가 같은 판정을 쓰도록, �
 
 ## 결과
 
-채널 제외 조건·규칙 일치·첫 일치 선택·겹침 알림·저장 위치 계산을 공통 라이브러리의 `rss` 모듈(`src/rss/`)로 옮기고, `regex: true`를 실제 정규식으로 판정하게 했어요.
+채널 제외 조건·규칙 일치·첫 일치 선택·겹침 알림·저장 위치 계산을 공통 라이브러리의 `rss` 모듈(`crates/trss-collect/src/rss/`)로 옮기고, `regex: true`를 실제 정규식으로 판정하게 했어요.
 `transmission-rss` 실행 파일은 `rss::legacy::collect_items`를 거쳐 이 모듈을 써요.
 
 - 판정은 `ChannelEvaluator::new(ChannelSpec)`로 정규식을 한 번 컴파일한 뒤 `evaluate(title)`로 항목마다 돌려요.
@@ -51,8 +51,8 @@ worker의 실제 처리와 웹의 미리보기가 같은 판정을 쓰도록, �
 
 | 확인 | 명령 | 결과 |
 | --- | --- | --- |
-| 완료 기준 표의 각 행을 격리된 단위 테스트로 확인(`src/rss/evaluate.rs`) | `cargo test` | 16개 통과 |
-| 기존 로직을 그대로 옮긴 기준 구현과 새 모듈의 선택 결과 비교(`tests/legacy_comparison.rs`, 표본 `tests/fixtures/legacy_channels.yml`·`sample_feed.xml`) | `cargo test` | 2개 통과. 항목 링크·저장 위치·회차 시작값이 같음 |
+| 완료 기준 표의 각 행을 격리된 단위 테스트로 확인(`crates/trss-collect/src/rss/evaluate.rs`) | `cargo test` | 16개 통과 |
+| 기존 로직을 그대로 옮긴 기준 구현과 새 모듈의 선택 결과 비교(`tests/legacy_comparison.rs`, 표본 `crates/trss-import/tests/fixtures/legacy_channels.yml`·`sample_feed.xml`) | `cargo test` | 2개 통과. 항목 링크·저장 위치·회차 시작값이 같음 |
 | 빌드와 정적 검사 | `cargo build`, `cargo clippy --all-targets` | 통과, 경고 없음 |
 
 - 완료 기준 표의 행과 테스트의 대응은 다음과 같아요.

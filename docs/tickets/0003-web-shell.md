@@ -31,7 +31,7 @@
 
 ### 구현한 것
 
-- `transmission-rss` 패키지에 `trss-web` 바이너리(`src/bin/trss-web.rs`)와 라이브러리 모듈 `src/web/`를 더했어요.
+- `transmission-rss` 패키지에 `trss-web` 바이너리(`crates/trss-web/src/main.rs`)와 라이브러리 모듈 `crates/trss-web/src/`를 더했어요.
   axum이 `/api/health`(JSON)와 프런트엔드 정적 빌드를 함께 제공해요.
   `/api/*`와 `/assets/*`의 없는 경로는 404이고, 나머지 없는 경로는 `index.html`로 돌려 클라이언트 경로를 새로고침해도 열려요.
   기존 `transmission-rss` 바이너리(`src/main.rs`)는 바꾸지 않았어요.

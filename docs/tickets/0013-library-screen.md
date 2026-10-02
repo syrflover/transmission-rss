@@ -38,7 +38,7 @@
 
 ### 구현한 것
 
-- 읽기 API `GET /api/library/works?sort=&filter=&q=&after=&limit=`(`src/web/library_api.rs`, 정렬·필터·검색·커서는 `src/store/library/page.rs`, 작품별 요약은 `src/store/library/overview.rs`)는 한 페이지를 `{ items, next, total, library_count }`로 답해요. `items`의 작품은 ID, 작품명(폴더 이름), `missing`, 감시 폴더, 최신 시즌 번호, 최신 시즌의 영상·자막 회차 범위, `subtitle_coverage`(`all`·`some`·`none`), `subtitle_check_needed`, 작품 추가 시각, 모든 시즌에서 가장 최근에 알려진 영상·자막 추가 시각(모르면 `null`)이에요. `total`은 필터·검색에 맞는 작품 수(`작품 N편`), `library_count`는 라이브러리 전체 작품 수(빈 라이브러리와 조건에 맞는 작품이 없는 경우를 가려요)예요.
+- 읽기 API `GET /api/library/works?sort=&filter=&q=&after=&limit=`(`crates/trss-web/src/library_api.rs`, 정렬·필터·검색·커서는 `crates/trss-library/src/store/library/page.rs`, 작품별 요약은 `crates/trss-library/src/store/library/overview.rs`)는 한 페이지를 `{ items, next, total, library_count }`로 답해요. `items`의 작품은 ID, 작품명(폴더 이름), `missing`, 감시 폴더, 최신 시즌 번호, 최신 시즌의 영상·자막 회차 범위, `subtitle_coverage`(`all`·`some`·`none`), `subtitle_check_needed`, 작품 추가 시각, 모든 시즌에서 가장 최근에 알려진 영상·자막 추가 시각(모르면 `null`)이에요. `total`은 필터·검색에 맞는 작품 수(`작품 N편`), `library_count`는 라이브러리 전체 작품 수(빈 라이브러리와 조건에 맞는 작품이 없는 경우를 가려요)예요.
   - `sort`는 `title`·`year`·`added`·`video`·`subtitle`(기본 `subtitle`), `filter`는 `all`·`airing`·`complete`·`partial`·`none`·`check`(기본 `all`), `limit`은 1–200(기본 60)이에요. 모르는 정렬·필터, 범위를 벗어난 `limit`, 알아볼 수 없는 커서, 다른 정렬로 만든 커서는 400과 한국어 한 문장이에요.
   - 정렬은 키 `(정렬의 시각 최신순·미상은 알려진 시각 뒤, 제목, 작품 ID)`예요. 제목은 NFC로 맞추고 대소문자를 가린 뒤 코드 포인트 순으로 견줘서(숫자 → 라틴 → 한글) 브라우저의 `Intl.Collator`와 구두점·악센트 순서가 다를 수 있어요. `title`과 `year`는 시각이 없어서 제목순이에요(방영연도를 아는 작품이 아직 없어요).
   - 커서는 마지막으로 보낸 항목의 키를 16진수로 쓴 불투명한 값이에요(정렬 이름 포함). 다음 페이지는 그 키 뒤의 작품이라, 페이지를 받는 사이 작품이 더해지거나 빠져도 이미 본 항목이 다시 나오지 않아요. 키가 앞선 자리에 새로 생긴 작품은 이미 지나온 자리라 보이지 않고, 뒤에 생긴 작품은 나와요. 페이지 사이에 한 작품의 정렬 시각이 바뀌면(새 파일) 그 작품만 중복되거나 빠질 수 있고, 화면은 ID로 중복을 걸러요.
@@ -55,7 +55,7 @@
 ### 검증한 것
 
 - `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`(588개)가 통과했고, 웹은 `npm run typecheck`와 `npm run build`가 통과했어요.
-- Rust 시험(`page.rs`, `library_api/tests.rs`, `tests/library_watch.rs`): 정렬 다섯 가지 모두에서 같은 시각·미상·같은 제목이 섞인 자료를 페이지 크기 1·2·5·7·22·23·24로 끝까지 이어 받았을 때 한 번에 받은 순서와 같고 중복·누락이 없어요. 시각 정렬은 최신순·미상 뒤·제목 다음 ID예요. 페이지 사이에 앞뒤로 작품이 더해지거나 커서가 가리키던 작품이 빠져도 이미 본 항목이 나오지 않아요(단위·API). 필터 여섯 가지의 정의와 `total`·`library_count`, 검색(대소문자, NFC로 친 질의가 NFD 이름에 맞음, 대괄호), 커서 왕복과 알아볼 수 없는 값, 잘못된 `sort`·`filter`·`limit`·`after`와 다른 정렬의 커서가 400과 한국어 문장인지, 빈 라이브러리를 시험해요. 130개 작품을 `limit=50`으로 다섯 정렬 모두 3페이지에 걸쳐 중복·누락 없이 받아요.
+- Rust 시험(`page.rs`, `library_api/tests.rs`, `crates/trss-worker/tests/library_watch.rs`): 정렬 다섯 가지 모두에서 같은 시각·미상·같은 제목이 섞인 자료를 페이지 크기 1·2·5·7·22·23·24로 끝까지 이어 받았을 때 한 번에 받은 순서와 같고 중복·누락이 없어요. 시각 정렬은 최신순·미상 뒤·제목 다음 ID예요. 페이지 사이에 앞뒤로 작품이 더해지거나 커서가 가리키던 작품이 빠져도 이미 본 항목이 나오지 않아요(단위·API). 필터 여섯 가지의 정의와 `total`·`library_count`, 검색(대소문자, NFC로 친 질의가 NFD 이름에 맞음, 대괄호), 커서 왕복과 알아볼 수 없는 값, 잘못된 `sort`·`filter`·`limit`·`after`와 다른 정렬의 커서가 400과 한국어 문장인지, 빈 라이브러리를 시험해요. 130개 작품을 `limit=50`으로 다섯 정렬 모두 3페이지에 걸쳐 중복·누락 없이 받아요.
 - 정렬 기대 순서를 서버 코드와 따로 구했어요: 스크래치 DB(520개 작품·11 384개 파일, 영상·자막 시각이 알려진 것·같은 값·미상이 섞이고 폴더 없음 2개)를 SQLite로 직접 읽어 정렬 키를 파이썬으로 계산한 520개 순서와, API를 페이지 크기 60과 7로 끝까지 따라가 얻은 순서가 다섯 정렬 모두 같아요. 필터별 개수는 전체 520, 다 갖춤 212, 일부 180, 없음 126, 확인 필요 54, 방영 중 0이고 처음 구현이 기록한 값과 같아요.
 - 시간: 페이지 하나(60개)를 답하는 데 디버그 빌드 약 30 ms, 릴리스 빌드 5–9 ms(`curl`, 520개 작품, 로컬 `trss-web`)예요. 520개 전체를 한 번에 받던 처음 구현은 디버그 44 ms, 릴리스 11 ms였어요.
 - 브라우저(헤드리스 Chromium을 DevTools 프로토콜로 구동, 로컬 `trss-web`, 위 스크래치 DB, 2026-10-01. 이 환경의 Browser 패널은 가려져 있어 `IntersectionObserver`·`requestAnimationFrame`이 돌지 않아서 쓰지 않았어요):
@@ -79,13 +79,13 @@
 - 실제 휴대폰·터치·가상 키보드, 키보드 조작과 초점 표시, 라이트·다크 모드마다의 글자 대비 측정은 하지 않았어요.
 - 자동 화면 시험은 없어요(이 저장소에 웹 시험 도구가 없어요). 화면 동작은 위 브라우저 확인으로만 봤고 커서·정렬·필터·검색은 Rust 시험과 파이썬 계산으로 따로 닫았어요.
 - 감시 폴더를 해제·다시 확인한 뒤 작품 상세 캐시가 버려지는 것은 코드로만 바꿨고 브라우저에서 해 보지 않았어요(`forgetLibrary`는 두 접두사를 지우는 한 줄이에요).
-- 영상·자막 추가 시각은 시험 자료의 DB 값을 직접 바꿔 섞었어요(worker의 감시 폴더 확인이 만든 시각은 `tests/library_watch.rs`로 확인했어요). 실제 NAS 폴더나 운영 DB로는 보지 않았어요.
+- 영상·자막 추가 시각은 시험 자료의 DB 값을 직접 바꿔 섞었어요(worker의 감시 폴더 확인이 만든 시각은 `crates/trss-worker/tests/library_watch.rs`로 확인했어요). 실제 NAS 폴더나 운영 DB로는 보지 않았어요.
 
 ### 남은 일
 
 - 위 `검증하지 못한 것`의 첫 항목(520개 스크롤)을 실제 기기에서 확인하면 이 티켓을 `완료`로 바꿔요.
 - 제목순은 NFC·소문자·코드 포인트 순이라 `Intl.Collator("ko")`였던 처음 구현과 구두점·악센트가 섞인 이름의 순서가 조금 다를 수 있어요. 한글·영문·숫자 이름은 같은 순서예요. 언어 규칙의 정렬이 필요하면 SQL 정렬 키나 collation 의존성을 정해야 해요.
 - 폴더가 없는 작품의 자막 줄 문구 `자막 확인 불가`는 명세에 정해진 말이 아니라 구현하며 정했어요. 바꾸고 싶으면 `web/src/screens/library/model.ts`의 `subtitleLine`을 고쳐요.
-- 방영연도·방영 중·원제·영문명 검색은 [0017](0017-season-info.md)이 `방영연도순`·`방영 중`·검색에 채웠어요([결과](0017-season-info.md#결과)). 서버 `src/store/library/page.rs`의 `Sort::time_of`·`Filter::admits`와 검색이 그 자리예요.
+- 방영연도·방영 중·원제·영문명 검색은 [0017](0017-season-info.md)이 `방영연도순`·`방영 중`·검색에 채웠어요([결과](0017-season-info.md#결과)). 서버 `crates/trss-library/src/store/library/page.rs`의 `Sort::time_of`·`Filter::admits`와 검색이 그 자리예요.
 - 요청마다 전체 작품의 요약을 계산해요. 작품이 수천 개로 늘어 페이지 응답이 느려지면 요약을 SQL로 옮기거나 쓰기 때 갱신하는 표를 둬요.
 - 할 일 배지는 결과 목표 3에서 붙여요.

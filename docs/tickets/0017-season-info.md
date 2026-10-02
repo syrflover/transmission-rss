@@ -36,9 +36,9 @@
 
 ### 구현한 것
 
-- 저장(`src/store/seasons/`, 마이그레이션 13): AniList 항목(`anilist_entries`: 제목 셋, 형식, 상태, 회차 수, 시작·종료일, 제작사·장르·방영 일정·속편, 설명, 받은 때), 시즌마다의 연결 상태(`season_info`: 버전, `auto`/`user`, 검색 작업, 메모), 순서 있는 연결(`season_entries`)이에요. 연결은 작품 ID에 묶여서 시즌 폴더가 사라졌다 돌아와도 남아요. 감시 폴더를 등록 해제해도 작품을 떼어 둘 뿐이라([0012](0012-watch-folders-discovery.md)) 연결이 남고, 떼어 둔 작품의 시즌은 화면·검색·하루 갱신에서 빠졌다가 같은 경로를 다시 등록하면 그대로 돌아와요.
-- 서비스와 대기열(`src/seasons/`, `trss-worker`): 첫 시즌의 검색 작업은 표지와 같은 `title.rs` 판정(정규화한 정확히 같은 제목 하나, 검색을 끝까지 읽음)으로 항목을 `자동`으로 이어요. 방영 전·방영 중 항목은 하루가 지나면 다시 받고, 끝난 항목은 `정보 다시 받기`로만 받아요. 요청은 표지와 같은 `anilist_pace`(2초 간격, `429` 대기)를 쓰고, 대기열은 따로 잠금(`<DB>.seasons.lock`)을 잡아요. 연결마다 버전이 있어 오래된 버전은 `409`와 지금 상태를 받고, 늦게 끝난 자동 결과는 버려져요. 검색 결과(항목 저장, 자동 연결, 메모)를 DB에 적지 못하면 AniList 실패와 같이 다음 재시도 간격만큼 미루고, 갱신한 항목을 적지 못하면 1시간 뒤로 미뤄요. 미루는 기록마저 실패하면 대기열이 한 번 쉬어요. 같은 일을 곧바로 다시 잡아 AniList에 거듭 묻지 않아요.
-- 웹 API(`src/web/seasons_api.rs`): `info`·`search`·`links`·`auto`·`refresh`와 작품 상세의 시즌별 `info`·작품의 `native_title`·회차의 `air_at`. 줄거리는 서버가 글자만 남겨 문단 배열로 보내요(`src/seasons/describe.rs`: `<br>`는 줄바꿈, `<p>`는 문단, 나머지 태그는 지우고 안의 글자는 남기며, 문자 참조는 한 번만 풀어요).
+- 저장(`crates/trss-library/src/store/seasons/`, 마이그레이션 13): AniList 항목(`anilist_entries`: 제목 셋, 형식, 상태, 회차 수, 시작·종료일, 제작사·장르·방영 일정·속편, 설명, 받은 때), 시즌마다의 연결 상태(`season_info`: 버전, `auto`/`user`, 검색 작업, 메모), 순서 있는 연결(`season_entries`)이에요. 연결은 작품 ID에 묶여서 시즌 폴더가 사라졌다 돌아와도 남아요. 감시 폴더를 등록 해제해도 작품을 떼어 둘 뿐이라([0012](0012-watch-folders-discovery.md)) 연결이 남고, 떼어 둔 작품의 시즌은 화면·검색·하루 갱신에서 빠졌다가 같은 경로를 다시 등록하면 그대로 돌아와요.
+- 서비스와 대기열(`crates/trss-library/src/seasons/`, `trss-worker`): 첫 시즌의 검색 작업은 표지와 같은 `title.rs` 판정(정규화한 정확히 같은 제목 하나, 검색을 끝까지 읽음)으로 항목을 `자동`으로 이어요. 방영 전·방영 중 항목은 하루가 지나면 다시 받고, 끝난 항목은 `정보 다시 받기`로만 받아요. 요청은 표지와 같은 `anilist_pace`(2초 간격, `429` 대기)를 쓰고, 대기열은 따로 잠금(`<DB>.seasons.lock`)을 잡아요. 연결마다 버전이 있어 오래된 버전은 `409`와 지금 상태를 받고, 늦게 끝난 자동 결과는 버려져요. 검색 결과(항목 저장, 자동 연결, 메모)를 DB에 적지 못하면 AniList 실패와 같이 다음 재시도 간격만큼 미루고, 갱신한 항목을 적지 못하면 1시간 뒤로 미뤄요. 미루는 기록마저 실패하면 대기열이 한 번 쉬어요. 같은 일을 곧바로 다시 잡아 AniList에 거듭 묻지 않아요.
+- 웹 API(`crates/trss-web/src/seasons_api.rs`): `info`·`search`·`links`·`auto`·`refresh`와 작품 상세의 시즌별 `info`·작품의 `native_title`·회차의 `air_at`. 줄거리는 서버가 글자만 남겨 문단 배열로 보내요(`crates/trss-library/src/seasons/describe.rs`: `<br>`는 줄바꿈, `<p>`는 문단, 나머지 태그는 지우고 안의 글자는 남기며, 문자 참조는 한 번만 풀어요).
 - 합쳐 보이는 값: 방영은 첫 항목의 시작부터 마지막 항목의 끝까지(방영 중 항목이 있으면 `방영 중`), 분량은 합(미상이 하나면 미상), 제작사는 애니메이션 제작사로 표시된 주 제작사, 제작사·장르는 순서를 지킨 합집합이에요. 머리의 원제는 가장 앞 시즌 첫 항목의 원제예요.
 - 라이브러리: `방영연도순`(최신 로컬 시즌의 첫 항목 시작 연도 내림차순, 미상은 뒤), `방영 중`(최신 로컬 시즌에 `RELEASING` 항목), 검색(연결한 항목의 원제·영문명·로마자 제목도 찾아요).
 - 화면: 시즌 정보 칸(방영·분량·제작사·장르, 컨테이너 너비에서 네 칸/두 칸), 제목 줄의 `자동` 표시·`AniList` 링크·`연결 바꾸기`, 속편 제안(`이 항목이 맞아요`·`다른 항목 고르기`), 연결 대화상자(검색, 더하기, 빼기, 순서, 연결 끊기, `자동으로 다시 찾기`, `정보 다시 받기`), `작품 정보` 카드의 줄거리(글자 노드로만), 머리의 원제, 회차 줄의 방영일.
@@ -58,7 +58,7 @@
 ### 검증한 것
 
 - `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`(702개 통과)와 웹 `npm run typecheck`, `npm run build`가 통과했어요.
-- 시험은 가짜 AniList(`src/artwork/fake.rs`)와 손으로 옮기는 시계(`AtomicI64`)로만 돌아 실제 네트워크에 나가지 않아요. 완료 기준의 행과 시험:
+- 시험은 가짜 AniList(`crates/trss-anilist/src/fake.rs`)와 손으로 옮기는 시계(`AtomicI64`)로만 돌아 실제 네트워크에 나가지 않아요. 완료 기준의 행과 시험:
   - 유일한 제목 `Lycoris Recoil`: `one_exact_title_links_the_first_season_as_auto_with_its_values`, `the_title_is_compared_the_way_the_cover_does`(표지와 같은 판정).
   - 같은 제목 후보가 둘 / 끝까지 읽지 못함: `a_second_candidate_with_the_same_title_links_nothing_and_a_note_says_why`, `a_search_that_was_not_read_to_its_end_links_nothing`.
   - 다음 시즌의 속편 제안과 확인: `the_next_season_is_offered_the_sequels_and_linked_only_when_the_user_confirms`, `the_next_season_shows_the_sequels_and_links_nothing_until_one_is_confirmed`(API; 제안은 N-1 시즌이 있을 때만, 확인 전에는 `미상`), `only_a_season_without_entries_gets_the_previous_seasons_sequels`.
@@ -71,7 +71,7 @@
   - 연결 없음: `a_season_without_a_link_is_unknown_and_never_filled_from_another_season`.
   - 마이그레이션과 트리거: `the_migration_creates_no_search_for_what_exists_already`, `a_newly_recorded_first_season_gets_one_search_and_nothing_else_does`, `a_lower_season_that_appears_later_takes_the_search_and_the_higher_ones_is_dropped`, `a_season_folder_that_goes_and_comes_back_keeps_its_link_and_gets_no_new_search`.
   - 방영일: `episode_air_dates_come_only_from_a_releasing_entry_with_a_schedule`, `air_times_come_only_from_a_releasing_entry_after_known_counts`.
-  - 리뷰 뒤 더한 것(고치기 전 코드에서 실패를 확인했어요): `a_search_whose_outcome_cannot_be_written_waits_like_a_failure_instead_of_asking_again_at_once`, `a_refresh_that_cannot_be_written_waits_an_hour`(트리거로 기록을 실패시킴), `a_merge_carries_the_moved_works_choices_where_the_kept_work_has_none`(`src/store/library/tests.rs`). 등록 해제 뒤 연결이 남는 것은 `an_entry_round_trips_and_an_unregistered_work_keeps_its_links`와 `unregistering_takes_the_works_out_and_the_same_path_brings_them_back_as_they_were`(`tests/library_watch.rs`)가 봐요.
+  - 리뷰 뒤 더한 것(고치기 전 코드에서 실패를 확인했어요): `a_search_whose_outcome_cannot_be_written_waits_like_a_failure_instead_of_asking_again_at_once`, `a_refresh_that_cannot_be_written_waits_an_hour`(트리거로 기록을 실패시킴), `a_merge_carries_the_moved_works_choices_where_the_kept_work_has_none`(`crates/trss-library/src/store/library/tests.rs`). 등록 해제 뒤 연결이 남는 것은 `an_entry_round_trips_and_an_unregistered_work_keeps_its_links`와 `unregistering_takes_the_works_out_and_the_same_path_brings_them_back_as_they_were`(`crates/trss-worker/tests/library_watch.rs`)가 봐요.
 - 브라우저(로컬 `trss-web`·`trss-worker`, 스크래치 DB, 가짜 AniList(`TRSS_ANILIST_URL`·`TRSS_ANILIST_IMAGE_ORIGINS`), 작품 8개, 1280px와 390px, 2026-10-01):
   - worker가 시즌 1을 검색해 `Lycoris Recoil`·`Sousou no Frieren`·`Oshi no Ko`·`Bocchi the Rock!`·`Dandadan`·`Kusuriya no Hitorigoto`는 `자동`으로 이었고, `Clevatess`(같은 제목 둘)는 `모호함`, `Spy x Family`(같은 제목 없음)는 `일치 없음` 메모로 남았어요.
   - `Dandadan`(방영 중): 방영 `2024년 10월 4일 ~`, 분량 12화, 제작사 `Science SARU`, 장르 셋, `방영 중` 표시, 회차 줄에 `9월 30일 (수)` 같은 방영일이 AniList 일정에서만 채워졌어요.

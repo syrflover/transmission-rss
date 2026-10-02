@@ -37,7 +37,7 @@
 
 ### 구현한 것
 
-- 규칙 API는 `src/web/rules_api.rs`예요. 모든 쓰기는 화면이 본 버전을 보내고, 버전이 다르면 `409`에 `current`(규칙, 순서 변경은 채널의 규칙 목록)를 담아요.
+- 규칙 API는 `crates/trss-web/src/rules_api.rs`예요. 모든 쓰기는 화면이 본 버전을 보내고, 버전이 다르면 `409`에 `current`(규칙, 순서 변경은 채널의 규칙 목록)를 담아요.
 
   | 호출 | 응답 |
   | --- | --- |
@@ -50,13 +50,13 @@
 
   규칙은 `id, channel_id, version, order(1부터), match, regex, case_insensitive, directory, episode, episode_auto, state, overlap, error, last_received_at`이에요.
   잘못된 정규식과 `/`로 시작하는 저장 폴더는 `400`으로 거절하고 아무것도 저장하지 않아요. 일치 문구를 비우면 `제목 대기` 규칙이 돼요.
-- 규칙 삭제는 `ChannelStore::delete_rule(id, version)`이에요(`src/store/channels/delete_rule.rs`). 다른 규칙의 순서는 그대로 두고, 수집 이력은 건드리지 않아요.
-- 미리보기는 worker의 판정을 그대로 써요. `src/worker/plan.rs`의 `ChannelPlan`(저장된 채널·규칙을 `src/rss`의 평가로 옮기는 worker의 변환)에 `evaluate`(판정 + 뒤에서 함께 맞는 규칙)와 `rule_errors`(규칙별 정규식 오류)를 더했고, `judge`는 `evaluate`를 거쳐요.
+- 규칙 삭제는 `ChannelStore::delete_rule(id, version)`이에요(`crates/trss-collect/src/store/channels/delete_rule.rs`). 다른 규칙의 순서는 그대로 두고, 수집 이력은 건드리지 않아요.
+- 미리보기는 worker의 판정을 그대로 써요. `crates/trss-collect/src/plan.rs`의 `ChannelPlan`(저장된 채널·규칙을 `crates/trss-collect/src/rss`의 평가로 옮기는 worker의 변환)에 `evaluate`(판정 + 뒤에서 함께 맞는 규칙)와 `rule_errors`(규칙별 정규식 오류)를 더했고, `judge`는 `evaluate`를 거쳐요.
   미리보기는 편집 중인 규칙을 채널의 규칙 자리에 끼워(수집 중으로 취급, 순서 변경도 반영) 그 채널의 수집 이력 항목을 `evaluate`로 판정해요. 제외 조건을 뺀 두 번째 계획으로 제외 때문에 못 받는 항목을 가려내요. 웹이 제목을 따로 판정하는 코드는 없어요.
   `겹침`은 이력 항목 중 앞 규칙이 가져가는데 이 규칙도 맞는 항목이 있는 수집 중 규칙에 붙어요. 제외된 항목과 보관한 규칙은 세지 않아요.
-- 상태 판은 `GET /api/collect/status?tz_offset=<분>`이에요(`src/web/status_api.rs`). 웹은 RSS도 Transmission도 부르지 않고, worker가 남긴 스냅숏과 수집 이력만 읽어요.
-  - 마이그레이션 4(`src/store/status/schema.sql`): `channel_read_status`(채널별 마지막 읽기 성공 여부·시각·마지막 성공 시각)와 `transmission_snapshot`(받는 중·시딩 수와 시각, 한 행).
-  - worker는 `src/worker/cycle.rs`에서 한 주기가 끝날 때 `StatusStore`로 기록해요. 기록·조회에 실패해도 출력만 하고 주기는 그대로 끝나요. Transmission에 물을 수 없으면 이전 수와 시각을 그대로 둬요(0을 쓰지 않아요). 읽기에 실패한 채널은 마지막 성공 시각을 지키고, 없어진 채널의 행은 지워요.
+- 상태 판은 `GET /api/collect/status?tz_offset=<분>`이에요(`crates/trss-web/src/status_api.rs`). 웹은 RSS도 Transmission도 부르지 않고, worker가 남긴 스냅숏과 수집 이력만 읽어요.
+  - 마이그레이션 4(`crates/trss-core/migrations/status/schema.sql`): `channel_read_status`(채널별 마지막 읽기 성공 여부·시각·마지막 성공 시각)와 `transmission_snapshot`(받는 중·시딩 수와 시각, 한 행).
+  - worker는 `crates/trss-worker/src/cycle.rs`에서 한 주기가 끝날 때 `StatusStore`로 기록해요. 기록·조회에 실패해도 출력만 하고 주기는 그대로 끝나요. Transmission에 물을 수 없으면 이전 수와 시각을 그대로 둬요(0을 쓰지 않아요). 읽기에 실패한 채널은 마지막 성공 시각을 지키고, 없어진 채널의 행은 지워요.
   - 날짜별 막대는 화면의 시간대(`tz_offset`) 기준 오늘까지 7일이에요. `실패·중복 N개`는 같은 7일의 추가 실패·중복 개수이고 `/collect/history?result=add_failed,duplicate`로 가요.
 - 규칙 탭(`web/src/screens/collect/rules/`)은 통합 목록(상태 배지·채널 태그·`겹침`, `검사 순서`·`제목순` 정렬)과 상세예요. 정렬은 화면에서만 바뀌고 저장된 순서를 건드리지 않아요.
   PC는 목록과 상세가 각자 스크롤하고 규칙을 골라도 화면이 움직이지 않아요(선택은 `?rule=<id>`로 주소 경로를 바꾸지 않아요). 휴대폰은 상세 화면으로 전환하고 `← 규칙 목록`으로 돌아와요.
@@ -68,7 +68,7 @@
 
 | 완료 기준 | 근거 |
 | --- | --- |
-| 미리보기와 worker 처리의 일치 | 통합 테스트 `tests/rules_preview_then_cycle.rs` `the_preview_of_every_rule_agrees_with_what_the_worker_did_with_the_same_items`: fake Transmission·피드 서버로 한 주기를 돌린 뒤 규칙마다 미리보기를 받아, 기록된 항목 7개 각각의 선택 여부·적용 규칙·저장 위치(Transmission이 받은 `download-dir`)가 같아요. 단위 테스트 `the_preview_agrees_with_the_worker_mapping_for_every_recorded_title`은 제목 표본 전체를 `ChannelPlan::evaluate`와 대조해요. |
+| 미리보기와 worker 처리의 일치 | 통합 테스트 `crates/trss-worker/tests/rules_preview_then_cycle.rs` `the_preview_of_every_rule_agrees_with_what_the_worker_did_with_the_same_items`: fake Transmission·피드 서버로 한 주기를 돌린 뒤 규칙마다 미리보기를 받아, 기록된 항목 7개 각각의 선택 여부·적용 규칙·저장 위치(Transmission이 받은 `download-dir`)가 같아요. 단위 테스트 `the_preview_agrees_with_the_worker_mapping_for_every_recorded_title`은 제목 표본 전체를 `ChannelPlan::evaluate`와 대조해요. |
 | 일치 문구를 넓혀 다른 규칙이 먼저 가져가던 항목에도 맞게 함 | API 테스트 `widening_a_phrase_shows_the_items_an_earlier_rule_takes_and_saving_marks_the_overlap`. 통합 테스트 `what_the_preview_predicts_for_an_edit_is_what_the_next_cycle_does_after_it_is_saved`는 미리보기가 예측한 새 항목이 저장 뒤 다음 주기에 예측한 폴더·규칙으로 추가되는지 봐요. 브라우저: 미리보기에 `앞 규칙이 가져가요`가 뜨고 저장 뒤 목록에 `겹침`이 붙어요. |
 | 정규식이 `(`로 끝남 | 브라우저: `정규식이 올바르지 않아요…` 문장이 뜨고 저장 버튼이 꺼지며 DB는 그대로예요. 다른 규칙을 열면 미리보기가 계속 나와요. API 테스트 `an_invalid_regex_is_refused_with_a_sentence_and_nothing_is_saved`, `an_invalid_regex_is_shown_in_the_preview_and_other_rules_still_preview`. |
 | 규칙 순서를 바꿔 저장 | 통합 테스트 `after_a_reorder_through_the_api_the_next_cycle_picks_the_first_match_in_the_new_order`(두 규칙이 맞는 항목을 다음 주기가 바뀐 순서의 첫 규칙으로 받음). 브라우저: `앞으로` 뒤 저장하면 API와 `검사 순서` 목록이 새 순서예요. |
@@ -76,7 +76,7 @@
 | 목록 정렬을 제목순으로 바꿈 | 브라우저: 목록만 재배열되고, 전후로 `rules` 표(id·position·version·match_text·state)와 API의 `order`가 같아요. |
 | 390px 휴대폰에서 규칙을 열어 고치고 저장 | 브라우저(390x844): 목록이 상세로 바뀌고, 저장 줄의 아래쪽이 하단 메뉴 위쪽보다 위에 있으며(779px 대 784.8px), 저장 버튼 중심을 `elementFromPoint`가 저장 버튼으로 돌려줘요. 끝까지 스크롤해도 같아요. 저장하면 DB에 반영돼요. |
 | 가로 넘침 없음 | 브라우저: 1440·768·390·320px x 밝은·어두운 화면 x (목록, 규칙 상세, 새 규칙 화면; 휴대폰 폭에서는 상태 판을 연 채로) 24곳 모두 `scrollWidth <= innerWidth`예요. |
-| 상태 판 | 브라우저: RSS `2개 중 1개 정상`과 읽지 못한 채널 이름, 7개 막대, `받는 중 2개 · 시딩 5개`, `실패·중복 2개` 링크의 주소. 0008과 합친 뒤에는 이 링크가 기록 탭을 `추가 실패`·`중복`만 보이게 열어요. 휴대폰은 한 줄로 접혀 있다가 눌러서 펴져요. 통합 테스트 `tests/status_snapshots_from_cycle.rs`: 한 주기 뒤 스냅숏이 채워지고, 피드 실패는 마지막 성공 시각을 지키며, Transmission이 꺼져 있어도 주기가 끝나고 이전 수가 남아요. |
+| 상태 판 | 브라우저: RSS `2개 중 1개 정상`과 읽지 못한 채널 이름, 7개 막대, `받는 중 2개 · 시딩 5개`, `실패·중복 2개` 링크의 주소. 0008과 합친 뒤에는 이 링크가 기록 탭을 `추가 실패`·`중복`만 보이게 열어요. 휴대폰은 한 줄로 접혀 있다가 눌러서 펴져요. 통합 테스트 `crates/trss-worker/tests/status_snapshots_from_cycle.rs`: 한 주기 뒤 스냅숏이 채워지고, 피드 실패는 마지막 성공 시각을 지키며, Transmission이 꺼져 있어도 주기가 끝나고 이전 수가 남아요. |
 | `/collect/rules/new?channel=&match=` | 브라우저: 채널과 일치 문구가 채워진 상세가 열리고 열기만 해서는 규칙 수가 그대로이며, `규칙 만들기`로 저장하면 만들어져 열려요. |
 
 - 백엔드 검사: `cargo test --offline`(라이브러리 200개와 통합 테스트 전부), `cargo clippy --offline --all-targets`(경고 없음), `cargo fmt --check`. 새 테스트는 저장소 `delete_rule` 4개, 상태 저장소 5개, `ChannelPlan::evaluate` 1개, 규칙 API 22개, 상태 API 6개, 통합 6개예요.

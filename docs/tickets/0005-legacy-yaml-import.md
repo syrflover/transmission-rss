@@ -43,10 +43,10 @@
 
 ### 구현한 것
 
-- 파일을 읽는 `src/import/legacy.rs`는 옛 실행 파일과 같은 `ChannelConfig` 역직렬화를 그대로 써서 생략된 기본값(`episode`는 1)을 예전처럼 읽어요.
+- 파일을 읽는 `crates/trss-import/src/legacy.rs`는 옛 실행 파일과 같은 `ChannelConfig` 역직렬화를 그대로 써서 생략된 기본값(`episode`는 1)을 예전처럼 읽어요.
   YAML이 아니거나 필수 필드(`url`·`directory`·`rules`, 규칙의 `match`·`directory`)가 없거나 값 형식이 틀리면 어디가 왜 틀렸는지 한국어 문장으로 알리고, 그 문장에는 파일 내용(토큰)을 되풀이하지 않아요.
   `http`·`https`가 아닌 주소, 빈 채널 `directory`, 절대 경로 규칙 `directory`도 이 단계에서 거부해요.
-- 적용은 `ChannelStore::import_channels`(`src/store/channels/import.rs`)가 한 트랜잭션으로 해요. 채널 여러 개를 추가·교체하다 하나라도 실패하면 적용 전 상태가 그대로 남아요.
+- 적용은 `ChannelStore::import_channels`(`crates/trss-collect/src/store/channels/import.rs`)가 한 트랜잭션으로 해요. 채널 여러 개를 추가·교체하다 하나라도 실패하면 적용 전 상태가 그대로 남아요.
 - API는 두 단계이고 서버가 미리보기를 들고 있지 않아요.
   - `POST /api/import/legacy/preview` `{ content }`는 파일을 읽고 지금 채널과 견줘 검토 자료를 돌려줘요. 아무것도 바꾸지 않아요.
   - `POST /api/import/legacy/apply` `{ content, choices: [{ index, existing_id, existing_version, decision }] }`는 파일을 다시 읽고 지금 상태로 다시 견줘 적용해요.
@@ -74,9 +74,9 @@
 
 | 확인 | 방법 | 결과 |
 | --- | --- | --- |
-| 완료 기준 표의 백엔드 행(모두 추가·순서와 값 보존·교체의 없어질 규칙과 별도 결과·같은 파일 `추가`·선택 강제·파일 거부·`-24`/`regex`·적용 도중 DB 오류) | 임시 DB 파일에 `tower::ServiceExt::oneshot`으로 HTTP API 호출. 7개(`src/web/import_api/tests.rs`) | 통과 |
-| 저장소: 규칙 ID 유지·삭제·새 ID, 한 트랜잭션, 낡은 버전, 검증 | `src/store/channels/import_tests.rs` 8개. 여러 채널 적용 중 트리거로 DB 오류를 일으켜 적용 전 상태 확인 | 통과 |
-| 파일 읽기·거부 문장·채널 식별·선택 검증·가리기 | `src/import/legacy.rs` 7개, `src/import/plan.rs` 5개 | 통과 |
+| 완료 기준 표의 백엔드 행(모두 추가·순서와 값 보존·교체의 없어질 규칙과 별도 결과·같은 파일 `추가`·선택 강제·파일 거부·`-24`/`regex`·적용 도중 DB 오류) | 임시 DB 파일에 `tower::ServiceExt::oneshot`으로 HTTP API 호출. 7개(`crates/trss-web/src/import_api/tests.rs`) | 통과 |
+| 저장소: 규칙 ID 유지·삭제·새 ID, 한 트랜잭션, 낡은 버전, 검증 | `crates/trss-collect/src/store/channels/import_tests.rs` 8개. 여러 채널 적용 중 트리거로 DB 오류를 일으켜 적용 전 상태 확인 | 통과 |
+| 파일 읽기·거부 문장·채널 식별·선택 검증·가리기 | `crates/trss-import/src/legacy.rs` 7개, `crates/trss-import/src/plan.rs` 5개 | 통과 |
 | 비밀 값 | API 테스트가 모든 응답 본문에 토큰과 쿼리 값이 없는지 확인. 검토 화면 HTML에도 없는지 브라우저에서 확인 | 통과 |
 | UI 완료 기준 전부와 화면 흐름 | 로컬 `trss-web`(`TRSS_DB_PATH` 임시 파일, `TRSS_WEB_STATIC_DIR=web/dist`)을 시스템 Chromium 헤드리스(playwright-core)로 1440·390px의 라이트·다크마다 새 DB로 처음부터 끝까지 진행. 스크립트는 저장소 밖에 뒀어요. | 4조합 모두 통과 |
 | 전체 | `cargo test`(오프라인) 72개+통합 2개 통과, `cargo clippy --all-targets` 경고 없음, `bun run build` 성공 | 통과 |
@@ -94,7 +94,7 @@
 
 ### 남은 것
 
-- `src/store/channels/mod.rs`에 `pub mod import;`와 `#[cfg(test)] mod import_tests;` 두 줄을 더했어요. 같은 파일을 고치는 [0007](0007-channels-tab-secrets.md)과 합칠 때 이 줄 근처에서 충돌할 수 있어요.
+- `crates/trss-collect/src/store/channels/mod.rs`에 `pub mod import;`와 `#[cfg(test)] mod import_tests;` 두 줄을 더했어요. 같은 파일을 고치는 [0007](0007-channels-tab-secrets.md)과 합칠 때 이 줄 근처에서 충돌할 수 있어요.
 - `import.rs`는 `repo.rs`의 비공개 SQL 도우미를 쓸 수 없어서 채널·규칙 INSERT 문을 따로 갖고 있어요. 뒤에 `repo.rs`를 다듬을 때 합치면 좋아요.
 - 사용자 정보(`https://user:pass@host/...`)가 든 주소는 이 티켓의 표시 함수(`display_url`)만 가려요. 0002의 `mask_url`과 `Channel::masked_url`은 쿼리 값만 가려서, 뒤 티켓의 채널 화면이 그 값을 쓰면 사용자 정보가 보일 수 있어요.
 - 요청 본문은 axum 기본 한도(2MB)이고 화면도 같은 한도로 먼저 알려요.

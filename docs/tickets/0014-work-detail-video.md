@@ -39,7 +39,7 @@
 
 ### 구현한 것
 
-- 읽기 API `GET /api/library/works/{id}`(`src/web/library_work_api.rs`, 읽기는 `src/store/library/detail.rs`): 작품명(폴더 이름), `missing`, 감시 폴더와 작품 폴더 경로(`folder_path`), 작품 추가 시각, 시즌(번호 오름차순, 회차 없는 시즌 폴더도 빈 목록으로), 회차(적힌 그대로의 `episode`, 숫자 `sort`, 영상·자막 파일의 상대 경로와 추가 시각, 모르면 `null`), 회차를 확인하지 못한 파일(이유 코드와 해요체 문장), 이 작품 폴더에 받는 규칙을 한 번에 답해요. 모르는 ID는 JSON `404`예요. 0012의 저장·발견 코드는 고치지 않고 `store/library/mod.rs`에 모듈 선언과 `work_detail` 하나만 더했어요.
+- 읽기 API `GET /api/library/works/{id}`(`crates/trss-web/src/library_work_api.rs`, 읽기는 `crates/trss-library/src/store/library/detail.rs`): 작품명(폴더 이름), `missing`, 감시 폴더와 작품 폴더 경로(`folder_path`), 작품 추가 시각, 시즌(번호 오름차순, 회차 없는 시즌 폴더도 빈 목록으로), 회차(적힌 그대로의 `episode`, 숫자 `sort`, 영상·자막 파일의 상대 경로와 추가 시각, 모르면 `null`), 회차를 확인하지 못한 파일(이유 코드와 해요체 문장), 이 작품 폴더에 받는 규칙을 한 번에 답해요. 모르는 ID는 JSON `404`예요. 0012의 저장·발견 코드는 고치지 않고 `store/library/mod.rs`에 모듈 선언과 `work_detail` 하나만 더했어요.
   - 회차는 라이브러리 목록과 같이 숫자로 견줘요. `013`과 `13`은 한 회차이고 더 작은 적힌 글자(`013`)로 두 파일을 함께 가져요. `17.5`는 `17`과 `18` 사이에, 숫자가 아닌 회차(`SP`)는 맨 뒤에 놓여요. 회차 번호는 `u128`과 소수부 글자로 견주고 `f64`로 바꾸지 않아요(`sort`는 화면에 쓰지 않는 참고 값이에요).
   - 규칙은 `directory`의 첫 마디(`rule_archive::work_folder`)가 이 작품의 폴더 이름이고, 작품의 감시 폴더가 수집 폴더 또는 보관 폴더일 때만 이어요. 보관한 규칙(`state: archived`)도 목록에 있고 상태가 붙어요. `..`가 들어 있는 저장 폴더, 수집 폴더 자체, 이름이 접두사만 같은 폴더는 이어지지 않아요. 수집 폴더가 정해지지 않았으면 규칙이 없어요. `save_path`는 `rss::save_path`로 만들어요.
 - 화면(`web/src/screens/library/WorkDetailScreen.tsx`, `detail/`): 머리(0013의 표지 자리, 작품명, 선택한 시즌에 자막이 있으면 `자막 제작자 제작자 알 수 없음`, 없으면 아무것도 두지 않아요), 시즌 타일, 회차 목록, `수집`·`파일` 카드. 시즌 정보 칸·AniList 링크·방영일·할 일·자막 후보와 교체 승인·`작품 정보`·`자막`·`최근 활동` 카드·표지 확대는 티켓 범위 밖이라 두지 않았어요.

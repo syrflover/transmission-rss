@@ -40,18 +40,18 @@
 
 ### 구현한 것
 
-- 명령 `rule_archive`(`src/worker/commands/rule_archive.rs`): payload는 `{ rule_id, direction: "archive" | "restore" }`이고 명령의 항목(subject)은 규칙 ID예요. 한 규칙에 열린 명령이 있으면 새 명령은 `409`(`current`에 그 명령)예요. 웹(`src/web/commands_api.rs`)은 규칙이 없으면 `404`, 이미 수집 중인 규칙의 복원은 `400`으로 거절하고, 규칙의 상태는 바꾸지 않아요. 상태를 바꾸는 것은 worker뿐이에요.
+- 명령 `rule_archive`(`crates/trss-collect/src/commands/rule_archive.rs`): payload는 `{ rule_id, direction: "archive" | "restore" }`이고 명령의 항목(subject)은 규칙 ID예요. 한 규칙에 열린 명령이 있으면 새 명령은 `409`(`current`에 그 명령)예요. 웹(`crates/trss-web/src/commands_api.rs`)은 규칙이 없으면 `404`, 이미 수집 중인 규칙의 복원은 `400`으로 거절하고, 규칙의 상태는 바꾸지 않아요. 상태를 바꾸는 것은 worker뿐이에요.
   - 보관: 규칙을 `archived`로 바꾼 뒤(`ChannelStore::set_rule_state`, 이미 그 상태면 그대로) 옮길지 정해요. 수집 폴더·보관 폴더가 없거나, 저장 폴더가 비었거나(수집 폴더 자체), 수집 폴더 밖이거나(`..` 포함), 모든 채널에서 같은 작품 폴더에 받는 수집 중인 규칙이 있으면 옮기지 않고 `done`·`kept`와 까닭으로 끝나요(`‘Clevatess/Season 03’ 규칙이 아직 이 작품 폴더에 받고 있어서 옮기지 않았어요.`, 둘 이상이면 `외 N개가`).
   - 복원: 폴더를 수집 폴더로 먼저 옮기고, 옮기지 못하면 규칙을 보관된 채로 두고 `failed`와 까닭으로 끝나요. 옮겼거나 이미 수집 폴더에 있거나 어느 쪽에도 없으면 규칙을 `active`로 바꿔요.
   - 결과는 `moved`(옮김, 또는 이미 목적지에만 있음), `kept`(일부러 두었음, 까닭 포함), `failed`(옮기지 못함, 까닭 포함)예요.
-- 옮기기(`src/worker/commands/rule_archive/work_folder.rs`)는 매번 디스크와 Transmission을 보고 남은 것을 해요. 위치는 저장하지 않아요.
+- 옮기기(`crates/trss-collect/src/commands/rule_archive/work_folder.rs`)는 매번 디스크와 Transmission을 보고 남은 것을 해요. 위치는 저장하지 않아요.
   1. 검사: 두 폴더가 있고 서로 안에 있지 않으며 같은 `st_dev`, 목적지의 작품 폴더와 합쳐 들어갈 폴더도 같은 `st_dev`, 작품 폴더 이름이 경로 조각 하나이고 링크가 아님, 안쪽에 두 폴더 밖을 가리키는 링크나 다른 파일시스템이 없음, 양쪽에 같은 상대 경로의 파일(양쪽 모두 실제 폴더인 것은 합침)이 없음. 겹치면 파일을 5개까지 적고(`외 N개`) 아무것도 옮기지 않아요. 마지막으로 빈 시험 파일을 수집 폴더에서 보관 폴더로 `RENAME_NOREPLACE`로 옮겨 보고 지워요(검사가 디스크에 쓰는 유일한 것이며 남기지 않아요).
   2. Transmission: 받는 폴더가 작품 폴더 안인 토렌트를 글자와 실제 위치(링크를 따름) 두 가지로 모두 고른 뒤, 하나라도 다 받지 않았거나(받는 중·대기·확인 중, 메타데이터를 아직 받는 자석 링크), 로컬 오류를 알리거나, 받는 폴더에 `..`가 있고 작품 폴더에 닿거나, 글자와 실제 위치가 작품 폴더 안팎으로 엇갈리거나, 그 파일(또는 `.part` 이름)이 목적지에 있는데 그 토렌트 자신의 데이터라고 확인되지 않으면 어느 토렌트도 옮기지 않고 까닭과 함께 끝나요. 자신의 데이터로 보는 것은 원래 자리에 그 토렌트의 파일이 하나도 없고, 목적지의 파일이 모두 토렌트의 이름 그대로인 보통 파일이며 크기가 토렌트의 `length`와 같을 때뿐이에요. 토렌트의 파일이 원래 자리와 목적지에 나뉘어 있고 두 쪽에 같은 이름이 없으며 목적지 쪽이 그런 파일이면(Transmission의 이동이 중간에 끊긴 모양), 파일을 적지 않고 그 토렌트의 이름과 함께 어느 쪽도 지우지 말고 남은 파일을 한쪽으로 모으거나 Transmission에서 위치를 바꾼 뒤 다시 옮기라고 알려요. 그다음 토렌트마다 `torrent-set-location`(`move: true`)을 보내고, 모두 새 위치를 보고할 때까지 1초마다 확인해요. 그 사이 토렌트가 로컬 오류를 알리면 그 글로 바로 `failed`, 300초 안에 끝나지 않으면 명령을 `running`으로 두어 다음 확인이 이어 가요(마지막 다섯 번째 시작에서는 그 까닭으로 `failed`). 누가 넣은 토렌트든 옮겨요.
   3. 나머지: `renameat2(RENAME_NOREPLACE)`(`rustix`, 대체 경로 없음)로 목적지에 없는 것은 통째로, 양쪽에 있는 폴더는 그 안을 파일 단위로 옮기고, 비게 된 원래 폴더는 지워요. 검사 뒤 목적지에 생긴 파일은 덮지 않고 원래 자리에 둔 채 `failed`로 알려요. 다른 파일시스템(`EXDEV`)이나 읽기 오류를 만나면 거기서 멈추고 까닭을 남겨요. 종료 요청이 오면 항목 사이에서 멈추고, 이 단계들은 worker의 잠금을 끝날 때까지 쥐고 있어요.
   - worker는 폴더를 새로 만들지 않아요. 목적지에 없는 것은 이름 바꾸기로 원래 소유자째 옮겨지고, 새 폴더는 Transmission이 자기 토렌트를 옮기며 만든 것뿐이라 Transmission 사용자의 것이에요.
 - 수집 주기와 같은 flock 아래에서 명령을 실행하므로, 옮기는 동안 주기는 `Busy`로 건너뛰고 새 회차를 넣지 않아요.
 - 멈춘 뒤 이어 가기: 명령은 `running`으로 남아 다음 worker가 다시 집어요(기존 명령 계약, 최대 5번). 각 단계는 원래 자리에서 목적지로만 옮기고 이미 목적지를 보고하는 토렌트는 다시 옮기지 않으므로, 다시 실행하면 남은 것만 옮겨 모두 목적지에 모여요.
-- 웹 API(`src/web/rules_api.rs`): `GET /api/rules/{id}`를 더했고, 규칙 보기에 마지막 보관·복원 명령(`archive_move{direction, command}`)이 실려요. `PUT /api/rules/{id}`는 상태를 바꾸는 본문을 `400`으로 거절해요(보관·복원은 명령으로만). 새로 적거나 바꾼 저장 폴더는 `..`가 있거나, 옮기는 중인 규칙의 것이거나, 옮기는 중인 작품 폴더 안이면 `400`과 까닭으로 거절해요.
+- 웹 API(`crates/trss-web/src/rules_api.rs`): `GET /api/rules/{id}`를 더했고, 규칙 보기에 마지막 보관·복원 명령(`archive_move{direction, command}`)이 실려요. `PUT /api/rules/{id}`는 상태를 바꾸는 본문을 `400`으로 거절해요(보관·복원은 명령으로만). 새로 적거나 바꾼 저장 폴더는 `..`가 있거나, 옮기는 중인 규칙의 것이거나, 옮기는 중인 작품 폴더 안이면 `400`과 까닭으로 거절해요.
 - 화면(`web/src/screens/collect/rules/`): `보관`·`복원` 버튼이 명령을 보내고(`useArchiveMove`, `다시 받기`와 같은 ID·조회·다시 보내기 방식), `ArchiveMoveNotice`가 `보관 폴더로 옮기는 중이에요`·`보관 폴더로 옮겼어요`·`옮기지 못했어요`와 까닭, 복원 쪽 문장, 일부러 두었을 때의 까닭을 보여줘요. 보관에서 옮기지 못했고 규칙이 보관된 채면 `다시 옮기기`가 있어요. 끝나면 규칙을 다시 읽어 목록 캐시를 바꿔요. 옮기는 동안 `보관`·`복원`·`삭제`는 눌리지 않아요. 명령 타입과 보내기는 `web/src/lib/commands.ts`로 옮겨 기록 탭과 같이 써요. 설정 `수집 폴더` 항목의 안내 문장도 옮기기에 맞게 고쳤어요.
 - 배포: `docker-compose.trss.yml`에서 `trss-worker`만 미디어를 읽고 쓰게 마운트하고 `trss-web`은 `:ro` 그대로예요. `readme.md`에 마운트와 보관·복원 동작을 적었어요.
 
@@ -82,8 +82,8 @@
 
 ### 검증한 것
 
-검토 뒤 고친 것까지 넣고 `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`(라이브러리 336개, `tests/archive_move.rs` 25개 포함 모든 통합 시험)가 통과했고, 웹은 `npm run typecheck`와 `npm run build`가 통과했어요. 아래 브라우저 확인은 검토 전 코드로 했어요(화면 코드는 그 뒤 바뀌지 않았어요).
-완료 기준은 `tests/archive_move.rs`(시험용 Transmission이 `torrent-set-location`에서 실제 임시 폴더의 파일을 옮겨요)로 확인했어요.
+검토 뒤 고친 것까지 넣고 `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`(라이브러리 336개, `crates/trss-worker/tests/archive_move.rs` 25개 포함 모든 통합 시험)가 통과했고, 웹은 `npm run typecheck`와 `npm run build`가 통과했어요. 아래 브라우저 확인은 검토 전 코드로 했어요(화면 코드는 그 뒤 바뀌지 않았어요).
+완료 기준은 `crates/trss-worker/tests/archive_move.rs`(시험용 Transmission이 `torrent-set-location`에서 실제 임시 폴더의 파일을 옮겨요)로 확인했어요.
 
 | 완료 기준 | 근거 |
 | --- | --- |

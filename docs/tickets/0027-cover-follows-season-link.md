@@ -29,12 +29,12 @@
 
 ### 구현한 것
 
-- 따라갈 항목(`src/store/seasons/repo.rs`의 `cover_target`): 작품 폴더에 기록된 시즌 가운데 항목을 연결한 가장 앞 시즌(시즌 0 특별편은 빼요)의 첫 항목이에요.
-- 표지 쪽(`src/store/artwork/repo.rs`의 `follow_season_link`, `ArtworkStore::follow_season_link`): 한 트랜잭션에서 따라갈 항목을 읽고, 표지가 `auto`이며 고른 AniList 항목이 그 항목이 아니면 그 항목을 고른 것으로 바꿔요. 선택 버전을 올리고 `fetch` 작업을 걸며, 이전 판정의 메모는 지워요. 가진 이미지 참조는 그대로 두므로 새 이미지를 받아 검증해 `fetched`가 반영하기 전까지 기존 표지가 보여요. 그래서 새 이미지는 기존 수신 파이프라인(worker의 `fetch` 작업, `Artwork::store_image`의 형식·크기 검사, 선택 버전 비교)을 그대로 거쳐요. `manual`·`disabled`와, 이미 그 항목을 고른 `auto`는 건드리지 않아요. 마이그레이션은 없어요.
-- 연결 저장 쪽(`src/seasons/mod.rs`의 `Seasons::follow_cover`): 사용자의 연결·바꾸기·끊기(`set_links`), `자동으로 다시 찾기`(`restart_auto`), worker의 첫 시즌 자동 연결(`src/seasons/queue.rs`의 `run_search`)이 연결을 저장한 직후에 불러요. 연결은 이미 저장된 뒤이므로 표지 쪽 오류는 기록만 하고 연결 저장은 그대로 성공해요.
-- 작품 상세 API(`src/web/library_work_api.rs`): `cover_pending`(수신할 `fetch` 작업이 남았는지)을 더했어요.
+- 따라갈 항목(`crates/trss-library/src/store/seasons/repo.rs`의 `cover_target`): 작품 폴더에 기록된 시즌 가운데 항목을 연결한 가장 앞 시즌(시즌 0 특별편은 빼요)의 첫 항목이에요.
+- 표지 쪽(`crates/trss-library/src/store/artwork/repo.rs`의 `follow_season_link`, `ArtworkStore::follow_season_link`): 한 트랜잭션에서 따라갈 항목을 읽고, 표지가 `auto`이며 고른 AniList 항목이 그 항목이 아니면 그 항목을 고른 것으로 바꿔요. 선택 버전을 올리고 `fetch` 작업을 걸며, 이전 판정의 메모는 지워요. 가진 이미지 참조는 그대로 두므로 새 이미지를 받아 검증해 `fetched`가 반영하기 전까지 기존 표지가 보여요. 그래서 새 이미지는 기존 수신 파이프라인(worker의 `fetch` 작업, `Artwork::store_image`의 형식·크기 검사, 선택 버전 비교)을 그대로 거쳐요. `manual`·`disabled`와, 이미 그 항목을 고른 `auto`는 건드리지 않아요. 마이그레이션은 없어요.
+- 연결 저장 쪽(`crates/trss-library/src/seasons/mod.rs`의 `Seasons::follow_cover`): 사용자의 연결·바꾸기·끊기(`set_links`), `자동으로 다시 찾기`(`restart_auto`), worker의 첫 시즌 자동 연결(`crates/trss-library/src/seasons/queue.rs`의 `run_search`)이 연결을 저장한 직후에 불러요. 연결은 이미 저장된 뒤이므로 표지 쪽 오류는 기록만 하고 연결 저장은 그대로 성공해요.
+- 작품 상세 API(`crates/trss-web/src/library_work_api.rs`): `cover_pending`(수신할 `fetch` 작업이 남았는지)을 더했어요.
 - 화면(`WorkDetailScreen.tsx`, `api.ts`, `CoverDialog.tsx`): `cover_pending`인 동안 작품 머리가 3초마다 표지를 다시 읽고, 표지가 바뀌면 라이브러리 목록 캐시도 비워요. 표지 대화상자나 시즌 대화상자가 닫힌 뒤에도 새로 고치지 않고 머리가 바뀌어요. 표지 대화상자는 AniList 항목을 고른 표지에 메모(수신 실패)가 있으면, 기존 이미지가 보여도 `다시 받기`를 보여줘요.
-- 문서 주석: `src/store/artwork/mod.rs`·`schema.sql`의 작업 설명에 이 요청이 `fetch` 작업을 만든다고 더했어요.
+- 문서 주석: `crates/trss-library/src/store/artwork/mod.rs`·`schema.sql`의 작업 설명에 이 요청이 `fetch` 작업을 만든다고 더했어요.
 
 ### 결정
 
@@ -50,7 +50,7 @@
 ### 검증한 것
 
 - `cargo test`(전체): 1454개 통과, 0개 실패(라이브러리 1078개 포함). 이 티켓의 새 시험은 13개예요. `cargo clippy --all-targets`는 경고 없이 끝났어요.
-- `src/seasons/cover_tests.rs`(가짜 AniList, 임시 앱 데이터 폴더, 시험이 움직이는 시계), 완료 기준의 각 줄에 대응해요.
+- `crates/trss-library/src/seasons/cover_tests.rs`(가짜 AniList, 임시 앱 데이터 폴더, 시험이 움직이는 시계), 완료 기준의 각 줄에 대응해요.
   - 자동 판정이 비워 둔 작품에서 시즌 1을 연결: `linking_the_first_season_of_an_undecided_cover_receives_that_entrys_cover`, 메모가 있는 경우 `an_undecided_cover_with_a_note_is_taken_over_by_the_link`. 연결 직후에는 이미지 없이 항목만 고르고, 수신·검증 뒤에 이미지가 보여요.
   - 자동으로 고른 표지에서 첫 항목을 바꿈: `changing_the_first_entry_of_the_earliest_season_changes_the_cover_after_it_is_received`. 받기 전에는 기존 이미지가 그대로 서빙되고, 받은 뒤에도 `auto`로 남아 다음 변경도 따라가요.
   - 시즌 2만 연결, 첫 항목 뒤에 항목을 더함, 시즌 2를 끊음: `a_link_that_leaves_the_earliest_seasons_first_entry_keeps_the_cover_as_it_is`(선택이 변하지 않고 이미지 요청도 없어요).
@@ -59,7 +59,7 @@
   - 늦은 자동 결과와 사용자의 선택: `a_late_automatic_image_never_undoes_the_users_choice`(이미지 응답을 붙잡아 둔 사이 업로드하면 늦은 결과는 `Dropped`, 이전 버전 화면의 업로드는 충돌, 이후 연결도 사용자의 표지를 되돌리지 않아요).
   - 그 밖에 연결 끊기로 다음 시즌 따라가기, 시즌 0 제외, worker의 자동 연결(표지 자체 검색은 돌지 않아요), `자동으로 다시 찾기`.
   - 따라가기 호출을 빼고 시험을 돌려 보아, 따라가는 쪽 9개가 실패하고 건드리지 않는 쪽(`manual`·시즌 2·시즌 0)만 통과하는 것을 확인했어요.
-- `src/web/seasons_api/tests.rs`의 `saving_a_link_lets_an_automatic_cover_follow_and_shows_a_failure_where_the_cover_view_reads_it`: `POST links`가 곧바로 답하고, 표지 대화상자가 읽는 `GET artwork`가 `pending: fetch`를, 작품 상세가 `cover_pending: true`를 보여요. worker가 받은 뒤에는 `cover_url`이 새 이미지예요. 이미지가 거부되면 `note.code = rejected`, `pending` 없음, 이전 이미지가 `available`로 남아요.
+- `crates/trss-web/src/seasons_api/tests.rs`의 `saving_a_link_lets_an_automatic_cover_follow_and_shows_a_failure_where_the_cover_view_reads_it`: `POST links`가 곧바로 답하고, 표지 대화상자가 읽는 `GET artwork`가 `pending: fetch`를, 작품 상세가 `cover_pending: true`를 보여요. worker가 받은 뒤에는 `cover_url`이 새 이미지예요. 이미지가 거부되면 `note.code = rejected`, `pending` 없음, 이전 이미지가 `available`로 남아요.
 - `web/`: `bun run typecheck`(`tsc -b`)와 `bun run build`가 통과했어요. `web/package.json`에는 lint·test 스크립트가 없어요.
 - 브라우저(로컬 `trss-web`과 `trss-worker`, 임시 DB, 직접 만든 가짜 AniList): 자동 검색이 항목을 찾지 못한 작품 상세에서 시즌 1에 `Alpha Show`(#10)를 연결해 저장하자 대화상자가 닫히고, 머리가 글자 표지에서 #10의 표지로 바뀌었어요(새로 고침 없음: 페이지에 심은 표식이 그대로예요). 이어서 연결을 `Beta Show`(#20)로 바꾸자 저장 뒤 약 5초 동안 이전 표지가 보이다가 #20의 표지로 바뀌었어요. 표지 대화상자를 연 적이 없어요.
 

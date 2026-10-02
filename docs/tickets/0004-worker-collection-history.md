@@ -45,8 +45,8 @@
 
 ### 구현한 것
 
-- **구성**: `src/bin/trss-worker.rs`(진입부), `src/worker/`(주기 실행·한 번의 처리·배타 잠금·환경 변수·저장소→판정 변환·피드 읽기), `src/transmission/`(`src/main.rs`에서 옮긴 Transmission 처리), `src/store/history/`(수집 이력 저장소와 `schema.sql`).
-  `src/main.rs`는 같은 함수를 `transmission` 모듈에서 불러 쓰고, 출력과 동작은 그대로예요. `src/rss/`·`src/config.rs`·`src/rule.rs`·`src/store/channels/`는 건드리지 않았어요.
+- **구성**: `crates/trss-worker/src/main.rs`(진입부), `crates/trss-worker/src/`(주기 실행·한 번의 처리·배타 잠금·환경 변수·저장소→판정 변환·피드 읽기), `crates/trss-transmission/src/`(`src/main.rs`에서 옮긴 Transmission 처리), `crates/trss-collect/src/store/history/`(수집 이력 저장소와 `schema.sql`).
+  `src/main.rs`는 같은 함수를 `transmission` 모듈에서 불러 쓰고, 출력과 동작은 그대로예요. `crates/trss-collect/src/rss/`·`crates/trss-collect/src/config.rs`·`crates/trss-collect/src/rule.rs`·`crates/trss-collect/src/store/channels/`는 건드리지 않았어요.
 - **환경 변수**: `TRSS_DB_PATH`(필수), `TRANSMISSION_URL`(필수), `DOWNLOAD_DIR`·`SPEED_LIMIT_UP`·`SPEED_LIMIT_DOWN`·`DOWNLOAD_QUEUE_SIZE`·`SEED_QUEUE_SIZE`(기존 이름 그대로, 선택), 새로 더한 `TRSS_WORKER_INTERVAL_SECS`(주기, 기본 300).
   `CHANNELS_CONFIG_URL`은 읽지 않아요. 잘못된 값은 변수 이름만 알리고 값은 찍지 않아요(`TRANSMISSION_URL`에 계정이 들어갈 수 있어서예요).
 - **한 번의 처리**: 시작할 때 채널·규칙을 한 번 읽고(`list_channels_with_rules`), 보관한 규칙을 빼고 판정에 넘겨요. 판정의 규칙 번호는 저장된 규칙 ID로 되돌리고, `match_text`가 `NULL`이면 `pattern: None`으로 넘겨요.
@@ -72,7 +72,7 @@
 ### 확인한 것
 
 `cargo build`, `cargo test`(전부 오프라인, 실패 없음), `cargo clippy --all-targets`(경고 없음)를 돌렸어요.
-가짜 Transmission JSON-RPC 서버와 고정 RSS 표본 서버를 `tests/common/mod.rs`에 만들어 `transmission-rpc` 클라이언트를 그대로 태웠어요(`session-set`·`torrent-add`·`torrent-get`·`torrent-rename-path`·`torrent-remove`·`torrent-stop`, 세션 ID 핸드셰이크 포함). 표본은 `tests/fixtures/worker_feed_a.xml`·`worker_feed_b.xml`·`worker_channels.yml`이고 토큰은 만든 값이에요.
+가짜 Transmission JSON-RPC 서버와 고정 RSS 표본 서버를 `crates/trss-worker/tests/common/mod.rs`에 만들어 `transmission-rpc` 클라이언트를 그대로 태웠어요(`session-set`·`torrent-add`·`torrent-get`·`torrent-rename-path`·`torrent-remove`·`torrent-stop`, 세션 ID 핸드셰이크 포함). 표본은 `crates/trss-worker/tests/fixtures/worker_feed_a.xml`·`worker_feed_b.xml`·`worker_channels.yml`이고 토큰은 만든 값이에요.
 
 | 완료 기준 | 테스트 |
 | --- | --- |

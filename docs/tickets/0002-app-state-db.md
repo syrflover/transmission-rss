@@ -36,7 +36,7 @@
 ## 결과
 
 `rusqlite`(`bundled`)로 로컬 SQLite DB와 채널·규칙 저장소를 만들었어요.
-DB 기반은 `src/store/db.rs`, 채널·규칙 기능은 `src/store/channels/`에 있어요([웹·worker 분리 ADR](../adr/0006-separate-web-worker-binaries.md)의 "기반은 분리, 기능별 SQL은 기능 모듈"에 맞췄어요).
+DB 기반은 `crates/trss-core/src/db.rs`, 채널·규칙 기능은 `crates/trss-collect/src/store/channels/`에 있어요([웹·worker 분리 ADR](../adr/0006-separate-web-worker-binaries.md)의 "기반은 분리, 기능별 SQL은 기능 모듈"에 맞췄어요).
 
 - 라이브러리: musl 릴리스에서 시스템 라이브러리 없이 SQLite를 C 소스로 함께 빌드하려고 `rusqlite`의 `bundled`를 골랐어요. 비동기 코드에서는 `Db::run`이 `spawn_blocking`으로 감싸 호출해요.
 - 마이그레이션: SQL을 바이너리에 내장하고 `PRAGMA user_version`으로 버전을 관리해요. 열 때 `BEGIN IMMEDIATE` 트랜잭션 안에서 밀린 것만 적용하므로, 두 프로세스가 동시에 열어도 한 번만 적용돼요. DB가 이 빌드보다 새 버전이면 열기를 거부해요.

@@ -127,7 +127,7 @@
 서버가 `trss-worker`·`trss-web`으로 바뀌고 0.5.0이 올라가 되돌릴 일이 없어져 옛 실행 경로를 모두 걷어냈어요.
 
 - 옛 실행 파일 `src/main.rs`(`transmission-rss`)를 지웠어요. 하드코딩된 LAN 주소의 Transmission에 접속하던 `#[ignore]` 테스트 둘(`test_get_torrent`, `test_add_torrent`)도 함께 사라져, 이제 어떤 테스트도 실제 Transmission에 접속하지 않아요.
-- 그 실행 파일에서만 쓰던 코드도 지웠어요. YAML 채널 설정을 판정으로 옮기던 `src/rss/legacy.rs`, 환경 변수 `CHANNELS_CONFIG_URL` 등을 읽던 `Config`(`src/config.rs`), `From<&ChannelConfig> for ChannelSpec`·`From<&Rule> for RuleSpec`, `Rule::directory`예요. YAML 가져오기(설정 → 데이터 → 가져오기)가 읽는 `ChannelConfig`와 `Rule`의 역직렬화는 그대로예요.
+- 그 실행 파일에서만 쓰던 코드도 지웠어요. YAML 채널 설정을 판정으로 옮기던 `src/rss/legacy.rs`, 환경 변수 `CHANNELS_CONFIG_URL` 등을 읽던 `Config`(`crates/trss-collect/src/config.rs`), `From<&ChannelConfig> for ChannelSpec`·`From<&Rule> for RuleSpec`, `Rule::directory`예요. YAML 가져오기(설정 → 데이터 → 가져오기)가 읽는 `ChannelConfig`와 `Rule`의 역직렬화는 그대로예요.
 - 옛 실행 파일과 견주던 테스트 `tests/legacy_comparison.rs`·`tests/worker_legacy_comparison.rs`와 표본 `tests/fixtures/sample_feed.xml`을 지웠어요. 견줄 대상이 사라졌고, 앞 티켓의 결과에 적힌 두 테스트는 그 시점의 기록으로 남아요.
 - `scripts/cron.sh`(`scripts/` 폴더 포함)와 `docker-compose.trss.yml`의 `legacy` 프로필 서비스 `trss`를 지웠어요.
 - `Dockerfile`은 `transmission-rss`를 이미지에 넣지 않고, ENTRYPOINT를 `/usr/local/bin/trss-worker`로 정했어요. 웹은 Compose처럼 `--entrypoint /usr/local/bin/trss-web`으로 실행해요. `FROM ... as`도 `AS`로 맞춰 빌드 경고를 없앴어요.

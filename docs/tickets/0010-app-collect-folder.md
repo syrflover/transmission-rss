@@ -35,15 +35,15 @@
 
 ### 구현한 것
 
-- 마이그레이션 7(`src/store/settings/migrate.rs`, 코드 마이그레이션 `Migration::Code`)이 `channels.base_dir`를 수집 폴더로 접고 컬럼을 지워요(`DROP COLUMN`을 골랐어요. 남겨 두면 두 곳이 같은 뜻을 들고 어긋날 수 있어서예요). 같은 트랜잭션에서 `collection_settings`(`id`, `collect_folder`, `archive_folder`, `version`; `src/store/settings/`)을 만들어요.
+- 마이그레이션 7(`crates/trss-core/src/settings/migrate.rs`, 코드 마이그레이션 `Migration::Code`)이 `channels.base_dir`를 수집 폴더로 접고 컬럼을 지워요(`DROP COLUMN`을 골랐어요. 남겨 두면 두 곳이 같은 뜻을 들고 어긋날 수 있어서예요). 같은 트랜잭션에서 `collection_settings`(`id`, `collect_folder`, `archive_folder`, `version`; `crates/trss-core/src/settings/`)을 만들어요.
   - 모든 채널의 기본 경로가 같은 글자이면 그 글자가 수집 폴더이고 규칙은 그대로예요.
-  - 다르면 경로 조각 단위의 가장 긴 공통 상위가 수집 폴더이고, 각 채널의 남은 조각이 그 채널 규칙의 저장 폴더 앞에 붙어요. 끝의 `/`(저장 폴더가 빈 규칙)와 절대 경로 저장 폴더도 `Path::join`이 옛 기본 경로와 만들던 글자 그대로 나오도록 조각을 글자 단위로 접어요(`src/folders.rs`). 접은 결과는 모든 기본 경로·저장 폴더 쌍에서 옛 경로와 같은지 스스로 검사하고, 어긋나면 마이그레이션이 실패해 DB가 v6으로 남아요.
+  - 다르면 경로 조각 단위의 가장 긴 공통 상위가 수집 폴더이고, 각 채널의 남은 조각이 그 채널 규칙의 저장 폴더 앞에 붙어요. 끝의 `/`(저장 폴더가 빈 규칙)와 절대 경로 저장 폴더도 `Path::join`이 옛 기본 경로와 만들던 글자 그대로 나오도록 조각을 글자 단위로 접어요(`crates/trss-core/src/folders.rs`). 접은 결과는 모든 기본 경로·저장 폴더 쌍에서 옛 경로와 같은지 스스로 검사하고, 어긋나면 마이그레이션이 실패해 DB가 v6으로 남아요.
   - 채널이 없으면 수집 폴더는 정해지지 않아요.
   - 공통 조각이 하나도 없는 상대 경로 기본 경로(`a/x`와 `b/y`)는 접을 수 없어서 마이그레이션이 실패해요(DB는 바뀌지 않아요). 절대 경로는 최악의 경우 `/`가 수집 폴더가 돼요.
 - 받는 위치는 `수집 폴더 + 규칙 저장 폴더`이고 규칙 주기(`worker::cycle`), 규칙 미리보기(`web::rules_api`), `다시 받기`(`worker::plan::rule_destination`)가 모두 `rss::save_path`를 써요. `ChannelInput`·`Channel`과 채널 API에서 `base_dir`가 빠졌고, 본문에 `base_dir`가 있으면 모르는 필드로 거부해요.
-- `GET`/`PUT /api/settings/collection`(`src/web/settings_api.rs`): `{folder, archive_folder, version}`, 버전이 다르면 `409 conflict`, 그 밖은 `ApiError`의 `invalid`·`internal`과 해요체 문장이에요. 검사는 절대 경로인 있는 폴더, `canonicalize` 뒤 같거나 한쪽이 다른 쪽 안이 아닐 것, 같은 `st_dev`예요. 보관 폴더는 비워도 돼요. 폴더는 적은 그대로(끝의 `/`만 뗌) 저장해요.
+- `GET`/`PUT /api/settings/collection`(`crates/trss-web/src/settings_api.rs`): `{folder, archive_folder, version}`, 버전이 다르면 `409 conflict`, 그 밖은 `ApiError`의 `invalid`·`internal`과 해요체 문장이에요. 검사는 절대 경로인 있는 폴더, `canonicalize` 뒤 같거나 한쪽이 다른 쪽 안이 아닐 것, 같은 `st_dev`예요. 보관 폴더는 비워도 돼요. 폴더는 적은 그대로(끝의 `/`만 뗌) 저장해요.
 - 수집 폴더가 없으면: 주기는 피드를 읽고 규칙이 고르지 않은 항목만 기록하고, 규칙이 고른 항목은 Transmission에 넣지도 기록하지도 않아요(보고서의 `waiting_for_collect_folder`). 기록하지 않으니 폴더를 정한 뒤 다음 주기가 새 항목으로 판정해 받아요. 토렌트 정리도 건너뛰어요. `다시 받기` 명령은 "수집 폴더가 정해지지 않아서 받지 않았어요"라는 까닭으로 `failed`로 끝나고 Transmission에 아무것도 보내지 않으며, 항목의 기록은 바꾸지 않아요. `/api/collect/status`에 `collect_folder_set`이 있고 상태 판이 까닭과 설정 링크를 보여줘요.
-- 기존 YAML(`src/import/fit.rs`, `src/web/import_api.rs`): 수집 폴더가 없으면 파일의 채널 폴더(다르면 공통 상위)로 정하고, 안이면 규칙 저장 폴더 앞에 남은 부분을 붙이고, 밖이면 검토 단계에 까닭과 함께 알리고 가져오지 않아요(결과 단계에도 나와요). 폴더는 채널과 같은 트랜잭션으로 정해요. 검토한 수집 폴더가 적용 때 다르면 `409`로 다시 검토하게 해요.
+- 기존 YAML(`crates/trss-import/src/fit.rs`, `crates/trss-web/src/import_api.rs`): 수집 폴더가 없으면 파일의 채널 폴더(다르면 공통 상위)로 정하고, 안이면 규칙 저장 폴더 앞에 남은 부분을 붙이고, 밖이면 검토 단계에 까닭과 함께 알리고 가져오지 않아요(결과 단계에도 나와요). 폴더는 채널과 같은 트랜잭션으로 정해요. 검토한 수집 폴더가 적용 때 다르면 `409`로 다시 검토하게 해요.
 - 웹: 설정 `수집 폴더` 항목(폴더 두 칸·저장·되돌리기·충돌 안내), 목록 줄은 `Shows (current) · 보관 Shows` 또는 수집 폴더 이름만, 채널 카드·편집기에서 기본 저장 폴더를 빼고 채널 탭에 설정 링크가 든 한 줄, 규칙 상세가 전체 경로를 보여주고, 폴더를 바꾸면 규칙·미리보기·상태 캐시를 버려요. `readme.md`와 `docker-compose.trss.yml` 주석, `worker`·`channels_api` 모듈 문서를 고쳤어요.
 
 ### 검토 뒤 고친 것
@@ -56,10 +56,10 @@
 ### 검증한 것
 
 - `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`가 모두 통과했어요(라이브러리 296개, 통합 시험 파일들 포함). 웹은 `npm run typecheck`와 `npm run build`가 통과했어요.
-- 마이그레이션(`src/store/settings/tests.rs`, 이전 버전 DB를 손으로 만들어 열어요): 같은 기본 경로, 다른 기본 경로(끝의 `/`가 있는 기본 경로·빈 저장 폴더·보관 규칙 포함), 채널 없음, 공통 조각 없음(v6 그대로)을 확인하고, 규칙마다 `save_path`와 글자 단위로 같은지 견줘요.
-- `tests/collect_folder.rs`: 마이그레이션한 DB에서 규칙 주기·미리보기·`다시 받기`가 같은 항목에 같은 폴더를 내고 마이그레이션 전 계산과 글자까지 같아요(`/media/other/`의 끝 `/` 포함). 수집 폴더가 없는 DB에서는 추가 0·`add_failed` 0·기록에 `추가 실패` 없음·토렌트 정리 없음·상태 판 `collect_folder_set=false`이고, 폴더를 정하면 다음 주기가 3개를 받아요. 폴더 없는 상태의 `다시 받기`는 까닭과 함께 끝나고 항목을 그대로 둬요.
-- 설정 API 시험(`src/web/settings_api/tests.rs`): 읽기·저장·비운 보관 폴더, 없는 폴더·폴더가 아닌 것·상대 경로, 같은 폴더와 양방향 안쪽(`..`과 심볼릭 링크 포함), 다른 파일시스템(`/proc`, Linux 전용), 오래된 버전 `409`, 잘못된 본문.
-- 기존 YAML: `src/import/fit.rs`와 `src/web/import_api/tests.rs`에서 폴더 미설정·안·밖·공통 상위·검토 뒤 폴더가 바뀜·모두 건너뜀을 확인해요. `tests/worker_legacy_comparison.rs`는 YAML을 가져오기 경로로 넣은 worker가 옛 실행 파일과 같은 Transmission 요청(같은 폴더)을 내는지 견줘요.
+- 마이그레이션(`crates/trss-collect/src/store/collect_folder_migration_tests.rs`, 이전 버전 DB를 손으로 만들어 열어요): 같은 기본 경로, 다른 기본 경로(끝의 `/`가 있는 기본 경로·빈 저장 폴더·보관 규칙 포함), 채널 없음, 공통 조각 없음(v6 그대로)을 확인하고, 규칙마다 `save_path`와 글자 단위로 같은지 견줘요.
+- `crates/trss-worker/tests/collect_folder.rs`: 마이그레이션한 DB에서 규칙 주기·미리보기·`다시 받기`가 같은 항목에 같은 폴더를 내고 마이그레이션 전 계산과 글자까지 같아요(`/media/other/`의 끝 `/` 포함). 수집 폴더가 없는 DB에서는 추가 0·`add_failed` 0·기록에 `추가 실패` 없음·토렌트 정리 없음·상태 판 `collect_folder_set=false`이고, 폴더를 정하면 다음 주기가 3개를 받아요. 폴더 없는 상태의 `다시 받기`는 까닭과 함께 끝나고 항목을 그대로 둬요.
+- 설정 API 시험(`crates/trss-web/src/settings_api/tests.rs`): 읽기·저장·비운 보관 폴더, 없는 폴더·폴더가 아닌 것·상대 경로, 같은 폴더와 양방향 안쪽(`..`과 심볼릭 링크 포함), 다른 파일시스템(`/proc`, Linux 전용), 오래된 버전 `409`, 잘못된 본문.
+- 기존 YAML: `crates/trss-import/src/fit.rs`와 `crates/trss-web/src/import_api/tests.rs`에서 폴더 미설정·안·밖·공통 상위·검토 뒤 폴더가 바뀜·모두 건너뜀을 확인해요. `tests/worker_legacy_comparison.rs`는 YAML을 가져오기 경로로 넣은 worker가 옛 실행 파일과 같은 Transmission 요청(같은 폴더)을 내는지 견줘요.
 - 브라우저(로컬 `trss-web`, 1280px과 390px, 스크래치 DB): v6 DB를 열어 마이그레이션됨을 확인했고, 설정 화면에서 수집 폴더 안의 보관 폴더가 까닭과 함께 거부되고 바깥 폴더는 저장돼 목록 줄이 `media · 보관 Shows-archive`로 바뀌고, 채널 탭에 기본 저장 폴더가 없고 설정 링크 한 줄이 있고, 규칙 상세가 전체 경로를 보여주고, 빈 DB에서 상태 판이 까닭을 보여주고 설정 패널이 `수집 폴더를 정해 주세요`를 보여주고, 가져오기 검토·결과 단계가 수집 폴더 설정과 밖의 채널을 보여주는 것을 봤어요. 390px에서 가로 넘침이 없었어요(`scrollWidth == innerWidth`).
 
 ### 검증하지 못한 것
