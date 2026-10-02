@@ -144,6 +144,20 @@ pub(super) fn first_season(conn: &Connection, work_id: &str) -> rusqlite::Result
     )
 }
 
+/// The AniList entry the work's cover follows: the first entry of the lowest
+/// numbered recorded season that links one (not season 0, the specials).
+pub(crate) fn cover_target(conn: &Connection, work_id: &str) -> rusqlite::Result<Option<i64>> {
+    conn.query_row(
+        "SELECT l.anilist_id FROM season_entries l
+           JOIN seasons s ON s.work_id = l.work_id AND s.number = l.season
+          WHERE l.work_id = ?1 AND l.season >= 1
+          ORDER BY l.season, l.position LIMIT 1",
+        [work_id],
+        |r| r.get(0),
+    )
+    .optional()
+}
+
 fn entries_of(conn: &Connection, work_id: &str, season: u32) -> rusqlite::Result<Vec<Entry>> {
     let mut stmt = conn.prepare(&format!(
         "SELECT {ENTRY_COLUMNS} FROM season_entries l JOIN anilist_entries e ON e.id = l.anilist_id

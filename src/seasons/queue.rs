@@ -6,6 +6,7 @@
 //!   and links the entry it names exactly ([`crate::artwork::title::decide`],
 //!   the rule the cover uses: the search read to its last page, one candidate
 //!   whose title equals the name after NFC, case folding and space folding).
+//!   A linked entry is what an `auto` cover follows ([`Seasons::follow_cover`]).
 //!   Anything else links nothing and leaves a note. The result is dropped when
 //!   the season's link changed meanwhile (the store checks the version).
 //! - **The daily refresh.** An entry a season links that is not yet released or
@@ -162,7 +163,10 @@ impl Seasons {
             .auto_linked(&job.work_id, job.season, job.version, id)
             .await
         {
-            Ok(true) => Ran::Linked(id),
+            Ok(true) => {
+                self.follow_cover(&job.work_id).await;
+                Ran::Linked(id)
+            }
             Ok(false) => Ran::Dropped,
             Err(e) => self.not_recorded(job, e).await,
         }

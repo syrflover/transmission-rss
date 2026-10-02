@@ -19,9 +19,11 @@
 --   taken at; a write from an older version changes nothing.
 -- - `job` is the automatic work still to do for the work: `search` (look the
 --   work's folder name up on AniList and select a clear match) or `fetch`
---   (receive the image of the selected AniList ID). Only a new work and a
---   user's request set it; `job_image_url` is the cover URL a verified search
---   answer gave, NULL when the fetch must ask AniList for it. `job_attempts`
+--   (receive the image of the selected AniList ID). Only a new work, a user's
+--   request and a season's link being saved while the cover is `auto` (it
+--   follows the earliest season's first entry) set it; `job_image_url` is the
+--   cover URL a verified search answer gave, NULL when the fetch must ask
+--   AniList for it. `job_attempts`
 --   and `job_not_before` space retries out. `note` is the code of the last
 --   automatic outcome the screen explains (no match, ambiguous, ...).
 --

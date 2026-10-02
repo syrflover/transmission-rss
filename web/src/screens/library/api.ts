@@ -215,6 +215,8 @@ export interface WorkDetail {
   rules: WorkRule[];
   /** Where the cover image is served while the work has one. */
   cover_url: string | null;
+  /** The worker still has to receive the cover's image; the old image shows until then. */
+  cover_pending: boolean;
 }
 
 /** The cache key of one work's page. */

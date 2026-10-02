@@ -23,6 +23,7 @@
 //!   }],
 //!   "unrecognized": [{ "path": "Extras/PV.mkv", "reason": "outside_season", "message": "…" }],
 //!   "cover_url": "/api/library/works/…/artwork/image?v=…",
+//!   "cover_pending": false,
 //!   "rules": [{
 //!     "id": "…", "channel": { "id": "…", "name": null, "host": "example.org" },
 //!     "match": "Lycoris", "directory": "Lycoris Recoil/Season 01",
@@ -76,7 +77,10 @@
 //!   set.
 //! - `cover_url` is where the work's cover is served while it has an image
 //!   reference, `null` otherwise; the cover view reads the rest from
-//!   [`super::artwork_api`].
+//!   [`super::artwork_api`]. `cover_pending` is true while the worker still has
+//!   to receive the cover's image (a cover that follows a season's link shows
+//!   the old image until then), so the screen reads the work again until it
+//!   is false.
 //! - `404` for a work that is not in the library.
 
 use std::{collections::HashMap, path::Path as FsPath};
@@ -99,6 +103,7 @@ use crate::{
     revision::{season_episode, Release},
     rss::save_path,
     store::{
+        artwork::JobKind,
         channels::ChannelWithRules,
         library::{EpisodeDetail, FileRecord, LibraryError, WorkDetail},
         revisions::Revision,
@@ -233,6 +238,7 @@ struct WorkDetailView {
     unrecognized: Vec<UnrecognizedView>,
     rules: Vec<RuleRef>,
     cover_url: Option<String>,
+    cover_pending: bool,
 }
 
 fn host_of(url: &str) -> String {
@@ -383,8 +389,11 @@ async fn show(
         &channels,
     );
 
-    let cover_url = match state.artwork.store.selection(&work.id).await {
-        Ok(selection) => selection.image.map(|image| image_url(&work.id, &image.id)),
+    let (cover_url, cover_pending) = match state.artwork.store.selection(&work.id).await {
+        Ok(selection) => (
+            selection.image.map(|image| image_url(&work.id, &image.id)),
+            selection.job.is_some_and(|job| job.kind == JobKind::Fetch),
+        ),
         Err(e) => return Err(ApiError::Internal(e.to_string())),
     };
 
@@ -505,5 +514,6 @@ async fn show(
             .collect(),
         rules,
         cover_url,
+        cover_pending,
     }))
 }

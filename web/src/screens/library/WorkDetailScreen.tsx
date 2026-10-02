@@ -32,6 +32,9 @@ import { Cover, FROM_LIBRARY } from "./WorkItem";
 
 const LOAD_FAILED = "작품을 불러오지 못했어요.";
 
+/** How often the page reads a cover that is still being received. */
+const COVER_POLL_MS = 3000;
+
 /** The two-column layout starts here; below it the cards fold under the episode list. */
 const WIDE_QUERY = "(min-width: 1100px)";
 
@@ -77,6 +80,31 @@ function WorkPage({ workId }: { workId: string }) {
       forgetPrefix(LIST_PREFIX);
     }
   };
+
+  // A cover that follows a season's link keeps its old image until the worker has received the new one, even
+  // after the cover view or the link dialog is closed: read the cover now and then until it is there.
+  const coverPending = work.data?.cover_pending ?? false;
+  const coverUrl = useRef<string | null>(null);
+  coverUrl.current = work.data?.cover_url ?? null;
+  const updateWork = work.update;
+  useEffect(() => {
+    if (!coverPending) return;
+    const controller = new AbortController();
+    const timer = setInterval(() => {
+      loadWork(workId, controller.signal).then(
+        (fresh) => {
+          if (!fresh) return;
+          if (fresh.cover_url !== coverUrl.current) forgetPrefix(LIST_PREFIX);
+          updateWork((w) => (w ? { ...w, cover_url: fresh.cover_url, cover_pending: fresh.cover_pending } : w));
+        },
+        () => {},
+      );
+    }, COVER_POLL_MS);
+    return () => {
+      clearInterval(timer);
+      controller.abort();
+    };
+  }, [workId, coverPending, updateWork]);
 
   // A season's info after a change (or after the app linked it) shows at once; the list reads its pages again.
   const infoChanged = (info: SeasonInfo) => {

@@ -26,8 +26,11 @@
 //! still has to do for a work. A work recorded for the first time gets a
 //! search (a trigger on `works` does it, so no scan code has to), and so does a
 //! user going back to `auto`; a user's repair asks for the selected ID's image
-//! again. Nothing else creates one: a rescan, a restart or opening a screen
-//! does not. Jobs persist, so a restart resumes the queue.
+//! again. A season's link being saved asks for the image of the entry an `auto`
+//! cover follows ([`ArtworkStore::follow_season_link`]); the image the work
+//! has stays until that one is received. Nothing else creates one: a rescan, a
+//! restart or opening a screen does not. Jobs persist, so a restart resumes the
+//! queue.
 //!
 //! # Files
 //!
@@ -417,6 +420,22 @@ impl ArtworkStore {
         let id = work_id.to_owned();
         self.db
             .run(move |c| repo::select_manual(c, &id, expected, anilist_media_id, &image))
+            .await
+    }
+
+    /// Lets the work's `auto` cover follow its seasons' links (see
+    /// [`crate::store::seasons::cover_target`]): when the entry to follow is
+    /// not the selected one, selects it and asks for its image, which replaces
+    /// the current one only once received. `manual` and `disabled` covers are
+    /// never changed. Whether an image was asked for.
+    pub async fn follow_season_link(
+        &self,
+        work_id: &str,
+        now: Millis,
+    ) -> Result<bool, ArtworkError> {
+        let id = work_id.to_owned();
+        self.db
+            .run(move |c| repo::follow_season_link(c, &id, now))
             .await
     }
 

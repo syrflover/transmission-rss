@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 use tower::ServiceExt;
 
 use crate::{
-    artwork::{fake::Fake, Artwork},
+    artwork::{fake::Fake, image::samples, AppData, Artwork},
     discovery::{EpisodeFile, FileKind, Scan, ScannedWork, WorkRead},
     store::Db,
     web::{api, AppState},
@@ -58,11 +58,21 @@ fn media(id: i64, romaji: &str, native: &str, status: &str, year: i64) -> Value 
 }
 
 async fn env(works: Vec<WorkRead>) -> Env {
+    env_in(works, false).await
+}
+
+/// [`env`] with an app data folder, so that cover images can be stored.
+async fn env_with_covers(works: Vec<WorkRead>) -> Env {
+    env_in(works, true).await
+}
+
+async fn env_in(works: Vec<WorkRead>, covers: bool) -> Env {
     let dir = tempfile::tempdir().unwrap();
     let db = Db::open(dir.path().join("trss.db")).await.unwrap();
     let fake = Fake::start().await;
+    let app_data = covers.then(|| AppData::new(dir.path()));
     let state = AppState::new(db.clone())
-        .with_artwork(Artwork::new(db, None, fake.config()).with_spacing(Duration::ZERO));
+        .with_artwork(Artwork::new(db, app_data, fake.config()).with_spacing(Duration::ZERO));
     let (folder, _) = state
         .library
         .add_folder("/c".into(), Scan { works }, 1, &[])
@@ -649,4 +659,83 @@ async fn asking_again_unlinks_the_first_season_for_a_new_search_and_refresh_rece
     .await;
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(error["current"]["pending"], "search");
+}
+
+/// An entry the cover can be received from: `media` plus its cover at `/img/<id>.jpg`.
+fn with_cover(env: &Env, id: i64, title: &str, image: &[u8]) {
+    let mut entry = media(id, title, "ショー", "FINISHED", 2022);
+    entry["coverImage"] = env.fake.entry(id, title, &[])["coverImage"].clone();
+    env.answer(entry);
+    env.fake
+        .state
+        .lock()
+        .unwrap()
+        .images
+        .insert(format!("{id}.jpg"), image.to_vec());
+}
+
+#[tokio::test]
+async fn saving_a_link_lets_an_automatic_cover_follow_and_shows_a_failure_where_the_cover_view_reads_it(
+) {
+    let env = env_with_covers(vec![work("Show", &[1], vec![episode(1, "01")])]).await;
+    let id = env.id("Show").await;
+    let artwork = format!("/library/works/{id}/artwork");
+    let season = format!("/library/works/{id}/seasons/1");
+    with_cover(&env, 1, "Show", &samples::jpeg());
+    with_cover(&env, 2, "Show (other)", b"not an image");
+
+    // Linking the first season: the link answers at once, the cover follows behind.
+    let (status, info) = post(
+        &env.state,
+        &format!("{season}/links"),
+        json!({ "version": 1, "anilist_ids": [1] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{info}");
+    let (_, cover) = get(&env.state, &artwork).await;
+    assert_eq!(
+        (
+            &cover["mode"],
+            &cover["anilist_media_id"],
+            &cover["pending"]
+        ),
+        (&json!("auto"), &json!(1), &json!("fetch"))
+    );
+    assert_eq!(cover["image"], Value::Null);
+    let (_, work) = get(&env.state, &format!("/library/works/{id}")).await;
+    assert_eq!(
+        (&work["cover_url"], &work["cover_pending"]),
+        (&Value::Null, &json!(true))
+    );
+
+    // Once the worker has received it, the work's page has the cover.
+    assert!(env.state.artwork.run_next().await.is_some());
+    let (_, cover) = get(&env.state, &artwork).await;
+    assert_eq!(cover["pending"], Value::Null);
+    assert_eq!(cover["image"]["status"], "available");
+    let (_, work) = get(&env.state, &format!("/library/works/{id}")).await;
+    assert_eq!(work["cover_pending"], false);
+    assert_eq!(work["cover_url"], cover["image"]["url"]);
+
+    // Changing the link to an entry whose image is refused: the link is saved,
+    // the old cover stays, and the cover view's state says why.
+    let (status, info) = post(
+        &env.state,
+        &format!("{season}/links"),
+        json!({ "version": info["version"], "anilist_ids": [2] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{info}");
+    assert_eq!(info["entries"][0]["id"], 2);
+    assert!(env.state.artwork.run_next().await.is_some());
+    let (_, after) = get(&env.state, &artwork).await;
+    assert_eq!(after["note"]["code"], "rejected");
+    assert_eq!(after["pending"], Value::Null);
+    assert_eq!(after["image"], cover["image"]);
+    assert_eq!(after["mode"], "auto");
+    let (_, work) = get(&env.state, &format!("/library/works/{id}")).await;
+    assert_eq!(
+        (&work["cover_url"], &work["cover_pending"]),
+        (&cover["image"]["url"], &json!(false))
+    );
 }

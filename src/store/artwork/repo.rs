@@ -290,6 +290,41 @@ pub(super) fn select_manual(
     Ok(selection)
 }
 
+/// Lets an `auto` cover follow the season links: when the entry the cover
+/// follows ([`crate::store::seasons::cover_target`]) is not the selected one,
+/// selects it and asks for its image. The image the work has stays until the
+/// new one is received, so a failure leaves the cover as it was (with the
+/// reason as the note). Whether the image was asked for.
+pub(super) fn follow_season_link(
+    conn: &mut Connection,
+    work_id: &str,
+    now: Millis,
+) -> Result<bool, ArtworkError> {
+    let tx = begin(conn)?;
+    ensure_row(&tx, work_id)?;
+    let Some(target) = crate::store::seasons::cover_target(&tx, work_id)? else {
+        return Ok(false);
+    };
+    let selection = read(&tx, work_id)?.ok_or(ArtworkError::NotFound)?;
+    if selection.mode != Mode::Auto
+        || (selection.source == Some(Source::Anilist) && selection.anilist_media_id == Some(target))
+    {
+        return Ok(false);
+    }
+    // A new selection: a search or fetch of the old one that is still running
+    // finds the version moved on and drops its result.
+    tx.execute(
+        "UPDATE work_artwork SET source = 'anilist', anilist_media_id = ?2,
+             version = version + 1, job = 'fetch', job_requested_at = ?3,
+             job_attempts = 0, job_not_before = NULL, job_image_url = NULL,
+             note = NULL, note_at = NULL
+         WHERE work_id = ?1",
+        params![work_id, target, now],
+    )?;
+    tx.commit()?;
+    Ok(true)
+}
+
 pub(super) fn next_job(conn: &Connection, now: Millis) -> rusqlite::Result<Option<ClaimedJob>> {
     conn.query_row(
         "SELECT a.work_id, w.dir_name, a.version, a.job, a.anilist_media_id,

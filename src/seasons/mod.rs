@@ -11,6 +11,10 @@
 //!   folder name names exactly one AniList entry, and the daily refresh of
 //!   entries that are not finished.
 //!
+//! Saving a season's link also lets the work's cover follow it
+//! ([`Seasons::follow_cover`]), whoever saves it: the user, or the worker's
+//! automatic link of a first season.
+//!
 //! [`Seasons`] puts them together for both processes. The web carries out the
 //! user's choices itself (search, link, unlink, order, ask again) because the
 //! user waits for the answer and needs the reason when AniList refuses; the
@@ -25,6 +29,8 @@ pub mod describe;
 pub mod queue;
 
 #[cfg(test)]
+mod cover_tests;
+#[cfg(test)]
 mod tests;
 
 use std::{sync::Arc, time::Duration};
@@ -32,6 +38,7 @@ use std::{sync::Arc, time::Duration};
 use crate::{
     artwork::{Anilist, AnilistError, Artwork, USER_MAX_WAIT},
     store::{
+        artwork::{ArtworkError, ArtworkStore},
         history::Millis,
         seasons::{Entry, SeasonError, SeasonLink, SeasonStore},
         Db,
@@ -63,6 +70,7 @@ fn clock_of(artwork: &Artwork) -> Clock {
 #[derive(Clone)]
 pub struct Seasons {
     pub store: SeasonStore,
+    artwork: ArtworkStore,
     pub anilist: Anilist,
     clock: Clock,
 }
@@ -70,6 +78,7 @@ pub struct Seasons {
 impl Seasons {
     pub fn new(db: Db, anilist: Anilist, clock: Clock) -> Self {
         Seasons {
+            artwork: ArtworkStore::new(db.clone()),
             store: SeasonStore::new(db),
             anilist,
             clock,
@@ -86,6 +95,7 @@ impl Seasons {
     pub fn alongside(&self, artwork: &Artwork) -> Self {
         Seasons {
             store: self.store.clone(),
+            artwork: artwork.store.clone(),
             anilist: artwork.anilist.clone(),
             clock: clock_of(artwork),
         }
@@ -93,6 +103,18 @@ impl Seasons {
 
     pub fn now(&self) -> Millis {
         (self.clock)()
+    }
+
+    /// Lets the work's cover follow its seasons' links after one was saved: an
+    /// `auto` cover is changed to the image of the earliest season's first
+    /// entry, which the worker receives and verifies like any cover (the cover
+    /// shown stays until then). The link is saved already, so a failure here is
+    /// logged and never the link's.
+    pub async fn follow_cover(&self, work_id: &str) {
+        match self.artwork.follow_season_link(work_id, self.now()).await {
+            Ok(_) | Err(ArtworkError::NotFound) => {}
+            Err(e) => eprintln!("Cover of work {work_id} cannot follow its seasons: {e}"),
+        }
     }
 
     /// Asks AniList for entry `id` and stores the answer.
@@ -131,7 +153,9 @@ impl Seasons {
                 self.receive(*id, Some(USER_MAX_WAIT)).await?;
             }
         }
-        Ok(self.store.set_links(work_id, season, expected, ids).await?)
+        let link = self.store.set_links(work_id, season, expected, ids).await?;
+        self.follow_cover(work_id).await;
+        Ok(link)
     }
 
     /// Unlinks the first season and asks for a new automatic search.
@@ -141,10 +165,12 @@ impl Seasons {
         season: u32,
         expected: i64,
     ) -> Result<SeasonLink, ActionError> {
-        Ok(self
+        let link = self
             .store
             .restart_auto(work_id, season, expected, self.now())
-            .await?)
+            .await?;
+        self.follow_cover(work_id).await;
+        Ok(link)
     }
 
     /// Asks AniList again for every entry the season links, finished or not.

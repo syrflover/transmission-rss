@@ -216,7 +216,8 @@ export function CoverDialog({
                     >
                       {busy === "upload" ? "올리는 중…" : "파일 올리기"}
                     </Button>
-                    {problem && state.source === "anilist" && (
+                    {/* A note on a selected AniList entry means its image was given up on, even while an older image shows. */}
+                    {(problem || state.note) && state.source === "anilist" && (
                       <Button
                         type="button"
                         variant="ghost"

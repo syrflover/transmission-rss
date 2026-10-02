@@ -80,7 +80,7 @@ nyaa 추가 검색의 묶음 크기·요청 간격은 [0026](0026-past-episode-s
 
 | 티켓 | 제목 | 상태 | 막는 티켓 |
 | --- | --- | --- | --- |
-| [0027](0027-cover-follows-season-link.md) | 자동 표지가 시즌의 AniList 연결을 따라가요 | 대기 | 없음 |
+| [0027](0027-cover-follows-season-link.md) | 자동 표지가 시즌의 AniList 연결을 따라가요 | 완료 | 없음 |
 | [0028](0028-creator-name-only.md) | 자막 제작자를 이름만 보여줘요 | 대기 | 없음 |
 
 ### 3. 자막 후보와 수신
