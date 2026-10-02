@@ -641,16 +641,20 @@ mod tests {
             assert!(std::future::Future::poll(taking.as_mut(), &mut cx).is_pending());
             drop(taking);
 
-            // The lock goes only once the hold the beat said is cleared.
-            for _ in 0..500 {
-                if CycleLock::try_acquire(&s.path).unwrap().is_some() {
+            // The lock goes only once the hold the beat said is cleared: when
+            // it can be taken, the hold is cleared already.
+            // Looked for between any two steps of the tasks that end it.
+            let mut free = None;
+            for _ in 0..1_000_000 {
+                free = CycleLock::try_acquire(&s.path).unwrap();
+                if free.is_some() {
                     break;
                 }
-                tokio::time::sleep(Duration::from_millis(10)).await;
+                tokio::task::yield_now().await;
             }
-            assert!(CycleLock::try_acquire(&s.path).unwrap().is_some());
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            assert!(free.is_some(), "the lock was never let go");
             assert_eq!(s.held_since().await, None);
+            drop(free);
 
             // The worker takes its lock again.
             let again = worker.try_hold().await.unwrap().expect("free");
