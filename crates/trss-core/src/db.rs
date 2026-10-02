@@ -39,71 +39,71 @@ impl Migration {
 /// reorder an entry that has shipped.
 const MIGRATIONS: &[Migration] = &[
     // 1: channels and rules
-    Migration::Sql(include_str!("channels/schema.sql")),
+    Migration::Sql(include_str!("../migrations/channels/schema.sql")),
     // 2: collection history and the worker's cycle marker
-    Migration::Sql(include_str!("history/schema.sql")),
+    Migration::Sql(include_str!("../migrations/history/schema.sql")),
     // 3: optional channel display name
     Migration::Sql("ALTER TABLE channels ADD COLUMN name TEXT CHECK (name IS NULL OR name <> '');"),
     // 4: the worker's snapshots for the collection screen's status board
-    Migration::Sql(include_str!("status/schema.sql")),
+    Migration::Sql(include_str!("../migrations/status/schema.sql")),
     // 5: commands the web accepts and the worker carries out
-    Migration::Sql(include_str!("commands/schema.sql")),
+    Migration::Sql(include_str!("../migrations/commands/schema.sql")),
     // 6: a command whose Transmission add got no answer
-    Migration::Sql(include_str!("commands/add_unconfirmed.sql")),
+    Migration::Sql(include_str!("../migrations/commands/add_unconfirmed.sql")),
     // 7: the app-wide collect folder replaces the channels' base folders
-    Migration::Code(super::settings::fold_base_dirs),
+    Migration::Code(crate::settings::fold_base_dirs),
     // 8: watch folders and the works, seasons, episodes and files found in them
-    Migration::Sql(include_str!("library/schema.sql")),
+    Migration::Sql(include_str!("../migrations/library/schema.sql")),
     // 9: work folders seen but not readable yet, so a folder's baseline is per work
-    Migration::Sql(include_str!("library/unread_works.sql")),
+    Migration::Sql(include_str!("../migrations/library/unread_works.sql")),
     // 10: watch folders the app registers for the collect and archive folders
-    Migration::Sql(include_str!("library/automatic.sql")),
+    Migration::Sql(include_str!("../migrations/library/automatic.sql")),
     // 11: work artwork: the selection, the image files the app made, AniList's pace
-    Migration::Sql(include_str!("artwork/schema.sql")),
+    Migration::Sql(include_str!("../migrations/artwork/schema.sql")),
     // 12: what the worker's inotify watches could not cover in a watch folder
-    Migration::Sql(include_str!("library/watch_note.sql")),
+    Migration::Sql(include_str!("../migrations/library/watch_note.sql")),
     // 13: season info: the AniList entries linked to each local season
-    Migration::Sql(include_str!("seasons/schema.sql")),
+    Migration::Sql(include_str!("../migrations/seasons/schema.sql")),
     // 14: unregistered watch folders keep their works instead of deleting them
-    Migration::Sql(include_str!("library/unregistered.sql")),
+    Migration::Sql(include_str!("../migrations/library/unregistered.sql")),
     // 15: Anissia: the schedule snapshot of subscribed anime, rule subscriptions, the request pace
-    Migration::Sql(include_str!("anissia/schema.sql")),
+    Migration::Sql(include_str!("../migrations/anissia/schema.sql")),
     // 16: a rule can be paused (`영상 받기` off); a subscription notes a season that is taken
-    Migration::Sql(include_str!("channels/paused.sql")),
+    Migration::Sql(include_str!("../migrations/channels/paused.sql")),
     // 17: the history's items found by the rule that received them
-    Migration::Sql(include_str!("history/by_rule.sql")),
+    Migration::Sql(include_str!("../migrations/history/by_rule.sql")),
     // 18: a number that changes when a video lookup in the library could answer differently
-    Migration::Sql(include_str!("library/generation.sql")),
+    Migration::Sql(include_str!("../migrations/library/generation.sql")),
     // 19: when a rule was last turned back on, so what it missed while off is left to the user
-    Migration::Sql(include_str!("channels/resumed.sql")),
+    Migration::Sql(include_str!("../migrations/channels/resumed.sql")),
     // 20: when a title-waiting subscription got its title; the title candidates the user rejected
-    Migration::Sql(include_str!("channels/title_waiting.sql")),
+    Migration::Sql(include_str!("../migrations/channels/title_waiting.sql")),
     // 21: the weekly schedule: the torrents being downloaded and the cycle interval the worker
     //     leaves for the web, and the first run's checklist
     Migration::Sql(concat!(
-        include_str!("status/week.sql"),
-        include_str!("setup/schema.sql")
+        include_str!("../migrations/status/week.sql"),
+        include_str!("../migrations/setup/schema.sql")
     )),
     // 22: when Anissia was found not to list an anime any more; the first run's steps and end
     //     kept, instead of read from the data each time
     Migration::Sql(concat!(
-        include_str!("anissia/unlisted.sql"),
-        include_str!("setup/ended.sql")
+        include_str!("../migrations/anissia/unlisted.sql"),
+        include_str!("../migrations/setup/ended.sql")
     )),
     // 23: the grounds of a rule's automatic episode offset
-    Migration::Sql(include_str!("channels/episode_basis.sql")),
+    Migration::Sql(include_str!("../migrations/channels/episode_basis.sql")),
     // 24: when a rule started and which archive suggestion grounds the user chose to keep collecting
-    Migration::Sql(include_str!("channels/archive_suggestion.sql")),
+    Migration::Sql(include_str!("../migrations/channels/archive_suggestion.sql")),
     // 25: the replacement of video revisions and how far each has come
-    Migration::Sql(include_str!("revisions/schema.sql")),
+    Migration::Sql(include_str!("../migrations/revisions/schema.sql")),
     // 26: the pace of search requests to a feed host, shared by the web and the worker
-    Migration::Sql(include_str!("search_pace/schema.sql")),
+    Migration::Sql(include_str!("../migrations/search_pace/schema.sql")),
     // 27: every torrent Transmission held when the worker last looked, for the web's past search
-    Migration::Sql(include_str!("status/listing.sql")),
+    Migration::Sql(include_str!("../migrations/status/listing.sql")),
     // 28: which items a channel's first read recorded, and when it was
-    Migration::Sql(include_str!("history/first_read.sql")),
+    Migration::Sql(include_str!("../migrations/history/first_read.sql")),
     // 29: the worker's heartbeat while it holds the cycle lock, so the web tells a dead worker from a slow cycle
-    Migration::Sql(include_str!("status/heartbeat.sql")),
+    Migration::Sql(include_str!("../migrations/status/heartbeat.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -181,10 +181,17 @@ impl Db {
     }
 }
 
+/// How many migrations this build applies, which is the `user_version` of a
+/// database it has opened.
+#[cfg(any(test, feature = "test-support"))]
+pub fn schema_version() -> usize {
+    MIGRATIONS.len()
+}
+
 /// Creates a database at `path` left as a build with its first `n` migrations
 /// would leave it, for tests of the migrations after them.
-#[cfg(test)]
-pub(crate) fn database_at(path: &Path, n: usize) -> Connection {
+#[cfg(any(test, feature = "test-support"))]
+pub fn database_at(path: &Path, n: usize) -> Connection {
     let conn = Connection::open(path).unwrap();
     for migration in &MIGRATIONS[..n] {
         migration.apply(&conn).unwrap();
@@ -1171,61 +1178,6 @@ mod tests {
             })
             .await;
         assert!(refused.is_err());
-    }
-
-    /// The migration that kept the list of every torrent in Transmission is number 27.
-    const BEFORE_TORRENT_LISTING: usize = 26;
-
-    #[tokio::test]
-    async fn a_database_from_before_the_torrent_listing_has_none_until_the_worker_writes_one() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("app.db");
-        {
-            let conn = database_at(&path, BEFORE_TORRENT_LISTING);
-            conn.execute(
-                "INSERT INTO transmission_snapshot (id, downloading, seeding, taken_at)
-                 VALUES (1, 2, 3, 400)",
-                [],
-            )
-            .unwrap();
-        }
-
-        let db = Db::open(&path).await.unwrap();
-
-        assert_eq!(version_of(&db).await, MIGRATIONS.len());
-        let status = crate::store::status::StatusStore::new(db);
-        // The counts the older worker left stay, and say nothing of which
-        // torrents are gone.
-        assert_eq!(status.transmission().await.unwrap().unwrap().seeding, 3);
-        assert_eq!(status.torrent_listing().await.unwrap(), None);
-        status.record_listing(500, vec!["aa".into()]).await.unwrap();
-        assert!(status.torrent_listing().await.unwrap().unwrap().holds("aa"));
-    }
-
-    /// The migration that added the worker's heartbeat is number 29.
-    const BEFORE_HEARTBEAT: usize = 28;
-
-    #[tokio::test]
-    async fn a_database_from_before_the_heartbeat_has_none_until_the_worker_writes_one() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("app.db");
-        {
-            let conn = database_at(&path, BEFORE_HEARTBEAT);
-            conn.execute(
-                "INSERT INTO worker_info (id, cycle_interval_ms) VALUES (1, 300000)",
-                [],
-            )
-            .unwrap();
-        }
-
-        let db = Db::open(&path).await.unwrap();
-
-        assert_eq!(version_of(&db).await, MIGRATIONS.len());
-        let status = crate::store::status::StatusStore::new(db);
-        assert_eq!(status.cycle_interval().await.unwrap(), Some(300_000));
-        assert_eq!(status.heartbeat().await.unwrap(), None);
-        status.record_heartbeat(500, Some(400)).await.unwrap();
-        assert_eq!(status.heartbeat().await.unwrap().unwrap().beat_at, 500);
     }
 
     /// How many migrations come before the one that stored the first read of

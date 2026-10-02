@@ -14,12 +14,12 @@ mod migrate;
 
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 
-pub(super) use migrate::fold_base_dirs;
+pub(crate) use migrate::fold_base_dirs;
 
-use super::db::{Db, DbError};
+use crate::db::{Db, DbError};
 
 /// Schema of the settings tables, run by the migration that adds them.
-pub(super) const SCHEMA: &str = include_str!("schema.sql");
+pub(crate) const SCHEMA: &str = include_str!("../../migrations/settings/schema.sql");
 
 #[derive(Debug, thiserror::Error)]
 pub enum SettingsError {
@@ -181,7 +181,7 @@ where
 /// folder stays empty). Used by the legacy import, which adopts the file's
 /// folder in the same transaction that imports the channels. A folder that is
 /// set already is a [`SettingsError::Conflict`] (expected version 0).
-pub(crate) fn set_collect_folder_if_unset(
+pub fn set_collect_folder_if_unset(
     tx: &Transaction<'_>,
     folder: &str,
 ) -> Result<(), SettingsError> {

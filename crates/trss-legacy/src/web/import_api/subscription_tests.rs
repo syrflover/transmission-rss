@@ -19,6 +19,8 @@ use serde_json::{json, Value};
 use tempfile::TempDir;
 use tower::ServiceExt;
 
+use trss_core::Clock;
+
 use super::*;
 use crate::{
     anissia::{fake::Fake, Anissia},
@@ -27,7 +29,7 @@ use crate::{
         history::{HistoryQuery, HistoryResult, KnownItem, Observation},
         Db,
     },
-    worker::{plan::ChannelPlan, Clock},
+    worker::plan::ChannelPlan,
 };
 
 /// 2026-10-01 12:00 in Seoul.

@@ -1,5 +1,6 @@
 use super::*;
 use crate::store::history::{HistoryResult, HistoryStore, Observation};
+use trss_core::db::schema_version;
 
 async fn db() -> Db {
     Db::open(":memory:").await.unwrap()
@@ -417,4 +418,70 @@ async fn the_torrent_listing_is_none_until_the_worker_writes_one_and_is_replaced
             hashes: HashSet::new(),
         })
     );
+}
+
+// --- migrations, seen through the store ----------------------------------------------
+
+/// The `user_version` of an opened database.
+async fn schema_version_of(db: &Db) -> usize {
+    db.run::<_, DbError, _>(|c| {
+        Ok(c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))? as usize)
+    })
+    .await
+    .unwrap()
+}
+
+/// The migration that kept the list of every torrent in Transmission is number 27.
+const BEFORE_TORRENT_LISTING: usize = 26;
+
+#[tokio::test]
+async fn a_database_from_before_the_torrent_listing_has_none_until_the_worker_writes_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("app.db");
+    {
+        let conn = crate::store::db::database_at(&path, BEFORE_TORRENT_LISTING);
+        conn.execute(
+            "INSERT INTO transmission_snapshot (id, downloading, seeding, taken_at)
+             VALUES (1, 2, 3, 400)",
+            [],
+        )
+        .unwrap();
+    }
+
+    let db = Db::open(&path).await.unwrap();
+
+    assert_eq!(schema_version_of(&db).await, schema_version());
+    let status = StatusStore::new(db);
+    // The counts the older worker left stay, and say nothing of which
+    // torrents are gone.
+    assert_eq!(status.transmission().await.unwrap().unwrap().seeding, 3);
+    assert_eq!(status.torrent_listing().await.unwrap(), None);
+    status.record_listing(500, vec!["aa".into()]).await.unwrap();
+    assert!(status.torrent_listing().await.unwrap().unwrap().holds("aa"));
+}
+
+/// The migration that added the worker's heartbeat is number 29.
+const BEFORE_HEARTBEAT: usize = 28;
+
+#[tokio::test]
+async fn a_database_from_before_the_heartbeat_has_none_until_the_worker_writes_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("app.db");
+    {
+        let conn = crate::store::db::database_at(&path, BEFORE_HEARTBEAT);
+        conn.execute(
+            "INSERT INTO worker_info (id, cycle_interval_ms) VALUES (1, 300000)",
+            [],
+        )
+        .unwrap();
+    }
+
+    let db = Db::open(&path).await.unwrap();
+
+    assert_eq!(schema_version_of(&db).await, schema_version());
+    let status = StatusStore::new(db);
+    assert_eq!(status.cycle_interval().await.unwrap(), Some(300_000));
+    assert_eq!(status.heartbeat().await.unwrap(), None);
+    status.record_heartbeat(500, Some(400)).await.unwrap();
+    assert_eq!(status.heartbeat().await.unwrap().unwrap().beat_at, 500);
 }

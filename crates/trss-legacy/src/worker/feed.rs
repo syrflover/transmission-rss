@@ -47,7 +47,7 @@ pub enum FetchError {
 
 pub fn client() -> Result<reqwest::Client, reqwest::Error> {
     reqwest::Client::builder()
-        .user_agent(crate::USER_AGENT)
+        .user_agent(trss_core::USER_AGENT)
         .timeout(FETCH_TIMEOUT)
         .build()
 }
@@ -55,7 +55,7 @@ pub fn client() -> Result<reqwest::Client, reqwest::Error> {
 pub async fn fetch(client: &reqwest::Client, url: &str) -> Result<rss::Channel, FetchError> {
     let response = client
         .get(url)
-        .header(header::USER_AGENT, crate::USER_AGENT)
+        .header(header::USER_AGENT, trss_core::USER_AGENT)
         .send()
         .await
         .map_err(|e| FetchError::Http(e.without_url()))?;

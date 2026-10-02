@@ -47,13 +47,14 @@ use url::Url;
 
 pub use parse::{Caption, Creator, ScheduleEntry};
 
+use trss_core::{system_clock, Clock};
+
 use crate::{
     store::{
         anissia::{AnissiaStore, AnissiaStoreError},
         history::Millis,
         Db,
     },
-    worker::{system_clock, Clock},
 };
 
 /// Anissia's API.
@@ -181,7 +182,7 @@ pub struct Anissia {
 impl Anissia {
     pub fn new(db: Db, config: AnissiaConfig, clock: Clock) -> Self {
         let http = reqwest::Client::builder()
-            .user_agent(crate::USER_AGENT)
+            .user_agent(trss_core::USER_AGENT)
             .timeout(API_TIMEOUT)
             .redirect(redirect::Policy::none())
             .build()

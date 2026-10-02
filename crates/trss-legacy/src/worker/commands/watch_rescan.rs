@@ -14,9 +14,11 @@
 
 use serde::{Deserialize, Serialize};
 
+use trss_core::Clock;
+
 use crate::{
     store::commands::{Command, CommandState, Outcome},
-    worker::{watch, Clock, CycleContext},
+    worker::{watch, CycleContext},
 };
 
 /// The `kind` of the command.

@@ -18,7 +18,7 @@ use std::{future::Future, time::Duration};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use super::Clock;
+use trss_core::Clock;
 use crate::store::{history::Millis, status::StatusStore};
 
 /// How often the heartbeat is written. The web calls the worker busy for a

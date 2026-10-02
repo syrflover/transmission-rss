@@ -24,7 +24,7 @@
 //!
 //! Two layers keep two workers from running the same cycle:
 //!
-//! 1. **An OS advisory lock** ([`lock::CycleLock`], `flock` on
+//! 1. **An OS advisory lock** ([`trss_core::CycleLock`], `flock` on
 //!    `<db path>.worker.lock`) is held for the whole cycle. A worker that finds
 //!    it taken skips the cycle. The kernel releases it when the holder dies,
 //!    and a slow holder keeps it for as long as it runs, so no timeout can let a
@@ -89,7 +89,6 @@ pub mod env;
 pub mod feed;
 pub mod heartbeat;
 pub mod live;
-pub mod lock;
 pub mod offsets;
 pub mod plan;
 pub mod revisions;
@@ -98,22 +97,21 @@ pub mod watch;
 
 use std::{
     path::PathBuf,
-    sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 
 use tokio_util::sync::CancellationToken;
+use trss_core::{system_clock, Clock, CycleLock};
 
 pub use commands::{rule_archive::work_folder::MovePolicy, CommandsOutcome, DEFAULT_COMMAND_POLL};
 pub use cycle::{run_cycle, CommandsAtStart, CycleContext, CycleError, CycleReport};
 pub use env::{EnvError, WorkerEnv};
-pub use lock::{lock_path_for, CycleLock};
 
 use crate::{
     store::{
         channels::ChannelStore,
         commands::{CommandError, CommandStore},
-        history::{HistoryError, HistoryStore, Millis},
+        history::{HistoryError, HistoryStore},
         library::LibraryStore,
         revisions::RevisionStore,
         seasons::SeasonStore,
@@ -123,17 +121,6 @@ use crate::{
     },
     transmission::{Redactor, RenamePolicy},
 };
-
-/// Source of the current time in Unix milliseconds.
-pub type Clock = Arc<dyn Fn() -> Millis + Send + Sync>;
-
-pub fn system_clock() -> Clock {
-    Arc::new(|| {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| d.as_millis() as Millis)
-    })
-}
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkerError {

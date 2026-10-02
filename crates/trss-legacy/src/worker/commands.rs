@@ -79,7 +79,9 @@ use std::{sync::Arc, time::Duration};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
-use super::{CycleLock, Worker, WorkerError};
+use trss_core::CycleLock;
+
+use super::{Worker, WorkerError};
 use crate::store::commands::{Command, CommandState, Outcome};
 
 /// How often the worker looks for waiting commands.

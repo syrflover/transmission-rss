@@ -113,6 +113,8 @@ use std::{
 use serde::{Deserialize, Serialize};
 use transmission_rpc::types::Id;
 
+use trss_core::Clock;
+
 use crate::{
     discovery::VIDEO_EXTENSIONS,
     episode_offset::signed,
@@ -126,7 +128,7 @@ use crate::{
     worker::{
         commands::rule_archive::work_folder::rename_noreplace,
         revisions::{episode_name, owner_of, same_folder, Owner},
-        Clock, CycleContext,
+        CycleContext,
     },
 };
 

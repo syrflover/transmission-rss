@@ -1,6 +1,6 @@
 //! The migration that replaces `channels.base_dir` with the collect folder.
 //!
-//! It runs inside the migration transaction (see `store::db`), once, on a
+//! It runs inside the migration transaction (see [`crate::db`]), once, on a
 //! database whose channels still carry a base folder each:
 //!
 //! 1. the settings table is created;
@@ -23,7 +23,7 @@ use rusqlite::{params, Connection};
 
 use super::SCHEMA;
 use crate::folders::{fold_bases, prefixed, FoldError};
-use crate::store::db::DbError;
+use crate::db::DbError;
 
 struct ChannelBase {
     id: String,

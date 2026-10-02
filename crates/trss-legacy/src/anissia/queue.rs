@@ -29,6 +29,8 @@ use std::{path::PathBuf, time::Duration};
 
 use tokio_util::sync::CancellationToken;
 
+use trss_core::CycleLock;
+
 use super::{Anissia, AnissiaError, LAST_WEEK};
 use crate::{
     artwork::queue::{LOCK_RETRY, POLL},
@@ -36,7 +38,6 @@ use crate::{
         anissia::{Due, REFRESH_AFTER_MS},
         history::Millis,
     },
-    worker::CycleLock,
 };
 
 /// How long a refresh that failed waits before the anime are tried again.

@@ -19,6 +19,8 @@ use std::{path::PathBuf, time::Duration};
 
 use tokio_util::sync::CancellationToken;
 
+use trss_core::CycleLock;
+
 use super::{
     anilist::AnilistError,
     files,
@@ -27,7 +29,6 @@ use super::{
 };
 use crate::{
     store::artwork::{ClaimedJob, JobKind, Note, Searched, Source},
-    worker::CycleLock,
 };
 
 /// How often an idle queue looks for new jobs.

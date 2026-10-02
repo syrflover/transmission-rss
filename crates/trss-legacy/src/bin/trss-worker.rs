@@ -1,12 +1,13 @@
 use std::{path::PathBuf, process::ExitCode};
 
 use tokio_util::sync::CancellationToken;
+use trss_core::lock_path_for;
 use trss_legacy::{
     anissia::{self, Anissia, AnissiaConfig},
     artwork::{self, AnilistConfig, AppData, Artwork},
     seasons::{self, Seasons},
     store::{db::DB_PATH_ENV, Db},
-    worker::{lock_path_for, Worker, WorkerEnv},
+    worker::{Worker, WorkerEnv},
 };
 
 #[tokio::main]

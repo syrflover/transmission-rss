@@ -14,6 +14,8 @@ use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
+use trss_core::Clock;
+
 use crate::{
     anissia::Anissia,
     discovery::{EpisodeFile, FileKind, Scan, ScannedWork, WorkRead},
@@ -27,7 +29,6 @@ use crate::{
         Db,
     },
     web::{api, AppState},
-    worker::Clock,
 };
 
 /// Thursday 2026-10-01 12:00 in Seoul (4분기); the week is 09-28 to 10-04.

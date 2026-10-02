@@ -89,12 +89,13 @@ pub use anilist::{Anilist, AnilistConfig, AnilistError, ImageFetchError};
 pub use files::{AppData, Unavailable};
 pub use image::Rejected;
 
+use trss_core::{system_clock, Clock};
+
 use crate::{
     store::{
         artwork::{ArtworkError, ArtworkStore, ImageRef, Selection, Source, UserChange},
         Db,
     },
-    worker::{system_clock, Clock},
 };
 
 /// The largest image file accepted, uploaded or fetched: 10 MiB.

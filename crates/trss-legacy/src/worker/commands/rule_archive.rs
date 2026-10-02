@@ -57,6 +57,8 @@ use std::{
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
+use trss_core::Clock;
+
 use crate::{
     folders::has_parent_dir,
     store::{
@@ -64,7 +66,7 @@ use crate::{
         commands::{Command, CommandState, Outcome, MAX_ATTEMPTS},
     },
     transmission,
-    worker::{watch, Clock, CycleContext},
+    worker::{watch, CycleContext},
 };
 
 use work_folder::{move_work_folder, Disk, Hold, MoveError, Moved, RealDisk, Request, Side};

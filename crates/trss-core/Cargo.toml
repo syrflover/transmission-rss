@@ -1,0 +1,18 @@
+[package]
+name = "trss-core"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+# `db::database_at`, for the tests of the crates above that start from an
+# older schema.
+test-support = []
+
+[dependencies]
+rusqlite = { version = "0.40", features = ["bundled"] }
+thiserror = "2"
+tokio = { version = "1", features = ["rt"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

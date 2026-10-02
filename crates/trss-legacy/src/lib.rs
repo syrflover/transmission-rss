@@ -5,7 +5,6 @@ pub mod automatic_watch;
 pub mod config;
 pub mod discovery;
 pub mod episode_offset;
-pub mod folders;
 pub mod import;
 pub mod past_search;
 pub mod revision;
@@ -19,4 +18,4 @@ pub mod transmission;
 pub mod web;
 pub mod worker;
 
-pub const USER_AGENT: &str = "trss/0.3";
+pub use trss_core::folders;

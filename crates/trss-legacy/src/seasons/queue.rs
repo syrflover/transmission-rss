@@ -22,6 +22,8 @@ use std::{path::PathBuf, time::Duration};
 
 use tokio_util::sync::CancellationToken;
 
+use trss_core::CycleLock;
+
 use super::{anilist::fetch_entry, Seasons};
 use crate::{
     artwork::{
@@ -30,7 +32,6 @@ use crate::{
         title::{decide, Decision},
     },
     store::seasons::{ClaimedSearch, Note, SeasonError},
-    worker::CycleLock,
 };
 
 /// How long a refresh that failed waits before the entry is tried again.

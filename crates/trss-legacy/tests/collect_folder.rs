@@ -144,19 +144,7 @@ async fn with_no_collect_folder_nothing_is_added_nothing_fails_and_the_board_say
 /// The database as the build before the collect folder left it: migrations 1
 /// to 6, with the channels' base folders.
 fn database_before_the_collect_folder(path: &Path) -> rusqlite::Connection {
-    let conn = rusqlite::Connection::open(path).unwrap();
-    for sql in [
-        include_str!("../src/store/channels/schema.sql"),
-        include_str!("../src/store/history/schema.sql"),
-        "ALTER TABLE channels ADD COLUMN name TEXT CHECK (name IS NULL OR name <> '');",
-        include_str!("../src/store/status/schema.sql"),
-        include_str!("../src/store/commands/schema.sql"),
-        include_str!("../src/store/commands/add_unconfirmed.sql"),
-    ] {
-        conn.execute_batch(sql).unwrap();
-    }
-    conn.pragma_update(None, "user_version", 6_i64).unwrap();
-    conn
+    trss_core::db::database_at(path, 6)
 }
 
 fn old_channel(conn: &rusqlite::Connection, id: &str, position: i64, url: &str, base: &str) {

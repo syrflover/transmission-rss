@@ -12,6 +12,8 @@ use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
+use trss_core::Clock;
+
 use super::*;
 use crate::{
     anissia::{fake::Fake, Anissia},
@@ -20,7 +22,6 @@ use crate::{
         history::{HistoryResult, Observation},
         Db,
     },
-    worker::Clock,
 };
 
 /// 2026-10-01 12:00 in Seoul: 4분기.

@@ -60,7 +60,9 @@ use std::{
 
 use tokio_util::sync::CancellationToken;
 
-use super::{live::Poll, Clock, CycleContext};
+use trss_core::Clock;
+
+use super::{live::Poll, CycleContext};
 use crate::{
     automatic_watch::{self, Wanted},
     discovery,

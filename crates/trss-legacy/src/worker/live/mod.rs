@@ -78,7 +78,9 @@ use tree::WatchTree;
 pub use tree::Why;
 use watcher::{Control, SharedFd, Task};
 
-use super::{Clock, CycleContext};
+use trss_core::Clock;
+
+use super::CycleContext;
 use crate::store::{history::Millis, library::WatchFolder};
 
 /// How long placing the watches of one folder may hold up whoever attaches it

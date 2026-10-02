@@ -659,7 +659,7 @@ async fn hundreds_of_new_works_are_searched_one_at_a_time_at_the_pace() {
     // The queue's lock is not the cycle's.
     assert_ne!(
         queue::lock_path_for(&env.dir.path().join("trss.db")),
-        crate::worker::lock_path_for(&env.dir.path().join("trss.db"))
+        trss_core::lock_path_for(&env.dir.path().join("trss.db"))
     );
 }
 

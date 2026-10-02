@@ -15,6 +15,8 @@ use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
+use trss_core::Clock;
+
 use super::*;
 use crate::{
     anissia::{Anissia, AnissiaConfig},
@@ -25,7 +27,6 @@ use crate::{
         status::{read_day, ChannelReadResult},
         Db,
     },
-    worker::Clock,
 };
 
 /// 2026-10-01 12:00 in Seoul.

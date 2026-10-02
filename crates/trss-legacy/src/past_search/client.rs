@@ -14,13 +14,14 @@ mod tests;
 
 use std::time::Duration;
 
+use trss_core::{system_clock, Clock};
+
 use super::query::search_url;
 use crate::{
     store::{channels::Channel, search_pace::SearchPace},
     transmission::Redactor,
     worker::{
         feed::{self, FeedItem, FetchError},
-        system_clock, Clock,
     },
 };
 

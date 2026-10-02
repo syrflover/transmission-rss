@@ -35,6 +35,8 @@ mod tests;
 
 use std::{sync::Arc, time::Duration};
 
+use trss_core::Clock;
+
 use crate::{
     artwork::{Anilist, AnilistError, Artwork, USER_MAX_WAIT},
     store::{
@@ -43,7 +45,6 @@ use crate::{
         seasons::{Entry, SeasonError, SeasonLink, SeasonStore},
         Db,
     },
-    worker::Clock,
 };
 
 /// The most entries one season links.

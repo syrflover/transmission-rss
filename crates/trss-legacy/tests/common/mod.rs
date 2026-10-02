@@ -46,6 +46,7 @@ use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use tokio::{net::TcpListener, sync::Semaphore, task::JoinHandle};
 use tower::ServiceExt;
+use trss_core::lock_path_for;
 use trss_legacy::{
     store::{
         channels::{ChannelInput, ChannelStore, ChannelWithRules, RuleInput},
@@ -55,7 +56,7 @@ use trss_legacy::{
     },
     transmission::RenamePolicy,
     web::AppState,
-    worker::{lock_path_for, Worker, WorkerEnv},
+    worker::{Worker, WorkerEnv},
 };
 
 /// The collect folder every harness starts with. Test channels are given by

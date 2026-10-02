@@ -24,10 +24,11 @@ use serde::Deserialize;
 use serde_json::json;
 use url::Url;
 
+use trss_core::Clock;
+
 use super::{title::Candidate, FETCH_TIMEOUT, MAX_IMAGE_BYTES};
 use crate::{
     store::artwork::{ArtworkError, ArtworkStore},
-    worker::Clock,
 };
 
 /// AniList's GraphQL endpoint.
@@ -247,13 +248,13 @@ pub struct Anilist {
 impl Anilist {
     pub fn new(config: AnilistConfig, store: ArtworkStore, clock: Clock) -> Self {
         let http = reqwest::Client::builder()
-            .user_agent(crate::USER_AGENT)
+            .user_agent(trss_core::USER_AGENT)
             .timeout(API_TIMEOUT)
             .redirect(redirect::Policy::none())
             .build()
             .expect("a client with a timeout and no redirects builds");
         let images = reqwest::Client::builder()
-            .user_agent(crate::USER_AGENT)
+            .user_agent(trss_core::USER_AGENT)
             .timeout(FETCH_TIMEOUT)
             .redirect(redirect::Policy::none())
             .build()

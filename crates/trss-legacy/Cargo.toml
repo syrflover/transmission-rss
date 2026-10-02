@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+trss-core = { path = "../trss-core" }
+
 # trname = { path = "../trname" }
 trname = { git = "https://github.com/syrflover/trname", rev = "6169808" }
 
@@ -39,6 +41,7 @@ unicode-normalization = "0.1.25"
 caseless = "0.2"
 
 [dev-dependencies]
+trss-core = { path = "../trss-core", features = ["test-support"] }
 # Makes the sample images of the tests; the app reads only headers.
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 http-body-util = "0.1.5"

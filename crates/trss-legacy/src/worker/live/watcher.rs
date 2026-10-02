@@ -15,11 +15,12 @@ use super::{
     tree::{self, Due, RawEvent, WatchTree},
     FolderStatus, LiveConfig, Runtime,
 };
+use trss_core::CycleLock;
+
 use crate::{
     store::status::StatusStore,
     worker::{
         heartbeat,
-        lock::CycleLock,
         watch::{self, ScanMode, WorksMode},
     },
 };

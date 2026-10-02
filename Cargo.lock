@@ -2479,6 +2479,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "trss-core"
+version = "0.1.0"
+dependencies = [
+ "rusqlite",
+ "tempfile",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "trss-legacy"
 version = "0.1.0"
 dependencies = [
@@ -2508,6 +2518,7 @@ dependencies = [
  "tower-http 0.7.1",
  "transmission-rpc",
  "trname",
+ "trss-core",
  "unicode-normalization",
  "url",
  "uuid",
