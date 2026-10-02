@@ -68,6 +68,7 @@ fn job(command: &str, posts: &[(&str, &str)]) -> NewJob {
         anime_no: None,
         source_id: None,
         creator: Some("제작자".to_owned()),
+        revision_of: None,
         items: posts
             .iter()
             .map(|(episode, path)| NewItem {
@@ -211,6 +212,7 @@ async fn a_site_check_and_an_unknown_site_wait_for_different_things() {
         .store
         .create(
             NewJob {
+                revision_of: None,
                 items: vec![NewItem {
                     observation_id: None,
                     episode: "1".into(),
@@ -698,6 +700,7 @@ async fn a_job_that_ends_each_run_waiting_for_a_source_is_never_held_for_its_sta
         .store
         .create(
             NewJob {
+                revision_of: None,
                 items: vec![NewItem {
                     observation_id: None,
                     episode: "1".into(),

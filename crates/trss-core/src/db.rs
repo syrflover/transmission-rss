@@ -120,6 +120,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("../migrations/settings/policy.sql")),
     // 36: a file receipt's format, failure class, answer facts and snapshot; a failed item's class
     Migration::Sql(include_str!("../migrations/jobs/results.sql")),
+    // 37: a job's revision of a received subtitle; a subtitle source's episode mapping to a season
+    Migration::Sql(include_str!("../migrations/jobs/follow.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -768,6 +770,88 @@ mod tests {
         assert_eq!(kept, (2, 2, None, None, None));
         assert_eq!(refused, [true; 6]);
         assert_eq!(accepted, 2);
+    }
+
+    #[tokio::test]
+    async fn a_database_from_before_auto_receipts_keeps_its_jobs_and_maps_no_source_yet() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        {
+            // A database as the build with 36 migrations left it: a work, a
+            // source with two observations and a job that received the first.
+            let conn = database_at(&path, 36);
+            conn.execute_batch(
+                "INSERT INTO watch_folders (id, path, created_at) VALUES ('f1', '/media', 1);
+                 INSERT INTO works (id, watch_folder_id, dir_name) VALUES ('w1', 'f1', 'Show');
+                 INSERT INTO subtitle_sources (id, anime_no, creator_name, created_at)
+                     VALUES ('s1', 3441, '에루샤', 5);
+                 INSERT INTO caption_observations (source_id, post_url, episode, updated,
+                     first_seen_at)
+                     VALUES ('s1', 'https://erulabo.com/1', '3', 'x', 6),
+                            ('s1', 'https://erulabo.com/1', '3', 'y', 7);
+                 INSERT INTO subtitle_jobs (id, command_id, request, origin, work_id, season,
+                     anime_no, source_id, creator, state, created_at, updated_at, state_at)
+                     VALUES ('j1', 'c1', '{}', 'pick', 'w1', 1, 3441, 's1', '에루샤', 'done',
+                             1, 1, 1);",
+            )
+            .unwrap();
+        }
+
+        let db = Db::open(&path).await.unwrap();
+
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+        type Kept = (i64, Option<i64>, i64);
+        let (kept, refused, accepted): (Kept, [bool; 5], i64) = db
+            .run::<_, DbError, _>(|c| {
+                let kept = c.query_row(
+                    "SELECT (SELECT count(*) FROM subtitle_jobs),
+                            (SELECT revision_of FROM subtitle_jobs WHERE id = 'j1'),
+                            (SELECT count(*) FROM subtitle_episode_mappings)",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )?;
+                let write = |sql: &str| c.execute(sql, []).is_err();
+                let refused = [
+                    // An observation that is not there.
+                    write("UPDATE subtitle_jobs SET revision_of = 99 WHERE id = 'j1'"),
+                    write(
+                        "INSERT INTO subtitle_episode_mappings VALUES
+                         ('w1', 1, 's1', 'guess', 0, '근거', 1)",
+                    ),
+                    // Undecided with an offset, decided without one.
+                    write(
+                        "INSERT INTO subtitle_episode_mappings VALUES
+                         ('w1', 1, 's1', 'undecided', 0, '근거', 1)",
+                    ),
+                    write(
+                        "INSERT INTO subtitle_episode_mappings VALUES
+                         ('w1', 1, 's1', 'auto', NULL, '근거', 1)",
+                    ),
+                    write(
+                        "INSERT INTO subtitle_episode_mappings VALUES
+                         ('w1', 1, 'nope', 'auto', 0, '근거', 1)",
+                    ),
+                ];
+                c.execute_batch(
+                    "UPDATE subtitle_jobs SET revision_of = 1 WHERE id = 'j1';
+                     INSERT INTO subtitle_episode_mappings VALUES
+                         ('w1', 1, 's1', 'auto', -12, '근거', 1);
+                     INSERT INTO subtitle_episode_mappings VALUES
+                         ('w1', 2, 's1', 'undecided', NULL, '이유', 1);",
+                )?;
+                // The mappings go with their work.
+                c.execute("DELETE FROM works WHERE id = 'w1'", [])?;
+                let accepted =
+                    c.query_row("SELECT count(*) FROM subtitle_episode_mappings", [], |r| {
+                        r.get(0)
+                    })?;
+                Ok((kept, refused, accepted))
+            })
+            .await
+            .unwrap();
+        assert_eq!(kept, (1, None, 0));
+        assert_eq!(refused, [true; 5]);
+        assert_eq!(accepted, 0);
     }
 
     #[tokio::test]

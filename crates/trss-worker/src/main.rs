@@ -72,6 +72,7 @@ async fn run() -> Result<(), String> {
         .map_err(|e| e.to_string())?
         .with_captions(captions.clone())
         .with_jobs(jobs)
+        .with_season_info(season_info.stored())
         .with_wake_socket(wake_path_for(&db_path));
 
     let cancel = CancellationToken::new();

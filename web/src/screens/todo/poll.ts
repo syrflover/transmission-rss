@@ -10,6 +10,7 @@ import { peek, store, useAfterDelay, useStored } from "@/lib/cached";
  */
 export const KEYS = {
   todos: "todo:list",
+  follow: "todo:subtitle-follow",
   jobs: "todo:jobs",
   job: (id: string) => `todo:job:${id}`,
 } as const;

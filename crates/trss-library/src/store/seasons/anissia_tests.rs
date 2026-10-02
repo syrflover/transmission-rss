@@ -230,6 +230,62 @@ async fn subscribe(db: &Db, id: &str, anime: i64, season: Option<String>) {
     .unwrap();
 }
 
+#[tokio::test]
+async fn an_archive_move_that_merges_two_works_keeps_the_subtitle_sources_mappings() {
+    let (db, library, _, collect, moved) = env().await;
+    let (archive, kept) = archive(&library, &moved).await;
+    let (m, k) = (moved.clone(), kept.clone());
+    db.run::<_, DbError, _>(move |c| {
+        c.execute_batch(
+            "INSERT INTO subtitle_sources (id, anime_no, creator_name, created_at)
+                 VALUES ('s1', 7, '가', 1), ('s2', 7, '나', 1), ('s3', 7, '다', 1);",
+        )?;
+        let put = |work: &str, source: &str, kind: &str, offset: Option<i64>| {
+            c.execute(
+                "INSERT INTO subtitle_episode_mappings VALUES (?1, 1, ?2, ?3, ?4, ?5, 1)",
+                rusqlite::params![work, source, kind, offset, format!("{work} {source}")],
+            )
+        };
+        // Only the moved work maps s1; both map s2 (the kept work's is the
+        // app's, the moved one the user's) and s3 (both the app's).
+        put(&m, "s1", "auto", Some(0))?;
+        put(&m, "s2", "user", Some(-12))?;
+        put(&k, "s2", "auto", Some(0))?;
+        put(&m, "s3", "auto", Some(-1))?;
+        put(&k, "s3", "undecided", None)?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+
+    assert_eq!(
+        library.follow_move(&collect, &archive, "A").await.unwrap(),
+        Followed::Merged
+    );
+    let rows: Vec<(String, String, String, Option<i64>)> = db
+        .run::<_, DbError, _>(|c| {
+            let mut stmt = c.prepare(
+                "SELECT work_id, source_id, kind, episode_offset
+                   FROM subtitle_episode_mappings ORDER BY source_id",
+            )?;
+            let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+        .await
+        .unwrap();
+    let k = |source: &str, kind: &str, offset: Option<i64>| {
+        (kept.clone(), source.to_owned(), kind.to_owned(), offset)
+    };
+    assert_eq!(
+        rows,
+        [
+            k("s1", "auto", Some(0)),
+            k("s2", "user", Some(-12)),
+            k("s3", "undecided", None)
+        ]
+    );
+}
+
 /// A rule's season, its note and its version.
 async fn rule(db: &Db, id: &str) -> (Option<String>, Option<String>, i64) {
     let id = id.to_owned();

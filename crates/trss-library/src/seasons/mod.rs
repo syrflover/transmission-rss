@@ -22,6 +22,11 @@
 //! side by side safely: every change of a season's links is checked against the
 //! link's version in its transaction, so a search that finishes late never
 //! undoes a user's choice.
+//!
+//! The queue rings [`Seasons::stored`] whenever it stored a season's entry (a
+//! search linked one, a refresh received one again), so the worker looks at
+//! what the subscribed creators posted with the season's episode count
+//! (`trss-jobs`' auto receipt, which this crate does not see).
 
 pub mod combine;
 pub mod describe;
@@ -72,6 +77,8 @@ pub struct Seasons {
     artwork: ArtworkStore,
     pub anilist: Anilist,
     clock: Clock,
+    /// Rung when the queue stored a season's entry.
+    stored: Arc<tokio::sync::Notify>,
 }
 
 impl Seasons {
@@ -81,7 +88,14 @@ impl Seasons {
             store: SeasonStore::new(db),
             anilist,
             clock,
+            stored: Arc::default(),
         }
+    }
+
+    /// Rung (once for any number of entries in between) whenever the queue
+    /// stored a season's entry, by these services or a clone of them.
+    pub fn stored(&self) -> Arc<tokio::sync::Notify> {
+        Arc::clone(&self.stored)
     }
 
     /// The season services over `db` that ask AniList through `artwork`'s
@@ -97,6 +111,7 @@ impl Seasons {
             artwork: artwork.store.clone(),
             anilist: artwork.anilist.clone(),
             clock: clock_of(artwork),
+            stored: Arc::clone(&self.stored),
         }
     }
 

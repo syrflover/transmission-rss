@@ -6,7 +6,8 @@ import { api } from "@/lib/api";
  * `src/web/todo_api.rs`) and the subtitle jobs the worker carries out
  * (`/api/subtitle-jobs`, `src/web/jobs_api.rs`). The suggestions (`제목 후보`,
  * `보관 제안`) come from the collect screen's own sources
- * (`collect/subs/api.ts`, `collect/archive/api.ts`).
+ * (`collect/subs/api.ts`, `collect/archive/api.ts`); `자막 구독` from
+ * `/api/todo/subtitle-follow`.
  */
 
 // ---------------------------------------------------------------------------
@@ -85,6 +86,30 @@ export function fetchTodos(signal?: AbortSignal): Promise<TodoList> {
   return api<TodoList>("/todo", { signal });
 }
 
+/**
+ * `자막 구독`: a subscription that gets subtitles with no creator chosen yet,
+ * while its anime has candidates. It names no creator; the user picks one in
+ * the work detail's 자막 후보. A suggestion, never counted in the badge.
+ */
+export interface FollowSuggestion {
+  work: WorkRef;
+  /** The anime's Anissia title, else the work's name. */
+  title: string;
+  season: number;
+  rule_id: string;
+  anime_no: number;
+  /** The candidates' episodes as Anissia writes them, once each. */
+  episodes: string[];
+  /** How many creators have candidates. */
+  creators: number;
+  /** When the first candidate was seen (Unix ms). */
+  since: number;
+}
+
+export function fetchFollowSuggestions(signal?: AbortSignal): Promise<FollowSuggestion[]> {
+  return api<{ suggestions: FollowSuggestion[] }>("/todo/subtitle-follow", { signal }).then((r) => r.suggestions);
+}
+
 /** The menu badge's count alone. */
 export function fetchTodoCount(signal?: AbortSignal): Promise<number> {
   return api<{ count: number }>("/todo/count", { signal }).then((r) => r.count);
@@ -127,6 +152,12 @@ export type StepKind = "found" | "open" | "auth" | "receive";
 
 export interface JobRow {
   id: string;
+  /** `pick`: the user picked its candidates; `auto`: the subscribed creator's, made by the app. */
+  origin: "pick" | "auto";
+  /** For a revision of a received subtitle: the observation received before. */
+  revision_of: number | null;
+  /** The latest job that received `revision_of`, while there is one. */
+  revises_job: string | null;
   state: JobState;
   wait: Wait | null;
   /** The step a `running` job is at. */

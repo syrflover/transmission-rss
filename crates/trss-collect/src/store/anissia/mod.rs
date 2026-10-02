@@ -19,7 +19,9 @@ use std::collections::{HashMap, HashSet};
 use rusqlite::{params, Connection, OptionalExtension, Row, TransactionBehavior};
 use trss_anissia::Anime;
 
-pub use captions::{revision_of, Candidate, Line, Observed, Received, Revision};
+pub use captions::{
+    episode_key, numeric_episode, revision_of, Candidate, Line, Observed, Received, Revision,
+};
 
 use trss_core::{
     db::{Db, DbError},

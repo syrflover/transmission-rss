@@ -81,6 +81,24 @@
 //!   item.
 //!
 //! Items come newest first, each kind by its own time, revisions first.
+//!
+//! `GET /api/todo/subtitle-follow`: the source of the suggestion kind
+//! `자막 구독`, one per work whose subscription gets subtitles with no creator
+//! chosen yet (`제작자 미정`) while its anime has candidates
+//! ([`trss_jobs::follow`]). It names no creator: the user picks one in the work
+//! detail's 자막 후보. Like every suggestion, it is not counted in `count`.
+//!
+//! ```json
+//! { "suggestions": [
+//!   { "work": { "id": "…", "name": "Show", "cover_url": "…" }, "title": "작품",
+//!     "season": 1, "rule_id": "…", "anime_no": 3441,
+//!     "episodes": ["1", "2", "3", "4"], "creators": 2,
+//!     "since": 1760000000000 } ] }
+//! ```
+//!
+//! `title` is the anime's Anissia title, else the work's name; `episodes` are
+//! the candidates' episodes as Anissia writes them, once each in the order
+//! first seen; `since` is when the first candidate was seen.
 
 use std::{collections::HashMap, path::Path as FsPath};
 
@@ -110,6 +128,7 @@ pub fn routes() -> Router<AppState> {
         .route("/todo", get(todos))
         .route("/todo/count", get(todo_count))
         .route("/todo/receive-failures", get(list))
+        .route("/todo/subtitle-follow", get(follow_suggestions))
 }
 
 #[derive(Debug, Serialize, PartialEq)]
@@ -367,6 +386,64 @@ async fn list(State(state): State<AppState>) -> Result<Json<FailureList>, ApiErr
             }),
     );
     Ok(Json(FailureList { items }))
+}
+
+// ---------------------------------------------------------------------------
+// `자막 구독`
+
+#[derive(Debug, Serialize, PartialEq)]
+struct FollowSuggestionView {
+    work: WorkRefView,
+    title: String,
+    season: u32,
+    rule_id: String,
+    anime_no: i64,
+    episodes: Vec<String>,
+    creators: usize,
+    since: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct FollowSuggestions {
+    suggestions: Vec<FollowSuggestionView>,
+}
+
+async fn follow_suggestions(
+    State(state): State<AppState>,
+) -> Result<Json<FollowSuggestions>, ApiError> {
+    let internal = |e: &dyn std::fmt::Display| ApiError::Internal(e.to_string());
+    let found = state.follow.suggestions().await.map_err(|e| internal(&e))?;
+    let ids: Vec<String> = found.iter().map(|s| s.work_id.clone()).collect();
+    let covers = match ids.is_empty() {
+        true => HashMap::new(),
+        false => state
+            .artwork
+            .store
+            .image_ids_of(ids)
+            .await
+            .map_err(|e| internal(&e))?,
+    };
+    Ok(Json(FollowSuggestions {
+        suggestions: found
+            .into_iter()
+            .map(|s| FollowSuggestionView {
+                title: s.anime_title.unwrap_or_else(|| s.work_name.clone()),
+                work: WorkRefView {
+                    cover_url: covers
+                        .get(&s.work_id)
+                        .map(|image| image_url(&s.work_id, image)),
+                    id: s.work_id,
+                    name: s.work_name,
+                },
+                season: s.season,
+                rule_id: s.rule_id,
+                anime_no: s.anime_no,
+                episodes: s.episodes,
+                creators: s.creators,
+                since: s.since,
+            })
+            .collect(),
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -669,3 +746,6 @@ async fn receive_failed_todos(state: &AppState) -> Result<Vec<Todo>, ApiError> {
         })
         .collect())
 }
+
+#[cfg(test)]
+mod tests;

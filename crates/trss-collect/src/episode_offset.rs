@@ -198,7 +198,7 @@ pub fn signed(value: i64) -> String {
 }
 
 /// `1–12, 14` for the episodes given in ascending order.
-fn ranges(episodes: &[u32]) -> String {
+pub fn ranges(episodes: &[u32]) -> String {
     let mut out: Vec<String> = Vec::new();
     let mut at = 0;
     while at < episodes.len() {

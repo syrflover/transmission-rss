@@ -287,3 +287,183 @@ async fn a_worker_that_does_not_read_anissia_fails_the_command_instead_of_holdin
     assert_eq!(shown["refresh"]["state"], "failed");
     assert_eq!(env.fake.count("/anime/caption/animeNo/"), 0);
 }
+
+impl Env {
+    /// Season 1's AniList entry, of 12 episodes.
+    async fn season_entry(&self) {
+        let work = self.work.clone();
+        self.h
+            .db
+            .run::<_, trss_core::DbError, _>(move |c| {
+                c.execute(
+                    "INSERT INTO anilist_entries (id, format, episodes, fetched_at)
+                     VALUES (1, 'TV', 12, 1)",
+                    [],
+                )?;
+                c.execute(
+                    "INSERT INTO season_entries (work_id, season, position, anilist_id)
+                     VALUES (?1, 1, 0, 1)",
+                    [work],
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+    }
+
+    /// A collecting subscription of season 1 that follows 에루샤.
+    async fn follow(&self) {
+        use trss_collect::store::channels::{
+            ChannelInput, NewSubscription, RuleInput, SubtitleMode,
+        };
+
+        let channel = self
+            .h
+            .channels
+            .create_channel(ChannelInput::new("https://feed.test/follow"))
+            .await
+            .unwrap();
+        let rule = self
+            .h
+            .channels
+            .create_subscription_rule(
+                &channel.id,
+                RuleInput {
+                    r#match: Some("Sayonara Lara".into()),
+                    directory: "Sayonara Lara".into(),
+                    episode: 0,
+                    ..RuleInput::default()
+                },
+                NewSubscription {
+                    anime: trss_anissia::Anime {
+                        anime_no: 3492,
+                        subject: "작품".into(),
+                        original_subject: None,
+                        week: 3,
+                        air_time: None,
+                        start_date: None,
+                        end_date: None,
+                        status: "ON".into(),
+                        fetched_at: 1,
+                    },
+                    subtitles: SubtitleMode::Follow,
+                    creator: Some("에루샤".into()),
+                    subscribed_at: 1,
+                },
+            )
+            .await
+            .unwrap();
+        self.h
+            .channels
+            .link_season(&rule.id, &format!("{}:1", self.work))
+            .await
+            .unwrap();
+    }
+
+    /// A worker that runs the jobs, with the fake source, and polls for
+    /// nothing in a test's time.
+    fn job_worker(&self) -> (Worker, trss_jobs::JobStore) {
+        use trss_jobs::{area::ReceiveArea, JobStore, Runner};
+        use trss_subtitles::{fake::FakeSource, Sources};
+
+        let jobs = JobStore::new(self.h.db.clone());
+        let runner = Runner::new(
+            jobs.clone(),
+            Sources::none().with_fake(FakeSource),
+            ReceiveArea::in_app_data(self.h.dir.path()),
+            Arc::new(|| 2_000),
+        );
+        let worker = self
+            .worker()
+            .with_jobs(runner)
+            .with_command_poll(Duration::from_secs(3600));
+        (worker, jobs)
+    }
+}
+
+/// Whether the subscribed creator's job is done within a few seconds.
+async fn auto_job_done(jobs: &trss_jobs::JobStore) -> bool {
+    let done = || async {
+        let page = jobs.done_page(None, 10).await.unwrap();
+        page.items.len() == 1 && page.items[0].origin == trss_jobs::AUTO
+    };
+    for _ in 0..200 {
+        if done().await {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    false
+}
+
+#[tokio::test]
+async fn a_reading_that_finds_the_subscribed_creators_new_episode_makes_and_runs_its_job() {
+    let env = Env::new().await;
+    env.season_entry().await;
+    env.follow().await;
+    let (worker, jobs) = env.job_worker();
+    let cancel = CancellationToken::new();
+    let running = tokio::spawn({
+        let (worker, cancel) = (worker.clone(), cancel.clone());
+        async move { worker.run(cancel).await }
+    });
+    // The worker's first look at its start found nothing.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // The reading of the recent list finds the creator's episode 1: the worker
+    // makes its job and runs it without waiting for its next poll.
+    env.fake.set_recent(vec![env.fake.recent_line(
+        3492,
+        "1",
+        "2026-10-02T11:00:00",
+        "https://fake.trss.invalid/ok/lara1",
+        "에루샤",
+    )]);
+    env.observer.run_due().await.unwrap();
+    assert!(
+        auto_job_done(&jobs).await,
+        "the subscribed creator's episode was received"
+    );
+
+    cancel.cancel();
+    running.await.unwrap();
+}
+
+#[tokio::test]
+async fn a_season_entry_stored_later_has_the_worker_look_at_the_subscribed_creator_again() {
+    let env = Env::new().await;
+    env.follow().await;
+    // The creator's episode 1 was observed while the season had no AniList
+    // entry: how its episodes map to the season is not decided.
+    env.fake.set_recent(vec![env.fake.recent_line(
+        3492,
+        "1",
+        "2026-10-02T11:00:00",
+        "https://fake.trss.invalid/ok/lara1",
+        "에루샤",
+    )]);
+    env.observer.run_due().await.unwrap();
+    let stored = Arc::new(tokio::sync::Notify::new());
+    let (worker, jobs) = env.job_worker();
+    let worker = worker.with_season_info(Arc::clone(&stored));
+    let cancel = CancellationToken::new();
+    let running = tokio::spawn({
+        let (worker, cancel) = (worker.clone(), cancel.clone());
+        async move { worker.run(cancel).await }
+    });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(jobs.open_jobs().await.unwrap().is_empty());
+    assert!(jobs.done_page(None, 10).await.unwrap().items.is_empty());
+
+    // The season queue stores the entry and rings: the worker looks again
+    // without waiting for anything else.
+    env.season_entry().await;
+    stored.notify_one();
+    assert!(
+        auto_job_done(&jobs).await,
+        "the episode was received once the season's count was known"
+    );
+
+    cancel.cancel();
+    running.await.unwrap();
+}

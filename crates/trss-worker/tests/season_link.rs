@@ -585,3 +585,81 @@ async fn connecting_a_subscription_to_a_season_has_the_animes_subtitle_lines_rea
     assert_eq!(latest.id, command.id);
     assert_eq!(fake.count("/anime/caption/animeNo/"), 1);
 }
+
+// --- a subscribed creator's season, once connected, is looked at (ticket 0045) ---
+
+#[tokio::test]
+async fn connecting_a_followed_subscription_to_its_season_makes_the_creators_jobs_in_that_cycle() {
+    use std::sync::Arc;
+    use trss_jobs::{area::ReceiveArea, JobStore, Runner};
+    use trss_subtitles::{fake::FakeSource, Sources};
+
+    let mut scene = Scene::new().await;
+    let jobs = JobStore::new(scene.h.db.clone());
+    scene.worker = scene.h.worker().with_jobs(Runner::new(
+        jobs.clone(),
+        Sources::none().with_fake(FakeSource),
+        ReceiveArea::in_app_data(scene.h.dir.path()),
+        Arc::new(|| 2_000),
+    ));
+    let rule = scene
+        .h
+        .channels
+        .create_subscription_rule(
+            &scene.channel,
+            rule("Work", "Work/Season 01"),
+            NewSubscription {
+                anime: anime(7),
+                subtitles: SubtitleMode::Follow,
+                creator: Some("에루샤".into()),
+                subscribed_at: 1_000_000,
+            },
+        )
+        .await
+        .unwrap();
+    scene
+        .received(&rule, "Work/Season 01/Work - S01E01.mkv")
+        .await;
+    scene.register().await;
+    // The season's episode count, and the creator's episode 2 already observed.
+    let work = scene.work_id("Work").await;
+    scene
+        .h
+        .db
+        .run::<_, trss_core::DbError, _>(move |c| {
+            c.execute(
+                "INSERT INTO anilist_entries (id, format, episodes, fetched_at)
+                 VALUES (1, 'TV', 12, 1)",
+                [],
+            )?;
+            c.execute(
+                "INSERT OR IGNORE INTO season_info (work_id, season) VALUES (?1, 1)",
+                [&work],
+            )?;
+            c.execute(
+                "INSERT INTO season_entries (work_id, season, position, anilist_id)
+                 VALUES (?1, 1, 0, 1)",
+                [&work],
+            )?;
+            c.execute_batch(
+                "INSERT INTO subtitle_sources (id, anime_no, creator_name, created_at)
+                     VALUES ('src-a', 7, '에루샤', 1);
+                 INSERT INTO caption_observations
+                     (source_id, post_url, episode, updated, first_seen_at)
+                 VALUES ('src-a', 'https://fake.trss.invalid/ok/ep2', '2',
+                         '2026-10-02T11:00:00', 2);",
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    // Without a season the rule's creator has nothing to receive.
+    assert_eq!(scene.worker.follow_once().await.unwrap(), 0);
+
+    // The cycle that connects the rule looks at the creator's posts at once.
+    scene.tick().await;
+    assert!(season_of(&scene.rule(&rule).await).is_some());
+    let open = jobs.open_jobs().await.unwrap();
+    assert_eq!(open.len(), 1);
+    assert_eq!(open[0].origin, trss_jobs::AUTO);
+}

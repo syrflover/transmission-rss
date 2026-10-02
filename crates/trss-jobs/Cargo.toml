@@ -6,6 +6,10 @@ edition.workspace = true
 [dependencies]
 trss-core.workspace = true
 trss-subtitles.workspace = true
+# The subscribed creator's auto receipt (`follow`) reads the subscriptions, the
+# observations, the season info and the library.
+trss-library.workspace = true
+trss-collect.workspace = true
 
 rusqlite.workspace = true
 serde_json.workspace = true
@@ -18,6 +22,8 @@ uuid.workspace = true
 
 [dev-dependencies]
 trss-core = { workspace = true, features = ["test-support"] }
+# The schedule snapshot a subscription is made with (`tests/follow.rs`).
+trss-anissia.workspace = true
 trss-subtitles = { workspace = true, features = ["test-support"] }
 serde_json.workspace = true
 tempfile.workspace = true

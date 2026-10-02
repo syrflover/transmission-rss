@@ -167,6 +167,7 @@ impl Seasons {
         {
             Ok(true) => {
                 self.follow_cover(&job.work_id).await;
+                self.stored.notify_one();
                 Ran::Linked(id)
             }
             Ok(false) => Ran::Dropped,
@@ -189,7 +190,10 @@ impl Seasons {
         let now = self.now();
         match fetch_entry(&self.anilist, id, None, now).await {
             Ok(Some(entry)) => match self.store.put_entry(entry).await {
-                Ok(()) => Ran::Refreshed(id),
+                Ok(()) => {
+                    self.stored.notify_one();
+                    Ran::Refreshed(id)
+                }
                 Err(e) => {
                     eprintln!("Season refresh of entry {id}: {e}");
                     self.refresh_off(id, REFRESH_RETRY).await

@@ -704,6 +704,7 @@ pub(super) fn follow_move(
             crate::store::seasons::merge_anissia_links(&tx, &moved, &kept)?;
             // Subscriptions connected to the moved work's seasons follow them.
             crate::store::seasons::follow_subscriptions(&tx, &moved, &kept)?;
+            merge_subtitle_mappings(&tx, &moved, &kept)?;
             // Unknown is the older: the work was there before the app looked.
             let seen = match (moved_seen, kept_seen) {
                 (Some(a), Some(b)) => Some(a.min(b)),
@@ -742,6 +743,25 @@ fn merge_work(tx: &Transaction<'_>, from: &str, into: &str) -> rusqlite::Result<
     tx.execute(
         "INSERT OR IGNORE INTO unrecognized_files (work_id, path, reason)
          SELECT ?2, path, reason FROM unrecognized_files WHERE work_id = ?1",
+        params![from, into],
+    )?;
+    Ok(())
+}
+
+/// Moves the subtitle sources' episode mappings of work `from`
+/// (`subtitle_episode_mappings`, which the subscribed creator's receipts
+/// keep) to work `into`. Where both have one for a season and source, the kept
+/// work's stays, unless the moved one is the user's.
+fn merge_subtitle_mappings(tx: &Transaction<'_>, from: &str, into: &str) -> rusqlite::Result<()> {
+    tx.execute(
+        "INSERT INTO subtitle_episode_mappings
+             (work_id, season, source_id, kind, episode_offset, evidence, decided_at)
+         SELECT ?2, season, source_id, kind, episode_offset, evidence, decided_at
+           FROM subtitle_episode_mappings WHERE work_id = ?1
+         ON CONFLICT (work_id, season, source_id) DO UPDATE SET
+             kind = excluded.kind, episode_offset = excluded.episode_offset,
+             evidence = excluded.evidence, decided_at = excluded.decided_at
+         WHERE excluded.kind = 'user'",
         params![from, into],
     )?;
     Ok(())

@@ -51,7 +51,11 @@
 //! subscription that receives subtitles; `POST /rules/{id}/subscription`
 //! (`{ version, anissia_anime_no, week, subtitles, creator }`) makes an existing
 //! rule a subscription and changes nothing else about it. A version that is not
-//! the stored one answers `409` with the rule's current view.
+//! the stored one answers `409` with the rule's current view. The creator is
+//! one the anime's captions name: a line the app observed (the work detail's
+//! 자막 후보) or one Anissia lists now. Once a creator is set or changed, the
+//! creator's episodes to receive are made into jobs at once
+//! ([`trss_jobs::follow`]); subtitles already received stay as they are.
 
 use std::{collections::HashMap, time::Duration};
 
@@ -65,6 +69,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use super::{
+    jobs_api,
     rules_api::{self, RuleView},
     ApiError, AppState,
 };
@@ -868,8 +873,18 @@ async fn chosen_creator(
     }
 }
 
-/// `name` if the anime's captions name that creator.
+/// `name` if the anime's captions name that creator: the lines the app
+/// observed (the work detail's 자막 후보, which keep a line Anissia no longer
+/// lists), else Anissia's list now.
 async fn named_creator(state: &AppState, anime_no: i64, name: &str) -> Result<String, ApiError> {
+    let observed = state
+        .anissia_store
+        .candidates(anime_no, Vec::new())
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    if observed.iter().any(|c| c.creator == name) {
+        return Ok(name.to_owned());
+    }
     let captions = state
         .anissia
         .captions(anime_no, Some(USER_MAX_WAIT))
@@ -974,6 +989,13 @@ async fn subscribe(
             ChannelError::Invalid(_) => ApiError::invalid("입력한 값으로는 구독할 수 없어요."),
             e => e.into(),
         })?;
+    if created
+        .subscription
+        .as_ref()
+        .is_some_and(|s| s.creator.is_some())
+    {
+        jobs_api::follow_now(&state).await;
+    }
     Ok((
         StatusCode::CREATED,
         Json(Subscribed {
@@ -1047,7 +1069,11 @@ async fn change_creator(
     };
     // The rule may have changed while Anissia was asked; the store checks again.
     let written = state.channels.set_creator(&id, b.version, creator).await;
-    rule_after(&state, &id, written).await
+    let answer = rule_after(&state, &id, written).await?;
+    // The new creator's episodes are received now; what the earlier one's
+    // left in place stays (`docs/specs/subtitles.md`, 구독 제작자 자동 수신).
+    jobs_api::follow_now(&state).await;
+    Ok(answer)
 }
 
 #[derive(Deserialize)]
@@ -1085,6 +1111,7 @@ async fn link_rule(
     let anime = scheduled_anime(&state, b.week, b.anissia_anime_no).await?;
     let creator =
         chosen_creator(&state, subtitles, b.creator.as_deref(), b.anissia_anime_no).await?;
+    let follows = creator.is_some();
     let written = state
         .channels
         .subscribe_rule(
@@ -1102,7 +1129,13 @@ async fn link_rule(
         Err(ChannelError::AlreadySubscribed { .. }) => Err(ApiError::invalid(
             "이 채널에서 이미 구독 중인 작품이에요. 그 구독 규칙을 열어 주세요.",
         )),
-        written => rule_after(&state, &id, written).await,
+        written => {
+            let answer = rule_after(&state, &id, written).await?;
+            if follows {
+                jobs_api::follow_now(&state).await;
+            }
+            Ok(answer)
+        }
     }
 }
 

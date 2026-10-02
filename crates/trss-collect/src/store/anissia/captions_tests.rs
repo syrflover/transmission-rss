@@ -240,6 +240,48 @@ async fn another_creators_post_of_a_received_episode_is_not_a_revision() {
 }
 
 #[tokio::test]
+async fn the_same_episode_written_another_way_is_a_revision_and_a_half_episode_is_not() {
+    let store = store();
+    store
+        .observe(vec![line(1, "가", "3", "https://a.test/a", NOON_UTC)], 1000)
+        .await
+        .unwrap();
+    store
+        .observe(
+            vec![
+                line(1, "가", "03", "https://a.test/a", NOON_UTC + MIN),
+                line(1, "가", "3.5", "https://a.test/h", NOON_UTC + MIN),
+            ],
+            2000,
+        )
+        .await
+        .unwrap();
+    let all = store.candidates(1, Vec::new()).await.unwrap();
+    let first = all.iter().find(|c| c.episode == "3").unwrap().clone();
+    let shown = store.candidates(1, vec![received(&first)]).await.unwrap();
+    let of = |episode: &str| {
+        shown
+            .iter()
+            .find(|c| c.episode == episode)
+            .unwrap()
+            .revision
+            .clone()
+    };
+    assert_eq!(
+        of("03"),
+        Some(Revision {
+            of: first.id,
+            same_post: true
+        })
+    );
+    assert_eq!(of("3.5"), None);
+    assert_eq!(
+        ["013", "13", "13.0", "13.50", "SP"].map(episode_key),
+        ["n:13", "n:13", "n:13", "n:13.5", "t:SP"]
+    );
+}
+
+#[tokio::test]
 async fn episodes_are_kept_as_written_and_an_unreadable_date_sorts_by_when_it_was_first_seen() {
     let store = store();
     let mut zero = line(1, "가", "0", "https://a.test/0", 0);

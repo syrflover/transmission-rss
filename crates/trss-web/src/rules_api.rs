@@ -1103,7 +1103,15 @@ async fn switch_rule(
         _ => return Err(ApiError::invalid(BAD_BODY)),
     };
     match written {
-        Ok(_) => Ok(Json(rule_view(&state, &id).await?)),
+        Ok(_) => {
+            let view = rule_view(&state, &id).await?;
+            // A subscription that takes part again receives its creator's
+            // episodes it missed meanwhile (`trss_jobs::follow`).
+            if b.video == Some(true) || b.subtitles == Some(true) {
+                super::jobs_api::follow_now(&state).await;
+            }
+            Ok(Json(view))
+        }
         Err(e) if e.is_conflict() => Err(rule_conflict(&state, &id).await),
         Err(e) => Err(store_error(e)),
     }

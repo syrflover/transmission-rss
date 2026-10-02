@@ -740,3 +740,83 @@ async fn saving_a_link_lets_an_automatic_cover_follow_and_shows_a_failure_where_
         (&cover["image"]["url"], &json!(false))
     );
 }
+
+#[tokio::test]
+async fn saving_the_links_of_a_subscribed_creators_season_makes_the_creators_jobs() {
+    use trss_collect::store::channels::{ChannelInput, NewSubscription, RuleInput, SubtitleMode};
+
+    let env = env(vec![work("Show", &[1], vec![episode(1, "01")])]).await;
+    env.answer(media(1, "A", "あ", "RELEASING", 2026));
+    let id = env.id("Show").await;
+    // A collecting subscription of season 1 that follows 에루샤, whose
+    // episode 2 was observed.
+    let channel = env
+        .state
+        .channels
+        .create_channel(ChannelInput::new("https://feed.test/rss"))
+        .await
+        .unwrap();
+    let rule = env
+        .state
+        .channels
+        .create_subscription_rule(
+            &channel.id,
+            RuleInput {
+                r#match: Some("Show".into()),
+                directory: "Show".into(),
+                ..RuleInput::default()
+            },
+            NewSubscription {
+                anime: trss_anissia::Anime {
+                    anime_no: 3441,
+                    subject: "작품".into(),
+                    original_subject: None,
+                    week: 3,
+                    air_time: None,
+                    start_date: None,
+                    end_date: None,
+                    status: "ON".into(),
+                    fetched_at: 1,
+                },
+                subtitles: SubtitleMode::Follow,
+                creator: Some("에루샤".into()),
+                subscribed_at: 1,
+            },
+        )
+        .await
+        .unwrap();
+    env.state
+        .channels
+        .link_season(&rule.id, &format!("{id}:1"))
+        .await
+        .unwrap();
+    env.state
+        .jobs
+        .db()
+        .run::<_, trss_core::DbError, _>(|c| {
+            c.execute_batch(
+                "INSERT INTO subtitle_sources (id, anime_no, creator_name, created_at)
+                     VALUES ('src-a', 3441, '에루샤', 1);
+                 INSERT INTO caption_observations
+                     (source_id, post_url, episode, updated, first_seen_at)
+                 VALUES ('src-a', 'https://blog.test/ep2', '2', '2026-10-02T11:00:00', 2);",
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    // Without the season's episode count, nothing is decided or received.
+    assert!(env.state.follow.evaluate(1).await.unwrap().is_empty());
+
+    let version = env.state.seasons.store.link(&id, 1).await.unwrap().version;
+    let (status, info) = post(
+        &env.state,
+        &format!("/library/works/{id}/seasons/1/links"),
+        json!({ "version": version, "anilist_ids": [1] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{info}");
+    let open = env.state.jobs.open_jobs().await.unwrap();
+    assert_eq!(open.len(), 1);
+    assert_eq!(open[0].origin, trss_jobs::AUTO);
+}

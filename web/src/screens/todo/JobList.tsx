@@ -10,7 +10,7 @@ import { btnNeutral } from "../collect/channels/styles";
 import { coverOf } from "../library/model";
 import { Cover } from "../library/WorkItem";
 import { fetchDoneJobs, jobPath, type DonePage, type JobGroups, type JobRow } from "./api";
-import { CountChip, FailureTag, StateBadge } from "./badges";
+import { CountChip, FailureTag, OriginTags, StateBadge, originSentence } from "./badges";
 import { episodeList, shownState } from "./format";
 import { ChevronIcon } from "./icons";
 import { TargetLine } from "./TargetLine";
@@ -117,7 +117,9 @@ function JobRowItem({ job }: { job: JobRow }) {
         />
         <span className="flex min-w-0 flex-col gap-1">
           <span className="line-clamp-2 min-w-0 text-[14.5px] leading-snug font-semibold">{job.title}</span>
-          <TargetLine episodes={episodes} creator={job.creator} />
+          <TargetLine episodes={episodes} creator={job.creator}>
+            <OriginTags job={job} />
+          </TargetLine>
         </span>
         <span className="flex flex-col items-end gap-1 text-right max-[720px]:col-start-2 max-[720px]:row-start-2 max-[720px]:mt-1 max-[720px]:flex-row max-[720px]:flex-wrap max-[720px]:items-center max-[720px]:justify-start max-[720px]:gap-x-2 max-[720px]:text-left">
           <StateBadge shown={shownState(job)} />
@@ -140,6 +142,18 @@ function JobRowItem({ job }: { job: JobRow }) {
             {describe(job)}
           </p>
           <dl className="m-0 grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3.5 gap-y-1 text-[12.5px] ">
+            {originSentence(job) !== null && <Field name="만든 곳">{originSentence(job)}</Field>}
+            {job.revision_of !== null && (
+              <Field name="수정본">
+                {job.revises_job !== null ? (
+                  <Link to={jobPath(job.revises_job)} className="underline underline-offset-2">
+                    이전에 받은 작업
+                  </Link>
+                ) : (
+                  "이전에 받은 자막의 수정본"
+                )}
+              </Field>
+            )}
             {job.source !== null && <Field name="출처">{job.source}</Field>}
             {episodes.length > 0 && <Field name="회차">{episodeList(episodes)}</Field>}
             <Field name="받은 회차">{received}</Field>

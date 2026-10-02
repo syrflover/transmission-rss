@@ -118,6 +118,16 @@ async fn a_pick_makes_one_job_per_browser_id_of_one_creators_candidates() {
     .await;
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(other["current"]["id"].as_str(), Some(id.as_str()));
+    // The IDs of the app's own receipts are not a browser's to take.
+    let (status, refused) = call(
+        &router,
+        Method::POST,
+        "/api/subtitle-jobs",
+        Some(pick("auto:3", &[3])),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(refused["message"], "이 요청 ID는 쓸 수 없어요.");
 
     // Accepted is pending, not done: the detail says what it is about.
     let (status, detail) = get(&router, &format!("/api/subtitle-jobs/{id}")).await;
@@ -196,6 +206,7 @@ async fn job_in(
                 anime_no: Some(ANIME),
                 source_id: Some("s1".into()),
                 creator: Some("에루샤".into()),
+                revision_of: None,
                 items: items
                     .iter()
                     .enumerate()
@@ -521,6 +532,7 @@ async fn a_tistory_receipt_shows_its_format_and_failures_by_class_and_no_signed_
                 anime_no: Some(ANIME),
                 source_id: Some("s1".into()),
                 creator: Some("에루샤".into()),
+                revision_of: None,
                 items: vec![NewItem {
                     observation_id: None,
                     episode: "24".into(),

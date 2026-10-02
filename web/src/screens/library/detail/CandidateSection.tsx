@@ -8,7 +8,14 @@ import { cn } from "@/lib/utils";
 
 import { btnAction, btnNeutral, hintClass } from "../../collect/channels/styles";
 import { MAX_JOB_CANDIDATES } from "../../todo/api";
-import { ANISSIA_CAPTIONS_KIND, type AnissiaLink, type CandidateList, type WorkEpisode } from "../api";
+import { changeCreator } from "../../collect/subs/api";
+import {
+  ANISSIA_CAPTIONS_KIND,
+  type AnissiaLink,
+  type CandidateList,
+  type CandidateMapping,
+  type WorkEpisode,
+} from "../api";
 import { ChevronIcon } from "../icons";
 import { CreateStatus, JobStatusLink, KindTag, PostLink, UpdatedAt } from "./CandidateParts";
 import {
@@ -38,6 +45,22 @@ function readLine(list: CandidateList): string[] {
     lines.push(`새로고침이 ${ago(refresh.finished_at ?? refresh.updated_at)} 실패했어요.${refresh.outcome?.reason ? ` ${refresh.outcome.reason}` : ""}`);
   }
   return lines;
+}
+
+/** A source's episode mapping as one quiet line: `자동 · <근거>`. */
+function mappingLine(mapping: CandidateMapping): string {
+  const label = { auto: "자동", undecided: "회차 대응 미정", user: "직접 정함" }[mapping.kind];
+  return `${label} · ${mapping.evidence}`;
+}
+
+/**
+ * The season's subscription that receives subtitles while its rule collects: its creator can be chosen from a
+ * group (`구독 제작자로 정하기`, or `제작자 변경` when another one is followed).
+ */
+export interface FollowChoice {
+  ruleId: string;
+  ruleVersion: number;
+  creator: string | null;
 }
 
 /** Whether a conflict's current value is a command still going on: the refresh to follow. */
@@ -118,6 +141,10 @@ function GroupItem({
   picked,
   onToggle,
   onMade,
+  mapping,
+  follow,
+  choosing,
+  onChoose,
 }: {
   group: CandidateGroup;
   workId: string;
@@ -127,6 +154,12 @@ function GroupItem({
   picked: ReadonlySet<number>;
   onToggle: (id: number) => void;
   onMade: (ids: readonly number[], jobId: string) => void;
+  /** The app's episode mapping of the creator's source to the season, when it decided one. */
+  mapping: CandidateMapping | undefined;
+  follow: FollowChoice | null;
+  /** A creator is being chosen (here or in another group). */
+  choosing: boolean;
+  onChoose: (creator: string) => void;
 }) {
   const bodyId = useId();
   const { phase, create, resend } = useCreateJob(workId, season, onMade);
@@ -164,6 +197,11 @@ function GroupItem({
             <span className="text-xs text-text-muted [overflow-wrap:anywhere]">
               {[group.host, group.range].filter((part) => part).join(" · ")}
             </span>
+            {mapping && (
+              <span className="text-xs text-text-muted [overflow-wrap:anywhere]" data-testid="candidate-mapping">
+                {mappingLine(mapping)}
+              </span>
+            )}
           </span>
           <span className="flex flex-wrap items-center gap-1.5">
             {group.missing > 0 && <span className={chip}>누락 {group.missing}</span>}
@@ -196,6 +234,24 @@ function GroupItem({
             )}
             {hint && <span className={hintClass}>{hint}</span>}
           </div>
+          {follow && !group.subscribed && (
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                variant="ghost"
+                className={btnNeutral}
+                disabled={choosing}
+                onClick={() => onChoose(group.creator)}
+              >
+                {follow.creator === null ? "구독 제작자로 정하기" : "제작자 변경"}
+              </Button>
+              <span className={hintClass}>
+                {follow.creator === null
+                  ? "받지 않은 회차부터 자동으로 받아요."
+                  : "이미 받은 자막은 그대로 두고, 받지 않은 회차부터 이 제작자를 따라요."}
+              </span>
+            </div>
+          )}
           <div className="mt-2 empty:hidden">
             <CreateStatus phase={phase} onResend={resend} />
           </div>
@@ -246,6 +302,8 @@ export function CandidateSection({
   order,
   subscribed,
   candidates,
+  follow,
+  onFollowChanged,
 }: {
   workId: string;
   link: AnissiaLink;
@@ -256,6 +314,10 @@ export function CandidateSection({
   /** The subscription's creator, whose group comes first. */
   subscribed: string | null;
   candidates: Candidates;
+  /** The subscription whose creator a group can become; `null` when none receives subtitles now. */
+  follow: FollowChoice | null;
+  /** The creator was chosen (or another place changed the subscription first): the page reads it again. */
+  onFollowChanged: () => void;
 }) {
   const { season } = link;
   const animeNo = link.anime?.anime_no ?? null;
@@ -266,6 +328,8 @@ export function CandidateSection({
   const [linking, setLinking] = useState(false);
   const [sending, setSending] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [choosing, setChoosing] = useState(false);
+  const [chooseError, setChooseError] = useState<string | null>(null);
 
   const groups = useMemo(
     () => (list ? groupsOf(list, episodes, order, subscribed, picked) : []),
@@ -307,13 +371,33 @@ export function CandidateSection({
     setSending(false);
   };
 
+  // The subscription follows the creator from now on; the jobs the server made for it show in the list.
+  const choose = async (creator: string) => {
+    if (!follow || choosing) return;
+    setChoosing(true);
+    setChooseError(null);
+    try {
+      await changeCreator({ id: follow.ruleId, version: follow.ruleVersion }, creator);
+      onFollowChanged();
+      await reload();
+    } catch (e) {
+      if (e instanceof ApiError && e.code === "conflict") {
+        onFollowChanged();
+        setChooseError("다른 곳에서 먼저 바꿨어요. 지금 상태를 보여드려요. 다시 골라 주세요.");
+      } else {
+        setChooseError(e instanceof ApiError ? e.message : "구독 제작자를 정하지 못했어요.");
+      }
+    }
+    setChoosing(false);
+  };
+
   const titleId = `candidates-title-${season}`;
   const title = seasonCount > 1 ? `시즌 ${season} 자막 후보` : "자막 후보";
 
   return (
     <section aria-labelledby={titleId} data-testid="candidate-section">
       <div className="flex flex-wrap items-center gap-x-2.5 gap-y-2">
-        <h2 id={titleId} className="text-[17px] font-bold">
+        <h2 id={titleId} tabIndex={-1} className="text-[17px] font-bold outline-none">
           {title}
         </h2>
         {groups.length > 0 && <span className={chip}>{groups.length}명</span>}
@@ -350,6 +434,16 @@ export function CandidateSection({
               {refreshError}
             </p>
           )}
+          {follow?.creator === null && groups.length > 0 && (
+            <p className={cn(hintClass, "m-0 mt-1.5 text-[12.5px]")}>
+              구독 제작자가 아직 없어요. 제작자를 펼쳐 구독 제작자로 정하면 받지 않은 회차부터 자동으로 받아요.
+            </p>
+          )}
+          {chooseError && (
+            <p role="alert" className="m-0 mt-1.5 text-[13px] font-semibold text-urgent">
+              {chooseError}
+            </p>
+          )}
           {!list ? (
             error !== null ? (
               <p role="alert" className="m-0 mt-2 text-[13px] font-semibold text-urgent">
@@ -373,6 +467,10 @@ export function CandidateSection({
                   picked={picked}
                   onToggle={toggle}
                   onMade={made}
+                  mapping={list?.mappings?.find((m) => m.source_id === group.sourceId)}
+                  follow={follow}
+                  choosing={choosing}
+                  onChoose={(creator) => void choose(creator)}
                 />
               ))}
             </ul>

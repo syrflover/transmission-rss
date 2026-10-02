@@ -6,7 +6,14 @@ import { EmptyState, ScreenFrame } from "./ScreenFrame";
 import { KEYS as COLLECT_KEYS } from "./collect/cache";
 import { fetchArchiveSuggestions, type ArchiveSuggestion } from "./collect/archive/api";
 import { fetchCandidates, type TitleCandidate } from "./collect/subs/api";
-import { fetchJobs, fetchTodos, type JobGroups, type TodoList } from "./todo/api";
+import {
+  fetchFollowSuggestions,
+  fetchJobs,
+  fetchTodos,
+  type FollowSuggestion,
+  type JobGroups,
+  type TodoList,
+} from "./todo/api";
 import { CountChip } from "./todo/badges";
 import { JobGroupsView } from "./todo/JobList";
 import { KEYS, usePolled } from "./todo/poll";
@@ -39,6 +46,12 @@ export function TodoScreen() {
     TODOS_MS,
     "보관 제안을 불러오지 못했어요.",
   );
+  const follows = usePolled<FollowSuggestion[]>(
+    KEYS.follow,
+    fetchFollowSuggestions,
+    TODOS_MS,
+    "자막 구독 제안을 불러오지 못했어요.",
+  );
 
   // The menu badge and the cards agree: the badge takes the count the cards came with.
   const count = todos.data?.count;
@@ -47,14 +60,14 @@ export function TodoScreen() {
   }, [count]);
 
   const needs = todos.data?.needs ?? [];
-  const rows = suggestionRows(candidates.data ?? [], archives.data ?? []);
+  const rows = suggestionRows(candidates.data ?? [], archives.data ?? [], follows.data ?? []);
   const groups = jobs.data;
   const jobTotal = groups
     ? groups.failed.length + groups.waiting.length + groups.running.length + groups.done.total
     : 0;
 
   // Every part has answered once: only then can the screen say that there is nothing.
-  const parts = [todos, jobs, candidates, archives];
+  const parts = [todos, jobs, candidates, archives, follows];
   const answered = parts.every((part) => part.data !== undefined);
   const empty = answered && needs.length === 0 && rows.length === 0 && jobTotal === 0;
   // A part that has no answer and failed is said once, not hidden.

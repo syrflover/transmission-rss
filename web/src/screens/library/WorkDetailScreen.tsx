@@ -247,6 +247,23 @@ function Loaded({
   // `자막 후보` section and the episode rows, so both name the same candidates.
   const candidates = useCandidates(work.id, season?.number ?? 0, season?.anissia.anime?.anime_no ?? null);
   const subscribedCreator = subscription?.creator ?? null;
+  // Its creator can be chosen from the candidates while it receives subtitles and its rule collects.
+  const follow =
+    subscription && subscription.rule_state === "active" && subscription.subtitles !== "none"
+      ? { ruleId: subscription.rule_id, ruleVersion: subscription.rule_version, creator: subscription.creator }
+      : null;
+
+  // An address that names the candidates (`자막 구독`'s `제작자 지정`) brings that section into view, once per arrival.
+  const wantSection = params.get("section");
+  const arrivedSection = useRef<string | null>(null);
+  useEffect(() => {
+    if (wantSection !== "candidates" || !settled || arrivedSection.current === locationKey) return;
+    arrivedSection.current = locationKey;
+    const heading = document.getElementById(`candidates-title-${season.number}`);
+    if (!heading) return;
+    heading.focus({ preventScroll: true });
+    heading.scrollIntoView({ block: "start", behavior: "instant" });
+  }, [wantSection, settled, season, locationKey]);
 
   return (
     <section className="mx-auto pb-4 max-[1099px]:max-w-[900px]">
@@ -386,6 +403,8 @@ function Loaded({
               order={order}
               subscribed={subscribedCreator}
               candidates={candidates}
+              follow={follow}
+              onFollowChanged={onSubscriptionChanged}
             />
           )}
           {season ? (

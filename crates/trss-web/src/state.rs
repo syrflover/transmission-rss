@@ -10,7 +10,7 @@ use trss_collect::{
     },
 };
 use trss_core::{commands::CommandStore, heartbeat::HeartbeatStore, settings::SettingsStore, Db};
-use trss_jobs::{JobStore, ReceiveArea};
+use trss_jobs::{Follow, JobStore, ReceiveArea};
 use trss_library::{
     artwork::Artwork,
     seasons::Seasons,
@@ -56,6 +56,8 @@ pub struct AppState {
     pub worker_wake: Option<PathBuf>,
     /// The subtitle jobs the worker carries out.
     pub jobs: JobStore,
+    /// The subscribed creators' receipts and the `자막 구독` suggestions.
+    pub follow: Follow,
     /// The receive area the worker puts the jobs' files in, for the paths the
     /// job detail shows (the web never writes there).
     pub receive_root: PathBuf,
@@ -80,6 +82,7 @@ impl AppState {
             past_search: PastSearch::new(SearchPace::new(db.clone())),
             worker_wake: None,
             jobs: JobStore::new(db.clone()),
+            follow: Follow::new(db.clone()),
             receive_root: PathBuf::from("receive"),
             // No app data folder: covers can be read and changed but no image
             // stored or served until `with_artwork` gives one.

@@ -8,8 +8,8 @@ import { EmptyState, usePageTitle } from "../ScreenFrame";
 import { btnNeutral } from "../collect/channels/styles";
 import { coverOf } from "../library/model";
 import { Cover } from "../library/WorkItem";
-import { fetchJob, type JobDetail, type JobRow } from "./api";
-import { CountChip, FailureTag, StateBadge, Tag } from "./badges";
+import { fetchJob, jobPath, type JobDetail, type JobRow } from "./api";
+import { CountChip, FailureTag, OriginTags, StateBadge, Tag, originSentence } from "./badges";
 import { ended, shownState } from "./format";
 import { BackIcon } from "./icons";
 import { JobResults } from "./JobResults";
@@ -129,8 +129,25 @@ function Page({ job }: { job: JobDetail }) {
           </h1>
           <TargetLine episodes={job.episodes} creator={job.creator} className="text-[14px] max-[720px]:text-[13px]">
             {job.season !== null && <Tag>시즌 {job.season}</Tag>}
+            <OriginTags job={job} />
             {job.source !== null && <span className="min-w-0 text-xs text-text-muted [overflow-wrap:anywhere]">{job.source}</span>}
           </TargetLine>
+          {(originSentence(job) !== null || job.revision_of !== null) && (
+            <p className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[13px] text-text-secondary">
+              {originSentence(job) !== null && <span>{originSentence(job)}</span>}
+              {job.revision_of !== null &&
+                (job.revises_job !== null ? (
+                  <Link
+                    to={jobPath(job.revises_job)}
+                    className="rounded-sm underline underline-offset-2 focus-visible:outline-2 focus-visible:outline-focus"
+                  >
+                    수정본: 이전에 받은 작업 보기
+                  </Link>
+                ) : (
+                  <span>이전에 받은 자막의 수정본이에요. 지금 자막은 바꾸지 않아요.</span>
+                ))}
+            </p>
+          )}
           <div className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
             <StateBadge shown={shownState(job)} withDone />
             <span className="text-xs text-text-muted">{timeSentence(job)}</span>

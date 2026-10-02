@@ -5,7 +5,9 @@
 //! - `POST /api/subtitle-jobs` `{ "id", "work_id", "season", "candidates": [<observation id>] }`
 //!   makes a job of the candidates a person picked for a season. `id` is made
 //!   by the browser for the action: a repeat with the same content answers
-//!   `200` with the job it made, other content under the same ID `409`. A new
+//!   `200` with the job it made, other content under the same ID `409`. An ID
+//!   that starts with `auto:` is the app's own (the subscribed creator's
+//!   receipts, [`trss_jobs::follow`]) and is refused with `400`. A new
 //!   job answers `202` `{ "id" }` and wakes the worker. The candidates must be
 //!   the season's Anissia anime's ([`trss_collect::store::anissia::AnissiaStore::candidates`])
 //!   and of one creator; the job copies their posts and episodes as they are.
@@ -23,6 +25,12 @@
 //! them), a job the class of its first failed item. A file carries the format
 //! its bytes were checked to be (`zip`, `ass`, `srt`, `smi`, `other`) and the
 //! answer's status, media type and, for a failure, size.
+//!
+//! A job's `origin` is `pick` (a person picked its candidates) or `auto` (the
+//! subscribed creator's episode, made by the app, [`trss_jobs::follow`]); a job
+//! that receives a revision of a subtitle received before has `revision_of`
+//! (that observation) and `revises_job` (the latest job that received it, or
+//! `null`), both `null` otherwise.
 //!
 //! A job's `title` is its anime's Anissia title, else its work's name. No
 //! answer carries a cookie, a token or a signed address: posts are public
@@ -81,6 +89,13 @@ pub struct ProgressView {
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct JobRowView {
     pub id: String,
+    /// `pick` (a person picked the candidates) or `auto` (the subscribed
+    /// creator's, received without a pick).
+    pub origin: String,
+    /// For a revision of a received subtitle: the observation received before
+    /// and the latest job that received it.
+    pub revision_of: Option<i64>,
+    pub revises_job: Option<String>,
     pub state: &'static str,
     pub wait: Option<&'static str>,
     pub stage: Option<&'static str>,
@@ -118,6 +133,9 @@ pub fn title_of(row: &JobRow) -> String {
 fn view(row: &JobRow, covers: &HashMap<String, String>) -> JobRowView {
     JobRowView {
         id: row.id.clone(),
+        origin: row.origin.clone(),
+        revision_of: row.revision_of,
+        revises_job: row.revises_job.clone(),
         state: row.state.code(),
         wait: row.wait.map(Wait::code),
         stage: row.stage.map(StepKind::code),
@@ -445,6 +463,10 @@ async fn create(
     if request.id.trim().is_empty() {
         return Err(ApiError::invalid("요청 ID가 비어 있어요."));
     }
+    // The app's own receipts of the subscribed creator take these IDs.
+    if request.id.starts_with(trss_jobs::follow::AUTO_PREFIX) {
+        return Err(ApiError::invalid("이 요청 ID는 쓸 수 없어요."));
+    }
     if request.candidates.is_empty() {
         return Err(ApiError::invalid("받을 후보를 하나 이상 골라 주세요."));
     }
@@ -513,6 +535,7 @@ async fn create(
         anime_no: Some(anime_no),
         source_id: Some(picked[0].source_id.clone()),
         creator: Some(picked[0].creator.clone()),
+        revision_of: None,
         items: picked
             .iter()
             .map(|c| NewItem {
@@ -541,6 +564,23 @@ async fn create(
                 .to_owned(),
             current: Some(json!({ "id": id })),
         }),
+    }
+}
+
+/// Makes the subscribed creators' jobs now ([`trss_jobs::Follow::evaluate`])
+/// and wakes the worker when it made one: after the creator was set or
+/// changed, the rule's receiving turned on, or a season's AniList or Anissia
+/// link saved. A failure is logged and changes nothing of the answer, since the
+/// worker looks again at its next start and after its next reading.
+pub async fn follow_now(state: &AppState) {
+    match state.follow.evaluate(now_millis()).await {
+        Ok(made) if !made.is_empty() => {
+            if let Some(path) = &state.worker_wake {
+                trss_core::wake::wake_worker(path);
+            }
+        }
+        Ok(_) => {}
+        Err(err) => eprintln!("Cannot look at the subscribed creators' subtitles: {err}"),
     }
 }
 

@@ -2,7 +2,7 @@ import type { ComponentProps, ComponentType, ReactNode } from "react";
 
 import { cn } from "@/lib/utils";
 
-import type { FailureClass } from "./api";
+import type { FailureClass, JobRow } from "./api";
 import { CheckIcon, ClockIcon, DownloadIcon, LockIcon, PauseIcon, WarningIcon } from "./icons";
 import { FAILURE_LABEL, type Shown } from "./format";
 
@@ -115,6 +115,24 @@ export function Tag({ children }: { children: ReactNode }) {
       {children}
     </span>
   );
+}
+
+/**
+ * How a job came to be, when it was not a pick: `자동` for the subscribed creator's episode the app made into a
+ * job, `수정본` for a revision of a subtitle received before.
+ */
+export function OriginTags({ job }: { job: Pick<JobRow, "origin" | "revision_of"> }) {
+  return (
+    <>
+      {job.origin === "auto" && <Tag>자동</Tag>}
+      {job.revision_of !== null && <Tag>수정본</Tag>}
+    </>
+  );
+}
+
+/** What made a job, as a sentence: `구독 제작자 자동 수신`, or `null` for a pick. */
+export function originSentence(job: Pick<JobRow, "origin">): string | null {
+  return job.origin === "auto" ? "구독 제작자 자동 수신" : null;
 }
 
 /** A failure's class before its reason (`원본 없음`, `만료`). */

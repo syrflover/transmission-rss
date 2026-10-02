@@ -103,6 +103,40 @@ pub struct Received {
     pub post_url: String,
 }
 
+/// The key two episode texts of Anissia's lines share when they are one
+/// episode, which the revision mark and the subscribed creator's receipts
+/// (`trss-jobs`) compare by: `n:` and a decimal number without its leading
+/// zeros and the trailing zeros of its decimal part (`013`, `13` and `13.0`
+/// are `n:13`; `13.50` is `n:13.5`), the same number the subtitle sources use
+/// (`trss_subtitles::episode::numeric_key`, which this crate does not see);
+/// `t:` and the text as written for any other (`SP`). No float is made.
+pub fn episode_key(text: &str) -> String {
+    match numeric_episode(text) {
+        Some(n) => format!("n:{n}"),
+        None => format!("t:{text}"),
+    }
+}
+
+/// The number part of [`episode_key`]; `None` for a text that is no number.
+pub fn numeric_episode(text: &str) -> Option<String> {
+    let (whole, decimal) = match text.split_once('.') {
+        Some((whole, decimal)) => (whole, Some(decimal)),
+        None => (text, None),
+    };
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    if !digits(whole) || decimal.is_some_and(|d| !digits(d)) {
+        return None;
+    }
+    let integer = match whole.trim_start_matches('0') {
+        "" => "0",
+        integer => integer,
+    };
+    match decimal.map(|d| d.trim_end_matches('0')).unwrap_or_default() {
+        "" => Some(integer.to_owned()),
+        fraction => Some(format!("{integer}.{fraction}")),
+    }
+}
+
 /// The revision mark of `candidate`, given the subtitles received of its
 /// anime.
 ///
@@ -111,7 +145,8 @@ pub struct Received {
 /// 조회): a subtitle received from an earlier observation of the creator's
 /// source with the same episode text. Two limits of what is known now:
 ///
-/// - The episode is the text Anissia's line had, compared as written; the
+/// - The episode is the text Anissia's line had, compared by
+///   [`episode_key`] (`03` and `3` are one episode, `13.5` is not `13`); the
 ///   episode a received package really holds is decided when it is analysed,
 ///   which comes later.
 /// - A subtitle the user put in without a creator, then gave one, does not
@@ -124,7 +159,7 @@ pub fn revision_of(candidate: &Candidate, received: &[Received]) -> Option<Revis
         .iter()
         .filter(|r| {
             r.source_id == candidate.source_id
-                && r.episode == candidate.episode
+                && episode_key(&r.episode) == episode_key(&candidate.episode)
                 && r.observation_id < candidate.id
         })
         .max_by_key(|r| r.observation_id)

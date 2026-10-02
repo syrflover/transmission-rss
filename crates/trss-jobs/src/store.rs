@@ -30,24 +30,34 @@ fn durable(
     Ok(written?)
 }
 
-/// A job to make: the candidates a person picked.
+/// A job to make: the candidates a person picked, or the one the app takes
+/// for the subscribed creator ([`crate::follow`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewJob {
-    /// The ID the browser made for the action.
+    /// The ID the browser made for the action (`auto:<observation id>` for a
+    /// job the app makes).
     pub command_id: String,
     /// The request's content in canonical JSON, to tell a repeat from another
     /// request with the same ID.
     pub request: String,
-    /// How it was asked for (`pick`).
+    /// How it was asked for: `pick` (a person picked the candidates) or
+    /// [`AUTO`].
     pub origin: String,
     pub work_id: Option<String>,
     pub season: Option<i64>,
     pub anime_no: Option<i64>,
     pub source_id: Option<String>,
     pub creator: Option<String>,
+    /// The observation whose subtitle the job receives a revision of: the
+    /// creator's subtitle of the episode received before.
+    pub revision_of: Option<i64>,
     /// In the order to receive them.
     pub items: Vec<NewItem>,
 }
+
+/// The origin of a job the app made without a pick: the subscribed creator's
+/// subtitle, received on its own ([`crate::follow`]).
+pub const AUTO: &str = "auto";
 
 /// One candidate of a job, as it was picked.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,6 +83,12 @@ pub enum Created {
 pub struct JobRow {
     pub seq: i64,
     pub id: String,
+    /// How it was asked for (`pick`, [`AUTO`]).
+    pub origin: String,
+    /// For a revision: the observation whose subtitle was received before, and
+    /// the latest job that received it.
+    pub revision_of: Option<i64>,
+    pub revises_job: Option<String>,
     pub state: JobState,
     pub wait: Option<Wait>,
     pub stage: Option<StepKind>,
@@ -930,8 +946,8 @@ fn create(c: &mut Connection, job: &NewJob, now: Millis) -> Result<Created, JobE
     tx.execute(
         "INSERT INTO subtitle_jobs
              (id, command_id, request, origin, work_id, season, anime_no, source_id, creator,
-              state, created_at, updated_at, state_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'pending', ?10, ?10, ?10)",
+              revision_of, state, created_at, updated_at, state_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'pending', ?11, ?11, ?11)",
         params![
             id,
             job.command_id,
@@ -942,6 +958,7 @@ fn create(c: &mut Connection, job: &NewJob, now: Millis) -> Result<Created, JobE
             job.anime_no,
             job.source_id,
             job.creator,
+            job.revision_of,
             now
         ],
     )?;
@@ -968,10 +985,15 @@ fn create(c: &mut Connection, job: &NewJob, now: Millis) -> Result<Created, JobE
          VALUES (?1, 'found', 'done', ?2, ?3)",
         params![id, now, format!("후보 {count}개")],
     )?;
+    let message = match (job.origin == AUTO, job.revision_of.is_some()) {
+        (true, true) => "구독 제작자의 수정본이라 자동으로 작업을 만들었어요",
+        (true, false) => "구독 제작자의 새 회차라 자동으로 작업을 만들었어요",
+        _ => "작업을 만들었어요",
+    };
     tx.execute(
         "INSERT INTO subtitle_job_events (job_id, at, message, detail)
-         VALUES (?1, ?2, '작업을 만들었어요', ?3)",
-        params![id, now, format!("후보 {count}개")],
+         VALUES (?1, ?2, ?3, ?4)",
+        params![id, now, message, format!("후보 {count}개")],
     )?;
     tx.commit()?;
     Ok(Created::Created(id))
@@ -979,7 +1001,11 @@ fn create(c: &mut Connection, job: &NewJob, now: Millis) -> Result<Created, JobE
 
 const JOB_COLUMNS: &str = "
     SELECT j.seq, j.id, j.state, j.wait, j.stage, j.note, j.state_at, j.created_at,
-           j.finished_at, j.work_id, w.dir_name, j.season, j.anime_no, a.subject, j.creator
+           j.finished_at, j.work_id, w.dir_name, j.season, j.anime_no, a.subject, j.creator,
+           j.origin, j.revision_of,
+           (SELECT r.job_id FROM subtitle_job_items r
+             WHERE r.observation_id = j.revision_of AND r.state = 'done'
+             ORDER BY r.id DESC LIMIT 1)
     FROM subtitle_jobs j
     LEFT JOIN works w ON w.id = j.work_id
     LEFT JOIN anissia_anime a ON a.anime_no = j.anime_no";
@@ -988,6 +1014,9 @@ fn job_row(r: &Row<'_>) -> rusqlite::Result<JobRow> {
     Ok(JobRow {
         seq: r.get(0)?,
         id: r.get(1)?,
+        origin: r.get(15)?,
+        revision_of: r.get(16)?,
+        revises_job: r.get(17)?,
         state: r.get(2)?,
         wait: r.get(3)?,
         stage: r.get(4)?,

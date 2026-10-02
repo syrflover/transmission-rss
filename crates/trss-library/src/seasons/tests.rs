@@ -145,6 +145,13 @@ impl Env {
     }
 }
 
+/// Whether `signal` was rung since it was last waited for.
+async fn rung(signal: &tokio::sync::Notify) -> bool {
+    tokio::time::timeout(Duration::from_millis(50), signal.notified())
+        .await
+        .is_ok()
+}
+
 fn ids(link: &crate::store::seasons::SeasonLink) -> Vec<i64> {
     link.entries.iter().map(|e| e.id).collect()
 }
@@ -160,8 +167,12 @@ async fn one_exact_title_links_the_first_season_as_auto_with_its_values() {
             media(2, "Lycoris Recoil: Other Name", "FINISHED", Some(1)),
         ],
     );
+    let stored = env.seasons.stored();
+    assert!(!rung(&stored).await);
 
     assert_eq!(env.drain().await, [Ran::Linked(1)]);
+    // The worker hears that a season's entry is stored.
+    assert!(rung(&stored).await);
     let link = env.seasons.store.link(&id, 1).await.unwrap();
     assert_eq!(ids(&link), [1]);
     assert_eq!(
@@ -417,12 +428,15 @@ async fn entries_that_are_not_finished_are_received_again_a_day_later_and_finish
         .await
         .unwrap();
     let received = env.requests();
+    let stored = env.seasons.stored();
+    rung(&stored).await;
 
     // Just received: nothing is due, however often the queue looks.
     assert!(env.drain().await.is_empty());
     env.advance(DAY - 1);
     assert!(env.drain().await.is_empty());
     assert_eq!(env.requests(), received);
+    assert!(!rung(&stored).await);
 
     // A day on, AniList says more: the two active entries are received again, the finished one not.
     env.answer(media(1, "Airing", "RELEASING", Some(24)));
@@ -432,6 +446,7 @@ async fn entries_that_are_not_finished_are_received_again_a_day_later_and_finish
     let mut ran = env.drain().await;
     ran.sort_by_key(|r| format!("{r:?}"));
     assert_eq!(ran, [Ran::Refreshed(1), Ran::Refreshed(2)]);
+    assert!(rung(&stored).await, "the worker hears of the new counts");
     assert_eq!(env.requests(), received + 2);
     let link = env.seasons.store.link(&show, 1).await.unwrap();
     assert_eq!(

@@ -36,6 +36,10 @@
 //! line with the pages it read and what it added and skipped.
 //! Whatever a reading does not reach (a failed page, or a line that changed
 //! twice between two readings) is seen at the next, as its last state.
+//!
+//! A reading that added observations rings [`CaptionObserver::observed`], so
+//! the worker looks at what the subscribed creators posted (the auto receipt
+//! of `trss-jobs`, which this crate does not see).
 
 use std::{
     collections::{HashMap, HashSet},
@@ -177,6 +181,8 @@ pub struct CaptionObserver {
     /// says: a reading whose schedule could not be written is not read again
     /// at once.
     held_until: Arc<Mutex<Millis>>,
+    /// Rung whenever a reading added observations.
+    observed: Arc<tokio::sync::Notify>,
 }
 
 impl CaptionObserver {
@@ -185,6 +191,19 @@ impl CaptionObserver {
             anissia,
             store,
             held_until: Arc::default(),
+            observed: Arc::default(),
+        }
+    }
+
+    /// Rung (once for any number of readings in between) whenever a reading
+    /// added observations, by this observer or a clone of it.
+    pub fn observed(&self) -> Arc<tokio::sync::Notify> {
+        Arc::clone(&self.observed)
+    }
+
+    fn took(&self, observed: Observed) {
+        if observed.added > 0 {
+            self.observed.notify_one();
         }
     }
 
@@ -225,7 +244,10 @@ impl CaptionObserver {
             // observations the order the lines changed in.
             let lines: Vec<Line> = lines.into_iter().rev().collect();
             match self.store.observe(lines, self.now()).await {
-                Ok(observed) => read.take(observed, skipped),
+                Ok(observed) => {
+                    self.took(observed);
+                    read.take(observed, skipped)
+                }
                 Err(e) => {
                     read.end = End::Failed(e.to_string());
                     return read;
@@ -254,7 +276,10 @@ impl CaptionObserver {
         let skipped = rows - lines.len();
         let lines: Vec<Line> = lines.into_iter().rev().collect();
         match self.store.observe(lines, self.now()).await {
-            Ok(observed) => read.take(observed, skipped),
+            Ok(observed) => {
+                self.took(observed);
+                read.take(observed, skipped)
+            }
             Err(e) => read.end = End::Failed(e.to_string()),
         }
         read

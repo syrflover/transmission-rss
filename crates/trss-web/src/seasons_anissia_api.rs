@@ -64,7 +64,11 @@
 //!       "updated_parse_failed": false, "first_seen_at": 1790780400000,
 //!       "sort_at": 1789009800000,
 //!       "revision": { "of": 7, "same_post": true },
-//!       "job": { "id": "1f0c…", "state": "done", "wait": null } } ] }
+//!       "job": { "id": "1f0c…", "state": "done", "wait": null } } ],
+//!   "mappings": [
+//!     { "source_id": "6f0c…", "kind": "auto", "offset": -12,
+//!       "evidence": "규칙의 회차 변환(13→S02E01)과 AniList 회차 수(12)가 맞아요",
+//!       "decided_at": 1790780400000 } ] }
 //! ```
 //!
 //! - `candidates` are newest first by `sort_at`: the update time, or the time
@@ -91,6 +95,11 @@
 //!   command for the anime (`pending`, `running`, `done` or `failed` with its
 //!   outcome), or `null`: the read made when the season was linked and the
 //!   user's `새로고침` both show there.
+//! - `mappings` are the sources' episode mappings to the season, one per
+//!   source the app decided one for (the subscribed creator's,
+//!   [`trss_jobs::mapping`]): `kind` `auto` (`offset` is added to Anissia's
+//!   whole episode), `undecided` (`offset` `null`) or `user`, with `evidence`,
+//!   the grounds that agree or why none do, for `자동 · <근거>`.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -568,6 +577,7 @@ async fn link(
             if let Some(anime_no) = body.anime_no {
                 ask_anissia_captions(&state, anime_no).await;
             }
+            crate::jobs_api::follow_now(&state).await;
             Ok(Json(view_of(&state, &id, season).await?))
         }
         Err(SeasonAnimeError::NoWork) => Err(ApiError::not_found(SEASON_NOT_FOUND)),
@@ -626,6 +636,18 @@ struct CandidatesView {
     read_at: Option<i64>,
     refresh: Option<CommandView>,
     candidates: Vec<CandidateObservation>,
+    mappings: Vec<MappingView>,
+}
+
+/// A source's episode mapping to the season ([`trss_jobs::mapping`]).
+#[derive(Serialize)]
+struct MappingView {
+    source_id: String,
+    /// `auto`, `undecided` or `user`.
+    kind: &'static str,
+    offset: Option<i64>,
+    evidence: String,
+    decided_at: i64,
 }
 
 impl From<&trss_collect::store::anissia::Candidate> for CandidateObservation {
@@ -674,6 +696,7 @@ async fn candidates(
             read_at,
             refresh: None,
             candidates: Vec::new(),
+            mappings: Vec::new(),
         }));
     };
     let picks = state
@@ -710,6 +733,21 @@ async fn candidates(
         .await
         .map_err(|e| internal(&e))?
         .remove(&anime_no.to_string());
+    let mut mappings: Vec<MappingView> = state
+        .follow
+        .mappings(&id, season)
+        .await
+        .map_err(|e| internal(&e))?
+        .into_iter()
+        .map(|(source_id, m)| MappingView {
+            source_id,
+            kind: m.kind.code(),
+            offset: m.offset,
+            evidence: m.evidence,
+            decided_at: m.decided_at,
+        })
+        .collect();
+    mappings.sort_by(|a, b| a.source_id.cmp(&b.source_id));
     Ok(Json(CandidatesView {
         season,
         anime_no: Some(anime_no),
@@ -726,5 +764,6 @@ async fn candidates(
                 ..CandidateObservation::from(c)
             })
             .collect(),
+        mappings,
     }))
 }

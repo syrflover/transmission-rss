@@ -524,6 +524,22 @@ export interface CandidateList {
   refresh: Command | null;
   /** Newest first. */
   candidates: Candidate[];
+  /** The sources' episode mappings to the season the app decided (the subscribed creator's). */
+  mappings: CandidateMapping[];
+}
+
+/**
+ * How a source's episodes map to the season's: `auto` (the app decided it from grounds that agree;
+ * `offset` is added to Anissia's whole episode), `undecided` (the grounds are missing or disagree;
+ * nothing is received automatically) or `user`.
+ */
+export interface CandidateMapping {
+  source_id: string;
+  kind: "auto" | "undecided" | "user";
+  offset: number | null;
+  /** The grounds that agree, or why none do, as a sentence. */
+  evidence: string;
+  decided_at: number;
 }
 
 /** The cache key of one season's candidates (the anime is in it, so a new link never shows the old one's list). */

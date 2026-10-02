@@ -9,12 +9,14 @@ import { btnNeutral } from "../collect/channels/styles";
 import { nameTitleLink } from "../collect/subs/Candidates";
 import { startDate } from "../collect/subs/format";
 import type { TitleCandidate } from "../collect/subs/api";
+import type { FollowSuggestion } from "./api";
 import { Tag } from "./badges";
+import { episodeRange } from "../library/detail/candidates";
 
 /** One row of `제안`: a title candidate or an archive suggestion, in the shape the list shows. */
 export interface Suggestion {
   id: string;
-  kind: "candidate" | "archive";
+  kind: "candidate" | "archive" | "follow";
   title: string;
   /** One quiet line. */
   detail: string;
@@ -84,12 +86,37 @@ export function fromArchive(s: ArchiveSuggestion): Suggestion {
   };
 }
 
-/** The rows of `제안`, newest first across both sources. */
-export function suggestionRows(candidates: readonly TitleCandidate[], archives: readonly ArchiveSuggestion[]): Suggestion[] {
-  return [...candidates.map(fromCandidate), ...archives.map(fromArchive)].sort((a, b) => b.order - a.order);
+/** Where the work detail shows a season's 자막 후보. */
+export function candidatesLink(workId: string, season: number): string {
+  return `/library/${encodeURIComponent(workId)}?season=${season}&section=candidates`;
 }
 
-const KIND_LABEL = { candidate: "제목 후보", archive: "보관 제안" } as const;
+/** `자막 구독`: the episodes and how many creators, never their names. */
+export function fromFollow(s: FollowSuggestion): Suggestion {
+  return {
+    id: `follow:${s.work.id}`,
+    kind: "follow",
+    title: s.title,
+    detail: `${episodeRange(s.episodes)} · 자막 후보 ${s.creators}명`,
+    at: s.since,
+    order: s.since,
+    to: candidatesLink(s.work.id, s.season),
+    action: "제작자 지정",
+  };
+}
+
+/** The rows of `제안`, newest first across the sources. */
+export function suggestionRows(
+  candidates: readonly TitleCandidate[],
+  archives: readonly ArchiveSuggestion[],
+  follows: readonly FollowSuggestion[] = [],
+): Suggestion[] {
+  return [...candidates.map(fromCandidate), ...archives.map(fromArchive), ...follows.map(fromFollow)].sort(
+    (a, b) => b.order - a.order,
+  );
+}
+
+const KIND_LABEL = { candidate: "제목 후보", archive: "보관 제안", follow: "자막 구독" } as const;
 
 /** Thin rows: a small kind tag, the title, one quiet line, the time, and one neutral button. */
 export function SuggestionRows({ rows }: { rows: readonly Suggestion[] }) {

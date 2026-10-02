@@ -349,7 +349,12 @@ async fn answer(
     result: Result<SeasonLink, ActionError>,
 ) -> Result<Json<SeasonInfoView>, ApiError> {
     match result {
-        Ok(_) => Ok(Json(info_of(state, work_id, season).await?)),
+        Ok(_) => {
+            // The season's episode count may decide how a subscribed creator's
+            // episodes map to it.
+            crate::jobs_api::follow_now(state).await;
+            Ok(Json(info_of(state, work_id, season).await?))
+        }
         Err(e) => Err(refused(state, work_id, season, e).await),
     }
 }

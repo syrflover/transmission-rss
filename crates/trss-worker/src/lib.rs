@@ -96,6 +96,12 @@
 //! real sources (Tistory's attachments) are always on; the fake one only with
 //! [`env::FAKE_SUBTITLE_SOURCE_VAR`].
 //!
+//! The worker also makes the jobs of the subscribed creators' new episodes and
+//! revisions itself ([`trss_jobs::follow`]): at its start, whenever a reading
+//! of Anissia's lines added observations, when the season link connected a
+//! rule's season, when the season queue stored a season's AniList entry
+//! ([`Worker::with_season_info`]), and after a run of jobs ended.
+//!
 //! # Shutdown
 //!
 //! Cancelling the token ([`Worker::run`]) stops the loop between cycles and
@@ -227,8 +233,13 @@ pub struct Worker {
     captions: Option<CaptionObserver>,
     /// Carries out the subtitle jobs; `None`: the worker leaves them alone.
     jobs: Option<trss_jobs::Runner>,
+    /// Makes the subscribed creators' jobs; set with `jobs`.
+    follow: Option<trss_jobs::Follow>,
     /// Rung when the web wakes the worker, so the jobs are looked at too.
     job_wake: Arc<tokio::sync::Notify>,
+    /// Rung when the season queue stored a season's entry
+    /// ([`trss_library::seasons::Seasons::stored`]); `None`: not heard.
+    season_stored: Option<Arc<tokio::sync::Notify>>,
     /// Held while subtitle jobs run: one run at a time, since the worker
     /// lock does not keep two runs of one worker apart.
     jobs_running: Arc<tokio::sync::Mutex<()>>,
@@ -309,7 +320,9 @@ impl Worker {
             wake_path: None,
             captions: None,
             jobs: None,
+            follow: None,
             job_wake: Arc::default(),
+            season_stored: None,
             jobs_running: Arc::default(),
             clock,
         })
@@ -390,6 +403,10 @@ impl Worker {
     pub async fn link_seasons(&self) -> season_link::Linked {
         let linked = season_link::link_seasons(&self.ctx.link()).await;
         self.ask_captions(&linked).await;
+        // A subscribed creator's season may have just become one to receive.
+        if linked.linked > 0 && self.follow_logged().await {
+            self.job_wake.notify_one();
+        }
         linked
     }
 
