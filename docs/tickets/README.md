@@ -121,7 +121,7 @@ Anissia 전체 목록 검색은 공식 문서에 없는 API라 바뀔 수 있어
 | [0031](0031-immediate-commands.md) | 웹 명령을 접수하자마자 실행해요 | 완료 | 0030 |
 | [0032](0032-server-browser-spike.md) | 서버 브라우저의 원격 화면과 창 크기를 확인해요 | 완료 | 없음 |
 | [0033](0033-source-paths-spike.md) | 출처별 실제 수신 경로를 확인해요 | 완료 | 없음 |
-| [0034](0034-season-anissia-link.md) | 시즌을 Anissia 작품에 연결해요 | 대기 | 0030 |
+| [0034](0034-season-anissia-link.md) | 시즌을 Anissia 작품에 연결해요 | 완료 | 0030 |
 | [0035](0035-candidate-observation.md) | Anissia 최근 자막 목록을 30분마다 읽어 자막 후보를 쌓아요 | 대기 | 0034 |
 | [0036](0036-subtitle-jobs-foundation.md) | 자막 작업을 기록하고 할 일 화면과 작업 상세를 세워요 | 대기 | 0030, 0031 |
 | [0037](0037-candidate-section.md) | 작품 상세의 자막 후보 구역에서 골라 받아요 | 대기 | 0035, 0036 |
