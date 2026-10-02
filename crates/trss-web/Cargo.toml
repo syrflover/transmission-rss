@@ -7,6 +7,7 @@ edition = "2021"
 trss-core = { path = "../trss-core" }
 trss-anissia = { path = "../trss-anissia" }
 trss-anilist = { path = "../trss-anilist" }
+trss-library = { path = "../trss-library" }
 trss-legacy = { path = "../trss-legacy" }
 
 axum = "0.8.9"
@@ -25,6 +26,7 @@ url = "2"
 trss-core = { path = "../trss-core", features = ["test-support"] }
 trss-anissia = { path = "../trss-anissia", features = ["test-support"] }
 trss-anilist = { path = "../trss-anilist", features = ["test-support"] }
+trss-library = { path = "../trss-library", features = ["test-support"] }
 trss-legacy = { path = "../trss-legacy", features = ["test-support"] }
 http-body-util = "0.1.5"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }

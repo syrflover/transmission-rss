@@ -24,15 +24,13 @@ use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 use trss_core::{heartbeat::HeartbeatStore, lock_path_for, CycleLock};
 use trss_legacy::{
+    store::channels::{ChannelInput, ChannelWithRules, RuleInput},
+    worker::MovePolicy,
+};
+use trss_library::{
     discovery::Reason,
-    store::{
-        channels::{ChannelInput, ChannelWithRules, RuleInput},
-        library::{LibraryStore, WatchFolder, WorkRecord},
-    },
-    worker::{
-        live::{LiveConfig, Reading},
-        MovePolicy,
-    },
+    live::{LiveConfig, Reading},
+    store::library::{LibraryStore, WatchFolder, WorkRecord},
 };
 use trss_worker::{CommandsOutcome, CycleReport, TickOutcome, Worker};
 

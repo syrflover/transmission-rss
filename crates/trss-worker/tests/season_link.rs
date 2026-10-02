@@ -17,8 +17,8 @@ use trss_anissia::Anime;
 use trss_legacy::store::{
     channels::{NewSubscription, Rule, SubtitleMode},
     history::{HistoryResult, Observation},
-    library::LibraryStore,
 };
+use trss_library::store::library::LibraryStore;
 use trss_worker::{TickOutcome, Worker};
 
 fn touch(path: &Path) {

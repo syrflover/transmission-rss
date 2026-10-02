@@ -86,13 +86,10 @@ use trss_core::{
 };
 use trss_legacy::{
     schedule::state::{self, Facts, SubtitleState, VideoState},
-    seasons::combine::air_times,
-    store::{
-        channels::{Rule, RuleState, SeasonRef, SubtitleMode},
-        library::Held,
-    },
+    store::channels::{Rule, RuleState, SeasonRef, SubtitleMode},
     subscriptions::{whole_episode, Quarter},
 };
+use trss_library::{seasons::combine::air_times, store::library::Held};
 
 #[cfg(test)]
 mod tests;

@@ -8,7 +8,8 @@ use tower::ServiceExt;
 
 use crate::api;
 use trss_core::Db;
-use trss_legacy::{discovery::Scan, store::channels::ChannelInput};
+use trss_legacy::store::channels::ChannelInput;
+use trss_library::discovery::Scan;
 
 use super::*;
 

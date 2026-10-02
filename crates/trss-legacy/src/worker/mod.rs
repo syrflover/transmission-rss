@@ -15,12 +15,10 @@
 pub mod commands;
 pub mod context;
 pub mod feed;
-pub mod live;
 pub mod offsets;
 pub mod plan;
 pub mod revisions;
 pub mod season_link;
-pub mod watch;
 
 pub use commands::rule_archive::work_folder::MovePolicy;
 pub use context::CycleContext;

@@ -13,7 +13,7 @@ use super::*;
 use crate::api;
 use trss_anilist::{fake::Fake, MAX_IMAGE_BYTES};
 use trss_core::Db;
-use trss_legacy::{
+use trss_library::{
     artwork::{image::samples, AppData, SERVING_BUDGET},
     discovery::{Scan, ScannedWork, WorkRead},
 };
@@ -412,7 +412,7 @@ async fn an_upload_waits_for_a_slot_before_it_reads_its_body() {
 
     let env = env().await;
     let held: Vec<_> = futures::future::join_all(
-        (0..trss_legacy::artwork::UPLOAD_SLOTS).map(|_| env.state.artwork.upload_slot()),
+        (0..trss_library::artwork::UPLOAD_SLOTS).map(|_| env.state.artwork.upload_slot()),
     )
     .await;
     let read = Arc::new(AtomicBool::new(false));
@@ -577,7 +577,7 @@ mod reading_a_body {
 /// Makes the work's cover a PNG-looking file of `size` bytes (serving looks at
 /// the size, the hash and the first bytes only) and returns the image URL.
 async fn plant_cover(env: &Env, size: usize) -> String {
-    use trss_legacy::{
+    use trss_library::{
         artwork::files::{image_ref, ARTWORK_DIR},
         store::artwork::{Format, Source},
     };

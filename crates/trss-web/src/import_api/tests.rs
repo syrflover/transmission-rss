@@ -11,8 +11,8 @@ use trss_core::{
     settings::{CollectionSettings, SettingsStore},
     Db,
 };
-use trss_legacy::store::{
-    channels::{ChannelInput, ChannelStore, RuleInput},
+use trss_legacy::store::channels::{ChannelInput, ChannelStore, RuleInput};
+use trss_library::store::{
     library::LibraryStore,
     setup::{SetupStore, Step},
 };
@@ -836,7 +836,7 @@ async fn an_import_whose_collect_folder_would_sit_inside_a_registered_watch_fold
     t.library
         .add_folder(
             root.clone(),
-            trss_legacy::discovery::Scan::default(),
+            trss_library::discovery::Scan::default(),
             1,
             &[],
         )

@@ -120,7 +120,6 @@ use trss_core::{
 };
 
 use crate::{
-    discovery::VIDEO_EXTENSIONS,
     episode_offset::signed,
     revision::FileIdentity,
     rss::save_path,
@@ -130,6 +129,7 @@ use crate::{
         CycleContext,
     },
 };
+use trss_library::discovery::VIDEO_EXTENSIONS;
 use trss_transmission::{torrent_places, TorrentPlace};
 
 /// The `kind` of the command.

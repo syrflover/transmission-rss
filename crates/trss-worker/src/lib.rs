@@ -105,12 +105,15 @@ use trss_legacy::{
     store::{
         channels::ChannelStore,
         history::{HistoryError, HistoryStore},
-        library::LibraryStore,
         revisions::RevisionStore,
-        seasons::SeasonStore,
         status::StatusStore,
     },
-    worker::{feed, live, season_link, watch, CycleContext, MovePolicy},
+    worker::{feed, season_link, CycleContext, MovePolicy},
+};
+use trss_library::{
+    live,
+    store::{library::LibraryStore, seasons::SeasonStore},
+    watch::{self, WatchContext},
 };
 use trss_transmission::{Redactor, RenamePolicy};
 
@@ -191,11 +194,15 @@ impl Worker {
                 settings: SettingsStore::new(db.clone()),
                 history: HistoryStore::new(db.clone()),
                 revisions: RevisionStore::new(db.clone()),
-                library: LibraryStore::new(db.clone()),
-                seasons: SeasonStore::new(db),
-                scan_cache: watch::ScanCaches::default(),
+                seasons: SeasonStore::new(db.clone()),
                 season_link: season_link::Memory::default(),
-                live: live::LiveWatch::default(),
+                watch: WatchContext {
+                    library: LibraryStore::new(db.clone()),
+                    settings: SettingsStore::new(db.clone()),
+                    heartbeat: HeartbeatStore::new(db),
+                    scan_cache: watch::ScanCaches::default(),
+                    live: live::LiveWatch::default(),
+                },
                 transmission_url: env.transmission_url.clone(),
                 transmission_http: trss_transmission::http_client(
                     trss_transmission::REQUEST_TIMEOUT,
@@ -236,13 +243,13 @@ impl Worker {
 
     /// Overrides how the inotify watches behave (default: [`live::LiveConfig::default`]).
     pub fn with_live_config(mut self, config: live::LiveConfig) -> Self {
-        self.ctx.live = live::LiveWatch::new(config);
+        self.ctx.watch.live = live::LiveWatch::new(config);
         self
     }
 
     /// The inotify watches of the watch folders.
     pub fn live(&self) -> &live::LiveWatch {
-        &self.ctx.live
+        &self.ctx.watch.live
     }
 
     /// Starts watching the watch folders for changes, so that cycles stop
@@ -250,13 +257,13 @@ impl Worker {
     /// does this itself; a worker that is only ticked is not watching, and its
     /// cycles read every folder.
     pub async fn start_watching(&self) {
-        self.ctx.live.start(
-            self.ctx.clone(),
+        self.ctx.watch.live.start(
+            self.ctx.watch.clone(),
             self.lock_path.clone(),
             self.clock.clone(),
             self.heartbeat_every,
         );
-        self.ctx.live.sync_folders().await;
+        self.ctx.watch.live.sync_folders().await;
     }
 
     /// One pass of the season link, which a cycle runs after the watch folder
@@ -268,7 +275,7 @@ impl Worker {
 
     /// Ends every watch.
     pub fn stop_watching(&self) {
-        self.ctx.live.stop();
+        self.ctx.watch.live.stop();
     }
 
     /// Overrides the minimum time between cycle starts (default: half the interval).
@@ -351,7 +358,7 @@ impl Worker {
         // The watch folders are read after the RSS work, under the same lock,
         // and one that cannot be read neither stops the others nor fails the tick.
         if !report.interrupted && !cancel.is_cancelled() {
-            watch::scan_all(&self.ctx, &self.clock, cancel).await;
+            watch::scan_all(&self.ctx.watch, &self.clock, cancel).await;
             // The videos the rules received are in the library now (or not yet).
             season_link::link_seasons(&self.ctx).await;
         }
@@ -370,7 +377,10 @@ impl Worker {
                     path: self.lock_path.clone(),
                     source,
                 })?;
-            if lock.is_some() || !self.ctx.live.flushing() || started.elapsed() > LIVE_LOCK_WAIT {
+            if lock.is_some()
+                || !self.ctx.watch.live.flushing()
+                || started.elapsed() > LIVE_LOCK_WAIT
+            {
                 return Ok(lock);
             }
             tokio::time::sleep(Duration::from_millis(25)).await;
@@ -406,7 +416,7 @@ impl Worker {
                 _ = ticker.tick() => {}
                 _ = command_ticker.tick() => {
                     // A watch folder registered meanwhile is watched from now on.
-                    self.ctx.live.sync_folders().await;
+                    self.ctx.watch.live.sync_folders().await;
                     self.poll_commands(&cancel).await;
                     continue;
                 }

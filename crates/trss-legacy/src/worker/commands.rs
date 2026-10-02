@@ -9,4 +9,3 @@ pub mod link;
 pub mod receive_once;
 pub mod receive_past;
 pub mod rule_archive;
-pub mod watch_rescan;

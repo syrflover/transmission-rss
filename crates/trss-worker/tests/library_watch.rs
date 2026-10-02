@@ -23,13 +23,15 @@ use tokio_util::sync::CancellationToken;
 use trss_anilist::{Entry, FuzzyDate};
 use trss_core::settings::SettingsStore;
 use trss_legacy::{
+    store::channels::{ChannelInput, ChannelWithRules, RuleInput},
+    worker::MovePolicy,
+};
+use trss_library::{
     discovery,
     store::{
-        channels::{ChannelInput, ChannelWithRules, RuleInput},
         library::{LibraryStore, WatchFolder, WorkRecord},
         seasons::SeasonStore,
     },
-    worker::MovePolicy,
 };
 use trss_worker::{CommandsOutcome, CycleReport, TickOutcome, Worker};
 

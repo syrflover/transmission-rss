@@ -96,13 +96,15 @@
 use std::path::{Component, Path};
 
 use crate::{
+    store::channels::{Rule, SeasonRef},
+    subscriptions::whole_episode,
+};
+use trss_library::{
     seasons::combine::combine,
     store::{
-        channels::{Rule, SeasonRef},
         library::{LibraryError, LibraryStore},
         seasons::{SeasonError, SeasonStore},
     },
-    subscriptions::whole_episode,
 };
 
 /// Why the earlier seasons' episodes cannot be added up.
@@ -863,12 +865,10 @@ mod tests {
 
     use std::collections::BTreeSet;
 
-    use crate::{
-        discovery::{EpisodeFile, FileKind, Scan, ScannedWork, WorkRead},
-        store::channels::{RuleState, Subscription, SubtitleMode},
-    };
+    use crate::store::channels::{RuleState, Subscription, SubtitleMode};
     use trss_anilist::{Entry, FuzzyDate};
     use trss_core::db::Db;
+    use trss_library::discovery::{EpisodeFile, FileKind, Scan, ScannedWork, WorkRead};
 
     fn entry(id: i64, episodes: Option<u32>) -> Entry {
         Entry {

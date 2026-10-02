@@ -35,7 +35,7 @@
 //! rule received and what the library holds at the paths Transmission reports,
 //! and Transmission's paths change together with the files on disk, which the
 //! library then notes. So the pass remembers, per rule, the torrents and the
-//! library's generation ([`crate::store::library::LibraryStore::generation`]) of
+//! library's generation ([`trss_library::store::library::LibraryStore::generation`]) of
 //! its last attempt that did not connect it, and tries again only when either
 //! differs. A taken season is the one more input: its holder can leave without
 //! touching the library, which is why [`link_seasons`] first lets the store clear
@@ -133,7 +133,7 @@ async fn find(ctx: &CycleContext, places: &[&TorrentPlace]) -> Option<Found> {
                 .map(move |file| format!("{dir}/{}", file.name))
         })
         .collect();
-    let videos = match ctx.library.find_videos(paths).await {
+    let videos = match ctx.watch.library.find_videos(paths).await {
         Ok(videos) => videos,
         Err(err) => {
             eprintln!("Season link: cannot look the videos up: {err}");
@@ -164,7 +164,7 @@ pub async fn link_seasons(ctx: &CycleContext) -> Linked {
     let mut done = Linked::default();
     // Read before anything the attempt depends on, so that a change during the
     // attempt makes the next one try again.
-    let generation = match ctx.library.generation().await {
+    let generation = match ctx.watch.library.generation().await {
         Ok(generation) => generation,
         Err(err) => {
             eprintln!("Season link: cannot read the library: {err}");

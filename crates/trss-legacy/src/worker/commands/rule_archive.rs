@@ -36,7 +36,7 @@
 //! **The library follows the folder.** When a work folder has moved (or is found
 //! moved already), the work the library holds under the old place keeps its ID
 //! and belongs to the new place, or is merged into the work the destination
-//! already had ([`crate::worker::watch::follow_move`]). Nothing follows a folder
+//! already had ([`trss_library::watch::follow_move`]). Nothing follows a folder
 //! moved by hand.
 //!
 //! Every step is safe to repeat, and where the folder is comes from the disk
@@ -65,8 +65,9 @@ use trss_core::{
 
 use crate::{
     store::channels::{Rule, RuleState},
-    worker::{watch, CycleContext},
+    worker::CycleContext,
 };
+use trss_library::watch;
 use trss_transmission as transmission;
 
 use work_folder::{move_work_folder, Disk, Hold, MoveError, Moved, RealDisk, Request, Side};
@@ -471,7 +472,7 @@ async fn move_folder(
         // ID (see `watch::follow_move`). A failure leaves the command to run
         // again, which finds the folder moved already and follows it then.
         let followed = watch::follow_move(
-            ctx,
+            &ctx.watch,
             request.from_root.clone(),
             request.to_root.clone(),
             request.name.clone(),

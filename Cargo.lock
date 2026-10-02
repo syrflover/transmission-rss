@@ -2555,11 +2555,35 @@ dependencies = [
  "trss-anilist",
  "trss-anissia",
  "trss-core",
+ "trss-library",
  "trss-transmission",
  "unicode-normalization",
  "url",
  "uuid",
  "yaml_serde",
+]
+
+[[package]]
+name = "trss-library"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "futures",
+ "image",
+ "regex",
+ "rusqlite",
+ "rustix",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "trss-anilist",
+ "trss-core",
+ "unicode-normalization",
+ "uuid",
 ]
 
 [[package]]
@@ -2598,6 +2622,7 @@ dependencies = [
  "trss-anissia",
  "trss-core",
  "trss-legacy",
+ "trss-library",
  "url",
 ]
 
@@ -2627,6 +2652,7 @@ dependencies = [
  "trss-anissia",
  "trss-core",
  "trss-legacy",
+ "trss-library",
  "trss-transmission",
  "trss-web",
  "url",

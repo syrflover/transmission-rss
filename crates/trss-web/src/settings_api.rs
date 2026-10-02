@@ -37,7 +37,7 @@
 //!
 //! # The watch folders
 //!
-//! The two folders are always watch folders ([`trss_legacy::automatic_watch`]). The
+//! The two folders are always watch folders ([`trss_library::automatic_watch`]). The
 //! save registers a newly set folder (reading it once, so that its first
 //! reading is the baseline as for a folder added by hand), turns a folder the
 //! user registered at the same place into the automatic one with its records,
@@ -58,7 +58,7 @@ use trss_core::{
     db::DbError,
     settings::{CollectionSettings, SettingsError},
 };
-use trss_legacy::{
+use trss_library::{
     automatic_watch::{self, Wanted},
     store::library::{self, LibraryError},
 };

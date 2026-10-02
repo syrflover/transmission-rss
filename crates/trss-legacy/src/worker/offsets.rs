@@ -121,7 +121,7 @@ async fn settle_rule(
     let mut rule = rule.clone();
     // The second try is for a rule the user saved while the cycle ran.
     for _ in 0..2 {
-        let basis = match gather(&ctx.library, &ctx.seasons, collect_folder, &rule).await {
+        let basis = match gather(&ctx.watch.library, &ctx.seasons, collect_folder, &rule).await {
             Ok(Some(basis)) => basis,
             Ok(None) => return kept(&rule),
             Err(err) => {

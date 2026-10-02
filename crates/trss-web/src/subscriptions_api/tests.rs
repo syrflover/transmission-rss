@@ -693,10 +693,8 @@ mod rule_detail {
 
     use super::*;
     use trss_anilist::{Entry, FuzzyDate};
-    use trss_legacy::{
-        discovery::{EpisodeFile, FileKind, Scan, ScannedWork, WorkRead},
-        store::channels::Rule,
-    };
+    use trss_legacy::store::channels::Rule;
+    use trss_library::discovery::{EpisodeFile, FileKind, Scan, ScannedWork, WorkRead};
 
     impl App {
         /// A subscription to 3320 on a fresh channel, with the schedule up.

@@ -16,11 +16,8 @@ use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 use trss_anilist::{Entry, FuzzyDate};
 use trss_anissia::Anime;
-use trss_legacy::store::{
-    channels::{ChannelInput, NewSubscription, Rule, RuleInput, SubtitleMode},
-    library::LibraryStore,
-    seasons::SeasonStore,
-};
+use trss_legacy::store::channels::{ChannelInput, NewSubscription, Rule, RuleInput, SubtitleMode};
+use trss_library::store::{library::LibraryStore, seasons::SeasonStore};
 use trss_worker::{CommandsOutcome, TickOutcome};
 
 const FEED: &str = "feed-offset";

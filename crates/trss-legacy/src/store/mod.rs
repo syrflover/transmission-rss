@@ -5,14 +5,10 @@
 //! queries and rules in its own submodule, starting with [`channels`].
 
 pub mod anissia;
-pub mod artwork;
 pub mod channels;
 pub mod history;
-pub mod library;
 pub mod revisions;
 pub mod search_pace;
-pub mod seasons;
-pub mod setup;
 pub mod status;
 
 #[cfg(test)]

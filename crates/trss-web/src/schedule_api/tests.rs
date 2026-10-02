@@ -18,16 +18,12 @@ use trss_core::{Clock, Db};
 
 use crate::{api, AppState};
 use trss_anissia::{Anime, Anissia};
-use trss_legacy::{
-    discovery::{EpisodeFile, FileKind, Scan, ScannedWork, WorkRead},
-    store::{
-        channels::{
-            Channel, ChannelInput, NewSubscription, Rule, RuleInput, RuleState, SubtitleMode,
-        },
-        history::{HistoryResult, Observation},
-        status::TransmissionCounts,
-    },
+use trss_legacy::store::{
+    channels::{Channel, ChannelInput, NewSubscription, Rule, RuleInput, RuleState, SubtitleMode},
+    history::{HistoryResult, Observation},
+    status::TransmissionCounts,
 };
+use trss_library::discovery::{EpisodeFile, FileKind, Scan, ScannedWork, WorkRead};
 
 /// Thursday 2026-10-01 12:00 in Seoul (4분기); the week is 09-28 to 10-04.
 const NOW: i64 = 1_790_780_400_000 + 12 * 60 * 60 * 1000;

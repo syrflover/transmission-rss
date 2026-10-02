@@ -7,7 +7,7 @@ use std::{
 };
 
 use trss_anilist::MAX_IMAGE_BYTES;
-use trss_legacy::{artwork::image::verify, store::artwork::Format};
+use trss_library::{artwork::image::verify, store::artwork::Format};
 
 /// Every byte ever allocated, freed or not.
 static ALLOCATED: AtomicUsize = AtomicUsize::new(0);

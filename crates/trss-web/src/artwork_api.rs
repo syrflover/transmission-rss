@@ -45,10 +45,10 @@
 //!   it before anything changes.
 //! - `upload` takes the file's bytes as the body; the format is judged from
 //!   the bytes, never the name or the content type. At most
-//!   [`trss_legacy::artwork::UPLOAD_SLOTS`] uploads are taken in at once; another
+//!   [`trss_library::artwork::UPLOAD_SLOTS`] uploads are taken in at once; another
 //!   waits for its turn before its body is read. The body is collected into
 //!   one buffer (sized from `Content-Length`, up to the byte limit) and is
-//!   not copied after that. Reading it may take [`trss_legacy::artwork::UPLOAD_BODY_TIMEOUT`]
+//!   not copied after that. Reading it may take [`trss_library::artwork::UPLOAD_BODY_TIMEOUT`]
 //!   in all: a body that stalls is answered `400` and gives its slot back.
 //! - `clear` makes the work `disabled` (no cover, no automatic search),
 //!   `auto` goes back to automatic with a new search, `repair` asks for the
@@ -69,7 +69,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{ApiError, AppState};
 use trss_anilist::{title::Candidate, AnilistError, ImageFetchError, MAX_IMAGE_BYTES};
-use trss_legacy::{
+use trss_library::{
     artwork::{ActionError, Artwork, USER_MAX_WAIT},
     store::artwork::{ArtworkError, Selection, UserChange},
 };
@@ -192,7 +192,7 @@ async fn refused(artwork: &Artwork, error: ActionError) -> ApiError {
             ApiError::invalid("AniList에 연결하지 못했어요. 잠시 뒤 다시 해 주세요.")
         }
         ActionError::Fetch(ImageFetchError::TooLarge) => {
-            ApiError::invalid(trss_legacy::artwork::Rejected::TooLarge.message())
+            ApiError::invalid(trss_library::artwork::Rejected::TooLarge.message())
         }
         ActionError::Fetch(e) => {
             eprintln!("trss-web: AniList image: {e}");
@@ -420,7 +420,7 @@ async fn upload(
         Ok(Ok(bytes)) => bytes,
         Ok(Err(BodyError::TooLarge)) => {
             return Err(ApiError::invalid(
-                trss_legacy::artwork::Rejected::TooLarge.message(),
+                trss_library::artwork::Rejected::TooLarge.message(),
             ))
         }
         Ok(Err(BodyError::Broken)) => {

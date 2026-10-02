@@ -33,10 +33,8 @@ use trss_core::{CycleLock, Millis};
 
 use trss_anissia::{Anissia, AnissiaError, LAST_WEEK};
 
-use crate::{
-    artwork::queue::{LOCK_RETRY, POLL},
-    store::anissia::{AnissiaStore, Due, REFRESH_AFTER_MS},
-};
+use crate::store::anissia::{AnissiaStore, Due, REFRESH_AFTER_MS};
+use trss_library::artwork::queue::{LOCK_RETRY, POLL};
 
 #[cfg(test)]
 mod tests;

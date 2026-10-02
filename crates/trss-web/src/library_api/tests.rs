@@ -10,7 +10,7 @@ use tower::ServiceExt;
 
 use crate::{api, AppState};
 use trss_core::Db;
-use trss_legacy::discovery::{
+use trss_library::discovery::{
     EpisodeFile, FileKind, Reason, Scan, ScannedWork, Unrecognized, WorkRead,
 };
 

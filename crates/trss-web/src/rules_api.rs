@@ -550,7 +550,7 @@ async fn season_of(state: &AppState, season_id: &str) -> Result<Option<RuleSeaso
         .await
         .map_err(|e| internal(&e))?;
     let episodes =
-        trss_legacy::seasons::combine::combine(&episodes.entries).and_then(|c| c.episodes);
+        trss_library::seasons::combine::combine(&episodes.entries).and_then(|c| c.episodes);
     let cover_url = state
         .artwork
         .store

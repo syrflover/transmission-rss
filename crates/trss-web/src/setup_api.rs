@@ -19,7 +19,7 @@
 //! The steps are `folder` (`감시 폴더 등록`) and `import` (`기존 설정 가져오기`).
 //! A step is `done` once it happened: a watch folder was registered, an import
 //! was applied (a channel that exists for another reason does not count). The
-//! store latches both when they happen ([`trss_legacy::store::setup`]), so removing
+//! store latches both when they happen ([`trss_library::store::setup`]), so removing
 //! the folder or the channels later does not undo them, and a skip, which the
 //! data cannot say, is kept there as well so every device shows the same
 //! checklist. The checklist is `active` while a step is neither done nor
@@ -41,7 +41,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use super::{commands_api::now_millis, ApiError, AppState};
-use trss_legacy::store::setup::{FirstRun, Step};
+use trss_library::store::setup::{FirstRun, Step};
 
 pub fn routes() -> Router<AppState> {
     Router::new().route("/first-run/{step}", put(skip))

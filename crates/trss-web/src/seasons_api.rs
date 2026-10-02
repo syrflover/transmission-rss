@@ -37,7 +37,7 @@
 //!   `can_auto` is true for the work's first season, the only one the app
 //!   searches for.
 //! - `airing`, `episodes`, `studios`, `genres` and `synopsis` are the linked
-//!   entries taken together ([`trss_legacy::seasons::combine`]) and are `null`/empty
+//!   entries taken together ([`trss_library::seasons::combine`]) and are `null`/empty
 //!   without an entry. `airing.state` is `releasing` while any entry is,
 //!   otherwise the last entry's status (`finished`, `not_yet_released`,
 //!   `cancelled`, `hiatus`). `episodes` is `null` when any entry's count is
@@ -67,7 +67,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{ApiError, AppState};
 use trss_anilist::{title::Candidate, AnilistError, Entry, FuzzyDate, Sequel};
-use trss_legacy::{
+use trss_library::{
     artwork::USER_MAX_WAIT,
     seasons::{combine, describe, ActionError},
     store::seasons::{SeasonError, SeasonLink},
@@ -252,7 +252,7 @@ pub fn untouched(work_id: &str, season: u32) -> SeasonLink {
         work_id: work_id.to_owned(),
         season,
         version: 0,
-        origin: trss_legacy::store::seasons::Origin::Auto,
+        origin: trss_library::store::seasons::Origin::Auto,
         entries: Vec::new(),
         job: None,
         note: None,

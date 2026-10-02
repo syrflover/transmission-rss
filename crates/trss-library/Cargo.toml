@@ -1,0 +1,38 @@
+[package]
+name = "trss-library"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+# What the tests of the crates above need from this one: the sample images and
+# the fake AniList server.
+test-support = ["trss-anilist/test-support", "dep:image"]
+
+[dependencies]
+trss-core = { path = "../trss-core" }
+trss-anilist = { path = "../trss-anilist" }
+
+# Image bytes shared between the web, the decode and the file writer without copies.
+bytes = "1"
+regex = "1"
+rusqlite = { version = "0.40", features = ["bundled"] }
+# The directory watches (inotify), without `unsafe`.
+rustix = { version = "1", features = ["fs"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync"] }
+tokio-util = "0.7"
+unicode-normalization = "0.1.25"
+uuid = { version = "1", features = ["v4"] }
+# Makes the sample images of the tests (`artwork::image::samples`); the app reads only headers.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"], optional = true }
+
+[dev-dependencies]
+trss-core = { path = "../trss-core", features = ["test-support"] }
+trss-anilist = { path = "../trss-anilist", features = ["test-support"] }
+futures = "0.3"
+# Makes the sample images of the tests; the app reads only headers.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+tempfile = "3.27.0"

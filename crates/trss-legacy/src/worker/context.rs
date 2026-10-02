@@ -3,11 +3,9 @@
 use url::Url;
 
 use super::commands::rule_archive::work_folder::MovePolicy;
-use crate::store::{
-    channels::ChannelStore, history::HistoryStore, library::LibraryStore, revisions::RevisionStore,
-    seasons::SeasonStore,
-};
+use crate::store::{channels::ChannelStore, history::HistoryStore, revisions::RevisionStore};
 use trss_core::settings::SettingsStore;
+use trss_library::{store::seasons::SeasonStore, watch::WatchContext};
 use trss_transmission as transmission;
 use trss_transmission::{Redactor, RenamePolicy, SessionConfig};
 
@@ -23,20 +21,15 @@ pub struct CycleContext {
     pub history: HistoryStore,
     /// The replacements of video revisions (see [`super::revisions`]).
     pub revisions: RevisionStore,
-    /// The watch folders the worker rescans (see [`crate::worker::watch`]).
-    pub library: LibraryStore,
     /// The AniList entries linked to the library's seasons (the episodes of
     /// the seasons before a rule's: [`crate::episode_offset`]).
     pub seasons: SeasonStore,
-    /// What the worker remembers of each watch folder's directories between
-    /// scans (see [`crate::worker::watch`]).
-    pub scan_cache: super::watch::ScanCaches,
     /// What the season link remembers between cycles (see
     /// [`crate::worker::season_link`]).
     pub season_link: super::season_link::Memory,
-    /// The inotify watches of the watch folders, which say what the cycle has
-    /// to read of them (see [`crate::worker::live`]).
-    pub live: super::live::LiveWatch,
+    /// The watch folders the worker reads and the inotify watches that say
+    /// what the cycle has to read of them (see [`trss_library::watch`]).
+    pub watch: WatchContext,
     pub transmission_url: Url,
     /// The client for Transmission's requests; they time out
     /// (see [`trss_transmission::http_client`]).

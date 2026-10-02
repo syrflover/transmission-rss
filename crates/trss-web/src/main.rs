@@ -6,7 +6,7 @@ use tokio::net::TcpListener;
 use trss_anilist::AnilistConfig;
 use trss_anissia::{Anissia, AnissiaConfig};
 use trss_core::{db::DB_PATH_ENV, Db};
-use trss_legacy::artwork::{AppData, Artwork};
+use trss_library::artwork::{AppData, Artwork};
 use trss_web::{self as web, env::WebEnv, AppState};
 
 #[tokio::main]

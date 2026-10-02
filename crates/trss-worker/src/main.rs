@@ -6,9 +6,11 @@ use trss_anissia::{Anissia, AnissiaConfig};
 use trss_core::{db::DB_PATH_ENV, lock_path_for, Db};
 use trss_legacy::{
     anissia::{self, AnissiaQueue},
+    store::anissia::AnissiaStore,
+};
+use trss_library::{
     artwork::{self, AppData, Artwork},
     seasons::{self, Seasons},
-    store::anissia::AnissiaStore,
 };
 use trss_worker::{Worker, WorkerEnv};
 

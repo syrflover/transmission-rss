@@ -102,13 +102,12 @@ use super::{
 use trss_legacy::{
     revision::{season_episode, Release},
     rss::save_path,
-    store::{
-        artwork::JobKind,
-        channels::ChannelWithRules,
-        library::{EpisodeDetail, FileRecord, LibraryError, WorkDetail},
-        revisions::Revision,
-    },
+    store::{channels::ChannelWithRules, revisions::Revision},
     worker::commands::rule_archive::{work_folder, WorkFolder},
+};
+use trss_library::store::{
+    artwork::JobKind,
+    library::{EpisodeDetail, FileRecord, LibraryError, WorkDetail},
 };
 
 #[cfg(test)]
@@ -448,7 +447,7 @@ async fn show(
                 .and_then(|p| links.get(&p))
                 // Only a season the work has can be followed from.
                 .filter(|_| numbers.contains(&(season.number - 1)));
-            let air_times = trss_legacy::seasons::combine::air_times(&link.entries);
+            let air_times = trss_library::seasons::combine::air_times(&link.entries);
             let info = season_view(link, previous, first);
             SeasonView {
                 number: season.number,

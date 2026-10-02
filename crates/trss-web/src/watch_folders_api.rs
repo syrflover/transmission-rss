@@ -19,7 +19,7 @@
 //!   linked to Anissia, and `new_works` are the works found after the folder's
 //!   first check, within the last [`NEW_DAYS`] days.
 //! - `automatic` is true for the collect folder and the archive folder, which
-//!   the app registers itself ([`trss_legacy::automatic_watch`]) while the settings
+//!   the app registers itself ([`trss_library::automatic_watch`]) while the settings
 //!   use them; `DELETE` refuses them with a `400` and a sentence.
 //! - `checked_at` is the last attempt to read the folder (`null` before any) and
 //!   `error` a sentence when that attempt could not read everything; the works
@@ -56,7 +56,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use super::{commands_api::now_millis, ApiError, AppState};
-use trss_legacy::{
+use trss_library::{
     discovery,
     store::library::{FolderSummary, LibraryError, WatchFolder},
 };
@@ -287,7 +287,7 @@ fn check_and_scan(
         ))
     })?;
     for other in registered {
-        let other_real = trss_legacy::automatic_watch::resolved(&other.path);
+        let other_real = trss_library::automatic_watch::resolved(&other.path);
         if other_real == real {
             return Err(ApiError::invalid("이미 등록한 감시 폴더예요."));
         }

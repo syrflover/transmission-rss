@@ -11,7 +11,7 @@ use tower::ServiceExt;
 use crate::{api, AppState};
 use trss_anilist::fake::Fake;
 use trss_core::Db;
-use trss_legacy::{
+use trss_library::{
     artwork::{image::samples, AppData, Artwork},
     discovery::{EpisodeFile, FileKind, Scan, ScannedWork, WorkRead},
 };

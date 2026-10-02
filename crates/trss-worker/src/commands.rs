@@ -77,9 +77,8 @@ use trss_core::{
     CycleLock,
 };
 
-use trss_legacy::worker::commands::{
-    episode_undo, receive_once, receive_past, rule_archive, watch_rescan,
-};
+use trss_legacy::worker::commands::{episode_undo, receive_once, receive_past, rule_archive};
+use trss_library::watch_rescan;
 
 use super::{Worker, WorkerError};
 
@@ -220,7 +219,7 @@ impl Worker {
             }
             watch_rescan::KIND => {
                 task.spawn(async move {
-                    match watch_rescan::run(&ctx, &owned, &clock).await {
+                    match watch_rescan::run(&ctx.watch, &owned, &clock).await {
                         Ok(finished) => Ran::Ended {
                             state: finished.state,
                             outcome: finished.outcome,

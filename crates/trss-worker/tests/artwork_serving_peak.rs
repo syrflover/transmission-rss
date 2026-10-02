@@ -19,7 +19,7 @@ use futures::StreamExt;
 use tower::ServiceExt;
 use trss_anilist::{AnilistConfig, MAX_IMAGE_BYTES};
 use trss_core::Db;
-use trss_legacy::{
+use trss_library::{
     artwork::{
         files::{image_ref, ARTWORK_DIR},
         AppData, Artwork, SERVING_BUDGET,

@@ -51,7 +51,7 @@
 //!   `subtitle` are the episodes of that season that have a file, as ranges of
 //!   consecutive episodes written as in the file names. `01` and `1` are one
 //!   episode, and an episode that is not a whole number (`17.5`) is a range of
-//!   its own. See [`trss_legacy::store::library`]'s overview for the rules.
+//!   its own. See [`trss_library::store::library`]'s overview for the rules.
 //! - `subtitle_coverage` is `all` (there is a video and every episode with a
 //!   video has a subtitle), `some`, or `none`; `null` for a work whose folder is
 //!   gone (`missing`), which has no holdings counted.
@@ -75,7 +75,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use super::{artwork_api::image_url, ApiError, AppState};
-use trss_legacy::store::library::{
+use trss_library::store::library::{
     Cursor, EpisodeRange, Filter, LibraryError, ListQuery, Sort, WorkOverview,
 };
 

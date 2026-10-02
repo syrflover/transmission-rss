@@ -76,8 +76,9 @@ use trss_core::commands::{Accepted, Command, CommandState, NewCommand};
 use trss_legacy::{
     past_search::service::Resolve,
     store::channels::RuleState,
-    worker::commands::{episode_undo, receive_once, receive_past, rule_archive, watch_rescan},
+    worker::commands::{episode_undo, receive_once, receive_past, rule_archive},
 };
+use trss_library::watch_rescan;
 
 #[cfg(test)]
 mod tests;

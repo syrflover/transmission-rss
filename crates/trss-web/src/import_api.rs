@@ -639,12 +639,12 @@ async fn apply(
             .folders()
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?;
-        let wanted = vec![trss_legacy::automatic_watch::Wanted {
+        let wanted = vec![trss_library::automatic_watch::Wanted {
             what: "수집 폴더",
             path: folder.clone(),
         }];
         tokio::task::spawn_blocking(move || {
-            trss_legacy::automatic_watch::plan(&wanted, &registered)
+            trss_library::automatic_watch::plan(&wanted, &registered)
         })
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?

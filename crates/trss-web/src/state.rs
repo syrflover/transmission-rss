@@ -2,14 +2,16 @@ use trss_anilist::AnilistConfig;
 use trss_anissia::{Anissia, AnissiaConfig};
 use trss_core::{commands::CommandStore, heartbeat::HeartbeatStore, settings::SettingsStore, Db};
 use trss_legacy::{
-    artwork::Artwork,
     past_search::service::PastSearch,
-    seasons::Seasons,
     store::{
         anissia::AnissiaStore, channels::ChannelStore, history::HistoryStore,
-        library::LibraryStore, revisions::RevisionStore, search_pace::SearchPace,
-        setup::SetupStore, status::StatusStore,
+        revisions::RevisionStore, search_pace::SearchPace, status::StatusStore,
     },
+};
+use trss_library::{
+    artwork::Artwork,
+    seasons::Seasons,
+    store::{library::LibraryStore, setup::SetupStore},
 };
 
 /// Shared handles every API handler can reach. Cheap to clone.
