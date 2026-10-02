@@ -318,3 +318,17 @@ async fn a_merged_subscription_whose_season_is_held_by_another_anime_is_noted_no
     // A note about the moved work's season is about the kept work's now.
     assert_eq!(rule(&db, "r4").await, (None, Some(format!("{kept}:2")), 2));
 }
+
+#[tokio::test]
+async fn an_anime_is_linked_while_some_season_links_it() {
+    let (db, _library, store, _folder, work) = env().await;
+    assert!(!store.anime_is_linked(7).await.unwrap());
+
+    set(&db, &work, 1, Some(7)).await;
+    assert!(store.anime_is_linked(7).await.unwrap());
+    assert!(!store.anime_is_linked(8).await.unwrap());
+
+    // A cut link links nothing.
+    set(&db, &work, 1, None).await;
+    assert!(!store.anime_is_linked(7).await.unwrap());
+}

@@ -207,6 +207,19 @@ impl SeasonStore {
             .await
     }
 
+    /// Whether some season is linked to Anissia anime `anime_no`.
+    pub async fn anime_is_linked(&self, anime_no: i64) -> Result<bool, SeasonError> {
+        self.db
+            .run(move |c| {
+                Ok(c.query_row(
+                    "SELECT EXISTS (SELECT 1 FROM season_anissia WHERE anime_no = ?1)",
+                    [anime_no],
+                    |r| r.get(0),
+                )?)
+            })
+            .await
+    }
+
     /// The Anissia links of every season of a work that has a row, by season
     /// number (a link that was cut is in it, with no anime).
     pub async fn anissia_links_of(

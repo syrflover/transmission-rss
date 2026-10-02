@@ -4,7 +4,7 @@ use tokio_util::sync::CancellationToken;
 use trss_anilist::AnilistConfig;
 use trss_anissia::{Anissia, AnissiaConfig};
 use trss_collect::{
-    anissia::{self, AnissiaQueue},
+    anissia::{self, captions::CaptionObserver, AnissiaQueue},
     store::anissia::AnissiaStore,
 };
 use trss_core::{db::DB_PATH_ENV, lock_path_for, wake::wake_path_for, Db};
@@ -41,12 +41,12 @@ async fn run() -> Result<(), String> {
 
     let artwork = Artwork::new(db.clone(), Some(AppData::for_database(&db_path)), anilist);
     let season_info = Seasons::over(db.clone(), &artwork);
-    let anissia = AnissiaQueue::new(
-        Anissia::with_defaults(db.clone(), anissia_config),
-        AnissiaStore::new(db.clone()),
-    );
+    let anissia_client = Anissia::with_defaults(db.clone(), anissia_config);
+    let anissia = AnissiaQueue::new(anissia_client.clone(), AnissiaStore::new(db.clone()));
+    let captions = CaptionObserver::new(anissia_client, AnissiaStore::new(db.clone()));
     let worker = Worker::new(db, &env, lock_path_for(&db_path))
         .map_err(|e| e.to_string())?
+        .with_captions(captions.clone())
         .with_wake_socket(wake_path_for(&db_path));
 
     let cancel = CancellationToken::new();
@@ -76,6 +76,14 @@ async fn run() -> Result<(), String> {
         async move { anissia.run_queue(lock, cancel).await }
     });
 
+    // The subtitle lines of every Anissia anime: the recent list every 30
+    // minutes, whatever the collection cycle is doing, under its own lock.
+    let caption_queue = tokio::spawn({
+        let cancel = cancel.clone();
+        let lock = anissia::captions::lock_path_for(&db_path);
+        async move { captions.run_queue(lock, cancel).await }
+    });
+
     println!(
         "trss-worker started: a cycle every {}s (database: {})",
         env.interval.as_secs(),
@@ -86,6 +94,7 @@ async fn run() -> Result<(), String> {
     let _ = queue.await;
     let _ = season_queue.await;
     let _ = anissia_queue.await;
+    let _ = caption_queue.await;
 
     println!("trss-worker stopped");
     Ok(())

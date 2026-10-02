@@ -44,8 +44,9 @@
 //!
 //! While it holds the lock the worker also leaves a heartbeat in the database
 //! ([`heartbeat`]), which is how the web tells a busy worker from a dead one
-//! without touching the lock. (The Anissia, artwork and season queues hold
-//! locks of their own, not this one.)
+//! without touching the lock. (The Anissia, artwork and season queues and the
+//! 30-minute observation of Anissia's subtitle lines hold locks of their own,
+//! not this one.)
 //!
 //! # Side by side
 //!
@@ -129,6 +130,7 @@ pub use cycle::{run_cycle, CommandsAtRemoval, CycleError, CycleReport};
 pub use env::{EnvError, WorkerEnv};
 
 use trss_collect::{
+    anissia::captions::CaptionObserver,
     commands::rule_archive::work_folder::MovePolicy,
     context::{CollectContext, TransmissionLink},
     feed, season_link,
@@ -208,6 +210,9 @@ pub struct Worker {
     /// Where the web's wake-ups arrive ([`trss_core::wake`]); `None`: only the
     /// worker's own looks.
     wake_path: Option<PathBuf>,
+    /// Reads one anime's subtitle lines for `anissia_captions` commands; `None`
+    /// fails them.
+    captions: Option<CaptionObserver>,
     clock: Clock,
 }
 
@@ -283,6 +288,7 @@ impl Worker {
             in_flight: InFlight::default(),
             cycling: Arc::default(),
             wake_path: None,
+            captions: None,
             clock,
         })
     }
@@ -321,6 +327,14 @@ impl Worker {
         let live = live::LiveWatch::new(config);
         self.ctx.live = live.clone();
         self.watch.live = live;
+        self
+    }
+
+    /// Reads the Anissia anime `anissia_captions` commands name with
+    /// `observer` (the 30-minute reading of the recent list is the observer's
+    /// own queue, [`CaptionObserver::run_queue`], run beside the worker).
+    pub fn with_captions(mut self, observer: CaptionObserver) -> Self {
+        self.captions = Some(observer);
         self
     }
 

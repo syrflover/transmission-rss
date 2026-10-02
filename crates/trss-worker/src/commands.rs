@@ -119,6 +119,12 @@
 //! to rename, rather than holding up the folder for the commands behind it; a
 //! new request (`이어서 되돌리기`) carries them on.
 //!
+//! An `anissia_captions` command (`새로고침` of a season's subtitle candidates,
+//! and the read the web asks for when a season is linked) reads one Anissia
+//! anime's subtitle lines at once and observes them ([`anissia_captions`]). It
+//! works in no folder and touches no torrent, so it waits for no turn and no
+//! gate; it asks Anissia at the app's shared pace.
+//!
 //! Each command kind has its own module below.
 
 use std::{
@@ -137,7 +143,7 @@ use trss_core::{
 };
 
 use trss_collect::commands::{
-    episode_undo, receive_once, receive_past,
+    anissia_captions, episode_undo, receive_once, receive_past,
     rule_archive::{self, work_folder::Hold},
 };
 use trss_library::watch_rescan;
@@ -185,6 +191,7 @@ enum Kind {
     RuleArchive,
     WatchRescan,
     EpisodeUndo,
+    AnissiaCaptions,
 }
 
 impl Kind {
@@ -195,6 +202,7 @@ impl Kind {
             rule_archive::KIND => Kind::RuleArchive,
             watch_rescan::KIND => Kind::WatchRescan,
             episode_undo::KIND => Kind::EpisodeUndo,
+            anissia_captions::KIND => Kind::AnissiaCaptions,
             _ => return None,
         })
     }
@@ -202,7 +210,7 @@ impl Kind {
     /// Whether the command may add, move, rename or take labels off torrents,
     /// and so takes the torrent gate ([`crate::removal`]).
     fn touches_torrents(self) -> bool {
-        self != Kind::WatchRescan
+        !matches!(self, Kind::WatchRescan | Kind::AnissiaCaptions)
     }
 }
 
@@ -486,6 +494,7 @@ impl Worker {
             Kind::WatchRescan => watch_rescan::section(&self.watch, command)
                 .await
                 .map_err(|e| text(&e)),
+            Kind::AnissiaCaptions => Ok(anissia_captions::section()),
         }
     }
 
@@ -600,6 +609,27 @@ impl Worker {
                             add_unconfirmed: false,
                         },
                         Err(err) => Ran::NotNow(err.to_string()),
+                    }
+                });
+            }
+            Kind::AnissiaCaptions => {
+                let observer = self.captions.clone();
+                task.spawn(async move {
+                    let Some(observer) = observer else {
+                        return Ran::Ended {
+                            state: CommandState::Failed,
+                            outcome: Outcome {
+                                result: anissia_captions::FAILED.to_owned(),
+                                reason: Some("이 worker는 Anissia를 읽지 않아요.".to_owned()),
+                            },
+                            add_unconfirmed: false,
+                        };
+                    };
+                    let finished = anissia_captions::run(&observer, &owned).await;
+                    Ran::Ended {
+                        state: finished.state,
+                        outcome: finished.outcome,
+                        add_unconfirmed: false,
                     }
                 });
             }

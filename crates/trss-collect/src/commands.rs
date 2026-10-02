@@ -4,6 +4,7 @@
 //! that claims waiting commands and calls the `run` of each is in the
 //! `trss-worker` crate.
 
+pub mod anissia_captions;
 pub mod episode_undo;
 pub mod link;
 pub mod receive_once;
