@@ -8,12 +8,12 @@ use serde_json::Value;
 use tower::ServiceExt;
 
 use super::*;
-use trss_core::Db;
-use trss_legacy::store::{
+use trss_collect::store::{
     channels::ChannelInput,
     history::{HistoryResult, Observation},
     status::{ChannelReadResult, TransmissionCounts},
 };
+use trss_core::Db;
 
 const MINUTE: i64 = 60_000;
 const HOUR: i64 = 3_600_000;

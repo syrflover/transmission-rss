@@ -3,11 +3,11 @@ use std::{path::PathBuf, process::ExitCode};
 use tokio_util::sync::CancellationToken;
 use trss_anilist::AnilistConfig;
 use trss_anissia::{Anissia, AnissiaConfig};
-use trss_core::{db::DB_PATH_ENV, lock_path_for, Db};
-use trss_legacy::{
+use trss_collect::{
     anissia::{self, AnissiaQueue},
     store::anissia::AnissiaStore,
 };
+use trss_core::{db::DB_PATH_ENV, lock_path_for, Db};
 use trss_library::{
     artwork::{self, AppData, Artwork},
     seasons::{self, Seasons},

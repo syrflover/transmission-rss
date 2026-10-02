@@ -2,7 +2,7 @@
 //! candidates that complete such a subscription (ticket 0020).
 
 use super::*;
-use trss_legacy::store::history::HistoryQuery;
+use trss_collect::store::history::HistoryQuery;
 
 const NEW_1: &str = "[SubsPlease] New Work - 01 (1080p) [AAAA1111].mkv";
 const NEW_2: &str = "[SubsPlease] New Work - 02 (1080p) [AAAA1112].mkv";
@@ -621,7 +621,7 @@ async fn a_history_row_that_matched_no_rule_offers_naming_only_where_a_subscript
 async fn the_item_window_says_when_it_left_older_items_unread() {
     let app = App::new().await;
     let channel = app.channel("feed.test").await;
-    let titles: Vec<String> = (0..=trss_legacy::store::history::MAX_PAGE_SIZE)
+    let titles: Vec<String> = (0..=trss_collect::store::history::MAX_PAGE_SIZE)
         .map(|n| format!("[G] Work {n} - 01"))
         .collect();
     let refs: Vec<&str> = titles.iter().map(String::as_str).collect();
@@ -630,7 +630,7 @@ async fn the_item_window_says_when_it_left_older_items_unread() {
     let (read, cut) = rules_api::channel_items_up_to(&app.state.history, &channel.id, 1)
         .await
         .unwrap();
-    assert_eq!(read.len(), trss_legacy::store::history::MAX_PAGE_SIZE);
+    assert_eq!(read.len(), trss_collect::store::history::MAX_PAGE_SIZE);
     assert!(cut, "a page was read and the history goes on");
 
     let (read, cut) = rules_api::channel_items_up_to(&app.state.history, &channel.id, 10_000)

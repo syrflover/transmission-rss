@@ -23,12 +23,12 @@ use trss_core::{Clock, Db};
 
 use super::*;
 use trss_anissia::{fake::Fake, Anissia};
-use trss_legacy::{
+use trss_collect::{
+    plan::ChannelPlan,
     store::{
         channels::{ChannelInput, NewSubscription, RuleInput, SubtitleMode},
         history::{HistoryQuery, HistoryResult, KnownItem, Observation},
     },
-    worker::plan::ChannelPlan,
 };
 
 /// 2026-10-01 12:00 in Seoul.

@@ -10,13 +10,13 @@
 //!
 //! `POST` takes `{ "query": <search words>, "from": <release>, "to": <release> }`.
 //! The search reads the tracker's search RSS (never its HTML), up to a minute
-//! when the first page is full ([`trss_legacy::past_search`]). A search leaves no
+//! when the first page is full ([`trss_collect::past_search`]). A search leaves no
 //! channel and no history; the results live in this process's memory, and
 //! receiving one of them is the `receive_past` command
 //! ([`super::commands_api`]), which names the item by its key.
 //!
 //! A new search of a rule ends the rule's earlier one. A search is forgotten
-//! [`trss_legacy::past_search::service::KEEP`] (30 minutes) after it started, however
+//! [`trss_collect::past_search::service::KEEP`] (30 minutes) after it started, however
 //! often it is polled, and when the web restarts: the screen then says the
 //! search is gone and the person searches again.
 
@@ -31,7 +31,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use super::{rules_api, ApiError, AppState};
-use trss_legacy::{
+use trss_collect::{
     episode_offset::{first_release, place_of, season_total},
     past_search::{
         judge::{Item, Range},
@@ -40,11 +40,11 @@ use trss_legacy::{
         service::{Outcome, Spec, Status},
         MAX_SPAN,
     },
+    plan::{rule_destination, ChannelPlan},
     store::{
         channels::{Channel, ChannelError, Rule, RuleState},
         history::{HistoryItem, HistoryQuery, HistoryResult, MAX_PAGE_SIZE},
     },
-    worker::plan::{rule_destination, ChannelPlan},
 };
 
 pub fn routes() -> Router<AppState> {
@@ -306,7 +306,7 @@ async fn start(
     let history_cut = settled_cut || titles.len() > MAX_TITLES;
     titles.truncate(MAX_TITLES);
     let redactor = ChannelPlan::new(
-        trss_legacy::store::channels::ChannelWithRules {
+        trss_collect::store::channels::ChannelWithRules {
             channel: channel.clone(),
             rules: Vec::new(),
         },
@@ -371,7 +371,7 @@ pub struct ResultView {
 pub struct ItemView {
     pub key: String,
     pub title: String,
-    /// See [`trss_legacy::past_search::judge::State::code`].
+    /// See [`trss_collect::past_search::judge::State::code`].
     pub state: &'static str,
     pub note: Option<String>,
     pub release: Option<u32>,

@@ -9,7 +9,7 @@
 //!
 //! The grounds of an automatic offset say the value it replaced, when that is
 //! known: `… 정했어요 (전에는 −24).` The view then offers `되돌리기`, an
-//! `episode_undo` command ([`trss_legacy::worker::commands::episode_undo`]); the last
+//! `episode_undo` command ([`trss_collect::commands::episode_undo`]); the last
 //! such command of the rule comes with the view (`episode_undo`), with each
 //! video it renames or left as it was, so the screen shows its progress and
 //! the files it could not rename.
@@ -19,7 +19,7 @@
 //! links the seasons the sum needs, and goes when the user sets the offset it
 //! offers. It is offered to a subscription that the app has never decided and
 //! that has picked an item, whatever its field holds, when the value differs
-//! from it ([`trss_legacy::episode_offset::worth_offering`]).
+//! from it ([`trss_collect::episode_offset::worth_offering`]).
 
 use std::collections::HashMap;
 
@@ -31,10 +31,10 @@ use serde::{Deserialize, Serialize};
 
 use super::{body, rule_conflict, rule_view, store_error, RuleView};
 use crate::{commands_api::CommandView, ApiError, AppState};
-use trss_legacy::{
+use trss_collect::{
+    commands::episode_undo,
     episode_offset::{decide, first_release, gather, may_decide, signed, worth_offering},
     store::channels::{ChannelError, Rule},
-    worker::commands::episode_undo,
 };
 
 /// What the app offers for a rule's offset.

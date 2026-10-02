@@ -31,7 +31,7 @@
 //!   `기타`, or a `신작` that starts in another week): an anime with an end
 //!   date leaves once the date has passed;
 //! - the worker's daily refresh found that Anissia no longer lists the anime
-//!   (`unlisted_at`, see [`trss_legacy::store::anissia`]): an anime without an end
+//!   (`unlisted_at`, see [`trss_collect::store::anissia`]): an anime without an end
 //!   date leaves this way. While Anissia cannot be reached that is not found
 //!   out, so the card stays; nor is it found out from a weekday whose list came
 //!   back empty although the anime was last listed in it.
@@ -39,7 +39,7 @@
 //! The card's `episode` is the season's episode that airs in the slot
 //! ([`trss_anissia::slot::episode_on`]); it is `null` when that cannot be
 //! told, and for a `결방` card. The status lines come from
-//! [`trss_legacy::schedule::state`]:
+//! [`trss_collect::schedule::state`]:
 //!
 //! - an anime the stored Anissia snapshot marks `OFF` is `video: "off"`
 //!   (`결방`) with no subtitle line, whatever the library holds; a paused rule
@@ -80,14 +80,14 @@ use trss_anissia::{
     slot::{episode_on, slot_in_week, Slot},
     Anime,
 };
-use trss_core::{
-    calendar::{date_text, day_of, week_start, weekday},
-    Millis,
-};
-use trss_legacy::{
+use trss_collect::{
     schedule::state::{self, Facts, SubtitleState, VideoState},
     store::channels::{Rule, RuleState, SeasonRef, SubtitleMode},
     subscriptions::{whole_episode, Quarter},
+};
+use trss_core::{
+    calendar::{date_text, day_of, week_start, weekday},
+    Millis,
 };
 use trss_library::{seasons::combine::air_times, store::library::Held};
 

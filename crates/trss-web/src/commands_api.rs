@@ -72,12 +72,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::{in_place::Evidence, ApiError, AppState};
-use trss_core::commands::{Accepted, Command, CommandState, NewCommand};
-use trss_legacy::{
+use trss_collect::{
+    commands::{episode_undo, receive_once, receive_past, rule_archive},
     past_search::service::Resolve,
     store::channels::RuleState,
-    worker::commands::{episode_undo, receive_once, receive_past, rule_archive},
 };
+use trss_core::commands::{Accepted, Command, CommandState, NewCommand};
 use trss_library::watch_rescan;
 
 #[cfg(test)]
@@ -395,8 +395,8 @@ async fn check_receive_past(
     // active and pick it. The worker looks at Transmission and the folder
     // again when it runs the command.
     let probe = if stored.departed && probe.result.is_settled() {
-        trss_legacy::store::history::HistoryItem {
-            result: trss_legacy::store::history::HistoryResult::NoMatch,
+        trss_collect::store::history::HistoryItem {
+            result: trss_collect::store::history::HistoryResult::NoMatch,
             ..probe
         }
     } else {

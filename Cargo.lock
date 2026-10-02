@@ -2513,6 +2513,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "trss-collect"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "caseless",
+ "crc32fast",
+ "futures",
+ "regex",
+ "reqwest 0.12.28",
+ "reqwest 0.13.5",
+ "rss",
+ "rusqlite",
+ "rustix",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "transmission-rpc",
+ "trname",
+ "trss-anilist",
+ "trss-anissia",
+ "trss-core",
+ "trss-library",
+ "trss-transmission",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "trss-core"
 version = "0.1.0"
 dependencies = [
@@ -2554,6 +2586,7 @@ dependencies = [
  "trname",
  "trss-anilist",
  "trss-anissia",
+ "trss-collect",
  "trss-core",
  "trss-library",
  "trss-transmission",
@@ -2620,6 +2653,7 @@ dependencies = [
  "tower-http 0.7.1",
  "trss-anilist",
  "trss-anissia",
+ "trss-collect",
  "trss-core",
  "trss-legacy",
  "trss-library",
@@ -2650,6 +2684,7 @@ dependencies = [
  "transmission-rpc",
  "trss-anilist",
  "trss-anissia",
+ "trss-collect",
  "trss-core",
  "trss-legacy",
  "trss-library",

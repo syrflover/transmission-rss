@@ -20,9 +20,10 @@ use url::Url;
 use yaml_serde::Value;
 
 use super::comments::{rule_comments, Reading};
-use crate::config::ChannelConfig;
-use crate::store::channels::import::ImportChannel;
-use crate::store::channels::{ChannelInput, RuleInput, RuleState};
+use trss_collect::{
+    config::ChannelConfig,
+    store::channels::{import::ImportChannel, ChannelInput, RuleInput, RuleState},
+};
 
 /// Why a file cannot be imported. The message is a Korean sentence for the user.
 #[derive(Debug, Clone, PartialEq, Eq)]

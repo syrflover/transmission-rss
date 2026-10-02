@@ -14,7 +14,7 @@ use axum::http::StatusCode;
 use common::*;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
-use trss_legacy::store::history::HistoryResult;
+use trss_collect::store::history::HistoryResult;
 use trss_worker::{CycleReport, TickOutcome, Worker};
 
 async fn run(worker: &Worker) -> CycleReport {
@@ -69,7 +69,7 @@ fn saved_at(h: &Harness, hash: &str) -> String {
         .download_dir
 }
 
-async fn channel_a(h: &Harness) -> trss_legacy::store::channels::ChannelWithRules {
+async fn channel_a(h: &Harness) -> trss_collect::store::channels::ChannelWithRules {
     h.add_channel(
         "feed-a",
         "/media/anime",

@@ -12,7 +12,7 @@ use common::*;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 use trss_anissia::Anime;
-use trss_legacy::store::{
+use trss_collect::store::{
     channels::{ChannelWithRules, NewSubscription, Rule, RuleInput, SubtitleMode},
     history::{HistoryItem, HistoryResult},
 };
@@ -371,7 +371,7 @@ async fn a_paused_waiting_subscription_offers_no_candidate() {
     s.h.channels
         .set_rule_state(
             &waiting.id,
-            trss_legacy::store::channels::RuleState::Archived,
+            trss_collect::store::channels::RuleState::Archived,
             s.h.now(),
         )
         .await

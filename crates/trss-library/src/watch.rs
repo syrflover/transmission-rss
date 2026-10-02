@@ -494,12 +494,13 @@ fn folder_at<'a>(folders: &'a [WatchFolder], root: &Path) -> Option<&'a WatchFol
 /// Doing it again changes nothing more, so a command that stops after the move
 /// and before this may run it on its next start.
 pub async fn follow_move(
-    ctx: &WatchContext,
+    library: &LibraryStore,
+    live: &LiveWatch,
     from_root: PathBuf,
     to_root: PathBuf,
     name: String,
 ) -> Result<Followed, LibraryError> {
-    let folders = ctx.library.folders().await?;
+    let folders = library.folders().await?;
     let ids = tokio::task::spawn_blocking(move || {
         let from = folder_at(&folders, &from_root)?.id.clone();
         let to = folder_at(&folders, &to_root)?.id.clone();
@@ -511,10 +512,10 @@ pub async fn follow_move(
     let Some((from, to)) = ids else {
         return Ok(Followed::NotTracked);
     };
-    let followed = ctx.library.follow_move(&from, &to, &name).await?;
+    let followed = library.follow_move(&from, &to, &name).await?;
     // The work folder's watches follow it, though the alerts of the move say so too.
-    ctx.live.resync(&from, Some(&name));
-    ctx.live.resync(&to, Some(&name));
+    live.resync(&from, Some(&name));
+    live.resync(&to, Some(&name));
     Ok(followed)
 }
 

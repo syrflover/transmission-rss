@@ -1,13 +1,13 @@
 use trss_anilist::AnilistConfig;
 use trss_anissia::{Anissia, AnissiaConfig};
-use trss_core::{commands::CommandStore, heartbeat::HeartbeatStore, settings::SettingsStore, Db};
-use trss_legacy::{
+use trss_collect::{
     past_search::service::PastSearch,
     store::{
         anissia::AnissiaStore, channels::ChannelStore, history::HistoryStore,
         revisions::RevisionStore, search_pace::SearchPace, status::StatusStore,
     },
 };
+use trss_core::{commands::CommandStore, heartbeat::HeartbeatStore, settings::SettingsStore, Db};
 use trss_library::{
     artwork::Artwork,
     seasons::Seasons,

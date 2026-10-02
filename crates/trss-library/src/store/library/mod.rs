@@ -33,7 +33,7 @@
 //!
 //! A work is identified by an app-issued ID and found again by its folder's
 //! place. [`LibraryStore::follow_move`] is how the archive move
-//! (`trss_collect::rule_archive`) keeps the ID: it changes the
+//! (`trss_collect::commands::rule_archive`) keeps the ID: it changes the
 //! work's watch folder, or, when the destination already has a work of that
 //! name, merges the moved work's records into it and keeps the destination's ID.
 //! A folder moved by hand is not recognized by its name: the old work goes

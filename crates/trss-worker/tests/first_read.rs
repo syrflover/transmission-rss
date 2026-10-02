@@ -14,7 +14,7 @@ use common::*;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 use trss_anissia::Anime;
-use trss_legacy::store::{
+use trss_collect::store::{
     channels::{ChannelWithRules, NewSubscription, Rule, RuleInput, SubtitleMode},
     history::{HistoryResult, Observation},
 };

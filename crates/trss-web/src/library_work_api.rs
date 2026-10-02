@@ -50,7 +50,7 @@
 //!   `can_retry`, `retry_blocked`, `command`), `null` otherwise; an episode
 //!   left with no file under its name by such a failure still has a row,
 //!   with no files. Both
-//!   come from [`trss_legacy::store::revisions`], for season folders of the work.
+//!   come from [`trss_collect::store::revisions`], for season folders of the work.
 //! - `native_title` is the first (lowest-numbered, not season 0) season's first
 //!   linked AniList entry's native title, `null` without one.
 //! - `korean_title` is the Anissia title (`subject`) of the anime the work's
@@ -58,7 +58,7 @@
 //!   when no subscription is connected to a season of the work.
 //! - `subscriptions` are the rules whose subscription is connected to a season
 //!   of this work (the connection is made from the videos the rule received, see
-//!   [`trss_legacy::worker::season_link`]), by season: the rule's ID, version and
+//!   [`trss_collect::season_link`]), by season: the rule's ID, version and
 //!   state, the anime (`anime_no`, `subject`), the subtitle mode and the creator
 //!   followed. The head shows the selected season's creator and changes it
 //!   through `PUT /api/rules/{id}/creator`.
@@ -99,11 +99,11 @@ use super::{
     todo_api::{failure_of, retry_offers, RetryOffer, RevisionFailure},
     ApiError, AppState,
 };
-use trss_legacy::{
+use trss_collect::{
+    commands::rule_archive::{work_folder, WorkFolder},
     revision::{season_episode, Release},
     rss::save_path,
     store::{channels::ChannelWithRules, revisions::Revision},
-    worker::commands::rule_archive::{work_folder, WorkFolder},
 };
 use trss_library::store::{
     artwork::JobKind,

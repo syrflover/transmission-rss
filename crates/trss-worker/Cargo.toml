@@ -8,6 +8,7 @@ trss-core = { path = "../trss-core" }
 trss-anissia = { path = "../trss-anissia" }
 trss-anilist = { path = "../trss-anilist" }
 trss-library = { path = "../trss-library" }
+trss-collect = { path = "../trss-collect" }
 trss-transmission = { path = "../trss-transmission" }
 trss-legacy = { path = "../trss-legacy" }
 
@@ -27,6 +28,7 @@ trss-core = { path = "../trss-core", features = ["test-support"] }
 trss-anissia = { path = "../trss-anissia", features = ["test-support"] }
 trss-anilist = { path = "../trss-anilist", features = ["test-support"] }
 trss-library = { path = "../trss-library", features = ["test-support"] }
+trss-collect = { path = "../trss-collect" }
 trss-web = { path = "../trss-web" }
 axum = "0.8.9"
 bytes = "1"

@@ -2,7 +2,7 @@
 //!
 //! The legacy file gives every channel its own `directory`; the app has one
 //! collect folder and each rule's directory is relative to it
-//! ([`crate::rss::save_path`]). So an import decides, for each channel, where
+//! ([`trss_collect::rss::save_path`]). So an import decides, for each channel, where
 //! its folder stands against the collect folder:
 //!
 //! - **No collect folder set yet.** The import sets it from the file: the
@@ -27,7 +27,7 @@
 use std::path::{Component, Path, PathBuf};
 
 use super::legacy::LegacyChannel;
-use crate::store::channels::import::ImportChannel;
+use trss_collect::store::channels::import::ImportChannel;
 use trss_core::folders::{common_ancestor, has_parent_dir, prefixed, relative_under};
 
 /// What an import does with one channel of the file.
@@ -142,7 +142,7 @@ pub fn fit(file: Vec<LegacyChannel>, current: Option<&str>) -> Result<Fitted, Re
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::channels::{ChannelInput, RuleInput};
+    use trss_collect::store::channels::{ChannelInput, RuleInput};
 
     fn legacy(folder: &str, directories: &[&str]) -> LegacyChannel {
         LegacyChannel {

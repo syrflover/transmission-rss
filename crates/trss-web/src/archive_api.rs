@@ -7,7 +7,7 @@
 //! | `POST /archive-suggestions/keep`      | `200 { kept: N }` (`수집 유지`)             |
 //!
 //! A suggestion is read off the rules, the stored Anissia snapshots and the
-//! history each time ([`trss_legacy::archive_suggestions`] has the grounds and the
+//! history each time ([`trss_collect::archive_suggestions`] has the grounds and the
 //! rules of when one appears and goes); nothing here asks Anissia or the feed.
 //! [`archive_suggestions`] is the source the 할 일 list reads for its
 //! `보관 제안` suggestions. A suggestion is not something that needs doing, so
@@ -36,14 +36,14 @@ use url::Url;
 
 use super::{subscriptions_api::AnimeView, ApiError, AppState};
 use trss_anissia::slot::Over;
-use trss_core::Millis;
-use trss_legacy::{
+use trss_collect::{
     archive_suggestions::{
         recent_matches, ArchiveSuggestion, Facts, Ground, Recent, WINDOW_TITLES,
     },
+    commands::rule_archive,
     store::channels::{ChannelWithRules, Rule, RuleState},
-    worker::commands::rule_archive,
 };
+use trss_core::Millis;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -335,7 +335,7 @@ async fn keep(
     }))
 }
 
-/// Whether `key` has the shape of a [`trss_legacy::archive_suggestions::Ground::key`]:
+/// Whether `key` has the shape of a [`trss_collect::archive_suggestions::Ground::key`]:
 /// `ended:<anime>:<date>`, `unlisted:<anime>` or `quiet:<ms>`.
 fn is_ground_key(key: &str) -> bool {
     let number = |s: &str| s.parse::<i64>().is_ok();

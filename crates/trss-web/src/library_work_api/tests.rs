@@ -10,8 +10,8 @@ use tower::ServiceExt;
 
 use super::*;
 use crate::api;
+use trss_collect::store::channels::{ChannelInput, RuleInput, RuleState};
 use trss_core::Db;
-use trss_legacy::store::channels::{ChannelInput, RuleInput, RuleState};
 use trss_library::discovery::{
     EpisodeFile, FileKind, Reason, Scan, ScannedWork, Unrecognized, WorkRead,
 };

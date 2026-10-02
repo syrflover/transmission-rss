@@ -1,7 +1,7 @@
 //! Whether the web can already tell that an episode's place holds the same or a
 //! higher revision than the one `다시 받기` would receive, so that the screens
 //! do not offer a button the worker is bound to refuse
-//! ([`NotRetryable::InPlace`](trss_legacy::worker::commands::receive_once::NotRetryable::InPlace)).
+//! ([`NotRetryable::InPlace`](trss_collect::commands::receive_once::NotRetryable::InPlace)).
 //!
 //! The web cannot ask Transmission (deployment trust boundary) and looks at a
 //! media folder only for whether a file is there, so it tells only from what
@@ -25,7 +25,7 @@
 //!   episode name is taken to be the item's because the rule's cycle names it
 //!   so; the web does not tell which torrent holds it.
 //!
-//! [`StatusStore::torrent_listing`]: trss_legacy::store::status::StatusStore::torrent_listing
+//! [`StatusStore::torrent_listing`]: trss_collect::store::status::StatusStore::torrent_listing
 
 use std::{
     collections::HashMap,
@@ -33,19 +33,17 @@ use std::{
 };
 
 use super::{commands_api::now_millis, ApiError, AppState};
-use trss_core::Millis;
-use trss_legacy::{
+use trss_collect::{
+    plan::rule_destination,
     revision::Release,
+    revisions::{episode_name, same_folder},
     store::{
         history::{HistoryItem, HistoryResult},
         revisions::{Revision, RevisionState},
         status::TorrentListing,
     },
-    worker::{
-        plan::rule_destination,
-        revisions::{episode_name, same_folder},
-    },
 };
+use trss_core::Millis;
 
 #[cfg(test)]
 mod tests;

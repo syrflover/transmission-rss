@@ -77,7 +77,7 @@ use trss_core::{
     CycleLock,
 };
 
-use trss_legacy::worker::commands::{episode_undo, receive_once, receive_past, rule_archive};
+use trss_collect::commands::{episode_undo, receive_once, receive_past, rule_archive};
 use trss_library::watch_rescan;
 
 use super::{Worker, WorkerError};
@@ -175,7 +175,12 @@ impl Worker {
 
         // In its own task so that a panic ends the command, not the worker.
         let mut task = JoinSet::new();
-        let (ctx, clock, owned) = (self.ctx.clone(), self.clock.clone(), command.clone());
+        let (ctx, watch, clock, owned) = (
+            self.ctx.clone(),
+            self.watch.clone(),
+            self.clock.clone(),
+            command.clone(),
+        );
         let cancel = cancel.clone();
         match command.kind.as_str() {
             receive_once::KIND => {
@@ -219,7 +224,7 @@ impl Worker {
             }
             watch_rescan::KIND => {
                 task.spawn(async move {
-                    match watch_rescan::run(&ctx.watch, &owned, &clock).await {
+                    match watch_rescan::run(&watch, &owned, &clock).await {
                         Ok(finished) => Ran::Ended {
                             state: finished.state,
                             outcome: finished.outcome,

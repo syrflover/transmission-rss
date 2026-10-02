@@ -12,29 +12,26 @@ use tokio::{task, task::JoinSet};
 use tokio_util::sync::CancellationToken;
 use transmission_rpc::types::{TorrentGetField, TorrentStatus};
 
-use trss_core::{settings::SettingsError, Millis};
-use trss_legacy::{
+use trss_collect::{
+    context::{CollectContext, MAX_REASON_CHARS},
     episode_offset::may_decide,
+    feed::{self, FeedItem},
+    offsets,
+    plan::{ChannelPlan, Judgement},
     revision::Release,
+    revisions::{self, Decided, Listing, Plan, Replaced, Selected},
     store::{
         channels::{ChannelError, ChannelWithRules, RuleState},
         history::{HistoryResult, KnownItem, Observation, Recorded},
         revisions::{HistoryWrite, Mark, NewRevision, Revision, RevisionState, RowWrite},
         status::{ChannelReadResult, StatusStore, TransmissionCounts},
     },
-    worker::{
-        context::MAX_REASON_CHARS,
-        feed::{self, FeedItem},
-        offsets,
-        plan::{ChannelPlan, Judgement},
-        revisions::{self, Decided, Listing, Plan, Replaced, Selected},
-        CycleContext,
-    },
 };
+use trss_core::{settings::SettingsError, Millis};
 use trss_transmission as transmission;
 use trss_transmission::{
     add_item, remove_stale, rename_with_retries, AddError, AddKind, Redactor, RemovedTorrent,
-    RenameMode,
+    RenameMode, SessionConfig,
 };
 
 /// How many selected items are added to Transmission at the same time.
@@ -90,7 +87,7 @@ pub struct CycleReport {
     /// this revision already.
     pub revisions_withheld: usize,
     /// Selected items left to a video revision replacement this cycle (see
-    /// [`trss_legacy::worker::revisions`]), or whose decision had to wait.
+    /// [`trss_collect::revisions`]), or whose decision had to wait.
     pub revisions_left: usize,
     /// The cycle stopped early because the worker is shutting down. What was
     /// done is recorded; the rest waits for the next cycle.
@@ -128,7 +125,7 @@ pub struct CommandsAtStart {
 /// subscription sat out is recorded as no match after the first read, so the
 /// next cycle, which can read the history, receives it.
 async fn make_plans(
-    ctx: &CycleContext,
+    ctx: &CollectContext,
     snapshot: Vec<ChannelWithRules>,
     collect_folder: &Path,
 ) -> Vec<ChannelPlan> {
@@ -215,7 +212,8 @@ enum JobOutcome {
 /// and the removal of departed torrents is skipped because it would judge
 /// them against an incomplete picture.
 pub async fn run_cycle(
-    ctx: &CycleContext,
+    ctx: &CollectContext,
+    session: &SessionConfig,
     at: Millis,
     commands: CommandsAtStart,
     cancel: &CancellationToken,
@@ -235,7 +233,7 @@ pub async fn run_cycle(
         .map(|settings| PathBuf::from(settings.folder));
     // The rules whose episode offset the app may still set (see
     // `offsets::settle`), before the snapshot goes into the plans.
-    let open_rules: HashMap<String, trss_legacy::store::channels::Rule> = snapshot
+    let open_rules: HashMap<String, trss_collect::store::channels::Rule> = snapshot
         .iter()
         .flat_map(|cwr| &cwr.rules)
         .filter(|rule| rule.state == RuleState::Active && may_decide(rule))
@@ -261,7 +259,7 @@ pub async fn run_cycle(
 
     println!("Cycle started: {} channel(s)", plans.len());
 
-    apply_session(ctx, &redactor).await;
+    apply_session(ctx, session, &redactor).await;
 
     // Read the feeds.
     let requests: Vec<(String, Redactor)> = plans
@@ -582,7 +580,7 @@ pub async fn run_cycle(
                 .torrent_hashes_of_channels(unread_channels)
                 .await?;
             hashes.extend(ctx.history.held_hashes_of_items(present).await?);
-            Ok::<_, trss_legacy::store::history::HistoryError>(hashes)
+            Ok::<_, trss_collect::store::history::HistoryError>(hashes)
         }
         .await;
         // A replacement under way keeps its new torrent, which it checks,
@@ -666,7 +664,7 @@ struct Fallback {
 /// aborted with it instead of carrying on with Transmission after the worker
 /// lock has been released.
 async fn add_jobs(
-    ctx: &CycleContext,
+    ctx: &CollectContext,
     jobs: Vec<Job>,
     at: Millis,
     redactor: &Redactor,
@@ -762,9 +760,9 @@ async fn add_jobs(
 /// Applies the session settings. Transmission being down is not fatal here:
 /// the items it would have taken are recorded as failed, and the next cycle
 /// tries again.
-async fn apply_session(ctx: &CycleContext, redactor: &Redactor) {
+async fn apply_session(ctx: &CollectContext, session: &SessionConfig, redactor: &Redactor) {
     let mut transmission = ctx.transmission();
-    let args = ctx.session.to_args();
+    let args = session.to_args();
     println!("Applying Transmission settings: {args:?}");
 
     let result = transmission.session_set(args).await;
@@ -780,7 +778,7 @@ async fn apply_session(ctx: &CycleContext, redactor: &Redactor) {
 /// [`rename_mode`]). The second value tells whether the item had no record
 /// before.
 async fn process_job(
-    ctx: CycleContext,
+    ctx: CollectContext,
     job: Job,
     at: Millis,
     redactor: Redactor,
@@ -963,7 +961,7 @@ fn new_revision(
 /// Records a revision that is not received (`버전 미상`, or the folder holds
 /// it already) and its decision, together.
 async fn withhold(
-    ctx: &CycleContext,
+    ctx: &CollectContext,
     job: Job,
     at: Millis,
     decided: Decided,
@@ -1015,7 +1013,7 @@ async fn withhold(
 /// when the torrent was added again (it had gone); one Transmission still
 /// holds is looked at by the replacement steps.
 async fn start_replacement(
-    ctx: &CycleContext,
+    ctx: &CollectContext,
     job: &Job,
     at: Millis,
     observation: Observation,
@@ -1080,7 +1078,7 @@ async fn start_replacement(
 ///   which finishes a rename an earlier run did not get to.
 /// - A torrent that history records as received by hand is not touched at
 ///   all: a person chose its folder, and the rule's folder may say otherwise.
-async fn rename_mode(ctx: &CycleContext, kind: AddKind, hash: &str) -> Option<RenameMode> {
+async fn rename_mode(ctx: &CollectContext, kind: AddKind, hash: &str) -> Option<RenameMode> {
     match kind {
         AddKind::Added => Some(RenameMode::Added),
         AddKind::Duplicate => match ctx.history.received_by_hand(hash).await {
@@ -1111,7 +1109,7 @@ fn failure_reason(err: &AddError, redactor: &Redactor) -> String {
 /// Leaves this cycle's feed reads in the database for the status board. The
 /// board is informational, so a failure to write is printed and the cycle goes on.
 async fn record_reads(
-    ctx: &CycleContext,
+    ctx: &CollectContext,
     at: Millis,
     plans: &[ChannelPlan],
     reads: Vec<ChannelReadResult>,
@@ -1128,7 +1126,7 @@ async fn record_reads(
 /// status board and the weekly schedule, and the hashes of all its torrents for
 /// the past episode search. If Transmission cannot be asked, the
 /// previous counts, hashes and their time stay as they were, and the cycle goes on.
-async fn record_transmission_counts(ctx: &CycleContext, at: Millis, redactor: &Redactor) {
+async fn record_transmission_counts(ctx: &CollectContext, at: Millis, redactor: &Redactor) {
     let mut transmission = ctx.transmission();
     let torrents = match transmission
         .torrent_get(
@@ -1181,7 +1179,7 @@ async fn record_transmission_counts(ctx: &CycleContext, at: Millis, redactor: &R
 }
 
 /// The jobs a cycle adds: those of `jobs` that no video revision replacement
-/// has decided about (see [`trss_legacy::worker::revisions`]). A revision with a row is the
+/// has decided about (see [`trss_collect::revisions`]). A revision with a row is the
 /// replacement's to carry on, unless its replacement failed before the new
 /// video was received: then the item is received again, as the row decided.
 /// The old video of a replacement that removed its torrent is not received
@@ -1189,7 +1187,7 @@ async fn record_transmission_counts(ctx: &CycleContext, at: Millis, redactor: &R
 /// replaced a video in the same folder. Without the rows the jobs wait for
 /// the next cycle: adding the old video's item again could bring it back.
 async fn leave_revisions(
-    ctx: &CycleContext,
+    ctx: &CollectContext,
     jobs: Vec<Job>,
     at: Millis,
     report: &mut CycleReport,

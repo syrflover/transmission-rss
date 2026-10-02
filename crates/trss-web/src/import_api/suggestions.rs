@@ -35,15 +35,13 @@ use serde::{Deserialize, Serialize};
 
 use super::super::AppState;
 use trss_anissia::{Anime, AnissiaError, LAST_WEEK};
-use trss_legacy::{
-    import::{
-        comments::{Airs, Reading},
-        suggest::{suggest, Suggestion},
-    },
-    store::channels::{
-        import_subscriptions::{ImportSubscription, SubscriptionOutcome},
-        ChannelWithRules, NewSubscription, RuleInput, SubtitleMode,
-    },
+use trss_collect::store::channels::{
+    import_subscriptions::{ImportSubscription, SubscriptionOutcome},
+    ChannelWithRules, NewSubscription, RuleInput, SubtitleMode,
+};
+use trss_legacy::import::{
+    comments::{Airs, Reading},
+    suggest::{suggest, Suggestion},
 };
 
 /// The longest the apply waits for its turn to ask Anissia, per request.

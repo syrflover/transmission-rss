@@ -63,7 +63,7 @@
 //! The preview does not judge titles itself. It puts the edited rule into the
 //! channel's stored rules (at the requested place in the order), hands that to
 //! the very mapping the worker uses ([`ChannelPlan`], which builds the shared
-//! [`trss_legacy::rss`] evaluation from stored channels and rules) and judges every
+//! [`trss_collect::rss`] evaluation from stored channels and rules) and judges every
 //! item the channel has in the collection history with it. So the channel's
 //! excludes, collect folder and rule order apply exactly as they do in a
 //! cycle, and the same items and settings give the same selection, applied
@@ -121,8 +121,9 @@ use super::{
     ApiError, AppState,
 };
 use trss_anissia::Anime;
-use trss_core::commands::Command;
-use trss_legacy::{
+use trss_collect::{
+    commands::rule_archive::{self, RuleArchive},
+    plan::{ChannelPlan, Judgement, PastCause, PlanEvaluation},
     rss::{ChannelEvaluator, ChannelSpec, RuleSpec},
     store::{
         channels::{
@@ -134,11 +135,8 @@ use trss_legacy::{
             MAX_PAGE_SIZE,
         },
     },
-    worker::{
-        commands::rule_archive::{self, RuleArchive},
-        plan::{ChannelPlan, Judgement, PastCause, PlanEvaluation},
-    },
 };
+use trss_core::commands::Command;
 
 mod episode;
 #[cfg(test)]
@@ -222,7 +220,7 @@ pub struct RuleView {
     pub episode: i64,
     pub episode_auto: bool,
     /// Why the app set the offset by itself, when it did and the rule has the
-    /// sentence (see [`trss_legacy::episode_offset`]).
+    /// sentence (see [`trss_collect::episode_offset`]).
     pub episode_basis: Option<String>,
     /// The offset the rule had before the app set its own, while the offset
     /// is the app's and the value it replaced is known.

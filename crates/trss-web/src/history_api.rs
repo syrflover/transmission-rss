@@ -51,13 +51,13 @@ use super::{
     ApiError, AppState,
 };
 use trss_anissia::Anime;
-use trss_legacy::{
+use trss_collect::{
+    commands::receive_once,
     store::{
         channels::{Channel, ChannelWithRules, Rule},
         history::{HistoryCursor, HistoryItem, HistoryQuery, HistoryResult, DEFAULT_PAGE_SIZE},
     },
     subscriptions::{candidates, folder_suggestion, parse_release},
-    worker::commands::receive_once,
 };
 
 #[cfg(test)]
@@ -306,7 +306,7 @@ struct ListParams {
     limit: Option<usize>,
 }
 
-fn history_error(err: trss_legacy::store::history::HistoryError) -> ApiError {
+fn history_error(err: trss_collect::store::history::HistoryError) -> ApiError {
     ApiError::Internal(err.to_string())
 }
 

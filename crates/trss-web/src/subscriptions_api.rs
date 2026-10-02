@@ -22,7 +22,7 @@
 //! Subscribing creates the rule and nothing else. It receives nothing: the
 //! items history recorded before are past, the cycle leaves them alone, and
 //! the user receives the ones they pick with `receive_once` and the new rule's
-//! ID (see [`trss_legacy::worker::commands::receive_once`]).
+//! ID (see [`trss_collect::commands::receive_once`]).
 //!
 //! Everything a subscription is made of is checked here against the stored
 //! data and Anissia, not trusted from the request: the release title must be
@@ -36,7 +36,7 @@
 //!
 //! `GET /subscriptions/candidates` lists the title candidates
 //! ([`title_candidates`]; the conditions under which one appears and goes are in
-//! [`trss_legacy::subscriptions::candidates`]). It is the source the 할 일 list reads
+//! [`trss_collect::subscriptions::candidates`]). It is the source the 할 일 list reads
 //! for its `제목 후보` suggestions, and it is not counted in any menu badge.
 //! `POST /subscriptions/candidates/reject` (`{ channel_id, work }`) turns a
 //! work down for good: it is not offered again and the subscriptions stay as
@@ -69,8 +69,7 @@ use super::{
     ApiError, AppState,
 };
 use trss_anissia::{Anime, AnissiaError, Fetched, LAST_WEEK, WEEK_OTHER, WEEK_UPCOMING};
-use trss_core::Millis;
-use trss_legacy::{
+use trss_collect::{
     store::channels::{
         ChannelError, ChannelWithRules, NewSubscription, RuleInput, RuleState, Subscription,
         SubtitleMode,
@@ -80,6 +79,7 @@ use trss_legacy::{
         folder_suggestion, title_groups, work_key, Quarter,
     },
 };
+use trss_core::Millis;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -555,7 +555,7 @@ async fn titles(
 /// The way the channel's newest record of the work `work` writes it: the match
 /// phrase it gives. The work must be one the channel's history holds.
 fn recorded_work(
-    items: &[trss_legacy::store::history::HistoryItem],
+    items: &[trss_collect::store::history::HistoryItem],
     work: &str,
 ) -> Result<String, ApiError> {
     let wanted = work_key(work);
@@ -576,7 +576,7 @@ fn recorded_work(
 
 /// The title candidates of every channel, the newest work first, as they are
 /// now. A candidate is read off the rules and the history each time (see
-/// [`trss_legacy::subscriptions::candidates`]), so it goes the moment its conditions
+/// [`trss_collect::subscriptions::candidates`]), so it goes the moment its conditions
 /// fail: the work gets a rule, the last subscription waiting for a title is
 /// paused, archived, given a title or deleted, or the user rejects the work.
 ///
@@ -992,7 +992,7 @@ async fn rule_at(
     state: &AppState,
     id: &str,
     version: i64,
-) -> Result<trss_legacy::store::channels::Rule, ApiError> {
+) -> Result<trss_collect::store::channels::Rule, ApiError> {
     let rule = state
         .channels
         .get_rule(id)
@@ -1010,7 +1010,7 @@ async fn rule_at(
 async fn rule_after(
     state: &AppState,
     id: &str,
-    written: Result<trss_legacy::store::channels::Rule, ChannelError>,
+    written: Result<trss_collect::store::channels::Rule, ChannelError>,
 ) -> Result<Json<RuleView>, ApiError> {
     match written {
         Ok(_) => Ok(Json(rules_api::rule_view(state, id).await?)),

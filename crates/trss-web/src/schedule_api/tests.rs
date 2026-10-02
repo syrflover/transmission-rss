@@ -18,7 +18,7 @@ use trss_core::{Clock, Db};
 
 use crate::{api, AppState};
 use trss_anissia::{Anime, Anissia};
-use trss_legacy::store::{
+use trss_collect::store::{
     channels::{Channel, ChannelInput, NewSubscription, Rule, RuleInput, RuleState, SubtitleMode},
     history::{HistoryResult, Observation},
     status::TransmissionCounts,
@@ -472,9 +472,10 @@ async fn the_stand_in_an_import_keeps_is_not_anissias_off() {
     // What an import stores while Anissia cannot be asked: `기타`, `OFF`, never
     // received. It has no weekday, so no card; and if it were moved to a weekday
     // without being received, it is still not read as `OFF`.
-    let stand_in = trss_legacy::store::channels::import_subscriptions::ImportSubscription::stand_in(
-        1, "대역", None,
-    );
+    let stand_in =
+        trss_collect::store::channels::import_subscriptions::ImportSubscription::stand_in(
+            1, "대역", None,
+        );
     assert_eq!(stand_in.status, "OFF");
     app.subscribe(stand_in.clone(), rule("S"), SubtitleMode::None, None)
         .await;
@@ -504,11 +505,12 @@ async fn a_stand_in_with_the_comments_weekday_shows_its_card_on_that_weekday() {
     // above the rule gave a weekday and time (Anissia's 4 is Thursday): the
     // card sits on that weekday right away, and the stand-in is not read as
     // `OFF` (it is not Anissia's word).
-    let stand_in = trss_legacy::store::channels::import_subscriptions::ImportSubscription::stand_in(
-        1,
-        "주석의 요일",
-        Some((4, "10:00")),
-    );
+    let stand_in =
+        trss_collect::store::channels::import_subscriptions::ImportSubscription::stand_in(
+            1,
+            "주석의 요일",
+            Some((4, "10:00")),
+        );
     assert_eq!((stand_in.fetched_at, stand_in.status.as_str()), (0, "OFF"));
     app.subscribe(stand_in, rule("T"), SubtitleMode::None, None)
         .await;

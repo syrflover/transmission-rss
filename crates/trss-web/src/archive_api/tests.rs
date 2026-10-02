@@ -19,7 +19,7 @@ use trss_core::{Clock, Db};
 
 use super::*;
 use trss_anissia::{Anime, Anissia, AnissiaConfig};
-use trss_legacy::store::{
+use trss_collect::store::{
     channels::{Channel, ChannelInput, NewSubscription, RuleInput, RuleState, SubtitleMode},
     history::{HistoryResult, Observation},
     status::{read_day, ChannelReadResult},

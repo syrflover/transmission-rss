@@ -19,8 +19,7 @@ use axum::http::StatusCode;
 use common::*;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
-use trss_core::settings::SettingsStore;
-use trss_legacy::{
+use trss_collect::{
     past_search::service::PastSearch,
     store::{
         channels::{ChannelInput, RuleInput, RuleState},
@@ -30,6 +29,7 @@ use trss_legacy::{
         status::StatusStore,
     },
 };
+use trss_core::settings::SettingsStore;
 use trss_web::AppState;
 use trss_worker::{CommandsOutcome, TickOutcome};
 

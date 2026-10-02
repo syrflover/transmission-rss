@@ -16,7 +16,7 @@ use trss_core::{Clock, Db};
 
 use super::*;
 use trss_anissia::{fake::Fake, Anissia};
-use trss_legacy::store::{
+use trss_collect::store::{
     channels::{Channel, ChannelInput},
     history::{HistoryResult, Observation},
 };
@@ -693,7 +693,7 @@ mod rule_detail {
 
     use super::*;
     use trss_anilist::{Entry, FuzzyDate};
-    use trss_legacy::store::channels::Rule;
+    use trss_collect::store::channels::Rule;
     use trss_library::discovery::{EpisodeFile, FileKind, Scan, ScannedWork, WorkRead};
 
     impl App {

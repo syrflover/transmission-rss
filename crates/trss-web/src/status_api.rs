@@ -15,7 +15,7 @@
 //!
 //! The web neither reads RSS feeds nor asks Transmission. Channel read status
 //! and Transmission's counts are snapshots the worker leaves each cycle
-//! ([`trss_legacy::store::status`]); each carries the time it was taken and `null`
+//! ([`trss_collect::store::status`]); each carries the time it was taken and `null`
 //! means the worker has not recorded one (yet). The received counts and the
 //! failure count come from the collection history.
 //!
@@ -39,12 +39,12 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use super::{ApiError, AppState};
-use trss_core::{heartbeat::WorkerHeartbeat, Millis};
-use trss_legacy::store::{
+use trss_collect::store::{
     channels::ChannelError,
     history::{CycleState, HistoryError},
     status::StatusError,
 };
+use trss_core::{heartbeat::WorkerHeartbeat, Millis};
 
 #[cfg(test)]
 mod tests;

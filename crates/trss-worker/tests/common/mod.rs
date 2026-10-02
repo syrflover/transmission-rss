@@ -46,11 +46,11 @@ use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use tokio::{net::TcpListener, sync::Semaphore, task::JoinHandle};
 use tower::ServiceExt;
-use trss_core::{lock_path_for, settings::SettingsStore, Db};
-use trss_legacy::store::{
+use trss_collect::store::{
     channels::{ChannelInput, ChannelStore, ChannelWithRules, RuleInput},
     history::{HistoryItem, HistoryQuery, HistoryStore, MAX_PAGE_SIZE},
 };
+use trss_core::{lock_path_for, settings::SettingsStore, Db};
 use trss_transmission::RenamePolicy;
 use trss_web::AppState;
 use trss_worker::{Worker, WorkerEnv};

@@ -7,11 +7,11 @@ use serde_json::{json, Value};
 use tempfile::TempDir;
 use tower::ServiceExt;
 
+use trss_collect::store::channels::{ChannelInput, ChannelStore, RuleInput};
 use trss_core::{
     settings::{CollectionSettings, SettingsStore},
     Db,
 };
-use trss_legacy::store::channels::{ChannelInput, ChannelStore, RuleInput};
 use trss_library::store::{
     library::LibraryStore,
     setup::{SetupStore, Step},
@@ -377,7 +377,7 @@ async fn replace_shows_the_rules_that_go_and_reports_them_separately() {
 #[tokio::test]
 async fn replacing_keeps_the_title_waiting_subscriptions_of_the_channel() {
     use trss_anissia::Anime;
-    use trss_legacy::store::channels::{NewSubscription, SubtitleMode};
+    use trss_collect::store::channels::{NewSubscription, SubtitleMode};
 
     let t = app().await;
     t.set_folder("/media").await;
@@ -465,7 +465,7 @@ async fn replacing_keeps_the_title_waiting_subscriptions_of_the_channel() {
 #[tokio::test]
 async fn replacing_keeps_the_folder_of_a_subscription_when_the_files_folder_is_no_work_folder() {
     use trss_anissia::Anime;
-    use trss_legacy::store::channels::{NewSubscription, SubtitleMode};
+    use trss_collect::store::channels::{NewSubscription, SubtitleMode};
 
     let t = app().await;
     t.set_folder("/media").await;
@@ -594,10 +594,10 @@ async fn replacing_keeps_the_folder_of_a_subscription_when_the_files_folder_is_n
 
 /// `rule` as it is stored after it moved to `position`.
 fn waiting_after(
-    rule: &trss_legacy::store::channels::Rule,
+    rule: &trss_collect::store::channels::Rule,
     position: i64,
-) -> trss_legacy::store::channels::Rule {
-    trss_legacy::store::channels::Rule {
+) -> trss_collect::store::channels::Rule {
+    trss_collect::store::channels::Rule {
         position,
         ..rule.clone()
     }

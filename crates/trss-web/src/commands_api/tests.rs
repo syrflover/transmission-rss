@@ -8,11 +8,11 @@ use serde_json::{json, Value};
 use tower::ServiceExt;
 
 use super::*;
-use trss_core::Db;
-use trss_legacy::store::{
+use trss_collect::store::{
     channels::{Channel, ChannelInput, Rule, RuleInput, RuleState},
     history::{HistoryItem, HistoryQuery, HistoryResult, Observation},
 };
+use trss_core::Db;
 
 const TOKEN: &str = "s3cr3t-tok-0123";
 const ID: &str = "0b7d5a44-6c1e-4c62-9a6a-3f0c1d2e4b55";

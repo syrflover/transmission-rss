@@ -16,7 +16,7 @@ use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 use trss_anilist::{Entry, FuzzyDate};
 use trss_anissia::Anime;
-use trss_legacy::store::channels::{ChannelInput, NewSubscription, Rule, RuleInput, SubtitleMode};
+use trss_collect::store::channels::{ChannelInput, NewSubscription, Rule, RuleInput, SubtitleMode};
 use trss_library::store::{library::LibraryStore, seasons::SeasonStore};
 use trss_worker::{CommandsOutcome, TickOutcome};
 
@@ -973,8 +973,8 @@ async fn a_video_whose_torrent_is_gone_is_renamed_on_disk_without_replacing() {
 
 #[tokio::test]
 async fn an_undo_waits_for_a_revision_replacement_under_way_and_moves_finished_ones() {
+    use trss_collect::store::revisions::{NewRevision, RevisionState, RevisionStore};
     use trss_core::DbError;
-    use trss_legacy::store::revisions::{NewRevision, RevisionState, RevisionStore};
     let (s, rule) = Scene::third_season_received().await;
     // A replacement of `S03E02` by a higher revision is under way.
     let revisions = RevisionStore::new(s.h.db.clone());
@@ -1046,10 +1046,10 @@ async fn an_undo_waits_for_a_revision_replacement_under_way_and_moves_finished_o
 /// for the file gone.
 #[tokio::test]
 async fn an_undo_moves_an_ended_replacement_that_watches_its_file() {
-    use trss_core::DbError;
-    use trss_legacy::store::revisions::{
+    use trss_collect::store::revisions::{
         NewRevision, RevisionState, RevisionStore, OLD_FILE_WATCHED,
     };
+    use trss_core::DbError;
     let (s, rule) = Scene::third_season_received().await;
     let revisions = RevisionStore::new(s.h.db.clone());
     let item = s.h.item("Show - 50").await;
@@ -1553,7 +1553,7 @@ impl Scene {
         episode_name: &str,
         receiving: bool,
     ) -> i64 {
-        use trss_legacy::store::revisions::{NewRevision, RevisionState, RevisionStore};
+        use trss_collect::store::revisions::{NewRevision, RevisionState, RevisionStore};
         let item = self.h.item(part).await;
         RevisionStore::new(self.h.db.clone())
             .create(
@@ -1635,7 +1635,7 @@ async fn a_start_cut_short_carries_on_and_checks_each_file_again() {
 /// Revision rows the new name has already are never merged with the file's.
 #[tokio::test]
 async fn a_new_name_that_has_revision_rows_of_its_own_is_not_taken() {
-    use trss_legacy::store::revisions::RevisionStore;
+    use trss_collect::store::revisions::RevisionStore;
     let (s, rule) = Scene::third_season_received().await;
     // An ended replacement left a row for `S03E26`, whose file is gone.
     let row = s
@@ -1959,7 +1959,7 @@ async fn a_gone_torrent_of_a_title_without_an_extension_and_two_videos_is_kept_w
 /// restored value, for another episode of that name stays.
 #[tokio::test]
 async fn a_waiting_file_moves_only_the_revision_rows_that_were_its_own() {
-    use trss_legacy::store::revisions::RevisionStore;
+    use trss_collect::store::revisions::RevisionStore;
     let (s, rule) = Scene::third_season_received().await;
     // A row of `S03E02` older than the undo (of another item: its own rows
     // move whoever wrote them).

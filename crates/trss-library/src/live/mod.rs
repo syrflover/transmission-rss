@@ -49,7 +49,7 @@
 //! folder registered after the start is watched and read once to catch what
 //! happened before its watches; one that is unregistered or whose path changed
 //! loses its watches. The archive move
-//! (`trss_collect::rule_archive`) asks the watches of the work
+//! (`trss_collect::commands::rule_archive`) asks the watches of the work
 //! folder it moved to follow ([`LiveWatch::resync`]), though the alerts of the
 //! move already do.
 //!

@@ -22,11 +22,11 @@ use axum::http::StatusCode;
 use common::*;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
-use trss_core::{heartbeat::HeartbeatStore, lock_path_for, CycleLock};
-use trss_legacy::{
+use trss_collect::{
+    commands::rule_archive::work_folder::MovePolicy,
     store::channels::{ChannelInput, ChannelWithRules, RuleInput},
-    worker::MovePolicy,
 };
+use trss_core::{heartbeat::HeartbeatStore, lock_path_for, CycleLock};
 use trss_library::{
     discovery::Reason,
     live::{LiveConfig, Reading},

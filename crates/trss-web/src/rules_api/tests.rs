@@ -8,11 +8,11 @@ use serde_json::{json, Value};
 use tower::ServiceExt;
 
 use super::*;
-use trss_core::Db;
-use trss_legacy::store::{
+use trss_collect::store::{
     channels::{ChannelInput, ChannelWithRules},
     history::Observation,
 };
+use trss_core::Db;
 
 struct App {
     state: AppState,
@@ -1180,8 +1180,8 @@ async fn the_preview_agrees_with_the_worker_mapping_for_every_recorded_title() {
 
 #[tokio::test]
 async fn the_state_is_not_saved_by_an_edit_and_the_last_archive_move_is_shown() {
+    use trss_collect::commands::rule_archive::{Direction, RuleArchive, KIND};
     use trss_core::commands::{CommandState, NewCommand, Outcome};
-    use trss_legacy::worker::commands::rule_archive::{Direction, RuleArchive, KIND};
 
     let app = App::new().await;
     let a = app
@@ -1325,8 +1325,8 @@ async fn a_save_folder_with_parent_components_is_refused_but_a_stored_one_still_
 
 #[tokio::test]
 async fn while_a_work_folder_moves_no_rule_changes_its_folder_into_or_out_of_it() {
+    use trss_collect::commands::rule_archive::{Direction, RuleArchive, KIND};
     use trss_core::commands::{CommandState, NewCommand, Outcome};
-    use trss_legacy::worker::commands::rule_archive::{Direction, RuleArchive, KIND};
 
     let app = App::new().await;
     let a = app

@@ -21,7 +21,7 @@
 //!
 //! - `revision` items are replacements of video revisions that failed, or
 //!   whose rename after the old video was removed has not gone through yet
-//!   ([`trss_legacy::store::revisions::Revision::is_failure`]). `files` are the two
+//!   ([`trss_collect::store::revisions::Revision::is_failure`]). `files` are the two
 //!   videos with what became of each: the old one `kept` (still there) or
 //!   `removed`; the new one under the name it was received with
 //!   (`received_name`), `missing` from there (a replacement that ended after
@@ -58,13 +58,14 @@ use axum::{extract::State, routing::get, Json, Router};
 use serde::Serialize;
 
 use super::{commands_api::CommandView, in_place::Evidence, ApiError, AppState};
-use trss_legacy::{
+use trss_collect::{
+    commands::receive_once,
     revision::season_episode,
+    revisions::received_again_on_retry,
     store::{
         history::{HistoryQuery, HistoryResult},
         revisions::{Revision, RevisionState},
     },
-    worker::{commands::receive_once, revisions::received_again_on_retry},
 };
 
 pub fn routes() -> Router<AppState> {

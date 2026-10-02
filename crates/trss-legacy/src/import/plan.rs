@@ -18,7 +18,7 @@ use std::collections::HashSet;
 
 use url::Url;
 
-use crate::store::channels::{
+use trss_collect::store::channels::{
     import::{match_rules, ImportAction, ImportChannel},
     mask_url, query_names, ChannelWithRules, Version,
 };
@@ -254,7 +254,7 @@ pub fn display_url(url: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use crate::store::channels::{Channel, ChannelInput, Rule, RuleInput, RuleState};
+    use trss_collect::store::channels::{Channel, ChannelInput, Rule, RuleInput, RuleState};
 
     use super::*;
 

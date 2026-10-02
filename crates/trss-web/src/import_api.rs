@@ -75,19 +75,17 @@ use std::collections::HashMap;
 use self::suggestions::{Pick, SubscriptionsResult, SuggestionView};
 use super::settings_api::check_folders;
 use super::{ApiError, AppState};
-use trss_legacy::{
-    import::{
-        fit::{fit, Fit, Fitted},
-        legacy::{self, LegacyChannel},
-        plan::{
-            build_actions, display_url, find_existing, keep_subscription_folders, Choice, Decision,
-        },
-        suggest::suggest,
+use trss_collect::store::channels::{
+    import::{is_title_waiting_subscription, match_rules, ImportChannel, ImportedChannel},
+    ChannelError, ChannelWithRules, Rule, Version,
+};
+use trss_legacy::import::{
+    fit::{fit, Fit, Fitted},
+    legacy::{self, LegacyChannel},
+    plan::{
+        build_actions, display_url, find_existing, keep_subscription_folders, Choice, Decision,
     },
-    store::channels::{
-        import::{is_title_waiting_subscription, match_rules, ImportChannel, ImportedChannel},
-        ChannelError, ChannelWithRules, Rule, Version,
-    },
+    suggest::suggest,
 };
 
 const STALE_MESSAGE: &str = "검토한 뒤에 채널이 바뀌었어요. 파일을 다시 검토한 다음 선택해 주세요.";
@@ -224,7 +222,7 @@ struct CollectFolderView {
     will_set: Option<String>,
 }
 
-fn invalid_regex(rule: &trss_legacy::store::channels::RuleInput) -> bool {
+fn invalid_regex(rule: &trss_collect::store::channels::RuleInput) -> bool {
     rule.regex
         && rule.r#match.as_deref().is_some_and(|pattern| {
             regex::RegexBuilder::new(pattern)

@@ -16,16 +16,16 @@ use axum::http::StatusCode;
 use common::*;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
-use trss_core::settings::SettingsStore;
-use trss_legacy::{
+use trss_collect::{
     revision::FileIdentity,
+    revisions,
     store::{
         channels::{ChannelInput, RuleInput, RuleState},
         history::{HistoryItem, HistoryResult, Observation},
         revisions::{Revision, RevisionState, RevisionStore, OLD_FILE_WATCHED},
     },
-    worker::revisions,
 };
+use trss_core::settings::SettingsStore;
 use trss_worker::{CommandsOutcome, CycleReport, TickOutcome};
 
 const OLD_HASH: &str = "1111000000000000000000000000000000000014";

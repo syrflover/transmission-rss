@@ -23,7 +23,7 @@ use axum::{
 };
 use serde_json::{json, Value};
 
-use trss_legacy::store::channels::ChannelError;
+use trss_collect::store::channels::ChannelError;
 
 #[derive(Debug)]
 pub enum ApiError {

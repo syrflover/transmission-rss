@@ -3,9 +3,9 @@
 //! Every interval (five minutes by default) the worker runs one *cycle*
 //! ([`cycle::run_cycle`]): it reads the channels and their rules from the app
 //! database, reads each channel's RSS feed, judges every item with the shared
-//! evaluation in [`trss_legacy::rss`], adds the selected ones to Transmission and
+//! evaluation in [`trss_collect::rss`], adds the selected ones to Transmission and
 //! records every item it saw in the collection history
-//! ([`trss_legacy::store::history`]). The Transmission handling is the legacy
+//! ([`trss_collect::store::history`]). The Transmission handling is the legacy
 //! binary's, shared through [`trss_transmission`].
 //!
 //! # The collect folder
@@ -101,21 +101,23 @@ pub use commands::{CommandsOutcome, DEFAULT_COMMAND_POLL};
 pub use cycle::{run_cycle, CommandsAtStart, CycleError, CycleReport};
 pub use env::{EnvError, WorkerEnv};
 
-use trss_legacy::{
+use trss_collect::{
+    commands::rule_archive::work_folder::MovePolicy,
+    context::CollectContext,
+    feed, season_link,
     store::{
         channels::ChannelStore,
         history::{HistoryError, HistoryStore},
         revisions::RevisionStore,
         status::StatusStore,
     },
-    worker::{feed, season_link, CycleContext, MovePolicy},
 };
 use trss_library::{
     live,
     store::{library::LibraryStore, seasons::SeasonStore},
     watch::{self, WatchContext},
 };
-use trss_transmission::{Redactor, RenamePolicy};
+use trss_transmission::{Redactor, RenamePolicy, SessionConfig};
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkerError {
@@ -150,7 +152,12 @@ pub enum TickOutcome {
 /// A collection worker. Cheap to clone.
 #[derive(Clone)]
 pub struct Worker {
-    ctx: CycleContext,
+    /// What the collection work (cycle, commands, season link) shares.
+    ctx: CollectContext,
+    /// What the reading of the watch folders shares.
+    watch: WatchContext,
+    /// Transmission's session settings, applied at the start of every cycle.
+    session: SessionConfig,
     /// Commands the web accepted; see [`commands`].
     commands: CommandStore,
     interval: Duration,
@@ -187,28 +194,33 @@ impl Worker {
             redactor.add(password);
         }
 
+        let library = LibraryStore::new(db.clone());
+        let live = live::LiveWatch::default();
+
         Ok(Worker {
             commands: CommandStore::new(db.clone()),
-            ctx: CycleContext {
+            watch: WatchContext {
+                library: library.clone(),
+                settings: SettingsStore::new(db.clone()),
+                heartbeat: HeartbeatStore::new(db.clone()),
+                scan_cache: watch::ScanCaches::default(),
+                live: live.clone(),
+            },
+            session: env.session.clone(),
+            ctx: CollectContext {
                 channels: ChannelStore::new(db.clone()),
                 settings: SettingsStore::new(db.clone()),
                 history: HistoryStore::new(db.clone()),
                 revisions: RevisionStore::new(db.clone()),
-                seasons: SeasonStore::new(db.clone()),
+                seasons: SeasonStore::new(db),
                 season_link: season_link::Memory::default(),
-                watch: WatchContext {
-                    library: LibraryStore::new(db.clone()),
-                    settings: SettingsStore::new(db.clone()),
-                    heartbeat: HeartbeatStore::new(db),
-                    scan_cache: watch::ScanCaches::default(),
-                    live: live::LiveWatch::default(),
-                },
+                library,
+                live,
                 transmission_url: env.transmission_url.clone(),
                 transmission_http: trss_transmission::http_client(
                     trss_transmission::REQUEST_TIMEOUT,
                 )
                 .map_err(WorkerError::TransmissionHttp)?,
-                session: env.session.clone(),
                 http: feed::client()?,
                 rename: RenamePolicy::default(),
                 moves: MovePolicy::default(),
@@ -243,13 +255,15 @@ impl Worker {
 
     /// Overrides how the inotify watches behave (default: [`live::LiveConfig::default`]).
     pub fn with_live_config(mut self, config: live::LiveConfig) -> Self {
-        self.ctx.watch.live = live::LiveWatch::new(config);
+        let live = live::LiveWatch::new(config);
+        self.ctx.live = live.clone();
+        self.watch.live = live;
         self
     }
 
     /// The inotify watches of the watch folders.
     pub fn live(&self) -> &live::LiveWatch {
-        &self.ctx.watch.live
+        &self.watch.live
     }
 
     /// Starts watching the watch folders for changes, so that cycles stop
@@ -257,13 +271,13 @@ impl Worker {
     /// does this itself; a worker that is only ticked is not watching, and its
     /// cycles read every folder.
     pub async fn start_watching(&self) {
-        self.ctx.watch.live.start(
-            self.ctx.watch.clone(),
+        self.watch.live.start(
+            self.watch.clone(),
             self.lock_path.clone(),
             self.clock.clone(),
             self.heartbeat_every,
         );
-        self.ctx.watch.live.sync_folders().await;
+        self.watch.live.sync_folders().await;
     }
 
     /// One pass of the season link, which a cycle runs after the watch folder
@@ -275,7 +289,7 @@ impl Worker {
 
     /// Ends every watch.
     pub fn stop_watching(&self) {
-        self.ctx.watch.live.stop();
+        self.watch.live.stop();
     }
 
     /// Overrides the minimum time between cycle starts (default: half the interval).
@@ -348,7 +362,7 @@ impl Worker {
             return Ok(TickOutcome::TooSoon);
         }
 
-        let report = run_cycle(&self.ctx, started, commands, cancel).await?;
+        let report = run_cycle(&self.ctx, &self.session, started, commands, cancel).await?;
 
         // An interrupted cycle stays unfinished in the marker.
         if !report.interrupted {
@@ -358,7 +372,7 @@ impl Worker {
         // The watch folders are read after the RSS work, under the same lock,
         // and one that cannot be read neither stops the others nor fails the tick.
         if !report.interrupted && !cancel.is_cancelled() {
-            watch::scan_all(&self.ctx.watch, &self.clock, cancel).await;
+            watch::scan_all(&self.watch, &self.clock, cancel).await;
             // The videos the rules received are in the library now (or not yet).
             season_link::link_seasons(&self.ctx).await;
         }
@@ -377,10 +391,7 @@ impl Worker {
                     path: self.lock_path.clone(),
                     source,
                 })?;
-            if lock.is_some()
-                || !self.ctx.watch.live.flushing()
-                || started.elapsed() > LIVE_LOCK_WAIT
-            {
+            if lock.is_some() || !self.watch.live.flushing() || started.elapsed() > LIVE_LOCK_WAIT {
                 return Ok(lock);
             }
             tokio::time::sleep(Duration::from_millis(25)).await;
@@ -416,7 +427,7 @@ impl Worker {
                 _ = ticker.tick() => {}
                 _ = command_ticker.tick() => {
                     // A watch folder registered meanwhile is watched from now on.
-                    self.ctx.watch.live.sync_folders().await;
+                    self.watch.live.sync_folders().await;
                     self.poll_commands(&cancel).await;
                     continue;
                 }

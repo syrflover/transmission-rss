@@ -68,7 +68,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use super::{ApiError, AppState};
-use trss_legacy::store::channels::{query_names, Channel, ChannelError, ChannelInput, MASK};
+use trss_collect::store::channels::{query_names, Channel, ChannelError, ChannelInput, MASK};
 
 #[cfg(test)]
 mod tests;

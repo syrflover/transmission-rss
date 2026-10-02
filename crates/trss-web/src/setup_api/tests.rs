@@ -7,8 +7,8 @@ use serde_json::{json, Value};
 use tower::ServiceExt;
 
 use crate::api;
+use trss_collect::store::channels::ChannelInput;
 use trss_core::Db;
-use trss_legacy::store::channels::ChannelInput;
 use trss_library::discovery::Scan;
 
 use super::*;

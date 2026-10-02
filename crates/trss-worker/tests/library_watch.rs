@@ -21,11 +21,11 @@ use common::*;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 use trss_anilist::{Entry, FuzzyDate};
-use trss_core::settings::SettingsStore;
-use trss_legacy::{
+use trss_collect::{
+    commands::rule_archive::work_folder::MovePolicy,
     store::channels::{ChannelInput, ChannelWithRules, RuleInput},
-    worker::MovePolicy,
 };
+use trss_core::settings::SettingsStore;
 use trss_library::{
     discovery,
     store::{
