@@ -10,8 +10,9 @@ use trss_legacy::{
         channels::{RuleInput, RuleState},
         history::{HistoryQuery, HistoryResult, MAX_PAGE_SIZE},
     },
-    worker::{feed::MAX_FEED_BYTES, CycleReport, TickOutcome, Worker},
+    worker::feed::MAX_FEED_BYTES,
 };
+use trss_worker::{CycleReport, TickOutcome, Worker};
 
 async fn run(worker: &Worker) -> CycleReport {
     match worker.tick(&CancellationToken::new()).await.unwrap() {

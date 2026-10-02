@@ -20,8 +20,8 @@ use trss_legacy::{
         history::{HistoryResult, Observation},
         library::LibraryStore,
     },
-    worker::{TickOutcome, Worker},
 };
+use trss_worker::{TickOutcome, Worker};
 
 fn touch(path: &Path) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();

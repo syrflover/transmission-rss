@@ -26,8 +26,8 @@ use trss_legacy::{
         settings::SettingsStore,
         Db,
     },
-    worker::{CommandsOutcome, CycleReport, TickOutcome, Worker},
 };
+use trss_worker::{CommandsOutcome, CycleReport, TickOutcome, Worker};
 
 async fn run(worker: &Worker) -> CycleReport {
     match worker.tick(&CancellationToken::new()).await.unwrap() {

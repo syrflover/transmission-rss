@@ -56,8 +56,8 @@ use trss_legacy::{
     },
     transmission::RenamePolicy,
     web::AppState,
-    worker::{Worker, WorkerEnv},
 };
+use trss_worker::{Worker, WorkerEnv};
 
 /// The collect folder every harness starts with. Test channels are given by
 /// the folder they used to have as a base folder (`/media/anime`), which

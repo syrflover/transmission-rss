@@ -9,8 +9,8 @@ use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 use trss_legacy::{
     store::status::StatusStore,
-    worker::{CycleReport, TickOutcome, Worker},
 };
+use trss_worker::{CycleReport, TickOutcome, Worker};
 
 async fn run(worker: &Worker) -> CycleReport {
     match worker.tick(&CancellationToken::new()).await.unwrap() {

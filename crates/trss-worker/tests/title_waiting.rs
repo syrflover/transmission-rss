@@ -17,8 +17,8 @@ use trss_legacy::{
         channels::{ChannelWithRules, NewSubscription, Rule, RuleInput, SubtitleMode},
         history::{HistoryItem, HistoryResult},
     },
-    worker::{CommandsOutcome, CycleReport, TickOutcome},
 };
+use trss_worker::{CommandsOutcome, CycleReport, TickOutcome};
 
 const BASE: &str = "/media/anime";
 const FEED: &str = "feed-x";

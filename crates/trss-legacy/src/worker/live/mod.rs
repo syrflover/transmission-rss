@@ -6,7 +6,7 @@
 //! folders ([`tree`]), one inotify instance per watch folder. An alert only
 //! says *which work to read again*: the alerts of one work are gathered for a
 //! few seconds ([`LiveConfig::debounce`]), and then, under the same lock as the
-//! cycles ([`crate::worker::lock::CycleLock`]), that one work is read and
+//! cycles ([`trss_core::CycleLock`]), that one work is read and
 //! recorded with the code every other reading uses
 //! ([`watch::scan_works`](crate::worker::watch::scan_works)). A reading that
 //! finds the lock taken waits and tries again, so alerts never interleave with
@@ -248,7 +248,7 @@ impl LiveWatch {
 
     /// Lets the folders be watched: [`LiveWatch::sync_folders`] places the
     /// watches. `ctx` is the context the readings run with.
-    pub(super) fn start(
+    pub fn start(
         &self,
         ctx: CycleContext,
         lock_path: PathBuf,
@@ -600,7 +600,7 @@ impl LiveWatch {
     }
 
     /// Whether a watch task holds the worker's lock for a reading right now.
-    pub(super) fn flushing(&self) -> bool {
+    pub fn flushing(&self) -> bool {
         self.inner.flushing.load(Ordering::SeqCst) > 0
     }
 }

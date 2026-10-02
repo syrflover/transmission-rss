@@ -28,8 +28,9 @@ use trss_legacy::{
         seasons::{Entry, FuzzyDate, SeasonStore},
         settings::SettingsStore,
     },
-    worker::{CommandsOutcome, CycleReport, MovePolicy, TickOutcome, Worker},
+    worker::MovePolicy,
 };
+use trss_worker::{CommandsOutcome, CycleReport, TickOutcome, Worker};
 
 fn touch(path: &Path) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();

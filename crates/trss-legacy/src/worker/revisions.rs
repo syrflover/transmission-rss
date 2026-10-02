@@ -96,7 +96,7 @@ use tokio::sync::{Mutex, Semaphore};
 use tokio_util::sync::CancellationToken;
 use transmission_rpc::types::Id;
 
-use super::{commands::receive_once::derived_name, cycle::MAX_REASON_CHARS, CycleContext};
+use super::{commands::receive_once::derived_name, context::MAX_REASON_CHARS, CycleContext};
 use crate::{
     revision::{crc_text, file_crc32_identified, FileIdentity, Release},
     store::{

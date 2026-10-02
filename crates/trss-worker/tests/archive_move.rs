@@ -29,8 +29,9 @@ use trss_legacy::{
         commands::{CommandState, CommandStore},
         settings::SettingsStore,
     },
-    worker::{CommandsOutcome, MovePolicy, TickOutcome, Worker},
+    worker::MovePolicy,
 };
+use trss_worker::{CommandsOutcome, TickOutcome, Worker};
 
 const SEEDING: u8 = 6;
 

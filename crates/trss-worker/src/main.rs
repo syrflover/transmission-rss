@@ -7,8 +7,8 @@ use trss_legacy::{
     artwork::{self, AnilistConfig, AppData, Artwork},
     seasons::{self, Seasons},
     store::{db::DB_PATH_ENV, Db},
-    worker::{Worker, WorkerEnv},
 };
+use trss_worker::{Worker, WorkerEnv};
 
 #[tokio::main]
 async fn main() -> ExitCode {

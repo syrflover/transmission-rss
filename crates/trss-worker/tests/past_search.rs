@@ -30,8 +30,8 @@ use trss_legacy::{
         status::StatusStore,
     },
     web::AppState,
-    worker::{CommandsOutcome, TickOutcome},
 };
+use trss_worker::{CommandsOutcome, TickOutcome};
 
 const SPACING: Duration = Duration::from_millis(150);
 static COMMANDS: AtomicU32 = AtomicU32::new(0);

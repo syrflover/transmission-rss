@@ -11,30 +11,29 @@ use futures::{stream, StreamExt};
 use tokio::{task, task::JoinSet};
 use tokio_util::sync::CancellationToken;
 use transmission_rpc::types::{TorrentGetField, TorrentStatus};
-use url::Url;
 
-use super::{
-    commands::rule_archive::work_folder::MovePolicy,
-    feed::{self, FeedItem},
-    plan::{ChannelPlan, Judgement},
-    revisions::{self, Decided, Listing, Plan, Replaced, Selected},
-};
-use crate::{
+use trss_legacy::{
     episode_offset::may_decide,
     store::{
-        channels::{ChannelError, ChannelStore, ChannelWithRules, RuleState},
-        history::{HistoryResult, HistoryStore, KnownItem, Millis, Observation, Recorded},
-        library::LibraryStore,
+        channels::{ChannelError, ChannelWithRules, RuleState},
+        history::{HistoryResult, KnownItem, Millis, Observation, Recorded},
         revisions::{
-            HistoryWrite, Mark, NewRevision, Revision, RevisionState, RevisionStore, RowWrite,
+            HistoryWrite, Mark, NewRevision, Revision, RevisionState, RowWrite,
         },
-        seasons::SeasonStore,
-        settings::{SettingsError, SettingsStore},
+        settings::SettingsError,
         status::{ChannelReadResult, StatusStore, TransmissionCounts},
     },
     transmission::{
         self, add_item, remove_stale, rename_with_retries, AddError, AddKind, Redactor,
-        RemovedTorrent, RenameMode, RenamePolicy, SessionConfig,
+        RemovedTorrent, RenameMode,
+    },
+    worker::{
+        context::MAX_REASON_CHARS,
+        feed::{self, FeedItem},
+        plan::{ChannelPlan, Judgement},
+        offsets,
+        revisions::{self, Decided, Listing, Plan, Replaced, Selected},
+        CycleContext,
     },
 };
 
@@ -42,53 +41,6 @@ use crate::{
 const ADD_CONCURRENCY: usize = 100;
 /// How many feeds are read at the same time.
 const FETCH_CONCURRENCY: usize = 5;
-/// Longest failure reason kept in history, in characters.
-pub(super) const MAX_REASON_CHARS: usize = 300;
-
-/// What a cycle needs. Cheap to clone.
-#[derive(Clone)]
-pub struct CycleContext {
-    pub channels: ChannelStore,
-    /// Where the collect folder is read from.
-    pub settings: SettingsStore,
-    pub history: HistoryStore,
-    /// The replacements of video revisions (see [`super::revisions`]).
-    pub revisions: RevisionStore,
-    /// The watch folders the worker rescans (see [`crate::worker::watch`]).
-    pub library: LibraryStore,
-    /// The AniList entries linked to the library's seasons (the episodes of
-    /// the seasons before a rule's: [`crate::episode_offset`]).
-    pub seasons: SeasonStore,
-    /// What the worker remembers of each watch folder's directories between
-    /// scans (see [`crate::worker::watch`]).
-    pub scan_cache: super::watch::ScanCaches,
-    /// What the season link remembers between cycles (see
-    /// [`crate::worker::season_link`]).
-    pub season_link: super::season_link::Memory,
-    /// The inotify watches of the watch folders, which say what the cycle has
-    /// to read of them (see [`crate::worker::live`]).
-    pub live: super::live::LiveWatch,
-    pub transmission_url: Url,
-    /// The client for Transmission's requests; they time out
-    /// (see [`crate::transmission::http_client`]).
-    pub transmission_http: reqwest012::Client,
-    pub session: SessionConfig,
-    pub http: reqwest::Client,
-    pub rename: RenamePolicy,
-    /// How a work folder move waits for Transmission (the `rule_archive`
-    /// command; see [`crate::worker::commands::rule_archive`]).
-    pub moves: MovePolicy,
-    /// Knows secrets that do not come from channels, such as credentials in
-    /// the Transmission URL.
-    pub redactor: Redactor,
-}
-
-impl CycleContext {
-    /// A client for Transmission, with timeouts.
-    pub(super) fn transmission(&self) -> transmission_rpc::TransClient {
-        transmission::client(self.transmission_url.clone(), &self.transmission_http)
-    }
-}
 
 #[derive(Debug, thiserror::Error)]
 pub enum CycleError {
@@ -138,7 +90,7 @@ pub struct CycleReport {
     /// this revision already.
     pub revisions_withheld: usize,
     /// Selected items left to a video revision replacement this cycle (see
-    /// [`super::revisions`]), or whose decision had to wait.
+    /// [`trss_legacy::worker::revisions`]), or whose decision had to wait.
     pub revisions_left: usize,
     /// The cycle stopped early because the worker is shutting down. What was
     /// done is recorded; the rest waits for the next cycle.
@@ -283,7 +235,7 @@ pub async fn run_cycle(
         .map(|settings| PathBuf::from(settings.folder));
     // The rules whose episode offset the app may still set (see
     // `offsets::settle`), before the snapshot goes into the plans.
-    let open_rules: HashMap<String, crate::store::channels::Rule> = snapshot
+    let open_rules: HashMap<String, trss_legacy::store::channels::Rule> = snapshot
         .iter()
         .flat_map(|cwr| &cwr.rules)
         .filter(|rule| rule.state == RuleState::Active && may_decide(rule))
@@ -515,7 +467,7 @@ pub async fn run_cycle(
                 }
             }
         }
-        let offsets = super::offsets::settle(ctx, folder, &open_rules, &firsts).await;
+        let offsets = offsets::settle(ctx, folder, &open_rules, &firsts).await;
         for job in &mut jobs {
             if let Some(offset) = job
                 .observation
@@ -630,7 +582,7 @@ pub async fn run_cycle(
                 .torrent_hashes_of_channels(unread_channels)
                 .await?;
             hashes.extend(ctx.history.held_hashes_of_items(present).await?);
-            Ok::<_, crate::store::history::HistoryError>(hashes)
+            Ok::<_, trss_legacy::store::history::HistoryError>(hashes)
         }
         .await;
         // A replacement under way keeps its new torrent, which it checks,
@@ -1225,7 +1177,7 @@ async fn record_transmission_counts(ctx: &CycleContext, at: Millis, redactor: &R
 }
 
 /// The jobs a cycle adds: those of `jobs` that no video revision replacement
-/// has decided about (see [`super::revisions`]). A revision with a row is the
+/// has decided about (see [`trss_legacy::worker::revisions`]). A revision with a row is the
 /// replacement's to carry on, unless its replacement failed before the new
 /// video was received: then the item is received again, as the row decided.
 /// The old video of a replacement that removed its torrent is not received

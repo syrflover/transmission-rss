@@ -32,8 +32,8 @@ use trss_legacy::{
         Db,
     },
     transmission::item_label,
-    worker::{CommandsOutcome, CycleReport, TickOutcome, Worker},
 };
+use trss_worker::{CommandsOutcome, CycleReport, TickOutcome, Worker};
 
 const BASE: &str = "/media/anime";
 const CMD: &str = "0b7d5a44-6c1e-4c62-9a6a-3f0c1d2e4b55";

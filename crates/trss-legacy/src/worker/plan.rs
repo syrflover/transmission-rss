@@ -127,7 +127,7 @@ impl ChannelPlan {
     /// Rules save under `collect_folder`, the app-wide collect folder. A caller
     /// with no folder set (the web preview on a fresh database) passes an empty
     /// path, which leaves each rule's own directory as the save path; the worker
-    /// never adds with one (see [`crate::worker::cycle`]).
+    /// never adds with one (see `run_cycle` in the `trss-worker` crate).
     pub fn new(channel_with_rules: ChannelWithRules, collect_folder: &Path) -> ChannelPlan {
         ChannelPlan::build(channel_with_rules, collect_folder, false)
     }

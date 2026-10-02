@@ -24,8 +24,9 @@ use trss_legacy::{
         revisions::{Revision, RevisionState, RevisionStore, OLD_FILE_WATCHED},
         settings::SettingsStore,
     },
-    worker::{revisions, CommandsOutcome, CycleReport, TickOutcome},
+    worker::revisions,
 };
+use trss_worker::{CommandsOutcome, CycleReport, TickOutcome};
 
 const OLD_HASH: &str = "1111000000000000000000000000000000000014";
 const NEW_HASH: &str = "2222000000000000000000000000000000000014";

@@ -32,9 +32,10 @@ use trss_legacy::{
     },
     worker::{
         live::{LiveConfig, Reading},
-        CommandsOutcome, CycleReport, MovePolicy, TickOutcome, Worker,
+        MovePolicy,
     },
 };
+use trss_worker::{CommandsOutcome, CycleReport, TickOutcome, Worker};
 
 const DEBOUNCE: Duration = Duration::from_millis(150);
 

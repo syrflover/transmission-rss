@@ -21,8 +21,8 @@ use trss_legacy::{
         library::LibraryStore,
         seasons::{Entry, FuzzyDate, SeasonStore},
     },
-    worker::{CommandsOutcome, TickOutcome},
 };
+use trss_worker::{CommandsOutcome, TickOutcome};
 
 const FEED: &str = "feed-offset";
 const CMD: &str = "7c1f0e0e-0a70-4c1e-8f6b-7d0c2a9b3e11";
@@ -1691,8 +1691,8 @@ impl Scene {
     }
 
     /// A worker whose Transmission cannot be reached.
-    fn worker_without_transmission(&self) -> trss_legacy::worker::Worker {
-        let env = trss_legacy::worker::WorkerEnv::from_lookup(|key| {
+    fn worker_without_transmission(&self) -> trss_worker::Worker {
+        let env = trss_worker::WorkerEnv::from_lookup(|key| {
             (key == "TRANSMISSION_URL").then(|| "http://127.0.0.1:1/transmission/rpc".to_owned())
         })
         .unwrap();
