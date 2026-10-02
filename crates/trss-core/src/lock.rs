@@ -93,7 +93,8 @@ impl CycleLock {
 /// handle is let go, which writes the last beat (clearing the hold) before the
 /// lock is let go. [`WorkerHold::release`] does that in place. When the last
 /// one goes some other way (a handle dropped because its task panicked or was
-/// aborted, or what [`WorkerHold::keep`] gave outliving the handles), a task
+/// aborted, what [`WorkerHold::keep`] gave outliving the handles, or a hold
+/// given up while its first beat was being written), a task
 /// writes the last beat and then lets go of the lock; a hold taken meanwhile
 /// waits for it, from the moment the last handle goes on whatever thread, and
 /// a hold given up while it waits leaves the waiting to the next. Only without a runtime to run that task (the process is
@@ -183,6 +184,58 @@ impl Ending<'_> {
     }
 }
 
+/// A hold being taken while its first beat is written. When the taking is
+/// given up there (the task that takes it is aborted), the beat may land all
+/// the same and say the lock is held: a task waits for it, writes the last
+/// beat and only then lets go of the lock, as when a hold ends without
+/// [`WorkerHold::release`], and the next hold waits for that task.
+struct Starting<'a> {
+    task: Option<tokio::task::JoinHandle<Heartbeat>>,
+    lock: Option<CycleLock>,
+    slot: &'a Mutex<Option<tokio::task::JoinHandle<()>>>,
+}
+
+impl Starting<'_> {
+    async fn wait(mut self) -> io::Result<(Heartbeat, CycleLock)> {
+        let started = match self.task.as_mut() {
+            Some(task) => task.await,
+            None => unreachable!("the start is waited for once"),
+        };
+        self.task = None;
+        let lock = self
+            .lock
+            .take()
+            .expect("the lock is kept until the start ends");
+        match started {
+            Ok(beat) => Ok((beat, lock)),
+            Err(err) => Err(io::Error::other(err)),
+        }
+    }
+}
+
+impl Drop for Starting<'_> {
+    fn drop(&mut self) {
+        let (Some(task), lock) = (self.task.take(), self.lock.take()) else {
+            return;
+        };
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let ending = runtime.spawn(async move {
+            if let Ok(beat) = task.await {
+                beat.stop().await;
+            }
+            drop(lock);
+        });
+        let mut slot = self.slot.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(earlier) = slot.replace(ending) {
+            // Not expected: the hold that was being taken waited for any
+            // earlier ending first.
+            drop(earlier);
+        }
+    }
+}
+
 impl Drop for Ending<'_> {
     fn drop(&mut self) {
         if let Some(task) = self.task.take() {
@@ -257,12 +310,20 @@ impl WorkerLock {
         let Some(lock) = CycleLock::try_acquire(&self.inner.path)? else {
             return Ok(None);
         };
-        let beat = Heartbeat::start(
+        // The first beat is written by a task of its own, so that a hold given
+        // up meanwhile (its task aborted) still ends it (see [`Starting`]).
+        let start = tokio::spawn(Heartbeat::start(
             self.inner.heartbeat.clone(),
             self.inner.clock.clone(),
             self.inner.every,
-        )
-        .await;
+        ));
+        let (beat, lock) = Starting {
+            task: Some(start),
+            lock: Some(lock),
+            slot: &self.inner.closing,
+        }
+        .wait()
+        .await?;
         self.inner.unfinished.fetch_add(1, Ordering::SeqCst);
         let new = Arc::new(Held {
             beat: Mutex::new(Some(beat)),
@@ -567,6 +628,33 @@ mod tests {
                 .expect("waits, not refused");
             hold.release().await;
             dropping.join().unwrap();
+        }
+
+        #[tokio::test]
+        async fn a_hold_given_up_while_its_first_beat_is_written_clears_it_before_the_lock_goes() {
+            let s = Scene::new().await;
+            let worker = s.worker();
+
+            // Given up (its task aborted) while the first beat is on its way.
+            let mut taking = Box::pin(worker.try_hold());
+            let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+            assert!(std::future::Future::poll(taking.as_mut(), &mut cx).is_pending());
+            drop(taking);
+
+            // The lock goes only once the hold the beat said is cleared.
+            for _ in 0..500 {
+                if CycleLock::try_acquire(&s.path).unwrap().is_some() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            assert!(CycleLock::try_acquire(&s.path).unwrap().is_some());
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            assert_eq!(s.held_since().await, None);
+
+            // The worker takes its lock again.
+            let again = worker.try_hold().await.unwrap().expect("free");
+            again.release().await;
         }
 
         #[tokio::test]
