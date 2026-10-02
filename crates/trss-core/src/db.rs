@@ -114,6 +114,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("../migrations/seasons/korean_titles.sql")),
     // 33: the observations of Anissia's subtitle lines, their sources, and the reading's schedule
     Migration::Sql(include_str!("../migrations/anissia/captions.sql")),
+    // 34: subtitle jobs, their items, steps, log and file receipts
+    Migration::Sql(include_str!("../migrations/jobs/schema.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -660,6 +662,109 @@ mod tests {
         // The link is as it was, and nothing is observed until the worker reads.
         assert_eq!((linked, sources, observations, polls), (3441, 0, 0, 0));
         assert_eq!(refused, [true; 4]);
+    }
+
+    #[tokio::test]
+    async fn a_database_from_before_subtitle_jobs_keeps_its_observations_and_starts_with_no_job() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        {
+            // A database as the build with 33 migrations left it: one source and
+            // one of its observations.
+            let conn = database_at(&path, 33);
+            conn.execute_batch(
+                "INSERT INTO subtitle_sources (id, anime_no, creator_name, created_at)
+                     VALUES ('s1', 3441, '에루샤', 5);
+                 INSERT INTO caption_observations
+                     (source_id, post_url, episode, updated, first_seen_at)
+                     VALUES ('s1', 'https://erulabo.com/837', '1', 'x', 6);",
+            )
+            .unwrap();
+        }
+
+        let db = Db::open(&path).await.unwrap();
+
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+        let (observations, jobs, refused, cascaded): (i64, i64, [bool; 7], i64) = db
+            .run::<_, DbError, _>(|c| {
+                let count = |sql: &str| c.query_row(sql, [], |r| r.get::<_, i64>(0));
+                let observations = count("SELECT count(*) FROM caption_observations")?;
+                let jobs = count("SELECT count(*) FROM subtitle_jobs")?;
+                c.execute_batch(
+                    "INSERT INTO subtitle_jobs (id, command_id, request, origin, source_id,
+                         state, created_at, updated_at, state_at)
+                         VALUES ('j1', 'c1', '{}', 'pick', 's1', 'pending', 1, 1, 1);
+                     INSERT INTO subtitle_job_items (job_id, position, observation_id, episode,
+                         post_url, found_at, state, updated_at)
+                         VALUES ('j1', 0, 1, '1', 'https://erulabo.com/837', 6, 'pending', 1);
+                     INSERT INTO subtitle_job_steps (job_id, step, state, at)
+                         VALUES ('j1', 'found', 'done', 1);
+                     INSERT INTO subtitle_job_events (job_id, at, message) VALUES ('j1', 1, '시작');
+                     INSERT INTO subtitle_job_files (id, job_id, item_id, file_key, name, state,
+                         created_at, updated_at)
+                         VALUES ('a1', 'j1', 1, 'k', 'x.ass', 'intended', 1, 1);",
+                )?;
+                // One job per browser command, known states only, items and
+                // files belong to a job.
+                let refused = [
+                    c.execute(
+                        "INSERT INTO subtitle_jobs (id, command_id, request, origin, state,
+                             created_at, updated_at, state_at)
+                         VALUES ('j2', 'c1', '{}', 'pick', 'pending', 1, 1, 1)",
+                        [],
+                    ),
+                    c.execute(
+                        "INSERT INTO subtitle_jobs (id, command_id, request, origin, state,
+                             created_at, updated_at, state_at)
+                         VALUES ('j3', 'c3', '{}', 'pick', 'paused', 1, 1, 1)",
+                        [],
+                    ),
+                    c.execute(
+                        "INSERT INTO subtitle_job_items (job_id, position, episode, post_url,
+                             found_at, state, updated_at)
+                         VALUES ('j1', 0, '2', 'https://a.test/2', 6, 'pending', 1)",
+                        [],
+                    ),
+                    c.execute(
+                        "INSERT INTO subtitle_job_items (job_id, position, episode, post_url,
+                             found_at, state, updated_at)
+                         VALUES ('nobody', 0, '2', 'https://a.test/2', 6, 'pending', 1)",
+                        [],
+                    ),
+                    c.execute(
+                        "INSERT INTO subtitle_job_files (id, job_id, item_id, file_key, name,
+                             state, created_at, updated_at)
+                         VALUES ('a2', 'j1', 1, 'k', 'x.ass', 'partial', 1, 1)",
+                        [],
+                    ),
+                    // A file of a job is received once.
+                    c.execute(
+                        "INSERT INTO subtitle_job_files (id, job_id, item_id, file_key, name,
+                             state, path, created_at, updated_at)
+                         VALUES ('a3', 'j1', 1, 'k', 'x.ass', 'done', 'j1/x.ass', 1, 1),
+                                ('a4', 'j1', 1, 'k', 'x.ass', 'done', 'j1/x (2).ass', 1, 1)",
+                        [],
+                    ),
+                    c.execute(
+                        "UPDATE subtitle_jobs SET state = 'waiting', wait = 'video' WHERE id = 'j1'",
+                        [],
+                    ),
+                ]
+                .map(|r| r.is_err());
+                c.execute("DELETE FROM subtitle_jobs WHERE id = 'j1'", [])?;
+                let cascaded = count(
+                    "SELECT (SELECT count(*) FROM subtitle_job_items)
+                          + (SELECT count(*) FROM subtitle_job_steps)
+                          + (SELECT count(*) FROM subtitle_job_events)
+                          + (SELECT count(*) FROM subtitle_job_files)",
+                )?;
+                Ok((observations, jobs, refused, cascaded))
+            })
+            .await
+            .unwrap();
+        assert_eq!((observations, jobs), (1, 0));
+        assert_eq!(refused, [true; 7]);
+        assert_eq!(cascaded, 0);
     }
 
     #[tokio::test]
