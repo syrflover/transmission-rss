@@ -624,50 +624,6 @@ pub(crate) fn delete_file_row(conn: &Connection, relative_path: &str) -> rusqlit
     Ok(())
 }
 
-// --- request pace ----------------------------------------------------------------------
-
-pub(super) fn take_slot(
-    conn: &mut Connection,
-    now: Millis,
-    spacing_ms: i64,
-    max_wait_ms: Option<i64>,
-) -> rusqlite::Result<Result<Millis, i64>> {
-    let tx = begin(conn)?;
-    let pace: Option<(Millis, Option<Millis>)> = tx
-        .query_row(
-            "SELECT next_at, blocked_until FROM anilist_pace WHERE id = 1",
-            [],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .optional()?;
-    let (next_at, blocked) = pace.unwrap_or((now, None));
-    let slot = now.max(next_at).max(blocked.unwrap_or(now));
-    if let Some(max) = max_wait_ms {
-        if slot - now > max {
-            return Ok(Err(slot - now));
-        }
-    }
-    tx.execute(
-        "INSERT INTO anilist_pace (id, next_at, blocked_until) VALUES (1, ?1, ?2)
-         ON CONFLICT (id) DO UPDATE SET next_at = excluded.next_at",
-        params![slot + spacing_ms, blocked],
-    )?;
-    tx.commit()?;
-    Ok(Ok(slot))
-}
-
-pub(super) fn block(conn: &mut Connection, until: Millis) -> rusqlite::Result<()> {
-    let tx = begin(conn)?;
-    tx.execute(
-        "INSERT INTO anilist_pace (id, next_at, blocked_until) VALUES (1, ?1, ?1)
-         ON CONFLICT (id) DO UPDATE SET
-             next_at = max(next_at, excluded.next_at),
-             blocked_until = max(coalesce(blocked_until, 0), excluded.blocked_until)",
-        params![until],
-    )?;
-    tx.commit()
-}
-
 /// A new app-issued ID (images, file names).
 pub(crate) fn new_id() -> String {
     Uuid::new_v4().to_string()

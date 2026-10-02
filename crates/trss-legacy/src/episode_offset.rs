@@ -865,11 +865,9 @@ mod tests {
 
     use crate::{
         discovery::{EpisodeFile, FileKind, Scan, ScannedWork, WorkRead},
-        store::{
-            channels::{RuleState, Subscription, SubtitleMode},
-            seasons::{Entry, FuzzyDate},
-        },
+        store::channels::{RuleState, Subscription, SubtitleMode},
     };
+    use trss_anilist::{Entry, FuzzyDate};
     use trss_core::db::Db;
 
     fn entry(id: i64, episodes: Option<u32>) -> Entry {

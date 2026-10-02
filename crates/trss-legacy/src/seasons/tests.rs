@@ -1,4 +1,4 @@
-//! The season flow end to end against a fake AniList ([`crate::artwork::fake`])
+//! The season flow end to end against a fake AniList ([`trss_anilist::fake`])
 //! and a clock the test moves: the rows of ticket 0017 that are not about the
 //! screen or the API.
 
@@ -15,13 +15,14 @@ use serde_json::{json, Value};
 
 use super::{queue::Ran, *};
 use crate::{
-    artwork::{fake::Fake, Artwork},
+    artwork::Artwork,
     discovery::{Scan, ScannedWork, WorkRead},
     store::{
         library::LibraryStore,
         seasons::{Note, Origin},
     },
 };
+use trss_anilist::fake::Fake;
 
 const HOUR: i64 = 60 * 60 * 1000;
 const DAY: i64 = 24 * HOUR;

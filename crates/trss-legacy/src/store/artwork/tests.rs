@@ -522,43 +522,6 @@ async fn a_selection_follows_its_work_through_an_archive_move() {
 }
 
 #[tokio::test]
-async fn requests_take_turns_and_a_block_holds_them_all() {
-    let db = Db::open_blocking(":memory:").unwrap();
-    let store = ArtworkStore::new(db);
-    assert_eq!(
-        store.take_request_slot(1000, 2000, None).await.unwrap(),
-        Ok(1000)
-    );
-    assert_eq!(
-        store.take_request_slot(1000, 2000, None).await.unwrap(),
-        Ok(3000)
-    );
-    // A caller that may wait 1s does not take a slot 4s away.
-    assert_eq!(
-        store
-            .take_request_slot(1000, 2000, Some(1000))
-            .await
-            .unwrap(),
-        Err(4000)
-    );
-    assert_eq!(
-        store.take_request_slot(1000, 2000, None).await.unwrap(),
-        Ok(5000)
-    );
-    store.block_requests(60_000).await.unwrap();
-    assert_eq!(
-        store.take_request_slot(7000, 2000, None).await.unwrap(),
-        Ok(60_000)
-    );
-    // A shorter block later does not shorten it.
-    store.block_requests(10_000).await.unwrap();
-    assert_eq!(
-        store.take_request_slot(8000, 2000, None).await.unwrap(),
-        Ok(62_000)
-    );
-}
-
-#[tokio::test]
 async fn an_unregistered_works_selection_is_hidden_kept_and_still_referenced() {
     let (db, library, folder, ids) = library(&["A"]).await;
     let store = ArtworkStore::new(db.clone());

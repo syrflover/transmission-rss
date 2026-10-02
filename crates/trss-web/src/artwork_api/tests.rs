@@ -11,9 +11,10 @@ use tower::ServiceExt;
 
 use super::*;
 use crate::api;
+use trss_anilist::{fake::Fake, MAX_IMAGE_BYTES};
 use trss_core::Db;
 use trss_legacy::{
-    artwork::{fake::Fake, image::samples, AppData, MAX_IMAGE_BYTES, SERVING_BUDGET},
+    artwork::{image::samples, AppData, SERVING_BUDGET},
     discovery::{Scan, ScannedWork, WorkRead},
 };
 

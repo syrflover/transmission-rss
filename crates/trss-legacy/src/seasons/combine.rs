@@ -14,7 +14,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::store::seasons::{Entry, FuzzyDate, Sequel};
+use trss_anilist::{Entry, FuzzyDate, Sequel};
 
 /// The values of a season's linked entries taken together.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,7 +103,7 @@ pub fn suggestions(previous: Option<&[Entry]>, this: &[Entry]) -> Vec<Sequel> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::seasons::Airing;
+    use trss_anilist::Airing;
 
     fn entry(id: i64) -> Entry {
         Entry {

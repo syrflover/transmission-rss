@@ -17,8 +17,9 @@
 //! is read or inflated, so what this costs in memory is a few locals whatever
 //! the file or the pixels it claims.
 
-use super::{MAX_IMAGE_BYTES, MAX_IMAGE_PIXELS, MAX_IMAGE_SIDE};
+use super::{MAX_IMAGE_PIXELS, MAX_IMAGE_SIDE};
 use crate::store::artwork::Format;
+use trss_anilist::MAX_IMAGE_BYTES;
 
 /// Why bytes are not an image the app keeps. Each has a sentence for the user.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]

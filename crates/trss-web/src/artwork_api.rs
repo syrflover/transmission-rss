@@ -68,11 +68,9 @@ use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 
 use super::{ApiError, AppState};
+use trss_anilist::{title::Candidate, AnilistError, ImageFetchError, MAX_IMAGE_BYTES};
 use trss_legacy::{
-    artwork::{
-        title::Candidate, ActionError, AnilistError, Artwork, ImageFetchError, MAX_IMAGE_BYTES,
-        USER_MAX_WAIT,
-    },
+    artwork::{ActionError, Artwork, USER_MAX_WAIT},
     store::artwork::{ArtworkError, Selection, UserChange},
 };
 

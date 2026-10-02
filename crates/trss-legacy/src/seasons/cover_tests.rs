@@ -1,5 +1,5 @@
 //! A work's cover following its seasons' links (`docs/specs/library.md`, 시즌
-//! 정보; ticket 0027) against a fake AniList ([`crate::artwork::fake`]), a
+//! 정보; ticket 0027) against a fake AniList ([`trss_anilist::fake`]), a
 //! temporary app data folder and a clock the test moves.
 
 use std::{
@@ -13,13 +13,14 @@ use std::{
 
 use super::{queue::Ran, *};
 use crate::{
-    artwork::{fake::Fake, image::samples, queue::Ran as ArtRan, AppData, Artwork},
+    artwork::{image::samples, queue::Ran as ArtRan, AppData, Artwork},
     discovery::{Scan, ScannedWork, WorkRead},
     store::{
         artwork::{ArtworkError, JobKind, Mode, Note, Selection, Source, UserChange},
         library::LibraryStore,
     },
 };
+use trss_anilist::fake::Fake;
 
 const HOUR: i64 = 60 * 60 * 1000;
 

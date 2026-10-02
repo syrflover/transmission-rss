@@ -1,5 +1,5 @@
 //! The worker's automatic artwork work: one job at a time, in request order,
-//! each AniList request in its turn ([`super::anilist::REQUEST_SPACING`]).
+//! each AniList request in its turn ([`trss_anilist::REQUEST_SPACING`]).
 //!
 //! It runs beside the collection loop, not under the cycle lock (it touches
 //! neither the media nor Transmission), so a long queue (the first reading of
@@ -21,13 +21,12 @@ use tokio_util::sync::CancellationToken;
 
 use trss_core::CycleLock;
 
-use super::{
-    anilist::AnilistError,
-    files,
-    title::{decide, Decision},
-    ActionError, Artwork, ImageFetchError,
-};
+use super::{files, ActionError, Artwork};
 use crate::store::artwork::{ClaimedJob, JobKind, Note, Searched, Source};
+use trss_anilist::{
+    title::{decide, Decision},
+    AnilistError, ImageFetchError,
+};
 
 /// How often an idle queue looks for new jobs.
 pub const POLL: Duration = Duration::from_secs(5);
@@ -64,13 +63,22 @@ pub enum Ran {
 }
 
 impl Artwork {
-    async fn later(&self, job: &ClaimedJob, error: &AnilistError) -> Ran {
+    /// [`Artwork::later`] for what AniList answered.
+    async fn later_anilist(&self, job: &ClaimedJob, error: &AnilistError) -> Ran {
+        let busy = match error {
+            AnilistError::Busy { retry_after } => Some(*retry_after),
+            _ => None,
+        };
+        self.later(job, error.to_string(), busy).await
+    }
+
+    /// Puts `job` off after `error`: for `busy` when AniList asked to wait (not
+    /// a failure), else by the next of [`RETRY_DELAYS`] (a failure).
+    async fn later(&self, job: &ClaimedJob, error: String, busy: Option<Duration>) -> Ran {
         let now = self.now();
-        let (retry_at, failed) = match error {
-            AnilistError::Busy { retry_after } => {
-                (Some(now + retry_after.as_millis() as i64), false)
-            }
-            _ => match RETRY_DELAYS.get(job.attempts as usize) {
+        let (retry_at, failed) = match busy {
+            Some(retry_after) => (Some(now + retry_after.as_millis() as i64), false),
+            None => match RETRY_DELAYS.get(job.attempts as usize) {
                 Some(delay) => (Some(now + delay.as_millis() as i64), true),
                 None => (None, true),
             },
@@ -128,7 +136,7 @@ impl Artwork {
     async fn run_search(&self, job: &ClaimedJob) -> Ran {
         let search = match self.anilist.search_all(&job.dir_name).await {
             Ok(search) => search,
-            Err(e) => return self.later(job, &e).await,
+            Err(e) => return self.later_anilist(job, &e).await,
         };
         let outcome = match decide(&job.dir_name, &search.candidates, search.complete) {
             Decision::Select(candidate) => Searched::Selected {
@@ -154,7 +162,7 @@ impl Artwork {
             Ok(false) => Ran::Dropped,
             // The outcome could not be recorded: try the job again later, not
             // at once (each try asks AniList again).
-            Err(e) => self.later(job, &AnilistError::Store(e)).await,
+            Err(e) => self.later(job, e.to_string(), None).await,
         }
     }
 
@@ -167,7 +175,7 @@ impl Artwork {
                 None => Err(self.give_up(job, Note::NoImage).await),
             },
             Ok(None) => Err(self.give_up(job, Note::Gone).await),
-            Err(e) => Err(self.later(job, &e).await),
+            Err(e) => Err(self.later_anilist(job, &e).await),
         }
     }
 
@@ -178,7 +186,7 @@ impl Artwork {
                 self.give_up(job, Note::Rejected).await
             }
             e => {
-                self.later(job, &AnilistError::Unreachable(e.to_string()))
+                self.later_anilist(job, &AnilistError::Unreachable(e.to_string()))
                     .await
             }
         }
@@ -217,7 +225,7 @@ impl Artwork {
             Err(e) => {
                 eprintln!("Artwork image for work {}: {e}", job.work_id);
                 return self
-                    .later(job, &AnilistError::Unreachable(e.to_string()))
+                    .later_anilist(job, &AnilistError::Unreachable(e.to_string()))
                     .await;
             }
         };
@@ -235,7 +243,7 @@ impl Artwork {
                 Ran::Dropped
             }
             // The stored file is left to the recovery; the job waits.
-            Err(e) => self.later(job, &AnilistError::Store(e)).await,
+            Err(e) => self.later(job, e.to_string(), None).await,
         }
     }
 

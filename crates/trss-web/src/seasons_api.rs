@@ -66,10 +66,11 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use super::{ApiError, AppState};
+use trss_anilist::{title::Candidate, AnilistError, Entry, FuzzyDate, Sequel};
 use trss_legacy::{
-    artwork::{title::Candidate, AnilistError, USER_MAX_WAIT},
+    artwork::USER_MAX_WAIT,
     seasons::{combine, describe, ActionError},
-    store::seasons::{Entry, FuzzyDate, SeasonError, SeasonLink, Sequel},
+    store::seasons::{SeasonError, SeasonLink},
 };
 
 #[cfg(test)]

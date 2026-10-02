@@ -14,7 +14,6 @@ use serde_json::json;
 use tempfile::TempDir;
 
 use super::{
-    fake::Fake,
     files::{self, AppData, ARTWORK_DIR, STAGING_DIR, STALE_STAGING},
     image::samples,
     queue::Ran,
@@ -27,6 +26,7 @@ use crate::{
         library::{LibraryStore, ListQuery},
     },
 };
+use trss_anilist::fake::Fake;
 use trss_core::DbError;
 
 struct Env {
@@ -372,7 +372,7 @@ async fn a_search_counts_only_when_read_to_its_last_page() {
         );
         // B: one match on page 1, but more pages than the app reads.
         let mut pages = vec![vec![env.fake.entry(2, "B", &[])]];
-        for p in 0..anilist::MAX_SEARCH_PAGES as i64 {
+        for p in 0..trss_anilist::MAX_SEARCH_PAGES as i64 {
             pages.push(filler(200 + p * 10));
         }
         state.searches.insert("B".into(), pages);
@@ -433,22 +433,16 @@ async fn a_failure_waits_and_a_429_holds_every_request_without_counting() {
     assert_eq!(env.art.run_job(&claimed).await, Ran::Later);
     let job = env.selection("A").await.job.unwrap();
     assert_eq!(job.attempts, 1, "a 429 is not a failure");
-    let now = env.art.now();
     // Every request, the web's included, waits for the block.
-    let slot = env
+    let search = env
         .art
-        .store
-        .take_request_slot(now, 0, Some(1000))
-        .await
-        .unwrap();
-    assert!(matches!(slot, Err(wait) if wait > 25_000), "{slot:?}");
-    assert!(matches!(
-        env.art
-            .anilist
-            .search_page("A", 1, Some(Duration::from_secs(1)))
-            .await,
-        Err(AnilistError::Busy { .. })
-    ));
+        .anilist
+        .search_page("A", 1, Some(Duration::from_secs(1)))
+        .await;
+    assert!(
+        matches!(search, Err(AnilistError::Busy { retry_after }) if retry_after > Duration::from_secs(25)),
+        "{search:?}"
+    );
 
     // Three failures in all, then the job is given up and the user is told.
     env.sql(
@@ -535,7 +529,7 @@ async fn an_answer_larger_than_the_limit_is_refused_before_it_is_read_whole() {
     let env = Env::new(&["A"]).await;
     env.fake
         .add_search("A", vec![env.fake.entry(1, "A", &[])], &samples::jpeg());
-    let limit = super::anilist::MAX_ANSWER_BYTES;
+    let limit = trss_anilist::MAX_ANSWER_BYTES;
     for chunked in [false, true] {
         {
             let mut state = env.fake.state.lock().unwrap();
@@ -926,7 +920,7 @@ async fn an_image_that_ends_short_of_its_announced_length_is_not_taken() {
         image_origins: vec![origin.clone()],
         ..env.fake.config()
     };
-    let anilist = Anilist::new(config, env.art.store.clone(), system_clock());
+    let anilist = Anilist::new(config, env.db.clone(), system_clock());
     let fetched = anilist.fetch_image(&format!("{origin}/img/1.jpg")).await;
     assert!(
         matches!(fetched, Err(ImageFetchError::Unreachable(_))),

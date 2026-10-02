@@ -1,7 +1,8 @@
+use trss_anilist::AnilistConfig;
 use trss_anissia::{Anissia, AnissiaConfig};
 use trss_core::{commands::CommandStore, heartbeat::HeartbeatStore, settings::SettingsStore, Db};
 use trss_legacy::{
-    artwork::{AnilistConfig, Artwork},
+    artwork::Artwork,
     past_search::service::PastSearch,
     seasons::Seasons,
     store::{

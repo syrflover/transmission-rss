@@ -1,5 +1,7 @@
 use std::collections::BTreeSet;
 
+use trss_anilist::{Airing, FuzzyDate, Sequel};
+
 use super::*;
 use crate::{
     discovery::{Scan, ScannedWork, WorkRead},

@@ -561,25 +561,6 @@ impl ArtworkStore {
         let r = relative_path.to_owned();
         self.db.run(move |c| Ok(repo::abandon_file(c, &r)?)).await
     }
-
-    /// Takes the next slot for an AniList request at or after `now`, keeping
-    /// `spacing_ms` between requests of both processes. `Err(wait)` without
-    /// taking one when the slot is more than `max_wait_ms` away.
-    pub async fn take_request_slot(
-        &self,
-        now: Millis,
-        spacing_ms: i64,
-        max_wait_ms: Option<i64>,
-    ) -> Result<Result<Millis, i64>, ArtworkError> {
-        self.db
-            .run(move |c| Ok(repo::take_slot(c, now, spacing_ms, max_wait_ms)?))
-            .await
-    }
-
-    /// AniList asked for no request before `until`.
-    pub async fn block_requests(&self, until: Millis) -> Result<(), ArtworkError> {
-        self.db.run(move |c| Ok(repo::block(c, until)?)).await
-    }
 }
 
 pub(crate) use repo::{delete_file_row, files_of_state, merge_selection, new_id, referenced_paths};

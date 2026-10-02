@@ -20,13 +20,14 @@ use axum::http::StatusCode;
 use common::*;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
+use trss_anilist::{Entry, FuzzyDate};
 use trss_core::settings::SettingsStore;
 use trss_legacy::{
     discovery,
     store::{
         channels::{ChannelInput, ChannelWithRules, RuleInput},
         library::{LibraryStore, WatchFolder, WorkRecord},
-        seasons::{Entry, FuzzyDate, SeasonStore},
+        seasons::SeasonStore,
     },
     worker::MovePolicy,
 };

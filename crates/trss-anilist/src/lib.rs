@@ -3,14 +3,14 @@
 //! point to (`docs/adr/0007-anilist-work-artwork.md`).
 //!
 //! - **Pace.** Every API request takes a slot from the database
-//!   ([`ArtworkStore::take_request_slot`]), so the web and the worker together
+//!   ([`RequestPace::take_request_slot`]), so the web and the worker together
 //!   send at most one request every [`REQUEST_SPACING`] (30 a minute, AniList's
 //!   lowest published limit). A `429` answer blocks every request until its
 //!   `Retry-After` has passed.
 //! - **Images only from allowed origins.** An image is fetched only from a URL
 //!   an AniList answer gave whose origin is one of
 //!   [`AnilistConfig::image_origins`], without following redirects, within
-//!   [`super::MAX_IMAGE_BYTES`] and [`super::FETCH_TIMEOUT`]. No URL a user
+//!   [`MAX_IMAGE_BYTES`] and [`FETCH_TIMEOUT`]. No URL a user
 //!   typed is ever fetched.
 //! - **Bounded answers.** An API answer is read up to [`MAX_ANSWER_BYTES`];
 //!   a longer one is refused before it is parsed.
@@ -24,10 +24,25 @@ use serde::Deserialize;
 use serde_json::json;
 use url::Url;
 
-use trss_core::Clock;
+use trss_core::{Clock, Db, DbError};
 
-use super::{title::Candidate, FETCH_TIMEOUT, MAX_IMAGE_BYTES};
-use crate::store::artwork::{ArtworkError, ArtworkStore};
+use pace::RequestPace;
+use title::Candidate;
+
+mod entry;
+mod pace;
+pub mod season;
+pub mod title;
+
+#[cfg(any(test, feature = "test-support"))]
+pub mod fake;
+
+pub use entry::{Airing, Entry, FuzzyDate, Sequel};
+
+/// The largest image file accepted, uploaded or fetched: 10 MiB.
+pub const MAX_IMAGE_BYTES: usize = 10 * 1024 * 1024;
+/// How long fetching one image may take in total.
+pub const FETCH_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// AniList's GraphQL endpoint.
 pub const DEFAULT_API_URL: &str = "https://graphql.anilist.co";
@@ -127,7 +142,7 @@ pub enum AnilistError {
     #[error("AniList's answer is not usable: {0}")]
     Invalid(String),
     #[error(transparent)]
-    Store(#[from] ArtworkError),
+    Store(#[from] DbError),
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -238,13 +253,13 @@ pub struct Anilist {
     config: std::sync::Arc<AnilistConfig>,
     http: reqwest::Client,
     images: reqwest::Client,
-    store: ArtworkStore,
+    pace: RequestPace,
     clock: Clock,
     spacing: Duration,
 }
 
 impl Anilist {
-    pub fn new(config: AnilistConfig, store: ArtworkStore, clock: Clock) -> Self {
+    pub fn new(config: AnilistConfig, db: Db, clock: Clock) -> Self {
         let http = reqwest::Client::builder()
             .user_agent(trss_core::USER_AGENT)
             .timeout(API_TIMEOUT)
@@ -261,7 +276,7 @@ impl Anilist {
             config: std::sync::Arc::new(config),
             http,
             images,
-            store,
+            pace: RequestPace::new(db),
             clock,
             spacing: REQUEST_SPACING,
         }
@@ -282,7 +297,7 @@ impl Anilist {
     async fn turn(&self, max_wait: Option<Duration>) -> Result<(), AnilistError> {
         let now = (self.clock)();
         let slot = self
-            .store
+            .pace
             .take_request_slot(
                 now,
                 self.spacing.as_millis() as i64,
@@ -332,7 +347,7 @@ impl Anilist {
                 .unwrap_or(DEFAULT_RETRY_AFTER)
                 .min(MAX_RETRY_AFTER);
             let until = (self.clock)() + retry_after.as_millis() as i64;
-            self.store.block_requests(until).await?;
+            self.pace.block_requests(until).await?;
             return Err(AnilistError::Busy { retry_after });
         }
         if status == StatusCode::NOT_FOUND {

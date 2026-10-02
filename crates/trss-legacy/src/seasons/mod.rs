@@ -2,7 +2,7 @@
 //! linked to one or more AniList entries, and the season's airing, amount,
 //! studios, genres, original title and synopsis are those entries'.
 //!
-//! - [`anilist`]: asking AniList for an entry (through the artwork client, so
+//! - `trss_anilist::season`: asking AniList for an entry (through the artwork client, so
 //!   with its request pace and `429` wait).
 //! - [`combine`]: several entries as one season, the air dates of episodes and
 //!   the sequels offered for a season.
@@ -23,7 +23,6 @@
 //! link's version in its transaction, so a search that finishes late never
 //! undoes a user's choice.
 
-pub mod anilist;
 pub mod combine;
 pub mod describe;
 pub mod queue;
@@ -38,12 +37,13 @@ use std::{sync::Arc, time::Duration};
 use trss_core::{Clock, Db, Millis};
 
 use crate::{
-    artwork::{Anilist, AnilistError, Artwork, USER_MAX_WAIT},
+    artwork::{Artwork, USER_MAX_WAIT},
     store::{
         artwork::{ArtworkError, ArtworkStore},
-        seasons::{Entry, SeasonError, SeasonLink, SeasonStore},
+        seasons::{SeasonError, SeasonLink, SeasonStore},
     },
 };
+use trss_anilist::{Anilist, AnilistError, Entry};
 
 /// The most entries one season links.
 pub const MAX_ENTRIES: usize = 8;
@@ -118,7 +118,7 @@ impl Seasons {
 
     /// Asks AniList for entry `id` and stores the answer.
     async fn receive(&self, id: i64, max_wait: Option<Duration>) -> Result<Entry, ActionError> {
-        let entry = anilist::fetch_entry(&self.anilist, id, max_wait, self.now())
+        let entry = trss_anilist::season::fetch_entry(&self.anilist, id, max_wait, self.now())
             .await?
             .ok_or(ActionError::NoEntry(id))?;
         self.store.put_entry(entry.clone()).await?;

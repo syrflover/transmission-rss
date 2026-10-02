@@ -63,11 +63,12 @@ use bytes::Bytes;
 use rusqlite::TransactionBehavior;
 use sha2::{Digest, Sha256};
 
-use super::{image::sniff, MAX_IMAGE_BYTES};
+use super::image::sniff;
 use crate::store::{
     artwork as store,
     artwork::{ArtworkError, ArtworkStore, Format, ImageRef, Source},
 };
+use trss_anilist::MAX_IMAGE_BYTES;
 use trss_core::{files::rename_noreplace, Millis};
 
 /// The folder of the images, relative to the app data folder.

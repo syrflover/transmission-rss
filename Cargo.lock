@@ -2479,6 +2479,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "trss-anilist"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "caseless",
+ "futures",
+ "reqwest 0.13.5",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "trss-core",
+ "unicode-normalization",
+ "url",
+]
+
+[[package]]
 name = "trss-anissia"
 version = "0.1.0"
 dependencies = [
@@ -2534,6 +2552,7 @@ dependencies = [
  "tokio-util",
  "transmission-rpc",
  "trname",
+ "trss-anilist",
  "trss-anissia",
  "trss-core",
  "trss-transmission",
@@ -2575,6 +2594,7 @@ dependencies = [
  "tokio",
  "tower",
  "tower-http 0.7.1",
+ "trss-anilist",
  "trss-anissia",
  "trss-core",
  "trss-legacy",
@@ -2603,6 +2623,7 @@ dependencies = [
  "tokio-util",
  "tower",
  "transmission-rpc",
+ "trss-anilist",
  "trss-anissia",
  "trss-core",
  "trss-legacy",

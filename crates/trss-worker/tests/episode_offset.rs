@@ -14,11 +14,12 @@ use axum::http::StatusCode;
 use common::*;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
+use trss_anilist::{Entry, FuzzyDate};
 use trss_anissia::Anime;
 use trss_legacy::store::{
     channels::{ChannelInput, NewSubscription, Rule, RuleInput, SubtitleMode},
     library::LibraryStore,
-    seasons::{Entry, FuzzyDate, SeasonStore},
+    seasons::SeasonStore,
 };
 use trss_worker::{CommandsOutcome, TickOutcome};
 

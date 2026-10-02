@@ -5,9 +5,8 @@ use std::collections::{BTreeMap, HashMap};
 
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 
-use super::{
-    Airing, ClaimedSearch, Entry, FuzzyDate, Job, Note, Origin, SeasonError, SeasonLink, Sequel,
-};
+use super::{ClaimedSearch, Job, Note, Origin, SeasonError, SeasonLink};
+use trss_anilist::{Airing, Entry, FuzzyDate, Sequel};
 use trss_core::Millis;
 
 /// A day, the time between two refreshes of an entry that is not finished.

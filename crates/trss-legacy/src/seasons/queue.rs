@@ -1,9 +1,9 @@
 //! The worker's automatic season work, one job at a time and each AniList
-//! request in its turn ([`crate::artwork::anilist::REQUEST_SPACING`], shared
+//! request in its turn ([`trss_anilist::REQUEST_SPACING`], shared
 //! with the cover queue through the database).
 //!
 //! - **Linking a first season.** A search job looks the work's folder name up
-//!   and links the entry it names exactly ([`crate::artwork::title::decide`],
+//!   and links the entry it names exactly ([`trss_anilist::title::decide`],
 //!   the rule the cover uses: the search read to its last page, one candidate
 //!   whose title equals the name after NFC, case folding and space folding).
 //!   A linked entry is what an `auto` cover follows ([`Seasons::follow_cover`]).
@@ -24,14 +24,15 @@ use tokio_util::sync::CancellationToken;
 
 use trss_core::CycleLock;
 
-use super::{anilist::fetch_entry, Seasons};
+use super::Seasons;
 use crate::{
-    artwork::{
-        anilist::AnilistError,
-        queue::{LOCK_RETRY, POLL, RETRY_DELAYS},
-        title::{decide, Decision},
-    },
+    artwork::queue::{LOCK_RETRY, POLL, RETRY_DELAYS},
     store::seasons::{ClaimedSearch, Note, SeasonError},
+};
+use trss_anilist::{
+    season::fetch_entry,
+    title::{decide, Decision},
+    AnilistError,
 };
 
 /// How long a refresh that failed waits before the entry is tried again.

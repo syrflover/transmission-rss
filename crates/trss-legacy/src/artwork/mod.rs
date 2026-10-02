@@ -3,8 +3,8 @@
 //! exactly one AniList entry, or chosen by the user from AniList's results or
 //! as an uploaded file.
 //!
-//! - [`title`]: the automatic decision.
-//! - [`anilist`]: the AniList client and its pace.
+//! - `trss_anilist::title`: the automatic decision.
+//! - `trss_anilist`: the AniList client and its pace.
 //! - [`image`]: judging image bytes.
 //! - [`files`]: the image files in the app data folder.
 //! - [`queue`]: the worker's automatic searches and fetches.
@@ -74,34 +74,30 @@
 //! folders measured 29 MB resident with its watches (ticket 0016), so about
 //! 40 MiB with a cover, far from 128 MiB.
 
-pub mod anilist;
 pub mod files;
 pub mod image;
 pub mod queue;
-pub mod title;
 
 use std::{sync::Arc, time::Duration};
 
 use bytes::Bytes;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
-pub use anilist::{Anilist, AnilistConfig, AnilistError, ImageFetchError};
 pub use files::{AppData, Unavailable};
 pub use image::Rejected;
+pub use trss_anilist::{
+    Anilist, AnilistConfig, AnilistError, ImageFetchError, FETCH_TIMEOUT, MAX_IMAGE_BYTES,
+};
 
 use trss_core::{system_clock, Clock, Db};
 
 use crate::store::artwork::{ArtworkError, ArtworkStore, ImageRef, Selection, Source, UserChange};
 
-/// The largest image file accepted, uploaded or fetched: 10 MiB.
-pub const MAX_IMAGE_BYTES: usize = 10 * 1024 * 1024;
 /// The longest side of an accepted image, in pixels.
 pub const MAX_IMAGE_SIDE: u32 = 8192;
 /// The most pixels an accepted image may have: 12 million (a 4000 × 3000
 /// photo), as its header states.
 pub const MAX_IMAGE_PIXELS: u64 = 12_000_000;
-/// How long fetching one image may take in total.
-pub const FETCH_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long a user's AniList request may wait for its turn before the web
 /// answers that AniList is busy.
 pub const USER_MAX_WAIT: Duration = Duration::from_secs(10);
@@ -190,9 +186,10 @@ impl Artwork {
         config: AnilistConfig,
         clock: Clock,
     ) -> Self {
+        let anilist = Anilist::new(config, db.clone(), clock.clone());
         let store = ArtworkStore::new(db);
         Artwork {
-            anilist: Anilist::new(config, store.clone(), clock.clone()),
+            anilist,
             store,
             app_data,
             clock,
@@ -432,7 +429,5 @@ impl Artwork {
     }
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub mod fake;
 #[cfg(test)]
 mod tests;

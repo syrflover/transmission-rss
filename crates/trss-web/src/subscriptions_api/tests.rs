@@ -692,12 +692,10 @@ mod rule_detail {
     use std::collections::BTreeSet;
 
     use super::*;
+    use trss_anilist::{Entry, FuzzyDate};
     use trss_legacy::{
         discovery::{EpisodeFile, FileKind, Scan, ScannedWork, WorkRead},
-        store::{
-            channels::Rule,
-            seasons::{Entry, FuzzyDate},
-        },
+        store::channels::Rule,
     };
 
     impl App {

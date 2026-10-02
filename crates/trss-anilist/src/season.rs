@@ -9,11 +9,9 @@ use std::time::Duration;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::{
-    artwork::{Anilist, AnilistError},
-    store::seasons::{Airing, Entry, FuzzyDate, Sequel},
-};
 use trss_core::Millis;
+
+use crate::{Airing, Anilist, AnilistError, Entry, FuzzyDate, Sequel};
 
 /// The most airing schedule entries asked for (AniList's page size caps it).
 const SCHEDULE_PAGE: u32 = 50;

@@ -17,11 +17,12 @@ use axum::{
 };
 use futures::StreamExt;
 use tower::ServiceExt;
+use trss_anilist::{AnilistConfig, MAX_IMAGE_BYTES};
 use trss_core::Db;
 use trss_legacy::{
     artwork::{
         files::{image_ref, ARTWORK_DIR},
-        AnilistConfig, AppData, Artwork, MAX_IMAGE_BYTES, SERVING_BUDGET,
+        AppData, Artwork, SERVING_BUDGET,
     },
     discovery::{Scan, ScannedWork, WorkRead},
     store::{
