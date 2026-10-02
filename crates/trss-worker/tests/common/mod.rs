@@ -47,6 +47,7 @@ use serde_json::{json, Value};
 use tokio::{net::TcpListener, sync::Semaphore, task::JoinHandle};
 use tower::ServiceExt;
 use trss_core::lock_path_for;
+use trss_web::AppState;
 use trss_legacy::{
     store::{
         channels::{ChannelInput, ChannelStore, ChannelWithRules, RuleInput},
@@ -55,7 +56,6 @@ use trss_legacy::{
         Db,
     },
     transmission::RenamePolicy,
-    web::AppState,
 };
 use trss_worker::{Worker, WorkerEnv};
 
@@ -1407,7 +1407,7 @@ impl WebApi {
         WebApi {
             router: Router::new().nest(
                 "/api",
-                trss_legacy::web::api::router().with_state(AppState::new(db)),
+                trss_web::api::router().with_state(AppState::new(db)),
             ),
         }
     }
@@ -1677,7 +1677,7 @@ impl WebApi {
         WebApi {
             router: Router::new().nest(
                 "/api",
-                trss_legacy::web::api::router().with_state(state),
+                trss_web::api::router().with_state(state),
             ),
         }
     }

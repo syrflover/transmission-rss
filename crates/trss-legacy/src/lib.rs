@@ -15,7 +15,6 @@ pub mod seasons;
 pub mod store;
 pub mod subscriptions;
 pub mod transmission;
-pub mod web;
 pub mod worker;
 
 pub use trss_core::folders;

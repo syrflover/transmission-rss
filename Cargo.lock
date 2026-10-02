@@ -2496,9 +2496,7 @@ dependencies = [
  "bytes",
  "caseless",
  "crc32fast",
- "dotenv",
  "futures",
- "http-body-util",
  "image",
  "regex",
  "reqwest 0.12.28",
@@ -2514,8 +2512,6 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-util",
- "tower",
- "tower-http 0.7.1",
  "transmission-rpc",
  "trname",
  "trss-core",
@@ -2523,6 +2519,30 @@ dependencies = [
  "url",
  "uuid",
  "yaml_serde",
+]
+
+[[package]]
+name = "trss-web"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "bytes",
+ "dotenv",
+ "futures",
+ "http-body-util",
+ "image",
+ "regex",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tower",
+ "tower-http 0.7.1",
+ "trss-core",
+ "trss-legacy",
+ "url",
 ]
 
 [[package]]
@@ -2549,6 +2569,7 @@ dependencies = [
  "transmission-rpc",
  "trss-core",
  "trss-legacy",
+ "trss-web",
  "url",
 ]
 

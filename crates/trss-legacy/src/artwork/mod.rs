@@ -382,8 +382,8 @@ impl Artwork {
     }
 
     /// The part of the [`SERVING_BUDGET`] not taken now (tests).
-    #[cfg(test)]
-    pub(crate) fn serving_free(&self) -> usize {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn serving_free(&self) -> usize {
         self.serving.available_permits()
     }
 
@@ -437,7 +437,7 @@ impl Artwork {
     }
 }
 
-#[cfg(test)]
-pub(crate) mod fake;
+#[cfg(any(test, feature = "test-support"))]
+pub mod fake;
 #[cfg(test)]
 mod tests;

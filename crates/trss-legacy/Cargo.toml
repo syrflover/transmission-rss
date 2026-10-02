@@ -3,6 +3,11 @@ name = "trss-legacy"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+# What the tests of the crates above need from this one: the fake AniList and
+# Anissia servers, the sample images and the older schemas.
+test-support = ["trss-core/test-support", "dep:image"]
+
 [dependencies]
 trss-core = { path = "../trss-core" }
 
@@ -12,7 +17,6 @@ trname = { git = "https://github.com/syrflover/trname", rev = "6169808" }
 # Image bytes shared between the web, the decode and the file writer without copies.
 bytes = "1"
 
-dotenv = "0.15"
 futures = "0.3"
 regex = "1"
 reqwest = "0.13"
@@ -36,14 +40,13 @@ tap = "1"
 url = "2"
 uuid = { version = "1", features = ["v4"] }
 axum = "0.8.9"
-tower-http = { version = "0.7.1", features = ["fs", "set-header"] }
 unicode-normalization = "0.1.25"
+# Makes the sample images of the tests (`artwork::image::samples`); the app reads only headers.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"], optional = true }
 caseless = "0.2"
 
 [dev-dependencies]
 trss-core = { path = "../trss-core", features = ["test-support"] }
 # Makes the sample images of the tests; the app reads only headers.
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
-http-body-util = "0.1.5"
 tempfile = "3.27.0"
-tower = { version = "0.5.3", features = ["util"] }

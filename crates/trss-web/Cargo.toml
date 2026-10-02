@@ -1,5 +1,5 @@
 [package]
-name = "trss-worker"
+name = "trss-web"
 version = "0.1.0"
 edition = "2021"
 
@@ -7,27 +7,23 @@ edition = "2021"
 trss-core = { path = "../trss-core" }
 trss-legacy = { path = "../trss-legacy" }
 
+axum = "0.8.9"
+bytes = "1"
 dotenv = "0.15"
 futures = "0.3"
-reqwest = "0.13"
-# The version transmission-rpc uses, for the timed client handed to it.
-reqwest012 = { package = "reqwest", version = "0.12", default-features = false }
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync"] }
-tokio-util = "0.7"
-transmission-rpc = "0.5"
+tower-http = { version = "0.7.1", features = ["fs", "set-header"] }
 url = "2"
 
 [dev-dependencies]
 trss-core = { path = "../trss-core", features = ["test-support"] }
-trss-web = { path = "../trss-web" }
-axum = "0.8.9"
-bytes = "1"
-crc32fast = "1"
+trss-legacy = { path = "../trss-legacy", features = ["test-support"] }
 http-body-util = "0.1.5"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 rusqlite = { version = "0.40", features = ["bundled"] }
-rustix = { version = "1", features = ["fs"] }
-serde_json = "1"
 tempfile = "3.27.0"
 tower = { version = "0.5.3", features = ["util"] }

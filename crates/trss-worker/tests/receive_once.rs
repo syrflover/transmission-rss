@@ -2731,9 +2731,9 @@ async fn an_item_first_seen_while_a_rule_was_archived_is_left_to_the_user_after_
 
 #[tokio::test]
 async fn a_long_command_beats_and_the_board_shows_no_stall_meanwhile() {
+    use trss_web::{status_api::board, AppState};
     use trss_legacy::{
         store::status::StatusStore,
-        web::{status_api::board, AppState},
     };
 
     let odd = release("guid-odd", 9, "Some Special Collection.mkv", "");

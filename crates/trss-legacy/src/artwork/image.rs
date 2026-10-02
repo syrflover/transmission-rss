@@ -215,8 +215,8 @@ fn webp_size(bytes: &[u8]) -> Option<(u32, u32)> {
     }
 }
 
-#[cfg(test)]
-pub(crate) mod samples {
+#[cfg(any(test, feature = "test-support"))]
+pub mod samples {
     //! Images made on the spot for the tests.
 
     use std::io::Cursor;
