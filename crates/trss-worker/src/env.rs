@@ -18,6 +18,9 @@ pub const DOWNLOAD_QUEUE_SIZE_VAR: &str = "DOWNLOAD_QUEUE_SIZE";
 pub const SEED_QUEUE_SIZE_VAR: &str = "SEED_QUEUE_SIZE";
 /// Seconds between collection cycles.
 pub const INTERVAL_VAR: &str = "TRSS_WORKER_INTERVAL_SECS";
+/// `1` turns on the fake subtitle source ([`trss_subtitles::fake`]) for the
+/// development environment and the tests. Never set in production.
+pub const FAKE_SUBTITLE_SOURCE_VAR: &str = "TRSS_FAKE_SUBTITLE_SOURCE";
 
 /// Five minutes, the period cron ran the former binary at.
 pub const DEFAULT_INTERVAL: Duration = Duration::from_secs(300);

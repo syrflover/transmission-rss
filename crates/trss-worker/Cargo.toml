@@ -10,6 +10,8 @@ trss-anilist.workspace = true
 trss-library.workspace = true
 trss-collect.workspace = true
 trss-transmission.workspace = true
+trss-subtitles.workspace = true
+trss-jobs.workspace = true
 
 dotenv.workspace = true
 futures.workspace = true

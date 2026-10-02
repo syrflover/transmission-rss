@@ -8,11 +8,13 @@ use trss_collect::{
     store::anissia::AnissiaStore,
 };
 use trss_core::{db::DB_PATH_ENV, lock_path_for, wake::wake_path_for, Db};
+use trss_jobs::{JobStore, ReceiveArea, Runner};
 use trss_library::{
     artwork::{self, AppData, Artwork},
     seasons::{self, Seasons},
 };
-use trss_worker::{Worker, WorkerEnv};
+use trss_subtitles::{fake::FakeSource, Sources};
+use trss_worker::{env::FAKE_SUBTITLE_SOURCE_VAR, Worker, WorkerEnv};
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -39,7 +41,19 @@ async fn run() -> Result<(), String> {
         format!("cannot open the app database (set {DB_PATH_ENV} to a file on a local volume): {e}")
     })?;
 
-    let artwork = Artwork::new(db.clone(), Some(AppData::for_database(&db_path)), anilist);
+    let app_data = AppData::for_database(&db_path);
+    let mut sources = Sources::none();
+    if std::env::var(FAKE_SUBTITLE_SOURCE_VAR).as_deref() == Ok("1") {
+        println!("The fake subtitle source is on ({FAKE_SUBTITLE_SOURCE_VAR})");
+        sources = sources.with_fake(FakeSource);
+    }
+    let jobs = Runner::new(
+        JobStore::new(db.clone()),
+        sources,
+        ReceiveArea::in_app_data(app_data.root()),
+        trss_core::system_clock(),
+    );
+    let artwork = Artwork::new(db.clone(), Some(app_data), anilist);
     let season_info = Seasons::over(db.clone(), &artwork);
     let anissia_client = Anissia::with_defaults(db.clone(), anissia_config);
     let anissia = AnissiaQueue::new(anissia_client.clone(), AnissiaStore::new(db.clone()));
@@ -47,6 +61,7 @@ async fn run() -> Result<(), String> {
     let worker = Worker::new(db, &env, lock_path_for(&db_path))
         .map_err(|e| e.to_string())?
         .with_captions(captions.clone())
+        .with_jobs(jobs)
         .with_wake_socket(wake_path_for(&db_path));
 
     let cancel = CancellationToken::new();

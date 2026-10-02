@@ -9,6 +9,9 @@
 #   dev/compose.sh logs [service]   follow the logs (default: trss-worker)
 #   dev/compose.sh status           show the containers
 #
+# The worker also reads dev/trss.dev.yml, which turns on the fake subtitle
+# source (posts on fake.trss.invalid) for subtitle jobs.
+#
 # `pull` reaches the server over ssh: TRSS_DEV_SERVER (default j4105) and
 # TRSS_DEV_SERVER_DIR, the folder of its compose files relative to the remote
 # home (default trss).
@@ -23,6 +26,11 @@ SERVER_DIR="${TRSS_DEV_SERVER_DIR:-trss}"
 
 compose() {
   docker compose --project-directory "$REPO" --env-file "$DEV/dev.env" "$@"
+}
+
+# docker-compose.trss.yml with the development additions.
+trss() {
+  compose -f docker-compose.trss.yml -f dev/trss.dev.yml "$@"
 }
 
 prepare() {
@@ -63,7 +71,7 @@ pull() {
     echo "dev/local already holds a database; pass --force to replace it and the media replica" >&2
     exit 1
   fi
-  compose -f docker-compose.trss.yml down 2>/dev/null || true
+  trss down 2>/dev/null || true
 
   mkdir -p "$LOCAL"
   staging="$(mktemp -d "$LOCAL/.pull.XXXXXX")"
@@ -91,12 +99,12 @@ up() {
   [[ -f "$LOCAL/data/trss.db" ]] || echo "No database in dev/local/data: trss starts empty (dev/compose.sh pull copies the server's)" >&2
   [[ "${1:-}" == "--no-build" ]] || docker build -t "$IMAGE" "$REPO"
   compose -f docker-compose.yml up -d
-  compose -f docker-compose.trss.yml up -d
+  trss up -d
   echo "Web: http://localhost:8080  Transmission: http://localhost:9091" >&2
 }
 
 down() {
-  compose -f docker-compose.trss.yml down
+  trss down
   compose -f docker-compose.yml down
 }
 
@@ -105,6 +113,6 @@ case "${1:-}" in
   up) shift; up "$@" ;;
   down) down ;;
   logs) docker logs -f "${2:-trss-worker}" ;;
-  status) compose -f docker-compose.yml ps; compose -f docker-compose.trss.yml ps ;;
+  status) compose -f docker-compose.yml ps; trss ps ;;
   *) sed -n '6,10p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

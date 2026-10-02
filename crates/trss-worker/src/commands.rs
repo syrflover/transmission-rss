@@ -363,6 +363,8 @@ impl Worker {
                 received = async { wake.as_ref().expect("guarded").recv(&mut buf).await },
                     if wake.is_some() =>
                 {
+                    // A wake may be for a subtitle job as well.
+                    self.job_wake.notify_one();
                     if let Err(err) = received {
                         eprintln!(
                             "Cannot hear the web's wake-ups: {err}; looking for commands every {}s",

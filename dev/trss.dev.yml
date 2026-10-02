@@ -1,0 +1,11 @@
+# The development environment's additions to docker-compose.trss.yml
+# (dev/compose.sh passes this file after it). The production compose files
+# stay as they are.
+#
+# The worker reads the fake subtitle source (posts on fake.trss.invalid,
+# trss_subtitles::fake), so a subtitle job can run from start to end with no
+# real site.
+services:
+  trss-worker:
+    environment:
+      TRSS_FAKE_SUBTITLE_SOURCE: "1"

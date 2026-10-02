@@ -86,6 +86,14 @@
 //! soon as the web wakes it ([`trss_core::wake`]), or at its own look every
 //! few seconds, several at a time ([`commands`]).
 //!
+//! # Subtitle jobs
+//!
+//! Beside the commands, the worker carries out the subtitle jobs the web made
+//! ([`trss_jobs`]), one at a time, holding the lock like a command: at its
+//! start (after putting the jobs that wait for a source back in line), when
+//! the web wakes it, and every few seconds. A job cut short by a shutdown or a
+//! kill stays `running` and goes on at the next start from its records.
+//!
 //! # Shutdown
 //!
 //! Cancelling the token ([`Worker::run`]) stops the loop between cycles and
@@ -112,6 +120,7 @@
 pub mod commands;
 pub mod cycle;
 pub mod env;
+mod jobs;
 pub mod removal;
 
 use std::{path::PathBuf, sync::Arc, time::Duration};
@@ -214,6 +223,13 @@ pub struct Worker {
     /// Reads one anime's subtitle lines for `anissia_captions` commands; `None`
     /// fails them.
     captions: Option<CaptionObserver>,
+    /// Carries out the subtitle jobs; `None`: the worker leaves them alone.
+    jobs: Option<trss_jobs::Runner>,
+    /// Rung when the web wakes the worker, so the jobs are looked at too.
+    job_wake: Arc<tokio::sync::Notify>,
+    /// Held while subtitle jobs run: one run at a time, since the worker
+    /// lock does not keep two runs of one worker apart.
+    jobs_running: Arc<tokio::sync::Mutex<()>>,
     clock: Clock,
 }
 
@@ -290,6 +306,9 @@ impl Worker {
             cycling: Arc::default(),
             wake_path: None,
             captions: None,
+            jobs: None,
+            job_wake: Arc::default(),
+            jobs_running: Arc::default(),
             clock,
         })
     }
@@ -507,6 +526,10 @@ impl Worker {
             eprintln!("Cannot record the cycle interval: {err}");
         }
         self.start_watching().await;
+        let jobs = tokio::spawn({
+            let (worker, cancel) = (self.clone(), cancel.clone());
+            async move { worker.run_jobs(cancel).await }
+        });
         let commands = tokio::spawn({
             let (worker, cancel, wake) = (self.clone(), cancel.clone(), self.listen_for_wakes());
             async move { worker.dispatch(cancel, wake).await }
@@ -514,6 +537,9 @@ impl Worker {
         self.run_loop(cancel).await;
         if let Err(err) = commands.await {
             eprintln!("Commands stopped: {err}");
+        }
+        if let Err(err) = jobs.await {
+            eprintln!("Subtitle jobs stopped: {err}");
         }
         self.stop_watching();
     }
