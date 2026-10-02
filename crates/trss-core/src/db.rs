@@ -110,6 +110,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("../migrations/commands/original_name.sql")),
     // 31: the Anissia anime each season is linked to; seasons with a subscription get its anime
     Migration::Sql(include_str!("../migrations/seasons/anissia_link.sql")),
+    // 32: the Korean titles of an AniList entry
+    Migration::Sql(include_str!("../migrations/seasons/korean_titles.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -524,6 +526,60 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(left, 0);
+    }
+
+    #[tokio::test]
+    async fn a_database_from_before_korean_titles_keeps_its_entries_with_an_empty_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        {
+            // A database as the build with 31 migrations left it: an AniList entry
+            // linked to a season.
+            let conn = database_at(&path, 31);
+            conn.execute_batch(
+                "INSERT INTO watch_folders (id, path, created_at) VALUES ('f1', '/media', 1);
+                 INSERT INTO works (id, watch_folder_id, dir_name) VALUES ('w1', 'f1', 'Show');
+                 INSERT INTO seasons (work_id, number) VALUES ('w1', 1);
+                 INSERT INTO anilist_entries (id, romaji, native, genres, fetched_at)
+                     VALUES (5, 'Show', 'ショー', '[\"Action\"]', 77);
+                 INSERT INTO season_entries (work_id, season, position, anilist_id)
+                     VALUES ('w1', 1, 0, 5);",
+            )
+            .unwrap();
+        }
+
+        let db = Db::open(&path).await.unwrap();
+
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+        let (row, linked, bad): (String, i64, bool) = db
+            .run::<_, DbError, _>(|c| {
+                let row = c.query_row(
+                    "SELECT romaji || '|' || native || '|' || genres || '|' || fetched_at
+                            || '|' || korean_titles FROM anilist_entries WHERE id = 5",
+                    [],
+                    |r| r.get(0),
+                )?;
+                let linked =
+                    c.query_row("SELECT count(*) FROM season_entries", [], |r| r.get(0))?;
+                // The column holds JSON: a stored list reads back, text that is not JSON is refused.
+                c.execute(
+                    "UPDATE anilist_entries SET korean_titles = '[\"봇치\"]' WHERE id = 5",
+                    [],
+                )?;
+                let bad = c
+                    .execute(
+                        "UPDATE anilist_entries SET korean_titles = 'not json' WHERE id = 5",
+                        [],
+                    )
+                    .is_err();
+                Ok((row, linked, bad))
+            })
+            .await
+            .unwrap();
+        // The entry is as it was, with no Korean titles until it is received again.
+        assert_eq!(row, "Show|ショー|[\"Action\"]|77|[]");
+        assert_eq!(linked, 1);
+        assert!(bad);
     }
 
     #[tokio::test]

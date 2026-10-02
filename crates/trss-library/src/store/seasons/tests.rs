@@ -112,6 +112,7 @@ fn entry(id: i64, status: &str, fetched_at: i64) -> Entry {
             episode: 1,
             at: 100,
         }],
+        korean_titles: Vec::new(),
         sequels: vec![Sequel {
             id: id + 100,
             romaji: Some("Next".into()),
@@ -521,4 +522,29 @@ async fn an_entry_round_trips_and_an_unregistered_work_keeps_its_links() {
     ));
     assert_eq!(env.store.next_refresh(i64::MAX / 2).await.unwrap(), None);
     assert!(env.store.entry(7).await.unwrap().is_some());
+}
+
+#[tokio::test]
+async fn an_entrys_korean_titles_are_stored_and_replaced_when_it_is_received_again() {
+    let env = Env::new(&[("Show", &[1])]).await;
+    let id = env.id("Show").await;
+    // An entry stored without them (as before they were kept) has none.
+    env.store.put_entry(entry(5, "RELEASING", 1)).await.unwrap();
+    env.store.set_links(&id, 1, 1, vec![5]).await.unwrap();
+    assert!(env.store.link(&id, 1).await.unwrap().entries[0]
+        .korean_titles
+        .is_empty());
+
+    // Received again, it carries them, in order.
+    let mut again = entry(5, "RELEASING", 2);
+    again.korean_titles = vec!["봇치 더 록!".into(), "외톨이 THE ROCK!".into()];
+    env.store.put_entry(again).await.unwrap();
+    assert_eq!(
+        env.store.link(&id, 1).await.unwrap().entries[0].korean_titles,
+        ["봇치 더 록!", "외톨이 THE ROCK!"]
+    );
+    assert_eq!(
+        env.store.entry(5).await.unwrap().unwrap().korean_titles,
+        ["봇치 더 록!", "외톨이 THE ROCK!"]
+    );
 }

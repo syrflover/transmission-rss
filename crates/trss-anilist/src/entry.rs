@@ -56,6 +56,8 @@ pub struct Entry {
     /// The main studios AniList flags as animation studios, in its order.
     pub studios: Vec<String>,
     pub genres: Vec<String>,
+    /// The entry's AniList synonyms that contain Hangul, in AniList's order.
+    pub korean_titles: Vec<String>,
     /// AniList's text, as it came (see `trss_library::seasons::describe`).
     pub description: Option<String>,
     /// The per-episode schedule, as far as AniList has one.

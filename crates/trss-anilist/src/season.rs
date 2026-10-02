@@ -19,7 +19,7 @@ const SCHEDULE_PAGE: u32 = 50;
 fn entry_query() -> String {
     format!(
         "query ($id: Int) {{ Media(id: $id, type: ANIME) {{ \
-           id title {{ romaji english native }} format status episodes description(asHtml: false) \
+           id title {{ romaji english native }} synonyms format status episodes description(asHtml: false) \
            startDate {{ year month day }} endDate {{ year month day }} genres \
            studios(isMain: true) {{ nodes {{ name isAnimationStudio }} }} \
            relations {{ edges {{ relationType node {{ id type format status \
@@ -102,6 +102,7 @@ struct Media {
     start_date: Option<Date>,
     end_date: Option<Date>,
     genres: Option<Vec<Option<String>>>,
+    synonyms: Option<Vec<Option<String>>>,
     studios: Option<Studios>,
     relations: Option<Relations>,
     airing_schedule: Option<AiringSchedule>,
@@ -145,6 +146,13 @@ fn unique(values: impl Iterator<Item = String>) -> Vec<String> {
         }
     }
     out
+}
+
+/// Whether `title` has a Hangul syllable or jamo in it.
+fn has_hangul(title: &str) -> bool {
+    title.chars().any(|c| {
+        matches!(c, '\u{AC00}'..='\u{D7A3}' | '\u{1100}'..='\u{11FF}' | '\u{3130}'..='\u{318F}')
+    })
 }
 
 fn entry_of(media: Media, fetched_at: Millis) -> Entry {
@@ -222,6 +230,15 @@ fn entry_of(media: Media, fetched_at: Millis) -> Entry {
         end: date(media.end_date),
         studios: unique(studios),
         genres: unique(genres.filter_map(|g| text(Some(g)))),
+        korean_titles: unique(
+            media
+                .synonyms
+                .unwrap_or_default()
+                .into_iter()
+                .flatten()
+                .filter_map(|s| text(Some(s)))
+                .filter(|s| has_hangul(s)),
+        ),
         description: text(media.description),
         airing,
         sequels: sequels_out,
@@ -253,6 +270,32 @@ mod tests {
     fn media(value: serde_json::Value) -> Entry {
         let media: Media = serde_json::from_value(value).unwrap();
         entry_of(media, 5)
+    }
+
+    #[test]
+    fn only_the_synonyms_with_hangul_are_kept_as_the_entrys_korean_titles() {
+        let entry = media(json!({
+            "id": 9,
+            "title": { "romaji": "Bocchi the Rock!", "english": null, "native": "ぼっち・ざ・ろっく！" },
+            "synonyms": [
+                "봇치 더 록!", "Bocchi", "ぼっち", null, "  ", "봇치 더 록!", "외톨이 THE ROCK!",
+                "孤独摇滚", "ㅂㅊ"
+            ]
+        }));
+        assert_eq!(
+            entry.korean_titles,
+            ["봇치 더 록!", "외톨이 THE ROCK!", "ㅂㅊ"]
+        );
+        // An answer with no synonyms has none.
+        let none = media(json!({ "id": 10, "title": { "romaji": "X" } }));
+        assert!(none.korean_titles.is_empty());
+        let null = media(json!({ "id": 11, "synonyms": null }));
+        assert!(null.korean_titles.is_empty());
+    }
+
+    #[test]
+    fn the_question_asks_for_the_synonyms() {
+        assert!(entry_query().contains("synonyms"));
     }
 
     #[test]

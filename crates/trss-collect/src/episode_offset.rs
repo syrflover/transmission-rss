@@ -885,6 +885,7 @@ mod tests {
             genres: Vec::new(),
             description: None,
             airing: Vec::new(),
+            korean_titles: Vec::new(),
             sequels: Vec::new(),
             fetched_at: 1,
         }

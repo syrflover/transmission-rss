@@ -18,7 +18,7 @@ fn begin(conn: &mut Connection) -> rusqlite::Result<Transaction<'_>> {
 
 const ENTRY_COLUMNS: &str = "e.id, e.romaji, e.english, e.native, e.format, e.status, e.episodes,
      e.start_year, e.start_month, e.start_day, e.end_year, e.end_month, e.end_day,
-     e.studios, e.genres, e.description, e.airing, e.sequels, e.fetched_at";
+     e.studios, e.genres, e.description, e.airing, e.sequels, e.fetched_at, e.korean_titles";
 
 fn json<T: serde::de::DeserializeOwned>(column: usize, text: &str) -> rusqlite::Result<T> {
     serde_json::from_str(text).map_err(|e| {
@@ -35,6 +35,7 @@ fn entry_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Entry> {
     let genres: String = row.get(14)?;
     let airing: String = row.get(16)?;
     let sequels: String = row.get(17)?;
+    let korean_titles: String = row.get(19)?;
     Ok(Entry {
         id: row.get(0)?,
         romaji: row.get(1)?,
@@ -59,6 +60,7 @@ fn entry_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Entry> {
         airing: json::<Vec<Airing>>(16, &airing)?,
         sequels: json::<Vec<Sequel>>(17, &sequels)?,
         fetched_at: row.get(18)?,
+        korean_titles: json::<Vec<String>>(19, &korean_titles)?,
     })
 }
 
@@ -76,9 +78,10 @@ pub(super) fn put_entry(conn: &Connection, entry: &Entry) -> rusqlite::Result<()
         "INSERT INTO anilist_entries
              (id, romaji, english, native, format, status, episodes,
               start_year, start_month, start_day, end_year, end_month, end_day,
-              studios, genres, description, airing, sequels, fetched_at, refresh_not_before)
+              studios, genres, description, airing, sequels, fetched_at, korean_titles,
+              refresh_not_before)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
-                 ?18, ?19, NULL)
+                 ?18, ?19, ?20, NULL)
          ON CONFLICT (id) DO UPDATE SET
              romaji = excluded.romaji, english = excluded.english, native = excluded.native,
              format = excluded.format, status = excluded.status, episodes = excluded.episodes,
@@ -88,6 +91,7 @@ pub(super) fn put_entry(conn: &Connection, entry: &Entry) -> rusqlite::Result<()
              studios = excluded.studios, genres = excluded.genres,
              description = excluded.description, airing = excluded.airing,
              sequels = excluded.sequels, fetched_at = excluded.fetched_at,
+             korean_titles = excluded.korean_titles,
              refresh_not_before = NULL",
         params![
             entry.id,
@@ -109,6 +113,7 @@ pub(super) fn put_entry(conn: &Connection, entry: &Entry) -> rusqlite::Result<()
             to_json(&entry.airing),
             to_json(&entry.sequels),
             entry.fetched_at,
+            to_json(&entry.korean_titles),
         ],
     )?;
     Ok(())

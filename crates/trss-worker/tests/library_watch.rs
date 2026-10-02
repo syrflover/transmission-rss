@@ -649,6 +649,7 @@ async fn unregistering_takes_the_works_out_and_the_same_path_brings_them_back_as
             genres: Vec::new(),
             description: None,
             airing: Vec::new(),
+            korean_titles: Vec::new(),
             sequels: Vec::new(),
             fetched_at: 1,
         })

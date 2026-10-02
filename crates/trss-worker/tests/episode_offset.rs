@@ -96,6 +96,7 @@ fn entry(id: i64, episodes: Option<u32>) -> Entry {
         genres: Vec::new(),
         description: None,
         airing: Vec::new(),
+        korean_titles: Vec::new(),
         sequels: Vec::new(),
         fetched_at: 1,
     }
