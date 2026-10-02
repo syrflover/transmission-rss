@@ -1,0 +1,12 @@
+{
+  "start-added-torrents": false,
+  "rpc-whitelist-enabled": false,
+  "rpc-host-whitelist-enabled": false,
+  "rpc-authentication-required": false,
+  "download-dir": "/downloads/downloads",
+  "incomplete-dir-enabled": false,
+  "dht-enabled": false,
+  "pex-enabled": false,
+  "lpd-enabled": false,
+  "port-forwarding-enabled": false
+}
