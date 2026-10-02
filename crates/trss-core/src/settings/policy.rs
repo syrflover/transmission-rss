@@ -1,0 +1,249 @@
+//! The common policy (`docs/specs/settings.md`, 공통 정책): the order of the
+//! subtitle formats, and the server browser's idle time and how many jobs may
+//! use it at once. The three are one record with one version, saved together.
+//!
+//! Until the first save the policy is [`Policy::default`] at version 0. The
+//! supported ranges ([`IDLE_TIMEOUT_SECONDS`], [`CONCURRENT_JOBS`]) are the
+//! app's: a value outside them is refused and nothing is saved.
+//!
+//! A work may order the formats its own way ([`WorkFormatOrder`]); the work's
+//! subtitles write that, the settings list the works that have one.
+
+use std::{fmt, ops::RangeInclusive};
+
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
+
+use super::{SettingsError, SettingsStore};
+use crate::Millis;
+
+/// The browser's idle time, in seconds: one minute to one hour.
+pub const IDLE_TIMEOUT_SECONDS: RangeInclusive<u32> = 60..=3600;
+/// How many jobs may use the server browser at once. The server is a small
+/// machine and each job holds a browser of its own.
+pub const CONCURRENT_JOBS: RangeInclusive<u32> = 1..=3;
+
+/// A subtitle file format the app ranks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SubtitleFormat {
+    Ass,
+    Srt,
+    Smi,
+}
+
+impl SubtitleFormat {
+    pub const ALL: [SubtitleFormat; 3] = [
+        SubtitleFormat::Ass,
+        SubtitleFormat::Srt,
+        SubtitleFormat::Smi,
+    ];
+
+    /// The lower-case code of the API and the records (`ass`).
+    pub fn code(self) -> &'static str {
+        match self {
+            SubtitleFormat::Ass => "ass",
+            SubtitleFormat::Srt => "srt",
+            SubtitleFormat::Smi => "smi",
+        }
+    }
+
+    pub fn parse(code: &str) -> Option<SubtitleFormat> {
+        SubtitleFormat::ALL.into_iter().find(|f| f.code() == code)
+    }
+}
+
+/// The three formats, each once, the preferred first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FormatOrder([SubtitleFormat; 3]);
+
+impl Default for FormatOrder {
+    /// ASS → SRT → SMI.
+    fn default() -> FormatOrder {
+        FormatOrder(SubtitleFormat::ALL)
+    }
+}
+
+impl FormatOrder {
+    /// The order the codes give, when they name each format once.
+    pub fn from_codes<S: AsRef<str>>(codes: &[S]) -> Option<FormatOrder> {
+        let formats: Vec<SubtitleFormat> = codes
+            .iter()
+            .map(|c| SubtitleFormat::parse(c.as_ref()))
+            .collect::<Option<_>>()?;
+        let order: [SubtitleFormat; 3] = formats.try_into().ok()?;
+        let each_once = SubtitleFormat::ALL.iter().all(|f| order.contains(f));
+        each_once.then_some(FormatOrder(order))
+    }
+
+    pub fn formats(&self) -> [SubtitleFormat; 3] {
+        self.0
+    }
+
+    fn parse_stored(text: &str) -> Option<FormatOrder> {
+        let codes: Vec<&str> = text.split(',').collect();
+        FormatOrder::from_codes(&codes)
+    }
+}
+
+impl fmt::Display for FormatOrder {
+    /// As stored: `ass,srt,smi`.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let codes: Vec<&str> = self.0.iter().map(|x| x.code()).collect();
+        f.write_str(&codes.join(","))
+    }
+}
+
+/// The common policy as stored, or the defaults at version 0.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Policy {
+    pub format_order: FormatOrder,
+    pub idle_timeout_seconds: u32,
+    pub max_concurrent_jobs: u32,
+    /// 0 until the first save; send it back to save.
+    pub version: i64,
+    /// When it was last saved; `None` before the first save.
+    pub saved_at: Option<Millis>,
+}
+
+impl Default for Policy {
+    fn default() -> Policy {
+        Policy {
+            format_order: FormatOrder::default(),
+            idle_timeout_seconds: 300,
+            max_concurrent_jobs: 1,
+            version: 0,
+            saved_at: None,
+        }
+    }
+}
+
+/// A work's own format order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkFormatOrder {
+    pub work_id: String,
+    /// The work's folder name, as the library names it.
+    pub name: String,
+    pub format_order: FormatOrder,
+    pub updated_at: Millis,
+}
+
+fn read_policy(conn: &Connection) -> Result<Policy, SettingsError> {
+    let row: Option<(String, u32, u32, i64, Millis)> = conn
+        .query_row(
+            "SELECT format_order, idle_timeout_seconds, max_concurrent_jobs, version, saved_at
+               FROM policy_settings WHERE id = 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+        )
+        .optional()?;
+    let Some((order, idle, jobs, version, saved_at)) = row else {
+        return Ok(Policy::default());
+    };
+    Ok(Policy {
+        format_order: FormatOrder::parse_stored(&order)
+            .ok_or(SettingsError::Invalid("a stored format order is not one"))?,
+        idle_timeout_seconds: idle,
+        max_concurrent_jobs: jobs,
+        version,
+        saved_at: Some(saved_at),
+    })
+}
+
+impl SettingsStore {
+    /// The common policy: as last saved, or the defaults at version 0.
+    pub async fn policy(&self) -> Result<Policy, SettingsError> {
+        self.db.run(|c| read_policy(c)).await
+    }
+
+    /// Saves the policy if it is still at `expected_version` (0 before the
+    /// first save) and returns it with its new version. Values outside the
+    /// supported ranges are [`SettingsError::Invalid`]; a stale version is
+    /// [`SettingsError::Conflict`]. Either way nothing is saved.
+    pub async fn put_policy(
+        &self,
+        expected_version: i64,
+        format_order: FormatOrder,
+        idle_timeout_seconds: u32,
+        max_concurrent_jobs: u32,
+        now: Millis,
+    ) -> Result<Policy, SettingsError> {
+        if !IDLE_TIMEOUT_SECONDS.contains(&idle_timeout_seconds) {
+            return Err(SettingsError::Invalid("the idle time is out of range"));
+        }
+        if !CONCURRENT_JOBS.contains(&max_concurrent_jobs) {
+            return Err(SettingsError::Invalid(
+                "the concurrent jobs are out of range",
+            ));
+        }
+        self.db
+            .run(move |c| {
+                let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                let actual = read_policy(&tx)?.version;
+                if actual != expected_version {
+                    return Err(SettingsError::Conflict {
+                        expected: expected_version,
+                        actual,
+                    });
+                }
+                tx.execute(
+                    "INSERT INTO policy_settings
+                         (id, format_order, idle_timeout_seconds, max_concurrent_jobs, version, saved_at)
+                     VALUES (1, ?1, ?2, ?3, 1, ?4)
+                     ON CONFLICT (id) DO UPDATE SET
+                         format_order = excluded.format_order,
+                         idle_timeout_seconds = excluded.idle_timeout_seconds,
+                         max_concurrent_jobs = excluded.max_concurrent_jobs,
+                         version = version + 1,
+                         saved_at = excluded.saved_at",
+                    params![
+                        format_order.to_string(),
+                        idle_timeout_seconds,
+                        max_concurrent_jobs,
+                        now
+                    ],
+                )?;
+                let stored = read_policy(&tx)?;
+                tx.commit()?;
+                Ok(stored)
+            })
+            .await
+    }
+
+    /// The works that order the formats their own way, most recently changed
+    /// first.
+    pub async fn work_format_orders(&self) -> Result<Vec<WorkFormatOrder>, SettingsError> {
+        self.db
+            .run(|c| {
+                let mut stmt = c.prepare(
+                    "SELECT p.work_id, w.dir_name, p.format_order, p.updated_at
+                       FROM work_subtitle_policy p JOIN works w ON w.id = p.work_id
+                      ORDER BY p.updated_at DESC, p.work_id",
+                )?;
+                let rows = stmt
+                    .query_map([], |r| {
+                        Ok((
+                            r.get::<_, String>(0)?,
+                            r.get::<_, String>(1)?,
+                            r.get::<_, String>(2)?,
+                            r.get(3)?,
+                        ))
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+                rows.into_iter()
+                    .map(|(work_id, name, order, updated_at)| {
+                        Ok(WorkFormatOrder {
+                            work_id,
+                            name,
+                            format_order: FormatOrder::parse_stored(&order).ok_or(
+                                SettingsError::Invalid("a stored format order is not one"),
+                            )?,
+                            updated_at,
+                        })
+                    })
+                    .collect()
+            })
+            .await
+    }
+}
+
+#[cfg(test)]
+mod tests;

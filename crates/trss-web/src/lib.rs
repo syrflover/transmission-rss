@@ -30,6 +30,7 @@ pub mod jobs_api;
 pub mod library_api;
 pub mod library_work_api;
 pub mod past_search_api;
+pub mod policy_api;
 pub mod rules_api;
 pub mod schedule_api;
 pub mod seasons_anissia_api;

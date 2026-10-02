@@ -1,7 +1,8 @@
 //! App-wide settings stored in the app database.
 //!
-//! Today that is the collection folders ([`CollectionSettings`]): the collect
-//! folder that every rule saves under and the optional archive folder. Writes
+//! The collection folders ([`CollectionSettings`]): the collect folder that
+//! every rule saves under and the optional archive folder; and the common
+//! policy ([`policy`]): the subtitle format order and the server browser. Writes
 //! take the version the caller last saw and fail with
 //! [`SettingsError::Conflict`], changing nothing, if someone saved first.
 //!
@@ -11,6 +12,7 @@
 //! can write when it writes.
 
 mod migrate;
+pub mod policy;
 
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 
@@ -26,7 +28,9 @@ pub enum SettingsError {
     #[error(transparent)]
     Db(#[from] DbError),
     /// The caller's version is not the stored one; nothing was changed.
-    #[error("the collection settings were changed by someone else (expected version {expected}, found {actual})")]
+    #[error(
+        "the settings were changed by someone else (expected version {expected}, found {actual})"
+    )]
     Conflict { expected: i64, actual: i64 },
     #[error("{0}")]
     Invalid(&'static str),

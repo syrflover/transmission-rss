@@ -116,6 +116,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("../migrations/anissia/captions.sql")),
     // 34: subtitle jobs, their items, steps, log and file receipts
     Migration::Sql(include_str!("../migrations/jobs/schema.sql")),
+    // 35: the common policy (subtitle format order, server browser) and a work's own format order
+    Migration::Sql(include_str!("../migrations/settings/policy.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -662,6 +664,37 @@ mod tests {
         // The link is as it was, and nothing is observed until the worker reads.
         assert_eq!((linked, sources, observations, polls), (3441, 0, 0, 0));
         assert_eq!(refused, [true; 4]);
+    }
+
+    #[tokio::test]
+    async fn a_database_from_before_the_common_policy_keeps_its_settings_and_has_no_policy_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        {
+            // A database as the build with 34 migrations left it: the collect folder set.
+            let conn = database_at(&path, 34);
+            conn.execute_batch(
+                "INSERT INTO collection_settings (id, collect_folder, archive_folder, version)
+                     VALUES (1, '/downloads/Shows', NULL, 3);",
+            )
+            .unwrap();
+        }
+
+        let db = Db::open(&path).await.unwrap();
+
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+        let (version, policies, overrides): (i64, i64, i64) = db
+            .run::<_, DbError, _>(|c| {
+                let count = |sql: &str| c.query_row(sql, [], |r| r.get::<_, i64>(0));
+                Ok((
+                    count("SELECT version FROM collection_settings")?,
+                    count("SELECT count(*) FROM policy_settings")?,
+                    count("SELECT count(*) FROM work_subtitle_policy")?,
+                ))
+            })
+            .await
+            .unwrap();
+        assert_eq!((version, policies, overrides), (3, 0, 0));
     }
 
     #[tokio::test]
