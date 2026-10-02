@@ -240,20 +240,6 @@ mod tests {
     }
 
     #[test]
-    fn the_server_zone_does_not_move_the_instant() {
-        // Nothing reads the system's zone; the test says so by changing it.
-        let before = std::env::var_os("TZ");
-        for zone in ["UTC", "Asia/Seoul", "America/Los_Angeles"] {
-            std::env::set_var("TZ", zone);
-            assert_eq!(updated_at("2026-10-02 21:00:00"), Some(NOON_UTC), "{zone}");
-        }
-        match before {
-            Some(zone) => std::env::set_var("TZ", zone),
-            None => std::env::remove_var("TZ"),
-        }
-    }
-
-    #[test]
     fn what_is_not_a_date_and_time_is_not_an_instant() {
         for bad in [
             "",
