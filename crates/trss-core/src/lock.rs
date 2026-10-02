@@ -12,7 +12,10 @@ use std::{
     fs::{File, OpenOptions, TryLockError},
     io,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, Weak},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex, Weak,
+    },
     time::Duration,
 };
 
@@ -92,7 +95,8 @@ impl CycleLock {
 /// one goes some other way (a handle dropped because its task panicked or was
 /// aborted, or what [`WorkerHold::keep`] gave outliving the handles), a task
 /// writes the last beat and then lets go of the lock; a hold taken meanwhile
-/// waits for it. Only without a runtime to run that task (the process is
+/// waits for it, from the moment the last handle goes on whatever thread, and
+/// a hold given up while it waits leaves the waiting to the next. Only without a runtime to run that task (the process is
 /// ending) are the beats merely stopped, so the web sees a worker that
 /// stopped.
 #[derive(Clone)]
@@ -113,6 +117,12 @@ struct Shared {
     /// for it, so the last beat of the old hold never lands after the first
     /// of the new one.
     closing: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// Holds not yet dropped to the end. The last handle of a hold drops it
+    /// on that handle's thread, and from the moment the hold can no longer
+    /// be shared until its `Drop` has stored its ending task in
+    /// [`Shared::closing`], neither the hold nor the task can be seen: a new
+    /// hold waits for this to come back to zero.
+    unfinished: AtomicUsize,
 }
 
 /// The lock while the worker holds it.
@@ -132,23 +142,54 @@ impl Drop for Held {
             .unwrap_or_else(|e| e.into_inner())
             .take();
         let lock = self.lock.take();
-        let Some(beat) = beat else {
-            // The last handle was released: the last beat is written.
-            drop(lock);
-            return;
+        let task = match (beat, tokio::runtime::Handle::try_current()) {
+            // The lock goes with the task and is let go only after the last
+            // beat.
+            (Some(beat), Ok(runtime)) => Some(runtime.spawn(async move {
+                beat.stop().await;
+                drop(lock);
+            })),
+            // The last handle was released, and the last beat is written; or
+            // there is no runtime to write it.
+            (beat, _) => {
+                drop(beat);
+                drop(lock);
+                None
+            }
         };
-        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
-            drop(beat);
-            drop(lock);
-            return;
-        };
-        // The lock goes with the task and is let go only after the last beat.
-        let task = runtime.spawn(async move {
-            beat.stop().await;
-            drop(lock);
-        });
         if let Some(shared) = self.shared.upgrade() {
-            *shared.closing.lock().unwrap_or_else(|e| e.into_inner()) = Some(task);
+            if let Some(task) = task {
+                *shared.closing.lock().unwrap_or_else(|e| e.into_inner()) = Some(task);
+            }
+            shared.unfinished.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+}
+
+/// The ending task of the last hold while a new hold waits for it. When the
+/// waiting is given up (the task that waits is aborted), the ending task goes
+/// back to [`Shared::closing`] for the next hold to wait for.
+struct Ending<'a> {
+    task: Option<tokio::task::JoinHandle<()>>,
+    slot: &'a Mutex<Option<tokio::task::JoinHandle<()>>>,
+}
+
+impl Ending<'_> {
+    async fn wait(mut self) {
+        if let Some(task) = self.task.as_mut() {
+            let _ = task.await;
+        }
+        self.task = None;
+    }
+}
+
+impl Drop for Ending<'_> {
+    fn drop(&mut self) {
+        if let Some(task) = self.task.take() {
+            let mut slot = self.slot.lock().unwrap_or_else(|e| e.into_inner());
+            if slot.is_none() {
+                *slot = Some(task);
+            }
         }
     }
 }
@@ -171,6 +212,7 @@ impl WorkerLock {
                 every,
                 held: tokio::sync::Mutex::new(Weak::new()),
                 closing: Mutex::new(None),
+                unfinished: AtomicUsize::new(0),
             }),
         }
     }
@@ -191,15 +233,27 @@ impl WorkerLock {
                 lock: self.clone(),
             }));
         }
-        let closing = self
+        // The last hold may be ending: dropped on another thread just now,
+        // or its ending task still writing the last beat. Its lock is let go
+        // only then, and the file is not refused for it in the meantime.
+        for _ in 0..1000 {
+            if self.inner.unfinished.load(Ordering::SeqCst) == 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        let task = self
             .inner
             .closing
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .take();
-        if let Some(task) = closing {
-            let _ = task.await;
+        Ending {
+            task,
+            slot: &self.inner.closing,
         }
+        .wait()
+        .await;
         let Some(lock) = CycleLock::try_acquire(&self.inner.path)? else {
             return Ok(None);
         };
@@ -209,6 +263,7 @@ impl WorkerLock {
             self.inner.every,
         )
         .await;
+        self.inner.unfinished.fetch_add(1, Ordering::SeqCst);
         let new = Arc::new(Held {
             beat: Mutex::new(Some(beat)),
             lock: Some(lock),
@@ -465,6 +520,53 @@ mod tests {
                 .expect("waits, not refused");
             assert_eq!(s.held_since().await, Some(7_000));
             again.release().await;
+        }
+
+        #[tokio::test]
+        async fn a_hold_given_up_while_the_last_one_ends_leaves_the_wait_to_the_next() {
+            let s = Scene::new().await;
+            let worker = s.worker();
+            drop(worker.try_hold().await.unwrap().unwrap());
+
+            // A hold waiting for the ending task is given up there (its task
+            // was aborted) before that task has run.
+            let mut waiting = Box::pin(worker.try_hold());
+            let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+            assert!(std::future::Future::poll(waiting.as_mut(), &mut cx).is_pending());
+            drop(waiting);
+
+            // The next one waits for the ending task all the same.
+            let again = worker
+                .try_hold()
+                .await
+                .unwrap()
+                .expect("waits, not refused");
+            again.release().await;
+        }
+
+        #[tokio::test]
+        async fn a_hold_taken_while_the_last_one_is_dropped_on_another_thread_waits_for_it() {
+            let s = Scene::new().await;
+            let worker = s.worker();
+            // The last handle of a hold has gone on another thread, whose drop
+            // of the hold has not yet let go of the lock or stored its ending
+            // task: the hold can no longer be shared, and the lock is taken.
+            let lock = CycleLock::try_acquire(&s.path).unwrap().unwrap();
+            worker.inner.unfinished.fetch_add(1, Ordering::SeqCst);
+            let shared = worker.inner.clone();
+            let dropping = std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(50));
+                drop(lock);
+                shared.unfinished.fetch_sub(1, Ordering::SeqCst);
+            });
+
+            let hold = worker
+                .try_hold()
+                .await
+                .unwrap()
+                .expect("waits, not refused");
+            hold.release().await;
+            dropping.join().unwrap();
         }
 
         #[tokio::test]
