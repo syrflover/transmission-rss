@@ -29,11 +29,25 @@
 
 use std::collections::HashMap;
 
-use crate::context::CollectContext;
+use crate::store::{channels::ChannelStore, history::HistoryStore};
 use crate::{
     episode_offset::{decide, first_release, gather, may_decide, same_effect, signed, Verdict},
     store::channels::Rule,
 };
+use trss_library::store::{library::LibraryStore, seasons::SeasonStore};
+
+/// What the episode offsets use (made from
+/// [`CollectContext::offsets`](crate::context::CollectContext::offsets)).
+/// Cheap to clone.
+#[derive(Clone)]
+pub struct OffsetsContext {
+    pub channels: ChannelStore,
+    /// Where the earlier receives of a rule are read.
+    pub history: HistoryStore,
+    /// With `seasons`, the seasons before a rule's ([`crate::episode_offset`]).
+    pub library: LibraryStore,
+    pub seasons: SeasonStore,
+}
 
 /// The offsets the rules that are about to receive their first items take,
 /// by rule ID: the one the app set, or the user's when the user saved another
@@ -41,7 +55,7 @@ use crate::{
 /// the rules of the cycle's snapshot that may be looked at at all
 /// ([`may_decide`]).
 pub async fn settle(
-    ctx: &CollectContext,
+    ctx: &OffsetsContext,
     collect_folder: &str,
     open: &HashMap<String, Rule>,
     firsts: &HashMap<String, Vec<String>>,
@@ -82,7 +96,7 @@ pub async fn settle(
 /// set its offset or the user saved another meanwhile. Used by `다시 받기` of a past item, which is a rule's first
 /// when the rule has picked nothing.
 pub async fn settle_one(
-    ctx: &CollectContext,
+    ctx: &OffsetsContext,
     collect_folder: &str,
     rule: &Rule,
     title: &str,
@@ -109,7 +123,7 @@ pub async fn settle_one(
 /// sets one. The offset the titles take: the one set, or the stored one when
 /// the user saved another since `rule` was read; `None` when `rule`'s holds.
 async fn settle_rule(
-    ctx: &CollectContext,
+    ctx: &OffsetsContext,
     collect_folder: &str,
     rule: &Rule,
     titles: &[String],
@@ -184,7 +198,7 @@ async fn settle_rule(
 
 /// The rules among `ids` the app has never decided, or `None` (with a line in
 /// the log) when that cannot be read.
-async fn undecided(ctx: &CollectContext, ids: Vec<String>) -> Option<Vec<String>> {
+async fn undecided(ctx: &OffsetsContext, ids: Vec<String>) -> Option<Vec<String>> {
     match ctx.channels.episode_marks(ids.clone()).await {
         Ok(marks) => Some(
             ids.into_iter()

@@ -63,17 +63,39 @@ use trss_core::{
     commands::{Command, CommandState, Outcome, MAX_ATTEMPTS},
     folder_locks::Section,
     folders::has_parent_dir,
+    settings::SettingsStore,
     Clock,
 };
 
 use crate::{
-    context::CollectContext,
-    store::channels::{Rule, RuleState},
+    context::TransmissionLink,
+    store::channels::{ChannelStore, Rule, RuleState},
 };
-use trss_library::watch;
+use trss_library::{live::LiveWatch, store::library::LibraryStore, watch};
 use trss_transmission as transmission;
 
-use work_folder::{move_work_folder, Disk, Hold, MoveError, Moved, RealDisk, Request, Side};
+use work_folder::{
+    move_work_folder, Disk, Hold, MoveError, MovePolicy, Moved, RealDisk, Request, Side,
+};
+
+/// What `rule_archive` uses (made from
+/// [`CollectContext::archive`](crate::context::CollectContext::archive)).
+/// Cheap to clone.
+#[derive(Clone)]
+pub struct ArchiveContext {
+    /// The rule, and the other rules that save in its work folder.
+    pub channels: ChannelStore,
+    /// Where the collect and archive folders are read from.
+    pub settings: SettingsStore,
+    /// The works the library knows, which follow the move.
+    pub library: LibraryStore,
+    /// The inotify watches of the watch folders, which the move tells.
+    pub live: LiveWatch,
+    pub transmission: TransmissionLink,
+    /// How the move waits for Transmission.
+    pub moves: MovePolicy,
+    pub redactor: transmission::Redactor,
+}
 
 /// The `kind` of the command.
 pub const KIND: &str = "rule_archive";
@@ -279,7 +301,7 @@ fn held_reason(holders: &[&Rule]) -> String {
 /// that saves into the collect folder itself or outside it) or the request or
 /// the rule cannot be found: the command then changes the rule's state alone,
 /// or ends by itself.
-pub async fn section(ctx: &CollectContext, command: &Command) -> Result<Section, Retry> {
+pub async fn section(ctx: &ArchiveContext, command: &Command) -> Result<Section, Retry> {
     let Ok(payload) = serde_json::from_str::<RuleArchive>(&command.payload) else {
         return Ok(Section::new());
     };
@@ -306,7 +328,7 @@ pub async fn section(ctx: &CollectContext, command: &Command) -> Result<Section,
 
 /// One start of a command, and what its moves need.
 struct Start<'a> {
-    ctx: &'a CollectContext,
+    ctx: &'a ArchiveContext,
     disk: Arc<dyn Disk>,
     /// Kept until the move's blocking work returns: the worker's hold of its lock.
     hold: Hold,
@@ -321,7 +343,7 @@ struct Start<'a> {
 /// See the module docs. `hold` keeps the worker's lock until the move's
 /// blocking work returns.
 pub async fn run(
-    ctx: &CollectContext,
+    ctx: &ArchiveContext,
     command: &Command,
     hold: Hold,
     clock: &Clock,
@@ -332,7 +354,7 @@ pub async fn run(
 
 /// [`run`] with the filesystems told by `disk`.
 pub async fn run_on(
-    ctx: &CollectContext,
+    ctx: &ArchiveContext,
     command: &Command,
     disk: Arc<dyn Disk>,
     hold: Hold,
@@ -470,7 +492,7 @@ pub fn forecast_archive(
     }
 }
 
-async fn settings(ctx: &CollectContext) -> Result<Option<(String, Option<String>)>, Retry> {
+async fn settings(ctx: &ArchiveContext) -> Result<Option<(String, Option<String>)>, Retry> {
     Ok(ctx
         .settings
         .collection()
@@ -485,7 +507,7 @@ async fn move_folder(
     request: &Request,
 ) -> Result<Result<Finished, Finished>, Retry> {
     let ctx = start.ctx;
-    let mut client = transmission::client(ctx.transmission_url.clone(), &ctx.transmission_http);
+    let mut client = ctx.transmission.client();
     println!(
         "Moving work folder {:?} from {} to {}",
         request.name,

@@ -423,16 +423,16 @@ impl Worker {
     async fn section(&self, kind: Kind, command: &Command) -> Result<Section, String> {
         let text = |err: &dyn std::fmt::Display| err.to_string();
         match kind {
-            Kind::ReceiveOnce => receive_once::section(&self.ctx, command)
+            Kind::ReceiveOnce => receive_once::section(&self.ctx.receive(), command)
                 .await
                 .map_err(|e| text(&e)),
-            Kind::ReceivePast => receive_past::section(&self.ctx, command)
+            Kind::ReceivePast => receive_past::section(&self.ctx.receive(), command)
                 .await
                 .map_err(|e| text(&e)),
-            Kind::RuleArchive => rule_archive::section(&self.ctx, command)
+            Kind::RuleArchive => rule_archive::section(&self.ctx.archive(), command)
                 .await
                 .map_err(|e| text(&e)),
-            Kind::EpisodeUndo => episode_undo::section(&self.ctx, command)
+            Kind::EpisodeUndo => episode_undo::section(&self.ctx.undo(), command)
                 .await
                 .map_err(|e| text(&e)),
             Kind::WatchRescan => watch_rescan::section(&self.watch, command)
@@ -486,15 +486,11 @@ impl Worker {
         cancel: &CancellationToken,
     ) -> Option<Ran> {
         let mut task = JoinSet::new();
-        let (ctx, watch, clock, owned) = (
-            self.ctx.clone(),
-            self.watch.clone(),
-            self.clock.clone(),
-            command.clone(),
-        );
+        let (watch, clock, owned) = (self.watch.clone(), self.clock.clone(), command.clone());
         let cancel = cancel.clone();
         match kind {
             Kind::ReceiveOnce => {
+                let ctx = self.ctx.receive();
                 task.spawn(async move {
                     match receive_once::run(&ctx, &owned, || clock(), &cancel).await {
                         Ok(finished) => Ran::Ended {
@@ -508,6 +504,7 @@ impl Worker {
                 });
             }
             Kind::ReceivePast => {
+                let ctx = self.ctx.receive();
                 task.spawn(async move {
                     match receive_past::run(&ctx, &owned, || clock(), &cancel).await {
                         Ok(finished) => Ran::Ended {
@@ -523,6 +520,7 @@ impl Worker {
             Kind::RuleArchive => {
                 // Kept by the move's blocking renames until they return.
                 let keep = hold.keep();
+                let ctx = self.ctx.archive();
                 task.spawn(async move {
                     match rule_archive::run(&ctx, &owned, keep, &clock, &cancel).await {
                         Ok(finished) => Ran::Ended {
@@ -547,6 +545,7 @@ impl Worker {
                 });
             }
             Kind::EpisodeUndo => {
+                let ctx = self.ctx.undo();
                 task.spawn(async move {
                     match episode_undo::run(&ctx, &owned, &clock).await {
                         Ok(finished) => Ran::Ended {

@@ -474,7 +474,7 @@ pub async fn run_cycle(
                 }
             }
         }
-        let offsets = offsets::settle(ctx, folder, &open_rules, &firsts).await;
+        let offsets = offsets::settle(&ctx.offsets(), folder, &open_rules, &firsts).await;
         for job in &mut jobs {
             if let Some(offset) = job
                 .observation
@@ -502,7 +502,7 @@ pub async fn run_cycle(
     }
 
     // Carry the replacements of video revisions on.
-    revisions::advance(ctx, at, &redactor, cancel).await;
+    revisions::advance(&ctx.revision_work(), &ctx.folders, at, &redactor, cancel).await;
 
     if cancel.is_cancelled() {
         report.interrupted = true;
@@ -672,7 +672,7 @@ async fn remove_departed(
     match recorded {
         Ok(hashes) => {
             kept.extend(hashes);
-            let mut transmission = ctx.transmission();
+            let mut transmission = ctx.transmission.client();
             remove_stale(
                 &mut transmission,
                 |hash, labels| kept.contains(hash) || labelled_for_a_waiting_item(labels),
@@ -815,7 +815,7 @@ async fn add_jobs(
 /// the items it would have taken are recorded as failed, and the next cycle
 /// tries again.
 async fn apply_session(ctx: &CollectContext, session: &SessionConfig, redactor: &Redactor) {
-    let mut transmission = ctx.transmission();
+    let mut transmission = ctx.transmission.client();
     let args = session.to_args();
     println!("Applying Transmission settings: {args:?}");
 
@@ -882,7 +882,7 @@ async fn process_job(
         Plan::Replace(Decided::of(row))
     } else if revisions::is_revision(&job.title) {
         revisions::plan(
-            &ctx,
+            &ctx.revision_work(),
             &Selected {
                 channel_id: &job.observation.channel_id,
                 identity_key: &job.observation.identity_key,
@@ -916,7 +916,7 @@ async fn process_job(
         }
     };
 
-    let mut transmission = ctx.transmission();
+    let mut transmission = ctx.transmission.client();
 
     let label =
         transmission::item_label(&job.observation.channel_id, &job.observation.identity_key);
@@ -1215,7 +1215,7 @@ async fn record_reads(
 /// the past episode search. If Transmission cannot be asked, the
 /// previous counts, hashes and their time stay as they were, and the cycle goes on.
 async fn record_transmission_counts(ctx: &CollectContext, at: Millis, redactor: &Redactor) {
-    let mut transmission = ctx.transmission();
+    let mut transmission = ctx.transmission.client();
     let torrents = match transmission
         .torrent_get(
             Some(vec![TorrentGetField::Status, TorrentGetField::HashString]),

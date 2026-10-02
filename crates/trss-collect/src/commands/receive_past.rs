@@ -47,7 +47,7 @@ use transmission_rpc::types::TorrentGetField;
 
 use super::receive_once::{self, failed, held, Finished, NotRetryable, Retry, Settle};
 use crate::{
-    context::CollectContext,
+    context::ReceiveContext,
     past_search::world,
     plan::rule_destination,
     revisions::{self, Decided, Listing, Plan, Replaced, Selected},
@@ -100,7 +100,7 @@ fn store(err: impl std::fmt::Display) -> Retry {
 /// The turn the command takes before it runs: a read of the work folder its
 /// rule saves into, as for `receive_once` ([`receive_once::section`]).
 pub async fn section(
-    ctx: &CollectContext,
+    ctx: &ReceiveContext,
     command: &Command,
 ) -> Result<trss_core::folder_locks::Section, Retry> {
     let Ok(payload) = serde_json::from_str::<ReceivePast>(&command.payload) else {
@@ -112,7 +112,7 @@ pub async fn section(
 /// Runs a `receive_past` command to its end (see the module docs), with its
 /// turn ([`section`]) taken.
 pub async fn run(
-    ctx: &CollectContext,
+    ctx: &ReceiveContext,
     command: &Command,
     now: impl Fn() -> Millis,
     cancel: &CancellationToken,
@@ -253,7 +253,7 @@ pub async fn run(
 /// that cannot be asked leaves the command to the next look, as the add would
 /// fail all the same.
 async fn departed(
-    ctx: &CollectContext,
+    ctx: &ReceiveContext,
     item: &HistoryItem,
     rule: &Rule,
     save_path: &Path,
@@ -262,7 +262,7 @@ async fn departed(
     if item.torrent_hash.is_none() {
         return Ok(false);
     }
-    let mut transmission = ctx.transmission();
+    let mut transmission = ctx.transmission.client();
     let listed = transmission
         .torrent_get(Some(vec![TorrentGetField::HashString]), None)
         .await
@@ -336,7 +336,7 @@ async fn departed(
 /// an earlier start's add that got no answer stays recorded, so the next cycle
 /// removes no departed torrents, and the command's label comes off.
 async fn ended(
-    ctx: &CollectContext,
+    ctx: &ReceiveContext,
     command: &Command,
     finished: Finished,
     cancel: &CancellationToken,
@@ -367,7 +367,7 @@ pub fn past_item(payload: &ReceivePast, channel_id: &str, id: i64) -> HistoryIte
 
 /// Records the result as a past item and returns it.
 async fn record(
-    ctx: &CollectContext,
+    ctx: &ReceiveContext,
     payload: &ReceivePast,
     channel: &Channel,
     at: Millis,
@@ -437,7 +437,7 @@ fn new_revision(
 /// Decides a result that is a revision, with the worker's own judgment
 /// ([`revisions::plan`]) and records what a revision that is not added needs.
 async fn decide_revision(
-    ctx: &CollectContext,
+    ctx: &ReceiveContext,
     item: &HistoryItem,
     rule: &Rule,
     save_path: &Path,
@@ -468,7 +468,7 @@ async fn decide_revision(
         return Ok(Revision::Normal);
     }
     let plan = revisions::plan(
-        ctx,
+        &ctx.revision_work(),
         &Selected {
             channel_id: &item.channel_id,
             identity_key: &item.identity_key,
@@ -536,7 +536,7 @@ async fn decide_revision(
 /// Records `result` with `reason` on `item` and the revision decision `row`
 /// that says why, together.
 async fn withhold(
-    ctx: &CollectContext,
+    ctx: &ReceiveContext,
     item: &HistoryItem,
     rule: &Rule,
     at: Millis,

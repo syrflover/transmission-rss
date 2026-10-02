@@ -49,10 +49,29 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crate::context::CollectContext;
+use crate::context::TransmissionLink;
 use crate::store::channels::{Rule, SeasonLinked, SeasonRef};
+use crate::store::{channels::ChannelStore, history::HistoryStore};
+use trss_library::store::library::LibraryStore;
 use trss_transmission as transmission;
+use trss_transmission::Redactor;
 use trss_transmission::TorrentPlace;
+
+/// What the season link uses (made from
+/// [`CollectContext::link`](crate::context::CollectContext::link)). Cheap to
+/// clone.
+#[derive(Clone)]
+pub struct LinkContext {
+    pub channels: ChannelStore,
+    /// The torrents the rules received.
+    pub history: HistoryStore,
+    /// Where the videos the rules received are looked up.
+    pub library: LibraryStore,
+    /// What the link remembers between cycles.
+    pub season_link: Memory,
+    pub transmission: TransmissionLink,
+    pub redactor: Redactor,
+}
 
 /// What one pass came to (tests and logs).
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -122,7 +141,7 @@ struct Found {
 
 /// What the library holds at the files of the given torrents, or `None` when
 /// it could not be asked.
-async fn find(ctx: &CollectContext, places: &[&TorrentPlace]) -> Option<Found> {
+async fn find(ctx: &LinkContext, places: &[&TorrentPlace]) -> Option<Found> {
     let paths: Vec<String> = places
         .iter()
         .flat_map(|place| {
@@ -160,7 +179,7 @@ async fn find(ctx: &CollectContext, places: &[&TorrentPlace]) -> Option<Found> {
 /// has under the path Transmission reports is logged once per worker start: it
 /// is what a download folder that is mounted at another path for the worker
 /// than for Transmission looks like. The log names the rule's ID only.
-pub async fn link_seasons(ctx: &CollectContext) -> Linked {
+pub async fn link_seasons(ctx: &LinkContext) -> Linked {
     let mut done = Linked::default();
     // Read before anything the attempt depends on, so that a change during the
     // attempt makes the next one try again.
@@ -234,7 +253,7 @@ pub async fn link_seasons(ctx: &CollectContext) -> Linked {
         return done;
     }
 
-    let mut client = ctx.transmission();
+    let mut client = ctx.transmission.client();
     let places = match transmission::torrent_places(&mut client, Some(&hashes), true).await {
         Ok(places) => places,
         Err(err) => {

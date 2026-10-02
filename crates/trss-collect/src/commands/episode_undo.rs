@@ -119,20 +119,38 @@ use trss_core::{
     commands::{Command, CommandState, Outcome},
     files::rename_noreplace,
     folder_locks::Section,
+    settings::SettingsStore,
     Clock,
 };
 
 use crate::{
-    context::CollectContext,
+    context::TransmissionLink,
     episode_offset::signed,
     plan::rule_work_folder,
     revision::FileIdentity,
     revisions::{episode_name, owner_of, same_folder, Owner},
     rss::save_path,
-    store::channels::{NewUndoFile, Rule, UndoBegun, UndoFileState, REVISION_UNDER_WAY},
+    store::{
+        channels::{ChannelStore, NewUndoFile, Rule, UndoBegun, UndoFileState, REVISION_UNDER_WAY},
+        history::HistoryStore,
+    },
 };
 use trss_library::discovery::VIDEO_EXTENSIONS;
 use trss_transmission::{torrent_places, TorrentPlace};
+
+/// What `episode_undo` uses (made from
+/// [`CollectContext::undo`](crate::context::CollectContext::undo)). Cheap to
+/// clone.
+#[derive(Clone)]
+pub struct UndoContext {
+    /// The rule, its offset and the files the undo renames.
+    pub channels: ChannelStore,
+    /// The videos the rule received, which the undo renames.
+    pub history: HistoryStore,
+    /// Where the collect folder is read from.
+    pub settings: SettingsStore,
+    pub transmission: TransmissionLink,
+}
 
 /// The `kind` of the command.
 pub const KIND: &str = "episode_undo";
@@ -223,7 +241,7 @@ fn transmission(err: impl std::fmt::Display) -> Retry {
 /// Plans and begins a new undo of the automatic value `from` of `rule`:
 /// the undo as begun, or how the command ends without one.
 async fn begin(
-    ctx: &CollectContext,
+    ctx: &UndoContext,
     command: &Command,
     rule: &Rule,
     from: i64,
@@ -288,7 +306,7 @@ fn passes(reason: &str) -> bool {
 /// Renames one pending file of the undo `command_id` and records how it
 /// ended. `false` when it waits, still `pending`.
 async fn carry_on(
-    ctx: &CollectContext,
+    ctx: &UndoContext,
     command_id: &str,
     file: &NewUndoFile,
     listing: &mut Listing,
@@ -355,7 +373,7 @@ fn failed(reason: impl Into<String>) -> Finished {
 /// The turn the command takes before it runs: a write of the work folder the
 /// rule saves into ([`rule_work_folder`]). Empty when the request, the rule or
 /// the collect folder cannot be found: the command then ends by itself.
-pub async fn section(ctx: &CollectContext, command: &Command) -> Result<Section, Retry> {
+pub async fn section(ctx: &UndoContext, command: &Command) -> Result<Section, Retry> {
     let Ok(payload) = serde_json::from_str::<EpisodeUndo>(&command.payload) else {
         return Ok(Section::new());
     };
@@ -374,11 +392,7 @@ pub async fn section(ctx: &CollectContext, command: &Command) -> Result<Section,
 }
 
 /// Runs the command, with its turn ([`section`]) taken.
-pub async fn run(
-    ctx: &CollectContext,
-    command: &Command,
-    clock: &Clock,
-) -> Result<Finished, Retry> {
+pub async fn run(ctx: &UndoContext, command: &Command, clock: &Clock) -> Result<Finished, Retry> {
     let Ok(payload) = serde_json::from_str::<EpisodeUndo>(&command.payload) else {
         return Ok(failed("요청 내용을 읽지 못했어요."));
     };
@@ -500,7 +514,7 @@ pub async fn run(
 /// file list once; a Transmission that cannot be reached leaves the command
 /// for the next look.
 async fn plan(
-    ctx: &CollectContext,
+    ctx: &UndoContext,
     rule: &Rule,
     collect_folder: &str,
     from: i64,
@@ -515,7 +529,7 @@ async fn plan(
         return Ok(Vec::new());
     }
     let rule_folder = save_path(Path::new(collect_folder), Path::new(&rule.directory));
-    let mut client = ctx.transmission();
+    let mut client = ctx.transmission.client();
     let places = torrent_places(&mut client, None, true)
         .await
         .map_err(transmission)?;
@@ -704,9 +718,9 @@ struct Listing {
 }
 
 impl Listing {
-    async fn get(&mut self, ctx: &CollectContext) -> Result<&[TorrentPlace], Retry> {
+    async fn get(&mut self, ctx: &UndoContext) -> Result<&[TorrentPlace], Retry> {
         if self.places.is_none() {
-            let mut client = ctx.transmission();
+            let mut client = ctx.transmission.client();
             let places = torrent_places(&mut client, None, true)
                 .await
                 .map_err(transmission)?;
@@ -762,7 +776,7 @@ fn new_name(
 /// recording it: nothing is at the old name and the planned file is at the
 /// new one, and a torrent that still holds it has the new name.
 async fn renamed_before(
-    ctx: &CollectContext,
+    ctx: &UndoContext,
     file: &NewUndoFile,
     listing: &mut Listing,
 ) -> Result<bool, Retry> {
@@ -799,7 +813,7 @@ fn identity_at(path: &Path) -> io::Result<Option<FileIdentity>> {
 /// Renames one planned video. `None` when it has the new name, else why it
 /// keeps its old one (or waits, for a reason that [`passes`]).
 async fn rename(
-    ctx: &CollectContext,
+    ctx: &UndoContext,
     command_id: &str,
     file: &NewUndoFile,
     listing: &mut Listing,
@@ -847,7 +861,7 @@ async fn rename(
             },
             None => return Ok(Some(NAME_CHANGED.to_owned())),
         };
-        let mut client = ctx.transmission();
+        let mut client = ctx.transmission.client();
         if place.name == file.to_name {
             let (from, to) = match (identity_at(&source), identity_at(&target)) {
                 (Ok(from), Ok(to)) => (from, to),

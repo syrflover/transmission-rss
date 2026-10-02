@@ -79,14 +79,14 @@ use trname::trname;
 
 use super::link;
 use crate::{
-    context::CollectContext,
+    context::TransmissionLink,
     offsets,
     plan::{picks, rule_destination, rule_work_folder, ChannelPlan},
     revision::Release,
     revisions,
     store::{
-        channels::{Channel, ChannelWithRules, Rule, RuleState},
-        history::{HistoryItem, HistoryResult},
+        channels::{Channel, ChannelStore, ChannelWithRules, Rule, RuleState},
+        history::{HistoryItem, HistoryResult, HistoryStore},
         revisions::{
             Claim, HistoryWrite, NewRevision, Revision, RevisionError, RevisionState,
             RevisionStore, RowWrite, Step,
@@ -96,13 +96,38 @@ use crate::{
 use trss_core::{
     commands::{Command, CommandState, Outcome, MAX_ATTEMPTS},
     folder_locks::Section,
+    settings::SettingsStore,
     Millis,
 };
+use trss_library::store::{library::LibraryStore, seasons::SeasonStore};
 use trss_transmission as transmission;
 use trss_transmission::{
     add_item, get_torrent, get_torrents, has_label, remove_label, AddError, AddKind, AddLabels,
-    Redactor,
+    Redactor, RenamePolicy,
 };
+
+/// What `receive_once` and `receive_past` use (made from
+/// [`CollectContext::receive`](crate::context::CollectContext::receive)).
+/// Cheap to clone.
+#[derive(Clone)]
+pub struct ReceiveContext {
+    pub channels: ChannelStore,
+    /// Where the collect folder is read from.
+    pub settings: SettingsStore,
+    pub history: HistoryStore,
+    /// The replacements of video revisions a retry carries on.
+    pub revisions: RevisionStore,
+    /// With `library`, what the episode offset of a rule's first item is
+    /// settled from ([`crate::offsets`]).
+    pub seasons: SeasonStore,
+    pub library: LibraryStore,
+    pub transmission: TransmissionLink,
+    /// Reads a channel's feed again for an item's link.
+    pub http: reqwest::Client,
+    pub rename: RenamePolicy,
+    /// Knows secrets that do not come from channels.
+    pub redactor: Redactor,
+}
 
 /// The `kind` of the command.
 pub const KIND: &str = "receive_once";
@@ -534,7 +559,7 @@ impl Retry {
 /// rule saves into ([`rule_work_folder`]), the rule found as [`execute`] finds
 /// it. Empty when the request, the item, the rule or the collect folder cannot
 /// be found: the command then ends by itself.
-pub async fn section(ctx: &CollectContext, command: &Command) -> Result<Section, Retry> {
+pub async fn section(ctx: &ReceiveContext, command: &Command) -> Result<Section, Retry> {
     let Ok(payload) = serde_json::from_str::<ReceiveOnce>(&command.payload) else {
         return Ok(Section::new());
     };
@@ -553,7 +578,7 @@ pub async fn section(ctx: &CollectContext, command: &Command) -> Result<Section,
 /// A read of the work folder the rule `rule_id` saves into, or nothing when
 /// there is no such rule or no collect folder.
 pub(crate) async fn rule_section(
-    ctx: &CollectContext,
+    ctx: &ReceiveContext,
     rule_id: Option<&str>,
 ) -> Result<Section, Retry> {
     let Some(id) = rule_id else {
@@ -570,7 +595,7 @@ pub(crate) async fn rule_section(
 
 /// Runs the command, with its turn ([`section`]) taken.
 pub async fn run(
-    ctx: &CollectContext,
+    ctx: &ReceiveContext,
     command: &Command,
     now: impl Fn() -> Millis,
     cancel: &CancellationToken,
@@ -582,7 +607,7 @@ pub async fn run(
 /// The steps of [`run`] after the add: the rename of a torrent this command
 /// put in, the note when the name stays, and the labels that come off.
 pub async fn finish(
-    ctx: &CollectContext,
+    ctx: &ReceiveContext,
     command: &Command,
     finished: Finished,
     cancel: &CancellationToken,
@@ -598,14 +623,12 @@ pub async fn finish(
         // History holds the torrent's hash now; the command's label has done
         // its job. One left behind (this fails, or the worker dies first) only
         // names a command that has ended.
-        let mut transmission =
-            transmission::client(ctx.transmission_url.clone(), &ctx.transmission_http);
+        let mut transmission = ctx.transmission.client();
         let label = transmission::command_label(&command.id);
         remove_label(&mut transmission, &step.hash, &label, &step.redactor).await;
     }
     if let Some(redactor) = &finished.unlabel {
-        let mut transmission =
-            transmission::client(ctx.transmission_url.clone(), &ctx.transmission_http);
+        let mut transmission = ctx.transmission.client();
         let label = transmission::command_label(&command.id);
         match get_torrents(&mut transmission).await {
             Ok(torrents) => {
@@ -625,7 +648,7 @@ pub async fn finish(
 /// Runs a `receive_once` command up to the point where its outcome is known and
 /// recorded on the history item (steps 1 to 3); [`run`] goes on from there.
 pub async fn execute(
-    ctx: &CollectContext,
+    ctx: &ReceiveContext,
     command: &Command,
     now: impl Fn() -> Millis,
 ) -> Result<Finished, Retry> {
@@ -653,7 +676,7 @@ pub enum Settle {
 /// the folder, which the caller has found out (`receive_past`): it is received
 /// again like an item no rule has received, and keeps its result.
 pub async fn execute_with(
-    ctx: &CollectContext,
+    ctx: &ReceiveContext,
     command: &Command,
     now: impl Fn() -> Millis,
     settle: Settle,
@@ -750,7 +773,13 @@ pub async fn execute_with(
     // (`offsets`).
     let settled = match (payload.rule_id, settle) {
         (Some(_), Settle::Offset) => {
-            offsets::settle_one(ctx, &collect_folder.folder, plan.rule, &item.title).await
+            offsets::settle_one(
+                &ctx.offsets(),
+                &collect_folder.folder,
+                plan.rule,
+                &item.title,
+            )
+            .await
         }
         _ => None,
     };
@@ -773,7 +802,7 @@ pub async fn execute_with(
         .await
         .map_err(Retry::store)?;
     if let Some(row) = waiting {
-        match revisions::holds_same_or_higher(ctx, &item, &row).await {
+        match revisions::holds_same_or_higher(&ctx.revision_work(), &item, &row).await {
             Ok(false) => {}
             Ok(true) => {
                 if again {
@@ -836,8 +865,7 @@ pub async fn execute_with(
         }
     }
 
-    let mut transmission =
-        transmission::client(ctx.transmission_url.clone(), &ctx.transmission_http);
+    let mut transmission = ctx.transmission.client();
     let item_label = transmission::item_label(&item.channel_id, &item.identity_key);
     let command_label = transmission::command_label(&command.id);
     let added = add_item(
@@ -1018,7 +1046,7 @@ pub async fn execute_with(
 /// and an earlier start's add that got no answer stays recorded; the item is
 /// left as it is.
 pub(super) fn end_early(
-    ctx: &CollectContext,
+    ctx: &ReceiveContext,
     command: &Command,
     mut finished: Finished,
 ) -> Finished {
@@ -1062,7 +1090,7 @@ pub(super) fn held(stored: HistoryResult, rename: Option<Rename>) -> Finished {
 /// found it there, after the command was accepted) keeps its result, and the
 /// command then ends with that result instead of failing.
 async fn refuse(
-    ctx: &CollectContext,
+    ctx: &ReceiveContext,
     item: &HistoryItem,
     rule_id: &str,
     reason: &str,
@@ -1112,7 +1140,7 @@ pub(super) fn failed(reason: &str, rename: Option<Rename>) -> Finished {
 }
 
 /// Knows the channel's secret values and the Transmission credentials.
-fn redactor_for(ctx: &CollectContext, channel: &Channel) -> Redactor {
+fn redactor_for(ctx: &ReceiveContext, channel: &Channel) -> Redactor {
     let mut redactor = ctx.redactor.clone();
     let plan = ChannelPlan::new(
         ChannelWithRules {
@@ -1173,12 +1201,11 @@ pub const NAME_NOT_CHANGED: &str = "이름을 바꾸지 못해서 원래 이름 
 /// item. Attempts follow `ctx.rename`, as a magnet link's file name is only
 /// known once Transmission has its metadata.
 pub async fn rename(
-    ctx: &CollectContext,
+    ctx: &ReceiveContext,
     rename: &Rename,
     cancel: &CancellationToken,
 ) -> RenameResult {
-    let mut transmission =
-        transmission::client(ctx.transmission_url.clone(), &ctx.transmission_http);
+    let mut transmission = ctx.transmission.client();
     for _ in 0..ctx.rename.attempts {
         tokio::select! {
             _ = tokio::time::sleep(ctx.rename.delay) => {}

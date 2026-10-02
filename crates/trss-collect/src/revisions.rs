@@ -34,7 +34,7 @@
 //! it with the request as the confirmation ([`confirm`]).
 //!
 //! Whatever is decided is written as a row of
-//! [`RevisionStore`](crate::store::revisions::RevisionStore), so an item is
+//! [`RevisionStore`], so an item is
 //! decided once (a CRC32 is not read again every cycle), and a cycle leaves the
 //! row's item to the steps below instead of adding it again. A cycle also no
 //! longer receives the old video's release (through any channel) once its
@@ -98,21 +98,33 @@ use transmission_rpc::types::Id;
 
 use crate::{
     commands::receive_once::derived_name,
-    context::{CollectContext, MAX_REASON_CHARS},
+    context::{TransmissionLink, MAX_REASON_CHARS},
 };
 use crate::{
     revision::{crc_text, file_crc32_identified, FileIdentity, Release},
     store::{
-        channels::RuleState,
-        history::{HistoryItem, HistoryResult},
+        channels::{ChannelStore, RuleState},
+        history::{HistoryItem, HistoryResult, HistoryStore},
         revisions::{
-            Claim, OldVideo, Replacement, Revision, RevisionState, RowWrite, Step, FOLDER_AWAY,
-            FOLDER_GONE_AFTER, OLD_FILE_WATCHED,
+            Claim, OldVideo, Replacement, Revision, RevisionState, RevisionStore, RowWrite, Step,
+            FOLDER_AWAY, FOLDER_GONE_AFTER, OLD_FILE_WATCHED,
         },
     },
 };
-use trss_core::Millis;
+use trss_core::{folder_locks::FolderLocks, Millis};
 use trss_transmission::{get_torrent, torrent_places, Redactor, TorrentPlace};
+
+/// What the video revisions use (made from
+/// [`CollectContext::revision_work`](crate::context::CollectContext::revision_work)).
+/// Cheap to clone.
+#[derive(Clone)]
+pub struct RevisionsContext {
+    pub channels: ChannelStore,
+    pub history: HistoryStore,
+    /// The replacements under way.
+    pub revisions: RevisionStore,
+    pub transmission: TransmissionLink,
+}
 
 /// Why a revision without a CRC32 in its name is not received.
 pub const NO_CRC: &str = "이름에 CRC32 값이 없어서 받은 영상을 확인할 수 없어 자동으로 받지 않았어요. 다시 받기로 받으면 확인 없이 이전 영상을 대체해요.";
@@ -233,12 +245,12 @@ impl Listing {
         Listing::default()
     }
 
-    async fn get(&self, ctx: &CollectContext) -> Result<Arc<Vec<TorrentPlace>>, String> {
+    async fn get(&self, ctx: &RevisionsContext) -> Result<Arc<Vec<TorrentPlace>>, String> {
         let mut read = self.read.lock().await;
         if let Some(places) = &*read {
             return places.clone();
         }
-        let mut transmission = ctx.transmission();
+        let mut transmission = ctx.transmission.client();
         let places = torrent_places(&mut transmission, None, true)
             .await
             .map(Arc::new)
@@ -331,7 +343,7 @@ async fn identified_crc_of(path: PathBuf) -> io::Result<(u32, FileIdentity)> {
 }
 
 /// Decides what to do with a selected item (see the module docs).
-pub async fn plan(ctx: &CollectContext, item: &Selected<'_>, listing: &Listing) -> Plan {
+pub async fn plan(ctx: &RevisionsContext, item: &Selected<'_>, listing: &Listing) -> Plan {
     let release = Release::parse(item.title);
     if release.version < 2 {
         return Plan::Normal;
@@ -345,7 +357,7 @@ pub async fn plan(ctx: &CollectContext, item: &Selected<'_>, listing: &Listing) 
 /// [`plan`] for the revision `release` of the episode file `episode_name` in
 /// `item.save_path`.
 async fn plan_at(
-    ctx: &CollectContext,
+    ctx: &RevisionsContext,
     item: &Selected<'_>,
     release: Release,
     episode_name: String,
@@ -379,7 +391,7 @@ async fn plan_at(
     // folder had the episode, and renamed. Asked about alone, which settles
     // every cycle after the first for such an item.
     if let Some(own) = &own {
-        let mut transmission = ctx.transmission();
+        let mut transmission = ctx.transmission.client();
         match torrent_places(&mut transmission, Some(std::slice::from_ref(own)), true).await {
             Ok(places) => match owner_of(&places, &target) {
                 Ok(Owner::One(_)) => return Plan::Normal,
@@ -502,7 +514,7 @@ async fn plan_at(
 /// replacement could replace nothing. `Err` when Transmission or the disk
 /// could not be read.
 pub async fn holds_same_or_higher(
-    ctx: &CollectContext,
+    ctx: &RevisionsContext,
     item: &HistoryItem,
     row: &Revision,
 ) -> Result<bool, String> {
@@ -596,7 +608,8 @@ const OLD_FILE_GONE_TOO: &str = "이전 영상의 토렌트를 지운 뒤 받은
 /// Carries every replacement under way as far as it goes now. `at` stamps
 /// what is written.
 pub async fn advance(
-    ctx: &CollectContext,
+    ctx: &RevisionsContext,
+    folders: &FolderLocks,
     at: Millis,
     redactor: &Redactor,
     cancel: &CancellationToken,
@@ -613,8 +626,7 @@ pub async fn advance(
         // A replacement removes and renames videos in its folder: it takes the
         // folder's turn, so no command moves or renames there meanwhile, and
         // no add into it runs beside the step.
-        let _turn = ctx
-            .folders
+        let _turn = folders
             .lock(trss_core::folder_locks::Section::new().write(&row.folder))
             .await;
         drive(ctx, row, at, redactor, &listing).await;
@@ -658,7 +670,7 @@ fn cleaned(step: Step, redactor: &Redactor) -> Step {
 }
 
 async fn drive(
-    ctx: &CollectContext,
+    ctx: &RevisionsContext,
     mut row: Revision,
     at: Millis,
     redactor: &Redactor,
@@ -849,11 +861,11 @@ fn skipped(reason: &str) -> Next {
 
 /// Step 1: the new video is all there, a file of its own in the rule's
 /// folder, and its CRC32 is the name's.
-async fn received(ctx: &CollectContext, row: &Revision) -> Next {
+async fn received(ctx: &RevisionsContext, row: &Revision) -> Next {
     let Some(hash) = row.torrent_hash.clone() else {
         return failed(UNKNOWN_TORRENT, None);
     };
-    let mut transmission = ctx.transmission();
+    let mut transmission = ctx.transmission.client();
     let place = match torrent_places(&mut transmission, Some(&[hash]), true).await {
         Ok(places) => places.into_iter().next(),
         Err(err) => return Next::Later(err.to_string()),
@@ -932,7 +944,7 @@ async fn received(ctx: &CollectContext, row: &Revision) -> Next {
 /// on its way skips it, as it would skip it before removing anything; and an
 /// episode name left empty by another replacement of the episode, between
 /// removing the old video and naming its new one, is not the old video gone.
-async fn recover(ctx: &CollectContext, row: &Revision) -> Next {
+async fn recover(ctx: &RevisionsContext, row: &Revision) -> Next {
     match ctx.revisions.verdict(row.id).await {
         Ok(Claim::Overtaken) => return Next::Step(Step::Overtaken),
         Ok(_) => {}
@@ -959,7 +971,7 @@ async fn recover(ctx: &CollectContext, row: &Revision) -> Next {
 /// Whether another replacement of `row`'s episode removed the file under
 /// the episode name and is on its way to the name (`removing`, `removed`):
 /// the name is empty for it, not for want of a video.
-async fn another_naming(ctx: &CollectContext, row: &Revision) -> Result<bool, String> {
+async fn another_naming(ctx: &RevisionsContext, row: &Revision) -> Result<bool, String> {
     let rows = ctx
         .revisions
         .of_episode(row.folder.clone(), row.episode_name.clone())
@@ -983,7 +995,7 @@ async fn another_naming(ctx: &CollectContext, row: &Revision) -> Result<bool, St
 /// (which still holds its torrent) says so ([`Step::FolderGone`]) until the
 /// folder is back. Nothing is removed. A folder away while the row's rule is
 /// archived is no run. `Some` is what to do instead of the row's step.
-async fn folder_watch(ctx: &CollectContext, row: &mut Revision, at: Millis) -> Option<Next> {
+async fn folder_watch(ctx: &RevisionsContext, row: &mut Revision, at: Millis) -> Option<Next> {
     // An archived rule's work folder is in the archive folder on purpose
     // (`rule_archive`), not a mount that went away: no run is kept while the
     // rule is archived, and the row is looked at as before once it is
@@ -1079,7 +1091,7 @@ fn new_video_missed(row: &Revision, reason: &str, ended: Option<&str>) -> Next {
 /// A look found the row's new video: an earlier miss no longer counts, and
 /// its reason `miss_reason` goes with it.
 async fn new_video_found(
-    ctx: &CollectContext,
+    ctx: &RevisionsContext,
     row: &mut Revision,
     miss_reason: Option<&str>,
 ) -> Result<(), Next> {
@@ -1101,7 +1113,7 @@ async fn new_video_found(
 /// earlier miss no longer counts toward two in a row; its reason
 /// `miss_reason` goes with it, as when the video is found.
 async fn folder_away(
-    ctx: &CollectContext,
+    ctx: &RevisionsContext,
     row: &mut Revision,
     why: String,
     miss_reason: Option<&str>,
@@ -1172,7 +1184,7 @@ fn exists(path: &Path) -> io::Result<bool> {
 /// skipped) with it in place. `removing` is written before anything is
 /// removed, by a claim that lets one replacement of the episode at a time.
 async fn remove_old(
-    ctx: &CollectContext,
+    ctx: &RevisionsContext,
     row: &mut Revision,
     at: Millis,
     listing: &Listing,
@@ -1207,7 +1219,7 @@ async fn remove_old(
     if let (true, RevisionState::Removing, Some(hash)) =
         (present, row.state, row.old_torrent_hash.as_ref())
     {
-        let mut transmission = ctx.transmission();
+        let mut transmission = ctx.transmission.client();
         match get_torrent(&mut transmission, hash).await {
             Ok(Some(_)) => {}
             Ok(None) => {
@@ -1309,7 +1321,7 @@ async fn remove_old(
 
     match &found.torrent_hash {
         Some(hash) => {
-            let mut transmission = ctx.transmission();
+            let mut transmission = ctx.transmission.client();
             let removed = transmission
                 .torrent_remove(vec![Id::Hash(hash.clone())], true)
                 .await;
@@ -1357,7 +1369,7 @@ async fn remove_old(
 /// row's release that may be removed, with the identity of the file that was
 /// looked at; otherwise what to do instead.
 async fn old_video(
-    ctx: &CollectContext,
+    ctx: &RevisionsContext,
     row: &Revision,
     old: &Path,
     listing: &Listing,
@@ -1501,7 +1513,7 @@ async fn old_video(
 }
 
 /// The row's new release, as its history item names it.
-async fn new_release(ctx: &CollectContext, row: &Revision) -> Result<Release, Next> {
+async fn new_release(ctx: &RevisionsContext, row: &Revision) -> Result<Release, Next> {
     match ctx.history.get(row.item_id).await {
         Ok(Some(item)) => Ok(Release::parse(&item.title)),
         Ok(None) => Err(failed(OTHER_RELEASE, None)),
@@ -1510,7 +1522,7 @@ async fn new_release(ctx: &CollectContext, row: &Revision) -> Result<Release, Ne
 }
 
 /// Step 3: the new video takes the episode name while the name is free.
-async fn rename(ctx: &CollectContext, row: &mut Revision, listing: &Listing) -> Next {
+async fn rename(ctx: &RevisionsContext, row: &mut Revision, listing: &Listing) -> Next {
     let folder = PathBuf::from(&row.folder);
     let folder = folder.as_path();
     let target = folder.join(&row.episode_name);
@@ -1555,7 +1567,7 @@ async fn rename(ctx: &CollectContext, row: &mut Revision, listing: &Listing) -> 
     };
     let source = folder.join(&received_name);
 
-    let mut transmission = ctx.transmission();
+    let mut transmission = ctx.transmission.client();
     let torrent = match &row.torrent_hash {
         Some(hash) => match get_torrent(&mut transmission, hash).await {
             Ok(torrent) => torrent,
@@ -1609,7 +1621,7 @@ async fn rename(ctx: &CollectContext, row: &mut Revision, listing: &Listing) -> 
 /// the row's torrent holds, or (the torrent gone too) its CRC32 is the one
 /// read when the new video was checked.
 async fn renamed_already(
-    ctx: &CollectContext,
+    ctx: &RevisionsContext,
     row: &Revision,
     target: &Path,
 ) -> Result<bool, String> {
@@ -1622,7 +1634,7 @@ async fn renamed_already(
         Err(err) => return Err(format!("cannot look at {received_name}: {err}")),
     }
     if let Some(hash) = &row.torrent_hash {
-        let mut transmission = ctx.transmission();
+        let mut transmission = ctx.transmission.client();
         let places = torrent_places(&mut transmission, Some(std::slice::from_ref(hash)), true)
             .await
             .map_err(|err| err.to_string())?;
@@ -1651,7 +1663,7 @@ async fn renamed_already(
 /// (the person put one, or another release came). A name emptied by another
 /// replacement of the episode that removed the file and is on its way to the
 /// name (`removing`, `removed`) is no failure: that one says so if it fails.
-async fn ended_watch(ctx: &CollectContext, row: &Revision) -> Next {
+async fn ended_watch(ctx: &RevisionsContext, row: &Revision) -> Next {
     if folder_there(row).is_err() {
         return Next::Wait;
     }

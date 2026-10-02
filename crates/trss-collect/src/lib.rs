@@ -15,7 +15,8 @@
 //! - [`past_search`], [`subscriptions`], [`archive_suggestions`], [`anissia`],
 //!   [`schedule`]: subscriptions to airing anime and what they offer.
 //!
-//! [`context::CollectContext`] is what the collection work shares.
+//! [`context::CollectContext`] is what the collection work shares; each command
+//! takes only the part it uses (see [`context`]).
 
 pub mod anissia;
 pub mod archive_suggestions;

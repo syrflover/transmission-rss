@@ -128,7 +128,7 @@ pub use env::{EnvError, WorkerEnv};
 
 use trss_collect::{
     commands::rule_archive::work_folder::MovePolicy,
-    context::CollectContext,
+    context::{CollectContext, TransmissionLink},
     feed, season_link,
     store::{
         channels::ChannelStore,
@@ -259,11 +259,11 @@ impl Worker {
                 season_link: season_link::Memory::default(),
                 library,
                 live,
-                transmission_url: env.transmission_url.clone(),
-                transmission_http: trss_transmission::http_client(
-                    trss_transmission::REQUEST_TIMEOUT,
-                )
-                .map_err(WorkerError::TransmissionHttp)?,
+                transmission: TransmissionLink {
+                    url: env.transmission_url.clone(),
+                    http: trss_transmission::http_client(trss_transmission::REQUEST_TIMEOUT)
+                        .map_err(WorkerError::TransmissionHttp)?,
+                },
                 http: feed::client()?,
                 rename: RenamePolicy::default(),
                 moves: MovePolicy::default(),
@@ -349,7 +349,7 @@ impl Worker {
     /// scan (see [`season_link`]). It takes no lock, so it is for callers that
     /// know no cycle is running, such as tests.
     pub async fn link_seasons(&self) -> season_link::Linked {
-        season_link::link_seasons(&self.ctx).await
+        season_link::link_seasons(&self.ctx.link()).await
     }
 
     /// Ends every watch.
@@ -381,7 +381,7 @@ impl Worker {
     /// Overrides how long one request to Transmission may take (default:
     /// [`trss_transmission::REQUEST_TIMEOUT`]).
     pub fn with_transmission_timeout(mut self, timeout: Duration) -> Self {
-        self.ctx.transmission_http = trss_transmission::http_client(timeout)
+        self.ctx.transmission.http = trss_transmission::http_client(timeout)
             .expect("a client with only timeouts set builds");
         self
     }
@@ -442,7 +442,7 @@ impl Worker {
         if !report.interrupted && !cancel.is_cancelled() {
             watch::scan_all(&self.watch, &self.clock, cancel).await;
             // The videos the rules received are in the library now (or not yet).
-            season_link::link_seasons(&self.ctx).await;
+            season_link::link_seasons(&self.ctx.link()).await;
         }
 
         Ok(TickOutcome::Ran(report))
