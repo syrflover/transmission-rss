@@ -3,11 +3,26 @@ name = "trss-subtitles"
 version.workspace = true
 edition.workspace = true
 
+[features]
+# `testing`: a local HTTP server shaped like Tistory, for the tests of the
+# crates above.
+test-support = ["dep:axum", "dep:futures", "tokio/net", "tokio/rt"]
+
 [dependencies]
+axum = { workspace = true, optional = true }
 bytes.workspace = true
+futures = { workspace = true, optional = true }
+percent-encoding.workspace = true
+reqwest.workspace = true
+scraper.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["time"] }
+tokio = { workspace = true, features = ["time", "sync"] }
 url.workspace = true
+zip.workspace = true
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+axum.workspace = true
+futures.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "net"] }

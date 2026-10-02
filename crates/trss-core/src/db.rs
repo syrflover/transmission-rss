@@ -118,6 +118,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("../migrations/jobs/schema.sql")),
     // 35: the common policy (subtitle format order, server browser) and a work's own format order
     Migration::Sql(include_str!("../migrations/settings/policy.sql")),
+    // 36: a file receipt's format, failure class, answer facts and snapshot; a failed item's class
+    Migration::Sql(include_str!("../migrations/jobs/results.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -695,6 +697,77 @@ mod tests {
             .await
             .unwrap();
         assert_eq!((version, policies, overrides), (3, 0, 0));
+    }
+
+    #[tokio::test]
+    async fn a_database_from_before_receive_results_keeps_its_receipts_and_checks_the_new_columns()
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        {
+            // A database as the build with 35 migrations left it: a job with a
+            // received file and a failed one.
+            let conn = database_at(&path, 35);
+            conn.execute_batch(
+                "INSERT INTO subtitle_jobs (id, command_id, request, origin, state,
+                     created_at, updated_at, state_at)
+                     VALUES ('j1', 'c1', '{}', 'pick', 'partial', 1, 1, 1);
+                 INSERT INTO subtitle_job_items (job_id, position, episode, post_url, found_at,
+                     state, reason, updated_at)
+                     VALUES ('j1', 0, '1', 'https://a.tistory.com/1', 6, 'done', NULL, 1),
+                            ('j1', 1, '2', 'https://a.tistory.com/2', 6, 'failed', '없어요', 1);
+                 INSERT INTO subtitle_job_files (id, job_id, item_id, file_key, name, state,
+                     size, sha256, path, created_at, updated_at)
+                     VALUES ('a1', 'j1', 1, 'k1', 'x.ass', 'done', 10, 'ab', 'j1/x.ass', 1, 1),
+                            ('a2', 'j1', 2, 'k2', 'y.ass', 'failed', NULL, NULL, NULL, 1, 1);",
+            )
+            .unwrap();
+        }
+
+        let db = Db::open(&path).await.unwrap();
+
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+        type Kept = (i64, i64, Option<String>, Option<String>, Option<String>);
+        let (kept, refused, accepted): (Kept, [bool; 6], i64) = db
+            .run::<_, DbError, _>(|c| {
+                let kept = c.query_row(
+                    "SELECT (SELECT count(*) FROM subtitle_job_files),
+                            (SELECT count(*) FROM subtitle_job_items),
+                            (SELECT format FROM subtitle_job_files WHERE id = 'a1'),
+                            (SELECT failure FROM subtitle_job_files WHERE id = 'a2'),
+                            (SELECT failure FROM subtitle_job_items WHERE position = 1)",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+                )?;
+                let update = |sql: &str| c.execute(sql, []).is_err();
+                let refused = [
+                    update("UPDATE subtitle_job_files SET format = 'mp4' WHERE id = 'a1'"),
+                    update("UPDATE subtitle_job_files SET failure = 'gone' WHERE id = 'a2'"),
+                    update("UPDATE subtitle_job_files SET http_status = 99 WHERE id = 'a2'"),
+                    update("UPDATE subtitle_job_files SET response_size = -1 WHERE id = 'a2'"),
+                    update("UPDATE subtitle_job_files SET snapshot = 'not json' WHERE id = 'a1'"),
+                    update("UPDATE subtitle_job_items SET failure = 'timeout' WHERE position = 1"),
+                ];
+                c.execute_batch(
+                    "UPDATE subtitle_job_files SET format = 'zip',
+                         snapshot = '[[\"article:modified_time\",\"2026-09-28T00:13:41+09:00\"]]'
+                         WHERE id = 'a1';
+                     UPDATE subtitle_job_files SET failure = 'expired', http_status = 404,
+                         content_type = 'text/html', response_size = 150 WHERE id = 'a2';
+                     UPDATE subtitle_job_items SET failure = 'expired' WHERE position = 1;",
+                )?;
+                let accepted = c.query_row(
+                    "SELECT count(*) FROM subtitle_job_files WHERE format IS NOT NULL OR failure IS NOT NULL",
+                    [],
+                    |r| r.get(0),
+                )?;
+                Ok((kept, refused, accepted))
+            })
+            .await
+            .unwrap();
+        assert_eq!(kept, (2, 2, None, None, None));
+        assert_eq!(refused, [true; 6]);
+        assert_eq!(accepted, 2);
     }
 
     #[tokio::test]

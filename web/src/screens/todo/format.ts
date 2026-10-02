@@ -1,4 +1,22 @@
-import type { JobRow, JobState, ItemState, Wait } from "./api";
+import type { FailureClass, FileFormat, JobRow, JobState, ItemState, Wait } from "./api";
+
+/** What a failure class is called (`docs/specs/jobs.md`, 공통 수신 결과와 실패 분류). */
+export const FAILURE_LABEL: Record<FailureClass, string> = {
+  missing: "원본 없음",
+  expired: "만료",
+  not_a_file: "파일 아님",
+  changed: "출처 구조 바뀜",
+  network: "네트워크 실패",
+};
+
+/** What a checked file's format is called. */
+export const FORMAT_LABEL: Record<FileFormat, string> = {
+  zip: "ZIP",
+  ass: "ASS",
+  srt: "SRT",
+  smi: "SMI",
+  other: "그 밖의 형식",
+};
 
 /** An episode as shown: leading zeros of a whole number go (`01` is `1`); anything else stays as written. */
 function shown(episode: string): string {

@@ -9,7 +9,7 @@ import { btnNeutral } from "../collect/channels/styles";
 import { coverOf } from "../library/model";
 import { Cover } from "../library/WorkItem";
 import { fetchJob, type JobDetail, type JobRow } from "./api";
-import { CountChip, StateBadge, Tag } from "./badges";
+import { CountChip, FailureTag, StateBadge, Tag } from "./badges";
 import { ended, shownState } from "./format";
 import { BackIcon } from "./icons";
 import { JobResults } from "./JobResults";
@@ -141,7 +141,10 @@ function Page({ job }: { job: JobDetail }) {
             )}
           </div>
           {job.note !== null && job.note !== "" && (
-            <p className="text-[13.5px] leading-relaxed text-text-secondary max-[720px]:text-[13px]">{job.note}</p>
+            <p className="text-[13.5px] leading-relaxed text-text-secondary max-[720px]:text-[13px]">
+              {job.failure !== null && <FailureTag failure={job.failure} />}
+              {job.note}
+            </p>
           )}
         </div>
       </header>

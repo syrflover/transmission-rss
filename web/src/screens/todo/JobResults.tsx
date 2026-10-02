@@ -1,8 +1,8 @@
 import { cn } from "@/lib/utils";
 
 import type { JobFile, JobItem } from "./api";
-import { ItemBadge } from "./badges";
-import { episodeName, shownItem, sizeText } from "./format";
+import { FailureTag, ItemBadge } from "./badges";
+import { FORMAT_LABEL, episodeName, shownItem, sizeText } from "./format";
 
 /** `받음 2 · 실패 1`: how many items ended in each way, for a job with more than one. */
 function summary(items: readonly JobItem[]): string {
@@ -56,8 +56,11 @@ function ItemBlock({ item }: { item: JobItem }) {
       <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5">
         <b className="text-[14.5px] font-bold">{episodeName(item.episode)}</b>
         <ItemBadge shown={shownItem(item.state, item.wait)} />
-        {item.reason !== null && item.reason !== "" && (
-          <span className="min-w-0 flex-1 basis-48 text-[13px] leading-snug text-text-secondary">{item.reason}</span>
+        {((item.reason !== null && item.reason !== "") || item.failure !== null) && (
+          <span className="min-w-0 flex-1 basis-48 text-[13px] leading-snug text-text-secondary">
+            {item.failure !== null && <FailureTag failure={item.failure} />}
+            {item.reason}
+          </span>
         )}
       </div>
       {item.files.length > 0 && (
@@ -71,20 +74,40 @@ function ItemBlock({ item }: { item: JobItem }) {
   );
 }
 
+/** What answered a failed file: `HTTP 404 · text/html · 150 B`, from what is known. */
+function answerLine(file: JobFile): string | null {
+  const parts = [
+    file.http_status !== null ? `HTTP ${file.http_status}` : null,
+    file.content_type,
+    file.response_size !== null ? sizeText(file.response_size) : null,
+  ].filter((part): part is string => part !== null && part !== "");
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
+
 function FileLine({ file }: { file: JobFile }) {
+  // The size and format of what was received; a failed file's bytes are gone.
+  const facts = [
+    file.state !== "failed" && file.size !== null ? sizeText(file.size) : null,
+    file.format !== null ? FORMAT_LABEL[file.format] : null,
+  ].filter((fact): fact is string => fact !== null);
+  const answer = file.state === "failed" ? answerLine(file) : null;
   return (
     <li className="flex min-w-0 flex-col gap-1">
       <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1">
         <span className="min-w-0 text-[13px] leading-snug font-semibold [overflow-wrap:anywhere]">{file.name}</span>
-        {file.size !== null && <span className="text-xs whitespace-nowrap text-text-muted">{sizeText(file.size)}</span>}
+        {facts.length > 0 && <span className="text-xs whitespace-nowrap text-text-muted">{facts.join(" · ")}</span>}
         {file.state !== "done" && <ItemBadge shown={FILE_STATE[file.state]} />}
         {file.shared_with !== null && (
           <span className="text-xs text-text-muted">같은 파일 · {episodeName(file.shared_with)}에서 받음</span>
         )}
       </div>
-      {file.reason !== null && file.reason !== "" && (
-        <p className="text-xs leading-snug text-text-secondary">{file.reason}</p>
+      {((file.reason !== null && file.reason !== "") || file.failure !== null) && (
+        <p className="text-xs leading-snug text-text-secondary">
+          {file.failure !== null && <FailureTag failure={file.failure} />}
+          {file.reason}
+        </p>
       )}
+      {answer !== null && <p className="text-xs leading-snug text-text-muted">{answer}</p>}
       {file.path !== null && (
         <p className="text-xs leading-snug text-text-muted [overflow-wrap:anywhere]">{file.path}</p>
       )}

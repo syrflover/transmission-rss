@@ -13,7 +13,7 @@ use trss_library::{
     artwork::{self, AppData, Artwork},
     seasons::{self, Seasons},
 };
-use trss_subtitles::{fake::FakeSource, Sources};
+use trss_subtitles::{fake::FakeSource, tistory::TistorySource, Sources};
 use trss_worker::{env::FAKE_SUBTITLE_SOURCE_VAR, Worker, WorkerEnv};
 
 #[tokio::main]
@@ -42,7 +42,8 @@ async fn run() -> Result<(), String> {
     })?;
 
     let app_data = AppData::for_database(&db_path);
-    let mut sources = Sources::none();
+    // The real sites are always on; the fake one only when asked for.
+    let mut sources = Sources::none().with_tistory(TistorySource::new());
     if std::env::var(FAKE_SUBTITLE_SOURCE_VAR).as_deref() == Ok("1") {
         println!("The fake subtitle source is on ({FAKE_SUBTITLE_SOURCE_VAR})");
         sources = sources.with_fake(FakeSource);

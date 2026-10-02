@@ -110,6 +110,18 @@ export type JobState = "pending" | "running" | "waiting" | "held" | "failed" | "
 /** What a `waiting` job or item waits for: a person's check (`인증 필요`) or a source it cannot read yet (`자막 대기`). */
 export type Wait = "auth" | "subtitle";
 
+/**
+ * The class of a failure, the same for every source (`docs/specs/jobs.md`, 공통 수신
+ * 결과와 실패 분류): the post or file is gone (`missing`), its signed address was
+ * refused even after reading the post again (`expired`), what came was not the file
+ * (`not_a_file`), the post holds nothing the source can read (`changed`), or the site
+ * could not be reached (`network`).
+ */
+export type FailureClass = "missing" | "expired" | "not_a_file" | "changed" | "network";
+
+/** What received bytes were checked to be; `other` is kept for the analysis to decide. */
+export type FileFormat = "zip" | "ass" | "srt" | "smi" | "other";
+
 /** The steps a job goes through, in this order. `auth` only when a source asks for it. */
 export type StepKind = "found" | "open" | "auth" | "receive";
 
@@ -135,6 +147,8 @@ export interface JobRow {
   source: string | null;
   /** Items received, failed, and all of them. */
   progress: { done: number; failed: number; total: number };
+  /** The class of the first failed item's failure, when it has one. */
+  failure: FailureClass | null;
 }
 
 export interface DonePage {
@@ -192,6 +206,15 @@ export interface JobFile {
   /** The episode of the item that received this same file, when another item of the job did. */
   shared_with: string | null;
   reason: string | null;
+  /** What its bytes were checked to be, once received. */
+  format: FileFormat | null;
+  /** The class of a failed file's failure. */
+  failure: FailureClass | null;
+  /** The answer's HTTP status and media type, when it came over HTTP. */
+  http_status: number | null;
+  content_type: string | null;
+  /** For a failure: how many bytes the answer that showed it had. */
+  response_size: number | null;
 }
 
 /** One episode of a job: one candidate the user picked. */
@@ -203,6 +226,8 @@ export interface JobItem {
   state: ItemState;
   wait: Wait | null;
   reason: string | null;
+  /** The class of a failed item's failure. */
+  failure: FailureClass | null;
   files: JobFile[];
 }
 

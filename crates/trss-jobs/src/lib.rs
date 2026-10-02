@@ -19,4 +19,5 @@ pub mod store;
 pub use area::ReceiveArea;
 pub use model::{FileState, ItemState, JobState, StepKind, StepState, Wait};
 pub use runner::Runner;
-pub use store::{Created, JobError, JobStore, NewItem, NewJob};
+pub use store::{Created, FileProblem, JobError, JobStore, NewItem, NewJob};
+pub use trss_subtitles::{verify::Format, FailureKind};

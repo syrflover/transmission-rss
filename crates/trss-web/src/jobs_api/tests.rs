@@ -416,6 +416,12 @@ async fn an_unfinished_file_is_receiving_only_while_its_episode_runs() {
                 path: None,
                 reason: None,
                 created_at: 100,
+                format: None,
+                failure: None,
+                http_status: None,
+                content_type: None,
+                response_size: None,
+                snapshot: None,
             })
             .await
             .unwrap();
@@ -480,4 +486,101 @@ async fn a_site_check_comes_before_a_receive_failure_and_the_badge_counts_both()
         get(&router, "/api/todo/count").await.1,
         json!({ "count": 2 })
     );
+}
+
+#[tokio::test]
+async fn a_tistory_receipt_shows_its_format_and_failures_by_class_and_no_signed_address() {
+    use trss_subtitles::testing::{spec, FileAnswer, PostAnswer, TistoryServer};
+
+    let (state, router) = app();
+    linked_season(&state).await;
+    let server = TistoryServer::start().await;
+    server.post(
+        "sumomomo",
+        492,
+        vec![PostAnswer::Files(vec![
+            spec("z", "Seihantai - 24.zip", "0.01MB"),
+            spec("p", "page.zip", "1KB"),
+            spec("x", "x.zip", "1KB"),
+        ])],
+    );
+    let zip =
+        trss_subtitles::verify::zip_of(&[("a.srt", b"1\n00:00:01,000 --> 00:00:02,000\nx\n")]);
+    server.file("z", vec![FileAnswer::Refused, FileAnswer::Bytes(zip)]);
+    server.file("p", vec![FileAnswer::Page]);
+    server.file("x", vec![FileAnswer::Refused]);
+    let made = state
+        .jobs
+        .create(
+            NewJob {
+                command_id: "t1".into(),
+                request: "{}".into(),
+                origin: "pick".into(),
+                work_id: Some("w1".into()),
+                season: Some(1),
+                anime_no: Some(ANIME),
+                source_id: Some("s1".into()),
+                creator: Some("에루샤".into()),
+                items: vec![NewItem {
+                    observation_id: None,
+                    episode: "24".into(),
+                    post_url: server.post_url("sumomomo", 492),
+                    found_at: 1,
+                }],
+            },
+            100,
+        )
+        .await
+        .unwrap();
+    let Created::Created(id) = made else { panic!() };
+    let dir = tempfile::tempdir().unwrap();
+    trss_jobs::Runner::new(
+        state.jobs.clone(),
+        trss_subtitles::Sources::none().with_tistory(server.source()),
+        trss_jobs::ReceiveArea::new(dir.path()),
+        std::sync::Arc::new(|| 1_000),
+    )
+    .run_ready(&tokio_util::sync::CancellationToken::new())
+    .await
+    .unwrap();
+
+    let (status, detail) = get(&router, &format!("/api/subtitle-jobs/{id}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(detail["state"], "failed");
+    assert_eq!(detail["failure"], "not_a_file");
+    let item = &detail["items"][0];
+    assert_eq!(item["failure"], "not_a_file");
+    let files = item["files"].as_array().unwrap();
+    let by_name = |name: &str| files.iter().find(|f| f["name"] == name).unwrap();
+    let received = by_name("Seihantai - 24.zip");
+    assert_eq!(received["state"], "done");
+    assert_eq!(received["format"], "zip");
+    assert_eq!(received["failure"], Value::Null);
+    let page = by_name("page.zip");
+    assert_eq!(
+        (
+            &page["failure"],
+            &page["http_status"],
+            &page["content_type"]
+        ),
+        (&json!("not_a_file"), &json!(200), &json!("text/html"))
+    );
+    let expired = by_name("x.zip");
+    assert_eq!(
+        (
+            &expired["failure"],
+            &expired["http_status"],
+            &expired["response_size"]
+        ),
+        (&json!("expired"), &json!(404), &json!(150))
+    );
+    let (_, groups) = get(&router, "/api/subtitle-jobs").await;
+    assert_eq!(groups["failed"][0]["failure"], "not_a_file");
+
+    // Neither the answers nor the log carry a signed address.
+    let (_, todo) = get(&router, "/api/todo").await;
+    for text in [detail.to_string(), groups.to_string(), todo.to_string()] {
+        assert!(!text.contains("signature=") && !text.contains("credential="));
+    }
+    assert!(detail["log"].as_array().unwrap().len() > 3);
 }

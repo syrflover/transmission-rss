@@ -3,6 +3,7 @@
 
 use rusqlite::{params, Connection, OptionalExtension, Row, TransactionBehavior};
 use trss_core::{Db, DbError, Millis};
+use trss_subtitles::{verify::Format, FailureKind};
 
 use crate::model::{FileState, ItemState, JobState, StepKind, StepState, Wait};
 
@@ -92,6 +93,8 @@ pub struct JobRow {
     /// The first item's post host.
     pub source: Option<String>,
     pub progress: Progress,
+    /// The class of the first failed item's failure, when it has one.
+    pub failure: Option<FailureKind>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -119,6 +122,9 @@ pub struct ItemRow {
     pub state: ItemState,
     pub wait: Option<Wait>,
     pub reason: Option<String>,
+    /// The class of a failed item's failure (`docs/specs/jobs.md`, 공통 수신
+    /// 결과와 실패 분류), when it has one.
+    pub failure: Option<FailureKind>,
     pub files: Vec<FileRow>,
 }
 
@@ -154,6 +160,79 @@ pub struct FileRow {
     pub path: Option<String>,
     pub reason: Option<String>,
     pub created_at: Millis,
+    /// What the received bytes are, found when they were checked.
+    pub format: Option<Format>,
+    /// The class of a failed (or retried) attempt.
+    pub failure: Option<FailureKind>,
+    /// The answer's status and media type, and for a failure the size of the
+    /// answer that showed it.
+    pub http_status: Option<u16>,
+    pub content_type: Option<String>,
+    pub response_size: Option<u64>,
+    /// What the source read about the file, as a JSON array of `[name,
+    /// value]` pairs ([`snapshot_json`]).
+    pub snapshot: Option<String>,
+}
+
+/// Why an attempt to receive a file failed, with the facts of the answer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileProblem {
+    pub reason: String,
+    /// `None` for a failure of this app (its disk), not of the source.
+    pub class: Option<FailureKind>,
+    pub status: Option<u16>,
+    pub content_type: Option<String>,
+    pub size: Option<u64>,
+}
+
+impl FileProblem {
+    /// A failure of this app, not of the source.
+    pub fn local(reason: impl Into<String>) -> FileProblem {
+        FileProblem {
+            reason: reason.into(),
+            class: None,
+            status: None,
+            content_type: None,
+            size: None,
+        }
+    }
+}
+
+impl From<&trss_subtitles::Failure> for FileProblem {
+    fn from(f: &trss_subtitles::Failure) -> FileProblem {
+        FileProblem {
+            reason: f.reason.clone(),
+            class: Some(f.kind),
+            status: f.status,
+            content_type: f.content_type.clone(),
+            size: f.size,
+        }
+    }
+}
+
+/// A status the records keep: a real HTTP one (the schema checks 100–599).
+fn kept_status(status: Option<u16>) -> Option<u16> {
+    status.filter(|s| (100..=599).contains(s))
+}
+
+/// A size as the records keep it: one past SQLite's integers is dropped
+/// rather than wrapped.
+fn stored_size(size: u64) -> Option<i64> {
+    i64::try_from(size).ok()
+}
+
+/// A snapshot as the records keep it: a JSON array of `[name, value]` pairs,
+/// or nothing when it is empty.
+pub fn snapshot_json(snapshot: &trss_subtitles::Snapshot) -> Option<String> {
+    if snapshot.is_empty() {
+        return None;
+    }
+    let pairs: Vec<[&str; 2]> = snapshot
+        .entries()
+        .iter()
+        .map(|(name, value)| [name.as_str(), value.as_str()])
+        .collect();
+    Some(serde_json::to_string(&pairs).expect("strings serialize"))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -367,8 +446,31 @@ impl JobStore {
             .run(move |c| {
                 c.execute(
                     "UPDATE subtitle_job_items
-                     SET state = ?2, wait = ?3, reason = ?4, updated_at = ?5 WHERE id = ?1",
+                     SET state = ?2, wait = ?3, reason = ?4, failure = NULL, updated_at = ?5
+                     WHERE id = ?1",
                     params![item_id, state, wait, reason, now],
+                )?;
+                Ok(())
+            })
+            .await
+    }
+
+    /// Ends an item `failed` for `reason`, of class `failure` when the source
+    /// gave one.
+    pub async fn fail_item(
+        &self,
+        item_id: i64,
+        reason: String,
+        failure: Option<FailureKind>,
+        now: Millis,
+    ) -> Result<(), JobError> {
+        self.db
+            .run(move |c| {
+                c.execute(
+                    "UPDATE subtitle_job_items
+                     SET state = 'failed', wait = NULL, reason = ?2, failure = ?3, updated_at = ?4
+                     WHERE id = ?1",
+                    params![item_id, reason, failure.map(FailureKind::code), now],
                 )?;
                 Ok(())
             })
@@ -572,9 +674,9 @@ impl JobStore {
                 durable(c, |c| {
                     c.execute(
                         "INSERT INTO subtitle_job_files
-                         (id, job_id, item_id, file_key, name, state, temp_dir,
+                         (id, job_id, item_id, file_key, name, state, temp_dir, snapshot,
                           created_at, updated_at)
-                     SELECT ?1, job_id, ?2, ?3, ?4, 'intended', ?5, ?6, ?6
+                     SELECT ?1, job_id, ?2, ?3, ?4, 'intended', ?5, ?7, ?6, ?6
                      FROM subtitle_job_items WHERE id = ?2",
                         params![
                             file.id,
@@ -582,7 +684,8 @@ impl JobStore {
                             file.file_key,
                             file.name,
                             file.temp_dir,
-                            file.created_at
+                            file.created_at,
+                            file.snapshot
                         ],
                     )
                 })
@@ -606,8 +709,43 @@ impl JobStore {
             .run(move |c| {
                 durable(c, |c| c.execute(
                     "UPDATE subtitle_job_files SET expected_size = ?2, updated_at = ?3 WHERE id = ?1",
-                    params![id, size.map(|s| s as i64), now],
+                    params![id, size.and_then(stored_size), now],
                 )).map(|_| ())
+            })
+            .await
+    }
+
+    /// The answer the bytes come in: the length it announced, its status and
+    /// media type, and what it added to the snapshot (`None` keeps it).
+    pub async fn file_answer(
+        &self,
+        id: &str,
+        size: Option<u64>,
+        status: Option<u16>,
+        content_type: Option<String>,
+        snapshot: Option<String>,
+        now: Millis,
+    ) -> Result<(), JobError> {
+        let id = id.to_owned();
+        self.db
+            .run(move |c| {
+                durable(c, |c| {
+                    c.execute(
+                        "UPDATE subtitle_job_files
+                         SET expected_size = ?2, http_status = ?3, content_type = ?4,
+                             snapshot = coalesce(?5, snapshot), updated_at = ?6
+                         WHERE id = ?1",
+                        params![
+                            id,
+                            size.and_then(stored_size),
+                            kept_status(status),
+                            content_type,
+                            snapshot,
+                            now
+                        ],
+                    )
+                })
+                .map(|_| ())
             })
             .await
     }
@@ -632,7 +770,7 @@ impl JobStore {
                      SET state = 'fetched', size = ?2, sha256 = ?3, object = ?4, path = ?5,
                          updated_at = ?6
                      WHERE id = ?1",
-                        params![id, size as i64, sha256, object, path, now],
+                        params![id, stored_size(size), sha256, object, path, now],
                     )
                 })
                 .map(|_| ())
@@ -663,6 +801,80 @@ impl JobStore {
             .await
     }
 
+    /// Ends a receipt `done`, its bytes checked to be `format`.
+    pub async fn file_done(&self, id: &str, format: Format, now: Millis) -> Result<(), JobError> {
+        let id = id.to_owned();
+        self.db
+            .run(move |c| {
+                durable(c, |c| {
+                    c.execute(
+                        "UPDATE subtitle_job_files
+                         SET state = 'done', reason = NULL, format = ?2, updated_at = ?3
+                         WHERE id = ?1",
+                        params![id, format.code(), now],
+                    )
+                })
+                .map(|_| ())
+            })
+            .await
+    }
+
+    /// Ends a receipt `failed`, or `abandoned` when it is to be tried again,
+    /// for `problem`. The answer's facts it does not have stay as recorded.
+    /// A planned path stays until its bytes are gone ([`JobStore::file_clear_path`]):
+    /// a crash in between leaves a record that still names them.
+    pub async fn file_fail(
+        &self,
+        id: &str,
+        state: FileState,
+        problem: FileProblem,
+        now: Millis,
+    ) -> Result<(), JobError> {
+        let id = id.to_owned();
+        self.db
+            .run(move |c| {
+                durable(c, |c| {
+                    c.execute(
+                        "UPDATE subtitle_job_files
+                         SET state = ?2, reason = ?3, failure = ?4,
+                             http_status = coalesce(?5, http_status),
+                             content_type = coalesce(?6, content_type),
+                             response_size = ?7, updated_at = ?8
+                         WHERE id = ?1",
+                        params![
+                            id,
+                            state,
+                            problem.reason,
+                            problem.class.map(FailureKind::code),
+                            kept_status(problem.status),
+                            problem.content_type,
+                            problem.size.and_then(stored_size),
+                            now
+                        ],
+                    )
+                })
+                .map(|_| ())
+            })
+            .await
+    }
+
+    /// Frees a failed receipt's planned path once its bytes are gone, so the
+    /// name is free for the next attempt.
+    pub async fn file_clear_path(&self, id: &str, now: Millis) -> Result<(), JobError> {
+        let id = id.to_owned();
+        self.db
+            .run(move |c| {
+                durable(c, |c| {
+                    c.execute(
+                        "UPDATE subtitle_job_files SET path = NULL, updated_at = ?2 WHERE id = ?1",
+                        params![id, now],
+                    )
+                })
+                .map(|_| ())
+            })
+            .await
+    }
+
     /// Records for another item that its file is `original`'s receipt.
     pub async fn file_share(
         &self,
@@ -678,9 +890,10 @@ impl JobStore {
                     c.execute(
                         "INSERT INTO subtitle_job_files
                          (id, job_id, item_id, file_key, name, state, same_as, size, sha256,
-                          object, path, created_at, updated_at)
+                          object, path, format, http_status, content_type, snapshot,
+                          created_at, updated_at)
                      SELECT ?1, job_id, ?2, file_key, name, 'done', id, size, sha256, object,
-                            path, ?3, ?3
+                            path, format, http_status, content_type, snapshot, ?3, ?3
                      FROM subtitle_job_files WHERE id = ?4",
                         params![id, item_id, now, original.id],
                     )
@@ -784,6 +997,7 @@ fn job_row(r: &Row<'_>) -> rusqlite::Result<JobRow> {
         episodes: Vec::new(),
         source: None,
         progress: Progress::default(),
+        failure: None,
     })
 }
 
@@ -792,19 +1006,27 @@ fn rows<P: rusqlite::Params>(c: &Connection, tail: &str, p: P) -> Result<Vec<Job
     let mut stmt = c.prepare(&format!("{JOB_COLUMNS} {tail}"))?;
     let mut jobs = stmt.query_map(p, job_row)?.collect::<Result<Vec<_>, _>>()?;
     let mut items = c.prepare(
-        "SELECT episode, post_url, state FROM subtitle_job_items
+        "SELECT episode, post_url, state, failure FROM subtitle_job_items
          WHERE job_id = ?1 ORDER BY position",
     )?;
     for job in &mut jobs {
+        let mut first_failed_seen = false;
         let rows = items.query_map([&job.id], |r| {
             Ok((
                 r.get::<_, String>(0)?,
                 r.get::<_, String>(1)?,
                 r.get::<_, ItemState>(2)?,
+                failure_at(r, 3)?,
             ))
         })?;
         for row in rows {
-            let (episode, post, state) = row?;
+            let (episode, post, state, failure) = row?;
+            // The first failed item's class, as the note is its reason: a
+            // later item's class would name another failure.
+            if state == ItemState::Failed && !first_failed_seen {
+                first_failed_seen = true;
+                job.failure = failure;
+            }
             if job.source.is_none() {
                 job.source = url::Url::parse(&post)
                     .ok()
@@ -858,8 +1080,38 @@ fn done_page(c: &Connection, after: Option<&str>, limit: usize) -> Result<DonePa
 
 const FILE_COLUMNS: &str = "
     SELECT id, item_id, file_key, name, state, same_as, temp_dir, expected_size, size, sha256,
-           object, path, reason, created_at
+           object, path, reason, created_at, format, failure, http_status, content_type,
+           response_size, snapshot
     FROM subtitle_job_files";
+
+/// A failure class column.
+fn failure_at(r: &Row<'_>, i: usize) -> rusqlite::Result<Option<FailureKind>> {
+    let code: Option<String> = r.get(i)?;
+    code.map(|code| {
+        FailureKind::parse(&code).ok_or_else(|| {
+            rusqlite::Error::FromSqlConversionFailure(
+                i,
+                rusqlite::types::Type::Text,
+                format!("unknown failure class {code:?}").into(),
+            )
+        })
+    })
+    .transpose()
+}
+
+fn format_at(r: &Row<'_>, i: usize) -> rusqlite::Result<Option<Format>> {
+    let code: Option<String> = r.get(i)?;
+    code.map(|code| {
+        Format::parse(&code).ok_or_else(|| {
+            rusqlite::Error::FromSqlConversionFailure(
+                i,
+                rusqlite::types::Type::Text,
+                format!("unknown format {code:?}").into(),
+            )
+        })
+    })
+    .transpose()
+}
 
 fn file_row(r: &Row<'_>) -> rusqlite::Result<FileRow> {
     Ok(FileRow {
@@ -870,19 +1122,31 @@ fn file_row(r: &Row<'_>) -> rusqlite::Result<FileRow> {
         state: r.get(4)?,
         same_as: r.get(5)?,
         temp_dir: r.get(6)?,
-        expected_size: r.get::<_, Option<i64>>(7)?.map(|s| s as u64),
-        size: r.get::<_, Option<i64>>(8)?.map(|s| s as u64),
+        expected_size: r
+            .get::<_, Option<i64>>(7)?
+            .and_then(|s| u64::try_from(s).ok()),
+        size: r
+            .get::<_, Option<i64>>(8)?
+            .and_then(|s| u64::try_from(s).ok()),
         sha256: r.get(9)?,
         object: r.get(10)?,
         path: r.get(11)?,
         reason: r.get(12)?,
         created_at: r.get(13)?,
+        format: format_at(r, 14)?,
+        failure: failure_at(r, 15)?,
+        http_status: r.get(16)?,
+        content_type: r.get(17)?,
+        response_size: r
+            .get::<_, Option<i64>>(18)?
+            .and_then(|s| u64::try_from(s).ok()),
+        snapshot: r.get(19)?,
     })
 }
 
 fn items(c: &Connection, job_id: &str) -> Result<Vec<ItemRow>, JobError> {
     let mut stmt = c.prepare(
-        "SELECT id, position, observation_id, episode, post_url, state, wait, reason
+        "SELECT id, position, observation_id, episode, post_url, state, wait, reason, failure
          FROM subtitle_job_items WHERE job_id = ?1 ORDER BY position",
     )?;
     let mut items = stmt
@@ -896,6 +1160,7 @@ fn items(c: &Connection, job_id: &str) -> Result<Vec<ItemRow>, JobError> {
                 state: r.get(5)?,
                 wait: r.get(6)?,
                 reason: r.get(7)?,
+                failure: failure_at(r, 8)?,
                 files: Vec::new(),
             })
         })?

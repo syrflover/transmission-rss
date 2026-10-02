@@ -18,6 +18,12 @@
 //! - `GET /api/subtitle-jobs/{id}` one job with its steps, items with their
 //!   files, its folder in the receive area and its log, newest first.
 //!
+//! A failed job, item and file carry their failure's class as `failure`
+//! (`missing`, `expired`, `not_a_file`, `changed`, `network`; the screens name
+//! them), a job the class of its first failed item. A file carries the format
+//! its bytes were checked to be (`zip`, `ass`, `srt`, `smi`, `other`) and the
+//! answer's status, media type and, for a failure, size.
+//!
 //! A job's `title` is its anime's Anissia title, else its work's name. No
 //! answer carries a cookie, a token or a signed address: posts are public
 //! pages, and the files are named by their place in the receive area.
@@ -88,6 +94,7 @@ pub struct JobRowView {
     pub creator: Option<String>,
     pub source: Option<String>,
     pub progress: ProgressView,
+    pub failure: Option<&'static str>,
 }
 
 /// The work a job is about, while the library has it, with its cover.
@@ -128,6 +135,7 @@ fn view(row: &JobRow, covers: &HashMap<String, String>) -> JobRowView {
             failed: row.progress.failed,
             total: row.progress.total,
         },
+        failure: row.failure.map(|f| f.code()),
     }
 }
 
@@ -249,6 +257,11 @@ struct FileView {
     path: Option<String>,
     shared_with: Option<String>,
     reason: Option<String>,
+    format: Option<&'static str>,
+    failure: Option<&'static str>,
+    http_status: Option<u16>,
+    content_type: Option<String>,
+    response_size: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -259,6 +272,7 @@ struct ItemView {
     state: &'static str,
     wait: Option<&'static str>,
     reason: Option<String>,
+    failure: Option<&'static str>,
     files: Vec<FileView>,
 }
 
@@ -348,6 +362,11 @@ fn file_view(
             .and_then(|id| owners.get(id))
             .map(|ep| (*ep).to_owned()),
         reason: file.reason.clone(),
+        format: file.format.map(|f| f.code()),
+        failure: file.failure.map(|f| f.code()),
+        http_status: file.http_status,
+        content_type: file.content_type.clone(),
+        response_size: file.response_size,
     })
 }
 
@@ -383,6 +402,7 @@ async fn detail(
             state: item.state.code(),
             wait: item.wait.map(Wait::code),
             reason: item.reason.clone(),
+            failure: item.failure.map(|f| f.code()),
             files: item
                 .files
                 .iter()

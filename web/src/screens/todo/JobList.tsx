@@ -10,7 +10,7 @@ import { btnNeutral } from "../collect/channels/styles";
 import { coverOf } from "../library/model";
 import { Cover } from "../library/WorkItem";
 import { fetchDoneJobs, jobPath, type DonePage, type JobGroups, type JobRow } from "./api";
-import { CountChip, StateBadge } from "./badges";
+import { CountChip, FailureTag, StateBadge } from "./badges";
 import { episodeList, shownState } from "./format";
 import { ChevronIcon } from "./icons";
 import { TargetLine } from "./TargetLine";
@@ -135,7 +135,10 @@ function JobRowItem({ job }: { job: JobRow }) {
           id={detailId}
           className="flex flex-col gap-3 px-3 pt-1 pb-3.5 pl-[76px] max-[720px]:pl-3"
         >
-          <p className="text-[13px] leading-relaxed text-text-secondary">{describe(job)}</p>
+          <p className="text-[13px] leading-relaxed text-text-secondary">
+            {job.failure !== null && <FailureTag failure={job.failure} />}
+            {describe(job)}
+          </p>
           <dl className="m-0 grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3.5 gap-y-1 text-[12.5px] ">
             {job.source !== null && <Field name="출처">{job.source}</Field>}
             {episodes.length > 0 && <Field name="회차">{episodeList(episodes)}</Field>}

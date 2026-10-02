@@ -92,7 +92,9 @@
 //! ([`trss_jobs`]), one at a time, holding the lock like a command: at its
 //! start (after putting the jobs that wait for a source back in line), when
 //! the web wakes it, and every few seconds. A job cut short by a shutdown or a
-//! kill stays `running` and goes on at the next start from its records.
+//! kill stays `running` and goes on at the next start from its records. The
+//! real sources (Tistory's attachments) are always on; the fake one only with
+//! [`env::FAKE_SUBTITLE_SOURCE_VAR`].
 //!
 //! # Shutdown
 //!

@@ -30,8 +30,10 @@ trss-anissia = { workspace = true, features = ["test-support"] }
 trss-anilist = { workspace = true, features = ["test-support"] }
 trss-library = { workspace = true, features = ["test-support"] }
 trss-collect.workspace = true
+trss-subtitles = { workspace = true, features = ["test-support"] }
 http-body-util.workspace = true
 image.workspace = true
 rusqlite.workspace = true
 tempfile.workspace = true
+tokio-util.workspace = true
 tower.workspace = true

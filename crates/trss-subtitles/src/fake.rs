@@ -74,10 +74,7 @@ fn delay(post: &Url) -> Duration {
 
 impl FakeSource {
     pub(crate) async fn open(&self, post: &Url) -> Result<Opened, Failure> {
-        let file = |key: String, name: &str| PostFile {
-            key,
-            name: format!("{name}.ass"),
-        };
+        let file = |key: String, name: &str| PostFile::new(key, format!("{name}.ass"));
         Ok(match read(post)? {
             Post::Ok(name) => Opened::Files(vec![file(format!("ok/{name}"), &name)]),
             Post::Short(name) => Opened::Files(vec![file(format!("short/{name}"), &name)]),
@@ -181,13 +178,7 @@ mod tests {
         let Opened::Files(files) = source.open(&post).await.unwrap() else {
             panic!("files");
         };
-        assert_eq!(
-            files,
-            [PostFile {
-                key: "ok/ep1".into(),
-                name: "ep1.ass".into()
-            }]
-        );
+        assert_eq!(files, [PostFile::new("ok/ep1", "ep1.ass")]);
         let (expected, first) = receive(&source, &post, &files[0]).await;
         let (_, second) = receive(&source, &post, &files[0]).await;
         assert_eq!(expected, Some(first.len() as u64));
@@ -204,7 +195,7 @@ mod tests {
 
         let keys = |opened: Opened| match opened {
             Opened::Files(files) => files.into_iter().map(|f| f.key).collect::<Vec<_>>(),
-            Opened::NeedsAuth { .. } => panic!("files"),
+            _ => panic!("files"),
         };
         assert_eq!(
             keys(source.open(&url("/shared/s/1")).await.unwrap()),

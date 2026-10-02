@@ -2,8 +2,9 @@ import type { ComponentProps, ComponentType, ReactNode } from "react";
 
 import { cn } from "@/lib/utils";
 
+import type { FailureClass } from "./api";
 import { CheckIcon, ClockIcon, DownloadIcon, LockIcon, PauseIcon, WarningIcon } from "./icons";
-import type { Shown } from "./format";
+import { FAILURE_LABEL, type Shown } from "./format";
 
 type IconType = ComponentType<ComponentProps<"svg">>;
 
@@ -112,6 +113,15 @@ export function Tag({ children }: { children: ReactNode }) {
   return (
     <span className="inline-flex items-center rounded-md border border-hairline-soft bg-surface-2 px-1.5 py-px text-[11.5px] leading-snug font-semibold whitespace-nowrap text-text-secondary">
       {children}
+    </span>
+  );
+}
+
+/** A failure's class before its reason (`원본 없음`, `만료`). */
+export function FailureTag({ failure, className }: { failure: FailureClass; className?: string }) {
+  return (
+    <span className={cn("mr-1.5 align-[1px]", className)}>
+      <Tag>{FAILURE_LABEL[failure]}</Tag>
     </span>
   );
 }

@@ -368,6 +368,12 @@ async fn intended(
         path: None,
         reason: None,
         created_at: 970,
+        format: None,
+        failure: None,
+        http_status: None,
+        content_type: None,
+        response_size: None,
+        snapshot: None,
     };
     s.store.file_intend(row.clone()).await.unwrap();
     s.store.file_expect(&id, expected, 971).await.unwrap();
@@ -711,5 +717,252 @@ async fn a_job_that_ends_each_run_waiting_for_a_source_is_never_held_for_its_sta
     assert_eq!(
         (d.row.state, d.row.wait),
         (JobState::Waiting, Some(Wait::Subtitle))
+    );
+}
+
+#[tokio::test]
+async fn recovered_bytes_that_are_a_web_page_fail_as_not_a_file_and_are_received_anew() {
+    let page = b"<!DOCTYPE html><html><body>expired</body></html>";
+    // Whole as announced (`intended`), and recorded fetched with the
+    // temporary file still there.
+    for as_fetched in [false, true] {
+        let s = setup().await;
+        let (id, item) = killed(&s, "/ok/a").await;
+        let row = intended(
+            &s,
+            item,
+            "ok/a",
+            "a.ass",
+            Some(page.len() as u64),
+            Some(page),
+        )
+        .await;
+        if as_fetched {
+            fetched(&s, &row, &format!("{id}/a.ass")).await;
+        }
+        run(&s).await;
+
+        let d = detail(&s, &id).await;
+        assert_eq!(d.row.state, JobState::Done, "fetched: {as_fetched}");
+        let first = d.items[0].files.iter().find(|f| f.id == row.id).unwrap();
+        assert_eq!(first.state, FileState::Failed);
+        assert_eq!(first.failure, Some(trss_jobs::FailureKind::NotAFile));
+        assert!(first.reason.as_deref().unwrap().contains("HTML"));
+        assert!(!s.area.at(row.temp_dir.as_deref().unwrap()).exists());
+        // The new attempt's bytes are the file, checked.
+        assert_eq!(files_in(&s.area.at(&id)), ["a.ass"]);
+        let done = d.items[0]
+            .files
+            .iter()
+            .find(|f| f.state == FileState::Done)
+            .unwrap();
+        assert_eq!(done.format, Some(trss_jobs::Format::Ass));
+    }
+
+    // Published before its record, then found to be a web page: removed.
+    let s = setup().await;
+    let (id, item) = killed(&s, "/missing/a").await;
+    let row = intended(&s, item, "ok/a", "a.ass", None, Some(page)).await;
+    let path = format!("{id}/a.ass");
+    fetched(&s, &row, &path).await;
+    std::fs::create_dir_all(s.area.at(&id)).unwrap();
+    std::fs::rename(
+        s.area.at(row.temp_dir.as_deref().unwrap()).join("a.ass"),
+        s.area.at(&path),
+    )
+    .unwrap();
+    run(&s).await;
+    let d = detail(&s, &id).await;
+    assert_eq!(d.items[0].files[0].state, FileState::Failed);
+    assert_eq!(
+        d.items[0].files[0].failure,
+        Some(trss_jobs::FailureKind::NotAFile)
+    );
+    assert!(!s.area.at(&path).exists());
+}
+
+#[tokio::test]
+async fn a_received_file_records_its_format_and_a_short_file_fails_as_not_a_file() {
+    let s = setup().await;
+    let id = make(&s, "c1", &[("1", "/ok/a"), ("2", "/short/b")]).await;
+    run(&s).await;
+
+    let d = detail(&s, &id).await;
+    assert_eq!(d.items[0].files[0].format, Some(trss_jobs::Format::Ass));
+    assert_eq!(d.items[1].failure, Some(trss_jobs::FailureKind::NotAFile));
+    assert_eq!(d.row.failure, Some(trss_jobs::FailureKind::NotAFile));
+    let short = &d.items[1].files[0];
+    assert_eq!(short.failure, Some(trss_jobs::FailureKind::NotAFile));
+    assert_eq!(short.response_size, Some(fake::ass("b").len() as u64 - 16));
+}
+
+/// Records a fetched attempt `failed` as a start does before it removes its
+/// bytes: the path still named.
+async fn failed_keeping_path(s: &Setup, row: &FileRow) {
+    let problem = trss_jobs::FileProblem {
+        reason: "받은 내용이 파일이 아니라 웹 페이지(HTML)예요".to_owned(),
+        class: Some(trss_jobs::FailureKind::NotAFile),
+        status: None,
+        content_type: None,
+        size: None,
+    };
+    s.store
+        .file_fail(&row.id, FileState::Failed, problem, 973)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_failure_recorded_before_its_bytes_went_is_finished_by_the_next_start() {
+    let page: &[u8] = b"<!DOCTYPE html><html><body>expired</body></html>";
+    // Stopped with the bytes in the temporary file (failed while publishing)
+    // or at the path (failed when a recovered publish was checked).
+    for published in [false, true] {
+        let s = setup().await;
+        let (id, item) = killed(&s, "/ok/a").await;
+        let row = intended(&s, item, "ok/a", "a.ass", None, Some(page)).await;
+        let path = format!("{id}/a.ass");
+        fetched(&s, &row, &path).await;
+        if published {
+            std::fs::create_dir_all(s.area.at(&id)).unwrap();
+            std::fs::rename(
+                s.area.at(row.temp_dir.as_deref().unwrap()).join("a.ass"),
+                s.area.at(&path),
+            )
+            .unwrap();
+        }
+        failed_keeping_path(&s, &row).await;
+        run(&s).await;
+
+        let d = detail(&s, &id).await;
+        assert_eq!(d.row.state, JobState::Done, "published: {published}");
+        let first = d.items[0].files.iter().find(|f| f.id == row.id).unwrap();
+        assert_eq!(first.state, FileState::Failed);
+        assert_eq!(first.path, None);
+        assert!(!s.area.at(row.temp_dir.as_deref().unwrap()).exists());
+        // The page's bytes are gone and the name was free for the file.
+        assert_eq!(files_in(&s.area.at(&id)), ["a.ass"]);
+        assert_ne!(std::fs::read(s.area.at(&path)).unwrap(), page);
+        assert!(d
+            .events
+            .iter()
+            .any(|e| e.message.contains("받지 못한 파일을 마저 지웠어요")));
+    }
+
+    // Something else at the path is not the record's: it stays, and only the
+    // path's record goes.
+    let s = setup().await;
+    let (id, item) = killed(&s, "/ok/a").await;
+    let row = intended(&s, item, "ok/a", "a.ass", None, Some(page)).await;
+    let path = format!("{id}/a.ass");
+    fetched(&s, &row, &path).await;
+    std::fs::remove_dir_all(s.area.at(row.temp_dir.as_deref().unwrap())).unwrap();
+    std::fs::create_dir_all(s.area.at(&id)).unwrap();
+    std::fs::write(s.area.at(&path), page).unwrap();
+    failed_keeping_path(&s, &row).await;
+    run(&s).await;
+    let d = detail(&s, &id).await;
+    assert_eq!(d.row.state, JobState::Done);
+    assert_eq!(std::fs::read(s.area.at(&path)).unwrap(), page);
+    assert_eq!(files_in(&s.area.at(&id)), ["a (2).ass", "a.ass"]);
+}
+
+#[tokio::test]
+async fn a_failure_whose_bytes_were_left_is_finished_even_when_the_post_is_gone() {
+    let page: &[u8] = b"<!DOCTYPE html><html><body>expired</body></html>";
+    for published in [false, true] {
+        let s = setup().await;
+        let (id, item) = killed(&s, "/missing/a").await;
+        let row = intended(&s, item, "missing/a", "a.ass", None, Some(page)).await;
+        let path = format!("{id}/a.ass");
+        fetched(&s, &row, &path).await;
+        if published {
+            std::fs::create_dir_all(s.area.at(&id)).unwrap();
+            std::fs::rename(
+                s.area.at(row.temp_dir.as_deref().unwrap()).join("a.ass"),
+                s.area.at(&path),
+            )
+            .unwrap();
+        }
+        failed_keeping_path(&s, &row).await;
+        run(&s).await;
+
+        let d = detail(&s, &id).await;
+        assert_eq!(d.row.state, JobState::Failed, "published: {published}");
+        let first = d.items[0].files.iter().find(|f| f.id == row.id).unwrap();
+        assert_eq!(first.state, FileState::Failed);
+        assert_eq!(first.path, None);
+        assert!(!s.area.at(row.temp_dir.as_deref().unwrap()).exists());
+        assert!(!s.area.at(&path).exists());
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn bytes_that_cannot_be_removed_hold_the_receipt_instead_of_counting_as_gone() {
+    use std::os::unix::fs::PermissionsExt;
+    let page: &[u8] = b"<!DOCTYPE html><html><body>expired</body></html>";
+    let s = setup().await;
+    let (id, item) = killed(&s, "/ok/a").await;
+    let row = intended(&s, item, "ok/a", "a.ass", None, Some(page)).await;
+    let path = format!("{id}/a.ass");
+    fetched(&s, &row, &path).await;
+    // Published before its record, found to be a web page, and its folder
+    // refuses the removal.
+    let folder = s.area.at(&id);
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::rename(
+        s.area.at(row.temp_dir.as_deref().unwrap()).join("a.ass"),
+        s.area.at(&path),
+    )
+    .unwrap();
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o555)).unwrap();
+    run(&s).await;
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let d = detail(&s, &id).await;
+    assert_eq!(d.row.state, JobState::Held);
+    let first = &d.items[0].files[0];
+    assert_eq!(first.state, FileState::Held);
+    assert_eq!(first.path.as_deref(), Some(path.as_str()));
+    assert_eq!(first.failure, Some(trss_jobs::FailureKind::NotAFile));
+    assert_eq!(std::fs::read(s.area.at(&path)).unwrap(), page);
+}
+
+#[tokio::test]
+async fn a_jobs_failure_class_is_its_first_failed_items_even_when_that_has_none() {
+    let s = setup().await;
+    let id = make(&s, "c1", &[("1", "/ok/a"), ("2", "/ok/b")]).await;
+    let items = s.store.items(&id).await.unwrap();
+    s.store
+        .fail_item(items[0].id, "디스크가 가득 찼어요".into(), None, 960)
+        .await
+        .unwrap();
+    s.store
+        .fail_item(
+            items[1].id,
+            "받은 파일이 비어 있어요".into(),
+            Some(trss_jobs::FailureKind::NotAFile),
+            961,
+        )
+        .await
+        .unwrap();
+    assert_eq!(detail(&s, &id).await.row.failure, None);
+
+    let s = setup().await;
+    let id = make(&s, "c1", &[("1", "/ok/a"), ("2", "/ok/b")]).await;
+    let items = s.store.items(&id).await.unwrap();
+    s.store
+        .fail_item(
+            items[1].id,
+            "받은 파일이 비어 있어요".into(),
+            Some(trss_jobs::FailureKind::NotAFile),
+            961,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        detail(&s, &id).await.row.failure,
+        Some(trss_jobs::FailureKind::NotAFile)
     );
 }
