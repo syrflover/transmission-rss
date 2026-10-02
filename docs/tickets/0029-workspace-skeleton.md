@@ -1,6 +1,6 @@
 # 0029 크레이트 지도를 정하고 workspace의 바이너리와 공통 기반을 나눠요
 
-- 상태: 진행 중 (workspace 전환과 `trss-core`·`trss-web`·`trss-worker` 분리, 크레이트 지도는 끝났어요. 로컬 compose 실행만 남았고 0030이 끝난 뒤 함께 확인해요. 아래 "결과")
+- 상태: 완료 (workspace 전환, 크레이트 지도, 로컬 compose 실행까지 끝났어요. 아래 "결과")
 - 출처: [기능별 크레이트 ADR](../adr/0011-feature-crate-workspace.md), [공통 라이브러리의 모듈 구성](../specs/web-app.md#공통-라이브러리의-모듈-구성)
 - 막는 티켓: 없음 (0027·0028처럼 진행 중인 변경이 있으면 먼저 끝내요. 파일을 대량으로 옮기는 동안 다른 변경과 충돌하기 때문이에요)
 
@@ -142,13 +142,12 @@ ADR 0011의 처음 목록(`rss`·`rule`… collect, `discovery`… library 등)�
 
 ### 검증하지 못한 것
 
-- 로컬 `docker compose` 실행: 실제 Transmission·RSS 피드·감시 폴더 데이터로 수집, 웹 명령, 웹 화면을 이전과 비교하지 않았어요. 위 이미지 시험은 빈 DB와 닿지 않는 Transmission이에요. 완료 기준의 이 행은 아직 안 채웠어요.
+- 로컬 `docker compose` 실행: 이 티켓 때는 하지 않았고, 0030이 끝난 뒤 실제 데이터로 했어요. 결과는 [0030의 로컬 compose 실행](0030-feature-crates.md#로컬-compose-실행-2026-10-02-커밋-826aa9b)에 있어요.
 - 배포 workflow를 실행하지 않았어요(태그 푸시에만 돌아요).
 - 웹 화면을 브라우저로 열어 보지 않았어요.
 - `cargo doc`의 깨진 문서 링크는 이전에도 있었어요. 옮기며 생긴 것은 고쳤지만 남은 것을 이전과 하나씩 비교하지는 않았어요.
 
 ### 남은 일
 
-- 로컬 compose 실행이 끝나야 완료로 바꿔요. 0030이 크레이트를 다 옮긴 뒤에 함께 확인해요.
 - 0030이 옮길 순서는 의존 방향대로 `trss-transmission`·`trss-anissia`·`trss-anilist` → `trss-library` → `trss-collect` → `trss-import` 순이에요. 옮기면서 `trss-legacy::worker`의 `CycleContext`를 풀고, 재수출(`db`·`settings`·`folders`·`Millis`)을 없애고, `trss-worker/tests/`의 통합 시험과 도구를 시험하는 크레이트로 나눠요. `common`은 여러 크레이트가 쓰므로 시험 도구 크레이트가 필요할 수 있어요.
 - `Cargo.toml`의 `tap`은 이전부터 쓰는 곳이 없어요(이 티켓과 무관해서 두었어요).
