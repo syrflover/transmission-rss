@@ -1,7 +1,22 @@
 collections:
   docs:
     path: ./docs
-    pattern: "**/*.md"
+    pattern: "**/*.{md,mdx,txt}"
+    ignore:
+      - "archive/**"
+    context:
+      "/": "trss 웹 재설계의 현재 문서: 주제별 명세, ADR, 용어집, 실행 계획과 티켓, 브레인스토밍 기록"
+  root:
+    path: .
+    pattern: "*.md"
+    context:
+      "/": "저장소 소개: transmission-rss의 기능, 실행 방법, 배포 구성"
+  archive:
+    path: ./docs/archive
+    pattern: "**/*.{md,mdx,txt}"
+    includeByDefault: false
+    context:
+      "/": "끝난 결과 목표의 티켓 묶음. 당시의 결과와 근거를 담은 역사 기록이며 현재 요구는 docs의 명세가 권위예요"
 models:
   embed: hf:Qwen/Qwen3-Embedding-0.6B-GGUF/Qwen3-Embedding-0.6B-Q8_0.gguf
   generate: hf:tobil/qmd-query-expansion-1.7B-gguf/qmd-query-expansion-1.7B-q4_k_m.gguf
