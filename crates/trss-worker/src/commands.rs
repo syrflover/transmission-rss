@@ -98,9 +98,10 @@
 //! the folder's turn, so no cycle adds a torrent into the folder while it
 //! moves, and a start cut short leaves it `running`: the next start looks at
 //! the disk and Transmission again and moves what is left (see
-//! [`rule_archive`]). Its blocking renames keep the worker's lock themselves
-//! ([`trss_core::WorkerHold::keep`]), so a shutdown that aborts the command's
-//! task lets go of the lock only once they have returned.
+//! [`rule_archive`]). Its blocking renames keep the worker's lock
+//! ([`trss_core::WorkerHold::keep`]), the command's turn at the folders and
+//! the torrent gate themselves, so a shutdown that aborts the command's task
+//! lets go of them only once the renames have returned.
 //!
 //! A `watch_rescan` command (`다시 확인` of a watch folder) reads the folder
 //! again, like the cycles do, and only reads ([`watch_rescan`]); it runs
@@ -132,7 +133,10 @@ use trss_core::{
     WorkerHold,
 };
 
-use trss_collect::commands::{episode_undo, receive_once, receive_past, rule_archive};
+use trss_collect::commands::{
+    episode_undo, receive_once, receive_past,
+    rule_archive::{self, work_folder::Hold},
+};
 use trss_library::watch_rescan;
 
 use super::{removal, Worker, WorkerError};
@@ -497,17 +501,22 @@ impl Worker {
             turn,
             entry,
         } = claim;
-        let turn = turn.ready().await;
+        let turn = Arc::new(turn.ready().await);
         let gate = match kind.touches_torrents() {
-            true => Some(self.torrents.command().await),
+            true => Some(Arc::new(self.torrents.command().await)),
             false => None,
         };
+        // What the command's blocking work keeps until it returns, even when
+        // this task is aborted at shutdown: the lock, the turn at the folders
+        // and the gate, so no reading records a folder half moved and no
+        // removal runs while files are still being renamed.
+        let keep: Hold = Arc::new((hold.keep(), turn.clone(), gate.clone()));
         // Dropped in this order, whatever ends the task: the command leaves
         // the in-flight set before the gate is let go, so a removal never
         // finds it neither running here nor `running` from an earlier start.
         let started = (entry, gate);
 
-        let ran = self.run_kind(&command, kind, &hold, &cancel).await;
+        let ran = self.run_kind(&command, kind, keep, &cancel).await;
         let carried = match self.record(&command, ran).await {
             Ok(carried) => carried,
             Err(err) => {
@@ -530,7 +539,7 @@ impl Worker {
         &self,
         command: &Command,
         kind: Kind,
-        hold: &WorkerHold,
+        keep: Hold,
         cancel: &CancellationToken,
     ) -> Option<Ran> {
         let mut task = JoinSet::new();
@@ -567,7 +576,6 @@ impl Worker {
             }
             Kind::RuleArchive => {
                 // Kept by the move's blocking renames until they return.
-                let keep = hold.keep();
                 let ctx = self.ctx.archive();
                 task.spawn(async move {
                     match rule_archive::run(&ctx, &owned, keep, &clock, &cancel).await {
