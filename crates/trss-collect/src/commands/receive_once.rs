@@ -81,7 +81,7 @@ use super::link;
 use crate::{
     context::CollectContext,
     offsets,
-    plan::{picks, rule_destination, ChannelPlan},
+    plan::{picks, rule_destination, rule_work_folder, ChannelPlan},
     revision::Release,
     revisions,
     store::{
@@ -95,6 +95,7 @@ use crate::{
 };
 use trss_core::{
     commands::{Command, CommandState, Outcome, MAX_ATTEMPTS},
+    folder_locks::Section,
     Millis,
 };
 use trss_transmission as transmission;
@@ -516,7 +517,7 @@ pub enum Retry {
 }
 
 impl Retry {
-    fn store(err: impl std::fmt::Display) -> Retry {
+    pub(crate) fn store(err: impl std::fmt::Display) -> Retry {
         Retry::Store(err.to_string())
     }
 }
@@ -529,6 +530,45 @@ impl Retry {
 /// A worker that dies before the command is ended leaves it `running`; the
 /// rerun meets the torrent as a duplicate carrying the command's label and
 /// goes through the same steps again (the rename leaves a name it gave already).
+/// The turn the command takes before it runs: a read of the work folder its
+/// rule saves into ([`rule_work_folder`]), the rule found as [`execute`] finds
+/// it. Empty when the request, the item, the rule or the collect folder cannot
+/// be found: the command then ends by itself.
+pub async fn section(ctx: &CollectContext, command: &Command) -> Result<Section, Retry> {
+    let Ok(payload) = serde_json::from_str::<ReceiveOnce>(&command.payload) else {
+        return Ok(Section::new());
+    };
+    let rule_id = match payload.rule_id {
+        Some(id) => Some(id),
+        None => ctx
+            .history
+            .get(payload.item_id)
+            .await
+            .map_err(Retry::store)?
+            .and_then(|item| item.rule_id),
+    };
+    rule_section(ctx, rule_id.as_deref()).await
+}
+
+/// A read of the work folder the rule `rule_id` saves into, or nothing when
+/// there is no such rule or no collect folder.
+pub(crate) async fn rule_section(
+    ctx: &CollectContext,
+    rule_id: Option<&str>,
+) -> Result<Section, Retry> {
+    let Some(id) = rule_id else {
+        return Ok(Section::new());
+    };
+    let Some(rule) = ctx.channels.get_rule(id).await.map_err(Retry::store)? else {
+        return Ok(Section::new());
+    };
+    let Some(collect) = ctx.settings.collection().await.map_err(Retry::store)? else {
+        return Ok(Section::new());
+    };
+    Ok(Section::new().read(rule_work_folder(Path::new(&collect.folder), &rule)))
+}
+
+/// Runs the command, with its turn ([`section`]) taken.
 pub async fn run(
     ctx: &CollectContext,
     command: &Command,

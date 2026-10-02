@@ -275,7 +275,7 @@ const DOWNLOADING_FRESH_CYCLES: i64 = 3;
 /// cycle intervals. Without a recorded interval (no worker of this version has
 /// run) nothing is believed.
 ///
-/// While the worker is busy ([`worker_busy`]: it beats while it holds the cycle
+/// While the worker is busy ([`worker_busy`]: it beats while it holds the worker
 /// lock, through the folder reading after the cycle's RSS work too) it is alive,
 /// and the look it left is the one before this cycle; a cycle longer than the
 /// allowance would otherwise age it out before the cycle can leave a newer

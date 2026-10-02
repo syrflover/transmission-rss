@@ -7,7 +7,7 @@ use trss_collect::{
     anissia::{self, AnissiaQueue},
     store::anissia::AnissiaStore,
 };
-use trss_core::{db::DB_PATH_ENV, lock_path_for, Db};
+use trss_core::{db::DB_PATH_ENV, lock_path_for, wake::wake_path_for, Db};
 use trss_library::{
     artwork::{self, AppData, Artwork},
     seasons::{self, Seasons},
@@ -45,7 +45,9 @@ async fn run() -> Result<(), String> {
         Anissia::with_defaults(db.clone(), anissia_config),
         AnissiaStore::new(db.clone()),
     );
-    let worker = Worker::new(db, &env, lock_path_for(&db_path)).map_err(|e| e.to_string())?;
+    let worker = Worker::new(db, &env, lock_path_for(&db_path))
+        .map_err(|e| e.to_string())?
+        .with_wake_socket(wake_path_for(&db_path));
 
     let cancel = CancellationToken::new();
     tokio::spawn(shutdown_on_signal(cancel.clone()));

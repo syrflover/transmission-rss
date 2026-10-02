@@ -1,7 +1,7 @@
 //! The worker's reading of the watch folders (`docs/specs/library.md`, 작품
 //! 발견과 감시 폴더).
 //!
-//! Every cycle, after the RSS work and under the same lock, [`scan_all`] reads
+//! Every cycle, after the RSS work, [`scan_all`] reads
 //! the registered watch folders that need it with [`crate::discovery::scan`]
 //! and records what it found ([`crate::store::library`]); which ones need it is
 //! decided by [`crate::live`]: with the kernel's inotify alerts doing the
@@ -17,6 +17,16 @@
 //! A folder that cannot be read records its reason on the folder and keeps what
 //! was known; it does not stop the other folders, the cycle, or the RSS work.
 //! A scan only reads: it creates, moves and deletes no file.
+//!
+//! # Turns
+//!
+//! Every reading of a watch folder, the cycle's, an alert's or `다시 확인`'s,
+//! takes its turn at the folder first ([`reading_section`], with
+//! [`WatchContext::folders`]): one reading of a folder at a time, so a reading
+//! that ended later never records an older picture over a newer one, and none
+//! while a command moves or renames what it reads (a work folder going to the
+//! archive folder). Commands that only add to a folder, and the readings of
+//! other folders, go on beside it.
 //!
 //! The duration of every scan is logged, since a large library (hundreds of
 //! works, thousands of files) is read in the cycle's own time.
@@ -43,8 +53,8 @@
 //!
 //! # A folder that hangs
 //!
-//! Every scan runs on a blocking thread, and the cycle waits for it under its
-//! lock. A mount that stops answering (NFS, SMB) would hold the lock for good,
+//! Every scan runs on a blocking thread, and the cycle waits for it under the
+//! worker's lock. A mount that stops answering (NFS, SMB) would hold the lock for good,
 //! so a scan gets [`SCAN_TIMEOUT`]; past it the folder is recorded as unreadable
 //! and the cycle goes on. The thread cannot be stopped, but a scan only reads, so
 //! leaving it to finish (or hang) harms nothing. While it still runs, the folder
@@ -60,7 +70,11 @@ use std::{
 
 use tokio_util::sync::CancellationToken;
 
-use trss_core::{heartbeat::HeartbeatStore, settings::SettingsStore, Clock};
+use trss_core::{
+    folder_locks::{FolderLocks, Section},
+    settings::SettingsStore,
+    Clock,
+};
 
 use crate::{
     automatic_watch::{self, Wanted},
@@ -76,8 +90,9 @@ pub struct WatchContext {
     pub library: LibraryStore,
     /// Where the collect and archive folders are read from.
     pub settings: SettingsStore,
-    /// Beaten while a reading holds the lock (see [`crate::live`]).
-    pub heartbeat: HeartbeatStore,
+    /// The worker's turns at its folders (see the module docs), shared with
+    /// the collection work.
+    pub folders: FolderLocks,
     /// What the worker remembers of each watch folder's directories between
     /// scans.
     pub scan_cache: ScanCaches,
@@ -418,6 +433,19 @@ pub async fn sync_automatic(ctx: &WatchContext, now: trss_core::Millis) {
     }
 }
 
+/// The turn a reading of the watch folder at `folder` takes: the reading's
+/// own, and a read of `works` (the work folders it reads) or, with none, of
+/// the whole folder.
+pub fn reading_section(folder: &str, works: &[String]) -> Section {
+    let section = Section::new().reading(folder);
+    if works.is_empty() {
+        return section.read(folder);
+    }
+    works.iter().fold(section, |section, work| {
+        section.read(Path::new(folder).join(work))
+    })
+}
+
 /// Reads the watch folders that need it, in turn: all of them when the worker
 /// is not watching (see the module docs), otherwise what
 /// [`super::live::LiveWatch::poll_for`] says. A folder that fails, or a
@@ -450,7 +478,11 @@ pub async fn scan_all(ctx: &WatchContext, clock: &Clock, cancel: &CancellationTo
                 for name in &names {
                     ctx.live.resync(&folder.id, Some(name));
                 }
-                scan_works(ctx, &folder, names, now, WorksMode::Incremental)
+                let _turn = ctx
+                    .folders
+                    .lock(reading_section(&folder.path, &names))
+                    .await;
+                scan_works(ctx, &folder, names, clock(), WorksMode::Incremental)
                     .await
                     .map(|_| ())
             }
@@ -458,7 +490,8 @@ pub async fn scan_all(ctx: &WatchContext, clock: &Clock, cancel: &CancellationTo
                 if ctx.live.wants_resync(&folder.id) {
                     ctx.live.resync(&folder.id, None);
                 }
-                scan_folder(ctx, &folder, now, ScanMode::Periodic)
+                let _turn = ctx.folders.lock(reading_section(&folder.path, &[])).await;
+                scan_folder(ctx, &folder, clock(), ScanMode::Periodic)
                     .await
                     .map(|_| ())
             }

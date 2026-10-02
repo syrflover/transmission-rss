@@ -1,19 +1,20 @@
-//! The worker's heartbeat while it holds the cycle lock.
+//! The worker's heartbeat while it holds the worker lock.
 //!
 //! The web cannot ask the worker whether it is alive, and must not look at the
-//! cycle lock: even a try-lock from the web could make the worker's own
+//! worker lock: even a try-lock from the web could make the worker's own
 //! try-lock fail and skip a cycle. So while the worker holds the lock, whatever
 //! for (a cycle: the RSS work, then the watch folder reading and the season
-//! link that follow under the same lock; the commands the web accepted; a
-//! reading that a watch folder's alert asked for), a task writes a timestamp to
-//! the database every [`BEAT_EVERY`] ([`HeartbeatStore::record`]). Every holder
-//! runs its work through [`while_holding`] once it has the lock.
+//! link that follow it; the commands the web accepted; a reading that a watch
+//! folder's alert asked for; several of them at once), a task writes a
+//! timestamp to the database every [`BEAT_EVERY`] ([`HeartbeatStore::record`]).
+//! The worker's lock ([`crate::WorkerLock`]) starts the beat when the first of
+//! them takes the lock and stops it when the last lets go.
 //! A timestamp that stops ageing means the worker is busy; one that has aged
 //! for a minute means it died or is stopped, whatever the cycle's own marker
 //! says. The web reads it with [`HeartbeatStore::read`] (`status_api` in
 //! `trss-web`).
 
-use std::{future::Future, time::Duration};
+use std::time::Duration;
 
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -26,7 +27,7 @@ use crate::{Clock, Db, DbError, Millis};
 /// minute after a beat, so this leaves room for three missed beats.
 pub const BEAT_EVERY: Duration = Duration::from_secs(15);
 
-/// The worker's pulse while it holds the cycle lock.
+/// The worker's pulse while it holds the worker lock.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WorkerHeartbeat {
     /// The last time the worker wrote it: every few seconds while it holds the
@@ -50,7 +51,7 @@ impl HeartbeatStore {
     }
 
     /// Records that the worker is alive at `beat_at` and, with `held_since`, has
-    /// held the cycle lock since then (`None`: it has let go of it).
+    /// held the worker lock since then (`None`: it has let go of it).
     pub async fn record(&self, beat_at: Millis, held_since: Option<Millis>) -> Result<(), DbError> {
         self.db
             .run(move |c| {
@@ -88,26 +89,9 @@ impl HeartbeatStore {
     }
 }
 
-/// Runs `work`, which the caller does with the cycle lock held, with the
-/// heartbeat beating, and lets go of the hold when it returns. The caller drops
-/// the lock after this returns, so the last beat is written under it. If `work`
-/// panics or is dropped the heartbeat is dropped with it: no clean end is
-/// written and the timestamp ages.
-pub async fn while_holding<T>(
-    store: HeartbeatStore,
-    clock: Clock,
-    every: Duration,
-    work: impl Future<Output = T>,
-) -> T {
-    let beat = Heartbeat::start(store, clock, every).await;
-    let out = work.await;
-    beat.stop().await;
-    out
-}
-
 /// A running heartbeat. Writes the first beat when it starts, one more every
 /// [`BEAT_EVERY`], and a last one that clears the hold when [`Heartbeat::stop`]
-/// is awaited. Dropping it without that (the cycle panicked or was aborted)
+/// is awaited. Dropping it without that (the work panicked or was aborted)
 /// only stops the beats, so the timestamp ages and the web sees a worker that
 /// has stopped.
 pub struct Heartbeat {
@@ -119,7 +103,7 @@ pub struct Heartbeat {
 
 impl Heartbeat {
     /// Starts beating for a lock taken now. A beat that cannot be written is
-    /// logged and does not fail the cycle: the worst it does is show the worker
+    /// logged and does not fail the work: the worst it does is show the worker
     /// as stopped.
     pub async fn start(store: HeartbeatStore, clock: Clock, every: Duration) -> Heartbeat {
         let held_since = clock();

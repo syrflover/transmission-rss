@@ -157,8 +157,9 @@ pub enum MoveError {
 }
 
 /// Something kept alive until the move's blocking work has returned, even
-/// when the task that waits for it is aborted: the worker passes its lock,
-/// so no cycle or other worker starts while files are still being renamed.
+/// when the task that waits for it is aborted: the worker passes its hold of
+/// its lock ([`trss_core::WorkerHold::keep`]), so no other worker starts while
+/// files are still being renamed.
 pub type Hold = Arc<dyn Any + Send + Sync>;
 
 /// The filesystem as the move sees it. The worker uses the metadata's

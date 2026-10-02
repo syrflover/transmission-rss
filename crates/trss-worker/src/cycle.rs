@@ -17,7 +17,7 @@ use trss_collect::{
     episode_offset::may_decide,
     feed::{self, FeedItem},
     offsets,
-    plan::{ChannelPlan, Judgement},
+    plan::{work_folder_of, ChannelPlan, Judgement},
     revision::Release,
     revisions::{self, Decided, Listing, Plan, Replaced, Selected},
     store::{
@@ -27,12 +27,14 @@ use trss_collect::{
         status::{ChannelReadResult, StatusStore, TransmissionCounts},
     },
 };
-use trss_core::{settings::SettingsError, Millis};
+use trss_core::{folder_locks::Section, settings::SettingsError, Millis};
 use trss_transmission as transmission;
 use trss_transmission::{
     add_item, remove_stale, rename_with_retries, AddError, AddKind, Redactor, RemovedTorrent,
     RenameMode, SessionConfig,
 };
+
+use crate::removal::Removal;
 
 /// How many selected items are added to Transmission at the same time.
 const ADD_CONCURRENCY: usize = 100;
@@ -66,6 +68,11 @@ pub struct CycleReport {
     /// Items a rule selected that were left alone because no collect folder is
     /// set. They are not recorded at all, so the next cycle judges them again.
     pub waiting_for_collect_folder: usize,
+    /// Items a rule selected that were left alone because, by their turn at
+    /// the work folder, the rule was no longer active or had another episode
+    /// conversion (a command archived it or undid its offset meanwhile). They
+    /// are not recorded at all, so the next cycle judges them again.
+    pub rule_changed: usize,
     /// Torrents taken out of Transmission because they left the feeds.
     pub removed: Vec<RemovedTorrent>,
     /// Items whose task panicked. Their torrents may or may not be in
@@ -75,11 +82,12 @@ pub struct CycleReport {
     /// connection failed or timed out rather than Transmission refusing).
     /// Like a panic, the cycle then removes no departed torrents.
     pub adds_unconfirmed: usize,
-    /// Commands left `running` when the cycle started (see
-    /// [`CommandsAtStart::running`]). The cycle then removes no departed torrents.
+    /// Commands an earlier start left `running` when the removal of departed
+    /// torrents was about to run (see [`CommandsAtRemoval::running`]); the
+    /// cycle then removes none. Zero when the cycle stopped before that point.
     pub commands_running: usize,
-    /// Commands with an unconfirmed add (see
-    /// [`CommandsAtStart::unconfirmed_adds`]). The cycle then removes no
+    /// Commands with an unconfirmed add at that point (see
+    /// [`CommandsAtRemoval::unconfirmed_adds`]); the cycle then removes no
     /// departed torrents.
     pub commands_unconfirmed: usize,
     /// Selected revisions not added because the folder holds the episode and
@@ -94,19 +102,7 @@ pub struct CycleReport {
     pub interrupted: bool,
 }
 
-/// What the web commands looked like when the cycle started, as far as they
-/// bear on removing departed torrents.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct CommandsAtStart {
-    /// Commands still `running`. Under the worker lock that is a command a
-    /// worker died in, or stopped to retry later: it may have handed a torrent
-    /// to Transmission without history learning its hash yet.
-    pub running: usize,
-    /// Commands ended since the previous cycle started whose add to
-    /// Transmission got no answer (or whose task panicked): Transmission may
-    /// hold their torrent under a hash history does not know.
-    pub unconfirmed_adds: usize,
-}
+pub use crate::removal::CommandsAtRemoval;
 
 /// The plan of each channel. A channel with a subscription gets one more
 /// look at history, for its first read: when history has no first read of it
@@ -178,6 +174,8 @@ struct Job {
     /// The item's own link, which Transmission is asked to add.
     link: String,
     save_path: PathBuf,
+    /// The folder whose turn the item takes ([`work_folder_of`]).
+    work_folder: PathBuf,
     episode: isize,
     channel_label: String,
     /// The replacement of this revision failed before it was received, and
@@ -201,28 +199,35 @@ enum JobOutcome {
     /// A revision whose decision waits for the next cycle; nothing was done or
     /// recorded.
     Later,
+    /// The rule changed while the item waited for its turn; nothing was done
+    /// or recorded (see [`CycleReport::rule_changed`]).
+    RuleChanged,
 }
 
-/// Runs one cycle whose records are stamped `at`. `commands` is what the
-/// caller found among the web commands before the cycle started.
+/// Runs one cycle whose records are stamped `at`. `removal` is what the
+/// removal of departed torrents waits for and asks about the web commands
+/// (see [`crate::removal`]).
 ///
 /// The channels and rules are read once, first; edits made while the cycle
-/// runs apply from the next cycle. `cancel` asks the cycle to wind down: no
-/// new item is started, items already handed to Transmission are recorded,
-/// and the removal of departed torrents is skipped because it would judge
-/// them against an incomplete picture.
+/// runs apply from the next cycle, except that an item whose rule was archived,
+/// paused or deleted, or got another episode conversion, by the time the item
+/// gets its turn at the work folder is left for the next cycle. `cancel` asks
+/// the cycle to wind down: no new item is started, items already handed to
+/// Transmission are recorded, and the removal of departed torrents is skipped
+/// because it would judge them against an incomplete picture.
+///
+/// Web commands run beside the cycle. Each item takes its turn at its work
+/// folder ([`trss_core::folder_locks`]) for its add and rename, so a command
+/// that moves or renames in the folder runs before or after it; the removal
+/// takes the torrent gate ([`crate::removal`]).
 pub async fn run_cycle(
     ctx: &CollectContext,
     session: &SessionConfig,
     at: Millis,
-    commands: CommandsAtStart,
+    removal: &Removal,
     cancel: &CancellationToken,
 ) -> Result<CycleReport, CycleError> {
-    let mut report = CycleReport {
-        commands_running: commands.running,
-        commands_unconfirmed: commands.unconfirmed_adds,
-        ..CycleReport::default()
-    };
+    let mut report = CycleReport::default();
 
     // One consistent snapshot, before anything else.
     let snapshot = ctx.channels.list_channels_with_rules().await?;
@@ -414,6 +419,10 @@ pub async fn run_cycle(
                     },
                     title: stored_title,
                     link,
+                    work_folder: work_folder_of(
+                        collect_folder.as_deref().unwrap_or(Path::new("")),
+                        &save_path,
+                    ),
                     save_path,
                     episode,
                     channel_label: label.clone(),
@@ -529,12 +538,33 @@ pub async fn run_cycle(
     // which meets the torrent again and keeps it. An add that timed out or lost
     // its connection is the same case: Transmission may have finished it.
     //
-    // A command left `running` is that case for a retry: its worker may
-    // have died after Transmission took the torrent and before the hash was
-    // written. A restarted worker runs its cycle before it looks for commands,
-    // so the removal waits until the rerun has met the torrent and recorded it.
-    // A command whose add got no answer is the unconfirmed case again; that
-    // holds the removal of the first cycle after it.
+    // A command left `running` by an earlier start is that case for a retry:
+    // its worker may have died after Transmission took the torrent and before
+    // the hash was written, so the removal waits until the rerun has met the
+    // torrent and recorded it. A command whose add got no answer is the
+    // unconfirmed case again; that holds the removal of the first cycle after
+    // it. A command running now holds the torrent gate, which the removal
+    // waits for (see `crate::removal`).
+    let removable =
+        collect_folder.is_some() && panicked == 0 && unconfirmed == 0 && report.channels_read > 0;
+    // From the commands' check through the last removal, no command adds (the
+    // check alone, for the report, needs no gate).
+    let gate = if removable {
+        tokio::select! {
+            gate = removal.gate.removal() => Some(gate),
+            _ = cancel.cancelled() => {
+                report.interrupted = true;
+                return Ok(report);
+            }
+        }
+    } else {
+        None
+    };
+    let commands = removal.commands().await;
+    if let Ok(commands) = &commands {
+        report.commands_running = commands.running;
+        report.commands_unconfirmed = commands.unconfirmed_adds;
+    }
     if collect_folder.is_none() {
         // The selected items were not recorded, so a torrent for one of them
         // (an older add, or the legacy cron's) could look like a departed one.
@@ -549,69 +579,29 @@ pub async fn run_cycle(
             "{unconfirmed} add(s) got no answer from Transmission; \
              leaving Transmission's torrents alone this cycle"
         );
-    } else if commands.running > 0 {
-        println!(
-            "{} command(s) were left running by an earlier worker; \
-             leaving Transmission's torrents alone this cycle",
-            commands.running
+    } else if let Err(err) = commands {
+        eprintln!(
+            "Cannot read the web commands ({err}); \
+             leaving Transmission's torrents alone this cycle"
         );
-    } else if commands.unconfirmed_adds > 0 {
+    } else if report.commands_running > 0 {
+        println!(
+            "{} command(s) were left running by an earlier start; \
+             leaving Transmission's torrents alone this cycle",
+            report.commands_running
+        );
+    } else if report.commands_unconfirmed > 0 {
         println!(
             "{} command(s) got no answer from Transmission to their add; \
              leaving Transmission's torrents alone this cycle",
-            commands.unconfirmed_adds
+            report.commands_unconfirmed
         );
     } else if report.channels_read > 0 {
-        let mut kept = kept;
-        let present_items: HashSet<(String, String)> = present.iter().cloned().collect();
-        let unread: HashSet<String> = unread_channels.iter().cloned().collect();
-        let labelled_for_a_waiting_item = |labels: &[String]| {
-            labels
-                .iter()
-                .filter_map(|label| transmission::item_of_label(label))
-                .any(|(channel, key)| {
-                    unread.contains(channel)
-                        || present_items.contains(&(channel.to_owned(), key.to_owned()))
-                })
-        };
-        let recorded = async {
-            let mut hashes = ctx
-                .history
-                .torrent_hashes_of_channels(unread_channels)
-                .await?;
-            hashes.extend(ctx.history.held_hashes_of_items(present).await?);
-            Ok::<_, trss_collect::store::history::HistoryError>(hashes)
-        }
-        .await;
-        // A replacement under way keeps its new torrent, which it checks,
-        // removes the old video next to and renames, whatever the feeds say.
-        let recorded = match (recorded, ctx.revisions.held_hashes().await) {
-            (Ok(mut hashes), Ok(held)) => {
-                hashes.extend(held);
-                Ok(hashes)
-            }
-            (Err(err), _) => Err(err.to_string()),
-            (_, Err(err)) => Err(err.to_string()),
-        };
-        match recorded {
-            Ok(hashes) => {
-                kept.extend(hashes);
-                let mut transmission = ctx.transmission();
-                report.removed = remove_stale(
-                    &mut transmission,
-                    |hash, labels| kept.contains(hash) || labelled_for_a_waiting_item(labels),
-                    &redactor,
-                )
-                .await;
-            }
-            Err(err) => eprintln!(
-                "Cannot tell which torrents came from unread channels ({err}); \
-                 leaving Transmission's torrents alone this cycle"
-            ),
-        }
+        report.removed = remove_departed(ctx, kept, present, unread_channels, &redactor).await;
     } else if report.channels > 0 {
         println!("No feed could be read; leaving Transmission's torrents alone");
     }
+    drop(gate);
 
     record_transmission_counts(ctx, at, &redactor).await;
 
@@ -635,6 +625,69 @@ pub async fn run_cycle(
     }
 
     Ok(report)
+}
+
+/// Removes the finished bot-labelled torrents nothing accounts for (see the
+/// rules in [`run_cycle`]): not `kept` (held for this cycle's items), not in
+/// history for a channel in `unread_channels` or an item in `present`, not
+/// held by a replacement under way, and not labelled for such an item. Run
+/// with the torrent gate held. A history that cannot be read removes nothing.
+async fn remove_departed(
+    ctx: &CollectContext,
+    mut kept: HashSet<String>,
+    present: Vec<(String, String)>,
+    unread_channels: Vec<String>,
+    redactor: &Redactor,
+) -> Vec<RemovedTorrent> {
+    let present_items: HashSet<(String, String)> = present.iter().cloned().collect();
+    let unread: HashSet<String> = unread_channels.iter().cloned().collect();
+    let labelled_for_a_waiting_item = |labels: &[String]| {
+        labels
+            .iter()
+            .filter_map(|label| transmission::item_of_label(label))
+            .any(|(channel, key)| {
+                unread.contains(channel)
+                    || present_items.contains(&(channel.to_owned(), key.to_owned()))
+            })
+    };
+    let recorded = async {
+        let mut hashes = ctx
+            .history
+            .torrent_hashes_of_channels(unread_channels)
+            .await?;
+        hashes.extend(ctx.history.held_hashes_of_items(present).await?);
+        Ok::<_, trss_collect::store::history::HistoryError>(hashes)
+    }
+    .await;
+    // A replacement under way keeps its new torrent, which it checks,
+    // removes the old video next to and renames, whatever the feeds say.
+    let recorded = match (recorded, ctx.revisions.held_hashes().await) {
+        (Ok(mut hashes), Ok(held)) => {
+            hashes.extend(held);
+            Ok(hashes)
+        }
+        (Err(err), _) => Err(err.to_string()),
+        (_, Err(err)) => Err(err.to_string()),
+    };
+    match recorded {
+        Ok(hashes) => {
+            kept.extend(hashes);
+            let mut transmission = ctx.transmission();
+            remove_stale(
+                &mut transmission,
+                |hash, labels| kept.contains(hash) || labelled_for_a_waiting_item(labels),
+                redactor,
+            )
+            .await
+        }
+        Err(err) => {
+            eprintln!(
+                "Cannot tell which torrents came from unread channels ({err}); \
+                 leaving Transmission's torrents alone this cycle"
+            );
+            Vec::new()
+        }
+    }
 }
 
 /// What the item tasks of a cycle came to.
@@ -751,6 +804,7 @@ async fn add_jobs(
             JobOutcome::NotStarted => {}
             JobOutcome::Withheld => report.revisions_withheld += 1,
             JobOutcome::Later => report.revisions_left += 1,
+            JobOutcome::RuleChanged => report.rule_changed += 1,
         }
     }
 
@@ -787,6 +841,40 @@ async fn process_job(
 ) -> (JobOutcome, bool) {
     if cancel.is_cancelled() {
         return (JobOutcome::NotStarted, false);
+    }
+    // The item's turn at its work folder, for its add and its rename: a
+    // command that moves the folder (an archive) or renames in it (an undo)
+    // runs before or after, never during.
+    let _turn = ctx
+        .folders
+        .lock(Section::new().read(&job.work_folder))
+        .await;
+    if cancel.is_cancelled() {
+        return (JobOutcome::NotStarted, false);
+    }
+    // Such a command may have changed the rule while the item waited: an
+    // archived rule receives nothing, and an undone offset names nothing.
+    if let Some(rule_id) = &job.observation.rule_id {
+        let unchanged = match ctx.channels.get_rule(rule_id).await {
+            Ok(Some(rule)) => {
+                rule.state == RuleState::Active && rule.episode as isize == job.episode
+            }
+            Ok(None) => false,
+            Err(err) => {
+                eprintln!(
+                    "Cannot read the rule of {} ({}): {err}",
+                    job.title, job.channel_label
+                );
+                false
+            }
+        };
+        if !unchanged {
+            println!(
+                "{} ({}) waits for the next cycle: its rule changed while the cycle ran",
+                job.title, job.channel_label
+            );
+            return (JobOutcome::RuleChanged, false);
+        }
     }
 
     let plan = if let Some(row) = &job.retry {

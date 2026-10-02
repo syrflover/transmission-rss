@@ -251,6 +251,7 @@ struct TrState {
     contents: HashMap<String, Vec<u8>>,
     /// Torrents `torrent-add` takes as still downloading, by hash.
     unfinished_on_add: std::collections::HashSet<String>,
+    seeding_on_add: std::collections::HashSet<String>,
     /// `torrent-remove` refusals for single torrents, by hash.
     rejected_removes: HashMap<String, String>,
     /// `torrent-rename-path` refusals for single torrents, by hash.
@@ -490,6 +491,16 @@ impl FakeTransmission {
             .lock()
             .unwrap()
             .unfinished_on_add
+            .insert(hash.to_owned());
+    }
+
+    /// Makes `torrent-add` take the torrent `hash` as seeding at once, as
+    /// Transmission does for a torrent whose data it finds complete.
+    pub fn seeding_on_add(&self, hash: &str) {
+        self.state
+            .lock()
+            .unwrap()
+            .seeding_on_add
             .insert(hash.to_owned());
     }
 
@@ -797,6 +808,9 @@ async fn tr_rpc_answer(
             });
             if st.unfinished_on_add.contains(&hash) {
                 st.torrents.last_mut().unwrap().left_until_done = 1 << 20;
+            }
+            if st.seeding_on_add.contains(&hash) {
+                st.torrents.last_mut().unwrap().status = 6;
             }
             if let Some(bytes) = st.contents.get(&hash).cloned() {
                 let dir = st.torrents.last().unwrap().download_dir.clone();

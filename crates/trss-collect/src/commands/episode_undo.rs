@@ -5,9 +5,11 @@
 //!
 //! The web accepts the command with an [`EpisodeUndo`] payload (the rule and
 //! the automatic value the user saw; one rule has at most one open undo) and
-//! the worker runs it with [`run`], under the lock that also guards the
-//! collection cycles: Transmission is reached from the worker only, and no
-//! cycle receives an item or renames a file while the undo runs.
+//! the worker runs it with [`run`], holding the turn of the rule's work folder
+//! ([`section`]): Transmission is reached from the worker only, and no cycle
+//! or command receives an item into the folder or renames a file in it while
+//! the undo runs. A cycle's item for the rule that waited for it finds the
+//! offset changed and is left for the next cycle.
 //!
 //! # What is renamed
 //!
@@ -116,12 +118,14 @@ use transmission_rpc::types::Id;
 use trss_core::{
     commands::{Command, CommandState, Outcome},
     files::rename_noreplace,
+    folder_locks::Section,
     Clock,
 };
 
 use crate::{
     context::CollectContext,
     episode_offset::signed,
+    plan::rule_work_folder,
     revision::FileIdentity,
     revisions::{episode_name, owner_of, same_folder, Owner},
     rss::save_path,
@@ -348,6 +352,28 @@ fn failed(reason: impl Into<String>) -> Finished {
 }
 
 /// Runs an `episode_undo` command to its end.
+/// The turn the command takes before it runs: a write of the work folder the
+/// rule saves into ([`rule_work_folder`]). Empty when the request, the rule or
+/// the collect folder cannot be found: the command then ends by itself.
+pub async fn section(ctx: &CollectContext, command: &Command) -> Result<Section, Retry> {
+    let Ok(payload) = serde_json::from_str::<EpisodeUndo>(&command.payload) else {
+        return Ok(Section::new());
+    };
+    let Some(rule) = ctx
+        .channels
+        .get_rule(&payload.rule_id)
+        .await
+        .map_err(store)?
+    else {
+        return Ok(Section::new());
+    };
+    let Some(collect) = ctx.settings.collection().await.map_err(store)? else {
+        return Ok(Section::new());
+    };
+    Ok(Section::new().write(rule_work_folder(Path::new(&collect.folder), &rule)))
+}
+
+/// Runs the command, with its turn ([`section`]) taken.
 pub async fn run(
     ctx: &CollectContext,
     command: &Command,

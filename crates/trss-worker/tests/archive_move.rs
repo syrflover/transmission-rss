@@ -789,7 +789,8 @@ async fn no_cycle_runs_while_a_folder_moves() {
     let task = tokio::spawn(async move { worker.run_commands(&CancellationToken::new()).await });
     gate.wait_arrived().await;
 
-    // Mid-move: a cycle and a second look for commands both find the lock taken.
+    // Mid-move: another worker's cycle and look for commands both find the
+    // lock between processes taken.
     let tick = s.worker().tick(&CancellationToken::new()).await.unwrap();
     assert_eq!(tick, TickOutcome::Busy);
     assert_eq!(s.run().await, CommandsOutcome::Busy);
@@ -809,6 +810,246 @@ async fn no_cycle_runs_while_a_folder_moves() {
         text(s.collect.join("Other/Season 01")).as_str()
     );
     assert!(!s.collect.join("Clevatess").exists());
+}
+
+#[tokio::test]
+async fn the_same_workers_cycle_adds_beside_a_move_and_skips_the_rule_archived_meanwhile() {
+    let s = Scene::new(true).await;
+    let c = s
+        .channel(
+            "feed-a",
+            &[
+                ("Clevatess", "Clevatess/Season 02"),
+                ("Other", "Other/Season 01"),
+            ],
+        )
+        .await;
+    s.seeding(
+        1,
+        "Clevatess S02E01.mkv",
+        &s.collect.join("Clevatess/Season 02"),
+    );
+    s.h.feeds.set_xml(
+        "feed-a",
+        &feed_xml(&[(2, "Clevatess S02E02.mkv"), (3, "Other S01E01.mkv")]),
+    );
+    // One worker, as a process has one.
+    let worker = s.worker();
+
+    // Its cycle has read the rules, both active, and waits for the feed.
+    let feed = s.h.feeds.hold("feed-a");
+    s.h.advance(300_000);
+    let cycle = tokio::spawn({
+        let worker = worker.clone();
+        async move { worker.tick(&CancellationToken::new()).await }
+    });
+    feed.wait_arrived().await;
+
+    // Meanwhile `보관` turns the first rule off and starts moving its folder.
+    let gate = s.h.tr.hold("torrent-set-location");
+    s.send("archive-beside-1", &c.rules[0].id, "archive").await;
+    let commands = tokio::spawn({
+        let worker = worker.clone();
+        async move { worker.run_commands(&CancellationToken::new()).await }
+    });
+    gate.wait_arrived().await;
+
+    // Mid-move, the cycle goes on: the other work folder's item goes in, the
+    // moving one's waits for the move.
+    feed.release_all();
+    let adds = || s.h.tr.calls_of("torrent-add");
+    for _ in 0..1000 {
+        if !adds().is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(adds().len(), 1);
+    assert_eq!(
+        adds()[0].args["download-dir"],
+        text(s.collect.join("Other/Season 01")).as_str()
+    );
+    assert!(!cycle.is_finished());
+
+    // The move ends; the waiting item's rule is archived now, so it is not
+    // added into the folder that left.
+    gate.release_all();
+    assert_eq!(commands.await.unwrap().unwrap(), CommandsOutcome::Ran(1));
+    assert_eq!(
+        s.command("archive-beside-1").await["outcome"]["result"],
+        "moved"
+    );
+    let TickOutcome::Ran(report) = cycle.await.unwrap().unwrap() else {
+        panic!("expected a cycle")
+    };
+    assert_eq!(report.rule_changed, 1);
+    assert_eq!(report.added, 1);
+    assert_eq!(adds().len(), 1);
+    assert!(!s.collect.join("Clevatess").exists());
+    assert_eq!(
+        files(&s.archive),
+        ["Clevatess/Season 02/Clevatess S02E01.mkv"]
+    );
+}
+
+#[tokio::test]
+async fn a_rescan_of_another_watch_folder_runs_while_a_folder_moves() {
+    let s = Scene::new(true).await;
+    let c = s
+        .channel("feed-a", &[("Clevatess", "Clevatess/Season 02")])
+        .await;
+    s.seeding(
+        1,
+        "Clevatess S02E01.mkv",
+        &s.collect.join("Clevatess/Season 02"),
+    );
+    // A watch folder outside the collect and archive folders.
+    let (status, _, body) = s
+        .api
+        .call(
+            "POST",
+            "/api/library/watch-folders",
+            Some(json!({ "path": text(&s.outside) })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let folder_id = body["folder"]["id"].as_str().unwrap().to_owned();
+    write(
+        &s.outside
+            .join("Lycoris Recoil/Season 01/Lycoris Recoil S01E01.mkv"),
+        "video",
+    );
+    let worker = s.worker();
+
+    let gate = s.h.tr.hold("torrent-set-location");
+    s.send("archive-rescan-1", &c.rules[0].id, "archive").await;
+    let moving = tokio::spawn({
+        let worker = worker.clone();
+        async move { worker.run_commands(&CancellationToken::new()).await }
+    });
+    gate.wait_arrived().await;
+
+    let (status, _, body) = s
+        .api
+        .call(
+            "POST",
+            "/api/commands",
+            Some(json!({
+                "id": "rescan-beside-1",
+                "kind": "watch_rescan",
+                "payload": { "folder_id": folder_id },
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    let ran = tokio::time::timeout(
+        Duration::from_secs(10),
+        worker.run_commands(&CancellationToken::new()),
+    )
+    .await
+    .expect("the rescan waited for the move")
+    .unwrap();
+
+    assert_eq!(ran, CommandsOutcome::Ran(1));
+    let rescan = s.command("rescan-beside-1").await;
+    assert_eq!(rescan["state"], "done", "{rescan}");
+    assert_eq!(rescan["outcome"]["result"], "scanned");
+    assert_eq!(s.command("archive-rescan-1").await["state"], "running");
+    assert!(s.collect.join("Clevatess").exists());
+
+    gate.release_all();
+    assert_eq!(moving.await.unwrap().unwrap(), CommandsOutcome::Ran(1));
+    assert_eq!(
+        s.command("archive-rescan-1").await["outcome"]["result"],
+        "moved"
+    );
+}
+
+#[tokio::test]
+async fn a_move_accepted_after_a_retry_into_its_work_folder_waits_for_it_and_takes_its_torrent() {
+    let s = Scene::new(true).await;
+    let c = s
+        .channel("feed-a", &[("Clevatess", "Clevatess/Season 02")])
+        .await;
+    let rule = &c.rules[0];
+    s.seeding(
+        1,
+        "Clevatess S02E01.mkv",
+        &s.collect.join("Clevatess/Season 02"),
+    );
+    // Transmission refused the rule's next episode: `다시 받기` is offered.
+    s.h.feeds
+        .set_xml("feed-a", &feed_xml(&[(2, "Clevatess S02E02.mkv")]));
+    s.h.tr.reject_adds(Some("not today"));
+    assert!(matches!(
+        s.worker().tick(&CancellationToken::new()).await.unwrap(),
+        TickOutcome::Ran(_)
+    ));
+    s.h.tr.reject_adds(None);
+    s.h.tr.clear_calls();
+    let item = s.h.item("Clevatess S02E02").await;
+    // The retried torrent's file is written where Transmission puts it.
+    s.h.tr.on_disk(s.h.dir.path());
+    s.h.tr.content_on_add(&hash(2), b"video");
+    s.h.tr.seeding_on_add(&hash(2));
+
+    // `다시 받기` first, then `보관` of the same rule: one work folder.
+    let add = s.h.tr.hold("torrent-add");
+    let (status, _, body) = s
+        .api
+        .call(
+            "POST",
+            "/api/commands",
+            Some(json!({
+                "id": "retry-turns-0001",
+                "kind": "receive_once",
+                "payload": { "item_id": item.id },
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    s.send("archive-turns-01", &rule.id, "archive").await;
+    let look = tokio::spawn({
+        let worker = s.worker();
+        async move { worker.run_commands(&CancellationToken::new()).await }
+    });
+    add.wait_arrived().await;
+
+    // Both are claimed; the move waits for the retry's add.
+    let commands = CommandStore::new(s.h.db.clone());
+    for _ in 0..1000 {
+        let archive = commands.get("archive-turns-01").await.unwrap().unwrap();
+        if archive.state == CommandState::Running {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(s.command("archive-turns-01").await["state"], "running");
+    assert_eq!(s.rule(&rule.id).await["state"], "active");
+    assert!(s.h.tr.calls_of("torrent-set-location").is_empty());
+
+    add.release_all();
+    assert_eq!(look.await.unwrap().unwrap(), CommandsOutcome::Ran(2));
+
+    // In the order they were accepted: the retry's torrent went into the work
+    // folder, and the move took it along with the rest.
+    let retry = s.command("retry-turns-0001").await;
+    assert_eq!(retry["outcome"]["result"], "received", "{retry}");
+    let archive = s.command("archive-turns-01").await;
+    assert_eq!(archive["outcome"]["result"], "moved", "{archive}");
+    let season = text(s.archive.join("Clevatess/Season 02"));
+    assert_eq!(s.h.tr.torrent(&hash(1)).download_dir, season);
+    assert_eq!(s.h.tr.torrent(&hash(2)).download_dir, season);
+    assert!(!s.collect.join("Clevatess").exists());
+    assert_eq!(
+        files(&s.archive),
+        [
+            "Clevatess/Season 02/Clevatess S02E01.mkv",
+            "Clevatess/Season 02/Clevatess S02E02.mkv"
+        ]
+    );
 }
 
 // --- 10. waiting for Transmission ------------------------------------------------------------

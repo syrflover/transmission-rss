@@ -11,12 +11,11 @@
 //!
 //! [`Artwork`] puts them together for both processes. The web carries out the
 //! user's choices itself: the user waits for them and needs the reason when a
-//! file or an entry is refused, an upload's bytes arrive at the web, and the
-//! worker's command loop waits behind a running cycle. Both processes write
+//! file or an entry is refused, and an upload's bytes arrive at the web. Both processes write
 //! the app data folder and the database safely side by side: files get fresh
 //! names and never replace anything, and every selection change is checked
 //! against the selection's version in its transaction. The worker runs only
-//! the automatic queue, outside the cycle lock (it touches neither the media
+//! the automatic queue, outside the worker lock (it touches neither the media
 //! nor Transmission).
 //!
 //! # Limits

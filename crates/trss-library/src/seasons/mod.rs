@@ -18,7 +18,7 @@
 //! [`Seasons`] puts them together for both processes. The web carries out the
 //! user's choices itself (search, link, unlink, order, ask again) because the
 //! user waits for the answer and needs the reason when AniList refuses; the
-//! worker runs the queue, outside the cycle lock. Both write the database
+//! worker runs the queue, outside the worker lock. Both write the database
 //! side by side safely: every change of a season's links is checked against the
 //! link's version in its transaction, so a search that finishes late never
 //! undoes a user's choice.

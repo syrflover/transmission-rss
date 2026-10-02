@@ -9,7 +9,8 @@ name: trss-app
 #
 # Both share the app database in TRSS_DATA_DIR. Keep it on a local disk of this
 # host, not an SMB or NFS share: SQLite and the worker's lock file
-# (`trss.db.worker.lock`) rely on local file locking.
+# (`trss.db.worker.lock`) rely on local file locking, and the web wakes the
+# worker through the socket `trss.db.wake` next to the database.
 
 x-trss: &trss
   image: ghcr.io/syrflover/transmission-rss:${TRSS_VERSION:?Set TRSS_VERSION in .env to a release tag, e.g. 0.4.0}

@@ -610,6 +610,13 @@ pub async fn advance(
         if cancel.is_cancelled() {
             return;
         }
+        // A replacement removes and renames videos in its folder: it takes the
+        // folder's turn, so no command moves or renames there meanwhile, and
+        // no add into it runs beside the step.
+        let _turn = ctx
+            .folders
+            .lock(trss_core::folder_locks::Section::new().write(&row.folder))
+            .await;
         drive(ctx, row, at, redactor, &listing).await;
     }
 }

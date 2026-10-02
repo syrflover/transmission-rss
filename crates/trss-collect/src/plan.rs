@@ -318,6 +318,29 @@ pub fn rule_destination(collect_folder: &Path, rule: &Rule) -> (PathBuf, isize) 
     (save_path(collect_folder, &spec.directory), spec.episode)
 }
 
+/// The folder whose turn ([`trss_core::folder_locks`]) work saving into
+/// `save_path` takes: the work folder, which is the collect folder joined with
+/// the first part of the save folder below it (`Clevatess` of
+/// `Clevatess/Season 02`); the collect folder itself for a save folder that is
+/// the collect folder; the save folder for one outside it. Placed by text, as
+/// the turns are.
+pub fn work_folder_of(collect_folder: &Path, save_path: &Path) -> PathBuf {
+    let collect = crate::commands::rule_archive::lexical(collect_folder);
+    let save = crate::commands::rule_archive::lexical(save_path);
+    match save.strip_prefix(&collect) {
+        Ok(below) => match below.components().next() {
+            Some(first) => collect.join(first),
+            None => collect,
+        },
+        Err(_) => save,
+    }
+}
+
+/// [`work_folder_of`] the folder `rule` saves into.
+pub fn rule_work_folder(collect_folder: &Path, rule: &Rule) -> PathBuf {
+    work_folder_of(collect_folder, &rule_destination(collect_folder, rule).0)
+}
+
 /// Whether `rule` alone would select an item with this title in `channel`:
 /// the channel does not exclude it and the rule matches. Other rules and the
 /// rule's state are not looked at.

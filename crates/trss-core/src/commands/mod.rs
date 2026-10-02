@@ -14,13 +14,15 @@
 //! - **A lost answer is looked up, not resent under a new ID.** The command is
 //!   read by its ID ([`CommandStore::get`]); it is either there (with its
 //!   state) or was never stored.
-//! - **The worker executes under the cycle lock.** [`CommandStore::claim_next`]
-//!   hands out the oldest open command and marks it `running`. Because a worker
-//!   only claims while it holds the lock that also guards collection cycles, a
-//!   command still `running` when a worker claims is one an earlier worker
-//!   started and did not finish (it died or was stopped), and it is handed out
-//!   again. A command that keeps ending its worker is given up after
-//!   [`MAX_ATTEMPTS`] tries.
+//! - **The worker executes under the worker lock.** [`CommandStore::claim_next`]
+//!   hands out the oldest open command and marks it `running`. A worker claims
+//!   only while it holds the worker lock ([`crate::WorkerLock`]), which one
+//!   worker at a time holds, and it passes over the commands it is running
+//!   itself ([`CommandStore::claim_next_excluding`]). So a command still
+//!   `running` when a worker claims it is one an earlier start did not finish
+//!   (its worker died or was stopped, or left it for a later look), and it is
+//!   handed out again. A command that keeps ending its worker is given up
+//!   after [`MAX_ATTEMPTS`] tries.
 //! - **The end is recorded once**, as `done` or `failed`, with an
 //!   [`Outcome`] the screen can show. Outcomes and everything else stored here
 //!   are free of secret values.
@@ -227,9 +229,20 @@ impl CommandStore {
 
     /// How many commands are `running`. Asked while holding the worker lock,
     /// these are commands a worker started and did not end: it died in them,
-    /// or stopped them to retry later.
+    /// or stopped them to retry later, or is running them now.
     pub async fn running_count(&self) -> Result<usize, CommandError> {
-        self.db.run(|c| repo::running_count(c)).await
+        self.running_count_excluding(Vec::new()).await
+    }
+
+    /// [`CommandStore::running_count`] without the commands whose IDs are in
+    /// `excluded` (the ones the asking worker is running now and knows about).
+    pub async fn running_count_excluding(
+        &self,
+        excluded: Vec<String>,
+    ) -> Result<usize, CommandError> {
+        self.db
+            .run(move |c| repo::running_count_excluding(c, &excluded))
+            .await
     }
 
     /// Hands out the oldest open command to run and marks it `running`, one
@@ -237,7 +250,20 @@ impl CommandStore {
     /// docs). A command already started [`MAX_ATTEMPTS`] times is failed on the
     /// way instead of handed out.
     pub async fn claim_next(&self, now: Millis) -> Result<Option<Command>, CommandError> {
-        self.db.run(move |c| repo::claim_next(c, now)).await
+        self.claim_next_excluding(now, Vec::new()).await
+    }
+
+    /// [`CommandStore::claim_next`], passing over the open commands whose IDs
+    /// are in `excluded`: the ones the worker is running now, and the ones it
+    /// leaves for a later look. They are neither handed out nor given up.
+    pub async fn claim_next_excluding(
+        &self,
+        now: Millis,
+        excluded: Vec<String>,
+    ) -> Result<Option<Command>, CommandError> {
+        self.db
+            .run(move |c| repo::claim_next_excluding(c, now, &excluded))
+            .await
     }
 
     /// Ends a command. Only an open command changes; the return value tells

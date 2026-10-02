@@ -2,9 +2,10 @@
 //! worker reads the folder again now instead of waiting for the next cycle.
 //!
 //! The web accepts the command with a [`WatchRescan`] payload (the folder's ID;
-//! one folder has at most one open rescan) and the worker runs it under the lock
-//! that also guards the cycles, reading the folder with the same scan the
-//! cycles use ([`crate::watch`]). The scan only reads the disk.
+//! one folder has at most one open rescan) and the worker runs it, reading the
+//! folder with the same scan the cycles use ([`crate::watch`]). The scan only
+//! reads the disk. The worker takes the folder's turn for it first
+//! ([`section`]), as for every reading of a watch folder; [`run`] does not.
 //!
 //! The command ends `done` when the folder was read, and `failed` with the
 //! reason when it could not be (the reason is also on the folder's row). A
@@ -16,6 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use trss_core::{
     commands::{Command, CommandState, Outcome},
+    folder_locks::Section,
     Clock,
 };
 
@@ -70,6 +72,23 @@ fn failed(reason: impl Into<String>) -> Finished {
             reason: Some(reason.into()),
         },
     }
+}
+
+/// The turn the command takes before it runs: a reading of its folder (see
+/// [`watch::reading_section`]). Empty when the request or the folder cannot be
+/// found: the command then ends by itself.
+pub async fn section(ctx: &WatchContext, command: &Command) -> Result<Section, Retry> {
+    let Ok(payload) = serde_json::from_str::<WatchRescan>(&command.payload) else {
+        return Ok(Section::new());
+    };
+    let folder = ctx
+        .library
+        .folder(&payload.folder_id)
+        .await
+        .map_err(|e| Retry(e.to_string()))?;
+    Ok(folder.map_or_else(Section::new, |folder| {
+        watch::reading_section(&folder.path, &[])
+    }))
 }
 
 /// Runs a `watch_rescan` command to its end.

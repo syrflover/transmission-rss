@@ -5,7 +5,7 @@ use tokio::net::TcpListener;
 
 use trss_anilist::AnilistConfig;
 use trss_anissia::{Anissia, AnissiaConfig};
-use trss_core::{db::DB_PATH_ENV, Db};
+use trss_core::{db::DB_PATH_ENV, wake::wake_path_for, Db};
 use trss_library::artwork::{AppData, Artwork};
 use trss_web::{self as web, env::WebEnv, AppState};
 
@@ -56,7 +56,8 @@ async fn run() -> Result<(), String> {
 
     let state = AppState::new(db.clone())
         .with_artwork(artwork)
-        .with_anissia(Anissia::with_defaults(db, anissia));
+        .with_anissia(Anissia::with_defaults(db, anissia))
+        .with_worker_wake(wake_path_for(&db_path));
     axum::serve(listener, web::router(&env.static_dir, state))
         .with_graceful_shutdown(web::shutdown_signal())
         .await

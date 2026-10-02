@@ -246,6 +246,84 @@ async fn a_command_that_keeps_ending_its_worker_is_given_up() {
 }
 
 #[tokio::test]
+async fn a_claim_passes_over_the_excluded_commands_without_giving_them_up() {
+    let (_dir, _db, commands) = store().await;
+    for (id, subject) in [("a", "1"), ("b", "2"), ("c", "3")] {
+        commands
+            .accept(new(id, "{}", Some(subject)), 1_000)
+            .await
+            .unwrap();
+    }
+    // `a` is running here; `b` was left for a later look after its last start.
+    commands.claim_next(2_000).await.unwrap().unwrap();
+    for _ in 0..MAX_ATTEMPTS {
+        commands
+            .claim_next_excluding(2_000, vec!["a".into()])
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    let excluded = vec!["a".to_owned(), "b".to_owned()];
+    let claimed = commands
+        .claim_next_excluding(3_000, excluded.clone())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!((claimed.id.as_str(), claimed.attempts), ("c", 1));
+    assert!(commands
+        .claim_next_excluding(3_000, vec!["a".into(), "b".into(), "c".into()])
+        .await
+        .unwrap()
+        .is_none());
+    // Passed over, `b` is still open; the next claim that looks at it gives it up.
+    let b = commands.get("b").await.unwrap().unwrap();
+    assert_eq!((b.state, b.attempts), (CommandState::Running, MAX_ATTEMPTS));
+    assert!(commands
+        .claim_next_excluding(4_000, vec!["a".into(), "c".into()])
+        .await
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        commands.get("b").await.unwrap().unwrap().state,
+        CommandState::Failed
+    );
+}
+
+#[tokio::test]
+async fn the_running_count_leaves_out_the_excluded_commands() {
+    let (_dir, _db, commands) = store().await;
+    for (id, subject) in [("a", "1"), ("b", "2"), ("c", "3")] {
+        commands
+            .accept(new(id, "{}", Some(subject)), 1_000)
+            .await
+            .unwrap();
+    }
+    commands.claim_next(2_000).await.unwrap().unwrap();
+    commands
+        .claim_next_excluding(2_000, vec!["a".into()])
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(commands.running_count().await.unwrap(), 2);
+    assert_eq!(
+        commands
+            .running_count_excluding(vec!["a".into(), "c".into()])
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        commands
+            .running_count_excluding(vec!["a".into(), "b".into()])
+            .await
+            .unwrap(),
+        0
+    );
+}
+
+#[tokio::test]
 async fn a_command_ends_once() {
     let (_dir, _db, commands) = store().await;
     commands

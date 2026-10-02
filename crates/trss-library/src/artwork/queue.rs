@@ -1,7 +1,7 @@
 //! The worker's automatic artwork work: one job at a time, in request order,
 //! each AniList request in its turn ([`trss_anilist::REQUEST_SPACING`]).
 //!
-//! It runs beside the collection loop, not under the cycle lock (it touches
+//! It runs beside the collection loop, not under the worker lock (it touches
 //! neither the media nor Transmission), so a long queue (the first reading of
 //! a watch folder records hundreds of works at once) never holds up a cycle,
 //! and the web keeps answering. One process runs the queue at a time

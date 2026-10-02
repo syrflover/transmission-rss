@@ -1934,7 +1934,8 @@ async fn a_command_waits_while_a_cycle_holds_the_lock() {
     // The item has left the feed, so the cycle does not pick it itself.
     s.feed(&[]);
 
-    // A cycle in progress (held at its first request to Transmission).
+    // Another worker's cycle in progress (held at its first request to
+    // Transmission): the lock between processes keeps them apart.
     let gate = s.h.tr.hold("session-set");
     s.h.advance(300_000);
     let cycle = {
@@ -2774,4 +2775,188 @@ async fn a_long_command_beats_and_the_board_shows_no_stall_meanwhile() {
     assert_eq!(running.await.unwrap().unwrap(), CommandsOutcome::Ran(1));
     let done = heartbeat.read().await.unwrap().unwrap();
     assert_eq!(done.held_since, None);
+}
+
+// --- commands at once, beside the cycles (ticket 0031) -----------------------------------------
+
+/// The state of command `id` as the screen reads it.
+async fn state_of(s: &Scene, id: &str) -> String {
+    s.command(id).await.1["state"].as_str().unwrap().to_owned()
+}
+
+#[tokio::test]
+async fn a_command_the_web_accepts_starts_within_a_second_without_waiting_for_a_look() {
+    const WOKEN: &str = "5a0c2a71-0000-4000-8000-000000000031";
+    const UNHEARD: &str = "5a0c2a71-0000-4000-8000-000000000032";
+    let liar = release("guid-liar-26", 26, LIAR, "");
+    let other = release("guid-other-3", 3, OTHER, "");
+    let s = Scene::failing(&[&liar, &other], picked_rules()).await;
+    // The items have left the feed, so the worker's own cycles do not take them.
+    s.feed(&[]);
+    let wake = trss_core::wake::wake_path_for(&s.h.db_path());
+    // The worker would look by itself only once an hour: only the web's wake
+    // can explain a start within the second.
+    let worker =
+        s.h.worker()
+            .with_command_poll(Duration::from_secs(3600))
+            .with_wake_socket(wake.clone());
+    let cancel = CancellationToken::new();
+    let running = tokio::spawn({
+        let (worker, cancel) = (worker.clone(), cancel.clone());
+        async move { worker.run(cancel).await }
+    });
+    wait_for("the worker's wake socket", || {
+        let wake = wake.clone();
+        async move { wake.exists() }
+    })
+    .await;
+    // Its first cycle and first look have found nothing to do.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // Accepted by a web that does not wake the worker: nothing starts it.
+    let (status, _) = s.post(UNHEARD, &s.item("Another Show").await).await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert_eq!(state_of(&s, UNHEARD).await, "pending");
+
+    // Accepted by a web that wakes it: under way within the second.
+    let web = WebApi::with_state(trss_web::AppState::new(s.h.db.clone()).with_worker_wake(wake));
+    let item = s.item("LIAR GAME - 26").await;
+    let accepted = Instant::now();
+    let (status, _, body) = web
+        .call(
+            "POST",
+            "/api/commands",
+            Some(json!({ "id": WOKEN, "kind": "receive_once", "payload": { "item_id": item.id } })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    while state_of(&s, WOKEN).await == "pending" {
+        assert!(
+            accepted.elapsed() < Duration::from_secs(1),
+            "the command did not start within a second"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    // The look the wake started takes every open command.
+    wait_for("both commands to end", || async {
+        state_of(&s, WOKEN).await == "done" && state_of(&s, UNHEARD).await == "done"
+    })
+    .await;
+    assert_eq!(s.command(WOKEN).await.1["outcome"]["result"], "received");
+    assert_eq!(s.command(UNHEARD).await.1["outcome"]["result"], "received");
+    assert_eq!(s.h.tr.torrents().len(), 2);
+
+    cancel.cancel();
+    running.await.unwrap();
+}
+
+#[tokio::test]
+async fn a_command_runs_to_its_end_while_the_same_workers_cycle_is_held_in_transmission() {
+    let liar = release("guid-liar-26", 26, LIAR, "");
+    let s = Scene::failing(&[&liar], picked_rules()).await;
+    let item = s.item("LIAR GAME - 26").await;
+    // One worker, as a process has one: its cycle and its commands side by side.
+    let worker = s.h.worker();
+    // The cycle is held at its first request to Transmission, which no
+    // command makes.
+    let gate = s.h.tr.hold("session-set");
+    s.h.advance(300_000);
+    let cycle = tokio::spawn({
+        let worker = worker.clone();
+        async move { worker.tick(&CancellationToken::new()).await }
+    });
+    gate.wait_arrived().await;
+
+    s.post(CMD, &item).await;
+    let ran = tokio::time::timeout(Duration::from_secs(10), s.run_commands_with(&worker))
+        .await
+        .expect("the command waited for the cycle");
+
+    assert_eq!(ran, CommandsOutcome::Ran(1));
+    assert!(!cycle.is_finished());
+    let (_, view) = s.command(CMD).await;
+    assert_eq!(view["state"], "done");
+    assert_eq!(view["outcome"]["result"], "received");
+
+    // The cycle then goes on and keeps the command's torrent.
+    gate.release_all();
+    let TickOutcome::Ran(report) = cycle.await.unwrap().unwrap() else {
+        panic!("expected a cycle")
+    };
+    assert!(report.removed.is_empty(), "{:?}", report.removed);
+    assert!(s.h.tr.calls_of("torrent-remove").is_empty());
+    assert_eq!(s.h.tr.torrents().len(), 1);
+    assert_eq!(s.h.tr.torrents()[0].name, "LIAR GAME S01E26.mkv");
+}
+
+#[tokio::test]
+async fn the_cycles_removal_waits_until_a_commands_add_is_recorded() {
+    let liar = release("guid-liar-26", 26, LIAR, "");
+    let s = Scene::failing(&[&liar], picked_rules()).await;
+    let item = s.item("LIAR GAME - 26").await;
+    s.post(CMD, &item).await;
+    // The item has left the feed: nothing but history will say the command's
+    // torrent belongs, so a removal between its add and its record would take
+    // it away.
+    s.feed(&[]);
+    let worker = s.h.worker();
+    // Transmission takes the torrent and is slow to say so.
+    let late = s.h.tr.hold_answer("torrent-add");
+    let commands = tokio::spawn({
+        let worker = worker.clone();
+        async move { worker.run_commands(&CancellationToken::new()).await }
+    });
+    late.wait_arrived().await;
+    assert_eq!(s.h.tr.torrents().len(), 1, "Transmission holds it");
+
+    // The same worker's cycle reads the feed and comes to its removal.
+    let hits = s.h.feeds.hits(FEED);
+    s.h.advance(300_000);
+    let cycle = tokio::spawn({
+        let worker = worker.clone();
+        async move { worker.tick(&CancellationToken::new()).await }
+    });
+    wait_for("the cycle to read the feed", || async {
+        s.h.feeds.hits(FEED) > hits
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // It waits for the command, and removes nothing meanwhile.
+    assert!(!cycle.is_finished());
+    assert!(s.h.tr.calls_of("torrent-remove").is_empty());
+    assert_eq!(s.h.tr.torrents().len(), 1);
+
+    late.release_all();
+    assert_eq!(commands.await.unwrap().unwrap(), CommandsOutcome::Ran(1));
+    let TickOutcome::Ran(report) = cycle.await.unwrap().unwrap() else {
+        panic!("expected a cycle")
+    };
+
+    // The command met its torrent and named it; history holds its hash.
+    let (_, view) = s.command(CMD).await;
+    assert_eq!(view["state"], "done");
+    assert_eq!(view["outcome"]["result"], "received");
+    let held = s.item("LIAR GAME - 26").await;
+    assert_eq!(held.result, HistoryResult::Received);
+    assert_eq!(held.torrent_hash.as_deref(), Some(hash(26).as_str()));
+    // Only then did the removal look: what it did with the departed item's
+    // torrent is the ordinary cleanup, after everything the command did.
+    let calls: Vec<String> = s.h.tr.calls().into_iter().map(|c| c.method).collect();
+    let renamed = calls
+        .iter()
+        .position(|m| m == "torrent-rename-path")
+        .expect("the command named the file");
+    if let Some(removed) = calls.iter().position(|m| m == "torrent-remove") {
+        assert!(removed > renamed, "{calls:?}");
+        let last_of_the_command = calls
+            .iter()
+            .rposition(|m| m == "torrent-set")
+            .unwrap_or(renamed);
+        assert!(removed > last_of_the_command, "{calls:?}");
+        assert_eq!(report.removed.len(), 1);
+    }
+    assert_eq!(report.commands_running, 0);
+    assert_eq!(report.commands_unconfirmed, 0);
 }

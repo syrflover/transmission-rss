@@ -1,6 +1,7 @@
 //! The task that watches one watch folder: it reads the kernel's events into
 //! its [`WatchTree`], and when something has been due for its debounce it
-//! reads that part of the folder again under the worker's lock.
+//! reads that part of the folder again, holding the worker's lock and its turn
+//! at the folder.
 
 use std::{
     os::fd::{AsRawFd, RawFd},
@@ -15,7 +16,6 @@ use super::{
     tree::{self, Due, RawEvent, WatchTree},
     FolderStatus, LiveConfig, Runtime,
 };
-use trss_core::{heartbeat, CycleLock};
 
 use crate::watch::{self, ScanMode, WorksMode};
 
@@ -46,23 +46,6 @@ pub(super) struct Task {
     pub controls: mpsc::UnboundedReceiver<Control>,
     pub fd: AsyncFd<SharedFd>,
     pub tree: Option<WatchTree>,
-}
-
-/// Counts the lock the task holds, so that a cycle that finds it taken can
-/// wait the moment out instead of skipping its turn.
-struct Flushing<'a>(&'a super::LiveWatch);
-
-impl<'a> Flushing<'a> {
-    fn begin(live: &'a super::LiveWatch) -> Self {
-        live.flushing_delta(1);
-        Flushing(live)
-    }
-}
-
-impl Drop for Flushing<'_> {
-    fn drop(&mut self) {
-        self.0.flushing_delta(-1);
-    }
 }
 
 /// Reads the events waiting on the descriptor, waiting until there are some.
@@ -105,7 +88,8 @@ where
 impl Task {
     pub(super) async fn run(mut self) {
         let mut tree = self.tree.take();
-        // When a reading that could not run (the lock was taken) may be tried again.
+        // When a reading that could not run (the lock or the turn was taken)
+        // may be tried again.
         let mut retry_at: Option<Instant> = None;
         // What was last written to the folder's row (`None`: nothing yet).
         let mut written: Option<Option<String>> = None;
@@ -179,8 +163,8 @@ impl Task {
         }
     }
 
-    /// Reads again what is due, if the worker's lock is free. When it could not
-    /// be done now, the time to try again.
+    /// Reads again what is due, if the worker's lock and the folder's turn are
+    /// free. When it could not be done now, the time to try again.
     async fn flush(&self, slot: &mut Option<WatchTree>) -> Option<Instant> {
         let tree = slot.as_mut()?;
         let mut due = tree.take_due(Instant::now());
@@ -190,11 +174,10 @@ impl Task {
         }
         let retry = Instant::now() + self.config.retry;
         let ctx = &self.runtime.ctx;
-        // Announced before the lock is tried, so a cycle that finds it taken
-        // waits for this reading instead of skipping itself.
-        let _flushing = Flushing::begin(&ctx.live);
-        let lock = match CycleLock::try_acquire(&self.runtime.lock_path) {
-            Ok(Some(lock)) => lock,
+        // The web sees the worker busy, not stopped, for as long as a reading
+        // takes (a whole folder on a slow disk takes minutes): the hold beats.
+        let hold = match self.runtime.lock.try_hold().await {
+            Ok(Some(hold)) => hold,
             Ok(None) => {
                 tree.defer(due, retry);
                 return Some(retry);
@@ -210,9 +193,6 @@ impl Task {
             }
         };
 
-        // The web sees the worker busy, not stopped, for as long as a reading
-        // takes (a whole folder on a slow disk takes minutes); the beat ends
-        // before the lock is let go.
         let read = async {
             let folder = match ctx.library.folder(&self.folder_id).await {
                 Ok(Some(folder)) => folder,
@@ -229,18 +209,34 @@ impl Task {
             };
             // The cycle may have read the whole folder since the catch-up was asked for.
             let whole = due.folder || !folder.baselined || (catching_up && self.catching_up());
-            let now = (self.runtime.clock)();
             let works = std::mem::take(&mut due.works);
+            if !whole && works.is_empty() {
+                return None;
+            }
+            // Not waited for: the task reads the folder's events meanwhile,
+            // and a move in the folder (which holds the turn for minutes)
+            // makes many.
+            let listed = if whole { &[][..] } else { &works[..] };
+            let Some(_turn) = ctx
+                .folders
+                .try_lock(watch::reading_section(&folder.path, listed))
+            else {
+                let again = Due {
+                    folder: whole,
+                    works: if whole { Vec::new() } else { works },
+                };
+                tree.defer(again, retry);
+                return Some(retry);
+            };
+            let now = (self.runtime.clock)();
             let outcome = if whole {
                 watch::scan_folder(ctx, &folder, now, ScanMode::Periodic)
                     .await
                     .map(|_| ())
-            } else if !works.is_empty() {
+            } else {
                 watch::scan_works(ctx, &folder, works.clone(), now, WorksMode::Fresh)
                     .await
                     .map(|_| ())
-            } else {
-                Ok(())
             };
             if let Err(error) = outcome {
                 eprintln!(
@@ -257,14 +253,8 @@ impl Task {
             }
             None
         };
-        let next = heartbeat::while_holding(
-            ctx.heartbeat.clone(),
-            self.runtime.clock.clone(),
-            self.runtime.heartbeat_every,
-            read,
-        )
-        .await;
-        drop(lock);
+        let next = read.await;
+        hold.release().await;
         next
     }
 

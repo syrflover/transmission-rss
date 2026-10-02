@@ -166,25 +166,37 @@ pub fn has_open(conn: &Connection) -> Result<bool> {
     )?)
 }
 
-pub fn running_count(conn: &Connection) -> Result<usize> {
+/// `ids` as the JSON array `json_each` reads.
+fn id_list(ids: &[String]) -> String {
+    serde_json::to_string(ids).expect("a list of strings serializes")
+}
+
+pub fn running_count_excluding(conn: &Connection, excluded: &[String]) -> Result<usize> {
     let count: i64 = conn.query_row(
-        "SELECT count(*) FROM commands WHERE state = 'running'",
-        [],
+        "SELECT count(*) FROM commands WHERE state = 'running'
+         AND id NOT IN (SELECT value FROM json_each(?1))",
+        [id_list(excluded)],
         |row| row.get(0),
     )?;
     Ok(count as usize)
 }
 
-pub fn claim_next(conn: &mut Connection, now: Millis) -> Result<Option<Command>> {
+pub fn claim_next_excluding(
+    conn: &mut Connection,
+    now: Millis,
+    excluded: &[String],
+) -> Result<Option<Command>> {
+    let excluded = id_list(excluded);
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     loop {
         let Some(command) = select_one(
             &tx,
             &format!(
                 "SELECT {COLUMNS} FROM commands WHERE state IN ('pending', 'running')
+                 AND id NOT IN (SELECT value FROM json_each(?1))
                  ORDER BY seq LIMIT 1"
             ),
-            [],
+            [&excluded],
         )?
         else {
             tx.commit()?;

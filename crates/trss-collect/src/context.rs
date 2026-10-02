@@ -5,7 +5,7 @@ use url::Url;
 
 use crate::commands::rule_archive::work_folder::MovePolicy;
 use crate::store::{channels::ChannelStore, history::HistoryStore, revisions::RevisionStore};
-use trss_core::settings::SettingsStore;
+use trss_core::{folder_locks::FolderLocks, settings::SettingsStore};
 use trss_library::{
     live::LiveWatch,
     store::{library::LibraryStore, seasons::SeasonStore},
@@ -49,6 +49,9 @@ pub struct CollectContext {
     /// Knows secrets that do not come from channels, such as credentials in
     /// the Transmission URL.
     pub redactor: Redactor,
+    /// The worker's turns at its folders ([`trss_core::folder_locks`]), shared
+    /// with the reading of the watch folders.
+    pub folders: FolderLocks,
 }
 
 impl CollectContext {

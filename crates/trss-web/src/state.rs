@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use trss_anilist::AnilistConfig;
 use trss_anissia::{Anissia, AnissiaConfig};
 use trss_collect::{
@@ -48,6 +50,9 @@ pub struct AppState {
     /// The past episode searches this process runs, and the request pace of
     /// the trackers they read.
     pub past_search: PastSearch,
+    /// Where the worker hears that a command was accepted
+    /// ([`trss_core::wake`]); `None`: it finds the command at its own next look.
+    pub worker_wake: Option<PathBuf>,
 }
 
 impl AppState {
@@ -67,6 +72,7 @@ impl AppState {
             setup: SetupStore::new(db.clone()),
             revisions: RevisionStore::new(db.clone()),
             past_search: PastSearch::new(SearchPace::new(db.clone())),
+            worker_wake: None,
             // No app data folder: covers can be read and changed but no image
             // stored or served until `with_artwork` gives one.
             artwork,
@@ -76,6 +82,13 @@ impl AppState {
     /// Replaces the Anissia client (its address, and a clock or pace in tests).
     pub fn with_anissia(mut self, anissia: Anissia) -> Self {
         self.anissia = anissia;
+        self
+    }
+
+    /// Wakes the worker at `path` whenever a command is accepted (see
+    /// [`trss_core::wake`]).
+    pub fn with_worker_wake(mut self, path: PathBuf) -> Self {
+        self.worker_wake = Some(path);
         self
     }
 

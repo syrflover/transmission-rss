@@ -24,33 +24,54 @@
 //!
 //! Two layers keep two workers from running the same cycle:
 //!
-//! 1. **An OS advisory lock** ([`trss_core::CycleLock`], `flock` on
-//!    `<db path>.worker.lock`) is held for the whole cycle. A worker that finds
-//!    it taken skips the cycle. The kernel releases it when the holder dies,
-//!    and a slow holder keeps it for as long as it runs, so no timeout can let a
-//!    second worker in while the first is still working. No SQLite transaction
-//!    is held during the cycle, so the web keeps writing.
+//! 1. **An OS advisory lock** ([`trss_core::WorkerLock`], `flock` on
+//!    `<db path>.worker.lock`) is held while the worker works: for a cycle, for
+//!    the web's commands, for a reading that a watch folder's alert asked for.
+//!    Everything one worker runs at the same time shares its hold; another
+//!    worker that finds the lock taken skips its cycle and leaves the commands
+//!    alone. The kernel releases it when the holder dies, and a slow holder
+//!    keeps it for as long as it runs, so no timeout can let a second worker
+//!    in while the first is still working. No SQLite transaction is held
+//!    meanwhile, so the web keeps writing.
 //! 2. **A start marker** in the database ([`HistoryStore::try_begin_cycle`])
 //!    refuses a start less than half an interval after the previous start.
 //!    Without it, two workers whose timers are out of phase would each run a
 //!    cycle every interval, one after the other. With it, the later one keeps
 //!    skipping and the period stays one cycle.
 //!
-//! While it holds the lock, for a cycle, for commands, or for a reading that a
-//! watch folder's alert asked for, the worker also leaves a heartbeat in the
-//! database ([`heartbeat`]), which is how the web tells a busy worker from a
-//! dead one without touching the lock. (The Anissia, artwork and season
-//! queues hold locks of their own, not this one.)
+//! One worker runs one cycle at a time ([`Worker::tick`] says
+//! [`TickOutcome::Busy`] to a second).
+//!
+//! While it holds the lock the worker also leaves a heartbeat in the database
+//! ([`heartbeat`]), which is how the web tells a busy worker from a dead one
+//! without touching the lock. (The Anissia, artwork and season queues hold
+//! locks of their own, not this one.)
+//!
+//! # Side by side
+//!
+//! Within one worker, the cycle, the commands and the readings of the watch
+//! folders run at the same time, and two things keep them from treading on
+//! each other:
+//!
+//! - **Turns at the folders** ([`trss_core::folder_locks`]). Each piece of
+//!   work names the folders it touches and how: a cycle's item reads its work
+//!   folder for its add and rename, a revision replacement writes its folder,
+//!   a reading of a watch folder reads the folder (one reading per folder at a
+//!   time), a command reads or writes the folders it works in ([`commands`]).
+//!   Work on the same folder runs in the order it came, work on other folders
+//!   side by side.
+//! - **The torrent gate** ([`removal`]). The cycle's removal of departed
+//!   torrents never runs between a command's add and the record of it.
 //!
 //! # Watch folders
 //!
 //! The worker watches the watch folders with inotify ([`live`]) and reads the
-//! works an alert names a few seconds after it, under the same lock as the
-//! cycles. After the RSS work of each cycle, still under the lock, it reads the
-//! folders the alerts could not cover ([`watch`]): all of them at the start, the
-//! ones with a directory that has no watch, a folder that has not been read whole
-//! for an hour, and, when it is not watching at all, every folder. Reading only
-//! looks at the disk and changes nothing.
+//! works an alert names a few seconds after it, holding the lock. After the RSS
+//! work of each cycle it reads the folders the alerts could not cover
+//! ([`watch`]): all of them at the start, the ones with a directory that has no
+//! watch, a folder that has not been read whole for an hour, and, when it is
+//! not watching at all, every folder. Reading only looks at the disk and
+//! changes nothing.
 //!
 //! After the watch folders, the worker connects the subscriptions that have no
 //! season yet to the season their received videos appeared in
@@ -58,8 +79,9 @@
 //!
 //! # Commands
 //!
-//! Between cycles the loop also looks, every few seconds, for commands the web
-//! accepted and runs them under the same lock ([`commands`]).
+//! Beside the cycles, the worker carries out the commands the web accepted as
+//! soon as the web wakes it ([`trss_core::wake`]), or at its own look every
+//! few seconds, several at a time ([`commands`]).
 //!
 //! # Shutdown
 //!
@@ -68,7 +90,8 @@
 //! Transmission are recorded (each item is recorded as one transaction right
 //! after Transmission answered), and the removal of departed torrents is
 //! skipped. Nothing is written for items that were not started; the next cycle
-//! sees them as new.
+//! sees them as new. No new command is started either, and the ones under way
+//! get the same grace as the cycle (see [`commands`]).
 //!
 //! Every request to Transmission times out ([`trss_transmission::REQUEST_TIMEOUT`],
 //! connecting [`trss_transmission::CONNECT_TIMEOUT`]), so a Transmission that
@@ -86,19 +109,21 @@
 pub mod commands;
 pub mod cycle;
 pub mod env;
+pub mod removal;
 
-use std::{path::PathBuf, time::Duration};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use tokio_util::sync::CancellationToken;
 use trss_core::{
     commands::{CommandError, CommandStore},
+    folder_locks::FolderLocks,
     heartbeat::{self, HeartbeatStore},
     settings::SettingsStore,
-    system_clock, Clock, CycleLock, Db,
+    system_clock, Clock, Db, WorkerHold, WorkerLock,
 };
 
-pub use commands::{CommandsOutcome, DEFAULT_COMMAND_POLL};
-pub use cycle::{run_cycle, CommandsAtStart, CycleError, CycleReport};
+pub use commands::{CommandsOutcome, DEFAULT_COMMAND_POLL, MAX_COMMANDS_AT_ONCE};
+pub use cycle::{run_cycle, CommandsAtRemoval, CycleError, CycleReport};
 pub use env::{EnvError, WorkerEnv};
 
 use trss_collect::{
@@ -118,6 +143,8 @@ use trss_library::{
     watch::{self, WatchContext},
 };
 use trss_transmission::{Redactor, RenamePolicy, SessionConfig};
+
+use removal::{InFlight, Removal, TorrentGate};
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkerError {
@@ -143,13 +170,14 @@ pub enum WorkerError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TickOutcome {
     Ran(CycleReport),
-    /// Another worker holds the lock and is running a cycle.
+    /// Another worker holds the lock, or this worker is running a cycle already.
     Busy,
     /// A cycle started less than the minimum gap ago (by any worker).
     TooSoon,
 }
 
-/// A collection worker. Cheap to clone.
+/// A collection worker. Cheap to clone; clones share the lock, the turns and
+/// the commands under way.
 #[derive(Clone)]
 pub struct Worker {
     /// What the collection work (cycle, commands, season link) shares.
@@ -164,15 +192,22 @@ pub struct Worker {
     command_poll: Duration,
     min_gap: Duration,
     shutdown_grace: Duration,
-    /// How often the heartbeat is written while a cycle holds the lock.
+    /// How often the heartbeat is written while the lock is held.
     heartbeat_every: Duration,
     lock_path: PathBuf,
+    /// The lock everything this worker runs shares (see the module docs).
+    lock: WorkerLock,
+    /// Between the commands' adds and the cycle's removal (see [`removal`]).
+    torrents: TorrentGate,
+    /// The commands this worker is carrying out now.
+    in_flight: InFlight,
+    /// Held while a cycle runs: one at a time.
+    cycling: Arc<tokio::sync::Mutex<()>>,
+    /// Where the web's wake-ups arrive ([`trss_core::wake`]); `None`: only the
+    /// worker's own looks.
+    wake_path: Option<PathBuf>,
     clock: Clock,
 }
-
-/// The longest a cycle waits for a reading of one of the worker's own watches
-/// to let go of the lock.
-const LIVE_LOCK_WAIT: Duration = Duration::from_secs(20);
 
 /// How long a running cycle may take to wind down after shutdown was asked
 /// for. It normally finishes within milliseconds (it starts nothing new and
@@ -196,17 +231,25 @@ impl Worker {
 
         let library = LibraryStore::new(db.clone());
         let live = live::LiveWatch::default();
+        let folders = FolderLocks::new();
+        let clock = system_clock();
 
         Ok(Worker {
             commands: CommandStore::new(db.clone()),
             watch: WatchContext {
                 library: library.clone(),
                 settings: SettingsStore::new(db.clone()),
-                heartbeat: HeartbeatStore::new(db.clone()),
+                folders: folders.clone(),
                 scan_cache: watch::ScanCaches::default(),
                 live: live.clone(),
             },
             session: env.session.clone(),
+            lock: WorkerLock::new(
+                lock_path.clone(),
+                HeartbeatStore::new(db.clone()),
+                clock.clone(),
+                heartbeat::BEAT_EVERY,
+            ),
             ctx: CollectContext {
                 channels: ChannelStore::new(db.clone()),
                 settings: SettingsStore::new(db.clone()),
@@ -225,6 +268,7 @@ impl Worker {
                 rename: RenamePolicy::default(),
                 moves: MovePolicy::default(),
                 redactor,
+                folders,
             },
             interval: env.interval,
             command_poll: DEFAULT_COMMAND_POLL,
@@ -232,12 +276,28 @@ impl Worker {
             shutdown_grace: SHUTDOWN_GRACE,
             heartbeat_every: heartbeat::BEAT_EVERY,
             lock_path,
-            clock: system_clock(),
+            torrents: TorrentGate::default(),
+            in_flight: InFlight::default(),
+            cycling: Arc::default(),
+            wake_path: None,
+            clock,
         })
+    }
+
+    /// The lock again, for a clock or a beat that changed. Builders call it
+    /// before the worker is used.
+    fn rebuild_lock(&mut self) {
+        self.lock = WorkerLock::new(
+            self.lock_path.clone(),
+            HeartbeatStore::new(self.ctx.channels.db().clone()),
+            self.clock.clone(),
+            self.heartbeat_every,
+        );
     }
 
     pub fn with_clock(mut self, clock: Clock) -> Self {
         self.clock = clock;
+        self.rebuild_lock();
         self
     }
 
@@ -261,6 +321,14 @@ impl Worker {
         self
     }
 
+    /// Listens for the web's wake-ups at `path` (see [`trss_core::wake`]) while
+    /// [`Worker::run`] runs. Without it the worker looks for commands at its
+    /// own pace only.
+    pub fn with_wake_socket(mut self, path: PathBuf) -> Self {
+        self.wake_path = Some(path);
+        self
+    }
+
     /// The inotify watches of the watch folders.
     pub fn live(&self) -> &live::LiveWatch {
         &self.watch.live
@@ -271,12 +339,9 @@ impl Worker {
     /// does this itself; a worker that is only ticked is not watching, and its
     /// cycles read every folder.
     pub async fn start_watching(&self) {
-        self.watch.live.start(
-            self.watch.clone(),
-            self.lock_path.clone(),
-            self.clock.clone(),
-            self.heartbeat_every,
-        );
+        self.watch
+            .live
+            .start(self.watch.clone(), self.lock.clone(), self.clock.clone());
         self.watch.live.sync_folders().await;
     }
 
@@ -298,17 +363,18 @@ impl Worker {
         self
     }
 
-    /// Overrides how long a running cycle may take to wind down after shutdown
-    /// was asked for (default: [`SHUTDOWN_GRACE`]).
+    /// Overrides how long a running cycle or command may take to wind down
+    /// after shutdown was asked for (default: [`SHUTDOWN_GRACE`]).
     pub fn with_shutdown_grace(mut self, grace: Duration) -> Self {
         self.shutdown_grace = grace;
         self
     }
 
-    /// Overrides how often the heartbeat is written while a cycle holds the lock
+    /// Overrides how often the heartbeat is written while the lock is held
     /// (default: [`heartbeat::BEAT_EVERY`]).
     pub fn with_heartbeat_every(mut self, every: Duration) -> Self {
         self.heartbeat_every = every;
+        self.rebuild_lock();
         self
     }
 
@@ -320,41 +386,37 @@ impl Worker {
         self
     }
 
+    /// A handle to this worker's hold of its lock; `None` when another worker
+    /// holds it.
+    pub(crate) async fn hold(&self) -> Result<Option<WorkerHold>, WorkerError> {
+        self.lock
+            .try_hold()
+            .await
+            .map_err(|source| WorkerError::Lock {
+                path: self.lock_path.clone(),
+                source,
+            })
+    }
+
     /// Tries to run one cycle now: takes the lock, checks the start marker,
-    /// runs the cycle, and releases the lock.
+    /// runs the cycle, and lets go of the lock. The commands and the readings
+    /// of this worker go on meanwhile.
     pub async fn tick(&self, cancel: &CancellationToken) -> Result<TickOutcome, WorkerError> {
-        let lock = self.acquire_cycle_lock().await?;
-        let Some(_lock) = lock else {
+        let Ok(_one_cycle) = self.cycling.try_lock() else {
             return Ok(TickOutcome::Busy);
         };
-
-        // The web tells a busy worker from a dead one by this pulse, for as long
-        // as the lock is held: the cycle and the folder reading after it.
-        self.beating(self.tick_locked(cancel)).await
-    }
-
-    /// Runs `work` with the cycle lock held by this worker and its heartbeat
-    /// beating ([`heartbeat::while_holding`]). Every holder of the lock does its
-    /// work through this.
-    pub(crate) async fn beating<T>(&self, work: impl std::future::Future<Output = T>) -> T {
-        heartbeat::while_holding(
-            HeartbeatStore::new(self.ctx.channels.db().clone()),
-            self.clock.clone(),
-            self.heartbeat_every,
-            work,
-        )
-        .await
-    }
-
-    /// One cycle and what follows it, with the cycle lock held.
-    async fn tick_locked(&self, cancel: &CancellationToken) -> Result<TickOutcome, WorkerError> {
-        // Read under the lock, before the cycle starts: no command runs
-        // meanwhile. The previous start is read before this cycle replaces it.
-        let previous_start = self.ctx.history.last_cycle().await?.map(|c| c.started_at);
-        let commands = CommandsAtStart {
-            running: self.commands.running_count().await?,
-            unconfirmed_adds: self.commands.unconfirmed_adds_since(previous_start).await?,
+        let Some(hold) = self.hold().await? else {
+            return Ok(TickOutcome::Busy);
         };
+        let outcome = self.tick_held(cancel).await;
+        hold.release().await;
+        outcome
+    }
+
+    /// One cycle and what follows it, with the lock held.
+    async fn tick_held(&self, cancel: &CancellationToken) -> Result<TickOutcome, WorkerError> {
+        // The previous start is read before this cycle replaces it.
+        let previous_start = self.ctx.history.last_cycle().await?.map(|c| c.started_at);
 
         let started = (self.clock)();
         let min_gap = i64::try_from(self.min_gap.as_millis()).unwrap_or(i64::MAX);
@@ -362,15 +424,21 @@ impl Worker {
             return Ok(TickOutcome::TooSoon);
         }
 
-        let report = run_cycle(&self.ctx, &self.session, started, commands, cancel).await?;
+        let removal = Removal {
+            gate: self.torrents.clone(),
+            commands: self.commands.clone(),
+            in_flight: self.in_flight.clone(),
+            previous_start,
+        };
+        let report = run_cycle(&self.ctx, &self.session, started, &removal, cancel).await?;
 
         // An interrupted cycle stays unfinished in the marker.
         if !report.interrupted {
             self.ctx.history.finish_cycle((self.clock)()).await?;
         }
 
-        // The watch folders are read after the RSS work, under the same lock,
-        // and one that cannot be read neither stops the others nor fails the tick.
+        // The watch folders are read after the RSS work, and one that cannot be
+        // read neither stops the others nor fails the tick.
         if !report.interrupted && !cancel.is_cancelled() {
             watch::scan_all(&self.watch, &self.clock, cancel).await;
             // The videos the rules received are in the library now (or not yet).
@@ -380,26 +448,9 @@ impl Worker {
         Ok(TickOutcome::Ran(report))
     }
 
-    /// Takes the cycle lock. A lock that one of the worker's own watches holds
-    /// for a reading of a work (a moment) is waited for rather than reported
-    /// as another worker's cycle, which would skip the whole cycle.
-    async fn acquire_cycle_lock(&self) -> Result<Option<CycleLock>, WorkerError> {
-        let started = tokio::time::Instant::now();
-        loop {
-            let lock =
-                CycleLock::try_acquire(&self.lock_path).map_err(|source| WorkerError::Lock {
-                    path: self.lock_path.clone(),
-                    source,
-                })?;
-            if lock.is_some() || !self.watch.live.flushing() || started.elapsed() > LIVE_LOCK_WAIT {
-                return Ok(lock);
-            }
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
-    }
-
-    /// Runs a cycle at start and then every interval until `cancel` fires. A
-    /// failed or panicking cycle is logged and the loop carries on.
+    /// Runs a cycle at start and then every interval until `cancel` fires, and
+    /// carries out the web's commands beside the cycles. A failed or panicking
+    /// cycle is logged and the loop carries on.
     pub async fn run(&self, cancel: CancellationToken) {
         // The web shows when the next check is due and cannot read this worker's settings.
         let status = StatusStore::new(self.ctx.channels.db().clone());
@@ -410,25 +461,31 @@ impl Worker {
             eprintln!("Cannot record the cycle interval: {err}");
         }
         self.start_watching().await;
+        let commands = tokio::spawn({
+            let (worker, cancel, wake) = (self.clone(), cancel.clone(), self.listen_for_wakes());
+            async move { worker.dispatch(cancel, wake).await }
+        });
         self.run_loop(cancel).await;
+        if let Err(err) = commands.await {
+            eprintln!("Commands stopped: {err}");
+        }
         self.stop_watching();
     }
 
     async fn run_loop(&self, cancel: CancellationToken) {
         let mut ticker = tokio::time::interval(self.interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        let mut command_ticker = tokio::time::interval(self.command_poll);
-        command_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut folder_ticker = tokio::time::interval(self.command_poll);
+        folder_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
         loop {
             tokio::select! {
                 biased;
                 _ = cancel.cancelled() => break,
                 _ = ticker.tick() => {}
-                _ = command_ticker.tick() => {
+                _ = folder_ticker.tick() => {
                     // A watch folder registered meanwhile is watched from now on.
                     self.watch.live.sync_folders().await;
-                    self.poll_commands(&cancel).await;
                     continue;
                 }
             }
@@ -440,7 +497,7 @@ impl Worker {
 
             // After shutdown was asked for, the cycle gets a grace period to wind
             // down. Past it, the cycle is aborted: dropping it aborts its item
-            // tasks and releases the lock, and what Transmission had not yet
+            // tasks and releases its hold, and what Transmission had not yet
             // answered is left for the next start.
             let joined = tokio::select! {
                 joined = &mut cycle => joined,

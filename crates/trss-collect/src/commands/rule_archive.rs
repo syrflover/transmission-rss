@@ -4,9 +4,11 @@
 //! 폴더 이동).
 //!
 //! The web accepts the command with a [`RuleArchive`] payload (the rule and a
-//! [`Direction`]); the worker runs it with [`run`], under the lock that also
-//! guards the collection cycles, so no cycle adds a torrent while a folder
-//! moves. The web never changes a rule's state itself: the order below is
+//! [`Direction`]); the worker runs it with [`run`], holding the turn of the
+//! work folder in the collect folder and in the archive folder ([`section`]):
+//! a cycle's add into the work folder waits for the move and then finds the
+//! rule archived, and no reading of the watch folders reads the folder while
+//! it moves. The web never changes a rule's state itself: the order below is
 //! the worker's.
 //!
 //! **Archive** turns the rule off first, so nothing new arrives at the old
@@ -59,6 +61,7 @@ use tokio_util::sync::CancellationToken;
 
 use trss_core::{
     commands::{Command, CommandState, Outcome, MAX_ATTEMPTS},
+    folder_locks::Section,
     folders::has_parent_dir,
     Clock,
 };
@@ -184,7 +187,7 @@ pub enum WorkFolder {
 }
 
 /// `path` with `.` and `..` resolved by text alone.
-fn lexical(path: &Path) -> PathBuf {
+pub(crate) fn lexical(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for component in path.components() {
         match component {
@@ -270,11 +273,42 @@ fn held_reason(holders: &[&Rule]) -> String {
     }
 }
 
+/// The turn the command takes before it runs: a write of the rule's work
+/// folder in the collect folder and in the archive folder (the ones that are
+/// set). Empty when there is no work folder to move (no collect folder, a rule
+/// that saves into the collect folder itself or outside it) or the request or
+/// the rule cannot be found: the command then changes the rule's state alone,
+/// or ends by itself.
+pub async fn section(ctx: &CollectContext, command: &Command) -> Result<Section, Retry> {
+    let Ok(payload) = serde_json::from_str::<RuleArchive>(&command.payload) else {
+        return Ok(Section::new());
+    };
+    let Some(rule) = ctx
+        .channels
+        .get_rule(&payload.rule_id)
+        .await
+        .map_err(Retry::store)?
+    else {
+        return Ok(Section::new());
+    };
+    let Some((collect, archive)) = settings(ctx).await? else {
+        return Ok(Section::new());
+    };
+    let WorkFolder::Named(name) = work_folder(Path::new(&collect), &rule.directory) else {
+        return Ok(Section::new());
+    };
+    let section = Section::new().write(Path::new(&collect).join(&name));
+    Ok(match archive {
+        Some(archive) => section.write(Path::new(&archive).join(&name)),
+        None => section,
+    })
+}
+
 /// One start of a command, and what its moves need.
 struct Start<'a> {
     ctx: &'a CollectContext,
     disk: Arc<dyn Disk>,
-    /// Kept until the move's blocking work returns: the worker's lock.
+    /// Kept until the move's blocking work returns: the worker's hold of its lock.
     hold: Hold,
     /// The last start the command gets: a move not finished yet ends it.
     last: bool,
@@ -283,8 +317,9 @@ struct Start<'a> {
     clock: &'a Clock,
 }
 
-/// Runs a `rule_archive` command to its end. See the module docs. `hold` is
-/// the worker's lock, kept until the move's blocking work returns.
+/// Runs a `rule_archive` command to its end, with its turn ([`section`]) taken.
+/// See the module docs. `hold` keeps the worker's lock until the move's
+/// blocking work returns.
 pub async fn run(
     ctx: &CollectContext,
     command: &Command,

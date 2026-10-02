@@ -137,13 +137,13 @@ const RUNNING_FLOOR_MS: i64 = 30 * 60_000;
 const RUNNING_INTERVALS: i64 = 10;
 
 /// How old the worker's heartbeat may be and still show it busy. The worker
-/// beats every 15 seconds while it holds the cycle lock
+/// beats every 15 seconds while it holds the worker lock
 /// ([`trss_core::heartbeat`]); this allows three missed beats, and one
 /// slow database write, before a worker that died is told from one that works,
 /// which is why a killed worker shows as stalled within about a minute.
 pub(super) const HEARTBEAT_FRESH_MS: i64 = 60_000;
 
-/// How long a worker may hold the cycle lock, or (with no heartbeat) a cycle
+/// How long a worker may hold the worker lock, or (with no heartbeat) a cycle
 /// run without an end, and still be taken for busy rather than hung or dead:
 /// the larger of 30 minutes and ten intervals, so that a short interval does not
 /// call a slow cycle stopped.
@@ -158,8 +158,9 @@ fn beating(beat: &WorkerHeartbeat, now: Millis) -> bool {
     now.saturating_sub(beat.beat_at) <= HEARTBEAT_FRESH_MS
 }
 
-/// Whether the worker has held the cycle lock past [`running_bound`] while it
-/// goes on beating: alive, but stuck in a cycle.
+/// Whether the worker has held the worker lock past [`running_bound`] while it
+/// goes on beating: alive, but stuck (in a cycle, or a command, or work that
+/// overlapped without a break).
 fn hung(beat: &WorkerHeartbeat, interval_ms: i64, now: Millis) -> bool {
     beat.held_since
         .is_some_and(|since| now.saturating_sub(since) > running_bound(interval_ms))
@@ -170,7 +171,7 @@ fn hung(beat: &WorkerHeartbeat, interval_ms: i64, now: Millis) -> bool {
 ///
 /// With a heartbeat (a worker of this version has run), the worker is busy
 /// while it beats, and until it has held the lock past [`running_bound`]. That
-/// covers the whole time under the cycle lock, including the watch folder
+/// covers the whole time under the worker lock, including the watch folder
 /// reading after the cycle's RSS work ended, and a worker killed in a cycle
 /// stops being busy as soon as its beat is stale. Without one (an older
 /// worker), the cycle's own marker is all there is: a cycle that has started

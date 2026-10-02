@@ -42,8 +42,10 @@
 //! The browser makes one ID per user action and sends it with the content.
 //!
 //! **Accepted is not done.** The answer to a `POST` says the command is stored
-//! (`state: "pending"`); the worker runs it later, and the screen reads the
+//! (`state: "pending"`); the worker runs it, and the screen reads the
 //! outcome from `GET /commands/{id}` (or from the item the command is about).
+//! A stored command wakes the worker ([`trss_core::wake`]), which starts it at
+//! once rather than at its next look a few seconds later.
 //! Nothing here reports a command as succeeded before the worker has written
 //! its outcome.
 //!
@@ -580,7 +582,13 @@ async fn create_command(
         .await
         .map_err(store)?
     {
-        Accepted::Created(command) => Ok((StatusCode::ACCEPTED, Json(CommandView::from(&command)))),
+        Accepted::Created(command) => {
+            // The worker starts it now rather than at its next look.
+            if let Some(path) = &state.worker_wake {
+                trss_core::wake::wake_worker(path);
+            }
+            Ok((StatusCode::ACCEPTED, Json(CommandView::from(&command))))
+        }
         Accepted::Existing(command) => Ok((StatusCode::OK, Json(CommandView::from(&command)))),
         Accepted::Mismatch(command) => Err(conflict(MISMATCH, &command)),
         Accepted::Busy(command) => Err(conflict(request.busy(), &command)),
