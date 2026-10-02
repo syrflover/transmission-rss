@@ -6,6 +6,7 @@
 //! | `GET  /api/library/works/{id}/seasons/{n}/anissia`        |                                                       |
 //! | `POST /api/library/works/{id}/seasons/{n}/anissia/search` | `{ "q": "…", "page": 1 }`                             |
 //! | `POST /api/library/works/{id}/seasons/{n}/anissia/link`   | `{ "version": 3, "anime_no": 3441, "week": 2 }`       |
+//! | `GET  /api/library/works/{id}/seasons/{n}/anissia/candidates` |                                                   |
 //!
 //! The link (also the answer of `link`, and each season of the work detail's
 //! `seasons[].anissia`):
@@ -45,7 +46,46 @@
 //!   anime is not taken from the request: it must be in the schedule's `week`
 //!   (the `편성표` tab) or in the page `page` of the search for `q` (the `전체
 //!   목록` tab) that Anissia just answered, and its snapshot is stored with the
-//!   link.
+//!   link. Once the link is stored the worker is asked to read the anime's
+//!   subtitle lines at once (`anissia_captions`, [`super::commands_api`]), so
+//!   the answer does not wait for Anissia.
+//!
+//! `candidates` is the season's 자막 후보 (`docs/specs/subtitles.md`): the
+//! observations the app has of the season's linked anime, whatever was observed
+//! before the season was linked ([`trss_collect::anissia::captions`]).
+//!
+//! ```json
+//! { "season": 2, "anime_no": 3441, "read_at": 1790780400000,
+//!   "refresh": { "id": "captions-3441-1790780400000", "state": "done", … },
+//!   "candidates": [
+//!     { "id": 12, "source_id": "6f0c…", "creator": "에루샤",
+//!       "post_url": "https://erulabo.com/837", "episode": "12",
+//!       "updated": "2026-09-10T12:10:00", "updated_at": 1789009800000,
+//!       "updated_parse_failed": false, "first_seen_at": 1790780400000,
+//!       "sort_at": 1789009800000,
+//!       "revision": { "of": 7, "same_post": true } } ] }
+//! ```
+//!
+//! - `candidates` are newest first by `sort_at`: the update time, or the time
+//!   the state was first seen when `updated` is not a date and time
+//!   (`updated_at` is `null` and `updated_parse_failed` is `true`; `updated`
+//!   is Anissia's text as it was). A season with no link has `anime_no`
+//!   `null` and none.
+//! - `episode` is Anissia's text as written (`0`, `13.5`): it is not a number
+//!   and no episode of the season. `source_id` is the app's ID of the creator's
+//!   lines of the anime; `creator` is the display name Anissia gives and is not
+//!   an ID.
+//! - `revision` marks a revision candidate: the creator was observed with the
+//!   same `episode` before (`of` is that earlier observation, `same_post` says
+//!   whether it had the same `post_url`: the post was fixed, or the episode was
+//!   posted again). Until received subtitles are recorded this is the app's
+//!   closest reading of `같은 회차에 같은 제작자의 자막이 있으면 수정 후보`;
+//!   it is `null` for an episode of the creator that is new.
+//! - `read_at` is when the 30-minute reading last read the whole recent list
+//!   (`null` before the first); `refresh` is the latest `anissia_captions`
+//!   command for the anime (`pending`, `running`, `done` or `failed` with its
+//!   outcome), or `null`: the read made when the season was linked and the
+//!   user's `새로고침` both show there.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -57,6 +97,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use super::{
+    commands_api::{ask_anissia_captions, CommandView},
     subscriptions_api::{scheduled_anime, unavailable, USER_MAX_WAIT},
     ApiError, AppState,
 };
@@ -77,6 +118,10 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/library/works/{id}/seasons/{season}/anissia/link",
             post(link),
+        )
+        .route(
+            "/library/works/{id}/seasons/{season}/anissia/candidates",
+            get(candidates),
         )
 }
 
@@ -512,7 +557,14 @@ async fn link(
         .set_season_anime(&id, season, body.version, anime)
         .await
     {
-        Ok(_) => Ok(Json(view_of(&state, &id, season).await?)),
+        Ok(_) => {
+            // The lines Anissia holds for the anime are read by the worker, not
+            // waited for here.
+            if let Some(anime_no) = body.anime_no {
+                ask_anissia_captions(&state, anime_no).await;
+            }
+            Ok(Json(view_of(&state, &id, season).await?))
+        }
         Err(SeasonAnimeError::NoWork) => Err(ApiError::not_found(SEASON_NOT_FOUND)),
         // A rule connected to the season after the check above.
         Err(SeasonAnimeError::Subscribed { rule_id, anime_no }) => {
@@ -531,4 +583,104 @@ async fn link(
         Err(SeasonAnimeError::Conflict(_)) => Err(conflict(&state, &id, season).await),
         Err(SeasonAnimeError::Db(e)) => Err(ApiError::Internal(e.to_string())),
     }
+}
+
+#[derive(Serialize)]
+struct CandidateObservation {
+    id: i64,
+    source_id: String,
+    creator: String,
+    post_url: String,
+    episode: String,
+    updated: String,
+    updated_at: Option<i64>,
+    updated_parse_failed: bool,
+    first_seen_at: i64,
+    sort_at: i64,
+    revision: Option<RevisionView>,
+}
+
+#[derive(Serialize)]
+struct RevisionView {
+    of: i64,
+    same_post: bool,
+}
+
+#[derive(Serialize)]
+struct CandidatesView {
+    season: u32,
+    anime_no: Option<i64>,
+    read_at: Option<i64>,
+    refresh: Option<CommandView>,
+    candidates: Vec<CandidateObservation>,
+}
+
+impl From<&trss_collect::store::anissia::Candidate> for CandidateObservation {
+    fn from(c: &trss_collect::store::anissia::Candidate) -> Self {
+        CandidateObservation {
+            id: c.id,
+            source_id: c.source_id.clone(),
+            creator: c.creator.clone(),
+            post_url: c.post_url.clone(),
+            episode: c.episode.clone(),
+            updated: c.updated.clone(),
+            updated_at: c.updated_at,
+            updated_parse_failed: c.updated_at.is_none(),
+            first_seen_at: c.first_seen_at,
+            sort_at: c.sort_at(),
+            revision: c.revision.as_ref().map(|r| RevisionView {
+                of: r.of,
+                same_post: r.same_post,
+            }),
+        }
+    }
+}
+
+async fn candidates(
+    State(state): State<AppState>,
+    Path((id, season)): Path<(String, u32)>,
+) -> Result<Json<CandidatesView>, ApiError> {
+    let internal = |e: &dyn std::fmt::Display| ApiError::Internal(e.to_string());
+    let link = state
+        .seasons
+        .store
+        .anissia_link(&id, season)
+        .await
+        .map_err(refused_store)?;
+    let read_at = state
+        .anissia_store
+        .caption_poll()
+        .await
+        .map_err(|e| internal(&e))?
+        .and_then(|(_, read_at)| read_at);
+    let Some(anime_no) = link.anime_no else {
+        return Ok(Json(CandidatesView {
+            season,
+            anime_no: None,
+            read_at,
+            refresh: None,
+            candidates: Vec::new(),
+        }));
+    };
+    let observed = state
+        .anissia_store
+        .candidates(anime_no)
+        .await
+        .map_err(|e| internal(&e))?;
+    let refresh = state
+        .commands
+        .latest_for_subjects(
+            trss_collect::commands::anissia_captions::KIND,
+            vec![anime_no.to_string()],
+        )
+        .await
+        .map_err(|e| internal(&e))?
+        .remove(&anime_no.to_string());
+    Ok(Json(CandidatesView {
+        season,
+        anime_no: Some(anime_no),
+        read_at,
+        refresh: refresh.as_ref().map(CommandView::from),
+        candidates: observed.iter().map(CandidateObservation::from).collect(),
+    }))
 }

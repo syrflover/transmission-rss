@@ -14,6 +14,7 @@
 //! | `receive_past` | `받기`       | `{ "rule_id": <rule>, "search_id": <past episode search>, "key": <result's key> }` |
 //! | `watch_rescan` | `다시 확인`  | `{ "folder_id": <watch folder> }`                              |
 //! | `episode_undo` | `되돌리기`   | `{ "rule_id": <rule>, "episode": <the automatic offset seen> }` |
+//! | `anissia_captions` | `새로고침` | `{ "anime_no": <Anissia anime a season is linked to> }`    |
 //!
 //! `receive_once` of a video revision is refused with `400` and the reason
 //! when the episode's place is known to hold the same or a higher revision
@@ -36,6 +37,13 @@
 //! value back and renames the videos ([`episode_undo`]). On a rule that is
 //! not automatic it is accepted too for an undo of that value that ended with
 //! files still to rename, which it carries on.
+//!
+//! `anissia_captions` reads one Anissia anime's subtitle lines now and observes
+//! them ([`trss_collect::commands::anissia_captions`]). It is accepted only for
+//! an anime some season is linked to. The web makes the same command itself,
+//! with an ID of its own, when a season is linked
+//! ([`super::seasons_anissia_api`]); its state and outcome are the candidates'
+//! `refresh`.
 //!
 //! A rule is archived and restored only through `rule_archive`: the worker
 //! turns the rule off before its folder moves and on after it moved back.
@@ -75,7 +83,7 @@ use serde_json::Value;
 
 use super::{in_place::Evidence, ApiError, AppState};
 use trss_collect::{
-    commands::{episode_undo, receive_once, receive_past, rule_archive},
+    commands::{anissia_captions, episode_undo, receive_once, receive_past, rule_archive},
     past_search::service::Resolve,
     store::channels::RuleState,
 };
@@ -155,6 +163,8 @@ const RULE_BUSY: &str =
     "이 규칙은 이미 보관하거나 복원하는 중이에요. 그 결과가 나올 때까지 기다려 주세요.";
 const FOLDER_BUSY: &str =
     "이 폴더는 이미 다시 확인하는 중이에요. 그 결과가 나올 때까지 기다려 주세요.";
+const CAPTIONS_BUSY: &str =
+    "이 작품의 자막 정보는 이미 읽는 중이에요. 그 결과가 나올 때까지 기다려 주세요.";
 const UNDO_BUSY: &str =
     "이 규칙의 회차 변환은 이미 되돌리는 중이에요. 그 결과가 나올 때까지 기다려 주세요.";
 
@@ -182,6 +192,7 @@ enum Request {
     RuleArchive(rule_archive::RuleArchive),
     WatchRescan(watch_rescan::WatchRescan),
     EpisodeUndo(episode_undo::EpisodeUndo),
+    AnissiaCaptions(anissia_captions::AnissiaCaptions),
 }
 
 /// What the browser sends to receive a result of a past episode search.
@@ -221,6 +232,11 @@ impl Request {
                     serde_json::from_value(payload).map_err(|_| ApiError::invalid(BAD_BODY))?;
                 Ok(Request::EpisodeUndo(payload))
             }
+            anissia_captions::KIND => {
+                let payload: anissia_captions::AnissiaCaptions =
+                    serde_json::from_value(payload).map_err(|_| ApiError::invalid(BAD_BODY))?;
+                Ok(Request::AnissiaCaptions(payload))
+            }
             _ => Err(ApiError::invalid("모르는 종류의 명령이에요.")),
         }
     }
@@ -232,6 +248,7 @@ impl Request {
             Request::RuleArchive(_) => rule_archive::KIND,
             Request::WatchRescan(_) => watch_rescan::KIND,
             Request::EpisodeUndo(_) => episode_undo::KIND,
+            Request::AnissiaCaptions(_) => anissia_captions::KIND,
         }
     }
 
@@ -242,6 +259,7 @@ impl Request {
             Request::RuleArchive(_) => RULE_BUSY,
             Request::WatchRescan(_) => FOLDER_BUSY,
             Request::EpisodeUndo(_) => UNDO_BUSY,
+            Request::AnissiaCaptions(_) => CAPTIONS_BUSY,
         }
     }
 
@@ -273,6 +291,10 @@ impl Request {
                 serde_json::from_str::<episode_undo::EpisodeUndo>(&stored.payload)
                     .is_ok_and(|stored| stored == *payload)
             }
+            Request::AnissiaCaptions(payload) => {
+                serde_json::from_str::<anissia_captions::AnissiaCaptions>(&stored.payload)
+                    .is_ok_and(|stored| stored == *payload)
+            }
         }
     }
 
@@ -288,7 +310,8 @@ impl Request {
             | Request::ReceivePast(_)
             | Request::RuleArchive(_)
             | Request::WatchRescan(_)
-            | Request::EpisodeUndo(_) => Ok(()),
+            | Request::EpisodeUndo(_)
+            | Request::AnissiaCaptions(_) => Ok(()),
         }
     }
 
@@ -328,6 +351,12 @@ impl Request {
                 payload: payload.canonical(),
                 subject: Some(payload.subject()),
             },
+            Request::AnissiaCaptions(payload) => NewCommand {
+                id,
+                kind: anissia_captions::KIND.to_owned(),
+                payload: payload.canonical(),
+                subject: Some(payload.subject()),
+            },
         }
     }
 
@@ -348,7 +377,58 @@ impl Request {
             Request::EpisodeUndo(payload) => {
                 check_episode_undo(payload, state).await.map(|()| None)
             }
+            Request::AnissiaCaptions(payload) => {
+                check_anissia_captions(payload, state).await.map(|()| None)
+            }
         }
+    }
+}
+
+/// Only an anime some season is linked to is read: the command is not a way to
+/// ask Anissia about any anime.
+async fn check_anissia_captions(
+    payload: &anissia_captions::AnissiaCaptions,
+    state: &AppState,
+) -> Result<(), ApiError> {
+    let linked = payload.anime_no > 0
+        && state
+            .seasons
+            .store
+            .anime_is_linked(payload.anime_no)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+    if linked {
+        Ok(())
+    } else {
+        Err(ApiError::invalid(
+            "이 작품에 연결한 시즌이 없어요. 화면을 새로고침해 주세요.",
+        ))
+    }
+}
+
+/// Makes the worker read Anissia anime `anime_no`'s subtitle lines now, as a
+/// command the web makes itself (an ID of its own: no browser sent one). One
+/// anime has at most one open read, so a read already waiting or running
+/// stands for this one. A failure to store it is logged and left: the reading
+/// of the recent list every 30 minutes and the user's `새로고침` still observe
+/// the anime.
+pub(super) async fn ask_anissia_captions(state: &AppState, anime_no: i64) {
+    let payload = anissia_captions::AnissiaCaptions { anime_no };
+    let now = now_millis();
+    let new = NewCommand {
+        id: format!("captions-{anime_no}-{now}"),
+        kind: anissia_captions::KIND.to_owned(),
+        payload: payload.canonical(),
+        subject: Some(payload.subject()),
+    };
+    match state.commands.accept(new, now).await {
+        Ok(Accepted::Created(_)) => {
+            if let Some(path) = &state.worker_wake {
+                trss_core::wake::wake_worker(path);
+            }
+        }
+        Ok(_) => {}
+        Err(e) => eprintln!("trss-web: cannot ask for the subtitle lines of anime {anime_no}: {e}"),
     }
 }
 
