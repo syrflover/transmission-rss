@@ -404,7 +404,8 @@ async fn show(
 
     let connected = state.channels.subscriptions_of_work(&work.id).await?;
     let numbers: Vec<u32> = work.seasons.iter().map(|s| s.number).collect();
-    let mut anissia_links = link_views(&state, &work.id, &numbers, &connected).await?;
+    let mut anissia_links =
+        link_views(&state, &work.id, &work.dir_name, &numbers, &connected).await?;
     let animes = state
         .anissia_store
         .animes(

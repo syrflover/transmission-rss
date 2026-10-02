@@ -168,8 +168,7 @@ async fn a_finished_show_is_found_by_the_folder_name_and_saved_as_the_seasons_li
     assert_eq!(app.get(1).await["version"], 0);
     assert_eq!(app.get(1).await["anime"], Value::Null);
 
-    // No text given: the work's folder name is what is searched for.
-    let (status, found) = app.search(1, json!({})).await;
+    let (status, found) = app.search(1, json!({ "q": "Sayonara Lara" })).await;
     assert_eq!(status, StatusCode::OK, "{found}");
     assert_eq!(found["q"], "Sayonara Lara");
     assert_eq!(numbers(&found), [2969]);
@@ -669,11 +668,17 @@ async fn a_rule_blocked_by_a_seasons_link_says_the_link_holds_the_season() {
 }
 
 /// An AniList entry with only the titles that matter here.
-fn entry_with_native(id: i64, native: Option<&str>) -> trss_anilist::Entry {
+fn entry_titled(
+    id: i64,
+    native: Option<&str>,
+    english: Option<&str>,
+    romaji: Option<&str>,
+    korean: &[&str],
+) -> trss_anilist::Entry {
     trss_anilist::Entry {
         id,
-        romaji: Some("Sayonara Lara".into()),
-        english: Some("Goodbye Lara".into()),
+        romaji: romaji.map(str::to_owned),
+        english: english.map(str::to_owned),
         native: native.map(str::to_owned),
         format: Some("TV".into()),
         status: Some("FINISHED".into()),
@@ -684,78 +689,123 @@ fn entry_with_native(id: i64, native: Option<&str>) -> trss_anilist::Entry {
         genres: Vec::new(),
         description: None,
         airing: Vec::new(),
+        korean_titles: korean.iter().map(|k| (*k).to_owned()).collect(),
         sequels: Vec::new(),
         fetched_at: NOW,
     }
 }
 
-#[tokio::test]
-async fn the_first_query_is_the_native_title_of_the_seasons_anilist_entry_else_the_folder_name() {
-    let app = App::new().await;
-    // Anissia's titles are Japanese or Korean; the library folder is not.
-    app.fake.set_catalogue(vec![
-        app.fake.finished(1, 2969, "안녕, 라라", "さよならララ"),
-        app.fake
-            .finished(0, 1900, "안녕, 나의 크라머", "Sayonara Cramer"),
-    ]);
-    let store = &app.state.seasons.store;
-    store
-        .put_entry(entry_with_native(5001, Some("さよならララ")))
-        .await
-        .unwrap();
-    store
-        .put_entry(entry_with_native(5002, None))
-        .await
-        .unwrap();
-    store
-        .put_entry(entry_with_native(5003, Some("続編")))
-        .await
-        .unwrap();
-    // Season 1 links an entry with a native title (and a second one that is
-    // not the first); season 2 links an entry with none.
-    let version = |season: u32| {
-        let store = store.clone();
-        let work = app.work.clone();
-        async move { store.link(&work, season).await.unwrap().version }
-    };
-    store
-        .set_links(&app.work, 1, version(1).await, vec![5001, 5003])
-        .await
-        .unwrap();
-    store
-        .set_links(&app.work, 2, version(2).await, vec![5002])
-        .await
-        .unwrap();
+fn reference(view: &Value) -> Vec<(String, String)> {
+    view["reference_titles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| {
+            (
+                t["kind"].as_str().unwrap().to_owned(),
+                t["title"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect()
+}
 
-    // The linked season starts with the native title and finds the show by it.
-    let (status, found) = app.search(1, json!({})).await;
-    assert_eq!(status, StatusCode::OK, "{found}");
-    assert_eq!(found["q"], "さよならララ");
-    assert_eq!(numbers(&found), [2969]);
-    // Nothing was asked of AniList for it.
-    // The query the user wrote stays theirs.
-    let (_, written) = app.search(1, json!({ "q": "Sayonara" })).await;
-    assert_eq!(written["q"], "Sayonara");
-    assert_eq!(numbers(&written), [1900]);
-
-    // An entry without a native title, and a season with no entry at all, are
-    // searched by the work's folder name.
-    let (_, no_native) = app.search(2, json!({})).await;
-    assert_eq!(no_native["q"], "Sayonara Lara");
-    let (_, unlinked) = app
-        .call(Method::POST, &app.path(0, "/search"), Some(json!({})))
-        .await;
-    assert_eq!(unlinked["error"], "not_found");
+fn pair(kind: &str, title: &str) -> (String, String) {
+    (kind.to_owned(), title.to_owned())
 }
 
 #[tokio::test]
-async fn an_unlinked_season_starts_with_the_folder_name() {
+async fn the_view_lists_the_titles_to_read_without_empty_or_repeated_ones() {
+    let app = App::new().await;
+    let store = &app.state.seasons.store;
+    // Season 1 links two entries: the second repeats the first's romaji and
+    // English titles (in another case), has an empty native title and a Korean
+    // synonym that the first has too.
+    store
+        .put_entry(entry_titled(
+            5001,
+            Some("さよならララ"),
+            Some("Goodbye Lara"),
+            Some("Sayonara Lara"),
+            &["안녕, 라라", "라라여 안녕"],
+        ))
+        .await
+        .unwrap();
+    store
+        .put_entry(entry_titled(
+            5002,
+            Some("  "),
+            Some("goodbye lara"),
+            Some("Sayonara Lara 2"),
+            &["안녕, 라라"],
+        ))
+        .await
+        .unwrap();
+    let version = store.link(&app.work, 1).await.unwrap().version;
+    store
+        .set_links(&app.work, 1, version, vec![5001, 5002])
+        .await
+        .unwrap();
+
+    // The folder name repeats the first entry's romaji title, so it is not listed twice.
+    let want = vec![
+        pair("native", "さよならララ"),
+        pair("english", "Goodbye Lara"),
+        pair("romaji", "Sayonara Lara"),
+        pair("korean", "안녕, 라라"),
+        pair("korean", "라라여 안녕"),
+        pair("romaji", "Sayonara Lara 2"),
+    ];
+    assert_eq!(reference(&app.get(1).await), want);
+    // The work detail carries the same, so the dialog needs no request of its own.
+    assert_eq!(reference(&app.detail(1).await), want);
+
+    // A season with no entry has the folder name only.
+    assert_eq!(
+        reference(&app.get(2).await),
+        [pair("folder", "Sayonara Lara")]
+    );
+
+    // A folder name no entry has is listed last.
+    let store = &app.state.seasons.store;
+    store
+        .put_entry(entry_titled(5003, Some("続"), None, None, &[]))
+        .await
+        .unwrap();
+    let version = store.link(&app.work, 2).await.unwrap().version;
+    store
+        .set_links(&app.work, 2, version, vec![5003])
+        .await
+        .unwrap();
+    assert_eq!(
+        reference(&app.get(2).await),
+        [pair("native", "続"), pair("folder", "Sayonara Lara")]
+    );
+}
+
+#[tokio::test]
+async fn a_search_without_a_query_is_refused_and_asks_nothing_of_anissia() {
     let app = App::new().await;
     app.catalogue();
-    let (status, found) = app.search(2, json!({ "q": "  " })).await;
-    assert_eq!(status, StatusCode::OK, "{found}");
-    assert_eq!(found["q"], "Sayonara Lara");
-    assert_eq!(numbers(&found), [2969]);
+    for body in [
+        json!({}),
+        json!({ "q": "" }),
+        json!({ "q": "   " }),
+        json!({ "q": null }),
+    ] {
+        let (status, refused) = app.search(1, body.clone()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}: {refused}");
+        assert_eq!(refused["message"], "검색어를 입력해 주세요.");
+    }
+    // A link picked from a search must say which search it was.
+    let (status, refused) = app
+        .link(
+            1,
+            json!({ "version": 0, "anime_no": 2969, "q": " ", "page": 1 }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(app.requests_for("/anime/"), 0);
+    assert_eq!(app.get(1).await["version"], 0);
 }
 
 #[tokio::test]

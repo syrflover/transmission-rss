@@ -14,7 +14,8 @@
 //! { "season": 2, "version": 3,
 //!   "anime": { "anime_no": 3441, "subject": "…", "original_subject": "…",
 //!              "status": "END", "url": "https://anissia.net/anime?animeNo=3441" },
-//!   "subscription": null }
+//!   "subscription": null,
+//!   "reference_titles": [{ "kind": "native", "title": "…" }, …] }
 //! ```
 //!
 //! - `version` goes with every change of the link: a change made from an
@@ -25,15 +26,20 @@
 //!   subscription's, and `link` refuses (`400`) to change it, whatever the
 //!   request names. The season's anime follows the subscription; to link it to
 //!   another, the subscription is deleted first (the link stays after that).
+//! - `reference_titles` are the titles the user reads to write a search: the
+//!   native, English and romaji titles and the Korean synonyms (the ones with
+//!   Hangul) of the season's linked AniList entries, then the work's folder
+//!   name, without empty or repeated ones. They are text to read, nothing is
+//!   searched with them.
 //! - `search` looks `q` up in Anissia's full anime list, finished anime
-//!   included (`q`, when left out, is the native title of the season's first
-//!   AniList entry, or the work's folder name for a season with none; the
-//!   season folder of a library is always `Season NN`, which names nothing to
-//!   search for),
-//!   one page of up to 30 at a time. `page` counts from 1. When Anissia does
-//!   not answer, or its answer is not the list's, it answers `502`
-//!   (`unavailable`) with a sentence; the schedule (`GET /anissia/schedule/
-//!   {week}`) and the links already stored are not affected.
+//!   included, one page of up to 30 at a time. `page` counts from 1. `q` is
+//!   required: an empty one answers `400`. The list matches Korean titles
+//!   (the native title of an AniList entry and the folder names of a library
+//!   rarely hit), so nothing is searched until the user writes a query,
+//!   reading the link's `reference_titles`. When Anissia does not answer, or
+//!   its answer is not the list's, it answers `502` (`unavailable`) with a
+//!   sentence; the schedule (`GET /anissia/schedule/{week}`) and the links
+//!   already stored are not affected.
 //! - `link` makes `anime_no` the season's anime (`null` cuts the link). The
 //!   anime is not taken from the request: it must be in the schedule's `week`
 //!   (the `편성표` tab) or in the page `page` of the search for `q` (the `전체
@@ -113,12 +119,52 @@ pub struct HoldingSubscription {
     subject: Option<String>,
 }
 
+/// A title the user can read to choose what to search for. `kind` is `native`,
+/// `english`, `romaji` or `korean` (an AniList entry's titles) or `folder` (the
+/// work's folder name).
+#[derive(Debug, Serialize)]
+pub struct ReferenceTitle {
+    kind: &'static str,
+    title: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct AnissiaLinkView {
     season: u32,
     version: i64,
     anime: Option<LinkedAnime>,
     subscription: Option<HoldingSubscription>,
+    /// The titles of the season's linked AniList entries and the work's folder
+    /// name, for the user to read when writing a search; no duplicates.
+    reference_titles: Vec<ReferenceTitle>,
+}
+
+/// The titles to show for a season: each linked entry's native, English and
+/// romaji titles and Korean synonyms, then the folder name, leaving out empty
+/// ones and ones already listed (compared without regard to case).
+fn reference_titles(entries: &[trss_anilist::Entry], folder: &str) -> Vec<ReferenceTitle> {
+    let mut out: Vec<ReferenceTitle> = Vec::new();
+    let mut add = |kind: &'static str, title: Option<&str>| {
+        let Some(title) = title.map(str::trim).filter(|t| !t.is_empty()) else {
+            return;
+        };
+        if out.iter().all(|t| !t.title.eq_ignore_ascii_case(title)) {
+            out.push(ReferenceTitle {
+                kind,
+                title: title.to_owned(),
+            });
+        }
+    };
+    for entry in entries {
+        add("native", entry.native.as_deref());
+        add("english", entry.english.as_deref());
+        add("romaji", entry.romaji.as_deref());
+        for korean in &entry.korean_titles {
+            add("korean", Some(korean));
+        }
+    }
+    add("folder", Some(folder));
+    out
 }
 
 /// The links of `seasons` of work `work_id`, by season number. `connected` are
@@ -128,6 +174,7 @@ pub struct AnissiaLinkView {
 pub async fn link_views(
     state: &AppState,
     work_id: &str,
+    work_name: &str,
     seasons: &[u32],
     connected: &[(u32, Rule)],
 ) -> Result<BTreeMap<u32, AnissiaLinkView>, ApiError> {
@@ -164,11 +211,22 @@ pub async fn link_views(
         .animes(wanted)
         .await
         .map_err(|e| internal(&e))?;
+    let infos = state
+        .seasons
+        .store
+        .links_of_seasons(seasons.iter().map(|s| (work_id.to_owned(), *s)).collect())
+        .await
+        .map_err(|e| internal(&e))?;
     Ok(seasons
         .iter()
-        .map(|season| {
+        .zip(infos)
+        .map(|(season, info)| {
             let link = links.get(season);
             let view = AnissiaLinkView {
+                reference_titles: reference_titles(
+                    info.as_ref().map_or(&[], |i| i.entries.as_slice()),
+                    work_name,
+                ),
                 season: *season,
                 version: link.map_or(0, |l| l.version),
                 anime: link
@@ -200,12 +258,19 @@ async fn view_of(
         .anissia_link(work_id, season)
         .await
         .map_err(refused_store)?;
+    let work_name = state
+        .library
+        .work_detail(work_id)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .ok_or_else(|| ApiError::not_found(SEASON_NOT_FOUND))?
+        .dir_name;
     let connected = state
         .channels
         .subscriptions_of_work(work_id)
         .await
         .map_err(ApiError::from)?;
-    let mut views = link_views(state, work_id, &[season], &connected).await?;
+    let mut views = link_views(state, work_id, &work_name, &[season], &connected).await?;
     views
         .remove(&season)
         .ok_or_else(|| ApiError::Internal("the season's link view is missing".into()))
@@ -302,48 +367,14 @@ fn search_unavailable(error: AnissiaError) -> ApiError {
     }
 }
 
-/// The text to search for: `q` as the user wrote it, or, when it is left out,
-/// the native (Japanese) title of the first AniList entry the season links,
-/// which is what Anissia's titles are written to match; a season with no
-/// entry, or an entry with no native title, is searched by the work's folder
-/// name. The native title is the one stored with the entry already, so
-/// nothing is asked of AniList.
-async fn query_of(
-    state: &AppState,
-    work_id: &str,
-    season: u32,
-    q: Option<String>,
-) -> Result<String, ApiError> {
-    let internal = |e: &dyn std::fmt::Display| ApiError::Internal(e.to_string());
-    let q = match q.map(|q| q.trim().to_owned()).filter(|q| !q.is_empty()) {
-        Some(q) => q,
-        None => {
-            let native = state
-                .seasons
-                .store
-                .link(work_id, season)
-                .await
-                .map_err(refused_store)?
-                .entries
-                .into_iter()
-                .next()
-                .and_then(|entry| entry.native)
-                .map(|native| native.trim().to_owned())
-                .filter(|native| !native.is_empty());
-            match native {
-                Some(native) => native,
-                None => {
-                    state
-                        .library
-                        .work_detail(work_id)
-                        .await
-                        .map_err(|e| internal(&e))?
-                        .ok_or_else(|| ApiError::not_found(SEASON_NOT_FOUND))?
-                        .dir_name
-                }
-            }
-        }
-    };
+/// The text to search for: what the user wrote. The server picks none itself:
+/// Anissia's list matches Korean titles, which no title the app holds
+/// reliably is, so the user reads the reference titles and writes the query.
+fn query_of(q: Option<String>) -> Result<String, ApiError> {
+    let q = q.map(|q| q.trim().to_owned()).unwrap_or_default();
+    if q.is_empty() {
+        return Err(ApiError::invalid("검색어를 입력해 주세요."));
+    }
     if q.chars().count() > 200 {
         return Err(ApiError::invalid("검색어는 200자까지 쓸 수 있어요."));
     }
@@ -373,7 +404,7 @@ async fn search(
         .anissia_link(&id, season)
         .await
         .map_err(refused_store)?;
-    let q = query_of(&state, &id, season, body.q).await?;
+    let q = query_of(body.q)?;
     let found = state
         .anissia
         .search_anime(&q, page - 1, Some(USER_MAX_WAIT))
@@ -401,18 +432,12 @@ struct LinkBody {
 
 /// The anime `body` names, as the snapshot to keep: one Anissia just listed in
 /// the place the request says.
-async fn named_anime(
-    state: &AppState,
-    work_id: &str,
-    season: u32,
-    body: &LinkBody,
-    anime_no: i64,
-) -> Result<Anime, ApiError> {
+async fn named_anime(state: &AppState, body: &LinkBody, anime_no: i64) -> Result<Anime, ApiError> {
     match (body.week, body.q.as_deref()) {
         (Some(week), None) => scheduled_anime(state, week, anime_no).await,
         (None, Some(_)) => {
             let page = page_of(body.page)?;
-            let q = query_of(state, work_id, season, body.q.clone()).await?;
+            let q = query_of(body.q.clone())?;
             let found = state
                 .anissia
                 .search_anime(&q, page - 1, Some(USER_MAX_WAIT))
@@ -477,7 +502,7 @@ async fn link(
         return Err(conflict(&state, &id, season).await);
     }
     let anime = match body.anime_no {
-        Some(no) => Some(named_anime(&state, &id, season, &body, no).await?),
+        Some(no) => Some(named_anime(&state, &body, no).await?),
         None => None,
     };
     match state
