@@ -2587,6 +2587,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "trss-subtitles"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "thiserror",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "trss-transmission"
 version = "0.1.0"
 dependencies = [

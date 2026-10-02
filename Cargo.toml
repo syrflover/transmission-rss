@@ -16,6 +16,7 @@ trss-anilist = { path = "crates/trss-anilist" }
 trss-library = { path = "crates/trss-library" }
 trss-collect = { path = "crates/trss-collect" }
 trss-import = { path = "crates/trss-import" }
+trss-subtitles = { path = "crates/trss-subtitles" }
 trss-web = { path = "crates/trss-web" }
 
 # trname = { path = "../trname" }
