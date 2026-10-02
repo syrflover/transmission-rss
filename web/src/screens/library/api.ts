@@ -423,8 +423,16 @@ export interface AnissiaLink {
   /** Sent back with a change; a change from an older version is a `conflict`. A season never linked has 0. */
   version: number;
   anime: AnissiaAnime | null;
-  /** Set while a subscription is connected to the season; the link is then changed from the subscription. */
+  /** Set while a subscription is connected to the season: the season's anime is the subscription's. */
   subscription: AnissiaHolder | null;
+  /** Titles to read when writing a search: nothing is searched with them. No duplicates. */
+  reference_titles: ReferenceTitle[];
+}
+
+/** A title of the season's linked AniList entries (`korean`: a synonym with Hangul) or the work's folder name. */
+export interface ReferenceTitle {
+  kind: "native" | "english" | "romaji" | "korean" | "folder";
+  title: string;
 }
 
 /** An anime of Anissia's full list. */
@@ -454,7 +462,7 @@ export type AnissiaSource = { week: number } | { q: string; page: number };
 
 const anissiaPath = (id: string, season: number) => `${seasonPath(id, season)}/anissia`;
 
-/** Searches Anissia's full list (finished anime included); an empty `q` is the work's folder name. */
+/** Searches Anissia's full list (finished anime included) for the user's `q`, which is required. */
 export function searchAnissia(id: string, season: number, q: string, page: number, signal?: AbortSignal): Promise<AnissiaPage> {
   return api<AnissiaPage>(`${anissiaPath(id, season)}/search`, { method: "POST", body: { q, page }, signal });
 }

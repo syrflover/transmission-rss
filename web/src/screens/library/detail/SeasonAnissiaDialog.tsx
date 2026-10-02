@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import { Dialog } from "radix-ui";
 
 import { Button } from "@/components/ui/button";
@@ -10,7 +10,7 @@ import { PickAnime } from "../../collect/subs/add/PickAnime";
 import { todayWeek } from "../../collect/subs/format";
 import type { ScheduleEntry } from "../../collect/subs/api";
 import { btnNeutral, btnPrimary, hintClass, inputClass } from "../../collect/channels/styles";
-import { searchAnissia, setAnissiaLink, type AnissiaCandidate, type AnissiaLink, type AnissiaSource } from "../api";
+import { searchAnissia, setAnissiaLink, type AnissiaCandidate, type AnissiaLink, type AnissiaSource, type ReferenceTitle } from "../api";
 import { anissiaStatusText as statusText } from "./model";
 
 /** The most pages of one search the server answers. */
@@ -41,8 +41,8 @@ const dates = (c: AnissiaCandidate) => {
 
 /**
  * Picks the Anissia anime a season is linked to: from Anissia's full list,
- * finished anime included (the work's folder name is searched first and can be
- * edited), or from this quarter's schedule. Nothing is saved until `연결`;
+ * finished anime included (the user writes the query, reading the season's
+ * reference titles; nothing is searched on open), or from this quarter's schedule. Nothing is saved until `연결`;
  * when someone changed the link first, the dialog shows the current link and
  * keeps the search and the pick.
  */
@@ -163,7 +163,7 @@ function Body({
 
       {/* Both tabs stay mounted, so a search and its place survive switching. */}
       <div hidden={tab !== "list"}>
-        <FullList workId={workId} season={link.season} picked={picked} onPick={setPicked} />
+        <FullList workId={workId} season={link.season} titles={link.reference_titles} picked={picked} onPick={setPicked} />
       </div>
       <div hidden={tab !== "schedule"}>
         <PickAnime
@@ -201,27 +201,27 @@ function Body({
 function FullList({
   workId,
   season,
+  titles,
   picked,
   onPick,
 }: {
   workId: string;
   season: number;
+  titles: readonly ReferenceTitle[];
   picked: Picked | null;
   onPick: (picked: Picked) => void;
 }) {
-  // Empty until the first answer: the server chooses what is searched first.
+  // Nothing is searched until the user writes a query.
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<{ q: string; rows: Row[]; page: number; hasNext: boolean } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const search = async (q: string, page: number, first = false) => {
+  const search = async (q: string, page: number) => {
     setLoading(true);
     setError(null);
     try {
       const answer = await searchAnissia(workId, season, q, page);
-      // The text the server searched for, for the user to edit.
-      if (first) setQuery(answer.q);
       const rows = answer.items.map((candidate) => ({ candidate, page: answer.page }));
       setResults((prev) => ({
         q: answer.q,
@@ -236,14 +236,6 @@ function FullList({
     }
   };
 
-  // The first query (the season's AniList title in Japanese, else the work's folder name) is searched as soon as the dialog opens.
-  const started = useRef(false);
-  useEffect(() => {
-    if (started.current) return;
-    started.current = true;
-    void search("", 1, true);
-  }, []);
-
   const submit = (event: FormEvent) => {
     event.preventDefault();
     const q = query.trim();
@@ -252,13 +244,20 @@ function FullList({
 
   return (
     <section aria-label="Anissia 전체 목록" className="flex flex-col gap-3">
+      <ReferenceTitles titles={titles} />
       <form onSubmit={submit} className="flex gap-2">
-        <Input aria-label="Anissia 검색어" value={query} onChange={(e) => setQuery(e.target.value)} className={cn(inputClass, "min-w-0 flex-1")} />
-        <Button type="submit" variant="ghost" className={btnNeutral} disabled={loading}>
+        <Input
+          aria-label="Anissia 검색어"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="한국어 제목으로 검색"
+          className={cn(inputClass, "min-w-0 flex-1")}
+        />
+        <Button type="submit" variant="ghost" className={btnNeutral} disabled={loading || query.trim() === ""}>
           검색
         </Button>
       </form>
-      <p className={hintClass}>방영이 끝난 작품도 찾아요. 먼저 찾은 검색어(AniList에 이은 시즌이면 그 일본어 제목, 아니면 작품 폴더 이름)가 맞지 않으면 고쳐 보세요.</p>
+      <p className={hintClass}>방영이 끝난 작품도 찾아요. Anissia는 한국어 제목으로 찾아져서, 일본어나 영어 제목은 거의 맞지 않아요. 위 제목을 참고해 한국어 제목을 직접 써 보세요.</p>
       {error && (
         <p role="alert" className="text-[13px] leading-relaxed font-semibold text-urgent">
           {error}
@@ -303,5 +302,31 @@ function FullList({
         </Button>
       )}
     </section>
+  );
+}
+
+const KIND_LABELS: Record<ReferenceTitle["kind"], string> = {
+  native: "원제",
+  english: "영어",
+  romaji: "로마자",
+  korean: "한국어",
+  folder: "폴더 이름",
+};
+
+/** The season's titles as plain text to read (and copy) when writing a search; nothing here searches. */
+function ReferenceTitles({ titles }: { titles: readonly ReferenceTitle[] }) {
+  if (titles.length === 0) return null;
+  return (
+    <div className="flex flex-col gap-1.5" data-testid="reference-titles">
+      <h3 className="text-[12.5px] font-semibold text-text-secondary">참고할 제목</h3>
+      <dl className="m-0 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 rounded-[10px] bg-surface-2 px-3 py-2 text-[13px] leading-snug dark:bg-surface-2">
+        {titles.map((t) => (
+          <div key={`${t.kind}:${t.title}`} className="contents">
+            <dt className="text-xs text-text-muted">{KIND_LABELS[t.kind]}</dt>
+            <dd className="m-0 break-words text-text-primary select-text">{t.title}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
   );
 }
