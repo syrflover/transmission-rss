@@ -1,4 +1,4 @@
-//! A stand-in for Anissia in tests: a local HTTP server answering the three
+//! A stand-in for Anissia in tests: a local HTTP server answering the four
 //! requests the client sends, with knobs for `429`s, failures, padding and
 //! answers that are not the API's. No test reaches the real Anissia.
 
@@ -30,6 +30,11 @@ pub struct FakeState {
     pub catalogue: Vec<Value>,
     /// How many anime a page of the full list has (Anissia's is 30).
     pub page_size: usize,
+    /// The lines of the recent captions list, newest first, as Anissia lists
+    /// them (`animeNo` and `subject` among the fields).
+    pub recent: Vec<Value>,
+    /// How many lines a page of the recent list has (Anissia's is 20).
+    pub recent_page_size: usize,
     /// The next this many requests answer `429` with this `Retry-After`.
     pub rate_limited: u32,
     /// `None` sends no `Retry-After`.
@@ -61,6 +66,7 @@ impl Fake {
         let fake = Fake {
             state: Arc::new(Mutex::new(FakeState {
                 page_size: 30,
+                recent_page_size: 20,
                 ..FakeState::default()
             })),
             origin,
@@ -69,6 +75,7 @@ impl Fake {
             .route("/anime/schedule/{week}", get(schedule))
             .route("/anime/caption/animeNo/{no}", get(captions))
             .route("/anime/list/{page}", get(list))
+            .route("/anime/caption/recent/{page}", get(recent))
             .with_state(fake.clone());
         tokio::spawn(async move {
             axum::serve(listener, app).await.unwrap();
@@ -122,6 +129,26 @@ impl Fake {
     /// A caption as Anissia lists it.
     pub fn caption(&self, episode: &str, updated: &str, creator: &str) -> Value {
         json!({ "episode": episode, "updDt": updated, "website": "https://blog.test/1", "name": creator })
+    }
+
+    /// A line of the recent list as Anissia gives it (observed 2026-10-02).
+    pub fn recent_line(
+        &self,
+        anime_no: i64,
+        episode: &str,
+        updated: &str,
+        website: &str,
+        creator: &str,
+    ) -> Value {
+        json!({
+            "animeNo": anime_no, "subject": format!("작품 {anime_no}"), "episode": episode,
+            "updDt": updated, "website": website, "name": creator,
+        })
+    }
+
+    /// Makes `lines` the recent captions list, which pages as Anissia's does.
+    pub fn set_recent(&self, lines: Vec<Value>) {
+        self.state.lock().unwrap().recent = lines;
     }
 
     pub fn requests(&self) -> Vec<(Instant, String)> {
@@ -270,4 +297,36 @@ async fn list(
         })
     });
     answer(&fake, format!("/anime/list/{page}?q={q}"), data)
+}
+
+/// `GET /anime/caption/recent/<page>`: the recent captions, `recent_page_size`
+/// to a page counting from 0, in Spring's page shape as observed on
+/// 2026-10-02. A page past the end is empty, with `last` true and still `ok`.
+async fn recent(State(fake): State<Fake>, Path(page): Path<String>) -> Response {
+    let data = page.parse::<usize>().ok().map(|index| {
+        let state = fake.state.lock().unwrap();
+        let size = state.recent_page_size.max(1);
+        let total = state.recent.len();
+        let total_pages = total.div_ceil(size);
+        let content: Vec<Value> = state
+            .recent
+            .iter()
+            .skip(index * size)
+            .take(size)
+            .cloned()
+            .collect();
+        json!({
+            "content": content, "empty": content.is_empty(), "first": index == 0,
+            "last": index + 1 >= total_pages, "number": index, "size": size,
+            "numberOfElements": content.len(), "totalElements": total,
+            "totalPages": total_pages,
+            "pageable": {
+                "offset": index * size, "pageNumber": index, "pageSize": size,
+                "paged": true, "unpaged": false,
+                "sort": {"empty": true, "sorted": false, "unsorted": true},
+            },
+            "sort": {"empty": true, "sorted": false, "unsorted": true},
+        })
+    });
+    answer(&fake, format!("/anime/caption/recent/{page}"), data)
 }

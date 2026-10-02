@@ -9,6 +9,10 @@
 //! - `GET /anime/list/<page>?q=<text>`: the full anime list, searched by title
 //!   (not in Anissia's documentation, see [`parse::anime_page`]). `page` counts
 //!   from 0, a page has up to 30 anime, and finished anime are in it.
+//! - `GET /anime/caption/recent/<page>`: the captions updated in the last 90
+//!   days, newest first, 20 to a page counting from 0 and an empty page past
+//!   the end. [`observe`] reads it, and the captions of one anime, for the
+//!   observation of the subtitle candidates.
 //!
 //! [`parse`] reads the answers. [`Anissia`] asks for them:
 //!
@@ -34,6 +38,7 @@
 
 mod anime;
 pub mod calendar;
+pub mod observe;
 pub mod pace;
 pub mod parse;
 pub mod slot;
@@ -56,6 +61,7 @@ use std::{
 use reqwest::{header, redirect, StatusCode};
 use url::Url;
 
+pub use observe::{CaptionLine, RecentPage};
 pub use parse::{AnimePage, Caption, Creator, ScheduleEntry};
 
 use pace::RequestPace;
@@ -340,6 +346,33 @@ impl Anissia {
             .get_list(&format!("/anime/caption/animeNo/{anime_no}"), max_wait)
             .await?;
         Ok(parse::captions(&list))
+    }
+
+    /// Asks Anissia for page `page` (from 0) of the recent captions, bypassing
+    /// the cache. The page past the last one is empty ([`RecentPage::rows`]
+    /// is 0).
+    pub async fn fetch_recent_captions(
+        &self,
+        page: u32,
+        max_wait: Option<Duration>,
+    ) -> Result<RecentPage, AnissiaError> {
+        let body = self
+            .get_body(&format!("/anime/caption/recent/{page}"), &[], max_wait)
+            .await?;
+        observe::recent_page(&body).map_err(|e| AnissiaError::Invalid(e.0))
+    }
+
+    /// Asks Anissia for the caption lines of anime `anime_no` as they are
+    /// written, bypassing the cache, with how many lines the answer held.
+    pub async fn fetch_caption_lines(
+        &self,
+        anime_no: i64,
+        max_wait: Option<Duration>,
+    ) -> Result<(Vec<CaptionLine>, usize), AnissiaError> {
+        let body = self
+            .get_body(&format!("/anime/caption/animeNo/{anime_no}"), &[], max_wait)
+            .await?;
+        observe::anime_lines(&body).map_err(|e| AnissiaError::Invalid(e.0))
     }
 
     /// Asks Anissia for page `page` (from 0) of the full anime list matching

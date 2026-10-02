@@ -498,3 +498,53 @@ async fn a_search_answer_that_is_not_the_lists_is_refused() {
         other => panic!("expected Invalid, got {other:?}"),
     }
 }
+
+#[tokio::test]
+async fn the_recent_captions_are_read_a_page_at_a_time_from_page_0_to_the_empty_page() {
+    let env = Env::new().await;
+    let lines: Vec<_> = (1..=45)
+        .map(|n| {
+            env.fake
+                .recent_line(n, "1", "2026-10-02T11:17:00", "https://a.test/1", "제작자")
+        })
+        .collect();
+    env.fake.set_recent(lines);
+
+    let mut seen = Vec::new();
+    for page in 0.. {
+        let read = env.anissia.fetch_recent_captions(page, None).await.unwrap();
+        seen.push(read.rows);
+        if read.rows == 0 {
+            break;
+        }
+    }
+    assert_eq!(seen, [20, 20, 5, 0]);
+    assert_eq!(env.fake.count("/anime/caption/recent/"), 4);
+
+    let first = env.anissia.fetch_recent_captions(0, None).await.unwrap();
+    assert_eq!(first.lines[0].anime_no, Some(1));
+    assert_eq!(first.lines[0].creator, "제작자");
+}
+
+#[tokio::test]
+async fn the_caption_lines_of_an_anime_keep_the_text_as_written_and_a_429_is_busy() {
+    let env = Env::new().await;
+    env.fake.set_captions(
+        3492,
+        vec![env.fake.caption("13.5", "2026-10-02 21:00:00", "에루샤")],
+    );
+    let (lines, rows) = env.anissia.fetch_caption_lines(3492, None).await.unwrap();
+    assert_eq!(rows, 1);
+    assert_eq!(lines[0].episode, "13.5");
+    assert_eq!(lines[0].updated_at, Some(1_790_942_400_000));
+    // An anime Anissia does not know has no lines.
+    let (none, rows) = env.anissia.fetch_caption_lines(1, None).await.unwrap();
+    assert_eq!((none.len(), rows), (0, 0));
+
+    env.fake.state.lock().unwrap().rate_limited = 1;
+    env.fake.state.lock().unwrap().retry_after = Some(120);
+    assert!(matches!(
+        env.anissia.fetch_recent_captions(0, None).await,
+        Err(AnissiaError::Busy { retry_after }) if retry_after == Duration::from_secs(120)
+    ));
+}
