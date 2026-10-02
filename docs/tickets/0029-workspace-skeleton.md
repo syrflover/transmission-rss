@@ -1,6 +1,6 @@
 # 0029 크레이트 지도를 정하고 workspace의 바이너리와 공통 기반을 나눠요
 
-- 상태: 진행 중 (workspace 전환과 `trss-core`·`trss-web`·`trss-worker` 분리는 끝났어요. 크레이트 지도의 다섯 배치는 사용자 결정을 기다리고, 로컬 compose 실행은 하지 못했어요. 아래 "결과")
+- 상태: 진행 중 (workspace 전환과 `trss-core`·`trss-web`·`trss-worker` 분리, 크레이트 지도는 끝났어요. 로컬 compose 실행만 남았고 0030이 끝난 뒤 함께 확인해요. 아래 "결과")
 - 출처: [기능별 크레이트 ADR](../adr/0011-feature-crate-workspace.md), [공통 라이브러리의 모듈 구성](../specs/web-app.md#공통-라이브러리의-모듈-구성)
 - 막는 티켓: 없음 (0027·0028처럼 진행 중인 변경이 있으면 먼저 끝내요. 파일을 대량으로 옮기는 동안 다른 변경과 충돌하기 때문이에요)
 
@@ -53,23 +53,22 @@ Docker 이미지 빌드, 테스트 위치(`tests/`), 배포 스크립트가 새 
 
 | 크레이트 | 책임 | 의존하는 크레이트 (목표) | 지금 |
 | --- | --- | --- | --- |
-| `trss-core` | DB·마이그레이션(SQL 전부)·앱 설정·폴더 산술·`Millis`·`Clock`·`CycleLock`·`USER_AGENT`. Q2가 정해지면 명령 큐·상태 스냅샷 저장소와 하트비트도 | 없음 | 있음. 외부 크레이트(`rusqlite`·`thiserror`·`tokio`)에만 의존 |
-| `trss-transmission` | Transmission RPC 클라이언트(시간 제한·이름 변경 재시도·비밀 값 가리기). Q4가 정해지면 릴리스 이름 판독(`revision`)도 | core | 없음(`trss-legacy::transmission`) |
-| `trss-anissia` | Anissia HTTP 클라이언트·응답 해석·설정 | core | 없음(`trss-legacy::anissia`) |
-| `trss-anilist` | AniList 클라이언트·제목 판정(Q5) | core | 없음(`trss-legacy::artwork`·`seasons`) |
-| `trss-collect` | 수집 규칙·피드·계획, 채널·규칙·구독·수집 이력, 영상 수정본, 지난 회차 검색, 회차 변환, 보관 제안, 규칙 보관·회차 되돌리기 명령 | core, transmission, anissia, library | 없음 |
+| `trss-core` | DB·마이그레이션(SQL 전부)·앱 설정·폴더 산술·`Millis`·`Clock`·`CycleLock`·`USER_AGENT`, 명령 큐·하트비트·`rename_noreplace`(Q2), KST 날짜 계산(Q3) | 없음 | 있음. 외부 크레이트(`rusqlite`·`thiserror`·`tokio`)에만 의존 |
+| `trss-transmission` | Transmission RPC 클라이언트(시간 제한·이름 변경 재시도·비밀 값 가리기). 이름 변경에 쓸 값은 호출하는 쪽이 넘겨요(Q4) | core | 없음(`trss-legacy::transmission`) |
+| `trss-anissia` | Anissia HTTP 클라이언트·응답 해석과 모델(Q5)·요일·날짜 표기 해석과 방영 칸 계산(Q3) | core | 없음(`trss-legacy::anissia`) |
+| `trss-anilist` | AniList 클라이언트·제목 판정·응답 모델·요청 간격 저장(Q5) | core | 없음(`trss-legacy::artwork`·`seasons`) |
+| `trss-collect` | 수집 규칙·피드·계획, 채널·규칙·구독·수집 이력, 영상 수정본, 지난 회차 검색, 회차 변환, 보관 제안, 규칙 보관·회차 되돌리기 명령, `season_link`(Q1), 상태 스냅샷, 편성의 영상·자막 상태(Q3) | core, transmission, anissia, library | 없음 |
 | `trss-library` | 작품 발견·감시 폴더·표지·시즌 정보와 그 저장소, 감시 폴더 읽기(`watch`·`live`) | core, anilist | 없음 |
-| `trss-schedule` | 이번 주 편성 상태 | core, collect | 없음(`trss-legacy::schedule`) |
 | `trss-import` | 기존 YAML 가져오기 계획 | core, collect | 없음(`trss-legacy::import`) |
-| `trss-web` | 라우터·API·화면 연결 | 모든 기능 크레이트, core | 있음. `trss-legacy`·`trss-core`에 의존 |
+| `trss-web` | 라우터·API·화면 연결, 이번 주 편성 조립(Q3) | 모든 기능 크레이트, core | 있음. `trss-legacy`·`trss-core`에 의존 |
 | `trss-worker` | 실행 루프·명령 분배·주기 | collect, library, transmission, anissia, anilist, core | 있음. `trss-legacy`·`trss-core`에 의존 |
 | `trss-legacy` | (임시) 위에서 아직 옮기지 않은 모든 모듈 | core | 있음 |
 
-`trss-library`가 `trss-collect`에 의존하지 않고 collect가 library에 의존하는 방향은 코드에서 읽은 것이에요(아래 Q1).
+`trss-library`가 `trss-collect`에 의존하지 않고 collect가 library에 의존하는 방향은 코드에서 읽은 것이에요(아래 Q1). `trss-schedule`은 두지 않기로 했어요(Q3).
 
 ### 모듈별 배치
 
-모듈마다 목표 크레이트예요. "미정"은 ADR 0011의 원칙과 어긋나서 아래 "사용자에게 묻는 것"으로 넘긴 배치예요. 나머지는 원칙대로 정했어요.
+모듈마다 목표 크레이트예요. Q 표시는 ADR 0011의 처음 목록과 어긋나서 사용자가 정한 배치(아래 "사용자가 정한 것")이고, 나머지는 원칙대로 정했어요.
 
 | 현재 모듈 | 목표 | 메모 |
 | --- | --- | --- |
@@ -81,27 +80,30 @@ Docker 이미지 빌드, 테스트 위치(`tests/`), 배포 스크립트가 새 
 | `worker/mod`(`Worker`), `env`, `commands`(분배), `cycle`(`run_cycle`), `bin/trss-worker` | `trss-worker` | 이동 끝 |
 | `worker/context`(`CycleContext`) | `trss-worker` | 명령·감시가 쓰는 저장소 묶음이라 0030에서 쓰는 것만 받도록 좁혀야 해요. 그동안 `trss-legacy` |
 | `transmission/` | `trss-transmission` | |
-| `revision` | 미정(Q4) | 권고: `trss-transmission` |
-| `anissia/{mod,parse,fake}` | `trss-anissia` | `parse`가 `store/anissia`의 `Anime`·`WEEK_UPCOMING`을 써서 모델을 클라이언트 쪽으로 옮겨야 해요 |
+| `revision` | `trss-collect` | Transmission 클라이언트는 이름 변경에 쓸 값을 호출하는 쪽에서 받아요(Q4) |
+| `anissia/{mod,parse,fake}` | `trss-anissia` | `parse`가 쓰는 `store/anissia`의 `Anime`·`WEEK_UPCOMING`도 함께 옮겨요(Q5) |
 | `anissia/queue` | `trss-collect` | `store/anissia`(collect)를 쓰는 갱신 작업이에요 |
-| `artwork/{anilist,title,fake}`, `seasons/anilist` | 미정(Q5) | 권고: `trss-anilist` |
+| `artwork/{anilist,title,fake}`, `seasons/anilist` | `trss-anilist` | `store::seasons`의 응답 모델(`Entry`·`FuzzyDate`·`Sequel`·`Airing`)과 AniList 몫의 요청 간격(`take_request_slot`·`block_requests`)도 옮겨요(Q5) |
 | `artwork/{mod,files,image,queue}`, `seasons/{mod,combine,describe,queue}` | `trss-library` | |
 | `discovery`, `automatic_watch` | `trss-library` | |
 | `rss`, `rule`, `config`, `episode_offset`, `past_search`, `subscriptions` | `trss-collect` | `episode_offset`이 라이브러리의 시즌 정보를 읽어서 collect→library 방향이 정해져요 |
-| `archive_suggestions` | `trss-collect` | `schedule`과 순환이라 Q3 |
-| `schedule/{calendar,slot}` | 미정(Q3) | 권고: `trss-collect` |
-| `schedule/{mod,state}` | `trss-schedule` | |
+| `archive_suggestions` | `trss-collect` | |
+| `schedule/calendar` | `trss-core`, `trss-anissia` | KST 날짜 계산(`day_of`·`day_start`·`days_from_civil`·`weekday`·`week_start`·`date_text`, `subscriptions`의 `DAY_MS`·`KST_OFFSET_MS`)은 core, Anissia 표기 해석(`weekday_of_anissia`·`PartialDate`)은 anissia(Q3) |
+| `schedule/slot` | `trss-anissia` | (Q3) |
+| `schedule/state` | `trss-collect` | (Q3) |
+| `web::schedule_api` | `trss-web` | 그대로. 이번 주 편성을 조립해요(Q3) |
 | `import/` | `trss-import` | `store/channels/import*`의 타입을 쓰므로 `trss-collect`에 의존해요 |
 | `worker/{plan,feed,revisions,offsets}` | `trss-collect` | |
-| `worker/commands/{receive_once,receive_past,episode_undo,rule_archive,link}` | `trss-collect` | 웹이 쓰는 요청 타입·검사 함수가 같은 파일에 있어요. `work_folder::rename_noreplace`는 Q2 |
-| `worker/commands/watch_rescan` | `trss-library` | `store/commands`가 필요해서 Q2 |
+| `worker/commands/{receive_once,receive_past,episode_undo,rule_archive,link}` | `trss-collect` | 웹이 쓰는 요청 타입·검사 함수가 같은 파일에 있어요. `work_folder::rename_noreplace`는 `trss-core`(Q2) |
+| `worker/commands/watch_rescan` | `trss-library` | |
 | `worker/{watch,live}` | `trss-library` | |
-| `worker/heartbeat` | 미정(Q2) | 권고: `trss-core` |
-| `worker/season_link` | 미정(Q1) | 권고: `trss-collect` |
+| `worker/heartbeat` | `trss-core` | (Q2) |
+| `worker/season_link` | `trss-collect` | (Q1) |
 | `store/{channels,history,revisions,search_pace,anissia}` | `trss-collect` | `store/anissia`는 `store/channels`와 서로 참조해서 같은 크레이트여야 해요 |
 | `store/{library,artwork,seasons}` | `trss-library` | |
 | `store/setup` | `trss-library` | 첫 실행 체크리스트이고 트리거가 `watch_folders`에 걸려요. 웹만 읽어요. 기능 사이 원칙과 부딪히지 않아서 제가 골랐어요 |
-| `store/{commands,status}` | 미정(Q2) | 권고: `trss-core` |
+| `store/commands` | `trss-core` | (Q2) |
+| `store/status` | `trss-core`, `trss-collect` | 하트비트 몫은 core, 나머지 상태 스냅샷은 collect(Q2) |
 
 ### 역방향 의존 (이동 전 코드, 시험·문서 링크 제외)
 
@@ -118,16 +120,16 @@ Docker 이미지 빌드, 테스트 위치(`tests/`), 배포 스크립트가 새 
 - worker 안: 명령 종류별 모듈·`offsets`·`season_link`·`watch`·`live`가 `CycleContext`를 받아요(0030에서 좁혀요).
 - 묶음 사이의 순환: 티켓이 적은 `import` ↔ `store/channels`는 지금 코드에 없어요. `import`가 `store::channels::import`의 타입을 쓰는 한 방향이고, 반대는 문서 링크뿐이에요. 대신 아래 Q1–Q5의 순환을 찾았어요.
 
-### 사용자에게 묻는 것
+### 사용자가 정한 것
 
-사용자 목록(`rss`·`rule`… collect, `discovery`… library 등)대로 크레이트를 나누면 크레이트 사이에 순환이 생기는 곳이 있어요. 크레이트 의존이 `core ← {transmission, anissia, anilist} ← library ← collect ← {schedule, import} ← {web, worker}`가 되도록 아래를 권고해요. 권고대로 배치하고 아래에서 작은 상수(`FETCH_TIMEOUT`·`MAX_IMAGE_BYTES`, 큐의 `POLL`·`LOCK_RETRY`·`RETRY_DELAYS`, `MAX_REASON_CHARS`, 시간 상수 `DAY_MS` 등)를 쓰는 쪽 크레이트로 옮긴다고 치면, `use`·경로 참조를 읽는 스크립트로 센 크레이트 그래프(웹·worker 제외)에 순환이 없어요. 모두 정해야 0030의 이동 순서가 정해져요.
+ADR 0011의 처음 목록(`rss`·`rule`… collect, `discovery`… library 등)대로 크레이트를 나누면 크레이트 사이에 순환이 생기는 곳이 있었어요. 크레이트 의존이 `core ← {transmission, anissia, anilist} ← library ← collect ← import ← {web, worker}`가 되도록 아래를 권고했고, 사용자가 2026-10-02에 정했어요(결정은 [ADR 0011](../adr/0011-feature-crate-workspace.md)). 권고대로 배치하고 아래에서 작은 상수(`FETCH_TIMEOUT`·`MAX_IMAGE_BYTES`, 큐의 `POLL`·`LOCK_RETRY`·`RETRY_DELAYS`, `MAX_REASON_CHARS`, 시간 상수 `DAY_MS` 등)를 쓰는 쪽 크레이트로 옮긴다고 치면, `use`·경로 참조를 읽는 스크립트로 센 크레이트 그래프(웹·worker 제외)에 순환이 없어요. 각 항목 끝에 정한 것을 적었어요.
 
-1. **Q1 collect ↔ library**: collect가 library를 쓰는 곳은 `episode_offset`(시즌 정보), `rule_archive`→`watch`, `store/channels/import`→`ensure_automatic_in`, `episode_undo`→`discovery`의 상수이고, library가 collect를 쓰는 곳은 `worker/season_link`→`store::channels`(구독·규칙)예요. 사용자 목록은 `season_link`를 library에 뒀어요. 권고: collect→library 방향으로 두고 `season_link`를 `trss-collect`로 옮겨요. 구독과 시즌을 잇는 일이라 구독 쪽 코드예요.
-2. **Q2 library가 collect의 저장소를 쓰는 곳**: `watch_rescan`→`store/commands`, `heartbeat`·`live/watcher`→`store/status`, `artwork/files`→`rename_noreplace`예요. 권고: `store/commands`(웹이 맡기고 worker가 집는 요청 큐)와 `store/status`(worker가 웹에 남기는 스냅샷·하트비트)는 기능 규칙이 없는 웹↔worker 인계 테이블이라 `trss-core`에 두고, `heartbeat`도 core로, `rename_noreplace`는 core의 파일 도구로 내려요. 대안은 `store/status`를 나누는 것이에요(하트비트만 core).
-3. **Q3 collect ↔ schedule**: `archive_suggestions`(collect, ADR이 보관 제안을 collect로 적었어요)가 `schedule::calendar`·`slot`을 쓰고, `schedule`은 `subscriptions`의 시간 상수와 `store::anissia::Anime`을 써요. 권고: 순수 계산인 `schedule/{calendar,slot}`을 `trss-collect`로 내리고 `trss-schedule`에는 화면용 상태(`state`)만 둬요. 대안은 `archive_suggestions`를 `trss-schedule`로 올리는 것인데 ADR의 문구와 어긋나요.
-4. **Q4 `trss-transmission` ↔ `revision`**: 외부 연동 크레이트인 `transmission`이 이름 변경에 `revision::Release::without_version`을 써요(`revision`은 regex와 std만 쓰는 잎 모듈이에요). 사용자 목록은 `revision`을 collect에 뒀어요. 권고: `revision.rs`를 `trss-transmission`으로 옮겨요. collect가 이미 의존하고 다른 기능 크레이트는 안 쓰며, 릴리스 이름 판독은 토렌트 이름 규칙이에요. 대안은 `transmission`이 이름을 호출한 쪽에서 받는 것(함수 시그니처 변경)이에요.
-5. **Q5 AniList·Anissia 클라이언트가 자기 저장소·모델과 엉킨 곳**: `artwork/anilist.rs`는 요청 간격을 `ArtworkStore`에 두고 `artwork` 상수·`title`을 쓰며, `seasons/anilist.rs`는 `store::seasons`의 모델(`Entry`·`FuzzyDate`·`Sequel`·`Airing`)을 반환해요. 반대로 library의 두 큐가 `AnilistError`·`title::decide`·`fetch_entry`를 써서, 사용자 목록대로 `trss-anilist`를 나누면 library와 서로 참조해요. `anissia/parse.rs`도 `store/anissia`의 `Anime`을 써요. 권고: 응답 모델과 요청 간격 저장(AniList 몫의 `take_request_slot`·`block_requests`)을 클라이언트 크레이트로 가져가고, 저장소와 큐는 기능 크레이트에 둬요. 모델 타입 이동이 있으므로 사용자가 확인해야 해요. 대안은 AniList 클라이언트를 `trss-library` 안에 두는 것이에요(ADR의 `trss-anilist`가 없어져요).
-6. **Q6 `folders`(사소)**: 파일 전체를 core에 뒀어요(마이그레이션이 쓰는 `fold_bases`·`prefixed`·`FoldError`와 import·규칙 보관·웹이 쓰는 `common_ancestor`·`has_parent_dir` 등이 한 파일이에요). 사용자 목록은 library예요. 권고: 그대로 core. 나누려면 마이그레이션 몫만 core에 남기고 나머지를 library나 collect로 보내요.
+1. **Q1 collect ↔ library**: collect가 library를 쓰는 곳은 `episode_offset`(시즌 정보), `rule_archive`→`watch`, `store/channels/import`→`ensure_automatic_in`, `episode_undo`→`discovery`의 상수이고, library가 collect를 쓰는 곳은 `worker/season_link`→`store::channels`(구독·규칙)예요. 사용자 목록은 `season_link`를 library에 뒀어요. 권고: collect→library 방향으로 두고 `season_link`를 `trss-collect`로 옮겨요. 구독과 시즌을 잇는 일이라 구독 쪽 코드예요. **정함**: 권고대로 collect→library, `season_link`는 `trss-collect`.
+2. **Q2 library가 collect의 저장소를 쓰는 곳**: `watch_rescan`→`store/commands`, `heartbeat`·`live/watcher`→`store/status`, `artwork/files`→`rename_noreplace`예요. 권고: `store/commands`(웹이 맡기고 worker가 집는 요청 큐)와 `store/status`(worker가 웹에 남기는 스냅샷·하트비트)는 기능 규칙이 없는 웹↔worker 인계 테이블이라 `trss-core`에 두고, `heartbeat`도 core로, `rename_noreplace`는 core의 파일 도구로 내려요. 대안은 `store/status`를 나누는 것이에요(하트비트만 core). **정함**: 명령 큐·하트비트·`rename_noreplace`는 `trss-core`, `store/status`의 나머지(상태 스냅샷)는 `trss-collect`.
+3. **Q3 collect ↔ schedule**: `archive_suggestions`(collect, ADR이 보관 제안을 collect로 적었어요)가 `schedule::calendar`·`slot`을 쓰고, `schedule`은 `subscriptions`의 시간 상수와 `store::anissia::Anime`을 써요. 권고: 순수 계산인 `schedule/{calendar,slot}`을 `trss-collect`로 내리고 `trss-schedule`에는 화면용 상태(`state`)만 둬요. 대안은 `archive_suggestions`를 `trss-schedule`로 올리는 것인데 ADR의 문구와 어긋나요. **정함**: `trss-schedule`을 두지 않아요. KST 날짜 계산은 `trss-core`, Anissia 요일·날짜 표기 해석과 `slot`은 `trss-anissia`, `state`는 `trss-collect`, 이번 주 편성 조립은 `trss-web`의 `schedule_api`.
+4. **Q4 `trss-transmission` ↔ `revision`**: 외부 연동 크레이트인 `transmission`이 이름 변경에 `revision::Release::without_version`을 써요(`revision`은 regex와 std만 쓰는 잎 모듈이에요). 사용자 목록은 `revision`을 collect에 뒀어요. 권고: `revision.rs`를 `trss-transmission`으로 옮겨요. collect가 이미 의존하고 다른 기능 크레이트는 안 쓰며, 릴리스 이름 판독은 토렌트 이름 규칙이에요. 대안은 `transmission`이 이름을 호출한 쪽에서 받는 것(함수 시그니처 변경)이에요. **정함**: 대안. `transmission`은 이름 변경에 쓸 값을 호출하는 쪽에서 받고, `revision`은 `trss-collect`에 둬요.
+5. **Q5 AniList·Anissia 클라이언트가 자기 저장소·모델과 엉킨 곳**: `artwork/anilist.rs`는 요청 간격을 `ArtworkStore`에 두고 `artwork` 상수·`title`을 쓰며, `seasons/anilist.rs`는 `store::seasons`의 모델(`Entry`·`FuzzyDate`·`Sequel`·`Airing`)을 반환해요. 반대로 library의 두 큐가 `AnilistError`·`title::decide`·`fetch_entry`를 써서, 사용자 목록대로 `trss-anilist`를 나누면 library와 서로 참조해요. `anissia/parse.rs`도 `store/anissia`의 `Anime`을 써요. 권고: 응답 모델과 요청 간격 저장(AniList 몫의 `take_request_slot`·`block_requests`)을 클라이언트 크레이트로 가져가고, 저장소와 큐는 기능 크레이트에 둬요. 모델 타입 이동이 있으므로 사용자가 확인해야 해요. 대안은 AniList 클라이언트를 `trss-library` 안에 두는 것이에요(ADR의 `trss-anilist`가 없어져요). **정함**: 권고대로 응답 모델과 요청 간격 저장을 클라이언트 크레이트로.
+6. **Q6 `folders`(사소)**: 파일 전체를 core에 뒀어요(마이그레이션이 쓰는 `fold_bases`·`prefixed`·`FoldError`와 import·규칙 보관·웹이 쓰는 `common_ancestor`·`has_parent_dir` 등이 한 파일이에요). 사용자 목록은 library예요. 권고: 그대로 core. 나누려면 마이그레이션 몫만 core에 남기고 나머지를 library나 collect로 보내요. **정함**: 그대로 core.
 
 ### 검증한 것
 
@@ -147,6 +149,6 @@ Docker 이미지 빌드, 테스트 위치(`tests/`), 배포 스크립트가 새 
 
 ### 남은 일
 
-- 위 Q1–Q6을 정해요. 이 티켓의 완료 기준 첫 행("어긋나는 배치는 사용자가 정했어요")과 로컬 compose 실행이 끝나야 완료로 바꿔요.
-- 0030이 옮길 순서는 의존 방향대로 `trss-transmission`·`trss-anissia`·`trss-anilist` → `trss-library` → `trss-collect` → `trss-schedule`·`trss-import` 순이에요. 옮기면서 `trss-legacy::worker`의 `CycleContext`를 풀고, 재수출(`db`·`settings`·`folders`·`Millis`)을 없애고, `trss-worker/tests/`의 통합 시험과 도구를 시험하는 크레이트로 나눠요. `common`은 여러 크레이트가 쓰므로 시험 도구 크레이트가 필요할 수 있어요.
+- 로컬 compose 실행이 끝나야 완료로 바꿔요. 0030이 크레이트를 다 옮긴 뒤에 함께 확인해요.
+- 0030이 옮길 순서는 의존 방향대로 `trss-transmission`·`trss-anissia`·`trss-anilist` → `trss-library` → `trss-collect` → `trss-import` 순이에요. 옮기면서 `trss-legacy::worker`의 `CycleContext`를 풀고, 재수출(`db`·`settings`·`folders`·`Millis`)을 없애고, `trss-worker/tests/`의 통합 시험과 도구를 시험하는 크레이트로 나눠요. `common`은 여러 크레이트가 쓰므로 시험 도구 크레이트가 필요할 수 있어요.
 - `Cargo.toml`의 `tap`은 이전부터 쓰는 곳이 없어요(이 티켓과 무관해서 두었어요).

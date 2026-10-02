@@ -10,11 +10,18 @@
 
 크레이트 지도의 모양은 2026-10-02에 실제 모듈 의존 관계를 세어 정했어요(사용자 결정).
 
-- 크레이트는 지금 서로 순환하는 모듈을 한 묶음으로 둬요. 기반 `trss-core`, 외부 연동 `trss-transmission`·`trss-anissia`·`trss-anilist`, 기능 `trss-collect`(수집·구독·지난 회차 검색·영상 수정본·보관 제안)·`trss-library`(발견·감시·표지·시즌 정보)·`trss-schedule`·`trss-import`, 목표 3의 `trss-subtitles`·`trss-jobs`·`trss-browser`, 바이너리 `trss-web`·`trss-worker`예요. 폴더는 `crates/<이름>/`이에요.
+- 크레이트는 지금 서로 순환하는 모듈을 한 묶음으로 둬요. 기반 `trss-core`, 외부 연동 `trss-transmission`·`trss-anissia`·`trss-anilist`, 기능 `trss-library`(발견·감시·표지·시즌 정보)·`trss-collect`(수집·구독·지난 회차 검색·영상 수정본·보관 제안·편성 상태)·`trss-import`, 목표 3의 `trss-subtitles`·`trss-jobs`·`trss-browser`, 바이너리 `trss-web`·`trss-worker`예요. 폴더는 `crates/<이름>/`이에요.
   지금 모듈마다 크레이트를 두는 안은 경계가 가장 강하지만, `store/channels`와 `store/history`, `store/library`·`store/artwork`·`store/seasons`, `import`와 `store/channels`의 순환을 모두 끊어야 해서 동작을 건드리는 설계 변경이 이동에 섞여요. 묶음 안의 경계는 지금처럼 관례로 지키고, 끊을 이유가 생기면 그때 나눠요.
 - 마이그레이션 SQL과 순서는 모두 `trss-core`에 둬요. DB가 하나이고, 표지의 트리거가 라이브러리의 `works`에, 첫 실행의 트리거가 `watch_folders`에 걸리듯 스키마가 기능 경계를 넘기 때문이에요. 기능 크레이트의 시험도 전체 스키마로 DB를 열 수 있어요.
   SQL을 기능 크레이트에 두고 위에서 모으는 안은, 기능 크레이트의 시험이 그 위 크레이트에 기대야 해서 같은 타입이 두 번 컴파일되는 문제가 생겨 고르지 않았어요.
-- worker 안에 있는 기능 판단(`plan`·`feed`·`revisions`·규칙 보관의 폴더 이동·`season_link`·`live`)과 공통 도구(`Clock`·`CycleLock`)는 기능·기반 크레이트로 내리고, worker에는 실행 루프·명령 분배·주기만 남겨요. `schedule`이 `web::schedule_api`를 참조하는 것도 같아요.
+- worker 안에 있는 기능 판단(`plan`·`feed`·`revisions`·규칙 보관의 폴더 이동·`season_link`·`live`)과 공통 도구(`Clock`·`CycleLock`)는 기능·기반 크레이트로 내리고, worker에는 실행 루프·명령 분배·주기만 남겨요.
+
+모듈을 실제로 배치해 보니 위 목록대로는 크레이트 사이에 순환이 생기는 곳이 있어서, 크레이트 의존이 `core ← {transmission, anissia, anilist} ← library ← collect ← import ← {web, worker}`가 되도록 다음을 정했어요(사용자 결정, 2026-10-02). 목표 3의 크레이트는 `import` 위, 바이너리 아래에 들어가요.
+
+- 수집이 라이브러리에 의존해요. 회차 변환이 시즌 정보를, 규칙 보관이 감시 폴더를 읽기 때문이에요. 구독과 시즌을 잇는 `season_link`는 구독 쪽 코드라 `trss-collect`에 둬요.
+- 웹이 맡기고 worker가 집는 명령 큐, worker의 하트비트, 같은 이름을 덮어쓰지 않는 이름 바꾸기(`rename_noreplace`)는 기능 규칙이 없는 인계·파일 도구라 `trss-core`에 둬요. 상태 스냅샷의 나머지는 `trss-collect`에 둬요. 폴더 산술(`folders`)은 마이그레이션이 쓰므로 파일 전체를 `trss-core`에 둬요.
+- `trss-schedule`은 두지 않아요. 편성 계산을 나눠, KST 날짜 계산은 `trss-core`, Anissia 요일·날짜 표기의 해석과 방영 칸 계산은 `trss-anissia`, 영상·자막 상태 판정은 `trss-collect`, 이번 주 편성의 조립은 `trss-web`에 둬요. 보관 제안(`trss-collect`)이 편성 계산을 쓰는데 편성 모듈은 구독의 상수와 Anissia 모델을 써서, 별도 크레이트로 두면 수집과 서로 참조하기 때문이에요. 보관 제안을 편성 크레이트로 올리는 안은 수집 기능을 둘로 흩어 고르지 않았어요.
+- 외부 연동 크레이트는 기능 코드를 부르지 않아요. Transmission 클라이언트는 이름을 바꿀 때 릴리스 이름 판독을 직접 부르지 않고 호출하는 쪽이 계산한 값을 받아요. AniList·Anissia의 응답 모델과 AniList 요청 간격의 저장은 클라이언트 크레이트로 옮기고, 그 결과를 쌓는 저장소와 갱신 큐는 기능 크레이트에 둬요. AniList 클라이언트를 `trss-library` 안에 두는 안은 모델을 옮기지 않아도 되지만, 외부 연동을 기능과 나눠 공유한다는 [모듈 구성](../specs/web-app.md#공통-라이브러리의-모듈-구성)의 원칙과 어긋나 고르지 않았어요.
 
 모듈 하나하나의 배치는 이 원칙대로 이동할 때 정해요.
 
