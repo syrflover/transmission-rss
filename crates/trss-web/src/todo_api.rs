@@ -1,8 +1,38 @@
-//! `GET /api/todo/receive-failures`: the source of the to-do kind `받기 실패`
-//! (`docs/specs/jobs.md`, 할 일): collection failures the person has to deal
-//! with. The to-do screen itself does not exist yet; this is what it will
-//! read, and the work detail shows the replacement failures on their episode
-//! rows ([`super::library_work_api`]).
+//! The to-dos (`docs/specs/jobs.md`, 할 일).
+//!
+//! `GET /api/todo` is what needs the person (`처리 필요`), the cards of the
+//! to-do screen, and `count`, the menu badge:
+//!
+//! ```json
+//! { "needs": [
+//!   { "kind": "auth", "key": "auth:<work id>", "at": 1760000000000,
+//!     "work": { "id": "…", "name": "Show", "cover_url": "…" }, "title": "작품",
+//!     "season": 1, "episodes": ["11", "12"], "creator": "제작자",
+//!     "reason": "CAPTCHA", "job_id": "…", "jobs": 1 },
+//!   { "kind": "receive_failed", "key": "revision:<work id>", "at": 1759990000000,
+//!     "context": "revision", "work": { … }, "title": "Show", "season": 1,
+//!     "episodes": ["14"], "count": 1, "reason": "…", "channel_id": null } ],
+//!   "count": 2 }
+//! ```
+//!
+//! - `auth` (`인증 필요`): the subtitle jobs waiting for a person to pass a
+//!   site's check, one to-do per work (per job when it has no work). `at` is
+//!   since when its oldest job waits, `job_id` that job, `episodes` the items
+//!   that wait.
+//! - `receive_failed` (`받기 실패`): the failures listed below, one to-do per
+//!   work for revisions (`context: "revision"`, the work's folder when the
+//!   library has no work there) and one per rule for add failures
+//!   (`context: "add_failed"`, with the rule's work when the collect folder
+//!   holds it, and the channel for the history's filter).
+//!
+//! `auth` comes before `receive_failed`, each newest first. Failed subtitle
+//! jobs are not to-dos: the screen's job list shows them. The suggestions
+//! (`제안`) come from their own APIs. `GET /api/todo/count` is `{ "count" }`
+//! alone.
+//!
+//! `GET /api/todo/receive-failures`: the source of the to-do kind `받기 실패`:
+//! collection failures the person has to deal with, which the work detail
+//! also shows on their episode rows ([`super::library_work_api`]).
 //!
 //! ```json
 //! { "items": [
@@ -57,7 +87,13 @@ use std::{collections::HashMap, path::Path as FsPath};
 use axum::{extract::State, routing::get, Json, Router};
 use serde::Serialize;
 
-use super::{commands_api::CommandView, in_place::Evidence, ApiError, AppState};
+use super::{
+    artwork_api::image_url,
+    commands_api::CommandView,
+    in_place::Evidence,
+    jobs_api::{covers_of, title_of, work_ref, WorkRefView},
+    ApiError, AppState,
+};
 use trss_collect::{
     commands::receive_once,
     revision::season_episode,
@@ -67,9 +103,13 @@ use trss_collect::{
         revisions::{Revision, RevisionState},
     },
 };
+use trss_jobs::{ItemState, Wait};
 
 pub fn routes() -> Router<AppState> {
-    Router::new().route("/todo/receive-failures", get(list))
+    Router::new()
+        .route("/todo", get(todos))
+        .route("/todo/count", get(todo_count))
+        .route("/todo/receive-failures", get(list))
 }
 
 #[derive(Debug, Serialize, PartialEq)]
@@ -327,4 +367,305 @@ async fn list(State(state): State<AppState>) -> Result<Json<FailureList>, ApiErr
             }),
     );
     Ok(Json(FailureList { items }))
+}
+
+// ---------------------------------------------------------------------------
+// `처리 필요`
+
+#[derive(Debug, Serialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Todo {
+    Auth {
+        key: String,
+        at: i64,
+        work: Option<WorkRefView>,
+        title: String,
+        season: Option<i64>,
+        episodes: Vec<String>,
+        creator: Option<String>,
+        reason: String,
+        job_id: String,
+        jobs: usize,
+    },
+    ReceiveFailed {
+        key: String,
+        at: i64,
+        context: &'static str,
+        work: Option<WorkRefView>,
+        title: String,
+        season: Option<u32>,
+        episodes: Vec<String>,
+        count: usize,
+        reason: Option<String>,
+        channel_id: Option<String>,
+    },
+}
+
+impl Todo {
+    fn at(&self) -> i64 {
+        match self {
+            Todo::Auth { at, .. } | Todo::ReceiveFailed { at, .. } => *at,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct TodoList {
+    pub needs: Vec<Todo>,
+    pub count: usize,
+}
+
+async fn todos(State(state): State<AppState>) -> Result<Json<TodoList>, ApiError> {
+    Ok(Json(todo_list(&state).await?))
+}
+
+#[derive(Serialize)]
+struct TodoCount {
+    count: usize,
+}
+
+async fn todo_count(State(state): State<AppState>) -> Result<Json<TodoCount>, ApiError> {
+    Ok(Json(TodoCount {
+        count: todo_list(&state).await?.count,
+    }))
+}
+
+/// The to-dos that need the person (see the module docs).
+pub async fn todo_list(state: &AppState) -> Result<TodoList, ApiError> {
+    let mut auth = auth_todos(state).await?;
+    let mut failed = receive_failed_todos(state).await?;
+    auth.sort_by_key(|t| std::cmp::Reverse(t.at()));
+    failed.sort_by_key(|t| std::cmp::Reverse(t.at()));
+    auth.extend(failed);
+    Ok(TodoList {
+        count: auth.len(),
+        needs: auth,
+    })
+}
+
+async fn auth_todos(state: &AppState) -> Result<Vec<Todo>, ApiError> {
+    let internal = |e: &dyn std::fmt::Display| ApiError::Internal(e.to_string());
+    let waits = state.jobs.auth_waits().await.map_err(|e| internal(&e))?;
+    let covers = covers_of(state, &waits).await?;
+    // Oldest first, so each work's first job is its oldest.
+    let mut groups: Vec<(String, Vec<&trss_jobs::store::JobRow>)> = Vec::new();
+    for row in &waits {
+        let key = format!("auth:{}", row.work_id.as_deref().unwrap_or(&row.id));
+        match groups.iter_mut().find(|(k, _)| *k == key) {
+            Some((_, rows)) => rows.push(row),
+            None => groups.push((key, vec![row])),
+        }
+    }
+    let mut todos = Vec::new();
+    for (key, rows) in groups {
+        let oldest = rows[0];
+        let (mut episodes, mut reason) = (Vec::new(), None);
+        for row in &rows {
+            for item in state.jobs.items(&row.id).await.map_err(|e| internal(&e))? {
+                if item.state == ItemState::Waiting && item.wait == Some(Wait::Auth) {
+                    reason = reason.or(item.reason);
+                    if !episodes.contains(&item.episode) {
+                        episodes.push(item.episode);
+                    }
+                }
+            }
+        }
+        todos.push(Todo::Auth {
+            key,
+            at: oldest.state_at,
+            work: work_ref(oldest, &covers),
+            title: title_of(oldest),
+            season: oldest.season,
+            episodes,
+            creator: oldest.creator.clone(),
+            reason: reason.unwrap_or_default(),
+            job_id: oldest.id.clone(),
+            jobs: rows.len(),
+        });
+    }
+    Ok(todos)
+}
+
+/// One `받기 실패` to-do as it is gathered.
+struct FailedGroup {
+    key: String,
+    context: &'static str,
+    at: i64,
+    work: Option<WorkLink>,
+    title: String,
+    season: Option<u32>,
+    episodes: Vec<String>,
+    count: usize,
+    reason: Option<String>,
+    channel_id: Option<String>,
+}
+
+impl FailedGroup {
+    /// Adds one failure at `at`; the newest gives the reason and season.
+    fn add(&mut self, at: i64, reason: Option<String>, episode: Option<(u32, String)>) {
+        self.count += 1;
+        if at >= self.at {
+            self.at = at;
+            self.reason = reason;
+            if let Some((season, _)) = &episode {
+                self.season = Some(*season);
+            }
+        }
+        if let Some((_, episode)) = episode {
+            if !self.episodes.contains(&episode) {
+                self.episodes.push(episode);
+            }
+        }
+    }
+}
+
+async fn receive_failed_todos(state: &AppState) -> Result<Vec<Todo>, ApiError> {
+    let internal = |e: &dyn std::fmt::Display| ApiError::Internal(e.to_string());
+    let mut groups: Vec<FailedGroup> = Vec::new();
+    let add = |groups: &mut Vec<FailedGroup>, fresh: FailedGroup, at, reason, episode| {
+        let index = match groups.iter().position(|g| g.key == fresh.key) {
+            Some(index) => index,
+            None => {
+                groups.push(fresh);
+                groups.len() - 1
+            }
+        };
+        groups[index].add(at, reason, episode);
+    };
+
+    for row in state.revisions.failures().await.map_err(|e| internal(&e))? {
+        let work = state
+            .revisions
+            .work_at(row.folder.clone())
+            .await
+            .map_err(|e| internal(&e))?;
+        let folder_name = FsPath::new(&row.folder)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| row.folder.clone());
+        let fresh = FailedGroup {
+            key: format!(
+                "revision:{}",
+                work.as_ref().map(|w| w.id.as_str()).unwrap_or(&row.folder)
+            ),
+            context: "revision",
+            at: i64::MIN,
+            title: work.as_ref().map(|w| w.name.clone()).unwrap_or(folder_name),
+            work: work.map(|w| WorkLink {
+                id: w.id,
+                name: w.name,
+            }),
+            season: None,
+            episodes: Vec::new(),
+            count: 0,
+            reason: None,
+            channel_id: None,
+        };
+        add(
+            &mut groups,
+            fresh,
+            row.updated_at,
+            row.reason.clone(),
+            season_episode(&row.episode_name),
+        );
+    }
+
+    let failed = state
+        .history
+        .list(HistoryQuery {
+            result: Some(HistoryResult::AddFailed),
+            limit: ADD_FAILURES,
+            ..Default::default()
+        })
+        .await
+        .map_err(|e| internal(&e))?;
+    let collect_folder = state
+        .settings
+        .collection()
+        .await
+        .map_err(|e| internal(&e))?
+        .map(|collect| collect.folder);
+    let mut rules = HashMap::new();
+    for item in failed.items {
+        let Some(rule_id) = item.rule_id.clone() else {
+            continue;
+        };
+        if !rules.contains_key(&rule_id) {
+            let rule = state.channels.get_rule(&rule_id).await?;
+            let work = match (&rule, &collect_folder) {
+                (Some(rule), Some(folder)) => state
+                    .revisions
+                    .work_at(
+                        FsPath::new(folder)
+                            .join(&rule.directory)
+                            .to_string_lossy()
+                            .into_owned(),
+                    )
+                    .await
+                    .map_err(|e| internal(&e))?,
+                _ => None,
+            };
+            rules.insert(rule_id.clone(), (rule.map(|r| r.directory), work));
+        }
+        let (directory, work) = &rules[&rule_id];
+        let fresh = FailedGroup {
+            key: format!("add_failed:{rule_id}"),
+            context: "add_failed",
+            at: i64::MIN,
+            title: work
+                .as_ref()
+                .map(|w| w.name.clone())
+                .or_else(|| directory.clone())
+                .unwrap_or_else(|| item.title.clone()),
+            work: work.as_ref().map(|w| WorkLink {
+                id: w.id.clone(),
+                name: w.name.clone(),
+            }),
+            season: None,
+            episodes: Vec::new(),
+            count: 0,
+            reason: None,
+            channel_id: Some(item.channel_id.clone()),
+        };
+        add(
+            &mut groups,
+            fresh,
+            item.result_at,
+            item.reason.clone(),
+            None,
+        );
+    }
+
+    let ids: Vec<String> = groups
+        .iter()
+        .filter_map(|g| g.work.as_ref().map(|w| w.id.clone()))
+        .collect();
+    let covers = match ids.is_empty() {
+        true => HashMap::new(),
+        false => state
+            .artwork
+            .store
+            .image_ids_of(ids)
+            .await
+            .map_err(|e| internal(&e))?,
+    };
+    Ok(groups
+        .into_iter()
+        .map(|g| Todo::ReceiveFailed {
+            key: g.key,
+            at: g.at,
+            context: g.context,
+            work: g.work.map(|w| WorkRefView {
+                cover_url: covers.get(&w.id).map(|image| image_url(&w.id, image)),
+                id: w.id,
+                name: w.name,
+            }),
+            title: g.title,
+            season: g.season,
+            episodes: g.episodes,
+            count: g.count,
+            reason: g.reason,
+            channel_id: g.channel_id,
+        })
+        .collect())
 }

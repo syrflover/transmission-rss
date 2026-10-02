@@ -43,7 +43,9 @@ async fn run() -> Result<(), String> {
         format!("cannot open the app database (set {DB_PATH_ENV} to a file on a local volume): {e}")
     })?;
     // Cover images live in the app data folder: the database's folder.
-    let artwork = Artwork::new(db.clone(), Some(AppData::for_database(&db_path)), anilist);
+    let app_data = AppData::for_database(&db_path);
+    let receive = trss_jobs::ReceiveArea::in_app_data(app_data.root());
+    let artwork = Artwork::new(db.clone(), Some(app_data), anilist);
 
     let listener = TcpListener::bind(env.addr)
         .await
@@ -57,6 +59,7 @@ async fn run() -> Result<(), String> {
     let state = AppState::new(db.clone())
         .with_artwork(artwork)
         .with_anissia(Anissia::with_defaults(db, anissia))
+        .with_receive_area(&receive)
         .with_worker_wake(wake_path_for(&db_path));
     axum::serve(listener, web::router(&env.static_dir, state))
         .with_graceful_shutdown(web::shutdown_signal())

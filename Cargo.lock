@@ -2649,6 +2649,7 @@ dependencies = [
  "trss-collect",
  "trss-core",
  "trss-import",
+ "trss-jobs",
  "trss-library",
  "url",
 ]

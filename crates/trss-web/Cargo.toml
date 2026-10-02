@@ -10,6 +10,7 @@ trss-anilist.workspace = true
 trss-library.workspace = true
 trss-collect.workspace = true
 trss-import.workspace = true
+trss-jobs.workspace = true
 
 axum.workspace = true
 bytes.workspace = true

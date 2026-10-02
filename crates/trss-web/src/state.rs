@@ -10,6 +10,7 @@ use trss_collect::{
     },
 };
 use trss_core::{commands::CommandStore, heartbeat::HeartbeatStore, settings::SettingsStore, Db};
+use trss_jobs::{JobStore, ReceiveArea};
 use trss_library::{
     artwork::Artwork,
     seasons::Seasons,
@@ -53,6 +54,11 @@ pub struct AppState {
     /// Where the worker hears that a command was accepted
     /// ([`trss_core::wake`]); `None`: it finds the command at its own next look.
     pub worker_wake: Option<PathBuf>,
+    /// The subtitle jobs the worker carries out.
+    pub jobs: JobStore,
+    /// The receive area the worker puts the jobs' files in, for the paths the
+    /// job detail shows (the web never writes there).
+    pub receive_root: PathBuf,
 }
 
 impl AppState {
@@ -73,6 +79,8 @@ impl AppState {
             revisions: RevisionStore::new(db.clone()),
             past_search: PastSearch::new(SearchPace::new(db.clone())),
             worker_wake: None,
+            jobs: JobStore::new(db.clone()),
+            receive_root: PathBuf::from("receive"),
             // No app data folder: covers can be read and changed but no image
             // stored or served until `with_artwork` gives one.
             artwork,
@@ -89,6 +97,12 @@ impl AppState {
     /// [`trss_core::wake`]).
     pub fn with_worker_wake(mut self, path: PathBuf) -> Self {
         self.worker_wake = Some(path);
+        self
+    }
+
+    /// Shows the jobs' files in `area` (the app data folder's).
+    pub fn with_receive_area(mut self, area: &ReceiveArea) -> Self {
+        self.receive_root = area.root().to_owned();
         self
     }
 
