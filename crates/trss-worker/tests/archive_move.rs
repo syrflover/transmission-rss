@@ -1052,6 +1052,107 @@ async fn a_move_accepted_after_a_retry_into_its_work_folder_waits_for_it_and_tak
     );
 }
 
+#[tokio::test]
+async fn a_retry_accepted_while_a_move_waits_for_transmission_and_a_cycle_ends_still_runs() {
+    let s = Scene::new(true).await;
+    let c = s
+        .channel(
+            "feed-a",
+            &[
+                ("Clevatess", "Clevatess/Season 02"),
+                ("Other", "Other/Season 01"),
+            ],
+        )
+        .await;
+    s.seeding(
+        1,
+        "Clevatess S02E01.mkv",
+        &s.collect.join("Clevatess/Season 02"),
+    );
+    // Transmission refused the other rule's item: `다시 받기` is offered.
+    s.h.feeds
+        .set_xml("feed-a", &feed_xml(&[(3, "Other S01E01.mkv")]));
+    s.h.tr.reject_adds(Some("not today"));
+    assert!(matches!(
+        s.worker().tick(&CancellationToken::new()).await.unwrap(),
+        TickOutcome::Ran(_)
+    ));
+    s.h.tr.reject_adds(None);
+    s.h.feeds.set_xml("feed-a", &feed_xml(&[]));
+    let item = s.h.item("Other S01E01").await;
+    let worker = s.worker();
+
+    // A move waits for Transmission, holding the torrent gate.
+    let gate = s.h.tr.hold("torrent-set-location");
+    s.send("archive-gate-001", &c.rules[0].id, "archive").await;
+    let moving = tokio::spawn({
+        let worker = worker.clone();
+        async move { worker.run_commands(&CancellationToken::new()).await }
+    });
+    gate.wait_arrived().await;
+
+    // The same worker's cycle comes to its removal and leaves it for later:
+    // it goes on to count the torrents. (Its reading of the collect folder
+    // then waits for the move.)
+    let counts = || {
+        s.h.tr
+            .calls_of("torrent-get")
+            .iter()
+            .filter(|c| c.args["fields"] == json!(["status", "hashString"]))
+            .count()
+    };
+    let counted = counts();
+    s.h.advance(300_000);
+    let cycle = tokio::spawn({
+        let worker = worker.clone();
+        async move { worker.tick(&CancellationToken::new()).await }
+    });
+    for _ in 0..1000 {
+        if counts() > counted {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(counts() > counted, "the cycle waited at its removal");
+
+    // A retry in another work folder starts and ends all the same.
+    let (status, _, body) = s
+        .api
+        .call(
+            "POST",
+            "/api/commands",
+            Some(json!({
+                "id": "retry-gate-00001",
+                "kind": "receive_once",
+                "payload": { "item_id": item.id },
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    let ran = tokio::time::timeout(
+        Duration::from_secs(10),
+        worker.run_commands(&CancellationToken::new()),
+    )
+    .await
+    .expect("the retry waited behind the cycle's removal")
+    .unwrap();
+    assert_eq!(ran, CommandsOutcome::Ran(1));
+    let retry = s.command("retry-gate-00001").await;
+    assert_eq!(retry["outcome"]["result"], "received", "{retry}");
+
+    gate.release_all();
+    assert_eq!(moving.await.unwrap().unwrap(), CommandsOutcome::Ran(1));
+    let TickOutcome::Ran(report) = cycle.await.unwrap().unwrap() else {
+        panic!("expected a cycle")
+    };
+    assert!(report.commands_at_work);
+    assert!(report.removed.is_empty(), "{:?}", report.removed);
+    assert_eq!(
+        s.command("archive-gate-001").await["outcome"]["result"],
+        "moved"
+    );
+}
+
 // --- 10. waiting for Transmission ------------------------------------------------------------
 
 #[tokio::test]
