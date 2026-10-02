@@ -1,16 +1,14 @@
 [package]
 name = "trss-transmission"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
 
 [dependencies]
-# trname = { path = "../trname" }
-trname = { git = "https://github.com/syrflover/trname", rev = "6169808" }
+trname.workspace = true
 
-regex = "1"
-# The version transmission-rpc uses, for the timed client handed to it.
-reqwest012 = { package = "reqwest", version = "0.12", default-features = false }
-tokio = { version = "1", features = ["macros", "time"] }
-tokio-util = "0.7"
-transmission-rpc = "0.5"
-url = "2"
+regex.workspace = true
+reqwest012.workspace = true
+tokio = { workspace = true, features = ["macros", "time"] }
+tokio-util.workspace = true
+transmission-rpc.workspace = true
+url.workspace = true

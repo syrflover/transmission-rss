@@ -1,13 +1,13 @@
 [package]
 name = "trss-import"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
 
 [dependencies]
-trss-core = { path = "../trss-core" }
-trss-collect = { path = "../trss-collect" }
+trss-core.workspace = true
+trss-collect.workspace = true
 
-regex = "1"
-serde = { version = "1", features = ["derive"] }
-yaml_serde = "0.10"
-url = "2"
+regex.workspace = true
+serde = { workspace = true, features = ["derive"] }
+yaml_serde.workspace = true
+url.workspace = true

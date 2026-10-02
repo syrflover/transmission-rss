@@ -1,7 +1,7 @@
 [package]
 name = "trss-core"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
 
 [features]
 # `db::database_at`, for the tests of the crates above that start from an
@@ -9,15 +9,14 @@ edition = "2021"
 test-support = []
 
 [dependencies]
-rusqlite = { version = "0.40", features = ["bundled"] }
-# `renameat2` with `RENAME_NOREPLACE`, without `unsafe`.
-rustix = { version = "1", features = ["fs"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-thiserror = "2"
-tokio = { version = "1", features = ["rt", "macros", "time"] }
-tokio-util = "0.7"
+rusqlite.workspace = true
+rustix.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "macros", "time"] }
+tokio-util.workspace = true
 
 [dev-dependencies]
-tempfile = "3.27.0"
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

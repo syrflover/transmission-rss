@@ -1,7 +1,7 @@
 [package]
 name = "trss-library"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
 
 [features]
 # What the tests of the crates above need from this one: the sample images and
@@ -9,30 +9,28 @@ edition = "2021"
 test-support = ["trss-anilist/test-support", "dep:image"]
 
 [dependencies]
-trss-core = { path = "../trss-core" }
-trss-anilist = { path = "../trss-anilist" }
+trss-core.workspace = true
+trss-anilist.workspace = true
 
 # Image bytes shared between the web, the decode and the file writer without copies.
-bytes = "1"
-regex = "1"
-rusqlite = { version = "0.40", features = ["bundled"] }
-# The directory watches (inotify), without `unsafe`.
-rustix = { version = "1", features = ["fs"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-sha2 = "0.10"
-thiserror = "2"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync"] }
-tokio-util = "0.7"
-unicode-normalization = "0.1.25"
-uuid = { version = "1", features = ["v4"] }
+bytes.workspace = true
+regex.workspace = true
+rusqlite.workspace = true
+rustix.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync"] }
+tokio-util.workspace = true
+unicode-normalization.workspace = true
+uuid.workspace = true
 # Makes the sample images of the tests (`artwork::image::samples`); the app reads only headers.
-image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"], optional = true }
+image = { workspace = true, optional = true }
 
 [dev-dependencies]
-trss-core = { path = "../trss-core", features = ["test-support"] }
-trss-anilist = { path = "../trss-anilist", features = ["test-support"] }
-futures = "0.3"
-# Makes the sample images of the tests; the app reads only headers.
-image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
-tempfile = "3.27.0"
+trss-core = { workspace = true, features = ["test-support"] }
+trss-anilist = { workspace = true, features = ["test-support"] }
+futures.workspace = true
+image.workspace = true
+tempfile.workspace = true
