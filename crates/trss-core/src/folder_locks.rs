@@ -23,6 +23,11 @@
 //! not followed). Two sections conflict when a folder of one overlaps a folder
 //! of the other and their kinds exclude each other as above.
 //!
+//! The table knows only the names it is given. A folder reached through a
+//! link, or named before a setting changed which folder the work will touch,
+//! is not seen as the same folder: the work itself still checks what it finds
+//! on disk, and the turns only keep the usual paths apart.
+//!
 //! Turns are first come, first served: [`FolderLocks::reserve`] puts a section
 //! in line at once, and [`Reservation::ready`] waits until no section that came
 //! before it and conflicts with it is left, whether that one is at work or

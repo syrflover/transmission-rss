@@ -369,7 +369,6 @@ fn failed(reason: impl Into<String>) -> Finished {
     }
 }
 
-/// Runs an `episode_undo` command to its end.
 /// The turn the command takes before it runs: a write of the work folder the
 /// rule saves into ([`rule_work_folder`]). Empty when the request, the rule or
 /// the collect folder cannot be found: the command then ends by itself.
@@ -391,7 +390,8 @@ pub async fn section(ctx: &UndoContext, command: &Command) -> Result<Section, Re
     Ok(Section::new().write(rule_work_folder(Path::new(&collect.folder), &rule)))
 }
 
-/// Runs the command, with its turn ([`section`]) taken.
+/// Runs an `episode_undo` command to its end, with its turn ([`section`])
+/// taken.
 pub async fn run(ctx: &UndoContext, command: &Command, clock: &Clock) -> Result<Finished, Retry> {
     let Ok(payload) = serde_json::from_str::<EpisodeUndo>(&command.payload) else {
         return Ok(failed("요청 내용을 읽지 못했어요."));
