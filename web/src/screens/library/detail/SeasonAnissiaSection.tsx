@@ -19,13 +19,11 @@ import { SeasonAnissiaDialog } from "./SeasonAnissiaDialog";
  */
 export function SeasonAnissiaSection({
   workId,
-  workName,
   link,
   seasonCount,
   onChanged,
 }: {
   workId: string;
-  workName: string;
   link: AnissiaLink;
   seasonCount: number;
   /** Called with the link after any change (and with the current one after a conflict). */
@@ -39,16 +37,26 @@ export function SeasonAnissiaSection({
   // Another season's message never stays.
   useEffect(() => setError(null), [season]);
 
+  // A change that came back as the current link: when a subscription holds the
+  // season by now, the dialog goes away with the buttons, so say why.
+  const changed = (next: AnissiaLink) => {
+    if (next.subscription && !link.subscription) {
+      setError("그 사이 이 시즌이 구독에 이어졌어요. 연결은 구독을 따라가요.");
+    }
+    onChanged(next);
+  };
+
   const cut = async () => {
     if (busy) return;
     setBusy(true);
     setError(null);
     try {
-      onChanged(await setAnissiaLink(workId, season, link.version, null));
+      changed(await setAnissiaLink(workId, season, link.version, null));
     } catch (e) {
       if (e instanceof ApiError && e.code === "conflict" && e.current) {
-        onChanged(e.current as AnissiaLink);
-        setError("다른 곳에서 먼저 바꿨어요. 지금 연결을 보여드려요.");
+        const current = e.current as AnissiaLink;
+        changed(current);
+        if (!current.subscription) setError("다른 곳에서 먼저 바꿨어요. 지금 연결을 보여드려요.");
       } else {
         setError(e instanceof ApiError ? e.message : "연결을 끊지 못했어요.");
       }
@@ -113,9 +121,10 @@ export function SeasonAnissiaSection({
 
       {subscription && (
         <p className={cn(hintClass, "mt-2.5")} data-testid="season-anissia-subscribed">
-          이 시즌은 구독{subscription.subject ? ` ‘${subscription.subject}’` : ""}에 이어져 있어서 여기서는 바꿀 수 없어요.{" "}
+          이 시즌은 구독{subscription.subject ? ` ‘${subscription.subject}’` : ""}을 따라가고 있어서 연결을 바꿀 수 없어요. 다른 작품에 잇고 싶으면 그 구독을 먼저 삭제해 주세요. 삭제해도
+          시즌의 연결은 남고, 그 뒤 여기서 바꾸거나 끊을 수 있어요.{" "}
           <Link to={`/collect/rules?rule=${encodeURIComponent(subscription.rule_id)}`} className="text-focus underline underline-offset-2">
-            구독에서 바꾸기
+            구독 열기
           </Link>
         </p>
       )}
@@ -125,7 +134,7 @@ export function SeasonAnissiaSection({
         </p>
       )}
 
-      {!subscription && <SeasonAnissiaDialog workId={workId} workName={workName} link={link} open={editing} onOpenChange={setEditing} onChanged={onChanged} />}
+      {!subscription && <SeasonAnissiaDialog workId={workId} link={link} open={editing} onOpenChange={setEditing} onChanged={changed} />}
     </section>
   );
 }

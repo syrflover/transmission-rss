@@ -363,7 +363,6 @@ function Loaded({
             <SeasonAnissiaSection
               key={`anissia-${season.number}`}
               workId={work.id}
-              workName={work.name}
               link={season.anissia}
               seasonCount={work.seasons.length}
               onChanged={onAnissiaChanged}

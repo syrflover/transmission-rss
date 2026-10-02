@@ -13,6 +13,9 @@ import { btnNeutral, btnPrimary, hintClass, inputClass } from "../../collect/cha
 import { searchAnissia, setAnissiaLink, type AnissiaCandidate, type AnissiaLink, type AnissiaSource } from "../api";
 import { anissiaStatusText as statusText } from "./model";
 
+/** The most pages of one search the server answers. */
+const MAX_PAGE = 100;
+
 type Tab = "list" | "schedule";
 
 /** The anime picked, and where it was picked from (the server checks it against that list). */
@@ -45,14 +48,12 @@ const dates = (c: AnissiaCandidate) => {
  */
 export function SeasonAnissiaDialog({
   workId,
-  workName,
   link,
   open,
   onOpenChange,
   onChanged,
 }: {
   workId: string;
-  workName: string;
   link: AnissiaLink;
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -80,7 +81,7 @@ export function SeasonAnissiaDialog({
               </svg>
             </Dialog.Close>
           </div>
-          <Body workId={workId} workName={workName} link={link} onClose={() => onOpenChange(false)} onChanged={onChanged} />
+          <Body workId={workId} link={link} onClose={() => onOpenChange(false)} onChanged={onChanged} />
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
@@ -89,13 +90,11 @@ export function SeasonAnissiaDialog({
 
 function Body({
   workId,
-  workName,
   link,
   onClose,
   onChanged,
 }: {
   workId: string;
-  workName: string;
   link: AnissiaLink;
   onClose: () => void;
   onChanged: (link: AnissiaLink) => void;
@@ -164,7 +163,7 @@ function Body({
 
       {/* Both tabs stay mounted, so a search and its place survive switching. */}
       <div hidden={tab !== "list"}>
-        <FullList workId={workId} season={link.season} initial={workName} picked={picked} onPick={setPicked} />
+        <FullList workId={workId} season={link.season} picked={picked} onPick={setPicked} />
       </div>
       <div hidden={tab !== "schedule"}>
         <PickAnime
@@ -202,26 +201,27 @@ function Body({
 function FullList({
   workId,
   season,
-  initial,
   picked,
   onPick,
 }: {
   workId: string;
   season: number;
-  initial: string;
   picked: Picked | null;
   onPick: (picked: Picked) => void;
 }) {
-  const [query, setQuery] = useState(initial);
+  // Empty until the first answer: the server chooses what is searched first.
+  const [query, setQuery] = useState("");
   const [results, setResults] = useState<{ q: string; rows: Row[]; page: number; hasNext: boolean } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const search = async (q: string, page: number) => {
+  const search = async (q: string, page: number, first = false) => {
     setLoading(true);
     setError(null);
     try {
       const answer = await searchAnissia(workId, season, q, page);
+      // The text the server searched for, for the user to edit.
+      if (first) setQuery(answer.q);
       const rows = answer.items.map((candidate) => ({ candidate, page: answer.page }));
       setResults((prev) => ({
         q: answer.q,
@@ -236,12 +236,12 @@ function FullList({
     }
   };
 
-  // The folder name is searched as soon as the dialog opens.
+  // The first query (the season's AniList title in Japanese, else the work's folder name) is searched as soon as the dialog opens.
   const started = useRef(false);
   useEffect(() => {
     if (started.current) return;
     started.current = true;
-    void search(initial, 1);
+    void search("", 1, true);
   }, []);
 
   const submit = (event: FormEvent) => {
@@ -258,7 +258,7 @@ function FullList({
           검색
         </Button>
       </form>
-      <p className={hintClass}>방영이 끝난 작품도 찾아요. 작품 폴더 이름으로 먼저 찾았으니, 맞는 게 없으면 검색어를 고쳐 보세요.</p>
+      <p className={hintClass}>방영이 끝난 작품도 찾아요. 먼저 찾은 검색어(AniList에 이은 시즌이면 그 일본어 제목, 아니면 작품 폴더 이름)가 맞지 않으면 고쳐 보세요.</p>
       {error && (
         <p role="alert" className="text-[13px] leading-relaxed font-semibold text-urgent">
           {error}
@@ -297,7 +297,7 @@ function FullList({
         </ul>
       )}
       {loading && <p className={hintClass}>Anissia에서 찾는 중이에요.</p>}
-      {results?.hasNext && !loading && (
+      {results?.hasNext && results.page < MAX_PAGE && !loading && (
         <Button type="button" variant="ghost" className={cn(btnNeutral, "self-start")} onClick={() => void search(results.q, results.page + 1)}>
           결과 더 보기
         </Button>
