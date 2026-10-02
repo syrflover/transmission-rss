@@ -328,9 +328,140 @@ CAPTCHA나 로그인은 요구되지 않았으며, 게시물의 안부게시판 
 
 관리형 Chromium에서도 내부 프레임의 정상 첨부 링크를 클릭했지만, 다운로드 API가 수신을 보고하지 않았고 이후 탭 세션이 닫혀 브라우저의 파일 저장은 확인하지 못했어요.
 HTTP 수신 성공을 브라우저 다운로드 처리나 첨부 URL의 유효기간·세션 종속성 검증으로 대체하지 않아요.
+브라우저 다운로드는 아래 2026-10-02 재확인에서 폴더에 떨어지는 것을 확인했어요.
 
 표본과 실험용 임시 파일은 검사 후 제거했으며, 서명 URL·쿠키·인증 토큰·자막 본문은 저장소에 보관하지 않았어요.
 인증이 필요하지 않았던 표본의 성공은 erulabo의 인증 후 재개를 입증하지 않아요.
+
+#### 2026-10-02 경로별 재확인
+
+[티켓 0033](../tickets/0033-source-paths-spike.md)에서 여섯 경로를 새 표본으로 다시 확인했어요.
+표본은 [Anissia 최근 자막 API](https://api.anissia.net/anime/caption/recent/0)의 70줄과, 편성표 API로 고른 방영 중 작품 45개의 작품별 자막 API(`/anime/caption/animeNo/<n>`) 55줄에서 골랐고, 경로마다 서로 다른 게시물 둘 이상이에요.
+
+방법은 두 가지예요.
+하나는 호스트마다 2초 이상 간격으로 하나씩 요청하는 Python HTTP 클라이언트(일반 브라우저 `User-Agent`, 쿠키 없음)이고, 다른 하나는 새 프로필의 Chromium 153을 헤드리스로 직접 실행해 CDP로 제어하는 도구예요(둘 다 `.scratch/source-paths/`의 임시 실행물이며 추적하지 않아요).
+브라우저에서는 `User-Agent` 문자열 외에 아무것도 바꾸지 않았고, 다운로드 폴더를 지정해 두고 클릭한 뒤 그 폴더에 파일이 생겼는지 봤어요.
+이 브라우저는 개발 PC의 헤드리스 Chromium이며 서버 컨테이너가 아니므로, 컨테이너에서의 수신은 [0032](../tickets/0032-server-browser-spike.md)·[0039](../tickets/0039-browser-container-lifecycle.md)의 일이에요.
+서명 URL·쿠키·토큰·자막 본문은 저장소에 두지 않았고 받은 파일은 `.scratch/`에만 있어요.
+경로 하나에 제작자 둘 안팎이라 표본 밖으로 일반화하지 않아요.
+
+| 경로 | 표본(게시물) | 받은 방법 | 인증 | 서버 폴더에 떨어진 파일 |
+| --- | --- | --- | --- | --- |
+| erulabo | [859](https://erulabo.com/859), [855](https://erulabo.com/855) | HTTP로 게시물과 카드까지만, 이후는 브라우저와 사람 | 카드를 누르면 Turnstile | 받지 않았어요(0032에서 사람이 확인) |
+| Blogger·Drive 개별 | C소라 [2026/10/2](https://csora556.blogspot.com/2026/10/2.html)·[2026/07/2](https://csora556.blogspot.com/2026/07/2.html), 카이란 [re-4th-19](https://kairan03.blogspot.com/2026/09/re-4th-19.html) | HTTP 3건, 브라우저 1건 | 없음 | ASS 48,179·48,431·70,424바이트 |
+| Blogger·Drive 회차 ZIP | C소라 [season-3](https://csora556.blogspot.com/2026/07/season-3.html)·[bang-dream](https://csora556.blogspot.com/2026/07/bang-dream.html), 별명따위 [4-2496](https://bluewater91.blogspot.com/2026/09/4-2496.html) | HTTP 3건, 브라우저 1건 | 없음 | ZIP 183,503·195,852·11,879바이트 |
+| Tistory 일반 첨부 | 스모모 [492](https://sumomomo.tistory.com/492)·[491](https://sumomomo.tistory.com/491) | HTTP 2건, 브라우저 1건 | 없음 | ZIP 11,379·11,724바이트 |
+| Tistory WinPNG | 하느 [763](https://harne1.tistory.com/763)·[761](https://harne1.tistory.com/761)·[762](https://harne1.tistory.com/762) | 브라우저(사이트의 뷰어 스크립트)만 | 없음 | 뷰어가 만든 SMI 325,527바이트 등 |
+| Naver 블로그 첨부 | 수퍼소닉EX [224428424028](https://blog.naver.com/gkdlfn0850/224428424028)·[224423843634](https://blog.naver.com/gkdlfn0850/224423843634)·[224423741506](https://blog.naver.com/gkdlfn0850/224423741506) | HTTP 3건, 브라우저 2건 | 없음 | ASS 44,155바이트, ZIP 471,381바이트 |
+
+##### erulabo
+
+- 게시물은 로그인·CAPTCHA 없이 HTTP 200(서버 렌더링, 약 170KB)으로 읽혀요.
+  파일 위치의 단서는 `button.og-link-button[data-file-url="/file/<uuid>"]` 카드 하나예요. 카드 제목이 `전생귀족3 (1)`·`헬모드2 (13)`처럼 작품과 `(회차)`이고, 설명에 릴리스 표기(`SubsPlease 1080p, Pretendard`)가 있어요.
+  게시물 제목도 `… 자막 (1)`처럼 회차로 끝나고, 게시물 하나에 카드 하나, 회차마다 새 게시물이에요(Anissia 줄의 주소가 837·850·853·854·855·859로 모두 달라요).
+- 브라우저로 열어도 카드를 누르기 전에는 Turnstile 위젯과 점검 화면이 없어요(스크립트만 미리 읽어요).
+  카드를 누르면 `/file/<id>/token`으로 이어지는 흐름은 [다운로드 스크립트](https://erulabo.com/js/download.js?v=20260923-1)에서 읽었고 2026-09-25의 기록과 같아요.
+  카드를 누르지 않았고 CAPTCHA를 어떤 방식으로도 건드리지 않았어요.
+- 서명 URL의 유효 시간(60초)은 2026-09-26의 관찰이며 이번에 다시 보지 못했어요.
+  카드 이후의 응답·파일 이름·크기·헤더는 사람이 인증해야 보이므로 0032에서 확인할 일이에요.
+
+##### Blogger·Google Drive 개별 자막
+
+- 단서는 게시물 본문의 `drive.google.com/file/d/<id>/view?usp=sharing` 링크와 링크 글자(`15화`, `24화`, 글꼴은 `폰트`)예요.
+  C소라의 2026/07/2 게시물은 13~24화 링크 열둘과 글꼴 링크를 한 게시물에 두고, 카이란의 게시물은 글자 없는 링크 하나예요.
+- HTTP가 충분해요. `GET drive.google.com/uc?export=download&id=<id>`가 `drive.usercontent.google.com/download`로 넘어간 뒤 200, `application/octet-stream`, `Content-Disposition: attachment`(파일 이름은 `filename*` 없이 UTF-8 바이트 그대로), `Content-Length`, `Last-Modified`를 줘요.
+  쿠키·로그인·CAPTCHA 없이 세 파일을 받았고, 모두 UTF-8 BOM의 ASS이며 `[Events]`와 Dialogue 528·506·680줄을 확인했어요.
+- 브라우저도 확인했어요. Drive 보기 페이지의 `다운로드` 버튼(aria-label) 한 번으로 24화 ASS(48,431바이트)가 폴더에 떨어졌고 HTTP로 받은 것과 바이트가 같아요.
+- 서명 URL이 없고 파일 ID로 주소가 늘 같아서 다시 얻을 것이 없어요.
+- 오류 신호: 없는 ID는 404, `text/html`, 1,704바이트의 `Error 404` 페이지예요. 접근 제한·할당량 화면은 보지 못했어요.
+- 카이란의 파일은 이름이 `… 19화 미완성(2).ass`, 스크립트 제목이 `마커표시본`인 임시본이었어요. 받은 바이트만으로 최종본인지 알 수 있는지는 미상이에요.
+
+##### Blogger·Google Drive 회차 ZIP
+
+- 단서는 링크 글자 `1 ~ 12화`·`1 ~ 13화`(C소라)나 파일 이름 `… 4 24.zip`(별명따위의 `uc?authuser=0&id=<id>&export=download` 링크)이에요.
+  같은 게시물에 `폰트` 링크와, 별명따위는 `자막 모음(작업 중)` 폴더 링크(`drive/folders/<id>`)도 있어요. 폴더 링크는 따라가 보지 않았어요.
+- 받는 방법은 개별 파일과 같아요. HTTP로 세 ZIP을 받아 CRC 검사를 통과했어요.
+  Grand Blue 183,503바이트(ASS 12개, 합 594,547바이트, 2026-09-26 표본과 크기가 같아요), BanG Dream 195,852바이트(ASS 13개 `BanG Dream! Yumemita 01~13.ass`), 별명따위 11,879바이트(SMI 하나 64,262바이트)예요. BanG Dream ZIP은 브라우저의 `다운로드` 버튼으로도 받아 HTTP와 바이트가 같았어요.
+- 별명따위 ZIP은 멤버 이름이 UTF-8 표시 없는 CP949 한글이고 수정 시각이 2107-12-31이에요. 분석 쪽에서 이름 인코딩을 다뤄야 해요.
+- 2026-09-26에 개별 링크가 있던 Grand Blue 게시물은 지금 ZIP 링크 하나만 남아 있어요. 게시물에 `수정 이력`이 적혀 있고 같은 주소를 고친 거예요.
+
+##### Tistory 일반 첨부
+
+- 게시물은 HTTP 200(약 57KB, 스크립트 없이 읽혀요)이에요.
+  단서는 `.fileblock a[href]`이고 파일 이름은 `.filename .name`, 크기는 `.size`(`0.01MB`로 거칠어요)예요. 파일 하나에 `blog.kakaocdn.net/dna/…/<파일 이름>.zip?credential&expires&signature&attach=1&knm=tfile.zip` 주소가 달려 있어요.
+- 이 주소에 쿠키·Referer 없이 GET하면 200, `application/octet-stream`, `Content-Disposition: attachment`예요. SRT 하나가 든 ZIP 11,379·11,724바이트를 받았고 CRC 검사와 SRT 시각표(425·397줄)를 확인했어요.
+  브라우저에서 링크를 한 번 눌러도 같은 ZIP이 폴더에 떨어졌어요(HTTP와 바이트가 같아요).
+- 서명 URL의 `expires`는 1793458799, 곧 2026-10-31 23:59:59 KST이고, 오늘 읽은 모든 게시물의 모든 파일이 같은 값이에요(남은 기간 약 29일). 게시물을 다시 읽어도 같은 주소가 나와요.
+  새 주소는 게시물을 다시 읽으면 얻어요. `expires`나 `signature`를 바꾼 주소와 `HEAD`는 404, `text/html`, 552바이트의 `404 Not Found`(openresty) 페이지예요. 월이 바뀐 뒤 실제 만료는 보지 못했어요.
+- 회차 표시가 다른 사례: 492는 Anissia 줄이 12인데 파일은 `Seihantai - 24.zip`이고 게시물 제목이 `24화`예요. 같은 작품의 C소라 줄은 24예요(누적 회차를 쓰는 제작자예요).
+
+##### Tistory WinPNG
+
+- 게시물(HTTP 200, 약 39KB)의 본문 이미지 가운데 주소가 `.png`로 끝나는 `blog.kakaocdn.net/dna/…/img.png` 하나가 WinPNG예요(다른 이미지는 `img1.daumcdn.net/thumb` 변환 주소예요). 스킨에 `WinPNG Viewer` 링크(`#btnWinPng`)도 있어요.
+  이 PNG는 서명 URL이 Tistory 첨부와 같은 달 말 만료이고 HTTP로 200 `image/png`(762는 589,852바이트)로 받아져요.
+- 파일은 스킨의 `Viewer.js`·`WinPNG.js`(모듈, 1,200여 줄)가 브라우저에서 복원해요. 본문 PNG를 누르면 뷰어가 PNG를 읽어 파일 목록(`#viewFileList`)과 blob 링크를 만들고, 링크를 누르면 브라우저 다운로드가 폴더에 파일을 떨어뜨려요(763의 SMI 325,527바이트를 확인했어요).
+  PNG 안의 파일을 HTTP만으로 꺼내는 길은 시도하지 않았어요(복원 코드가 캔버스와 여러 형식 버전, 키 입력을 써요).
+- 내용은 게시물마다 달랐어요.
+  763은 JMK(Jamaker 프로젝트) 하나가 들어 있고 뷰어가 변환기(`Subtitle.Converter.js`)로 SMI(325,527바이트, SYNC 2,964개)와 ASS(170,855바이트, Dialogue 1,784줄)를 만들어요.
+  761은 1~12화의 JMK 열둘과 회차별 방송 예고(`WEB予告`) JMK 열둘이 한 PNG에 들어 있고, 파일마다 SMI·ASS 변환 링크가 붙어요.
+  762는 SMI 열둘(01~12화)이 그대로 들어 있고 모두 UTF-8 BOM의 `<SAMI>`예요.
+  회차를 고르는 단서는 파일 이름 `[SubsPlease] Mebius Dust - 12 (1080p) [7624D7BF].smi`이며 릴리스 이름과 CRC32를 담고 있어요.
+- 761·762는 한 PNG가 시리즈 전체라서 Anissia 줄(12)의 회차 표시와 파일 수가 달라요.
+- 762의 12화는 2026-09-26 표본(32,355바이트)과 지금(33,627바이트)이 달라요. 게시물 수정 시각이 09-27 15:47로 그 사이예요. 파일 변경인지 뷰어 스크립트 버전(`Subtitle.Converter.js?260929v2`) 변경인지는 가르지 못했어요.
+- 오류 신호: WinPNG가 아닌 PNG를 뷰어에 넣으면 `이미지를 해석할 수 없습니다. 비밀번호가 있다면 키를 입력하세요.` 입력창이 뜨고 파일 목록이 비어 있어요. 키가 필요한 실제 이미지는 보지 못했어요.
+
+##### Naver 블로그 첨부
+
+- `blog.naver.com/<blogId>/<logNo>`는 2.9KB의 프레임 틀이고, 본문은 `PostView.naver?blogId=<id>&logNo=<n>&redirect=Dlog&widgetTypeCall=true&noTrackingCode=true&directAccess=false`(HTTP 200, 약 210KB)에 있어요.
+  단서는 `a.se-file-save-button`의 `https://download.blog.naver.com/open/<42자 조각>/<토큰>/<파일 이름>` 주소와, 같은 페이지의 `aPostFiles` JSON이에요. JSON에는 파일 이름, 정확한 크기(`attachFileSize`: `44,155`), 악성·제한 표시(`maliciousCodeYn`, `punishType`, `ahfLicenseYn`)가 있어요.
+  글꼴(TTF)도 첨부로 같이 올라오므로 확장자로 가려야 해요.
+- HTTP GET은 쿠키·Referer 없이 200, `application/octet-stream`, `Content-Disposition: attachment; filename*=UTF-8''…`예요. SMI(UTF-16LE BOM, SYNC 677개, 76,408바이트), ZIP(SMI 49개 `통합자막.zip`, 471,381바이트, CRC 통과), ASS(UTF-8 BOM, Dialogue 382줄, 44,155바이트)를 받았고 크기는 `attachFileSize`와 같아요.
+- 브라우저에서도 받았어요. 저장 버튼을 한 번 누르면 `내 컴퓨터 저장`/`네이버 MYBOX에 저장` 선택 칸이 열릴 뿐이고(`se.22` 모듈이 첫 클릭의 기본 동작을 막아요), `내 컴퓨터 저장`을 한 번 더 눌러야 `window.open`으로 다운로드가 시작돼요. 프레임 안의 글(`blog.naver.com/<id>/<n>`)과 `PostView` 직접 열기 모두 같은 결과이고 HTTP와 바이트가 같았어요.
+  2026-09-26에 다운로드가 보고되지 않았던 까닭은 첫 클릭이 선택 칸만 연 것과, 새 창이 시작하는 다운로드의 `Browser.download*` 이벤트를 페이지 연결에서 받지 못한 것으로 보여요. 이번에도 이벤트는 오지 않았지만 파일은 폴더에 떨어졌으므로 폴더를 보고 판단해야 해요.
+- 다운로드 주소의 토큰은 게시물을 읽을 때마다 바뀌어요(첫 조각의 앞부분은 같고 뒤쪽 10자 안팎이 읽을 때마다 달라요). 먼저 받은 주소는 20분 넘게 계속 쓸 수 있었어요. 새 주소는 `PostView`를 다시 읽으면 얻어요.
+  토큰을 바꾸면 400, `text/html`, 3,452바이트의 HTML이에요.
+- 두 번째 제작자(zerocard2의 SMI 83,710바이트)와 elainalove1017의 글(`네죽사 1~8화 자막.zip` 106,408바이트와 ASS 하나)은 파일 정보만 읽고 받지 않았어요.
+
+##### 게시물의 파일 정보를 다시 읽는 비용
+
+Anissia 줄이 그대로인 게시물 수정이 실제로 있었는지와, 인증 없이 읽을 수 있는 값을 봤어요.
+
+| 경로 | 인증 없이 다시 읽는 값 | 비용 |
+| --- | --- | --- |
+| erulabo | 게시물의 `dateModified`·카드 제목. 파일 크기·해시는 인증 뒤에야 보여 미상이에요. | 게시물 GET 약 170KB |
+| Blogger·Drive | 파일 `Last-Modified`·`Content-Length`(`HEAD`로 읽어요), 게시물의 링크 목록과 JSON-LD `dateModified` | 파일당 `HEAD`(본문 없음), 링크 목록은 게시물 GET 90~220KB |
+| Tistory 일반 | 게시물의 `article:modified_time`·파일 이름·거친 크기, 파일 주소에 `Range: bytes=0-0`을 건 응답의 정확한 전체 크기(206, 1바이트) | 게시물 GET 40~60KB + 파일당 1바이트 |
+| Tistory WinPNG | 게시물의 `article:modified_time`, PNG 주소의 `Range` 응답에서 PNG 전체 크기 | 같음. 뷰어가 만드는 SMI·ASS 바이트는 PNG를 복원해야 알아요 |
+| Naver | `aPostFiles`의 파일 이름·정확한 크기, 파일 주소 `HEAD`의 `Content-Length`. 수정 시각은 없고 작성 시각은 하루가 지나야 절대 시각이에요 | 게시물 GET 약 210KB |
+
+- Tistory·Drive·Naver 모두 `ETag`는 없었고, Drive만 `Last-Modified`가 있어요.
+- 수정이 실제로 있었어요. 게시물 수정 시각이 Anissia 줄의 `updDt`보다 58시간 이상 늦은 게시물이 열한 곳 가운데 넷이었어요(하느 761·762, 스모모 461, C소라 season-3).
+  Drive 파일은 여섯 개 가운데 둘이 `updDt`보다 13시간(별명따위 ZIP)·20시간(카이란 ASS) 뒤에 바뀌었고, 나머지 넷은 `updDt`보다 15분 안쪽 앞이었어요.
+  이 시각은 게시물 수정이 곧 파일 변경이라는 뜻은 아니에요(글만 고쳐도 수정 시각은 바뀌어요).
+
+##### Anissia 줄의 관찰
+
+- 회차 표시 `0`: 작품별 자막 API 55줄 가운데 24줄이 `0`이고 그중 22줄은 주소가 비어 있었어요(아직 올리지 않은 줄로 보이지만 확인은 못 했어요).
+  주소가 있으면서 `0`인 줄은 셋이에요. 극장판 게시물(스모모 420, 회차 번호 없는 `…Paradise.zip`), 유튜브 영상 주소(하느), 블로그 첫 화면 주소(코코렛, 2023년)예요.
+  최근 자막 목록은 주소가 있는 줄만 주므로 70줄 가운데 `0`은 앞의 둘뿐이었어요.
+  `0`이 등록 기본값이 남은 것인지 제작자가 고른 값인지는 미상이에요.
+- 최근 70줄의 호스트는 Blogger 32, Tistory 24, Naver 7, erulabo 6, 유튜브 1로, 여섯 경로가 69줄을 덮어요. 유튜브 주소 같은 여섯 경로 밖의 주소가 줄에 올 수 있어요.
+- 여러 회차를 담은 게시물은 열어 본 20개 가운데 7개예요(하느 761·762의 PNG, C소라 season-3·bang-dream의 ZIP, C소라 2026/07/2의 회차별 링크 열둘, 수퍼소닉EX의 49개 SMI ZIP, elainalove1017의 1~8화 ZIP). 나머지 13개는 회차 하나예요.
+  제작자의 습관에 몰려 있고 끝난 작품의 마지막 게시물에 많아서, 비율을 일반화하지 않아요.
+- 줄의 주소 변화: Anissia는 한 시점의 줄만 보여 주므로 같은 제작자·작품의 주소가 회차마다 바뀌었는지는 직접 보지 못했고, 아래는 주소·제목·시각에서 읽은 추정이에요.
+  erulabo·스모모(Tistory)·수퍼소닉EX(Naver)는 회차 번호가 게시물 제목이나 주소에 들어 있고 같은 제작자의 줄마다 서로 다른 게시물이라 회차마다 새 게시물로 보여요.
+  C소라·에텔레로사·이마이는 한 게시물을 고쳐 가요. Blogger 32줄 가운데 게시물 연월이 `updDt`보다 앞서는 줄이 15개이고(C소라 9, 에텔레로사 4, 카이란 1, 이마이 1), 이때 주소는 그대로고 회차 표시와 `updDt`만 바뀌는 것으로 보여요(C소라의 2026/07/2 게시물에는 13~24화 링크가 모두 있어요).
+  Naver의 elainalove1017도 06-23에 쓴 한 게시물이 줄의 `updDt`(08-28)까지 이어졌어요.
+- Anissia API의 `updDt`는 `2026-10-02T11:17:00`처럼 `T`로 이은 시간대 없는 값으로 왔어요(공식 문서의 예는 `2012-02-01 00:00:00`).
+
+##### 이번에 검증하지 못한 것
+
+- erulabo 카드 이후의 수신 전부(인증 이후의 `download_url`·파일·헤더).
+- WinPNG를 브라우저 밖에서 복원하는 길, 키가 필요한 이미지, 뷰어 스크립트가 바뀐 뒤의 결과.
+- Drive의 할당량·바이러스 검사 화면, 큰 파일, 폴더 링크, 비공개 파일.
+- Tistory 서명 URL이 월 말을 지난 뒤의 실제 만료, Naver 토큰의 최대 유효 시간, 모든 출처의 429·차단 응답.
+- 서버 컨테이너 안의 브라우저 수신과 휴대폰·VPN 경로. 이번 브라우저 확인은 개발 PC의 헤드리스 Chromium이에요.
+- 게시물 수정이 곧 파일 변경인지(글만 고친 경우와의 구분), 파일 변경을 Anissia 줄 없이 감지하는 주기의 효과.
 
 ### 주요 출처 erulabo의 보안 확인
 
