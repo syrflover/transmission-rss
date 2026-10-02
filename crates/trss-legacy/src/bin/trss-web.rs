@@ -3,7 +3,7 @@ use std::process::ExitCode;
 use std::path::PathBuf;
 use tokio::net::TcpListener;
 
-use transmission_rss::{
+use trss_legacy::{
     anissia::{Anissia, AnissiaConfig},
     artwork::{AnilistConfig, AppData, Artwork},
     store::{db::DB_PATH_ENV, Db},

@@ -7,7 +7,7 @@ mod common;
 use common::*;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
-use transmission_rss::{
+use trss_legacy::{
     store::status::StatusStore,
     worker::{CycleReport, TickOutcome, Worker},
 };
@@ -88,7 +88,7 @@ async fn a_failed_read_keeps_when_the_last_good_one_was() {
 /// count their 4 weeks in.
 async fn read_days_of(h: &Harness, channel_id: &str) -> Vec<i64> {
     let channel_id = channel_id.to_owned();
-    h.db.run::<_, transmission_rss::store::DbError, _>(move |c| {
+    h.db.run::<_, trss_legacy::store::DbError, _>(move |c| {
         let mut stmt =
             c.prepare("SELECT day FROM channel_read_days WHERE channel_id = ?1 ORDER BY day")?;
         let days = stmt

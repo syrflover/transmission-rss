@@ -2469,7 +2469,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "transmission-rss"
+name = "trname"
+version = "0.1.0"
+source = "git+https://github.com/syrflover/trname?rev=6169808#616980813076180c682d03f9d6b4716bcba50256"
+dependencies = [
+ "clap",
+ "inquire",
+ "regex",
+]
+
+[[package]]
+name = "trss-legacy"
 version = "0.1.0"
 dependencies = [
  "axum",
@@ -2502,16 +2512,6 @@ dependencies = [
  "url",
  "uuid",
  "yaml_serde",
-]
-
-[[package]]
-name = "trname"
-version = "0.1.0"
-source = "git+https://github.com/syrflover/trname?rev=6169808#616980813076180c682d03f9d6b4716bcba50256"
-dependencies = [
- "clap",
- "inquire",
- "regex",
 ]
 
 [[package]]

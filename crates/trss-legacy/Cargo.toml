@@ -1,0 +1,46 @@
+[package]
+name = "trss-legacy"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# trname = { path = "../trname" }
+trname = { git = "https://github.com/syrflover/trname", rev = "6169808" }
+
+# Image bytes shared between the web, the decode and the file writer without copies.
+bytes = "1"
+
+dotenv = "0.15"
+futures = "0.3"
+regex = "1"
+reqwest = "0.13"
+# The version transmission-rpc uses, for the timed client handed to it.
+reqwest012 = { package = "reqwest", version = "0.12", default-features = false }
+rusqlite = { version = "0.40", features = ["bundled"] }
+rss = { version = "2.0", features = ["with-serde"] }
+# `renameat2` with `RENAME_NOREPLACE` for the archive move, without `unsafe`.
+rustix = { version = "1", features = ["fs"] }
+serde = "1"
+sha2 = "0.10"
+# The CRC32 of a received video, read as a stream, to check a revision against its name.
+crc32fast = "1"
+serde_json = "1"
+yaml_serde = "0.10"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync"] }
+tokio-util = "0.7"
+transmission-rpc = "0.5"
+tap = "1"
+url = "2"
+uuid = { version = "1", features = ["v4"] }
+axum = "0.8.9"
+tower-http = { version = "0.7.1", features = ["fs", "set-header"] }
+unicode-normalization = "0.1.25"
+caseless = "0.2"
+
+[dev-dependencies]
+# Makes the sample images of the tests; the app reads only headers.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+http-body-util = "0.1.5"
+tempfile = "3.27.0"
+tower = { version = "0.5.3", features = ["util"] }

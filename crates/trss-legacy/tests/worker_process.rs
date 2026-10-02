@@ -11,7 +11,7 @@ use std::{
 };
 
 use common::*;
-use transmission_rss::store::history::HistoryResult;
+use trss_legacy::store::history::HistoryResult;
 
 struct Proc {
     child: Child,
@@ -328,7 +328,7 @@ async fn logs_and_history_never_contain_secret_query_values() {
         listener.local_addr().unwrap()
     };
     h.channels
-        .create_channel(transmission_rss::store::channels::ChannelInput::new(
+        .create_channel(trss_legacy::store::channels::ChannelInput::new(
             format!("http://{dead}/feed?filter=1080p&token={SECRET}"),
         ))
         .await

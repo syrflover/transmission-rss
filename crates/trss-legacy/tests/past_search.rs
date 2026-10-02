@@ -19,7 +19,7 @@ use axum::http::StatusCode;
 use common::*;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
-use transmission_rss::{
+use trss_legacy::{
     past_search::service::PastSearch,
     store::{
         channels::{ChannelInput, RuleInput, RuleState},
@@ -1097,7 +1097,7 @@ async fn a_paused_rule_after_an_unanswered_add_ends_the_command_and_holds_the_ne
     );
     late.release_all();
     assert_eq!(s.command(&id).await["state"], "running");
-    let label = transmission_rss::transmission::command_label(&id);
+    let label = trss_legacy::transmission::command_label(&id);
     assert!(s.h.tr.torrents()[0].labels.contains(&label));
 
     s.h.channels

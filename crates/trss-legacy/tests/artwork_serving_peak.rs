@@ -17,7 +17,7 @@ use axum::{
 };
 use futures::StreamExt;
 use tower::ServiceExt;
-use transmission_rss::{
+use trss_legacy::{
     artwork::{
         files::{image_ref, ARTWORK_DIR},
         AnilistConfig, AppData, Artwork, MAX_IMAGE_BYTES, SERVING_BUDGET,

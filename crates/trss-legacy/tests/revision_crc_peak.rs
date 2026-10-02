@@ -8,7 +8,7 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use transmission_rss::revision::{file_crc32, CRC_BUFFER};
+use trss_legacy::revision::{file_crc32, CRC_BUFFER};
 
 struct Counting;
 

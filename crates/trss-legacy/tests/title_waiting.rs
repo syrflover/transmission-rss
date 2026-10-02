@@ -11,7 +11,7 @@ use axum::http::StatusCode;
 use common::*;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
-use transmission_rss::{
+use trss_legacy::{
     store::{
         anissia::Anime,
         channels::{ChannelWithRules, NewSubscription, Rule, RuleInput, SubtitleMode},
@@ -373,7 +373,7 @@ async fn a_paused_waiting_subscription_offers_no_candidate() {
     s.h.channels
         .set_rule_state(
             &waiting.id,
-            transmission_rss::store::channels::RuleState::Archived,
+            trss_legacy::store::channels::RuleState::Archived,
             s.h.now(),
         )
         .await

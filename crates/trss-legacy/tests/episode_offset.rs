@@ -14,7 +14,7 @@ use axum::http::StatusCode;
 use common::*;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
-use transmission_rss::{
+use trss_legacy::{
     store::{
         anissia::Anime,
         channels::{ChannelInput, NewSubscription, Rule, RuleInput, SubtitleMode},
@@ -307,7 +307,7 @@ async fn save(s: &Scene, rule: &Rule, version: &Value, episode: i64) -> (StatusC
 
 /// Sets the collect folder (a real folder, which the library scans).
 async fn set_collect_folder(h: &Harness, shows: &std::path::Path) {
-    transmission_rss::store::settings::SettingsStore::new(h.db.clone())
+    trss_legacy::store::settings::SettingsStore::new(h.db.clone())
         .put_collection(0, shows.to_str().unwrap().to_owned(), None)
         .await
         .unwrap();
@@ -655,7 +655,7 @@ async fn a_suggestion_that_cannot_be_read_leaves_the_rule_list_answering() {
     s.h.db
         .run(|c| {
             c.execute_batch("ALTER TABLE season_info RENAME TO season_info_gone")
-                .map_err(transmission_rss::store::db::DbError::from)
+                .map_err(trss_legacy::store::db::DbError::from)
         })
         .await
         .unwrap();
@@ -977,7 +977,7 @@ async fn a_video_whose_torrent_is_gone_is_renamed_on_disk_without_replacing() {
 
 #[tokio::test]
 async fn an_undo_waits_for_a_revision_replacement_under_way_and_moves_finished_ones() {
-    use transmission_rss::store::{
+    use trss_legacy::store::{
         revisions::{NewRevision, RevisionState, RevisionStore},
         DbError,
     };
@@ -1052,7 +1052,7 @@ async fn an_undo_waits_for_a_revision_replacement_under_way_and_moves_finished_o
 /// for the file gone.
 #[tokio::test]
 async fn an_undo_moves_an_ended_replacement_that_watches_its_file() {
-    use transmission_rss::store::{
+    use trss_legacy::store::{
         revisions::{NewRevision, RevisionState, RevisionStore, OLD_FILE_WATCHED},
         DbError,
     };
@@ -1559,7 +1559,7 @@ impl Scene {
         episode_name: &str,
         receiving: bool,
     ) -> i64 {
-        use transmission_rss::store::revisions::{NewRevision, RevisionState, RevisionStore};
+        use trss_legacy::store::revisions::{NewRevision, RevisionState, RevisionStore};
         let item = self.h.item(part).await;
         RevisionStore::new(self.h.db.clone())
             .create(
@@ -1641,7 +1641,7 @@ async fn a_start_cut_short_carries_on_and_checks_each_file_again() {
 /// Revision rows the new name has already are never merged with the file's.
 #[tokio::test]
 async fn a_new_name_that_has_revision_rows_of_its_own_is_not_taken() {
-    use transmission_rss::store::revisions::RevisionStore;
+    use trss_legacy::store::revisions::RevisionStore;
     let (s, rule) = Scene::third_season_received().await;
     // An ended replacement left a row for `S03E26`, whose file is gone.
     let row = s
@@ -1691,8 +1691,8 @@ impl Scene {
     }
 
     /// A worker whose Transmission cannot be reached.
-    fn worker_without_transmission(&self) -> transmission_rss::worker::Worker {
-        let env = transmission_rss::worker::WorkerEnv::from_lookup(|key| {
+    fn worker_without_transmission(&self) -> trss_legacy::worker::Worker {
+        let env = trss_legacy::worker::WorkerEnv::from_lookup(|key| {
             (key == "TRANSMISSION_URL").then(|| "http://127.0.0.1:1/transmission/rpc".to_owned())
         })
         .unwrap();
@@ -1714,7 +1714,7 @@ impl Scene {
 /// `이어서 되돌리기` carries it on later.
 #[tokio::test]
 async fn an_undo_that_cannot_reach_transmission_stops_and_is_carried_on_later() {
-    use transmission_rss::store::commands::{CommandStore, NewCommand};
+    use trss_legacy::store::commands::{CommandStore, NewCommand};
     let (s, rule) = Scene::third_season_received().await;
     s.undo_cut_short(&rule, "undo-0301-a").await;
     // Another command waits behind it (an undo of a rule that is gone).
@@ -1790,7 +1790,7 @@ async fn a_file_renamed_before_a_start_was_cut_short_is_recorded_renamed() {
 /// new undo of the rule as it is: it does not carry on an older one.
 #[tokio::test]
 async fn an_automatic_rule_starts_a_new_undo_instead_of_carrying_on_an_old_one() {
-    use transmission_rss::store::{
+    use trss_legacy::store::{
         commands::{CommandState, CommandStore, Outcome},
         DbError,
     };
@@ -1837,7 +1837,7 @@ async fn an_automatic_rule_starts_a_new_undo_instead_of_carrying_on_an_old_one()
 
 #[tokio::test]
 async fn an_undo_that_ended_half_done_is_shown_and_carried_on_when_asked_again() {
-    use transmission_rss::store::commands::{CommandState, CommandStore, Outcome};
+    use trss_legacy::store::commands::{CommandState, CommandStore, Outcome};
     let (s, rule) = Scene::third_season_received().await;
     s.undo_cut_short(&rule, "undo-0302-a").await;
     // It ended there (a panic, say).
@@ -1893,7 +1893,7 @@ impl Scene {
     /// Drops the extension of the RSS title `Show - {n}` was received for, as
     /// a feed without one has it.
     async fn title_without_extension(&self, n: u32) {
-        use transmission_rss::store::DbError;
+        use trss_legacy::store::DbError;
         let title = show(n).title;
         let bare = title.trim_end_matches(".mkv").to_owned();
         self.h
@@ -1967,7 +1967,7 @@ async fn a_gone_torrent_of_a_title_without_an_extension_and_two_videos_is_kept_w
 /// restored value, for another episode of that name stays.
 #[tokio::test]
 async fn a_waiting_file_moves_only_the_revision_rows_that_were_its_own() {
-    use transmission_rss::store::revisions::RevisionStore;
+    use trss_legacy::store::revisions::RevisionStore;
     let (s, rule) = Scene::third_season_received().await;
     // A row of `S03E02` older than the undo (of another item: its own rows
     // move whoever wrote them).

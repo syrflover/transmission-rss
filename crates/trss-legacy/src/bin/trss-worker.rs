@@ -1,7 +1,7 @@
 use std::{path::PathBuf, process::ExitCode};
 
 use tokio_util::sync::CancellationToken;
-use transmission_rss::{
+use trss_legacy::{
     anissia::{self, Anissia, AnissiaConfig},
     artwork::{self, AnilistConfig, AppData, Artwork},
     seasons::{self, Seasons},

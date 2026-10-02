@@ -8,7 +8,7 @@ use axum::{
     http::{header, Method, Request},
 };
 use tower::ServiceExt;
-use transmission_rss::{
+use trss_legacy::{
     artwork::{AnilistConfig, AppData, Artwork, MAX_IMAGE_BYTES},
     store::Db,
     web::{self, AppState},

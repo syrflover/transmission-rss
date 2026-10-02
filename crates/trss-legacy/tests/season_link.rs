@@ -13,7 +13,7 @@ use std::{fs, path::Path};
 
 use common::*;
 use tokio_util::sync::CancellationToken;
-use transmission_rss::{
+use trss_legacy::{
     store::{
         anissia::Anime,
         channels::{NewSubscription, Rule, SubtitleMode},

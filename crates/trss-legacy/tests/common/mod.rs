@@ -46,7 +46,7 @@ use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use tokio::{net::TcpListener, sync::Semaphore, task::JoinHandle};
 use tower::ServiceExt;
-use transmission_rss::{
+use trss_legacy::{
     store::{
         channels::{ChannelInput, ChannelStore, ChannelWithRules, RuleInput},
         history::{HistoryItem, HistoryQuery, HistoryStore, MAX_PAGE_SIZE},
@@ -1360,7 +1360,7 @@ impl Harness {
             .to_string_lossy()
             .into_owned();
         for rule in &mut rules {
-            rule.directory = transmission_rss::folders::prefixed(&below, &rule.directory);
+            rule.directory = trss_legacy::folders::prefixed(&below, &rule.directory);
         }
         self.channels
             .create_channel_with_rules(input, rules)
@@ -1406,7 +1406,7 @@ impl WebApi {
         WebApi {
             router: Router::new().nest(
                 "/api",
-                transmission_rss::web::api::router().with_state(AppState::new(db)),
+                trss_legacy::web::api::router().with_state(AppState::new(db)),
             ),
         }
     }
@@ -1676,7 +1676,7 @@ impl WebApi {
         WebApi {
             router: Router::new().nest(
                 "/api",
-                transmission_rss::web::api::router().with_state(state),
+                trss_legacy::web::api::router().with_state(state),
             ),
         }
     }

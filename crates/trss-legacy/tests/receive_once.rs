@@ -22,8 +22,8 @@ use axum::http::StatusCode;
 use common::*;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
-use transmission_rss::worker::commands::receive_once::{NAME_NOT_DERIVED, SEVERAL_FILES};
-use transmission_rss::{
+use trss_legacy::worker::commands::receive_once::{NAME_NOT_DERIVED, SEVERAL_FILES};
+use trss_legacy::{
     store::{
         channels::{ChannelWithRules, RuleInput, RuleState},
         commands::{CommandState, CommandStore, NewCommand, MAX_ATTEMPTS},
@@ -177,7 +177,7 @@ impl Scene {
     }
 
     /// The `n`-th rule the channel was made with.
-    fn rule_of(&self, n: usize) -> &transmission_rss::store::channels::Rule {
+    fn rule_of(&self, n: usize) -> &trss_legacy::store::channels::Rule {
         &self.channel.rules[n]
     }
 
@@ -721,7 +721,7 @@ async fn a_retry_with_no_collect_folder_ends_at_once_and_leaves_the_item_as_it_w
     // The app cannot unset the folder once it is set; this is a database that
     // has none, as a fresh one does.
     s.h.db
-        .run::<_, transmission_rss::store::DbError, _>(|c| {
+        .run::<_, trss_legacy::store::DbError, _>(|c| {
             Ok(c.execute("DELETE FROM collection_settings", [])
                 .map(|_| ())?)
         })
@@ -2227,8 +2227,8 @@ async fn subscribe(
     s: &Scene,
     phrase: &str,
     directory: &str,
-) -> transmission_rss::store::channels::Rule {
-    use transmission_rss::store::{
+) -> trss_legacy::store::channels::Rule {
+    use trss_legacy::store::{
         anissia::Anime,
         channels::{NewSubscription, SubtitleMode},
     };
@@ -2421,7 +2421,7 @@ async fn a_repeat_of_a_request_is_not_stored_twice_and_an_archived_rule_receives
 // --- the rule detail's view of the past items ----------------------------------------------
 
 /// What the rule detail sends to preview the stored rule as it is.
-fn preview_of(channel_id: &str, rule: &transmission_rss::store::channels::Rule) -> Value {
+fn preview_of(channel_id: &str, rule: &trss_legacy::store::channels::Rule) -> Value {
     json!({
         "channel_id": channel_id,
         "rule_id": rule.id,
@@ -2446,7 +2446,7 @@ fn kind_of<'a>(preview: &'a Value, title_part: &str) -> &'a str {
         .unwrap()
 }
 
-async fn preview_rule(s: &Scene, rule: &transmission_rss::store::channels::Rule) -> Value {
+async fn preview_rule(s: &Scene, rule: &trss_legacy::store::channels::Rule) -> Value {
     let (status, preview) = s
         .call(
             "POST",
@@ -2560,7 +2560,7 @@ async fn an_item_that_failed_without_any_rule_is_not_said_to_belong_to_another_r
 // --- what a rule missed while it was off ------------------------------------------------------
 
 /// The `n`-th rule of the scene as stored now.
-async fn stored_rule(s: &Scene, n: usize) -> transmission_rss::store::channels::Rule {
+async fn stored_rule(s: &Scene, n: usize) -> trss_legacy::store::channels::Rule {
     s.h.channels
         .get_rule(&s.rule_of(n).id)
         .await
@@ -2730,7 +2730,7 @@ async fn an_item_first_seen_while_a_rule_was_archived_is_left_to_the_user_after_
 
 #[tokio::test]
 async fn a_long_command_beats_and_the_board_shows_no_stall_meanwhile() {
-    use transmission_rss::{
+    use trss_legacy::{
         store::status::StatusStore,
         web::{status_api::board, AppState},
     };

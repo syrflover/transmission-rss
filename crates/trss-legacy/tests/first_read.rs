@@ -13,7 +13,7 @@ use axum::http::StatusCode;
 use common::*;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
-use transmission_rss::{
+use trss_legacy::{
     store::{
         anissia::Anime,
         channels::{ChannelWithRules, NewSubscription, Rule, RuleInput, SubtitleMode},
@@ -446,7 +446,7 @@ async fn a_history_that_cannot_say_when_the_channel_was_first_read_holds_its_sub
     // feed's items are still looked up one by one.
     let channel_id = s.channel.channel.id.clone();
     s.h.db
-        .run::<_, transmission_rss::store::DbError, _>(move |c| {
+        .run::<_, trss_legacy::store::DbError, _>(move |c| {
             c.execute(
                 "INSERT INTO history_first_reads (channel_id, first_read_at)
                  VALUES (?1, 'unreadable')",
@@ -468,7 +468,7 @@ async fn a_history_that_cannot_say_when_the_channel_was_first_read_holds_its_sub
     // would have done), what the subscription sat out is past.
     let first_read = s.h.item("Nova Quest - 01").await.first_seen_at;
     s.h.db
-        .run::<_, transmission_rss::store::DbError, _>(move |c| {
+        .run::<_, trss_legacy::store::DbError, _>(move |c| {
             c.execute(
                 "UPDATE history_first_reads SET first_read_at = ?1",
                 [first_read],

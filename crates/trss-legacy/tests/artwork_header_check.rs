@@ -6,7 +6,7 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use transmission_rss::{
+use trss_legacy::{
     artwork::{image::verify, MAX_IMAGE_BYTES},
     store::artwork::Format,
 };

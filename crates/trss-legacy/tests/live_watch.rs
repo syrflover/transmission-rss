@@ -22,7 +22,7 @@ use axum::http::StatusCode;
 use common::*;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
-use transmission_rss::{
+use trss_legacy::{
     discovery::Reason,
     store::{
         channels::{ChannelInput, ChannelWithRules, RuleInput},

@@ -17,7 +17,7 @@ FROM clux/muslrust:stable AS builder
 WORKDIR /usr/src/transmission-rss
 
 COPY Cargo.toml Cargo.lock ./
-COPY src ./src
+COPY crates ./crates
 
 # `--locked`: build the dependency versions the tests ran against.
 RUN cargo build --release --locked

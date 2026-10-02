@@ -5,7 +5,7 @@ mod common;
 
 use common::*;
 use tokio_util::sync::CancellationToken;
-use transmission_rss::{
+use trss_legacy::{
     store::{
         channels::{RuleInput, RuleState},
         history::{HistoryQuery, HistoryResult, MAX_PAGE_SIZE},
@@ -24,7 +24,7 @@ fn hash_a(n: u32) -> String {
     format!("aaaa{n:036}")
 }
 
-async fn channel_a(h: &Harness) -> transmission_rss::store::channels::ChannelWithRules {
+async fn channel_a(h: &Harness) -> trss_legacy::store::channels::ChannelWithRules {
     h.add_channel(
         "feed-a",
         "/media/anime",
@@ -179,7 +179,7 @@ async fn items_differing_only_in_a_secret_named_query_value_are_all_added_and_re
         magnet('3', "Show%20-%2003"),
     );
     h.feeds.set_xml("ids", &xml);
-    let input = transmission_rss::store::channels::ChannelInput::new(format!(
+    let input = trss_legacy::store::channels::ChannelInput::new(format!(
         "{}?id=0&token={SECRET}",
         h.feeds.url("ids")
     ));
@@ -1169,7 +1169,7 @@ async fn a_hung_session_set_delays_the_cycle_by_the_timeout_only() {
 
 /// Every text value in the history tables, as one string.
 async fn history_dump(h: &Harness) -> String {
-    use transmission_rss::store::DbError;
+    use trss_legacy::store::DbError;
     h.db.run::<_, DbError, _>(|conn| {
         let mut out = String::new();
         for table in ["history_items", "history_changes", "collection_cycle"] {
@@ -1204,7 +1204,7 @@ async fn secret_query_values_never_reach_history() {
     };
     let dead_url = format!("http://{dead}/feed?token={SECRET}");
     h.channels
-        .create_channel(transmission_rss::store::channels::ChannelInput::new(
+        .create_channel(trss_legacy::store::channels::ChannelInput::new(
             dead_url,
         ))
         .await
@@ -1238,7 +1238,7 @@ async fn secrets_in_item_links_and_guids_are_masked_in_history_but_used_for_addi
         "cccc".repeat(10)
     );
     h.feeds.set_xml("private", &xml);
-    let mut input = transmission_rss::store::channels::ChannelInput::new(format!(
+    let mut input = trss_legacy::store::channels::ChannelInput::new(format!(
         "{}?passkey=PASSKEY-VALUE-123",
         h.feeds.url("private")
     ));
@@ -1283,7 +1283,7 @@ async fn secret_values_are_masked_in_history_under_other_names_in_paths_and_enco
         "dddd".repeat(10)
     );
     h.feeds.set_xml("other-names", &xml);
-    let input = transmission_rss::store::channels::ChannelInput::new(format!(
+    let input = trss_legacy::store::channels::ChannelInput::new(format!(
         "{}?passkey={IN_URL}&r=1080",
         h.feeds.url("other-names")
     ));
