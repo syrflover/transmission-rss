@@ -58,4 +58,3 @@ impl CycleContext {
         transmission::client(self.transmission_url.clone(), &self.transmission_http)
     }
 }
-

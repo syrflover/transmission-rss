@@ -583,7 +583,9 @@ async fn replacing_keeps_the_folder_of_a_subscription_when_the_files_folder_is_n
     );
     // They are still subscriptions, and the rule screen can save them.
     assert!(stored.rules[1..].iter().all(|r| r.subscription.is_some()));
-    assert!(trss_legacy::folders::is_work_folder(&stored.rules[1].directory));
+    assert!(trss_legacy::folders::is_work_folder(
+        &stored.rules[1].directory
+    ));
 }
 
 /// `rule` as it is stored after it moved to `position`.
@@ -828,7 +830,12 @@ async fn an_import_whose_collect_folder_would_sit_inside_a_registered_watch_fold
     // The root of the scratch folder is a watch folder, and `/media` is in it.
     let root = t.root();
     t.library
-        .add_folder(root.clone(), trss_legacy::discovery::Scan::default(), 1, &[])
+        .add_folder(
+            root.clone(),
+            trss_legacy::discovery::Scan::default(),
+            1,
+            &[],
+        )
         .await
         .unwrap();
     let (status, text, result) = t.apply(&content, json!([])).await;

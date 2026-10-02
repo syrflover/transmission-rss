@@ -93,7 +93,9 @@ const MIGRATIONS: &[Migration] = &[
     // 23: the grounds of a rule's automatic episode offset
     Migration::Sql(include_str!("../migrations/channels/episode_basis.sql")),
     // 24: when a rule started and which archive suggestion grounds the user chose to keep collecting
-    Migration::Sql(include_str!("../migrations/channels/archive_suggestion.sql")),
+    Migration::Sql(include_str!(
+        "../migrations/channels/archive_suggestion.sql"
+    )),
     // 25: the replacement of video revisions and how far each has come
     Migration::Sql(include_str!("../migrations/revisions/schema.sql")),
     // 26: the pace of search requests to a feed host, shared by the web and the worker

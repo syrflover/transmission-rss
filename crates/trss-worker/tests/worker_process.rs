@@ -328,9 +328,9 @@ async fn logs_and_history_never_contain_secret_query_values() {
         listener.local_addr().unwrap()
     };
     h.channels
-        .create_channel(trss_legacy::store::channels::ChannelInput::new(
-            format!("http://{dead}/feed?filter=1080p&token={SECRET}"),
-        ))
+        .create_channel(trss_legacy::store::channels::ChannelInput::new(format!(
+            "http://{dead}/feed?filter=1080p&token={SECRET}"
+        )))
         .await
         .unwrap();
     // Not RSS at all.

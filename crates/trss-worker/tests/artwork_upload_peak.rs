@@ -8,11 +8,11 @@ use axum::{
     http::{header, Method, Request},
 };
 use tower::ServiceExt;
-use trss_web::{self as web, AppState};
 use trss_legacy::{
     artwork::{AnilistConfig, AppData, Artwork, MAX_IMAGE_BYTES},
     store::Db,
 };
+use trss_web::{self as web, AppState};
 
 /// A `kB` field of `/proc/self/status`, in bytes.
 fn status_bytes(field: &str) -> u64 {

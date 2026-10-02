@@ -19,7 +19,6 @@ use axum::http::StatusCode;
 use common::*;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
-use trss_web::AppState;
 use trss_legacy::{
     past_search::service::PastSearch,
     store::{
@@ -31,6 +30,7 @@ use trss_legacy::{
         status::StatusStore,
     },
 };
+use trss_web::AppState;
 use trss_worker::{CommandsOutcome, TickOutcome};
 
 const SPACING: Duration = Duration::from_millis(150);

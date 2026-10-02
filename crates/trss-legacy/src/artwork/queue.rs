@@ -27,9 +27,7 @@ use super::{
     title::{decide, Decision},
     ActionError, Artwork, ImageFetchError,
 };
-use crate::{
-    store::artwork::{ClaimedJob, JobKind, Note, Searched, Source},
-};
+use crate::store::artwork::{ClaimedJob, JobKind, Note, Searched, Source};
 
 /// How often an idle queue looks for new jobs.
 pub const POLL: Duration = Duration::from_secs(5);

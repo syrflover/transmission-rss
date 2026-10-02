@@ -17,9 +17,7 @@ use trss_legacy::{
     store::{
         channels::{ChannelError, ChannelWithRules, RuleState},
         history::{HistoryResult, KnownItem, Millis, Observation, Recorded},
-        revisions::{
-            HistoryWrite, Mark, NewRevision, Revision, RevisionState, RowWrite,
-        },
+        revisions::{HistoryWrite, Mark, NewRevision, Revision, RevisionState, RowWrite},
         settings::SettingsError,
         status::{ChannelReadResult, StatusStore, TransmissionCounts},
     },
@@ -30,8 +28,8 @@ use trss_legacy::{
     worker::{
         context::MAX_REASON_CHARS,
         feed::{self, FeedItem},
-        plan::{ChannelPlan, Judgement},
         offsets,
+        plan::{ChannelPlan, Judgement},
         revisions::{self, Decided, Listing, Plan, Replaced, Selected},
         CycleContext,
     },

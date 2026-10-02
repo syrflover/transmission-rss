@@ -641,10 +641,12 @@ async fn apply(
             what: "수집 폴더",
             path: folder.clone(),
         }];
-        tokio::task::spawn_blocking(move || trss_legacy::automatic_watch::plan(&wanted, &registered))
-            .await
-            .map_err(|e| ApiError::Internal(e.to_string()))?
-            .map_err(ApiError::invalid)?;
+        tokio::task::spawn_blocking(move || {
+            trss_legacy::automatic_watch::plan(&wanted, &registered)
+        })
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .map_err(ApiError::invalid)?;
     }
     // Anissia is asked only for the checked suggestions, and never blocks the
     // import: what it cannot say is left for the worker's daily refresh.

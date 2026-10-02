@@ -27,9 +27,7 @@ use url::Url;
 use trss_core::Clock;
 
 use super::{title::Candidate, FETCH_TIMEOUT, MAX_IMAGE_BYTES};
-use crate::{
-    store::artwork::{ArtworkError, ArtworkStore},
-};
+use crate::store::artwork::{ArtworkError, ArtworkStore};
 
 /// AniList's GraphQL endpoint.
 pub const DEFAULT_API_URL: &str = "https://graphql.anilist.co";

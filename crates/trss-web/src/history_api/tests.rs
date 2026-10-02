@@ -27,8 +27,7 @@ struct App {
 impl App {
     fn new() -> App {
         let state = AppState::new(Db::open_blocking(":memory:").unwrap());
-        let router =
-            Router::new().nest("/api", crate::api::router().with_state(state.clone()));
+        let router = Router::new().nest("/api", crate::api::router().with_state(state.clone()));
         App { state, router }
     }
 

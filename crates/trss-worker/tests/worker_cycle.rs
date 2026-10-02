@@ -1205,9 +1205,7 @@ async fn secret_query_values_never_reach_history() {
     };
     let dead_url = format!("http://{dead}/feed?token={SECRET}");
     h.channels
-        .create_channel(trss_legacy::store::channels::ChannelInput::new(
-            dead_url,
-        ))
+        .create_channel(trss_legacy::store::channels::ChannelInput::new(dead_url))
         .await
         .unwrap();
     h.feeds.set_status("broken", 500);

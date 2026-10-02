@@ -382,7 +382,9 @@ pub(super) fn check_work_folder(directory: &str) -> Result<(), ApiError> {
 /// does not name: the user is told to choose one first.
 pub(super) fn check_stored_work_folder(rule: &Rule) -> Result<(), ApiError> {
     let directory = rule.directory.trim();
-    if directory.is_empty() || trss_legacy::folders::is_collect_folder_itself(FsPath::new(directory)) {
+    if directory.is_empty()
+        || trss_legacy::folders::is_collect_folder_itself(FsPath::new(directory))
+    {
         return Err(ApiError::invalid(
             "이 규칙은 수집 폴더 자체에 받아요. 구독은 작품 폴더에 받으니, 규칙의 저장 폴더를 작품 폴더로 먼저 정해 주세요.",
         ));
@@ -540,7 +542,8 @@ async fn season_of(state: &AppState, season_id: &str) -> Result<Option<RuleSeaso
         .link(&parsed.work_id, parsed.number)
         .await
         .map_err(|e| internal(&e))?;
-    let episodes = trss_legacy::seasons::combine::combine(&episodes.entries).and_then(|c| c.episodes);
+    let episodes =
+        trss_legacy::seasons::combine::combine(&episodes.entries).and_then(|c| c.episodes);
     let cover_url = state
         .artwork
         .store

@@ -7,9 +7,7 @@ mod common;
 use common::*;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
-use trss_legacy::{
-    store::status::StatusStore,
-};
+use trss_legacy::store::status::StatusStore;
 use trss_worker::{CycleReport, TickOutcome, Worker};
 
 async fn run(worker: &Worker) -> CycleReport {

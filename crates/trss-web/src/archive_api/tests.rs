@@ -84,8 +84,7 @@ impl App {
             .create_channel(ChannelInput::new("https://feed.test/rss"))
             .await
             .unwrap();
-        let router =
-            Router::new().nest("/api", crate::api::router().with_state(state.clone()));
+        let router = Router::new().nest("/api", crate::api::router().with_state(state.clone()));
         App {
             db,
             state,

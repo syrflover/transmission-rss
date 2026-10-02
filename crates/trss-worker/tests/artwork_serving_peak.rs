@@ -17,7 +17,6 @@ use axum::{
 };
 use futures::StreamExt;
 use tower::ServiceExt;
-use trss_web::{self as web, AppState};
 use trss_legacy::{
     artwork::{
         files::{image_ref, ARTWORK_DIR},
@@ -30,6 +29,7 @@ use trss_legacy::{
         Db,
     },
 };
+use trss_web::{self as web, AppState};
 
 static LIVE: AtomicUsize = AtomicUsize::new(0);
 static PEAK: AtomicUsize = AtomicUsize::new(0);

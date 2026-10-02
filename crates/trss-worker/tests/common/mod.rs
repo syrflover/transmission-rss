@@ -47,7 +47,6 @@ use serde_json::{json, Value};
 use tokio::{net::TcpListener, sync::Semaphore, task::JoinHandle};
 use tower::ServiceExt;
 use trss_core::lock_path_for;
-use trss_web::AppState;
 use trss_legacy::{
     store::{
         channels::{ChannelInput, ChannelStore, ChannelWithRules, RuleInput},
@@ -57,6 +56,7 @@ use trss_legacy::{
     },
     transmission::RenamePolicy,
 };
+use trss_web::AppState;
 use trss_worker::{Worker, WorkerEnv};
 
 /// The collect folder every harness starts with. Test channels are given by
@@ -1675,10 +1675,7 @@ impl WebApi {
     /// The `/api` router over `state`.
     pub fn with_state(state: AppState) -> WebApi {
         WebApi {
-            router: Router::new().nest(
-                "/api",
-                trss_web::api::router().with_state(state),
-            ),
+            router: Router::new().nest("/api", trss_web::api::router().with_state(state)),
         }
     }
 }

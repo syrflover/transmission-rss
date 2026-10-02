@@ -13,13 +13,11 @@ use serde_json::{json, Value};
 use tower::ServiceExt;
 
 use crate::{commands_api::now_millis, AppState};
-use trss_legacy::{
-    store::{
-        channels::{Channel, ChannelInput, Rule, RuleInput},
-        history::{HistoryItem, HistoryResult, Observation},
-        revisions::{NewRevision, OldVideo, RevisionState, Step},
-        Db,
-    },
+use trss_legacy::store::{
+    channels::{Channel, ChannelInput, Rule, RuleInput},
+    history::{HistoryItem, HistoryResult, Observation},
+    revisions::{NewRevision, OldVideo, RevisionState, Step},
+    Db,
 };
 
 const EPISODE_NAME: &str = "Show S01E14.mkv";
@@ -54,8 +52,7 @@ struct World {
 impl World {
     async fn new() -> World {
         let state = AppState::new(Db::open_blocking(":memory:").unwrap());
-        let router =
-            Router::new().nest("/api", crate::api::router().with_state(state.clone()));
+        let router = Router::new().nest("/api", crate::api::router().with_state(state.clone()));
         let dir = tempfile::tempdir().unwrap();
         let media = dir.path().join("media");
         let folder = media.join("Show").join("Season 01");

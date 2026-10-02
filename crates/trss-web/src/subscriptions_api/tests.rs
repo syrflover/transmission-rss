@@ -50,8 +50,7 @@ impl App {
             .put_collection(0, "/media".to_owned(), None)
             .await
             .unwrap();
-        let router =
-            Router::new().nest("/api", crate::api::router().with_state(state.clone()));
+        let router = Router::new().nest("/api", crate::api::router().with_state(state.clone()));
         App {
             state,
             router,

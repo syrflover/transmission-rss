@@ -14,9 +14,7 @@ use axum::http::StatusCode;
 use common::*;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
-use trss_legacy::{
-    store::history::HistoryResult,
-};
+use trss_legacy::store::history::HistoryResult;
 use trss_worker::{CycleReport, TickOutcome, Worker};
 
 async fn run(worker: &Worker) -> CycleReport {

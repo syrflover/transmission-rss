@@ -53,8 +53,7 @@ impl App {
         let clock: Clock = Arc::new(move || now.load(Ordering::SeqCst));
         let anissia = Anissia::new(db.clone(), fake.config(), clock).with_spacing(Duration::ZERO);
         let state = AppState::new(db).with_anissia(anissia);
-        let router =
-            Router::new().nest("/api", crate::api::router().with_state(state.clone()));
+        let router = Router::new().nest("/api", crate::api::router().with_state(state.clone()));
         let app = App {
             dir,
             state,

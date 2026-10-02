@@ -478,8 +478,9 @@ async fn the_stand_in_an_import_keeps_is_not_anissias_off() {
     // What an import stores while Anissia cannot be asked: `기타`, `OFF`, never
     // received. It has no weekday, so no card; and if it were moved to a weekday
     // without being received, it is still not read as `OFF`.
-    let stand_in =
-        trss_legacy::store::channels::import_subscriptions::ImportSubscription::stand_in(1, "대역", None);
+    let stand_in = trss_legacy::store::channels::import_subscriptions::ImportSubscription::stand_in(
+        1, "대역", None,
+    );
     assert_eq!(stand_in.status, "OFF");
     app.subscribe(stand_in.clone(), rule("S"), SubtitleMode::None, None)
         .await;

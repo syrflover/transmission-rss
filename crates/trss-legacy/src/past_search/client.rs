@@ -20,9 +20,7 @@ use super::query::search_url;
 use crate::{
     store::{channels::Channel, search_pace::SearchPace},
     transmission::Redactor,
-    worker::{
-        feed::{self, FeedItem, FetchError},
-    },
+    worker::feed::{self, FeedItem, FetchError},
 };
 
 /// The time between two requests to one host. A search of a long series sends

@@ -18,8 +18,8 @@ use std::{future::Future, time::Duration};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use trss_core::Clock;
 use crate::store::{history::Millis, status::StatusStore};
+use trss_core::Clock;
 
 /// How often the heartbeat is written. The web calls the worker busy for a
 /// minute after a beat, so this leaves room for three missed beats.

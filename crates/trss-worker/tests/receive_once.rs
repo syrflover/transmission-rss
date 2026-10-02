@@ -2224,11 +2224,7 @@ async fn a_held_item_whose_channel_is_gone_ends_with_its_result_and_the_label_co
 // --- receiving the past items of a subscription ------------------------------------------
 
 /// Makes `phrase` a subscription rule of the scene's channel, as of the harness's clock.
-async fn subscribe(
-    s: &Scene,
-    phrase: &str,
-    directory: &str,
-) -> trss_legacy::store::channels::Rule {
+async fn subscribe(s: &Scene, phrase: &str, directory: &str) -> trss_legacy::store::channels::Rule {
     use trss_legacy::store::{
         anissia::Anime,
         channels::{NewSubscription, SubtitleMode},
@@ -2731,10 +2727,8 @@ async fn an_item_first_seen_while_a_rule_was_archived_is_left_to_the_user_after_
 
 #[tokio::test]
 async fn a_long_command_beats_and_the_board_shows_no_stall_meanwhile() {
+    use trss_legacy::store::status::StatusStore;
     use trss_web::{status_api::board, AppState};
-    use trss_legacy::{
-        store::status::StatusStore,
-    };
 
     let odd = release("guid-odd", 9, "Some Special Collection.mkv", "");
     let s = Scene::failing(&[&odd], vec![rule("Some Special", "Some Show")]).await;

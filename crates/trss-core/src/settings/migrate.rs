@@ -22,8 +22,8 @@ use std::path::Path;
 use rusqlite::{params, Connection};
 
 use super::SCHEMA;
-use crate::folders::{fold_bases, prefixed, FoldError};
 use crate::db::DbError;
+use crate::folders::{fold_bases, prefixed, FoldError};
 
 struct ChannelBase {
     id: String,

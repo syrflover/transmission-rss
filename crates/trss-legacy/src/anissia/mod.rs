@@ -49,12 +49,10 @@ pub use parse::{Caption, Creator, ScheduleEntry};
 
 use trss_core::{system_clock, Clock};
 
-use crate::{
-    store::{
-        anissia::{AnissiaStore, AnissiaStoreError},
-        history::Millis,
-        Db,
-    },
+use crate::store::{
+    anissia::{AnissiaStore, AnissiaStoreError},
+    history::Millis,
+    Db,
 };
 
 /// Anissia's API.
