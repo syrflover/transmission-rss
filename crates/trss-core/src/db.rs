@@ -112,6 +112,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("../migrations/seasons/anissia_link.sql")),
     // 32: the Korean titles of an AniList entry
     Migration::Sql(include_str!("../migrations/seasons/korean_titles.sql")),
+    // 33: the observations of Anissia's subtitle lines, their sources, and the reading's schedule
+    Migration::Sql(include_str!("../migrations/anissia/captions.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -580,6 +582,84 @@ mod tests {
         assert_eq!(row, "Show|ショー|[\"Action\"]|77|[]");
         assert_eq!(linked, 1);
         assert!(bad);
+    }
+
+    #[tokio::test]
+    async fn a_database_from_before_caption_observations_keeps_its_rows_and_starts_with_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        {
+            // A database as the build with 32 migrations left it: a season linked
+            // to an Anissia anime, and that anime's snapshot.
+            let conn = database_at(&path, 32);
+            conn.execute_batch(
+                "INSERT INTO watch_folders (id, path, created_at) VALUES ('f1', '/media', 1);
+                 INSERT INTO works (id, watch_folder_id, dir_name) VALUES ('w1', 'f1', 'Show');
+                 INSERT INTO seasons (work_id, number) VALUES ('w1', 1);
+                 INSERT INTO anissia_anime (anime_no, subject, week, status, fetched_at)
+                     VALUES (3441, '작품', 2, 'ON', 77);
+                 INSERT INTO season_anissia (work_id, season, anime_no, version)
+                     VALUES ('w1', 1, 3441, 1);",
+            )
+            .unwrap();
+        }
+
+        let db = Db::open(&path).await.unwrap();
+
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+        let (linked, sources, observations, polls, refused): (i64, i64, i64, i64, [bool; 4]) = db
+            .run::<_, DbError, _>(|c| {
+                let count = |sql: &str| c.query_row(sql, [], |r| r.get::<_, i64>(0));
+                let linked = count("SELECT anime_no FROM season_anissia WHERE work_id = 'w1'")?;
+                let (sources, observations, polls) = (
+                    count("SELECT count(*) FROM subtitle_sources")?,
+                    count("SELECT count(*) FROM caption_observations")?,
+                    count("SELECT count(*) FROM anissia_caption_poll")?,
+                );
+                c.execute(
+                    "INSERT INTO subtitle_sources (id, anime_no, creator_name, created_at)
+                     VALUES ('s1', 3441, '에루샤', 5)",
+                    [],
+                )?;
+                c.execute(
+                    "INSERT INTO caption_observations
+                         (source_id, post_url, episode, updated, updated_at, first_seen_at)
+                     VALUES ('s1', 'https://erulabo.com/837', '0', 'not a date', NULL, 6)",
+                    [],
+                )?;
+                // A creator has one source per anime; an observation names a
+                // source and a post; the schedule is one row.
+                let refused = [
+                    c.execute(
+                        "INSERT INTO subtitle_sources (id, anime_no, creator_name, created_at)
+                         VALUES ('s2', 3441, '에루샤', 5)",
+                        [],
+                    ),
+                    c.execute(
+                        "INSERT INTO caption_observations
+                             (source_id, post_url, episode, updated, first_seen_at)
+                         VALUES ('nobody', 'https://a.test/1', '1', 'x', 6)",
+                        [],
+                    ),
+                    c.execute(
+                        "INSERT INTO caption_observations
+                             (source_id, post_url, episode, updated, first_seen_at)
+                         VALUES ('s1', '', '1', 'x', 6)",
+                        [],
+                    ),
+                    c.execute(
+                        "INSERT INTO anissia_caption_poll (id, next_at) VALUES (2, 1)",
+                        [],
+                    ),
+                ]
+                .map(|r| r.is_err());
+                Ok((linked, sources, observations, polls, refused))
+            })
+            .await
+            .unwrap();
+        // The link is as it was, and nothing is observed until the worker reads.
+        assert_eq!((linked, sources, observations, polls), (3441, 0, 0, 0));
+        assert_eq!(refused, [true; 4]);
     }
 
     #[tokio::test]

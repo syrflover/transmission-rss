@@ -24,6 +24,12 @@
 //! for an hour, and `429` for as long as Anissia says. One process runs the
 //! queue at a time (`<db path>.anissia.lock`), outside the collection cycle's
 //! lock: it touches neither the media nor Transmission.
+//!
+//! The observation of the subtitle lines of every anime is [`captions`].
+
+pub mod captions;
+#[cfg(test)]
+mod captions_tests;
 
 use std::{path::PathBuf, time::Duration};
 

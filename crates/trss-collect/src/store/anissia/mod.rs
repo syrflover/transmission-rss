@@ -5,7 +5,12 @@
 //! The subscription itself is part of a rule ([`crate::store::channels`]); this
 //! store keeps what the rule's detail and the weekly schedule show of the anime
 //! without asking Anissia, and what the worker's daily refresh needs to know.
+//! It also keeps the observations of Anissia's subtitle lines of every anime
+//! ([`captions`]).
 
+mod captions;
+#[cfg(test)]
+mod captions_tests;
 #[cfg(test)]
 mod tests;
 
@@ -13,6 +18,8 @@ use std::collections::{HashMap, HashSet};
 
 use rusqlite::{params, Connection, OptionalExtension, Row, TransactionBehavior};
 use trss_anissia::Anime;
+
+pub use captions::{Candidate, Line, Observed, Revision};
 
 use trss_core::{
     db::{Db, DbError},
