@@ -716,7 +716,11 @@ impl JobStore {
     }
 
     /// The answer the bytes come in: the length it announced, its status and
-    /// media type, and what it added to the snapshot (`None` keeps it).
+    /// media type, what it added to the snapshot (`None` keeps it), and the
+    /// name it gave the file when the post gave none (`None` keeps the
+    /// post's). It is recorded before any byte is written, so the temporary
+    /// file a restart looks for has the recorded name.
+    #[allow(clippy::too_many_arguments)]
     pub async fn file_answer(
         &self,
         id: &str,
@@ -724,6 +728,7 @@ impl JobStore {
         status: Option<u16>,
         content_type: Option<String>,
         snapshot: Option<String>,
+        name: Option<String>,
         now: Millis,
     ) -> Result<(), JobError> {
         let id = id.to_owned();
@@ -733,7 +738,8 @@ impl JobStore {
                     c.execute(
                         "UPDATE subtitle_job_files
                          SET expected_size = ?2, http_status = ?3, content_type = ?4,
-                             snapshot = coalesce(?5, snapshot), updated_at = ?6
+                             snapshot = coalesce(?5, snapshot), name = coalesce(?7, name),
+                             updated_at = ?6
                          WHERE id = ?1",
                         params![
                             id,
@@ -741,7 +747,8 @@ impl JobStore {
                             kept_status(status),
                             content_type,
                             snapshot,
-                            now
+                            now,
+                            name
                         ],
                     )
                 })

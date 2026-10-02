@@ -11,8 +11,10 @@
 //! - A post no source of this build reads waits for one (`자막 대기`); the
 //!   worker puts such items back in line when it starts
 //!   ([`Runner::requeue_waiting_for_sources`]). So does a post whose source
-//!   finds its subtitle somewhere it cannot read yet (a Google Drive link, a
-//!   WinPNG image), with the source's reason.
+//!   finds its subtitle somewhere it cannot read yet (a Google Drive folder,
+//!   a WinPNG image), with the source's reason.
+//! - The source opens the post for the item's episode: a post that says which
+//!   file is which episode (Blogger's Drive links) offers that episode's.
 //! - A site that asks for a person's check makes the item wait (`인증 필요`).
 //!   Nothing goes on until a later ticket's screen lets a person solve it.
 //! - A file the job received for one item is not received again for another:
@@ -30,7 +32,8 @@
 //! a record of its result:
 //!
 //! 1. `intended`: the attempt's ID and its own temporary folder, before
-//!    anything is fetched; then the length the source announced.
+//!    anything is fetched; then the length the source announced, and the
+//!    file's name when the answer gives one the post did not (Drive's).
 //! 2. The bytes go to `.tmp/<attempt>/<name>`, hashed as they come, and the
 //!    file is synced. A length other than the announced one fails the attempt
 //!    and its bytes are removed.
@@ -350,7 +353,7 @@ impl Runner {
             let opened = tokio::select! {
                 biased;
                 _ = cancel.cancelled() => return Ok(ItemEnd::Interrupted),
-                opened = source.open(&post) => opened,
+                opened = source.open(&post, &item.episode) => opened,
             };
             match opened {
                 Err(failure) if failure.kind.retryable() && tries < self.retry_waits.len() => {
@@ -657,6 +660,9 @@ impl Runner {
                 snapshot_json(&whole)
             }
         };
+        // The name the answer gives (a Drive file's) is the file's from here
+        // on, recorded before its temporary file is made.
+        let answered = fetch.name.as_deref().map(area::safe_name);
         self.store
             .file_answer(
                 &attempt,
@@ -664,9 +670,11 @@ impl Runner {
                 fetch.status,
                 fetch.content_type.clone(),
                 snapshot,
+                answered.clone(),
                 self.now(),
             )
             .await?;
+        let name = answered.as_deref().unwrap_or(name);
         // What a failure of the bytes themselves says about the answer.
         let (status, content_type) = (fetch.status, fetch.content_type.clone());
         let not_a_file = |reason: String, size: u64| FileProblem {

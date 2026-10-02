@@ -1,15 +1,20 @@
-//! A local HTTP server shaped like Tistory, for the tests here and of the
-//! crates above (feature `test-support`).
+//! A local HTTP server shaped like Tistory, Blogger and Google Drive, for the
+//! tests here and of the crates above (feature `test-support`).
 //!
-//! Every name resolves to the server ([`TistoryServer::source`]), so the
+//! Every name resolves to the server ([`SourceServer::source`]), so the
 //! addresses keep their real shape with the server's port:
-//! `http://<blog>.tistory.com:<port>/<n>` for a post and
+//! `http://<blog>.tistory.com:<port>/<n>` for a Tistory post,
 //! `http://blog.kakaocdn.net:<port>/dna/<id>/<name>?credential=…&signature=…`
-//! for its files; any CDN host ([`tistory::cdn_host`]) serves the files. Each
-//! post and file answers from a script a test sets, one answer per request,
-//! the last one again and again. Every serving of a post signs its addresses
-//! anew, as Tistory does. The source it gives takes plain `http`, which the
-//! source over the network refuses.
+//! for its files (any CDN host, [`tistory::cdn_host`], serves them),
+//! `http://<blog>.blogspot.com:<port>/<path>` for a Blogger post, and
+//! `http://drive.usercontent.google.com:<port>/download?id=<id>&export=download`
+//! for a Drive file (`drive.google.com/uc` redirects there as Drive does).
+//! The posts link Drive files by their real addresses (`https://drive.google.com/file/d/<id>/view`):
+//! the sources take only the ID from them. Each post and file answers from a
+//! script a test sets, one answer per request, the last one again and again.
+//! Every serving of a Tistory post signs its addresses anew, as Tistory does.
+//! The sources it gives take plain `http`, which the sources over the network
+//! refuse.
 
 use std::{
     collections::HashMap,
@@ -26,7 +31,14 @@ use axum::{
 };
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 
-use crate::tistory::{self, Limits, Reach, TistorySource};
+use url::Url;
+
+use crate::{
+    blogger::BloggerSource,
+    drive::Drive,
+    http::{Limits, Reach},
+    tistory::{self, TistorySource},
+};
 
 /// The host of the files.
 pub const CDN: &str = "blog.kakaocdn.net";
@@ -81,11 +93,37 @@ pub enum FileAnswer {
     Redirect { host: String, id: String },
 }
 
+/// How a Drive file answers one request.
+#[derive(Debug, Clone)]
+pub enum DriveAnswer {
+    /// The file, `200` `application/octet-stream`, its name in
+    /// `Content-Disposition` as UTF-8 bytes, its `Content-Length` and
+    /// `Last-Modified`.
+    File { name: String, bytes: Vec<u8> },
+    /// No such file: `404` `text/html`, 1,652 bytes.
+    Missing,
+    /// The page that asks to confirm the download of a file too large to
+    /// scan: `200` `text/html`.
+    Confirm,
+    /// The quota is spent: `200` `text/html`.
+    Quota,
+    /// `302` to a sign-in on `accounts.google.com`.
+    SignIn,
+    /// `302` to the same file on `host` (any host resolves to the server).
+    Redirect { host: String },
+    /// This status with a small web page.
+    Status(u16),
+}
+
+/// The `Last-Modified` of every Drive file.
+pub const DRIVE_MODIFIED: &str = "Fri, 02 Oct 2026 02:11:00 GMT";
+
 /// A request the server saw.
 #[derive(Debug, Clone)]
 pub struct Seen {
     pub host: String,
     pub path: String,
+    pub query: String,
     pub at: Instant,
     pub cookie: bool,
     pub referer: bool,
@@ -113,18 +151,19 @@ struct State {
     /// By `<host>/<path>` without the port.
     posts: HashMap<String, Script<PostAnswer>>,
     files: HashMap<String, Script<FileAnswer>>,
+    drive: HashMap<String, Script<DriveAnswer>>,
     seen: Vec<Seen>,
     signed: u64,
 }
 
 /// The server, until it is dropped.
-pub struct TistoryServer {
+pub struct SourceServer {
     port: u16,
     state: Arc<Mutex<State>>,
     task: tokio::task::JoinHandle<()>,
 }
 
-impl Drop for TistoryServer {
+impl Drop for SourceServer {
     fn drop(&mut self) {
         self.task.abort();
     }
@@ -143,8 +182,8 @@ impl reqwest::dns::Resolve for Loopback {
     }
 }
 
-impl TistoryServer {
-    pub async fn start() -> TistoryServer {
+impl SourceServer {
+    pub async fn start() -> SourceServer {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let state = Arc::new(Mutex::new(State {
@@ -161,7 +200,7 @@ impl TistoryServer {
         let task = tokio::spawn(async move {
             axum::serve(listener, app).await.unwrap();
         });
-        TistoryServer { port, state, task }
+        SourceServer { port, state, task }
     }
 
     /// The Tistory source, reaching this server for every name, with no
@@ -177,13 +216,70 @@ impl TistoryServer {
         })
     }
 
-    /// The source with these limits (a smaller file, a shorter deadline).
+    /// The source with these limits (a smaller file, a shorter deadline),
+    /// and a Drive of its own with them.
     pub fn source_with(&self, limits: Limits) -> TistorySource {
-        let reach = Reach { plain_http: true };
-        let builder = reqwest::Client::builder()
-            .no_proxy()
-            .dns_resolver(Arc::new(Loopback));
-        TistorySource::over(tistory::client(builder, reach), limits, reach)
+        self.source_over(limits, self.drive_with(limits))
+    }
+
+    /// The source with these limits, receiving Drive files through `drive`.
+    pub fn source_over(&self, limits: Limits, drive: Drive) -> TistorySource {
+        TistorySource::over(builder(), limits, REACH, drive)
+    }
+
+    /// The Blogger source, reaching this server for every name, with no
+    /// spacing between requests.
+    pub fn blogger(&self) -> BloggerSource {
+        self.blogger_with(Limits {
+            spacing: Duration::ZERO,
+            ..Limits::default()
+        })
+    }
+
+    pub fn blogger_with(&self, limits: Limits) -> BloggerSource {
+        self.blogger_over(limits, self.drive_with(limits))
+    }
+
+    /// The Blogger source with these limits, receiving Drive files through
+    /// `drive`.
+    pub fn blogger_over(&self, limits: Limits, drive: Drive) -> BloggerSource {
+        BloggerSource::over(builder(), limits, REACH, drive)
+    }
+
+    /// Drive on this server with these limits, for sources to share.
+    pub fn drive_with(&self, limits: Limits) -> Drive {
+        let base = Url::parse(&format!("http://{DRIVE_FILES}:{}/", self.port)).unwrap();
+        Drive::over(builder(), limits, REACH, base)
+    }
+
+    /// The address of Blogger post `path` (`2026/07/2.html`) of `blog`.
+    pub fn blogger_url(&self, blog: &str, path: &str) -> String {
+        format!("http://{blog}.blogspot.com:{}/{path}", self.port)
+    }
+
+    /// How Blogger post `path` of `blog` answers, request after request.
+    pub fn blogger_post(&self, blog: &str, path: &str, answers: Vec<PostAnswer>) {
+        self.lock().posts.insert(
+            format!("{blog}.blogspot.com/{path}"),
+            Script { answers, served: 0 },
+        );
+    }
+
+    /// How the Drive file with ID `id` answers, request after request.
+    pub fn drive(&self, id: &str, answers: Vec<DriveAnswer>) {
+        self.lock()
+            .drive
+            .insert(id.to_owned(), Script { answers, served: 0 });
+    }
+
+    /// How many times the Drive file with ID `id` was asked for.
+    pub fn drive_asked(&self, id: &str) -> usize {
+        let query = format!("id={id}&");
+        self.lock()
+            .seen
+            .iter()
+            .filter(|s| s.host == DRIVE_FILES && s.query.starts_with(&query))
+            .count()
     }
 
     /// The address of post `number` of `blog`.
@@ -216,15 +312,65 @@ impl TistoryServer {
     }
 }
 
+/// The sources' reach here: plain `http`.
+const REACH: Reach = Reach { plain_http: true };
+
+/// The host Drive files come from.
+pub const DRIVE_FILES: &str = "drive.usercontent.google.com";
+
+fn builder() -> reqwest::ClientBuilder {
+    reqwest::Client::builder()
+        .no_proxy()
+        .dns_resolver(Arc::new(Loopback))
+}
+
+/// A Drive file's address as a post links it.
+pub fn drive_link(id: &str) -> String {
+    format!("https://drive.google.com/file/d/{id}/view?usp=sharing")
+}
+
+/// A Blogger post as the newer themes write it (C소라, 별명따위): its JSON-LD
+/// with `dateModified`, the body (`.post-body`) with a link of these words to
+/// each address, and the blog's folder of all its subtitles outside it.
+pub fn blogger_page(links: &[(&str, &str)]) -> String {
+    let links: String = links
+        .iter()
+        .map(|(words, href)| {
+            format!(
+                r#"<a href="{}" target="_blank">{}</a><br />"#,
+                escape(href),
+                escape(words)
+            )
+        })
+        .collect();
+    format!(
+        r#"<!DOCTYPE html><html><head><meta charset="UTF-8"><script type="application/ld+json">{{
+  "@context": "http://schema.org",
+  "@type": "BlogPosting",
+  "headline": "정반대의 너와 나 2기",
+  "datePublished": "2026-07-05T22:58:00+09:00",
+  "dateModified": "{BLOGGER_MODIFIED}"
+}}</script></head><body>
+<div class='post-body-container'><div class='post-body entry-content float-container' id='post-body-1'><p>자막이에요.</p><p>{links}</p></div></div>
+<div class='widget LinkList'><a href='https://drive.google.com/drive/folders/10YFO-jkkgsybQnPpl5TVAwPdx2P0SE-y'>자막 모음(작업 중)</a></div>
+</body></html>"#
+    )
+}
+
+/// The `dateModified` of every [`blogger_page`].
+pub const BLOGGER_MODIFIED: &str = "2026-09-27T22:55:03+09:00";
+
 /// The body container of the posts seen (`tistory::BODY`).
 pub const BODY_OPEN: &str = r#"<div class="tt_article_useless_p_margin contents_style">"#;
 
-/// A post whose subtitle is a Google Drive link.
-pub fn drive_page() -> String {
-    r#"<!doctype html><html><body><div class="tt_article_useless_p_margin contents_style"><p>24화 자막</p>
-<p><a href="https://drive.google.com/file/d/1AbCdEf/view?usp=drive_link">https://drive.google.com/file/d/1AbCdEf/view?usp=drive_link</a></p>
+/// A Tistory post whose subtitle is a Google Drive link in its body, as felia
+/// 1187: one link to file `id` whose words say nothing of the episode.
+pub fn drive_page(id: &str) -> String {
+    format!(
+        r#"<!doctype html><html><head><meta property="article:modified_time" content="2026-10-01T23:10:30+09:00"></head><body><div class="tt_article_useless_p_margin contents_style"><p>1화 자막</p>
+<table><tbody><tr><td><a href="https://drive.google.com/file/d/{id}/view?usp=drive_link"><span><b>자막 다운로드</b></span></a></td></tr></tbody></table>
 </div></body></html>"#
-        .to_owned()
+    )
 }
 
 fn page(status: u16, size: usize) -> Response {
@@ -268,7 +414,34 @@ fn pieces(bytes: Vec<u8>) -> Vec<Result<bytes::Bytes, std::convert::Infallible>>
         .collect()
 }
 
+/// The server's answer to `request`. Drive's and the CDN's answers also set a
+/// cookie for their whole domain, as the real hosts do, so a client that kept
+/// cookies would send one on its next request there (`Seen::cookie`).
 fn answer(state: &Mutex<State>, request: Request<Body>) -> Response {
+    let host = request
+        .headers()
+        .get(header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .and_then(|h| h.split(':').next())
+        .unwrap_or_default()
+        .to_owned();
+    let mut response = respond(state, request);
+    if crate::drive::HOSTS.contains(&host.as_str()) || tistory::cdn_host(&host) {
+        // The last two labels: `google.com`, `daumcdn.net`.
+        let at = host.rmatch_indices('.').nth(1).map_or(0, |(i, _)| i + 1);
+        let cookie = format!(
+            "NID=511=test-cookie; expires=Sun, 04-Apr-2027 00:00:00 GMT; path=/; domain=.{}; HttpOnly",
+            &host[at..]
+        );
+        response.headers_mut().append(
+            header::SET_COOKIE,
+            header::HeaderValue::from_str(&cookie).unwrap(),
+        );
+    }
+    response
+}
+
+fn respond(state: &Mutex<State>, request: Request<Body>) -> Response {
     let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
     let headers = request.headers();
     let host = headers
@@ -277,13 +450,71 @@ fn answer(state: &Mutex<State>, request: Request<Body>) -> Response {
         .unwrap_or_default();
     let host = host.split(':').next().unwrap_or_default().to_owned();
     let path = request.uri().path().to_owned();
+    let query = request.uri().query().unwrap_or_default().to_owned();
     state.seen.push(Seen {
         host: host.clone(),
         path: path.clone(),
+        query: query.clone(),
         at: Instant::now(),
         cookie: headers.contains_key(header::COOKIE),
         referer: headers.contains_key(header::REFERER),
     });
+
+    if host == "drive.google.com" && path == "/uc" {
+        let to = format!("http://{DRIVE_FILES}:{}/download?{query}", state.port);
+        return (StatusCode::SEE_OTHER, [(header::LOCATION, to)]).into_response();
+    }
+    if crate::drive::HOSTS.contains(&host.as_str()) && path == "/download" {
+        let id = url::form_urlencoded::parse(query.as_bytes())
+            .find(|(k, _)| k == "id")
+            .map(|(_, v)| v.into_owned())
+            .unwrap_or_default();
+        let port = state.port;
+        return match state.drive.get_mut(&id).and_then(Script::next) {
+            Some(DriveAnswer::File { name, bytes }) => {
+                let mut response = octets(Body::from(bytes));
+                let headers = response.headers_mut();
+                let disposition = format!("attachment; filename=\"{name}\"");
+                headers.insert(
+                    header::CONTENT_DISPOSITION,
+                    header::HeaderValue::from_bytes(disposition.as_bytes()).unwrap(),
+                );
+                headers.insert(
+                    header::LAST_MODIFIED,
+                    header::HeaderValue::from_static(DRIVE_MODIFIED),
+                );
+                response
+            }
+            Some(DriveAnswer::Confirm) => (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+                format!(
+                    r#"<!DOCTYPE html><html><head><title>Google Drive - Virus scan warning</title></head><body><form id="download-form" action="https://{DRIVE_FILES}/download" method="get"><input type="submit" id="uc-download-link" value="Download anyway"/><input type="hidden" name="id" value="{id}"><input type="hidden" name="export" value="download"><input type="hidden" name="confirm" value="t"></form></body></html>"#
+                ),
+            )
+                .into_response(),
+            Some(DriveAnswer::Quota) => (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+                "<!DOCTYPE html><html><head><title>Google Drive - Quota exceeded</title></head><body>Too many users have viewed or downloaded this file recently.</body></html>",
+            )
+                .into_response(),
+            Some(DriveAnswer::SignIn) => (
+                StatusCode::FOUND,
+                [(
+                    header::LOCATION,
+                    "https://accounts.google.com/ServiceLogin?continue=https://drive.google.com/",
+                )],
+            )
+                .into_response(),
+            Some(DriveAnswer::Redirect { host }) => {
+                let to = format!("http://{host}:{port}/download?{query}");
+                (StatusCode::FOUND, [(header::LOCATION, to)]).into_response()
+            }
+            Some(DriveAnswer::Status(status)) => page(status, 0),
+            Some(DriveAnswer::Missing) | None => page(404, 1652),
+        };
+    }
 
     if tistory::cdn_host(&host) {
         let id = path.split('/').nth(2).unwrap_or_default().to_owned();
@@ -395,7 +626,7 @@ mod tests {
     }
 
     async fn files(source: &Source, post: &Url) -> Vec<crate::PostFile> {
-        match source.open(post).await.unwrap() {
+        match source.open(post, "24").await.unwrap() {
             Opened::Files(files) => files,
             other => panic!("files: {other:?}"),
         }
@@ -403,7 +634,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_zip_comes_whole_with_no_cookie_or_referer() {
-        let server = TistoryServer::start().await;
+        let server = SourceServer::start().await;
         let zip = verify::zip_of(&[("Seihantai - 24.srt", SRT)]);
         server.post(
             "sumomomo",
@@ -428,7 +659,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_refused_address_is_read_again_once_then_expired_or_missing() {
-        let server = TistoryServer::start().await;
+        let server = SourceServer::start().await;
         let source = Source::Tistory(server.source());
         let post = Url::parse(&server.post_url("blog", 1)).unwrap();
         let a = spec("a", "a.zip", "1KB");
@@ -474,30 +705,238 @@ mod tests {
 
     #[tokio::test]
     async fn a_missing_post_a_failing_site_and_a_drive_post_each_say_so() {
-        let server = TistoryServer::start().await;
+        let server = SourceServer::start().await;
         let source = Source::Tistory(server.source());
         let url = |n| Url::parse(&server.post_url("blog", n)).unwrap();
         server.post("blog", 2, vec![PostAnswer::Status(503)]);
-        server.post("blog", 3, vec![PostAnswer::Page(drive_page())]);
+        server.post(
+            "blog",
+            3,
+            vec![PostAnswer::Page(drive_page(
+                "1zqWESZSANz8Uj2aaW9u1oSHKurLuTqQw",
+            ))],
+        );
 
-        let missing = source.open(&url(99999)).await.unwrap_err();
+        let missing = source.open(&url(99999), "1").await.unwrap_err();
         assert_eq!(
             (missing.kind, missing.status, missing.size),
             (FailureKind::Missing, Some(404), Some(1952))
         );
         assert_eq!(
-            source.open(&url(2)).await.unwrap_err().kind,
+            source.open(&url(2), "1").await.unwrap_err().kind,
             FailureKind::Network
         );
-        assert!(matches!(
-            source.open(&url(3)).await.unwrap(),
-            Opened::Elsewhere { .. }
-        ));
+        // A Drive link in the body: the file, from Drive, under the name
+        // Drive gives it.
+        let ass = crate::fake::ass("FX Senshi Kurumi 01");
+        server.drive(
+            "1zqWESZSANz8Uj2aaW9u1oSHKurLuTqQw",
+            vec![DriveAnswer::File {
+                name: "FX 전사 쿠루미 01.ass".into(),
+                bytes: ass.clone(),
+            }],
+        );
+        let drive = files(&source, &url(3)).await;
+        assert_eq!(drive.len(), 1);
+        assert_eq!(drive[0].key, "drive:1zqWESZSANz8Uj2aaW9u1oSHKurLuTqQw");
+        let mut fetch = source.fetch(&url(3), &drive[0]).await.unwrap();
+        assert_eq!(fetch.name.as_deref(), Some("FX 전사 쿠루미 01.ass"));
+        assert_eq!(fetch.expected_size, Some(ass.len() as u64));
+        let mut bytes = Vec::new();
+        while let Some(piece) = fetch.chunk().await.unwrap() {
+            bytes.extend_from_slice(&piece);
+        }
+        assert_eq!(bytes, ass);
+        assert!(server.seen().iter().all(|s| !s.cookie && !s.referer));
+    }
+
+    /// A Blogger post of C소라's shape: the fonts, then 13–24화.
+    fn csora(server: &SourceServer) -> Url {
+        let ids: Vec<(String, String)> =
+            std::iter::once(("폰트".to_owned(), "1font0000000".to_owned()))
+                .chain((13..=24).map(|n| (format!("{n}화"), format!("1episode{n:04}"))))
+                .collect();
+        let links: Vec<(String, String)> = ids
+            .iter()
+            .map(|(w, id)| (w.clone(), drive_link(id)))
+            .collect();
+        let links: Vec<(&str, &str)> = links
+            .iter()
+            .map(|(w, h)| (w.as_str(), h.as_str()))
+            .collect();
+        server.blogger_post(
+            "csora556",
+            "2026/07/2.html",
+            vec![PostAnswer::Page(blogger_page(&links))],
+        );
+        Url::parse(&server.blogger_url("csora556", "2026/07/2.html")).unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_blogger_post_offers_its_episodes_file_and_fonts_from_drive() {
+        let server = SourceServer::start().await;
+        let source = Source::Blogger(server.blogger());
+        let post = csora(&server);
+        let chosen = match source.open(&post, "24").await.unwrap() {
+            Opened::Files(files) => files,
+            other => panic!("files: {other:?}"),
+        };
+        let keys: Vec<&str> = chosen.iter().map(|f| f.key.as_str()).collect();
+        assert_eq!(keys, ["drive:1font0000000", "drive:1episode0024"]);
+        assert_eq!(
+            chosen[1].snapshot.entries(),
+            [(
+                crate::blogger::POST_MODIFIED.to_owned(),
+                BLOGGER_MODIFIED.to_owned()
+            )]
+        );
+        let ass = crate::fake::ass("Seihantai 24");
+        server.drive(
+            "1episode0024",
+            vec![DriveAnswer::File {
+                name: "Seihantai 24.ass".into(),
+                bytes: ass.clone(),
+            }],
+        );
+        let (expected, bytes) = bytes_of(&source, &post, &chosen[1]).await;
+        assert_eq!((expected, bytes), (Some(ass.len() as u64), ass.clone()));
+        let fetch = source.fetch(&post, &chosen[1]).await.unwrap();
+        assert_eq!(
+            fetch.snapshot.entries(),
+            [
+                (
+                    crate::http::LAST_MODIFIED.to_owned(),
+                    DRIVE_MODIFIED.to_owned()
+                ),
+                (
+                    crate::drive::CONTENT_LENGTH.to_owned(),
+                    ass.len().to_string()
+                ),
+            ]
+        );
+        // A second file from Drive, after Drive set its cookie twice.
+        let font = b"OTTO font".to_vec();
+        server.drive(
+            "1font0000000",
+            vec![DriveAnswer::File {
+                name: "fonts.zip".into(),
+                bytes: font.clone(),
+            }],
+        );
+        let (_, bytes) = bytes_of(&source, &post, &chosen[0]).await;
+        assert_eq!(bytes, font);
+        assert_eq!(server.drive_asked("1font0000000"), 1);
+        // Only the chosen files were asked for, and no other episode's; none
+        // of the requests carried Drive's cookie or a `Referer`.
+        assert_eq!(server.drive_asked("1episode0023"), 0);
+        assert!(server.seen().iter().all(|s| !s.cookie && !s.referer));
+
+        let failure = source.open(&post, "12").await.unwrap_err();
+        assert_eq!(failure.kind, FailureKind::Changed);
+        assert_eq!(failure.reason, "게시물에 12화 파일이 없어요");
+    }
+
+    #[tokio::test]
+    async fn a_page_from_drive_instead_of_the_file_is_a_classified_failure() {
+        let server = SourceServer::start().await;
+        let source = Source::Blogger(server.blogger());
+        let post = csora(&server);
+        let Opened::Files(chosen) = source.open(&post, "13").await.unwrap() else {
+            panic!("files");
+        };
+        let file = &chosen[1];
+        let cases = [
+            (
+                DriveAnswer::Confirm,
+                FailureKind::NotAFile,
+                Some(200),
+                "확인 페이지",
+            ),
+            (DriveAnswer::Quota, FailureKind::NotAFile, Some(200), "한도"),
+            (
+                DriveAnswer::Missing,
+                FailureKind::Missing,
+                Some(404),
+                "없어요",
+            ),
+            (
+                DriveAnswer::SignIn,
+                FailureKind::Missing,
+                Some(302),
+                "로그인",
+            ),
+            (
+                DriveAnswer::Status(403),
+                FailureKind::Missing,
+                Some(403),
+                "공개",
+            ),
+            (
+                DriveAnswer::Status(503),
+                FailureKind::Network,
+                Some(503),
+                "주지 못했어요",
+            ),
+            (
+                DriveAnswer::Redirect {
+                    host: "collect.example".into(),
+                },
+                FailureKind::Changed,
+                Some(302),
+                "따라갈 수 없는",
+            ),
+        ];
+        for (answer, kind, status, says) in cases {
+            server.drive("1episode0013", vec![answer.clone()]);
+            let failure = source.fetch(&post, file).await.err().unwrap();
+            assert_eq!((failure.kind, failure.status), (kind, status), "{answer:?}");
+            assert!(
+                failure.reason.contains(says),
+                "{answer:?}: {}",
+                failure.reason
+            );
+        }
+        let failure = {
+            server.drive("1episode0013", vec![DriveAnswer::Confirm]);
+            source.fetch(&post, file).await.err().unwrap()
+        };
+        assert_eq!(failure.content_type.as_deref(), Some("text/html"));
+        assert!(failure.size.is_some_and(|s| s > 0));
+        // No request left Drive's hosts, and none went to sign in.
+        assert!(server
+            .seen()
+            .iter()
+            .all(|s| s.host != "collect.example" && s.host != "accounts.google.com"));
+
+        // Within Drive's hosts a redirect is followed.
+        server.drive(
+            "1episode0013",
+            vec![
+                DriveAnswer::Redirect {
+                    host: "drive.google.com".into(),
+                },
+                DriveAnswer::File {
+                    name: "13.ass".into(),
+                    bytes: crate::fake::ass("13"),
+                },
+            ],
+        );
+        let (_, bytes) = bytes_of(&source, &post, file).await;
+        assert_eq!(bytes, crate::fake::ass("13"));
+        // The cookie Drive set on the first answer is not sent on the
+        // redirect to its other host, nor on any later request.
+        let seen = server.seen();
+        let followed = seen
+            .iter()
+            .find(|s| s.host == "drive.google.com" && s.path == "/download")
+            .unwrap();
+        assert!(!followed.cookie && !followed.referer);
+        assert!(seen.iter().all(|s| !s.cookie && !s.referer));
     }
 
     #[tokio::test]
     async fn a_redirect_is_followed_on_the_cdn_with_no_referer_and_stopped_elsewhere() {
-        let server = TistoryServer::start().await;
+        let server = SourceServer::start().await;
         let zip = verify::zip_of(&[("a.srt", SRT)]);
         server.post(
             "blog",
@@ -545,7 +984,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_file_past_its_byte_limit_or_encoded_is_not_a_file() {
-        let server = TistoryServer::start().await;
+        let server = SourceServer::start().await;
         let big = vec![b'x'; 4096];
         server.post(
             "blog",
@@ -602,7 +1041,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_file_that_stalls_past_its_deadline_is_a_network_failure() {
-        let server = TistoryServer::start().await;
+        let server = SourceServer::start().await;
         server.post(
             "blog",
             1,
@@ -632,7 +1071,7 @@ mod tests {
 
     #[tokio::test]
     async fn requests_to_one_host_are_spaced() {
-        let server = TistoryServer::start().await;
+        let server = SourceServer::start().await;
         let specs: Vec<FileSpec> = (0..3)
             .map(|i| spec(&format!("f{i}"), &format!("{i}.srt"), "1KB"))
             .collect();
@@ -655,5 +1094,83 @@ mod tests {
         assert!(cdn
             .windows(2)
             .all(|w| w[1] - w[0] >= Duration::from_millis(140)));
+    }
+
+    #[tokio::test]
+    async fn sources_sharing_one_drive_space_their_drive_requests_together() {
+        let server = SourceServer::start().await;
+        let unspaced = Limits {
+            spacing: Duration::ZERO,
+            ..Limits::default()
+        };
+        let drive = server.drive_with(Limits {
+            spacing: Duration::from_millis(150),
+            ..Limits::default()
+        });
+        let tistory = Source::Tistory(server.source_over(unspaced, drive.clone()));
+        let blogger = Source::Blogger(server.blogger_over(unspaced, drive));
+        server.post(
+            "felia",
+            1187,
+            vec![PostAnswer::Page(drive_page("1tistoryfile0001"))],
+        );
+        let tistory_post = Url::parse(&server.post_url("felia", 1187)).unwrap();
+        let blogger_post = csora(&server);
+        for (id, name) in [("1tistoryfile0001", "01.ass"), ("1episode0013", "13.ass")] {
+            server.drive(
+                id,
+                vec![DriveAnswer::File {
+                    name: name.into(),
+                    bytes: crate::fake::ass(name),
+                }],
+            );
+        }
+        let Opened::Files(from_tistory) = tistory.open(&tistory_post, "1").await.unwrap() else {
+            panic!("files");
+        };
+        let Opened::Files(from_blogger) = blogger.open(&blogger_post, "13").await.unwrap() else {
+            panic!("files");
+        };
+
+        for _ in 0..2 {
+            bytes_of(&tistory, &tistory_post, &from_tistory[0]).await;
+            bytes_of(&blogger, &blogger_post, &from_blogger[1]).await;
+        }
+        let drive: Vec<Instant> = server
+            .seen()
+            .iter()
+            .filter(|s| crate::drive::HOSTS.contains(&s.host.as_str()))
+            .map(|s| s.at)
+            .collect();
+        assert_eq!(drive.len(), 4);
+        assert!(drive
+            .windows(2)
+            .all(|w| w[1] - w[0] >= Duration::from_millis(140)));
+    }
+
+    #[tokio::test]
+    async fn drive_and_the_cdn_set_a_cookie_the_sources_never_send() {
+        // The cookie checks above mean something only while these hosts
+        // set one.
+        let server = SourceServer::start().await;
+        let client = builder().build().unwrap();
+        for (url, domain) in [
+            (
+                format!("http://{DRIVE_FILES}:{}/download?id=x", server.port),
+                "domain=.google.com",
+            ),
+            (
+                format!("http://{CDN}:{}/dna/x/y/z/a.zip", server.port),
+                "domain=.kakaocdn.net",
+            ),
+        ] {
+            let response = client.get(&url).send().await.unwrap();
+            let cookie = response.headers().get(header::SET_COOKIE).unwrap();
+            let cookie = cookie.to_str().unwrap();
+            assert!(
+                cookie.starts_with("NID=") && cookie.contains(domain),
+                "{cookie}"
+            );
+        }
     }
 }

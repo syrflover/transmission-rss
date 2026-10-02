@@ -20,7 +20,7 @@ use trss_jobs::{
     Runner, StepKind, StepState, Wait,
 };
 use trss_subtitles::{
-    testing::{drive_page, spec, FileAnswer, PostAnswer, TistoryServer, CDN},
+    testing::{spec, FileAnswer, PostAnswer, SourceServer, BODY_OPEN, CDN},
     tistory::TistorySource,
     verify, Sources,
 };
@@ -32,7 +32,7 @@ struct Setup {
     store: JobStore,
     runner: Runner,
     area: ReceiveArea,
-    server: TistoryServer,
+    server: SourceServer,
 }
 
 fn ticking_clock() -> Clock {
@@ -41,7 +41,7 @@ fn ticking_clock() -> Clock {
 }
 
 async fn setup() -> Setup {
-    let server = TistoryServer::start().await;
+    let server = SourceServer::start().await;
     let dir = tempfile::tempdir().unwrap();
     let db = Db::open(dir.path().join("app.db")).await.unwrap();
     let store = JobStore::new(db);
@@ -303,10 +303,12 @@ async fn a_file_gone_from_the_post_read_again_fails_as_missing() {
 }
 
 #[tokio::test]
-async fn a_missing_post_fails_as_missing_and_a_drive_post_waits_for_a_source() {
+async fn a_missing_post_fails_as_missing_and_a_drive_folder_post_waits_for_a_source() {
     let s = setup().await;
-    s.server
-        .post("felia", 1187, vec![PostAnswer::Page(drive_page())]);
+    let folder = format!(
+        r#"<html><body>{BODY_OPEN}<p><a href="https://drive.google.com/drive/folders/10YFO-jkkgsybQnPpl5TVAwPdx2P0SE-y">자막 모음</a></p></div></body></html>"#
+    );
+    s.server.post("felia", 1187, vec![PostAnswer::Page(folder)]);
     let missing = make(
         &s.store,
         "c1",
@@ -330,13 +332,13 @@ async fn a_missing_post_fails_as_missing_and_a_drive_post_waits_for_a_source() {
         (JobState::Waiting, Some(Wait::Subtitle))
     );
     assert_eq!(d.row.failure, None);
-    assert!(d.row.note.as_deref().unwrap().contains("Google Drive"));
+    assert!(d.row.note.as_deref().unwrap().contains("Google Drive 폴더"));
     assert_eq!(d.items[0].state, ItemState::Waiting);
     assert!(d.items[0]
         .reason
         .as_deref()
         .unwrap()
-        .contains("Google Drive"));
+        .contains("Google Drive 폴더"));
     // A worker start puts it back in line, as a post no source reads.
     assert_eq!(s.runner.requeue_waiting_for_sources().await.unwrap(), 1);
 }
@@ -537,7 +539,7 @@ async fn a_real_tistory_post_is_received() {
     let area = ReceiveArea::in_app_data(dir.path());
     let runner = Runner::new(
         store.clone(),
-        Sources::none().with_tistory(TistorySource::new()),
+        Sources::none().with_tistory(TistorySource::new(trss_subtitles::drive::Drive::new())),
         area.clone(),
         trss_core::system_clock(),
     );

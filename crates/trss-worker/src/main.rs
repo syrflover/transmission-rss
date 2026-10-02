@@ -13,7 +13,9 @@ use trss_library::{
     artwork::{self, AppData, Artwork},
     seasons::{self, Seasons},
 };
-use trss_subtitles::{fake::FakeSource, tistory::TistorySource, Sources};
+use trss_subtitles::{
+    blogger::BloggerSource, drive::Drive, fake::FakeSource, tistory::TistorySource, Sources,
+};
 use trss_worker::{env::FAKE_SUBTITLE_SOURCE_VAR, Worker, WorkerEnv};
 
 #[tokio::main]
@@ -42,8 +44,13 @@ async fn run() -> Result<(), String> {
     })?;
 
     let app_data = AppData::for_database(&db_path);
-    // The real sites are always on; the fake one only when asked for.
-    let mut sources = Sources::none().with_tistory(TistorySource::new());
+    // The real sites are always on; the fake one only when asked for. One
+    // Drive serves every source that links Drive files, so their requests to
+    // Drive's hosts are spaced together.
+    let drive = Drive::new();
+    let mut sources = Sources::none()
+        .with_tistory(TistorySource::new(drive.clone()))
+        .with_blogger(BloggerSource::new(drive));
     if std::env::var(FAKE_SUBTITLE_SOURCE_VAR).as_deref() == Ok("1") {
         println!("The fake subtitle source is on ({FAKE_SUBTITLE_SOURCE_VAR})");
         sources = sources.with_fake(FakeSource);

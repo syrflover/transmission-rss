@@ -54,11 +54,13 @@ impl ReceiveArea {
     }
 }
 
-/// `name` as a single safe file name: no separators, control characters or
-/// leading dots, not empty, and at most 200 bytes.
+/// `name` as a single safe file name: no separators, control characters,
+/// invisible format characters or leading dots, not empty, and at most 200
+/// bytes.
 pub fn safe_name(name: &str) -> String {
     let cleaned: String = name
         .chars()
+        .filter(|&c| !invisible(c))
         .map(|c| match c {
             '/' | '\\' => '_',
             c if c.is_control() => '_',
@@ -86,6 +88,30 @@ pub fn safe_name(name: &str) -> String {
         false => stem,
     };
     format!("{}{ext}", cut(stem, MAX_NAME - ext.len()))
+}
+
+/// A format character that shows nothing but can change how a name reads:
+/// the bidirectional marks, embeddings, overrides and isolates (which can
+/// show `gpj.ass` as `ssa.jpg`), zero-width spaces, word joiners and
+/// invisible operators, the byte order mark, the soft hyphen, interlinear
+/// annotation marks and tag characters. The zero-width joiner and non-joiner
+/// stay, as they shape emoji and scripts.
+fn invisible(c: char) -> bool {
+    matches!(
+        c,
+        '\u{AD}'
+            | '\u{61C}'
+            | '\u{180E}'
+            | '\u{200B}'
+            | '\u{200E}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{206F}'
+            | '\u{FEFF}'
+            | '\u{FFF9}'..='\u{FFFB}'
+            | '\u{E0001}'
+            | '\u{E0020}'..='\u{E007F}'
+    )
 }
 
 const MAX_NAME: usize = 200;
@@ -168,6 +194,29 @@ pub fn sync_dir(path: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invisible_format_characters_are_dropped_from_names() {
+        // A right-to-left override would show this name as `13화ssa.exe`.
+        assert_eq!(safe_name("13화\u{202E}exe.ass"), "13화exe.ass");
+        assert_eq!(
+            safe_name("\u{200E}\u{200F}\u{202A}\u{202B}\u{202C}\u{202D}a.ass"),
+            "a.ass"
+        );
+        assert_eq!(safe_name("\u{2066}b\u{2067}\u{2068}\u{2069}.srt"), "b.srt");
+        assert_eq!(
+            safe_name("\u{FEFF}c\u{200B}d\u{2060}\u{61C}\u{AD}.ass"),
+            "cd.ass"
+        );
+        assert_eq!(safe_name("e\u{E0041}.ass"), "e.ass");
+        // Leading dots under an invisible mark are still trimmed, and a name
+        // of nothing else is still a name.
+        assert_eq!(safe_name("\u{200F}.hidden.ass"), "hidden.ass");
+        assert_eq!(safe_name("\u{202E}\u{2066}"), "file");
+        // The joiners that shape emoji and scripts stay.
+        assert_eq!(safe_name("👩\u{200D}💻 1화.ass"), "👩\u{200D}💻 1화.ass");
+        assert_eq!(safe_name("a\u{200C}b.srt"), "a\u{200C}b.srt");
+    }
 
     #[test]
     fn names_are_made_safe_and_numbered() {

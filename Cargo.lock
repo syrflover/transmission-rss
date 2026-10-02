@@ -2834,6 +2834,7 @@ dependencies = [
  "percent-encoding",
  "reqwest 0.13.5",
  "scraper",
+ "serde_json",
  "sha2",
  "tempfile",
  "thiserror",

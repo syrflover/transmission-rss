@@ -84,11 +84,18 @@ function answerLine(file: JobFile): string | null {
   return parts.length > 0 ? parts.join(" · ") : null;
 }
 
+/** The words a font file's name carries on the posts seen. */
+const FONT_NAME = /폰트|글꼴|font/i;
+
 function FileLine({ file }: { file: JobFile }) {
   // The size and format of what was received; a failed file's bytes are gone.
+  // A ZIP is received whole as a bundle: which of its files serve which
+  // episode is the analysis's, after the receipt. A ZIP named for fonts holds
+  // the post's fonts, not episodes.
   const facts = [
     file.state !== "failed" && file.size !== null ? sizeText(file.size) : null,
     file.format !== null ? FORMAT_LABEL[file.format] : null,
+    file.format === "zip" ? (FONT_NAME.test(file.name) ? "폰트 묶음" : "묶음으로 받음") : null,
   ].filter((fact): fact is string => fact !== null);
   const answer = file.state === "failed" ? answerLine(file) : null;
   return (

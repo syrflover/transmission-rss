@@ -490,11 +490,11 @@ async fn a_site_check_comes_before_a_receive_failure_and_the_badge_counts_both()
 
 #[tokio::test]
 async fn a_tistory_receipt_shows_its_format_and_failures_by_class_and_no_signed_address() {
-    use trss_subtitles::testing::{spec, FileAnswer, PostAnswer, TistoryServer};
+    use trss_subtitles::testing::{spec, FileAnswer, PostAnswer, SourceServer};
 
     let (state, router) = app();
     linked_season(&state).await;
-    let server = TistoryServer::start().await;
+    let server = SourceServer::start().await;
     server.post(
         "sumomomo",
         492,

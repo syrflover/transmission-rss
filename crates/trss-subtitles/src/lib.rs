@@ -3,7 +3,8 @@
 //!
 //! A job ([`trss-jobs`]) hands a candidate's post address to [`Sources`], which
 //! names the [`Source`] that knows the address's site, or none. The source
-//! opens the post ([`Source::open`]): the files it offers ([`PostFile`]), that
+//! opens the post for the candidate's episode ([`Source::open`]): the files it
+//! offers for it ([`PostFile`]), that
 //! a person has to pass the site's check first ([`Opened::NeedsAuth`]), that
 //! the subtitle is somewhere this app cannot read yet ([`Opened::Elsewhere`]),
 //! or why it cannot ([`Failure`]). It then receives one file at a time
@@ -14,8 +15,11 @@
 //!
 //! Sources are an enum rather than trait objects: the set is closed and each
 //! one is async. [`tistory::TistorySource`] reads Tistory's attachments over
-//! HTTP; [`fake::FakeSource`] is a source with no network that lets a job run
-//! from start to end in tests and in the development environment.
+//! HTTP, and [`blogger::BloggerSource`] Blogger's posts; both receive the
+//! Google Drive files a post links ([`drive`]), those that serve the
+//! episode ([`episode`]). [`fake::FakeSource`] is a source with no network
+//! that lets a job run from start to end in tests and in the development
+//! environment.
 //!
 //! No value here keeps a cookie, a token or a signed download address where it
 //! could be stored, logged or shown: a [`PostFile::key`] names a file within
@@ -26,7 +30,11 @@
 //!
 //! [`trss-jobs`]: ../trss_jobs/index.html
 
+pub mod blogger;
+pub mod drive;
+pub mod episode;
 pub mod fake;
+pub mod http;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing;
 pub mod tistory;
@@ -37,6 +45,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use url::Url;
 
+use blogger::BloggerSource;
 use fake::{FakeBody, FakeSource};
 use tistory::TistorySource;
 
@@ -113,8 +122,8 @@ impl std::fmt::Debug for Locator {
 }
 
 /// What a source read about a file and its post, as named values (Tistory's
-/// `article:modified_time` and the size it shows; a later source's
-/// `Last-Modified`). Each is compared only with the next snapshot of the same
+/// `article:modified_time` and the size it shows, Blogger's `dateModified`;
+/// an answer's `Last-Modified` and Drive's `Content-Length`). Each is compared only with the next snapshot of the same
 /// path. No value holds a secret.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Snapshot(Vec<(String, String)>);
@@ -146,7 +155,7 @@ pub enum Opened {
     /// `reason` names it in a few words (`"CAPTCHA"`).
     NeedsAuth { reason: String },
     /// The post's subtitle is somewhere this app cannot read yet (a Google
-    /// Drive link, a WinPNG image): the item waits for a source (`자막 대기`)
+    /// Drive folder, a WinPNG image): the item waits for a source (`자막 대기`)
     /// as a post of an unknown site does. `reason` says where, in a sentence.
     Elsewhere { reason: String },
 }
@@ -263,6 +272,10 @@ pub struct Fetch {
     /// answer gives `None` rather than the encoded length. A restarted job
     /// takes a temporary file of this length as received whole.
     pub expected_size: Option<u64>,
+    /// The file's name as the answer gives it (Drive's
+    /// `Content-Disposition`), when the post did not: the job receives the
+    /// file under it.
+    pub name: Option<String>,
     /// The answer's HTTP status and media type, when the bytes come over HTTP:
     /// kept with the receipt, so a file the bytes turn out not to be says
     /// what answered.
@@ -304,6 +317,7 @@ impl Fetch {
     ) -> Fetch {
         Fetch {
             expected_size,
+            name: None,
             status,
             content_type,
             snapshot,
@@ -325,10 +339,10 @@ impl Fetch {
                 let next = match self.deadline {
                     Some((at, deadline)) => tokio::time::timeout_at(at, next)
                         .await
-                        .map_err(|_| tistory::deadline_failure(deadline))?,
+                        .map_err(|_| http::deadline_failure(deadline))?,
                     None => next.await,
                 };
-                next.map_err(|e| tistory::network_failure(&e, "받는 도중에 연결이 끊겼어요"))?
+                next.map_err(|e| http::network_failure(&e, "받는 도중에 연결이 끊겼어요"))?
             }
         };
         if let Some(piece) = &piece {
@@ -357,14 +371,19 @@ impl Fetch {
 pub enum Source {
     Fake(FakeSource),
     Tistory(TistorySource),
+    Blogger(BloggerSource),
 }
 
 impl Source {
-    /// Reads the post at `post` for the files it offers.
-    pub async fn open(&self, post: &Url) -> Result<Opened, Failure> {
+    /// Reads the post at `post` for the files it offers for `episode`, the
+    /// candidate's episode as Anissia wrote it. A post that says which file is
+    /// which episode offers the episode's (and the fonts); one that does not
+    /// offers them all.
+    pub async fn open(&self, post: &Url, episode: &str) -> Result<Opened, Failure> {
         match self {
             Source::Fake(source) => source.open(post).await,
-            Source::Tistory(source) => source.open(post).await,
+            Source::Tistory(source) => source.open(post, episode).await,
+            Source::Blogger(source) => source.open(post, episode).await,
         }
     }
 
@@ -384,6 +403,7 @@ impl Source {
                 ))
             }
             Source::Tistory(source) => source.fetch(post, file).await,
+            Source::Blogger(source) => source.fetch(post, file).await,
         }
     }
 }
@@ -393,6 +413,7 @@ impl Source {
 pub struct Sources {
     fake: Option<FakeSource>,
     tistory: Option<TistorySource>,
+    blogger: Option<BloggerSource>,
 }
 
 impl Sources {
@@ -414,11 +435,19 @@ impl Sources {
         self
     }
 
+    /// Adds the Blogger source, for the posts on a blog of
+    /// [`blogger::reads`].
+    pub fn with_blogger(mut self, source: BloggerSource) -> Sources {
+        self.blogger = Some(source);
+        self
+    }
+
     /// The source that reads the post at `post`, if this process knows one.
     pub fn for_post(&self, post: &Url) -> Option<Source> {
         match post.host_str() {
             Some(fake::HOST) => self.fake.clone().map(Source::Fake),
             Some(host) if tistory::reads(host) => self.tistory.clone().map(Source::Tistory),
+            Some(host) if blogger::reads(host) => self.blogger.clone().map(Source::Blogger),
             _ => None,
         }
     }

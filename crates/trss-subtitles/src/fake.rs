@@ -175,7 +175,7 @@ mod tests {
         let post = Url::parse("https://fake.trss.invalid/ok/ep1").unwrap();
         let source = sources.for_post(&post).unwrap();
 
-        let Opened::Files(files) = source.open(&post).await.unwrap() else {
+        let Opened::Files(files) = source.open(&post, "1").await.unwrap() else {
             panic!("files");
         };
         assert_eq!(files, [PostFile::new("ok/ep1", "ep1.ass")]);
@@ -198,26 +198,26 @@ mod tests {
             _ => panic!("files"),
         };
         assert_eq!(
-            keys(source.open(&url("/shared/s/1")).await.unwrap()),
-            keys(source.open(&url("/shared/s/2")).await.unwrap())
+            keys(source.open(&url("/shared/s/1"), "1").await.unwrap()),
+            keys(source.open(&url("/shared/s/2"), "1").await.unwrap())
         );
         assert_eq!(
-            source.open(&url("/auth/1")).await.unwrap(),
+            source.open(&url("/auth/1"), "1").await.unwrap(),
             Opened::NeedsAuth {
                 reason: "CAPTCHA".into()
             }
         );
         assert_eq!(
-            source.open(&url("/missing/1")).await.unwrap_err().kind,
+            source.open(&url("/missing/1"), "1").await.unwrap_err().kind,
             FailureKind::Missing
         );
         assert_eq!(
-            keys(source.open(&url("/empty/1")).await.unwrap()),
+            keys(source.open(&url("/empty/1"), "1").await.unwrap()),
             Vec::<String>::new()
         );
 
         let post = url("/short/x");
-        let Opened::Files(files) = source.open(&post).await.unwrap() else {
+        let Opened::Files(files) = source.open(&post, "1").await.unwrap() else {
             panic!("files");
         };
         let (expected, bytes) = receive(&source, &post, &files[0]).await;
