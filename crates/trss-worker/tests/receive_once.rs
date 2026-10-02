@@ -222,6 +222,15 @@ impl Scene {
         }
     }
 
+    /// Runs one collection cycle of `worker`, a period after the last.
+    async fn cycle_with(&self, worker: &Worker) -> CycleReport {
+        self.h.advance(300_000);
+        match worker.tick(&CancellationToken::new()).await.unwrap() {
+            TickOutcome::Ran(report) => report,
+            other => panic!("expected a cycle, got {other:?}"),
+        }
+    }
+
     async fn call(&self, method: &str, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
         let (status, text, json) = self.api.call(method, uri, body).await;
         self.bodies.lock().unwrap().push(text);
@@ -2891,7 +2900,7 @@ async fn a_command_runs_to_its_end_while_the_same_workers_cycle_is_held_in_trans
 }
 
 #[tokio::test]
-async fn the_cycles_removal_waits_until_a_commands_add_is_recorded() {
+async fn the_cycles_removal_leaves_the_torrents_alone_while_a_command_adds() {
     let liar = release("guid-liar-26", 26, LIAR, "");
     let s = Scene::failing(&[&liar], picked_rules()).await;
     let item = s.item("LIAR GAME - 26").await;
@@ -2910,21 +2919,27 @@ async fn the_cycles_removal_waits_until_a_commands_add_is_recorded() {
     late.wait_arrived().await;
     assert_eq!(s.h.tr.torrents().len(), 1, "Transmission holds it");
 
-    // The same worker's cycle reads the feed and comes to its removal.
-    let hits = s.h.feeds.hits(FEED);
+    // The same worker's cycle comes to its removal meanwhile: it does not wait
+    // for the command, and goes on past it (to count the torrents) having
+    // removed nothing. Its reading of the collect folder then waits for the
+    // command's turn at the work folder.
+    let counts = || {
+        s.h.tr
+            .calls_of("torrent-get")
+            .iter()
+            .filter(|c| c.args["fields"] == json!(["status", "hashString"]))
+            .count()
+    };
+    let counted = counts();
     s.h.advance(300_000);
     let cycle = tokio::spawn({
         let worker = worker.clone();
         async move { worker.tick(&CancellationToken::new()).await }
     });
-    wait_for("the cycle to read the feed", || async {
-        s.h.feeds.hits(FEED) > hits
+    wait_for("the cycle to pass its removal", || async {
+        counts() > counted
     })
     .await;
-    tokio::time::sleep(Duration::from_millis(500)).await;
-
-    // It waits for the command, and removes nothing meanwhile.
-    assert!(!cycle.is_finished());
     assert!(s.h.tr.calls_of("torrent-remove").is_empty());
     assert_eq!(s.h.tr.torrents().len(), 1);
 
@@ -2933,6 +2948,10 @@ async fn the_cycles_removal_waits_until_a_commands_add_is_recorded() {
     let TickOutcome::Ran(report) = cycle.await.unwrap().unwrap() else {
         panic!("expected a cycle")
     };
+    assert!(report.commands_at_work);
+    assert!(report.removed.is_empty(), "{:?}", report.removed);
+    assert!(s.h.tr.calls_of("torrent-remove").is_empty());
+    assert_eq!(s.h.tr.torrents().len(), 1);
 
     // The command met its torrent and named it; history holds its hash.
     let (_, view) = s.command(CMD).await;
@@ -2941,24 +2960,12 @@ async fn the_cycles_removal_waits_until_a_commands_add_is_recorded() {
     let held = s.item("LIAR GAME - 26").await;
     assert_eq!(held.result, HistoryResult::Received);
     assert_eq!(held.torrent_hash.as_deref(), Some(hash(26).as_str()));
-    // Only then did the removal look: what it did with the departed item's
-    // torrent is the ordinary cleanup, after everything the command did.
-    let calls: Vec<String> = s.h.tr.calls().into_iter().map(|c| c.method).collect();
-    let renamed = calls
-        .iter()
-        .position(|m| m == "torrent-rename-path")
-        .expect("the command named the file");
-    if let Some(removed) = calls.iter().position(|m| m == "torrent-remove") {
-        assert!(removed > renamed, "{calls:?}");
-        let last_of_the_command = calls
-            .iter()
-            .rposition(|m| m == "torrent-set")
-            .unwrap_or(renamed);
-        assert!(removed > last_of_the_command, "{calls:?}");
-        assert_eq!(report.removed.len(), 1);
-    }
-    assert_eq!(report.commands_running, 0);
-    assert_eq!(report.commands_unconfirmed, 0);
+    assert_eq!(s.h.tr.torrent(&hash(26)).name, "LIAR GAME S01E26.mkv");
+
+    // With no command at work, the next cycle cleans up as usual.
+    let report = s.cycle_with(&worker).await;
+    assert!(!report.commands_at_work);
+    assert_eq!(report.removed.len(), 1);
 }
 
 const SONO: &str = "[SubsPlease] Sono Bisque Doll - 13 (1080p) [ABCD1236].mkv";

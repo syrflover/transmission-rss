@@ -90,6 +90,11 @@ pub struct CycleReport {
     /// [`CommandsAtRemoval::unconfirmed_adds`]); the cycle then removes no
     /// departed torrents.
     pub commands_unconfirmed: usize,
+    /// Commands were adding, moving or renaming torrents when the removal of
+    /// departed torrents was due (they held the torrent gate, see
+    /// [`crate::removal`]), so the cycle removed none; the next cycle tries
+    /// again.
+    pub commands_at_work: bool,
     /// Selected revisions not added because the folder holds the episode and
     /// the worker could not tell the revisions apart (`버전 미상`), or holds
     /// this revision already.
@@ -219,7 +224,8 @@ enum JobOutcome {
 /// Web commands run beside the cycle. Each item takes its turn at its work
 /// folder ([`trss_core::folder_locks`]) for its add and rename, so a command
 /// that moves or renames in the folder runs before or after it; the removal
-/// takes the torrent gate ([`crate::removal`]).
+/// takes the torrent gate ([`crate::removal`]), or is left for the next cycle
+/// when commands hold it.
 pub async fn run_cycle(
     ctx: &CollectContext,
     session: &SessionConfig,
@@ -543,23 +549,18 @@ pub async fn run_cycle(
     // the hash was written, so the removal waits until the rerun has met the
     // torrent and recorded it. A command whose add got no answer is the
     // unconfirmed case again; that holds the removal of the first cycle after
-    // it. A command running now holds the torrent gate, which the removal
-    // waits for (see `crate::removal`).
+    // it. A command running now holds the torrent gate; the removal does not
+    // wait for it and is left for the next cycle (see `crate::removal`).
     let removable =
         collect_folder.is_some() && panicked == 0 && unconfirmed == 0 && report.channels_read > 0;
     // From the commands' check through the last removal, no command adds (the
     // check alone, for the report, needs no gate).
     let gate = if removable {
-        tokio::select! {
-            gate = removal.gate.removal() => Some(gate),
-            _ = cancel.cancelled() => {
-                report.interrupted = true;
-                return Ok(report);
-            }
-        }
+        removal.gate.try_removal()
     } else {
         None
     };
+    report.commands_at_work = removable && gate.is_none();
     let commands = removal.commands().await;
     if let Ok(commands) = &commands {
         report.commands_running = commands.running;
@@ -578,6 +579,11 @@ pub async fn run_cycle(
         println!(
             "{unconfirmed} add(s) got no answer from Transmission; \
              leaving Transmission's torrents alone this cycle"
+        );
+    } else if report.commands_at_work {
+        println!(
+            "Command(s) are changing Transmission's torrents; \
+             leaving them alone this cycle"
         );
     } else if let Err(err) = commands {
         eprintln!(

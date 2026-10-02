@@ -13,9 +13,11 @@
 //!   removal holds it alone, from reading the hashes history keeps through
 //!   the last removal. So no removal runs between a command's add and the
 //!   record that accounts for it, and the hashes the removal reads include
-//!   every command that ended before it. The gate is fair: a removal that
-//!   waits holds back the commands that come after it, and waits only for the
-//!   commands already under way.
+//!   every command that ended before it. The removal does not wait for the
+//!   gate: it is periodic cleanup, and a removal waiting behind a long
+//!   command (a move waits minutes for Transmission) would hold back every
+//!   command after it. When a command holds the gate, the cycle removes
+//!   nothing and the next cycle tries again.
 //! - **The check at removal time** ([`Removal::commands`]), under the gate.
 //!   A command still `running` that this worker is not carrying out now is
 //!   one an earlier start left (a worker died in it, or this worker left it
@@ -51,9 +53,10 @@ impl TorrentGate {
         self.0.clone().read_owned().await
     }
 
-    /// The removal's turn: alone.
-    pub(crate) async fn removal(&self) -> OwnedRwLockWriteGuard<()> {
-        self.0.clone().write_owned().await
+    /// The removal's turn, alone, if no command holds the gate now. Never
+    /// waits, so no command ever waits behind a removal that waits itself.
+    pub(crate) fn try_removal(&self) -> Option<OwnedRwLockWriteGuard<()>> {
+        self.0.clone().try_write_owned().ok()
     }
 }
 
