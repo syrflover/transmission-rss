@@ -2,11 +2,11 @@
 
 - 상태: 대기
 - 출처: [출처별 다운로드](../specs/subtitles.md#출처별-다운로드)(Blogger·Google Drive 개별 자막, 회차 ZIP), [Blogger·Google Drive 조사](../brainstorm/web-gui-subtitles.md#bloggergoogle-drive)
-- 막는 티켓: [0038](0038-receive-result-tistory.md), [0039](0039-browser-container-lifecycle.md)(0033이 브라우저 경로가 필요하다고 정하면)
+- 막는 티켓: [0038](0038-receive-result-tistory.md)
 
 ## 작업
 
-Blogger 게시물에서 연결된 Google Drive 파일을 받아요. 게시물에 개별 회차 파일과 회차 ZIP이 함께 있을 수 있으므로, 후보의 회차와 사용자가 고른 범위에 맞는 파일을 고르는 규칙은 0033의 관찰을 따라요.
+Blogger 게시물에서 연결된 Google Drive 파일을 worker가 HTTP로 받아요(사용자 결정, 2026-10-02. 0033에서 쿠키·로그인 없이 받아졌어요). 게시물에 개별 회차 파일과 회차 ZIP이 함께 있을 수 있으므로, 후보의 회차와 사용자가 고른 범위에 맞는 파일을 고르는 규칙은 0033의 관찰을 따라요.
 회차 ZIP에서 고른 범위만 적용하는 일은 결과 목표 4의 묶음 분석이고, 이 티켓은 두 종류를 각각 수신 영역까지 받는 것이에요.
 개별 파일 수신의 성공으로 ZIP 처리를 완료로 보지 않아요.
 
