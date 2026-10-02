@@ -25,14 +25,22 @@
 //!
 //! Before a command starts, the look names the folders it works in and takes
 //! its place in line for them ([`trss_core::folder_locks`]), in the order the
-//! commands were claimed: `receive_once` and `receive_past` read the work
-//! folder of their rule, `rule_archive` writes the rule's work folder in the
-//! collect and the archive folder, `episode_undo` writes the rule's work
-//! folder, and `watch_rescan` reads its watch folder as every reading does.
-//! The command waits for its turn and runs; the command modules take no turn
-//! themselves (a task never waits for a second one). So two commands on one
-//! work folder run one after the other in the order they were accepted, and a
-//! cycle's add into a work folder that is moving waits for the move.
+//! commands were claimed: `receive_once` and `receive_past` write the work
+//! folder of their rule (their add and rename must not meet a cycle's or
+//! another receive's of the same item), `rule_archive` writes the rule's work
+//! folder in the collect and the archive folder, `episode_undo` writes the
+//! rule's work folder, and `watch_rescan` reads its watch folder as every
+//! reading does. The command waits for its turn and runs; the command modules
+//! take no turn themselves (a task never waits for a second one). So two
+//! commands on one work folder run one after the other in the order they were
+//! accepted, and a cycle's add into a work folder that is moving or receiving
+//! waits for it.
+//!
+//! The folders are named when the command is claimed, from the rule and the
+//! collect folder as they are then; a change to either before the command
+//! runs is not seen, nor is a link that reaches the same folder by another
+//! name. Each command checks the rule and the folders again when it runs, so
+//! a stale turn only orders work that did not need ordering, or orders less.
 //!
 //! The commands that may add, move, rename or take labels off torrents (all
 //! but `watch_rescan`) then take the torrent gate ([`crate::removal`]) and

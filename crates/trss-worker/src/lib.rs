@@ -57,7 +57,9 @@
 //!   work names the folders it touches and how: a cycle's item reads its work
 //!   folder for its add and rename, a revision replacement writes its folder,
 //!   a reading of a watch folder reads the folder (one reading per folder at a
-//!   time), a command reads or writes the folders it works in ([`commands`]).
+//!   time), a command reads or writes the folders it works in ([`commands`]):
+//!   a retry writes its work folder, so it and the cycle's add of the same
+//!   item go in turn.
 //!   Work on the same folder runs in the order it came, work on other folders
 //!   side by side.
 //! - **The torrent gate** ([`removal`]). The cycle's removal of departed

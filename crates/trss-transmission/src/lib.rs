@@ -660,6 +660,23 @@ pub async fn rename_torrent(
     Ok(Renamed::NotYet)
 }
 
+/// Whether the file `name` in `download_dir` has the `trname` form already,
+/// read as [`RenameMode::Existing`] reads it: it looks renamed, or `trname`
+/// finds it formatted. A rename of such a name would read its episode as a
+/// release's and convert it a second time (`E13` with a conversion of `+12`
+/// becoming `E25`), so a rename that may meet a name it or another rename
+/// gave already asks this first.
+pub fn has_trname_form(
+    name: &str,
+    download_dir: &Path,
+    starts_episode_at: isize,
+    name_for_trname: NameForTrname,
+) -> bool {
+    looks_renamed(name, download_dir)
+        || trname_raw(download_dir, &name_for_trname(name), starts_episode_at)
+            .is_some_and(|(_, file, _)| file.already_formatted)
+}
+
 /// Whether `name` is the name `trname` gives in `download_dir`
 /// (`.../<title>/Season NN`): the folder's title and an episode, as in
 /// `<title> S01E05.mkv`, `S01E05.5` or a three-digit `S01E105`, with the

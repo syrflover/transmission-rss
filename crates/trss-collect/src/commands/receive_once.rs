@@ -102,8 +102,8 @@ use trss_core::{
 use trss_library::store::{library::LibraryStore, seasons::SeasonStore};
 use trss_transmission as transmission;
 use trss_transmission::{
-    add_item, get_torrent, get_torrents, has_label, remove_label, AddError, AddKind, AddLabels,
-    Redactor, RenamePolicy,
+    add_item, get_torrent, get_torrents, has_label, has_trname_form, remove_label, AddError,
+    AddKind, AddLabels, Redactor, RenamePolicy,
 };
 
 /// What `receive_once` and `receive_past` use (made from
@@ -547,18 +547,18 @@ impl Retry {
     }
 }
 
-/// Runs a `receive_once` command to its end: [`execute`], then, when the add
-/// put the torrent in, [`rename`] and the note when the name stays. The caller
-/// ends the command with the returned [`Finished`] afterwards, so a screen that
-/// re-reads the item once the command has ended sees the note too.
-///
-/// A worker that dies before the command is ended leaves it `running`; the
-/// rerun meets the torrent as a duplicate carrying the command's label and
-/// goes through the same steps again (the rename leaves a name it gave already).
-/// The turn the command takes before it runs: a read of the work folder its
+/// The turn the command takes before it runs: a write of the work folder its
 /// rule saves into ([`rule_work_folder`]), the rule found as [`execute`] finds
-/// it. Empty when the request, the item, the rule or the collect folder cannot
-/// be found: the command then ends by itself.
+/// it. A write, not a read: the add and the rename of an item are not to meet
+/// another receive's or a cycle's of the same item (the second rename would
+/// apply the episode offset to a name that has it already), so the receives
+/// and the cycle's adds into one work folder go in turn. Empty when the
+/// request, the item, the rule or the collect folder cannot be found: the
+/// command then ends by itself.
+///
+/// The folder is named when the command is claimed, by its text: a rule or a
+/// collect folder changed before the command runs, or a link to the folder
+/// under another name, is not seen (see [`trss_core::folder_locks`]).
 pub async fn section(ctx: &ReceiveContext, command: &Command) -> Result<Section, Retry> {
     let Ok(payload) = serde_json::from_str::<ReceiveOnce>(&command.payload) else {
         return Ok(Section::new());
@@ -575,7 +575,7 @@ pub async fn section(ctx: &ReceiveContext, command: &Command) -> Result<Section,
     rule_section(ctx, rule_id.as_deref()).await
 }
 
-/// A read of the work folder the rule `rule_id` saves into, or nothing when
+/// A write of the work folder the rule `rule_id` saves into, or nothing when
 /// there is no such rule or no collect folder.
 pub(crate) async fn rule_section(
     ctx: &ReceiveContext,
@@ -590,10 +590,18 @@ pub(crate) async fn rule_section(
     let Some(collect) = ctx.settings.collection().await.map_err(Retry::store)? else {
         return Ok(Section::new());
     };
-    Ok(Section::new().read(rule_work_folder(Path::new(&collect.folder), &rule)))
+    Ok(Section::new().write(rule_work_folder(Path::new(&collect.folder), &rule)))
 }
 
-/// Runs the command, with its turn ([`section`]) taken.
+/// Runs a `receive_once` command to its end, with its turn ([`section`])
+/// taken: [`execute`], then, when the add put the torrent in, [`rename`] and
+/// the note when the name stays. The caller ends the command with the
+/// returned [`Finished`] afterwards, so a screen that re-reads the item once
+/// the command has ended sees the note too.
+///
+/// A worker that dies before the command is ended leaves it `running`; the
+/// rerun meets the torrent as a duplicate carrying the command's label and
+/// goes through the same steps again (the rename leaves a name it gave already).
 pub async fn run(
     ctx: &ReceiveContext,
     command: &Command,
@@ -1229,6 +1237,17 @@ pub async fn rename(
         let Some(old_name) = torrent.name else {
             continue;
         };
+        // A name in the `trname` form was given already, by this command's
+        // earlier start or by a cycle: converting its episode again would
+        // count the rule's conversion twice.
+        if has_trname_form(
+            &old_name,
+            &rename.save_path,
+            rename.episode,
+            Release::without_version,
+        ) {
+            return RenameResult::Unchanged;
+        }
         let Some(new_name) = derived_name(&rename.save_path, &old_name, rename.episode) else {
             return RenameResult::Kept(NAME_NOT_DERIVED);
         };

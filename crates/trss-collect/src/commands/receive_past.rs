@@ -97,7 +97,7 @@ fn store(err: impl std::fmt::Display) -> Retry {
     Retry::Store(err.to_string())
 }
 
-/// The turn the command takes before it runs: a read of the work folder its
+/// The turn the command takes before it runs: a write of the work folder its
 /// rule saves into, as for `receive_once` ([`receive_once::section`]).
 pub async fn section(
     ctx: &ReceiveContext,

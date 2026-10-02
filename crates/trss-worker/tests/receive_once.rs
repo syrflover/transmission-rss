@@ -2960,3 +2960,93 @@ async fn the_cycles_removal_waits_until_a_commands_add_is_recorded() {
     assert_eq!(report.commands_running, 0);
     assert_eq!(report.commands_unconfirmed, 0);
 }
+
+const SONO: &str = "[SubsPlease] Sono Bisque Doll - 13 (1080p) [ABCD1236].mkv";
+
+/// A rule with an episode conversion of 12 (release 13 is named episode 24).
+fn counting_on_rules() -> Vec<RuleInput> {
+    vec![RuleInput {
+        episode: 12,
+        ..rule("Sono Bisque Doll", "Sono Bisque Doll/Season 01")
+    }]
+}
+
+#[tokio::test]
+async fn a_rerun_leaves_the_name_its_earlier_start_gave_and_converts_no_episode_twice() {
+    let sono = release("guid-sono-13", 13, SONO, "");
+    let s = Scene::failing(&[&sono], counting_on_rules()).await;
+    let item = s.item("Sono Bisque Doll - 13").await;
+    s.post(CMD, &item).await;
+    let store = CommandStore::new(s.h.db.clone());
+    store.claim_next(s.h.now()).await.unwrap().unwrap();
+    // Transmission took the torrent and the earlier start renamed it, then the
+    // worker died before writing the result.
+    s.h.tr.preload(FakeTorrent {
+        download_dir: "/media/anime/Sono Bisque Doll/Season 01".to_owned(),
+        labels: vec![
+            BOT_LABEL.to_owned(),
+            item_label(&item.channel_id, &item.identity_key),
+            format!("trss-cmd:{CMD}"),
+        ],
+        ..FakeTorrent::new(&hash(13), "Sono Bisque Doll S01E24.mkv")
+    });
+
+    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
+
+    assert_eq!(s.command(CMD).await.1["outcome"]["result"], "received");
+    assert!(s.h.tr.calls_of("torrent-rename-path").is_empty());
+    assert_eq!(
+        s.h.tr.torrent(&hash(13)).name,
+        "Sono Bisque Doll S01E24.mkv"
+    );
+}
+
+#[tokio::test]
+async fn a_retry_and_the_cycles_add_of_the_same_item_go_in_turn() {
+    let sono = release("guid-sono-13", 13, SONO, "");
+    // The item stays in the feed, so the cycle adds it again itself.
+    let s = Scene::failing(&[&sono], counting_on_rules()).await;
+    let item = s.item("Sono Bisque Doll - 13").await;
+    s.post(CMD, &item).await;
+    let worker = s.h.worker();
+
+    // The retry has added the torrent and is about to rename it.
+    let rename = s.h.tr.hold("torrent-rename-path");
+    let commands = tokio::spawn({
+        let worker = worker.clone();
+        async move { worker.run_commands(&CancellationToken::new()).await }
+    });
+    rename.wait_arrived().await;
+    assert_eq!(s.adds().len(), 1);
+
+    // The same worker's cycle picks the item again: its add waits for the
+    // retry's turn at the work folder.
+    let hits = s.h.feeds.hits(FEED);
+    s.h.advance(300_000);
+    let cycle = tokio::spawn({
+        let worker = worker.clone();
+        async move { worker.tick(&CancellationToken::new()).await }
+    });
+    wait_for("the cycle to read the feed", || async {
+        s.h.feeds.hits(FEED) > hits
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(s.adds().len(), 1, "the cycle's add waits");
+    assert!(!cycle.is_finished());
+
+    rename.release_all();
+    assert_eq!(commands.await.unwrap().unwrap(), CommandsOutcome::Ran(1));
+    let TickOutcome::Ran(_) = cycle.await.unwrap().unwrap() else {
+        panic!("expected a cycle")
+    };
+
+    // One conversion of the episode, whoever renamed.
+    assert_eq!(s.command(CMD).await.1["outcome"]["result"], "received");
+    assert_eq!(s.h.tr.torrents().len(), 1);
+    assert_eq!(
+        s.h.tr.torrent(&hash(13)).name,
+        "Sono Bisque Doll S01E24.mkv"
+    );
+    assert_eq!(s.h.tr.calls_of("torrent-rename-path").len(), 1);
+}
