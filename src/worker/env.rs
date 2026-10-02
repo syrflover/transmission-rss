@@ -1,9 +1,8 @@
 //! The worker's settings from environment variables.
 //!
 //! Transmission's address, speed limits, queue sizes and download directory
-//! use the same variables as the legacy `transmission-rss` binary. The worker
-//! never reads `CHANNELS_CONFIG_URL`: channels and rules come from the app
-//! database.
+//! use the same variables as the former cron binary. Channels and rules come
+//! from the app database, not from an environment variable.
 
 use std::{str::FromStr, time::Duration};
 
@@ -20,7 +19,7 @@ pub const SEED_QUEUE_SIZE_VAR: &str = "SEED_QUEUE_SIZE";
 /// Seconds between collection cycles.
 pub const INTERVAL_VAR: &str = "TRSS_WORKER_INTERVAL_SECS";
 
-/// Five minutes, the period cron ran the legacy binary at.
+/// Five minutes, the period cron ran the former binary at.
 pub const DEFAULT_INTERVAL: Duration = Duration::from_secs(300);
 
 /// A bad setting. Messages name the variable and never its value, because
@@ -127,7 +126,7 @@ mod tests {
 
     #[test]
     fn channels_config_url_is_not_needed() {
-        // The legacy binary would panic without it; the worker ignores it.
+        // The former binary panicked without it; the worker ignores it.
         assert!(WorkerEnv::from_lookup(lookup(&[("TRANSMISSION_URL", "http://tr/")])).is_ok());
     }
 

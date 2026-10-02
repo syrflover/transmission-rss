@@ -10,9 +10,9 @@ COPY web/ ./
 RUN bun run build
 
 
-# Rust build: `transmission-rss` (cron RSS run), `trss-web` (web server) and
-# `trss-worker` (long-running collection worker).
-FROM clux/muslrust:stable as builder
+# Rust build: `trss-web` (web server) and `trss-worker` (long-running
+# collection worker).
+FROM clux/muslrust:stable AS builder
 
 WORKDIR /usr/src/transmission-rss
 
@@ -30,7 +30,6 @@ RUN apk update
 WORKDIR /usr/local/bin
 
 COPY --from=builder \
-    /usr/src/transmission-rss/target/x86_64-unknown-linux-musl/release/transmission-rss \
     /usr/src/transmission-rss/target/x86_64-unknown-linux-musl/release/trss-web \
     /usr/src/transmission-rss/target/x86_64-unknown-linux-musl/release/trss-worker \
     ./
@@ -38,13 +37,13 @@ COPY --from=builder \
 # Static frontend that `trss-web` serves (no Node server at runtime).
 COPY --from=web-builder /usr/src/web/dist /usr/local/share/trss/web
 
-# Defaults for `trss-web`; the cron `transmission-rss` run ignores them.
-# The ENTRYPOINT below still runs `transmission-rss` as before (cron); run the
-# web server or the worker by overriding it:
-# `docker run --entrypoint ./trss-web <image>` / `--entrypoint ./trss-worker`.
+# Defaults for `trss-web`; `trss-worker` ignores them.
+# The image runs the worker; run the web server by overriding the entrypoint
+# with `--entrypoint /usr/local/bin/trss-web` (docker-compose.trss.yml sets the
+# entrypoint of both services this way).
 ENV TRSS_WEB_BIND=0.0.0.0 \
     TRSS_WEB_PORT=8080 \
     TRSS_WEB_STATIC_DIR=/usr/local/share/trss/web
 EXPOSE 8080
 
-ENTRYPOINT [ "./transmission-rss" ]
+ENTRYPOINT [ "/usr/local/bin/trss-worker" ]

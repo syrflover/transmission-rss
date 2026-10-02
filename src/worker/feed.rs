@@ -9,7 +9,7 @@ use crate::{
     transmission::Redactor,
 };
 
-/// How long one feed request may take in total. The legacy binary had no
+/// How long one feed request may take in total. The former binary had no
 /// limit, which a process that never exits cannot afford.
 pub const FETCH_TIMEOUT: Duration = Duration::from_secs(60);
 

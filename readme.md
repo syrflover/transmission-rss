@@ -72,7 +72,7 @@ To back up, copy `TRSS_DATA_DIR/trss.db` and `TRSS_DATA_DIR/artwork/` together w
 
 ### Resource limits
 
-Each trss container is limited to 0.25 CPU and 128M of memory. The cron run of the old binary had 0.1 CPU and 96M for a job that lived a few seconds. The worker now stays up, parses every feed each cycle, and adds the selected items concurrently; the web serves the screens and previews rules against stored history. These limits are a starting point, to be revisited with `docker stats` after the first days of running.
+Each trss container is limited to 0.25 CPU and 128M of memory. The worker stays up, parses every feed each cycle, and adds the selected items concurrently; the web serves the screens and previews rules against stored history. These limits are a starting point, to be revisited with `docker stats` after the first days of running.
 
 The worker reads at most 2 MiB of an RSS feed (real feeds are 50 to 300 KB), five feeds at a time, so a feed that is huge or never ends cannot exhaust that memory. A feed whose response announces a longer body is refused before it is read, and any other is dropped as soon as what has arrived passes the cap. The channel counts as unread for that cycle, like one whose server did not answer: the cycle log says `the feed is larger than 2097152 bytes`, and its torrents are not cleaned up (the cap is `MAX_FEED_BYTES` in `src/worker/feed.rs`).
 
@@ -130,7 +130,7 @@ Each watched directory (a watch folder, each work folder, each `Season NN` folde
 
 ### Channels and the collect folder
 
-Channels and rules live in the app database and are edited in the web. To bring over a channel configuration of the old binary (the YAML at `CHANNELS_CONFIG_URL`), use Settings → Data → Import in the web. Importing only writes channels and rules (and the collect folder, below) and the subscriptions you check; it adds, renames and removes nothing.
+Channels and rules live in the app database and are edited in the web. To bring over a channel configuration YAML from versions up to 0.3.x, which ran as a cron job and read it from `CHANNELS_CONFIG_URL`, use Settings → Data → Import in the web. Importing only writes channels and rules (and the collect folder, below) and the subscriptions you check; it adds, renames and removes nothing.
 
 The review step also reads the two comment lines directly above each rule (no blank line between) and suggests a subscription for that rule:
 
@@ -193,29 +193,3 @@ A rule's detail has a `지난 회차 검색` section for episodes the feed no lo
 - **Long series.** The tracker returns at most 75 results. When the first page is full, the episodes of the range that are still missing are searched in groups of 10, `{series} - (1000|1001|…)`, using the numbering of the first page's real titles, and merged without repeats. At most 20 extra searches are sent (so a search takes up to a minute), a range spans at most 2000 episodes, a search keeps at most 2000 results, and at most 20 existing videos are read for their CRC32.
 - **What is selected.** Only an episode that is missing from the work folder and that no torrent of the rule or channel in Transmission holds. A higher revision of an existing episode and a result whose version cannot be told (`버전 미상`) are shown but not selected; tick one to receive it with the checks of video revisions above. Batches, episodes already in the folder and episodes of another season are never selected, and results outside the range are folded into a count. Whether an episode was received from another release is judged from the recorded history and the real files in the work folder.
 - **Received once, gone now.** An episode the history shows as received is missing again, and its result can be ticked, when its video is not in the work folder and its torrent is no longer in Transmission. Only a single episode is judged so (a batch stays received), and only when the work folder exists and was read whole (at most 5000 entries): an unmounted volume or a very large folder holds every received episode, as does another torrent of the rule for the same episode that Transmission still has. `trss-web` does not call Transmission: each worker cycle leaves the hashes of all its torrents (migration 27, `transmission_listing` and `transmission_torrents`), and a search compares them with the torrent hash in history. Without a list yet, for an item received after the list was taken, or for an item whose hash history does not know, the torrent counts as still there. When such a result is received, `trss-worker` asks Transmission and the folder again and adds it only if both are still empty, so a list that has gone stale never adds a duplicate.
-
-## Switching from the cron job
-
-Up to 0.3.x, `scripts/cron.sh` ran the old binary every 5 minutes. Do not run it next to the worker: each removes the trss-labelled torrents that are not in its own feeds, so they can remove each other's torrents.
-
-1. Save Transmission's torrent list to compare against later:
-
-   ```sh
-   curl -s -H "X-Transmission-Session-Id: $(curl -s -o /dev/null -w '%header{x-transmission-session-id}' http://localhost:9091/transmission/rpc)" \
-     -d '{"method":"torrent-get","arguments":{"fields":["hashString","name","downloadDir","labels"]}}' \
-     http://localhost:9091/transmission/rpc > torrents-before-switch.json
-   ```
-
-2. Remove the cron job and let a run in progress finish: `./scripts/cron.sh uninstall`, then check that `docker ps` shows no `trss` container.
-3. Update this checkout, add `TRSS_VERSION` and `TRSS_WEB_HOST_IP` to `.env`, and start only the web: `docker compose -f docker-compose.trss.yml up -d trss-web`.
-4. Import the channel configuration (Settings → Data → Import).
-5. Start the worker: `docker compose -f docker-compose.trss.yml up -d trss-worker`. Its first cycle should meet every torrent the cron job added as a `duplicate` in the same folder, add only items published since the last cron run, and remove nothing it would not have removed.
-
-### Rolling back
-
-```sh
-docker compose -f docker-compose.trss.yml stop trss-worker trss-web
-./scripts/cron.sh install
-```
-
-The cron job needs `CHANNELS_CONFIG_URL` in `.env`. The app database stays as it is for another attempt.

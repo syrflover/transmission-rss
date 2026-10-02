@@ -246,9 +246,9 @@ TheTVDB는 [현재 요금표](https://thetvdb.com/api-information)에 연 매출
 
 - [README](../../readme.md)는 RSS 피드(RSS Feed)의 항목을 규칙에 따라 Transmission에 추가하고 파일명을 변경하는 도구로 설명해요.
   현재 사용 안내는 Docker Compose, 환경 변수와 원격 YAML 설정 중심이에요.
-- [예약 실행 스크립트](../../scripts/cron.sh)는 5분 간격 실행과 로그 파일 출력을 설정해요.
+- 예약 실행 스크립트(`scripts/cron.sh`, 지금은 없음)는 5분 간격 실행과 로그 파일 출력을 설정해요.
   저장소 조사에서는 trss 자체 웹 GUI를 찾지 못했어요.
-- [주 실행 경로](../../src/main.rs)의 파일명 변경은 파일이 하나인 토렌트(Torrent)를 대상으로 해요.
+- 주 실행 경로(`src/main.rs`, 지금은 없음)의 파일명 변경은 파일이 하나인 토렌트(Torrent)를 대상으로 해요.
   피드에서 사라진 관리 대상 토렌트를 Transmission에서 제거할 때 로컬 데이터는 삭제하지 않아요.
   따라서 이 기능을 자막 정리나 미디어 파일 자동 삭제 기능으로 간주하지 않아요.
 - [Anissia 연동 코드](../../src/anissia.rs)에는 자막 메타데이터와 다운로드 관련 코드가 있지만 미완성 부분이 있고, [Cargo 설정](../../Cargo.toml)의 선택 기능으로 분리돼 있어요.

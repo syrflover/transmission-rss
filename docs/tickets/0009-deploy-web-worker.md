@@ -6,7 +6,7 @@
 
 ## 작업
 
-지금 배포는 [cron](../../scripts/cron.sh)이 5분마다 `docker compose run --rm`으로 종료형 컨테이너를 띄우고, [trss Compose](../../docker-compose.trss.yml)는 웹 포트·미디어 볼륨이 없으며 CPU 0.1·메모리 96M로 제한돼 있어요.
+지금 배포는 cron(`scripts/cron.sh`)이 5분마다 `docker compose run --rm`으로 종료형 컨테이너를 띄우고, [trss Compose](../../docker-compose.trss.yml)는 웹 포트·미디어 볼륨이 없으며 CPU 0.1·메모리 96M로 제한돼 있어요.
 이를 같은 이미지·같은 릴리스 버전의 `trss-web`과 `trss-worker` 두 상시 컨테이너로 바꾸고, 기존 cron을 걷어내며, 운영 안내를 고쳐요.
 사용자의 실제 서버에서 기존 YAML을 가져와 worker가 cron과 같은 결과를 내는 것을 확인하는 전환 티켓이에요.
 
@@ -17,7 +17,7 @@
   DB 경로는 `TRSS_DB_PATH`, 웹은 `TRSS_WEB_BIND`·`TRSS_WEB_PORT`·`TRSS_WEB_STATIC_DIR`(이미지 기본값 `0.0.0.0`·`8080`·`/usr/local/share/trss/web`)이에요.
   worker는 `TRSS_DB_PATH`·`TRANSMISSION_URL`(필수)과 기존과 같은 이름의 속도 제한·큐·다운로드 폴더 변수, 주기 `TRSS_WORKER_INTERVAL_SECS`(기본 300)를 읽어요.
   worker 배타성은 DB 파일 옆 `<DB 경로>.worker.lock`의 파일 잠금이라, DB와 같은 로컬 볼륨에 둬야 해요.
-  이미지의 ENTRYPOINT는 cron이 쓰는 `transmission-rss`라서, 웹·worker 컨테이너는 `trss-web`·`trss-worker`를 명시해 실행해요. cron을 걷어낼 때 ENTRYPOINT도 다시 정해요.
+  이미지의 ENTRYPOINT는 cron이 쓰던 `transmission-rss`였어서, 웹·worker 컨테이너는 `trss-web`·`trss-worker`를 명시해 실행해요. cron을 걷어낸 2026-10-02부터 이미지의 ENTRYPOINT는 `trss-worker`예요.
 - 0001–0007을 합친 트리의 `docker build`로 만든 이미지에서 `trss-worker`를 띄워, musl 바이너리가 빈 DB를 만들고 마이그레이션을 적용하고 잠금 파일을 만든 뒤 한 주기를 돌고 SIGTERM에 0으로 끝나는 것을 확인했어요(연결할 수 없는 Transmission 주소로). 실제 Transmission과 실제 피드는 이 티켓에서 확인해요.
 - worker의 Transmission 요청 제한은 연결 5초·전체 30초예요. 실제 `.torrent` 주소 추가가 30초 안에 답하는지 관찰해요.
 - 전환 중 cron의 `transmission-rss`와 `trss-worker`를 함께 돌리면, 둘 다 자기 피드에 없는 trss 라벨 토렌트를 정리하므로 서로가 받은 토렌트를 지울 수 있어요.
@@ -49,9 +49,9 @@
 
 - `docker-compose.trss.yml`에 상시 서비스 `trss-worker`·`trss-web`을 두었어요. 둘 다 `ghcr.io/syrflover/transmission-rss:${TRSS_VERSION}`(같은 릴리스), `restart: unless-stopped`, 로그 회전(10m×3)이고, 실행 파일은 `entrypoint`로 명시해요.
   DB는 `TRSS_DATA_DIR`(기본 `./data`)의 `/data/trss.db`예요. 미디어는 Transmission과 같은 `/downloads`에 읽기 전용으로 붙여, 폴더 링크 검사와 Transmission `downloadDir` 비교가 같은 경로 표기를 봐요.
-- 옛 cron 서비스 `trss`는 되돌리기용으로 `legacy` 프로필에 남겼고, `scripts/cron.sh`가 `--profile legacy`로 불러요. `CHANNELS_CONFIG_URL`은 전환 뒤 `.env`에서 빠져도 파일 전체가 풀리도록 필수에서 뺐어요. ENTRYPOINT(`transmission-rss`)는 되돌리기가 필요 없어질 때 다시 정해요.
+- 옛 cron 서비스 `trss`는 되돌리기용으로 `legacy` 프로필에 남겼고, `scripts/cron.sh`가 `--profile legacy`로 불러요. `CHANNELS_CONFIG_URL`은 전환 뒤 `.env`에서 빠져도 파일 전체가 풀리도록 필수에서 뺐어요. ENTRYPOINT(`transmission-rss`)는 되돌리기가 필요 없어질 때 다시 정하기로 했고, 2026-10-02에 정했어요(아래 `옛 cron 걷어내기`).
 - 자원 한도는 컨테이너마다 0.25 CPU·128M으로 시작해요. 근거와 재검토 계획은 [readme](../../readme.md#resource-limits)에 있어요. 로컬 유휴 상태는 worker 3.4MiB·web 1.2MiB였어요(피드와 Transmission 없이, 실제 부하가 아님).
-- 운영 안내([readme](../../readme.md))에 설정, 실행·중지·업데이트·로그·백업, cron에서 옮기는 순서(토렌트 목록 저장 → cron 해제 → web → 가져오기 → worker), 되돌리기를 적었어요.
+- 운영 안내([readme](../../readme.md))에 설정, 실행·중지·업데이트·로그·백업, cron에서 옮기는 순서(토렌트 목록 저장 → cron 해제 → web → 가져오기 → worker), 되돌리기를 적었어요. 이 전환 안내는 전환을 마친 2026-10-02에 걷어냈어요.
 
 ### 로컬 확인 (2026-09-30, `--locked`로 빌드한 이미지, 연결할 수 없는 Transmission 주소)
 
@@ -126,4 +126,14 @@
 
 - 며칠 동안 봇 토렌트 여럿을 받는 사이 `oom_kill`이 0에 머무는지(`transmission.slice` 아래 경로), 봇 토렌트의 이름·항목 라벨이 주기를 넘어 유지되는지 봐요. 되돌림(RHEL-255363)이 들어간 커널이 나오면 올려요.
 - 완료 기준의 나머지 실제 확인: cron과 같은 결과를 주기 수·차이와 함께 기록, 실제 배포 경로의 보호 경계(`ss -ltn`, 휴대폰 LTE에서 공인 IP 접속 불가), 휴대폰에서 0003·0006 수행, `.torrent` 추가 응답 시간, 자원 한도 재검토.
-- 되돌리기가 필요 없어지면 ENTRYPOINT를 정하고 `cron.sh`와 `legacy` 서비스를 걷어내요.
+
+### 옛 cron 걷어내기 (2026-10-02, 사용자 승인)
+
+서버가 `trss-worker`·`trss-web`으로 바뀌고 0.5.0이 올라가 되돌릴 일이 없어져 옛 실행 경로를 모두 걷어냈어요.
+
+- 옛 실행 파일 `src/main.rs`(`transmission-rss`)를 지웠어요. 하드코딩된 LAN 주소의 Transmission에 접속하던 `#[ignore]` 테스트 둘(`test_get_torrent`, `test_add_torrent`)도 함께 사라져, 이제 어떤 테스트도 실제 Transmission에 접속하지 않아요.
+- 그 실행 파일에서만 쓰던 코드도 지웠어요. YAML 채널 설정을 판정으로 옮기던 `src/rss/legacy.rs`, 환경 변수 `CHANNELS_CONFIG_URL` 등을 읽던 `Config`(`src/config.rs`), `From<&ChannelConfig> for ChannelSpec`·`From<&Rule> for RuleSpec`, `Rule::directory`예요. YAML 가져오기(설정 → 데이터 → 가져오기)가 읽는 `ChannelConfig`와 `Rule`의 역직렬화는 그대로예요.
+- 옛 실행 파일과 견주던 테스트 `tests/legacy_comparison.rs`·`tests/worker_legacy_comparison.rs`와 표본 `tests/fixtures/sample_feed.xml`을 지웠어요. 견줄 대상이 사라졌고, 앞 티켓의 결과에 적힌 두 테스트는 그 시점의 기록으로 남아요.
+- `scripts/cron.sh`(`scripts/` 폴더 포함)와 `docker-compose.trss.yml`의 `legacy` 프로필 서비스 `trss`를 지웠어요.
+- `Dockerfile`은 `transmission-rss`를 이미지에 넣지 않고, ENTRYPOINT를 `/usr/local/bin/trss-worker`로 정했어요. 웹은 Compose처럼 `--entrypoint /usr/local/bin/trss-web`으로 실행해요. `FROM ... as`도 `AS`로 맞춰 빌드 경고를 없앴어요.
+- [readme](../../readme.md)의 `Switching from the cron job`과 `Rolling back`을 걷어냈어요. 서버에 남은 cron 항목은 이미 2026-10-01에 `cron.sh uninstall`로 지웠어요.

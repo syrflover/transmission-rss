@@ -2,13 +2,11 @@
 //! that is already present, renaming the single file with `trname`, and
 //! removing bot-labelled torrents that have left the feed.
 //!
-//! The logic here moved out of `src/main.rs` unchanged so that the legacy
-//! `transmission-rss` binary and `trss-worker` behave the same way. Where the
-//! binary printed an error, these functions print it through a [`Redactor`]
-//! (the binary passes [`Redactor::none`]), so the worker never logs a
-//! secret that an HTTP error quotes. Renaming takes a [`RenameMode`]: the
-//! binary renames every torrent as one it has just added (the legacy
-//! behavior), while the worker keeps that for its own new adds only.
+//! The logic here moved out of the former cron binary unchanged. Where that
+//! binary printed an error, these functions print it through a [`Redactor`], so
+//! the worker never logs a secret that an HTTP error quotes. Renaming takes a
+//! [`RenameMode`]: the former binary renamed every torrent as one it had just
+//! added, while the worker does that for its own new adds only.
 
 mod redact;
 
@@ -541,9 +539,9 @@ pub async fn remove_label(
 /// Which torrent [`rename_torrent`] is renaming, which decides how far it may go.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenameMode {
-    /// A torrent the caller has just added: the legacy behavior. The single
-    /// file is renamed, and the torrent is removed together with its data when
-    /// its name cannot be derived.
+    /// A torrent the caller has just added. The single file is renamed, and the
+    /// torrent is removed together with its data when its name cannot be
+    /// derived.
     Added,
     /// A torrent Transmission already had. Its file is renamed only while it
     /// sits in `download_dir` and its name is not in the `trname` form yet (a
@@ -693,7 +691,7 @@ pub struct RenamePolicy {
 }
 
 impl Default for RenamePolicy {
-    /// The binary's behavior: an attempt every second, 17 attempts.
+    /// An attempt every second, 17 attempts.
     fn default() -> Self {
         RenamePolicy {
             delay: Duration::from_secs(1),

@@ -3,7 +3,7 @@
 //! The file is a list of channels (`url`, `directory`, optional `excludes`,
 //! `rules`), each rule having `match`, `directory` and optional `regex`,
 //! `case_insensitive` and `episode` (default 1). The deserialization is the
-//! one the old executable uses ([`ChannelConfig`]); this module adds the checks
+//! one the old executable used ([`ChannelConfig`]); this module adds the checks
 //! the app database needs and turns failures into Korean sentences that say why
 //! the file cannot be imported.
 //!
