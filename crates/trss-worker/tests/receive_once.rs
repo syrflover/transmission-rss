@@ -31,9 +31,9 @@ use trss_legacy::{
         channels::{ChannelWithRules, RuleInput, RuleState},
         history::{HistoryItem, HistoryResult},
     },
-    transmission::item_label,
     worker::commands::receive_once::{NAME_NOT_DERIVED, SEVERAL_FILES},
 };
+use trss_transmission::item_label;
 use trss_worker::{CommandsOutcome, CycleReport, TickOutcome, Worker};
 
 const BASE: &str = "/media/anime";

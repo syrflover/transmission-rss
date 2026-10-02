@@ -3,14 +3,13 @@
 use url::Url;
 
 use super::commands::rule_archive::work_folder::MovePolicy;
-use crate::{
-    store::{
-        channels::ChannelStore, history::HistoryStore, library::LibraryStore,
-        revisions::RevisionStore, seasons::SeasonStore,
-    },
-    transmission::{self, Redactor, RenamePolicy, SessionConfig},
+use crate::store::{
+    channels::ChannelStore, history::HistoryStore, library::LibraryStore, revisions::RevisionStore,
+    seasons::SeasonStore,
 };
 use trss_core::settings::SettingsStore;
+use trss_transmission as transmission;
+use trss_transmission::{Redactor, RenamePolicy, SessionConfig};
 
 /// Longest failure reason kept in history, in characters.
 pub const MAX_REASON_CHARS: usize = 300;
@@ -40,7 +39,7 @@ pub struct CycleContext {
     pub live: super::live::LiveWatch,
     pub transmission_url: Url,
     /// The client for Transmission's requests; they time out
-    /// (see [`crate::transmission::http_client`]).
+    /// (see [`trss_transmission::http_client`]).
     pub transmission_http: reqwest012::Client,
     pub session: SessionConfig,
     pub http: reqwest::Client,

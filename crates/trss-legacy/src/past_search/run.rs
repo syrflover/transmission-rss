@@ -24,7 +24,8 @@ use super::{
     release::{read, Kind, Notation},
     BATCH_SIZE, MAX_EXTRA_SEARCHES, MAX_RESULTS, PAGE_LIMIT,
 };
-use crate::{store::channels::Channel, transmission::Redactor, worker::feed::FeedItem};
+use crate::{store::channels::Channel, worker::feed::FeedItem};
+use trss_transmission::Redactor;
 
 /// What a search read.
 #[derive(Debug, Clone, Default)]

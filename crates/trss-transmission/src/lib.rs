@@ -25,8 +25,6 @@ use transmission_rpc::{
 };
 use trname::trname_raw;
 
-use crate::revision::Release;
-
 /// How long connecting to Transmission may take.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -565,8 +563,16 @@ pub enum Renamed {
     NotYet,
 }
 
+/// How the caller reads a torrent's name for `trname`: the name to derive the
+/// episode from, given the name Transmission holds the file under. Release
+/// names carry notation (a revision such as `06v2`) that `trname` does not read
+/// the same way in every name, and what to do with it is the caller's rule,
+/// not Transmission's.
+pub type NameForTrname = fn(&str) -> String;
+
 /// Renames the torrent's single file to the `trname` name for `download_dir`
-/// (`.../<title>/Season NN`). What happens when the name cannot be derived, or
+/// (`.../<title>/Season NN`), deriving it from the torrent's name as
+/// `name_for_trname` gives it. What happens when the name cannot be derived, or
 /// is in that form already, depends on `mode`. Torrents with more than one
 /// file are left alone, and so is a torrent whose new name is taken by a file
 /// in its folder (looked up on this host's disk, which sees the folders at the
@@ -577,6 +583,7 @@ pub async fn rename_torrent(
     download_dir: &Path,
     starts_episode_at: isize,
     mode: RenameMode,
+    name_for_trname: NameForTrname,
 ) -> transmission_rpc::types::Result<Renamed> {
     let Some(torrent) = get_torrent(transmission, hash).await? else {
         return Ok(match mode {
@@ -599,11 +606,9 @@ pub async fn rename_torrent(
             return Ok(Renamed::Finished);
         }
 
-        // Read without the revision marker: `trname` does not read `06v2`
-        // as episode 6 in every name (Erai-raws' gives episode 34).
         let derived = trname_raw(
             download_dir,
-            &Release::without_version(&old_file_name),
+            &name_for_trname(&old_file_name),
             starts_episode_at,
         );
         match (mode, derived) {
@@ -616,8 +621,8 @@ pub async fn rename_torrent(
                 // own under the old name (libtransmission's `renamePath`
                 // renames on disk only when the target is not there). That is
                 // the old video when a higher revision of a received episode
-                // comes in; its replacement is the worker's (see
-                // `crate::worker::revisions`).
+                // comes in; its replacement is the worker's (the revision
+                // replacement in `trss-collect`).
                 let folder = torrent
                     .download_dir
                     .as_deref()
@@ -710,6 +715,7 @@ pub async fn rename_with_retries(
     save_path: &Path,
     episode: isize,
     mode: RenameMode,
+    name_for_trname: NameForTrname,
     policy: RenamePolicy,
     redactor: &Redactor,
     cancel: &CancellationToken,
@@ -720,9 +726,16 @@ pub async fn rename_with_retries(
             _ = cancel.cancelled() => break,
         }
 
-        let res = rename_torrent(transmission, hash, save_path, episode, mode)
-            .await
-            .inspect_err(|err| println!("{}", redactor.apply(&err.to_string())));
+        let res = rename_torrent(
+            transmission,
+            hash,
+            save_path,
+            episode,
+            mode,
+            name_for_trname,
+        )
+        .await
+        .inspect_err(|err| println!("{}", redactor.apply(&err.to_string())));
 
         if let Ok(Renamed::To(_) | Renamed::Finished) = res {
             break;

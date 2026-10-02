@@ -1097,7 +1097,7 @@ async fn a_paused_rule_after_an_unanswered_add_ends_the_command_and_holds_the_ne
     );
     late.release_all();
     assert_eq!(s.command(&id).await["state"], "running");
-    let label = trss_legacy::transmission::command_label(&id);
+    let label = trss_transmission::command_label(&id);
     assert!(s.h.tr.torrents()[0].labels.contains(&label));
 
     s.h.channels

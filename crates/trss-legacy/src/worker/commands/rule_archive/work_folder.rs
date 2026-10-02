@@ -70,7 +70,8 @@ use tokio_util::sync::CancellationToken;
 use transmission_rpc::TransClient;
 use trss_core::{files::rename_noreplace, folders::has_parent_dir};
 
-use crate::transmission::{self, Redactor, TorrentFile, TorrentPlace};
+use trss_transmission as transmission;
+use trss_transmission::{Redactor, TorrentFile, TorrentPlace};
 
 /// How the move waits for Transmission to report the new folders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

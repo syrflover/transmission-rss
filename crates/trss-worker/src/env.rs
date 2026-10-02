@@ -8,7 +8,7 @@ use std::{str::FromStr, time::Duration};
 
 use url::Url;
 
-use trss_legacy::transmission::SessionConfig;
+use trss_transmission::SessionConfig;
 
 pub const TRANSMISSION_URL_VAR: &str = "TRANSMISSION_URL";
 pub const DOWNLOAD_DIR_VAR: &str = "DOWNLOAD_DIR";

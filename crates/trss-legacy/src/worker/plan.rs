@@ -11,9 +11,9 @@ use crate::{
         channels::{Channel, ChannelWithRules, Rule, RuleState},
         history::{HistoryResult, KnownItem},
     },
-    transmission::Redactor,
 };
 use trss_core::Millis;
+use trss_transmission::Redactor;
 
 /// What the evaluation decided about one item title.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -297,7 +297,7 @@ impl ChannelPlan {
     }
 
     /// Knows the channel URL's secret query values (those long enough to be
-    /// replaced in free text, see [`crate::transmission::MIN_QUERY_SECRET_LEN`]), for cleaning error
+    /// replaced in free text, see [`trss_transmission::MIN_QUERY_SECRET_LEN`]), for cleaning error
     /// text and the text that goes into history.
     pub fn redactor(&self) -> Redactor {
         let mut redactor = Redactor::none();

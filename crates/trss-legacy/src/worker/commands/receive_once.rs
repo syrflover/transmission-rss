@@ -88,10 +88,6 @@ use crate::{
             RevisionStore, RowWrite, Step,
         },
     },
-    transmission::{
-        self, add_item, get_torrent, get_torrents, has_label, remove_label, AddError, AddKind,
-        AddLabels, Redactor,
-    },
     worker::{
         offsets,
         plan::{picks, rule_destination, ChannelPlan},
@@ -101,6 +97,11 @@ use crate::{
 use trss_core::{
     commands::{Command, CommandState, Outcome, MAX_ATTEMPTS},
     Millis,
+};
+use trss_transmission as transmission;
+use trss_transmission::{
+    add_item, get_torrent, get_torrents, has_label, remove_label, AddError, AddKind, AddLabels,
+    Redactor,
 };
 
 /// The `kind` of the command.

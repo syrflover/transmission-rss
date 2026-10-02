@@ -4,10 +4,8 @@ use std::time::Duration;
 
 use reqwest::header;
 
-use crate::{
-    store::history::{identity_key, stored_link},
-    transmission::Redactor,
-};
+use crate::store::history::{identity_key, stored_link};
+use trss_transmission::Redactor;
 
 /// How long one feed request may take in total. The former binary had no
 /// limit, which a process that never exits cannot afford.

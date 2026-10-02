@@ -15,15 +15,12 @@ use transmission_rpc::types::{TorrentGetField, TorrentStatus};
 use trss_core::{settings::SettingsError, Millis};
 use trss_legacy::{
     episode_offset::may_decide,
+    revision::Release,
     store::{
         channels::{ChannelError, ChannelWithRules, RuleState},
         history::{HistoryResult, KnownItem, Observation, Recorded},
         revisions::{HistoryWrite, Mark, NewRevision, Revision, RevisionState, RowWrite},
         status::{ChannelReadResult, StatusStore, TransmissionCounts},
-    },
-    transmission::{
-        self, add_item, remove_stale, rename_with_retries, AddError, AddKind, Redactor,
-        RemovedTorrent, RenameMode,
     },
     worker::{
         context::MAX_REASON_CHARS,
@@ -33,6 +30,11 @@ use trss_legacy::{
         revisions::{self, Decided, Listing, Plan, Replaced, Selected},
         CycleContext,
     },
+};
+use trss_transmission as transmission;
+use trss_transmission::{
+    add_item, remove_stale, rename_with_retries, AddError, AddKind, Redactor, RemovedTorrent,
+    RenameMode,
 };
 
 /// How many selected items are added to Transmission at the same time.
@@ -917,6 +919,10 @@ async fn process_job(
                 &job.save_path,
                 job.episode,
                 mode,
+                // Read without the revision marker: `trname` does not read
+                // `06v2` as episode 6 in every name (Erai-raws' gives episode
+                // 34).
+                Release::without_version,
                 ctx.rename,
                 &redactor,
                 &cancel,

@@ -6,7 +6,7 @@
 //! evaluation in [`trss_legacy::rss`], adds the selected ones to Transmission and
 //! records every item it saw in the collection history
 //! ([`trss_legacy::store::history`]). The Transmission handling is the legacy
-//! binary's, shared through [`trss_legacy::transmission`].
+//! binary's, shared through [`trss_transmission`].
 //!
 //! # The collect folder
 //!
@@ -70,8 +70,8 @@
 //! skipped. Nothing is written for items that were not started; the next cycle
 //! sees them as new.
 //!
-//! Every request to Transmission times out ([`trss_legacy::transmission::REQUEST_TIMEOUT`],
-//! connecting [`trss_legacy::transmission::CONNECT_TIMEOUT`]), so a Transmission that
+//! Every request to Transmission times out ([`trss_transmission::REQUEST_TIMEOUT`],
+//! connecting [`trss_transmission::CONNECT_TIMEOUT`]), so a Transmission that
 //! stops answering fails the items of the cycle instead of holding the lock
 //! for good. A cycle that has not wound down [`SHUTDOWN_GRACE`] after the
 //! shutdown request is aborted, which aborts its item tasks and releases the
@@ -110,9 +110,9 @@ use trss_legacy::{
         seasons::SeasonStore,
         status::StatusStore,
     },
-    transmission::{Redactor, RenamePolicy},
     worker::{feed, live, season_link, watch, CycleContext, MovePolicy},
 };
+use trss_transmission::{Redactor, RenamePolicy};
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkerError {
@@ -197,8 +197,8 @@ impl Worker {
                 season_link: season_link::Memory::default(),
                 live: live::LiveWatch::default(),
                 transmission_url: env.transmission_url.clone(),
-                transmission_http: trss_legacy::transmission::http_client(
-                    trss_legacy::transmission::REQUEST_TIMEOUT,
+                transmission_http: trss_transmission::http_client(
+                    trss_transmission::REQUEST_TIMEOUT,
                 )
                 .map_err(WorkerError::TransmissionHttp)?,
                 session: env.session.clone(),
@@ -292,9 +292,9 @@ impl Worker {
     }
 
     /// Overrides how long one request to Transmission may take (default:
-    /// [`trss_legacy::transmission::REQUEST_TIMEOUT`]).
+    /// [`trss_transmission::REQUEST_TIMEOUT`]).
     pub fn with_transmission_timeout(mut self, timeout: Duration) -> Self {
-        self.ctx.transmission_http = trss_legacy::transmission::http_client(timeout)
+        self.ctx.transmission_http = trss_transmission::http_client(timeout)
             .expect("a client with only timeouts set builds");
         self
     }

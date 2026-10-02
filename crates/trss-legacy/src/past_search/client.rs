@@ -19,9 +19,9 @@ use trss_core::{system_clock, Clock};
 use super::query::search_url;
 use crate::{
     store::{channels::Channel, search_pace::SearchPace},
-    transmission::Redactor,
     worker::feed::{self, FeedItem, FetchError},
 };
+use trss_transmission::Redactor;
 
 /// The time between two requests to one host. A search of a long series sends
 /// up to [`super::MAX_EXTRA_SEARCHES`] more after the first, so this is the

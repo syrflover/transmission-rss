@@ -28,9 +28,9 @@ use crate::{
         channels::{Channel, MASK},
         history::{identity_key, HistoryItem},
     },
-    transmission::Redactor,
     worker::feed,
 };
+use trss_transmission::Redactor;
 
 /// A link that could be rebuilt, or the sentence saying why not.
 pub type Recovery = Result<String, String>;

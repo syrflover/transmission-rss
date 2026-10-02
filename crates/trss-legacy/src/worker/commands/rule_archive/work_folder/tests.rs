@@ -391,7 +391,7 @@ fn place(hash: &str, name: &str, dir: &Path) -> TorrentPlace {
         hash: hash.into(),
         name: name.into(),
         download_dir: dir.to_str().unwrap().into(),
-        files: vec![crate::transmission::TorrentFile {
+        files: vec![trss_transmission::TorrentFile {
             name: name.into(),
             length: 5,
             complete: true,
@@ -524,7 +524,7 @@ fn a_torrent_file_the_destination_has_refuses_the_move_unless_it_is_only_there()
     // Anything is refused while a file of the torrent is still at its
     // folder; one with its name on both sides is named as a conflict.
     let mut both = place("e", "e03.mkv", &from);
-    both.files.push(crate::transmission::TorrentFile {
+    both.files.push(trss_transmission::TorrentFile {
         name: "e05.mkv".into(),
         length: 5,
         complete: true,
@@ -546,7 +546,7 @@ fn two_files(hash: &str, name: &str, dir: &Path, files: [&str; 2]) -> TorrentPla
     TorrentPlace {
         files: files
             .into_iter()
-            .map(|name| crate::transmission::TorrentFile {
+            .map(|name| trss_transmission::TorrentFile {
                 name: name.into(),
                 length: 5,
                 complete: true,
@@ -734,9 +734,9 @@ fn unreachable_transmission() -> TransClient {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     drop(listener);
-    crate::transmission::client(
+    trss_transmission::client(
         format!("http://{addr}/transmission/rpc").parse().unwrap(),
-        &crate::transmission::http_client(Duration::from_secs(2)).unwrap(),
+        &trss_transmission::http_client(Duration::from_secs(2)).unwrap(),
     )
 }
 

@@ -33,9 +33,9 @@ use crate::{
         search_pace::SearchPace,
         status::TorrentListing,
     },
-    transmission::Redactor,
     worker::{feed::FeedItem, plan::picks},
 };
+use trss_transmission::Redactor;
 
 /// How many searches are kept at once.
 pub const MAX_SEARCHES: usize = 6;

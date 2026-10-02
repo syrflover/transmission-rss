@@ -41,7 +41,7 @@
 //! the screen says so (`이름을 되돌리지 못했어요` with the names), while the
 //! other files go on. Before Transmission's rename the target is looked up on
 //! disk; Transmission answers success without moving anything when the target
-//! is there (see [`crate::transmission::rename_torrent`]), so a target that
+//! is there (see [`trss_transmission::rename_torrent`]), so a target that
 //! appeared in between leaves the source in place, and the torrent's name is
 //! then put back. A rename on disk refuses an existing target by itself.
 //!
@@ -125,12 +125,12 @@ use crate::{
     revision::FileIdentity,
     rss::save_path,
     store::channels::{NewUndoFile, Rule, UndoBegun, UndoFileState, REVISION_UNDER_WAY},
-    transmission::{torrent_places, TorrentPlace},
     worker::{
         revisions::{episode_name, owner_of, same_folder, Owner},
         CycleContext,
     },
 };
+use trss_transmission::{torrent_places, TorrentPlace};
 
 /// The `kind` of the command.
 pub const KIND: &str = "episode_undo";

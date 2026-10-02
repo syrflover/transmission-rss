@@ -14,5 +14,4 @@ pub mod schedule;
 pub mod seasons;
 pub mod store;
 pub mod subscriptions;
-pub mod transmission;
 pub mod worker;

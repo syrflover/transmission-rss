@@ -2519,10 +2519,24 @@ dependencies = [
  "transmission-rpc",
  "trname",
  "trss-core",
+ "trss-transmission",
  "unicode-normalization",
  "url",
  "uuid",
  "yaml_serde",
+]
+
+[[package]]
+name = "trss-transmission"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "reqwest 0.12.28",
+ "tokio",
+ "tokio-util",
+ "transmission-rpc",
+ "trname",
+ "url",
 ]
 
 [[package]]
@@ -2573,6 +2587,7 @@ dependencies = [
  "transmission-rpc",
  "trss-core",
  "trss-legacy",
+ "trss-transmission",
  "trss-web",
  "url",
 ]

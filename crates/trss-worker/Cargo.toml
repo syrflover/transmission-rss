@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 trss-core = { path = "../trss-core" }
+trss-transmission = { path = "../trss-transmission" }
 trss-legacy = { path = "../trss-legacy" }
 
 dotenv = "0.15"

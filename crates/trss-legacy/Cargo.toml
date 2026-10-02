@@ -10,6 +10,7 @@ test-support = ["trss-core/test-support", "dep:image"]
 
 [dependencies]
 trss-core = { path = "../trss-core" }
+trss-transmission = { path = "../trss-transmission" }
 
 # trname = { path = "../trname" }
 trname = { git = "https://github.com/syrflover/trname", rev = "6169808" }

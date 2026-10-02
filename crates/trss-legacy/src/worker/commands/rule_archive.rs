@@ -65,9 +65,9 @@ use trss_core::{
 
 use crate::{
     store::channels::{Rule, RuleState},
-    transmission,
     worker::{watch, CycleContext},
 };
+use trss_transmission as transmission;
 
 use work_folder::{move_work_folder, Disk, Hold, MoveError, Moved, RealDisk, Request, Side};
 

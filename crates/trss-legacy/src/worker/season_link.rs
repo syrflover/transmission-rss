@@ -50,10 +50,9 @@ use std::{
 };
 
 use super::CycleContext;
-use crate::{
-    store::channels::{Rule, SeasonLinked, SeasonRef},
-    transmission::{self, TorrentPlace},
-};
+use crate::store::channels::{Rule, SeasonLinked, SeasonRef};
+use trss_transmission as transmission;
+use trss_transmission::TorrentPlace;
 
 /// What one pass came to (tests and logs).
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
