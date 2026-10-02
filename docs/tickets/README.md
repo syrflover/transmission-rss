@@ -123,7 +123,7 @@ Anissia 전체 목록 검색은 공식 문서에 없는 API라 바뀔 수 있어
 | [0033](0033-source-paths-spike.md) | 출처별 실제 수신 경로를 확인해요 | 완료 | 없음 |
 | [0034](0034-season-anissia-link.md) | 시즌을 Anissia 작품에 연결해요 | 완료 | 0030 |
 | [0035](0035-candidate-observation.md) | Anissia 최근 자막 목록을 30분마다 읽어 자막 후보를 쌓아요 | 완료 | 0034 |
-| [0036](0036-subtitle-jobs-foundation.md) | 자막 작업을 기록하고 할 일 화면과 작업 상세를 세워요 | 대기 | 0030, 0031 |
+| [0036](0036-subtitle-jobs-foundation.md) | 자막 작업을 기록하고 할 일 화면과 작업 상세를 세워요 | 완료 | 0030, 0031 |
 | [0037](0037-candidate-section.md) | 작품 상세의 자막 후보 구역에서 골라 받아요 | 대기 | 0035, 0036 |
 | [0038](0038-receive-result-tistory.md) | 공통 수신 결과를 정하고 Tistory 일반 첨부를 받아요 | 대기 | 0033, 0036 |
 | [0039](0039-browser-container-lifecycle.md) | 서버 브라우저 컨테이너와 수명을 다뤄요 | 대기 | 0032, 0036 |
