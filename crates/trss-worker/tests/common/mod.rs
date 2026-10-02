@@ -46,13 +46,11 @@ use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use tokio::{net::TcpListener, sync::Semaphore, task::JoinHandle};
 use tower::ServiceExt;
-use trss_core::lock_path_for;
+use trss_core::{lock_path_for, settings::SettingsStore, Db};
 use trss_legacy::{
     store::{
         channels::{ChannelInput, ChannelStore, ChannelWithRules, RuleInput},
         history::{HistoryItem, HistoryQuery, HistoryStore, MAX_PAGE_SIZE},
-        settings::SettingsStore,
-        Db,
     },
     transmission::RenamePolicy,
 };
@@ -1361,7 +1359,7 @@ impl Harness {
             .to_string_lossy()
             .into_owned();
         for rule in &mut rules {
-            rule.directory = trss_legacy::folders::prefixed(&below, &rule.directory);
+            rule.directory = trss_core::folders::prefixed(&below, &rule.directory);
         }
         self.channels
             .create_channel_with_rules(input, rules)

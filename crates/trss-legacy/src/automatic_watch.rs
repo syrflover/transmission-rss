@@ -272,11 +272,9 @@ mod tests {
     async fn a_folder_kept_under_another_spelling_is_settled_and_keeps_its_note() {
         use crate::{
             discovery::Scan,
-            store::{
-                library::{LibraryError, LibraryStore},
-                Db,
-            },
+            store::library::{LibraryError, LibraryStore},
         };
+        use trss_core::Db;
 
         // The settings write the folder as `real`; a folder is registered at
         // the same place as `alias`, and an unregistered one still holds the

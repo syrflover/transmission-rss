@@ -50,7 +50,7 @@ use crate::{
     past_search::world,
     store::{
         channels::{Channel, Rule},
-        history::{HistoryItem, HistoryResult, Millis, Observation},
+        history::{HistoryItem, HistoryResult, Observation},
         revisions::{HistoryWrite, NewRevision, RevisionState, RowWrite},
         status::TorrentListing,
     },
@@ -60,7 +60,10 @@ use crate::{
         CycleContext,
     },
 };
-use trss_core::commands::{Command, CommandState, Outcome};
+use trss_core::{
+    commands::{Command, CommandState, Outcome},
+    Millis,
+};
 
 /// The `kind` of the command.
 pub const KIND: &str = "receive_past";

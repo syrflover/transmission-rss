@@ -6,13 +6,13 @@
 
 use std::collections::BTreeMap;
 
-use trss_core::calendar::{day_start, weekday};
+use trss_core::{
+    calendar::{day_start, weekday},
+    Millis,
+};
 
 use super::calendar::{weekday_of_anissia, PartialDate};
-use crate::store::{
-    anissia::{Anime, WEEK_UPCOMING},
-    history::Millis,
-};
+use crate::store::anissia::{Anime, WEEK_UPCOMING};
 
 /// The most an AniList air time may differ from the schedule's for the two to
 /// be the same broadcast: a broadcast a day late is still that week's episode,

@@ -23,7 +23,8 @@ use super::{
     repo::{check_creator, check_not_subscribed, NewSubscription},
     ChannelError, ChannelStore,
 };
-use crate::store::{anissia, history::Millis};
+use crate::store::anissia;
+use trss_core::Millis;
 
 /// A rule of an import that becomes a subscription.
 #[derive(Debug, Clone, PartialEq, Eq)]

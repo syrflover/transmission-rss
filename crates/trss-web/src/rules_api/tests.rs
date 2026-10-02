@@ -8,10 +8,10 @@ use serde_json::{json, Value};
 use tower::ServiceExt;
 
 use super::*;
+use trss_core::Db;
 use trss_legacy::store::{
     channels::{ChannelInput, ChannelWithRules},
     history::Observation,
-    Db,
 };
 
 struct App {

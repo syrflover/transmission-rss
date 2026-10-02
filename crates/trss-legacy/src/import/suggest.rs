@@ -9,10 +9,8 @@
 use std::{collections::HashMap, path::Path};
 
 use super::comments::Reading;
-use crate::{
-    folders::{has_parent_dir, is_collect_folder_itself},
-    store::channels::RuleInput,
-};
+use crate::store::channels::RuleInput;
+use trss_core::folders::{has_parent_dir, is_collect_folder_itself};
 
 /// The four cases of the spec's suggestion table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

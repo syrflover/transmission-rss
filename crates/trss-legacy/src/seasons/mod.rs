@@ -35,15 +35,13 @@ mod tests;
 
 use std::{sync::Arc, time::Duration};
 
-use trss_core::Clock;
+use trss_core::{Clock, Db, Millis};
 
 use crate::{
     artwork::{Anilist, AnilistError, Artwork, USER_MAX_WAIT},
     store::{
         artwork::{ArtworkError, ArtworkStore},
-        history::Millis,
         seasons::{Entry, SeasonError, SeasonLink, SeasonStore},
-        Db,
     },
 };
 

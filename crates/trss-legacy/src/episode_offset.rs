@@ -867,10 +867,10 @@ mod tests {
         discovery::{EpisodeFile, FileKind, Scan, ScannedWork, WorkRead},
         store::{
             channels::{RuleState, Subscription, SubtitleMode},
-            db::Db,
             seasons::{Entry, FuzzyDate},
         },
     };
+    use trss_core::db::Db;
 
     fn entry(id: i64, episodes: Option<u32>) -> Entry {
         Entry {

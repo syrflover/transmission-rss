@@ -8,8 +8,8 @@ use serde_json::{json, Value};
 use tower::ServiceExt;
 
 use super::*;
+use trss_core::Db;
 use trss_legacy::store::channels::{RuleInput, RuleState};
-use trss_legacy::store::Db;
 
 /// Raw secret values used across the tests. No response body may contain them.
 const TOKEN: &str = "s3cr3t-tok";

@@ -82,9 +82,10 @@ use std::collections::HashMap;
 
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Row, TransactionBehavior};
 
-use super::{
+use super::history::{repo as history_repo, HistoryError, HistoryResult, Observation, Recorded};
+use trss_core::{
     db::{Db, DbError},
-    history::{repo as history_repo, HistoryError, HistoryResult, Millis, Observation, Recorded},
+    Millis,
 };
 
 #[derive(Debug, thiserror::Error)]

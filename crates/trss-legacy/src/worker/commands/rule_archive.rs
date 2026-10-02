@@ -59,11 +59,11 @@ use tokio_util::sync::CancellationToken;
 
 use trss_core::{
     commands::{Command, CommandState, Outcome, MAX_ATTEMPTS},
+    folders::has_parent_dir,
     Clock,
 };
 
 use crate::{
-    folders::has_parent_dir,
     store::channels::{Rule, RuleState},
     transmission,
     worker::{watch, CycleContext},
@@ -202,7 +202,7 @@ fn lexical(path: &Path) -> PathBuf {
 /// Where the rule saving to `directory` (relative to `collect`, or absolute)
 /// keeps its files, by path components. A directory with a `..` component is
 /// [`WorkFolder::Outside`]: its text does not say where it lands once links
-/// are followed (see [`crate::folders::has_parent_dir`]), so its folder is
+/// are followed (see [`trss_core::folders::has_parent_dir`]), so its folder is
 /// never moved.
 pub fn work_folder(collect: &Path, directory: &str) -> WorkFolder {
     if has_parent_dir(Path::new(directory)) {

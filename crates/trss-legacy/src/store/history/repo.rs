@@ -6,9 +6,10 @@ use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Row, Tra
 
 use super::model::{
     CycleState, HistoryChange, HistoryCursor, HistoryItem, HistoryPage, HistoryQuery,
-    HistoryResult, KnownItem, Millis, Observation, Recorded, Transition, MAX_PAGE_SIZE,
+    HistoryResult, KnownItem, Observation, Recorded, Transition, MAX_PAGE_SIZE,
 };
 use super::HistoryError;
+use trss_core::Millis;
 
 type Result<T> = std::result::Result<T, HistoryError>;
 

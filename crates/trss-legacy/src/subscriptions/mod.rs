@@ -8,9 +8,12 @@ pub mod candidates;
 use std::{collections::HashMap, sync::OnceLock};
 
 use regex::Regex;
-use trss_core::calendar::{civil_from_days, DAY_MS, KST_OFFSET_MS};
+use trss_core::{
+    calendar::{civil_from_days, DAY_MS, KST_OFFSET_MS},
+    Millis,
+};
 
-use crate::store::history::{HistoryItem, Millis};
+use crate::store::history::HistoryItem;
 
 /// A release title read into the parts the subscription flow needs.
 #[derive(Debug, Clone, PartialEq, Eq)]

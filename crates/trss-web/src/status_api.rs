@@ -39,10 +39,10 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use super::{ApiError, AppState};
-use trss_core::heartbeat::WorkerHeartbeat;
+use trss_core::{heartbeat::WorkerHeartbeat, Millis};
 use trss_legacy::store::{
     channels::ChannelError,
-    history::{CycleState, HistoryError, Millis},
+    history::{CycleState, HistoryError},
     status::StatusError,
 };
 

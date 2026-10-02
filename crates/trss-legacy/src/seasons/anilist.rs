@@ -11,11 +11,9 @@ use serde_json::json;
 
 use crate::{
     artwork::{Anilist, AnilistError},
-    store::{
-        history::Millis,
-        seasons::{Airing, Entry, FuzzyDate, Sequel},
-    },
+    store::seasons::{Airing, Entry, FuzzyDate, Sequel},
 };
+use trss_core::Millis;
 
 /// The most airing schedule entries asked for (AniList's page size caps it).
 const SCHEDULE_PAGE: u32 = 50;

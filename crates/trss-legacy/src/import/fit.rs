@@ -27,8 +27,8 @@
 use std::path::{Component, Path, PathBuf};
 
 use super::legacy::LegacyChannel;
-use crate::folders::{common_ancestor, has_parent_dir, prefixed, relative_under};
 use crate::store::channels::import::ImportChannel;
+use trss_core::folders::{common_ancestor, has_parent_dir, prefixed, relative_under};
 
 /// What an import does with one channel of the file.
 #[derive(Debug, Clone, PartialEq, Eq)]

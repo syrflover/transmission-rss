@@ -13,11 +13,11 @@ use serde_json::{json, Value};
 use tower::ServiceExt;
 
 use crate::{commands_api::now_millis, AppState};
+use trss_core::Db;
 use trss_legacy::store::{
     channels::{Channel, ChannelInput, Rule, RuleInput},
     history::{HistoryItem, HistoryResult, Observation},
     revisions::{NewRevision, OldVideo, RevisionState, Step},
-    Db,
 };
 
 const EPISODE_NAME: &str = "Show S01E14.mkv";

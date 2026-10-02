@@ -24,13 +24,12 @@ use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 use trss_core::{
     commands::{CommandState, CommandStore, NewCommand, MAX_ATTEMPTS},
-    lock_path_for, CycleLock,
+    lock_path_for, CycleLock, Db,
 };
 use trss_legacy::{
     store::{
         channels::{ChannelWithRules, RuleInput, RuleState},
         history::{HistoryItem, HistoryResult},
-        Db,
     },
     transmission::item_label,
     worker::commands::receive_once::{NAME_NOT_DERIVED, SEVERAL_FILES},
@@ -724,7 +723,7 @@ async fn a_retry_with_no_collect_folder_ends_at_once_and_leaves_the_item_as_it_w
     // The app cannot unset the folder once it is set; this is a database that
     // has none, as a fresh one does.
     s.h.db
-        .run::<_, trss_legacy::store::DbError, _>(|c| {
+        .run::<_, trss_core::DbError, _>(|c| {
             Ok(c.execute("DELETE FROM collection_settings", [])
                 .map(|_| ())?)
         })

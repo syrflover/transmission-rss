@@ -13,9 +13,9 @@ use std::collections::{HashMap, HashSet};
 
 use rusqlite::{params, Connection, OptionalExtension, Row, TransactionBehavior};
 
-use super::{
+use trss_core::{
     db::{Db, DbError},
-    history::Millis,
+    Millis,
 };
 
 /// A day: how old a snapshot may get before the worker asks Anissia again.

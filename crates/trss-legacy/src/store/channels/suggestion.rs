@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use rusqlite::{params, Connection, TransactionBehavior};
 
 use super::ChannelError;
-use crate::store::history::Millis;
+use trss_core::Millis;
 
 type Result<T> = std::result::Result<T, ChannelError>;
 

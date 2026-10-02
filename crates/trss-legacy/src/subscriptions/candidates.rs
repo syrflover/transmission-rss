@@ -46,10 +46,11 @@ use std::{
 use crate::{
     store::{
         channels::{ChannelWithRules, Rule, RuleState},
-        history::{HistoryItem, HistoryResult, Millis},
+        history::{HistoryItem, HistoryResult},
     },
     worker::plan::{ChannelPlan, Judgement},
 };
+use trss_core::Millis;
 
 use super::{parse_release, work_key};
 

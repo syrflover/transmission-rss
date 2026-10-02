@@ -39,9 +39,9 @@ use serde::{Deserialize, Serialize};
 
 pub use repo::LinkedFact;
 
-use super::{
+use trss_core::{
     db::{Db, DbError},
-    history::Millis,
+    Millis,
 };
 
 /// AniList's date, any part of which may be unknown.

@@ -110,7 +110,7 @@ mod tests {
     const INDEX: &str = "<!doctype html><title>TRSS</title>";
 
     fn test_state() -> AppState {
-        AppState::new(trss_legacy::store::Db::open_blocking(":memory:").unwrap())
+        AppState::new(trss_core::Db::open_blocking(":memory:").unwrap())
     }
 
     fn build_dir() -> TempDir {

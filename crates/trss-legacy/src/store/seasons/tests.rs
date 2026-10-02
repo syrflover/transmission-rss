@@ -231,7 +231,7 @@ async fn the_migration_creates_no_search_for_what_exists_already() {
     let path = dir.path().join("trss.db");
     {
         // A database as the build before season info left it, with a work and its seasons.
-        let conn = crate::store::db::database_at(&path, 12);
+        let conn = trss_core::db::database_at(&path, 12);
         conn.execute_batch(
             "INSERT INTO watch_folders (id, path, created_at, baselined) VALUES ('f', '/w', 1, 1);
              INSERT INTO works (id, watch_folder_id, dir_name) VALUES ('w1', 'f', 'Old Work');

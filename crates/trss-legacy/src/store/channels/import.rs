@@ -25,10 +25,10 @@ use super::{
     import_subscriptions::{subscribe, ImportSubscription, SubscriptionOutcome},
     repo, ChannelError, ChannelStore,
 };
-use crate::store::{
-    history::Millis,
-    library::{ensure_automatic_in, LibraryError},
+use crate::store::library::{ensure_automatic_in, LibraryError};
+use trss_core::{
     settings::{set_collect_folder_if_unset, SettingsError},
+    Millis,
 };
 
 /// One channel of the file: its fields and rules in file order.

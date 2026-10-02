@@ -54,13 +54,13 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use super::{commands_api::now_millis, watch_folders_api, ApiError, AppState};
+use trss_core::{
+    db::DbError,
+    settings::{CollectionSettings, SettingsError},
+};
 use trss_legacy::{
     automatic_watch::{self, Wanted},
-    store::{
-        db::DbError,
-        library::{self, LibraryError},
-        settings::{CollectionSettings, SettingsError},
-    },
+    store::library::{self, LibraryError},
 };
 
 #[cfg(test)]

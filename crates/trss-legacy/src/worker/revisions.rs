@@ -101,7 +101,7 @@ use crate::{
     revision::{crc_text, file_crc32_identified, FileIdentity, Release},
     store::{
         channels::RuleState,
-        history::{HistoryItem, HistoryResult, Millis},
+        history::{HistoryItem, HistoryResult},
         revisions::{
             Claim, OldVideo, Replacement, Revision, RevisionState, RowWrite, Step, FOLDER_AWAY,
             FOLDER_GONE_AFTER, OLD_FILE_WATCHED,
@@ -109,6 +109,7 @@ use crate::{
     },
     transmission::{get_torrent, torrent_places, Redactor, TorrentPlace},
 };
+use trss_core::Millis;
 
 /// Why a revision without a CRC32 in its name is not received.
 pub const NO_CRC: &str = "이름에 CRC32 값이 없어서 받은 영상을 확인할 수 없어 자동으로 받지 않았어요. 다시 받기로 받으면 확인 없이 이전 영상을 대체해요.";

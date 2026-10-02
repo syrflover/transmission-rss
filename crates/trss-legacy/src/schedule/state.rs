@@ -4,7 +4,8 @@
 
 use serde::Serialize;
 
-use crate::store::{anissia::Anime, channels::SubtitleMode, history::Millis};
+use crate::store::{anissia::Anime, channels::SubtitleMode};
+use trss_core::Millis;
 
 /// The video line of a card.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

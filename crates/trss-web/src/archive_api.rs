@@ -35,15 +35,13 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use super::{subscriptions_api::AnimeView, ApiError, AppState};
+use trss_core::Millis;
 use trss_legacy::{
     archive_suggestions::{
         recent_matches, ArchiveSuggestion, Facts, Ground, Recent, WINDOW_TITLES,
     },
     schedule::slot::Over,
-    store::{
-        channels::{ChannelWithRules, Rule, RuleState},
-        history::Millis,
-    },
+    store::channels::{ChannelWithRules, Rule, RuleState},
     worker::commands::rule_archive,
 };
 

@@ -10,11 +10,13 @@ use serde_json::Value;
 use tower::ServiceExt;
 
 use super::*;
-use trss_core::commands::{CommandState, NewCommand, Outcome};
+use trss_core::{
+    commands::{CommandState, NewCommand, Outcome},
+    Db,
+};
 use trss_legacy::store::{
     channels::{ChannelInput, RuleInput, RuleState},
     history::Observation,
-    Db,
 };
 
 const TOKEN: &str = "s3cr3t-tok-0123";

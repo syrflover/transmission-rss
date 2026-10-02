@@ -18,9 +18,11 @@ use std::collections::HashSet;
 
 use url::Url;
 
-use crate::folders::is_work_folder;
-use crate::store::channels::import::{match_rules, ImportAction, ImportChannel};
-use crate::store::channels::{mask_url, query_names, ChannelWithRules, Version};
+use crate::store::channels::{
+    import::{match_rules, ImportAction, ImportChannel},
+    mask_url, query_names, ChannelWithRules, Version,
+};
+use trss_core::folders::is_work_folder;
 
 /// The user's decision for one file channel that already exists.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

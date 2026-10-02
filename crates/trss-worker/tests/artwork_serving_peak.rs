@@ -17,6 +17,7 @@ use axum::{
 };
 use futures::StreamExt;
 use tower::ServiceExt;
+use trss_core::Db;
 use trss_legacy::{
     artwork::{
         files::{image_ref, ARTWORK_DIR},
@@ -26,7 +27,6 @@ use trss_legacy::{
     store::{
         artwork::{Format, Source},
         library::LibraryStore,
-        Db,
     },
 };
 use trss_web::{self as web, AppState};

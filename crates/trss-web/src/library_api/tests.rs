@@ -9,9 +9,9 @@ use serde_json::Value;
 use tower::ServiceExt;
 
 use crate::{api, AppState};
-use trss_legacy::{
-    discovery::{EpisodeFile, FileKind, Reason, Scan, ScannedWork, Unrecognized, WorkRead},
-    store::Db,
+use trss_core::Db;
+use trss_legacy::discovery::{
+    EpisodeFile, FileKind, Reason, Scan, ScannedWork, Unrecognized, WorkRead,
 };
 
 async fn get(state: &AppState, uri: &str) -> (StatusCode, Value) {

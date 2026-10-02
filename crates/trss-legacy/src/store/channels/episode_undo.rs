@@ -38,7 +38,8 @@ use std::collections::HashMap;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, TransactionBehavior};
 
 use super::{ChannelError, ChannelStore};
-use crate::store::{history::Millis, revisions::RevisionState};
+use crate::store::revisions::RevisionState;
+use trss_core::Millis;
 
 type Result<T> = std::result::Result<T, ChannelError>;
 

@@ -12,13 +12,13 @@ use tokio::{task, task::JoinSet};
 use tokio_util::sync::CancellationToken;
 use transmission_rpc::types::{TorrentGetField, TorrentStatus};
 
+use trss_core::{settings::SettingsError, Millis};
 use trss_legacy::{
     episode_offset::may_decide,
     store::{
         channels::{ChannelError, ChannelWithRules, RuleState},
-        history::{HistoryResult, KnownItem, Millis, Observation, Recorded},
+        history::{HistoryResult, KnownItem, Observation, Recorded},
         revisions::{HistoryWrite, Mark, NewRevision, Revision, RevisionState, RowWrite},
-        settings::SettingsError,
         status::{ChannelReadResult, StatusStore, TransmissionCounts},
     },
     transmission::{

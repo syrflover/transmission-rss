@@ -9,10 +9,11 @@ use crate::{
     rss::{save_path, ChannelEvaluator, ChannelSpec, Outcome, RuleSpec, SkipReason},
     store::{
         channels::{Channel, ChannelWithRules, Rule, RuleState},
-        history::{HistoryResult, KnownItem, Millis},
+        history::{HistoryResult, KnownItem},
     },
     transmission::Redactor,
 };
+use trss_core::Millis;
 
 /// What the evaluation decided about one item title.
 #[derive(Debug, Clone, PartialEq, Eq)]

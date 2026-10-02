@@ -68,6 +68,7 @@ use super::{
     rules_api::{self, RuleView},
     ApiError, AppState,
 };
+use trss_core::Millis;
 use trss_legacy::{
     anissia::{AnissiaError, Fetched, LAST_WEEK},
     store::{
@@ -76,7 +77,6 @@ use trss_legacy::{
             ChannelError, ChannelWithRules, NewSubscription, RuleInput, RuleState, Subscription,
             SubtitleMode,
         },
-        history::Millis,
     },
     subscriptions::{
         candidates::{self, TitleCandidate},

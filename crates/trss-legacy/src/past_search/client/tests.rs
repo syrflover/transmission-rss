@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use super::*;
-use crate::store::Db;
+use trss_core::Db;
 
 fn channel() -> Channel {
     Channel {

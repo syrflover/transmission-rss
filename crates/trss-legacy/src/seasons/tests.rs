@@ -598,7 +598,7 @@ async fn a_failed_search_is_tried_again_later_and_given_up_after_three_failures(
 /// Makes every write that `sql` names fail, as a full disk or a broken file would.
 async fn refuse(env: &Env, sql: &'static str) {
     env.db
-        .run::<_, crate::store::DbError, _>(move |conn| Ok(conn.execute_batch(sql)?))
+        .run::<_, trss_core::DbError, _>(move |conn| Ok(conn.execute_batch(sql)?))
         .await
         .unwrap();
 }

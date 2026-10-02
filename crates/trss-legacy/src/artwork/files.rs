@@ -67,9 +67,8 @@ use super::{image::sniff, MAX_IMAGE_BYTES};
 use crate::store::{
     artwork as store,
     artwork::{ArtworkError, ArtworkStore, Format, ImageRef, Source},
-    history::Millis,
 };
-use trss_core::files::rename_noreplace;
+use trss_core::{files::rename_noreplace, Millis};
 
 /// The folder of the images, relative to the app data folder.
 pub const ARTWORK_DIR: &str = "artwork";

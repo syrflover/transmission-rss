@@ -20,13 +20,13 @@ use axum::http::StatusCode;
 use common::*;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
+use trss_core::settings::SettingsStore;
 use trss_legacy::{
     discovery,
     store::{
         channels::{ChannelInput, ChannelWithRules, RuleInput},
         library::{LibraryStore, WatchFolder, WorkRecord},
         seasons::{Entry, FuzzyDate, SeasonStore},
-        settings::SettingsStore,
     },
     worker::MovePolicy,
 };
@@ -572,8 +572,8 @@ async fn an_unreadable_watch_folder_shows_its_reason_and_stops_neither_the_other
 // --- unregistering -------------------------------------------------------------------
 
 /// The automatic jobs waiting in the database: cover and season searches.
-async fn queued_jobs(db: &trss_legacy::store::Db) -> i64 {
-    db.run::<_, trss_legacy::store::DbError, _>(|c| {
+async fn queued_jobs(db: &trss_core::Db) -> i64 {
+    db.run::<_, trss_core::DbError, _>(|c| {
         Ok(c.query_row(
             "SELECT (SELECT count(*) FROM work_artwork WHERE job IS NOT NULL)
                   + (SELECT count(*) FROM season_info WHERE job IS NOT NULL)",

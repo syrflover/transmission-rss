@@ -1,7 +1,7 @@
 //! The database handle behind a [`ChannelStore`].
 
 use super::ChannelStore;
-use crate::store::Db;
+use trss_core::Db;
 
 impl ChannelStore {
     /// The database this store works on, for a store of another feature that

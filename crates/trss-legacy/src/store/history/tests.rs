@@ -1098,7 +1098,7 @@ async fn migration_adds_history_to_a_database_that_only_has_channels() {
     let path = dir.path().join("app.db");
     {
         // A database as version 1 left it.
-        crate::store::db::database_at(&path, 1);
+        trss_core::db::database_at(&path, 1);
     }
     let db = Db::open(&path).await.unwrap();
     let history = HistoryStore::new(db);

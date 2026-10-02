@@ -1,7 +1,7 @@
 use std::fmt;
 use std::str::FromStr;
 
-pub use trss_core::Millis;
+use trss_core::Millis;
 
 /// What became of an RSS item. The codes are stored in the database and are
 /// stable; the Korean labels are what the screens show.

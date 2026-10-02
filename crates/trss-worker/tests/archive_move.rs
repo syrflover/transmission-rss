@@ -23,12 +23,12 @@ use axum::http::StatusCode;
 use common::*;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
-use trss_core::commands::{CommandState, CommandStore};
+use trss_core::{
+    commands::{CommandState, CommandStore},
+    settings::SettingsStore,
+};
 use trss_legacy::{
-    store::{
-        channels::{ChannelInput, ChannelWithRules, RuleInput, RuleState},
-        settings::SettingsStore,
-    },
+    store::channels::{ChannelInput, ChannelWithRules, RuleInput, RuleState},
     worker::MovePolicy,
 };
 use trss_worker::{CommandsOutcome, TickOutcome, Worker};

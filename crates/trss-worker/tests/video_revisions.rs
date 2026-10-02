@@ -16,13 +16,13 @@ use axum::http::StatusCode;
 use common::*;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
+use trss_core::settings::SettingsStore;
 use trss_legacy::{
     revision::FileIdentity,
     store::{
         channels::{ChannelInput, RuleInput, RuleState},
         history::{HistoryItem, HistoryResult, Observation},
         revisions::{Revision, RevisionState, RevisionStore, OLD_FILE_WATCHED},
-        settings::SettingsStore,
     },
     worker::revisions,
 };

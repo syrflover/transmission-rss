@@ -7,10 +7,8 @@ use serde_json::{json, Value};
 use tower::ServiceExt;
 
 use crate::api;
-use trss_legacy::{
-    discovery::Scan,
-    store::{channels::ChannelInput, Db},
-};
+use trss_core::Db;
+use trss_legacy::{discovery::Scan, store::channels::ChannelInput};
 
 use super::*;
 
@@ -190,7 +188,7 @@ async fn an_install_that_was_not_empty_has_no_first_run() {
     let path = dir.path().join("app.db");
     {
         // A database as the build before the first run left it, with a channel.
-        let conn = trss_legacy::store::db::database_at(&path, 20);
+        let conn = trss_core::db::database_at(&path, 20);
         conn.execute(
             "INSERT INTO channels (id, position, url, excludes, secret_query, version)
              VALUES ('c1', 0, 'http://x/', '[]', '[]', 1)",

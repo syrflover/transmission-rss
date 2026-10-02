@@ -19,7 +19,7 @@ use serde_json::{json, Value};
 use tempfile::TempDir;
 use tower::ServiceExt;
 
-use trss_core::Clock;
+use trss_core::{Clock, Db};
 
 use super::*;
 use trss_legacy::{
@@ -27,7 +27,6 @@ use trss_legacy::{
     store::{
         channels::{ChannelInput, NewSubscription, RuleInput, SubtitleMode},
         history::{HistoryQuery, HistoryResult, KnownItem, Observation},
-        Db,
     },
     worker::plan::ChannelPlan,
 };

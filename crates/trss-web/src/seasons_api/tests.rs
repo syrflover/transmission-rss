@@ -9,10 +9,10 @@ use serde_json::{json, Value};
 use tower::ServiceExt;
 
 use crate::{api, AppState};
+use trss_core::Db;
 use trss_legacy::{
     artwork::{fake::Fake, image::samples, AppData, Artwork},
     discovery::{EpisodeFile, FileKind, Scan, ScannedWork, WorkRead},
-    store::Db,
 };
 
 struct Env {

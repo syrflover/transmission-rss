@@ -12,7 +12,7 @@ use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
-use trss_core::Clock;
+use trss_core::{Clock, Db};
 
 use super::*;
 use trss_legacy::{
@@ -20,7 +20,6 @@ use trss_legacy::{
     store::{
         channels::{Channel, ChannelInput},
         history::{HistoryResult, Observation},
-        Db,
     },
 };
 

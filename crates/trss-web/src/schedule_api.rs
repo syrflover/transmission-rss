@@ -76,7 +76,10 @@ use super::{
     subscriptions_api::{quarter_of, QuarterView},
     ApiError, AppState,
 };
-use trss_core::calendar::{date_text, day_of, week_start, weekday};
+use trss_core::{
+    calendar::{date_text, day_of, week_start, weekday},
+    Millis,
+};
 use trss_legacy::{
     schedule::{
         slot::{episode_on, slot_in_week, Slot},
@@ -86,7 +89,6 @@ use trss_legacy::{
     store::{
         anissia::Anime,
         channels::{Rule, RuleState, SeasonRef, SubtitleMode},
-        history::Millis,
         library::Held,
     },
     subscriptions::{whole_episode, Quarter},

@@ -19,10 +19,8 @@ use std::collections::BTreeMap;
 use rusqlite::{params, Connection, OptionalExtension};
 
 use super::{FileRecord, UnrecognizedRecord};
-use crate::{
-    discovery::{FileKind, Reason},
-    store::history::Millis,
-};
+use crate::discovery::{FileKind, Reason};
+use trss_core::Millis;
 
 /// An episode of a season with its files.
 #[derive(Debug, Clone, PartialEq)]
@@ -345,8 +343,9 @@ mod tests {
     use super::*;
     use crate::{
         discovery::{EpisodeFile, Scan, ScannedWork, Unrecognized, WorkRead},
-        store::{db::Db, library::LibraryStore},
+        store::library::LibraryStore,
     };
+    use trss_core::db::Db;
 
     fn file(season: u32, episode: &str, name: &str, kind: FileKind) -> EpisodeFile {
         EpisodeFile {
@@ -646,7 +645,7 @@ mod tests {
         .await;
         let plan: Vec<String> = store
             .db
-            .run::<_, crate::store::db::DbError, _>(|c| {
+            .run::<_, trss_core::db::DbError, _>(|c| {
                 let mut stmt = c.prepare(&format!("EXPLAIN QUERY PLAN {FIND_VIDEO_SQL}"))?;
                 let args = vec!["/w"; stmt.parameter_count()];
                 let rows = stmt

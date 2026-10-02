@@ -77,12 +77,10 @@ use rusqlite::Transaction;
 pub use overview::{EpisodeRange, SubtitleCoverage, WorkOverview};
 pub use page::{Cursor, Filter, ListQuery, Page, Sort};
 
-use crate::{
-    discovery::{FileKind, Reason, Scan, ScanError},
-    store::{
-        db::{Db, DbError},
-        history::Millis,
-    },
+use crate::discovery::{FileKind, Reason, Scan, ScanError};
+use trss_core::{
+    db::{Db, DbError},
+    Millis,
 };
 
 #[derive(Debug, thiserror::Error)]

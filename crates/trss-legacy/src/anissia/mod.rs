@@ -47,13 +47,9 @@ use url::Url;
 
 pub use parse::{Caption, Creator, ScheduleEntry};
 
-use trss_core::{system_clock, Clock};
+use trss_core::{system_clock, Clock, Db, Millis};
 
-use crate::store::{
-    anissia::{AnissiaStore, AnissiaStoreError},
-    history::Millis,
-    Db,
-};
+use crate::store::anissia::{AnissiaStore, AnissiaStoreError};
 
 /// Anissia's API.
 pub const DEFAULT_URL: &str = "https://api.anissia.net";

@@ -28,7 +28,7 @@
 //! # Save folders of subscriptions
 //!
 //! A subscription saves into a work folder below the collect folder, which the
-//! rule screen checks when it saves ([`trss_legacy::folders::is_work_folder`]). A
+//! rule screen checks when it saves ([`trss_core::folders::is_work_folder`]). A
 //! replacement that would give a subscription's rule a folder that fails that
 //! check (the channel's folder is the collect folder itself and the file's
 //! rule names no folder of its own, or the folder has `..`) keeps the
@@ -75,18 +75,20 @@ use std::collections::HashMap;
 use self::suggestions::{Pick, SubscriptionsResult, SuggestionView};
 use super::settings_api::check_folders;
 use super::{ApiError, AppState};
-use trss_legacy::import::{
-    fit::{fit, Fit, Fitted},
-    legacy::{self, LegacyChannel},
-    plan::{
-        build_actions, display_url, find_existing, keep_subscription_folders, Choice, Decision,
+use trss_legacy::{
+    import::{
+        fit::{fit, Fit, Fitted},
+        legacy::{self, LegacyChannel},
+        plan::{
+            build_actions, display_url, find_existing, keep_subscription_folders, Choice, Decision,
+        },
+        suggest::suggest,
     },
-    suggest::suggest,
+    store::channels::{
+        import::{is_title_waiting_subscription, match_rules, ImportChannel, ImportedChannel},
+        ChannelError, ChannelWithRules, Rule, Version,
+    },
 };
-use trss_legacy::store::channels::import::{
-    is_title_waiting_subscription, match_rules, ImportChannel, ImportedChannel,
-};
-use trss_legacy::store::channels::{ChannelError, ChannelWithRules, Rule, Version};
 
 const STALE_MESSAGE: &str = "검토한 뒤에 채널이 바뀌었어요. 파일을 다시 검토한 다음 선택해 주세요.";
 

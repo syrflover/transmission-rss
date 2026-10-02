@@ -45,8 +45,10 @@ pub use model::{
 
 use std::collections::{HashMap, HashSet};
 
-use super::db::{Db, DbError};
-use super::history::Millis;
+use trss_core::{
+    db::{Db, DbError},
+    Millis,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ChannelError {

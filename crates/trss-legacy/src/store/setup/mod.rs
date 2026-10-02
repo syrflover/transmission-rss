@@ -11,9 +11,9 @@ mod tests;
 
 use rusqlite::{params, Connection, OptionalExtension};
 
-use super::{
+use trss_core::{
     db::{Db, DbError},
-    history::Millis,
+    Millis,
 };
 
 #[derive(Debug, thiserror::Error)]

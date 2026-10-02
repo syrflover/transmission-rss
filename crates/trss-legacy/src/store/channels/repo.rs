@@ -14,7 +14,8 @@ use super::model::{
     Subscription, SubtitleMode, Version,
 };
 use super::ChannelError;
-use crate::store::{anissia, history::Millis};
+use crate::store::anissia;
+use trss_core::Millis;
 
 type Result<T> = std::result::Result<T, ChannelError>;
 

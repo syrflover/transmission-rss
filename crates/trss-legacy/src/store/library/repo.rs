@@ -12,10 +12,8 @@ use super::{
     AutomaticApplied, AutomaticPlan, EpisodeRecord, FileRecord, FolderSummary, Followed,
     LibraryError, ScanReport, UnrecognizedRecord, WatchFolder, WorkRecord,
 };
-use crate::{
-    discovery::{EpisodeFile, FileKind, Reason, Scan, ScanError, ScannedWork, WorkRead},
-    store::history::Millis,
-};
+use crate::discovery::{EpisodeFile, FileKind, Reason, Scan, ScanError, ScannedWork, WorkRead};
+use trss_core::Millis;
 
 fn begin(conn: &mut Connection) -> rusqlite::Result<Transaction<'_>> {
     conn.transaction_with_behavior(TransactionBehavior::Immediate)

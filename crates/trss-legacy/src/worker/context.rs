@@ -6,10 +6,11 @@ use super::commands::rule_archive::work_folder::MovePolicy;
 use crate::{
     store::{
         channels::ChannelStore, history::HistoryStore, library::LibraryStore,
-        revisions::RevisionStore, seasons::SeasonStore, settings::SettingsStore,
+        revisions::RevisionStore, seasons::SeasonStore,
     },
     transmission::{self, Redactor, RenamePolicy, SessionConfig},
 };
+use trss_core::settings::SettingsStore;
 
 /// Longest failure reason kept in history, in characters.
 pub const MAX_REASON_CHARS: usize = 300;

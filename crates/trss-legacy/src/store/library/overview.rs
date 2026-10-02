@@ -32,8 +32,9 @@ use rusqlite::Connection;
 
 use crate::{
     discovery::{kind_of, FileKind, Reason},
-    store::{history::Millis, seasons},
+    store::seasons,
 };
+use trss_core::Millis;
 
 /// A run of consecutive episodes, as written (`first` and `last` are the
 /// written forms of its ends; they are equal for a single episode).

@@ -47,9 +47,9 @@ use rusqlite::Connection;
 
 pub use repo::FileRow;
 
-use super::{
+use trss_core::{
     db::{Db, DbError},
-    history::Millis,
+    Millis,
 };
 
 /// How a work's cover is chosen.

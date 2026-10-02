@@ -413,7 +413,7 @@ async fn a_database_from_before_the_torrent_listing_has_none_until_the_worker_wr
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("app.db");
     {
-        let conn = crate::store::db::database_at(&path, BEFORE_TORRENT_LISTING);
+        let conn = trss_core::db::database_at(&path, BEFORE_TORRENT_LISTING);
         conn.execute(
             "INSERT INTO transmission_snapshot (id, downloading, seeding, taken_at)
              VALUES (1, 2, 3, 400)",
@@ -442,7 +442,7 @@ async fn a_database_from_before_the_heartbeat_has_none_until_the_worker_writes_o
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("app.db");
     {
-        let conn = crate::store::db::database_at(&path, BEFORE_HEARTBEAT);
+        let conn = trss_core::db::database_at(&path, BEFORE_HEARTBEAT);
         conn.execute(
             "INSERT INTO worker_info (id, cycle_interval_ms) VALUES (1, 300000)",
             [],

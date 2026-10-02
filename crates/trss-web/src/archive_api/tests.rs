@@ -15,7 +15,7 @@ use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
-use trss_core::Clock;
+use trss_core::{Clock, Db};
 
 use super::*;
 use trss_legacy::{
@@ -25,7 +25,6 @@ use trss_legacy::{
         channels::{Channel, ChannelInput, NewSubscription, RuleInput, RuleState, SubtitleMode},
         history::{HistoryResult, Observation},
         status::{read_day, ChannelReadResult},
-        Db,
     },
 };
 
@@ -143,7 +142,7 @@ impl App {
     async fn restamp(&self, rule: &Rule, at: Millis) {
         let id = rule.id.clone();
         self.db
-            .run::<_, trss_legacy::store::DbError, _>(move |c| {
+            .run::<_, trss_core::DbError, _>(move |c| {
                 c.execute(
                     "UPDATE rule_started SET started_at = ?2 WHERE rule_id = ?1",
                     rusqlite::params![id, at],

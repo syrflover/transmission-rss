@@ -1,4 +1,4 @@
-use trss_core::{commands::CommandStore, heartbeat::HeartbeatStore};
+use trss_core::{commands::CommandStore, heartbeat::HeartbeatStore, settings::SettingsStore, Db};
 use trss_legacy::{
     anissia::{Anissia, AnissiaConfig},
     artwork::{AnilistConfig, Artwork},
@@ -6,8 +6,7 @@ use trss_legacy::{
     seasons::Seasons,
     store::{
         channels::ChannelStore, history::HistoryStore, library::LibraryStore,
-        revisions::RevisionStore, search_pace::SearchPace, settings::SettingsStore,
-        setup::SetupStore, status::StatusStore, Db,
+        revisions::RevisionStore, search_pace::SearchPace, setup::SetupStore, status::StatusStore,
     },
 };
 

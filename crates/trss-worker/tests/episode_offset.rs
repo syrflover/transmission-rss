@@ -305,7 +305,7 @@ async fn save(s: &Scene, rule: &Rule, version: &Value, episode: i64) -> (StatusC
 
 /// Sets the collect folder (a real folder, which the library scans).
 async fn set_collect_folder(h: &Harness, shows: &std::path::Path) {
-    trss_legacy::store::settings::SettingsStore::new(h.db.clone())
+    trss_core::settings::SettingsStore::new(h.db.clone())
         .put_collection(0, shows.to_str().unwrap().to_owned(), None)
         .await
         .unwrap();
@@ -653,7 +653,7 @@ async fn a_suggestion_that_cannot_be_read_leaves_the_rule_list_answering() {
     s.h.db
         .run(|c| {
             c.execute_batch("ALTER TABLE season_info RENAME TO season_info_gone")
-                .map_err(trss_legacy::store::db::DbError::from)
+                .map_err(trss_core::db::DbError::from)
         })
         .await
         .unwrap();
@@ -975,10 +975,8 @@ async fn a_video_whose_torrent_is_gone_is_renamed_on_disk_without_replacing() {
 
 #[tokio::test]
 async fn an_undo_waits_for_a_revision_replacement_under_way_and_moves_finished_ones() {
-    use trss_legacy::store::{
-        revisions::{NewRevision, RevisionState, RevisionStore},
-        DbError,
-    };
+    use trss_core::DbError;
+    use trss_legacy::store::revisions::{NewRevision, RevisionState, RevisionStore};
     let (s, rule) = Scene::third_season_received().await;
     // A replacement of `S03E02` by a higher revision is under way.
     let revisions = RevisionStore::new(s.h.db.clone());
@@ -1050,9 +1048,9 @@ async fn an_undo_waits_for_a_revision_replacement_under_way_and_moves_finished_o
 /// for the file gone.
 #[tokio::test]
 async fn an_undo_moves_an_ended_replacement_that_watches_its_file() {
-    use trss_legacy::store::{
-        revisions::{NewRevision, RevisionState, RevisionStore, OLD_FILE_WATCHED},
-        DbError,
+    use trss_core::DbError;
+    use trss_legacy::store::revisions::{
+        NewRevision, RevisionState, RevisionStore, OLD_FILE_WATCHED,
     };
     let (s, rule) = Scene::third_season_received().await;
     let revisions = RevisionStore::new(s.h.db.clone());
@@ -1789,7 +1787,7 @@ async fn a_file_renamed_before_a_start_was_cut_short_is_recorded_renamed() {
 #[tokio::test]
 async fn an_automatic_rule_starts_a_new_undo_instead_of_carrying_on_an_old_one() {
     use trss_core::commands::{CommandState, CommandStore, Outcome};
-    use trss_legacy::store::DbError;
+    use trss_core::DbError;
     let (s, rule) = Scene::third_season_received().await;
     s.undo_cut_short(&rule, "undo-0304-a").await;
     CommandStore::new(s.h.db.clone())
@@ -1889,7 +1887,7 @@ impl Scene {
     /// Drops the extension of the RSS title `Show - {n}` was received for, as
     /// a feed without one has it.
     async fn title_without_extension(&self, n: u32) {
-        use trss_legacy::store::DbError;
+        use trss_core::DbError;
         let title = show(n).title;
         let bare = title.trim_end_matches(".mkv").to_owned();
         self.h

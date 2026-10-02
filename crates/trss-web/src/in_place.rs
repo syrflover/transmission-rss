@@ -33,10 +33,11 @@ use std::{
 };
 
 use super::{commands_api::now_millis, ApiError, AppState};
+use trss_core::Millis;
 use trss_legacy::{
     revision::Release,
     store::{
-        history::{HistoryItem, HistoryResult, Millis},
+        history::{HistoryItem, HistoryResult},
         revisions::{Revision, RevisionState},
         status::TorrentListing,
     },

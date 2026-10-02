@@ -1170,7 +1170,7 @@ async fn a_hung_session_set_delays_the_cycle_by_the_timeout_only() {
 
 /// Every text value in the history tables, as one string.
 async fn history_dump(h: &Harness) -> String {
-    use trss_legacy::store::DbError;
+    use trss_core::DbError;
     h.db.run::<_, DbError, _>(|conn| {
         let mut out = String::new();
         for table in ["history_items", "history_changes", "collection_cycle"] {

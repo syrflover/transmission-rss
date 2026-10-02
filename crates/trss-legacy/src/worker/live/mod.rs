@@ -78,10 +78,10 @@ use tree::WatchTree;
 pub use tree::Why;
 use watcher::{Control, SharedFd, Task};
 
-use trss_core::Clock;
+use trss_core::{Clock, Millis};
 
 use super::CycleContext;
-use crate::store::{history::Millis, library::WatchFolder};
+use crate::store::library::WatchFolder;
 
 /// How long placing the watches of one folder may hold up whoever attaches it
 /// (the command poll). Past it the folder is read by every cycle instead.

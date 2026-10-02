@@ -25,9 +25,9 @@ use crate::{
     store::{
         artwork::{Format, JobKind, Mode, Note, Selection, Source, UserChange},
         library::{LibraryStore, ListQuery},
-        DbError,
     },
 };
+use trss_core::DbError;
 
 struct Env {
     dir: TempDir,

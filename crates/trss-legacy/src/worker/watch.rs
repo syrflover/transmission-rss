@@ -173,7 +173,7 @@ pub enum Scanned {
 pub async fn scan_folder(
     ctx: &CycleContext,
     folder: &WatchFolder,
-    now: crate::store::history::Millis,
+    now: trss_core::Millis,
     mode: ScanMode,
 ) -> Result<Scanned, LibraryError> {
     let started = Instant::now();
@@ -257,7 +257,7 @@ pub async fn scan_works(
     ctx: &CycleContext,
     folder: &WatchFolder,
     names: Vec<String>,
-    now: crate::store::history::Millis,
+    now: trss_core::Millis,
     mode: WorksMode,
 ) -> Result<Scanned, LibraryError> {
     let started = Instant::now();
@@ -339,7 +339,7 @@ pub async fn scan_works(
 /// Makes the automatic watch folders the collect and archive folders of the
 /// settings (see the module docs). Failures are logged: the folders already
 /// registered are read all the same.
-pub async fn sync_automatic(ctx: &CycleContext, now: crate::store::history::Millis) {
+pub async fn sync_automatic(ctx: &CycleContext, now: trss_core::Millis) {
     let settings = match ctx.settings.collection().await {
         Ok(Some(settings)) => settings,
         Ok(None) => return,

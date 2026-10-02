@@ -10,7 +10,7 @@ use super::{
     ArtworkError, ClaimedJob, Format, ImageRef, Job, JobKind, Mode, Note, Searched, Selection,
     Source, UserChange,
 };
-use crate::store::history::Millis;
+use trss_core::Millis;
 
 fn begin(conn: &mut Connection) -> rusqlite::Result<Transaction<'_>> {
     conn.transaction_with_behavior(TransactionBehavior::Immediate)

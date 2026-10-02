@@ -469,7 +469,7 @@ fn search_error(err: SearchError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::Db;
+    use trss_core::Db;
 
     async fn service() -> (PastSearch, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();

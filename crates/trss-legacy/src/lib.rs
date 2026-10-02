@@ -16,5 +16,3 @@ pub mod store;
 pub mod subscriptions;
 pub mod transmission;
 pub mod worker;
-
-pub use trss_core::folders;

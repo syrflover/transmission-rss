@@ -8,7 +8,7 @@ use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBe
 use super::{
     Airing, ClaimedSearch, Entry, FuzzyDate, Job, Note, Origin, SeasonError, SeasonLink, Sequel,
 };
-use crate::store::history::Millis;
+use trss_core::Millis;
 
 /// A day, the time between two refreshes of an entry that is not finished.
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;

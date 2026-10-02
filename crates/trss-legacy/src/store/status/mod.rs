@@ -26,8 +26,10 @@ use std::collections::HashSet;
 
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 
-use super::db::{Db, DbError};
-use super::history::Millis;
+use trss_core::{
+    db::{Db, DbError},
+    Millis,
+};
 
 #[cfg(test)]
 mod tests;

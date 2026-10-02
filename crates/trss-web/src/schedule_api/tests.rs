@@ -14,7 +14,7 @@ use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
-use trss_core::Clock;
+use trss_core::{Clock, Db};
 
 use crate::{api, AppState};
 use trss_legacy::{
@@ -27,7 +27,6 @@ use trss_legacy::{
         },
         history::{HistoryResult, Observation},
         status::TransmissionCounts,
-        Db,
     },
 };
 

@@ -378,7 +378,7 @@ pub(super) fn check_work_folder(directory: &str) -> Result<(), ApiError> {
     if directory.is_empty() {
         return Err(ApiError::invalid("저장 폴더를 적어 주세요."));
     }
-    if trss_legacy::folders::is_collect_folder_itself(FsPath::new(directory)) {
+    if trss_core::folders::is_collect_folder_itself(FsPath::new(directory)) {
         return Err(ApiError::invalid(
             "저장 폴더로 `.`만 적을 수는 없어요. 수집 폴더 자체에 받게 되니, 그 아래의 작품 폴더 이름을 적어 주세요.",
         ));
@@ -390,8 +390,7 @@ pub(super) fn check_work_folder(directory: &str) -> Result<(), ApiError> {
 /// does not name: the user is told to choose one first.
 pub(super) fn check_stored_work_folder(rule: &Rule) -> Result<(), ApiError> {
     let directory = rule.directory.trim();
-    if directory.is_empty()
-        || trss_legacy::folders::is_collect_folder_itself(FsPath::new(directory))
+    if directory.is_empty() || trss_core::folders::is_collect_folder_itself(FsPath::new(directory))
     {
         return Err(ApiError::invalid(
             "이 규칙은 수집 폴더 자체에 받아요. 구독은 작품 폴더에 받으니, 규칙의 저장 폴더를 작품 폴더로 먼저 정해 주세요.",
@@ -410,7 +409,7 @@ pub(super) async fn check_directory(
     if stored.is_some_and(|rule| rule.directory == directory) {
         return Ok(());
     }
-    if trss_legacy::folders::has_parent_dir(FsPath::new(directory)) {
+    if trss_core::folders::has_parent_dir(FsPath::new(directory)) {
         return Err(ApiError::invalid(
             "저장 폴더에는 `..`를 쓸 수 없어요. 수집 폴더 아래 경로를 `..` 없이 적어 주세요.",
         ));

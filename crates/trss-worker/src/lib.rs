@@ -11,7 +11,7 @@
 //! # The collect folder
 //!
 //! Every torrent is saved under the app's collect folder
-//! ([`trss_legacy::store::settings`]) plus its rule's directory. While no collect
+//! ([`trss_core::settings`]) plus its rule's directory. While no collect
 //! folder is set the worker has nowhere to save anything: it still reads the
 //! feeds and records the items no rule picks, but the items a rule picked are
 //! neither added nor recorded (the cycle counts them as
@@ -93,7 +93,8 @@ use tokio_util::sync::CancellationToken;
 use trss_core::{
     commands::{CommandError, CommandStore},
     heartbeat::{self, HeartbeatStore},
-    system_clock, Clock, CycleLock,
+    settings::SettingsStore,
+    system_clock, Clock, CycleLock, Db,
 };
 
 pub use commands::{CommandsOutcome, DEFAULT_COMMAND_POLL};
@@ -107,9 +108,7 @@ use trss_legacy::{
         library::LibraryStore,
         revisions::RevisionStore,
         seasons::SeasonStore,
-        settings::SettingsStore,
         status::StatusStore,
-        Db,
     },
     transmission::{Redactor, RenamePolicy},
     worker::{feed, live, season_link, watch, CycleContext, MovePolicy},

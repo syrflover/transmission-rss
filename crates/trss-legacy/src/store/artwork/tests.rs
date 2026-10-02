@@ -128,7 +128,7 @@ async fn works_recorded_before_the_migration_get_no_search_until_asked() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("app.db");
     {
-        let conn = crate::store::db::database_at(&path, 10);
+        let conn = trss_core::db::database_at(&path, 10);
         conn.execute_batch(
             "INSERT INTO watch_folders (id, path, created_at) VALUES ('w', '/w', 1);
              INSERT INTO works (id, watch_folder_id, dir_name) VALUES ('a', 'w', 'A');",

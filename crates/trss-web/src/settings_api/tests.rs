@@ -11,7 +11,7 @@ use tempfile::TempDir;
 use tower::ServiceExt;
 
 use super::*;
-use trss_legacy::store::Db;
+use trss_core::Db;
 
 struct App {
     router: Router,

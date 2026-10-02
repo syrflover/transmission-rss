@@ -7,11 +7,15 @@ use serde_json::{json, Value};
 use tempfile::TempDir;
 use tower::ServiceExt;
 
-use trss_legacy::store::channels::{ChannelInput, ChannelStore, RuleInput};
-use trss_legacy::store::library::LibraryStore;
-use trss_legacy::store::settings::{CollectionSettings, SettingsStore};
-use trss_legacy::store::setup::{SetupStore, Step};
-use trss_legacy::store::Db;
+use trss_core::{
+    settings::{CollectionSettings, SettingsStore},
+    Db,
+};
+use trss_legacy::store::{
+    channels::{ChannelInput, ChannelStore, RuleInput},
+    library::LibraryStore,
+    setup::{SetupStore, Step},
+};
 
 use super::*;
 
@@ -583,7 +587,7 @@ async fn replacing_keeps_the_folder_of_a_subscription_when_the_files_folder_is_n
     );
     // They are still subscriptions, and the rule screen can save them.
     assert!(stored.rules[1..].iter().all(|r| r.subscription.is_some()));
-    assert!(trss_legacy::folders::is_work_folder(
+    assert!(trss_core::folders::is_work_folder(
         &stored.rules[1].directory
     ));
 }

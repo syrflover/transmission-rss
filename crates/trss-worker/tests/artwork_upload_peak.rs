@@ -8,10 +8,8 @@ use axum::{
     http::{header, Method, Request},
 };
 use tower::ServiceExt;
-use trss_legacy::{
-    artwork::{AnilistConfig, AppData, Artwork, MAX_IMAGE_BYTES},
-    store::Db,
-};
+use trss_core::Db;
+use trss_legacy::artwork::{AnilistConfig, AppData, Artwork, MAX_IMAGE_BYTES};
 use trss_web::{self as web, AppState};
 
 /// A `kB` field of `/proc/self/status`, in bytes.

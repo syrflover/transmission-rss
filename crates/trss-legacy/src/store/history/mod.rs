@@ -45,15 +45,17 @@ mod tests;
 pub use identity::{identity_key, stored_link};
 pub use model::{
     CycleState, HistoryChange, HistoryCursor, HistoryItem, HistoryPage, HistoryQuery,
-    HistoryResult, KnownItem, Millis, Observation, Recorded, Transition, DEFAULT_PAGE_SIZE,
-    MAX_PAGE_SIZE,
+    HistoryResult, KnownItem, Observation, Recorded, Transition, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE,
 };
 pub use rule_items::ReceivedItem;
 
 use std::collections::HashSet;
 
 use self::repo::Origin;
-use super::db::{Db, DbError};
+use trss_core::{
+    db::{Db, DbError},
+    Millis,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum HistoryError {

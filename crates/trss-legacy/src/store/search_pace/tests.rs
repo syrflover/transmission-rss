@@ -1,5 +1,5 @@
 use super::*;
-use crate::store::Db;
+use trss_core::Db;
 
 async fn pace() -> (SearchPace, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();

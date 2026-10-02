@@ -18,13 +18,12 @@ use axum::http::StatusCode;
 use common::*;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
+use trss_core::{settings::SettingsStore, Db};
 use trss_legacy::{
     rss::save_path,
     store::{
         channels::ChannelStore,
         history::{HistoryQuery, HistoryResult, HistoryStore, MAX_PAGE_SIZE},
-        settings::SettingsStore,
-        Db,
     },
 };
 use trss_worker::{CommandsOutcome, CycleReport, TickOutcome, Worker};
