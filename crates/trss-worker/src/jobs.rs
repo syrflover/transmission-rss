@@ -13,6 +13,11 @@ use super::Worker;
 /// how late a due reading starts.
 pub(crate) const RECHECK_EVERY: Duration = Duration::from_secs(60 * 60);
 
+/// How often the worker looks at the remote screens besides the web's
+/// wake-ups: the runs bound to jobs that wait for a site's check are watched
+/// from the first look after the job settled.
+pub(crate) const SCREEN_POLL: Duration = Duration::from_secs(2);
+
 impl Worker {
     /// Carries out the subtitle jobs with `runner` (see the crate docs), makes
     /// the subscribed creators' jobs, and reads their received episodes' files
@@ -126,6 +131,48 @@ impl Worker {
             Err(err) => {
                 eprintln!("Subtitle jobs: cannot look at the subscribed creators: {err}");
                 false
+            }
+        }
+    }
+
+    /// Clears the bindings of the remote screens when this worker holds the
+    /// server browser: the runs they name were an earlier worker's
+    /// ([`trss_jobs::screen`]). A worker without it leaves them, since they
+    /// may be the other worker's.
+    pub(crate) async fn clear_screens(&self) {
+        let (Some(runner), Some(_)) = (&self.jobs, &self.browser) else {
+            return;
+        };
+        match runner.screens().unbind_all((self.clock)()).await {
+            Ok(0) => {}
+            Ok(n) => {
+                println!("Remote screens: {n} bound to an earlier worker's browser are closed")
+            }
+            Err(err) => eprintln!("Remote screens: cannot close the earlier ones: {err}"),
+        }
+    }
+
+    /// The remote screens of the jobs that wait for a site's check, until
+    /// `cancel` fires: whenever the web wakes the worker (a person opened a
+    /// job's page) and every [`SCREEN_POLL`], the runner watches the bound
+    /// runs and answers the requests to prepare a screen
+    /// ([`trss_jobs::Runner::tend_screens`]). Only a worker with the server
+    /// browser does.
+    pub(crate) async fn run_screens(&self, cancel: CancellationToken) {
+        let (Some(runner), Some(_)) = (self.jobs.clone(), &self.browser) else {
+            return;
+        };
+        let mut ticker = tokio::time::interval(SCREEN_POLL);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tokio::select! {
+                biased;
+                _ = cancel.cancelled() => break,
+                _ = self.screen_wake.notified() => {}
+                _ = ticker.tick() => {}
+            }
+            if let Err(err) = runner.tend_screens(&self.job_wake, &cancel).await {
+                eprintln!("Remote screens: {err}");
             }
         }
     }

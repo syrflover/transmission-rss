@@ -30,6 +30,7 @@ pub fn router() -> Router<AppState> {
         .merge(super::policy_api::routes())
         .merge(super::rules_api::routes())
         .merge(super::schedule_api::routes())
+        .merge(super::screen_api::routes())
         .merge(super::seasons_anissia_api::routes())
         .merge(super::seasons_api::routes())
         .merge(super::settings_api::routes())

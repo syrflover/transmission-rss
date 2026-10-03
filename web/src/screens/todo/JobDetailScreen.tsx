@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
 import { when } from "@/lib/time";
+import { cn } from "@/lib/utils";
 
 import { EmptyState, usePageTitle } from "../ScreenFrame";
 import { btnNeutral } from "../collect/channels/styles";
@@ -12,11 +13,13 @@ import { fetchJob, jobPath, type JobDetail, type JobRow } from "./api";
 import { CountChip, FailureTag, OriginTags, StateBadge, Tag, originSentence } from "./badges";
 import { ended, shownState } from "./format";
 import { BackIcon } from "./icons";
+import { JobAuth } from "./JobAuth";
 import { JobResults } from "./JobResults";
 import { JobSteps } from "./JobSteps";
 import { UploadResults } from "./UploadResults";
 import { KEYS, usePolled } from "./poll";
 import { TargetLine } from "./TargetLine";
+import { useScreenPrepare, type ScreenPrepare } from "./useScreenPrepare";
 
 /** How often a job that is still going is read while the page is visible. */
 const JOB_MS = 2000;
@@ -36,9 +39,11 @@ function BackLink() {
 
 /**
  * A subtitle job's page, one for every job: the way back, the head, the steps,
- * the result of each episode, the path and the log, in one column. It reads the
- * job again every two seconds while the page is visible and the job has not
- * ended.
+ * the check on the site (the remote screen) while the job has one, the result
+ * of each episode, the path and the log, in one column. It reads the job again
+ * every two seconds while the page is visible and the job has not ended. Opening
+ * the page asks once for the job's server browser screen to be prepared;
+ * reading the job again never does.
  */
 export function JobDetailScreen() {
   const { jobId = "" } = useParams();
@@ -54,8 +59,9 @@ function JobPage({ jobId }: { jobId: string }) {
     LOAD_FAILED,
   );
   usePageTitle(job.data?.title ?? "작업");
+  const prepare = useScreenPrepare(jobId, job.data);
 
-  if (job.data) return <Page job={job.data} />;
+  if (job.data) return <Page job={job.data} prepare={prepare} />;
 
   return (
     <section className="mx-auto flex max-w-[880px] flex-col items-start gap-3 pt-4 pb-4">
@@ -90,8 +96,11 @@ function timeSentence(job: JobRow): string {
   }
 }
 
-function Page({ job }: { job: JobDetail }) {
+function Page({ job, prepare }: { job: JobDetail; prepare: ScreenPrepare }) {
   const title = useRef<HTMLHeadingElement>(null);
+  const screen = prepare.screen;
+  // A phone shows the check box in its first screen: the head shrinks while the job has a screen.
+  const compact = screen !== null;
 
   // Arriving takes focus to the head, once per job.
   useEffect(() => {
@@ -108,7 +117,7 @@ function Page({ job }: { job: JobDetail }) {
         <Cover
           work={coverOf(job.title)}
           imageUrl={job.work?.cover_url}
-          className="h-[88px] w-[59px] max-[720px]:h-[68px] max-[720px]:w-12"
+          className={cn("h-[88px] w-[59px] max-[720px]:h-[68px] max-[720px]:w-12", compact && "max-[720px]:hidden")}
           letterClass="text-2xl"
         />
         <div className="flex min-w-0 flex-1 flex-col gap-1.5">
@@ -154,13 +163,13 @@ function Page({ job }: { job: JobDetail }) {
             <StateBadge shown={shownState(job)} withDone />
             <span className="text-xs text-text-muted">{timeSentence(job)}</span>
             {job.work !== null && (
-              <Button asChild variant="ghost" className={`${btnNeutral} ml-auto`}>
+              <Button asChild variant="ghost" className={cn(btnNeutral, "ml-auto", compact && "max-[720px]:hidden")}>
                 <Link to={`/library/${encodeURIComponent(job.work.id)}`}>작품 보기</Link>
               </Button>
             )}
           </div>
           {job.note !== null && job.note !== "" && (
-            <p className="text-[13.5px] leading-relaxed text-text-secondary max-[720px]:text-[13px]">
+            <p className={cn("text-[13.5px] leading-relaxed text-text-secondary max-[720px]:text-[13px]", compact && "max-[720px]:line-clamp-2")}>
               {job.failure !== null && <FailureTag failure={job.failure} />}
               {job.note}
             </p>
@@ -168,9 +177,11 @@ function Page({ job }: { job: JobDetail }) {
         </div>
       </header>
 
-      <div className="mt-5">
+      <div className={cn("mt-5", compact && "max-[720px]:mt-3")}>
         <JobSteps steps={job.steps} />
       </div>
+
+      {screen !== null && <JobAuth jobId={job.id} screen={screen} prepare={prepare} />}
 
       {job.origin === "upload" ? (
         <Part title="올린 파일">

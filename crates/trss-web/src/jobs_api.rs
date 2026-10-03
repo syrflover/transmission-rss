@@ -19,7 +19,11 @@
 //! - `GET /api/subtitle-jobs/done?after=&limit=` the next page of `done`
 //!   (`limit` up to 50, 20 by default).
 //! - `GET /api/subtitle-jobs/{id}` one job with its steps, items with their
-//!   files, its folder in the receive area and its log, newest first.
+//!   files, its folder in the receive area, its log, newest first, and its
+//!   remote screen (`screen`, see [`super::screen_api`]; `null` for none). It
+//!   reads only: it never asks for a browser run.
+//! - `POST /api/subtitle-jobs/{id}/screen` and the screen's socket: see
+//!   [`super::screen_api`].
 //!
 //! A failed job, item and file carry their failure's class as `failure`
 //! (`missing`, `expired`, `not_a_file`, `changed`, `network`; an item also
@@ -360,6 +364,9 @@ struct DetailView {
     dropped: Vec<DroppedView>,
     receive_dir: String,
     log: Vec<LogView>,
+    /// The remote screen of a job that waits for a site's check in the
+    /// server browser ([`super::screen_api`]); `null` when it has none.
+    screen: Option<super::screen_api::ScreenView>,
 }
 
 /// The steps in order, those not reached `upcoming`; `auth` only when the job
@@ -458,6 +465,8 @@ async fn detail(
         return Err(ApiError::not_found("작업을 찾지 못했어요."));
     };
     let covers = covers_of(&state, [&row]).await?;
+    // Read only: showing the job never asks for a browser run.
+    let screen = super::screen_api::screen_of(&state, &row.id).await?;
     // Which item's episode received each file, for the items that share it.
     let owners: HashMap<&str, &str> = items
         .iter()
@@ -509,6 +518,7 @@ async fn detail(
             })
             .collect(),
         row: view(&row, &covers),
+        screen,
     }))
 }
 

@@ -11,8 +11,11 @@ trss-library.workspace = true
 trss-collect.workspace = true
 trss-import.workspace = true
 trss-jobs.workspace = true
+# The remote screens of the jobs that wait for a site's check: a DevTools
+# connection to a run through the launcher's proxy (`screen_api`).
+trss-browser.workspace = true
 
-axum = { workspace = true, features = ["multipart"] }
+axum = { workspace = true, features = ["multipart", "ws"] }
 bytes.workspace = true
 dotenv.workspace = true
 futures.workspace = true
@@ -22,6 +25,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync"] }
 tower-http.workspace = true
+tokio-util.workspace = true
 url.workspace = true
 
 [dev-dependencies]
@@ -37,3 +41,4 @@ rusqlite.workspace = true
 tempfile.workspace = true
 tokio-util.workspace = true
 tower.workspace = true
+tokio-tungstenite.workspace = true

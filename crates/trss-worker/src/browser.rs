@@ -7,8 +7,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use trss_browser::{BrowserPolicy, BrowserPool, PolicySource, PoolConfig};
+use trss_browser::{ActivitySource, BrowserPolicy, BrowserPool, PolicySource, PoolConfig};
 use trss_core::{settings::SettingsStore, Clock, CycleLock, Db};
+use trss_jobs::ScreenStore;
 
 use crate::env::BrowserEnv;
 
@@ -27,6 +28,22 @@ pub fn policy_source(db: Db) -> PolicySource {
                     BrowserPolicy::default()
                 }
             }
+        })
+    })
+}
+
+/// A person's input on the remote screens of the jobs that wait for a site's
+/// check (`trss_jobs::screen`), which the web records: the pool's idle end
+/// counts it as use of the bound run. Input that cannot be read is none.
+pub fn screen_activity(db: Db) -> ActivitySource {
+    let screens = ScreenStore::new(db);
+    ActivitySource::new(move || {
+        let screens = screens.clone();
+        Box::pin(async move {
+            screens.live_inputs().await.unwrap_or_else(|err| {
+                eprintln!("Browser: cannot read the remote screens' input ({err})");
+                Vec::new()
+            })
         })
     })
 }
@@ -51,9 +68,11 @@ pub fn take_lock(db_path: &Path) -> io::Result<Option<CycleLock>> {
 }
 
 /// The pool over the browser container `env` names. This resets the
-/// container, so a browser an earlier worker left open is closed.
+/// container, so a browser an earlier worker left open is closed. Its idle end
+/// counts a person's input on a job's remote screen ([`screen_activity`]).
 pub async fn connect(db: Db, env: &BrowserEnv, clock: Clock) -> Result<BrowserPool, String> {
-    let config = PoolConfig::new(env.url.clone(), env.token.clone(), env.downloads.clone());
+    let config = PoolConfig::new(env.url.clone(), env.token.clone(), env.downloads.clone())
+        .with_activity(screen_activity(db.clone()));
     BrowserPool::new(config, clock, policy_source(db))
         .await
         .map_err(|e| format!("cannot set up the server browser: {e}"))

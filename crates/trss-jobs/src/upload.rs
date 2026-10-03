@@ -161,6 +161,16 @@ fn is_winpng_staging(name: &str) -> bool {
         .is_some_and(|id| uuid::Uuid::try_parse(id).is_ok_and(|u| u.to_string() == id))
 }
 
+/// The item a folder holds the file of a site's check for (`check-`, the
+/// job's UUID, `-` and the item's ID; see [`crate::Runner`]).
+fn check_staging_item(name: &str) -> Option<i64> {
+    let rest = name.strip_prefix("check-")?;
+    let (job, item) = (rest.get(..36)?, rest.get(36..)?.strip_prefix('-')?);
+    let canonical = uuid::Uuid::try_parse(job).is_ok_and(|u| u.to_string() == job);
+    let item_id = item.parse::<i64>().ok()?;
+    (canonical && item_id.to_string() == item).then_some(item_id)
+}
+
 /// The uploads of a process: the turns, the limits, and where files go.
 #[derive(Clone)]
 pub struct Uploads {
@@ -209,12 +219,18 @@ impl Uploads {
     /// (the files a reading of a post's WinPNG images put down, which the
     /// runner removes after each item and a killed process does not) that
     /// nothing wrote for `older_than`: a reading going on writes into its
-    /// folder every few seconds. Anything else in the area is left. Returns
-    /// how many folders it removed.
+    /// folder every few seconds; and the folders `.tmp/check-<job id>-<item
+    /// id>/` (the file a person's check let the server browser download,
+    /// which the runner removes once the item settles) that nothing wrote for
+    /// `older_than` and whose item no longer has to receive its file (not
+    /// pending, running or waiting; the item's next run takes the file
+    /// otherwise). Anything else in the area is left. Returns how many
+    /// folders it removed.
     pub async fn sweep(&self, older_than: Duration) -> Result<usize, UploadError> {
         let root = self.area.root().to_owned();
         let mut candidates: Vec<PathBuf> = Vec::new();
         let mut stagings: Vec<PathBuf> = Vec::new();
+        let mut checks: Vec<(PathBuf, i64)> = Vec::new();
         for dir in [root.join(".tmp"), root.clone()] {
             let mut entries = match tokio::fs::read_dir(&dir).await {
                 Ok(entries) => entries,
@@ -235,6 +251,10 @@ impl Uploads {
                     candidates.push(entry.path());
                 } else if old && dir.ends_with(".tmp") && is_winpng_staging(&name) {
                     stagings.push(entry.path());
+                } else if let Some(item) =
+                    check_staging_item(&name).filter(|_| old && dir.ends_with(".tmp"))
+                {
+                    checks.push((entry.path(), item));
                 }
             }
         }
@@ -243,6 +263,16 @@ impl Uploads {
             .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
             .collect();
         let known = self.store.known_receive_ids(names).await?;
+        let open = self
+            .store
+            .open_items(checks.iter().map(|(_, item)| *item).collect())
+            .await?;
+        stagings.extend(
+            checks
+                .into_iter()
+                .filter(|(_, item)| !open.contains(item))
+                .map(|(path, _)| path),
+        );
         let mut removed = 0;
         for path in stagings {
             if tokio::fs::remove_dir_all(&path).await.is_ok() {

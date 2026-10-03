@@ -118,8 +118,19 @@
 //! idle time while [`Worker::run`] runs, and ends all of them at shutdown.
 //! Without the variable the worker runs as before. The binary also gives the
 //! subtitle jobs a reader over the pool, which takes the files out of the
-//! WinPNG images of a Tistory post (`trss_subtitles::winpng`); a worker
-//! without the pool leaves such posts waiting for a source.
+//! WinPNG images of a Tistory post (`trss_subtitles::winpng`), and a browser
+//! that brings a post to a site's check for a person to pass on the job's
+//! remote screen (`trss_subtitles::auth`); a worker without the pool leaves
+//! such posts waiting for a source.
+//!
+//! The web shows that screen and relays the person's input to the run's page
+//! itself, through the launcher; only this worker's pool starts, resets and
+//! ends runs. They meet in the database (`trss_jobs::screen`): the worker
+//! binds the run to the job, watches it for the file, and clears the binding
+//! when the run ends, all of them at its start; the web asks it to prepare
+//! the screen when a person opens the job's page, which wakes the worker's
+//! look at the screens, and records the person's input, which the pool's idle
+//! end counts as use ([`browser::screen_activity`]).
 //!
 //! One worker at a time uses one container, since a pool resets it and its
 //! reaper ends the runs it does not know: the binary takes
@@ -266,6 +277,9 @@ pub struct Worker {
     recheck_every: Duration,
     /// Rung when the web wakes the worker, so the jobs are looked at too.
     job_wake: Arc<tokio::sync::Notify>,
+    /// Rung when the web wakes the worker, so the remote screens are looked
+    /// at too (a person opened a job's page).
+    screen_wake: Arc<tokio::sync::Notify>,
     /// Rung when the season queue stored a season's entry
     /// ([`trss_library::seasons::Seasons::stored`]); `None`: not heard.
     season_stored: Option<Arc<tokio::sync::Notify>>,
@@ -355,6 +369,7 @@ impl Worker {
             recheck: None,
             recheck_every: jobs::RECHECK_EVERY,
             job_wake: Arc::default(),
+            screen_wake: Arc::default(),
             season_stored: None,
             jobs_running: Arc::default(),
             browser: None,
@@ -595,9 +610,16 @@ impl Worker {
             eprintln!("Cannot record the cycle interval: {err}");
         }
         self.start_watching().await;
+        // Before any job runs: the runs bound to the jobs that wait for a
+        // site's check were an earlier worker's, closed by the pool's reset.
+        self.clear_screens().await;
         let jobs = tokio::spawn({
             let (worker, cancel) = (self.clone(), cancel.clone());
             async move { worker.run_jobs(cancel).await }
+        });
+        let screens = tokio::spawn({
+            let (worker, cancel) = (self.clone(), cancel.clone());
+            async move { worker.run_screens(cancel).await }
         });
         let rechecks = tokio::spawn({
             let (worker, cancel) = (self.clone(), cancel.clone());
@@ -628,6 +650,9 @@ impl Worker {
         }
         if let Err(err) = jobs.await {
             eprintln!("Subtitle jobs stopped: {err}");
+        }
+        if let Err(err) = screens.await {
+            eprintln!("Remote screens stopped: {err}");
         }
         if let Err(err) = rechecks.await {
             eprintln!("Subtitle rechecks stopped: {err}");

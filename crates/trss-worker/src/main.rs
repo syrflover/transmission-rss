@@ -14,7 +14,7 @@ use trss_library::{
     seasons::{self, Seasons},
 };
 use trss_subtitles::{
-    blogger::BloggerSource, drive::Drive, fake::FakeSource, naver::NaverSource,
+    auth::BrowserAuth, blogger::BloggerSource, drive::Drive, fake::FakeSource, naver::NaverSource,
     tistory::TistorySource, winpng::BrowserReader, Sources,
 };
 use trss_worker::{env::FAKE_SUBTITLE_SOURCE_VAR, Worker, WorkerEnv};
@@ -91,9 +91,13 @@ async fn run() -> Result<(), String> {
         trss_core::system_clock(),
     );
     // The posts whose subtitle is in WinPNG images are read by the server
-    // browser; a worker without one leaves them waiting.
+    // browser, and the posts whose file comes after a person's check on the
+    // site are brought to that check in it; a worker without one leaves them
+    // waiting.
     let jobs = match &browser {
-        Some(pool) => jobs.with_winpng(BrowserReader::shared(pool.clone())),
+        Some(pool) => jobs
+            .with_winpng(BrowserReader::shared(pool.clone()))
+            .with_auth(BrowserAuth::shared(pool.clone())),
         None => jobs,
     };
     let artwork = Artwork::new(db.clone(), Some(app_data), anilist);

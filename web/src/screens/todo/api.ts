@@ -355,10 +355,44 @@ export interface JobDetail extends JobRow {
   log: LogEntry[];
   /** For an upload job: the files left out, in the order they were named. */
   dropped: DroppedFile[];
+  /**
+   * The remote screen of a job that waits for a site's check in the server
+   * browser (`screen_api.rs`); `null` when it has none.
+   */
+  screen: JobScreen | null;
+}
+
+/** A job's remote screen, as `screen_api.rs` describes it. */
+export interface JobScreen {
+  /**
+   * `ready`: a browser run shows the check (connect to `run`); `preparing`:
+   * the worker is bringing the page to it; `closed`: no run shows it (`note`
+   * says why), opening the page prepares it again; `unavailable`: this server
+   * has no server browser.
+   */
+  state: "ready" | "preparing" | "closed" | "unavailable";
+  run: string | null;
+  /**
+   * With `run`: when the run was bound to the job (ms). Another check of the
+   * job in the same run is a new binding, with a later `bound`.
+   */
+  bound: number | null;
+  note: string | null;
 }
 
 export function fetchJob(id: string, signal?: AbortSignal): Promise<JobDetail> {
   return api<JobDetail>(`/subtitle-jobs/${encodeURIComponent(id)}`, { signal });
+}
+
+/**
+ * A person opened the job's page: asks the worker to bring the page to its
+ * check again if its server browser is gone, and counts as use of a live one.
+ * Answers the screen as it is now, or `null` when the job has none. Only the
+ * opening of the page (and the person's `다시 열기`) sends this; reading the
+ * job, polling and reconnecting never do.
+ */
+export function prepareScreen(id: string): Promise<JobScreen | null> {
+  return api<JobScreen | null>(`/subtitle-jobs/${encodeURIComponent(id)}/screen`, { method: "POST" });
 }
 
 /** The most candidates one job takes, as the server (`MAX_CANDIDATES` in `jobs_api.rs`) does. */

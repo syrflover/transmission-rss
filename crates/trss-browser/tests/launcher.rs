@@ -370,6 +370,42 @@ async fn the_proxy_relays_frames_both_ways() {
     assert_eq!(socket.next().await.unwrap().unwrap(), Message::text(big));
 }
 
+/// The worker drives a run and the web shows its page: two clients of one
+/// run at once, each with its own connection to the browser, both behind the
+/// token.
+#[tokio::test]
+async fn two_clients_of_one_run_each_get_their_own_answers() {
+    let h = harness().await;
+    h.started("a").await;
+    let mut worker = h.connect("a").await.unwrap();
+    let mut web = h.connect("a").await.unwrap();
+
+    worker.send(Message::text("from the worker")).await.unwrap();
+    web.send(Message::text("from the web")).await.unwrap();
+    assert_eq!(
+        web.next().await.unwrap().unwrap(),
+        Message::text("from the web")
+    );
+    assert_eq!(
+        worker.next().await.unwrap().unwrap(),
+        Message::text("from the worker")
+    );
+
+    // The second client closing leaves the first one's connection alone.
+    drop(web);
+    worker.send(Message::text("still here")).await.unwrap();
+    assert_eq!(
+        worker.next().await.unwrap().unwrap(),
+        Message::text("still here")
+    );
+    // And a second client still needs the token.
+    let refused = connect_async(format!("ws://{}/runs/a/cdp", h.base)).await;
+    assert!(
+        matches!(refused, Err(tokio_tungstenite::tungstenite::Error::Http(ref r)) if r.status() == 401),
+        "{refused:?}"
+    );
+}
+
 #[tokio::test]
 async fn an_unknown_or_ended_run_has_no_proxy() {
     let h = harness().await;

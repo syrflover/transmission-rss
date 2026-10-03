@@ -12,7 +12,7 @@ use trss_collect::{
     },
 };
 use trss_core::{commands::CommandStore, heartbeat::HeartbeatStore, settings::SettingsStore, Db};
-use trss_jobs::{Follow, JobStore, ReceiveArea, Uploads};
+use trss_jobs::{Follow, JobStore, ReceiveArea, ScreenStore, Uploads};
 use trss_library::{
     artwork::Artwork,
     seasons::Seasons,
@@ -69,6 +69,12 @@ pub struct AppState {
     /// The host names the web answers to besides IP addresses and
     /// `localhost` (`TRSS_WEB_HOSTS`, [`crate::origin_guard`]).
     pub web_hosts: AllowedHosts,
+    /// The remote screens of the jobs that wait for a site's check, as the
+    /// worker bound them.
+    pub screens: ScreenStore,
+    /// The way to the server browser's runs for those screens; `None`: this
+    /// web has none (no `TRSS_BROWSER_URL`).
+    pub remote: Option<crate::screen_api::RemoteScreens>,
 }
 
 impl AppState {
@@ -93,6 +99,8 @@ impl AppState {
             follow: Follow::new(db.clone()),
             receive_root: PathBuf::from("receive"),
             uploads: Uploads::new(JobStore::new(db.clone()), ReceiveArea::new("receive")),
+            screens: ScreenStore::new(db.clone()),
+            remote: None,
             // No app data folder: covers can be read and changed but no image
             // stored or served until `with_artwork` gives one.
             artwork,
@@ -130,6 +138,13 @@ impl AppState {
     /// the same receive area as the one given to `with_receive_area`.
     pub fn with_uploads(mut self, uploads: Uploads) -> Self {
         self.uploads = uploads;
+        self
+    }
+
+    /// Shows the remote screens through `remote` (the server browser's
+    /// launcher).
+    pub fn with_remote_screens(mut self, remote: crate::screen_api::RemoteScreens) -> Self {
+        self.remote = Some(remote);
         self
     }
 

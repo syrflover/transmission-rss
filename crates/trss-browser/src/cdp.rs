@@ -4,7 +4,10 @@
 //! `sessionId` for a target the connection attached to in flatten mode) and
 //! their answers, and the events the browser sends. [`Connection::command`]
 //! sends one and waits for its answer; [`Connection::events`] is a feed of
-//! every event of the browser and of its sessions.
+//! every event of the browser and of its sessions. One reader takes the
+//! answers and the events in the order the browser sent them: each event has
+//! its place (`seq`), and [`Connection::command_marked`] tells how many
+//! events came before an answer.
 
 use std::{
     collections::HashMap,
@@ -51,15 +54,20 @@ pub struct Event {
     pub params: Value,
     /// The session the event came from; `None` for the browser itself.
     pub session_id: Option<String>,
+    /// The event's place among the connection's events, from 1.
+    pub seq: u64,
 }
 
-type Pending = oneshot::Sender<Result<Value, CdpError>>;
+/// An answer, and how many events came before it.
+type Pending = oneshot::Sender<Result<(Value, u64), CdpError>>;
 
 struct Shared {
     next_id: AtomicU64,
     /// The commands waiting for an answer, with the method for the error.
     pending: Mutex<HashMap<u64, (String, Pending)>>,
     events: broadcast::Sender<Event>,
+    /// How many events were read so far (the last one's `seq`).
+    events_read: AtomicU64,
     out: mpsc::UnboundedSender<String>,
     /// Cancelled when the connection is over, from either side.
     closed: CancellationToken,
@@ -110,6 +118,7 @@ impl Connection {
             next_id: AtomicU64::new(1),
             pending: Mutex::default(),
             events,
+            events_read: AtomicU64::new(0),
             out,
             closed: closed.clone(),
         });
@@ -138,6 +147,31 @@ impl Connection {
         params: Value,
         timeout: Duration,
     ) -> Result<Value, CdpError> {
+        self.command_marked_within(session, method, params, timeout)
+            .await
+            .map(|(answer, _)| answer)
+    }
+
+    /// Sends `method` like [`Connection::command`], and gives with its
+    /// answer how many events the browser sent before it: the events whose
+    /// `seq` is at most that came before the answer, the others after.
+    pub async fn command_marked(
+        &self,
+        session: Option<&str>,
+        method: &str,
+        params: Value,
+    ) -> Result<(Value, u64), CdpError> {
+        self.command_marked_within(session, method, params, COMMAND_TIMEOUT)
+            .await
+    }
+
+    async fn command_marked_within(
+        &self,
+        session: Option<&str>,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<(Value, u64), CdpError> {
         if self.shared.closed.is_cancelled() {
             return Err(CdpError::Closed);
         }
@@ -212,10 +246,16 @@ impl Shared {
                         .unwrap_or("")
                         .to_owned(),
                 }),
-                None => Ok(message["result"].take()),
+                // The one reader reads the events too: those read so far
+                // are those before the answer.
+                None => Ok((
+                    message["result"].take(),
+                    self.events_read.load(Ordering::SeqCst),
+                )),
             };
             let _ = tx.send(answer);
         } else if let Some(method) = message.get("method").and_then(Value::as_str) {
+            let seq = self.events_read.fetch_add(1, Ordering::SeqCst) + 1;
             let _ = self.events.send(Event {
                 method: method.to_owned(),
                 params: message["params"].take(),
@@ -223,6 +263,7 @@ impl Shared {
                     .get("sessionId")
                     .and_then(Value::as_str)
                     .map(str::to_owned),
+                seq,
             });
         }
     }

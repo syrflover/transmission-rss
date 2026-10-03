@@ -4,6 +4,7 @@ use std::{
 };
 
 use crate::origin_guard::{AllowedHosts, HOSTS_VAR};
+use url::Url;
 
 /// Environment variable naming the address `trss-web` listens on.
 pub const BIND_VAR: &str = "TRSS_WEB_BIND";
@@ -11,6 +12,11 @@ pub const BIND_VAR: &str = "TRSS_WEB_BIND";
 pub const PORT_VAR: &str = "TRSS_WEB_PORT";
 /// Environment variable naming the directory that holds the frontend build.
 pub const STATIC_DIR_VAR: &str = "TRSS_WEB_STATIC_DIR";
+/// The server browser's launcher (the worker's variable of the same name):
+/// the web shows a job's remote screen through it ([`crate::screen_api`]).
+pub const BROWSER_URL_VAR: &str = "TRSS_BROWSER_URL";
+/// The launcher's token, with [`BROWSER_URL_VAR`].
+pub const BROWSER_TOKEN_VAR: &str = "TRSS_BROWSER_TOKEN";
 
 const DEFAULT_BIND: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
 const DEFAULT_PORT: u16 = 8080;
@@ -24,6 +30,27 @@ pub enum EnvError {
     Port(String),
     #[error("{HOSTS_VAR} must be host names separated by commas, got {0:?}")]
     Hosts(String),
+    #[error("{BROWSER_URL_VAR} must be an http address, got {0:?}")]
+    BrowserUrl(String),
+    #[error("{BROWSER_URL_VAR} is set but {BROWSER_TOKEN_VAR} is not")]
+    BrowserToken,
+}
+
+/// How the web reaches the server browser's launcher: only through its
+/// token-protected DevTools proxy of a run, never to start or end one.
+#[derive(Clone, PartialEq, Eq)]
+pub struct BrowserAccess {
+    pub url: Url,
+    pub token: String,
+}
+
+impl std::fmt::Debug for BrowserAccess {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The token is a secret.
+        f.debug_struct("BrowserAccess")
+            .field("url", &self.url.as_str())
+            .finish_non_exhaustive()
+    }
 }
 
 /// Deployment settings of `trss-web`, read from the environment.
@@ -35,11 +62,16 @@ pub enum EnvError {
 /// Requests are answered for IP addresses and `localhost`; a host name the
 /// web is reached by (through a reverse proxy, say) must be listed in
 /// `TRSS_WEB_HOSTS` (see [`crate::origin_guard`]).
+///
+/// With `TRSS_BROWSER_URL` (and `TRSS_BROWSER_TOKEN`) the web shows the remote
+/// screens of the jobs that wait for a site's check, and refuses every
+/// connection from the server browser's network ([`crate::browser_net`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WebEnv {
     pub addr: SocketAddr,
     pub static_dir: PathBuf,
     pub hosts: AllowedHosts,
+    pub browser: Option<BrowserAccess>,
 }
 
 impl WebEnv {
@@ -72,11 +104,23 @@ impl WebEnv {
             Some(value) => AllowedHosts::parse(&value).ok_or(EnvError::Hosts(value))?,
             None => AllowedHosts::default(),
         };
+        let browser = match get(BROWSER_URL_VAR) {
+            Some(value) => {
+                let url = Url::parse(value.trim())
+                    .ok()
+                    .filter(|u| matches!(u.scheme(), "http" | "https") && u.host().is_some())
+                    .ok_or_else(|| EnvError::BrowserUrl(value.clone()))?;
+                let token = get(BROWSER_TOKEN_VAR).ok_or(EnvError::BrowserToken)?;
+                Some(BrowserAccess { url, token })
+            }
+            None => None,
+        };
 
         Ok(Self {
             addr: SocketAddr::new(ip, port),
             static_dir,
             hosts,
+            browser,
         })
     }
 }
@@ -130,6 +174,31 @@ mod tests {
         let env = env(&[(BIND_VAR, "::1"), (PORT_VAR, " "), (STATIC_DIR_VAR, "")]).unwrap();
         assert_eq!(env.addr, "[::1]:8080".parse().unwrap());
         assert_eq!(env.static_dir, PathBuf::from("web/dist"));
+    }
+
+    #[test]
+    fn the_server_browser_needs_its_address_and_token_together() {
+        assert_eq!(env(&[]).unwrap().browser, None);
+        let env_ok = env(&[
+            (BROWSER_URL_VAR, "http://trss-browser:9230"),
+            (BROWSER_TOKEN_VAR, "secret-token"),
+        ])
+        .unwrap();
+        let browser = env_ok.browser.unwrap();
+        assert_eq!(browser.url.as_str(), "http://trss-browser:9230/");
+        assert_eq!(browser.token, "secret-token");
+        assert!(!format!("{browser:?}").contains("secret-token"));
+        assert_eq!(
+            env(&[(BROWSER_URL_VAR, "http://trss-browser:9230")]),
+            Err(EnvError::BrowserToken)
+        );
+        assert_eq!(
+            env(&[
+                (BROWSER_URL_VAR, "trss-browser:9230"),
+                (BROWSER_TOKEN_VAR, "t")
+            ]),
+            Err(EnvError::BrowserUrl("trss-browser:9230".into()))
+        );
     }
 
     #[test]

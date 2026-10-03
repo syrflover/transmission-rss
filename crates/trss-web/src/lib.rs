@@ -22,6 +22,7 @@ use tower_http::{
 pub mod api;
 pub mod archive_api;
 pub mod artwork_api;
+pub mod browser_net;
 pub mod channels_api;
 pub mod commands_api;
 pub mod env;
@@ -38,6 +39,7 @@ pub mod past_search_api;
 pub mod policy_api;
 pub mod rules_api;
 pub mod schedule_api;
+pub mod screen_api;
 pub mod seasons_anissia_api;
 pub mod seasons_api;
 pub mod settings_api;

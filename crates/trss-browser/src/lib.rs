@@ -5,8 +5,10 @@
 //! - [`launcher`] and the binary `trss-browserd`: what runs in the browser
 //!   container. A virtual display and a small HTTP service that starts and
 //!   ends one Chromium per run, with a profile of its own that is deleted with
-//!   the run, and proxies the run's DevTools socket to the worker behind a
-//!   token. No port of the container is published.
+//!   the run, and proxies the run's DevTools socket behind a token: to the
+//!   worker, and to the web, which shows a run's page to a person and relays
+//!   the person's input through a connection of its own (a run takes more
+//!   than one). No port of the container is published.
 //! - [`pool`]: the worker's side. A [`BrowserPool`] gives each job a
 //!   [`BrowserRun`], drives it through [`cdp`], keeps within the policy's cap
 //!   on concurrent browser jobs, and ends runs that are idle past the policy's
@@ -23,7 +25,7 @@ pub mod pool;
 pub mod protocol;
 
 pub use pool::{
-    BrowserError, BrowserPolicy, BrowserPool, BrowserRun, DialogSeen, Dialogs, Download,
-    DownloadState, MovedFile, Page, PolicySource, PoolConfig, RunStatus, DOWNLOAD_STALL,
+    ActivitySource, BrowserError, BrowserPolicy, BrowserPool, BrowserRun, DialogSeen, Dialogs,
+    Download, DownloadState, MovedFile, Page, PolicySource, PoolConfig, RunStatus, DOWNLOAD_STALL,
     MAX_DOWNLOAD_BYTES, MAX_RUN_DOWNLOAD_BYTES,
 };

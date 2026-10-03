@@ -7,7 +7,13 @@ use trss_anilist::AnilistConfig;
 use trss_anissia::{Anissia, AnissiaConfig};
 use trss_core::{db::DB_PATH_ENV, wake::wake_path_for, Db};
 use trss_library::artwork::{AppData, Artwork};
-use trss_web::{self as web, env::WebEnv, AppState};
+use trss_web::{
+    self as web,
+    browser_net::{self, GuardedListener},
+    env::WebEnv,
+    screen_api::RemoteScreens,
+    AppState,
+};
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -47,6 +53,20 @@ async fn run() -> Result<(), String> {
     let receive = trss_jobs::ReceiveArea::in_app_data(app_data.root());
     let artwork = Artwork::new(db.clone(), Some(app_data), anilist);
 
+    // With the server browser, the web is on its network: every connection
+    // from there is refused, and a web that cannot tell which addresses those
+    // are does not start.
+    let refused = match &env.browser {
+        Some(access) => {
+            let subnet = browser_net::find(&access.url).await.map_err(|e| {
+                format!("will not start without refusing the server browser's network: {e}")
+            })?;
+            println!("trss-web refuses connections from the server browser's network {subnet}");
+            Some(subnet)
+        }
+        None => None,
+    };
+
     let listener = TcpListener::bind(env.addr)
         .await
         .map_err(|e| format!("cannot listen on {}: {e}", env.addr))?;
@@ -62,6 +82,10 @@ async fn run() -> Result<(), String> {
         .with_receive_area(&receive)
         .with_worker_wake(wake_path_for(&db_path))
         .with_web_hosts(env.hosts.clone());
+    let state = match &env.browser {
+        Some(access) => state.with_remote_screens(RemoteScreens::new(access)?),
+        None => state,
+    };
     // What a killed process, or an upload cut short in this one, left in the
     // receive area (a staging folder, or the folder of a job that was never
     // recorded). This process takes the uploads, so it sweeps: at start and
@@ -75,6 +99,7 @@ async fn run() -> Result<(), String> {
             Err(e) => eprintln!("trss-web: cannot sweep the receive area: {e}"),
         },
     );
+    let listener = GuardedListener::new(listener, refused);
     let served = axum::serve(listener, web::router(&env.static_dir, state))
         .with_graceful_shutdown(web::shutdown_signal())
         .await

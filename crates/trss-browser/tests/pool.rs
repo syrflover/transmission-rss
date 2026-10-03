@@ -961,3 +961,74 @@ fn the_pool_configuration_does_not_show_the_token() {
     assert!(!shown.contains("s3cret"), "{shown}");
     assert!(shown.contains("trss-browser"));
 }
+
+#[tokio::test]
+async fn a_persons_input_reported_from_outside_counts_as_use_and_a_watched_screen_does_not() {
+    use std::sync::{
+        atomic::{AtomicI64, Ordering},
+        Arc, Mutex,
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let downloads = dir.path().join("browser-downloads");
+    std::fs::create_dir_all(&downloads).unwrap();
+    let clock = Arc::new(AtomicI64::new(1_000_000));
+    let fake = support::fake_launcher(downloads.clone(), 4, clock.clone()).await;
+    // What the web wrote: (run id, when a person last gave input).
+    let inputs: Arc<Mutex<Vec<(String, i64)>>> = Arc::default();
+    let mut config = trss_browser::PoolConfig::new(fake.url.clone(), TOKEN, &downloads)
+        .with_activity(trss_browser::ActivitySource::new({
+            let inputs = inputs.clone();
+            move || {
+                let inputs = inputs.lock().unwrap().clone();
+                Box::pin(async move { inputs })
+            }
+        }));
+    config.slot_recheck = Duration::from_millis(100);
+    let pool = trss_browser::BrowserPool::new(
+        config,
+        Arc::new({
+            let clock = clock.clone();
+            move || clock.load(Ordering::SeqCst)
+        }),
+        trss_browser::PolicySource::fixed(policy(300, 2)),
+    )
+    .await
+    .unwrap();
+    let advance = |secs: i64| clock.fetch_add(secs * 1000, Ordering::SeqCst);
+    let used = pool.start("used").await.unwrap();
+    let watched = pool.start("watched").await.unwrap();
+
+    // Both screens are open; frames go to them all along. Only the first one
+    // gets input, 250 seconds in, as the web reports it.
+    advance(250);
+    inputs
+        .lock()
+        .unwrap()
+        .push((used.run_id().to_owned(), clock.load(Ordering::SeqCst)));
+    // An input of a run the pool does not have changes nothing.
+    inputs
+        .lock()
+        .unwrap()
+        .push(("gone-000000000000".to_owned(), clock.load(Ordering::SeqCst)));
+    advance(51);
+    // The watched one is idle past its time; the used one counts from the input.
+    assert_eq!(pool.reap_once().await, [watched.run_id().to_owned()]);
+    assert!(watched.is_ended() && !used.is_ended());
+    advance(248);
+    assert!(pool.reap_once().await.is_empty());
+    advance(2);
+    assert_eq!(pool.reap_once().await, [used.run_id().to_owned()]);
+
+    // An input reported for a time after the pass is taken as now, so a clock
+    // ahead does not keep a run for longer than the idle time.
+    let next = pool.start("used").await.unwrap();
+    inputs.lock().unwrap().clear();
+    inputs.lock().unwrap().push((
+        next.run_id().to_owned(),
+        clock.load(Ordering::SeqCst) + 3_600_000,
+    ));
+    assert!(pool.reap_once().await.is_empty());
+    inputs.lock().unwrap().clear();
+    advance(301);
+    assert_eq!(pool.reap_once().await, [next.run_id().to_owned()]);
+}

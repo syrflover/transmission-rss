@@ -24,7 +24,7 @@ scraper.workspace = true
 # attachment list (`aPostFiles`).
 serde_json.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["time", "sync", "fs", "io-util"] }
+tokio = { workspace = true, features = ["time", "sync", "fs", "io-util", "rt"] }
 url.workspace = true
 zip.workspace = true
 

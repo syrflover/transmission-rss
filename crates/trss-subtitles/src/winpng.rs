@@ -297,7 +297,7 @@ fn same_name(link: &str, got: &str) -> bool {
 /// Takes what has already ended off `next` without waiting for more, until it
 /// gives nothing at once. A source that has ended gives its error at once, and
 /// that is the end of the draining, not a reason to go on.
-async fn drain<T, E, F>(mut next: impl FnMut() -> F) -> Result<usize, E>
+pub(crate) async fn drain<T, E, F>(mut next: impl FnMut() -> F) -> Result<usize, E>
 where
     F: Future<Output = Result<T, E>>,
 {
@@ -606,7 +606,7 @@ pub struct BrowserPage {
 /// A failure of the browser, in words that are the same whatever the browser
 /// said: its own text can hold the page's addresses and exception texts.
 /// Only the kind of the error is logged.
-fn browser_failure(err: BrowserError) -> Failure {
+pub(crate) fn browser_failure(err: BrowserError) -> Failure {
     let (kind, reason) = match &err {
         BrowserError::RunEnded { .. } => ("run ended", "서버 브라우저의 실행이 끝났어요"),
         BrowserError::Launcher(_) => ("launcher", "서버 브라우저를 시작하지 못했어요"),

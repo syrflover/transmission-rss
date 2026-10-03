@@ -463,6 +463,13 @@ impl BrowserRun {
         self.entry.is_ended()
     }
 
+    /// Resolves when the run has ended (at once for one that has). A task that
+    /// serves a page of the run for as long as it lives waits on this: the
+    /// run's events go on being sent while any handle holds the run.
+    pub async fn ended(&self) {
+        self.entry.ended.cancelled().await
+    }
+
     /// Reads the run's state. Not activity.
     pub fn status(&self) -> RunStatus {
         self.entry.status()
@@ -484,11 +491,16 @@ impl BrowserRun {
 
     // --- activity ---
 
-    /// A person used the screen: the idle time counts from now.
+    /// A person used the screen: the idle time counts from now. Decided under
+    /// the lock an idle end decides under ([`RunInner::touch_live`]), so the
+    /// use is either counted before the reaper looks, or refused as ended;
+    /// never counted on a run the reaper ends meanwhile.
     pub fn touch(&self) -> Result<(), BrowserError> {
-        self.check()?;
-        self.entry.touch_at(self.pool.now());
-        Ok(())
+        if self.entry.touch_live(self.pool.now()) {
+            Ok(())
+        } else {
+            Err(self.ended_error())
+        }
     }
 
     /// A job step is running on the run: it does not end for being idle until

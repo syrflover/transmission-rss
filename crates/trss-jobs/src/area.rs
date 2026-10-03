@@ -6,6 +6,9 @@
 //!   shows in folders (a WinPNG image's).
 //! - `.tmp/winpng-<job id>/`: the files a server browser took out of a post's
 //!   images before the job receives them; removed when the item ends.
+//! - `.tmp/check-<job id>-<item id>/`: the file a server browser downloaded
+//!   when a person passed a site's check on the job's screen, until the item
+//!   received it ([`crate::screen`]).
 //! - `.tmp/<attempt id>/<name>`: the temporary file of one attempt to receive
 //!   a file. Nothing but that attempt writes there, and a published file
 //!   leaves it by a rename that never replaces anything

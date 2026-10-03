@@ -363,6 +363,61 @@ async fn the_sweep_removes_an_old_winpng_staging_folder_and_keeps_a_young_one() 
 }
 
 #[tokio::test]
+async fn the_sweep_removes_an_old_check_folder_whose_item_settled_and_keeps_an_open_items() {
+    use trss_jobs::{Created, ItemState, NewItem, NewJob};
+    let s = setup().await;
+    let job = NewJob {
+        command_id: "c1".to_owned(),
+        request: "{}".to_owned(),
+        origin: "pick".to_owned(),
+        work_id: None,
+        season: Some(1),
+        anime_no: None,
+        source_id: None,
+        creator: None,
+        revision_of: None,
+        revises_attributed: false,
+        items: ["1", "2"]
+            .iter()
+            .map(|ep| NewItem {
+                observation_id: None,
+                episode: (*ep).to_owned(),
+                post_url: format!("https://fake.trss.invalid/check/ep{ep}"),
+                found_at: 500,
+            })
+            .collect(),
+    };
+    let Created::Created(job) = s.store.create(job, 900).await.unwrap() else {
+        panic!("not created");
+    };
+    let items = s.store.items(&job).await.unwrap();
+    let (open, settled) = (items[0].id, items[1].id);
+    s.store
+        .set_item(settled, ItemState::Failed, None, None, 1_000)
+        .await
+        .unwrap();
+    let made = |rel: &str| {
+        let dir = s.area.at(rel);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("ep.srt"), b"x").unwrap();
+        dir
+    };
+    // The item's next run takes the file of an open item, however old.
+    let kept = made(&format!(".tmp/check-{job}-{open}"));
+    let gone = made(&format!(".tmp/check-{job}-{settled}"));
+    let young = made(&format!(".tmp/check-{job}-{}", settled + 100));
+    let other = made(".tmp/check-notes-1");
+    for dir in [&kept, &gone, &other] {
+        make_old(dir);
+    }
+    assert_eq!(s.uploads.sweep(Duration::from_secs(3600)).await.unwrap(), 1);
+    assert!(!gone.exists());
+    for stays in [&kept, &young, &other] {
+        assert!(stays.exists(), "{stays:?}");
+    }
+}
+
+#[tokio::test]
 async fn the_sweep_goes_on_in_the_background_and_catches_an_orphan_made_later() {
     use std::sync::{Arc, Mutex};
     let s = setup().await;

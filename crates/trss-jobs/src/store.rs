@@ -428,6 +428,26 @@ impl JobStore {
             .await
     }
 
+    /// Which of the items `ids` still have to receive their files: pending,
+    /// running or waiting.
+    pub async fn open_items(&self, ids: Vec<i64>) -> Result<HashSet<i64>, JobError> {
+        self.db
+            .run(move |c| {
+                let mut stmt = c.prepare(
+                    "SELECT EXISTS(SELECT 1 FROM subtitle_job_items
+                                   WHERE id = ?1 AND state IN ('pending', 'running', 'waiting'))",
+                )?;
+                let mut open = HashSet::new();
+                for id in ids {
+                    if stmt.query_row([id], |r| r.get::<_, bool>(0))? {
+                        open.insert(id);
+                    }
+                }
+                Ok(open)
+            })
+            .await
+    }
+
     /// The jobs that are not done, oldest first.
     pub async fn open_jobs(&self) -> Result<Vec<JobRow>, JobError> {
         self.db

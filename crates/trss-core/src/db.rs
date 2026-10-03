@@ -136,6 +136,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("../migrations/jobs/user_mapping.sql")),
     // 44: an item can fail for no subtitle in an image or for a key it needs; a received file's folders
     Migration::Sql(include_str!("../migrations/jobs/winpng.sql")),
+    // 45: the remote screen of a job that waits for a person's check: the bound browser run and the web's requests
+    Migration::Sql(include_str!("../migrations/jobs/remote_screen.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -2357,6 +2359,82 @@ mod tests {
         assert_eq!(kept, (2, None, Some("changed".to_owned()), None));
         assert_eq!(refused, [true; 4]);
         assert_eq!(accepted, "no_subtitle,needs_input");
+    }
+
+    #[tokio::test]
+    async fn a_database_from_before_the_remote_screen_gets_a_table_that_keeps_no_half_binding() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        {
+            // A database as the build with 44 migrations left it: a job that
+            // waits for a person's check.
+            let conn = database_at(&path, 44);
+            conn.execute_batch(
+                "INSERT INTO subtitle_jobs (id, command_id, request, origin, state, wait,
+                     created_at, updated_at, state_at)
+                     VALUES ('j1', 'c1', '{}', 'pick', 'waiting', 'auth', 1, 1, 1);
+                 INSERT INTO subtitle_job_items (job_id, position, episode, post_url, found_at,
+                     state, wait, updated_at)
+                     VALUES ('j1', 0, '1', 'https://fake.trss.invalid/check/1', 6, 'waiting',
+                             'auth', 1);",
+            )
+            .unwrap();
+        }
+
+        let db = Db::open(&path).await.unwrap();
+
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+        type Kept = (Option<String>, Option<i64>);
+        let (empty, refused, kept, left): (i64, [bool; 4], Kept, i64) = db
+            .run::<_, DbError, _>(|c| {
+                let count = |c: &Connection| {
+                    c.query_row("SELECT count(*) FROM subtitle_job_screens", [], |r| {
+                        r.get::<_, i64>(0)
+                    })
+                };
+                let empty = count(c)?;
+                let insert = |sql: &str| c.execute(sql, []).is_err();
+                let refused = [
+                    // A run without its page, and a page without its run.
+                    insert(
+                        "INSERT INTO subtitle_job_screens (job_id, item_id, run_id, bound_at,
+                             updated_at) VALUES ('j1', 1, 'r', 5, 5)",
+                    ),
+                    insert(
+                        "INSERT INTO subtitle_job_screens (job_id, item_id, target_id,
+                             updated_at) VALUES ('j1', 1, 'T', 5)",
+                    ),
+                    // A run with no time it was bound.
+                    insert(
+                        "INSERT INTO subtitle_job_screens (job_id, item_id, run_id, target_id,
+                             updated_at) VALUES ('j1', 1, 'r', 'T', 5)",
+                    ),
+                    // An item that is not there.
+                    insert(
+                        "INSERT INTO subtitle_job_screens (job_id, item_id, updated_at)
+                             VALUES ('j1', 99, 5)",
+                    ),
+                ];
+                c.execute(
+                    "INSERT INTO subtitle_job_screens (job_id, item_id, run_id, target_id,
+                         bound_at, updated_at) VALUES ('j1', 1, 'j1-abc', 'T1', 5, 5)",
+                    [],
+                )?;
+                let kept = c.query_row(
+                    "SELECT run_id, bound_at FROM subtitle_job_screens WHERE job_id = 'j1'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?;
+                // The row goes with its job.
+                c.execute("DELETE FROM subtitle_jobs WHERE id = 'j1'", [])?;
+                Ok((empty, refused, kept, count(c)?))
+            })
+            .await
+            .unwrap();
+        assert_eq!(empty, 0);
+        assert_eq!(refused, [true; 4]);
+        assert_eq!(kept, (Some("j1-abc".to_owned()), Some(5)));
+        assert_eq!(left, 0);
     }
 
     #[tokio::test]

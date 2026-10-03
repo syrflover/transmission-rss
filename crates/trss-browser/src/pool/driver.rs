@@ -253,6 +253,7 @@ mod tests {
             method: method.to_owned(),
             params: json!({}),
             session_id: None,
+            seq: 0,
         }
     }
 

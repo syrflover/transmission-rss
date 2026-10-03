@@ -5,7 +5,8 @@
 //! names the [`Source`] that knows the address's site, or none. The source
 //! opens the post for the candidate's episode ([`Source::open`]): the files it
 //! offers for it ([`PostFile`]), that
-//! a person has to pass the site's check first ([`Opened::NeedsAuth`]), that
+//! a person has to pass the site's check first ([`Opened::NeedsAuth`], or in the
+//! server browser, [`Opened::BrowserAuth`] and [`auth`]), that
 //! the subtitle is somewhere this app cannot read yet ([`Opened::Elsewhere`]),
 //! or why it cannot ([`Failure`]). It then receives one file at a time
 //! ([`Source::fetch`]) as a stream of bytes with the length the site announced
@@ -31,6 +32,7 @@
 //!
 //! [`trss-jobs`]: ../trss_jobs/index.html
 
+pub mod auth;
 pub mod blogger;
 pub mod drive;
 pub mod episode;
@@ -192,8 +194,18 @@ pub enum Opened {
     /// The files the post offers, in the post's order.
     Files(Vec<PostFile>),
     /// A person has to pass the site's check before anything can be read;
-    /// `reason` names it in a few words (`"CAPTCHA"`).
+    /// `reason` names it in a few words (`"CAPTCHA"`). Nothing brings the check
+    /// on screen: the item waits until a later source does.
     NeedsAuth { reason: String },
+    /// A person has to pass the site's check in the server browser, and the
+    /// file then comes as the browser's download ([`auth`]): the job asks its
+    /// [`auth::AuthBrowser`] to bring `page` to the check, and waits for the
+    /// person (`인증 필요`). Without a server browser the item waits for a
+    /// source (`자막 대기`). `reason` names the check in a few words.
+    BrowserAuth {
+        reason: String,
+        page: auth::AuthPage,
+    },
     /// The post's subtitle is somewhere this app cannot read yet (a Google
     /// Drive folder, a WinPNG image): the item waits for a source (`자막 대기`)
     /// as a post of an unknown site does. `reason` says where, in a sentence.
@@ -517,8 +529,13 @@ impl Source {
         }
     }
 
-    /// Starts receiving `file` of the post at `post`.
+    /// Starts receiving `file` of the post at `post`. A file already on this
+    /// machine (one a server browser took out of an image or downloaded after
+    /// a site's check) is read from there.
     pub async fn fetch(&self, post: &Url, file: &PostFile) -> Result<Fetch, Failure> {
+        if let Some(path) = file.staged() {
+            return Fetch::local(path).await;
+        }
         match self {
             Source::Fake(source) => {
                 let body = source.fetch(post, file).await?;

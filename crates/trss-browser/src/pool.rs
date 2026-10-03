@@ -26,8 +26,11 @@
 //! is not busy and whose last activity is older than the policy's idle time
 //! ends ([`BrowserPool::reap_once`], run every [`REAP_EVERY`] by
 //! [`BrowserPool::run_reaper`]). Activity is the later of the last
-//! [`BrowserRun::touch`] (a person using the screen), the end of the last
-//! busy stretch, the end of the last download, and the start. The queries
+//! [`BrowserRun::touch`] (a person using the screen), the last use reported
+//! by the [`ActivitySource`] (a person's input the web relayed, read at each
+//! reaper pass), the end of the last busy stretch, the end of the last
+//! download, and the start. A screen that is only watched is not activity:
+//! nothing reports it. The queries
 //! ([`BrowserPool::status`], [`BrowserPool::run_of_job`]) never start a run and
 //! never move the activity time.
 //!
@@ -169,6 +172,31 @@ impl PolicySource {
     }
 }
 
+/// Where the pool reads the uses of its runs that happen outside the worker:
+/// a person's input that the web relays to a run's page. Each reaper pass
+/// reads it before it decides, and takes each `(run id, time)` as a use of
+/// that run at that time ([`BrowserRun::touch`]). A run it does not name, or
+/// one that has ended, is left as it is; the screen merely being watched is
+/// never reported, so it is not activity.
+#[derive(Clone)]
+pub struct ActivitySource(Arc<ReadActivity>);
+
+/// The uses outside the worker: `(run id, time)` each.
+type ReadActivity = dyn Fn() -> BoxFuture<'static, Vec<(String, Millis)>> + Send + Sync;
+
+impl ActivitySource {
+    pub fn new<F>(read: F) -> ActivitySource
+    where
+        F: Fn() -> BoxFuture<'static, Vec<(String, Millis)>> + Send + Sync + 'static,
+    {
+        ActivitySource(Arc::new(read))
+    }
+
+    async fn get(&self) -> Vec<(String, Millis)> {
+        (self.0)().await
+    }
+}
+
 /// How the pool reaches the browser container and the files it saves.
 #[derive(Clone)]
 pub struct PoolConfig {
@@ -184,6 +212,8 @@ pub struct PoolConfig {
     /// How long a start that waits for a slot goes without reading the policy
     /// again (default [`SLOT_RECHECK`]).
     pub slot_recheck: Duration,
+    /// The uses of the runs outside the worker (default: none).
+    pub activity: Option<ActivitySource>,
 }
 
 impl std::fmt::Debug for PoolConfig {
@@ -210,7 +240,15 @@ impl PoolConfig {
             downloads_root: downloads_root.into(),
             reap_every: REAP_EVERY,
             slot_recheck: SLOT_RECHECK,
+            activity: None,
         }
+    }
+
+    /// The same configuration reading the uses of the runs outside the worker
+    /// from `activity`.
+    pub fn with_activity(mut self, activity: ActivitySource) -> Self {
+        self.activity = Some(activity);
+        self
     }
 }
 
@@ -219,6 +257,7 @@ pub(crate) struct PoolInner {
     pub(crate) downloads_root: PathBuf,
     pub(crate) clock: Clock,
     policy: PolicySource,
+    activity: Option<ActivitySource>,
     reap_every: Duration,
     slot_recheck: Duration,
     /// The runs by id, those still being started and those ended but not yet
@@ -254,6 +293,7 @@ impl BrowserPool {
                 downloads_root: config.downloads_root,
                 clock,
                 policy,
+                activity: config.activity,
                 reap_every: config.reap_every,
                 slot_recheck: config.slot_recheck,
                 runs: Mutex::default(),
@@ -379,6 +419,22 @@ impl BrowserPool {
             return Vec::new();
         }
         let policy = inner.policy.get().await;
+        // A person's input relayed by the web, read before the clock: a use
+        // reported now is not older than the time it is judged at.
+        let outside: HashMap<String, Millis> = match &inner.activity {
+            Some(activity) => {
+                activity
+                    .get()
+                    .await
+                    .into_iter()
+                    .fold(HashMap::new(), |mut uses, (run, at)| {
+                        let last = uses.entry(run).or_insert(at);
+                        *last = (*last).max(at);
+                        uses
+                    })
+            }
+            None => HashMap::new(),
+        };
         let now = (inner.clock)();
         let idle_ms = i64::try_from(policy.idle.as_millis()).unwrap_or(i64::MAX);
 
@@ -398,6 +454,10 @@ impl BrowserPool {
             }
             if !entry.is_ready() {
                 continue;
+            }
+            // A use from outside counts like a touch, never later than now.
+            if let Some(at) = outside.get(&entry.run_id) {
+                entry.touch_live((*at).min(now));
             }
             // A download that has gone quiet is canceled, and no longer
             // keeps the run from being idle.

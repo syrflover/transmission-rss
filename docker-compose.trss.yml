@@ -12,21 +12,26 @@ name: trss-app
 # release). It is always up but holds only a virtual display and a launcher
 # while idle; the worker asks the launcher to start a Chromium per job and to
 # close it. Nothing of it is published on the host: the launcher answers only
-# the worker, over `browser_net`, and only with TRSS_BROWSER_TOKEN.
+# the worker and the web, over `browser_net`, and only with TRSS_BROWSER_TOKEN.
+# Only the worker starts, resets and ends runs; the web connects to a run's
+# page through the launcher's protected DevTools proxy to show a job's remote
+# screen (the site's check a person passes) and relay the person's input.
 #
 # The browser opens pages of the sites it is sent to, so it is not on
-# `trss_net`, where trss-web (which has no sign-in) and Transmission listen:
-# a page could otherwise try requests to them. It has the network
-# `browser_net` to itself, shared with the worker alone (the worker is on both).
-# `browser_net` is not internal, because the pages need the internet.
-# A bridge still reaches this host's LAN address, the Docker gateway and the
-# LAN, so every connection of the browser goes through the launcher's egress
-# proxy, which connects to public addresses only (it resolves names itself
-# and refuses private, loopback, link-local, CGNAT/Tailscale, multicast and
-# reserved addresses, and the networks the container is on and their
-# gateways, whatever their addresses). Nothing here needs setting for it. It
-# cannot tell a public address that leads back into the LAN (the router's WAN
-# address with hairpin NAT, or your own domain pointing at it).
+# `trss_net`, where Transmission listens: a page could otherwise try requests
+# to it. It has the network `browser_net`, shared with the worker and the web
+# (both are on both networks). The web has no sign-in, so it refuses every
+# connection from `browser_net`'s addresses, and does not start when it cannot
+# tell which those are. `browser_net` is not internal, because the pages need
+# the internet. A bridge still reaches this host's LAN address, the Docker
+# gateway and the LAN, so every connection of the browser goes through the
+# launcher's egress proxy, which connects to public addresses only (it
+# resolves names itself and refuses private, loopback, link-local,
+# CGNAT/Tailscale, multicast and reserved addresses, and the networks the
+# container is on and their gateways, whatever their addresses). Nothing here
+# needs setting for it. It cannot tell a public address that leads back into
+# the LAN (the router's WAN address with hairpin NAT, or your own domain
+# pointing at it).
 #
 # Optional extra, on the host: firewall rules that drop what `browser_net`
 # sends to private ranges, in case the browser ever got around the proxy. The
@@ -34,10 +39,10 @@ name: trss-app
 # adapt (not tested here), with SUBNET from
 # `docker network inspect trss-app_browser_net`. Run them in the order
 # listed: each `-I` inserts at the top of its chain, so the RETURN rule, run
-# second, ends up above the DROP rule. RETURN keeps the worker's connection to
-# the launcher inside `browser_net`; DROP drops the rest to private ranges
-# (published ports of other containers included); the INPUT rule drops what
-# goes to this host itself.
+# second, ends up above the DROP rule. RETURN keeps the worker's and the web's
+# connections to the launcher inside `browser_net`; DROP drops the rest to
+# private ranges (published ports of other containers included); the INPUT
+# rule drops what goes to this host itself.
 #   iptables -I DOCKER-USER -s SUBNET -d 10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,169.254.0.0/16 -j DROP
 #   iptables -I DOCKER-USER -s SUBNET -d SUBNET -j RETURN
 #   iptables -I INPUT -s SUBNET -j DROP
@@ -94,7 +99,7 @@ services:
       TRSS_BROWSER_URL: http://trss-browser:9230
       TRSS_BROWSER_TOKEN: ${TRSS_BROWSER_TOKEN:?Set TRSS_BROWSER_TOKEN in .env to a long random string, e.g. the output of openssl rand -hex 32}
       TRSS_BROWSER_DOWNLOADS: /data/browser-downloads
-    # On `browser_net` too, to reach trss-browser (the only service on it).
+    # On `browser_net` too, to reach trss-browser.
     networks:
       - trss_net
       - browser_net
@@ -128,6 +133,23 @@ services:
       # name made to resolve to this address (DNS rebinding) cannot use the
       # web. A change that comes from a page of another origin is refused too.
       TRSS_WEB_HOSTS: ${TRSS_WEB_HOSTS:-}
+      # The server browser's launcher, for the remote screens of the jobs
+      # that wait for a site's check (the same address and token as the
+      # worker's). The web finds `browser_net`'s addresses from this host
+      # name at its start and refuses every connection from them.
+      TRSS_BROWSER_URL: http://trss-browser:9230
+      TRSS_BROWSER_TOKEN: ${TRSS_BROWSER_TOKEN:?Set TRSS_BROWSER_TOKEN in .env to a long random string, e.g. the output of openssl rand -hex 32}
+    # On `browser_net` too, to reach trss-browser. The published port below
+    # must come in through `trss_net`: Docker takes the published ports of a
+    # container through the network of its default gateway, which without
+    # `gw_priority` can be `browser_net`, whose gateway address the web
+    # refuses (Docker Engine 28 or later, Compose 2.33 or later).
+    networks:
+      trss_net:
+        gw_priority: 1
+      browser_net: {}
+    depends_on:
+      - trss-browser
     # Only on the LAN address of this host: the web has no sign-in of its own.
     ports:
       - "${TRSS_WEB_HOST_IP:?Set TRSS_WEB_HOST_IP in .env to this host's LAN address}:${TRSS_WEB_HOST_PORT:-8080}:8080"
@@ -148,8 +170,8 @@ services:
       # value, which is the one to change.
       TRSS_BROWSER_MAX_RUNS: "3"
     # No `ports`: neither the launcher (9230) nor Chromium's DevTools is
-    # reachable from the host or the LAN. Keep it so; the web will reach a
-    # run only through the app's own protected screen.
+    # reachable from the host or the LAN. Keep it so; a person reaches a run
+    # only through the web's remote screen.
     #
     # The files the browser downloads. The worker moves them from here into a
     # job's receive area (same filesystem as the data folder) and deletes the
@@ -167,8 +189,8 @@ services:
       options:
         max-size: 10m
         max-file: "3"
-    # Its own network, shared with the worker alone: no route to trss-web or
-    # Transmission on `trss_net`.
+    # Its own network, shared with the worker and the web: no route to
+    # Transmission on `trss_net`, and the web refuses its connections.
     networks:
       - browser_net
     # Open runs are closed on SIGTERM (Chromium gets 5 seconds to exit each).
@@ -186,6 +208,6 @@ services:
 networks:
   trss_net:
     external: true
-  # trss-browser and the worker. Not `internal`: the browser needs the
-  # internet.
+  # trss-browser, the worker and the web. Not `internal`: the browser needs
+  # the internet.
   browser_net: {}
