@@ -161,8 +161,12 @@ Tistory 일반 첨부가 이 결과로 처음 구현됐고, 이후 출처(0041�
 - 파일 정보 스냅샷은 출처마다 다른 값을 이름과 함께 `[이름, 값]`의 JSON 배열로 저장해, 같은 경로의 다음 스냅샷과만 견줘요.
   Tistory는 게시물의 `article:modified_time`, 표시 크기(`declared_size`), 응답에 있으면 `Last-Modified`(`last_modified`)를 남겨요.
   Google Drive 파일은 게시물의 수정 시각(Blogger는 JSON-LD의 `dateModified`가 있는 테마에서만, Tistory 본문의 링크는 `article:modified_time`), 응답의 `Last-Modified`(`last_modified`), 알린 길이(`content_length`)를 남겨요.
-  Naver 첨부는 게시물의 작성 시각(`publish_date`, 이 글의 영역 `id="post-view<logNo>"` 안의 `se_publishDate`가 `2026. 6. 23. 5:19`처럼 날짜일 때만이에요. 하루가 안 된 글은 `3시간 전`처럼 보여서 남기지 않아요. 그래서 처음 스냅샷에 없던 `publish_date`가 다음 스냅샷에 생기는 것은 변경이 아니고, 스냅샷 비교(0050)는 이것을 변경으로 보지 않아야 해요), `attachFileSize`의 바이트 수(`attach_file_size`), Naver가 표시한 제한(`blocked`, 있을 때만)을 남겨요. 수정 시각과 `Last-Modified`는 없어요.
+  Naver 첨부는 게시물의 작성 시각(`publish_date`, 이 글의 영역 `id="post-view<logNo>"` 안의 `se_publishDate`가 `2026. 6. 23. 5:19`처럼 날짜일 때만이에요. 하루가 안 된 글은 `3시간 전`처럼 보여서 남기지 않아요. 그래서 처음 스냅샷에 없던 `publish_date`가 다음 스냅샷에 생기는 것은 변경이 아니고, 재확인(0050)도 이것을 변경으로 보지 않아요), `attachFileSize`의 바이트 수(`attach_file_size`), Naver가 표시한 제한(`blocked`, 있을 때만)을 남겨요. 수정 시각과 `Last-Modified`는 없어요.
   이 값으로 Anissia 줄이 그대로인 게시물 수정을 찾는 일은 [구독 제작자 자동 수신](subtitles.md#구독-제작자-자동-수신)의 받은 뒤 14일 재확인이에요.
+  재확인은 스냅샷을 서로 견주지 않고, 받은 파일의 바이트 수(`subtitle_job_files.size`)와 스냅샷의 `last_modified`를 기준으로 삼아 출처가 지금 알려 주는 값과 견줘요. Tistory는 정확한 전체 크기를 스냅샷에 남기지 않아서 받은 바이트 수가 기준이에요.
+  재확인 기록은 회차(`subtitle_job_items`)마다 한 줄(`subtitle_item_rechecks`)이에요: 마지막으로 읽기로 한 시각(`checked_at`, 첫 요청 전에 써요), 읽은 횟수, 결과(`same`·`changed`·`missing`·`failed`·`unreadable`), 읽은 값(파일 키·크기·`Last-Modified`, 주소와 토큰은 없어요), 만든 작업이에요.
+  재확인이 만든 수정본 작업의 요청 ID는 `recheck:<회차 번호>:<새 값의 요약>`이라 같은 변화로는 하나만 생겨요. 수정본 작업이 받은 파일이 이전에 받은 파일과 바이트까지 같으면 그 회차에 이전 작업을 가리키는 `unchanged_from`을 남겨요(`교체 승인`을 만들지 않는 근거예요).
+  수정본 작업의 `revises_job`은 같은 관찰을 받은 이전 작업만 가리켜요(재확인의 수정본은 이전 수신과 같은 관찰을 다시 받기 때문이에요).
 - 실패는 분류, 이유 한 문장, 응답이 있었으면 HTTP 상태·`Content-Type`(매개변수를 뺀 미디어 형식)·응답 크기를 가져요.
   실패한 회차도 분류를 가지며, 작업은 첫 실패 회차의 분류로 보여요.
 - 서명 URL·쿠키·토큰은 저장하지 않고 작업 기록·로그·API 응답에도 내지 않아요.

@@ -55,6 +55,8 @@ pub const CDN: &str = "blog.kakaocdn.net";
 pub enum PostAnswer {
     /// A page with a fileblock for each file, signed anew.
     Files(Vec<FileSpec>),
+    /// The same, the post's `article:modified_time` being this.
+    FilesAt(Vec<FileSpec>, String),
     /// This page, `200`.
     Page(String),
     /// This status with a small web page.
@@ -129,6 +131,12 @@ pub enum DriveAnswer {
     /// `Content-Disposition` as UTF-8 bytes, its `Content-Length` and
     /// `Last-Modified`.
     File { name: String, bytes: Vec<u8> },
+    /// The same file with this `Last-Modified`.
+    FileAt {
+        name: String,
+        bytes: Vec<u8>,
+        modified: String,
+    },
     /// No such file: `404` `text/html`, 1,652 bytes.
     Missing,
     /// The page that asks to confirm the download of a file too large to
@@ -150,6 +158,10 @@ pub const DRIVE_MODIFIED: &str = "Fri, 02 Oct 2026 02:11:00 GMT";
 /// A request the server saw.
 #[derive(Debug, Clone)]
 pub struct Seen {
+    /// `GET`, `HEAD`.
+    pub method: String,
+    /// The `Range` header, when the request had one.
+    pub range: Option<String>,
     pub host: String,
     pub path: String,
     pub query: String,
@@ -437,6 +449,9 @@ pub fn blogger_page(links: &[(&str, &str)]) -> String {
 /// The `dateModified` of every [`blogger_page`].
 pub const BLOGGER_MODIFIED: &str = "2026-09-27T22:55:03+09:00";
 
+/// The `article:modified_time` of every [`PostAnswer::Files`] page.
+pub const TISTORY_MODIFIED: &str = "2026-09-28T00:13:41+09:00";
+
 /// The body container of the posts seen (`tistory::BODY`).
 pub const BODY_OPEN: &str = r#"<div class="tt_article_useless_p_margin contents_style">"#;
 
@@ -528,7 +543,14 @@ fn respond(state: &Mutex<State>, request: Request<Body>) -> Response {
     let host = host.split(':').next().unwrap_or_default().to_owned();
     let path = request.uri().path().to_owned();
     let query = request.uri().query().unwrap_or_default().to_owned();
+    let head = request.method() == axum::http::Method::HEAD;
+    let range = headers
+        .get(header::RANGE)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
     state.seen.push(Seen {
+        method: request.method().as_str().to_owned(),
+        range: range.clone(),
         host: host.clone(),
         path: path.clone(),
         query: query.clone(),
@@ -548,7 +570,17 @@ fn respond(state: &Mutex<State>, request: Request<Body>) -> Response {
             .unwrap_or_default();
         let port = state.port;
         return match state.drive.get_mut(&id).and_then(Script::next) {
-            Some(DriveAnswer::File { name, bytes }) => {
+            Some(answer @ (DriveAnswer::File { .. } | DriveAnswer::FileAt { .. })) => {
+                let (name, bytes, modified) = match answer {
+                    DriveAnswer::File { name, bytes } => (name, bytes, DRIVE_MODIFIED.to_owned()),
+                    DriveAnswer::FileAt {
+                        name,
+                        bytes,
+                        modified,
+                    } => (name, bytes, modified),
+                    _ => unreachable!("matched above"),
+                };
+                let length = bytes.len();
                 let mut response = octets(Body::from(bytes));
                 let headers = response.headers_mut();
                 let disposition = format!("attachment; filename=\"{name}\"");
@@ -558,8 +590,10 @@ fn respond(state: &Mutex<State>, request: Request<Body>) -> Response {
                 );
                 headers.insert(
                     header::LAST_MODIFIED,
-                    header::HeaderValue::from_static(DRIVE_MODIFIED),
+                    header::HeaderValue::from_str(&modified).unwrap(),
                 );
+                // A `HEAD` has no body but the same `Content-Length`.
+                headers.insert(header::CONTENT_LENGTH, length.into());
                 response
             }
             Some(DriveAnswer::Confirm) => (
@@ -637,7 +671,7 @@ fn respond(state: &Mutex<State>, request: Request<Body>) -> Response {
             )
                 .into_response(),
             Some(PostAnswer::Status(status)) => page(status, 3228),
-            Some(PostAnswer::Files(_)) | None => page(404, 3228),
+            Some(PostAnswer::Files(_) | PostAnswer::FilesAt(..)) | None => page(404, 3228),
         };
     }
     if host == naver::FILE_HOST {
@@ -662,7 +696,28 @@ fn respond(state: &Mutex<State>, request: Request<Body>) -> Response {
 
     if tistory::cdn_host(&host) {
         let id = path.split('/').nth(2).unwrap_or_default().to_owned();
+        // The CDN refuses a `HEAD` (2026-10-03).
+        if head {
+            return page(404, 150);
+        }
         return match state.files.get_mut(&id).and_then(Script::next) {
+            Some(FileAnswer::Bytes(bytes)) if range.as_deref() == Some("bytes=0-0") => {
+                // The one byte asked for, and the whole size in `Content-Range`.
+                let total = bytes.len();
+                let mut response = (
+                    StatusCode::PARTIAL_CONTENT,
+                    [
+                        (header::CONTENT_TYPE, "application/octet-stream".to_owned()),
+                        (header::CONTENT_RANGE, format!("bytes 0-0/{total}")),
+                    ],
+                    Body::from(bytes[..1.min(total)].to_vec()),
+                )
+                    .into_response();
+                response
+                    .headers_mut()
+                    .insert(header::CONTENT_LENGTH, 1.into());
+                response
+            }
             Some(FileAnswer::Bytes(bytes)) => octets(Body::from(bytes)),
             Some(FileAnswer::Streamed(bytes)) => {
                 octets(Body::from_stream(futures::stream::iter(pieces(bytes))))
@@ -696,9 +751,14 @@ fn respond(state: &Mutex<State>, request: Request<Body>) -> Response {
 
     let key = format!("{host}{path}");
     match state.posts.get_mut(&key).and_then(Script::next) {
-        Some(PostAnswer::Files(files)) => {
+        Some(answer @ (PostAnswer::Files(_) | PostAnswer::FilesAt(..))) => {
             state.signed += 1;
-            let html = files_page(state.port, state.signed, &files);
+            let (files, modified) = match answer {
+                PostAnswer::FilesAt(files, modified) => (files, modified),
+                PostAnswer::Files(files) => (files, TISTORY_MODIFIED.to_owned()),
+                _ => unreachable!("matched above"),
+            };
+            let html = files_page(state.port, state.signed, &files, &modified);
             (
                 StatusCode::OK,
                 [(header::CONTENT_TYPE, "text/html;charset=UTF-8")],
@@ -788,7 +848,7 @@ fn escape(text: &str) -> String {
 }
 
 /// A post's page as Tistory writes it: a picture, then the fileblocks.
-fn files_page(port: u16, signed: u64, files: &[FileSpec]) -> String {
+fn files_page(port: u16, signed: u64, files: &[FileSpec], modified: &str) -> String {
     let blocks: String = files
         .iter()
         .map(|f| {
@@ -803,7 +863,7 @@ fn files_page(port: u16, signed: u64, files: &[FileSpec]) -> String {
         .collect();
     format!(
         r#"<!doctype html><html lang="ko"><head><meta charset="utf-8">
-<meta property="article:modified_time" content="2026-09-28T00:13:41+09:00"><title>자막</title></head>
+<meta property="article:modified_time" content="{modified}"><title>자막</title></head>
 <body>{BODY_OPEN}<p><img src="http://{CDN}:{port}/dna/pic/1/2/img.png?credential=P&amp;signature=Q"></p>
 {blocks}</div></body></html>"#
     )
@@ -815,7 +875,7 @@ mod tests {
     use url::Url;
 
     use super::*;
-    use crate::{verify, FailureKind, Opened, Source};
+    use crate::{verify, FailureKind, FileInfo, Opened, Source};
 
     const SRT: &[u8] = b"1\n00:00:01,000 --> 00:00:02,000\nHi\n";
 
@@ -1603,5 +1663,191 @@ mod tests {
         assert_eq!(failure.kind, FailureKind::Changed);
         assert_eq!(server.seen().len(), before);
         assert!(server.seen().iter().all(|s| s.host != naver::FILE_HOST));
+    }
+
+    fn keys(names: &[&str]) -> Vec<String> {
+        names.iter().map(|n| (*n).to_owned()).collect()
+    }
+
+    #[tokio::test]
+    async fn a_drive_file_is_read_again_by_a_head_with_no_body_cookie_or_referer() {
+        let server = SourceServer::start().await;
+        let source = Source::Blogger(server.blogger());
+        let post = csora(&server);
+        let ass = crate::fake::ass("Seihantai 24");
+        server.drive(
+            "1episode0024",
+            vec![DriveAnswer::FileAt {
+                name: "Seihantai 24.ass".into(),
+                bytes: ass.clone(),
+                modified: "Tue, 29 Sep 2026 19:53:19 GMT".into(),
+            }],
+        );
+        let answers = source.recheck(&post, &keys(&["drive:1episode0024"])).await;
+        assert_eq!(answers.len(), 1);
+        assert_eq!(
+            answers[0].1.as_ref().unwrap(),
+            &FileInfo {
+                size: Some(ass.len() as u64),
+                last_modified: Some("Tue, 29 Sep 2026 19:53:19 GMT".into()),
+            }
+        );
+        // One `HEAD` of the download address; the post is not read and nothing
+        // else is asked for.
+        let seen = server.seen();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(
+            (seen[0].method.as_str(), seen[0].host.as_str()),
+            ("HEAD", DRIVE_FILES)
+        );
+        assert_eq!(seen[0].path, "/download");
+        assert!(!seen[0].cookie && !seen[0].referer && seen[0].range.is_none());
+
+        // A file gone, one that asks to sign in, a page instead of the file.
+        for (answer, kind) in [
+            (DriveAnswer::Missing, FailureKind::Missing),
+            (DriveAnswer::SignIn, FailureKind::Missing),
+            (DriveAnswer::Status(503), FailureKind::Network),
+            (DriveAnswer::Confirm, FailureKind::NotAFile),
+        ] {
+            server.drive("1episode0024", vec![answer.clone()]);
+            let answers = source.recheck(&post, &keys(&["drive:1episode0024"])).await;
+            assert_eq!(answers[0].1.as_ref().unwrap_err().kind, kind, "{answer:?}");
+        }
+        // A key that is no Drive file's is no Blogger file.
+        let answers = source.recheck(&post, &keys(&["tistory:x"])).await;
+        assert_eq!(
+            answers[0].1.as_ref().unwrap_err().kind,
+            FailureKind::Changed
+        );
+    }
+
+    #[tokio::test]
+    async fn a_tistory_attachment_is_read_again_by_a_one_byte_range_for_its_total() {
+        let server = SourceServer::start().await;
+        let source = Source::Tistory(server.source());
+        let post = Url::parse(&server.post_url("sumomomo", 491)).unwrap();
+        let (a, b) = (spec("a", "a.zip", "0.01MB"), spec("b", "b.zip", "0.02MB"));
+        server.post("sumomomo", 491, vec![PostAnswer::Files(vec![a, b])]);
+        server.file("a", vec![FileAnswer::Bytes(vec![7; 11_724])]);
+        server.file("b", vec![FileAnswer::Bytes(vec![8; 90])]);
+        let offered = files(&source, &post).await;
+        let wanted: Vec<String> = offered.iter().map(|f| f.key.clone()).collect();
+
+        let answers = source.recheck(&post, &wanted).await;
+        let sizes: Vec<Option<u64>> = answers
+            .iter()
+            .map(|(_, info)| info.as_ref().unwrap().size)
+            .collect();
+        assert_eq!(sizes, [Some(11_724), Some(90)]);
+        // No `Last-Modified` or `ETag` on that CDN: a size is all there is.
+        assert!(answers
+            .iter()
+            .all(|(_, info)| info.as_ref().unwrap().last_modified.is_none()));
+        // The post once for both files (and once before, by `open`); each
+        // address asked for one byte, never with a `HEAD`, no cookie, no
+        // `Referer`, and no body of the file taken.
+        let seen = server.seen();
+        let posts = seen
+            .iter()
+            .filter(|s| s.host.ends_with(".tistory.com"))
+            .count();
+        assert_eq!(posts, 2);
+        let cdn: Vec<_> = seen.iter().filter(|s| s.host == CDN).collect();
+        assert_eq!(cdn.len(), 2);
+        assert!(cdn
+            .iter()
+            .all(|s| s.method == "GET" && s.range.as_deref() == Some("bytes=0-0")));
+        assert!(seen.iter().all(|s| !s.cookie && !s.referer));
+
+        // A file the post no longer offers, and an address the CDN refuses.
+        server.post(
+            "sumomomo",
+            491,
+            vec![PostAnswer::Files(vec![spec("a", "a.zip", "0.01MB")])],
+        );
+        server.file("a", vec![FileAnswer::Refused]);
+        let answers = source.recheck(&post, &wanted).await;
+        assert_eq!(
+            answers[0].1.as_ref().unwrap_err().kind,
+            FailureKind::Expired
+        );
+        assert_eq!(
+            answers[1].1.as_ref().unwrap_err().kind,
+            FailureKind::Missing
+        );
+
+        // The post gone: every file of it, and a CDN that is down.
+        server.post("sumomomo", 491, vec![PostAnswer::Status(404)]);
+        let answers = source.recheck(&post, &wanted).await;
+        assert!(answers
+            .iter()
+            .all(|(_, info)| info.as_ref().unwrap_err().kind == FailureKind::Missing));
+        server.post(
+            "sumomomo",
+            491,
+            vec![PostAnswer::Files(vec![spec("a", "a.zip", "1KB")])],
+        );
+        server.file("a", vec![FileAnswer::Status(503)]);
+        let answers = source.recheck(&post, &wanted[..1]).await;
+        assert_eq!(
+            answers[0].1.as_ref().unwrap_err().kind,
+            FailureKind::Network
+        );
+    }
+
+    #[tokio::test]
+    async fn a_naver_attachment_is_read_again_from_the_posts_page_alone() {
+        let server = SourceServer::start().await;
+        let (post, zip, ass) = elaina(&server);
+        let source = Source::Naver(server.naver());
+        let wanted = keys(&[
+            "naver:elainalove1017/224324105274/네죽사 1~8화 자막.zip",
+            &format!("naver:elainalove1017/224324105274/{ELAINA_ASS}"),
+            "naver:elainalove1017/224324105274/gone.ass",
+        ]);
+        let answers = source.recheck(&post, &wanted).await;
+        assert_eq!(
+            answers[0].1.as_ref().unwrap(),
+            &FileInfo {
+                size: Some(zip.len() as u64),
+                last_modified: None
+            }
+        );
+        assert_eq!(answers[1].1.as_ref().unwrap().size, Some(ass.len() as u64));
+        assert_eq!(
+            answers[2].1.as_ref().unwrap_err().kind,
+            FailureKind::Missing
+        );
+        // One reading of the inner page, none of the file host.
+        assert_eq!(server.naver_read("224324105274"), 1);
+        assert!(server.seen().iter().all(|s| s.host != naver::FILE_HOST));
+
+        // A flagged file and a post gone.
+        server.naver_post(
+            "elainalove1017",
+            "224324105274",
+            vec![PostAnswer::Naver(vec![NaverFile {
+                malicious: true,
+                ..naver_file("a.zip", 10)
+            }])],
+        );
+        let answers = source
+            .recheck(&post, &keys(&["naver:elainalove1017/224324105274/a.zip"]))
+            .await;
+        assert_eq!(
+            answers[0].1.as_ref().unwrap_err().kind,
+            FailureKind::Missing
+        );
+        server.naver_post(
+            "elainalove1017",
+            "224324105274",
+            vec![PostAnswer::Status(404)],
+        );
+        let answers = source.recheck(&post, &wanted[..1]).await;
+        assert_eq!(
+            answers[0].1.as_ref().unwrap_err().kind,
+            FailureKind::Missing
+        );
     }
 }

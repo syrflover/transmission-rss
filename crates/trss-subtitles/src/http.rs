@@ -15,7 +15,7 @@ use std::{
 use reqwest::{header, Response, StatusCode};
 use url::Url;
 
-use crate::{Body, Failure, FailureKind, Fetch, Snapshot, FILE_DEADLINE, MAX_FILE_BYTES};
+use crate::{Body, Failure, FailureKind, Fetch, FileInfo, Snapshot, FILE_DEADLINE, MAX_FILE_BYTES};
 
 /// The least time between two requests to one host.
 pub const SPACING: Duration = Duration::from_secs(1);
@@ -23,8 +23,8 @@ pub const SPACING: Duration = Duration::from_secs(1);
 /// The most redirects one request follows.
 const MAX_REDIRECTS: usize = 10;
 
-/// How long a post may take to come.
-const POST_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long a post may take to come, or a request for a file's information.
+pub(crate) const POST_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long the connection may stay silent while a file comes.
 const READ_TIMEOUT: Duration = Duration::from_secs(60);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -198,30 +198,105 @@ pub(crate) async fn get_file(
         .await
         .map_err(|_| deadline_failure(limits.file_deadline))?
         .map_err(|e| network_failure(&e, "파일 주소에 연결하지 못했어요"))?;
-    let status = response.status();
-    if status != StatusCode::OK {
-        let content_type = media_type(&response);
-        let html = content_type.as_deref() == Some("text/html");
-        let size = error_size(response).await;
-        let (kind, reason) = match status.as_u16() {
-            400 | 403 | 404 | 410 if html => (FailureKind::Expired, "파일 주소가 거절됐어요"),
-            404 | 410 => (FailureKind::Missing, "파일이 없어요"),
-            300..=399 => (
-                FailureKind::Changed,
-                "파일 주소가 따라갈 수 없는 곳으로 넘기려 했어요",
-            ),
-            429 | 500..=599 => (FailureKind::Network, "사이트가 파일을 주지 못했어요"),
-            _ => (FailureKind::Changed, "파일 주소가 뜻밖의 답을 줬어요"),
-        };
-        return Err(
-            Failure::new(kind, format!("{reason} (HTTP {})", status.as_u16())).with_response(
-                Some(status.as_u16()),
-                content_type,
-                size,
-            ),
-        );
+    if response.status() != StatusCode::OK {
+        return Err(refusal(response).await);
     }
     take_file(response, limits, deadline)
+}
+
+/// The failure a file's answer that is not `200` comes to: a refusal with a
+/// web page (`400`, `403`, `404` or `410` with `text/html`) is an expired
+/// address ([`FailureKind::Expired`]), which the source reads its post again
+/// for.
+pub(crate) async fn refusal(response: Response) -> Failure {
+    let status = response.status();
+    let content_type = media_type(&response);
+    let html = content_type.as_deref() == Some("text/html");
+    let size = error_size(response).await;
+    let (kind, reason) = match status.as_u16() {
+        400 | 403 | 404 | 410 if html => (FailureKind::Expired, "파일 주소가 거절됐어요"),
+        404 | 410 => (FailureKind::Missing, "파일이 없어요"),
+        300..=399 => (
+            FailureKind::Changed,
+            "파일 주소가 따라갈 수 없는 곳으로 넘기려 했어요",
+        ),
+        429 | 500..=599 => (FailureKind::Network, "사이트가 파일을 주지 못했어요"),
+        _ => (FailureKind::Changed, "파일 주소가 뜻밖의 답을 줬어요"),
+    };
+    Failure::new(kind, format!("{reason} (HTTP {})", status.as_u16())).with_response(
+        Some(status.as_u16()),
+        content_type,
+        size,
+    )
+}
+
+/// The whole size of the file at the signed address `locator` without
+/// receiving it: a `GET` with `Range: bytes=0-0`, which answers `206` with
+/// the total in `Content-Range` (`bytes 0-0/11724`) and one byte. Tistory's
+/// CDN answers its `HEAD` with `404` and gives neither `Last-Modified` nor
+/// `ETag` (2026-10-03), so the total is all it tells. A server that ignores
+/// the range and answers `200` gives the size in `Content-Length`; its body is
+/// not read. The request has no cookie and no `Referer`, like a receipt.
+pub(crate) async fn range_total(
+    http: &reqwest::Client,
+    pace: &Pace,
+    locator: &Url,
+) -> Result<FileInfo, Failure> {
+    pace.wait(locator).await;
+    let response = http
+        .get(locator.clone())
+        .header(header::RANGE, "bytes=0-0")
+        .timeout(POST_TIMEOUT)
+        .send()
+        .await
+        .map_err(|e| network_failure(&e, "파일 주소에 연결하지 못했어요"))?;
+    let status = response.status();
+    let size = match status {
+        StatusCode::PARTIAL_CONTENT => response
+            .headers()
+            .get(header::CONTENT_RANGE)
+            .and_then(|v| v.to_str().ok())
+            .and_then(content_range_total),
+        StatusCode::OK => header_length(&response),
+        _ => return Err(refusal(response).await),
+    };
+    match size {
+        Some(size) => Ok(FileInfo {
+            size: Some(size),
+            last_modified: None,
+        }),
+        None => Err(Failure::new(
+            FailureKind::Changed,
+            "사이트가 파일의 전체 크기를 알려주지 않았어요",
+        )
+        .with_response(Some(status.as_u16()), media_type(&response), None)),
+    }
+}
+
+/// The total of a `Content-Range` (`bytes 0-0/11724`); none when the server
+/// does not know it (`*`).
+fn content_range_total(value: &str) -> Option<u64> {
+    value.rsplit_once('/')?.1.trim().parse().ok()
+}
+
+/// The answer's `Content-Length` header (a `HEAD` answer has no body for
+/// [`Response::content_length`] to measure), unless the body is encoded: its
+/// length would be the encoding's.
+pub(crate) fn header_length(response: &Response) -> Option<u64> {
+    let encoded = response
+        .headers()
+        .get(header::CONTENT_ENCODING)
+        .is_some_and(|v| {
+            let v = String::from_utf8_lossy(v.as_bytes());
+            !v.trim().is_empty() && !v.trim().eq_ignore_ascii_case("identity")
+        });
+    if encoded {
+        return None;
+    }
+    response
+        .headers()
+        .get(header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok()?.trim().parse().ok())
 }
 
 /// Takes a `200` answer as the file's bytes, held to `limits` from

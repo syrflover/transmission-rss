@@ -49,7 +49,7 @@ pub use crate::http::{Limits, LAST_MODIFIED, SPACING};
 use crate::{
     drive::{self, Drive},
     http::{self, Pace, Reach},
-    Failure, FailureKind, Fetch, Opened, PostFile, Snapshot,
+    Failure, FailureKind, Fetch, FileInfo, Opened, PostFile, Snapshot,
 };
 
 /// The hosts this source reads: `<blog>.tistory.com`.
@@ -185,6 +185,54 @@ impl TistorySource {
             }),
             other => other,
         }
+    }
+
+    /// The files `keys` name, read again without receiving them (see
+    /// [`crate::Source::recheck`]). An attachment's signed address is never
+    /// kept, so the post is read again for it (once, whatever the number of
+    /// files), and the address is asked for one byte: the total in the answer
+    /// is the file's size ([`http::range_total`]). A Drive file in the body
+    /// is a `HEAD` of its fixed address, with no post read.
+    pub(crate) async fn recheck(
+        &self,
+        post: &Url,
+        keys: &[String],
+    ) -> Vec<(String, Result<FileInfo, Failure>)> {
+        let mut answers = Vec::new();
+        // The attachments the post offers now, read when the first one needs it.
+        let mut offered: Option<Result<Vec<PostFile>, Failure>> = None;
+        for key in keys {
+            let info = if let Some(id) = drive::id_of(key) {
+                self.inner.drive.head(id).await
+            } else {
+                if offered.is_none() {
+                    offered = Some(
+                        http::get_page(&self.inner.http, &self.inner.pace, post)
+                            .await
+                            .map(|page| {
+                                attachments(post, &Html::parse_document(&page), self.inner.reach)
+                            }),
+                    );
+                }
+                match offered.as_ref().expect("read above") {
+                    Err(failure) => Err(failure.clone()),
+                    Ok(files) => match files.iter().find(|f| f.key == *key) {
+                        None => Err(Failure::new(
+                            FailureKind::Missing,
+                            "게시물을 다시 읽었지만 이 파일이 없어요",
+                        )),
+                        Some(file) => match file.locator() {
+                            Some(locator) => {
+                                http::range_total(&self.inner.http, &self.inner.pace, locator).await
+                            }
+                            None => Err(Failure::new(FailureKind::Expired, "받을 주소가 없어요")),
+                        },
+                    },
+                }
+            };
+            answers.push((key.clone(), info));
+        }
+        answers
     }
 
     async fn get_file(&self, locator: &Url) -> Result<Fetch, Failure> {

@@ -50,7 +50,7 @@ use crate::{
     drive::{self, Drive},
     episode,
     http::{self, Limits, Pace, Reach},
-    Failure, FailureKind, Fetch, Opened, PostFile, Snapshot,
+    Failure, FailureKind, Fetch, FileInfo, Opened, PostFile, Snapshot,
 };
 
 /// The hosts of the posts this source reads.
@@ -202,6 +202,63 @@ impl NaverSource {
     pub(crate) async fn open(&self, post: &Url, episode: &str) -> Result<Opened, Failure> {
         let (blog, log_no, page) = self.page(post).await?;
         read_page(post, &blog, &log_no, &page, self.inner.reach, episode)
+    }
+
+    /// The files `keys` name, read again (see [`crate::Source::recheck`]).
+    /// The post's inner page lists every attachment with its exact size
+    /// (`attachFileSize`), so one reading of it answers for all of them and no
+    /// request goes to the file host: the size is the file's value. Naver
+    /// gives no modified time. A Drive file in the body is a `HEAD` of its
+    /// fixed address, with no post read.
+    pub(crate) async fn recheck(
+        &self,
+        post: &Url,
+        keys: &[String],
+    ) -> Vec<(String, Result<FileInfo, Failure>)> {
+        let mut answers = Vec::new();
+        let mut offered: Option<Result<Vec<PostFile>, Failure>> = None;
+        for key in keys {
+            let info = if let Some(id) = drive::id_of(key) {
+                self.inner.drive.head(id).await
+            } else {
+                if offered.is_none() {
+                    offered = Some(match self.page(post).await {
+                        Ok((blog, log_no, page)) => {
+                            attachments(&blog, &log_no, &page, self.inner.reach)
+                        }
+                        Err(failure) => Err(failure),
+                    });
+                }
+                match offered.as_ref().expect("read above") {
+                    Err(failure) => Err(failure.clone()),
+                    Ok(files) => match files.iter().find(|f| f.key == *key) {
+                        None => Err(Failure::new(
+                            FailureKind::Missing,
+                            "게시물을 다시 읽었지만 이 첨부가 없어요",
+                        )),
+                        Some(file) => match snapshot_value(&file.snapshot, BLOCKED) {
+                            Some(blocked) => Err(blocked_failure(blocked)),
+                            None => {
+                                match snapshot_value(&file.snapshot, ATTACH_FILE_SIZE)
+                                    .and_then(|s| s.parse().ok())
+                                {
+                                    Some(size) => Ok(FileInfo {
+                                        size: Some(size),
+                                        last_modified: None,
+                                    }),
+                                    None => Err(Failure::new(
+                                        FailureKind::Changed,
+                                        "게시물이 첨부의 크기(attachFileSize)를 알려주지 않았어요",
+                                    )),
+                                }
+                            }
+                        },
+                    },
+                }
+            };
+            answers.push((key.clone(), info));
+        }
+        answers
     }
 
     pub(crate) async fn fetch(&self, post: &Url, file: &PostFile) -> Result<Fetch, Failure> {

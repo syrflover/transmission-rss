@@ -31,7 +31,7 @@ use url::Url;
 use crate::{
     episode,
     http::{self, Limits, Pace, Reach},
-    Failure, FailureKind, Fetch, Opened, PostFile, Snapshot,
+    Failure, FailureKind, Fetch, FileInfo, Opened, PostFile, Snapshot,
 };
 
 /// The hosts a Drive file is received from, and the only ones its requests
@@ -235,10 +235,7 @@ impl Drive {
 
     /// Starts receiving the file with Drive ID `id`.
     pub(crate) async fn fetch(&self, id: &str) -> Result<Fetch, Failure> {
-        let mut url = self.inner.base.join("download").expect("a valid address");
-        url.query_pairs_mut()
-            .append_pair("id", id)
-            .append_pair("export", "download");
+        let url = self.download_url(id);
         self.inner.pace.wait(&url).await;
         let limits = self.inner.limits;
         let deadline = tokio::time::Instant::now() + limits.file_deadline;
@@ -247,49 +244,22 @@ impl Drive {
             .map_err(|_| http::deadline_failure(limits.file_deadline))?
             .map_err(|e| http::network_failure(&e, "Google Drive에 연결하지 못했어요"))?;
         let status = response.status();
-        let content_type = http::media_type(&response);
-        let failure = |kind, reason: &str, size| {
-            Failure::new(kind, format!("{reason} (HTTP {})", status.as_u16())).with_response(
-                Some(status.as_u16()),
-                content_type.clone(),
-                size,
-            )
-        };
-        if status == StatusCode::OK && content_type.as_deref() == Some("text/html") {
+        if status == StatusCode::OK && http::media_type(&response).as_deref() == Some("text/html") {
+            let content_type = http::media_type(&response);
             let page = http::read_capped(response, http::MAX_ERROR_BODY)
                 .await
                 .unwrap_or_default();
             let (kind, reason) = page_says(&String::from_utf8_lossy(&page));
-            return Err(failure(kind, reason, Some(page.len() as u64)));
+            return Err(
+                Failure::new(kind, format!("{reason} (HTTP {})", status.as_u16())).with_response(
+                    Some(status.as_u16()),
+                    content_type,
+                    Some(page.len() as u64),
+                ),
+            );
         }
         if status != StatusCode::OK {
-            // A sign-in is where Drive sends a request for a file it does not
-            // share: the redirect the client did not follow.
-            let to_sign_in = response
-                .headers()
-                .get(header::LOCATION)
-                .and_then(|v| v.to_str().ok())
-                .and_then(|l| Url::parse(l).ok())
-                .is_some_and(|l| l.host_str() == Some("accounts.google.com"));
-            let size = http::error_size(response).await;
-            let (kind, reason) = match status.as_u16() {
-                404 | 410 => (FailureKind::Missing, "Google Drive에 파일이 없어요"),
-                401 | 403 => (
-                    FailureKind::Missing,
-                    "Google Drive 파일이 공개돼 있지 않아요",
-                ),
-                300..=399 if to_sign_in => (
-                    FailureKind::Missing,
-                    "Google Drive가 로그인을 요구해요. 파일이 공개돼 있지 않아요",
-                ),
-                300..=399 => (
-                    FailureKind::Changed,
-                    "Google Drive가 따라갈 수 없는 곳으로 넘기려 했어요",
-                ),
-                429 | 500..=599 => (FailureKind::Network, "Google Drive가 파일을 주지 못했어요"),
-                _ => (FailureKind::Changed, "Google Drive가 뜻밖의 답을 줬어요"),
-            };
-            return Err(failure(kind, reason, size));
+            return Err(refused(response).await);
         }
         let name = response
             .headers()
@@ -302,6 +272,93 @@ impl Drive {
         fetch.name = name;
         Ok(fetch)
     }
+
+    /// Reads the information of the file with Drive ID `id` without receiving
+    /// it: a `HEAD` of the address a receipt asks, with the same hosts, no
+    /// cookie and no `Referer`. A public file answers `200` with
+    /// `Content-Length` and `Last-Modified` and no body (2026-10-03; the
+    /// answer to a `HEAD` of `drive.google.com/uc` is the same after its
+    /// `303`).
+    pub(crate) async fn head(&self, id: &str) -> Result<FileInfo, Failure> {
+        let url = self.download_url(id);
+        self.inner.pace.wait(&url).await;
+        let response = self
+            .inner
+            .http
+            .head(url)
+            .timeout(http::POST_TIMEOUT)
+            .send()
+            .await
+            .map_err(|e| http::network_failure(&e, "Google Drive에 연결하지 못했어요"))?;
+        let status = response.status();
+        if status != StatusCode::OK {
+            return Err(refused(response).await);
+        }
+        if http::media_type(&response).as_deref() == Some("text/html") {
+            // A web page for a `HEAD` is a confirmation, a quota or a
+            // sign-in page: not a file, and a `HEAD` has no body to tell which.
+            return Err(Failure::new(
+                FailureKind::NotAFile,
+                "Google Drive가 파일 대신 웹 페이지를 줬어요 (HTTP 200)",
+            )
+            .with_response(Some(200), Some("text/html".to_owned()), None));
+        }
+        Ok(FileInfo {
+            size: http::header_length(&response),
+            last_modified: response
+                .headers()
+                .get(header::LAST_MODIFIED)
+                .and_then(|v| v.to_str().ok())
+                .map(|v| v.trim().to_owned())
+                .filter(|v| !v.is_empty()),
+        })
+    }
+
+    /// Where a file is asked for.
+    fn download_url(&self, id: &str) -> Url {
+        let mut url = self.inner.base.join("download").expect("a valid address");
+        url.query_pairs_mut()
+            .append_pair("id", id)
+            .append_pair("export", "download");
+        url
+    }
+}
+
+/// The failure of a Drive answer that is not `200`.
+async fn refused(response: reqwest::Response) -> Failure {
+    let status = response.status();
+    let content_type = http::media_type(&response);
+    // A sign-in is where Drive sends a request for a file it does not
+    // share: the redirect the client did not follow.
+    let to_sign_in = response
+        .headers()
+        .get(header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|l| Url::parse(l).ok())
+        .is_some_and(|l| l.host_str() == Some("accounts.google.com"));
+    let size = http::error_size(response).await;
+    let (kind, reason) = match status.as_u16() {
+        404 | 410 => (FailureKind::Missing, "Google Drive에 파일이 없어요"),
+        401 | 403 => (
+            FailureKind::Missing,
+            "Google Drive 파일이 공개돼 있지 않아요",
+        ),
+        300..=399 if to_sign_in => (
+            FailureKind::Missing,
+            "Google Drive가 로그인을 요구해요. 파일이 공개돼 있지 않아요",
+        ),
+        300..=399 => (
+            FailureKind::Changed,
+            "Google Drive가 따라갈 수 없는 곳으로 넘기려 했어요",
+        ),
+        429 | 500..=599 => (FailureKind::Network, "Google Drive가 파일을 주지 못했어요"),
+        _ => (FailureKind::Changed, "Google Drive가 뜻밖의 답을 줬어요"),
+    };
+    Failure::new(kind, format!("{reason} (HTTP {})", status.as_u16())).with_response(
+        Some(status.as_u16()),
+        content_type,
+        size,
+    )
 }
 
 /// What a web page Drive gave instead of the file says, as a failure.

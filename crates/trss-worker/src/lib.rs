@@ -102,6 +102,13 @@
 //! rule's season, when the season queue stored a season's AniList entry
 //! ([`Worker::with_season_info`]), and after a run of jobs ended.
 //!
+//! Its own task also reads the files of the episodes received from the
+//! subscribed creator again, once a day for 14 days after the receipt, and
+//! makes a revision job when a file differs ([`trss_jobs::recheck`]). The task
+//! looks for what is due at its start and every hour
+//! ([`Worker::with_recheck_every`]), and the database remembers each reading,
+//! so a restart reads nothing twice in a day.
+//!
 //! # Shutdown
 //!
 //! Cancelling the token ([`Worker::run`]) stops the loop between cycles and
@@ -235,6 +242,10 @@ pub struct Worker {
     jobs: Option<trss_jobs::Runner>,
     /// Makes the subscribed creators' jobs; set with `jobs`.
     follow: Option<trss_jobs::Follow>,
+    /// Reads the received episodes' files again for 14 days; set with `jobs`.
+    recheck: Option<trss_jobs::Recheck>,
+    /// How often the due rechecks are looked for.
+    recheck_every: Duration,
     /// Rung when the web wakes the worker, so the jobs are looked at too.
     job_wake: Arc<tokio::sync::Notify>,
     /// Rung when the season queue stored a season's entry
@@ -321,6 +332,8 @@ impl Worker {
             captions: None,
             jobs: None,
             follow: None,
+            recheck: None,
+            recheck_every: jobs::RECHECK_EVERY,
             job_wake: Arc::default(),
             season_stored: None,
             jobs_running: Arc::default(),
@@ -549,6 +562,10 @@ impl Worker {
             let (worker, cancel) = (self.clone(), cancel.clone());
             async move { worker.run_jobs(cancel).await }
         });
+        let rechecks = tokio::spawn({
+            let (worker, cancel) = (self.clone(), cancel.clone());
+            async move { worker.run_rechecks(cancel).await }
+        });
         let commands = tokio::spawn({
             let (worker, cancel, wake) = (self.clone(), cancel.clone(), self.listen_for_wakes());
             async move { worker.dispatch(cancel, wake).await }
@@ -559,6 +576,9 @@ impl Worker {
         }
         if let Err(err) = jobs.await {
             eprintln!("Subtitle jobs stopped: {err}");
+        }
+        if let Err(err) = rechecks.await {
+            eprintln!("Subtitle rechecks stopped: {err}");
         }
         self.stop_watching();
     }

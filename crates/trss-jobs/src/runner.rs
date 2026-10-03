@@ -25,6 +25,10 @@
 //!   분류); an expired address is the source's to read again.
 //! - A failed item and a failed receipt keep the class of their failure, and
 //!   a receipt the answer's status, media type and size.
+//! - An item of a job that receives a revision (`revision_of`) whose files
+//!   are, by key, the same bytes (SHA-256) as the earlier receipt's records
+//!   that there is nothing to replace ([`JobStore::finish_item`]); no
+//!   replacement is to be approved for it.
 //!
 //! # One receipt
 //!
@@ -215,6 +219,16 @@ impl Runner {
 
     pub fn store(&self) -> &JobStore {
         &self.store
+    }
+
+    /// The sources this runner reads. The recheck ([`crate::recheck`]) asks the
+    /// same ones, so its requests share their pace per host.
+    pub fn sources(&self) -> &Sources {
+        &self.sources
+    }
+
+    pub fn clock(&self) -> &Clock {
+        &self.clock
     }
 
     fn now(&self) -> Millis {
@@ -509,9 +523,18 @@ impl Runner {
                     .await?
             }
             (None, None) => {
-                self.store
-                    .set_item(item.id, ItemState::Done, None, None, now)
-                    .await?
+                // A revision whose files are the earlier receipt's bytes
+                // replaces nothing; that is recorded with the item's end.
+                if self.store.finish_item(item.id, now).await?.is_some() {
+                    self.store
+                        .event(
+                            job,
+                            format!("{ep}: 받은 파일이 지난번과 바이트가 같아 바꿀 것이 없어요"),
+                            Some(format!("파일 {}개", files.len())),
+                            self.now(),
+                        )
+                        .await?;
+                }
             }
         }
         Ok(ItemEnd::Settled)

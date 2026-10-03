@@ -2,17 +2,93 @@
 //! jobs, and [`trss_jobs::runner`]), and the subscribed creators' receipts
 //! that make jobs of their own ([`trss_jobs::follow`]).
 
+use std::time::Duration;
+
 use tokio_util::sync::CancellationToken;
 
 use super::Worker;
 
+/// How often the worker looks for received episodes to read again. Each item
+/// is read once a day ([`trss_jobs::recheck::INTERVAL`]), so this only bounds
+/// how late a due reading starts.
+pub(crate) const RECHECK_EVERY: Duration = Duration::from_secs(60 * 60);
+
 impl Worker {
-    /// Carries out the subtitle jobs with `runner` (see the crate docs), and
-    /// makes the subscribed creators' jobs.
+    /// Carries out the subtitle jobs with `runner` (see the crate docs), makes
+    /// the subscribed creators' jobs, and reads their received episodes' files
+    /// again (with the runner's sources, so the requests keep the same pace
+    /// per host).
     pub fn with_jobs(mut self, runner: trss_jobs::Runner) -> Self {
+        let db = self.ctx.channels.db().clone();
+        self.recheck = Some(trss_jobs::Recheck::new(
+            db.clone(),
+            runner.sources().clone(),
+        ));
         self.jobs = Some(runner);
-        self.follow = Some(trss_jobs::Follow::new(self.ctx.channels.db().clone()));
+        self.follow = Some(trss_jobs::Follow::new(db));
         self
+    }
+
+    /// Overrides how often the due rechecks are looked for (default: an hour).
+    pub fn with_recheck_every(mut self, every: Duration) -> Self {
+        self.recheck_every = every;
+        self
+    }
+
+    /// One pass of the recheck at the clock's time (see
+    /// [`trss_jobs::recheck`]); the jobs it makes are run at once. 0 for a
+    /// worker that runs no jobs.
+    pub async fn recheck_once(&self, cancel: &CancellationToken) -> Result<usize, String> {
+        let Some(recheck) = &self.recheck else {
+            return Ok(0);
+        };
+        let report = recheck
+            .run(&self.clock, cancel)
+            .await
+            .map_err(|e| e.to_string())?;
+        if report.read() > 0 {
+            println!(
+                "Subtitle recheck: {} read ({} changed, {} same, {} missing, {} failed, {} unreadable)",
+                report.read(),
+                report.changed,
+                report.same,
+                report.missing,
+                report.failed,
+                report.unreadable
+            );
+        }
+        if !report.jobs.is_empty() {
+            self.job_wake.notify_one();
+        }
+        Ok(report.read())
+    }
+
+    /// The recheck until `cancel` fires: a pass at the start and one every
+    /// [`Worker::with_recheck_every`]. A pass that fails is logged and the
+    /// next one goes on.
+    pub(crate) async fn run_rechecks(&self, cancel: CancellationToken) {
+        if self.recheck.is_none() {
+            return;
+        }
+        let mut ticker = tokio::time::interval(self.recheck_every);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tokio::select! {
+                biased;
+                _ = cancel.cancelled() => break,
+                _ = ticker.tick() => {}
+            }
+            // In its own task so that a panic ends the pass, not the loop.
+            let run = tokio::spawn({
+                let (worker, cancel) = (self.clone(), cancel.clone());
+                async move { worker.recheck_once(&cancel).await }
+            });
+            match run.await {
+                Ok(Ok(_)) => {}
+                Ok(Err(err)) => eprintln!("Subtitle recheck failed: {err}"),
+                Err(err) => eprintln!("Subtitle recheck ended with an internal error: {err}"),
+            }
+        }
     }
 
     /// Looks at the subscribed creators again whenever `stored` rings: the

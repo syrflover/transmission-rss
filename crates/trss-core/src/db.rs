@@ -128,6 +128,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("../migrations/jobs/upload_archive.sql")),
     // 40: the creator the user named for a subtitle file of the library
     Migration::Sql(include_str!("../migrations/library/subtitle_creator.sql")),
+    // 41: the daily recheck of a received episode's files, and the revision that equals what was received
+    Migration::Sql(include_str!("../migrations/jobs/recheck.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -1064,6 +1066,75 @@ mod tests {
             .unwrap();
         assert_eq!(set_at, 0);
         assert_eq!(flag, (1, "0".to_owned()));
+    }
+
+    #[tokio::test]
+    async fn a_database_from_before_the_recheck_keeps_its_items_and_starts_with_no_reading() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        {
+            // A database as the build with 40 migrations left it: a job that
+            // received one episode.
+            let conn = database_at(&path, 40);
+            conn.execute_batch(
+                "INSERT INTO subtitle_jobs (id, command_id, request, origin, state,
+                     created_at, updated_at, state_at)
+                     VALUES ('j1', 'c1', '{}', 'auto', 'done', 1, 1, 1);
+                 INSERT INTO subtitle_job_items (job_id, position, episode, post_url,
+                     found_at, state, updated_at)
+                     VALUES ('j1', 0, '1', 'https://erulabo.com/1', 6, 'done', 1);",
+            )
+            .unwrap();
+        }
+
+        let db = Db::open(&path).await.unwrap();
+
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+        let (kept, refused, cascaded): ((i64, Option<String>, i64), [bool; 4], i64) = db
+            .run::<_, DbError, _>(|c| {
+                let kept = c.query_row(
+                    "SELECT (SELECT count(*) FROM subtitle_job_items),
+                            (SELECT unchanged_from FROM subtitle_job_items WHERE id = 1),
+                            (SELECT count(*) FROM subtitle_item_rechecks)",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )?;
+                let write = |sql: &str| c.execute(sql, []).is_err();
+                let refused = [
+                    // An item that is not there.
+                    write("INSERT INTO subtitle_item_rechecks (item_id, checked_at) VALUES (9, 1)"),
+                    // A result that is not one of the known ones.
+                    write(
+                        "INSERT INTO subtitle_item_rechecks (item_id, checked_at, result)
+                         VALUES (1, 1, 'maybe')",
+                    ),
+                    // `observed` is JSON.
+                    write(
+                        "INSERT INTO subtitle_item_rechecks (item_id, checked_at, observed)
+                         VALUES (1, 1, 'not json')",
+                    ),
+                    // A job that is not there.
+                    write("UPDATE subtitle_job_items SET unchanged_from = 'nobody' WHERE id = 1"),
+                ];
+                c.execute_batch(
+                    "INSERT INTO subtitle_item_rechecks
+                         (item_id, checked_at, checks, result, observed, job_id, result_at)
+                         VALUES (1, 5, 1, 'changed', '[{\"key\":\"k\",\"size\":3}]', 'j1', 5);
+                     UPDATE subtitle_job_items SET unchanged_from = 'j1' WHERE id = 1;",
+                )?;
+                // A reading goes with its item.
+                c.execute("DELETE FROM subtitle_job_items WHERE id = 1", [])?;
+                let cascaded =
+                    c.query_row("SELECT count(*) FROM subtitle_item_rechecks", [], |r| {
+                        r.get(0)
+                    })?;
+                Ok((kept, refused, cascaded))
+            })
+            .await
+            .unwrap();
+        assert_eq!(kept, (1, None, 0));
+        assert_eq!(refused, [true; 4]);
+        assert_eq!(cascaded, 0);
     }
 
     #[tokio::test]

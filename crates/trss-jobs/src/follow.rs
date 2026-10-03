@@ -381,18 +381,11 @@ impl Follow {
         Ok(made)
     }
 
-    async fn follow(&self, sub: &Subscribed, creator: &str, now: Millis) -> Result<Vec<String>> {
-        let observed = self.anissia.candidates(sub.anime_no, Vec::new()).await?;
-        let Some(source_id) = observed
-            .iter()
-            .find(|c| c.creator == creator)
-            .map(|c| c.source_id.clone())
-        else {
-            return Ok(Vec::new());
-        };
-        // A work whose folder is gone holds nothing as far as the library
-        // knows, which is not the same as holding no subtitle.
-        let work_id = sub.work_id.clone();
+    /// Whether the work's folder is there. A work whose folder is gone
+    /// (`missing`) holds nothing as far as the library knows, which is not the
+    /// same as holding no subtitle, so nothing is received for it.
+    pub(crate) async fn folder_present(&self, work_id: &str) -> Result<bool> {
+        let work_id = work_id.to_owned();
         let missing = self
             .db
             .run(move |c| {
@@ -404,7 +397,33 @@ impl Follow {
                 )
             })
             .await?;
-        if missing != Some(0) {
+        Ok(missing == Some(0))
+    }
+
+    /// The source of the subscribed creator `creator` among the observed
+    /// sources of the subscription's anime, found by Anissia's name.
+    pub(crate) async fn creator_source(
+        &self,
+        sub: &Subscribed,
+        creator: &str,
+    ) -> Result<Option<String>> {
+        let observed = self.anissia.candidates(sub.anime_no, Vec::new()).await?;
+        Ok(observed
+            .into_iter()
+            .find(|c| c.creator == creator)
+            .map(|c| c.source_id))
+    }
+
+    async fn follow(&self, sub: &Subscribed, creator: &str, now: Millis) -> Result<Vec<String>> {
+        let observed = self.anissia.candidates(sub.anime_no, Vec::new()).await?;
+        let Some(source_id) = observed
+            .iter()
+            .find(|c| c.creator == creator)
+            .map(|c| c.source_id.clone())
+        else {
+            return Ok(Vec::new());
+        };
+        if !self.folder_present(&sub.work_id).await? {
             return Ok(Vec::new());
         }
         let Some(held) = self

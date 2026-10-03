@@ -26,7 +26,7 @@ use url::Url;
 use crate::{
     drive::{self, Drive},
     http::{self, Limits, Pace, Reach},
-    Failure, FailureKind, Fetch, Opened, PostFile, Snapshot,
+    Failure, FailureKind, Fetch, FileInfo, Opened, PostFile, Snapshot,
 };
 
 /// The hosts this source reads: `<blog>.blogspot.com`.
@@ -100,6 +100,28 @@ impl BloggerSource {
         }
         let page = http::get_page(&self.inner.http, &self.inner.pace, &post).await?;
         read_page(&post, &page, episode)
+    }
+
+    /// The Drive files `keys` name, read again with a `HEAD` each (see
+    /// [`crate::Source::recheck`]). The post is not read: a Drive file's
+    /// address does not change.
+    pub(crate) async fn recheck(
+        &self,
+        _post: &Url,
+        keys: &[String],
+    ) -> Vec<(String, Result<FileInfo, Failure>)> {
+        let mut answers = Vec::new();
+        for key in keys {
+            let info = match drive::id_of(key) {
+                Some(id) => self.inner.drive.head(id).await,
+                None => Err(Failure::new(
+                    FailureKind::Changed,
+                    "Blogger 게시물이 Google Drive 밖의 파일을 가리켜요",
+                )),
+            };
+            answers.push((key.clone(), info));
+        }
+        answers
     }
 
     pub(crate) async fn fetch(&self, _post: &Url, file: &PostFile) -> Result<Fetch, Failure> {

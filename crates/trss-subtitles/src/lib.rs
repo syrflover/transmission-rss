@@ -150,6 +150,22 @@ impl Snapshot {
     }
 }
 
+/// What a source reads again about a file it received before, without
+/// receiving it ([`Source::recheck`]; `docs/specs/subtitles.md`, 구독 제작자
+/// 자동 수신). Each value is what the site gives with no sign-in; one the site
+/// does not give is `None`, and a missing value is never a difference.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FileInfo {
+    /// The file's whole size in bytes: a Drive file's `Content-Length` (a
+    /// `HEAD` answer), a Tistory attachment's total in the `Content-Range` of
+    /// a one-byte range request, a Naver attachment's `attachFileSize`.
+    pub size: Option<u64>,
+    /// The `Last-Modified` the answer gave, as it wrote it. Only Drive's
+    /// answers have one: Tistory's and Naver's files have no modified time to
+    /// read, so a same-size edit shows nothing there.
+    pub last_modified: Option<String>,
+}
+
 /// What opening a post came to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Opened {
@@ -390,6 +406,31 @@ impl Source {
             Source::Tistory(source) => source.open(post, episode).await,
             Source::Blogger(source) => source.open(post, episode).await,
             Source::Naver(source) => source.open(post, episode).await,
+        }
+    }
+
+    /// Reads again what the site tells about the files `keys` name
+    /// ([`PostFile::key`]) of the post at `post`, without receiving any: a
+    /// request that gets no body for each file (a Drive file's `HEAD`, a
+    /// Tistory attachment's one-byte range) after reading the post again for a
+    /// signed address, or the post's own list of attachments (Naver). The post
+    /// is read once, and only when a key needs it (a Drive file's address is
+    /// always the same).
+    ///
+    /// One answer per key, in the order of `keys`: the file's information, or
+    /// why the site could not give it. A post that cannot be read gives that
+    /// failure for each key that needs it; a file the post no longer offers is
+    /// [`FailureKind::Missing`]. Requests keep the sources' spacing per host.
+    pub async fn recheck(
+        &self,
+        post: &Url,
+        keys: &[String],
+    ) -> Vec<(String, Result<FileInfo, Failure>)> {
+        match self {
+            Source::Fake(source) => source.recheck(post, keys).await,
+            Source::Tistory(source) => source.recheck(post, keys).await,
+            Source::Blogger(source) => source.recheck(post, keys).await,
+            Source::Naver(source) => source.recheck(post, keys).await,
         }
     }
 

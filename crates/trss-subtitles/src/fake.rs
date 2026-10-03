@@ -22,7 +22,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use url::Url;
 
-use crate::{Failure, FailureKind, Opened, PostFile};
+use crate::{Failure, FailureKind, FileInfo, Opened, PostFile};
 
 /// The host of the fake posts.
 pub const HOST: &str = "fake.trss.invalid";
@@ -87,6 +87,34 @@ impl FakeSource {
             }
             Post::Empty => Opened::Files(Vec::new()),
         })
+    }
+
+    /// The size of each file, which never changes: the file's name is its
+    /// bytes (see [`ass`]).
+    pub(crate) async fn recheck(
+        &self,
+        post: &Url,
+        keys: &[String],
+    ) -> Vec<(String, Result<FileInfo, Failure>)> {
+        let post = read(post);
+        keys.iter()
+            .map(|key| {
+                let info = match &post {
+                    Err(failure) => Err(failure.clone()),
+                    Ok(Post::Missing) => {
+                        Err(Failure::new(FailureKind::Missing, "게시물이 없어요 (404)"))
+                    }
+                    Ok(_) => {
+                        let name = key.rsplit('/').next().unwrap_or_default();
+                        Ok(FileInfo {
+                            size: Some(ass(name).len() as u64),
+                            last_modified: None,
+                        })
+                    }
+                };
+                (key.clone(), info)
+            })
+            .collect()
     }
 
     pub(crate) async fn fetch(&self, post: &Url, file: &PostFile) -> Result<FakeBody, Failure> {

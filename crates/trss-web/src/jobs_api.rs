@@ -6,8 +6,9 @@
 //!   makes a job of the candidates a person picked for a season. `id` is made
 //!   by the browser for the action: a repeat with the same content answers
 //!   `200` with the job it made, other content under the same ID `409`. An ID
-//!   that starts with `auto:` is the app's own (the subscribed creator's
-//!   receipts, [`trss_jobs::follow`]) and is refused with `400`. A new
+//!   that starts with `auto:` or `recheck:` is the app's own (the subscribed
+//!   creator's receipts, [`trss_jobs::follow`], and the revisions the
+//!   recheck makes, [`trss_jobs::recheck`]) and is refused with `400`. A new
 //!   job answers `202` `{ "id" }` and wakes the worker. The candidates must be
 //!   the season's Anissia anime's ([`trss_collect::store::anissia::AnissiaStore::candidates`])
 //!   and of one creator; the job copies their posts and episodes as they are.
@@ -25,6 +26,10 @@
 //! them), a job the class of its first failed item. A file carries the format
 //! its bytes were checked to be (`zip`, `ass`, `srt`, `smi`, `other`) and the
 //! answer's status, media type and, for a failure, size.
+//!
+//! An item of a revision job whose files are the same bytes as the earlier
+//! receipt's has `unchanged_from`, that receipt's job: there is nothing to
+//! replace.
 //!
 //! A job's `origin` is `pick` (a person picked its candidates), `auto` (the
 //! subscribed creator's episode, made by the app, [`trss_jobs::follow`]) or
@@ -330,6 +335,9 @@ struct ItemView {
     wait: Option<&'static str>,
     reason: Option<String>,
     failure: Option<&'static str>,
+    /// For an item of a revision job whose files are the earlier receipt's
+    /// bytes: that receipt's job. There is nothing to replace.
+    unchanged_from: Option<String>,
     files: Vec<FileView>,
 }
 
@@ -465,6 +473,7 @@ async fn detail(
             wait: item.wait.map(Wait::code),
             reason: item.reason.clone(),
             failure: item.failure.map(|f| f.code()),
+            unchanged_from: item.unchanged_from.clone(),
             files: item
                 .files
                 .iter()
@@ -514,8 +523,11 @@ async fn create(
     if request.id.trim().is_empty() {
         return Err(ApiError::invalid("요청 ID가 비어 있어요."));
     }
-    // The app's own receipts of the subscribed creator take these IDs.
-    if request.id.starts_with(trss_jobs::follow::AUTO_PREFIX) {
+    // The app's own receipts of the subscribed creator (`auto:`) and the
+    // recheck's revisions (`recheck:`) take these IDs.
+    if request.id.starts_with(trss_jobs::follow::AUTO_PREFIX)
+        || request.id.starts_with(trss_jobs::recheck::COMMAND_PREFIX)
+    {
         return Err(ApiError::invalid("이 요청 ID는 쓸 수 없어요."));
     }
     if request.candidates.is_empty() {

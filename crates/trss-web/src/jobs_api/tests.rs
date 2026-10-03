@@ -128,6 +128,15 @@ async fn a_pick_makes_one_job_per_browser_id_of_one_creators_candidates() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(refused["message"], "이 요청 ID는 쓸 수 없어요.");
+    let (status, refused) = call(
+        &router,
+        Method::POST,
+        "/api/subtitle-jobs",
+        Some(pick("recheck:3:ab12", &[3])),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(refused["message"], "이 요청 ID는 쓸 수 없어요.");
 
     // Accepted is pending, not done: the detail says what it is about.
     let (status, detail) = get(&router, &format!("/api/subtitle-jobs/{id}")).await;

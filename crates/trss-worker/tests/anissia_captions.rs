@@ -467,3 +467,78 @@ async fn a_season_entry_stored_later_has_the_worker_look_at_the_subscribed_creat
     cancel.cancel();
     running.await.unwrap();
 }
+
+/// How many times the recheck has read the items (their `checks` summed).
+async fn rechecks_read(env: &Env) -> i64 {
+    env.h
+        .db
+        .run::<_, trss_core::DbError, _>(|c| {
+            Ok(c.query_row(
+                "SELECT COALESCE(SUM(checks), 0) FROM subtitle_item_rechecks",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .await
+        .unwrap()
+}
+
+/// Whether the recheck's reading count reaches `count` within a few seconds.
+async fn rechecks_reach(env: &Env, count: i64) -> bool {
+    for _ in 0..200 {
+        if rechecks_read(env).await == count {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    false
+}
+
+#[tokio::test]
+async fn the_worker_reads_the_received_episode_once_a_day_for_fourteen_days() {
+    const DAY: i64 = 24 * 60 * 60 * 1000;
+    let env = Env::new().await;
+    env.season_entry().await;
+    env.follow().await;
+    let (worker, jobs) = env.job_worker();
+    let worker = worker.with_recheck_every(Duration::from_millis(40));
+    let cancel = CancellationToken::new();
+    let running = tokio::spawn({
+        let (worker, cancel) = (worker.clone(), cancel.clone());
+        async move { worker.run(cancel).await }
+    });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    env.fake.set_recent(vec![env.fake.recent_line(
+        3492,
+        "1",
+        "2026-10-02T11:00:00",
+        "https://fake.trss.invalid/ok/lara1",
+        "에루샤",
+    )]);
+    env.observer.run_due().await.unwrap();
+    assert!(auto_job_done(&jobs).await);
+
+    // The receipt is minutes old: the loop's passes read nothing.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(rechecks_read(&env).await, 0);
+
+    // Three days later: one reading, and no second one however often the loop
+    // looks the same day.
+    let start = env.h.clock.load(Ordering::SeqCst);
+    env.h.clock.store(start + 3 * DAY, Ordering::SeqCst);
+    assert!(rechecks_reach(&env, 1).await, "read on the third day");
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert_eq!(rechecks_read(&env).await, 1);
+
+    // The next day another one; past the fourteenth day none.
+    env.h.clock.store(start + 4 * DAY + 1, Ordering::SeqCst);
+    assert!(rechecks_reach(&env, 2).await, "read on the fourth day");
+    env.h.clock.store(start + 20 * DAY, Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert_eq!(rechecks_read(&env).await, 2);
+    // The fake source's files do not differ from what was received.
+    assert_eq!(jobs.done_page(None, 10).await.unwrap().items.len(), 1);
+
+    cancel.cancel();
+    running.await.unwrap();
+}

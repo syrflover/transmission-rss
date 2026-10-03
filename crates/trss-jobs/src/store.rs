@@ -207,6 +207,9 @@ pub struct ItemRow {
     /// The class of a failed item's failure (`docs/specs/jobs.md`, 공통 수신
     /// 결과와 실패 분류), when it has one.
     pub failure: Option<FailureKind>,
+    /// For an item of a revision job whose files are the same bytes as the
+    /// earlier receipt's: that receipt's job. There is nothing to replace.
+    pub unchanged_from: Option<String>,
     pub files: Vec<FileRow>,
 }
 
@@ -440,6 +443,36 @@ impl JobStore {
     pub async fn detail(&self, id: &str) -> Result<Option<JobDetail>, JobError> {
         let id = id.to_owned();
         self.db.run(move |c| detail(c, &id)).await
+    }
+
+    /// Ends an item `done` and, in the same transaction, marks it when it is
+    /// the item of a revision job (`revision_of`) whose files are the same
+    /// bytes as the files of the earlier receipt of the episode: the latest
+    /// done item of the revised observation before it. Both must have the same
+    /// files (by key) with the same SHA-256 each. Returns that earlier
+    /// receipt's job, or `None` when the item is not such an item or differs.
+    pub async fn finish_item(&self, item_id: i64, now: Millis) -> Result<Option<String>, JobError> {
+        self.db
+            .run(move |c| {
+                let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                tx.execute(
+                    "UPDATE subtitle_job_items
+                     SET state = 'done', wait = NULL, reason = NULL, failure = NULL,
+                         updated_at = ?2
+                     WHERE id = ?1",
+                    params![item_id, now],
+                )?;
+                let unchanged = unchanged_from(&tx, item_id)?;
+                if let Some(job) = &unchanged {
+                    tx.execute(
+                        "UPDATE subtitle_job_items SET unchanged_from = ?2 WHERE id = ?1",
+                        params![item_id, job],
+                    )?;
+                }
+                tx.commit()?;
+                Ok(unchanged)
+            })
+            .await
     }
 
     /// The candidates the jobs of Anissia anime `anime_no` took, in the order
@@ -1214,7 +1247,8 @@ const JOB_COLUMNS: &str = "
            j.finished_at, j.work_id, w.dir_name, j.season, j.anime_no, a.subject, j.creator,
            j.origin, j.revision_of,
            (SELECT r.job_id FROM subtitle_job_items r
-             WHERE r.observation_id = j.revision_of AND r.state = 'done'
+              JOIN subtitle_jobs rj ON rj.id = r.job_id
+             WHERE r.observation_id = j.revision_of AND r.state = 'done' AND rj.seq < j.seq
              ORDER BY r.id DESC LIMIT 1),
            j.revises_attributed
     FROM subtitle_jobs j
@@ -1459,7 +1493,8 @@ fn kind_at(r: &Row<'_>, i: usize) -> rusqlite::Result<Option<Kind>> {
 
 fn items(c: &Connection, job_id: &str) -> Result<Vec<ItemRow>, JobError> {
     let mut stmt = c.prepare(
-        "SELECT id, position, observation_id, episode, post_url, state, wait, reason, failure
+        "SELECT id, position, observation_id, episode, post_url, state, wait, reason, failure,
+                unchanged_from
          FROM subtitle_job_items WHERE job_id = ?1 ORDER BY position",
     )?;
     let mut items = stmt
@@ -1474,6 +1509,7 @@ fn items(c: &Connection, job_id: &str) -> Result<Vec<ItemRow>, JobError> {
                 wait: r.get(6)?,
                 reason: r.get(7)?,
                 failure: failure_at(r, 8)?,
+                unchanged_from: r.get(9)?,
                 files: Vec::new(),
             })
         })?
@@ -1547,4 +1583,50 @@ fn detail(c: &mut Connection, id: &str) -> Result<Option<JobDetail>, JobError> {
     drop(dropped_stmt);
     tx.commit()?;
     Ok(Some(detail))
+}
+
+/// The earlier receipt's job when the done item `item_id` of a revision job
+/// has the same files, by key, with the same SHA-256 as that receipt
+/// ([`JobStore::finish_item`]).
+fn unchanged_from(tx: &Connection, item_id: i64) -> Result<Option<String>, JobError> {
+    let revised: Option<i64> = tx
+        .query_row(
+            "SELECT j.revision_of FROM subtitle_job_items i
+               JOIN subtitle_jobs j ON j.id = i.job_id
+              WHERE i.id = ?1 AND i.state = 'done'",
+            [item_id],
+            |r| r.get(0),
+        )
+        .optional()?
+        .flatten();
+    let Some(revised) = revised else {
+        return Ok(None);
+    };
+    let earlier: Option<(i64, String)> = tx
+        .query_row(
+            "SELECT id, job_id FROM subtitle_job_items
+              WHERE observation_id = ?1 AND state = 'done' AND id < ?2
+              ORDER BY id DESC LIMIT 1",
+            params![revised, item_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    let Some((earlier_item, earlier_job)) = earlier else {
+        return Ok(None);
+    };
+    let hashes = |item: i64| -> Result<Vec<(String, Option<String>)>, JobError> {
+        let mut stmt = tx.prepare(
+            "SELECT file_key, sha256 FROM subtitle_job_files
+              WHERE item_id = ?1 AND state = 'done' ORDER BY file_key",
+        )?;
+        let rows = stmt
+            .query_map([item], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    };
+    let (now_files, was_files) = (hashes(item_id)?, hashes(earlier_item)?);
+    let same = !now_files.is_empty()
+        && now_files == was_files
+        && now_files.iter().all(|(_, sha)| sha.is_some());
+    Ok(same.then_some(earlier_job))
 }
