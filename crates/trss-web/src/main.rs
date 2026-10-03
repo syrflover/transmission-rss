@@ -60,7 +60,8 @@ async fn run() -> Result<(), String> {
         .with_artwork(artwork)
         .with_anissia(Anissia::with_defaults(db, anissia))
         .with_receive_area(&receive)
-        .with_worker_wake(wake_path_for(&db_path));
+        .with_worker_wake(wake_path_for(&db_path))
+        .with_web_hosts(env.hosts.clone());
     // What a killed process, or an upload cut short in this one, left in the
     // receive area (a staging folder, or the folder of a job that was never
     // recorded). This process takes the uploads, so it sweeps: at start and

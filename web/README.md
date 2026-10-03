@@ -29,6 +29,7 @@ cargo run --bin trss-web      # http://127.0.0.1:8080, serves ./web/dist
 | `TRSS_WEB_BIND` | `127.0.0.1` | IP address to listen on (there is no app login; bind wider only behind LAN/VPN/front-door auth) |
 | `TRSS_WEB_PORT` | `8080` | Port to listen on |
 | `TRSS_WEB_STATIC_DIR` | `web/dist` | Directory holding the frontend build (`index.html`, `assets/`) |
+| `TRSS_WEB_HOSTS` | (none) | Host names, comma-separated, the server answers to besides IP addresses and `localhost`; a request for another name is refused (DNS rebinding) |
 
 In the Docker image these are `0.0.0.0`, `8080` and `/usr/local/share/trss/web`.
 

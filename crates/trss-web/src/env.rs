@@ -3,6 +3,8 @@ use std::{
     path::PathBuf,
 };
 
+use crate::origin_guard::{AllowedHosts, HOSTS_VAR};
+
 /// Environment variable naming the address `trss-web` listens on.
 pub const BIND_VAR: &str = "TRSS_WEB_BIND";
 /// Environment variable naming the port `trss-web` listens on.
@@ -20,6 +22,8 @@ pub enum EnvError {
     Bind(String),
     #[error("{PORT_VAR} must be a port number (0-65535), got {0:?}")]
     Port(String),
+    #[error("{HOSTS_VAR} must be host names separated by commas, got {0:?}")]
+    Hosts(String),
 }
 
 /// Deployment settings of `trss-web`, read from the environment.
@@ -27,10 +31,15 @@ pub enum EnvError {
 /// There is no app login (access is limited by the network in front of the
 /// app), so the default bind address is loopback; a deployment that should be
 /// reachable from other hosts must opt in with `TRSS_WEB_BIND`.
+///
+/// Requests are answered for IP addresses and `localhost`; a host name the
+/// web is reached by (through a reverse proxy, say) must be listed in
+/// `TRSS_WEB_HOSTS` (see [`crate::origin_guard`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WebEnv {
     pub addr: SocketAddr,
     pub static_dir: PathBuf,
+    pub hosts: AllowedHosts,
 }
 
 impl WebEnv {
@@ -59,10 +68,15 @@ impl WebEnv {
         let static_dir = get(STATIC_DIR_VAR)
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(DEFAULT_STATIC_DIR));
+        let hosts = match get(HOSTS_VAR) {
+            Some(value) => AllowedHosts::parse(&value).ok_or(EnvError::Hosts(value))?,
+            None => AllowedHosts::default(),
+        };
 
         Ok(Self {
             addr: SocketAddr::new(ip, port),
             static_dir,
+            hosts,
         })
     }
 }
@@ -86,6 +100,17 @@ mod tests {
         let env = env(&[]).unwrap();
         assert_eq!(env.addr, "127.0.0.1:8080".parse().unwrap());
         assert_eq!(env.static_dir, PathBuf::from("web/dist"));
+        assert_eq!(env.hosts, AllowedHosts::default());
+    }
+
+    #[test]
+    fn reads_the_host_names() {
+        let read = env(&[(HOSTS_VAR, "trss.example.com, NAS.lan:8080")]).unwrap();
+        assert_eq!(read.hosts.names(), ["trss.example.com", "nas.lan"]);
+        assert_eq!(
+            env(&[(HOSTS_VAR, "https://trss.example.com")]),
+            Err(EnvError::Hosts("https://trss.example.com".into()))
+        );
     }
 
     #[test]

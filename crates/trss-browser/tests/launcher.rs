@@ -238,6 +238,46 @@ async fn a_start_gives_the_run_a_profile_and_a_downloads_folder() {
         std::fs::read_to_string(profile.join("display.txt")).unwrap(),
         ":77"
     );
+    // Out through the launcher's proxy alone.
+    let proxy = h.launcher.proxy_addr();
+    for wanted in [
+        format!("--proxy-server=http://{proxy}"),
+        "--proxy-bypass-list=<-loopback>".to_owned(),
+        "--disable-quic".to_owned(),
+        "--webrtc-ip-handling-policy=disable_non_proxied_udp".to_owned(),
+    ] {
+        assert!(
+            args.contains(&wanted.as_str()),
+            "{wanted} missing from {args:?}"
+        );
+    }
+}
+
+/// The browser's proxy does not lead to the launcher, or anything else on
+/// loopback: what a page asks of it for those is refused before any
+/// connection is made.
+#[tokio::test]
+async fn the_browsers_proxy_does_not_reach_the_launcher() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let h = harness().await;
+    let proxy = h.launcher.proxy_addr();
+    assert!(proxy.ip().is_loopback());
+    for head in [
+        format!("CONNECT {} HTTP/1.1\r\nHost: {}\r\n\r\n", h.base, h.base),
+        format!(
+            "GET http://{}/runs HTTP/1.1\r\nHost: {}\r\nAuthorization: Bearer {TOKEN}\r\n\r\n",
+            h.base, h.base
+        ),
+        format!("CONNECT {proxy} HTTP/1.1\r\nHost: {proxy}\r\n\r\n"),
+        "GET http://localhost:9230/runs HTTP/1.1\r\nHost: localhost:9230\r\n\r\n".to_owned(),
+    ] {
+        let mut socket = tokio::net::TcpStream::connect(proxy).await.unwrap();
+        socket.write_all(head.as_bytes()).await.unwrap();
+        let mut answer = [0u8; 12];
+        socket.read_exact(&mut answer).await.unwrap();
+        assert_eq!(&answer, b"HTTP/1.1 403", "{head}");
+    }
 }
 
 #[tokio::test]

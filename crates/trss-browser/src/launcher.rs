@@ -15,6 +15,14 @@
 //! only. The one way to reach it is the proxy at `GET /runs/{id}/cdp`, behind
 //! the token ([`api`]).
 //!
+//! Every connection Chromium makes goes through the launcher's egress proxy
+//! on the container's loopback ([`egress`]), which connects only to public
+//! addresses: the pages a run opens cannot reach the host's LAN address, the
+//! Docker gateway, this launcher or anything else on the local network.
+//! Chromium is started with that proxy, without its implicit loopback
+//! bypass, with QUIC off and with WebRTC kept from sending UDP around the
+//! proxy ([`egress_flags`]).
+//!
 //! A run is over when the worker ends it, when [`Launcher::reset`] ends all
 //! of them, or when its Chromium exits by itself. In each case the proxied
 //! sockets close, the process group is stopped (SIGTERM, then SIGKILL after
@@ -29,12 +37,13 @@
 
 pub mod api;
 mod devtools;
+pub mod egress;
 pub mod xvfb;
 
 use std::{
     collections::HashMap,
     io,
-    net::SocketAddr,
+    net::{Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
     process::Stdio,
     sync::{Arc, Mutex},
@@ -57,6 +66,10 @@ pub const CHROMIUM_ARGS_VAR: &str = "TRSS_BROWSER_CHROMIUM_ARGS";
 pub const RUNS_DIR_VAR: &str = "TRSS_BROWSER_RUNS_DIR";
 pub const DOWNLOADS_VAR: &str = "TRSS_BROWSER_DOWNLOADS";
 pub const DISPLAY_VAR: &str = "TRSS_BROWSER_DISPLAY";
+/// Addresses (`ip:port`, separated by commas) the egress proxy lets the
+/// browser reach although they are not public. For the real-image tests,
+/// which serve a site on the test host; deployments leave it unset.
+pub const EGRESS_ALLOW_VAR: &str = "TRSS_BROWSER_EGRESS_ALLOW";
 
 pub const DEFAULT_BIND: &str = "0.0.0.0:9230";
 pub const DEFAULT_MAX_RUNS: usize = 2;
@@ -74,8 +87,13 @@ pub struct Config {
     pub chromium: PathBuf,
     /// Arguments put before the launcher's own. The image sets `--no-sandbox`:
     /// the container is the sandbox, and Docker's default seccomp profile
-    /// keeps Chromium's own from starting.
+    /// keeps Chromium's own from starting. From the environment, an argument
+    /// about proxies, QUIC or WebRTC's addresses is refused: those are the
+    /// launcher's ([`egress_flags`]).
     pub chromium_args: Vec<String>,
+    /// Addresses the egress proxy lets through although they are not public
+    /// ([`EGRESS_ALLOW_VAR`]). Empty in deployments.
+    pub egress_allow: Vec<SocketAddr>,
     /// Where each run's profile is made, and removed from.
     pub runs_dir: PathBuf,
     /// The folder shared with the worker; a run's downloads go in a folder of
@@ -100,6 +118,7 @@ impl std::fmt::Debug for Config {
             .field("bind", &self.bind)
             .field("chromium", &self.chromium)
             .field("chromium_args", &self.chromium_args)
+            .field("egress_allow", &self.egress_allow)
             .field("runs_dir", &self.runs_dir)
             .field("downloads_dir", &self.downloads_dir)
             .field("display", &self.display)
@@ -127,6 +146,7 @@ impl Config {
             bind: DEFAULT_BIND.parse().expect("a socket address"),
             chromium: PathBuf::from("chromium"),
             chromium_args: Vec::new(),
+            egress_allow: Vec::new(),
             runs_dir: PathBuf::from("/tmp/trss-runs"),
             downloads_dir: PathBuf::from("/downloads"),
             display: ":99".to_owned(),
@@ -161,6 +181,20 @@ impl Config {
         }
         if let Some(args) = get(CHROMIUM_ARGS_VAR) {
             config.chromium_args = args.split_whitespace().map(str::to_owned).collect();
+            if config.chromium_args.iter().any(|a| touches_egress(a)) {
+                return Err(ConfigError::Invalid(CHROMIUM_ARGS_VAR));
+            }
+        }
+        if let Some(allow) = get(EGRESS_ALLOW_VAR) {
+            config.egress_allow = allow
+                .split(',')
+                .map(str::trim)
+                .filter(|a| !a.is_empty())
+                .map(|a| {
+                    a.parse()
+                        .map_err(|_| ConfigError::Invalid(EGRESS_ALLOW_VAR))
+                })
+                .collect::<Result<_, _>>()?;
         }
         if let Some(dir) = get(RUNS_DIR_VAR).filter(|d| !d.is_empty()) {
             config.runs_dir = dir.into();
@@ -246,7 +280,66 @@ struct Inner {
     /// The starts under way (those queued for `start_lock` included), by run
     /// id: an end or a reset finds them here.
     starting: Mutex<HashMap<String, Starting>>,
+    /// The egress proxy every run's Chromium goes through, on loopback.
+    proxy: SocketAddr,
+    /// Its task, stopped with the launcher.
+    _proxy_task: AbortOnDrop,
 }
+
+/// Stops a task when dropped.
+struct AbortOnDrop(tokio::task::AbortHandle);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// The flags that send every connection of a run's Chromium through the
+/// egress proxy at `proxy` and close the ways around it:
+///
+/// - `--proxy-server` with `<-loopback>` as the bypass list, which takes away
+///   Chromium's implicit bypass of `localhost` and loopback addresses, so
+///   those go to the proxy too (which refuses them);
+/// - `--disable-quic`: QUIC does not go through an HTTP proxy;
+/// - `--webrtc-ip-handling-policy=disable_non_proxied_udp`: WebRTC sends no
+///   UDP and uses TCP through the proxy only.
+///
+/// They come after the configured arguments, and Chromium takes the last of
+/// a repeated switch. The image's managed policy sets the WebRTC and QUIC
+/// rules again (`Dockerfile.browser`).
+pub fn egress_flags(proxy: SocketAddr) -> [String; 4] {
+    [
+        format!("--proxy-server=http://{proxy}"),
+        "--proxy-bypass-list=<-loopback>".to_owned(),
+        "--disable-quic".to_owned(),
+        "--webrtc-ip-handling-policy=disable_non_proxied_udp".to_owned(),
+    ]
+}
+
+/// Whether a configured Chromium argument would change what
+/// [`egress_flags`] set (`--no-proxy-server` would win over them, for one),
+/// or where names lead (`--host-rules`, `--host-resolver-rules`).
+fn touches_egress(arg: &str) -> bool {
+    let arg = arg.to_ascii_lowercase();
+    [
+        "proxy",
+        "quic",
+        "webrtc-ip-handling",
+        "host-rules",
+        "host-resolver-rules",
+    ]
+    .iter()
+    .any(|word| arg.contains(word))
+}
+
+/// Variables of the launcher's environment that Chromium's start must not
+/// see: the token, and the flags Debian's `/usr/bin/chromium` wrapper would
+/// put before the launcher's (it clears `CHROMIUM_FLAGS` itself and reads
+/// no `CHROMIUM_USER_FLAGS` today; both are taken out in case that changes).
+/// The wrapper's own additions come from `/etc/chromium.d`, which only root
+/// writes in the image.
+const HIDDEN_FROM_CHROMIUM: [&str; 3] = [TOKEN_VAR, "CHROMIUM_FLAGS", "CHROMIUM_USER_FLAGS"];
 
 /// A start under way.
 struct Starting {
@@ -299,15 +392,26 @@ fn free_port() -> io::Result<u16> {
 impl Launcher {
     /// A launcher over `config`. The folders it needs are made, and what an
     /// earlier launcher left in the runs folder is removed: no process of
-    /// that one is alive in this container.
+    /// that one is alive in this container. The egress proxy starts on a
+    /// free port of loopback and stops when the launcher is dropped; the
+    /// networks the container is on are read now, for it to refuse.
     pub async fn open(config: Config) -> io::Result<Launcher> {
         tokio::fs::create_dir_all(&config.runs_dir).await?;
+        let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+        let proxy = listener.local_addr()?;
+        let egress = Arc::new(
+            egress::Egress::new(egress::system_resolver(), config.egress_allow.clone())
+                .with_local_networks(egress::LocalNetworks::read()),
+        );
+        let task = tokio::spawn(egress::serve(listener, egress));
         let launcher = Launcher {
             inner: Arc::new(Inner {
                 config,
                 runs: Mutex::default(),
                 start_lock: tokio::sync::Mutex::new(()),
                 starting: Mutex::default(),
+                proxy,
+                _proxy_task: AbortOnDrop(task.abort_handle()),
             }),
         };
         launcher.clear_runs_dir().await;
@@ -316,6 +420,11 @@ impl Launcher {
 
     pub fn config(&self) -> &Config {
         &self.inner.config
+    }
+
+    /// Where the egress proxy listens (loopback).
+    pub fn proxy_addr(&self) -> SocketAddr {
+        self.inner.proxy
     }
 
     async fn clear_runs_dir(&self) {
@@ -524,15 +633,19 @@ impl Launcher {
 
     /// The command that starts Chromium for a run. The page code of a site
     /// runs in Chromium, so what the launcher is configured with (its token
-    /// above all) is not passed on in the environment.
+    /// above all) is not passed on in the environment, nor are flags for the
+    /// Debian wrapper ([`HIDDEN_FROM_CHROMIUM`]).
     fn chromium_command(&self, profile: &Path, port: u16) -> Command {
         let config = &self.inner.config;
         let mut command = Command::new(&config.chromium);
+        for name in HIDDEN_FROM_CHROMIUM {
+            command.env_remove(name);
+        }
         command
-            .env_remove(TOKEN_VAR)
             .args(&config.chromium_args)
             .arg(format!("--user-data-dir={}", profile.display()))
             .arg(format!("--remote-debugging-port={port}"))
+            .args(egress_flags(self.inner.proxy))
             .args([
                 "--no-first-run",
                 "--no-default-browser-check",
@@ -750,26 +863,96 @@ mod tests {
         );
     }
 
-    #[test]
-    fn chromium_does_not_get_the_launchers_token() {
+    #[tokio::test]
+    async fn chromium_does_not_get_the_launchers_token() {
         let dir = tempfile::tempdir().unwrap();
         let mut config = Config::new("t");
         config.runs_dir = dir.path().join("runs");
-        let launcher = Launcher {
-            inner: Arc::new(Inner {
-                config,
-                runs: Mutex::default(),
-                start_lock: tokio::sync::Mutex::new(()),
-                starting: Mutex::default(),
-            }),
-        };
+        let launcher = Launcher::open(config).await.unwrap();
         let command = launcher.chromium_command(Path::new("/profile"), 9222);
         let envs: HashMap<_, _> = command.as_std().get_envs().collect();
         // `None` is a variable taken out of the environment.
-        assert_eq!(envs.get(std::ffi::OsStr::new(TOKEN_VAR)), Some(&None));
+        for name in [TOKEN_VAR, "CHROMIUM_FLAGS", "CHROMIUM_USER_FLAGS"] {
+            assert_eq!(envs.get(std::ffi::OsStr::new(name)), Some(&None), "{name}");
+        }
         assert!(envs
             .get(std::ffi::OsStr::new("DISPLAY"))
             .is_some_and(Option::is_some));
+    }
+
+    #[tokio::test]
+    async fn chromium_goes_out_through_the_launchers_proxy_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = Config::new("t");
+        config.runs_dir = dir.path().join("runs");
+        // What the configuration adds comes first, so the launcher's win.
+        config.chromium_args = vec!["--no-sandbox".to_owned()];
+        let launcher = Launcher::open(config).await.unwrap();
+        let proxy = launcher.proxy_addr();
+        assert!(proxy.ip().is_loopback());
+        let command = launcher.chromium_command(Path::new("/profile"), 9222);
+        let args: Vec<String> = command
+            .as_std()
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(args[0], "--no-sandbox");
+        for flag in [
+            format!("--proxy-server=http://127.0.0.1:{}", proxy.port()),
+            "--proxy-bypass-list=<-loopback>".to_owned(),
+            "--disable-quic".to_owned(),
+            "--webrtc-ip-handling-policy=disable_non_proxied_udp".to_owned(),
+        ] {
+            assert!(args.contains(&flag), "{flag} missing from {args:?}");
+        }
+    }
+
+    #[test]
+    fn configured_arguments_cannot_change_the_way_out() {
+        for args in [
+            "--no-sandbox --no-proxy-server",
+            "--proxy-server=direct://",
+            "--proxy-bypass-list=*",
+            "--proxy-pac-url=http://x/p.pac",
+            "--enable-quic",
+            "--webrtc-ip-handling-policy=default",
+            "--force-webrtc-ip-handling-policy=default",
+            "--host-rules=MAP * 192.168.1.1",
+            "--host-resolver-rules=MAP example.com 127.0.0.1",
+        ] {
+            assert_eq!(
+                Config::from_lookup(lookup(&[(TOKEN_VAR, "t"), (CHROMIUM_ARGS_VAR, args)]))
+                    .unwrap_err(),
+                ConfigError::Invalid(CHROMIUM_ARGS_VAR),
+                "{args}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_egress_exceptions_are_exact_addresses() {
+        let config = Config::from_lookup(lookup(&[(TOKEN_VAR, "t")])).unwrap();
+        assert!(config.egress_allow.is_empty());
+        let config = Config::from_lookup(lookup(&[
+            (TOKEN_VAR, "t"),
+            (EGRESS_ALLOW_VAR, "172.17.0.1:8080, [::1]:9"),
+        ]))
+        .unwrap();
+        assert_eq!(
+            config.egress_allow,
+            [
+                "172.17.0.1:8080".parse::<SocketAddr>().unwrap(),
+                "[::1]:9".parse().unwrap()
+            ]
+        );
+        for bad in ["172.17.0.1", "host:80", "10.0.0.0/8"] {
+            assert_eq!(
+                Config::from_lookup(lookup(&[(TOKEN_VAR, "t"), (EGRESS_ALLOW_VAR, bad)]))
+                    .unwrap_err(),
+                ConfigError::Invalid(EGRESS_ALLOW_VAR),
+                "{bad}"
+            );
+        }
     }
 
     #[test]

@@ -32,6 +32,9 @@ crc32fast = "1"
 dotenv = "0.15"
 futures = "0.3"
 http-body-util = "0.1.5"
+# The server browser's egress proxy in trss-browserd (HTTP/1 on both sides).
+hyper = "1"
+hyper-util = "0.1"
 # Makes the sample images of the tests; the app reads only headers.
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 # A file name in an address, decoded for display.

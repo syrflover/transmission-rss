@@ -19,6 +19,28 @@ name: trss-app
 # a page could otherwise try requests to them. It has the network
 # `browser_net` to itself, shared with the worker alone (the worker is on both).
 # `browser_net` is not internal, because the pages need the internet.
+# A bridge still reaches this host's LAN address, the Docker gateway and the
+# LAN, so every connection of the browser goes through the launcher's egress
+# proxy, which connects to public addresses only (it resolves names itself
+# and refuses private, loopback, link-local, CGNAT/Tailscale, multicast and
+# reserved addresses, and the networks the container is on and their
+# gateways, whatever their addresses). Nothing here needs setting for it. It
+# cannot tell a public address that leads back into the LAN (the router's WAN
+# address with hairpin NAT, or your own domain pointing at it).
+#
+# Optional extra, on the host: firewall rules that drop what `browser_net`
+# sends to private ranges, in case the browser ever got around the proxy. The
+# app cannot check they are there, so they are not required. An example to
+# adapt (not tested here), with SUBNET from
+# `docker network inspect trss-app_browser_net`. Run them in the order
+# listed: each `-I` inserts at the top of its chain, so the RETURN rule, run
+# second, ends up above the DROP rule. RETURN keeps the worker's connection to
+# the launcher inside `browser_net`; DROP drops the rest to private ranges
+# (published ports of other containers included); the INPUT rule drops what
+# goes to this host itself.
+#   iptables -I DOCKER-USER -s SUBNET -d 10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,169.254.0.0/16 -j DROP
+#   iptables -I DOCKER-USER -s SUBNET -d SUBNET -j RETURN
+#   iptables -I INPUT -s SUBNET -j DROP
 #
 # One worker at a time uses one trss-browser: a worker resets the launcher
 # when it starts and its reaper ends the runs it does not know, so a second
@@ -96,6 +118,16 @@ services:
     <<: *trss
     container_name: trss-web
     entrypoint: ["/usr/local/bin/trss-web"]
+    environment:
+      <<: *trss-env
+      # The host names the web answers to besides IP addresses and
+      # `localhost`, separated by commas (e.g. trss.example.com behind a
+      # reverse proxy, which must pass the browser's Host on). Unset, it is
+      # reached by this host's LAN address and port, as published below; a
+      # request for any other name is refused, so that a page of another
+      # name made to resolve to this address (DNS rebinding) cannot use the
+      # web. A change that comes from a page of another origin is refused too.
+      TRSS_WEB_HOSTS: ${TRSS_WEB_HOSTS:-}
     # Only on the LAN address of this host: the web has no sign-in of its own.
     ports:
       - "${TRSS_WEB_HOST_IP:?Set TRSS_WEB_HOST_IP in .env to this host's LAN address}:${TRSS_WEB_HOST_PORT:-8080}:8080"

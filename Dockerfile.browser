@@ -32,6 +32,18 @@ RUN apt-get update \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
+# The pages the browser opens must not reach the local network. The launcher
+# starts every Chromium with its egress proxy, which connects to public
+# addresses only, and with flags that close the ways around it
+# (crates/trss-browser/src/launcher/egress.rs). This managed policy holds the
+# rules that do not need the proxy's port, whatever the flags say: no QUIC
+# (it does not go through an HTTP proxy), no WebRTC UDP outside the proxy, and
+# no Cast discovery on the local network.
+RUN mkdir -p /etc/chromium/policies/managed \
+    && printf '%s\n' \
+        '{"QuicAllowed": false, "WebRtcIPHandling": "disable_non_proxied_udp", "EnableMediaRouter": false}' \
+        > /etc/chromium/policies/managed/trss-egress.json
+
 # Not root. The uid is fixed so that the shared downloads folder's owner is
 # predictable on the host.
 RUN useradd --uid 10001 --create-home --home-dir /home/browser --shell /usr/sbin/nologin browser \

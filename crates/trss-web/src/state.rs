@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use crate::origin_guard::AllowedHosts;
+
 use trss_anilist::AnilistConfig;
 use trss_anissia::{Anissia, AnissiaConfig};
 use trss_collect::{
@@ -64,6 +66,9 @@ pub struct AppState {
     pub receive_root: PathBuf,
     /// The subtitles and fonts a person uploads, made into jobs.
     pub uploads: Uploads,
+    /// The host names the web answers to besides IP addresses and
+    /// `localhost` (`TRSS_WEB_HOSTS`, [`crate::origin_guard`]).
+    pub web_hosts: AllowedHosts,
 }
 
 impl AppState {
@@ -91,7 +96,14 @@ impl AppState {
             // No app data folder: covers can be read and changed but no image
             // stored or served until `with_artwork` gives one.
             artwork,
+            web_hosts: AllowedHosts::default(),
         }
+    }
+
+    /// Answers requests for `hosts` too, besides IP addresses and `localhost`.
+    pub fn with_web_hosts(mut self, hosts: AllowedHosts) -> Self {
+        self.web_hosts = hosts;
+        self
     }
 
     /// Replaces the Anissia client (its address, and a clock or pace in tests).

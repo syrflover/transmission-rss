@@ -177,6 +177,30 @@ fn the_release_workflow_builds_the_browser_image_with_the_same_tags() {
     assert!(workflow.contains("ghcr.io/syrflover/trss-browser:latest"));
 }
 
+/// The browser reaches only public addresses: no exception is configured
+/// anywhere, nothing in the arguments can change the proxy, and the image's
+/// managed policy repeats the rules that do not need it.
+#[test]
+fn the_browser_has_no_way_out_but_the_launchers_proxy() {
+    let compose = compose();
+    let browser = service(&compose, "trss-browser");
+    assert!(environment(browser, "TRSS_BROWSER_EGRESS_ALLOW").is_none());
+    assert!(environment(browser, "TRSS_BROWSER_CHROMIUM_ARGS").is_none());
+    assert!(!repo_file("dev/trss.dev.yml").contains("TRSS_BROWSER_EGRESS_ALLOW"));
+    assert!(!repo_file("dev/dev.env").contains("TRSS_BROWSER_EGRESS_ALLOW"));
+    let dockerfile = repo_file("Dockerfile.browser");
+    assert!(!dockerfile.contains("TRSS_BROWSER_EGRESS_ALLOW"));
+    assert!(dockerfile.contains("TRSS_BROWSER_CHROMIUM_ARGS=--no-sandbox \\"));
+    assert!(dockerfile.contains("/etc/chromium/policies/managed/"));
+    for rule in [
+        r#""QuicAllowed": false"#,
+        r#""WebRtcIPHandling": "disable_non_proxied_udp""#,
+        r#""EnableMediaRouter": false"#,
+    ] {
+        assert!(dockerfile.contains(rule), "{rule}");
+    }
+}
+
 #[test]
 fn the_image_runs_the_launcher_as_a_user_without_exposing_a_port() {
     let dockerfile = repo_file("Dockerfile.browser");

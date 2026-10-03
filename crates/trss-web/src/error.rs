@@ -12,6 +12,8 @@
 //! | `unavailable` | 502  | a service the call needs (Anissia) did not answer; `message` says why |
 //! |             | 503    | this server cannot take the call now (an upload with no turn free); nothing was done |
 //! | `internal`  | 500    | a server-side failure; details go to the log, not here    |
+//! | `host_not_allowed` | 421 | the request's `Host` is not one the web answers to ([`crate::origin_guard`]) |
+//! | `forbidden` | 403    | a change or a WebSocket from another origin ([`crate::origin_guard`]) |
 //!
 //! `message` is shown to the user as is, so it is a full Korean sentence and
 //! never contains secret values (see `docs/specs/collection.md`, 채널 URL의

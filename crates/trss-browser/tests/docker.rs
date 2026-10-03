@@ -11,14 +11,28 @@
 //! It starts a throwaway container named `trss-browser-test-<pid>` (removed at
 //! the end), publishes no port (the launcher is reached at the container's
 //! address on the bridge network), and prints the memory it measured.
+//!
+//! The browser reaches only public addresses (the launcher's egress proxy).
+//! The first test serves its site on the test host and lets the browser reach
+//! exactly that address with `TRSS_BROWSER_EGRESS_ALLOW`; the second
+//! (`the_browser_reaches_public_addresses_only`, which needs the internet)
+//! shows that nothing else on the host, the LAN or the container is reached.
+//! Run it against an image without the proxy with
+//! `TRSS_BROWSER_EGRESS_CONTROL=1` to see the same probes get through there:
+//! it then prints what was reached and asserts nothing.
 
 use std::{
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     path::Path,
     process::{Command, Output},
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
     time::{Duration, Instant},
 };
+
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use axum::{
     extract::State,
@@ -50,6 +64,18 @@ fn docker_ok(args: &[&str]) -> String {
         String::from_utf8_lossy(&out.stderr)
     );
     String::from_utf8_lossy(&out.stdout).trim().to_owned()
+}
+
+/// The default bridge's gateway: the host as a container sees it, which
+/// `host-gateway` stands for.
+fn bridge_gateway() -> String {
+    docker_ok(&[
+        "network",
+        "inspect",
+        "bridge",
+        "-f",
+        "{{(index .IPAM.Config 0).Gateway}}",
+    ])
 }
 
 /// Removes the container at the end, whatever happened.
@@ -237,6 +263,9 @@ async fn the_real_image_runs_a_browser_per_job_and_forgets_it() {
     let receive = tempfile::tempdir().unwrap();
     let (site_addr, site) = spawn_site().await;
     let site_url = format!("http://host.docker.internal:{}", site_addr.port());
+    // The host is not public: the egress proxy lets the browser reach this
+    // one address of it, the site, and nothing else.
+    let site_from_container = format!("{}:{}", bridge_gateway(), site_addr.port());
 
     // --- the container, as the compose file runs it (no port published) ---
     let name = format!("trss-browser-test-{}", std::process::id());
@@ -256,6 +285,8 @@ async fn the_real_image_runs_a_browser_per_job_and_forgets_it() {
         "--add-host=host.docker.internal:host-gateway",
         "-e",
         &format!("TRSS_BROWSER_TOKEN={TOKEN}"),
+        "-e",
+        &format!("TRSS_BROWSER_EGRESS_ALLOW={site_from_container}"),
         "-e",
         "TRSS_BROWSER_MAX_RUNS=3",
         "-v",
@@ -515,4 +546,466 @@ async fn the_real_image_runs_a_browser_per_job_and_forgets_it() {
     assert!(!logs.contains("SECRET"));
     pool.shutdown().await;
     assert_eq!(Path::new(&downloads.path()).read_dir().unwrap().count(), 0);
+}
+
+/// The subnet of the egress test's own network, outside the private ranges
+/// (a public block the test host takes for itself while the test runs).
+const OWN_SUBNET: &str = "11.255.53.0/24";
+const OWN_GATEWAY: &str = "11.255.53.1";
+
+/// Removes a Docker network at the end, whatever happened. Declared before
+/// the container that uses it, so it is dropped after it.
+struct Network(String);
+
+impl Drop for Network {
+    fn drop(&mut self) {
+        let _ = docker(&["network", "rm", &self.0]);
+    }
+}
+
+/// The test host's LAN address: the source address of its route to the
+/// internet (no packet is sent).
+fn lan_address() -> IpAddr {
+    let socket = std::net::UdpSocket::bind("0.0.0.0:0").unwrap();
+    socket.connect("1.1.1.1:80").unwrap();
+    socket.local_addr().unwrap().ip()
+}
+
+/// A listener on every address of the test host that counts the TCP
+/// connections it is given and answers each with `site reached` (readable
+/// from any origin, so that a page could see it).
+async fn counting_site() -> (u16, Arc<AtomicUsize>) {
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let hits = Arc::new(AtomicUsize::new(0));
+    let counter = hits.clone();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                continue;
+            };
+            counter.fetch_add(1, Ordering::SeqCst);
+            tokio::spawn(async move {
+                let mut request = [0u8; 4096];
+                let _ =
+                    tokio::time::timeout(Duration::from_secs(2), socket.read(&mut request)).await;
+                let body = "site reached";
+                let answer = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = socket.write_all(answer.as_bytes()).await;
+            });
+        }
+    });
+    (port, hits)
+}
+
+/// A UDP socket on every address of the test host that counts the datagrams
+/// it is sent (WebRTC's and WebTransport's would land here).
+async fn counting_udp() -> (u16, Arc<AtomicUsize>) {
+    let socket = tokio::net::UdpSocket::bind("0.0.0.0:0").await.unwrap();
+    let port = socket.local_addr().unwrap().port();
+    let datagrams = Arc::new(AtomicUsize::new(0));
+    let counter = datagrams.clone();
+    tokio::spawn(async move {
+        let mut buffer = [0u8; 2048];
+        while socket.recv_from(&mut buffer).await.is_ok() {
+            counter.fetch_add(1, Ordering::SeqCst);
+        }
+    });
+    (port, datagrams)
+}
+
+/// What the page's network said about `url` since `events` was taken: the
+/// statuses it received and the errors it failed with.
+fn network_outcome(
+    events: &mut tokio::sync::broadcast::Receiver<trss_browser::cdp::Event>,
+    url: &str,
+) -> Vec<String> {
+    let mut seen = Vec::new();
+    let mut ids = Vec::new();
+    while let Ok(event) = events.try_recv() {
+        match event.method.as_str() {
+            "Network.requestWillBeSent" if event.params["request"]["url"] == url => {
+                ids.push(event.params["requestId"].clone());
+            }
+            "Network.responseReceived" if event.params["response"]["url"] == url => {
+                seen.push(format!(
+                    "status {} from {}:{}",
+                    event.params["response"]["status"],
+                    event.params["response"]["remoteIPAddress"]
+                        .as_str()
+                        .unwrap_or("?"),
+                    event.params["response"]["remotePort"]
+                ));
+            }
+            "Network.loadingFailed" if ids.contains(&event.params["requestId"]) => {
+                seen.push(format!(
+                    "failed {} {} {}",
+                    event.params["errorText"].as_str().unwrap_or(""),
+                    event.params["blockedReason"].as_str().unwrap_or(""),
+                    event.params["corsErrorStatus"]["corsError"]
+                        .as_str()
+                        .unwrap_or("")
+                ));
+            }
+            _ => {}
+        }
+    }
+    seen
+}
+
+/// Every way a page of the real image could reach the host, the LAN, the
+/// Docker gateway, the launcher or a name that resolves to a private address
+/// is refused; public sites load.
+#[tokio::test]
+#[ignore = "needs docker, the trss-browser image and the internet"]
+async fn the_browser_reaches_public_addresses_only() {
+    let control = std::env::var("TRSS_BROWSER_EGRESS_CONTROL").is_ok_and(|v| v == "1");
+    let lan = lan_address();
+    let gateway = bridge_gateway();
+    let (port, hits) = counting_site().await;
+    let (udp_port, datagrams) = counting_udp().await;
+    let downloads = tempfile::tempdir().unwrap();
+    // A real name in public DNS that resolves to the LAN address.
+    let nip = format!("{}.nip.io", lan.to_string().replace('.', "-"));
+
+    // More `docker run` arguments, to take one layer away and see the other
+    // hold (`--tmpfs /etc/chromium/policies` hides the managed policy).
+    let extra_args: Vec<String> = std::env::var("TRSS_BROWSER_EGRESS_DOCKER_ARGS")
+        .unwrap_or_default()
+        .split_whitespace()
+        .map(str::to_owned)
+        .collect();
+
+    // The container is on a network of its own whose subnet is outside the
+    // private ranges, as a Docker address pool can be: its gateway (this
+    // host) has an address the classes call public, and only the proxy's
+    // reading of the container's own networks refuses it.
+    let network = format!("trss-browser-egress-net-{}", std::process::id());
+    let _ = docker(&["network", "rm", &network]);
+    docker_ok(&[
+        "network",
+        "create",
+        "--subnet",
+        OWN_SUBNET,
+        "--gateway",
+        OWN_GATEWAY,
+        &network,
+    ]);
+    let _network = Network(network.clone());
+
+    let name = format!("trss-browser-egress-{}", std::process::id());
+    let _ = docker(&["rm", "-f", &name]);
+    let container = Container { name: name.clone() };
+    let add_lan = format!("--add-host=lan.trss.test:{lan}");
+    let token = format!("TRSS_BROWSER_TOKEN={TOKEN}");
+    let volume = format!("{}:/downloads", downloads.path().display());
+    let image = image();
+    let mut args = vec![
+        "run",
+        "-d",
+        "--name",
+        &name,
+        "--network",
+        &network,
+        "--memory",
+        "768m",
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges:true",
+        "--add-host=host.docker.internal:host-gateway",
+        &add_lan,
+        "-e",
+        &token,
+        // What the Debian wrapper would put before the launcher's flags.
+        "-e",
+        "CHROMIUM_FLAGS=--no-proxy-server",
+        "-e",
+        "CHROMIUM_USER_FLAGS=--no-proxy-server",
+        "-v",
+        &volume,
+    ];
+    args.extend(extra_args.iter().map(String::as_str));
+    args.push(&image);
+    docker_ok(&args);
+    let ip = docker_ok(&[
+        "inspect",
+        "-f",
+        "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
+        &name,
+    ]);
+    let base = format!("http://{ip}:9230");
+    wait_for_launcher(&base).await;
+    let pool = BrowserPool::new(
+        PoolConfig::new(base.parse().unwrap(), TOKEN, downloads.path()),
+        trss_core::system_clock(),
+        PolicySource::fixed(BrowserPolicy::default()),
+    )
+    .await
+    .unwrap();
+    let run = pool.start("egress").await.unwrap();
+    let page = run.new_page("about:blank").await.unwrap();
+    let text = |page: &trss_browser::Page| {
+        let page = page.clone();
+        async move {
+            page.evaluate("document.body ? document.body.innerText : ''")
+                .await
+                .ok()
+                .and_then(|v| v.as_str().map(str::to_owned))
+                .unwrap_or_default()
+        }
+    };
+
+    // What must not be reached: (label, address as a page writes it).
+    let mut private: Vec<(String, String)> = vec![
+        ("the host's LAN address".into(), format!("{lan}:{port}")),
+        (
+            "the default bridge's gateway".into(),
+            format!("{gateway}:{port}"),
+        ),
+        (
+            "the gateway of the container's own network (outside the private ranges)".into(),
+            format!("{OWN_GATEWAY}:{port}"),
+        ),
+        (
+            "the cloud metadata address".into(),
+            "169.254.169.254:80".into(),
+        ),
+        (
+            "a CGNAT (Tailscale) address".into(),
+            "100.100.100.100:80".into(),
+        ),
+        (
+            "host.docker.internal".into(),
+            format!("host.docker.internal:{port}"),
+        ),
+        (
+            "a name of /etc/hosts for the LAN address".into(),
+            format!("lan.trss.test:{port}"),
+        ),
+        (
+            "a public DNS name for the LAN address".into(),
+            format!("{nip}:{port}"),
+        ),
+    ];
+    let launcher: Vec<(String, String)> = vec![
+        ("the launcher on loopback".into(), "127.0.0.1:9230".into()),
+        ("the launcher as localhost".into(), "localhost:9230".into()),
+        ("the launcher on [::1]".into(), "[::1]:9230".into()),
+        (
+            "the launcher on the container's address".into(),
+            format!("{ip}:9230"),
+        ),
+    ];
+    private.extend(launcher.iter().cloned());
+    let mut reached: Vec<String> = Vec::new();
+    let mut note_reach = |what: String, got_through: bool| {
+        println!("{} {what}", if got_through { "REACHED" } else { "refused" });
+        if got_through {
+            reached.push(what);
+        }
+    };
+
+    // --- top-level navigations ---
+    for (label, address) in &private {
+        for scheme in ["http", "https"] {
+            let before = hits.load(Ordering::SeqCst);
+            let navigated = page.navigate(&format!("{scheme}://{address}/runs")).await;
+            tokio::time::sleep(Duration::from_millis(1500)).await;
+            let shown = text(&page).await;
+            let outcome = match &navigated {
+                Err(err) => format!("navigation error {err}"),
+                Ok(()) => format!("page {:?}", shown.chars().take(60).collect::<String>()),
+            };
+            let through = hits.load(Ordering::SeqCst) > before
+                || shown.contains("site reached")
+                || shown.contains("unauthorized");
+            note_reach(format!("navigate {scheme} {label}: {outcome}"), through);
+        }
+    }
+
+    // --- fetch and WebSocket from a public page (plain HTTP, so that mixed
+    //     content rules do not stop them first; neverssl.com has no HTTPS
+    //     for Chromium to upgrade to) ---
+    page.navigate("http://neverssl.com/").await.unwrap();
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    let public_page = page
+        .evaluate("[location.protocol, location.hostname, document.title]")
+        .await
+        .unwrap();
+    println!("public page over HTTP: {public_page}");
+    if !control {
+        assert_eq!(public_page[0], "http:");
+        assert!(public_page[1].as_str().unwrap().ends_with("neverssl.com"));
+    }
+    let mut events = run.events().unwrap();
+    for (label, address) in &private {
+        for scheme in ["http", "https"] {
+            let url = format!("{scheme}://{address}/runs");
+            let before = hits.load(Ordering::SeqCst);
+            let answer = page
+                .evaluate(&format!(
+                    "fetch({url:?}).then(r => 'status ' + r.status, e => 'error ' + e.message)"
+                ))
+                .await
+                .unwrap();
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            let network = network_outcome(&mut events, &url);
+            let through = hits.load(Ordering::SeqCst) > before
+                || answer.as_str().is_some_and(|a| a.starts_with("status 200"))
+                || network
+                    .iter()
+                    .any(|n| n.starts_with("status 200") || n.starts_with("status 401"));
+            note_reach(
+                format!("fetch {scheme} {label}: {answer} {network:?}"),
+                through,
+            );
+        }
+        for scheme in ["ws", "wss"] {
+            let before = hits.load(Ordering::SeqCst);
+            let answer = page
+                .evaluate(&format!(
+                    "new Promise(r => {{ try {{ const w = new WebSocket({:?}); w.onopen = () => r('open'); w.onerror = () => r('error'); setTimeout(() => r('timeout'), 5000); }} catch (e) {{ r('threw ' + e.message); }} }})",
+                    format!("{scheme}://{address}/runs/x/cdp")
+                ))
+                .await
+                .unwrap();
+            let through = hits.load(Ordering::SeqCst) > before || answer == "open";
+            note_reach(format!("WebSocket {scheme} {label}: {answer}"), through);
+        }
+    }
+
+    // --- UDP: WebRTC and WebTransport (both need a secure page) ---
+    page.navigate("https://example.com/").await.unwrap();
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let candidates = page
+        .evaluate(&format!(
+            "new Promise(async r => {{ const pc = new RTCPeerConnection({{ iceServers: [{{ urls: 'stun:{lan}:{udp_port}' }}, {{ urls: 'turn:{lan}:{udp_port}?transport=udp', username: 'u', credential: 'p' }}] }}); const found = []; pc.onicecandidate = e => {{ if (e.candidate) found.push(e.candidate.candidate) }}; pc.createDataChannel('x'); await pc.setLocalDescription(await pc.createOffer()); setTimeout(() => r(found), 5000); }})"
+        ))
+        .await
+        .unwrap();
+    let udp_candidates = candidates
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| {
+            c.as_str()
+                .is_some_and(|c| c.to_lowercase().contains(" udp "))
+        })
+        .count();
+    note_reach(
+        format!(
+            "WebRTC: {udp_candidates} UDP candidates of {}",
+            candidates.as_array().unwrap().len()
+        ),
+        udp_candidates > 0,
+    );
+    let transport = page
+        .evaluate(&format!(
+            "(async () => {{ try {{ const t = new WebTransport('https://{lan}:{udp_port}/'); const done = await Promise.race([t.ready.then(() => 'ready'), new Promise(r => setTimeout(() => r('timeout'), 5000))]); return done; }} catch (e) {{ return 'error ' + e.message; }} }})()"
+        ))
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let udp = datagrams.load(Ordering::SeqCst);
+    note_reach(
+        format!("WebTransport: {transport}; datagrams that arrived: {udp}"),
+        udp > 0,
+    );
+
+    // --- public sites load ---
+    let public_fetch = page
+        .evaluate("fetch('https://example.com/').then(r => 'status ' + r.status, e => 'error ' + e.message)")
+        .await
+        .unwrap();
+    println!("public fetch over HTTPS: {public_fetch}");
+    let public_socket = page
+        .evaluate("new Promise(r => { const w = new WebSocket('wss://ws.postman-echo.com/raw'); w.onopen = () => r('open'); w.onerror = () => r('error'); setTimeout(() => r('timeout'), 8000); })")
+        .await
+        .unwrap();
+    println!("public WebSocket (wss://ws.postman-echo.com/raw): {public_socket}");
+    page.navigate("https://harne1.tistory.com/763")
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_secs(6)).await;
+    let tistory = page
+        .evaluate("[location.hostname, document.title, document.images.length]")
+        .await
+        .unwrap();
+    println!("Tistory post: {tistory}");
+    // The image's managed policy is in force (its page is made of shadow
+    // roots, so its text is gathered through them).
+    page.navigate("chrome://policy").await.unwrap();
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let policies = page
+        .evaluate(
+            "(function walk(n) { let t = ''; if (n.shadowRoot) t += walk(n.shadowRoot); for (const c of n.childNodes) { t += c.nodeType === 3 ? c.textContent + ' ' : walk(c); } return t; })(document.body).replace(/\\s+/g, ' ')",
+        )
+        .await
+        .unwrap()
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    let around = |name: &str| {
+        policies
+            .find(name)
+            .map(|at| policies[at..].chars().take(70).collect::<String>())
+            .unwrap_or_default()
+    };
+    println!(
+        "chrome://policy: {:?} {:?} {:?}",
+        around("EnableMediaRouter"),
+        around("QuicAllowed"),
+        around("WebRtcIPHandling")
+    );
+    let policy_in_force = policies.contains("disable_non_proxied_udp");
+
+    run.end().await;
+    let logs = String::from_utf8_lossy(&docker(&["logs", &name]).stdout).into_owned()
+        + &String::from_utf8_lossy(&docker(&["logs", &name]).stderr);
+    println!("launcher log:\n{logs}");
+    pool.shutdown().await;
+    drop(container);
+
+    println!(
+        "site connections: {}, datagrams: {}",
+        hits.load(Ordering::SeqCst),
+        datagrams.load(Ordering::SeqCst)
+    );
+    if control {
+        println!("control run: {} probes got through", reached.len());
+        return;
+    }
+    assert!(reached.is_empty(), "reached: {reached:#?}");
+    assert_eq!(hits.load(Ordering::SeqCst), 0);
+    assert_eq!(datagrams.load(Ordering::SeqCst), 0);
+    assert_eq!(public_fetch, "status 200");
+    assert!(
+        policy_in_force || !extra_args.is_empty(),
+        "the managed policy is not in force: {policies}"
+    );
+    assert_eq!(tistory[0], "harne1.tistory.com");
+    assert!(
+        tistory[1].as_str().is_some_and(|t| !t.is_empty()),
+        "{tistory}"
+    );
+    // Neither a refused nor an allowed destination is in the log.
+    for secret in [
+        lan.to_string(),
+        gateway.clone(),
+        "lan.trss.test".to_owned(),
+        OWN_GATEWAY.to_owned(),
+        "169.254.169.254".to_owned(),
+        "100.100.100.100".to_owned(),
+        nip.clone(),
+        "example.com".to_owned(),
+        "tistory".to_owned(),
+        format!(":{port}"),
+    ] {
+        assert!(!logs.contains(&secret), "the log names {secret}");
+    }
+    assert!(!logs.contains("panicked"), "{logs}");
 }

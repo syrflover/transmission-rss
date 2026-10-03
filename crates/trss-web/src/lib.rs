@@ -4,12 +4,15 @@
 //! build (a plain directory, see [`env::STATIC_DIR_VAR`]) from the same
 //! process, so production needs no Node server. Client-side routes such as
 //! `/collect` fall back to `index.html` so a reload on them works.
+//!
+//! Every route, the app's files included, is behind the `Host` and `Origin`
+//! checks of [`origin_guard`].
 
-use std::path::Path;
+use std::{path::Path, sync::Arc};
 
 use axum::{
     http::{header, HeaderValue},
-    Router,
+    middleware, Router,
 };
 use tower_http::{
     services::{ServeDir, ServeFile},
@@ -30,6 +33,7 @@ pub mod jobs_api;
 pub mod library_api;
 pub mod library_work_api;
 pub mod mapping_api;
+pub mod origin_guard;
 pub mod past_search_api;
 pub mod policy_api;
 pub mod rules_api;
@@ -71,10 +75,14 @@ pub fn router(static_dir: &Path, state: AppState) -> Router {
             HeaderValue::from_static("no-cache"),
         ));
 
+    // Last, so that it covers every route above and the fallback, and any
+    // route added to them (WebSockets included).
+    let guard = Arc::new(origin_guard::OriginGuard::new(state.web_hosts.clone()));
     Router::new()
         .nest("/api", api::router().with_state(state))
         .merge(assets)
         .fallback_service(pages)
+        .layer(middleware::from_fn_with_state(guard, origin_guard::guard))
 }
 
 /// Resolves when the process is asked to stop (Ctrl-C, or SIGTERM from `docker stop`).
@@ -193,6 +201,78 @@ mod tests {
             .to_str()
             .unwrap()
             .contains("immutable"));
+    }
+
+    /// The `Host` and `Origin` checks cover the API, its fallback, the files
+    /// and the app's routes alike.
+    #[tokio::test]
+    async fn every_route_is_behind_the_host_and_origin_checks() {
+        let dir = build_dir();
+        let state =
+            test_state().with_web_hosts(origin_guard::AllowedHosts::parse("trss.example").unwrap());
+        let app = router(dir.path(), state);
+        let send = |method: Method, uri: &str, headers: &[(&str, &str)]| {
+            let mut request = Request::builder().method(method).uri(uri);
+            for (name, value) in headers {
+                request = request.header(*name, *value);
+            }
+            app.clone().oneshot(request.body(Body::empty()).unwrap())
+        };
+        for uri in [
+            "/api/health",
+            "/api/nope",
+            "/",
+            "/collect",
+            "/favicon.svg",
+            "/assets/app-abc123.js",
+        ] {
+            let refused = send(Method::GET, uri, &[("host", "rebound.evil.example:8080")])
+                .await
+                .unwrap();
+            assert_eq!(refused.status(), StatusCode::MISDIRECTED_REQUEST, "{uri}");
+            for host in ["192.168.1.116:8080", "localhost:8080", "trss.example"] {
+                let served = send(Method::GET, uri, &[("host", host)]).await.unwrap();
+                assert_ne!(
+                    served.status(),
+                    StatusCode::MISDIRECTED_REQUEST,
+                    "{uri} {host}"
+                );
+            }
+        }
+        let cross = send(
+            Method::POST,
+            "/api/nope",
+            &[
+                ("host", "192.168.1.116:8080"),
+                ("origin", "http://evil.example"),
+            ],
+        )
+        .await
+        .unwrap();
+        assert_eq!(cross.status(), StatusCode::FORBIDDEN);
+        let own = send(
+            Method::POST,
+            "/api/nope",
+            &[
+                ("host", "192.168.1.116:8080"),
+                ("origin", "http://192.168.1.116:8080"),
+            ],
+        )
+        .await
+        .unwrap();
+        assert_eq!(own.status(), StatusCode::NOT_FOUND);
+        let socket = send(
+            Method::GET,
+            "/api/nope",
+            &[
+                ("host", "localhost:8080"),
+                ("connection", "upgrade"),
+                ("upgrade", "websocket"),
+            ],
+        )
+        .await
+        .unwrap();
+        assert_eq!(socket.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]

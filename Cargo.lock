@@ -2844,7 +2844,11 @@ name = "trss-browser"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "bytes",
  "futures",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "regex",
  "reqwest 0.13.5",
  "rustix",

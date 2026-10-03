@@ -20,7 +20,11 @@ path = "src/bin/fake_chromium.rs"
 trss-core.workspace = true
 
 axum = { workspace = true, features = ["ws"] }
+bytes.workspace = true
 futures.workspace = true
+http-body-util.workspace = true
+hyper = { workspace = true, features = ["server", "client", "http1"] }
+hyper-util = { workspace = true, features = ["tokio"] }
 reqwest.workspace = true
 rustix = { workspace = true, features = ["process", "fs"] }
 serde = { workspace = true, features = ["derive"] }

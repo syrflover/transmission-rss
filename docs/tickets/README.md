@@ -147,7 +147,7 @@ Anissia 전체 목록 검색은 공식 문서에 없는 API라 바뀔 수 있어
 | [0050](0050-silent-revision-recheck.md) | 받은 회차의 파일 정보를 다시 읽어 Anissia에 안 보이는 수정본을 찾아요 | 진행 중 | 0045 |
 | [0051](0051-airtime-episode-mapping.md) | 구독 제작자 출처의 회차 대응을 방영 시각으로 정해요 | 완료 | 0045 |
 | [0052](0052-user-episode-mapping.md) | 자막 후보 구역에서 회차 대응을 정하고 `회차 확인 필요`로 물어요 | 완료 | 0051 |
-| [0053](0053-browser-egress-and-web-origin.md) | 서버 브라우저가 LAN에 닿지 못하게 하고, 웹이 다른 출처의 요청을 거절해요 | 대기 | 0039 |
+| [0053](0053-browser-egress-and-web-origin.md) | 서버 브라우저가 LAN에 닿지 못하게 하고, 웹이 다른 출처의 요청을 거절해요 | 완료 | 0039 |
 
 ### 4. 보관·적용과 교체 승인
 
