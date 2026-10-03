@@ -136,7 +136,7 @@ Anissia 전체 목록 검색은 공식 문서에 없는 API라 바뀔 수 있어
 | [0040](0040-remote-auth-screen.md) | 작업 상세에서 원격 화면으로 인증해요 | 대기 | 0039 |
 | [0041](0041-source-erulabo.md) | erulabo 자막을 인증 뒤 서버 브라우저로 받아요 | 대기 | 0038, 0040 |
 | [0042](0042-source-blogger-drive.md) | Blogger·Google Drive의 개별 자막과 회차 ZIP을 받아요 | 완료 | 0038 |
-| [0043](0043-source-tistory-winpng.md) | Tistory WinPNG 이미지에서 뷰어로 자막을 꺼내요 | 대기 | 0038, 0039 |
+| [0043](0043-source-tistory-winpng.md) | Tistory WinPNG 이미지에서 뷰어로 자막을 꺼내요 | 완료 | 0038, 0039 |
 | [0044](0044-source-naver.md) | Naver 블로그 첨부를 받아요 | 완료 | 0038 |
 | [0045](0045-follow-creator-auto-receive.md) | 구독 제작자의 새 회차와 수정본을 자동으로 받고 `자막 구독` 할 일을 만들어요 | 완료 | 0035, 0037, 0038 |
 | [0046](0046-find-in-browser.md) | 직접 찾기로 지난 회차 자막을 서버 브라우저에서 받아요 | 대기 | 0037, 0040 |

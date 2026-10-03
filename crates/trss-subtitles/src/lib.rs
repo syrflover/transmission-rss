@@ -42,6 +42,7 @@ pub mod testing;
 pub mod tistory;
 pub mod upload;
 pub mod verify;
+pub mod winpng;
 
 use std::time::Duration;
 
@@ -70,6 +71,10 @@ pub struct PostFile {
     pub key: String,
     /// The file's name as the site gives it.
     pub name: String,
+    /// The folders the file is in within what the post offers, as a relative
+    /// path of safe components joined by `/` (a WinPNG image's folders), when
+    /// it has any: the job keeps the file under them.
+    pub folder: Option<String>,
     /// The size the site shows beside the file, as it shows it (Tistory's
     /// `0.01MB`). It is coarse: a value of the snapshot, never the length the
     /// bytes are held to.
@@ -79,6 +84,9 @@ pub struct PostFile {
     /// Where the bytes are, as the post gave it: a signed address. Only the
     /// source reads it.
     locator: Option<Locator>,
+    /// Where the bytes already are on this machine (a file a server browser
+    /// took out of a WinPNG image): the source reads them from there.
+    staged: Option<std::path::PathBuf>,
 }
 
 impl PostFile {
@@ -86,10 +94,21 @@ impl PostFile {
         PostFile {
             key: key.into(),
             name: name.into(),
+            folder: None,
             size_text: None,
             snapshot: Snapshot::default(),
             locator: None,
+            staged: None,
         }
+    }
+
+    pub(crate) fn staged(&self) -> Option<&std::path::Path> {
+        self.staged.as_deref()
+    }
+
+    pub(crate) fn with_staged(mut self, path: std::path::PathBuf) -> PostFile {
+        self.staged = Some(path);
+        self
     }
 
     pub(crate) fn locator(&self) -> Option<&Url> {
@@ -107,6 +126,7 @@ impl PartialEq for PostFile {
     fn eq(&self, other: &PostFile) -> bool {
         self.key == other.key
             && self.name == other.name
+            && self.folder == other.folder
             && self.size_text == other.size_text
             && self.snapshot == other.snapshot
     }
@@ -178,6 +198,18 @@ pub enum Opened {
     /// Drive folder, a WinPNG image): the item waits for a source (`자막 대기`)
     /// as a post of an unknown site does. `reason` says where, in a sentence.
     Elsewhere { reason: String },
+    /// The post's subtitle is in PNG images that a WinPNG viewer opens
+    /// ([`winpng`]): only a server browser can take the files out of them, so
+    /// the job asks its [`winpng::WinpngReader`] and, without one, the item
+    /// waits for a source (`자막 대기`) as for [`Opened::Elsewhere`].
+    /// `snapshot` is what the post said about itself. `elsewhere` is the reason
+    /// to wait with when the images turn out to hold no subtitle but the post
+    /// links one somewhere else too (a Drive folder): the item then waits as
+    /// for [`Opened::Elsewhere`] instead of failing.
+    WinPng {
+        snapshot: Snapshot,
+        elsewhere: Option<String>,
+    },
 }
 
 /// Why a post or a file could not be read (`docs/specs/jobs.md`, 공통 수신
@@ -214,15 +246,24 @@ pub enum FailureKind {
     Changed,
     /// The site could not be reached or failed (`네트워크 실패`).
     Network,
+    /// The post opens and its images were read, but none holds a subtitle:
+    /// a picture that is not a WinPNG image (`자막 없음`). It is a class of an
+    /// item, never of a file.
+    NoSubtitle,
+    /// The subtitle needs something only a person can give, a WinPNG image's
+    /// key (`추가 입력 필요`). It is a class of an item, never of a file.
+    NeedsInput,
 }
 
 impl FailureKind {
-    pub const ALL: [FailureKind; 5] = [
+    pub const ALL: [FailureKind; 7] = [
         FailureKind::Missing,
         FailureKind::Expired,
         FailureKind::NotAFile,
         FailureKind::Changed,
         FailureKind::Network,
+        FailureKind::NoSubtitle,
+        FailureKind::NeedsInput,
     ];
 
     /// The class's code in the records and the API.
@@ -233,6 +274,8 @@ impl FailureKind {
             FailureKind::NotAFile => "not_a_file",
             FailureKind::Changed => "changed",
             FailureKind::Network => "network",
+            FailureKind::NoSubtitle => "no_subtitle",
+            FailureKind::NeedsInput => "needs_input",
         }
     }
 
@@ -248,6 +291,8 @@ impl FailureKind {
             FailureKind::NotAFile => "파일 아님",
             FailureKind::Changed => "출처 구조 바뀜",
             FailureKind::Network => "네트워크 실패",
+            FailureKind::NoSubtitle => "자막 없음",
+            FailureKind::NeedsInput => "추가 입력 필요",
         }
     }
 
@@ -312,6 +357,9 @@ pub struct Fetch {
     deadline: Option<(tokio::time::Instant, Duration)>,
 }
 
+/// How much of a local file one piece holds.
+const LOCAL_PIECE: usize = 64 * 1024;
+
 /// `200MiB`, or a smaller limit in bytes.
 pub(crate) fn size_limit_text(bytes: u64) -> String {
     match bytes % (1 << 20) {
@@ -323,6 +371,8 @@ pub(crate) fn size_limit_text(bytes: u64) -> String {
 enum Body {
     Fake(FakeBody),
     Http(reqwest::Response),
+    /// A file of this machine, read piece by piece.
+    Local(tokio::fs::File),
 }
 
 impl Fetch {
@@ -348,6 +398,27 @@ impl Fetch {
         }
     }
 
+    /// A file of this machine whose whole length is announced.
+    pub(crate) async fn local(path: &std::path::Path) -> Result<Fetch, Failure> {
+        let missing = |e: std::io::Error| {
+            Failure::new(
+                FailureKind::Missing,
+                format!("꺼내 둔 파일을 열지 못했어요: {}", e.kind()),
+            )
+        };
+        let file = tokio::fs::File::open(path).await.map_err(missing)?;
+        let len = file.metadata().await.map_err(missing)?.len();
+        Ok(Fetch::new(
+            Some(len),
+            None,
+            None,
+            Snapshot::default(),
+            Body::Local(file),
+            MAX_FILE_BYTES,
+            None,
+        ))
+    }
+
     /// The next piece of the file; `None` at its end. Bytes past the file's
     /// limit are [`FailureKind::NotAFile`]; the deadline passing is
     /// [`FailureKind::Network`].
@@ -363,6 +434,18 @@ impl Fetch {
                     None => next.await,
                 };
                 next.map_err(|e| http::network_failure(&e, "받는 도중에 연결이 끊겼어요"))?
+            }
+            Body::Local(file) => {
+                use tokio::io::AsyncReadExt;
+                let mut buf = vec![0u8; LOCAL_PIECE];
+                let n = file.read(&mut buf).await.map_err(|e| {
+                    Failure::new(
+                        FailureKind::Network,
+                        format!("꺼내 둔 파일을 읽지 못했어요: {}", e.kind()),
+                    )
+                })?;
+                buf.truncate(n);
+                (n > 0).then(|| Bytes::from(buf))
             }
         };
         if let Some(piece) = &piece {

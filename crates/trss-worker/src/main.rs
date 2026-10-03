@@ -15,7 +15,7 @@ use trss_library::{
 };
 use trss_subtitles::{
     blogger::BloggerSource, drive::Drive, fake::FakeSource, naver::NaverSource,
-    tistory::TistorySource, Sources,
+    tistory::TistorySource, winpng::BrowserReader, Sources,
 };
 use trss_worker::{env::FAKE_SUBTITLE_SOURCE_VAR, Worker, WorkerEnv};
 
@@ -57,17 +57,6 @@ async fn run() -> Result<(), String> {
         println!("The fake subtitle source is on ({FAKE_SUBTITLE_SOURCE_VAR})");
         sources = sources.with_fake(FakeSource);
     }
-    let jobs = Runner::new(
-        JobStore::new(db.clone()),
-        sources,
-        ReceiveArea::in_app_data(app_data.root()),
-        trss_core::system_clock(),
-    );
-    let artwork = Artwork::new(db.clone(), Some(app_data), anilist);
-    let season_info = Seasons::over(db.clone(), &artwork);
-    let anissia_client = Anissia::with_defaults(db.clone(), anissia_config);
-    let anissia = AnissiaQueue::new(anissia_client.clone(), AnissiaStore::new(db.clone()));
-    let captions = CaptionObserver::new(anissia_client, AnissiaStore::new(db.clone()));
     // One worker at a time uses the browser container: a second one would
     // reset it and end the first one's runs. The lock lives as long as this
     // process (`_browser_lock`).
@@ -95,6 +84,23 @@ async fn run() -> Result<(), String> {
         },
         None => (None, None),
     };
+    let jobs = Runner::new(
+        JobStore::new(db.clone()),
+        sources,
+        ReceiveArea::in_app_data(app_data.root()),
+        trss_core::system_clock(),
+    );
+    // The posts whose subtitle is in WinPNG images are read by the server
+    // browser; a worker without one leaves them waiting.
+    let jobs = match &browser {
+        Some(pool) => jobs.with_winpng(BrowserReader::shared(pool.clone())),
+        None => jobs,
+    };
+    let artwork = Artwork::new(db.clone(), Some(app_data), anilist);
+    let season_info = Seasons::over(db.clone(), &artwork);
+    let anissia_client = Anissia::with_defaults(db.clone(), anissia_config);
+    let anissia = AnissiaQueue::new(anissia_client.clone(), AnissiaStore::new(db.clone()));
+    let captions = CaptionObserver::new(anissia_client, AnissiaStore::new(db.clone()));
     let mut worker = Worker::new(db, &env, lock_path_for(&db_path))
         .map_err(|e| e.to_string())?
         .with_captions(captions.clone())

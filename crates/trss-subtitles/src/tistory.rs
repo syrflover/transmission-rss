@@ -16,9 +16,14 @@
 //!   its body ([`BODY`]) only, since the skin around it has its own links and
 //!   thumbnails. Google Drive file links there are received as Blogger's are
 //!   ([`crate::drive`]): those that serve the candidate's episode. A Drive
-//!   folder, or an image on `*.kakaocdn.net` ending in `.png` (WinPNG), puts
-//!   the subtitle elsewhere ([`Opened::Elsewhere`]). With none of these, or
-//!   with no body this module knows, the post has [`FailureKind::Changed`].
+//!   folder puts the subtitle elsewhere ([`Opened::Elsewhere`]); an image on
+//!   `*.kakaocdn.net` ending in `.png` (WinPNG) puts it in the image
+//!   ([`Opened::WinPng`]), which only a server browser can open
+//!   ([`crate::winpng`]). With none of these, or with no body this module
+//!   knows, the post has [`FailureKind::Changed`].
+//! - A file a browser took out of a WinPNG image is received from where it
+//!   was put ([`PostFile`]'s staged path); a recheck does not read the images
+//!   again, so such a file answers [`FailureKind::Changed`] (`docs/specs/jobs.md`).
 //! - A redirect is followed only to where the request may go itself: from a
 //!   post to an `https` blog on `tistory.com`, from a file to the CDN, ten at
 //!   most. Anything else is the redirect's answer, [`FailureKind::Changed`].
@@ -70,6 +75,10 @@ pub fn cdn_host(host: &str) -> bool {
 /// 공통 수신 결과와 실패 분류): the editor's `tt_article_useless_p_margin
 /// contents_style` in every skin seen, inside `#article-view` in some.
 pub const BODY: &str = ".tt_article_useless_p_margin, .contents_style, #article-view";
+
+/// What a key of a file out of a WinPNG image starts with
+/// ([`crate::winpng::offered`]).
+const WINPNG_KEY: &str = "winpng:";
 
 /// The snapshot's names.
 pub const POST_MODIFIED: &str = "article:modified_time";
@@ -148,6 +157,10 @@ impl TistorySource {
     }
 
     pub(crate) async fn fetch(&self, post: &Url, file: &PostFile) -> Result<Fetch, Failure> {
+        // A file out of a WinPNG image is already here.
+        if let Some(path) = file.staged() {
+            return Fetch::local(path).await;
+        }
         // A Drive file has no signed address to read again.
         if let Some(id) = drive::id_of(&file.key) {
             return self.inner.drive.fetch(id).await;
@@ -202,7 +215,13 @@ impl TistorySource {
         // The attachments the post offers now, read when the first one needs it.
         let mut offered: Option<Result<Vec<PostFile>, Failure>> = None;
         for key in keys {
-            let info = if let Some(id) = drive::id_of(key) {
+            let info = if key.starts_with(WINPNG_KEY) {
+                // Its bytes come out of an image only a browser opens.
+                Err(Failure::new(
+                    FailureKind::Changed,
+                    "WinPNG 이미지에서 나온 파일은 다시 확인하지 않아요",
+                ))
+            } else if let Some(id) = drive::id_of(key) {
                 self.inner.drive.head(id).await
             } else {
                 if offered.is_none() {
@@ -347,9 +366,15 @@ pub(crate) fn read_page(
                 })
         });
     if winpng {
-        return Ok(Opened::Elsewhere {
-            reason: "자막이 게시물의 PNG 이미지(WinPNG)에 들어 있어요. 이미지에서 꺼내는 방법은 아직 없어요"
-                .to_owned(),
+        // A Drive folder beside the pictures: where the subtitle waits if the
+        // pictures hold none.
+        let elsewhere = match drive::offered(&[], folder, episode, &snapshot) {
+            Some(Ok(Opened::Elsewhere { reason })) => Some(reason),
+            _ => None,
+        };
+        return Ok(Opened::WinPng {
+            snapshot,
+            elsewhere,
         });
     }
     if let Some(elsewhere) = drive::offered(&[], folder, episode, &snapshot) {
@@ -446,7 +471,7 @@ mod tests {
         assert_eq!(failure.kind, FailureKind::Changed);
         assert!(matches!(
             read_page_(&post(), &page(&blocks)),
-            Ok(Opened::Elsewhere { .. })
+            Ok(Opened::WinPng { .. })
         ));
         // Beside one on the CDN, only that one is offered.
         let both = format!("{blocks}{}", fileblock("a.zip", Some("a.zip"), "1KB"));
@@ -557,11 +582,23 @@ mod tests {
         };
         assert!(reason.contains("Google Drive 폴더"));
 
-        // The page's body image on kakaocdn ending in `.png`: WinPNG.
-        let Ok(Opened::Elsewhere { reason }) = read_page_(&post(), &page("")) else {
-            panic!("elsewhere");
+        // The page's body image on kakaocdn ending in `.png`: WinPNG, with
+        // what the post said of itself.
+        let Ok(Opened::WinPng {
+            snapshot,
+            elsewhere,
+        }) = read_page_(&post(), &page(""))
+        else {
+            panic!("winpng");
         };
-        assert!(reason.contains("WinPNG"));
+        assert_eq!(elsewhere, None);
+        assert_eq!(
+            snapshot.entries(),
+            [(
+                POST_MODIFIED.to_owned(),
+                "2026-09-28T00:13:41+09:00".to_owned()
+            )]
+        );
 
         let home = "<html><body><div class='entry'><img src='https://tistory1.daumcdn.net/x.jpg'></div></body></html>";
         let failure = read_page_(&post(), home).unwrap_err();
@@ -585,10 +622,19 @@ mod tests {
         assert_eq!(keys, ["drive:1AbCdEfGhIjK"]);
         let png =
             r#"<p><img data-src="https://blog.kakaocdn.net/dna/x/y/z/img.png?credential=c"></p>"#;
-        let Ok(Opened::Elsewhere { reason }) = read_page_(&post(), &plain_page(png)) else {
-            panic!("elsewhere");
+        assert!(matches!(
+            read_page_(&post(), &plain_page(png)),
+            Ok(Opened::WinPng { .. })
+        ));
+        // A Drive folder beside the picture: the pictures are read first, and
+        // the folder is where the item waits if they hold nothing.
+        let both = plain_page(
+            r#"<p><a href="https://drive.google.com/drive/folders/10YFO-jkkgsybQnPpl5TVAwPdx2P0SE-y">자막 모음</a><img src="https://blog.kakaocdn.net/dna/x/y/z/img.png"></p>"#,
+        );
+        let Ok(Opened::WinPng { elsewhere, .. }) = read_page_(&post(), &both) else {
+            panic!("winpng");
         };
-        assert!(reason.contains("WinPNG"));
+        assert!(elsewhere.is_some_and(|r| r.contains("Google Drive 폴더")));
         // No body this module knows: changed, whatever the page links to.
         let bodiless = format!(
             r#"<html><body><div class="entry-content">{drive}<img src="https://blog.kakaocdn.net/dna/x/y/z/img.png"></div></body></html>"#

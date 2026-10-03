@@ -134,6 +134,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("../migrations/jobs/airtime.sql")),
     // 43: the version of a source's episode mapping and the user's per-episode exceptions to it
     Migration::Sql(include_str!("../migrations/jobs/user_mapping.sql")),
+    // 44: an item can fail for no subtitle in an image or for a key it needs; a received file's folders
+    Migration::Sql(include_str!("../migrations/jobs/winpng.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -2290,6 +2292,71 @@ mod tests {
             "the items first seen at the time of the channel's first recorded item are its \
              first read's, not the ones a clock that went back stamped earlier"
         );
+    }
+
+    #[tokio::test]
+    async fn a_database_from_before_winpng_keeps_its_items_and_checks_the_new_classes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        {
+            // A database as the build with 43 migrations left it: a job with
+            // a done item and an item that failed as `changed`.
+            let conn = database_at(&path, 43);
+            conn.execute_batch(
+                "INSERT INTO subtitle_jobs (id, command_id, request, origin, state,
+                     created_at, updated_at, state_at)
+                     VALUES ('j1', 'c1', '{}', 'pick', 'partial', 1, 1, 1);
+                 INSERT INTO subtitle_job_items (job_id, position, episode, post_url, found_at,
+                     state, reason, failure, updated_at)
+                     VALUES ('j1', 0, '1', 'https://a.tistory.com/1', 6, 'done', NULL, NULL, 1),
+                            ('j1', 1, '2', 'https://a.tistory.com/2', 6, 'failed', '없어요',
+                             'changed', 1);
+                 INSERT INTO subtitle_job_files (id, job_id, item_id, file_key, name, state,
+                     size, sha256, path, created_at, updated_at)
+                     VALUES ('a1', 'j1', 1, 'k1', 'x.ass', 'done', 10, 'ab', 'j1/x.ass', 1, 1);",
+            )
+            .unwrap();
+        }
+
+        let db = Db::open(&path).await.unwrap();
+
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+        type Kept = (i64, Option<String>, Option<String>, Option<String>);
+        let (kept, refused, accepted): (Kept, [bool; 4], String) = db
+            .run::<_, DbError, _>(|c| {
+                let kept = c.query_row(
+                    "SELECT (SELECT count(*) FROM subtitle_job_items),
+                            (SELECT failure FROM subtitle_job_items WHERE position = 0),
+                            (SELECT failure FROM subtitle_job_items WHERE position = 1),
+                            (SELECT folder FROM subtitle_job_files WHERE id = 'a1')",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                )?;
+                let update = |sql: &str| c.execute(sql, []).is_err();
+                let refused = [
+                    update("UPDATE subtitle_job_items SET failure = 'gone' WHERE position = 1"),
+                    update("UPDATE subtitle_job_files SET failure = 'needs_input' WHERE id = 'a1'"),
+                    update("UPDATE subtitle_job_files SET folder = '' WHERE id = 'a1'"),
+                    update("UPDATE subtitle_job_items SET failure = 'timeout' WHERE position = 0"),
+                ];
+                c.execute_batch(
+                    "UPDATE subtitle_job_items SET failure = 'no_subtitle' WHERE position = 0;
+                     UPDATE subtitle_job_items SET failure = 'needs_input' WHERE position = 1;
+                     UPDATE subtitle_job_files SET folder = '회차/2화' WHERE id = 'a1';",
+                )?;
+                let accepted = c.query_row(
+                    "SELECT group_concat(failure, ',') FROM
+                         (SELECT failure FROM subtitle_job_items ORDER BY position)",
+                    [],
+                    |r| r.get(0),
+                )?;
+                Ok((kept, refused, accepted))
+            })
+            .await
+            .unwrap();
+        assert_eq!(kept, (2, None, Some("changed".to_owned()), None));
+        assert_eq!(refused, [true; 4]);
+        assert_eq!(accepted, "no_subtitle,needs_input");
     }
 
     #[tokio::test]

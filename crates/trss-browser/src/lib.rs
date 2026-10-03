@@ -23,7 +23,7 @@ pub mod pool;
 pub mod protocol;
 
 pub use pool::{
-    BrowserError, BrowserPolicy, BrowserPool, BrowserRun, Download, DownloadState, MovedFile, Page,
-    PolicySource, PoolConfig, RunStatus, DOWNLOAD_STALL, MAX_DOWNLOAD_BYTES,
-    MAX_RUN_DOWNLOAD_BYTES,
+    BrowserError, BrowserPolicy, BrowserPool, BrowserRun, DialogSeen, Dialogs, Download,
+    DownloadState, MovedFile, Page, PolicySource, PoolConfig, RunStatus, DOWNLOAD_STALL,
+    MAX_DOWNLOAD_BYTES, MAX_RUN_DOWNLOAD_BYTES,
 };

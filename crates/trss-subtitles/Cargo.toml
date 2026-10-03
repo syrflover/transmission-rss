@@ -7,8 +7,13 @@ edition.workspace = true
 # `testing`: a local HTTP server shaped like Tistory, Blogger, Naver blogs
 # and Google Drive, for the tests of the crates above.
 test-support = ["dep:axum", "dep:futures", "tokio/net", "tokio/rt"]
+# `BrowserReader::with_script_after_ready`, which the real-viewer test
+# (`tests/winpng_sample.rs`, ignored) uses to make the viewer see a picture and
+# an image it cannot read. Not for the app.
+test-hooks = []
 
 [dependencies]
+trss-browser.workspace = true
 axum = { workspace = true, optional = true }
 bytes.workspace = true
 futures = { workspace = true, optional = true }
@@ -19,13 +24,18 @@ scraper.workspace = true
 # attachment list (`aPostFiles`).
 serde_json.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["time", "sync"] }
+tokio = { workspace = true, features = ["time", "sync", "fs", "io-util"] }
 url.workspace = true
 zip.workspace = true
 
 [dev-dependencies]
+trss-core = { workspace = true }
 axum.workspace = true
 futures.workspace = true
 sha2.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "net"] }
+
+[[test]]
+name = "winpng_sample"
+required-features = ["test-hooks"]

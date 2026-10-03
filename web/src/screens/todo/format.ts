@@ -7,6 +7,8 @@ export const FAILURE_LABEL: Record<FailureClass, string> = {
   not_a_file: "파일 아님",
   changed: "출처 구조 바뀜",
   network: "네트워크 실패",
+  no_subtitle: "자막 없음",
+  needs_input: "추가 입력 필요",
 };
 
 /** What a checked file's format is called. */

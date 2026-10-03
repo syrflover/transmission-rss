@@ -261,6 +261,9 @@ pub struct FileRow {
     pub kind: Option<Kind>,
     /// For an uploaded archive: which format its first bytes said.
     pub archive: Option<Archive>,
+    /// The folders the file is published under within the job's folder
+    /// (`회차/2화`), when the post shows it in some.
+    pub folder: Option<String>,
 }
 
 /// Why an attempt to receive a file failed, with the facts of the answer.
@@ -848,8 +851,8 @@ impl JobStore {
                     c.execute(
                         "INSERT INTO subtitle_job_files
                          (id, job_id, item_id, file_key, name, state, temp_dir, snapshot,
-                          created_at, updated_at)
-                     SELECT ?1, job_id, ?2, ?3, ?4, 'intended', ?5, ?7, ?6, ?6
+                          created_at, updated_at, folder)
+                     SELECT ?1, job_id, ?2, ?3, ?4, 'intended', ?5, ?7, ?6, ?6, ?8
                      FROM subtitle_job_items WHERE id = ?2",
                         params![
                             file.id,
@@ -858,7 +861,8 @@ impl JobStore {
                             file.name,
                             file.temp_dir,
                             file.created_at,
-                            file.snapshot
+                            file.snapshot,
+                            file.folder
                         ],
                     )
                 })
@@ -1071,9 +1075,9 @@ impl JobStore {
                         "INSERT INTO subtitle_job_files
                          (id, job_id, item_id, file_key, name, state, same_as, size, sha256,
                           object, path, format, http_status, content_type, snapshot,
-                          created_at, updated_at)
+                          created_at, updated_at, folder)
                      SELECT ?1, job_id, ?2, file_key, name, 'done', id, size, sha256, object,
-                            path, format, http_status, content_type, snapshot, ?3, ?3
+                            path, format, http_status, content_type, snapshot, ?3, ?3, folder
                      FROM subtitle_job_files WHERE id = ?4",
                         params![id, item_id, now, original.id],
                     )
@@ -1444,7 +1448,7 @@ fn done_page(c: &Connection, after: Option<&str>, limit: usize) -> Result<DonePa
 const FILE_COLUMNS: &str = "
     SELECT id, item_id, file_key, name, state, same_as, temp_dir, expected_size, size, sha256,
            object, path, reason, created_at, format, failure, http_status, content_type,
-           response_size, snapshot, kind, archive_type
+           response_size, snapshot, kind, archive_type, folder
     FROM subtitle_job_files";
 
 /// A failure class column.
@@ -1506,6 +1510,7 @@ fn file_row(r: &Row<'_>) -> rusqlite::Result<FileRow> {
         snapshot: r.get(19)?,
         kind: kind_at(r, 20)?,
         archive: archive_at(r, 21)?,
+        folder: r.get(22)?,
     })
 }
 

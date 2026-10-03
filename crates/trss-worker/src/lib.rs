@@ -116,8 +116,10 @@
 //! ([`browser`]): it resets the container at its start, so a run an earlier
 //! worker left open is gone, ends the runs that are idle past the policy's
 //! idle time while [`Worker::run`] runs, and ends all of them at shutdown.
-//! Without the variable the worker runs as before. No source uses the pool
-//! yet ([`Worker::browser`]).
+//! Without the variable the worker runs as before. The binary also gives the
+//! subtitle jobs a reader over the pool, which takes the files out of the
+//! WinPNG images of a Tistory post (`trss_subtitles::winpng`); a worker
+//! without the pool leaves such posts waiting for a source.
 //!
 //! One worker at a time uses one container, since a pool resets it and its
 //! reaper ends the runs it does not know: the binary takes
@@ -407,9 +409,10 @@ impl Worker {
 
     /// Gives the worker the server browser. While [`Worker::run`] runs, the
     /// pool's reaper ends the runs that are idle past the policy's idle time,
-    /// and at shutdown every run ends. No job uses the browser yet; the pool is
-    /// there for the sources that need a person's authentication
-    /// ([`Worker::browser`]).
+    /// and at shutdown every run ends. The jobs use the pool through the
+    /// runner's reader, which the caller gives the runner
+    /// (`trss_jobs::Runner::with_winpng`); the pool is also there for the
+    /// sources that need a person's authentication ([`Worker::browser`]).
     pub fn with_browser(mut self, pool: trss_browser::BrowserPool) -> Self {
         self.browser = Some(pool);
         self

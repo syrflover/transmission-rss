@@ -22,8 +22,9 @@
 //!   files, its folder in the receive area and its log, newest first.
 //!
 //! A failed job, item and file carry their failure's class as `failure`
-//! (`missing`, `expired`, `not_a_file`, `changed`, `network`; the screens name
-//! them), a job the class of its first failed item. A file carries the format
+//! (`missing`, `expired`, `not_a_file`, `changed`, `network`; an item also
+//! `no_subtitle` and `needs_input`; the screens name them), a job the class of
+//! its first failed item. A file carries the format
 //! its bytes were checked to be (`zip`, `ass`, `srt`, `smi`, `other`) and the
 //! answer's status, media type and, for a failure, size.
 //!
@@ -303,6 +304,8 @@ struct StepView {
 #[derive(Debug, Serialize)]
 struct FileView {
     name: String,
+    /// The folders the post shows the file in (`회차/2화`), when it does.
+    folder: Option<String>,
     state: &'static str,
     size: Option<u64>,
     sha256: Option<String>,
@@ -415,6 +418,7 @@ fn file_view(
     let received = file.state == FileState::Done;
     Some(FileView {
         name: file.name.clone(),
+        folder: file.folder.clone(),
         state: shown,
         size: file.size,
         sha256: file.sha256.clone(),

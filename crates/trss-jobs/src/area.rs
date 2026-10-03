@@ -2,7 +2,10 @@
 //!
 //! - `<job id>/<name>`: a job's received files, under the names the site gave
 //!   (made safe for a file name; a second file of the same name becomes
-//!   `<stem> (2).<ext>`).
+//!   `<stem> (2).<ext>`), or `<job id>/<folders>/<name>` for a file the post
+//!   shows in folders (a WinPNG image's).
+//! - `.tmp/winpng-<job id>/`: the files a server browser took out of a post's
+//!   images before the job receives them; removed when the item ends.
 //! - `.tmp/<attempt id>/<name>`: the temporary file of one attempt to receive
 //!   a file. Nothing but that attempt writes there, and a published file
 //!   leaves it by a rename that never replaces anything
@@ -88,6 +91,36 @@ pub fn safe_name(name: &str) -> String {
         false => stem,
     };
     format!("{}{ext}", cut(stem, MAX_NAME - ext.len()))
+}
+
+/// The most folders deep a file of a source may be put.
+pub const MAX_FOLDER_DEPTH: usize = 8;
+/// The most bytes the folders of a file may take together (with the `/`s),
+/// so the path of a file stays far under what the file system takes.
+pub const MAX_FOLDER_BYTES: usize = 600;
+
+/// `folder` (a relative path of folders joined by `/`) with every folder made
+/// a safe name ([`safe_name`]), without empty parts or parts that walk out;
+/// `Ok(None)` when nothing is left. A path deeper than [`MAX_FOLDER_DEPTH`]
+/// or longer than [`MAX_FOLDER_BYTES`] is refused, with the reason in a
+/// sentence: cutting it would put the file somewhere the source did not.
+pub fn safe_folder(folder: &str) -> Result<Option<String>, String> {
+    let parts: Vec<String> = folder
+        .split(['/', '\\'])
+        .map(str::trim)
+        .filter(|p| !p.is_empty() && *p != "." && *p != "..")
+        .map(safe_name)
+        .collect();
+    if parts.len() > MAX_FOLDER_DEPTH {
+        return Err(format!(
+            "파일이 폴더 {MAX_FOLDER_DEPTH}단계보다 깊은 곳에 있어서 받지 않았어요"
+        ));
+    }
+    let joined = parts.join("/");
+    if joined.len() > MAX_FOLDER_BYTES {
+        return Err("파일이 있는 폴더 경로가 너무 길어서 받지 않았어요".to_owned());
+    }
+    Ok((!parts.is_empty()).then_some(joined))
 }
 
 /// A format character that shows nothing but can change how a name reads:
@@ -236,5 +269,23 @@ mod tests {
         assert_eq!(names, ["a.ass", "a (2).ass", "a (3).ass"]);
         let names: Vec<String> = name_candidates("noext").take(2).collect();
         assert_eq!(names, ["noext", "noext (2)"]);
+    }
+
+    #[test]
+    fn folders_are_made_safe_and_capped() {
+        assert_eq!(safe_folder("").unwrap(), None);
+        assert_eq!(safe_folder(".././/").unwrap(), None);
+        assert_eq!(
+            safe_folder("회차/../2화\\예고/").unwrap().as_deref(),
+            Some("회차/2화/예고")
+        );
+        // Eight deep is the most; nine is refused rather than cut.
+        let deep = |n: usize| vec!["d"; n].join("/");
+        assert!(safe_folder(&deep(MAX_FOLDER_DEPTH)).unwrap().is_some());
+        assert!(safe_folder(&deep(MAX_FOLDER_DEPTH + 1)).is_err());
+        // A few long names add up past the cap.
+        let long = vec!["가".repeat(60); 4].join("/");
+        assert!(long.len() > MAX_FOLDER_BYTES);
+        assert!(safe_folder(&long).is_err());
     }
 }

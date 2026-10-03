@@ -2979,6 +2979,8 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
+ "trss-browser",
+ "trss-core",
  "url",
  "zip",
 ]

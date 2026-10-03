@@ -11,8 +11,17 @@
 //! - A post no source of this build reads waits for one (`자막 대기`); the
 //!   worker puts such items back in line when it starts
 //!   ([`Runner::requeue_waiting_for_sources`]). So does a post whose source
-//!   finds its subtitle somewhere it cannot read yet (a Google Drive folder,
-//!   a WinPNG image), with the source's reason.
+//!   finds its subtitle somewhere it cannot read yet (a Google Drive folder),
+//!   with the source's reason.
+//! - A post whose subtitle is in WinPNG images ([`Opened::WinPng`]) is read by
+//!   the runner's [`WinpngReader`] (a server browser; [`Runner::with_winpng`]):
+//!   the files it takes out are put in a folder of the job's, which is the
+//!   step `open`, and are then received like any other file, under their
+//!   folders ([`FileRow::folder`]). A post whose images hold no subtitle fails
+//!   as `no_subtitle`, and one whose image needs a key as `needs_input`.
+//!   A runner with no reader leaves the item waiting for a source, as for a
+//!   Drive folder. The reader's browser run is let go when a run ends, unless
+//!   the job waits for a person's check on the site.
 //! - The source opens the post for the item's episode: a post that says which
 //!   file is which episode (Blogger's Drive links) offers that episode's.
 //! - A site that asks for a person's check makes the item wait (`인증 필요`).
@@ -91,7 +100,11 @@ use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
 use tokio_util::sync::CancellationToken;
 use trss_core::{Clock, Millis};
-use trss_subtitles::{verify, Failure, FailureKind, Opened, PostFile, Sources};
+use trss_subtitles::{
+    verify,
+    winpng::{self, ViewRequest, Viewed, WinpngReader},
+    Failure, FailureKind, Opened, PostFile, Snapshot, Sources,
+};
 use url::Url;
 
 use crate::{
@@ -121,6 +134,9 @@ pub struct Runner {
     area: ReceiveArea,
     clock: Clock,
     retry_waits: Arc<[Duration]>,
+    /// Reads the WinPNG images of a post; `None`: the worker has no server
+    /// browser.
+    winpng: Option<Arc<dyn WinpngReader>>,
 }
 
 /// How one file of an item came out.
@@ -207,7 +223,14 @@ impl Runner {
             area,
             clock,
             retry_waits: Arc::new(RETRY_WAITS),
+            winpng: None,
         }
+    }
+
+    /// The same runner reading WinPNG images with `reader`.
+    pub fn with_winpng(mut self, reader: Arc<dyn WinpngReader>) -> Runner {
+        self.winpng = Some(reader);
+        self
     }
 
     /// The same runner with other waits before a retry ([`RETRY_WAITS`]); as
@@ -290,7 +313,11 @@ impl Runner {
             if cancel.is_cancelled() {
                 return Ok(false);
             }
-            if let ItemEnd::Interrupted = self.run_item(id, item, cancel).await? {
+            let end = self.run_item(id, item, cancel).await;
+            // What a reading of images left in the job's staging folder is
+            // not the next item's.
+            let _ = tokio::fs::remove_dir_all(self.staging(id)).await;
+            if let ItemEnd::Interrupted = end? {
                 return Ok(false);
             }
         }
@@ -369,6 +396,19 @@ impl Runner {
                 _ = cancel.cancelled() => return Ok(ItemEnd::Interrupted),
                 opened = source.open(&post, &item.episode) => opened,
             };
+            // The images of the post, read by the browser, are the files it
+            // offers.
+            let opened = match opened {
+                Ok(Opened::WinPng {
+                    snapshot,
+                    elsewhere,
+                }) => tokio::select! {
+                    biased;
+                    _ = cancel.cancelled() => return Ok(ItemEnd::Interrupted),
+                    opened = self.read_winpng(job, &post, &snapshot, elsewhere.as_deref()) => opened,
+                },
+                other => other,
+            };
             match opened {
                 Err(failure) if failure.kind.retryable() && tries < self.retry_waits.len() => {
                     let wait = self.retry_waits[tries];
@@ -395,10 +435,16 @@ impl Runner {
         };
         let files = match opened {
             Err(failure) => {
+                let message = match failure.kind {
+                    FailureKind::NoSubtitle | FailureKind::NeedsInput => {
+                        "게시물의 이미지에서 자막을 꺼내지 못했어요"
+                    }
+                    _ => "게시물을 열지 못했어요",
+                };
                 self.store
                     .event(
                         job,
-                        format!("{ep}: 게시물을 열지 못했어요"),
+                        format!("{ep}: {message}"),
                         Some(described(&FileProblem::from(&failure))),
                         self.now(),
                     )
@@ -464,6 +510,8 @@ impl Runner {
                 return Ok(ItemEnd::Settled);
             }
             Ok(Opened::Files(files)) => files,
+            // Taken to the files it offers before this match.
+            Ok(Opened::WinPng { .. }) => unreachable!("WinPNG images are read above"),
         };
         let now = self.now();
         self.store
@@ -538,6 +586,74 @@ impl Runner {
             }
         }
         Ok(ItemEnd::Settled)
+    }
+
+    /// The folder a reading of images puts its files in: the job's own, in the
+    /// area's temporary folder, though not named as an attempt (nothing else
+    /// removes it).
+    fn staging(&self, job: &str) -> PathBuf {
+        self.area.at(&format!(".tmp/winpng-{job}"))
+    }
+
+    /// The files the post's WinPNG images hold, read by the runner's reader
+    /// into the job's staging folder (see the module docs). Without a reader
+    /// the post waits as one whose subtitle is somewhere unreadable. When the
+    /// images hold nothing but the post links a subtitle somewhere else too
+    /// (`elsewhere`, a Drive folder), it waits for that, as it did before the
+    /// images were read.
+    async fn read_winpng(
+        &self,
+        job: &str,
+        post: &Url,
+        snapshot: &Snapshot,
+        elsewhere: Option<&str>,
+    ) -> Result<Opened, Failure> {
+        let Some(reader) = &self.winpng else {
+            return Ok(Opened::Elsewhere {
+                reason: winpng::NO_READER.to_owned(),
+            });
+        };
+        let staging = self.staging(job);
+        let _ = tokio::fs::remove_dir_all(&staging).await;
+        tokio::fs::create_dir_all(&staging).await.map_err(|e| {
+            Failure::new(
+                FailureKind::Network,
+                format!(
+                    "이미지에서 꺼낸 파일을 둘 폴더를 만들지 못했어요: {}",
+                    e.kind()
+                ),
+            )
+        })?;
+        let viewed = reader
+            .read(ViewRequest {
+                job,
+                post,
+                staging: &staging,
+            })
+            .await?;
+        if let (Viewed::NoSubtitle | Viewed::NoImages, Some(reason)) = (&viewed, elsewhere) {
+            return Ok(Opened::Elsewhere {
+                reason: reason.to_owned(),
+            });
+        }
+        match viewed {
+            Viewed::Files(staged) => Ok(Opened::Files(winpng::offered(snapshot, &staged))),
+            Viewed::NoSubtitle => Err(Failure::new(
+                FailureKind::NoSubtitle,
+                "게시물의 이미지를 열어 봤지만 자막이 든 WinPNG 이미지가 없어요",
+            )),
+            // The page the browser opened has none of the images the source
+            // saw (loaded late, or the page changed): nothing is known of the
+            // subtitle, so it is not `자막 없음`.
+            Viewed::NoImages => Err(Failure::new(
+                FailureKind::Changed,
+                "브라우저로 연 게시물에서 WinPNG 이미지를 찾지 못했어요",
+            )),
+            Viewed::NeedsKey => Err(Failure::new(
+                FailureKind::NeedsInput,
+                "자막이 든 WinPNG 이미지를 열려면 키가 필요해요. 키를 넣는 방법은 아직 없어요",
+            )),
+        }
     }
 
     /// Receives one file of `item`, or finds it received (see the module docs).
@@ -625,6 +741,13 @@ impl Runner {
     ) -> Result<Receipt, JobError> {
         let attempt = uuid::Uuid::new_v4().to_string();
         let temp_rel = ReceiveArea::temp_dir(&attempt);
+        // A folder too deep or too long is refused below, after the receipt is
+        // recorded.
+        let (folder, folder_refused) = match file.folder.as_deref().map(area::safe_folder) {
+            None => (None, None),
+            Some(Ok(folder)) => (folder, None),
+            Some(Err(reason)) => (None, Some(reason)),
+        };
         let now = self.now();
         self.store
             .file_intend(FileRow {
@@ -650,8 +773,22 @@ impl Runner {
                 snapshot: snapshot_json(&file.snapshot),
                 kind: None,
                 archive: None,
+                folder: folder.clone(),
             })
             .await?;
+
+        if let Some(reason) = folder_refused {
+            let problem = FileProblem {
+                reason,
+                class: Some(FailureKind::NotAFile),
+                status: None,
+                content_type: None,
+                size: None,
+            };
+            return self
+                .fail_file(job, ep, &attempt, name, None, problem, false)
+                .await;
+        }
 
         let fetched = tokio::select! {
             biased;
@@ -818,7 +955,7 @@ impl Runner {
                     .await
             }
         };
-        let path = self.plan_path(job, name).await?;
+        let path = self.plan_path(job, folder.as_deref(), name).await?;
         self.store
             .file_fetched(&attempt, size, sha256, object, path.clone(), self.now())
             .await?;
@@ -857,10 +994,16 @@ impl Runner {
         let published = (|| {
             let folder = target.parent().expect("a path in a job's folder");
             // Synced every time: a crash may have left a folder made before
-            // its entry was synced.
+            // its entry was synced. Every level down from the area has its
+            // entry synced, a file's own folders included.
             std::fs::create_dir_all(folder)?;
-            if let Some(parent) = folder.parent() {
+            let mut level = folder;
+            while let Some(parent) = level.parent() {
                 area::sync_dir(parent)?;
+                if parent == self.area.root() {
+                    break;
+                }
+                level = parent;
             }
             trss_core::files::rename_noreplace(&temp, &target)?;
             area::sync_dir(folder)
@@ -889,15 +1032,47 @@ impl Runner {
         Ok(Receipt::Received)
     }
 
-    /// A free path for `name` in the job's folder: on the disk and among the
-    /// job's receipts.
-    async fn plan_path(&self, job: &str, name: &str) -> Result<String, JobError> {
+    /// A free path for `name` in the job's folder, within `folder` when the
+    /// file has one: on the disk and among the job's receipts.
+    async fn plan_path(
+        &self,
+        job: &str,
+        folder: Option<&str>,
+        name: &str,
+    ) -> Result<String, JobError> {
         let taken = self.store.paths_of(job).await?;
-        let dir = ReceiveArea::job_dir(job);
+        // A name is out of the way when nothing of the job is at it, on the
+        // disk or among the receipts, and when it is not a folder that files
+        // are at (`X` the file against `X/` the folder).
+        let free = |path: &str| {
+            let on_disk = std::fs::symlink_metadata(self.area.at(path)).is_ok();
+            let is_folder = taken.iter().any(|t| {
+                t.strip_prefix(path)
+                    .is_some_and(|rest| rest.starts_with('/'))
+            });
+            !on_disk && !is_folder && !taken.iter().any(|t| t == path)
+        };
+        // A folder is out of the way when what is at its name is a folder (or
+        // nothing). One that is a file of the job's, or anything that is not a
+        // folder on the disk, is passed over for `X (2)`, as a file would be.
+        let usable_folder = |path: &str| {
+            let on_disk = match std::fs::symlink_metadata(self.area.at(path)) {
+                Ok(meta) => meta.is_dir(),
+                Err(_) => true,
+            };
+            on_disk && !taken.iter().any(|t| t == path)
+        };
+        let mut dir = ReceiveArea::job_dir(job);
+        for part in folder.into_iter().flat_map(|f| f.split('/')) {
+            let candidate = std::iter::once(part.to_owned())
+                .chain((2..).map(|n| format!("{part} ({n})")))
+                .find(|c| usable_folder(&format!("{dir}/{c}")))
+                .expect("the names go on");
+            dir = format!("{dir}/{candidate}");
+        }
         for candidate in area::name_candidates(name) {
             let path = format!("{dir}/{candidate}");
-            let on_disk = std::fs::symlink_metadata(self.area.at(&path)).is_ok();
-            if !on_disk && !taken.contains(&path) {
+            if free(&path) {
                 return Ok(path);
             }
         }
@@ -1043,7 +1218,7 @@ impl Runner {
                             .hold_reason(job, ep, r, "임시 파일을 읽지 못했어요")
                             .await;
                     };
-                    let path = self.plan_path(job, &r.name).await?;
+                    let path = self.plan_path(job, r.folder.as_deref(), &r.name).await?;
                     self.store
                         .file_fetched(&r.id, size, sha, object, path.clone(), now)
                         .await?;
@@ -1403,6 +1578,11 @@ impl Runner {
         self.store
             .event(job, message.to_owned(), detail.or(note), now)
             .await?;
+        // The run ended, so the browser run it used goes too; a job that waits
+        // for a person's check on the site keeps it for that check.
+        if let (Some(reader), false) = (&self.winpng, wait == Some(Wait::Auth)) {
+            reader.release(job).await;
+        }
         println!("Subtitle job {job}: {} ({done}/{total})", state.code());
         Ok(())
     }

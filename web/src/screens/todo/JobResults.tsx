@@ -134,7 +134,7 @@ function FileLine({ file }: { file: JobFile }) {
     <li className="flex min-w-0 flex-col gap-1">
       <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1">
         <span className="min-w-0 text-[13px] leading-snug font-semibold [overflow-wrap:anywhere]">
-          {file.name}
+          {file.folder !== null ? `${file.folder}/${file.name}` : file.name}
         </span>
         {facts.length > 0 && (
           <span className="text-xs whitespace-nowrap text-text-muted">

@@ -777,6 +777,78 @@ impl Page {
             .await
             .map(|_| ())
     }
+
+    /// Answers every JavaScript dialog (`alert`, `confirm`, `prompt`) the page
+    /// opens from now on by dismissing it, as a person who cancels does, so a
+    /// page script that waits on one never blocks the run. What was opened is
+    /// kept in the returned [`Dialogs`], which stops answering when dropped.
+    pub async fn dismiss_dialogs(&self) -> Result<Dialogs, BrowserError> {
+        let session = self.session_id()?;
+        let mut events = self.run.events()?;
+        self.send("Page.enable", json!({})).await?;
+        let seen: Arc<Mutex<Vec<DialogSeen>>> = Arc::default();
+        let task = tokio::spawn({
+            let (page, seen) = (self.clone(), seen.clone());
+            async move {
+                loop {
+                    match events.recv().await {
+                        Ok(event)
+                            if event.method == "Page.javascriptDialogOpening"
+                                && event.session_id.as_deref() == Some(session.as_str()) =>
+                        {
+                            let text = |key: &str| {
+                                event.params[key]
+                                    .as_str()
+                                    .unwrap_or_default()
+                                    .chars()
+                                    .take(200)
+                                    .collect::<String>()
+                            };
+                            seen.lock().expect("dialogs lock").push(DialogSeen {
+                                kind: text("type"),
+                                message: text("message"),
+                            });
+                            let _ = page
+                                .send("Page.handleJavaScriptDialog", json!({ "accept": false }))
+                                .await;
+                        }
+                        Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {}
+                        Err(broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            }
+        });
+        Ok(Dialogs { seen, task })
+    }
+}
+
+/// A dialog a page opened.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DialogSeen {
+    /// `alert`, `confirm`, `prompt` or `beforeunload`.
+    pub kind: String,
+    /// Its text, cut at 200 characters.
+    pub message: String,
+}
+
+/// The dialogs a page opened since [`Page::dismiss_dialogs`]; dropping it stops
+/// the dismissing.
+pub struct Dialogs {
+    seen: Arc<Mutex<Vec<DialogSeen>>>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl Dialogs {
+    /// The dialogs opened so far, in order.
+    pub fn seen(&self) -> Vec<DialogSeen> {
+        self.seen.lock().expect("dialogs lock").clone()
+    }
+}
+
+impl Drop for Dialogs {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
 }
 
 #[cfg(test)]

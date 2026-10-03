@@ -169,10 +169,12 @@ export type Wait = "auth" | "subtitle";
  * 결과와 실패 분류): the post or file is gone (`missing`), its signed address was
  * refused even after reading the post again (`expired`), what came was not the file
  * (`not_a_file`), the post holds nothing the source can read (`changed`), or the site
- * could not be reached (`network`).
+ * could not be reached (`network`). An item can also fail because the images of the
+ * post hold no subtitle (`no_subtitle`) or one needs a key only a person can give
+ * (`needs_input`).
  */
 export type FailureClass =
-  "missing" | "expired" | "not_a_file" | "changed" | "network";
+  "missing" | "expired" | "not_a_file" | "changed" | "network" | "no_subtitle" | "needs_input";
 
 /** What received bytes were checked to be; `other` is kept for the analysis to decide. */
 export type FileFormat = "zip" | "ass" | "srt" | "smi" | "other";
@@ -284,6 +286,8 @@ export type ItemState =
 export interface JobFile {
   /** The file's name as the site gave it. */
   name: string;
+  /** The folders the post shows it in (`회차/2화`), when it does. */
+  folder: string | null;
   /** `receiving` while bytes come in; `held`: its receipt could not be confirmed after a restart. */
   state: "receiving" | "done" | "held" | "failed";
   /** Bytes received. */

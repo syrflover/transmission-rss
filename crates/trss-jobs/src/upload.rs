@@ -154,6 +154,13 @@ pub enum UploadError {
     Job(#[from] JobError),
 }
 
+/// Whether `name` is a folder where a reading of WinPNG images puts its files
+/// (`winpng-` and the job's UUID; see [`crate::Runner`]).
+fn is_winpng_staging(name: &str) -> bool {
+    name.strip_prefix("winpng-")
+        .is_some_and(|id| uuid::Uuid::try_parse(id).is_ok_and(|u| u.to_string() == id))
+}
+
 /// The uploads of a process: the turns, the limits, and where files go.
 #[derive(Clone)]
 pub struct Uploads {
@@ -198,11 +205,16 @@ impl Uploads {
     /// `.tmp/<id>/` and `<id>/` whose name is a UUID (what an upload makes)
     /// that no job or file record names and that nothing wrote for `older_than`
     /// (an upload or a receipt going on is younger, and a receipt's attempt
-    /// folder always has its record). Anything else in the area is left.
-    /// Returns how many folders it removed.
+    /// folder always has its record), and the folders `.tmp/winpng-<job id>/`
+    /// (the files a reading of a post's WinPNG images put down, which the
+    /// runner removes after each item and a killed process does not) that
+    /// nothing wrote for `older_than`: a reading going on writes into its
+    /// folder every few seconds. Anything else in the area is left. Returns
+    /// how many folders it removed.
     pub async fn sweep(&self, older_than: Duration) -> Result<usize, UploadError> {
         let root = self.area.root().to_owned();
         let mut candidates: Vec<PathBuf> = Vec::new();
+        let mut stagings: Vec<PathBuf> = Vec::new();
         for dir in [root.join(".tmp"), root.clone()] {
             let mut entries = match tokio::fs::read_dir(&dir).await {
                 Ok(entries) => entries,
@@ -221,6 +233,8 @@ impl Uploads {
                     .is_some_and(|age| age >= older_than);
                 if old && uuid::Uuid::try_parse(&name).is_ok_and(|id| id.to_string() == name) {
                     candidates.push(entry.path());
+                } else if old && dir.ends_with(".tmp") && is_winpng_staging(&name) {
+                    stagings.push(entry.path());
                 }
             }
         }
@@ -230,6 +244,11 @@ impl Uploads {
             .collect();
         let known = self.store.known_receive_ids(names).await?;
         let mut removed = 0;
+        for path in stagings {
+            if tokio::fs::remove_dir_all(&path).await.is_ok() {
+                removed += 1;
+            }
+        }
         for path in candidates {
             let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
             if name.is_some_and(|n| known.contains(&n)) {

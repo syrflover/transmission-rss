@@ -337,6 +337,32 @@ async fn the_sweep_removes_only_old_orphans_of_a_uuid_name() {
 }
 
 #[tokio::test]
+async fn the_sweep_removes_an_old_winpng_staging_folder_and_keeps_a_young_one() {
+    let s = setup().await;
+    let made = |rel: &str| {
+        let dir = s.area.at(rel);
+        std::fs::create_dir_all(dir.join("1")).unwrap();
+        std::fs::write(dir.join("1/01.smi"), b"x").unwrap();
+        dir
+    };
+    let job = "4f0c2f6e-1c1f-4a52-9a43-0a7b8f1d2c01";
+    let old = made(&format!(".tmp/winpng-{job}"));
+    let young = made(".tmp/winpng-6a1d7d88-3f0e-4a7f-8d57-2b6c4c0e9f02");
+    // Not what a reading makes: an old folder of another name stays.
+    let other = made(".tmp/winpng-notes");
+    let elsewhere = made("winpng-0b9e1b5c-6a7d-4f29-8c3e-5d1f7a2b4c03");
+    for dir in [&old, &other, &elsewhere] {
+        make_old(dir);
+    }
+    let removed = s.uploads.sweep(Duration::from_secs(3600)).await.unwrap();
+    assert_eq!(removed, 1);
+    assert!(!old.exists());
+    for stays in [&young, &other, &elsewhere] {
+        assert!(stays.exists(), "{stays:?}");
+    }
+}
+
+#[tokio::test]
 async fn the_sweep_goes_on_in_the_background_and_catches_an_orphan_made_later() {
     use std::sync::{Arc, Mutex};
     let s = setup().await;
