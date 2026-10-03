@@ -23,15 +23,19 @@
 //! | a job received this observation | nothing |
 //! | a job that has not failed holds an observation of the episode (pending, running, waiting, held) | nothing yet: it is looked at again after that job |
 //! | a job received an earlier observation of the creator's episode | a **revision** job (`revision_of` that observation); the subtitle in place is untouched |
+//! | the episode is a conflict of the source's mapping ([`mapping::conflicts`]: a decimal or text such as `13.5`, a number outside the season's episodes once mapped, or, for an `auto` mapping, one whose own air time points at another offset) | nothing: the other episodes of the source are received as usual, and the conflict is recorded for the user (`subtitle_mapping_conflicts`) |
 //! | the source's mapping to the season is undecided, or the episode is no whole number (`0`, `13.5`, `SP`) | nothing: whether the episode has a subtitle cannot be told |
 //! | the mapped episode of the season has a subtitle file in the library whose creator the user named as this creator, and the app first saw this observation after that (`creator_set_at` of the file; the earliest of such files counts) | a **revision** job of a subtitle the user attributed (`revises_attributed`, `revision_of` unset: nothing of it was received); the subtitle in place is untouched |
 //! | the mapped episode of the season has any other subtitle file in the library | nothing: another creator's (or an unknown) subtitle is there, and a new creator's candidate is no revision of it. A line of this creator seen before the user named the file stays a revision candidate on screen (수정) only |
 //! | another creator's subtitle of the episode was received, or a job that has not failed is receiving it (by that source's mapping, or by the same Anissia episode when it has none) | nothing, for the same reason |
 //! | otherwise | a **new episode** job |
 //!
-//! The rows from the mapping on apply the same checks to an attributed
-//! revision: the mapping is decided and the episode is a whole number, and no
-//! other creator's subtitle of the episode was received or is on its way. The
+//! The conflict row applies to every path below it; the revision of a received
+//! episode, above it, is of what was received whatever the mapping now says.
+//! The rows from the mapping on apply the same checks to an
+//! attributed revision: the mapping is decided and the episode is a whole
+//! number, and no other creator's subtitle of the episode was received or is on
+//! its way. The
 //! bytes are not compared with the subtitle in the library: the job only
 //! receives, and the replacement comparison (`교체 비교와 승인`) does not exist
 //! yet, which is where "nothing to replace" would be recorded.
@@ -43,9 +47,11 @@
 //! time changed again is a new observation, so a new revision job. A job that
 //! failed is not made again by itself; the user picks the candidate again.
 //!
-//! The source's mapping is decided first ([`mapping::decide`]), every time.
-//! A work whose folder is gone (`missing`) receives nothing: what its
-//! episodes hold is not known.
+//! The source's mapping is decided first ([`mapping::decide`], from the times
+//! Anissia wrote on the creator's episodes and the season's AniList schedule),
+//! every time, and the source's conflicts are rewritten with it in one
+//! transaction. A work whose folder is gone (`missing`) receives nothing: what
+//! its episodes hold is not known.
 //!
 //! # When
 //!
@@ -69,7 +75,7 @@ use trss_collect::store::{
 };
 use trss_core::{Db, DbError, Millis};
 use trss_library::{
-    seasons::combine::combine,
+    seasons::combine::{combine, schedule_times},
     store::{
         library::{AttributedSubtitle, Held, LibraryError, LibraryStore},
         seasons::{SeasonError, SeasonStore},
@@ -115,8 +121,6 @@ pub struct Subscribed {
     pub anime_no: i64,
     /// The creator followed; `None` while it is not chosen (`제작자 미정`).
     pub creator: Option<String>,
-    /// The rule's 회차 변환.
-    pub rule_episode: i64,
 }
 
 /// A `자막 구독` suggestion: a work whose subscription has no creator yet and
@@ -159,6 +163,27 @@ fn whole(text: &str) -> Option<i64> {
     }
 }
 
+/// What the library knows of a subscription's season for its mapping.
+struct SeasonGround {
+    /// The air time (Unix ms) of each season episode, from every linked entry.
+    schedule: BTreeMap<u32, i64>,
+    /// The AniList episode count of the linked entries together.
+    count: Option<u32>,
+    /// The episodes of all earlier seasons together, when each is known.
+    previous: Option<u32>,
+}
+
+impl SeasonGround {
+    fn season(&self, number: u32) -> mapping::Season<'_> {
+        mapping::Season {
+            number,
+            schedule: &self.schedule,
+            count: self.count,
+            previous: self.previous,
+        }
+    }
+}
+
 /// What the newest observations of a creator's episodes come to.
 struct Grounds<'a> {
     source_id: &'a str,
@@ -174,6 +199,8 @@ struct Grounds<'a> {
     others: &'a HashMap<String, i64>,
     /// The season's subtitle files whose creator the user named.
     attributed: &'a [AttributedSubtitle],
+    /// The keys of the source's episodes that do not fit its mapping.
+    conflicted: &'a HashSet<String>,
 }
 
 /// An observation to receive and what it is a revision of.
@@ -240,6 +267,11 @@ fn to_receive<'a>(g: &Grounds<'a>) -> Vec<Receipt<'a>> {
                 revision_of: Some(of),
                 revises_attributed: false,
             });
+            continue;
+        }
+        // A received episode's revision is of what was received, whatever the
+        // mapping now says; from here on the episode must fit the mapping.
+        if g.conflicted.contains(&k) {
             continue;
         }
         let (Some(offset), Some(n)) = (g.offset, whole(&o.episode)) else {
@@ -353,7 +385,6 @@ impl Follow {
                         SubtitleMode::Follow => sub.creator,
                         _ => None,
                     },
-                    rule_episode: rule.episode,
                 });
             }
         }
@@ -414,6 +445,39 @@ impl Follow {
             .map(|c| c.source_id))
     }
 
+    /// What the library knows of the subscription's season for its mapping
+    /// ([`SeasonGround`]).
+    async fn season_ground(&self, sub: &Subscribed) -> Result<SeasonGround> {
+        // The earlier seasons, then the subscription's own.
+        let mut wanted: Vec<(String, u32)> =
+            (1..sub.season).map(|s| (sub.work_id.clone(), s)).collect();
+        wanted.push((sub.work_id.clone(), sub.season));
+        let mut links = self.seasons.links_of_seasons(wanted).await?;
+        let own = links
+            .pop()
+            .flatten()
+            .filter(|link| !link.entries.is_empty());
+        let previous = links
+            .into_iter()
+            .map(|link| {
+                link.filter(|l| !l.entries.is_empty())
+                    .and_then(|l| combine(&l.entries).and_then(|c| c.episodes))
+            })
+            .try_fold(0u32, |sum, n| n.and_then(|n| sum.checked_add(n)));
+        Ok(match own {
+            Some(link) => SeasonGround {
+                schedule: schedule_times(&link.entries),
+                count: combine(&link.entries).and_then(|c| c.episodes),
+                previous,
+            },
+            None => SeasonGround {
+                schedule: BTreeMap::new(),
+                count: None,
+                previous,
+            },
+        })
+    }
+
     async fn follow(&self, sub: &Subscribed, creator: &str, now: Millis) -> Result<Vec<String>> {
         let observed = self.anissia.candidates(sub.anime_no, Vec::new()).await?;
         let Some(source_id) = observed
@@ -433,35 +497,53 @@ impl Follow {
         else {
             return Ok(Vec::new());
         };
-        let count = self
-            .seasons
-            .links_of_seasons(vec![(sub.work_id.clone(), sub.season)])
-            .await?
-            .into_iter()
-            .next()
-            .flatten()
-            .filter(|link| !link.entries.is_empty())
-            .and_then(|link| combine(&link.entries).and_then(|c| c.episodes));
-        let mut numbers: Vec<u32> = observed
+        let ground = self.season_ground(sub).await?;
+        // The earliest observation of each whole episode of the source, and the
+        // newest text of each episode key.
+        let mut earliest: BTreeMap<u32, &Candidate> = BTreeMap::new();
+        let mut newest_text: BTreeMap<String, &Candidate> = BTreeMap::new();
+        for c in observed.iter().filter(|c| c.source_id == source_id) {
+            if let Some(n) = whole(&c.episode).and_then(|n| u32::try_from(n).ok()) {
+                let entry = earliest.entry(n).or_insert(c);
+                if c.id < entry.id {
+                    *entry = c;
+                }
+            }
+            let entry = newest_text.entry(key(&c.episode)).or_insert(c);
+            if c.id > entry.id {
+                *entry = c;
+            }
+        }
+        let posted: Vec<mapping::Posted> = earliest
             .iter()
-            .filter(|c| c.source_id == source_id)
-            .filter_map(|c| whole(&c.episode).and_then(|n| u32::try_from(n).ok()))
+            .map(|(&episode, c)| mapping::Posted {
+                episode,
+                at: c.updated_at,
+            })
             .collect();
-        numbers.sort_unstable();
-        numbers.dedup();
-        let decided = mapping::decide(&numbers, count, sub.rule_episode, sub.season);
+        let texts: Vec<String> = newest_text.values().map(|c| c.episode.clone()).collect();
+        let decided = mapping::decide(&posted, &ground.season(sub.season));
 
-        let mappings = {
+        let (mappings, conflicted) = {
             let (work_id, season, source) = (sub.work_id.clone(), sub.season, source_id.clone());
             self.db
                 .run(move |c| {
                     // Written before anyone else reads: a mapping the user sets
-                    // meanwhile is not overwritten with the app's.
+                    // meanwhile is not overwritten with the app's, and the
+                    // conflicts are the ones of the mapping that stands.
                     let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
                     mapping::store_in(&tx, &work_id, season, &source, &decided, now)?;
                     let all = mapping::read_in(&tx, &work_id, season)?;
+                    let found = match all.get(&source) {
+                        Some(stored) => {
+                            mapping::conflicts(stored, &texts, &posted, &ground.season(season))
+                        }
+                        None => Vec::new(),
+                    };
+                    mapping::store_conflicts(&tx, &work_id, season, &source, &found, now)?;
                     tx.commit()?;
-                    Ok::<_, FollowError>(all)
+                    let keys: HashSet<String> = found.iter().map(|f| key(&f.episode)).collect();
+                    Ok::<_, FollowError>((all, keys))
                 })
                 .await?
         };
@@ -485,6 +567,7 @@ impl Follow {
             offset,
             others: &others,
             attributed: &attributed,
+            conflicted: &conflicted,
         };
         let mut made = Vec::new();
         for Receipt {

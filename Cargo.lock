@@ -2812,6 +2812,7 @@ dependencies = [
 name = "trss-jobs"
 version = "0.1.0"
 dependencies = [
+ "reqwest 0.13.5",
  "rusqlite",
  "serde_json",
  "sha2",
@@ -2819,6 +2820,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-util",
+ "trss-anilist",
  "trss-anissia",
  "trss-collect",
  "trss-core",

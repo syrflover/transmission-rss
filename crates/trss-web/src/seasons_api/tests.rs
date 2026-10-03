@@ -746,10 +746,15 @@ async fn saving_the_links_of_a_subscribed_creators_season_makes_the_creators_job
     use trss_collect::store::channels::{ChannelInput, NewSubscription, RuleInput, SubtitleMode};
 
     let env = env(vec![work("Show", &[1], vec![episode(1, "01")])]).await;
-    env.answer(media(1, "A", "あ", "RELEASING", 2026));
+    // A season of 12 that aired weekly from 1_790_000_000 s.
+    let mut entry = media(1, "A", "あ", "RELEASING", 2026);
+    entry["airingSchedule"] = json!({ "nodes": (1..=12)
+        .map(|k| json!({ "episode": k, "airingAt": 1_790_000_000 + (k - 1) * 604_800 }))
+        .collect::<Vec<_>>() });
+    env.answer(entry);
     let id = env.id("Show").await;
     // A collecting subscription of season 1 that follows 에루샤, whose
-    // episode 2 was observed.
+    // episodes 1 and 2 were observed an hour after they aired.
     let channel = env
         .state
         .channels
@@ -798,14 +803,15 @@ async fn saving_the_links_of_a_subscribed_creators_season_makes_the_creators_job
                 "INSERT INTO subtitle_sources (id, anime_no, creator_name, created_at)
                      VALUES ('src-a', 3441, '에루샤', 1);
                  INSERT INTO caption_observations
-                     (source_id, post_url, episode, updated, first_seen_at)
-                 VALUES ('src-a', 'https://blog.test/ep2', '2', '2026-10-02T11:00:00', 2);",
+                     (source_id, post_url, episode, updated, updated_at, first_seen_at)
+                 VALUES ('src-a', 'https://blog.test/ep1', '1', 'x', 1790003600000, 2),
+                        ('src-a', 'https://blog.test/ep2', '2', 'x', 1790608400000, 2);",
             )?;
             Ok(())
         })
         .await
         .unwrap();
-    // Without the season's episode count, nothing is decided or received.
+    // Without the season's schedule, nothing is decided or received.
     assert!(env.state.follow.evaluate(1).await.unwrap().is_empty());
 
     let version = env.state.seasons.store.link(&id, 1).await.unwrap().version;
@@ -817,6 +823,6 @@ async fn saving_the_links_of_a_subscribed_creators_season_makes_the_creators_job
     .await;
     assert_eq!(status, StatusCode::OK, "{info}");
     let open = env.state.jobs.open_jobs().await.unwrap();
-    assert_eq!(open.len(), 1);
-    assert_eq!(open[0].origin, trss_jobs::AUTO);
+    assert_eq!(open.len(), 2);
+    assert!(open.iter().all(|job| job.origin == trss_jobs::AUTO));
 }

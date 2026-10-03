@@ -242,17 +242,39 @@ async fn an_archive_move_that_merges_two_works_keeps_the_subtitle_sources_mappin
         )?;
         let put = |work: &str, source: &str, kind: &str, offset: Option<i64>| {
             c.execute(
-                "INSERT INTO subtitle_episode_mappings VALUES (?1, 1, ?2, ?3, ?4, ?5, 1)",
+                "INSERT INTO subtitle_episode_mappings
+                     (work_id, season, source_id, kind, episode_offset, evidence, decided_at)
+                 VALUES (?1, 1, ?2, ?3, ?4, ?5, 1)",
                 rusqlite::params![work, source, kind, offset, format!("{work} {source}")],
             )
         };
-        // Only the moved work maps s1; both map s2 (the kept work's is the
-        // app's, the moved one the user's) and s3 (both the app's).
-        put(&m, "s1", "auto", Some(0))?;
+        // Only the moved work maps s1 (the app's, gone undecided from an
+        // offset it keeps); both map s2 (the kept work's is the app's, the
+        // moved one the user's) and s3 (both the app's).
+        put(&m, "s1", "undecided", None)?;
+        c.execute(
+            "UPDATE subtitle_episode_mappings SET retired_offset = 2
+              WHERE work_id = ?1 AND source_id = 's1'",
+            [&m],
+        )?;
         put(&m, "s2", "user", Some(-12))?;
         put(&k, "s2", "auto", Some(0))?;
         put(&m, "s3", "auto", Some(-1))?;
         put(&k, "s3", "undecided", None)?;
+        // Each mapping has the conflicts it was found against.
+        let conflict = |work: &str, source: &str, episode: &str| {
+            c.execute(
+                "INSERT INTO subtitle_mapping_conflicts
+                     (work_id, season, source_id, episode, reason, found_at)
+                 VALUES (?1, 1, ?2, ?3, '근거', 1)",
+                rusqlite::params![work, source, episode],
+            )
+        };
+        conflict(&m, "s1", "13.5")?;
+        conflict(&m, "s2", "14.5")?;
+        conflict(&k, "s2", "SP")?;
+        conflict(&m, "s3", "15.5")?;
+        conflict(&k, "s3", "SP")?;
         Ok(())
     })
     .await
@@ -262,28 +284,54 @@ async fn an_archive_move_that_merges_two_works_keeps_the_subtitle_sources_mappin
         library.follow_move(&collect, &archive, "A").await.unwrap(),
         Followed::Merged
     );
-    let rows: Vec<(String, String, String, Option<i64>)> = db
+    type Row = (String, String, String, Option<i64>, Option<i64>);
+    let rows: Vec<Row> = db
         .run::<_, DbError, _>(|c| {
             let mut stmt = c.prepare(
-                "SELECT work_id, source_id, kind, episode_offset
+                "SELECT work_id, source_id, kind, episode_offset, retired_offset
                    FROM subtitle_episode_mappings ORDER BY source_id",
             )?;
-            let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+            let rows = stmt.query_map([], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            })?;
             Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
         })
         .await
         .unwrap();
-    let k = |source: &str, kind: &str, offset: Option<i64>| {
-        (kept.clone(), source.to_owned(), kind.to_owned(), offset)
+    let k = |source: &str, kind: &str, offset: Option<i64>, retired: Option<i64>| {
+        (
+            kept.clone(),
+            source.to_owned(),
+            kind.to_owned(),
+            offset,
+            retired,
+        )
     };
+    // The offset an undecided mapping keeps goes with it.
     assert_eq!(
         rows,
         [
-            k("s1", "auto", Some(0)),
-            k("s2", "user", Some(-12)),
-            k("s3", "undecided", None)
+            k("s1", "undecided", None, Some(2)),
+            k("s2", "user", Some(-12), None),
+            k("s3", "undecided", None, None)
         ]
     );
+    // The conflicts follow the mapping that is kept: the moved work's for s1
+    // (nothing to replace) and s2 (the user's mapping won), the kept work's
+    // for s3 (its own mapping stayed).
+    let conflicts: Vec<(String, String, String)> = db
+        .run::<_, DbError, _>(|c| {
+            let mut stmt = c.prepare(
+                "SELECT work_id, source_id, episode
+                   FROM subtitle_mapping_conflicts ORDER BY source_id, episode",
+            )?;
+            let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+        .await
+        .unwrap();
+    let c = |source: &str, episode: &str| (kept.clone(), source.to_owned(), episode.to_owned());
+    assert_eq!(conflicts, [c("s1", "13.5"), c("s2", "14.5"), c("s3", "SP")]);
 }
 
 /// A rule's season, its note and its version.

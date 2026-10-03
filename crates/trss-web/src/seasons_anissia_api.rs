@@ -67,7 +67,7 @@
 //!       "job": { "id": "1f0c…", "state": "done", "wait": null } } ],
 //!   "mappings": [
 //!     { "source_id": "6f0c…", "kind": "auto", "offset": -12,
-//!       "evidence": "규칙의 회차 변환(13→S02E01)과 AniList 회차 수(12)가 맞아요",
+//!       "evidence": "13화가 1화 방영 뒤에 올라왔고 앞 시즌 회차 수(12)만큼 이어 셌어요",
 //!       "decided_at": 1790780400000 } ] }
 //! ```
 //!

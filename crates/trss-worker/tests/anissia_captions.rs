@@ -295,10 +295,18 @@ impl Env {
         self.h
             .db
             .run::<_, trss_core::DbError, _>(move |c| {
+                // Episode 1 aired an hour before the creator's line (`updDt`
+                // 2026-10-02T11:00:00), then one a week.
+                let first =
+                    trss_anissia::observe::updated_at("2026-10-02T11:00:00").unwrap() / 1000 - 3600;
+                let airing = (1..=12)
+                    .map(|k| format!(r#"{{"episode":{k},"at":{}}}"#, first + (k - 1) * 7 * 86_400))
+                    .collect::<Vec<_>>()
+                    .join(",");
                 c.execute(
-                    "INSERT INTO anilist_entries (id, format, episodes, fetched_at)
-                     VALUES (1, 'TV', 12, 1)",
-                    [],
+                    "INSERT INTO anilist_entries (id, format, episodes, airing, fetched_at)
+                     VALUES (1, 'TV', 12, ?1, 1)",
+                    [format!("[{airing}]")],
                 )?;
                 c.execute(
                     "INSERT INTO season_entries (work_id, season, position, anilist_id)

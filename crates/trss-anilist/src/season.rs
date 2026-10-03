@@ -13,8 +13,15 @@ use trss_core::Millis;
 
 use crate::{Airing, Anilist, AnilistError, Entry, FuzzyDate, Sequel};
 
-/// The most airing schedule entries asked for (AniList's page size caps it).
-const SCHEDULE_PAGE: u32 = 50;
+/// The airing schedule entries asked for at once. AniList answers at most 25
+/// per page whatever `perPage` says (observed 2026-10-03), so a longer
+/// schedule is read page by page.
+const SCHEDULE_PAGE: u32 = 25;
+
+/// The most pages of an airing schedule read: 500 airings, far more than the
+/// season of any entry the library is about, and a bound on the requests one
+/// entry may cost.
+const SCHEDULE_PAGES: u32 = 20;
 
 fn entry_query() -> String {
     format!(
@@ -24,7 +31,17 @@ fn entry_query() -> String {
            studios(isMain: true) {{ nodes {{ name isAnimationStudio }} }} \
            relations {{ edges {{ relationType node {{ id type format status \
              title {{ romaji english native }} startDate {{ year month day }} }} }} }} \
-           airingSchedule(perPage: {SCHEDULE_PAGE}) {{ nodes {{ episode airingAt }} }} }} }}"
+           airingSchedule(perPage: {SCHEDULE_PAGE}) {{ pageInfo {{ hasNextPage }} nodes {{ episode airingAt }} }} }} }}"
+    )
+}
+
+/// The airing schedule's `page` (from 2 on) of the entry, with the same nodes
+/// the entry query asks for.
+fn schedule_query() -> String {
+    format!(
+        "query ($id: Int, $page: Int) {{ Media(id: $id, type: ANIME) {{ id \
+           airingSchedule(perPage: {SCHEDULE_PAGE}, page: $page) {{ \
+             pageInfo {{ hasNextPage }} nodes {{ episode airingAt }} }} }} }}"
     )
 }
 
@@ -86,7 +103,15 @@ struct AiringNode {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PageInfo {
+    has_next_page: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct AiringSchedule {
+    page_info: Option<PageInfo>,
     nodes: Option<Vec<Option<AiringNode>>>,
 }
 
@@ -247,7 +272,10 @@ fn entry_of(media: Media, fetched_at: Millis) -> Entry {
 }
 
 /// The anime entry `id` as AniList describes it now, received at `now`;
-/// `None` when AniList has none. `max_wait` is as in [`Anilist::media`].
+/// `None` when AniList has none. `max_wait` is as in [`Anilist::media`]. The
+/// airing schedule is read to its end (up to [`SCHEDULE_PAGES`] pages, each a
+/// request of its own through the same pace); a page that cannot be read fails
+/// the whole entry, so a schedule cut short is never stored as the entry's.
 pub async fn fetch_entry(
     anilist: &Anilist,
     id: i64,
@@ -257,10 +285,48 @@ pub async fn fetch_entry(
     let data: Option<Data> = anilist
         .post(entry_query(), json!({ "id": id }), max_wait)
         .await?;
-    Ok(data
-        .and_then(|d| d.media)
-        .filter(|m| m.id == id)
-        .map(|m| entry_of(m, now)))
+    let Some(mut media) = data.and_then(|d| d.media).filter(|m| m.id == id) else {
+        return Ok(None);
+    };
+    let mut more = media
+        .airing_schedule
+        .as_ref()
+        .and_then(|s| s.page_info.as_ref())
+        .and_then(|p| p.has_next_page)
+        == Some(true);
+    for page in 2..=SCHEDULE_PAGES {
+        if !more {
+            break;
+        }
+        let data: Option<Data> = anilist
+            .post(
+                schedule_query(),
+                json!({ "id": id, "page": page }),
+                max_wait,
+            )
+            .await?;
+        let schedule = data
+            .and_then(|d| d.media)
+            .filter(|m| m.id == id)
+            .and_then(|m| m.airing_schedule)
+            .ok_or_else(|| {
+                AnilistError::Invalid(format!("airing schedule page {page} of {id} is missing"))
+            })?;
+        let nodes = schedule.nodes.unwrap_or_default();
+        // AniList's totals are not reliable (observed 2026-10-03), so the walk
+        // ends at the first page that says it is the last or has nothing.
+        more = schedule.page_info.and_then(|p| p.has_next_page) == Some(true) && !nodes.is_empty();
+        media
+            .airing_schedule
+            .get_or_insert(AiringSchedule {
+                page_info: None,
+                nodes: None,
+            })
+            .nodes
+            .get_or_insert_with(Vec::new)
+            .extend(nodes);
+    }
+    Ok(Some(entry_of(media, now)))
 }
 
 #[cfg(test)]
@@ -389,5 +455,57 @@ mod tests {
         assert_eq!(entry.start, FuzzyDate::default());
         assert!(entry.studios.is_empty() && entry.genres.is_empty() && entry.airing.is_empty());
         assert_eq!(entry.display_title(), "");
+    }
+
+    /// An entry the fake serves with `airings` scheduled episodes (episode `i`
+    /// at `i * 1000` seconds), and a client for it.
+    async fn paged(airings: u32) -> (crate::fake::Fake, Anilist) {
+        let fake = crate::fake::Fake::start().await;
+        let nodes: Vec<_> = (1..=airings)
+            .map(|i| json!({ "episode": i, "airingAt": i64::from(i) * 1000 }))
+            .collect();
+        let mut entry = fake.entry(21, "Long", &[]);
+        entry["airingSchedule"] = json!({ "nodes": nodes });
+        fake.state.lock().unwrap().media.insert(21, entry);
+        let anilist = Anilist::new(
+            fake.config(),
+            trss_core::Db::open(":memory:").await.unwrap(),
+            std::sync::Arc::new(|| 1_000_000),
+        )
+        .with_spacing(Duration::ZERO);
+        (fake, anilist)
+    }
+
+    #[tokio::test]
+    async fn a_schedule_longer_than_a_page_is_read_to_its_end() {
+        for (airings, requests) in [(0u32, 1usize), (24, 1), (25, 1), (26, 2), (60, 3), (75, 3)] {
+            let (fake, anilist) = paged(airings).await;
+            let entry = fetch_entry(&anilist, 21, None, 5).await.unwrap().unwrap();
+            assert_eq!(entry.airing.len(), airings as usize, "{airings} airings");
+            assert_eq!(
+                entry.airing.last().map(|a| (a.episode, a.at)),
+                (airings > 0).then(|| (airings, i64::from(airings) * 1000))
+            );
+            assert_eq!(fake.api_requests().len(), requests, "{airings} airings");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_pages_of_a_schedule_are_asked_by_number_and_stop_at_the_cap() {
+        let (fake, anilist) = paged(SCHEDULE_PAGE * (SCHEDULE_PAGES + 4)).await;
+        let entry = fetch_entry(&anilist, 21, None, 5).await.unwrap().unwrap();
+        assert_eq!(
+            entry.airing.len(),
+            (SCHEDULE_PAGE * SCHEDULE_PAGES) as usize
+        );
+        let asked: Vec<_> = fake
+            .api_requests()
+            .iter()
+            .map(|(_, v)| v["page"].as_u64())
+            .collect();
+        assert_eq!(asked.len(), SCHEDULE_PAGES as usize);
+        assert_eq!(asked[0], None, "the entry query is the first page");
+        assert_eq!(asked[1], Some(2));
+        assert_eq!(asked.last(), Some(&Some(u64::from(SCHEDULE_PAGES))));
     }
 }

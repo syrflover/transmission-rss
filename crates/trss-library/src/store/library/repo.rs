@@ -824,16 +824,49 @@ fn merge_work(tx: &Transaction<'_>, from: &str, into: &str) -> rusqlite::Result<
 /// (`subtitle_episode_mappings`, which the subscribed creator's receipts
 /// keep) to work `into`. Where both have one for a season and source, the kept
 /// work's stays, unless the moved one is the user's.
+///
+/// The conflicts of a source's episodes (`subtitle_mapping_conflicts`) belong
+/// to the mapping they were found against, so they go where that mapping
+/// does: the moved work's replace the kept work's for each (season, source)
+/// whose mapping `into` now has from `from`, and the kept work's stay for the
+/// others. The follower rewrites them at its next look anyway.
 fn merge_subtitle_mappings(tx: &Transaction<'_>, from: &str, into: &str) -> rusqlite::Result<()> {
     tx.execute(
         "INSERT INTO subtitle_episode_mappings
-             (work_id, season, source_id, kind, episode_offset, evidence, decided_at)
-         SELECT ?2, season, source_id, kind, episode_offset, evidence, decided_at
+             (work_id, season, source_id, kind, episode_offset, evidence, decided_at,
+              retired_offset)
+         SELECT ?2, season, source_id, kind, episode_offset, evidence, decided_at, retired_offset
            FROM subtitle_episode_mappings WHERE work_id = ?1
          ON CONFLICT (work_id, season, source_id) DO UPDATE SET
              kind = excluded.kind, episode_offset = excluded.episode_offset,
-             evidence = excluded.evidence, decided_at = excluded.decided_at
+             evidence = excluded.evidence, decided_at = excluded.decided_at,
+             retired_offset = excluded.retired_offset
          WHERE excluded.kind = 'user'",
+        params![from, into],
+    )?;
+    // The (season, source) pairs whose mapping `into` has from `from` now.
+    let moved = "SELECT m.season, m.source_id
+                   FROM subtitle_episode_mappings m
+                   JOIN subtitle_episode_mappings f
+                     ON f.work_id = ?1 AND f.season = m.season AND f.source_id = m.source_id
+                  WHERE m.work_id = ?2 AND m.kind = f.kind
+                    AND m.episode_offset IS f.episode_offset AND m.evidence = f.evidence
+                    AND m.decided_at = f.decided_at";
+    tx.execute(
+        &format!(
+            "DELETE FROM subtitle_mapping_conflicts
+              WHERE work_id = ?2 AND (season, source_id) IN ({moved})"
+        ),
+        params![from, into],
+    )?;
+    tx.execute(
+        &format!(
+            "INSERT OR IGNORE INTO subtitle_mapping_conflicts
+                 (work_id, season, source_id, episode, reason, found_at)
+             SELECT ?2, season, source_id, episode, reason, found_at
+               FROM subtitle_mapping_conflicts
+              WHERE work_id = ?1 AND (season, source_id) IN ({moved})"
+        ),
         params![from, into],
     )?;
     Ok(())

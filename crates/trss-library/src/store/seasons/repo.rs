@@ -548,8 +548,12 @@ pub(super) fn search_later(
 
 pub(super) fn next_refresh(conn: &Connection, now: Millis) -> rusqlite::Result<Option<i64>> {
     conn.query_row(
+        // A finished entry is read again only while its stored schedule is
+        // the 25 airings an earlier build kept of a longer season (AniList
+        // gives 25 a page; the schedule is now read in full).
         "SELECT e.id FROM anilist_entries e
-          WHERE e.status IN ('RELEASING', 'NOT_YET_RELEASED')
+          WHERE (e.status IN ('RELEASING', 'NOT_YET_RELEASED')
+                 OR (json_array_length(e.airing) = 25 AND e.episodes > 25))
             AND e.fetched_at <= ?1 - ?2
             AND (e.refresh_not_before IS NULL OR e.refresh_not_before <= ?1)
             AND EXISTS (SELECT 1 FROM season_entries l

@@ -130,6 +130,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("../migrations/library/subtitle_creator.sql")),
     // 41: the daily recheck of a received episode's files, and the revision that equals what was received
     Migration::Sql(include_str!("../migrations/jobs/recheck.sql")),
+    // 42: the offset an auto mapping was taken back from; the episodes that do not fit a source's mapping
+    Migration::Sql(include_str!("../migrations/jobs/airtime.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -823,28 +825,34 @@ mod tests {
                     // An observation that is not there.
                     write("UPDATE subtitle_jobs SET revision_of = 99 WHERE id = 'j1'"),
                     write(
-                        "INSERT INTO subtitle_episode_mappings VALUES
+                        "INSERT INTO subtitle_episode_mappings
+                         (work_id, season, source_id, kind, episode_offset, evidence, decided_at) VALUES
                          ('w1', 1, 's1', 'guess', 0, '근거', 1)",
                     ),
                     // Undecided with an offset, decided without one.
                     write(
-                        "INSERT INTO subtitle_episode_mappings VALUES
+                        "INSERT INTO subtitle_episode_mappings
+                         (work_id, season, source_id, kind, episode_offset, evidence, decided_at) VALUES
                          ('w1', 1, 's1', 'undecided', 0, '근거', 1)",
                     ),
                     write(
-                        "INSERT INTO subtitle_episode_mappings VALUES
+                        "INSERT INTO subtitle_episode_mappings
+                         (work_id, season, source_id, kind, episode_offset, evidence, decided_at) VALUES
                          ('w1', 1, 's1', 'auto', NULL, '근거', 1)",
                     ),
                     write(
-                        "INSERT INTO subtitle_episode_mappings VALUES
+                        "INSERT INTO subtitle_episode_mappings
+                         (work_id, season, source_id, kind, episode_offset, evidence, decided_at) VALUES
                          ('w1', 1, 'nope', 'auto', 0, '근거', 1)",
                     ),
                 ];
                 c.execute_batch(
                     "UPDATE subtitle_jobs SET revision_of = 1 WHERE id = 'j1';
-                     INSERT INTO subtitle_episode_mappings VALUES
+                     INSERT INTO subtitle_episode_mappings
+                         (work_id, season, source_id, kind, episode_offset, evidence, decided_at) VALUES
                          ('w1', 1, 's1', 'auto', -12, '근거', 1);
-                     INSERT INTO subtitle_episode_mappings VALUES
+                     INSERT INTO subtitle_episode_mappings
+                         (work_id, season, source_id, kind, episode_offset, evidence, decided_at) VALUES
                          ('w1', 2, 's1', 'undecided', NULL, '이유', 1);",
                 )?;
                 // The mappings go with their work.
@@ -1126,6 +1134,94 @@ mod tests {
                 c.execute("DELETE FROM subtitle_job_items WHERE id = 1", [])?;
                 let cascaded =
                     c.query_row("SELECT count(*) FROM subtitle_item_rechecks", [], |r| {
+                        r.get(0)
+                    })?;
+                Ok((kept, refused, cascaded))
+            })
+            .await
+            .unwrap();
+        assert_eq!(kept, (1, None, 0));
+        assert_eq!(refused, [true; 4]);
+        assert_eq!(cascaded, 0);
+    }
+
+    #[tokio::test]
+    async fn a_database_from_before_the_air_time_mapping_keeps_its_mappings_and_starts_with_no_conflict(
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        {
+            // A database as the build with 41 migrations left it: a work whose
+            // source has an automatic mapping.
+            let conn = database_at(&path, 41);
+            conn.execute_batch(
+                "INSERT INTO watch_folders (id, path, created_at) VALUES ('f1', '/media', 1);
+                 INSERT INTO works (id, watch_folder_id, dir_name) VALUES ('w1', 'f1', 'Show');
+                 INSERT INTO subtitle_sources (id, anime_no, creator_name, created_at)
+                     VALUES ('s1', 3441, '에루샤', 5);
+                 INSERT INTO subtitle_episode_mappings
+                     (work_id, season, source_id, kind, episode_offset, evidence, decided_at)
+                     VALUES ('w1', 1, 's1', 'auto', 0, '근거', 7);",
+            )
+            .unwrap();
+        }
+
+        let db = Db::open(&path).await.unwrap();
+
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+        let (kept, refused, cascaded): ((i64, Option<i64>, i64), [bool; 4], i64) = db
+            .run::<_, DbError, _>(|c| {
+                let kept = c.query_row(
+                    "SELECT (SELECT count(*) FROM subtitle_episode_mappings),
+                            (SELECT retired_offset FROM subtitle_episode_mappings),
+                            (SELECT count(*) FROM subtitle_mapping_conflicts)",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )?;
+                let write = |sql: &str| c.execute(sql, []).is_err();
+                let refused = [
+                    // A work that is not there.
+                    write(
+                        "INSERT INTO subtitle_mapping_conflicts
+                             (work_id, season, source_id, episode, reason, found_at)
+                             VALUES ('nope', 1, 's1', '13.5', '소수', 1)",
+                    ),
+                    // A source that is not there.
+                    write(
+                        "INSERT INTO subtitle_mapping_conflicts
+                             (work_id, season, source_id, episode, reason, found_at)
+                             VALUES ('w1', 1, 'nope', '13.5', '소수', 1)",
+                    ),
+                    // No reason.
+                    write(
+                        "INSERT INTO subtitle_mapping_conflicts
+                             (work_id, season, source_id, episode, reason, found_at)
+                             VALUES ('w1', 1, 's1', '13.5', '', 1)",
+                    ),
+                    // One row per episode of a source.
+                    {
+                        c.execute_batch(
+                            "INSERT INTO subtitle_mapping_conflicts
+                                 (work_id, season, source_id, episode, reason, found_at)
+                                 VALUES ('w1', 1, 's1', '13.5', '소수', 1)",
+                        )?;
+                        write(
+                            "INSERT INTO subtitle_mapping_conflicts
+                                 (work_id, season, source_id, episode, reason, found_at)
+                                 VALUES ('w1', 1, 's1', '13.5', '또', 2)",
+                        )
+                    },
+                ];
+                // The offset an auto mapping was taken back from is kept with the row.
+                c.execute(
+                    "UPDATE subtitle_episode_mappings
+                        SET kind = 'undecided', episode_offset = NULL, retired_offset = 0",
+                    [],
+                )?;
+                // The conflicts go with their work.
+                c.execute("DELETE FROM works WHERE id = 'w1'", [])?;
+                let cascaded =
+                    c.query_row("SELECT count(*) FROM subtitle_mapping_conflicts", [], |r| {
                         r.get(0)
                     })?;
                 Ok((kept, refused, cascaded))

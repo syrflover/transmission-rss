@@ -627,10 +627,23 @@ async fn connecting_a_followed_subscription_to_its_season_makes_the_creators_job
         .h
         .db
         .run::<_, trss_core::DbError, _>(move |c| {
+            // Episode 2 aired an hour before the creator's line (`updDt`
+            // 2026-10-02T11:00:00); one a week.
+            let second =
+                trss_anissia::observe::updated_at("2026-10-02T11:00:00").unwrap() / 1000 - 3600;
+            let airing = (1..=12)
+                .map(|k| {
+                    format!(
+                        r#"{{"episode":{k},"at":{}}}"#,
+                        second + (k - 2) * 7 * 86_400
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(",");
             c.execute(
-                "INSERT INTO anilist_entries (id, format, episodes, fetched_at)
-                 VALUES (1, 'TV', 12, 1)",
-                [],
+                "INSERT INTO anilist_entries (id, format, episodes, airing, fetched_at)
+                 VALUES (1, 'TV', 12, ?1, 1)",
+                [format!("[{airing}]")],
             )?;
             c.execute(
                 "INSERT OR IGNORE INTO season_info (work_id, season) VALUES (?1, 1)",
@@ -641,14 +654,15 @@ async fn connecting_a_followed_subscription_to_its_season_makes_the_creators_job
                  VALUES (?1, 1, 0, 1)",
                 [&work],
             )?;
-            c.execute_batch(
+            c.execute_batch(&format!(
                 "INSERT INTO subtitle_sources (id, anime_no, creator_name, created_at)
                      VALUES ('src-a', 7, '에루샤', 1);
                  INSERT INTO caption_observations
-                     (source_id, post_url, episode, updated, first_seen_at)
+                     (source_id, post_url, episode, updated, updated_at, first_seen_at)
                  VALUES ('src-a', 'https://fake.trss.invalid/ok/ep2', '2',
-                         '2026-10-02T11:00:00', 2);",
-            )?;
+                         '2026-10-02T11:00:00', {}, 2);",
+                (second + 3600) * 1000
+            ))?;
             Ok(())
         })
         .await

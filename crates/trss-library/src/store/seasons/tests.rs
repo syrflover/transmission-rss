@@ -495,6 +495,44 @@ async fn only_linked_entries_that_are_not_finished_are_due_a_day_after_they_were
 }
 
 #[tokio::test]
+async fn a_finished_entry_whose_schedule_was_cut_at_25_is_read_again_once() {
+    const DAY: i64 = 24 * 60 * 60 * 1000;
+    let env = Env::new(&[("Show", &[1, 2])]).await;
+    let id = env.id("Show").await;
+    let airings = |n: u32| {
+        (1..=n)
+            .map(|episode| Airing {
+                episode,
+                at: i64::from(episode),
+            })
+            .collect::<Vec<_>>()
+    };
+    let long = |airing: Vec<Airing>, fetched_at: i64| Entry {
+        episodes: Some(50),
+        airing,
+        ..entry(1, "FINISHED", fetched_at)
+    };
+    // As an earlier build stored it: the first page of a 50-episode season.
+    env.store.put_entry(long(airings(25), 0)).await.unwrap();
+    // A finished 25-episode season with its whole schedule is not.
+    env.store
+        .put_entry(Entry {
+            episodes: Some(25),
+            airing: airings(25),
+            ..entry(2, "FINISHED", 0)
+        })
+        .await
+        .unwrap();
+    env.store.set_links(&id, 1, 1, vec![1]).await.unwrap();
+    env.store.set_links(&id, 2, 0, vec![2]).await.unwrap();
+
+    assert_eq!(env.store.next_refresh(DAY).await.unwrap(), Some(1));
+    // Read in full, it is finished and due no more.
+    env.store.put_entry(long(airings(50), DAY)).await.unwrap();
+    assert_eq!(env.store.next_refresh(10 * DAY).await.unwrap(), None);
+}
+
+#[tokio::test]
 async fn an_entry_round_trips_and_an_unregistered_work_keeps_its_links() {
     let env = Env::new(&[("Show", &[1])]).await;
     let id = env.id("Show").await;

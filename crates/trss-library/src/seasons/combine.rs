@@ -11,6 +11,8 @@
 //!   per-episode schedule. An entry's episodes follow the earlier entries' in
 //!   the season (a Part 2 of 13 episodes after a Part 1 of 12 starts at 13),
 //!   which is known only while every earlier entry knows its episode count.
+//!   [`schedule_times`] reads the same schedule from entries of any status,
+//!   for the episode mapping of a subtitle source.
 
 use std::collections::BTreeMap;
 
@@ -67,12 +69,25 @@ pub fn combine(entries: &[Entry]) -> Option<Combined> {
 }
 
 /// The scheduled airing time (Unix milliseconds) of each episode of a season
-/// whose schedule is known, by the episode's number in the season.
+/// whose schedule is known, by the episode's number in the season, from the
+/// entries that are releasing.
 pub fn air_times(entries: &[Entry]) -> BTreeMap<u32, i64> {
+    times(entries, true)
+}
+
+/// [`air_times`] from every entry that has a schedule, whatever its status: a
+/// finished entry's airings say when its episodes aired, which is what the
+/// episode mapping of a subtitle source is decided from. An entry with no
+/// schedule nodes adds no times.
+pub fn schedule_times(entries: &[Entry]) -> BTreeMap<u32, i64> {
+    times(entries, false)
+}
+
+fn times(entries: &[Entry], releasing_only: bool) -> BTreeMap<u32, i64> {
     let mut times = BTreeMap::new();
     let mut offset = 0u32;
     for entry in entries {
-        if entry.is_releasing() {
+        if !releasing_only || entry.is_releasing() {
             for airing in &entry.airing {
                 if let Some(episode) = offset.checked_add(airing.episode) {
                     times.insert(episode, airing.at.saturating_mul(1000));
@@ -241,6 +256,56 @@ mod tests {
         };
         assert!(air_times(&[unknown, releasing]).is_empty());
         assert!(air_times(&[]).is_empty());
+    }
+
+    #[test]
+    fn schedule_times_come_from_an_entry_of_any_status() {
+        let airing = |episodes: &[(u32, i64)]| -> Vec<Airing> {
+            episodes
+                .iter()
+                .map(|(episode, at)| Airing {
+                    episode: *episode,
+                    at: *at,
+                })
+                .collect()
+        };
+        let finished = Entry {
+            episodes: Some(12),
+            airing: airing(&[(1, 10), (12, 120)]),
+            ..entry(1)
+        };
+        let part2 = Entry {
+            episodes: Some(12),
+            airing: airing(&[(1, 130)]),
+            ..entry(2)
+        };
+        // Both parts' schedules count, the second after the first's 12.
+        assert_eq!(
+            schedule_times(&[finished.clone(), part2.clone()])
+                .into_iter()
+                .collect::<Vec<_>>(),
+            [(1, 10_000), (12, 120_000), (13, 130_000)]
+        );
+        // The screen's reading is unchanged: neither part is releasing.
+        assert!(air_times(&[finished.clone(), part2.clone()]).is_empty());
+        // An entry without a schedule adds nothing but still has its episodes.
+        let bare = Entry {
+            airing: Vec::new(),
+            ..finished.clone()
+        };
+        assert_eq!(
+            schedule_times(&[bare, part2.clone()])
+                .keys()
+                .copied()
+                .collect::<Vec<_>>(),
+            [13]
+        );
+        // A count that is not known leaves the later entries without times.
+        let unknown = Entry {
+            episodes: None,
+            ..finished
+        };
+        assert_eq!(schedule_times(&[unknown, part2]).len(), 2);
     }
 
     #[test]

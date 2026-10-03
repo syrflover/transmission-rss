@@ -20,6 +20,9 @@ use trss_jobs::{area::ReceiveArea, Runner};
 use trss_subtitles::{fake::FakeSource, Sources};
 
 const ANIME: i64 = 3424;
+/// Episode 1 of the season airs here (Unix seconds); one episode a week.
+const AIRED: i64 = 1_790_000_000;
+const WEEK: i64 = 7 * 24 * 3600;
 
 struct App {
     state: AppState,
@@ -43,15 +46,23 @@ impl App {
     /// subscription that gets subtitles with no creator chosen yet.
     async fn new() -> App {
         let state = AppState::new(Db::open_blocking(":memory:").unwrap());
+        // The season's 12 episodes, aired weekly: what the creators' lines are
+        // read against.
+        let airing = (1..=12)
+            .map(|k| format!(r#"{{"episode":{k},"at":{}}}"#, AIRED + (k - 1) * WEEK))
+            .collect::<Vec<_>>()
+            .join(",");
         sql(
             &state,
-            "INSERT INTO watch_folders (id, path, created_at) VALUES ('f1', '/media', 1);
-             INSERT INTO works (id, watch_folder_id, dir_name) VALUES ('w1', 'f1', 'Show');
-             INSERT INTO seasons (work_id, number) VALUES ('w1', 1);
-             INSERT INTO anilist_entries (id, format, episodes, fetched_at) VALUES (1, 'TV', 12, 1);
-             INSERT INTO season_entries (work_id, season, position, anilist_id)
-                 VALUES ('w1', 1, 0, 1);"
-                .into(),
+            format!(
+                "INSERT INTO watch_folders (id, path, created_at) VALUES ('f1', '/media', 1);
+                 INSERT INTO works (id, watch_folder_id, dir_name) VALUES ('w1', 'f1', 'Show');
+                 INSERT INTO seasons (work_id, number) VALUES ('w1', 1);
+                 INSERT INTO anilist_entries (id, format, episodes, airing, fetched_at)
+                     VALUES (1, 'TV', 12, '[{airing}]', 1);
+                 INSERT INTO season_entries (work_id, season, position, anilist_id)
+                     VALUES ('w1', 1, 0, 1);"
+            ),
         )
         .await;
         let channel = state
@@ -108,17 +119,21 @@ impl App {
     }
 
     /// Lines of the anime as the reading stored them: `(source, creator,
-    /// episode, path, updated)`.
+    /// episode, path, updated)`. Anissia wrote each an hour after its episode
+    /// aired (`updated` is only the text).
     async fn observe(&self, lines: &[(&str, &str, &str, &str, &str)]) {
         let mut batch = String::new();
         for (source, creator, episode, path, updated) in lines {
+            let at = episode.parse::<i64>().map_or("NULL".to_owned(), |n| {
+                ((AIRED + (n - 1) * WEEK + 3600) * 1000).to_string()
+            });
             batch.push_str(&format!(
                 "INSERT OR IGNORE INTO subtitle_sources (id, anime_no, creator_name, created_at)
                      VALUES ('{source}', {ANIME}, '{creator}', 1);
                  INSERT INTO caption_observations (source_id, post_url, episode, updated,
-                     first_seen_at)
+                     updated_at, first_seen_at)
                      VALUES ('{source}', 'https://fake.trss.invalid{path}', '{episode}',
-                             '{updated}', 7);"
+                             '{updated}', {at}, 7);"
             ));
         }
         sql(&self.state, batch).await;
@@ -270,7 +285,7 @@ async fn choosing_a_candidates_creator_receives_its_episodes_and_a_check_is_a_to
     let s1 = mappings.iter().find(|m| m["source_id"] == "s1").unwrap();
     assert_eq!(s1["kind"], "auto");
     assert_eq!(s1["offset"], 0);
-    assert!(s1["evidence"].as_str().unwrap().contains("1–2화"), "{s1}");
+    assert!(s1["evidence"].as_str().unwrap().contains("1화·2화"), "{s1}");
 }
 
 #[tokio::test]

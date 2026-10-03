@@ -24,6 +24,9 @@ uuid.workspace = true
 trss-core = { workspace = true, features = ["test-support"] }
 # The schedule snapshot a subscription is made with (`tests/follow.rs`).
 trss-anissia.workspace = true
+# The real AniList and Anissia of the ignored sample (`tests/airtime_sample.rs`).
+trss-anilist.workspace = true
+reqwest.workspace = true
 trss-subtitles = { workspace = true, features = ["test-support"] }
 serde_json.workspace = true
 tempfile.workspace = true

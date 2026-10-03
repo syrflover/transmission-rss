@@ -124,6 +124,21 @@ impl World {
             .await
             .unwrap();
         let rule = channels.get_rule(&rule.id).await.unwrap().unwrap();
+        // These tests are about what is read again once an episode is received,
+        // not about the mapping the app decides: the user has mapped the
+        // creator's episodes as they are, which the app never changes.
+        db.run::<_, DbError, _>(|c| {
+            c.execute_batch(
+                "INSERT INTO subtitle_sources (id, anime_no, creator_name, created_at)
+                     VALUES ('src-에루샤', 3441, '에루샤', 1);
+                 INSERT INTO subtitle_episode_mappings
+                     (work_id, season, source_id, kind, episode_offset, evidence, decided_at)
+                     VALUES ('w1', 1, 'src-에루샤', 'user', 0, '사용자가 정했어요', 1);",
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
 
         let sources = Sources::none()
             .with_blogger(server.blogger())

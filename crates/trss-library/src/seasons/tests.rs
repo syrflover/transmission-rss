@@ -474,6 +474,32 @@ async fn entries_that_are_not_finished_are_received_again_a_day_later_and_finish
 }
 
 #[tokio::test]
+async fn an_entry_with_a_long_schedule_is_stored_with_every_airing() {
+    let env = Env::new(&[("Show", &[1])]).await;
+    let show = env.id("Show").await;
+    env.drain().await;
+    // AniList answers 25 airings to a page; the entry has 60, and is finished.
+    let mut long = media(1, "Long", "FINISHED", Some(60));
+    long["airingSchedule"] = json!({
+        "nodes": (1..=60)
+            .map(|i| json!({ "episode": i, "airingAt": 1_000 * i }))
+            .collect::<Vec<_>>()
+    });
+    env.answer(long);
+    let v = env.seasons.store.link(&show, 1).await.unwrap().version;
+    env.seasons.set_links(&show, 1, v, vec![1]).await.unwrap();
+
+    let entry = env.seasons.store.entry(1).await.unwrap().unwrap();
+    assert_eq!(entry.airing.len(), 60);
+    assert_eq!(entry.airing[59].episode, 60);
+    assert_eq!(entry.airing[59].at, 60_000);
+    // The entry, then pages 2 and 3.
+    let requests = env.fake.api_requests();
+    let pages: Vec<Option<u64>> = requests.iter().map(|(_, v)| v["page"].as_u64()).collect();
+    assert_eq!(&pages[pages.len() - 3..], [None, Some(2), Some(3)]);
+}
+
+#[tokio::test]
 async fn the_user_can_receive_a_finished_entry_again() {
     let env = Env::new(&[("Show", &[1])]).await;
     let id = env.id("Show").await;

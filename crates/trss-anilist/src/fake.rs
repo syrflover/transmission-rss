@@ -20,6 +20,9 @@ use serde_json::{json, Value};
 
 use super::AnilistConfig;
 
+/// The most airing schedule nodes the fake answers at once, as AniList does.
+const SCHEDULE_PAGE: usize = 25;
+
 #[derive(Default)]
 pub struct FakeState {
     /// Pages of entries (as AniList's JSON) by search text.
@@ -182,7 +185,21 @@ async fn graphql(State(fake): State<Fake>, body: Bytes) -> Response {
     }
     let id = variables["id"].as_i64().unwrap_or(0);
     match state.media.get(&id) {
-        Some(entry) => answer(StatusCode::OK, json!({ "data": { "Media": entry } })),
+        Some(entry) => {
+            let mut entry = entry.clone();
+            // Like AniList, an entry's schedule comes at most 25 nodes to a
+            // page, the `page` variable choosing which, with `hasNextPage`.
+            if let Some(nodes) = entry["airingSchedule"]["nodes"].as_array().cloned() {
+                let page = variables["page"].as_u64().unwrap_or(1).max(1) as usize;
+                let from = (page - 1) * SCHEDULE_PAGE;
+                let nodes: Vec<Value> = nodes.into_iter().skip(from).collect();
+                entry["airingSchedule"] = json!({
+                    "pageInfo": { "hasNextPage": nodes.len() > SCHEDULE_PAGE },
+                    "nodes": nodes.into_iter().take(SCHEDULE_PAGE).collect::<Vec<_>>(),
+                });
+            }
+            answer(StatusCode::OK, json!({ "data": { "Media": entry } }))
+        }
         None => answer(
             StatusCode::NOT_FOUND,
             json!({ "errors": [{ "message": "Not Found.", "status": 404 }], "data": { "Media": null } }),
