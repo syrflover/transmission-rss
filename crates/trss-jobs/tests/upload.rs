@@ -442,8 +442,9 @@ async fn the_sweep_goes_on_in_the_background_and_catches_an_orphan_made_later() 
     let orphan = made(".tmp/4f0c2f6e-1c1f-4a52-9a43-0a7b8f1d2c01");
     let young = made(".tmp/0b9e1b5c-6a7d-4f29-8c3e-5d1f7a2b4c03");
     make_old(&orphan);
+    // The pass reports after it removes the folder, so wait for the report.
     for _ in 0..100 {
-        if !orphan.exists() {
+        if !reports.lock().unwrap().is_empty() {
             break;
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
