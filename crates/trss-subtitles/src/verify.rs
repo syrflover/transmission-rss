@@ -186,7 +186,7 @@ pub fn sniff(head: &[u8]) -> Sniffed {
 
 /// The text's ASCII, a byte per character: UTF-16 by its BOM (anything not
 /// ASCII becomes `0xFF`), a UTF-8 BOM dropped, other bytes as they are.
-fn ascii_view(head: &[u8]) -> Vec<u8> {
+pub(crate) fn ascii_view(head: &[u8]) -> Vec<u8> {
     let utf16 = |rest: &[u8], le: bool| {
         rest.as_chunks::<2>()
             .0
@@ -211,7 +211,7 @@ fn ascii_view(head: &[u8]) -> Vec<u8> {
     }
 }
 
-fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+pub(crate) fn contains(haystack: &[u8], needle: &[u8]) -> bool {
     haystack.windows(needle.len()).any(|w| w == needle)
 }
 
@@ -244,7 +244,20 @@ fn is_timestamp(text: &[u8]) -> bool {
 }
 
 /// Reads every member of the ZIP at `path` to its end, which checks its CRC.
-fn check_zip(path: &Path) -> Result<(), Failure> {
+pub fn check_zip(path: &Path) -> Result<(), Failure> {
+    let mut unlimited = u64::MAX;
+    check_zip_within(path, &mut unlimited)
+}
+
+/// The reason a ZIP is not read because the bytes its upload may have
+/// inflated in all are spent.
+pub const INFLATE_BUDGET_SPENT: &str =
+    "한 번에 올린 압축 파일을 확인할 수 있는 양을 넘어서 이 압축 파일은 받지 않아요";
+
+/// [`check_zip`] that also counts what it inflates against `budget`, which
+/// several ZIPs share: a ZIP that would take more than is left fails with
+/// [`INFLATE_BUDGET_SPENT`], and what was read is taken from the budget.
+pub fn check_zip_within(path: &Path, budget: &mut u64) -> Result<(), Failure> {
     let not_a_file = |reason: String| Failure::new(FailureKind::NotAFile, reason);
     let mut file =
         File::open(path).map_err(|_| not_a_file("받은 파일을 읽지 못했어요".to_owned()))?;
@@ -258,6 +271,9 @@ fn check_zip(path: &Path) -> Result<(), Failure> {
             )))
         }
         Claimed::Within => {}
+    }
+    if *budget == 0 {
+        return Err(not_a_file(INFLATE_BUDGET_SPENT.to_owned()));
     }
     let mut archive = zip::ZipArchive::new(file)
         .map_err(|_| not_a_file("ZIP으로 시작하지만 열 수 없어요".to_owned()))?;
@@ -284,17 +300,23 @@ fn check_zip(path: &Path) -> Result<(), Failure> {
             continue;
         }
         let left = ZIP_MAX_BYTES - total;
-        let read = io::copy(&mut (&mut member).take(left + 1), &mut io::sink()).map_err(|_| {
-            not_a_file(format!(
-                "ZIP 안 {}번째 파일이 손상됐어요 (CRC가 맞지 않거나 끝까지 읽히지 않아요)",
-                i + 1
-            ))
-        })?;
+        // The upload's budget may be the nearer limit.
+        let shared = *budget < left;
+        let allowed = left.min(*budget);
+        let read =
+            io::copy(&mut (&mut member).take(allowed + 1), &mut io::sink()).map_err(|_| {
+                not_a_file(format!(
+                    "ZIP 안 {}번째 파일이 손상됐어요 (CRC가 맞지 않거나 끝까지 읽히지 않아요)",
+                    i + 1
+                ))
+            })?;
+        *budget -= read.min(*budget);
         total += read;
-        if total > ZIP_MAX_BYTES {
-            return Err(not_a_file(
-                "ZIP을 풀면 확인할 수 있는 크기를 넘어요".to_owned(),
-            ));
+        if read > allowed {
+            return Err(not_a_file(match shared {
+                true => INFLATE_BUDGET_SPENT.to_owned(),
+                false => "ZIP을 풀면 확인할 수 있는 크기를 넘어요".to_owned(),
+            }));
         }
     }
     Ok(())

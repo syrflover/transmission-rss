@@ -10,6 +10,7 @@
 //! | `conflict`  | 409    | someone saved first; `current` carries the server's value |
 //! |             |        | when the handler has it, so the screen can compare        |
 //! | `unavailable` | 502  | a service the call needs (Anissia) did not answer; `message` says why |
+//! |             | 503    | this server cannot take the call now (an upload with no turn free); nothing was done |
 //! | `internal`  | 500    | a server-side failure; details go to the log, not here    |
 //!
 //! `message` is shown to the user as is, so it is a full Korean sentence and
@@ -36,6 +37,9 @@ pub enum ApiError {
     /// A service outside the app that the call needs cannot be used now; the
     /// message says why, for the screen to show with a retry.
     Unavailable(String),
+    /// This server cannot take the call now and did nothing; trying again
+    /// later is safe.
+    Busy(String),
     /// The detail is logged, never sent.
     Internal(String),
 }
@@ -82,6 +86,10 @@ impl IntoResponse for ApiError {
             }
             ApiError::Unavailable(message) => (
                 StatusCode::BAD_GATEWAY,
+                json!({ "error": "unavailable", "message": message }),
+            ),
+            ApiError::Busy(message) => (
+                StatusCode::SERVICE_UNAVAILABLE,
                 json!({ "error": "unavailable", "message": message }),
             ),
             ApiError::Internal(detail) => {

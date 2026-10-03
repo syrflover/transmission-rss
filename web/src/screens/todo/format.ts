@@ -1,4 +1,4 @@
-import type { FailureClass, FileFormat, JobRow, JobState, ItemState, Wait } from "./api";
+import type { FailureClass, FileFormat, JobRow, JobState, ItemState, UploadSummary, Wait } from "./api";
 
 /** What a failure class is called (`docs/specs/jobs.md`, 공통 수신 결과와 실패 분류). */
 export const FAILURE_LABEL: Record<FailureClass, string> = {
@@ -17,6 +17,16 @@ export const FORMAT_LABEL: Record<FileFormat, string> = {
   smi: "SMI",
   other: "그 밖의 형식",
 };
+
+/** `자막 2개 · 폰트 1개 · 압축 파일 1개`: what an upload job kept, by kind; `null` when it kept nothing. */
+export function uploadKept(upload: Pick<UploadSummary, "subtitles" | "fonts" | "archives">): string | null {
+  const parts = [
+    upload.subtitles > 0 ? `자막 ${upload.subtitles}개` : null,
+    upload.fonts > 0 ? `폰트 ${upload.fonts}개` : null,
+    upload.archives > 0 ? `압축 파일 ${upload.archives}개` : null,
+  ].filter((part): part is string => part !== null);
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
 
 /** An episode as shown: leading zeros of a whole number go (`01` is `1`); anything else stays as written. */
 function shown(episode: string): string {

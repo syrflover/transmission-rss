@@ -14,6 +14,7 @@ import { ended, shownState } from "./format";
 import { BackIcon } from "./icons";
 import { JobResults } from "./JobResults";
 import { JobSteps } from "./JobSteps";
+import { UploadResults } from "./UploadResults";
 import { KEYS, usePolled } from "./poll";
 import { TargetLine } from "./TargetLine";
 
@@ -83,7 +84,7 @@ function timeSentence(job: JobRow): string {
     case "partial":
       return `${at} 일부 실패`;
     case "done":
-      return `${at} 받음`;
+      return job.origin === "upload" ? `${at} 올림` : `${at} 받음`;
     default:
       return `${at}부터`;
   }
@@ -170,9 +171,15 @@ function Page({ job }: { job: JobDetail }) {
         <JobSteps steps={job.steps} />
       </div>
 
-      <Part title="회차별 결과">
-        <JobResults items={job.items} />
-      </Part>
+      {job.origin === "upload" ? (
+        <Part title="올린 파일">
+          <UploadResults files={job.items.flatMap((item) => item.files)} dropped={job.dropped} />
+        </Part>
+      ) : (
+        <Part title="회차별 결과">
+          <JobResults items={job.items} />
+        </Part>
+      )}
 
       <Part title="경로">
         <dl className="m-0 grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3.5 gap-y-1 text-[13px] max-[720px]:grid-cols-1 max-[720px]:gap-y-0">

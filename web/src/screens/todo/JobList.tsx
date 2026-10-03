@@ -11,7 +11,7 @@ import { coverOf } from "../library/model";
 import { Cover } from "../library/WorkItem";
 import { fetchDoneJobs, jobPath, type DonePage, type JobGroups, type JobRow } from "./api";
 import { CountChip, FailureTag, OriginTags, StateBadge, originSentence } from "./badges";
-import { episodeList, shownState } from "./format";
+import { episodeList, shownState, uploadKept } from "./format";
 import { ChevronIcon } from "./icons";
 import { TargetLine } from "./TargetLine";
 
@@ -30,6 +30,13 @@ function timeLine(job: JobRow): string {
     default:
       return when(job.state_at);
   }
+}
+
+/** An upload job's sentence: what it kept, and that some files were left out. */
+function uploaded(job: JobRow): string {
+  const kept = job.upload !== null ? uploadKept(job.upload) : null;
+  const dropped = job.upload?.dropped ?? 0;
+  return `올린 파일: ${kept ?? "없음"}.${dropped > 0 ? ` 뺀 파일 ${dropped}개의 이름과 이유는 작업 상세에서 볼 수 있어요.` : ""}`;
 }
 
 /** The one sentence of the expanded row: the job's own note, else a plain one for its state. */
@@ -53,7 +60,7 @@ function describe(job: JobRow): string {
     case "partial":
       return "일부 회차는 받았고 일부는 받지 못했어요. 작업 상세에서 회차별 이유를 볼 수 있어요.";
     case "done":
-      return "자막을 모두 받았어요.";
+      return job.origin === "upload" ? uploaded(job) : "자막을 모두 받았어요.";
   }
 }
 
@@ -156,8 +163,17 @@ function JobRowItem({ job }: { job: JobRow }) {
             )}
             {job.source !== null && <Field name="출처">{job.source}</Field>}
             {episodes.length > 0 && <Field name="회차">{episodeList(episodes)}</Field>}
-            <Field name="받은 회차">{received}</Field>
-            {job.progress.failed > 0 && <Field name="실패">{job.progress.failed}개</Field>}
+            {job.origin === "upload" ? (
+              <>
+                {job.upload !== null && uploadKept(job.upload) !== null && <Field name="올린 파일">{uploadKept(job.upload)}</Field>}
+                {job.upload !== null && job.upload.dropped > 0 && <Field name="뺀 파일">{job.upload.dropped}개</Field>}
+              </>
+            ) : (
+              <>
+                <Field name="받은 회차">{received}</Field>
+                {job.progress.failed > 0 && <Field name="실패">{job.progress.failed}개</Field>}
+              </>
+            )}
           </dl>
           <div>
             <Button asChild variant="ghost" className={btnNeutral}>

@@ -12,7 +12,7 @@ trss-collect.workspace = true
 trss-import.workspace = true
 trss-jobs.workspace = true
 
-axum.workspace = true
+axum = { workspace = true, features = ["multipart"] }
 bytes.workspace = true
 dotenv.workspace = true
 futures.workspace = true

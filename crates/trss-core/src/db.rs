@@ -122,6 +122,10 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("../migrations/jobs/results.sql")),
     // 37: a job's revision of a received subtitle; a subtitle source's episode mapping to a season
     Migration::Sql(include_str!("../migrations/jobs/follow.sql")),
+    // 38: the kind of a file a person uploaded, and the files an upload did not keep
+    Migration::Sql(include_str!("../migrations/jobs/upload.sql")),
+    // 39: the format of an uploaded archive
+    Migration::Sql(include_str!("../migrations/jobs/upload_archive.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -852,6 +856,121 @@ mod tests {
         assert_eq!(kept, (1, None, 0));
         assert_eq!(refused, [true; 5]);
         assert_eq!(accepted, 0);
+    }
+
+    #[tokio::test]
+    async fn a_database_from_before_uploads_keeps_its_jobs_and_checks_the_new_columns() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        {
+            // A database as the build with 37 migrations left it: a job with a
+            // received file.
+            let conn = database_at(&path, 37);
+            conn.execute_batch(
+                "INSERT INTO subtitle_jobs (id, command_id, request, origin, state,
+                     created_at, updated_at, state_at)
+                     VALUES ('j1', 'c1', '{}', 'pick', 'done', 1, 1, 1);
+                 INSERT INTO subtitle_job_items (job_id, position, episode, post_url, found_at,
+                     state, updated_at)
+                     VALUES ('j1', 0, '1', 'https://a.tistory.com/1', 6, 'done', 1);
+                 INSERT INTO subtitle_job_files (id, job_id, item_id, file_key, name, state,
+                     size, sha256, path, created_at, updated_at)
+                     VALUES ('a1', 'j1', 1, 'k1', 'x.ass', 'done', 10, 'ab', 'j1/x.ass', 1, 1);",
+            )
+            .unwrap();
+        }
+
+        let db = Db::open(&path).await.unwrap();
+
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+        let (kept, refused, cascaded): ((i64, Option<String>), [bool; 4], i64) = db
+            .run::<_, DbError, _>(|c| {
+                let kept = c.query_row(
+                    "SELECT (SELECT count(*) FROM subtitle_job_files),
+                            (SELECT kind FROM subtitle_job_files WHERE id = 'a1')",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?;
+                let write = |sql: &str| c.execute(sql, []).is_err();
+                let refused = [
+                    write("UPDATE subtitle_job_files SET kind = 'video' WHERE id = 'a1'"),
+                    write("INSERT INTO subtitle_job_dropped VALUES ('nobody', 0, 'a.txt', '이유')"),
+                    write("INSERT INTO subtitle_job_dropped VALUES ('j1', 0, '', '이유')"),
+                    write("INSERT INTO subtitle_job_dropped VALUES ('j1', 0, 'a.txt', '')"),
+                ];
+                c.execute_batch(
+                    "UPDATE subtitle_job_files SET kind = 'font' WHERE id = 'a1';
+                     INSERT INTO subtitle_job_dropped VALUES ('j1', 0, 'a.txt', '이유');",
+                )?;
+                // The dropped names go with their job.
+                c.execute("DELETE FROM subtitle_jobs WHERE id = 'j1'", [])?;
+                let cascaded =
+                    c.query_row("SELECT count(*) FROM subtitle_job_dropped", [], |r| {
+                        r.get(0)
+                    })?;
+                Ok((kept, refused, cascaded))
+            })
+            .await
+            .unwrap();
+        assert_eq!(kept, (1, None));
+        assert_eq!(refused, [true; 4]);
+        assert_eq!(cascaded, 0);
+    }
+
+    #[tokio::test]
+    async fn a_database_from_before_archive_types_keeps_its_uploads_and_checks_the_new_column() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        {
+            // A database as the build with 38 migrations left it: an upload
+            // job with a ZIP.
+            let conn = database_at(&path, 38);
+            conn.execute_batch(
+                "INSERT INTO subtitle_jobs (id, command_id, request, origin, state,
+                     created_at, updated_at, state_at)
+                     VALUES ('j1', 'c1', '{}', 'upload', 'done', 1, 1, 1);
+                 INSERT INTO subtitle_job_items (job_id, position, episode, post_url, found_at,
+                     state, updated_at)
+                     VALUES ('j1', 0, '', 'upload:', 6, 'done', 1);
+                 INSERT INTO subtitle_job_files (id, job_id, item_id, file_key, name, state,
+                     size, sha256, path, created_at, updated_at, format, kind)
+                     VALUES ('a1', 'j1', 1, 'k1', 'x.zip', 'done', 10, 'ab', 'j1/x.zip', 1, 1,
+                             'zip', 'archive');",
+            )
+            .unwrap();
+        }
+
+        let db = Db::open(&path).await.unwrap();
+
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+        let (kept, refused, accepted): ((String, Option<String>), [bool; 2], bool) = db
+            .run::<_, DbError, _>(|c| {
+                let kept = c.query_row(
+                    "SELECT kind, archive_type FROM subtitle_job_files WHERE id = 'a1'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?;
+                let write = |sql: &str| c.execute(sql, []).is_err();
+                let refused = [
+                    write("UPDATE subtitle_job_files SET archive_type = 'iso' WHERE id = 'a1'"),
+                    write("UPDATE subtitle_job_files SET archive_type = 'ZIP' WHERE id = 'a1'"),
+                ];
+                let accepted = ["zip", "rar", "7z", "gz", "bz2", "xz", "tar"]
+                    .iter()
+                    .all(|t| {
+                        c.execute(
+                            "UPDATE subtitle_job_files SET archive_type = ?1 WHERE id = 'a1'",
+                            [t],
+                        )
+                        .is_ok()
+                    });
+                Ok((kept, refused, accepted))
+            })
+            .await
+            .unwrap();
+        assert_eq!(kept, ("archive".to_owned(), None));
+        assert_eq!(refused, [true; 2]);
+        assert!(accepted);
     }
 
     #[tokio::test]

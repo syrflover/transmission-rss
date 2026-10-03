@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --test src/screens/library/detail/upload.test.ts"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.1",

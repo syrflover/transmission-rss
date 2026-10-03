@@ -61,8 +61,23 @@ async fn run() -> Result<(), String> {
         .with_anissia(Anissia::with_defaults(db, anissia))
         .with_receive_area(&receive)
         .with_worker_wake(wake_path_for(&db_path));
-    axum::serve(listener, web::router(&env.static_dir, state))
+    // What a killed process, or an upload cut short in this one, left in the
+    // receive area (a staging folder, or the folder of a job that was never
+    // recorded). This process takes the uploads, so it sweeps: at start and
+    // every hour. Anything an upload or a receipt going on owns is younger
+    // than the hour, or has a record.
+    let sweeping = state.uploads.keep_sweeping(
+        std::time::Duration::from_secs(3600),
+        std::time::Duration::from_secs(3600),
+        |result| match result {
+            Ok(removed) => println!("trss-web: removed {removed} abandoned upload folders"),
+            Err(e) => eprintln!("trss-web: cannot sweep the receive area: {e}"),
+        },
+    );
+    let served = axum::serve(listener, web::router(&env.static_dir, state))
         .with_graceful_shutdown(web::shutdown_signal())
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string());
+    sweeping.abort();
+    served
 }

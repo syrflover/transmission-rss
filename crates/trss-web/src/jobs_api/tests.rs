@@ -433,6 +433,8 @@ async fn an_unfinished_file_is_receiving_only_while_its_episode_runs() {
                 content_type: None,
                 response_size: None,
                 snapshot: None,
+                kind: None,
+                archive: None,
             })
             .await
             .unwrap();

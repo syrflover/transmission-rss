@@ -26,8 +26,14 @@
 //! its bytes were checked to be (`zip`, `ass`, `srt`, `smi`, `other`) and the
 //! answer's status, media type and, for a failure, size.
 //!
-//! A job's `origin` is `pick` (a person picked its candidates) or `auto` (the
-//! subscribed creator's episode, made by the app, [`trss_jobs::follow`]); a job
+//! A job's `origin` is `pick` (a person picked its candidates), `auto` (the
+//! subscribed creator's episode, made by the app, [`trss_jobs::follow`]) or
+//! `upload` (the subtitles and fonts a person uploaded, already `done`,
+//! [`super::subtitle_upload_api`]). An upload job has `upload` (what it kept
+//! by kind, and how many files it dropped), no episodes, only the steps it
+//! went through (`receive`), its package's files with their `kind`
+//! (`subtitle`, `font`, `archive`) and `dropped` (the names and reasons of the
+//! files it did not keep) in its detail; a job
 //! that receives a revision of a subtitle received before has `revision_of`
 //! (that observation) and `revises_job` (the latest job that received it, or
 //! `null`), both `null` otherwise.
@@ -49,7 +55,7 @@ use serde_json::json;
 
 use trss_jobs::{
     store::{DonePage, FileRow, JobDetail, JobRow, StepRow},
-    Created, FileState, ItemState, JobState, NewItem, NewJob, StepKind, Wait,
+    Created, FileState, ItemState, JobState, NewItem, NewJob, StepKind, Wait, UPLOAD,
 };
 
 use super::{artwork_api::image_url, commands_api::now_millis, ApiError, AppState};
@@ -110,6 +116,16 @@ pub struct JobRowView {
     pub source: Option<String>,
     pub progress: ProgressView,
     pub failure: Option<&'static str>,
+    /// For an upload job: what it kept and dropped.
+    pub upload: Option<UploadView>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq)]
+pub struct UploadView {
+    pub subtitles: usize,
+    pub fonts: usize,
+    pub archives: usize,
+    pub dropped: usize,
 }
 
 /// The work a job is about, while the library has it, with its cover.
@@ -154,6 +170,12 @@ fn view(row: &JobRow, covers: &HashMap<String, String>) -> JobRowView {
             total: row.progress.total,
         },
         failure: row.failure.map(|f| f.code()),
+        upload: row.upload.map(|u| UploadView {
+            subtitles: u.subtitles,
+            fonts: u.fonts,
+            archives: u.archives,
+            dropped: u.dropped,
+        }),
     }
 }
 
@@ -280,6 +302,16 @@ struct FileView {
     http_status: Option<u16>,
     content_type: Option<String>,
     response_size: Option<u64>,
+    /// For an uploaded file: what its content check judged it to be.
+    kind: Option<&'static str>,
+    /// For an uploaded archive: its format (`zip`, `rar`, `7z`, `gz`, `bz2`, `xz`, `tar`).
+    archive: Option<&'static str>,
+}
+
+#[derive(Debug, Serialize)]
+struct DroppedView {
+    name: String,
+    reason: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -307,13 +339,15 @@ struct DetailView {
     row: JobRowView,
     steps: Vec<StepView>,
     items: Vec<ItemView>,
+    dropped: Vec<DroppedView>,
     receive_dir: String,
     log: Vec<LogView>,
 }
 
 /// The steps in order, those not reached `upcoming`; `auth` only when the job
-/// reached it.
-fn steps_view(steps: &[StepRow]) -> Vec<StepView> {
+/// reached it. An upload has no fetching to do: it shows the steps it went
+/// through.
+fn steps_view(steps: &[StepRow], origin: &str) -> Vec<StepView> {
     [
         StepKind::Found,
         StepKind::Open,
@@ -323,7 +357,7 @@ fn steps_view(steps: &[StepRow]) -> Vec<StepView> {
     .into_iter()
     .filter_map(|kind| {
         let row = steps.iter().find(|s| s.step == kind);
-        if kind == StepKind::Auth && row.is_none() {
+        if row.is_none() && (kind == StepKind::Auth || origin == UPLOAD) {
             return None;
         }
         Some(match row {
@@ -385,6 +419,8 @@ fn file_view(
         http_status: file.http_status,
         content_type: file.content_type.clone(),
         response_size: file.response_size,
+        kind: file.kind.map(|k| k.code()),
+        archive: file.archive.map(|a| a.code()),
     })
 }
 
@@ -396,6 +432,7 @@ async fn detail(
         row,
         steps,
         items,
+        dropped,
         events,
     }) = state.jobs.detail(&id).await.map_err(|e| internal(&e))?
     else {
@@ -429,8 +466,15 @@ async fn detail(
         })
         .collect();
     Ok(Json(DetailView {
-        steps: steps_view(&steps),
+        steps: steps_view(&steps, &row.origin),
         items: items_view,
+        dropped: dropped
+            .into_iter()
+            .map(|d| DroppedView {
+                name: d.name,
+                reason: d.reason,
+            })
+            .collect(),
         receive_dir: state
             .receive_root
             .join(&row.id)

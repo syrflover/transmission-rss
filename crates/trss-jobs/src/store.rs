@@ -1,9 +1,15 @@
 //! The job records: what the web asks for, what the runner writes as it goes,
 //! and what the screens read.
 
+use std::collections::HashSet;
+
 use rusqlite::{params, Connection, OptionalExtension, Row, TransactionBehavior};
 use trss_core::{Db, DbError, Millis};
-use trss_subtitles::{verify::Format, FailureKind};
+use trss_subtitles::{
+    upload::{Archive, Kind},
+    verify::Format,
+    FailureKind,
+};
 
 use crate::model::{FileState, ItemState, JobState, StepKind, StepState, Wait};
 
@@ -68,6 +74,49 @@ pub struct NewItem {
     pub found_at: Millis,
 }
 
+/// The origin of a job made from files a person uploaded
+/// ([`crate::upload`]).
+pub const UPLOAD: &str = "upload";
+
+/// The post address of the one item of an upload job: there is no post.
+const UPLOAD_POST: &str = "upload:";
+
+/// An upload to record: the job is made `done`, with its files and the names
+/// of those it dropped.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewUpload {
+    /// The job's ID, which names its folder in the receive area.
+    pub id: String,
+    pub command_id: String,
+    /// The request's content in canonical JSON.
+    pub request: String,
+    pub work_id: String,
+    pub season: i64,
+    pub anime_no: Option<i64>,
+    pub source_id: Option<String>,
+    pub creator: Option<String>,
+    pub files: Vec<UploadedFile>,
+    pub dropped: Vec<crate::upload::Dropped>,
+}
+
+/// A file an upload kept, already in the job's folder.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UploadedFile {
+    pub id: String,
+    /// Where the file was in what the person gave: unique within the job.
+    pub file_key: String,
+    pub name: String,
+    /// Relative to the receive area.
+    pub path: String,
+    pub size: u64,
+    pub sha256: String,
+    pub object: String,
+    pub format: Format,
+    pub kind: Kind,
+    /// Which archive format an `archive` is.
+    pub archive: Option<Archive>,
+}
+
 /// What [`JobStore::create`] did, with the job's ID.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Created {
@@ -111,6 +160,17 @@ pub struct JobRow {
     pub progress: Progress,
     /// The class of the first failed item's failure, when it has one.
     pub failure: Option<FailureKind>,
+    /// For an upload job: what it kept and dropped.
+    pub upload: Option<UploadSummary>,
+}
+
+/// What an upload job kept, by kind, and how many files it dropped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct UploadSummary {
+    pub subtitles: usize,
+    pub fonts: usize,
+    pub archives: usize,
+    pub dropped: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -188,6 +248,10 @@ pub struct FileRow {
     /// What the source read about the file, as a JSON array of `[name,
     /// value]` pairs ([`snapshot_json`]).
     pub snapshot: Option<String>,
+    /// For a file a person uploaded: what its content check judged it to be.
+    pub kind: Option<Kind>,
+    /// For an uploaded archive: which format its first bytes said.
+    pub archive: Option<Archive>,
 }
 
 /// Why an attempt to receive a file failed, with the facts of the answer.
@@ -263,8 +327,18 @@ pub struct JobDetail {
     pub row: JobRow,
     pub steps: Vec<StepRow>,
     pub items: Vec<ItemRow>,
+    /// For an upload job: the files it did not keep, in the order they were
+    /// listed.
+    pub dropped: Vec<DroppedRow>,
     /// Newest first.
     pub events: Vec<EventRow>,
+}
+
+/// A file an upload did not keep, with why.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DroppedRow {
+    pub name: String,
+    pub reason: String,
 }
 
 /// A page of done jobs, newest first.
@@ -296,6 +370,33 @@ impl JobStore {
     /// transaction, so two deliveries at once store one job.
     pub async fn create(&self, job: NewJob, now: Millis) -> Result<Created, JobError> {
         self.db.run(move |c| create(c, &job, now)).await
+    }
+
+    /// Records an upload as a job that is already `done`, unless its command
+    /// ID is known. The check and the writes are one transaction, so two
+    /// deliveries at once make one job.
+    pub async fn create_upload(&self, upload: NewUpload, now: Millis) -> Result<Created, JobError> {
+        self.db.run(move |c| create_upload(c, &upload, now)).await
+    }
+
+    /// Which of `ids` name a job or a file record (a receipt's attempt folder
+    /// is named by its file's ID).
+    pub async fn known_receive_ids(&self, ids: Vec<String>) -> Result<HashSet<String>, JobError> {
+        self.db
+            .run(move |c| {
+                let mut stmt = c.prepare(
+                    "SELECT EXISTS(SELECT 1 FROM subtitle_jobs WHERE id = ?1)
+                         OR EXISTS(SELECT 1 FROM subtitle_job_files WHERE id = ?1)",
+                )?;
+                let mut known = HashSet::new();
+                for id in ids {
+                    if stmt.query_row([&id], |r| r.get::<_, bool>(0))? {
+                        known.insert(id);
+                    }
+                }
+                Ok(known)
+            })
+            .await
     }
 
     /// The jobs that are not done, oldest first.
@@ -999,6 +1100,101 @@ fn create(c: &mut Connection, job: &NewJob, now: Millis) -> Result<Created, JobE
     Ok(Created::Created(id))
 }
 
+fn create_upload(c: &mut Connection, up: &NewUpload, now: Millis) -> Result<Created, JobError> {
+    let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let known: Option<(String, String)> = tx
+        .query_row(
+            "SELECT id, request FROM subtitle_jobs WHERE command_id = ?1",
+            [&up.command_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    if let Some((id, request)) = known {
+        return Ok(match request == up.request {
+            true => Created::Existing(id),
+            false => Created::Mismatch(id),
+        });
+    }
+    let counts = crate::upload::Counts {
+        subtitles: up.files.iter().filter(|f| f.kind == Kind::Subtitle).count(),
+        fonts: up.files.iter().filter(|f| f.kind == Kind::Font).count(),
+        archives: up.files.iter().filter(|f| f.kind == Kind::Archive).count(),
+    };
+    let kept = counts.sentence();
+    let dropped_note = match up.dropped.len() {
+        0 => String::new(),
+        n => format!(" · 뺀 파일 {n}개"),
+    };
+    tx.execute(
+        "INSERT INTO subtitle_jobs
+             (id, command_id, request, origin, work_id, season, anime_no, source_id, creator,
+              state, note, created_at, updated_at, state_at, finished_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'done', ?10, ?11, ?11, ?11, ?11)",
+        params![
+            up.id,
+            up.command_id,
+            up.request,
+            UPLOAD,
+            up.work_id,
+            up.season,
+            up.anime_no,
+            up.source_id,
+            up.creator,
+            format!("올린 파일: {kept}"),
+            now
+        ],
+    )?;
+    tx.execute(
+        "INSERT INTO subtitle_job_items
+             (job_id, position, observation_id, episode, post_url, found_at, state, updated_at)
+         VALUES (?1, 0, NULL, '', ?2, ?3, 'done', ?3)",
+        params![up.id, UPLOAD_POST, now],
+    )?;
+    let item_id = tx.last_insert_rowid();
+    for file in &up.files {
+        tx.execute(
+            "INSERT INTO subtitle_job_files
+                 (id, job_id, item_id, file_key, name, state, size, sha256, object, path,
+                  created_at, updated_at, format, kind, archive_type)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'done', ?6, ?7, ?8, ?9, ?10, ?10, ?11, ?12, ?13)",
+            params![
+                file.id,
+                up.id,
+                item_id,
+                file.file_key,
+                file.name,
+                i64::try_from(file.size).unwrap_or(i64::MAX),
+                file.sha256,
+                file.object,
+                file.path,
+                now,
+                file.format.code(),
+                file.kind.code(),
+                file.archive.map(Archive::code)
+            ],
+        )?;
+    }
+    for (position, file) in up.dropped.iter().enumerate() {
+        tx.execute(
+            "INSERT INTO subtitle_job_dropped (job_id, position, name, reason)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![up.id, position as i64, file.name, file.reason],
+        )?;
+    }
+    tx.execute(
+        "INSERT INTO subtitle_job_steps (job_id, step, state, at, note)
+         VALUES (?1, 'receive', 'done', ?2, ?3)",
+        params![up.id, now, format!("{kept}{dropped_note}")],
+    )?;
+    tx.execute(
+        "INSERT INTO subtitle_job_events (job_id, at, message, detail)
+         VALUES (?1, ?2, '자막과 폰트를 올렸어요', ?3)",
+        params![up.id, now, format!("{kept}{dropped_note}")],
+    )?;
+    tx.commit()?;
+    Ok(Created::Created(up.id.clone()))
+}
+
 const JOB_COLUMNS: &str = "
     SELECT j.seq, j.id, j.state, j.wait, j.stage, j.note, j.state_at, j.created_at,
            j.finished_at, j.work_id, w.dir_name, j.season, j.anime_no, a.subject, j.creator,
@@ -1034,6 +1230,7 @@ fn job_row(r: &Row<'_>) -> rusqlite::Result<JobRow> {
         source: None,
         progress: Progress::default(),
         failure: None,
+        upload: None,
     })
 }
 
@@ -1068,7 +1265,10 @@ fn rows<P: rusqlite::Params>(c: &Connection, tail: &str, p: P) -> Result<Vec<Job
                     .ok()
                     .and_then(|u| u.host_str().map(str::to_owned));
             }
-            job.episodes.push(episode);
+            // An upload's item stands for the package: it has no episode.
+            if !(job.origin == UPLOAD && episode.is_empty()) {
+                job.episodes.push(episode);
+            }
             job.progress.total += 1;
             match state {
                 ItemState::Done => job.progress.done += 1,
@@ -1077,7 +1277,38 @@ fn rows<P: rusqlite::Params>(c: &Connection, tail: &str, p: P) -> Result<Vec<Job
             }
         }
     }
+    for job in &mut jobs {
+        if job.origin == UPLOAD {
+            job.upload = Some(upload_summary(c, &job.id)?);
+        }
+    }
     Ok(jobs)
+}
+
+/// What the upload job `id` kept and dropped.
+fn upload_summary(c: &Connection, id: &str) -> Result<UploadSummary, JobError> {
+    let mut summary = UploadSummary::default();
+    let mut stmt = c.prepare(
+        "SELECT kind, count(*) FROM subtitle_job_files
+         WHERE job_id = ?1 AND state = 'done' AND kind IS NOT NULL GROUP BY kind",
+    )?;
+    let kinds = stmt
+        .query_map([id], |r| Ok((kind_at(r, 0)?, r.get::<_, i64>(1)? as usize)))?
+        .collect::<Result<Vec<_>, _>>()?;
+    for (kind, count) in kinds {
+        match kind {
+            Some(Kind::Subtitle) => summary.subtitles = count,
+            Some(Kind::Font) => summary.fonts = count,
+            Some(Kind::Archive) => summary.archives = count,
+            None => {}
+        }
+    }
+    summary.dropped = c.query_row(
+        "SELECT count(*) FROM subtitle_job_dropped WHERE job_id = ?1",
+        [id],
+        |r| r.get::<_, i64>(0),
+    )? as usize;
+    Ok(summary)
 }
 
 fn done_page(c: &Connection, after: Option<&str>, limit: usize) -> Result<DonePage, JobError> {
@@ -1117,7 +1348,7 @@ fn done_page(c: &Connection, after: Option<&str>, limit: usize) -> Result<DonePa
 const FILE_COLUMNS: &str = "
     SELECT id, item_id, file_key, name, state, same_as, temp_dir, expected_size, size, sha256,
            object, path, reason, created_at, format, failure, http_status, content_type,
-           response_size, snapshot
+           response_size, snapshot, kind, archive_type
     FROM subtitle_job_files";
 
 /// A failure class column.
@@ -1177,7 +1408,37 @@ fn file_row(r: &Row<'_>) -> rusqlite::Result<FileRow> {
             .get::<_, Option<i64>>(18)?
             .and_then(|s| u64::try_from(s).ok()),
         snapshot: r.get(19)?,
+        kind: kind_at(r, 20)?,
+        archive: archive_at(r, 21)?,
     })
+}
+
+fn archive_at(r: &Row<'_>, i: usize) -> rusqlite::Result<Option<Archive>> {
+    let code: Option<String> = r.get(i)?;
+    code.map(|code| {
+        Archive::parse(&code).ok_or_else(|| {
+            rusqlite::Error::FromSqlConversionFailure(
+                i,
+                rusqlite::types::Type::Text,
+                format!("unknown archive type {code:?}").into(),
+            )
+        })
+    })
+    .transpose()
+}
+
+fn kind_at(r: &Row<'_>, i: usize) -> rusqlite::Result<Option<Kind>> {
+    let code: Option<String> = r.get(i)?;
+    code.map(|code| {
+        Kind::parse(&code).ok_or_else(|| {
+            rusqlite::Error::FromSqlConversionFailure(
+                i,
+                rusqlite::types::Type::Text,
+                format!("unknown file kind {code:?}").into(),
+            )
+        })
+    })
+    .transpose()
 }
 
 fn items(c: &Connection, job_id: &str) -> Result<Vec<ItemRow>, JobError> {
@@ -1248,13 +1509,26 @@ fn detail(c: &mut Connection, id: &str) -> Result<Option<JobDetail>, JobError> {
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
+    let mut dropped_stmt = c.prepare(
+        "SELECT name, reason FROM subtitle_job_dropped WHERE job_id = ?1 ORDER BY position",
+    )?;
+    let dropped = dropped_stmt
+        .query_map([id], |r| {
+            Ok(DroppedRow {
+                name: r.get(0)?,
+                reason: r.get(1)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
     let detail = JobDetail {
         steps: steps(c, id)?,
         items: items(c, id)?,
+        dropped,
         events,
         row,
     };
     drop(stmt);
+    drop(dropped_stmt);
     tx.commit()?;
     Ok(Some(detail))
 }

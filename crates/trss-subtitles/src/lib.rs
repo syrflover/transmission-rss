@@ -40,6 +40,7 @@ pub mod naver;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing;
 pub mod tistory;
+pub mod upload;
 pub mod verify;
 
 use std::time::Duration;

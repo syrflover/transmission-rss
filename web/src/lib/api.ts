@@ -36,7 +36,8 @@ const UNKNOWN_MESSAGE = "서버가 알 수 없는 응답을 보냈어요. 잠시
 
 /**
  * Sends a request to `/api{path}` and returns the parsed JSON body.
- * A `body` object is sent as JSON, a `Blob` (a chosen file) as its bytes.
+ * A `body` object is sent as JSON, a `Blob` (a chosen file) as its bytes, and
+ * a `FormData` as a multipart form (the browser sets its boundary).
  * A 204 response resolves to `undefined`.
  */
 export async function api<T>(
@@ -45,16 +46,19 @@ export async function api<T>(
 ): Promise<T> {
   const { body, headers, ...rest } = init;
   const raw = body instanceof Blob;
+  const form = body instanceof FormData;
   let response: Response;
   try {
     response = await fetch(`/api${path}`, {
       ...rest,
       headers: {
         Accept: "application/json",
-        ...(body === undefined ? {} : { "Content-Type": raw ? "application/octet-stream" : "application/json" }),
+        ...(body === undefined || form
+          ? {}
+          : { "Content-Type": raw ? "application/octet-stream" : "application/json" }),
         ...headers,
       },
-      body: body === undefined ? undefined : raw ? body : JSON.stringify(body),
+      body: body === undefined ? undefined : raw || form ? (body as BodyInit) : JSON.stringify(body),
     });
   } catch {
     throw new ApiError("network", NETWORK_MESSAGE, 0);

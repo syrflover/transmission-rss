@@ -29,6 +29,7 @@ import { defaultSeason, rowId } from "./detail/model";
 import { useEpisodeOrder } from "./detail/prefs";
 import { SeasonAnissiaSection } from "./detail/SeasonAnissiaSection";
 import { SeasonInfoSection } from "./detail/SeasonInfoSection";
+import { UploadSection } from "./detail/UploadSection";
 import { SeasonTiles } from "./detail/SeasonTiles";
 import { CollectCard, FilesCard, InfoCard } from "./detail/SideCards";
 import { coverOf } from "./model";
@@ -405,6 +406,15 @@ function Loaded({
               candidates={candidates}
               follow={follow}
               onFollowChanged={onSubscriptionChanged}
+            />
+          )}
+          {season && (
+            <UploadSection
+              key={`upload-${season.number}`}
+              workId={work.id}
+              season={season.number}
+              seasonCount={work.seasons.length}
+              candidates={candidates.data ?? null}
             />
           )}
           {season ? (

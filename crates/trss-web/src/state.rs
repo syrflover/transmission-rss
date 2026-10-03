@@ -10,7 +10,7 @@ use trss_collect::{
     },
 };
 use trss_core::{commands::CommandStore, heartbeat::HeartbeatStore, settings::SettingsStore, Db};
-use trss_jobs::{Follow, JobStore, ReceiveArea};
+use trss_jobs::{Follow, JobStore, ReceiveArea, Uploads};
 use trss_library::{
     artwork::Artwork,
     seasons::Seasons,
@@ -59,8 +59,11 @@ pub struct AppState {
     /// The subscribed creators' receipts and the `자막 구독` suggestions.
     pub follow: Follow,
     /// The receive area the worker puts the jobs' files in, for the paths the
-    /// job detail shows (the web never writes there).
+    /// job detail shows. The web writes there only what a person uploads
+    /// ([`AppState::uploads`]).
     pub receive_root: PathBuf,
+    /// The subtitles and fonts a person uploads, made into jobs.
+    pub uploads: Uploads,
 }
 
 impl AppState {
@@ -84,6 +87,7 @@ impl AppState {
             jobs: JobStore::new(db.clone()),
             follow: Follow::new(db.clone()),
             receive_root: PathBuf::from("receive"),
+            uploads: Uploads::new(JobStore::new(db.clone()), ReceiveArea::new("receive")),
             // No app data folder: covers can be read and changed but no image
             // stored or served until `with_artwork` gives one.
             artwork,
@@ -106,6 +110,14 @@ impl AppState {
     /// Shows the jobs' files in `area` (the app data folder's).
     pub fn with_receive_area(mut self, area: &ReceiveArea) -> Self {
         self.receive_root = area.root().to_owned();
+        self.uploads = Uploads::new(self.jobs.clone(), area.clone());
+        self
+    }
+
+    /// Replaces the uploads (their limits and times in tests); they write to
+    /// the same receive area as the one given to `with_receive_area`.
+    pub fn with_uploads(mut self, uploads: Uploads) -> Self {
+        self.uploads = uploads;
         self
     }
 

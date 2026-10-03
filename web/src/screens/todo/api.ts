@@ -147,13 +147,22 @@ export type FailureClass = "missing" | "expired" | "not_a_file" | "changed" | "n
 /** What received bytes were checked to be; `other` is kept for the analysis to decide. */
 export type FileFormat = "zip" | "ass" | "srt" | "smi" | "other";
 
-/** The steps a job goes through, in this order. `auth` only when a source asks for it. */
+/** The format of an uploaded archive. */
+export type ArchiveType = "zip" | "rar" | "7z" | "gz" | "bz2" | "xz" | "tar";
+
+/** What an uploaded file was judged to be by its content. */
+export type UploadKind = "subtitle" | "font" | "archive";
+
+/** The steps a job goes through, in this order. `auth` only when a source asks for it. An upload job has only `receive`. */
 export type StepKind = "found" | "open" | "auth" | "receive";
 
 export interface JobRow {
   id: string;
-  /** `pick`: the user picked its candidates; `auto`: the subscribed creator's, made by the app. */
-  origin: "pick" | "auto";
+  /**
+   * `pick`: the user picked its candidates; `auto`: the subscribed creator's, made by the app;
+   * `upload`: subtitles and fonts the user uploaded (it is `done` from the start).
+   */
+  origin: "pick" | "auto" | "upload";
   /** For a revision of a received subtitle: the observation received before. */
   revision_of: number | null;
   /** The latest job that received `revision_of`, while there is one. */
@@ -180,6 +189,15 @@ export interface JobRow {
   progress: { done: number; failed: number; total: number };
   /** The class of the first failed item's failure, when it has one. */
   failure: FailureClass | null;
+  /** For an upload job: what it kept, by kind, and how many files it dropped. */
+  upload: UploadSummary | null;
+}
+
+export interface UploadSummary {
+  subtitles: number;
+  fonts: number;
+  archives: number;
+  dropped: number;
 }
 
 export interface DonePage {
@@ -246,6 +264,16 @@ export interface JobFile {
   content_type: string | null;
   /** For a failure: how many bytes the answer that showed it had. */
   response_size: number | null;
+  /** For an uploaded file: what its content was judged to be. */
+  kind: UploadKind | null;
+  /** For an uploaded archive: its format, by its first bytes. */
+  archive: ArchiveType | null;
+}
+
+/** A file of an upload that was not kept, with why. */
+export interface DroppedFile {
+  name: string;
+  reason: string;
 }
 
 /** One episode of a job: one candidate the user picked. */
@@ -277,6 +305,8 @@ export interface JobDetail extends JobRow {
   receive_dir: string;
   /** Newest first. */
   log: LogEntry[];
+  /** For an upload job: the files left out, in the order they were named. */
+  dropped: DroppedFile[];
 }
 
 export function fetchJob(id: string, signal?: AbortSignal): Promise<JobDetail> {
@@ -307,4 +337,42 @@ export function createSubtitleJob(job: NewSubtitleJob): Promise<{ id: string }> 
 /** Where a job's detail is. */
 export function jobPath(id: string): string {
   return `/todo/job/${encodeURIComponent(id)}`;
+}
+
+/** What an upload answers when it made the job now (`202`): the files kept by kind and the files dropped. */
+export interface UploadResult {
+  id: string;
+  /** Absent when the same upload was stored before (`200`). */
+  kept?: { subtitles: number; fonts: number; archives: number };
+  dropped?: DroppedFile[];
+}
+
+/** What an upload is made of: the browser's ID for it, the season, the creator and the files. */
+export interface NewUpload {
+  id: string;
+  work_id: string;
+  season: number;
+  /** A candidate source's ID, or `null` for `제작자 알 수 없음`. */
+  creator: string | null;
+  /** The files to store, each with the name or folder path it is sent under. */
+  files: { name: string; file: Blob }[];
+  /** The names of the files the browser left out. */
+  skipped: string[];
+}
+
+/**
+ * Uploads subtitles and fonts as one job. The metadata parts come before the
+ * files, so the server checks the season and the creator before it takes any
+ * bytes. `202` when the job was made now and `200` when the same ID with the
+ * same upload was stored before. The same ID with another upload is a `conflict`.
+ */
+export function uploadSubtitles(upload: NewUpload, signal?: AbortSignal): Promise<UploadResult> {
+  const form = new FormData();
+  form.append("id", upload.id);
+  form.append("work_id", upload.work_id);
+  form.append("season", String(upload.season));
+  form.append("creator", upload.creator ?? "");
+  for (const name of upload.skipped) form.append("skipped", name);
+  for (const { name, file } of upload.files) form.append("file", file, name);
+  return api<UploadResult>("/subtitle-jobs/upload", { method: "POST", body: form, signal });
 }

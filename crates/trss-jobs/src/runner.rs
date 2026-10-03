@@ -625,6 +625,8 @@ impl Runner {
                 content_type: None,
                 response_size: None,
                 snapshot: snapshot_json(&file.snapshot),
+                kind: None,
+                archive: None,
             })
             .await?;
 

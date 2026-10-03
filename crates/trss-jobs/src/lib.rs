@@ -12,6 +12,9 @@
 //!   pick, and the `자막 구독` suggestions; [`mapping`]: the episode mapping
 //!   the app decides for that creator's source.
 //!
+//! - [`upload`]: the subtitles and fonts a person uploads, made into a job that
+//!   is already `done`.
+//!
 //! The sites themselves are `trss-subtitles`'s.
 
 pub mod area;
@@ -20,10 +23,12 @@ pub mod mapping;
 pub mod model;
 pub mod runner;
 pub mod store;
+pub mod upload;
 
 pub use area::ReceiveArea;
 pub use follow::{Follow, FollowError};
 pub use model::{FileState, ItemState, JobState, StepKind, StepState, Wait};
 pub use runner::Runner;
-pub use store::{Created, FileProblem, JobError, JobStore, NewItem, NewJob, AUTO};
+pub use store::{Created, FileProblem, JobError, JobStore, NewItem, NewJob, AUTO, UPLOAD};
 pub use trss_subtitles::{verify::Format, FailureKind};
+pub use upload::{Finished, Uploads};

@@ -382,6 +382,8 @@ async fn intended(
         content_type: None,
         response_size: None,
         snapshot: None,
+        kind: None,
+        archive: None,
     };
     s.store.file_intend(row.clone()).await.unwrap();
     s.store.file_expect(&id, expected, 971).await.unwrap();
