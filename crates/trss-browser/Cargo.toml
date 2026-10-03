@@ -1,0 +1,39 @@
+[package]
+name = "trss-browser"
+version.workspace = true
+edition.workspace = true
+autobins = false
+
+# The launcher that runs in the browser container.
+[[bin]]
+name = "trss-browserd"
+path = "src/main.rs"
+
+# A stand-in for Chromium for the launcher's tests (it serves `/json/version`
+# and an echo WebSocket on the debugging port it is given). Not part of the
+# image.
+[[bin]]
+name = "trss-fake-chromium"
+path = "src/bin/fake_chromium.rs"
+
+[dependencies]
+trss-core.workspace = true
+
+axum = { workspace = true, features = ["ws"] }
+futures.workspace = true
+reqwest.workspace = true
+rustix = { workspace = true, features = ["process", "fs"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "process", "signal", "time", "sync", "fs", "io-util"] }
+tokio-tungstenite.workspace = true
+tokio-util.workspace = true
+url.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+regex.workspace = true
+tempfile.workspace = true
+yaml_serde.workspace = true

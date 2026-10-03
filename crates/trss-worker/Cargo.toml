@@ -12,6 +12,7 @@ trss-collect.workspace = true
 trss-transmission.workspace = true
 trss-subtitles.workspace = true
 trss-jobs.workspace = true
+trss-browser.workspace = true
 
 dotenv.workspace = true
 futures.workspace = true

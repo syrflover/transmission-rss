@@ -68,12 +68,43 @@ async fn run() -> Result<(), String> {
     let anissia_client = Anissia::with_defaults(db.clone(), anissia_config);
     let anissia = AnissiaQueue::new(anissia_client.clone(), AnissiaStore::new(db.clone()));
     let captions = CaptionObserver::new(anissia_client, AnissiaStore::new(db.clone()));
-    let worker = Worker::new(db, &env, lock_path_for(&db_path))
+    // One worker at a time uses the browser container: a second one would
+    // reset it and end the first one's runs. The lock lives as long as this
+    // process (`_browser_lock`).
+    let (browser, _browser_lock) = match &env.browser {
+        Some(browser_env) => match trss_worker::browser::take_lock(&db_path)
+            .map_err(|e| format!("cannot take the lock of the server browser: {e}"))?
+        {
+            Some(lock) => (
+                Some(
+                    trss_worker::browser::connect(
+                        db.clone(),
+                        browser_env,
+                        trss_core::system_clock(),
+                    )
+                    .await?,
+                ),
+                Some(lock),
+            ),
+            None => {
+                eprintln!(
+                    "trss-worker: another worker uses the browser container; this one runs without a server browser"
+                );
+                (None, None)
+            }
+        },
+        None => (None, None),
+    };
+    let mut worker = Worker::new(db, &env, lock_path_for(&db_path))
         .map_err(|e| e.to_string())?
         .with_captions(captions.clone())
         .with_jobs(jobs)
         .with_season_info(season_info.stored())
         .with_wake_socket(wake_path_for(&db_path));
+    if let Some(pool) = browser {
+        println!("The server browser is on (a pool over the browser container)");
+        worker = worker.with_browser(pool);
+    }
 
     let cancel = CancellationToken::new();
     tokio::spawn(shutdown_on_signal(cancel.clone()));

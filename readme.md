@@ -24,6 +24,7 @@ WATCH_DIR=/path/to/watch
 # trss (required)
 TRSS_VERSION=0.4.0            # release tag of ghcr.io/syrflover/transmission-rss
 TRSS_WEB_HOST_IP=192.168.0.10 # this host's LAN address; the web listens only there
+TRSS_BROWSER_TOKEN=<random>   # what the worker and the browser container share, e.g. from `openssl rand -hex 32`
 
 # trss (optional, defaults shown)
 TRSS_DATA_DIR=./data          # app database; must be on a local disk of this host
@@ -39,6 +40,7 @@ SEED_QUEUE_SIZE=1
 - `MEDIA_DIR` is mounted to `/downloads` in Transmission and in both trss containers, so all of them spell folders the same way: read-write in `trss-worker`, which moves work folders when rules are archived and restored (see below), and read-only in `trss-web`, which only reads it. Transmission downloads to `/downloads/downloads` (`$MEDIA_DIR/downloads` on the host) unless a rule says otherwise.
 - `TRSS_DATA_DIR` holds `trss.db`, the worker's lock files `trss.db.worker.lock`, `trss.db.artwork.lock`, `trss.db.seasons.lock`, `trss.db.anissia.lock` and `trss.db.anissia-captions.lock`, the socket `trss.db.wake` through which the web wakes the worker when it accepts a command (the worker also looks every 3 seconds by itself), and `artwork/`, the work covers (see [Work covers](#work-covers)). Keep it on a local disk, not an SMB or NFS share: SQLite and the locks rely on local file locking.
 - The web has no sign-in of its own. `TRSS_WEB_HOST_IP` binds its port to the LAN address only; reach it from outside through a VPN, never by forwarding the port.
+- `trss-browser` is the server browser for the subtitle sources that need a person to pass a check (`Dockerfile.browser`, image `ghcr.io/syrflover/trss-browser`, tagged with the same release as the app). It is always up but idle it holds only a virtual display and a small launcher (`trss-browserd`); the worker asks the launcher to start a Chromium for a job (with a profile of its own, deleted when the run ends) and to close it. It publishes no port: neither the launcher nor Chromium's DevTools is reachable from the host or the LAN, and the launcher answers only requests with `TRSS_BROWSER_TOKEN`. Keep it so. The browser opens the pages of the sites it is sent to, so it is not on `trss_net` (where trss-web, which has no sign-in, and Transmission listen): it has the compose network `browser_net` to itself, shared only with the worker, which is on both. `browser_net` is not `internal`, since the pages need the internet. Keep other services off it. One worker at a time uses one trss-browser (a worker resets the launcher when it starts, and a second would end the first one's runs); the worker takes the lock `trss.db.browser.lock` next to the database for its life and runs without a server browser if another worker has it. The worker reads `TRSS_BROWSER_URL` (set in the compose file to `http://trss-browser:9230`), `TRSS_BROWSER_TOKEN` and `TRSS_BROWSER_DOWNLOADS` (`/data/browser-downloads`); without `TRSS_BROWSER_URL` it runs without a browser. How long a browser may sit idle and how many jobs may use one at once are in the settings' common policy. Downloads land in `TRSS_DATA_DIR/browser-downloads/`, which the worker empties once the reset of the launcher at its start has gone through (if the container cannot be reached then, at the first use); the browser writes there as uid 10001, so the worker opens the folder to it (mode 1777) at its start. A download over 200 MiB, a run whose downloads pass 1 GiB, and a download that reports no progress for 120 s are canceled.
 
 On a host whose Docker uses the systemd cgroup driver, install the slice the Transmission container runs in once (see [Resource limits](#resource-limits)):
 
@@ -72,7 +74,9 @@ To back up, copy `TRSS_DATA_DIR/trss.db` and `TRSS_DATA_DIR/artwork/` together w
 
 ### Resource limits
 
-Each trss container is limited to 0.25 CPU and 128M of memory. The worker stays up, parses every feed each cycle, and adds the selected items concurrently; the web serves the screens and previews rules against stored history. These limits are a starting point, to be revisited with `docker stats` after the first days of running.
+`trss-browser` is limited to 768M of memory, with no CPU limit (the limit was measured with one Chromium, ticket 0032; CPU was not measured under a limit). A run opens a Chromium, so give it more when the policy allows several concurrent browser jobs.
+
+The web and worker containers are each limited to 0.25 CPU and 128M of memory. The worker stays up, parses every feed each cycle, and adds the selected items concurrently; the web serves the screens and previews rules against stored history. These limits are a starting point, to be revisited with `docker stats` after the first days of running.
 
 The worker reads at most 2 MiB of an RSS feed (real feeds are 50 to 300 KB), five feeds at a time, so a feed that is huge or never ends cannot exhaust that memory. A feed whose response announces a longer body is refused before it is read, and any other is dropped as soon as what has arrived passes the cap. The channel counts as unread for that cycle, like one whose server did not answer: the cycle log says `the feed is larger than 2097152 bytes`, and its torrents are not cleaned up (the cap is `MAX_FEED_BYTES` in `src/worker/feed.rs`).
 
@@ -201,7 +205,7 @@ A rule's detail has a `지난 회차 검색` section for episodes the feed no lo
 
 ```sh
 dev/compose.sh pull           # copy the server's data (once; --force replaces it)
-dev/compose.sh up             # build the image, start Transmission, trss-worker, trss-web
+dev/compose.sh up             # build the images, start Transmission, trss-browser, trss-worker, trss-web
 dev/compose.sh logs           # follow trss-worker (or: dev/compose.sh logs trss-web)
 dev/compose.sh down           # stop; dev/local stays for the next up
 ```

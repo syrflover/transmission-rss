@@ -1,0 +1,59 @@
+# The server browser container: a virtual display and the launcher
+# (`trss-browserd`, crates/trss-browser) that starts one Chromium per run when
+# the worker asks and deletes its profile when the run ends. Idle, the
+# container holds only Xvfb and the launcher; Chromium exists while a run does.
+#
+# A file of its own, not a target of Dockerfile: the app image stays Alpine
+# with nothing of this in it, and building one does not build the other (the
+# launcher needs glibc-based Chromium and fonts, the app needs neither).
+# docker-compose.trss.yml runs it as the `trss-browser` service.
+FROM clux/muslrust:stable AS builder
+
+WORKDIR /usr/src/transmission-rss
+
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+
+# Only the launcher; `--locked` as in Dockerfile.
+RUN cargo build --release --locked -p trss-browser --bin trss-browserd
+
+
+FROM debian:trixie-20260918-slim
+
+# `chromium` is Debian's, so its security updates come with the base image;
+# `tini` reaps the processes Chromium leaves behind, since the launcher is
+# PID 1's child and not an init.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        chromium \
+        xvfb \
+        fonts-noto-cjk \
+        tini \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Not root. The uid is fixed so that the shared downloads folder's owner is
+# predictable on the host.
+RUN useradd --uid 10001 --create-home --home-dir /home/browser --shell /usr/sbin/nologin browser \
+    && mkdir -m 1777 /tmp/.X11-unix /downloads
+
+COPY --from=builder \
+    /usr/src/transmission-rss/target/x86_64-unknown-linux-musl/release/trss-browserd \
+    /usr/local/bin/trss-browserd
+
+USER browser
+
+# `--no-sandbox`: Docker's default seccomp profile does not allow the user
+# namespaces Chromium's own sandbox needs, and the container (no published
+# port, no Docker socket, no capabilities, a memory limit) is the boundary.
+# The launcher listens on 0.0.0.0:9230 inside the container and answers only
+# requests with TRSS_BROWSER_TOKEN, which the image does not set: the launcher
+# refuses to start without it. Nothing is published; the worker reaches it over
+# the compose network.
+ENV HOME=/home/browser \
+    LANG=C.UTF-8 \
+    TRSS_BROWSER_CHROMIUM=/usr/bin/chromium \
+    TRSS_BROWSER_CHROMIUM_ARGS=--no-sandbox \
+    TRSS_BROWSER_DOWNLOADS=/downloads
+
+ENTRYPOINT [ "/usr/bin/tini", "--", "/usr/local/bin/trss-browserd" ]

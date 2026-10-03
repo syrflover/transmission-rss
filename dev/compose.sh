@@ -4,7 +4,7 @@
 # stopped, and a copy of a server's data.
 #
 #   dev/compose.sh pull [--force]   copy the server's database, covers and media file names
-#   dev/compose.sh up [--no-build]  build the image and start Transmission, trss-worker, trss-web
+#   dev/compose.sh up [--no-build]  build the images and start Transmission, trss-browser, trss-worker, trss-web
 #   dev/compose.sh down             stop and remove the containers (dev/local stays)
 #   dev/compose.sh logs [service]   follow the logs (default: trss-worker)
 #   dev/compose.sh status           show the containers
@@ -21,6 +21,9 @@ REPO="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 DEV="$REPO/dev"
 LOCAL="$DEV/local"
 IMAGE=ghcr.io/syrflover/transmission-rss:local
+# The server browser (Dockerfile.browser). Always up in compose, with only a
+# virtual display and its launcher running while no job uses a browser.
+BROWSER_IMAGE=ghcr.io/syrflover/trss-browser:local
 SERVER="${TRSS_DEV_SERVER:-j4105}"
 SERVER_DIR="${TRSS_DEV_SERVER_DIR:-trss}"
 
@@ -34,7 +37,7 @@ trss() {
 }
 
 prepare() {
-  mkdir -p "$LOCAL/data" "$LOCAL/media/downloads" "$LOCAL/watch" "$LOCAL/transmission-config"
+  mkdir -p "$LOCAL/data" "$LOCAL/media/downloads" "$LOCAL/watch" "$LOCAL/transmission-config" "$LOCAL/data/browser-downloads"
   # Transmission writes its settings back on start; seed them only once.
   [[ -f "$LOCAL/transmission-config/settings.json" ]] ||
     cp "$DEV/transmission-settings.json" "$LOCAL/transmission-config/settings.json"
@@ -97,7 +100,10 @@ pull() {
 up() {
   prepare
   [[ -f "$LOCAL/data/trss.db" ]] || echo "No database in dev/local/data: trss starts empty (dev/compose.sh pull copies the server's)" >&2
-  [[ "${1:-}" == "--no-build" ]] || docker build -t "$IMAGE" "$REPO"
+  if [[ "${1:-}" != "--no-build" ]]; then
+    docker build -t "$IMAGE" "$REPO"
+    docker build -t "$BROWSER_IMAGE" -f "$REPO/Dockerfile.browser" "$REPO"
+  fi
   compose -f docker-compose.yml up -d
   trss up -d
   echo "Web: http://localhost:8080  Transmission: http://localhost:9091" >&2

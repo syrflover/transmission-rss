@@ -109,6 +109,21 @@
 //! ([`Worker::with_recheck_every`]), and the database remembers each reading,
 //! so a restart reads nothing twice in a day.
 //!
+//! # The server browser
+//!
+//! With `TRSS_BROWSER_URL` (and its token and downloads folder, [`env`]) the
+//! worker holds a [`trss_browser::BrowserPool`] over the browser container
+//! ([`browser`]): it resets the container at its start, so a run an earlier
+//! worker left open is gone, ends the runs that are idle past the policy's
+//! idle time while [`Worker::run`] runs, and ends all of them at shutdown.
+//! Without the variable the worker runs as before. No source uses the pool
+//! yet ([`Worker::browser`]).
+//!
+//! One worker at a time uses one container, since a pool resets it and its
+//! reaper ends the runs it does not know: the binary takes
+//! [`browser::take_lock`] for its life before it makes the pool, and runs
+//! without a server browser when another worker has it.
+//!
 //! # Shutdown
 //!
 //! Cancelling the token ([`Worker::run`]) stops the loop between cycles and
@@ -132,6 +147,7 @@
 //! taking a torrent and the record being written leaves that item recorded as
 //! `duplicate` instead of `received` after the next cycle.
 
+pub mod browser;
 pub mod commands;
 pub mod cycle;
 pub mod env;
@@ -254,6 +270,8 @@ pub struct Worker {
     /// Held while subtitle jobs run: one run at a time, since the worker
     /// lock does not keep two runs of one worker apart.
     jobs_running: Arc<tokio::sync::Mutex<()>>,
+    /// The server browser ([`trss_browser`]); `None`: the worker has none.
+    browser: Option<trss_browser::BrowserPool>,
     clock: Clock,
 }
 
@@ -337,6 +355,7 @@ impl Worker {
             job_wake: Arc::default(),
             season_stored: None,
             jobs_running: Arc::default(),
+            browser: None,
             clock,
         })
     }
@@ -384,6 +403,21 @@ impl Worker {
     pub fn with_captions(mut self, observer: CaptionObserver) -> Self {
         self.captions = Some(observer);
         self
+    }
+
+    /// Gives the worker the server browser. While [`Worker::run`] runs, the
+    /// pool's reaper ends the runs that are idle past the policy's idle time,
+    /// and at shutdown every run ends. No job uses the browser yet; the pool is
+    /// there for the sources that need a person's authentication
+    /// ([`Worker::browser`]).
+    pub fn with_browser(mut self, pool: trss_browser::BrowserPool) -> Self {
+        self.browser = Some(pool);
+        self
+    }
+
+    /// The server browser; `None` when the worker was given none.
+    pub fn browser(&self) -> Option<&trss_browser::BrowserPool> {
+        self.browser.as_ref()
     }
 
     /// Listens for the web's wake-ups at `path` (see [`trss_core::wake`]) while
@@ -570,7 +604,22 @@ impl Worker {
             let (worker, cancel, wake) = (self.clone(), cancel.clone(), self.listen_for_wakes());
             async move { worker.dispatch(cancel, wake).await }
         });
+        let browser_reaper = self.browser.clone().map(|pool| {
+            let cancel = cancel.clone();
+            tokio::spawn(async move { pool.run_reaper(cancel).await })
+        });
         self.run_loop(cancel).await;
+        if let (Some(reaper), Some(pool)) = (browser_reaper, &self.browser) {
+            let _ = reaper.await;
+            // Whatever the jobs held open goes with the worker; the jobs
+            // themselves wait for authentication as before.
+            if tokio::time::timeout(self.shutdown_grace, pool.shutdown())
+                .await
+                .is_err()
+            {
+                eprintln!("Browser: the runs did not all end before the shutdown grace ran out");
+            }
+        }
         if let Err(err) = commands.await {
             eprintln!("Commands stopped: {err}");
         }

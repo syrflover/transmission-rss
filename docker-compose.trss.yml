@@ -7,6 +7,23 @@ name: trss-app
 # the commands the web accepts) run all the time from the same image and the
 # same release. Transmission comes from docker-compose.yml on `trss_net`.
 #
+# trss-browser is the server browser for the subtitle sources that need a
+# person to pass a check (Dockerfile.browser, built and tagged with the same
+# release). It is always up but holds only a virtual display and a launcher
+# while idle; the worker asks the launcher to start a Chromium per job and to
+# close it. Nothing of it is published on the host: the launcher answers only
+# the worker, over `browser_net`, and only with TRSS_BROWSER_TOKEN.
+#
+# The browser opens pages of the sites it is sent to, so it is not on
+# `trss_net`, where trss-web (which has no sign-in) and Transmission listen:
+# a page could otherwise try requests to them. It has the network
+# `browser_net` to itself, shared with the worker alone (the worker is on both).
+# `browser_net` is not internal, because the pages need the internet.
+#
+# One worker at a time uses one trss-browser: a worker resets the launcher
+# when it starts and its reaper ends the runs it does not know, so a second
+# worker on the same launcher would end the first one's runs.
+#
 # Both share the app database in TRSS_DATA_DIR. Keep it on a local disk of this
 # host, not an SMB or NFS share: SQLite and the worker's lock file
 # (`trss.db.worker.lock`) rely on local file locking, and the web wakes the
@@ -47,6 +64,18 @@ services:
       DOWNLOAD_QUEUE_SIZE: ${DOWNLOAD_QUEUE_SIZE:-5}
       SEED_QUEUE_SIZE: ${SEED_QUEUE_SIZE:-1}
       TRSS_WORKER_INTERVAL_SECS: ${TRSS_WORKER_INTERVAL_SECS:-300}
+      # The server browser: the launcher's address on `browser_net`, its token,
+      # and the folder the browser saves downloads in, at the path this
+      # container sees it (it is trss-browser's /downloads, see below, inside
+      # the data folder mounted here). The worker makes the folder writable
+      # for the browser's user at its start.
+      TRSS_BROWSER_URL: http://trss-browser:9230
+      TRSS_BROWSER_TOKEN: ${TRSS_BROWSER_TOKEN:?Set TRSS_BROWSER_TOKEN in .env to a long random string, e.g. the output of openssl rand -hex 32}
+      TRSS_BROWSER_DOWNLOADS: /data/browser-downloads
+    # On `browser_net` too, to reach trss-browser (the only service on it).
+    networks:
+      - trss_net
+      - browser_net
     # The worker is the only writer to the media: archiving and restoring a
     # rule moves its work folder between the collect and archive folders
     # (after Transmission has moved its torrents there). Replaces the shared
@@ -76,6 +105,55 @@ services:
           cpus: "0.25"
           memory: 128M
 
+  trss-browser:
+    image: ghcr.io/syrflover/trss-browser:${TRSS_VERSION:?Set TRSS_VERSION in .env to a release tag, e.g. 0.4.0}
+    container_name: trss-browser
+    restart: unless-stopped
+    environment:
+      TRSS_BROWSER_TOKEN: ${TRSS_BROWSER_TOKEN:?Set TRSS_BROWSER_TOKEN in .env to a long random string, e.g. the output of openssl rand -hex 32}
+      # The most runs the launcher starts: the largest value the policy's
+      # concurrent browser jobs can take. The worker keeps to the policy's own
+      # value, which is the one to change.
+      TRSS_BROWSER_MAX_RUNS: "3"
+    # No `ports`: neither the launcher (9230) nor Chromium's DevTools is
+    # reachable from the host or the LAN. Keep it so; the web will reach a
+    # run only through the app's own protected screen.
+    #
+    # The files the browser downloads. The worker moves them from here into a
+    # job's receive area (same filesystem as the data folder) and deletes the
+    # rest when the run ends.
+    volumes:
+      - ${TRSS_DATA_DIR:-./data}/browser-downloads:/downloads
+    # A Chromium that nothing needs: no capability, no new privilege. (Its own
+    # sandbox is off in the image: this container is the sandbox.)
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    # Its own network, shared with the worker alone: no route to trss-web or
+    # Transmission on `trss_net`.
+    networks:
+      - browser_net
+    # Open runs are closed on SIGTERM (Chromium gets 5 seconds to exit each).
+    stop_grace_period: 15s
+    deploy:
+      resources:
+        limits:
+          # 768 MiB: the starting value measured with one Chromium on the
+          # erulabo check (ticket 0032, process memory about 450 MiB). The
+          # concurrent browser jobs of the policy (up to 3) are not sized for
+          # it: raise this limit with them. No CPU limit is set; none has been
+          # measured with this check yet.
+          memory: 768M
+
 networks:
   trss_net:
     external: true
+  # trss-browser and the worker. Not `internal`: the browser needs the
+  # internet.
+  browser_net: {}

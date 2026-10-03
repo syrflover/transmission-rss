@@ -4,7 +4,7 @@
 //! use the same variables as the former cron binary. Channels and rules come
 //! from the app database, not from an environment variable.
 
-use std::{str::FromStr, time::Duration};
+use std::{path::PathBuf, str::FromStr, time::Duration};
 
 use url::Url;
 
@@ -22,6 +22,15 @@ pub const INTERVAL_VAR: &str = "TRSS_WORKER_INTERVAL_SECS";
 /// development environment and the tests. Never set in production.
 pub const FAKE_SUBTITLE_SOURCE_VAR: &str = "TRSS_FAKE_SUBTITLE_SOURCE";
 
+/// The browser container's launcher (`trss_browser::launcher`), for example
+/// `http://trss-browser:9230`. Unset: the worker runs no browser.
+pub const BROWSER_URL_VAR: &str = "TRSS_BROWSER_URL";
+/// What the launcher requires of every request. Required with the address.
+pub const BROWSER_TOKEN_VAR: &str = "TRSS_BROWSER_TOKEN";
+/// The shared downloads folder, at the path this worker sees it. Required
+/// with the address.
+pub const BROWSER_DOWNLOADS_VAR: &str = "TRSS_BROWSER_DOWNLOADS";
+
 /// Five minutes, the period cron ran the former binary at.
 pub const DEFAULT_INTERVAL: Duration = Duration::from_secs(300);
 
@@ -35,12 +44,33 @@ pub enum EnvError {
     Invalid(&'static str),
 }
 
+/// Where the server browser is and how to reach it.
+#[derive(Clone)]
+pub struct BrowserEnv {
+    pub url: Url,
+    /// Never printed.
+    pub token: String,
+    pub downloads: PathBuf,
+}
+
+impl std::fmt::Debug for BrowserEnv {
+    /// Without the token.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BrowserEnv")
+            .field("url", &self.url.as_str())
+            .field("downloads", &self.downloads)
+            .finish_non_exhaustive()
+    }
+}
+
 #[derive(Clone)]
 pub struct WorkerEnv {
     /// May carry credentials (`http://user:password@host/`); never print it.
     pub transmission_url: Url,
     pub session: SessionConfig,
     pub interval: Duration,
+    /// The server browser; `None`: the worker runs without one.
+    pub browser: Option<BrowserEnv>,
 }
 
 impl std::fmt::Debug for WorkerEnv {
@@ -55,6 +85,7 @@ impl std::fmt::Debug for WorkerEnv {
             .field("has_credentials", &has_credentials)
             .field("session", &self.session)
             .field("interval", &self.interval)
+            .field("browser", &self.browser)
             .finish()
     }
 }
@@ -85,6 +116,22 @@ impl WorkerEnv {
             Some(secs) => Duration::from_secs(secs),
         };
 
+        let browser = match get(BROWSER_URL_VAR).filter(|v| !v.is_empty()) {
+            None => None,
+            Some(url) => Some(BrowserEnv {
+                url: url
+                    .parse()
+                    .map_err(|_| EnvError::Invalid(BROWSER_URL_VAR))?,
+                token: get(BROWSER_TOKEN_VAR)
+                    .filter(|v| !v.is_empty())
+                    .ok_or(EnvError::Missing(BROWSER_TOKEN_VAR))?,
+                downloads: get(BROWSER_DOWNLOADS_VAR)
+                    .filter(|v| !v.is_empty())
+                    .map(PathBuf::from)
+                    .ok_or(EnvError::Missing(BROWSER_DOWNLOADS_VAR))?,
+            }),
+        };
+
         Ok(WorkerEnv {
             transmission_url,
             session: SessionConfig {
@@ -95,6 +142,7 @@ impl WorkerEnv {
                 seed_queue_size: optional(&get, SEED_QUEUE_SIZE_VAR)?,
             },
             interval,
+            browser,
         })
     }
 }
@@ -156,6 +204,60 @@ mod tests {
             }
         );
         assert_eq!(env.interval, Duration::from_secs(60));
+    }
+
+    #[test]
+    fn the_browser_is_off_unless_its_address_is_set() {
+        let env = WorkerEnv::from_lookup(lookup(&[("TRANSMISSION_URL", "http://tr/")])).unwrap();
+        assert!(env.browser.is_none());
+
+        // The token and the folder alone do not turn it on.
+        let env = WorkerEnv::from_lookup(lookup(&[
+            ("TRANSMISSION_URL", "http://tr/"),
+            ("TRSS_BROWSER_TOKEN", "t"),
+            ("TRSS_BROWSER_DOWNLOADS", "/data/browser-downloads"),
+        ]))
+        .unwrap();
+        assert!(env.browser.is_none());
+
+        let env = WorkerEnv::from_lookup(lookup(&[
+            ("TRANSMISSION_URL", "http://tr/"),
+            ("TRSS_BROWSER_URL", "http://trss-browser:9230"),
+            ("TRSS_BROWSER_TOKEN", "s3cret-token"),
+            ("TRSS_BROWSER_DOWNLOADS", "/data/browser-downloads"),
+        ]))
+        .unwrap();
+        let browser = env.browser.as_ref().unwrap();
+        assert_eq!(browser.url.as_str(), "http://trss-browser:9230/");
+        assert_eq!(browser.token, "s3cret-token");
+        assert_eq!(browser.downloads, PathBuf::from("/data/browser-downloads"));
+        assert!(!format!("{env:?}").contains("s3cret"));
+    }
+
+    #[test]
+    fn a_browser_address_needs_its_token_and_folder() {
+        let with = |extra: &[(&str, &str)]| {
+            let mut vars = vec![
+                ("TRANSMISSION_URL", "http://tr/"),
+                ("TRSS_BROWSER_URL", "http://trss-browser:9230"),
+            ];
+            vars.extend_from_slice(extra);
+            WorkerEnv::from_lookup(lookup(&vars)).unwrap_err()
+        };
+        assert_eq!(
+            with(&[("TRSS_BROWSER_DOWNLOADS", "/d")]),
+            EnvError::Missing("TRSS_BROWSER_TOKEN")
+        );
+        assert_eq!(
+            with(&[("TRSS_BROWSER_TOKEN", "t")]),
+            EnvError::Missing("TRSS_BROWSER_DOWNLOADS")
+        );
+        let bad = WorkerEnv::from_lookup(lookup(&[
+            ("TRANSMISSION_URL", "http://tr/"),
+            ("TRSS_BROWSER_URL", "not a url"),
+        ]))
+        .unwrap_err();
+        assert_eq!(bad, EnvError::Invalid("TRSS_BROWSER_URL"));
     }
 
     #[test]

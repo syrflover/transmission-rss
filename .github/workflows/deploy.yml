@@ -31,3 +31,12 @@ jobs:
           tags: |
             ghcr.io/syrflover/transmission-rss:${{ github.ref_name }}
             ghcr.io/syrflover/transmission-rss:latest
+      # The server browser of docker-compose.trss.yml, tagged the same way.
+      - name: Build and push the browser image
+        uses: docker/build-push-action@v6
+        with:
+          file: Dockerfile.browser
+          push: true
+          tags: |
+            ghcr.io/syrflover/trss-browser:${{ github.ref_name }}
+            ghcr.io/syrflover/trss-browser:latest
