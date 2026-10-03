@@ -14,8 +14,9 @@
 //! ```
 //!
 //! The test needs the `test-hooks` feature (it is not built without it). It
-//! starts a throwaway container named `trss-winpng-sample-<pid>` (removed
-//! at the end). Only counts, sizes and formats are printed: no address.
+//! starts a throwaway container per test, named
+//! `trss-winpng-sample-<test>-<pid>` (removed at the end). Only counts,
+//! sizes and formats are printed: no address.
 
 use std::{
     path::Path,
@@ -60,8 +61,9 @@ impl Drop for Container {
     }
 }
 
-async fn start(downloads: &Path) -> (Container, BrowserPool) {
-    let name = format!("trss-winpng-sample-{}", std::process::id());
+async fn start(test: &str, downloads: &Path) -> (Container, BrowserPool) {
+    // One name per test: the tests run in parallel by default.
+    let name = format!("trss-winpng-sample-{test}-{}", std::process::id());
     let container = Container(name.clone());
     std::fs::set_permissions(
         downloads,
@@ -145,7 +147,7 @@ fn posts() -> Vec<Url> {
 #[ignore]
 async fn the_real_viewer_gives_the_files_of_real_posts() {
     let downloads = tempfile::tempdir().unwrap();
-    let (_container, pool) = start(downloads.path()).await;
+    let (_container, pool) = start("posts", downloads.path()).await;
     let reader = BrowserReader::new(pool.clone());
     let posts = posts();
 
@@ -226,7 +228,7 @@ async fn the_real_viewer_gives_the_files_of_real_posts() {
 #[ignore]
 async fn a_picture_has_no_subtitle_and_an_unreadable_image_needs_input() {
     let downloads = tempfile::tempdir().unwrap();
-    let (_container, pool) = start(downloads.path()).await;
+    let (_container, pool) = start("failures", downloads.path()).await;
     let post = posts().remove(0);
 
     let plain = BrowserReader::new(pool.clone()).with_script_after_ready(PLAIN);
