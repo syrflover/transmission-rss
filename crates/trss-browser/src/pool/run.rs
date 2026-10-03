@@ -992,6 +992,8 @@ impl Page {
     /// opens from now on by dismissing it, as a person who cancels does, so a
     /// page script that waits on one never blocks the run. What was opened is
     /// kept in the returned [`Dialogs`], which stops answering when dropped.
+    /// A watch that falls behind the browser's events ends the run, since a
+    /// dialog it missed would hold the page.
     pub async fn dismiss_dialogs(&self) -> Result<Dialogs, BrowserError> {
         let session = self.session_id()?;
         let mut events = self.run.events()?;
@@ -1022,7 +1024,19 @@ impl Page {
                                 .send("Page.handleJavaScriptDialog", json!({ "accept": false }))
                                 .await;
                         }
-                        Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {}
+                        Ok(_) => {}
+                        // A dialog may have been among what was missed, and a
+                        // page that waits on it never goes on: as when the
+                        // driver falls behind, the run ends and the job asks
+                        // for a new one.
+                        Err(broadcast::error::RecvError::Lagged(missed)) => {
+                            eprintln!(
+                                "Browser: ending the run of job {}: its dialog watch fell behind by {missed} events of the browser",
+                                page.run.entry.job_id
+                            );
+                            page.run.end().await;
+                            break;
+                        }
                         Err(broadcast::error::RecvError::Closed) => break,
                     }
                 }
