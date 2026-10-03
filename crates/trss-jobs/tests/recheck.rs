@@ -986,6 +986,104 @@ async fn only_the_subscribed_creators_receipts_are_read_while_the_subscription_t
     assert_eq!(w.drive_head_count(), head);
 }
 
+#[tokio::test]
+async fn an_upload_of_the_subscribed_creator_is_never_read_again() {
+    let w = World::new().await;
+    // Uploaded as the subscribed creator's: no observation, so no post to read.
+    let made = w
+        .jobs
+        .create_upload(
+            trss_jobs::store::NewUpload {
+                id: "up1".to_owned(),
+                command_id: "upload-1".to_owned(),
+                request: "{}".to_owned(),
+                work_id: WORK.to_owned(),
+                season: 1,
+                anime_no: Some(ANIME),
+                source_id: None,
+                creator: Some("에루샤".to_owned()),
+                files: vec![trss_jobs::store::UploadedFile {
+                    id: "f1".to_owned(),
+                    file_key: "Show 05.srt".to_owned(),
+                    name: "Show 05.srt".to_owned(),
+                    path: "up1/Show 05.srt".to_owned(),
+                    size: SRT_A.len() as u64,
+                    sha256: sha(SRT_A),
+                    object: "Show 05.srt".to_owned(),
+                    format: verify::Format::Srt,
+                    kind: trss_subtitles::upload::Kind::Subtitle,
+                    archive: None,
+                }],
+                dropped: Vec::new(),
+            },
+            NOW,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(made, Created::Created(_)));
+    w.db.run::<_, DbError, _>(|c| {
+        c.execute(
+            "INSERT OR IGNORE INTO subtitle_sources (id, anime_no, creator_name, created_at)
+             VALUES ('src-에루샤', ?1, '에루샤', 1)",
+            [ANIME],
+        )?;
+        c.execute(
+            "UPDATE subtitle_jobs SET source_id = 'src-에루샤' WHERE id = 'up1'",
+            [],
+        )?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+
+    for day in 1..=3 {
+        let report = w.recheck_at(day * DAY).await;
+        assert_eq!(report.read(), 0);
+        assert!(report.jobs.is_empty());
+    }
+    assert!(w.server.seen().is_empty());
+    assert_eq!(w.job_count().await, 1);
+}
+
+#[tokio::test]
+async fn a_receipt_that_revised_a_file_the_user_named_is_read_again_like_any_other() {
+    let w = World::new().await;
+    // The user's own subtitle of 5화, named as the subscribed creator's before
+    // the creator's line was first seen.
+    w.file(5, "ass").await;
+    w.db.run::<_, DbError, _>(|c| {
+        c.execute(
+            "INSERT OR IGNORE INTO subtitle_sources (id, anime_no, creator_name, created_at)
+             VALUES ('src-에루샤', ?1, '에루샤', 1)",
+            [ANIME],
+        )?;
+        c.execute(
+            "UPDATE media_files SET creator_source_id = 'src-에루샤', creator_set_at = 1,
+                    creator_version = creator_version + 1
+              WHERE kind = 'subtitle'",
+            [],
+        )?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+    let observed = w.drive_post().await;
+    w.drive(vec![
+        file("Show 05.srt", SRT_A, MODIFIED_A),
+        file("Show 05.srt", SRT_B, MODIFIED_B),
+    ]);
+    let first = w.receive().await;
+    assert!(w.detail(&first).await.row.revises_attributed);
+
+    // The Drive file changes: a revision of that receipt, as for any other.
+    let report = w.recheck_at(3 * DAY).await;
+    assert_eq!((report.changed, report.jobs.len()), (1, 1));
+    let d = w.detail(&report.jobs[0]).await;
+    assert_eq!(d.row.revision_of, Some(observed));
+    assert_eq!(d.row.revises_job.as_deref(), Some(first.as_str()));
+    assert!(!d.row.revises_attributed);
+}
+
 /// Reads the real posts of 2026-10-03 and compares what they say now with
 /// what was received then. Run by hand:
 /// `cargo test -p trss-jobs --test recheck -- --ignored --nocapture`.

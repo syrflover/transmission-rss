@@ -322,8 +322,8 @@ async fn target_of(state: &AppState, head: Head) -> Result<Target, ApiError> {
     if id.chars().count() > ID_MAX {
         return Err(ApiError::invalid("요청 ID가 너무 길어요."));
     }
-    // The app's own receipts of the subscribed creator take these IDs.
-    if id.starts_with(trss_jobs::follow::AUTO_PREFIX) {
+    // The app's own receipts and revisions take these IDs.
+    if trss_jobs::is_app_command(&id) {
         return Err(ApiError::invalid("이 요청 ID는 쓸 수 없어요."));
     }
     let work_id = head.work_id.unwrap_or_default();

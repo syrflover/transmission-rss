@@ -525,9 +525,7 @@ async fn create(
     }
     // The app's own receipts of the subscribed creator (`auto:`) and the
     // recheck's revisions (`recheck:`) take these IDs.
-    if request.id.starts_with(trss_jobs::follow::AUTO_PREFIX)
-        || request.id.starts_with(trss_jobs::recheck::COMMAND_PREFIX)
-    {
+    if trss_jobs::is_app_command(&request.id) {
         return Err(ApiError::invalid("이 요청 ID는 쓸 수 없어요."));
     }
     if request.candidates.is_empty() {

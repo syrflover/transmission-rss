@@ -106,8 +106,12 @@ export interface FollowSuggestion {
   since: number;
 }
 
-export function fetchFollowSuggestions(signal?: AbortSignal): Promise<FollowSuggestion[]> {
-  return api<{ suggestions: FollowSuggestion[] }>("/todo/subtitle-follow", { signal }).then((r) => r.suggestions);
+export function fetchFollowSuggestions(
+  signal?: AbortSignal,
+): Promise<FollowSuggestion[]> {
+  return api<{ suggestions: FollowSuggestion[] }>("/todo/subtitle-follow", {
+    signal,
+  }).then((r) => r.suggestions);
 }
 
 /** The menu badge's count alone. */
@@ -130,7 +134,8 @@ export function fetchTodoCount(signal?: AbortSignal): Promise<number> {
  *   received (`일부 실패`).
  * - `done`: every item was received.
  */
-export type JobState = "pending" | "running" | "waiting" | "held" | "failed" | "partial" | "done";
+export type JobState =
+  "pending" | "running" | "waiting" | "held" | "failed" | "partial" | "done";
 
 /** What a `waiting` job or item waits for: a person's check (`인증 필요`) or a source it cannot read yet (`자막 대기`). */
 export type Wait = "auth" | "subtitle";
@@ -142,7 +147,8 @@ export type Wait = "auth" | "subtitle";
  * (`not_a_file`), the post holds nothing the source can read (`changed`), or the site
  * could not be reached (`network`).
  */
-export type FailureClass = "missing" | "expired" | "not_a_file" | "changed" | "network";
+export type FailureClass =
+  "missing" | "expired" | "not_a_file" | "changed" | "network";
 
 /** What received bytes were checked to be; `other` is kept for the analysis to decide. */
 export type FileFormat = "zip" | "ass" | "srt" | "smi" | "other";
@@ -226,8 +232,14 @@ export function fetchJobs(signal?: AbortSignal): Promise<JobGroups> {
 }
 
 /** The done jobs after `after` (a page's `next`). */
-export function fetchDoneJobs(after: string, signal?: AbortSignal): Promise<DonePage> {
-  return api<DonePage>(`/subtitle-jobs/done?after=${encodeURIComponent(after)}&limit=20`, { signal });
+export function fetchDoneJobs(
+  after: string,
+  signal?: AbortSignal,
+): Promise<DonePage> {
+  return api<DonePage>(
+    `/subtitle-jobs/done?after=${encodeURIComponent(after)}&limit=20`,
+    { signal },
+  );
 }
 
 /**
@@ -242,7 +254,8 @@ export interface Step {
   note: string | null;
 }
 
-export type ItemState = "pending" | "running" | "waiting" | "held" | "failed" | "done";
+export type ItemState =
+  "pending" | "running" | "waiting" | "held" | "failed" | "done";
 
 export interface JobFile {
   /** The file's name as the site gave it. */
@@ -289,6 +302,11 @@ export interface JobItem {
   reason: string | null;
   /** The class of a failed item's failure. */
   failure: FailureClass | null;
+  /**
+   * On a revision: the job of the earlier receipt whose files are the same bytes,
+   * so there is nothing to replace; `null` otherwise.
+   */
+  unchanged_from: string | null;
   files: JobFile[];
 }
 
@@ -332,7 +350,9 @@ export interface NewSubtitleJob {
  * `200` when the same ID with the same content was made before: both give the
  * job's ID. The same ID with other content is a `conflict`.
  */
-export function createSubtitleJob(job: NewSubtitleJob): Promise<{ id: string }> {
+export function createSubtitleJob(
+  job: NewSubtitleJob,
+): Promise<{ id: string }> {
   return api<{ id: string }>("/subtitle-jobs", { method: "POST", body: job });
 }
 
@@ -368,7 +388,10 @@ export interface NewUpload {
  * bytes. `202` when the job was made now and `200` when the same ID with the
  * same upload was stored before. The same ID with another upload is a `conflict`.
  */
-export function uploadSubtitles(upload: NewUpload, signal?: AbortSignal): Promise<UploadResult> {
+export function uploadSubtitles(
+  upload: NewUpload,
+  signal?: AbortSignal,
+): Promise<UploadResult> {
   const form = new FormData();
   form.append("id", upload.id);
   form.append("work_id", upload.work_id);
@@ -376,5 +399,9 @@ export function uploadSubtitles(upload: NewUpload, signal?: AbortSignal): Promis
   form.append("creator", upload.creator ?? "");
   for (const name of upload.skipped) form.append("skipped", name);
   for (const { name, file } of upload.files) form.append("file", file, name);
-  return api<UploadResult>("/subtitle-jobs/upload", { method: "POST", body: form, signal });
+  return api<UploadResult>("/subtitle-jobs/upload", {
+    method: "POST",
+    body: form,
+    signal,
+  });
 }

@@ -582,6 +582,10 @@ async fn a_bad_request_is_refused_before_a_file_is_stored() {
         (file(Form::to("   ", 1, None)), StatusCode::BAD_REQUEST),
         (file(Form::to("auto:3", 1, None)), StatusCode::BAD_REQUEST),
         (
+            file(Form::to("recheck:3:0123456789abcdef", 1, None)),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
             file(Form::to(&"x".repeat(129), 1, None)),
             StatusCode::BAD_REQUEST,
         ),

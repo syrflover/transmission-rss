@@ -36,3 +36,11 @@ pub use runner::Runner;
 pub use store::{Created, FileProblem, JobError, JobStore, NewItem, NewJob, AUTO, UPLOAD};
 pub use trss_subtitles::{verify::Format, FailureKind};
 pub use upload::{Finished, Uploads};
+
+/// Whether `command_id` is one the app makes for itself: the subscribed
+/// creator's receipts (`auto:`, [`follow`]) and the recheck's revisions
+/// (`recheck:`, [`recheck`]). A person's request may not take one, or the app's
+/// own job for it would find the person's in its place.
+pub fn is_app_command(command_id: &str) -> bool {
+    command_id.starts_with(follow::AUTO_PREFIX) || command_id.starts_with(recheck::COMMAND_PREFIX)
+}

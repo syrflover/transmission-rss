@@ -1,6 +1,8 @@
+import { Link } from "react-router-dom";
+
 import { cn } from "@/lib/utils";
 
-import type { JobFile, JobItem } from "./api";
+import { jobPath, type JobFile, type JobItem } from "./api";
 import { FailureTag, ItemBadge } from "./badges";
 import { FORMAT_LABEL, episodeName, shownItem, sizeText } from "./format";
 
@@ -22,7 +24,12 @@ function summary(items: readonly JobItem[]): string {
     .join(" · ");
 }
 
-const FILE_STATE = { receiving: "receive", done: "done", held: "held", failed: "failed" } as const;
+const FILE_STATE = {
+  receiving: "receive",
+  done: "done",
+  held: "held",
+  failed: "failed",
+} as const;
 
 /**
  * `회차별 결과`: what each episode of the job really came to and why, with the
@@ -31,11 +38,19 @@ const FILE_STATE = { receiving: "receive", done: "done", held: "held", failed: "
  */
 export function JobResults({ items }: { items: readonly JobItem[] }) {
   if (items.length === 0) {
-    return <p className="text-[13px] text-text-muted">아직 회차가 정해지지 않았어요.</p>;
+    return (
+      <p className="text-[13px] text-text-muted">
+        아직 회차가 정해지지 않았어요.
+      </p>
+    );
   }
   return (
     <div className="flex flex-col gap-2.5">
-      {items.length > 1 && <p className="text-[13px] font-semibold text-text-secondary">{summary(items)}</p>}
+      {items.length > 1 && (
+        <p className="text-[13px] font-semibold text-text-secondary">
+          {summary(items)}
+        </p>
+      )}
       <ul className="m-0 flex list-none flex-col gap-2.5 p-0">
         {items.map((item) => (
           <ItemBlock key={item.id} item={item} />
@@ -56,13 +71,26 @@ function ItemBlock({ item }: { item: JobItem }) {
       <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5">
         <b className="text-[14.5px] font-bold">{episodeName(item.episode)}</b>
         <ItemBadge shown={shownItem(item.state, item.wait)} />
-        {((item.reason !== null && item.reason !== "") || item.failure !== null) && (
+        {((item.reason !== null && item.reason !== "") ||
+          item.failure !== null) && (
           <span className="min-w-0 flex-1 basis-48 text-[13px] leading-snug text-text-secondary">
             {item.failure !== null && <FailureTag failure={item.failure} />}
             {item.reason}
           </span>
         )}
       </div>
+      {item.unchanged_from !== null && (
+        <p className="text-[13px] leading-snug text-text-secondary">
+          바꿀 것이 없음 · 받은 파일이{" "}
+          <Link
+            to={jobPath(item.unchanged_from)}
+            className="rounded-sm underline underline-offset-2 focus-visible:outline-2 focus-visible:outline-focus"
+          >
+            이전에 받은 것
+          </Link>
+          과 같아요
+        </p>
+      )}
       {item.files.length > 0 && (
         <ul className="m-0 flex list-none flex-col gap-2.5 border-t border-hairline-soft p-0 pt-2.5">
           {item.files.map((file, i) => (
@@ -95,28 +123,45 @@ function FileLine({ file }: { file: JobFile }) {
   const facts = [
     file.state !== "failed" && file.size !== null ? sizeText(file.size) : null,
     file.format !== null ? FORMAT_LABEL[file.format] : null,
-    file.format === "zip" ? (FONT_NAME.test(file.name) ? "폰트 묶음" : "묶음으로 받음") : null,
+    file.format === "zip"
+      ? FONT_NAME.test(file.name)
+        ? "폰트 묶음"
+        : "묶음으로 받음"
+      : null,
   ].filter((fact): fact is string => fact !== null);
   const answer = file.state === "failed" ? answerLine(file) : null;
   return (
     <li className="flex min-w-0 flex-col gap-1">
       <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1">
-        <span className="min-w-0 text-[13px] leading-snug font-semibold [overflow-wrap:anywhere]">{file.name}</span>
-        {facts.length > 0 && <span className="text-xs whitespace-nowrap text-text-muted">{facts.join(" · ")}</span>}
+        <span className="min-w-0 text-[13px] leading-snug font-semibold [overflow-wrap:anywhere]">
+          {file.name}
+        </span>
+        {facts.length > 0 && (
+          <span className="text-xs whitespace-nowrap text-text-muted">
+            {facts.join(" · ")}
+          </span>
+        )}
         {file.state !== "done" && <ItemBadge shown={FILE_STATE[file.state]} />}
         {file.shared_with !== null && (
-          <span className="text-xs text-text-muted">같은 파일 · {episodeName(file.shared_with)}에서 받음</span>
+          <span className="text-xs text-text-muted">
+            같은 파일 · {episodeName(file.shared_with)}에서 받음
+          </span>
         )}
       </div>
-      {((file.reason !== null && file.reason !== "") || file.failure !== null) && (
+      {((file.reason !== null && file.reason !== "") ||
+        file.failure !== null) && (
         <p className="text-xs leading-snug text-text-secondary">
           {file.failure !== null && <FailureTag failure={file.failure} />}
           {file.reason}
         </p>
       )}
-      {answer !== null && <p className="text-xs leading-snug text-text-muted">{answer}</p>}
+      {answer !== null && (
+        <p className="text-xs leading-snug text-text-muted">{answer}</p>
+      )}
       {file.path !== null && (
-        <p className="text-xs leading-snug text-text-muted [overflow-wrap:anywhere]">{file.path}</p>
+        <p className="text-xs leading-snug text-text-muted [overflow-wrap:anywhere]">
+          {file.path}
+        </p>
       )}
     </li>
   );
