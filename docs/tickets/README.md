@@ -135,7 +135,7 @@ Anissia 전체 목록 검색은 공식 문서에 없는 API라 바뀔 수 있어
 | [0038](0038-receive-result-tistory.md) | 공통 수신 결과를 정하고 Tistory 일반 첨부를 받아요 | 완료 | 0033, 0036 |
 | [0039](0039-browser-container-lifecycle.md) | 서버 브라우저 컨테이너와 수명을 다뤄요 | 완료 | 0032, 0036 |
 | [0040](0040-remote-auth-screen.md) | 작업 상세에서 원격 화면으로 인증해요 | 진행 중 | 0039, 0053 |
-| [0041](0041-source-erulabo.md) | erulabo 자막을 인증 뒤 서버 브라우저로 받아요 | 진행 중 | 0038, 0040 |
+| [0041](0041-source-erulabo.md) | erulabo 자막을 인증 뒤 서버 브라우저로 받아요 | 완료 | 0038, 0040 |
 | [0042](0042-source-blogger-drive.md) | Blogger·Google Drive의 개별 자막과 회차 ZIP을 받아요 | 완료 | 0038 |
 | [0043](0043-source-tistory-winpng.md) | Tistory WinPNG 이미지에서 뷰어로 자막을 꺼내요 | 완료 | 0038, 0039 |
 | [0044](0044-source-naver.md) | Naver 블로그 첨부를 받아요 | 완료 | 0038 |
