@@ -1188,3 +1188,38 @@ async fn real_posts_are_read_again_and_agree_with_what_was_received() {
         }
     }
 }
+
+#[tokio::test]
+async fn an_episode_the_user_does_not_receive_is_not_read_again() {
+    let w = World::new().await;
+    w.drive_post().await;
+    w.drive(vec![file("Show 05.srt", SRT_A, MODIFIED_A)]);
+    let first = w.receive().await;
+
+    // The user says the creator's 5화 is not received: inside the window, where the
+    // recheck would read it (see `a_receipt_fifteen_days_old_is_not_read`), nothing is.
+    let version = w
+        .follow
+        .mappings(WORK, 1)
+        .await
+        .unwrap()
+        .get("src-에루샤")
+        .map_or(0, |m| m.version);
+    let saved = w
+        .follow
+        .set_user_mapping(
+            WORK,
+            1,
+            "src-에루샤",
+            version,
+            trss_jobs::mapping::UserMapping::new(0, vec![("05".to_owned(), None)]).unwrap(),
+            NOW,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(saved, trss_jobs::mapping::Saved::Done(Some(_))));
+    let report = w.recheck_at(14 * DAY - HOUR).await;
+    assert_eq!(report.read(), 0);
+    assert_eq!(w.drive_head_count(), 0);
+    assert_eq!(w.record(&first).await, None);
+}

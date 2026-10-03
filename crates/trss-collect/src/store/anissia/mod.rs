@@ -20,8 +20,8 @@ use rusqlite::{params, Connection, OptionalExtension, Row, TransactionBehavior};
 use trss_anissia::Anime;
 
 pub use captions::{
-    episode_key, numeric_episode, revision_by_attribution, revision_of, Attributed, Candidate,
-    Line, Observed, Received, Revision,
+    episode_key, numeric_episode, revision_by_attributed_episode, revision_by_attribution,
+    revision_of, Attributed, Candidate, Line, Observed, Received, Revision,
 };
 
 use trss_core::{

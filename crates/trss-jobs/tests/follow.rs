@@ -13,8 +13,10 @@ use trss_collect::store::channels::{
 };
 use trss_core::{Clock, Db, DbError};
 use trss_jobs::{
-    area::ReceiveArea, mapping::MappingKind, store::JobDetail, Created, Follow, JobState, JobStore,
-    NewItem, NewJob, Runner, Wait, AUTO,
+    area::ReceiveArea,
+    mapping::{Mapping, MappingKind, Saved, UserMapping},
+    store::JobDetail,
+    Created, Follow, JobState, JobStore, NewItem, NewJob, Runner, Wait, AUTO,
 };
 use trss_subtitles::{
     fake::{self, FakeSource},
@@ -1715,4 +1717,442 @@ async fn another_creators_job_that_has_not_failed_still_holds_an_attributed_epis
         .await;
     assert!(w.evaluate().await.is_empty());
     assert_eq!(w.job_count().await, 1);
+}
+
+// --- the mapping the user sets (docs/specs/library.md, 자막의 회차 대응) -------------------
+
+/// The user saves the creator's mapping with `offset` and `exceptions`, from
+/// the version the app has stored now (0 for none).
+async fn user_sets(
+    w: &World,
+    season: u32,
+    creator: &str,
+    offset: i64,
+    exceptions: &[(&str, Option<i64>)],
+) -> Mapping {
+    let key = format!("src-{creator}");
+    let version = w
+        .follow
+        .mappings(WORK, season)
+        .await
+        .unwrap()
+        .get(&key)
+        .map_or(0, |m| m.version);
+    let user = UserMapping::new(
+        offset,
+        exceptions
+            .iter()
+            .map(|(episode, target)| ((*episode).to_owned(), *target))
+            .collect(),
+    )
+    .unwrap();
+    match w
+        .follow
+        .set_user_mapping(WORK, season, &key, version, user, NOW)
+        .await
+        .unwrap()
+    {
+        Saved::Done(Some(mapping)) => mapping,
+        other => panic!("{other:?}"),
+    }
+}
+
+/// The offset the app retired for the creator's mapping, if any.
+async fn retired(w: &World, season: u32, creator: &str) -> Option<i64> {
+    let key = format!("src-{creator}");
+    w.db.run::<_, DbError, _>(move |c| {
+        Ok(c.query_row(
+            "SELECT retired_offset FROM subtitle_episode_mappings
+              WHERE work_id = 'w1' AND season = ?1 AND source_id = ?2",
+            rusqlite::params![season, key],
+            |r| r.get(0),
+        )?)
+    })
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn an_episode_the_user_does_not_receive_is_left_while_the_others_follow_the_default() {
+    let w = World::new(Sub::aired(FIRST, 12)).await;
+    for (episode, k) in [("1", 1), ("2", 2)] {
+        w.observe_at(
+            "에루샤",
+            episode,
+            &format!("/ok/ep{episode}"),
+            Some(at(FIRST, k, 3_600)),
+        )
+        .await;
+    }
+    w.observe_at("에루샤", "13.5", "/ok/ep13_5", Some(at(FIRST, 3, 3_600)))
+        .await;
+    assert_eq!(w.evaluate().await.len(), 2);
+    // `13.5` fits no mapping: the to-do asks, naming it.
+    let checks = w.follow.episode_checks().await.unwrap();
+    assert_eq!(checks.len(), 1);
+    assert_eq!(checks[0].episodes, ["13.5"]);
+    assert_eq!(checks[0].undecided, None);
+    assert_eq!(checks[0].creator, "에루샤");
+
+    // The user maps the default 0 and says `13.5` is not received.
+    let saved = user_sets(&w, 1, "에루샤", 0, &[("13.5", None)]).await;
+    assert_eq!(saved.kind, MappingKind::User);
+    // The ask is gone at once, and stays gone at the next look.
+    assert!(w.conflicts(1, "에루샤").await.is_empty());
+    assert!(w.follow.episode_checks().await.unwrap().is_empty());
+    w.observe_at("에루샤", "3", "/ok/ep3", Some(at(FIRST, 3, 7_200)))
+        .await;
+    let made = w.evaluate().await;
+    assert_eq!(w.episodes_of(&made).await, ["3"]);
+    assert!(w.conflicts(1, "에루샤").await.is_empty());
+    assert!(w.follow.episode_checks().await.unwrap().is_empty());
+    assert_eq!(w.mapping(1, "에루샤").await, saved);
+    assert_eq!(w.job_count().await, 3);
+}
+
+#[tokio::test]
+async fn an_exception_receives_an_episode_as_the_season_episode_it_names() {
+    let w = World::new(Sub::default()).await;
+    // The creator's 14 is past the season's 12: a conflict, and the ask.
+    w.observe("에루샤", "14", "/ok/ep14", "2026-10-02T11:00:00")
+        .await;
+    assert!(w.evaluate().await.is_empty());
+    assert_eq!(w.conflicts(1, "에루샤").await.len(), 1);
+    assert_eq!(w.follow.episode_checks().await.unwrap().len(), 1);
+
+    // `014` is the same episode as `14`: it is the season's 12.
+    user_sets(&w, 1, "에루샤", 0, &[("014", Some(12))]).await;
+    assert!(w.follow.episode_checks().await.unwrap().is_empty());
+    let made = w.evaluate().await;
+    assert_eq!(w.episodes_of(&made).await, ["14"]);
+    assert!(w.conflicts(1, "에루샤").await.is_empty());
+
+    // The season's 12 already has a subtitle: nothing is received for it.
+    let w = World::new(Sub::default()).await;
+    w.file(1, 12, "mkv").await;
+    w.file(1, 12, "ass").await;
+    w.observe("에루샤", "14", "/ok/ep14", "2026-10-02T11:00:00")
+        .await;
+    user_sets(&w, 1, "에루샤", 0, &[("14", Some(12))]).await;
+    assert!(w.evaluate().await.is_empty());
+    assert_eq!(w.job_count().await, 0);
+}
+
+#[tokio::test]
+async fn the_attributed_revision_of_an_episode_an_exception_moves_is_received() {
+    let w = World::new(Sub::default()).await;
+    // The subtitle of the season's 12 is 에루샤's by the user's word; her line
+    // 14 is newer, and the user says 14 is the season's 12.
+    w.file(1, 12, "mkv").await;
+    w.file(1, 12, "ass").await;
+    w.attribute(1, 12, "에루샤", 100).await;
+    w.observe_seen("에루샤", "14", "/ok/ep14", "2026-10-02T11:50:00", 200)
+        .await;
+    assert!(w.evaluate().await.is_empty(), "14 fits no mapping yet");
+    user_sets(&w, 1, "에루샤", 0, &[("14", Some(12))]).await;
+    let made = w.evaluate().await;
+    assert_eq!(made.len(), 1);
+    assert!(w.detail(&made[0]).await.row.revises_attributed);
+}
+
+#[tokio::test]
+async fn another_creators_episode_the_users_exception_moves_holds_the_target() {
+    // 다른's episode 7 is the season's 2 by the user's exception, and its job is in line.
+    let w = World::new(Sub {
+        creator: Some("다른"),
+        ..Sub::default()
+    })
+    .await;
+    user_sets(&w, 1, "다른", 0, &[("7", Some(2))]).await;
+    w.observe("다른", "7", "/ok/other7", "2026-10-02T11:00:00")
+        .await;
+    assert_eq!(w.evaluate().await.len(), 1);
+    let rule = w.rule_now().await;
+    w.channels
+        .set_creator(&rule.id, rule.version, Some("에루샤".into()))
+        .await
+        .unwrap();
+
+    // 에루샤's 2 waits for that job; her 7 is new (7 is not what 다른's job holds).
+    w.observe("에루샤", "2", "/ok/ep2", "2026-10-02T12:00:00")
+        .await;
+    w.observe("에루샤", "7", "/ok/ep7", "2026-10-02T12:00:00")
+        .await;
+    let made = w.evaluate().await;
+    assert_eq!(w.episodes_of(&made).await, ["7"]);
+}
+
+#[tokio::test]
+async fn continuing_on_from_the_earlier_season_decides_an_undecided_source_and_receives_on() {
+    let w = World::new(Sub {
+        season: 2,
+        earlier: Some(12),
+        ..Sub::aired(FIRST, 12)
+    })
+    .await;
+    // 13 posted after episode 4 aired: −9, which no structure explains.
+    w.observe_at("에루샤", "13", "/ok/ep13", Some(at(FIRST, 4, 3_600)))
+        .await;
+    assert!(w.evaluate().await.is_empty());
+    assert_eq!(w.mapping(2, "에루샤").await.kind, MappingKind::Undecided);
+    let checks = w.follow.episode_checks().await.unwrap();
+    assert_eq!(checks.len(), 1);
+    assert_eq!(
+        (checks[0].season, checks[0].creator.as_str()),
+        (2, "에루샤")
+    );
+    assert!(checks[0].undecided.is_some());
+    assert!(checks[0].episodes.is_empty());
+    // The sum the choice subtracts is known for the second season, and is 0
+    // for the first.
+    assert_eq!(
+        w.follow.season_facts(WORK, 2).await.unwrap().previous,
+        Some(12)
+    );
+    assert_eq!(
+        w.follow.season_facts(WORK, 1).await.unwrap().previous,
+        Some(0)
+    );
+
+    let saved = user_sets(&w, 2, "에루샤", -12, &[]).await;
+    assert_eq!((saved.kind, saved.offset), (MappingKind::User, Some(-12)));
+    assert!(w.follow.episode_checks().await.unwrap().is_empty());
+    let made = w.evaluate().await;
+    assert_eq!(w.episodes_of(&made).await, ["13"]);
+}
+
+#[tokio::test]
+async fn the_sum_of_the_earlier_seasons_is_not_known_without_their_episode_counts() {
+    let w = World::new(Sub {
+        season: 2,
+        earlier: None,
+        ..Sub::aired(FIRST, 12)
+    })
+    .await;
+    assert_eq!(w.follow.season_facts(WORK, 2).await.unwrap().previous, None);
+}
+
+#[tokio::test]
+async fn a_revert_lets_the_app_decide_again_to_any_offset_the_grounds_now_say() {
+    // Auto 0 from two on-time episodes; the schedule is then corrected so that
+    // the same posts say +1: the mapping goes undecided and keeps 0 to be
+    // decided to.
+    let w = World::new(Sub::aired(FIRST, 12)).await;
+    for (episode, k) in [("1", 1), ("2", 2)] {
+        w.observe_at(
+            "에루샤",
+            episode,
+            &format!("/ok/ep{episode}"),
+            Some(at(FIRST, k, 3_600)),
+        )
+        .await;
+    }
+    w.evaluate().await;
+    let earlier = weekly(FIRST, 12)
+        .into_iter()
+        .map(|(k, secs)| serde_json::json!({ "episode": k, "at": secs - 7 * 86_400 }))
+        .collect::<Vec<_>>();
+    let earlier = serde_json::to_string(&earlier).unwrap();
+    w.db.run::<_, DbError, _>(move |c| {
+        c.execute("UPDATE anilist_entries SET airing = ?1", [earlier])?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+    w.evaluate().await;
+    assert_eq!(w.mapping(1, "에루샤").await.kind, MappingKind::Undecided);
+    assert_eq!(retired(&w, 1, "에루샤").await, Some(0));
+    assert_eq!(w.follow.episode_checks().await.unwrap().len(), 1);
+
+    // The user maps it: the offset the app kept is cleared.
+    let saved = user_sets(&w, 1, "에루샤", 0, &[("13.5", None)]).await;
+    assert_eq!(retired(&w, 1, "에루샤").await, None);
+    assert!(w.follow.episode_checks().await.unwrap().is_empty());
+
+    // Taking it back deletes the mapping with its exceptions, and the app now
+    // decides what the grounds say, +1 too.
+    assert_eq!(
+        w.follow
+            .revert_mapping(WORK, 1, "src-에루샤", saved.version)
+            .await
+            .unwrap(),
+        Saved::Done(None)
+    );
+    assert!(w.follow.mappings(WORK, 1).await.unwrap().is_empty());
+    w.evaluate().await;
+    let mapping = w.mapping(1, "에루샤").await;
+    assert_eq!((mapping.kind, mapping.offset), (MappingKind::Auto, Some(1)));
+    assert!(mapping.exceptions.is_empty());
+    assert!(w.follow.episode_checks().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_revert_with_no_grounds_returns_to_undecided_and_the_ask() {
+    // The season has no schedule: the app cannot decide anything.
+    let w = World::new(Sub {
+        user_offset: None,
+        ..Sub::default()
+    })
+    .await;
+    w.observe("에루샤", "1", "/ok/ep1", "2026-10-02T11:00:00")
+        .await;
+    assert!(w.evaluate().await.is_empty());
+    assert_eq!(w.follow.episode_checks().await.unwrap().len(), 1);
+    let saved = user_sets(&w, 1, "에루샤", 0, &[]).await;
+    assert!(w.follow.episode_checks().await.unwrap().is_empty());
+    assert_eq!(w.evaluate().await.len(), 1, "the user's mapping receives");
+
+    w.follow
+        .revert_mapping(WORK, 1, "src-에루샤", saved.version)
+        .await
+        .unwrap();
+    w.evaluate().await;
+    let mapping = w.mapping(1, "에루샤").await;
+    assert_eq!(mapping.kind, MappingKind::Undecided);
+    assert_eq!(w.follow.episode_checks().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn a_save_from_a_screen_that_read_an_older_version_is_refused_with_the_current_mapping() {
+    let w = World::new(Sub::aired(FIRST, 12)).await;
+    w.observe_at("에루샤", "1", "/ok/ep1", Some(at(FIRST, 1, 3_600)))
+        .await;
+    w.evaluate().await;
+    let read = w.mapping(1, "에루샤").await;
+    // Another screen saves first.
+    let first = user_sets(&w, 1, "에루샤", 2, &[]).await;
+    // The late save carries the version read before.
+    let late = w
+        .follow
+        .set_user_mapping(
+            WORK,
+            1,
+            "src-에루샤",
+            read.version,
+            UserMapping::new(5, Vec::new()).unwrap(),
+            NOW,
+        )
+        .await
+        .unwrap();
+    assert_eq!(late, Saved::Stale(Some(first.clone())));
+    assert_eq!(w.mapping(1, "에루샤").await, first);
+}
+
+#[tokio::test]
+async fn a_revision_of_an_episode_the_user_does_not_receive_is_left_while_other_revisions_are_received(
+) {
+    let w = World::new(Sub::aired(FIRST, 12)).await;
+    for (episode, k) in [("1", 1), ("2", 2)] {
+        w.observe_at(
+            "에루샤",
+            episode,
+            &format!("/ok/ep{episode}"),
+            Some(at(FIRST, k, 3_600)),
+        )
+        .await;
+    }
+    assert_eq!(w.evaluate().await.len(), 2);
+    w.run().await;
+
+    // The user's word stops the episode's revisions; the other episode's goes on.
+    user_sets(&w, 1, "에루샤", 0, &[("01", None)]).await;
+    for (episode, k) in [("1", 1), ("2", 2)] {
+        w.observe_at(
+            "에루샤",
+            episode,
+            &format!("/ok/ep{episode}"),
+            Some(at(FIRST, k, 7_200)),
+        )
+        .await;
+    }
+    let made = w.evaluate().await;
+    assert_eq!(w.episodes_of(&made).await, ["2"]);
+    assert_eq!(w.job_count().await, 3);
+}
+
+#[tokio::test]
+async fn an_exception_that_receives_elsewhere_does_not_stop_the_revisions_of_a_received_episode() {
+    // The counterpart of the user's `받지 않음`: only that word stops a revision.
+    let w = World::new(Sub::aired(FIRST, 12)).await;
+    w.observe_at("에루샤", "1", "/ok/ep1", Some(at(FIRST, 1, 3_600)))
+        .await;
+    w.evaluate().await;
+    w.run().await;
+    user_sets(&w, 1, "에루샤", 0, &[("2", Some(1))]).await;
+    w.observe_at("에루샤", "1", "/ok/ep1", Some(at(FIRST, 1, 7_200)))
+        .await;
+    assert_eq!(w.evaluate().await.len(), 1);
+}
+
+#[tokio::test]
+async fn a_job_decided_under_a_mapping_the_user_has_since_saved_is_not_made() {
+    let w = World::new(Sub::aired(FIRST, 12)).await;
+    let observation = w
+        .observe_at("에루샤", "1", "/ok/ep1", Some(at(FIRST, 1, 3_600)))
+        .await;
+    w.evaluate().await;
+    let read = w.mapping(1, "에루샤").await;
+    // The user saves after the follower read the mapping and before its job is stored.
+    let saved = user_sets(&w, 1, "에루샤", 3, &[]).await;
+    assert!(saved.version > read.version);
+    let jobs = trss_jobs::JobStore::new(w.db.clone());
+    let job = |command: &str| trss_jobs::NewJob {
+        command_id: command.to_owned(),
+        request: "{}".to_owned(),
+        origin: AUTO.to_owned(),
+        work_id: Some(WORK.to_owned()),
+        season: Some(1),
+        anime_no: Some(ANIME),
+        source_id: Some("src-에루샤".to_owned()),
+        creator: Some("에루샤".to_owned()),
+        revision_of: None,
+        revises_attributed: false,
+        items: vec![trss_jobs::NewItem {
+            observation_id: Some(observation),
+            episode: "9".to_owned(),
+            post_url: "/ok/ep9".to_owned(),
+            found_at: 1,
+        }],
+    };
+    let stamp = |version: i64| trss_jobs::MappingStamp {
+        work_id: WORK.to_owned(),
+        season: 1,
+        source_id: "src-에루샤".to_owned(),
+        version,
+    };
+    let before = w.job_count().await;
+    let refused = jobs
+        .create_under_mapping(job("auto:stale"), NOW, stamp(read.version))
+        .await
+        .unwrap();
+    assert!(refused.is_none());
+    assert_eq!(w.job_count().await, before);
+    let made = jobs
+        .create_under_mapping(job("auto:current"), NOW, stamp(saved.version))
+        .await
+        .unwrap();
+    assert!(matches!(made, Some(trss_jobs::Created::Created(_))));
+    assert_eq!(w.job_count().await, before + 1);
+}
+
+#[tokio::test]
+async fn the_seasons_episode_count_the_dialog_measures_against_falls_back_to_the_last_scheduled_episode(
+) {
+    let counted = World::new(Sub::aired(FIRST, 12)).await;
+    assert_eq!(
+        counted.follow.season_facts(WORK, 1).await.unwrap().total,
+        Some(12)
+    );
+    // No AniList count: the highest scheduled episode, as the mapping's own N.
+    let scheduled = World::new(Sub {
+        count: None,
+        airing: weekly(FIRST, 10),
+        user_offset: None,
+        ..Sub::default()
+    })
+    .await;
+    assert_eq!(
+        scheduled.follow.season_facts(WORK, 1).await.unwrap().total,
+        Some(10)
+    );
 }

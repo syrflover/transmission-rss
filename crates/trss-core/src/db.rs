@@ -132,6 +132,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("../migrations/jobs/recheck.sql")),
     // 42: the offset an auto mapping was taken back from; the episodes that do not fit a source's mapping
     Migration::Sql(include_str!("../migrations/jobs/airtime.sql")),
+    // 43: the version of a source's episode mapping and the user's per-episode exceptions to it
+    Migration::Sql(include_str!("../migrations/jobs/user_mapping.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -1231,6 +1233,99 @@ mod tests {
         assert_eq!(kept, (1, None, 0));
         assert_eq!(refused, [true; 4]);
         assert_eq!(cascaded, 0);
+    }
+
+    #[tokio::test]
+    async fn a_database_from_before_the_users_mapping_keeps_its_mappings_at_version_one_and_starts_with_no_exception(
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        {
+            // A database as the build with 42 migrations left it: a work whose
+            // source has an automatic mapping.
+            let conn = database_at(&path, 42);
+            conn.execute_batch(
+                "INSERT INTO watch_folders (id, path, created_at) VALUES ('f1', '/media', 1);
+                 INSERT INTO works (id, watch_folder_id, dir_name) VALUES ('w1', 'f1', 'Show');
+                 INSERT INTO subtitle_sources (id, anime_no, creator_name, created_at)
+                     VALUES ('s1', 3441, '에루샤', 5);
+                 INSERT INTO subtitle_episode_mappings
+                     (work_id, season, source_id, kind, episode_offset, evidence, decided_at)
+                     VALUES ('w1', 1, 's1', 'auto', 0, '근거', 7);",
+            )
+            .unwrap();
+        }
+
+        let db = Db::open(&path).await.unwrap();
+
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+        let (kept, refused, after_mapping, after_work): (
+            (i64, i64, i64, i64),
+            [bool; 5],
+            i64,
+            i64,
+        ) = db
+            .run::<_, DbError, _>(|c| {
+                let kept = c.query_row(
+                    "SELECT (SELECT count(*) FROM subtitle_episode_mappings),
+                            (SELECT version FROM subtitle_episode_mappings),
+                            (SELECT version FROM subtitle_mapping_clock),
+                            (SELECT count(*) FROM subtitle_episode_exceptions)",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                )?;
+                let write = |sql: &str| c.execute(sql, []).is_err();
+                let exception = |key: &str, episode: &str, target: &str, source: &str| {
+                    format!(
+                        "INSERT INTO subtitle_episode_exceptions
+                             (work_id, season, source_id, episode_key, episode, target)
+                         VALUES ('w1', 1, '{source}', '{key}', '{episode}', {target})"
+                    )
+                };
+                let refused = [
+                    // A target below the first episode.
+                    write(&exception("n:13", "13", "0", "s1")),
+                    // No key, no text.
+                    write(&exception("", "13", "1", "s1")),
+                    write(&exception("n:13", "", "1", "s1")),
+                    // A mapping that is not there.
+                    write(&exception("n:13", "13", "1", "nope")),
+                    // One exception per episode key of a source.
+                    {
+                        c.execute_batch(&exception("n:13", "013", "1", "s1"))?;
+                        write(&exception("n:13", "13.0", "NULL", "s1"))
+                    },
+                ];
+                // 받지 않음 has no target.
+                c.execute_batch(&exception("n:13.5", "13.5", "NULL", "s1"))?;
+                // The exceptions go with their mapping...
+                c.execute("DELETE FROM subtitle_episode_mappings", [])?;
+                let after_mapping = c.query_row(
+                    "SELECT count(*) FROM subtitle_episode_exceptions",
+                    [],
+                    |r| r.get(0),
+                )?;
+                // ...and with their work.
+                c.execute_batch(
+                    "INSERT INTO subtitle_episode_mappings
+                         (work_id, season, source_id, kind, episode_offset, evidence, decided_at)
+                         VALUES ('w1', 1, 's1', 'user', 0, '근거', 7);",
+                )?;
+                c.execute_batch(&exception("n:13", "13", "1", "s1"))?;
+                c.execute("DELETE FROM works WHERE id = 'w1'", [])?;
+                let after_work = c.query_row(
+                    "SELECT count(*) FROM subtitle_episode_exceptions",
+                    [],
+                    |r| r.get(0),
+                )?;
+                Ok((kept, refused, after_mapping, after_work))
+            })
+            .await
+            .unwrap();
+        assert_eq!(kept, (1, 1, 1, 0));
+        assert_eq!(refused, [true; 5]);
+        assert_eq!(after_mapping, 0);
+        assert_eq!(after_work, 0);
     }
 
     #[tokio::test]

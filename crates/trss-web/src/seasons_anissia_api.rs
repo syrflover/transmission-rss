@@ -68,7 +68,8 @@
 //!   "mappings": [
 //!     { "source_id": "6f0c…", "kind": "auto", "offset": -12,
 //!       "evidence": "13화가 1화 방영 뒤에 올라왔고 앞 시즌 회차 수(12)만큼 이어 셌어요",
-//!       "decided_at": 1790780400000 } ] }
+//!       "decided_at": 1790780400000, "version": 4, "exceptions": [] } ],
+//!   "previous_episodes": 12, "season_episodes": 12 }
 //! ```
 //!
 //! - `candidates` are newest first by `sort_at`: the update time, or the time
@@ -104,8 +105,15 @@
 //! - `mappings` are the sources' episode mappings to the season, one per
 //!   source the app decided one for (the subscribed creator's,
 //!   [`trss_jobs::mapping`]): `kind` `auto` (`offset` is added to Anissia's
-//!   whole episode), `undecided` (`offset` `null`) or `user`, with `evidence`,
-//!   the grounds that agree or why none do, for `자동 · <근거>`.
+//!   whole episode), `undecided` (`offset` `null`) or `user` (the user's, see
+//!   [`super::mapping_api`], which has the `exceptions` too), with `evidence`,
+//!   the grounds that agree or why none do, for `자동 · <근거>`, and `version`,
+//!   what a save of the user's mapping carries (a source without an entry is
+//!   version 0). `previous_episodes` is the episodes of all the earlier seasons
+//!   together when each is known (`0` for the first season), `null` otherwise:
+//!   the sum `앞 시즌에 이어 셈` subtracts. `season_episodes` is the season's own
+//!   episode count `N` as the app measures a mapping against (the AniList count, else the highest
+//!   scheduled episode), `null` when it is not known.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -118,12 +126,13 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     commands_api::{ask_anissia_captions, CommandView},
+    mapping_api::MappingView,
     subscriptions_api::{scheduled_anime, unavailable, USER_MAX_WAIT},
     ApiError, AppState,
 };
 use trss_anissia::{Anime, AnissiaError, ScheduleEntry};
 use trss_collect::store::{
-    anissia::{revision_by_attribution, Attributed},
+    anissia::{revision_by_attributed_episode, revision_by_attribution, Attributed},
     channels::{Rule, SeasonAnimeError},
 };
 use trss_library::store::seasons::SeasonError;
@@ -649,17 +658,10 @@ struct CandidatesView {
     refresh: Option<CommandView>,
     candidates: Vec<CandidateObservation>,
     mappings: Vec<MappingView>,
-}
-
-/// A source's episode mapping to the season ([`trss_jobs::mapping`]).
-#[derive(Serialize)]
-struct MappingView {
-    source_id: String,
-    /// `auto`, `undecided` or `user`.
-    kind: &'static str,
-    offset: Option<i64>,
-    evidence: String,
-    decided_at: i64,
+    /// The episodes of the earlier seasons together, when each is known.
+    previous_episodes: Option<u32>,
+    /// The season's episode count `N` (AniList, else the highest scheduled episode), when it is known.
+    season_episodes: Option<u32>,
 }
 
 impl From<&trss_collect::store::anissia::Candidate> for CandidateObservation {
@@ -709,6 +711,8 @@ async fn candidates(
             refresh: None,
             candidates: Vec::new(),
             mappings: Vec::new(),
+            previous_episodes: None,
+            season_episodes: None,
         }));
     };
     let picks = state
@@ -757,14 +761,19 @@ async fn candidates(
     if !attributed.is_empty() {
         for candidate in observed.iter_mut().filter(|c| c.revision.is_none()) {
             // A source with no mapping is compared by number as it is; one
-            // the app could not decide a mapping for cannot say.
-            let offset = match mappings.get(&candidate.source_id) {
-                None => Some(0),
-                Some(mapping) => mapping.decided_offset(),
+            // the app could not decide a mapping for cannot say. The user's
+            // exception for the episode comes before the offset.
+            candidate.revision = match mappings.get(&candidate.source_id) {
+                None => revision_by_attribution(candidate, 0, &attributed),
+                Some(mapping) => match mapping.exception_of(&candidate.episode) {
+                    Some(exception) => exception.target.and_then(|target| {
+                        revision_by_attributed_episode(candidate, i64::from(target), &attributed)
+                    }),
+                    None => mapping
+                        .decided_offset()
+                        .and_then(|offset| revision_by_attribution(candidate, offset, &attributed)),
+                },
             };
-            if let Some(offset) = offset {
-                candidate.revision = revision_by_attribution(candidate, offset, &attributed);
-            }
         }
     }
     let refresh = state
@@ -776,15 +785,14 @@ async fn candidates(
         .await
         .map_err(|e| internal(&e))?
         .remove(&anime_no.to_string());
+    let facts = state
+        .follow
+        .season_facts(&id, season)
+        .await
+        .map_err(|e| internal(&e))?;
     let mut mappings: Vec<MappingView> = mappings
         .into_iter()
-        .map(|(source_id, m)| MappingView {
-            source_id,
-            kind: m.kind.code(),
-            offset: m.offset,
-            evidence: m.evidence,
-            decided_at: m.decided_at,
-        })
+        .map(|(source_id, m)| MappingView::of(source_id, m))
         .collect();
     mappings.sort_by(|a, b| a.source_id.cmp(&b.source_id));
     Ok(Json(CandidatesView {
@@ -804,5 +812,7 @@ async fn candidates(
             })
             .collect(),
         mappings,
+        previous_episodes: facts.previous,
+        season_episodes: facts.total,
     }))
 }

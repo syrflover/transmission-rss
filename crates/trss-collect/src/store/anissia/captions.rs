@@ -225,6 +225,28 @@ pub fn revision_by_attribution(
         })
 }
 
+/// The revision mark of `candidate` when the user's exception says which
+/// season episode it is (`docs/specs/library.md`, 자막의 회차 대응): the season
+/// holds a subtitle of the candidate's creator for that episode. Like
+/// [`revision_by_attribution`], the mark carries no `of` and no `same_post`;
+/// an episode below 1 is none.
+pub fn revision_by_attributed_episode(
+    candidate: &Candidate,
+    season_episode: i64,
+    held: &[Attributed],
+) -> Option<Revision> {
+    if season_episode <= 0 {
+        return None;
+    }
+    let wanted = format!("n:{season_episode}");
+    held.iter()
+        .any(|a| a.source_id == candidate.source_id && episode_key(&a.episode) == wanted)
+        .then_some(Revision {
+            of: None,
+            same_post: None,
+        })
+}
+
 /// Whether an observation says what `line` says. The times are compared as
 /// moments when both are, so the same moment written another way is no change;
 /// otherwise as written.

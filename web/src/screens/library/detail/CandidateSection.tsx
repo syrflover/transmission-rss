@@ -1,4 +1,4 @@
-import { useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { ApiError } from "@/lib/api";
@@ -29,6 +29,8 @@ import {
   type CandidateGroup,
   type Kind,
 } from "./candidates";
+import { mappingText } from "./mapping.ts";
+import { MappingControls } from "./MappingDialog";
 import type { EpisodeOrder } from "./model";
 import { SeasonAnissiaDialog } from "./SeasonAnissiaDialog";
 
@@ -45,12 +47,6 @@ function readLine(list: CandidateList): string[] {
     lines.push(`새로고침이 ${ago(refresh.finished_at ?? refresh.updated_at)} 실패했어요.${refresh.outcome?.reason ? ` ${refresh.outcome.reason}` : ""}`);
   }
   return lines;
-}
-
-/** A source's episode mapping as one quiet line: `자동 · <근거>`. */
-function mappingLine(mapping: CandidateMapping): string {
-  const label = { auto: "자동", undecided: "회차 대응 미정", user: "직접 정함" }[mapping.kind];
-  return `${label} · ${mapping.evidence}`;
 }
 
 /**
@@ -153,6 +149,8 @@ function GroupItem({
   follow,
   choosing,
   onChoose,
+  facts,
+  onMapping,
 }: {
   group: CandidateGroup;
   workId: string;
@@ -168,6 +166,10 @@ function GroupItem({
   /** A creator is being chosen (here or in another group). */
   choosing: boolean;
   onChoose: (creator: string) => void;
+  /** What the dialog needs of the season: the earlier seasons' episodes and its own count. */
+  facts: { previous: number | null | undefined; total: number | null | undefined };
+  /** The creator's mapping changed (`null`: it has none now). */
+  onMapping: (mapping: CandidateMapping | null) => void;
 }) {
   const bodyId = useId();
   const { phase, create, resend } = useCreateJob(workId, season, onMade);
@@ -207,7 +209,11 @@ function GroupItem({
             </span>
             {mapping && (
               <span className="text-xs text-text-muted [overflow-wrap:anywhere]" data-testid="candidate-mapping">
-                {mappingLine(mapping)}
+                {mappingText(
+                  mapping,
+                  group.rows.map((r) => r.candidate.episode),
+                  facts.total,
+                )}
               </span>
             )}
           </span>
@@ -260,6 +266,19 @@ function GroupItem({
               </span>
             </div>
           )}
+          <MappingControls
+            target={{
+              workId,
+              season,
+              sourceId: group.sourceId,
+              creator: group.creator,
+              episodes: group.rows.map((r) => r.candidate.episode),
+              mapping,
+              previous: facts.previous,
+              total: facts.total,
+            }}
+            onChanged={onMapping}
+          />
           <div className="mt-2 empty:hidden">
             <CreateStatus phase={phase} onResend={resend} />
           </div>
@@ -312,6 +331,7 @@ export function CandidateSection({
   candidates,
   follow,
   onFollowChanged,
+  openSource,
 }: {
   workId: string;
   link: AnissiaLink;
@@ -326,10 +346,12 @@ export function CandidateSection({
   follow: FollowChoice | null;
   /** The creator was chosen (or another place changed the subscription first): the page reads it again. */
   onFollowChanged: () => void;
+  /** The creator whose group the address names (`회차 확인 필요`'s link): it is opened once. */
+  openSource?: string | null;
 }) {
   const { season } = link;
   const animeNo = link.anime?.anime_no ?? null;
-  const { data, error, slow, reload, taken } = candidates;
+  const { data, error, slow, reload, taken, setMapping } = candidates;
   const list = data ?? undefined;
   const [opened, setOpened] = useState<ReadonlySet<string>>(new Set());
   const [picked, setPicked] = useState<ReadonlySet<number>>(new Set());
@@ -343,6 +365,14 @@ export function CandidateSection({
     () => (list ? groupsOf(list, episodes, order, subscribed, picked) : []),
     [list, episodes, order, subscribed, picked],
   );
+
+  // The address names a creator (the `회차 확인 필요` to-do): its group opens once it is in the list.
+  const openedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!openSource || openedFor.current === openSource || !groups.some((g) => g.sourceId === openSource)) return;
+    openedFor.current = openSource;
+    setOpened((prev) => new Set(prev).add(openSource));
+  }, [openSource, groups]);
 
   const toggleOpen = (sourceId: string) =>
     setOpened((prev) => {
@@ -479,6 +509,8 @@ export function CandidateSection({
                   follow={follow}
                   choosing={choosing}
                   onChoose={(creator) => void choose(creator)}
+                  facts={{ previous: list?.previous_episodes, total: list?.season_episodes }}
+                  onMapping={(next) => setMapping(group.sourceId, next)}
                 />
               ))}
             </ul>

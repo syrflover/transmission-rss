@@ -25,7 +25,20 @@
 //!   (`context: "add_failed"`, with the rule's work when the collect folder
 //!   holds it, and the channel for the history's filter).
 //!
-//! `auth` comes before `receive_failed`, each newest first. Failed subtitle
+//! - `episode_check` (`회차 확인 필요`): a subscribed creator's source whose
+//!   episode mapping the app could not decide (`reason` says why; the
+//!   mapping is `undecided`), or whose newly seen `episodes` fit the mapping
+//!   no way and have no exception of the user's ([`trss_jobs::mapping`]). One
+//!   to-do per work, derived at each read from the stored mappings and
+//!   conflicts, so it is gone once the user's mapping is saved or the
+//!   exceptions cover the conflicting episodes. It names the lowest season
+//!   that needs it (`season`), its creator and `source_id`, which the work
+//!   detail's candidates open (`/library/<work>?season=<n>&section=candidates&source=<id>`);
+//!   `sources` counts the sources of the work that need the user, and `at` is
+//!   since when the oldest waits.
+//!
+//! `auth` comes before `receive_failed` and that before `episode_check`, each
+//! newest first. Failed subtitle
 //! jobs are not to-dos: the screen's job list shows them. The suggestions
 //! (`제안`) come from their own APIs. `GET /api/todo/count` is `{ "count" }`
 //! alone.
@@ -476,12 +489,26 @@ pub enum Todo {
         reason: Option<String>,
         channel_id: Option<String>,
     },
+    EpisodeCheck {
+        key: String,
+        at: i64,
+        work: Option<WorkRefView>,
+        title: String,
+        season: u32,
+        creator: String,
+        source_id: String,
+        episodes: Vec<String>,
+        reason: Option<String>,
+        sources: usize,
+    },
 }
 
 impl Todo {
     fn at(&self) -> i64 {
         match self {
-            Todo::Auth { at, .. } | Todo::ReceiveFailed { at, .. } => *at,
+            Todo::Auth { at, .. }
+            | Todo::ReceiveFailed { at, .. }
+            | Todo::EpisodeCheck { at, .. } => *at,
         }
     }
 }
@@ -511,9 +538,20 @@ async fn todo_count(State(state): State<AppState>) -> Result<Json<TodoCount>, Ap
 pub async fn todo_list(state: &AppState) -> Result<TodoList, ApiError> {
     let mut auth = auth_todos(state).await?;
     let mut failed = receive_failed_todos(state).await?;
+    // `회차 확인 필요` is a question on top of the others: when it cannot be
+    // read, the rest of the list (and the badge) still answers.
+    let mut checks = match episode_check_todos(state).await {
+        Ok(checks) => checks,
+        Err(e) => {
+            eprintln!("Cannot read the 회차 확인 필요 to-dos: {e:?}");
+            Vec::new()
+        }
+    };
     auth.sort_by_key(|t| std::cmp::Reverse(t.at()));
     failed.sort_by_key(|t| std::cmp::Reverse(t.at()));
+    checks.sort_by_key(|t| std::cmp::Reverse(t.at()));
     auth.extend(failed);
+    auth.extend(checks);
     Ok(TodoList {
         count: auth.len(),
         needs: auth,
@@ -561,6 +599,65 @@ async fn auth_todos(state: &AppState) -> Result<Vec<Todo>, ApiError> {
         });
     }
     Ok(todos)
+}
+
+/// The `회차 확인 필요` to-dos: one per work whose subscribed creator's
+/// mapping is undecided or has an episode that fits no mapping and no exception
+/// ([`trss_jobs::Follow::episode_checks`]). Derived at each read, so it is gone
+/// as soon as the user's mapping or exceptions cover what it asked about.
+async fn episode_check_todos(state: &AppState) -> Result<Vec<Todo>, ApiError> {
+    let internal = |e: &dyn std::fmt::Display| ApiError::Internal(e.to_string());
+    let checks = state
+        .follow
+        .episode_checks()
+        .await
+        .map_err(|e| internal(&e))?;
+    // One to-do per work: the lowest season's check names the creator and the
+    // episodes; it has been waiting since the oldest of the work's checks.
+    let mut groups: Vec<(trss_jobs::follow::EpisodeCheck, usize, i64)> = Vec::new();
+    for check in checks {
+        match groups.iter_mut().find(|(g, ..)| g.work_id == check.work_id) {
+            Some((_, count, since)) => {
+                *count += 1;
+                *since = (*since).min(check.since);
+            }
+            None => {
+                let since = check.since;
+                groups.push((check, 1, since));
+            }
+        }
+    }
+    let ids: Vec<String> = groups.iter().map(|(g, ..)| g.work_id.clone()).collect();
+    let covers = match ids.is_empty() {
+        true => HashMap::new(),
+        false => state
+            .artwork
+            .store
+            .image_ids_of(ids)
+            .await
+            .map_err(|e| internal(&e))?,
+    };
+    Ok(groups
+        .into_iter()
+        .map(|(check, sources, since)| Todo::EpisodeCheck {
+            key: format!("episode:{}", check.work_id),
+            at: since,
+            title: check.anime_title.unwrap_or_else(|| check.work_name.clone()),
+            work: Some(WorkRefView {
+                cover_url: covers
+                    .get(&check.work_id)
+                    .map(|image| image_url(&check.work_id, image)),
+                id: check.work_id,
+                name: check.work_name,
+            }),
+            season: check.season,
+            creator: check.creator,
+            source_id: check.source_id,
+            episodes: check.episodes,
+            reason: check.undecided,
+            sources,
+        })
+        .collect())
 }
 
 /// One `받기 실패` to-do as it is gathered.

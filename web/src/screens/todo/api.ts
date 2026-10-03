@@ -73,10 +73,34 @@ export interface ReceiveFailedTodo {
   channel_id: string | null;
 }
 
-export type Todo = AuthTodo | ReceiveFailedTodo;
+/**
+ * `회차 확인 필요`: a work's subscribed creator has a mapping to the season the app cannot decide (`reason` says
+ * why), or some of its episodes fit the decided mapping nowhere, so they are not received. One to-do per work; it
+ * names the lowest season's check and opens that creator's group in the work's 자막 후보.
+ */
+export interface EpisodeCheckTodo {
+  kind: "episode_check";
+  key: string;
+  /** Since when the work's oldest check waits (Unix ms). */
+  at: number;
+  work: WorkRef | null;
+  title: string;
+  season: number;
+  creator: string;
+  /** The creator's ID of the anime's lines: what the group's address names. */
+  source_id: string;
+  /** The episodes that fit nowhere; empty for an undecided mapping. */
+  episodes: string[];
+  /** Why the mapping is undecided; `null` when the mapping is decided and episodes do not fit. */
+  reason: string | null;
+  /** How many seasons and creators of the work need a check. */
+  sources: number;
+}
+
+export type Todo = AuthTodo | ReceiveFailedTodo | EpisodeCheckTodo;
 
 export interface TodoList {
-  /** Red kinds first (`인증 필요`, `받기 실패`), each newest first. */
+  /** Red kinds first (`인증 필요`, `받기 실패`), then `회차 확인 필요`, each newest first. */
   needs: Todo[];
   /** What the menu badge shows: `needs.length`. */
   count: number;

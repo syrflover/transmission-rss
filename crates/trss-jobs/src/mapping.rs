@@ -55,20 +55,45 @@
 //! when a whole `n` with `n + d` falls below 1 or past `N` (`N` known), or, for an
 //! `auto` mapping only, when a whole `n`'s own air-time evidence is another
 //! offset. `0` (the line a creator registers before the first episode) is
-//! never received and never a conflict. A conflict is not received by itself;
-//! the source's other episodes are. The set is stored with the mapping
-//! ([`store_conflicts`]) for the to-do and screen of ticket 0052.
+//! never received and never a conflict, and neither is an episode the user's
+//! exception covers (it is received as the exception says, or not at all). A
+//! conflict is not received by itself; the source's other episodes are. The set
+//! is stored with the mapping ([`store_conflicts`]) for the `회차 확인 필요`
+//! to-do and the work detail.
 //!
 //! The mapping is decided again whenever the subscribed creator's episodes are
 //! looked at, so a new episode that points to another offset takes an `auto`
 //! mapping back to `undecided` until the user maps it.
+//!
+//! # What the user sets
+//!
+//! The user maps any source of the season from the work detail
+//! ([`set_user_in`]): a default offset and the per-episode [`Exception`]s, one
+//! unit saved with the `user` kind and `retired_offset` cleared. An exception
+//! names one episode text of Anissia (compared by [`episode_key`]: `013`, `13`
+//! and `13.0` are one) and says which season episode it is, or that it is not
+//! received. Exceptions are applied before the offset wherever a mapping is read
+//! ([`Mapping::season_episode`]): the subscribed creator's receipt, the conflicts
+//! (an episode an exception covers is none), the candidates' revision marks. The
+//! app never changes a `user` row ([`store_in`]); [`revert_in`] (`자동으로
+//! 되돌리기`) deletes it with its exceptions and the offset it had retired, so the
+//! app decides again at its next look.
+//!
+//! # The version
+//!
+//! Every write that changes a row gives it the next value of one counter
+//! shared by all rows (`subtitle_mapping_clock`); a save or a revert carries the
+//! version the screen read and is refused with the row now stored when that is
+//! another. A source with no row is version 0. The counter never gives a value
+//! twice, so a row deleted by a revert and made again by the app is not the
+//! version a screen still holds.
 
 use std::collections::{BTreeMap, HashMap};
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use trss_collect::{
     episode_offset::{ranges, signed},
-    store::anissia::numeric_episode,
+    store::anissia::{episode_key, numeric_episode},
 };
 use trss_core::Millis;
 
@@ -105,6 +130,26 @@ impl MappingKind {
     }
 }
 
+/// The evidence a mapping the user set carries.
+pub const USER_EVIDENCE: &str = "사용자가 정했어요";
+
+/// The most exceptions a mapping has, and the longest episode text of one.
+pub const MAX_EXCEPTIONS: usize = 200;
+const MAX_EPISODE_CHARS: usize = 32;
+/// The largest offset and season episode the user can set.
+const MAX_NUMBER: i64 = 9999;
+
+/// One exception of a user's mapping: one episode text of Anissia is the
+/// season's episode `target`, or is not received (`None`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Exception {
+    /// [`episode_key`] of `episode`: what two texts of one episode share.
+    pub key: String,
+    /// The text as the user wrote it.
+    pub episode: String,
+    pub target: Option<u32>,
+}
+
 /// A source's mapping to a season, as stored.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Mapping {
@@ -114,9 +159,60 @@ pub struct Mapping {
     /// Why: the grounds that agree, or the reason none do.
     pub evidence: String,
     pub decided_at: Millis,
+    /// What a save carries (see the module docs); a source with no row is 0.
+    pub version: i64,
+    /// The user's exceptions, by key; empty for any mapping but a `user` one.
+    pub exceptions: Vec<Exception>,
+}
+
+/// Where a mapping puts an episode text of Anissia.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mapped {
+    /// The season's episode, which may be outside the season (below 1 or past
+    /// its last): a whole episode `n` is `n + offset`, an exception's is its
+    /// target.
+    Episode(i64),
+    /// The user's exception says the episode is not received.
+    NotReceived,
+    /// The mapping is undecided, or the text is no whole episode and has no
+    /// exception.
+    Unmapped,
+}
+
+/// A positive whole episode number (not `0`, `13.5` or text).
+pub(crate) fn whole(text: &str) -> Option<i64> {
+    let n = numeric_episode(text)?;
+    match n.parse::<i64>() {
+        Ok(n) if n > 0 => Some(n),
+        _ => None,
+    }
 }
 
 impl Mapping {
+    /// The exception that covers the episode text, if the user set one.
+    pub fn exception_of(&self, text: &str) -> Option<&Exception> {
+        if self.exceptions.is_empty() {
+            return None;
+        }
+        let key = episode_key(text);
+        self.exceptions.iter().find(|e| e.key == key)
+    }
+
+    /// Where the mapping puts the episode text: the exception first, else the
+    /// offset for a whole episode (see the module docs).
+    pub fn season_episode(&self, text: &str) -> Mapped {
+        if let Some(exception) = self.exception_of(text) {
+            return match exception.target {
+                Some(target) => Mapped::Episode(i64::from(target)),
+                None => Mapped::NotReceived,
+            };
+        }
+        match (self.decided_offset(), whole(text)) {
+            (Some(offset), Some(n)) => Mapped::Episode(n + offset),
+            _ => Mapped::Unmapped,
+        }
+    }
+
     /// What to add to Anissia's whole episode to get the season's, `None` while
     /// the mapping is undecided: the one reading of the mapping the receipt of
     /// the subscribed creator's episodes and the work detail's candidates share.
@@ -324,6 +420,10 @@ pub fn conflicts(
     let total = season.total();
     let mut out = Vec::new();
     for text in texts {
+        // The user said what the episode is, or that it is not received.
+        if mapping.exception_of(text).is_some() {
+            continue;
+        }
         let reason = match numeric_episode(text) {
             None => Some(format!(
                 "숫자가 아닌 회차({text})는 정한 차이로 알 수 없어요"
@@ -373,6 +473,9 @@ pub fn conflicts(
     out
 }
 
+const MAPPING_COLUMNS: &str =
+    "source_id, kind, episode_offset, evidence, decided_at, retired_offset, version";
+
 fn mapping_of(r: &rusqlite::Row<'_>) -> rusqlite::Result<(String, Mapping, Option<i64>)> {
     let code: String = r.get(1)?;
     let kind = MappingKind::parse(&code).ok_or_else(|| {
@@ -389,9 +492,40 @@ fn mapping_of(r: &rusqlite::Row<'_>) -> rusqlite::Result<(String, Mapping, Optio
             offset: r.get(2)?,
             evidence: r.get(3)?,
             decided_at: r.get(4)?,
+            version: r.get(6)?,
+            exceptions: Vec::new(),
         },
         r.get(5)?,
     ))
+}
+
+/// The exceptions of season `season` of the work, by source, each ordered by
+/// its text.
+fn exceptions_in(
+    c: &Connection,
+    work_id: &str,
+    season: u32,
+) -> rusqlite::Result<HashMap<String, Vec<Exception>>> {
+    let mut stmt = c.prepare(
+        "SELECT source_id, episode_key, episode, target FROM subtitle_episode_exceptions
+          WHERE work_id = ?1 AND season = ?2 ORDER BY episode_key",
+    )?;
+    let rows = stmt.query_map(params![work_id, season], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            Exception {
+                key: r.get(1)?,
+                episode: r.get(2)?,
+                target: r.get(3)?,
+            },
+        ))
+    })?;
+    let mut by_source: HashMap<String, Vec<Exception>> = HashMap::new();
+    for row in rows {
+        let (source, exception) = row?;
+        by_source.entry(source).or_default().push(exception);
+    }
+    Ok(by_source)
 }
 
 /// The mappings of season `season` of the work, by source.
@@ -400,13 +534,55 @@ pub fn read_in(
     work_id: &str,
     season: u32,
 ) -> rusqlite::Result<HashMap<String, Mapping>> {
-    let mut stmt = c.prepare(
-        "SELECT source_id, kind, episode_offset, evidence, decided_at, retired_offset
-           FROM subtitle_episode_mappings WHERE work_id = ?1 AND season = ?2",
-    )?;
+    let mut stmt = c.prepare(&format!(
+        "SELECT {MAPPING_COLUMNS} FROM subtitle_episode_mappings
+          WHERE work_id = ?1 AND season = ?2"
+    ))?;
     let rows = stmt.query_map(params![work_id, season], mapping_of)?;
-    rows.map(|row| row.map(|(source, mapping, _)| (source, mapping)))
-        .collect()
+    let mut mappings: HashMap<String, Mapping> = rows
+        .map(|row| row.map(|(source, mapping, _)| (source, mapping)))
+        .collect::<rusqlite::Result<_>>()?;
+    for (source, exceptions) in exceptions_in(c, work_id, season)? {
+        if let Some(mapping) = mappings.get_mut(&source) {
+            mapping.exceptions = exceptions;
+        }
+    }
+    Ok(mappings)
+}
+
+/// The mapping of one source in the season, with the offset it retired.
+fn read_one(
+    c: &Connection,
+    work_id: &str,
+    season: u32,
+    source_id: &str,
+) -> rusqlite::Result<Option<(Mapping, Option<i64>)>> {
+    let row = c
+        .query_row(
+            &format!(
+                "SELECT {MAPPING_COLUMNS} FROM subtitle_episode_mappings
+                  WHERE work_id = ?1 AND season = ?2 AND source_id = ?3"
+            ),
+            params![work_id, season, source_id],
+            mapping_of,
+        )
+        .optional()?;
+    let Some((_, mut mapping, retired)) = row else {
+        return Ok(None);
+    };
+    if let Some(exceptions) = exceptions_in(c, work_id, season)?.remove(source_id) {
+        mapping.exceptions = exceptions;
+    }
+    Ok(Some((mapping, retired)))
+}
+
+/// The next value of the version counter (see the module docs).
+fn next_version(c: &Connection) -> rusqlite::Result<i64> {
+    c.query_row(
+        "UPDATE subtitle_mapping_clock SET version = version + 1 RETURNING version",
+        [],
+        |r| r.get(0),
+    )
 }
 
 /// Writes what the app decided for the source, unless the user set its
@@ -418,6 +594,10 @@ pub fn read_in(
 /// other reason), the offset it had is kept as `retired_offset`, and while
 /// that is set only the same offset is decided again; any other is refused the
 /// same way.
+///
+/// A write that changes the row gives it the next version. Call it in a
+/// write transaction when the user may save at the same time: the user's row
+/// that is there then stays whatever was decided before.
 pub fn store_in(
     c: &Connection,
     work_id: &str,
@@ -426,18 +606,7 @@ pub fn store_in(
     decided: &Decided,
     now: Millis,
 ) -> rusqlite::Result<Mapping> {
-    let read = || {
-        c.query_row(
-            "SELECT source_id, kind, episode_offset, evidence, decided_at, retired_offset
-               FROM subtitle_episode_mappings
-              WHERE work_id = ?1 AND season = ?2 AND source_id = ?3",
-            params![work_id, season, source_id],
-            mapping_of,
-        )
-        .optional()
-        .map(|row| row.map(|(_, m, retired)| (m, retired)))
-    };
-    let stored = read()?;
+    let stored = read_one(c, work_id, season, source_id)?;
     let (mut offset, mut evidence) = (decided.offset, decided.evidence.clone());
     let mut retired: Option<i64> = None;
     if let Some((m, kept)) = &stored {
@@ -469,15 +638,16 @@ pub fn store_in(
             return Ok(m.clone());
         }
     }
+    let version = next_version(c)?;
     c.execute(
         "INSERT INTO subtitle_episode_mappings
              (work_id, season, source_id, kind, episode_offset, evidence, decided_at,
-              retired_offset)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+              retired_offset, version)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
          ON CONFLICT (work_id, season, source_id) DO UPDATE SET
              kind = excluded.kind, episode_offset = excluded.episode_offset,
              evidence = excluded.evidence, decided_at = excluded.decided_at,
-             retired_offset = excluded.retired_offset
+             retired_offset = excluded.retired_offset, version = excluded.version
          WHERE subtitle_episode_mappings.kind <> 'user'",
         params![
             work_id,
@@ -487,16 +657,204 @@ pub fn store_in(
             offset,
             evidence,
             now,
-            retired
+            retired,
+            version
         ],
     )?;
     // The row as it is now: a user's mapping that came in between stays.
-    Ok(read()?.map(|(m, _)| m).unwrap_or(Mapping {
-        kind,
-        offset,
-        evidence,
-        decided_at: now,
-    }))
+    Ok(read_one(c, work_id, season, source_id)?
+        .map(|(m, _)| m)
+        .unwrap_or(Mapping {
+            kind,
+            offset,
+            evidence,
+            decided_at: now,
+            version,
+            exceptions: Vec::new(),
+        }))
+}
+
+/// A mapping the user sets, checked ([`UserMapping::new`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserMapping {
+    pub offset: i64,
+    pub exceptions: Vec<Exception>,
+}
+
+/// Why a mapping the user sent cannot be saved, as a sentence for the user.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{0}")]
+pub struct InvalidMapping(pub String);
+
+impl UserMapping {
+    /// Checks the offset and the exceptions (`episode`, `target`) the user sent:
+    /// the offset within ±9999, each episode text non-empty and short, each
+    /// target a season episode from 1 to 9999 or `None` for 받지 않음, and no
+    /// two texts of one [`episode_key`].
+    pub fn new(
+        offset: i64,
+        exceptions: Vec<(String, Option<i64>)>,
+    ) -> Result<UserMapping, InvalidMapping> {
+        let invalid = |message: String| Err(InvalidMapping(message));
+        if offset.abs() > MAX_NUMBER {
+            return invalid(format!(
+                "차이는 −{MAX_NUMBER}에서 {MAX_NUMBER} 사이의 정수로 적어 주세요."
+            ));
+        }
+        if exceptions.len() > MAX_EXCEPTIONS {
+            return invalid(format!("예외는 {MAX_EXCEPTIONS}개까지 둘 수 있어요."));
+        }
+        let mut out: Vec<Exception> = Vec::with_capacity(exceptions.len());
+        for (text, target) in exceptions {
+            let episode = text.trim().to_owned();
+            if episode.is_empty() {
+                return invalid("예외의 회차 표시를 적어 주세요.".to_owned());
+            }
+            if episode.chars().count() > MAX_EPISODE_CHARS {
+                return invalid(format!(
+                    "회차 표시 ‘{episode}’가 너무 길어요. {MAX_EPISODE_CHARS}자까지 적을 수 있어요."
+                ));
+            }
+            let target = match target {
+                None => None,
+                Some(t) if (1..=MAX_NUMBER).contains(&t) => Some(t as u32),
+                Some(_) => {
+                    return invalid(format!(
+                    "‘{episode}’를 옮길 시즌 회차는 1에서 {MAX_NUMBER} 사이의 정수로 적어 주세요."
+                ))
+                }
+            };
+            let key = episode_key(&episode);
+            if let Some(same) = out.iter().find(|e| e.key == key) {
+                return invalid(if same.episode == episode {
+                    format!("회차 ‘{episode}’의 예외가 둘이에요. 같은 회차에는 예외를 하나만 둘 수 있어요.")
+                } else {
+                    format!(
+                        "회차 ‘{}’와 ‘{episode}’는 같은 회차예요. 예외를 하나만 남겨 주세요.",
+                        same.episode
+                    )
+                });
+            }
+            out.push(Exception {
+                key,
+                episode,
+                target,
+            });
+        }
+        out.sort_by(|a, b| a.key.cmp(&b.key));
+        Ok(UserMapping {
+            offset,
+            exceptions: out,
+        })
+    }
+}
+
+/// What a save or a revert of the user's came to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Saved {
+    /// Done; the mapping now stored (`None` after a revert).
+    Done(Option<Mapping>),
+    /// The row was not the version the screen read: what is stored now.
+    Stale(Option<Mapping>),
+    /// A revert of a mapping the user did not set: nothing to take back.
+    NotTheUsers(Option<Mapping>),
+}
+
+/// Saves the mapping the user set for the source in the season, as one unit
+/// (the offset with its exceptions): a `user` row that clears the offset the
+/// app retired, with the next version. `version` is what the screen read (0 for
+/// a source with no row); another is refused with the stored mapping. The
+/// source's stored conflicts go, since they were found against the mapping
+/// that was there; the follower writes them again at its next look.
+pub fn set_user_in(
+    c: &mut Connection,
+    work_id: &str,
+    season: u32,
+    source_id: &str,
+    version: i64,
+    user: &UserMapping,
+    now: Millis,
+) -> rusqlite::Result<Saved> {
+    let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let stored = read_one(&tx, work_id, season, source_id)?.map(|(m, _)| m);
+    if stored.as_ref().map_or(0, |m| m.version) != version {
+        return Ok(Saved::Stale(stored));
+    }
+    let next = next_version(&tx)?;
+    tx.execute(
+        "INSERT INTO subtitle_episode_mappings
+             (work_id, season, source_id, kind, episode_offset, evidence, decided_at,
+              retired_offset, version)
+         VALUES (?1, ?2, ?3, 'user', ?4, ?5, ?6, NULL, ?7)
+         ON CONFLICT (work_id, season, source_id) DO UPDATE SET
+             kind = 'user', episode_offset = excluded.episode_offset,
+             evidence = excluded.evidence, decided_at = excluded.decided_at,
+             retired_offset = NULL, version = excluded.version",
+        params![
+            work_id,
+            season,
+            source_id,
+            user.offset,
+            USER_EVIDENCE,
+            now,
+            next
+        ],
+    )?;
+    tx.execute(
+        "DELETE FROM subtitle_episode_exceptions
+          WHERE work_id = ?1 AND season = ?2 AND source_id = ?3",
+        params![work_id, season, source_id],
+    )?;
+    for e in &user.exceptions {
+        tx.execute(
+            "INSERT INTO subtitle_episode_exceptions
+                 (work_id, season, source_id, episode_key, episode, target)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![work_id, season, source_id, e.key, e.episode, e.target],
+        )?;
+    }
+    tx.execute(
+        "DELETE FROM subtitle_mapping_conflicts
+          WHERE work_id = ?1 AND season = ?2 AND source_id = ?3",
+        params![work_id, season, source_id],
+    )?;
+    let saved = read_one(&tx, work_id, season, source_id)?.map(|(m, _)| m);
+    tx.commit()?;
+    Ok(Saved::Done(saved))
+}
+
+/// `자동으로 되돌리기`: deletes the user's mapping of the source with its
+/// exceptions and the offset the app had retired, and the conflicts found
+/// against it, so the app decides again at its next look. `version` is what the
+/// screen read. A mapping the user did not set is not taken back.
+pub fn revert_in(
+    c: &mut Connection,
+    work_id: &str,
+    season: u32,
+    source_id: &str,
+    version: i64,
+) -> rusqlite::Result<Saved> {
+    let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let stored = read_one(&tx, work_id, season, source_id)?.map(|(m, _)| m);
+    if stored.as_ref().map_or(0, |m| m.version) != version {
+        return Ok(Saved::Stale(stored));
+    }
+    if stored.as_ref().is_none_or(|m| m.kind != MappingKind::User) {
+        return Ok(Saved::NotTheUsers(stored));
+    }
+    // The exceptions go with the row.
+    tx.execute(
+        "DELETE FROM subtitle_episode_mappings
+          WHERE work_id = ?1 AND season = ?2 AND source_id = ?3",
+        params![work_id, season, source_id],
+    )?;
+    tx.execute(
+        "DELETE FROM subtitle_mapping_conflicts
+          WHERE work_id = ?1 AND season = ?2 AND source_id = ?3",
+        params![work_id, season, source_id],
+    )?;
+    tx.commit()?;
+    Ok(Saved::Done(None))
 }
 
 /// Makes the stored conflicts of the source in the season exactly `found`: an

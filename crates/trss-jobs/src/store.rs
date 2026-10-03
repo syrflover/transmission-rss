@@ -378,7 +378,24 @@ impl JobStore {
     /// its browser ID is known. The check and the insert are one write
     /// transaction, so two deliveries at once store one job.
     pub async fn create(&self, job: NewJob, now: Millis) -> Result<Created, JobError> {
-        self.db.run(move |c| create(c, &job, now)).await
+        let made = self.db.run(move |c| create(c, &job, now, None)).await?;
+        Ok(made.unwrap_or_else(|| unreachable!("a job with no stamp is never refused")))
+    }
+
+    /// [`JobStore::create`] for a job made under a source's episode mapping:
+    /// the mapping's version is checked in the same write transaction as the
+    /// insert, and `None` (nothing stored) says the mapping changed since
+    /// `under` was read, so the job was decided under a mapping that no longer
+    /// stands.
+    pub async fn create_under_mapping(
+        &self,
+        job: NewJob,
+        now: Millis,
+        under: MappingStamp,
+    ) -> Result<Option<Created>, JobError> {
+        self.db
+            .run(move |c| create(c, &job, now, Some(&under)))
+            .await
     }
 
     /// Records an upload as a job that is already `done`, unless its command
@@ -1067,8 +1084,37 @@ impl JobStore {
     }
 }
 
-fn create(c: &mut Connection, job: &NewJob, now: Millis) -> Result<Created, JobError> {
+/// The mapping version a job was decided under ([`JobStore::create_under_mapping`]).
+#[derive(Debug, Clone)]
+pub struct MappingStamp {
+    pub work_id: String,
+    pub season: u32,
+    pub source_id: String,
+    /// The version read (`0` for a source with no mapping).
+    pub version: i64,
+}
+
+fn create(
+    c: &mut Connection,
+    job: &NewJob,
+    now: Millis,
+    under: Option<&MappingStamp>,
+) -> Result<Option<Created>, JobError> {
     let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    if let Some(under) = under {
+        let version: i64 = tx
+            .query_row(
+                "SELECT version FROM subtitle_episode_mappings
+                  WHERE work_id = ?1 AND season = ?2 AND source_id = ?3",
+                params![under.work_id, under.season, under.source_id],
+                |r| r.get(0),
+            )
+            .optional()?
+            .unwrap_or(0);
+        if version != under.version {
+            return Ok(None);
+        }
+    }
     let known: Option<(String, String)> = tx
         .query_row(
             "SELECT id, request FROM subtitle_jobs WHERE command_id = ?1",
@@ -1077,10 +1123,10 @@ fn create(c: &mut Connection, job: &NewJob, now: Millis) -> Result<Created, JobE
         )
         .optional()?;
     if let Some((id, request)) = known {
-        return Ok(match request == job.request {
+        return Ok(Some(match request == job.request {
             true => Created::Existing(id),
             false => Created::Mismatch(id),
-        });
+        }));
     }
     let id = uuid::Uuid::new_v4().to_string();
     tx.execute(
@@ -1144,7 +1190,7 @@ fn create(c: &mut Connection, job: &NewJob, now: Millis) -> Result<Created, JobE
         params![id, now, message, format!("후보 {count}개")],
     )?;
     tx.commit()?;
-    Ok(Created::Created(id))
+    Ok(Some(Created::Created(id)))
 }
 
 fn create_upload(c: &mut Connection, up: &NewUpload, now: Millis) -> Result<Created, JobError> {

@@ -13,7 +13,8 @@ const base =
 
 /**
  * A state badge. It always has a border and an icon, never colour alone. Red
- * is for what needs the user (`urgent`); the rest are neutral. `ok` is the one
+ * is for what needs the user (`urgent`); `check` is the calm blue of a question
+ * only the user can answer; the rest are neutral. `ok` is the one
  * green: the check on something received.
  */
 export function Badge({
@@ -22,7 +23,7 @@ export function Badge({
   children,
   className,
 }: {
-  tone: "urgent" | "neutral" | "ok";
+  tone: "urgent" | "neutral" | "ok" | "check";
   icon: IconType;
   children: ReactNode;
   className?: string;
@@ -31,7 +32,11 @@ export function Badge({
     <span
       className={cn(
         base,
-        tone === "urgent" ? "border-urgent text-urgent" : "border-hairline text-text-secondary",
+        tone === "urgent"
+          ? "border-urgent text-urgent"
+          : tone === "check"
+            ? "border-focus text-focus"
+            : "border-hairline text-text-secondary",
         tone === "ok" && "font-semibold text-text-primary",
         className,
       )}

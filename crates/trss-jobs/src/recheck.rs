@@ -351,7 +351,20 @@ impl Recheck {
         let Some(source_id) = self.follow.creator_source(sub, creator).await? else {
             return Ok(report);
         };
-        let due = self.due(sub, &source_id, clock()).await?;
+        let mut due = self.due(sub, &source_id, clock()).await?;
+        // The user's `받지 않음` stops an episode's rechecks too: its items are
+        // neither read nor claimed.
+        if let Some(own) = self
+            .follow
+            .mappings(&sub.work_id, sub.season)
+            .await?
+            .remove(&source_id)
+        {
+            due.retain(|item| {
+                !own.exception_of(&item.episode)
+                    .is_some_and(|e| e.target.is_none())
+            });
+        }
 
         // The items of a post are read together.
         let mut posts: BTreeMap<String, Vec<Due>> = BTreeMap::new();

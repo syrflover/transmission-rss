@@ -829,20 +829,29 @@ fn merge_work(tx: &Transaction<'_>, from: &str, into: &str) -> rusqlite::Result<
 /// to the mapping they were found against, so they go where that mapping
 /// does: the moved work's replace the kept work's for each (season, source)
 /// whose mapping `into` now has from `from`, and the kept work's stay for the
-/// others. The follower rewrites them at its next look anyway.
+/// others. The follower rewrites them at its next look anyway. The user's
+/// exceptions (`subtitle_episode_exceptions`) go the same way, with the user's
+/// mapping they belong to. A mapping written here has a new version (the next
+/// of `subtitle_mapping_clock`), since it is not the row a screen read.
 fn merge_subtitle_mappings(tx: &Transaction<'_>, from: &str, into: &str) -> rusqlite::Result<()> {
+    let version: i64 = tx.query_row(
+        "UPDATE subtitle_mapping_clock SET version = version + 1 RETURNING version",
+        [],
+        |r| r.get(0),
+    )?;
     tx.execute(
         "INSERT INTO subtitle_episode_mappings
              (work_id, season, source_id, kind, episode_offset, evidence, decided_at,
-              retired_offset)
-         SELECT ?2, season, source_id, kind, episode_offset, evidence, decided_at, retired_offset
+              retired_offset, version)
+         SELECT ?2, season, source_id, kind, episode_offset, evidence, decided_at, retired_offset,
+                ?3
            FROM subtitle_episode_mappings WHERE work_id = ?1
          ON CONFLICT (work_id, season, source_id) DO UPDATE SET
              kind = excluded.kind, episode_offset = excluded.episode_offset,
              evidence = excluded.evidence, decided_at = excluded.decided_at,
-             retired_offset = excluded.retired_offset
+             retired_offset = excluded.retired_offset, version = excluded.version
          WHERE excluded.kind = 'user'",
-        params![from, into],
+        params![from, into, version],
     )?;
     // The (season, source) pairs whose mapping `into` has from `from` now.
     let moved = "SELECT m.season, m.source_id
@@ -852,6 +861,23 @@ fn merge_subtitle_mappings(tx: &Transaction<'_>, from: &str, into: &str) -> rusq
                   WHERE m.work_id = ?2 AND m.kind = f.kind
                     AND m.episode_offset IS f.episode_offset AND m.evidence = f.evidence
                     AND m.decided_at = f.decided_at";
+    tx.execute(
+        &format!(
+            "DELETE FROM subtitle_episode_exceptions
+              WHERE work_id = ?2 AND (season, source_id) IN ({moved})"
+        ),
+        params![from, into],
+    )?;
+    tx.execute(
+        &format!(
+            "INSERT INTO subtitle_episode_exceptions
+                 (work_id, season, source_id, episode_key, episode, target)
+             SELECT ?2, season, source_id, episode_key, episode, target
+               FROM subtitle_episode_exceptions
+              WHERE work_id = ?1 AND (season, source_id) IN ({moved})"
+        ),
+        params![from, into],
+    )?;
     tx.execute(
         &format!(
             "DELETE FROM subtitle_mapping_conflicts

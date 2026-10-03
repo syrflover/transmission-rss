@@ -238,7 +238,8 @@ async fn an_archive_move_that_merges_two_works_keeps_the_subtitle_sources_mappin
     db.run::<_, DbError, _>(move |c| {
         c.execute_batch(
             "INSERT INTO subtitle_sources (id, anime_no, creator_name, created_at)
-                 VALUES ('s1', 7, '가', 1), ('s2', 7, '나', 1), ('s3', 7, '다', 1);",
+                 VALUES ('s1', 7, '가', 1), ('s2', 7, '나', 1), ('s3', 7, '다', 1),
+                        ('s4', 7, '라', 1), ('s5', 7, '마', 1);",
         )?;
         let put = |work: &str, source: &str, kind: &str, offset: Option<i64>| {
             c.execute(
@@ -261,6 +262,24 @@ async fn an_archive_move_that_merges_two_works_keeps_the_subtitle_sources_mappin
         put(&k, "s2", "auto", Some(0))?;
         put(&m, "s3", "auto", Some(-1))?;
         put(&k, "s3", "undecided", None)?;
+        // s4: both are the user's, with exceptions of their own; s5: the kept
+        // work's is the user's with an exception, the moved one is the app's.
+        put(&m, "s4", "user", Some(0))?;
+        put(&k, "s4", "user", Some(1))?;
+        put(&k, "s5", "user", Some(2))?;
+        put(&m, "s5", "auto", Some(0))?;
+        let exception = |work: &str, source: &str, key: &str, target: Option<i64>| {
+            c.execute(
+                "INSERT INTO subtitle_episode_exceptions
+                     (work_id, season, source_id, episode_key, episode, target)
+                 VALUES (?1, 1, ?2, ?3, ?3, ?4)",
+                rusqlite::params![work, source, key, target],
+            )
+        };
+        exception(&m, "s2", "13.5", None)?;
+        exception(&m, "s4", "14", Some(2))?;
+        exception(&k, "s4", "15", Some(3))?;
+        exception(&k, "s5", "16", Some(4))?;
         // Each mapping has the conflicts it was found against.
         let conflict = |work: &str, source: &str, episode: &str| {
             c.execute(
@@ -285,6 +304,48 @@ async fn an_archive_move_that_merges_two_works_keeps_the_subtitle_sources_mappin
         Followed::Merged
     );
     type Row = (String, String, String, Option<i64>, Option<i64>);
+    let exceptions: Vec<(String, String, String, Option<i64>)> = db
+        .run::<_, DbError, _>(|c| {
+            let mut stmt = c.prepare(
+                "SELECT work_id, source_id, episode_key, target FROM subtitle_episode_exceptions
+                  ORDER BY source_id, episode_key",
+            )?;
+            let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+        .await
+        .unwrap();
+    // The exceptions go with the user's mapping that is kept: the moved
+    // work's replace the kept work's for s4 (its mapping won), and the kept
+    // work's stay for s5.
+    let e = |source: &str, key: &str, target: Option<i64>| {
+        (kept.clone(), source.to_owned(), key.to_owned(), target)
+    };
+    assert_eq!(
+        exceptions,
+        [
+            e("s2", "13.5", None),
+            e("s4", "14", Some(2)),
+            e("s5", "16", Some(4))
+        ]
+    );
+    let versions: Vec<(String, i64)> = db
+        .run::<_, DbError, _>(|c| {
+            let mut stmt = c.prepare(
+                "SELECT source_id, version FROM subtitle_episode_mappings ORDER BY source_id",
+            )?;
+            let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+        .await
+        .unwrap();
+    // A mapping the merge wrote is a version no screen read; the kept work's
+    // own (s5) is as it was.
+    let version = |name: &str| versions.iter().find(|(s, _)| s == name).unwrap().1;
+    assert_eq!(version("s5"), 1);
+    for moved in ["s1", "s2", "s4"] {
+        assert!(version(moved) > 1, "{moved}");
+    }
     let rows: Vec<Row> = db
         .run::<_, DbError, _>(|c| {
             let mut stmt = c.prepare(
@@ -313,7 +374,9 @@ async fn an_archive_move_that_merges_two_works_keeps_the_subtitle_sources_mappin
         [
             k("s1", "undecided", None, Some(2)),
             k("s2", "user", Some(-12), None),
-            k("s3", "undecided", None, None)
+            k("s3", "undecided", None, None),
+            k("s4", "user", Some(0), None),
+            k("s5", "user", Some(2), None)
         ]
     );
     // The conflicts follow the mapping that is kept: the moved work's for s1

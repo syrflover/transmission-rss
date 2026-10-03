@@ -12,10 +12,12 @@ import {
   type Candidate,
   type CandidateJob,
   type CandidateList,
+  type CandidateMapping,
   type EpisodeRange,
   type WorkEpisode,
 } from "../api";
 import { formatRanges } from "../model";
+import { episodeKey, numericKey } from "./episodeKey.ts";
 import { episodeLabel, type EpisodeOrder } from "./model";
 
 /**
@@ -29,26 +31,7 @@ import { episodeLabel, type EpisodeOrder } from "./model";
 
 // --- episodes ---------------------------------------------------------------------------
 
-/**
- * The comparison key of text that is plainly a number (`library.md`, 자막의 회차 대응): the
- * leading zeros of the integer part and the trailing zeros of the decimal part
- * go, and a decimal part left empty loses its dot, so `013`, `13` and `13.0` are
- * `13` and `13.50` is `13.5`. No float is made, so `13.5` is never rounded.
- * `null` for any other text.
- */
-export function numericKey(text: string): string | null {
-  if (!/^\d+(\.\d+)?$/.test(text)) return null;
-  const [whole, decimal = ""] = text.split(".");
-  const integer = whole.replace(/^0+/, "") || "0";
-  const fraction = decimal.replace(/0+$/, "");
-  return fraction === "" ? integer : `${integer}.${fraction}`;
-}
-
-/** One key for the episodes that are the same: `1` and `01` are, other text is only itself (`SP`). */
-export function episodeKey(text: string): string {
-  const n = numericKey(text);
-  return n === null ? `t:${text}` : `n:${n}`;
-}
+export { episodeKey, numericKey };
 
 /**
  * Whether a candidate's episode is the library episode. This compares Anissia's
@@ -363,7 +346,22 @@ export function useCandidates(workId: string, season: number, animeNo: number | 
     },
     [key, reload],
   );
-  return { ...polled, reload, taken };
+  /** Shows a creator's mapping as the server now holds it (`null`: it has none) and reads the list again. */
+  const setMapping = useCallback(
+    (sourceId: string, mapping: CandidateMapping | null) => {
+      patch<CandidateList | null>(key, (list) =>
+        list
+          ? {
+              ...list,
+              mappings: [...(list.mappings ?? []).filter((m) => m.source_id !== sourceId), ...(mapping ? [mapping] : [])],
+            }
+          : list,
+      );
+      void reload();
+    },
+    [key, reload],
+  );
+  return { ...polled, reload, taken, setMapping };
 }
 
 // --- creating a job ---------------------------------------------------------------------------

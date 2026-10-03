@@ -87,8 +87,9 @@ export function fromArchive(s: ArchiveSuggestion): Suggestion {
 }
 
 /** Where the work detail shows a season's 자막 후보. */
-export function candidatesLink(workId: string, season: number): string {
-  return `/library/${encodeURIComponent(workId)}?season=${season}&section=candidates`;
+export function candidatesLink(workId: string, season: number, creatorId?: string): string {
+  const creator = creatorId === undefined ? "" : `&source=${encodeURIComponent(creatorId)}`;
+  return `/library/${encodeURIComponent(workId)}?season=${season}&section=candidates${creator}`;
 }
 
 /** `자막 구독`: the episodes and how many creators, never their names. */

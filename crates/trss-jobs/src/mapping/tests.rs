@@ -51,6 +51,8 @@ fn only_a_decided_mapping_has_an_offset_whatever_the_stored_number_is() {
         offset,
         evidence: String::new(),
         decided_at: 0,
+        version: 1,
+        exceptions: Vec::new(),
     };
     assert_eq!(
         mapping(MappingKind::Auto, Some(-12)).decided_offset(),
@@ -502,6 +504,389 @@ mod stored {
         .await
         .unwrap();
     }
+
+    // --- what the user sets -------------------------------------------------------------
+
+    fn user(offset: i64, exceptions: &[(&str, Option<i64>)]) -> UserMapping {
+        UserMapping::new(
+            offset,
+            exceptions
+                .iter()
+                .map(|(episode, target)| ((*episode).to_owned(), *target))
+                .collect(),
+        )
+        .unwrap()
+    }
+
+    fn done(saved: Saved) -> Mapping {
+        match saved {
+            Saved::Done(Some(m)) => m,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    fn exceptions_of(c: &Connection) -> Vec<(String, String, Option<u32>)> {
+        let mut stmt = c
+            .prepare(
+                "SELECT episode_key, episode, target FROM subtitle_episode_exceptions
+                  ORDER BY episode_key",
+            )
+            .unwrap();
+        let rows = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap();
+        rows.collect::<rusqlite::Result<_>>().unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_save_stores_the_offset_and_its_exceptions_as_the_users_mapping() {
+        let db = db().await;
+        db.run::<_, DbError, _>(|c| {
+            let saved = done(
+                set_user_in(
+                    c,
+                    "w1",
+                    1,
+                    "s1",
+                    0,
+                    &user(-12, &[("14", Some(3)), ("013.0", None)]),
+                    10,
+                )
+                .unwrap(),
+            );
+            assert_eq!(
+                (saved.kind, saved.offset, saved.decided_at),
+                (MappingKind::User, Some(-12), 10)
+            );
+            assert_eq!(saved.evidence, USER_EVIDENCE);
+            assert!(saved.version > 1);
+            assert_eq!(
+                saved.exceptions,
+                [
+                    Exception {
+                        key: "n:13".into(),
+                        episode: "013.0".into(),
+                        target: None
+                    },
+                    Exception {
+                        key: "n:14".into(),
+                        episode: "14".into(),
+                        target: Some(3)
+                    }
+                ]
+            );
+            // What is read back is what was saved.
+            let read = read_in(c, "w1", 1).unwrap().remove("s1").unwrap();
+            assert_eq!(read, saved);
+            // A second save replaces the exceptions as a whole.
+            let again = done(
+                set_user_in(
+                    c,
+                    "w1",
+                    1,
+                    "s1",
+                    saved.version,
+                    &user(0, &[("15", Some(15))]),
+                    20,
+                )
+                .unwrap(),
+            );
+            assert_eq!(again.offset, Some(0));
+            assert!(again.version > saved.version);
+            assert_eq!(exceptions_of(c), [("n:15".into(), "15".into(), Some(15))]);
+            Ok(())
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_save_clears_the_offset_the_app_retired_so_it_may_decide_another_after_a_revert() {
+        let db = db().await;
+        db.run::<_, DbError, _>(|c| {
+            put(c, &zero(), 10);
+            put(c, &nothing(), 20);
+            assert_eq!(row(c), ("undecided".into(), None, Some(0)));
+            let version = read_in(c, "w1", 1).unwrap()["s1"].version;
+            let saved = done(set_user_in(c, "w1", 1, "s1", version, &user(3, &[]), 30).unwrap());
+            assert_eq!(row(c), ("user".into(), Some(3), None));
+            // The app does not touch it.
+            assert_eq!(put(c, &plus_one(), 40), saved);
+            // A revert deletes the row, and the app decides whatever its grounds say.
+            assert_eq!(
+                revert_in(c, "w1", 1, "s1", saved.version).unwrap(),
+                Saved::Done(None)
+            );
+            assert!(read_in(c, "w1", 1).unwrap().is_empty());
+            let m = put(c, &plus_one(), 50);
+            assert_eq!((m.kind, m.offset), (MappingKind::Auto, Some(1)));
+            assert_eq!(row(c), ("auto".into(), Some(1), None));
+            Ok(())
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_save_from_an_older_version_is_refused_and_changes_nothing() {
+        let db = db().await;
+        db.run::<_, DbError, _>(|c| {
+            // The source has no row: version 0. Two screens read that.
+            let first = done(set_user_in(c, "w1", 1, "s1", 0, &user(0, &[]), 10).unwrap());
+            let late = set_user_in(c, "w1", 1, "s1", 0, &user(5, &[("2", None)]), 20).unwrap();
+            assert_eq!(late, Saved::Stale(Some(first.clone())));
+            assert_eq!(row(c), ("user".into(), Some(0), None));
+            assert!(exceptions_of(c).is_empty());
+            Ok(())
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_app_changing_a_mapping_gives_it_a_new_version_and_the_same_again_does_not() {
+        let db = db().await;
+        db.run::<_, DbError, _>(|c| {
+            let first = put(c, &zero(), 10);
+            assert_eq!(put(c, &zero(), 20).version, first.version);
+            let undecided = put(c, &plus_one(), 30);
+            assert!(undecided.version > first.version);
+            // A user's save from the version read before the app's write is refused.
+            let late = set_user_in(c, "w1", 1, "s1", first.version, &user(0, &[]), 40).unwrap();
+            assert_eq!(late, Saved::Stale(Some(undecided.clone())));
+            // ...and from the version read after it goes through.
+            assert!(matches!(
+                set_user_in(c, "w1", 1, "s1", undecided.version, &user(0, &[]), 50).unwrap(),
+                Saved::Done(Some(_))
+            ));
+            Ok(())
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_user_saving_while_the_app_is_about_to_store_its_decision_keeps_the_users_mapping()
+    {
+        let db = db().await;
+        db.run::<_, DbError, _>(|c| {
+            put(c, &zero(), 10);
+            // The app decided +1 from its grounds; before it stores that, the
+            // user maps the source with an exception.
+            let decided = plus_one();
+            let version = read_in(c, "w1", 1).unwrap()["s1"].version;
+            let saved = done(
+                set_user_in(c, "w1", 1, "s1", version, &user(-12, &[("13.5", None)]), 20).unwrap(),
+            );
+            let stored = put(c, &decided, 30);
+            assert_eq!(stored, saved);
+            assert_eq!(row(c), ("user".into(), Some(-12), None));
+            assert_eq!(exceptions_of(c), [("n:13.5".into(), "13.5".into(), None)]);
+            Ok(())
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_revert_takes_the_mapping_its_exceptions_and_conflicts_and_is_refused_from_an_older_version(
+    ) {
+        let db = db().await;
+        db.run::<_, DbError, _>(|c| {
+            let saved =
+                done(set_user_in(c, "w1", 1, "s1", 0, &user(0, &[("2", Some(1))]), 10).unwrap());
+            store_conflicts(
+                c,
+                "w1",
+                1,
+                "s1",
+                &[Conflict {
+                    episode: "13.5".into(),
+                    reason: "소수".into(),
+                }],
+                11,
+            )
+            .unwrap();
+            // From a version that is not the stored one: nothing happens.
+            assert_eq!(
+                revert_in(c, "w1", 1, "s1", saved.version - 1).unwrap(),
+                Saved::Stale(Some(saved.clone()))
+            );
+            assert_eq!(row(c).0, "user");
+            assert_eq!(
+                revert_in(c, "w1", 1, "s1", saved.version).unwrap(),
+                Saved::Done(None)
+            );
+            assert!(read_in(c, "w1", 1).unwrap().is_empty());
+            assert!(exceptions_of(c).is_empty());
+            assert!(conflicts_in(c, "w1", 1, "s1").unwrap().is_empty());
+            // The source is version 0 again, and the app's new row is another
+            // version than the one the screen held.
+            let again = put(c, &zero(), 20);
+            assert_ne!(again.version, saved.version);
+            assert_eq!(
+                set_user_in(c, "w1", 1, "s1", saved.version, &user(0, &[]), 30).unwrap(),
+                Saved::Stale(Some(again))
+            );
+            Ok(())
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn only_the_users_mapping_is_taken_back() {
+        let db = db().await;
+        db.run::<_, DbError, _>(|c| {
+            // No row.
+            assert_eq!(
+                revert_in(c, "w1", 1, "s1", 0).unwrap(),
+                Saved::NotTheUsers(None)
+            );
+            // The app's.
+            let auto = put(c, &zero(), 10);
+            assert_eq!(
+                revert_in(c, "w1", 1, "s1", auto.version).unwrap(),
+                Saved::NotTheUsers(Some(auto))
+            );
+            assert_eq!(row(c).0, "auto");
+            Ok(())
+        })
+        .await
+        .unwrap();
+    }
+}
+
+mod mapped {
+    use super::*;
+
+    fn user_mapping(offset: i64, exceptions: &[(&str, Option<i64>)]) -> Mapping {
+        let user = UserMapping::new(
+            offset,
+            exceptions
+                .iter()
+                .map(|(episode, target)| ((*episode).to_owned(), *target))
+                .collect(),
+        )
+        .unwrap();
+        Mapping {
+            kind: MappingKind::User,
+            offset: Some(user.offset),
+            evidence: USER_EVIDENCE.into(),
+            decided_at: 1,
+            version: 5,
+            exceptions: user.exceptions,
+        }
+    }
+
+    #[test]
+    fn an_exception_is_applied_before_the_offset_and_the_others_follow_the_offset() {
+        let m = user_mapping(0, &[("13.5", None), ("14", Some(3)), ("SP", Some(20))]);
+        assert_eq!(m.season_episode("13.5"), Mapped::NotReceived);
+        assert_eq!(m.season_episode("13.50"), Mapped::NotReceived);
+        // The key is the number: the exception for `14` covers `014` and `14.0`.
+        for text in ["14", "014", "14.0"] {
+            assert_eq!(m.season_episode(text), Mapped::Episode(3), "{text}");
+        }
+        assert_eq!(m.season_episode("SP"), Mapped::Episode(20));
+        // Every other whole episode follows the default; text with no exception has no place.
+        assert_eq!(m.season_episode("13"), Mapped::Episode(13));
+        assert_eq!(m.season_episode("1"), Mapped::Episode(1));
+        assert_eq!(m.season_episode("0"), Mapped::Unmapped);
+        assert_eq!(m.season_episode("OVA"), Mapped::Unmapped);
+        assert_eq!(m.season_episode("12.5"), Mapped::Unmapped);
+    }
+
+    #[test]
+    fn an_exception_of_a_number_the_offset_would_put_outside_still_stands() {
+        let m = user_mapping(-12, &[("1", Some(1)), ("13", None)]);
+        assert_eq!(m.season_episode("1"), Mapped::Episode(1));
+        assert_eq!(m.season_episode("13"), Mapped::NotReceived);
+        assert_eq!(m.season_episode("14"), Mapped::Episode(2));
+        // Without it `2` would map below 1.
+        assert_eq!(m.season_episode("2"), Mapped::Episode(-10));
+    }
+
+    #[test]
+    fn an_undecided_mapping_places_nothing() {
+        let m = Mapping {
+            kind: MappingKind::Undecided,
+            offset: None,
+            evidence: "근거 없음".into(),
+            decided_at: 1,
+            version: 1,
+            exceptions: Vec::new(),
+        };
+        assert_eq!(m.season_episode("1"), Mapped::Unmapped);
+    }
+
+    #[test]
+    fn an_episode_an_exception_covers_is_no_conflict_but_the_others_still_are() {
+        let schedule = weekly(12);
+        let season = season(1, &schedule, Some(0));
+        let m = user_mapping(0, &[("13.5", None), ("13", Some(12)), ("SP", Some(3))]);
+        let texts: Vec<String> = ["12", "13", "13.5", "14", "14.5", "SP", "OVA"]
+            .iter()
+            .map(|t| (*t).to_owned())
+            .collect();
+        let found = conflicts(&m, &texts, &[], &season);
+        let names: Vec<&str> = found.iter().map(|c| c.episode.as_str()).collect();
+        // `13` is past the 12 by the offset but the exception puts it at 12.
+        assert_eq!(names, ["14", "14.5", "OVA"]);
+    }
+
+    #[test]
+    fn two_exceptions_of_one_number_are_refused_whatever_they_say() {
+        for pair in [
+            [("013", Some(1)), ("13", Some(2))],
+            [("13", None), ("13.0", Some(2))],
+            [("13.50", None), ("13.5", None)],
+            [("13", Some(1)), ("13", Some(1))],
+        ] {
+            let err =
+                UserMapping::new(0, pair.iter().map(|(e, t)| ((*e).to_owned(), *t)).collect())
+                    .unwrap_err();
+            assert!(err.to_string().contains("같은 회차"), "{pair:?}: {err}");
+        }
+        // Different numbers and different texts are not repeats.
+        assert!(UserMapping::new(
+            0,
+            vec![
+                ("13".into(), None),
+                ("13.5".into(), None),
+                ("SP".into(), None),
+                ("SP2".into(), Some(2))
+            ]
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn a_mapping_the_user_sends_must_be_one_that_can_be_stored() {
+        let refused = |offset: i64, exceptions: Vec<(&str, Option<i64>)>| {
+            UserMapping::new(
+                offset,
+                exceptions
+                    .into_iter()
+                    .map(|(e, t)| (e.to_owned(), t))
+                    .collect(),
+            )
+            .is_err()
+        };
+        assert!(refused(10_000, vec![]));
+        assert!(refused(-10_000, vec![]));
+        assert!(!refused(9_999, vec![]));
+        assert!(refused(0, vec![("", None)]));
+        assert!(refused(0, vec![("  ", Some(1))]));
+        assert!(refused(0, vec![("13", Some(0))]));
+        assert!(refused(0, vec![("13", Some(-1))]));
+        assert!(refused(0, vec![("13", Some(10_000))]));
+        assert!(refused(0, vec![(&"1".repeat(33), None)]));
+        let many: Vec<(String, Option<i64>)> = (1..=MAX_EXCEPTIONS as i64 + 1)
+            .map(|n| (n.to_string(), None))
+            .collect();
+        assert!(UserMapping::new(0, many).is_err());
+    }
 }
 
 mod conflicting {
@@ -513,6 +898,8 @@ mod conflicting {
             offset,
             evidence: "근거".into(),
             decided_at: 1,
+            version: 1,
+            exceptions: Vec::new(),
         }
     }
 

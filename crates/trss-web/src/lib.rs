@@ -29,6 +29,7 @@ pub mod in_place;
 pub mod jobs_api;
 pub mod library_api;
 pub mod library_work_api;
+pub mod mapping_api;
 pub mod past_search_api;
 pub mod policy_api;
 pub mod rules_api;

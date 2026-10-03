@@ -378,6 +378,7 @@ function Loaded({
               candidates={candidates}
               follow={follow}
               onFollowChanged={onSubscriptionChanged}
+              openSource={params.get("source")}
             />
           )}
           {season && (

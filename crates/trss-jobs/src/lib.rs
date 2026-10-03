@@ -33,7 +33,9 @@ pub use follow::{Follow, FollowError};
 pub use model::{FileState, ItemState, JobState, StepKind, StepState, Wait};
 pub use recheck::Recheck;
 pub use runner::Runner;
-pub use store::{Created, FileProblem, JobError, JobStore, NewItem, NewJob, AUTO, UPLOAD};
+pub use store::{
+    Created, FileProblem, JobError, JobStore, MappingStamp, NewItem, NewJob, AUTO, UPLOAD,
+};
 pub use trss_subtitles::{verify::Format, FailureKind};
 pub use upload::{Finished, Uploads};
 

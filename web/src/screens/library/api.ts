@@ -546,8 +546,12 @@ export interface CandidateList {
   refresh: Command | null;
   /** Newest first. */
   candidates: Candidate[];
-  /** The sources' episode mappings to the season the app decided (the subscribed creator's). */
+  /** The sources' episode mappings to the season (the app's decision, or the user's). */
   mappings: CandidateMapping[];
+  /** The episodes of the earlier seasons together when each is known (`0` for the first season); `null` otherwise. */
+  previous_episodes?: number | null;
+  /** The season's own episode count when it is known. */
+  season_episodes?: number | null;
 }
 
 /**
@@ -562,6 +566,39 @@ export interface CandidateMapping {
   /** The grounds that agree, or why none do, as a sentence. */
   evidence: string;
   decided_at: number;
+  /** What a save or a revert carries; a source with no mapping is version 0. */
+  version: number;
+  /** The user's exceptions: one Anissia episode text to one season episode, or `null` for 받지 않음. */
+  exceptions: MappingException[];
+}
+
+export interface MappingException {
+  episode: string;
+  target: number | null;
+}
+
+/** A source's mapping as the revert and a `409` carry it (`null` when the source has none). */
+export interface SourceMapping {
+  source_id: string;
+  mapping: CandidateMapping | null;
+}
+
+const mappingPath = (id: string, season: number, sourceId: string) =>
+  `${anissiaPath(id, season)}/sources/${encodeURIComponent(sourceId)}/mapping`;
+
+/** Saves the user's mapping of a source: the default offset and the exceptions as one unit, from `version`. */
+export function saveMapping(
+  id: string,
+  season: number,
+  sourceId: string,
+  body: { version: number; offset: number; exceptions: MappingException[] },
+): Promise<CandidateMapping> {
+  return api<CandidateMapping>(mappingPath(id, season, sourceId), { method: "PUT", body });
+}
+
+/** `자동으로 되돌리기`: drops the user's mapping so the app decides again. */
+export function revertMapping(id: string, season: number, sourceId: string, version: number): Promise<SourceMapping> {
+  return api<SourceMapping>(`${mappingPath(id, season, sourceId)}/revert`, { method: "POST", body: { version } });
 }
 
 /** The cache key of one season's candidates (the anime is in it, so a new link never shows the old one's list). */
