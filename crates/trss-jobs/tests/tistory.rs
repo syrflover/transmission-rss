@@ -74,6 +74,7 @@ async fn make(store: &JobStore, command: &str, posts: &[(&str, String)]) -> Stri
         source_id: None,
         creator: Some("제작자".to_owned()),
         revision_of: None,
+        revises_attributed: false,
         items: posts
             .iter()
             .map(|(episode, post)| NewItem {

@@ -159,6 +159,18 @@ impl World {
     /// A line of the anime as the reading stores it: a new observation of
     /// `creator`'s source.
     async fn observe(&self, creator: &str, episode: &str, path: &str, updated: &str) -> i64 {
+        self.observe_seen(creator, episode, path, updated, 2).await
+    }
+
+    /// [`World::observe`] with the time the app first saw the line.
+    async fn observe_seen(
+        &self,
+        creator: &str,
+        episode: &str,
+        path: &str,
+        updated: &str,
+        seen: i64,
+    ) -> i64 {
         let (creator, episode, url, updated) = (
             creator.to_owned(),
             episode.to_owned(),
@@ -174,9 +186,16 @@ impl World {
                 )?;
                 c.execute(
                     "INSERT INTO caption_observations
-                         (source_id, post_url, episode, updated, first_seen_at)
-                     VALUES ('src-' || ?1, ?2, ?3, ?4, 2)",
-                    rusqlite::params![creator, url, episode, updated],
+                         (source_id, post_url, episode, updated, updated_at, first_seen_at)
+                     VALUES ('src-' || ?1, ?2, ?3, ?4, ?5, ?6)",
+                    rusqlite::params![
+                        creator,
+                        url,
+                        episode,
+                        updated,
+                        trss_anissia::observe::updated_at(&updated),
+                        seen
+                    ],
                 )?;
                 Ok(c.last_insert_rowid())
             })
@@ -205,6 +224,30 @@ impl World {
                         kind
                     ],
                 )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+    }
+
+    /// The user names `creator` the creator of the season's subtitle of the
+    /// episode, at `at` (the file is in the library already).
+    async fn attribute(&self, season: u32, episode: u32, creator: &'static str, at: i64) {
+        self.db
+            .run::<_, DbError, _>(move |c| {
+                c.execute(
+                    "INSERT OR IGNORE INTO subtitle_sources (id, anime_no, creator_name, created_at)
+                     VALUES ('src-' || ?1, ?2, ?1, 1)",
+                    rusqlite::params![creator, ANIME],
+                )?;
+                let changed = c.execute(
+                    "UPDATE media_files
+                        SET creator_source_id = 'src-' || ?1, creator_set_at = ?2,
+                            creator_version = creator_version + 1
+                      WHERE work_id = 'w1' AND season = ?3 AND episode = ?4 AND kind = 'subtitle'",
+                    rusqlite::params![creator, at, season, format!("{episode:02}")],
+                )?;
+                assert_eq!(changed, 1);
                 Ok(())
             })
             .await
@@ -764,4 +807,245 @@ async fn a_subscription_that_cannot_be_looked_at_does_not_stop_the_others() {
     let made = w.evaluate().await;
     assert_eq!(made.len(), 1);
     assert_eq!(w.detail(&made[0]).await.row.work_id.as_deref(), Some("w2"));
+}
+
+#[tokio::test]
+async fn a_line_first_seen_after_the_creator_was_named_for_the_file_is_received_as_its_revision() {
+    let w = World::new(Sub::default()).await;
+    w.file(1, 5, "mkv").await;
+    w.file(1, 5, "ass").await;
+    // The user's own subtitle of episode 5, named as 에루샤's at 100. The line
+    // the app saw before that stays a candidate on screen: no job.
+    w.observe_seen("에루샤", "5", "/ok/ep5", "2026-10-02T11:00:00", 50)
+        .await;
+    w.attribute(1, 5, "에루샤", 100).await;
+    assert!(w.evaluate().await.is_empty());
+    assert_eq!(w.job_count().await, 0);
+    let library = w.files().await;
+
+    // The creator fixes it after that: one automatic job that receives.
+    let fixed = w
+        .observe_seen("에루샤", "05", "/ok/ep5", "2026-10-02T11:50:00", 200)
+        .await;
+    let made = w.evaluate().await;
+    assert_eq!(made.len(), 1);
+    let d = w.detail(&made[0]).await;
+    assert_eq!(d.row.origin, AUTO);
+    assert!(d.row.revises_attributed);
+    assert_eq!(d.row.revision_of, None);
+    assert_eq!(d.row.revises_job, None);
+    assert_eq!(d.row.creator.as_deref(), Some("에루샤"));
+    assert_eq!(d.items[0].observation_id, Some(fixed));
+    assert_eq!(
+        d.events.last().unwrap().message,
+        "구독 제작자의 수정본이 제작자를 붙인 자막에 맞아 자동으로 작업을 만들었어요"
+    );
+
+    // Looked at again, by this process or a restarted one: no second job.
+    assert!(w.evaluate().await.is_empty());
+    assert!(Follow::new(w.db.clone())
+        .evaluate(NOW + 1)
+        .await
+        .unwrap()
+        .is_empty());
+    assert_eq!(w.job_count().await, 1);
+
+    // It receives beside the subtitle in place, which stays.
+    w.run().await;
+    let d = w.detail(&made[0]).await;
+    assert_eq!(d.row.state, JobState::Done);
+    assert!(w
+        .area
+        .at(d.items[0].files[0].path.as_deref().unwrap())
+        .exists());
+    assert_eq!(w.files().await, library);
+    assert!(w.evaluate().await.is_empty());
+
+    // A later fix is a revision of that receipt, as for any received episode.
+    let again = w
+        .observe_seen("에루샤", "5", "/ok/ep5", "2026-10-02T12:30:00", 300)
+        .await;
+    let made_again = w.evaluate().await;
+    assert_eq!(made_again.len(), 1);
+    let d = w.detail(&made_again[0]).await;
+    assert!(!d.row.revises_attributed);
+    assert_eq!(d.row.revision_of, Some(fixed));
+    assert_eq!(d.items[0].observation_id, Some(again));
+}
+
+#[tokio::test]
+async fn a_line_anissia_shows_was_there_before_the_creator_was_named_is_no_such_revision() {
+    // 2026-10-02 11:00 and 12:00 in Seoul, as Unix ms.
+    const ELEVEN: i64 = 1_790_906_400_000;
+    const NOON: i64 = ELEVEN + 3_600_000;
+    let w = World::new(Sub::default()).await;
+    w.file(1, 5, "mkv").await;
+    w.file(1, 5, "ass").await;
+    // Named at noon before any line of the creator was observed; the app then
+    // first sees the line Anissia dates 11:00, likely the very post of the file.
+    w.attribute(1, 5, "에루샤", NOON).await;
+    w.observe_seen(
+        "에루샤",
+        "5",
+        "/ok/ep5",
+        "2026-10-02T11:00:00",
+        NOON + 60_000,
+    )
+    .await;
+    assert!(w.evaluate().await.is_empty());
+    // A line first seen at the very moment it was named is not after it.
+    w.observe_seen("에루샤", "5", "/ok/ep5", "2026-10-02T12:30:00", NOON)
+        .await;
+    assert!(w.evaluate().await.is_empty());
+
+    // Named again at 13:00: a line written at 12:30 and seen since is older.
+    w.attribute(1, 5, "에루샤", NOON + 3_600_000).await;
+    w.observe_seen(
+        "에루샤",
+        "5",
+        "/ok/ep5",
+        "2026-10-02T12:45:00",
+        NOON + 3_700_000,
+    )
+    .await;
+    assert!(w.evaluate().await.is_empty());
+    assert_eq!(w.job_count().await, 0);
+
+    // Written and seen after the last naming: the revision is received.
+    let fixed = w
+        .observe_seen(
+            "에루샤",
+            "5",
+            "/ok/ep5",
+            "2026-10-02T13:10:00",
+            NOON + 4_300_000,
+        )
+        .await;
+    let made = w.evaluate().await;
+    assert_eq!(made.len(), 1);
+    let d = w.detail(&made[0]).await;
+    assert!(d.row.revises_attributed);
+    assert_eq!(d.items[0].observation_id, Some(fixed));
+}
+
+#[tokio::test]
+async fn a_named_file_of_another_creator_or_a_line_of_another_creator_is_no_such_revision() {
+    let w = World::new(Sub::default()).await;
+    w.file(1, 5, "mkv").await;
+    w.file(1, 5, "ass").await;
+    w.file(1, 6, "mkv").await;
+    w.file(1, 6, "ass").await;
+    // Episode 5's file is 다른's and episode 6's is 에루샤's.
+    w.attribute(1, 5, "다른", 100).await;
+    w.attribute(1, 6, "에루샤", 100).await;
+    w.observe_seen("에루샤", "5", "/ok/ep5", "2026-10-02T11:00:00", 200)
+        .await;
+    // 다른's line for episode 6 is not the followed creator's.
+    w.observe_seen("다른", "6", "/ok/other6", "2026-10-02T11:00:00", 200)
+        .await;
+    assert!(w.evaluate().await.is_empty());
+    assert_eq!(w.job_count().await, 0);
+
+    // A subtitle nobody named stays as it is, too.
+    w.file(1, 7, "mkv").await;
+    w.file(1, 7, "ass").await;
+    w.observe_seen("에루샤", "7", "/ok/ep7", "2026-10-02T11:00:00", 200)
+        .await;
+    assert!(w.evaluate().await.is_empty());
+    assert_eq!(w.job_count().await, 0);
+}
+
+#[tokio::test]
+async fn a_named_file_makes_no_receipt_without_a_subscribed_creator_or_with_subtitles_off() {
+    for sub in [
+        Sub {
+            subtitles: SubtitleMode::None,
+            creator: None,
+            ..Sub::default()
+        },
+        Sub {
+            subtitles: SubtitleMode::Undecided,
+            creator: None,
+            ..Sub::default()
+        },
+    ] {
+        let w = World::new(sub).await;
+        w.file(1, 5, "mkv").await;
+        w.file(1, 5, "ass").await;
+        w.attribute(1, 5, "에루샤", 100).await;
+        w.observe_seen("에루샤", "5", "/ok/ep5", "2026-10-02T11:00:00", 200)
+            .await;
+        assert!(w.evaluate().await.is_empty());
+        assert_eq!(w.job_count().await, 0);
+    }
+}
+
+#[tokio::test]
+async fn the_attributed_revision_follows_the_sources_mapping_and_waits_for_a_decision() {
+    // Anissia's 13 is the second season's episode 1.
+    let w = World::new(Sub {
+        episode: -12,
+        season: 2,
+        count: Some(12),
+        ..Sub::default()
+    })
+    .await;
+    w.file(2, 1, "mkv").await;
+    w.file(2, 1, "ass").await;
+    w.attribute(2, 1, "에루샤", 100).await;
+    w.observe_seen("에루샤", "13", "/ok/ep13", "2026-10-02T11:00:00", 50)
+        .await;
+    assert!(w.evaluate().await.is_empty());
+    let fixed = w
+        .observe_seen("에루샤", "13", "/ok/ep13", "2026-10-02T11:50:00", 200)
+        .await;
+    let made = w.evaluate().await;
+    assert_eq!(made.len(), 1);
+    let d = w.detail(&made[0]).await;
+    assert!(d.row.revises_attributed);
+    assert_eq!(d.items[0].observation_id, Some(fixed));
+
+    // A season whose mapping the app cannot decide receives nothing: which
+    // episode the line is about is not known.
+    let w = World::new(Sub {
+        episode: 0,
+        season: 2,
+        count: Some(12),
+        ..Sub::default()
+    })
+    .await;
+    w.file(2, 1, "mkv").await;
+    w.file(2, 1, "ass").await;
+    w.attribute(2, 1, "에루샤", 100).await;
+    w.observe_seen("에루샤", "13", "/ok/ep13", "2026-10-02T11:50:00", 200)
+        .await;
+    assert!(w.evaluate().await.is_empty());
+    assert_eq!(w.job_count().await, 0);
+}
+
+#[tokio::test]
+async fn another_creators_job_that_has_not_failed_still_holds_an_attributed_episode() {
+    let w = World::new(Sub {
+        creator: Some("다른"),
+        ..Sub::default()
+    })
+    .await;
+    w.file(1, 4, "mkv").await;
+    w.observe("다른", "4", "/ok/other4", "2026-10-02T11:00:00")
+        .await;
+    assert_eq!(w.evaluate().await.len(), 1);
+    let rule = w.rule_now().await;
+    w.channels
+        .set_creator(&rule.id, rule.version, Some("에루샤".into()))
+        .await
+        .unwrap();
+
+    // The episode's subtitle is 에루샤's by the user's word, and her line is
+    // newer, but 다른's job for the episode is still in line.
+    w.file(1, 4, "ass").await;
+    w.attribute(1, 4, "에루샤", 100).await;
+    w.observe_seen("에루샤", "4", "/ok/ep4", "2026-10-02T12:00:00", 200)
+        .await;
+    assert!(w.evaluate().await.is_empty());
+    assert_eq!(w.job_count().await, 1);
 }

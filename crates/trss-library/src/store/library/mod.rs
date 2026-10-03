@@ -61,6 +61,9 @@
 //! from the folders as they were read, and applying it fails with
 //! [`LibraryError::Changed`] if they are not the registered folders any more.
 
+mod creators;
+#[cfg(test)]
+mod creators_tests;
 mod detail;
 mod folder_work;
 mod overview;
@@ -71,6 +74,7 @@ mod tests;
 
 use std::collections::BTreeMap;
 
+pub use creators::{AttributedSubtitle, CreatorError, CreatorSet};
 pub use detail::{EpisodeDetail, Held, SeasonDetail, SeasonHoldings, WorkDetail};
 use rusqlite::Transaction;
 
@@ -263,6 +267,24 @@ pub struct FileRecord {
     pub kind: FileKind,
     /// `None`: unknown.
     pub added_at: Option<Millis>,
+    /// The creator of a subtitle file the user named; `None` is `제작자 알 수
+    /// 없음` (and always so for a video).
+    pub creator: Option<FileCreator>,
+    /// Goes up with every change of the file's creator (0 for a file never
+    /// given one), so a change made from an older version changes nothing.
+    pub creator_version: i64,
+}
+
+/// The creator the user named for a subtitle file: a subtitle source, which is
+/// one creator's lines of one Anissia anime.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileCreator {
+    /// The app's ID of the source.
+    pub source_id: String,
+    /// The creator's display name, as Anissia gives it.
+    pub name: String,
+    /// The Anissia anime the source belongs to.
+    pub anime_no: i64,
 }
 
 /// One recorded episode: a season and the episode as written.

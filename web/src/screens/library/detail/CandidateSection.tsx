@@ -119,7 +119,15 @@ function CandidateItem({
         </div>
         <p className="m-0 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-xs text-text-muted [overflow-wrap:anywhere]">
           <UpdatedAt candidate={c} />
-          {c.revision && <span>{c.revision.same_post ? "이전과 같은 게시물" : "이전과 다른 게시물"}</span>}
+          {c.revision && (
+            <span>
+              {c.revision.same_post === null
+                ? "제작자를 정한 자막 파일이 있어요"
+                : c.revision.same_post
+                  ? "이전과 같은 게시물"
+                  : "이전과 다른 게시물"}
+            </span>
+          )}
           <PostLink url={c.post_url} />
         </p>
       </div>

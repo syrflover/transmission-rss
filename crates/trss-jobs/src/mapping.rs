@@ -76,6 +76,18 @@ pub struct Mapping {
     pub decided_at: Millis,
 }
 
+impl Mapping {
+    /// What to add to Anissia's whole episode to get the season's, `None` while
+    /// the mapping is undecided: the one reading of the mapping the receipt of
+    /// the subscribed creator's episodes and the work detail's candidates share.
+    pub fn decided_offset(&self) -> Option<i64> {
+        match self.kind {
+            MappingKind::Undecided => None,
+            MappingKind::Auto | MappingKind::User => self.offset,
+        }
+    }
+}
+
 /// What the app decides from the grounds ([`decide`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Decided {
@@ -239,6 +251,30 @@ pub fn store_in(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_decided_mapping_has_an_offset_whatever_the_stored_number_is() {
+        let mapping = |kind, offset| Mapping {
+            kind,
+            offset,
+            evidence: String::new(),
+            decided_at: 0,
+        };
+        assert_eq!(
+            mapping(MappingKind::Auto, Some(-12)).decided_offset(),
+            Some(-12)
+        );
+        assert_eq!(
+            mapping(MappingKind::User, Some(0)).decided_offset(),
+            Some(0)
+        );
+        assert_eq!(
+            mapping(MappingKind::Undecided, Some(3)).decided_offset(),
+            None
+        );
+        assert_eq!(mapping(MappingKind::Undecided, None).decided_offset(), None);
+        assert_eq!(mapping(MappingKind::Auto, None).decided_offset(), None);
+    }
 
     #[test]
     fn the_rule_shifts_its_numbers_as_trname_does() {

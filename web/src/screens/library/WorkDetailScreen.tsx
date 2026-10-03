@@ -8,10 +8,6 @@ import { useMediaQuery, PHONE_QUERY } from "@/lib/media";
 import { EmptyState, ScreenFrame, usePageTitle } from "../ScreenFrame";
 import { btnNeutral } from "../collect/channels/styles";
 import { KEYS } from "../collect/cache";
-import { changeCreator, type SubtitleMode } from "../collect/subs/api";
-import { CreatorPicker } from "../collect/subs/CreatorPicker";
-import { subtitleChoice } from "../collect/subs/format";
-import { ApiError } from "@/lib/api";
 import {
   LIST_PREFIX,
   loadWork,
@@ -31,6 +27,7 @@ import { SeasonAnissiaSection } from "./detail/SeasonAnissiaSection";
 import { SeasonInfoSection } from "./detail/SeasonInfoSection";
 import { UploadSection } from "./detail/UploadSection";
 import { SeasonTiles } from "./detail/SeasonTiles";
+import { HeadCreators } from "./detail/SubtitleCreators";
 import { CollectCard, FilesCard, InfoCard } from "./detail/SideCards";
 import { coverOf } from "./model";
 import { Cover, FROM_LIBRARY } from "./WorkItem";
@@ -146,6 +143,11 @@ function WorkPage({ workId }: { workId: string }) {
     work.reload();
   };
 
+  // Subtitle files got a creator: the page reads them again.
+  const creatorsChanged = () => {
+    work.reload();
+  };
+
   if (work.data) {
     return (
       <Loaded
@@ -155,6 +157,7 @@ function WorkPage({ workId }: { workId: string }) {
         onInfoChanged={infoChanged}
         onAnissiaChanged={anissiaChanged}
         onSubscriptionChanged={subscriptionEdited}
+        onCreatorsChanged={creatorsChanged}
         onRetried={retried}
       />
     );
@@ -189,6 +192,7 @@ function Loaded({
   onInfoChanged,
   onAnissiaChanged,
   onSubscriptionChanged,
+  onCreatorsChanged,
   onRetried,
 }: {
   work: WorkDetail;
@@ -197,6 +201,7 @@ function Loaded({
   onInfoChanged: (info: SeasonInfo) => void;
   onAnissiaChanged: (link: AnissiaLink) => void;
   onSubscriptionChanged: () => void;
+  onCreatorsChanged: () => void;
   onRetried: () => Promise<void>;
 }) {
   const cover = coverOf(work.name);
@@ -242,12 +247,17 @@ function Loaded({
     forSeason.find((s) => s.rule_state === "active") ??
     forSeason.find((s) => s.rule_state === "paused") ??
     forSeason[0];
-  const [creatorOpen, setCreatorOpen] = useState(false);
 
   // The chosen season's subtitle candidates: read only for a season linked to an Anissia anime, and shared by the
   // `자막 후보` section and the episode rows, so both name the same candidates.
   const candidates = useCandidates(work.id, season?.number ?? 0, season?.anissia.anime?.anime_no ?? null);
   const subscribedCreator = subscription?.creator ?? null;
+  // A creator named for a subtitle file changes the revision candidates too, so both are read again.
+  const reloadCandidates = candidates.reload;
+  const creatorNamed = () => {
+    onCreatorsChanged();
+    void reloadCandidates();
+  };
   // Its creator can be chosen from the candidates while it receives subtitles and its rule collects.
   const follow =
     subscription && subscription.rule_state === "active" && subscription.subtitles !== "none"
@@ -300,53 +310,15 @@ function Loaded({
               {work.native_title}
             </p>
           )}
-          {subscription ? (
-            <div className="mt-3 flex min-w-0 flex-col gap-2.5" data-testid="head-creator">
-              <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px]">
-                <span className="font-semibold text-text-muted">자막 제작자</span>
-                <span className="font-medium text-text-secondary">
-                  {subtitleChoice({ subtitles: subscription.subtitles as SubtitleMode, creator: subscription.creator })}
-                </span>
-                <button
-                  type="button"
-                  aria-expanded={creatorOpen}
-                  disabled={subscription.subtitles === "none"}
-                  title={subscription.subtitles === "none" ? "자막 받기를 켠 뒤 바꿀 수 있어요" : undefined}
-                  onClick={() => setCreatorOpen((open) => !open)}
-                  className="inline-flex min-h-6 items-center rounded-md px-1.5 text-[12.5px] font-semibold text-focus underline underline-offset-2 outline-offset-2 hover:bg-surface-2 focus-visible:outline-2 focus-visible:outline-focus disabled:cursor-not-allowed disabled:text-text-muted disabled:no-underline max-[720px]:min-h-9"
-                >
-                  제작자 변경
-                </button>
-              </p>
-              {creatorOpen && (
-                <CreatorPicker
-                  key={`${subscription.rule_version}:${subscription.creator ?? ""}`}
-                  animeNo={subscription.anime_no}
-                  current={subscription.creator}
-                  onCancel={() => setCreatorOpen(false)}
-                  onApply={async (creator) => {
-                    try {
-                      await changeCreator({ id: subscription.rule_id, version: subscription.rule_version }, creator);
-                    } catch (e) {
-                      if (e instanceof ApiError && e.code === "conflict") {
-                        onSubscriptionChanged();
-                        throw new Error("다른 곳에서 먼저 바꿨어요. 지금 상태를 보여드려요. 다시 골라 주세요.");
-                      }
-                      throw e;
-                    }
-                    onSubscriptionChanged();
-                    setCreatorOpen(false);
-                  }}
-                />
-              )}
-            </div>
-          ) : (
-            hasSubtitles && (
-              <p className="mt-3 flex flex-wrap items-baseline gap-x-2 gap-y-1 text-[13px]">
-                <span className="font-semibold text-text-muted">자막 제작자</span>
-                <span className="font-medium text-text-secondary">제작자 알 수 없음</span>
-              </p>
-            )
+          {season && (subscription || hasSubtitles) && (
+            <HeadCreators
+              key={`creators-${season.number}`}
+              workId={work.id}
+              season={season}
+              subscription={subscription}
+              onSubscriptionChanged={onSubscriptionChanged}
+              onNamed={creatorNamed}
+            />
           )}
         </div>
       </div>
@@ -420,6 +392,9 @@ function Loaded({
           {season ? (
             <EpisodeList
               key={`episodes-${season.number}`}
+              workId={work.id}
+              animeNo={season.anissia.anime?.anime_no ?? null}
+              onCreatorChanged={creatorNamed}
               season={season}
               seasonCount={work.seasons.length}
               missing={work.missing}

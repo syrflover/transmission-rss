@@ -207,6 +207,7 @@ async fn job_in(
                 source_id: Some("s1".into()),
                 creator: Some("에루샤".into()),
                 revision_of: None,
+                revises_attributed: false,
                 items: items
                     .iter()
                     .enumerate()
@@ -535,6 +536,7 @@ async fn a_tistory_receipt_shows_its_format_and_failures_by_class_and_no_signed_
                 source_id: Some("s1".into()),
                 creator: Some("에루샤".into()),
                 revision_of: None,
+                revises_attributed: false,
                 items: vec![NewItem {
                     observation_id: None,
                     episode: "24".into(),
@@ -597,4 +599,56 @@ async fn a_tistory_receipt_shows_its_format_and_failures_by_class_and_no_signed_
         assert!(!text.contains("signature=") && !text.contains("credential="));
     }
     assert!(detail["log"].as_array().unwrap().len() > 3);
+}
+
+#[tokio::test]
+async fn an_automatic_revision_of_a_named_subtitle_says_so_with_no_earlier_job() {
+    let (state, router) = app();
+    linked_season(&state).await;
+    let made = state
+        .jobs
+        .create(
+            NewJob {
+                command_id: "auto:1".into(),
+                request: "{}".into(),
+                origin: "auto".into(),
+                work_id: Some("w1".into()),
+                season: Some(1),
+                anime_no: Some(ANIME),
+                source_id: Some("s1".into()),
+                creator: Some("에루샤".into()),
+                revision_of: None,
+                revises_attributed: true,
+                items: vec![NewItem {
+                    observation_id: None,
+                    episode: "5".into(),
+                    post_url: "https://fake.trss.invalid/ok/5".into(),
+                    found_at: 1,
+                }],
+            },
+            100,
+        )
+        .await
+        .unwrap();
+    let Created::Created(id) = made else { panic!() };
+    let plain = job_in(
+        &state.jobs,
+        2,
+        JobState::Pending,
+        None,
+        &[(ItemState::Pending, None)],
+        100,
+    )
+    .await;
+
+    let (_, detail) = get(&router, &format!("/api/subtitle-jobs/{id}")).await;
+    assert_eq!(detail["revises_attributed"], true);
+    assert_eq!(detail["revision_of"], Value::Null);
+    assert_eq!(detail["revises_job"], Value::Null);
+    assert_eq!(
+        detail["log"].as_array().unwrap().last().unwrap()["message"],
+        "구독 제작자의 수정본이 제작자를 붙인 자막에 맞아 자동으로 작업을 만들었어요"
+    );
+    let (_, other) = get(&router, &format!("/api/subtitle-jobs/{plain}")).await;
+    assert_eq!(other["revises_attributed"], false);
 }

@@ -24,9 +24,17 @@
 //! | a job that has not failed holds an observation of the episode (pending, running, waiting, held) | nothing yet: it is looked at again after that job |
 //! | a job received an earlier observation of the creator's episode | a **revision** job (`revision_of` that observation); the subtitle in place is untouched |
 //! | the source's mapping to the season is undecided, or the episode is no whole number (`0`, `13.5`, `SP`) | nothing: whether the episode has a subtitle cannot be told |
-//! | the mapped episode of the season has a subtitle file in the library | nothing: another creator's (or an unknown) subtitle is there, and a new creator's candidate is no revision of it |
+//! | the mapped episode of the season has a subtitle file in the library whose creator the user named as this creator, and the app first saw this observation after that (`creator_set_at` of the file; the earliest of such files counts) | a **revision** job of a subtitle the user attributed (`revises_attributed`, `revision_of` unset: nothing of it was received); the subtitle in place is untouched |
+//! | the mapped episode of the season has any other subtitle file in the library | nothing: another creator's (or an unknown) subtitle is there, and a new creator's candidate is no revision of it. A line of this creator seen before the user named the file stays a revision candidate on screen (수정) only |
 //! | another creator's subtitle of the episode was received, or a job that has not failed is receiving it (by that source's mapping, or by the same Anissia episode when it has none) | nothing, for the same reason |
 //! | otherwise | a **new episode** job |
+//!
+//! The rows from the mapping on apply the same checks to an attributed
+//! revision: the mapping is decided and the episode is a whole number, and no
+//! other creator's subtitle of the episode was received or is on its way. The
+//! bytes are not compared with the subtitle in the library: the job only
+//! receives, and the replacement comparison (`교체 비교와 승인`) does not exist
+//! yet, which is where "nothing to replace" would be recorded.
 //!
 //! Each is one job of one candidate, made like a pick ([`JobStore::create`])
 //! with origin [`AUTO`] and the request ID `auto:<observation id>`: a second
@@ -63,13 +71,13 @@ use trss_core::{Db, DbError, Millis};
 use trss_library::{
     seasons::combine::combine,
     store::{
-        library::{Held, LibraryError, LibraryStore},
+        library::{AttributedSubtitle, Held, LibraryError, LibraryStore},
         seasons::{SeasonError, SeasonStore},
     },
 };
 
 use crate::{
-    mapping::{self, Mapping, MappingKind},
+    mapping::{self, Mapping},
     store::{JobError, JobStore, NewItem, NewJob, Pick, AUTO},
     Created, ItemState,
 };
@@ -164,11 +172,23 @@ struct Grounds<'a> {
     offset: Option<i64>,
     /// The other sources' decided offsets.
     others: &'a HashMap<String, i64>,
+    /// The season's subtitle files whose creator the user named.
+    attributed: &'a [AttributedSubtitle],
 }
 
-/// The observations to receive, oldest first, each with the observation it
-/// revises (see the module docs).
-fn to_receive<'a>(g: &Grounds<'a>) -> Vec<(&'a Candidate, Option<i64>)> {
+/// An observation to receive and what it is a revision of.
+#[derive(Debug, Clone, Copy)]
+struct Receipt<'a> {
+    candidate: &'a Candidate,
+    /// The observation of the creator's episode received before.
+    revision_of: Option<i64>,
+    /// It revises a subtitle file the user gave this creator.
+    revises_attributed: bool,
+}
+
+/// The observations to receive, oldest first, each with what it revises (see
+/// the module docs).
+fn to_receive<'a>(g: &Grounds<'a>) -> Vec<Receipt<'a>> {
     let ours: Vec<&Candidate> = g
         .observed
         .iter()
@@ -215,7 +235,11 @@ fn to_receive<'a>(g: &Grounds<'a>) -> Vec<(&'a Candidate, Option<i64>)> {
             .map(|p| p.observation_id)
             .max();
         if let Some(of) = received {
-            out.push((o, Some(of)));
+            out.push(Receipt {
+                candidate: o,
+                revision_of: Some(of),
+                revises_attributed: false,
+            });
             continue;
         }
         let (Some(offset), Some(n)) = (g.offset, whole(&o.episode)) else {
@@ -226,7 +250,23 @@ fn to_receive<'a>(g: &Grounds<'a>) -> Vec<(&'a Candidate, Option<i64>)> {
             .ok()
             .and_then(|v| g.held.get(&v))
             .is_some_and(|h| h.subtitle);
-        if video < 1 || has_file {
+        if video < 1 {
+            continue;
+        }
+        // A subtitle file is there: the line revises it only when the user gave
+        // the file to this very creator and the line is newer than that: first
+        // seen after it and, when Anissia's time reads, written after it. A
+        // line seen before stays a revision candidate on screen only, and so
+        // does one the app first sees late but that Anissia shows was there
+        // already (a creator named before any line of theirs was observed).
+        let revises_attributed = has_file
+            && g.attributed.iter().any(|a| {
+                a.source_id == g.source_id
+                    && whole(&a.episode) == Some(video)
+                    && a.set_at < o.first_seen_at
+                    && o.updated_at.is_none_or(|u| a.set_at < u)
+            });
+        if has_file && !revises_attributed {
             continue;
         }
         // Another creator's subtitle of the episode, received or on its way.
@@ -244,9 +284,13 @@ fn to_receive<'a>(g: &Grounds<'a>) -> Vec<(&'a Candidate, Option<i64>)> {
         if another {
             continue;
         }
-        out.push((o, None));
+        out.push(Receipt {
+            candidate: o,
+            revision_of: None,
+            revises_attributed,
+        });
     }
-    out.sort_by_key(|(c, _)| c.id);
+    out.sort_by_key(|r| r.candidate.id);
     out
 }
 
@@ -402,17 +446,17 @@ impl Follow {
                 })
                 .await?
         };
-        let decided_offset = |m: &Mapping| match m.kind {
-            MappingKind::Undecided => None,
-            MappingKind::Auto | MappingKind::User => m.offset,
-        };
-        let offset = mappings.get(&source_id).and_then(decided_offset);
+        let offset = mappings.get(&source_id).and_then(Mapping::decided_offset);
         let others: HashMap<String, i64> = mappings
             .iter()
             .filter(|(s, _)| **s != source_id)
-            .filter_map(|(s, m)| decided_offset(m).map(|o| (s.clone(), o)))
+            .filter_map(|(s, m)| m.decided_offset().map(|o| (s.clone(), o)))
             .collect();
 
+        let attributed = self
+            .library
+            .attributed_subtitles(&sub.work_id, sub.season)
+            .await?;
         let picks = self.jobs.picks_of_anime(sub.anime_no).await?;
         let grounds = Grounds {
             source_id: &source_id,
@@ -421,14 +465,21 @@ impl Follow {
             held: &held,
             offset,
             others: &others,
+            attributed: &attributed,
         };
         let mut made = Vec::new();
-        for (candidate, revision_of) in to_receive(&grounds) {
+        for Receipt {
+            candidate,
+            revision_of,
+            revises_attributed,
+        } in to_receive(&grounds)
+        {
             let request = json!({
                 "auto": candidate.id,
                 "work_id": sub.work_id,
                 "season": sub.season,
                 "revision_of": revision_of,
+                "revises_attributed": revises_attributed,
             })
             .to_string();
             let job = NewJob {
@@ -441,6 +492,7 @@ impl Follow {
                 source_id: Some(source_id.clone()),
                 creator: Some(candidate.creator.clone()),
                 revision_of,
+                revises_attributed,
                 items: vec![NewItem {
                     observation_id: Some(candidate.id),
                     episode: candidate.episode.clone(),

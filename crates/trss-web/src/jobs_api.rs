@@ -36,7 +36,10 @@
 //! files it did not keep) in its detail; a job
 //! that receives a revision of a subtitle received before has `revision_of`
 //! (that observation) and `revises_job` (the latest job that received it, or
-//! `null`), both `null` otherwise.
+//! `null`), both `null` otherwise. `revises_attributed` is `true` on the job
+//! of a line of the subscribed creator that revises a subtitle file whose
+//! creator the user named: nothing of it was received before, so the other two
+//! stay `null`.
 //!
 //! A job's `title` is its anime's Anissia title, else its work's name. No
 //! answer carries a cookie, a token or a signed address: posts are public
@@ -102,6 +105,9 @@ pub struct JobRowView {
     /// and the latest job that received it.
     pub revision_of: Option<i64>,
     pub revises_job: Option<String>,
+    /// A revision of a subtitle file whose creator the user named (no earlier
+    /// receipt exists, so `revision_of` and `revises_job` are `null`).
+    pub revises_attributed: bool,
     pub state: &'static str,
     pub wait: Option<&'static str>,
     pub stage: Option<&'static str>,
@@ -152,6 +158,7 @@ fn view(row: &JobRow, covers: &HashMap<String, String>) -> JobRowView {
         origin: row.origin.clone(),
         revision_of: row.revision_of,
         revises_job: row.revises_job.clone(),
+        revises_attributed: row.revises_attributed,
         state: row.state.code(),
         wait: row.wait.map(Wait::code),
         stage: row.stage.map(StepKind::code),
@@ -580,6 +587,7 @@ async fn create(
         source_id: Some(picked[0].source_id.clone()),
         creator: Some(picked[0].creator.clone()),
         revision_of: None,
+        revises_attributed: false,
         items: picked
             .iter()
             .map(|c| NewItem {

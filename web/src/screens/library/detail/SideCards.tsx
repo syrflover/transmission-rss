@@ -180,7 +180,10 @@ export function FilesCard({ work, collapsible }: { work: WorkDetail; collapsible
                                 <span key={f.path}>영상 {baseName(f.path)}</span>
                               ))}
                               {episode.subtitle.map((f) => (
-                                <span key={f.path}>자막 {baseName(f.path)}</span>
+                                <span key={f.path}>
+                                  자막 {baseName(f.path)}
+                                  <span className="font-sans text-text-muted"> · {f.creator ? f.creator.name : "제작자 알 수 없음"}</span>
+                                </span>
                               ))}
                             </span>
                           </li>

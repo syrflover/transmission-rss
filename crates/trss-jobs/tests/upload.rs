@@ -608,6 +608,7 @@ async fn only_an_upload_has_items_without_an_episode() {
                 source_id: None,
                 creator: None,
                 revision_of: None,
+                revises_attributed: false,
                 items: vec![NewItem {
                     observation_id: None,
                     episode: String::new(),

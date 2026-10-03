@@ -16,7 +16,9 @@
 //!     "episodes": [{
 //!       "episode": "01", "sort": 1.0, "air_at": null,
 //!       "video":    [{ "path": "Season 01/… S01E01.mkv", "added_at": null }],
-//!       "subtitle": [{ "path": "Season 01/… S01E01.ko.ass", "added_at": 1760000100000 }],
+//!       "subtitle": [{ "path": "Season 01/… S01E01.ko.ass", "added_at": 1760000100000,
+//!                      "creator": { "source_id": "…", "name": "하느", "anime_no": 3441 },
+//!                      "creator_version": 1 }],
 //!       "revision": { "from": "v1", "to": "v2", "replaced_at": 1760000200000 },
 //!       "failure": null
 //!     }]
@@ -41,6 +43,10 @@
 //!   `sort` is its number, `null` when it is no number (`SP`). `added_at` is
 //!   Unix milliseconds, `null` when unknown (the file was there before the app
 //!   first looked).
+//! - A subtitle file's `creator` is the creator the user named for it
+//!   (`null` is `제작자 알 수 없음`, which is what every file found in a watch
+//!   folder is until then), and `creator_version` the version a change of it
+//!   names ([`super::subtitle_creator_api`]).
 //! - `revision` is the version line of an episode whose video was replaced by
 //!   a higher revision of the same release (the latest such replacement;
 //!   `from` is `null` when the old video's revision was not known), `null`
@@ -100,6 +106,7 @@ use super::{
     artwork_api::image_url,
     seasons_anissia_api::{link_views, AnissiaLinkView},
     seasons_api::{season_view, work_infos, SeasonInfoView},
+    subtitle_creator_api::CreatorView,
     todo_api::{failure_of, retry_offers, RetryOffer, RevisionFailure},
     ApiError, AppState,
 };
@@ -142,13 +149,36 @@ impl From<FileRecord> for FileView {
     }
 }
 
+/// A subtitle file, with the creator the user named for it.
+#[derive(Serialize)]
+struct SubtitleView {
+    path: String,
+    added_at: Option<i64>,
+    /// The creator the user named; `null` is `제작자 알 수 없음`.
+    creator: Option<CreatorView>,
+    /// The version of the file's creator, which a change of it names
+    /// (see [`super::subtitle_creator_api`]).
+    creator_version: i64,
+}
+
+impl From<FileRecord> for SubtitleView {
+    fn from(file: FileRecord) -> Self {
+        SubtitleView {
+            path: file.path,
+            added_at: file.added_at,
+            creator: file.creator.map(CreatorView::from),
+            creator_version: file.creator_version,
+        }
+    }
+}
+
 #[derive(Serialize)]
 struct EpisodeView {
     episode: String,
     sort: Option<f64>,
     air_at: Option<i64>,
     video: Vec<FileView>,
-    subtitle: Vec<FileView>,
+    subtitle: Vec<SubtitleView>,
     /// The episode's video was replaced by a higher revision: the version line.
     revision: Option<RevisionView>,
     /// The replacement of the episode's video failed (`받기 실패`).
@@ -172,7 +202,11 @@ impl From<EpisodeDetail> for EpisodeView {
             sort: episode.number,
             air_at: None,
             video: episode.video.into_iter().map(FileView::from).collect(),
-            subtitle: episode.subtitle.into_iter().map(FileView::from).collect(),
+            subtitle: episode
+                .subtitle
+                .into_iter()
+                .map(SubtitleView::from)
+                .collect(),
             revision: None,
             failure: None,
         }

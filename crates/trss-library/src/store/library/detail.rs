@@ -126,8 +126,10 @@ pub(super) fn detail(conn: &Connection, id: &str) -> rusqlite::Result<Option<Wor
     }
     {
         let mut stmt = conn.prepare(
-            "SELECT season, episode, path, kind, added_at FROM media_files
-              WHERE work_id = ?1 ORDER BY path",
+            "SELECT m.season, m.episode, m.path, m.kind, m.added_at,
+                    m.creator_source_id, s.creator_name, s.anime_no, m.creator_version
+               FROM media_files m LEFT JOIN subtitle_sources s ON s.id = m.creator_source_id
+              WHERE m.work_id = ?1 ORDER BY m.path",
         )?;
         let mut cursor = stmt.query([id])?;
         while let Some(row) = cursor.next()? {
@@ -137,6 +139,8 @@ pub(super) fn detail(conn: &Connection, id: &str) -> rusqlite::Result<Option<Wor
                 path: row.get(2)?,
                 kind: FileKind::from_code(&row.get::<_, String>(3)?).unwrap_or(FileKind::Video),
                 added_at: row.get(4)?,
+                creator: super::creators::creator_of(row.get(5)?, row.get(6)?, row.get(7)?),
+                creator_version: row.get(8)?,
             };
             let gathered = seasons
                 .entry(season)

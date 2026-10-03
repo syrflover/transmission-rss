@@ -126,6 +126,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("../migrations/jobs/upload.sql")),
     // 39: the format of an uploaded archive
     Migration::Sql(include_str!("../migrations/jobs/upload_archive.sql")),
+    // 40: the creator the user named for a subtitle file of the library
+    Migration::Sql(include_str!("../migrations/library/subtitle_creator.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -971,6 +973,97 @@ mod tests {
         assert_eq!(kept, ("archive".to_owned(), None));
         assert_eq!(refused, [true; 2]);
         assert!(accepted);
+    }
+
+    #[tokio::test]
+    async fn a_library_from_before_subtitle_creators_keeps_its_files_with_no_creator() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        {
+            // A database as the build with 39 migrations left it: a work with a
+            // video and a subtitle, and a subtitle source.
+            let conn = database_at(&path, 39);
+            conn.execute_batch(
+                "INSERT INTO watch_folders (id, path, created_at) VALUES ('f1', '/media', 1);
+                 INSERT INTO works (id, watch_folder_id, dir_name) VALUES ('w1', 'f1', 'Show');
+                 INSERT INTO seasons (work_id, number) VALUES ('w1', 1);
+                 INSERT INTO episodes (work_id, season, episode) VALUES ('w1', 1, '01');
+                 INSERT INTO media_files (work_id, path, season, episode, kind, added_at)
+                     VALUES ('w1', 'Season 01/e01.mkv', 1, '01', 'video', 5),
+                            ('w1', 'Season 01/e01.ass', 1, '01', 'subtitle', 6);
+                 INSERT INTO subtitle_sources (id, anime_no, creator_name, created_at)
+                     VALUES ('s1', 3441, '하느', 5);",
+            )
+            .unwrap();
+        }
+
+        let db = Db::open(&path).await.unwrap();
+
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+        type Kept = Vec<(String, Option<String>, i64)>;
+        let (kept, refused, named): (Kept, [bool; 2], i64) = db
+            .run::<_, DbError, _>(|c| {
+                let mut stmt = c.prepare(
+                    "SELECT path, creator_source_id, creator_version FROM media_files
+                      ORDER BY path",
+                )?;
+                let kept = stmt
+                    .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+                    .collect::<rusqlite::Result<Kept>>()?;
+                let write = |sql: &str| c.execute(sql, []).is_err();
+                let refused = [
+                    // A source that is not there; a version below zero.
+                    write(
+                        "UPDATE media_files SET creator_source_id = 'nope' WHERE kind = 'subtitle'",
+                    ),
+                    write("UPDATE media_files SET creator_version = -1 WHERE kind = 'subtitle'"),
+                ];
+                c.execute(
+                    "UPDATE media_files SET creator_source_id = 's1', creator_version = 1
+                      WHERE kind = 'subtitle'",
+                    [],
+                )?;
+                let named = c.query_row(
+                    "SELECT count(*) FROM media_files WHERE creator_source_id = 's1'",
+                    [],
+                    |r| r.get(0),
+                )?;
+                Ok((kept, refused, named))
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            kept,
+            [
+                ("Season 01/e01.ass".to_owned(), None, 0),
+                ("Season 01/e01.mkv".to_owned(), None, 0)
+            ]
+        );
+        assert_eq!(refused, [true; 2]);
+        assert_eq!(named, 1);
+
+        // The time a creator was named is none for the files that were there,
+        // and a job of an earlier build is no revision of a named file.
+        let (set_at, flag): (i64, (i64, String)) = db
+            .run::<_, DbError, _>(|c| {
+                Ok((
+                    c.query_row(
+                        "SELECT count(*) FROM media_files WHERE creator_set_at IS NOT NULL",
+                        [],
+                        |r| r.get(0),
+                    )?,
+                    c.query_row(
+                        "SELECT \"notnull\", dflt_value FROM pragma_table_info('subtitle_jobs')
+                          WHERE name = 'revises_attributed'",
+                        [],
+                        |r| Ok((r.get(0)?, r.get(1)?)),
+                    )?,
+                ))
+            })
+            .await
+            .unwrap();
+        assert_eq!(set_at, 0);
+        assert_eq!(flag, (1, "0".to_owned()));
     }
 
     #[tokio::test]

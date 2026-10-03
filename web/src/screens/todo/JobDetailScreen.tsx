@@ -133,7 +133,7 @@ function Page({ job }: { job: JobDetail }) {
             <OriginTags job={job} />
             {job.source !== null && <span className="min-w-0 text-xs text-text-muted [overflow-wrap:anywhere]">{job.source}</span>}
           </TargetLine>
-          {(originSentence(job) !== null || job.revision_of !== null) && (
+          {(originSentence(job) !== null || job.revision_of !== null || job.revises_attributed) && (
             <p className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[13px] text-text-secondary">
               {originSentence(job) !== null && <span>{originSentence(job)}</span>}
               {job.revision_of !== null &&
@@ -147,6 +147,7 @@ function Page({ job }: { job: JobDetail }) {
                 ) : (
                   <span>이전에 받은 자막의 수정본이에요. 지금 자막은 바꾸지 않아요.</span>
                 ))}
+              {job.revises_attributed && <span>제작자를 붙인 자막의 수정본이에요. 지금 자막은 바꾸지 않아요.</span>}
             </p>
           )}
           <div className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-1.5">

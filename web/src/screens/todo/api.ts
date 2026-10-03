@@ -167,6 +167,8 @@ export interface JobRow {
   revision_of: number | null;
   /** The latest job that received `revision_of`, while there is one. */
   revises_job: string | null;
+  /** A revision of a subtitle file whose creator the user named; `revision_of` and `revises_job` are `null` then. */
+  revises_attributed: boolean;
   state: JobState;
   wait: Wait | null;
   /** The step a `running` job is at. */

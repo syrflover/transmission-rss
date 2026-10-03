@@ -184,15 +184,15 @@ async fn a_candidate_revises_the_creators_episode_only_once_its_subtitle_was_rec
     assert_eq!(
         by(&all, "/b", 5).revision,
         Some(Revision {
-            of: first.id,
-            same_post: true
+            of: Some(first.id),
+            same_post: Some(true)
         })
     );
     assert_eq!(
         by(&all, "/c", 6).revision,
         Some(Revision {
-            of: first.id,
-            same_post: false
+            of: Some(first.id),
+            same_post: Some(false)
         })
     );
 
@@ -205,8 +205,8 @@ async fn a_candidate_revises_the_creators_episode_only_once_its_subtitle_was_rec
     assert_eq!(
         by(&all, "/c", 6).revision,
         Some(Revision {
-            of: fixed.id,
-            same_post: false
+            of: Some(fixed.id),
+            same_post: Some(false)
         })
     );
     let all = read(vec![received(&by(&all, "/c", 6))]).await.unwrap();
@@ -270,8 +270,8 @@ async fn the_same_episode_written_another_way_is_a_revision_and_a_half_episode_i
     assert_eq!(
         of("03"),
         Some(Revision {
-            of: first.id,
-            same_post: true
+            of: Some(first.id),
+            same_post: Some(true)
         })
     );
     assert_eq!(of("3.5"), None);
@@ -325,5 +325,163 @@ async fn the_reading_schedule_keeps_when_it_is_due_and_when_it_last_read_everyth
     assert_eq!(
         store.caption_poll().await.unwrap(),
         Some((12_000, Some(4000)))
+    );
+}
+
+fn held(source_id: &str, episode: &str) -> Attributed {
+    Attributed {
+        source_id: source_id.into(),
+        episode: episode.into(),
+    }
+}
+
+async fn observed_of(store: &AnissiaStore, creator: &str, episode: &str) -> Candidate {
+    store
+        .candidates(1, Vec::new())
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|c| c.creator == creator && c.episode == episode)
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_creator_the_user_named_before_any_line_of_it_was_observed_gets_the_source_the_line_finds(
+) {
+    let store = store();
+    let named = store
+        .source_of_creator(1, "하느".into(), 500)
+        .await
+        .unwrap();
+    // Asked again, or for another anime's creator of that name: one source per
+    // creator and anime.
+    assert_eq!(
+        store
+            .source_of_creator(1, "하느".into(), 900)
+            .await
+            .unwrap(),
+        named
+    );
+    assert_ne!(
+        store
+            .source_of_creator(2, "하느".into(), 900)
+            .await
+            .unwrap(),
+        named
+    );
+
+    // The creator's line, observed later, is of the same source: it is the
+    // candidate of the creator the user named.
+    store
+        .observe(
+            vec![line(1, "하느", "5", "https://a.test/a", NOON_UTC)],
+            1000,
+        )
+        .await
+        .unwrap();
+    assert_eq!(observed_of(&store, "하느", "5").await.source_id, named);
+}
+
+#[tokio::test]
+async fn a_candidate_of_the_creator_of_a_subtitle_file_for_the_same_episode_is_a_revision() {
+    let store = store();
+    store
+        .observe(
+            vec![
+                line(1, "하느", "5", "https://a.test/a", NOON_UTC),
+                line(1, "카이란", "5", "https://a.test/b", NOON_UTC),
+            ],
+            1000,
+        )
+        .await
+        .unwrap();
+    let hanu = observed_of(&store, "하느", "5").await;
+    let kairan = observed_of(&store, "카이란", "5").await;
+    let mark = Some(Revision {
+        of: None,
+        same_post: None,
+    });
+
+    // 5화 of 하느 is in the library, written `05`: 하느's 5화 revises it and
+    // 카이란's does not, because the file is not 카이란's.
+    let files = [held(&hanu.source_id, "05"), held(&hanu.source_id, "02")];
+    assert_eq!(revision_by_attribution(&hanu, 0, &files), mark);
+    assert_eq!(revision_by_attribution(&kairan, 0, &files), None);
+
+    // Another episode, a half episode, and a text that is no number are other
+    // episodes.
+    let other = [held(&hanu.source_id, "6"), held(&hanu.source_id, "SP")];
+    assert_eq!(revision_by_attribution(&hanu, 0, &other), None);
+    store
+        .observe(
+            vec![line(1, "하느", "5.5", "https://a.test/h", NOON_UTC + MIN)],
+            2000,
+        )
+        .await
+        .unwrap();
+    let half = observed_of(&store, "하느", "5.5").await;
+    assert_eq!(revision_by_attribution(&half, 0, &files), None);
+    assert_eq!(
+        revision_by_attribution(&half, 0, &[held(&hanu.source_id, "5.50")]),
+        mark
+    );
+}
+
+#[tokio::test]
+async fn the_sources_mapping_moves_the_candidates_episode_to_the_seasons_before_it_is_compared() {
+    let store = store();
+    store
+        .observe(
+            vec![
+                line(1, "하느", "13", "https://a.test/a", NOON_UTC),
+                line(1, "하느", "0", "https://a.test/z", NOON_UTC + MIN),
+            ],
+            1000,
+        )
+        .await
+        .unwrap();
+    let thirteen = observed_of(&store, "하느", "13").await;
+    let zero = observed_of(&store, "하느", "0").await;
+    let id = thirteen.source_id.clone();
+    let mark = Some(Revision {
+        of: None,
+        same_post: None,
+    });
+
+    // A cumulative 13 is the season's episode 1 (offset -12).
+    assert_eq!(
+        revision_by_attribution(&thirteen, -12, &[held(&id, "01")]),
+        mark
+    );
+    assert_eq!(
+        revision_by_attribution(&thirteen, -12, &[held(&id, "13")]),
+        None
+    );
+    // Without the mapping the numbers are compared as they are.
+    assert_eq!(
+        revision_by_attribution(&thirteen, 0, &[held(&id, "13")]),
+        mark
+    );
+    // The line registered before the first episode (`0`) is no episode of the
+    // season, and neither is a mapped number that is not above `0`: the
+    // subscribed creator's receipt reads them the same way.
+    assert_eq!(revision_by_attribution(&zero, 0, &[held(&id, "0")]), None);
+    assert_eq!(revision_by_attribution(&zero, 5, &[held(&id, "5")]), None);
+    assert_eq!(
+        revision_by_attribution(&zero, -12, &[held(&id, "-12")]),
+        None
+    );
+    assert_eq!(
+        revision_by_attribution(&thirteen, -13, &[held(&id, "0")]),
+        None
+    );
+    assert_eq!(
+        revision_by_attribution(&thirteen, -20, &[held(&id, "-7")]),
+        None
+    );
+    // An episode mapped out of the season's reach matches nothing.
+    assert_eq!(
+        revision_by_attribution(&thirteen, i64::MAX, &[held(&id, "1")]),
+        None
     );
 }

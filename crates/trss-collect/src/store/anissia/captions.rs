@@ -81,15 +81,29 @@ impl Candidate {
     }
 }
 
-/// The received observation a candidate revises.
+/// What a revision candidate revises: a subtitle the app received from an
+/// earlier observation, or a subtitle file whose creator the user named.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Revision {
     /// The latest earlier observation of the creator with the same episode
-    /// text whose subtitle was received.
-    pub of: i64,
+    /// text whose subtitle was received. `None` when it revises a subtitle
+    /// file of the library whose creator the user named: there is no
+    /// observation of it.
+    pub of: Option<i64>,
     /// Whether that observation had the same post address: the creator fixed
-    /// the post (`true`) or posted the episode again elsewhere (`false`).
-    pub same_post: bool,
+    /// the post (`Some(true)`) or posted the episode again elsewhere
+    /// (`Some(false)`). `None` together with `of`: the post of a file the user
+    /// named a creator for is not known.
+    pub same_post: Option<bool>,
+}
+
+/// A subtitle file of the library whose creator the user named.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Attributed {
+    /// The creator's source.
+    pub source_id: String,
+    /// The season episode the file is for, as written in its name.
+    pub episode: String,
 }
 
 /// A subtitle a job received from an observation (`trss-jobs` records it; the
@@ -149,8 +163,9 @@ pub fn numeric_episode(text: &str) -> Option<String> {
 ///   [`episode_key`] (`03` and `3` are one episode, `13.5` is not `13`); the
 ///   episode a received package really holds is decided when it is analysed,
 ///   which comes later.
-/// - A subtitle the user put in without a creator, then gave one, does not
-///   count yet: those creators are not recorded.
+/// - A subtitle the user put in without a creator, then gave one, counts
+///   through [`revision_by_attribution`], which the caller applies to the
+///   candidates this leaves unmarked.
 ///
 /// An observation newer than the candidate is not what it revises, and the
 /// candidate's own receipt is not either.
@@ -164,8 +179,49 @@ pub fn revision_of(candidate: &Candidate, received: &[Received]) -> Option<Revis
         })
         .max_by_key(|r| r.observation_id)
         .map(|r| Revision {
-            of: r.observation_id,
-            same_post: r.post_url == candidate.post_url,
+            of: Some(r.observation_id),
+            same_post: Some(r.post_url == candidate.post_url),
+        })
+}
+
+/// The revision mark of `candidate` by the subtitle files of the library whose
+/// creator the user named (`docs/specs/subtitles.md`, 자막 후보 조회): the
+/// season holds a subtitle of the candidate's creator for the same episode.
+///
+/// `offset` is what the creator's source maps Anissia's whole episode to the
+/// season's by (`0` while the source has no mapping, so the numbers are
+/// compared as they are, as the work detail compares them everywhere else); a
+/// source whose mapping is undecided has none, and the caller does not ask.
+/// Under an offset other than `0` only a whole episode of Anissia's above `0`
+/// can be mapped, and to an episode above `0`. The file's post is not known, so the mark carries no `of` and no
+/// `same_post`.
+pub fn revision_by_attribution(
+    candidate: &Candidate,
+    offset: i64,
+    held: &[Attributed],
+) -> Option<Revision> {
+    // Anissia's episode `0` and a mapped number that is not above `0` are no
+    // episode of the season (as the subscribed creator's receipt reads them),
+    // so there is nothing to revise.
+    let wanted = if offset == 0 {
+        let key = episode_key(&candidate.episode);
+        if key == "n:0" {
+            return None;
+        }
+        key
+    } else {
+        let n: i64 = numeric_episode(&candidate.episode)?.parse().ok()?;
+        let mapped = n.checked_add(offset)?;
+        if n <= 0 || mapped <= 0 {
+            return None;
+        }
+        format!("n:{mapped}")
+    };
+    held.iter()
+        .any(|a| a.source_id == candidate.source_id && episode_key(&a.episode) == wanted)
+        .then_some(Revision {
+            of: None,
+            same_post: None,
         })
 }
 
@@ -202,6 +258,31 @@ fn source_of(conn: &Connection, line: &Line, at: Millis) -> rusqlite::Result<Str
 }
 
 impl AnissiaStore {
+    /// The source of creator `creator` of anime `anime_no`, made at `at` when
+    /// no line of the creator was observed yet (the user can name a creator
+    /// Anissia lists before the first observation of its line, which then
+    /// finds this source).
+    pub async fn source_of_creator(
+        &self,
+        anime_no: i64,
+        creator: String,
+        at: Millis,
+    ) -> Result<String> {
+        self.db
+            .run(move |c| {
+                let line = Line {
+                    anime_no,
+                    creator,
+                    episode: String::new(),
+                    post_url: String::new(),
+                    updated: String::new(),
+                    updated_at: None,
+                };
+                Ok::<_, super::AnissiaStoreError>(source_of(c, &line, at)?)
+            })
+            .await
+    }
+
     /// Records `lines` seen at `at`, each as an observation unless the
     /// creator's previous observation of the anime already says the same. One
     /// transaction: a page of lines is kept whole or not at all.

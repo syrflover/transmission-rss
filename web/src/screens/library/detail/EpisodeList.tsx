@@ -13,6 +13,7 @@ import { retryStatus, useItemRetry } from "../../collect/history/useRetry";
 import type { Candidate } from "../api";
 import { candidatesOf } from "./candidates";
 import { candidateNote, EpisodePicks, type EpisodeCandidateSource } from "./EpisodeCandidates";
+import { SubtitleFiles } from "./SubtitleCreators";
 
 /**
  * One kind of file of an episode: `영상 ✓` or `자막 −`. The label is the same
@@ -137,19 +138,26 @@ const addedAt = (file: WorkFile) => (file.added_at === null ? "미상" : dateTim
 
 function Details({
   id,
+  workId,
   season,
+  animeNo,
   episode,
   picks,
   source,
   onRetried,
+  onCreatorChanged,
 }: {
   id: string;
+  workId: string;
   season: number;
+  /** The Anissia anime the season is linked to; the creators of a subtitle file are its creators. */
+  animeNo: number | null;
   episode: WorkEpisode;
   /** The subtitle candidates of the episode, none without a source. */
   picks: readonly Candidate[];
   source: EpisodeCandidateSource | undefined;
   onRetried: () => Promise<void>;
+  onCreatorChanged: () => void;
 }) {
   return (
     <dl id={id} className="m-0 grid grid-cols-[repeat(auto-fit,minmax(170px,1fr))] gap-x-4 gap-y-3 px-4 pt-1 pb-4 max-[720px]:px-3">
@@ -158,7 +166,13 @@ function Details({
         <Files files={episode.video} />
       </Cell>
       <Cell label="자막 파일">
-        <Files files={episode.subtitle} />
+        <SubtitleFiles
+          workId={workId}
+          season={season}
+          animeNo={animeNo}
+          files={episode.subtitle}
+          onChanged={onCreatorChanged}
+        />
       </Cell>
       <Cell label="추가 시각">
         {episode.video.map((file) => (
@@ -178,7 +192,9 @@ function Details({
 }
 
 function Row({
+  workId,
   season,
+  animeNo,
   episode,
   missing,
   picks,
@@ -186,8 +202,11 @@ function Row({
   open,
   onToggle,
   onRetried,
+  onCreatorChanged,
 }: {
+  workId: string;
   season: number;
+  animeNo: number | null;
   episode: WorkEpisode;
   missing: boolean;
   picks: readonly Candidate[];
@@ -195,6 +214,7 @@ function Row({
   open: boolean;
   onToggle: () => void;
   onRetried: () => Promise<void>;
+  onCreatorChanged: () => void;
 }) {
   const id = rowId(season, episode.episode);
   const detailId = `${id}-files`;
@@ -230,7 +250,19 @@ function Row({
         <span className="text-[12.5px] text-text-muted">{episode.air_at === null ? null : airDay(episode.air_at)}</span>
         <ChevronIcon className={cn("size-4 text-text-muted transition-transform", open && "rotate-90")} />
       </button>
-      {open && <Details id={detailId} season={season} episode={episode} picks={picks} source={source} onRetried={onRetried} />}
+      {open && (
+        <Details
+          id={detailId}
+          workId={workId}
+          season={season}
+          animeNo={animeNo}
+          episode={episode}
+          picks={picks}
+          source={source}
+          onRetried={onRetried}
+          onCreatorChanged={onCreatorChanged}
+        />
+      )}
     </li>
   );
 }
@@ -238,6 +270,11 @@ function Row({
 const NO_PICKS: readonly Candidate[] = [];
 
 interface EpisodeListProps {
+  workId: string;
+  /** The Anissia anime the season is linked to, `null` without a link. */
+  animeNo: number | null;
+  /** A subtitle file's creator changed: the page reads the work again. */
+  onCreatorChanged: () => void;
   season: WorkSeason;
   /** How many seasons the work has: a single season's list needs no season in its title. */
   seasonCount: number;
@@ -260,7 +297,18 @@ interface EpisodeListProps {
  * no subtitle that other creators have a candidate for says so quietly, and its
  * opened row has `받기` for each.
  */
-export function EpisodeList({ season, seasonCount, missing, order, onOrder, onRetried, candidates }: EpisodeListProps) {
+export function EpisodeList({
+  workId,
+  animeNo,
+  onCreatorChanged,
+  season,
+  seasonCount,
+  missing,
+  order,
+  onOrder,
+  onRetried,
+  candidates,
+}: EpisodeListProps) {
   const [opened, setOpened] = useState<ReadonlySet<string>>(new Set());
   const toggle = (episode: string) =>
     setOpened((prev) => {
@@ -299,6 +347,9 @@ export function EpisodeList({ season, seasonCount, missing, order, onOrder, onRe
           {inOrder(season.episodes, order).map((episode) => (
             <Row
               key={episode.episode}
+              workId={workId}
+              animeNo={animeNo}
+              onCreatorChanged={onCreatorChanged}
               season={season.number}
               episode={episode}
               missing={missing}

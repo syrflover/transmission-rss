@@ -876,7 +876,11 @@ async fn chosen_creator(
 /// `name` if the anime's captions name that creator: the lines the app
 /// observed (the work detail's 자막 후보, which keep a line Anissia no longer
 /// lists), else Anissia's list now.
-async fn named_creator(state: &AppState, anime_no: i64, name: &str) -> Result<String, ApiError> {
+pub(super) async fn named_creator(
+    state: &AppState,
+    anime_no: i64,
+    name: &str,
+) -> Result<String, ApiError> {
     let observed = state
         .anissia_store
         .candidates(anime_no, Vec::new())

@@ -86,6 +86,12 @@
 //!   had the same `post_url`: the post was fixed, or the episode was posted
 //!   again). It is `null` otherwise, also when the creator was only observed
 //!   with the episode before ([`trss_collect::store::anissia::revision_of`]).
+//!   It also marks a candidate whose creator the user named for a subtitle
+//!   file of the season's episode ([`super::subtitle_creator_api`]): the same
+//!   episode, once the source's mapping is applied (compared as numbers when the
+//!   source has none, and not marked while its mapping is undecided). Such a
+//!   mark has `of` and `same_post` `null`, because the file's post is not known
+//!   ([`trss_collect::store::anissia::revision_by_attribution`]).
 //! - `job` is how the latest subtitle job that took the candidate stands, as
 //!   its item for the candidate: `state` `pending`, `running`, `waiting`
 //!   (`wait` `auth` or `subtitle`), `held`, `failed` or `done`, with the job's
@@ -116,7 +122,10 @@ use super::{
     ApiError, AppState,
 };
 use trss_anissia::{Anime, AnissiaError, ScheduleEntry};
-use trss_collect::store::channels::{Rule, SeasonAnimeError};
+use trss_collect::store::{
+    anissia::{revision_by_attribution, Attributed},
+    channels::{Rule, SeasonAnimeError},
+};
 use trss_library::store::seasons::SeasonError;
 
 #[cfg(test)]
@@ -337,7 +346,7 @@ async fn view_of(
         .ok_or_else(|| ApiError::Internal("the season's link view is missing".into()))
 }
 
-fn refused_store(error: SeasonError) -> ApiError {
+pub(super) fn refused_store(error: SeasonError) -> ApiError {
     match error {
         SeasonError::NotFound => ApiError::not_found(SEASON_NOT_FOUND),
         SeasonError::Invalid(message) => ApiError::invalid(message),
@@ -625,8 +634,11 @@ struct PickView {
 
 #[derive(Serialize)]
 struct RevisionView {
-    of: i64,
-    same_post: bool,
+    /// The earlier observation whose subtitle was received; `null` when the
+    /// candidate revises a subtitle file whose creator the user named.
+    of: Option<i64>,
+    /// Whether that observation had the same post address; `null` with `of`.
+    same_post: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -719,11 +731,42 @@ async fn candidates(
     // The latest job of each candidate (the picks come in the order taken).
     let latest: HashMap<i64, &trss_jobs::store::Pick> =
         picks.iter().map(|p| (p.observation_id, p)).collect();
-    let observed = state
+    let mut observed = state
         .anissia_store
         .candidates(anime_no, received)
         .await
         .map_err(|e| internal(&e))?;
+    let mappings = state
+        .follow
+        .mappings(&id, season)
+        .await
+        .map_err(|e| internal(&e))?;
+    // A subtitle file whose creator the user named makes the creator's later
+    // candidate of the same episode a revision candidate too.
+    let attributed: Vec<Attributed> = state
+        .library
+        .attributed_subtitles(&id, season)
+        .await
+        .map_err(|e| internal(&e))?
+        .into_iter()
+        .map(|a| Attributed {
+            source_id: a.source_id,
+            episode: a.episode,
+        })
+        .collect();
+    if !attributed.is_empty() {
+        for candidate in observed.iter_mut().filter(|c| c.revision.is_none()) {
+            // A source with no mapping is compared by number as it is; one
+            // the app could not decide a mapping for cannot say.
+            let offset = match mappings.get(&candidate.source_id) {
+                None => Some(0),
+                Some(mapping) => mapping.decided_offset(),
+            };
+            if let Some(offset) = offset {
+                candidate.revision = revision_by_attribution(candidate, offset, &attributed);
+            }
+        }
+    }
     let refresh = state
         .commands
         .latest_for_subjects(
@@ -733,11 +776,7 @@ async fn candidates(
         .await
         .map_err(|e| internal(&e))?
         .remove(&anime_no.to_string());
-    let mut mappings: Vec<MappingView> = state
-        .follow
-        .mappings(&id, season)
-        .await
-        .map_err(|e| internal(&e))?
+    let mut mappings: Vec<MappingView> = mappings
         .into_iter()
         .map(|(source_id, m)| MappingView {
             source_id,

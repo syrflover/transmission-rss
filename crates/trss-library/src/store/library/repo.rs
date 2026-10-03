@@ -464,7 +464,7 @@ fn apply(
                     }
                 };
                 report.works_found += 1;
-                sync_work(tx, &id, work, files_stamp, &mut report)?;
+                sync_work(tx, &id, work, files_stamp, now, &mut report)?;
             }
         }
     }
@@ -534,6 +534,19 @@ struct KnownFile {
     episode: String,
     kind: String,
     added_at: Option<Millis>,
+    /// The subtitle source the user named for the file, and its version.
+    creator: Option<String>,
+    creator_version: i64,
+    creator_set_at: Option<Millis>,
+}
+
+/// What a file recorded again keeps of the row it had: the time it was added
+/// and its creator.
+struct Carried {
+    added_at: Option<Millis>,
+    creator: Option<String>,
+    creator_version: i64,
+    creator_set_at: Option<Millis>,
 }
 
 /// Makes the records of one work the scan's: the files that are gone are
@@ -544,12 +557,15 @@ fn sync_work(
     work_id: &str,
     scanned: &ScannedWork,
     stamp: Option<Millis>,
+    now: Millis,
     report: &mut ScanReport,
 ) -> rusqlite::Result<()> {
     let mut known: HashMap<String, KnownFile> = HashMap::new();
     {
         let mut stmt = tx.prepare(
-            "SELECT path, season, episode, kind, added_at FROM media_files WHERE work_id = ?1",
+            "SELECT path, season, episode, kind, added_at, creator_source_id, creator_version,
+                    creator_set_at
+               FROM media_files WHERE work_id = ?1",
         )?;
         let rows = stmt.query_map([work_id], |row| {
             Ok((
@@ -559,6 +575,9 @@ fn sync_work(
                     episode: row.get(2)?,
                     kind: row.get(3)?,
                     added_at: row.get(4)?,
+                    creator: row.get(5)?,
+                    creator_version: row.get(6)?,
+                    creator_set_at: row.get(7)?,
                 },
             ))
         })?;
@@ -571,8 +590,9 @@ fn sync_work(
     let scanned_files: HashMap<&str, &EpisodeFile> =
         scanned.files.iter().map(|f| (f.path.as_str(), f)).collect();
     // A file whose place in the episodes changed (its name is read differently
-    // now) is dropped and recorded again with the time it had.
-    let mut carried: HashMap<&str, Option<Millis>> = HashMap::new();
+    // now) is dropped and recorded again with the time it had and the creator
+    // the user named for it.
+    let mut carried: HashMap<&str, Carried> = HashMap::new();
     let mut removed = 0;
     for (path, file) in &known {
         let now = scanned_files.get(path.as_str());
@@ -587,7 +607,15 @@ fn sync_work(
             params![work_id, path],
         )?;
         if now.is_some() {
-            carried.insert(path, file.added_at);
+            carried.insert(
+                path,
+                Carried {
+                    added_at: file.added_at,
+                    creator: file.creator.clone(),
+                    creator_version: file.creator_version,
+                    creator_set_at: file.creator_set_at,
+                },
+            );
         } else {
             removed += 1;
         }
@@ -627,15 +655,32 @@ fn sync_work(
 
     // New files, and the ones recorded again.
     for file in &scanned.files {
-        let added_at = match (
+        let (added_at, creator, creator_version, creator_set_at) = match (
             known.contains_key(&file.path),
             carried.get(file.path.as_str()),
         ) {
             (true, None) => continue,
-            (_, Some(time)) => *time,
+            // A creator is a subtitle's: a file read as a video now has none.
+            (_, Some(old)) if file.kind == FileKind::Subtitle => (
+                old.added_at,
+                old.creator.as_deref(),
+                old.creator_version,
+                old.creator_set_at,
+            ),
+            // The creator the file loses is a change: the version goes up, so a
+            // screen that read the file with it cannot name over the loss.
+            (_, Some(old)) => (
+                old.added_at,
+                None,
+                old.creator_version + i64::from(old.creator.is_some()),
+                None,
+            ),
+            // A new file starts at the scan's time, a version above any the
+            // path had before: a screen that read an earlier file of this name
+            // (one that was removed) cannot change this one.
             (false, None) => {
                 report.files_added += 1;
-                stamp
+                (stamp, None, now, None)
             }
         };
         tx.execute(
@@ -643,15 +688,20 @@ fn sync_work(
             params![work_id, file.season, file.episode],
         )?;
         tx.execute(
-            "INSERT INTO media_files (work_id, path, season, episode, kind, added_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO media_files
+                 (work_id, path, season, episode, kind, added_at, creator_source_id,
+                  creator_version, creator_set_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 work_id,
                 file.path,
                 file.season,
                 file.episode,
                 file.kind.code(),
-                added_at
+                added_at,
+                creator,
+                creator_version,
+                creator_set_at
             ],
         )?;
     }
@@ -736,8 +786,30 @@ fn merge_work(tx: &Transaction<'_>, from: &str, into: &str) -> rusqlite::Result<
         params![from, into],
     )?;
     tx.execute(
-        "INSERT OR IGNORE INTO media_files (work_id, path, season, episode, kind, added_at)
-         SELECT ?2, path, season, episode, kind, added_at FROM media_files WHERE work_id = ?1",
+        "INSERT OR IGNORE INTO media_files
+             (work_id, path, season, episode, kind, added_at, creator_source_id, creator_version,
+              creator_set_at)
+         SELECT ?2, path, season, episode, kind, added_at, creator_source_id, creator_version,
+                creator_set_at
+           FROM media_files WHERE work_id = ?1",
+        params![from, into],
+    )?;
+    // A subtitle both works have: the one with a creator named wins over one
+    // with none (`into`'s creator stays when both are named), and the version
+    // goes past both so no screen that read either can change it.
+    tx.execute(
+        "UPDATE media_files
+            SET creator_source_id = (SELECT f.creator_source_id FROM media_files f
+                                      WHERE f.work_id = ?1 AND f.path = media_files.path),
+                creator_set_at = (SELECT f.creator_set_at FROM media_files f
+                                   WHERE f.work_id = ?1 AND f.path = media_files.path),
+                creator_version = MAX(creator_version,
+                                      (SELECT f.creator_version FROM media_files f
+                                        WHERE f.work_id = ?1 AND f.path = media_files.path)) + 1
+          WHERE work_id = ?2 AND kind = 'subtitle' AND creator_source_id IS NULL
+            AND EXISTS (SELECT 1 FROM media_files f
+                         WHERE f.work_id = ?1 AND f.path = media_files.path
+                           AND f.kind = 'subtitle' AND f.creator_source_id IS NOT NULL)",
         params![from, into],
     )?;
     tx.execute(
@@ -795,8 +867,10 @@ pub(super) fn works(conn: &Connection, folder_id: &str) -> rusqlite::Result<Vec<
             .collect::<rusqlite::Result<_>>()?;
 
         let mut stmt = conn.prepare(
-            "SELECT season, episode, path, kind, added_at FROM media_files
-              WHERE work_id = ?1 ORDER BY season, episode, path",
+            "SELECT m.season, m.episode, m.path, m.kind, m.added_at,
+                    m.creator_source_id, s.creator_name, s.anime_no, m.creator_version
+               FROM media_files m LEFT JOIN subtitle_sources s ON s.id = m.creator_source_id
+              WHERE m.work_id = ?1 ORDER BY m.season, m.episode, m.path",
         )?;
         let rows = stmt.query_map([&work.id], |row| {
             Ok((
@@ -806,6 +880,8 @@ pub(super) fn works(conn: &Connection, folder_id: &str) -> rusqlite::Result<Vec<
                     path: row.get(2)?,
                     kind: FileKind::from_code(&row.get::<_, String>(3)?).unwrap_or(FileKind::Video),
                     added_at: row.get(4)?,
+                    creator: super::creators::creator_of(row.get(5)?, row.get(6)?, row.get(7)?),
+                    creator_version: row.get(8)?,
                 },
             ))
         })?;

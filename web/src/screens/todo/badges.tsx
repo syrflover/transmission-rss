@@ -121,13 +121,17 @@ export function Tag({ children }: { children: ReactNode }) {
  * How a job came to be, when it was not a pick: `자동` for the subscribed creator's episode the app made into a
  * job, `수정본` for a revision of a subtitle received before.
  */
-export function OriginTags({ job }: { job: Pick<JobRow, "origin" | "revision_of" | "creator"> }) {
+export function OriginTags({
+  job,
+}: {
+  job: Pick<JobRow, "origin" | "revision_of" | "creator" | "revises_attributed">;
+}) {
   return (
     <>
       {job.origin === "auto" && <Tag>자동</Tag>}
       {job.origin === "upload" && <Tag>올림</Tag>}
       {job.origin === "upload" && job.creator === null && <Tag>제작자 알 수 없음</Tag>}
-      {job.revision_of !== null && <Tag>수정본</Tag>}
+      {(job.revision_of !== null || job.revises_attributed) && <Tag>수정본</Tag>}
     </>
   );
 }

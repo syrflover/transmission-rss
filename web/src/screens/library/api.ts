@@ -105,6 +105,24 @@ export interface WorkFile {
   added_at: number | null;
 }
 
+/** The creator the user named for a subtitle file: one creator of the season's Anissia anime. */
+export interface FileCreator {
+  /** The app's ID of the creator's lines of the anime. */
+  source_id: string;
+  /** The creator's name as Anissia gives it. */
+  name: string;
+  anime_no: number;
+}
+
+/**
+ * A subtitle file. `creator` is `null` for `제작자 알 수 없음`, which every file found in a watch folder is until the
+ * user names one; `creator_version` is what a change of it names, so a change made from an older version is refused.
+ */
+export interface WorkSubtitle extends WorkFile {
+  creator: FileCreator | null;
+  creator_version: number;
+}
+
 /** The episode's video was replaced by a higher revision of the same release: the quiet version line. */
 export interface EpisodeRevision {
   /** `v1`; `null` when the old video's revision was not known. */
@@ -149,7 +167,7 @@ export interface WorkEpisode {
   /** When AniList schedules it (Unix milliseconds); only for a releasing entry with a schedule, else `null`. */
   air_at: number | null;
   video: WorkFile[];
-  subtitle: WorkFile[];
+  subtitle: WorkSubtitle[];
   /** Set when the video was replaced by a higher revision; `null` otherwise. */
   revision: EpisodeRevision | null;
   /** Set while a replacement of the video has failed; `null` otherwise. */
@@ -483,12 +501,16 @@ export interface CandidateJob {
   wait: "auth" | "subtitle" | null;
 }
 
-/** A revision candidate: the same creator's subtitle of the episode was received from an earlier observation. */
+/**
+ * A revision candidate: the same creator's subtitle of the episode was received from an earlier observation, or the
+ * user named the creator for the season's subtitle file of the episode (`of` and `same_post` are then `null`: the
+ * file's post is not known).
+ */
 export interface CandidateRevision {
   /** The earlier observation. */
-  of: number;
+  of: number | null;
   /** The earlier observation had the same post address: the post was fixed, not posted again. */
-  same_post: boolean;
+  same_post: boolean | null;
 }
 
 /**
@@ -552,3 +574,38 @@ export function loadCandidates(id: string, season: number, signal?: AbortSignal)
 
 /** The command `새로고침` sends: reads the anime's subtitle lines now. */
 export const ANISSIA_CAPTIONS_KIND = "anissia_captions";
+
+// --- the creator of a season's subtitle files (`src/web/subtitle_creator_api.rs`) -----
+
+/** The answer of naming a season's unknown subtitles a creator. */
+export interface NamedCreators {
+  season: number;
+  creator: FileCreator;
+  /** How many files it named: the ones that were still unknown. */
+  attached: number;
+}
+
+/** Names the creator `creator` (one of the season's Anissia anime) for every subtitle file of the season that has none. */
+export function nameUnknownCreators(id: string, season: number, creator: string): Promise<NamedCreators> {
+  return api<NamedCreators>(`${seasonPath(id, season)}/subtitle-creators`, { method: "POST", body: { creator } });
+}
+
+/** One subtitle file's creator now. */
+export interface FileCreatorState {
+  path: string;
+  version: number;
+  creator: FileCreator | null;
+}
+
+/** Changes one subtitle file's creator from `version` (`null` creator: back to `제작자 알 수 없음`). */
+export function setFileCreator(
+  id: string,
+  season: number,
+  file: { path: string; version: number },
+  creator: string | null,
+): Promise<FileCreatorState> {
+  return api<FileCreatorState>(`${seasonPath(id, season)}/subtitle-creators/file`, {
+    method: "PUT",
+    body: { path: file.path, version: file.version, creator },
+  });
+}
