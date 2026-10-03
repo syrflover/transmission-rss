@@ -724,6 +724,211 @@ fn first_free(name: &str, taken: &mut HashSet<String>) -> String {
         .expect("the names go on")
 }
 
+/// What the files of one package tell about each other, which the bytes of
+/// one file alone cannot: the later volumes of a split archive waiting on a
+/// name, the first volumes kept, and the VobSub indexes kept. An upload sees
+/// all its files at once ([`keep_the_files`]); a find job's browser run
+/// brings them one at a time, each judged against those before it
+/// ([`sort_arrival`]).
+#[derive(Debug, Default)]
+struct Siblings {
+    /// The lowercased names later volumes are vouched for by
+    /// ([`volume_anchor`]).
+    wanted: HashSet<String>,
+    /// The archives kept, by lowercased name.
+    first_volumes: HashMap<String, Archive>,
+    /// The stems ([`stem_key`]) of the VobSub indexes kept.
+    indexes: HashSet<String>,
+}
+
+impl Siblings {
+    /// `name` is one of the package's files.
+    fn want(&mut self, name: &str) {
+        if let Some(anchor) = volume_anchor(name) {
+            self.wanted.insert(anchor);
+        }
+    }
+
+    /// A ZIP that cannot be read alone but starts with `PK` and has volumes
+    /// waiting on it (`pack.z01` for `pack.zip`, `pack.zip.002` for
+    /// `pack.zip.001`) is the set's spanned ZIP: it is kept without the
+    /// structural check a whole ZIP gets.
+    fn spanned(&self, name: &str, path: &Path, verdict: &mut Verdict) {
+        if matches!(verdict, Verdict::BadZip(_))
+            && self.wanted.contains(&name.to_lowercase())
+            && is_zip_signed(path)
+        {
+            *verdict = Verdict::Keep(Kept {
+                kind: Kind::Archive,
+                format: trss_subtitles::verify::Format::Other,
+                archive: Some(Archive::Zip),
+            });
+        }
+    }
+
+    /// Notes a file judged `verdict` (after [`Siblings::spanned`]): a kept
+    /// archive vouches for its set's later volumes, a kept VobSub index for
+    /// its program stream.
+    fn note(&mut self, name: &str, path: &Path, verdict: &Verdict) {
+        let Verdict::Keep(kept) = verdict else {
+            return;
+        };
+        if let (Kind::Archive, Some(archive)) = (kept.kind, kept.archive) {
+            self.first_volumes.insert(name.to_lowercase(), archive);
+        }
+        if extension_of(name).is_some_and(|ext| ext.eq_ignore_ascii_case("idx"))
+            && is_vobsub_index(path)
+        {
+            self.indexes.insert(stem_key(name));
+        }
+    }
+
+    /// What becomes of the file `name` judged `verdict`: kept as what, or
+    /// dropped for why.
+    fn resolve(&self, name: &str, verdict: Verdict) -> Result<Kept, String> {
+        match verdict {
+            Verdict::Keep(kept) => Ok(kept),
+            Verdict::Stream if self.indexes.contains(&stem_key(name)) => Ok(Kept {
+                kind: Kind::Subtitle,
+                format: trss_subtitles::verify::Format::Other,
+                archive: None,
+            }),
+            Verdict::Stream => Err(NO_INDEX_REASON.to_owned()),
+            // A later volume of a split archive is the set's, whatever its bytes are.
+            Verdict::Drop(_) | Verdict::BadZip(_)
+                if volume_anchor(name).is_some() && !has_own_reason(&verdict) =>
+            {
+                match volume_anchor(name).and_then(|anchor| self.first_volumes.get(&anchor)) {
+                    Some(archive) => Ok(Kept {
+                        kind: Kind::Archive,
+                        format: trss_subtitles::verify::Format::Other,
+                        archive: Some(*archive),
+                    }),
+                    None => Err(NO_FIRST_VOLUME.to_owned()),
+                }
+            }
+            Verdict::BadZip(reason) => Err(reason),
+            // A file named as an archive that is none says so, not that it is no subtitle.
+            Verdict::Drop(reason) if reason == NOT_THEM && is_archive_name(name) => {
+                Err(NOT_AN_ARCHIVE.to_owned())
+            }
+            Verdict::Drop(reason) => Err(reason),
+        }
+    }
+}
+
+/// A file a find job's browser run downloaded, judged
+/// ([`sort_arrival`]): kept in the job's folder, or dropped (its bytes gone).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Arrived {
+    Kept(UploadedFile),
+    Dropped(Dropped),
+}
+
+/// What a find job kept before a file arrives: what [`sort_arrival`] judges
+/// it against and names it apart from. A file the job dropped is no part of
+/// its package (its bytes are gone), so it vouches for nothing.
+#[derive(Debug, Clone, Default)]
+pub struct Earlier {
+    /// The files kept: shown name, path relative to the receive area, kind
+    /// and archive format.
+    pub kept: Vec<(String, String, Kind, Option<Archive>)>,
+}
+
+impl Earlier {
+    /// What the job's records `found` say it kept.
+    pub fn of(found: &crate::store::Found) -> Earlier {
+        Earlier {
+            kept: found
+                .kept
+                .iter()
+                .filter_map(|f| Some((f.name.clone(), f.path.clone()?, f.kind?, f.archive)))
+                .collect(),
+        }
+    }
+}
+
+/// Judges a file a find job's browser run downloaded to `staged` (in a
+/// folder of the receive area), named `raw` by the site, as an upload's file
+/// is judged ([`judge`] and the rules between files, [`Siblings`]) against
+/// the files the job kept `earlier`. A kept file is moved into the job's
+/// folder under a free safe name, `n` making its receipt's ID; a dropped one
+/// is removed. ZIPs inflate within `budget`. The rules between files see
+/// only the files kept before: a VobSub stream before its index, or a later
+/// volume of a split archive before its first, is dropped, and is kept if it
+/// is downloaded again after. A ZIP that cannot be read alone is kept, as an
+/// upload keeps it, only with a later volume of its set among the files, so
+/// a ZIP split into volumes (`.z01`, `.zip.001`) is never kept: each of its
+/// parts comes alone.
+pub fn sort_arrival(
+    area: &ReceiveArea,
+    job_id: &str,
+    staged: &Path,
+    raw: &str,
+    earlier: &Earlier,
+    n: usize,
+    budget: &mut u64,
+) -> Result<Arrived, UploadError> {
+    // Named apart from the files kept only: a dropped file holds no name, so
+    // a stream downloaded again after its index keeps its stem.
+    let mut shown: HashSet<String> = earlier.kept.iter().map(|k| k.0.clone()).collect();
+    let name = first_free(&display_name(raw), &mut shown);
+    let mut verdict = judge(staged, budget);
+    let mut siblings = Siblings::default();
+    for (kept_name, ..) in &earlier.kept {
+        siblings.want(kept_name);
+    }
+    siblings.want(&name);
+    siblings.spanned(&name, staged, &mut verdict);
+    for (kept_name, path, kind, archive) in &earlier.kept {
+        let verdict = Verdict::Keep(Kept {
+            kind: *kind,
+            format: trss_subtitles::verify::Format::Other,
+            archive: *archive,
+        });
+        siblings.note(kept_name, &area.at(path), &verdict);
+    }
+    let kept = match siblings.resolve(&name, verdict) {
+        Ok(kept) => kept,
+        Err(reason) => {
+            std::fs::remove_file(staged)?;
+            return Ok(Arrived::Dropped(Dropped { name, reason }));
+        }
+    };
+
+    let (size, sha256, _) = area::read_facts(staged)?;
+    let rel_dir = ReceiveArea::job_dir(job_id);
+    let job_dir = area.at(&rel_dir);
+    std::fs::create_dir_all(&job_dir)?;
+    // The names in the folder now: a file a crash left there unrecorded keeps
+    // its name.
+    let mut used: HashSet<String> = std::fs::read_dir(&job_dir)?
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    let last = name.rsplit('/').next().unwrap_or(&name);
+    let flat = first_free(last, &mut used);
+    let target = job_dir.join(&flat);
+    trss_core::files::rename_noreplace(staged, &target)?;
+    area::sync_dir(&job_dir)?;
+    if let Some(folder) = job_dir.parent() {
+        area::sync_dir(folder)?;
+    }
+    let meta = std::fs::symlink_metadata(&target)?;
+    Ok(Arrived::Kept(UploadedFile {
+        id: format!("{job_id}.{n:04}"),
+        file_key: name.clone(),
+        name,
+        path: format!("{rel_dir}/{flat}"),
+        size,
+        sha256,
+        object: area::object_of(&meta),
+        format: kept.format,
+        kind: kept.kind,
+        archive: kept.archive,
+    }))
+}
+
 /// What judging an upload's files came to: the kept files, the dropped ones,
 /// and the job's folder when one was made.
 type Placed = (Vec<UploadedFile>, Vec<Dropped>, Option<PathBuf>);
@@ -760,92 +965,21 @@ fn keep_the_files(
             (file, name, verdict)
         })
         .collect();
-    // A ZIP that cannot be read alone but starts with `PK` and has volumes
-    // waiting on it (`pack.z01` for `pack.zip`, `pack.zip.002` for
-    // `pack.zip.001`) is the set's spanned ZIP: it is kept without the
-    // structural check a whole ZIP gets.
-    let wanted: HashSet<String> = judged
-        .iter()
-        .filter_map(|(_, name, _)| volume_anchor(name))
-        .collect();
-    for (file, name, verdict) in &mut judged {
-        if matches!(verdict, Verdict::BadZip(_))
-            && wanted.contains(&name.to_lowercase())
-            && is_zip_signed(&staged_dir.join(&file.temp))
-        {
-            *verdict = Verdict::Keep(Kept {
-                kind: Kind::Archive,
-                format: trss_subtitles::verify::Format::Other,
-                archive: Some(Archive::Zip),
-            });
-        }
+    let mut siblings = Siblings::default();
+    for (_, name, _) in &judged {
+        siblings.want(name);
     }
-    let first_volumes: HashMap<String, Archive> = judged
-        .iter()
-        .filter_map(|(_, name, verdict)| match verdict {
-            Verdict::Keep(Kept {
-                kind: Kind::Archive,
-                archive: Some(archive),
-                ..
-            }) => Some((name.to_lowercase(), *archive)),
-            _ => None,
-        })
-        .collect();
-    let indexes: Vec<String> = judged
-        .iter()
-        .filter(|(file, name, verdict)| {
-            matches!(verdict, Verdict::Keep(_))
-                && extension_of(name).is_some_and(|ext| ext.eq_ignore_ascii_case("idx"))
-                && is_vobsub_index(&staged_dir.join(&file.temp))
-        })
-        .map(|(_, name, _)| stem_key(name))
-        .collect();
+    for (file, name, verdict) in &mut judged {
+        siblings.spanned(name, &staged_dir.join(&file.temp), verdict);
+    }
+    for (file, name, verdict) in &judged {
+        siblings.note(name, &staged_dir.join(&file.temp), verdict);
+    }
     let mut keepers: Vec<(Staged, String, Kept)> = Vec::new();
     for (file, name, verdict) in judged {
-        match verdict {
-            Verdict::Keep(kept) => keepers.push((file, name, kept)),
-            Verdict::Stream if indexes.contains(&stem_key(&name)) => keepers.push((
-                file,
-                name,
-                Kept {
-                    kind: Kind::Subtitle,
-                    format: trss_subtitles::verify::Format::Other,
-                    archive: None,
-                },
-            )),
-            Verdict::Stream => dropped.push(Dropped {
-                name,
-                reason: NO_INDEX_REASON.to_owned(),
-            }),
-            // A later volume of a split archive is the set's, whatever its bytes are.
-            Verdict::Drop(_) | Verdict::BadZip(_)
-                if volume_anchor(&name).is_some() && !has_own_reason(&verdict) =>
-            {
-                match volume_anchor(&name).and_then(|anchor| first_volumes.get(&anchor)) {
-                    Some(archive) => keepers.push((
-                        file,
-                        name,
-                        Kept {
-                            kind: Kind::Archive,
-                            format: trss_subtitles::verify::Format::Other,
-                            archive: Some(*archive),
-                        },
-                    )),
-                    None => dropped.push(Dropped {
-                        name,
-                        reason: NO_FIRST_VOLUME.to_owned(),
-                    }),
-                }
-            }
-            Verdict::BadZip(reason) => dropped.push(Dropped { name, reason }),
-            // A file named as an archive that is none says so, not that it is no subtitle.
-            Verdict::Drop(reason) if reason == NOT_THEM && is_archive_name(&name) => {
-                dropped.push(Dropped {
-                    name,
-                    reason: NOT_AN_ARCHIVE.to_owned(),
-                })
-            }
-            Verdict::Drop(reason) => dropped.push(Dropped { name, reason }),
+        match siblings.resolve(&name, verdict) {
+            Ok(kept) => keepers.push((file, name, kept)),
+            Err(reason) => dropped.push(Dropped { name, reason }),
         }
     }
     if keepers.is_empty() {
@@ -936,5 +1070,109 @@ mod tests {
             .sentence(),
             "압축 파일 1개"
         );
+    }
+
+    fn program_stream() -> Vec<u8> {
+        let mut bytes = b"\x00\x00\x01\xBA\x44\x00\x04\x00\x04\x01".to_vec();
+        bytes.resize(64, 0);
+        bytes
+    }
+
+    const IDX: &[u8] = b"# VobSub index file, v7 (do not modify this line!)\nlangidx: 0\n";
+
+    /// Sorts `bytes` arriving as `name` after `earlier`, as the `n`th file.
+    fn arrive(
+        area: &ReceiveArea,
+        name: &str,
+        bytes: &[u8],
+        earlier: &mut Earlier,
+        n: usize,
+    ) -> Arrived {
+        let staged = area.at(".tmp/check-j-1");
+        std::fs::create_dir_all(&staged).unwrap();
+        let staged = staged.join(name);
+        std::fs::write(&staged, bytes).unwrap();
+        let mut budget = INFLATE_BUDGET;
+        let arrived = sort_arrival(area, "j", &staged, name, earlier, n, &mut budget).unwrap();
+        assert!(!staged.exists(), "the staged bytes are moved or removed");
+        match &arrived {
+            Arrived::Kept(file) => {
+                earlier.kept.push((
+                    file.name.clone(),
+                    file.path.clone(),
+                    file.kind,
+                    file.archive,
+                ));
+            }
+            Arrived::Dropped(_) => {}
+        }
+        arrived
+    }
+
+    #[test]
+    fn an_arrival_is_kept_in_the_jobs_folder_under_a_name_of_its_own() {
+        let dir = tempfile::tempdir().unwrap();
+        let area = ReceiveArea::in_app_data(dir.path());
+        let mut earlier = Earlier::default();
+        let srt = b"1\n00:00:01,000 --> 00:00:02,000\nhi\n\n";
+        let Arrived::Kept(first) = arrive(&area, "ep1.srt", srt, &mut earlier, 0) else {
+            panic!("kept")
+        };
+        assert_eq!(
+            (first.id.as_str(), first.path.as_str()),
+            ("j.0000", "j/ep1.srt")
+        );
+        assert_eq!(first.kind, Kind::Subtitle);
+        // The same name again is a second file, named apart.
+        let Arrived::Kept(second) = arrive(&area, "ep1.srt", srt, &mut earlier, 1) else {
+            panic!("kept")
+        };
+        assert_eq!(second.id, "j.0001");
+        assert_ne!(second.name, first.name);
+        assert_ne!(second.path, first.path);
+        assert!(area.at(&first.path).exists() && area.at(&second.path).exists());
+
+        let Arrived::Dropped(dropped) = arrive(&area, "readme.txt", b"hello", &mut earlier, 2)
+        else {
+            panic!("dropped")
+        };
+        assert_eq!(dropped.reason, NOT_THEM);
+    }
+
+    #[test]
+    fn the_rules_between_files_see_the_files_that_came_before() {
+        let dir = tempfile::tempdir().unwrap();
+        let area = ReceiveArea::in_app_data(dir.path());
+        let mut earlier = Earlier::default();
+        // A program stream before its index is dropped; after it, kept.
+        let Arrived::Dropped(early) =
+            arrive(&area, "movie.sub", &program_stream(), &mut earlier, 0)
+        else {
+            panic!("dropped")
+        };
+        assert_eq!(early.reason, NO_INDEX_REASON);
+        assert!(matches!(
+            arrive(&area, "movie.idx", IDX, &mut earlier, 0),
+            Arrived::Kept(_)
+        ));
+        let Arrived::Kept(stream) = arrive(&area, "movie.sub", &program_stream(), &mut earlier, 1)
+        else {
+            panic!("kept")
+        };
+        assert_eq!(stream.kind, Kind::Subtitle);
+        // A later volume with no first volume before it is dropped.
+        let Arrived::Dropped(volume) = arrive(&area, "pack.z01", b"\x00\x01", &mut earlier, 2)
+        else {
+            panic!("dropped")
+        };
+        assert_eq!(volume.reason, NO_FIRST_VOLUME);
+        // Nor does the dropped volume vouch for a ZIP after it: that ZIP,
+        // unreadable alone, would be a set with a part missing.
+        let Arrived::Dropped(zip) = arrive(&area, "pack.zip", b"PK\x03\x04broken", &mut earlier, 2)
+        else {
+            panic!("dropped")
+        };
+        assert_eq!(zip.name, "pack.zip");
+        assert!(earlier.kept.iter().all(|k| k.0 != "pack.zip"));
     }
 }

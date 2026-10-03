@@ -138,6 +138,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("../migrations/jobs/winpng.sql")),
     // 45: the remote screen of a job that waits for a person's check: the bound browser run and the web's requests
     Migration::Sql(include_str!("../migrations/jobs/remote_screen.sql")),
+    // 46: a find job's request to finish receiving; its screen's first page and a request to close a popup
+    Migration::Sql(include_str!("../migrations/jobs/find.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]

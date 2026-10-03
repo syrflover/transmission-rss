@@ -104,7 +104,7 @@ pub fn routes() -> Router<AppState> {
 /// What a text part may be at most, in bytes.
 const TEXT_MAX: usize = 4096;
 /// The longest command ID.
-const ID_MAX: usize = 128;
+pub(crate) const ID_MAX: usize = 128;
 /// What the multipart framing and the text parts may add to the files'
 /// bytes in a `Content-Length` that is believed to be within the limit.
 const FRAMING_ALLOWANCE: u64 = 8 * 1024 * 1024;

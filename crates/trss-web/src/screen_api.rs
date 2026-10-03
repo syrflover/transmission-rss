@@ -25,7 +25,21 @@
 //!   why: opening the page prepares it again) or `unavailable` (this web has
 //!   no server browser). `bound` (with `run`) is when the run was bound to
 //!   the job, in milliseconds: another check of the job in the same run is a
-//!   new binding with a later `bound`, to connect to anew.
+//!   new binding with a later `bound`, to connect to anew. `popup` (with
+//!   `run`) says the page shown is not the one the run was bound with: a find
+//!   job's screen follows a page its post opened, which a person may close.
+//!
+//! # Closing a popup
+//!
+//! `POST /api/subtitle-jobs/{id}/screen/close` `{ "run", "bound" }`: a person
+//! closes the page a find job's screen shows, of the binding they see, when
+//! it is a page the post opened (`popup`). The request is written for the
+//! worker, which owns the runs: it closes that page in the browser
+//! (`Target.closeTarget`), never the page the run opened the post in, and the
+//! screen goes back to the page before it, a new binding (`ended` `run`).
+//! `202` when it was asked, `409` when the job's screen shows no such popup
+//! now (the binding changed, or it is the post's page), `404` for no job. The
+//! web itself sends the browser nothing for it.
 //!
 //! # The socket
 //!
@@ -142,6 +156,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/subtitle-jobs/{id}/screen", post(prepare))
         .route("/subtitle-jobs/{id}/screen/socket", get(socket))
+        .route("/subtitle-jobs/{id}/screen/close", post(close))
 }
 
 /// The web's way to the server browser's runs, and the hubs of the screens
@@ -238,6 +253,9 @@ pub struct ScreenView {
     /// in the same run.
     pub bound: Option<i64>,
     pub note: Option<String>,
+    /// With `run`: the page shown is a page the post opened, which a person
+    /// may close (`POST .../screen/close`).
+    pub popup: bool,
 }
 
 const NO_BROWSER: &str =
@@ -250,6 +268,7 @@ fn view_of(state: &AppState, screen: Screen) -> ScreenView {
             run: None,
             bound: None,
             note: Some(NO_BROWSER.to_owned()),
+            popup: false,
         };
     }
     ScreenView {
@@ -257,6 +276,7 @@ fn view_of(state: &AppState, screen: Screen) -> ScreenView {
         run: screen.run_id,
         bound: screen.bound_at,
         note: screen.note,
+        popup: screen.popup,
     }
 }
 
@@ -301,6 +321,36 @@ async fn prepare(
         }
     }
     Ok(Json(Some(view_of(&state, screen))))
+}
+
+/// The binding of the screen a person asks to close the page of.
+#[derive(Debug, Deserialize)]
+struct CloseRequest {
+    run: String,
+    bound: i64,
+}
+
+async fn close(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<CloseRequest>,
+) -> Result<StatusCode, ApiError> {
+    let asked = state
+        .screens
+        .request_close(&id, &request.run, request.bound, now_millis())
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    if asked {
+        return Ok(StatusCode::ACCEPTED);
+    }
+    if !job_exists(&state, &id).await? {
+        return Err(ApiError::not_found("작업을 찾지 못했어요."));
+    }
+    Err(ApiError::Conflict {
+        message: "닫을 창이 없어요. 화면이 바뀌었으면 새로 연 화면에서 다시 시도해 주세요."
+            .to_owned(),
+        current: None,
+    })
 }
 
 fn refuse(status: StatusCode, error: &str, message: &str) -> Response {

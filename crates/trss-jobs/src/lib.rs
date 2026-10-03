@@ -18,7 +18,11 @@
 //!   days, and the revision jobs made when a file differs.
 //!
 //! - [`upload`]: the subtitles and fonts a person uploads, made into a job that
-//!   is already `done`.
+//!   is already `done`, and the same judging for the files a find job's
+//!   browser run downloads.
+//! - A find job ([`FIND`], [`JobStore::create_find`]): a person browses a
+//!   creator's posts on the job's remote screen and every download becomes a
+//!   file of its one package, until they finish it ([`JobStore::ask_finish`]).
 //!
 //! The sites themselves are `trss-subtitles`'s.
 
@@ -39,7 +43,8 @@ pub use recheck::Recheck;
 pub use runner::Runner;
 pub use screen::{Screen, ScreenState, ScreenStore};
 pub use store::{
-    Created, FileProblem, JobError, JobStore, MappingStamp, NewItem, NewJob, AUTO, UPLOAD,
+    AskedFinish, Created, FileProblem, JobError, JobStore, MappingStamp, NewFind, NewItem, NewJob,
+    AUTO, FIND, NOTHING_FOUND, UPLOAD,
 };
 pub use trss_subtitles::{verify::Format, FailureKind};
 pub use upload::{Finished, Uploads};

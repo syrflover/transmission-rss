@@ -156,10 +156,11 @@ impl Worker {
     /// `cancel` fires: whenever the web wakes the worker (a person opened a
     /// job's page) and every [`SCREEN_POLL`], the runner watches the bound
     /// runs and answers the requests to prepare a screen
-    /// ([`trss_jobs::Runner::tend_screens`]). Only a worker with the server
-    /// browser does.
+    /// ([`trss_jobs::Runner::tend_screens`]). A worker without the server
+    /// browser has no runs to watch; it still ends the find jobs a person
+    /// asked to finish, which only a worker does.
     pub(crate) async fn run_screens(&self, cancel: CancellationToken) {
-        let (Some(runner), Some(_)) = (self.jobs.clone(), &self.browser) else {
+        let Some(runner) = self.jobs.clone() else {
             return;
         };
         let mut ticker = tokio::time::interval(SCREEN_POLL);

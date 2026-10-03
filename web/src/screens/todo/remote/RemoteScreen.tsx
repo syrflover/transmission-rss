@@ -50,6 +50,7 @@ export function RemoteScreen({
   title,
   opening,
   onReopen,
+  actions,
 }: {
   jobId: string;
   run: string;
@@ -60,6 +61,8 @@ export function RemoteScreen({
   opening: boolean;
   /** Asks for the page and its screen to be prepared again; resolves when the answer is in. */
   onReopen: () => Promise<void>;
+  /** More controls of the screen, before its own (a find job's `이 창 닫기`). */
+  actions?: React.ReactNode;
 }) {
   const area = useRef<HTMLDivElement>(null);
   const image = useRef<HTMLImageElement>(null);
@@ -271,6 +274,7 @@ export function RemoteScreen({
           {title}
         </h2>
         <div className="ml-auto flex items-center gap-2">
+          {actions}
           {touch && (
             <Button
               type="button"

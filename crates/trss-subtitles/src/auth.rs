@@ -37,6 +37,18 @@
 //! ([`arrived`]); the folder goes when the item settles. A refusal is kept
 //! the same way ([`REFUSED`]) until the item's next run fails it.
 //!
+//! # A page a person browses
+//!
+//! A find job (`docs/specs/subtitles.md`, 직접 찾기와 자막 올리기) asks for
+//! [`AuthPage::Browse`]: the post is opened and nothing on it is clicked. The
+//! person goes to an earlier post on the job's remote screen, opens its
+//! popups, passes a site's check there, and starts the downloads. Every
+//! download the run completes is handed out by [`AuthBrowser::wait_file`] as
+//! for a check; nothing judges the run's documents as refusals, since what
+//! came is judged by its bytes afterwards. [`AuthBrowser::downloading`] tells
+//! whether a download is still on its way, and [`AuthBrowser::pages`] which
+//! pages the run has open, so the screen can follow a popup.
+//!
 //! [`BrowserAuth`] is the [`AuthBrowser`] over a [`trss_browser::BrowserPool`].
 //!
 //! No address leaves this module: a post's download may be signed. The
@@ -85,7 +97,13 @@ pub enum AuthPage {
     Fake(fake::FakeCheck),
     /// An erulabo post and the card of the episode ([`erulabo`]).
     Erulabo(erulabo::ErulaboCheck),
+    /// A post a person browses from (a find job): opened, and nothing on it
+    /// clicked. A fake post ([`fake::HOST`]) is served inside the browser.
+    Browse,
 }
+
+/// What a page a person browses is called on the job's screen and in its log.
+pub const BROWSE_REASON: &str = "직접 찾기";
 
 impl AuthPage {
     /// What the check is called on the job's screen and in its log.
@@ -93,6 +111,7 @@ impl AuthPage {
         match self {
             AuthPage::Fake(_) => fake::CHECK_REASON,
             AuthPage::Erulabo(_) => erulabo::CHECK_REASON,
+            AuthPage::Browse => BROWSE_REASON,
         }
     }
 
@@ -100,7 +119,7 @@ impl AuthPage {
     /// snapshot.
     pub fn snapshot(&self) -> Snapshot {
         match self {
-            AuthPage::Fake(_) => Snapshot::default(),
+            AuthPage::Fake(_) | AuthPage::Browse => Snapshot::default(),
             AuthPage::Erulabo(check) => check.snapshot().clone(),
         }
     }
@@ -178,6 +197,38 @@ pub trait AuthBrowser: Send + Sync {
     fn rearm<'a>(&'a self, job: &'a str, run_id: &'a str) -> BoxFuture<'a, ()> {
         let _ = (job, run_id);
         Box::pin(async {})
+    }
+
+    /// Whether a download of the run `run_id` of `job` is on its way: under
+    /// way in the browser, ended and not yet handed out, or handed out and
+    /// still being moved by [`AuthBrowser::wait_file`]. Looks only. A
+    /// [`AuthBrowser::wait_file`] given up while this is `false` loses no
+    /// file. `false` by default.
+    fn downloading(&self, job: &str, run_id: &str) -> bool {
+        let _ = (job, run_id);
+        false
+    }
+
+    /// The DevTools targets of the pages the run `run_id` of `job` has open
+    /// now (a popup is one), none when it is not live. Looks only. None by
+    /// default.
+    fn pages(&self, job: &str, run_id: &str) -> Vec<String> {
+        let _ = (job, run_id);
+        Vec::new()
+    }
+
+    /// A person asked to close the page `target` of the run `run_id` of
+    /// `job` (a popup the post opened): it is closed, unless it is the page
+    /// the run was prepared with, which never is. Whether it was closed.
+    /// `false` by default.
+    fn close_page<'a>(
+        &'a self,
+        job: &'a str,
+        run_id: &'a str,
+        target: &'a str,
+    ) -> BoxFuture<'a, bool> {
+        let _ = (job, run_id, target);
+        Box::pin(async { false })
     }
 }
 
@@ -475,6 +526,9 @@ pub struct BrowserAuth {
     rearming: Arc<Mutex<HashSet<String>>>,
     /// The runs that logged the host of a page they did not know.
     unknown_hosts: Arc<FirstPerRun>,
+    /// The jobs whose download [`AuthBrowser::wait_file`] has taken from the
+    /// run and is moving now ([`AuthBrowser::downloading`]).
+    taking: Arc<Mutex<HashSet<String>>>,
     #[cfg(feature = "test-hooks")]
     page_setup: Option<PageSetup>,
 }
@@ -491,6 +545,7 @@ impl BrowserAuth {
             shown: Arc::default(),
             rearming: Arc::default(),
             unknown_hosts: Arc::default(),
+            taking: Arc::default(),
             #[cfg(feature = "test-hooks")]
             page_setup: None,
         }
@@ -550,6 +605,7 @@ impl BrowserAuth {
         let driven = match request.page {
             AuthPage::Fake(check) => fake::drive_check(&page, request.post, check).await,
             AuthPage::Erulabo(check) => erulabo::drive_check(&page, request.post, check).await,
+            AuthPage::Browse => browse(&page, request.post).await,
         };
         if let Err(failure) = driven {
             let _ = page.close().await;
@@ -592,6 +648,9 @@ impl BrowserAuth {
             },
             refused = self.refusal(job, &run), if watched => return Waited::Refused(refused),
         };
+        // Set in the same poll the download was taken in, so whoever asks
+        // `downloading` sees it as on its way until it is moved (or not).
+        let _taking = Taking::new(&self.taking, job);
         if download.state != DownloadState::Completed {
             return Waited::NotTaken {
                 reason: "브라우저의 다운로드가 끝나지 못했어요 (취소되었거나 크기 한도를 넘었어요)"
@@ -620,6 +679,58 @@ impl BrowserAuth {
             }
         }
     }
+}
+
+/// A download of a job taken from its run and not yet moved: the job is in
+/// [`BrowserAuth::taking`] until this goes.
+struct Taking {
+    jobs: Arc<Mutex<HashSet<String>>>,
+    job: String,
+}
+
+impl Taking {
+    fn new(jobs: &Arc<Mutex<HashSet<String>>>, job: &str) -> Taking {
+        jobs.lock().expect("taking lock").insert(job.to_owned());
+        Taking {
+            jobs: jobs.clone(),
+            job: job.to_owned(),
+        }
+    }
+}
+
+impl Drop for Taking {
+    fn drop(&mut self) {
+        if let Ok(mut jobs) = self.jobs.lock() {
+            jobs.remove(&self.job);
+        }
+    }
+}
+
+/// Opens the post a person browses from in `page` (a blank page of the job's
+/// run) and waits until it has loaded, clicking nothing. A fake post is served
+/// inside the browser ([`fake::HOST`]).
+async fn browse(page: &Page, post: &Url) -> Result<(), Failure> {
+    if !matches!(post.scheme(), "http" | "https") {
+        return Err(Failure::new(
+            FailureKind::Changed,
+            "게시물 주소가 웹 주소가 아니에요",
+        ));
+    }
+    if post.host_str() == Some(fake::HOST) {
+        fake::serve_page(page.clone()).await?;
+    }
+    page.navigate(post.as_str())
+        .await
+        .map_err(browser_failure)?;
+    // A page that never finishes loading (a stalled ad) is still the
+    // person's to use: only a page that does not answer at all is a failure.
+    if !wait_until(page, "document.readyState !== 'loading'", READY_TIMEOUT).await? {
+        return Err(Failure::new(
+            FailureKind::Network,
+            "게시물이 시간 안에 열리지 않았어요",
+        ));
+    }
+    Ok(())
 }
 
 /// What a document a page of the run was answered with means to the wait.
@@ -741,6 +852,49 @@ impl AuthBrowser for BrowserAuth {
             self.shown.lock().expect("shown lock").remove(job);
             self.unknown_hosts.forget(job);
             self.pool.end_job(job).await
+        })
+    }
+
+    fn downloading(&self, job: &str, run_id: &str) -> bool {
+        self.taking.lock().expect("taking lock").contains(job)
+            || self
+                .live(job, run_id)
+                .is_some_and(|run| run.download_active())
+    }
+
+    fn pages(&self, job: &str, run_id: &str) -> Vec<String> {
+        match self.live(job, run_id).filter(|run| !run.is_ended()) {
+            Some(run) => run
+                .pages()
+                .iter()
+                .map(|page| page.target_id().to_owned())
+                .collect(),
+            None => Vec::new(),
+        }
+    }
+
+    fn close_page<'a>(
+        &'a self,
+        job: &'a str,
+        run_id: &'a str,
+        target: &'a str,
+    ) -> BoxFuture<'a, bool> {
+        Box::pin(async move {
+            // The page the run was prepared with stays: the browser always
+            // has a window, and the post is where the person came from.
+            if self
+                .shown(job, run_id)
+                .is_none_or(|shown| shown.target_id == target)
+            {
+                return false;
+            }
+            let Some(run) = self.live(job, run_id).filter(|run| !run.is_ended()) else {
+                return false;
+            };
+            let Some(page) = run.pages().into_iter().find(|p| p.target_id() == target) else {
+                return false;
+            };
+            page.close().await.is_ok()
         })
     }
 

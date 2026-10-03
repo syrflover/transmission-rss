@@ -15,6 +15,11 @@
 //!   person's input on the screen ([`ScreenStore::record_input`]), which the
 //!   worker's idle end of browser runs counts as use
 //!   ([`ScreenStore::live_inputs`]).
+//! - A find job's screen follows a page the post opened (a popup,
+//!   [`ScreenStore::retarget`]). The web records a person's request to close
+//!   such a page ([`ScreenStore::request_close`]); the worker closes it in the
+//!   browser, never the run's first page, and the screen goes back to the
+//!   page before it ([`ScreenStore::take_close`]).
 //!
 //! No token, cookie or address is written here.
 
@@ -38,6 +43,11 @@ pub const WORKER_RESTARTED: &str =
 pub const FILE_ARRIVED: &str = "사이트 확인을 마쳐 브라우저가 파일을 받았어요";
 /// The same, when the answer was a web page instead of the file.
 pub const FILE_REFUSED: &str = "사이트 확인을 마쳤지만 파일 대신 웹 페이지가 왔어요";
+/// The job's log when a person reopened the screen of a run that had ended
+/// ([`ScreenStore::requeue_for_check`]).
+pub const CHECK_PREPARED_AGAIN: &str = "사이트 확인 화면을 다시 준비해요";
+/// The same, for a find job.
+pub const FIND_PREPARED_AGAIN: &str = "제작자의 게시물을 다시 열어요";
 
 /// How far a job's remote screen is, as the web shows it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,6 +89,10 @@ pub struct Screen {
     pub bound_at: Option<Millis>,
     /// Why no run shows it, in a sentence.
     pub note: Option<String>,
+    /// With `run_id`: the page shown is not the one the run was bound with
+    /// (a find job's popup), so a person may close it
+    /// ([`ScreenStore::request_close`]).
+    pub popup: bool,
 }
 
 /// A binding of a run to a job that waits for its check: what the worker
@@ -88,6 +102,11 @@ pub struct Binding {
     pub job_id: String,
     pub item_id: i64,
     pub run_id: String,
+    /// The page of the run the screen shows.
+    pub target_id: String,
+    /// The job is a find job: a person browses on the screen and every
+    /// download of the run is the job's ([`crate::runner`]).
+    pub find: bool,
 }
 
 /// A person opened the page of a job that waits for its check: the worker
@@ -100,6 +119,8 @@ pub struct PrepareRequest {
     /// When it was asked: what [`ScreenStore::mark_prepared`] and
     /// [`ScreenStore::requeue_for_check`] answer.
     pub asked_at: Millis,
+    /// The job is a find job: its page has no check to bring back.
+    pub find: bool,
 }
 
 /// A file the browser downloaded arrived for the bound run.
@@ -186,8 +207,68 @@ impl ScreenStore {
             .await
     }
 
+    /// A person asked to close the page the find job's screen shows, of the
+    /// binding (`run_id`, `bound_at`) they see: written for the worker
+    /// ([`ScreenStore::take_close`]) when that is still the binding and its
+    /// page is not the run's first ([`Screen::popup`]). Whether it was.
+    pub async fn request_close(
+        &self,
+        job_id: &str,
+        run_id: &str,
+        bound_at: Millis,
+        now: Millis,
+    ) -> Result<bool, JobError> {
+        let (id, run) = (job_id.to_owned(), run_id.to_owned());
+        self.db
+            .run(move |c| {
+                Ok(c.execute(
+                    &format!(
+                        "UPDATE subtitle_job_screens
+                         SET close_target_id = target_id, updated_at = ?4
+                         WHERE job_id = ?1 AND run_id = ?2 AND bound_at = ?3
+                           AND target_id <> first_target_id
+                           AND EXISTS (SELECT 1 FROM subtitle_jobs j
+                                       WHERE j.id = ?1 AND j.origin = 'find'
+                                         AND {WAITS_FOR_CHECK})"
+                    ),
+                    params![id, run, bound_at, now],
+                )? > 0)
+            })
+            .await
+    }
+
     // -----------------------------------------------------------------------
     // What the worker writes
+
+    /// The page of the run `run_id` a person asked to close
+    /// ([`ScreenStore::request_close`]), if any: the request is answered by
+    /// this (taken once).
+    pub async fn take_close(&self, job_id: &str, run_id: &str) -> Result<Option<String>, JobError> {
+        let (id, run) = (job_id.to_owned(), run_id.to_owned());
+        self.db
+            .run(move |c| {
+                let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                let asked: Option<String> = tx
+                    .query_row(
+                        "SELECT close_target_id FROM subtitle_job_screens
+                         WHERE job_id = ?1 AND run_id = ?2",
+                        params![id, run],
+                        |r| r.get(0),
+                    )
+                    .optional()?
+                    .flatten();
+                if asked.is_some() {
+                    tx.execute(
+                        "UPDATE subtitle_job_screens SET close_target_id = NULL
+                         WHERE job_id = ?1 AND run_id = ?2",
+                        params![id, run],
+                    )?;
+                }
+                tx.commit()?;
+                Ok(asked)
+            })
+            .await
+    }
 
     /// The run `run_id` shows the check of `item_id`, at its page
     /// `target_id`: bound to the job, any earlier binding and note replaced.
@@ -206,14 +287,15 @@ impl ScreenStore {
                 c.execute(
                     "INSERT INTO subtitle_job_screens
                          (job_id, item_id, run_id, target_id, bound_at, note, prepared_at,
-                          input_at, updated_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?5, NULL, ?5)
+                          input_at, updated_at, first_target_id, close_target_id)
+                     VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?5, NULL, ?5, ?4, NULL)
                      ON CONFLICT (job_id) DO UPDATE
                      SET item_id = excluded.item_id, run_id = excluded.run_id,
                          target_id = excluded.target_id, bound_at = excluded.bound_at,
                          note = NULL, input_at = NULL,
                          prepared_at = MAX(excluded.prepared_at, COALESCE(prepare_at, 0)),
-                         updated_at = excluded.updated_at",
+                         updated_at = excluded.updated_at,
+                         first_target_id = excluded.target_id, close_target_id = NULL",
                     params![id, item_id, run, target, now],
                 )?;
                 Ok(())
@@ -243,10 +325,35 @@ impl ScreenStore {
                      SET item_id = excluded.item_id, run_id = NULL, target_id = NULL,
                          bound_at = NULL, note = excluded.note, input_at = NULL,
                          prepared_at = MAX(excluded.prepared_at, COALESCE(prepare_at, 0)),
-                         updated_at = excluded.updated_at",
+                         updated_at = excluded.updated_at,
+                         first_target_id = NULL, close_target_id = NULL",
                     params![id, item_id, note, now],
                 )?;
                 Ok(())
+            })
+            .await
+    }
+
+    /// The screen of the run `run_id` shows its page `target_id` from now on
+    /// (a find job's popup, or the page left when it closed): a new binding
+    /// of the same run, so the screens open on the old page end and connect
+    /// anew. The person's last input stays. Whether it changed.
+    pub async fn retarget(
+        &self,
+        job_id: &str,
+        run_id: &str,
+        target_id: &str,
+        now: Millis,
+    ) -> Result<bool, JobError> {
+        let (id, run, target) = (job_id.to_owned(), run_id.to_owned(), target_id.to_owned());
+        self.db
+            .run(move |c| {
+                Ok(c.execute(
+                    "UPDATE subtitle_job_screens
+                     SET target_id = ?3, bound_at = MAX(?4, bound_at + 1), updated_at = ?4
+                     WHERE job_id = ?1 AND run_id = ?2 AND target_id <> ?3",
+                    params![id, run, target, now],
+                )? > 0)
             })
             .await
     }
@@ -267,7 +374,8 @@ impl ScreenStore {
                 Ok(c.execute(
                     "UPDATE subtitle_job_screens
                      SET run_id = NULL, target_id = NULL, bound_at = NULL, note = ?3,
-                         input_at = NULL, updated_at = ?4
+                         input_at = NULL, updated_at = ?4,
+                         first_target_id = NULL, close_target_id = NULL
                      WHERE job_id = ?1 AND run_id = ?2",
                     params![id, run, note, now],
                 )? > 0)
@@ -283,7 +391,8 @@ impl ScreenStore {
                 Ok(c.execute(
                     "UPDATE subtitle_job_screens
                      SET run_id = NULL, target_id = NULL, bound_at = NULL, note = ?2,
-                         input_at = NULL, updated_at = ?1
+                         input_at = NULL, updated_at = ?1,
+                         first_target_id = NULL, close_target_id = NULL
                      WHERE run_id IS NOT NULL",
                     params![now, WORKER_RESTARTED],
                 )?)
@@ -308,16 +417,12 @@ impl ScreenStore {
         self.db
             .run(move |c| {
                 Ok(c.query_row(
-                    "SELECT job_id, item_id, run_id FROM subtitle_job_screens
-                     WHERE job_id = ?1 AND run_id IS NOT NULL",
+                    "SELECT s.job_id, s.item_id, s.run_id, s.target_id,
+                            COALESCE(j.origin = 'find', 0)
+                     FROM subtitle_job_screens s LEFT JOIN subtitle_jobs j ON j.id = s.job_id
+                     WHERE s.job_id = ?1 AND s.run_id IS NOT NULL",
                     [id],
-                    |r| {
-                        Ok(Binding {
-                            job_id: r.get(0)?,
-                            item_id: r.get(1)?,
-                            run_id: r.get(2)?,
-                        })
-                    },
+                    binding_row,
                 )
                 .optional()?)
             })
@@ -330,18 +435,12 @@ impl ScreenStore {
         self.db
             .run(|c| {
                 let mut stmt = c.prepare(&format!(
-                    "SELECT s.job_id, s.item_id, s.run_id
+                    "SELECT s.job_id, s.item_id, s.run_id, s.target_id, j.origin = 'find'
                      FROM subtitle_job_screens s JOIN subtitle_jobs j ON j.id = s.job_id
                      WHERE s.run_id IS NOT NULL AND {WAITS_FOR_CHECK}
                      ORDER BY s.job_id"
                 ))?;
-                let rows = stmt.query_map([], |r| {
-                    Ok(Binding {
-                        job_id: r.get(0)?,
-                        item_id: r.get(1)?,
-                        run_id: r.get(2)?,
-                    })
-                })?;
+                let rows = stmt.query_map([], binding_row)?;
                 Ok(rows.collect::<Result<_, _>>()?)
             })
             .await
@@ -353,7 +452,7 @@ impl ScreenStore {
         self.db
             .run(|c| {
                 let mut stmt = c.prepare(&format!(
-                    "SELECT s.job_id, s.run_id, s.prepare_at
+                    "SELECT s.job_id, s.run_id, s.prepare_at, j.origin = 'find'
                      FROM subtitle_job_screens s JOIN subtitle_jobs j ON j.id = s.job_id
                      WHERE s.prepare_at > COALESCE(s.prepared_at, 0) AND {WAITS_FOR_CHECK}
                      ORDER BY s.prepare_at"
@@ -363,6 +462,7 @@ impl ScreenStore {
                         job_id: r.get(0)?,
                         run_id: r.get(1)?,
                         asked_at: r.get(2)?,
+                        find: r.get(3)?,
                     })
                 })?;
                 Ok(rows.collect::<Result<_, _>>()?)
@@ -411,14 +511,15 @@ impl ScreenStore {
                         "UPDATE subtitle_job_screens
                          SET run_id = NULL, target_id = NULL, bound_at = NULL, note = NULL,
                              input_at = NULL, prepared_at = MAX(?2, COALESCE(prepared_at, 0)),
-                             updated_at = ?3
+                             updated_at = ?3, first_target_id = NULL, close_target_id = NULL
                          WHERE job_id = ?1",
                         params![id, asked_at, now],
                     )?;
                     tx.execute(
                         "INSERT INTO subtitle_job_events (job_id, at, message, detail)
-                         VALUES (?1, ?2, '사이트 확인 화면을 다시 준비해요', NULL)",
-                        params![id, now],
+                         SELECT ?1, ?2, CASE origin WHEN 'find' THEN ?3 ELSE ?4 END, NULL
+                         FROM subtitle_jobs WHERE id = ?1",
+                        params![id, now, FIND_PREPARED_AGAIN, CHECK_PREPARED_AGAIN],
                     )?;
                 }
                 tx.commit()?;
@@ -501,6 +602,16 @@ impl ScreenStore {
     }
 }
 
+fn binding_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Binding> {
+    Ok(Binding {
+        job_id: r.get(0)?,
+        item_id: r.get(1)?,
+        run_id: r.get(2)?,
+        target_id: r.get(3)?,
+        find: r.get(4)?,
+    })
+}
+
 /// Puts a job that waits for its check, and its items that do, back in line.
 /// Whether it waited.
 fn requeue(c: &Connection, job_id: &str, now: Millis) -> Result<bool, JobError> {
@@ -530,7 +641,8 @@ fn requeue(c: &Connection, job_id: &str, now: Millis) -> Result<bool, JobError> 
 }
 
 /// A screen's row with its job's state: run, page, binding time, note,
-/// whether a request is unanswered, the job's state and wait.
+/// whether a request is unanswered, the job's state and wait, and whether
+/// the page shown is not the run's first.
 type ScreenRow = (
     Option<String>,
     Option<String>,
@@ -539,13 +651,15 @@ type ScreenRow = (
     bool,
     JobState,
     Option<Wait>,
+    bool,
 );
 
 fn screen(c: &Connection, job_id: &str) -> Result<Option<Screen>, JobError> {
     let row: Option<ScreenRow> = c
         .query_row(
             "SELECT s.run_id, s.target_id, s.bound_at, s.note,
-                    COALESCE(s.prepare_at, 0) > COALESCE(s.prepared_at, 0), j.state, j.wait
+                    COALESCE(s.prepare_at, 0) > COALESCE(s.prepared_at, 0), j.state, j.wait,
+                    COALESCE(s.target_id <> s.first_target_id, 0)
              FROM subtitle_job_screens s JOIN subtitle_jobs j ON j.id = s.job_id
              WHERE s.job_id = ?1",
             [job_id],
@@ -558,11 +672,12 @@ fn screen(c: &Connection, job_id: &str) -> Result<Option<Screen>, JobError> {
                     r.get(4)?,
                     r.get(5)?,
                     r.get(6)?,
+                    r.get(7)?,
                 ))
             },
         )
         .optional()?;
-    let Some((run_id, target_id, bound_at, note, asked, state, wait)) = row else {
+    let Some((run_id, target_id, bound_at, note, asked, state, wait, popup)) = row else {
         return Ok(None);
     };
     let waits = state == JobState::Waiting && wait == Some(Wait::Auth);
@@ -575,6 +690,7 @@ fn screen(c: &Connection, job_id: &str) -> Result<Option<Screen>, JobError> {
             target_id,
             bound_at,
             note: None,
+            popup,
         },
         None if waits && !asked => Screen {
             state: ScreenState::Closed,
@@ -583,6 +699,7 @@ fn screen(c: &Connection, job_id: &str) -> Result<Option<Screen>, JobError> {
             target_id: None,
             bound_at: None,
             note,
+            popup: false,
         },
         // Asked, or back in line to be brought to the check again.
         _ if waits || back_in_line => Screen {
@@ -592,6 +709,7 @@ fn screen(c: &Connection, job_id: &str) -> Result<Option<Screen>, JobError> {
             target_id: None,
             bound_at: None,
             note: None,
+            popup: false,
         },
         // A screen of a job that ended, which the runner clears.
         _ => return Ok(None),

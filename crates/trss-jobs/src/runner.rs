@@ -46,6 +46,10 @@
 //!   binding to the next worker's start. Without an [`AuthBrowser`] such a
 //!   post waits for a source.
 //!   A site's check that needs no browser (a protected post) only waits.
+//! - A find job ([`crate::store::FIND`]) has no source to read: the browser
+//!   opens its creator's post for a person to browse on the job's remote
+//!   screen, and every file the run downloads becomes a file of the job's
+//!   one package, judged as an upload's files are (see [`find`]).
 //! - A file the job received for one item is not received again for another:
 //!   the second item's receipt names the first (`same_as`).
 //! - A network failure while opening a post or receiving a file is tried
@@ -133,8 +137,10 @@ use crate::{
     area::{self, ReceiveArea},
     model::{FileState, ItemState, JobState, StepKind, StepState, Wait},
     screen::{self, Arrival, ScreenStore},
-    store::{snapshot_json, FileProblem, FileRow, ItemRow, JobError, JobStore},
+    store::{snapshot_json, FileProblem, FileRow, ItemRow, JobError, JobStore, FIND},
 };
+
+pub mod find;
 
 /// What the job's log and screen say for a post no source reads.
 pub const NO_SOURCE: &str = "이 출처에서 받는 방법을 아직 몰라요";
@@ -179,6 +185,9 @@ pub struct Runner {
     /// The jobs whose check is being brought back to the page
     /// ([`Runner::tend_screens`]): one at a time for each.
     rearming: Arc<Mutex<HashSet<String>>>,
+    /// By find job: held by whoever takes its staged downloads or ends it
+    /// ([`Runner::watch_find`]), so two of them never judge the same file.
+    find_takes: Arc<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
 }
 
 /// A job's check being brought back to its page; the job is free again when
@@ -297,6 +306,7 @@ impl Runner {
             screens: ScreenStore::new(store.db().clone()),
             watching: Arc::default(),
             rearming: Arc::default(),
+            find_takes: Arc::default(),
             store,
         }
     }
@@ -389,6 +399,9 @@ impl Runner {
         self.store
             .event(id, message.to_owned(), None, self.now())
             .await?;
+        if self.store.origin(id).await?.as_deref() == Some(FIND) {
+            return self.run_find(id, cancel).await;
+        }
 
         for item in self.store.items(id).await? {
             if !matches!(item.state, ItemState::Pending | ItemState::Running) {
@@ -861,14 +874,25 @@ impl Runner {
     /// answers the requests to prepare their screens (see the module docs).
     /// A file that arrives, or a job put back in line, notifies `wake` (the
     /// worker's job loop). The worker calls it whenever it is woken and every
-    /// few seconds; it does nothing without an [`AuthBrowser`]. `shutdown`
-    /// is the worker's: a run that ends after it fired was ended by the
-    /// shutdown, which closes no screen (the next start does).
+    /// few seconds. Without an [`AuthBrowser`] it only ends the find jobs a
+    /// person asked to finish that have no run bound. `shutdown` is the
+    /// worker's: a run that ends after it fired was ended by the shutdown,
+    /// which closes no screen (the next start does).
     pub async fn tend_screens(
         &self,
         wake: &Arc<Notify>,
         shutdown: &CancellationToken,
     ) -> Result<(), JobError> {
+        // A find job a person asked to finish with no run bound: its run
+        // ended (idle, a restart) before its watch ended it, it never had
+        // one, or the worker has no server browser. Only the worker ends it,
+        // after taking what a run left in its folder. One failing job does
+        // not hold back the others.
+        for job in self.store.unbound_finishes().await? {
+            if let Err(err) = self.end_unbound_find(&job).await {
+                eprintln!("Subtitle job {job}: finishing: {err}");
+            }
+        }
         let Some(browser) = &self.auth else {
             return Ok(());
         };
@@ -884,7 +908,12 @@ impl Runner {
                     }
                 }
             };
-            if fresh {
+            if fresh && binding.find {
+                tokio::spawn(
+                    self.clone()
+                        .watch_find(binding, browser.clone(), shutdown.clone()),
+                );
+            } else if fresh {
                 tokio::spawn(self.clone().watch(
                     binding,
                     browser.clone(),
@@ -907,8 +936,9 @@ impl Runner {
                     .await?;
                 // A check that went away while no one looked comes back. One
                 // at a time for a job: a screen opened while the card is being
-                // clicked waits for nothing and starts nothing.
-                if let Some(run) = request.run_id.clone() {
+                // clicked waits for nothing and starts nothing. A find job has
+                // no check: its page is the person's as they left it.
+                if let Some(run) = request.run_id.clone().filter(|_| !request.find) {
                     let job = request.job_id.clone();
                     let started = self
                         .rearming
@@ -933,8 +963,13 @@ impl Runner {
                 .await?
             {
                 println!(
-                    "Subtitle job {}: the site's check is brought to the screen again",
-                    request.job_id
+                    "Subtitle job {}: {} is brought to the screen again",
+                    request.job_id,
+                    if request.find {
+                        "the creator's post"
+                    } else {
+                        "the site's check"
+                    }
                 );
                 wake.notify_one();
             }

@@ -11,6 +11,7 @@
 //! | `/missing/<anything>` | the post is gone |
 //! | `/empty/<anything>` | the post offers no file |
 //! | `/short/<name>` | one file, `<name>.ass`, whose bytes stop 16 short of the length announced |
+//! | `/blog/<name>` | a creator's blog for a find job ([`crate::auth::AuthPage::Browse`]): its posts are served inside the server browser only |
 //!
 //! `?delay_ms=<n>` waits `n` milliseconds before each [`CHUNK`] bytes of a file
 //! (about 30 of them), so a test can stop the worker in the middle of one.
@@ -31,6 +32,14 @@
 //! page then starts a real browser download of `/files/<name>.srt`, a small
 //! valid SRT file ([`srt`]). The card follows the middle of the screen when
 //! the screen's size changes, so the box stays on the first screen.
+//!
+//! # A blog to browse
+//!
+//! `/blog/<name>` is the newest post of a fake creator's blog, served the same
+//! way to a page a person browses ([`serve_page`]). Each post `/blog/<name>/<n>`
+//! (1 to [`BLOG_POSTS`], the newest first) links the post before it and has
+//! two attachments: `<name>-<n>.srt`, a small valid SRT file, and
+//! `<name>-<n>.txt`, a text file that is no subtitle. Nothing here clicks them.
 
 use std::time::Duration;
 
@@ -73,6 +82,9 @@ fn is_check_name(name: &str) -> bool {
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
+
+/// How many posts a fake blog has (`/blog/<name>/1` to this one).
+pub const BLOG_POSTS: u32 = 3;
 
 /// How many bytes one piece of a fake file has.
 pub const CHUNK: usize = 64;
@@ -324,6 +336,37 @@ window.addEventListener('resize', () => {{
     )
 }
 
+/// The post `n` of the fake blog `name` (a name [`is_check_name`] lets
+/// through): a link to the post before it, its two attachments, and a link
+/// that opens the post in a new window (a popup).
+fn blog_page(name: &str, n: u32) -> String {
+    let before = match n {
+        1 => String::from("<p>첫 게시물이에요.</p>"),
+        n => format!(
+            r#"<p><a id="before" href="/blog/{name}/{}">이전 글: {}화</a></p>"#,
+            n - 1,
+            n - 1
+        ),
+    };
+    format!(
+        r#"<!doctype html>
+<html lang="ko"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>가짜 블로그 {name} {n}화</title>
+<style>body {{ font-family: sans-serif; margin: 0; padding: 16px; }} a {{ display: inline-block; padding: 8px 0; }}</style>
+</head><body>
+<h1>{name} {n}화 자막</h1>
+{before}
+<ul>
+<li><a id="srt" href="/files/{name}-{n}.srt" download="{name}-{n}.srt">{name}-{n}.srt</a></li>
+<li><a id="txt" href="/files/{name}-{n}.txt" download="{name}-{n}.txt">{name}-{n}.txt</a></li>
+</ul>
+<p><a id="popup" href="/blog/{name}/{n}" target="_blank">새 창으로 보기</a></p>
+</body></html>
+"#
+    )
+}
+
 /// What the fake site answers for a request to `url`: status, media type,
 /// whether it is an attachment, and the body.
 fn answer(url: &str) -> (u16, &'static str, Option<String>, Vec<u8>) {
@@ -344,15 +387,40 @@ fn answer(url: &str) -> (u16, &'static str, Option<String>, Vec<u8>) {
             None,
             check_page(name).into_bytes(),
         ),
-        ["files", file] => match file.strip_suffix(".srt").filter(|n| is_check_name(n)) {
-            Some(name) => (
+        ["blog", name] if is_check_name(name) => (
+            200,
+            "text/html; charset=utf-8",
+            None,
+            blog_page(name, BLOG_POSTS).into_bytes(),
+        ),
+        ["blog", name, post] if is_check_name(name) => match post.parse::<u32>() {
+            Ok(n) if (1..=BLOG_POSTS).contains(&n) && n.to_string() == *post => (
                 200,
-                "application/x-subrip",
-                Some(format!("attachment; filename=\"{name}.srt\"")),
-                srt(name),
+                "text/html; charset=utf-8",
+                None,
+                blog_page(name, n).into_bytes(),
             ),
-            None => (404, "text/plain", None, Vec::new()),
+            _ => (404, "text/plain", None, Vec::new()),
         },
+        ["files", file] => {
+            if let Some(name) = file.strip_suffix(".srt").filter(|n| is_check_name(n)) {
+                (
+                    200,
+                    "application/x-subrip",
+                    Some(format!("attachment; filename=\"{name}.srt\"")),
+                    srt(name),
+                )
+            } else if let Some(name) = file.strip_suffix(".txt").filter(|n| is_check_name(n)) {
+                (
+                    200,
+                    "text/plain; charset=utf-8",
+                    Some(format!("attachment; filename=\"{name}.txt\"")),
+                    format!("{name}: 자막이 아닌 글이에요.\n").into_bytes(),
+                )
+            } else {
+                (404, "text/plain", None, Vec::new())
+            }
+        }
         _ => (404, "text/plain", None, Vec::new()),
     }
 }
@@ -378,7 +446,8 @@ fn base64(bytes: &[u8]) -> String {
 
 /// Answers the page's requests to [`HOST`] for as long as the run lives (or
 /// the page is gone): the page and its file come from here, not a network.
-async fn serve(page: Page) -> Result<(), Failure> {
+/// A page a person browses from a fake post is served the same way.
+pub(crate) async fn serve_page(page: Page) -> Result<(), Failure> {
     let session = page.session_id().map_err(|_| browser_trouble())?;
     let run = page.run().clone();
     let mut events = run.events().map_err(|_| browser_trouble())?;
@@ -452,7 +521,7 @@ pub(crate) async fn drive_check(page: &Page, post: &Url, check: &FakeCheck) -> R
     let mut address = Url::parse(&format!("https://{HOST}/check/{}", check.name))
         .map_err(|_| Failure::new(FailureKind::Changed, "가짜 출처가 모르는 주소예요"))?;
     address.set_query(post.query());
-    serve(page.clone()).await?;
+    serve_page(page.clone()).await?;
     page.navigate(address.as_str())
         .await
         .map_err(|_| browser_trouble())?;

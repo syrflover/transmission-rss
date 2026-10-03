@@ -31,6 +31,7 @@ import {
 } from "./candidates";
 import { mappingText } from "./mapping.ts";
 import { MappingControls } from "./MappingDialog";
+import { FindSection } from "./FindSection";
 import type { EpisodeOrder } from "./model";
 import { SeasonAnissiaDialog } from "./SeasonAnissiaDialog";
 
@@ -515,6 +516,7 @@ export function CandidateSection({
               ))}
             </ul>
           )}
+          {groups.length > 0 && <FindSection workId={workId} season={season} groups={groups} />}
         </>
       )}
     </section>

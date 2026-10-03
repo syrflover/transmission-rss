@@ -1,4 +1,5 @@
 import type { FailureClass, FileFormat, JobRow, JobState, ItemState, UploadSummary, Wait } from "./api";
+import { findShown } from "./findState.ts";
 
 /** What a failure class is called (`docs/specs/jobs.md`, 공통 수신 결과와 실패 분류). */
 export const FAILURE_LABEL: Record<FailureClass, string> = {
@@ -100,7 +101,11 @@ export function sizeText(bytes: number): string {
   return `${mb < 10 ? mb.toFixed(1).replace(/\.0$/, "") : Math.round(mb)} MB`;
 }
 
-/** The state a badge names; `waiting` splits by what it waits for. */
+/**
+ * The state a badge names; `waiting` splits by what it waits for. A find job (직접 찾기) whose server browser is open
+ * for the user is `finding`, one the user finished `finishing` until it ends, and one that ended with no file kept
+ * `nothing` (`받은 파일 없음`, not `받음`).
+ */
 export type Shown =
   | "failed"
   | "partial"
@@ -111,9 +116,20 @@ export type Shown =
   | "held"
   | "open"
   | "receive"
+  | "finding"
+  | "finishing"
+  | "nothing"
   | "done";
 
-export function shownState(job: Pick<JobRow, "state" | "wait" | "stage">): Shown {
+export function shownState(
+  job: Pick<JobRow, "state" | "wait" | "stage"> & Partial<Pick<JobRow, "origin" | "upload" | "finishing">>,
+): Shown {
+  if (job.origin === "find") {
+    const upload = job.upload ?? null;
+    const kept = upload === null ? 0 : upload.subtitles + upload.fonts + upload.archives;
+    const find = findShown({ state: job.state, wait: job.wait, finishing: job.finishing === true, kept });
+    if (find !== null) return find;
+  }
   switch (job.state) {
     case "waiting":
       return job.wait === "auth" ? "auth" : job.wait === "subtitle" ? "subtitle" : "waiting";

@@ -21,16 +21,25 @@ const ARCHIVE_LABEL: Record<ArchiveType, string> = {
 const ORDER: UploadKind[] = ["subtitle", "font", "archive"];
 
 /**
- * `올린 파일` of an upload job: the files it kept, grouped by what their content
+ * `올린 파일` of an upload job, and `받은 파일` of a find job: the files it kept, grouped by what their content
  * was judged to be, and `뺀 파일` with each name and the reason. A ZIP is kept
  * whole; which of its files are subtitles and fonts waits for the analysis.
  */
-export function UploadResults({ files, dropped }: { files: readonly JobFile[]; dropped: readonly DroppedFile[] }) {
+export function UploadResults({
+  files,
+  dropped,
+  empty = "남은 파일이 없어요.",
+}: {
+  files: readonly JobFile[];
+  dropped: readonly DroppedFile[];
+  /** What it says when no file was kept. */
+  empty?: string;
+}) {
   const groups = ORDER.map((kind) => ({ kind, files: files.filter((f) => f.kind === kind) })).filter((g) => g.files.length > 0);
   return (
     <div className="flex flex-col gap-3">
       {groups.length === 0 ? (
-        <p className="text-[13px] text-text-muted">남은 파일이 없어요.</p>
+        <p className="text-[13px] text-text-muted">{empty}</p>
       ) : (
         groups.map((group) => (
           <section key={group.kind} className="flex min-w-0 flex-col gap-1.5">

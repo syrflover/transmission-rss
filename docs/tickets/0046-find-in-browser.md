@@ -1,6 +1,6 @@
 # 0046 직접 찾기로 지난 회차 자막을 서버 브라우저에서 받아요
 
-- 상태: 대기
+- 상태: 진행 중
 - 출처: [직접 찾기와 자막 올리기](../specs/subtitles.md#직접-찾기와-자막-올리기), [지난 회차 ADR](../adr/0012-past-subtitles-find-and-upload.md)
 - 막는 티켓: [0040](0040-remote-auth-screen.md), [0037](0037-candidate-section.md)(구역의 자리)
 
@@ -22,3 +22,63 @@
 | 아무것도 받지 않고 끝냄 | 받음이 아니라 받은 파일 없음으로 끝나요. |
 | 유휴 시간이 지남 | 브라우저 수명 정책대로 닫히고, 이미 받은 파일은 남아요. |
 | 실제 서버에서 실제 제작자 블로그의 지난 회차 하나 | 수동 다운로드·업로드 없이 서버가 받은 결과가 있어요. |
+
+## 결과
+
+### 만든 것 (2026-10-04)
+
+- **시작**: 작품 상세 자막 후보 구역의 후보 목록 아래에 `직접 찾기`가 있어요. 후보의 제작자 하나를 고르고 누르면 `POST /api/subtitle-jobs/find`가 작업(`origin = find`)을 만들고 작업 상세로 가요. 시작 게시물은 그 제작자의 가장 최근 관찰의 게시물이에요. 후보가 없는 시즌(Anissia 연결 없음, 관찰한 제작자 없음)에는 `직접 찾기`가 없고 API도 `400`이에요.
+- **둘러보기**: worker가 그 게시물을 작업의 서버 브라우저 실행에 열기만 하고(`AuthPage::Browse`, 아무것도 누르지 않아요) 원격 화면에 묶어요. 작업 상세는 머리 아래에 원격 화면(`직접 찾기`)과 `받기 끝내기`를 둬요. 팝업이 열려 남으면 원격 화면이 그 창을 따라가고, 닫히면 돌아와요. 팝업을 보여주는 동안에는 `이 창 닫기`가 있어서, 누르면 worker가 그 창을 서버 브라우저에서 닫고 화면이 앞 창으로 돌아가요. 시작 게시물의 창은 닫지 않아요.
+- **받기**: 그 실행이 끝낸 다운로드는 모두 작업의 한 묶음(회차 없음)의 파일이고 제작자는 고른 제작자예요. 자막 올리기의 판별(`judge`와 파일 사이 규칙)을 그대로 써서 자막·폰트·압축 파일만 남기고, 뺀 파일은 이름과 이유를 `뺀 파일`에 적어요. 한 작업의 다운로드를 가려 담는 일은 worker 안에서 한 번에 하나씩이에요.
+- **끝내기**: `받기 끝내기`(`POST /api/subtitle-jobs/{id}/finish`)는 받는 중인 다운로드를 **기다렸다가** 끝내요(거절하지 않아요). 웹은 서버 브라우저를 볼 수 없고 worker가 실행을 가지므로, 웹이 거절하려면 worker에게 물어야 하고 그 사이에도 다운로드가 시작될 수 있어서예요. 기다림은 서버 브라우저의 멈춤(120초)·크기 한도 안에서 끝나요. 웹은 요청만 적고 작업은 늘 worker가 끝내요. 실행이 묶이지 않은 작업은 worker가 원격 화면을 살필 때(서버 브라우저가 없는 worker도) 회차 폴더에 남은 다운로드를 먼저 가려 담고 끝내요. 남긴 파일이 있으면 `받은 파일: …`으로, 없으면 `받은 파일 없음`으로 끝나고 실행을 닫고 회차 폴더를 지워요.
+- **수명**: 0040을 그대로 따라요. 유휴로 닫히면 받은 파일은 남고, 다시 열면 새 실행이 같은 시작 게시물을 열어요(작업 기록 `제작자의 게시물을 다시 열어요`). 화면을 다시 열어도 사이트 확인을 되살리는 동작은 하지 않아요. 페이지 주소는 남기지 않아요.
+- **할 일**: 직접 찾기 작업은 `인증 필요` 카드로 올리지 않고, `자막 작업`에 `직접 찾는 중`·`끝내는 중`·`받은 파일 없음`으로 보여요. `대기 중`에서는 `인증 필요`와 함께 앞에 서지 않고 `자막 대기`와 같은 자리에서 만든 순서대로 섞여요.
+- **기록**: 마이그레이션 46(`crates/trss-core/migrations/jobs/find.sql`)이 `subtitle_jobs.finish_at`과 `subtitle_job_screens.first_target_id`·`close_target_id`를 더해요. `origin`은 원래 자유 문자열이라 바꾸지 않았어요.
+- 규칙 전체는 [직접 찾기와 자막 올리기](../specs/subtitles.md#직접-찾기와-자막-올리기), [작업 상세](../specs/jobs.md#작업-상세), [작업 화면 안의 인증과 브라우저 수명](../specs/jobs.md#작업-화면-안의-인증과-브라우저-수명), [자막 후보 구역](../specs/library.md#자막-후보-구역)에 있어요.
+
+### 검증한 것
+
+| 완료 기준 | 근거 |
+| --- | --- |
+| 가짜 블로그에서 지난 게시물로 이동해 첨부를 누름 | 실제 브라우저 이미지의 무시된 테스트 `find_sample`: 가짜 블로그 최근 게시물(3화)이 열리고 저절로 받은 것이 없었으며, 두 번째 CDP 클라이언트의 신뢰 클릭으로 2화로 옮겨 첨부 둘을 누르자 실행이 `sample-2.srt`·`sample-2.txt`를 넘겼어요. worker 쪽은 가짜 브라우저로 `a_find_job_opens_the_creators_post_and_keeps_what_a_persons_click_downloads`: 파일이 작업 폴더(`<작업>/maker-2.srt`)에 있고 작업에 제작자와 `origin = find`가 있어요. 개발 환경 웹 화면에서 `직접 찾기`를 누르자 작업 상세가 열렸고 머리에 `직접 찾기` 표시가 있었어요. |
+| 한 작업에서 파일 두 개를 받음 | `two_downloads_are_two_files_of_one_package_and_finishing_ends_the_job_done`: 항목 하나에 파일 둘, `받은 파일: 자막 2개`로 끝나요. |
+| 아무것도 받지 않고 끝냄 | `finishing_with_nothing_received_ends_as_nothing_found`, `without_a_server_browser_a_find_job_waits_and_the_worker_ends_it_when_finished`, web 시험 `finishing_a_find_job_asks_the_worker_and_never_ends_it_here`. 개발 환경 웹 화면에서 `받기 끝내기`를 누르자 배지가 `받은 파일 없음`, 시각이 `끝냄`이었고 할 일 목록 완료 줄에도 같은 배지가 있었어요(375×812 흉내, 독립 리뷰 반영 전 코드). |
+| 유휴 시간이 지남 | `an_idle_end_closes_the_run_keeps_the_files_and_a_reopening_opens_the_same_post`: 실행이 끝나면 화면이 닫히고(`서버 브라우저가 쉬는 동안 닫혔어요…`) 받은 파일은 남으며, 다시 열면 새 실행이 같은 게시물을 열고(작업 기록 `제작자의 게시물을 다시 열어요`) 새 다운로드가 같은 묶음에 들어가요. |
+| 실제 서버에서 실제 제작자 블로그의 지난 회차 하나 | **확인하지 않았어요.** 실제 서버와 사람의 조작이 필요해요. |
+
+그 밖의 근거예요.
+
+- 자막이 아닌 다운로드: `a_download_that_is_no_subtitle_is_dropped_with_why`(`.txt`가 `내용이 자막이나 폰트가 아니에요`로 빠지고 받은 바이트가 지워져요). 파일 사이 규칙이 앞서 남긴 파일만 보는 것은 `upload` 단위 시험 `the_rules_between_files_see_the_files_that_came_before`예요.
+- 받는 중에 끝내기: `finishing_waits_for_a_download_under_way_and_keeps_it`(1.2초 동안 끝나지 않다가, 다운로드가 들어온 뒤 그 파일과 함께 끝나요).
+- 팝업: `the_screen_follows_a_page_the_post_opens_and_comes_back_when_it_closes`, `a_page_that_opens_and_closes_at_once_is_not_followed`, `a_person_closes_a_popup_and_the_screen_goes_back_to_the_post`, web 시험 `a_person_asks_the_worker_to_close_a_find_jobs_popup_and_the_web_sends_the_browser_nothing`. 실제 브라우저에서는 `find_sample`이 `target="_blank"` 링크의 신뢰 클릭으로 연 새 창을 실행의 페이지로 보고, 시작 페이지 닫기는 거절하며, 새 창은 닫아 시작 페이지만 남는 것을 확인했어요.
+- API: `a_find_makes_one_job_per_browser_id_that_opens_the_creators_newest_post`(같은 `id`는 같은 작업, 다른 내용은 `409`, 다른 작품의 제작자·없는 제작자·연결 없는 시즌은 `400`, 없는 시즌은 `404`, 앱의 ID·빈 ID·129자 ID는 `400`), 끝내기의 `400`·`404`, `대기 중` 순서는 `a_find_job_waits_among_the_ordinary_waits_not_with_the_checks`.
+- 재시작과 끝내기: `a_download_a_restart_left_in_the_folder_is_taken_by_the_next_watch`, `a_file_a_restart_left_in_the_folder_is_received_when_the_job_is_finished`, `finishing_a_job_whose_run_closed_is_ended_by_the_workers_next_look`, `a_finish_asked_while_the_run_was_bound_ends_the_job_once_the_run_ends`, `a_finish_asked_before_the_run_opened_ends_the_job_without_opening_it`, `two_takers_of_the_same_left_files_take_each_once`, `a_finish_after_the_screen_failed_to_open_leaves_no_step_waiting_nor_folder`, `a_finish_after_a_later_screen_failed_to_open_keeps_the_post_opened`, `opening_a_find_jobs_screen_brings_no_check_back`.
+
+작업 공간 시험 2,187개가 통과하고(무시된 시험 10개는 돌리지 않았어요), clippy 경고가 없고, web node 시험 72개가 통과하고, 웹 빌드가 돼요(2026-10-04, 독립 리뷰 반영 뒤). 무시된 `find_sample`은 `ghcr.io/syrflover/trss-browser:local` 이미지로 따로 돌려 통과했어요(33초).
+
+### 독립 리뷰
+
+finish 상태 기계, 받는 중 끝내기의 취소 안전성, 0040과의 연결을 두고 리뷰를 받았어요. 막는 결함은 없었고 아래를 고쳤어요.
+
+| 지적 | 처리 |
+| --- | --- |
+| 닫히지 않는 팝업(광고 창)에 원격 화면이 묶이면 사람이 빠져나올 수 없음 | 팝업을 보여주는 동안 `이 창 닫기`를 두었어요. 웹은 사람이 본 묶음일 때만 요청을 적고 브라우저에는 아무것도 보내지 않으며, worker가 그 창을 닫아요(`Target.closeTarget`). 시작 페이지는 서버 브라우저 쪽에서도 닫지 않아요. 실행의 페이지를 아는 쪽이 worker이고, `받기 끝내기`처럼 웹이 요청을 적고 worker가 처리하는 길과 같아서 이 길을 골랐어요. |
+| 웹이 바로 끝낸 작업은 재시작으로 회차 폴더에 남은 다운로드를 기록하지 않음 | 웹은 요청만 적고 작업은 늘 worker가 끝내요. 서버 브라우저가 없는 worker도 원격 화면을 살필 때 이 일을 해요. 끝나기 전까지 화면은 `끝내는 중`이에요. |
+| 두 가려 담기 경로가 같은 파일을 다룸(헛된 `남기지 못했어요`, 기록 없는 파일) | 작업마다 잠금 하나를 두어 가려 담기와 끝내기를 한 번에 하나씩 해요. 잠금을 빼면 같은 시험이 다섯 번 모두 실패했어요. |
+| 끝낼 작업 하나의 오류가 뒤의 작업을 모두 막음 | 오류를 로그에 남기고 다음 작업으로 가요. |
+| 직접 찾기 작업이 `대기 중`에서 `인증 필요`와 함께 앞에 섬 | `자막 대기`와 같은 자리에서 만든 순서대로 섞여요. 작업 명세에 적었어요. |
+| 준비에 실패한 작업을 끝내면 `게시물 열기`가 기다림으로, 회차 폴더가 그대로 남음 | 전에 게시물을 연 적이 있으면 완료로, 없으면 지우고, 회차 폴더를 지워요. |
+| 뺀 뒤 조각(`pack.z01`)이 다음 `pack.zip`을 나뉜 ZIP으로 남기게 함 | 뺀 파일은 근거가 되지 않아요. 혼자 열리지 않는 ZIP은 올리기처럼 뒤 조각이 함께 있어야 남으므로, 나뉜 ZIP은 직접 찾기로 받지 못한다고 한계에 적었어요. 고치기 전 규칙으로는 새 시험이 실패했어요. |
+| 시험 빈틈(묶인 채 끝내기 뒤 실행 종료, 재시작, 잠깐 열린 팝업, 직접 찾기의 확인 되살리기) | 위 시험들을 더했어요. 화면을 다시 열 때 직접 찾기 작업에는 확인 되살리기를 부르지 않아요. |
+| 다시 준비할 때의 작업 기록이 사이트 확인의 문구 | `제작자의 게시물을 다시 열어요`로 적어요. |
+
+### 남은 한계
+
+- 실제 제작자 블로그, 실제 휴대폰, 웹 원격 화면으로 가짜 블로그를 둘러보는 흐름은 확인하지 않았어요(개발 환경 웹에는 서버 브라우저를 붙이지 않았어요). `이 창 닫기`의 웹 화면도 개발 환경에서 보지 않았어요.
+- 실제 브라우저에서 새 창은 약 30초 뒤에야 실행의 페이지가 돼요(2026-10-04, `find_sample`). 브라우저 풀이 새 창을 설정하는 `Network.enable`이 디버거를 기다리는 창에서는 답하지 않아 명령 시간 한도(30초)까지 기다린 뒤 설정 없이(광고 차단 없이) 창을 풀어줘서예요. 그동안 원격 화면은 새 창을 따라가지 않아요. 브라우저 풀(0040)의 동작이라 이 작업에서는 바꾸지 않았어요.
+- 파일 사이 규칙은 앞서 남긴 파일만 봐요. `.idx`보다 먼저 받은 `.sub`, 첫 조각보다 먼저 받은 뒤 조각은 빠지고, 다시 받아야 남아요. 조각으로 나눈 ZIP(`.z01`, `.zip.001`)은 조각이 하나씩 들어와서 받을 수 없어요. 자막 올리기로 올려야 해요.
+- ZIP 확인용 풀기 한도(2GiB)는 지켜보기마다 메모리에 있어서 worker가 다시 시작하거나 실행이 바뀌면 다시 2GiB예요.
+- 다운로드가 브라우저에 알려지기 전에 누른 `받기 끝내기`는 그 다운로드를 기다리지 않아요.
+- 작업 폴더로 옮긴 직후 기록 전에 worker가 죽으면 그 파일은 기록 없이 폴더에 남아요(다음 파일은 이름을 피해요).
+- 가려 담기의 잠금은 worker 프로세스 안의 것이에요. worker 둘이 같은 데이터베이스를 쓰면 둘이 같은 작업을 끝내려 할 때 겹칠 수 있어요(끝내기 자체는 한 트랜잭션이라 한 번만 돼요).
+- 원격 화면 스크롤은 0040 그대로예요(부드러운 스크롤은 완료 조건이 아니에요).

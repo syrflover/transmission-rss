@@ -24,6 +24,20 @@
 //!   reads only: it never asks for a browser run.
 //! - `POST /api/subtitle-jobs/{id}/screen` and the screen's socket: see
 //!   [`super::screen_api`].
+//! - `POST /api/subtitle-jobs/find` `{ "id", "work_id", "season", "creator" }`
+//!   makes a find job (직접 찾기): the server browser opens the most recently
+//!   observed post of `creator` (a source ID of the season's Anissia anime's
+//!   candidates) for a person to browse on the job's remote screen, and keeps
+//!   what they download there. `id` works as above (`202`, `200`, `409`,
+//!   `400` for the app's own). A season with no Anissia anime is refused with
+//!   `400`, a creator with no candidate of the season too.
+//! - `POST /api/subtitle-jobs/{id}/finish` a person finishes a find job
+//!   (`받기 끝내기`): the request is written and the worker woken, which ends
+//!   the job once no download of its run is on its way, and at once when no
+//!   run is bound, after taking what a run left in its folder. `200`
+//!   `{ "state": "finishing" }` (`finishing` on the job until it ended), or
+//!   `{ "state": "done" }` for a job that ended before. `400` for a job that
+//!   is no find job, `404` for no job.
 //!
 //! A failed job, item and file carry their failure's class as `failure`
 //! (`missing`, `expired`, `not_a_file`, `changed`, `network`; an item also
@@ -43,7 +57,9 @@
 //! by kind, and how many files it dropped), no episodes, only the steps it
 //! went through (`receive`), its package's files with their `kind`
 //! (`subtitle`, `font`, `archive`) and `dropped` (the names and reasons of the
-//! files it did not keep) in its detail; a job
+//! files it did not keep) in its detail. A find job (`find`, 직접 찾기) has the
+//! same as it receives, its steps `open` and `receive` as it reached them,
+//! and ends `done` with the note `받은 파일 없음` when it kept nothing; a job
 //! that receives a revision of a subtitle received before has `revision_of`
 //! (that observation) and `revises_job` (the latest job that received it, or
 //! `null`), both `null` otherwise. `revises_attributed` is `true` on the job
@@ -60,7 +76,7 @@ use std::collections::HashMap;
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -68,7 +84,8 @@ use serde_json::json;
 
 use trss_jobs::{
     store::{DonePage, FileRow, JobDetail, JobRow, StepRow},
-    Created, FileState, ItemState, JobState, NewItem, NewJob, StepKind, Wait, UPLOAD,
+    AskedFinish, Created, FileState, ItemState, JobState, NewFind, NewItem, NewJob, StepKind, Wait,
+    FIND, UPLOAD,
 };
 
 use super::{artwork_api::image_url, commands_api::now_millis, ApiError, AppState};
@@ -78,6 +95,8 @@ pub fn routes() -> Router<AppState> {
         .route("/subtitle-jobs", get(groups).post(create))
         .route("/subtitle-jobs/done", get(done))
         .route("/subtitle-jobs/{id}", get(detail))
+        .route("/subtitle-jobs/find", post(create_find))
+        .route("/subtitle-jobs/{id}/finish", post(finish))
 }
 
 /// How many done jobs the groups carry.
@@ -132,8 +151,11 @@ pub struct JobRowView {
     pub source: Option<String>,
     pub progress: ProgressView,
     pub failure: Option<&'static str>,
-    /// For an upload job: what it kept and dropped.
+    /// For an upload or a find job: what it kept and dropped.
     pub upload: Option<UploadView>,
+    /// A find job a person finished, which the worker ends once no download
+    /// of its run is on its way.
+    pub finishing: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq)]
@@ -193,6 +215,7 @@ fn view(row: &JobRow, covers: &HashMap<String, String>) -> JobRowView {
             archives: u.archives,
             dropped: u.dropped,
         }),
+        finishing: row.finishing,
     }
 }
 
@@ -239,10 +262,12 @@ struct Groups {
     done: DonePageView,
 }
 
-/// Where a not-done job sits in `waiting`: a person's check first.
+/// Where a not-done job sits in `waiting`: a person's check first, then the
+/// other waits (a find job, which waits for a person's browsing, among them),
+/// held, then pending.
 fn waiting_rank(row: &JobRow) -> Option<u8> {
     match (row.state, row.wait) {
-        (JobState::Waiting, Some(Wait::Auth)) => Some(0),
+        (JobState::Waiting, Some(Wait::Auth)) if row.origin != FIND => Some(0),
         (JobState::Waiting, _) => Some(1),
         (JobState::Held, _) => Some(2),
         (JobState::Pending, _) => Some(3),
@@ -382,7 +407,7 @@ fn steps_view(steps: &[StepRow], origin: &str) -> Vec<StepView> {
     .into_iter()
     .filter_map(|kind| {
         let row = steps.iter().find(|s| s.step == kind);
-        if row.is_none() && (kind == StepKind::Auth || origin == UPLOAD) {
+        if row.is_none() && (kind == StepKind::Auth || origin == UPLOAD || origin == FIND) {
             return None;
         }
         Some(match row {
@@ -641,6 +666,131 @@ async fn create(
             current: Some(json!({ "id": id })),
         }),
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct FindRequest {
+    id: String,
+    work_id: String,
+    season: u32,
+    /// The source ID of the creator.
+    creator: String,
+}
+
+async fn create_find(
+    State(state): State<AppState>,
+    Json(request): Json<FindRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    let id = request.id.trim();
+    if id.is_empty() {
+        return Err(ApiError::invalid("요청 ID가 비어 있어요."));
+    }
+    if id.chars().count() > super::subtitle_upload_api::ID_MAX {
+        return Err(ApiError::invalid("요청 ID가 너무 길어요."));
+    }
+    if trss_jobs::is_app_command(id) {
+        return Err(ApiError::invalid("이 요청 ID는 쓸 수 없어요."));
+    }
+    if request.work_id.is_empty() {
+        return Err(ApiError::invalid("작품이 빠졌어요."));
+    }
+    let link = state
+        .seasons
+        .store
+        .anissia_link(&request.work_id, request.season)
+        .await
+        .map_err(|e| match e {
+            trss_library::store::seasons::SeasonError::NotFound => {
+                ApiError::not_found("시즌을 찾지 못했어요. 화면을 새로고침해 주세요.")
+            }
+            e => internal(&e),
+        })?;
+    let Some(anime_no) = link.anime_no else {
+        return Err(ApiError::invalid(
+            "이 시즌은 Anissia 작품에 연결돼 있지 않아서 직접 찾을 제작자가 없어요.",
+        ));
+    };
+    let candidates = state
+        .anissia_store
+        .candidates(anime_no, Vec::new())
+        .await
+        .map_err(|e| internal(&e))?;
+    // The creator's most recently observed post: the browser opens it.
+    let Some(newest) = candidates
+        .iter()
+        .filter(|c| c.source_id == request.creator)
+        .max_by_key(|c| c.id)
+    else {
+        return Err(ApiError::invalid(
+            "고른 제작자가 이 시즌의 제작자가 아니에요. 화면을 새로고침해 주세요.",
+        ));
+    };
+    if !url::Url::parse(&newest.post_url).is_ok_and(|u| matches!(u.scheme(), "http" | "https")) {
+        return Err(ApiError::invalid("이 제작자의 게시물 주소를 열 수 없어요."));
+    }
+
+    let canonical = json!({
+        "find": {
+            "work_id": request.work_id,
+            "season": request.season,
+            "creator": request.creator,
+        }
+    })
+    .to_string();
+    let find = NewFind {
+        command_id: id.to_owned(),
+        request: canonical,
+        work_id: request.work_id.clone(),
+        season: i64::from(request.season),
+        anime_no,
+        source_id: newest.source_id.clone(),
+        creator: newest.creator.clone(),
+        post_url: newest.post_url.clone(),
+    };
+    match state
+        .jobs
+        .create_find(find, now_millis())
+        .await
+        .map_err(|e| internal(&e))?
+    {
+        Created::Created(id) => {
+            if let Some(path) = &state.worker_wake {
+                trss_core::wake::wake_worker(path);
+            }
+            Ok((StatusCode::ACCEPTED, Json(json!({ "id": id }))))
+        }
+        Created::Existing(id) => Ok((StatusCode::OK, Json(json!({ "id": id })))),
+        Created::Mismatch(id) => Err(ApiError::Conflict {
+            message: "같은 요청 ID로 다른 작업을 만든 적이 있어요. 화면을 새로고침해 주세요."
+                .to_owned(),
+            current: Some(json!({ "id": id })),
+        }),
+    }
+}
+
+async fn finish(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let asked = state
+        .jobs
+        .ask_finish(&id, now_millis())
+        .await
+        .map_err(|e| internal(&e))?;
+    let shown = match asked {
+        AskedFinish::Missing => return Err(ApiError::not_found("작업을 찾지 못했어요.")),
+        AskedFinish::NotFind => {
+            return Err(ApiError::invalid("직접 찾기 작업만 받기를 끝낼 수 있어요."))
+        }
+        AskedFinish::Ended => "done",
+        AskedFinish::Asked => {
+            if let Some(path) = &state.worker_wake {
+                trss_core::wake::wake_worker(path);
+            }
+            "finishing"
+        }
+    };
+    Ok(Json(json!({ "state": shown })))
 }
 
 /// Makes the subscribed creators' jobs now ([`trss_jobs::Follow::evaluate`])

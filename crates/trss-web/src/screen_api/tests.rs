@@ -362,6 +362,25 @@ impl Setup {
         (status, json)
     }
 
+    /// Sends `body` as JSON with `method` to `path`; the answer's status.
+    async fn http_json(&self, method: &str, path: &str, body: &Value) -> u16 {
+        let body = body.to_string();
+        let mut stream = tokio::net::TcpStream::connect(&self.web).await.unwrap();
+        let request = format!(
+            "{method} {path} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            self.web,
+            body.len()
+        );
+        tokio::io::AsyncWriteExt::write_all(&mut stream, request.as_bytes())
+            .await
+            .unwrap();
+        let mut answer = Vec::new();
+        tokio::io::AsyncReadExt::read_to_end(&mut stream, &mut answer)
+            .await
+            .unwrap();
+        String::from_utf8_lossy(&answer)[9..12].parse().unwrap()
+    }
+
     /// Opens the job's socket for `run` from a page whose origin is
     /// `origin` (`None`: no `Origin`).
     async fn open(&self, run: &str, origin: Option<&str>) -> Result<Socket, u16> {
@@ -543,7 +562,7 @@ async fn reading_the_job_and_the_lists_asks_for_no_run_and_opening_its_page_does
         .await;
     assert_eq!(
         detail["screen"],
-        json!({ "state": "ready", "run": "run-1", "bound": 1000, "note": null })
+        json!({ "state": "ready", "run": "run-1", "bound": 1000, "note": null, "popup": false })
     );
     assert!(s.screens().prepare_requests().await.unwrap().is_empty());
     assert_eq!(s.woken(), 0);
@@ -555,7 +574,7 @@ async fn reading_the_job_and_the_lists_asks_for_no_run_and_opening_its_page_does
     assert_eq!(status, 200);
     assert_eq!(
         screen,
-        json!({ "state": "ready", "run": "run-1", "bound": 1000, "note": null })
+        json!({ "state": "ready", "run": "run-1", "bound": 1000, "note": null, "popup": false })
     );
     assert_eq!(s.screens().prepare_requests().await.unwrap().len(), 1);
     assert_eq!(s.woken(), 1);
@@ -564,6 +583,69 @@ async fn reading_the_job_and_the_lists_asks_for_no_run_and_opening_its_page_does
 
     let (status, _) = s.http("POST", "/api/subtitle-jobs/nope/screen").await;
     assert_eq!(status, 404);
+}
+
+#[tokio::test]
+async fn a_person_asks_the_worker_to_close_a_find_jobs_popup_and_the_web_sends_the_browser_nothing()
+{
+    let s = setup(true).await;
+    s.waiting_on("run-1").await;
+    let close = format!("/api/subtitle-jobs/{}/screen/close", s.job);
+    let asked = |bound: i64| json!({ "run": "run-1", "bound": bound });
+
+    // A site's check has no popup to close.
+    s.screens()
+        .retarget(&s.job, "run-1", "P1", 2_000)
+        .await
+        .unwrap();
+    assert_eq!(s.http_json("POST", &close, &asked(2_000)).await, 409);
+
+    // A find job's screen on a page its post opened.
+    s.state
+        .jobs
+        .db()
+        .run::<_, DbError, _>(|c| Ok(c.execute("UPDATE subtitle_jobs SET origin = 'find'", [])?))
+        .await
+        .unwrap();
+    let (_, detail) = s
+        .http("GET", &format!("/api/subtitle-jobs/{}", s.job))
+        .await;
+    assert_eq!(detail["screen"]["popup"], true);
+    // Asked on a binding the person no longer sees: refused.
+    assert_eq!(s.http_json("POST", &close, &asked(1_000)).await, 409);
+    assert_eq!(s.http_json("POST", &close, &asked(2_000)).await, 202);
+    assert_eq!(
+        s.screens()
+            .take_close(&s.job, "run-1")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("P1")
+    );
+    // Taken once.
+    assert_eq!(s.screens().take_close(&s.job, "run-1").await.unwrap(), None);
+
+    // Back on the post's page: nothing to close there.
+    s.screens()
+        .retarget(&s.job, "run-1", "T1", 3_000)
+        .await
+        .unwrap();
+    let (_, detail) = s
+        .http("GET", &format!("/api/subtitle-jobs/{}", s.job))
+        .await;
+    assert_eq!(detail["screen"]["popup"], false);
+    assert_eq!(s.http_json("POST", &close, &asked(3_000)).await, 409);
+    assert_eq!(
+        s.http_json(
+            "POST",
+            "/api/subtitle-jobs/nope/screen/close",
+            &asked(3_000)
+        )
+        .await,
+        404
+    );
+    let seen = s.launcher.seen.lock().unwrap();
+    assert!(seen.commands.is_empty() && seen.others.is_empty());
 }
 
 #[tokio::test]

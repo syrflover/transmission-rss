@@ -662,3 +662,244 @@ async fn an_automatic_revision_of_a_named_subtitle_says_so_with_no_earlier_job()
     let (_, other) = get(&router, &format!("/api/subtitle-jobs/{plain}")).await;
     assert_eq!(other["revises_attributed"], false);
 }
+
+fn find(id: &str, season: u32, creator: &str) -> Value {
+    json!({ "id": id, "work_id": "w1", "season": season, "creator": creator })
+}
+
+#[tokio::test]
+async fn a_find_makes_one_job_per_browser_id_that_opens_the_creators_newest_post() {
+    let (state, router) = app();
+    linked_season(&state).await;
+
+    let (status, made) = call(
+        &router,
+        Method::POST,
+        "/api/subtitle-jobs/find",
+        Some(find("f1", 1, "s1")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let id = made["id"].as_str().unwrap().to_owned();
+    let (status, again) = call(
+        &router,
+        Method::POST,
+        "/api/subtitle-jobs/find",
+        Some(find("f1", 1, "s1")),
+    )
+    .await;
+    assert_eq!(
+        (status, again["id"].as_str()),
+        (StatusCode::OK, Some(id.as_str()))
+    );
+    let (status, other) = call(
+        &router,
+        Method::POST,
+        "/api/subtitle-jobs/find",
+        Some(find("f1", 1, "s2")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(other["current"]["id"].as_str(), Some(id.as_str()));
+    // A pick under the same ID is another request too.
+    let (status, _) = call(
+        &router,
+        Method::POST,
+        "/api/subtitle-jobs",
+        Some(pick("f1", &[1])),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+
+    let (status, detail) = get(&router, &format!("/api/subtitle-jobs/{id}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(detail["origin"], "find");
+    assert_eq!(detail["state"], "pending");
+    assert_eq!(detail["creator"], "에루샤");
+    assert_eq!(detail["episodes"], json!([]));
+    assert_eq!(detail["finishing"], false);
+    assert_eq!(detail["upload"]["subtitles"], 0);
+    // The browser starts at the creator's most recently observed post.
+    assert_eq!(
+        detail["items"][0]["post_url"],
+        "https://fake.trss.invalid/ok/3"
+    );
+    assert_eq!(detail["items"][0]["episode"], "");
+    // Only the steps it reached.
+    assert_eq!(detail["steps"], json!([]));
+
+    let refused = [
+        // A creator of another anime, or none of the season's.
+        (find("f2", 1, "s9"), StatusCode::BAD_REQUEST),
+        (find("f3", 1, "nope"), StatusCode::BAD_REQUEST),
+        // A season with no Anissia anime has no creators to find.
+        (find("f4", 2, "s1"), StatusCode::BAD_REQUEST),
+        (find("f5", 3, "s1"), StatusCode::NOT_FOUND),
+        (find("auto:9", 1, "s1"), StatusCode::BAD_REQUEST),
+        (find(" ", 1, "s1"), StatusCode::BAD_REQUEST),
+        (find(&"x".repeat(129), 1, "s1"), StatusCode::BAD_REQUEST),
+    ];
+    for (body, expected) in refused {
+        let (status, answer) = call(
+            &router,
+            Method::POST,
+            "/api/subtitle-jobs/find",
+            Some(body.clone()),
+        )
+        .await;
+        assert_eq!(status, expected, "{body}: {answer}");
+    }
+    let (_, unknown) = call(
+        &router,
+        Method::POST,
+        "/api/subtitle-jobs/find",
+        Some(find("f3", 1, "nope")),
+    )
+    .await;
+    assert_eq!(
+        unknown["message"],
+        "고른 제작자가 이 시즌의 제작자가 아니에요. 화면을 새로고침해 주세요."
+    );
+    let (_, unlinked) = call(
+        &router,
+        Method::POST,
+        "/api/subtitle-jobs/find",
+        Some(find("f4", 2, "s1")),
+    )
+    .await;
+    assert_eq!(
+        unlinked["message"],
+        "이 시즌은 Anissia 작품에 연결돼 있지 않아서 직접 찾을 제작자가 없어요."
+    );
+    assert_eq!(state.jobs.open_jobs().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn finishing_a_find_job_asks_the_worker_and_never_ends_it_here() {
+    let (state, router) = app();
+    linked_season(&state).await;
+    let (_, made) = call(
+        &router,
+        Method::POST,
+        "/api/subtitle-jobs/find",
+        Some(find("f1", 1, "s1")),
+    )
+    .await;
+    let id = made["id"].as_str().unwrap().to_owned();
+    let finish = format!("/api/subtitle-jobs/{id}/finish");
+
+    // In line for the worker: it is the worker's to end.
+    let (status, answer) = call(&router, Method::POST, &finish, None).await;
+    assert_eq!(
+        (status, &answer),
+        (StatusCode::OK, &json!({ "state": "finishing" }))
+    );
+    let (_, detail) = get(&router, &format!("/api/subtitle-jobs/{id}")).await;
+    assert_eq!(detail["finishing"], true);
+    assert_eq!(detail["state"], "pending");
+
+    // Waiting with no browser run bound: still the worker's to end, since a
+    // download a run left in the job's folder is seen by the worker alone.
+    sql(
+        &state,
+        "UPDATE subtitle_jobs SET state = 'waiting', wait = 'auth';
+         UPDATE subtitle_job_items SET state = 'waiting', wait = 'auth';",
+    )
+    .await;
+    let (status, answer) = call(&router, Method::POST, &finish, None).await;
+    assert_eq!(
+        (status, &answer),
+        (StatusCode::OK, &json!({ "state": "finishing" }))
+    );
+    let (_, detail) = get(&router, &format!("/api/subtitle-jobs/{id}")).await;
+    assert_eq!(detail["state"], "waiting");
+    assert_eq!(detail["finishing"], true);
+
+    // Once the worker ended it, the answer says so.
+    state.jobs.end_find(&id, None, 20_000).await.unwrap();
+    let (status, answer) = call(&router, Method::POST, &finish, None).await;
+    assert_eq!(
+        (status, &answer),
+        (StatusCode::OK, &json!({ "state": "done" }))
+    );
+    let (_, detail) = get(&router, &format!("/api/subtitle-jobs/{id}")).await;
+    assert_eq!(detail["note"], "받은 파일 없음");
+    assert_eq!(detail["finishing"], false);
+
+    // Only a find job is finished so.
+    let (_, picked) = call(
+        &router,
+        Method::POST,
+        "/api/subtitle-jobs",
+        Some(pick("p1", &[1])),
+    )
+    .await;
+    let (status, _) = call(
+        &router,
+        Method::POST,
+        &format!(
+            "/api/subtitle-jobs/{}/finish",
+            picked["id"].as_str().unwrap()
+        ),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _) = call(
+        &router,
+        Method::POST,
+        "/api/subtitle-jobs/nope/finish",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn a_find_job_waits_among_the_ordinary_waits_not_with_the_checks() {
+    let (state, router) = app();
+    linked_season(&state).await;
+    let (_, made) = call(
+        &router,
+        Method::POST,
+        "/api/subtitle-jobs/find",
+        Some(find("f1", 1, "s1")),
+    )
+    .await;
+    let found = made["id"].as_str().unwrap().to_owned();
+    // A person browses its screen: it waits as a check's job does.
+    sql(
+        &state,
+        "UPDATE subtitle_jobs SET state = 'waiting', wait = 'auth' WHERE origin = 'find';
+         UPDATE subtitle_job_items SET state = 'waiting', wait = 'auth';",
+    )
+    .await;
+    let subtitle = job_in(
+        &state.jobs,
+        1,
+        JobState::Waiting,
+        Some(Wait::Subtitle),
+        &[(ItemState::Waiting, Some("…"))],
+        50,
+    )
+    .await;
+    let check = job_in(
+        &state.jobs,
+        2,
+        JobState::Waiting,
+        Some(Wait::Auth),
+        &[(ItemState::Waiting, Some("CAPTCHA"))],
+        60,
+    )
+    .await;
+    let (_, groups) = get(&router, "/api/subtitle-jobs").await;
+    let ids: Vec<&str> = groups["waiting"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|j| j["id"].as_str().unwrap())
+        .collect();
+    // The check made last comes first; the find job then sits by its order
+    // among the other waits.
+    assert_eq!(ids, [check.as_str(), found.as_str(), subtitle.as_str()]);
+}

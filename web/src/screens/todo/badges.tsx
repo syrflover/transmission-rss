@@ -3,7 +3,7 @@ import type { ComponentProps, ComponentType, ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
 import type { FailureClass, JobRow } from "./api";
-import { CheckIcon, ClockIcon, DownloadIcon, LockIcon, PauseIcon, WarningIcon } from "./icons";
+import { CheckIcon, CircleIcon, ClockIcon, DownloadIcon, LockIcon, PauseIcon, WarningIcon } from "./icons";
 import { FAILURE_LABEL, type Shown } from "./format";
 
 type IconType = ComponentType<ComponentProps<"svg">>;
@@ -57,6 +57,9 @@ const SHOWN: Record<Exclude<Shown, "done">, { tone: "urgent" | "neutral"; icon: 
   held: { tone: "neutral", icon: PauseIcon, text: "보류" },
   open: { tone: "neutral", icon: DownloadIcon, text: "게시물 여는 중" },
   receive: { tone: "neutral", icon: DownloadIcon, text: "받는 중" },
+  finding: { tone: "neutral", icon: DownloadIcon, text: "직접 찾는 중" },
+  finishing: { tone: "neutral", icon: ClockIcon, text: "끝내는 중" },
+  nothing: { tone: "neutral", icon: CircleIcon, text: "받은 파일 없음" },
 };
 
 /**
@@ -124,7 +127,7 @@ export function Tag({ children }: { children: ReactNode }) {
 
 /**
  * How a job came to be, when it was not a pick: `자동` for the subscribed creator's episode the app made into a
- * job, `수정본` for a revision of a subtitle received before.
+ * job, `올림` for an upload, `직접 찾기` for a find job, `수정본` for a revision of a subtitle received before.
  */
 export function OriginTags({
   job,
@@ -136,18 +139,21 @@ export function OriginTags({
       {job.origin === "auto" && <Tag>자동</Tag>}
       {job.origin === "upload" && <Tag>올림</Tag>}
       {job.origin === "upload" && job.creator === null && <Tag>제작자 알 수 없음</Tag>}
+      {job.origin === "find" && <Tag>직접 찾기</Tag>}
       {(job.revision_of !== null || job.revises_attributed) && <Tag>수정본</Tag>}
     </>
   );
 }
 
-/** What made a job, as a sentence: `구독 제작자 자동 수신`, `직접 올림`, or `null` for a pick. */
+/** What made a job, as a sentence: `구독 제작자 자동 수신`, `직접 올림`, `직접 찾기`, or `null` for a pick. */
 export function originSentence(job: Pick<JobRow, "origin">): string | null {
   switch (job.origin) {
     case "auto":
       return "구독 제작자 자동 수신";
     case "upload":
       return "직접 올림";
+    case "find":
+      return "직접 찾기";
     case "pick":
       return null;
   }

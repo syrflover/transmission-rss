@@ -185,16 +185,20 @@ export type ArchiveType = "zip" | "rar" | "7z" | "gz" | "bz2" | "xz" | "tar";
 /** What an uploaded file was judged to be by its content. */
 export type UploadKind = "subtitle" | "font" | "archive";
 
-/** The steps a job goes through, in this order. `auth` only when a source asks for it. An upload job has only `receive`. */
+/**
+ * The steps a job goes through, in this order. `auth` only when a source asks for it. An upload job has only
+ * `receive`; a find job `open` and `receive`, as it reaches them.
+ */
 export type StepKind = "found" | "open" | "auth" | "receive";
 
 export interface JobRow {
   id: string;
   /**
    * `pick`: the user picked its candidates; `auto`: the subscribed creator's, made by the app;
-   * `upload`: subtitles and fonts the user uploaded (it is `done` from the start).
+   * `upload`: subtitles and fonts the user uploaded (it is `done` from the start); `find`: the user browses the
+   * chosen creator's posts in the server browser and every download is a file of the job (직접 찾기).
    */
-  origin: "pick" | "auto" | "upload";
+  origin: "pick" | "auto" | "upload" | "find";
   /** For a revision of a received subtitle: the observation received before. */
   revision_of: number | null;
   /** The latest job that received `revision_of`, while there is one. */
@@ -223,8 +227,10 @@ export interface JobRow {
   progress: { done: number; failed: number; total: number };
   /** The class of the first failed item's failure, when it has one. */
   failure: FailureClass | null;
-  /** For an upload job: what it kept, by kind, and how many files it dropped. */
+  /** For an upload or a find job: what it kept, by kind, and how many files it dropped. */
   upload: UploadSummary | null;
+  /** A find job the user finished, which ends once no download of its server browser is on its way. */
+  finishing: boolean;
 }
 
 export interface UploadSummary {
@@ -353,7 +359,7 @@ export interface JobDetail extends JobRow {
   receive_dir: string;
   /** Newest first. */
   log: LogEntry[];
-  /** For an upload job: the files left out, in the order they were named. */
+  /** For an upload or a find job: the files left out, in the order they were named or downloaded. */
   dropped: DroppedFile[];
   /**
    * The remote screen of a job that waits for a site's check in the server
@@ -378,6 +384,11 @@ export interface JobScreen {
    */
   bound: number | null;
   note: string | null;
+  /**
+   * With `run`: the page shown is one the post opened (a find job's popup), which the person may close
+   * ({@link closePopup}).
+   */
+  popup: boolean;
 }
 
 export function fetchJob(id: string, signal?: AbortSignal): Promise<JobDetail> {
@@ -393,6 +404,18 @@ export function fetchJob(id: string, signal?: AbortSignal): Promise<JobDetail> {
  */
 export function prepareScreen(id: string): Promise<JobScreen | null> {
   return api<JobScreen | null>(`/subtitle-jobs/${encodeURIComponent(id)}/screen`, { method: "POST" });
+}
+
+/**
+ * Closes the page a find job's screen shows, of the binding (`run`, `bound`) the person sees, when it is one the post
+ * opened (`popup`). The worker closes it in the server browser, never the post's own page, and the screen goes back to
+ * the page before it as a new binding. A `conflict` when the screen no longer shows that popup.
+ */
+export async function closePopup(id: string, run: string, bound: number): Promise<void> {
+  await api<unknown>(`/subtitle-jobs/${encodeURIComponent(id)}/screen/close`, {
+    method: "POST",
+    body: { run, bound },
+  });
 }
 
 /** The most candidates one job takes, as the server (`MAX_CANDIDATES` in `jobs_api.rs`) does. */
@@ -421,6 +444,34 @@ export function createSubtitleJob(
 /** Where a job's detail is. */
 export function jobPath(id: string): string {
   return `/todo/job/${encodeURIComponent(id)}`;
+}
+
+/** What makes a find job (직접 찾기): the browser's ID for the action, the season and a candidate source's ID. */
+export interface NewFindJob {
+  id: string;
+  work_id: string;
+  season: number;
+  creator: string;
+}
+
+/**
+ * Creates a find job: the server browser opens the creator's most recently observed post for the user to browse
+ * on the job's remote screen. `202` when it was made now and `200` when the same ID with the same content was made
+ * before: both give the job's ID. The same ID with other content is a `conflict`.
+ */
+export function createFindJob(job: NewFindJob): Promise<{ id: string }> {
+  return api<{ id: string }>("/subtitle-jobs/find", { method: "POST", body: job });
+}
+
+/**
+ * Finishes a find job (`받기 끝내기`): the request is written and the worker ends the job once no download of its
+ * server browser is on its way (`finishing` until then); `done` for a job that had ended.
+ */
+export function finishJob(id: string): Promise<{ state: "done" | "finishing" }> {
+  return api<{ state: "done" | "finishing" }>(
+    `/subtitle-jobs/${encodeURIComponent(id)}/finish`,
+    { method: "POST" },
+  );
 }
 
 /** What an upload answers when it made the job now (`202`): the files kept by kind and the files dropped. */

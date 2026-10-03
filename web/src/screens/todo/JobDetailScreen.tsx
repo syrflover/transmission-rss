@@ -9,9 +9,10 @@ import { EmptyState, usePageTitle } from "../ScreenFrame";
 import { btnNeutral } from "../collect/channels/styles";
 import { coverOf } from "../library/model";
 import { Cover } from "../library/WorkItem";
-import { fetchJob, jobPath, type JobDetail, type JobRow } from "./api";
+import { fetchJob, jobPath, type JobDetail, type JobRow, type JobScreen } from "./api";
 import { CountChip, FailureTag, OriginTags, StateBadge, Tag, originSentence } from "./badges";
 import { ended, shownState } from "./format";
+import { FindFinish } from "./FindFinish";
 import { BackIcon } from "./icons";
 import { JobAuth } from "./JobAuth";
 import { JobResults } from "./JobResults";
@@ -40,7 +41,9 @@ function BackLink() {
 /**
  * A subtitle job's page, one for every job: the way back, the head, the steps,
  * the check on the site (the remote screen) while the job has one, the result
- * of each episode, the path and the log, in one column. It reads the job again
+ * of each episode, the path and the log, in one column. A find job (직접 찾기)
+ * puts its remote screen first, with `받기 끝내기` under it, and lists the files
+ * it received instead of episodes. It reads the job again
  * every two seconds while the page is visible and the job has not ended. Opening
  * the page asks once for the job's server browser screen to be prepared;
  * reading the job again never does.
@@ -90,15 +93,20 @@ function timeSentence(job: JobRow): string {
     case "partial":
       return `${at} 일부 실패`;
     case "done":
-      return job.origin === "upload" ? `${at} 올림` : `${at} 받음`;
+      return job.origin === "upload" ? `${at} 올림` : job.origin === "find" ? `${at} 끝냄` : `${at} 받음`;
     default:
       return `${at}부터`;
   }
 }
 
+/** What a find job that has no screen yet shows while the worker opens its post. */
+const OPENING: JobScreen = { state: "preparing", run: null, bound: null, note: null, popup: false };
+
 function Page({ job, prepare }: { job: JobDetail; prepare: ScreenPrepare }) {
   const title = useRef<HTMLHeadingElement>(null);
-  const screen = prepare.screen;
+  const find = job.origin === "find" && !ended(job.state);
+  const screen =
+    prepare.screen ?? (find && (job.state === "pending" || job.state === "running") ? OPENING : null);
   // A phone shows the check box in its first screen: the head shrinks while the job has a screen.
   const compact = screen !== null;
 
@@ -177,15 +185,30 @@ function Page({ job, prepare }: { job: JobDetail; prepare: ScreenPrepare }) {
         </div>
       </header>
 
+      {find &&
+        (screen !== null ? (
+          <JobAuth jobId={job.id} screen={screen} prepare={prepare} find>
+            <FindFinish job={job} />
+          </JobAuth>
+        ) : (
+          <div className="mt-6 max-[720px]:mt-4">
+            <FindFinish job={job} />
+          </div>
+        ))}
+
       <div className={cn("mt-5", compact && "max-[720px]:mt-3")}>
         <JobSteps steps={job.steps} />
       </div>
 
-      {screen !== null && <JobAuth jobId={job.id} screen={screen} prepare={prepare} />}
+      {!find && screen !== null && <JobAuth jobId={job.id} screen={screen} prepare={prepare} />}
 
-      {job.origin === "upload" ? (
-        <Part title="올린 파일">
-          <UploadResults files={job.items.flatMap((item) => item.files)} dropped={job.dropped} />
+      {job.origin === "upload" || job.origin === "find" ? (
+        <Part title={job.origin === "find" ? "받은 파일" : "올린 파일"}>
+          <UploadResults
+            files={job.items.flatMap((item) => item.files)}
+            dropped={job.dropped}
+            empty={job.origin === "find" ? "받은 파일이 없어요." : undefined}
+          />
         </Part>
       ) : (
         <Part title="회차별 결과">

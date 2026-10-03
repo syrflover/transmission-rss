@@ -85,6 +85,49 @@ pub const UPLOAD: &str = "upload";
 /// The post address of the one item of an upload job: there is no post.
 const UPLOAD_POST: &str = "upload:";
 
+/// The origin of a job a person makes to find a subtitle in the server
+/// browser, starting at a creator's post (`crate::runner`, find jobs).
+pub const FIND: &str = "find";
+
+/// A find job to make: one item for its package, whose post is where the
+/// browser starts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewFind {
+    pub command_id: String,
+    /// The request's content in canonical JSON.
+    pub request: String,
+    pub work_id: String,
+    pub season: i64,
+    pub anime_no: i64,
+    pub source_id: String,
+    pub creator: String,
+    /// The creator's newest post the app observed for the anime.
+    pub post_url: String,
+}
+
+/// What a find job has received so far: its item, the files it kept and the
+/// names of those it dropped, in order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Found {
+    pub item_id: i64,
+    pub kept: Vec<FileRow>,
+    pub dropped: Vec<DroppedRow>,
+}
+
+/// What a person's request to finish a find job did ([`JobStore::ask_finish`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AskedFinish {
+    /// No such job.
+    Missing,
+    /// The job is not a find job.
+    NotFind,
+    /// The job had ended already.
+    Ended,
+    /// The request is written; the worker ends the job once no download of
+    /// its run is on its way, or at its next look when no run is bound.
+    Asked,
+}
+
 /// An upload to record: the job is made `done`, with its files and the names
 /// of those it dropped.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -166,11 +209,13 @@ pub struct JobRow {
     pub progress: Progress,
     /// The class of the first failed item's failure, when it has one.
     pub failure: Option<FailureKind>,
-    /// For an upload job: what it kept and dropped.
+    /// For an upload or a find job: what it kept and dropped.
     pub upload: Option<UploadSummary>,
+    /// For a find job: a person asked it to finish and it has not ended yet.
+    pub finishing: bool,
 }
 
-/// What an upload job kept, by kind, and how many files it dropped.
+/// What an upload or a find job kept, by kind, and how many files it dropped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct UploadSummary {
     pub subtitles: usize,
@@ -455,13 +500,16 @@ impl JobStore {
             .await
     }
 
-    /// The jobs waiting for a person's check, oldest first.
+    /// The jobs waiting for a person's check, oldest first. A find job, which
+    /// waits the same way while a person browses, is the person's own doing
+    /// and not among them.
     pub async fn auth_waits(&self) -> Result<Vec<JobRow>, JobError> {
         self.db
             .run(|c| {
                 rows(
                     c,
-                    "WHERE j.state = 'waiting' AND j.wait = 'auth' ORDER BY j.seq",
+                    "WHERE j.state = 'waiting' AND j.wait = 'auth' AND j.origin <> 'find'
+                     ORDER BY j.seq",
                     [],
                 )
             })
@@ -544,6 +592,224 @@ impl JobStore {
                     })?
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(rows)
+            })
+            .await
+    }
+
+    // -----------------------------------------------------------------------
+    // Find jobs
+
+    /// Stores a find job as `pending`, unless its command ID is known. The
+    /// check and the insert are one write transaction, so two deliveries at
+    /// once store one job.
+    pub async fn create_find(&self, find: NewFind, now: Millis) -> Result<Created, JobError> {
+        self.db.run(move |c| create_find(c, &find, now)).await
+    }
+
+    /// How the job was asked for (`pick`, [`AUTO`], [`UPLOAD`], [`FIND`]), or
+    /// `None` when there is no such job.
+    pub async fn origin(&self, job_id: &str) -> Result<Option<String>, JobError> {
+        let id = job_id.to_owned();
+        self.db
+            .run(move |c| {
+                Ok(c.query_row(
+                    "SELECT origin FROM subtitle_jobs WHERE id = ?1",
+                    [id],
+                    |r| r.get(0),
+                )
+                .optional()?)
+            })
+            .await
+    }
+
+    /// What the find job has received so far, or `None` when it has no item.
+    pub async fn found(&self, job_id: &str) -> Result<Option<Found>, JobError> {
+        let id = job_id.to_owned();
+        self.db
+            .run(move |c| {
+                let Some(item) = items(c, &id)?.into_iter().next() else {
+                    return Ok(None);
+                };
+                Ok(Some(Found {
+                    item_id: item.id,
+                    kept: item
+                        .files
+                        .into_iter()
+                        .filter(|f| f.state == FileState::Done)
+                        .collect(),
+                    dropped: dropped_rows(c, &id)?,
+                }))
+            })
+            .await
+    }
+
+    /// Records a file the find job's browser run downloaded and the job kept,
+    /// already in the job's folder, as a receipt at `done` of its item, with
+    /// a line in its log.
+    pub async fn add_found(
+        &self,
+        job_id: &str,
+        item_id: i64,
+        file: UploadedFile,
+        now: Millis,
+    ) -> Result<(), JobError> {
+        let id = job_id.to_owned();
+        self.db
+            .run(move |c| {
+                let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                tx.execute(
+                    "INSERT INTO subtitle_job_files
+                         (id, job_id, item_id, file_key, name, state, size, sha256, object,
+                          path, created_at, updated_at, format, kind, archive_type)
+                     VALUES (?1, ?2, ?3, ?4, ?5, 'done', ?6, ?7, ?8, ?9, ?10, ?10, ?11, ?12, ?13)",
+                    params![
+                        file.id,
+                        id,
+                        item_id,
+                        file.file_key,
+                        file.name,
+                        i64::try_from(file.size).unwrap_or(i64::MAX),
+                        file.sha256,
+                        file.object,
+                        file.path,
+                        now,
+                        file.format.code(),
+                        file.kind.code(),
+                        file.archive.map(Archive::code)
+                    ],
+                )?;
+                tx.execute(
+                    "INSERT INTO subtitle_job_events (job_id, at, message, detail)
+                     VALUES (?1, ?2, '서버 브라우저가 받은 파일을 남겼어요', ?3)",
+                    params![id, now, format!("{} · {}", file.name, file.kind.label())],
+                )?;
+                tx.commit()?;
+                Ok(())
+            })
+            .await
+    }
+
+    /// Records a file the find job's browser run downloaded and the job did
+    /// not keep, with why (its bytes are gone), with a line in its log.
+    pub async fn add_dropped(
+        &self,
+        job_id: &str,
+        dropped: crate::upload::Dropped,
+        now: Millis,
+    ) -> Result<(), JobError> {
+        let id = job_id.to_owned();
+        self.db
+            .run(move |c| {
+                let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                tx.execute(
+                    "INSERT INTO subtitle_job_dropped (job_id, position, name, reason)
+                     VALUES (?1, (SELECT COALESCE(MAX(position), -1) + 1
+                                  FROM subtitle_job_dropped WHERE job_id = ?1), ?2, ?3)",
+                    params![id, dropped.name, dropped.reason],
+                )?;
+                tx.execute(
+                    "INSERT INTO subtitle_job_events (job_id, at, message, detail)
+                     VALUES (?1, ?2, '서버 브라우저가 받은 파일을 뺐어요', ?3)",
+                    params![id, now, format!("{} · {}", dropped.name, dropped.reason)],
+                )?;
+                tx.commit()?;
+                Ok(())
+            })
+            .await
+    }
+
+    /// Whether a person asked the find job to finish ([`JobStore::ask_finish`]).
+    pub async fn finish_asked(&self, job_id: &str) -> Result<bool, JobError> {
+        let id = job_id.to_owned();
+        self.db
+            .run(move |c| {
+                Ok(c.query_row(
+                    "SELECT finish_at IS NOT NULL FROM subtitle_jobs WHERE id = ?1",
+                    [id],
+                    |r| r.get(0),
+                )
+                .optional()?
+                .unwrap_or(false))
+            })
+            .await
+    }
+
+    /// A person asked the find job to finish receiving. The request is
+    /// written and nothing else: the worker ends the job
+    /// ([`JobStore::end_find`]), since only it sees a download a run left in
+    /// the job's folder (a restart cut its watch short) and whether one is
+    /// on its way. Until then the job is finishing ([`JobRow::finishing`]).
+    pub async fn ask_finish(&self, job_id: &str, now: Millis) -> Result<AskedFinish, JobError> {
+        let id = job_id.to_owned();
+        self.db
+            .run(move |c| {
+                let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                let found: Option<(String, JobState)> = tx
+                    .query_row(
+                        "SELECT origin, state FROM subtitle_jobs WHERE id = ?1",
+                        [&id],
+                        |r| Ok((r.get(0)?, r.get(1)?)),
+                    )
+                    .optional()?;
+                let Some((origin, state)) = found else {
+                    return Ok(AskedFinish::Missing);
+                };
+                if origin != FIND {
+                    return Ok(AskedFinish::NotFind);
+                }
+                if state.is_finished() {
+                    return Ok(AskedFinish::Ended);
+                }
+                tx.execute(
+                    "UPDATE subtitle_jobs SET finish_at = COALESCE(finish_at, ?2), updated_at = ?2
+                     WHERE id = ?1",
+                    params![id, now],
+                )?;
+                tx.commit()?;
+                Ok(AskedFinish::Asked)
+            })
+            .await
+    }
+
+    /// Ends the find job `done` when it has not ended and the run bound to it
+    /// is `run` (`None`: no run is bound): its item is done, its step
+    /// `receive` too, a step `open` left unfinished (its screen could not be
+    /// prepared) is done when a run once opened the post and goes when none
+    /// did, its screen goes, and its note and log say what it kept, or
+    /// 받은 파일 없음. The worker removes its folder of downloads. Whether it
+    /// ended now.
+    pub async fn end_find(
+        &self,
+        job_id: &str,
+        run: Option<&str>,
+        now: Millis,
+    ) -> Result<bool, JobError> {
+        let (id, run) = (job_id.to_owned(), run.map(str::to_owned));
+        self.db
+            .run(move |c| {
+                let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                let ended = end_find(&tx, &id, run.as_deref(), now)?;
+                tx.commit()?;
+                Ok(ended)
+            })
+            .await
+    }
+
+    /// The find jobs a person asked to finish that wait (or are held) with no
+    /// browser run bound to them: the worker ends them.
+    pub async fn unbound_finishes(&self) -> Result<Vec<String>, JobError> {
+        self.db
+            .run(|c| {
+                let mut stmt = c.prepare(
+                    "SELECT j.id FROM subtitle_jobs j
+                     WHERE j.origin = 'find' AND j.finish_at IS NOT NULL
+                       AND j.state IN ('waiting', 'held')
+                       AND NOT EXISTS (SELECT 1 FROM subtitle_job_screens s
+                                       WHERE s.job_id = j.id AND s.run_id IS NOT NULL)
+                     ORDER BY j.seq",
+                )?;
+                let rows = stmt.query_map([], |r| r.get(0))?;
+                Ok(rows.collect::<Result<_, _>>()?)
             })
             .await
     }
@@ -1312,6 +1578,174 @@ fn create_upload(c: &mut Connection, up: &NewUpload, now: Millis) -> Result<Crea
     Ok(Created::Created(up.id.clone()))
 }
 
+fn create_find(c: &mut Connection, find: &NewFind, now: Millis) -> Result<Created, JobError> {
+    let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let known: Option<(String, String)> = tx
+        .query_row(
+            "SELECT id, request FROM subtitle_jobs WHERE command_id = ?1",
+            [&find.command_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    if let Some((id, request)) = known {
+        return Ok(match request == find.request {
+            true => Created::Existing(id),
+            false => Created::Mismatch(id),
+        });
+    }
+    let id = uuid::Uuid::new_v4().to_string();
+    tx.execute(
+        "INSERT INTO subtitle_jobs
+             (id, command_id, request, origin, work_id, season, anime_no, source_id, creator,
+              state, created_at, updated_at, state_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'pending', ?10, ?10, ?10)",
+        params![
+            id,
+            find.command_id,
+            find.request,
+            FIND,
+            find.work_id,
+            find.season,
+            find.anime_no,
+            find.source_id,
+            find.creator,
+            now
+        ],
+    )?;
+    // The item stands for the package: no episode, no observation (it is no
+    // candidate the person picked, and nothing reads it as one).
+    tx.execute(
+        "INSERT INTO subtitle_job_items
+             (job_id, position, observation_id, episode, post_url, found_at, state, updated_at)
+         VALUES (?1, 0, NULL, '', ?2, ?3, 'pending', ?3)",
+        params![id, find.post_url, now],
+    )?;
+    let host = url::Url::parse(&find.post_url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_owned));
+    tx.execute(
+        "INSERT INTO subtitle_job_events (job_id, at, message, detail)
+         VALUES (?1, ?2, '직접 찾기 작업을 만들었어요', ?3)",
+        params![
+            id,
+            now,
+            match host {
+                Some(host) => format!("{} · {host}", find.creator),
+                None => find.creator.clone(),
+            }
+        ],
+    )?;
+    tx.commit()?;
+    Ok(Created::Created(id))
+}
+
+/// Ends the find job `id` in `tx` (see [`JobStore::end_find`]). Whether it
+/// ended now.
+fn end_find(tx: &Connection, id: &str, run: Option<&str>, now: Millis) -> Result<bool, JobError> {
+    let open: Option<JobState> = tx
+        .query_row(
+            "SELECT state FROM subtitle_jobs WHERE id = ?1 AND origin = 'find'",
+            [id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if open.is_none_or(JobState::is_finished) {
+        return Ok(false);
+    }
+    let bound: Option<String> = tx
+        .query_row(
+            "SELECT run_id FROM subtitle_job_screens WHERE job_id = ?1",
+            [id],
+            |r| r.get(0),
+        )
+        .optional()?
+        .flatten();
+    if bound.as_deref() != run {
+        return Ok(false);
+    }
+    let summary = upload_summary(tx, id)?;
+    let counts = crate::upload::Counts {
+        subtitles: summary.subtitles,
+        fonts: summary.fonts,
+        archives: summary.archives,
+    };
+    let dropped = match summary.dropped {
+        0 => String::new(),
+        n => format!(" · 뺀 파일 {n}개"),
+    };
+    let kept = summary.subtitles + summary.fonts + summary.archives;
+    let (note, message) = match kept {
+        0 => (
+            format!("{NOTHING_FOUND}{dropped}"),
+            "받은 파일 없이 받기를 끝냈어요",
+        ),
+        _ => (
+            format!("받은 파일: {}{dropped}", counts.sentence()),
+            "받기를 끝냈어요",
+        ),
+    };
+    tx.execute(
+        "UPDATE subtitle_job_items
+         SET state = 'done', wait = NULL, reason = NULL, failure = NULL, updated_at = ?2
+         WHERE job_id = ?1",
+        params![id, now],
+    )?;
+    // A step `open` the last run left waiting (its screen was not prepared)
+    // says nothing of a job that ended: done when an earlier run opened the
+    // post (the step `receive` began), gone when none did.
+    tx.execute(
+        "UPDATE subtitle_job_steps SET state = 'done', note = NULL
+         WHERE job_id = ?1 AND step = 'open' AND state <> 'done'
+           AND EXISTS (SELECT 1 FROM subtitle_job_steps
+                       WHERE job_id = ?1 AND step = 'receive')",
+        [id],
+    )?;
+    tx.execute(
+        "DELETE FROM subtitle_job_steps WHERE job_id = ?1 AND step = 'open' AND state <> 'done'",
+        [id],
+    )?;
+    tx.execute(
+        "INSERT INTO subtitle_job_steps (job_id, step, state, at, note)
+         VALUES (?1, 'receive', 'done', ?2, ?3)
+         ON CONFLICT (job_id, step) DO UPDATE
+         SET state = 'done', at = excluded.at, note = excluded.note",
+        params![id, now, note],
+    )?;
+    tx.execute(
+        "UPDATE subtitle_jobs
+         SET state = 'done', wait = NULL, note = ?2, stage = NULL, state_at = ?3,
+             updated_at = ?3, finished_at = ?3, attempts = 0
+         WHERE id = ?1",
+        params![id, note, now],
+    )?;
+    tx.execute("DELETE FROM subtitle_job_screens WHERE job_id = ?1", [id])?;
+    tx.execute(
+        "INSERT INTO subtitle_job_events (job_id, at, message, detail)
+         VALUES (?1, ?2, ?3, ?4)",
+        params![id, now, message, note],
+    )?;
+    Ok(true)
+}
+
+/// The note of a find job that ended with no file kept.
+pub const NOTHING_FOUND: &str = "받은 파일 없음";
+
+/// The files a job dropped, in order.
+fn dropped_rows(c: &Connection, id: &str) -> Result<Vec<DroppedRow>, JobError> {
+    let mut stmt = c.prepare(
+        "SELECT name, reason FROM subtitle_job_dropped WHERE job_id = ?1 ORDER BY position",
+    )?;
+    let rows = stmt
+        .query_map([id], |r| {
+            Ok(DroppedRow {
+                name: r.get(0)?,
+                reason: r.get(1)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 const JOB_COLUMNS: &str = "
     SELECT j.seq, j.id, j.state, j.wait, j.stage, j.note, j.state_at, j.created_at,
            j.finished_at, j.work_id, w.dir_name, j.season, j.anime_no, a.subject, j.creator,
@@ -1320,7 +1754,8 @@ const JOB_COLUMNS: &str = "
               JOIN subtitle_jobs rj ON rj.id = r.job_id
              WHERE r.observation_id = j.revision_of AND r.state = 'done' AND rj.seq < j.seq
              ORDER BY r.id DESC LIMIT 1),
-           j.revises_attributed
+           j.revises_attributed,
+           j.finish_at IS NOT NULL AND j.state NOT IN ('done', 'failed', 'partial')
     FROM subtitle_jobs j
     LEFT JOIN works w ON w.id = j.work_id
     LEFT JOIN anissia_anime a ON a.anime_no = j.anime_no";
@@ -1351,6 +1786,7 @@ fn job_row(r: &Row<'_>) -> rusqlite::Result<JobRow> {
         progress: Progress::default(),
         failure: None,
         upload: None,
+        finishing: r.get(19)?,
     })
 }
 
@@ -1385,8 +1821,9 @@ fn rows<P: rusqlite::Params>(c: &Connection, tail: &str, p: P) -> Result<Vec<Job
                     .ok()
                     .and_then(|u| u.host_str().map(str::to_owned));
             }
-            // An upload's item stands for the package: it has no episode.
-            if !(job.origin == UPLOAD && episode.is_empty()) {
+            // An upload's or a find job's item stands for the package: it has
+            // no episode.
+            if !((job.origin == UPLOAD || job.origin == FIND) && episode.is_empty()) {
                 job.episodes.push(episode);
             }
             job.progress.total += 1;
@@ -1398,7 +1835,7 @@ fn rows<P: rusqlite::Params>(c: &Connection, tail: &str, p: P) -> Result<Vec<Job
         }
     }
     for job in &mut jobs {
-        if job.origin == UPLOAD {
+        if job.origin == UPLOAD || job.origin == FIND {
             job.upload = Some(upload_summary(c, &job.id)?);
         }
     }
@@ -1632,26 +2069,14 @@ fn detail(c: &mut Connection, id: &str) -> Result<Option<JobDetail>, JobError> {
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
-    let mut dropped_stmt = c.prepare(
-        "SELECT name, reason FROM subtitle_job_dropped WHERE job_id = ?1 ORDER BY position",
-    )?;
-    let dropped = dropped_stmt
-        .query_map([id], |r| {
-            Ok(DroppedRow {
-                name: r.get(0)?,
-                reason: r.get(1)?,
-            })
-        })?
-        .collect::<Result<Vec<_>, _>>()?;
     let detail = JobDetail {
         steps: steps(c, id)?,
         items: items(c, id)?,
-        dropped,
+        dropped: dropped_rows(c, id)?,
         events,
         row,
     };
     drop(stmt);
-    drop(dropped_stmt);
     tx.commit()?;
     Ok(Some(detail))
 }
