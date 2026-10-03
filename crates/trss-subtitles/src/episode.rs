@@ -80,7 +80,7 @@ pub struct Span {
 }
 
 impl Span {
-    fn holds(&self, key: &str) -> bool {
+    pub(crate) fn holds(&self, key: &str) -> bool {
         compare(&self.from, key) != Ordering::Greater && compare(key, &self.to) != Ordering::Greater
     }
 }

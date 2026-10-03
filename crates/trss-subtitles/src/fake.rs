@@ -25,7 +25,7 @@
 //! network: the driver ([`drive_check`]) intercepts the page's requests to
 //! [`HOST`] (DevTools' `Fetch` domain) and answers them itself for as long as
 //! the run lives. The page has a download card far down; the driver scrolls
-//! it to the middle of the screen and clicks it, as erulabo's driver will, and
+//! it to the middle of the screen and clicks it, as erulabo's driver does, and
 //! a fake check box appears in the card. Only a person's click on the box (a
 //! trusted event: a remote screen's input, not a page script) passes it; the
 //! page then starts a real browser download of `/files/<name>.srt`, a small
@@ -54,7 +54,7 @@ pub const CHECK_REASON: &str = "가짜 사람 확인";
 /// A fake post that needs the check in the browser: the name of its file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FakeCheck {
-    name: String,
+    pub(crate) name: String,
 }
 
 impl FakeCheck {
@@ -565,7 +565,9 @@ mod tests {
         };
         assert_eq!(reason, CHECK_REASON);
         assert_eq!(page.reason(), CHECK_REASON);
-        let AuthPage::Fake(check) = &page;
+        let AuthPage::Fake(check) = &page else {
+            panic!("{page:?}");
+        };
         assert_eq!(check.name(), "ep1");
 
         // Nothing to fetch without the browser.
@@ -578,7 +580,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("ep1.srt");
         std::fs::write(&path, srt("ep1")).unwrap();
-        let arrived = crate::auth::arrived(&post, "ep1.srt", path.clone());
+        let arrived = crate::auth::arrived(&post, &page, "ep1.srt", path.clone()).await;
         let (expected, bytes) = receive(&source, &post, &arrived).await;
         assert_eq!(bytes, srt("ep1"));
         assert_eq!(expected, Some(bytes.len() as u64));

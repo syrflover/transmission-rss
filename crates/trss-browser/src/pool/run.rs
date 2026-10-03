@@ -55,7 +55,23 @@ pub(crate) struct RunInner {
     targets_changed: Notify,
     downloads: Mutex<DownloadTable>,
     downloads_changed: Notify,
+    /// By frame: the last answer of a document the frame loaded, with its
+    /// address (in memory only). A download is the answer of a navigation
+    /// the browser turned into one, so its facts are there.
+    documents: Mutex<HashMap<String, (String, DownloadAnswer)>>,
+    /// The documents the run's pages (not the frames inside them) were
+    /// answered with, in the order the events came ([`BrowserRun::page_documents`]).
+    page_documents: broadcast::Sender<PageDocument>,
 }
+
+/// The most frames whose last document answer is kept; past it they are
+/// forgotten all at once (a run has a handful of pages and frames).
+const MAX_DOCUMENTS: usize = 64;
+
+/// How many answers of page documents a slow reader of
+/// [`BrowserRun::page_documents`] may fall behind by before it loses the
+/// oldest.
+const PAGE_DOCUMENTS_KEPT: usize = 32;
 
 struct Activity {
     /// Job steps that said they are running.
@@ -84,6 +100,8 @@ struct DownloadTable {
 struct DownloadItem {
     file_name: String,
     host: Option<String>,
+    source: Option<DownloadSource>,
+    answer: Option<DownloadAnswer>,
     received: u64,
     /// When the download began or last reported progress.
     last_progress: Millis,
@@ -116,6 +134,8 @@ impl RunInner {
             targets_changed: Notify::new(),
             downloads: Mutex::default(),
             downloads_changed: Notify::new(),
+            documents: Mutex::default(),
+            page_documents: broadcast::channel(PAGE_DOCUMENTS_KEPT).0,
         }
     }
 
@@ -257,12 +277,83 @@ impl RunInner {
         self.targets_changed.notify_waiters();
     }
 
+    /// Whether `target_id` is a page of the run (a window or a popup), not a
+    /// frame of another site inside one. A page's main frame has its target's
+    /// ID as its frame ID.
+    fn is_page_target(&self, target_id: &str) -> bool {
+        self.targets
+            .lock()
+            .expect("targets lock")
+            .get(target_id)
+            .is_some_and(|t| t.kind == "page")
+    }
+
     // --- downloads ---
 
-    pub(crate) fn download_began(&self, guid: &str, url: &str, suggested: &str, now: Millis) {
-        let host = url::Url::parse(url)
-            .ok()
+    pub(crate) fn download_active(&self) -> bool {
+        let table = self.downloads.lock().expect("downloads lock");
+        table.busy() || !table.finished.is_empty()
+    }
+
+    /// A `Network.responseReceived` of the run's connection: the answer of a
+    /// document is kept for the download it may become, and told to the
+    /// readers of [`BrowserRun::page_documents`] when it is a page's own.
+    /// Decided here, in the order the events came, so a popup's first
+    /// document is never taken for a frame's.
+    pub(crate) fn response_received(&self, params: &Value) {
+        if params["type"] != "Document" {
+            return;
+        }
+        let (Some(frame), Some(url)) = (
+            params["frameId"].as_str(),
+            params["response"]["url"].as_str(),
+        ) else {
+            return;
+        };
+        let answer = DownloadAnswer::of_response(&params["response"]);
+        if self.is_page_target(frame) {
+            if let Ok(source) = url::Url::parse(url) {
+                // No reader is no error.
+                let _ = self.page_documents.send(PageDocument {
+                    source: DownloadSource::new(source),
+                    answer: answer.clone(),
+                });
+            }
+        }
+        self.document_answered(frame, url, answer);
+    }
+
+    /// The answer of the document frame `frame_id` loaded from `url`.
+    pub(crate) fn document_answered(&self, frame_id: &str, url: &str, answer: DownloadAnswer) {
+        let mut documents = self.documents.lock().expect("documents lock");
+        if documents.len() >= MAX_DOCUMENTS && !documents.contains_key(frame_id) {
+            documents.clear();
+        }
+        documents.insert(frame_id.to_owned(), (url.to_owned(), answer));
+    }
+
+    /// A download began from `url` in frame `frame_id` (when the browser
+    /// said which): the frame's last document answer is the download's when
+    /// it was answered from the same address.
+    pub(crate) fn download_began(
+        &self,
+        guid: &str,
+        url: &str,
+        frame_id: Option<&str>,
+        suggested: &str,
+        now: Millis,
+    ) {
+        let parsed = url::Url::parse(url).ok();
+        let host = parsed
+            .as_ref()
             .and_then(|u| u.host_str().map(str::to_owned));
+        let answer = frame_id.and_then(|frame| {
+            let documents = self.documents.lock().expect("documents lock");
+            documents
+                .get(frame)
+                .filter(|(answered, _)| answered == url)
+                .map(|(_, answer)| answer.clone())
+        });
         // The address can carry a signature: only the host is ever logged.
         println!(
             "Browser: a download began in the run of job {} from {}",
@@ -278,6 +369,8 @@ impl RunInner {
                 DownloadItem {
                     file_name: suggested.to_owned(),
                     host,
+                    source: parsed.map(DownloadSource),
+                    answer,
                     received: 0,
                     last_progress: now,
                     cancelling: false,
@@ -309,12 +402,17 @@ impl RunInner {
         {
             let mut table = self.downloads.lock().expect("downloads lock");
             let item = table.in_progress.remove(guid);
-            let (file_name, host) = item.map_or((String::new(), None), |i| (i.file_name, i.host));
+            let (file_name, host, source, answer) = item.map_or_else(
+                || (String::new(), None, None, None),
+                |i| (i.file_name, i.host, i.source, i.answer),
+            );
             table.finished_bytes = table.finished_bytes.saturating_add(received);
             table.finished.push_back(Download {
                 guid: guid.to_owned(),
                 file_name,
                 host,
+                source,
+                answer,
                 state,
                 path: self.downloads_dir.join(guid),
                 received_bytes: received,
@@ -407,10 +505,94 @@ pub struct Download {
     pub file_name: String,
     /// The host it came from (never the address, which can be signed).
     pub host: Option<String>,
+    /// The address it came from, in memory only ([`DownloadSource`]).
+    pub source: Option<DownloadSource>,
+    /// What the answer that became the download said, when the browser
+    /// reported it for the frame the download began in.
+    pub answer: Option<DownloadAnswer>,
     pub state: DownloadState,
     /// Where the file is, at the path the worker sees.
     pub path: PathBuf,
     pub received_bytes: u64,
+}
+
+/// The address a download came from. It can be signed, so it stays in
+/// memory: its `Debug` hides it, and nothing here logs or stores it. A reader
+/// takes from it what is not secret (a Google Drive file's ID).
+#[derive(Clone, PartialEq, Eq)]
+pub struct DownloadSource(url::Url);
+
+impl DownloadSource {
+    pub fn new(url: url::Url) -> DownloadSource {
+        DownloadSource(url)
+    }
+
+    pub fn url(&self) -> &url::Url {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for DownloadSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("DownloadSource(<hidden>)")
+    }
+}
+
+/// What the answer a download came of said about the file: the facts of a
+/// `Network.responseReceived` of the document that became the download.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DownloadAnswer {
+    /// The HTTP status, when the answer said one.
+    pub status: Option<u16>,
+    /// The media type, without its parameters.
+    pub content_type: Option<String>,
+    pub content_length: Option<u64>,
+    /// `Last-Modified`, as the answer wrote it.
+    pub last_modified: Option<String>,
+}
+
+impl DownloadAnswer {
+    /// The facts of a DevTools `Response` object.
+    pub fn of_response(response: &Value) -> DownloadAnswer {
+        let header = |name: &str| {
+            response["headers"].as_object().and_then(|headers| {
+                headers
+                    .iter()
+                    .find(|(k, _)| k.eq_ignore_ascii_case(name))
+                    .and_then(|(_, v)| v.as_str())
+                    .map(|v| v.trim().to_owned())
+            })
+        };
+        let media = |v: &str| {
+            let media = v
+                .split(';')
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .to_lowercase();
+            (!media.is_empty()).then_some(media)
+        };
+        DownloadAnswer {
+            status: response["status"]
+                .as_u64()
+                .and_then(|s| u16::try_from(s).ok()),
+            content_type: header("content-type")
+                .as_deref()
+                .and_then(media)
+                .or_else(|| response["mimeType"].as_str().and_then(media)),
+            content_length: header("content-length").and_then(|v| v.parse().ok()),
+            last_modified: header("last-modified").filter(|v| !v.is_empty() && v.len() <= 64),
+        }
+    }
+}
+
+/// A document a page of the run (its main frame; not a frame of another site
+/// inside it) was answered with. The address stays in memory like a
+/// download's ([`DownloadSource`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PageDocument {
+    pub source: DownloadSource,
+    pub answer: DownloadAnswer,
 }
 
 /// The handle of one run of one job. Cheap to clone.
@@ -565,6 +747,16 @@ impl BrowserRun {
             .ok_or_else(|| self.ended_error())
     }
 
+    /// The documents the run's pages are answered with from now on, in the
+    /// order the browser said them: those of a window or a popup, not of the
+    /// frames inside them (a sign-in or a player another site shows in a
+    /// page is no navigation of the page). A reader that falls far behind
+    /// loses the oldest ones.
+    pub fn page_documents(&self) -> Result<broadcast::Receiver<PageDocument>, BrowserError> {
+        self.check()?;
+        Ok(self.entry.page_documents.subscribe())
+    }
+
     /// Opens a page and opens `url` in it. The page is set up (ads blocked)
     /// before it loads anything.
     pub async fn new_page(&self, url: &str) -> Result<Page, BrowserError> {
@@ -666,6 +858,12 @@ impl BrowserRun {
                 _ = self.entry.ended.cancelled() => return Err(self.ended_error()),
             }
         }
+    }
+
+    /// Whether a download of the run is under way, or ended and not yet
+    /// handed out by [`BrowserRun::download_finished`]. Looks only.
+    pub fn download_active(&self) -> bool {
+        self.entry.download_active()
     }
 
     /// Moves a completed download into `dir` (made if missing), named by the
@@ -930,7 +1128,7 @@ mod tests {
     }
 
     fn began(run: &RunInner, guid: &str, now: Millis) {
-        run.download_began(guid, "https://h.example/f?sig=SECRET", "f.zip", now);
+        run.download_began(guid, "https://h.example/f?sig=SECRET", None, "f.zip", now);
     }
 
     #[test]
@@ -1004,5 +1202,120 @@ mod tests {
         // When the last one stops reporting, the run is not busy any more.
         assert_eq!(run.take_stalled_downloads(300_000, stall), ["moving"]);
         assert!(!run.is_busy());
+    }
+
+    #[test]
+    fn a_download_takes_the_answer_of_the_document_its_frame_loaded_from_its_address() {
+        let run = ready_run(0);
+        let url = "https://drive.usercontent.google.com/download?id=ABCDEFGHIJKL&export=download&at=SECRET";
+        let response = json!({
+            "url": url, "status": 200, "mimeType": "application/octet-stream",
+            "headers": {
+                "content-type": "application/octet-stream",
+                "Content-Length": "14245",
+                "last-modified": "Fri, 02 Oct 2026 02:11:11 GMT",
+            },
+        });
+        run.document_answered("F1", url, DownloadAnswer::of_response(&response));
+        // Another frame's document is not this download's.
+        run.document_answered("F2", "https://erulabo.com/859", DownloadAnswer::default());
+        run.download_began("g", url, Some("F1"), "x.zip", 0);
+        // A download of another address in the same frame has no answer.
+        run.download_began("h", "https://elsewhere.example/x", Some("F1"), "y.zip", 0);
+        run.download_progress("g", "completed", 14_245, 1);
+        run.download_progress("h", "completed", 1, 1);
+        let mut table = run.downloads.lock().unwrap();
+        let g = table.finished.pop_front().unwrap();
+        let h = table.finished.pop_front().unwrap();
+        assert_eq!(
+            g.answer,
+            Some(DownloadAnswer {
+                status: Some(200),
+                content_type: Some("application/octet-stream".into()),
+                content_length: Some(14_245),
+                last_modified: Some("Fri, 02 Oct 2026 02:11:11 GMT".into()),
+            })
+        );
+        assert_eq!(g.source.as_ref().map(|s| s.url().as_str()), Some(url));
+        assert_eq!(h.answer, None);
+        // The address never shows.
+        let shown = format!("{g:?}");
+        assert!(
+            !shown.contains("SECRET") && !shown.contains("ABCDEFGHIJKL"),
+            "{shown}"
+        );
+    }
+    fn document(frame: &str, url: &str, status: u64) -> Value {
+        json!({
+            "type": "Document", "frameId": frame,
+            "response": { "url": url, "status": status, "mimeType": "text/html",
+                          "headers": { "Content-Type": "text/html; charset=utf-8" } },
+        })
+    }
+
+    #[test]
+    fn only_the_documents_of_the_runs_pages_are_told_and_those_of_frames_are_not() {
+        let run = ready_run(0);
+        run.target_attached("P1", "s1", "page");
+        // A popup is a page of the run as well; a frame of another site is a
+        // target of its own, of another kind.
+        run.target_attached("P2", "s2", "page");
+        run.target_attached("F1", "s3", "iframe");
+        let mut told = run.page_documents.subscribe();
+
+        run.response_received(&document("F1", "https://accounts.google.com/gsi/x", 200));
+        run.response_received(&document("unknown", "https://drive.google.com/x", 200));
+        run.response_received(&json!({
+            "type": "Image", "frameId": "P1",
+            "response": { "url": "https://erulabo.com/a.png", "status": 200 },
+        }));
+        run.response_received(&document("P1", "https://accounts.google.com/signin", 200));
+        run.response_received(&document("P2", "https://erulabo.com/860", 404));
+
+        let first = told.try_recv().unwrap();
+        assert_eq!(
+            first.source.url().as_str(),
+            "https://accounts.google.com/signin"
+        );
+        assert_eq!(first.answer.status, Some(200));
+        assert_eq!(first.answer.content_type.as_deref(), Some("text/html"));
+        let second = told.try_recv().unwrap();
+        assert_eq!(second.source.url().host_str(), Some("erulabo.com"));
+        assert_eq!(second.answer.status, Some(404));
+        assert!(told.try_recv().is_err(), "nothing else was a page's");
+        // The address does not show in the debug text.
+        assert!(!format!("{first:?}").contains("signin"));
+    }
+
+    #[test]
+    fn a_page_that_is_gone_is_no_page_and_an_answer_with_no_status_has_none() {
+        let run = ready_run(0);
+        run.target_attached("P1", "s1", "page");
+        run.target_destroyed("P1");
+        let mut told = run.page_documents.subscribe();
+        run.response_received(&document("P1", "https://erulabo.com/860", 200));
+        assert!(told.try_recv().is_err());
+
+        let answer = DownloadAnswer::of_response(&json!({
+            "url": "https://erulabo.com/860", "mimeType": "text/html",
+        }));
+        assert_eq!(answer.status, None);
+        let answer = DownloadAnswer::of_response(&json!({ "status": 70_000 }));
+        assert_eq!(answer.status, None);
+        let answer = DownloadAnswer::of_response(&json!({ "status": 429 }));
+        assert_eq!(answer.status, Some(429));
+    }
+
+    #[test]
+    fn a_download_is_active_from_its_beginning_until_it_is_handed_out() {
+        let run = ready_run(0);
+        assert!(!run.download_active());
+        began(&run, "g", 0);
+        assert!(run.download_active());
+        run.download_progress("g", "completed", 1, 1);
+        // Ended, and not taken yet.
+        assert!(run.download_active());
+        run.downloads.lock().unwrap().finished.clear();
+        assert!(!run.download_active());
     }
 }

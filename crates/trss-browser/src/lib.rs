@@ -26,6 +26,7 @@ pub mod protocol;
 
 pub use pool::{
     ActivitySource, BrowserError, BrowserPolicy, BrowserPool, BrowserRun, DialogSeen, Dialogs,
-    Download, DownloadState, MovedFile, Page, PolicySource, PoolConfig, RunStatus, DOWNLOAD_STALL,
-    MAX_DOWNLOAD_BYTES, MAX_RUN_DOWNLOAD_BYTES,
+    Download, DownloadAnswer, DownloadSource, DownloadState, MovedFile, Page, PageDocument,
+    PolicySource, PoolConfig, RunStatus, DOWNLOAD_STALL, MAX_DOWNLOAD_BYTES,
+    MAX_RUN_DOWNLOAD_BYTES,
 };

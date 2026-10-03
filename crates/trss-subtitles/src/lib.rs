@@ -18,7 +18,9 @@
 //! one is async. [`tistory::TistorySource`] reads Tistory's attachments over
 //! HTTP, [`naver::NaverSource`] Naver blogs' attachments, and
 //! [`blogger::BloggerSource`] Blogger's posts; all of them receive the Google
-//! Drive files a post links ([`drive`]). Where a post says which file is
+//! Drive files a post links ([`drive`]). [`erulabo::ErulaboSource`] reads
+//! erulabo's posts, whose files come only through the site's check in the
+//! server browser ([`auth`]). Where a post says which file is
 //! which episode, they offer those that serve the episode ([`episode`]). [`fake::FakeSource`] is a source with no network
 //! that lets a job run from start to end in tests and in the development
 //! environment.
@@ -36,6 +38,7 @@ pub mod auth;
 pub mod blogger;
 pub mod drive;
 pub mod episode;
+pub mod erulabo;
 pub mod fake;
 pub mod http;
 pub mod naver;
@@ -52,6 +55,7 @@ use bytes::Bytes;
 use url::Url;
 
 use blogger::BloggerSource;
+use erulabo::ErulaboSource;
 use fake::{FakeBody, FakeSource};
 use naver::NaverSource;
 use tistory::TistorySource;
@@ -89,6 +93,16 @@ pub struct PostFile {
     /// Where the bytes already are on this machine (a file a server browser
     /// took out of a WinPNG image): the source reads them from there.
     staged: Option<std::path::PathBuf>,
+    /// What the answer the browser downloaded the staged file from said.
+    answer: Option<StagedAnswer>,
+}
+
+/// What the answer a server browser downloaded a file from said, kept with
+/// the receipt as an HTTP answer's is ([`Fetch::status`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct StagedAnswer {
+    pub status: Option<u16>,
+    pub content_type: Option<String>,
 }
 
 impl PostFile {
@@ -101,6 +115,7 @@ impl PostFile {
             snapshot: Snapshot::default(),
             locator: None,
             staged: None,
+            answer: None,
         }
     }
 
@@ -110,6 +125,11 @@ impl PostFile {
 
     pub(crate) fn with_staged(mut self, path: std::path::PathBuf) -> PostFile {
         self.staged = Some(path);
+        self
+    }
+
+    pub(crate) fn with_answer(mut self, answer: StagedAnswer) -> PostFile {
+        self.answer = Some(answer);
         self
     }
 
@@ -488,6 +508,7 @@ pub enum Source {
     Tistory(TistorySource),
     Blogger(BloggerSource),
     Naver(NaverSource),
+    Erulabo(ErulaboSource),
 }
 
 impl Source {
@@ -501,6 +522,7 @@ impl Source {
             Source::Tistory(source) => source.open(post, episode).await,
             Source::Blogger(source) => source.open(post, episode).await,
             Source::Naver(source) => source.open(post, episode).await,
+            Source::Erulabo(source) => source.open(post, episode).await,
         }
     }
 
@@ -526,6 +548,7 @@ impl Source {
             Source::Tistory(source) => source.recheck(post, keys).await,
             Source::Blogger(source) => source.recheck(post, keys).await,
             Source::Naver(source) => source.recheck(post, keys).await,
+            Source::Erulabo(source) => source.recheck(post, keys).await,
         }
     }
 
@@ -534,7 +557,12 @@ impl Source {
     /// a site's check) is read from there.
     pub async fn fetch(&self, post: &Url, file: &PostFile) -> Result<Fetch, Failure> {
         if let Some(path) = file.staged() {
-            return Fetch::local(path).await;
+            let mut fetch = Fetch::local(path).await?;
+            if let Some(answer) = &file.answer {
+                fetch.status = answer.status;
+                fetch.content_type = answer.content_type.clone();
+            }
+            return Ok(fetch);
         }
         match self {
             Source::Fake(source) => {
@@ -552,6 +580,7 @@ impl Source {
             Source::Tistory(source) => source.fetch(post, file).await,
             Source::Blogger(source) => source.fetch(post, file).await,
             Source::Naver(source) => source.fetch(post, file).await,
+            Source::Erulabo(source) => Err(source.fetch()),
         }
     }
 }
@@ -563,6 +592,7 @@ pub struct Sources {
     tistory: Option<TistorySource>,
     blogger: Option<BloggerSource>,
     naver: Option<NaverSource>,
+    erulabo: Option<ErulaboSource>,
 }
 
 impl Sources {
@@ -597,6 +627,12 @@ impl Sources {
         self
     }
 
+    /// Adds the erulabo source, for the posts of [`erulabo::reads`].
+    pub fn with_erulabo(mut self, source: ErulaboSource) -> Sources {
+        self.erulabo = Some(source);
+        self
+    }
+
     /// The source that reads the post at `post`, if this process knows one.
     pub fn for_post(&self, post: &Url) -> Option<Source> {
         match post.host_str() {
@@ -604,6 +640,7 @@ impl Sources {
             Some(host) if tistory::reads(host) => self.tistory.clone().map(Source::Tistory),
             Some(host) if blogger::reads(host) => self.blogger.clone().map(Source::Blogger),
             Some(host) if naver::reads(host) => self.naver.clone().map(Source::Naver),
+            Some(host) if erulabo::reads(host) => self.erulabo.clone().map(Source::Erulabo),
             _ => None,
         }
     }

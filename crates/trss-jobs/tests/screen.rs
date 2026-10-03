@@ -21,7 +21,7 @@ use trss_core::{Clock, Db};
 use trss_jobs::{
     area::ReceiveArea,
     runner::{NO_AUTH_BROWSER, OTHER_CHECK_FIRST},
-    screen::{RUN_ENDED, WORKER_RESTARTED},
+    screen::{FILE_REFUSED, RUN_ENDED, WORKER_RESTARTED},
     store::JobDetail,
     Created, FileState, Format, ItemState, JobState, JobStore, NewItem, NewJob, Runner,
     ScreenState, ScreenStore, StepKind, StepState, Wait,
@@ -36,6 +36,8 @@ use trss_subtitles::{
 enum Next {
     /// A download of `name` with the fake post's subtitle.
     File(&'static str),
+    /// The answer that should have been the file was a web page.
+    Refused(Failure),
     NotTaken,
     Ended,
 }
@@ -54,6 +56,11 @@ struct FakeBrowser {
     /// Every preparation in the first run (`run-1`), each on a page of its
     /// own, as the pool does for a job whose run is still live.
     one_run: AtomicBool,
+    /// The runs `rearm` was asked for, in order.
+    rearmed: Mutex<Vec<String>>,
+    /// Whether `rearm` waits for `rearm_go` (a check being brought back).
+    hold_rearm: AtomicBool,
+    rearm_go: Notify,
 }
 
 impl FakeBrowser {
@@ -141,6 +148,7 @@ impl AuthBrowser for FakeBrowser {
                         path,
                     }
                 }
+                Some(Next::Refused(failure)) => Waited::Refused(failure),
                 Some(Next::NotTaken) => Waited::NotTaken {
                     reason: "취소됐어요".to_owned(),
                 },
@@ -165,6 +173,15 @@ impl AuthBrowser for FakeBrowser {
         Box::pin(async move {
             self.released.lock().unwrap().push(job.to_owned());
             self.live.lock().unwrap().clear();
+        })
+    }
+
+    fn rearm<'a>(&'a self, _job: &'a str, run_id: &'a str) -> BoxFuture<'a, ()> {
+        Box::pin(async move {
+            self.rearmed.lock().unwrap().push(run_id.to_owned());
+            if self.hold_rearm.load(Ordering::SeqCst) {
+                self.rearm_go.notified().await;
+            }
         })
     }
 }
@@ -699,4 +716,189 @@ async fn without_a_server_browser_a_check_post_waits_for_a_source() {
     );
     assert_eq!(d.items[0].reason.as_deref(), Some(NO_AUTH_BROWSER));
     assert!(s.screens.screen(&id).await.unwrap().is_none());
+}
+
+/// The page that came instead of the file, as the browser tells it.
+fn refusal(kind: FailureKind, status: u16) -> Failure {
+    Failure::new(kind, format!("가짜 거절 (HTTP {status})")).with_response(
+        Some(status),
+        Some("text/html".to_owned()),
+        None,
+    )
+}
+
+/// The item's folder of the check.
+fn folder_of(s: &Setup, id: &str, item: i64) -> std::path::PathBuf {
+    s.area.at(&format!(".tmp/check-{id}-{item}"))
+}
+
+#[tokio::test]
+async fn a_refused_download_fails_the_item_with_its_class_and_removes_its_folder() {
+    let s = setup(true).await;
+    let id = waiting(&s).await;
+    let item = detail(&s, &id).await.items[0].id;
+    let folder = folder_of(&s, &id, item);
+    tend(&s).await;
+
+    let woken = s.wake.notified();
+    s.browser
+        .give(Next::Refused(refusal(FailureKind::Expired, 403)));
+    tokio::time::timeout(Duration::from_secs(2), woken)
+        .await
+        .expect("the worker is woken");
+    // The check is passed and the screen is over; the refusal waits in the
+    // item's folder for its next run.
+    let d = detail(&s, &id).await;
+    assert_eq!(d.row.state, JobState::Pending);
+    assert_eq!(step(&d, StepKind::Auth), Some(StepState::Done));
+    assert!(s.screens.screen(&id).await.unwrap().is_none());
+    assert!(folder.join(".refused").exists());
+    let event = d
+        .events
+        .iter()
+        .find(|e| e.message == FILE_REFUSED)
+        .expect("the refusal is logged");
+    assert_eq!(event.detail.as_deref(), Some("만료 · 가짜 거절 (HTTP 403)"));
+
+    run(&s).await;
+    let d = detail(&s, &id).await;
+    assert_eq!(d.row.state, JobState::Failed, "{:?}", d.events);
+    assert_eq!(d.items[0].state, ItemState::Failed);
+    assert_eq!(d.items[0].failure, Some(FailureKind::Expired));
+    assert_eq!(d.items[0].reason.as_deref(), Some("가짜 거절 (HTTP 403)"));
+    assert!(d.items[0].files.is_empty());
+    assert!(d.events.iter().any(|e| e
+        .message
+        .ends_with("사이트가 파일 대신 웹 페이지를 보냈어요")));
+    // Nothing asked the address or the check again, and the folder is gone.
+    assert_eq!(s.browser.prepares(), 1);
+    assert!(!folder.exists());
+}
+
+#[tokio::test]
+async fn a_refusal_that_is_the_sites_failure_ends_the_item_at_once_as_a_network_failure() {
+    let s = setup(true).await;
+    let id = waiting(&s).await;
+    let item = detail(&s, &id).await.items[0].id;
+    tend(&s).await;
+    let woken = s.wake.notified();
+    s.browser
+        .give(Next::Refused(refusal(FailureKind::Network, 503)));
+    tokio::time::timeout(Duration::from_secs(2), woken)
+        .await
+        .expect("the worker is woken");
+
+    run(&s).await;
+    let d = detail(&s, &id).await;
+    assert_eq!(d.items[0].state, ItemState::Failed, "{:?}", d.events);
+    assert_eq!(d.items[0].failure, Some(FailureKind::Network));
+    // No second attempt: a new address needs a new check.
+    assert_eq!(s.browser.prepares(), 1);
+    assert!(d
+        .events
+        .iter()
+        .any(|e| e.message.ends_with("사이트가 파일을 주지 못했어요")));
+    assert!(!d.events.iter().any(|e| e
+        .message
+        .ends_with("사이트가 파일 대신 웹 페이지를 보냈어요")));
+    assert!(!folder_of(&s, &id, item).exists());
+}
+
+#[tokio::test]
+async fn a_refusal_that_comes_after_its_binding_changed_is_kept_or_removed_with_its_item() {
+    // The item still waits for its file: its next run fails with the kept
+    // refusal, without another check.
+    let s = setup(true).await;
+    let id = waiting(&s).await;
+    let item = detail(&s, &id).await.items[0].id;
+    let folder = folder_of(&s, &id, item);
+    tend(&s).await;
+    s.screens
+        .unbind(&id, "run-1", RUN_ENDED, 5_000)
+        .await
+        .unwrap();
+    s.browser
+        .give(Next::Refused(refusal(FailureKind::Missing, 404)));
+    until(|| async {
+        folder.join(".refused").exists() && s.browser.next.lock().unwrap().is_some()
+    })
+    .await;
+    assert_eq!(detail(&s, &id).await.row.state, JobState::Waiting);
+
+    s.screens.request_prepare(&id, 6_000).await.unwrap();
+    tend(&s).await;
+    run(&s).await;
+    let d = detail(&s, &id).await;
+    assert_eq!(
+        d.items[0].failure,
+        Some(FailureKind::Missing),
+        "{:?}",
+        d.events
+    );
+    assert_eq!(s.browser.prepares(), 1);
+    assert!(!folder.exists());
+
+    // The item settled meanwhile: the kept refusal goes.
+    let s = setup(true).await;
+    let id = waiting(&s).await;
+    let item = detail(&s, &id).await.items[0].id;
+    let folder = folder_of(&s, &id, item);
+    tend(&s).await;
+    s.screens
+        .unbind(&id, "run-1", RUN_ENDED, 5_000)
+        .await
+        .unwrap();
+    s.store
+        .set_item(
+            item,
+            ItemState::Failed,
+            None,
+            Some("다른 곳에서 받았어요".to_owned()),
+            5_000,
+        )
+        .await
+        .unwrap();
+    s.browser
+        .give(Next::Refused(refusal(FailureKind::Expired, 403)));
+    until(|| async { s.browser.next.lock().unwrap().is_some() && !folder.exists() }).await;
+}
+
+#[tokio::test]
+async fn opening_the_screen_of_a_live_run_brings_its_check_back_once_at_a_time() {
+    let s = setup(true).await;
+    let id = waiting(&s).await;
+    assert!(s.browser.rearmed.lock().unwrap().is_empty());
+    s.browser.hold_rearm.store(true, Ordering::SeqCst);
+
+    s.screens.request_prepare(&id, 5_000).await.unwrap();
+    tend(&s).await;
+    until(|| async { s.browser.rearmed.lock().unwrap().len() == 1 }).await;
+    assert_eq!(*s.browser.rearmed.lock().unwrap(), vec!["run-1".to_owned()]);
+
+    // Opened again while the card is still being clicked: nothing starts.
+    s.screens.request_prepare(&id, 6_000).await.unwrap();
+    tend(&s).await;
+    assert_eq!(s.browser.touched.lock().unwrap().len(), 2);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(s.browser.rearmed.lock().unwrap().len(), 1);
+
+    // Once it is done, the next opening brings it back again.
+    s.browser.rearm_go.notify_one();
+    let at = AtomicI64::new(7_000);
+    until(|| async {
+        let now = at.fetch_add(1_000, Ordering::SeqCst);
+        s.screens.request_prepare(&id, now).await.unwrap();
+        tend(&s).await;
+        s.browser.rearmed.lock().unwrap().len() == 2
+    })
+    .await;
+    s.browser.rearm_go.notify_one();
+
+    // A run that is not live is prepared anew, not brought back.
+    s.browser.live.lock().unwrap().clear();
+    let before = s.browser.rearmed.lock().unwrap().len();
+    s.screens.request_prepare(&id, 99_000).await.unwrap();
+    tend(&s).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(s.browser.rearmed.lock().unwrap().len(), before);
 }

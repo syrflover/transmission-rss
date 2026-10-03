@@ -85,12 +85,14 @@
 //!
 //! # What is not rechecked
 //!
-//! erulabo posts are out of scope until its source exists (ticket 0041): its
-//! post's `dateModified` would have to become an `인증 필요` to-do and the
-//! Drive ID of an authenticated receipt would have to be observed. A source
-//! that implements [`trss_subtitles::Source::recheck`] for erulabo is where
-//! that goes; the items of a post no source reads are recorded `unreadable`.
-//! The same goes for Tistory's WinPNG images.
+//! erulabo's files come only through the site's check (ticket 0041), so its
+//! source answers each of them as one it cannot read again, and its items
+//! are recorded `unreadable`. What ticket 0050 adds there is the post's
+//! `dateModified` (in the receipt's snapshot, `dateModified`) becoming an
+//! `인증 필요` to-do, and the Drive ID the receipt's snapshot keeps
+//! (`drive_id`) observed by a `HEAD`; the place is the erulabo source's
+//! [`trss_subtitles::Source::recheck`]. The items of a post no source reads
+//! are recorded `unreadable` too, and so are Tistory's WinPNG images.
 //!
 //! # A file or post that is gone
 //!

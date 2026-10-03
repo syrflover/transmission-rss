@@ -14,8 +14,8 @@ use trss_library::{
     seasons::{self, Seasons},
 };
 use trss_subtitles::{
-    auth::BrowserAuth, blogger::BloggerSource, drive::Drive, fake::FakeSource, naver::NaverSource,
-    tistory::TistorySource, winpng::BrowserReader, Sources,
+    auth::BrowserAuth, blogger::BloggerSource, drive::Drive, erulabo::ErulaboSource,
+    fake::FakeSource, naver::NaverSource, tistory::TistorySource, winpng::BrowserReader, Sources,
 };
 use trss_worker::{env::FAKE_SUBTITLE_SOURCE_VAR, Worker, WorkerEnv};
 
@@ -47,12 +47,14 @@ async fn run() -> Result<(), String> {
     let app_data = AppData::for_database(&db_path);
     // The real sites are always on; the fake one only when asked for. One
     // Drive serves every source that links Drive files, so their requests to
-    // Drive's hosts are spaced together.
+    // Drive's hosts are spaced together. erulabo's files come only through
+    // the site's check in the server browser: without one its posts wait.
     let drive = Drive::new();
     let mut sources = Sources::none()
         .with_tistory(TistorySource::new(drive.clone()))
         .with_blogger(BloggerSource::new(drive.clone()))
-        .with_naver(NaverSource::new(drive));
+        .with_naver(NaverSource::new(drive))
+        .with_erulabo(ErulaboSource::new());
     if std::env::var(FAKE_SUBTITLE_SOURCE_VAR).as_deref() == Ok("1") {
         println!("The fake subtitle source is on ({FAKE_SUBTITLE_SOURCE_VAR})");
         sources = sources.with_fake(FakeSource);

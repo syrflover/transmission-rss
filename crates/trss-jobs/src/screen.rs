@@ -33,6 +33,11 @@ pub const RUN_ENDED: &str =
 /// The same, when the worker restarted.
 pub const WORKER_RESTARTED: &str =
     "작업기가 다시 시작해 서버 브라우저가 닫혔어요. 작업 화면을 다시 열면 다시 준비해요";
+/// The job's log when the check was passed and the browser downloaded the
+/// file ([`ScreenStore::arrival`]).
+pub const FILE_ARRIVED: &str = "사이트 확인을 마쳐 브라우저가 파일을 받았어요";
+/// The same, when the answer was a web page instead of the file.
+pub const FILE_REFUSED: &str = "사이트 확인을 마쳤지만 파일 대신 웹 페이지가 왔어요";
 
 /// How far a job's remote screen is, as the web shows it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -422,20 +427,23 @@ impl ScreenStore {
             .await
     }
 
-    /// The bound run `run_id` downloaded the file `name` of the job's check:
-    /// the check is passed (`인증` done), the screen is over, and the job goes
-    /// back in line to receive the file (`받기`). The runner finds the file
-    /// where the watch put it. `item_id`: the item the watch was for, which
-    /// a stale arrival reports on ([`Arrival::Stale`]).
+    /// The bound run `run_id` downloaded the file of the job's check, or was
+    /// refused it: the check is passed (`인증` done), the screen is over, the
+    /// job's log says `message` with `detail` (the file's name, or why), and
+    /// the job goes back in line to receive the file (`받기`) or fail with
+    /// the refusal. The runner finds either where the watch put it.
+    /// `item_id`: the item the watch was for, which a stale arrival reports
+    /// on ([`Arrival::Stale`]).
     pub async fn arrival(
         &self,
         job_id: &str,
         run_id: &str,
         item_id: i64,
-        name: &str,
+        message: &'static str,
+        detail: &str,
         now: Millis,
     ) -> Result<Arrival, JobError> {
-        let (id, run, name) = (job_id.to_owned(), run_id.to_owned(), name.to_owned());
+        let (id, run, detail) = (job_id.to_owned(), run_id.to_owned(), detail.to_owned());
         self.db
             .run(move |c| {
                 let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -468,8 +476,8 @@ impl ScreenStore {
                 )?;
                 tx.execute(
                     "INSERT INTO subtitle_job_events (job_id, at, message, detail)
-                     VALUES (?1, ?2, '사이트 확인을 마쳐 브라우저가 파일을 받았어요', ?3)",
-                    params![id, now, name],
+                     VALUES (?1, ?2, ?3, ?4)",
+                    params![id, now, message, detail],
                 )?;
                 tx.commit()?;
                 Ok(Arrival::Taken)

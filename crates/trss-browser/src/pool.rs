@@ -85,8 +85,8 @@ use crate::{
 pub use files::{safe_file_name, MovedFile};
 use run::RunInner;
 pub use run::{
-    BrowserRun, DialogSeen, Dialogs, Download, DownloadState, Page, RunStatus, DOWNLOAD_STALL,
-    MAX_DOWNLOAD_BYTES, MAX_RUN_DOWNLOAD_BYTES,
+    BrowserRun, DialogSeen, Dialogs, Download, DownloadAnswer, DownloadSource, DownloadState, Page,
+    PageDocument, RunStatus, DOWNLOAD_STALL, MAX_DOWNLOAD_BYTES, MAX_RUN_DOWNLOAD_BYTES,
 };
 
 /// How often [`BrowserPool::run_reaper`] looks for idle runs.

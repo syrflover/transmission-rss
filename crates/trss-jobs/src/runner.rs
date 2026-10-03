@@ -32,7 +32,13 @@
 //!   worker watches the bound run ([`Runner::tend_screens`]): the file the
 //!   browser downloads when the person passes the check is put in a folder of
 //!   the item's and the job goes back in line, and the item's next run
-//!   receives that file like any other (`받기`). The item's folder goes once
+//!   receives that file like any other (`받기`). Where the file should have
+//!   come from answering with a web page instead (an expired address, a
+//!   file gone; [`Waited::Refused`]) is kept in that folder the same way,
+//!   and the item's next run fails with it: nothing asks the address again,
+//!   and a new attempt goes through the check anew. Each opening of the
+//!   job's screen lets the browser bring a check that went away back to the
+//!   page ([`AuthBrowser::rearm`]). The item's folder goes once
 //!   the item settles (received, failed or held). A run that ends before
 //!   leaves the job waiting with no run; a person's next opening of the job's
 //!   page asks for it again, and the job goes back in line to be brought to
@@ -104,7 +110,7 @@
 //! holds the receipt.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     io,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -170,6 +176,24 @@ pub struct Runner {
     /// The bound run and item each job's watch waits on
     /// ([`Runner::tend_screens`]).
     watching: Arc<Mutex<HashMap<String, (String, i64)>>>,
+    /// The jobs whose check is being brought back to the page
+    /// ([`Runner::tend_screens`]): one at a time for each.
+    rearming: Arc<Mutex<HashSet<String>>>,
+}
+
+/// A job's check being brought back to its page; the job is free again when
+/// this goes, whatever way the task ended.
+struct Rearming {
+    jobs: Arc<Mutex<HashSet<String>>>,
+    job: String,
+}
+
+impl Drop for Rearming {
+    fn drop(&mut self) {
+        if let Ok(mut jobs) = self.jobs.lock() {
+            jobs.remove(&self.job);
+        }
+    }
 }
 
 /// How one file of an item came out.
@@ -247,24 +271,12 @@ enum Written {
 enum Check {
     /// The browser downloaded the post's file: receive it.
     Arrived(Box<PostFile>),
+    /// Where the file should have come from answered with a page instead:
+    /// the item fails with it.
+    Refused(Failure),
     /// The item waits (its state is written).
     Settled,
     Interrupted,
-}
-
-/// The file in `dir`, if one is there: what a check let the browser
-/// download.
-async fn staged_file(dir: &Path) -> Option<(String, PathBuf)> {
-    let mut entries = tokio::fs::read_dir(dir).await.ok()?;
-    while let Ok(Some(entry)) = entries.next_entry().await {
-        if entry.file_type().await.is_ok_and(|t| t.is_file()) {
-            return Some((
-                entry.file_name().to_string_lossy().into_owned(),
-                entry.path(),
-            ));
-        }
-    }
-    None
 }
 
 /// How one item came out.
@@ -284,6 +296,7 @@ impl Runner {
             auth: None,
             screens: ScreenStore::new(store.db().clone()),
             watching: Arc::default(),
+            rearming: Arc::default(),
             store,
         }
     }
@@ -593,6 +606,27 @@ impl Runner {
                         checked = Some(self.check_staging(job, item.id));
                         vec![*file]
                     }
+                    Check::Refused(failure) => {
+                        // A site that could not answer (`429`, `5xx`) did not
+                        // send a page in place of the file, but it ends the
+                        // item the same: a new address comes only from a new
+                        // check.
+                        let message = match failure.kind {
+                            FailureKind::Network => "사이트가 파일을 주지 못했어요",
+                            _ => "사이트가 파일 대신 웹 페이지를 보냈어요",
+                        };
+                        self.store
+                            .event(
+                                job,
+                                format!("{ep}: {message}"),
+                                Some(described(&FileProblem::from(&failure))),
+                                self.now(),
+                            )
+                            .await?;
+                        fail(failure.reason, Some(failure.kind)).await?;
+                        let _ = tokio::fs::remove_dir_all(self.check_staging(job, item.id)).await;
+                        return Ok(ItemEnd::Settled);
+                    }
                     Check::Settled => return Ok(ItemEnd::Settled),
                     Check::Interrupted => return Ok(ItemEnd::Interrupted),
                 }
@@ -700,14 +734,19 @@ impl Runner {
         cancel: &CancellationToken,
     ) -> Result<Check, JobError> {
         let now = self.now();
-        if let Some((name, path)) = staged_file(&self.check_staging(job, item.id)).await {
+        if let Some(staged) = auth::staged(&self.check_staging(job, item.id)).await {
             self.store
                 .set_step(job, StepKind::Open, StepState::Done, None, now)
                 .await?;
             self.store
                 .set_step(job, StepKind::Auth, StepState::Done, None, now)
                 .await?;
-            return Ok(Check::Arrived(Box::new(auth::arrived(post, &name, path))));
+            return Ok(match staged {
+                auth::Staged::File { name, path } => {
+                    Check::Arrived(Box::new(auth::arrived(post, page, &name, path).await))
+                }
+                auth::Staged::Refused(failure) => Check::Refused(failure),
+            });
         }
         let Some(browser) = &self.auth else {
             self.wait_check(
@@ -866,6 +905,28 @@ impl Runner {
                 self.screens
                     .mark_prepared(&request.job_id, request.asked_at, now)
                     .await?;
+                // A check that went away while no one looked comes back. One
+                // at a time for a job: a screen opened while the card is being
+                // clicked waits for nothing and starts nothing.
+                if let Some(run) = request.run_id.clone() {
+                    let job = request.job_id.clone();
+                    let started = self
+                        .rearming
+                        .lock()
+                        .expect("rearming lock")
+                        .insert(job.clone());
+                    if started {
+                        let guard = Rearming {
+                            jobs: self.rearming.clone(),
+                            job: job.clone(),
+                        };
+                        let browser = browser.clone();
+                        tokio::spawn(async move {
+                            browser.rearm(&job, &run).await;
+                            drop(guard);
+                        });
+                    }
+                }
             } else if self
                 .screens
                 .requeue_for_check(&request.job_id, request.asked_at, now)
@@ -901,7 +962,11 @@ impl Runner {
             let now = self.now();
             match waited {
                 Waited::File { name, path } => {
-                    match self.screens.arrival(job, run, item, &name, now).await {
+                    match self
+                        .screens
+                        .arrival(job, run, item, screen::FILE_ARRIVED, &name, now)
+                        .await
+                    {
                         Ok(Arrival::Taken) => {
                             println!("Subtitle job {job}: the site's check was passed");
                             wake.notify_one();
@@ -912,10 +977,41 @@ impl Runner {
                         Ok(Arrival::Stale { item_open: true }) => {}
                         Ok(Arrival::Stale { item_open: false }) => {
                             let _ = tokio::fs::remove_file(&path).await;
-                            let _ = tokio::fs::remove_dir(&staging).await;
+                            let _ = tokio::fs::remove_dir_all(&staging).await;
                         }
                         Err(err) => {
                             eprintln!("Subtitle job {job}: the file of the site's check: {err}")
+                        }
+                    }
+                    break;
+                }
+                Waited::Refused(failure) => {
+                    // Kept for the item's next run, which fails with it.
+                    if let Err(err) = auth::record_refusal(&staging, &failure).await {
+                        eprintln!(
+                            "Subtitle job {job}: the refusal of the site's check could not be kept: {}",
+                            err.kind()
+                        );
+                        break;
+                    }
+                    let detail = described(&FileProblem::from(&failure));
+                    match self
+                        .screens
+                        .arrival(job, run, item, screen::FILE_REFUSED, &detail, now)
+                        .await
+                    {
+                        Ok(Arrival::Taken) => {
+                            println!(
+                                "Subtitle job {job}: the site's check was passed but its file was refused"
+                            );
+                            wake.notify_one();
+                        }
+                        Ok(Arrival::Stale { item_open: true }) => {}
+                        Ok(Arrival::Stale { item_open: false }) => {
+                            let _ = tokio::fs::remove_dir_all(&staging).await;
+                        }
+                        Err(err) => {
+                            eprintln!("Subtitle job {job}: the refusal of the site's check: {err}")
                         }
                     }
                     break;

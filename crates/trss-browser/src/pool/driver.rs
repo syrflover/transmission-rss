@@ -161,11 +161,16 @@ fn on_event(pool: &Arc<PoolInner>, entry: &Arc<RunInner>, conn: &Connection, eve
                 entry.target_destroyed(&target);
             }
         }
+        // A navigation the browser turns into a download is answered first:
+        // what the answer said is the download's (`download_began`). The
+        // documents of the run's pages are told on (`page_documents`).
+        "Network.responseReceived" => entry.response_received(params),
         "Browser.downloadWillBegin" => {
             if let Some(guid) = text(&params["guid"]) {
                 entry.download_began(
                     &guid,
                     params["url"].as_str().unwrap_or_default(),
+                    params["frameId"].as_str(),
                     params["suggestedFilename"].as_str().unwrap_or_default(),
                     pool.now(),
                 );

@@ -17,10 +17,25 @@
 //! through the same steps as any other file (`docs/specs/jobs.md`, 공통 수신
 //! 결과와 실패 분류).
 //!
-//! A source that adds a site (erulabo, ticket 0041) adds a variant to
-//! [`AuthPage`] and its driver: what opens the post, where the download card
-//! is, and how its file arrives are its own; the binding, the remote screen
-//! and the receipt are the same.
+//! A site adds a variant to [`AuthPage`] and its driver: what opens the post,
+//! where the download card is, and how its file arrives are its own; the
+//! binding, the remote screen and the receipt are the same. erulabo
+//! ([`crate::erulabo`]) is the real one: its check goes away after 30
+//! seconds, so a person's opening of the job's screen brings it back
+//! ([`AuthBrowser::rearm`]), and an answer that is a web page instead of its
+//! file ends the wait ([`Waited::Refused`]).
+//!
+//! # What the download's answer said
+//!
+//! The browser reports the answer of the navigation it turned into the
+//! download ([`trss_browser::DownloadAnswer`]): its status, media type,
+//! `Content-Length` and `Last-Modified`, and the address, which stays in
+//! memory. When the address is a Google Drive file's, its ID is taken from
+//! it (user decision, 2026-10-02: to learn how a creator revises a file).
+//! These go to a file beside the downloaded one in the item's folder
+//! ([`ANSWER`]), and from there to the file's snapshot and its receipt
+//! ([`arrived`]); the folder goes when the item settles. A refusal is kept
+//! the same way ([`REFUSED`]) until the item's next run fails it.
 //!
 //! [`BrowserAuth`] is the [`AuthBrowser`] over a [`trss_browser::BrowserPool`].
 //!
@@ -28,17 +43,31 @@
 //! browser's own words are not logged either, only the kind of a failure.
 
 use std::{
+    collections::{HashMap, HashSet},
     future::Future,
     path::{Path, PathBuf},
     pin::Pin,
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
 use serde_json::{json, Value};
-use trss_browser::{BrowserError, BrowserPool, BrowserRun, DownloadState, Page};
+use tokio::sync::broadcast::error::RecvError;
+use trss_browser::{
+    BrowserError, BrowserPool, BrowserRun, Download, DownloadState, Page, PageDocument,
+};
 use url::Url;
 
-use crate::{fake, Failure, FailureKind, PostFile};
+use crate::{drive, erulabo, fake, http, Failure, FailureKind, PostFile, Snapshot};
+
+/// The file beside a downloaded one that says what its answer said. A
+/// download's name never starts with a dot ([`trss_browser::safe_file_name`]),
+/// so the two never meet.
+pub const ANSWER: &str = ".answer";
+/// The file in an item's folder that says the download was refused.
+pub const REFUSED: &str = ".refused";
+/// The snapshot's name for a Google Drive file's ID.
+pub const DRIVE_ID: &str = "drive_id";
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -54,6 +83,8 @@ pub enum AuthPage {
     /// The fake source's post ([`fake`]): its pages are served inside the
     /// browser, with no network.
     Fake(fake::FakeCheck),
+    /// An erulabo post and the card of the episode ([`erulabo`]).
+    Erulabo(erulabo::ErulaboCheck),
 }
 
 impl AuthPage {
@@ -61,6 +92,16 @@ impl AuthPage {
     pub fn reason(&self) -> &'static str {
         match self {
             AuthPage::Fake(_) => fake::CHECK_REASON,
+            AuthPage::Erulabo(_) => erulabo::CHECK_REASON,
+        }
+    }
+
+    /// What the post said about itself when it was opened, for the file's
+    /// snapshot.
+    pub fn snapshot(&self) -> Snapshot {
+        match self {
+            AuthPage::Fake(_) => Snapshot::default(),
+            AuthPage::Erulabo(check) => check.snapshot().clone(),
         }
     }
 }
@@ -92,6 +133,10 @@ pub enum Waited {
     /// file the browser's folder could hand over): `reason` says which. The
     /// page is still there, so the wait can go on.
     NotTaken { reason: String },
+    /// Where the file should have come from answered with a web page instead
+    /// (an expired address, a file gone): the item fails with it. Nothing
+    /// asks the address again.
+    Refused(Failure),
     /// The run is over (idle, lost, ended): nothing more comes from it.
     Ended,
 }
@@ -127,6 +172,13 @@ pub trait AuthBrowser: Send + Sync {
 
     /// The job needs no more of the browser: its run goes.
     fn release<'a>(&'a self, job: &'a str) -> BoxFuture<'a, ()>;
+
+    /// A person opened the job's screen of the live run `run_id`: a page
+    /// whose check went away is brought back to it. Nothing by default.
+    fn rearm<'a>(&'a self, job: &'a str, run_id: &'a str) -> BoxFuture<'a, ()> {
+        let _ = (job, run_id);
+        Box::pin(async {})
+    }
 }
 
 /// The key of a file a post gave through the browser: the post's host and
@@ -139,10 +191,167 @@ pub fn file_key(post: &Url, name: &str) -> String {
     )
 }
 
+/// What a download's answer said, as [`ANSWER`] keeps it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Answered {
+    pub status: Option<u16>,
+    pub content_type: Option<String>,
+    pub content_length: Option<u64>,
+    pub last_modified: Option<String>,
+    /// The Google Drive file's ID, when the download came from one.
+    pub drive_id: Option<String>,
+}
+
+impl Answered {
+    /// What `download` tells: its answer, and the Drive ID of its address.
+    /// The address itself is not kept.
+    pub fn of(download: &Download) -> Answered {
+        let answer = download.answer.clone().unwrap_or_default();
+        let drive_id =
+            download
+                .source
+                .as_ref()
+                .and_then(|source| match drive::link(source.url()) {
+                    Some(drive::Link::File(id)) => Some(id),
+                    _ => None,
+                });
+        Answered {
+            status: download.answer.as_ref().and_then(|a| a.status),
+            content_type: answer.content_type,
+            content_length: answer.content_length,
+            last_modified: answer.last_modified,
+            drive_id,
+        }
+    }
+
+    fn to_json(&self) -> Value {
+        json!({
+            "status": self.status,
+            "content_type": self.content_type,
+            "content_length": self.content_length,
+            "last_modified": self.last_modified,
+            "drive_id": self.drive_id,
+        })
+    }
+
+    fn from_json(value: &Value) -> Answered {
+        let text = |key: &str| value[key].as_str().map(str::to_owned);
+        Answered {
+            status: value["status"].as_u64().and_then(|s| u16::try_from(s).ok()),
+            content_type: text("content_type"),
+            content_length: value["content_length"].as_u64(),
+            last_modified: text("last_modified"),
+            drive_id: text("drive_id"),
+        }
+    }
+}
+
+/// Keeps what `answered` says beside the file that is to come into
+/// `staging` (written whole, then renamed).
+pub async fn record_answer(staging: &Path, answered: &Answered) -> std::io::Result<()> {
+    write_whole(staging, ANSWER, answered.to_json().to_string().as_bytes()).await
+}
+
+/// Keeps `failure`, the refusal of the item's download, in its folder
+/// `staging` for the item's next run ([`staged`]).
+pub async fn record_refusal(staging: &Path, failure: &Failure) -> std::io::Result<()> {
+    let kept = json!({
+        "kind": failure.kind.code(),
+        "reason": failure.reason,
+        "status": failure.status,
+        "content_type": failure.content_type,
+    });
+    write_whole(staging, REFUSED, kept.to_string().as_bytes()).await
+}
+
+async fn write_whole(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<()> {
+    tokio::fs::create_dir_all(dir).await?;
+    let part = dir.join(format!("{name}.part"));
+    tokio::fs::write(&part, bytes).await?;
+    tokio::fs::rename(&part, dir.join(name)).await
+}
+
+/// What an item's folder holds from its check.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Staged {
+    /// The file the browser downloaded.
+    File { name: String, path: PathBuf },
+    /// The answer that refused it.
+    Refused(Failure),
+}
+
+/// What the item's folder `dir` holds: a refusal, or the downloaded file (the
+/// one file whose name does not start with a dot), or nothing.
+pub async fn staged(dir: &Path) -> Option<Staged> {
+    if let Ok(bytes) = tokio::fs::read(dir.join(REFUSED)).await {
+        let kept: Value = serde_json::from_slice(&bytes).unwrap_or_default();
+        let kind = kept["kind"]
+            .as_str()
+            .and_then(FailureKind::parse)
+            .unwrap_or(FailureKind::NotAFile);
+        let failure = Failure::new(
+            kind,
+            kept["reason"]
+                .as_str()
+                .unwrap_or("파일 대신 웹 페이지가 왔어요"),
+        )
+        .with_response(
+            kept["status"].as_u64().and_then(|s| u16::try_from(s).ok()),
+            kept["content_type"].as_str().map(str::to_owned),
+            None,
+        );
+        return Some(Staged::Refused(failure));
+    }
+    let mut entries = tokio::fs::read_dir(dir).await.ok()?;
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') {
+            continue;
+        }
+        if entry.file_type().await.is_ok_and(|t| t.is_file()) {
+            return Some(Staged::File {
+                name,
+                path: entry.path(),
+            });
+        }
+    }
+    None
+}
+
 /// The post's file that a download made, now at `path`: the job receives it
-/// from there ([`PostFile`]'s staged path).
-pub fn arrived(post: &Url, name: &str, path: PathBuf) -> PostFile {
-    PostFile::new(file_key(post, name), name.to_owned()).with_staged(path)
+/// from there ([`PostFile`]'s staged path). Its snapshot is what the post
+/// said about itself (`page`) and what the download's answer said
+/// ([`ANSWER`], beside the file); the answer's status and media type go with
+/// the receipt. The length it announced goes only into the snapshot
+/// (`content_length`): the job holds the file to its own length.
+pub async fn arrived(post: &Url, page: &AuthPage, name: &str, path: PathBuf) -> PostFile {
+    let answered = match path.parent() {
+        Some(dir) => tokio::fs::read(dir.join(ANSWER))
+            .await
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+            .map(|value| Answered::from_json(&value)),
+        None => None,
+    };
+    let mut snapshot = page.snapshot();
+    let mut file = PostFile::new(file_key(post, name), name.to_owned());
+    if let Some(answered) = &answered {
+        if let Some(id) = &answered.drive_id {
+            snapshot.push(DRIVE_ID, id.clone());
+        }
+        if let Some(modified) = &answered.last_modified {
+            snapshot.push(http::LAST_MODIFIED, modified.clone());
+        }
+        if let Some(length) = answered.content_length {
+            snapshot.push(drive::CONTENT_LENGTH, length.to_string());
+        }
+        file = file.with_answer(crate::StagedAnswer {
+            status: answered.status,
+            content_type: answered.content_type.clone(),
+        });
+    }
+    file.snapshot = snapshot;
+    file.with_staged(path)
 }
 
 /// A failure of the browser, in words that are the same whatever the browser
@@ -160,32 +369,68 @@ fn browser_failure(err: BrowserError) -> Failure {
 }
 
 /// Scrolls the element `find` (a JavaScript expression that gives it, or
-/// `null`) to the middle of the screen and clicks its middle with the mouse,
-/// as a person does: the check a site shows in its place is then on the first
-/// screen of a PC and of a phone. Whether the element was there.
+/// `null`) to the middle of the screen at once and clicks its middle with the
+/// mouse, as a person does: the check a site shows in its place is then on
+/// the first screen of a PC and of a phone. Whether the element was there;
+/// an element something else covers is [`FailureKind::Changed`] and is not
+/// clicked.
 pub async fn click_centered(page: &Page, find: &str) -> Result<bool, Failure> {
+    // `instant`: a page that scrolls smoothly (`scroll-behavior: smooth`, as
+    // erulabo's does) would still be on its way, and the point read now would
+    // be where the element was, not where it ends up. The point counts only
+    // if the element itself is what a click there reaches (nothing covers it).
     let script = format!(
         "(() => {{ const el = ({find}); if (!el) return null;
-           el.scrollIntoView({{block: 'center', inline: 'center'}});
+           el.scrollIntoView({{block: 'center', inline: 'center', behavior: 'instant'}});
            const r = el.getBoundingClientRect();
-           return JSON.stringify({{x: r.left + r.width / 2, y: r.top + r.height / 2}}); }})()"
+           const x = r.left + r.width / 2, y = r.top + r.height / 2;
+           const hit = document.elementFromPoint(x, y);
+           return JSON.stringify({{x, y, covered: !(hit && (hit === el || el.contains(hit)))}}); }})()"
     );
     let point = match page.evaluate(&script).await.map_err(browser_failure)? {
         Value::String(text) => serde_json::from_str::<Value>(&text)
             .map_err(|_| Failure::new(FailureKind::Changed, "누를 자리를 읽지 못했어요"))?,
         _ => return Ok(false),
     };
-    for (kind, button, count) in [
-        ("mouseMoved", "none", 0),
-        ("mousePressed", "left", 1),
-        ("mouseReleased", "left", 1),
-    ] {
+    if point["covered"] != Value::Bool(false) {
+        return Err(Failure::new(
+            FailureKind::Changed,
+            "누를 자리를 다른 것이 가리고 있어요",
+        ));
+    }
+    let (Some(x), Some(y)) = (point["x"].as_f64(), point["y"].as_f64()) else {
+        return Err(Failure::new(
+            FailureKind::Changed,
+            "누를 자리를 읽지 못했어요",
+        ));
+    };
+    let mouse = |kind: &'static str, button: &'static str, count: u8| {
         page.send(
             "Input.dispatchMouseEvent",
-            json!({ "type": kind, "x": point["x"], "y": point["y"], "button": button, "clickCount": count }),
+            json!({ "type": kind, "x": x, "y": y, "button": button, "clickCount": count }),
         )
+    };
+    mouse("mouseMoved", "none", 0)
         .await
         .map_err(browser_failure)?;
+    // The page may have moved on since the point was read (the site's notice
+    // slides over it, the layout shifts): the press is made only where the
+    // element still is and nothing covers it.
+    let still = format!(
+        "(() => {{ const el = ({find}); if (!el) return false;
+           const r = el.getBoundingClientRect();
+           if ({x} < r.left || {x} > r.right || {y} < r.top || {y} > r.bottom) return false;
+           const hit = document.elementFromPoint({x}, {y});
+           return !!hit && (hit === el || el.contains(hit)); }})()"
+    );
+    if page.evaluate(&still).await.map_err(browser_failure)? != Value::Bool(true) {
+        return Err(Failure::new(
+            FailureKind::Changed,
+            "누르기 직전에 누를 자리가 바뀌어 누르지 않았어요",
+        ));
+    }
+    for (kind, button) in [("mousePressed", "left"), ("mouseReleased", "left")] {
+        mouse(kind, button, 1).await.map_err(browser_failure)?;
     }
     Ok(true)
 }
@@ -210,19 +455,64 @@ pub async fn wait_until(page: &Page, script: &str, wait: Duration) -> Result<boo
     }
 }
 
+/// The page of a job brought to its check: in memory, as the runs are.
+#[derive(Debug, Clone)]
+struct Shown {
+    run_id: String,
+    target_id: String,
+    post: Url,
+    page: AuthPage,
+}
+
 /// The [`AuthBrowser`] over a server browser pool.
 #[derive(Clone)]
 pub struct BrowserAuth {
     pool: BrowserPool,
     start_wait: Duration,
+    /// By job.
+    shown: Arc<Mutex<HashMap<String, Shown>>>,
+    /// The jobs whose page is being brought back to its check.
+    rearming: Arc<Mutex<HashSet<String>>>,
+    /// The runs that logged the host of a page they did not know.
+    unknown_hosts: Arc<FirstPerRun>,
+    #[cfg(feature = "test-hooks")]
+    page_setup: Option<PageSetup>,
 }
+
+/// What [`BrowserAuth::with_page_setup`] runs on each new page.
+#[cfg(feature = "test-hooks")]
+pub type PageSetup = Arc<dyn Fn(Page) -> BoxFuture<'static, ()> + Send + Sync>;
 
 impl BrowserAuth {
     pub fn new(pool: BrowserPool) -> BrowserAuth {
         BrowserAuth {
             pool,
             start_wait: START_WAIT,
+            shown: Arc::default(),
+            rearming: Arc::default(),
+            unknown_hosts: Arc::default(),
+            #[cfg(feature = "test-hooks")]
+            page_setup: None,
         }
+    }
+
+    /// The same, running `setup` on each page it opens before the page goes
+    /// to the post: for the tests of a site's page in the real browser image,
+    /// which answer the site's addresses from inside the browser. Only with
+    /// the `test-hooks` feature.
+    #[cfg(feature = "test-hooks")]
+    pub fn with_page_setup(mut self, setup: PageSetup) -> BrowserAuth {
+        self.page_setup = Some(setup);
+        self
+    }
+
+    fn shown(&self, job: &str, run_id: &str) -> Option<Shown> {
+        self.shown
+            .lock()
+            .expect("shown lock")
+            .get(job)
+            .filter(|s| s.run_id == run_id)
+            .cloned()
     }
 
     /// The browser as a job takes it.
@@ -253,8 +543,13 @@ impl BrowserAuth {
             .await
             .map_err(browser_failure)?;
         let page = run.new_page("about:blank").await.map_err(browser_failure)?;
+        #[cfg(feature = "test-hooks")]
+        if let Some(setup) = &self.page_setup {
+            setup(page.clone()).await;
+        }
         let driven = match request.page {
             AuthPage::Fake(check) => fake::drive_check(&page, request.post, check).await,
+            AuthPage::Erulabo(check) => erulabo::drive_check(&page, request.post, check).await,
         };
         if let Err(failure) = driven {
             let _ = page.close().await;
@@ -267,6 +562,15 @@ impl BrowserAuth {
                 let _ = other.close().await;
             }
         }
+        self.shown.lock().expect("shown lock").insert(
+            request.job.to_owned(),
+            Shown {
+                run_id: run.run_id().to_owned(),
+                target_id: page.target_id().to_owned(),
+                post: request.post.clone(),
+                page: request.page.clone(),
+            },
+        );
         Ok(Prepared {
             run_id: run.run_id().to_owned(),
             target_id: page.target_id().to_owned(),
@@ -277,15 +581,30 @@ impl BrowserAuth {
         let Some(run) = self.live(job, run_id) else {
             return Waited::Ended;
         };
-        let download = match run.download_finished().await {
-            Ok(download) => download,
-            Err(_) => return Waited::Ended,
+        // A site whose file can be refused with a page is watched for one.
+        let watched = self
+            .shown(job, run_id)
+            .is_some_and(|s| matches!(s.page, AuthPage::Erulabo(_)));
+        let download = tokio::select! {
+            download = run.download_finished() => match download {
+                Ok(download) => download,
+                Err(_) => return Waited::Ended,
+            },
+            refused = self.refusal(job, &run), if watched => return Waited::Refused(refused),
         };
         if download.state != DownloadState::Completed {
             return Waited::NotTaken {
                 reason: "브라우저의 다운로드가 끝나지 못했어요 (취소되었거나 크기 한도를 넘었어요)"
                     .to_owned(),
             };
+        }
+        // What the answer said goes first, so the file is never there
+        // without it. A later download writes its own over it.
+        if let Err(err) = record_answer(staging, &Answered::of(&download)).await {
+            eprintln!(
+                "trss-subtitles: what a download's answer said could not be kept: {}",
+                err.kind()
+            );
         }
         match run.move_download(&download, staging).await {
             Ok(moved) => Waited::File {
@@ -298,6 +617,94 @@ impl BrowserAuth {
                 Waited::NotTaken {
                     reason: format!("브라우저가 받은 파일을 가져오지 못했어요: {failure}"),
                 }
+            }
+        }
+    }
+}
+
+/// What a document a page of the run was answered with means to the wait.
+#[derive(Debug)]
+enum Judged {
+    /// It refuses the download instead of giving the file.
+    Refused(Failure),
+    /// A host the source does not know (`host` only, never the address): the
+    /// wait goes on, and the host is told so a real check can learn it.
+    UnknownHost(String),
+    Nothing,
+}
+
+/// Judges a document of one of the run's pages ([`erulabo::download_refusal`],
+/// [`erulabo::known_host`]).
+fn judge(document: &PageDocument) -> Judged {
+    let url = document.source.url();
+    let Some(host) = url.host_str() else {
+        return Judged::Nothing;
+    };
+    if let Some(status) = document.answer.status {
+        if let Some(failure) =
+            erulabo::download_refusal(url, status, document.answer.content_type.as_deref())
+        {
+            return Judged::Refused(failure);
+        }
+    }
+    if erulabo::known_host(host) {
+        Judged::Nothing
+    } else {
+        Judged::UnknownHost(host.to_owned())
+    }
+}
+
+/// Which jobs' runs did something already: once per run.
+#[derive(Debug, Default)]
+struct FirstPerRun(Mutex<HashMap<String, String>>);
+
+impl FirstPerRun {
+    /// Whether this is the first time for the run `run_id` of `job`.
+    fn first(&self, job: &str, run_id: &str) -> bool {
+        let mut seen = self.0.lock().expect("first lock");
+        if seen.get(job).is_some_and(|run| run == run_id) {
+            return false;
+        }
+        seen.insert(job.to_owned(), run_id.to_owned());
+        true
+    }
+
+    fn forget(&self, job: &str) {
+        self.0.lock().expect("first lock").remove(job);
+    }
+}
+
+impl BrowserAuth {
+    /// The first document of the run's pages that refuses its download
+    /// instead of giving the file ([`erulabo::download_refusal`]). Only the
+    /// pages' own documents count: the frames inside a page (Google's
+    /// sign-in, a Drive player) are not where the file comes from. Never, if
+    /// the run's events end.
+    async fn refusal(&self, job: &str, run: &BrowserRun) -> Failure {
+        let Ok(mut documents) = run.page_documents() else {
+            return std::future::pending().await;
+        };
+        loop {
+            match documents.recv().await {
+                Ok(document) => match judge(&document) {
+                    Judged::Refused(failure) => {
+                        eprintln!(
+                            "trss-subtitles: a download of a site's check was refused: {}",
+                            failure.kind.code()
+                        );
+                        return failure;
+                    }
+                    Judged::UnknownHost(host) => {
+                        if self.unknown_hosts.first(job, run.run_id()) {
+                            eprintln!(
+                                "trss-subtitles: a page of a site's check went to a host the source does not know: {host}"
+                            );
+                        }
+                    }
+                    Judged::Nothing => {}
+                },
+                Err(RecvError::Lagged(_)) => {}
+                Err(RecvError::Closed) => return std::future::pending().await,
             }
         }
     }
@@ -330,7 +737,55 @@ impl AuthBrowser for BrowserAuth {
     }
 
     fn release<'a>(&'a self, job: &'a str) -> BoxFuture<'a, ()> {
-        Box::pin(async move { self.pool.end_job(job).await })
+        Box::pin(async move {
+            self.shown.lock().expect("shown lock").remove(job);
+            self.unknown_hosts.forget(job);
+            self.pool.end_job(job).await
+        })
+    }
+
+    fn rearm<'a>(&'a self, job: &'a str, run_id: &'a str) -> BoxFuture<'a, ()> {
+        Box::pin(async move {
+            let Some(shown) = self.shown(job, run_id) else {
+                return;
+            };
+            let AuthPage::Erulabo(check) = &shown.page else {
+                return;
+            };
+            let Some(run) = self.live(job, run_id) else {
+                return;
+            };
+            // A person who passed the check has a download coming (or not yet
+            // taken): clicking the card then would start the check anew.
+            if run.download_active() {
+                return;
+            }
+            // One at a time: two screens opened together click once.
+            if !self
+                .rearming
+                .lock()
+                .expect("rearming lock")
+                .insert(job.to_owned())
+            {
+                return;
+            }
+            if let (Ok(_busy), Some(page)) = (
+                run.busy_guard(),
+                run.pages()
+                    .into_iter()
+                    .find(|p| p.target_id() == shown.target_id),
+            ) {
+                // The reasons are the driver's own words, with no address.
+                if let Err(failure) = erulabo::rearm(&page, &shown.post, check).await {
+                    eprintln!(
+                        "trss-subtitles: a site's check could not be brought back ({}): {}",
+                        failure.kind.code(),
+                        failure.reason
+                    );
+                }
+            }
+            self.rearming.lock().expect("rearming lock").remove(job);
+        })
     }
 }
 
@@ -338,15 +793,190 @@ impl AuthBrowser for BrowserAuth {
 mod tests {
     use super::*;
 
-    #[test]
-    fn a_file_that_came_through_the_browser_is_keyed_by_its_post_and_name_only() {
+    fn fake_page() -> AuthPage {
+        AuthPage::Fake(fake::FakeCheck {
+            name: "ep1".to_owned(),
+        })
+    }
+
+    #[tokio::test]
+    async fn a_file_that_came_through_the_browser_is_keyed_by_its_post_and_name_only() {
         let post = Url::parse("https://fake.trss.invalid/check/ep1?x=1").unwrap();
         assert_eq!(
             file_key(&post, "ep1.srt"),
             "browser:fake.trss.invalid/check/ep1#ep1.srt"
         );
-        let file = arrived(&post, "ep1.srt", PathBuf::from("/area/.tmp/x/ep1.srt"));
+        let file = arrived(
+            &post,
+            &fake_page(),
+            "ep1.srt",
+            PathBuf::from("/area/.tmp/x/ep1.srt"),
+        )
+        .await;
         assert_eq!(file.name, "ep1.srt");
         assert_eq!(file.staged(), Some(Path::new("/area/.tmp/x/ep1.srt")));
+        assert_eq!(file.snapshot, Snapshot::default());
+    }
+
+    #[tokio::test]
+    async fn what_the_answer_said_goes_with_the_file_and_its_address_does_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let answered = Answered {
+            status: Some(200),
+            content_type: Some("application/octet-stream".to_owned()),
+            content_length: Some(5),
+            last_modified: Some("Fri, 02 Oct 2026 02:11:11 GMT".to_owned()),
+            drive_id: Some("1AbC_d-E".to_owned()),
+        };
+        record_answer(dir.path(), &answered).await.unwrap();
+        let path = dir.path().join("ep1.zip");
+        std::fs::write(&path, b"12345").unwrap();
+        assert_eq!(
+            staged(dir.path()).await,
+            Some(Staged::File {
+                name: "ep1.zip".to_owned(),
+                path: path.clone()
+            })
+        );
+
+        let post = Url::parse("https://erulabo.com/859").unwrap();
+        let mut page_snapshot = Snapshot::default();
+        page_snapshot.push(erulabo::POST_MODIFIED, "2026-10-01T00:00:00+09:00");
+        let page = AuthPage::Erulabo(erulabo::ErulaboCheck::new(
+            "/file/abc".to_owned(),
+            "전생귀족3 (1)".to_owned(),
+            page_snapshot.clone(),
+        ));
+        let file = arrived(&post, &page, "ep1.zip", path).await;
+        let mut expected = page_snapshot;
+        expected.push(DRIVE_ID, "1AbC_d-E");
+        expected.push(http::LAST_MODIFIED, "Fri, 02 Oct 2026 02:11:11 GMT");
+        expected.push(drive::CONTENT_LENGTH, "5");
+        assert_eq!(file.snapshot, expected);
+        let fetch = crate::Source::Fake(fake::FakeSource)
+            .fetch(&post, &file)
+            .await
+            .unwrap();
+        assert_eq!(fetch.status, Some(200));
+        assert_eq!(
+            fetch.content_type.as_deref(),
+            Some("application/octet-stream")
+        );
+        assert_eq!(fetch.expected_size, Some(5));
+    }
+
+    #[tokio::test]
+    async fn a_refusal_kept_in_the_folder_comes_before_any_file_in_it() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(staged(dir.path()).await, None);
+        std::fs::write(dir.path().join("half.zip"), b"1").unwrap();
+        let refused = Failure::new(FailureKind::Expired, "받기 주소가 만료됐어요 (HTTP 403)")
+            .with_response(Some(403), Some("text/html".to_owned()), None);
+        record_refusal(dir.path(), &refused).await.unwrap();
+        assert_eq!(staged(dir.path()).await, Some(Staged::Refused(refused)));
+    }
+    fn document(url: &str, status: Option<u16>, content_type: Option<&str>) -> PageDocument {
+        PageDocument {
+            source: trss_browser::DownloadSource::new(Url::parse(url).unwrap()),
+            answer: trss_browser::DownloadAnswer {
+                status,
+                content_type: content_type.map(str::to_owned),
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn a_page_document_is_a_refusal_an_unknown_host_or_nothing() {
+        let kind = |d: PageDocument| match judge(&d) {
+            Judged::Refused(f) => format!("refused {}", f.kind.code()),
+            Judged::UnknownHost(host) => format!("unknown {host}"),
+            Judged::Nothing => "nothing".to_owned(),
+        };
+        // Google's sign-in as a page: Drive wants the person to sign in.
+        assert_eq!(
+            kind(document(
+                "https://accounts.google.com/v3/signin?continue=SECRET",
+                Some(200),
+                Some("text/html")
+            )),
+            "refused missing"
+        );
+        assert_eq!(
+            kind(document(
+                "https://drive.usercontent.google.com/download?id=ABCDEFGHIJKL&at=SECRET",
+                Some(403),
+                Some("text/html")
+            )),
+            "refused missing"
+        );
+        assert_eq!(
+            kind(document(
+                "https://erulabo.com/file/abc/download?signature=SECRET",
+                Some(429),
+                Some("text/html")
+            )),
+            "refused network"
+        );
+        // The file itself, the post, and a site the source never heard of: the
+        // host alone is named, and the wait goes on.
+        assert_eq!(
+            kind(document(
+                "https://drive.usercontent.google.com/download?id=A&at=SECRET",
+                Some(200),
+                Some("application/octet-stream")
+            )),
+            "nothing"
+        );
+        assert_eq!(
+            kind(document(
+                "https://erulabo.com/860",
+                Some(200),
+                Some("text/html")
+            )),
+            "nothing"
+        );
+        assert_eq!(
+            kind(document(
+                "https://download.example/f/SECRET?token=SECRET",
+                Some(403),
+                Some("text/html")
+            )),
+            "unknown download.example"
+        );
+        // An answer with no status says nothing about a refusal.
+        assert_eq!(
+            kind(document("https://accounts.google.com/signin", None, None)),
+            "nothing"
+        );
+    }
+
+    #[test]
+    fn an_unknown_host_is_told_once_per_run_of_a_job() {
+        let first = FirstPerRun::default();
+        assert!(first.first("j", "run-1"));
+        assert!(!first.first("j", "run-1"));
+        assert!(first.first("other", "run-1"));
+        assert!(first.first("j", "run-2"));
+        first.forget("j");
+        assert!(first.first("j", "run-2"));
+    }
+
+    #[test]
+    fn an_answer_with_no_status_is_kept_with_none_and_never_as_zero() {
+        let answered = Answered::of(&Download {
+            guid: "g".to_owned(),
+            file_name: "x.zip".to_owned(),
+            host: None,
+            source: None,
+            answer: Some(trss_browser::DownloadAnswer::default()),
+            state: DownloadState::Completed,
+            path: PathBuf::from("/x"),
+            received_bytes: 1,
+        });
+        assert_eq!(answered.status, None);
+        let again = Answered::from_json(&answered.to_json());
+        assert_eq!(again.status, None);
+        assert_eq!(again, answered);
     }
 }

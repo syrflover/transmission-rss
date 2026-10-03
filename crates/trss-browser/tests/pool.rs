@@ -823,6 +823,8 @@ async fn a_hard_link_and_a_made_up_name_in_the_browsers_folder_are_not_moved() {
             guid: guid.to_owned(),
             file_name: "x.zip".to_owned(),
             host: None,
+            source: None,
+            answer: None,
             state: DownloadState::Completed,
             path: run.downloads_dir().join(guid),
             received_bytes: 1,

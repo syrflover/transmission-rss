@@ -169,7 +169,7 @@ pub(crate) fn read_page(post: &Url, page: &str, episode: &str) -> Result<Opened,
 }
 
 /// The post's `dateModified` from its JSON-LD, when the theme writes one.
-fn date_modified(html: &Html) -> Option<String> {
+pub(crate) fn date_modified(html: &Html) -> Option<String> {
     let scripts =
         Selector::parse(r#"script[type="application/ld+json"]"#).expect("a valid selector");
     html.select(&scripts).find_map(|script| {
