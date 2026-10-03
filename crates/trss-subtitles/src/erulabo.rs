@@ -30,8 +30,13 @@
 //!   An answer that is a web page instead ([`download_refusal`]) ends the
 //!   item; the address is never asked for again, and a new receipt goes
 //!   through the check again.
-//! - Nothing is read again without the check: a recheck answers
-//!   [`FailureKind::Changed`], which the recheck records as unreadable.
+//! - A file cannot be read again without the check: [`ErulaboSource::recheck`]
+//!   answers [`FailureKind::Changed`] for every key. What the daily recheck
+//!   (`docs/specs/subtitles.md`, 구독 제작자 자동 수신) has instead is
+//!   [`ErulaboSource::recheck_post`]: the post read again over HTTP for its
+//!   `dateModified` (a change makes a person pass the check again), and a
+//!   `HEAD` of the Google Drive file whose ID the receipt kept, with no
+//!   cookie, recorded and never acted on.
 
 use std::{sync::Arc, time::Duration};
 
@@ -41,10 +46,11 @@ use url::Url;
 
 use crate::{
     auth::{self, AuthPage},
-    blogger, drive,
+    blogger,
+    drive::{self, Drive},
     episode::{self, Holds},
     http::{self, Limits, Pace, Reach},
-    Failure, FailureKind, FileInfo, Opened, Snapshot,
+    Failure, FailureKind, FileInfo, Opened, PostReading, Received, Snapshot,
 };
 
 /// The site's host.
@@ -196,16 +202,31 @@ pub fn choose_card(episode: &str, titles: &[&str]) -> Result<usize, String> {
     })
 }
 
+/// The page `html` as a post: it has the post's body, which a page of
+/// maintenance or a block does not.
+fn require_body(html: &Html) -> Result<(), Failure> {
+    let body = Selector::parse("#post-body").expect("a valid selector");
+    match html.select(&body).next() {
+        Some(_) => Ok(()),
+        None => Err(Failure::new(
+            FailureKind::Changed,
+            "게시물에서 본문을 찾지 못했어요",
+        )),
+    }
+}
+
+/// The post's `dateModified` on its page, `None` when the post does not say.
+pub(crate) fn read_modified(page: &str) -> Result<Option<String>, Failure> {
+    let html = Html::parse_document(page);
+    require_body(&html)?;
+    Ok(blogger::date_modified(&html))
+}
+
 /// What a post's page offers for `episode` (see the module docs).
 pub(crate) fn read_page(page: &str, episode: &str) -> Result<Opened, Failure> {
     let html = Html::parse_document(page);
     let select = |css: &str| Selector::parse(css).expect("a valid selector");
-    if html.select(&select("#post-body")).next().is_none() {
-        return Err(Failure::new(
-            FailureKind::Changed,
-            "게시물에서 본문을 찾지 못했어요",
-        ));
-    }
+    require_body(&html)?;
     let title_of = select(".og-title");
     let cards: Vec<(String, String)> = html
         .select(&select("#post-body button[data-file-url]"))
@@ -248,6 +269,9 @@ struct Inner {
     http: reqwest::Client,
     reach: Reach,
     pace: Pace,
+    /// Asks the Drive files the receipts kept the ID of (a `HEAD` each). The
+    /// other sources share it, so Drive's hosts are spaced together.
+    drive: Drive,
 }
 
 impl std::fmt::Debug for ErulaboSource {
@@ -256,27 +280,25 @@ impl std::fmt::Debug for ErulaboSource {
     }
 }
 
-impl Default for ErulaboSource {
-    fn default() -> Self {
-        ErulaboSource::new()
-    }
-}
-
 impl ErulaboSource {
-    /// The source over the network.
-    pub fn new() -> ErulaboSource {
+    /// The source over the network, observing Drive files through `drive`,
+    /// which the other sources share.
+    pub fn new(drive: Drive) -> ErulaboSource {
         ErulaboSource::over(
             reqwest::Client::builder(),
             Limits::default(),
             Reach::NETWORK,
+            drive,
         )
     }
 
-    /// The source with its own client, limits and reach (the tests' server).
+    /// The source with its own client, limits, reach and Drive (the tests'
+    /// server).
     pub(crate) fn over(
         builder: reqwest::ClientBuilder,
         limits: Limits,
         reach: Reach,
+        drive: Drive,
     ) -> ErulaboSource {
         // A post is followed only to the site's own posts.
         let follow =
@@ -286,6 +308,7 @@ impl ErulaboSource {
                 http: http::client(builder, follow),
                 reach,
                 pace: Pace::new(limits.spacing),
+                drive,
             }),
         }
     }
@@ -294,6 +317,42 @@ impl ErulaboSource {
         let address = post_address(post, self.inner.reach)?;
         let page = http::get_page(&self.inner.http, &self.inner.pace, &address).await?;
         read_page(&page, episode)
+    }
+
+    /// The post at `post` read again for what the daily recheck can see
+    /// without the check (see the module docs): its `dateModified`, and a
+    /// `HEAD` of each Drive file of `received` once. A post that is not one
+    /// (a page without its body) is [`FailureKind::Changed`]. The post is
+    /// read before Drive is asked, so a post that cannot be read costs no
+    /// request to Drive. Neither a Drive ID nor an address is in any failure.
+    pub(crate) async fn recheck_post(
+        &self,
+        post: &Url,
+        received: &[Received],
+    ) -> Result<PostReading, Failure> {
+        let address = post_address(post, self.inner.reach)?;
+        let page = http::get_page(&self.inner.http, &self.inner.pace, &address).await?;
+        let modified = read_modified(&page)?;
+        let mut observed: Vec<(String, Result<FileInfo, Failure>)> = Vec::new();
+        // One `HEAD` for a Drive file, however many receipts name it.
+        let mut asked: Vec<(&str, usize)> = Vec::new();
+        for file in received {
+            let Some(id) = &file.drive else {
+                continue;
+            };
+            if observed.iter().any(|(key, _)| *key == file.key) {
+                continue;
+            }
+            let answer = match asked.iter().find(|(seen, _)| *seen == id.as_str()) {
+                Some(&(_, at)) => observed[at].1.clone(),
+                None => {
+                    asked.push((id.as_str(), observed.len()));
+                    self.inner.drive.head(id).await
+                }
+            };
+            observed.push((file.key.clone(), answer));
+        }
+        Ok(PostReading { modified, observed })
     }
 
     /// Nothing of a file is told without the check (`docs/specs/subtitles.md`,
@@ -743,7 +802,7 @@ mod tests {
 
     #[tokio::test]
     async fn nothing_is_fetched_or_read_again_without_the_check() {
-        let source = ErulaboSource::new();
+        let source = ErulaboSource::new(drive::Drive::new());
         let post = Url::parse("https://erulabo.com/859").unwrap();
         let answers = source
             .recheck(&post, &["browser:erulabo.com/859#a.zip".to_owned()])

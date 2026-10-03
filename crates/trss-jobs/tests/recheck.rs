@@ -19,14 +19,15 @@ use trss_collect::store::channels::{
 use trss_core::{Clock, Db, DbError};
 use trss_jobs::{
     area::ReceiveArea, recheck::Report, store::JobDetail, Created, Follow, ItemState, JobState,
-    JobStore, NewItem, NewJob, Recheck, Runner, AUTO,
+    JobStore, NewItem, NewJob, Recheck, Runner, Wait, AUTO,
 };
 use trss_subtitles::{
+    auth::{self, Answered, AuthBrowser, BoxFuture, PrepareRequest, Prepared, Waited},
     testing::{
-        blogger_page, drive_link, naver_file, spec, DriveAnswer, FileAnswer, PostAnswer,
-        SourceServer,
+        blogger_page, drive_link, erulabo_page, naver_file, spec, DriveAnswer, FileAnswer,
+        PostAnswer, SourceServer,
     },
-    verify, Sources,
+    verify, Failure, Sources,
 };
 
 const ANIME: i64 = 3441;
@@ -143,7 +144,8 @@ impl World {
         let sources = Sources::none()
             .with_blogger(server.blogger())
             .with_tistory(server.source())
-            .with_naver(server.naver());
+            .with_naver(server.naver())
+            .with_erulabo(server.erulabo());
         let jobs = JobStore::new(db.clone());
         let runner = Runner::new(
             jobs.clone(),
@@ -1222,4 +1224,439 @@ async fn an_episode_the_user_does_not_receive_is_not_read_again() {
     assert_eq!(report.read(), 0);
     assert_eq!(w.drive_head_count(), 0);
     assert_eq!(w.record(&first).await, None);
+}
+
+// erulabo (ticket 0050): the files come only through the site's check, so the
+// post's `dateModified` is what the recheck compares, and the Drive file of
+// the receipt is only observed.
+
+/// The Drive file the creator's 5화 download of erulabo came from, as the
+/// receipt's snapshot kept its ID. It is the key to the file: it is in the
+/// receipt's snapshot and nowhere else.
+const ERULABO_DRIVE_ID: &str = "1erulaboepisode05";
+const POST_A: &str = "2026-10-01T09:00:00+09:00";
+const POST_B: &str = "2026-10-02T21:30:00+09:00";
+const ERULABO_POST: u32 = 859;
+const ERULABO_FILE: &str = "Show 05.srt";
+
+/// A browser that brings every post to its check and never gets a file: the
+/// job waits for a person (`인증 필요`).
+struct CheckOnly;
+
+impl AuthBrowser for CheckOnly {
+    fn prepare<'a>(
+        &'a self,
+        _request: PrepareRequest<'a>,
+    ) -> BoxFuture<'a, Result<Prepared, Failure>> {
+        Box::pin(async {
+            Ok(Prepared {
+                run_id: "run-1".to_owned(),
+                target_id: "target-1".to_owned(),
+            })
+        })
+    }
+
+    fn wait_file<'a>(
+        &'a self,
+        _job: &'a str,
+        _run_id: &'a str,
+        _staging: &'a std::path::Path,
+    ) -> BoxFuture<'a, Waited> {
+        Box::pin(async { Waited::Ended })
+    }
+
+    fn is_live(&self, _job: &str, _run_id: &str) -> bool {
+        true
+    }
+
+    fn touch(&self, _job: &str, _run_id: &str) -> bool {
+        true
+    }
+
+    fn release<'a>(&'a self, _job: &'a str) -> BoxFuture<'a, ()> {
+        Box::pin(async {})
+    }
+}
+
+impl World {
+    /// The creator's 5화 post on erulabo, observed, with a video in the
+    /// library. `modified` is the post's `dateModified` for each reading of
+    /// it, one after another, the last one again: the receipt's, the recheck's,
+    /// the next receipt's.
+    async fn erulabo_post(&self, modified: &[&str]) -> i64 {
+        self.server.erulabo_post(
+            ERULABO_POST,
+            modified
+                .iter()
+                .map(|m| {
+                    PostAnswer::Page(erulabo_page(
+                        &[
+                            ("/file/aaaa-5", "에루샤 (5)"),
+                            ("/file/bbbb-6", "에루샤 (6)"),
+                        ],
+                        m,
+                    ))
+                })
+                .collect(),
+        );
+        self.file(5, "mkv").await;
+        self.observe(
+            "에루샤",
+            "5",
+            &self.server.erulabo_url(ERULABO_POST),
+            "2026-10-02T11:00:00",
+        )
+        .await
+    }
+
+    /// What a person's passed check left in the item's folder: the file the
+    /// browser downloaded, and what its answer said (the Drive file it came
+    /// from).
+    async fn pass_check(&self, job: &str, bytes: &[u8], modified: &str) {
+        let item = self.detail(job).await.items[0].id;
+        let dir =
+            ReceiveArea::in_app_data(self._dir.path()).at(&format!(".tmp/check-{job}-{item}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(ERULABO_FILE), bytes).unwrap();
+        auth::record_answer(
+            &dir,
+            &Answered {
+                status: Some(200),
+                content_type: Some("application/octet-stream".to_owned()),
+                content_length: Some(bytes.len() as u64),
+                last_modified: Some(modified.to_owned()),
+                drive_id: Some(ERULABO_DRIVE_ID.to_owned()),
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    /// The subscribed creator's job for what was observed, run to the check,
+    /// the check passed (the file of `bytes`), and received.
+    async fn receive_through_the_check(&self, bytes: &[u8], modified: &str) -> String {
+        let made = self.follow.evaluate(NOW).await.unwrap();
+        assert_eq!(made.len(), 1, "one job for the observation");
+        self.pass_check(&made[0], bytes, modified).await;
+        self.run().await;
+        let d = self.detail(&made[0]).await;
+        assert_eq!(d.row.state, JobState::Done, "{:?}", d.events);
+        made[0].clone()
+    }
+
+    /// The recheck record of the first item of job `job`: (result, checks,
+    /// the job it made, what it observed).
+    async fn erulabo_record(&self, job: &str) -> (String, i64, Option<String>, serde_json::Value) {
+        let job = job.to_owned();
+        self.db
+            .run::<_, DbError, _>(move |c| {
+                Ok(c.query_row(
+                    "SELECT r.result, r.checks, r.job_id, r.observed FROM subtitle_item_rechecks r
+                       JOIN subtitle_job_items i ON i.id = r.item_id WHERE i.job_id = ?1",
+                    [job],
+                    |r| {
+                        let observed: String = r.get(3)?;
+                        Ok((
+                            r.get(0)?,
+                            r.get(1)?,
+                            r.get(2)?,
+                            serde_json::from_str(&observed).unwrap(),
+                        ))
+                    },
+                )?)
+            })
+            .await
+            .unwrap()
+    }
+
+    /// Where `needle` is in the database, as `table.column`.
+    async fn where_is(&self, needle: &str) -> Vec<String> {
+        let needle = needle.to_owned();
+        self.db
+            .run::<_, DbError, _>(move |c| {
+                let tables: Vec<String> = c
+                    .prepare(
+                        "SELECT name FROM sqlite_master
+                          WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+                    )?
+                    .query_map([], |r| r.get(0))?
+                    .collect::<rusqlite::Result<_>>()?;
+                let mut found = Vec::new();
+                for table in tables {
+                    let columns: Vec<String> = c
+                        .prepare(&format!("SELECT name FROM pragma_table_info('{table}')"))?
+                        .query_map([], |r| r.get(0))?
+                        .collect::<rusqlite::Result<_>>()?;
+                    for column in columns {
+                        let hits: i64 = c.query_row(
+                            &format!(
+                                "SELECT count(*) FROM \"{table}\"
+                                  WHERE instr(CAST(\"{column}\" AS TEXT), ?1) > 0"
+                            ),
+                            [&needle],
+                            |r| r.get(0),
+                        )?;
+                        if hits > 0 {
+                            found.push(format!("{table}.{column}"));
+                        }
+                    }
+                }
+                Ok(found)
+            })
+            .await
+            .unwrap()
+    }
+
+    /// How many times erulabo's post was read.
+    fn erulabo_reads(&self) -> usize {
+        self.server
+            .seen()
+            .iter()
+            .filter(|s| s.host == "erulabo.com")
+            .count()
+    }
+}
+
+#[tokio::test]
+async fn an_erulabo_post_whose_modified_time_changed_raises_a_check_to_do_and_receives_nothing() {
+    let w = World::new().await;
+    let first_observed = w.erulabo_post(&[POST_A, POST_B]).await;
+    // The Drive file at the recheck: the same as received.
+    w.server.drive(
+        ERULABO_DRIVE_ID,
+        vec![file(ERULABO_FILE, SRT_A, MODIFIED_A)],
+    );
+    let first = w.receive_through_the_check(SRT_A, MODIFIED_A).await;
+    // What the receipt kept of the file.
+    let kept = w.detail(&first).await.items[0].files[0].clone();
+    assert_eq!(kept.file_key, "browser:erulabo.com/859#Show 05.srt");
+    w.file(5, "ass").await;
+    let library = w.library().await;
+    let reads_before = w.erulabo_reads();
+
+    // Three days later the post says it was fixed.
+    let report = w.recheck_at(3 * DAY).await;
+    assert_eq!((report.changed, report.read()), (1, 1));
+    assert_eq!(report.jobs.len(), 1);
+    // The post was read once, by HTTP.
+    assert_eq!(w.erulabo_reads(), reads_before + 1);
+    let d = w.detail(&report.jobs[0]).await;
+    assert_eq!(d.row.origin, AUTO);
+    assert_eq!(d.row.state, JobState::Pending);
+    assert_eq!(d.row.revision_of, Some(first_observed));
+    assert_eq!(d.row.revises_job.as_deref(), Some(first.as_str()));
+    assert_eq!(d.row.creator.as_deref(), Some("에루샤"));
+    assert_eq!(d.items[0].observation_id, Some(first_observed));
+    assert_eq!(d.items[0].post_url, w.server.erulabo_url(ERULABO_POST));
+    assert!(d.events.iter().all(|e| e.at == NOW + 3 * DAY));
+    assert_eq!(
+        d.events[0].message,
+        "게시물의 수정 시각이 받은 때와 달라서 다시 받아요"
+    );
+    assert_eq!(
+        d.events[0].detail.as_deref(),
+        Some(format!("{POST_A} → {POST_B} · 사이트 확인을 거쳐야 받을 수 있어요").as_str())
+    );
+    let (result, checks, made, _) = w.erulabo_record(&first).await;
+    assert_eq!(
+        (result.as_str(), checks, made.as_deref()),
+        ("changed", 1, Some(report.jobs[0].as_str()))
+    );
+    // Nothing was received, and the library is as it was.
+    assert!(d.items[0].files.is_empty());
+    assert_eq!(w.library().await, library);
+    assert_eq!(w.job_count().await, 2);
+
+    // The job opens the post and stops at the site's check: a to-do for a
+    // person (`인증 필요`), which the person passes on the remote screen.
+    let runner = Runner::new(
+        w.jobs.clone(),
+        w.sources.clone(),
+        ReceiveArea::in_app_data(w._dir.path()),
+        ticking_clock(),
+    )
+    .with_auth(Arc::new(CheckOnly));
+    runner.run_ready(&CancellationToken::new()).await.unwrap();
+    let d = w.detail(&report.jobs[0]).await;
+    assert_eq!(
+        (d.row.state, d.row.wait),
+        (JobState::Waiting, Some(Wait::Auth))
+    );
+    assert_eq!(
+        (d.items[0].state, d.items[0].wait),
+        (ItemState::Waiting, Some(Wait::Auth))
+    );
+    assert!(d.items[0].files.is_empty());
+    let waits = w.jobs.auth_waits().await.unwrap();
+    assert_eq!(
+        waits.iter().map(|j| j.id.as_str()).collect::<Vec<_>>(),
+        [report.jobs[0].as_str()]
+    );
+    assert_eq!(w.library().await, library);
+
+    // While that to-do waits the episode is not read again, so no second
+    // to-do comes of the same post.
+    let reads = w.erulabo_reads();
+    let report = w.recheck_at(4 * DAY).await;
+    assert_eq!(report.read(), 0);
+    assert_eq!(w.erulabo_reads(), reads);
+    assert_eq!(w.job_count().await, 2);
+    // The revision job's request, its events and its wait at the check hold
+    // no Drive ID either.
+    assert_eq!(
+        w.where_is(ERULABO_DRIVE_ID).await,
+        ["subtitle_job_files.snapshot"]
+    );
+}
+
+#[tokio::test]
+async fn a_post_edited_in_its_text_only_is_received_once_more_through_the_check_and_then_agrees() {
+    let w = World::new().await;
+    w.erulabo_post(&[POST_A, POST_B]).await;
+    w.server.drive(
+        ERULABO_DRIVE_ID,
+        vec![file(ERULABO_FILE, SRT_A, MODIFIED_A)],
+    );
+    let first = w.receive_through_the_check(SRT_A, MODIFIED_A).await;
+    w.file(5, "ass").await;
+
+    let report = w.recheck_at(3 * DAY).await;
+    assert_eq!(report.jobs.len(), 1);
+    // The person passes the check; the file is the same bytes.
+    w.pass_check(&report.jobs[0], SRT_A, MODIFIED_A).await;
+    w.run().await;
+    let d = w.detail(&report.jobs[0]).await;
+    assert_eq!(d.row.state, JobState::Done, "{:?}", d.events);
+    assert_eq!(d.items[0].unchanged_from.as_deref(), Some(first.as_str()));
+
+    // That receipt has the post's new time, so the next reading finds the post
+    // as it is and makes nothing; the window is the first receipt's.
+    let report = w.recheck_at(4 * DAY).await;
+    assert_eq!((report.same, report.read()), (1, 1));
+    assert!(report.jobs.is_empty());
+    assert_eq!(w.job_count().await, 2);
+    assert_eq!(w.recheck_at(14 * DAY + HOUR).await.read(), 0);
+    // Two receipts through the check and a revision job: the ID is still only
+    // in the receipts' snapshots.
+    assert_eq!(
+        w.where_is(ERULABO_DRIVE_ID).await,
+        ["subtitle_job_files.snapshot"]
+    );
+}
+
+#[tokio::test]
+async fn a_changed_drive_file_with_the_post_as_it_was_is_only_recorded_and_the_id_is_nowhere_else()
+{
+    let w = World::new().await;
+    w.erulabo_post(&[POST_A]).await;
+    // The Drive file at the first look, and as it is on the next day.
+    w.server.drive(
+        ERULABO_DRIVE_ID,
+        vec![
+            file(ERULABO_FILE, SRT_B, MODIFIED_B),
+            file(ERULABO_FILE, SRT_A, MODIFIED_A),
+        ],
+    );
+    let first = w.receive_through_the_check(SRT_A, MODIFIED_A).await;
+    w.file(5, "ass").await;
+    let library = w.library().await;
+    let jobs = w.job_count().await;
+    assert_eq!(w.drive_head_count(), 0);
+
+    // The first look: the file is longer than it was received, the post is not
+    // fixed. Only the observation is recorded.
+    let report = w.recheck_at(3 * DAY).await;
+    assert_eq!((report.same, report.changed, report.read()), (1, 0, 1));
+    assert!(report.jobs.is_empty());
+    assert_eq!(w.drive_head_count(), 1);
+    let (result, checks, made, observed) = w.erulabo_record(&first).await;
+    assert_eq!((result.as_str(), checks, made), ("same", 1, None));
+    assert_eq!(
+        observed,
+        serde_json::json!([
+            {"post": true, "modified": POST_A, "was": POST_A},
+            {
+                "key": "browser:erulabo.com/859#Show 05.srt",
+                "size": SRT_B.len(),
+                "last_modified": MODIFIED_B,
+            },
+        ])
+    );
+    // No to-do, no job, nothing received.
+    assert_eq!(w.job_count().await, jobs);
+    assert!(w.jobs.auth_waits().await.unwrap().is_empty());
+    assert_eq!(w.library().await, library);
+
+    // The next day's observation replaces it.
+    let report = w.recheck_at(4 * DAY).await;
+    assert_eq!((report.same, report.jobs.len()), (1, 0));
+    let (result, checks, _, observed) = w.erulabo_record(&first).await;
+    assert_eq!((result.as_str(), checks), ("same", 2));
+    assert_eq!(observed[1]["size"], SRT_A.len());
+    assert_eq!(observed[1]["last_modified"], MODIFIED_A);
+    assert_eq!(w.job_count().await, jobs);
+
+    // Drive was asked with a `HEAD`, no cookie and no `Referer`, and the ID is
+    // in the receipt's snapshot and nowhere else in the database: not in the
+    // record, the jobs' requests, their events or their errors. What is
+    // printed and what the web API shows are seen by reading the code.
+    let seen = w.server.seen();
+    let heads: Vec<_> = seen.iter().filter(|s| s.method == "HEAD").collect();
+    assert_eq!(heads.len(), 2);
+    assert!(heads.iter().all(|s| !s.cookie && !s.referer));
+    assert_eq!(
+        w.where_is(ERULABO_DRIVE_ID).await,
+        ["subtitle_job_files.snapshot"]
+    );
+}
+
+#[tokio::test]
+async fn an_erulabo_post_that_cannot_be_compared_or_read_is_recorded_and_makes_nothing() {
+    let w = World::new().await;
+    w.erulabo_post(&[POST_A]).await;
+    w.server.drive(
+        ERULABO_DRIVE_ID,
+        vec![file(ERULABO_FILE, SRT_A, MODIFIED_A)],
+    );
+    let first = w.receive_through_the_check(SRT_A, MODIFIED_A).await;
+    w.file(5, "ass").await;
+    let jobs = w.job_count().await;
+
+    // The Drive file is gone and the post is as it was: the observation says
+    // so and the post's verdict stands.
+    w.server.drive(ERULABO_DRIVE_ID, vec![DriveAnswer::Missing]);
+    let report = w.recheck_at(2 * DAY).await;
+    assert_eq!((report.same, report.read()), (1, 1));
+    let (result, _, _, observed) = w.erulabo_record(&first).await;
+    assert_eq!(result, "same");
+    assert_eq!(observed[1]["problem"], "missing");
+
+    // A post that is gone, one that cannot be reached, a page that is not the
+    // post, and a post that does not say when it was modified (nothing to
+    // compare).
+    for (answer, expected) in [
+        (PostAnswer::Status(404), "missing"),
+        (PostAnswer::Status(503), "failed"),
+        (
+            PostAnswer::Page("<html><body>점검 중</body></html>".into()),
+            "unreadable",
+        ),
+        (
+            PostAnswer::Page(r#"<html><body><div id="post-body"></div></body></html>"#.into()),
+            "unreadable",
+        ),
+    ] {
+        w.server.erulabo_post(ERULABO_POST, vec![answer]);
+        let day = 2 + w.erulabo_record(&first).await.1;
+        let report = w.recheck_at(day * DAY).await;
+        assert_eq!(report.read(), 1, "{expected}");
+        let (result, _, made, _) = w.erulabo_record(&first).await;
+        assert_eq!((result.as_str(), made), (expected, None));
+        assert!(report.jobs.is_empty());
+    }
+    assert_eq!(w.job_count().await, jobs);
+    assert_eq!(
+        w.where_is(ERULABO_DRIVE_ID).await,
+        ["subtitle_job_files.snapshot"]
+    );
 }

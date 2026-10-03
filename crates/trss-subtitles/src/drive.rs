@@ -83,7 +83,7 @@ fn drive_host(host: &str) -> bool {
 }
 
 /// An ID as Drive makes them: letters, digits, `-` and `_`.
-fn valid_id(id: &str) -> bool {
+pub(crate) fn valid_id(id: &str) -> bool {
     (10..=128).contains(&id.len())
         && id
             .bytes()

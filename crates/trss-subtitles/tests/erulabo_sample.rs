@@ -544,7 +544,7 @@ async fn a_fake_erulabo_post_is_brought_to_its_check_and_its_answer_is_kept() {
     expected.push("content_length", SRT.len().to_string());
     assert_eq!(file.snapshot, expected);
     let source = Sources::none()
-        .with_erulabo(ErulaboSource::new())
+        .with_erulabo(ErulaboSource::new(trss_subtitles::drive::Drive::new()))
         .for_post(&post)
         .unwrap();
     let fetch = source.fetch(&post, &file).await.unwrap();
@@ -612,7 +612,7 @@ async fn a_real_erulabo_post_waits_at_its_check_on_the_first_screen() {
     let auth = BrowserAuth::new(pool.clone());
 
     let source = Sources::none()
-        .with_erulabo(ErulaboSource::new())
+        .with_erulabo(ErulaboSource::new(trss_subtitles::drive::Drive::new()))
         .for_post(&post)
         .unwrap();
     let Opened::BrowserAuth { reason, page } = source.open(&post, &episode).await.unwrap() else {

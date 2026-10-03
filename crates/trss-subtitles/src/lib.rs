@@ -208,6 +208,56 @@ pub struct FileInfo {
     pub last_modified: Option<String>,
 }
 
+/// A file received after a site's check, as the receipt kept it: what a source
+/// whose files cannot be read again without the check ([`Source::recheck_post`])
+/// needs to look at the file from outside. The Google Drive file's ID is a key
+/// to the file, so this type's `Debug` hides it.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Received {
+    key: String,
+    drive: Option<String>,
+}
+
+impl Received {
+    /// The file `key` of a post and, when the download came from Google Drive,
+    /// the ID the receipt's snapshot kept for it (one that is not a Drive ID
+    /// is dropped).
+    pub fn new(key: impl Into<String>, drive_id: Option<&str>) -> Received {
+        Received {
+            key: key.into(),
+            drive: drive_id.filter(|id| drive::valid_id(id)).map(str::to_owned),
+        }
+    }
+
+    pub fn key(&self) -> &str {
+        &self.key
+    }
+}
+
+impl std::fmt::Debug for Received {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Received")
+            .field("key", &self.key)
+            .field("drive", &self.drive.as_ref().map(|_| "<hidden>"))
+            .finish()
+    }
+}
+
+/// What a source read again about a post whose files it cannot read without a
+/// person's check ([`Source::recheck_post`]; `docs/specs/subtitles.md`, 구독
+/// 제작자 자동 수신).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PostReading {
+    /// The post's own modified time (`dateModified`) as it is now, in the
+    /// words the snapshot of a receipt keeps it. `None` when the post does not
+    /// say.
+    pub modified: Option<String>,
+    /// What the site tells, with no check, about the received files that come
+    /// from a Google Drive file (a `HEAD`), one answer per such file key. It
+    /// is observed and recorded, never a reason to receive again.
+    pub observed: Vec<(String, Result<FileInfo, Failure>)>,
+}
+
 /// What opening a post came to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Opened {
@@ -549,6 +599,27 @@ impl Source {
             Source::Blogger(source) => source.recheck(post, keys).await,
             Source::Naver(source) => source.recheck(post, keys).await,
             Source::Erulabo(source) => source.recheck(post, keys).await,
+        }
+    }
+
+    /// For a source whose files come only through a person's check (erulabo):
+    /// reads the post at `post` again over HTTP, with no browser, for its
+    /// modified time, and asks Google Drive, for each of `received` that came
+    /// from a Drive file, what a `HEAD` of it says. `None` for a source that
+    /// reads its files directly ([`Source::recheck`]).
+    ///
+    /// The post is read once and each Drive file asked for once. Requests
+    /// keep the sources' spacing per host. A post that cannot be read is the
+    /// failure ([`FailureKind::Missing`] for a post that is gone); a Drive
+    /// file that cannot be read is its own failure within `observed`.
+    pub async fn recheck_post(
+        &self,
+        post: &Url,
+        received: &[Received],
+    ) -> Option<Result<PostReading, Failure>> {
+        match self {
+            Source::Erulabo(source) => Some(source.recheck_post(post, received).await),
+            Source::Fake(_) | Source::Tistory(_) | Source::Blogger(_) | Source::Naver(_) => None,
         }
     }
 

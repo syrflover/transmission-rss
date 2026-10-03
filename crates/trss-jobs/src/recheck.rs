@@ -56,7 +56,8 @@
 //! and a Drive file's `Last-Modified` against the one it was received with. A
 //! value the site does not give, or one the receipt has not, is not a
 //! difference (a Naver `publish_date` that appears later is not either). A
-//! post's modified time is never compared: a post fixed in its text only does
+//! post's modified time is never compared (but for erulabo's, which has
+//! nothing else, see below): a post fixed in its text only does
 //! not make a job. So a Tistory or Naver file edited to the same size shows
 //! nothing; a Drive file shows by its modified time as well.
 //!
@@ -83,16 +84,33 @@
 //! values (2026-10-03), so the first reading after a receipt finds no
 //! difference.
 //!
+//! # erulabo
+//!
+//! erulabo's files come only through the site's check (ticket 0041), so no
+//! file's size can be read without one. The source is asked about the post
+//! instead ([`trss_subtitles::Source::recheck_post`]: the post over HTTP, no
+//! browser), and two things come of it:
+//!
+//! - The post's `dateModified` against the one in the receipt's snapshot
+//!   (`dateModified`). A different one makes the revision job like any other
+//!   difference, but nothing is received by it: the job opens the post and
+//!   stops at the site's check (`인증 필요`) for a person. The same time is
+//!   [`Verdict::Same`]. A time the receipt or the post does not give is
+//!   `unreadable`, since there is nothing to compare. The receipt that job
+//!   makes has the new time, so the next reading finds no difference.
+//! - The observation: when the receipt's snapshot has the Drive file's ID
+//!   (`drive_id`), a `HEAD` of that file (no cookie) is put in the record's
+//!   `observed` as that file's `size` and `last_modified`, or the class of its
+//!   failure as `problem`. It never makes a job or changes the verdict (a
+//!   file that is gone is not `missing`); it is there to be compared with the
+//!   next receipt that passes the check, and each reading replaces the last.
+//!   The ID itself is not copied anywhere: the receipt's snapshot has it, the
+//!   record, the job's request and its log do not.
+//!
 //! # What is not rechecked
 //!
-//! erulabo's files come only through the site's check (ticket 0041), so its
-//! source answers each of them as one it cannot read again, and its items
-//! are recorded `unreadable`. What ticket 0050 adds there is the post's
-//! `dateModified` (in the receipt's snapshot, `dateModified`) becoming an
-//! `인증 필요` to-do, and the Drive ID the receipt's snapshot keeps
-//! (`drive_id`) observed by a `HEAD`; the place is the erulabo source's
-//! [`trss_subtitles::Source::recheck`]. The items of a post no source reads
-//! are recorded `unreadable` too, and so are Tistory's WinPNG images.
+//! The items of a post no source reads are recorded `unreadable`, and so are
+//! Tistory's WinPNG images.
 //!
 //! # A file or post that is gone
 //!
@@ -128,7 +146,9 @@ use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
 use trss_collect::store::anissia::episode_key;
 use trss_core::{Clock, Db, DbError, Millis};
-use trss_subtitles::{Failure, FailureKind, FileInfo, Opened, PostFile, Sources};
+use trss_subtitles::{
+    Failure, FailureKind, FileInfo, Opened, PostFile, PostReading, Received, Sources,
+};
 use url::Url;
 
 use crate::{
@@ -245,6 +265,12 @@ struct Known {
     name: String,
     size: Option<u64>,
     last_modified: Option<String>,
+    /// The post's own modified time the receipt's snapshot kept (erulabo's
+    /// `dateModified`).
+    post_modified: Option<String>,
+    /// What a source that cannot read the file without a check needs to look at
+    /// it from outside (the Drive file's ID, which its `Debug` hides).
+    received: Received,
 }
 
 /// A reading as the database keeps it, to give back when a newer one is cut
@@ -290,6 +316,15 @@ struct Change {
 }
 
 type Answers = Option<HashMap<String, std::result::Result<FileInfo, Failure>>>;
+
+/// What the source of a post said about the files of the items that share it.
+enum Asked {
+    /// About each file by itself, if a source of this build reads the post.
+    Files(Answers),
+    /// A source whose files are behind a check said what the post shows from
+    /// outside (see the module docs, erulabo).
+    Post(std::result::Result<PostReading, Failure>),
+}
 
 /// The recheck of the received episodes' files. Cheap to clone.
 #[derive(Clone)]
@@ -388,7 +423,7 @@ impl Recheck {
             if claimed.is_empty() {
                 continue;
             }
-            let answers = tokio::select! {
+            let asked = tokio::select! {
                 biased;
                 _ = cancel.cancelled() => {
                     for item in &claimed {
@@ -396,11 +431,11 @@ impl Recheck {
                     }
                     break;
                 }
-                answers = self.ask(&post, &claimed) => answers,
+                asked = self.ask(&post, &claimed) => asked,
             };
             for item in claimed {
                 let verdict = self
-                    .judge(sub, &source_id, creator, &item, &answers, &mut report)
+                    .judge(sub, &source_id, creator, &item, &asked, &mut report)
                     .await?;
                 report.count(verdict);
             }
@@ -558,13 +593,24 @@ impl Recheck {
                 )?;
                 let rows = stmt.query_map([item_id], |r| {
                     let snapshot: Option<String> = r.get(3)?;
+                    let value = |name: &str| {
+                        snapshot
+                            .as_deref()
+                            .and_then(|snapshot| snapshot_value(snapshot, name))
+                    };
+                    let key: String = r.get(0)?;
                     Ok(Known {
-                        key: r.get(0)?,
+                        received: Received::new(
+                            key.clone(),
+                            value(trss_subtitles::auth::DRIVE_ID).as_deref(),
+                        ),
+                        key,
                         name: r.get(1)?,
                         size: r
                             .get::<_, Option<i64>>(2)?
                             .and_then(|s| u64::try_from(s).ok()),
-                        last_modified: snapshot.as_deref().and_then(last_modified_of),
+                        last_modified: value(trss_subtitles::http::LAST_MODIFIED),
+                        post_modified: value(trss_subtitles::erulabo::POST_MODIFIED),
                     })
                 })?;
                 let mut files: Vec<Known> = Vec::new();
@@ -637,17 +683,29 @@ impl Recheck {
     }
 
     /// Asks the source of `post` for the files of `items`, one answer per
-    /// key; a post no source reads answers none.
-    async fn ask(&self, post: &str, items: &[Due]) -> Answers {
-        let url = Url::parse(post).ok()?;
-        let source = self.sources.for_post(&url)?;
+    /// key; a post no source reads answers none. A source whose files are
+    /// behind a check is asked about the post and its Drive files instead.
+    async fn ask(&self, post: &str, items: &[Due]) -> Asked {
+        let Some((url, source)) = Url::parse(post)
+            .ok()
+            .and_then(|url| self.sources.for_post(&url).map(|source| (url, source)))
+        else {
+            return Asked::Files(None);
+        };
         let mut keys: Vec<String> = Vec::new();
+        let mut received: Vec<Received> = Vec::new();
         for file in items.iter().flat_map(|i| &i.files) {
             if !keys.contains(&file.key) {
                 keys.push(file.key.clone());
+                received.push(file.received.clone());
             }
         }
-        Some(source.recheck(&url, &keys).await.into_iter().collect())
+        if let Some(reading) = source.recheck_post(&url, &received).await {
+            return Asked::Post(reading);
+        }
+        Asked::Files(Some(
+            source.recheck(&url, &keys).await.into_iter().collect(),
+        ))
     }
 
     /// The files the post offers for the item's episode now (as a receipt
@@ -677,9 +735,17 @@ impl Recheck {
         source_id: &str,
         creator: &str,
         item: &Due,
-        answers: &Answers,
+        asked: &Asked,
         report: &mut Report,
     ) -> Result<Verdict> {
+        let answers = match asked {
+            Asked::Files(answers) => answers,
+            Asked::Post(reading) => {
+                return self
+                    .judge_post(sub, source_id, creator, item, reading, report)
+                    .await
+            }
+        };
         let now = item.claimed;
         let mut changes: Vec<Change> = Vec::new();
         let mut worst: Option<Verdict> = None;
@@ -755,11 +821,109 @@ impl Recheck {
 
         let job = match verdict {
             Verdict::Changed => Some(
-                self.revision(sub, source_id, creator, item, &changes, now)
+                self.revision(sub, source_id, creator, item, &changes, None, now)
                     .await?,
             ),
             _ => None,
         };
+        self.record(item, verdict, observed, job, report).await
+    }
+
+    /// The reading of a post whose files are behind a check (erulabo): the
+    /// post's modified time against the one the receipt kept, and the
+    /// observation of its Drive files.
+    ///
+    /// Only the post's time can make a job. A different one makes the job that
+    /// receives the post again, which stops at the site's check for a person
+    /// (`인증 필요`); nothing is received before. What the Drive files showed
+    /// (size, modified time) is put into the record beside it and never
+    /// compared with the receipt here: it is for comparing with the next
+    /// receipt that passes the check. A Drive file that could not be read is
+    /// recorded with the class of its failure and does not change the verdict.
+    async fn judge_post(
+        &self,
+        sub: &Subscribed,
+        source_id: &str,
+        creator: &str,
+        item: &Due,
+        reading: &std::result::Result<PostReading, Failure>,
+        report: &mut Report,
+    ) -> Result<Verdict> {
+        let now = item.claimed;
+        // The files are in the order they were received: the latest one saw
+        // the post last, so an edit between two receipts is not a change.
+        let was = item
+            .files
+            .iter()
+            .rev()
+            .find_map(|f| f.post_modified.clone());
+        let mut observed = Vec::new();
+        let mut changed = None;
+        let verdict = match reading {
+            Err(failure) => {
+                observed.push(json!({"post": true, "problem": failure.kind.code()}));
+                match failure.kind {
+                    FailureKind::Missing => Verdict::Missing,
+                    FailureKind::Network => Verdict::Failed,
+                    _ => Verdict::Unreadable,
+                }
+            }
+            Ok(read) => {
+                observed.push(json!({"post": true, "modified": read.modified, "was": was}));
+                for (key, answer) in &read.observed {
+                    if !item.files.iter().any(|f| f.key == *key) {
+                        continue;
+                    }
+                    observed.push(match answer {
+                        Ok(info) => json!({
+                            "key": key,
+                            "size": info.size,
+                            "last_modified": info.last_modified,
+                        }),
+                        Err(failure) => json!({"key": key, "problem": failure.kind.code()}),
+                    });
+                }
+                // A time the receipt or the post does not give is nothing to
+                // compare.
+                match (&was, &read.modified) {
+                    (Some(was), Some(now)) if was != now => {
+                        changed = Some((was.clone(), now.clone()));
+                        Verdict::Changed
+                    }
+                    (Some(_), Some(_)) => Verdict::Same,
+                    _ => Verdict::Unreadable,
+                }
+            }
+        };
+        let job = match &changed {
+            Some((was, new)) => Some(
+                self.revision(
+                    sub,
+                    source_id,
+                    creator,
+                    item,
+                    &[],
+                    Some((was.as_str(), new.as_str())),
+                    now,
+                )
+                .await?,
+            ),
+            None => None,
+        };
+        self.record(item, verdict, observed, job, report).await
+    }
+
+    /// Writes how the reading of `item` came out (the job it made, if any, is
+    /// for the runner to be woken for) and says so in the log.
+    async fn record(
+        &self,
+        item: &Due,
+        verdict: Verdict,
+        observed: Vec<serde_json::Value>,
+        job: Option<(String, bool)>,
+        report: &mut Report,
+    ) -> Result<Verdict> {
+        let now = item.claimed;
         if let Some((id, true)) = &job {
             report.jobs.push(id.clone());
         }
@@ -789,7 +953,10 @@ impl Recheck {
     }
 
     /// The job that receives the post of `item` again, as a revision of the
-    /// item's receipt. Returns its ID and whether this call made it.
+    /// item's receipt. Returns its ID and whether this call made it. `post` is
+    /// the post's modified time (the receipt's, the new one) when that is what
+    /// differs.
+    #[allow(clippy::too_many_arguments)]
     async fn revision(
         &self,
         sub: &Subscribed,
@@ -797,6 +964,7 @@ impl Recheck {
         creator: &str,
         item: &Due,
         changes: &[Change],
+        post: Option<(&str, &str)>,
         now: Millis,
     ) -> Result<(String, bool)> {
         // The new values name the change, so the same change is one job.
@@ -812,12 +980,16 @@ impl Recheck {
                 )
             })
             .collect();
+        if let Some((_, new)) = post {
+            lines.push(format!("post\t{new}"));
+        }
         lines.sort();
         let digest = Sha256::digest(lines.join("\n").as_bytes());
         let digest: String = digest.iter().take(8).map(|b| format!("{b:02x}")).collect();
         let request = json!({
             "recheck": item.id,
             "observation": item.observation,
+            "post_modified": post.map(|(_, new)| new),
             "files": changes.iter().map(|c| json!({
                 "key": c.key,
                 "size": c.now.size,
@@ -846,14 +1018,18 @@ impl Recheck {
         };
         match self.jobs.create(job, now).await? {
             Created::Created(id) => {
-                let detail = changes.iter().map(describe).collect::<Vec<_>>().join(" · ");
+                let (message, detail) = match post {
+                    Some((was, new)) => (
+                        "게시물의 수정 시각이 받은 때와 달라서 다시 받아요",
+                        format!("{was} → {new} · 사이트 확인을 거쳐야 받을 수 있어요"),
+                    ),
+                    None => (
+                        "받은 파일의 정보가 받은 때와 달라서 다시 받아요",
+                        changes.iter().map(describe).collect::<Vec<_>>().join(" · "),
+                    ),
+                };
                 self.jobs
-                    .event(
-                        &id,
-                        "받은 파일의 정보가 받은 때와 달라서 다시 받아요".to_owned(),
-                        Some(detail),
-                        now,
-                    )
+                    .event(&id, message.to_owned(), Some(detail), now)
                     .await?;
                 Ok((id, true))
             }
@@ -891,12 +1067,12 @@ fn sizes_of(observed: &str) -> HashMap<String, Option<u64>> {
         .collect()
 }
 
-/// The `last_modified` of a snapshot (a JSON array of `[name, value]` pairs).
-fn last_modified_of(snapshot: &str) -> Option<String> {
+/// The value of `name` in a snapshot (a JSON array of `[name, value]` pairs).
+fn snapshot_value(snapshot: &str, name: &str) -> Option<String> {
     let pairs: Vec<[String; 2]> = serde_json::from_str(snapshot).ok()?;
     pairs
         .into_iter()
-        .find(|[name, _]| name == trss_subtitles::http::LAST_MODIFIED)
+        .find(|[n, _]| n == name)
         .map(|[_, value]| value)
 }
 

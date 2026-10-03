@@ -49,12 +49,14 @@ async fn run() -> Result<(), String> {
     // Drive serves every source that links Drive files, so their requests to
     // Drive's hosts are spaced together. erulabo's files come only through
     // the site's check in the server browser: without one its posts wait.
+    // Its Drive is only asked for a `HEAD` of the files it came from (the
+    // daily recheck's observation).
     let drive = Drive::new();
     let mut sources = Sources::none()
         .with_tistory(TistorySource::new(drive.clone()))
         .with_blogger(BloggerSource::new(drive.clone()))
-        .with_naver(NaverSource::new(drive))
-        .with_erulabo(ErulaboSource::new());
+        .with_naver(NaverSource::new(drive.clone()))
+        .with_erulabo(ErulaboSource::new(drive));
     if std::env::var(FAKE_SUBTITLE_SOURCE_VAR).as_deref() == Ok("1") {
         println!("The fake subtitle source is on ({FAKE_SUBTITLE_SOURCE_VAR})");
         sources = sources.with_fake(FakeSource);

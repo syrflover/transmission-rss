@@ -10,6 +10,8 @@
 //! `http://<blog>.blogspot.com:<port>/<path>` for a Blogger post, and
 //! `http://drive.usercontent.google.com:<port>/download?id=<id>&export=download`
 //! for a Drive file (`drive.google.com/uc` redirects there as Drive does),
+//! `http://erulabo.com:<port>/<number>` for an erulabo post (its download is
+//! the server browser's, not served here),
 //! `http://blog.naver.com:<port>/<blog>/<logNo>` for a Naver post's frame
 //! (its inner page at `/PostView.naver?blogId=…&logNo=…`) and
 //! `http://download.blog.naver.com:<port>/open/<file>/<token>/<name>` for
@@ -42,6 +44,7 @@ use url::Url;
 use crate::{
     blogger::BloggerSource,
     drive::Drive,
+    erulabo::ErulaboSource,
     http::{Limits, Reach},
     naver::{self, NaverSource},
     tistory::{self, TistorySource},
@@ -310,6 +313,30 @@ impl SourceServer {
         NaverSource::over(builder(), limits, REACH, drive, base)
     }
 
+    /// The erulabo source, reaching this server for every name, with no
+    /// spacing between requests, observing Drive files on this server.
+    pub fn erulabo(&self) -> ErulaboSource {
+        let limits = Limits {
+            spacing: Duration::ZERO,
+            ..Limits::default()
+        };
+        ErulaboSource::over(builder(), limits, REACH, self.drive_with(limits))
+    }
+
+    /// The address of erulabo post `number`.
+    pub fn erulabo_url(&self, number: u32) -> String {
+        format!("http://erulabo.com:{}/{number}", self.port)
+    }
+
+    /// How erulabo post `number` answers, request after request (a
+    /// [`PostAnswer::Page`] of [`erulabo_page`]).
+    pub fn erulabo_post(&self, number: u32, answers: Vec<PostAnswer>) {
+        self.lock().posts.insert(
+            format!("erulabo.com/{number}"),
+            Script { answers, served: 0 },
+        );
+    }
+
     /// The address of Naver post `log_no` of `blog`: its frame.
     pub fn naver_url(&self, blog: &str, log_no: &str) -> String {
         format!("http://blog.naver.com:{}/{blog}/{log_no}", self.port)
@@ -443,6 +470,26 @@ pub fn blogger_page(links: &[(&str, &str)]) -> String {
 <div class='post-body-container'><div class='post-body entry-content float-container' id='post-body-1'><p>자막이에요.</p><p>{links}</p></div></div>
 <div class='widget LinkList'><a href='https://drive.google.com/drive/folders/10YFO-jkkgsybQnPpl5TVAwPdx2P0SE-y'>자막 모음(작업 중)</a></div>
 </body></html>"#
+    )
+}
+
+/// An erulabo post as the site writes it (2026-10-03): its JSON-LD with
+/// `dateModified` `modified`, and the body with a download card of each
+/// `(file, title)`.
+pub fn erulabo_page(cards: &[(&str, &str)], modified: &str) -> String {
+    let cards: String = cards
+        .iter()
+        .map(|(file, title)| {
+            format!(
+                r#"<button type="button" class="og-link og-link-button" data-file-url="{file}"><span class="og-preview"><span class="og-body"><span class="og-title">{}</span></span></span></button>"#,
+                escape(title)
+            )
+        })
+        .collect();
+    format!(
+        r#"<!doctype html><html><head><title>자막</title>
+<script type="application/ld+json">{{"@context":"https://schema.org","@type":"BlogPosting","datePublished":"2026-09-22T11:20:00+09:00","dateModified":"{modified}"}}</script>
+</head><body><div id="post-body" class="fr-view"><p>본문</p>{cards}</div></body></html>"#
     )
 }
 
@@ -1849,5 +1896,137 @@ mod tests {
             answers[0].1.as_ref().unwrap_err().kind,
             FailureKind::Missing
         );
+    }
+
+    #[tokio::test]
+    async fn an_erulabo_post_is_read_again_for_its_modified_time_and_its_drive_file_by_a_head() {
+        use crate::Received;
+
+        let server = SourceServer::start().await;
+        let source = Source::Erulabo(server.erulabo());
+        let post = Url::parse(&server.erulabo_url(859)).unwrap();
+        server.erulabo_post(
+            859,
+            vec![PostAnswer::Page(erulabo_page(
+                &[("/file/aaaa-1", "전생귀족3 (1)")],
+                "2026-10-02T09:00:00+09:00",
+            ))],
+        );
+        let bytes = crate::fake::ass("erulabo 1");
+        server.drive(
+            "1erulabodrive01",
+            vec![DriveAnswer::FileAt {
+                name: "a.zip".into(),
+                bytes: bytes.clone(),
+                modified: "Tue, 29 Sep 2026 19:53:19 GMT".into(),
+            }],
+        );
+        let received = vec![
+            Received::new("browser:erulabo.com/859#a.zip", Some("1erulabodrive01")),
+            // The same file twice (a series card for two episodes) is asked
+            // for once; a file with no Drive ID, or an odd one, is not.
+            Received::new("browser:erulabo.com/859#a.zip", Some("1erulabodrive01")),
+            Received::new("browser:erulabo.com/859#b.zip", None),
+            Received::new("browser:erulabo.com/859#c.zip", Some("a b")),
+            // Another name for the same Drive file shares the one answer.
+            Received::new("browser:erulabo.com/859#d.zip", Some("1erulabodrive01")),
+        ];
+        let reading = source
+            .recheck_post(&post, &received)
+            .await
+            .expect("erulabo reads the post")
+            .unwrap();
+        assert_eq!(
+            reading.modified.as_deref(),
+            Some("2026-10-02T09:00:00+09:00")
+        );
+        assert_eq!(reading.observed.len(), 2);
+        assert_eq!(reading.observed[0].0, "browser:erulabo.com/859#a.zip");
+        assert_eq!(reading.observed[1].0, "browser:erulabo.com/859#d.zip");
+        assert_eq!(
+            reading.observed[0].1.as_ref().unwrap(),
+            &FileInfo {
+                size: Some(bytes.len() as u64),
+                last_modified: Some("Tue, 29 Sep 2026 19:53:19 GMT".into()),
+            }
+        );
+        assert_eq!(reading.observed[1].1, reading.observed[0].1);
+        // The post once (a `GET`, no cookie), the Drive file once (a `HEAD`,
+        // no cookie, no `Referer`); the check's card was never clicked.
+        let seen = server.seen();
+        assert_eq!(seen.len(), 2);
+        assert_eq!(
+            (
+                seen[0].method.as_str(),
+                seen[0].host.as_str(),
+                seen[0].path.as_str()
+            ),
+            ("GET", "erulabo.com", "/859")
+        );
+        assert_eq!(
+            (seen[1].method.as_str(), seen[1].host.as_str()),
+            ("HEAD", DRIVE_FILES)
+        );
+        assert!(seen.iter().all(|s| !s.cookie && !s.referer));
+        // Neither the file's ID nor an address is shown by the types.
+        assert!(!format!("{received:?}").contains("1erulabodrive01"));
+
+        // A Drive file that cannot be read is its own failure; the post is
+        // still read.
+        server.drive("1erulabodrive01", vec![DriveAnswer::Missing]);
+        let reading = source
+            .recheck_post(&post, &received)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            reading.modified.as_deref(),
+            Some("2026-10-02T09:00:00+09:00")
+        );
+        let failure = reading.observed[0].1.as_ref().unwrap_err();
+        assert_eq!(failure.kind, FailureKind::Missing);
+        assert!(!failure.reason.contains("1erulabodrive01"));
+
+        // A post gone is the failure, and Drive is not asked then.
+        server.erulabo_post(859, vec![PostAnswer::Status(404)]);
+        let before = server.seen().len();
+        let failure = source
+            .recheck_post(&post, &received)
+            .await
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(failure.kind, FailureKind::Missing);
+        let after: Vec<_> = server.seen().split_off(before);
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].host, "erulabo.com");
+
+        // A page that is not the post (no body) is a post that changed; a
+        // post that does not say when it was modified has no time.
+        server.erulabo_post(
+            859,
+            vec![PostAnswer::Page("<html><body>점검 중</body></html>".into())],
+        );
+        let failure = source
+            .recheck_post(&post, &received)
+            .await
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(failure.kind, FailureKind::Changed);
+        server.erulabo_post(
+            859,
+            vec![PostAnswer::Page(
+                r#"<html><body><div id="post-body"></div></body></html>"#.into(),
+            )],
+        );
+        let reading = source
+            .recheck_post(&post, &received)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(reading.modified, None);
+
+        // The other sources read their files directly.
+        let tistory = Source::Tistory(server.source());
+        assert!(tistory.recheck_post(&post, &received).await.is_none());
     }
 }
