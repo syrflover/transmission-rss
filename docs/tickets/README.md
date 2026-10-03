@@ -134,7 +134,7 @@ Anissia 전체 목록 검색은 공식 문서에 없는 API라 바뀔 수 있어
 | [0044](0044-source-naver.md) | Naver 블로그 첨부를 받아요 | 완료 | 0038 |
 | [0045](0045-follow-creator-auto-receive.md) | 구독 제작자의 새 회차와 수정본을 자동으로 받고 `자막 구독` 할 일을 만들어요 | 완료 | 0035, 0037, 0038 |
 | [0046](0046-find-in-browser.md) | 직접 찾기로 지난 회차 자막을 서버 브라우저에서 받아요 | 대기 | 0037, 0040 |
-| [0047](0047-subtitle-upload.md) | 자막과 폰트를 올려요 | 대기 | 0036 |
+| [0047](0047-subtitle-upload.md) | 자막과 폰트를 올려요 | 완료 | 0036 |
 | [0048](0048-attribute-unknown-creator.md) | 제작자 알 수 없는 자막에 Anissia 제작자를 붙여요 | 대기 | 0034, 0037 |
 | [0049](0049-common-policy-settings.md) | 설정에서 자막 형식과 브라우저 정책을 정해요 | 완료 | 0030 |
 | [0050](0050-silent-revision-recheck.md) | 받은 회차의 파일 정보를 다시 읽어 Anissia에 안 보이는 수정본을 찾아요 | 대기 | 0045 |
