@@ -120,3 +120,11 @@ nyaa 추가 검색의 묶음 크기·요청 간격은 [0026](0026-past-episode-s
 - [앱 YAML 내보내기](../specs/settings.md#내보내기)와 [가져오기](../specs/settings.md#앱-yaml)(작품·보관 관계 포함)
 - 전체 웹 흐름과 [실제 배포의 접근 보호](../specs/web-app.md#접근-경계와-기기), [실제 재생 환경](../specs/subtitles.md#실제-재생-환경) 확인, 운영 안내
 - [검증 근거와 완료 판정](../specs/web-app.md#검증-근거와-완료-판정)의 전체 구현 완료 조건
+
+## 운영
+
+결과 목표에 들지 않고, 실제 서버를 운영하며 지켜보는 일이에요.
+
+| 티켓 | 제목 | 상태 | 막는 티켓 |
+| --- | --- | --- | --- |
+| [0058](0058-server-oom-and-resource-limits.md) | 실제 서버의 Transmission OOM과 자원 한도를 지켜봐요 | 진행 중 | 없음 |
