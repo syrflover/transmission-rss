@@ -1,7 +1,7 @@
 # 0053 서버 브라우저가 LAN에 닿지 못하게 하고, 웹이 다른 출처의 요청을 거절해요
 
 - 상태: 완료
-- 출처: [작업 화면 안의 인증과 브라우저 수명](../specs/jobs.md#작업-화면-안의-인증과-브라우저-수명), [접근 경계와 기기](../specs/web-app.md#접근-경계와-기기), [0039의 한계](0039-browser-container-lifecycle.md#한계)
+- 출처: [작업 화면 안의 인증과 브라우저 수명](../../../specs/jobs.md#작업-화면-안의-인증과-브라우저-수명), [접근 경계와 기기](../../../specs/web-app.md#접근-경계와-기기), [0039의 한계](0039-browser-container-lifecycle.md#한계)
 - 막는 티켓: 없음
 
 ## 배경
@@ -36,9 +36,9 @@ trss-web은 로그인이 없고 Host·Origin을 검사하지 않아요. 다른 �
 
 ### 만든 것 (2026-10-03)
 
-- **송신 프록시**: 실행기(`trss-browserd`)가 컨테이너 루프백에 프록시를 띄우고, Chromium의 모든 연결이 이 프록시를 거쳐요. 프록시는 이름을 직접 풀어요. 풀린 주소 가운데 하나라도 공개 주소가 아니면 연결하지 않고, 통과하면 다시 풀지 않고 그 주소로 연결해요. 실행기가 시작할 때 컨테이너의 라우팅 표에서 읽은 자기 네트워크와 게이트웨이도 거절해요. 규칙 전체는 [작업 화면 안의 인증과 브라우저 수명](../specs/jobs.md#작업-화면-안의-인증과-브라우저-수명)에 있어요.
+- **송신 프록시**: 실행기(`trss-browserd`)가 컨테이너 루프백에 프록시를 띄우고, Chromium의 모든 연결이 이 프록시를 거쳐요. 프록시는 이름을 직접 풀어요. 풀린 주소 가운데 하나라도 공개 주소가 아니면 연결하지 않고, 통과하면 다시 풀지 않고 그 주소로 연결해요. 실행기가 시작할 때 컨테이너의 라우팅 표에서 읽은 자기 네트워크와 게이트웨이도 거절해요. 규칙 전체는 [작업 화면 안의 인증과 브라우저 수명](../../../specs/jobs.md#작업-화면-안의-인증과-브라우저-수명)에 있어요.
 - **프록시 밖 길 닫기**: 루프백 예외를 없애고(`<-loopback>`), QUIC을 끄고, WebRTC가 프록시 밖 UDP를 쓰지 않게 해요. 이미지의 관리 정책에도 같은 설정을 넣었어요. `TRSS_BROWSER_CHROMIUM_ARGS`에 프록시·QUIC·WebRTC·`host-rules` 계열 인자가 있으면 실행기가 시작하지 않아요. Debian 래퍼가 읽는 `CHROMIUM_FLAGS`·`CHROMIUM_USER_FLAGS`는 Chromium 환경에서 빼요.
-- **웹의 Host·Origin 검사**: 모든 경로(화면 파일·`/api`·WebSocket)에서 Host가 IP 주소, `localhost`, `TRSS_WEB_HOSTS`의 이름일 때만 답해요(그 밖은 `421`). 상태를 바꾸는 요청과 WebSocket은 다른 Origin, `null`, `Sec-Fetch-Site: cross-site`를 `403`으로 거절해요. 규칙과 scheme을 견주지 않는 이유는 [접근 경계와 기기](../specs/web-app.md#접근-경계와-기기)에 있어요.
+- **웹의 Host·Origin 검사**: 모든 경로(화면 파일·`/api`·WebSocket)에서 Host가 IP 주소, `localhost`, `TRSS_WEB_HOSTS`의 이름일 때만 답해요(그 밖은 `421`). 상태를 바꾸는 요청과 WebSocket은 다른 Origin, `null`, `Sec-Fetch-Site: cross-site`를 `403`으로 거절해요. 규칙과 scheme을 견주지 않는 이유는 [접근 경계와 기기](../../../specs/web-app.md#접근-경계와-기기)에 있어요.
 - 거절 로그에는 목적지·주소를 남기지 않고, 횟수만 1분에 한 번까지 남겨요.
 - 시험 호스트에 사이트를 띄우는 기존 실제 이미지 시험을 위해 `TRSS_BROWSER_EGRESS_ALLOW`(정확한 `IP:포트`)를 뒀어요. compose와 개발 환경에는 없고, compose 시험이 이를 지켜요.
 

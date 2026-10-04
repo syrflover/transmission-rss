@@ -1,7 +1,7 @@
 # 0049 설정에서 자막 형식과 브라우저 정책을 정해요
 
 - 상태: 완료
-- 출처: [공통 정책](../specs/settings.md#공통-정책), [설정 화면](../specs/settings.md#설정-화면), [앱 YAML의 구성](../specs/settings.md#앱-yaml의-구성)의 `subtitle_policy`·`browser`
+- 출처: [공통 정책](../../../specs/settings.md#공통-정책), [설정 화면](../../../specs/settings.md#설정-화면), [앱 YAML의 구성](../../../specs/settings.md#앱-yaml의-구성)의 `subtitle_policy`·`browser`
 - 막는 티켓: [0030](0030-feature-crates.md)
 
 ## 작업

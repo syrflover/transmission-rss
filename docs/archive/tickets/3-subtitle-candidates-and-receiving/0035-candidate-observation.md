@@ -1,7 +1,7 @@
 # 0035 Anissia 최근 자막 목록을 30분마다 읽어 자막 후보를 쌓아요
 
 - 상태: 완료 (아래 "결과")
-- 출처: [자막 후보 조회](../specs/subtitles.md#자막-후보-조회), [지난 회차 ADR](../adr/0012-past-subtitles-find-and-upload.md), [자막 출처 연결](../glossary.md)
+- 출처: [자막 후보 조회](../../../specs/subtitles.md#자막-후보-조회), [지난 회차 ADR](../../../adr/0012-past-subtitles-find-and-upload.md), [자막 출처 연결](../../../glossary.md)
 - 막는 티켓: [0034](0034-season-anissia-link.md)(시즌별 후보 조회와 연결 시 읽기)
 
 ## 작업

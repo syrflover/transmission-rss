@@ -335,13 +335,13 @@ HTTP 수신 성공을 브라우저 다운로드 처리나 첨부 URL의 유효�
 
 #### 2026-10-02 경로별 재확인
 
-[티켓 0033](../tickets/0033-source-paths-spike.md)에서 여섯 경로를 새 표본으로 다시 확인했어요.
+[티켓 0033](../archive/tickets/3-subtitle-candidates-and-receiving/0033-source-paths-spike.md)에서 여섯 경로를 새 표본으로 다시 확인했어요.
 표본은 [Anissia 최근 자막 API](https://api.anissia.net/anime/caption/recent/0)의 70줄과, 편성표 API로 고른 방영 중 작품 45개의 작품별 자막 API(`/anime/caption/animeNo/<n>`) 55줄에서 골랐고, 경로마다 서로 다른 게시물 둘 이상이에요.
 
 방법은 두 가지예요.
 하나는 호스트마다 2초 이상 간격으로 하나씩 요청하는 Python HTTP 클라이언트(일반 브라우저 `User-Agent`, 쿠키 없음)이고, 다른 하나는 새 프로필의 Chromium 153을 헤드리스로 직접 실행해 CDP로 제어하는 도구예요(둘 다 `.scratch/source-paths/`의 임시 실행물이며 추적하지 않아요).
 브라우저에서는 `User-Agent` 문자열 외에 아무것도 바꾸지 않았고, 다운로드 폴더를 지정해 두고 클릭한 뒤 그 폴더에 파일이 생겼는지 봤어요.
-이 브라우저는 개발 PC의 헤드리스 Chromium이며 서버 컨테이너가 아니므로, 컨테이너에서의 수신은 [0032](../tickets/0032-server-browser-spike.md)·[0039](../tickets/0039-browser-container-lifecycle.md)의 일이에요.
+이 브라우저는 개발 PC의 헤드리스 Chromium이며 서버 컨테이너가 아니므로, 컨테이너에서의 수신은 [0032](../archive/tickets/3-subtitle-candidates-and-receiving/0032-server-browser-spike.md)·[0039](../archive/tickets/3-subtitle-candidates-and-receiving/0039-browser-container-lifecycle.md)의 일이에요.
 서명 URL·쿠키·토큰·자막 본문은 저장소에 두지 않았고 받은 파일은 `.scratch/`에만 있어요.
 경로 하나에 제작자 둘 안팎이라 표본 밖으로 일반화하지 않아요.
 
@@ -548,7 +548,7 @@ CDP 연결과 서버 다운로드 경로 `/home/seluser/Downloads` 설정, erula
 
 #### 2026-10-02 원격 화면과 기기 폭 비교
 
-[티켓 0032](../tickets/0032-server-browser-spike.md)에서 원격 화면 방식 둘과 기기 폭 맞추기 둘을 이 개발 PC의 LAN에서 비교했어요.
+[티켓 0032](../archive/tickets/3-subtitle-candidates-and-receiving/0032-server-browser-spike.md)에서 원격 화면 방식 둘과 기기 폭 맞추기 둘을 이 개발 PC의 LAN에서 비교했어요.
 장치는 `.scratch/server-browser-0032/`의 임시 실행물(추적하지 않음)이에요. 위와 같은 이미지(`selenium/standalone-chromium`, 같은 digest)를 쓰되 Selenium Grid는 끄고, Chromium 152를 가상 디스플레이(Xvfb 1920×1200) 위에 창 있는 모드로 직접 띄웠어요. 실행마다 새 프로필이고 자동화·위장 플래그는 없어요. CDP는 호스트 루프백에만 열었어요.
 Turnstile은 매번 사용자가 직접 풀었고, 서버는 게시물 열기와 정상 다운로드 카드 누르기만 했어요.
 휴대폰은 사용자의 실제 휴대폰 한 대예요.
@@ -589,7 +589,7 @@ Turnstile은 매번 사용자가 직접 풀었고, 서버는 게시물 열기와
 
 #### 2026-10-03 제품 서버 브라우저에서 확인 직전까지
 
-[티켓 0041](../tickets/0041-source-erulabo.md)을 만들며 제품 이미지(`Dockerfile.browser`로 지은 `trss-browser:test-0041`, Chromium 154.0.8037.92, 메모리 한도 768MiB, 실행마다 새 프로필)로 실제 게시물을 확인 직전까지 열었어요.
+[티켓 0041](../archive/tickets/3-subtitle-candidates-and-receiving/0041-source-erulabo.md)을 만들며 제품 이미지(`Dockerfile.browser`로 지은 `trss-browser:test-0041`, Chromium 154.0.8037.92, 메모리 한도 768MiB, 실행마다 새 프로필)로 실제 게시물을 확인 직전까지 열었어요.
 Turnstile은 누르지도 풀지도 않았고, 브라우저를 위장하지 않았어요. 서명 주소·토큰·쿠키는 기록하지 않았어요.
 
 - 게시물 859·855·850·837·854·853은 HTTP로 모두 200(약 170KB)이었고, 서버 브라우저도 확인 전까지 거절 없이 열었어요.

@@ -1,7 +1,7 @@
 # 0038 공통 수신 결과를 정하고 Tistory 일반 첨부를 받아요
 
 - 상태: 완료
-- 출처: [출처별 다운로드](../specs/subtitles.md#출처별-다운로드)(Tistory 일반 첨부), [작업 결과](../specs/jobs.md#작업-결과), [웹 앱 공통 명세의 구현 순서](../specs/web-app.md#구현-순서)(공통 결과·실패 표현을 정한 뒤 출처 병행)
+- 출처: [출처별 다운로드](../../../specs/subtitles.md#출처별-다운로드)(Tistory 일반 첨부), [작업 결과](../../../specs/jobs.md#작업-결과), [웹 앱 공통 명세의 구현 순서](../../../specs/web-app.md#구현-순서)(공통 결과·실패 표현을 정한 뒤 출처 병행)
 - 막는 티켓: [0033](0033-source-paths-spike.md)(실패 분류와 단계 목록 초안), [0036](0036-subtitle-jobs-foundation.md)
 
 ## 작업
@@ -27,7 +27,7 @@
 
 ### 만든 것 (2026-10-03)
 
-- **공통 수신 결과**: 출처에서 파일 하나를 받으려는 시도는 `받음`(형식 ZIP·ASS·SRT·SMI·그 밖, 크기, SHA-256, 파일 정보 스냅샷)이나 실패 분류 하나로 끝나요. 실패 분류는 `원본 없음`·`만료`·`파일 아님`·`출처 구조 바뀜`·`네트워크 실패`이고, 응답이 있었으면 HTTP 상태·`Content-Type`·응답 크기를 함께 남겨요. 규칙 전체는 [공통 수신 결과와 실패 분류](../specs/jobs.md#공통-수신-결과와-실패-분류)에 있어요.
+- **공통 수신 결과**: 출처에서 파일 하나를 받으려는 시도는 `받음`(형식 ZIP·ASS·SRT·SMI·그 밖, 크기, SHA-256, 파일 정보 스냅샷)이나 실패 분류 하나로 끝나요. 실패 분류는 `원본 없음`·`만료`·`파일 아님`·`출처 구조 바뀜`·`네트워크 실패`이고, 응답이 있었으면 HTTP 상태·`Content-Type`·응답 크기를 함께 남겨요. 규칙 전체는 [공통 수신 결과와 실패 분류](../../../specs/jobs.md#공통-수신-결과와-실패-분류)에 있어요.
 - **받은 바이트 검사**: 공개하기 전에(재시작 복구 포함) 빈 파일, 웹 페이지, CRC가 맞지 않는 ZIP, 이름이 약속한 형식과 다른 바이트를 `파일 아님`으로 보고 지워요. ZIP 안의 멤버가 자막인지는 보지 않아요. 한 게시물의 폰트 ZIP도 정상 파일이고, 멤버를 가르는 것은 결과 목표 4의 분석이에요. 검사 자체가 죽으면 지우지 않고 보류해요.
 - **다시 시도**: `네트워크 실패`는 같은 실행 안에서 2초·10초 뒤 두 번 더 시도해요. `만료`는 게시물을 한 번 다시 읽어 새 주소로 받아요. 다시 읽은 게시물에 그 파일이 없으면 `원본 없음`, 또 거절되면 `만료`예요.
 - **Tistory 일반 첨부**: `*.tistory.com` 게시물의 `.fileblock` 첨부를 모두 받아요. 쿠키와 Referer 없이, https의 Tistory CDN(`*.kakaocdn.net`·`*.daumcdn.net`)에서만 받고, 리다이렉트도 그 호스트로만 따라가요. 파일 하나는 200MiB, 15분까지예요. 같은 호스트에는 1초 간격으로 요청해요.
@@ -44,7 +44,7 @@
 | 첨부 대신 오류 HTML | `an_error_page_instead_of_the_attachment_fails_as_not_a_file_with_its_reason`. 개발 환경에서 가짜 출처의 `/missing/` 게시물은 작업 상세에 `원본 없음 · 게시물이 없어요 (404)`로 보였어요. |
 | 첨부 URL 만료 | `an_expired_address_is_read_from_the_post_again_and_received`, `an_address_refused_again_after_reading_the_post_fails_as_expired`, `a_file_gone_from_the_post_read_again_fails_as_missing` |
 | 실제 Tistory 게시물 하나 | 개발 환경의 worker가 실제 후보(스모모 491, 담배 고양이 12화)로 작업을 받았어요: `Yani Neko - 12.zip` 11,724바이트(0033 기록과 같음), ZIP, CRC 통과, 안에 `Yani Neko - 12.srt` 31,792바이트, SHA-256 `1470019a…6fec`, HTTP 200 `application/octet-stream`. 리뷰 수정 뒤 다시 빌드해 같은 바이트를 받았어요. 무시해 둔 `a_real_tistory_post_is_received`로 492도 받았어요(11,379바이트). 이 확인을 위해 개발 데이터의 시즌 하나를 3440에 잠시 연결했다가 되돌렸어요. |
-| 공통 결과 | 명세의 [공통 수신 결과와 실패 분류](../specs/jobs.md#공통-수신-결과와-실패-분류), `a_tistory_receipt_shows_its_format_and_failures_by_class_and_no_signed_address`, 개발 환경의 작업 상세·작업 목록 화면이에요. |
+| 공통 결과 | 명세의 [공통 수신 결과와 실패 분류](../../../specs/jobs.md#공통-수신-결과와-실패-분류), `a_tistory_receipt_shows_its_format_and_failures_by_class_and_no_signed_address`, 개발 환경의 작업 상세·작업 목록 화면이에요. |
 
 그 밖에 실제 Drive 게시물(코코렛 felia 1187, FX 전사 쿠루미 1화)이 `자막 대기`(`자막이 Google Drive 링크로 올라와 있어요…`)로 기다리는 것을 개발 환경에서 봤어요. 시험으로는 `a_missing_post_fails_as_missing_and_a_drive_post_waits_for_a_source`, `every_file_of_a_post_is_received_once_for_the_episodes_it_serves`, `a_network_failure_is_tried_again_twice_then_fails_as_network`, `a_shutdown_during_a_retry_wait_stops_the_run_at_once`, `no_signed_address_reaches_the_records_or_the_log`, `a_file_past_its_byte_limit_fails_as_not_a_file_and_leaves_no_bytes`, `recovered_bytes_that_are_a_web_page_fail_as_not_a_file_and_are_received_anew`, `a_failure_recorded_before_its_bytes_went_is_finished_by_the_next_start`, `a_failure_whose_bytes_were_left_is_finished_even_when_the_post_is_gone`, `bytes_that_cannot_be_removed_hold_the_receipt_instead_of_counting_as_gone`, 리다이렉트의 `a_redirect_is_followed_on_the_cdn_with_no_referer_and_stopped_elsewhere`, 마이그레이션 `a_database_from_before_receive_results_keeps_its_receipts_and_checks_the_new_columns`가 있어요. 개발 환경의 작업 표 다섯 개와 웹·worker 로그에 `signature=`·`credential=`이 없었어요. 작업 공간 시험 1,660개가 통과하고(실제 네트워크 시험 1개는 무시), clippy 경고가 없고, 웹 빌드가 돼요.
 

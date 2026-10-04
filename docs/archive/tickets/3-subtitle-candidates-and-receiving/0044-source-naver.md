@@ -1,7 +1,7 @@
 # 0044 Naver 블로그 첨부를 받아요
 
 - 상태: 완료
-- 출처: [출처별 다운로드](../specs/subtitles.md#출처별-다운로드)(Naver 블로그 첨부), [Naver 블로그 첨부 조사](../brainstorm/web-gui-subtitles.md#naver-블로그-첨부)
+- 출처: [출처별 다운로드](../../../specs/subtitles.md#출처별-다운로드)(Naver 블로그 첨부), [Naver 블로그 첨부 조사](../../../brainstorm/web-gui-subtitles.md#naver-블로그-첨부)
 - 막는 티켓: [0038](0038-receive-result-tistory.md)
 
 ## 작업
@@ -27,7 +27,7 @@ Naver 블로그 게시물(내부 프레임 포함)에서 유효한 첨부 경로
 - **회차 고르기**: 0042의 규칙을 첨부 파일 이름에 써요. 폰트 확장자(`.ttf`·`.otf`·`.ttc`·`.woff`·`.woff2`)는 이름과 상관없이 폰트이고, `S01E08`은 8화, `S02E01-E12`·`E01-E12`·`ep01-ep12`는 범위예요. 첨부가 없는 글은 본문의 Drive 링크를 받아요.
 - **스냅샷**: 이 글의 날짜(`publish_date`, 절대 날짜일 때만)와 `attach_file_size`, 표시된 제한(`blocked`)을 남겨요. 하루가 안 된 글은 날짜가 없어서, 스냅샷 비교(0050)는 날짜가 나중에 생기는 것을 변경으로 보지 않아야 한다고 명세에 적었어요.
 - `get_file`이 Tistory에서 `http.rs`로 옮겨 세 출처가 함께 써요. worker가 Naver 출처를 켜요.
-- 상세 규칙은 [공통 수신 결과와 실패 분류](../specs/jobs.md#공통-수신-결과와-실패-분류)에 있어요.
+- 상세 규칙은 [공통 수신 결과와 실패 분류](../../../specs/jobs.md#공통-수신-결과와-실패-분류)에 있어요.
 
 ### 검증한 것
 

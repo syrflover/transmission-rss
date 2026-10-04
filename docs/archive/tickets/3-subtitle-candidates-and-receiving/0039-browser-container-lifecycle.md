@@ -1,7 +1,7 @@
 # 0039 서버 브라우저 컨테이너와 수명을 다뤄요
 
 - 상태: 완료
-- 출처: [작업 화면 안의 인증과 브라우저 수명](../specs/jobs.md#작업-화면-안의-인증과-브라우저-수명), [인증 운영 ADR](../adr/0002-server-browser-subtitle-authentication.md), [공통 정책](../specs/settings.md#공통-정책)
+- 출처: [작업 화면 안의 인증과 브라우저 수명](../../../specs/jobs.md#작업-화면-안의-인증과-브라우저-수명), [인증 운영 ADR](../../../adr/0002-server-browser-subtitle-authentication.md), [공통 정책](../../../specs/settings.md#공통-정책)
 - 막는 티켓: [0032](0032-server-browser-spike.md)(원격 화면 방식과 자원 한도), [0036](0036-subtitle-jobs-foundation.md)
 
 ## 작업
@@ -39,7 +39,7 @@ worker가 작업에 쓸 서버 Chromium을 띄우고 거두는 기반이에요. 
 - **수명**: 유휴 종료와 작업 단계 시작은 한 잠금에서 정해져서 둘 다 받아들여지는 일이 없어요. 시작 요청이 끊겨도 실행기가 프로세스·폴더를 남기지 않고, worker가 다시 시작하면 남은 실행을 정리해요. 실행기 하나에는 worker 하나만 붙어요(`<db>.browser.lock`).
 - **배포**: `Dockerfile.browser`, compose의 `trss-browser` 서비스(768MiB, `cap_drop: ALL`, `no-new-privileges`, tini), `deploy.yml`의 두 번째 이미지 빌드, 개발 환경(`dev/compose.sh`, `dev/dev.env`). **서버 `.env`에 `TRSS_BROWSER_TOKEN`이 있어야 compose가 시작돼요.**
 - 어떤 출처도 아직 풀을 쓰지 않아요. erulabo(0041)·직접 찾기(0046)·WinPNG(0043)가 이 위에 붙어요.
-- 규칙 전체와 측정값은 [작업 화면 안의 인증과 브라우저 수명](../specs/jobs.md#작업-화면-안의-인증과-브라우저-수명)에 있어요.
+- 규칙 전체와 측정값은 [작업 화면 안의 인증과 브라우저 수명](../../../specs/jobs.md#작업-화면-안의-인증과-브라우저-수명)에 있어요.
 
 ### 검증한 것
 

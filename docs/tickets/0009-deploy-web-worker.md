@@ -33,7 +33,7 @@
   관찰한 날짜·주기 수·차이를 이 티켓의 결과에 적어요.
 - 웹만 재시작하는 동안 worker의 정기 처리가 계속돼요.
 - 보호 경계 밖에서 웹 포트에 접근할 수 없는 것을 실제 배포 경로에서 확인해요.
-  원격 인증 경로의 보호 확인은 결과 목표 3에서 해요.
+  원격 인증 경로의 보호는 결과 목표 3에서 만들었어요. 서버 브라우저 네트워크에서 온 연결의 거절은 [0040](../archive/tickets/3-subtitle-candidates-and-receiving/0040-remote-auth-screen.md)이, 브라우저 송신 제한과 웹의 Host·Origin 검사는 [0053](../archive/tickets/3-subtitle-candidates-and-receiving/0053-browser-egress-and-web-origin.md)이 했어요. 시험과 개발 환경에서만 확인했고, 실제 배포 경로에서는 이 티켓이 확인해요.
 - 실제 휴대폰에서 골격 화면(0003)과 규칙 편집(0006)을 한 번 수행하고 결과를 기록해요.
 
 ## 결과

@@ -1,7 +1,7 @@
 # 0034 시즌을 Anissia 작품에 연결해요
 
 - 상태: 완료 (아래 "결과", 화면은 브라우저로 보지 못함)
-- 출처: [작품 연결과 제외](../specs/library.md#작품-연결과-제외), [작품·회차 대응 필드](../specs/settings.md#작품회차-대응-필드)의 `seasons[].anissia_anime_no`, [채널과 규칙 필드](../specs/settings.md#채널과-규칙-필드)의 `subscription.season_id`
+- 출처: [작품 연결과 제외](../../../specs/library.md#작품-연결과-제외), [작품·회차 대응 필드](../../../specs/settings.md#작품회차-대응-필드)의 `seasons[].anissia_anime_no`, [채널과 규칙 필드](../../../specs/settings.md#채널과-규칙-필드)의 `subscription.season_id`
 - 막는 티켓: [0030](0030-feature-crates.md)
 
 ## 작업

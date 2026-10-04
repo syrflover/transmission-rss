@@ -1,7 +1,7 @@
 # 0042 Blogger·Google Drive의 개별 자막과 회차 ZIP을 받아요
 
 - 상태: 완료
-- 출처: [출처별 다운로드](../specs/subtitles.md#출처별-다운로드)(Blogger·Google Drive 개별 자막, 회차 ZIP), [Blogger·Google Drive 조사](../brainstorm/web-gui-subtitles.md#bloggergoogle-drive)
+- 출처: [출처별 다운로드](../../../specs/subtitles.md#출처별-다운로드)(Blogger·Google Drive 개별 자막, 회차 ZIP), [Blogger·Google Drive 조사](../../../brainstorm/web-gui-subtitles.md#bloggergoogle-drive)
 - 막는 티켓: [0038](0038-receive-result-tistory.md)
 
 ## 작업
@@ -26,7 +26,7 @@ Blogger 게시물에서 연결된 Google Drive 파일을 worker가 HTTP로 받�
 - **Blogger 출처**: `*.blogspot.com` 게시물의 본문(`.post-body`, 실제 테마 모두 같음)에서 Google Drive 링크와 그 글자를 읽어요. 게시물 수정 시각은 JSON-LD `dateModified`가 있는 테마에서 스냅샷에 남겨요.
 - **Drive 수신**: `drive:<파일 ID>`를 키로, https의 `drive.google.com`·`drive.usercontent.google.com`에서만, 쿠키·Referer 없이 받아요. 실제로는 `uc?export=download`가 `drive.usercontent.google.com/download`로 303 리다이렉트돼요. 파일 이름은 다운로드 응답의 `Content-Disposition`에서 와서, 안전한 이름으로 바꿔 바이트보다 먼저 기록해요. 확인·할당량 페이지는 넘기지 않고 `파일 아님`, 없는 파일(404 `text/html`)·로그인 요구는 `원본 없음`이에요. 폴더 링크만 있으면 `자막 대기`예요. Tistory와 Blogger가 Drive 요청 간격을 함께 써요.
 - **Tistory 본문의 Drive 링크**: 0038에서 `자막 대기`였던 게시물(felia)을 같은 Drive 수신으로 받아요. Tistory 첨부 블록은 그대로 모두 받아요.
-- **회차 고르기**: 링크 글자로 그 회차의 파일을 골라요. 그 회차를 이름한 링크(`15화`, `고양이와 용 08`, `… 4 24.zip`), 회차가 든 범위(`1 ~ 12화`, `1-3`), 폰트 링크, 회차가 없는 압축 파일, 그리고 회차를 말하지 않는 링크가 하나뿐이면 그 링크를 받아요. 아무것도 맞지 않으면 `출처 구조 바뀜`(`게시물에 24화 파일이 없어요`)이에요. 연도·날짜·코덱 숫자(`H.264`)·1000이 넘는 숫자와 띄어 쓴 `3 - 05`의 앞 숫자는 회차로 읽지 않아요. 비교 기준은 화면의 회차 키와 같아요. 규칙 전체는 [공통 수신 결과와 실패 분류](../specs/jobs.md#공통-수신-결과와-실패-분류)에 있어요.
+- **회차 고르기**: 링크 글자로 그 회차의 파일을 골라요. 그 회차를 이름한 링크(`15화`, `고양이와 용 08`, `… 4 24.zip`), 회차가 든 범위(`1 ~ 12화`, `1-3`), 폰트 링크, 회차가 없는 압축 파일, 그리고 회차를 말하지 않는 링크가 하나뿐이면 그 링크를 받아요. 아무것도 맞지 않으면 `출처 구조 바뀜`(`게시물에 24화 파일이 없어요`)이에요. 연도·날짜·코덱 숫자(`H.264`)·1000이 넘는 숫자와 띄어 쓴 `3 - 05`의 앞 숫자는 회차로 읽지 않아요. 비교 기준은 화면의 회차 키와 같아요. 규칙 전체는 [공통 수신 결과와 실패 분류](../../../specs/jobs.md#공통-수신-결과와-실패-분류)에 있어요.
 - **화면**: 받은 ZIP은 작업 상세에 `ZIP · 묶음으로 받음`, 이름이 폰트인 ZIP은 `ZIP · 폰트 묶음`으로 보여요.
 - 원격 파일 이름에서 보이지 않는 서식 문자(방향 바꿈 등)를 지워 확장자를 속일 수 없게 했어요.
 

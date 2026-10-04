@@ -23,6 +23,6 @@
 직접 찾기와 올리기는 사람이 고른 파일을 들이는 별도 입력 경로예요.
 출처별 다운로드에서 서버가 게시물을 열고 정상 다운로드를 시작해야 한다는 요구를 대신하지 않으며, 자동 수신의 검증을 이 경로의 성공으로 채우지 않아요.
 
-Anissia 줄을 관찰로 쌓는 부분은 [0035](../tickets/0035-candidate-observation.md)에서(2026-10-02), 자막 올리기는 [0047](../tickets/0047-subtitle-upload.md)에서(2026-10-03), 직접 찾기는 [0046](../tickets/0046-find-in-browser.md)에서(2026-10-04) 구현했어요.
+Anissia 줄을 관찰로 쌓는 부분은 [0035](../archive/tickets/3-subtitle-candidates-and-receiving/0035-candidate-observation.md)에서(2026-10-02), 자막 올리기는 [0047](../archive/tickets/3-subtitle-candidates-and-receiving/0047-subtitle-upload.md)에서(2026-10-03), 직접 찾기는 [0046](../archive/tickets/3-subtitle-candidates-and-receiving/0046-find-in-browser.md)에서(2026-10-04) 구현했어요.
 직접 찾기를 실제 제작자 블로그에서 확인하는 일은 0046에 남아 있어요.
 현재 요구는 [자막 명세](../specs/subtitles.md#직접-찾기와-자막-올리기)에 있어요.

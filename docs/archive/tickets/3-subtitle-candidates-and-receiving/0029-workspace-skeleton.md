@@ -1,14 +1,14 @@
 # 0029 크레이트 지도를 정하고 workspace의 바이너리와 공통 기반을 나눠요
 
 - 상태: 완료 (workspace 전환, 크레이트 지도, 로컬 compose 실행까지 끝났어요. 아래 "결과")
-- 출처: [기능별 크레이트 ADR](../adr/0011-feature-crate-workspace.md), [공통 라이브러리의 모듈 구성](../specs/web-app.md#공통-라이브러리의-모듈-구성)
+- 출처: [기능별 크레이트 ADR](../../../adr/0011-feature-crate-workspace.md), [공통 라이브러리의 모듈 구성](../../../specs/web-app.md#공통-라이브러리의-모듈-구성)
 - 막는 티켓: 없음 (0027·0028처럼 진행 중인 변경이 있으면 먼저 끝내요. 파일을 대량으로 옮기는 동안 다른 변경과 충돌하기 때문이에요)
 
 ## 작업
 
 동작을 바꾸지 않고 저장소를 Cargo workspace로 바꾸는 첫 단계예요. 넓은 이동이라 확장·축소 순서로 진행해요.
 
-1. 크레이트 지도의 모양은 [ADR 0011](../adr/0011-feature-crate-workspace.md)에 정했어요(사용자 결정, 2026-10-02). 순환하는 모듈을 한 묶음으로 두는 크레이트 구성, 마이그레이션 SQL과 순서는 모두 `trss-core`, 폴더는 `crates/<이름>/`이에요.
+1. 크레이트 지도의 모양은 [ADR 0011](../../../adr/0011-feature-crate-workspace.md)에 정했어요(사용자 결정, 2026-10-02). 순환하는 모듈을 한 묶음으로 두는 크레이트 구성, 마이그레이션 SQL과 순서는 모두 `trss-core`, 폴더는 `crates/<이름>/`이에요.
    이 티켓에서는 모듈마다 갈 크레이트를 표로 정하고 결과에 남겨요. 그 원칙을 바꿔야 하는 배치(예: 묶음을 더 나누거나 합침)가 나오면 그때만 사용자에게 물어요.
    2026-10-02에 `crate::` 참조로 센 역방향 의존이에요(시험 코드 제외). 이동 때 다시 확인해요.
    - 기능 → worker: `anissia`·`artwork`·`seasons`(`Clock`·`CycleLock`), `archive_suggestions`·`subscriptions`·`store/channels`(`plan::ChannelPlan`), `past_search`(`feed`·`plan`·`revisions`), `episode_offset`(`revisions`·`season_link`), `store/history`·`store/revisions`·`transmission`(`revisions`), `store/channels`(`commands::episode_undo`), `artwork`(규칙 보관의 `rename_noreplace`), `store/library`(문서 링크만: `commands::rule_archive`·`live`)
@@ -122,7 +122,7 @@ Docker 이미지 빌드, 테스트 위치(`tests/`), 배포 스크립트가 새 
 
 ### 사용자가 정한 것
 
-ADR 0011의 처음 목록(`rss`·`rule`… collect, `discovery`… library 등)대로 크레이트를 나누면 크레이트 사이에 순환이 생기는 곳이 있었어요. 크레이트 의존이 `core ← {transmission, anissia, anilist} ← library ← collect ← import ← {web, worker}`가 되도록 아래를 권고했고, 사용자가 2026-10-02에 정했어요(결정은 [ADR 0011](../adr/0011-feature-crate-workspace.md)). 권고대로 배치하고 아래에서 작은 상수(`FETCH_TIMEOUT`·`MAX_IMAGE_BYTES`, 큐의 `POLL`·`LOCK_RETRY`·`RETRY_DELAYS`, `MAX_REASON_CHARS`, 시간 상수 `DAY_MS` 등)를 쓰는 쪽 크레이트로 옮긴다고 치면, `use`·경로 참조를 읽는 스크립트로 센 크레이트 그래프(웹·worker 제외)에 순환이 없어요. 각 항목 끝에 정한 것을 적었어요.
+ADR 0011의 처음 목록(`rss`·`rule`… collect, `discovery`… library 등)대로 크레이트를 나누면 크레이트 사이에 순환이 생기는 곳이 있었어요. 크레이트 의존이 `core ← {transmission, anissia, anilist} ← library ← collect ← import ← {web, worker}`가 되도록 아래를 권고했고, 사용자가 2026-10-02에 정했어요(결정은 [ADR 0011](../../../adr/0011-feature-crate-workspace.md)). 권고대로 배치하고 아래에서 작은 상수(`FETCH_TIMEOUT`·`MAX_IMAGE_BYTES`, 큐의 `POLL`·`LOCK_RETRY`·`RETRY_DELAYS`, `MAX_REASON_CHARS`, 시간 상수 `DAY_MS` 등)를 쓰는 쪽 크레이트로 옮긴다고 치면, `use`·경로 참조를 읽는 스크립트로 센 크레이트 그래프(웹·worker 제외)에 순환이 없어요. 각 항목 끝에 정한 것을 적었어요.
 
 1. **Q1 collect ↔ library**: collect가 library를 쓰는 곳은 `episode_offset`(시즌 정보), `rule_archive`→`watch`, `store/channels/import`→`ensure_automatic_in`, `episode_undo`→`discovery`의 상수이고, library가 collect를 쓰는 곳은 `worker/season_link`→`store::channels`(구독·규칙)예요. 사용자 목록은 `season_link`를 library에 뒀어요. 권고: collect→library 방향으로 두고 `season_link`를 `trss-collect`로 옮겨요. 구독과 시즌을 잇는 일이라 구독 쪽 코드예요. **정함**: 권고대로 collect→library, `season_link`는 `trss-collect`.
 2. **Q2 library가 collect의 저장소를 쓰는 곳**: `watch_rescan`→`store/commands`, `heartbeat`·`live/watcher`→`store/status`, `artwork/files`→`rename_noreplace`예요. 권고: `store/commands`(웹이 맡기고 worker가 집는 요청 큐)와 `store/status`(worker가 웹에 남기는 스냅샷·하트비트)는 기능 규칙이 없는 웹↔worker 인계 테이블이라 `trss-core`에 두고, `heartbeat`도 core로, `rename_noreplace`는 core의 파일 도구로 내려요. 대안은 `store/status`를 나누는 것이에요(하트비트만 core). **정함**: 명령 큐·하트비트·`rename_noreplace`는 `trss-core`, `store/status`의 나머지(상태 스냅샷)는 `trss-collect`.

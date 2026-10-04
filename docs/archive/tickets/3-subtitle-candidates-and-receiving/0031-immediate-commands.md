@@ -1,7 +1,7 @@
 # 0031 웹 명령을 접수하자마자 실행해요
 
 - 상태: 완료 (아래 "결과")
-- 출처: [웹 명령과 상태 갱신](../specs/web-app.md#웹-명령과-상태-갱신)의 즉시 실행, [웹·작업 바이너리 분리 ADR](../adr/0006-separate-web-worker-binaries.md)
+- 출처: [웹 명령과 상태 갱신](../../../specs/web-app.md#웹-명령과-상태-갱신)의 즉시 실행, [웹·작업 바이너리 분리 ADR](../../../adr/0006-separate-web-worker-binaries.md)
 - 막는 티켓: [0030](0030-feature-crates.md)(worker 코드가 옮겨지는 중이라서예요)
 
 ## 작업
