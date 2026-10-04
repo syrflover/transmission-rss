@@ -50,6 +50,7 @@ export function receive(session: ScreenSession, message: ServerMessage): ScreenS
     case "nav":
     case "tabs":
     case "page":
+    case "dialog":
     case "ended":
       return session;
   }

@@ -112,6 +112,12 @@
 //!   blank is the floor, judged here on the page's own history at every
 //!   request, whatever `nav` last said. A step that is not allowed is
 //!   ignored. They count as input.
+//! - `{"type":"dialog","id","accept","text"}`: the answer to the dialog
+//!   `id` the page shows (`Page.handleJavaScriptDialog`): `accept` is `확인`
+//!   (`떠나기` for a `beforeunload`), and `text` (up to 2,000 characters) is
+//!   what a prompt that is accepted answers. An answer to another dialog than
+//!   the one shown is ignored. It is taken at once, not behind the inputs,
+//!   and counts as input.
 //!
 //! The web sends:
 //!
@@ -138,6 +144,16 @@
 //!   once it answers again. Meanwhile inputs are not sent to it, and a size
 //!   sent is applied when it answers (a new generation). Sent like `nav`
 //!   (not at all while the page never stalled).
+//! - `{"type":"dialog","dialog":{"id","kind","message","host","prompt"}}`:
+//!   the page shows a dialog (`Page.javascriptDialogOpening`), which no frame
+//!   draws. `kind` is `alert`, `confirm`, `prompt` or `beforeunload`;
+//!   `message` is cut to 1,000 characters and `prompt` (a prompt's default
+//!   text) to 2,000; `host` is the host of the frame that opened it (`null`
+//!   as above). While it shows, inputs, reloads and steps are not sent to
+//!   the page and a size is applied once it closed. `{"type":"dialog",
+//!   "dialog":null}` once it closed. Sent like `nav`. A `beforeunload` that
+//!   comes within 3 s of a person's reload or step is answered `leave` by the
+//!   web and not sent. The message is never logged or stored.
 //! - `{"type":"ended","reason"}`, then the socket closes: the run's page or
 //!   connection is gone (`browser`), the job's binding changed (`run`: the
 //!   file came, the run ended, or another run, page or binding took its
@@ -717,6 +733,12 @@ async fn serve(
                     let Ok(message) = serde_json::from_str::<Incoming>(text.as_str()) else {
                         continue;
                     };
+                    // An answer to a dialog does not wait behind the inputs.
+                    if let Incoming::Dialog { id, accept, text } = message {
+                        let hub = hub.clone();
+                        tokio::spawn(async move { hub.answer_dialog(id, accept, text).await });
+                        continue;
+                    }
                     if takes(&message, queue.capacity()) {
                         let _ = queue.try_send(message);
                     }

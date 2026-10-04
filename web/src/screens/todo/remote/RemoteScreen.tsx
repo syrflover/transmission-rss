@@ -20,6 +20,7 @@ import {
   wheelPixels,
 } from "./keys";
 import { textChunks, type EndedReason, type InputBody, type Tab, type TouchPoint } from "./protocol";
+import { PageDialogCard } from "./PageDialogCard";
 import { showsTabRow, tabLabel, withShown } from "./tabs";
 import { isTouchDevice, useRemoteConnection } from "./useRemoteConnection";
 
@@ -68,6 +69,9 @@ const ENDED_TEXT: Record<EndedReason, string> = {
  *   `stuck`) is covered by a note with `새로 띄우기`, which asks the worker
  *   for a new run of the post (`POST .../screen/restart`); the note stays
  *   until the job has another binding.
+ * - A dialog the page shows, which no frame draws, is a card over the screen
+ *   ({@link PageDialogCard}); the toolbar and the tabs wait until it is
+ *   answered.
  */
 export function RemoteScreen({
   jobId,
@@ -331,7 +335,10 @@ export function RemoteScreen({
   // Also before the first frame: a page that is already stalled when the
   // screen connects sends none until it answers again.
   const stalled = (live || phase === "connecting") && !conn.responding;
+  // A dialog the page shows: the person answers it before anything else goes to the page.
+  const dialog = (live || phase === "connecting") && !restarting ? conn.dialog : null;
   const covered = !live || stalled || restarting;
+  const usable = live && dialog === null;
   const aspect = frame ?? planned;
   // A page that ended while the screen was ready: the person asks for it again.
   const reopen = () => {
@@ -350,7 +357,7 @@ export function RemoteScreen({
           className={iconButton}
           aria-label="뒤로"
           title="뒤로"
-          disabled={!live || !conn.nav?.back}
+          disabled={!usable || !conn.nav?.back}
           onClick={conn.back}
         >
           <HistoryBackIcon className="size-[18px]" />
@@ -361,7 +368,7 @@ export function RemoteScreen({
           className={iconButton}
           aria-label="앞으로"
           title="앞으로"
-          disabled={!live || !conn.nav?.forward}
+          disabled={!usable || !conn.nav?.forward}
           onClick={conn.forward}
         >
           <HistoryForwardIcon className="size-[18px]" />
@@ -373,7 +380,7 @@ export function RemoteScreen({
           className={iconButton}
           aria-label="새로고침"
           title="새로고침"
-          disabled={!live}
+          disabled={!usable}
           onClick={conn.reload}
         >
           <ReloadIcon className="size-[18px]" />
@@ -388,7 +395,7 @@ export function RemoteScreen({
             variant="ghost"
             className={cn(btnNeutral, "ml-auto")}
             aria-pressed={typing}
-            disabled={!live}
+            disabled={!usable}
             onClick={showKeyboard}
           >
             키보드
@@ -410,7 +417,7 @@ export function RemoteScreen({
               <button
                 type="button"
                 aria-current={tab.shown ? "page" : undefined}
-                disabled={asking || !live}
+                disabled={asking || !usable}
                 className={cn(
                   "min-h-9 min-w-0 flex-1 truncate rounded-full px-3 text-left text-[13px] font-semibold max-[720px]:min-h-10",
                   tab.shown ? "text-focus" : "text-text-primary",
@@ -428,7 +435,7 @@ export function RemoteScreen({
                   type="button"
                   aria-label={`${tabLabel(tab)} 닫기`}
                   title="닫기"
-                  disabled={asking || !live}
+                  disabled={asking || !usable}
                   className="flex size-9 flex-none items-center justify-center rounded-full text-text-secondary hover:text-text-primary max-[720px]:size-10"
                   onClick={() => void askTab(closeTab, tab)}
                 >
@@ -466,7 +473,11 @@ export function RemoteScreen({
             ref={image}
             alt=""
             draggable={false}
-            className={cn("pointer-events-none absolute inset-0 size-full", !frame && "invisible", covered && "opacity-40")}
+            className={cn(
+              "pointer-events-none absolute inset-0 size-full",
+              !frame && "invisible",
+              (covered || dialog !== null) && "opacity-40",
+            )}
           />
           <textarea
             ref={field}
@@ -488,7 +499,14 @@ export function RemoteScreen({
           />
         </div>
 
-        {covered && (
+        {dialog !== null && (
+          <PageDialogCard
+            key={dialog.id}
+            dialog={dialog}
+            onAnswer={(accept, text) => conn.answerDialog(dialog.id, accept, text)}
+          />
+        )}
+        {covered && dialog === null && (
           <div
             role="status"
             className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-surface-1/60 p-4 text-center text-[13.5px] leading-relaxed text-text-secondary"

@@ -34,6 +34,22 @@ export interface Tab {
   closable: boolean;
 }
 
+/** The kinds of dialog a page shows: `alert("…")`, `confirm("…")`, `prompt("…")`, and the ask before leaving it. */
+export type DialogKind = "alert" | "confirm" | "prompt" | "beforeunload";
+
+/** A dialog the remote page shows, which no frame draws: the person answers it here. */
+export interface PageDialog {
+  /** What the answer names the dialog by. */
+  id: number;
+  kind: DialogKind;
+  /** The page's text, cut by the server; empty for `beforeunload`, whose text browsers no longer show. */
+  message: string;
+  /** Only the host of the frame that opened it; `null` for one with none. */
+  host: string | null;
+  /** A prompt's default text. */
+  prompt: string;
+}
+
 /** Whether a step back or forward is allowed on the page shown, and its host. */
 export interface Nav {
   back: boolean;
@@ -57,6 +73,11 @@ export type ServerMessage =
    * it answers again. Sent on connecting and whenever it changes; never while the page never stalled.
    */
   | { type: "page"; responding: boolean }
+  /**
+   * The dialog the page shows, or `null` once it closed. Inputs, reloads and steps are not sent to the page meanwhile.
+   * Sent on connecting and whenever it changes.
+   */
+  | { type: "dialog"; dialog: PageDialog | null }
   | { type: "ended"; reason: EndedReason };
 
 const isNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
@@ -71,6 +92,18 @@ function parseTab(value: unknown): Tab | null {
     typeof t.shown === "boolean" &&
     typeof t.closable === "boolean"
     ? { id: t.id, title: t.title, host: t.host, shown: t.shown, closable: t.closable }
+    : null;
+}
+
+function parseDialog(value: unknown): PageDialog | null {
+  if (typeof value !== "object" || value === null) return null;
+  const d = value as Record<string, unknown>;
+  return isNumber(d.id) &&
+    (d.kind === "alert" || d.kind === "confirm" || d.kind === "prompt" || d.kind === "beforeunload") &&
+    typeof d.message === "string" &&
+    (d.host === null || typeof d.host === "string") &&
+    typeof d.prompt === "string"
+    ? { id: d.id, kind: d.kind, message: d.message, host: d.host, prompt: d.prompt }
     : null;
 }
 
@@ -111,6 +144,11 @@ export function parseServerMessage(text: string): ServerMessage | null {
     }
     case "page":
       return typeof m.responding === "boolean" ? { type: "page", responding: m.responding } : null;
+    case "dialog": {
+      if (m.dialog === null) return { type: "dialog", dialog: null };
+      const dialog = parseDialog(m.dialog);
+      return dialog === null ? null : { type: "dialog", dialog };
+    }
     case "ended":
       return m.reason === "browser" || m.reason === "run" || m.reason === "unreachable" || m.reason === "stuck" || m.reason === "replaced"
         ? { type: "ended", reason: m.reason }
@@ -163,6 +201,8 @@ export type ClientMessage =
   /** A step back or forward in the page's history; the server judges it again on the page's own history. */
   | { type: "back" }
   | { type: "forward" }
+  /** The answer to the dialog `id`: `accept` is 확인 (떠나기 for `beforeunload`); `text` answers an accepted prompt. */
+  | { type: "dialog"; id: number; accept: boolean; text?: string }
   | (InputBody & { gen: number });
 
 /** The server drops a message over this many bytes by closing the socket. */

@@ -13,6 +13,7 @@ import {
   type EndedReason,
   type InputBody,
   type Nav,
+  type PageDialog,
   type ServerMessage,
   type Tab,
   type Viewport,
@@ -55,6 +56,10 @@ export interface Connection {
   tabs: Tab[];
   /** Whether the page answers, as the server last said: inputs are not sent to one that does not. */
   responding: boolean;
+  /** The dialog the page shows, as the server last said; `null` when none does. */
+  dialog: PageDialog | null;
+  /** Answers the dialog `id`: `accept` is 확인 (떠나기), `text` what an accepted prompt answers. */
+  answerDialog: (id: number, accept: boolean, text?: string) => void;
 }
 
 /** Whether this device is a touch screen: its main pointer is a finger. */
@@ -98,6 +103,7 @@ export function useRemoteConnection(options: {
   const [nav, setNav] = useState<Nav | null>(null);
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [responding, setResponding] = useState(true);
+  const [dialog, setDialog] = useState<PageDialog | null>(null);
   /** The run the `nav` and `tabs` above are of: another binding of it keeps them while the socket connects anew. */
   const stateOf = useRef<string | null>(null);
   /** Counts the retries after a read of the job said to connect to the same run again. */
@@ -131,8 +137,9 @@ export function useRemoteConnection(options: {
     setPhase("connecting");
     setReason(null);
     setFrame(null);
-    // Each socket is told anew when the page does not answer.
+    // Each socket is told anew when the page does not answer or shows a dialog.
     setResponding(true);
+    setDialog(null);
     // The tabs and the page's state stay while a screen of the same run connects anew (a switch of tab is one), so
     // the row does not flicker; another run's are not this one's.
     if (stateOf.current !== run) {
@@ -226,6 +233,9 @@ export function useRemoteConnection(options: {
         case "page":
           setResponding(message.responding);
           break;
+        case "dialog":
+          setDialog(message.dialog);
+          break;
         case "ended":
           ended = message.reason;
           break;
@@ -284,6 +294,10 @@ export function useRemoteConnection(options: {
   const reload = useCallback(() => command({ type: "reload" }), [command]);
   const back = useCallback(() => command({ type: "back" }), [command]);
   const forward = useCallback(() => command({ type: "forward" }), [command]);
+  const answerDialog = useCallback(
+    (id: number, accept: boolean, text?: string) => command({ type: "dialog", id, accept, ...(text === undefined ? {} : { text }) }),
+    [command],
+  );
 
-  return { phase, reason, frame, planned, session, send, reload, back, forward, nav, tabs, responding };
+  return { phase, reason, frame, planned, session, send, reload, back, forward, nav, tabs, responding, dialog, answerDialog };
 }

@@ -56,6 +56,26 @@
 //! the hub (`browser`). A page that does not answer `Page.enable` within
 //! [`Times::open_within`] has no hub at all ([`OpenError::Stuck`]).
 //!
+//! # Dialogs
+//!
+//! The page's dialogs (`alert`, `confirm`, `prompt`, `beforeunload`) are
+//! not drawn in the frames, and with `Page.enable` on, the browser leaves
+//! them to the hub: one no one answers holds the page until the run ends,
+//! even after the hub's connection closed. So the hub tells its sockets the
+//! dialog the page shows and answers it as a person chooses
+//! ([`Hub::answer_dialog`]). While it shows, inputs, reloads and steps are
+//! not sent (the page takes none), a size is kept until it closed, and then
+//! what a press that opened it holds down is let go. An
+//! input that opened it (a click on a button that asks to confirm) is
+//! answered only once it closed: its wait ends when the dialog opens, and
+//! neither that wait nor the dialog is a page that does not answer (a
+//! stall ends when one opens, and none starts while it shows). A person's
+//! answer the page refuses means it shows none: a dialog whose close the hub
+//! missed is closed then, so it does not hold the screen. A `beforeunload`
+//! within [`LEAVE_WITHIN`] of a person's reload or step is theirs: the hub
+//! answers it `leave` and does not send it. A hub that goes while a dialog
+//! shows dismisses it first (an `alert` is closed, a `beforeunload` stays).
+//!
 //! # Seats
 //!
 //! At most [`MAX_SOCKETS`] sockets are open on a hub. A new one always gets
@@ -67,7 +87,7 @@
 use std::{
     collections::VecDeque,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
     },
     time::{Duration, Instant},
@@ -80,13 +100,13 @@ use tokio::sync::{
         self,
         error::{RecvError, TryRecvError},
     },
-    mpsc, oneshot, Notify,
+    mpsc, oneshot, watch, Notify,
 };
 use tokio_util::sync::{CancellationToken, DropGuard};
 use trss_browser::cdp::{CdpError, Connection, Event};
 use trss_jobs::ScreenStore;
 
-use super::nav::{tabs_message, History};
+use super::nav::{host_of, tabs_message, History};
 use crate::commands_api::now_millis;
 
 /// The times a hub keeps (see the module docs and `super`).
@@ -164,6 +184,16 @@ const SIZE_SLACK: f64 = 1.5;
 /// The least time between two readings of the page's history and the run's
 /// targets, however many events ask for one.
 const REFRESH_GAP: Duration = Duration::from_millis(150);
+/// How long after a person's reload or step a `beforeunload` dialog is
+/// taken as theirs and answered `leave` (see the module docs).
+const LEAVE_WITHIN: Duration = Duration::from_secs(3);
+/// The most characters of a dialog's message that are sent.
+const DIALOG_MESSAGE: usize = 1000;
+/// The most characters of a prompt's text, sent or answered.
+const DIALOG_TEXT: usize = 2000;
+/// How long the dismissal of a dialog no one answers may take when its hub
+/// goes.
+const DISMISS_WITHIN: Duration = Duration::from_secs(2);
 
 /// What a device reports when it opens the screen or changes its size.
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
@@ -250,6 +280,14 @@ pub enum Incoming {
     Reload,
     Back,
     Forward,
+    /// A person's answer to the dialog `id` the page shows: `accept` (`확인`,
+    /// `떠나기`) or not, and for a prompt the text.
+    Dialog {
+        id: u64,
+        accept: bool,
+        #[serde(default)]
+        text: Option<String>,
+    },
 }
 
 impl Incoming {
@@ -394,7 +432,11 @@ fn command_of(message: &Incoming, view: &View) -> Option<(&'static str, Value)> 
             let length = text.chars().count();
             (length > 0 && length <= 2000).then(|| ("Input.insertText", json!({ "text": text })))
         }
-        Incoming::Viewport(_) | Incoming::Reload | Incoming::Back | Incoming::Forward => None,
+        Incoming::Viewport(_)
+        | Incoming::Reload
+        | Incoming::Back
+        | Incoming::Forward
+        | Incoming::Dialog { .. } => None,
     }
 }
 
@@ -417,6 +459,11 @@ struct Held {
     mouse: Option<(String, f64, f64)>,
     /// Fingers are on the page: the last touch event sent left points.
     touch: bool,
+    /// How many dialogs the page had shown when the button, or the first
+    /// finger, went down: a dialog that closed lets go only of what went
+    /// down before it opened.
+    mouse_from: u64,
+    touch_from: u64,
 }
 
 /// The sockets seated on a hub, oldest first.
@@ -433,6 +480,21 @@ struct Barrier {
     viewport: Arc<str>,
     after: u64,
     done: oneshot::Sender<()>,
+}
+
+/// A dialog the page shows (see the module docs).
+#[derive(Debug, Clone, Copy)]
+struct Shown {
+    id: u64,
+    kind: &'static str,
+    /// A `beforeunload` the hub answers itself (`leave`): never sent to the
+    /// sockets.
+    theirs: bool,
+}
+
+/// `text` cut to its first `most` characters.
+fn cut(text: &str, most: usize) -> String {
+    text.chars().take(most).collect()
 }
 
 /// The remote screen of one run's page.
@@ -462,10 +524,24 @@ pub struct Hub {
     /// changed; `reason` says which (`browser`, `run`).
     ended: CancellationToken,
     reason: Mutex<&'static str>,
-    /// The `nav`, `tabs` and `page` messages as last sent.
+    /// The dialog the page shows: inputs, reloads, steps and changes of
+    /// size wait while it does (see the module docs).
+    dialog: watch::Sender<Option<Shown>>,
+    /// The last dialog's number.
+    dialogs: AtomicU64,
+    /// When a person last reloaded the page or stepped in its history.
+    left_at: Mutex<Option<Instant>>,
+    /// The dialog a person's answer is on its way to (0 when none): one
+    /// answer to a dialog at a time.
+    answering: AtomicU64,
+    /// A size was kept while the page could not take it (stalled, or a
+    /// dialog showed): it is applied once the page can.
+    size_waits: AtomicBool,
+    /// The `nav`, `tabs`, `page` and `dialog` messages as last sent.
     nav: Mutex<Option<Arc<str>>>,
     tabs: Mutex<Option<Arc<str>>>,
     page: Mutex<Option<Arc<str>>>,
+    dialog_message: Mutex<Option<Arc<str>>>,
     /// The pages the worker listed when the hub last read the screen.
     listed: Mutex<Vec<String>>,
     /// Told that `nav` or `tabs` may be out of date.
@@ -498,7 +574,26 @@ impl Drop for Seat {
 
 impl Drop for Hub {
     fn drop(&mut self) {
-        self.conn.close();
+        // A dialog no one answers stays on the page and holds it until the
+        // run ends: it is dismissed first (see the module docs).
+        let shows = self.dialog.borrow().is_some();
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) if shows => {
+                let (conn, session) = (self.conn.clone(), self.session.clone());
+                runtime.spawn(async move {
+                    let _ = conn
+                        .command_within(
+                            Some(&session),
+                            "Page.handleJavaScriptDialog",
+                            json!({ "accept": false }),
+                            DISMISS_WITHIN,
+                        )
+                        .await;
+                    conn.close();
+                });
+            }
+            _ => self.conn.close(),
+        }
     }
 }
 
@@ -573,9 +668,15 @@ impl Hub {
             seats: Mutex::default(),
             ended: CancellationToken::new(),
             reason: Mutex::new("browser"),
+            dialog: watch::Sender::new(None),
+            dialogs: AtomicU64::new(0),
+            left_at: Mutex::new(None),
+            answering: AtomicU64::new(0),
+            size_waits: AtomicBool::new(false),
             nav: Mutex::default(),
             tabs: Mutex::default(),
             page: Mutex::default(),
+            dialog_message: Mutex::default(),
             listed: Mutex::default(),
             changed: Arc::new(Notify::new()),
             refresh: tokio::sync::Mutex::new(()),
@@ -628,10 +729,10 @@ impl Hub {
         self.out.subscribe()
     }
 
-    /// The `nav`, `tabs` and `page` messages as last sent, for a socket that
-    /// connects or skipped some.
+    /// The `nav`, `tabs`, `page` and `dialog` messages as last sent, for a
+    /// socket that connects or skipped some.
     pub fn states(&self) -> Vec<Arc<str>> {
-        [&self.nav, &self.tabs, &self.page]
+        [&self.nav, &self.tabs, &self.page, &self.dialog_message]
             .into_iter()
             .filter_map(|slot| slot.lock().expect("state lock").clone())
             .collect()
@@ -714,6 +815,144 @@ impl Hub {
         }
     }
 
+    /// An input to the page: [`Hub::send`], but the wait ends when the page
+    /// shows a dialog. The input went to the page, which answers it only
+    /// once the dialog closes (a click that opened it): it is not a page
+    /// that does not answer (see the module docs).
+    async fn send_input(&self, method: &str, params: Value) -> Result<Value, Fail> {
+        let mut dialog = self.dialog.subscribe();
+        tokio::select! {
+            // First, so that the input is sent before the dialog is looked at.
+            biased;
+            answer = self.send(method, params) => answer,
+            _ = dialog.wait_for(Option::is_some) => Ok(Value::Null),
+        }
+    }
+
+    pub fn shows_dialog(&self) -> bool {
+        self.dialog.borrow().is_some()
+    }
+
+    /// A person reloads the page or steps in its history: a `beforeunload`
+    /// dialog it brings is theirs.
+    fn leaving(&self) {
+        *self.left_at.lock().expect("left lock") = Some(Instant::now());
+    }
+
+    /// A person's answer to the dialog `id`: only the one the page shows
+    /// now, and not one the hub answers itself, and one answer at a time.
+    /// The text goes only with a prompt that is accepted. Counts as input.
+    pub async fn answer_dialog(self: &Arc<Self>, id: u64, accept: bool, text: Option<String>) {
+        let kind = match *self.dialog.borrow() {
+            Some(shown) if shown.id == id && !shown.theirs => shown.kind,
+            _ => return,
+        };
+        if self.answering.swap(id, Ordering::SeqCst) == id {
+            return;
+        }
+        let mut params = json!({ "accept": accept });
+        if accept && kind == "prompt" {
+            params["promptText"] = json!(cut(text.as_deref().unwrap_or(""), DIALOG_TEXT));
+        }
+        let answer = self.send("Page.handleJavaScriptDialog", params).await;
+        let _ = self
+            .answering
+            .compare_exchange(id, 0, Ordering::SeqCst, Ordering::SeqCst);
+        // Refused: the page shows no dialog. One that closed meanwhile was
+        // closed by its own event; one whose close the hub missed (its
+        // events lagged) would hold the screen until every socket closed, so
+        // it is closed now.
+        if let Err(Fail::Refused(_)) = answer {
+            let mut gone = None;
+            self.dialog.send_if_modified(|shown| match *shown {
+                Some(was) if was.id == id => {
+                    gone = shown.take();
+                    true
+                }
+                _ => false,
+            });
+            if let Some(gone) = gone {
+                self.after_dialog(gone);
+            }
+        }
+        self.input_came().await;
+    }
+
+    /// The page shows a dialog. A `beforeunload` that comes soon after a
+    /// person's reload or step is answered `leave` at once; any other is
+    /// told to the sockets. Waiting for a person is not a page that does not
+    /// answer: a stall ends, and the size is applied once the dialog closed.
+    fn dialog_opening(self: &Arc<Self>, params: &Value) {
+        let kind = match params["type"].as_str() {
+            Some("confirm") => "confirm",
+            Some("prompt") => "prompt",
+            Some("beforeunload") => "beforeunload",
+            _ => "alert",
+        };
+        let theirs = kind == "beforeunload"
+            && self
+                .left_at
+                .lock()
+                .expect("left lock")
+                .is_some_and(|at| at.elapsed() <= LEAVE_WITHIN);
+        let id = self.dialogs.fetch_add(1, Ordering::SeqCst) + 1;
+        // Shown first: a stall that comes meanwhile sees it ([`Hub::mark_stalled`]).
+        self.dialog.send_replace(Some(Shown { id, kind, theirs }));
+        if self.mark_stalled(false) {
+            self.size_waits.store(true, Ordering::SeqCst);
+        }
+        if theirs {
+            let hub = self.clone();
+            tokio::spawn(async move {
+                let _ = hub
+                    .send("Page.handleJavaScriptDialog", json!({ "accept": true }))
+                    .await;
+            });
+            return;
+        }
+        // The message is what the page shows the person, as the frames are:
+        // it is sent and never logged. Of the frame's address only the host.
+        let message = json!({
+            "type": "dialog",
+            "dialog": {
+                "id": id,
+                "kind": kind,
+                "message": cut(params["message"].as_str().unwrap_or(""), DIALOG_MESSAGE),
+                "host": params["url"].as_str().and_then(host_of),
+                "prompt": cut(params["defaultPrompt"].as_str().unwrap_or(""), DIALOG_TEXT),
+            },
+        });
+        self.publish(&self.dialog_message, message.to_string());
+    }
+
+    /// The dialog closed (answered, or the page went).
+    fn dialog_closed(self: &Arc<Self>) {
+        if let Some(shown) = self.dialog.send_replace(None) {
+            self.after_dialog(shown);
+        }
+    }
+
+    /// The dialog `shown` no longer shows: the sockets are told, what a
+    /// press that opened it holds down is let go (its release came while it
+    /// showed and was not sent; a press that came after it closed is not),
+    /// and a size kept meanwhile is applied.
+    fn after_dialog(self: &Arc<Self>, shown: Shown) {
+        if !shown.theirs {
+            self.publish(
+                &self.dialog_message,
+                json!({ "type": "dialog", "dialog": null }).to_string(),
+            );
+        }
+        let hub = self.clone();
+        tokio::spawn(async move {
+            {
+                let mut held = hub.input.lock().await;
+                hub.release_held(&mut held, shown.id).await;
+            }
+            hub.apply_waiting_size().await;
+        });
+    }
+
     /// The page did not answer in time: the sockets are told, and the prober
     /// asks until it answers again.
     fn stall(&self) {
@@ -733,9 +972,14 @@ impl Hub {
     /// Sets whether the page is stalled and tells the sockets when that
     /// changed, both under the lock of the `page` message: a stall and a
     /// recovery that cross are told in the order the flag changed, and the
-    /// last message sent is the flag's value. Whether it changed.
+    /// last message sent is the flag's value. A page that shows a dialog
+    /// does not stall: a command it did not answer waits for the person (a
+    /// reload sent just before the dialog opened). Whether it changed.
     fn mark_stalled(&self, stalled: bool) -> bool {
         let mut last = self.page.lock().expect("state lock");
+        if stalled && self.shows_dialog() {
+            return false;
+        }
         if self.stalled.swap(stalled, Ordering::SeqCst) == stalled {
             return false;
         }
@@ -748,14 +992,19 @@ impl Hub {
     }
 
     /// Takes one message of a socket.
-    pub async fn handle(&self, message: Incoming) -> Handled {
+    pub async fn handle(self: &Arc<Self>, message: Incoming) -> Handled {
         match message {
             Incoming::Viewport(viewport) if viewport.valid() => {
                 self.resize_to(viewport).await;
                 Handled::Done
             }
             Incoming::Viewport(_) => Handled::Invalid,
+            // Not while a dialog shows: the person answers it first.
+            Incoming::Reload | Incoming::Back | Incoming::Forward if self.shows_dialog() => {
+                Handled::Done
+            }
             Incoming::Reload => {
+                self.leaving();
                 // Also when the page is stalled: the browser itself answers
                 // it, and a page that moves again may need it.
                 if let Err(fail) = self
@@ -775,6 +1024,10 @@ impl Hub {
                 self.step(false).await;
                 Handled::Done
             }
+            Incoming::Dialog { id, accept, text } => {
+                self.answer_dialog(id, accept, text).await;
+                Handled::Done
+            }
             Incoming::Mouse { gen, .. }
             | Incoming::Touch { gen, .. }
             | Incoming::Key { gen, .. }
@@ -789,11 +1042,14 @@ impl Hub {
                 let Some((method, params)) = command_of(&message, &view) else {
                     return Handled::Invalid;
                 };
-                // Not sent to a stalled page (see the module docs).
-                if self.is_stalled() {
+                // Before the input goes: a dialog it opens is a later one.
+                let dialogs = self.dialogs.load(Ordering::SeqCst);
+                // Not sent to a stalled page, nor while a dialog shows (see
+                // the module docs).
+                if self.is_stalled() || self.shows_dialog() {
                     return Handled::Done;
                 }
-                match self.send(method, params).await {
+                match self.send_input(method, params).await {
                     Ok(_) => {}
                     // Sent, and the page may take it later.
                     Err(fail @ Fail::Late(_)) => self.failed(&fail),
@@ -802,7 +1058,7 @@ impl Hub {
                         return Handled::Done;
                     }
                 }
-                note_held(&mut held, &message);
+                note_held(&mut held, &message, dialogs);
                 drop(held);
                 self.input_came().await;
                 Handled::Done
@@ -827,9 +1083,14 @@ impl Hub {
                 history.forward()
             };
             if let Some(entry) = entry {
-                let _ = self
+                self.leaving();
+                let step = self
                     .send("Page.navigateToHistoryEntry", json!({ "entryId": entry }))
                     .await;
+                // Not taken: a `beforeunload` the page brings now is its own.
+                if let Err(Fail::Refused(_)) = step {
+                    *self.left_at.lock().expect("left lock") = None;
+                }
             }
         }
         self.input_came().await;
@@ -889,8 +1150,8 @@ impl Hub {
     }
 }
 
-/// What a sent input leaves held down on the page.
-fn note_held(held: &mut Held, message: &Incoming) {
+/// What a sent input leaves held down on the page, `dialogs` having shown.
+fn note_held(held: &mut Held, message: &Incoming, dialogs: u64) {
     match message {
         Incoming::Mouse {
             event,
@@ -902,6 +1163,7 @@ fn note_held(held: &mut Held, message: &Incoming) {
             "mousePressed" => {
                 let button = button.clone().unwrap_or_else(|| "left".to_owned());
                 held.mouse = Some((button, *x, *y));
+                held.mouse_from = dialogs;
             }
             "mouseReleased" => held.mouse = None,
             "mouseMoved" => {
@@ -914,18 +1176,35 @@ fn note_held(held: &mut Held, message: &Incoming) {
         // The points are the fingers left on the page, also after a
         // `touchEnd` of one of them.
         Incoming::Touch { event, points, .. } => {
-            held.touch = event != "touchCancel" && !points.is_empty();
+            let touch = event != "touchCancel" && !points.is_empty();
+            if touch && !held.touch {
+                held.touch_from = dialogs;
+            }
+            held.touch = touch;
         }
         _ => {}
     }
 }
 
+/// What of `held` went down before `before` dialogs had shown, taken out of
+/// it: the button, and whether fingers were down.
+fn let_go(held: &mut Held, before: u64) -> (Option<(String, f64, f64)>, bool) {
+    let mouse = if held.mouse_from < before {
+        held.mouse.take()
+    } else {
+        None
+    };
+    let touch = held.touch_from < before && std::mem::take(&mut held.touch);
+    (mouse, touch)
+}
+
 impl Hub {
-    /// Lets go of what the page holds down (see the module docs). A
-    /// release that does not click.
-    async fn release_held(&self, held: &mut Held) {
-        let held = std::mem::take(held);
-        if let Some((button, x, y)) = held.mouse {
+    /// Lets go of what the page holds down that went down before `before`
+    /// dialogs had shown (all of it with `u64::MAX`; see the module docs).
+    /// A release that does not click.
+    async fn release_held(&self, held: &mut Held, before: u64) {
+        let (mouse, touch) = let_go(held, before);
+        if let Some((button, x, y)) = mouse {
             let _ = self
                 .send(
                     "Input.dispatchMouseEvent",
@@ -936,7 +1215,7 @@ impl Hub {
                 )
                 .await;
         }
-        if held.touch {
+        if touch {
             let _ = self
                 .send(
                     "Input.dispatchTouchEvent",
@@ -964,14 +1243,29 @@ impl Hub {
         }
     }
 
+    /// A size kept while a dialog showed is applied once it closed. Under
+    /// the lock of a change of size, which a size kept meanwhile was kept
+    /// under too.
+    async fn apply_waiting_size(&self) {
+        let one = self.resize.lock().await;
+        if self.size_waits.load(Ordering::SeqCst) {
+            if let Some(viewport) = self.view().viewport {
+                self.apply_size(viewport, one).await;
+            }
+        }
+    }
+
     /// [`Hub::resize_to`], with its change of size under way (`_one`).
     async fn apply_size(&self, viewport: Viewport, _one: tokio::sync::MutexGuard<'_, ()>) {
-        // A stalled page would not answer: the size is applied when it
-        // answers again ([`Hub::recover`]).
-        if self.is_stalled() {
+        // A stalled page, or one that shows a dialog, would not answer: the
+        // size is applied when it answers again ([`Hub::recover`]) or the
+        // dialog closed.
+        if self.is_stalled() || self.shows_dialog() {
             self.view.lock().expect("view lock").viewport = Some(viewport);
+            self.size_waits.store(true, Ordering::SeqCst);
             return;
         }
+        self.size_waits.store(false, Ordering::SeqCst);
         let gen = {
             let mut held = self.input.lock().await;
             let gen = {
@@ -981,7 +1275,7 @@ impl Hub {
                 view.viewport = Some(viewport);
                 view.gen
             };
-            self.release_held(&mut held).await;
+            self.release_held(&mut held, u64::MAX).await;
             gen
         };
         let applied = async {
@@ -1031,7 +1325,13 @@ impl Hub {
             // applied anew: the devices' inputs wait for it.
             Err(fail @ Fail::Late(_)) => {
                 self.view.lock().expect("view lock").resizing = false;
-                self.failed(&fail);
+                // A dialog that opened meanwhile holds the page: the size is
+                // applied once it closed.
+                if self.shows_dialog() {
+                    self.size_waits.store(true, Ordering::SeqCst);
+                } else {
+                    self.failed(&fail);
+                }
             }
             Err(fail) => {
                 self.view.lock().expect("view lock").resizing = false;
@@ -1053,7 +1353,7 @@ impl Hub {
 
     /// One event of the page's connection. A frame that comes while the
     /// size changes is kept aside in `kept` (the newest one).
-    fn take(&self, event: Event, kept: &mut Option<Event>) {
+    fn take(self: &Arc<Self>, event: Event, kept: &mut Option<Event>) {
         let ours = event.session_id.as_deref() == Some(self.session.as_str());
         match event.method.as_str() {
             "Page.screencastFrame" if ours => {
@@ -1077,6 +1377,8 @@ impl Hub {
                 self.changed.notify_one()
             }
             "Page.navigatedWithinDocument" if ours => self.changed.notify_one(),
+            "Page.javascriptDialogOpening" if ours => self.dialog_opening(&event.params),
+            "Page.javascriptDialogClosed" if ours => self.dialog_closed(),
             "Target.targetCreated" | "Target.targetDestroyed" | "Target.targetInfoChanged" => {
                 self.changed.notify_one()
             }
@@ -1433,6 +1735,37 @@ mod tests {
     }
 
     #[test]
+    fn a_closed_dialog_lets_go_only_of_what_went_down_before_it_opened() {
+        let parse = |text: &str| serde_json::from_str::<Incoming>(text).unwrap();
+        let press =
+            parse(r#"{"type":"mouse","gen":1,"event":"mousePressed","x":5,"y":6,"button":"left"}"#);
+        let touch =
+            parse(r#"{"type":"touch","gen":1,"event":"touchStart","points":[{"x":1,"y":1}]}"#);
+
+        // The press that opened dialog 1 went down with none shown yet.
+        let mut held = Held::default();
+        note_held(&mut held, &press, 0);
+        note_held(&mut held, &touch, 0);
+        assert_eq!(
+            let_go(&mut held, 1),
+            (Some(("left".to_owned(), 5.0, 6.0)), true)
+        );
+        assert!(held.mouse.is_none() && !held.touch);
+
+        // A press and a touch after dialog 1 closed are the person's own: its
+        // release, coming late, leaves them down. A change of size lets go of
+        // all.
+        note_held(&mut held, &press, 1);
+        note_held(&mut held, &touch, 1);
+        assert_eq!(let_go(&mut held, 1), (None, false));
+        assert!(held.mouse.is_some() && held.touch);
+        assert_eq!(
+            let_go(&mut held, u64::MAX),
+            (Some(("left".to_owned(), 5.0, 6.0)), true)
+        );
+    }
+
+    #[test]
     fn fingers_are_held_while_a_touch_event_leaves_points() {
         let parse = |text: &str| serde_json::from_str::<Incoming>(text).unwrap();
         let mut held = Held::default();
@@ -1443,31 +1776,40 @@ mod tests {
             &parse(&format!(
                 r#"{{"type":"touch","gen":1,"event":"touchStart","points":{two}}}"#
             )),
+            0,
         );
         assert!(held.touch);
-        // One finger lifts; the other stays down.
+        // One finger lifts; the other stays down, held since before the
+        // dialog that showed meanwhile.
         note_held(
             &mut held,
             &parse(&format!(
                 r#"{{"type":"touch","gen":1,"event":"touchEnd","points":{one}}}"#
             )),
+            1,
         );
         assert!(held.touch);
+        assert_eq!(held.touch_from, 0);
         note_held(
             &mut held,
             &parse(r#"{"type":"touch","gen":1,"event":"touchEnd","points":[]}"#),
+            0,
         );
         assert!(!held.touch);
+        // A new touch, after that dialog.
         note_held(
             &mut held,
             &parse(&format!(
                 r#"{{"type":"touch","gen":1,"event":"touchMove","points":{one}}}"#
             )),
+            1,
         );
         assert!(held.touch);
+        assert_eq!(held.touch_from, 1);
         note_held(
             &mut held,
             &parse(r#"{"type":"touch","gen":1,"event":"touchCancel","points":[]}"#),
+            0,
         );
         assert!(!held.touch);
     }

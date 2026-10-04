@@ -63,6 +63,23 @@ struct Launcher {
     history: Arc<Mutex<FakeHistory>>,
     /// The targets the browser reports (`Target.getTargets`).
     targets: Arc<Mutex<Value>>,
+    /// The dialog the next command of this kind opens instead of being
+    /// answered (a click handler that asks, a script a reload ran into): the
+    /// kind (`mousePressed`, `mouseReleased`, or a method), and the params
+    /// of `Page.javascriptDialogOpening`.
+    dialog_on: Arc<Mutex<Option<(&'static str, Value)>>>,
+    /// The connection whose page shows a dialog, by run. It stays after
+    /// that connection closed, and only that connection can answer it, as
+    /// the browser's does.
+    showing: Arc<Mutex<HashMap<String, u64>>>,
+    /// Moves on when a dialog closed: what each connection's page held back
+    /// is answered.
+    closes: Arc<tokio::sync::watch::Sender<u64>>,
+    connections: Arc<std::sync::atomic::AtomicU64>,
+    /// Set: a reload or a step opens a `beforeunload` dialog.
+    unload: Arc<std::sync::atomic::AtomicBool>,
+    /// Events a run's page sends of itself, as its own script does.
+    pokes: Arc<Mutex<HashMap<String, tokio::sync::mpsc::UnboundedSender<Value>>>>,
 }
 
 /// The address a fake page is at: a path, a query and a fragment that must
@@ -91,6 +108,21 @@ impl Launcher {
 
     fn set_targets(&self, targets: Value) {
         *self.targets.lock().unwrap() = targets;
+    }
+
+    /// The dialog of `run`'s page goes without a word (its close event is
+    /// lost).
+    fn lose_dialog(&self, run: &str) {
+        self.showing.lock().unwrap().remove(run);
+        self.closes.send_modify(|n| *n += 1);
+    }
+
+    /// The page of `run` opens a dialog of its own (`params` of
+    /// `Page.javascriptDialogOpening`).
+    fn open_dialog(&self, run: &str, params: Value) {
+        let poke = self.pokes.lock().unwrap().get(run).cloned().unwrap();
+        poke.send(json!({ "method": "Page.javascriptDialogOpening", "params": params }))
+            .unwrap();
     }
 
     fn count(&self, method: &str) -> usize {
@@ -172,9 +204,37 @@ async fn page(mut socket: axum::extract::ws::WebSocket, run: String, launcher: L
     let session = format!("S-{run}");
     let (mut width, mut height) = (800.0, 600.0);
     let mut frame = 0;
+    let (poke, mut poked) = tokio::sync::mpsc::unbounded_channel::<Value>();
+    launcher.pokes.lock().unwrap().insert(run.clone(), poke);
+    let me = launcher
+        .connections
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let mut closes = launcher.closes.subscribe();
+    // A dialog shows: what the page answers itself waits for it to close.
+    let shows = || launcher.showing.lock().unwrap().contains_key(&run);
+    let show = || {
+        launcher.showing.lock().unwrap().insert(run.clone(), me);
+    };
+    let mut deferred: Vec<Value> = Vec::new();
     loop {
         let message = tokio::select! {
             _ = ended.cancelled() => break,
+            Some(mut event) = poked.recv() => {
+                if event["method"] == "Page.javascriptDialogOpening" {
+                    show();
+                }
+                event["sessionId"] = json!(session);
+                let _ = socket.send(Message::Text(event.to_string().into())).await;
+                continue;
+            }
+            Ok(()) = closes.changed() => {
+                if !shows() {
+                    for answer in deferred.drain(..) {
+                        let _ = socket.send(Message::Text(answer.to_string().into())).await;
+                    }
+                }
+                continue;
+            }
             message = socket.recv() => message,
         };
         let Some(Ok(Message::Text(text))) = message else {
@@ -238,6 +298,60 @@ async fn page(mut socket: axum::extract::ws::WebSocket, run: String, launcher: L
             .flatten();
         let answer =
             json!({ "id": command["id"], "result": result, "sessionId": command["sessionId"] });
+        let opening = |params: Value| json!({ "method": "Page.javascriptDialogOpening", "sessionId": session, "params": params });
+        if method == "Page.handleJavaScriptDialog" {
+            let mine = launcher.showing.lock().unwrap().get(&run) == Some(&me);
+            if !mine {
+                let refused = json!({ "id": command["id"], "sessionId": command["sessionId"],
+                                      "error": { "code": -32000, "message": "No dialog is showing" } });
+                let _ = socket.send(Message::Text(refused.to_string().into())).await;
+                continue;
+            }
+            launcher.showing.lock().unwrap().remove(&run);
+            let closed = json!({ "method": "Page.javascriptDialogClosed", "sessionId": session,
+                                 "params": { "result": params["accept"], "userInput": params["promptText"] } });
+            for message in [answer, closed] {
+                let _ = socket.send(Message::Text(message.to_string().into())).await;
+            }
+            launcher.closes.send_modify(|n| *n += 1);
+            continue;
+        }
+        let page_own = method.starts_with("Input.")
+            || method.starts_with("Emulation.")
+            || method == "Runtime.evaluate"
+            || method == "Page.enable";
+        if shows() && page_own {
+            deferred.push(answer);
+            continue;
+        }
+        let kind = if method == "Input.dispatchMouseEvent" {
+            params["type"].as_str().unwrap_or_default()
+        } else {
+            method.as_str()
+        };
+        let dialog = {
+            let mut on = launcher.dialog_on.lock().unwrap();
+            on.take_if(|(trigger, _)| *trigger == kind)
+                .map(|(_, dialog)| dialog)
+        };
+        if let Some(dialog) = dialog {
+            show();
+            let _ = socket
+                .send(Message::Text(opening(dialog).to_string().into()))
+                .await;
+            deferred.push(answer);
+            continue;
+        }
+        let unloading = (method == "Page.reload" || method == "Page.navigateToHistoryEntry")
+            && launcher.unload.load(std::sync::atomic::Ordering::SeqCst);
+        if unloading {
+            let _ = socket.send(Message::Text(answer.to_string().into())).await;
+            show();
+            let dialog =
+                opening(json!({ "type": "beforeunload", "message": "", "url": SECRET_PAGE }));
+            let _ = socket.send(Message::Text(dialog.to_string().into())).await;
+            continue;
+        }
         if method == "Input.dispatchMouseEvent"
             && params["type"] == "mousePressed"
             && launcher
@@ -574,6 +688,23 @@ async fn next_within(socket: &mut Socket, kind: &str, wait: Duration) -> Value {
     })
     .await
     .unwrap_or_else(|_| panic!("no {kind} in time"))
+}
+
+/// Every message but frames the socket gets within `wait`.
+async fn all_within(socket: &mut Socket, wait: Duration) -> Vec<Value> {
+    let mut seen = Vec::new();
+    let _ = tokio::time::timeout(wait, async {
+        while let Some(Ok(message)) = socket.next().await {
+            if let WsMessage::Text(text) = message {
+                let value: Value = serde_json::from_str(text.as_str()).unwrap();
+                if value["type"] != "frame" {
+                    seen.push(value);
+                }
+            }
+        }
+    })
+    .await;
+    seen
 }
 
 async fn send(socket: &mut Socket, message: Value) {
@@ -1674,5 +1805,413 @@ async fn a_person_asks_the_worker_to_start_the_run_anew_and_the_web_ends_no_run(
         )
         .await,
         404
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The page's dialogs (ticket 0057)
+
+/// A phone's screen on `run-1`, its size applied and a frame drawn.
+async fn phone_on(s: &Setup) -> Socket {
+    let mut phone = s.open("run-1", Some(&s.origin())).await.unwrap();
+    send(
+        &mut phone,
+        json!({ "type": "viewport", "width": 402, "height": 666, "dpr": 3, "touch": true }),
+    )
+    .await;
+    assert_eq!(next_of(&mut phone, "viewport").await["gen"], 1);
+    next_of(&mut phone, "frame").await;
+    phone
+}
+
+fn mouse(gen: u64, event: &str, x: f64) -> Value {
+    json!({ "type": "mouse", "gen": gen, "event": event, "x": x, "y": 10,
+            "button": "left", "clickCount": 1 })
+}
+
+#[tokio::test]
+async fn a_click_that_asks_to_confirm_shows_the_dialog_and_the_persons_answer_goes_to_the_page() {
+    let s = setup_answering(Duration::from_millis(500)).await;
+    s.waiting_on("run-1").await;
+    let mut phone = phone_on(&s).await;
+
+    // The click's handler asks: the screen shows it, with the host only.
+    *s.launcher.dialog_on.lock().unwrap() = Some((
+        "mouseReleased",
+        json!({
+            "type": "confirm", "message": "정말 받을까요?\n두 줄", "url": SECRET_PAGE, "defaultPrompt": "",
+        }),
+    ));
+    send(&mut phone, mouse(1, "mousePressed", 10.0)).await;
+    send(&mut phone, mouse(1, "mouseReleased", 10.0)).await;
+    let dialog = next_of(&mut phone, "dialog").await;
+    assert_eq!(
+        dialog["dialog"],
+        json!({ "id": 1, "kind": "confirm", "message": "정말 받을까요?\n두 줄",
+                "host": "blog.example.org", "prompt": "" })
+    );
+
+    // The click waits for the answer, and that is not a page that does not
+    // answer. Inputs, a reload and a step are not sent meanwhile, and a size
+    // waits for the dialog to close.
+    let clicks = s.launcher.count("Input.dispatchMouseEvent");
+    send(&mut phone, mouse(1, "mouseMoved", 20.0)).await;
+    send(&mut phone, json!({ "type": "reload" })).await;
+    send(&mut phone, json!({ "type": "back" })).await;
+    send(
+        &mut phone,
+        json!({ "type": "viewport", "width": 390, "height": 844, "dpr": 3, "touch": true }),
+    )
+    .await;
+    let seen = all_within(&mut phone, Duration::from_millis(1200)).await;
+    assert!(
+        !seen
+            .iter()
+            .any(|m| m["type"] == "page" || m["type"] == "ended"),
+        "{seen:?}"
+    );
+    assert_eq!(s.launcher.count("Input.dispatchMouseEvent"), clicks);
+    assert_eq!(s.launcher.count("Page.reload"), 0);
+    assert_eq!(s.launcher.count("Page.navigateToHistoryEntry"), 0);
+    assert_eq!(
+        s.launcher
+            .last("Emulation.setDeviceMetricsOverride")
+            .unwrap()["width"],
+        402
+    );
+
+    // A screen that connects now is told; an answer to another dialog is
+    // ignored.
+    let mut pc = s.open("run-1", Some(&s.origin())).await.unwrap();
+    assert_eq!(next_of(&mut pc, "dialog").await["dialog"]["id"], 1);
+    send(
+        &mut pc,
+        json!({ "type": "dialog", "id": 7, "accept": true }),
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(s.launcher.count("Page.handleJavaScriptDialog"), 0);
+
+    // The person confirms: the page gets it, every screen is told, and the
+    // size kept meanwhile is applied as a new generation.
+    send(
+        &mut phone,
+        json!({ "type": "dialog", "id": 1, "accept": true, "text": "x" }),
+    )
+    .await;
+    assert_eq!(next_of(&mut phone, "dialog").await["dialog"], Value::Null);
+    assert_eq!(next_of(&mut pc, "dialog").await["dialog"], Value::Null);
+    assert_eq!(
+        s.launcher.last("Page.handleJavaScriptDialog").unwrap(),
+        json!({ "accept": true })
+    );
+    let viewport = next_of(&mut phone, "viewport").await;
+    assert_eq!(
+        (viewport["gen"].clone(), viewport["width"].clone()),
+        (json!(2), json!(390))
+    );
+    // Inputs go to the page again.
+    let clicks = s.launcher.count("Input.dispatchMouseEvent");
+    send(&mut phone, mouse(2, "mouseMoved", 30.0)).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(s.launcher.count("Input.dispatchMouseEvent"), clicks + 1);
+    // The answer counts as input.
+    assert!(!s.screens().live_inputs().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_prompt_gets_the_persons_text_and_a_long_message_is_cut() {
+    let s = setup_answering(Duration::from_millis(500)).await;
+    s.waiting_on("run-1").await;
+    let mut phone = phone_on(&s).await;
+
+    let long = "가".repeat(1500);
+    s.launcher.open_dialog(
+        "run-1",
+        json!({ "type": "prompt", "message": long, "url": SECRET_NEXT, "defaultPrompt": "기본" }),
+    );
+    let dialog = next_of(&mut phone, "dialog").await["dialog"].clone();
+    assert_eq!(dialog["kind"], "prompt");
+    assert_eq!(dialog["message"].as_str().unwrap().chars().count(), 1000);
+    assert_eq!(
+        (dialog["host"].clone(), dialog["prompt"].clone()),
+        (json!("files.example.org"), json!("기본"))
+    );
+    let id = dialog["id"].clone();
+    send(
+        &mut phone,
+        json!({ "type": "dialog", "id": id, "accept": true, "text": "답" }),
+    )
+    .await;
+    assert_eq!(next_of(&mut phone, "dialog").await["dialog"], Value::Null);
+    assert_eq!(
+        s.launcher.last("Page.handleJavaScriptDialog").unwrap(),
+        json!({ "accept": true, "promptText": "답" })
+    );
+
+    // Cancelled, the text does not go.
+    s.launcher.open_dialog(
+        "run-1",
+        json!({ "type": "prompt", "message": "또", "url": SECRET_PAGE, "defaultPrompt": "" }),
+    );
+    let id = next_of(&mut phone, "dialog").await["dialog"]["id"].clone();
+    send(
+        &mut phone,
+        json!({ "type": "dialog", "id": id, "accept": false, "text": "답" }),
+    )
+    .await;
+    assert_eq!(next_of(&mut phone, "dialog").await["dialog"], Value::Null);
+    assert_eq!(
+        s.launcher.last("Page.handleJavaScriptDialog").unwrap(),
+        json!({ "accept": false })
+    );
+}
+
+#[tokio::test]
+async fn a_beforeunload_of_the_page_itself_is_asked_and_one_after_a_persons_reload_is_left_at_once()
+{
+    let s = setup_answering(Duration::from_millis(500)).await;
+    s.waiting_on("run-1").await;
+    let mut phone = phone_on(&s).await;
+
+    // The page goes of itself: the person chooses to stay.
+    s.launcher.open_dialog(
+        "run-1",
+        json!({ "type": "beforeunload", "message": "", "url": SECRET_PAGE }),
+    );
+    let dialog = next_of(&mut phone, "dialog").await["dialog"].clone();
+    assert_eq!(dialog["kind"], "beforeunload");
+    send(
+        &mut phone,
+        json!({ "type": "dialog", "id": dialog["id"], "accept": false }),
+    )
+    .await;
+    assert_eq!(next_of(&mut phone, "dialog").await["dialog"], Value::Null);
+    assert_eq!(
+        s.launcher.last("Page.handleJavaScriptDialog").unwrap(),
+        json!({ "accept": false })
+    );
+
+    // The person's own reload: the page is left without asking.
+    s.launcher
+        .unload
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    send(&mut phone, json!({ "type": "reload" })).await;
+    let seen = all_within(&mut phone, Duration::from_millis(800)).await;
+    assert!(!seen.iter().any(|m| m["type"] == "dialog"), "{seen:?}");
+    assert_eq!(s.launcher.count("Page.handleJavaScriptDialog"), 2);
+    assert_eq!(
+        s.launcher.last("Page.handleJavaScriptDialog").unwrap(),
+        json!({ "accept": true })
+    );
+    // Inputs go again once it closed.
+    let moves = s.launcher.count("Input.dispatchMouseEvent");
+    send(&mut phone, mouse(1, "mouseMoved", 30.0)).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(s.launcher.count("Input.dispatchMouseEvent"), moves + 1);
+}
+
+#[tokio::test]
+async fn a_dialog_left_open_by_the_last_screen_is_dismissed_and_the_page_opens_again() {
+    let s = setup_answering(Duration::from_millis(500)).await;
+    s.waiting_on("run-1").await;
+    let mut phone = phone_on(&s).await;
+    s.launcher.open_dialog(
+        "run-1",
+        json!({ "type": "alert", "message": "알림", "url": SECRET_PAGE }),
+    );
+    assert_eq!(
+        next_of(&mut phone, "dialog").await["dialog"]["kind"],
+        "alert"
+    );
+    drop(phone);
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while s.launcher.count("Page.handleJavaScriptDialog") == 0 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the dialog was dismissed");
+    assert_eq!(
+        s.launcher.last("Page.handleJavaScriptDialog").unwrap(),
+        json!({ "accept": false })
+    );
+    // The page answers again: a screen opened anew is not stuck.
+    let mut phone = s.open("run-1", Some(&s.origin())).await.unwrap();
+    next_of(&mut phone, "frame").await;
+}
+
+#[tokio::test]
+async fn a_dialog_whose_close_was_missed_is_closed_when_the_persons_answer_is_refused() {
+    let s = setup_answering(Duration::from_millis(500)).await;
+    s.waiting_on("run-1").await;
+    let mut phone = phone_on(&s).await;
+    s.launcher.open_dialog(
+        "run-1",
+        json!({ "type": "confirm", "message": "받을까요?", "url": SECRET_PAGE }),
+    );
+    let id = next_of(&mut phone, "dialog").await["dialog"]["id"].clone();
+
+    // The dialog goes, and the hub does not hear of it: the person's answer
+    // is refused, which closes it on the screens.
+    s.launcher.lose_dialog("run-1");
+    send(
+        &mut phone,
+        json!({ "type": "dialog", "id": id, "accept": true }),
+    )
+    .await;
+    assert_eq!(next_of(&mut phone, "dialog").await["dialog"], Value::Null);
+    // Inputs go to the page again.
+    let clicks = s.launcher.count("Input.dispatchMouseEvent");
+    send(&mut phone, mouse(1, "mouseMoved", 30.0)).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(s.launcher.count("Input.dispatchMouseEvent"), clicks + 1);
+}
+
+#[tokio::test]
+async fn a_command_a_dialog_holds_up_is_not_a_page_that_does_not_answer() {
+    let s = setup_answering(Duration::from_millis(500)).await;
+    s.waiting_on("run-1").await;
+    let mut phone = phone_on(&s).await;
+
+    // A script the reload runs into asks, and the reload is answered only
+    // once the person answered, later than the page is given.
+    *s.launcher.dialog_on.lock().unwrap() = Some((
+        "Page.reload",
+        json!({ "type": "confirm", "message": "저장할까요?", "url": SECRET_PAGE }),
+    ));
+    send(&mut phone, json!({ "type": "reload" })).await;
+    let id = next_of(&mut phone, "dialog").await["dialog"]["id"].clone();
+    let seen = all_within(&mut phone, Duration::from_millis(1200)).await;
+    assert!(!seen.iter().any(|m| m["type"] == "page"), "{seen:?}");
+
+    send(
+        &mut phone,
+        json!({ "type": "dialog", "id": id, "accept": false }),
+    )
+    .await;
+    assert_eq!(next_of(&mut phone, "dialog").await["dialog"], Value::Null);
+    let seen = all_within(&mut phone, Duration::from_millis(300)).await;
+    assert!(!seen.iter().any(|m| m["type"] == "page"), "{seen:?}");
+}
+
+#[tokio::test]
+async fn a_press_that_opens_a_dialog_is_let_go_once_it_closed() {
+    let s = setup_answering(Duration::from_millis(500)).await;
+    s.waiting_on("run-1").await;
+    let mut phone = phone_on(&s).await;
+    let releases = || {
+        s.launcher
+            .seen
+            .lock()
+            .unwrap()
+            .commands
+            .iter()
+            .filter(|(_, m, p)| m == "Input.dispatchMouseEvent" && p["type"] == "mouseReleased")
+            .count()
+    };
+
+    // The press's handler shows an alert; the release comes while it shows
+    // and is not sent.
+    *s.launcher.dialog_on.lock().unwrap() = Some((
+        "mousePressed",
+        json!({ "type": "alert", "message": "눌렀어요", "url": SECRET_PAGE }),
+    ));
+    send(&mut phone, mouse(1, "mousePressed", 10.0)).await;
+    let id = next_of(&mut phone, "dialog").await["dialog"]["id"].clone();
+    send(&mut phone, mouse(1, "mouseReleased", 10.0)).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(releases(), 0);
+
+    // Once it closed, the button is let go where it went down, without a
+    // click.
+    send(
+        &mut phone,
+        json!({ "type": "dialog", "id": id, "accept": true }),
+    )
+    .await;
+    assert_eq!(next_of(&mut phone, "dialog").await["dialog"], Value::Null);
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while releases() == 0 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the button was let go");
+    let last = s.launcher.last("Input.dispatchMouseEvent").unwrap();
+    assert_eq!(
+        (
+            last["type"].clone(),
+            last["x"].clone(),
+            last["clickCount"].clone()
+        ),
+        (json!("mouseReleased"), json!(10.0), json!(0))
+    );
+}
+
+#[tokio::test]
+async fn a_dialog_ends_a_stall_and_the_size_kept_meanwhile_is_applied_once_it_closed() {
+    let s = setup_answering(Duration::from_millis(500)).await;
+    s.waiting_on("run-1").await;
+    let mut phone = phone_on(&s).await;
+
+    // The page stalls, and a size comes meanwhile.
+    s.launcher
+        .stuck
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    send(
+        &mut phone,
+        json!({ "type": "touch", "gen": 1, "event": "touchStart", "points": [{ "x": 10, "y": 10 }] }),
+    )
+    .await;
+    let page = next_within(&mut phone, "page", Duration::from_secs(3)).await;
+    assert_eq!(page["responding"], false);
+    send(
+        &mut phone,
+        json!({ "type": "viewport", "width": 390, "height": 844, "dpr": 3, "touch": true }),
+    )
+    .await;
+
+    // The page shows a dialog: it answers again, and waits for the person.
+    s.launcher.open_dialog(
+        "run-1",
+        json!({ "type": "alert", "message": "알림", "url": SECRET_PAGE }),
+    );
+    s.launcher
+        .stuck
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    let seen = all_within(&mut phone, Duration::from_millis(1200)).await;
+    assert!(
+        seen.iter()
+            .any(|m| m["type"] == "page" && m["responding"] == true),
+        "{seen:?}"
+    );
+    let dialog = seen
+        .iter()
+        .find(|m| m["type"] == "dialog")
+        .expect("the dialog was told");
+    assert!(!seen.iter().any(|m| m["type"] == "viewport"), "{seen:?}");
+    assert_eq!(
+        s.launcher
+            .last("Emulation.setDeviceMetricsOverride")
+            .unwrap()["width"],
+        402
+    );
+
+    // Once it closed, the finger is let go and the size is applied.
+    send(
+        &mut phone,
+        json!({ "type": "dialog", "id": dialog["dialog"]["id"], "accept": true }),
+    )
+    .await;
+    let viewport = next_of(&mut phone, "viewport").await;
+    assert_eq!(
+        (viewport["gen"].clone(), viewport["width"].clone()),
+        (json!(2), json!(390))
+    );
+    assert_eq!(
+        s.launcher.last("Input.dispatchTouchEvent").unwrap()["type"],
+        "touchCancel"
     );
 }

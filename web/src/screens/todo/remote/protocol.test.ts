@@ -47,6 +47,15 @@ test("the server's messages are read by their shape", () => {
   assert.deepEqual(parseServerMessage('{"type":"tabs","tabs":[]}'), { type: "tabs", tabs: [] });
   assert.deepEqual(parseServerMessage('{"type":"page","responding":false}'), { type: "page", responding: false });
   assert.deepEqual(parseServerMessage('{"type":"page","responding":true}'), { type: "page", responding: true });
+  for (const kind of ["alert", "confirm", "prompt", "beforeunload"]) {
+    const dialog = { id: 3, kind, message: "정말요?\n두 줄", host: "blog.example.org", prompt: "" };
+    assert.deepEqual(parseServerMessage(JSON.stringify({ type: "dialog", dialog })), { type: "dialog", dialog });
+  }
+  assert.deepEqual(
+    parseServerMessage('{"type":"dialog","dialog":{"id":4,"kind":"prompt","message":"","host":null,"prompt":"기본"}}'),
+    { type: "dialog", dialog: { id: 4, kind: "prompt", message: "", host: null, prompt: "기본" } },
+  );
+  assert.deepEqual(parseServerMessage('{"type":"dialog","dialog":null}'), { type: "dialog", dialog: null });
   for (const reason of ["browser", "run", "unreachable", "stuck", "replaced"]) {
     assert.deepEqual(parseServerMessage(`{"type":"ended","reason":"${reason}"}`), { type: "ended", reason });
   }
@@ -68,10 +77,25 @@ test("a message that is not the protocol's is ignored", () => {
     '{"type":"tabs","tabs":[{"id":"T1","title":"","host":null,"shown":true}]}',
     '{"type":"page","responding":"no"}',
     '{"type":"page"}',
+    '{"type":"dialog"}',
+    '{"type":"dialog","dialog":{"id":1,"kind":"popup","message":"","host":null,"prompt":""}}',
+    '{"type":"dialog","dialog":{"id":"1","kind":"alert","message":"","host":null,"prompt":""}}',
+    '{"type":"dialog","dialog":{"id":1,"kind":"alert","host":null,"prompt":""}}',
+    '{"type":"dialog","dialog":{"id":1,"kind":"alert","message":"","prompt":""}}',
     '{"type":"unknown"}',
   ]) {
     assert.equal(parseServerMessage(text), null, text);
   }
+});
+
+test("an answer to a dialog names it and carries a prompt's text", () => {
+  assert.deepEqual(JSON.parse(encode({ type: "dialog", id: 3, accept: true, text: "답" }) ?? ""), {
+    type: "dialog",
+    id: 3,
+    accept: true,
+    text: "답",
+  });
+  assert.deepEqual(JSON.parse(encode({ type: "dialog", id: 3, accept: false }) ?? ""), { type: "dialog", id: 3, accept: false });
 });
 
 test("inputs are encoded as the server's protocol names them", () => {

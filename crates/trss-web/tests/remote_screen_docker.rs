@@ -26,6 +26,11 @@
 //! says the page does not answer and stays, comes back when the page moves
 //! again, ends `stuck` when opened on a page held for good, and a person's
 //! ask for a new run opens the post again in a new run (ticket 0056).
+//!
+//! The fourth is the page's dialogs on a find job's screen: a confirm and a
+//! prompt a tap opens are answered from the screen, a `beforeunload` of the
+//! page itself is asked and one after the person's reload is left at once,
+//! and an alert left open when the screen closes is dismissed (ticket 0057).
 
 use std::{
     path::Path,
@@ -493,6 +498,29 @@ impl Watched {
         })
         .await
         .expect("a frame in time")
+    }
+
+    /// Every message but frames that comes within `wait`, kept in `seen`.
+    async fn drain(&mut self, wait: Duration) {
+        let _ = tokio::time::timeout(wait, async {
+            while let Some(Ok(message)) = self.socket.next().await {
+                if let Message::Text(text) = message {
+                    let value: Value = serde_json::from_str(text.as_str()).unwrap();
+                    if value["type"] != "frame" {
+                        self.seen.push(text.to_string());
+                        self.taken.push(false);
+                    }
+                }
+            }
+        })
+        .await;
+    }
+
+    /// Whether a message of `kind` came (taken or not).
+    fn saw(&self, kind: &str) -> bool {
+        self.seen
+            .iter()
+            .any(|text| serde_json::from_str::<Value>(text).unwrap()["type"] == kind)
     }
 
     /// A tap of one finger at (`x`, `y`) on the generation `gen`.
@@ -1182,5 +1210,192 @@ async fn a_page_held_by_its_script_stalls_the_screen_and_a_new_run_opens_the_pos
     );
     println!("the screen of the new run shows the post");
 
+    world.end().await;
+}
+
+// ---------------------------------------------------------------------------
+// The page's dialogs (ticket 0057)
+
+#[tokio::test]
+#[ignore = "needs docker and the trss-browser image"]
+async fn the_pages_dialogs_are_answered_from_the_screen_and_none_is_left_open() {
+    let world = find_world("dialogs").await;
+    let FindWorld {
+        ref base,
+        ref screens,
+        ref job,
+        web,
+        ..
+    } = world;
+    let first = screens.screen(job).await.unwrap().unwrap();
+    let (run, target, bound) = (
+        first.run_id.clone().unwrap(),
+        first.target_id.clone().unwrap(),
+        first.bound_at.unwrap(),
+    );
+    let eyes = Eyes::on(base, &run, &target).await;
+    eyes.title_ends_with(&format!("{}화", fake::BLOG_POSTS))
+        .await;
+    let mut screen = open_screen(web, job, &run, bound).await;
+    screen.next("nav").await;
+    let mut every_message: Vec<String> = Vec::new();
+
+    // A button whose click asks to confirm.
+    let button = |script: &str| {
+        format!(
+            "document.getElementById('ask')?.remove();
+             document.body.insertAdjacentHTML('beforeend', '<button id=ask style=\"position:fixed;left:0;top:0;width:300px;height:200px;z-index:2147483647\">ask</button>');
+             document.getElementById('ask').onclick = () => {{ {script} }}; 0"
+        )
+    };
+    eyes.eval(&button("window.answer = confirm('정말 받을까요?')"))
+        .await;
+    let gen = screen.gen();
+    screen.tap(gen, 100.0, 100.0).await;
+    let dialog = screen.next("dialog").await["dialog"].clone();
+    assert_eq!(
+        (
+            dialog["kind"].clone(),
+            dialog["message"].clone(),
+            dialog["host"].clone()
+        ),
+        (json!("confirm"), json!("정말 받을까요?"), json!(fake::HOST))
+    );
+    // Waiting for the person is not a page that does not answer.
+    screen.drain(Duration::from_secs(7)).await;
+    assert!(!screen.saw("page"), "{:?}", screen.seen);
+    assert!(!screen.saw("ended"), "{:?}", screen.seen);
+    screen
+        .send(json!({ "type": "dialog", "id": dialog["id"], "accept": true }))
+        .await;
+    assert_eq!(screen.next("dialog").await["dialog"], Value::Null);
+    assert_eq!(eyes.eval("window.answer").await, json!(true));
+    println!("a confirm a tap opened was shown and its 확인 reached the page");
+
+    // A prompt: the person's text reaches the page.
+    eyes.eval(&button("window.answer = prompt('이름은요?', '기본')"))
+        .await;
+    let gen = screen.gen();
+    screen.tap(gen, 100.0, 100.0).await;
+    let dialog = screen.next("dialog").await["dialog"].clone();
+    assert_eq!(
+        (dialog["kind"].clone(), dialog["prompt"].clone()),
+        (json!("prompt"), json!("기본"))
+    );
+    screen
+        .send(json!({ "type": "dialog", "id": dialog["id"], "accept": true, "text": "답" }))
+        .await;
+    assert_eq!(screen.next("dialog").await["dialog"], Value::Null);
+    assert_eq!(eyes.eval("window.answer").await, json!("답"));
+    println!("a prompt got the person's text");
+
+    // The page goes of itself: the person is asked and stays.
+    eyes.eval(
+        "window.marker = 1;
+         addEventListener('beforeunload', (e) => { e.preventDefault(); e.returnValue = ''; });
+         setTimeout(() => location.reload(), 100); 0",
+    )
+    .await;
+    let dialog = screen.next("dialog").await["dialog"].clone();
+    assert_eq!(dialog["kind"], "beforeunload");
+    screen
+        .send(json!({ "type": "dialog", "id": dialog["id"], "accept": false }))
+        .await;
+    assert_eq!(screen.next("dialog").await["dialog"], Value::Null);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(
+        eyes.eval("window.marker").await,
+        json!(1),
+        "the page stayed"
+    );
+    println!("the page's own leaving was asked, and it stayed");
+
+    // The person's reload: the page asks, and it is left without asking
+    // the person. The test's own connection sees the dialog the screen is
+    // never sent.
+    every_message.append(&mut screen.seen.clone());
+    let asked = screen.seen.len();
+    let mut events = eyes.conn.events();
+    eyes.send("Page.enable", json!({})).await;
+    screen.send(json!({ "type": "reload" })).await;
+    until(
+        Duration::from_secs(15),
+        "the page was read anew",
+        || async { eyes.eval("typeof window.marker").await == json!("undefined") },
+    )
+    .await;
+    eyes.send("Page.disable", json!({})).await;
+    screen.drain(Duration::from_secs(1)).await;
+    assert!(
+        !screen.seen[asked..]
+            .iter()
+            .any(|text| text.contains("\"dialog\"")),
+        "{:?}",
+        &screen.seen[asked..]
+    );
+    let mut dialogs = Vec::new();
+    while let Ok(event) = events.try_recv() {
+        if event.session_id.as_deref() == Some(eyes.session.as_str())
+            && event.method.starts_with("Page.javascriptDialog")
+        {
+            dialogs.push((
+                event.method,
+                event.params["type"].clone(),
+                event.params["result"].clone(),
+            ));
+        }
+    }
+    assert_eq!(
+        dialogs,
+        [
+            (
+                "Page.javascriptDialogOpening".to_owned(),
+                json!("beforeunload"),
+                Value::Null
+            ),
+            (
+                "Page.javascriptDialogClosed".to_owned(),
+                Value::Null,
+                json!(true)
+            ),
+        ]
+    );
+    println!("the person's reload brought the page's ask, and it was left without asking");
+
+    // An alert left open when the screen closes is dismissed: a screen
+    // opened anew is not stuck, and the page answers.
+    eyes.eval("setTimeout(() => alert('알림'), 200); 0").await;
+    let dialog = screen.next("dialog").await["dialog"].clone();
+    assert_eq!(
+        (dialog["kind"].clone(), dialog["message"].clone()),
+        (json!("alert"), json!("알림"))
+    );
+    every_message.append(&mut screen.seen.clone());
+    drop(screen);
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let mut screen = open_screen(web, job, &run, bound).await;
+    screen.frame().await;
+    assert_eq!(eyes.eval("1 + 1").await, json!(2));
+    every_message.append(&mut screen.seen.clone());
+    println!("the alert left open was dismissed and the screen opened again");
+
+    // Whatever was sent over the socket named only hosts. A dialog's text is
+    // the page's own words, as the frames are, and is left out.
+    for text in &every_message {
+        let mut value: Value = serde_json::from_str(text).unwrap();
+        if let Some(dialog) = value["dialog"].as_object_mut() {
+            dialog.remove("message");
+            dialog.remove("prompt");
+        }
+        let text = value.to_string();
+        for secret in ["/blog", "maker/", "?", "#"] {
+            assert!(!text.contains(secret), "{secret} in {text}");
+        }
+    }
+    println!(
+        "{} messages checked: no path, query or fragment",
+        every_message.len()
+    );
+    drop(eyes);
     world.end().await;
 }
