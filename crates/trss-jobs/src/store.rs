@@ -547,6 +547,31 @@ impl JobStore {
             .await
     }
 
+    /// The work's stored subtitles on an episode with no applied copy.
+    pub async fn stored_only(
+        &self,
+        work_id: &str,
+    ) -> Result<Vec<crate::place::records::StoredOnly>, JobError> {
+        let id = work_id.to_owned();
+        self.db
+            .run(move |c| Ok(crate::place::records::stored_only(c, &id)?))
+            .await
+    }
+
+    /// Asks the job that stored `stored_id` to apply it
+    /// ([`crate::place::records::choose_stored`]).
+    pub async fn choose_stored(
+        &self,
+        work_id: &str,
+        stored_id: &str,
+        now: Millis,
+    ) -> Result<crate::place::records::StoredChoice, JobError> {
+        let (work, stored) = (work_id.to_owned(), stored_id.to_owned());
+        self.db
+            .run(move |c| crate::place::records::choose_stored(c, &work, &stored, now))
+            .await
+    }
+
     /// Where each row of the job's plan has its files, by position.
     pub async fn plan_paths(
         &self,

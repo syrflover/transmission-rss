@@ -67,6 +67,11 @@ export function JobResults({
 }
 
 function ItemBlock({ item, placements }: { item: JobItem; placements: readonly Placement[] }) {
+  // A package of several files says what came of them in groups, not under
+  // each file.
+  const own = new Set(item.files.map((f) => f.id));
+  const ofItem = placements.filter((p) => own.has(p.file_id));
+  const grouped = ofItem.length > 1;
   return (
     <li
       className={cn(
@@ -103,11 +108,12 @@ function ItemBlock({ item, placements }: { item: JobItem; placements: readonly P
             <FileLine
               key={`${file.name}:${i}`}
               file={file}
-              placements={placements.filter((p) => p.file_id === file.id)}
+              placements={grouped ? [] : placements.filter((p) => p.file_id === file.id)}
             />
           ))}
         </ul>
       )}
+      {grouped && <PackageGroups placements={ofItem} />}
     </li>
   );
 }
@@ -147,6 +153,126 @@ function placementText(p: Placement): { word: string; detail: string | null; urg
     case "dropped":
       return { word: "버림", detail: p.note, urgent: false };
   }
+}
+
+/** The groups a package's files are told in, in this order. */
+const GROUPS: {
+  key: string;
+  title: string;
+  urgent?: boolean;
+  match: (p: Placement) => boolean;
+}[] = [
+  {
+    key: "ask",
+    title: "확인 필요",
+    match: (p) => p.outcome === null && p.question !== null,
+  },
+  { key: "held", title: "보류", match: (p) => p.outcome === "held" },
+  {
+    key: "failed",
+    title: "보관·적용 실패",
+    urgent: true,
+    match: (p) => p.outcome === "failed",
+  },
+  { key: "applied", title: "적용함", match: (p) => p.outcome === "applied" },
+  {
+    key: "stored",
+    title: "보관만 함",
+    match: (p) =>
+      p.kind === "subtitle" &&
+      p.episode !== null &&
+      (p.outcome === "stored" ||
+        p.outcome === "existing" ||
+        p.outcome === "no_video"),
+  },
+  {
+    key: "loose",
+    title: "회차에 붙이지 않음",
+    match: (p) =>
+      p.kind === "subtitle" && p.episode === null && p.outcome === "stored",
+  },
+  {
+    key: "assets",
+    title: "폰트·첨부",
+    match: (p) => p.kind !== "subtitle" && p.outcome === "stored",
+  },
+  { key: "dropped", title: "버림", match: (p) => p.outcome === "dropped" },
+  {
+    key: "pending",
+    title: "처리 대기",
+    match: (p) => p.outcome === null && p.question === null,
+  },
+];
+
+const ASSET_KIND: Record<Placement["kind"], string> = {
+  subtitle: "자막",
+  font: "폰트",
+  attachment: "첨부",
+  companion: "구성 파일",
+  other: "그 밖의 파일",
+};
+
+/** One file of a group: its name, with its episode and why when it says more. */
+function GroupLine({
+  placement: p,
+  group,
+}: {
+  placement: Placement;
+  group: string;
+}) {
+  const detail = [
+    p.episode !== null ? episodeName(String(p.episode)) : null,
+    group === "assets" ? ASSET_KIND[p.kind] : null,
+    group === "ask" ? p.question : group === "applied" ? null : p.note,
+  ].filter((part): part is string => part !== null && part !== "");
+  return (
+    <li className="flex min-w-0 flex-col gap-0.5">
+      <span className="text-[13px] leading-snug [overflow-wrap:anywhere]">
+        {p.name}
+      </span>
+      {detail.length > 0 && (
+        <span className="text-xs leading-snug text-text-secondary [overflow-wrap:anywhere]">
+          {detail.join(" · ")}
+        </span>
+      )}
+    </li>
+  );
+}
+
+/**
+ * What came of a package's files, grouped: applied, stored only (another
+ * episode, another format), on no episode, fonts and attachments, dropped, and
+ * first what needs a person.
+ */
+function PackageGroups({ placements }: { placements: readonly Placement[] }) {
+  const groups = GROUPS.map((g) => ({
+    ...g,
+    rows: placements.filter(g.match),
+  })).filter((g) => g.rows.length > 0);
+  return (
+    <div className="flex flex-col gap-2.5 border-t border-hairline-soft pt-2.5">
+      {groups.map((g) => (
+        <section key={g.key} aria-label={g.title} className="flex flex-col gap-1.5">
+          <h4
+            className={cn(
+              "text-xs font-bold",
+              g.urgent ? "text-urgent" : "text-text-primary",
+            )}
+          >
+            {g.title}{" "}
+            <span className="font-semibold text-text-muted">
+              {g.rows.length}
+            </span>
+          </h4>
+          <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
+            {g.rows.map((p) => (
+              <GroupLine key={p.position} placement={p} group={g.key} />
+            ))}
+          </ul>
+        </section>
+      ))}
+    </div>
+  );
 }
 
 function PlacementLine({ placement }: { placement: Placement }) {

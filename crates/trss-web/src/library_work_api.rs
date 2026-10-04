@@ -20,7 +20,9 @@
 //!                      "creator": { "source_id": "…", "name": "하느", "anime_no": 3441 },
 //!                      "creator_version": 1 }],
 //!       "revision": { "from": "v1", "to": "v2", "replaced_at": 1760000200000 },
-//!       "failure": null
+//!       "failure": null,
+//!       "stored": [{ "id": "…", "name": "Show - 02.ass", "creator": "하느", "format": "ass",
+//!                    "stored_at": 1760000300000, "can_apply": true }]
 //!     }]
 //!   }],
 //!   "unrecognized": [{ "path": "Extras/PV.mkv", "reason": "outside_season", "message": "…" }],
@@ -57,6 +59,19 @@
 //!   left with no file under its name by such a failure still has a row,
 //!   with no files. Both
 //!   come from [`trss_collect::store::revisions`], for season folders of the work.
+//! - `stored` are the stored subtitles on the episode with no applied copy of
+//!   them beside a video (보관만 한 자막: another episode of a package, a
+//!   format the order did not take, an episode that had no video), oldest
+//!   first. `can_apply` says whether `적용` can ask for it: a format the app
+//!   applies, received by a job whose record is there. An episode with only
+//!   such subtitles has a row of its own with no files.
+//! - `POST /api/library/works/{id}/stored/{stored_id}/apply` applies one: the
+//!   job that stored it applies it beside the episode's video, as its first
+//!   apply does, and the worker is woken. `202` `{ "job_id" }`; `404` for a
+//!   stored subtitle that is not the work's; `409` (`conflict`, no `current`)
+//!   with why not in `message` (an episode with a subtitle, whose change is a
+//!   replacement's; a format the app does not apply; a job that runs or is
+//!   held). `trss_jobs::place::records::choose_stored` has the rules.
 //! - `native_title` is the first (lowest-numbered, not season 0) season's first
 //!   linked AniList entry's native title, `null` without one.
 //! - `korean_title` is the Anissia title (`subject`) of the anime the work's
@@ -96,7 +111,8 @@ use std::{collections::HashMap, path::Path as FsPath};
 
 use axum::{
     extract::{Path, State},
-    routing::get,
+    http::StatusCode,
+    routing::{get, post},
     Json, Router,
 };
 use serde::Serialize;
@@ -125,7 +141,10 @@ use trss_library::store::{
 mod tests;
 
 pub fn routes() -> Router<AppState> {
-    Router::new().route("/library/works/{id}", get(show))
+    Router::new().route("/library/works/{id}", get(show)).route(
+        "/library/works/{id}/stored/{stored_id}/apply",
+        post(apply_stored),
+    )
 }
 
 #[derive(Serialize)]
@@ -183,6 +202,33 @@ struct EpisodeView {
     revision: Option<RevisionView>,
     /// The replacement of the episode's video failed (`받기 실패`).
     failure: Option<RevisionFailure>,
+    /// Stored subtitles on the episode with no applied copy (`보관본 있음`).
+    stored: Vec<StoredView>,
+}
+
+/// A stored subtitle on an episode with no applied copy of it.
+#[derive(Serialize)]
+struct StoredView {
+    id: String,
+    name: String,
+    creator: Option<String>,
+    /// `ass`, `srt`, `smi` or `other`.
+    format: &'static str,
+    stored_at: i64,
+    can_apply: bool,
+}
+
+impl From<trss_jobs::place::records::StoredOnly> for StoredView {
+    fn from(stored: trss_jobs::place::records::StoredOnly) -> Self {
+        StoredView {
+            can_apply: stored.format.extension().is_some() && stored.job_id.is_some(),
+            id: stored.id,
+            name: stored.name,
+            creator: stored.creator,
+            format: stored.format.code(),
+            stored_at: stored.stored_at,
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -209,6 +255,7 @@ impl From<EpisodeDetail> for EpisodeView {
                 .collect(),
             revision: None,
             failure: None,
+            stored: Vec::new(),
         }
     }
 }
@@ -328,6 +375,42 @@ fn rules_of(
     rules
 }
 
+/// Puts each stored subtitle with no applied copy on its episode's row,
+/// making a row with no files for an episode that has none.
+fn attach_stored(seasons: &mut [SeasonView], stored: Vec<trss_jobs::place::records::StoredOnly>) {
+    for one in stored {
+        let Some(season) = seasons.iter_mut().find(|s| s.number == one.season) else {
+            continue;
+        };
+        let number = one.episode as f64;
+        let index = match season.episodes.iter().position(|e| e.sort == Some(number)) {
+            Some(index) => index,
+            None => {
+                let index = season
+                    .episodes
+                    .iter()
+                    .position(|e| e.sort.is_some_and(|s| s > number))
+                    .unwrap_or(season.episodes.len());
+                season.episodes.insert(
+                    index,
+                    EpisodeView {
+                        episode: format!("{:02}", one.episode),
+                        sort: Some(number),
+                        air_at: None,
+                        video: Vec::new(),
+                        subtitle: Vec::new(),
+                        revision: None,
+                        failure: None,
+                        stored: Vec::new(),
+                    },
+                );
+                index
+            }
+        };
+        season.episodes[index].stored.push(StoredView::from(one));
+    }
+}
+
 /// Puts each replacement of the work on its episode's row: the version line
 /// of the latest one that is done, and a failure. A failure whose episode has
 /// no row (its old video is gone and the new one does not have the episode
@@ -373,6 +456,7 @@ fn attach_revisions(
                         subtitle: Vec::new(),
                         revision: None,
                         failure: None,
+                        stored: Vec::new(),
                     },
                 );
                 index
@@ -532,6 +616,12 @@ async fn show(
     let offers = retry_offers(&state, &failed).await?;
     let mut seasons = seasons;
     attach_revisions(&mut seasons, revisions, FsPath::new(&folder_path), offers);
+    let stored = state
+        .jobs
+        .stored_only(&work.id)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    attach_stored(&mut seasons, stored);
     Ok(Json(WorkDetailView {
         id: work.id,
         name: work.dir_name,
@@ -559,4 +649,35 @@ async fn show(
         cover_url,
         cover_pending,
     }))
+}
+
+#[derive(Serialize)]
+struct Applying {
+    job_id: String,
+}
+
+async fn apply_stored(
+    State(state): State<AppState>,
+    Path((id, stored_id)): Path<(String, String)>,
+) -> Result<(StatusCode, Json<Applying>), ApiError> {
+    use trss_jobs::place::records::StoredChoice;
+    let now = super::commands_api::now_millis();
+    match state
+        .jobs
+        .choose_stored(&id, &stored_id, now)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+    {
+        StoredChoice::Queued(job_id) => {
+            if let Some(path) = &state.worker_wake {
+                trss_core::wake::wake_worker(path);
+            }
+            Ok((StatusCode::ACCEPTED, Json(Applying { job_id })))
+        }
+        StoredChoice::NotFound => Err(ApiError::not_found("이 보관본을 찾지 못했어요.")),
+        StoredChoice::Refused(message) => Err(ApiError::Conflict {
+            message: message.to_owned(),
+            current: None,
+        }),
+    }
 }

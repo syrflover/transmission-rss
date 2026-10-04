@@ -28,20 +28,34 @@ use sha2::{Digest, Sha256};
 #[derive(Debug, Clone)]
 pub struct ReceiveArea {
     root: PathBuf,
+    app_data: Option<PathBuf>,
 }
 
 impl ReceiveArea {
+    /// An area at `root`, with no app data folder known.
     pub fn new(root: impl Into<PathBuf>) -> ReceiveArea {
-        ReceiveArea { root: root.into() }
+        ReceiveArea {
+            root: root.into(),
+            app_data: None,
+        }
     }
 
     /// The area in the app data folder `app_data` (the database's folder).
     pub fn in_app_data(app_data: &Path) -> ReceiveArea {
-        ReceiveArea::new(app_data.join("receive"))
+        ReceiveArea {
+            root: app_data.join("receive"),
+            app_data: Some(app_data.to_owned()),
+        }
     }
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// The app data folder the area is in, when it was made in one: where a
+    /// package's attachments and companion files are kept.
+    pub fn app_data(&self) -> Option<&Path> {
+        self.app_data.as_deref()
     }
 
     /// A job's folder, relative to the area.

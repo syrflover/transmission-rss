@@ -10,21 +10,27 @@
 //! 1. The effects an earlier start left unfinished are compared with the
 //!    disk (the table below).
 //! 2. The analysis makes the job's plan ([`records::PlanRow`]) from each
-//!    post's receipts not planned yet: what each file is and which episode
-//!    of the job's season it goes on ([`episode::of_candidate`]). A post
-//!    whose package this build cannot analyse yet (more than one file, an
-//!    archive, a font) leaves the job waiting with the reason (`자막 대기`):
-//!    a later build takes it up when the worker starts.
-//!    Uploads and find jobs wait for a person's placement first and are not
-//!    placed here yet.
-//! 3. Each row to keep is stored: copied into the work folder's
-//!    `.trss/subtitles/<creator>/<name>` ([`store_name`]), or, when a file of
-//!    that name (or a numbered one) with the same bytes is stored already,
-//!    that one is used. Another file under the name (another case of it
+//!    post's receipts not planned yet ([`package::plan`]): what each file is
+//!    (a subtitle, a font, an attachment, a companion file, or one to drop),
+//!    which episode of the job's season it goes on ([`episode::of_candidate`]
+//!    for the candidate's, the numbering it used for the rest), and which
+//!    one of an episode is applied (the format order; alternatives of one
+//!    format are asked). A post with an archive leaves the job waiting with
+//!    the reason (`자막 대기`): a later build takes it up when the worker
+//!    starts. Uploads and find jobs wait for a person's placement first and
+//!    are not placed here yet.
+//! 3. Each row to keep is stored: a subtitle or a font is copied into the
+//!    work folder's `.trss/subtitles/<creator>/<name>`, an attachment or a
+//!    companion file into the app data folder's
+//!    `subtitle-files/<work>/<creator>/<name>` ([`store_name`]); or, when a
+//!    file of that name (or a numbered one) with the same bytes is stored
+//!    already, that one is used. Another file under the name (another case of it
 //!    too), or another job's effect under way to it, numbers the new one
 //!    (`<stem> (2).<ext>`). A work folder that is not there (a share not
 //!    mounted, a work moved) leaves the job waiting (`영상 대기`): nothing
 //!    was written, and the worker tries again when it starts.
+//!    Each stored subtitle of the post is then linked to its fonts and
+//!    attachments (a companion file to the subtitle of its stem).
 //! 4. A receipt every row of which is stored leaves the receive area.
 //! 5. A row whose episode has one video and no subtitle is applied: the
 //!    stored file is copied beside the video under its stem. An episode with
@@ -39,7 +45,8 @@
 //! Storing and applying are each an effect on one file ([`files`]):
 //!
 //! 1. `intended`: the effect's ID, its temporary file `.trss/tmp/<ID>` in the
-//!    work folder, its target and the bytes' length and SHA-256, before
+//!    work folder (`subtitle-files/.tmp/<ID>` in the app data folder for a
+//!    file kept there), its target and the bytes' length and SHA-256, before
 //!    anything is written.
 //! 2. The bytes are copied to the temporary file, synced and read back.
 //! 3. `prepared`: the temporary file's object.
@@ -68,6 +75,7 @@
 
 pub mod episode;
 pub mod files;
+pub mod package;
 pub mod records;
 
 use std::{
@@ -88,28 +96,21 @@ use crate::{
         StepState, SubtitleFormat,
     },
     runner::episode_label,
-    store::{FileRow, ItemRow, JobError, JobStore, FIND, UPLOAD},
+    store::{FileRow, ItemRow, JobError, JobStore, AUTO, FIND, UPLOAD},
 };
-use episode::{named, Named, Target};
 use files::{Copied, Published};
-use records::{Effect, JobFacts, Kept, NewApplied, NewStored, Placed, PlanRow};
+use package::{extension, member, Member};
+use records::{Effect, JobFacts, Kept, NewApplied, NewStored, PlanRow, Role};
 
 /// The creator folder of a subtitle whose creator nobody named.
 pub const UNKNOWN_CREATOR: &str = "제작자 알 수 없음";
 
 /// What a package this build cannot analyse waits for.
 pub const ARCHIVE_LATER: &str = "압축 파일을 풀어 분석하는 일은 아직 할 수 없어요";
-pub const PACKAGE_LATER: &str =
-    "자막이 여럿이거나 폰트·첨부가 함께 온 묶음의 분석은 아직 할 수 없어요";
 
-/// The extensions of subtitles the app keeps but does not apply by itself.
-const OTHER_SUBTITLES: [&str; 8] = ["ssa", "vtt", "sup", "sub", "idx", "ttml", "dfxp", "lrc"];
 /// The extensions a subtitle beside a video may have, for "the episode has a
 /// subtitle".
 const SUBTITLE_EXTENSIONS: [&str; 8] = ["ass", "ssa", "srt", "smi", "vtt", "sup", "sub", "idx"];
-const FONT_EXTENSIONS: [&str; 5] = ["ttf", "otf", "ttc", "woff", "woff2"];
-const ARCHIVE_EXTENSIONS: [&str; 8] = ["zip", "rar", "7z", "gz", "bz2", "xz", "tar", "tgz"];
-
 /// How many names past a taken one a store tries.
 const MAX_NAMES: usize = 1000;
 /// How many times a store takes the next name when its target is taken
@@ -138,6 +139,9 @@ pub struct Standing {
     pub failed: usize,
     /// The first failed row's reason.
     pub failure: Option<String>,
+    /// Why the first candidate none of whose files came is missing one
+    /// (`받은 묶음에 후보의 14화 파일이 없어요`).
+    pub missing: Option<String>,
 }
 
 /// The name a store takes ([`Placer::choose_name`]).
@@ -149,41 +153,6 @@ enum Choice {
     Full,
     /// The creator folder could not be read.
     Unreadable(io::Error),
-}
-
-/// What a member of a package is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Member {
-    Subtitle(SubtitleFormat),
-    Font,
-    Archive,
-    Other,
-}
-
-/// `name`'s extension in lower case.
-fn extension(name: &str) -> Option<String> {
-    let base = name.rsplit('/').next().unwrap_or(name);
-    base.rsplit_once('.')
-        .filter(|(stem, _)| !stem.is_empty())
-        .map(|(_, ext)| ext.to_lowercase())
-}
-
-/// What a received file is, from its checked `format` and its name.
-fn member(name: &str, format: Format) -> Member {
-    let ext = extension(name);
-    let ext = ext.as_deref().unwrap_or("");
-    match format {
-        // SSA opens as ASS does, but is not applied by itself.
-        Format::Ass if ext == "ssa" => Member::Subtitle(SubtitleFormat::Other),
-        Format::Ass => Member::Subtitle(SubtitleFormat::Ass),
-        Format::Srt => Member::Subtitle(SubtitleFormat::Srt),
-        Format::Smi => Member::Subtitle(SubtitleFormat::Smi),
-        Format::Zip => Member::Archive,
-        Format::Other if OTHER_SUBTITLES.contains(&ext) => Member::Subtitle(SubtitleFormat::Other),
-        Format::Other if FONT_EXTENSIONS.contains(&ext) => Member::Font,
-        Format::Other if ARCHIVE_EXTENSIONS.contains(&ext) => Member::Archive,
-        Format::Other => Member::Other,
-    }
 }
 
 /// `creator` as the name of a folder every share shows the same: a safe name
@@ -254,6 +223,11 @@ fn encoding_of(bytes: &[u8]) -> Option<String> {
         bytes if std::str::from_utf8(bytes).is_ok() => Some("utf-8".to_owned()),
         _ => None,
     }
+}
+
+/// The length of `dir/`, where a kept file's name starts in its path.
+fn prefix_len(dir: &str) -> usize {
+    dir.len() + 1
 }
 
 /// Runs blocking file work off the runtime.
@@ -339,6 +313,43 @@ impl Placer {
     pub async fn standing(&self, job: &str) -> Result<Standing, JobError> {
         let id = job.to_owned();
         let rows = self.read(move |c| records::plan(c, &id)).await?;
+        let id = job.to_owned();
+        let origin = self
+            .read(move |c| records::job_facts(c, &id))
+            .await?
+            .map(|f| f.origin);
+        // A received candidate no file of whose package is its own.
+        let missing = match origin.as_deref() {
+            Some(UPLOAD | FIND) | None => None,
+            Some(_) if rows.is_empty() => None,
+            Some(_) => self
+                .store
+                .items(job)
+                .await?
+                .into_iter()
+                .filter(|i| i.state == ItemState::Done && i.unchanged_from.is_none())
+                .filter(|i| !i.files.is_empty())
+                .find(|i| {
+                    // Its own receipts were planned (a receipt another
+                    // post's item received first is that item's).
+                    let own: Vec<&str> = i
+                        .files
+                        .iter()
+                        .filter(|f| f.same_as.is_none())
+                        .map(|f| f.id.as_str())
+                        .collect();
+                    rows.iter().any(|r| own.contains(&r.file_id.as_str()))
+                        && !rows
+                            .iter()
+                            .any(|r| r.item_id == Some(i.id) && r.anissia_episode.is_some())
+                })
+                .map(|i| {
+                    format!(
+                        "받은 묶음에 후보의 {} 파일이 없어요",
+                        episode_label(&i.episode)
+                    )
+                }),
+        };
         let first = |o: Outcome| {
             rows.iter()
                 .find(|r| r.outcome == Some(o))
@@ -356,6 +367,7 @@ impl Placer {
                 .filter(|r| r.outcome == Some(Outcome::Failed))
                 .count(),
             failure: first(Outcome::Failed),
+            missing,
         })
     }
 
@@ -392,18 +404,26 @@ impl Placer {
         let rows = self.read(move |c| records::plan(c, &id)).await?;
         let to_store: Vec<&PlanRow> = rows
             .iter()
-            .filter(|r| {
-                r.action != PlanAction::Drop && r.stored_id.is_none() && r.outcome.is_none()
-            })
+            .filter(|r| r.action != PlanAction::Drop && !r.kept() && r.outcome.is_none())
             .collect();
         let wid = work_id.clone();
         let folder = self.read(move |c| records::work_folder(c, &wid)).await?;
         let Some(folder) = folder.filter(|f| Path::new(f).is_dir()) else {
             // Nothing was written, so nothing needs a person: the job waits
-            // for the folder (a share not mounted yet, a work moved).
+            // for the folder (a share not mounted yet, a work moved), with
+            // what it has to store, or a stored file to apply (one a person
+            // chose from the episode's line).
             if !to_store.is_empty() {
                 placement.no_folder =
                     Some("작품 폴더를 찾지 못해 받은 자막을 보관하지 못했어요".to_owned());
+            } else if rows.iter().any(|r| {
+                r.action == PlanAction::Apply
+                    && r.stored_id.is_some()
+                    && r.outcome.is_none()
+                    && r.question.is_none()
+            }) {
+                placement.no_folder =
+                    Some("작품 폴더를 찾지 못해 보관한 자막을 적용하지 못했어요".to_owned());
             }
             return Ok(Some(placement));
         };
@@ -419,6 +439,7 @@ impl Placer {
             self.store_row(&facts, &items, &folder, row).await?;
         }
         self.end_store_step(job).await?;
+        self.link(job, &items).await?;
         self.clear(job).await?;
 
         let id = job.to_owned();
@@ -498,6 +519,7 @@ impl Placer {
         let mut blocked = None;
         let mut mappings = None;
         let mut total = None;
+        let mut order = Vec::new();
         for (_, (candidates, files)) in posts {
             if files.is_empty() || files.iter().all(|f| planned.contains(&f.id)) {
                 continue;
@@ -518,22 +540,21 @@ impl Placer {
                         }
                     },
                 };
-                members.push((*file, format, member(&file.name, format)));
+                let (Some(size), Some(sha256)) = (file.size, file.sha256.clone()) else {
+                    continue;
+                };
+                members.push((*file, format, size, sha256));
             }
             if members.len() != files.len() {
                 continue;
             }
-            let [(file, _, Member::Subtitle(format))] = members.as_slice() else {
-                let archive = members.iter().any(|(_, _, m)| *m == Member::Archive);
-                later.get_or_insert_with(|| {
-                    match archive {
-                        true => ARCHIVE_LATER,
-                        false => PACKAGE_LATER,
-                    }
-                    .to_owned()
-                });
+            if members
+                .iter()
+                .any(|(f, format, ..)| member(&f.name, *format) == Member::Archive)
+            {
+                later.get_or_insert_with(|| ARCHIVE_LATER.to_owned());
                 continue;
-            };
+            }
             if mappings.is_none() {
                 mappings = Some(
                     self.follow
@@ -547,109 +568,119 @@ impl Placer {
                     .await
                     .map_err(follow_error)?
                     .total;
+                let wid = work_id.to_owned();
+                order = self.read(move |c| records::format_order(c, &wid)).await?;
             }
             let mapping = facts
                 .source_id
                 .as_ref()
                 .and_then(|s| mappings.as_ref().and_then(|m| m.get(s)));
-            let name = match &file.folder {
-                Some(folder) => format!("{folder}/{}", file.name),
-                None => file.name.clone(),
-            };
-            let base = file.name.as_str();
-            // The candidate whose episode the file is: the one when it is
-            // alone, else the one the file's name says.
-            let alone = candidates.len() == 1;
-            let decided: Vec<(&ItemRow, Target)> = candidates
+            let names: Vec<String> = members
                 .iter()
-                .map(|c| {
-                    (
-                        *c,
-                        episode::of_candidate(&c.episode, mapping, base, total, alone),
-                    )
+                .map(|(file, ..)| match &file.folder {
+                    Some(folder) => format!("{folder}/{}", file.name),
+                    None => file.name.clone(),
                 })
                 .collect();
-            let chosen: Vec<&(&ItemRow, Target)> = decided
+            let sha256: Vec<&str> = members.iter().map(|(.., sha)| sha.as_str()).collect();
+            let package_files: Vec<package::File<'_>> = members
                 .iter()
-                .filter(|(_, t)| matches!(t, Target::Episode { .. }))
+                .zip(&names)
+                .map(|((_, format, ..), name)| package::File {
+                    name,
+                    format: *format,
+                })
                 .collect();
-            let (item, target) = match chosen.as_slice() {
-                [one] => (one.0, one.1.clone()),
-                _ => match decided.first() {
-                    Some((item, Target::Ask(reason))) if alone => {
-                        (*item, Target::Ask(reason.clone()))
+            // The item that received the files first leads: a package asked
+            // about as a whole is its (the others' copies are the same).
+            let mut candidates = candidates;
+            candidates.sort_by_key(|c| !c.files.iter().any(|f| f.same_as.is_none()));
+            let package_candidates: Vec<package::Candidate<'_>> = candidates
+                .iter()
+                .map(|c| package::Candidate {
+                    item_id: c.id,
+                    episode: &c.episode,
+                })
+                .collect();
+            let made = package::plan(
+                &package_candidates,
+                &package_files,
+                &package::Context {
+                    mapping,
+                    total,
+                    season,
+                    order: &order,
+                    follow: facts.origin == AUTO,
+                    sha256: &sha256,
+                },
+            );
+            let rows: Vec<PlanRow> = made
+                .rows
+                .into_iter()
+                .filter(|r| !planned.contains(&members[r.file].0.id))
+                .map(|r| {
+                    let (file, _, size, sha256) = &members[r.file];
+                    PlanRow {
+                        job_id: job.to_owned(),
+                        position: 0,
+                        file_id: file.id.clone(),
+                        member: None,
+                        name: names[r.file].clone(),
+                        kind: r.kind,
+                        format: r.format,
+                        size: *size,
+                        sha256: sha256.clone(),
+                        item_id: Some(r.item_id),
+                        anissia_episode: r.anissia_episode,
+                        attachment_episode: r.attachment_episode,
+                        question: r.question,
+                        placed: r.placed,
+                        action: r.action,
+                        stored_id: None,
+                        outcome: r.outcome,
+                        note: r.note,
+                        applied_id: None,
+                        asset_id: None,
                     }
-                    Some((item, _)) => (
-                        *item,
-                        Target::Ask("이 파일 하나를 여러 회차가 함께 받았어요".to_owned()),
-                    ),
-                    None => continue,
-                },
-            };
-            let (placed, question) = match target {
-                Target::Episode {
-                    episode,
-                    assignment,
-                    basis,
-                } => (
-                    Some(Placed {
-                        episode,
-                        assignment,
-                        basis,
-                    }),
-                    None,
-                ),
-                Target::Ask(reason) => (None, Some(reason)),
-            };
-            let applies = format.extension().is_some();
-            let (Some(size), Some(sha256)) = (file.size, file.sha256.clone()) else {
-                continue;
-            };
-            let row = PlanRow {
-                job_id: job.to_owned(),
-                position: 0,
-                file_id: file.id.clone(),
-                member: None,
-                name,
-                kind: AssetKind::Subtitle,
-                format: Some(*format),
-                size,
-                sha256,
-                item_id: Some(item.id),
-                anissia_episode: Some(item.episode.clone()),
-                attachment_episode: match named(base) {
-                    Named::One(key) => Some(key),
-                    _ => None,
-                },
-                // An unsupported format is kept on its episode but asks
-                // nothing: it is not applied whatever the answer.
-                question: question.filter(|_| applies),
-                placed,
-                action: match applies {
-                    true => PlanAction::Apply,
-                    false => PlanAction::Store,
-                },
-                stored_id: None,
-                outcome: None,
-                note: (!applies).then(|| "자동으로 적용하지 않는 형식이라 보관만 해요".to_owned()),
-                applied_id: None,
-            };
+                })
+                .collect();
             let id = job.to_owned();
             let now = self.now();
             let added = self
-                .write(move |c| records::add_plan(c, &id, vec![row], now))
+                .write(move |c| records::add_plan(c, &id, rows, now))
                 .await?;
             // A receipt another post shares is planned once.
             planned.extend(added.iter().map(|r| r.file_id.clone()));
             for row in added {
                 if let Some(question) = &row.question {
+                    let ask = match row.placed {
+                        Some(_) => "적용할 자막을 골라야 해요",
+                        None => "회차를 확인해야 해요",
+                    };
+                    self.event(job, format!("{}: {ask}", row.name), Some(question.clone()))
+                        .await?;
+                } else if row.action == PlanAction::Drop {
                     self.event(
                         job,
-                        format!("{}: 회차를 확인해야 해요", row.name),
-                        Some(question.clone()),
+                        format!("{}: 보관하지 않았어요", row.name),
+                        row.note.clone(),
                     )
                     .await?;
                 }
+            }
+            for (item, reason) in made.missing {
+                let Some(item) = candidates.iter().find(|c| c.id == item) else {
+                    continue;
+                };
+                self.event(
+                    job,
+                    format!(
+                        "{}: 받은 묶음에 이 회차의 파일이 없어요",
+                        episode_label(&item.episode)
+                    ),
+                    Some(reason),
+                )
+                .await?;
             }
         }
         Ok(Placement {
@@ -673,7 +704,7 @@ impl Placer {
         &self,
         facts: &JobFacts,
         items: &[ItemRow],
-        folder: &str,
+        work_folder: &str,
         row: &PlanRow,
     ) -> Result<(), JobError> {
         let job = row.job_id.as_str();
@@ -692,11 +723,29 @@ impl Placer {
                 .await;
         };
         let source = self.area.at(path);
+        let (folder, temp_dir) = match records::base_of(row.kind) {
+            "work" => (work_folder.to_owned(), files::TEMP_DIR),
+            _ => match self.area.app_data() {
+                Some(app_data) => (app_data.to_string_lossy().into_owned(), files::APP_TEMP_DIR),
+                None => {
+                    return self
+                        .fail_row(
+                            row,
+                            "앱 데이터 폴더를 알 수 없어 이 파일을 보관하지 못했어요".to_owned(),
+                        )
+                        .await
+                }
+            },
+        };
+        let folder = folder.as_str();
+        let dir = self.dir_of(facts, row).await?;
 
-        let name = match self.choose_name(facts, folder, row, None).await? {
+        let name = match self.choose_name(facts, folder, &dir, row, None).await? {
             Choice::New(name) => name,
             Choice::Reuse(name, asset) => {
-                return self.reuse(facts, items, row, folder, (name, asset)).await
+                return self
+                    .reuse(facts, items, row, folder, &dir, (name, asset))
+                    .await
             }
             Choice::Full => {
                 return self
@@ -709,7 +758,6 @@ impl Placer {
                     .await
             }
         };
-        let relative = format!("{}/{}", self.creator_dir(facts, folder).await?, name);
 
         let effect = Effect {
             id: uuid::Uuid::new_v4().to_string(),
@@ -718,8 +766,8 @@ impl Placer {
             kind: EffectKind::Store,
             state: EffectState::Intended,
             folder: folder.to_owned(),
-            temp: format!("{}/{}", files::TEMP_DIR, uuid::Uuid::new_v4()),
-            target: relative,
+            temp: format!("{temp_dir}/{}", uuid::Uuid::new_v4()),
+            target: format!("{dir}/{name}"),
             video: None,
             size: row.size,
             sha256: row.sha256.clone(),
@@ -761,43 +809,64 @@ impl Placer {
         }
     }
 
-    /// The creator folder of the job's files, relative to the work folder:
-    /// a folder of the same name in another case the work has already is
-    /// used, so one creator has one folder on every share.
-    async fn creator_dir(&self, facts: &JobFacts, _folder: &str) -> Result<String, JobError> {
+    /// The job's creator folder in `parent` (relative to `base`): a folder of
+    /// the same name in another case the work has there already is used, so
+    /// one creator has one folder on every share.
+    async fn creator_dir(
+        &self,
+        facts: &JobFacts,
+        base: &'static str,
+        parent: String,
+    ) -> Result<String, JobError> {
         let wanted = creator_folder(facts.creator.as_deref());
         let work = facts.work_id.clone().unwrap_or_default();
+        let prefix = format!("{parent}/");
+        let under = prefix.clone();
         let assets = self
-            .read(move |c| {
-                records::work_assets_under(c, &work, &format!("{}/", files::SUBTITLES_DIR))
-            })
+            .read(move |c| records::assets_under(c, &work, base, &under))
             .await?;
         let lower = wanted.to_lowercase();
         let existing = assets.iter().find_map(|a| {
-            let rest = a
-                .relative_path
-                .strip_prefix(&format!("{}/", files::SUBTITLES_DIR))?;
+            let rest = a.relative_path.strip_prefix(&prefix)?;
             let (dir, _) = rest.split_once('/')?;
             (dir.to_lowercase() == lower).then(|| dir.to_owned())
         });
-        Ok(format!(
-            "{}/{}",
-            files::SUBTITLES_DIR,
-            existing.unwrap_or(wanted)
-        ))
+        Ok(format!("{parent}/{}", existing.unwrap_or(wanted)))
     }
 
-    /// Uses the stored file `name` (the asset `asset`) that holds the row's
-    /// bytes already.
+    /// The folder a row's file is kept in, relative to where it is kept: the
+    /// creator folder ([`Placer::creator_dir`]) in the work folder's
+    /// `.trss/subtitles` for a subtitle or a font, in the app data folder's
+    /// `subtitle-files/<work>` for anything else.
+    async fn dir_of(&self, facts: &JobFacts, row: &PlanRow) -> Result<String, JobError> {
+        match records::base_of(row.kind) {
+            "work" => {
+                self.creator_dir(facts, "work", files::SUBTITLES_DIR.to_owned())
+                    .await
+            }
+            base => {
+                let parent = format!(
+                    "{}/{}",
+                    files::APP_FILES_DIR,
+                    safe_name(facts.work_id.as_deref().unwrap_or_default())
+                );
+                self.creator_dir(facts, base, parent).await
+            }
+        }
+    }
+
+    /// Uses the kept file `name` (the asset `asset`) in `dir` that holds the
+    /// row's bytes already.
     async fn reuse(
         &self,
         facts: &JobFacts,
         items: &[ItemRow],
         row: &PlanRow,
         folder: &str,
+        dir: &str,
         (name, asset): (String, String),
     ) -> Result<(), JobError> {
-        let relative = format!("{}/{name}", self.creator_dir(facts, folder).await?);
+        let relative = format!("{dir}/{name}");
         let at = files::within(Path::new(folder), &relative);
         self.record_stored(facts, items, row, Kept::Reused(asset), &at)
             .await?;
@@ -809,25 +878,26 @@ impl Placer {
         .await
     }
 
-    /// The name the row's file is stored under in its creator folder, or the
-    /// stored file under one of its names that holds the same bytes already.
-    /// The names of files there, registered or not, and the targets of other
-    /// effects under way (but `except`) are taken.
+    /// The name the row's file is kept under in `dir`, or the kept file under
+    /// one of its names that holds the same bytes already. The names of files
+    /// there, registered or not, and the targets of other effects under way
+    /// (but `except`) are taken.
     async fn choose_name(
         &self,
         facts: &JobFacts,
         folder: &str,
+        dir: &str,
         row: &PlanRow,
         except: Option<&str>,
     ) -> Result<Choice, JobError> {
-        let dir = self.creator_dir(facts, folder).await?;
         let work = facts.work_id.clone().unwrap_or_default();
         let prefix = format!("{dir}/");
+        let base = records::base_of(row.kind);
         let assets = self
-            .read(move |c| records::work_assets_under(c, &work, &prefix))
+            .read(move |c| records::assets_under(c, &work, base, &prefix))
             .await?;
         let on_disk = {
-            let path = files::within(Path::new(folder), &dir);
+            let path = files::within(Path::new(folder), dir);
             blocking(move || files::names_in(&path)).await
         };
         let on_disk = match on_disk {
@@ -848,10 +918,14 @@ impl Placer {
         }));
         let mut same_bytes: HashMap<String, String> = HashMap::new();
         for asset in &assets {
-            let Some(name) = asset.relative_path.rsplit('/').next() else {
+            let Some(rest) = asset
+                .relative_path
+                .get(prefix_len(dir)..)
+                .filter(|r| !r.contains('/'))
+            else {
                 continue;
             };
-            let lower = name.to_lowercase();
+            let lower = rest.to_lowercase();
             if asset.size == row.size && asset.sha256 == row.sha256 {
                 // Used only while the file is there with these bytes.
                 let path = files::within(Path::new(folder), &asset.relative_path);
@@ -892,6 +966,10 @@ impl Placer {
         };
         let folder = PathBuf::from(&effect.folder);
         let temp = files::within(&folder, &effect.temp);
+        let dir = match effect.target.rsplit_once('/') {
+            Some((dir, _)) => dir.to_owned(),
+            None => self.dir_of(facts, &row).await?,
+        };
         for _ in 0..=MAX_RETARGETS {
             let target = files::within(&folder, &effect.target);
             let from = temp.clone();
@@ -899,13 +977,21 @@ impl Placer {
                 Published::Done => return self.stored_by(facts, items, &row, &effect).await,
                 Published::Occupied => {
                     let name = match self
-                        .choose_name(facts, &effect.folder, &row, Some(&effect.id))
+                        .choose_name(facts, &effect.folder, &dir, &row, Some(&effect.id))
                         .await?
                     {
                         Choice::New(name) => name,
                         Choice::Reuse(name, asset) => {
                             return self
-                                .reuse_instead(facts, items, &row, &effect, &temp, (name, asset))
+                                .reuse_instead(
+                                    facts,
+                                    items,
+                                    &row,
+                                    &effect,
+                                    &temp,
+                                    &dir,
+                                    (name, asset),
+                                )
                                 .await
                         }
                         Choice::Full => {
@@ -918,7 +1004,6 @@ impl Placer {
                             return self.hold_effect(&effect, &reason).await;
                         }
                     };
-                    let dir = self.creator_dir(facts, &effect.folder).await?;
                     effect.target = format!("{dir}/{name}");
                     let (id, target, now) = (effect.id.clone(), effect.target.clone(), self.now());
                     self.write(move |c| records::retarget(c, &id, &target, now))
@@ -936,8 +1021,9 @@ impl Placer {
         .await
     }
 
-    /// A prepared store whose target was taken by a stored file of the same
+    /// A prepared store whose target was taken by a kept file of the same
     /// bytes: its temporary file goes and that file is used.
+    #[allow(clippy::too_many_arguments)]
     async fn reuse_instead(
         &self,
         facts: &JobFacts,
@@ -945,6 +1031,7 @@ impl Placer {
         row: &PlanRow,
         effect: &Effect,
         temp: &Path,
+        dir: &str,
         found: (String, String),
     ) -> Result<(), JobError> {
         let temp = temp.to_owned();
@@ -955,7 +1042,8 @@ impl Placer {
         let (id, now) = (effect.id.clone(), self.now());
         self.write(move |c| records::end_effect(c, &id, EffectState::Abandoned, None, now))
             .await?;
-        self.reuse(facts, items, row, &effect.folder, found).await
+        self.reuse(facts, items, row, &effect.folder, dir, found)
+            .await
     }
 
     /// A publish that failed: nothing moved when the temporary file is still
@@ -1022,13 +1110,21 @@ impl Placer {
         bytes_at: &Path,
     ) -> Result<String, JobError> {
         let item = row.item_id.and_then(|id| items.iter().find(|i| i.id == id));
-        let observation = match item.and_then(|i| i.observation_id) {
+        // The candidate's line is of its own file only.
+        let observation = match item
+            .filter(|_| row.anissia_episode.is_some())
+            .and_then(|i| i.observation_id)
+        {
             Some(id) => self.read(move |c| records::observation(c, id)).await?,
             None => None,
         };
-        let path = bytes_at.to_owned();
-        let encoding =
-            blocking(move || std::fs::read(path).ok().and_then(|b| encoding_of(&b))).await;
+        let encoding = match row.kind {
+            AssetKind::Subtitle => {
+                let path = bytes_at.to_owned();
+                blocking(move || std::fs::read(path).ok().and_then(|b| encoding_of(&b))).await
+            }
+            _ => None,
+        };
         let file_id = row.file_id.clone();
         let received_at = self
             .read(move |c| {
@@ -1057,6 +1153,72 @@ impl Placer {
             .await
     }
 
+    /// Links the stored subtitles of each package of the job whose files are
+    /// all kept (or settled otherwise) to the package's fonts, attachments
+    /// and companion files: a companion to the subtitle of its name only
+    /// (`docs/specs/subtitles.md`, 폰트).
+    async fn link(&self, job: &str, items: &[ItemRow]) -> Result<(), JobError> {
+        let id = job.to_owned();
+        let rows = self.read(move |c| records::plan(c, &id)).await?;
+        let post_of = |row: &PlanRow| {
+            row.item_id
+                .and_then(|id| items.iter().find(|i| i.id == id))
+                .map(|i| i.post_url.clone())
+        };
+        let mut posts: BTreeMap<String, Vec<&PlanRow>> = BTreeMap::new();
+        for row in &rows {
+            if let Some(post) = post_of(row) {
+                posts.entry(post).or_default().push(row);
+            }
+        }
+        let stem = |name: &str| {
+            let base = name.rsplit('/').next().unwrap_or(name);
+            base.rsplit_once('.')
+                .map(|(s, _)| s)
+                .unwrap_or(base)
+                .to_lowercase()
+        };
+        let mut links: Vec<(String, Vec<(String, Role)>)> = Vec::new();
+        for rows in posts.values() {
+            let settled = rows
+                .iter()
+                .all(|r| r.action == PlanAction::Drop || r.kept() || r.outcome.is_some());
+            if !settled {
+                continue;
+            }
+            for subtitle in rows.iter().filter(|r| r.kind == AssetKind::Subtitle) {
+                let Some(stored) = &subtitle.stored_id else {
+                    continue;
+                };
+                let assets: Vec<(String, Role)> = rows
+                    .iter()
+                    .filter_map(|r| {
+                        let asset = r.asset_id.clone()?;
+                        let role = match r.kind {
+                            AssetKind::Font => Role::Font,
+                            AssetKind::Attachment => Role::Attachment,
+                            AssetKind::Companion if stem(&r.name) == stem(&subtitle.name) => {
+                                Role::Companion
+                            }
+                            _ => return None,
+                        };
+                        Some((asset, role))
+                    })
+                    .collect();
+                if !links.iter().any(|(s, _)| s == stored) {
+                    links.push((stored.clone(), assets));
+                }
+            }
+        }
+        let ids: Vec<String> = links.iter().map(|(s, _)| s.clone()).collect();
+        let unknown = self.read(move |c| records::links_unknown(c, &ids)).await?;
+        links.retain(|(s, _)| unknown.contains(s));
+        if links.is_empty() {
+            return Ok(());
+        }
+        self.write(move |c| records::link(c, &links)).await
+    }
+
     async fn end_store_step(&self, job: &str) -> Result<(), JobError> {
         let id = job.to_owned();
         let rows = self.read(move |c| records::plan(c, &id)).await?;
@@ -1064,14 +1226,10 @@ impl Placer {
             .iter()
             .filter(|r| r.action != PlanAction::Drop)
             .collect();
-        if keep.is_empty()
-            || keep
-                .iter()
-                .any(|r| r.stored_id.is_none() && r.outcome.is_none())
-        {
+        if keep.is_empty() || keep.iter().any(|r| !r.kept() && r.outcome.is_none()) {
             return Ok(());
         }
-        let failed = keep.iter().filter(|r| r.stored_id.is_none()).count();
+        let failed = keep.iter().filter(|r| !r.kept()).count();
         let held = keep.iter().find(|r| r.outcome == Some(Outcome::Held));
         let (state, note) = match (held, failed) {
             (Some(row), _) => (StepState::Waiting, row.note.clone()),
@@ -1682,26 +1840,6 @@ mod tests {
             ),
             Some(("A (3).ass".to_owned(), true))
         );
-    }
-
-    #[test]
-    fn members_are_told_by_format_and_name() {
-        assert_eq!(
-            member("a.ass", Format::Ass),
-            Member::Subtitle(SubtitleFormat::Ass)
-        );
-        assert_eq!(
-            member("a.ssa", Format::Ass),
-            Member::Subtitle(SubtitleFormat::Other)
-        );
-        assert_eq!(
-            member("a.vtt", Format::Other),
-            Member::Subtitle(SubtitleFormat::Other)
-        );
-        assert_eq!(member("H2MPRB.TTF", Format::Other), Member::Font);
-        assert_eq!(member("pack.rar", Format::Other), Member::Archive);
-        assert_eq!(member("a.zip", Format::Zip), Member::Archive);
-        assert_eq!(member("setup.exe", Format::Other), Member::Other);
     }
 
     #[test]

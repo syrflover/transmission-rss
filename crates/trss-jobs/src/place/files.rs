@@ -1,8 +1,10 @@
-//! The file effects of storing and applying, on a work folder's file system.
-//! Blocking: the caller runs them off the runtime.
+//! The file effects of storing and applying, on a work folder's file system
+//! (or the app data folder's, for the files of a package that are neither
+//! subtitles nor fonts). Blocking: the caller runs them off the runtime.
 //!
 //! Every effect writes its own temporary file in the work folder's
-//! `.trss/tmp/`, on the file system of where it is published, and publishes
+//! `.trss/tmp/` (the app data folder's `subtitle-files/.tmp/`), on the file
+//! system of where it is published, and publishes
 //! it by a rename that replaces nothing ([`rename_noreplace`]). A rename keeps
 //! the file's object, so the published file is known for this effect's by
 //! the object recorded before the rename.
@@ -24,6 +26,12 @@ pub const TRSS_DIR: &str = ".trss";
 pub const SUBTITLES_DIR: &str = ".trss/subtitles";
 /// Where the temporary files of effects go, relative to the work folder.
 pub const TEMP_DIR: &str = ".trss/tmp";
+/// Where a package's attachments and companion files go, relative to the
+/// app data folder: `<work id>/<creator>/<name>` under it.
+pub const APP_FILES_DIR: &str = "subtitle-files";
+/// Where the temporary files of effects in the app data folder go, relative
+/// to it.
+pub const APP_TEMP_DIR: &str = "subtitle-files/.tmp";
 
 /// What came of writing a temporary file.
 #[derive(Debug)]

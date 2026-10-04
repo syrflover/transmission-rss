@@ -2230,6 +2230,13 @@ impl Runner {
                         standing.failure,
                         "보관하거나 적용하지 못한 파일이 있어요",
                     )
+                } else if let Some(reason) = standing.missing {
+                    (
+                        JobState::Partial,
+                        None,
+                        Some(reason),
+                        "받은 묶음에 후보의 회차 파일이 없어요",
+                    )
                 } else {
                     (state, wait, note, message)
                 }

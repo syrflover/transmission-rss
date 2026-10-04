@@ -6,6 +6,7 @@
 //! | --- | --- |
 //! | `/ok/<name>` | one file, `<name>.ass` |
 //! | `/shared/<series>/<anything>` | one file, `<series>.ass`, the same file for every post of the series |
+//! | `/pack/<file>/<file>/…` | a file for each segment, named as it (percent-encoded), whose bytes its extension says ([`bytes_of`]) |
 //! | `/auth/<anything>` | a person has to pass a check (`CAPTCHA`) that nothing shows |
 //! | `/check/<name>` | a person has to pass a check in the server browser; then the browser downloads `<name>.srt` |
 //! | `/missing/<anything>` | the post is gone |
@@ -119,6 +120,7 @@ enum Post {
     Missing,
     Empty,
     Short(String),
+    Pack(Vec<String>),
 }
 
 fn read(post: &Url) -> Result<Post, Failure> {
@@ -136,6 +138,20 @@ fn read(post: &Url) -> Result<Post, Failure> {
         Some("check") => Post::Check(name(1).filter(|n| is_check_name(n)).ok_or_else(changed)?),
         Some("missing") => Post::Missing,
         Some("empty") => Post::Empty,
+        Some("pack") => {
+            let names: Vec<String> = segments[1..]
+                .iter()
+                .map(|s| {
+                    percent_encoding::percent_decode_str(s)
+                        .decode_utf8_lossy()
+                        .into_owned()
+                })
+                .collect();
+            match names.is_empty() {
+                true => return Err(changed()),
+                false => Post::Pack(names),
+            }
+        }
         _ => return Err(changed()),
     })
 }
@@ -166,6 +182,12 @@ impl FakeSource {
                 return Err(Failure::new(FailureKind::Missing, "게시물이 없어요 (404)"))
             }
             Post::Empty => Opened::Files(Vec::new()),
+            Post::Pack(names) => Opened::Files(
+                names
+                    .into_iter()
+                    .map(|name| PostFile::new(format!("pack/{name}"), name))
+                    .collect(),
+            ),
         })
     }
 
@@ -189,6 +211,13 @@ impl FakeSource {
                         size: Some(srt(name).len() as u64),
                         last_modified: None,
                     }),
+                    Ok(Post::Pack(_)) => {
+                        let name = key.strip_prefix("pack/").unwrap_or(key);
+                        Ok(FileInfo {
+                            size: Some(bytes_of(name).len() as u64),
+                            last_modified: None,
+                        })
+                    }
                     Ok(_) => {
                         let name = key.rsplit('/').next().unwrap_or_default();
                         Ok(FileInfo {
@@ -213,7 +242,10 @@ impl FakeSource {
         }
         let short = matches!(post_kind, Post::Short(_));
         let name = file.name.strip_suffix(".ass").unwrap_or(&file.name);
-        let mut bytes = ass(name);
+        let mut bytes = match post_kind {
+            Post::Pack(_) => bytes_of(&file.name),
+            _ => ass(name),
+        };
         let declared = bytes.len() as u64;
         if short {
             bytes.truncate(bytes.len() - SHORT_BY as usize);
@@ -274,6 +306,32 @@ pub fn ass(name: &str) -> Vec<u8> {
         ));
     }
     text.into_bytes()
+}
+
+/// The bytes of a `/pack/` post's file `name`, by its extension: an ASS, SRT
+/// or SMI file made from its stem (a stem ending in `+` differs from the one
+/// without), a font's first bytes, an executable's, or text for anything else.
+pub fn bytes_of(name: &str) -> Vec<u8> {
+    let (stem, ext) = name.rsplit_once('.').unwrap_or((name, ""));
+    match ext.to_lowercase().as_str() {
+        "ass" | "ssa" => ass(stem),
+        "srt" => srt(stem),
+        "smi" => format!(
+            "<SAMI>\n<BODY>\n<SYNC Start=0><P Class=KRCC>가짜 자막 {stem}\n</BODY>\n</SAMI>\n"
+        )
+        .into_bytes(),
+        "ttf" | "otf" => {
+            let mut bytes = vec![0, 1, 0, 0, 0, 4];
+            bytes.extend_from_slice(stem.as_bytes());
+            bytes
+        }
+        "exe" => {
+            let mut bytes = b"MZ\x90\0".to_vec();
+            bytes.extend_from_slice(stem.as_bytes());
+            bytes
+        }
+        _ => format!("가짜 첨부 {name}\n").into_bytes(),
+    }
 }
 
 /// The bytes of the file a check post's page downloads: a valid SRT file, the

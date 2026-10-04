@@ -104,8 +104,9 @@ pub const DATABASE_FILE_SUFFIXES: &[&str] = &[
 ];
 
 /// The folders in the app data folder that trss writes into, with their
-/// subfolders: the receive area and the work covers (and their staging).
-pub const APP_DATA_FOLDERS: &[&str] = &["receive", "artwork"];
+/// subfolders: the receive area, the work covers (and their staging) and the
+/// subtitle packages' attachments and companion files.
+pub const APP_DATA_FOLDERS: &[&str] = &["receive", "artwork", "subtitle-files"];
 
 /// [`check_writable`] for the app data folder of the database at `db_path`
 /// (its folder), with the files [`DATABASE_FILE_SUFFIXES`] names and the

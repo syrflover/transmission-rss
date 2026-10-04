@@ -146,6 +146,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("../migrations/jobs/screen_restart.sql")),
     // 49: storing and applying what a job received: packages, assets, stored and applied subtitles, the plan and its file effects
     Migration::Sql(include_str!("../migrations/jobs/store_apply.sql")),
+    // 50: the asset a plan row keeps when it is a font, an attachment or a companion file
+    Migration::Sql(include_str!("../migrations/jobs/package_assets.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]

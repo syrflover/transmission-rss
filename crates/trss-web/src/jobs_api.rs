@@ -400,7 +400,8 @@ struct PlacementView {
     outcome: Option<&'static str>,
     note: Option<String>,
     /// Server paths: the video it was put beside, its applied copy while it
-    /// is there, and its stored file in the work folder's `.trss/`.
+    /// is there, and its stored file in the work folder's `.trss/` (in the
+    /// app data folder's `subtitle-files/` for an attachment or a companion).
     video: Option<String>,
     applied: Option<String>,
     stored: Option<String>,
@@ -597,7 +598,15 @@ async fn detail(
                 note: p.note,
                 video: full(at.video.clone()),
                 applied: full(at.applied.clone()),
-                stored: full(at.stored.clone()),
+                // A package's attachment or companion is in the app data
+                // folder, the receive area's parent.
+                stored: match at.in_app_data {
+                    true => at.stored.clone().and_then(|relative| {
+                        let app_data = state.receive_root.parent()?;
+                        Some(app_data.join(relative).to_string_lossy().into_owned())
+                    }),
+                    false => full(at.stored.clone()),
+                },
             }
         })
         .collect();

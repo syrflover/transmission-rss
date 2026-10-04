@@ -172,6 +172,30 @@ export interface WorkEpisode {
   revision: EpisodeRevision | null;
   /** Set while a replacement of the video has failed; `null` otherwise. */
   failure: EpisodeFailure | null;
+  /** Stored subtitles on the episode with no applied copy beside its video (`보관본 있음`), oldest first. */
+  stored: StoredSubtitle[];
+}
+
+/** A stored subtitle of an episode that is not applied beside its video. */
+export interface StoredSubtitle {
+  id: string;
+  /** The stored file's name. */
+  name: string;
+  /** The creator it was received from; `null` is `제작자 알 수 없음`. */
+  creator: string | null;
+  format: "ass" | "srt" | "smi" | "other";
+  /** When it was stored (Unix milliseconds). */
+  stored_at: number;
+  /** Whether `적용` can ask for it: a format the app applies, from a job whose record is there. */
+  can_apply: boolean;
+}
+
+/** Asks the job that stored `storedId` to apply it beside the episode's video; answers that job. */
+export function applyStored(id: string, storedId: string): Promise<{ job_id: string }> {
+  return api<{ job_id: string }>(
+    `/library/works/${encodeURIComponent(id)}/stored/${encodeURIComponent(storedId)}/apply`,
+    { method: "POST" },
+  );
 }
 
 export interface WorkSeason {

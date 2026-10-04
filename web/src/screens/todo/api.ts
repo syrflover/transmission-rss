@@ -389,9 +389,9 @@ export interface Placement {
   file_id: string;
   /** The received file's name (with its folder in a package). */
   name: string;
-  kind: "subtitle" | "font";
+  kind: "subtitle" | "font" | "attachment" | "companion" | "other";
   format: "ass" | "srt" | "smi" | "other" | null;
-  /** The season's episode it is on; `null` while a person has to say. */
+  /** The season's episode it is on; `null` while a person has to say, or for a file on no episode. */
   episode: number | null;
   /** The episode the candidate said. */
   anissia_episode: string | null;

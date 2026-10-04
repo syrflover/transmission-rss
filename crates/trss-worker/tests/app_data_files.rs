@@ -37,7 +37,7 @@ fn app_data_files_cover_every_lock_and_the_wake_socket() {
 }
 
 #[test]
-fn app_data_folders_cover_the_receive_area_and_the_artwork() {
+fn app_data_folders_cover_the_receive_area_the_artwork_and_the_subtitle_files() {
     use trss_core::access::APP_DATA_FOLDERS;
     let root = Path::new("/data");
     let receive = trss_jobs::ReceiveArea::in_app_data(root);
@@ -45,4 +45,5 @@ fn app_data_folders_cover_the_receive_area_and_the_artwork() {
         .iter()
         .any(|f| root.join(f) == receive.root()));
     assert!(APP_DATA_FOLDERS.contains(&trss_library::artwork::files::ARTWORK_DIR));
+    assert!(APP_DATA_FOLDERS.contains(&trss_jobs::place::files::APP_FILES_DIR));
 }

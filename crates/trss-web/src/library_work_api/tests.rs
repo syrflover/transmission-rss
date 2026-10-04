@@ -259,3 +259,116 @@ async fn without_a_collect_folder_no_rule_belongs_to_a_work() {
     let (_, body) = get(&state, &format!("/library/works/{id}")).await;
     assert_eq!(body["rules"], serde_json::json!([]));
 }
+
+async fn post(state: &AppState, uri: &str) -> (StatusCode, Value) {
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri(uri)
+        .body(Body::empty())
+        .unwrap();
+    let response = api::router()
+        .with_state(state.clone())
+        .oneshot(request)
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+/// A done job of the work that stored `Show - <n>.ass` for each episode `n`
+/// of season 1 and applied none; the stored subtitles' IDs are `s<n>`.
+async fn stored_only(state: &AppState, work: &str, episodes: &[i64]) {
+    let work = work.to_owned();
+    let episodes = episodes.to_vec();
+    state
+        .jobs
+        .db()
+        .run(move |c| {
+            c.execute_batch(&format!(
+                "INSERT INTO subtitle_jobs (id, command_id, request, origin, work_id, season, state,
+                                            created_at, updated_at, state_at)
+                     VALUES ('j1', 'c1', '{{}}', 'pick', '{work}', 1, 'done', 0, 0, 0);
+                 INSERT INTO subtitle_job_items (id, job_id, position, episode, post_url, found_at,
+                                                 state, updated_at)
+                     VALUES (1, 'j1', 0, '2', 'https://example.org/p', 0, 'done', 0);
+                 INSERT INTO subtitle_packages (id, work_id, job_id, source_kind, created_at)
+                     VALUES ('p1', '{work}', 'j1', 'post', 0);"
+            ))?;
+            for (position, n) in episodes.iter().enumerate() {
+                let sha = format!("{n:064}");
+                c.execute_batch(&format!(
+                    "INSERT INTO subtitle_job_files (id, job_id, item_id, file_key, name, state,
+                                                     size, sha256, created_at, updated_at)
+                         VALUES ('f{n}', 'j1', 1, 'k{n}', 'Show - {n:02}.ass', 'done', 1, '{sha}',
+                                 0, 0);
+                     INSERT INTO subtitle_assets (id, work_id, kind, base, relative_path,
+                                                  byte_size, sha256, created_at)
+                         VALUES ('a{n}', '{work}', 'subtitle', 'work',
+                                 '.trss/subtitles/하느/Show - {n:02}.ass', 1, '{sha}', 0);
+                     INSERT INTO subtitle_stored (id, work_id, season, package_id,
+                                                  subtitle_asset_id, assignment, episode, format,
+                                                  creator, stored_at)
+                         VALUES ('s{n}', '{work}', 1, 'p1', 'a{n}', 'explicit', {n}, 'ass', '하느',
+                                 {n});
+                     INSERT INTO subtitle_job_plan (job_id, position, file_id, name, kind, format,
+                                                    size, sha256, item_id, assignment, episode,
+                                                    action, stored_id, outcome, note, updated_at)
+                         VALUES ('j1', {position}, 'f{n}', 'Show - {n:02}.ass', 'subtitle', 'ass',
+                                 1, '{sha}', 1, 'explicit', {n}, 'store', 's{n}', 'stored',
+                                 '고르지 않은 회차라 보관만 해요', 0);"
+                ))?;
+            }
+            Ok::<_, trss_jobs::JobError>(())
+        })
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn an_episode_lists_its_stored_only_subtitles_and_one_is_applied_on_request() {
+    let (state, id) = state_with_work().await;
+    // Episode 1 has a subtitle, 2 has a video only, 5 has no file.
+    stored_only(&state, &id, &[1, 2, 5]).await;
+    let (status, body) = get(&state, &format!("/library/works/{id}")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let episodes = body["seasons"][0]["episodes"].as_array().unwrap();
+    let of = |e: &str| episodes.iter().find(|x| x["episode"] == e).unwrap();
+    assert_eq!(of("02")["stored"][0]["name"], "Show - 02.ass");
+    assert_eq!(of("02")["stored"][0]["creator"], "하느");
+    assert_eq!(of("02")["stored"][0]["can_apply"], true);
+    // An episode with stored subtitles only has a row with no files.
+    assert_eq!(of("05")["video"], serde_json::json!([]));
+    assert_eq!(of("05")["stored"][0]["id"], "s5");
+    let numbers: Vec<f64> = episodes
+        .iter()
+        .map(|e| e["sort"].as_f64().unwrap())
+        .collect();
+    assert_eq!(numbers, [1.0, 2.0, 5.0]);
+
+    let (status, body) = post(&state, &format!("/library/works/{id}/stored/s2/apply")).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    assert_eq!(body["job_id"], "j1");
+    let plan = state.jobs.plan("j1").await.unwrap();
+    let row = plan
+        .iter()
+        .find(|r| r.stored_id.as_deref() == Some("s2"))
+        .unwrap();
+    assert_eq!(row.action, trss_jobs::model::PlanAction::Apply);
+    assert_eq!(row.outcome, None);
+    let job = state.jobs.detail("j1").await.unwrap().unwrap();
+    assert_eq!(job.row.state, trss_jobs::JobState::Pending);
+
+    // An episode with a subtitle is a replacement's, and an unknown stored
+    // subtitle is no one's.
+    let (status, body) = post(&state, &format!("/library/works/{id}/stored/s1/apply")).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(body["message"].as_str().unwrap().contains("자막이 있어요"));
+    let (status, _) = post(&state, &format!("/library/works/{id}/stored/nope/apply")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = post(&state, "/library/works/other/stored/s5/apply").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}

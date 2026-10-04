@@ -1,9 +1,13 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 
 import { cn } from "@/lib/utils";
 import { dateTime } from "@/lib/time";
 
-import type { EpisodeFailure, EpisodeRevision, FailureFile, WorkEpisode, WorkFile, WorkSeason } from "../api";
+import { ApiError } from "@/lib/api";
+
+import { applyStored, type EpisodeFailure, type EpisodeRevision, type FailureFile, type StoredSubtitle, type WorkEpisode, type WorkFile, type WorkSeason } from "../api";
+import { jobPath } from "../../todo/api";
 import { CheckIcon, ChevronIcon, MinusIcon } from "../icons";
 import { airDay, baseName, episodeLabel, inOrder, ORDERS, rowId, type EpisodeOrder } from "./model";
 import { EmptyState } from "../../ScreenFrame";
@@ -133,6 +137,74 @@ function VersionLine({ revision }: { revision: EpisodeRevision }) {
   );
 }
 
+const STORED_FORMAT: Record<StoredSubtitle["format"], string> = { ass: "ASS", srt: "SRT", smi: "SMI", other: "그 밖의 형식" };
+
+/** A stored subtitle shown on an episode with none: applying it is the job's that stored it. */
+function StoredLine({
+  workId,
+  stored,
+  hasVideo,
+  onApplied,
+}: {
+  workId: string;
+  stored: StoredSubtitle;
+  hasVideo: boolean;
+  onApplied: () => Promise<void>;
+}) {
+  const [phase, setPhase] = useState<{ kind: "idle" } | { kind: "sending" } | { kind: "sent"; job: string } | { kind: "error"; text: string }>({
+    kind: "idle",
+  });
+  const apply = async () => {
+    setPhase({ kind: "sending" });
+    try {
+      const { job_id } = await applyStored(workId, stored.id);
+      setPhase({ kind: "sent", job: job_id });
+      await onApplied();
+    } catch (e) {
+      setPhase({ kind: "error", text: e instanceof ApiError ? e.message : "적용을 요청하지 못했어요." });
+    }
+  };
+  const facts = [stored.creator ?? "제작자 알 수 없음", STORED_FORMAT[stored.format], `${dateTime(stored.stored_at)} 받음`];
+  return (
+    <span className="flex flex-col gap-1">
+      <span title={stored.name} className="font-mono text-[12px] break-all">
+        {stored.name}
+      </span>
+      <span className="text-[12px] text-text-muted">{facts.join(" · ")}</span>
+      {phase.kind === "sent" ? (
+        <span role="status" className="text-xs text-text-secondary">
+          적용을 맡겼어요.{" "}
+          <Link to={jobPath(phase.job)} className="rounded-sm underline underline-offset-2 focus-visible:outline-2 focus-visible:outline-focus">
+            작업 보기
+          </Link>
+        </span>
+      ) : !stored.can_apply ? (
+        <span className="text-xs text-text-muted">
+          {stored.format === "other" ? "자동으로 적용하지 않는 형식이에요." : "받은 작업의 기록이 없어 여기서 적용할 수 없어요."}
+        </span>
+      ) : !hasVideo ? (
+        <span className="text-xs text-text-muted">영상이 들어오면 적용할 수 있어요.</span>
+      ) : (
+        <span className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void apply()}
+            disabled={phase.kind === "sending"}
+            className="inline-flex min-h-7 items-center rounded-md border border-hairline px-2.5 text-[12.5px] font-semibold text-text-primary hover:bg-surface-2 focus-visible:outline-2 focus-visible:outline-focus disabled:opacity-60 max-[720px]:min-h-9"
+          >
+            {phase.kind === "sending" ? "요청하는 중…" : "적용"}
+          </button>
+          {phase.kind === "error" && (
+            <span role="alert" className="text-xs text-urgent">
+              {phase.text}
+            </span>
+          )}
+        </span>
+      )}
+    </span>
+  );
+}
+
 /** The time a file was added, or `미상` when it was there before the app first looked. */
 const addedAt = (file: WorkFile) => (file.added_at === null ? "미상" : dateTime(file.added_at));
 
@@ -186,6 +258,13 @@ function Details({
           </span>
         ))}
       </Cell>
+      {episode.subtitle.length === 0 && episode.stored.length > 0 && (
+        <Cell label="보관본">
+          {episode.stored.map((stored) => (
+            <StoredLine key={stored.id} workId={workId} stored={stored} hasVideo={episode.video.length > 0} onApplied={onRetried} />
+          ))}
+        </Cell>
+      )}
       {source && picks.length > 0 && <EpisodePicks candidates={picks} season={season} source={source} />}
     </dl>
   );
@@ -243,6 +322,8 @@ function Row({
             )}
             {/* Quiet and uncoloured: a candidate to look at, not a to-do. */}
             {picks.length > 0 && <span className="text-xs text-text-muted [overflow-wrap:anywhere]">{candidateNote(picks)}</span>}
+            {/* A stored subtitle to apply is a choice, not a held subtitle: the check above stays `−`. */}
+            {episode.subtitle.length === 0 && episode.stored.length > 0 && <span className="text-xs text-text-muted">보관본 있음</span>}
           </span>
           {episode.revision !== null && <VersionLine revision={episode.revision} />}
         </span>
@@ -295,7 +376,9 @@ interface EpisodeListProps {
  * it opens the files and when each was added, and the failed replacement's two
  * files with why (and `다시 받기` when its download stopped). An episode with
  * no subtitle that other creators have a candidate for says so quietly, and its
- * opened row has `받기` for each.
+ * opened row has `받기` for each. One with no subtitle but a stored one (another
+ * episode of a package, `보관본 있음`) says so quietly too, and its opened row has
+ * the stored subtitles with `적용`, which the job that stored it does.
  */
 export function EpisodeList({
   workId,
