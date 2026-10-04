@@ -172,6 +172,22 @@ impl Connection {
         params: Value,
         timeout: Duration,
     ) -> Result<(Value, u64), CdpError> {
+        self.send(session, method, params)?
+            .marked_within(timeout)
+            .await
+    }
+
+    /// Queues `method` (in `session`, when given) for the socket and returns
+    /// at once, before any answer. Commands queued by successive calls reach
+    /// the browser in the order of the calls, which an `async` command
+    /// cannot promise: its body does not run, and so does not queue, until
+    /// it is first polled. [`Sent::answer`] waits for the answer.
+    pub fn send(
+        &self,
+        session: Option<&str>,
+        method: &str,
+        params: Value,
+    ) -> Result<Sent, CdpError> {
         if self.shared.closed.is_cancelled() {
             return Err(CdpError::Closed);
         }
@@ -190,14 +206,12 @@ impl Connection {
             self.forget(id);
             return Err(CdpError::Closed);
         }
-        match tokio::time::timeout(timeout, rx).await {
-            Ok(Ok(answer)) => answer,
-            Ok(Err(_)) => Err(CdpError::Closed),
-            Err(_) => {
-                self.forget(id);
-                Err(CdpError::Timeout(method.to_owned()))
-            }
-        }
+        Ok(Sent {
+            conn: self.clone(),
+            id,
+            method: method.to_owned(),
+            rx,
+        })
     }
 
     fn forget(&self, id: u64) {
@@ -224,6 +238,34 @@ impl Connection {
 
     pub fn close(&self) {
         self.shared.closed.cancel();
+    }
+}
+
+/// A command that is queued for the socket and waits for its answer.
+pub struct Sent {
+    conn: Connection,
+    id: u64,
+    method: String,
+    rx: oneshot::Receiver<Result<(Value, u64), CdpError>>,
+}
+
+impl Sent {
+    /// Waits for the answer for as long as [`COMMAND_TIMEOUT`].
+    pub async fn answer(self) -> Result<Value, CdpError> {
+        self.marked_within(COMMAND_TIMEOUT)
+            .await
+            .map(|(answer, _)| answer)
+    }
+
+    async fn marked_within(self, timeout: Duration) -> Result<(Value, u64), CdpError> {
+        match tokio::time::timeout(timeout, self.rx).await {
+            Ok(Ok(answer)) => answer,
+            Ok(Err(_)) => Err(CdpError::Closed),
+            Err(_) => {
+                self.conn.forget(self.id);
+                Err(CdpError::Timeout(self.method))
+            }
+        }
     }
 }
 

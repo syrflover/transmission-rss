@@ -83,6 +83,21 @@ fn is_check_name(name: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
+/// The document of the window a fake post's `#probe-popup` link opens (a
+/// `blob:` address of the post's origin: nothing is fetched to load it). When
+/// it loads it asks for an address of the browser pool's blocklist
+/// (`*.googlesyndication.com`) and for one that is not on it, and writes what
+/// became of each into its title: `ad blocked, other reached` for a window
+/// that was set up before it loaded.
+pub const PROBE_POPUP_DOC: &str = r#"<!doctype html><meta charset="utf-8"><title>probing</title>
+<script>
+const ask = url => fetch(url, { mode: 'no-cors' }).then(() => 'reached', () => 'blocked');
+Promise.all([
+  ask('https://pagead2.googlesyndication.com/pagead/trss-probe'),
+  ask('https://example.com/'),
+]).then(([ad, other]) => { document.title = 'ad ' + ad + ', other ' + other; });
+</script>"#;
+
 /// How many posts a fake blog has (`/blog/<name>/1` to this one).
 pub const BLOG_POSTS: u32 = 3;
 
@@ -338,8 +353,13 @@ window.addEventListener('resize', () => {{
 
 /// The post `n` of the fake blog `name` (a name [`is_check_name`] lets
 /// through): a link to the post before it, its two attachments, and a link
-/// that opens the post in a new window (a popup).
+/// that opens the post in a new window (a popup), and one that opens
+/// [`PROBE_POPUP_DOC`] in another.
 fn blog_page(name: &str, n: u32) -> String {
+    // Inside a script element of the page: no `</script>` may end it early.
+    let probe = serde_json::to_string(PROBE_POPUP_DOC)
+        .expect("a string is JSON")
+        .replace("</", "<\\/");
     let before = match n {
         1 => String::from("<p>첫 게시물이에요.</p>"),
         n => format!(
@@ -362,6 +382,10 @@ fn blog_page(name: &str, n: u32) -> String {
 <li><a id="txt" href="/files/{name}-{n}.txt" download="{name}-{n}.txt">{name}-{n}.txt</a></li>
 </ul>
 <p><a id="popup" href="/blog/{name}/{n}" target="_blank">새 창으로 보기</a></p>
+<p><a id="probe-popup" target="_blank">광고 요청 창으로 보기</a></p>
+<script>
+document.getElementById('probe-popup').href = URL.createObjectURL(new Blob([{probe}], {{ type: 'text/html' }}));
+</script>
 </body></html>
 "#
     )

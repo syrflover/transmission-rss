@@ -757,8 +757,9 @@ impl BrowserRun {
         Ok(self.entry.page_documents.subscribe())
     }
 
-    /// Opens a page and opens `url` in it. The page is set up (ads blocked)
-    /// before it loads anything.
+    /// Opens a page and opens `url` in it. The page's set-up (ads blocked)
+    /// is sent before it is let go, so it comes before anything the page
+    /// asks for over the same session.
     pub async fn new_page(&self, url: &str) -> Result<Page, BrowserError> {
         let created = self
             .command("Target.createTarget", json!({ "url": "about:blank" }))
@@ -778,8 +779,8 @@ impl BrowserRun {
         Ok(page)
     }
 
-    /// The pages open now (those the connection is attached to and has set
-    /// up). Looks only.
+    /// The pages open now (those the connection is attached to and has let
+    /// go, their set-up sent). Looks only.
     pub fn pages(&self) -> Vec<Page> {
         let targets = self.entry.targets.lock().expect("targets lock");
         let mut ids: Vec<&String> = targets

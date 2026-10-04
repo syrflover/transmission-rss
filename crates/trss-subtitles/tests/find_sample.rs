@@ -5,7 +5,9 @@
 //! trusted clicks, and the run hands out both downloads. A click that opens a
 //! new window makes a page of the run, which a person's request closes
 //! ([`AuthBrowser::close_page`]); the page the run opened the post in is
-//! never closed so.
+//! never closed so. Such a window becomes a page within 2 seconds, and one
+//! whose first request is a blocklisted address shows the browser's blocked
+//! error page (ticket 0054).
 //!
 //! Needs Docker and the browser image (`TRSS_BROWSER_IMAGE`, default
 //! `ghcr.io/syrflover/trss-browser:local`, built from `Dockerfile.browser`):
@@ -28,7 +30,7 @@ use trss_browser::{
     cdp::Connection, client::LauncherClient, BrowserPolicy, BrowserPool, PolicySource, PoolConfig,
 };
 use trss_subtitles::{
-    auth::{AuthBrowser, AuthPage, BrowserAuth, PrepareRequest, Waited},
+    auth::{AuthBrowser, AuthPage, BrowserAuth, PrepareRequest, Prepared, Waited},
     fake,
 };
 use url::Url;
@@ -174,6 +176,46 @@ impl Screen {
     }
 }
 
+/// A person's click on the link `id` opens a window: it is a page of the run
+/// within 2 seconds. Returns its target.
+async fn open_popup(screen: &Screen, auth: &BrowserAuth, prepared: &Prepared, id: &str) -> String {
+    let clicked = std::time::Instant::now();
+    screen.click(id).await;
+    loop {
+        let popup = auth
+            .pages("job-1", &prepared.run_id)
+            .into_iter()
+            .find(|p| *p != prepared.target_id);
+        if let Some(popup) = popup {
+            println!(
+                "the window of {id} became a page in {:?}",
+                clicked.elapsed()
+            );
+            return popup;
+        }
+        assert!(
+            clicked.elapsed() < Duration::from_secs(2),
+            "no new window within 2 s of the click on {id}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// A person's request closes the popup, and the post's own page is left.
+async fn close_popup(auth: &BrowserAuth, prepared: &Prepared, popup: &str) {
+    assert!(auth.close_page("job-1", &prepared.run_id, popup).await);
+    for _ in 0..40 {
+        if auth.pages("job-1", &prepared.run_id) == vec![prepared.target_id.clone()] {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    panic!(
+        "the popup is still a page: {:?}",
+        auth.pages("job-1", &prepared.run_id)
+    );
+}
+
 #[tokio::test]
 #[ignore = "needs docker and the trss-browser image"]
 async fn a_person_goes_to_a_past_post_and_its_attachments_are_the_runs_downloads() {
@@ -264,39 +306,112 @@ async fn a_person_goes_to_a_past_post_and_its_attachments_are_the_runs_downloads
     );
     assert!(!auth.downloading("job-1", &prepared.run_id));
 
-    // A click opens the post in a new window: a page of the run.
-    // The pool lets a popup go only once its setup gave up (`Network.enable`
-    // is not answered while the popup waits for the debugger:
-    // `cdp::COMMAND_TIMEOUT`, 30 s), so it is waited for that long.
-    screen.click("popup").await;
-    let mut popup = None;
-    for _ in 0..200 {
-        popup = auth
-            .pages("job-1", &prepared.run_id)
-            .into_iter()
-            .find(|p| *p != prepared.target_id);
-        if popup.is_some() {
+    // A frame of another site is a target of its own, set up the same way:
+    // it asks for a blocklisted address and is refused, while an address that
+    // is not on the list goes through.
+    screen
+        .eval(
+            "document.body.append(Object.assign(document.createElement('iframe'), \
+             { id: 'cross', src: 'https://example.com/' })); 0",
+        )
+        .await;
+    let mut frame = None;
+    for _ in 0..80 {
+        let targets = screen
+            .conn
+            .command(None, "Target.getTargets", json!({}))
+            .await
+            .unwrap();
+        frame = targets["targetInfos"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| {
+                t["type"] == "iframe"
+                    && t["url"].as_str().is_some_and(|u| u.contains("example.com"))
+            })
+            .and_then(|t| t["targetId"].as_str().map(str::to_owned));
+        if frame.is_some() {
             break;
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
-    let popup = popup.expect("no new window");
+    let frame = frame.expect("the frame of another site is not a target");
+    let attached = screen
+        .conn
+        .command(
+            None,
+            "Target.attachToTarget",
+            json!({ "targetId": frame, "flatten": true }),
+        )
+        .await
+        .unwrap();
+    let frame_view = Screen {
+        conn: screen.conn.clone(),
+        session: attached["sessionId"].as_str().unwrap().to_owned(),
+    };
+    let asked = frame_view
+        .send(
+            "Runtime.evaluate",
+            json!({
+                "expression": "const ask = url => fetch(url, { mode: 'no-cors' }).then(() => 'reached', () => 'blocked'); \
+                    Promise.all([ask('https://pagead2.googlesyndication.com/pagead/trss-probe'), ask('https://example.com/')]) \
+                    .then(([ad, other]) => 'ad ' + ad + ', other ' + other)",
+                "awaitPromise": true,
+                "returnByValue": true,
+            }),
+        )
+        .await;
+    assert_eq!(
+        asked["result"]["value"], "ad blocked, other reached",
+        "the frame of another site was not set up: {asked}"
+    );
+
+    // A click opens the post in a new window: a page of the run, at once.
+    // The pool sets a popup up and lets it go without waiting for an answer of
+    // the set-up (`Network.enable` is not answered while the popup waits for
+    // the debugger; waiting for it held the popup for `cdp::COMMAND_TIMEOUT`,
+    // 30 s, ticket 0054).
+    let popup = open_popup(&screen, &auth, &prepared, "popup").await;
     // The post's own page stays; the popup closes.
     assert!(
         !auth
             .close_page("job-1", &prepared.run_id, &prepared.target_id)
             .await
     );
-    assert!(auth.close_page("job-1", &prepared.run_id, &popup).await);
-    let mut pages = auth.pages("job-1", &prepared.run_id);
-    for _ in 0..40 {
-        if !pages.contains(&popup) {
+    close_popup(&auth, &prepared, &popup).await;
+
+    // A window that asks for a blocklisted address as soon as its document
+    // loads is set up before it: the request is blocked, and one for an
+    // address that is not on the list goes through.
+    let probe = open_popup(&screen, &auth, &prepared, "probe-popup").await;
+    let attached = screen
+        .conn
+        .command(
+            None,
+            "Target.attachToTarget",
+            json!({ "targetId": probe, "flatten": true }),
+        )
+        .await
+        .unwrap();
+    let probe_view = Screen {
+        conn: screen.conn.clone(),
+        session: attached["sessionId"].as_str().unwrap().to_owned(),
+    };
+    let mut title = Value::Null;
+    for _ in 0..80 {
+        title = probe_view.eval("document.title").await;
+        if title.as_str().is_some_and(|t| t.starts_with("ad ")) {
             break;
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
-        pages = auth.pages("job-1", &prepared.run_id);
     }
-    assert_eq!(pages, vec![prepared.target_id.clone()]);
+    assert_eq!(
+        title.as_str().unwrap_or_default(),
+        "ad blocked, other reached",
+        "the popup was not set up before it loaded (or the network is out)"
+    );
+    close_popup(&auth, &prepared, &probe).await;
 
     auth.release("job-1").await;
     assert!(!auth.is_live("job-1", &prepared.run_id));
