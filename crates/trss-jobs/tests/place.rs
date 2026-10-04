@@ -320,7 +320,7 @@ async fn a_name_taken_by_other_bytes_is_numbered_and_the_same_bytes_are_one_file
 }
 
 #[tokio::test]
-async fn an_episode_with_a_subtitle_keeps_it_and_one_without_a_video_is_stored_only() {
+async fn an_episode_with_a_subtitle_keeps_it_and_one_without_a_video_waits_for_it() {
     let s = setup().await;
     let smi = s.work().join("Season 01/Show S01E02.smi");
     std::fs::write(&smi, b"<SAMI></SAMI>").unwrap();
@@ -336,15 +336,278 @@ async fn an_episode_with_a_subtitle_keeps_it_and_one_without_a_video_is_stored_o
     assert!(!s.work().join("Season 01/Show S01E02.ass").exists());
     assert!(s.stored_dir().join("Show-02.ass").exists());
 
-    // Episode 3 has no video.
+    // Episode 3 has no video: stored, and the job waits for it (영상 대기).
     let id = make(&s, "c2", "3", "/ok/Show-03", false).await;
     run(&s).await;
     let d = detail(&s, &id).await;
-    assert_eq!(d.row.state, JobState::Done);
+    assert_eq!(
+        (d.row.state, d.row.wait, d.row.note.as_deref()),
+        (
+            JobState::Waiting,
+            Some(Wait::Video),
+            Some(trss_jobs::place::AWAITING_VIDEO)
+        )
+    );
     let plan = s.store.plan(&id).await.unwrap();
     assert_eq!(plan[0].outcome, Some(Outcome::NoVideo));
     assert_eq!(plan[0].action, PlanAction::Apply);
     assert!(s.stored_dir().join("Show-03.ass").exists());
+    assert_eq!(
+        names(&s.work().join("Season 01")),
+        ["Show S01E02.mkv", "Show S01E02.smi"]
+    );
+}
+
+/// A job of episode 3, which has no video: it waits for it (영상 대기).
+async fn awaiting_video(s: &Setup) -> String {
+    let id = make(s, "c3", "3", "/ok/Show-03", false).await;
+    run(s).await;
+    let d = detail(s, &id).await;
+    assert_eq!(
+        (d.row.state, d.row.wait),
+        (JobState::Waiting, Some(Wait::Video))
+    );
+    id
+}
+
+fn told(d: &JobDetail, message: &str) -> usize {
+    d.events
+        .iter()
+        .filter(|e| e.message.contains(message))
+        .count()
+}
+
+#[tokio::test]
+async fn a_subtitle_waiting_for_its_video_is_applied_once_the_library_has_it() {
+    let s = setup().await;
+    let id = awaiting_video(&s).await;
+    let receipts = s.count("subtitle_job_files").await;
+
+    // Nothing came: the first look finds no video, and a library that did not
+    // change is not looked at again.
+    assert_eq!(s.runner.requeue_awaiting_video().await.unwrap(), 0);
+    assert_eq!(s.runner.requeue_awaiting_video().await.unwrap(), 0);
+    // A worker's start runs it again: it still waits, told once.
+    assert_eq!(s.runner.requeue_waiting_for_sources().await.unwrap(), 1);
+    run(&s).await;
+    let d = detail(&s, &id).await;
+    assert_eq!(
+        (d.row.state, d.row.wait),
+        (JobState::Waiting, Some(Wait::Video))
+    );
+    assert_eq!(told(&d, trss_jobs::place::AWAITING_VIDEO), 1);
+    assert_eq!(step(&d, StepKind::Apply), Some(StepState::Waiting));
+    assert!(awaiting(&s).await);
+    // Another episode's video is not this one's.
+    video(&s, "04").await;
+    assert_eq!(s.runner.requeue_awaiting_video().await.unwrap(), 0);
+
+    video(&s, "03").await;
+    assert_eq!(s.runner.requeue_awaiting_video().await.unwrap(), 1);
+    let d = detail(&s, &id).await;
+    assert_eq!(d.row.state, JobState::Pending);
+    assert_eq!(told(&d, "영상이 들어와 적용을 이어가요"), 1);
+    run(&s).await;
+    let d = detail(&s, &id).await;
+    assert_eq!(d.row.state, JobState::Done, "{:?}", d.row.note);
+    assert_eq!(step(&d, StepKind::Apply), Some(StepState::Done));
+    assert_eq!(
+        s.store.plan(&id).await.unwrap()[0].outcome,
+        Some(Outcome::Applied)
+    );
+    assert!(s.work().join("Season 01/Show S01E03.ass").exists());
+    // Applied from what was stored: nothing was received again.
+    assert_eq!(s.count("subtitle_job_files").await, receipts);
+    assert_eq!(s.runner.requeue_awaiting_video().await.unwrap(), 0);
+}
+
+/// Whether the work's stored subtitle of episode 3 is told as waiting for its
+/// video.
+async fn awaiting(s: &Setup) -> bool {
+    let stored = s.store.stored_only(WORK).await.unwrap();
+    stored
+        .iter()
+        .find(|x| x.episode == 3)
+        .unwrap()
+        .awaiting_video
+}
+
+/// A candidate's job of episode 3 (`/ok/Show-03`) and episode 4 at `post`.
+async fn with_episode_4(s: &Setup, post: &str) -> String {
+    let item = |episode: &str, post_url: String| NewItem {
+        observation_id: None,
+        episode: episode.to_owned(),
+        post_url,
+        found_at: 500,
+    };
+    let job = NewJob {
+        command_id: "c4".to_owned(),
+        request: "{\"c\":\"c4\"}".to_owned(),
+        origin: "pick".to_owned(),
+        work_id: Some(WORK.to_owned()),
+        season: Some(1),
+        anime_no: Some(7),
+        source_id: None,
+        creator: Some(CREATOR.to_owned()),
+        revision_of: None,
+        revises_attributed: false,
+        items: vec![
+            item("3", format!("https://{}/ok/Show-03", fake::HOST)),
+            item("4", post.to_owned()),
+        ],
+    };
+    match s.store.create(job, 900).await.unwrap() {
+        Created::Created(id) => id,
+        other => panic!("created: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_partly_received_job_stays_partial_and_applies_once_the_video_comes() {
+    let s = setup().await;
+    let missing = format!("https://{}/missing/Show-04", fake::HOST);
+    let id = with_episode_4(&s, &missing).await;
+    run(&s).await;
+    // What failed is told first; the row waiting for its video still waits.
+    let d = detail(&s, &id).await;
+    assert_eq!(d.row.state, JobState::Partial, "{:?}", d.row.note);
+    assert!(d.row.note.as_deref().unwrap().contains("받지 못했어요"));
+    assert_eq!(
+        s.store.plan(&id).await.unwrap()[0].outcome,
+        Some(Outcome::NoVideo)
+    );
+    assert!(awaiting(&s).await);
+
+    video(&s, "03").await;
+    assert_eq!(s.runner.requeue_awaiting_video().await.unwrap(), 1);
+    run(&s).await;
+    let d = detail(&s, &id).await;
+    assert_eq!(d.row.state, JobState::Partial);
+    assert!(d.row.finished_at.is_some());
+    assert_eq!(
+        s.store.plan(&id).await.unwrap()[0].outcome,
+        Some(Outcome::Applied)
+    );
+    assert!(s.work().join("Season 01/Show S01E03.ass").exists());
+}
+
+#[tokio::test]
+async fn a_job_waiting_for_a_source_applies_once_the_video_comes() {
+    let s = setup().await;
+    let id = with_episode_4(&s, "https://example.org/Show-04").await;
+    run(&s).await;
+    let d = detail(&s, &id).await;
+    assert_eq!(
+        (d.row.state, d.row.wait),
+        (JobState::Waiting, Some(Wait::Subtitle))
+    );
+    assert!(awaiting(&s).await);
+
+    video(&s, "03").await;
+    assert_eq!(s.runner.requeue_awaiting_video().await.unwrap(), 1);
+    run(&s).await;
+    let d = detail(&s, &id).await;
+    assert_eq!(
+        (d.row.state, d.row.wait),
+        (JobState::Waiting, Some(Wait::Subtitle))
+    );
+    assert_eq!(
+        s.store.plan(&id).await.unwrap()[0].outcome,
+        Some(Outcome::Applied)
+    );
+}
+
+#[tokio::test]
+async fn a_held_job_does_not_tell_its_row_as_waiting_for_the_video() {
+    let s = setup().await;
+    let id = awaiting_video(&s).await;
+    let job = id.clone();
+    s.db.run(move |c| {
+        c.execute(
+            "UPDATE subtitle_jobs SET state = 'held', wait = NULL WHERE id = ?1",
+            [job],
+        )
+        .map_err(trss_core::DbError::from)
+    })
+    .await
+    .unwrap();
+    // A person has to act on it first: nothing applies it by itself.
+    assert!(!awaiting(&s).await);
+    video(&s, "03").await;
+    assert_eq!(s.runner.requeue_awaiting_video().await.unwrap(), 0);
+    assert_eq!(detail(&s, &id).await.row.state, JobState::Held);
+}
+
+#[tokio::test]
+async fn a_video_that_comes_while_the_folder_is_away_waits_for_the_folder() {
+    let s = setup().await;
+    let id = awaiting_video(&s).await;
+    video(&s, "03").await;
+    let (work, hidden) = (s.work(), s.dir.path().join("shows/.Show-away"));
+    std::fs::rename(&work, &hidden).unwrap();
+    assert_eq!(s.runner.requeue_awaiting_video().await.unwrap(), 1);
+    run(&s).await;
+    let d = detail(&s, &id).await;
+    assert_eq!(
+        (d.row.state, d.row.wait),
+        (JobState::Waiting, Some(Wait::Video))
+    );
+    assert_eq!(
+        d.row.note.as_deref(),
+        Some("작품 폴더를 찾지 못해 보관한 자막을 적용하지 못했어요")
+    );
+    // The folder comes back: a worker's start takes it up.
+    std::fs::rename(&hidden, &work).unwrap();
+    assert_eq!(s.runner.requeue_waiting_for_sources().await.unwrap(), 1);
+    run(&s).await;
+    assert_eq!(detail(&s, &id).await.row.state, JobState::Done);
+    assert!(s.work().join("Season 01/Show S01E03.ass").exists());
+}
+
+#[tokio::test]
+async fn a_video_recorded_but_not_on_the_disk_is_looked_at_once_per_library_change() {
+    let s = setup().await;
+    // The library still records episode 2's video, which is gone.
+    std::fs::remove_file(s.work().join(VIDEO)).unwrap();
+    let id = make(&s, "c1", "2", "/ok/Show-02", false).await;
+    run(&s).await;
+    let waits = |d: JobDetail| (d.row.state, d.row.wait);
+    assert_eq!(
+        waits(detail(&s, &id).await),
+        (JobState::Waiting, Some(Wait::Video))
+    );
+    assert_eq!(s.runner.requeue_awaiting_video().await.unwrap(), 1);
+    run(&s).await;
+    assert_eq!(
+        waits(detail(&s, &id).await),
+        (JobState::Waiting, Some(Wait::Video))
+    );
+    // Not again and again while the library stays as it is.
+    assert_eq!(s.runner.requeue_awaiting_video().await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn a_subtitle_that_came_with_the_video_is_kept() {
+    let s = setup().await;
+    let id = awaiting_video(&s).await;
+    video(&s, "03").await;
+    let smi = s.work().join("Season 01/Show S01E03.smi");
+    std::fs::write(&smi, b"<SAMI></SAMI>").unwrap();
+    s.sql(
+        "INSERT INTO media_files (work_id, path, season, episode, kind)
+             VALUES ('w1', 'Season 01/Show S01E03.smi', 1, '03', 'subtitle')",
+    )
+    .await;
+    assert_eq!(s.runner.requeue_awaiting_video().await.unwrap(), 1);
+    run(&s).await;
+    let d = detail(&s, &id).await;
+    assert_eq!(d.row.state, JobState::Done);
+    assert_eq!(
+        s.store.plan(&id).await.unwrap()[0].outcome,
+        Some(Outcome::Existing)
+    );
+    assert_eq!(std::fs::read(&smi).unwrap(), b"<SAMI></SAMI>");
+    assert!(!s.work().join("Season 01/Show S01E03.ass").exists());
 }
 
 // ---------------------------------------------------------------------------
@@ -1309,6 +1572,7 @@ async fn a_creator_named_in_another_case_keeps_one_attachment_folder() {
     let first = make_pack(&s, "c1", "pick", "2", &["Show - 02.ass", "readme.txt"]).await;
     creator_of(&s, &first, "Sub Team").await;
     run(&s).await;
+    video(&s, "03").await;
     let second = make_pack(&s, "c2", "pick", "3", &["Show - 03.ass", "notes.txt"]).await;
     creator_of(&s, &second, "SUB TEAM").await;
     run(&s).await;

@@ -956,6 +956,11 @@ pub struct StoredOnly {
     pub stored_at: Millis,
     /// The job whose plan row has it, which applies it when asked.
     pub job_id: Option<String>,
+    /// A job applies it by itself once the episode's video comes (`영상
+    /// 대기`): one that waits for the video or a source, ended partly failed,
+    /// or is about to run. A job held or waiting for a person does not until
+    /// the person acts, so its row is not told so.
+    pub awaiting_video: bool,
 }
 
 pub fn stored_only(c: &Connection, work_id: &str) -> rusqlite::Result<Vec<StoredOnly>> {
@@ -963,7 +968,12 @@ pub fn stored_only(c: &Connection, work_id: &str) -> rusqlite::Result<Vec<Stored
         "SELECT s.id, s.season, s.episode, a.relative_path, s.creator, s.format, s.stored_at,
                 (SELECT p.job_id FROM subtitle_job_plan p
                   WHERE p.stored_id = s.id AND p.episode IS NOT NULL
-                  ORDER BY p.updated_at DESC LIMIT 1)
+                  ORDER BY p.updated_at DESC LIMIT 1),
+                EXISTS (SELECT 1 FROM subtitle_job_plan p JOIN subtitle_jobs j ON j.id = p.job_id
+                         WHERE p.stored_id = s.id AND p.action = 'apply'
+                           AND p.outcome = 'no_video'
+                           AND (j.state = 'waiting' AND j.wait IN ('video', 'subtitle')
+                                OR j.state IN ('partial', 'pending', 'running')))
            FROM subtitle_stored s JOIN subtitle_assets a ON a.id = s.subtitle_asset_id
           WHERE s.work_id = ?1 AND s.episode IS NOT NULL
             AND NOT EXISTS (SELECT 1 FROM subtitle_applied ap
@@ -981,6 +991,7 @@ pub fn stored_only(c: &Connection, work_id: &str) -> rusqlite::Result<Vec<Stored
             format: r.get(5)?,
             stored_at: r.get(6)?,
             job_id: r.get(7)?,
+            awaiting_video: r.get(8)?,
         })
     })?;
     rows.collect()

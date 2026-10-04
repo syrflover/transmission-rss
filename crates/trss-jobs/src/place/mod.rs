@@ -35,10 +35,12 @@
 //! 5. A row whose episode has one video and no subtitle is applied: the
 //!    stored file is copied beside the video under its stem. An episode with
 //!    a subtitle, or with another job's apply under way, keeps it and the
-//!    row is stored only, as is one without a video; a row whose episode a
-//!    person has to say waits for them (`회차 확인 필요`). An earlier applied
-//!    copy recorded at the path is recorded as removed: the rename replaced
-//!    nothing, so a person removed it.
+//!    row is stored only; a row whose episode has no video waits for it
+//!    (`영상 대기`) and is applied when the job runs again once the library
+//!    records the video ([`crate::JobStore::requeue_awaiting_video`]); a row
+//!    whose episode a person has to say waits for them (`회차 확인 필요`). An
+//!    earlier applied copy recorded at the path is recorded as removed: the
+//!    rename replaced nothing, so a person removed it.
 //!
 //! # One effect
 //!
@@ -108,6 +110,9 @@ pub const UNKNOWN_CREATOR: &str = "제작자 알 수 없음";
 /// What a package this build cannot analyse waits for.
 pub const ARCHIVE_LATER: &str = "압축 파일을 풀어 분석하는 일은 아직 할 수 없어요";
 
+/// A row to apply whose episode has no video yet (`영상 대기`).
+pub const AWAITING_VIDEO: &str = "영상이 아직 없어 영상이 들어오면 적용해요";
+
 /// The extensions a subtitle beside a video may have, for "the episode has a
 /// subtitle".
 const SUBTITLE_EXTENSIONS: [&str; 8] = ["ass", "ssa", "srt", "smi", "vtt", "sup", "sub", "idx"];
@@ -142,6 +147,8 @@ pub struct Standing {
     /// Why the first candidate none of whose files came is missing one
     /// (`받은 묶음에 후보의 14화 파일이 없어요`).
     pub missing: Option<String>,
+    /// Rows to apply whose episode has no video yet (`영상 대기`).
+    pub awaiting_video: usize,
 }
 
 /// The name a store takes ([`Placer::choose_name`]).
@@ -368,6 +375,10 @@ impl Placer {
                 .count(),
             failure: first(Outcome::Failed),
             missing,
+            awaiting_video: rows
+                .iter()
+                .filter(|r| r.action == PlanAction::Apply && r.outcome == Some(Outcome::NoVideo))
+                .count(),
         })
     }
 
@@ -419,7 +430,7 @@ impl Placer {
             } else if rows.iter().any(|r| {
                 r.action == PlanAction::Apply
                     && r.stored_id.is_some()
-                    && r.outcome.is_none()
+                    && matches!(r.outcome, None | Some(Outcome::NoVideo))
                     && r.question.is_none()
             }) {
                 placement.no_folder =
@@ -444,12 +455,13 @@ impl Placer {
 
         let id = job.to_owned();
         let rows = self.read(move |c| records::plan(c, &id)).await?;
+        // A row waiting for its video looks again.
         let to_apply: Vec<&PlanRow> = rows
             .iter()
             .filter(|r| {
                 r.action == PlanAction::Apply
                     && r.stored_id.is_some()
-                    && r.outcome.is_none()
+                    && matches!(r.outcome, None | Some(Outcome::NoVideo))
                     && r.question.is_none()
             })
             .collect();
@@ -1358,9 +1370,15 @@ impl Placer {
         }
         let video = match present.as_slice() {
             [] => {
-                let note = "영상이 없어 보관만 했어요".to_owned();
-                self.settle_row(row, Outcome::NoVideo, note.clone()).await?;
-                return self.event(job, format!("{label}: {note}"), None).await;
+                // It waits for the video (영상 대기): told once.
+                if row.outcome == Some(Outcome::NoVideo) {
+                    return Ok(());
+                }
+                self.settle_row(row, Outcome::NoVideo, AWAITING_VIDEO.to_owned())
+                    .await?;
+                return self
+                    .event(job, format!("{label}: {AWAITING_VIDEO}"), None)
+                    .await;
             }
             [one] => one.clone(),
             _ => {
@@ -1583,6 +1601,7 @@ impl Placer {
             .filter(|r| r.outcome == Some(Outcome::Failed))
             .count();
         let held = apply.iter().find(|r| r.outcome == Some(Outcome::Held));
+        let awaiting = apply.iter().any(|r| r.outcome == Some(Outcome::NoVideo));
         let (state, note) = match held {
             Some(row) => (StepState::Waiting, row.note.clone()),
             None if failed == apply.len() => (StepState::Failed, apply[0].note.clone()),
@@ -1590,6 +1609,7 @@ impl Placer {
                 StepState::Partial,
                 Some(format!("{failed}개를 적용하지 못했어요")),
             ),
+            None if awaiting => (StepState::Waiting, Some(AWAITING_VIDEO.to_owned())),
             // Done: what was not applied says why.
             None => (
                 StepState::Done,

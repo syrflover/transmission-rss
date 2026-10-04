@@ -22,7 +22,8 @@
 //!       "revision": { "from": "v1", "to": "v2", "replaced_at": 1760000200000 },
 //!       "failure": null,
 //!       "stored": [{ "id": "…", "name": "Show - 02.ass", "creator": "하느", "format": "ass",
-//!                    "stored_at": 1760000300000, "can_apply": true }]
+//!                    "stored_at": 1760000300000, "can_apply": true,
+//!                    "awaiting_video": false }]
 //!     }]
 //!   }],
 //!   "unrecognized": [{ "path": "Extras/PV.mkv", "reason": "outside_season", "message": "…" }],
@@ -61,10 +62,12 @@
 //!   come from [`trss_collect::store::revisions`], for season folders of the work.
 //! - `stored` are the stored subtitles on the episode with no applied copy of
 //!   them beside a video (보관만 한 자막: another episode of a package, a
-//!   format the order did not take, an episode that had no video), oldest
-//!   first. `can_apply` says whether `적용` can ask for it: a format the app
-//!   applies, received by a job whose record is there. An episode with only
-//!   such subtitles has a row of its own with no files.
+//!   format the order did not take; or one waiting for the episode's video),
+//!   oldest first. `can_apply` says whether `적용` can ask for it: a format the app
+//!   applies, received by a job whose record is there. `awaiting_video` says
+//!   a job applies it once the episode's video comes (`영상 대기`): no
+//!   `적용` is asked for it. An episode with only such subtitles has a row of
+//!   its own with no files.
 //! - `POST /api/library/works/{id}/stored/{stored_id}/apply` applies one: the
 //!   job that stored it applies it beside the episode's video, as its first
 //!   apply does, and the worker is woken. `202` `{ "job_id" }`; `404` for a
@@ -216,6 +219,8 @@ struct StoredView {
     format: &'static str,
     stored_at: i64,
     can_apply: bool,
+    /// A job applies it once the episode's video comes (`영상 대기`).
+    awaiting_video: bool,
 }
 
 impl From<trss_jobs::place::records::StoredOnly> for StoredView {
@@ -227,6 +232,7 @@ impl From<trss_jobs::place::records::StoredOnly> for StoredView {
             creator: stored.creator,
             format: stored.format.code(),
             stored_at: stored.stored_at,
+            awaiting_video: stored.awaiting_video,
         }
     }
 }

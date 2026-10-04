@@ -67,17 +67,17 @@ fn ticking_clock() -> Clock {
 }
 
 /// Every item of the job is received. A package this build does not
-/// analyse yet (an archive) leaves the job waiting for it; the recheck reads
-/// receipts whatever came of them.
+/// analyse yet (an archive) leaves the job waiting for it, and an episode with
+/// no video leaves it waiting for the video; the recheck reads receipts
+/// whatever came of them.
 fn assert_received(d: &JobDetail) {
     assert!(
         d.items.iter().all(|i| i.state == ItemState::Done),
         "{:?}",
         d.events
     );
-    match d.row.state {
-        JobState::Done => {}
-        JobState::Waiting => assert_eq!(d.row.wait, Some(Wait::Subtitle), "{:?}", d.events),
+    match (d.row.state, d.row.wait) {
+        (JobState::Done, _) | (JobState::Waiting, Some(Wait::Subtitle | Wait::Video)) => {}
         other => panic!("{other:?}: {:?}", d.events),
     }
 }
@@ -218,9 +218,18 @@ impl World {
     }
 
     /// The library's files of the season's episode: a video (`mkv`) or a
-    /// subtitle (`ass`).
+    /// subtitle (`ass`), on the disk too (a subtitle a job applied there
+    /// already stays as it is).
     async fn file(&self, episode: u32, ext: &'static str) {
         let kind = if ext == "mkv" { "video" } else { "subtitle" };
+        let path = self
+            ._dir
+            .path()
+            .join(format!("media/Show/Season 01/Show S01E{episode:02}.{ext}"));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        if !path.exists() {
+            std::fs::write(&path, ext).unwrap();
+        }
         self.db
             .run::<_, DbError, _>(move |c| {
                 let episode = format!("{episode:02}");
@@ -1000,7 +1009,7 @@ async fn only_the_subscribed_creators_receipts_are_read_while_the_subscription_t
     }
     w.run().await;
     for id in &picked {
-        assert_eq!(w.detail(id).await.row.state, JobState::Done);
+        assert_received(&w.detail(id).await);
     }
 
     let report = w.recheck_at(2 * DAY).await;

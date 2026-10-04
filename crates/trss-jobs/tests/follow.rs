@@ -364,8 +364,17 @@ impl World {
         std::fs::read(path).ok()
     }
 
+    /// A file of the work `Show` the library recorded, on the disk too (a
+    /// subtitle a job applied there already stays as it is).
     async fn file(&self, season: u32, episode: u32, ext: &'static str) {
         let kind = if ext == "mkv" { "video" } else { "subtitle" };
+        let path = self._dir.path().join(format!(
+            "media/Show/Season {season:02}/Show S{season:02}E{episode:02}.{ext}"
+        ));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        if !path.exists() {
+            std::fs::write(&path, ext).unwrap();
+        }
         self.db
             .run::<_, DbError, _>(move |c| {
                 let episode = format!("{episode:02}");
@@ -765,7 +774,12 @@ async fn two_episodes_posted_after_they_aired_decide_the_mapping_and_the_episode
     assert_eq!(w.detail(&made[1]).await.items[0].observation_id, Some(two));
     assert!(w.conflicts(1, "에루샤").await.is_empty());
     w.run().await;
-    assert_eq!(w.detail(&made[0]).await.row.state, JobState::Done);
+    // Received and stored; the episodes have no video yet.
+    let d = w.detail(&made[0]).await;
+    assert_eq!(
+        (d.row.state, d.row.wait),
+        (JobState::Waiting, Some(Wait::Video))
+    );
     assert!(w.evaluate().await.is_empty());
 }
 

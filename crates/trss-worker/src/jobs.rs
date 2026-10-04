@@ -194,6 +194,13 @@ impl Worker {
         let Ok(_one_run) = self.jobs_running.try_lock() else {
             return Ok(None);
         };
+        // A video the library recorded since the last look takes up the
+        // subtitles waiting for it.
+        match runner.requeue_awaiting_video().await {
+            Ok(0) => {}
+            Ok(n) => println!("Subtitle jobs: {n} waiting for a video are in line again"),
+            Err(err) => eprintln!("Subtitle jobs: cannot look for arrived videos: {err}"),
+        }
         if !runner.has_ready().await.map_err(|e| e.to_string())? {
             return Ok(Some(0));
         }
@@ -339,6 +346,120 @@ mod tests {
                 Arc::new(|| 2_000),
             ));
         (dir, worker, db)
+    }
+
+    /// A worker with a job runner and a job of the work `w1` whose episode 1
+    /// row waits for its video (`영상 대기`).
+    async fn with_a_job_waiting_for_a_video() -> (tempfile::TempDir, Worker, Db, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open(dir.path().join("app.db")).await.unwrap();
+        let store = JobStore::new(db.clone());
+        let job = NewJob {
+            command_id: "c1".to_owned(),
+            request: "{}".to_owned(),
+            origin: "pick".to_owned(),
+            work_id: Some("w1".to_owned()),
+            season: Some(1),
+            anime_no: None,
+            source_id: None,
+            creator: Some("creator".to_owned()),
+            revision_of: None,
+            revises_attributed: false,
+            items: vec![NewItem {
+                observation_id: None,
+                episode: "1".to_owned(),
+                post_url: "https://fake.trss.invalid/ok/ep1".to_owned(),
+                found_at: 500,
+            }],
+        };
+        let Created::Created(id) = store.create(job, 900).await.unwrap() else {
+            panic!("the job was not created");
+        };
+        let shows = dir.path().join("shows").to_string_lossy().into_owned();
+        let job = id.clone();
+        db.run(move |c| {
+            c.execute(
+                "INSERT INTO watch_folders (id, path, created_at) VALUES ('f1', ?1, 0)",
+                [shows],
+            )?;
+            c.execute_batch(
+                "INSERT INTO works (id, watch_folder_id, dir_name) VALUES ('w1', 'f1', 'Show');
+                 INSERT INTO seasons (work_id, number) VALUES ('w1', 1);",
+            )?;
+            c.execute(
+                "UPDATE subtitle_jobs SET state = 'waiting', wait = 'video' WHERE id = ?1",
+                [&job],
+            )?;
+            c.execute(
+                "INSERT INTO subtitle_job_files (id, job_id, item_id, file_key, name, state,
+                                                 size, sha256, created_at, updated_at)
+                 SELECT 'r1', job_id, id, 'k1', 'Show - 01.ass', 'done', 1, printf('%064d', 1),
+                        0, 0
+                   FROM subtitle_job_items WHERE job_id = ?1",
+                [&job],
+            )?;
+            c.execute(
+                "INSERT INTO subtitle_job_plan (job_id, position, file_id, name, kind, format,
+                                                size, sha256, assignment, episode, action,
+                                                outcome, updated_at)
+                 VALUES (?1, 0, 'r1', 'Show - 01.ass', 'subtitle', 'ass', 1,
+                         printf('%064d', 1), 'explicit', 1, 'apply', 'no_video', 0)",
+                [&job],
+            )?;
+            Ok::<_, trss_core::DbError>(())
+        })
+        .await
+        .unwrap();
+        let env = WorkerEnv::from_lookup(|key| {
+            (key == "TRANSMISSION_URL").then(|| "http://127.0.0.1:1/transmission/rpc".to_owned())
+        })
+        .unwrap();
+        let worker = Worker::new(db.clone(), &env, dir.path().join("app.db.worker.lock"))
+            .unwrap()
+            .with_clock(Arc::new(|| 2_000))
+            .with_jobs(Runner::new(
+                store,
+                Sources::none(),
+                ReceiveArea::in_app_data(dir.path()),
+                Arc::new(|| 2_000),
+            ));
+        (dir, worker, db, id)
+    }
+
+    /// How often the job's log says its video came.
+    async fn video_came(db: &Db, job: &str) -> i64 {
+        let job = job.to_owned();
+        db.run(move |c| {
+            Ok::<_, trss_core::DbError>(c.query_row(
+                "SELECT COUNT(*) FROM subtitle_job_events
+                  WHERE job_id = ?1 AND message = '영상이 들어와 적용을 이어가요'",
+                [job],
+                |row| row.get(0),
+            )?)
+        })
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_video_the_library_records_puts_the_job_waiting_for_it_back_in_line() {
+        let (_dir, worker, db, job) = with_a_job_waiting_for_a_video().await;
+        let cancel = tokio_util::sync::CancellationToken::new();
+        worker.run_jobs_once(&cancel).await.unwrap();
+        assert_eq!(video_came(&db, &job).await, 0);
+
+        db.run(|c| {
+            c.execute_batch(
+                "INSERT INTO episodes (work_id, season, episode) VALUES ('w1', 1, '01');
+                 INSERT INTO media_files (work_id, path, season, episode, kind)
+                     VALUES ('w1', 'Season 01/Show S01E01.mkv', 1, '01', 'video');",
+            )?;
+            Ok::<_, trss_core::DbError>(())
+        })
+        .await
+        .unwrap();
+        worker.run_jobs_once(&cancel).await.unwrap();
+        assert_eq!(video_came(&db, &job).await, 1);
     }
 
     /// How many remote screens are bound to a run.

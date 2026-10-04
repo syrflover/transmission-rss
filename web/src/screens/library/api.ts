@@ -188,6 +188,8 @@ export interface StoredSubtitle {
   stored_at: number;
   /** Whether `적용` can ask for it: a format the app applies, from a job whose record is there. */
   can_apply: boolean;
+  /** A job applies it once the episode's video comes (`영상 대기`); it asks for no `적용`. */
+  awaiting_video: boolean;
 }
 
 /** Asks the job that stored `storedId` to apply it beside the episode's video; answers that job. */

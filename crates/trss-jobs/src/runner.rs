@@ -196,6 +196,9 @@ pub struct Runner {
     /// By find job: held by whoever takes its staged downloads or ends it
     /// ([`Runner::watch_find`]), so two of them never judge the same file.
     find_takes: Arc<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
+    /// The library's generation the last look for arrived videos saw
+    /// ([`Runner::requeue_awaiting_video`]).
+    video_seen: Arc<Mutex<Option<i64>>>,
 }
 
 /// A job's check being brought back to its page; the job is free again when
@@ -326,6 +329,7 @@ impl Runner {
             watching: Arc::default(),
             rearming: Arc::default(),
             find_takes: Arc::default(),
+            video_seen: Arc::default(),
             store,
         }
     }
@@ -374,6 +378,16 @@ impl Runner {
     /// Puts the jobs that wait for a source back in line (see the module docs).
     pub async fn requeue_waiting_for_sources(&self) -> Result<usize, JobError> {
         self.store.requeue_waiting_for_sources(self.now()).await
+    }
+
+    /// Puts the jobs waiting for a video (`영상 대기`) back in line once the
+    /// library has a video for an episode one of their rows waits on; looks
+    /// only when the library changed since the last look.
+    pub async fn requeue_awaiting_video(&self) -> Result<usize, JobError> {
+        let seen = *self.video_seen.lock().expect("not poisoned");
+        let (generation, requeued) = self.store.requeue_awaiting_video(seen, self.now()).await?;
+        *self.video_seen.lock().expect("not poisoned") = Some(generation);
+        Ok(requeued)
     }
 
     pub async fn has_ready(&self) -> Result<bool, JobError> {
@@ -2237,7 +2251,20 @@ impl Runner {
                         Some(reason),
                         "받은 묶음에 후보의 회차 파일이 없어요",
                     )
+                } else if standing.awaiting_video > 0 && state == JobState::Done {
+                    (
+                        JobState::Waiting,
+                        Some(Wait::Video),
+                        Some(match standing.awaiting_video {
+                            1 => crate::place::AWAITING_VIDEO.to_owned(),
+                            n => format!("영상이 없는 회차 {n}개의 영상을 기다려요"),
+                        }),
+                        "영상을 기다려요",
+                    )
                 } else {
+                    // A partial receipt stays partial: its rows waiting for a
+                    // video go on when it comes
+                    // ([`JobStore::requeue_awaiting_video`]).
                     (state, wait, note, message)
                 }
             }

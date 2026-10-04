@@ -959,6 +959,83 @@ impl JobStore {
             .await
     }
 
+    /// Puts back in line the jobs a row of which waits for its episode's
+    /// video (`영상 대기`) and now has one recorded, when the library's
+    /// generation is not `seen`; the generation looked at, and how many jobs
+    /// went back in line. The jobs are those that wait for the video or for a
+    /// source, and those that ended partly failed: a job held or waiting for a
+    /// person goes on when the person acts.
+    pub async fn requeue_awaiting_video(
+        &self,
+        seen: Option<i64>,
+        now: Millis,
+    ) -> Result<(i64, usize), JobError> {
+        fn generation(c: &Connection) -> rusqlite::Result<i64> {
+            Ok(c.query_row(
+                "SELECT generation FROM library_generation WHERE id = 1",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?
+            .unwrap_or(0))
+        }
+        self.db
+            .run(move |c| {
+                // Every command poll asks: a library that did not change takes
+                // no write lock.
+                if let Some(seen) = seen {
+                    if generation(c)? == seen {
+                        return Ok((seen, 0));
+                    }
+                }
+                let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                let generation = generation(&tx)?;
+                let waiting: Vec<(String, String, u32, i64)> = {
+                    let mut stmt = tx.prepare(
+                        "SELECT DISTINCT j.id, j.work_id, j.season, p.episode
+                           FROM subtitle_jobs j JOIN subtitle_job_plan p ON p.job_id = j.id
+                          WHERE (j.state = 'waiting' AND j.wait IN ('video', 'subtitle')
+                                 OR j.state = 'partial')
+                            AND j.work_id IS NOT NULL AND j.season IS NOT NULL
+                            AND p.action = 'apply' AND p.outcome = 'no_video'
+                            AND p.episode IS NOT NULL
+                          ORDER BY j.seq, p.episode",
+                    )?;
+                    let rows =
+                        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+                    rows.collect::<rusqlite::Result<_>>()?
+                };
+                let mut requeued: Vec<(String, i64)> = Vec::new();
+                for (job, work, season, episode) in waiting {
+                    if requeued.iter().any(|(j, _)| *j == job) {
+                        continue;
+                    }
+                    let (videos, _) =
+                        crate::place::records::episode_files(&tx, &work, season, episode)?;
+                    if !videos.is_empty() {
+                        requeued.push((job, episode));
+                    }
+                }
+                for (job, episode) in &requeued {
+                    tx.execute(
+                        "UPDATE subtitle_jobs
+                            SET state = 'pending', wait = NULL, note = NULL, finished_at = NULL,
+                                state_at = ?2, updated_at = ?2
+                          WHERE id = ?1",
+                        params![job, now],
+                    )?;
+                    tx.execute(
+                        "INSERT INTO subtitle_job_events (job_id, at, message, detail)
+                         VALUES (?1, ?2, '영상이 들어와 적용을 이어가요', ?3)",
+                        params![job, now, format!("{episode}화")],
+                    )?;
+                }
+                tx.commit()?;
+                Ok((generation, requeued.len()))
+            })
+            .await
+    }
+
     pub async fn items(&self, job_id: &str) -> Result<Vec<ItemRow>, JobError> {
         let id = job_id.to_owned();
         self.db.run(move |c| items(c, &id)).await

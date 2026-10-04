@@ -205,8 +205,33 @@ function StoredLine({
   );
 }
 
+/**
+ * A received subtitle waiting for the episode's video (`영상 대기`): why, and
+ * the file. It is not beside a video, so it is not the episode's subtitle, and
+ * the job applies it by itself once the video comes.
+ */
+function AwaitingLine({ stored }: { stored: StoredSubtitle }) {
+  const facts = [stored.creator ?? "제작자 알 수 없음", STORED_FORMAT[stored.format], `${dateTime(stored.stored_at)} 받음`];
+  return (
+    <span className="flex flex-col gap-1">
+      <span title={stored.name} className="font-mono text-[12px] break-all">
+        {stored.name}
+      </span>
+      <span className="text-[12px] text-text-muted">{facts.join(" · ")}</span>
+    </span>
+  );
+}
+
 /** The time a file was added, or `미상` when it was there before the app first looked. */
 const addedAt = (file: WorkFile) => (file.added_at === null ? "미상" : dateTime(file.added_at));
+
+/** The episode's stored subtitles: those waiting for its video, and the others (`보관본 있음`). */
+function storedOf(episode: WorkEpisode) {
+  return {
+    awaiting: episode.stored.filter((stored) => stored.awaiting_video),
+    others: episode.stored.filter((stored) => !stored.awaiting_video),
+  };
+}
 
 function Details({
   id,
@@ -231,6 +256,7 @@ function Details({
   onRetried: () => Promise<void>;
   onCreatorChanged: () => void;
 }) {
+  const { awaiting, others } = storedOf(episode);
   return (
     <dl id={id} className="m-0 grid grid-cols-[repeat(auto-fit,minmax(170px,1fr))] gap-x-4 gap-y-3 px-4 pt-1 pb-4 max-[720px]:px-3">
       {episode.failure !== null && <Failure failure={episode.failure} onRetried={onRetried} />}
@@ -258,9 +284,19 @@ function Details({
           </span>
         ))}
       </Cell>
-      {episode.subtitle.length === 0 && episode.stored.length > 0 && (
+      {awaiting.length > 0 && (
+        <Cell label="영상 대기">
+          <span className="text-text-secondary">
+            {episode.video.length === 0 ? "영상이 아직 없어 영상이 들어오면 적용해요." : "영상이 들어와 곧 적용해요."}
+          </span>
+          {awaiting.map((stored) => (
+            <AwaitingLine key={stored.id} stored={stored} />
+          ))}
+        </Cell>
+      )}
+      {episode.subtitle.length === 0 && others.length > 0 && (
         <Cell label="보관본">
-          {episode.stored.map((stored) => (
+          {others.map((stored) => (
             <StoredLine key={stored.id} workId={workId} stored={stored} hasVideo={episode.video.length > 0} onApplied={onRetried} />
           ))}
         </Cell>
@@ -297,6 +333,7 @@ function Row({
 }) {
   const id = rowId(season, episode.episode);
   const detailId = `${id}-files`;
+  const { awaiting, others } = storedOf(episode);
   return (
     <li className="border-t border-hairline-soft first:border-t-0">
       <button
@@ -314,7 +351,13 @@ function Row({
         <span className="flex min-w-0 flex-col gap-1">
           <span className="flex flex-wrap items-center gap-x-4 gap-y-1">
             <Hold label="영상" on={episode.video.length > 0} missing={missing} />
-            <Hold label="자막" on={episode.subtitle.length > 0} missing={missing} />
+            {/* A subtitle received for a video still to come is held: `자막 ✓` with `영상 대기`. */}
+            <Hold label="자막" on={episode.subtitle.length > 0 || awaiting.length > 0} missing={missing} />
+            {awaiting.length > 0 && (
+              <span className="inline-flex items-center rounded-full border border-hairline px-2 py-px text-xs font-bold whitespace-nowrap text-text-secondary">
+                영상 대기
+              </span>
+            )}
             {episode.failure !== null && (
               <span className="inline-flex items-center rounded-full border border-urgent px-2 py-px text-xs font-bold whitespace-nowrap text-urgent">
                 받기 실패
@@ -323,7 +366,9 @@ function Row({
             {/* Quiet and uncoloured: a candidate to look at, not a to-do. */}
             {picks.length > 0 && <span className="text-xs text-text-muted [overflow-wrap:anywhere]">{candidateNote(picks)}</span>}
             {/* A stored subtitle to apply is a choice, not a held subtitle: the check above stays `−`. */}
-            {episode.subtitle.length === 0 && episode.stored.length > 0 && <span className="text-xs text-text-muted">보관본 있음</span>}
+            {episode.subtitle.length === 0 && awaiting.length === 0 && others.length > 0 && (
+              <span className="text-xs text-text-muted">보관본 있음</span>
+            )}
           </span>
           {episode.revision !== null && <VersionLine revision={episode.revision} />}
         </span>

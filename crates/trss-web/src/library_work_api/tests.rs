@@ -372,3 +372,29 @@ async fn an_episode_lists_its_stored_only_subtitles_and_one_is_applied_on_reques
     let (status, _) = post(&state, "/library/works/other/stored/s5/apply").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn a_stored_subtitle_waiting_for_its_video_says_so() {
+    let (state, id) = state_with_work().await;
+    // Episode 5 has no file: its row waits for the video.
+    stored_only(&state, &id, &[2, 5]).await;
+    state
+        .jobs
+        .db()
+        .run(|c| {
+            c.execute_batch(
+                "UPDATE subtitle_job_plan SET action = 'apply', outcome = 'no_video'
+                  WHERE stored_id = 's5';
+                 UPDATE subtitle_jobs SET state = 'waiting', wait = 'video' WHERE id = 'j1';",
+            )?;
+            Ok::<_, trss_jobs::JobError>(())
+        })
+        .await
+        .unwrap();
+    let (status, body) = get(&state, &format!("/library/works/{id}")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let episodes = body["seasons"][0]["episodes"].as_array().unwrap();
+    let of = |e: &str| episodes.iter().find(|x| x["episode"] == e).unwrap();
+    assert_eq!(of("05")["stored"][0]["awaiting_video"], true);
+    assert_eq!(of("02")["stored"][0]["awaiting_video"], false);
+}

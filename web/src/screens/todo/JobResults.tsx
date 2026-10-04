@@ -144,8 +144,9 @@ function placementText(p: Placement): { word: string; detail: string | null; urg
       return { word: "적용함", detail: episode, urgent: false };
     case "stored":
     case "existing":
-    case "no_video":
       return { word: "보관만 함", detail: p.note, urgent: false };
+    case "no_video":
+      return { word: "영상 대기", detail: p.note, urgent: false };
     case "held":
       return { word: "보류", detail: p.note, urgent: false };
     case "failed":
@@ -175,15 +176,14 @@ const GROUPS: {
     match: (p) => p.outcome === "failed",
   },
   { key: "applied", title: "적용함", match: (p) => p.outcome === "applied" },
+  { key: "video", title: "영상 대기", match: (p) => p.outcome === "no_video" },
   {
     key: "stored",
     title: "보관만 함",
     match: (p) =>
       p.kind === "subtitle" &&
       p.episode !== null &&
-      (p.outcome === "stored" ||
-        p.outcome === "existing" ||
-        p.outcome === "no_video"),
+      (p.outcome === "stored" || p.outcome === "existing"),
   },
   {
     key: "loose",
@@ -240,9 +240,9 @@ function GroupLine({
 }
 
 /**
- * What came of a package's files, grouped: applied, stored only (another
- * episode, another format), on no episode, fonts and attachments, dropped, and
- * first what needs a person.
+ * What came of a package's files, grouped: applied, waiting for the video,
+ * stored only (another episode, another format), on no episode, fonts and
+ * attachments, dropped, and first what needs a person.
  */
 function PackageGroups({ placements }: { placements: readonly Placement[] }) {
   const groups = GROUPS.map((g) => ({

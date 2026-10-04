@@ -148,6 +148,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("../migrations/jobs/store_apply.sql")),
     // 50: the asset a plan row keeps when it is a font, an attachment or a companion file
     Migration::Sql(include_str!("../migrations/jobs/package_assets.sql")),
+    // 51: a received subtitle whose episode has no video waits for it; the jobs earlier builds finished so go back in line
+    Migration::Sql(include_str!("../migrations/jobs/awaiting_video.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -2445,6 +2447,73 @@ mod tests {
         assert_eq!(refused, [true; 4]);
         assert_eq!(kept, (Some("j1-abc".to_owned()), Some(5)));
         assert_eq!(left, 0);
+    }
+
+    const BEFORE_AWAITING_VIDEO: usize = 50;
+
+    #[tokio::test]
+    async fn a_job_an_earlier_build_finished_with_an_episode_without_a_video_goes_back_in_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        {
+            // A database as the build with fifty migrations left it: `j1`
+            // stored its subtitle only because the episode had no video, `j2`
+            // applied its own, `j3` is held with such a row.
+            let conn = database_at(&path, BEFORE_AWAITING_VIDEO);
+            conn.execute_batch(
+                "INSERT INTO subtitle_jobs (id, command_id, request, origin, work_id, season,
+                                            state, created_at, updated_at, state_at, finished_at)
+                     VALUES ('j1', 'c1', '{}', 'pick', 'w', 1, 'done', 0, 0, 0, 0),
+                            ('j2', 'c2', '{}', 'pick', 'w', 1, 'done', 0, 0, 0, 0),
+                            ('j3', 'c3', '{}', 'pick', 'w', 1, 'held', 0, 0, 0, NULL);
+                 INSERT INTO subtitle_job_items (id, job_id, position, episode, post_url,
+                                                 found_at, state, updated_at)
+                     VALUES (1, 'j1', 0, '1', 'https://example.org/1', 0, 'done', 0),
+                            (2, 'j2', 0, '2', 'https://example.org/2', 0, 'done', 0),
+                            (3, 'j3', 0, '3', 'https://example.org/3', 0, 'done', 0);
+                 INSERT INTO subtitle_job_files (id, job_id, item_id, file_key, name, state, size,
+                                                 sha256, created_at, updated_at)
+                     VALUES ('f1', 'j1', 1, 'k1', 'a.ass', 'done', 1, printf('%064d', 1), 0, 0),
+                            ('f2', 'j2', 2, 'k2', 'b.ass', 'done', 1, printf('%064d', 2), 0, 0),
+                            ('f3', 'j3', 3, 'k3', 'c.ass', 'done', 1, printf('%064d', 3), 0, 0);
+                 INSERT INTO subtitle_job_plan (job_id, position, file_id, name, kind, format,
+                                                size, sha256, assignment, episode, action,
+                                                outcome, note, updated_at)
+                     VALUES ('j1', 0, 'f1', 'a.ass', 'subtitle', 'ass', 1, printf('%064d', 1),
+                             'explicit', 1, 'apply', 'no_video', '영상이 없어 보관만 했어요', 0),
+                            ('j2', 0, 'f2', 'b.ass', 'subtitle', 'ass', 1, printf('%064d', 2),
+                             'explicit', 2, 'apply', 'applied', NULL, 0),
+                            ('j3', 0, 'f3', 'c.ass', 'subtitle', 'ass', 1, printf('%064d', 3),
+                             'explicit', 3, 'apply', 'no_video', '영상이 없어 보관만 했어요', 0);",
+            )
+            .unwrap();
+        }
+
+        let db = Db::open(&path).await.unwrap();
+
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+        let (jobs, notes) = db
+            .run::<_, DbError, _>(|c| {
+                let mut stmt = c.prepare(
+                    "SELECT id || ':' || state || ':' || (finished_at IS NULL) FROM subtitle_jobs
+                      ORDER BY id",
+                )?;
+                let jobs = stmt
+                    .query_map([], |r| r.get::<_, String>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                let mut stmt =
+                    c.prepare("SELECT coalesce(note, '') FROM subtitle_job_plan ORDER BY job_id")?;
+                let notes = stmt
+                    .query_map([], |r| r.get::<_, String>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok((jobs, notes))
+            })
+            .await
+            .unwrap();
+        // A held job stays for a person; its row waits for the video too.
+        assert_eq!(jobs, ["j1:pending:1", "j2:done:0", "j3:held:1"]);
+        let waiting = "영상이 아직 없어 영상이 들어오면 적용해요";
+        assert_eq!(notes, [waiting, "", waiting]);
     }
 
     #[tokio::test]
