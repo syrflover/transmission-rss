@@ -5,6 +5,7 @@ import { store } from "@/lib/cached";
 import { fetchJob, type JobDetail } from "../api";
 import { KEYS } from "../poll";
 import { deviceViewport, sameViewport } from "./geometry";
+import { MOVE_LIMIT_MS, nextMove, type Move, type MoveEvent } from "./move";
 import {
   encode,
   parseServerMessage,
@@ -60,6 +61,10 @@ export interface Connection {
   dialog: PageDialog | null;
   /** Answers the dialog `id`: `accept` is 확인 (떠나기), `text` what an accepted prompt answers. */
   answerDialog: (id: number, accept: boolean, text?: string) => void;
+  /** Whether the screen moves to another page, and why ({@link Move}); `null` when it does not. */
+  moving: Move<WebSocket>["kind"] | null;
+  /** A person asked for another page (a tab picked, or the one shown closed); returns what takes it back when the ask failed. */
+  askMove: () => () => void;
 }
 
 /** Whether this device is a touch screen: its main pointer is a finger. */
@@ -85,7 +90,9 @@ async function readJob(id: string): Promise<JobDetail | null> {
  * for a run (only the page's opening does that). A socket the server ended is
  * not connected again to the same binding; another binding, of the same run
  * too (another check of the job), comes through new `run` or `bound`.
- * `attempt` connects again on demand.
+ * `attempt` connects again on demand. It also says when the screen moves to
+ * another page, from a person's ask or the end of the binding or its page
+ * until the new page is drawn ({@link nextMove}).
  */
 export function useRemoteConnection(options: {
   jobId: string;
@@ -104,6 +111,9 @@ export function useRemoteConnection(options: {
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [responding, setResponding] = useState(true);
   const [dialog, setDialog] = useState<PageDialog | null>(null);
+  /** Kept across bindings: a move ends on another socket than it began on. */
+  const [move, setMove] = useState<Move<WebSocket> | null>(null);
+  const moveBy = useCallback((event: MoveEvent<WebSocket>) => setMove((m) => nextMove(m, event)), []);
   /** The run the `nav` and `tabs` above are of: another binding of it keeps them while the socket connects anew. */
   const stateOf = useRef<string | null>(null);
   /** Counts the retries after a read of the job said to connect to the same run again. */
@@ -132,6 +142,7 @@ export function useRemoteConnection(options: {
     let waiting: Extract<ServerMessage, { type: "frame" }> | null = null;
     let sent: Viewport | null = null;
     let shownSize: { width: number; height: number } | null = null;
+    let drawn = false;
 
     session.current = NEW_SESSION;
     setPhase("connecting");
@@ -189,9 +200,14 @@ export function useRemoteConnection(options: {
         setFrame(shownSize);
       }
       setPhase("live");
+      if (!drawn) {
+        drawn = true;
+        moveBy({ type: "drawn", on: ws });
+      }
     };
 
     const later = (after: () => void) => {
+      moveBy({ type: "lost" });
       failures.current.count += 1;
       const delay = retryDelay(failures.current.count);
       if (delay === null) {
@@ -250,6 +266,7 @@ export function useRemoteConnection(options: {
       if (ended !== null) {
         setReason(ended);
         setPhase("ended");
+        moveBy({ type: "ended", on: ws, reason: ended });
         // The binding changed or the browser is gone: the job says which (a new binding connects through `run` and `bound`).
         void readJob(jobId);
         return;
@@ -274,7 +291,21 @@ export function useRemoteConnection(options: {
       ws.close();
       if (socket.current === ws) socket.current = null;
     };
-  }, [jobId, run, bound, attempt, round, area, image]);
+  }, [jobId, run, bound, attempt, round, area, image, moveBy]);
+
+  // A move that makes no step says no more: the screen shows what its socket says.
+  useEffect(() => {
+    if (move === null) return;
+    const limit = setTimeout(() => moveBy({ type: "expired", move }), MOVE_LIMIT_MS);
+    return () => clearTimeout(limit);
+  }, [move, moveBy]);
+
+  const askMove = useCallback(() => {
+    const ws = socket.current;
+    if (ws === null) return () => {};
+    moveBy({ type: "asked", on: ws });
+    return () => moveBy({ type: "refused", on: ws });
+  }, [moveBy]);
 
   const send = useCallback((body: InputBody): boolean => {
     const ws = socket.current;
@@ -299,5 +330,22 @@ export function useRemoteConnection(options: {
     [command],
   );
 
-  return { phase, reason, frame, planned, session, send, reload, back, forward, nav, tabs, responding, dialog, answerDialog };
+  return {
+    phase,
+    reason,
+    frame,
+    planned,
+    session,
+    send,
+    reload,
+    back,
+    forward,
+    nav,
+    tabs,
+    responding,
+    dialog,
+    answerDialog,
+    moving: move?.kind ?? null,
+    askMove,
+  };
 }

@@ -1,4 +1,14 @@
-import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type CompositionEvent, type KeyboardEvent, type PointerEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ClipboardEvent,
+  type CompositionEvent,
+  type KeyboardEvent,
+  type PointerEvent,
+  type ReactNode,
+} from "react";
 
 import { Button } from "@/components/ui/button";
 import { ApiError } from "@/lib/api";
@@ -32,9 +42,10 @@ const STALLED_TEXT =
 /** A round button with an icon, in the shape of the screen's other buttons; it is at least as tall as they are. */
 const iconButton = cn(btnNeutral, "size-9 min-h-9 w-9 px-0 max-[720px]:size-10 max-[720px]:min-h-10");
 
+/** `browser` and `run` show only once the move to another page made no step for a while (`move.ts`). */
 const ENDED_TEXT: Record<EndedReason, string> = {
   browser: "서버 브라우저가 닫혔어요. 작업 화면을 다시 열면 다시 준비해요.",
-  run: "이 작업의 서버 브라우저 실행이 바뀌었어요. 작업 상태를 다시 읽고 있어요.",
+  run: "새 화면을 불러오지 못했어요. 다시 열면 다시 준비해요.",
   unreachable: "서버 브라우저에 닿지 못했어요. 작업 화면을 다시 열면 다시 준비해요.",
   stuck: "페이지가 응답하지 않아요. 서버 브라우저를 새로 띄워 게시물을 다시 열 수 있어요. 받은 파일은 남아요.",
   replaced: "다른 기기나 탭에서 이 인증 화면을 열어서 여기 화면은 닫혔어요. 여기서 계속하려면 다시 열어 주세요.",
@@ -53,7 +64,10 @@ const ENDED_TEXT: Record<EndedReason, string> = {
  *   shown is marked, a tab switches to its page, and every tab but the run's
  *   first has a close control. Switching and closing are asked of the server
  *   (`POST .../screen/switch` and `.../close`) for the binding this screen
- *   shows; the worker moves the screen, which reconnects.
+ *   shows; the worker moves the screen, which reconnects. From the ask until
+ *   the new page is drawn the screen says it changes the window, and when
+ *   the worker moves it by itself (to a window the page opened, or from one
+ *   that closed) it says it loads the screen ({@link Connection.moving}).
  * - Pointer positions are mapped from the shown box to the frame's own CSS
  *   pixels with {@link toRemote}, so a frame of another size than the area
  *   (another device opened the screen last) is still hit exactly. An input is
@@ -122,10 +136,13 @@ export function RemoteScreen({
     if (bound === null || asking) return;
     setAsking(true);
     setTabError(null);
+    // A switch, or closing the page shown, moves the screen; closing another page does not.
+    const takeBack = ask === switchTab || tab.shown ? conn.askMove() : null;
     try {
       await ask(jobId, run, bound, tab.id);
       if (ask === switchTab) setWanted(tab.id);
     } catch (e) {
+      takeBack?.();
       setTabError(e instanceof ApiError ? e.message : TAB_FAILED);
     } finally {
       setAsking(false);
@@ -330,15 +347,15 @@ export function RemoteScreen({
 
   // --- what is shown -------------------------------------------------------------------------
 
-  const { phase, frame, planned, reason } = conn;
+  const { phase, frame, planned, reason, moving } = conn;
   const live = phase === "live";
   // Also before the first frame: a page that is already stalled when the
   // screen connects sends none until it answers again.
   const stalled = (live || phase === "connecting") && !conn.responding;
   // A dialog the page shows: the person answers it before anything else goes to the page.
   const dialog = (live || phase === "connecting") && !restarting ? conn.dialog : null;
-  const covered = !live || stalled || restarting;
-  const usable = live && dialog === null;
+  const covered = !live || stalled || restarting || moving !== null;
+  const usable = live && dialog === null && moving === null;
   const aspect = frame ?? planned;
   // A page that ended while the screen was ready: the person asks for it again.
   const reopen = () => {
@@ -512,11 +529,13 @@ export function RemoteScreen({
             className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-surface-1/60 p-4 text-center text-[13.5px] leading-relaxed text-text-secondary"
           >
             {restarting ? (
-              <p>서버 브라우저를 새로 띄우고 있어요.</p>
+              <Loading>서버 브라우저를 새로 띄우고 있어요.</Loading>
+            ) : moving !== null && !stalled ? (
+              <Loading>{moving === "asked" ? "창을 바꾸는 중이에요." : "화면을 불러오는 중이에요."}</Loading>
             ) : (
               <>
-                {phase === "connecting" && !stalled && <p>화면을 불러오는 중이에요.</p>}
-                {phase === "retrying" && <p>연결이 끊겨서 다시 연결하고 있어요.</p>}
+                {phase === "connecting" && !stalled && <Loading>화면을 불러오는 중이에요.</Loading>}
+                {phase === "retrying" && <Loading>연결이 끊겨서 다시 연결하고 있어요.</Loading>}
                 {phase === "failed" && (
                   <>
                     <p>서버 브라우저에 다시 연결하지 못했어요.</p>
@@ -575,5 +594,15 @@ export function RemoteScreen({
           : "화면을 누른 뒤 입력하면 서버 브라우저로 전달돼요. 입력에서 빠져나가려면 Shift와 Esc를 함께 눌러요."}
       </p>
     </>
+  );
+}
+
+/** A note of the screen that something is on its way: a turning ring before the text. */
+function Loading({ children }: { children: ReactNode }) {
+  return (
+    <p className="flex items-center gap-2">
+      <span aria-hidden className="size-4 flex-none animate-spin rounded-full border-2 border-hairline border-t-focus" />
+      {children}
+    </p>
   );
 }
