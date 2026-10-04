@@ -48,9 +48,18 @@ impl Env {
                 unrecognized: Vec::new(),
             })],
         };
+        // The work's folder, where what its jobs receive is stored; its video
+        // keeps season 1 when the worker's watcher reads the folder.
+        let root = h.dir.path().join("c");
+        std::fs::create_dir_all(root.join("Sayonara Lara/Season 01")).unwrap();
+        std::fs::write(
+            root.join("Sayonara Lara/Season 01/Sayonara Lara S01E01.mkv"),
+            b"v",
+        )
+        .unwrap();
         let (folder, _) = state
             .library
-            .add_folder("/c".into(), scan, 1, &[])
+            .add_folder(root.to_string_lossy().into_owned(), scan, 1, &[])
             .await
             .unwrap();
         let work = state.library.works(&folder.id).await.unwrap().remove(0).id;

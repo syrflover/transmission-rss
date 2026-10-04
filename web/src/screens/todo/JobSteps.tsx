@@ -11,6 +11,10 @@ const LABEL: Record<StepKind, string> = {
   open: "게시물 열기",
   auth: "인증",
   receive: "받기",
+  placement: "배치 확인",
+  store: "보관",
+  approval: "교체 승인",
+  apply: "적용",
 };
 
 type IconType = ComponentType<ComponentProps<"svg">>;

@@ -8,7 +8,14 @@ import { btnAction } from "../collect/channels/styles";
 import { QuestionIcon } from "../library/icons";
 import { coverOf } from "../library/model";
 import { Cover } from "../library/WorkItem";
-import { jobPath, type AuthTodo, type EpisodeCheckTodo, type ReceiveFailedTodo, type Todo } from "./api";
+import {
+  jobPath,
+  type AuthTodo,
+  type EpisodeCheckTodo,
+  type PlacementCheckTodo,
+  type ReceiveFailedTodo,
+  type Todo,
+} from "./api";
 import { Badge, Tag } from "./badges";
 import { LockIcon, WarningIcon } from "./icons";
 import { candidatesLink } from "./Suggestions";
@@ -58,6 +65,8 @@ export function TodoCards({ todos }: { todos: readonly Todo[] }) {
             <AuthCard todo={todo} />
           ) : todo.kind === "receive_failed" ? (
             <ReceiveFailedCard todo={todo} />
+          ) : todo.kind === "placement_check" ? (
+            <PlacementCheckCard todo={todo} />
           ) : (
             <EpisodeCheckCard todo={todo} />
           )}
@@ -202,6 +211,35 @@ function EpisodeCheckCard({ todo }: { todo: EpisodeCheckTodo }) {
       action={
         <Button asChild variant="ghost" className={btnAction}>
           <Link to={episodeCheckPath(todo)}>회차 대응 정하기</Link>
+        </Button>
+      }
+    />
+  );
+}
+
+/** A job's received files whose episode a person has to say: its source and how many files; `확인` opens the job. */
+function PlacementCheckCard({ todo }: { todo: PlacementCheckTodo }) {
+  return (
+    <Card
+      tone="check"
+      kind={
+        <Badge tone="check" icon={QuestionIcon}>
+          회차 확인 필요
+        </Badge>
+      }
+      at={todo.at}
+      title={todo.title}
+      work={todo.work}
+      target={
+        <TargetLine episodes={[]} creator={todo.creator}>
+          <Tag>받은 파일 {todo.files.length}개</Tag>
+          {todo.season !== null && todo.season > 1 && <Tag>시즌 {todo.season}</Tag>}
+        </TargetLine>
+      }
+      reason={todo.reason ?? "받은 파일의 회차를 정하지 못했어요."}
+      action={
+        <Button asChild variant="ghost" className={btnAction}>
+          <Link to={jobPath(todo.job_id)}>확인</Link>
         </Button>
       }
     />

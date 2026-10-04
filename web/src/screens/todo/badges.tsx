@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 
 import type { FailureClass, JobRow } from "./api";
 import { CheckIcon, CircleIcon, ClockIcon, DownloadIcon, LockIcon, PauseIcon, WarningIcon } from "./icons";
+import { QuestionIcon } from "../library/icons";
 import { FAILURE_LABEL, type Shown } from "./format";
 
 type IconType = ComponentType<ComponentProps<"svg">>;
@@ -47,16 +48,21 @@ export function Badge({
   );
 }
 
-const SHOWN: Record<Exclude<Shown, "done">, { tone: "urgent" | "neutral"; icon: IconType; text: string }> = {
+const SHOWN: Record<Exclude<Shown, "done">, { tone: "urgent" | "neutral" | "check"; icon: IconType; text: string }> = {
   failed: { tone: "urgent", icon: WarningIcon, text: "실패" },
   partial: { tone: "urgent", icon: WarningIcon, text: "일부 실패" },
   auth: { tone: "urgent", icon: LockIcon, text: "인증 필요" },
   subtitle: { tone: "neutral", icon: ClockIcon, text: "자막 대기" },
+  placement: { tone: "check", icon: QuestionIcon, text: "회차 확인 필요" },
+  approval: { tone: "check", icon: QuestionIcon, text: "교체 승인" },
+  video: { tone: "neutral", icon: ClockIcon, text: "영상 대기" },
   waiting: { tone: "neutral", icon: ClockIcon, text: "대기" },
   pending: { tone: "neutral", icon: ClockIcon, text: "시작 대기" },
   held: { tone: "neutral", icon: PauseIcon, text: "보류" },
   open: { tone: "neutral", icon: DownloadIcon, text: "게시물 여는 중" },
   receive: { tone: "neutral", icon: DownloadIcon, text: "받는 중" },
+  store: { tone: "neutral", icon: DownloadIcon, text: "보관하는 중" },
+  apply: { tone: "neutral", icon: DownloadIcon, text: "적용하는 중" },
   finding: { tone: "neutral", icon: DownloadIcon, text: "직접 찾는 중" },
   finishing: { tone: "neutral", icon: ClockIcon, text: "끝내는 중" },
   nothing: { tone: "neutral", icon: CircleIcon, text: "받은 파일 없음" },

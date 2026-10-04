@@ -12,7 +12,8 @@
 //!   worker puts such items back in line when it starts
 //!   ([`Runner::requeue_waiting_for_sources`]). So does a post whose source
 //!   finds its subtitle somewhere it cannot read yet (a Google Drive folder),
-//!   with the source's reason.
+//!   with the source's reason, and a job whose received files wait for their
+//!   work folder to be there again (`영상 대기`, [`crate::place`]).
 //! - A post whose subtitle is in WinPNG images ([`Opened::WinPng`]) is read by
 //!   the runner's [`WinpngReader`] (a server browser; [`Runner::with_winpng`]):
 //!   the files it takes out are put in a folder of the job's, which is the
@@ -139,6 +140,7 @@ use url::Url;
 use crate::{
     area::{self, ReceiveArea},
     model::{FileState, ItemState, JobState, StepKind, StepState, Wait},
+    place::{Placement, Placer},
     screen::{self, Arrival, ScreenStore},
     store::{snapshot_json, FileProblem, FileRow, ItemRow, JobError, JobStore, FIND},
 };
@@ -172,6 +174,8 @@ pub const RETRY_WAITS: [Duration; 2] = [Duration::from_secs(2), Duration::from_s
 #[derive(Clone)]
 pub struct Runner {
     store: JobStore,
+    /// Stores and applies what the items received ([`crate::place`]).
+    placer: Placer,
     sources: Sources,
     area: ReceiveArea,
     clock: Clock,
@@ -292,6 +296,16 @@ enum Check {
     Interrupted,
 }
 
+/// How a job stands from its items alone ([`Runner::received`]).
+struct Received {
+    state: JobState,
+    wait: Option<Wait>,
+    note: Option<String>,
+    message: &'static str,
+    /// The log line's detail when it is not the note.
+    detail: Option<String>,
+}
+
 /// How one item came out.
 enum ItemEnd {
     Settled,
@@ -301,6 +315,7 @@ enum ItemEnd {
 impl Runner {
     pub fn new(store: JobStore, sources: Sources, area: ReceiveArea, clock: Clock) -> Runner {
         Runner {
+            placer: Placer::new(store.clone(), area.clone(), clock.clone()),
             sources,
             area,
             clock,
@@ -395,9 +410,15 @@ impl Runner {
         resumed: bool,
         cancel: &CancellationToken,
     ) -> Result<bool, JobError> {
-        let message = match resumed {
-            true => "멈췄던 작업을 이어가요",
-            false => "작업을 시작했어요",
+        let items = self.store.items(id).await?;
+        let received = !items
+            .iter()
+            .any(|i| matches!(i.state, ItemState::Pending | ItemState::Running));
+        let message = match (resumed, received) {
+            (true, _) => "멈췄던 작업을 이어가요",
+            // Received before storing was made: stored and applied now.
+            (false, true) => "받아 둔 파일의 보관과 적용을 이어가요",
+            (false, false) => "작업을 시작했어요",
         };
         println!("Subtitle job {id}: {message}");
         self.store
@@ -407,7 +428,7 @@ impl Runner {
             return self.run_find(id, cancel).await;
         }
 
-        for item in self.store.items(id).await? {
+        for item in items {
             if !matches!(item.state, ItemState::Pending | ItemState::Running) {
                 continue;
             }
@@ -422,7 +443,11 @@ impl Runner {
                 return Ok(false);
             }
         }
-        self.settle(id).await?;
+        let received = self.received(id).await?;
+        let Some(placement) = self.placer.run(id, cancel).await? else {
+            return Ok(false);
+        };
+        self.settle(id, received, placement).await?;
         Ok(true)
     }
 
@@ -1312,6 +1337,7 @@ impl Runner {
                 kind: None,
                 archive: None,
                 folder: folder.clone(),
+                cleared_at: None,
             })
             .await?;
 
@@ -1629,9 +1655,12 @@ impl Runner {
     ) -> Result<Receipt, JobError> {
         let path = original.path.as_deref().unwrap_or_default();
         let facts = area::read_facts(&self.area.at(path)).ok();
-        let matches = facts.as_ref().is_some_and(|(size, sha, _)| {
-            Some(*size) == original.size && Some(sha) == original.sha256.as_ref()
-        });
+        // A receipt already stored left the receive area: its bytes were
+        // checked when they came and are kept in the work folder now.
+        let matches = original.cleared_at.is_some()
+            || facts.as_ref().is_some_and(|(size, sha, _)| {
+                Some(*size) == original.size && Some(sha) == original.sha256.as_ref()
+            });
         if !matches {
             let reason = "받은 파일이 기록과 달라요".to_owned();
             self.store
@@ -2022,8 +2051,9 @@ impl Runner {
         Ok(None)
     }
 
-    /// Writes the job's state, steps and last log line from its items.
-    async fn settle(&self, job: &str) -> Result<(), JobError> {
+    /// How the job stands from its items, with its opening and receiving
+    /// steps written, before what it received is stored and applied.
+    async fn received(&self, job: &str) -> Result<Received, JobError> {
         let items = self.store.items(job).await?;
         // The file of a settled item's check is not needed any more.
         for item in items.iter().filter(|i| {
@@ -2121,6 +2151,93 @@ impl Runner {
                     .set_step(job, StepKind::Receive, step, note, now)
                     .await?;
             }
+        }
+        Ok(Received {
+            state,
+            wait,
+            note,
+            message,
+            detail,
+        })
+    }
+
+    /// Writes the job's state and last log line from its items
+    /// ([`Runner::received`]), then from its plan ([`crate::place`]): a
+    /// received job whose files wait for a person, a later build or a check
+    /// is not `done`.
+    async fn settle(
+        &self,
+        job: &str,
+        received: Received,
+        placement: Placement,
+    ) -> Result<(), JobError> {
+        let Received {
+            state,
+            wait,
+            note,
+            message,
+            mut detail,
+        } = received;
+        let now = self.now();
+        let (done, total) = {
+            let items = self.store.items(job).await?;
+            let done = items.iter().filter(|i| i.state == ItemState::Done).count();
+            (done, items.len())
+        };
+        // What was received goes on to the plan's rows.
+        let (state, wait, note, message) = match state {
+            JobState::Done | JobState::Partial => {
+                let standing = self.placer.standing(job).await?;
+                if let Some(reason) = placement.blocked.or(standing.held) {
+                    (
+                        JobState::Held,
+                        None,
+                        Some(reason),
+                        "보관하거나 적용하지 못한 파일이 있어 보류했어요",
+                    )
+                } else if let Some(reason) = placement.unanalysed {
+                    (
+                        JobState::Waiting,
+                        Some(Wait::Subtitle),
+                        Some(reason),
+                        "받은 묶음의 분석을 기다려요",
+                    )
+                } else if let Some(reason) = placement.no_folder {
+                    (
+                        JobState::Waiting,
+                        Some(Wait::Video),
+                        Some(reason),
+                        "작품 폴더를 기다려요",
+                    )
+                } else if standing.questions > 0 {
+                    (
+                        JobState::Waiting,
+                        Some(Wait::Placement),
+                        Some(format!(
+                            "회차를 확인할 파일이 {}개 있어요",
+                            standing.questions
+                        )),
+                        "회차 확인을 기다려요",
+                    )
+                } else if standing.failed > 0 {
+                    let all = standing.failed == standing.rows && state == JobState::Done;
+                    (
+                        match all {
+                            true => JobState::Failed,
+                            false => JobState::Partial,
+                        },
+                        None,
+                        standing.failure,
+                        "보관하거나 적용하지 못한 파일이 있어요",
+                    )
+                } else {
+                    (state, wait, note, message)
+                }
+            }
+            _ => (state, wait, note, message),
+        };
+        if detail.is_none() && wait == Some(Wait::Placement) {
+            detail = note.clone();
         }
         self.store
             .settle(job, state, wait, note.clone(), now)

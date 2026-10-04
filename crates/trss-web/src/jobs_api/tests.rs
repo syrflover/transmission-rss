@@ -158,7 +158,9 @@ async fn a_pick_makes_one_job_per_browser_id_of_one_creators_candidates() {
         [
             ("found", "done"),
             ("open", "upcoming"),
-            ("receive", "upcoming")
+            ("receive", "upcoming"),
+            ("store", "upcoming"),
+            ("apply", "upcoming")
         ]
     );
     assert_eq!(detail["receive_dir"], format!("receive/{id}"));
@@ -446,6 +448,7 @@ async fn an_unfinished_file_is_receiving_only_while_its_episode_runs() {
                 kind: None,
                 archive: None,
                 folder: None,
+                cleared_at: None,
             })
             .await
             .unwrap();

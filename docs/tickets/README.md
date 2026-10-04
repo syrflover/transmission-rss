@@ -147,7 +147,7 @@
 | [0060](0060-server-filesystem-probe.md) | 실제 서버의 미디어 디스크에서 파일 쓰기를 확인해요 | 대기 | 없음 |
 | [0061](0061-infuse-placement-check.md) | Infuse에서 적용본과 `.trss/`가 어떻게 보이는지 확인해요 | 대기 | 없음 |
 | [0062](0062-run-as-media-user.md) | web과 worker를 1000:1000으로 실행해요 | 대기 | 없음 |
-| [0063](0063-store-and-first-apply.md) | 받은 자막 파일 하나를 보관하고 영상 옆에 처음 적용해요 | 대기 | 없음 |
+| [0063](0063-store-and-first-apply.md) | 받은 자막 파일 하나를 보관하고 영상 옆에 처음 적용해요 | 완료 | 없음 |
 | [0064](0064-multi-file-packages.md) | 여러 파일 묶음에서 회차의 파일을 고르고 나머지 회차를 보관해요 | 대기 | 0063 |
 | [0065](0065-archive-extraction.md) | 압축 파일을 한도를 건 별도 프로세스에서 풀어요 | 대기 | 0059, 0064 |
 | [0066](0066-placement-confirmation.md) | 올리기와 직접 찾기의 배치를 한 번 확인받아요 | 대기 | 0064 |

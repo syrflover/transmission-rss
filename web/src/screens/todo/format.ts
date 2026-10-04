@@ -102,20 +102,25 @@ export function sizeText(bytes: number): string {
 }
 
 /**
- * The state a badge names; `waiting` splits by what it waits for. A find job (직접 찾기) whose server browser is open
- * for the user is `finding`, one the user finished `finishing` until it ends, and one that ended with no file kept
- * `nothing` (`받은 파일 없음`, not `받음`).
+ * The state a badge names; `waiting` splits by what it waits for, and `running` by its stage. A find job (직접 찾기)
+ * whose server browser is open for the user is `finding`, one the user finished `finishing` until it ends, and one
+ * that ended with no file kept `nothing` (`받은 파일 없음`, not `받음`).
  */
 export type Shown =
   | "failed"
   | "partial"
   | "auth"
   | "subtitle"
+  | "placement"
+  | "approval"
+  | "video"
   | "waiting"
   | "pending"
   | "held"
   | "open"
   | "receive"
+  | "store"
+  | "apply"
   | "finding"
   | "finishing"
   | "nothing"
@@ -132,9 +137,9 @@ export function shownState(
   }
   switch (job.state) {
     case "waiting":
-      return job.wait === "auth" ? "auth" : job.wait === "subtitle" ? "subtitle" : "waiting";
+      return job.wait ?? "waiting";
     case "running":
-      return job.stage === "open" ? "open" : "receive";
+      return job.stage === "open" || job.stage === "store" || job.stage === "apply" ? job.stage : "receive";
     default:
       return job.state;
   }

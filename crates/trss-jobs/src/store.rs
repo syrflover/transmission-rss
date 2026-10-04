@@ -21,6 +21,9 @@ pub enum JobError {
     Sqlite(#[from] rusqlite::Error),
     #[error("no record of {0}")]
     Missing(&'static str),
+    /// What the season info or a work's library says could not be read.
+    #[error("{0}")]
+    Other(String),
 }
 
 /// Runs a write of a file receipt with every commit synced: the record of an
@@ -309,6 +312,9 @@ pub struct FileRow {
     /// The folders the file is published under within the job's folder
     /// (`회차/2화`), when the post shows it in some.
     pub folder: Option<String>,
+    /// When its bytes were removed from the receive area, once stored
+    /// ([`crate::place`]).
+    pub cleared_at: Option<Millis>,
 }
 
 /// Why an attempt to receive a file failed, with the facts of the answer.
@@ -513,6 +519,42 @@ impl JobStore {
                     [],
                 )
             })
+            .await
+    }
+
+    /// The jobs waiting for a person to say which episode a file is (the
+    /// job's 배치 확인, `회차 확인 필요`), oldest first.
+    pub async fn placement_waits(&self) -> Result<Vec<JobRow>, JobError> {
+        self.db
+            .run(|c| {
+                rows(
+                    c,
+                    "WHERE j.state = 'waiting' AND j.wait = 'placement' ORDER BY j.seq",
+                    [],
+                )
+            })
+            .await
+    }
+
+    /// The job's placement plan ([`crate::place`]), in order.
+    pub async fn plan(
+        &self,
+        job_id: &str,
+    ) -> Result<Vec<crate::place::records::PlanRow>, JobError> {
+        let id = job_id.to_owned();
+        self.db
+            .run(move |c| Ok(crate::place::records::plan(c, &id)?))
+            .await
+    }
+
+    /// Where each row of the job's plan has its files, by position.
+    pub async fn plan_paths(
+        &self,
+        job_id: &str,
+    ) -> Result<Vec<(i64, crate::place::records::RowPaths)>, JobError> {
+        let id = job_id.to_owned();
+        self.db
+            .run(move |c| Ok(crate::place::records::row_paths(c, &id)?))
             .await
     }
 
@@ -865,7 +907,8 @@ impl JobStore {
     }
 
     /// Puts the items and jobs that wait for a source back in line, so a
-    /// build that knows more sources tries them again.
+    /// build that knows more sources tries them again; so are the jobs whose
+    /// work folder was not there (`영상 대기`).
     pub async fn requeue_waiting_for_sources(&self, now: Millis) -> Result<usize, JobError> {
         self.db
             .run(move |c| {
@@ -882,7 +925,7 @@ impl JobStore {
                     "UPDATE subtitle_jobs
                      SET state = 'pending', wait = NULL, note = NULL, state_at = ?1,
                          updated_at = ?1
-                     WHERE state = 'waiting' AND wait = 'subtitle'",
+                     WHERE state = 'waiting' AND wait IN ('subtitle', 'video')",
                     [now],
                 )?;
                 tx.commit()?;
@@ -1074,6 +1117,20 @@ impl JobStore {
                 tx.execute(
                     "UPDATE subtitle_job_steps SET state = 'waiting', at = ?3, note = ?2
                      WHERE job_id = ?1 AND state = 'current'",
+                    params![id, note, now],
+                )?;
+                // Its file effects under way are not known to have ended:
+                // held with their rows, so their targets are free again.
+                tx.execute(
+                    "UPDATE subtitle_job_plan SET outcome = 'held', note = ?2, updated_at = ?3
+                     WHERE job_id = ?1 AND position IN
+                           (SELECT position FROM subtitle_file_effects
+                             WHERE job_id = ?1 AND state IN ('intended', 'prepared'))",
+                    params![id, note, now],
+                )?;
+                tx.execute(
+                    "UPDATE subtitle_file_effects SET state = 'held', reason = ?2, updated_at = ?3
+                     WHERE job_id = ?1 AND state IN ('intended', 'prepared')",
                     params![id, note, now],
                 )?;
                 tx.execute(
@@ -1361,9 +1418,10 @@ impl JobStore {
                         "INSERT INTO subtitle_job_files
                          (id, job_id, item_id, file_key, name, state, same_as, size, sha256,
                           object, path, format, http_status, content_type, snapshot,
-                          created_at, updated_at, folder)
+                          created_at, updated_at, folder, cleared_at)
                      SELECT ?1, job_id, ?2, file_key, name, 'done', id, size, sha256, object,
-                            path, format, http_status, content_type, snapshot, ?3, ?3, folder
+                            path, format, http_status, content_type, snapshot, ?3, ?3, folder,
+                            cleared_at
                      FROM subtitle_job_files WHERE id = ?4",
                         params![id, item_id, now, original.id],
                     )
@@ -1905,7 +1963,7 @@ fn done_page(c: &Connection, after: Option<&str>, limit: usize) -> Result<DonePa
 const FILE_COLUMNS: &str = "
     SELECT id, item_id, file_key, name, state, same_as, temp_dir, expected_size, size, sha256,
            object, path, reason, created_at, format, failure, http_status, content_type,
-           response_size, snapshot, kind, archive_type, folder
+           response_size, snapshot, kind, archive_type, folder, cleared_at
     FROM subtitle_job_files";
 
 /// A failure class column.
@@ -1968,6 +2026,7 @@ fn file_row(r: &Row<'_>) -> rusqlite::Result<FileRow> {
         kind: kind_at(r, 20)?,
         archive: archive_at(r, 21)?,
         folder: r.get(22)?,
+        cleared_at: r.get(23)?,
     })
 }
 

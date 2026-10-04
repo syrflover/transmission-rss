@@ -143,7 +143,20 @@ export function jobStatus(job: CandidateJob | null): string | null {
     case "running":
       return "받는 중";
     case "waiting":
-      return job.wait === "auth" ? "인증 필요" : job.wait === "subtitle" ? "자막 대기" : "대기";
+      switch (job.wait) {
+        case "auth":
+          return "인증 필요";
+        case "subtitle":
+          return "자막 대기";
+        case "placement":
+          return "회차 확인 필요";
+        case "approval":
+          return "교체 승인";
+        case "video":
+          return "영상 대기";
+        default:
+          return "대기";
+      }
     case "held":
       return "보류";
     case "failed":

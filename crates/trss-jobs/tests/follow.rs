@@ -34,7 +34,6 @@ struct World {
     jobs: JobStore,
     channels: ChannelStore,
     runner: Runner,
-    area: ReceiveArea,
     rule: Rule,
 }
 
@@ -124,10 +123,19 @@ impl World {
         )
         .unwrap();
         let earlier = sub.earlier;
+        // The works' folders, where what their jobs receive is stored.
+        let media = dir.path().join("media");
+        for work in ["Show", "Other"] {
+            std::fs::create_dir_all(media.join(work)).unwrap();
+        }
+        let media = media.to_string_lossy().into_owned();
         db.run::<_, DbError, _>(move |c| {
+            c.execute(
+                "INSERT INTO watch_folders (id, path, created_at) VALUES ('f1', ?1, 1)",
+                [media],
+            )?;
             c.execute_batch(
-                "INSERT INTO watch_folders (id, path, created_at) VALUES ('f1', '/media', 1);
-                 INSERT INTO works (id, watch_folder_id, dir_name) VALUES ('w1', 'f1', 'Show');
+                "INSERT INTO works (id, watch_folder_id, dir_name) VALUES ('w1', 'f1', 'Show');
                  INSERT INTO seasons (work_id, number) VALUES ('w1', 1), ('w1', 2);
                  INSERT OR IGNORE INTO season_info (work_id, season) VALUES ('w1', 1), ('w1', 2);",
             )?;
@@ -222,11 +230,10 @@ impl World {
         }
 
         let jobs = JobStore::new(db.clone());
-        let area = ReceiveArea::in_app_data(dir.path());
         let runner = Runner::new(
             jobs.clone(),
             Sources::none().with_fake(FakeSource),
-            area.clone(),
+            ReceiveArea::in_app_data(dir.path()),
             ticking_clock(),
         );
         World {
@@ -236,7 +243,6 @@ impl World {
             jobs,
             channels,
             runner,
-            area,
             rule,
         }
     }
@@ -347,6 +353,17 @@ impl World {
 
     /// A file of the season's episode in the library: a video (`mkv`) or a
     /// subtitle (`ass`).
+    /// The bytes stored for `creator` under `name` in the work's folder.
+    fn stored(&self, creator: &str, name: &str) -> Option<Vec<u8>> {
+        let path = self
+            ._dir
+            .path()
+            .join("media/Show/.trss/subtitles")
+            .join(creator)
+            .join(name);
+        std::fs::read(path).ok()
+    }
+
     async fn file(&self, season: u32, episode: u32, ext: &'static str) {
         let kind = if ext == "mkv" { "video" } else { "subtitle" };
         self.db
@@ -467,11 +484,7 @@ async fn a_new_episode_of_the_subscribed_creator_is_received_without_a_pick() {
     w.run().await;
     let d = w.detail(&made[0]).await;
     assert_eq!(d.row.state, JobState::Done);
-    let file = &d.items[0].files[0];
-    assert_eq!(
-        std::fs::read(w.area.at(file.path.as_deref().unwrap())).unwrap(),
-        fake::ass("ep5")
-    );
+    assert_eq!(w.stored("에루샤", "ep5.ass"), Some(fake::ass("ep5")));
 }
 
 #[tokio::test]
@@ -521,16 +534,10 @@ async fn a_revision_of_a_received_episode_is_received_and_the_subtitle_in_place_
     w.run().await;
     let d = w.detail(&revised[0]).await;
     assert_eq!(d.row.state, JobState::Done);
-    // Received beside the first, and the library's subtitle is as it was.
-    assert!(w
-        .area
-        .at(d.items[0].files[0].path.as_deref().unwrap())
-        .exists());
+    // Stored beside the first, and the library's subtitle is as it was.
+    assert_eq!(w.stored("에루샤", "ep3.ass"), Some(fake::ass("ep3")));
     let earlier = w.detail(&made[0]).await;
-    assert!(w
-        .area
-        .at(earlier.items[0].files[0].path.as_deref().unwrap())
-        .exists());
+    assert_eq!(earlier.row.state, JobState::Done);
     assert_eq!(w.files().await, library);
 }
 
@@ -1041,7 +1048,10 @@ async fn a_revision_of_a_received_episode_that_conflicts_is_received() {
         panic!("created");
     };
     w.run().await;
-    assert_eq!(w.detail(&picked).await.row.state, JobState::Done);
+    // Received, and kept on no episode until the user says which `13.5` is.
+    let d = w.detail(&picked).await;
+    assert_eq!(d.row.state, JobState::Waiting);
+    assert_eq!(d.row.wait, Some(Wait::Placement));
 
     // The creator fixes it: the revision is of what was received, whatever
     // the mapping says of the episode.
@@ -1507,10 +1517,7 @@ async fn a_line_first_seen_after_the_creator_was_named_for_the_file_is_received_
     w.run().await;
     let d = w.detail(&made[0]).await;
     assert_eq!(d.row.state, JobState::Done);
-    assert!(w
-        .area
-        .at(d.items[0].files[0].path.as_deref().unwrap())
-        .exists());
+    assert!(d.items[0].files[0].path.is_some());
     assert_eq!(w.files().await, library);
     assert!(w.evaluate().await.is_empty());
 

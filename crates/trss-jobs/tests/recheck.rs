@@ -66,15 +66,38 @@ fn ticking_clock() -> Clock {
     Arc::new(move || now.fetch_add(10, Ordering::SeqCst))
 }
 
+/// Every item of the job is received. A package this build does not
+/// analyse yet (an archive) leaves the job waiting for it; the recheck reads
+/// receipts whatever came of them.
+fn assert_received(d: &JobDetail) {
+    assert!(
+        d.items.iter().all(|i| i.state == ItemState::Done),
+        "{:?}",
+        d.events
+    );
+    match d.row.state {
+        JobState::Done => {}
+        JobState::Waiting => assert_eq!(d.row.wait, Some(Wait::Subtitle), "{:?}", d.events),
+        other => panic!("{other:?}: {:?}", d.events),
+    }
+}
+
 impl World {
     async fn new() -> World {
         let server = SourceServer::start().await;
         let dir = tempfile::tempdir().unwrap();
         let db = Db::open(dir.path().join("app.db")).await.unwrap();
-        db.run::<_, DbError, _>(|c| {
+        // The work's folder, where what its jobs receive is stored.
+        let media = dir.path().join("media");
+        std::fs::create_dir_all(media.join("Show")).unwrap();
+        let media = media.to_string_lossy().into_owned();
+        db.run::<_, DbError, _>(move |c| {
+            c.execute(
+                "INSERT INTO watch_folders (id, path, created_at) VALUES ('f1', ?1, 1)",
+                [media],
+            )?;
             c.execute_batch(
-                "INSERT INTO watch_folders (id, path, created_at) VALUES ('f1', '/media', 1);
-                 INSERT INTO works (id, watch_folder_id, dir_name) VALUES ('w1', 'f1', 'Show');
+                "INSERT INTO works (id, watch_folder_id, dir_name) VALUES ('w1', 'f1', 'Show');
                  INSERT INTO seasons (work_id, number) VALUES ('w1', 1);
                  INSERT OR IGNORE INTO season_info (work_id, season) VALUES ('w1', 1);
                  INSERT INTO anilist_entries (id, format, episodes, fetched_at)
@@ -234,7 +257,7 @@ impl World {
         assert_eq!(made.len(), 1, "one job for the observation");
         self.run().await;
         let d = self.detail(&made[0]).await;
-        assert_eq!(d.row.state, JobState::Done, "{:?}", d.events);
+        assert_received(&d);
         made[0].clone()
     }
 
@@ -454,7 +477,7 @@ async fn a_tistory_post_whose_modified_time_changed_with_the_same_total_is_not_r
     assert_eq!((report.changed, report.jobs.len()), (1, 1));
     w.run().await;
     let d = w.detail(&report.jobs[0]).await;
-    assert_eq!(d.row.state, JobState::Done);
+    assert_received(&d);
     assert_eq!(d.items[0].files[0].size, Some(bigger.len() as u64));
 }
 
@@ -728,7 +751,7 @@ async fn a_tistory_attachment_deleted_and_attached_again_is_received_again() {
 
     w.run().await;
     let done = w.detail(&report.jobs[0]).await;
-    assert_eq!(done.row.state, JobState::Done);
+    assert_received(&done);
     assert_eq!(done.items[0].files[0].size, Some(fixed_zip.len() as u64));
     // Asked again the next day, the new receipt is what is read: nothing.
     assert_eq!(w.recheck_at(3 * DAY + HOUR).await.same, 1);
@@ -1340,7 +1363,7 @@ impl World {
         self.pass_check(&made[0], bytes, modified).await;
         self.run().await;
         let d = self.detail(&made[0]).await;
-        assert_eq!(d.row.state, JobState::Done, "{:?}", d.events);
+        assert_received(&d);
         made[0].clone()
     }
 

@@ -498,7 +498,7 @@ export interface CandidateJob {
   id: string;
   state: "pending" | "running" | "waiting" | "held" | "failed" | "done";
   /** What a `waiting` item waits for: a person's check or a source it cannot read yet. */
-  wait: "auth" | "subtitle" | null;
+  wait: "auth" | "subtitle" | "placement" | "approval" | "video" | null;
 }
 
 /**

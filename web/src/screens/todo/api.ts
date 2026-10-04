@@ -97,7 +97,27 @@ export interface EpisodeCheckTodo {
   sources: number;
 }
 
-export type Todo = AuthTodo | ReceiveFailedTodo | EpisodeCheckTodo;
+/**
+ * `회차 확인 필요` of a subtitle job: it received files whose episode a person has to say (its 배치 확인). One per
+ * job; it opens the job's detail.
+ */
+export interface PlacementCheckTodo {
+  kind: "placement_check";
+  key: string;
+  /** Since when the job waits (Unix ms). */
+  at: number;
+  work: WorkRef | null;
+  title: string;
+  season: number | null;
+  creator: string | null;
+  /** The names of the files it asks about. */
+  files: string[];
+  /** The first file's question. */
+  reason: string | null;
+  job_id: string;
+}
+
+export type Todo = AuthTodo | ReceiveFailedTodo | EpisodeCheckTodo | PlacementCheckTodo;
 
 export interface TodoList {
   /** Red kinds first (`인증 필요`, `받기 실패`), then `회차 확인 필요`, each newest first. */
@@ -162,7 +182,12 @@ export type JobState =
   "pending" | "running" | "waiting" | "held" | "failed" | "partial" | "done";
 
 /** What a `waiting` job or item waits for: a person's check (`인증 필요`) or a source it cannot read yet (`자막 대기`). */
-export type Wait = "auth" | "subtitle";
+/**
+ * What a waiting job or item waits for: a site's check (`auth`), a way to receive or a later build's analysis
+ * (`subtitle`), a person to say where its files go (`placement`, `회차 확인 필요`), the approval of a replacement
+ * (`approval`), or its video (`video`).
+ */
+export type Wait = "auth" | "subtitle" | "placement" | "approval" | "video";
 
 /**
  * The class of a failure, the same for every source (`docs/specs/jobs.md`, 공통 수신
@@ -189,7 +214,7 @@ export type UploadKind = "subtitle" | "font" | "archive";
  * The steps a job goes through, in this order. `auth` only when a source asks for it. An upload job has only
  * `receive`; a find job `open` and `receive`, as it reaches them.
  */
-export type StepKind = "found" | "open" | "auth" | "receive";
+export type StepKind = "found" | "open" | "auth" | "receive" | "placement" | "store" | "approval" | "apply";
 
 export interface JobRow {
   id: string;
@@ -290,6 +315,8 @@ export type ItemState =
   "pending" | "running" | "waiting" | "held" | "failed" | "done";
 
 export interface JobFile {
+  /** The receipt's ID, which a placement's `file_id` names. */
+  id: string;
   /** The file's name as the site gave it. */
   name: string;
   /** The folders the post shows it in (`회차/2화`), when it does. */
@@ -299,7 +326,7 @@ export interface JobFile {
   /** Bytes received. */
   size: number | null;
   sha256: string | null;
-  /** Where it is in the receive area (absolute, as the server sees it). */
+  /** Where it is in the receive area (absolute, as the server sees it); `null` once it left the area, stored. */
   path: string | null;
   /** The episode of the item that received this same file, when another item of the job did. */
   shared_with: string | null;
@@ -352,9 +379,39 @@ export interface LogEntry {
   detail: string | null;
 }
 
+/** What came of a received file once stored and applied (`trss_jobs::place`). */
+export type PlacementOutcome = "applied" | "stored" | "existing" | "no_video" | "held" | "failed" | "dropped";
+
+/** One received file as it was placed: its episode, what came of it and where it is. */
+export interface Placement {
+  position: number;
+  /** The receipt it was made from (a `JobFile`'s `id`). */
+  file_id: string;
+  /** The received file's name (with its folder in a package). */
+  name: string;
+  kind: "subtitle" | "font";
+  format: "ass" | "srt" | "smi" | "other" | null;
+  /** The season's episode it is on; `null` while a person has to say. */
+  episode: number | null;
+  /** The episode the candidate said. */
+  anissia_episode: string | null;
+  /** Why a person has to say its episode (`회차 확인 필요`). */
+  question: string | null;
+  action: "apply" | "store" | "drop";
+  /** `null` while under way. */
+  outcome: PlacementOutcome | null;
+  note: string | null;
+  /** Server paths: the video it was put beside, its applied copy while it is there, its stored file. */
+  video: string | null;
+  applied: string | null;
+  stored: string | null;
+}
+
 export interface JobDetail extends JobRow {
   steps: Step[];
   items: JobItem[];
+  /** What became of each received file, in the order they were planned. */
+  placements: Placement[];
   /** The job's folder in the receive area (absolute, as the server sees it). */
   receive_dir: string;
   /** Newest first. */

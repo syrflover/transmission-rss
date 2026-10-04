@@ -30,6 +30,7 @@ pub mod area;
 pub mod follow;
 pub mod mapping;
 pub mod model;
+pub mod place;
 pub mod recheck;
 pub mod runner;
 pub mod screen;

@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef } from "react";
+import { Fragment, useEffect, useId, useRef } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
@@ -11,7 +11,7 @@ import { coverOf } from "../library/model";
 import { Cover } from "../library/WorkItem";
 import { fetchJob, jobPath, type JobDetail, type JobRow, type JobScreen } from "./api";
 import { CountChip, FailureTag, OriginTags, StateBadge, Tag, originSentence } from "./badges";
-import { ended, shownState } from "./format";
+import { ended, episodeName, shownState } from "./format";
 import { FindFinish } from "./FindFinish";
 import { BackIcon } from "./icons";
 import { JobAuth } from "./JobAuth";
@@ -212,15 +212,12 @@ function Page({ job, prepare }: { job: JobDetail; prepare: ScreenPrepare }) {
         </Part>
       ) : (
         <Part title="회차별 결과">
-          <JobResults items={job.items} />
+          <JobResults items={job.items} placements={job.placements} />
         </Part>
       )}
 
       <Part title="경로">
-        <dl className="m-0 grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3.5 gap-y-1 text-[13px] max-[720px]:grid-cols-1 max-[720px]:gap-y-0">
-          <dt className="font-semibold text-text-muted">수신 영역</dt>
-          <dd className="m-0 min-w-0 leading-snug text-text-secondary [overflow-wrap:anywhere]">{job.receive_dir}</dd>
-        </dl>
+        <JobPaths job={job} />
       </Part>
 
       <Part title="기록" count={`${job.log.length}건`}>
@@ -246,6 +243,50 @@ function Page({ job, prepare }: { job: JobDetail; prepare: ScreenPrepare }) {
         )}
       </Part>
     </article>
+  );
+}
+
+/** One file's paths, or the receive area's: a term and its path per line. */
+function PathList({ rows }: { rows: readonly (readonly [string, string | null])[] }) {
+  const shown = rows.filter((row): row is readonly [string, string] => row[1] !== null);
+  return (
+    <dl className="m-0 grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3.5 gap-y-1 text-[13px] max-[720px]:grid-cols-1 max-[720px]:gap-y-0">
+      {shown.map(([term, path]) => (
+        <Fragment key={term}>
+          <dt className="font-semibold text-text-muted max-[720px]:mt-1 max-[720px]:first:mt-0">{term}</dt>
+          <dd className="m-0 min-w-0 leading-snug text-text-secondary [overflow-wrap:anywhere]">{path}</dd>
+        </Fragment>
+      ))}
+    </dl>
+  );
+}
+
+/**
+ * `경로`: for each file placed, its video, applied copy and stored file, apart; then the job's folder in the receive
+ * area, while something is in it.
+ */
+function JobPaths({ job }: { job: JobDetail }) {
+  const placed = job.placements.filter((p) => p.video !== null || p.applied !== null || p.stored !== null);
+  const received = job.items.some((item) => item.files.some((file) => file.path !== null));
+  return (
+    <div className="flex flex-col gap-3">
+      {placed.map((p) => (
+        <div key={p.position} className="flex min-w-0 flex-col gap-1">
+          <p className="text-[13px] leading-snug font-semibold [overflow-wrap:anywhere]">
+            {p.episode !== null && <span className="mr-2">{episodeName(String(p.episode))}</span>}
+            <span className="font-normal text-text-secondary">{p.name}</span>
+          </p>
+          <PathList
+            rows={[
+              ["영상", p.video],
+              ["적용본", p.applied],
+              ["보관본", p.stored],
+            ]}
+          />
+        </div>
+      ))}
+      {(received || placed.length === 0) && <PathList rows={[["수신 영역", job.receive_dir]]} />}
+    </div>
   );
 }
 

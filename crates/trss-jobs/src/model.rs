@@ -61,8 +61,16 @@ codes! {
     Wait {
         /// A person has to pass the site's check (`인증 필요`).
         Auth = "auth",
-        /// No source this build knows reads the post (`자막 대기`).
+        /// No source this build knows reads the post, or this build cannot
+        /// yet analyse what it received (`자막 대기`).
         Subtitle = "subtitle",
+        /// A person has to say which episode a file is (`회차 확인 필요`,
+        /// the job's 배치 확인).
+        Placement = "placement",
+        /// A person has to approve replacing a subtitle (`교체 승인`).
+        Approval = "approval",
+        /// The episode's video is not there yet (`영상 대기`).
+        Video = "video",
     }
 }
 
@@ -73,6 +81,14 @@ codes! {
         Open = "open",
         Auth = "auth",
         Receive = "receive",
+        /// A person confirms where the files go (`배치 확인`).
+        Placement = "placement",
+        /// The files are kept in the work folder's `.trss/` (`보관`).
+        Store = "store",
+        /// A stored subtitle is copied beside its video (`적용`).
+        Apply = "apply",
+        /// A replacement waits for a person's approval (`교체 승인`).
+        Approval = "approval",
     }
 }
 
@@ -107,6 +123,88 @@ codes! {
         Held = "held",
         Failed = "failed",
         Abandoned = "abandoned",
+    }
+}
+
+codes! {
+    /// What a kept file is (`docs/specs/settings.md`, 보관 관계 필드).
+    AssetKind {
+        Subtitle = "subtitle",
+        Font = "font",
+        /// A package's description, licence and the like.
+        Attachment = "attachment",
+        /// A file a subtitle needs beside it (the SUB of an IDX).
+        Companion = "companion",
+        Other = "other",
+    }
+}
+
+codes! {
+    /// A subtitle's format as the analysis found it; `other` is a subtitle the
+    /// app keeps but does not apply by itself (SSA, WebVTT, images).
+    SubtitleFormat {
+        Ass = "ass",
+        Srt = "srt",
+        Smi = "smi",
+        Other = "other",
+    }
+}
+
+codes! {
+    /// What a row of a job's placement plan is to come to.
+    PlanAction {
+        /// Stored, then put beside its video.
+        Apply = "apply",
+        /// Stored only.
+        Store = "store",
+        /// Not kept.
+        Drop = "drop",
+    }
+}
+
+codes! {
+    /// What came of a row of a job's placement plan (see the schema's
+    /// comment).
+    Outcome {
+        Applied = "applied",
+        Stored = "stored",
+        Existing = "existing",
+        NoVideo = "no_video",
+        Held = "held",
+        Failed = "failed",
+        Dropped = "dropped",
+    }
+}
+
+codes! {
+    /// An effect on a work folder's file.
+    EffectKind {
+        Store = "store",
+        Apply = "apply",
+    }
+}
+
+codes! {
+    /// Where an effect on a file is (see the schema's comment).
+    EffectState {
+        Intended = "intended",
+        Prepared = "prepared",
+        Done = "done",
+        Held = "held",
+        Failed = "failed",
+        Abandoned = "abandoned",
+    }
+}
+
+impl SubtitleFormat {
+    /// The extension a copy beside a video gets.
+    pub fn extension(self) -> Option<&'static str> {
+        match self {
+            SubtitleFormat::Ass => Some("ass"),
+            SubtitleFormat::Srt => Some("srt"),
+            SubtitleFormat::Smi => Some("smi"),
+            SubtitleFormat::Other => None,
+        }
     }
 }
 

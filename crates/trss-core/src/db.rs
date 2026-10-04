@@ -144,6 +144,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("../migrations/jobs/screen_controls.sql")),
     // 48: a person's request to start a screen's browser run anew
     Migration::Sql(include_str!("../migrations/jobs/screen_restart.sql")),
+    // 49: storing and applying what a job received: packages, assets, stored and applied subtitles, the plan and its file effects
+    Migration::Sql(include_str!("../migrations/jobs/store_apply.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -1420,7 +1422,7 @@ mod tests {
                         [],
                     ),
                     c.execute(
-                        "UPDATE subtitle_jobs SET state = 'waiting', wait = 'video' WHERE id = 'j1'",
+                        "UPDATE subtitle_jobs SET state = 'waiting', wait = 'forever' WHERE id = 'j1'",
                         [],
                     ),
                 ]

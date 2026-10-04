@@ -2,7 +2,7 @@ import { Link } from "react-router-dom";
 
 import { cn } from "@/lib/utils";
 
-import { jobPath, type JobFile, type JobItem } from "./api";
+import { jobPath, type JobFile, type JobItem, type Placement } from "./api";
 import { FailureTag, ItemBadge } from "./badges";
 import { FORMAT_LABEL, episodeName, shownItem, sizeText } from "./format";
 
@@ -36,7 +36,13 @@ const FILE_STATE = {
  * files it received. A job where some failed says so above the list; it never
  * reads as complete.
  */
-export function JobResults({ items }: { items: readonly JobItem[] }) {
+export function JobResults({
+  items,
+  placements = [],
+}: {
+  items: readonly JobItem[];
+  placements?: readonly Placement[];
+}) {
   if (items.length === 0) {
     return (
       <p className="text-[13px] text-text-muted">
@@ -53,14 +59,14 @@ export function JobResults({ items }: { items: readonly JobItem[] }) {
       )}
       <ul className="m-0 flex list-none flex-col gap-2.5 p-0">
         {items.map((item) => (
-          <ItemBlock key={item.id} item={item} />
+          <ItemBlock key={item.id} item={item} placements={placements} />
         ))}
       </ul>
     </div>
   );
 }
 
-function ItemBlock({ item }: { item: JobItem }) {
+function ItemBlock({ item, placements }: { item: JobItem; placements: readonly Placement[] }) {
   return (
     <li
       className={cn(
@@ -94,7 +100,11 @@ function ItemBlock({ item }: { item: JobItem }) {
       {item.files.length > 0 && (
         <ul className="m-0 flex list-none flex-col gap-2.5 border-t border-hairline-soft p-0 pt-2.5">
           {item.files.map((file, i) => (
-            <FileLine key={`${file.name}:${i}`} file={file} />
+            <FileLine
+              key={`${file.name}:${i}`}
+              file={file}
+              placements={placements.filter((p) => p.file_id === file.id)}
+            />
           ))}
         </ul>
       )}
@@ -115,7 +125,41 @@ function answerLine(file: JobFile): string | null {
 /** The words a font file's name carries on the posts seen. */
 const FONT_NAME = /폰트|글꼴|font/i;
 
-function FileLine({ file }: { file: JobFile }) {
+/** What came of a placed file, in a word, with the reason or the episode it went to. */
+function placementText(p: Placement): { word: string; detail: string | null; urgent: boolean } {
+  const episode = p.episode !== null ? episodeName(String(p.episode)) : null;
+  if (p.outcome === null) {
+    return p.question !== null
+      ? { word: "회차 확인 필요", detail: p.question, urgent: false }
+      : { word: "보관 대기", detail: null, urgent: false };
+  }
+  switch (p.outcome) {
+    case "applied":
+      return { word: "적용함", detail: episode, urgent: false };
+    case "stored":
+    case "existing":
+    case "no_video":
+      return { word: "보관만 함", detail: p.note, urgent: false };
+    case "held":
+      return { word: "보류", detail: p.note, urgent: false };
+    case "failed":
+      return { word: "보관·적용 실패", detail: p.note, urgent: true };
+    case "dropped":
+      return { word: "버림", detail: p.note, urgent: false };
+  }
+}
+
+function PlacementLine({ placement }: { placement: Placement }) {
+  const { word, detail, urgent } = placementText(placement);
+  return (
+    <p className="text-xs leading-snug text-text-secondary">
+      <b className={cn("font-semibold", urgent ? "text-urgent" : "text-text-primary")}>{word}</b>
+      {detail !== null && detail !== "" && <span> · {detail}</span>}
+    </p>
+  );
+}
+
+function FileLine({ file, placements }: { file: JobFile; placements: readonly Placement[] }) {
   // The size and format of what was received; a failed file's bytes are gone.
   // A ZIP is received whole as a bundle: which of its files serve which
   // episode is the analysis's, after the receipt. A ZIP named for fonts holds
@@ -158,6 +202,9 @@ function FileLine({ file }: { file: JobFile }) {
       {answer !== null && (
         <p className="text-xs leading-snug text-text-muted">{answer}</p>
       )}
+      {placements.map((p) => (
+        <PlacementLine key={p.position} placement={p} />
+      ))}
       {file.path !== null && (
         <p className="text-xs leading-snug text-text-muted [overflow-wrap:anywhere]">
           {file.path}

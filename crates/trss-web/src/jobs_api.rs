@@ -19,9 +19,11 @@
 //! - `GET /api/subtitle-jobs/done?after=&limit=` the next page of `done`
 //!   (`limit` up to 50, 20 by default).
 //! - `GET /api/subtitle-jobs/{id}` one job with its steps, items with their
-//!   files, its folder in the receive area, its log, newest first, and its
-//!   remote screen (`screen`, see [`super::screen_api`]; `null` for none). It
-//!   reads only: it never asks for a browser run.
+//!   files, what became of each received file (`placements`: its episode,
+//!   whether it was stored and applied, and the paths of its video, applied
+//!   copy and stored file), its folder in the receive area, its log, newest
+//!   first, and its remote screen (`screen`, see [`super::screen_api`];
+//!   `null` for none). It reads only: it never asks for a browser run.
 //! - `POST /api/subtitle-jobs/{id}/screen` and the screen's socket: see
 //!   [`super::screen_api`].
 //! - `POST /api/subtitle-jobs/find` `{ "id", "work_id", "season", "creator" }`
@@ -332,6 +334,8 @@ struct StepView {
 
 #[derive(Debug, Serialize)]
 struct FileView {
+    /// The receipt's ID, which `placements` name.
+    id: String,
     name: String,
     /// The folders the post shows the file in (`회차/2화`), when it does.
     folder: Option<String>,
@@ -373,6 +377,35 @@ struct ItemView {
     files: Vec<FileView>,
 }
 
+/// One row of a job's placement plan ([`trss_jobs::place`]).
+#[derive(Debug, Serialize)]
+struct PlacementView {
+    position: i64,
+    /// The receipt it was made from (a file's `id`).
+    file_id: String,
+    /// The received file's name (with its folder in a package).
+    name: String,
+    kind: &'static str,
+    format: Option<&'static str>,
+    /// The season's episode it is on; `null` while a person has to say.
+    episode: Option<i64>,
+    /// The episode the candidate said.
+    anissia_episode: Option<String>,
+    /// Why a person has to say its episode (`회차 확인 필요`).
+    question: Option<String>,
+    /// `apply`, `store` or `drop`.
+    action: &'static str,
+    /// `applied`, `stored`, `existing`, `no_video`, `held`, `failed`,
+    /// `dropped`; `null` while under way.
+    outcome: Option<&'static str>,
+    note: Option<String>,
+    /// Server paths: the video it was put beside, its applied copy while it
+    /// is there, and its stored file in the work folder's `.trss/`.
+    video: Option<String>,
+    applied: Option<String>,
+    stored: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 struct LogView {
     at: i64,
@@ -387,6 +420,9 @@ struct DetailView {
     steps: Vec<StepView>,
     items: Vec<ItemView>,
     dropped: Vec<DroppedView>,
+    /// What became of each received file: its episode, whether it was stored
+    /// and applied, and where.
+    placements: Vec<PlacementView>,
     receive_dir: String,
     log: Vec<LogView>,
     /// The remote screen of a job that waits for a site's check in the
@@ -394,22 +430,35 @@ struct DetailView {
     screen: Option<super::screen_api::ScreenView>,
 }
 
-/// The steps in order, those not reached `upcoming`; `auth` only when the job
-/// reached it. An upload has no fetching to do: it shows the steps it went
-/// through.
-fn steps_view(steps: &[StepRow], origin: &str) -> Vec<StepView> {
+/// The steps in order, those not reached `upcoming`; `auth`, `placement` and
+/// `approval` only when the job reached them, and `store` and `apply` not
+/// reached only while the job has not ended. An upload has no fetching to do:
+/// it shows the steps it went through, as a find job does.
+fn steps_view(steps: &[StepRow], row: &JobRow) -> Vec<StepView> {
+    let origin = row.origin.as_str();
     [
         StepKind::Found,
         StepKind::Open,
         StepKind::Auth,
         StepKind::Receive,
+        StepKind::Placement,
+        StepKind::Store,
+        StepKind::Approval,
+        StepKind::Apply,
     ]
     .into_iter()
     .filter_map(|kind| {
-        let row = steps.iter().find(|s| s.step == kind);
-        if row.is_none() && (kind == StepKind::Auth || origin == UPLOAD || origin == FIND) {
+        let row_of = steps.iter().find(|s| s.step == kind);
+        let only_reached = matches!(
+            kind,
+            StepKind::Auth | StepKind::Placement | StepKind::Approval
+        ) || origin == UPLOAD
+            || origin == FIND
+            || (matches!(kind, StepKind::Store | StepKind::Apply) && row.finished_at.is_some());
+        if row_of.is_none() && only_reached {
             return None;
         }
+        let row = row_of;
         Some(match row {
             Some(s) => StepView {
                 step: kind.code(),
@@ -449,6 +498,7 @@ fn file_view(
     // another file or nothing.
     let received = file.state == FileState::Done;
     Some(FileView {
+        id: file.id.clone(),
         name: file.name.clone(),
         folder: file.folder.clone(),
         state: shown,
@@ -457,7 +507,7 @@ fn file_view(
         path: file
             .path
             .as_ref()
-            .filter(|_| received)
+            .filter(|_| received && file.cleared_at.is_none())
             .map(|p| state.receive_root.join(p).to_string_lossy().into_owned()),
         shared_with: file
             .same_as
@@ -519,8 +569,41 @@ async fn detail(
                 .collect(),
         })
         .collect();
+    let plan = state.jobs.plan(&id).await.map_err(|e| internal(&e))?;
+    let paths: HashMap<i64, trss_jobs::place::records::RowPaths> = state
+        .jobs
+        .plan_paths(&id)
+        .await
+        .map_err(|e| internal(&e))?
+        .into_iter()
+        .collect();
+    let placements = plan
+        .into_iter()
+        .map(|p| {
+            let at = paths.get(&p.position).cloned().unwrap_or_default();
+            let full =
+                |relative: Option<String>| Some(format!("{}/{}", at.folder.as_deref()?, relative?));
+            PlacementView {
+                position: p.position,
+                file_id: p.file_id,
+                name: p.name,
+                kind: p.kind.code(),
+                format: p.format.map(|f| f.code()),
+                episode: p.placed.map(|placed| placed.episode),
+                anissia_episode: p.anissia_episode,
+                question: p.question,
+                action: p.action.code(),
+                outcome: p.outcome.map(|o| o.code()),
+                note: p.note,
+                video: full(at.video.clone()),
+                applied: full(at.applied.clone()),
+                stored: full(at.stored.clone()),
+            }
+        })
+        .collect();
     Ok(Json(DetailView {
-        steps: steps_view(&steps, &row.origin),
+        steps: steps_view(&steps, &row),
+        placements,
         items: items_view,
         dropped: dropped
             .into_iter()
