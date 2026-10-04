@@ -18,7 +18,7 @@
 //!
 //! A subtitle is the file of a candidate when the candidate's episode, taken
 //! through the source's mapping, is the one its name says
-//! ([`episode::of_candidate`]); a name without a number is the candidate's
+//! ([`super::episode::of_candidate`]); a name without a number is the candidate's
 //! when the post has one candidate and no subtitle of it names a number.
 //! When no file is any candidate's and the package's subtitles name one
 //! episode at most, they are asked about (`회차 확인 필요`), as a single file
