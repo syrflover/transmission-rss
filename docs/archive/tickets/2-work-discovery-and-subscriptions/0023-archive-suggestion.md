@@ -1,7 +1,7 @@
 # 0023 방영이 끝났거나 새 항목이 없는 규칙에 보관을 제안해요
 
 - 상태: 완료 (실제 Transmission·실제 Anissia와 429·네트워크 단절은 못 봤어요. 아래 "검증하지 못한 것")
-- 출처: [규칙 보관](../specs/collection.md#규칙-보관)(보관 제안), [수집 화면](../specs/collection.md#수집-화면)(구독 탭, 상태 배너), [할 일](../specs/jobs.md#할-일)(`보관 제안`)
+- 출처: [규칙 보관](../../../specs/collection.md#규칙-보관)(보관 제안), [수집 화면](../../../specs/collection.md#수집-화면)(구독 탭, 상태 배너), [할 일](../../../specs/jobs.md#할-일)(`보관 제안`)
 - 막는 티켓: 없음(보관·복원의 폴더 이동은 [0011](0011-archive-folder-move.md), Anissia 종영 정보는 [0021](0021-weekly-schedule.md)에 있어요)
 
 ## 작업

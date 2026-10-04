@@ -1,7 +1,7 @@
 # 0026 규칙 상세에서 지난 회차를 검색해 골라 받아요
 
 - 상태: 완료 (실제 Transmission으로는 확인하지 않았고, 실제 nyaa는 검색 RSS 한 번만 읽었어요. 아래 "검증하지 못한 것")
-- 출처: [지난 회차 검색](../specs/collection.md#지난-회차-검색), [채널과 규칙 필드](../specs/settings.md#채널과-규칙-필드)(`past_search`), [수집 화면](../specs/collection.md#수집-화면)(채널 탭의 검색 형식)
+- 출처: [지난 회차 검색](../../../specs/collection.md#지난-회차-검색), [채널과 규칙 필드](../../../specs/settings.md#채널과-규칙-필드)(`past_search`), [수집 화면](../../../specs/collection.md#수집-화면)(채널 탭의 검색 형식)
 - 막는 티켓: [0024](0024-video-episode-offset.md)(범위 제안의 회차 변환), [0025](0025-replace-video-revisions.md)(수정본·`버전 미상` 판정)
 
 ## 작업
