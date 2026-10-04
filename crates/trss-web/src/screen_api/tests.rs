@@ -2215,3 +2215,28 @@ async fn a_dialog_ends_a_stall_and_the_size_kept_meanwhile_is_applied_once_it_cl
         "touchCancel"
     );
 }
+
+#[tokio::test]
+async fn a_screen_brings_its_page_to_the_front_before_it_draws_it() {
+    let s = setup(true).await;
+    s.waiting_on("run-1").await;
+    let _phone = phone_on(&s).await;
+    let sent: Vec<String> = s
+        .launcher
+        .seen
+        .lock()
+        .unwrap()
+        .commands
+        .iter()
+        .map(|(_, method, _)| method.clone())
+        .collect();
+    let front = sent
+        .iter()
+        .position(|m| m == "Page.bringToFront")
+        .expect("the page was brought to the front");
+    let drawn = sent
+        .iter()
+        .position(|m| m == "Page.startScreencast")
+        .unwrap();
+    assert!(front < drawn, "{sent:?}");
+}

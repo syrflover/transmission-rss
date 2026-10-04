@@ -1,6 +1,8 @@
 //! One remote screen of a browser run: the web's own DevTools connection to
 //! the page that shows a job's check, shared by every socket open on it (see
-//! the protocol in [`super`]).
+//! the protocol in [`super`]). The browser draws only the tab in front, so
+//! the hub brings its page there when it opens: a page a popup was opened in
+//! front of (a person who went back to the earlier tab) would send no frames.
 //!
 //! # Frames after a change of size
 //!
@@ -637,6 +639,17 @@ impl Hub {
             Err(CdpError::Timeout(_)) => return Err(OpenError::Stuck),
             Err(e) => return Err(unreachable("Page.enable", e)),
         }
+        // The browser draws only the tab in front: a page another one was
+        // opened in front of (a person who went back to an earlier tab)
+        // sends no frames until it is brought there.
+        let _ = conn
+            .command_within(
+                Some(&session),
+                "Page.bringToFront",
+                json!({}),
+                times.answer_within,
+            )
+            .await;
         // The tabs follow the run's other targets: their titles and
         // addresses change as they load. Without it they are read when the
         // worker's list or the page changes.

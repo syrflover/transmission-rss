@@ -988,7 +988,10 @@ async fn a_find_screen_steps_back_and_forward_never_before_its_first_page_and_sw
         .map(|t| t["id"].clone())
         .collect();
     assert_eq!(shown, vec![json!(first_target)], "the choice is not undone");
-    println!("the switch to the first tab was kept across the follower's looks");
+    // The popup was in front of the first page in the browser, which draws
+    // only the tab in front.
+    screen.frame().await;
+    println!("the switch to the first tab was kept across the follower's looks, and it is drawn");
 
     // The popup is a hidden tab now: closing it closes that page only, and
     // the screen stays as it is.
@@ -1051,7 +1054,12 @@ async fn a_find_screen_steps_back_and_forward_never_before_its_first_page_and_sw
         },
     )
     .await;
-    println!("the shown tab was closed and the screen went back to the first page");
+    let back = screens.screen(job).await.unwrap().unwrap();
+    open_screen(web, job, &run, back.bound_at.unwrap())
+        .await
+        .frame()
+        .await;
+    println!("the shown tab was closed and the screen went back to the first page, drawn");
 
     // Whatever was sent over the socket named only hosts.
     for text in &every_message {
