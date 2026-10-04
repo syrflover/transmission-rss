@@ -1,24 +1,24 @@
 # 0008 수집 이력을 보고 한 번 받기를 해요
 
 - 상태: 완료
-- 출처: [수집 이력](../specs/collection.md#수집-이력), [수집 화면](../specs/collection.md#수집-화면), [웹 명령과 상태 갱신](../specs/web-app.md#웹-명령과-상태-갱신)
+- 출처: [수집 이력](../../../specs/collection.md#수집-이력), [수집 화면](../../../specs/collection.md#수집-화면), [웹 명령과 상태 갱신](../../../specs/web-app.md#웹-명령과-상태-갱신)
 - 막는 티켓: [0003](0003-web-shell.md), [0004](0004-worker-collection-history.md), [0006](0006-rules-tab-preview.md)
 
 ## 작업
 
 수집 화면의 `기록` 탭에서 수집 이력을 시간순으로 훑고, 항목이 왜 받아지지 않았는지 보고, 규칙 없이 `한 번 받기`로 받거나 그 항목에서 새 규칙을 만들어요.
-`한 번 받기`는 웹이 접수하고 worker가 실행하는 첫 명령이라, [웹 명령의 계약](../specs/web-app.md#웹-명령과-상태-갱신)(명령 ID, 중복 전달, 접수와 완료의 구분)을 여기서 처음 세워요.
+`한 번 받기`는 웹이 접수하고 worker가 실행하는 첫 명령이라, [웹 명령의 계약](../../../specs/web-app.md#웹-명령과-상태-갱신)(명령 ID, 중복 전달, 접수와 완료의 구분)을 여기서 처음 세워요.
 
 - 목록은 최근 순서, 결과·채널 필터, `9월 28일 (월)` 같은 날짜 머리, 무한 스크롤이에요.
   기록 줄은 일어난 일을 먼저 쓰고 덧붙이는 정보는 흐리게 옆에 둬요.
 - 줄을 누르면 그 항목으로 할 수 있는 일(`한 번 받기`·`규칙 생성`)과 받지 않은 까닭을 펼쳐요.
 - `규칙 생성`은 항목 제목으로 채운 새 규칙 상세(0006)를 열고, 저장하기 전에는 아무것도 바꾸지 않아요.
-- `한 번 받기`는 펼친 자리에 채널 기본 폴더로 채운 저장 폴더 칸을 두고, 고른 폴더에 받아 회차 변환 없이 trname 이름을 붙여요([수집 이력](../specs/collection.md#수집-이력)).
+- `한 번 받기`는 펼친 자리에 채널 기본 폴더로 채운 저장 폴더 칸을 두고, 고른 폴더에 받아 회차 변환 없이 trname 이름을 붙여요([수집 이력](../../../specs/collection.md#수집-이력)).
   고를 수 있는 폴더는 그 채널의 기본 폴더 아래로 한정하고(감시 폴더가 생기는 결과 목표 2부터는 감시 폴더 아래도), 절대 경로·`..`·링크로 벗어나는 입력을 거부해요.
   명령 ID와 함께 접수하고, 접수 응답을 받음으로 표시하지 않아요.
   worker가 Transmission에 넣은 결과를 그 기록의 결과로 남기고 화면이 주기 조회로 보여줘요.
 - 상태 판의 `실패·중복 N개`는 이 탭의 해당 필터로 이어져요.
-- 원래 링크는 [수집 이력](../specs/collection.md#수집-이력)대로 가린 자리를 채널의 비밀 값으로 되살리고, 그래도 가린 값이 남으면 채널의 지금 RSS에서 같은 동일성 키의 항목을 찾아 얻어요(사용자 결정).
+- 원래 링크는 [수집 이력](../../../specs/collection.md#수집-이력)대로 가린 자리를 채널의 비밀 값으로 되살리고, 그래도 가린 값이 남으면 채널의 지금 RSS에서 같은 동일성 키의 항목을 찾아 얻어요(사용자 결정).
 - `규칙 생성`은 [0006](0006-rules-tab-preview.md)의 규칙 상세를 열어요. 나머지는 0006과 함께 진행할 수 있고, 이 연결만 0006을 합친 뒤에 붙여요.
 
 ## 완료 기준
@@ -132,7 +132,7 @@
   이제 명령의 추가는 `trss-cmd:<명령 ID>` 라벨을 함께 실어요. Transmission은 `중복`으로 답한 추가의 라벨을 붙이지 않고 worker도 이 라벨은 덧붙이지 않으니, 이 라벨이 있는 토렌트만 명령 것으로 봐요. 표시 여부와 상관없이 판정해서, 넣은 뒤 결과를 쓰기 전에 worker가 죽은 경우도 이제 `받음`이 되고 이름을 바꿔요(위 알려진 틈이 닫힘). 기록을 마치면 명령 라벨을 떼요(실패하거나 그 전에 죽으면 끝난 명령을 가리키는 라벨이 남을 뿐이에요). 해시를 끝내 알지 못한 채 끝난 명령의 라벨도 남는데, 같은 항목의 뒤 명령은 그 토렌트를 자기 것으로 보지 않고 `중복`으로 기록해요(앞 명령이 넣은 것이니 맞는 기록이에요).
   이 판정은 Transmission이 `중복`으로 답한 추가의 라벨을 기존 토렌트에 적용하지 않는다는 전제에 기대요. libtransmission `rpcimpl.cc`의 `add_torrent_impl`은 `duplicate_of`가 있으면 기존 토렌트 정보만 돌려주고 끝나며, 요청의 라벨은 새 토렌트를 만들 때만 쓰여요(GitHub `main` 소스를 읽어 확인했고, 실제 Transmission으로 돌려 보지는 않았어요). 사람이 넣은 토렌트에 봇 라벨이 붙지 않는 것도 같은 전제예요.
   시험: `another_items_bot_torrent_in_the_chosen_folder_is_not_taken_as_the_commands_own`(수정 전 실패), `a_bot_torrent_without_the_commands_label_is_not_taken_as_its_own`, `a_command_whose_torrent_went_in_before_the_worker_died_adds_no_second_torrent`와 `a_cycle_run_while_a_command_is_left_running_removes_nothing`(미리 넣은 토렌트에 명령 라벨을 싣고 `받음`을 기대하도록 바꿈), `a_no_match_item_is_received_into_the_chosen_folder_by_the_worker`(추가 요청의 명령 라벨과 뗀 뒤의 라벨).
-- **`한 번 받기`가 `다시 받기`로 (후속, [수집 이력](../specs/collection.md#수집-이력) 개정)**: 저장 폴더 칸이 있고 규칙 없이 아무 항목이나 받던 `한 번 받기`를, 규칙이 고르고도 추가하지 못한(`추가 실패`) 항목만 그 규칙의 저장 폴더(채널 기본 폴더와 규칙 `directory`를 이은 경로)와 회차 변환으로 다시 받는 `다시 받기`로 바꿨어요. 명령 종류 문자열 `receive_once`, 명령 ID 멱등, 답 없던 추가의 재시도, `trss-cmd:`·봇·항목 라벨, 비밀 링크 복원, 결과 기록은 그대로예요. 성공하면 항목의 규칙이 그 규칙이 되어 행에 `규칙 ‘…’`이 떠요. 앱 공통 수집 폴더는 이 작업에서 만들지 않았어요. 사용자에게 보이는 결과 이름 `받음`은 `추가함`(`직접 받음`은 `직접 추가함`, 대기 중 칩은 `추가하는 중`, 수집 현황은 `최근 7일 추가`)으로 바꿨어요.
+- **`한 번 받기`가 `다시 받기`로 (후속, [수집 이력](../../../specs/collection.md#수집-이력) 개정)**: 저장 폴더 칸이 있고 규칙 없이 아무 항목이나 받던 `한 번 받기`를, 규칙이 고르고도 추가하지 못한(`추가 실패`) 항목만 그 규칙의 저장 폴더(채널 기본 폴더와 규칙 `directory`를 이은 경로)와 회차 변환으로 다시 받는 `다시 받기`로 바꿨어요. 명령 종류 문자열 `receive_once`, 명령 ID 멱등, 답 없던 추가의 재시도, `trss-cmd:`·봇·항목 라벨, 비밀 링크 복원, 결과 기록은 그대로예요. 성공하면 항목의 규칙이 그 규칙이 되어 행에 `규칙 ‘…’`이 떠요. 앱 공통 수집 폴더는 이 작업에서 만들지 않았어요. 사용자에게 보이는 결과 이름 `받음`은 `추가함`(`직접 받음`은 `직접 추가함`, 대기 중 칩은 `추가하는 중`, 수집 현황은 `최근 7일 추가`)으로 바꿨어요.
   대상 판정은 `receive_once::retry_plan` 한 곳에 있고 웹 접수(`commands_api`), 기록 행의 `can_retry`·`retry_blocked`(`history_api`), worker의 실행 시점 재확인이 함께 써요. 결과가 `add_failed`이고 기록된 규칙이 있으며 그 규칙이 남아 있고 활성일 때만 대상이에요(`버전 미상`은 생기면 `is_retryable_result`에 더해요). 규칙이 지워졌거나 보관됐거나 규칙이 없던 옛 실패 행은 버튼 없이 까닭만 보여요. 접수 뒤 조건이 바뀌면 worker는 항목을 건드리지 않고 `추가 실패`와 까닭으로 바로 끝내고, 그 사이 이미 받거나 `중복`이 된 항목은 그 결과로 끝내요. 실패한 재시도도 규칙을 그대로 두어 다시 시도할 수 있어요(`record_outcome`이 `rule_id`를 받아요).
   요청 본문에 비지 않은 `folder`가 있으면 400이에요. 저장돼 있던 옛 명령의 payload는 `folder`가 있어도 그대로 읽히고(`skip_serializing`) `canonical()`은 `{"item_id":N}`만 써요. 같은 ID로 다시 온 요청은 접수 검사보다 먼저 저장된 명령과 `canonical()`로 견줘, 옛 탭이 그대로 다시 보낸 요청(폴더가 비었든 아니든)에도 저장된 명령을 200으로 돌려줘요. 폴더를 고르던 옛 명령을 worker가 돌릴 때는 규칙 폴더로 받지 않고 `폴더를 고르던 예전 요청이라 실행하지 않았어요…`로 항목을 그대로 둔 채 `추가 실패`로 끝내요(폴더가 빈 옛 명령은 보통 재시도로 돌아요). 접수 뒤 대상이 아니게 된 항목은 채널이 지워졌어도 같은 길로 끝나 항목의 결과를 바꾸지 않고, 앞선 시작이 넣었을 수 있는 토렌트의 `trss-cmd:` 라벨을 떼요. 입력 폴더 검증 모듈 `folder.rs`는 더 쓸 곳이 없어 지웠어요(규칙 주기와 같은 경로를 쓰므로 그 주기가 없는 심볼릭 링크·`..` 검사는 재시도에도 없어요). 규칙 폴더가 비어 있으면 규칙 주기와 같이 끝에 `/`가 붙은 채널 기본 폴더로 들어가요. 규칙 없이 받은 옛 행은 `by_hand`(`직접 추가함`)로 남고 규칙 주기가 이름을 바꾸거나 지우지 않는 보호도 그대로예요.
   시험(`crates/trss-worker/tests/receive_once.rs`): `a_failed_item_is_added_again_into_its_rules_folder_by_the_worker`, `the_rules_episode_conversion_names_the_file`, `a_retry_goes_where_the_rules_own_cycle_puts_the_same_release`, `a_rule_without_a_folder_retries_into_the_channels_base_folder`, `a_request_naming_a_folder_is_refused_and_nothing_is_accepted`, `a_command_stored_with_a_folder_before_the_change_runs_into_the_rules_folder`, `a_rule_deleted_after_the_request_ends_the_command_at_once`, `a_rule_archived_after_the_request_ends_the_command_at_once`, `an_item_that_a_later_cycle_found_no_rule_for_ends_the_command_at_once`, `a_failure_with_no_rule_recorded_is_not_offered_and_ends_the_command_at_once`, `items_no_rule_picked_and_items_transmission_holds_are_not_retried`, `a_retry_that_failed_can_be_tried_again_with_a_new_command`. 웹 접수·행: `a_request_that_names_a_folder_is_refused_and_nothing_is_stored`, `an_item_that_cannot_be_retried_is_refused_with_its_reason_and_nothing_is_stored`, `the_row_says_whether_a_failed_item_can_be_retried_and_why_not`. 저장소: `an_outcome_keeps_the_rule_it_is_given_through_failure_and_success`. 옛 payload와 대상 판정 단위 시험은 `receive_once.rs` 안에 있어요. 새 통합 시험 53개 중 20개가 이전 소스에서 실패했어요. 리뷰 뒤: API `a_legacy_command_sent_again_is_answered_with_the_stored_command`, 통합 `a_command_stored_with_an_empty_folder_before_the_change_runs_as_a_retry`, `a_command_stored_with_a_folder_before_the_change_is_not_run_into_the_rules_folder`, `an_item_no_rule_picked_is_left_as_it_is_when_its_channel_is_gone_and_the_label_comes_off`, `a_held_item_whose_channel_is_gone_ends_with_its_result_and_the_label_comes_off`(라벨 떼기와 옛 폴더 검사를 빼면 4개가 실패).

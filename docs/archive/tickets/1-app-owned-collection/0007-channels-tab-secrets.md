@@ -1,7 +1,7 @@
 # 0007 채널 탭에서 채널과 비밀 값을 관리해요
 
 - 상태: 완료
-- 출처: [채널 URL의 비밀 값](../specs/collection.md#채널-url의-비밀-값), [수집 화면](../specs/collection.md#수집-화면)
+- 출처: [채널 URL의 비밀 값](../../../specs/collection.md#채널-url의-비밀-값), [수집 화면](../../../specs/collection.md#수집-화면)
 - 막는 티켓: [0002](0002-app-state-db.md), [0003](0003-web-shell.md)
 
 ## 작업

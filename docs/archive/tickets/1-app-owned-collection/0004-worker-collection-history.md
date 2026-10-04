@@ -1,7 +1,7 @@
 # 0004 worker가 DB 설정으로 상시 수집하고 수집 이력을 남겨요
 
 - 상태: 완료
-- 출처: [채널과 다운로드 규칙](../specs/collection.md#채널과-다운로드-규칙), [수집 이력](../specs/collection.md#수집-이력), [구현 경계와 실행 순서](../specs/web-app.md#구현-경계와-실행-순서)
+- 출처: [채널과 다운로드 규칙](../../../specs/collection.md#채널과-다운로드-규칙), [수집 이력](../../../specs/collection.md#수집-이력), [구현 경계와 실행 순서](../../../specs/web-app.md#구현-경계와-실행-순서)
 - 막는 티켓: [0001](0001-rule-evaluation.md), [0002](0002-app-state-db.md)
 
 ## 작업

@@ -1,12 +1,12 @@
 # 0058 실제 서버의 Transmission OOM과 자원 한도를 지켜봐요
 
 - 상태: 진행 중
-- 출처: [0009](0009-deploy-web-worker.md)의 남은 일에서 떼어 냈어요(사용자 결정, 2026-10-04)
+- 출처: [0009](../archive/tickets/1-app-owned-collection/0009-deploy-web-worker.md)의 남은 일에서 떼어 냈어요(사용자 결정, 2026-10-04)
 - 막는 티켓: 없음
 
 ## 배경
 
-0009에서 웹과 worker를 배포하다가 Transmission 데몬이 컨테이너 안에서 되풀이해 죽는 것을 찾았어요. 원인은 호스트 커널(RHEL 9 `5.14.0-687.41.1`부터)에 들어간 memcg 재시도 변경(RHEL-211058)이에요. 원인과 조치는 [0009의 기록](0009-deploy-web-worker.md#이름과-라벨이-되돌아간-일-호스트-커널의-oom-강제-종료)에 있어요.
+0009에서 웹과 worker를 배포하다가 Transmission 데몬이 컨테이너 안에서 되풀이해 죽는 것을 찾았어요. 원인은 호스트 커널(RHEL 9 `5.14.0-687.41.1`부터)에 들어간 memcg 재시도 변경(RHEL-211058)이에요. 원인과 조치는 [0009의 기록](../archive/tickets/1-app-owned-collection/0009-deploy-web-worker.md#이름과-라벨이-되돌아간-일-호스트-커널의-oom-강제-종료)에 있어요.
 
 조치는 `transmission.slice`의 `MemoryHigh=384M`예요. 캐시를 384M 아래로 붙잡아 512M 한도에 닿지 않게 해요. Transmission의 512M 한도는 그대로 둬요(사용자 결정).
 

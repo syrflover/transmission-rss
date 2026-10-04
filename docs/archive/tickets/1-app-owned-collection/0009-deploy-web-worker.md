@@ -1,12 +1,12 @@
 # 0009 웹과 worker를 배포하고 cron을 걷어내요
 
-- 상태: 진행 중 (0.5.0 운영 중, 옛 cron 걷어냄, 휴대폰·LTE 확인 남음. OOM 관찰과 자원 한도는 [0058](0058-server-oom-and-resource-limits.md)로 옮김)
-- 출처: [구현 경계와 실행 순서](../specs/web-app.md#구현-경계와-실행-순서), [접근 경계와 기기](../specs/web-app.md#접근-경계와-기기)
+- 상태: 완료 (OOM 관찰과 자원 한도는 [0058](../../../tickets/0058-server-oom-and-resource-limits.md)로 옮김. 원격 인증 화면의 실제 배포 경로 보호는 결과 목표 5로 넘김)
+- 출처: [구현 경계와 실행 순서](../../../specs/web-app.md#구현-경계와-실행-순서), [접근 경계와 기기](../../../specs/web-app.md#접근-경계와-기기)
 - 막는 티켓: [0004](0004-worker-collection-history.md), [0005](0005-legacy-yaml-import.md)
 
 ## 작업
 
-지금 배포는 cron(`scripts/cron.sh`)이 5분마다 `docker compose run --rm`으로 종료형 컨테이너를 띄우고, [trss Compose](../../docker-compose.trss.yml)는 웹 포트·미디어 볼륨이 없으며 CPU 0.1·메모리 96M로 제한돼 있어요.
+지금 배포는 cron(`scripts/cron.sh`)이 5분마다 `docker compose run --rm`으로 종료형 컨테이너를 띄우고, [trss Compose](../../../../docker-compose.trss.yml)는 웹 포트·미디어 볼륨이 없으며 CPU 0.1·메모리 96M로 제한돼 있어요.
 이를 같은 이미지·같은 릴리스 버전의 `trss-web`과 `trss-worker` 두 상시 컨테이너로 바꾸고, 기존 cron을 걷어내며, 운영 안내를 고쳐요.
 사용자의 실제 서버에서 기존 YAML을 가져와 worker가 cron과 같은 결과를 내는 것을 확인하는 전환 티켓이에요.
 
@@ -23,7 +23,7 @@
 - 전환 중 cron의 `transmission-rss`와 `trss-worker`를 함께 돌리면, 둘 다 자기 피드에 없는 trss 라벨 토렌트를 정리하므로 서로가 받은 토렌트를 지울 수 있어요.
   cron을 먼저 멈춘 뒤 worker를 켜거나, 두 쪽이 같은 채널 설정을 쓰는 동안만 겹치게 해요.
 - `Cargo.lock`이 `.gitignore`에 있어 이미지 빌드마다 Rust 의존성 버전이 달라질 수 있어요. 상시 실행 배포 전에 커밋해 고정할지 정해요.
-- 태그 기반 [배포 workflow](../../.github/workflows/deploy.yml)의 이미지 게시는 원격 쓰기이므로, 게시와 서버 반영은 사용자가 승인한 때만 해요.
+- 태그 기반 [배포 workflow](../../../../.github/workflows/deploy.yml)의 이미지 게시는 원격 쓰기이므로, 게시와 서버 반영은 사용자가 승인한 때만 해요.
 
 ## 완료 기준
 
@@ -33,7 +33,7 @@
   관찰한 날짜·주기 수·차이를 이 티켓의 결과에 적어요.
 - 웹만 재시작하는 동안 worker의 정기 처리가 계속돼요.
 - 보호 경계 밖에서 웹 포트에 접근할 수 없는 것을 실제 배포 경로에서 확인해요.
-  원격 인증 경로의 보호는 결과 목표 3에서 만들었어요. 서버 브라우저 네트워크에서 온 연결의 거절은 [0040](../archive/tickets/3-subtitle-candidates-and-receiving/0040-remote-auth-screen.md)이, 브라우저 송신 제한과 웹의 Host·Origin 검사는 [0053](../archive/tickets/3-subtitle-candidates-and-receiving/0053-browser-egress-and-web-origin.md)이 했어요. 시험과 개발 환경에서만 확인했고, 실제 배포 경로에서는 이 티켓이 확인해요.
+  원격 인증 경로의 보호는 결과 목표 3에서 만들었어요. 서버 브라우저 네트워크에서 온 연결의 거절은 [0040](../3-subtitle-candidates-and-receiving/0040-remote-auth-screen.md)이, 브라우저 송신 제한과 웹의 Host·Origin 검사는 [0053](../3-subtitle-candidates-and-receiving/0053-browser-egress-and-web-origin.md)이 했어요. 시험과 개발 환경에서만 확인했고, 실제 배포 경로에서는 이 티켓이 확인해요.
 - 실제 휴대폰에서 골격 화면(0003)과 규칙 편집(0006)을 한 번 수행하고 결과를 기록해요.
 
 ## 결과
@@ -50,8 +50,8 @@
 - `docker-compose.trss.yml`에 상시 서비스 `trss-worker`·`trss-web`을 두었어요. 둘 다 `ghcr.io/syrflover/transmission-rss:${TRSS_VERSION}`(같은 릴리스), `restart: unless-stopped`, 로그 회전(10m×3)이고, 실행 파일은 `entrypoint`로 명시해요.
   DB는 `TRSS_DATA_DIR`(기본 `./data`)의 `/data/trss.db`예요. 미디어는 Transmission과 같은 `/downloads`에 읽기 전용으로 붙여, 폴더 링크 검사와 Transmission `downloadDir` 비교가 같은 경로 표기를 봐요.
 - 옛 cron 서비스 `trss`는 되돌리기용으로 `legacy` 프로필에 남겼고, `scripts/cron.sh`가 `--profile legacy`로 불러요. `CHANNELS_CONFIG_URL`은 전환 뒤 `.env`에서 빠져도 파일 전체가 풀리도록 필수에서 뺐어요. ENTRYPOINT(`transmission-rss`)는 되돌리기가 필요 없어질 때 다시 정하기로 했고, 2026-10-02에 정했어요(아래 `옛 cron 걷어내기`).
-- 자원 한도는 컨테이너마다 0.25 CPU·128M으로 시작해요. 근거와 재검토 계획은 [readme](../../readme.md#resource-limits)에 있어요. 로컬 유휴 상태는 worker 3.4MiB·web 1.2MiB였어요(피드와 Transmission 없이, 실제 부하가 아님).
-- 운영 안내([readme](../../readme.md))에 설정, 실행·중지·업데이트·로그·백업, cron에서 옮기는 순서(토렌트 목록 저장 → cron 해제 → web → 가져오기 → worker), 되돌리기를 적었어요. 이 전환 안내는 전환을 마친 2026-10-02에 걷어냈어요.
+- 자원 한도는 컨테이너마다 0.25 CPU·128M으로 시작해요. 근거와 재검토 계획은 [readme](../../../../readme.md#resource-limits)에 있어요. 로컬 유휴 상태는 worker 3.4MiB·web 1.2MiB였어요(피드와 Transmission 없이, 실제 부하가 아님).
+- 운영 안내([readme](../../../../readme.md))에 설정, 실행·중지·업데이트·로그·백업, cron에서 옮기는 순서(토렌트 목록 저장 → cron 해제 → web → 가져오기 → worker), 되돌리기를 적었어요. 이 전환 안내는 전환을 마친 2026-10-02에 걷어냈어요.
 
 ### 로컬 확인 (2026-09-30, `--locked`로 빌드한 이미지, 연결할 수 없는 Transmission 주소)
 
@@ -90,9 +90,9 @@
 - `687.53.1`로 올린 직후 죽지 않은 것은 받는 토렌트가 없어서였어요. 2026-09-30에 봇 토렌트 5개를 받기 시작하자 512M에서 다시 죽었고(16:46–17:23 UTC에 9번, 짧게는 34초 간격), 죽는 순간의 모습(`anon` 50MB 안팎, `inactive_file` 420–470MB)도 같았어요. MGLRU(`/sys/kernel/mm/lru_gen/enabled` `0x0007`)를 꺼도 죽어서 원인에서 뺐어요.
 - 원인: 커널 회수 추적(`vmscan` tracepoint)에서 죽기 직전 1ms 동안 데몬 스레드가 회수를 **16번 연달아 모두 성공**(`nr_scanned=64 nr_reclaimed=64`, 못 비운 이유 0)한 뒤 OOM을 냈어요. 58초 동안 3,667번의 회수 중 아무것도 못 비운 회수는 없었어요. 캐시를 못 비운 게 아니라, 비운 자리를 다른 쓰기가 먼저 가져가는 동안 재시도 한도 16번을 다 쓴 거예요.
   `687.41.1`부터의 RHEL 커널에는 RHEL 전용 변경 "mm/memcg: refactor try_charge_memcg retry logic to use for loop"(RHEL-211058)이 들어 있어요. upstream은 회수가 진전을 내는 재시도를 한도에 세지 않는데, 이 변경은 모든 재시도를 16번 안에 세요. Red Hat은 2026-09-21 CentOS Stream 9에서 이 변경을 되돌렸어요(RHEL-255363, "unexpected oom kills"). 같이 들어온 `vm.mem_cgroup_reclaim_retries`는 범위가 1–16이라 한도를 늘리는 데 쓸 수 없어요.
-- 한도는 1G로 올렸다가 사용자 결정으로 512M로 되돌렸고([docker-compose.yml](../../docker-compose.yml)), 한도를 없애는 우회는 사용자가 택하지 않았어요.
+- 한도는 1G로 올렸다가 사용자 결정으로 512M로 되돌렸고([docker-compose.yml](../../../../docker-compose.yml)), 한도를 없애는 우회는 사용자가 택하지 않았어요.
 - 조치: 이 버그는 `memory.max`에 부딪힌 할당에서만 동작해요. `memory.high`를 넘은 쪽의 회수(`mem_cgroup_handle_over_high`)는 회수하고 늦추기만 하고 OOM을 부르지 않아요. 그래서 캐시를 384M 아래로 붙잡아 512M 벽에 닿지 않게 해요. 커널을 17.1로 되돌리는 방법도 있었지만, 보안 수정을 잃지 않는 이 방법을 택했어요.
-  2026-09-30 서버에서 실행 중인 컨테이너의 cgroup에 `memory.high` 384M를 직접 써서 시험했고, 받는 동안 잘 된다고 사용자가 확인했어요(카운터 값은 받지 않았어요). 저장소에는 컨테이너를 다시 만들어도 남도록 [transmission.slice](../../deploy/transmission.slice)(`MemoryHigh=384M`)와 compose의 `cgroup_parent`로 넣었어요. 되돌림이 들어간 커널이 나와도 남겨 둬도 괜찮아요.
+  2026-09-30 서버에서 실행 중인 컨테이너의 cgroup에 `memory.high` 384M를 직접 써서 시험했고, 받는 동안 잘 된다고 사용자가 확인했어요(카운터 값은 받지 않았어요). 저장소에는 컨테이너를 다시 만들어도 남도록 [transmission.slice](../../../../deploy/transmission.slice)(`MemoryHigh=384M`)와 compose의 `cgroup_parent`로 넣었어요. 되돌림이 들어간 커널이 나와도 남겨 둬도 괜찮아요.
   2026-10-01 서버에 slice를 설치하고 컨테이너를 다시 만든 뒤 `transmission.slice/memory.high`가 `402653184`(384M), 컨테이너의 `oom_kill`이 0이었어요(사용자 확인).
 - 이름 바꾸기가 되돌아가는 동안 생길 수 있는 일: Transmission(4.1.1 `renamePath`)은 바꿀 이름의 파일이 이미 있으면 파일을 옮기지 않고도 성공으로 답하고 토렌트를 그 파일에 이어요. 강제 종료 사이에 버려진 새 이름의 `.part`가 있으면, 받은 조각 기록과 파일 내용이 어긋날 수 있어요. 그래서 받는 중인 봇 토렌트를 한 번 verify해요.
 
@@ -103,7 +103,7 @@
 - 빠진 회차: 일회성 스크립트로 규칙마다 nyaa의 릴리스와 폴더·Transmission을 견줬어요. 빠진 회차는 없었어요. Re Zero S4와 Slime S4의 `missing`은 같은 규칙에 걸리는 이전 시즌 릴리스였어요(음수 보정이 1 미만이면 적용되지 않아 번호가 그대로 남음). Yani Neko는 nyaa에서 찾지 못해 폴더로 확인했고, 비어 있던 11화는 기본 받기 폴더(`/downloads/downloads`)로 받아지고 있었어요. 같은 내용의 사본이 규칙 폴더에도 있었어요.
 - `incomplete`에 남은 부분 파일 83개는 모두 어느 토렌트도 쓰지 않았어요. 받는 중인 토렌트가 없었고, 이름 바꾸기와 강제 종료가 되풀이되며 한 회차가 바뀐 이름과 릴리스 이름으로 두 벌씩 남은 경우가 많았어요. Yani Neko 폴더의 07–10화 릴리스 이름 사본과 07·09화 `.part`, 기본 받기 폴더의 11화 사본(모두 `cmp`로 같음)과 함께 `/data/storage1/media/.trash`로 옮겼어요(95G). 비우는 것은 사용자가 며칠 뒤 해요.
 - worker는 피드에서 빠진 봇 토렌트를 다 받았는지 보지 않고 Transmission에서 뺐어요(데이터는 남김). 이번에는 그렇게 빠진 토렌트가 없었지만(`Removed` 0), Transmission이 오래 멈추면 덜 받은 회차가 주인 없는 `.part`로 남을 수 있어요.
-  사용자 결정으로 다 받은 뒤에만 빼도록 바꿨어요([수집 명세](../specs/collection.md)). `0.4.1`부터 적용돼요.
+  사용자 결정으로 다 받은 뒤에만 빼도록 바꿨어요([수집 명세](../../../specs/collection.md)). `0.4.1`부터 적용돼요.
 
 ### 0.4.1 배포 (2026-10-01, 사용자 승인)
 
@@ -131,7 +131,7 @@
 - 옛 실행 파일과 견주던 테스트 `tests/legacy_comparison.rs`·`tests/worker_legacy_comparison.rs`와 표본 `tests/fixtures/sample_feed.xml`을 지웠어요. 견줄 대상이 사라졌고, 앞 티켓의 결과에 적힌 두 테스트는 그 시점의 기록으로 남아요.
 - `scripts/cron.sh`(`scripts/` 폴더 포함)와 `docker-compose.trss.yml`의 `legacy` 프로필 서비스 `trss`를 지웠어요.
 - `Dockerfile`은 `transmission-rss`를 이미지에 넣지 않고, ENTRYPOINT를 `/usr/local/bin/trss-worker`로 정했어요. 웹은 Compose처럼 `--entrypoint /usr/local/bin/trss-web`으로 실행해요. `FROM ... as`도 `AS`로 맞춰 빌드 경고를 없앴어요.
-- [readme](../../readme.md)의 `Switching from the cron job`과 `Rolling back`을 걷어냈어요. 서버에 남은 cron 항목은 이미 2026-10-01에 `cron.sh uninstall`로 지웠어요.
+- [readme](../../../../readme.md)의 `Switching from the cron job`과 `Rolling back`을 걷어냈어요. 서버에 남은 cron 항목은 이미 2026-10-01에 `cron.sh uninstall`로 지웠어요.
 
 ### 서버 점검 (2026-10-02, 0.5.0을 올리고 약 40분 뒤)
 
@@ -140,8 +140,16 @@
 - `docker stats`: worker 7.4MiB, web 3.9MiB(한도 128M), Transmission 16MiB(512M), CPU는 모두 0.1% 아래예요. 커널은 `5.14.0-687.53.1.el9_8`이에요.
 - `ss -ltn`: 웹 8080은 `192.168.1.21`에만 열려 있어요. 호스트의 네트워크 장치는 LAN(`enp3s0`)과 Docker 브리지뿐이에요. Transmission 9091은 `0.0.0.0`에 열려 있고 RPC 인증이 없어(LAN에서 세션 ID만으로 응답) LAN 안에서는 누구나 쓸 수 있어요. 이 저장소의 Transmission 설정 그대로이고 이번 배포가 바꾼 것은 아니에요.
 
+### 휴대폰·LTE 확인 (2026-10-04, 사용자 확인)
+
+- 사용자가 아래를 확인했다고 알렸어요(2026-10-04). 관찰한 값(응답 시간, 접속을 시도한 화면)은 받지 않았어요.
+  - 휴대폰 LTE에서 공인 IP로 웹(8080)과 Transmission(9091)에 닿지 않아요.
+  - 휴대폰에서 골격 화면(0003)과 규칙 편집(0006)을 한 번씩 했어요.
+  - 실제 `.torrent` 추가의 응답 시간을 봤어요.
+- 이 확인은 0.5.0의 서버에서 했어요. 0.5.0에는 결과 목표 3의 원격 인증 화면이 없어서, 그 경로의 보호는 이 확인에 들지 않아요.
+
 ### 남은 일
 
-- OOM 관찰, 커널 갱신, 자원 한도 재검토는 [0058](0058-server-oom-and-resource-limits.md)로 옮겼어요(사용자 결정, 2026-10-04). 결과 목표 1의 완료 조건에 들지 않고, 실제 서버를 며칠 운영해야 볼 수 있어서예요.
-- 휴대폰 LTE에서 공인 IP로 웹(8080)과 Transmission(9091)에 닿지 않는지 봐요. 공유기의 포트 포워딩에 달려 있어 서버 안에서는 확인할 수 없어요.
-- 휴대폰에서 0003·0006 수행, `.torrent` 추가 응답 시간을 봐요.
+- OOM 관찰, 커널 갱신, 자원 한도 재검토는 [0058](../../../tickets/0058-server-oom-and-resource-limits.md)로 옮겼어요(사용자 결정, 2026-10-04). 결과 목표 1의 완료 조건에 들지 않고, 실제 서버를 며칠 운영해야 볼 수 있어서예요.
+- 휴대폰·LTE 확인은 2026-10-04에 사용자 확인으로 마쳤어요(위).
+- 원격 인증 화면(결과 목표 3)의 보호를 실제 배포 경로에서 확인하는 일은 결과 목표 5의 [실제 배포의 접근 보호](../../../specs/web-app.md#접근-경계와-기기)로 넘겼어요. 서버는 0.5.0이라 아직 원격 화면이 없어요. 목표 3이 든 릴리스를 올릴 때 확인해요.

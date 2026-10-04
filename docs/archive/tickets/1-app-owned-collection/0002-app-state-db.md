@@ -1,7 +1,7 @@
 # 0002 채널·규칙을 앱 DB에 저장해요
 
 - 상태: 완료
-- 출처: [앱이 소유하는 설정](../specs/settings.md#앱이-소유하는-설정), [채널과 규칙 필드](../specs/settings.md#채널과-규칙-필드), [구현 경계와 실행 순서](../specs/web-app.md#구현-경계와-실행-순서), [저장소 ADR](../adr/0005-local-sqlite-app-state.md)
+- 출처: [앱이 소유하는 설정](../../../specs/settings.md#앱이-소유하는-설정), [채널과 규칙 필드](../../../specs/settings.md#채널과-규칙-필드), [구현 경계와 실행 순서](../../../specs/web-app.md#구현-경계와-실행-순서), [저장소 ADR](../../../adr/0005-local-sqlite-app-state.md)
 - 막는 티켓: 없음
 
 ## 작업
@@ -14,7 +14,7 @@
 - 규칙은 안정적인 ID, 채널 안 순서, 일치 문구(없을 수 있음), `regex`·`case_insensitive`, 저장 폴더, 회차 변환과 그 값을 자동으로 정했는지, 상태(`active`·`archived`)를 가져요.
   규칙 하나는 채널 하나에 속해요.
   구독 정보는 결과 목표 2에서 더해요.
-- 수정은 확인한 대상 버전을 받아, 그 사이 다른 쪽이 먼저 저장했으면 바꾸지 않고 충돌로 거부해요([웹 명령과 상태 갱신](../specs/web-app.md#웹-명령과-상태-갱신)).
+- 수정은 확인한 대상 버전을 받아, 그 사이 다른 쪽이 먼저 저장했으면 바꾸지 않고 충돌로 거부해요([웹 명령과 상태 갱신](../../../specs/web-app.md#웹-명령과-상태-갱신)).
 - 여러 채널·규칙을 함께 바꾸는 동작(가져오기의 채널 교체, 규칙 순서 변경)은 한 트랜잭션으로 반영해요.
 - 비밀 값은 DB에는 원문으로 두되, 조회 결과를 로그나 오류 문구에 찍을 때는 가린 값만 내보내요.
 
@@ -36,7 +36,7 @@
 ## 결과
 
 `rusqlite`(`bundled`)로 로컬 SQLite DB와 채널·규칙 저장소를 만들었어요.
-DB 기반은 `crates/trss-core/src/db.rs`, 채널·규칙 기능은 `crates/trss-collect/src/store/channels/`에 있어요([웹·worker 분리 ADR](../adr/0006-separate-web-worker-binaries.md)의 "기반은 분리, 기능별 SQL은 기능 모듈"에 맞췄어요).
+DB 기반은 `crates/trss-core/src/db.rs`, 채널·규칙 기능은 `crates/trss-collect/src/store/channels/`에 있어요([웹·worker 분리 ADR](../../../adr/0006-separate-web-worker-binaries.md)의 "기반은 분리, 기능별 SQL은 기능 모듈"에 맞췄어요).
 
 - 라이브러리: musl 릴리스에서 시스템 라이브러리 없이 SQLite를 C 소스로 함께 빌드하려고 `rusqlite`의 `bundled`를 골랐어요. 비동기 코드에서는 `Db::run`이 `spawn_blocking`으로 감싸 호출해요.
 - 마이그레이션: SQL을 바이너리에 내장하고 `PRAGMA user_version`으로 버전을 관리해요. 열 때 `BEGIN IMMEDIATE` 트랜잭션 안에서 밀린 것만 적용하므로, 두 프로세스가 동시에 열어도 한 번만 적용돼요. DB가 이 빌드보다 새 버전이면 열기를 거부해요.

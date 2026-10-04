@@ -1,7 +1,7 @@
 # 0006 수집 화면 규칙 탭에서 규칙을 고치고 미리 봐요
 
 - 상태: 완료
-- 출처: [채널과 다운로드 규칙](../specs/collection.md#채널과-다운로드-규칙), [수집 화면](../specs/collection.md#수집-화면), [웹 명령과 상태 갱신](../specs/web-app.md#웹-명령과-상태-갱신)
+- 출처: [채널과 다운로드 규칙](../../../specs/collection.md#채널과-다운로드-규칙), [수집 화면](../../../specs/collection.md#수집-화면), [웹 명령과 상태 갱신](../../../specs/web-app.md#웹-명령과-상태-갱신)
 - 막는 티켓: [0001](0001-rule-evaluation.md), [0002](0002-app-state-db.md), [0003](0003-web-shell.md), [0004](0004-worker-collection-history.md)
 
 ## 작업
