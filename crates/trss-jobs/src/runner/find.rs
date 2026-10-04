@@ -11,10 +11,9 @@
 //! kept as a file of the job's package, or dropped with why. One taker at a
 //! time for a job ([`Runner::find_take`]): the watch, a next run's start and
 //! the end of a job with no run never judge the same staged file. The screen
-//! follows the newest page of the run, so a post a popup opens is the one a
-//! person sees; a person may close such a page from the job's screen
-//! ([`ScreenStore::request_close`](crate::ScreenStore::request_close)), never
-//! the post the run opened, and the screen goes back to the page before it.
+//! follows the pages of the run like a site's check does ([`super::pages`]):
+//! a post a popup opens is the one a person sees, and a person may switch
+//! between the pages and close any but the post the run opened.
 //! The run ends as any other: an idle run closes and the files received stay;
 //! a person reopening the screen puts the job back in line and its next run
 //! opens the same post anew.
@@ -48,10 +47,8 @@ use crate::{
 /// What a find job waits for while its run is open: a person browsing it.
 pub const FIND_NOTE: &str = "원격 화면에서 게시물을 찾아 첨부 파일을 받아 주세요";
 
-/// How often the watch looks for a request to finish, and the screen's
-/// follower for new pages.
+/// How often the watch looks for a request to finish.
 const FINISH_POLL: Duration = Duration::from_millis(500);
-const PAGE_POLL: Duration = Duration::from_secs(1);
 
 impl Runner {
     /// One run of the find job `id` (see the module docs). Returns whether
@@ -356,12 +353,7 @@ impl Runner {
                 eprintln!("Subtitle job {job}: the files left by the run: {err}");
             }
         }
-        let follow = CancellationToken::new();
-        tokio::spawn(
-            self.clone()
-                .follow_pages(binding.clone(), browser.clone(), follow.clone()),
-        );
-        let _stop_following = follow.drop_guard();
+        let _stop_following = self.follow_pages_of(&binding, &browser);
         loop {
             let next = tokio::select! {
                 biased;
@@ -448,83 +440,6 @@ impl Runner {
                 }
             }
             tokio::time::sleep(FINISH_POLL).await;
-        }
-    }
-
-    /// Keeps the job's screen on the newest page of its run: a page the
-    /// post opened (a popup) is shown once it stays, and when the page shown
-    /// closes, the newest one left is. A page shown that a person asked to
-    /// close ([`ScreenStore::take_close`](crate::ScreenStore::take_close)) is
-    /// closed in the browser, unless it is the run's first. Ends with the
-    /// binding, or `stop`.
-    async fn follow_pages(
-        self,
-        binding: screen::Binding,
-        browser: Arc<dyn AuthBrowser>,
-        stop: CancellationToken,
-    ) {
-        let (job, run) = (binding.job_id.as_str(), binding.run_id.as_str());
-        // The pages in the order they came; a page counts once seen twice,
-        // so one that opens and closes at once is never shown.
-        let mut order = vec![binding.target_id.clone()];
-        let mut seen_once: Vec<String> = Vec::new();
-        let mut shown = binding.target_id.clone();
-        loop {
-            tokio::select! {
-                biased;
-                _ = stop.cancelled() => return,
-                _ = tokio::time::sleep(PAGE_POLL) => {}
-            }
-            if !browser.is_live(job, run) {
-                return;
-            }
-            match self.screens.take_close(job, run).await {
-                // Only the page the person saw: one shown since is not
-                // theirs to close.
-                Ok(Some(target)) if target == shown => {
-                    if browser.close_page(job, run, &target).await {
-                        println!("Subtitle job {job}: a page the post opened was closed");
-                    }
-                }
-                Ok(_) => {}
-                Err(err) => eprintln!("Subtitle job {job}: a request to close a page: {err}"),
-            }
-            let pages = browser.pages(job, run);
-            let fresh: Vec<String> = pages
-                .iter()
-                .filter(|p| !order.contains(p))
-                .cloned()
-                .collect();
-            for page in &fresh {
-                if seen_once.contains(page) {
-                    order.push(page.clone());
-                }
-            }
-            seen_once = fresh;
-            let newest = order
-                .iter()
-                .rev()
-                .find(|p| pages.contains(p))
-                .cloned()
-                .or_else(|| pages.last().cloned());
-            let Some(newest) = newest else {
-                continue;
-            };
-            if newest == shown {
-                continue;
-            }
-            match self.screens.retarget(job, run, &newest, self.now()).await {
-                Ok(true) => shown = newest,
-                // The binding is not this run's any more.
-                Ok(false) => match self.screens.bound(job).await {
-                    Ok(Some(bound)) if bound.run_id == run => shown = bound.target_id,
-                    _ => return,
-                },
-                Err(err) => {
-                    eprintln!("Subtitle job {job}: following the run's pages: {err}");
-                    return;
-                }
-            }
         }
     }
 }

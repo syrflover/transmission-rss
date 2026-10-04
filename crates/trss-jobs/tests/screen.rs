@@ -61,6 +61,12 @@ struct FakeBrowser {
     /// Whether `rearm` waits for `rearm_go` (a check being brought back).
     hold_rearm: AtomicBool,
     rearm_go: Notify,
+    /// The pages the run has open; the first is the one it was prepared
+    /// with.
+    pages: Mutex<Vec<String>>,
+    /// Every page asked to close, and those that were closed.
+    close_calls: Mutex<Vec<String>>,
+    closed: Mutex<Vec<String>>,
 }
 
 impl FakeBrowser {
@@ -113,9 +119,11 @@ impl AuthBrowser for FakeBrowser {
                 format!("run-{}", prepared.len())
             };
             self.live.lock().unwrap().insert(run.clone());
+            let target = format!("target-{}", prepared.len());
+            *self.pages.lock().unwrap() = vec![target.clone()];
             Ok(Prepared {
                 run_id: run,
-                target_id: format!("target-{}", prepared.len()),
+                target_id: target,
             })
         })
     }
@@ -173,6 +181,35 @@ impl AuthBrowser for FakeBrowser {
         Box::pin(async move {
             self.released.lock().unwrap().push(job.to_owned());
             self.live.lock().unwrap().clear();
+        })
+    }
+
+    fn pages(&self, job: &str, run_id: &str) -> Vec<String> {
+        match self.is_live(job, run_id) {
+            true => self.pages.lock().unwrap().clone(),
+            false => Vec::new(),
+        }
+    }
+
+    fn close_page<'a>(
+        &'a self,
+        job: &'a str,
+        run_id: &'a str,
+        target: &'a str,
+    ) -> BoxFuture<'a, bool> {
+        Box::pin(async move {
+            self.close_calls.lock().unwrap().push(target.to_owned());
+            let mut pages = self.pages.lock().unwrap();
+            if !self.is_live(job, run_id) || pages.first().map(String::as_str) == Some(target) {
+                return false;
+            }
+            let before = pages.len();
+            pages.retain(|p| p != target);
+            let closed = pages.len() < before;
+            if closed {
+                self.closed.lock().unwrap().push(target.to_owned());
+            }
+            closed
         })
     }
 
@@ -515,6 +552,47 @@ async fn a_preparation_that_fails_leaves_the_screen_closed_with_why_and_a_reques
         s.screens.screen(&id).await.unwrap().unwrap().state,
         ScreenState::Ready
     );
+}
+
+#[tokio::test]
+async fn the_tabs_and_requests_of_a_binding_never_reach_the_next_one() {
+    let s = setup(true).await;
+    let id = waiting(&s).await;
+    let item = s.screens.bound(&id).await.unwrap().unwrap().item_id;
+    let pages = ["target-1".to_owned(), "popup-1".to_owned()];
+    // The same run bound again (another check of the job), and bound again
+    // after a worker restart cleared it: a request written for the binding
+    // before is not the new one's.
+    for restart in [false, true] {
+        s.screens
+            .set_pages(&id, "run-1", &pages, 1_000)
+            .await
+            .unwrap();
+        let bound = shown(&s, &id).await.bound_at.unwrap();
+        assert!(s
+            .screens
+            .request_switch(&id, "run-1", bound, "popup-1", 2_000)
+            .await
+            .unwrap());
+        assert!(s
+            .screens
+            .request_close(&id, "run-1", bound, Some("popup-1"), 2_000)
+            .await
+            .unwrap());
+        if restart {
+            assert_eq!(s.screens.unbind_all(2_500).await.unwrap(), 1);
+            let screen = shown(&s, &id).await;
+            assert!(screen.pages.is_empty() && screen.first_target_id.is_none());
+        }
+        s.screens
+            .bind(&id, item, "run-1", "target-1", 3_000 + i64::from(restart))
+            .await
+            .unwrap();
+        let screen = shown(&s, &id).await;
+        assert_eq!(screen.pages, vec!["target-1".to_owned()]);
+        assert_eq!(s.screens.take_switch(&id, "run-1").await.unwrap(), None);
+        assert!(s.screens.take_close(&id, "run-1").await.unwrap().is_empty());
+    }
 }
 
 #[tokio::test]
@@ -901,4 +979,310 @@ async fn opening_the_screen_of_a_live_run_brings_its_check_back_once_at_a_time()
     tend(&s).await;
     tokio::time::sleep(Duration::from_millis(50)).await;
     assert_eq!(s.browser.rearmed.lock().unwrap().len(), before);
+}
+
+/// The job's screen as the web reads it.
+async fn shown(s: &Setup, id: &str) -> trss_jobs::Screen {
+    s.screens.screen(id).await.unwrap().unwrap()
+}
+
+/// Waits until the screen shows `target`, for up to five seconds.
+async fn shows(s: &Setup, id: &str, target: &str) {
+    for _ in 0..500 {
+        if shown(s, id).await.target_id.as_deref() == Some(target) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("the screen does not show {target}");
+}
+
+fn open_page(s: &Setup, page: &str) {
+    s.browser.pages.lock().unwrap().push(page.to_owned());
+}
+
+/// A check's screen with a popup open and shown: `target-1` is the first page.
+async fn with_a_popup(s: &Setup) -> String {
+    let id = waiting(s).await;
+    tend(s).await;
+    open_page(s, "popup-1");
+    shows(s, &id, "popup-1").await;
+    id
+}
+
+#[tokio::test]
+async fn a_check_screen_follows_a_popup_that_stays_and_lists_its_pages() {
+    let s = setup(true).await;
+    let id = waiting(&s).await;
+    tend(&s).await;
+    let first = shown(&s, &id).await;
+    assert_eq!(first.pages, vec!["target-1".to_owned()]);
+    assert_eq!(first.first_target_id.as_deref(), Some("target-1"));
+
+    // A page that opens and closes at once is no tab.
+    open_page(&s, "blink");
+    tokio::time::sleep(Duration::from_millis(900)).await;
+    s.browser.pages.lock().unwrap().retain(|p| p != "blink");
+    tokio::time::sleep(Duration::from_millis(1_500)).await;
+    assert_eq!(shown(&s, &id).await.bound_at, first.bound_at);
+
+    // One that stays is shown, as a new binding of the same run, and a tab.
+    open_page(&s, "popup-1");
+    shows(&s, &id, "popup-1").await;
+    let popup = shown(&s, &id).await;
+    assert_eq!(popup.run_id, first.run_id);
+    assert!(popup.bound_at > first.bound_at);
+    assert!(popup.popup);
+    assert_eq!(
+        popup.pages,
+        vec!["target-1".to_owned(), "popup-1".to_owned()]
+    );
+}
+
+#[tokio::test]
+async fn a_persons_switch_on_a_check_screen_is_kept_and_a_closed_shown_tab_goes_to_the_newest_left()
+{
+    let s = setup(true).await;
+    let id = with_a_popup(&s).await;
+    let popup = shown(&s, &id).await;
+    let run_id = popup.run_id.clone().unwrap();
+
+    // Back to the first page: not undone at the follower's next looks.
+    assert!(s
+        .screens
+        .request_switch(&id, &run_id, popup.bound_at.unwrap(), "target-1", 5_000)
+        .await
+        .unwrap());
+    shows(&s, &id, "target-1").await;
+    let back = shown(&s, &id).await;
+    assert!(back.bound_at > popup.bound_at);
+    tokio::time::sleep(Duration::from_millis(2_500)).await;
+    let kept = shown(&s, &id).await;
+    assert_eq!(kept.target_id.as_deref(), Some("target-1"));
+    assert_eq!(kept.bound_at, back.bound_at);
+
+    // A second popup that stays is shown.
+    open_page(&s, "popup-2");
+    shows(&s, &id, "popup-2").await;
+    // Closing the shown page: the newest page left is shown.
+    let second = shown(&s, &id).await;
+    assert!(s
+        .screens
+        .request_close(&id, &run_id, second.bound_at.unwrap(), None, 6_000)
+        .await
+        .unwrap());
+    shows(&s, &id, "popup-1").await;
+    assert_eq!(
+        *s.browser.closed.lock().unwrap(),
+        vec!["popup-2".to_owned()]
+    );
+    assert_eq!(
+        shown(&s, &id).await.pages,
+        vec!["target-1".to_owned(), "popup-1".to_owned()]
+    );
+}
+
+#[tokio::test]
+async fn closing_a_tab_that_is_not_shown_closes_only_that_page() {
+    let s = setup(true).await;
+    let id = with_a_popup(&s).await;
+    let popup = shown(&s, &id).await;
+    let run_id = popup.run_id.clone().unwrap();
+    // The first page is shown now; the popup is the hidden one.
+    s.screens
+        .request_switch(&id, &run_id, popup.bound_at.unwrap(), "target-1", 5_000)
+        .await
+        .unwrap();
+    shows(&s, &id, "target-1").await;
+    let first = shown(&s, &id).await;
+
+    assert!(s
+        .screens
+        .request_close(
+            &id,
+            &run_id,
+            first.bound_at.unwrap(),
+            Some("popup-1"),
+            6_000
+        )
+        .await
+        .unwrap());
+    until(|| async { s.browser.pages.lock().unwrap().len() == 1 }).await;
+    assert_eq!(
+        *s.browser.closed.lock().unwrap(),
+        vec!["popup-1".to_owned()]
+    );
+    // The screen is as it was: the same binding, with one tab.
+    until(|| async { shown(&s, &id).await.pages == vec!["target-1".to_owned()] }).await;
+    let now = shown(&s, &id).await;
+    assert_eq!(now.target_id.as_deref(), Some("target-1"));
+    assert_eq!(now.bound_at, first.bound_at);
+}
+
+#[tokio::test]
+async fn a_request_for_another_binding_an_unlisted_page_or_the_first_page_is_refused() {
+    let s = setup(true).await;
+    let id = with_a_popup(&s).await;
+    let popup = shown(&s, &id).await;
+    let (run_id, bound) = (popup.run_id.clone().unwrap(), popup.bound_at.unwrap());
+    let stale = bound - 1;
+    for (what, asked) in [
+        (
+            "a binding the person no longer sees",
+            s.screens
+                .request_switch(&id, &run_id, stale, "target-1", 5_000)
+                .await
+                .unwrap(),
+        ),
+        (
+            "a page that is not listed",
+            s.screens
+                .request_switch(&id, &run_id, bound, "elsewhere", 5_000)
+                .await
+                .unwrap(),
+        ),
+        (
+            "another run",
+            s.screens
+                .request_switch(&id, "run-0", bound, "target-1", 5_000)
+                .await
+                .unwrap(),
+        ),
+        (
+            "closing on a binding the person no longer sees",
+            s.screens
+                .request_close(&id, &run_id, stale, Some("popup-1"), 5_000)
+                .await
+                .unwrap(),
+        ),
+        (
+            "closing a page that is not listed",
+            s.screens
+                .request_close(&id, &run_id, bound, Some("elsewhere"), 5_000)
+                .await
+                .unwrap(),
+        ),
+        (
+            "closing the first page",
+            s.screens
+                .request_close(&id, &run_id, bound, Some("target-1"), 5_000)
+                .await
+                .unwrap(),
+        ),
+        ("closing the page shown when it is the first", {
+            s.screens
+                .request_switch(&id, &run_id, bound, "target-1", 5_000)
+                .await
+                .unwrap();
+            shows(&s, &id, "target-1").await;
+            let first = shown(&s, &id).await;
+            s.screens
+                .request_close(&id, &run_id, first.bound_at.unwrap(), None, 5_000)
+                .await
+                .unwrap()
+        }),
+    ] {
+        assert!(!asked, "{what} was written");
+    }
+    // Nothing was left for the worker, and no page was closed or asked of the
+    // browser: the first page is not even asked to close.
+    assert_eq!(s.screens.take_switch(&id, &run_id).await.unwrap(), None);
+    assert!(s.screens.take_close(&id, &run_id).await.unwrap().is_empty());
+    assert!(s.browser.close_calls.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_request_that_was_written_is_taken_once_and_counts_as_the_persons_input() {
+    let s = setup(true).await;
+    let id = waiting(&s).await;
+    // Pages as the worker listed them: no follower is needed to judge a request.
+    assert!(s
+        .screens
+        .set_pages(
+            &id,
+            "run-1",
+            &["target-1".to_owned(), "popup-1".to_owned()],
+            1_500
+        )
+        .await
+        .unwrap());
+    // The same list is not written again.
+    assert!(!s
+        .screens
+        .set_pages(
+            &id,
+            "run-1",
+            &["target-1".to_owned(), "popup-1".to_owned()],
+            1_600
+        )
+        .await
+        .unwrap());
+    let bound = shown(&s, &id).await.bound_at.unwrap();
+    assert!(s.screens.live_inputs().await.unwrap().is_empty());
+
+    assert!(s
+        .screens
+        .request_switch(&id, "run-1", bound, "popup-1", 2_000)
+        .await
+        .unwrap());
+    assert_eq!(
+        s.screens.live_inputs().await.unwrap(),
+        vec![("run-1".to_owned(), 2_000)]
+    );
+    // The newest request is the one taken, once.
+    assert!(s
+        .screens
+        .request_switch(&id, "run-1", bound, "target-1", 2_100)
+        .await
+        .unwrap());
+    assert_eq!(
+        s.screens
+            .take_switch(&id, "run-1")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("target-1")
+    );
+    assert_eq!(s.screens.take_switch(&id, "run-1").await.unwrap(), None);
+
+    assert!(s
+        .screens
+        .request_close(&id, "run-1", bound, Some("popup-1"), 3_000)
+        .await
+        .unwrap());
+    // The same page asked twice is one request.
+    assert!(s
+        .screens
+        .request_close(&id, "run-1", bound, Some("popup-1"), 3_100)
+        .await
+        .unwrap());
+    assert_eq!(
+        s.screens.live_inputs().await.unwrap(),
+        vec![("run-1".to_owned(), 3_100)]
+    );
+    assert_eq!(
+        s.screens.take_close(&id, "run-1").await.unwrap(),
+        vec!["popup-1".to_owned()]
+    );
+    assert!(s.screens.take_close(&id, "run-1").await.unwrap().is_empty());
+
+    // The pages and requests go with the binding.
+    assert!(s
+        .screens
+        .request_switch(&id, "run-1", bound, "popup-1", 4_000)
+        .await
+        .unwrap());
+    s.screens
+        .unbind(&id, "run-1", RUN_ENDED, 5_000)
+        .await
+        .unwrap();
+    assert!(s
+        .screens
+        .screen(&id)
+        .await
+        .unwrap()
+        .unwrap()
+        .pages
+        .is_empty());
+    assert_eq!(s.screens.take_switch(&id, "run-1").await.unwrap(), None);
 }

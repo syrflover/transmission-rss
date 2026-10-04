@@ -28,6 +28,19 @@
 //! went to the page before the change (and is let go by it) or is judged
 //! against the new generation (and dropped).
 //!
+//! # What the screen says about its pages
+//!
+//! Besides frames, a hub tells its sockets the state of the page shown (the
+//! back and forward buttons, the host: the `nav` message) and the run's tabs
+//! (the `tabs` message), both built in [`super::nav`] and sent only when they
+//! change, and again to a socket that connects or skipped messages. They are
+//! read again when the browser says a page navigated or a target changed
+//! (the events are told to the refresher, which reads at most every
+//! [`REFRESH_GAP`]) and when the worker's list of the run's pages changes.
+//! Back and forward are judged here against the page's own history each time
+//! (a step back never goes before the first page that is not blank), whatever
+//! a socket believes.
+//!
 //! # Seats
 //!
 //! At most [`MAX_SOCKETS`] sockets are open on a hub. A new one always gets
@@ -49,12 +62,13 @@ use tokio::sync::{
         self,
         error::{RecvError, TryRecvError},
     },
-    mpsc, oneshot,
+    mpsc, oneshot, Notify,
 };
 use tokio_util::sync::{CancellationToken, DropGuard};
 use trss_browser::cdp::{Connection, Event};
 use trss_jobs::ScreenStore;
 
+use super::nav::{tabs_message, History};
 use crate::commands_api::now_millis;
 
 /// How many frames and notes wait for a slow socket before it skips some.
@@ -64,6 +78,9 @@ const FRAME_QUALITY: u32 = 70;
 /// How far a frame's size may be from the device's and still be its (the
 /// browser rounds).
 const SIZE_SLACK: f64 = 1.5;
+/// The least time between two readings of the page's history and the run's
+/// targets, however many events ask for one.
+const REFRESH_GAP: Duration = Duration::from_millis(150);
 
 /// What a device reports when it opens the screen or changes its size.
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
@@ -148,6 +165,8 @@ pub enum Incoming {
         text: String,
     },
     Reload,
+    Back,
+    Forward,
 }
 
 #[derive(Debug, Deserialize)]
@@ -277,7 +296,7 @@ fn command_of(message: &Incoming, view: &View) -> Option<(&'static str, Value)> 
             let length = text.chars().count();
             (length > 0 && length <= 2000).then(|| ("Input.insertText", json!({ "text": text })))
         }
-        Incoming::Viewport(_) | Incoming::Reload => None,
+        Incoming::Viewport(_) | Incoming::Reload | Incoming::Back | Incoming::Forward => None,
     }
 }
 
@@ -340,6 +359,15 @@ pub struct Hub {
     /// changed; `reason` says which (`browser`, `run`).
     ended: CancellationToken,
     reason: Mutex<&'static str>,
+    /// The `nav` and `tabs` messages as last sent.
+    nav: Mutex<Option<Arc<str>>>,
+    tabs: Mutex<Option<Arc<str>>>,
+    /// The pages the worker listed when the hub last read the screen.
+    listed: Mutex<Vec<String>>,
+    /// Told that `nav` or `tabs` may be out of date.
+    changed: Arc<Notify>,
+    /// One reading of the page and the targets at a time.
+    refresh: tokio::sync::Mutex<()>,
     _stop_tasks: DropGuard,
 }
 
@@ -404,6 +432,16 @@ impl Hub {
         conn.command(Some(&session), "Page.enable", json!({}))
             .await
             .map_err(|e| format!("Page.enable: {e}"))?;
+        // The tabs follow the run's other targets: their titles and
+        // addresses change as they load. Without it they are read when the
+        // worker's list or the page changes.
+        let _ = conn
+            .command(
+                None,
+                "Target.setDiscoverTargets",
+                json!({ "discover": true }),
+            )
+            .await;
         let stop = CancellationToken::new();
         let (out, _) = broadcast::channel(OUT_BACKLOG);
         let (barriers, barrier_feed) = mpsc::unbounded_channel();
@@ -423,6 +461,11 @@ impl Hub {
             seats: Mutex::default(),
             ended: CancellationToken::new(),
             reason: Mutex::new("browser"),
+            nav: Mutex::default(),
+            tabs: Mutex::default(),
+            listed: Mutex::default(),
+            changed: Arc::new(Notify::new()),
+            refresh: tokio::sync::Mutex::new(()),
             _stop_tasks: stop.clone().drop_guard(),
         });
         tokio::spawn(pump(
@@ -432,7 +475,10 @@ impl Hub {
             barrier_feed,
             stop.clone(),
         ));
+        tokio::spawn(refresher(Arc::downgrade(&hub), stop.clone()));
         tokio::spawn(watch_binding(Arc::downgrade(&hub), check_every, stop));
+        // Before the first frame: a socket that connects finds the state.
+        hub.read_state().await;
         hub.start_screencast(None)
             .await
             .map_err(|e| format!("screencast: {e}"))?;
@@ -465,6 +511,15 @@ impl Hub {
 
     pub fn subscribe(&self) -> broadcast::Receiver<Arc<str>> {
         self.out.subscribe()
+    }
+
+    /// The `nav` and `tabs` messages as last sent, for a socket that
+    /// connects or skipped some.
+    pub fn states(&self) -> Vec<Arc<str>> {
+        [&self.nav, &self.tabs]
+            .into_iter()
+            .filter_map(|slot| slot.lock().expect("state lock").clone())
+            .collect()
     }
 
     pub fn is_ended(&self) -> bool {
@@ -538,6 +593,14 @@ impl Hub {
                 self.input_came().await;
                 Handled::Done
             }
+            Incoming::Back => {
+                self.step(true).await;
+                Handled::Done
+            }
+            Incoming::Forward => {
+                self.step(false).await;
+                Handled::Done
+            }
             Incoming::Mouse { gen, .. }
             | Incoming::Touch { gen, .. }
             | Incoming::Key { gen, .. }
@@ -562,6 +625,81 @@ impl Hub {
                 Handled::Done
             }
         }
+    }
+}
+
+impl Hub {
+    /// One step back (or forward) in the page's history, when its own history
+    /// allows it now ([`History::back`]): a step back never goes to the blank
+    /// page the server passed through, whatever the socket believes. Counts as
+    /// a person's input. A step the browser refuses (its history changed
+    /// between the read and the step) is only not taken: a page or connection
+    /// that is gone ends the hub through its own events, not through one
+    /// press of a button.
+    async fn step(&self, back: bool) {
+        if let Ok(history) = self.history().await {
+            let entry = if back {
+                history.back()
+            } else {
+                history.forward()
+            };
+            if let Some(entry) = entry {
+                let _ = self
+                    .send("Page.navigateToHistoryEntry", json!({ "entryId": entry }))
+                    .await;
+            }
+        }
+        self.input_came().await;
+        // A step that was refused leaves the buttons as the page says.
+        self.changed.notify_one();
+    }
+
+    async fn history(&self) -> Result<History, String> {
+        let answer = self.send("Page.getNavigationHistory", json!({})).await?;
+        History::parse(&answer).ok_or_else(|| "no history".to_owned())
+    }
+
+    /// Reads the state of the page shown and the run's tabs, and tells the
+    /// sockets what changed.
+    async fn read_state(&self) {
+        let _one = self.refresh.lock().await;
+        if let Ok(history) = self.history().await {
+            self.publish(&self.nav, history.nav().message());
+        }
+        let screen = match self.screens.screen(&self.job).await {
+            Ok(Some(screen)) if screen.run_id.as_deref() == Some(self.binding.run.as_str()) => {
+                screen
+            }
+            _ => return,
+        };
+        *self.listed.lock().expect("listed lock") = screen.pages.clone();
+        let Ok(answer) = self
+            .conn
+            .command(None, "Target.getTargets", json!({}))
+            .await
+        else {
+            return;
+        };
+        let message = tabs_message(
+            &screen.pages,
+            &answer["targetInfos"],
+            &self.binding.target,
+            screen.first_target_id.as_deref(),
+        );
+        self.publish(&self.tabs, message);
+    }
+
+    /// Sends `message` to the sockets when it is not what `slot` last held.
+    fn publish(&self, slot: &Mutex<Option<Arc<str>>>, message: String) {
+        let message: Arc<str> = message.into();
+        {
+            let mut last = slot.lock().expect("state lock");
+            if last.as_deref() == Some(&*message) {
+                return;
+            }
+            *last = Some(message.clone());
+        }
+        let _ = self.out.send(message);
     }
 }
 
@@ -719,6 +857,16 @@ impl Hub {
                 self.end()
             }
             "Inspector.detached" if ours => self.end(),
+            // The page shown went to another address (the main frame, or a
+            // change of the address within its document), or a target of the
+            // run changed its title or address, came or went.
+            "Page.frameNavigated" if ours && event.params["frame"]["parentId"].is_null() => {
+                self.changed.notify_one()
+            }
+            "Page.navigatedWithinDocument" if ours => self.changed.notify_one(),
+            "Target.targetCreated" | "Target.targetDestroyed" | "Target.targetInfoChanged" => {
+                self.changed.notify_one()
+            }
             _ => {}
         }
     }
@@ -880,6 +1028,34 @@ async fn pump(
     }
 }
 
+/// Reads the page's state and the run's tabs whenever they may have changed
+/// (see the module docs), at most every [`REFRESH_GAP`], until the hub is
+/// dropped.
+async fn refresher(hub: std::sync::Weak<Hub>, stop: CancellationToken) {
+    loop {
+        let Some(changed) = hub.upgrade().map(|hub| hub.changed.clone()) else {
+            return;
+        };
+        tokio::select! {
+            _ = stop.cancelled() => return,
+            _ = changed.notified() => {}
+        }
+        {
+            let Some(hub) = hub.upgrade() else {
+                return;
+            };
+            if hub.is_ended() {
+                return;
+            }
+            hub.read_state().await;
+        }
+        tokio::select! {
+            _ = stop.cancelled() => return,
+            _ = tokio::time::sleep(REFRESH_GAP) => {}
+        }
+    }
+}
+
 /// Ends the hub (`run`) once its binding is no longer the job's: the job no
 /// longer waits for its check, or another run, page or binding took its
 /// place. One reading every `every` for all the sockets of the hub.
@@ -902,7 +1078,7 @@ async fn watch_binding(hub: std::sync::Weak<Hub>, every: Duration, stop: Cancell
             continue;
         };
         let b = &hub.binding;
-        let still = screen.is_some_and(|s| {
+        let still = screen.as_ref().is_some_and(|s| {
             s.waiting
                 && s.run_id.as_deref() == Some(b.run.as_str())
                 && s.target_id.as_deref() == Some(b.target.as_str())
@@ -911,6 +1087,11 @@ async fn watch_binding(hub: std::sync::Weak<Hub>, every: Duration, stop: Cancell
         if !still {
             hub.end_because("run");
             return;
+        }
+        // The worker changed the run's list of pages.
+        let pages = screen.map(|s| s.pages).unwrap_or_default();
+        if *hub.listed.lock().expect("listed lock") != pages {
+            hub.changed.notify_one();
         }
     }
 }

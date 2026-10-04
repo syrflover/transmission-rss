@@ -41,6 +41,9 @@ struct Seen {
     others: Vec<String>,
 }
 
+/// The index of the entry shown, and the entries (ID, address).
+type FakeHistory = (usize, Vec<(i64, String)>);
+
 #[derive(Clone, Default)]
 struct Launcher {
     seen: Arc<Mutex<Seen>>,
@@ -51,6 +54,50 @@ struct Launcher {
     quiet: Arc<std::sync::atomic::AtomicBool>,
     /// Set: a mouse press is answered only after 300 ms.
     slow_press: Arc<std::sync::atomic::AtomicBool>,
+    /// The history of every page: the index of the entry shown, and the
+    /// entries (ID, address). A step to an entry changes the index.
+    history: Arc<Mutex<FakeHistory>>,
+    /// The targets the browser reports (`Target.getTargets`).
+    targets: Arc<Mutex<Value>>,
+}
+
+/// The address a fake page is at: a path, a query and a fragment that must
+/// never leave the web.
+const SECRET_PAGE: &str = "https://blog.example.org/post/1?sig=SECRET#frag";
+const SECRET_NEXT: &str = "https://files.example.org/get/a.srt?sig=SECRET2";
+
+impl Launcher {
+    fn new() -> Launcher {
+        let launcher = Launcher::default();
+        // What the server's own preparation leaves: a blank page, then the post.
+        launcher.set_history(1, &["about:blank", SECRET_PAGE]);
+        launcher
+    }
+
+    /// The history of the pages is `urls`, at the entry `current`.
+    fn set_history(&self, current: usize, urls: &[&str]) {
+        *self.history.lock().unwrap() = (
+            current,
+            urls.iter()
+                .enumerate()
+                .map(|(n, u)| (n as i64 + 10, (*u).to_owned()))
+                .collect(),
+        );
+    }
+
+    fn set_targets(&self, targets: Value) {
+        *self.targets.lock().unwrap() = targets;
+    }
+
+    fn count(&self, method: &str) -> usize {
+        self.seen
+            .lock()
+            .unwrap()
+            .commands
+            .iter()
+            .filter(|(_, m, _)| m == method)
+            .count()
+    }
 }
 
 impl Launcher {
@@ -140,8 +187,32 @@ async fn page(mut socket: axum::extract::ws::WebSocket, run: String, launcher: L
             .push((run.clone(), method.clone(), params.clone()));
         let result = match method.as_str() {
             "Target.attachToTarget" => json!({ "sessionId": session }),
+            "Target.getTargets" => {
+                json!({ "targetInfos": launcher.targets.lock().unwrap().clone() })
+            }
+            "Page.getNavigationHistory" => {
+                let (current, entries) = launcher.history.lock().unwrap().clone();
+                json!({
+                    "currentIndex": current,
+                    "entries": entries.iter()
+                        .map(|(id, url)| json!({ "id": id, "url": url, "title": "" }))
+                        .collect::<Vec<_>>(),
+                })
+            }
             _ => json!({}),
         };
+        // A step to a history entry is a navigation of the main frame.
+        let stepped = (method == "Page.navigateToHistoryEntry")
+            .then(|| {
+                let mut history = launcher.history.lock().unwrap();
+                let at = history
+                    .1
+                    .iter()
+                    .position(|(id, _)| *id == params["entryId"])?;
+                history.0 = at;
+                Some(history.1[at].1.clone())
+            })
+            .flatten();
         let answer =
             json!({ "id": command["id"], "result": result, "sessionId": command["sessionId"] });
         if method == "Input.dispatchMouseEvent"
@@ -176,6 +247,14 @@ async fn page(mut socket: axum::extract::ws::WebSocket, run: String, launcher: L
             height = params["height"].as_f64().unwrap();
         }
         let quiet = launcher.quiet.load(std::sync::atomic::Ordering::SeqCst);
+        if let Some(url) = stepped {
+            let event = json!({
+                "method": "Page.frameNavigated",
+                "sessionId": session,
+                "params": { "frame": { "id": "main", "url": url } },
+            });
+            let _ = socket.send(Message::Text(event.to_string().into())).await;
+        }
         if method == "Page.startScreencast" && !quiet {
             frame += 1;
             let event = json!({
@@ -227,7 +306,7 @@ async fn setup(with_browser: bool) -> Setup {
 async fn setup_pinging(with_browser: bool, ping_every: Duration, pong_within: Duration) -> Setup {
     let dir = tempfile::tempdir().unwrap();
     let db = Db::open(dir.path().join("app.db")).await.unwrap();
-    let launcher = Launcher::default();
+    let launcher = Launcher::new();
     let launcher_addr = serve(
         Router::new()
             .route("/runs/{run}/cdp", get(cdp))
@@ -585,67 +664,262 @@ async fn reading_the_job_and_the_lists_asks_for_no_run_and_opening_its_page_does
     assert_eq!(status, 404);
 }
 
-#[tokio::test]
-async fn a_person_asks_the_worker_to_close_a_find_jobs_popup_and_the_web_sends_the_browser_nothing()
-{
-    let s = setup(true).await;
+/// The job's screen with a popup `P1` listed after the first page `T1`.
+async fn with_two_pages(s: &Setup) {
     s.waiting_on("run-1").await;
-    let close = format!("/api/subtitle-jobs/{}/screen/close", s.job);
-    let asked = |bound: i64| json!({ "run": "run-1", "bound": bound });
-
-    // A site's check has no popup to close.
     s.screens()
-        .retarget(&s.job, "run-1", "P1", 2_000)
+        .set_pages(&s.job, "run-1", &["T1".to_owned(), "P1".to_owned()], 1_500)
         .await
         .unwrap();
-    assert_eq!(s.http_json("POST", &close, &asked(2_000)).await, 409);
+}
 
-    // A find job's screen on a page its post opened.
-    s.state
-        .jobs
-        .db()
-        .run::<_, DbError, _>(|c| Ok(c.execute("UPDATE subtitle_jobs SET origin = 'find'", [])?))
-        .await
-        .unwrap();
-    let (_, detail) = s
-        .http("GET", &format!("/api/subtitle-jobs/{}", s.job))
-        .await;
-    assert_eq!(detail["screen"]["popup"], true);
-    // Asked on a binding the person no longer sees: refused.
-    assert_eq!(s.http_json("POST", &close, &asked(1_000)).await, 409);
-    assert_eq!(s.http_json("POST", &close, &asked(2_000)).await, 202);
+#[tokio::test]
+async fn a_person_asks_the_worker_to_show_a_tab_and_the_web_sends_the_browser_nothing() {
+    let s = setup(true).await;
+    with_two_pages(&s).await;
+    let switch = format!("/api/subtitle-jobs/{}/screen/switch", s.job);
+    let asked =
+        |bound: i64, target: &str| json!({ "run": "run-1", "bound": bound, "target": target });
+
+    // Refused: a binding the person no longer sees, a page the worker did
+    // not list, another run.
+    assert_eq!(s.http_json("POST", &switch, &asked(999, "P1")).await, 409);
+    assert_eq!(s.http_json("POST", &switch, &asked(1_000, "Z9")).await, 409);
+    assert_eq!(
+        s.http_json(
+            "POST",
+            &switch,
+            &json!({ "run": "run-0", "bound": 1_000, "target": "P1" })
+        )
+        .await,
+        409
+    );
+    assert_eq!(
+        s.screens().take_switch(&s.job, "run-1").await.unwrap(),
+        None
+    );
+    assert_eq!(s.input_at().await, None);
+
+    // Asked for a listed page, for a check as for a find job's screen.
+    assert_eq!(s.http_json("POST", &switch, &asked(1_000, "P1")).await, 202);
+    assert!(s.input_at().await.is_some(), "it is the person's input");
     assert_eq!(
         s.screens()
-            .take_close(&s.job, "run-1")
+            .take_switch(&s.job, "run-1")
             .await
             .unwrap()
             .as_deref(),
         Some("P1")
     );
     // Taken once.
-    assert_eq!(s.screens().take_close(&s.job, "run-1").await.unwrap(), None);
-
-    // Back on the post's page: nothing to close there.
-    s.screens()
-        .retarget(&s.job, "run-1", "T1", 3_000)
-        .await
-        .unwrap();
-    let (_, detail) = s
-        .http("GET", &format!("/api/subtitle-jobs/{}", s.job))
-        .await;
-    assert_eq!(detail["screen"]["popup"], false);
-    assert_eq!(s.http_json("POST", &close, &asked(3_000)).await, 409);
+    assert_eq!(
+        s.screens().take_switch(&s.job, "run-1").await.unwrap(),
+        None
+    );
     assert_eq!(
         s.http_json(
             "POST",
-            "/api/subtitle-jobs/nope/screen/close",
-            &asked(3_000)
+            "/api/subtitle-jobs/nope/screen/switch",
+            &asked(1_000, "P1")
         )
         .await,
         404
     );
     let seen = s.launcher.seen.lock().unwrap();
     assert!(seen.commands.is_empty() && seen.others.is_empty());
+}
+
+#[tokio::test]
+async fn a_person_asks_the_worker_to_close_a_tab_but_never_the_first_page() {
+    let s = setup(true).await;
+    with_two_pages(&s).await;
+    let close = format!("/api/subtitle-jobs/{}/screen/close", s.job);
+    let asked = |bound: i64, target: Option<&str>| match target {
+        Some(target) => json!({ "run": "run-1", "bound": bound, "target": target }),
+        None => json!({ "run": "run-1", "bound": bound }),
+    };
+
+    // The screen shows the first page: closing "the page shown" and naming it
+    // are refused, and so is a page that is not listed or a stale binding.
+    assert_eq!(s.http_json("POST", &close, &asked(1_000, None)).await, 409);
+    assert_eq!(
+        s.http_json("POST", &close, &asked(1_000, Some("T1"))).await,
+        409
+    );
+    assert_eq!(
+        s.http_json("POST", &close, &asked(1_000, Some("Z9"))).await,
+        409
+    );
+    assert_eq!(
+        s.http_json("POST", &close, &asked(999, Some("P1"))).await,
+        409
+    );
+    assert!(s
+        .screens()
+        .take_close(&s.job, "run-1")
+        .await
+        .unwrap()
+        .is_empty());
+    assert_eq!(s.input_at().await, None);
+
+    // A tab that is not shown closes, for a check as for a find job's screen.
+    assert_eq!(
+        s.http_json("POST", &close, &asked(1_000, Some("P1"))).await,
+        202
+    );
+    assert!(s.input_at().await.is_some(), "it is the person's input");
+    assert_eq!(
+        s.screens().take_close(&s.job, "run-1").await.unwrap(),
+        vec!["P1".to_owned()]
+    );
+    // Taken once.
+    assert!(s
+        .screens()
+        .take_close(&s.job, "run-1")
+        .await
+        .unwrap()
+        .is_empty());
+
+    // The page shown, when it is not the first, is the default.
+    s.screens()
+        .retarget(&s.job, "run-1", "P1", 2_000)
+        .await
+        .unwrap();
+    assert_eq!(s.http_json("POST", &close, &asked(1_000, None)).await, 409);
+    assert_eq!(s.http_json("POST", &close, &asked(2_000, None)).await, 202);
+    assert_eq!(
+        s.screens().take_close(&s.job, "run-1").await.unwrap(),
+        vec!["P1".to_owned()]
+    );
+    // The first page, named while another is shown: still refused.
+    assert_eq!(
+        s.http_json("POST", &close, &asked(2_000, Some("T1"))).await,
+        409
+    );
+    assert_eq!(
+        s.http_json(
+            "POST",
+            "/api/subtitle-jobs/nope/screen/close",
+            &asked(2_000, None)
+        )
+        .await,
+        404
+    );
+    let seen = s.launcher.seen.lock().unwrap();
+    assert!(seen.commands.is_empty() && seen.others.is_empty());
+}
+
+#[tokio::test]
+async fn a_screen_tells_the_host_only_and_a_step_back_never_goes_before_the_first_page() {
+    let s = setup(true).await;
+    s.waiting_on("run-1").await;
+    let origin = s.origin();
+    let mut socket = s.open("run-1", Some(&origin)).await.unwrap();
+
+    // The page the server prepared: a blank page, then the post. Nothing is
+    // behind it, and only its host is said.
+    let nav = next_of(&mut socket, "nav").await;
+    assert_eq!(
+        nav,
+        json!({ "type": "nav", "back": false, "forward": false, "host": "blog.example.org" })
+    );
+
+    // A step back asked anyway goes nowhere, however the device believes.
+    send(&mut socket, json!({ "type": "back" })).await;
+    send(&mut socket, json!({ "type": "forward" })).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(s.launcher.count("Page.navigateToHistoryEntry"), 0);
+    assert!(s.input_at().await.is_some(), "a person's step is input");
+
+    // The person went on to another page: the page can step back to the post
+    // (entry 11), and not before it.
+    s.launcher
+        .set_history(2, &["about:blank", SECRET_PAGE, SECRET_NEXT]);
+    send(&mut socket, json!({ "type": "back" })).await;
+    let nav = next_of(&mut socket, "nav").await;
+    assert_eq!(
+        s.launcher.last("Page.navigateToHistoryEntry").unwrap()["entryId"],
+        11
+    );
+    assert_eq!(
+        nav,
+        json!({ "type": "nav", "back": false, "forward": true, "host": "blog.example.org" })
+    );
+    send(&mut socket, json!({ "type": "back" })).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(s.launcher.count("Page.navigateToHistoryEntry"), 1);
+
+    send(&mut socket, json!({ "type": "forward" })).await;
+    let nav = next_of(&mut socket, "nav").await;
+    assert_eq!(
+        s.launcher.last("Page.navigateToHistoryEntry").unwrap()["entryId"],
+        12
+    );
+    assert_eq!(
+        nav,
+        json!({ "type": "nav", "back": true, "forward": false, "host": "files.example.org" })
+    );
+
+    // A socket that connects later is told the state at once.
+    let mut other = s.open("run-1", Some(&origin)).await.unwrap();
+    assert_eq!(next_of(&mut other, "nav").await, nav);
+}
+
+#[tokio::test]
+async fn no_message_of_a_screen_carries_a_path_a_query_or_a_fragment() {
+    let s = setup(true).await;
+    with_two_pages(&s).await;
+    s.launcher.set_history(1, &["about:blank", SECRET_PAGE]);
+    s.launcher.set_targets(json!([
+        { "targetId": "T1", "type": "page", "title": SECRET_PAGE, "url": SECRET_PAGE },
+        { "targetId": "P1", "type": "page", "title": "받는 곳", "url": SECRET_NEXT },
+        { "targetId": "Z9", "type": "page", "title": "not listed", "url": "https://z.example/" },
+    ]));
+    let origin = s.origin();
+    let mut socket = s.open("run-1", Some(&origin)).await.unwrap();
+
+    let mut texts = Vec::new();
+    let mut tabs = Value::Null;
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while tabs.is_null() {
+            match socket.next().await {
+                Some(Ok(WsMessage::Text(text))) => {
+                    let value: Value = serde_json::from_str(text.as_str()).unwrap();
+                    if value["type"] == "tabs" {
+                        tabs = value.clone();
+                    }
+                    if value["type"] != "frame" {
+                        texts.push(text.to_string());
+                    }
+                }
+                Some(Ok(_)) => {}
+                other => panic!("the socket ended: {other:?}"),
+            }
+        }
+    })
+    .await
+    .expect("no tabs in time");
+    // Both listed pages, in the worker's order; the unlisted one is no tab.
+    assert_eq!(
+        tabs,
+        json!({ "type": "tabs", "tabs": [
+            { "id": "T1", "title": "", "host": "blog.example.org", "shown": true, "closable": false },
+            { "id": "P1", "title": "받는 곳", "host": "files.example.org", "shown": false, "closable": true },
+        ] })
+    );
+    // The worker's list changes (a tab closed): the tabs follow.
+    s.screens()
+        .set_pages(&s.job, "run-1", &["T1".to_owned()], 2_000)
+        .await
+        .unwrap();
+    let tabs = next_of(&mut socket, "tabs").await;
+    assert_eq!(tabs["tabs"].as_array().unwrap().len(), 1);
+    texts.push(tabs.to_string());
+    for text in texts {
+        for secret in ["/post", "/get", "sig", "SECRET", "frag", "?", "#"] {
+            assert!(!text.contains(secret), "{secret} in {text}");
+        }
+    }
 }
 
 #[tokio::test]

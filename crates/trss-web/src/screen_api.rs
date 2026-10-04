@@ -26,20 +26,33 @@
 //!   no server browser). `bound` (with `run`) is when the run was bound to
 //!   the job, in milliseconds: another check of the job in the same run is a
 //!   new binding with a later `bound`, to connect to anew. `popup` (with
-//!   `run`) says the page shown is not the one the run was bound with: a find
-//!   job's screen follows a page its post opened, which a person may close.
+//!   `run`) says the page shown is not the one the run was bound with: a
+//!   screen follows a page the run opened (a popup), for a find job and a
+//!   site's check alike.
 //!
-//! # Closing a popup
+//! # Tabs: switching and closing
 //!
-//! `POST /api/subtitle-jobs/{id}/screen/close` `{ "run", "bound" }`: a person
-//! closes the page a find job's screen shows, of the binding they see, when
-//! it is a page the post opened (`popup`). The request is written for the
-//! worker, which owns the runs: it closes that page in the browser
-//! (`Target.closeTarget`), never the page the run opened the post in, and the
-//! screen goes back to the page before it, a new binding (`ended` `run`).
-//! `202` when it was asked, `409` when the job's screen shows no such popup
-//! now (the binding changed, or it is the post's page), `404` for no job. The
-//! web itself sends the browser nothing for it.
+//! The worker lists the pages of a run that stayed, in the order they came
+//! (the tabs); the web reads their titles and hosts from the browser. A
+//! person switches to a page and closes one with requests the worker answers,
+//! since it owns the runs; the web itself sends the browser nothing for them.
+//! Both name the binding the person sees (`run`, `bound`) and count as the
+//! person's input for the run's idle end.
+//!
+//! - `POST /api/subtitle-jobs/{id}/screen/switch` `{ "run", "bound", "target" }`:
+//!   show the page `target`. Written when the binding is still the job's and
+//!   `target` is one of the listed pages. The worker moves the screen there
+//!   when the page is still open, as a new binding (`ended` `run`).
+//! - `POST /api/subtitle-jobs/{id}/screen/close` `{ "run", "bound", "target"? }`:
+//!   close the page `target`, shown or not (the page shown when it is left
+//!   out). Written when the binding is still the job's, `target` is one of
+//!   the listed pages and it is not the run's first page, which is never
+//!   closed (the worker refuses it too, `Target.closeTarget` is sent for no
+//!   other). Closing a page that is not shown leaves the screen as it is;
+//!   closing the one shown moves it to the newest page left, a new binding.
+//!
+//! Both answer `202` (with `{}`) when asked, `409` when the job's screen is no longer that
+//! binding or has no such page to switch to or close, `404` for no job.
 //!
 //! # The socket
 //!
@@ -79,6 +92,13 @@
 //!   changes, is dropped and answered `{"type":"dropped","gen":<current>}`;
 //!   one out of bounds is ignored.
 //! - `{"type":"reload"}`: reloads the page.
+//! - `{"type":"back"}`, `{"type":"forward"}`: a step back or forward in the
+//!   history of the page shown (`Page.navigateToHistoryEntry`). A step back
+//!   never goes to the blank page (`about:blank`) the server passed through
+//!   while it prepared the page: the first history entry whose address is not
+//!   blank is the floor, judged here on the page's own history at every
+//!   request, whatever `nav` last said. A step that is not allowed is
+//!   ignored. They count as input.
 //!
 //! The web sends:
 //!
@@ -88,6 +108,18 @@
 //!   (`Page.startScreencast`, base64 in `data`) of the current size. Frames
 //!   are acknowledged as they come; one of another size, or one that comes
 //!   while the size changes, is not sent. A slow socket skips frames.
+//! - `{"type":"nav","back","forward","host"}`: whether a step back and a step
+//!   forward is allowed on the page shown, and its host (`null` for a page
+//!   with none: `about:blank`, `data:`, `blob:`). Sent when a socket connects
+//!   and whenever it changes (the page navigated).
+//! - `{"type":"tabs","tabs":[{"id","title","host","shown","closable"}]}`: the
+//!   run's tabs in the order the worker listed them, the page shown marked
+//!   (`shown`), `closable` false for the run's first page. `title` is cut to
+//!   40 characters and empty when the page has none or it may name an
+//!   address (below); `host` is `null` as above.
+//!   A listed page the browser does not report is left out, a page the worker
+//!   did not list never appears, and `id` is the name a switch or close
+//!   request uses. Sent like `nav`.
 //! - `{"type":"ended","reason"}`, then the socket closes: the run's page or
 //!   connection is gone (`browser`), the job's binding changed (`run`: the
 //!   file came, the run ended, or another run, page or binding took its
@@ -95,6 +127,12 @@
 //!   screen of the binding took this one's seat (`replaced`): at most
 //!   [`MAX_SOCKETS`] are open on a binding, and one more takes the place of
 //!   the oldest (the newest is the device the person is using).
+//!
+//! Only a page's host is ever sent, never a path, query or fragment: an
+//! address can carry a signed link or a token. None is logged or stored
+//! either. A title that may name an address (the page's own, as the browser
+//! writes it for a page with no title, or any other) is sent empty (the
+//! `nav` module).
 //!
 //! The sockets of one binding share one DevTools connection (a hub), which
 //! goes when the last of them closes; the hub reads whether its binding is
@@ -108,6 +146,7 @@
 //! [`INPUT_EVERY`]; the frames alone are not use.
 
 mod hub;
+mod nav;
 
 use std::{
     collections::HashMap,
@@ -129,7 +168,7 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 use tokio::sync::broadcast::error::RecvError;
 use trss_browser::client::LauncherClient;
 use trss_jobs::{Screen, ScreenState};
@@ -157,6 +196,7 @@ pub fn routes() -> Router<AppState> {
         .route("/subtitle-jobs/{id}/screen", post(prepare))
         .route("/subtitle-jobs/{id}/screen/socket", get(socket))
         .route("/subtitle-jobs/{id}/screen/close", post(close))
+        .route("/subtitle-jobs/{id}/screen/switch", post(switch))
 }
 
 /// The web's way to the server browser's runs, and the hubs of the screens
@@ -323,32 +363,85 @@ async fn prepare(
     Ok(Json(Some(view_of(&state, screen))))
 }
 
-/// The binding of the screen a person asks to close the page of.
+/// The binding of the screen a person asks to close a page of, and the page
+/// (the one shown, when left out).
 #[derive(Debug, Deserialize)]
 struct CloseRequest {
     run: String,
     bound: i64,
+    #[serde(default)]
+    target: Option<String>,
 }
 
 async fn close(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(request): Json<CloseRequest>,
-) -> Result<StatusCode, ApiError> {
+) -> Result<(StatusCode, Json<Value>), ApiError> {
     let asked = state
         .screens
-        .request_close(&id, &request.run, request.bound, now_millis())
+        .request_close(
+            &id,
+            &request.run,
+            request.bound,
+            request.target.as_deref(),
+            now_millis(),
+        )
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
+    answered(&state, &id, asked, NO_PAGE_TO_CLOSE).await
+}
+
+/// The binding of the screen a person asks to show another page of, and the
+/// page.
+#[derive(Debug, Deserialize)]
+struct SwitchRequest {
+    run: String,
+    bound: i64,
+    target: String,
+}
+
+async fn switch(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<SwitchRequest>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let asked = state
+        .screens
+        .request_switch(
+            &id,
+            &request.run,
+            request.bound,
+            &request.target,
+            now_millis(),
+        )
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    answered(&state, &id, asked, NO_PAGE_TO_SHOW).await
+}
+
+const NO_PAGE_TO_CLOSE: &str =
+    "닫을 창이 없어요. 화면이 바뀌었으면 새로 연 화면에서 다시 시도해 주세요.";
+const NO_PAGE_TO_SHOW: &str =
+    "보여줄 창이 없어요. 화면이 바뀌었으면 새로 연 화면에서 다시 시도해 주세요.";
+
+/// `202` for a request that was written, else `404` for no job and `409`
+/// (`message`) when the screen is not what the person saw.
+async fn answered(
+    state: &AppState,
+    job: &str,
+    asked: bool,
+    message: &str,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
     if asked {
-        return Ok(StatusCode::ACCEPTED);
+        // A body, as the screens read every answer of the API as JSON.
+        return Ok((StatusCode::ACCEPTED, Json(json!({}))));
     }
-    if !job_exists(&state, &id).await? {
+    if !job_exists(state, job).await? {
         return Err(ApiError::not_found("작업을 찾지 못했어요."));
     }
     Err(ApiError::Conflict {
-        message: "닫을 창이 없어요. 화면이 바뀌었으면 새로 연 화면에서 다시 시도해 주세요."
-            .to_owned(),
+        message: message.to_owned(),
         current: None,
     })
 }
@@ -478,6 +571,11 @@ async fn serve(
             return;
         }
     }
+    for state in hub.states() {
+        if !deliver(&mut socket, Message::Text(state.as_ref().into())).await {
+            return;
+        }
+    }
     let mut ping = tokio::time::interval_at(
         tokio::time::Instant::now() + remote.ping_every,
         remote.ping_every,
@@ -532,7 +630,14 @@ async fn serve(
                         return;
                     }
                 }
-                Err(RecvError::Lagged(_)) => {}
+                // Frames may be skipped; the page's state may not.
+                Err(RecvError::Lagged(_)) => {
+                    for state in hub.states() {
+                        if !deliver(&mut socket, Message::Text(state.as_ref().into())).await {
+                            return;
+                        }
+                    }
+                }
                 Err(RecvError::Closed) => break,
             },
             _ = hub.ended() => {

@@ -12,10 +12,15 @@
 //! cargo test -p trss-web --test remote_screen_docker -- --ignored --nocapture
 //! ```
 //!
-//! It starts a throwaway container named `trss-remote-screen-<pid>` (removed
-//! at the end). Where the check box is, the test reads from the page through
-//! a DevTools connection of its own, standing in for the person who sees it
-//! in the frame.
+//! It starts a throwaway container named `trss-remote-screen-<pid>-<test>`
+//! (removed at the end). Where the check box is, the test reads from the page
+//! through a DevTools connection of its own, standing in for the person who
+//! sees it in the frame.
+//!
+//! The second test is a find job's screen with the browser controls: back
+//! and forward with the blank page the server passed through as the floor,
+//! the host as the only address that is sent, a popup that becomes a tab, and
+//! switching to and closing tabs (ticket 0055).
 
 use std::{
     path::Path,
@@ -75,8 +80,8 @@ impl Drop for Container {
     }
 }
 
-async fn start(downloads: &Path) -> (Container, Url) {
-    let name = format!("trss-remote-screen-{}", std::process::id());
+async fn start(downloads: &Path, test: &str) -> (Container, Url) {
+    let name = format!("trss-remote-screen-{}-{test}", std::process::id());
     let _ = docker(&["rm", "-f", &name]);
     let container = Container(name.clone());
     std::fs::set_permissions(
@@ -162,7 +167,7 @@ async fn a_tap_relayed_through_the_remote_screen_passes_the_check_and_the_file_i
     let dir = tempfile::tempdir().unwrap();
     let downloads = dir.path().join("browser-downloads");
     std::fs::create_dir(&downloads).unwrap();
-    let (_container, base) = start(&downloads).await;
+    let (_container, base) = start(&downloads, "check").await;
 
     // The worker's side.
     let db = Db::open(dir.path().join("app.db")).await.unwrap();
@@ -397,6 +402,540 @@ async fn a_tap_relayed_through_the_remote_screen_passes_the_check_and_the_file_i
     })
     .await;
     assert!(runner.screens().screen(&job).await.unwrap().is_none());
+
+    cancel.cancel();
+    let _ = worker.await;
+    pool.shutdown().await;
+}
+
+// ---------------------------------------------------------------------------
+// The browser controls of a find job's screen (ticket 0055)
+
+/// A socket of the screen, with every message it carried but frames.
+struct Watched {
+    socket: Socket,
+    /// Every message but frames, in arrival order.
+    seen: Vec<String>,
+    /// Whether `next` took the message of `seen` at the same index.
+    taken: Vec<bool>,
+}
+
+impl Watched {
+    /// The first message of `kind` not taken yet (messages that came before
+    /// it stay for their own `next`), within 30 s.
+    async fn next(&mut self, kind: &str) -> Value {
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                for (i, text) in self.seen.iter().enumerate() {
+                    let value: Value = serde_json::from_str(text).unwrap();
+                    if !self.taken[i] && value["type"] == kind {
+                        self.taken[i] = true;
+                        return value;
+                    }
+                }
+                match self.socket.next().await {
+                    Some(Ok(Message::Text(text))) => {
+                        let value: Value = serde_json::from_str(text.as_str()).unwrap();
+                        if value["type"] != "frame" {
+                            self.seen.push(text.to_string());
+                            self.taken.push(false);
+                        }
+                    }
+                    Some(Ok(_)) => {}
+                    other => panic!("the socket ended before {kind}: {other:?}"),
+                }
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("no {kind} in time"))
+    }
+
+    async fn send(&mut self, message: Value) {
+        self.socket
+            .send(Message::Text(message.to_string().into()))
+            .await
+            .unwrap();
+    }
+}
+
+/// Opens the job's screen socket for the binding (`run`, `bound`) as a phone
+/// does: its size first.
+async fn open_screen(web: std::net::SocketAddr, job: &str, run: &str, bound: i64) -> Watched {
+    let mut request =
+        format!("ws://{web}/api/subtitle-jobs/{job}/screen/socket?run={run}&bound={bound}")
+            .into_client_request()
+            .unwrap();
+    request
+        .headers_mut()
+        .insert("origin", format!("http://{web}").parse().unwrap());
+    let (socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+    let mut screen = Watched {
+        socket,
+        seen: Vec::new(),
+        taken: Vec::new(),
+    };
+    screen
+        .send(json!({ "type": "viewport", "width": 402, "height": 666, "dpr": 3, "touch": true }))
+        .await;
+    screen.next("viewport").await;
+    screen
+}
+
+/// A POST of `body` as JSON to the web's `path`: the answer's status.
+async fn post(web: std::net::SocketAddr, path: &str, body: &Value) -> u16 {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let body = body.to_string();
+    let mut stream = tokio::net::TcpStream::connect(web).await.unwrap();
+    let request = format!(
+        "POST {path} HTTP/1.1\r\nHost: {web}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream.write_all(request.as_bytes()).await.unwrap();
+    let mut answer = Vec::new();
+    stream.read_to_end(&mut answer).await.unwrap();
+    String::from_utf8_lossy(&answer)[9..12].parse().unwrap()
+}
+
+/// A DevTools connection of the test's own to the first page: the person's
+/// eyes and finger (it clicks where the page says the link is).
+struct Eyes {
+    conn: Connection,
+    session: String,
+}
+
+impl Eyes {
+    async fn on(base: &Url, run: &str, target: &str) -> Eyes {
+        let conn = Connection::connect(
+            &LauncherClient::new(base.clone(), TOKEN)
+                .unwrap()
+                .cdp_url(run),
+            TOKEN,
+        )
+        .await
+        .unwrap();
+        let session = conn
+            .command(
+                None,
+                "Target.attachToTarget",
+                json!({ "targetId": target, "flatten": true }),
+            )
+            .await
+            .unwrap()["sessionId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        Eyes { conn, session }
+    }
+
+    async fn send(&self, method: &str, params: Value) -> Value {
+        self.conn
+            .command(Some(&self.session), method, params)
+            .await
+            .unwrap()
+    }
+
+    async fn eval(&self, expression: &str) -> Value {
+        self.send(
+            "Runtime.evaluate",
+            json!({ "expression": expression, "returnByValue": true }),
+        )
+        .await["result"]["value"]
+            .clone()
+    }
+
+    async fn title(&self) -> String {
+        self.eval("document.title")
+            .await
+            .as_str()
+            .unwrap_or_default()
+            .to_owned()
+    }
+
+    async fn title_ends_with(&self, ending: &str) {
+        until(Duration::from_secs(20), ending, || async {
+            self.title().await.ends_with(ending)
+        })
+        .await;
+    }
+
+    /// A trusted click in the middle of the element `id`.
+    async fn click(&self, id: &str) {
+        let rect = self
+            .eval(&format!(
+                "JSON.stringify(document.getElementById('{id}').getBoundingClientRect())"
+            ))
+            .await;
+        let rect: Value = serde_json::from_str(rect.as_str().unwrap()).unwrap();
+        let x = rect["x"].as_f64().unwrap() + rect["width"].as_f64().unwrap() / 2.0;
+        let y = rect["y"].as_f64().unwrap() + rect["height"].as_f64().unwrap() / 2.0;
+        for (kind, button, count) in [
+            ("mouseMoved", "none", 0),
+            ("mousePressed", "left", 1),
+            ("mouseReleased", "left", 1),
+        ] {
+            self.send(
+                "Input.dispatchMouseEvent",
+                json!({ "type": kind, "x": x, "y": y, "button": button, "clickCount": count }),
+            )
+            .await;
+        }
+    }
+
+    /// The page's history: the index of the entry shown, and the addresses.
+    async fn history(&self) -> (usize, Vec<String>) {
+        let history = self.send("Page.getNavigationHistory", json!({})).await;
+        (
+            history["currentIndex"].as_u64().unwrap() as usize,
+            history["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|e| e["url"].as_str().unwrap().to_owned())
+                .collect(),
+        )
+    }
+}
+
+#[tokio::test]
+#[ignore = "needs docker and the trss-browser image"]
+async fn a_find_screen_steps_back_and_forward_never_before_its_first_page_and_switches_and_closes_tabs(
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let downloads = dir.path().join("browser-downloads");
+    std::fs::create_dir(&downloads).unwrap();
+    let (_container, base) = start(&downloads, "find").await;
+
+    // The worker's side: a find job at the fake blog's newest post.
+    let db = Db::open(dir.path().join("app.db")).await.unwrap();
+    db.run::<_, trss_core::DbError, _>(|c| {
+        c.execute(
+            "INSERT INTO subtitle_sources (id, anime_no, creator_name, created_at)
+             VALUES ('src-maker', 3441, '메이커', 1)",
+            [],
+        )?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+    let store = JobStore::new(db.clone());
+    let pool = BrowserPool::new(
+        PoolConfig::new(base.clone(), TOKEN, &downloads),
+        trss_core::system_clock(),
+        PolicySource::fixed(BrowserPolicy::default()),
+    )
+    .await
+    .unwrap();
+    let area = ReceiveArea::in_app_data(dir.path());
+    let runner = Runner::new(
+        store.clone(),
+        Sources::none().with_fake(FakeSource),
+        area,
+        trss_core::system_clock(),
+    )
+    .with_auth(BrowserAuth::shared(pool.clone()));
+    let job = match store
+        .create_find(
+            trss_jobs::NewFind {
+                command_id: "find-1".to_owned(),
+                request: r#"{"find":{}}"#.to_owned(),
+                work_id: "w1".to_owned(),
+                season: 1,
+                anime_no: 3441,
+                source_id: "src-maker".to_owned(),
+                creator: "메이커".to_owned(),
+                post_url: format!("https://{}/blog/maker", fake::HOST),
+            },
+            900,
+        )
+        .await
+        .unwrap()
+    {
+        Created::Created(id) => id,
+        other => panic!("{other:?}"),
+    };
+    let cancel = CancellationToken::new();
+    runner.run_ready(&cancel).await.unwrap();
+    let screens = runner.screens().clone();
+    let first = screens.screen(&job).await.unwrap().unwrap();
+    assert_eq!(first.state, ScreenState::Ready);
+    let (run, first_target) = (
+        first.run_id.clone().unwrap(),
+        first.target_id.clone().unwrap(),
+    );
+    let wake = Arc::new(Notify::new());
+    let worker = tokio::spawn({
+        let (runner, wake, cancel) = (runner.clone(), wake.clone(), cancel.clone());
+        async move {
+            while !cancel.is_cancelled() {
+                runner.tend_screens(&wake, &cancel).await.unwrap();
+                tokio::select! {
+                    _ = wake.notified() => {
+                        runner.run_ready(&cancel).await.unwrap();
+                    }
+                    _ = tokio::time::sleep(Duration::from_millis(200)) => {}
+                }
+            }
+        }
+    });
+
+    // The web's side.
+    let state = AppState::new(db.clone()).with_remote_screens(
+        RemoteScreens::new(&BrowserAccess {
+            url: base.clone(),
+            token: TOKEN.to_owned(),
+        })
+        .unwrap(),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let web = listener.local_addr().unwrap();
+    let router = trss_web::router(dir.path(), state);
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let (switch, close) = (
+        format!("/api/subtitle-jobs/{job}/screen/switch"),
+        format!("/api/subtitle-jobs/{job}/screen/close"),
+    );
+    let mut every_message: Vec<String> = Vec::new();
+
+    // The page the server prepared has a blank page behind it, and the screen
+    // says nothing can be stepped back to, with the host and no more.
+    let eyes = Eyes::on(&base, &run, &first_target).await;
+    let newest = fake::BLOG_POSTS;
+    eyes.title_ends_with(&format!("{newest}화")).await;
+    let (current, urls) = eyes.history().await;
+    println!("the page's history: entry {current} of {}", urls.len());
+    assert_eq!(
+        urls[0], "about:blank",
+        "the server passes through a blank page"
+    );
+    assert!(current >= 1);
+    let mut screen = open_screen(web, &job, &run, first.bound_at.unwrap()).await;
+    let nav = screen.next("nav").await;
+    assert_eq!(
+        nav,
+        json!({ "type": "nav", "back": false, "forward": false, "host": fake::HOST })
+    );
+    let tabs = screen.next("tabs").await;
+    assert_eq!(
+        tabs["tabs"],
+        json!([{ "id": first_target, "title": format!("가짜 블로그 maker {newest}화"),
+                 "host": fake::HOST, "shown": true, "closable": false }])
+    );
+
+    // A step back asked anyway does not go to the blank page.
+    screen.send(json!({ "type": "back" })).await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert_eq!(eyes.history().await.0, current);
+    assert!(eyes.title().await.ends_with(&format!("{newest}화")));
+
+    // The person goes to the post before: back is on, then forward.
+    eyes.click("before").await;
+    eyes.title_ends_with(&format!("{}화", newest - 1)).await;
+    let nav = screen.next("nav").await;
+    assert_eq!(
+        (nav["back"].clone(), nav["forward"].clone()),
+        (json!(true), json!(false))
+    );
+    screen.send(json!({ "type": "back" })).await;
+    eyes.title_ends_with(&format!("{newest}화")).await;
+    let nav = screen.next("nav").await;
+    assert_eq!(
+        (nav["back"].clone(), nav["forward"].clone()),
+        (json!(false), json!(true))
+    );
+    assert_eq!(eyes.history().await.0, current, "back stops at the post");
+    screen.send(json!({ "type": "forward" })).await;
+    eyes.title_ends_with(&format!("{}화", newest - 1)).await;
+    let nav = screen.next("nav").await;
+    assert_eq!(
+        (nav["back"].clone(), nav["forward"].clone()),
+        (json!(true), json!(false))
+    );
+    assert_eq!(nav["host"], fake::HOST);
+    // The steps are the person's input for the run's idle end.
+    assert!(!screens.live_inputs().await.unwrap().is_empty());
+    println!("back and forward went between the posts and never before the first page");
+
+    // A window the post opens that stays is shown, and is a tab.
+    eyes.click("popup").await;
+    until(Duration::from_secs(20), "the popup is shown", || async {
+        screens
+            .screen(&job)
+            .await
+            .unwrap()
+            .unwrap()
+            .target_id
+            .as_deref()
+            != Some(first_target.as_str())
+    })
+    .await;
+    let ended = screen.next("ended").await;
+    assert_eq!(ended["reason"], "run");
+    every_message.append(&mut screen.seen.clone());
+    let popup_screen = screens.screen(&job).await.unwrap().unwrap();
+    let popup = popup_screen.target_id.clone().unwrap();
+    assert_eq!(
+        popup_screen.pages,
+        vec![first_target.clone(), popup.clone()]
+    );
+    let mut screen = open_screen(web, &job, &run, popup_screen.bound_at.unwrap()).await;
+    screen.next("nav").await;
+    let tabs = screen.next("tabs").await;
+    let tabs = tabs["tabs"].as_array().unwrap();
+    assert_eq!(tabs.len(), 2, "{tabs:?}");
+    assert_eq!(
+        (tabs[0]["id"].as_str(), tabs[0]["closable"].clone()),
+        (Some(first_target.as_str()), json!(false))
+    );
+    assert_eq!(
+        (
+            tabs[1]["id"].as_str(),
+            tabs[1]["shown"].clone(),
+            tabs[1]["closable"].clone()
+        ),
+        (Some(popup.as_str()), json!(true), json!(true))
+    );
+    assert_eq!(tabs[1]["host"], fake::HOST);
+    println!(
+        "the popup is a tab: {} and {}",
+        tabs[0]["title"], tabs[1]["title"]
+    );
+
+    // Requests: the old binding, a page that is not listed and the first
+    // page's close are refused.
+    let (bound, stale) = (popup_screen.bound_at.unwrap(), first.bound_at.unwrap());
+    assert_eq!(
+        post(
+            web,
+            &switch,
+            &json!({ "run": run, "bound": stale, "target": first_target })
+        )
+        .await,
+        409
+    );
+    assert_eq!(
+        post(
+            web,
+            &switch,
+            &json!({ "run": run, "bound": bound, "target": "nope" })
+        )
+        .await,
+        409
+    );
+    assert_eq!(
+        post(
+            web,
+            &close,
+            &json!({ "run": run, "bound": bound, "target": first_target })
+        )
+        .await,
+        409
+    );
+
+    // The person goes to the first tab: the screen moves there and stays.
+    assert_eq!(
+        post(
+            web,
+            &switch,
+            &json!({ "run": run, "bound": bound, "target": first_target })
+        )
+        .await,
+        202
+    );
+    let ended = screen.next("ended").await;
+    assert_eq!(ended["reason"], "run");
+    every_message.append(&mut screen.seen.clone());
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let back_on_first = screens.screen(&job).await.unwrap().unwrap();
+    assert_eq!(
+        back_on_first.target_id.as_deref(),
+        Some(first_target.as_str())
+    );
+    let mut screen = open_screen(web, &job, &run, back_on_first.bound_at.unwrap()).await;
+    screen.next("nav").await;
+    let tabs = screen.next("tabs").await;
+    let shown: Vec<_> = tabs["tabs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|t| t["shown"] == true)
+        .map(|t| t["id"].clone())
+        .collect();
+    assert_eq!(shown, vec![json!(first_target)], "the choice is not undone");
+    println!("the switch to the first tab was kept across the follower's looks");
+
+    // The popup is a hidden tab now: closing it closes that page only, and
+    // the screen stays as it is.
+    let bound = back_on_first.bound_at.unwrap();
+    assert_eq!(
+        post(
+            web,
+            &close,
+            &json!({ "run": run, "bound": bound, "target": popup })
+        )
+        .await,
+        202
+    );
+    let tabs = screen.next("tabs").await;
+    assert_eq!(tabs["tabs"].as_array().unwrap().len(), 1, "{tabs}");
+    assert_eq!(
+        screens.screen(&job).await.unwrap().unwrap().bound_at,
+        Some(bound),
+        "closing a hidden tab leaves the screen as it is"
+    );
+    println!("a hidden tab was closed and the screen stayed");
+
+    // A new popup is shown; closing the shown one goes back to the first page.
+    eyes.click("popup").await;
+    until(
+        Duration::from_secs(20),
+        "the popup is shown again",
+        || async {
+            screens
+                .screen(&job)
+                .await
+                .unwrap()
+                .unwrap()
+                .target_id
+                .as_deref()
+                != Some(first_target.as_str())
+        },
+    )
+    .await;
+    let ended = screen.next("ended").await;
+    assert_eq!(ended["reason"], "run");
+    every_message.append(&mut screen.seen.clone());
+    let second = screens.screen(&job).await.unwrap().unwrap();
+    assert_eq!(
+        post(
+            web,
+            &close,
+            &json!({ "run": run, "bound": second.bound_at.unwrap() })
+        )
+        .await,
+        202
+    );
+    until(
+        Duration::from_secs(20),
+        "the screen is back on the first page",
+        || async {
+            let now = screens.screen(&job).await.unwrap().unwrap();
+            now.target_id.as_deref() == Some(first_target.as_str())
+                && now.pages == vec![first_target.clone()]
+        },
+    )
+    .await;
+    println!("the shown tab was closed and the screen went back to the first page");
+
+    // Whatever was sent over the socket named only hosts.
+    for text in &every_message {
+        for secret in ["/blog", "maker/", "?", "#"] {
+            assert!(!text.contains(secret), "{secret} in {text}");
+        }
+    }
+    println!(
+        "{} messages checked: no path, query or fragment",
+        every_message.len()
+    );
 
     cancel.cancel();
     let _ = worker.await;

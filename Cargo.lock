@@ -3012,6 +3012,7 @@ dependencies = [
  "futures",
  "http-body-util",
  "image",
+ "percent-encoding",
  "regex",
  "rusqlite",
  "serde",

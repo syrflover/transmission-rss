@@ -5,7 +5,18 @@ import { store } from "@/lib/cached";
 import { fetchJob, type JobDetail } from "../api";
 import { KEYS } from "../poll";
 import { deviceViewport, sameViewport } from "./geometry";
-import { encode, parseServerMessage, socketUrl, type ClientMessage, type EndedReason, type InputBody, type ServerMessage, type Viewport } from "./protocol";
+import {
+  encode,
+  parseServerMessage,
+  socketUrl,
+  type ClientMessage,
+  type EndedReason,
+  type InputBody,
+  type Nav,
+  type ServerMessage,
+  type Tab,
+  type Viewport,
+} from "./protocol";
 import { afterEnd, retryDelay, sameBinding } from "./reconnect";
 import { inputGen, NEW_SESSION, receive, sentViewport, type ScreenSession } from "./session";
 
@@ -35,6 +46,13 @@ export interface Connection {
   /** Sends an input stamped with the generation of the frame on screen; `false` when it had to be dropped. */
   send: (body: InputBody) => boolean;
   reload: () => void;
+  /** A step back or forward in the page's history; the server decides whether it is allowed. */
+  back: () => void;
+  forward: () => void;
+  /** The state of the page shown (what the buttons and the host show), as the server last said; `null` before it did. */
+  nav: Nav | null;
+  /** The run's tabs as the server last said; none before it did, and after another run's screen opened. */
+  tabs: Tab[];
 }
 
 /** Whether this device is a touch screen: its main pointer is a finger. */
@@ -75,6 +93,10 @@ export function useRemoteConnection(options: {
   const [reason, setReason] = useState<EndedReason | null>(null);
   const [frame, setFrame] = useState<{ width: number; height: number } | null>(null);
   const [planned, setPlanned] = useState<Viewport | null>(null);
+  const [nav, setNav] = useState<Nav | null>(null);
+  const [tabs, setTabs] = useState<Tab[]>([]);
+  /** The run the `nav` and `tabs` above are of: another binding of it keeps them while the socket connects anew. */
+  const stateOf = useRef<string | null>(null);
   /** Counts the retries after a read of the job said to connect to the same run again. */
   const [round, setRound] = useState(0);
   const session = useRef<ScreenSession>(NEW_SESSION);
@@ -106,6 +128,13 @@ export function useRemoteConnection(options: {
     setPhase("connecting");
     setReason(null);
     setFrame(null);
+    // The tabs and the page's state stay while a screen of the same run connects anew (a switch of tab is one), so
+    // the row does not flicker; another run's are not this one's.
+    if (stateOf.current !== run) {
+      stateOf.current = run;
+      setNav(null);
+      setTabs([]);
+    }
     const ws = new WebSocket(socketUrl(window.location, jobId, run, bound));
     socket.current = ws;
 
@@ -183,6 +212,12 @@ export function useRemoteConnection(options: {
           waiting = message;
           if (raf === 0) raf = requestAnimationFrame(draw);
           break;
+        case "nav":
+          setNav({ back: message.back, forward: message.forward, host: message.host });
+          break;
+        case "tabs":
+          setTabs(message.tabs);
+          break;
         case "ended":
           ended = message.reason;
           break;
@@ -233,11 +268,14 @@ export function useRemoteConnection(options: {
     return true;
   }, []);
 
-  const reload = useCallback(() => {
+  const command = useCallback((message: ClientMessage) => {
     const ws = socket.current;
-    const text = encode({ type: "reload" });
+    const text = encode(message);
     if (ws !== null && ws.readyState === WebSocket.OPEN && text !== null) ws.send(text);
   }, []);
+  const reload = useCallback(() => command({ type: "reload" }), [command]);
+  const back = useCallback(() => command({ type: "back" }), [command]);
+  const forward = useCallback(() => command({ type: "forward" }), [command]);
 
-  return { phase, reason, frame, planned, session, send, reload };
+  return { phase, reason, frame, planned, session, send, reload, back, forward, nav, tabs };
 }

@@ -141,6 +141,7 @@ use crate::{
 };
 
 pub mod find;
+mod pages;
 
 /// What the job's log and screen say for a post no source reads.
 pub const NO_SOURCE: &str = "이 출처에서 받는 방법을 아직 몰라요";
@@ -992,6 +993,7 @@ impl Runner {
             binding.item_id,
         );
         let staging = self.check_staging(job, binding.item_id);
+        let _stop_following = self.follow_pages_of(&binding, &browser);
         loop {
             let waited = browser.wait_file(job, run, &staging).await;
             let now = self.now();

@@ -15,13 +15,19 @@
 //!   person's input on the screen ([`ScreenStore::record_input`]), which the
 //!   worker's idle end of browser runs counts as use
 //!   ([`ScreenStore::live_inputs`]).
-//! - A find job's screen follows a page the post opened (a popup,
-//!   [`ScreenStore::retarget`]). The web records a person's request to close
-//!   such a page ([`ScreenStore::request_close`]); the worker closes it in the
-//!   browser, never the run's first page, and the screen goes back to the
-//!   page before it ([`ScreenStore::take_close`]).
+//! - The screen follows a page the run opened (a popup,
+//!   [`ScreenStore::retarget`]), for a find job's screen and a check's alike.
+//!   The worker writes the run's pages in the order they came
+//!   ([`ScreenStore::set_pages`]): the tabs a person may see, switch to and
+//!   close. The web records a person's request to show another one
+//!   ([`ScreenStore::request_switch`]) or to close one
+//!   ([`ScreenStore::request_close`]), only for a page in that list and, to
+//!   close, never the run's first; the worker takes them
+//!   ([`ScreenStore::take_switch`], [`ScreenStore::take_close`]), closes the
+//!   page in the browser (never the first, here too) or moves the screen.
 //!
-//! No token, cookie or address is written here.
+//! No token, cookie or address is written here: a page is a DevTools target
+//! ID.
 
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use trss_core::{Db, Millis};
@@ -90,9 +96,13 @@ pub struct Screen {
     /// Why no run shows it, in a sentence.
     pub note: Option<String>,
     /// With `run_id`: the page shown is not the one the run was bound with
-    /// (a find job's popup), so a person may close it
-    /// ([`ScreenStore::request_close`]).
+    /// (a popup), so a person may close it ([`ScreenStore::request_close`]).
     pub popup: bool,
+    /// With `run_id`: the pages of the run a person may see as tabs, in the
+    /// order they came ([`ScreenStore::set_pages`]).
+    pub pages: Vec<String>,
+    /// With `run_id`: the page the run was bound with, which is never closed.
+    pub first_target_id: Option<String>,
 }
 
 /// A binding of a run to a job that waits for its check: what the worker
@@ -104,6 +114,8 @@ pub struct Binding {
     pub run_id: String,
     /// The page of the run the screen shows.
     pub target_id: String,
+    /// The page the run was bound with, which is never closed.
+    pub first_target_id: String,
     /// The job is a find job: a person browses on the screen and every
     /// download of the run is the job's ([`crate::runner`]).
     pub find: bool,
@@ -207,32 +219,86 @@ impl ScreenStore {
             .await
     }
 
-    /// A person asked to close the page the find job's screen shows, of the
-    /// binding (`run_id`, `bound_at`) they see: written for the worker
-    /// ([`ScreenStore::take_close`]) when that is still the binding and its
-    /// page is not the run's first ([`Screen::popup`]). Whether it was.
+    /// A person asked to close the page `target` (the page the screen shows,
+    /// when `None`) of the job's screen, of the binding (`run_id`,
+    /// `bound_at`) they see: written for the worker
+    /// ([`ScreenStore::take_close`]) when that is still the binding, the page
+    /// is one of the run's tabs and it is not the run's first. Whether it was.
+    /// It counts as the person's input for the run's idle end.
     pub async fn request_close(
         &self,
         job_id: &str,
         run_id: &str,
         bound_at: Millis,
+        target: Option<&str>,
         now: Millis,
     ) -> Result<bool, JobError> {
-        let (id, run) = (job_id.to_owned(), run_id.to_owned());
+        let (id, run, target) = (
+            job_id.to_owned(),
+            run_id.to_owned(),
+            target.map(str::to_owned),
+        );
         self.db
             .run(move |c| {
-                Ok(c.execute(
-                    &format!(
-                        "UPDATE subtitle_job_screens
-                         SET close_target_id = target_id, updated_at = ?4
-                         WHERE job_id = ?1 AND run_id = ?2 AND bound_at = ?3
-                           AND target_id <> first_target_id
-                           AND EXISTS (SELECT 1 FROM subtitle_jobs j
-                                       WHERE j.id = ?1 AND j.origin = 'find'
-                                         AND {WAITS_FOR_CHECK})"
-                    ),
-                    params![id, run, bound_at, now],
-                )? > 0)
+                let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                let Some(row) = asked_row(&tx, &id, &run, bound_at)? else {
+                    return Ok(false);
+                };
+                let Some(target) = target.or(row.shown) else {
+                    return Ok(false);
+                };
+                if !row.pages.contains(&target) || row.first.as_deref() == Some(target.as_str()) {
+                    return Ok(false);
+                }
+                let mut asked = row.closing;
+                if !asked.contains(&target) {
+                    asked.push(target);
+                }
+                tx.execute(
+                    "UPDATE subtitle_job_screens
+                     SET close_target_id = ?3, updated_at = ?4,
+                         input_at = MAX(?4, COALESCE(input_at, 0))
+                     WHERE job_id = ?1 AND run_id = ?2",
+                    params![id, run, asked.join(" "), now],
+                )?;
+                tx.commit()?;
+                Ok(true)
+            })
+            .await
+    }
+
+    /// A person asked to show the page `target` of the job's screen, of the
+    /// binding (`run_id`, `bound_at`) they see: written for the worker
+    /// ([`ScreenStore::take_switch`]) when that is still the binding and the
+    /// page is one of the run's tabs. Whether it was. It counts as the
+    /// person's input for the run's idle end.
+    pub async fn request_switch(
+        &self,
+        job_id: &str,
+        run_id: &str,
+        bound_at: Millis,
+        target: &str,
+        now: Millis,
+    ) -> Result<bool, JobError> {
+        let (id, run, target) = (job_id.to_owned(), run_id.to_owned(), target.to_owned());
+        self.db
+            .run(move |c| {
+                let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                let Some(row) = asked_row(&tx, &id, &run, bound_at)? else {
+                    return Ok(false);
+                };
+                if !row.pages.contains(&target) {
+                    return Ok(false);
+                }
+                tx.execute(
+                    "UPDATE subtitle_job_screens
+                     SET switch_target_id = ?3, updated_at = ?4,
+                         input_at = MAX(?4, COALESCE(input_at, 0))
+                     WHERE job_id = ?1 AND run_id = ?2",
+                    params![id, run, target, now],
+                )?;
+                tx.commit()?;
+                Ok(true)
             })
             .await
     }
@@ -240,10 +306,10 @@ impl ScreenStore {
     // -----------------------------------------------------------------------
     // What the worker writes
 
-    /// The page of the run `run_id` a person asked to close
-    /// ([`ScreenStore::request_close`]), if any: the request is answered by
-    /// this (taken once).
-    pub async fn take_close(&self, job_id: &str, run_id: &str) -> Result<Option<String>, JobError> {
+    /// The pages of the run `run_id` a person asked to close
+    /// ([`ScreenStore::request_close`]), oldest request first: the requests
+    /// are answered by this (taken once).
+    pub async fn take_close(&self, job_id: &str, run_id: &str) -> Result<Vec<String>, JobError> {
         let (id, run) = (job_id.to_owned(), run_id.to_owned());
         self.db
             .run(move |c| {
@@ -265,7 +331,65 @@ impl ScreenStore {
                     )?;
                 }
                 tx.commit()?;
+                Ok(split_asked(asked))
+            })
+            .await
+    }
+
+    /// The page of the run `run_id` a person asked to show
+    /// ([`ScreenStore::request_switch`]), if any: the request is answered by
+    /// this (taken once). The newest request wins.
+    pub async fn take_switch(
+        &self,
+        job_id: &str,
+        run_id: &str,
+    ) -> Result<Option<String>, JobError> {
+        let (id, run) = (job_id.to_owned(), run_id.to_owned());
+        self.db
+            .run(move |c| {
+                let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                let asked: Option<String> = tx
+                    .query_row(
+                        "SELECT switch_target_id FROM subtitle_job_screens
+                         WHERE job_id = ?1 AND run_id = ?2",
+                        params![id, run],
+                        |r| r.get(0),
+                    )
+                    .optional()?
+                    .flatten();
+                if asked.is_some() {
+                    tx.execute(
+                        "UPDATE subtitle_job_screens SET switch_target_id = NULL
+                         WHERE job_id = ?1 AND run_id = ?2",
+                        params![id, run],
+                    )?;
+                }
+                tx.commit()?;
                 Ok(asked)
+            })
+            .await
+    }
+
+    /// The pages of the run `run_id` that are tabs of the screen now, in the
+    /// order they came: written when the run is still the job's and the list
+    /// changed. Whether it was written.
+    pub async fn set_pages(
+        &self,
+        job_id: &str,
+        run_id: &str,
+        pages: &[String],
+        now: Millis,
+    ) -> Result<bool, JobError> {
+        let (id, run) = (job_id.to_owned(), run_id.to_owned());
+        let pages = pages_json(pages);
+        self.db
+            .run(move |c| {
+                Ok(c.execute(
+                    "UPDATE subtitle_job_screens
+                     SET pages = ?3, updated_at = ?4
+                     WHERE job_id = ?1 AND run_id = ?2 AND pages IS NOT ?3",
+                    params![id, run, pages, now],
+                )? > 0)
             })
             .await
     }
@@ -287,16 +411,25 @@ impl ScreenStore {
                 c.execute(
                     "INSERT INTO subtitle_job_screens
                          (job_id, item_id, run_id, target_id, bound_at, note, prepared_at,
-                          input_at, updated_at, first_target_id, close_target_id)
-                     VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?5, NULL, ?5, ?4, NULL)
+                          input_at, updated_at, first_target_id, close_target_id, pages,
+                          switch_target_id)
+                     VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?5, NULL, ?5, ?4, NULL, ?6, NULL)
                      ON CONFLICT (job_id) DO UPDATE
                      SET item_id = excluded.item_id, run_id = excluded.run_id,
                          target_id = excluded.target_id, bound_at = excluded.bound_at,
                          note = NULL, input_at = NULL,
                          prepared_at = MAX(excluded.prepared_at, COALESCE(prepare_at, 0)),
                          updated_at = excluded.updated_at,
-                         first_target_id = excluded.target_id, close_target_id = NULL",
-                    params![id, item_id, run, target, now],
+                         first_target_id = excluded.target_id, close_target_id = NULL,
+                         pages = excluded.pages, switch_target_id = NULL",
+                    params![
+                        id,
+                        item_id,
+                        run,
+                        target,
+                        now,
+                        pages_json(std::slice::from_ref(&target))
+                    ],
                 )?;
                 Ok(())
             })
@@ -326,7 +459,8 @@ impl ScreenStore {
                          bound_at = NULL, note = excluded.note, input_at = NULL,
                          prepared_at = MAX(excluded.prepared_at, COALESCE(prepare_at, 0)),
                          updated_at = excluded.updated_at,
-                         first_target_id = NULL, close_target_id = NULL",
+                         first_target_id = NULL, close_target_id = NULL,
+                         pages = NULL, switch_target_id = NULL",
                     params![id, item_id, note, now],
                 )?;
                 Ok(())
@@ -375,7 +509,8 @@ impl ScreenStore {
                     "UPDATE subtitle_job_screens
                      SET run_id = NULL, target_id = NULL, bound_at = NULL, note = ?3,
                          input_at = NULL, updated_at = ?4,
-                         first_target_id = NULL, close_target_id = NULL
+                         first_target_id = NULL, close_target_id = NULL,
+                         pages = NULL, switch_target_id = NULL
                      WHERE job_id = ?1 AND run_id = ?2",
                     params![id, run, note, now],
                 )? > 0)
@@ -392,7 +527,8 @@ impl ScreenStore {
                     "UPDATE subtitle_job_screens
                      SET run_id = NULL, target_id = NULL, bound_at = NULL, note = ?2,
                          input_at = NULL, updated_at = ?1,
-                         first_target_id = NULL, close_target_id = NULL
+                         first_target_id = NULL, close_target_id = NULL,
+                         pages = NULL, switch_target_id = NULL
                      WHERE run_id IS NOT NULL",
                     params![now, WORKER_RESTARTED],
                 )?)
@@ -418,6 +554,7 @@ impl ScreenStore {
             .run(move |c| {
                 Ok(c.query_row(
                     "SELECT s.job_id, s.item_id, s.run_id, s.target_id,
+                            COALESCE(s.first_target_id, s.target_id),
                             COALESCE(j.origin = 'find', 0)
                      FROM subtitle_job_screens s LEFT JOIN subtitle_jobs j ON j.id = s.job_id
                      WHERE s.job_id = ?1 AND s.run_id IS NOT NULL",
@@ -435,7 +572,8 @@ impl ScreenStore {
         self.db
             .run(|c| {
                 let mut stmt = c.prepare(&format!(
-                    "SELECT s.job_id, s.item_id, s.run_id, s.target_id, j.origin = 'find'
+                    "SELECT s.job_id, s.item_id, s.run_id, s.target_id,
+                            COALESCE(s.first_target_id, s.target_id), j.origin = 'find'
                      FROM subtitle_job_screens s JOIN subtitle_jobs j ON j.id = s.job_id
                      WHERE s.run_id IS NOT NULL AND {WAITS_FOR_CHECK}
                      ORDER BY s.job_id"
@@ -511,7 +649,8 @@ impl ScreenStore {
                         "UPDATE subtitle_job_screens
                          SET run_id = NULL, target_id = NULL, bound_at = NULL, note = NULL,
                              input_at = NULL, prepared_at = MAX(?2, COALESCE(prepared_at, 0)),
-                             updated_at = ?3, first_target_id = NULL, close_target_id = NULL
+                             updated_at = ?3, first_target_id = NULL, close_target_id = NULL,
+                             pages = NULL, switch_target_id = NULL
                          WHERE job_id = ?1",
                         params![id, asked_at, now],
                     )?;
@@ -608,7 +747,8 @@ fn binding_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Binding> {
         item_id: r.get(1)?,
         run_id: r.get(2)?,
         target_id: r.get(3)?,
-        find: r.get(4)?,
+        first_target_id: r.get(4)?,
+        find: r.get(5)?,
     })
 }
 
@@ -641,8 +781,9 @@ fn requeue(c: &Connection, job_id: &str, now: Millis) -> Result<bool, JobError> 
 }
 
 /// A screen's row with its job's state: run, page, binding time, note,
-/// whether a request is unanswered, the job's state and wait, and whether
-/// the page shown is not the run's first.
+/// whether a request is unanswered, the job's state and wait, whether the
+/// page shown is not the run's first, the run's first page and its pages
+/// (JSON).
 type ScreenRow = (
     Option<String>,
     Option<String>,
@@ -652,14 +793,74 @@ type ScreenRow = (
     JobState,
     Option<Wait>,
     bool,
+    Option<String>,
+    Option<String>,
 );
+
+/// The JSON the pages of a run are stored as.
+fn pages_json(pages: &[String]) -> String {
+    serde_json::to_string(pages).expect("a list of strings is JSON")
+}
+
+/// The pages a stored list holds; none for a missing or unreadable one.
+fn page_list(stored: Option<String>) -> Vec<String> {
+    stored
+        .and_then(|json| serde_json::from_str(&json).ok())
+        .unwrap_or_default()
+}
+
+/// The pages of a stored request to close, which names them separated by
+/// one space.
+fn split_asked(asked: Option<String>) -> Vec<String> {
+    asked
+        .iter()
+        .flat_map(|asked| asked.split(' '))
+        .filter(|target| !target.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// What a person's request to close or switch a page is judged against: the
+/// binding it was made for, still bound to a job that waits for its check.
+struct AskedRow {
+    shown: Option<String>,
+    first: Option<String>,
+    pages: Vec<String>,
+    /// The pages already asked to close, not yet taken.
+    closing: Vec<String>,
+}
+
+fn asked_row(
+    c: &Connection,
+    job_id: &str,
+    run_id: &str,
+    bound_at: Millis,
+) -> Result<Option<AskedRow>, JobError> {
+    Ok(c.query_row(
+        &format!(
+            "SELECT s.target_id, s.first_target_id, s.pages, s.close_target_id
+             FROM subtitle_job_screens s JOIN subtitle_jobs j ON j.id = s.job_id
+             WHERE s.job_id = ?1 AND s.run_id = ?2 AND s.bound_at = ?3 AND {WAITS_FOR_CHECK}"
+        ),
+        params![job_id, run_id, bound_at],
+        |r| {
+            Ok(AskedRow {
+                shown: r.get(0)?,
+                first: r.get(1)?,
+                pages: page_list(r.get(2)?),
+                closing: split_asked(r.get(3)?),
+            })
+        },
+    )
+    .optional()?)
+}
 
 fn screen(c: &Connection, job_id: &str) -> Result<Option<Screen>, JobError> {
     let row: Option<ScreenRow> = c
         .query_row(
             "SELECT s.run_id, s.target_id, s.bound_at, s.note,
                     COALESCE(s.prepare_at, 0) > COALESCE(s.prepared_at, 0), j.state, j.wait,
-                    COALESCE(s.target_id <> s.first_target_id, 0)
+                    COALESCE(s.target_id <> s.first_target_id, 0), s.first_target_id, s.pages
              FROM subtitle_job_screens s JOIN subtitle_jobs j ON j.id = s.job_id
              WHERE s.job_id = ?1",
             [job_id],
@@ -673,11 +874,14 @@ fn screen(c: &Connection, job_id: &str) -> Result<Option<Screen>, JobError> {
                     r.get(5)?,
                     r.get(6)?,
                     r.get(7)?,
+                    r.get(8)?,
+                    r.get(9)?,
                 ))
             },
         )
         .optional()?;
-    let Some((run_id, target_id, bound_at, note, asked, state, wait, popup)) = row else {
+    let Some((run_id, target_id, bound_at, note, asked, state, wait, popup, first, pages)) = row
+    else {
         return Ok(None);
     };
     let waits = state == JobState::Waiting && wait == Some(Wait::Auth);
@@ -691,6 +895,8 @@ fn screen(c: &Connection, job_id: &str) -> Result<Option<Screen>, JobError> {
             bound_at,
             note: None,
             popup,
+            pages: page_list(pages),
+            first_target_id: first,
         },
         None if waits && !asked => Screen {
             state: ScreenState::Closed,
@@ -700,6 +906,8 @@ fn screen(c: &Connection, job_id: &str) -> Result<Option<Screen>, JobError> {
             bound_at: None,
             note,
             popup: false,
+            pages: Vec::new(),
+            first_target_id: None,
         },
         // Asked, or back in line to be brought to the check again.
         _ if waits || back_in_line => Screen {
@@ -710,6 +918,8 @@ fn screen(c: &Connection, job_id: &str) -> Result<Option<Screen>, JobError> {
             bound_at: None,
             note: None,
             popup: false,
+            pages: Vec::new(),
+            first_target_id: None,
         },
         // A screen of a job that ended, which the runner clears.
         _ => return Ok(None),

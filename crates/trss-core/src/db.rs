@@ -140,6 +140,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("../migrations/jobs/remote_screen.sql")),
     // 46: a find job's request to finish receiving; its screen's first page and a request to close a popup
     Migration::Sql(include_str!("../migrations/jobs/find.sql")),
+    // 47: the pages of a screen's run a person may see as tabs, and a request to show another one
+    Migration::Sql(include_str!("../migrations/jobs/screen_controls.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]

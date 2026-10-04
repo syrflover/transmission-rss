@@ -20,6 +20,31 @@ test("the server's messages are read by their shape", () => {
     data: "/9j/",
   });
   assert.deepEqual(parseServerMessage('{"type":"dropped","gen":3}'), { type: "dropped", gen: 3 });
+  assert.deepEqual(parseServerMessage('{"type":"nav","back":true,"forward":false,"host":"blog.example.org"}'), {
+    type: "nav",
+    back: true,
+    forward: false,
+    host: "blog.example.org",
+  });
+  assert.deepEqual(parseServerMessage('{"type":"nav","back":false,"forward":false,"host":null}'), {
+    type: "nav",
+    back: false,
+    forward: false,
+    host: null,
+  });
+  assert.deepEqual(
+    parseServerMessage(
+      '{"type":"tabs","tabs":[{"id":"T1","title":"","host":"blog.example.org","shown":true,"closable":false},{"id":"P1","title":"글","host":null,"shown":false,"closable":true}]}',
+    ),
+    {
+      type: "tabs",
+      tabs: [
+        { id: "T1", title: "", host: "blog.example.org", shown: true, closable: false },
+        { id: "P1", title: "글", host: null, shown: false, closable: true },
+      ],
+    },
+  );
+  assert.deepEqual(parseServerMessage('{"type":"tabs","tabs":[]}'), { type: "tabs", tabs: [] });
   for (const reason of ["browser", "run", "unreachable", "replaced"]) {
     assert.deepEqual(parseServerMessage(`{"type":"ended","reason":"${reason}"}`), { type: "ended", reason });
   }
@@ -34,6 +59,11 @@ test("a message that is not the protocol's is ignored", () => {
     '{"type":"frame","gen":"1","width":10,"height":10,"data":""}',
     '{"type":"viewport","gen":1,"width":1,"height":1,"dpr":1}',
     '{"type":"ended","reason":"gone"}',
+    '{"type":"nav","back":"yes","forward":false,"host":null}',
+    '{"type":"nav","back":true,"forward":false}',
+    '{"type":"tabs","tabs":"none"}',
+    '{"type":"tabs","tabs":[{"id":"","title":"","host":null,"shown":true,"closable":true}]}',
+    '{"type":"tabs","tabs":[{"id":"T1","title":"","host":null,"shown":true}]}',
     '{"type":"unknown"}',
   ]) {
     assert.equal(parseServerMessage(text), null, text);
@@ -54,6 +84,8 @@ test("inputs are encoded as the server's protocol names them", () => {
     modifiers: 0,
   });
   assert.deepEqual(JSON.parse(encode({ type: "reload" }) ?? ""), { type: "reload" });
+  assert.deepEqual(JSON.parse(encode({ type: "back" }) ?? ""), { type: "back" });
+  assert.deepEqual(JSON.parse(encode({ type: "forward" }) ?? ""), { type: "forward" });
   assert.deepEqual(JSON.parse(encode({ type: "viewport", width: 402, height: 666, dpr: 3, touch: true }) ?? ""), {
     type: "viewport",
     width: 402,

@@ -103,6 +103,43 @@ export function BackIcon(props: ComponentProps<"svg">) {
   );
 }
 
+/** A chevron pointing left: back in a page's history. */
+export function HistoryBackIcon(props: ComponentProps<"svg">) {
+  return (
+    <Icon {...props}>
+      <path d="m15 6-6 6 6 6" />
+    </Icon>
+  );
+}
+
+/** A chevron pointing right: forward in a page's history. */
+export function HistoryForwardIcon(props: ComponentProps<"svg">) {
+  return (
+    <Icon {...props}>
+      <path d="m9 6 6 6-6 6" />
+    </Icon>
+  );
+}
+
+/** An arrow turning back on itself: load the page again. */
+export function ReloadIcon(props: ComponentProps<"svg">) {
+  return (
+    <Icon {...props}>
+      <path d="M19.5 12a7.5 7.5 0 1 1-2.3-5.4" />
+      <path d="M19.5 4.5v4h-4" />
+    </Icon>
+  );
+}
+
+/** A cross: close. */
+export function CloseIcon(props: ComponentProps<"svg">) {
+  return (
+    <Icon {...props}>
+      <path d="m7 7 10 10M17 7 7 17" />
+    </Icon>
+  );
+}
+
 /** A step that has not been reached. */
 export function CircleIcon(props: ComponentProps<"svg">) {
   return (

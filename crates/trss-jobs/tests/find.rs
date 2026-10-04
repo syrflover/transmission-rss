@@ -58,6 +58,8 @@ struct FindBrowser {
     pages: Mutex<Vec<String>>,
     /// The pages closed at a person's request.
     closed: Mutex<Vec<String>>,
+    /// Every page the worker asked to close, whether it was closed.
+    close_calls: Mutex<Vec<String>>,
     /// How many times a page was brought back to its check.
     rearms: AtomicUsize,
     /// The next preparation fails.
@@ -173,6 +175,7 @@ impl AuthBrowser for FindBrowser {
         target: &'a str,
     ) -> BoxFuture<'a, bool> {
         Box::pin(async move {
+            self.close_calls.lock().unwrap().push(target.to_owned());
             let mut pages = self.pages.lock().unwrap();
             if !self.is_live(job, run_id) || pages.first().map(String::as_str) == Some(target) {
                 return false;
@@ -766,7 +769,7 @@ async fn a_person_closes_a_popup_and_the_screen_goes_back_to_the_post() {
     // The post's own page is no popup to close.
     assert!(!s
         .screens
-        .request_close(&id, &run_id, first.bound_at.unwrap(), 2_000)
+        .request_close(&id, &run_id, first.bound_at.unwrap(), None, 2_000)
         .await
         .unwrap());
 
@@ -780,12 +783,12 @@ async fn a_person_closes_a_popup_and_the_screen_goes_back_to_the_post() {
     // A request made on the binding before is not this page's.
     assert!(!s
         .screens
-        .request_close(&id, &run_id, first.bound_at.unwrap(), 3_000)
+        .request_close(&id, &run_id, first.bound_at.unwrap(), None, 3_000)
         .await
         .unwrap());
     assert!(s
         .screens
-        .request_close(&id, &run_id, popup.bound_at.unwrap(), 3_000)
+        .request_close(&id, &run_id, popup.bound_at.unwrap(), None, 3_000)
         .await
         .unwrap());
     until(5, || async {
@@ -803,6 +806,134 @@ async fn a_person_closes_a_popup_and_the_screen_goes_back_to_the_post() {
     let back = shown(&s, &id).await;
     assert!(!back.popup);
     assert!(back.bound_at > popup.bound_at);
+}
+
+/// Waits until the screen shows `target`, for up to five seconds.
+async fn shows(s: &Setup, id: &str, target: &str) {
+    until(5, || async {
+        shown(s, id).await.target_id.as_deref() == Some(target)
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_persons_choice_of_an_older_tab_is_kept_and_a_new_popup_is_shown_after_it() {
+    let s = setup(true).await;
+    let id = browsing(&s).await;
+    s.browser.pages.lock().unwrap().push("popup-1".to_owned());
+    shows(&s, &id, "popup-1").await;
+    let popup = shown(&s, &id).await;
+    let run_id = popup.run_id.clone().unwrap();
+    assert_eq!(
+        popup.pages,
+        vec!["target-1".to_owned(), "popup-1".to_owned()]
+    );
+
+    assert!(s
+        .screens
+        .request_switch(&id, &run_id, popup.bound_at.unwrap(), "target-1", 5_000)
+        .await
+        .unwrap());
+    shows(&s, &id, "target-1").await;
+    let chosen = shown(&s, &id).await;
+    // The follower looks again and again: the choice stays.
+    tokio::time::sleep(Duration::from_millis(2_500)).await;
+    let kept = shown(&s, &id).await;
+    assert_eq!(kept.target_id.as_deref(), Some("target-1"));
+    assert_eq!(kept.bound_at, chosen.bound_at);
+
+    // A new window that stays is shown, though the person chose another.
+    s.browser.pages.lock().unwrap().push("popup-2".to_owned());
+    shows(&s, &id, "popup-2").await;
+    assert_eq!(
+        shown(&s, &id).await.pages,
+        vec![
+            "target-1".to_owned(),
+            "popup-1".to_owned(),
+            "popup-2".to_owned()
+        ]
+    );
+}
+
+#[tokio::test]
+async fn closing_a_hidden_tab_keeps_the_screen_and_closing_the_shown_one_shows_the_newest_left() {
+    let s = setup(true).await;
+    let id = browsing(&s).await;
+    for popup in ["popup-1", "popup-2"] {
+        s.browser.pages.lock().unwrap().push(popup.to_owned());
+        shows(&s, &id, popup).await;
+    }
+    let second = shown(&s, &id).await;
+    let run_id = second.run_id.clone().unwrap();
+    assert_eq!(second.pages.len(), 3);
+
+    // `popup-1` is hidden: only it closes, and the screen stays on `popup-2`.
+    assert!(s
+        .screens
+        .request_close(
+            &id,
+            &run_id,
+            second.bound_at.unwrap(),
+            Some("popup-1"),
+            5_000
+        )
+        .await
+        .unwrap());
+    until(5, || async {
+        *s.browser.closed.lock().unwrap() == vec!["popup-1".to_owned()]
+    })
+    .await;
+    until(5, || async { shown(&s, &id).await.pages.len() == 2 }).await;
+    let after = shown(&s, &id).await;
+    assert_eq!(after.target_id.as_deref(), Some("popup-2"));
+    assert_eq!(after.bound_at, second.bound_at);
+
+    // The shown one closes: the newest page left is the post's own.
+    assert!(s
+        .screens
+        .request_close(&id, &run_id, after.bound_at.unwrap(), None, 6_000)
+        .await
+        .unwrap());
+    shows(&s, &id, "target-1").await;
+    assert_eq!(
+        *s.browser.closed.lock().unwrap(),
+        vec!["popup-1".to_owned(), "popup-2".to_owned()]
+    );
+    assert_eq!(shown(&s, &id).await.pages, vec!["target-1".to_owned()]);
+}
+
+#[tokio::test]
+async fn the_worker_never_asks_the_browser_to_close_the_first_page() {
+    let s = setup(true).await;
+    let id = browsing(&s).await;
+    let first = shown(&s, &id).await;
+    let run_id = first.run_id.clone().unwrap();
+    // The web does not write such a request; one that reaches the row anyway
+    // (written by hand here) is not asked of the browser.
+    s.store
+        .db()
+        .run::<_, DbError, _>(|c| {
+            Ok(c.execute(
+                "UPDATE subtitle_job_screens SET close_target_id = 'target-1 popup-9'",
+                [],
+            )?)
+        })
+        .await
+        .unwrap();
+    until(5, || async {
+        s.browser
+            .close_calls
+            .lock()
+            .unwrap()
+            .contains(&"popup-9".to_owned())
+    })
+    .await;
+    assert_eq!(
+        *s.browser.close_calls.lock().unwrap(),
+        vec!["popup-9".to_owned()]
+    );
+    assert!(s.screens.take_close(&id, &run_id).await.unwrap().is_empty());
+    assert_eq!(shown(&s, &id).await.target_id.as_deref(), Some("target-1"));
 }
 
 #[tokio::test]

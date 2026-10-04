@@ -46,6 +46,9 @@ export function receive(session: ScreenSession, message: ServerMessage): ScreenS
       };
     case "dropped":
       return { ...session, gen: newest(session.gen, message.gen) };
+    // The page's state and the tabs are not the session's: the screen keeps them.
+    case "nav":
+    case "tabs":
     case "ended":
       return session;
   }

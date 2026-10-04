@@ -1,16 +1,14 @@
-import { useId, useState } from "react";
+import { useId } from "react";
 
 import { Button } from "@/components/ui/button";
-import { ApiError } from "@/lib/api";
 
-import { btnAction, btnNeutral } from "../collect/channels/styles";
-import { closePopup, type JobScreen } from "./api";
+import { btnAction } from "../collect/channels/styles";
+import type { JobScreen } from "./api";
 import { RemoteScreen } from "./remote/RemoteScreen";
 import type { ScreenPrepare } from "./useScreenPrepare";
 
 const TITLE = "인증";
 const FIND_TITLE = "직접 찾기";
-const CLOSE_FAILED = "창을 닫지 못했어요. 잠시 뒤 다시 시도해 주세요.";
 
 /**
  * The job's check on the site, done on the server browser's page from here
@@ -19,9 +17,9 @@ const CLOSE_FAILED = "창을 닫지 못했어요. 잠시 뒤 다시 시도해 �
  * closed screen is prepared again by `다시 열기`, which is the person asking;
  * nothing here asks for a browser by itself. A find job (`find`) shows the
  * creator's posts there for the person to browse, under `직접 찾기`; `children`
- * come under the screen (its `받기 끝내기`). When the screen follows a page the
- * post opened (`popup`), `이 창 닫기` asks the server to close it, and the screen
- * goes back to the page before it.
+ * come under the screen (its `받기 끝내기`). The screen has the same browser
+ * controls for either: back, forward, reload, the host of the page and the
+ * tabs of the run ({@link RemoteScreen}).
  */
 export function JobAuth({
   jobId,
@@ -38,29 +36,6 @@ export function JobAuth({
 }) {
   const headingId = useId();
   const title = find ? FIND_TITLE : TITLE;
-  const [closing, setClosing] = useState<number | null>(null);
-  const [closeError, setCloseError] = useState<string | null>(null);
-  const run = screen.run;
-  const bound = screen.bound;
-  // Asked for this binding: the button waits for the screen to move on.
-  const asked = closing !== null && closing === bound;
-  const close = async () => {
-    if (run === null || bound === null) return;
-    setClosing(bound);
-    setCloseError(null);
-    try {
-      await closePopup(jobId, run, bound);
-    } catch (e) {
-      setClosing(null);
-      setCloseError(e instanceof ApiError ? e.message : CLOSE_FAILED);
-    }
-  };
-  const actions =
-    find && screen.popup ? (
-      <Button type="button" variant="ghost" className={btnNeutral} disabled={asked} onClick={() => void close()}>
-        {asked ? "닫는 중…" : "이 창 닫기"}
-      </Button>
-    ) : null;
   return (
     <section aria-labelledby={headingId} className="mt-6 max-[720px]:mt-4">
       {screen.state === "ready" && screen.run !== null ? (
@@ -72,7 +47,6 @@ export function JobAuth({
           title={title}
           opening={prepare.opening}
           onReopen={prepare.open}
-          actions={actions}
         />
       ) : (
         <>
@@ -81,11 +55,6 @@ export function JobAuth({
           </h2>
           <Notice screen={screen} prepare={prepare} find={find} />
         </>
-      )}
-      {closeError !== null && (
-        <p role="alert" className="mt-2 text-[13px] font-semibold text-urgent">
-          {closeError}
-        </p>
       )}
       {prepare.error !== null && (
         <p role="alert" className="mt-2 text-[13px] font-semibold text-urgent">

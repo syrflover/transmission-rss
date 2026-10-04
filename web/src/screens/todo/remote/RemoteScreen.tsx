@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type CompositionEvent, type KeyboardEvent, type PointerEvent } from "react";
 
 import { Button } from "@/components/ui/button";
+import { ApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 import { btnAction, btnNeutral } from "../../collect/channels/styles";
+import { closeTab, switchTab } from "../api";
+import { CloseIcon, HistoryBackIcon, HistoryForwardIcon, ReloadIcon } from "../icons";
 import { toRemote } from "./geometry";
 import {
   buttonName,
@@ -16,8 +19,14 @@ import {
   nextClickCount,
   wheelPixels,
 } from "./keys";
-import { textChunks, type EndedReason, type InputBody, type TouchPoint } from "./protocol";
+import { textChunks, type EndedReason, type InputBody, type Tab, type TouchPoint } from "./protocol";
+import { showsTabRow, tabLabel, withShown } from "./tabs";
 import { isTouchDevice, useRemoteConnection } from "./useRemoteConnection";
+
+const TAB_FAILED = "창을 바꾸지 못했어요. 잠시 뒤 다시 시도해 주세요.";
+
+/** A round button with an icon, in the shape of the screen's other buttons; it is at least as tall as they are. */
+const iconButton = cn(btnNeutral, "size-9 min-h-9 w-9 px-0 max-[720px]:size-10 max-[720px]:min-h-10");
 
 const ENDED_TEXT: Record<EndedReason, string> = {
   browser: "서버 브라우저가 닫혔어요. 작업 화면을 다시 열면 다시 준비해요.",
@@ -30,6 +39,16 @@ const ENDED_TEXT: Record<EndedReason, string> = {
  * The remote screen of a job: the server browser's page drawn into the area,
  * and the pointer, touch and keyboard input of this device relayed to it.
  *
+ * - Above the area, a toolbar has back, forward and reload buttons, the host
+ *   of the page shown (never its whole address: the server sends only the
+ *   host) and, on a touch screen, `키보드`. Back and forward are on as the
+ *   server says ({@link Connection.nav}); the server judges every step
+ *   again, and never goes back to the blank page it passed through.
+ * - Below it, a row of tabs when the run has two or more pages: the page
+ *   shown is marked, a tab switches to its page, and every tab but the run's
+ *   first has a close control. Switching and closing are asked of the server
+ *   (`POST .../screen/switch` and `.../close`) for the binding this screen
+ *   shows; the worker moves the screen, which reconnects.
  * - Pointer positions are mapped from the shown box to the frame's own CSS
  *   pixels with {@link toRemote}, so a frame of another size than the area
  *   (another device opened the screen last) is still hit exactly. An input is
@@ -50,7 +69,6 @@ export function RemoteScreen({
   title,
   opening,
   onReopen,
-  actions,
 }: {
   jobId: string;
   run: string;
@@ -61,18 +79,39 @@ export function RemoteScreen({
   opening: boolean;
   /** Asks for the page and its screen to be prepared again; resolves when the answer is in. */
   onReopen: () => Promise<void>;
-  /** More controls of the screen, before its own (a find job's `이 창 닫기`). */
-  actions?: React.ReactNode;
 }) {
   const area = useRef<HTMLDivElement>(null);
   const image = useRef<HTMLImageElement>(null);
   const field = useRef<HTMLTextAreaElement>(null);
   const refresh = useRef<HTMLButtonElement>(null);
   const [attempt, setAttempt] = useState(0);
+  /** A request about a tab is on its way (the tabs wait for the answer). */
+  const [asking, setAsking] = useState(false);
+  /** The tab a switch was asked for, shown as the page until the server's tabs say so. */
+  const [wanted, setWanted] = useState<string | null>(null);
+  const [tabError, setTabError] = useState<string | null>(null);
   const [touch] = useState(isTouchDevice);
   const [typing, setTyping] = useState(false);
   const conn = useRemoteConnection({ jobId, run, bound, attempt, area, image });
   const { send, session } = conn;
+  const tabs = withShown(conn.tabs, wanted);
+  // The server's tabs are the truth again once they come.
+  useEffect(() => setWanted(null), [conn.tabs]);
+
+  /** Asks the server to switch to or close a tab, for the binding this screen shows. */
+  const askTab = async (ask: (jobId: string, run: string, bound: number, target: string) => Promise<void>, tab: Tab) => {
+    if (bound === null || asking) return;
+    setAsking(true);
+    setTabError(null);
+    try {
+      await ask(jobId, run, bound, tab.id);
+      if (ask === switchTab) setWanted(tab.id);
+    } catch (e) {
+      setTabError(e instanceof ApiError ? e.message : TAB_FAILED);
+    } finally {
+      setAsking(false);
+    }
+  };
 
   // --- pointer and touch ---------------------------------------------------------------------
 
@@ -269,29 +308,110 @@ export function RemoteScreen({
 
   return (
     <>
-      <div className="mb-3 flex flex-wrap items-center gap-x-2.5 gap-y-1.5 max-[720px]:mb-2">
-        <h2 id={headingId} className="text-[17px] font-bold">
-          {title}
-        </h2>
-        <div className="ml-auto flex items-center gap-2">
-          {actions}
-          {touch && (
-            <Button
-              type="button"
-              variant="ghost"
-              className={btnNeutral}
-              aria-pressed={typing}
-              disabled={!live}
-              onClick={showKeyboard}
-            >
-              키보드
-            </Button>
-          )}
-          <Button ref={refresh} type="button" variant="ghost" className={btnNeutral} disabled={!live} onClick={conn.reload}>
-            새로고침
+      <h2 id={headingId} className="mb-2 text-[17px] font-bold">
+        {title}
+      </h2>
+      <div role="toolbar" aria-label="원격 화면 도구" className="mb-2 flex items-center gap-1.5">
+        <Button
+          type="button"
+          variant="ghost"
+          className={iconButton}
+          aria-label="뒤로"
+          title="뒤로"
+          disabled={!live || !conn.nav?.back}
+          onClick={conn.back}
+        >
+          <HistoryBackIcon className="size-[18px]" />
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          className={iconButton}
+          aria-label="앞으로"
+          title="앞으로"
+          disabled={!live || !conn.nav?.forward}
+          onClick={conn.forward}
+        >
+          <HistoryForwardIcon className="size-[18px]" />
+        </Button>
+        <Button
+          ref={refresh}
+          type="button"
+          variant="ghost"
+          className={iconButton}
+          aria-label="새로고침"
+          title="새로고침"
+          disabled={!live}
+          onClick={conn.reload}
+        >
+          <ReloadIcon className="size-[18px]" />
+        </Button>
+        <p className="min-w-0 flex-1 truncate px-1.5 text-[13px] text-text-secondary" title={conn.nav?.host ?? undefined}>
+          {conn.nav?.host != null && <span className="sr-only">현재 사이트 </span>}
+          {conn.nav?.host}
+        </p>
+        {touch && (
+          <Button
+            type="button"
+            variant="ghost"
+            className={cn(btnNeutral, "ml-auto")}
+            aria-pressed={typing}
+            disabled={!live}
+            onClick={showKeyboard}
+          >
+            키보드
           </Button>
-        </div>
+        )}
       </div>
+      {showsTabRow(tabs) && (
+        <div role="group" aria-label="열린 창" className="mb-2 flex flex-wrap gap-1.5">
+          {tabs.map((tab) => (
+            <div
+              key={tab.id}
+              className={cn(
+                "flex max-w-[220px] min-w-0 items-center rounded-full border max-[720px]:max-w-full",
+                tab.shown
+                  ? "border-focus bg-[color-mix(in_srgb,var(--focus-ring)_12%,transparent)]"
+                  : "border-hairline bg-surface-1",
+              )}
+            >
+              <button
+                type="button"
+                aria-current={tab.shown ? "page" : undefined}
+                disabled={asking || !live}
+                className={cn(
+                  "min-h-9 min-w-0 flex-1 truncate rounded-full px-3 text-left text-[13px] font-semibold max-[720px]:min-h-10",
+                  tab.shown ? "text-focus" : "text-text-primary",
+                  !tab.closable && "pr-3",
+                  tab.closable && "pr-1",
+                )}
+                onClick={() => {
+                  if (!tab.shown) void askTab(switchTab, tab);
+                }}
+              >
+                {tabLabel(tab)}
+              </button>
+              {tab.closable && (
+                <button
+                  type="button"
+                  aria-label={`${tabLabel(tab)} 닫기`}
+                  title="닫기"
+                  disabled={asking || !live}
+                  className="flex size-9 flex-none items-center justify-center rounded-full text-text-secondary hover:text-text-primary max-[720px]:size-10"
+                  onClick={() => void askTab(closeTab, tab)}
+                >
+                  <CloseIcon className="size-[14px]" />
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      {tabError !== null && (
+        <p role="alert" className="mb-2 text-[13px] font-semibold text-urgent">
+          {tabError}
+        </p>
+      )}
 
       <div
         className="relative overflow-hidden rounded-card border border-hairline bg-surface-2 shadow-(--card-shadow) outline-offset-2 focus-within:outline-2 focus-within:outline-focus"

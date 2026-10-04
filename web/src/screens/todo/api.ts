@@ -384,10 +384,7 @@ export interface JobScreen {
    */
   bound: number | null;
   note: string | null;
-  /**
-   * With `run`: the page shown is one the post opened (a find job's popup), which the person may close
-   * ({@link closePopup}).
-   */
+  /** With `run`: the page shown is not the one the run was bound with (a popup). */
   popup: boolean;
 }
 
@@ -407,14 +404,26 @@ export function prepareScreen(id: string): Promise<JobScreen | null> {
 }
 
 /**
- * Closes the page a find job's screen shows, of the binding (`run`, `bound`) the person sees, when it is one the post
- * opened (`popup`). The worker closes it in the server browser, never the post's own page, and the screen goes back to
- * the page before it as a new binding. A `conflict` when the screen no longer shows that popup.
+ * Closes the tab `target` of the job's screen, of the binding (`run`, `bound`) the person sees, shown or not. The worker
+ * closes it in the server browser, never the run's first page. A page that is not shown leaves the screen as it is; the
+ * one shown goes to the newest page left, as a new binding. A `conflict` when the binding changed or the page cannot be
+ * closed.
  */
-export async function closePopup(id: string, run: string, bound: number): Promise<void> {
+export async function closeTab(id: string, run: string, bound: number, target: string): Promise<void> {
   await api<unknown>(`/subtitle-jobs/${encodeURIComponent(id)}/screen/close`, {
     method: "POST",
-    body: { run, bound },
+    body: { run, bound, target },
+  });
+}
+
+/**
+ * Shows the tab `target` on the job's screen, of the binding (`run`, `bound`) the person sees: the worker moves the
+ * screen to it as a new binding. A `conflict` when the binding changed or the page is not one of the tabs.
+ */
+export async function switchTab(id: string, run: string, bound: number, target: string): Promise<void> {
+  await api<unknown>(`/subtitle-jobs/${encodeURIComponent(id)}/screen/switch`, {
+    method: "POST",
+    body: { run, bound, target },
   });
 }
 

@@ -20,6 +20,27 @@ export interface Viewport {
  */
 export type EndedReason = "browser" | "run" | "unreachable" | "replaced";
 
+/** One tab of the run: a page the server browser has open. */
+export interface Tab {
+  /** What a switch or close request names the page by. */
+  id: string;
+  /** The page's title, already cut by the server; empty when the page has none. */
+  title: string;
+  /** Only the host of the page's address, never a path or query; `null` for a page with none (`about:blank`). */
+  host: string | null;
+  /** The page the screen shows. */
+  shown: boolean;
+  /** The run's first page cannot be closed. */
+  closable: boolean;
+}
+
+/** Whether a step back or forward is allowed on the page shown, and its host. */
+export interface Nav {
+  back: boolean;
+  forward: boolean;
+  host: string | null;
+}
+
 export type ServerMessage =
   /** A change of size is done (or, on connecting, the size the page has now); `gen` names the frames of it. */
   | ({ type: "viewport"; gen: number } & Viewport)
@@ -27,9 +48,26 @@ export type ServerMessage =
   | { type: "frame"; gen: number; width: number; height: number; data: string }
   /** An input was dropped; `gen` is the generation the page is at. */
   | { type: "dropped"; gen: number }
+  /** The state of the page shown; sent on connecting and whenever it changes. */
+  | ({ type: "nav" } & Nav)
+  /** The run's tabs in the order the worker listed them; sent on connecting and whenever they change. */
+  | { type: "tabs"; tabs: Tab[] }
   | { type: "ended"; reason: EndedReason };
 
 const isNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
+
+function parseTab(value: unknown): Tab | null {
+  if (typeof value !== "object" || value === null) return null;
+  const t = value as Record<string, unknown>;
+  return typeof t.id === "string" &&
+    t.id !== "" &&
+    typeof t.title === "string" &&
+    (t.host === null || typeof t.host === "string") &&
+    typeof t.shown === "boolean" &&
+    typeof t.closable === "boolean"
+    ? { id: t.id, title: t.title, host: t.host, shown: t.shown, closable: t.closable }
+    : null;
+}
 
 /** The message a text frame carries, or `null` when it is not one of the protocol's. */
 export function parseServerMessage(text: string): ServerMessage | null {
@@ -52,6 +90,20 @@ export function parseServerMessage(text: string): ServerMessage | null {
         : null;
     case "dropped":
       return isNumber(m.gen) ? { type: "dropped", gen: m.gen } : null;
+    case "nav":
+      return typeof m.back === "boolean" && typeof m.forward === "boolean" && (m.host === null || typeof m.host === "string")
+        ? { type: "nav", back: m.back, forward: m.forward, host: m.host }
+        : null;
+    case "tabs": {
+      if (!Array.isArray(m.tabs)) return null;
+      const tabs: Tab[] = [];
+      for (const item of m.tabs as unknown[]) {
+        const t = parseTab(item);
+        if (t === null) return null;
+        tabs.push(t);
+      }
+      return { type: "tabs", tabs };
+    }
     case "ended":
       return m.reason === "browser" || m.reason === "run" || m.reason === "unreachable" || m.reason === "replaced"
         ? { type: "ended", reason: m.reason }
@@ -101,6 +153,9 @@ export type InputBody =
 export type ClientMessage =
   | ({ type: "viewport" } & Viewport)
   | { type: "reload" }
+  /** A step back or forward in the page's history; the server judges it again on the page's own history. */
+  | { type: "back" }
+  | { type: "forward" }
   | (InputBody & { gen: number });
 
 /** The server drops a message over this many bytes by closing the socket. */
