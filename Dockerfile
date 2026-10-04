@@ -10,8 +10,8 @@ COPY web/ ./
 RUN bun run build
 
 
-# Rust build: `trss-web` (web server) and `trss-worker` (long-running
-# collection worker).
+# Rust build: `trss-web` (web server), `trss-worker` (long-running collection
+# worker) and `trss-probe` (the file probe, ticket 0060).
 FROM clux/muslrust:stable AS builder
 
 WORKDIR /usr/src/transmission-rss
@@ -23,6 +23,26 @@ COPY crates ./crates
 RUN cargo build --release --locked
 
 
+# The probe alone, for a host that runs a release without it (deploy/probe.sh
+# mounts it into the release's image). Not part of the image: build it with
+#   docker build --target probe-binary --output type=local,dest=probe-out .
+# which writes probe-out/trss-probe, a static executable.
+FROM clux/muslrust:stable AS probe-builder
+
+WORKDIR /usr/src/transmission-rss
+
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+
+RUN cargo build --release --locked -p trss-probe
+
+FROM scratch AS probe-binary
+
+COPY --from=probe-builder \
+    /usr/src/transmission-rss/target/x86_64-unknown-linux-musl/release/trss-probe \
+    /trss-probe
+
+
 FROM alpine:edge
 
 RUN apk update
@@ -32,6 +52,7 @@ WORKDIR /usr/local/bin
 COPY --from=builder \
     /usr/src/transmission-rss/target/x86_64-unknown-linux-musl/release/trss-web \
     /usr/src/transmission-rss/target/x86_64-unknown-linux-musl/release/trss-worker \
+    /usr/src/transmission-rss/target/x86_64-unknown-linux-musl/release/trss-probe \
     ./
 
 # Static frontend that `trss-web` serves (no Node server at runtime).

@@ -2969,6 +2969,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "trss-probe"
+version = "0.1.0"
+dependencies = [
+ "rustix",
+ "tempfile",
+]
+
+[[package]]
 name = "trss-subtitles"
 version = "0.1.0"
 dependencies = [

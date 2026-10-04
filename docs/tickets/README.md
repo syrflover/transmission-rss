@@ -144,7 +144,7 @@
 | 티켓 | 제목 | 상태 | 막는 티켓 |
 | --- | --- | --- | --- |
 | [0059](0059-archive-tools-and-limits.md) | 압축 해제 도구와 한도를 정해요 | 대기 | 없음 |
-| [0060](0060-server-filesystem-probe.md) | 실제 서버의 미디어 디스크에서 파일 쓰기를 확인해요 | 대기 | 없음 |
+| [0060](0060-server-filesystem-probe.md) | 실제 서버의 미디어 디스크에서 파일 쓰기를 확인해요 | 진행 중 | 없음 |
 | [0061](0061-infuse-placement-check.md) | Infuse에서 적용본과 `.trss/`가 어떻게 보이는지 확인해요 | 대기 | 없음 |
 | [0062](0062-run-as-media-user.md) | web과 worker를 1000:1000으로 실행해요 | 완료 | 없음 |
 | [0063](0063-store-and-first-apply.md) | 받은 자막 파일 하나를 보관하고 영상 옆에 처음 적용해요 | 완료 | 없음 |

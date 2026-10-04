@@ -106,3 +106,6 @@ web/dist/
 
 # dev/compose.sh: the local environment's data
 dev/local/
+
+# deploy/probe.sh: the probe binary built for a host (docker build --target probe-binary)
+probe-out/

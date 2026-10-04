@@ -109,6 +109,18 @@ To switch an install that ran as root (release 0.5.x and before), on the host, w
 4. Update `TRSS_VERSION` and start: `docker compose -f docker-compose.trss.yml pull && docker compose -f docker-compose.trss.yml up -d`.
 5. Look at both logs (`docker compose -f docker-compose.trss.yml logs trss-worker trss-web`). A start that stops with `cannot write the app data folder` names the path to fix.
 
+### File probe
+
+`trss-probe` checks, on a host's real disks, the file behavior that archiving and subtitle placing rely on, and prints a plain-text report: the filesystem and mount options of the media and data folders, `renameat2(RENAME_NOREPLACE)` (and its refusal with `EEXIST`), `EXDEV` between the data folder and the media, `fsync`, the stability of `dev:inode` across a rename, the owner and mode of what it makes (expected 1000:1000), a test subfolder in an existing work folder, and a 300 MiB write and read under the container's memory limit with the cgroup's `memory.current` peak and `oom_kill`. It makes only folders and files named `.trss-probe-*` and removes them. Releases after 0.5.0 carry it as `/usr/local/bin/trss-probe`. For a host that runs an older image, build the static binary and run it in a one-off container that looks like the worker's (user 1000:1000, 128M of memory, no swap, the worker's mounts):
+
+```sh
+docker build --target probe-binary --output type=local,dest=probe-out .   # writes probe-out/trss-probe
+# copy probe-out/trss-probe and deploy/probe.sh to the compose folder, then there:
+./probe.sh -- --work "/downloads/downloads/<a folder Transmission made>" 2>&1 | tee probe.txt
+```
+
+`./probe.sh --help` lists the options. The steps for the server are in ticket 0060.
+
 ### Resource limits
 
 `trss-browser` is limited to 768M of memory, with no CPU limit (the limit was measured with one Chromium, ticket 0032; CPU was not measured under a limit). A run opens a Chromium, so give it more when the policy allows several concurrent browser jobs.
