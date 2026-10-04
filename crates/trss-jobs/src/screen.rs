@@ -25,6 +25,13 @@
 //!   close, never the run's first; the worker takes them
 //!   ([`ScreenStore::take_switch`], [`ScreenStore::take_close`]), closes the
 //!   page in the browser (never the first, here too) or moves the screen.
+//! - A person may ask to start the run anew when its page is stuck
+//!   ([`ScreenStore::request_restart`]). It is a request to prepare with
+//!   `restart` set ([`PrepareRequest::restart`]): the worker ends the run and
+//!   brings the job back to the check in a new one
+//!   ([`ScreenStore::requeue_for_check`]). The run it ends on purpose is not
+//!   reported as one that ended by itself ([`ScreenStore::unbind`] leaves a
+//!   run whose restart is pending).
 //!
 //! No token, cookie or address is written here: a page is a DevTools target
 //! ID.
@@ -54,6 +61,11 @@ pub const FILE_REFUSED: &str = "사이트 확인을 마쳤지만 파일 대신 �
 pub const CHECK_PREPARED_AGAIN: &str = "사이트 확인 화면을 다시 준비해요";
 /// The same, for a find job.
 pub const FIND_PREPARED_AGAIN: &str = "제작자의 게시물을 다시 열어요";
+/// The job's log when a person asked to start the stuck run anew and the
+/// worker ended it ([`ScreenStore::requeue_for_check`] with `restarted`).
+pub const RESTARTED_CHECK: &str = "서버 브라우저를 새로 띄워 사이트 확인 화면을 다시 준비해요";
+/// The same, for a find job.
+pub const RESTARTED_FIND: &str = "서버 브라우저를 새로 띄워 제작자의 게시물을 다시 열어요";
 
 /// How far a job's remote screen is, as the web shows it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,6 +145,10 @@ pub struct PrepareRequest {
     pub asked_at: Millis,
     /// The job is a find job: its page has no check to bring back.
     pub find: bool,
+    /// A person asked to start the bound run anew
+    /// ([`ScreenStore::request_restart`]): the worker ends it, even when it
+    /// is live, and puts the job back in line.
+    pub restart: bool,
 }
 
 /// A file the browser downloaded arrived for the bound run.
@@ -303,6 +319,42 @@ impl ScreenStore {
             .await
     }
 
+    /// A person asked to start the run `run_id` of the job anew, of the
+    /// binding (`run_id`, `bound_at`) they see: written for the worker (a
+    /// request to prepare with [`PrepareRequest::restart`] set; the caller
+    /// wakes it) when that is still the binding and the job waits for its
+    /// check. Whether it was. It counts as the person's input for the run's
+    /// idle end.
+    pub async fn request_restart(
+        &self,
+        job_id: &str,
+        run_id: &str,
+        bound_at: Millis,
+        now: Millis,
+    ) -> Result<bool, JobError> {
+        let (id, run) = (job_id.to_owned(), run_id.to_owned());
+        self.db
+            .run(move |c| {
+                let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                if asked_row(&tx, &id, &run, bound_at)?.is_none() {
+                    return Ok(false);
+                }
+                tx.execute(
+                    "UPDATE subtitle_job_screens
+                     SET restart_run_id = ?2,
+                         prepare_at = MAX(?3, COALESCE(prepare_at, 0) + 1,
+                                          COALESCE(prepared_at, 0) + 1),
+                         input_at = MAX(?3, COALESCE(input_at, 0)),
+                         updated_at = ?3
+                     WHERE job_id = ?1 AND run_id = ?2",
+                    params![id, run, now],
+                )?;
+                tx.commit()?;
+                Ok(true)
+            })
+            .await
+    }
+
     // -----------------------------------------------------------------------
     // What the worker writes
 
@@ -412,8 +464,8 @@ impl ScreenStore {
                     "INSERT INTO subtitle_job_screens
                          (job_id, item_id, run_id, target_id, bound_at, note, prepared_at,
                           input_at, updated_at, first_target_id, close_target_id, pages,
-                          switch_target_id)
-                     VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?5, NULL, ?5, ?4, NULL, ?6, NULL)
+                          switch_target_id, restart_run_id)
+                     VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?5, NULL, ?5, ?4, NULL, ?6, NULL, NULL)
                      ON CONFLICT (job_id) DO UPDATE
                      SET item_id = excluded.item_id, run_id = excluded.run_id,
                          target_id = excluded.target_id, bound_at = excluded.bound_at,
@@ -421,7 +473,8 @@ impl ScreenStore {
                          prepared_at = MAX(excluded.prepared_at, COALESCE(prepare_at, 0)),
                          updated_at = excluded.updated_at,
                          first_target_id = excluded.target_id, close_target_id = NULL,
-                         pages = excluded.pages, switch_target_id = NULL",
+                         pages = excluded.pages, switch_target_id = NULL,
+                         restart_run_id = NULL",
                     params![
                         id,
                         item_id,
@@ -460,7 +513,8 @@ impl ScreenStore {
                          prepared_at = MAX(excluded.prepared_at, COALESCE(prepare_at, 0)),
                          updated_at = excluded.updated_at,
                          first_target_id = NULL, close_target_id = NULL,
-                         pages = NULL, switch_target_id = NULL",
+                         pages = NULL, switch_target_id = NULL,
+                         restart_run_id = NULL",
                     params![id, item_id, note, now],
                 )?;
                 Ok(())
@@ -494,7 +548,11 @@ impl ScreenStore {
 
     /// The run `run_id` ended before its file came: the binding is cleared
     /// (with `note`) when it is still that run's, and the job keeps waiting
-    /// for its check. Whether it was.
+    /// for its check. Whether it was. A run a person asked to start anew
+    /// ([`ScreenStore::request_restart`]) is left bound: the worker ends it
+    /// on purpose and answers the request with
+    /// [`ScreenStore::requeue_for_check`], which is no run that ended by
+    /// itself.
     pub async fn unbind(
         &self,
         job_id: &str,
@@ -510,8 +568,9 @@ impl ScreenStore {
                      SET run_id = NULL, target_id = NULL, bound_at = NULL, note = ?3,
                          input_at = NULL, updated_at = ?4,
                          first_target_id = NULL, close_target_id = NULL,
-                         pages = NULL, switch_target_id = NULL
-                     WHERE job_id = ?1 AND run_id = ?2",
+                         pages = NULL, switch_target_id = NULL,
+                         restart_run_id = NULL
+                     WHERE job_id = ?1 AND run_id = ?2 AND restart_run_id IS NOT ?2",
                     params![id, run, note, now],
                 )? > 0)
             })
@@ -528,7 +587,8 @@ impl ScreenStore {
                      SET run_id = NULL, target_id = NULL, bound_at = NULL, note = ?2,
                          input_at = NULL, updated_at = ?1,
                          first_target_id = NULL, close_target_id = NULL,
-                         pages = NULL, switch_target_id = NULL
+                         pages = NULL, switch_target_id = NULL,
+                         restart_run_id = NULL
                      WHERE run_id IS NOT NULL",
                     params![now, WORKER_RESTARTED],
                 )?)
@@ -590,7 +650,8 @@ impl ScreenStore {
         self.db
             .run(|c| {
                 let mut stmt = c.prepare(&format!(
-                    "SELECT s.job_id, s.run_id, s.prepare_at, j.origin = 'find'
+                    "SELECT s.job_id, s.run_id, s.prepare_at, j.origin = 'find',
+                            s.restart_run_id IS NOT NULL AND s.restart_run_id IS s.run_id
                      FROM subtitle_job_screens s JOIN subtitle_jobs j ON j.id = s.job_id
                      WHERE s.prepare_at > COALESCE(s.prepared_at, 0) AND {WAITS_FOR_CHECK}
                      ORDER BY s.prepare_at"
@@ -601,6 +662,7 @@ impl ScreenStore {
                         run_id: r.get(1)?,
                         asked_at: r.get(2)?,
                         find: r.get(3)?,
+                        restart: r.get(4)?,
                     })
                 })?;
                 Ok(rows.collect::<Result<_, _>>()?)
@@ -632,11 +694,14 @@ impl ScreenStore {
     /// The request asked at `asked_at` is answered by bringing the page to
     /// the check anew: the binding is cleared, and the job and its items that
     /// wait for a check go back in line, so the runner's next run of the job
-    /// prepares it. Whether the job was put back (it still waited).
+    /// prepares it. `restarted`: the request was a person's to start the run
+    /// anew ([`PrepareRequest::restart`]), which the job's log says. Whether
+    /// the job was put back (it still waited).
     pub async fn requeue_for_check(
         &self,
         job_id: &str,
         asked_at: Millis,
+        restarted: bool,
         now: Millis,
     ) -> Result<bool, JobError> {
         let id = job_id.to_owned();
@@ -650,7 +715,8 @@ impl ScreenStore {
                          SET run_id = NULL, target_id = NULL, bound_at = NULL, note = NULL,
                              input_at = NULL, prepared_at = MAX(?2, COALESCE(prepared_at, 0)),
                              updated_at = ?3, first_target_id = NULL, close_target_id = NULL,
-                             pages = NULL, switch_target_id = NULL
+                             pages = NULL, switch_target_id = NULL,
+                             restart_run_id = NULL
                          WHERE job_id = ?1",
                         params![id, asked_at, now],
                     )?;
@@ -658,7 +724,20 @@ impl ScreenStore {
                         "INSERT INTO subtitle_job_events (job_id, at, message, detail)
                          SELECT ?1, ?2, CASE origin WHEN 'find' THEN ?3 ELSE ?4 END, NULL
                          FROM subtitle_jobs WHERE id = ?1",
-                        params![id, now, FIND_PREPARED_AGAIN, CHECK_PREPARED_AGAIN],
+                        params![
+                            id,
+                            now,
+                            if restarted {
+                                RESTARTED_FIND
+                            } else {
+                                FIND_PREPARED_AGAIN
+                            },
+                            if restarted {
+                                RESTARTED_CHECK
+                            } else {
+                                CHECK_PREPARED_AGAIN
+                            }
+                        ],
                     )?;
                 }
                 tx.commit()?;

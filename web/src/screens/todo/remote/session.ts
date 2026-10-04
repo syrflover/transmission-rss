@@ -49,6 +49,7 @@ export function receive(session: ScreenSession, message: ServerMessage): ScreenS
     // The page's state and the tabs are not the session's: the screen keeps them.
     case "nav":
     case "tabs":
+    case "page":
     case "ended":
       return session;
   }

@@ -16,9 +16,9 @@ export interface Viewport {
 
 /**
  * Why the server ended a socket: the page or its connection is gone, the job's binding changed, the run could not be
- * reached, or too many screens are open on the binding already.
+ * reached, the page did not answer when the screen opened, or too many screens are open on the binding already.
  */
-export type EndedReason = "browser" | "run" | "unreachable" | "replaced";
+export type EndedReason = "browser" | "run" | "unreachable" | "stuck" | "replaced";
 
 /** One tab of the run: a page the server browser has open. */
 export interface Tab {
@@ -52,6 +52,11 @@ export type ServerMessage =
   | ({ type: "nav" } & Nav)
   /** The run's tabs in the order the worker listed them; sent on connecting and whenever they change. */
   | { type: "tabs"; tabs: Tab[] }
+  /**
+   * Whether the page answers: `false` once it did not answer an input in time (inputs are not sent to it), `true` once
+   * it answers again. Sent on connecting and whenever it changes; never while the page never stalled.
+   */
+  | { type: "page"; responding: boolean }
   | { type: "ended"; reason: EndedReason };
 
 const isNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
@@ -104,8 +109,10 @@ export function parseServerMessage(text: string): ServerMessage | null {
       }
       return { type: "tabs", tabs };
     }
+    case "page":
+      return typeof m.responding === "boolean" ? { type: "page", responding: m.responding } : null;
     case "ended":
-      return m.reason === "browser" || m.reason === "run" || m.reason === "unreachable" || m.reason === "replaced"
+      return m.reason === "browser" || m.reason === "run" || m.reason === "unreachable" || m.reason === "stuck" || m.reason === "replaced"
         ? { type: "ended", reason: m.reason }
         : null;
     default:

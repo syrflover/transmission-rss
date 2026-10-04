@@ -21,6 +21,11 @@
 //! and forward with the blank page the server passed through as the floor,
 //! the host as the only address that is sent, a popup that becomes a tab, and
 //! switching to and closing tabs (ticket 0055).
+//!
+//! The third is a find job's page that its own script holds: the screen
+//! says the page does not answer and stays, comes back when the page moves
+//! again, ends `stuck` when opened on a page held for good, and a person's
+//! ask for a new run opens the post again in a new run (ticket 0056).
 
 use std::{
     path::Path,
@@ -456,11 +461,60 @@ impl Watched {
             .await
             .unwrap();
     }
+
+    /// The generation of the last size the screen was told.
+    fn gen(&self) -> u64 {
+        self.seen
+            .iter()
+            .rev()
+            .map(|text| serde_json::from_str::<Value>(text).unwrap())
+            .find(|value| value["type"] == "viewport")
+            .and_then(|value| value["gen"].as_u64())
+            .expect("a size was told")
+    }
+
+    /// The next frame, within 30 s (the messages before it are kept).
+    async fn frame(&mut self) -> Value {
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                match self.socket.next().await {
+                    Some(Ok(Message::Text(text))) => {
+                        let value: Value = serde_json::from_str(text.as_str()).unwrap();
+                        if value["type"] == "frame" {
+                            return value;
+                        }
+                        self.seen.push(text.to_string());
+                        self.taken.push(false);
+                    }
+                    Some(Ok(_)) => {}
+                    other => panic!("the socket ended before a frame: {other:?}"),
+                }
+            }
+        })
+        .await
+        .expect("a frame in time")
+    }
+
+    /// A tap of one finger at (`x`, `y`) on the generation `gen`.
+    async fn tap(&mut self, gen: u64, x: f64, y: f64) {
+        self.send(json!({ "type": "touch", "gen": gen, "event": "touchStart",
+                          "points": [{ "x": x, "y": y }] }))
+            .await;
+        self.send(json!({ "type": "touch", "gen": gen, "event": "touchEnd", "points": [] }))
+            .await;
+    }
 }
 
 /// Opens the job's screen socket for the binding (`run`, `bound`) as a phone
 /// does: its size first.
 async fn open_screen(web: std::net::SocketAddr, job: &str, run: &str, bound: i64) -> Watched {
+    let mut screen = connect_screen(web, job, run, bound).await;
+    screen.next("viewport").await;
+    screen
+}
+
+/// [`open_screen`] without waiting for the size to be applied.
+async fn connect_screen(web: std::net::SocketAddr, job: &str, run: &str, bound: i64) -> Watched {
     let mut request =
         format!("ws://{web}/api/subtitle-jobs/{job}/screen/socket?run={run}&bound={bound}")
             .into_client_request()
@@ -477,7 +531,6 @@ async fn open_screen(web: std::net::SocketAddr, job: &str, run: &str, bound: i64
     screen
         .send(json!({ "type": "viewport", "width": 402, "height": 666, "dpr": 3, "touch": true }))
         .await;
-    screen.next("viewport").await;
     screen
 }
 
@@ -596,14 +649,27 @@ impl Eyes {
     }
 }
 
-#[tokio::test]
-#[ignore = "needs docker and the trss-browser image"]
-async fn a_find_screen_steps_back_and_forward_never_before_its_first_page_and_switches_and_closes_tabs(
-) {
+/// A find job at the fake blog's newest post, brought to its screen by the
+/// worker's runner, which goes on tending it, with a web in front: what the
+/// find screen tests share.
+struct FindWorld {
+    _dir: tempfile::TempDir,
+    _container: Container,
+    base: Url,
+    store: JobStore,
+    pool: BrowserPool,
+    screens: trss_jobs::ScreenStore,
+    job: String,
+    web: std::net::SocketAddr,
+    cancel: CancellationToken,
+    worker: tokio::task::JoinHandle<()>,
+}
+
+async fn find_world(test: &str) -> FindWorld {
     let dir = tempfile::tempdir().unwrap();
     let downloads = dir.path().join("browser-downloads");
     std::fs::create_dir(&downloads).unwrap();
-    let (_container, base) = start(&downloads, "find").await;
+    let (container, base) = start(&downloads, test).await;
 
     // The worker's side: a find job at the fake blog's newest post.
     let db = Db::open(dir.path().join("app.db")).await.unwrap();
@@ -655,13 +721,6 @@ async fn a_find_screen_steps_back_and_forward_never_before_its_first_page_and_sw
     };
     let cancel = CancellationToken::new();
     runner.run_ready(&cancel).await.unwrap();
-    let screens = runner.screens().clone();
-    let first = screens.screen(&job).await.unwrap().unwrap();
-    assert_eq!(first.state, ScreenState::Ready);
-    let (run, first_target) = (
-        first.run_id.clone().unwrap(),
-        first.target_id.clone().unwrap(),
-    );
     let wake = Arc::new(Notify::new());
     let worker = tokio::spawn({
         let (runner, wake, cancel) = (runner.clone(), wake.clone(), cancel.clone());
@@ -690,6 +749,46 @@ async fn a_find_screen_steps_back_and_forward_never_before_its_first_page_and_sw
     let web = listener.local_addr().unwrap();
     let router = trss_web::router(dir.path(), state);
     tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    FindWorld {
+        _dir: dir,
+        _container: container,
+        base,
+        store,
+        pool,
+        screens: runner.screens().clone(),
+        job,
+        web,
+        cancel,
+        worker,
+    }
+}
+
+impl FindWorld {
+    async fn end(self) {
+        self.cancel.cancel();
+        let _ = self.worker.await;
+        self.pool.shutdown().await;
+    }
+}
+
+#[tokio::test]
+#[ignore = "needs docker and the trss-browser image"]
+async fn a_find_screen_steps_back_and_forward_never_before_its_first_page_and_switches_and_closes_tabs(
+) {
+    let world = find_world("find").await;
+    let FindWorld {
+        ref base,
+        ref screens,
+        ref job,
+        web,
+        ..
+    } = world;
+    let first = screens.screen(job).await.unwrap().unwrap();
+    assert_eq!(first.state, ScreenState::Ready);
+    let (run, first_target) = (
+        first.run_id.clone().unwrap(),
+        first.target_id.clone().unwrap(),
+    );
     let (switch, close) = (
         format!("/api/subtitle-jobs/{job}/screen/switch"),
         format!("/api/subtitle-jobs/{job}/screen/close"),
@@ -698,7 +797,7 @@ async fn a_find_screen_steps_back_and_forward_never_before_its_first_page_and_sw
 
     // The page the server prepared has a blank page behind it, and the screen
     // says nothing can be stepped back to, with the host and no more.
-    let eyes = Eyes::on(&base, &run, &first_target).await;
+    let eyes = Eyes::on(base, &run, &first_target).await;
     let newest = fake::BLOG_POSTS;
     eyes.title_ends_with(&format!("{newest}화")).await;
     let (current, urls) = eyes.history().await;
@@ -708,7 +807,7 @@ async fn a_find_screen_steps_back_and_forward_never_before_its_first_page_and_sw
         "the server passes through a blank page"
     );
     assert!(current >= 1);
-    let mut screen = open_screen(web, &job, &run, first.bound_at.unwrap()).await;
+    let mut screen = open_screen(web, job, &run, first.bound_at.unwrap()).await;
     let nav = screen.next("nav").await;
     assert_eq!(
         nav,
@@ -759,7 +858,7 @@ async fn a_find_screen_steps_back_and_forward_never_before_its_first_page_and_sw
     eyes.click("popup").await;
     until(Duration::from_secs(20), "the popup is shown", || async {
         screens
-            .screen(&job)
+            .screen(job)
             .await
             .unwrap()
             .unwrap()
@@ -771,13 +870,13 @@ async fn a_find_screen_steps_back_and_forward_never_before_its_first_page_and_sw
     let ended = screen.next("ended").await;
     assert_eq!(ended["reason"], "run");
     every_message.append(&mut screen.seen.clone());
-    let popup_screen = screens.screen(&job).await.unwrap().unwrap();
+    let popup_screen = screens.screen(job).await.unwrap().unwrap();
     let popup = popup_screen.target_id.clone().unwrap();
     assert_eq!(
         popup_screen.pages,
         vec![first_target.clone(), popup.clone()]
     );
-    let mut screen = open_screen(web, &job, &run, popup_screen.bound_at.unwrap()).await;
+    let mut screen = open_screen(web, job, &run, popup_screen.bound_at.unwrap()).await;
     screen.next("nav").await;
     let tabs = screen.next("tabs").await;
     let tabs = tabs["tabs"].as_array().unwrap();
@@ -845,12 +944,12 @@ async fn a_find_screen_steps_back_and_forward_never_before_its_first_page_and_sw
     assert_eq!(ended["reason"], "run");
     every_message.append(&mut screen.seen.clone());
     tokio::time::sleep(Duration::from_secs(3)).await;
-    let back_on_first = screens.screen(&job).await.unwrap().unwrap();
+    let back_on_first = screens.screen(job).await.unwrap().unwrap();
     assert_eq!(
         back_on_first.target_id.as_deref(),
         Some(first_target.as_str())
     );
-    let mut screen = open_screen(web, &job, &run, back_on_first.bound_at.unwrap()).await;
+    let mut screen = open_screen(web, job, &run, back_on_first.bound_at.unwrap()).await;
     screen.next("nav").await;
     let tabs = screen.next("tabs").await;
     let shown: Vec<_> = tabs["tabs"]
@@ -878,7 +977,7 @@ async fn a_find_screen_steps_back_and_forward_never_before_its_first_page_and_sw
     let tabs = screen.next("tabs").await;
     assert_eq!(tabs["tabs"].as_array().unwrap().len(), 1, "{tabs}");
     assert_eq!(
-        screens.screen(&job).await.unwrap().unwrap().bound_at,
+        screens.screen(job).await.unwrap().unwrap().bound_at,
         Some(bound),
         "closing a hidden tab leaves the screen as it is"
     );
@@ -891,7 +990,7 @@ async fn a_find_screen_steps_back_and_forward_never_before_its_first_page_and_sw
         "the popup is shown again",
         || async {
             screens
-                .screen(&job)
+                .screen(job)
                 .await
                 .unwrap()
                 .unwrap()
@@ -904,7 +1003,7 @@ async fn a_find_screen_steps_back_and_forward_never_before_its_first_page_and_sw
     let ended = screen.next("ended").await;
     assert_eq!(ended["reason"], "run");
     every_message.append(&mut screen.seen.clone());
-    let second = screens.screen(&job).await.unwrap().unwrap();
+    let second = screens.screen(job).await.unwrap().unwrap();
     assert_eq!(
         post(
             web,
@@ -918,7 +1017,7 @@ async fn a_find_screen_steps_back_and_forward_never_before_its_first_page_and_sw
         Duration::from_secs(20),
         "the screen is back on the first page",
         || async {
-            let now = screens.screen(&job).await.unwrap().unwrap();
+            let now = screens.screen(job).await.unwrap().unwrap();
             now.target_id.as_deref() == Some(first_target.as_str())
                 && now.pages == vec![first_target.clone()]
         },
@@ -937,7 +1036,151 @@ async fn a_find_screen_steps_back_and_forward_never_before_its_first_page_and_sw
         every_message.len()
     );
 
-    cancel.cancel();
-    let _ = worker.await;
-    pool.shutdown().await;
+    world.end().await;
+}
+
+// ---------------------------------------------------------------------------
+// A page that does not answer (ticket 0056)
+
+#[tokio::test]
+#[ignore = "needs docker and the trss-browser image"]
+async fn a_page_held_by_its_script_stalls_the_screen_and_a_new_run_opens_the_post_again() {
+    let world = find_world("stuck").await;
+    let FindWorld {
+        ref base,
+        ref store,
+        ref pool,
+        ref screens,
+        ref job,
+        web,
+        ..
+    } = world;
+    let first = screens.screen(job).await.unwrap().unwrap();
+    let (run, target, bound) = (
+        first.run_id.clone().unwrap(),
+        first.target_id.clone().unwrap(),
+        first.bound_at.unwrap(),
+    );
+    let eyes = Eyes::on(base, &run, &target).await;
+    eyes.title_ends_with(&format!("{}화", fake::BLOG_POSTS))
+        .await;
+    let mut screen = open_screen(web, job, &run, bound).await;
+    screen.next("nav").await;
+    let gen = screen.gen();
+
+    // The page's script holds it for 9 s; a tap meanwhile is not answered,
+    // and the screen says so and stays.
+    eyes.eval(
+        "setTimeout(() => { const end = Date.now() + 9000; while (Date.now() < end) {} }, 100); 0",
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let tapped = std::time::Instant::now();
+    screen.tap(gen, 200.0, 600.0).await;
+    let page = screen.next("page").await;
+    assert_eq!(page["responding"], false, "{page}");
+    println!(
+        "the screen said the page does not answer {:?} after the tap",
+        tapped.elapsed()
+    );
+
+    // The page moves again: the screen says so, with a new generation.
+    let page = screen.next("page").await;
+    assert_eq!(page["responding"], true, "{page}");
+    let viewport = screen.next("viewport").await;
+    assert!(viewport["gen"].as_u64().unwrap() > gen, "{viewport}");
+    println!(
+        "the page answered again {:?} after the tap, as generation {}",
+        tapped.elapsed(),
+        viewport["gen"]
+    );
+
+    // Inputs go to the page again.
+    eyes.eval("window.taps = 0; addEventListener('touchstart', () => window.taps++); 0")
+        .await;
+    let gen = screen.gen();
+    screen.tap(gen, 200.0, 600.0).await;
+    until(
+        Duration::from_secs(10),
+        "the tap reached the page",
+        || async { eyes.eval("window.taps").await == json!(1) },
+    )
+    .await;
+    println!("a tap reached the page that moved again");
+
+    // The script holds the page for good: a screen opened anew on it ends
+    // `stuck`.
+    eyes.eval("setTimeout(() => { while (true) {} }, 100); 0")
+        .await;
+    drop(eyes);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let gen = screen.gen();
+    screen.tap(gen, 200.0, 600.0).await;
+    let page = screen.next("page").await;
+    assert_eq!(page["responding"], false, "{page}");
+    drop(screen);
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let opened = std::time::Instant::now();
+    let mut again = connect_screen(web, job, &run, bound).await;
+    let ended = again.next("ended").await;
+    assert_eq!(ended["reason"], "stuck", "{ended}");
+    println!(
+        "a screen opened on the held page ended stuck in {:?}",
+        opened.elapsed()
+    );
+
+    // A new run for another binding is refused; for this one the worker
+    // lets the run go and opens the post again in a new run.
+    let restart = format!("/api/subtitle-jobs/{job}/screen/restart");
+    assert_eq!(
+        post(web, &restart, &json!({ "run": run, "bound": bound - 1 })).await,
+        409
+    );
+    assert_eq!(
+        post(web, &restart, &json!({ "run": run, "bound": bound })).await,
+        202
+    );
+    let asked = std::time::Instant::now();
+    until(
+        Duration::from_secs(60),
+        "a new run shows the post",
+        || async {
+            let now = screens.screen(job).await.unwrap().unwrap();
+            now.state == ScreenState::Ready
+                && now.run_id.as_deref().is_some_and(|r| r != run)
+                && now.bound_at.is_some()
+        },
+    )
+    .await;
+    let second = screens.screen(job).await.unwrap().unwrap();
+    let new_run = second.run_id.clone().unwrap();
+    println!(
+        "a new run showed the post {:?} after the ask",
+        asked.elapsed()
+    );
+    assert_eq!(
+        pool.run_of_job(job).map(|r| r.run_id().to_owned()),
+        Some(new_run.clone())
+    );
+    let mut screen = open_screen(web, job, &new_run, second.bound_at.unwrap()).await;
+    let nav = screen.next("nav").await;
+    assert_eq!(nav["host"], fake::HOST);
+    let frame = screen.frame().await;
+    assert_eq!(frame["gen"].as_u64(), Some(screen.gen()));
+    let events = store.detail(job).await.unwrap().unwrap().events;
+    assert!(
+        events
+            .iter()
+            .any(|e| e.message == trss_jobs::screen::RESTARTED_FIND),
+        "{events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| e.message == trss_jobs::screen::RUN_ENDED),
+        "{events:?}"
+    );
+    println!("the screen of the new run shows the post");
+
+    world.end().await;
 }

@@ -22,7 +22,7 @@ use trss_core::{Clock, Db, DbError};
 use trss_jobs::{
     area::ReceiveArea,
     runner::{find::FIND_NOTE, NO_AUTH_BROWSER},
-    screen::{FIND_PREPARED_AGAIN, RUN_ENDED},
+    screen::{FIND_PREPARED_AGAIN, RESTARTED_FIND, RUN_ENDED},
     store::JobDetail,
     upload::Kind,
     AskedFinish, Created, FileState, ItemState, JobState, JobStore, NewFind, Runner, ScreenState,
@@ -537,6 +537,52 @@ async fn an_idle_end_closes_the_run_keeps_the_files_and_a_reopening_opens_the_sa
         .give(Next::File("maker-2.srt", fake::srt("maker-2")));
     until(2, || async { kept(&s, &id).await == 2 }).await;
     assert!(s.area.at(&path).exists());
+}
+
+#[tokio::test]
+async fn a_restart_ends_the_stuck_run_after_its_download_and_opens_the_same_post_in_a_new_one() {
+    let s = setup(true).await;
+    let id = browsing(&s).await;
+    let bound = shown(&s, &id).await.bound_at.unwrap();
+
+    // A download on its way is not lost to the restart: it waits.
+    s.browser.under_way.store(true, Ordering::SeqCst);
+    assert!(s
+        .screens
+        .request_restart(&id, "run-1", bound, 5_000)
+        .await
+        .unwrap());
+    for _ in 0..3 {
+        tend(&s).await;
+    }
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(s.browser.released.lock().unwrap().is_empty());
+    assert_eq!(detail(&s, &id).await.row.state, JobState::Waiting);
+    let asked = s.screens.prepare_requests().await.unwrap();
+    assert!(asked.len() == 1 && asked[0].restart && asked[0].find);
+
+    s.browser.under_way.store(false, Ordering::SeqCst);
+    tend(&s).await;
+    assert_eq!(*s.browser.released.lock().unwrap(), vec![id.clone()]);
+    let d = detail(&s, &id).await;
+    assert_eq!(d.row.state, JobState::Pending);
+    assert!(d.events.iter().any(|e| e.message == RESTARTED_FIND));
+    assert!(!d.events.iter().any(|e| e.message == FIND_PREPARED_AGAIN));
+    // The run that ended is not reported as one that closed by itself.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let d = detail(&s, &id).await;
+    assert!(!d.events.iter().any(|e| e.message.contains("닫혔어요")));
+    assert_eq!(shown(&s, &id).await.note, None);
+
+    // The job's next run opens the same post in a new run.
+    run(&s).await;
+    tend(&s).await;
+    let prepares = s.browser.prepares();
+    assert_eq!(prepares.len(), 2);
+    assert_eq!(prepares[1].1, POST);
+    let screen = shown(&s, &id).await;
+    assert_eq!(screen.state, ScreenState::Ready);
+    assert_eq!(screen.run_id.as_deref(), Some("run-2"));
 }
 
 #[tokio::test]

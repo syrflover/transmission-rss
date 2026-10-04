@@ -41,6 +41,21 @@
 //! (a step back never goes before the first page that is not blank), whatever
 //! a socket believes.
 //!
+//! # A page that does not answer
+//!
+//! An input, a reload or a change of size that the page does not answer
+//! within [`Times::answer_within`] does not end the hub: the page is
+//! stalled. The sockets are told (`{"type":"page","responding":false}`),
+//! and the inputs that come are not sent: they would wait in the browser and
+//! reach the page all at once when it moves again. A size asked for meanwhile
+//! is kept for later. The prober asks the page for a trifle
+//! (`Runtime.evaluate`) every [`Times::probe_every`]; once it answers, the
+//! sockets are told (`responding: true`) and the last size is applied anew,
+//! which starts the screencast again as a new generation (a change of size
+//! may have stopped halfway). Only a connection or a page that is gone ends
+//! the hub (`browser`). A page that does not answer `Page.enable` within
+//! [`Times::open_within`] has no hub at all ([`OpenError::Stuck`]).
+//!
 //! # Seats
 //!
 //! At most [`MAX_SOCKETS`] sockets are open on a hub. A new one always gets
@@ -51,7 +66,10 @@
 
 use std::{
     collections::VecDeque,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     time::{Duration, Instant},
 };
 
@@ -65,11 +83,76 @@ use tokio::sync::{
     mpsc, oneshot, Notify,
 };
 use tokio_util::sync::{CancellationToken, DropGuard};
-use trss_browser::cdp::{Connection, Event};
+use trss_browser::cdp::{CdpError, Connection, Event};
 use trss_jobs::ScreenStore;
 
 use super::nav::{tabs_message, History};
 use crate::commands_api::now_millis;
+
+/// The times a hub keeps (see the module docs and `super`).
+#[derive(Debug, Clone, Copy)]
+pub struct Times {
+    /// How often a person's input is recorded for the worker's idle end.
+    pub input_every: Duration,
+    /// How often the hub reads whether its binding is still the job's.
+    pub check_every: Duration,
+    /// How long a command to the page may wait for its answer before the
+    /// page is taken as stalled.
+    pub answer_within: Duration,
+    /// How long `Page.enable` may wait when the hub opens.
+    pub open_within: Duration,
+    /// How often a stalled page is asked whether it answers again.
+    pub probe_every: Duration,
+}
+
+/// Why no hub could be opened on a page.
+#[derive(Debug)]
+pub enum OpenError {
+    /// The page did not answer within [`Times::open_within`].
+    Stuck,
+    /// The run or its page could not be reached.
+    Unreachable(String),
+}
+
+impl std::fmt::Display for OpenError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OpenError::Stuck => f.write_str("the page does not answer"),
+            OpenError::Unreachable(why) => f.write_str(why),
+        }
+    }
+}
+
+/// Why a command to the page had no answer.
+#[derive(Debug)]
+enum Fail {
+    /// The connection or the page is gone.
+    Gone(String),
+    /// No answer within [`Times::answer_within`].
+    Late(String),
+    /// The browser refused it.
+    Refused(String),
+}
+
+impl From<CdpError> for Fail {
+    fn from(err: CdpError) -> Fail {
+        match err {
+            CdpError::Timeout(_) => Fail::Late(err.to_string()),
+            CdpError::Command { .. } => Fail::Refused(err.to_string()),
+            CdpError::Closed | CdpError::Connect(_) | CdpError::NotFound => {
+                Fail::Gone(err.to_string())
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for Fail {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Fail::Gone(why) | Fail::Late(why) | Fail::Refused(why) => f.write_str(why),
+        }
+    }
+}
 
 /// How many frames and notes wait for a slow socket before it skips some.
 const OUT_BACKLOG: usize = 8;
@@ -167,6 +250,21 @@ pub enum Incoming {
     Reload,
     Back,
     Forward,
+}
+
+impl Incoming {
+    /// A move of the pointer or of a finger, or a turn of the wheel: one of
+    /// a stream in which the next says where the pointer is as well. The
+    /// only messages a socket lets go of when they pile up: a press, a
+    /// release, a key, a size, a reload or a step that is lost would leave
+    /// the page or the screen in another state than the device's.
+    pub fn is_motion(&self) -> bool {
+        match self {
+            Incoming::Mouse { event, .. } => event == "mouseMoved" || event == "mouseWheel",
+            Incoming::Touch { event, .. } => event == "touchMove",
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -349,8 +447,13 @@ pub struct Hub {
     barriers: mpsc::UnboundedSender<Barrier>,
     out: broadcast::Sender<Arc<str>>,
     screens: ScreenStore,
-    input_every: Duration,
+    times: Times,
     last_input: Mutex<Option<Instant>>,
+    /// The page did not answer a command in time and has not answered the
+    /// prober since (see the module docs).
+    stalled: AtomicBool,
+    /// Told when the page stalls: the prober starts asking.
+    stalls: Arc<Notify>,
     /// Taken to admit, send and record an input, and to move the generation
     /// on and let go of what is held (see the module docs).
     input: tokio::sync::Mutex<Held>,
@@ -359,9 +462,10 @@ pub struct Hub {
     /// changed; `reason` says which (`browser`, `run`).
     ended: CancellationToken,
     reason: Mutex<&'static str>,
-    /// The `nav` and `tabs` messages as last sent.
+    /// The `nav`, `tabs` and `page` messages as last sent.
     nav: Mutex<Option<Arc<str>>>,
     tabs: Mutex<Option<Arc<str>>>,
+    page: Mutex<Option<Arc<str>>>,
     /// The pages the worker listed when the hub last read the screen.
     listed: Mutex<Vec<String>>,
     /// Told that `nav` or `tabs` may be out of date.
@@ -400,22 +504,21 @@ impl Drop for Hub {
 
 impl Hub {
     /// Attaches to the page of `binding` through the launcher's DevTools
-    /// proxy at `cdp_url` and starts sending its frames. Every `check_every`
-    /// it reads whether the binding is still the job's, and ends (`run`)
-    /// when it is not.
-    #[allow(clippy::too_many_arguments)]
+    /// proxy at `cdp_url` and starts sending its frames. Every
+    /// [`Times::check_every`] it reads whether the binding is still the
+    /// job's, and ends (`run`) when it is not.
     pub async fn open(
         cdp_url: &str,
         token: &str,
         job: &str,
         binding: Binding,
         screens: ScreenStore,
-        input_every: Duration,
-        check_every: Duration,
-    ) -> Result<Arc<Hub>, String> {
+        times: Times,
+    ) -> Result<Arc<Hub>, OpenError> {
+        let unreachable = |what: &str, e: CdpError| OpenError::Unreachable(format!("{what}: {e}"));
         let conn = Connection::connect(cdp_url, token)
             .await
-            .map_err(|e| format!("connect: {e}"))?;
+            .map_err(|e| unreachable("connect", e))?;
         let events = conn.events();
         let attached = conn
             .command(
@@ -424,14 +527,21 @@ impl Hub {
                 json!({ "targetId": binding.target, "flatten": true }),
             )
             .await
-            .map_err(|e| format!("attach: {e}"))?;
+            .map_err(|e| unreachable("attach", e))?;
         let session = attached["sessionId"]
             .as_str()
-            .ok_or("attach: no session")?
+            .ok_or_else(|| OpenError::Unreachable("attach: no session".to_owned()))?
             .to_owned();
-        conn.command(Some(&session), "Page.enable", json!({}))
+        // The page answers this itself: one that is held (a dialog no one
+        // answers, a script that never yields) does not.
+        match conn
+            .command_within(Some(&session), "Page.enable", json!({}), times.open_within)
             .await
-            .map_err(|e| format!("Page.enable: {e}"))?;
+        {
+            Ok(_) => {}
+            Err(CdpError::Timeout(_)) => return Err(OpenError::Stuck),
+            Err(e) => return Err(unreachable("Page.enable", e)),
+        }
         // The tabs follow the run's other targets: their titles and
         // addresses change as they load. Without it they are read when the
         // worker's list or the page changes.
@@ -455,14 +565,17 @@ impl Hub {
             barriers,
             out,
             screens,
-            input_every,
+            times,
             last_input: Mutex::new(None),
+            stalled: AtomicBool::new(false),
+            stalls: Arc::new(Notify::new()),
             input: tokio::sync::Mutex::default(),
             seats: Mutex::default(),
             ended: CancellationToken::new(),
             reason: Mutex::new("browser"),
             nav: Mutex::default(),
             tabs: Mutex::default(),
+            page: Mutex::default(),
             listed: Mutex::default(),
             changed: Arc::new(Notify::new()),
             refresh: tokio::sync::Mutex::new(()),
@@ -476,13 +589,15 @@ impl Hub {
             stop.clone(),
         ));
         tokio::spawn(refresher(Arc::downgrade(&hub), stop.clone()));
-        tokio::spawn(watch_binding(Arc::downgrade(&hub), check_every, stop));
+        tokio::spawn(prober(Arc::downgrade(&hub), stop.clone()));
+        tokio::spawn(watch_binding(Arc::downgrade(&hub), times.check_every, stop));
         // Before the first frame: a socket that connects finds the state.
         hub.read_state().await;
-        hub.start_screencast(None)
-            .await
-            .map_err(|e| format!("screencast: {e}"))?;
-        Ok(hub)
+        match hub.start_screencast(None).await {
+            Ok(_) => Ok(hub),
+            Err(Fail::Late(_)) => Err(OpenError::Stuck),
+            Err(e) => Err(OpenError::Unreachable(format!("screencast: {e}"))),
+        }
     }
 
     /// A place for one more socket. When [`MAX_SOCKETS`] are taken, the
@@ -513,10 +628,10 @@ impl Hub {
         self.out.subscribe()
     }
 
-    /// The `nav` and `tabs` messages as last sent, for a socket that
+    /// The `nav`, `tabs` and `page` messages as last sent, for a socket that
     /// connects or skipped some.
     pub fn states(&self) -> Vec<Arc<str>> {
-        [&self.nav, &self.tabs]
+        [&self.nav, &self.tabs, &self.page]
             .into_iter()
             .filter_map(|slot| slot.lock().expect("state lock").clone())
             .collect()
@@ -549,33 +664,91 @@ impl Hub {
         }
     }
 
-    async fn send(&self, method: &str, params: Value) -> Result<Value, String> {
-        self.conn
-            .command(Some(&self.session), method, params)
-            .await
-            .map_err(|e| e.to_string())
+    /// A command in the page's session, waiting for its answer for as long
+    /// as [`Times::answer_within`].
+    async fn send(&self, method: &str, params: Value) -> Result<Value, Fail> {
+        Ok(self
+            .conn
+            .command_within(
+                Some(&self.session),
+                method,
+                params,
+                self.times.answer_within,
+            )
+            .await?)
     }
 
     /// Starts the screencast; how many events came before the start was
     /// answered.
-    async fn start_screencast(&self, viewport: Option<Viewport>) -> Result<u64, String> {
+    async fn start_screencast(&self, viewport: Option<Viewport>) -> Result<u64, Fail> {
         let mut params = json!({ "format": "jpeg", "quality": FRAME_QUALITY, "everyNthFrame": 1 });
         if let Some(v) = viewport {
             params["maxWidth"] = json!(v.width);
             params["maxHeight"] = json!(v.height);
         }
-        self.conn
-            .command_marked(Some(&self.session), "Page.startScreencast", params)
+        Ok(self
+            .conn
+            .command_marked_within(
+                Some(&self.session),
+                "Page.startScreencast",
+                params,
+                self.times.answer_within,
+            )
             .await
-            .map(|(_, after)| after)
-            .map_err(|e| e.to_string())
+            .map(|(_, after)| after)?)
+    }
+
+    pub fn is_stalled(&self) -> bool {
+        self.stalled.load(Ordering::SeqCst)
+    }
+
+    /// What a command to the page that was not answered means: a page or
+    /// connection that is gone ends the hub, one that did not answer in time
+    /// is stalled (see the module docs), and a refusal is that command's
+    /// alone.
+    fn failed(&self, fail: &Fail) {
+        match fail {
+            Fail::Gone(_) => self.end(),
+            Fail::Late(_) => self.stall(),
+            Fail::Refused(_) => {}
+        }
+    }
+
+    /// The page did not answer in time: the sockets are told, and the prober
+    /// asks until it answers again.
+    fn stall(&self) {
+        if self.mark_stalled(true) {
+            self.stalls.notify_one();
+        }
+    }
+
+    /// The stalled page answered: the sockets are told, and the last size
+    /// is applied anew, which starts the screencast again.
+    async fn recover(&self) {
+        if self.mark_stalled(false) {
+            self.reapply_size().await;
+        }
+    }
+
+    /// Sets whether the page is stalled and tells the sockets when that
+    /// changed, both under the lock of the `page` message: a stall and a
+    /// recovery that cross are told in the order the flag changed, and the
+    /// last message sent is the flag's value. Whether it changed.
+    fn mark_stalled(&self, stalled: bool) -> bool {
+        let mut last = self.page.lock().expect("state lock");
+        if self.stalled.swap(stalled, Ordering::SeqCst) == stalled {
+            return false;
+        }
+        let message: Arc<str> = json!({ "type": "page", "responding": !stalled })
+            .to_string()
+            .into();
+        *last = Some(message.clone());
+        let _ = self.out.send(message);
+        true
     }
 
     /// Takes one message of a socket.
-    pub async fn handle(&self, text: &str) -> Handled {
-        let Ok(message) = serde_json::from_str::<Incoming>(text) else {
-            return Handled::Invalid;
-        };
+    pub async fn handle(&self, message: Incoming) -> Handled {
         match message {
             Incoming::Viewport(viewport) if viewport.valid() => {
                 self.resize_to(viewport).await;
@@ -583,12 +756,13 @@ impl Hub {
             }
             Incoming::Viewport(_) => Handled::Invalid,
             Incoming::Reload => {
-                if self
+                // Also when the page is stalled: the browser itself answers
+                // it, and a page that moves again may need it.
+                if let Err(fail) = self
                     .send("Page.reload", json!({ "ignoreCache": false }))
                     .await
-                    .is_err()
                 {
-                    self.end();
+                    self.failed(&fail);
                 }
                 self.input_came().await;
                 Handled::Done
@@ -615,9 +789,18 @@ impl Hub {
                 let Some((method, params)) = command_of(&message, &view) else {
                     return Handled::Invalid;
                 };
-                if self.send(method, params).await.is_err() {
-                    self.end();
+                // Not sent to a stalled page (see the module docs).
+                if self.is_stalled() {
                     return Handled::Done;
+                }
+                match self.send(method, params).await {
+                    Ok(_) => {}
+                    // Sent, and the page may take it later.
+                    Err(fail @ Fail::Late(_)) => self.failed(&fail),
+                    Err(fail) => {
+                        self.failed(&fail);
+                        return Handled::Done;
+                    }
                 }
                 note_held(&mut held, &message);
                 drop(held);
@@ -655,7 +838,10 @@ impl Hub {
     }
 
     async fn history(&self) -> Result<History, String> {
-        let answer = self.send("Page.getNavigationHistory", json!({})).await?;
+        let answer = self
+            .send("Page.getNavigationHistory", json!({}))
+            .await
+            .map_err(|e| e.to_string())?;
         History::parse(&answer).ok_or_else(|| "no history".to_owned())
     }
 
@@ -764,7 +950,28 @@ impl Hub {
     /// generation, the page laid out for it, and the frames of its size
     /// (see the module docs).
     async fn resize_to(&self, viewport: Viewport) {
-        let _one = self.resize.lock().await;
+        let one = self.resize.lock().await;
+        self.apply_size(viewport, one).await;
+    }
+
+    /// The last size, read once no other change of size is under way, is
+    /// applied anew: one a socket asked for while the page was stalled, or
+    /// meanwhile, is not undone by an older one.
+    async fn reapply_size(&self) {
+        let one = self.resize.lock().await;
+        if let Some(viewport) = self.view().viewport {
+            self.apply_size(viewport, one).await;
+        }
+    }
+
+    /// [`Hub::resize_to`], with its change of size under way (`_one`).
+    async fn apply_size(&self, viewport: Viewport, _one: tokio::sync::MutexGuard<'_, ()>) {
+        // A stalled page would not answer: the size is applied when it
+        // answers again ([`Hub::recover`]).
+        if self.is_stalled() {
+            self.view.lock().expect("view lock").viewport = Some(viewport);
+            return;
+        }
         let gen = {
             let mut held = self.input.lock().await;
             let gen = {
@@ -820,10 +1027,16 @@ impl Hub {
                     let _ = finished.await;
                 }
             }
-            Err(err) => {
+            // The new size is sent once the page answers again and it is
+            // applied anew: the devices' inputs wait for it.
+            Err(fail @ Fail::Late(_)) => {
+                self.view.lock().expect("view lock").resizing = false;
+                self.failed(&fail);
+            }
+            Err(fail) => {
                 self.view.lock().expect("view lock").resizing = false;
                 eprintln!(
-                    "trss-web: the remote screen of job {} could not change its size: {err}",
+                    "trss-web: the remote screen of job {} could not change its size: {fail}",
                     self.job
                 );
                 self.end();
@@ -901,11 +1114,11 @@ impl Hub {
     }
 
     /// A person's input reached the page: recorded for the worker's idle end,
-    /// at most every `input_every`.
+    /// at most every [`Times::input_every`].
     async fn input_came(&self) {
         let due = {
             let mut last = self.last_input.lock().expect("input lock");
-            let due = last.is_none_or(|at| at.elapsed() >= self.input_every);
+            let due = last.is_none_or(|at| at.elapsed() >= self.times.input_every);
             if due {
                 *last = Some(Instant::now());
             }
@@ -956,10 +1169,58 @@ impl Hub {
 }
 
 /// The message that ends a socket; `reason` is `browser` (the run's page or
-/// connection is gone), `run` (the job's binding changed), `unreachable` or
-/// `replaced` (a newer screen of the binding took this one's seat).
+/// connection is gone), `run` (the job's binding changed), `unreachable`,
+/// `stuck` (the page did not answer when the screen opened) or `replaced` (a
+/// newer screen of the binding took this one's seat).
 pub fn ended_message(reason: &str) -> String {
     json!({ "type": "ended", "reason": reason }).to_string()
+}
+
+/// Asks a stalled page every [`Times::probe_every`] whether it answers again
+/// (see the module docs), until the hub is dropped.
+async fn prober(hub: std::sync::Weak<Hub>, stop: CancellationToken) {
+    loop {
+        let Some((stalls, every)) = hub
+            .upgrade()
+            .map(|hub| (hub.stalls.clone(), hub.times.probe_every))
+        else {
+            return;
+        };
+        tokio::select! {
+            _ = stop.cancelled() => return,
+            _ = stalls.notified() => {}
+        }
+        loop {
+            tokio::select! {
+                _ = stop.cancelled() => return,
+                _ = tokio::time::sleep(every) => {}
+            }
+            let Some(hub) = hub.upgrade() else {
+                return;
+            };
+            if hub.is_ended() {
+                return;
+            }
+            if !hub.is_stalled() {
+                break;
+            }
+            match hub
+                .send("Runtime.evaluate", json!({ "expression": "0" }))
+                .await
+            {
+                // A refusal is the page's answer too.
+                Ok(_) | Err(Fail::Refused(_)) => {
+                    hub.recover().await;
+                    break;
+                }
+                Err(Fail::Gone(_)) => {
+                    hub.end();
+                    return;
+                }
+                Err(Fail::Late(_)) => {}
+            }
+        }
+    }
 }
 
 /// Reads the events of the hub's connection until the hub is dropped (which

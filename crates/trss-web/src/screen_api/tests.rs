@@ -54,6 +54,10 @@ struct Launcher {
     quiet: Arc<std::sync::atomic::AtomicBool>,
     /// Set: a mouse press is answered only after 300 ms.
     slow_press: Arc<std::sync::atomic::AtomicBool>,
+    /// Set: the page's own thread is held (a script that never yields), so
+    /// what the page answers itself (inputs, `Runtime.evaluate`,
+    /// `Page.enable`) gets no answer. The browser still answers the rest.
+    stuck: Arc<std::sync::atomic::AtomicBool>,
     /// The history of every page: the index of the entry shown, and the
     /// entries (ID, address). A step to an entry changes the index.
     history: Arc<Mutex<FakeHistory>>,
@@ -185,6 +189,25 @@ async fn page(mut socket: axum::extract::ws::WebSocket, run: String, launcher: L
             .unwrap()
             .commands
             .push((run.clone(), method.clone(), params.clone()));
+        let own =
+            method.starts_with("Input.") || method == "Runtime.evaluate" || method == "Page.enable";
+        if own && launcher.stuck.load(std::sync::atomic::Ordering::SeqCst) {
+            // No answer. A frame comes meanwhile, which the socket must
+            // still be sent while its input waits.
+            if method.starts_with("Input.") {
+                let event = json!({
+                    "method": "Page.screencastFrame",
+                    "sessionId": session,
+                    "params": {
+                        "data": "held",
+                        "sessionId": 5000,
+                        "metadata": { "deviceWidth": width, "deviceHeight": height },
+                    },
+                });
+                let _ = socket.send(Message::Text(event.to_string().into())).await;
+            }
+            continue;
+        }
         let result = match method.as_str() {
             "Target.attachToTarget" => json!({ "sessionId": session }),
             "Target.getTargets" => {
@@ -304,6 +327,26 @@ async fn setup(with_browser: bool) -> Setup {
 /// [`setup`], with the web pinging every `ping_every` and waiting
 /// `pong_within` for an answer.
 async fn setup_pinging(with_browser: bool, ping_every: Duration, pong_within: Duration) -> Setup {
+    setup_with(with_browser, |remote| {
+        remote.with_pings(ping_every, pong_within)
+    })
+    .await
+}
+
+/// [`setup`], with the web taking a page as stalled after `answer_within`
+/// (`Page.enable`: twice that) and asking it again every 50 ms.
+async fn setup_answering(answer_within: Duration) -> Setup {
+    setup_with(true, |remote| {
+        remote.with_answers(answer_within, answer_within * 2, Duration::from_millis(50))
+    })
+    .await
+}
+
+/// [`setup`], with the web's remote screens as `configure` makes them.
+async fn setup_with(
+    with_browser: bool,
+    configure: impl FnOnce(RemoteScreens) -> RemoteScreens,
+) -> Setup {
     let dir = tempfile::tempdir().unwrap();
     let db = Db::open(dir.path().join("app.db")).await.unwrap();
     let launcher = Launcher::new();
@@ -324,9 +367,8 @@ async fn setup_pinging(with_browser: bool, ping_every: Duration, pong_within: Du
             token: TOKEN.to_owned(),
         })
         .unwrap()
-        .with_times(Duration::from_millis(200), Duration::from_millis(50))
-        .with_pings(ping_every, pong_within);
-        state = state.with_remote_screens(remote);
+        .with_times(Duration::from_millis(200), Duration::from_millis(50));
+        state = state.with_remote_screens(configure(remote));
     }
     // The app's own router: its Host and Origin checks are in front of the
     // screen's routes.
@@ -511,7 +553,12 @@ type Socket =
 
 /// The next message of `socket` of `kind`, skipping others, within 2 s.
 async fn next_of(socket: &mut Socket, kind: &str) -> Value {
-    tokio::time::timeout(Duration::from_secs(2), async {
+    next_within(socket, kind, Duration::from_secs(2)).await
+}
+
+/// The next message of `socket` of `kind`, skipping others, within `wait`.
+async fn next_within(socket: &mut Socket, kind: &str, wait: Duration) -> Value {
+    tokio::time::timeout(wait, async {
         loop {
             match socket.next().await {
                 Some(Ok(WsMessage::Text(text))) => {
@@ -1381,4 +1428,251 @@ async fn a_press_admitted_just_before_a_change_of_size_is_let_go_by_it() {
         .unwrap();
     assert!(pressed < released && released < laid_out, "{commands:?}");
     assert_eq!(commands[released].1["clickCount"], 0);
+}
+
+/// The next frame of `socket` whose data is `data`, skipping others.
+async fn frame_of(socket: &mut Socket, data: &str) -> Value {
+    loop {
+        let frame = next_of(socket, "frame").await;
+        if frame["data"] == data {
+            return frame;
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_page_that_does_not_answer_stalls_the_screen_and_comes_back_without_ending_it() {
+    use std::sync::atomic::Ordering::SeqCst;
+    let s = setup_answering(Duration::from_millis(800)).await;
+    s.waiting_on("run-1").await;
+    let origin = s.origin();
+    let mut phone = s.open("run-1", Some(&origin)).await.unwrap();
+    send(
+        &mut phone,
+        json!({ "type": "viewport", "width": 402, "height": 666, "dpr": 3, "touch": true }),
+    )
+    .await;
+    assert_eq!(next_of(&mut phone, "viewport").await["gen"], 1);
+    next_of(&mut phone, "frame").await;
+
+    // The page's thread is held: a tap gets no answer. What comes meanwhile
+    // is still sent to the socket.
+    s.launcher.stuck.store(true, SeqCst);
+    let sent = tokio::time::Instant::now();
+    send(
+        &mut phone,
+        json!({ "type": "touch", "gen": 1, "event": "touchStart", "points": [{ "x": 10, "y": 10 }] }),
+    )
+    .await;
+    frame_of(&mut phone, "held").await;
+    assert!(
+        sent.elapsed() < Duration::from_millis(600),
+        "{:?}",
+        sent.elapsed()
+    );
+    // Then the page is stalled, and the screen goes on.
+    let page = next_within(&mut phone, "page", Duration::from_secs(3)).await;
+    assert_eq!(page["responding"], false);
+
+    // Inputs are not sent to it meanwhile, and a size waits for it.
+    let touches = s.launcher.count("Input.dispatchTouchEvent");
+    send(
+        &mut phone,
+        json!({ "type": "touch", "gen": 1, "event": "touchMove", "points": [{ "x": 12, "y": 12 }] }),
+    )
+    .await;
+    send(
+        &mut phone,
+        json!({ "type": "viewport", "width": 390, "height": 844, "dpr": 3, "touch": true }),
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(s.launcher.count("Input.dispatchTouchEvent"), touches);
+    assert_eq!(
+        s.launcher
+            .last("Emulation.setDeviceMetricsOverride")
+            .unwrap()["width"],
+        402
+    );
+    // A screen that connects now is told.
+    let mut pc = s.open("run-1", Some(&origin)).await.unwrap();
+    assert_eq!(next_of(&mut pc, "page").await["responding"], false);
+
+    // The page answers again: the screens are told, and the page is laid out
+    // anew at the last size as a new generation.
+    s.launcher.stuck.store(false, SeqCst);
+    let page = next_within(&mut phone, "page", Duration::from_secs(3)).await;
+    assert_eq!(page["responding"], true);
+    let viewport = next_of(&mut phone, "viewport").await;
+    assert_eq!(
+        (viewport["gen"].clone(), viewport["width"].clone()),
+        (json!(2), json!(390))
+    );
+    assert_eq!(next_of(&mut pc, "page").await["responding"], true);
+    // The finger that was down when it stalled is let go, and inputs reach
+    // the page again.
+    assert_eq!(
+        s.launcher.last("Input.dispatchTouchEvent").unwrap()["type"],
+        "touchCancel"
+    );
+    send(
+        &mut phone,
+        json!({ "type": "touch", "gen": 2, "event": "touchStart", "points": [{ "x": 20, "y": 20 }] }),
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        s.launcher.last("Input.dispatchTouchEvent").unwrap()["type"],
+        "touchStart"
+    );
+    assert!(s.launcher.seen.lock().unwrap().others.is_empty());
+}
+
+#[tokio::test]
+async fn inputs_that_pile_up_behind_one_the_page_does_not_answer_are_let_go_but_never_a_size() {
+    use std::sync::atomic::Ordering::SeqCst;
+    let s = setup_answering(Duration::from_millis(1500)).await;
+    s.waiting_on("run-1").await;
+    let origin = s.origin();
+    let mut phone = s.open("run-1", Some(&origin)).await.unwrap();
+    send(
+        &mut phone,
+        json!({ "type": "viewport", "width": 402, "height": 666, "dpr": 3, "touch": true }),
+    )
+    .await;
+    assert_eq!(next_of(&mut phone, "viewport").await["gen"], 1);
+    next_of(&mut phone, "frame").await;
+
+    s.launcher.stuck.store(true, SeqCst);
+    send(
+        &mut phone,
+        json!({ "type": "touch", "gen": 1, "event": "touchStart", "points": [{ "x": 10, "y": 10 }] }),
+    )
+    .await;
+    // More than the queue takes, then a size.
+    for n in 0..100 {
+        send(
+            &mut phone,
+            json!({ "type": "mouse", "gen": 1, "event": "mouseMoved", "x": n, "y": 5 }),
+        )
+        .await;
+    }
+    send(
+        &mut phone,
+        json!({ "type": "viewport", "width": 390, "height": 844, "dpr": 3, "touch": true }),
+    )
+    .await;
+    assert_eq!(
+        next_within(&mut phone, "page", Duration::from_secs(3)).await["responding"],
+        false
+    );
+    s.launcher.stuck.store(false, SeqCst);
+    assert_eq!(
+        next_within(&mut phone, "page", Duration::from_secs(4)).await["responding"],
+        true
+    );
+    let viewport = next_of(&mut phone, "viewport").await;
+    assert_eq!(
+        (viewport["gen"].clone(), viewport["width"].clone()),
+        (json!(2), json!(390))
+    );
+    // None of the moves reached the page.
+    assert_eq!(s.launcher.count("Input.dispatchMouseEvent"), 0);
+}
+
+#[test]
+fn a_full_queue_lets_moves_go_but_never_a_press_a_release_a_key_or_a_size() {
+    let message = |value: Value| serde_json::from_value::<Incoming>(value).unwrap();
+    let moves = [
+        json!({ "type": "mouse", "gen": 1, "event": "mouseMoved", "x": 1, "y": 1 }),
+        json!({ "type": "mouse", "gen": 1, "event": "mouseWheel", "x": 1, "y": 1, "deltaY": 40 }),
+        json!({ "type": "touch", "gen": 1, "event": "touchMove", "points": [{ "x": 1, "y": 1 }] }),
+    ];
+    let kept = [
+        json!({ "type": "mouse", "gen": 1, "event": "mousePressed", "x": 1, "y": 1, "button": "left" }),
+        json!({ "type": "mouse", "gen": 1, "event": "mouseReleased", "x": 1, "y": 1, "button": "left" }),
+        json!({ "type": "touch", "gen": 1, "event": "touchStart", "points": [{ "x": 1, "y": 1 }] }),
+        json!({ "type": "touch", "gen": 1, "event": "touchEnd", "points": [] }),
+        json!({ "type": "touch", "gen": 1, "event": "touchCancel", "points": [] }),
+        json!({ "type": "key", "gen": 1, "event": "keyUp", "key": "a" }),
+        json!({ "type": "text", "gen": 1, "text": "가" }),
+        json!({ "type": "viewport", "width": 402, "height": 666, "dpr": 3, "touch": true }),
+        json!({ "type": "reload" }),
+        json!({ "type": "back" }),
+    ];
+    for value in moves {
+        assert!(
+            takes(&message(value.clone()), KEPT_FROM_MOTION + 1),
+            "{value}"
+        );
+        assert!(!takes(&message(value.clone()), KEPT_FROM_MOTION), "{value}");
+    }
+    for value in kept {
+        assert!(takes(&message(value.clone()), 1), "{value}");
+    }
+}
+
+#[tokio::test]
+async fn a_screen_that_opens_on_a_page_that_does_not_answer_ends_stuck() {
+    use std::sync::atomic::Ordering::SeqCst;
+    let s = setup_answering(Duration::from_millis(200)).await;
+    s.waiting_on("run-1").await;
+    let origin = s.origin();
+    s.launcher.stuck.store(true, SeqCst);
+    let mut socket = s.open("run-1", Some(&origin)).await.unwrap();
+    let ended = next_of(&mut socket, "ended").await;
+    assert_eq!(ended["reason"], "stuck");
+
+    // Once the page answers, a screen of the same binding connects.
+    s.launcher.stuck.store(false, SeqCst);
+    let mut socket = s.open("run-1", Some(&origin)).await.unwrap();
+    next_of(&mut socket, "frame").await;
+    assert!(s.launcher.seen.lock().unwrap().others.is_empty());
+}
+
+#[tokio::test]
+async fn a_person_asks_the_worker_to_start_the_run_anew_and_the_web_ends_no_run() {
+    let s = setup(true).await;
+    s.waiting_on("run-1").await;
+    let restart = format!("/api/subtitle-jobs/{}/screen/restart", s.job);
+
+    // Refused: a binding the person no longer sees, another run.
+    assert_eq!(
+        s.http_json("POST", &restart, &json!({ "run": "run-1", "bound": 999 }))
+            .await,
+        409
+    );
+    assert_eq!(
+        s.http_json("POST", &restart, &json!({ "run": "run-0", "bound": 1_000 }))
+            .await,
+        409
+    );
+    assert!(s.screens().prepare_requests().await.unwrap().is_empty());
+    assert_eq!(s.woken(), 0);
+    assert_eq!(s.input_at().await, None);
+
+    // Asked for the binding the person sees: a request to prepare that
+    // starts the run anew, and the worker is woken for it.
+    assert_eq!(
+        s.http_json("POST", &restart, &json!({ "run": "run-1", "bound": 1_000 }))
+            .await,
+        202
+    );
+    let requests = s.screens().prepare_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0].restart);
+    assert_eq!(s.woken(), 1);
+    assert!(s.input_at().await.is_some(), "it is the person's input");
+    // The web itself ends nothing.
+    assert!(s.launcher.seen.lock().unwrap().others.is_empty());
+
+    assert_eq!(
+        s.http_json(
+            "POST",
+            "/api/subtitle-jobs/nope/screen/restart",
+            &json!({ "run": "run-1", "bound": 1_000 })
+        )
+        .await,
+        404
+    );
 }

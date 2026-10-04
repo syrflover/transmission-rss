@@ -17,11 +17,11 @@ use std::{
 
 use tokio::sync::{mpsc, Notify};
 use tokio_util::sync::CancellationToken;
-use trss_core::{Clock, Db};
+use trss_core::{Clock, Db, DbError};
 use trss_jobs::{
     area::ReceiveArea,
     runner::{NO_AUTH_BROWSER, OTHER_CHECK_FIRST},
-    screen::{FILE_REFUSED, RUN_ENDED, WORKER_RESTARTED},
+    screen::{CHECK_PREPARED_AGAIN, FILE_REFUSED, RESTARTED_CHECK, RUN_ENDED, WORKER_RESTARTED},
     store::JobDetail,
     Created, FileState, Format, ItemState, JobState, JobStore, NewItem, NewJob, Runner,
     ScreenState, ScreenStore, StepKind, StepState, Wait,
@@ -67,6 +67,12 @@ struct FakeBrowser {
     /// Every page asked to close, and those that were closed.
     close_calls: Mutex<Vec<String>>,
     closed: Mutex<Vec<String>>,
+    /// A download of the run is on its way.
+    under_way: AtomicBool,
+    /// With a store: the state of the job at each release, to tell whether
+    /// the job was put back in line before its run ended.
+    store: Mutex<Option<JobStore>>,
+    states_at_release: Mutex<Vec<JobState>>,
 }
 
 impl FakeBrowser {
@@ -179,9 +185,18 @@ impl AuthBrowser for FakeBrowser {
 
     fn release<'a>(&'a self, job: &'a str) -> BoxFuture<'a, ()> {
         Box::pin(async move {
+            let store = self.store.lock().unwrap().clone();
+            if let Some(store) = store {
+                let state = store.detail(job).await.unwrap().unwrap().row.state;
+                self.states_at_release.lock().unwrap().push(state);
+            }
             self.released.lock().unwrap().push(job.to_owned());
             self.live.lock().unwrap().clear();
         })
+    }
+
+    fn downloading(&self, _job: &str, _run_id: &str) -> bool {
+        self.under_way.load(Ordering::SeqCst)
     }
 
     fn pages(&self, job: &str, run_id: &str) -> Vec<String> {
@@ -225,6 +240,7 @@ impl AuthBrowser for FakeBrowser {
 
 struct Setup {
     _dir: tempfile::TempDir,
+    db: Db,
     store: JobStore,
     screens: ScreenStore,
     runner: Runner,
@@ -258,7 +274,8 @@ async fn setup(with_browser: bool) -> Setup {
     Setup {
         _dir: dir,
         store,
-        screens: ScreenStore::new(db),
+        screens: ScreenStore::new(db.clone()),
+        db,
         runner,
         area,
         browser,
@@ -493,6 +510,8 @@ async fn opening_the_page_of_a_live_run_starts_nothing_and_counts_as_use() {
     tend(&s).await;
     assert_eq!(*s.browser.touched.lock().unwrap(), vec!["run-1".to_owned()]);
     assert!(s.screens.prepare_requests().await.unwrap().is_empty());
+    // Only touched: an ordinary request never ends the run.
+    assert!(s.browser.released.lock().unwrap().is_empty());
     run(&s).await;
     assert_eq!(s.browser.prepares(), 1);
     let d = detail(&s, &id).await;
@@ -1285,4 +1304,331 @@ async fn a_request_that_was_written_is_taken_once_and_counts_as_the_persons_inpu
         .pages
         .is_empty());
     assert_eq!(s.screens.take_switch(&id, "run-1").await.unwrap(), None);
+}
+
+/// Waits until the fake's watch has given up its feed (it ended), for up to
+/// two seconds.
+async fn watch_ended(s: &Setup) {
+    until(|| async { s.browser.next.lock().unwrap().is_some() }).await;
+}
+
+/// Puts the job in `state` whatever its binding, as another part of the app
+/// would (`waiting` is the check's wait).
+async fn force_state(s: &Setup, id: &str, state: &'static str) {
+    let id = id.to_owned();
+    s.db.run::<_, DbError, _>(move |c| {
+        c.execute(
+            "UPDATE subtitle_jobs SET state = ?2, wait = CASE ?2 WHEN 'waiting' THEN 'auth' END
+             WHERE id = ?1",
+            rusqlite::params![id, state],
+        )?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn a_request_to_start_a_run_anew_is_refused_for_another_binding_or_a_job_not_waiting() {
+    let s = setup(true).await;
+    let id = waiting(&s).await;
+    let bound = shown(&s, &id).await.bound_at.unwrap();
+    for (what, asked) in [
+        (
+            "another run",
+            s.screens
+                .request_restart(&id, "run-0", bound, 5_000)
+                .await
+                .unwrap(),
+        ),
+        (
+            "a binding the person no longer sees",
+            s.screens
+                .request_restart(&id, "run-1", bound - 1, 5_000)
+                .await
+                .unwrap(),
+        ),
+        (
+            "a job that is gone",
+            s.screens
+                .request_restart("no-such-job", "run-1", bound, 5_000)
+                .await
+                .unwrap(),
+        ),
+    ] {
+        assert!(!asked, "{what} was written");
+    }
+    assert!(s.screens.prepare_requests().await.unwrap().is_empty());
+    assert!(s.screens.live_inputs().await.unwrap().is_empty());
+
+    // A job that no longer waits for its check, with its binding still
+    // there, takes no request either.
+    force_state(&s, &id, "running").await;
+    assert!(!s
+        .screens
+        .request_restart(&id, "run-1", bound, 7_000)
+        .await
+        .unwrap());
+    assert!(s.screens.live_inputs().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_request_to_start_a_run_anew_is_a_prepare_request_with_restart_and_counts_as_input() {
+    let s = setup(true).await;
+    let id = waiting(&s).await;
+    let bound = shown(&s, &id).await.bound_at.unwrap();
+
+    // An ordinary opening of the page is no restart.
+    s.screens.request_prepare(&id, 4_000).await.unwrap();
+    let asked = s.screens.prepare_requests().await.unwrap();
+    assert_eq!(asked.len(), 1);
+    assert!(!asked[0].restart);
+    s.screens
+        .mark_prepared(&id, asked[0].asked_at, 4_500)
+        .await
+        .unwrap();
+    assert!(s.screens.prepare_requests().await.unwrap().is_empty());
+
+    assert!(s
+        .screens
+        .request_restart(&id, "run-1", bound, 5_000)
+        .await
+        .unwrap());
+    let asked = s.screens.prepare_requests().await.unwrap();
+    assert_eq!(asked.len(), 1);
+    assert_eq!(
+        (asked[0].job_id.as_str(), asked[0].run_id.as_deref()),
+        (id.as_str(), Some("run-1"))
+    );
+    assert!(asked[0].restart && !asked[0].find);
+    assert!(asked[0].asked_at >= 5_000);
+    assert_eq!(
+        s.screens.live_inputs().await.unwrap(),
+        vec![("run-1".to_owned(), 5_000)]
+    );
+    // The screen still shows the run until the worker answers.
+    assert_eq!(shown(&s, &id).await.state, ScreenState::Ready);
+
+    // A person opening the page meanwhile does not take it back.
+    s.screens.request_prepare(&id, 6_000).await.unwrap();
+    assert!(s.screens.prepare_requests().await.unwrap()[0].restart);
+}
+
+#[tokio::test]
+async fn a_restart_does_not_outlive_its_binding() {
+    for how in ["bind", "unbind_all", "requeue_for_check"] {
+        let s = setup(true).await;
+        let id = waiting(&s).await;
+        let item = s.screens.bound(&id).await.unwrap().unwrap().item_id;
+        let bound = shown(&s, &id).await.bound_at.unwrap();
+        assert!(s
+            .screens
+            .request_restart(&id, "run-1", bound, 5_000)
+            .await
+            .unwrap());
+        let asked = s.screens.prepare_requests().await.unwrap()[0].asked_at;
+        match how {
+            "bind" => {}
+            "unbind_all" => {
+                assert_eq!(s.screens.unbind_all(5_500).await.unwrap(), 1);
+            }
+            _ => {
+                assert!(s
+                    .screens
+                    .requeue_for_check(&id, asked, true, 5_500)
+                    .await
+                    .unwrap());
+                // The job waits for its check again (the next run is the same run).
+                force_state(&s, &id, "waiting").await;
+            }
+        }
+        // The same run, bound anew (another check of the job).
+        s.screens
+            .bind(&id, item, "run-1", "target-2", 6_000)
+            .await
+            .unwrap();
+        let screen = shown(&s, &id).await;
+        assert_eq!(screen.run_id.as_deref(), Some("run-1"), "{how}");
+        s.screens.request_prepare(&id, 7_000).await.unwrap();
+        let asked = s.screens.prepare_requests().await.unwrap();
+        assert_eq!(asked.len(), 1, "{how}");
+        assert!(!asked[0].restart, "{how}: the new binding is a restart");
+    }
+}
+
+#[tokio::test]
+async fn a_failed_binding_and_a_retarget_treat_a_pending_restart_by_whether_the_run_stays() {
+    let s = setup(true).await;
+    let id = waiting(&s).await;
+    let item = s.screens.bound(&id).await.unwrap().unwrap().item_id;
+    let bound = shown(&s, &id).await.bound_at.unwrap();
+    assert!(s
+        .screens
+        .request_restart(&id, "run-1", bound, 5_000)
+        .await
+        .unwrap());
+    // The same run on another page: still the run the person wants anew.
+    assert!(s
+        .screens
+        .retarget(&id, "run-1", "popup-1", 5_500)
+        .await
+        .unwrap());
+    assert!(s.screens.prepare_requests().await.unwrap()[0].restart);
+    // No run bound: nothing is left to start anew.
+    s.screens
+        .bind_failed(&id, item, "안 열렸어요".to_owned(), 6_000)
+        .await
+        .unwrap();
+    s.screens.request_prepare(&id, 7_000).await.unwrap();
+    let asked = s.screens.prepare_requests().await.unwrap();
+    assert_eq!(asked.len(), 1);
+    assert!(!asked[0].restart && asked[0].run_id.is_none());
+}
+
+#[tokio::test]
+async fn a_run_is_not_unbound_as_ended_while_its_restart_is_pending() {
+    let s = setup(true).await;
+    let id = waiting(&s).await;
+    let bound = shown(&s, &id).await.bound_at.unwrap();
+
+    // Without a restart pending it is, as before.
+    assert!(!s
+        .screens
+        .unbind(&id, "run-0", RUN_ENDED, 4_000)
+        .await
+        .unwrap());
+    assert!(s
+        .screens
+        .request_restart(&id, "run-1", bound, 5_000)
+        .await
+        .unwrap());
+    assert!(!s
+        .screens
+        .unbind(&id, "run-1", RUN_ENDED, 5_500)
+        .await
+        .unwrap());
+    let screen = shown(&s, &id).await;
+    assert_eq!(screen.run_id.as_deref(), Some("run-1"));
+    assert_eq!(screen.note, None);
+    assert!(s.screens.prepare_requests().await.unwrap()[0].restart);
+
+    // Another job's run ending is not held either.
+    let other = setup(true).await;
+    let other_id = waiting(&other).await;
+    assert!(other
+        .screens
+        .unbind(&other_id, "run-1", RUN_ENDED, 5_500)
+        .await
+        .unwrap());
+}
+
+#[tokio::test]
+async fn a_restart_of_a_live_run_ends_it_and_puts_the_job_back_in_line_with_its_own_event() {
+    let s = setup(true).await;
+    *s.browser.store.lock().unwrap() = Some(s.store.clone());
+    let id = waiting(&s).await;
+    tend(&s).await;
+    let bound = shown(&s, &id).await.bound_at.unwrap();
+    assert!(s
+        .screens
+        .request_restart(&id, "run-1", bound, 5_000)
+        .await
+        .unwrap());
+
+    let woken = s.wake.notified();
+    tend(&s).await;
+    tokio::time::timeout(Duration::from_secs(1), woken)
+        .await
+        .expect("the worker is woken");
+    // The run was ended, and only then was the job put back in line.
+    assert_eq!(*s.browser.released.lock().unwrap(), vec![id.clone()]);
+    assert_eq!(
+        *s.browser.states_at_release.lock().unwrap(),
+        vec![JobState::Waiting]
+    );
+    assert!(s.browser.touched.lock().unwrap().is_empty());
+    let d = detail(&s, &id).await;
+    assert_eq!(d.row.state, JobState::Pending);
+    assert!(d.events.iter().any(|e| e.message == RESTARTED_CHECK));
+    assert!(!d.events.iter().any(|e| e.message == CHECK_PREPARED_AGAIN));
+    assert_eq!(shown(&s, &id).await.state, ScreenState::Preparing);
+    assert!(s.screens.prepare_requests().await.unwrap().is_empty());
+
+    // The run that was watched ends with the release; the person is told of
+    // no run that closed by itself.
+    s.browser.give(Next::Ended);
+    watch_ended(&s).await;
+    let d = detail(&s, &id).await;
+    assert!(!d.events.iter().any(|e| e.message.contains("닫혔어요")));
+    assert_eq!(shown(&s, &id).await.note, None);
+
+    // The job's next run opens the post in a new run, bound to the screen.
+    run(&s).await;
+    assert_eq!(s.browser.prepares(), 2);
+    let screen = shown(&s, &id).await;
+    assert_eq!(screen.state, ScreenState::Ready);
+    assert_eq!(screen.run_id.as_deref(), Some("run-2"));
+    assert!(s.screens.prepare_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_restart_waits_for_a_download_on_its_way_and_is_answered_once_it_ended() {
+    let s = setup(true).await;
+    let id = waiting(&s).await;
+    tend(&s).await;
+    let bound = shown(&s, &id).await.bound_at.unwrap();
+    s.browser.under_way.store(true, Ordering::SeqCst);
+    assert!(s
+        .screens
+        .request_restart(&id, "run-1", bound, 5_000)
+        .await
+        .unwrap());
+
+    for _ in 0..3 {
+        tend(&s).await;
+    }
+    assert!(s.browser.released.lock().unwrap().is_empty());
+    assert!(s.browser.touched.lock().unwrap().is_empty());
+    let d = detail(&s, &id).await;
+    assert_eq!(d.row.state, JobState::Waiting);
+    assert!(!d.events.iter().any(|e| e.message == RESTARTED_CHECK));
+    let asked = s.screens.prepare_requests().await.unwrap();
+    assert!(asked.len() == 1 && asked[0].restart);
+    assert_eq!(shown(&s, &id).await.run_id.as_deref(), Some("run-1"));
+
+    s.browser.under_way.store(false, Ordering::SeqCst);
+    tend(&s).await;
+    assert_eq!(*s.browser.released.lock().unwrap(), vec![id.clone()]);
+    let d = detail(&s, &id).await;
+    assert_eq!(d.row.state, JobState::Pending);
+    assert!(d.events.iter().any(|e| e.message == RESTARTED_CHECK));
+    assert!(s.screens.prepare_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_restart_of_a_run_that_is_gone_puts_the_job_back_in_line_without_ending_anything() {
+    let s = setup(true).await;
+    let id = waiting(&s).await;
+    let bound = shown(&s, &id).await.bound_at.unwrap();
+    // The run went away while no one looked.
+    s.browser.live.lock().unwrap().clear();
+    assert!(s
+        .screens
+        .request_restart(&id, "run-1", bound, 5_000)
+        .await
+        .unwrap());
+
+    tend(&s).await;
+    assert!(s.browser.released.lock().unwrap().is_empty());
+    let d = detail(&s, &id).await;
+    assert_eq!(d.row.state, JobState::Pending);
+    assert!(d.events.iter().any(|e| e.message == RESTARTED_CHECK));
+    // The watch that found the run gone did not report it as closed.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let d = detail(&s, &id).await;
+    assert!(!d.events.iter().any(|e| e.message.contains("닫혔어요")));
+    assert_eq!(shown(&s, &id).await.note, None);
+    run(&s).await;
+    assert_eq!(s.browser.prepares(), 2);
+    assert_eq!(shown(&s, &id).await.state, ScreenState::Ready);
 }

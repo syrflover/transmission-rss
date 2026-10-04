@@ -53,6 +53,8 @@ export interface Connection {
   nav: Nav | null;
   /** The run's tabs as the server last said; none before it did, and after another run's screen opened. */
   tabs: Tab[];
+  /** Whether the page answers, as the server last said: inputs are not sent to one that does not. */
+  responding: boolean;
 }
 
 /** Whether this device is a touch screen: its main pointer is a finger. */
@@ -95,6 +97,7 @@ export function useRemoteConnection(options: {
   const [planned, setPlanned] = useState<Viewport | null>(null);
   const [nav, setNav] = useState<Nav | null>(null);
   const [tabs, setTabs] = useState<Tab[]>([]);
+  const [responding, setResponding] = useState(true);
   /** The run the `nav` and `tabs` above are of: another binding of it keeps them while the socket connects anew. */
   const stateOf = useRef<string | null>(null);
   /** Counts the retries after a read of the job said to connect to the same run again. */
@@ -128,6 +131,8 @@ export function useRemoteConnection(options: {
     setPhase("connecting");
     setReason(null);
     setFrame(null);
+    // Each socket is told anew when the page does not answer.
+    setResponding(true);
     // The tabs and the page's state stay while a screen of the same run connects anew (a switch of tab is one), so
     // the row does not flicker; another run's are not this one's.
     if (stateOf.current !== run) {
@@ -218,6 +223,9 @@ export function useRemoteConnection(options: {
         case "tabs":
           setTabs(message.tabs);
           break;
+        case "page":
+          setResponding(message.responding);
+          break;
         case "ended":
           ended = message.reason;
           break;
@@ -277,5 +285,5 @@ export function useRemoteConnection(options: {
   const back = useCallback(() => command({ type: "back" }), [command]);
   const forward = useCallback(() => command({ type: "forward" }), [command]);
 
-  return { phase, reason, frame, planned, session, send, reload, back, forward, nav, tabs };
+  return { phase, reason, frame, planned, session, send, reload, back, forward, nav, tabs, responding };
 }

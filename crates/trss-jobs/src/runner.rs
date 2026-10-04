@@ -38,11 +38,14 @@
 //!   and the item's next run fails with it: nothing asks the address again,
 //!   and a new attempt goes through the check anew. Each opening of the
 //!   job's screen lets the browser bring a check that went away back to the
-//!   page ([`AuthBrowser::rearm`]). The item's folder goes once
-//!   the item settles (received, failed or held). A run that ends before
-//!   leaves the job waiting with no run; a person's next opening of the job's
-//!   page asks for it again, and the job goes back in line to be brought to
-//!   the check anew. The runs the worker's own shutdown ends leave the
+//!   page ([`AuthBrowser::rearm`]). A person may also ask to start the run
+//!   anew when its page is stuck ([`screen::ScreenStore::request_restart`]):
+//!   the worker ends the run, after any download of it has ended, and puts
+//!   the job back in line to be brought to the check in a new run. The
+//!   item's folder goes once the item settles (received, failed or held). A
+//!   run that ends before leaves the job waiting with no run; a person's
+//!   next opening of the job's page asks for it again, and the job goes back
+//!   in line to be brought to the check anew. The runs the worker's own shutdown ends leave the
 //!   binding to the next worker's start. Without an [`AuthBrowser`] such a
 //!   post waits for a source.
 //!   A site's check that needs no browser (a protected post) only waits.
@@ -874,8 +877,11 @@ impl Runner {
     /// Watches the runs bound to jobs that wait for a person's check, and
     /// answers the requests to prepare their screens (see the module docs).
     /// A file that arrives, or a job put back in line, notifies `wake` (the
-    /// worker's job loop). The worker calls it whenever it is woken and every
-    /// few seconds. Without an [`AuthBrowser`] it only ends the find jobs a
+    /// worker's job loop). A person's request to start a run anew ends that
+    /// run first (never while it has a download on its way: the request
+    /// waits for a later round), and only then puts the job back in line, so
+    /// the next run of the job cannot take the same run back. The worker
+    /// calls it whenever it is woken and every few seconds. Without an [`AuthBrowser`] it only ends the find jobs a
     /// person asked to finish that have no run bound. `shutdown` is the
     /// worker's: a run that ends after it fired was ended by the shutdown,
     /// which closes no screen (the next start does).
@@ -925,6 +931,34 @@ impl Runner {
         }
         for request in self.screens.prepare_requests().await? {
             let now = self.now();
+            if request.restart {
+                // A person asked to start the stuck run anew. A download on
+                // its way is not lost for it: the request stays unanswered
+                // until the download ended.
+                if let Some(run) = request
+                    .run_id
+                    .as_deref()
+                    .filter(|run| browser.is_live(&request.job_id, run))
+                {
+                    if browser.downloading(&request.job_id, run) {
+                        continue;
+                    }
+                    // The run is over before the job goes back in line.
+                    browser.release(&request.job_id).await;
+                }
+                if self
+                    .screens
+                    .requeue_for_check(&request.job_id, request.asked_at, true, self.now())
+                    .await?
+                {
+                    println!(
+                        "Subtitle job {}: the server browser is started anew at a person's request",
+                        request.job_id
+                    );
+                    wake.notify_one();
+                }
+                continue;
+            }
             // A person opened the screen: the live run's idle time counts
             // from now.
             let live = request
@@ -960,7 +994,7 @@ impl Runner {
                 }
             } else if self
                 .screens
-                .requeue_for_check(&request.job_id, request.asked_at, now)
+                .requeue_for_check(&request.job_id, request.asked_at, false, now)
                 .await?
             {
                 println!(

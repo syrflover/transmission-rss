@@ -427,6 +427,18 @@ export async function switchTab(id: string, run: string, bound: number, target: 
   });
 }
 
+/**
+ * Asks the worker to start the job's server browser run anew, for the binding (`run`, `bound`) the person sees: it ends
+ * the run (once no download of it is on its way) and opens the post again in a new run, a new binding. Asked when the
+ * page does not answer. A `conflict` when the binding changed.
+ */
+export async function restartScreen(id: string, run: string, bound: number): Promise<void> {
+  await api<unknown>(`/subtitle-jobs/${encodeURIComponent(id)}/screen/restart`, {
+    method: "POST",
+    body: { run, bound },
+  });
+}
+
 /** The most candidates one job takes, as the server (`MAX_CANDIDATES` in `jobs_api.rs`) does. */
 export const MAX_JOB_CANDIDATES = 200;
 

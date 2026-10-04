@@ -5,7 +5,7 @@ import { ApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 import { btnAction, btnNeutral } from "../../collect/channels/styles";
-import { closeTab, switchTab } from "../api";
+import { closeTab, restartScreen, switchTab } from "../api";
 import { CloseIcon, HistoryBackIcon, HistoryForwardIcon, ReloadIcon } from "../icons";
 import { toRemote } from "./geometry";
 import {
@@ -24,6 +24,9 @@ import { showsTabRow, tabLabel, withShown } from "./tabs";
 import { isTouchDevice, useRemoteConnection } from "./useRemoteConnection";
 
 const TAB_FAILED = "창을 바꾸지 못했어요. 잠시 뒤 다시 시도해 주세요.";
+const RESTART_FAILED = "서버 브라우저를 새로 띄우지 못했어요. 잠시 뒤 다시 시도해 주세요.";
+const STALLED_TEXT =
+  "페이지가 응답하지 않아요. 잠시 기다리거나, 서버 브라우저를 새로 띄워 게시물을 다시 열 수 있어요. 받은 파일은 남아요.";
 
 /** A round button with an icon, in the shape of the screen's other buttons; it is at least as tall as they are. */
 const iconButton = cn(btnNeutral, "size-9 min-h-9 w-9 px-0 max-[720px]:size-10 max-[720px]:min-h-10");
@@ -32,6 +35,7 @@ const ENDED_TEXT: Record<EndedReason, string> = {
   browser: "서버 브라우저가 닫혔어요. 작업 화면을 다시 열면 다시 준비해요.",
   run: "이 작업의 서버 브라우저 실행이 바뀌었어요. 작업 상태를 다시 읽고 있어요.",
   unreachable: "서버 브라우저에 닿지 못했어요. 작업 화면을 다시 열면 다시 준비해요.",
+  stuck: "페이지가 응답하지 않아요. 서버 브라우저를 새로 띄워 게시물을 다시 열 수 있어요. 받은 파일은 남아요.",
   replaced: "다른 기기나 탭에서 이 인증 화면을 열어서 여기 화면은 닫혔어요. 여기서 계속하려면 다시 열어 주세요.",
 };
 
@@ -60,6 +64,10 @@ const ENDED_TEXT: Record<EndedReason, string> = {
  *   touch tap does not raise the virtual keyboard by itself.
  * - The area stops the page from scrolling or zooming under a finger or a
  *   wheel, only over itself.
+ * - A page that does not answer (the server says so, or ended the socket as
+ *   `stuck`) is covered by a note with `새로 띄우기`, which asks the worker
+ *   for a new run of the post (`POST .../screen/restart`); the note stays
+ *   until the job has another binding.
  */
 export function RemoteScreen({
   jobId,
@@ -90,6 +98,13 @@ export function RemoteScreen({
   /** The tab a switch was asked for, shown as the page until the server's tabs say so. */
   const [wanted, setWanted] = useState<string | null>(null);
   const [tabError, setTabError] = useState<string | null>(null);
+  /** A new run was asked for; the screen of this binding waits for the next one. */
+  const [restarting, setRestarting] = useState(false);
+  const [restartError, setRestartError] = useState<string | null>(null);
+  useEffect(() => {
+    setRestarting(false);
+    setRestartError(null);
+  }, [run, bound]);
   const [touch] = useState(isTouchDevice);
   const [typing, setTyping] = useState(false);
   const conn = useRemoteConnection({ jobId, run, bound, attempt, area, image });
@@ -110,6 +125,19 @@ export function RemoteScreen({
       setTabError(e instanceof ApiError ? e.message : TAB_FAILED);
     } finally {
       setAsking(false);
+    }
+  };
+
+  /** Asks the worker for a new run of the post, for the binding this screen shows. */
+  const restart = async () => {
+    if (bound === null || restarting) return;
+    setRestarting(true);
+    setRestartError(null);
+    try {
+      await restartScreen(jobId, run, bound);
+    } catch (e) {
+      setRestarting(false);
+      setRestartError(e instanceof ApiError ? e.message : RESTART_FAILED);
     }
   };
 
@@ -300,6 +328,10 @@ export function RemoteScreen({
 
   const { phase, frame, planned, reason } = conn;
   const live = phase === "live";
+  // Also before the first frame: a page that is already stalled when the
+  // screen connects sends none until it answers again.
+  const stalled = (live || phase === "connecting") && !conn.responding;
+  const covered = !live || stalled || restarting;
   const aspect = frame ?? planned;
   // A page that ended while the screen was ready: the person asks for it again.
   const reopen = () => {
@@ -434,7 +466,7 @@ export function RemoteScreen({
             ref={image}
             alt=""
             draggable={false}
-            className={cn("pointer-events-none absolute inset-0 size-full", !frame && "invisible", phase !== "live" && "opacity-40")}
+            className={cn("pointer-events-none absolute inset-0 size-full", !frame && "invisible", covered && "opacity-40")}
           />
           <textarea
             ref={field}
@@ -456,27 +488,63 @@ export function RemoteScreen({
           />
         </div>
 
-        {phase !== "live" && (
+        {covered && (
           <div
             role="status"
             className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-surface-1/60 p-4 text-center text-[13.5px] leading-relaxed text-text-secondary"
           >
-            {phase === "connecting" && <p>화면을 불러오는 중이에요.</p>}
-            {phase === "retrying" && <p>연결이 끊겨서 다시 연결하고 있어요.</p>}
-            {phase === "failed" && (
+            {restarting ? (
+              <p>서버 브라우저를 새로 띄우고 있어요.</p>
+            ) : (
               <>
-                <p>서버 브라우저에 다시 연결하지 못했어요.</p>
-                <Button type="button" variant="ghost" className={btnAction} onClick={() => setAttempt((n) => n + 1)}>
-                  다시 연결
-                </Button>
-              </>
-            )}
-            {phase === "ended" && (
-              <>
-                <p>{ENDED_TEXT[reason ?? "browser"]}</p>
-                <Button type="button" variant="ghost" className={btnAction} disabled={opening} onClick={reopen}>
-                  다시 열기
-                </Button>
+                {phase === "connecting" && !stalled && <p>화면을 불러오는 중이에요.</p>}
+                {phase === "retrying" && <p>연결이 끊겨서 다시 연결하고 있어요.</p>}
+                {phase === "failed" && (
+                  <>
+                    <p>서버 브라우저에 다시 연결하지 못했어요.</p>
+                    <Button type="button" variant="ghost" className={btnAction} onClick={() => setAttempt((n) => n + 1)}>
+                      다시 연결
+                    </Button>
+                  </>
+                )}
+                {stalled && (
+                  <>
+                    <p>{STALLED_TEXT}</p>
+                    {bound !== null && (
+                      <Button type="button" variant="ghost" className={btnAction} onClick={() => void restart()}>
+                        새로 띄우기
+                      </Button>
+                    )}
+                  </>
+                )}
+                {phase === "ended" && reason === "stuck" && (
+                  <>
+                    <p>{ENDED_TEXT.stuck}</p>
+                    <div className="flex flex-wrap justify-center gap-2">
+                      {bound !== null && (
+                        <Button type="button" variant="ghost" className={btnAction} onClick={() => void restart()}>
+                          새로 띄우기
+                        </Button>
+                      )}
+                      <Button type="button" variant="ghost" className={btnNeutral} onClick={() => setAttempt((n) => n + 1)}>
+                        다시 연결
+                      </Button>
+                    </div>
+                  </>
+                )}
+                {phase === "ended" && reason !== "stuck" && (
+                  <>
+                    <p>{ENDED_TEXT[reason ?? "browser"]}</p>
+                    <Button type="button" variant="ghost" className={btnAction} disabled={opening} onClick={reopen}>
+                      다시 열기
+                    </Button>
+                  </>
+                )}
+                {restartError !== null && (
+                  <p role="alert" className="text-[13px] font-semibold text-urgent">
+                    {restartError}
+                  </p>
+                )}
               </>
             )}
           </div>

@@ -165,7 +165,9 @@ impl Connection {
             .await
     }
 
-    async fn command_marked_within(
+    /// [`Connection::command_marked`], waiting for the answer for as long as
+    /// `timeout`.
+    pub async fn command_marked_within(
         &self,
         session: Option<&str>,
         method: &str,

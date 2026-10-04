@@ -142,6 +142,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("../migrations/jobs/find.sql")),
     // 47: the pages of a screen's run a person may see as tabs, and a request to show another one
     Migration::Sql(include_str!("../migrations/jobs/screen_controls.sql")),
+    // 48: a person's request to start a screen's browser run anew
+    Migration::Sql(include_str!("../migrations/jobs/screen_restart.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]

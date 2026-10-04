@@ -54,6 +54,19 @@
 //! Both answer `202` (with `{}`) when asked, `409` when the job's screen is no longer that
 //! binding or has no such page to switch to or close, `404` for no job.
 //!
+//! # Starting the run anew
+//!
+//! `POST /api/subtitle-jobs/{id}/screen/restart` `{ "run", "bound" }`: a
+//! person asks for a new server browser run when the page shown does not
+//! answer (`page`, `stuck` below). Written when the binding is still the
+//! job's, and the worker is woken: it ends the run (once no download of it
+//! is on its way) and brings the job back to the post in a new run, a new
+//! binding. The open screens end as the run goes (`ended` `browser`), or
+//! as the binding changes (`run`) when that comes first; the web itself
+//! ends no run. It counts as the
+//! person's input. Answers `202` (with `{}`), `409` when the job's screen is
+//! no longer that binding, `404` for no job.
+//!
 //! # The socket
 //!
 //! `GET /api/subtitle-jobs/{id}/screen/socket?run=<run>&bound=<bound>` is a
@@ -120,11 +133,17 @@
 //!   A listed page the browser does not report is left out, a page the worker
 //!   did not list never appears, and `id` is the name a switch or close
 //!   request uses. Sent like `nav`.
+//! - `{"type":"page","responding"}`: `false` once the page did not answer an
+//!   input, a reload or a change of size within [`ANSWER_WITHIN`], `true`
+//!   once it answers again. Meanwhile inputs are not sent to it, and a size
+//!   sent is applied when it answers (a new generation). Sent like `nav`
+//!   (not at all while the page never stalled).
 //! - `{"type":"ended","reason"}`, then the socket closes: the run's page or
 //!   connection is gone (`browser`), the job's binding changed (`run`: the
 //!   file came, the run ended, or another run, page or binding took its
-//!   place), the run could not be reached (`unreachable`), or a newer
-//!   screen of the binding took this one's seat (`replaced`): at most
+//!   place), the run could not be reached (`unreachable`), the page did not
+//!   answer within [`OPEN_WITHIN`] when the screen opened (`stuck`), or a
+//!   newer screen of the binding took this one's seat (`replaced`): at most
 //!   [`MAX_SOCKETS`] are open on a binding, and one more takes the place of
 //!   the oldest (the newest is the device the person is using).
 //!
@@ -136,7 +155,14 @@
 //!
 //! The sockets of one binding share one DevTools connection (a hub), which
 //! goes when the last of them closes; the hub reads whether its binding is
-//! still the job's every [`CHECK_EVERY`]. A socket that does not take what
+//! still the job's every [`CHECK_EVERY`]. A page that does not answer in time
+//! does not end the hub: it is asked every [`PROBE_EVERY`] whether it answers
+//! again (`page`, above). A socket's messages are taken in order apart from
+//! the socket itself, so one the page does not answer holds back neither the
+//! pings nor what is sent to it; moves of the pointer that pile up
+//! meanwhile are let go first, and a press, a release, a key, a size, a
+//! reload or a step only once all [`QUEUE`] places are taken. A socket
+//! that is over leaves the rest of its messages untaken. A socket that does not take what
 //! is sent to it within [`SEND_TIMEOUT`] is closed. The web pings every
 //! socket every [`PING_EVERY`] and drops one that sends nothing (a pong or
 //! any message) within [`PONG_WITHIN`]: a device that slept or changed its
@@ -170,11 +196,12 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::sync::broadcast::error::RecvError;
+use tokio_util::sync::CancellationToken;
 use trss_browser::client::LauncherClient;
 use trss_jobs::{Screen, ScreenState};
 
-pub use hub::{admits, Binding, View, Viewport, MAX_SOCKETS};
-use hub::{ended_message, Handled, Hub};
+pub use hub::{admits, Binding, Times, View, Viewport, MAX_SOCKETS};
+use hub::{ended_message, Handled, Hub, Incoming, OpenError};
 
 use super::{commands_api::now_millis, env::BrowserAccess, ApiError, AppState};
 
@@ -188,8 +215,20 @@ pub const SEND_TIMEOUT: Duration = Duration::from_secs(10);
 pub const PING_EVERY: Duration = Duration::from_secs(15);
 /// How long a ping waits for the socket to answer before it is dropped.
 pub const PONG_WITHIN: Duration = Duration::from_secs(10);
+/// How long a command to the page may wait for its answer before the page is
+/// taken as stalled.
+pub const ANSWER_WITHIN: Duration = Duration::from_secs(5);
+/// How long the page may take to answer when a screen opens on it.
+pub const OPEN_WITHIN: Duration = Duration::from_secs(10);
+/// How often a stalled page is asked whether it answers again.
+pub const PROBE_EVERY: Duration = Duration::from_secs(1);
 /// The largest message a socket takes.
 const MAX_MESSAGE: usize = 64 * 1024;
+/// How many messages of a socket wait to be taken.
+const QUEUE: usize = 64;
+/// The places of the queue that moves of the pointer do not take
+/// ([`Incoming::is_motion`]).
+const KEPT_FROM_MOTION: usize = 16;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -197,6 +236,7 @@ pub fn routes() -> Router<AppState> {
         .route("/subtitle-jobs/{id}/screen/socket", get(socket))
         .route("/subtitle-jobs/{id}/screen/close", post(close))
         .route("/subtitle-jobs/{id}/screen/switch", post(switch))
+        .route("/subtitle-jobs/{id}/screen/restart", post(restart))
 }
 
 /// The web's way to the server browser's runs, and the hubs of the screens
@@ -205,8 +245,7 @@ pub fn routes() -> Router<AppState> {
 pub struct RemoteScreens {
     launcher: Arc<LauncherClient>,
     hubs: Arc<Mutex<HashMap<Binding, Weak<Hub>>>>,
-    input_every: Duration,
-    check_every: Duration,
+    times: Times,
     ping_every: Duration,
     pong_within: Duration,
 }
@@ -218,8 +257,13 @@ impl RemoteScreens {
         Ok(RemoteScreens {
             launcher: Arc::new(launcher),
             hubs: Arc::default(),
-            input_every: INPUT_EVERY,
-            check_every: CHECK_EVERY,
+            times: Times {
+                input_every: INPUT_EVERY,
+                check_every: CHECK_EVERY,
+                answer_within: ANSWER_WITHIN,
+                open_within: OPEN_WITHIN,
+                probe_every: PROBE_EVERY,
+            },
             ping_every: PING_EVERY,
             pong_within: PONG_WITHIN,
         })
@@ -234,8 +278,22 @@ impl RemoteScreens {
 
     /// Other times than [`INPUT_EVERY`] and [`CHECK_EVERY`] (tests).
     pub fn with_times(mut self, input_every: Duration, check_every: Duration) -> RemoteScreens {
-        self.input_every = input_every;
-        self.check_every = check_every;
+        self.times.input_every = input_every;
+        self.times.check_every = check_every;
+        self
+    }
+
+    /// Other times than [`ANSWER_WITHIN`], [`OPEN_WITHIN`] and
+    /// [`PROBE_EVERY`] (tests).
+    pub fn with_answers(
+        mut self,
+        answer_within: Duration,
+        open_within: Duration,
+        probe_every: Duration,
+    ) -> RemoteScreens {
+        self.times.answer_within = answer_within;
+        self.times.open_within = open_within;
+        self.times.probe_every = probe_every;
         self
     }
 
@@ -245,7 +303,7 @@ impl RemoteScreens {
         state: &AppState,
         job: &str,
         binding: &Binding,
-    ) -> Result<Arc<Hub>, String> {
+    ) -> Result<Arc<Hub>, OpenError> {
         if let Some(hub) = self.open_hub(binding) {
             return Ok(hub);
         }
@@ -255,8 +313,7 @@ impl RemoteScreens {
             job,
             binding.clone(),
             state.screens.clone(),
-            self.input_every,
-            self.check_every,
+            self.times,
         )
         .await?;
         let mut hubs = self.hubs.lock().expect("hubs lock");
@@ -420,6 +477,33 @@ async fn switch(
     answered(&state, &id, asked, NO_PAGE_TO_SHOW).await
 }
 
+/// The binding of the screen whose run a person asks to start anew.
+#[derive(Debug, Deserialize)]
+struct RestartRequest {
+    run: String,
+    bound: i64,
+}
+
+async fn restart(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<RestartRequest>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let asked = state
+        .screens
+        .request_restart(&id, &request.run, request.bound, now_millis())
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    if asked {
+        if let Some(path) = &state.worker_wake {
+            trss_core::wake::wake_worker(path);
+        }
+    }
+    answered(&state, &id, asked, NO_RUN_TO_RESTART).await
+}
+
+const NO_RUN_TO_RESTART: &str =
+    "새로 띄울 서버 브라우저가 없어요. 화면이 바뀌었으면 새로 연 화면에서 다시 시도해 주세요.";
 const NO_PAGE_TO_CLOSE: &str =
     "닫을 창이 없어요. 화면이 바뀌었으면 새로 연 화면에서 다시 시도해 주세요.";
 const NO_PAGE_TO_SHOW: &str =
@@ -528,6 +612,15 @@ async fn socket(
         .on_upgrade(move |socket| serve(socket, state, remote, id, binding))
 }
 
+/// Whether a socket's `message` goes in its queue, which has `free` places
+/// left: moves that pile up behind an input the page does not answer are
+/// let go (they would reach the page all at once), and the last places are
+/// kept for what must not be lost ([`Incoming::is_motion`]). A message is
+/// still lost when every place is taken.
+fn takes(message: &Incoming, free: usize) -> bool {
+    !message.is_motion() || free > KEPT_FROM_MOTION
+}
+
 /// Sends `message`, and says whether the socket took it within
 /// [`SEND_TIMEOUT`]: a socket that does not is given up.
 async fn deliver(socket: &mut WebSocket, message: Message) -> bool {
@@ -549,12 +642,17 @@ async fn serve(
     let hub = match remote.hub(&state, &job, &binding).await {
         Ok(hub) => hub,
         Err(err) => {
-            eprintln!("trss-web: cannot reach the page of job {job}'s run: {err}");
-            let _ = deliver(
-                &mut socket,
-                Message::Text(ended_message("unreachable").into()),
-            )
-            .await;
+            let reason = match err {
+                OpenError::Stuck => {
+                    eprintln!("trss-web: the page of job {job}'s run does not answer");
+                    "stuck"
+                }
+                OpenError::Unreachable(why) => {
+                    eprintln!("trss-web: cannot reach the page of job {job}'s run: {why}");
+                    "unreachable"
+                }
+            };
+            let _ = deliver(&mut socket, Message::Text(ended_message(reason).into())).await;
             let _ = deliver(&mut socket, Message::Close(None)).await;
             return;
         }
@@ -576,6 +674,28 @@ async fn serve(
             return;
         }
     }
+    // The socket's messages are taken in order by a task of their own: one
+    // the page does not answer in time holds that task, not the pings,
+    // frames and notes below. Once the socket is over the task takes no
+    // more of them, but the one it is taking is not cut short: a change of
+    // size must not stop halfway.
+    let (queue, mut queued) = tokio::sync::mpsc::channel::<Incoming>(QUEUE);
+    let (dropped, mut notes) = tokio::sync::mpsc::unbounded_channel::<u64>();
+    let over = CancellationToken::new();
+    let _over = over.clone().drop_guard();
+    tokio::spawn({
+        let hub = hub.clone();
+        async move {
+            while let Some(message) = queued.recv().await {
+                if over.is_cancelled() {
+                    return;
+                }
+                if let Handled::Dropped { gen } = hub.handle(message).await {
+                    let _ = dropped.send(gen);
+                }
+            }
+        }
+    });
     let mut ping = tokio::time::interval_at(
         tokio::time::Instant::now() + remote.ping_every,
         remote.ping_every,
@@ -593,15 +713,22 @@ async fn serve(
                 }
                 Some(Ok(Message::Text(text))) => {
                     pinged = false;
-                    if let Handled::Dropped { gen } = hub.handle(text.as_str()).await {
-                        let note = json!({ "type": "dropped", "gen": gen }).to_string();
-                        if !deliver(&mut socket, Message::Text(note.into())).await {
-                            return;
-                        }
+                    // Not a message of the protocol: ignored.
+                    let Ok(message) = serde_json::from_str::<Incoming>(text.as_str()) else {
+                        continue;
+                    };
+                    if takes(&message, queue.capacity()) {
+                        let _ = queue.try_send(message);
                     }
                 }
                 Some(Ok(_)) | None | Some(Err(_)) => break,
             },
+            Some(gen) = notes.recv() => {
+                let note = json!({ "type": "dropped", "gen": gen }).to_string();
+                if !deliver(&mut socket, Message::Text(note.into())).await {
+                    return;
+                }
+            }
             _ = ping.tick(), if !pinged => {
                 if !deliver(&mut socket, Message::Ping(Default::default())).await {
                     return;

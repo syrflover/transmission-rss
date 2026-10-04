@@ -45,7 +45,9 @@ test("the server's messages are read by their shape", () => {
     },
   );
   assert.deepEqual(parseServerMessage('{"type":"tabs","tabs":[]}'), { type: "tabs", tabs: [] });
-  for (const reason of ["browser", "run", "unreachable", "replaced"]) {
+  assert.deepEqual(parseServerMessage('{"type":"page","responding":false}'), { type: "page", responding: false });
+  assert.deepEqual(parseServerMessage('{"type":"page","responding":true}'), { type: "page", responding: true });
+  for (const reason of ["browser", "run", "unreachable", "stuck", "replaced"]) {
     assert.deepEqual(parseServerMessage(`{"type":"ended","reason":"${reason}"}`), { type: "ended", reason });
   }
 });
@@ -64,6 +66,8 @@ test("a message that is not the protocol's is ignored", () => {
     '{"type":"tabs","tabs":"none"}',
     '{"type":"tabs","tabs":[{"id":"","title":"","host":null,"shown":true,"closable":true}]}',
     '{"type":"tabs","tabs":[{"id":"T1","title":"","host":null,"shown":true}]}',
+    '{"type":"page","responding":"no"}',
+    '{"type":"page"}',
     '{"type":"unknown"}',
   ]) {
     assert.equal(parseServerMessage(text), null, text);
