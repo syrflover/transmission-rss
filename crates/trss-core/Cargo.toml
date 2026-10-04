@@ -10,7 +10,7 @@ test-support = []
 
 [dependencies]
 rusqlite.workspace = true
-rustix.workspace = true
+rustix = { workspace = true, features = ["process"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 thiserror.workspace = true

@@ -288,6 +288,9 @@ pub struct Worker {
     jobs_running: Arc<tokio::sync::Mutex<()>>,
     /// The server browser ([`trss_browser`]); `None`: the worker has none.
     browser: Option<trss_browser::BrowserPool>,
+    /// The worker holds the server browser's lock but runs without the browser
+    /// ([`Worker::with_unused_browser_lock`]).
+    browser_lock_unused: bool,
     clock: Clock,
 }
 
@@ -373,6 +376,7 @@ impl Worker {
             season_stored: None,
             jobs_running: Arc::default(),
             browser: None,
+            browser_lock_unused: false,
             clock,
         })
     }
@@ -430,6 +434,16 @@ impl Worker {
     /// sources that need a person's authentication ([`Worker::browser`]).
     pub fn with_browser(mut self, pool: trss_browser::BrowserPool) -> Self {
         self.browser = Some(pool);
+        self
+    }
+
+    /// Tells the worker it holds the server browser's lock (the lock of
+    /// `browser::take_lock`) but runs without the browser, because it could not prepare the
+    /// downloads folder. No other worker uses the browser then, so the remote
+    /// screens still bound to runs of an earlier worker are no one's and are
+    /// closed at the start, as for a worker that has the browser.
+    pub fn with_unused_browser_lock(mut self) -> Self {
+        self.browser_lock_unused = true;
         self
     }
 

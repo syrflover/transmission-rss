@@ -46,4 +46,11 @@ ENV TRSS_WEB_BIND=0.0.0.0 \
     TRSS_WEB_STATIC_DIR=/usr/local/share/trss/web
 EXPOSE 8080
 
+# Not root: 1000:1000, the user Transmission writes the media as, so that what
+# trss writes there has the same owner (the players read it over NFS, which
+# shows the owner as numbers). The compose file's `user:` sets another uid and
+# gid from TRSS_UID and TRSS_GID. The data folder must belong to this user:
+# both binaries check at their start that they can write it.
+USER 1000:1000
+
 ENTRYPOINT [ "/usr/local/bin/trss-worker" ]

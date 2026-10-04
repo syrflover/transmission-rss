@@ -5,7 +5,7 @@ use tokio::net::TcpListener;
 
 use trss_anilist::AnilistConfig;
 use trss_anissia::{Anissia, AnissiaConfig};
-use trss_core::{db::DB_PATH_ENV, wake::wake_path_for, Db};
+use trss_core::{access::check_app_data, db::DB_PATH_ENV, wake::wake_path_for, Db};
 use trss_library::artwork::{AppData, Artwork};
 use trss_web::{
     self as web,
@@ -45,6 +45,9 @@ async fn run() -> Result<(), String> {
     let db_path: PathBuf = std::env::var_os(DB_PATH_ENV)
         .ok_or_else(|| format!("environment variable {DB_PATH_ENV} is not set"))?
         .into();
+    // The worker's user and this one share the database and the receive area:
+    // a file an earlier deploy made as another user stops the start here.
+    check_app_data(&db_path).map_err(|e| e.to_string())?;
     let db = Db::open(&db_path).await.map_err(|e| {
         format!("cannot open the app database (set {DB_PATH_ENV} to a file on a local volume): {e}")
     })?;

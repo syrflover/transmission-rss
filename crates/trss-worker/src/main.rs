@@ -7,7 +7,7 @@ use trss_collect::{
     anissia::{self, captions::CaptionObserver, AnissiaQueue},
     store::anissia::AnissiaStore,
 };
-use trss_core::{db::DB_PATH_ENV, lock_path_for, wake::wake_path_for, Db};
+use trss_core::{access::check_app_data, db::DB_PATH_ENV, lock_path_for, wake::wake_path_for, Db};
 use trss_jobs::{JobStore, ReceiveArea, Runner};
 use trss_library::{
     artwork::{self, AppData, Artwork},
@@ -40,6 +40,9 @@ async fn run() -> Result<(), String> {
     let db_path: PathBuf = std::env::var_os(DB_PATH_ENV)
         .ok_or_else(|| format!("environment variable {DB_PATH_ENV} is not set"))?
         .into();
+    // Before anything is opened: a file an earlier deploy made as another user
+    // stops the start here, with its path and the uid that is needed.
+    check_app_data(&db_path).map_err(|e| e.to_string())?;
     let db = Db::open(&db_path).await.map_err(|e| {
         format!("cannot open the app database (set {DB_PATH_ENV} to a file on a local volume): {e}")
     })?;
@@ -63,22 +66,35 @@ async fn run() -> Result<(), String> {
     }
     // One worker at a time uses the browser container: a second one would
     // reset it and end the first one's runs. The lock lives as long as this
-    // process (`_browser_lock`).
-    let (browser, _browser_lock) = match &env.browser {
+    // process (`browser_lock`).
+    let (browser, browser_lock) = match &env.browser {
         Some(browser_env) => match trss_worker::browser::take_lock(&db_path)
             .map_err(|e| format!("cannot take the lock of the server browser: {e}"))?
         {
-            Some(lock) => (
-                Some(
-                    trss_worker::browser::connect(
-                        db.clone(),
-                        browser_env,
-                        trss_core::system_clock(),
-                    )
-                    .await?,
+            Some(lock) => match trss_browser::prepare_downloads_root(&browser_env.downloads) {
+                Ok(()) => (
+                    Some(
+                        trss_worker::browser::connect(
+                            db.clone(),
+                            browser_env,
+                            trss_core::system_clock(),
+                        )
+                        .await?,
+                    ),
+                    Some(lock),
                 ),
-                Some(lock),
-            ),
+                // A first start has a downloads folder Docker made as root.
+                // That is no reason to stop the whole worker (its restart
+                // policy would loop on it): it runs as it did without a
+                // browser, and the message says what to give the folder.
+                Err(reason) => {
+                    eprintln!("trss-worker: running without a server browser: {reason}");
+                    // Keep the lock: while this worker holds it no other one
+                    // uses the browser, so the screens bound to an earlier
+                    // worker's runs are no one's and are closed at the start.
+                    (None, Some(lock))
+                }
+            },
             None => {
                 eprintln!(
                     "trss-worker: another worker uses the browser container; this one runs without a server browser"
@@ -118,6 +134,8 @@ async fn run() -> Result<(), String> {
     if let Some(pool) = browser {
         println!("The server browser is on (a pool over the browser container)");
         worker = worker.with_browser(pool);
+    } else if browser_lock.is_some() {
+        worker = worker.with_unused_browser_lock();
     }
 
     let cancel = CancellationToken::new();

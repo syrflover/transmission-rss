@@ -68,7 +68,7 @@ mod run;
 
 use std::{
     collections::HashMap,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -598,31 +598,17 @@ impl PoolInner {
         if *done {
             return Ok(());
         }
-        self.prepare_downloads_root().await;
+        self.prepare_downloads_root().await?;
         self.launcher.reset().await?;
         self.clear_downloads_root().await;
         *done = true;
         Ok(())
     }
 
-    /// The folder is shared with a browser that runs as another user and
-    /// makes a folder in it for each run, like `/tmp`.
-    async fn prepare_downloads_root(&self) {
-        use std::os::unix::fs::PermissionsExt;
-        if let Err(err) = tokio::fs::create_dir_all(&self.downloads_root).await {
-            eprintln!(
-                "Browser: cannot make {}: {err}",
-                self.downloads_root.display()
-            );
-            return;
-        }
-        let mode = std::fs::Permissions::from_mode(0o1777);
-        if let Err(err) = tokio::fs::set_permissions(&self.downloads_root, mode).await {
-            eprintln!(
-                "Browser: cannot open {} to the browser user: {err}",
-                self.downloads_root.display()
-            );
-        }
+    /// See [`prepare_downloads_root`]; a failure stops the first use.
+    async fn prepare_downloads_root(&self) -> Result<(), BrowserError> {
+        prepare_downloads_root(&self.downloads_root)
+            .map_err(|message| BrowserError::Io(std::io::Error::other(message)))
     }
 
     async fn clear_downloads_root(&self) {
@@ -666,6 +652,60 @@ impl PoolInner {
             ),
         }
     }
+}
+
+/// The mode of the downloads folder: open to every user, sticky.
+const DOWNLOADS_MODE: u32 = 0o1777;
+
+/// Makes the shared downloads folder `root` and opens it to the browser. The
+/// folder is shared with a browser that runs as another user and makes a
+/// folder in it for each run, like `/tmp` (mode 1777).
+///
+/// The folder must belong to this process (or this process is root). Under
+/// the sticky bit only the owner of a folder, or of an entry in it, may remove
+/// the entry, so a worker that does not own the folder cannot remove the run
+/// folders the browser makes in it, and they would pile up unseen. Docker
+/// makes a missing bind-mount folder as root, and a deploy from before the
+/// worker ran as 1000:1000 left folders of root, so this is the usual state of
+/// a first start. The error then names the path, who owns it and the commands
+/// that fix it, and the caller runs without the browser rather than
+/// stopping the whole worker. A folder it owns gets the mode if it lacks it.
+pub fn prepare_downloads_root(root: &Path) -> Result<(), String> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    std::fs::create_dir_all(root)
+        .map_err(|err| format!("cannot make the downloads folder {}: {err}", root.display()))?;
+    let meta = std::fs::metadata(root).map_err(|err| {
+        format!(
+            "cannot look at the downloads folder {}: {err}",
+            root.display()
+        )
+    })?;
+    let uid = rustix::process::geteuid().as_raw();
+    let gid = rustix::process::getegid().as_raw();
+    if meta.uid() != uid && uid != 0 {
+        return Err(format!(
+            "the downloads folder {} is owned by uid {} gid {} (mode {:04o}), not by this process \
+             (uid {uid}): it needs to be owned by the worker with mode {:04o}, since only its owner \
+             can remove the run folders the browser makes in it. On the host, in the app data \
+             folder: sudo chown {uid}:{gid} browser-downloads && sudo chmod {:o} browser-downloads",
+            root.display(),
+            meta.uid(),
+            meta.gid(),
+            meta.mode() & 0o7777,
+            DOWNLOADS_MODE,
+            DOWNLOADS_MODE,
+        ));
+    }
+    if meta.mode() & 0o7777 == DOWNLOADS_MODE {
+        return Ok(());
+    }
+    std::fs::set_permissions(root, std::fs::Permissions::from_mode(DOWNLOADS_MODE)).map_err(|err| {
+        format!(
+            "cannot open the downloads folder {} to the browser user (mode {:04o}): {err}",
+            root.display(),
+            DOWNLOADS_MODE,
+        )
+    })
 }
 
 async fn remove_tree(path: &std::path::Path) {

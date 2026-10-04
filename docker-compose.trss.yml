@@ -51,14 +51,27 @@ name: trss-app
 # when it starts and its reaper ends the runs it does not know, so a second
 # worker on the same launcher would end the first one's runs.
 #
-# Both share the app database in TRSS_DATA_DIR. Keep it on a local disk of this
-# host, not an SMB or NFS share: SQLite and the worker's lock file
-# (`trss.db.worker.lock`) rely on local file locking, and the web wakes the
-# worker through the socket `trss.db.wake` next to the database.
+# Both share the app database in TRSS_DATA_DIR. The folder must exist before
+# the first start and belong to TRSS_UID:TRSS_GID (1000:1000 by default): a
+# folder that Docker makes for a missing path belongs to root. So does the
+# folder `browser-downloads` in it, which also has to exist before the first
+# `up`, owned by TRSS_UID:TRSS_GID with mode 1777 (the readme has the
+# commands); otherwise the worker runs without the server browser. Keep it on a
+# local disk of this host, not an SMB or NFS share: SQLite and the worker's
+# lock file (`trss.db.worker.lock`) rely on local file locking, and the web
+# wakes the worker through the socket `trss.db.wake` next to the database.
 
 x-trss: &trss
   image: ghcr.io/syrflover/transmission-rss:${TRSS_VERSION:?Set TRSS_VERSION in .env to a release tag, e.g. 0.4.0}
   restart: unless-stopped
+  # The user Transmission writes the media as (`PUID`/`PGID` in
+  # docker-compose.yml), so that what trss writes there has the same owner:
+  # the players read the media over NFS, which shows the owner as numbers.
+  # Both containers use it, since they share the database, its WAL files and
+  # the receive area. Another uid and gid: TRSS_UID and TRSS_GID in .env, with
+  # the data folder given to them. Each binary checks at its start that it can
+  # write the data folder and stops with the path and the uid it needs.
+  user: "${TRSS_UID:-1000}:${TRSS_GID:-1000}"
   environment: &trss-env
     TRSS_DB_PATH: /data/trss.db
   volumes:
@@ -94,8 +107,12 @@ services:
       # The server browser: the launcher's address on `browser_net`, its token,
       # and the folder the browser saves downloads in, at the path this
       # container sees it (it is trss-browser's /downloads, see below, inside
-      # the data folder mounted here). The worker makes the folder writable
-      # for the browser's user at its start.
+      # the data folder mounted here). The worker opens the folder to the
+      # browser's user (mode 1777) at its start, which it can do only for a
+      # folder it owns. Make the folder before the first `up`, owned by
+      # TRSS_UID:TRSS_GID (Docker would make it as root): when it is another
+      # user's, the worker logs the path and the fix and runs without the
+      # server browser.
       TRSS_BROWSER_URL: http://trss-browser:9230
       TRSS_BROWSER_TOKEN: ${TRSS_BROWSER_TOKEN:?Set TRSS_BROWSER_TOKEN in .env to a long random string, e.g. the output of openssl rand -hex 32}
       TRSS_BROWSER_DOWNLOADS: /data/browser-downloads

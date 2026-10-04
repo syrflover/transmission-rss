@@ -136,13 +136,19 @@ impl Worker {
     }
 
     /// Clears the bindings of the remote screens when this worker holds the
-    /// server browser: the runs they name were an earlier worker's
-    /// ([`trss_jobs::screen`]). A worker without it leaves them, since they
-    /// may be the other worker's.
+    /// server browser's lock, with the browser or without it (see
+    /// [`Worker::with_unused_browser_lock`]): the runs they name were an
+    /// earlier worker's ([`trss_jobs::screen`]), and a job that waits for a
+    /// check would otherwise show a screen for a run that is gone. A worker
+    /// that does not hold the lock leaves them, since they may be the other
+    /// worker's.
     pub(crate) async fn clear_screens(&self) {
-        let (Some(runner), Some(_)) = (&self.jobs, &self.browser) else {
+        let Some(runner) = &self.jobs else {
             return;
         };
+        if self.browser.is_none() && !self.browser_lock_unused {
+            return;
+        }
         match runner.screens().unbind_all((self.clock)()).await {
             Ok(0) => {}
             Ok(n) => {
@@ -274,5 +280,100 @@ impl Worker {
                 Err(err) => eprintln!("Subtitle job task ended with an internal error: {err}"),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use trss_core::Db;
+    use trss_jobs::{area::ReceiveArea, Created, JobStore, NewItem, NewJob, Runner, ScreenStore};
+    use trss_subtitles::Sources;
+
+    use crate::{Worker, WorkerEnv};
+
+    /// A worker with a job runner and one job whose remote screen is bound to
+    /// a run of an earlier worker.
+    async fn with_a_bound_screen() -> (tempfile::TempDir, Worker, Db) {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open(dir.path().join("app.db")).await.unwrap();
+        let store = JobStore::new(db.clone());
+        let job = NewJob {
+            command_id: "c1".to_owned(),
+            request: "{}".to_owned(),
+            origin: "pick".to_owned(),
+            work_id: None,
+            season: Some(1),
+            anime_no: None,
+            source_id: None,
+            creator: Some("creator".to_owned()),
+            revision_of: None,
+            revises_attributed: false,
+            items: vec![NewItem {
+                observation_id: None,
+                episode: "1".to_owned(),
+                post_url: "https://fake.trss.invalid/check/ep1".to_owned(),
+                found_at: 500,
+            }],
+        };
+        let Created::Created(id) = store.create(job, 900).await.unwrap() else {
+            panic!("the job was not created");
+        };
+        let item = store.detail(&id).await.unwrap().unwrap().items[0].id;
+        ScreenStore::new(db.clone())
+            .bind(&id, item, "run-1", "target-1", 1_000)
+            .await
+            .unwrap();
+        let env = WorkerEnv::from_lookup(|key| {
+            (key == "TRANSMISSION_URL").then(|| "http://127.0.0.1:1/transmission/rpc".to_owned())
+        })
+        .unwrap();
+        let worker = Worker::new(db.clone(), &env, dir.path().join("app.db.worker.lock"))
+            .unwrap()
+            .with_clock(Arc::new(|| 2_000))
+            .with_jobs(Runner::new(
+                store,
+                Sources::none(),
+                ReceiveArea::in_app_data(dir.path()),
+                Arc::new(|| 2_000),
+            ));
+        (dir, worker, db)
+    }
+
+    /// How many remote screens are bound to a run.
+    async fn bound(db: &Db) -> i64 {
+        db.run(|c| {
+            Ok::<_, trss_core::DbError>(c.query_row(
+                "SELECT COUNT(*) FROM subtitle_job_screens WHERE run_id IS NOT NULL",
+                [],
+                |row| row.get(0),
+            )?)
+        })
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_worker_that_holds_the_browser_lock_without_the_browser_closes_the_leftover_screens()
+    {
+        let (_dir, worker, db) = with_a_bound_screen().await;
+        assert_eq!(bound(&db).await, 1);
+        let worker = worker.with_unused_browser_lock();
+
+        worker.clear_screens().await;
+
+        assert_eq!(bound(&db).await, 0);
+    }
+
+    #[tokio::test]
+    async fn a_worker_that_does_not_hold_the_browser_lock_leaves_the_screens_alone() {
+        // They may be the screens of the worker that does hold it.
+        let (_dir, worker, db) = with_a_bound_screen().await;
+        assert_eq!(bound(&db).await, 1);
+
+        worker.clear_screens().await;
+
+        assert_eq!(bound(&db).await, 1);
     }
 }

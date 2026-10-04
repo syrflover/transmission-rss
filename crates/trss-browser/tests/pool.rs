@@ -1034,3 +1034,52 @@ async fn a_persons_input_reported_from_outside_counts_as_use_and_a_watched_scree
     advance(301);
     assert_eq!(pool.reap_once().await, [next.run_id().to_owned()]);
 }
+
+#[test]
+fn a_downloads_folder_this_process_owns_is_opened_to_the_browser() {
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path().join("browser-downloads");
+    // Missing: made. With another mode: opened up. With the mode: left.
+    trss_browser::prepare_downloads_root(&folder).unwrap();
+    assert_eq!(
+        folder.metadata().unwrap().permissions().mode() & 0o7777,
+        0o1777
+    );
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o755)).unwrap();
+    trss_browser::prepare_downloads_root(&folder).unwrap();
+    assert_eq!(
+        folder.metadata().unwrap().permissions().mode() & 0o7777,
+        0o1777
+    );
+    trss_browser::prepare_downloads_root(&folder).unwrap();
+}
+
+#[test]
+fn a_downloads_folder_of_another_user_is_reported_with_the_fix_even_with_the_mode() {
+    if rustix::process::geteuid().is_root() {
+        return;
+    }
+    // `/tmp` is root's and has mode 1777, but this process could not remove
+    // the browser's run folders in it under the sticky bit.
+    let err = trss_browser::prepare_downloads_root(std::path::Path::new("/tmp")).unwrap_err();
+    assert!(err.contains("/tmp"), "{err}");
+    assert!(err.contains("uid 0"), "{err}");
+    assert!(err.contains("chown"), "{err}");
+    assert!(err.contains("chmod 1777"), "{err}");
+}
+
+#[test]
+fn a_downloads_folder_of_another_user_with_the_wrong_mode_is_reported_not_half_done() {
+    if rustix::process::geteuid().is_root() {
+        return;
+    }
+    // `/usr` is root's with mode 755: this process cannot open it up.
+    let err = trss_browser::prepare_downloads_root(std::path::Path::new("/usr")).unwrap_err();
+    assert!(err.contains("/usr"), "{err}");
+    assert!(err.contains("mode 1777"), "{err}");
+    assert!(err.contains("uid 0"), "{err}");
+    assert_eq!(
+        std::fs::metadata("/usr").unwrap().permissions().mode() & 0o7777,
+        0o755
+    );
+}

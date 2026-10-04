@@ -8,6 +8,7 @@
 //! those of the first run on `watch_folders`); a feature crate keeps only the
 //! code that reads and writes its own tables.
 
+pub mod access;
 pub mod calendar;
 mod clock;
 pub mod commands;
