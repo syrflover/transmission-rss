@@ -4,13 +4,16 @@ import { test } from "node:test";
 import type { Replacement, ReplacementVersion } from "./replacementTypes.ts";
 import {
   againNotice,
+  asEpisodeList,
   cardLayout,
   compareRows,
+  decisionsFor,
   limitNotices,
   openOnes,
   pathRows,
   pathWarnings,
   postLabel,
+  rowTags,
   stateLine,
   shownVersions,
   versionFacts,
@@ -249,4 +252,41 @@ test("the version lines count the dialogue as the content comparison read it, wh
   const unreadable = plan({ current: version({ lines: null }), comparison: { state: "unreadable", reason: "까닭" } });
   assert.equal(shownVersions(unreadable).current?.lines, null);
   assert.equal(limitNotices({ ...unreadable, limits: ["lines_unknown"] }).length, 1);
+});
+
+test("several plans to decide are an episode list; one keeps its decision card", () => {
+  assert.equal(asEpisodeList([plan()]), false);
+  assert.equal(asEpisodeList([plan(), plan({ plan_id: "p2", episode: 4 })]), true);
+});
+
+test("모두 교체 and 모두 유지 decide each plan the list shows, at the version it shows", () => {
+  const open = [plan({ plan_id: "p1", version: 2 }), plan({ plan_id: "p2", episode: 4 })];
+  assert.deepEqual(decisionsFor(open, "replace"), [
+    { plan: "p1", version: 2, decision: "replace" },
+    { plan: "p2", version: 1, decision: "replace" },
+  ]);
+  assert.deepEqual(
+    decisionsFor(open, "keep").map((d) => d.decision),
+    ["keep", "keep"],
+  );
+});
+
+test("an episode row's tags are what the to-do card would say for that plan alone", () => {
+  assert.deepEqual(rowTags(plan()), ["비교 불가"]);
+  const comparison = {
+    state: "compared",
+    current: { format: "ASS", encoding: "UTF-8", cues: 24 },
+    new: { format: "SMI", encoding: "UTF-8", cues: 327 },
+    dialogue: { added: 303, changed: 24, removed: 0 },
+    timing: { count: 0 },
+    styles: null,
+    fonts: null,
+    not_compared: [{ item: "styles", reason: "한쪽이 ASS가 아니에요" }],
+  } as const;
+  // One plan: no number beside 일부 비교 불가.
+  assert.deepEqual(rowTags(plan({ comparison: { ...comparison, not_compared: [...comparison.not_compared] } })), [
+    "대사 추가 303",
+    "대사 변경 24",
+    "일부 비교 불가",
+  ]);
 });

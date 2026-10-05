@@ -38,7 +38,10 @@ impl App {
         let dir = tempfile::tempdir().unwrap();
         let shows = dir.path().join("shows");
         std::fs::create_dir_all(shows.join("Show/Season 01")).unwrap();
-        std::fs::write(shows.join("Show").join(VIDEO), b"video").unwrap();
+        for episode in 2..=4 {
+            let video = format!("Season 01/Show S01E{episode:02}.mkv");
+            std::fs::write(shows.join("Show").join(video), b"video").unwrap();
+        }
         let path = shows.to_string_lossy().into_owned();
         state
             .jobs
@@ -55,6 +58,13 @@ impl App {
                      INSERT INTO media_files (work_id, path, season, episode, kind)
                          VALUES ('w1', '{VIDEO}', 1, '02', 'video');"
                 ))?;
+                for episode in [3, 4] {
+                    c.execute_batch(&format!(
+                        "INSERT INTO episodes (work_id, season, episode) VALUES ('w1', 1, '{episode:02}');
+                         INSERT INTO media_files (work_id, path, season, episode, kind)
+                             VALUES ('w1', 'Season 01/Show S01E{episode:02}.mkv', 1, '{episode:02}', 'video');"
+                    ))?;
+                }
                 Ok(())
             })
             .await
@@ -80,6 +90,11 @@ impl App {
 
     /// A pick's job of `creator` for the fake post `path`, run.
     async fn job(&self, command: &str, creator: &str, path: &str) -> String {
+        self.job_of(command, creator, &[("2", path)]).await
+    }
+
+    /// A pick's job of `creator` for the fake posts (episode, path), run.
+    async fn job_of(&self, command: &str, creator: &str, posts: &[(&str, &str)]) -> String {
         let made = self
             .state
             .jobs
@@ -95,12 +110,15 @@ impl App {
                     creator: Some(creator.to_owned()),
                     revision_of: None,
                     revises_attributed: false,
-                    items: vec![NewItem {
-                        observation_id: None,
-                        episode: "2".to_owned(),
-                        post_url: format!("https://{}{path}", fake::HOST),
-                        found_at: 1,
-                    }],
+                    items: posts
+                        .iter()
+                        .map(|(episode, path)| NewItem {
+                            observation_id: None,
+                            episode: (*episode).to_owned(),
+                            post_url: format!("https://{}{path}", fake::HOST),
+                            found_at: 1,
+                        })
+                        .collect(),
                 },
                 100,
             )
@@ -581,4 +599,210 @@ async fn the_replacement_to_do_counts_a_plan_compared_only_in_part() {
             "uncompared": 0, "partial": 1, "plans": 1
         })
     );
+}
+
+impl App {
+    /// A first job applies episodes 2 to 4 (`/ok/Show-0N`) and a second
+    /// job's plans for the revisions (`/ok/Show-0Nv2`) wait: the second job
+    /// and its plans' IDs and versions, by episode.
+    async fn three_waiting(&self) -> (String, Vec<(String, i64)>) {
+        let first = [
+            ("2", "/ok/Show-02"),
+            ("3", "/ok/Show-03"),
+            ("4", "/ok/Show-04"),
+        ];
+        self.job_of("c1", "에루샤", &first).await;
+        let second = [
+            ("2", "/ok/Show-02v2"),
+            ("3", "/ok/Show-03v2"),
+            ("4", "/ok/Show-04v2"),
+        ];
+        let job = self.job_of("c2", "에루샤", &second).await;
+        let detail = self.detail(&job).await;
+        let mut plans: Vec<(i64, String, i64)> = detail["replacements"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| {
+                (
+                    r["episode"].as_i64().unwrap(),
+                    r["plan_id"].as_str().unwrap().to_owned(),
+                    r["version"].as_i64().unwrap(),
+                )
+            })
+            .collect();
+        plans.sort();
+        assert_eq!(plans.len(), 3, "{plans:?}");
+        (job, plans.into_iter().map(|(_, id, v)| (id, v)).collect())
+    }
+
+    async fn decide_many(&self, job: &str, body: Value) -> (StatusCode, Value) {
+        self.call(
+            Method::POST,
+            &format!("/api/subtitle-jobs/{job}/replacements"),
+            Some(body),
+        )
+        .await
+    }
+
+    /// The subtitle beside the video of the episode.
+    fn subtitle(&self, episode: u32) -> Vec<u8> {
+        std::fs::read(self.at(&format!("Season 01/Show S01E{episode:02}.ass"))).unwrap()
+    }
+}
+
+#[tokio::test]
+async fn several_decisions_at_once_answer_each_plan_in_the_order_asked() {
+    let app = App::new().await;
+    let (job, plans) = app.three_waiting().await;
+    let [(two, v2), (three, v3), (four, v4)] = &plans[..] else {
+        panic!()
+    };
+    // Episode 2 is replaced, 3 is kept, and 4 names a version that is not
+    // the plan to decide.
+    let (status, body) = app
+        .decide_many(
+            &job,
+            json!({ "decisions": [
+                { "plan": four, "version": v4 + 1, "decision": "replace" },
+                { "plan": two, "version": v2, "decision": "replace" },
+                { "plan": three, "version": v3, "decision": "keep" },
+            ] }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body,
+        json!({ "results": [
+            { "plan": four, "state": "stale" },
+            { "plan": two, "state": "approved" },
+            { "plan": three, "state": "kept" },
+        ] })
+    );
+    // The job is in line for the two decisions; the plan left stale is still
+    // open.
+    let detail = app.detail(&job).await;
+    assert_eq!(detail["state"], "pending");
+    let states: Vec<_> = detail["replacements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| (r["episode"].as_i64().unwrap(), r["state"].clone()))
+        .collect();
+    assert!(states.contains(&(2, json!("approved"))), "{states:?}");
+    assert!(states.contains(&(3, json!("kept"))), "{states:?}");
+    assert!(states.contains(&(4, json!("open"))), "{states:?}");
+
+    app.run().await;
+    assert_eq!(app.subtitle(2), fake::ass("Show-02v2"));
+    assert_eq!(app.subtitle(3), fake::ass("Show-03"));
+    assert_eq!(app.subtitle(4), fake::ass("Show-04"));
+    // Episode 4 still waits for the person.
+    let detail = app.detail(&job).await;
+    assert_eq!(
+        (&detail["state"], &detail["wait"]),
+        (&json!("waiting"), &json!("approval"))
+    );
+}
+
+#[tokio::test]
+async fn a_list_of_decisions_that_cannot_be_read_is_refused_with_nothing_written() {
+    let app = App::new().await;
+    let (job, plans) = app.three_waiting().await;
+    let (id, version) = &plans[0];
+    let (other, _) = &plans[1];
+    let one = |plan: &str, decision: &str| json!({ "plan": plan, "version": version, "decision": decision });
+    let too_many: Vec<Value> = (0..1001).map(|i| one(&format!("p{i}"), "keep")).collect();
+    let cases = [
+        json!({ "decisions": [] }),
+        json!({ "decisions": too_many }),
+        json!({ "decisions": [one(id, "keep"), one(other, "keep"), one(id, "replace")] }),
+        json!({ "decisions": [one(id, "keep"), one(other, "maybe")] }),
+    ];
+    for body in cases {
+        let (status, error) = app.decide_many(&job, body.clone()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body:.200} {error}");
+        assert_eq!(error["error"], "invalid");
+    }
+    // The limit itself is fine to ask: 1,000 plans that do not exist are
+    // not found, not too many.
+    let at_limit: Vec<Value> = (0..1000).map(|i| one(&format!("p{i}"), "keep")).collect();
+    let (status, _) = app
+        .decide_many(&job, json!({ "decisions": at_limit }))
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    // Without a body the request is not read at all.
+    let (status, _) = app.decide_many(&job, json!({})).await;
+    assert!(status.is_client_error());
+
+    let detail = app.detail(&job).await;
+    assert_eq!(detail["wait"], "approval");
+    assert!(detail["replacements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|r| r["state"] == "open"));
+}
+
+#[tokio::test]
+async fn a_plan_of_another_job_is_not_found_and_nothing_of_the_list_is_written() {
+    let app = App::new().await;
+    let (job, plans) = app.three_waiting().await;
+    // Another job's plan for episode 2 waits too.
+    let (other, foreign) = app.revision_of("c3", "/ok/Show-02v3").await;
+    assert_ne!(job, other);
+    let mut decisions: Vec<Value> = plans
+        .iter()
+        .map(|(id, v)| json!({ "plan": id, "version": v, "decision": "replace" }))
+        .collect();
+    decisions.push(json!({ "plan": foreign, "version": 1, "decision": "replace" }));
+    let (status, body) = app
+        .decide_many(&job, json!({ "decisions": decisions }))
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["error"], "not_found");
+
+    for id in [&job, &other] {
+        let detail = app.detail(id).await;
+        assert_eq!(
+            (&detail["state"], &detail["wait"]),
+            (&json!("waiting"), &json!("approval")),
+            "{id}"
+        );
+        assert!(detail["replacements"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|r| r["state"] == "open"));
+    }
+}
+
+#[tokio::test]
+async fn the_worker_is_woken_only_when_a_decision_was_written() {
+    use std::os::unix::net::UnixDatagram;
+    let mut app = App::new().await;
+    let socket_path = app.dir.path().join("worker.wake");
+    let socket = UnixDatagram::bind(&socket_path).unwrap();
+    socket.set_nonblocking(true).unwrap();
+    app.state = app.state.clone().with_worker_wake(socket_path);
+    app.router = Router::new().nest("/api", crate::api::router().with_state(app.state.clone()));
+    let (job, plans) = app.three_waiting().await;
+    let woke = || socket.recv(&mut [0u8; 8]).is_ok();
+    while woke() {}
+
+    let stale: Vec<Value> = plans
+        .iter()
+        .map(|(id, v)| json!({ "plan": id, "version": v + 1, "decision": "replace" }))
+        .collect();
+    let (status, body) = app.decide_many(&job, json!({ "decisions": stale })).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(!woke(), "nothing was written");
+
+    let all: Vec<Value> = plans
+        .iter()
+        .map(|(id, v)| json!({ "plan": id, "version": v, "decision": "replace" }))
+        .collect();
+    let (status, body) = app.decide_many(&job, json!({ "decisions": all })).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(woke(), "the worker was woken");
 }

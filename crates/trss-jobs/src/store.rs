@@ -644,6 +644,20 @@ impl JobStore {
             .await
     }
 
+    /// A person's decisions on several replacement plans of the job at once
+    /// ([`crate::place::replace::records::decide_all`]).
+    pub async fn decide_replacements(
+        &self,
+        job_id: &str,
+        decisions: Vec<crate::place::replace::records::Decision>,
+        now: Millis,
+    ) -> Result<Vec<crate::place::replace::records::Decided>, JobError> {
+        let job = job_id.to_owned();
+        self.db
+            .run(move |c| crate::place::replace::records::decide_all(c, &job, &decisions, now))
+            .await
+    }
+
     /// The job's placement plan ([`crate::place`]), in order.
     pub async fn plan(
         &self,

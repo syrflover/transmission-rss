@@ -159,3 +159,16 @@ export interface ReplacementChanges {
   /** The open plans summed, `uncompared` and `partial` of them among them. */
   plans: number;
 }
+
+/** One of several decisions sent at once: the plan, the version the list showed, and what to do. */
+export interface ReplacementDecision {
+  plan: string;
+  version: number;
+  decision: "replace" | "keep";
+}
+
+/** What became of one decision sent with others: written, or `stale` for a plan that changed since it was read. */
+export interface ReplacementResult {
+  plan: string;
+  state: "approved" | "kept" | "stale";
+}

@@ -52,6 +52,39 @@ export function todoTags(changes: ReplacementChanges): string[] {
   return tags;
 }
 
+/**
+ * One plan's part of the `교체 승인` card's sum, by the server's rule (`todo_api::Changes::add`), so a row of the
+ * episode list says what the card would for that episode alone.
+ */
+export function planChanges(comparison: Comparison | null): ReplacementChanges {
+  const none = {
+    added: 0,
+    changed: 0,
+    removed: 0,
+    timing: 0,
+    styles: 0,
+    fonts: 0,
+    uncompared: 0,
+    partial: 0,
+    plans: 1,
+  };
+  if (comparison === null || comparison.state !== "compared") return { ...none, uncompared: 1 };
+  const { dialogue, styles, fonts } = comparison;
+  const ass = comparison.current.format === "ASS" || comparison.new.format === "ASS";
+  const leftOut =
+    comparison.not_compared.some((n) => n.item === "dialogue") || (ass && (styles === null || fonts === null));
+  return {
+    ...none,
+    added: dialogue.added,
+    changed: dialogue.changed,
+    removed: dialogue.removed,
+    timing: comparison.timing.count,
+    styles: styles === null ? 0 : styles.added.length + styles.removed.length + styles.changed.length,
+    fonts: fonts === null ? 0 : fonts.added.length + fonts.removed.length,
+    partial: leftOut ? 1 : 0,
+  };
+}
+
 // ---------------------------------------------------------------- the 변경 사항 section
 
 /** One number tag of an item (`추가 2`). A `dim` one is 0. */

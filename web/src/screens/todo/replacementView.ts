@@ -1,6 +1,7 @@
 import { when } from "../../lib/time.ts";
 import { sizeText } from "./bytes.ts";
-import type { Replacement, ReplacementPath, ReplacementVersion } from "./replacementTypes.ts";
+import { planChanges, todoTags } from "./changes.ts";
+import type { Replacement, ReplacementDecision, ReplacementPath, ReplacementVersion } from "./replacementTypes.ts";
 
 /**
  * What the decision card of a job's replacement (`docs/specs/subtitles.md`, 교체 비교와 승인) shows, decided from
@@ -28,6 +29,27 @@ export function waitingPositions(replacements: readonly Replacement[]): Set<numb
  */
 export function cardLayout(open: number, index: number): { sticky: boolean; fixed: boolean } {
   return { sticky: index === 0, fixed: open === 1 };
+}
+
+/**
+ * Whether the job's plans to decide are an episode list (`docs/specs/subtitles.md`, 교체 비교와 승인): when there are
+ * several, the list is the main area and each row opens to its comparison; one plan keeps its decision card.
+ */
+export function asEpisodeList(open: readonly Replacement[]): boolean {
+  return open.length > 1;
+}
+
+/**
+ * The decisions `모두 교체` or `모두 유지` sends: one for each plan the list shows, bound to the version it shows, so
+ * a plan made again since then is not decided by it.
+ */
+export function decisionsFor(open: readonly Replacement[], decision: "replace" | "keep"): ReplacementDecision[] {
+  return open.map((r) => ({ plan: r.plan_id, version: r.version, decision }));
+}
+
+/** The tags of an episode row: what the to-do card would say for that plan alone. */
+export function rowTags(r: Replacement): string[] {
+  return todoTags(planChanges(r.comparison));
 }
 
 /**

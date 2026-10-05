@@ -474,6 +474,15 @@ pub enum Decided {
     Stale,
 }
 
+/// A person's decision on one plan of a job ([`decide_all`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Decision {
+    pub plan_id: String,
+    pub version: i64,
+    /// `true` approves the plan; `false` keeps the episode's subtitle.
+    pub replace: bool,
+}
+
 /// A person's decision on the job's plan `plan_id` of `version`: `replace`
 /// approves it, else the episode keeps its subtitle (the row is settled
 /// `existing`). Refused unless it is the row's latest version and `open`.
@@ -481,7 +490,7 @@ pub enum Decided {
 /// something else (held, a check, a site) keeps waiting and carries the
 /// decision out once it runs again, and a run under way ends `pending` and
 /// runs again ([`crate::store::JobStore::settle`]). With its log line. One
-/// synced transaction.
+/// synced transaction. [`decide_all`] with one decision.
 pub fn decide(
     c: &mut Connection,
     job_id: &str,
@@ -490,63 +499,105 @@ pub fn decide(
     replace: bool,
     now: Millis,
 ) -> Result<Decided, JobError> {
+    let decision = Decision {
+        plan_id: plan_id.to_owned(),
+        version,
+        replace,
+    };
+    let mut decided = decide_all(c, job_id, std::slice::from_ref(&decision), now)?;
+    Ok(decided.remove(0))
+}
+
+/// A person's decisions on several plans of the job at once, one per
+/// episode: each is checked and written as [`decide`] does, in one synced
+/// transaction, and the job is put back in line once. A plan that is no
+/// longer the row's to decide is `Stale` and left as it is, the others are
+/// written. If any plan is not the job's, nothing is written and that
+/// plan's place holds `NotFound` and the others hold `Stale` (none of them
+/// was written). The results are in the order of the decisions, and each is
+/// checked against what the ones before it wrote, so a plan named twice is
+/// written at most once.
+pub fn decide_all(
+    c: &mut Connection,
+    job_id: &str,
+    decisions: &[Decision],
+    now: Millis,
+) -> Result<Vec<Decided>, JobError> {
     durable(c, |c| {
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let found: Option<(i64, i64, PlanState, i64, i64)> = tx
-            .query_row(
-                "SELECT position, version, state, episode,
-                        (SELECT max(version) FROM subtitle_replacements o
-                          WHERE o.job_id = r.job_id AND o.position = r.position)
-                   FROM subtitle_replacements r WHERE id = ?1 AND job_id = ?2",
-                params![plan_id, job_id],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
-            )
-            .optional()?;
-        let Some((position, found_version, state, episode, latest)) = found else {
-            return Ok(Decided::NotFound);
-        };
-        if found_version != version || latest != version || state != PlanState::Open {
-            return Ok(Decided::Stale);
-        }
-        let to = match replace {
-            true => PlanState::Approved,
-            false => PlanState::Kept,
-        };
-        tx.execute(
-            "UPDATE subtitle_replacements SET state = ?2, decided_at = ?3, updated_at = ?3
-              WHERE id = ?1",
-            params![plan_id, to, now],
-        )?;
-        let message = match replace {
-            true => "새 자막으로 교체하기로 했어요",
-            false => {
-                tx.execute(
-                    "UPDATE subtitle_job_plan
-                        SET outcome = 'existing', note = '현재 자막을 그대로 두고 보관만 했어요',
-                            updated_at = ?3
-                      WHERE job_id = ?1 AND position = ?2",
-                    params![job_id, position, now],
-                )?;
-                "현재 자막을 그대로 두기로 했어요"
+        let mut results = Vec::with_capacity(decisions.len());
+        let mut written = false;
+        for (index, decision) in decisions.iter().enumerate() {
+            let Decision {
+                plan_id,
+                version,
+                replace,
+            } = decision;
+            let found: Option<(i64, i64, PlanState, i64, i64)> = tx
+                .query_row(
+                    "SELECT position, version, state, episode,
+                            (SELECT max(version) FROM subtitle_replacements o
+                              WHERE o.job_id = r.job_id AND o.position = r.position)
+                       FROM subtitle_replacements r WHERE id = ?1 AND job_id = ?2",
+                    params![plan_id, job_id],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+                )
+                .optional()?;
+            let Some((position, found_version, state, episode, latest)) = found else {
+                // Dropping the transaction writes nothing of the others.
+                let mut refused = vec![Decided::Stale; decisions.len()];
+                refused[index] = Decided::NotFound;
+                return Ok(refused);
+            };
+            if found_version != *version || latest != *version || state != PlanState::Open {
+                results.push(Decided::Stale);
+                continue;
             }
-        };
-        tx.execute(
-            "UPDATE subtitle_jobs
-                SET state = 'pending', wait = NULL, note = ?3, finished_at = NULL, state_at = ?2
-              WHERE id = ?1 AND state = 'waiting' AND wait = 'approval'",
-            params![job_id, now, DECIDED],
-        )?;
-        tx.execute(
-            "UPDATE subtitle_jobs SET updated_at = ?2 WHERE id = ?1",
-            params![job_id, now],
-        )?;
-        tx.execute(
-            "INSERT INTO subtitle_job_events (job_id, at, message, detail)
-             VALUES (?1, ?2, ?3, ?4)",
-            params![job_id, now, message, format!("{episode}화")],
-        )?;
+            let to = match replace {
+                true => PlanState::Approved,
+                false => PlanState::Kept,
+            };
+            tx.execute(
+                "UPDATE subtitle_replacements SET state = ?2, decided_at = ?3, updated_at = ?3
+                  WHERE id = ?1",
+                params![plan_id, to, now],
+            )?;
+            let message = match replace {
+                true => "새 자막으로 교체하기로 했어요",
+                false => {
+                    tx.execute(
+                        "UPDATE subtitle_job_plan
+                            SET outcome = 'existing', note = '현재 자막을 그대로 두고 보관만 했어요',
+                                updated_at = ?3
+                          WHERE job_id = ?1 AND position = ?2",
+                        params![job_id, position, now],
+                    )?;
+                    "현재 자막을 그대로 두기로 했어요"
+                }
+            };
+            tx.execute(
+                "INSERT INTO subtitle_job_events (job_id, at, message, detail)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![job_id, now, message, format!("{episode}화")],
+            )?;
+            written = true;
+            results.push(Decided::Done(to));
+        }
+        if written {
+            tx.execute(
+                "UPDATE subtitle_jobs
+                    SET state = 'pending', wait = NULL, note = ?3, finished_at = NULL,
+                        state_at = ?2
+                  WHERE id = ?1 AND state = 'waiting' AND wait = 'approval'",
+                params![job_id, now, DECIDED],
+            )?;
+            tx.execute(
+                "UPDATE subtitle_jobs SET updated_at = ?2 WHERE id = ?1",
+                params![job_id, now],
+            )?;
+        }
         tx.commit()?;
-        Ok(Decided::Done(to))
+        Ok(results)
     })
 }
 

@@ -15,8 +15,8 @@ use trss_jobs::{
     model::{PathAction, PlanState},
     place::replace::{
         records::{
-            Compared, Comparison, Decided, Diff, Encoding, NotCompared, PlanPath, PlanView, Side,
-            StoredFacts,
+            Compared, Comparison, Decided, Decision, Diff, Encoding, NotCompared, PlanPath,
+            PlanView, Side, StoredFacts,
         },
         NEW_REVISION,
     },
@@ -417,6 +417,88 @@ pub(super) async fn decide(
             current: None,
         }),
     }
+}
+
+/// The most decisions one request carries: a season's episodes with room.
+const DECIDE_MAX: usize = 1000;
+
+#[derive(Debug, Deserialize)]
+pub(super) struct DecideManyRequest {
+    decisions: Vec<DecideManyItem>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct DecideManyItem {
+    plan: String,
+    version: i64,
+    /// `replace` or `keep`, as [`DecideRequest::decision`].
+    decision: String,
+}
+
+/// `POST /api/subtitle-jobs/{id}/replacements`: the person's decisions on
+/// several plans of the job at once (`모두 교체`, `모두 유지`, a list's
+/// picks), each as [`decide`] takes one. A plan that is not the plan to
+/// decide any more is `stale` in the results and left as it is, the others
+/// are written. A plan of another job fails the whole request, with nothing
+/// written.
+pub(super) async fn decide_many(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<DecideManyRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if request.decisions.is_empty() {
+        return Err(ApiError::invalid("결정할 교체 계획이 없어요."));
+    }
+    if request.decisions.len() > DECIDE_MAX {
+        return Err(ApiError::invalid(format!(
+            "한 번에 {DECIDE_MAX}개까지만 결정할 수 있어요."
+        )));
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut decisions = Vec::with_capacity(request.decisions.len());
+    for item in &request.decisions {
+        if !seen.insert(item.plan.as_str()) {
+            return Err(ApiError::invalid(
+                "같은 교체 계획을 두 번 결정할 수 없어요.",
+            ));
+        }
+        let replace = match item.decision.as_str() {
+            "replace" => true,
+            "keep" => false,
+            _ => return Err(ApiError::invalid("결정은 replace나 keep이어야 해요.")),
+        };
+        decisions.push(Decision {
+            plan_id: item.plan.clone(),
+            version: item.version,
+            replace,
+        });
+    }
+    let decided = state
+        .jobs
+        .decide_replacements(&id, decisions, now_millis())
+        .await
+        .map_err(|e| internal(&e))?;
+    if decided.contains(&Decided::NotFound) {
+        return Err(ApiError::not_found("교체 계획을 찾지 못했어요."));
+    }
+    if decided.iter().any(|d| matches!(d, Decided::Done(_))) {
+        if let Some(path) = &state.worker_wake {
+            trss_core::wake::wake_worker(path);
+        }
+    }
+    let results: Vec<_> = request
+        .decisions
+        .iter()
+        .zip(&decided)
+        .map(|(item, decided)| {
+            let state = match decided {
+                Decided::Done(to) => to.code(),
+                _ => "stale",
+            };
+            json!({ "plan": item.plan, "state": state })
+        })
+        .collect();
+    Ok(Json(json!({ "results": results })))
 }
 
 #[cfg(test)]

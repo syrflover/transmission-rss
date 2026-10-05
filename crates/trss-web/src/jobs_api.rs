@@ -67,6 +67,15 @@
 //!   and the worker woken, `404` for no such plan of the job, `409` when the
 //!   plan of that version is not the row's to decide any more (a newer
 //!   version replaced it, or it was decided): the person compares again.
+//! - `POST /api/subtitle-jobs/{id}/replacements` `{ "decisions": [{ "plan",
+//!   "version", "decision": "replace" | "keep" }] }` the decisions on
+//!   several plans at once, in one transaction: `200` `{ "results": [{
+//!   "plan", "state": "approved" | "kept" | "stale" }] }` in request order
+//!   (`stale`: not the plan to decide any more, left as it is; the others
+//!   are written) and the worker woken when any was written; `400` for no
+//!   decision, more than 1,000, the same plan twice or a decision other than
+//!   `replace` and `keep`; `404`, with nothing written, when any plan is not
+//!   the job's.
 //!
 //!   Each of `placements` has its `position`, the episode number its name
 //!   says (`named`, as written) and what put it on its episode
@@ -177,6 +186,10 @@ pub fn routes() -> Router<AppState> {
         .route("/subtitle-jobs/{id}", get(detail))
         .route("/subtitle-jobs/find", post(create_find))
         .route("/subtitle-jobs/{id}/finish", post(finish))
+        .route(
+            "/subtitle-jobs/{id}/replacements",
+            post(replacement::decide_many),
+        )
         .route(
             "/subtitle-jobs/{id}/replacements/{plan}",
             post(replacement::decide),

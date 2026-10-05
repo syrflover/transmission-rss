@@ -1,7 +1,13 @@
 import { api } from "@/lib/api";
 
 import type { ConfirmView, Placement, PlacementChoice } from "./placementTypes";
-import type { Replacement, ReplacementChanges, ReplacementLines } from "./replacementTypes";
+import type {
+  Replacement,
+  ReplacementChanges,
+  ReplacementDecision,
+  ReplacementLines,
+  ReplacementResult,
+} from "./replacementTypes";
 
 export type {
   ConfirmEpisode,
@@ -15,8 +21,10 @@ export type {
   DialogueLine,
   Replacement,
   ReplacementChanges,
+  ReplacementDecision,
   ReplacementLines,
   ReplacementPath,
+  ReplacementResult,
   ReplacementState,
   ReplacementVersion,
   TimingLine,
@@ -566,6 +574,23 @@ export function decideReplacement(
     `/subtitle-jobs/${encodeURIComponent(jobId)}/replacements/${encodeURIComponent(planId)}`,
     { method: "POST", body: { version, decision }, signal },
   );
+}
+
+/**
+ * Several decisions on a job's replacements at once (`모두 교체`·`모두 유지`). Each is bound to the plan and version
+ * it names, so a plan made again since the list was read comes back `stale` and the others are written. `not_found`,
+ * with nothing written, when one is not this job's plan.
+ */
+export function decideReplacements(
+  jobId: string,
+  decisions: readonly ReplacementDecision[],
+  signal?: AbortSignal,
+): Promise<{ results: ReplacementResult[] }> {
+  return api<{ results: ReplacementResult[] }>(`/subtitle-jobs/${encodeURIComponent(jobId)}/replacements`, {
+    method: "POST",
+    body: { decisions },
+    signal,
+  });
 }
 
 /**
