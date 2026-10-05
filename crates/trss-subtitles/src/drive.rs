@@ -96,7 +96,7 @@ pub fn key(id: &str) -> String {
 }
 
 /// The Drive ID of a file's key, when it is a Drive file's.
-pub(crate) fn id_of(key: &str) -> Option<&str> {
+pub fn id_of(key: &str) -> Option<&str> {
     key.strip_prefix("drive:").filter(|id| valid_id(id))
 }
 

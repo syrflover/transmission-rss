@@ -140,6 +140,8 @@ pub enum DriveAnswer {
         bytes: Vec<u8>,
         modified: String,
     },
+    /// The same file with no `Last-Modified`.
+    Undated { name: String, bytes: Vec<u8> },
     /// No such file: `404` `text/html`, 1,652 bytes.
     Missing,
     /// The page that asks to confirm the download of a file too large to
@@ -617,14 +619,21 @@ fn respond(state: &Mutex<State>, request: Request<Body>) -> Response {
             .unwrap_or_default();
         let port = state.port;
         return match state.drive.get_mut(&id).and_then(Script::next) {
-            Some(answer @ (DriveAnswer::File { .. } | DriveAnswer::FileAt { .. })) => {
+            Some(
+                answer @ (DriveAnswer::File { .. }
+                | DriveAnswer::FileAt { .. }
+                | DriveAnswer::Undated { .. }),
+            ) => {
                 let (name, bytes, modified) = match answer {
-                    DriveAnswer::File { name, bytes } => (name, bytes, DRIVE_MODIFIED.to_owned()),
+                    DriveAnswer::File { name, bytes } => {
+                        (name, bytes, Some(DRIVE_MODIFIED.to_owned()))
+                    }
                     DriveAnswer::FileAt {
                         name,
                         bytes,
                         modified,
-                    } => (name, bytes, modified),
+                    } => (name, bytes, Some(modified)),
+                    DriveAnswer::Undated { name, bytes } => (name, bytes, None),
                     _ => unreachable!("matched above"),
                 };
                 let length = bytes.len();
@@ -635,10 +644,12 @@ fn respond(state: &Mutex<State>, request: Request<Body>) -> Response {
                     header::CONTENT_DISPOSITION,
                     header::HeaderValue::from_bytes(disposition.as_bytes()).unwrap(),
                 );
-                headers.insert(
-                    header::LAST_MODIFIED,
-                    header::HeaderValue::from_str(&modified).unwrap(),
-                );
+                if let Some(modified) = modified {
+                    headers.insert(
+                        header::LAST_MODIFIED,
+                        header::HeaderValue::from_str(&modified).unwrap(),
+                    );
+                }
                 // A `HEAD` has no body but the same `Content-Length`.
                 headers.insert(header::CONTENT_LENGTH, length.into());
                 response

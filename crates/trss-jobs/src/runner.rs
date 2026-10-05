@@ -89,6 +89,13 @@
 //!    synced.
 //! 6. `done` with the format the check found, and the temporary folder goes.
 //!
+//! A Google Drive font the work keeps already is first read with a `HEAD`,
+//! and is not received when its size and `Last-Modified` are those it was
+//! kept with ([`crate::place::unchanged`]): nothing is fetched, so nothing is
+//! intended; the receipt is written `done` at once, with no path and no
+//! temporary folder, naming the font it uses (`unchanged_asset`). A `HEAD`
+//! that fails or gives other values leaves the file to the steps above.
+//!
 //! # Restart
 //!
 //! A worker that dies leaves its job `running`; the next one to hold the
@@ -109,6 +116,9 @@
 //! | `done` | the path has the recorded length and hash | reused |
 //! | `done` | anything else | `held` |
 //! | `failed` that still names its path | its temporary file or its path is the recorded object with its length and hash | that file removed (a removal that fails: `held`), then the path cleared |
+//! | nothing (cut between a font's `HEAD` and its record) | nothing of it | the font is looked at again: a new `HEAD` |
+//! | `done`, not received (`unchanged_asset`) | no file of its own; the font not removed, its file with its recorded length and hash | the package uses the font when its row is stored |
+//! | `done`, not received | the font removed by a cleanup, its file gone or other bytes | at its row's store: `abandoned` with the receipts that share it, their rows not kept gone, their items `pending`; the job goes back in line and receives the file |
 //!
 //! A held file holds its item, and a held item holds its job: the runner does
 //! not take it up again by itself. Its temporary file and anything at its path
@@ -1313,6 +1323,12 @@ impl Runner {
         {
             return self.reuse(job, item, ep, original, &receipts).await;
         }
+        if let Some(receipt) = self
+            .unchanged(job, item, ep, source, post, file, &name, cancel)
+            .await?
+        {
+            return Ok(receipt);
+        }
 
         let mut tries = 0;
         loop {
@@ -1344,6 +1360,125 @@ impl Runner {
                 receipt => return Ok(receipt),
             }
         }
+    }
+
+    /// A Google Drive font the work keeps already, left unreceived when a
+    /// `HEAD` gives the size and `Last-Modified` it was kept with
+    /// ([`crate::place::unchanged`]): its receipt is `done` at once, naming
+    /// the font. `None`: the file is received. No `HEAD` is asked for a file
+    /// with no such font.
+    #[allow(clippy::too_many_arguments)]
+    async fn unchanged(
+        &self,
+        job: &str,
+        item: &ItemRow,
+        ep: &str,
+        source: &trss_subtitles::Source,
+        post: &Url,
+        file: &PostFile,
+        name: &str,
+        cancel: &CancellationToken,
+    ) -> Result<Option<Receipt>, JobError> {
+        if file.is_staged() || trss_subtitles::drive::id_of(&file.key).is_none() {
+            return Ok(None);
+        }
+        // A folder refused is the receipt's to record (`attempt`).
+        let folder = match file.folder.as_deref().map(area::safe_folder) {
+            None => None,
+            Some(Ok(folder)) => folder,
+            Some(Err(_)) => return Ok(None),
+        };
+        let Some(kept) = self.placer.unchanged_font(job, &file.key).await? else {
+            return Ok(None);
+        };
+        let keys = [file.key.clone()];
+        let answers = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Ok(Some(Receipt::Interrupted)),
+            answers = source.recheck(post, &keys) => answers,
+        };
+        let info = answers
+            .into_iter()
+            .find(|(key, _)| *key == file.key)
+            .map(|(_, info)| info);
+        let (message, detail) = match &info {
+            Some(Ok(info))
+                if info.size == Some(kept.size)
+                    && info.last_modified.as_deref() == Some(kept.last_modified.as_str()) =>
+            {
+                ("", None)
+            }
+            Some(Ok(_)) => (
+                "보관한 폰트와 크기나 수정 시각이 달라 받아요",
+                Some(name.to_owned()),
+            ),
+            Some(Err(failure)) => (
+                "폰트가 바뀌었는지 확인하지 못해 받아요",
+                Some(format!("{name} · {}", described(&failure.into()))),
+            ),
+            None => (
+                "폰트가 바뀌었는지 확인하지 못해 받아요",
+                Some(name.to_owned()),
+            ),
+        };
+        if !message.is_empty() {
+            self.store
+                .event(job, format!("{ep}: {message}"), detail, self.now())
+                .await?;
+            return Ok(None);
+        }
+        let mut snapshot = file.snapshot.clone();
+        snapshot.push(
+            trss_subtitles::http::LAST_MODIFIED,
+            kept.last_modified.clone(),
+        );
+        snapshot.push(trss_subtitles::drive::CONTENT_LENGTH, kept.size.to_string());
+        let now = self.now();
+        self.store
+            .file_unchanged(FileRow {
+                id: uuid::Uuid::new_v4().to_string(),
+                item_id: item.id,
+                file_key: file.key.clone(),
+                name: kept.name.clone(),
+                state: FileState::Done,
+                same_as: None,
+                temp_dir: None,
+                expected_size: Some(kept.size),
+                size: Some(kept.size),
+                sha256: Some(kept.sha256.clone()),
+                object: None,
+                path: None,
+                reason: None,
+                created_at: now,
+                format: Some(verify::Format::Other),
+                failure: None,
+                http_status: None,
+                content_type: None,
+                response_size: None,
+                snapshot: snapshot_json(&snapshot),
+                kind: None,
+                archive: None,
+                folder,
+                cleared_at: None,
+                volume_of: None,
+                unpacked_at: None,
+                unpack_error: None,
+                unchanged_asset: Some(kept.asset_id),
+            })
+            .await?;
+        self.store
+            .event(
+                job,
+                format!("{ep}: 바뀌지 않은 폰트라 받지 않았어요"),
+                Some(format!(
+                    "{} · {} · 크기와 수정 시각이 보관한 폰트와 같아요",
+                    kept.name,
+                    human_size(kept.size)
+                )),
+                now,
+            )
+            .await?;
+        Ok(Some(Receipt::Received))
     }
 
     /// One attempt to receive `file` (see the module docs). A network failure
@@ -1400,6 +1535,7 @@ impl Runner {
                 volume_of: None,
                 unpacked_at: None,
                 unpack_error: None,
+                unchanged_asset: None,
             })
             .await?;
 
@@ -1718,8 +1854,11 @@ impl Runner {
         let path = original.path.as_deref().unwrap_or_default();
         let facts = area::read_facts(&self.area.at(path)).ok();
         // A receipt already stored left the receive area: its bytes were
-        // checked when they came and are kept in the work folder now.
+        // checked when they came and are kept in the work folder now. One
+        // that was not received has no bytes here: its font is looked at when
+        // it is stored ([`crate::place::unchanged`]).
         let matches = original.cleared_at.is_some()
+            || original.unchanged_asset.is_some()
             || facts.as_ref().is_some_and(|(size, sha, _)| {
                 Some(*size) == original.size && Some(sha) == original.sha256.as_ref()
             });
@@ -1744,7 +1883,18 @@ impl Runner {
             return Ok(Receipt::Held(reason));
         }
         let name = &original.name;
-        if original.item_id == item.id {
+        if original.item_id == item.id && original.unchanged_asset.is_some() {
+            // A run cut after the font was found unchanged: nothing was
+            // received, and the font is looked at when it is stored.
+            self.store
+                .event(
+                    job,
+                    format!("{ep}: 바뀌지 않은 폰트라 받지 않았어요"),
+                    Some(name.clone()),
+                    self.now(),
+                )
+                .await?;
+        } else if original.item_id == item.id {
             self.store
                 .event(
                     job,
@@ -2244,13 +2394,25 @@ impl Runner {
             mut detail,
         } = received;
         let now = self.now();
-        let (done, total) = {
+        let (done, total, again) = {
             let items = self.store.items(job).await?;
             let done = items.iter().filter(|i| i.state == ItemState::Done).count();
-            (done, items.len())
+            // An item the placement put back in line: a font it did not
+            // receive went away before it was stored
+            // ([`crate::place::unchanged`]). A job that waits for a person's
+            // check on the site keeps waiting, with its screen; the run after
+            // the check receives that item too.
+            let again = items.iter().any(|i| i.state == ItemState::Pending);
+            (done, items.len(), again)
         };
         // What was received goes on to the plan's rows.
         let (state, wait, note, message) = match state {
+            _ if again && wait != Some(Wait::Auth) => (
+                JobState::Pending,
+                None,
+                Some(crate::place::unchanged::RECEIVE_AGAIN.to_owned()),
+                crate::place::unchanged::RECEIVE_AGAIN,
+            ),
             JobState::Done | JobState::Partial => {
                 let standing = self.placer.standing(job).await?;
                 if let Some(reason) = placement.blocked.or(standing.held) {

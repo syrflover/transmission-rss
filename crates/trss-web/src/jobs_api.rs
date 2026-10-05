@@ -97,6 +97,16 @@
 //! receipt's has `unchanged_from`, that receipt's job: there is nothing to
 //! replace.
 //!
+//! A Google Drive font that was not received because its size and
+//! `Last-Modified` did not change is `unchanged` among its item's files
+//! ([`trss_jobs::place::unchanged`]). Each font of `placements` that was kept
+//! has `font_receipt`: `unchanged` (not received), `same` (received with the
+//! bytes of a font kept before, which it uses: a Naver or Tistory font, a
+//! Drive font whose `Last-Modified` changed, a font in an archive) or `new`
+//! (kept as a new file); only a receipt that asked for no bytes is
+//! `unchanged`. A received archive, which comes whole, has `new_assets` once
+//! its files are settled: how many of them became new stored files.
+//!
 //! A job's `origin` is `pick` (a person picked its candidates), `auto` (the
 //! subscribed creator's episode, made by the app, [`trss_jobs::follow`]) or
 //! `upload` (the subtitles and fonts a person uploaded, received already,
@@ -132,7 +142,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use trss_jobs::{
-    place::package::{member, Member},
+    place::{
+        package::{member, Member},
+        unchanged,
+    },
     store::{DonePage, FileRow, JobDetail, JobRow, StepRow},
     AskedFinish, Created, FileState, ItemState, JobState, NewFind, NewItem, NewJob, StepKind, Wait,
     FIND, UPLOAD,
@@ -415,6 +428,15 @@ struct FileView {
     /// For a received archive: what came of unpacking it; `null` before it
     /// was tried, and for a file that is no archive.
     unpack: Option<UnpackView>,
+    /// A Google Drive font that was not received because its size and
+    /// `Last-Modified` are those of the stored font it uses
+    /// ([`trss_jobs::place::unchanged`], `받지 않음(바뀌지 않음)`).
+    unchanged: bool,
+    /// For a received archive (received whole) whose files are all kept or
+    /// settled: how many of them became new stored files, 0 when each was
+    /// stored already with the same bytes; `null` before, and for a file that
+    /// is no archive.
+    new_assets: Option<usize>,
 }
 
 /// What came of unpacking a received archive ([`trss_jobs::place::unpack`]).
@@ -488,6 +510,12 @@ struct PlacementView {
     video: Option<String>,
     applied: Option<String>,
     stored: Option<String>,
+    /// For a font kept: `unchanged` (its Google Drive file was not received:
+    /// it did not change), `same` (received, with the bytes of a font kept
+    /// before, which it uses) or `new` (received and kept as a new file);
+    /// `null` otherwise. A font only shared by another episode of the job is
+    /// never `unchanged`.
+    font_receipt: Option<&'static str>,
 }
 
 #[derive(Debug, Serialize)]
@@ -620,6 +648,7 @@ fn file_view(
     state: &AppState,
     owners: &HashMap<&str, &str>,
     unpacked: (&Unpacked<'_>, &HashMap<&str, &str>),
+    new_assets: &HashMap<&str, usize>,
 ) -> Option<FileView> {
     let shown = match file.state {
         // Under way only while its episode runs; a held or stopped episode
@@ -661,6 +690,10 @@ fn file_view(
         kind: file.kind.map(|k| k.code()),
         archive: file.archive.map(|a| a.code()),
         unpack: unpack_view(file, unpacked.0, unpacked.1),
+        unchanged: file.unchanged_asset.is_some(),
+        new_assets: file
+            .unpacked_at
+            .and_then(|_| new_assets.get(file.id.as_str()).copied()),
     })
 }
 
@@ -700,6 +733,21 @@ async fn detail(
         .flat_map(|item| item.files.iter())
         .map(|f| (f.id.as_str(), f.name.as_str()))
         .collect();
+    let receipts: HashMap<&str, &FileRow> = items
+        .iter()
+        .flat_map(|item| item.files.iter())
+        .map(|f| (f.id.as_str(), f))
+        .collect();
+    let plan = state.jobs.plan(&id).await.map_err(|e| internal(&e))?;
+    let paths: HashMap<i64, trss_jobs::place::records::RowPaths> = state
+        .jobs
+        .plan_paths(&id)
+        .await
+        .map_err(|e| internal(&e))?
+        .into_iter()
+        .collect();
+    let made: HashMap<i64, bool> = paths.iter().map(|(p, at)| (*p, at.made)).collect();
+    let new_assets = unchanged::new_assets(&plan, &made);
     let items_view = items
         .iter()
         .map(|item| ItemView {
@@ -714,23 +762,30 @@ async fn detail(
             files: item
                 .files
                 .iter()
-                .filter_map(|f| file_view(f, item.state, &state, &owners, (&unpacked, &names)))
+                .filter_map(|f| {
+                    let unpacked = (&unpacked, &names);
+                    file_view(f, item.state, &state, &owners, unpacked, &new_assets)
+                })
                 .collect(),
         })
         .collect();
-    let plan = state.jobs.plan(&id).await.map_err(|e| internal(&e))?;
     let confirm = placement::view(&state, &row, &plan).await?;
-    let paths: HashMap<i64, trss_jobs::place::records::RowPaths> = state
-        .jobs
-        .plan_paths(&id)
-        .await
-        .map_err(|e| internal(&e))?
-        .into_iter()
+    let fonts: HashMap<i64, &'static str> = plan
+        .iter()
+        .filter_map(|p| {
+            let made = made.get(&p.position).copied().unwrap_or(false);
+            let receipt = receipts.get(p.file_id.as_str()).copied();
+            Some((
+                p.position,
+                unchanged::font_receipt(p, receipt, made)?.code(),
+            ))
+        })
         .collect();
     let placements = plan
         .into_iter()
         .map(|p| {
             let at = paths.get(&p.position).cloned().unwrap_or_default();
+            let font_receipt = fonts.get(&p.position).copied();
             let full =
                 |relative: Option<String>| Some(format!("{}/{}", at.folder.as_deref()?, relative?));
             PlacementView {
@@ -758,6 +813,7 @@ async fn detail(
                     }),
                     false => full(at.stored.clone()),
                 },
+                font_receipt,
             }
         })
         .collect();

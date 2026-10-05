@@ -34,6 +34,11 @@ export interface Placement {
   video: string | null;
   applied: string | null;
   stored: string | null;
+  /**
+   * For a kept font: `unchanged` (its Google Drive file was not received: it did not change), `same` (received, with
+   * the bytes of a font kept before) or `new` (kept as a new file); `null` otherwise.
+   */
+  font_receipt: "unchanged" | "same" | "new" | null;
 }
 
 /** One episode a row of the 배치 확인 can go on. */

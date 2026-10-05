@@ -35,8 +35,10 @@
 //! kept it of a job not ended that may still link it: one with an item not
 //! received yet, a subtitle row not stored yet, or a stored subtitle not
 //! cleaned whose links are not known (`links_known = 0`, a run cut between
-//! the store and the link) ([`JOB_FILE`]); an effect not ended that aims at
-//! its path (the same reason). A job past its links (waiting for a video
+//! the store and the link) ([`JOB_FILE`]); a receipt of a job not ended that
+//! uses it instead of receiving an unchanged Drive font, until its row is
+//! stored ([`super::unchanged`], the same reason); an effect not ended that
+//! aims at its path (the same reason). A job past its links (waiting for a video
 //! with every item received, or put back in line by a cleanup) keeps no
 //! file this way, and no link is ever made to a removed file
 //! ([`records::link`]). The list and the worker's look again use the same
@@ -344,6 +346,20 @@ fn in_use(
                               JOIN subtitle_stored s ON s.id = u.stored_id
                              WHERE u.job_id = j.id AND s.links_known = 0
                                AND s.cleaned_at IS NULL))",
+        [asset],
+    )? {
+        return Ok(Some(JOB_FILE));
+    }
+    // A job not ended that did not receive a Drive font because the work
+    // keeps it ([`super::unchanged`]): it uses the font when its row is
+    // stored, and until then no plan row names the font.
+    if exists(
+        c,
+        "SELECT 1 FROM subtitle_job_files f JOIN subtitle_jobs j ON j.id = f.job_id
+          WHERE f.unchanged_asset = ?1 AND f.state = 'done'
+            AND j.state NOT IN ('done', 'failed', 'partial')
+            AND NOT EXISTS (SELECT 1 FROM subtitle_job_plan p
+                             WHERE p.file_id = f.id AND p.asset_id IS NOT NULL)",
         [asset],
     )? {
         return Ok(Some(JOB_FILE));

@@ -392,6 +392,13 @@ export interface JobFile {
   archive: ArchiveType | null;
   /** For a received archive: what came of unpacking it; `null` before it was tried, and for a file that is no archive. */
   unpack: UnpackResult | null;
+  /** A Google Drive font not received because its size and `Last-Modified` are those of the stored font it uses. */
+  unchanged: boolean;
+  /**
+   * For a received archive (received whole) whose files are all settled: how many of them became new stored files, 0
+   * when each was kept already; `null` before, and for a file that is no archive.
+   */
+  new_assets: number | null;
 }
 
 /** What came of unpacking a received archive. */

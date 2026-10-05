@@ -900,6 +900,9 @@ pub struct RowPaths {
     pub applied: Option<String>,
     pub video: Option<String>,
     pub in_app_data: bool,
+    /// The row's own store published its file: a new asset, not one kept
+    /// before with the same bytes (nor a font it did not receive).
+    pub made: bool,
 }
 
 /// [`RowPaths`] of each row of the job's plan, by position. A file a cleanup
@@ -907,7 +910,10 @@ pub struct RowPaths {
 pub fn row_paths(c: &Connection, job_id: &str) -> rusqlite::Result<Vec<(i64, RowPaths)>> {
     let mut stmt = c.prepare(
         "SELECT p.position, coalesce(s.work_id, k.work_id), coalesce(a.relative_path, k.relative_path),
-                ap.path, ap.video_path, coalesce(k.base = 'app_data', 0)
+                ap.path, ap.video_path, coalesce(k.base = 'app_data', 0),
+                EXISTS (SELECT 1 FROM subtitle_file_effects e
+                         WHERE e.job_id = p.job_id AND e.position = p.position
+                           AND e.kind = 'store' AND e.state = 'done')
            FROM subtitle_job_plan p
            LEFT JOIN subtitle_stored s ON s.id = p.stored_id
            LEFT JOIN subtitle_assets a
@@ -925,11 +931,12 @@ pub fn row_paths(c: &Connection, job_id: &str) -> rusqlite::Result<Vec<(i64, Row
             r.get::<_, Option<String>>(3)?,
             r.get::<_, Option<String>>(4)?,
             r.get::<_, bool>(5)?,
+            r.get::<_, bool>(6)?,
         ))
     })?;
     let mut paths = Vec::new();
     for row in rows {
-        let (position, work, stored, applied, video, in_app_data) = row?;
+        let (position, work, stored, applied, video, in_app_data, made) = row?;
         let folder = match &work {
             Some(work) => work_folder(c, work)?,
             None => None,
@@ -942,6 +949,7 @@ pub fn row_paths(c: &Connection, job_id: &str) -> rusqlite::Result<Vec<(i64, Row
                 applied,
                 video,
                 in_app_data,
+                made,
             },
         ));
     }

@@ -391,6 +391,7 @@ async fn intended(
         volume_of: None,
         unpacked_at: None,
         unpack_error: None,
+        unchanged_asset: None,
     };
     s.store.file_intend(row.clone()).await.unwrap();
     s.store.file_expect(&id, expected, 971).await.unwrap();

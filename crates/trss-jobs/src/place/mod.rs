@@ -36,6 +36,9 @@
 //!    (`<stem> (2).<ext>`). A work folder that is not there (a share not
 //!    mounted, a work moved) leaves the job waiting (`영상 대기`): nothing
 //!    was written, and the worker tries again when it starts.
+//!    A Google Drive font the job did not receive because it did not change
+//!    uses the font its receipt names, as a reuse does, or is received again
+//!    when that font went away ([`unchanged`]).
 //!    Each stored subtitle of the post is then linked to its fonts and
 //!    attachments (a companion file to the subtitle of its stem).
 //! 5. A receipt every row of which is stored leaves the receive area, an
@@ -101,6 +104,7 @@ pub mod files;
 pub mod package;
 pub mod records;
 pub mod replace;
+pub mod unchanged;
 pub mod unpack;
 
 use std::{
@@ -907,6 +911,13 @@ impl Placer {
                 .fail_row(row, "받은 파일의 기록을 찾지 못했어요".to_owned())
                 .await;
         };
+        // A Drive font not received because it did not change uses the font
+        // it names ([`unchanged`]).
+        if let Some(asset) = &receipt.unchanged_asset {
+            return self
+                .store_unchanged(facts, items, row, receipt, asset)
+                .await;
+        }
         let Some(path) = &receipt.path else {
             return self
                 .fail_row(row, "받은 파일의 경로 기록이 없어요".to_owned())
@@ -1383,9 +1394,19 @@ impl Placer {
                 .and_then(|id| items.iter().find(|i| i.id == id))
                 .map(|i| i.post_url.clone())
         };
+        // A post with an item to receive again (a font not received whose
+        // font went away, [`unchanged`]) links once that file is stored.
+        let again: Vec<String> = self
+            .store
+            .items(job)
+            .await?
+            .into_iter()
+            .filter(|i| i.state == ItemState::Pending)
+            .map(|i| i.post_url)
+            .collect();
         let mut posts: BTreeMap<String, Vec<&PlanRow>> = BTreeMap::new();
         for row in &rows {
-            if let Some(post) = post_of(row) {
+            if let Some(post) = post_of(row).filter(|p| !again.contains(p)) {
                 posts.entry(post).or_default().push(row);
             }
         }

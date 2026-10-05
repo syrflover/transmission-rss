@@ -123,6 +123,12 @@ impl PostFile {
         self.staged.as_deref()
     }
 
+    /// Whether its bytes are on this machine already (a file a server
+    /// browser took or downloaded): nothing asks the site for them.
+    pub fn is_staged(&self) -> bool {
+        self.staged.is_some()
+    }
+
     pub(crate) fn with_staged(mut self, path: std::path::PathBuf) -> PostFile {
         self.staged = Some(path);
         self

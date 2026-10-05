@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 
 import { jobPath, type JobFile, type JobItem, type Placement, type Replacement } from "./api";
 import { FailureTag, ItemBadge } from "./badges";
+import { archiveReceiptText, fontReceiptText } from "./fontReceipt";
 import { FORMAT_LABEL, episodeName, shownItem, sizeText, unpackText } from "./format";
 import { waitingPositions } from "./replacementView";
 
@@ -253,7 +254,7 @@ const ASSET_KIND: Record<Placement["kind"], string> = {
   other: "그 밖의 파일",
 };
 
-/** One file of a group: its name, with its episode and why when it says more. */
+/** One file of a group: its name, with its episode and why when it says more, and how a kept font was received. */
 function GroupLine({
   placement: p,
   group,
@@ -264,6 +265,7 @@ function GroupLine({
   const detail = [
     p.episode !== null ? episodeName(String(p.episode)) : null,
     group === "assets" ? ASSET_KIND[p.kind] : null,
+    group === "assets" ? fontReceiptText(p.font_receipt) : null,
     group === "ask" ? p.question : group === "applied" ? null : p.note,
   ].filter((part): part is string => part !== null && part !== "");
   return (
@@ -327,10 +329,12 @@ function PackageGroups({
 
 function PlacementLine({ placement, waiting }: { placement: Placement; waiting: ReadonlySet<number> }) {
   const { word, detail, urgent } = placementText(placement, waiting);
+  const font = fontReceiptText(placement.font_receipt);
   return (
     <p className="text-xs leading-snug text-text-secondary">
       <b className={cn("font-semibold", urgent ? "text-urgent" : "text-text-primary")}>{word}</b>
       {detail !== null && detail !== "" && <span> · {detail}</span>}
+      {font !== null && <span> · {font}</span>}
     </p>
   );
 }
@@ -348,11 +352,14 @@ function FileLine({
   // A ZIP is received whole as a bundle: which of its files serve which
   // episode is the analysis's, after the receipt. A ZIP named for fonts holds
   // the post's fonts, not episodes. An archive is unpacked after it is
-  // received: its files are the package's below.
+  // received: its files are the package's below, and it says how many of
+  // them were new. A Drive font that did not change was not received: it
+  // says so in place of the format of bytes that never came.
   const unpacked = file.unpack !== null ? unpackText(file.unpack) : null;
+  const archive = archiveReceiptText(file.new_assets);
   const facts = [
     file.state !== "failed" && file.size !== null ? sizeText(file.size) : null,
-    file.format !== null ? FORMAT_LABEL[file.format] : null,
+    file.unchanged ? fontReceiptText("unchanged") : file.format !== null ? FORMAT_LABEL[file.format] : null,
     file.format === "zip"
       ? FONT_NAME.test(file.name)
         ? "폰트 묶음"
@@ -396,6 +403,7 @@ function FileLine({
           {unpacked.reason !== null && <span> · {unpacked.reason}</span>}
         </p>
       )}
+      {archive !== null && <p className="text-xs leading-snug text-text-secondary">{archive}</p>}
       {placements.map((p) => (
         <PlacementLine key={p.position} placement={p} waiting={waiting} />
       ))}

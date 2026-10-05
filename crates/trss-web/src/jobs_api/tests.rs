@@ -452,6 +452,7 @@ async fn an_unfinished_file_is_receiving_only_while_its_episode_runs() {
                 volume_of: None,
                 unpacked_at: None,
                 unpack_error: None,
+                unchanged_asset: None,
             })
             .await
             .unwrap();

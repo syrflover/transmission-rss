@@ -356,6 +356,10 @@ pub struct FileRow {
     pub unpacked_at: Option<Millis>,
     /// For an archive: why it could not be unpacked (풀지 못함).
     pub unpack_error: Option<String>,
+    /// For a Google Drive font not received because it did not change: the
+    /// stored font it uses instead ([`crate::place::unchanged`]). Such a
+    /// receipt is `done` with no path.
+    pub unchanged_asset: Option<String>,
 }
 
 /// Why an attempt to receive a file failed, with the facts of the answer.
@@ -1595,6 +1599,47 @@ impl JobStore {
             .await
     }
 
+    /// Records a Google Drive font that is not received because it did not
+    /// change ([`crate::place::unchanged`]): `done` at once, with no path and
+    /// no temporary folder, naming the stored font it uses
+    /// (`unchanged_asset`) with that font's size and SHA-256, and the snapshot
+    /// with what the `HEAD` said. Nothing is fetched, so no intent comes
+    /// before it.
+    pub async fn file_unchanged(&self, file: FileRow) -> Result<(), JobError> {
+        self.db
+            .run(move |c| {
+                durable(c, |c| {
+                    c.execute(
+                        "INSERT INTO subtitle_job_files
+                         (id, job_id, item_id, file_key, name, state, expected_size, size,
+                          sha256, format, snapshot, created_at, updated_at, folder,
+                          unchanged_asset)
+                     SELECT ?1, job_id, ?2, ?3, ?4, 'done', ?5, ?6, ?7, ?8, ?9, ?10, ?10, ?11, ?12
+                     FROM subtitle_job_items WHERE id = ?2",
+                        params![
+                            file.id,
+                            file.item_id,
+                            file.file_key,
+                            file.name,
+                            file.expected_size.map(|s| s as i64),
+                            file.size.map(|s| s as i64),
+                            file.sha256,
+                            file.format.map(Format::code),
+                            file.snapshot,
+                            file.created_at,
+                            file.folder,
+                            file.unchanged_asset,
+                        ],
+                    )
+                })
+                .and_then(|rows| match rows {
+                    1 => Ok(()),
+                    _ => Err(JobError::Missing("the item of a file not received")),
+                })
+            })
+            .await
+    }
+
     /// Records the intent to receive a file before anything is fetched.
     pub async fn file_intend(&self, file: FileRow) -> Result<(), JobError> {
         self.db
@@ -1827,10 +1872,10 @@ impl JobStore {
                         "INSERT INTO subtitle_job_files
                          (id, job_id, item_id, file_key, name, state, same_as, size, sha256,
                           object, path, format, http_status, content_type, snapshot,
-                          created_at, updated_at, folder, cleared_at)
+                          created_at, updated_at, folder, cleared_at, unchanged_asset)
                      SELECT ?1, job_id, ?2, file_key, name, 'done', id, size, sha256, object,
                             path, format, http_status, content_type, snapshot, ?3, ?3, folder,
-                            cleared_at
+                            cleared_at, unchanged_asset
                      FROM subtitle_job_files WHERE id = ?4",
                         params![id, item_id, now, original.id],
                     )
@@ -2421,7 +2466,7 @@ const FILE_COLUMNS: &str = "
     SELECT id, item_id, file_key, name, state, same_as, temp_dir, expected_size, size, sha256,
            object, path, reason, created_at, format, failure, http_status, content_type,
            response_size, snapshot, kind, archive_type, folder, cleared_at, volume_of,
-           unpacked_at, unpack_error
+           unpacked_at, unpack_error, unchanged_asset
     FROM subtitle_job_files";
 
 /// A failure class column.
@@ -2488,6 +2533,7 @@ fn file_row(r: &Row<'_>) -> rusqlite::Result<FileRow> {
         volume_of: r.get(24)?,
         unpacked_at: r.get(25)?,
         unpack_error: r.get(26)?,
+        unchanged_asset: r.get(27)?,
     })
 }
 

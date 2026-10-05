@@ -169,6 +169,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("../migrations/jobs/placement_confirm.sql")),
     // 55: a person's cleanup of a stored subtitle and the files that go with it; a removed asset frees its path
     Migration::Sql(include_str!("../migrations/jobs/cleanup.sql")),
+    // 56: a Google Drive font not received again because its size and Last-Modified did not change: the font its receipt uses
+    Migration::Sql(include_str!("../migrations/jobs/unchanged_fonts.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]

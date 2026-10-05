@@ -34,6 +34,7 @@ const placement = (position: number, over: Partial<Placement> = {}): Placement =
   video: null,
   applied: null,
   stored: null,
+  font_receipt: null,
   ...over,
 });
 
