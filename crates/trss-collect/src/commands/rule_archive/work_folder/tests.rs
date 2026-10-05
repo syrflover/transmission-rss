@@ -1,6 +1,7 @@
 //! The move's checks and renames on real temporary folders. The Transmission
 //! step, the command around it and the interplay with the cycle are tested end
-//! to end in `tests/archive_move.rs`, against a fake Transmission.
+//! to end in trss-worker's `tests/it/archive_move.rs`, against a fake
+//! Transmission.
 
 use std::{
     fs,

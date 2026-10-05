@@ -25,9 +25,9 @@ uuid.workspace = true
 
 [dev-dependencies]
 trss-core = { workspace = true, features = ["test-support"] }
-# The schedule snapshot a subscription is made with (`tests/follow.rs`).
+# The schedule snapshot a subscription is made with (`tests/it/follow.rs`).
 trss-anissia.workspace = true
-# The real AniList and Anissia of the ignored sample (`tests/airtime_sample.rs`).
+# The real AniList and Anissia of the ignored sample (`tests/it/airtime_sample.rs`).
 trss-anilist.workspace = true
 reqwest.workspace = true
 trss-subtitles = { workspace = true, features = ["test-support"] }
@@ -36,5 +36,5 @@ tempfile.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs", "io-util", "time"] }
 # The archives the child process of `tests/extract_process.rs` unpacks.
 zip.workspace = true
-# Encodes the CP949 subtitles the comparison tests read (`tests/replace.rs`).
+# Encodes the CP949 subtitles the comparison tests read (`tests/it/replace.rs`).
 encoding_rs.workspace = true

@@ -25,7 +25,7 @@
 //! starts the job's browser run and drives the page through [`ViewerPage`]; the
 //! driving itself ([`drive`]) does not know the browser, so it is tested with a
 //! page that has no browser behind it, and the scripts that [`BrowserPage`]
-//! gives the page are tested against a real viewer (`tests/winpng_sample.rs`).
+//! gives the page are tested against a real viewer (`tests/it/winpng_sample.rs`).
 //!
 //! # Driving the viewer
 //!
