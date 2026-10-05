@@ -80,3 +80,14 @@ uuid = { version = "1", features = ["v4"] }
 yaml_serde = "0.10"
 # Checks every member's CRC of a received ZIP; reading only, deflate only.
 zip = { version = "7", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+
+# Dependency code that every test runs and that is slow unoptimized, made
+# fast in debug builds too; the workspace crates stay at opt-level 0 for
+# debugging. On 2026-10-06 (one thread): SQLite's parser, which the migrations
+# of each database a test opens run, 180 → 64 ms a database; rustls reading
+# the system's root certificates, which each HTTP client does, 40 → 6 ms.
+[profile.dev.package.libsqlite3-sys]
+opt-level = 3
+
+[profile.dev.package.rustls-pki-types]
+opt-level = 3
