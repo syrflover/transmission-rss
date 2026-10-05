@@ -91,3 +91,25 @@ opt-level = 3
 
 [profile.dev.package.rustls-pki-types]
 opt-level = 3
+
+# Debug info for everyday builds and tests: dependencies keep only the line
+# tables, which panic backtraces read, and the rest stays in split files beside
+# the objects instead of being copied into every test binary. On 2026-10-06 a
+# workspace test run after an edit to trss-jobs went from 7.2 to 2.5 GB of test
+# binaries and from 5.2 to 3.0 GB written to disk. kache rewrites the paths to
+# the split files, so a debugger finds none of them: build with
+# `--profile debugger` to debug.
+[profile.dev]
+split-debuginfo = "unpacked"
+
+[profile.dev.package."*"]
+debug = "line-tables-only"
+
+# Full debug info inside the binaries, for gdb (`cargo build --profile
+# debugger`, `cargo test --profile debugger`), built into target/debugger.
+[profile.debugger]
+inherits = "dev"
+split-debuginfo = "off"
+
+[profile.debugger.package."*"]
+debug = true
