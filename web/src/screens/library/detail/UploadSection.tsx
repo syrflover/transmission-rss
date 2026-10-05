@@ -177,7 +177,7 @@ export function UploadSection({
         </h2>
       </div>
       <p className={cn(hintClass, "m-0 mt-1.5 text-[12.5px]")}>
-        자막과 폰트만 남겨서 작업 하나로 받아요. 다른 파일은 빼고, 뺀 파일의 이름과 이유는 작업에서 볼 수 있어요. 압축 파일(ZIP)은 그대로 받고, 안의 분류는 묶음 분석을 기다려요.
+        자막과 폰트만 남겨서 작업 하나로 받아요. 다른 파일은 빼고, 뺀 파일의 이름과 이유는 작업에서 볼 수 있어요. 압축 파일은 그대로 받은 뒤 풀어서 안의 파일을 나눠요.
       </p>
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -269,7 +269,7 @@ export function UploadSection({
                   <span className={cn("text-xs", entry.kind === null ? "text-text-secondary" : "text-text-muted")}>
                     {entry.kind === null
                       ? "빼요 · 이름으로 보아 자막이나 폰트가 아니에요"
-                      : `${KIND_LABEL[entry.kind]} · ${bytesText(entry.file.size)}${entry.kind === "archive" ? " · 안의 분류는 묶음 분석을 기다려요" : ""}`}
+                      : `${KIND_LABEL[entry.kind]} · ${bytesText(entry.file.size)}${entry.kind === "archive" ? " · 받은 뒤 풀어요" : ""}`}
                   </span>
                 </span>
                 <button

@@ -1,0 +1,26 @@
+[package]
+name = "trss-archive"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+bzip2.workspace = true
+encoding_rs.workspace = true
+flate2.workspace = true
+liblzma.workspace = true
+rars.workspace = true
+# `process` for the limits, the parent-death signal and the process group kill
+# of the child; `fs` for `fdatasync` and `fadvise`.
+rustix = { workspace = true, features = ["fs", "process"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+sevenz-rust2.workspace = true
+sha2.workspace = true
+tar.workspace = true
+zip.workspace = true
+
+[dev-dependencies]
+# Make the sample archives of the tests; the app only reads.
+rars = { workspace = true, features = ["write"] }
+sevenz-rust2 = { workspace = true, features = ["compress"] }
+tempfile.workspace = true

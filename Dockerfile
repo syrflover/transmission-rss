@@ -11,7 +11,8 @@ RUN bun run build
 
 
 # Rust build: `trss-web` (web server), `trss-worker` (long-running collection
-# worker) and `trss-probe` (the file probe, ticket 0060).
+# worker), `trss-extract` (the child process the worker unpacks a received
+# archive in, beside it) and `trss-probe` (the file probe, ticket 0060).
 FROM clux/muslrust:stable AS builder
 
 WORKDIR /usr/src/transmission-rss
@@ -23,10 +24,12 @@ COPY crates ./crates
 RUN cargo build --release --locked
 
 
-# The probe alone, for a host that runs a release without it (deploy/probe.sh
-# mounts it into the release's image). Not part of the image: build it with
+# The probe alone, with `trss-extract` for its --unpack, for a host that runs a
+# release without them (deploy/probe.sh mounts them into the release's image).
+# Not part of the image: build them with
 #   docker build --target probe-binary --output type=local,dest=probe-out .
-# which writes probe-out/trss-probe, a static executable.
+# which writes probe-out/trss-probe and probe-out/trss-extract, static
+# executables.
 FROM clux/muslrust:stable AS probe-builder
 
 WORKDIR /usr/src/transmission-rss
@@ -34,13 +37,17 @@ WORKDIR /usr/src/transmission-rss
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 
-RUN cargo build --release --locked -p trss-probe
+RUN cargo build --release --locked -p trss-probe -p trss-jobs \
+    --bin trss-probe --bin trss-extract
 
 FROM scratch AS probe-binary
 
 COPY --from=probe-builder \
     /usr/src/transmission-rss/target/x86_64-unknown-linux-musl/release/trss-probe \
     /trss-probe
+COPY --from=probe-builder \
+    /usr/src/transmission-rss/target/x86_64-unknown-linux-musl/release/trss-extract \
+    /trss-extract
 
 
 FROM alpine:edge
@@ -52,6 +59,7 @@ WORKDIR /usr/local/bin
 COPY --from=builder \
     /usr/src/transmission-rss/target/x86_64-unknown-linux-musl/release/trss-web \
     /usr/src/transmission-rss/target/x86_64-unknown-linux-musl/release/trss-worker \
+    /usr/src/transmission-rss/target/x86_64-unknown-linux-musl/release/trss-extract \
     /usr/src/transmission-rss/target/x86_64-unknown-linux-musl/release/trss-probe \
     ./
 

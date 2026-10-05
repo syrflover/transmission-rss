@@ -7,19 +7,24 @@
 //! After its items are received, every run of a job goes on here
 //! ([`Placer::run`]):
 //!
-//! 1. The effects an earlier start left unfinished are compared with the
+//! 1. The received archives not tried yet are unpacked into the receive
+//!    area, the volumes of a split one together ([`unpack`]); one that
+//!    cannot be unpacked stays there with why (풀지 못함). Uploads and find
+//!    jobs stop after this: they wait for a person's placement first and are
+//!    not placed here yet.
+//! 2. The effects an earlier start left unfinished are compared with the
 //!    disk (the table below).
-//! 2. The analysis makes the job's plan ([`records::PlanRow`]) from each
-//!    post's receipts not planned yet ([`package::plan`]): what each file is
-//!    (a subtitle, a font, an attachment, a companion file, or one to drop),
-//!    which episode of the job's season it goes on ([`episode::of_candidate`]
-//!    for the candidate's, the numbering it used for the rest), and which
-//!    one of an episode is applied (the format order; alternatives of one
-//!    format are asked). A post with an archive leaves the job waiting with
-//!    the reason (`자막 대기`): a later build takes it up when the worker
-//!    starts. Uploads and find jobs wait for a person's placement first and
-//!    are not placed here yet.
-//! 3. Each row to keep is stored: a subtitle or a font is copied into the
+//! 3. The analysis makes the job's plan ([`records::PlanRow`]) from each
+//!    post's receipts not planned yet ([`package::plan`]), an unpacked
+//!    archive's members in its place: what each file is (a subtitle, a font,
+//!    an attachment, a companion file, or one to drop), which episode of the
+//!    job's season it goes on ([`episode::of_candidate`] for the candidate's,
+//!    the numbering it used for the rest), and which one of an episode is
+//!    applied (the format order; alternatives of one format are asked). A
+//!    post with an archive not unpacked yet (a worker without the program
+//!    that unpacks) leaves the job waiting with the reason (`자막 대기`): a
+//!    later build takes it up when the worker starts.
+//! 4. Each row to keep is stored: a subtitle or a font is copied into the
 //!    work folder's `.trss/subtitles/<creator>/<name>`, an attachment or a
 //!    companion file into the app data folder's
 //!    `subtitle-files/<work>/<creator>/<name>` ([`store_name`]); or, when a
@@ -31,8 +36,9 @@
 //!    was written, and the worker tries again when it starts.
 //!    Each stored subtitle of the post is then linked to its fonts and
 //!    attachments (a companion file to the subtitle of its stem).
-//! 4. A receipt every row of which is stored leaves the receive area.
-//! 5. A row whose episode has one video and no subtitle is applied: the
+//! 5. A receipt every row of which is stored leaves the receive area, an
+//!    archive with its later volumes and its unpack folder.
+//! 6. A row whose episode has one video and no subtitle is applied: the
 //!    stored file is copied beside the video under its stem. An episode with
 //!    a subtitle, or with another job's apply under way, keeps it and the
 //!    row is stored only; a row whose episode has no video waits for it
@@ -80,6 +86,7 @@ pub mod files;
 pub mod package;
 pub mod records;
 pub mod replace;
+pub mod unpack;
 
 use std::{
     collections::{BTreeMap, HashMap},
@@ -88,6 +95,7 @@ use std::{
 };
 
 use tokio_util::sync::CancellationToken;
+use trss_archive::run::Unpacker;
 use trss_core::{Clock, Db, Millis};
 use trss_subtitles::verify::{self, Format};
 
@@ -102,14 +110,15 @@ use crate::{
     store::{FileRow, ItemRow, JobError, JobStore, AUTO, FIND, UPLOAD},
 };
 use files::{Copied, Published};
-use package::{extension, member, Member};
+use package::extension;
 use records::{Effect, JobFacts, Kept, NewApplied, NewStored, PlanRow, Role};
 
 /// The creator folder of a subtitle whose creator nobody named.
 pub const UNKNOWN_CREATOR: &str = "제작자 알 수 없음";
 
-/// What a package this build cannot analyse waits for.
-pub const ARCHIVE_LATER: &str = "압축 파일을 풀어 분석하는 일은 아직 할 수 없어요";
+/// What a package with an archive not unpacked waits for: a worker without
+/// the program that unpacks ([`unpack::PROGRAM`]).
+pub const ARCHIVE_LATER: &str = "압축 파일을 푸는 프로그램이 없어 분석을 기다려요";
 
 /// A row to apply whose episode has no video yet (`영상 대기`).
 pub const AWAITING_VIDEO: &str = "영상이 아직 없어 영상이 들어오면 적용해요";
@@ -154,6 +163,26 @@ pub struct Standing {
     pub approvals: usize,
     /// Rows whose replacement a person approved, not carried out yet.
     pub approved: usize,
+    /// Received archives that could not be unpacked ([`unpack`]).
+    pub unpack_failed: usize,
+    /// The first of them, with why (`pack.zip: 암호가 걸려 있어요`).
+    pub unpack_failure: Option<String>,
+    /// A receipt is neither planned nor an archive that could not be
+    /// unpacked (an upload's, before its placement is confirmed).
+    pub unplanned: bool,
+}
+
+/// A file of a package the analysis plans: a receipt, or a member of an
+/// unpacked one.
+struct Entry {
+    file_id: String,
+    member: Option<String>,
+    /// Its name with the folders it was received in (and those inside its
+    /// archive).
+    name: String,
+    format: Format,
+    size: u64,
+    sha256: String,
 }
 
 /// The name a store takes ([`Placer::choose_name`]).
@@ -280,6 +309,8 @@ pub struct Placer {
     area: ReceiveArea,
     clock: Clock,
     follow: Follow,
+    /// What unpacks a received archive ([`unpack`]); `None`: archives wait.
+    unpacker: Option<Unpacker>,
 }
 
 impl Placer {
@@ -291,7 +322,14 @@ impl Placer {
             store,
             area,
             clock,
+            unpacker: None,
         }
+    }
+
+    /// The same placer unpacking received archives with `unpacker`.
+    pub fn with_unpacker(mut self, unpacker: Unpacker) -> Placer {
+        self.unpacker = Some(unpacker);
+        self
     }
 
     fn now(&self) -> Millis {
@@ -373,6 +411,8 @@ impl Placer {
         let (approvals, approved) = self
             .read(move |c| replace::records::live_counts(c, &id))
             .await?;
+        let id = job.to_owned();
+        let (unpack_failures, unplanned) = self.read(move |c| unpack::standing(c, &id)).await?;
         let first = |o: Outcome| {
             rows.iter()
                 .find(|r| r.outcome == Some(o))
@@ -397,6 +437,9 @@ impl Placer {
                 .count(),
             approvals,
             approved,
+            unpack_failed: unpack_failures.len(),
+            unpack_failure: unpack_failures.into_iter().next(),
+            unplanned,
         })
     }
 
@@ -411,8 +454,18 @@ impl Placer {
         let Some(facts) = self.read(move |c| records::job_facts(c, &id)).await? else {
             return Ok(Some(Placement::default()));
         };
+        if self.unpack(job, cancel).await?.is_none() {
+            return Ok(None);
+        }
         if facts.origin == UPLOAD || facts.origin == FIND {
-            return Ok(Some(Placement::default()));
+            // Without the program its archives wait, as a package's do.
+            let id = job.to_owned();
+            let untried =
+                self.unpacker.is_none() && self.read(move |c| unpack::untried(c, &id)).await?;
+            return Ok(Some(Placement {
+                unanalysed: untried.then(|| ARCHIVE_LATER.to_owned()),
+                ..Placement::default()
+            }));
         }
         let (Some(work_id), Some(season)) = (facts.work_id.clone(), facts.season) else {
             return Ok(Some(Placement::default()));
@@ -557,10 +610,18 @@ impl Placer {
         let mut total = None;
         let mut order = Vec::new();
         for (_, (candidates, files)) in posts {
+            // A later volume goes with its first, and an archive that could
+            // not be unpacked has no row ([`unpack`]).
+            let files: Vec<&FileRow> = files
+                .into_iter()
+                .filter(|f| f.volume_of.is_none() && f.unpack_error.is_none())
+                .collect();
             if files.is_empty() || files.iter().all(|f| planned.contains(&f.id)) {
                 continue;
             }
-            let mut members = Vec::new();
+            let mut entries = Vec::new();
+            let mut not_files = Vec::new();
+            let mut complete = true;
             for file in &files {
                 let format = match file.format {
                     Some(format) => format,
@@ -572,23 +633,52 @@ impl Placer {
                             blocked.get_or_insert_with(|| {
                                 "받은 파일의 형식을 다시 확인하지 못했어요".to_owned()
                             });
+                            complete = false;
                             continue;
                         }
                     },
                 };
+                let named = |path: &str| match &file.folder {
+                    Some(folder) => format!("{folder}/{path}"),
+                    None => path.to_owned(),
+                };
+                if unpack::is_archive_receipt(file, Some(format)) {
+                    if file.unpacked_at.is_none() {
+                        later.get_or_insert_with(|| ARCHIVE_LATER.to_owned());
+                        complete = false;
+                        continue;
+                    }
+                    let id = file.id.clone();
+                    for m in self.read(move |c| unpack::members(c, &id)).await? {
+                        let entry = Entry {
+                            file_id: file.id.clone(),
+                            name: named(&m.path),
+                            member: Some(m.path),
+                            format: Format::Other,
+                            size: m.size,
+                            sha256: m.sha256,
+                        };
+                        match m.format {
+                            Ok(format) => entries.push(Entry { format, ..entry }),
+                            Err(reason) => not_files.push((entry, reason)),
+                        }
+                    }
+                    continue;
+                }
                 let (Some(size), Some(sha256)) = (file.size, file.sha256.clone()) else {
+                    complete = false;
                     continue;
                 };
-                members.push((*file, format, size, sha256));
+                entries.push(Entry {
+                    file_id: file.id.clone(),
+                    member: None,
+                    name: named(&file.name),
+                    format,
+                    size,
+                    sha256,
+                });
             }
-            if members.len() != files.len() {
-                continue;
-            }
-            if members
-                .iter()
-                .any(|(f, format, ..)| member(&f.name, *format) == Member::Archive)
-            {
-                later.get_or_insert_with(|| ARCHIVE_LATER.to_owned());
+            if !complete {
                 continue;
             }
             if mappings.is_none() {
@@ -611,20 +701,12 @@ impl Placer {
                 .source_id
                 .as_ref()
                 .and_then(|s| mappings.as_ref().and_then(|m| m.get(s)));
-            let names: Vec<String> = members
+            let sha256: Vec<&str> = entries.iter().map(|e| e.sha256.as_str()).collect();
+            let package_files: Vec<package::File<'_>> = entries
                 .iter()
-                .map(|(file, ..)| match &file.folder {
-                    Some(folder) => format!("{folder}/{}", file.name),
-                    None => file.name.clone(),
-                })
-                .collect();
-            let sha256: Vec<&str> = members.iter().map(|(.., sha)| sha.as_str()).collect();
-            let package_files: Vec<package::File<'_>> = members
-                .iter()
-                .zip(&names)
-                .map(|((_, format, ..), name)| package::File {
-                    name,
-                    format: *format,
+                .map(|e| package::File {
+                    name: &e.name,
+                    format: e.format,
                 })
                 .collect();
             // The item that received the files first leads: a package asked
@@ -650,35 +732,57 @@ impl Placer {
                     sha256: &sha256,
                 },
             );
+            let new_row = |e: &Entry| PlanRow {
+                job_id: job.to_owned(),
+                position: 0,
+                file_id: e.file_id.clone(),
+                member: e.member.clone(),
+                name: e.name.clone(),
+                kind: AssetKind::Other,
+                format: None,
+                size: e.size,
+                sha256: e.sha256.clone(),
+                item_id: None,
+                anissia_episode: None,
+                attachment_episode: None,
+                question: None,
+                placed: None,
+                action: PlanAction::Drop,
+                stored_id: None,
+                outcome: Some(Outcome::Dropped),
+                note: None,
+                applied_id: None,
+                asset_id: None,
+            };
+            let first_item = candidates.first().map(|c| c.id);
             let rows: Vec<PlanRow> = made
                 .rows
                 .into_iter()
-                .filter(|r| !planned.contains(&members[r.file].0.id))
-                .map(|r| {
-                    let (file, _, size, sha256) = &members[r.file];
-                    PlanRow {
-                        job_id: job.to_owned(),
-                        position: 0,
-                        file_id: file.id.clone(),
-                        member: None,
-                        name: names[r.file].clone(),
-                        kind: r.kind,
-                        format: r.format,
-                        size: *size,
-                        sha256: sha256.clone(),
-                        item_id: Some(r.item_id),
-                        anissia_episode: r.anissia_episode,
-                        attachment_episode: r.attachment_episode,
-                        question: r.question,
-                        placed: r.placed,
-                        action: r.action,
-                        stored_id: None,
-                        outcome: r.outcome,
-                        note: r.note,
-                        applied_id: None,
-                        asset_id: None,
-                    }
+                .filter(|r| !planned.contains(&entries[r.file].file_id))
+                .map(|r| PlanRow {
+                    kind: r.kind,
+                    format: r.format,
+                    item_id: Some(r.item_id),
+                    anissia_episode: r.anissia_episode,
+                    attachment_episode: r.attachment_episode,
+                    question: r.question,
+                    placed: r.placed,
+                    action: r.action,
+                    outcome: r.outcome,
+                    note: r.note,
+                    ..new_row(&entries[r.file])
                 })
+                // A member that is no file (a web page, nothing) is not kept.
+                .chain(
+                    not_files
+                        .iter()
+                        .filter(|(e, _)| !planned.contains(&e.file_id))
+                        .map(|(e, reason)| PlanRow {
+                            item_id: first_item,
+                            note: Some(reason.clone()),
+                            ..new_row(e)
+                        }),
+                )
                 .collect();
             let id = job.to_owned();
             let now = self.now();
@@ -758,7 +862,27 @@ impl Placer {
                 .fail_row(row, "받은 파일의 경로 기록이 없어요".to_owned())
                 .await;
         };
-        let source = self.area.at(path);
+        let source = match &row.member {
+            None => self.area.at(path),
+            // A member is in its archive's unpack folder, under its number.
+            Some(member) => {
+                let (id, member) = (receipt.id.clone(), member.clone());
+                let Some(position) = self
+                    .read(move |c| unpack::member_position(c, &id, &member))
+                    .await?
+                else {
+                    return self
+                        .fail_row(
+                            row,
+                            "압축 파일에서 푼 파일의 기록을 찾지 못했어요".to_owned(),
+                        )
+                        .await;
+                };
+                self.area
+                    .at(&ReceiveArea::unpack_dir(job, &receipt.id))
+                    .join(position.to_string())
+            }
+        };
         let (folder, temp_dir) = match records::base_of(row.kind) {
             "work" => (work_folder.to_owned(), files::TEMP_DIR),
             _ => match self.area.app_data() {
@@ -1295,34 +1419,66 @@ impl Placer {
         let id = job.to_owned();
         let clearable = self.read(move |c| records::clearable(c, &id)).await?;
         let mut removed = 0;
+        // Unpack folders removed: a repeat after a restart cut a clearing
+        // short may find only the folder left.
+        let mut unpacked = 0;
         for receipt in clearable {
             if !receipt.cleared {
                 let (id, now) = (receipt.id.clone(), self.now());
                 self.write(move |c| records::clearing(c, &id, now)).await?;
             }
-            let path = self.area.at(&receipt.path);
-            let existed = path.exists();
-            match blocking(move || files::remove_known(&path)).await {
-                Ok(()) if existed => removed += 1,
-                Ok(()) => {}
-                Err(err) => {
-                    self.event(
-                        job,
-                        "받은 파일을 수신 영역에서 지우지 못했어요".to_owned(),
-                        Some(format!("{}: {err}", receipt.path)),
-                    )
-                    .await?;
+            let paths = std::iter::once(&receipt.path).chain(&receipt.volumes);
+            for relative in paths {
+                let path = self.area.at(relative);
+                let existed = path.exists();
+                match blocking(move || files::remove_known(&path)).await {
+                    Ok(()) if existed => removed += 1,
+                    Ok(()) => {}
+                    Err(err) => {
+                        self.event(
+                            job,
+                            "받은 파일을 수신 영역에서 지우지 못했어요".to_owned(),
+                            Some(format!("{relative}: {err}")),
+                        )
+                        .await?;
+                    }
+                }
+            }
+            if receipt.unpacked {
+                let relative = ReceiveArea::unpack_dir(job, &receipt.id);
+                let dir = self.area.at(&relative);
+                let removed_dir = blocking(move || match std::fs::remove_dir_all(&dir) {
+                    Ok(()) => Ok(true),
+                    Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
+                    Err(err) => Err(err),
+                })
+                .await;
+                match removed_dir {
+                    Ok(true) => unpacked += 1,
+                    Ok(false) => {}
+                    Err(err) => {
+                        self.event(
+                            job,
+                            "압축 파일에서 푼 파일을 수신 영역에서 지우지 못했어요".to_owned(),
+                            Some(format!("{relative}: {err}")),
+                        )
+                        .await?;
+                    }
                 }
             }
         }
-        if removed > 0 {
+        if removed > 0 || unpacked > 0 {
             // The job's folder and the folders under it go once empty.
             let root = self.area.at(&ReceiveArea::job_dir(job));
             blocking(move || remove_empty_dirs(&root)).await;
+            let detail = match removed {
+                0 => format!("푼 폴더 {unpacked}개"),
+                n => format!("파일 {n}개"),
+            };
             self.event(
                 job,
                 "보관한 파일을 수신 영역에서 지웠어요".to_owned(),
-                Some(format!("파일 {removed}개")),
+                Some(detail),
             )
             .await?;
         }

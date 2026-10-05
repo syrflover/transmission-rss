@@ -8,7 +8,7 @@ use trss_collect::{
     store::anissia::AnissiaStore,
 };
 use trss_core::{access::check_app_data, db::DB_PATH_ENV, lock_path_for, wake::wake_path_for, Db};
-use trss_jobs::{JobStore, ReceiveArea, Runner};
+use trss_jobs::{place::unpack, JobStore, ReceiveArea, Runner, Unpacker};
 use trss_library::{
     artwork::{self, AppData, Artwork},
     seasons::{self, Seasons},
@@ -119,6 +119,23 @@ async fn run() -> Result<(), String> {
             .with_winpng(BrowserReader::shared(pool.clone()))
             .with_auth(BrowserAuth::shared(pool.clone())),
         None => jobs,
+    };
+    // Received archives are unpacked by the program beside this one, in a
+    // process of its own with limits; without it they wait for a build that
+    // has it.
+    let extract = std::env::current_exe().map(|exe| exe.with_file_name(unpack::PROGRAM));
+    let jobs = match extract {
+        Ok(program) if program.is_file() => {
+            println!("Received archives are unpacked by {}", program.display());
+            jobs.with_unpacker(Unpacker::new(program))
+        }
+        _ => {
+            println!(
+                "Received archives wait: {} is not beside this program",
+                unpack::PROGRAM
+            );
+            jobs
+        }
     };
     let artwork = Artwork::new(db.clone(), Some(app_data), anilist);
     let season_info = Seasons::over(db.clone(), &artwork);

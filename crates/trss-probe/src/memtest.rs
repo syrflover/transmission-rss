@@ -26,11 +26,11 @@ fn fill(buf: &mut [u8], chunk: u64) {
     }
 }
 
-fn mib(bytes: u64) -> String {
+pub fn mib(bytes: u64) -> String {
     format!("{:.1} MiB", bytes as f64 / MIB as f64)
 }
 
-fn peak_text(peak: &Peak) -> String {
+pub fn peak_text(peak: &Peak) -> String {
     format!(
         "peak memory.current {}, memory.stat file {}, anon {}, file_dirty {}, file_writeback {}",
         mib(peak.current),

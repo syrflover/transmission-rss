@@ -1,6 +1,7 @@
 //! Uploads (`trss_jobs::upload`) against the records and the receive area:
-//! the job they make is `done` and nobody else touches it, a refused or
-//! abandoned upload leaves no byte, and uploads wait for their turn.
+//! the job they make is `done` and nobody else touches it (one that kept an
+//! archive waits for the worker to unpack it), a refused or abandoned upload
+//! leaves no byte, and uploads wait for their turn.
 
 use std::time::Duration;
 
@@ -670,6 +671,13 @@ async fn archives_of_every_format_are_kept_whole_and_one_that_is_none_is_dropped
         Some(trss_subtitles::verify::Format::Other)
     );
     assert_eq!(stored[7].format, Some(trss_subtitles::verify::Format::Zip));
+    // The archives are the worker's to unpack: the job waits for it.
+    assert_eq!(detail.row.state, JobState::Pending);
+    assert_eq!(detail.row.finished_at, None);
+    assert_eq!(
+        s.store.claim_next(2_000).await.unwrap(),
+        Some((job_id.clone(), false, 1))
+    );
 }
 
 #[tokio::test]

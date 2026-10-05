@@ -315,6 +315,13 @@ pub struct FileRow {
     /// When its bytes were removed from the receive area, once stored
     /// ([`crate::place`]).
     pub cleared_at: Option<Millis>,
+    /// For a later volume of a split archive: the first volume, which it is
+    /// unpacked, kept and cleared with ([`crate::place::unpack`]).
+    pub volume_of: Option<String>,
+    /// For an archive: when its members were recorded.
+    pub unpacked_at: Option<Millis>,
+    /// For an archive: why it could not be unpacked (풀지 못함).
+    pub unpack_error: Option<String>,
 }
 
 /// Why an attempt to receive a file failed, with the facts of the answer.
@@ -588,6 +595,18 @@ impl JobStore {
         let id = job_id.to_owned();
         self.db
             .run(move |c| Ok(crate::place::records::plan(c, &id)?))
+            .await
+    }
+
+    /// The members the job's received archives were unpacked to
+    /// ([`crate::place::unpack`]), in order.
+    pub async fn members(
+        &self,
+        job_id: &str,
+    ) -> Result<Vec<crate::place::unpack::MemberRow>, JobError> {
+        let id = job_id.to_owned();
+        self.db
+            .run(move |c| Ok(crate::place::unpack::job_members(c, &id)?))
             .await
     }
 
@@ -902,6 +921,22 @@ impl JobStore {
                 let ended = end_find(&tx, &id, run.as_deref(), now)?;
                 tx.commit()?;
                 Ok(ended)
+            })
+            .await
+    }
+
+    /// The note of the upload job `job_id` once what it kept is placed, as it
+    /// was made with ([`upload_note`]); a wait in between leaves it another.
+    pub async fn upload_note(&self, job_id: &str) -> Result<String, JobError> {
+        let id = job_id.to_owned();
+        self.db
+            .run(move |c| {
+                let summary = upload_summary(c, &id)?;
+                Ok(upload_note(&crate::upload::Counts {
+                    subtitles: summary.subtitles,
+                    fonts: summary.fonts,
+                    archives: summary.archives,
+                }))
             })
             .await
     }
@@ -1755,11 +1790,17 @@ fn create_upload(c: &mut Connection, up: &NewUpload, now: Millis) -> Result<Crea
         0 => String::new(),
         n => format!(" · 뺀 파일 {n}개"),
     };
+    // An upload that kept an archive waits for the worker, which unpacks it
+    // (`crate::place::unpack`); the others are done as they are made.
+    let (state, finished_at) = match counts.archives {
+        0 => (JobState::Done, Some(now)),
+        _ => (JobState::Pending, None),
+    };
     tx.execute(
         "INSERT INTO subtitle_jobs
              (id, command_id, request, origin, work_id, season, anime_no, source_id, creator,
               state, note, created_at, updated_at, state_at, finished_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'done', ?10, ?11, ?11, ?11, ?11)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12, ?12, ?13)",
         params![
             up.id,
             up.command_id,
@@ -1770,8 +1811,10 @@ fn create_upload(c: &mut Connection, up: &NewUpload, now: Millis) -> Result<Crea
             up.anime_no,
             up.source_id,
             up.creator,
-            format!("올린 파일: {kept}"),
-            now
+            state,
+            upload_note(&counts),
+            now,
+            finished_at
         ],
     )?;
     tx.execute(
@@ -2094,6 +2137,11 @@ fn rows<P: rusqlite::Params>(c: &Connection, tail: &str, p: P) -> Result<Vec<Job
     Ok(jobs)
 }
 
+/// An upload job's note: what it kept (`올린 파일: 자막 3개`).
+fn upload_note(counts: &crate::upload::Counts) -> String {
+    format!("올린 파일: {}", counts.sentence())
+}
+
 /// What the upload job `id` kept and dropped.
 fn upload_summary(c: &Connection, id: &str) -> Result<UploadSummary, JobError> {
     let mut summary = UploadSummary::default();
@@ -2157,7 +2205,8 @@ fn done_page(c: &Connection, after: Option<&str>, limit: usize) -> Result<DonePa
 const FILE_COLUMNS: &str = "
     SELECT id, item_id, file_key, name, state, same_as, temp_dir, expected_size, size, sha256,
            object, path, reason, created_at, format, failure, http_status, content_type,
-           response_size, snapshot, kind, archive_type, folder, cleared_at
+           response_size, snapshot, kind, archive_type, folder, cleared_at, volume_of,
+           unpacked_at, unpack_error
     FROM subtitle_job_files";
 
 /// A failure class column.
@@ -2221,6 +2270,9 @@ fn file_row(r: &Row<'_>) -> rusqlite::Result<FileRow> {
         archive: archive_at(r, 21)?,
         folder: r.get(22)?,
         cleared_at: r.get(23)?,
+        volume_of: r.get(24)?,
+        unpacked_at: r.get(25)?,
+        unpack_error: r.get(26)?,
     })
 }
 

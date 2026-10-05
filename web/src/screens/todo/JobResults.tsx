@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils";
 
 import { jobPath, type JobFile, type JobItem, type Placement, type Replacement } from "./api";
 import { FailureTag, ItemBadge } from "./badges";
-import { FORMAT_LABEL, episodeName, shownItem, sizeText } from "./format";
+import { FORMAT_LABEL, episodeName, shownItem, sizeText, unpackText } from "./format";
 import { waitingPositions } from "./replacementView";
 
 /** `받음 2 · 실패 1`: how many items ended in each way, for a job with more than one. */
@@ -326,7 +326,9 @@ function FileLine({
   // The size and format of what was received; a failed file's bytes are gone.
   // A ZIP is received whole as a bundle: which of its files serve which
   // episode is the analysis's, after the receipt. A ZIP named for fonts holds
-  // the post's fonts, not episodes.
+  // the post's fonts, not episodes. An archive is unpacked after it is
+  // received: its files are the package's below.
+  const unpacked = file.unpack !== null ? unpackText(file.unpack) : null;
   const facts = [
     file.state !== "failed" && file.size !== null ? sizeText(file.size) : null,
     file.format !== null ? FORMAT_LABEL[file.format] : null,
@@ -364,6 +366,14 @@ function FileLine({
       )}
       {answer !== null && (
         <p className="text-xs leading-snug text-text-muted">{answer}</p>
+      )}
+      {unpacked !== null && (
+        <p className="text-xs leading-snug text-text-secondary [overflow-wrap:anywhere]">
+          <b className={cn("font-semibold", unpacked.urgent ? "text-urgent" : "text-text-primary")}>
+            {unpacked.text}
+          </b>
+          {unpacked.reason !== null && <span> · {unpacked.reason}</span>}
+        </p>
       )}
       {placements.map((p) => (
         <PlacementLine key={p.position} placement={p} waiting={waiting} />

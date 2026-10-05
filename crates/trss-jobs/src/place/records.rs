@@ -921,13 +921,19 @@ pub struct Clearable {
     pub id: String,
     pub path: String,
     pub cleared: bool,
+    /// The paths of the later volumes of the split archive it is the first
+    /// of, which go with it.
+    pub volumes: Vec<String>,
+    /// It is an archive that was unpacked: its unpack folder goes too.
+    pub unpacked: bool,
 }
 
 /// The job's receipts every plan row of which is stored or dropped, with the
 /// ones already cleared.
 pub fn clearable(c: &Connection, job_id: &str) -> rusqlite::Result<Vec<Clearable>> {
     let mut stmt = c.prepare(
-        "SELECT f.id, f.path, f.cleared_at IS NOT NULL FROM subtitle_job_files f
+        "SELECT f.id, f.path, f.cleared_at IS NOT NULL, f.unpacked_at IS NOT NULL
+           FROM subtitle_job_files f
           WHERE f.job_id = ?1 AND f.state = 'done' AND f.same_as IS NULL AND f.path IS NOT NULL
             AND EXISTS (SELECT 1 FROM subtitle_job_plan p WHERE p.file_id = f.id)
             AND NOT EXISTS (SELECT 1 FROM subtitle_job_plan p
@@ -939,19 +945,34 @@ pub fn clearable(c: &Connection, job_id: &str) -> rusqlite::Result<Vec<Clearable
             id: r.get(0)?,
             path: r.get(1)?,
             cleared: r.get(2)?,
+            volumes: Vec::new(),
+            unpacked: r.get(3)?,
         })
     })?;
-    rows.collect()
+    let mut rows = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut volumes = c.prepare(
+        "SELECT path FROM subtitle_job_files
+          WHERE volume_of = ?1 AND same_as IS NULL AND path IS NOT NULL ORDER BY name",
+    )?;
+    for row in &mut rows {
+        row.volumes = volumes
+            .query_map([&row.id], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+    }
+    Ok(rows)
 }
 
 /// The receipt's bytes are to be removed from the receive area: written
 /// before they are.
 pub fn clearing(c: &mut Connection, file_id: &str, now: Millis) -> Result<(), JobError> {
     durable(c, |c| {
-        // The receipts that share its bytes lose them too.
+        // The receipts that share its bytes lose them too, and so do the
+        // later volumes of a split archive and the receipts sharing theirs.
         c.execute(
             "UPDATE subtitle_job_files SET cleared_at = ?2, updated_at = ?2
-             WHERE (id = ?1 OR same_as = ?1) AND cleared_at IS NULL",
+             WHERE (id = ?1 OR same_as = ?1 OR volume_of = ?1
+                    OR same_as IN (SELECT id FROM subtitle_job_files WHERE volume_of = ?1))
+               AND cleared_at IS NULL",
             params![file_id, now],
         )?;
         Ok(())

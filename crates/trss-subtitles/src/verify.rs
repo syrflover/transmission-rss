@@ -110,6 +110,14 @@ pub enum Sniffed {
 /// Checks the file at `path`, received under `name`: its format, or why it is
 /// not a file (always [`FailureKind::NotAFile`]). Blocking: it reads the file.
 pub fn check(path: &Path, name: &str) -> Result<Format, Failure> {
+    let mut unlimited = u64::MAX;
+    check_within(path, name, &mut unlimited)
+}
+
+/// [`check`] whose ZIP check counts what it inflates against `budget`, which
+/// several files share ([`check_zip_within`]): an archive's members, so that
+/// many ZIPs among them cost no more than one budget.
+pub fn check_within(path: &Path, name: &str, budget: &mut u64) -> Result<Format, Failure> {
     let not_a_file = |reason: String| Failure::new(FailureKind::NotAFile, reason);
     let unreadable = |_: io::Error| not_a_file("받은 파일을 읽지 못했어요".to_owned());
     let mut file = File::open(path).map_err(unreadable)?;
@@ -135,7 +143,7 @@ pub fn check(path: &Path, name: &str) -> Result<Format, Failure> {
             ))
         }
         Sniffed::Format(Format::Zip) => {
-            check_zip(path)?;
+            check_zip_within(path, budget)?;
             Format::Zip
         }
         Sniffed::Format(format) => format,
@@ -527,6 +535,31 @@ mod tests {
         assert_eq!(checked("a.zip", ASS), Err(FailureKind::NotAFile));
         assert_eq!(checked("a.srt", ASS), Err(FailureKind::NotAFile));
         assert_eq!(checked("a.ass", b"plain"), Err(FailureKind::NotAFile));
+    }
+
+    #[test]
+    fn files_checked_within_one_budget_share_what_their_zips_inflate() {
+        let dir = tempfile::tempdir().unwrap();
+        let member = vec![b'x'; 1000];
+        let zip = zip_of(&[("a.txt", &member)]);
+        let (first, second) = (dir.path().join("a.docx"), dir.path().join("b.docx"));
+        std::fs::write(&first, &zip).unwrap();
+        std::fs::write(&second, &zip).unwrap();
+        let mut budget = 1500;
+        assert_eq!(
+            check_within(&first, "a.docx", &mut budget).map_err(|f| f.reason),
+            Ok(Format::Zip)
+        );
+        assert_eq!(budget, 500);
+        assert_eq!(
+            check_within(&second, "b.docx", &mut budget).map_err(|f| f.reason),
+            Err(INFLATE_BUDGET_SPENT.to_owned())
+        );
+        // Alone, each passes.
+        assert_eq!(
+            check(&second, "b.docx").map_err(|f| f.reason),
+            Ok(Format::Zip)
+        );
     }
 
     #[test]

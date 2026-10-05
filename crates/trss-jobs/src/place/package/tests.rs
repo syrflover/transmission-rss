@@ -404,6 +404,8 @@ fn members_are_told_by_format_and_name() {
     assert_eq!(member("H2MPRB.TTF", Format::Other), Member::Font);
     assert_eq!(member("pack.rar", Format::Other), Member::Archive);
     assert_eq!(member("a.zip", Format::Zip), Member::Archive);
+    // A document whose bytes are a ZIP is no archive to unpack.
+    assert_eq!(member("설명.docx", Format::Zip), Member::Attachment);
     assert_eq!(member("읽어주세요.TXT", Format::Other), Member::Attachment);
     assert_eq!(member("setup.exe", Format::Other), Member::Other);
 }

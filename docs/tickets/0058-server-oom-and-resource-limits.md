@@ -16,7 +16,7 @@
 
 - 봇 토렌트 여럿을 며칠 받는 동안 Transmission 컨테이너의 `oom_kill`이 0에 머무는지 봐요. 2026-10-02 점검에서는 0이었지만, 그 사이 받은 것은 1.4GB 한 회차뿐이었어요.
 - 되돌림(RHEL-255363)이 들어간 RHEL 9 커널이 나오면 올려요. 올린 뒤에도 `oom_kill`이 0인지 봐요. `transmission.slice`는 남겨 둬도 괜찮아요. 2026-10-02 서버의 커널은 `5.14.0-687.53.1.el9_8`이었어요. 이 커널에 되돌림이 들어갔는지는 확인하지 않았어요.
-- 웹과 worker의 메모리 한도(128M)를 다시 정해요. 2026-10-02 사용량은 worker 7.4MiB, web 3.9MiB로 한도의 6% 아래였어요. 큰 폴더 스캔과 표지 올리기 때의 최대치를 보고 정해요. 서버 브라우저([0039](../archive/tickets/3-subtitle-candidates-and-receiving/0039-browser-container-lifecycle.md))가 들어간 릴리스를 올리면 그 컨테이너(한도 768M)의 사용량도 함께 봐요.
+- 웹(128M)과 worker(256M, [0065](0065-archive-extraction.md)에서 압축 해제 때문에 128M에서 올렸어요)의 메모리 한도를 다시 정해요. 2026-10-02 사용량은 worker 7.4MiB, web 3.9MiB로 한도의 6% 아래였어요. 큰 폴더 스캔과 표지 올리기 때의 최대치를 보고 정해요. 서버 브라우저([0039](../archive/tickets/3-subtitle-candidates-and-receiving/0039-browser-container-lifecycle.md))가 들어간 릴리스를 올리면 그 컨테이너(한도 768M)의 사용량도 함께 봐요.
 
 ## 완료 기준
 

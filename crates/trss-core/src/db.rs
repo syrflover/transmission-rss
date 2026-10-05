@@ -163,6 +163,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("../migrations/jobs/awaiting_video.sql")),
     // 52: replacing an episode's subtitle once a person approves it: the plans, their paths, the effects that take a file off its path or import it, packages imported from beside a video
     Migration::Remake(include_str!("../migrations/jobs/replacement.sql")),
+    // 53: unpacking a received archive: the volumes of a split one, whether and why not it was unpacked, its members
+    Migration::Sql(include_str!("../migrations/jobs/unpack.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]

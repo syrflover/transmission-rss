@@ -111,21 +111,22 @@ To switch an install that ran as root (release 0.5.x and before), on the host, w
 
 ### File probe
 
-`trss-probe` checks, on a host's real disks, the file behavior that archiving and subtitle placing rely on, and prints a plain-text report: the filesystem and mount options of the media and data folders, `renameat2(RENAME_NOREPLACE)` (and its refusal with `EEXIST`), `EXDEV` between the data folder and the media, `fsync`, the stability of `dev:inode` across a rename, the owner and mode of what it makes (expected 1000:1000), a test subfolder in an existing work folder, and a 300 MiB write and read under the container's memory limit with the cgroup's `memory.current` peak and `oom_kill`. It makes only folders and files named `.trss-probe-*` and removes them. Releases after 0.5.0 carry it as `/usr/local/bin/trss-probe`. For a host that runs an older image, build the static binary and run it in a one-off container that looks like the worker's (user 1000:1000, 128M of memory, no swap, the worker's mounts):
+`trss-probe` checks, on a host's real disks, the file behavior that archiving and subtitle placing rely on, and prints a plain-text report: the filesystem and mount options of the media and data folders, `renameat2(RENAME_NOREPLACE)` (and its refusal with `EEXIST`), `EXDEV` between the data folder and the media, `fsync`, the stability of `dev:inode` across a rename, the owner and mode of what it makes (expected 1000:1000), a test subfolder in an existing work folder, and a 300 MiB write and read under the container's memory limit with the cgroup's `memory.current` peak and `oom_kill`. With `--unpack FILE[,FILE...]` (repeatable; the volumes of a split archive comma-separated, in order) it also unpacks each archive in a test folder under the data folder, as the worker does with `trss-extract`, and reports the outcome, the time, the memory peaks and the new `oom_kill` events (a new kill fails the check; a refusal does not). It makes only folders and files named `.trss-probe-*` and removes them. Releases after 0.5.0 carry it as `/usr/local/bin/trss-probe`. For a host that runs an older image, build the static binary and run it in a one-off container that looks like the worker's (user 1000:1000, 256M of memory, no swap, the worker's mounts):
 
 ```sh
-docker build --target probe-binary --output type=local,dest=probe-out .   # writes probe-out/trss-probe
-# copy probe-out/trss-probe and deploy/probe.sh to the compose folder, then there:
+docker build --target probe-binary --output type=local,dest=probe-out .   # writes probe-out/trss-probe and probe-out/trss-extract
+# copy probe-out/trss-probe, probe-out/trss-extract and deploy/probe.sh to the compose folder, then there:
 ./probe.sh -- --work "/downloads/downloads/<a folder Transmission made>" 2>&1 | tee probe.txt
+./probe.sh --samples ~/samples -- --size-mib 0 --unpack /samples/big.rar 2>&1 | tee unpack.txt
 ```
 
-`./probe.sh --help` lists the options. The steps for the server are in ticket 0060.
+`--samples DIR` mounts a host folder read-only at `/samples`, and `--extract FILE` names another `trss-extract` than the one next to the script. `./probe.sh --help` lists the options. The steps for the server are in ticket 0060.
 
 ### Resource limits
 
 `trss-browser` is limited to 768M of memory, with no CPU limit (the limit was measured with one Chromium, ticket 0032; CPU was not measured under a limit). A run opens a Chromium, so give it more when the policy allows several concurrent browser jobs.
 
-The web and worker containers are each limited to 0.25 CPU and 128M of memory. The worker stays up, parses every feed each cycle, and adds the selected items concurrently; the web serves the screens and previews rules against stored history. These limits are a starting point, to be revisited with `docker stats` after the first days of running.
+The web and worker containers are each limited to 0.25 CPU. The web has 128M of memory and the worker 256M: the worker unpacks a received subtitle archive in a child process (`trss-extract`, beside it in the image) that shares its limit, with its own address space held to 256 MiB and its `oom_score_adj` raised to 1000, so the kernel ends the child, not the worker, when the container runs out of memory. The worker stays up, parses every feed each cycle, and adds the selected items concurrently; the web serves the screens and previews rules against stored history. These limits are a starting point, to be revisited with `docker stats` after the first days of running.
 
 The worker reads at most 2 MiB of an RSS feed (real feeds are 50 to 300 KB), five feeds at a time, so a feed that is huge or never ends cannot exhaust that memory. A feed whose response announces a longer body is refused before it is read, and any other is dropped as soon as what has arrived passes the cap. The channel counts as unread for that cycle, like one whose server did not answer: the cycle log says `the feed is larger than 2097152 bytes`, and its torrents are not cleaned up (the cap is `MAX_FEED_BYTES` in `src/worker/feed.rs`).
 

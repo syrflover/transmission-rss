@@ -1,4 +1,4 @@
-import type { FailureClass, FileFormat, JobRow, JobState, ItemState, UploadSummary, Wait } from "./api";
+import type { FailureClass, FileFormat, JobRow, JobState, ItemState, UnpackResult, UploadSummary, Wait } from "./api";
 import { sizeText } from "./bytes.ts";
 import { findShown } from "./findState.ts";
 
@@ -23,6 +23,34 @@ export const FORMAT_LABEL: Record<FileFormat, string> = {
   smi: "SMI",
   other: "그 밖의 형식",
 };
+
+/**
+ * What came of unpacking an archive, in a phrase: `파일 14개를 풀었어요 (자막 12 · 폰트 2)`, `풀지 못함` (urgent,
+ * with why in `reason`), or that a later volume goes with its first (named in `reason`).
+ */
+export function unpackText(unpack: UnpackResult): { text: string; reason: string | null; urgent: boolean } {
+  switch (unpack.state) {
+    case "done": {
+      const kinds = [
+        unpack.subtitles ? `자막 ${unpack.subtitles}` : null,
+        unpack.fonts ? `폰트 ${unpack.fonts}` : null,
+      ].filter((part): part is string => part !== null);
+      return {
+        text: `파일 ${unpack.files ?? 0}개를 풀었어요${kinds.length > 0 ? ` (${kinds.join(" · ")})` : ""}`,
+        reason: null,
+        urgent: false,
+      };
+    }
+    case "failed":
+      return { text: "풀지 못함", reason: unpack.reason, urgent: true };
+    case "volume":
+      return {
+        text: "나뉜 조각 · 첫 조각과 함께 풀어요",
+        reason: unpack.first !== null ? `첫 조각: ${unpack.first}` : null,
+        urgent: false,
+      };
+  }
+}
 
 /** `자막 2개 · 폰트 1개 · 압축 파일 1개`: what an upload job kept, by kind; `null` when it kept nothing. */
 export function uploadKept(upload: Pick<UploadSummary, "subtitles" | "fonts" | "archives">): string | null {

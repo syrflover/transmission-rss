@@ -104,6 +104,8 @@ pub fn member(name: &str, format: Format) -> Member {
         Format::Ass => Member::Subtitle(SubtitleFormat::Ass),
         Format::Srt => Member::Subtitle(SubtitleFormat::Srt),
         Format::Smi => Member::Subtitle(SubtitleFormat::Smi),
+        // A document can be a ZIP (`.docx`).
+        Format::Zip if ATTACHMENT_EXTENSIONS.contains(&ext) => Member::Attachment,
         Format::Zip => Member::Archive,
         Format::Other if OTHER_SUBTITLES.contains(&ext) => Member::Subtitle(SubtitleFormat::Other),
         Format::Other if FONT_EXTENSIONS.contains(&ext) => Member::Font,

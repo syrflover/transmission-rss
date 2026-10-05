@@ -4,6 +4,11 @@
 //!   (made safe for a file name; a second file of the same name becomes
 //!   `<stem> (2).<ext>`), or `<job id>/<folders>/<name>` for a file the post
 //!   shows in folders (a WinPNG image's).
+//! - `<job id>/.unpack/<file id>/<n>`: the members a received archive was
+//!   unpacked to, under the numbers the unpacking gave them (no name from the
+//!   archive is a path here); removed with the archive once its members are
+//!   kept ([`crate::place::unpack`]). A received name never starts with a
+//!   dot, so the folder is no receipt's.
 //! - `.tmp/winpng-<job id>/`: the files a server browser took out of a post's
 //!   images before the job receives them; removed when the item ends.
 //! - `.tmp/check-<job id>-<item id>/`: the file a server browser downloaded
@@ -61,6 +66,11 @@ impl ReceiveArea {
     /// A job's folder, relative to the area.
     pub fn job_dir(job_id: &str) -> String {
         job_id.to_owned()
+    }
+
+    /// The folder a received archive is unpacked into, relative to the area.
+    pub fn unpack_dir(job_id: &str, file_id: &str) -> String {
+        format!("{job_id}/.unpack/{file_id}")
     }
 
     /// An attempt's temporary folder, relative to the area.

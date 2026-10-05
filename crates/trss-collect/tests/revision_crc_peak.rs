@@ -1,7 +1,7 @@
 //! The CRC32 of a received video is read as a stream: checking a file larger
-//! than the container's 128M memory limit (`docs/specs/collection.md`, 영상
-//! 수정본의 대체) holds one buffer, not the file. This binary counts what it
-//! allocates, so it has a test of its own.
+//! than the worker container's 256M memory limit (`docs/specs/collection.md`,
+//! 영상 수정본의 대체) holds one buffer, not the file. This binary counts what
+//! it allocates, so it has a test of its own.
 
 use std::{
     alloc::{GlobalAlloc, Layout, System},

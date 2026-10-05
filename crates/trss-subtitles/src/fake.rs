@@ -6,7 +6,8 @@
 //! | --- | --- |
 //! | `/ok/<name>` | one file, `<name>.ass` |
 //! | `/shared/<series>/<anything>` | one file, `<series>.ass`, the same file for every post of the series |
-//! | `/pack/<file>/<file>/…` | a file for each segment, named as it (percent-encoded), whose bytes its extension says ([`bytes_of`]) |
+//! | `/pack/<file>/<file>/…` | a file for each segment, named as it (percent-encoded; `%2F` puts one in a folder of the post), whose bytes its extension says ([`bytes_of`]) |
+//! | `/zip/<archive>/<member>/<member>/…` | one file, `<archive>`, a ZIP of the members (percent-encoded; `%2F` puts one in a folder) with the bytes [`bytes_of`] gives their names ([`zip_of`]) |
 //! | `/auth/<anything>` | a person has to pass a check (`CAPTCHA`) that nothing shows |
 //! | `/check/<name>` | a person has to pass a check in the server browser; then the browser downloads `<name>.srt` |
 //! | `/missing/<anything>` | the post is gone |
@@ -121,6 +122,7 @@ enum Post {
     Empty,
     Short(String),
     Pack(Vec<String>),
+    Zip(String, Vec<String>),
 }
 
 fn read(post: &Url) -> Result<Post, Failure> {
@@ -138,7 +140,7 @@ fn read(post: &Url) -> Result<Post, Failure> {
         Some("check") => Post::Check(name(1).filter(|n| is_check_name(n)).ok_or_else(changed)?),
         Some("missing") => Post::Missing,
         Some("empty") => Post::Empty,
-        Some("pack") => {
+        Some(kind @ ("pack" | "zip")) => {
             let names: Vec<String> = segments[1..]
                 .iter()
                 .map(|s| {
@@ -147,9 +149,10 @@ fn read(post: &Url) -> Result<Post, Failure> {
                         .into_owned()
                 })
                 .collect();
-            match names.is_empty() {
-                true => return Err(changed()),
-                false => Post::Pack(names),
+            match (kind, names.split_first()) {
+                (_, None) => return Err(changed()),
+                ("zip", Some((archive, members))) => Post::Zip(archive.clone(), members.to_vec()),
+                _ => Post::Pack(names),
             }
         }
         _ => return Err(changed()),
@@ -185,9 +188,18 @@ impl FakeSource {
             Post::Pack(names) => Opened::Files(
                 names
                     .into_iter()
-                    .map(|name| PostFile::new(format!("pack/{name}"), name))
+                    .map(|path| match path.rsplit_once('/') {
+                        Some((folder, name)) => PostFile {
+                            folder: Some(folder.to_owned()),
+                            ..PostFile::new(format!("pack/{path}"), name.to_owned())
+                        },
+                        None => PostFile::new(format!("pack/{path}"), path),
+                    })
                     .collect(),
             ),
+            Post::Zip(archive, _) => {
+                Opened::Files(vec![PostFile::new(format!("zip/{archive}"), archive)])
+            }
         })
     }
 
@@ -212,12 +224,17 @@ impl FakeSource {
                         last_modified: None,
                     }),
                     Ok(Post::Pack(_)) => {
-                        let name = key.strip_prefix("pack/").unwrap_or(key);
+                        let path = key.strip_prefix("pack/").unwrap_or(key);
+                        let name = path.rsplit('/').next().unwrap_or(path);
                         Ok(FileInfo {
                             size: Some(bytes_of(name).len() as u64),
                             last_modified: None,
                         })
                     }
+                    Ok(Post::Zip(_, members)) => Ok(FileInfo {
+                        size: Some(zip_of(members).len() as u64),
+                        last_modified: None,
+                    }),
                     Ok(_) => {
                         let name = key.rsplit('/').next().unwrap_or_default();
                         Ok(FileInfo {
@@ -242,8 +259,9 @@ impl FakeSource {
         }
         let short = matches!(post_kind, Post::Short(_));
         let name = file.name.strip_suffix(".ass").unwrap_or(&file.name);
-        let mut bytes = match post_kind {
+        let mut bytes = match &post_kind {
             Post::Pack(_) => bytes_of(&file.name),
+            Post::Zip(_, members) => zip_of(members),
             _ => ass(name),
         };
         let declared = bytes.len() as u64;
@@ -310,7 +328,8 @@ pub fn ass(name: &str) -> Vec<u8> {
 
 /// The bytes of a `/pack/` post's file `name`, by its extension: an ASS, SRT
 /// or SMI file made from its stem (a stem ending in `+` differs from the one
-/// without), a font's first bytes, an executable's, or text for anything else.
+/// without), a font's first bytes, an executable's, a web page for `.html`
+/// (what a site answers in place of a file), or text for anything else.
 pub fn bytes_of(name: &str) -> Vec<u8> {
     let (stem, ext) = name.rsplit_once('.').unwrap_or((name, ""));
     match ext.to_lowercase().as_str() {
@@ -330,8 +349,31 @@ pub fn bytes_of(name: &str) -> Vec<u8> {
             bytes.extend_from_slice(stem.as_bytes());
             bytes
         }
+        "html" => {
+            format!("<!DOCTYPE html>\n<html><body>가짜 페이지 {stem}</body></html>\n").into_bytes()
+        }
         _ => format!("가짜 첨부 {name}\n").into_bytes(),
     }
+}
+
+/// A ZIP (stored, dated 1980) of `members`, each with the bytes [`bytes_of`]
+/// gives its name: the same bytes for the same members.
+pub fn zip_of(members: &[String]) -> Vec<u8> {
+    use std::io::Write;
+
+    use zip::{write::SimpleFileOptions, CompressionMethod, DateTime, ZipWriter};
+
+    let options = SimpleFileOptions::default()
+        .compression_method(CompressionMethod::Stored)
+        .last_modified_time(DateTime::default());
+    let mut zip = ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for member in members {
+        let base = member.rsplit('/').next().unwrap_or(member);
+        zip.start_file(member.as_str(), options)
+            .and_then(|()| Ok(zip.write_all(&bytes_of(base))?))
+            .expect("a ZIP in memory");
+    }
+    zip.finish().expect("a ZIP in memory").into_inner()
 }
 
 /// The bytes of the file a check post's page downloads: a valid SRT file, the
@@ -666,6 +708,46 @@ mod tests {
         assert_eq!(first, second);
         assert!(first.starts_with("\u{feff}[Script Info]".as_bytes()));
         assert!(first.len() > 20 * CHUNK);
+    }
+
+    #[tokio::test]
+    async fn a_zip_post_is_one_archive_of_its_members_in_their_folders() {
+        use std::io::Read;
+
+        let post = Url::parse(
+            "https://fake.trss.invalid/zip/Show%201-2.zip/Show%20-%2001.ass/Fonts%2FA.ttf",
+        )
+        .unwrap();
+        let source = Source::Fake(FakeSource);
+        let Opened::Files(files) = source.open(&post, "1").await.unwrap() else {
+            panic!("files");
+        };
+        assert_eq!(files, [PostFile::new("zip/Show 1-2.zip", "Show 1-2.zip")]);
+        let members = ["Show - 01.ass".to_owned(), "Fonts/A.ttf".to_owned()];
+        let (expected, bytes) = receive(&source, &post, &files[0]).await;
+        assert_eq!(bytes, zip_of(&members));
+        assert_eq!(expected, Some(bytes.len() as u64));
+        let rechecked = FakeSource.recheck(&post, &[files[0].key.clone()]).await;
+        assert_eq!(
+            rechecked[0].1.as_ref().unwrap().size,
+            Some(bytes.len() as u64)
+        );
+
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut read = Vec::new();
+        for i in 0..zip.len() {
+            let mut member = zip.by_index(i).unwrap();
+            let mut content = Vec::new();
+            member.read_to_end(&mut content).unwrap();
+            read.push((member.name().to_owned(), content));
+        }
+        assert_eq!(
+            read,
+            [
+                ("Show - 01.ass".to_owned(), bytes_of("Show - 01.ass")),
+                ("Fonts/A.ttf".to_owned(), bytes_of("A.ttf")),
+            ]
+        );
     }
 
     #[tokio::test]

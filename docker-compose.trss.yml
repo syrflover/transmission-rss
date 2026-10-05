@@ -130,11 +130,14 @@ services:
     # The worker winds down within 5 seconds of SIGTERM (a cycle or command in
     # flight is abandoned and picked up again at the next start).
     stop_grace_period: 15s
+    # 256M: the worker unpacks a received archive in a child process
+    # (trss-extract) that shares this limit; its address space is held to
+    # 256 MiB and it used up to 80 MB on a normal 200 MiB package (ticket 0059).
     deploy:
       resources:
         limits:
           cpus: "0.25"
-          memory: 128M
+          memory: 256M
 
   trss-web:
     <<: *trss

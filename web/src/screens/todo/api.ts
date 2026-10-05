@@ -375,6 +375,24 @@ export interface JobFile {
   kind: UploadKind | null;
   /** For an uploaded archive: its format, by its first bytes. */
   archive: ArchiveType | null;
+  /** For a received archive: what came of unpacking it; `null` before it was tried, and for a file that is no archive. */
+  unpack: UnpackResult | null;
+}
+
+/** What came of unpacking a received archive. */
+export interface UnpackResult {
+  /**
+   * `done`: its files were taken out; `failed`: it could not be unpacked (풀지 못함, with `reason`) and stays in
+   * the receive area; `volume`: a later volume of the split archive `first`, unpacked with it.
+   */
+  state: "done" | "failed" | "volume";
+  reason: string | null;
+  /** For `volume`: the first volume's name. */
+  first: string | null;
+  /** For `done`: how many files it held, and how many of them are subtitles and fonts. */
+  files: number | null;
+  subtitles: number | null;
+  fonts: number | null;
 }
 
 /** A file of an upload that was not kept, with why. */

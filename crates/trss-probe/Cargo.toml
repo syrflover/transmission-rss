@@ -5,10 +5,15 @@ edition.workspace = true
 
 # Checks the file behavior trss's archiving and subtitle placing rely on, on
 # the real disk, as the worker's user and under the worker's memory limit. A
-# separate static binary with nothing but rustix, so that it can be built alone
-# and copied to a host that runs an older image.
+# separate static binary, so that it can be built alone and copied to a host
+# that runs an older image. It depends on trss-archive (static Rust and static
+# liblzma, so it stays one static executable) because it measures the worker's
+# own unpacking: it starts `trss-extract` through `trss_archive::run::Unpacker`
+# and samples the container's memory meanwhile.
 [dependencies]
 rustix = { workspace = true, features = ["process"] }
+trss-archive.workspace = true
 
 [dev-dependencies]
+serde_json.workspace = true
 tempfile.workspace = true

@@ -14,8 +14,9 @@
 //! 2. [`Uploads::finish`] judges every staged file by its bytes
 //!    ([`trss_subtitles::upload::judge`]), keeps subtitles, fonts and ZIPs
 //!    under safe names in the job's folder `<job>/` of the receive area, and
-//!    records the job, already `done`, with the files it kept and the names
-//!    and reasons of those it dropped.
+//!    records the job with the files it kept and the names and reasons of
+//!    those it dropped: already `done`, or `pending` when it kept an archive,
+//!    for the worker to unpack ([`crate::place::unpack`]).
 //! 3. A job is made once for a command ID: a repeat of the same upload finds
 //!    the job it made, and the files of that repeat are removed.
 //!

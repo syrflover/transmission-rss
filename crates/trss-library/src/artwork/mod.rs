@@ -71,7 +71,8 @@
 //! until the file is published. The cycle (feeds, Transmission), the command
 //! loop and the directory watches come on top of it: a library of about 1,500
 //! folders measured 29 MB resident with its watches (ticket 0016), so about
-//! 40 MiB with a cover, far from 128 MiB.
+//! 40 MiB with a cover, far from its 256 MiB (most of which is kept for
+//! unpacking a received archive in a child process, `trss_jobs::place::unpack`).
 
 pub mod files;
 pub mod image;

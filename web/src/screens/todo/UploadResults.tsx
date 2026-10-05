@@ -1,6 +1,8 @@
+import { cn } from "@/lib/utils";
+
 import type { ArchiveType, DroppedFile, JobFile, UploadKind } from "./api";
 import { ItemBadge } from "./badges";
-import { FORMAT_LABEL, sizeText } from "./format";
+import { FORMAT_LABEL, sizeText, unpackText } from "./format";
 
 const KIND_LABEL: Record<UploadKind, string> = {
   subtitle: "자막",
@@ -22,8 +24,8 @@ const ORDER: UploadKind[] = ["subtitle", "font", "archive"];
 
 /**
  * `올린 파일` of an upload job, and `받은 파일` of a find job: the files it kept, grouped by what their content
- * was judged to be, and `뺀 파일` with each name and the reason. A ZIP is kept
- * whole; which of its files are subtitles and fonts waits for the analysis.
+ * was judged to be, and `뺀 파일` with each name and the reason. An archive is kept
+ * whole and unpacked after: its line says how many subtitles and fonts it held, or why it could not be unpacked.
  */
 export function UploadResults({
   files,
@@ -48,7 +50,7 @@ export function UploadResults({
             </h3>
             {group.kind === "archive" && (
               <p className="text-xs leading-snug text-text-muted">
-                압축 파일은 묶음으로 받았어요. 안의 분류는 묶음 분석을 기다려요. 나뉜 압축 파일은 조각마다 따로 받아요.
+                압축 파일은 묶음으로 받은 뒤 풀어서 안의 파일을 나눠요. 나뉜 압축 파일은 조각마다 따로 받고, 첫 조각과 함께 풀어요.
               </p>
             )}
             <ul className="m-0 flex list-none flex-col gap-2 rounded-card border border-hairline bg-surface-1 px-3.5 py-3 shadow-(--card-shadow)">
@@ -80,9 +82,10 @@ export function UploadResults({
 
 function FileLine({ file }: { file: JobFile }) {
   // A font and a subtitle that is only stored have no format of their own to name.
+  const unpacked = file.unpack !== null ? unpackText(file.unpack) : null;
   const format =
     file.kind === "archive"
-      ? `${file.archive !== null ? ARCHIVE_LABEL[file.archive] : "압축 파일"} · 묶음 분석을 기다려요`
+      ? `${file.archive !== null ? ARCHIVE_LABEL[file.archive] : "압축 파일"} · ${unpacked?.text ?? "풀기를 기다려요"}`
       : file.kind === "font"
         ? "폰트"
         : file.format === "other"
@@ -98,6 +101,11 @@ function FileLine({ file }: { file: JobFile }) {
         {facts.length > 0 && <span className="text-xs whitespace-nowrap text-text-muted">{facts.join(" · ")}</span>}
         {file.state !== "done" && <ItemBadge shown={file.state === "receiving" ? "receive" : file.state} />}
       </div>
+      {unpacked?.reason != null && (
+        <p className={cn("text-xs leading-snug [overflow-wrap:anywhere]", unpacked.urgent ? "text-urgent" : "text-text-secondary")}>
+          {unpacked.reason}
+        </p>
+      )}
       {file.path !== null && <p className="text-xs leading-snug text-text-muted [overflow-wrap:anywhere]">{file.path}</p>}
     </li>
   );

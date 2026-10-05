@@ -10,6 +10,9 @@ trss-subtitles.workspace = true
 # observations, the season info and the library.
 trss-library.workspace = true
 trss-collect.workspace = true
+# Unpacks a received archive in a child process with limits
+# (`place::unpack`), the program `src/bin/trss-extract.rs`.
+trss-archive.workspace = true
 
 rusqlite.workspace = true
 serde_json.workspace = true
@@ -31,3 +34,5 @@ trss-subtitles = { workspace = true, features = ["test-support"] }
 serde_json.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs", "io-util", "time"] }
+# The archives the child process of `tests/extract_process.rs` unpacks.
+zip.workspace = true

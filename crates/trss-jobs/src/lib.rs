@@ -8,6 +8,8 @@
 //!   that let a restarted worker reuse what it received or hold what it cannot
 //!   vouch for.
 //! - [`area`]: the receive area in the app data folder.
+//! - [`place`]: what a job received, unpacked ([`place::unpack`], in the
+//!   `trss-extract` program this crate builds), analysed, stored and applied.
 //! - [`screen`]: the remote screen of a job that waits for a person's check
 //!   on the site: the browser run bound to it, shared by the worker and the
 //!   web.
@@ -47,6 +49,7 @@ pub use store::{
     AskedFinish, Created, FileProblem, JobError, JobStore, MappingStamp, NewFind, NewItem, NewJob,
     AUTO, FIND, NOTHING_FOUND, UPLOAD,
 };
+pub use trss_archive::run::Unpacker;
 pub use trss_subtitles::{verify::Format, FailureKind};
 pub use upload::{Finished, Uploads};
 

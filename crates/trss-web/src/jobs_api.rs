@@ -21,8 +21,10 @@
 //! - `GET /api/subtitle-jobs/{id}` one job with its steps, items with their
 //!   files, what became of each received file (`placements`: its episode,
 //!   whether it was stored and applied, and the paths of its video, applied
-//!   copy and stored file), its folder in the receive area, its log, newest
-//!   first, and its remote screen (`screen`, see [`super::screen_api`];
+//!   copy and stored file), what came of unpacking each received archive
+//!   (`unpack`: unpacked with how many files, not unpacked with why, or a
+//!   later volume of a split archive), its folder in the receive area, its
+//!   log, newest first, and its remote screen (`screen`, see [`super::screen_api`];
 //!   `null` for none). It reads only: it never asks for a browser run.
 //! - `POST /api/subtitle-jobs/{id}/screen` and the screen's socket: see
 //!   [`super::screen_api`].
@@ -107,6 +109,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use trss_jobs::{
+    place::package::{member, Member},
     store::{DonePage, FileRow, JobDetail, JobRow, StepRow},
     AskedFinish, Created, FileState, ItemState, JobState, NewFind, NewItem, NewJob, StepKind, Wait,
     FIND, UPLOAD,
@@ -380,6 +383,26 @@ struct FileView {
     kind: Option<&'static str>,
     /// For an uploaded archive: its format (`zip`, `rar`, `7z`, `gz`, `bz2`, `xz`, `tar`).
     archive: Option<&'static str>,
+    /// For a received archive: what came of unpacking it; `null` before it
+    /// was tried, and for a file that is no archive.
+    unpack: Option<UnpackView>,
+}
+
+/// What came of unpacking a received archive ([`trss_jobs::place::unpack`]).
+#[derive(Debug, Serialize)]
+struct UnpackView {
+    /// `done`: its members were recorded; `failed`: it could not be unpacked
+    /// (풀지 못함, with `reason`) and stays in the receive area; `volume`: a
+    /// later volume of the split archive `first`, unpacked with it.
+    state: &'static str,
+    reason: Option<String>,
+    /// For `volume`: the first volume's name.
+    first: Option<String>,
+    /// For `done`: how many files it held, and how many of them are
+    /// subtitles and fonts by their check and name.
+    files: Option<usize>,
+    subtitles: Option<usize>,
+    fonts: Option<usize>,
 }
 
 #[derive(Debug, Serialize)]
@@ -507,11 +530,59 @@ fn steps_view(steps: &[StepRow], row: &JobRow) -> Vec<StepView> {
     .collect()
 }
 
+/// The files of each unpacked archive, by its receipt.
+type Unpacked<'a> = HashMap<&'a str, Vec<&'a trss_jobs::place::unpack::MemberRow>>;
+
+fn unpack_view(
+    file: &FileRow,
+    members: &Unpacked<'_>,
+    names: &HashMap<&str, &str>,
+) -> Option<UnpackView> {
+    let view = |state| UnpackView {
+        state,
+        reason: None,
+        first: None,
+        files: None,
+        subtitles: None,
+        fonts: None,
+    };
+    if let Some(first) = &file.volume_of {
+        return Some(UnpackView {
+            first: names.get(first.as_str()).map(|n| (*n).to_owned()),
+            ..view("volume")
+        });
+    }
+    if let Some(reason) = &file.unpack_error {
+        return Some(UnpackView {
+            reason: Some(reason.clone()),
+            ..view("failed")
+        });
+    }
+    file.unpacked_at?;
+    let of = members.get(file.id.as_str()).map_or(&[][..], Vec::as_slice);
+    let kinds: Vec<Member> = of
+        .iter()
+        .filter_map(|m| Some(member(&m.path, m.format.clone().ok()?)))
+        .collect();
+    Some(UnpackView {
+        files: Some(of.len()),
+        subtitles: Some(
+            kinds
+                .iter()
+                .filter(|k| matches!(k, Member::Subtitle(_)))
+                .count(),
+        ),
+        fonts: Some(kinds.iter().filter(|k| **k == Member::Font).count()),
+        ..view("done")
+    })
+}
+
 fn file_view(
     file: &FileRow,
     item: ItemState,
     state: &AppState,
     owners: &HashMap<&str, &str>,
+    unpacked: (&Unpacked<'_>, &HashMap<&str, &str>),
 ) -> Option<FileView> {
     let shown = match file.state {
         // Under way only while its episode runs; a held or stopped episode
@@ -552,6 +623,7 @@ fn file_view(
         response_size: file.response_size,
         kind: file.kind.map(|k| k.code()),
         archive: file.archive.map(|a| a.code()),
+        unpack: unpack_view(file, unpacked.0, unpacked.1),
     })
 }
 
@@ -581,6 +653,16 @@ async fn detail(
                 .map(move |f| (f.id.as_str(), item.episode.as_str()))
         })
         .collect();
+    let members = state.jobs.members(&id).await.map_err(|e| internal(&e))?;
+    let mut unpacked: Unpacked<'_> = HashMap::new();
+    for m in &members {
+        unpacked.entry(m.file_id.as_str()).or_default().push(m);
+    }
+    let names: HashMap<&str, &str> = items
+        .iter()
+        .flat_map(|item| item.files.iter())
+        .map(|f| (f.id.as_str(), f.name.as_str()))
+        .collect();
     let items_view = items
         .iter()
         .map(|item| ItemView {
@@ -595,7 +677,7 @@ async fn detail(
             files: item
                 .files
                 .iter()
-                .filter_map(|f| file_view(f, item.state, &state, &owners))
+                .filter_map(|f| file_view(f, item.state, &state, &owners, (&unpacked, &names)))
                 .collect(),
         })
         .collect();

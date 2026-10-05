@@ -518,6 +518,9 @@ async fn a_restart_publishes_a_file_that_came_whole_under_its_folder_and_reads_i
             archive: None,
             folder: Some("회차".to_owned()),
             cleared_at: None,
+            volume_of: None,
+            unpacked_at: None,
+            unpack_error: None,
         })
         .await
         .unwrap();

@@ -449,6 +449,9 @@ async fn an_unfinished_file_is_receiving_only_while_its_episode_runs() {
                 archive: None,
                 folder: None,
                 cleared_at: None,
+                volume_of: None,
+                unpacked_at: None,
+                unpack_error: None,
             })
             .await
             .unwrap();
@@ -905,4 +908,65 @@ async fn a_find_job_waits_among_the_ordinary_waits_not_with_the_checks() {
     // The check made last comes first; the find job then sits by its order
     // among the other waits.
     assert_eq!(ids, [check.as_str(), found.as_str(), subtitle.as_str()]);
+}
+
+#[tokio::test]
+async fn each_received_archive_says_what_came_of_unpacking_it() {
+    let (state, router) = app();
+    sql(
+        &state,
+        "INSERT INTO subtitle_jobs (id, command_id, request, origin, state, note, created_at,
+                                   updated_at, state_at, finished_at)
+             VALUES ('j1', 'c1', '{}', 'upload', 'partial', 'x', 1, 1, 1, 2);
+         INSERT INTO subtitle_job_items (id, job_id, position, episode, post_url, found_at, state,
+                                         updated_at)
+             VALUES (1, 'j1', 0, '', 'upload:', 1, 'done', 1);
+         INSERT INTO subtitle_job_files (id, job_id, item_id, file_key, name, state, size, sha256,
+                                         path, created_at, updated_at, format, kind,
+                                         unpacked_at, unpack_error, volume_of)
+             VALUES ('a', 'j1', 1, 'a', 'pack.zip', 'done', 9, '0000000000000000000000000000000000000000000000000000000000000000', 'j1/a', 1, 1, 'zip',
+                     'archive', 2, NULL, NULL),
+                    ('b', 'j1', 1, 'b', 's.part1.rar', 'done', 9, '0000000000000000000000000000000000000000000000000000000000000000', 'j1/b', 1, 1, 'other',
+                     'archive', NULL, '나뉜 압축 파일의 조각이 모자라요', NULL),
+                    ('c', 'j1', 1, 'c', 's.part3.rar', 'done', 9, '0000000000000000000000000000000000000000000000000000000000000000', 'j1/c', 1, 1, 'other',
+                     'archive', NULL, NULL, 'b'),
+                    ('d', 'j1', 1, 'd', 'later.7z', 'done', 9, '0000000000000000000000000000000000000000000000000000000000000000', 'j1/d', 1, 1, 'other',
+                     'archive', NULL, NULL, NULL),
+                    ('e', 'j1', 1, 'e', '01.ass', 'done', 9, '0000000000000000000000000000000000000000000000000000000000000000', 'j1/e', 1, 1, 'ass',
+                     'subtitle', NULL, NULL, NULL);
+         INSERT INTO subtitle_job_members (file_id, position, path, size, sha256, format, reason)
+             VALUES ('a', 0, 'Show - 01.ass', 1, '0000000000000000000000000000000000000000000000000000000000000000', 'ass', NULL),
+                    ('a', 1, 'Fonts/A.ttf', 1, '0000000000000000000000000000000000000000000000000000000000000000', 'other', NULL),
+                    ('a', 2, 'readme.txt', 1, '0000000000000000000000000000000000000000000000000000000000000000', 'other', NULL),
+                    ('a', 3, 'page.ass', 1, '0000000000000000000000000000000000000000000000000000000000000000', NULL, '웹 페이지예요');",
+    )
+    .await;
+
+    let (status, detail) = get(&router, "/api/subtitle-jobs/j1").await;
+    assert_eq!(status, StatusCode::OK);
+    let files = detail["items"][0]["files"].as_array().unwrap();
+    let unpack = |name: &str| {
+        files
+            .iter()
+            .find(|f| f["name"] == name)
+            .map(|f| f["unpack"].clone())
+            .unwrap()
+    };
+    // A web page among the members is one of its files, and neither a
+    // subtitle nor a font.
+    assert_eq!(
+        unpack("pack.zip"),
+        json!({ "state": "done", "reason": null, "first": null,
+                 "files": 4, "subtitles": 1, "fonts": 1 })
+    );
+    assert_eq!(
+        unpack("s.part1.rar"),
+        json!({ "state": "failed", "reason": "나뉜 압축 파일의 조각이 모자라요", "first": null,
+                 "files": null, "subtitles": null, "fonts": null })
+    );
+    assert_eq!(unpack("s.part3.rar")["state"], "volume");
+    assert_eq!(unpack("s.part3.rar")["first"], "s.part1.rar");
+    // Not tried yet, and no archive.
+    assert_eq!(unpack("later.7z"), Value::Null);
+    assert_eq!(unpack("01.ass"), Value::Null);
 }

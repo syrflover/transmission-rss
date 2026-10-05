@@ -142,7 +142,7 @@ use crate::{
     model::{FileState, ItemState, JobState, StepKind, StepState, Wait},
     place::{Placement, Placer},
     screen::{self, Arrival, ScreenStore},
-    store::{snapshot_json, FileProblem, FileRow, ItemRow, JobError, JobStore, FIND},
+    store::{snapshot_json, FileProblem, FileRow, ItemRow, JobError, JobStore, FIND, UPLOAD},
 };
 
 pub mod find;
@@ -334,6 +334,14 @@ impl Runner {
         }
     }
 
+    /// The same runner unpacking received archives with `unpacker`
+    /// ([`crate::place::unpack`]); without one, a package with an archive
+    /// waits.
+    pub fn with_unpacker(mut self, unpacker: trss_archive::run::Unpacker) -> Runner {
+        self.placer = self.placer.with_unpacker(unpacker);
+        self
+    }
+
     /// The same runner bringing posts to a site's check with `browser`.
     pub fn with_auth(mut self, browser: Arc<dyn AuthBrowser>) -> Runner {
         self.auth = Some(browser);
@@ -428,8 +436,12 @@ impl Runner {
         let received = !items
             .iter()
             .any(|i| matches!(i.state, ItemState::Pending | ItemState::Running));
+        let origin = self.store.origin(id).await?;
+        let upload = origin.as_deref() == Some(UPLOAD);
         let message = match (resumed, received) {
             (true, _) => "멈췄던 작업을 이어가요",
+            // An upload that kept an archive: unpacked now.
+            (false, true) if upload => "올린 압축 파일을 풀어요",
             // Received before storing was made: stored and applied now.
             (false, true) => "받아 둔 파일의 보관과 적용을 이어가요",
             (false, false) => "작업을 시작했어요",
@@ -438,7 +450,7 @@ impl Runner {
         self.store
             .event(id, message.to_owned(), None, self.now())
             .await?;
-        if self.store.origin(id).await?.as_deref() == Some(FIND) {
+        if origin.as_deref() == Some(FIND) {
             return self.run_find(id, cancel).await;
         }
 
@@ -457,7 +469,13 @@ impl Runner {
                 return Ok(false);
             }
         }
-        let received = self.received(id).await?;
+        // An upload's note says what it kept, whatever a wait for the program
+        // said in between.
+        let kept = match upload {
+            true => Some(self.store.upload_note(id).await?),
+            false => None,
+        };
+        let received = self.received(id, kept).await?;
         let Some(placement) = self.placer.run(id, cancel).await? else {
             return Ok(false);
         };
@@ -1352,6 +1370,9 @@ impl Runner {
                 archive: None,
                 folder: folder.clone(),
                 cleared_at: None,
+                volume_of: None,
+                unpacked_at: None,
+                unpack_error: None,
             })
             .await?;
 
@@ -2066,8 +2087,11 @@ impl Runner {
     }
 
     /// How the job stands from its items, with its opening and receiving
-    /// steps written, before what it received is stored and applied.
-    async fn received(&self, job: &str) -> Result<Received, JobError> {
+    /// steps written, before what it received is stored and applied. `kept`
+    /// is an upload's note (`올린 파일: …`): the note of the job, all of
+    /// whose files were received when it was made, with its receiving step
+    /// left as it was written then (what it kept and dropped).
+    async fn received(&self, job: &str, kept: Option<String>) -> Result<Received, JobError> {
         let items = self.store.items(job).await?;
         // The file of a settled item's check is not needed any more.
         for item in items.iter().filter(|i| {
@@ -2128,7 +2152,7 @@ impl Runner {
                 "받을 방법을 기다려요",
             )
         } else if done == total {
-            (JobState::Done, None, None, "작업을 마쳤어요")
+            (JobState::Done, None, kept.clone(), "작업을 마쳤어요")
         } else if failed == total {
             (
                 JobState::Failed,
@@ -2151,7 +2175,7 @@ impl Runner {
                 .set_step(job, StepKind::Open, StepState::Failed, note.clone(), now)
                 .await?;
         }
-        if step_of(StepKind::Receive).is_some() {
+        if step_of(StepKind::Receive).is_some() && kept.is_none() {
             let step = match state {
                 JobState::Done => Some(StepState::Done),
                 JobState::Partial => Some(StepState::Partial),
@@ -2251,16 +2275,21 @@ impl Runner {
                         }),
                         "교체 승인을 기다려요",
                     )
-                } else if standing.failed > 0 {
-                    let all = standing.failed == standing.rows && state == JobState::Done;
+                } else if standing.failed > 0 || standing.unpack_failed > 0 {
+                    let all = standing.failed == standing.rows
+                        && !standing.unplanned
+                        && state == JobState::Done;
                     (
                         match all {
                             true => JobState::Failed,
                             false => JobState::Partial,
                         },
                         None,
-                        standing.failure,
-                        "보관하거나 적용하지 못한 파일이 있어요",
+                        standing.failure.or(standing.unpack_failure),
+                        match standing.failed {
+                            0 => "압축 파일을 풀지 못했어요",
+                            _ => "보관하거나 적용하지 못한 파일이 있어요",
+                        },
                     )
                 } else if let Some(reason) = standing.missing {
                     (

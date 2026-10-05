@@ -1,6 +1,7 @@
 //! `POST /api/subtitle-jobs/upload`: the subtitles and fonts a person uploads
 //! from the work detail (`docs/specs/subtitles.md`, 직접 찾기와 자막 올리기),
-//! made into one job that is already `done` ([`trss_jobs::upload`]).
+//! made into one job that is already `done`, or that waits for the worker to
+//! unpack the archives it kept, which this wakes ([`trss_jobs::upload`]).
 //!
 //! The body is `multipart/form-data`, its parts in this order:
 //!
@@ -646,7 +647,14 @@ async fn receive(
             job_id,
             counts,
             dropped,
-        } => Ok((
+        } => {
+            // The archives it kept are the worker's to unpack.
+            if counts.archives > 0 {
+                if let Some(path) = &state.worker_wake {
+                    trss_core::wake::wake_worker(path);
+                }
+            }
+            Ok((
             StatusCode::ACCEPTED,
             Json(json!({
                 "id": job_id,
@@ -657,7 +665,8 @@ async fn receive(
                 },
                 "dropped": dropped_view(&dropped),
             })),
-        )),
+        ))
+        }
         Finished::Existing(id) => Ok((StatusCode::OK, Json(json!({ "id": id })))),
         Finished::Mismatch(id) => Err(ApiError::Conflict {
             message: "같은 요청 ID로 다른 파일을 올린 적이 있어요. 화면을 새로고침해 주세요."
