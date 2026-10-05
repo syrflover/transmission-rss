@@ -18,6 +18,8 @@ FROM clux/muslrust:stable AS builder
 WORKDIR /usr/src/transmission-rss
 
 COPY Cargo.toml Cargo.lock ./
+# The SQLite build options (`LIBSQLITE3_FLAGS`).
+COPY .cargo ./.cargo
 COPY crates ./crates
 
 # `--locked`: build the dependency versions the tests ran against.
@@ -35,6 +37,8 @@ FROM clux/muslrust:stable AS probe-builder
 WORKDIR /usr/src/transmission-rss
 
 COPY Cargo.toml Cargo.lock ./
+# The SQLite build options (`LIBSQLITE3_FLAGS`).
+COPY .cargo ./.cargo
 COPY crates ./crates
 
 RUN cargo build --release --locked -p trss-probe -p trss-jobs \

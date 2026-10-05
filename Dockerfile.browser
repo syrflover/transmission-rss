@@ -12,6 +12,8 @@ FROM clux/muslrust:stable AS builder
 WORKDIR /usr/src/transmission-rss
 
 COPY Cargo.toml Cargo.lock ./
+# The SQLite build options (`LIBSQLITE3_FLAGS`).
+COPY .cargo ./.cargo
 COPY crates ./crates
 
 # Only the launcher; `--locked` as in Dockerfile.

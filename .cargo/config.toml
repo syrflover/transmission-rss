@@ -1,0 +1,9 @@
+[env]
+# The bundled SQLite (libsqlite3-sys) without its memory statistics, which
+# every SQLite allocation updates under one process-wide mutex. Nothing here
+# reads them (`sqlite3_status`, `sqlite3_memory_used`, the soft heap limit),
+# and with a connection per thread, as the tests open their databases, the
+# threads queued on that mutex: at 12 test threads a migrated `:memory:`
+# database took 2.3 s instead of 0.18 s, more than half of it in the kernel.
+# The image builds copy this file, so the app runs the SQLite the tests ran.
+LIBSQLITE3_FLAGS = "-DSQLITE_DEFAULT_MEMSTATUS=0"
