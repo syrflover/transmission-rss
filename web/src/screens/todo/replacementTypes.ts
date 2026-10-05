@@ -68,4 +68,94 @@ export interface Replacement {
   paths: ReplacementPath[];
   /** The limits of the comparison that hold, only those. */
   limits: ("unknown_source" | "lines_unknown")[];
+  /** What differs between the two files' contents; `null` for a plan made before the app compared contents. */
+  comparison: Comparison | null;
+}
+
+/** What was read of one side of a comparison. */
+export interface ComparedSide {
+  format: "ASS" | "SRT" | "WebVTT" | "SMI";
+  encoding: "UTF-8" | "UTF-16" | "CP949";
+  /** The cues of all its tracks. */
+  cues: number;
+}
+
+/** A style the two files both have, with each field that differs. */
+export interface StyleChange {
+  name: string;
+  fields: { field: string; old: string; new: string }[];
+}
+
+/** The items of a comparison that can be left out, with why. */
+export type ComparedItem = "dialogue" | "styles" | "fonts";
+
+/**
+ * The comparison a plan keeps (`docs/specs/subtitles.md`, 교체 비교와 승인). `unreadable` says why a file's content
+ * could not be read, `compared` the counts of the four items and what could not be compared. Its dialogue and timing
+ * lines come from `fetchReplacementLines`, not with the job.
+ */
+export type Comparison =
+  | { state: "unreadable"; reason: string }
+  | {
+      state: "compared";
+      current: ComparedSide;
+      new: ComparedSide;
+      dialogue: { added: number; changed: number; removed: number };
+      timing: { count: number };
+      /** `null` when the styles cannot be compared (see `not_compared`). */
+      styles: { added: string[]; removed: string[]; changed: StyleChange[] } | null;
+      /** `null` when the fonts cannot be compared. */
+      fonts: { added: string[]; removed: string[] } | null;
+      not_compared: { item: ComparedItem; reason: string }[];
+    };
+
+/** A dialogue line's text and where it is, in milliseconds. */
+export interface PlacedText {
+  text: string;
+  start: number;
+  end: number;
+}
+
+/** A line of the dialogue comparison. An added line has no `old`, a removed one no `new`. */
+export interface DialogueLine {
+  kind: "added" | "changed" | "removed";
+  /** The SMI language class, only when a file has several. */
+  class?: string;
+  old?: PlacedText;
+  new?: PlacedText;
+}
+
+/** A line whose start or end moved, in milliseconds. */
+export interface TimingLine {
+  text: string;
+  class?: string;
+  old: { start: number; end: number };
+  new: { start: number; end: number };
+}
+
+/** The lines of a plan's comparison (`/subtitle-jobs/{id}/replacements/{plan}/lines`). */
+export interface ReplacementLines {
+  dialogue: DialogueLine[];
+  timing: TimingLine[];
+}
+
+/**
+ * What a `교체 승인` to-do sums over the open plans it counts: the lines and items that differ, and how many plans
+ * have no comparison to count (none was made, or a file could not be read).
+ */
+export interface ReplacementChanges {
+  added: number;
+  changed: number;
+  removed: number;
+  timing: number;
+  styles: number;
+  fonts: number;
+  uncompared: number;
+  /**
+   * Compared plans that left a part out: a language of the dialogue with no counterpart, or the styles and fonts of
+   * an ASS set against another format.
+   */
+  partial: number;
+  /** The open plans summed, `uncompared` and `partial` of them among them. */
+  plans: number;
 }

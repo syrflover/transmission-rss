@@ -370,3 +370,215 @@ async fn a_plan_compared_again_says_why() {
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(std::fs::read(app.at(TARGET)).unwrap(), fake::ass("Show-02"));
 }
+
+impl App {
+    /// The first job applies a subtitle, the second's plan to replace it
+    /// waits: the second job and its plan's ID.
+    async fn waiting_revision(&self) -> (String, String) {
+        self.job("c1", "에루샤", "/ok/Show-02").await;
+        self.revision_of("c2", "/ok/Show-02v2").await
+    }
+
+    /// Another job's plan against the file beside the video.
+    async fn revision_of(&self, command: &str, post: &str) -> (String, String) {
+        let job = self.job(command, "에루샤", post).await;
+        let plan = self.replacement(&job).await["plan_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        (job, plan)
+    }
+
+    fn lines_uri(job: &str, plan: &str) -> String {
+        format!("/api/subtitle-jobs/{job}/replacements/{plan}/lines")
+    }
+
+    /// The plan's comparison as an earlier build left it (none) or as the
+    /// worker could not make it (`why`).
+    async fn recompared(&self, plan: &str, why: Option<&str>) {
+        // The comparison does not change once made, so it is replaced whole.
+        let insert = match why {
+            Some(why) => format!(
+                "INSERT INTO subtitle_replacement_diffs (plan_id, path, unreadable)
+                 VALUES ('{plan}', '{TARGET}', '{why}');"
+            ),
+            None => String::new(),
+        };
+        self.sql(format!(
+            "DELETE FROM subtitle_replacement_diffs WHERE plan_id = '{plan}'; {insert}"
+        ))
+        .await;
+    }
+}
+
+#[tokio::test]
+async fn the_detail_says_what_changed_without_the_lines() {
+    let app = App::new().await;
+    let (job, _) = app.waiting_revision().await;
+
+    let r = app.replacement(&job).await;
+
+    let side = json!({ "format": "ASS", "encoding": "UTF-8", "cues": 24 });
+    assert_eq!(
+        r["comparison"],
+        json!({
+            "state": "compared",
+            "current": side,
+            "new": side,
+            "dialogue": { "added": 0, "changed": 24, "removed": 0 },
+            "timing": { "count": 0 },
+            "styles": { "added": [], "removed": [], "changed": [] },
+            "fonts": { "added": [], "removed": [] },
+            "not_compared": []
+        })
+    );
+}
+
+#[tokio::test]
+async fn a_plan_with_no_comparison_or_an_unreadable_one_says_so_and_never_no_difference() {
+    let app = App::new().await;
+    let (job, plan) = app.waiting_revision().await;
+
+    app.recompared(&plan, None).await;
+    assert_eq!(app.replacement(&job).await["comparison"], Value::Null);
+
+    app.recompared(&plan, Some("현재 자막: 인코딩을 알 수 없어요"))
+        .await;
+    assert_eq!(
+        app.replacement(&job).await["comparison"],
+        json!({ "state": "unreadable", "reason": "현재 자막: 인코딩을 알 수 없어요" })
+    );
+}
+
+#[tokio::test]
+async fn the_lines_of_a_compared_plan_come_from_their_own_route() {
+    let app = App::new().await;
+    let (job, plan) = app.waiting_revision().await;
+
+    let (status, lines) = app
+        .call(Method::GET, &App::lines_uri(&job, &plan), None)
+        .await;
+
+    assert_eq!(status, StatusCode::OK, "{lines}");
+    assert_eq!(lines["timing"], json!([]));
+    let dialogue = lines["dialogue"].as_array().unwrap();
+    assert_eq!(dialogue.len(), 24);
+    assert_eq!(
+        dialogue[0],
+        json!({
+            "kind": "changed",
+            "old": { "text": "가짜 자막 Show-02 1", "start": 0, "end": 1500 },
+            "new": { "text": "가짜 자막 Show-02v2 1", "start": 0, "end": 1500 }
+        })
+    );
+}
+
+#[tokio::test]
+async fn the_lines_of_a_plan_that_is_not_the_jobs_or_was_not_compared_are_not_found() {
+    let app = App::new().await;
+    let (job, plan) = app.waiting_revision().await;
+    let (status, _) = app
+        .call(Method::GET, &App::lines_uri(&job, &plan), None)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Another job's plan, and no plan.
+    for (job, plan) in [("another", plan.as_str()), (job.as_str(), "no-plan")] {
+        let (status, body) = app
+            .call(Method::GET, &App::lines_uri(job, plan), None)
+            .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{job} {plan}: {body}");
+    }
+    // A plan made before contents were compared, and one that could not be.
+    for why in [
+        None,
+        Some("새 자막: 이미지 자막이라 내용을 비교할 수 없어요"),
+    ] {
+        app.recompared(&plan, why).await;
+        let (status, body) = app
+            .call(Method::GET, &App::lines_uri(&job, &plan), None)
+            .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{why:?}: {body}");
+    }
+}
+
+#[tokio::test]
+async fn the_replacement_to_do_sums_what_its_open_plans_change() {
+    let app = App::new().await;
+    app.job("c1", "에루샤", "/ok/Show-02").await;
+    // Two plans compared (24 dialogue lines changed each), one that could not
+    // be, and one made before contents were compared.
+    app.revision_of("c2", "/ok/Show-02v2").await;
+    app.revision_of("c3", "/ok/Show-02v3").await;
+    let (_, unreadable) = app.revision_of("c4", "/ok/Show-02v4").await;
+    let (_, earlier) = app.revision_of("c5", "/ok/Show-02v5").await;
+    app.recompared(&unreadable, Some("현재 자막: 인코딩을 알 수 없어요"))
+        .await;
+    app.recompared(&earlier, None).await;
+
+    let (_, todo) = app.call(Method::GET, "/api/todo", None).await;
+
+    let card = &todo["needs"][0];
+    assert_eq!(card["kind"], "replacement");
+    assert_eq!(card["episodes"], json!([2]));
+    assert_eq!(card["jobs"], 4);
+    assert_eq!(
+        card["changes"],
+        json!({
+            "added": 0, "changed": 48, "removed": 0, "timing": 0, "styles": 0, "fonts": 0,
+            "uncompared": 2, "partial": 0, "plans": 4
+        })
+    );
+}
+
+#[tokio::test]
+async fn the_replacement_to_do_sums_timing_styles_and_fonts_too() {
+    let app = App::new().await;
+    // A file the app did not manage: the new copy's font and one line's start
+    // differ.
+    let current = String::from_utf8(fake::ass("Show-02v2"))
+        .unwrap()
+        .replace("Style: Default,Arial,", "Style: Default,Noto Sans CJK KR,")
+        .replacen("Dialogue: 0,0:00:00.00,", "Dialogue: 0,0:00:00.50,", 1);
+    std::fs::write(app.at(TARGET), current).unwrap();
+    app.job("c1", "에루샤", "/ok/Show-02v2").await;
+
+    let (_, todo) = app.call(Method::GET, "/api/todo", None).await;
+
+    assert_eq!(
+        todo["needs"][0]["changes"],
+        json!({
+            "added": 0, "changed": 0, "removed": 0, "timing": 1, "styles": 1, "fonts": 2,
+            "uncompared": 0, "partial": 0, "plans": 1
+        })
+    );
+}
+
+#[tokio::test]
+async fn the_replacement_to_do_counts_a_plan_compared_only_in_part() {
+    let app = App::new().await;
+    // An SRT beside the video with the new ASS's very dialogue: nothing
+    // differs in what was compared, but the ASS's styles and fonts were not.
+    let mut srt = String::new();
+    for i in 0..24 {
+        srt += &format!(
+            "{}\n00:00:{:02},000 --> 00:00:{:02},500\n가짜 자막 Show-02v2 {}\n\n",
+            i + 1,
+            i * 2,
+            i * 2 + 1,
+            i + 1
+        );
+    }
+    std::fs::write(app.at("Season 01/Show S01E02.srt"), srt).unwrap();
+    app.job("c1", "에루샤", "/ok/Show-02v2").await;
+
+    let (_, todo) = app.call(Method::GET, "/api/todo", None).await;
+
+    assert_eq!(
+        todo["needs"][0]["changes"],
+        json!({
+            "added": 0, "changed": 0, "removed": 0, "timing": 0, "styles": 0, "fonts": 0,
+            "uncompared": 0, "partial": 1, "plans": 1
+        })
+    );
+}

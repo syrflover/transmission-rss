@@ -43,6 +43,18 @@ export function versionFacts(version: ReplacementVersion, now: number = Date.now
   return facts;
 }
 
+/**
+ * The two version lines' files, their dialogue lines counted as the content comparison read them when it was made:
+ * the plan's own count only sees a format's markers (an SMI's empty `<SYNC>` ends a line without being one), and the
+ * card would otherwise say one number above the comparison's tags and another inside them.
+ */
+export function shownVersions(r: Replacement): { current: ReplacementVersion | null; new: ReplacementVersion | null } {
+  const compared = r.comparison?.state === "compared" ? r.comparison : null;
+  const counted = (version: ReplacementVersion | null, cues: number | undefined) =>
+    version === null || cues === undefined ? version : { ...version, lines: cues };
+  return { current: counted(r.current, compared?.current.cues), new: counted(r.new, compared?.new.cues) };
+}
+
 /** One row of the side-by-side comparison: a name and the two files' values. A `null` link has no post. */
 export interface CompareRow {
   name: string;
@@ -137,7 +149,8 @@ export function limitNotices(r: Replacement): Notice[] {
         path: null,
         text: "현재 파일을 누가 만들었는지 몰라서 두 자막의 출처를 견줄 수 없어요.",
       });
-    } else if (limit === "lines_unknown") {
+    } else if (limit === "lines_unknown" && r.comparison?.state !== "compared") {
+      // A comparison that was made read every line; its counts stand in the version lines.
       out.push({
         key: limit,
         title: "대사 수를 읽지 못함",

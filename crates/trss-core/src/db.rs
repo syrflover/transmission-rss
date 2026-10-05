@@ -171,6 +171,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("../migrations/jobs/cleanup.sql")),
     // 56: a Google Drive font not received again because its size and Last-Modified did not change: the font its receipt uses
     Migration::Sql(include_str!("../migrations/jobs/unchanged_fonts.sql")),
+    // 57: what differs between a replacement plan's current subtitle and the new one, kept with the plan
+    Migration::Sql(include_str!("../migrations/jobs/replacement_diffs.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]

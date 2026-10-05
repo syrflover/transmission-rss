@@ -39,11 +39,28 @@
 //!   `current` and `new` (received or changed time, size, dialogue lines,
 //!   creator, format, post, encoding, whether the app manages it, its path,
 //!   and the current one's stored file), `side_by_side` (the creator, format
-//!   or post differs, or the current file's source is not known), `paths`
+//!   or post differs, or the current file's source is not known), `comparison`
+//!   (what differs between the two files' contents, made with the plan; see
+//!   below), `paths`
 //!   (each path beside the video with its `action`, `add`, `replace`,
 //!   `remove` or `keep`, and a `warning` for a change the person may not
 //!   expect: `overwrite_unmanaged`, `remove_applied`) and `limits`
 //!   (`unknown_source`, `lines_unknown`, only those that hold).
+//!
+//!   `comparison` is `null` for a plan made before the app compared
+//!   contents, `{ "state": "unreadable", "reason" }` when it could not be made
+//!   (a file whose content cannot be read, one too large, or a current file
+//!   changed meanwhile), else `{ "state": "compared" }` with `current` and
+//!   `new` (`format`, `encoding`, `cues`), `dialogue` (`added`, `changed`,
+//!   `removed`), `timing` (`count`), `styles` and `fonts` (`null` when they
+//!   cannot be compared) and `not_compared` (`item`, `reason`). It has no
+//!   dialogue or timing lines, as the detail is polled.
+//! - `GET /api/subtitle-jobs/{id}/replacements/{plan}/lines` the lines of a
+//!   `compared` comparison: `{ "dialogue": [{ "kind": "added" | "changed" |
+//!   "removed", "class"?, "old"?, "new"? }], "timing": [{ "text", "class"?,
+//!   "old", "new" }] }` with `old` and `new` as `{ "text", "start", "end" }`
+//!   (`start` and `end` only in timing), in milliseconds. `404` when the plan
+//!   is not the job's or has no `compared` comparison.
 //! - `POST /api/subtitle-jobs/{id}/replacements/{plan}` `{ "version",
 //!   "decision": "replace" | "keep" }` a person's decision on the plan
 //!   (`새 자막으로 교체`, `현재 유지`): `200` `{ "state": "approved" | "kept" }`
@@ -163,6 +180,10 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/subtitle-jobs/{id}/replacements/{plan}",
             post(replacement::decide),
+        )
+        .route(
+            "/subtitle-jobs/{id}/replacements/{plan}/lines",
+            get(replacement::lines),
         )
         .route("/subtitle-jobs/{id}/placement", post(placement::confirm))
 }

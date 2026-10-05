@@ -20,6 +20,10 @@
 //! it), an episode whose paths another effect under way is changing, and one
 //! with two files to take off whose names differ in case only.
 //!
+//! The plan keeps what differs between its current subtitle ([`records::Plan::current`])
+//! and the new one, made with it ([`diff`]): the worker reads both files, never
+//! a web request.
+//!
 //! The person keeps the current subtitle (the row is stored only) or
 //! approves the plan ([`records::decide`]); either puts the job waiting for
 //! it back in line, and a job running meanwhile goes back in line as its run
@@ -72,6 +76,7 @@
 //! | a `done` plan | | step 6 |
 //! | anything else | | the plan, its effects and its row are held; every file stays |
 
+pub mod diff;
 pub mod lines;
 pub mod records;
 
@@ -99,7 +104,7 @@ use crate::{
     },
     store::JobError,
 };
-use records::{Claimed, FileSeen, Imported, Plan, PlanPath, VideoSeen};
+use records::{Claimed, Compared, Comparison, FileSeen, Imported, Plan, PlanPath, VideoSeen};
 
 /// The reason a plan goes stale for a newer revision (`새 수정본 발견`).
 pub const NEW_REVISION: &str = "같은 출처의 새 수정본이 들어왔어요";
@@ -388,9 +393,9 @@ impl Placer {
             Ok::<_, io::Error>((facts, bytes))
         })
         .await;
-        let asset_lines = match read {
+        let (asset_lines, asset_bytes) = match read {
             Ok(((n, sha, _), bytes)) if n == asset.size && sha == asset.sha256 => {
-                lines::count(&bytes, ext)
+                (lines::count(&bytes, ext), bytes)
             }
             _ => {
                 let reason = "보관본이 기록과 달라 비교하지 못했어요".to_owned();
@@ -487,15 +492,12 @@ impl Placer {
             decided_at: None,
             paths,
         };
+        let comparison = self.comparison(&plan, folder, asset_bytes, ext).await;
         let now = self.now();
         let p = plan.clone();
-        self.write(move |c| records::make_plan(c, &p, AWAITING_APPROVAL, now))
+        self.write(move |c| records::make_plan(c, &p, comparison, AWAITING_APPROVAL, now))
             .await?;
-        let current = plan
-            .paths
-            .iter()
-            .find(|p| p.file.is_some())
-            .map(|p| p.path.clone());
+        let current = plan.current().map(|(path, _)| path.path.clone());
         self.event(
             &row.job_id,
             format!("{label}: {AWAITING_APPROVAL}"),
@@ -503,6 +505,30 @@ impl Placer {
         )
         .await?;
         Ok(true)
+    }
+
+    /// What differs between the plan's current subtitle and the new one
+    /// (`new`, an `ext` file), made off the async runtime.
+    async fn comparison(
+        &self,
+        plan: &Plan,
+        folder: &str,
+        new: Vec<u8>,
+        ext: &'static str,
+    ) -> Comparison {
+        let Some((path, seen)) = plan.current() else {
+            return Comparison {
+                path: plan.target.clone(),
+                result: Compared::Unreadable("현재 자막을 찾지 못했어요".to_owned()),
+            };
+        };
+        let at = files::within(Path::new(folder), &path.path);
+        let seen = seen.clone();
+        let result = blocking(move || diff::compare_files(&at, &seen, &new, ext)).await;
+        Comparison {
+            path: path.path.clone(),
+            result,
+        }
     }
 
     /// Why the plan's evidence no longer holds, if it does not: the work

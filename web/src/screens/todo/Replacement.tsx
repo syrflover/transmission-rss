@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { Fragment, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { refreshTodoCount } from "@/app/todo-count";
@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import { btnNeutral, btnPrimary } from "../collect/channels/styles";
 import { decideReplacement, fetchJob, type JobDetail, type Replacement } from "./api";
 import { Badge, Tag } from "./badges";
+import { ChangesSection } from "./Changes";
 import { WarningIcon } from "./icons";
 import { KEYS } from "./poll";
 import {
@@ -23,6 +24,7 @@ import {
   planEpisode,
   postLabel,
   stateLine,
+  shownVersions,
   versionFacts,
   type CompareRow,
   type Notice,
@@ -85,8 +87,8 @@ function useDecision(jobId: string) {
 
 /**
  * The job's replacements under its head: a decision card for each plan to decide, with the warnings and limits that
- * hold under it, then one short line for each plan that is not (or no longer) to decide. The cards are children of
- * the page itself so the first one can follow the page's top on a computer.
+ * hold under it and its `변경 사항`, then one short line for each plan that is not (or no longer) to decide. The cards
+ * are children of the page itself so the first one can follow the page's top on a computer.
  */
 export function ReplacementDecisions({ job }: { job: JobDetail }) {
   const { sending, problem, decide } = useDecision(job.id);
@@ -102,16 +104,18 @@ export function ReplacementDecisions({ job }: { job: JobDetail }) {
       {open.map((r, i) => {
         const notices = [...pathWarnings(r.paths), ...limitNotices(r)];
         return (
-          <DecisionCard
-            key={r.plan_id}
-            r={r}
-            many={many}
-            layout={cardLayout(open.length, i)}
-            sending={sending !== null}
-            problem={problem?.plan === r.plan_id ? problem.text : null}
-            onDecide={(decision) => void decide(r, decision)}
-            notices={notices}
-          />
+          <Fragment key={r.plan_id}>
+            <DecisionCard
+              r={r}
+              many={many}
+              layout={cardLayout(open.length, i)}
+              sending={sending !== null}
+              problem={problem?.plan === r.plan_id ? problem.text : null}
+              onDecide={(decision) => void decide(r, decision)}
+              notices={notices}
+            />
+            <ChangesSection jobId={job.id} r={r} many={many} />
+          </Fragment>
         );
       })}
       {lines.length > 0 && (
@@ -156,6 +160,7 @@ function DecisionCard({
 }) {
   const again = againNotice(r);
   const rows = compareRows(r);
+  const shown = shownVersions(r);
   return (
     <>
       <section
@@ -181,8 +186,8 @@ function DecisionCard({
               </div>
             )}
             <dl className="m-0 flex flex-col gap-1.5">
-              {r.current !== null && <VersionLine name="현재" facts={versionFacts(r.current)} />}
-              {r.new !== null && <VersionLine name="새 자막" facts={versionFacts(r.new)} />}
+              {shown.current !== null && <VersionLine name="현재" facts={versionFacts(shown.current)} />}
+              {shown.new !== null && <VersionLine name="새 자막" facts={versionFacts(shown.new)} />}
             </dl>
             {rows.length > 0 && <Compare rows={rows} />}
           </div>

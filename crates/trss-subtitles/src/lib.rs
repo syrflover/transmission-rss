@@ -25,6 +25,9 @@
 //! that lets a job run from start to end in tests and in the development
 //! environment.
 //!
+//! [`compare`] reads two subtitle files and says what differs between them
+//! (dialogue, timing, styles, fonts), for the approval of a replacement.
+//!
 //! No value here keeps a cookie, a token or a signed download address where it
 //! could be stored, logged or shown: a [`PostFile::key`] names a file within
 //! its post in words that stay the same from one reading to the next, and the
@@ -36,6 +39,7 @@
 
 pub mod auth;
 pub mod blogger;
+pub mod compare;
 pub mod drive;
 pub mod episode;
 pub mod erulabo;

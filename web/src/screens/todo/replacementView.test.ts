@@ -12,6 +12,7 @@ import {
   pathWarnings,
   postLabel,
   stateLine,
+  shownVersions,
   versionFacts,
   waitingPositions,
 } from "./replacementView.ts";
@@ -48,6 +49,7 @@ const plan = (over: Partial<Replacement> = {}): Replacement => ({
   side_by_side: false,
   paths: [{ path: "/v/01.ass", action: "replace", managed: true, warning: null }],
   limits: [],
+  comparison: null,
   ...over,
 });
 
@@ -218,4 +220,33 @@ test("a done plan says what it did, and the stored copy it names is the previous
 test("a post's link text drops the scheme and a trailing slash", () => {
   assert.equal(postLabel("https://blog.example/post/1/"), "blog.example/post/1");
   assert.equal(postLabel("http://x.test"), "x.test");
+});
+
+test("the version lines count the dialogue as the content comparison read it, when one was made", () => {
+  const compared: Replacement = plan({
+    current: version({ lines: 493 }),
+    new: version({ lines: 24 }),
+    limits: ["lines_unknown"],
+    comparison: {
+      state: "compared",
+      current: { format: "SMI", encoding: "UTF-8", cues: 327 },
+      new: { format: "ASS", encoding: "UTF-8", cues: 24 },
+      dialogue: { added: 0, changed: 0, removed: 303 },
+      timing: { count: 0 },
+      styles: null,
+      fonts: null,
+      not_compared: [],
+    },
+  });
+  const shown = shownVersions(compared);
+  assert.equal(shown.current?.lines, 327);
+  assert.equal(shown.new?.lines, 24);
+  // Its counts stand: no warning that a count could not be read.
+  assert.deepEqual(limitNotices(compared), []);
+
+  const before = plan({ current: version({ lines: 493 }), comparison: null });
+  assert.equal(shownVersions(before).current?.lines, 493);
+  const unreadable = plan({ current: version({ lines: null }), comparison: { state: "unreadable", reason: "까닭" } });
+  assert.equal(shownVersions(unreadable).current?.lines, null);
+  assert.equal(limitNotices({ ...unreadable, limits: ["lines_unknown"] }).length, 1);
 });

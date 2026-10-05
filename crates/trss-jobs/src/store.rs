@@ -607,6 +607,25 @@ impl JobStore {
             .await
     }
 
+    /// The lines of the difference a replacement plan of the job was made
+    /// with, as JSON text (`{"dialogue": [...], "timing": [...]}`, see
+    /// [`crate::place::replace::records::comparison_lines`]); `None` when
+    /// the plan is not the job's or its contents were not compared.
+    pub async fn replacement_lines(
+        &self,
+        job_id: &str,
+        plan_id: &str,
+    ) -> Result<Option<String>, JobError> {
+        let (job, plan) = (job_id.to_owned(), plan_id.to_owned());
+        self.db
+            .run(move |c| {
+                Ok(crate::place::replace::records::comparison_lines(
+                    c, &job, &plan,
+                )?)
+            })
+            .await
+    }
+
     /// A person's decision on a replacement plan
     /// ([`crate::place::replace::records::decide`]).
     pub async fn decide_replacement(

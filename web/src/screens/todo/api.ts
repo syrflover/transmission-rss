@@ -1,7 +1,7 @@
 import { api } from "@/lib/api";
 
 import type { ConfirmView, Placement, PlacementChoice } from "./placementTypes";
-import type { Replacement } from "./replacementTypes";
+import type { Replacement, ReplacementChanges, ReplacementLines } from "./replacementTypes";
 
 export type {
   ConfirmEpisode,
@@ -11,10 +11,15 @@ export type {
   PlacementOutcome,
 } from "./placementTypes";
 export type {
+  Comparison,
+  DialogueLine,
   Replacement,
+  ReplacementChanges,
+  ReplacementLines,
   ReplacementPath,
   ReplacementState,
   ReplacementVersion,
+  TimingLine,
 } from "./replacementTypes";
 
 /**
@@ -136,8 +141,8 @@ export interface PlacementCheckTodo {
 
 /**
  * `교체 승인`: subtitle jobs of one work wait for a person to approve or refuse replacing the subtitle an episode
- * already has. One to-do per work (per job when it has no work); it opens the oldest such job. It names no reason: the
- * change summary tags of the spec come with the content comparison.
+ * already has. One to-do per work (per job when it has no work); it opens the oldest such job. Its reason line is the
+ * number tags of `changes` (`changes.ts`, `todoTags`).
  */
 export interface ReplacementTodo {
   kind: "replacement";
@@ -154,6 +159,8 @@ export interface ReplacementTodo {
   job_id: string;
   /** How many jobs of the work wait for a decision. */
   jobs: number;
+  /** What the open plans counted in `episodes` change, summed. */
+  changes: ReplacementChanges;
 }
 
 export type Todo = AuthTodo | ReceiveFailedTodo | ReplacementTodo | EpisodeCheckTodo | PlacementCheckTodo;
@@ -558,6 +565,17 @@ export function decideReplacement(
   return api<{ state: "approved" | "kept" }>(
     `/subtitle-jobs/${encodeURIComponent(jobId)}/replacements/${encodeURIComponent(planId)}`,
     { method: "POST", body: { version, decision }, signal },
+  );
+}
+
+/**
+ * The dialogue and timing lines of a plan's comparison. Read when a person first opens 대사 or 타이밍, not with the
+ * job: a whole-file change can be hundreds of KB. `not_found` for a plan that is not this job's or was not compared.
+ */
+export function fetchReplacementLines(jobId: string, planId: string, signal?: AbortSignal): Promise<ReplacementLines> {
+  return api<ReplacementLines>(
+    `/subtitle-jobs/${encodeURIComponent(jobId)}/replacements/${encodeURIComponent(planId)}/lines`,
+    { signal },
   );
 }
 

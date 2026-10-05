@@ -3038,6 +3038,7 @@ dependencies = [
 name = "trss-jobs"
 version = "0.1.0"
 dependencies = [
+ "encoding_rs",
  "reqwest 0.13.5",
  "rusqlite",
  "serde_json",
@@ -3097,10 +3098,12 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "bytes",
+ "encoding_rs",
  "futures",
  "percent-encoding",
  "reqwest 0.13.5",
  "scraper",
+ "serde",
  "serde_json",
  "sha2",
  "tempfile",

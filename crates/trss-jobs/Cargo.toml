@@ -36,3 +36,5 @@ tempfile.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs", "io-util", "time"] }
 # The archives the child process of `tests/extract_process.rs` unpacks.
 zip.workspace = true
+# Encodes the CP949 subtitles the comparison tests read (`tests/replace.rs`).
+encoding_rs.workspace = true

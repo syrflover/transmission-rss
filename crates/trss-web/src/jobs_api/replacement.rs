@@ -4,6 +4,8 @@
 
 use axum::{
     extract::{Path, State},
+    http::{header::CONTENT_TYPE, HeaderValue},
+    response::{IntoResponse, Response},
     Json,
 };
 use serde::{Deserialize, Serialize};
@@ -12,7 +14,10 @@ use serde_json::json;
 use trss_jobs::{
     model::{PathAction, PlanState},
     place::replace::{
-        records::{Decided, PlanPath, PlanView, StoredFacts},
+        records::{
+            Compared, Comparison, Decided, Diff, Encoding, NotCompared, PlanPath, PlanView, Side,
+            StoredFacts,
+        },
         NEW_REVISION,
     },
 };
@@ -69,6 +74,138 @@ pub(super) struct AgainView {
     new_revision: bool,
 }
 
+/// What differs between the current subtitle and the new one, as the plan
+/// was made with it. Without the dialogue and timing lines: the detail is
+/// polled, and a whole file's change is large (`lines`).
+#[derive(Debug, Serialize)]
+#[serde(tag = "state", rename_all = "lowercase")]
+pub(super) enum ComparisonView {
+    /// The contents were not compared: why. Never shown as no difference.
+    Unreadable {
+        reason: String,
+    },
+    Compared(Box<ComparedView>),
+}
+
+/// The counts of a difference.
+#[derive(Debug, Serialize)]
+pub(super) struct ComparedView {
+    current: SideView,
+    new: SideView,
+    dialogue: DialogueView,
+    timing: TimingView,
+    /// `null` when the styles cannot be compared (`not_compared`).
+    styles: Option<StylesView>,
+    /// `null` when the fonts cannot be compared (`not_compared`).
+    fonts: Option<FontsView>,
+    /// What was not compared between two readable files, and why.
+    not_compared: Vec<NotCompared>,
+}
+
+/// What was read of one subtitle.
+#[derive(Debug, Serialize)]
+pub(super) struct SideView {
+    /// `ASS`, `SRT`, `WebVTT` or `SMI`.
+    format: &'static str,
+    /// `UTF-8`, `UTF-16` or `CP949`.
+    encoding: Encoding,
+    cues: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct DialogueView {
+    added: u64,
+    changed: u64,
+    removed: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct TimingView {
+    count: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct StylesView {
+    added: Vec<String>,
+    removed: Vec<String>,
+    changed: Vec<StyleChangeView>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct StyleChangeView {
+    name: String,
+    fields: Vec<FieldChangeView>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct FieldChangeView {
+    field: String,
+    old: String,
+    new: String,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct FontsView {
+    added: Vec<String>,
+    removed: Vec<String>,
+}
+
+impl ComparisonView {
+    fn of(comparison: &Comparison) -> Self {
+        match &comparison.result {
+            Compared::Unreadable(reason) => Self::Unreadable {
+                reason: reason.clone(),
+            },
+            Compared::Diff(diff) => Self::of_diff(diff),
+        }
+    }
+
+    fn of_diff(diff: &Diff) -> Self {
+        let side = |s: &Side| SideView {
+            format: s.format.label(),
+            encoding: s.encoding,
+            cues: s.cues,
+        };
+        Self::Compared(Box::new(ComparedView {
+            current: side(&diff.old),
+            new: side(&diff.new),
+            dialogue: DialogueView {
+                added: diff.dialogue.added,
+                changed: diff.dialogue.changed,
+                removed: diff.dialogue.removed,
+            },
+            timing: TimingView {
+                count: diff.timing.count,
+            },
+            styles: diff.styles.as_ref().map(|s| StylesView {
+                added: s.added.clone(),
+                removed: s.removed.clone(),
+                changed: s
+                    .changed
+                    .iter()
+                    .map(|c| StyleChangeView {
+                        name: c.name.clone(),
+                        fields: c
+                            .fields
+                            .iter()
+                            .map(|f| FieldChangeView {
+                                field: f.field.clone(),
+                                old: f.old.clone(),
+                                new: f.new.clone(),
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+            }),
+            fonts: diff.fonts.as_ref().map(|f| FontsView {
+                added: f.added.clone(),
+                removed: f.removed.clone(),
+            }),
+            not_compared: diff.not_compared.clone(),
+        }))
+    }
+}
+
 /// A row's latest replacement plan.
 #[derive(Debug, Serialize)]
 pub(super) struct ReplacementView {
@@ -94,6 +231,9 @@ pub(super) struct ReplacementView {
     /// Whether the two files' facts are shown side by side: the creator,
     /// format or post differs, or the current file's source is not known.
     side_by_side: bool,
+    /// What differs between `current` and `new`: `null` for a plan made
+    /// before the app compared contents.
+    comparison: Option<ComparisonView>,
     paths: Vec<PathView>,
     /// The limits of the comparison that hold: `unknown_source` (the
     /// current file is not the app's), `lines_unknown` (a file's lines
@@ -123,13 +263,9 @@ fn view(v: &PlanView) -> ReplacementView {
             .find(|(p, _)| *p == path.path)
             .map(|(_, facts)| facts)
     };
-    let shown = [PathAction::Replace, PathAction::Remove, PathAction::Keep]
-        .into_iter()
-        .find_map(|action| plan.paths.iter().find(|p| p.action == action));
-    let current = shown.and_then(|path| {
-        let file = path.file.as_ref()?;
+    let current = plan.current().map(|(path, file)| {
         let facts = facts_of(path);
-        Some(VersionView {
+        VersionView {
             received_at: facts.map(|f| f.received_at),
             changed_at: facts.is_none().then_some(file.mtime / 1_000_000),
             size: file.size,
@@ -143,7 +279,7 @@ fn view(v: &PlanView) -> ReplacementView {
             managed: path.applied_id.is_some(),
             path: full(&path.path),
             stored: facts.map(|f| full(&f.asset_path)),
-        })
+        }
     });
     let new = v.new.as_ref().map(|f: &StoredFacts| VersionView {
         received_at: Some(f.received_at),
@@ -189,6 +325,7 @@ fn view(v: &PlanView) -> ReplacementView {
         current,
         new,
         side_by_side,
+        comparison: v.comparison.as_ref().map(ComparisonView::of),
         paths: plan
             .paths
             .iter()
@@ -216,6 +353,31 @@ fn format_of(path: &str) -> Option<&'static str> {
         "smi" | "sami" => "smi",
         _ => "other",
     })
+}
+
+/// `GET /api/subtitle-jobs/{id}/replacements/{plan}/lines`: the dialogue and
+/// timing lines of the difference the plan was made with, as the comparison
+/// engine writes them (times in milliseconds). `404` when the plan is not
+/// the job's or its contents were not compared. The stored text is sent
+/// as it is: a rewritten file's lines are large, and the web's memory is
+/// small.
+pub(super) async fn lines(
+    State(state): State<AppState>,
+    Path((id, plan)): Path<(String, String)>,
+) -> Result<Response, ApiError> {
+    match state
+        .jobs
+        .replacement_lines(&id, &plan)
+        .await
+        .map_err(|e| internal(&e))?
+    {
+        Some(json) => Ok((
+            [(CONTENT_TYPE, HeaderValue::from_static("application/json"))],
+            json,
+        )
+            .into_response()),
+        None => Err(ApiError::not_found("비교한 줄을 찾지 못했어요.")),
+    }
 }
 
 #[derive(Debug, Deserialize)]

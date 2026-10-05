@@ -5,6 +5,8 @@
 
 use rusqlite::{params, Connection, OptionalExtension, Row, TransactionBehavior};
 use trss_core::Millis;
+// What the screens read of a comparison.
+pub use trss_subtitles::compare::{Diff, Encoding, Format, Item, NotCompared, Side};
 
 use crate::{
     model::{EffectState, PathAction, PlanState, SubtitleFormat},
@@ -92,7 +94,46 @@ impl Plan {
     pub fn path(&self, path: &str) -> Option<&PlanPath> {
         self.paths.iter().find(|p| p.path == path)
     }
+
+    /// The subtitle the episode has now, the one a person compares the new
+    /// one with: the file the new copy replaces, else the first applied copy
+    /// it removes, else the first file it keeps beside the video; with the
+    /// file as the plan saw it. A plan has one whenever it was made, as a
+    /// plan exists only for an episode that has a subtitle.
+    pub fn current(&self) -> Option<(&PlanPath, &FileSeen)> {
+        [PathAction::Replace, PathAction::Remove, PathAction::Keep]
+            .into_iter()
+            .find_map(|action| {
+                self.paths
+                    .iter()
+                    .filter(|p| p.action == action)
+                    .find_map(|p| Some((p, p.file.as_ref()?)))
+            })
+    }
 }
+
+/// What comparing the current subtitle of a plan with the new one came to
+/// (`subtitle_replacement_diffs`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Comparison {
+    /// The current file compared, as in the plan's paths.
+    pub path: String,
+    pub result: Compared,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Compared {
+    /// What differs. Read from the records, it has no dialogue or timing
+    /// lines in it (they are apart, [`comparison_lines`]); its counts are
+    /// whole.
+    Diff(Box<Diff>),
+    /// Why the contents were not compared, in Korean for the screen: never
+    /// shown as no difference.
+    Unreadable(String),
+}
+
+/// What a comparison whose stored summary cannot be read now says.
+const UNSTORED: &str = "저장된 비교를 읽지 못했어요";
 
 const PLAN_COLUMNS: &str = "id, job_id, position, version, state, reason, work_id, season, \
      episode, assignment, basis, folder, video_path, video_object, video_size, video_mtime, \
@@ -228,14 +269,17 @@ pub fn live_counts(c: &Connection, job_id: &str) -> rusqlite::Result<(usize, usi
     )
 }
 
-/// Records a new plan for its row, the next version, `open`, with a note on
-/// the row; returns its version. One synced transaction.
+/// Records a new plan for its row, the next version, `open`, with its
+/// `comparison` and a note on the row; returns its version. One synced
+/// transaction.
 pub fn make_plan(
     c: &mut Connection,
     plan: &Plan,
+    comparison: Comparison,
     note: &str,
     now: Millis,
 ) -> Result<i64, JobError> {
+    let stored = Stored::of(comparison)?;
     durable(c, |c| {
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let version: i64 = tx.query_row(
@@ -294,6 +338,17 @@ pub fn make_plan(
                 ],
             )?;
         }
+        tx.execute(
+            "INSERT INTO subtitle_replacement_diffs (plan_id, path, diff, lines, unreadable)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                plan.id,
+                stored.path,
+                stored.diff,
+                stored.lines,
+                stored.unreadable
+            ],
+        )?;
         // The row waits for the person: whatever it came to before (the
         // video it waited for, say) is over.
         tx.execute(
@@ -304,6 +359,87 @@ pub fn make_plan(
         tx.commit()?;
         Ok(version)
     })
+}
+
+/// A comparison as its table keeps it.
+struct Stored {
+    path: String,
+    diff: Option<String>,
+    lines: Option<String>,
+    unreadable: Option<String>,
+}
+
+impl Stored {
+    /// The counts and the lines apart: reading a job's detail never reads a
+    /// whole file's change.
+    fn of(comparison: Comparison) -> Result<Self, JobError> {
+        let json = |e: serde_json::Error| JobError::Other(format!("비교를 저장하지 못했어요: {e}"));
+        let Comparison { path, result } = comparison;
+        Ok(match result {
+            Compared::Unreadable(reason) => Self {
+                path,
+                diff: None,
+                lines: None,
+                unreadable: Some(reason),
+            },
+            Compared::Diff(mut diff) => {
+                let dialogue = std::mem::take(&mut diff.dialogue.lines);
+                let timing = std::mem::take(&mut diff.timing.lines);
+                let lines = format!(
+                    "{{\"dialogue\":{},\"timing\":{}}}",
+                    serde_json::to_string(&dialogue).map_err(json)?,
+                    serde_json::to_string(&timing).map_err(json)?
+                );
+                Self {
+                    path,
+                    diff: Some(serde_json::to_string(&*diff).map_err(json)?),
+                    lines: Some(lines),
+                    unreadable: None,
+                }
+            }
+        })
+    }
+}
+
+/// The comparison of the plan, without the lines of a difference, if the plan
+/// was made with one.
+pub fn comparison(c: &Connection, plan_id: &str) -> rusqlite::Result<Option<Comparison>> {
+    let found: Option<(String, Option<String>, Option<String>)> = c
+        .query_row(
+            "SELECT path, diff, unreadable FROM subtitle_replacement_diffs WHERE plan_id = ?1",
+            [plan_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()?;
+    Ok(found.map(|(path, diff, unreadable)| Comparison {
+        path,
+        result: match (diff, unreadable) {
+            (Some(json), _) => match serde_json::from_str::<Diff>(&json) {
+                Ok(diff) => Compared::Diff(Box::new(diff)),
+                Err(_) => Compared::Unreadable(UNSTORED.to_owned()),
+            },
+            (None, reason) => Compared::Unreadable(reason.unwrap_or_else(|| UNSTORED.to_owned())),
+        },
+    }))
+}
+
+/// The lines of the plan's difference as JSON text, `{"dialogue": [...],
+/// "timing": [...]}` as the engine writes them: `None` unless the plan is
+/// the job's and its comparison was made. The text is not parsed, as a
+/// rewritten file's lines are large.
+pub fn comparison_lines(
+    c: &Connection,
+    job_id: &str,
+    plan_id: &str,
+) -> rusqlite::Result<Option<String>> {
+    c.query_row(
+        "SELECT d.lines FROM subtitle_replacement_diffs d
+           JOIN subtitle_replacements r ON r.id = d.plan_id
+          WHERE r.id = ?1 AND r.job_id = ?2 AND d.lines IS NOT NULL",
+        params![plan_id, job_id],
+        |r| r.get(0),
+    )
+    .optional()
 }
 
 /// Moves the plan from `from` to `to` with the reason; whether it was at
@@ -790,6 +926,10 @@ pub struct PlanView {
     pub new: Option<StoredFacts>,
     /// For each path of an applied copy: what it is a copy of.
     pub applied: Vec<(String, StoredFacts)>,
+    /// What differs between the current subtitle and the new one, without
+    /// the lines ([`comparison_lines`]); `None` for a plan made before the
+    /// app compared contents.
+    pub comparison: Option<Comparison>,
 }
 
 /// The latest plan of each row of the job, for its detail.
@@ -809,11 +949,13 @@ pub fn views(c: &Connection, job_id: &str) -> rusqlite::Result<Vec<PlanView>> {
                 }
             }
         }
+        let comparison = comparison(c, &plan.id)?;
         views.push(PlanView {
             plan,
             previous,
             new,
             applied,
+            comparison,
         });
     }
     Ok(views)

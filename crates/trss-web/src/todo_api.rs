@@ -49,7 +49,16 @@
 //!   ([`trss_jobs::place::replace`]), one to-do per work (per job when it
 //!   has no work). `at` is since when its oldest job waits, `job_id` that job
 //!   (its detail is where the person compares, `비교`), `episodes` the
-//!   episodes whose plan waits, `jobs` how many jobs wait.
+//!   episodes whose plan waits, `jobs` how many jobs wait, and `changes`,
+//!   what the open plans change, summed: `added`, `changed` and `removed`
+//!   dialogue lines, `timing` lines, `styles` (added, removed and changed),
+//!   `fonts` (added and removed) and `uncompared`, how many open plans have
+//!   no comparison of their contents (made before the app compared them, or
+//!   not readable), which the other numbers leave out, `partial`, how many
+//!   compared plans left a part out (a language of the dialogue with no
+//!   counterpart, or the styles and fonts of an ASS set against another
+//!   format), and `plans`, how many open plans were summed (`uncompared` and
+//!   `partial` of them among them).
 //!
 //! `auth` comes before `receive_failed`, that before `replacement`, and that
 //! before `episode_check` and `placement_check`, each newest first. Failed subtitle
@@ -148,7 +157,11 @@ use trss_collect::{
         revisions::{Revision, RevisionState},
     },
 };
-use trss_jobs::{model::PlanState, ItemState, Wait};
+use trss_jobs::{
+    model::PlanState,
+    place::replace::records::{Compared, Comparison, Format, Item},
+    ItemState, Wait,
+};
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -536,7 +549,64 @@ pub enum Todo {
         creator: Option<String>,
         job_id: String,
         jobs: usize,
+        changes: Changes,
     },
+}
+
+/// What the open plans of a `교체 승인` to-do change, summed: the card's
+/// reason line.
+#[derive(Debug, Default, Serialize, PartialEq)]
+pub struct Changes {
+    /// Dialogue lines.
+    added: u64,
+    changed: u64,
+    removed: u64,
+    /// Lines whose timing moved.
+    timing: u64,
+    /// Styles added, removed and changed.
+    styles: u64,
+    /// Fonts added and removed.
+    fonts: u64,
+    /// Plans whose contents were not compared (made before the app compared
+    /// them, or not readable): what they change is not in the numbers above.
+    uncompared: u64,
+    /// Compared plans that left a part out: a language of the dialogue with
+    /// no counterpart, or the styles and fonts of an ASS set against another
+    /// format. Two files with no styles at all leave nothing out.
+    partial: u64,
+    /// The open plans summed, `uncompared` and `partial` of them among them.
+    plans: u64,
+}
+
+impl Changes {
+    fn add(&mut self, comparison: Option<&Comparison>) {
+        self.plans += 1;
+        let Some(Comparison {
+            result: Compared::Diff(diff),
+            ..
+        }) = comparison
+        else {
+            self.uncompared += 1;
+            return;
+        };
+        self.added += diff.dialogue.added;
+        self.changed += diff.dialogue.changed;
+        self.removed += diff.dialogue.removed;
+        self.timing += diff.timing.count;
+        if let Some(styles) = &diff.styles {
+            self.styles +=
+                (styles.added.len() + styles.removed.len() + styles.changed.len()) as u64;
+        }
+        if let Some(fonts) = &diff.fonts {
+            self.fonts += (fonts.added.len() + fonts.removed.len()) as u64;
+        }
+        let ass = diff.old.format == Format::Ass || diff.new.format == Format::Ass;
+        let left_out = diff.not_compared.iter().any(|n| n.item == Item::Dialogue)
+            || (ass && (diff.styles.is_none() || diff.fonts.is_none()));
+        if left_out {
+            self.partial += 1;
+        }
+    }
 }
 
 impl Todo {
@@ -667,6 +737,7 @@ async fn replacement_todos(state: &AppState) -> Result<Vec<Todo>, ApiError> {
     for (key, rows) in groups {
         let oldest = rows[0];
         let mut episodes = Vec::new();
+        let mut changes = Changes::default();
         for row in &rows {
             let plans = state
                 .jobs
@@ -675,9 +746,13 @@ async fn replacement_todos(state: &AppState) -> Result<Vec<Todo>, ApiError> {
                 .map_err(|e| internal(&e))?;
             for view in plans {
                 let plan = view.plan;
-                if plan.state == PlanState::Open && !episodes.contains(&plan.episode) {
+                if plan.state != PlanState::Open {
+                    continue;
+                }
+                if !episodes.contains(&plan.episode) {
                     episodes.push(plan.episode);
                 }
+                changes.add(view.comparison.as_ref());
             }
         }
         episodes.sort();
@@ -691,6 +766,7 @@ async fn replacement_todos(state: &AppState) -> Result<Vec<Todo>, ApiError> {
             creator: oldest.creator.clone(),
             job_id: oldest.id.clone(),
             jobs: rows.len(),
+            changes,
         });
     }
     Ok(todos)

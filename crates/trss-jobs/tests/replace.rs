@@ -17,7 +17,7 @@ use trss_core::{Clock, Db};
 use trss_jobs::{
     area::{object_of, ReceiveArea},
     model::{Outcome, PathAction, PlanState},
-    place::replace::records::{Decided, Plan, PlanView},
+    place::replace::records::{Compared, Decided, Plan, PlanView},
     place::replace::AWAITING_APPROVAL,
     store::{JobDetail, DECIDED},
     Created, JobState, JobStore, NewItem, NewJob, Runner, Wait,
@@ -1511,4 +1511,400 @@ async fn a_job_held_while_its_old_copy_is_aside_holds_the_plan_and_its_effects()
         s.store.plan(&job).await.unwrap()[0].outcome,
         Some(Outcome::Held)
     );
+}
+
+// ---- the comparison a plan is made with (ticket 0069)
+
+/// The dialogue lines of an ASS as text lines, replaced by `edit`, which gets
+/// each one's index and returns its new text (`None` drops the line).
+fn edited_ass(bytes: &[u8], edit: impl Fn(usize, &str) -> Option<String>) -> Vec<u8> {
+    let text = String::from_utf8(bytes.to_vec()).unwrap();
+    let mut index = 0;
+    let mut out = String::new();
+    for line in text.split_inclusive('\n') {
+        if line.starts_with("Dialogue:") {
+            let at = index;
+            index += 1;
+            if let Some(line) = edit(at, line) {
+                out.push_str(&line);
+            }
+        } else {
+            out.push_str(line);
+        }
+    }
+    out.into_bytes()
+}
+
+/// `current` beside the video at `path`, then the plan of the fake post `post`
+/// to replace it (or go beside it), waiting: the job and its view.
+async fn waiting_beside(s: &Setup, path: &str, current: &[u8], post: &str) -> (String, PlanView) {
+    write(s, path, current);
+    let job = make(s, "c1", CREATOR, post).await;
+    run(s).await;
+    waiting_for_approval(&detail(s, &job).await);
+    let v = view(s, &job).await;
+    (job, v)
+}
+
+/// What the plan's comparison found, the lines left out.
+fn found(v: &PlanView) -> &trss_jobs::place::replace::records::Diff {
+    match v.comparison.as_ref().map(|c| &c.result) {
+        Some(Compared::Diff(diff)) => diff,
+        other => panic!("comparison: {other:?}"),
+    }
+}
+
+/// Why the plan's comparison was not made.
+fn not_made(v: &PlanView) -> &str {
+    match v.comparison.as_ref().map(|c| &c.result) {
+        Some(Compared::Unreadable(reason)) => reason,
+        other => panic!("comparison: {other:?}"),
+    }
+}
+
+/// The stored lines of the plan's difference.
+async fn lines_of(s: &Setup, job: &str, plan: &Plan) -> Option<serde_json::Value> {
+    s.store
+        .replacement_lines(job, &plan.id)
+        .await
+        .unwrap()
+        .map(|json| serde_json::from_str(&json).unwrap())
+}
+
+#[tokio::test]
+async fn an_ass_with_two_lines_added_and_twelve_changed_is_stored_with_its_counts_and_lines() {
+    let s = setup().await;
+    let new = fake::ass("Show-02");
+    // The current file lacks the last two lines and says other things in
+    // twelve of the rest.
+    let current = edited_ass(&new, |i, line| match i {
+        22 | 23 => None,
+        2..=13 => Some(line.replace("가짜 자막", "예전 자막")),
+        _ => Some(line.to_owned()),
+    });
+    let (job, v) = waiting_beside(&s, TARGET, &current, "/ok/Show-02").await;
+
+    let diff = found(&v);
+    assert_eq!(
+        (
+            diff.dialogue.added,
+            diff.dialogue.changed,
+            diff.dialogue.removed
+        ),
+        (2, 12, 0)
+    );
+    assert_eq!((diff.old.cues, diff.new.cues), (22, 24));
+    assert_eq!(v.comparison.as_ref().unwrap().path, TARGET);
+    // The detail carries the counts only; the lines are kept apart.
+    assert!(diff.dialogue.lines.is_empty() && diff.timing.lines.is_empty());
+    let lines = lines_of(&s, &job, &v.plan).await.unwrap();
+    let dialogue = lines["dialogue"].as_array().unwrap();
+    assert_eq!(dialogue.len(), 14);
+    let kinds = |kind: &str| dialogue.iter().filter(|l| l["kind"] == kind).count();
+    assert_eq!(
+        (kinds("added"), kinds("changed"), kinds("removed")),
+        (2, 12, 0)
+    );
+    let first_changed = dialogue.iter().find(|l| l["kind"] == "changed").unwrap();
+    assert_eq!(first_changed["old"]["text"], "예전 자막 Show-02 3");
+    assert_eq!(first_changed["new"]["text"], "가짜 자막 Show-02 3");
+    assert_eq!(first_changed["new"]["start"], 4_000);
+    assert_eq!(lines["timing"], serde_json::json!([]));
+}
+
+#[tokio::test]
+async fn an_srt_with_only_its_timing_moved_has_no_dialogue_change_and_counts_its_moved_lines() {
+    let s = setup().await;
+    let new = String::from_utf8(fake::srt("Show - 02")).unwrap();
+    let mut current = new.clone();
+    for i in 0..5 {
+        let (a, b) = (i * 2, i * 2 + 1);
+        current = current.replace(
+            &format!("00:00:{a:02},000 --> 00:00:{b:02},500"),
+            &format!("00:00:{a:02},300 --> 00:00:{b:02},800"),
+        );
+    }
+    let (job, v) = waiting_beside(&s, SRT, current.as_bytes(), "/pack/Show - 02.srt").await;
+
+    let diff = found(&v);
+    assert_eq!(
+        (
+            diff.dialogue.added,
+            diff.dialogue.changed,
+            diff.dialogue.removed
+        ),
+        (0, 0, 0)
+    );
+    assert_eq!(diff.timing.count, 5);
+    assert_eq!((diff.styles.is_none(), diff.fonts.is_none()), (true, true));
+    let lines = lines_of(&s, &job, &v.plan).await.unwrap();
+    let timing = lines["timing"].as_array().unwrap();
+    assert_eq!(timing.len(), 5);
+    assert_eq!(
+        timing[0]["old"],
+        serde_json::json!({"start": 300, "end": 1800})
+    );
+    assert_eq!(
+        timing[0]["new"],
+        serde_json::json!({"start": 0, "end": 1500})
+    );
+    assert_eq!(lines["dialogue"], serde_json::json!([]));
+}
+
+#[tokio::test]
+async fn an_ass_whose_styles_font_only_changed_has_a_style_change_and_fonts_added_and_removed() {
+    let s = setup().await;
+    let current = String::from_utf8(fake::ass("Show-02"))
+        .unwrap()
+        .replace("Style: Default,Arial,", "Style: Default,Noto Sans CJK KR,");
+    let (_, v) = waiting_beside(&s, TARGET, current.as_bytes(), "/ok/Show-02").await;
+
+    let diff = found(&v);
+    assert_eq!(diff.dialogue.total(), 0);
+    let styles = diff.styles.as_ref().unwrap();
+    assert_eq!((styles.added.len(), styles.removed.len()), (0, 0));
+    assert_eq!(styles.changed.len(), 1);
+    assert_eq!(styles.changed[0].name, "Default");
+    let fields: Vec<_> = styles.changed[0]
+        .fields
+        .iter()
+        .map(|f| (f.field.as_str(), f.old.as_str(), f.new.as_str()))
+        .collect();
+    assert_eq!(fields, [("Fontname", "Noto Sans CJK KR", "Arial")]);
+    let fonts = diff.fonts.as_ref().unwrap();
+    assert_eq!(fonts.added, ["Arial"]);
+    assert_eq!(fonts.removed, ["Noto Sans CJK KR"]);
+}
+
+#[tokio::test]
+async fn a_cp949_smi_and_a_utf8_smi_of_the_same_content_do_not_differ() {
+    use trss_jobs::place::replace::records::{Encoding, Side};
+
+    let s = setup().await;
+    let text = String::from_utf8(fake::bytes_of("Show - 02.smi")).unwrap();
+    let (cp949, _, failed) = encoding_rs::EUC_KR.encode(&text);
+    assert!(!failed && cp949.as_ref() != text.as_bytes());
+    let smi = "Season 01/Show S01E02.smi";
+    let (_, v) = waiting_beside(&s, smi, &cp949, "/pack/Show - 02.smi").await;
+
+    let diff = found(&v);
+    assert_eq!(
+        (
+            diff.dialogue.added,
+            diff.dialogue.changed,
+            diff.dialogue.removed
+        ),
+        (0, 0, 0)
+    );
+    assert_eq!(diff.timing.count, 0);
+    let side = |encoding| Side {
+        format: trss_subtitles::compare::Format::Smi,
+        encoding,
+        cues: 1,
+    };
+    assert_eq!(diff.old, side(Encoding::Cp949));
+    assert_eq!(diff.new, side(Encoding::Utf8));
+}
+
+#[tokio::test]
+async fn a_current_smi_whose_encoding_is_unknown_is_not_compared_and_says_which_side() {
+    let s = setup().await;
+    let smi = "Season 01/Show S01E02.smi";
+    let current = b"<SAMI>\n<BODY>\n<SYNC Start=0><P Class=KRCC>\x80\x80\xff\n</BODY>\n</SAMI>\n";
+    let (job, v) = waiting_beside(&s, smi, current, "/pack/Show - 02.smi").await;
+
+    let reason = not_made(&v);
+    assert!(reason.starts_with("현재 자막: ") && reason.len() > "현재 자막: ".len());
+    assert_eq!(v.comparison.as_ref().unwrap().path, smi);
+    // Not made means no lines, and never a difference of nothing.
+    assert_eq!(lines_of(&s, &job, &v.plan).await, None);
+}
+
+#[tokio::test]
+async fn a_picture_subtitle_beside_the_video_is_the_current_one_and_is_not_compared() {
+    let s = setup().await;
+    let sup = "Season 01/Show S01E02.sup";
+    let (_, v) = waiting_beside(&s, sup, b"PG\x00\x01picture", "/ok/Show-02").await;
+
+    assert_eq!(
+        actions(&v.plan),
+        [(TARGET, PathAction::Add), (sup, PathAction::Keep)]
+    );
+    assert_eq!(v.plan.current().map(|(p, _)| p.path.as_str()), Some(sup));
+    assert_eq!(
+        not_made(&v),
+        "현재 자막: 이미지 자막이라 내용을 비교할 수 없어요"
+    );
+    assert_eq!(v.comparison.as_ref().unwrap().path, sup);
+}
+
+#[tokio::test]
+async fn a_current_file_over_eight_mib_is_not_compared() {
+    let s = setup().await;
+    let mut big = fake::srt("Show - 02");
+    big.resize(8 * 1024 * 1024 + 1, b'\n');
+    let (job, v) = waiting_beside(&s, SRT, &big, "/pack/Show - 02.srt").await;
+
+    assert_eq!(
+        not_made(&v),
+        "현재 자막: 파일이 커서 내용을 비교하지 않았어요"
+    );
+    assert_eq!(lines_of(&s, &job, &v.plan).await, None);
+    // The plan itself is made as for any file.
+    assert_eq!(actions(&v.plan), [(SRT, PathAction::Replace)]);
+}
+
+#[tokio::test]
+async fn a_plan_made_again_after_a_change_has_a_comparison_of_its_own() {
+    let s = setup().await;
+    let (job, plan) = revision_approved(&s).await;
+    assert!(matches!(
+        s.store.replacements(&job).await.unwrap()[0].comparison,
+        Some(trss_jobs::place::replace::records::Comparison {
+            result: Compared::Diff(_),
+            ..
+        })
+    ));
+    let mut bytes = fake::ass("Show-02");
+    let last = bytes.len() - 2;
+    bytes[last] = b'X';
+    std::fs::write(s.at(TARGET), &bytes).unwrap();
+    run(&s).await;
+
+    let v = view(&s, &job).await;
+    assert_eq!((v.plan.version, v.plan.state), (2, PlanState::Open));
+    assert_ne!(v.plan.id, plan.id);
+    assert_eq!(
+        s.count("SELECT count(*) FROM subtitle_replacement_diffs")
+            .await,
+        2
+    );
+    // The new comparison is with the file as it is now.
+    assert_eq!(found(&v).dialogue.total(), 24);
+    assert!(lines_of(&s, &job, &v.plan).await.is_some());
+    // The first plan's lines are not another job's or plan's to read.
+    assert_eq!(lines_of(&s, "another", &v.plan).await, None);
+}
+
+#[tokio::test]
+async fn a_plan_made_by_an_earlier_build_has_no_comparison() {
+    let s = setup().await;
+    let (job, plan) = revision_waiting(&s).await;
+    s.sql(format!(
+        "DROP TRIGGER subtitle_replacement_diffs_fixed;
+         DELETE FROM subtitle_replacement_diffs WHERE plan_id = '{}'",
+        plan.id
+    ))
+    .await;
+
+    assert_eq!(view(&s, &job).await.comparison, None);
+    assert_eq!(lines_of(&s, &job, &plan).await, None);
+}
+
+#[tokio::test]
+async fn migration_57_keeps_a_comparison_for_a_plan_and_refuses_what_is_not_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("app.db");
+    let conn = trss_core::db::database_at(&path, 56);
+    let there = |c: &rusqlite::Connection| -> bool {
+        c.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE name = 'subtitle_replacement_diffs'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap()
+            == 1
+    };
+    assert!(!there(&conn));
+    // A plan of an earlier build, its parents not written (foreign keys off
+    // for it only).
+    conn.pragma_update(None, "foreign_keys", false).unwrap();
+    conn.execute_batch(
+        "INSERT INTO subtitle_replacements
+             (id, job_id, position, version, state, work_id, season, episode, assignment,
+              folder, video_path, video_object, video_size, video_mtime, stored_id, asset_id,
+              asset_path, asset_size, asset_sha256, target, created_at, updated_at)
+             VALUES ('r1', 'j1', 0, 1, 'open', 'w', 1, 1, 'explicit', '/w', 'v.mkv', '1:3', 10,
+                     11, 's1', 'a1', 'a.ass', 1, printf('%064d', 1), 'v.ass', 0, 0);",
+    )
+    .unwrap();
+    drop(conn);
+    let db = Db::open(&path).await.unwrap();
+
+    db.run(move |c| {
+        assert!(there(c));
+        let refused = |sql: &str| c.execute(sql, []).is_err();
+        let insert = |plan: &str, path: &str, diff: &str, lines: &str, unreadable: &str| {
+            format!(
+                "INSERT INTO subtitle_replacement_diffs (plan_id, path, diff, lines, unreadable)
+                 VALUES ({plan}, {path}, {diff}, {lines}, {unreadable})"
+            )
+        };
+        // Either a difference with its lines, or why there is none: not both,
+        // not neither, not a difference without its lines.
+        assert!(refused(&insert("'r1'", "'v.ass'", "NULL", "NULL", "NULL")));
+        assert!(refused(&insert("'r1'", "'v.ass'", "'{}'", "'{}'", "'why'")));
+        assert!(refused(&insert("'r1'", "'v.ass'", "'{}'", "NULL", "NULL")));
+        assert!(refused(&insert("'r1'", "'v.ass'", "NULL", "'{}'", "'why'")));
+        // Valid JSON, a path, a reason.
+        assert!(refused(&insert("'r1'", "'v.ass'", "'{'", "'{}'", "NULL")));
+        assert!(refused(&insert("'r1'", "'v.ass'", "'{}'", "'['", "NULL")));
+        assert!(refused(&insert("'r1'", "''", "'{}'", "'{}'", "NULL")));
+        assert!(refused(&insert("'r1'", "'v.ass'", "NULL", "NULL", "''")));
+        // Of a plan that is there (the foreign key).
+        assert!(refused(&insert(
+            "'gone'", "'v.ass'", "NULL", "NULL", "'why'"
+        )));
+        c.execute(&insert("'r1'", "'v.ass'", "'{}'", "'{}'", "NULL"), [])
+            .unwrap();
+        // One for a plan.
+        assert!(refused(&insert("'r1'", "'v.ass'", "NULL", "NULL", "'why'")));
+        // It does not change.
+        assert!(refused(
+            "UPDATE subtitle_replacement_diffs SET unreadable = 'why', diff = NULL, lines = NULL"
+        ));
+        assert!(refused(
+            "UPDATE subtitle_replacement_diffs SET path = 'other.ass'"
+        ));
+        // It goes with its plan.
+        c.execute("DELETE FROM subtitle_replacements WHERE id = 'r1'", [])
+            .unwrap();
+        let left: i64 = c
+            .query_row("SELECT count(*) FROM subtitle_replacement_diffs", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(left, 0);
+        Ok::<_, trss_core::DbError>(())
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn the_current_subtitle_is_the_replaced_file_else_the_removed_copy_else_a_kept_file() {
+    let s = setup().await;
+    // An applied SRT to remove, beside nothing at the new copy's path.
+    let (_, plan) = ass_waiting_beside_srt(&s).await;
+    assert_eq!(
+        actions(&plan),
+        [(TARGET, PathAction::Add), (SRT, PathAction::Remove)]
+    );
+    assert_eq!(plan.current().map(|(p, _)| p.path.as_str()), Some(SRT));
+
+    // A file to replace comes before a removal and a kept file.
+    let mut both = plan.clone();
+    both.paths[0].action = PathAction::Keep;
+    both.paths[0].file = both.paths[1].file.clone();
+    both.paths
+        .push(trss_jobs::place::replace::records::PlanPath {
+            path: "x.ass".to_owned(),
+            action: PathAction::Replace,
+            ..both.paths[1].clone()
+        });
+    assert_eq!(both.current().map(|(p, _)| p.path.as_str()), Some("x.ass"));
+    // A plan that only adds has none.
+    let mut adds = plan;
+    adds.paths.truncate(1);
+    assert!(adds.current().is_none());
 }

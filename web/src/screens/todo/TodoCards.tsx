@@ -18,6 +18,7 @@ import {
   type Todo,
 } from "./api";
 import { Badge, Tag } from "./badges";
+import { todoTags } from "./changes";
 import { LockIcon, WarningIcon } from "./icons";
 import { candidatesLink } from "./Suggestions";
 import { TargetLine } from "./TargetLine";
@@ -101,7 +102,7 @@ function Card({
   title: string;
   work: { cover_url: string | null } | null;
   target: React.ReactNode;
-  reason: string | null;
+  reason: React.ReactNode;
   action: React.ReactNode;
 }) {
   return (
@@ -222,7 +223,7 @@ function EpisodeCheckCard({ todo }: { todo: EpisodeCheckTodo }) {
 
 /**
  * `교체 승인`: the new subtitle of a work's job waits for a person to approve or refuse replacing the one an episode
- * has. No reason line yet: the spec's numeric change tags come with the content comparison. `비교` opens the job.
+ * has. Its reason line is the number tags of what the comparison found (`todoTags`). `비교` opens the job.
  */
 function ReplacementCard({ todo }: { todo: ReplacementTodo }) {
   return (
@@ -242,7 +243,13 @@ function ReplacementCard({ todo }: { todo: ReplacementTodo }) {
           {todo.jobs > 1 && <Tag>작업 {todo.jobs}개</Tag>}
         </TargetLine>
       }
-      reason={null}
+      reason={
+        <span className="flex flex-wrap items-center gap-1">
+          {todoTags(todo.changes).map((tag) => (
+            <Tag key={tag}>{tag}</Tag>
+          ))}
+        </span>
+      }
       action={
         <Button asChild variant="ghost" className={btnAction}>
           <Link to={jobPath(todo.job_id)}>비교</Link>
