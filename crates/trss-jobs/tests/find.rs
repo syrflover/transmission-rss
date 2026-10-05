@@ -480,6 +480,48 @@ async fn finishing_waits_for_a_download_under_way_and_keeps_it() {
     assert_eq!(d.row.note.as_deref(), Some("받은 파일: 자막 1개"));
 }
 
+/// The browser may move a download into the job's folder after the watch
+/// saw none on its way and before the job's folder goes with its end.
+#[tokio::test]
+async fn a_download_that_lands_as_the_watch_ends_the_job_is_kept() {
+    let s = setup(true).await;
+    let id = browsing(&s).await;
+    // The watch is past taking what an earlier run left: it took this one.
+    s.browser
+        .give(Next::File("maker-2.srt", fake::srt("maker-2")));
+    until(2, || async { kept(&s, &id).await == 1 }).await;
+    let item = detail(&s, &id).await.items[0].id;
+
+    s.browser.under_way.store(true, Ordering::SeqCst);
+    assert_eq!(
+        s.store.ask_finish(&id, 9_000).await.unwrap(),
+        AskedFinish::Asked
+    );
+    // The download lands without the watch's wait reporting it, which had
+    // given way to the finish, and none is on its way any more.
+    let staging = s.area.at(&format!(".tmp/check-{id}-{item}"));
+    std::fs::create_dir_all(&staging).unwrap();
+    std::fs::write(staging.join("maker-1.srt"), fake::srt("maker-1")).unwrap();
+    s.browser.under_way.store(false, Ordering::SeqCst);
+    until(3, || async {
+        detail(&s, &id).await.row.state != JobState::Waiting
+    })
+    .await;
+
+    // It is the job's, which goes on to its 배치 확인.
+    let d = detail(&s, &id).await;
+    let names: Vec<_> = d.items[0].files.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, ["maker-2.srt", "maker-1.srt"]);
+    assert_eq!(d.row.state, JobState::Pending);
+    assert_eq!(d.row.note.as_deref(), Some("받은 파일: 자막 2개"));
+    let path = d.items[0].files[1].path.clone().unwrap();
+    assert_eq!(
+        std::fs::read(s.area.at(&path)).unwrap(),
+        fake::srt("maker-1")
+    );
+    assert!(!staging.exists());
+}
+
 #[tokio::test]
 async fn a_download_that_is_no_subtitle_is_dropped_with_why() {
     let s = setup(true).await;

@@ -25,7 +25,7 @@
 //! ends within the browser's stall and size limits), never cut off. A job
 //! with no run bound is ended by the worker's next look at the screens
 //! ([`Runner::tend_screens`], with or without a server browser) or by its run
-//! starting, after taking what a run left in its folder.
+//! starting. Either end takes what is in the job's folder first.
 
 use std::{path::Path, sync::Arc, time::Duration};
 
@@ -412,7 +412,15 @@ impl Runner {
                 }
                 None => {
                     let _taking = self.find_take(job).await;
-                    match self.store.end_find(job, Some(run), now).await {
+                    // A download the browser moved in after the finish found
+                    // none on its way is the job's too, and the folder goes
+                    // with the job's end.
+                    if let Err(err) = self.take_found(job, item, &mut budget).await {
+                        // The next watch of the run takes it and ends the job.
+                        eprintln!("Subtitle job {job}: finishing: {err}");
+                        break;
+                    }
+                    match self.store.end_find(job, Some(run), self.now()).await {
                         Ok(true) => {
                             println!("Subtitle job {job}: finished receiving");
                             browser.release(job).await;
