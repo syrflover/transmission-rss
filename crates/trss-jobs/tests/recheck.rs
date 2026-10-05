@@ -67,9 +67,10 @@ fn ticking_clock() -> Clock {
 }
 
 /// Every item of the job is received. A package this build does not
-/// analyse yet (an archive) leaves the job waiting for it, and an episode with
-/// no video leaves it waiting for the video; the recheck reads receipts
-/// whatever came of them.
+/// analyse yet (an archive) leaves the job waiting for it, an episode with
+/// no video leaves it waiting for the video, and one with a subtitle for a
+/// person to approve replacing it; the recheck reads receipts whatever came
+/// of them.
 fn assert_received(d: &JobDetail) {
     assert!(
         d.items.iter().all(|i| i.state == ItemState::Done),
@@ -77,7 +78,8 @@ fn assert_received(d: &JobDetail) {
         d.events
     );
     match (d.row.state, d.row.wait) {
-        (JobState::Done, _) | (JobState::Waiting, Some(Wait::Subtitle | Wait::Video)) => {}
+        (JobState::Done, _)
+        | (JobState::Waiting, Some(Wait::Subtitle | Wait::Video | Wait::Approval)) => {}
         other => panic!("{other:?}: {:?}", d.events),
     }
 }
@@ -428,10 +430,14 @@ async fn a_drive_file_whose_size_changed_three_days_after_makes_a_revision_job_a
     assert_eq!(after_receipt, 1);
     assert!(seen.iter().all(|s| !s.cookie && !s.referer));
 
-    // Run: the post is received again; the library's subtitle is untouched.
+    // Run: the post is received again; the library's subtitle is untouched
+    // until a person approves replacing it.
     w.run().await;
     let d = w.detail(&report.jobs[0]).await;
-    assert_eq!(d.row.state, JobState::Done);
+    assert_eq!(
+        (d.row.state, d.row.wait),
+        (JobState::Waiting, Some(Wait::Approval))
+    );
     assert_eq!(
         d.items[0].files[0].sha256.as_deref(),
         Some(sha(SRT_B).as_str())
@@ -825,7 +831,10 @@ async fn a_drive_file_gone_with_a_new_link_in_the_post_is_received_again() {
     );
     w.run().await;
     let done = w.detail(&report.jobs[0]).await;
-    assert_eq!(done.row.state, JobState::Done);
+    assert_eq!(
+        (done.row.state, done.row.wait),
+        (JobState::Waiting, Some(Wait::Approval))
+    );
     assert_eq!(
         done.items[0].files[0].sha256.as_deref(),
         Some(sha(SRT_B).as_str())

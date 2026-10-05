@@ -2233,6 +2233,24 @@ impl Runner {
                         )),
                         "회차 확인을 기다려요",
                     )
+                } else if standing.approved > 0 {
+                    // Decided while the run went on: carried out by the next.
+                    (
+                        JobState::Pending,
+                        None,
+                        Some("승인한 교체를 반영해요".to_owned()),
+                        "승인한 교체를 반영해요",
+                    )
+                } else if standing.approvals > 0 {
+                    (
+                        JobState::Waiting,
+                        Some(Wait::Approval),
+                        Some(match standing.approvals {
+                            1 => crate::place::replace::AWAITING_APPROVAL.to_owned(),
+                            n => format!("교체를 기다리는 회차가 {n}개 있어요"),
+                        }),
+                        "교체 승인을 기다려요",
+                    )
                 } else if standing.failed > 0 {
                     let all = standing.failed == standing.rows && state == JobState::Done;
                     (
@@ -2273,11 +2291,16 @@ impl Runner {
         if detail.is_none() && wait == Some(Wait::Placement) {
             detail = note.clone();
         }
-        self.store
+        let requeued = self
+            .store
             .settle(job, state, wait, note.clone(), now)
             .await?;
+        let (state, message, detail) = match requeued {
+            true => (JobState::Pending, crate::store::DECIDED, None),
+            false => (state, message, detail.or(note)),
+        };
         self.store
-            .event(job, message.to_owned(), detail.or(note), now)
+            .event(job, message.to_owned(), detail, now)
             .await?;
         // The run ended, so the browser run it used goes too; a job that waits
         // for a person's check on the site keeps it for that check, and its

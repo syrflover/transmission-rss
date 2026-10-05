@@ -536,6 +536,50 @@ impl JobStore {
             .await
     }
 
+    /// The jobs waiting for a person to approve or refuse a replacement
+    /// (`교체 승인`), oldest first.
+    pub async fn approval_waits(&self) -> Result<Vec<JobRow>, JobError> {
+        self.db
+            .run(|c| {
+                rows(
+                    c,
+                    "WHERE j.state = 'waiting' AND j.wait = 'approval' ORDER BY j.seq",
+                    [],
+                )
+            })
+            .await
+    }
+
+    /// The latest replacement plan of each row of the job, for its detail
+    /// ([`crate::place::replace`]).
+    pub async fn replacements(
+        &self,
+        job_id: &str,
+    ) -> Result<Vec<crate::place::replace::records::PlanView>, JobError> {
+        let id = job_id.to_owned();
+        self.db
+            .run(move |c| Ok(crate::place::replace::records::views(c, &id)?))
+            .await
+    }
+
+    /// A person's decision on a replacement plan
+    /// ([`crate::place::replace::records::decide`]).
+    pub async fn decide_replacement(
+        &self,
+        job_id: &str,
+        plan_id: &str,
+        version: i64,
+        replace: bool,
+        now: Millis,
+    ) -> Result<crate::place::replace::records::Decided, JobError> {
+        let (job, plan) = (job_id.to_owned(), plan_id.to_owned());
+        self.db
+            .run(move |c| {
+                crate::place::replace::records::decide(c, &job, &plan, version, replace, now)
+            })
+            .await
+    }
+
     /// The job's placement plan ([`crate::place`]), in order.
     pub async fn plan(
         &self,
@@ -1174,6 +1218,12 @@ impl JobStore {
     }
 
     /// Ends a run of the job in `state` (with `wait` and `note`) at `now`.
+    ///
+    /// A person may decide on a replacement while the run goes on, after it
+    /// counted the plans: a job about to wait for an approval that has an
+    /// approved plan, or no plan left to decide, goes back in line instead
+    /// ([`DECIDED`]), in the same transaction as the decisions are
+    /// read, so the next run carries them out. Says whether it did.
     pub async fn settle(
         &self,
         job_id: &str,
@@ -1181,19 +1231,35 @@ impl JobStore {
         wait: Option<Wait>,
         note: Option<String>,
         now: Millis,
-    ) -> Result<(), JobError> {
+    ) -> Result<bool, JobError> {
         let id = job_id.to_owned();
         self.db
             .run(move |c| {
+                let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                let decided = state == JobState::Waiting
+                    && wait == Some(Wait::Approval)
+                    && tx.query_row(
+                        "SELECT EXISTS (SELECT 1 FROM subtitle_replacements
+                                         WHERE job_id = ?1 AND state = 'approved')
+                             OR NOT EXISTS (SELECT 1 FROM subtitle_replacements
+                                             WHERE job_id = ?1 AND state = 'open')",
+                        [&id],
+                        |r| r.get::<_, bool>(0),
+                    )?;
+                let (state, wait, note) = match decided {
+                    true => (JobState::Pending, None, Some(DECIDED.to_owned())),
+                    false => (state, wait, note),
+                };
                 let finished = state.is_finished().then_some(now);
-                c.execute(
+                tx.execute(
                     "UPDATE subtitle_jobs
                      SET state = ?2, wait = ?3, note = ?4, stage = NULL, state_at = ?5,
                          updated_at = ?5, finished_at = ?6, attempts = 0
                      WHERE id = ?1",
                     params![id, state, wait, note, now, finished],
                 )?;
-                Ok(())
+                tx.commit()?;
+                Ok(decided)
             })
             .await
     }
@@ -1222,17 +1288,38 @@ impl JobStore {
                     params![id, note, now],
                 )?;
                 // Its file effects under way are not known to have ended:
-                // held with their rows, so their targets are free again.
+                // held with their rows and replacement plans, so their
+                // targets are free again and the plans are not carried on.
+                // A done plan's removals only wait for their clean-up: the
+                // replacement stays done, and the clean-up runs when the job
+                // runs again.
+                let under_way = "SELECT * FROM subtitle_file_effects
+                                  WHERE job_id = ?1
+                                    AND state IN ('intended', 'prepared', 'set_aside')
+                                    AND (plan_id IS NULL OR plan_id NOT IN
+                                         (SELECT id FROM subtitle_replacements
+                                           WHERE state = 'done'))";
                 tx.execute(
-                    "UPDATE subtitle_job_plan SET outcome = 'held', note = ?2, updated_at = ?3
-                     WHERE job_id = ?1 AND position IN
-                           (SELECT position FROM subtitle_file_effects
-                             WHERE job_id = ?1 AND state IN ('intended', 'prepared'))",
+                    &format!(
+                        "UPDATE subtitle_job_plan SET outcome = 'held', note = ?2, updated_at = ?3
+                         WHERE job_id = ?1 AND position IN
+                               (SELECT position FROM ({under_way}))"
+                    ),
                     params![id, note, now],
                 )?;
                 tx.execute(
-                    "UPDATE subtitle_file_effects SET state = 'held', reason = ?2, updated_at = ?3
-                     WHERE job_id = ?1 AND state IN ('intended', 'prepared')",
+                    &format!(
+                        "UPDATE subtitle_replacements SET state = 'held', reason = ?2, updated_at = ?3
+                         WHERE state = 'approved' AND id IN
+                               (SELECT plan_id FROM ({under_way}) WHERE plan_id IS NOT NULL)"
+                    ),
+                    params![id, note, now],
+                )?;
+                tx.execute(
+                    &format!(
+                        "UPDATE subtitle_file_effects SET state = 'held', reason = ?2, updated_at = ?3
+                         WHERE id IN (SELECT id FROM ({under_way}))"
+                    ),
                     params![id, note, now],
                 )?;
                 tx.execute(
@@ -1889,6 +1976,11 @@ fn end_find(tx: &Connection, id: &str, run: Option<&str>, now: Millis) -> Result
 
 /// The note of a find job that ended with no file kept.
 pub const NOTHING_FOUND: &str = "받은 파일 없음";
+
+/// The note of a job a decision on its replacement put back in line
+/// ([`crate::place::replace::records::decide`]), and the note and log line
+/// of one decided on while it ran ([`JobStore::settle`]).
+pub const DECIDED: &str = "결정한 교체를 이어가요";
 
 /// The files a job dropped, in order.
 fn dropped_rows(c: &Connection, id: &str) -> Result<Vec<DroppedRow>, JobError> {

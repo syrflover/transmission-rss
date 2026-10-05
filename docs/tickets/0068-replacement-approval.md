@@ -1,6 +1,6 @@
 # 0068 자막이 있는 회차를 승인받아 교체해요
 
-- 상태: 대기
+- 상태: 완료
 - 출처: [교체 비교와 승인](../specs/subtitles.md#교체-비교와-승인), [승인 증거와 반영 직전 검사](../specs/subtitles.md#승인-증거와-반영-직전-검사), [체크포인트와 중단 복구](../specs/jobs.md#체크포인트와-중단-복구), [할 일](../specs/jobs.md#할-일)의 `교체 승인`
 - 막는 티켓: [0063](0063-store-and-first-apply.md)
 
@@ -32,3 +32,74 @@
 | 보호 복사할 공간이 없음(시험) | 파괴적인 효과 전에 멈추고 기존 파일이 그대로예요. |
 | 두 작업이 같은 경로를 바꾸려 함(시험) | 한 번에 하나만 반영되고, 뒤 작업은 새 상태로 다시 비교해요. |
 | 휴대폰 폭 | 버튼 두 개가 하단 메뉴 바로 위에 고정돼요. |
+
+## 결과
+
+### 만든 것 (2026-10-05)
+
+- **교체 계획**(`crates/trss-jobs/src/place/replace/`): 적용할 줄의 회차에 자막이 있으면 바뀌지 않는 계획을 만들고 작업을 `교체 승인`에서 멈춰요. 회차의 자막은 영상 이름 줄기의 자막 파일, 라이브러리가 기록한 자막, 앱의 적용본 가운데 디스크에 있는 것이에요. 계획은 새 적용본의 경로를 `교체`(정확히 같은 이름이 먼저, 없으면 대소문자만 다른 이름)나 `추가`로, 다른 경로의 앱 적용본을 `제거`로, 그 밖의 자막을 `유지`로 둬요. 첫 적용(0063), 묶음의 다른 회차(0064), 영상 대기 뒤의 적용(0067), 공개 직전에 자막이 생긴 적용이 모두 이 길로 와요. 0066의 배치 확인도 확인 뒤 이 길로 오도록 그 티켓의 문장을 고쳤어요.
+- **다시 검사**(`Placer::changed`): 작업이 다시 돌 때와 반영 직전에 작품 폴더, 줄과 보관본의 회차 대응, 새 자막의 보관 기록과 바이트, 같은 출처의 새 수정본, 영상의 식별 정보와 그 영상이 회차의 유일한 영상인지, 영상 옆 자막(경로마다 크기·SHA-256·객체와 앱 적용본인지, 빈자리, 새로 생긴 자막)을 봐요. 다르면 그 판을 `다시 비교 필요`로 닫고 다음 판을 만들어요.
+- **결정**(`records::decide`, `JobStore::settle`): 줄의 마지막 판이고 아직 열린 계획만 받아요. 결정은 `교체 승인`에서 기다리는 작업만 다시 줄에 세우고, 작업이 도는 중에 결정하면 그 실행이 끝날 때 `결정한 교체를 이어가요`로 다시 줄에 세워요.
+- **반영과 재시작**: 효과를 `의도`로 한꺼번에 잡고, 새 자막의 임시 파일과 떼어낼 파일의 보호 복사본을 만든 뒤, 관리하지 않던 파일을 `제작자 알 수 없음` 보관본으로 들여요. 그다음 교체할 파일을 `.trss/tmp/<ID>.aside`로 옮기고, 새 적용본을 공개하고, 다른 경로의 적용본을 옮긴 뒤 완료를 적고 보호 자료를 정리해요. 재시작 때의 대조표는 모듈 문서에 있어요. 같은 경로를 쓰는 다른 효과가 있으면 반영하지 않아요. 다섯 번 끊긴 작업을 보류하면 승인한 계획과 옮겨 둔 제거도 함께 보류해요.
+- **마이그레이션 52**(`replacement.sql`): 교체 계획 표와 증거 변경을 거절하는 트리거를 만들어요. 묶음에 `existing` 출처를, 효과에 제거·들이기와 `옮겨 둠`, 계획 ID를 더해요. 묶음·효과 표는 외래 키를 끈 트랜잭션에서 새로 만들어요(`Migration::Remake`). 커밋 전에 그 마이그레이션이 새로 깨뜨린 참조가 있으면 실패해요. 그 전부터 깨져 있던 참조로는 멈추지 않아요.
+- **API**: 작업 상세에 `replacements`(줄마다 마지막 판의 버전 줄·나란한 비교·경로와 경고·판단 한계·다시 비교한 까닭)를 더했어요. `POST /api/subtitle-jobs/{id}/replacements/{plan}`은 `{ version, replace }`를 받고, 다른 판이나 이미 정한 판의 결정에는 `409`를 돌려줘요. 할 일에 `교체 승인` 카드(`비교`)를 더했고, 작품 상세의 보관본에는 승인을 기다리는 작업(`approval_job`)을 붙였어요.
+- **웹**: 작업 상세의 결정 카드(`Replacement.tsx`, `replacementView.ts`)를 만들었어요. 카드에는 `현재`·`새 자막` 버전 줄이 있고, 조건이 있을 때만 나란한 비교·경고·판단 한계·경로가 나와요. PC에서는 머리 아래에 붙고, 휴대폰에서는 결정할 카드가 하나일 때 버튼 두 개를 하단 메뉴 위에 고정해요. 결정한 계획은 한 줄로 줄여요. 작업 목록과 묶음 결과에는 `교체 승인 대기`를, 회차 줄에는 `교체 승인` 배지와 작업 링크를 더했어요.
+- **명세**: [교체 계획과 반영](../specs/subtitles.md#교체-계획과-반영)을 새로 쓰고, [체크포인트와 중단 복구](../specs/jobs.md#체크포인트와-중단-복구)에서 이 흐름으로 이었어요.
+
+### 검증한 것
+
+| 완료 기준 | 근거 |
+| --- | --- |
+| 같은 제작자·같은 게시물의 수정본 | 시험 `a_revision_waits_for_approval_then_replaces_and_the_earlier_stored_copy_stays`: 승인하면 교체되고, 두 보관본이 남고, 이전 적용본은 지운 것으로 기록되고, 보호 자료가 남지 않아요. 승인은 한 번만 쓰여요. API 시험 `a_revision_of_the_same_post_shows_two_version_lines_and_nothing_else`는 나란한 비교·판단 한계·경고가 없다는 것과 할 일 카드를 확인해요. 웹 시험은 그런 계획에 버전 줄 말고는 아무것도 나오지 않는다는 것을 확인해요. 개발 환경(2026-10-05)의 1화(작업 `5a27f063`, `/ok/dev-1v2`)에서는 할 일 `비교` 카드와 회차 줄 `교체 승인` 배지가 보였어요. 승인하자 `S01E01.ass`의 SHA-256이 새 보관본과 같아졌고(`5c0db1…`), 이전 보관본(`a8e033…`)은 남았고, `.trss/tmp`는 비었어요. |
+| `현재 유지` | 시험 `keeping_the_current_subtitle_leaves_the_file_and_ends_the_job`. 개발 환경의 2화(작업 `f21a0fad`)에서 `현재 유지`를 누르자 파일(`3e1878…`)이 그대로였고, 계획은 `kept`, 작업은 `완료`였으며, 할 일이 8개에서 7개로 줄었어요. |
+| trss가 관리하지 않는 `X.ass`가 있는 회차 | 시험 `an_unmanaged_subtitle_is_imported_as_the_unknown_creators_before_it_is_replaced`: 그 바이트가 `existing` 묶음의 `제작자 알 수 없음` 보관본이 돼요. API 시험 `overwriting_a_file_the_app_did_not_manage_is_a_warning_and_a_limit`이 `overwrite_unmanaged` 경고와 `출처 미상` 한계를 확인해요. 개발 환경의 2화(손으로 고친 `S01E02.ass`)에서 휴대폰 폭에 경고와 한계가 보였어요. |
+| SRT 적용본이 있는 회차에 다른 제작자의 ASS로 교체 | 시험 `another_creators_ass_removes_the_applied_srt_and_keeps_its_stored_copy`: 계획이 `.ass` 추가와 `.srt` 제거이고, 승인하면 `.srt`만 지워지며 그 보관본은 남아요. API 시험 `another_creators_ass_beside_an_applied_srt_warns_of_its_removal`이 `remove_applied` 경고를 확인해요. |
+| 승인 뒤 반영 전의 변화 | 시험 `a_video_replaced_after_approval_asks_to_compare_again`, `the_existing_subtitle_changed_to_other_bytes_of_its_size_asks_to_compare_again`, `a_stored_asset_changed_after_approval_is_not_applied`(보관 파일이 기록과 다르면 다시 비교한 뒤 보류해요), `a_mapping_changed_after_approval_is_not_applied`(영상 대기로 가요), `a_file_at_the_path_to_add_after_approval_asks_to_compare_again`에서 각각 반영하지 않고 기존 파일이 그대로예요. 더한 시험도 같아요. `an_applied_copy_whose_record_changed_after_approval_asks_to_compare_again`은 적용 기록이 바뀐 경우를, `a_second_video_after_approval_leaves_the_subtitle_stored_only`는 회차에 영상이 둘이 된 경우를 봐요. |
+| 각 단계 사이에서 worker 중단 | 시험이 그 지점에서 남는 파일과 기록을 만든 뒤 작업을 다시 돌려요. 의도만 적음, 보호 복사 뒤, 옮긴 뒤(기록 전·후), 공개 뒤 기록 전, 들이기 공개 뒤 기록 전, 다른 경로의 적용본을 옮긴 뒤 기록 전, 완료 뒤 정리 전, 정리 중간(`killed_*` 9개)을 다뤄요. 모두 한 번만 적용·기록되고 보호 자료가 남지 않아요. 옮겨 둔 파일이 계획의 것이 아니면 모든 파일을 남기고 보류해요(`an_old_copy_set_aside_that_is_not_the_one_compared_is_held_with_its_copies`). 끊긴 작업을 보류하면 계획과 효과도 보류돼요(`a_job_held_while_its_old_copy_is_aside_holds_the_plan_and_its_effects`). 새 적용본의 기록을 DB가 거절하면 계획을 보류하고 다른 경로의 적용본을 지우지 않아요(`a_new_copy_published_but_not_recorded_holds_the_plan_and_removes_nothing_more`). |
+| 보호 복사할 공간이 없음 | 시험 `no_room_for_the_copies_stops_before_anything_beside_the_video_changes`: `.trss/tmp`에 쓸 수 없게 하자 계획이 실패하고 기존 파일과 임시 폴더가 그대로예요. |
+| 두 작업이 같은 경로를 바꾸려 함 | 시험 `of_two_approved_jobs_on_one_path_the_later_compares_again`: 앞 작업이 교체하고, 뒤 작업은 앞 작업의 적용본을 현재 자막으로 다시 비교해요. |
+| 휴대폰 폭 | 개발 환경(내장 브라우저의 휴대폰 크기)에서 1화의 버튼 두 개가 하단 메뉴 바로 위에 고정됐고 맨 아래 내용이 가려지지 않았어요. PC에서는 결정 카드가 머리 아래에 붙었어요(머리 65px, 카드 top 71px). 웹 시험이 카드가 하나일 때만 버튼을 고정하는 것을 확인해요. |
+
+그 밖의 시험도 있어요.
+
+- 실행 중에 한 결정을 다음 실행이 잇는 것(`a_decision_made_while_the_job_runs_is_carried_out_by_its_next_run`), 보류된 작업은 결정해도 보류로 남는 것(`a_decision_on_a_held_job_leaves_it_held`), 다른 판·다른 작업·없는 계획의 결정을 거절하는 것(`a_decision_on_a_plan_that_is_not_the_rows_to_decide_is_refused`, API `a_decision_names_the_version_it_saw`)을 확인해요.
+- 기록만 남고 파일이 없는 라이브러리 자막은 자막으로 세지 않아요(`a_subtitle_the_library_recorded_that_is_gone_is_not_one_to_replace`). 대소문자만 다른 두 파일 가운데 정확한 이름만 교체해요(`of_two_names_differing_in_case_only_the_targets_own_is_replaced`). 유지할 파일 옆에 추가해요(`approving_a_plan_with_a_kept_file_adds_beside_it`).
+- 배치 시험 세 개(`an_episode_with_a_subtitle_waits_for_approval_and_one_without_a_video_for_it`, `a_subtitle_that_came_with_the_video_waits_for_approval`, `a_file_that_takes_the_name_before_publishing_is_kept_for_a_replacement_to_approve`)와 회차 줄 API 시험(`a_stored_subtitle_waiting_for_a_replacement_names_its_job`)이 있어요.
+- 마이그레이션 시험 두 개(`the_remade_package_and_effect_tables_keep_their_rows_and_references`, `a_reference_broken_before_the_remake_does_not_stop_it`)와 웹 시험 14개(`replacementView.test.ts`)가 있어요.
+
+### 독립 검토
+
+복잡한 불변식 검토(2026-10-05)는 마이그레이션 52의 데이터 보존, 중단 지점마다의 복구, 다섯 가지 다시 검사, 공간 부족, 들이기의 멱등성, 두 작업의 직렬화, 승인을 판에 묶는 것, 끊긴 작업의 보류에서 결함을 찾지 못했어요. 아래 지적은 고쳤어요. 고친 코드를 하나씩 되돌리면 해당 시험이 실패하는 것을 확인했어요.
+
+- 작업이 도는 중에 결정하면 실행 끝의 상태 기록이 작업을 다시 `교체 승인`으로 덮어써 결정이 갇혔어요. 이제 같은 트랜잭션에서 결정을 보고 다시 줄에 세워요.
+- 결정이 보류·실패 작업까지 대기로 돌렸어요. 이제 `교체 승인`에서 기다리는 작업만 돌려요.
+- 새 적용본의 기록이 거절돼 계획을 보류한 뒤에도 다른 경로의 적용본을 지웠어요. 이제 거기서 멈춰요.
+- 감시가 지우지 않은 라이브러리 기록만으로 자막이 있다고 봤어요. 이제 디스크에 있는 것만 세요.
+- 대소문자만 다른 파일이 둘이면 정확한 이름이 아닌 쪽을 교체할 수 있었어요.
+- 다시 검사가 앱 적용본인지와 회차의 영상 수를 보지 않았어요.
+- 계획을 `다시 비교 필요`로 옮기지 못해도(그사이 결정됨) 그런 기록을 남겼어요.
+- 마이그레이션 52가 그 전부터 깨진 참조에도 실패했어요.
+- 들이기, 다른 경로의 적용본을 옮긴 뒤, 정리 중간의 중단 시험이 없었어요.
+
+고친 뒤 다시 한 검토(2026-10-05)는 아홉 가지가 모두 맞다고 봤어요. 그 검토의 작은 지적도 고쳤고, 마지막 하나 말고는 고친 코드를 되돌리면 해당 시험이 실패해요.
+
+- 들이기 중단 시험이 들인 파일의 자리를 확인하지 않았어요. 이제 기록된 자산의 경로와 폴더의 파일을 확인해요.
+- 결정이 작업을 다시 줄에 세울 때 `교체 승인을 기다려요` 메모가 남았어요. 이제 `결정한 교체를 이어가요`예요.
+- 떼어낼 두 파일의 이름이 대소문자만 다르면, 반영할 때 효과를 잡지 못하고 오류로 되풀이했어요. 이제 계획을 만들지 않고 보관만 해요(`two_files_to_take_off_differing_in_case_leave_the_subtitle_stored_only`).
+- 정리만 남은 완료 계획의 작업을 보류하면 그 줄이 보류로 바뀌었어요. 이제 완료로 남고, 다시 돌 때 정리해요(`a_job_held_before_its_clean_up_keeps_its_replacement_done`).
+- 마이그레이션 52의 참조 검사가 rowid 없는 표의 같은 문자열을 하나로 봤어요. 이제 개수로 견줘요(`a_reference_broken_again_alike_is_still_new`).
+- 라이브러리가 기록한 자막을 읽을 수 없을 때(권한, 입출력 오류) 없는 것으로 봤어요. 이제 있는 것으로 봐요. 이 경우는 시험하지 않았어요.
+
+### 시험
+
+두 번의 검토로 고친 코드(2026-10-05, `49c8eb6` 위의 작업 트리)에서 `cargo test --workspace`가 2,384개 통과, 실패 0, 무시 13개였어요. 교체 시험(`replace.rs`)은 34개, 교체 API 시험은 6개예요. `cargo clippy --workspace --all-targets -D warnings`와 `cargo fmt --all --check`가 통과해요. 웹은 `npm test` 96개가 통과했고 `tsc -b`가 통과했어요. 개발 환경 관찰은 독립 검토로 고치기 전의 작업 트리로 지은 이미지에서 했어요. 고친 것은 시험으로만 확인했어요.
+
+### 한계
+
+- 중단 시험은 worker 프로세스를 실제로 죽이지 않아요. 그 지점에서 남는 파일과 기록을 만들어 재시작의 대조를 확인해요.
+- 교체할 파일을 옮겨 둔 뒤 새 적용본을 공개하지 못하면 옮긴 파일을 되돌리지 않고 보류해요. 옮겨 둔 파일과 보호 복사본은 남아요. 이 실패는 시험으로 일으키지 못했어요.
+- 승인한 계획이 반영 직전에 다른 효과에 막히면 그 승인은 쓰지 않고 보관만 해요. 그 보관본을 다시 고르는 것은 [0072](0072-choose-stored-subtitle.md)예요.
+- 결정과 다시 비교가 겹치는 경쟁(계획을 `다시 비교 필요`로 옮기지 못하는 경우)은 시험하지 않았어요.
+- 마이그레이션 52는 0063–0067 빌드가 "자막이 있는 회차"라서 보관만 하고 끝낸 줄을 다시 보지 않아요. 서버는 0.5.0이고 그 빌드를 배포한 적이 없어서, 그런 줄은 개발 DB에만 있어요.
+- 휴대폰 폭은 내장 브라우저의 휴대폰 크기로만 봤고, 실제 기기에서는 보지 않았어요.
+- 줄 수만 견주고 내용은 견주지 않아요(0069). 여러 회차의 목록과 `모두 교체`는 0070이에요.

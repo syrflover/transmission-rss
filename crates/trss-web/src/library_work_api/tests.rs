@@ -398,3 +398,40 @@ async fn a_stored_subtitle_waiting_for_its_video_says_so() {
     assert_eq!(of("05")["stored"][0]["awaiting_video"], true);
     assert_eq!(of("02")["stored"][0]["awaiting_video"], false);
 }
+
+#[tokio::test]
+async fn a_stored_subtitle_waiting_for_a_replacement_names_its_job() {
+    let (state, id) = state_with_work().await;
+    // Episode 1 has a subtitle: the job's plan to replace it waits for the
+    // user (`교체 승인`).
+    stored_only(&state, &id, &[1, 2]).await;
+    let work = id.clone();
+    state
+        .jobs
+        .db()
+        .run(move |c| {
+            c.execute_batch(&format!(
+                "UPDATE subtitle_job_plan SET action = 'apply', outcome = NULL
+                  WHERE stored_id = 's1';
+                 UPDATE subtitle_jobs SET state = 'waiting', wait = 'approval' WHERE id = 'j1';
+                 INSERT INTO subtitle_replacements
+                     (id, job_id, position, version, state, work_id, season, episode, assignment,
+                      folder, video_path, video_object, video_size, video_mtime, stored_id,
+                      asset_id, asset_path, asset_size, asset_sha256, target, created_at,
+                      updated_at)
+                     VALUES ('r1', 'j1', 0, 1, 'open', '{work}', 1, 1, 'explicit', '/media/Show',
+                             'S01E01.mkv', '1:2:3', 5, 7, 's1', 'a1',
+                             '.trss/subtitles/하느/Show - 01.ass', 1, printf('%064d', 1),
+                             'S01E01.ass', 0, 0);"
+            ))?;
+            Ok::<_, trss_jobs::JobError>(())
+        })
+        .await
+        .unwrap();
+    let (status, body) = get(&state, &format!("/library/works/{id}")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let episodes = body["seasons"][0]["episodes"].as_array().unwrap();
+    let of = |e: &str| episodes.iter().find(|x| x["episode"] == e).unwrap();
+    assert_eq!(of("01")["stored"][0]["approval_job"], "j1");
+    assert_eq!(of("02")["stored"][0]["approval_job"], Value::Null);
+}

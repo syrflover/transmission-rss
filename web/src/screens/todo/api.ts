@@ -1,5 +1,14 @@
 import { api } from "@/lib/api";
 
+import type { Replacement } from "./replacementTypes";
+
+export type {
+  Replacement,
+  ReplacementPath,
+  ReplacementState,
+  ReplacementVersion,
+} from "./replacementTypes";
+
 /**
  * The 할 일 screen and the job detail (`docs/specs/jobs.md`, 할 일 화면 and
  * 작업 상세) read these: the to-dos that need the user (`/api/todo`,
@@ -117,10 +126,32 @@ export interface PlacementCheckTodo {
   job_id: string;
 }
 
-export type Todo = AuthTodo | ReceiveFailedTodo | EpisodeCheckTodo | PlacementCheckTodo;
+/**
+ * `교체 승인`: subtitle jobs of one work wait for a person to approve or refuse replacing the subtitle an episode
+ * already has. One to-do per work (per job when it has no work); it opens the oldest such job. It names no reason: the
+ * change summary tags of the spec come with the content comparison.
+ */
+export interface ReplacementTodo {
+  kind: "replacement";
+  key: string;
+  /** Since when the oldest of its jobs waits (Unix ms). */
+  at: number;
+  work: WorkRef | null;
+  title: string;
+  season: number | null;
+  /** The episodes that wait for a decision, as numbers. */
+  episodes: number[];
+  creator: string | null;
+  /** The job the card's `비교` opens. */
+  job_id: string;
+  /** How many jobs of the work wait for a decision. */
+  jobs: number;
+}
+
+export type Todo = AuthTodo | ReceiveFailedTodo | ReplacementTodo | EpisodeCheckTodo | PlacementCheckTodo;
 
 export interface TodoList {
-  /** Red kinds first (`인증 필요`, `받기 실패`), then `회차 확인 필요`, each newest first. */
+  /** Red kinds first (`인증 필요`, `받기 실패`), then `교체 승인`, then `회차 확인 필요`, each newest first. */
   needs: Todo[];
   /** What the menu badge shows: `needs.length`. */
   count: number;
@@ -412,6 +443,8 @@ export interface JobDetail extends JobRow {
   items: JobItem[];
   /** What became of each received file, in the order they were planned. */
   placements: Placement[];
+  /** The latest replacement plan of each row whose episode had a subtitle. */
+  replacements: Replacement[];
   /** The job's folder in the receive area (absolute, as the server sees it). */
   receive_dir: string;
   /** Newest first. */
@@ -494,6 +527,24 @@ export async function restartScreen(id: string, run: string, bound: number): Pro
     method: "POST",
     body: { run, bound },
   });
+}
+
+/**
+ * A person's decision on a replacement: `replace` (`새 자막으로 교체`) or `keep` (`현재 유지`), for the plan version
+ * the card showed. Answers the plan's new state. A `conflict` when that version is not the one to decide any more
+ * (a newer comparison replaced it, or it was decided): the job is read again; `not_found` for a plan the job lacks.
+ */
+export function decideReplacement(
+  jobId: string,
+  planId: string,
+  version: number,
+  decision: "replace" | "keep",
+  signal?: AbortSignal,
+): Promise<{ state: "approved" | "kept" }> {
+  return api<{ state: "approved" | "kept" }>(
+    `/subtitle-jobs/${encodeURIComponent(jobId)}/replacements/${encodeURIComponent(planId)}`,
+    { method: "POST", body: { version, decision }, signal },
+  );
 }
 
 /** The most candidates one job takes, as the server (`MAX_CANDIDATES` in `jobs_api.rs`) does. */

@@ -23,14 +23,25 @@ enum Migration {
     /// Code for a change SQL cannot express. It runs inside the migration's
     /// transaction, so an `Err` leaves the database at the previous version.
     Code(fn(&Connection) -> Result<(), DbError>),
+    /// A SQL script that makes anew a table other tables refer to (SQLite
+    /// cannot change a column's CHECK in place). It runs in a transaction of
+    /// its own with foreign keys off, so dropping the old table neither
+    /// cascades to the rows that refer to it nor fails, and it commits only
+    /// when it broke no reference (SQLite's "other kinds of table schema
+    /// changes"); one broken before it is not its own and does not stop it.
+    Remake(&'static str),
 }
 
 impl Migration {
     fn apply(&self, conn: &Connection) -> Result<(), DbError> {
         match self {
-            Migration::Sql(sql) => Ok(conn.execute_batch(sql)?),
+            Migration::Sql(sql) | Migration::Remake(sql) => Ok(conn.execute_batch(sql)?),
             Migration::Code(run) => run(conn),
         }
+    }
+
+    fn remakes(&self) -> bool {
+        matches!(self, Migration::Remake(_))
     }
 }
 
@@ -150,6 +161,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("../migrations/jobs/package_assets.sql")),
     // 51: a received subtitle whose episode has no video waits for it; the jobs earlier builds finished so go back in line
     Migration::Sql(include_str!("../migrations/jobs/awaiting_video.sql")),
+    // 52: replacing an episode's subtitle once a person approves it: the plans, their paths, the effects that take a file off its path or import it, packages imported from beside a video
+    Migration::Remake(include_str!("../migrations/jobs/replacement.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -246,26 +259,95 @@ pub fn database_at(path: &Path, n: usize) -> Connection {
     conn
 }
 
-/// Applies pending migrations inside one write transaction, so two processes
-/// starting together apply each migration once.
+/// Applies pending migrations inside write transactions, so two processes
+/// starting together apply each migration once: the ones in a row that are
+/// no [`Migration::Remake`] in one, each remake in one of its own with
+/// foreign keys off.
 fn migrate(conn: &mut Connection) -> Result<(), DbError> {
     let supported = MIGRATIONS.len();
-    let current = user_version(conn)?;
-    if current == supported {
-        return Ok(());
+    loop {
+        let current = user_version(conn)?;
+        if current == supported {
+            return Ok(());
+        }
+        check_supported(current, supported)?;
+        let remake = MIGRATIONS[current].remakes();
+        // A no-op inside a transaction, so it is set before one begins.
+        if remake {
+            conn.pragma_update(None, "foreign_keys", false)?;
+        }
+        let ran = migrate_run(conn, remake);
+        if remake {
+            conn.pragma_update(None, "foreign_keys", true)?;
+        }
+        ran?;
     }
-    check_supported(current, supported)?;
+}
 
+/// One transaction of [`migrate`]: the pending migrations from the first
+/// on that are remakes (`remake`, one of them) or are not.
+fn migrate_run(conn: &mut Connection, remake: bool) -> Result<(), DbError> {
+    let supported = MIGRATIONS.len();
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     // Another process may have migrated while this one waited for the lock.
     let current = user_version(&tx)?;
     check_supported(current, supported)?;
     for (index, migration) in MIGRATIONS.iter().enumerate().skip(current) {
+        if migration.remakes() != remake {
+            break;
+        }
+        let before = match remake {
+            true => broken_references(&tx)?,
+            false => Vec::new(),
+        };
         migration.apply(&tx)?;
+        if remake {
+            let broken = newly_broken(before, broken_references(&tx)?);
+            if !broken.is_empty() {
+                return Err(DbError::Migration(format!(
+                    "migration {} left broken references: {}",
+                    index + 1,
+                    broken.join(", ")
+                )));
+            }
+        }
         tx.pragma_update(None, "user_version", (index + 1) as i64)?;
+        if remake {
+            break;
+        }
     }
     tx.commit()?;
     Ok(())
+}
+
+/// The references whose row is missing, as `table row n -> parent`.
+fn broken_references(conn: &Connection) -> Result<Vec<String>, DbError> {
+    let mut stmt = conn.prepare("PRAGMA foreign_key_check")?;
+    let rows = stmt.query_map([], |r| {
+        Ok(format!(
+            "{} row {} -> {}",
+            r.get::<_, String>(0)?,
+            r.get::<_, Option<i64>>(1)?.unwrap_or_default(),
+            r.get::<_, String>(2)?
+        ))
+    })?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+/// The references of `after` that `before` does not account for. A child
+/// table without rowids has every row as `row 0`, so references read alike:
+/// each one before excuses one after.
+fn newly_broken(mut before: Vec<String>, after: Vec<String>) -> Vec<String> {
+    after
+        .into_iter()
+        .filter(|b| match before.iter().position(|x| x == b) {
+            Some(i) => {
+                before.swap_remove(i);
+                false
+            }
+            None => true,
+        })
+        .collect()
 }
 
 fn check_supported(found: usize, supported: usize) -> Result<(), DbError> {
@@ -2514,6 +2596,177 @@ mod tests {
         assert_eq!(jobs, ["j1:pending:1", "j2:done:0", "j3:held:1"]);
         let waiting = "영상이 아직 없어 영상이 들어오면 적용해요";
         assert_eq!(notes, [waiting, "", waiting]);
+    }
+
+    /// Migration 51's database: replacements and their records come after it.
+    const BEFORE_REPLACEMENT: usize = 51;
+
+    #[tokio::test]
+    async fn the_remade_package_and_effect_tables_keep_their_rows_and_references() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        {
+            let conn = database_at(&path, BEFORE_REPLACEMENT);
+            conn.execute_batch(
+                "INSERT INTO subtitle_jobs (id, command_id, request, origin, work_id, season,
+                                            state, created_at, updated_at, state_at)
+                     VALUES ('j1', 'c1', '{}', 'pick', 'w', 1, 'done', 0, 0, 0);
+                 INSERT INTO subtitle_job_items (id, job_id, position, episode, post_url,
+                                                 found_at, state, updated_at)
+                     VALUES (1, 'j1', 0, '1', 'https://example.org/1', 0, 'done', 0);
+                 INSERT INTO subtitle_job_files (id, job_id, item_id, file_key, name, state, size,
+                                                 sha256, created_at, updated_at)
+                     VALUES ('f1', 'j1', 1, 'k1', 'a.ass', 'done', 1, printf('%064d', 1), 0, 0);
+                 INSERT INTO subtitle_packages (id, work_id, job_id, source_kind, source_page,
+                                                received_at, created_at)
+                     VALUES ('p1', 'w', 'j1', 'post', 'https://example.org/1', 5, 6);
+                 INSERT INTO subtitle_assets (id, work_id, kind, base, relative_path, byte_size,
+                                              sha256, created_at)
+                     VALUES ('a1', 'w', 'subtitle', 'work', '.trss/subtitles/x/a.ass', 1,
+                             printf('%064d', 1), 0);
+                 INSERT INTO subtitle_package_entries (package_id, position, asset_id,
+                                                       original_name)
+                     VALUES ('p1', 0, 'a1', 'a.ass');
+                 INSERT INTO subtitle_stored (id, work_id, season, package_id, subtitle_asset_id,
+                                              assignment, episode, format, stored_at)
+                     VALUES ('s1', 'w', 1, 'p1', 'a1', 'explicit', 1, 'ass', 0);
+                 INSERT INTO subtitle_job_plan (job_id, position, file_id, name, kind, format,
+                                                size, sha256, assignment, episode, action,
+                                                stored_id, updated_at)
+                     VALUES ('j1', 0, 'f1', 'a.ass', 'subtitle', 'ass', 1, printf('%064d', 1),
+                             'explicit', 1, 'apply', 's1', 0);
+                 INSERT INTO subtitle_file_effects (id, job_id, position, kind, state, folder,
+                                                    temp, target, video, size, sha256,
+                                                    object, created_at, updated_at)
+                     VALUES ('e1', 'j1', 0, 'apply', 'prepared', '/w', '.trss/tmp/e1', 'v.ass',
+                             'v.mkv', 1, printf('%064d', 1), '1:2', 0, 0);",
+            )
+            .unwrap();
+        }
+
+        let db = Db::open(&path).await.unwrap();
+
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+        db.run::<_, DbError, _>(|c| {
+            // The rows and what refers to them are as they were.
+            let package: (String, Option<String>, Option<i64>) = c.query_row(
+                "SELECT source_kind, source_page, received_at FROM subtitle_packages
+                  WHERE id = 'p1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )?;
+            assert_eq!(
+                package,
+                (
+                    "post".to_owned(),
+                    Some("https://example.org/1".to_owned()),
+                    Some(5)
+                )
+            );
+            let entries: i64 = c.query_row(
+                "SELECT count(*) FROM subtitle_package_entries WHERE package_id = 'p1'",
+                [],
+                |r| r.get(0),
+            )?;
+            assert_eq!(entries, 1, "the remake cascaded nothing");
+            let effect: (String, String, Option<String>) = c.query_row(
+                "SELECT state, object, plan_id FROM subtitle_file_effects WHERE id = 'e1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )?;
+            assert_eq!(effect, ("prepared".to_owned(), "1:2".to_owned(), None));
+            let foreign: bool = c.query_row("PRAGMA foreign_keys", [], |r| r.get(0))?;
+            assert!(foreign, "foreign keys are on again");
+            let broken = c
+                .prepare("PRAGMA foreign_key_check")?
+                .query([])?
+                .next()?
+                .is_some();
+            assert!(!broken);
+
+            // A package imported from beside a video, and a plan for the row.
+            c.execute_batch(
+                "INSERT INTO subtitle_packages (id, work_id, job_id, source_kind, created_at)
+                     VALUES ('p2', 'w', 'j1', 'existing', 0);
+                 INSERT INTO subtitle_replacements
+                     (id, job_id, position, version, state, work_id, season, episode, assignment,
+                      folder, video_path, video_object, video_size, video_mtime, stored_id,
+                      asset_id, asset_path, asset_size, asset_sha256, target, created_at,
+                      updated_at)
+                     VALUES ('r1', 'j1', 0, 1, 'open', 'w', 1, 1, 'explicit', '/w', 'v.mkv',
+                             '1:3', 10, 11, 's1', 'a1', '.trss/subtitles/x/a.ass', 1,
+                             printf('%064d', 1), 'v.ass', 0, 0);
+                 INSERT INTO subtitle_replacement_paths (plan_id, path, action, byte_size, sha256,
+                                                         object)
+                     VALUES ('r1', 'v.ass', 'replace', 2, printf('%064d', 2), '1:4');",
+            )?;
+            // Its evidence does not change, and it only goes forward.
+            let refused = |sql: &str| c.execute(sql, []).is_err();
+            assert!(refused(
+                "UPDATE subtitle_replacements SET video_size = 12 WHERE id = 'r1'"
+            ));
+            assert!(refused(
+                "UPDATE subtitle_replacement_paths SET byte_size = 3"
+            ));
+            assert!(refused(
+                "UPDATE subtitle_replacements SET state = 'done' WHERE id = 'r1'"
+            ));
+            c.execute(
+                "UPDATE subtitle_replacements SET state = 'approved' WHERE id = 'r1'",
+                [],
+            )?;
+            assert!(refused(
+                "UPDATE subtitle_replacements SET state = 'open' WHERE id = 'r1'"
+            ));
+            // A row has one plan to decide or carry out at a time.
+            assert!(refused(
+                "INSERT INTO subtitle_replacements
+                     (id, job_id, position, version, state, work_id, season, episode, assignment,
+                      folder, video_path, video_object, video_size, video_mtime, stored_id,
+                      asset_id, asset_path, asset_size, asset_sha256, target, created_at,
+                      updated_at)
+                     VALUES ('r2', 'j1', 0, 2, 'open', 'w', 1, 1, 'explicit', '/w', 'v.mkv',
+                             '1:3', 10, 11, 's1', 'a1', '.trss/subtitles/x/a.ass', 1,
+                             printf('%064d', 1), 'v.ass', 0, 0)"
+            ));
+            Ok(())
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_reference_broken_before_the_remake_does_not_stop_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        {
+            // An item of no job, written with foreign keys off.
+            let conn = database_at(&path, BEFORE_REPLACEMENT);
+            conn.pragma_update(None, "foreign_keys", false).unwrap();
+            conn.execute_batch(
+                "INSERT INTO subtitle_job_items (id, job_id, position, episode, post_url,
+                                                 found_at, state, updated_at)
+                     VALUES (1, 'gone', 0, '1', 'https://example.org/1', 0, 'done', 0);",
+            )
+            .unwrap();
+        }
+
+        let db = Db::open(&path).await.unwrap();
+
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+    }
+
+    #[test]
+    fn a_reference_broken_again_alike_is_still_new() {
+        let r = |s: &str| s.to_owned();
+        // Rows of a table without rowids all read `row 0`.
+        let before = vec![r("entries row 0 -> assets")];
+        let after = vec![r("entries row 0 -> assets"), r("entries row 0 -> assets")];
+        assert_eq!(
+            newly_broken(before.clone(), after),
+            [r("entries row 0 -> assets")]
+        );
+        assert_eq!(newly_broken(before.clone(), before), Vec::<String>::new());
     }
 
     #[tokio::test]

@@ -181,6 +181,11 @@ codes! {
     EffectKind {
         Store = "store",
         Apply = "apply",
+        /// A replacement takes an existing file off its path.
+        Remove = "remove",
+        /// A replacement keeps a subtitle the app did not manage as a stored
+        /// one before it changes it.
+        Import = "import",
     }
 }
 
@@ -189,10 +194,36 @@ codes! {
     EffectState {
         Intended = "intended",
         Prepared = "prepared",
+        /// A removal's file is renamed aside, into the work folder's
+        /// `.trss/tmp/`.
+        SetAside = "set_aside",
         Done = "done",
         Held = "held",
         Failed = "failed",
         Abandoned = "abandoned",
+    }
+}
+
+codes! {
+    /// Where a replacement plan is (see the schema's comment).
+    PlanState {
+        Open = "open",
+        Kept = "kept",
+        Approved = "approved",
+        Done = "done",
+        Stale = "stale",
+        Held = "held",
+        Failed = "failed",
+    }
+}
+
+codes! {
+    /// What a replacement plan does to a path beside the video.
+    PathAction {
+        Add = "add",
+        Replace = "replace",
+        Remove = "remove",
+        Keep = "keep",
     }
 }
 

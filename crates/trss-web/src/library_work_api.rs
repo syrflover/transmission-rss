@@ -23,7 +23,7 @@
 //!       "failure": null,
 //!       "stored": [{ "id": "…", "name": "Show - 02.ass", "creator": "하느", "format": "ass",
 //!                    "stored_at": 1760000300000, "can_apply": true,
-//!                    "awaiting_video": false }]
+//!                    "awaiting_video": false, "approval_job": null }]
 //!     }]
 //!   }],
 //!   "unrecognized": [{ "path": "Extras/PV.mkv", "reason": "outside_season", "message": "…" }],
@@ -66,8 +66,10 @@
 //!   oldest first. `can_apply` says whether `적용` can ask for it: a format the app
 //!   applies, received by a job whose record is there. `awaiting_video` says
 //!   a job applies it once the episode's video comes (`영상 대기`): no
-//!   `적용` is asked for it. An episode with only such subtitles has a row of
-//!   its own with no files.
+//!   `적용` is asked for it. `approval_job` is the job that waits for a
+//!   person to approve replacing the episode's subtitle with it (`교체
+//!   승인`, [`trss_jobs::place::replace`]), whose detail compares the two.
+//!   An episode with only such subtitles has a row of its own with no files.
 //! - `POST /api/library/works/{id}/stored/{stored_id}/apply` applies one: the
 //!   job that stored it applies it beside the episode's video, as its first
 //!   apply does, and the worker is woken. `202` `{ "job_id" }`; `404` for a
@@ -221,6 +223,9 @@ struct StoredView {
     can_apply: bool,
     /// A job applies it once the episode's video comes (`영상 대기`).
     awaiting_video: bool,
+    /// The job that waits for a person to approve replacing the episode's
+    /// subtitle with it (`교체 승인`), whose detail compares the two.
+    approval_job: Option<String>,
 }
 
 impl From<trss_jobs::place::records::StoredOnly> for StoredView {
@@ -233,6 +238,7 @@ impl From<trss_jobs::place::records::StoredOnly> for StoredView {
             format: stored.format.code(),
             stored_at: stored.stored_at,
             awaiting_video: stored.awaiting_video,
+            approval_job: stored.awaiting_approval,
         }
     }
 }

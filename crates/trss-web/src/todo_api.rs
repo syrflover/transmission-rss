@@ -41,9 +41,15 @@
 //!   person to say which episode its files are (the job's 배치 확인): one
 //!   to-do per job, which opens the job's detail (`job_id`). `files` are the
 //!   names of the files it asks about, `reason` the first one's question.
+//! - `replacement` (`교체 승인`): the subtitle jobs waiting for a person to
+//!   approve or refuse replacing an episode's subtitle
+//!   ([`trss_jobs::place::replace`]), one to-do per work (per job when it
+//!   has no work). `at` is since when its oldest job waits, `job_id` that job
+//!   (its detail is where the person compares, `비교`), `episodes` the
+//!   episodes whose plan waits, `jobs` how many jobs wait.
 //!
-//! `auth` comes before `receive_failed` and that before `episode_check`, each
-//! newest first. Failed subtitle
+//! `auth` comes before `receive_failed`, that before `replacement`, and that
+//! before `episode_check` and `placement_check`, each newest first. Failed subtitle
 //! jobs are not to-dos: the screen's job list shows them. The suggestions
 //! (`제안`) come from their own APIs. `GET /api/todo/count` is `{ "count" }`
 //! alone.
@@ -139,7 +145,7 @@ use trss_collect::{
         revisions::{Revision, RevisionState},
     },
 };
-use trss_jobs::{ItemState, Wait};
+use trss_jobs::{model::PlanState, ItemState, Wait};
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -517,6 +523,17 @@ pub enum Todo {
         reason: Option<String>,
         job_id: String,
     },
+    Replacement {
+        key: String,
+        at: i64,
+        work: Option<WorkRefView>,
+        title: String,
+        season: Option<i64>,
+        episodes: Vec<i64>,
+        creator: Option<String>,
+        job_id: String,
+        jobs: usize,
+    },
 }
 
 impl Todo {
@@ -525,7 +542,8 @@ impl Todo {
             Todo::Auth { at, .. }
             | Todo::ReceiveFailed { at, .. }
             | Todo::EpisodeCheck { at, .. }
-            | Todo::PlacementCheck { at, .. } => *at,
+            | Todo::PlacementCheck { at, .. }
+            | Todo::Replacement { at, .. } => *at,
         }
     }
 }
@@ -555,6 +573,7 @@ async fn todo_count(State(state): State<AppState>) -> Result<Json<TodoCount>, Ap
 pub async fn todo_list(state: &AppState) -> Result<TodoList, ApiError> {
     let mut auth = auth_todos(state).await?;
     let mut failed = receive_failed_todos(state).await?;
+    let mut replacements = replacement_todos(state).await?;
     // `회차 확인 필요` is a question on top of the others: when it cannot be
     // read, the rest of the list (and the badge) still answers.
     let mut checks = match episode_check_todos(state).await {
@@ -567,8 +586,10 @@ pub async fn todo_list(state: &AppState) -> Result<TodoList, ApiError> {
     checks.extend(placement_check_todos(state).await?);
     auth.sort_by_key(|t| std::cmp::Reverse(t.at()));
     failed.sort_by_key(|t| std::cmp::Reverse(t.at()));
+    replacements.sort_by_key(|t| std::cmp::Reverse(t.at()));
     checks.sort_by_key(|t| std::cmp::Reverse(t.at()));
     auth.extend(failed);
+    auth.extend(replacements);
     auth.extend(checks);
     Ok(TodoList {
         count: auth.len(),
@@ -612,6 +633,59 @@ async fn auth_todos(state: &AppState) -> Result<Vec<Todo>, ApiError> {
             episodes,
             creator: oldest.creator.clone(),
             reason: reason.unwrap_or_default(),
+            job_id: oldest.id.clone(),
+            jobs: rows.len(),
+        });
+    }
+    Ok(todos)
+}
+
+/// The `교체 승인` to-dos: one per work whose jobs wait for a person to
+/// approve or refuse replacing an episode's subtitle (per job when it has no
+/// work), which opens its oldest job's detail.
+async fn replacement_todos(state: &AppState) -> Result<Vec<Todo>, ApiError> {
+    let internal = |e: &dyn std::fmt::Display| ApiError::Internal(e.to_string());
+    let waits = state
+        .jobs
+        .approval_waits()
+        .await
+        .map_err(|e| internal(&e))?;
+    let covers = covers_of(state, &waits).await?;
+    // Oldest first, so each work's first job is its oldest.
+    let mut groups: Vec<(String, Vec<&trss_jobs::store::JobRow>)> = Vec::new();
+    for row in &waits {
+        let key = format!("replacement:{}", row.work_id.as_deref().unwrap_or(&row.id));
+        match groups.iter_mut().find(|(k, _)| *k == key) {
+            Some((_, rows)) => rows.push(row),
+            None => groups.push((key, vec![row])),
+        }
+    }
+    let mut todos = Vec::new();
+    for (key, rows) in groups {
+        let oldest = rows[0];
+        let mut episodes = Vec::new();
+        for row in &rows {
+            let plans = state
+                .jobs
+                .replacements(&row.id)
+                .await
+                .map_err(|e| internal(&e))?;
+            for view in plans {
+                let plan = view.plan;
+                if plan.state == PlanState::Open && !episodes.contains(&plan.episode) {
+                    episodes.push(plan.episode);
+                }
+            }
+        }
+        episodes.sort();
+        todos.push(Todo::Replacement {
+            key,
+            at: oldest.state_at,
+            work: work_ref(oldest, &covers),
+            title: title_of(oldest),
+            season: oldest.season,
+            episodes,
+            creator: oldest.creator.clone(),
             job_id: oldest.id.clone(),
             jobs: rows.len(),
         });

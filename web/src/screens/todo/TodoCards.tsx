@@ -14,6 +14,7 @@ import {
   type EpisodeCheckTodo,
   type PlacementCheckTodo,
   type ReceiveFailedTodo,
+  type ReplacementTodo,
   type Todo,
 } from "./api";
 import { Badge, Tag } from "./badges";
@@ -65,6 +66,8 @@ export function TodoCards({ todos }: { todos: readonly Todo[] }) {
             <AuthCard todo={todo} />
           ) : todo.kind === "receive_failed" ? (
             <ReceiveFailedCard todo={todo} />
+          ) : todo.kind === "replacement" ? (
+            <ReplacementCard todo={todo} />
           ) : todo.kind === "placement_check" ? (
             <PlacementCheckCard todo={todo} />
           ) : (
@@ -211,6 +214,38 @@ function EpisodeCheckCard({ todo }: { todo: EpisodeCheckTodo }) {
       action={
         <Button asChild variant="ghost" className={btnAction}>
           <Link to={episodeCheckPath(todo)}>회차 대응 정하기</Link>
+        </Button>
+      }
+    />
+  );
+}
+
+/**
+ * `교체 승인`: the new subtitle of a work's job waits for a person to approve or refuse replacing the one an episode
+ * has. No reason line yet: the spec's numeric change tags come with the content comparison. `비교` opens the job.
+ */
+function ReplacementCard({ todo }: { todo: ReplacementTodo }) {
+  return (
+    <Card
+      tone="check"
+      kind={
+        <Badge tone="check" icon={QuestionIcon}>
+          교체 승인
+        </Badge>
+      }
+      at={todo.at}
+      title={todo.title}
+      work={todo.work}
+      target={
+        <TargetLine episodes={todo.episodes.map(String)} creator={todo.creator}>
+          {todo.season !== null && todo.season > 1 && <Tag>시즌 {todo.season}</Tag>}
+          {todo.jobs > 1 && <Tag>작업 {todo.jobs}개</Tag>}
+        </TargetLine>
+      }
+      reason={null}
+      action={
+        <Button asChild variant="ghost" className={btnAction}>
+          <Link to={jobPath(todo.job_id)}>비교</Link>
         </Button>
       }
     />

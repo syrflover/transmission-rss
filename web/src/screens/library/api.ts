@@ -190,6 +190,8 @@ export interface StoredSubtitle {
   can_apply: boolean;
   /** A job applies it once the episode's video comes (`영상 대기`); it asks for no `적용`. */
   awaiting_video: boolean;
+  /** The job waiting for the user to approve replacing the episode's subtitle with it (`교체 승인`); it asks for no `적용`. */
+  approval_job: string | null;
 }
 
 /** Asks the job that stored `storedId` to apply it beside the episode's video; answers that job. */

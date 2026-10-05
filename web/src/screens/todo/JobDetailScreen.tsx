@@ -16,6 +16,8 @@ import { FindFinish } from "./FindFinish";
 import { BackIcon } from "./icons";
 import { JobAuth } from "./JobAuth";
 import { JobResults } from "./JobResults";
+import { ReplacementDecisions, ReplacementPaths } from "./Replacement";
+import { cardLayout, openOnes } from "./replacementView";
 import { JobSteps } from "./JobSteps";
 import { UploadResults } from "./UploadResults";
 import { KEYS, usePolled } from "./poll";
@@ -39,8 +41,9 @@ function BackLink() {
 }
 
 /**
- * A subtitle job's page, one for every job: the way back, the head, the steps,
- * the check on the site (the remote screen) while the job has one, the result
+ * A subtitle job's page, one for every job: the way back, the head, the
+ * decision on replacing an episode's subtitle (the card and its notes) while the
+ * job has one, the steps, the check on the site (the remote screen) while the job has one, the result
  * of each episode, the path and the log, in one column. A find job (직접 찾기)
  * puts its remote screen first, with `받기 끝내기` under it, and lists the files
  * it received instead of episodes. It reads the job again
@@ -109,6 +112,8 @@ function Page({ job, prepare }: { job: JobDetail; prepare: ScreenPrepare }) {
     prepare.screen ?? (find && (job.state === "pending" || job.state === "running") ? OPENING : null);
   // A phone shows the check box in its first screen: the head shrinks while the job has a screen.
   const compact = screen !== null;
+  // The phone's decision buttons are fixed above the bottom menu: the page leaves room so they never cover its end.
+  const fixedBar = cardLayout(openOnes(job.replacements).length, 0).fixed;
 
   // Arriving takes focus to the head, once per job.
   useEffect(() => {
@@ -116,7 +121,7 @@ function Page({ job, prepare }: { job: JobDetail; prepare: ScreenPrepare }) {
   }, []);
 
   return (
-    <article className="mx-auto max-w-[880px] pb-4">
+    <article className={cn("mx-auto max-w-[880px] pb-4", fixedBar && "max-[720px]:pb-20")}>
       <div className="pt-4 max-[720px]:pt-2">
         <BackLink />
       </div>
@@ -185,6 +190,8 @@ function Page({ job, prepare }: { job: JobDetail; prepare: ScreenPrepare }) {
         </div>
       </header>
 
+      <ReplacementDecisions job={job} />
+
       {find &&
         (screen !== null ? (
           <JobAuth jobId={job.id} screen={screen} prepare={prepare} find>
@@ -212,7 +219,7 @@ function Page({ job, prepare }: { job: JobDetail; prepare: ScreenPrepare }) {
         </Part>
       ) : (
         <Part title="회차별 결과">
-          <JobResults items={job.items} placements={job.placements} />
+          <JobResults items={job.items} placements={job.placements} replacements={job.replacements} />
         </Part>
       )}
 
@@ -285,6 +292,7 @@ function JobPaths({ job }: { job: JobDetail }) {
           />
         </div>
       ))}
+      <ReplacementPaths replacements={job.replacements} />
       {(received || placed.length === 0) && <PathList rows={[["수신 영역", job.receive_dir]]} />}
     </div>
   );

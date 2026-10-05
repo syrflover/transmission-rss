@@ -79,6 +79,7 @@ pub mod episode;
 pub mod files;
 pub mod package;
 pub mod records;
+pub mod replace;
 
 use std::{
     collections::{BTreeMap, HashMap},
@@ -94,8 +95,8 @@ use crate::{
     area::{safe_name, ReceiveArea},
     follow::Follow,
     model::{
-        AssetKind, EffectKind, EffectState, FileState, ItemState, Outcome, PlanAction, StepKind,
-        StepState, SubtitleFormat,
+        AssetKind, EffectKind, EffectState, FileState, ItemState, Outcome, PlanAction, PlanState,
+        StepKind, StepState, SubtitleFormat,
     },
     runner::episode_label,
     store::{FileRow, ItemRow, JobError, JobStore, AUTO, FIND, UPLOAD},
@@ -149,6 +150,10 @@ pub struct Standing {
     pub missing: Option<String>,
     /// Rows to apply whose episode has no video yet (`영상 대기`).
     pub awaiting_video: usize,
+    /// Rows whose replacement waits for a person (`교체 승인`).
+    pub approvals: usize,
+    /// Rows whose replacement a person approved, not carried out yet.
+    pub approved: usize,
 }
 
 /// The name a store takes ([`Placer::choose_name`]).
@@ -316,6 +321,13 @@ impl Placer {
         self.store.event(job, message, detail, self.now()).await
     }
 
+    /// The job is at `step` now, which begins unless it began before.
+    async fn begin(&self, job: &str, step: StepKind) -> Result<(), JobError> {
+        let now = self.now();
+        self.store.set_stage(job, step, now).await?;
+        self.store.begin_step(job, step, now).await
+    }
+
     /// How the job's plan stands.
     pub async fn standing(&self, job: &str) -> Result<Standing, JobError> {
         let id = job.to_owned();
@@ -357,6 +369,10 @@ impl Placer {
                     )
                 }),
         };
+        let id = job.to_owned();
+        let (approvals, approved) = self
+            .read(move |c| replace::records::live_counts(c, &id))
+            .await?;
         let first = |o: Outcome| {
             rows.iter()
                 .find(|r| r.outcome == Some(o))
@@ -379,6 +395,8 @@ impl Placer {
                 .iter()
                 .filter(|r| r.action == PlanAction::Apply && r.outcome == Some(Outcome::NoVideo))
                 .count(),
+            approvals,
+            approved,
         })
     }
 
@@ -402,11 +420,20 @@ impl Placer {
         let items = self.store.items(job).await?;
 
         let id = job.to_owned();
+        let mut plans: Vec<String> = Vec::new();
         for effect in self
             .read(move |c| records::unfinished_effects(c, &id))
             .await?
         {
-            self.recover(&facts, &items, effect).await?;
+            // A replacement's effects are compared together.
+            match effect.plan_id.clone() {
+                Some(plan) if plans.contains(&plan) => {}
+                Some(plan) => {
+                    self.recover_plan(&plan).await?;
+                    plans.push(plan);
+                }
+                None => self.recover(&facts, &items, effect).await?,
+            }
         }
 
         let mut placement = self.analyse(job, &facts, &work_id, season, &items).await?;
@@ -455,7 +482,9 @@ impl Placer {
 
         let id = job.to_owned();
         let rows = self.read(move |c| records::plan(c, &id)).await?;
-        // A row waiting for its video looks again.
+        // A row waiting for its video looks again, and so does one whose
+        // replacement waits for a person or was decided. The steps begin as
+        // the rows reach them.
         let to_apply: Vec<&PlanRow> = rows
             .iter()
             .filter(|r| {
@@ -465,11 +494,6 @@ impl Placer {
                     && r.question.is_none()
             })
             .collect();
-        if !to_apply.is_empty() {
-            let now = self.now();
-            self.store.set_stage(job, StepKind::Apply, now).await?;
-            self.store.begin_step(job, StepKind::Apply, now).await?;
-        }
         for row in to_apply {
             if cancel.is_cancelled() {
                 return Ok(None);
@@ -785,6 +809,8 @@ impl Placer {
             sha256: row.sha256.clone(),
             object: None,
             reason: None,
+            source: None,
+            plan_id: None,
         };
         let e = effect.clone();
         let now = self.now();
@@ -1072,8 +1098,12 @@ impl Placer {
             Ok(Some((_, _, object))) if Some(&object) == effect.object.as_ref() => {
                 let _ = blocking(move || files::remove_known(&temp)).await;
                 let reason = match effect.kind {
-                    EffectKind::Store => format!("보관본을 쓰지 못했어요: {err}"),
-                    EffectKind::Apply => format!("적용본을 쓰지 못했어요: {err}"),
+                    EffectKind::Store | EffectKind::Import => {
+                        format!("보관본을 쓰지 못했어요: {err}")
+                    }
+                    EffectKind::Apply | EffectKind::Remove => {
+                        format!("적용본을 쓰지 못했어요: {err}")
+                    }
                 };
                 self.fail_effect(effect, reason).await
             }
@@ -1303,7 +1333,8 @@ impl Placer {
     // Applying
 
     /// Why the episode of `video` has a subtitle, if it has: one the library
-    /// recorded, or a file beside the video under its stem.
+    /// recorded that is on the disk, or a file beside the video under its
+    /// stem.
     async fn existing_subtitle(
         &self,
         facts: &JobFacts,
@@ -1316,8 +1347,18 @@ impl Placer {
         let (_, subtitles) = self
             .read(move |c| records::episode_files(c, &work, season, episode))
             .await?;
-        if let Some(first) = subtitles.first() {
-            return Ok(Some(first.clone()));
+        // A file the library recorded counts while it is on the disk (or
+        // cannot be looked at): a record the watcher has not dropped yet is
+        // not a subtitle.
+        let base = PathBuf::from(folder);
+        let recorded = blocking(move || {
+            subtitles
+                .into_iter()
+                .find(|p| files::occupied(&files::within(&base, p)).unwrap_or(true))
+        })
+        .await;
+        if let Some(first) = recorded {
+            return Ok(Some(first));
         }
         let (dir, stem) = video_parts(video);
         let path = files::within(Path::new(folder), dir);
@@ -1351,6 +1392,13 @@ impl Placer {
         ) else {
             return Ok(());
         };
+        // A replacement to decide or carry out goes on; one that went stale
+        // leaves the row to be looked at anew.
+        if let Some(plan) = self.live_plan(row).await? {
+            if self.go_on(facts, row, plan).await? {
+                return Ok(());
+            }
+        }
         let label = row_label(row);
         let work = facts.work_id.clone().unwrap_or_default();
         let season = facts.season.unwrap_or(0);
@@ -1389,16 +1437,10 @@ impl Placer {
                 return self.event(job, format!("{label}: {note}"), None).await;
             }
         };
-        if let Some(existing) = self
-            .existing_subtitle(facts, folder, episode, &video)
-            .await?
-        {
-            let note = "이 회차에 자막이 이미 있어 그대로 두고 보관만 했어요".to_owned();
-            self.settle_row(row, Outcome::Existing, note.clone())
-                .await?;
-            return self
-                .event(job, format!("{label}: {note}"), Some(existing))
-                .await;
+        // An episode with a subtitle waits for a person's approval to replace
+        // it ([`replace`]).
+        if self.compare(facts, folder, row, &video).await? {
+            return Ok(());
         }
         let (dir, stem) = video_parts(&video);
         let target = joined(dir, &format!("{stem}.{ext}"));
@@ -1426,6 +1468,7 @@ impl Placer {
                 .fail_row(row, "보관본의 기록을 찾지 못했어요".to_owned())
                 .await;
         };
+        self.begin(job, StepKind::Apply).await?;
         let effect = Effect {
             id: uuid::Uuid::new_v4().to_string(),
             job_id: job.to_owned(),
@@ -1440,6 +1483,8 @@ impl Placer {
             sha256: asset.sha256.clone(),
             object: None,
             reason: None,
+            source: None,
+            plan_id: None,
         };
         let e = effect.clone();
         let now = self.now();
@@ -1498,8 +1543,10 @@ impl Placer {
             .existing_subtitle(facts, &effect.folder, placed.episode, &video)
             .await?
         {
-            let reason = "적용하려던 회차에 다른 자막이 생겨 덮어쓰지 않고 보류했어요";
-            return self.withdraw(&row, &effect, &temp, reason, existing).await;
+            let reason = "적용하려던 회차에 다른 자막이 생겨 덮어쓰지 않았어요";
+            return self
+                .withdraw(facts, &row, &effect, &temp, reason, existing)
+                .await;
         }
         let target = files::within(&folder, &effect.target);
         let from = temp.clone();
@@ -1509,19 +1556,22 @@ impl Placer {
                     .await
             }
             Published::Occupied => {
-                let reason = "적용하려던 이름에 다른 파일이 먼저 생겨 덮어쓰지 않고 보류했어요";
+                let reason = "적용하려던 이름에 다른 파일이 먼저 생겨 덮어쓰지 않았어요";
                 let at = effect.target.clone();
-                self.withdraw(&row, &effect, &temp, reason, at).await
+                self.withdraw(facts, &row, &effect, &temp, reason, at).await
             }
             Published::Failed(err) => self.unsure(&effect, &temp, err).await,
         }
     }
 
     /// An apply that something on disk overtook before it was published:
-    /// its temporary file goes, nothing beside the video changes and the row
-    /// is held for a person (the effect too when its file cannot go).
+    /// its temporary file goes and nothing beside the video changes. The
+    /// episode has a subtitle now, so its replacement is planned for a
+    /// person to approve ([`replace`]); the row is held when it cannot be
+    /// (the effect too when its file cannot go).
     async fn withdraw(
         &self,
+        facts: &JobFacts,
         row: &PlanRow,
         effect: &Effect,
         temp: &Path,
@@ -1537,15 +1587,23 @@ impl Placer {
                 )
                 .await;
         }
-        let (e, r, now) = (effect.clone(), reason.to_owned(), self.now());
-        self.write(move |c| records::withdrawn(c, &e, &r, now))
+        let (id, now) = (effect.id.clone(), self.now());
+        self.write(move |c| records::end_effect(c, &id, EffectState::Abandoned, None, now))
             .await?;
         self.event(
             &row.job_id,
             format!("{}: {reason}", row_label(row)),
             Some(found),
         )
-        .await
+        .await?;
+        let video = effect.video.clone().unwrap_or_default();
+        if self.compare(facts, &effect.folder, row, &video).await? {
+            return Ok(());
+        }
+        // The subtitle went again: a person looks at the row.
+        let (e, r, now) = (effect.clone(), reason.to_owned(), self.now());
+        self.write(move |c| records::withdrawn(c, &e, &r, now))
+            .await
     }
 
     async fn applied_by(
@@ -1582,11 +1640,51 @@ impl Placer {
 
     async fn end_apply_step(&self, job: &str) -> Result<(), JobError> {
         let id = job.to_owned();
-        let rows = self.read(move |c| records::plan(c, &id)).await?;
+        let (rows, plans) = self
+            .read(move |c| {
+                Ok((
+                    records::plan(c, &id)?,
+                    replace::records::latest_plans(c, &id)?,
+                ))
+            })
+            .await?;
+        // The rows whose replacement waits or is under way are the
+        // approval's (`교체 승인`), not the apply's.
+        let live: Vec<i64> = plans
+            .iter()
+            .filter(|p| matches!(p.state, PlanState::Open | PlanState::Approved))
+            .map(|p| p.position)
+            .collect();
+        if !plans.is_empty() {
+            let open = plans.iter().filter(|p| p.state == PlanState::Open).count();
+            let (state, note) = match open {
+                0 if live.is_empty() => (StepState::Done, None),
+                0 => (StepState::Current, None),
+                1 => (
+                    StepState::Waiting,
+                    Some(replace::AWAITING_APPROVAL.to_owned()),
+                ),
+                n => (
+                    StepState::Waiting,
+                    Some(format!("교체를 기다리는 회차가 {n}개 있어요")),
+                ),
+            };
+            if open > 0 {
+                self.store
+                    .set_stage(job, StepKind::Approval, self.now())
+                    .await?;
+            }
+            self.store
+                .set_step(job, StepKind::Approval, state, note, self.now())
+                .await?;
+        }
         let apply: Vec<&PlanRow> = rows
             .iter()
             .filter(|r| {
-                r.action == PlanAction::Apply && r.question.is_none() && r.stored_id.is_some()
+                r.action == PlanAction::Apply
+                    && r.question.is_none()
+                    && r.stored_id.is_some()
+                    && !live.contains(&r.position)
             })
             .collect();
         if apply.is_empty() || apply.iter().any(|r| r.outcome.is_none()) {
@@ -1664,6 +1762,10 @@ impl Placer {
                     (Ok(t), _) if ours(&t) => match effect.kind {
                         EffectKind::Store => self.finish_store(facts, items, effect).await,
                         EffectKind::Apply => self.finish_apply(facts, effect).await,
+                        // A replacement's effects are its plan's.
+                        EffectKind::Remove | EffectKind::Import => {
+                            self.hold_effect(&effect, "교체 계획이 없는 효과예요").await
+                        }
                     },
                     (Ok(None), Ok(g)) if ours(&g) => {
                         let target = files::within(&folder, &effect.target);

@@ -320,18 +320,19 @@ async fn a_name_taken_by_other_bytes_is_numbered_and_the_same_bytes_are_one_file
 }
 
 #[tokio::test]
-async fn an_episode_with_a_subtitle_keeps_it_and_one_without_a_video_waits_for_it() {
+async fn an_episode_with_a_subtitle_waits_for_approval_and_one_without_a_video_for_it() {
     let s = setup().await;
     let smi = s.work().join("Season 01/Show S01E02.smi");
     std::fs::write(&smi, b"<SAMI></SAMI>").unwrap();
     let id = make(&s, "c1", "2", "/ok/Show-02", false).await;
     run(&s).await;
     let d = detail(&s, &id).await;
-    assert_eq!(d.row.state, JobState::Done);
     assert_eq!(
-        s.store.plan(&id).await.unwrap()[0].outcome,
-        Some(Outcome::Existing)
+        (d.row.state, d.row.wait),
+        (JobState::Waiting, Some(Wait::Approval))
     );
+    assert_eq!(s.store.plan(&id).await.unwrap()[0].outcome, None);
+    assert_eq!(s.count("subtitle_replacements").await, 1);
     assert_eq!(std::fs::read(&smi).unwrap(), b"<SAMI></SAMI>");
     assert!(!s.work().join("Season 01/Show S01E02.ass").exists());
     assert!(s.stored_dir().join("Show-02.ass").exists());
@@ -587,7 +588,7 @@ async fn a_video_recorded_but_not_on_the_disk_is_looked_at_once_per_library_chan
 }
 
 #[tokio::test]
-async fn a_subtitle_that_came_with_the_video_is_kept() {
+async fn a_subtitle_that_came_with_the_video_waits_for_approval() {
     let s = setup().await;
     let id = awaiting_video(&s).await;
     video(&s, "03").await;
@@ -601,11 +602,11 @@ async fn a_subtitle_that_came_with_the_video_is_kept() {
     assert_eq!(s.runner.requeue_awaiting_video().await.unwrap(), 1);
     run(&s).await;
     let d = detail(&s, &id).await;
-    assert_eq!(d.row.state, JobState::Done);
     assert_eq!(
-        s.store.plan(&id).await.unwrap()[0].outcome,
-        Some(Outcome::Existing)
+        (d.row.state, d.row.wait),
+        (JobState::Waiting, Some(Wait::Approval))
     );
+    assert_eq!(s.store.plan(&id).await.unwrap()[0].outcome, None);
     assert_eq!(std::fs::read(&smi).unwrap(), b"<SAMI></SAMI>");
     assert!(!s.work().join("Season 01/Show S01E03.ass").exists());
 }
@@ -850,7 +851,7 @@ async fn an_apply_renamed_before_its_record_is_recorded_once() {
 }
 
 #[tokio::test]
-async fn a_file_that_takes_the_name_before_publishing_is_kept_and_the_episode_held() {
+async fn a_file_that_takes_the_name_before_publishing_is_kept_for_a_replacement_to_approve() {
     let s = setup().await;
     let id = stored_not_applied(&s).await;
     let bytes = fake::ass("Show-02");
@@ -872,11 +873,18 @@ async fn a_file_that_takes_the_name_before_publishing_is_kept_and_the_episode_he
     std::fs::write(s.work().join(target), b"mine").unwrap();
     run(&s).await;
 
+    // The episode has a subtitle now: its replacement waits for a person.
     let d = detail(&s, &id).await;
-    assert_eq!(d.row.state, JobState::Held, "{:?}", d.row.note);
+    assert_eq!(
+        (d.row.state, d.row.wait),
+        (JobState::Waiting, Some(Wait::Approval)),
+        "{:?}",
+        d.row.note
+    );
     assert_eq!(std::fs::read(s.work().join(target)).unwrap(), b"mine");
     assert!(!s.work().join(&temp).exists());
     assert_eq!(s.count("subtitle_applied").await, 0);
+    assert_eq!(s.count("subtitle_replacements").await, 1);
 }
 
 /// Puts `job` last in line, as a job a killed worker left `running` behind
@@ -1603,13 +1611,20 @@ async fn the_subscribed_creators_package_applies_its_other_episodes() {
     .await;
     run(&s).await;
     let d = detail(&s, &id).await;
-    assert_eq!(d.row.state, JobState::Done, "{:?}", d.row.note);
+    assert_eq!(
+        (d.row.state, d.row.wait),
+        (JobState::Waiting, Some(Wait::Approval)),
+        "{:?}",
+        d.row.note
+    );
     assert!(s.work().join("Season 01/Show S01E03.ass").exists());
-    // Episode 4 has a subtitle, which stays.
+    // Episode 4 has a subtitle, which stays until a person approves
+    // replacing it.
     assert!(!s.work().join("Season 01/Show S01E04.ass").exists());
     let plan = s.store.plan(&id).await.unwrap();
     let four = plan.iter().find(|r| episode_of(r) == Some(4)).unwrap();
-    assert_eq!(four.outcome, Some(Outcome::Existing));
+    assert_eq!(four.outcome, None);
+    assert_eq!(s.count("subtitle_replacements").await, 1);
 
     // A pick's package stores them only.
     let s = setup().await;

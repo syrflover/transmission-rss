@@ -2,9 +2,10 @@ import { Link } from "react-router-dom";
 
 import { cn } from "@/lib/utils";
 
-import { jobPath, type JobFile, type JobItem, type Placement } from "./api";
+import { jobPath, type JobFile, type JobItem, type Placement, type Replacement } from "./api";
 import { FailureTag, ItemBadge } from "./badges";
 import { FORMAT_LABEL, episodeName, shownItem, sizeText } from "./format";
+import { waitingPositions } from "./replacementView";
 
 /** `받음 2 · 실패 1`: how many items ended in each way, for a job with more than one. */
 function summary(items: readonly JobItem[]): string {
@@ -34,14 +35,17 @@ const FILE_STATE = {
 /**
  * `회차별 결과`: what each episode of the job really came to and why, with the
  * files it received. A job where some failed says so above the list; it never
- * reads as complete.
+ * reads as complete. A file whose episode has a replacement to decide reads
+ * `교체 승인 대기`, not as under way.
  */
 export function JobResults({
   items,
   placements = [],
+  replacements = [],
 }: {
   items: readonly JobItem[];
   placements?: readonly Placement[];
+  replacements?: readonly Replacement[];
 }) {
   if (items.length === 0) {
     return (
@@ -50,6 +54,7 @@ export function JobResults({
       </p>
     );
   }
+  const waiting = waitingPositions(replacements);
   return (
     <div className="flex flex-col gap-2.5">
       {items.length > 1 && (
@@ -59,14 +64,22 @@ export function JobResults({
       )}
       <ul className="m-0 flex list-none flex-col gap-2.5 p-0">
         {items.map((item) => (
-          <ItemBlock key={item.id} item={item} placements={placements} />
+          <ItemBlock key={item.id} item={item} placements={placements} waiting={waiting} />
         ))}
       </ul>
     </div>
   );
 }
 
-function ItemBlock({ item, placements }: { item: JobItem; placements: readonly Placement[] }) {
+function ItemBlock({
+  item,
+  placements,
+  waiting,
+}: {
+  item: JobItem;
+  placements: readonly Placement[];
+  waiting: ReadonlySet<number>;
+}) {
   // A package of several files says what came of them in groups, not under
   // each file.
   const own = new Set(item.files.map((f) => f.id));
@@ -109,11 +122,12 @@ function ItemBlock({ item, placements }: { item: JobItem; placements: readonly P
               key={`${file.name}:${i}`}
               file={file}
               placements={grouped ? [] : placements.filter((p) => p.file_id === file.id)}
+              waiting={waiting}
             />
           ))}
         </ul>
       )}
-      {grouped && <PackageGroups placements={ofItem} />}
+      {grouped && <PackageGroups placements={ofItem} waiting={waiting} />}
     </li>
   );
 }
@@ -132,9 +146,13 @@ function answerLine(file: JobFile): string | null {
 const FONT_NAME = /폰트|글꼴|font/i;
 
 /** What came of a placed file, in a word, with the reason or the episode it went to. */
-function placementText(p: Placement): { word: string; detail: string | null; urgent: boolean } {
+function placementText(
+  p: Placement,
+  waiting: ReadonlySet<number>,
+): { word: string; detail: string | null; urgent: boolean } {
   const episode = p.episode !== null ? episodeName(String(p.episode)) : null;
   if (p.outcome === null) {
+    if (waiting.has(p.position)) return { word: "교체 승인 대기", detail: null, urgent: false };
     return p.question !== null
       ? { word: "회차 확인 필요", detail: p.question, urgent: false }
       : { word: "보관 대기", detail: null, urgent: false };
@@ -156,17 +174,22 @@ function placementText(p: Placement): { word: string; detail: string | null; urg
   }
 }
 
-/** The groups a package's files are told in, in this order. */
+/** The groups a package's files are told in, in this order; the first two are what a person decides. */
 const GROUPS: {
   key: string;
   title: string;
   urgent?: boolean;
-  match: (p: Placement) => boolean;
+  match: (p: Placement, waiting: ReadonlySet<number>) => boolean;
 }[] = [
   {
     key: "ask",
     title: "확인 필요",
     match: (p) => p.outcome === null && p.question !== null,
+  },
+  {
+    key: "approval",
+    title: "교체 승인 대기",
+    match: (p, waiting) => p.outcome === null && waiting.has(p.position),
   },
   { key: "held", title: "보류", match: (p) => p.outcome === "held" },
   {
@@ -200,7 +223,7 @@ const GROUPS: {
   {
     key: "pending",
     title: "처리 대기",
-    match: (p) => p.outcome === null && p.question === null,
+    match: (p, waiting) => p.outcome === null && p.question === null && !waiting.has(p.position),
   },
 ];
 
@@ -244,10 +267,16 @@ function GroupLine({
  * stored only (another episode, another format), on no episode, fonts and
  * attachments, dropped, and first what needs a person.
  */
-function PackageGroups({ placements }: { placements: readonly Placement[] }) {
+function PackageGroups({
+  placements,
+  waiting,
+}: {
+  placements: readonly Placement[];
+  waiting: ReadonlySet<number>;
+}) {
   const groups = GROUPS.map((g) => ({
     ...g,
-    rows: placements.filter(g.match),
+    rows: placements.filter((p) => g.match(p, waiting)),
   })).filter((g) => g.rows.length > 0);
   return (
     <div className="flex flex-col gap-2.5 border-t border-hairline-soft pt-2.5">
@@ -275,8 +304,8 @@ function PackageGroups({ placements }: { placements: readonly Placement[] }) {
   );
 }
 
-function PlacementLine({ placement }: { placement: Placement }) {
-  const { word, detail, urgent } = placementText(placement);
+function PlacementLine({ placement, waiting }: { placement: Placement; waiting: ReadonlySet<number> }) {
+  const { word, detail, urgent } = placementText(placement, waiting);
   return (
     <p className="text-xs leading-snug text-text-secondary">
       <b className={cn("font-semibold", urgent ? "text-urgent" : "text-text-primary")}>{word}</b>
@@ -285,7 +314,15 @@ function PlacementLine({ placement }: { placement: Placement }) {
   );
 }
 
-function FileLine({ file, placements }: { file: JobFile; placements: readonly Placement[] }) {
+function FileLine({
+  file,
+  placements,
+  waiting,
+}: {
+  file: JobFile;
+  placements: readonly Placement[];
+  waiting: ReadonlySet<number>;
+}) {
   // The size and format of what was received; a failed file's bytes are gone.
   // A ZIP is received whole as a bundle: which of its files serve which
   // episode is the analysis's, after the receipt. A ZIP named for fonts holds
@@ -329,7 +366,7 @@ function FileLine({ file, placements }: { file: JobFile; placements: readonly Pl
         <p className="text-xs leading-snug text-text-muted">{answer}</p>
       )}
       {placements.map((p) => (
-        <PlacementLine key={p.position} placement={p} />
+        <PlacementLine key={p.position} placement={p} waiting={waiting} />
       ))}
       {file.path !== null && (
         <p className="text-xs leading-snug text-text-muted [overflow-wrap:anywhere]">

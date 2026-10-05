@@ -1527,10 +1527,14 @@ async fn a_line_first_seen_after_the_creator_was_named_for_the_file_is_received_
         .is_empty());
     assert_eq!(w.job_count().await, 1);
 
-    // It receives beside the subtitle in place, which stays.
+    // It receives beside the subtitle in place, which stays until a person
+    // approves replacing it.
     w.run().await;
     let d = w.detail(&made[0]).await;
-    assert_eq!(d.row.state, JobState::Done);
+    assert_eq!(
+        (d.row.state, d.row.wait),
+        (JobState::Waiting, Some(Wait::Approval))
+    );
     assert!(d.items[0].files[0].path.is_some());
     assert_eq!(w.files().await, library);
     assert!(w.evaluate().await.is_empty());

@@ -247,12 +247,17 @@ pub struct Effect {
     pub sha256: String,
     pub object: Option<String>,
     pub reason: Option<String>,
+    /// For a replacement's removal or import: the path it takes off or
+    /// imports.
+    pub source: Option<String>,
+    /// The replacement plan it carries out.
+    pub plan_id: Option<String>,
 }
 
-const EFFECT_COLUMNS: &str =
-    "id, job_id, position, kind, state, folder, temp, target, video, size, sha256, object, reason";
+pub(crate) const EFFECT_COLUMNS: &str = "id, job_id, position, kind, state, folder, temp, target, \
+     video, size, sha256, object, reason, source, plan_id";
 
-fn effect(r: &Row<'_>) -> rusqlite::Result<Effect> {
+pub(crate) fn effect(r: &Row<'_>) -> rusqlite::Result<Effect> {
     Ok(Effect {
         id: r.get(0)?,
         job_id: r.get(1)?,
@@ -267,44 +272,53 @@ fn effect(r: &Row<'_>) -> rusqlite::Result<Effect> {
         sha256: r.get(10)?,
         object: r.get(11)?,
         reason: r.get(12)?,
+        source: r.get(13)?,
+        plan_id: r.get(14)?,
     })
 }
 
-/// The job's effects that did not end: `intended` or `prepared`.
+/// The job's effects that did not end: `intended`, `prepared` or
+/// `set_aside`.
 pub fn unfinished_effects(c: &Connection, job_id: &str) -> rusqlite::Result<Vec<Effect>> {
     let mut stmt = c.prepare(&format!(
         "SELECT {EFFECT_COLUMNS} FROM subtitle_file_effects
-          WHERE job_id = ?1 AND state IN ('intended', 'prepared')
+          WHERE job_id = ?1 AND state IN ('intended', 'prepared', 'set_aside')
           ORDER BY created_at, id"
     ))?;
     let rows = stmt.query_map([job_id], effect)?;
     rows.collect()
 }
 
+/// Inserts an effect as `intended`, in the caller's transaction.
+pub(crate) fn insert_intended(c: &Connection, e: &Effect, now: Millis) -> rusqlite::Result<()> {
+    c.execute(
+        &format!(
+            "INSERT INTO subtitle_file_effects ({EFFECT_COLUMNS}, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, 'intended', ?5, ?6, ?7, ?8, ?9, ?10, NULL, NULL, ?11, ?12,
+                     ?13, ?13)"
+        ),
+        params![
+            e.id,
+            e.job_id,
+            e.position,
+            e.kind,
+            e.folder,
+            e.temp,
+            e.target,
+            e.video,
+            e.size as i64,
+            e.sha256,
+            e.source,
+            e.plan_id,
+            now
+        ],
+    )?;
+    Ok(())
+}
+
 /// Records an effect's intent, before anything is written.
 pub fn intend(c: &mut Connection, e: &Effect, now: Millis) -> Result<(), JobError> {
-    durable(c, |c| {
-        c.execute(
-            &format!(
-                "INSERT INTO subtitle_file_effects ({EFFECT_COLUMNS}, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, 'intended', ?5, ?6, ?7, ?8, ?9, ?10, NULL, NULL, ?11, ?11)"
-            ),
-            params![
-                e.id,
-                e.job_id,
-                e.position,
-                e.kind,
-                e.folder,
-                e.temp,
-                e.target,
-                e.video,
-                e.size as i64,
-                e.sha256,
-                now
-            ],
-        )?;
-        Ok(())
-    })
+    durable(c, |c| Ok(insert_intended(c, e, now)?))
 }
 
 /// The temporary file of an intended effect is written and checked.
@@ -400,7 +414,8 @@ pub fn withdrawn(
 }
 
 /// The targets in `folder`, lower-cased, of the effects under way (of any
-/// job) but `except`: names another effect is about to take.
+/// job) but `except`, and the paths a replacement under way takes off:
+/// names another effect is about to take or change.
 pub fn busy_targets(
     c: &Connection,
     folder: &str,
@@ -408,7 +423,11 @@ pub fn busy_targets(
 ) -> rusqlite::Result<Vec<String>> {
     let mut stmt = c.prepare(
         "SELECT lower(target) FROM subtitle_file_effects
-          WHERE folder = ?1 AND state IN ('intended', 'prepared') AND id IS NOT ?2",
+          WHERE folder = ?1 AND state IN ('intended', 'prepared', 'set_aside') AND id IS NOT ?2
+         UNION
+         SELECT lower(source) FROM subtitle_file_effects
+          WHERE folder = ?1 AND kind = 'remove' AND state IN ('intended', 'prepared', 'set_aside')
+            AND id IS NOT ?2",
     )?;
     let rows = stmt.query_map(params![folder, except], |r| r.get::<_, String>(0))?;
     rows.collect()
@@ -961,6 +980,9 @@ pub struct StoredOnly {
     /// or is about to run. A job held or waiting for a person does not until
     /// the person acts, so its row is not told so.
     pub awaiting_video: bool,
+    /// The job whose replacement plan to decide puts it beside the
+    /// episode's video (`교체 승인`).
+    pub awaiting_approval: Option<String>,
 }
 
 pub fn stored_only(c: &Connection, work_id: &str) -> rusqlite::Result<Vec<StoredOnly>> {
@@ -973,7 +995,10 @@ pub fn stored_only(c: &Connection, work_id: &str) -> rusqlite::Result<Vec<Stored
                          WHERE p.stored_id = s.id AND p.action = 'apply'
                            AND p.outcome = 'no_video'
                            AND (j.state = 'waiting' AND j.wait IN ('video', 'subtitle')
-                                OR j.state IN ('partial', 'pending', 'running')))
+                                OR j.state IN ('partial', 'pending', 'running'))),
+                (SELECT r.job_id FROM subtitle_replacements r
+                  WHERE r.stored_id = s.id AND r.state = 'open'
+                  ORDER BY r.created_at LIMIT 1)
            FROM subtitle_stored s JOIN subtitle_assets a ON a.id = s.subtitle_asset_id
           WHERE s.work_id = ?1 AND s.episode IS NOT NULL
             AND NOT EXISTS (SELECT 1 FROM subtitle_applied ap
@@ -992,6 +1017,7 @@ pub fn stored_only(c: &Connection, work_id: &str) -> rusqlite::Result<Vec<Stored
             stored_at: r.get(6)?,
             job_id: r.get(7)?,
             awaiting_video: r.get(8)?,
+            awaiting_approval: r.get(9)?,
         })
     })?;
     rows.collect()

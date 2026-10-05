@@ -52,6 +52,9 @@ function describe(job: JobRow): string {
         ? "게시물을 열어 받을 파일을 찾고 있어요."
         : "자막 파일을 받고 있어요.";
     case "waiting":
+      if (job.wait === "approval") {
+        return "기존 자막을 바꿀지 사람의 승인을 기다려요. 위의 교체 승인 카드나 작업 상세에서 이어가요.";
+      }
       return job.wait === "auth"
         ? "사이트가 사람의 확인을 기다려요. 위의 인증 필요 카드나 작업 상세에서 이어가요."
         : "자막이 아직 출처에 연결되지 않아서 다시 확인하기를 기다려요.";

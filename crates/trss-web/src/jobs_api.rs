@@ -26,6 +26,28 @@
 //!   `null` for none). It reads only: it never asks for a browser run.
 //! - `POST /api/subtitle-jobs/{id}/screen` and the screen's socket: see
 //!   [`super::screen_api`].
+//!
+//!   A row whose episode had a subtitle has its latest replacement plan in
+//!   `replacements` ([`trss_jobs::place::replace`]): `plan_id` and `version`
+//!   (which a decision names, never shown), `state` (`open` to decide, then
+//!   `approved`, `kept`, `done`, `stale`, `held` or `failed`, with `reason`;
+//!   `new_revision` on a plan stale for a newer revision of its source), the
+//!   episode, `again` (why the version before went stale, and whether for a
+//!   newer revision: `다시 비교 필요`, `새 수정본 발견`), the version lines
+//!   `current` and `new` (received or changed time, size, dialogue lines,
+//!   creator, format, post, encoding, whether the app manages it, its path,
+//!   and the current one's stored file), `side_by_side` (the creator, format
+//!   or post differs, or the current file's source is not known), `paths`
+//!   (each path beside the video with its `action`, `add`, `replace`,
+//!   `remove` or `keep`, and a `warning` for a change the person may not
+//!   expect: `overwrite_unmanaged`, `remove_applied`) and `limits`
+//!   (`unknown_source`, `lines_unknown`, only those that hold).
+//! - `POST /api/subtitle-jobs/{id}/replacements/{plan}` `{ "version",
+//!   "decision": "replace" | "keep" }` a person's decision on the plan
+//!   (`새 자막으로 교체`, `현재 유지`): `200` `{ "state": "approved" | "kept" }`
+//!   and the worker woken, `404` for no such plan of the job, `409` when the
+//!   plan of that version is not the row's to decide any more (a newer
+//!   version replaced it, or it was decided): the person compares again.
 //! - `POST /api/subtitle-jobs/find` `{ "id", "work_id", "season", "creator" }`
 //!   makes a find job (직접 찾기): the server browser opens the most recently
 //!   observed post of `creator` (a source ID of the season's Anissia anime's
@@ -99,6 +121,10 @@ pub fn routes() -> Router<AppState> {
         .route("/subtitle-jobs/{id}", get(detail))
         .route("/subtitle-jobs/find", post(create_find))
         .route("/subtitle-jobs/{id}/finish", post(finish))
+        .route(
+            "/subtitle-jobs/{id}/replacements/{plan}",
+            post(replacement::decide),
+        )
 }
 
 /// How many done jobs the groups carry.
@@ -429,6 +455,9 @@ struct DetailView {
     /// The remote screen of a job that waits for a site's check in the
     /// server browser ([`super::screen_api`]); `null` when it has none.
     screen: Option<super::screen_api::ScreenView>,
+    /// The latest replacement plan of each row whose episode had a subtitle
+    /// (교체 비교와 승인).
+    replacements: Vec<replacement::ReplacementView>,
 }
 
 /// The steps in order, those not reached `upcoming`; `auth`, `placement` and
@@ -610,8 +639,10 @@ async fn detail(
             }
         })
         .collect();
+    let replacements = replacement::views(&state, &id).await?;
     Ok(Json(DetailView {
         steps: steps_view(&steps, &row),
+        replacements,
         placements,
         items: items_view,
         dropped: dropped
@@ -902,5 +933,6 @@ pub async fn follow_now(state: &AppState) {
     }
 }
 
+mod replacement;
 #[cfg(test)]
 mod tests;

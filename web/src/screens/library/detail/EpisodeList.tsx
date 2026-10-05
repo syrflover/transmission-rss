@@ -225,11 +225,15 @@ function AwaitingLine({ stored }: { stored: StoredSubtitle }) {
 /** The time a file was added, or `미상` when it was there before the app first looked. */
 const addedAt = (file: WorkFile) => (file.added_at === null ? "미상" : dateTime(file.added_at));
 
-/** The episode's stored subtitles: those waiting for its video, and the others (`보관본 있음`). */
+/**
+ * The episode's stored subtitles: those waiting for its video, those waiting for the user to approve a replacement
+ * (`교체 승인`), and the others (`보관본 있음`).
+ */
 function storedOf(episode: WorkEpisode) {
   return {
     awaiting: episode.stored.filter((stored) => stored.awaiting_video),
-    others: episode.stored.filter((stored) => !stored.awaiting_video),
+    approval: episode.stored.filter((stored) => !stored.awaiting_video && stored.approval_job !== null),
+    others: episode.stored.filter((stored) => !stored.awaiting_video && stored.approval_job === null),
   };
 }
 
@@ -256,7 +260,7 @@ function Details({
   onRetried: () => Promise<void>;
   onCreatorChanged: () => void;
 }) {
-  const { awaiting, others } = storedOf(episode);
+  const { awaiting, approval, others } = storedOf(episode);
   return (
     <dl id={id} className="m-0 grid grid-cols-[repeat(auto-fit,minmax(170px,1fr))] gap-x-4 gap-y-3 px-4 pt-1 pb-4 max-[720px]:px-3">
       {episode.failure !== null && <Failure failure={episode.failure} onRetried={onRetried} />}
@@ -291,6 +295,22 @@ function Details({
           </span>
           {awaiting.map((stored) => (
             <AwaitingLine key={stored.id} stored={stored} />
+          ))}
+        </Cell>
+      )}
+      {approval.length > 0 && (
+        <Cell label="교체 승인">
+          <span className="text-text-secondary">현재 자막을 이 자막으로 바꿀지 작업에서 비교해 정해요.</span>
+          {approval.map((stored) => (
+            <span key={stored.id} className="flex flex-col gap-1">
+              <AwaitingLine stored={stored} />
+              <Link
+                to={jobPath(stored.approval_job ?? "")}
+                className="inline-flex min-h-6 items-center self-start rounded-sm text-xs font-semibold underline underline-offset-2 focus-visible:outline-2 focus-visible:outline-focus max-[720px]:min-h-9"
+              >
+                작업 보기
+              </Link>
+            </span>
           ))}
         </Cell>
       )}
@@ -333,7 +353,7 @@ function Row({
 }) {
   const id = rowId(season, episode.episode);
   const detailId = `${id}-files`;
-  const { awaiting, others } = storedOf(episode);
+  const { awaiting, approval, others } = storedOf(episode);
   return (
     <li className="border-t border-hairline-soft first:border-t-0">
       <button
@@ -361,6 +381,12 @@ function Row({
             {episode.failure !== null && (
               <span className="inline-flex items-center rounded-full border border-urgent px-2 py-px text-xs font-bold whitespace-nowrap text-urgent">
                 받기 실패
+              </span>
+            )}
+            {/* The current subtitle stays until the user approves the new one in its job. */}
+            {approval.length > 0 && (
+              <span className="inline-flex items-center rounded-full border border-focus px-2 py-px text-xs font-bold whitespace-nowrap text-focus">
+                교체 승인
               </span>
             )}
             {/* Quiet and uncoloured: a candidate to look at, not a to-do. */}
