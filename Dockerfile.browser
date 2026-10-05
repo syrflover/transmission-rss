@@ -11,11 +11,20 @@ FROM clux/muslrust:stable AS builder
 
 WORKDIR /usr/src/transmission-rss
 
+COPY deploy/stamp-sources.sh /usr/local/bin/
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 
-# Only the launcher; `--locked` as in Dockerfile.
-RUN cargo build --release --locked -p trss-browser --bin trss-browserd
+# Only the launcher; `--locked` and the caches as in Dockerfile's `builder`,
+# whose mounts these are (the same ids), so a change elsewhere in the workspace
+# leaves the launcher as it is and the build only copies it out.
+RUN --mount=type=cache,id=trss-cargo-registry,target=/opt/cargo/registry,sharing=locked \
+    --mount=type=cache,id=trss-cargo-git,target=/opt/cargo/git,sharing=locked \
+    --mount=type=cache,id=trss-target,target=/usr/src/transmission-rss/target,sharing=locked \
+    stamp-sources.sh target/.source-stamps Cargo.toml Cargo.lock crates \
+    && cargo build --release --locked -p trss-browser --bin trss-browserd \
+    && mkdir /out \
+    && cp target/x86_64-unknown-linux-musl/release/trss-browserd /out/
 
 
 FROM debian:trixie-20260918-slim
@@ -49,9 +58,7 @@ RUN mkdir -p /etc/chromium/policies/managed \
 RUN useradd --uid 10001 --create-home --home-dir /home/browser --shell /usr/sbin/nologin browser \
     && mkdir -m 1777 /tmp/.X11-unix /downloads
 
-COPY --from=builder \
-    /usr/src/transmission-rss/target/x86_64-unknown-linux-musl/release/trss-browserd \
-    /usr/local/bin/trss-browserd
+COPY --from=builder /out/trss-browserd /usr/local/bin/trss-browserd
 
 USER browser
 

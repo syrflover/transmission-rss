@@ -13,15 +13,36 @@ RUN bun run build
 # Rust build: `trss-web` (web server), `trss-worker` (long-running collection
 # worker), `trss-extract` (the child process the worker unpacks a received
 # archive in, beside it) and `trss-probe` (the file probe, ticket 0060).
+#
+# The crates.io registry, the git checkouts and target/ are BuildKit cache
+# mounts that the builder keeps between builds, shared by the Rust stages here
+# and in Dockerfile.browser (the same ids): a rebuild compiles only the
+# workspace crates whose files changed and the crates that depend on them, and
+# each set of dependency features once. target/ is not in the stage's image, so the same RUN copies
+# the binaries out to /out. `sharing=locked`: one build at a time, so another
+# build cannot replace a binary between `cargo build` and that copy.
+# deploy/stamp-sources.sh lets cargo tell changed files by their content, since
+# every checkout that builds on the machine shares the cache.
 FROM clux/muslrust:stable AS builder
 
 WORKDIR /usr/src/transmission-rss
 
+COPY deploy/stamp-sources.sh /usr/local/bin/
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 
 # `--locked`: build the dependency versions the tests ran against.
-RUN cargo build --release --locked
+RUN --mount=type=cache,id=trss-cargo-registry,target=/opt/cargo/registry,sharing=locked \
+    --mount=type=cache,id=trss-cargo-git,target=/opt/cargo/git,sharing=locked \
+    --mount=type=cache,id=trss-target,target=/usr/src/transmission-rss/target,sharing=locked \
+    stamp-sources.sh target/.source-stamps Cargo.toml Cargo.lock crates \
+    && cargo build --release --locked \
+    && mkdir /out \
+    && cp target/x86_64-unknown-linux-musl/release/trss-web \
+        target/x86_64-unknown-linux-musl/release/trss-worker \
+        target/x86_64-unknown-linux-musl/release/trss-extract \
+        target/x86_64-unknown-linux-musl/release/trss-probe \
+        /out/
 
 
 # The probe alone, with `trss-extract` for its --unpack, for a host that runs a
@@ -29,25 +50,30 @@ RUN cargo build --release --locked
 # Not part of the image: build them with
 #   docker build --target probe-binary --output type=local,dest=probe-out .
 # which writes probe-out/trss-probe and probe-out/trss-extract, static
-# executables.
+# executables. It builds with the caches of `builder`.
 FROM clux/muslrust:stable AS probe-builder
 
 WORKDIR /usr/src/transmission-rss
 
+COPY deploy/stamp-sources.sh /usr/local/bin/
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 
-RUN cargo build --release --locked -p trss-probe -p trss-jobs \
-    --bin trss-probe --bin trss-extract
+RUN --mount=type=cache,id=trss-cargo-registry,target=/opt/cargo/registry,sharing=locked \
+    --mount=type=cache,id=trss-cargo-git,target=/opt/cargo/git,sharing=locked \
+    --mount=type=cache,id=trss-target,target=/usr/src/transmission-rss/target,sharing=locked \
+    stamp-sources.sh target/.source-stamps Cargo.toml Cargo.lock crates \
+    && cargo build --release --locked -p trss-probe -p trss-jobs \
+        --bin trss-probe --bin trss-extract \
+    && mkdir /out \
+    && cp target/x86_64-unknown-linux-musl/release/trss-probe \
+        target/x86_64-unknown-linux-musl/release/trss-extract \
+        /out/
 
 FROM scratch AS probe-binary
 
-COPY --from=probe-builder \
-    /usr/src/transmission-rss/target/x86_64-unknown-linux-musl/release/trss-probe \
-    /trss-probe
-COPY --from=probe-builder \
-    /usr/src/transmission-rss/target/x86_64-unknown-linux-musl/release/trss-extract \
-    /trss-extract
+COPY --from=probe-builder /out/trss-probe /trss-probe
+COPY --from=probe-builder /out/trss-extract /trss-extract
 
 
 FROM alpine:edge
@@ -57,10 +83,10 @@ RUN apk update
 WORKDIR /usr/local/bin
 
 COPY --from=builder \
-    /usr/src/transmission-rss/target/x86_64-unknown-linux-musl/release/trss-web \
-    /usr/src/transmission-rss/target/x86_64-unknown-linux-musl/release/trss-worker \
-    /usr/src/transmission-rss/target/x86_64-unknown-linux-musl/release/trss-extract \
-    /usr/src/transmission-rss/target/x86_64-unknown-linux-musl/release/trss-probe \
+    /out/trss-web \
+    /out/trss-worker \
+    /out/trss-extract \
+    /out/trss-probe \
     ./
 
 # Static frontend that `trss-web` serves (no Node server at runtime).
