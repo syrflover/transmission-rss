@@ -40,7 +40,10 @@
 //! - `placement_check` (`회차 확인 필요` too): a subtitle job waiting for a
 //!   person to say which episode its files are (the job's 배치 확인): one
 //!   to-do per job, which opens the job's detail (`job_id`). `files` are the
-//!   names of the files it asks about, `reason` the first one's question.
+//!   names of the files it asks about (an upload's or a find job's subtitles,
+//!   which its table places as a whole, else the held ones), `reason` the
+//!   first one's question, or, for a whole table, what the job waits for (its
+//!   note).
 //! - `replacement` (`교체 승인`): the subtitle jobs waiting for a person to
 //!   approve or refuse replacing an episode's subtitle
 //!   ([`trss_jobs::place::replace`]), one to-do per work (per job when it
@@ -706,14 +709,16 @@ async fn placement_check_todos(state: &AppState) -> Result<Vec<Todo>, ApiError> 
     let covers = covers_of(state, &waits).await?;
     let mut todos = Vec::new();
     for row in &waits {
-        let asked: Vec<_> = state
+        // An upload's or a find job's table is confirmed as a whole: its
+        // note says what it waits for, not one file's question.
+        let Some((asked, whole)) = state
             .jobs
-            .plan(&row.id)
+            .placeable(&row.id)
             .await
             .map_err(|e| internal(&e))?
-            .into_iter()
-            .filter(|r| r.question.is_some())
-            .collect();
+        else {
+            continue;
+        };
         todos.push(Todo::PlacementCheck {
             key: format!("placement:{}", row.id),
             at: row.state_at,
@@ -722,7 +727,10 @@ async fn placement_check_todos(state: &AppState) -> Result<Vec<Todo>, ApiError> 
             season: row.season,
             creator: row.creator.clone(),
             files: asked.iter().map(|r| r.name.clone()).collect(),
-            reason: asked.first().and_then(|r| r.question.clone()),
+            reason: match whole {
+                true => row.note.clone(),
+                false => asked.first().and_then(|r| r.question.clone()),
+            },
             job_id: row.id.clone(),
         });
     }

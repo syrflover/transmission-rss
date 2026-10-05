@@ -124,15 +124,16 @@ pub enum AskedFinish {
     Missing,
     /// The job is not a find job.
     NotFind,
-    /// The job had ended already.
+    /// The job's 받기 had ended already.
     Ended,
     /// The request is written; the worker ends the job once no download of
     /// its run is on its way, or at its next look when no run is bound.
     Asked,
 }
 
-/// An upload to record: the job is made `done`, with its files and the names
-/// of those it dropped.
+/// An upload to record: the job is made `pending` for the worker's analysis
+/// and a person's 배치 확인, with its files and the names of those it
+/// dropped.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewUpload {
     /// The job's ID, which names its folder in the receive area.
@@ -214,8 +215,12 @@ pub struct JobRow {
     pub failure: Option<FailureKind>,
     /// For an upload or a find job: what it kept and dropped.
     pub upload: Option<UploadSummary>,
-    /// For a find job: a person asked it to finish and it has not ended yet.
+    /// For a find job: a person asked it to finish and its 받기 has not
+    /// ended yet.
     pub finishing: bool,
+    /// For a find job: its 받기 has not ended ([`JobStore::end_find`] makes
+    /// its item done), so its remote screen and `받기 끝내기` still apply.
+    pub receiving: bool,
 }
 
 /// What an upload or a find job kept, by kind, and how many files it dropped.
@@ -225,6 +230,17 @@ pub struct UploadSummary {
     pub fonts: usize,
     pub archives: usize,
     pub dropped: usize,
+}
+
+impl UploadSummary {
+    /// What it kept, by kind.
+    pub fn counts(&self) -> crate::upload::Counts {
+        crate::upload::Counts {
+            subtitles: self.subtitles,
+            fonts: self.fonts,
+            archives: self.archives,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -459,8 +475,8 @@ impl JobStore {
             .await
     }
 
-    /// Records an upload as a job that is already `done`, unless its command
-    /// ID is known. The check and the writes are one transaction, so two
+    /// Records an upload as a job whose 받기 is over and that waits for the
+    /// worker (`pending`), unless its command ID is known. The check and the writes are one transaction, so two
     /// deliveries at once make one job.
     pub async fn create_upload(&self, upload: NewUpload, now: Millis) -> Result<Created, JobError> {
         self.db.run(move |c| create_upload(c, &upload, now)).await
@@ -887,7 +903,7 @@ impl JobStore {
                 if origin != FIND {
                     return Ok(AskedFinish::NotFind);
                 }
-                if state.is_finished() {
+                if state.is_finished() || received(&tx, &id)? {
                     return Ok(AskedFinish::Ended);
                 }
                 tx.execute(
@@ -901,13 +917,17 @@ impl JobStore {
             .await
     }
 
-    /// Ends the find job `done` when it has not ended and the run bound to it
-    /// is `run` (`None`: no run is bound): its item is done, its step
+    /// Ends the find job's 받기 when it has not ended and the run bound to
+    /// it is `run` (`None`: no run is bound): its item is done, its step
     /// `receive` too, a step `open` left unfinished (its screen could not be
     /// prepared) is done when a run once opened the post and goes when none
-    /// did, its screen goes, and its note and log say what it kept, or
-    /// 받은 파일 없음. The worker removes its folder of downloads. Whether it
-    /// ended now.
+    /// did, its screen goes, and its note and log say what it kept. A job
+    /// that kept files is `pending` again for the worker's analysis and a
+    /// person's 배치 확인; one that kept none ends `done` with 받은 파일 없음.
+    /// The worker removes its folder of downloads. Whether it ended now.
+    ///
+    /// The end of a run's watch (`Some`) waits while the job is `running`:
+    /// the job's run settles it first, and the next watch ends it.
     pub async fn end_find(
         &self,
         job_id: &str,
@@ -925,19 +945,96 @@ impl JobStore {
             .await
     }
 
-    /// The note of the upload job `job_id` once what it kept is placed, as it
-    /// was made with ([`upload_note`]); a wait in between leaves it another.
-    pub async fn upload_note(&self, job_id: &str) -> Result<String, JobError> {
+    /// The note of the upload or find job `job_id` once what it kept is
+    /// placed, as it was made or ended with ([`upload_note`],
+    /// [`found_note`]); a wait in between leaves it another.
+    pub async fn kept_note(&self, job_id: &str) -> Result<String, JobError> {
         let id = job_id.to_owned();
         self.db
             .run(move |c| {
+                let origin: Option<String> = c
+                    .query_row(
+                        "SELECT origin FROM subtitle_jobs WHERE id = ?1",
+                        [&id],
+                        |r| r.get(0),
+                    )
+                    .optional()?;
                 let summary = upload_summary(c, &id)?;
-                Ok(upload_note(&crate::upload::Counts {
-                    subtitles: summary.subtitles,
-                    fonts: summary.fonts,
-                    archives: summary.archives,
-                }))
+                Ok(match origin.as_deref() {
+                    Some(FIND) => found_note(&summary),
+                    _ => upload_note(&summary.counts()),
+                })
             })
+            .await
+    }
+
+    /// Whether a person confirmed the job's placement (배치 확인).
+    pub async fn placement_confirmed(&self, job_id: &str) -> Result<bool, JobError> {
+        let id = job_id.to_owned();
+        self.db
+            .run(move |c| {
+                Ok(c.query_row(
+                    "SELECT placement_confirmed_at IS NOT NULL FROM subtitle_jobs WHERE id = ?1",
+                    [id],
+                    |r| r.get::<_, bool>(0),
+                )
+                .optional()?
+                .unwrap_or(false))
+            })
+            .await
+    }
+
+    /// The rows of the job a person places at its 배치 확인, and whether
+    /// they are its whole plan ([`crate::place::records::placeable`]);
+    /// `None` for no such job.
+    pub async fn placeable(
+        &self,
+        job_id: &str,
+    ) -> Result<Option<(Vec<crate::place::records::PlanRow>, bool)>, JobError> {
+        let id = job_id.to_owned();
+        self.db
+            .run(move |c| {
+                let Some(facts) = crate::place::records::job_facts(c, &id)? else {
+                    return Ok(None);
+                };
+                let rows = crate::place::records::plan(c, &id)?;
+                let (positions, whole) = crate::place::records::placeable(&facts, &rows);
+                let asked = rows
+                    .into_iter()
+                    .filter(|r| positions.contains(&r.position))
+                    .collect();
+                Ok(Some((asked, whole)))
+            })
+            .await
+    }
+
+    /// Applies a person's 배치 확인 of the job
+    /// ([`crate::place::records::confirm_placement`]); `total` is the
+    /// season's episode count when known.
+    pub async fn confirm_placement(
+        &self,
+        job_id: &str,
+        placings: Vec<crate::place::records::RowPlacing>,
+        total: Option<u32>,
+        now: Millis,
+    ) -> Result<crate::place::records::Confirmed, JobError> {
+        let id = job_id.to_owned();
+        self.db
+            .run(move |c| crate::place::records::confirm_placement(c, &id, &placings, total, now))
+            .await
+    }
+
+    /// The library's videos and subtitles of the season, by episode
+    /// ([`crate::place::records::season_files`]).
+    pub async fn season_files(
+        &self,
+        work_id: &str,
+        season: u32,
+    ) -> Result<std::collections::BTreeMap<i64, crate::place::records::EpisodeFiles>, JobError>
+    {
+        let id = work_id.to_owned();
+        self.db
+            .run(move |c| Ok(crate::place::records::season_files(c, &id, season)?))
             .await
     }
 
@@ -950,6 +1047,8 @@ impl JobStore {
                     "SELECT j.id FROM subtitle_jobs j
                      WHERE j.origin = 'find' AND j.finish_at IS NOT NULL
                        AND j.state IN ('waiting', 'held')
+                       AND EXISTS (SELECT 1 FROM subtitle_job_items i
+                                   WHERE i.job_id = j.id AND i.state <> 'done')
                        AND NOT EXISTS (SELECT 1 FROM subtitle_job_screens s
                                        WHERE s.job_id = j.id AND s.run_id IS NOT NULL)
                      ORDER BY j.seq",
@@ -1790,17 +1889,14 @@ fn create_upload(c: &mut Connection, up: &NewUpload, now: Millis) -> Result<Crea
         0 => String::new(),
         n => format!(" · 뺀 파일 {n}개"),
     };
-    // An upload that kept an archive waits for the worker, which unpacks it
-    // (`crate::place::unpack`); the others are done as they are made.
-    let (state, finished_at) = match counts.archives {
-        0 => (JobState::Done, Some(now)),
-        _ => (JobState::Pending, None),
-    };
+    // The worker analyses what was uploaded (unpacking an archive,
+    // `crate::place::unpack`), and the job waits for the person's
+    // 배치 확인 before anything is kept.
     tx.execute(
         "INSERT INTO subtitle_jobs
              (id, command_id, request, origin, work_id, season, anime_no, source_id, creator,
-              state, note, created_at, updated_at, state_at, finished_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12, ?12, ?13)",
+              state, note, created_at, updated_at, state_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12, ?12)",
         params![
             up.id,
             up.command_id,
@@ -1811,10 +1907,9 @@ fn create_upload(c: &mut Connection, up: &NewUpload, now: Millis) -> Result<Crea
             up.anime_no,
             up.source_id,
             up.creator,
-            state,
+            JobState::Pending,
             upload_note(&counts),
-            now,
-            finished_at
+            now
         ],
     )?;
     tx.execute(
@@ -1939,7 +2034,14 @@ fn end_find(tx: &Connection, id: &str, run: Option<&str>, now: Millis) -> Result
             |r| r.get(0),
         )
         .optional()?;
-    if open.is_none_or(JobState::is_finished) {
+    if open.is_none_or(JobState::is_finished) || received(tx, id)? {
+        return Ok(false);
+    }
+    // A run of the job holds it while it is `running` and writes the job's
+    // wait when it settles: a watch's end leaves the job to it, or that wait
+    // would be written over the ended 받기. The worker watches only jobs that
+    // wait for their check; this keeps the order without counting on it.
+    if run.is_some() && open == Some(JobState::Running) {
         return Ok(false);
     }
     let bound: Option<String> = tx
@@ -1954,24 +2056,25 @@ fn end_find(tx: &Connection, id: &str, run: Option<&str>, now: Millis) -> Result
         return Ok(false);
     }
     let summary = upload_summary(tx, id)?;
-    let counts = crate::upload::Counts {
-        subtitles: summary.subtitles,
-        fonts: summary.fonts,
-        archives: summary.archives,
-    };
     let dropped = match summary.dropped {
         0 => String::new(),
         n => format!(" · 뺀 파일 {n}개"),
     };
     let kept = summary.subtitles + summary.fonts + summary.archives;
-    let (note, message) = match kept {
+    // What it kept goes on to the worker's analysis and a person's
+    // 배치 확인: the job is back in line.
+    let (note, message, state, finished_at) = match kept {
         0 => (
             format!("{NOTHING_FOUND}{dropped}"),
             "받은 파일 없이 받기를 끝냈어요",
+            JobState::Done,
+            Some(now),
         ),
         _ => (
-            format!("받은 파일: {}{dropped}", counts.sentence()),
+            found_note(&summary),
             "받기를 끝냈어요",
+            JobState::Pending,
+            None,
         ),
     };
     tx.execute(
@@ -2003,10 +2106,10 @@ fn end_find(tx: &Connection, id: &str, run: Option<&str>, now: Millis) -> Result
     )?;
     tx.execute(
         "UPDATE subtitle_jobs
-         SET state = 'done', wait = NULL, note = ?2, stage = NULL, state_at = ?3,
-             updated_at = ?3, finished_at = ?3, attempts = 0
+         SET state = ?4, wait = NULL, note = ?2, stage = NULL, state_at = ?3,
+             updated_at = ?3, finished_at = ?5, attempts = 0
          WHERE id = ?1",
-        params![id, note, now],
+        params![id, note, now, state, finished_at],
     )?;
     tx.execute("DELETE FROM subtitle_job_screens WHERE job_id = ?1", [id])?;
     tx.execute(
@@ -2015,6 +2118,17 @@ fn end_find(tx: &Connection, id: &str, run: Option<&str>, now: Millis) -> Result
         params![id, now, message, note],
     )?;
     Ok(true)
+}
+
+/// Whether the find job `id`'s 받기 ended: [`end_find`] made its item done,
+/// and it went on to its placement.
+fn received(tx: &Connection, id: &str) -> rusqlite::Result<bool> {
+    tx.query_row(
+        "SELECT NOT EXISTS (SELECT 1 FROM subtitle_job_items
+                            WHERE job_id = ?1 AND state <> 'done')",
+        [id],
+        |r| r.get(0),
+    )
 }
 
 /// The note of a find job that ended with no file kept.
@@ -2051,6 +2165,11 @@ const JOB_COLUMNS: &str = "
              ORDER BY r.id DESC LIMIT 1),
            j.revises_attributed,
            j.finish_at IS NOT NULL AND j.state NOT IN ('done', 'failed', 'partial')
+             AND EXISTS (SELECT 1 FROM subtitle_job_items i
+                         WHERE i.job_id = j.id AND i.state <> 'done'),
+           j.origin = 'find' AND j.state NOT IN ('done', 'failed', 'partial')
+             AND EXISTS (SELECT 1 FROM subtitle_job_items i
+                         WHERE i.job_id = j.id AND i.state <> 'done')
     FROM subtitle_jobs j
     LEFT JOIN works w ON w.id = j.work_id
     LEFT JOIN anissia_anime a ON a.anime_no = j.anime_no";
@@ -2082,6 +2201,7 @@ fn job_row(r: &Row<'_>) -> rusqlite::Result<JobRow> {
         failure: None,
         upload: None,
         finishing: r.get(19)?,
+        receiving: r.get(20)?,
     })
 }
 
@@ -2140,6 +2260,15 @@ fn rows<P: rusqlite::Params>(c: &Connection, tail: &str, p: P) -> Result<Vec<Job
 /// An upload job's note: what it kept (`올린 파일: 자막 3개`).
 fn upload_note(counts: &crate::upload::Counts) -> String {
     format!("올린 파일: {}", counts.sentence())
+}
+
+/// The note of a find job that ended with files: what it kept and dropped.
+fn found_note(summary: &UploadSummary) -> String {
+    let dropped = match summary.dropped {
+        0 => String::new(),
+        n => format!(" · 뺀 파일 {n}개"),
+    };
+    format!("받은 파일: {}{dropped}", summary.counts().sentence())
 }
 
 /// What the upload job `id` kept and dropped.

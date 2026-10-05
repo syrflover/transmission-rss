@@ -258,20 +258,8 @@ pub fn plan(candidates: &[Candidate<'_>], files: &[File<'_>], ctx: &Context<'_>)
     let Some(first) = candidates.first() else {
         return Planned::default();
     };
-    let mut members: Vec<Member> = files.iter().map(|f| member(f.name, f.format)).collect();
-    // A SUB beside an IDX of the same name is that IDX's.
-    for i in 0..files.len() {
-        if extension(files[i].name).as_deref() == Some("sub") {
-            let stem = stem_of(files[i].name);
-            let paired = files
-                .iter()
-                .any(|f| extension(f.name).as_deref() == Some("idx") && stem_of(f.name) == stem);
-            if paired {
-                members[i] = Member::Companion;
-            }
-        }
-    }
-    let base = |i: usize| files[i].name.rsplit('/').next().unwrap_or(files[i].name);
+    let members = members_of(files);
+    let base = |i: usize| base_name(files[i].name);
     let subtitles: Vec<usize> = (0..files.len())
         .filter(|&i| matches!(members[i], Member::Subtitle(_)))
         .collect();
@@ -536,36 +524,319 @@ pub fn plan(candidates: &[Candidate<'_>], files: &[File<'_>], ctx: &Context<'_>)
                     }
                     Err(None) => {}
                 }
-                if extension(file.name).as_deref() == Some("idx") {
-                    let stem = stem_of(file.name);
-                    let has_sub = files
-                        .iter()
-                        .enumerate()
-                        .any(|(j, f)| members[j] == Member::Companion && stem_of(f.name) == stem);
-                    if !has_sub {
-                        row.note = Some("짝인 SUB 파일이 묶음에 없어요".to_owned());
-                    }
-                }
+                note_lone_idx(&mut row, file, files, &members);
             }
-            Member::Font => row.kind = AssetKind::Font,
-            Member::Attachment => row.kind = AssetKind::Attachment,
-            Member::Companion => row.kind = AssetKind::Companion,
-            Member::Other | Member::Archive => {
-                row.kind = AssetKind::Other;
-                row.action = PlanAction::Drop;
-                row.outcome = Some(Outcome::Dropped);
-                row.note = Some(NOT_KEPT.to_owned());
-            }
-        }
-        if row.kind != AssetKind::Subtitle {
-            row.attachment_episode = None;
+            other => not_subtitle(&mut row, other),
         }
         rows.push(row);
     }
 
-    // Which file of each episode is applied.
+    choose(&mut rows, on_episode, ctx, |own| own || ctx.follow);
+    for (i, question) in split {
+        if rows[i].format.and_then(SubtitleFormat::extension).is_some() {
+            rows[i].action = PlanAction::Apply;
+            rows[i].question = Some(question);
+            rows[i].note = None;
+        }
+    }
+    // A question of the episode applies once answered.
+    for row in &mut rows {
+        if row.question.is_some() && row.placed.is_none() {
+            row.action = match row.format.and_then(SubtitleFormat::extension) {
+                Some(_) => PlanAction::Apply,
+                None => PlanAction::Store,
+            };
+            if row.action == PlanAction::Store {
+                row.question = None;
+                row.note = Some("자동으로 적용하지 않는 형식이라 보관만 해요".to_owned());
+            }
+        }
+    }
+
+    let missing = match ask_all {
+        true => Vec::new(),
+        false => candidates
+            .iter()
+            .filter(|c| {
+                !chosen.values().any(|(of, _)| of.item_id == c.item_id)
+                    && !held.values().any(|(of, _)| of.item_id == c.item_id)
+            })
+            .map(|c| {
+                (
+                    c.item_id,
+                    format!("받은 묶음에 후보의 {} 파일이 없어요", label(c.episode)),
+                )
+            })
+            .collect(),
+    };
+    Planned { rows, missing }
+}
+
+/// The plan of a package a person uploaded or found (`origin` `upload` or
+/// `find`), which no candidate names an episode for: each subtitle is on the
+/// episode its name says, through the source's mapping when it has one
+/// (`mapped`), else under the same number (`explicit`, also for an unknown
+/// creator). A name whose number cannot be one of the season's (another
+/// season's mark, a decimal or text episode, several or no number, outside
+/// the season, a mapping that is undecided or does not take it) is asked
+/// about. Every subtitle is the person's to apply, so each episode applies
+/// its first format of the order. The plan waits for the person's
+/// 배치 확인 before anything is kept.
+pub fn plan_named(item_id: i64, files: &[File<'_>], ctx: &Context<'_>) -> Planned {
+    let members = members_of(files);
+    let mut rows: Vec<Row> = Vec::with_capacity(files.len());
+    let mut on_episode: BTreeMap<i64, Vec<(usize, bool)>> = BTreeMap::new();
+    for (i, file) in files.iter().enumerate() {
+        let base = base_name(file.name);
+        let mut row = Row {
+            file: i,
+            kind: AssetKind::Subtitle,
+            format: None,
+            item_id,
+            anissia_episode: None,
+            attachment_episode: match named(base) {
+                Named::One(key) => Some(key),
+                _ => None,
+            },
+            placed: None,
+            question: None,
+            action: PlanAction::Store,
+            outcome: None,
+            note: None,
+        };
+        match members[i] {
+            Member::Subtitle(format) => {
+                row.format = Some(format);
+                match named_target(base, ctx) {
+                    Ok(placed) => {
+                        on_episode
+                            .entry(placed.episode)
+                            .or_default()
+                            .push((i, true));
+                        row.placed = Some(placed);
+                    }
+                    Err(reason) if format.extension().is_some() => {
+                        row.action = PlanAction::Apply;
+                        row.question = Some(reason);
+                    }
+                    Err(reason) => {
+                        row.note = Some(format!("회차에 붙이지 않고 보관만 해요: {reason}"));
+                    }
+                }
+                note_lone_idx(&mut row, file, files, &members);
+            }
+            other => not_subtitle(&mut row, other),
+        }
+        rows.push(row);
+    }
+    choose(&mut rows, on_episode, ctx, |_| true);
+    Planned {
+        rows,
+        missing: Vec::new(),
+    }
+}
+
+/// The season's episode a person's file `base` names (see [`plan_named`]),
+/// or why it is asked about.
+fn named_target(base: &str, ctx: &Context<'_>) -> Result<Placed, String> {
+    let key = match named(base) {
+        Named::One(key) => key,
+        Named::Nothing => return Err("파일 이름에 회차 번호가 없어요".to_owned()),
+        Named::Several => return Err("파일 이름이 회차 여럿을 가리켜요".to_owned()),
+    };
+    if let Some(m) = season_mark(base).filter(|&m| m != ctx.season) {
+        return Err(format!(
+            "파일 이름이 가리키는 시즌({m})이 이 작업의 시즌({})과 달라 보여요",
+            ctx.season
+        ));
+    }
+    let Some(number) = whole(&key) else {
+        return Err(format!(
+            "{}는 정수 회차가 아니라 시즌의 회차로 정하지 못했어요",
+            label(&key)
+        ));
+    };
+    let placed = match ctx.mapping.map(|m| (m, m.season_episode(&key))) {
+        None => Placed {
+            episode: number,
+            assignment: Assignment::Explicit,
+            basis: None,
+        },
+        Some((_, Mapped::Episode(n))) => Placed {
+            episode: n,
+            assignment: Assignment::Mapped,
+            basis: Some(Basis::Attachment),
+        },
+        Some((_, Mapped::NotReceived)) => {
+            return Err(format!(
+                "회차 대응이 {}를 받지 않는 회차로 정해 두었어요",
+                label(&key)
+            ))
+        }
+        Some((m, Mapped::Unmapped)) => {
+            return Err(match m.decided_offset() {
+                None => "이 제작자의 회차 대응이 아직 미정이에요".to_owned(),
+                Some(_) => format!("{}는 회차 대응으로 옮길 수 없는 회차예요", label(&key)),
+            })
+        }
+    };
+    if placed.episode < 1 || ctx.total.is_some_and(|n| placed.episode > i64::from(n)) {
+        return Err(format!(
+            "{}가 시즌의 {} 밖이에요",
+            label(&key),
+            match ctx.total {
+                Some(n) => format!("1–{n}화"),
+                None => "1화부터".to_owned(),
+            }
+        ));
+    }
+    Ok(placed)
+}
+
+/// One subtitle row as a person placed it at 배치 확인: on `episode` (none:
+/// on no episode), and whether they want it applied.
+#[derive(Debug, Clone)]
+pub struct Placing<'a> {
+    pub episode: Option<i64>,
+    pub apply: bool,
+    pub format: SubtitleFormat,
+    pub sha256: &'a str,
+}
+
+/// What a person's placing comes to, by row: applied or stored only, with
+/// why. Of the rows they want applied on an episode, the first format of
+/// `order` is applied and the others are stored, a file with the same bytes
+/// once; two files of that format with different bytes are refused with why,
+/// since no rule tells them apart.
+pub fn placing(
+    rows: &[Placing<'_>],
+    order: &[SubtitleFormat],
+) -> Result<Vec<(PlanAction, Option<String>)>, String> {
+    let mut out: Vec<(PlanAction, Option<String>)> = rows
+        .iter()
+        .map(|r| {
+            let note = match (r.apply, r.episode) {
+                (_, None) => "회차에 붙이지 않고 보관만 해요",
+                (false, Some(_)) => "배치 확인에서 적용하지 않기로 해 보관만 해요",
+                (true, Some(_)) => "자동으로 적용하지 않는 형식이라 보관만 해요",
+            };
+            (PlanAction::Store, Some(note.to_owned()))
+        })
+        .collect();
+    let mut on_episode: BTreeMap<i64, Vec<usize>> = BTreeMap::new();
+    for (i, r) in rows.iter().enumerate() {
+        if let (true, Some(episode)) = (r.apply, r.episode) {
+            on_episode.entry(episode).or_default().push(i);
+        }
+    }
+    for (episode, on) in on_episode {
+        let Some(picked) = order
+            .iter()
+            .copied()
+            .find(|f| on.iter().any(|&i| rows[i].format == *f))
+        else {
+            continue;
+        };
+        let of_picked: Vec<usize> = on
+            .iter()
+            .copied()
+            .filter(|&i| rows[i].format == picked)
+            .collect();
+        let mut bytes: Vec<&str> = of_picked.iter().map(|&i| rows[i].sha256).collect();
+        bytes.sort_unstable();
+        bytes.dedup();
+        if bytes.len() > 1 {
+            return Err(format!(
+                "{}화에 적용할 {} 자막이 {}개예요. 하나만 남기고 나머지는 적용하지 않음으로 둬 주세요.",
+                episode,
+                format_name(picked),
+                bytes.len()
+            ));
+        }
+        for &i in &on {
+            out[i].1 = match rows[i].format {
+                f if f == picked => continue,
+                SubtitleFormat::Other => {
+                    Some("자동으로 적용하지 않는 형식이라 보관만 해요".to_owned())
+                }
+                _ => Some(format!(
+                    "형식 순서에 따라 {}를 적용하고 이 형식은 보관만 해요",
+                    format_name(picked)
+                )),
+            };
+        }
+        let (apply, rest) = of_picked.split_first().expect("one at least");
+        out[*apply] = (PlanAction::Apply, None);
+        for &i in rest {
+            out[i].1 = Some("같은 내용의 파일을 적용하므로 이 파일은 보관만 해요".to_owned());
+        }
+    }
+    Ok(out)
+}
+
+/// The name without its folders.
+fn base_name(name: &str) -> &str {
+    name.rsplit('/').next().unwrap_or(name)
+}
+
+/// What each file is, a SUB beside an IDX of the same name being that IDX's.
+fn members_of(files: &[File<'_>]) -> Vec<Member> {
+    let mut members: Vec<Member> = files.iter().map(|f| member(f.name, f.format)).collect();
+    for i in 0..files.len() {
+        if extension(files[i].name).as_deref() == Some("sub") {
+            let stem = stem_of(files[i].name);
+            let paired = files
+                .iter()
+                .any(|f| extension(f.name).as_deref() == Some("idx") && stem_of(f.name) == stem);
+            if paired {
+                members[i] = Member::Companion;
+            }
+        }
+    }
+    members
+}
+
+/// The row of a file that is no subtitle: kept as its kind, or dropped.
+fn not_subtitle(row: &mut Row, member: Member) {
+    match member {
+        Member::Font => row.kind = AssetKind::Font,
+        Member::Attachment => row.kind = AssetKind::Attachment,
+        Member::Companion => row.kind = AssetKind::Companion,
+        Member::Other | Member::Archive | Member::Subtitle(_) => {
+            row.kind = AssetKind::Other;
+            row.action = PlanAction::Drop;
+            row.outcome = Some(Outcome::Dropped);
+            row.note = Some(NOT_KEPT.to_owned());
+        }
+    }
+    row.attachment_episode = None;
+}
+
+/// Notes an IDX whose SUB is not in the package.
+fn note_lone_idx(row: &mut Row, file: &File<'_>, files: &[File<'_>], members: &[Member]) {
+    if extension(file.name).as_deref() == Some("idx") {
+        let stem = stem_of(file.name);
+        let has_sub = files
+            .iter()
+            .enumerate()
+            .any(|(j, f)| members[j] == Member::Companion && stem_of(f.name) == stem);
+        if !has_sub {
+            row.note = Some("짝인 SUB 파일이 묶음에 없어요".to_owned());
+        }
+    }
+}
+
+/// Which file of each episode is applied: of the files `applies` wants
+/// (by whether each is its candidate's own), the first format of the order
+/// that is there; the others are stored only. Files of that format with
+/// different bytes are each asked about.
+fn choose(
+    rows: &mut [Row],
+    on_episode: BTreeMap<i64, Vec<(usize, bool)>>,
+    ctx: &Context<'_>,
+    applies: impl Fn(bool) -> bool,
+) {
     for (_, on) in on_episode {
-        let applies = |own: bool| own || ctx.follow;
         let wanted: Vec<usize> = on
             .iter()
             .filter(|(_, own)| applies(*own))
@@ -633,44 +904,6 @@ pub fn plan(candidates: &[Candidate<'_>], files: &[File<'_>], ctx: &Context<'_>)
             }
         }
     }
-    for (i, question) in split {
-        if rows[i].format.and_then(SubtitleFormat::extension).is_some() {
-            rows[i].action = PlanAction::Apply;
-            rows[i].question = Some(question);
-            rows[i].note = None;
-        }
-    }
-    // A question of the episode applies once answered.
-    for row in &mut rows {
-        if row.question.is_some() && row.placed.is_none() {
-            row.action = match row.format.and_then(SubtitleFormat::extension) {
-                Some(_) => PlanAction::Apply,
-                None => PlanAction::Store,
-            };
-            if row.action == PlanAction::Store {
-                row.question = None;
-                row.note = Some("자동으로 적용하지 않는 형식이라 보관만 해요".to_owned());
-            }
-        }
-    }
-
-    let missing = match ask_all {
-        true => Vec::new(),
-        false => candidates
-            .iter()
-            .filter(|c| {
-                !chosen.values().any(|(of, _)| of.item_id == c.item_id)
-                    && !held.values().any(|(of, _)| of.item_id == c.item_id)
-            })
-            .map(|c| {
-                (
-                    c.item_id,
-                    format!("받은 묶음에 후보의 {} 파일이 없어요", label(c.episode)),
-                )
-            })
-            .collect(),
-    };
-    Planned { rows, missing }
 }
 
 #[cfg(test)]

@@ -165,6 +165,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Remake(include_str!("../migrations/jobs/replacement.sql")),
     // 53: unpacking a received archive: the volumes of a split one, whether and why not it was unpacked, its members
     Migration::Sql(include_str!("../migrations/jobs/unpack.sql")),
+    // 54: a person confirms an upload's or a find job's placement before any of it is kept; the ones earlier builds finished go back in line
+    Migration::Sql(include_str!("../migrations/jobs/placement_confirm.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]

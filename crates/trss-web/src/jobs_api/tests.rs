@@ -14,13 +14,13 @@ use trss_jobs::{ItemState, JobStore};
 
 const ANIME: i64 = 3424;
 
-fn app() -> (AppState, Router) {
+pub(super) fn app() -> (AppState, Router) {
     let state = AppState::new(Db::open_blocking(":memory:").unwrap());
     let router = Router::new().nest("/api", crate::api::router().with_state(state.clone()));
     (state, router)
 }
 
-async fn call(
+pub(super) async fn call(
     router: &Router,
     method: Method,
     uri: &str,
@@ -43,11 +43,11 @@ async fn call(
     )
 }
 
-async fn get(router: &Router, uri: &str) -> (StatusCode, Value) {
+pub(super) async fn get(router: &Router, uri: &str) -> (StatusCode, Value) {
     call(router, Method::GET, uri, None).await
 }
 
-async fn sql(state: &AppState, sql: &'static str) {
+pub(super) async fn sql(state: &AppState, sql: &'static str) {
     state
         .jobs
         .db()
@@ -802,6 +802,7 @@ async fn finishing_a_find_job_asks_the_worker_and_never_ends_it_here() {
     );
     let (_, detail) = get(&router, &format!("/api/subtitle-jobs/{id}")).await;
     assert_eq!(detail["finishing"], true);
+    assert_eq!(detail["receiving"], true);
     assert_eq!(detail["state"], "pending");
 
     // Waiting with no browser run bound: still the worker's to end, since a
@@ -831,6 +832,7 @@ async fn finishing_a_find_job_asks_the_worker_and_never_ends_it_here() {
     let (_, detail) = get(&router, &format!("/api/subtitle-jobs/{id}")).await;
     assert_eq!(detail["note"], "받은 파일 없음");
     assert_eq!(detail["finishing"], false);
+    assert_eq!(detail["receiving"], false);
 
     // Only a find job is finished so.
     let (_, picked) = call(

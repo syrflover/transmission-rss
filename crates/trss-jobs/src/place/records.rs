@@ -3,6 +3,8 @@
 //! ([`durable`]), so the record of an effect's intent is on disk before the
 //! effect.
 
+use std::collections::BTreeMap;
+
 use rusqlite::{params, Connection, OptionalExtension, Row, TransactionBehavior};
 use trss_core::Millis;
 
@@ -31,11 +33,15 @@ pub struct JobFacts {
     pub season: Option<u32>,
     pub source_id: Option<String>,
     pub creator: Option<String>,
+    /// When a person confirmed the job's placement (배치 확인), for an
+    /// upload or a find job.
+    pub placement_confirmed_at: Option<Millis>,
 }
 
 pub fn job_facts(c: &Connection, job_id: &str) -> rusqlite::Result<Option<JobFacts>> {
     c.query_row(
-        "SELECT origin, work_id, season, source_id, creator FROM subtitle_jobs WHERE id = ?1",
+        "SELECT origin, work_id, season, source_id, creator, placement_confirmed_at
+           FROM subtitle_jobs WHERE id = ?1",
         [job_id],
         |r| {
             Ok(JobFacts {
@@ -44,6 +50,7 @@ pub fn job_facts(c: &Connection, job_id: &str) -> rusqlite::Result<Option<JobFac
                 season: r.get(2)?,
                 source_id: r.get(3)?,
                 creator: r.get(4)?,
+                placement_confirmed_at: r.get(5)?,
             })
         },
     )
@@ -1174,6 +1181,218 @@ pub fn choose_stored(
     })
 }
 
+/// A person's placing of one plan row at 배치 확인: on `episode` (none: on
+/// no episode), applied or not.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RowPlacing {
+    pub position: i64,
+    pub episode: Option<i64>,
+    pub apply: bool,
+}
+
+/// What came of a person's 배치 확인 ([`confirm_placement`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Confirmed {
+    /// The job is queued again to keep and apply its rows: how many are to
+    /// be applied and how many stored only.
+    Queued {
+        applied: usize,
+        stored: usize,
+    },
+    NotFound,
+    /// The job does not wait for its placement now.
+    NotWaiting,
+    /// The rows placed are not the ones the job asks about now.
+    Stale,
+    /// Why the placing is not taken, for the person.
+    Refused(String),
+}
+
+/// The rows of `job` a person places at its 배치 확인, and whether it is
+/// the whole plan: an upload's or a find job's subtitles before its first
+/// confirmation, else the rows it asks about (보류한 줄).
+pub fn placeable(facts: &JobFacts, rows: &[PlanRow]) -> (Vec<i64>, bool) {
+    let whole = (facts.origin == crate::store::UPLOAD || facts.origin == crate::store::FIND)
+        && facts.placement_confirmed_at.is_none();
+    let positions = rows
+        .iter()
+        .filter(|r| match whole {
+            true => r.kind == AssetKind::Subtitle && r.outcome.is_none(),
+            false => r.question.is_some() && r.outcome != Some(Outcome::Dropped),
+        })
+        .map(|r| r.position)
+        .collect();
+    (positions, whole)
+}
+
+/// Applies a person's 배치 확인 of the job: `placings` places every row it
+/// asks about ([`placeable`]), on an episode of the season (`1..=total`)
+/// or none, applied or not. Of the rows applied on an episode, the first
+/// format of the work's order is ([`crate::place::package::placing`]). A
+/// row left on its planned episode keeps what put it there (a mapping's
+/// `mapped`), a row it asked about too; one a person moved, or placed with
+/// no planned episode, is `explicit`. In one synced transaction with its
+/// log line, the rows are written, the job's placement is marked confirmed
+/// and the job queued again. Taken only while the job waits for it: an
+/// upload or a find job waiting for its placement, or a job with rows it
+/// asks about that neither runs, is held nor waits for an approval.
+pub fn confirm_placement(
+    c: &mut Connection,
+    job_id: &str,
+    placings: &[RowPlacing],
+    total: Option<u32>,
+    now: Millis,
+) -> Result<Confirmed, JobError> {
+    durable(c, |c| {
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let Some(facts) = job_facts(&tx, job_id)? else {
+            return Ok(Confirmed::NotFound);
+        };
+        let (state, wait): (String, Option<String>) = tx.query_row(
+            "SELECT state, wait FROM subtitle_jobs WHERE id = ?1",
+            [job_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        let rows = plan(&tx, job_id)?;
+        let (positions, whole) = placeable(&facts, &rows);
+        let waiting = match whole {
+            true => state == "waiting" && wait.as_deref() == Some("placement"),
+            false => state != "running" && state != "held" && wait.as_deref() != Some("approval"),
+        };
+        // A package of fonts and attachments alone has no row to place, and
+        // the person confirms keeping it all the same.
+        if !waiting || (positions.is_empty() && !whole) {
+            return Ok(Confirmed::NotWaiting);
+        }
+        let mut placed: Vec<i64> = placings.iter().map(|p| p.position).collect();
+        placed.sort_unstable();
+        let mut asked = positions.clone();
+        asked.sort_unstable();
+        if placed != asked {
+            return Ok(Confirmed::Stale);
+        }
+        let row_at = |position: i64| rows.iter().find(|r| r.position == position).expect("asked");
+        for p in placings {
+            if let Some(episode) = p.episode {
+                if episode < 1 || total.is_some_and(|n| episode > i64::from(n)) {
+                    return Ok(Confirmed::Refused(match total {
+                        Some(n) => format!("{episode}화는 이 시즌의 1–{n}화 밖이에요."),
+                        None => format!("{episode}화는 회차가 될 수 없어요."),
+                    }));
+                }
+            } else if p.apply {
+                return Ok(Confirmed::Refused(format!(
+                    "{}: 적용할 회차를 골라 주세요.",
+                    row_at(p.position).name
+                )));
+            }
+        }
+        // Another row of the job applied, or to apply, on an episode a
+        // placed row would be applied on.
+        let fixed: Vec<i64> = rows
+            .iter()
+            .filter(|r| !positions.contains(&r.position) && r.action == PlanAction::Apply)
+            .filter(|r| matches!(r.outcome, None | Some(Outcome::Applied | Outcome::NoVideo)))
+            .filter_map(|r| r.placed.as_ref().map(|p| p.episode))
+            .collect();
+        if let Some(episode) = placings
+            .iter()
+            .filter(|p| p.apply)
+            .filter_map(|p| p.episode)
+            .find(|e| fixed.contains(e))
+        {
+            return Ok(Confirmed::Refused(format!(
+                "이 작업이 {episode}화에 적용할 자막이 이미 있어요. 다른 회차로 두거나 적용하지 않음으로 둬 주세요."
+            )));
+        }
+        let order = match &facts.work_id {
+            Some(work) => format_order(&tx, work)?,
+            None => Vec::new(),
+        };
+        let decided = match crate::place::package::placing(
+            &placings
+                .iter()
+                .map(|p| {
+                    let row = row_at(p.position);
+                    crate::place::package::Placing {
+                        episode: p.episode,
+                        apply: p.apply,
+                        format: row.format.unwrap_or(SubtitleFormat::Other),
+                        sha256: &row.sha256,
+                    }
+                })
+                .collect::<Vec<_>>(),
+            &order,
+        ) {
+            Ok(decided) => decided,
+            Err(why) => return Ok(Confirmed::Refused(why)),
+        };
+        let (mut applied, mut stored) = (0, 0);
+        for (p, (action, note)) in placings.iter().zip(decided) {
+            let row = row_at(p.position);
+            let kept = row
+                .placed
+                .as_ref()
+                .filter(|planned| Some(planned.episode) == p.episode);
+            let (assignment, basis) = match (kept, p.episode) {
+                (Some(planned), _) => (Some(planned.assignment), planned.basis),
+                (None, Some(_)) => (Some(Assignment::Explicit), None),
+                (None, None) => (None, None),
+            };
+            match action {
+                PlanAction::Apply => applied += 1,
+                _ => stored += 1,
+            }
+            tx.execute(
+                "UPDATE subtitle_job_plan
+                    SET episode = ?3, assignment = ?4, basis = ?5, action = ?6, question = NULL,
+                        note = ?7,
+                        outcome = CASE WHEN ?6 = 'store' AND stored_id IS NOT NULL
+                                       THEN 'stored' END,
+                        updated_at = ?8
+                  WHERE job_id = ?1 AND position = ?2",
+                params![
+                    job_id,
+                    p.position,
+                    p.episode,
+                    assignment.map(Assignment::code),
+                    basis.map(Basis::code),
+                    action,
+                    note,
+                    now
+                ],
+            )?;
+        }
+        let note = "배치를 확인했어요";
+        let detail = match placings.is_empty() {
+            true => "폰트와 첨부만 보관해요".to_owned(),
+            false => format!("적용 {applied}개 · 보관만 {stored}개"),
+        };
+        tx.execute(
+            "UPDATE subtitle_jobs
+                SET state = 'pending', wait = NULL, finished_at = NULL, note = ?2,
+                    placement_confirmed_at = CASE WHEN ?4 THEN ?3 ELSE placement_confirmed_at END,
+                    state_at = ?3, updated_at = ?3
+              WHERE id = ?1",
+            params![job_id, note, now, whole],
+        )?;
+        tx.execute(
+            "INSERT INTO subtitle_job_steps (job_id, step, state, at, note)
+             VALUES (?1, 'placement', 'done', ?2, ?3)
+             ON CONFLICT (job_id, step) DO UPDATE
+             SET state = 'done', at = excluded.at, note = excluded.note",
+            params![job_id, now, detail],
+        )?;
+        tx.execute(
+            "INSERT INTO subtitle_job_events (job_id, at, message, detail)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![job_id, now, note, detail],
+        )?;
+        tx.commit()?;
+        Ok(Confirmed::Queued { applied, stored })
+    })
+}
+
 // ---------------------------------------------------------------------------
 // The library
 
@@ -1224,6 +1443,49 @@ pub fn episode_files(
         }
     }
     Ok((videos, subtitles))
+}
+
+/// The library's files of one episode, as paths relative to the work
+/// folder.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EpisodeFiles {
+    pub videos: Vec<String>,
+    pub subtitles: Vec<String>,
+}
+
+/// The library's files of the season by episode (whatever zeros its text
+/// has).
+pub fn season_files(
+    c: &Connection,
+    work_id: &str,
+    season: u32,
+) -> rusqlite::Result<BTreeMap<i64, EpisodeFiles>> {
+    let mut stmt = c.prepare(
+        "SELECT path, episode, kind FROM media_files WHERE work_id = ?1 AND season = ?2
+          ORDER BY path",
+    )?;
+    let rows = stmt.query_map(params![work_id, season], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, String>(2)?,
+        ))
+    })?;
+    let mut by_episode: BTreeMap<i64, EpisodeFiles> = BTreeMap::new();
+    for row in rows {
+        let (path, text, kind) = row?;
+        let Some(episode) =
+            trss_subtitles::episode::numeric_key(&text).and_then(|key| key.parse::<i64>().ok())
+        else {
+            continue;
+        };
+        let files = by_episode.entry(episode).or_default();
+        match kind.as_str() {
+            "video" => files.videos.push(path),
+            _ => files.subtitles.push(path),
+        }
+    }
+    Ok(by_episode)
 }
 
 /// The candidate's line as observed, for a stored subtitle

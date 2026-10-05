@@ -267,7 +267,7 @@ function PlacementCheckCard({ todo }: { todo: PlacementCheckTodo }) {
       work={todo.work}
       target={
         <TargetLine episodes={[]} creator={todo.creator}>
-          <Tag>받은 파일 {todo.files.length}개</Tag>
+          {todo.files.length > 0 && <Tag>받은 파일 {todo.files.length}개</Tag>}
           {todo.season !== null && todo.season > 1 && <Tag>시즌 {todo.season}</Tag>}
         </TargetLine>
       }

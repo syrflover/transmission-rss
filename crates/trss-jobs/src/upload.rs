@@ -15,8 +15,9 @@
 //!    ([`trss_subtitles::upload::judge`]), keeps subtitles, fonts and ZIPs
 //!    under safe names in the job's folder `<job>/` of the receive area, and
 //!    records the job with the files it kept and the names and reasons of
-//!    those it dropped: already `done`, or `pending` when it kept an archive,
-//!    for the worker to unpack ([`crate::place::unpack`]).
+//!    those it dropped, `pending` for the worker to unpack
+//!    ([`crate::place::unpack`]) and analyse them for the person's
+//!    배치 확인 ([`crate::place`]).
 //! 3. A job is made once for a command ID: a repeat of the same upload finds
 //!    the job it made, and the files of that repeat are removed.
 //!

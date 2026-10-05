@@ -29,6 +29,7 @@
 
 use std::{path::Path, sync::Arc, time::Duration};
 
+use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use trss_subtitles::{
     auth::{self, AuthBrowser, AuthPage, Waited},
@@ -203,22 +204,24 @@ impl Runner {
     }
 
     /// Ends the find job `job` that a person asked to finish and that has no
-    /// run bound, after taking what its last run left in its folder.
-    pub(super) async fn end_unbound_find(&self, job: &str) -> Result<(), JobError> {
+    /// run bound, after taking what its last run left in its folder. Says
+    /// whether it ended (a job that kept files is back in line).
+    pub(super) async fn end_unbound_find(&self, job: &str) -> Result<bool, JobError> {
         let _taking = self.find_take(job).await;
         let Some(found) = self.store.found(job).await? else {
-            return Ok(());
+            return Ok(false);
         };
         let mut budget = INFLATE_BUDGET;
         self.take_found(job, found.item_id, &mut budget).await?;
-        if self.store.end_find(job, None, self.now()).await? {
+        let ended = self.store.end_find(job, None, self.now()).await?;
+        if ended {
             println!("Subtitle job {job}: finished receiving");
             if let Some(browser) = &self.auth {
                 browser.release(job).await;
             }
             self.forget_staging(job, found.item_id).await;
         }
-        Ok(())
+        Ok(ended)
     }
 
     /// The job ended: its folder of downloads goes (with what its last
@@ -338,6 +341,7 @@ impl Runner {
         self,
         binding: screen::Binding,
         browser: Arc<dyn AuthBrowser>,
+        wake: Arc<Notify>,
         shutdown: CancellationToken,
     ) {
         let (job, run, item) = (
@@ -413,6 +417,8 @@ impl Runner {
                             println!("Subtitle job {job}: finished receiving");
                             browser.release(job).await;
                             self.forget_staging(job, item).await;
+                            // What it kept is analysed next.
+                            wake.notify_one();
                         }
                         Ok(false) => {}
                         Err(err) => eprintln!("Subtitle job {job}: finishing: {err}"),

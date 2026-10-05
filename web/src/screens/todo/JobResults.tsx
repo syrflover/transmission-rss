@@ -71,6 +71,24 @@ export function JobResults({
   );
 }
 
+/**
+ * `회차별 결과` of an upload or a find job: what came of its one package's files, in groups. Its files are listed
+ * above (`올린 파일`, `받은 파일`), and its item is on no episode of its own.
+ */
+export function PackageResults({
+  placements,
+  replacements = [],
+}: {
+  placements: readonly Placement[];
+  replacements?: readonly Replacement[];
+}) {
+  return (
+    <div className="flex min-w-0 flex-col rounded-card border border-hairline bg-surface-1 px-3.5 py-3 shadow-(--card-shadow)">
+      <PackageGroups placements={placements} waiting={waitingPositions(replacements)} divided={false} />
+    </div>
+  );
+}
+
 function ItemBlock({
   item,
   placements,
@@ -270,16 +288,19 @@ function GroupLine({
 function PackageGroups({
   placements,
   waiting,
+  divided = true,
 }: {
   placements: readonly Placement[];
   waiting: ReadonlySet<number>;
+  /** Set apart from the item's files above it. */
+  divided?: boolean;
 }) {
   const groups = GROUPS.map((g) => ({
     ...g,
     rows: placements.filter((p) => g.match(p, waiting)),
   })).filter((g) => g.rows.length > 0);
   return (
-    <div className="flex flex-col gap-2.5 border-t border-hairline-soft pt-2.5">
+    <div className={cn("flex flex-col gap-2.5", divided && "border-t border-hairline-soft pt-2.5")}>
       {groups.map((g) => (
         <section key={g.key} aria-label={g.title} className="flex flex-col gap-1.5">
           <h4

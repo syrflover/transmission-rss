@@ -330,6 +330,7 @@ async fn a_find_job_opens_the_creators_post_and_keeps_what_a_persons_click_downl
     );
     assert_eq!(d.row.note.as_deref(), Some(FIND_NOTE));
     assert_eq!(d.row.origin, FIND);
+    assert!(d.row.receiving);
     assert_eq!(d.row.creator.as_deref(), Some("메이커"));
     assert!(d.row.episodes.is_empty());
     assert_eq!(step(&d, StepKind::Open), Some(StepState::Done));
@@ -365,7 +366,7 @@ async fn a_find_job_opens_the_creators_post_and_keeps_what_a_persons_click_downl
 }
 
 #[tokio::test]
-async fn two_downloads_are_two_files_of_one_package_and_finishing_ends_the_job_done() {
+async fn two_downloads_are_two_files_of_one_package_and_finishing_hands_them_to_placement() {
     let s = setup(true).await;
     let id = browsing(&s).await;
     s.browser
@@ -379,11 +380,13 @@ async fn two_downloads_are_two_files_of_one_package_and_finishing_ends_the_job_d
         AskedFinish::Asked
     );
     assert!(detail(&s, &id).await.row.finishing);
+    // Receiving is over; the package goes on to its placement.
     until(3, || async {
-        detail(&s, &id).await.row.state == JobState::Done
+        detail(&s, &id).await.row.state == JobState::Pending
     })
     .await;
     let d = detail(&s, &id).await;
+    assert_eq!(d.row.finished_at, None);
     assert_eq!(d.items.len(), 1);
     assert_eq!(d.items[0].state, ItemState::Done);
     let names: Vec<_> = d.items[0].files.iter().map(|f| f.name.as_str()).collect();
@@ -399,6 +402,37 @@ async fn two_downloads_are_two_files_of_one_package_and_finishing_ends_the_job_d
     // Asked again, it is the same.
     assert_eq!(
         s.store.ask_finish(&id, 9_500).await.unwrap(),
+        AskedFinish::Ended
+    );
+
+    // The worker's next run plans the package and waits for a person to
+    // confirm where its files go (배치 확인), keeping nothing yet.
+    run(&s).await;
+    let d = detail(&s, &id).await;
+    assert_eq!(
+        (d.row.state, d.row.wait),
+        (JobState::Waiting, Some(Wait::Placement))
+    );
+    assert_eq!(
+        d.row.note.as_deref(),
+        Some("자막 2개가 붙을 회차를 확인해 주세요")
+    );
+    assert_eq!(step(&d, StepKind::Placement), Some(StepState::Waiting));
+    assert_eq!(step(&d, StepKind::Store), None);
+    let plan = s.store.plan(&id).await.unwrap();
+    assert_eq!(plan.len(), 2);
+    assert!(plan.iter().all(|r| r.outcome.is_none()));
+    assert!(!d.row.receiving);
+    // Its 받기 ended once: the worker's look at the screens leaves a job
+    // waiting for its 배치 확인 alone, though a person had asked to finish.
+    tend(&s).await;
+    let d = detail(&s, &id).await;
+    assert_eq!(d.row.wait, Some(Wait::Placement));
+    assert!(!d.row.finishing);
+    let ended = d.events.iter().filter(|e| e.message == "받기를 끝냈어요");
+    assert_eq!(ended.count(), 1);
+    assert_eq!(
+        s.store.ask_finish(&id, 9_900).await.unwrap(),
         AskedFinish::Ended
     );
 }
@@ -433,12 +467,12 @@ async fn finishing_waits_for_a_download_under_way_and_keeps_it() {
     tokio::time::sleep(Duration::from_millis(1_200)).await;
     assert_eq!(detail(&s, &id).await.row.state, JobState::Waiting);
 
-    // The download completes: it is the job's, then the job ends.
+    // The download completes: it is the job's, then receiving ends.
     s.browser
         .give(Next::File("maker-1.srt", fake::srt("maker-1")));
     s.browser.under_way.store(false, Ordering::SeqCst);
     until(3, || async {
-        detail(&s, &id).await.row.state == JobState::Done
+        detail(&s, &id).await.row.state == JobState::Pending
     })
     .await;
     let d = detail(&s, &id).await;
@@ -606,7 +640,7 @@ async fn finishing_a_job_whose_run_closed_is_ended_by_the_workers_next_look() {
     assert!(d.row.finishing);
     tend(&s).await;
     let d = detail(&s, &id).await;
-    assert_eq!(d.row.state, JobState::Done);
+    assert_eq!(d.row.state, JobState::Pending);
     assert!(!d.row.finishing);
     assert_eq!(d.row.note.as_deref(), Some("받은 파일: 자막 1개"));
 }
@@ -663,7 +697,7 @@ async fn a_file_a_restart_left_in_the_folder_is_received_when_the_job_is_finishe
     assert_eq!(detail(&s, &id).await.row.state, JobState::Waiting);
     tend(&s).await;
     let d = detail(&s, &id).await;
-    assert_eq!(d.row.state, JobState::Done);
+    assert_eq!(d.row.state, JobState::Pending);
     assert_eq!(d.row.note.as_deref(), Some("받은 파일: 자막 1개"));
     assert_eq!(d.items[0].files[0].name, "maker-1.srt");
     assert!(!staging.exists());
@@ -689,7 +723,7 @@ async fn two_takers_of_the_same_left_files_take_each_once() {
     a.unwrap();
     b.unwrap();
     let d = detail(&s, &id).await;
-    assert_eq!(d.row.state, JobState::Done);
+    assert_eq!(d.row.state, JobState::Pending);
     let mut names: Vec<_> = d.items[0].files.iter().map(|f| f.name.as_str()).collect();
     names.sort();
     assert_eq!(names, ["maker-1.srt", "maker-2.srt"]);
@@ -1079,4 +1113,61 @@ async fn a_find_job_command_is_made_once_and_other_jobs_cannot_be_finished() {
         s.store.ask_finish("nope", 1_000).await.unwrap(),
         AskedFinish::Missing
     );
+}
+
+/// A watch's finish never ends a job a run of it holds (`running`): the run
+/// would write the job's wait over the ended 받기, and the job would wait
+/// for its check with no screen, which nothing ends again. The worker
+/// watches only jobs that wait for their check; the store keeps the order
+/// itself, in the order `run_find` writes.
+#[tokio::test]
+async fn a_watchs_finish_waits_for_the_run_that_bound_it_to_settle_the_job() {
+    let s = setup(true).await;
+    let id = make(&s).await;
+    let item = detail(&s, &id).await.items[0].id;
+    // The job's run, as `run_find` writes it: claimed, bound, its item
+    // waiting for the person.
+    s.store.claim_next(950).await.unwrap().unwrap();
+    s.screens
+        .bind(&id, item, "run-1", "t-1", 960)
+        .await
+        .unwrap();
+    s.store
+        .set_item(
+            item,
+            ItemState::Waiting,
+            Some(Wait::Auth),
+            Some(FIND_NOTE.to_owned()),
+            970,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        s.store.ask_finish(&id, 975).await.unwrap(),
+        AskedFinish::Asked
+    );
+    // The watch's finish comes before the run settled the job.
+    assert!(!s.store.end_find(&id, Some("run-1"), 980).await.unwrap());
+    s.store
+        .settle(
+            &id,
+            JobState::Waiting,
+            Some(Wait::Auth),
+            Some(FIND_NOTE.to_owned()),
+            990,
+        )
+        .await
+        .unwrap();
+    let d = detail(&s, &id).await;
+    assert_eq!(
+        (d.row.state, d.row.wait),
+        (JobState::Waiting, Some(Wait::Auth))
+    );
+    assert!(d.row.receiving && d.row.finishing);
+    // The next watch of the run ends it.
+    assert!(s.store.end_find(&id, Some("run-1"), 1_000).await.unwrap());
+    let d = detail(&s, &id).await;
+    assert_eq!(d.row.state, JobState::Done);
+    assert_eq!(d.row.note.as_deref(), Some(NOTHING_FOUND));
+    assert!(!d.row.receiving && !d.row.finishing);
 }

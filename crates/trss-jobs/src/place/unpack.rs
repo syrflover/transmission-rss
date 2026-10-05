@@ -33,8 +33,8 @@
 //!   time limit.
 //!
 //! A placer with no unpacker (a worker without the program beside it) leaves
-//! archives as they are: their packages wait ([`super::ARCHIVE_LATER`]), and
-//! so does an upload or a find job that kept one ([`untried`]).
+//! archives as they are: their packages wait ([`super::ARCHIVE_LATER`]), an
+//! upload's or a find job's too.
 
 use std::path::PathBuf;
 
@@ -571,20 +571,6 @@ pub fn standing(c: &Connection, job_id: &str) -> rusqlite::Result<(Vec<String>, 
         |r| r.get(0),
     )?;
     Ok((failures, unplanned))
-}
-
-/// Whether the job has an archive an upload or a find job kept
-/// (`archive_type`) that was neither unpacked nor refused yet.
-pub fn untried(c: &Connection, job_id: &str) -> rusqlite::Result<bool> {
-    c.query_row(
-        "SELECT EXISTS (
-             SELECT 1 FROM subtitle_job_files
-              WHERE job_id = ?1 AND state = 'done' AND same_as IS NULL
-                AND archive_type IS NOT NULL AND volume_of IS NULL
-                AND unpacked_at IS NULL AND unpack_error IS NULL)",
-        [job_id],
-        |r| r.get(0),
-    )
 }
 
 /// The members `file_id` was unpacked to, in order.

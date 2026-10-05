@@ -226,7 +226,9 @@ async fn two_ass_a_font_and_a_text_file_make_one_package_that_says_what_it_dropp
     let id = made["id"].as_str().unwrap();
     let job = detail(&s.router, id).await;
     assert_eq!(job["origin"], "upload");
-    assert_eq!(job["state"], "done");
+    // Received, it waits for the worker's analysis and the 배치 확인.
+    assert_eq!(job["state"], "pending");
+    assert_eq!(job["receiving"], false);
     assert_eq!(job["title"], "작품");
     assert_eq!(job["season"], 1);
     assert_eq!(job["creator"], Value::Null);
@@ -284,14 +286,14 @@ async fn two_ass_a_font_and_a_text_file_make_one_package_that_says_what_it_dropp
         ]
     );
 
-    // It is among the done jobs of the list.
+    // It is among the waiting jobs of the list.
     let request = Request::builder()
         .uri("/api/subtitle-jobs")
         .body(Body::empty())
         .unwrap();
     let (_, groups) = answer(&s.router, request).await;
-    assert_eq!(groups["done"]["items"][0]["id"], id);
-    assert_eq!(groups["done"]["items"][0]["origin"], "upload");
+    assert_eq!(groups["waiting"][0]["id"], id);
+    assert_eq!(groups["waiting"][0]["origin"], "upload");
 }
 
 #[tokio::test]

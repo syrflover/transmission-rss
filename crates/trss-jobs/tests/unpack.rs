@@ -16,7 +16,8 @@ use tokio_util::sync::CancellationToken;
 use trss_core::{Clock, Db};
 use trss_jobs::{
     area::ReceiveArea,
-    model::{Outcome, PlanAction, StepKind},
+    model::{AssetKind, Outcome, PlanAction, StepKind},
+    place::records::{Confirmed, RowPlacing},
     store::{FileRow, JobDetail},
     Created, JobState, JobStore, NewItem, NewJob, Runner, Unpacker, Wait,
 };
@@ -246,6 +247,28 @@ async fn replace_bytes(s: &Setup, file: &FileRow, bytes: &[u8]) {
     })
     .await
     .unwrap();
+}
+
+/// Confirms the job's 배치 확인 as it was planned: each subtitle on the
+/// episode it was planned on, applied when it was to be.
+async fn confirm_as_planned(s: &Setup, id: &str) -> Confirmed {
+    let placings = s
+        .store
+        .plan(id)
+        .await
+        .unwrap()
+        .iter()
+        .filter(|r| r.kind == AssetKind::Subtitle && r.outcome.is_none())
+        .map(|r| RowPlacing {
+            position: r.position,
+            episode: episode_of(r),
+            apply: r.action == PlanAction::Apply && r.placed.is_some(),
+        })
+        .collect();
+    s.store
+        .confirm_placement(id, placings, None, 5_000)
+        .await
+        .unwrap()
 }
 
 /// The note of the job's receiving step.
@@ -610,7 +633,7 @@ async fn a_split_set_without_its_first_volume_says_why() {
 
 // Uploads of RAR 5, 7z, `tar.xz` and a RAR in volumes (ticket 0065): the job
 // waits for the worker, which unpacks each, and the job detail has what came
-// of them. Placing them waits for the placement check (0066).
+// of them. Their members wait for a person's 배치 확인 (0066).
 #[tokio::test]
 async fn uploaded_archives_of_each_format_are_unpacked_by_the_worker() {
     let s = setup().await;
@@ -649,8 +672,16 @@ async fn uploaded_archives_of_each_format_are_unpacked_by_the_worker() {
     s.run().await;
 
     let d = s.detail(&id).await;
-    assert_eq!(d.row.state, JobState::Done, "{:?}", d.row.note);
-    assert_eq!(d.row.note.as_deref(), Some("올린 파일: 압축 파일 5개"));
+    assert_eq!(
+        (d.row.state, d.row.wait),
+        (JobState::Waiting, Some(Wait::Placement)),
+        "{:?}",
+        d.row.note
+    );
+    assert_eq!(
+        d.row.note.as_deref(),
+        Some("자막 8개가 붙을 회차를 확인해 주세요")
+    );
     assert_eq!(receive_note(&d).as_deref(), Some("압축 파일 5개"));
     let files = &d.items[0].files;
     let by_name = |n: &str| files.iter().find(|f| f.name == n).unwrap();
@@ -681,8 +712,12 @@ async fn uploaded_archives_of_each_format_are_unpacked_by_the_worker() {
         by_name("split.part2.rar").volume_of.as_deref(),
         Some(by_name("split.part1.rar").id.as_str())
     );
-    // Nothing is placed yet: the archives and their members stay received.
-    assert!(s.store.plan(&id).await.unwrap().is_empty());
+    // Nothing is kept before the 배치 확인: the archives and their members
+    // stay received.
+    let plan = s.store.plan(&id).await.unwrap();
+    assert_eq!(plan.len(), 12);
+    assert!(plan.iter().all(|r| !r.kept() && r.outcome.is_none()));
+    assert!(!s.work().join(".trss").exists());
     for file in files {
         assert!(s.area.at(file.path.as_deref().unwrap()).is_file());
     }
@@ -700,14 +735,14 @@ async fn uploaded_archives_of_each_format_are_unpacked_by_the_worker() {
 
 // An upload that kept an archive (a RAR with no extension, kept by its
 // bytes) waits for a worker with the program, and keeps the note of what it
-// kept, on the job and on its receiving step, once it is unpacked.
+// kept on its receiving step once it is unpacked; then it waits for its
+// 배치 확인.
 #[tokio::test]
 async fn an_upload_waits_for_the_program_and_keeps_what_it_kept() {
     let s = setup().await;
     let rar = std::fs::read(fixtures().join("pack.rar")).unwrap();
     let (id, dropped) = upload(&s, "u1", &[("subs", rar)]).await;
     assert_eq!(dropped, Vec::<String>::new());
-    let kept = Some("올린 파일: 압축 파일 1개".to_owned());
     let received = Some("압축 파일 1개".to_owned());
     s.runner(false)
         .run_ready(&CancellationToken::new())
@@ -724,8 +759,11 @@ async fn an_upload_waits_for_the_program_and_keeps_what_it_kept() {
     s.store.requeue_waiting_for_sources(5_000).await.unwrap();
     s.run().await;
     let d = s.detail(&id).await;
-    assert_eq!(d.row.state, JobState::Done, "{:?}", d.row.note);
-    assert_eq!(d.row.note, kept);
+    assert_eq!(d.row.wait, Some(Wait::Placement), "{:?}", d.row.note);
+    assert_eq!(
+        d.row.note.as_deref(),
+        Some("자막 2개가 붙을 회차를 확인해 주세요")
+    );
     assert_eq!(receive_note(&d), received);
     let file = &d.items[0].files[0];
     assert!(file.unpacked_at.is_some(), "{:?}", file.unpack_error);
@@ -777,7 +815,8 @@ fn deflated_zip(members: &[(&str, &[u8])]) -> Vec<u8> {
 }
 
 // Bombs and a password (ticket 0065): each archive alone is not unpacked,
-// with why, and stays received; the rest of the job, and the next job, go on.
+// with why, and stays received; the rest of the job, and the next job, go on
+// to their 배치 확인, and the job partly failed once it is placed.
 #[tokio::test]
 async fn bombs_and_a_password_fail_alone_and_the_next_job_goes_on() {
     let s = setup().await;
@@ -846,12 +885,8 @@ async fn bombs_and_a_password_fail_alone_and_the_next_job_goes_on() {
     );
     assert_eq!(error("password.zip").as_deref(), Some("암호가 걸려 있어요"));
     assert_eq!(error("good.rar"), None);
-    // Something of it was unpacked: partly failed, the first reason its note.
-    assert_eq!(d.row.state, JobState::Partial, "{:?}", d.row.note);
-    assert_eq!(
-        d.row.note.as_deref(),
-        Some("ratio.zip: 풀린 크기가 압축 파일 크기에 비해 너무 커요")
-    );
+    // What was unpacked waits for its 배치 확인.
+    assert_eq!(d.row.wait, Some(Wait::Placement), "{:?}", d.row.note);
     // Each stays received, and only the good one has an unpack folder.
     for file in &d.items[0].files {
         assert!(
@@ -862,5 +897,26 @@ async fn bombs_and_a_password_fail_alone_and_the_next_job_goes_on() {
         let folder = s.area.at(&ReceiveArea::unpack_dir(&id, &file.id));
         assert_eq!(folder.exists(), file.name == "good.rar", "{}", file.name);
     }
-    assert_eq!(s.detail(&next).await.row.state, JobState::Done);
+    assert_eq!(s.detail(&next).await.row.wait, Some(Wait::Placement));
+
+    // Placed, something of it was kept: partly failed, the first reason its
+    // note.
+    video(&s, "01").await;
+    video(&s, "02").await;
+    assert_eq!(
+        confirm_as_planned(&s, &id).await,
+        Confirmed::Queued {
+            applied: 2,
+            stored: 0
+        }
+    );
+    s.run().await;
+    let d = s.detail(&id).await;
+    assert_eq!(d.row.state, JobState::Partial, "{:?}", d.row.note);
+    assert_eq!(
+        d.row.note.as_deref(),
+        Some("ratio.zip: 풀린 크기가 압축 파일 크기에 비해 너무 커요")
+    );
+    assert!(s.work().join("Season 01/Show S01E01.ass").is_file());
+    assert!(s.work().join("Season 01/Show S01E02.ass").is_file());
 }

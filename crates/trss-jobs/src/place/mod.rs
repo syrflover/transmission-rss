@@ -9,9 +9,7 @@
 //!
 //! 1. The received archives not tried yet are unpacked into the receive
 //!    area, the volumes of a split one together ([`unpack`]); one that
-//!    cannot be unpacked stays there with why (풀지 못함). Uploads and find
-//!    jobs stop after this: they wait for a person's placement first and are
-//!    not placed here yet.
+//!    cannot be unpacked stays there with why (풀지 못함).
 //! 2. The effects an earlier start left unfinished are compared with the
 //!    disk (the table below).
 //! 3. The analysis makes the job's plan ([`records::PlanRow`]) from each
@@ -23,7 +21,11 @@
 //!    applied (the format order; alternatives of one format are asked). A
 //!    post with an archive not unpacked yet (a worker without the program
 //!    that unpacks) leaves the job waiting with the reason (`자막 대기`): a
-//!    later build takes it up when the worker starts.
+//!    later build takes it up when the worker starts. An upload's or a find
+//!    job's package names no episode: its files go by their names
+//!    ([`package::plan_named`]), and the plan waits for a person's
+//!    배치 확인 ([`records::confirm_placement`]) before anything of it is
+//!    kept (`회차 확인 필요`).
 //! 4. Each row to keep is stored: a subtitle or a font is copied into the
 //!    work folder's `.trss/subtitles/<creator>/<name>`, an attachment or a
 //!    companion file into the app data folder's
@@ -141,6 +143,9 @@ pub struct Placement {
     pub no_folder: Option<String>,
     /// Why a received file needs a person before it can be placed.
     pub blocked: Option<String>,
+    /// What an upload's or a find job's plan waits for a person to confirm
+    /// (배치 확인) before anything of it is kept.
+    pub confirm: Option<String>,
 }
 
 /// How a job's plan stands, for its state.
@@ -276,6 +281,20 @@ async fn blocking<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) 
     match tokio::task::spawn_blocking(work).await {
         Ok(value) => value,
         Err(err) => std::panic::resume_unwind(err.into_panic()),
+    }
+}
+
+/// What a plan waiting for its 배치 확인 asks of the person.
+fn confirm_note(rows: &[PlanRow]) -> String {
+    let subtitles = rows
+        .iter()
+        .filter(|r| r.kind == AssetKind::Subtitle && r.action != PlanAction::Drop)
+        .count();
+    let asked = rows.iter().filter(|r| r.question.is_some()).count();
+    match (subtitles, asked) {
+        (0, _) => "받은 폰트와 첨부를 보관하기 전에 확인해 주세요".to_owned(),
+        (n, 0) => format!("자막 {n}개가 붙을 회차를 확인해 주세요"),
+        (n, k) => format!("자막 {n}개가 붙을 회차를 확인해 주세요 · 회차를 정할 파일 {k}개"),
     }
 }
 
@@ -457,16 +476,6 @@ impl Placer {
         if self.unpack(job, cancel).await?.is_none() {
             return Ok(None);
         }
-        if facts.origin == UPLOAD || facts.origin == FIND {
-            // Without the program its archives wait, as a package's do.
-            let id = job.to_owned();
-            let untried =
-                self.unpacker.is_none() && self.read(move |c| unpack::untried(c, &id)).await?;
-            return Ok(Some(Placement {
-                unanalysed: untried.then(|| ARCHIVE_LATER.to_owned()),
-                ..Placement::default()
-            }));
-        }
         let (Some(work_id), Some(season)) = (facts.work_id.clone(), facts.season) else {
             return Ok(Some(Placement::default()));
         };
@@ -493,6 +502,29 @@ impl Placer {
 
         let id = job.to_owned();
         let rows = self.read(move |c| records::plan(c, &id)).await?;
+        // A person confirms an upload's or a find job's plan before
+        // anything of it is kept (배치 확인).
+        let unconfirmed = (facts.origin == UPLOAD || facts.origin == FIND)
+            && facts.placement_confirmed_at.is_none();
+        if unconfirmed
+            && placement.unanalysed.is_none()
+            && rows.iter().any(|r| r.action != PlanAction::Drop)
+        {
+            let note = confirm_note(&rows);
+            let now = self.now();
+            self.store.set_stage(job, StepKind::Placement, now).await?;
+            self.store
+                .set_step(
+                    job,
+                    StepKind::Placement,
+                    StepState::Waiting,
+                    Some(note.clone()),
+                    now,
+                )
+                .await?;
+            placement.confirm = Some(note);
+            return Ok(Some(placement));
+        }
         let to_store: Vec<&PlanRow> = rows
             .iter()
             .filter(|r| r.action != PlanAction::Drop && !r.kept() && r.outcome.is_none())
@@ -720,18 +752,23 @@ impl Placer {
                     episode: &c.episode,
                 })
                 .collect();
-            let made = package::plan(
-                &package_candidates,
-                &package_files,
-                &package::Context {
-                    mapping,
-                    total,
-                    season,
-                    order: &order,
-                    follow: facts.origin == AUTO,
-                    sha256: &sha256,
+            let context = package::Context {
+                mapping,
+                total,
+                season,
+                order: &order,
+                follow: facts.origin == AUTO,
+                sha256: &sha256,
+            };
+            // A person's upload or find names no episode: its files go by
+            // their names, for the person to confirm.
+            let made = match facts.origin.as_str() {
+                UPLOAD | FIND => match package_candidates.first() {
+                    Some(first) => package::plan_named(first.item_id, &package_files, &context),
+                    None => package::Planned::default(),
                 },
-            );
+                _ => package::plan(&package_candidates, &package_files, &context),
+            };
             let new_row = |e: &Entry| PlanRow {
                 job_id: job.to_owned(),
                 position: 0,
@@ -825,8 +862,8 @@ impl Placer {
         }
         Ok(Placement {
             unanalysed: later,
-            no_folder: None,
             blocked,
+            ..Placement::default()
         })
     }
 

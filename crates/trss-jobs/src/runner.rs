@@ -438,10 +438,17 @@ impl Runner {
             .any(|i| matches!(i.state, ItemState::Pending | ItemState::Running));
         let origin = self.store.origin(id).await?;
         let upload = origin.as_deref() == Some(UPLOAD);
+        let find = origin.as_deref() == Some(FIND);
+        // A find job is received once a person ended it: its one item is
+        // done.
+        let found = find && items.iter().all(|i| i.state == ItemState::Done);
+        let confirmed = (upload || found) && self.store.placement_confirmed(id).await?;
         let message = match (resumed, received) {
             (true, _) => "멈췄던 작업을 이어가요",
-            // An upload that kept an archive: unpacked now.
-            (false, true) if upload => "올린 압축 파일을 풀어요",
+            (false, true) if confirmed => "배치를 확인한 파일을 보관하고 적용해요",
+            // An upload or a found package: analysed for a person's
+            // 배치 확인.
+            (false, true) if upload || found => "받은 파일의 배치를 준비해요",
             // Received before storing was made: stored and applied now.
             (false, true) => "받아 둔 파일의 보관과 적용을 이어가요",
             (false, false) => "작업을 시작했어요",
@@ -450,7 +457,7 @@ impl Runner {
         self.store
             .event(id, message.to_owned(), None, self.now())
             .await?;
-        if origin.as_deref() == Some(FIND) {
+        if find && !found {
             return self.run_find(id, cancel).await;
         }
 
@@ -469,10 +476,10 @@ impl Runner {
                 return Ok(false);
             }
         }
-        // An upload's note says what it kept, whatever a wait for the program
-        // said in between.
-        let kept = match upload {
-            true => Some(self.store.upload_note(id).await?),
+        // An upload's or a find job's note says what it kept, whatever a
+        // wait said in between.
+        let kept = match upload || find {
+            true => Some(self.store.kept_note(id).await?),
             false => None,
         };
         let received = self.received(id, kept).await?;
@@ -953,8 +960,11 @@ impl Runner {
         // after taking what a run left in its folder. One failing job does
         // not hold back the others.
         for job in self.store.unbound_finishes().await? {
-            if let Err(err) = self.end_unbound_find(&job).await {
-                eprintln!("Subtitle job {job}: finishing: {err}");
+            match self.end_unbound_find(&job).await {
+                // What it kept is analysed next.
+                Ok(true) => wake.notify_one(),
+                Ok(false) => {}
+                Err(err) => eprintln!("Subtitle job {job}: finishing: {err}"),
             }
         }
         let Some(browser) = &self.auth else {
@@ -973,10 +983,12 @@ impl Runner {
                 }
             };
             if fresh && binding.find {
-                tokio::spawn(
-                    self.clone()
-                        .watch_find(binding, browser.clone(), shutdown.clone()),
-                );
+                tokio::spawn(self.clone().watch_find(
+                    binding,
+                    browser.clone(),
+                    wake.clone(),
+                    shutdown.clone(),
+                ));
             } else if fresh {
                 tokio::spawn(self.clone().watch(
                     binding,
@@ -2239,6 +2251,13 @@ impl Runner {
                         Some(Wait::Subtitle),
                         Some(reason),
                         "받은 묶음의 분석을 기다려요",
+                    )
+                } else if let Some(reason) = placement.confirm {
+                    (
+                        JobState::Waiting,
+                        Some(Wait::Placement),
+                        Some(reason),
+                        "배치 확인을 기다려요",
                     )
                 } else if let Some(reason) = placement.no_folder {
                     (

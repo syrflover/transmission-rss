@@ -409,3 +409,264 @@ fn members_are_told_by_format_and_name() {
     assert_eq!(member("읽어주세요.TXT", Format::Other), Member::Attachment);
     assert_eq!(member("setup.exe", Format::Other), Member::Other);
 }
+
+impl Case<'_> {
+    /// The plan of the files as a person's upload (no candidate).
+    fn named(&self) -> Planned {
+        let files: Vec<File<'_>> = self
+            .names
+            .iter()
+            .map(|n| File {
+                name: n,
+                format: format_of(n),
+            })
+            .collect();
+        let sha: Vec<&str> = self.sha.iter().map(String::as_str).collect();
+        plan_named(
+            1,
+            &files,
+            &Context {
+                mapping: self.mapping.as_ref(),
+                total: self.total,
+                season: self.season,
+                order: &ORDER,
+                follow: false,
+                sha256: &sha,
+            },
+        )
+    }
+}
+
+/// Each row's episode and how it got there, action and question.
+fn named_rows(planned: &Planned) -> Vec<(Option<i64>, Option<Assignment>, PlanAction, bool)> {
+    planned
+        .rows
+        .iter()
+        .map(|r| {
+            (
+                r.placed.as_ref().map(|p| p.episode),
+                r.placed.as_ref().map(|p| p.assignment),
+                r.action,
+                r.question.is_some(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn an_upload_of_an_unknown_creator_is_placed_under_the_same_numbers_and_one_past_the_season_asked()
+{
+    let names: Vec<String> = (1..=13).map(|n| format!("Show - {n:02}.ass")).collect();
+    let mut case = Case::new("", names.iter().map(String::as_str).collect());
+    case.total = Some(12);
+    let planned = case.named();
+    let rows = named_rows(&planned);
+    for (i, row) in rows.iter().take(12).enumerate() {
+        assert_eq!(
+            *row,
+            (
+                Some(i as i64 + 1),
+                Some(Assignment::Explicit),
+                PlanAction::Apply,
+                false
+            )
+        );
+    }
+    assert_eq!(rows[12], (None, None, PlanAction::Apply, true));
+    assert_eq!(
+        planned.rows[12].question.as_deref(),
+        Some("13화가 시즌의 1–12화 밖이에요")
+    );
+    assert!(planned.missing.is_empty());
+}
+
+#[test]
+fn an_upload_of_a_mapped_creator_goes_through_the_mapping() {
+    let names: Vec<String> = (13..=24).map(|n| format!("Show - {n:02}.ass")).collect();
+    let mut case = Case::new("", names.iter().map(String::as_str).collect());
+    case.total = Some(12);
+    case.mapping = Some(offset(-12));
+    let rows = named_rows(&case.named());
+    for (i, row) in rows.iter().enumerate() {
+        assert_eq!(
+            *row,
+            (
+                Some(i as i64 + 1),
+                Some(Assignment::Mapped),
+                PlanAction::Apply,
+                false
+            )
+        );
+    }
+}
+
+#[test]
+fn an_upload_asks_about_an_undecided_mapping_a_decimal_another_season_and_no_number() {
+    let mut case = Case::new(
+        "",
+        vec![
+            "Show - 03.ass",
+            "Show - 05.5.ass",
+            "Show S03E01.ass",
+            "Show.ass",
+            "Show - 01-02.ass",
+        ],
+    );
+    case.season = 2;
+    let questions: Vec<Option<String>> =
+        case.named().rows.into_iter().map(|r| r.question).collect();
+    assert_eq!(
+        questions,
+        [
+            None,
+            Some("5.5화는 정수 회차가 아니라 시즌의 회차로 정하지 못했어요".to_owned()),
+            Some("파일 이름이 가리키는 시즌(3)이 이 작업의 시즌(2)과 달라 보여요".to_owned()),
+            Some("파일 이름에 회차 번호가 없어요".to_owned()),
+            Some("파일 이름이 회차 여럿을 가리켜요".to_owned()),
+        ]
+    );
+    case.mapping = Some(Mapping {
+        offset: None,
+        ..offset(0)
+    });
+    assert_eq!(
+        case.named().rows[0].question.as_deref(),
+        Some("이 제작자의 회차 대응이 아직 미정이에요")
+    );
+}
+
+#[test]
+fn an_upload_applies_the_first_format_and_asks_about_alternatives() {
+    let mut case = Case::new(
+        "",
+        vec![
+            "a/Show - 01.ass",
+            "a/Show - 01.srt",
+            "b/Show - 02.ass",
+            "c/Show - 02.ass",
+            "Show - 03.vtt",
+            "font.ttf",
+            "setup.exe",
+        ],
+    );
+    case.total = Some(12);
+    let planned = case.named();
+    let rows = named_rows(&planned);
+    assert_eq!(
+        rows[0],
+        (
+            Some(1),
+            Some(Assignment::Explicit),
+            PlanAction::Apply,
+            false
+        )
+    );
+    assert_eq!(
+        rows[1],
+        (
+            Some(1),
+            Some(Assignment::Explicit),
+            PlanAction::Store,
+            false
+        )
+    );
+    assert_eq!(
+        rows[2],
+        (Some(2), Some(Assignment::Explicit), PlanAction::Apply, true)
+    );
+    assert_eq!(
+        rows[3],
+        (Some(2), Some(Assignment::Explicit), PlanAction::Apply, true)
+    );
+    assert_eq!(
+        rows[4],
+        (
+            Some(3),
+            Some(Assignment::Explicit),
+            PlanAction::Store,
+            false
+        )
+    );
+    assert_eq!(planned.rows[5].kind, AssetKind::Font);
+    assert_eq!(planned.rows[6].action, PlanAction::Drop);
+}
+
+fn placed(episode: Option<i64>, apply: bool, format: SubtitleFormat, sha256: &str) -> Placing<'_> {
+    Placing {
+        episode,
+        apply,
+        format,
+        sha256,
+    }
+}
+
+#[test]
+fn a_persons_placing_applies_one_file_per_episode_in_the_format_order() {
+    let a = "a".repeat(64);
+    let b = "b".repeat(64);
+    let decided = placing(
+        &[
+            placed(Some(1), true, SubtitleFormat::Srt, &a),
+            placed(Some(1), true, SubtitleFormat::Ass, &b),
+            placed(Some(2), true, SubtitleFormat::Ass, &a),
+            placed(Some(2), true, SubtitleFormat::Ass, &a),
+            placed(Some(3), false, SubtitleFormat::Ass, &a),
+            placed(None, false, SubtitleFormat::Ass, &b),
+            placed(Some(4), true, SubtitleFormat::Other, &b),
+        ],
+        &ORDER,
+    )
+    .unwrap();
+    let actions: Vec<PlanAction> = decided.iter().map(|(a, _)| *a).collect();
+    assert_eq!(
+        actions,
+        [
+            PlanAction::Store,
+            PlanAction::Apply,
+            PlanAction::Apply,
+            PlanAction::Store,
+            PlanAction::Store,
+            PlanAction::Store,
+            PlanAction::Store,
+        ]
+    );
+    assert_eq!(
+        decided[0].1.as_deref(),
+        Some("형식 순서에 따라 ASS를 적용하고 이 형식은 보관만 해요")
+    );
+    assert_eq!(
+        decided[3].1.as_deref(),
+        Some("같은 내용의 파일을 적용하므로 이 파일은 보관만 해요")
+    );
+    assert_eq!(
+        decided[4].1.as_deref(),
+        Some("배치 확인에서 적용하지 않기로 해 보관만 해요")
+    );
+    assert_eq!(
+        decided[5].1.as_deref(),
+        Some("회차에 붙이지 않고 보관만 해요")
+    );
+    assert_eq!(
+        decided[6].1.as_deref(),
+        Some("자동으로 적용하지 않는 형식이라 보관만 해요")
+    );
+}
+
+#[test]
+fn two_different_files_of_one_format_on_an_episode_are_refused() {
+    let (a, b) = ("a".repeat(64), "b".repeat(64));
+    let refused = placing(
+        &[
+            placed(Some(2), true, SubtitleFormat::Ass, &a),
+            placed(Some(2), true, SubtitleFormat::Ass, &b),
+        ],
+        &ORDER,
+    );
+    assert_eq!(
+        refused,
+        Err(
+            "2화에 적용할 ASS 자막이 2개예요. 하나만 남기고 나머지는 적용하지 않음으로 둬 주세요."
+                .to_owned()
+        )
+    );
+}

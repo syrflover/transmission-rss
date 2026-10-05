@@ -1,7 +1,7 @@
 //! Uploads (`trss_jobs::upload`) against the records and the receive area:
-//! the job they make is `done` and nobody else touches it (one that kept an
-//! archive waits for the worker to unpack it), a refused or abandoned upload
-//! leaves no byte, and uploads wait for their turn.
+//! the job they make has its files received and waits for the worker, which
+//! unpacks and analyses them for a person's 배치 확인, a refused or abandoned
+//! upload leaves no byte, and uploads wait for their turn.
 
 use std::time::Duration;
 
@@ -63,7 +63,7 @@ fn tmp_entries(area: &ReceiveArea) -> usize {
 }
 
 #[tokio::test]
-async fn an_upload_is_a_done_job_that_nothing_picks_up_again() {
+async fn an_upload_is_a_received_job_that_waits_for_the_worker() {
     let s = setup().await;
     let staging = stage(&s.uploads, &[("01.ass", ASS), ("note.txt", b"hello")]).await;
     let made = s
@@ -89,14 +89,13 @@ async fn an_upload_is_a_done_job_that_nothing_picks_up_again() {
     );
     assert_eq!(dropped.len(), 1);
 
-    // Nothing is waiting for a worker, and a restart's look at the waiting
-    // jobs leaves it as it is.
-    assert!(!s.store.has_ready().await.unwrap());
-    assert_eq!(s.store.claim_next(6_000).await.unwrap(), None);
+    // The worker takes it next, to analyse it for its 배치 확인; a
+    // restart's look at the waiting jobs leaves it as it is.
+    assert!(s.store.has_ready().await.unwrap());
     assert_eq!(s.store.requeue_waiting_for_sources(6_000).await.unwrap(), 0);
     let detail = s.store.detail(&job_id).await.unwrap().unwrap();
-    assert_eq!(detail.row.state, JobState::Done);
-    assert_eq!(detail.row.finished_at, Some(5_000));
+    assert_eq!(detail.row.state, JobState::Pending);
+    assert_eq!(detail.row.finished_at, None);
     assert_eq!(detail.row.origin, "upload");
     assert_eq!(detail.row.episodes, Vec::<String>::new());
     assert_eq!(detail.row.source, None);
@@ -117,6 +116,10 @@ async fn an_upload_is_a_done_job_that_nothing_picks_up_again() {
     );
     assert_eq!(file.object.as_deref(), Some(object.as_str()));
     assert_eq!(tmp_entries(&s.area), 0);
+    assert_eq!(
+        s.store.claim_next(6_000).await.unwrap().map(|(id, ..)| id),
+        Some(job_id)
+    );
 }
 
 #[tokio::test]
@@ -174,7 +177,7 @@ async fn a_repeat_or_another_upload_under_the_same_id_stores_no_second_package()
     assert_eq!(folders, std::slice::from_ref(&job_id));
     assert_eq!(tmp_entries(&s.area), 0);
     // The store itself answers the same.
-    assert_eq!(s.store.done_page(None, 10).await.unwrap().total, 1);
+    assert_eq!(s.store.open_jobs().await.unwrap().len(), 1);
 }
 
 #[tokio::test]
@@ -248,7 +251,7 @@ async fn finishing_goes_on_when_the_request_is_dropped_and_leaves_no_orphan() {
     let mut done = None;
     for _ in 0..100 {
         tokio::time::sleep(Duration::from_millis(20)).await;
-        if let Some(job) = s.store.done_page(None, 10).await.unwrap().items.first() {
+        if let Some(job) = s.store.open_jobs().await.unwrap().first() {
             done = Some(job.id.clone());
             break;
         }

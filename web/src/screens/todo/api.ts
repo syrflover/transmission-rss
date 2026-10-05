@@ -1,7 +1,15 @@
 import { api } from "@/lib/api";
 
+import type { ConfirmView, Placement, PlacementChoice } from "./placementTypes";
 import type { Replacement } from "./replacementTypes";
 
+export type {
+  ConfirmEpisode,
+  ConfirmView,
+  Placement,
+  PlacementChoice,
+  PlacementOutcome,
+} from "./placementTypes";
 export type {
   Replacement,
   ReplacementPath,
@@ -119,9 +127,9 @@ export interface PlacementCheckTodo {
   title: string;
   season: number | null;
   creator: string | null;
-  /** The names of the files it asks about. */
+  /** The names of the files it asks about: an upload's or a find job's subtitles its table places, else the held ones. */
   files: string[];
-  /** The first file's question. */
+  /** The first file's question, or for an upload's or a find job's table what the job waits for. */
   reason: string | null;
   job_id: string;
 }
@@ -242,8 +250,9 @@ export type ArchiveType = "zip" | "rar" | "7z" | "gz" | "bz2" | "xz" | "tar";
 export type UploadKind = "subtitle" | "font" | "archive";
 
 /**
- * The steps a job goes through, in this order. `auth` only when a source asks for it. An upload job has only
- * `receive`; a find job `open` and `receive`, as it reaches them.
+ * The steps a job goes through, in this order. `auth` only when a source asks for it. An upload job goes
+ * `receive` (at once), `placement` (배치 확인: the analysis, then the person's confirmation), `store` and `apply`; a
+ * find job `open`, `receive`, `placement`, `store` and `apply`, as it reaches them.
  */
 export type StepKind = "found" | "open" | "auth" | "receive" | "placement" | "store" | "approval" | "apply";
 
@@ -251,10 +260,16 @@ export interface JobRow {
   id: string;
   /**
    * `pick`: the user picked its candidates; `auto`: the subscribed creator's, made by the app;
-   * `upload`: subtitles and fonts the user uploaded (it is `done` from the start); `find`: the user browses the
-   * chosen creator's posts in the server browser and every download is a file of the job (직접 찾기).
+   * `upload`: subtitles and fonts the user uploaded (they are received at once, then the job waits for the worker's
+   * analysis and the person's 배치 확인); `find`: the user browses the chosen creator's posts in the server browser
+   * and every download is a file of the job (직접 찾기), then it waits for the 배치 확인 too.
    */
   origin: "pick" | "auto" | "upload" | "find";
+  /**
+   * For a find job: its 받기 has not ended, so its remote screen and `받기 끝내기` still apply. `false` for every
+   * other job and for a find job after it finished receiving.
+   */
+  receiving: boolean;
   /** For a revision of a received subtitle: the observation received before. */
   revision_of: number | null;
   /** The latest job that received `revision_of`, while there is one. */
@@ -428,34 +443,6 @@ export interface LogEntry {
   detail: string | null;
 }
 
-/** What came of a received file once stored and applied (`trss_jobs::place`). */
-export type PlacementOutcome = "applied" | "stored" | "existing" | "no_video" | "held" | "failed" | "dropped";
-
-/** One received file as it was placed: its episode, what came of it and where it is. */
-export interface Placement {
-  position: number;
-  /** The receipt it was made from (a `JobFile`'s `id`). */
-  file_id: string;
-  /** The received file's name (with its folder in a package). */
-  name: string;
-  kind: "subtitle" | "font" | "attachment" | "companion" | "other";
-  format: "ass" | "srt" | "smi" | "other" | null;
-  /** The season's episode it is on; `null` while a person has to say, or for a file on no episode. */
-  episode: number | null;
-  /** The episode the candidate said. */
-  anissia_episode: string | null;
-  /** Why a person has to say its episode (`회차 확인 필요`). */
-  question: string | null;
-  action: "apply" | "store" | "drop";
-  /** `null` while under way. */
-  outcome: PlacementOutcome | null;
-  note: string | null;
-  /** Server paths: the video it was put beside, its applied copy while it is there, its stored file. */
-  video: string | null;
-  applied: string | null;
-  stored: string | null;
-}
-
 export interface JobDetail extends JobRow {
   steps: Step[];
   items: JobItem[];
@@ -474,6 +461,8 @@ export interface JobDetail extends JobRow {
    * browser (`screen_api.rs`); `null` when it has none.
    */
   screen: JobScreen | null;
+  /** The 배치 확인 table's data while the job waits for it (`wait` is `placement`); `null` otherwise. */
+  confirm: ConfirmView | null;
 }
 
 /** A job's remote screen, as `screen_api.rs` describes it. */
@@ -563,6 +552,23 @@ export function decideReplacement(
     `/subtitle-jobs/${encodeURIComponent(jobId)}/replacements/${encodeURIComponent(planId)}`,
     { method: "POST", body: { version, decision }, signal },
   );
+}
+
+/**
+ * A person's answer to a job's 배치 확인: one entry for each of `confirm.positions`. The job becomes `pending` and the
+ * worker stores and applies it. `invalid` (a Korean sentence to show as is) for a placing that cannot be kept; a
+ * `conflict` when the job no longer waits or its rows changed: the job is read again; `not_found` for no job.
+ */
+export function confirmPlacement(
+  jobId: string,
+  rows: readonly PlacementChoice[],
+  signal?: AbortSignal,
+): Promise<{ applied: number; stored: number }> {
+  return api<{ applied: number; stored: number }>(`/subtitle-jobs/${encodeURIComponent(jobId)}/placement`, {
+    method: "POST",
+    body: { rows },
+    signal,
+  });
 }
 
 /** The most candidates one job takes, as the server (`MAX_CANDIDATES` in `jobs_api.rs`) does. */

@@ -50,6 +50,27 @@
 //!   and the worker woken, `404` for no such plan of the job, `409` when the
 //!   plan of that version is not the row's to decide any more (a newer
 //!   version replaced it, or it was decided): the person compares again.
+//!
+//!   Each of `placements` has its `position`, the episode number its name
+//!   says (`named`, as written) and what put it on its episode
+//!   (`assignment`: `mapped` by the source's mapping, `explicit` by the same
+//!   number or a person). While the job waits for its 배치 확인
+//!   ([`placement`]), its detail has `confirm`: `scope` (`whole`, an
+//!   upload's or a find job's plan before anything of it is kept; `held`,
+//!   the rows it asks about), the `positions` of the rows to place, the
+//!   season's episode count `total` (`null` when not known) and the
+//!   `episodes` a row can go on, each with the name of its video when it has
+//!   exactly one, how many it has, and whether it has a subtitle already (one
+//!   applied there waits for a replacement's approval); `null` otherwise.
+//! - `POST /api/subtitle-jobs/{id}/placement` `{ "rows": [{ "position",
+//!   "episode", "apply" }] }` the person's 배치 확인 (`적용`): every row of
+//!   `confirm.positions` with the episode it goes on (`null`: none) and
+//!   whether it is applied (`false`: `적용하지 않음`, stored only). `200`
+//!   `{ "applied", "stored" }` and the worker woken; `400` with why for a
+//!   placing that cannot be kept (an episode outside the season, a row
+//!   applied on no episode, two different files of one format applied on
+//!   one episode); `409` when the job no longer waits for it or its rows
+//!   changed: the person reloads; `404` for no job.
 //! - `POST /api/subtitle-jobs/find` `{ "id", "work_id", "season", "creator" }`
 //!   makes a find job (직접 찾기): the server browser opens the most recently
 //!   observed post of `creator` (a source ID of the season's Anissia anime's
@@ -61,8 +82,8 @@
 //!   (`받기 끝내기`): the request is written and the worker woken, which ends
 //!   the job once no download of its run is on its way, and at once when no
 //!   run is bound, after taking what a run left in its folder. `200`
-//!   `{ "state": "finishing" }` (`finishing` on the job until it ended), or
-//!   `{ "state": "done" }` for a job that ended before. `400` for a job that
+//!   `{ "state": "finishing" }` (`finishing` on the job until its 받기
+//!   ended), or `{ "state": "done" }` for a job whose 받기 ended before. `400` for a job that
 //!   is no find job, `404` for no job.
 //!
 //! A failed job, item and file carry their failure's class as `failure`
@@ -78,14 +99,16 @@
 //!
 //! A job's `origin` is `pick` (a person picked its candidates), `auto` (the
 //! subscribed creator's episode, made by the app, [`trss_jobs::follow`]) or
-//! `upload` (the subtitles and fonts a person uploaded, already `done`,
+//! `upload` (the subtitles and fonts a person uploaded, received already,
 //! [`super::subtitle_upload_api`]). An upload job has `upload` (what it kept
-//! by kind, and how many files it dropped), no episodes, only the steps it
-//! went through (`receive`), its package's files with their `kind`
-//! (`subtitle`, `font`, `archive`) and `dropped` (the names and reasons of the
-//! files it did not keep) in its detail. A find job (`find`, 직접 찾기) has the
-//! same as it receives, its steps `open` and `receive` as it reached them,
-//! and ends `done` with the note `받은 파일 없음` when it kept nothing; a job
+//! by kind, and how many files it dropped), no episodes, the steps it went
+//! through (`receive`, then 배치 확인 and the rest of its placement), its
+//! package's files with their `kind` (`subtitle`, `font`, `archive`) and
+//! `dropped` (the names and reasons of the files it did not keep) in its
+//! detail. A find job (`find`, 직접 찾기) has the same as it receives, its
+//! steps `open` and `receive` as it reached them, `receiving` until its
+//! 받기 ended, then goes on to its 배치 확인 as an upload does, or ends
+//! `done` with the note `받은 파일 없음` when it kept nothing; a job
 //! that receives a revision of a subtitle received before has `revision_of`
 //! (that observation) and `revises_job` (the latest job that received it, or
 //! `null`), both `null` otherwise. `revises_attributed` is `true` on the job
@@ -128,6 +151,7 @@ pub fn routes() -> Router<AppState> {
             "/subtitle-jobs/{id}/replacements/{plan}",
             post(replacement::decide),
         )
+        .route("/subtitle-jobs/{id}/placement", post(placement::confirm))
 }
 
 /// How many done jobs the groups carry.
@@ -187,6 +211,10 @@ pub struct JobRowView {
     /// A find job a person finished, which the worker ends once no download
     /// of its run is on its way.
     pub finishing: bool,
+    /// A find job whose 받기 has not ended: its remote screen and
+    /// `받기 끝내기` still apply. Once it ended, the job goes on to its
+    /// 배치 확인 like an upload.
+    pub receiving: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq)]
@@ -247,6 +275,7 @@ fn view(row: &JobRow, covers: &HashMap<String, String>) -> JobRowView {
             dropped: u.dropped,
         }),
         finishing: row.finishing,
+        receiving: row.receiving,
     }
 }
 
@@ -442,6 +471,11 @@ struct PlacementView {
     anissia_episode: Option<String>,
     /// Why a person has to say its episode (`회차 확인 필요`).
     question: Option<String>,
+    /// The episode number its name says, as written.
+    named: Option<String>,
+    /// What put it on `episode`: `mapped` (the source's mapping) or
+    /// `explicit` (the same number, or a person's choice).
+    assignment: Option<&'static str>,
     /// `apply`, `store` or `drop`.
     action: &'static str,
     /// `applied`, `stored`, `existing`, `no_video`, `held`, `failed`,
@@ -481,6 +515,9 @@ struct DetailView {
     /// The latest replacement plan of each row whose episode had a subtitle
     /// (교체 비교와 승인).
     replacements: Vec<replacement::ReplacementView>,
+    /// The 배치 확인 table, while the job waits for a person to place its
+    /// files; `null` otherwise.
+    confirm: Option<placement::ConfirmView>,
 }
 
 /// The steps in order, those not reached `upcoming`; `auth`, `placement` and
@@ -682,6 +719,7 @@ async fn detail(
         })
         .collect();
     let plan = state.jobs.plan(&id).await.map_err(|e| internal(&e))?;
+    let confirm = placement::view(&state, &row, &plan).await?;
     let paths: HashMap<i64, trss_jobs::place::records::RowPaths> = state
         .jobs
         .plan_paths(&id)
@@ -701,8 +739,10 @@ async fn detail(
                 name: p.name,
                 kind: p.kind.code(),
                 format: p.format.map(|f| f.code()),
-                episode: p.placed.map(|placed| placed.episode),
+                episode: p.placed.as_ref().map(|placed| placed.episode),
+                assignment: p.placed.map(|placed| placed.assignment.code()),
                 anissia_episode: p.anissia_episode,
+                named: p.attachment_episode,
                 question: p.question,
                 action: p.action.code(),
                 outcome: p.outcome.map(|o| o.code()),
@@ -725,6 +765,7 @@ async fn detail(
     Ok(Json(DetailView {
         steps: steps_view(&steps, &row),
         replacements,
+        confirm,
         placements,
         items: items_view,
         dropped: dropped
@@ -1015,6 +1056,7 @@ pub async fn follow_now(state: &AppState) {
     }
 }
 
+mod placement;
 mod replacement;
 #[cfg(test)]
 mod tests;

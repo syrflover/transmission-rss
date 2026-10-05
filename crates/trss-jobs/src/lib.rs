@@ -19,12 +19,15 @@
 //! - [`recheck`]: the daily reading of the received episodes' files for 14
 //!   days, and the revision jobs made when a file differs.
 //!
-//! - [`upload`]: the subtitles and fonts a person uploads, made into a job that
-//!   is already `done`, and the same judging for the files a find job's
-//!   browser run downloads.
+//! - [`upload`]: the subtitles and fonts a person uploads, made into a job
+//!   whose files are received, and the same judging for the files a find
+//!   job's browser run downloads.
 //! - A find job ([`FIND`], [`JobStore::create_find`]): a person browses a
 //!   creator's posts on the job's remote screen and every download becomes a
-//!   file of its one package, until they finish it ([`JobStore::ask_finish`]).
+//!   file of its one package, until they finish its 받기
+//!   ([`JobStore::ask_finish`]).
+//! - Both wait for the person's 배치 확인 before anything they received is
+//!   kept ([`place`], [`place::records::confirm_placement`]).
 //!
 //! The sites themselves are `trss-subtitles`'s.
 

@@ -15,7 +15,8 @@ import { ended, episodeName, shownState } from "./format";
 import { FindFinish } from "./FindFinish";
 import { BackIcon } from "./icons";
 import { JobAuth } from "./JobAuth";
-import { JobResults } from "./JobResults";
+import { JobResults, PackageResults } from "./JobResults";
+import { PlacementConfirm } from "./PlacementConfirm";
 import { ReplacementDecisions, ReplacementPaths } from "./Replacement";
 import { cardLayout, openOnes } from "./replacementView";
 import { JobSteps } from "./JobSteps";
@@ -107,7 +108,7 @@ const OPENING: JobScreen = { state: "preparing", run: null, bound: null, note: n
 
 function Page({ job, prepare }: { job: JobDetail; prepare: ScreenPrepare }) {
   const title = useRef<HTMLHeadingElement>(null);
-  const find = job.origin === "find" && !ended(job.state);
+  const find = job.origin === "find" && job.receiving;
   const screen =
     prepare.screen ?? (find && (job.state === "pending" || job.state === "running") ? OPENING : null);
   // A phone shows the check box in its first screen: the head shrinks while the job has a screen.
@@ -192,6 +193,8 @@ function Page({ job, prepare }: { job: JobDetail; prepare: ScreenPrepare }) {
 
       <ReplacementDecisions job={job} />
 
+      {job.confirm !== null && <PlacementConfirm job={job} confirm={job.confirm} />}
+
       {find &&
         (screen !== null ? (
           <JobAuth jobId={job.id} screen={screen} prepare={prepare} find>
@@ -210,13 +213,20 @@ function Page({ job, prepare }: { job: JobDetail; prepare: ScreenPrepare }) {
       {!find && screen !== null && <JobAuth jobId={job.id} screen={screen} prepare={prepare} />}
 
       {job.origin === "upload" || job.origin === "find" ? (
-        <Part title={job.origin === "find" ? "받은 파일" : "올린 파일"}>
-          <UploadResults
-            files={job.items.flatMap((item) => item.files)}
-            dropped={job.dropped}
-            empty={job.origin === "find" ? "받은 파일이 없어요." : undefined}
-          />
-        </Part>
+        <>
+          <Part title={job.origin === "find" ? "받은 파일" : "올린 파일"}>
+            <UploadResults
+              files={job.items.flatMap((item) => item.files)}
+              dropped={job.dropped}
+              empty={job.origin === "find" ? "받은 파일이 없어요." : undefined}
+            />
+          </Part>
+          {job.confirm === null && job.placements.length > 0 && (
+            <Part title="회차별 결과">
+              <PackageResults placements={job.placements} replacements={job.replacements} />
+            </Part>
+          )}
+        </>
       ) : (
         <Part title="회차별 결과">
           <JobResults items={job.items} placements={job.placements} replacements={job.replacements} />
