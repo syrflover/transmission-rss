@@ -1,8 +1,22 @@
 import { api, ApiError } from "@/lib/api";
-import { forgetPrefix } from "@/lib/cached";
+import { forget, forgetPrefix } from "@/lib/cached";
 import type { Command } from "@/lib/commands";
 
 import { forgetWeek } from "../schedule/api";
+import type { WorkStorage } from "./storage.ts";
+
+export type {
+  AssetKind,
+  CleanAsset,
+  CleanKind,
+  CleanableEntry,
+  CleaningEntry,
+  KeptAsset,
+  StorageKind,
+  StorageOverview,
+  StorageWork,
+  WorkStorage,
+} from "./storage.ts";
 
 /**
  * The library list (`src/web/library_api.rs`): the works with the summary the
@@ -82,6 +96,9 @@ export const LIST_PREFIX = "library:list:";
 /** ...and these one work's page. */
 export const WORK_PREFIX = "library:work:";
 
+/** The cache key of the settings' stored size per work (`settings/storage`). */
+export const STORAGE_KEY = "library:storage";
+
 /**
  * Whoever changes which folders the library reads (adds, rescans or removes a
  * watch folder, sets the collect or archive folder) calls this: the loaded
@@ -90,6 +107,7 @@ export const WORK_PREFIX = "library:work:";
 export function forgetLibrary(): void {
   forgetPrefix(LIST_PREFIX);
   forgetPrefix(WORK_PREFIX);
+  forget(STORAGE_KEY);
   // The home screen's checklist ends with the first watch folder, and its cards link to works.
   forgetWeek();
 }
@@ -202,6 +220,18 @@ export function applyStored(id: string, storedId: string): Promise<{ job_id: str
   );
 }
 
+/**
+ * Asks the worker to delete the stored subtitle `storedId` and `assets`, the ids of the linked files the confirmation
+ * listed; answers the cleanup's id. A `409` is a `conflict`: the stored file cannot be cleaned (its message is why),
+ * or its files changed since (`current` is the new entry).
+ */
+export function cleanStored(id: string, storedId: string, assets: string[]): Promise<{ cleanup_id: string }> {
+  return api<{ cleanup_id: string }>(
+    `/library/works/${encodeURIComponent(id)}/stored/${encodeURIComponent(storedId)}/clean`,
+    { method: "POST", body: { assets } },
+  );
+}
+
 export interface WorkSeason {
   number: number;
   /** The AniList entries the season links, taken together. */
@@ -265,6 +295,8 @@ export interface WorkDetail {
   cover_url: string | null;
   /** The worker still has to receive the cover's image; the old image shows until then. */
   cover_pending: boolean;
+  /** What the app stored for the work, and the stored subtitles that can be cleaned (`파일` card). */
+  storage: WorkStorage;
 }
 
 /** The cache key of one work's page. */

@@ -463,7 +463,8 @@ pub fn base_of(kind: AssetKind) -> &'static str {
 }
 
 /// The work's assets kept in `base` whose path starts with `prefix`,
-/// whatever its letters' case.
+/// whatever its letters' case, but the removed ones ([`crate::place::cleanup`]):
+/// their files are gone, and their paths are free again.
 pub fn assets_under(
     c: &Connection,
     work_id: &str,
@@ -472,7 +473,7 @@ pub fn assets_under(
 ) -> rusqlite::Result<Vec<Asset>> {
     let mut stmt = c.prepare(
         "SELECT id, kind, relative_path, byte_size, sha256 FROM subtitle_assets
-          WHERE work_id = ?1 AND base = ?3
+          WHERE work_id = ?1 AND base = ?3 AND removed_at IS NULL
             AND lower(substr(relative_path, 1, length(?2))) = lower(?2)",
     )?;
     let rows = stmt.query_map(params![work_id, prefix, base], |r| {
@@ -487,9 +488,31 @@ pub fn assets_under(
     rows.collect()
 }
 
+/// The paths of the work's assets kept in `base` under `prefix`, whatever
+/// its letters' case, removed ones too, the ones not removed first: a
+/// folder's name stays the one first written ([`crate::place::Placer`]'s
+/// creator folder), as the folder may outlive its recorded files.
+pub fn asset_paths_under(
+    c: &Connection,
+    work_id: &str,
+    base: &str,
+    prefix: &str,
+) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = c.prepare(
+        "SELECT relative_path FROM subtitle_assets
+          WHERE work_id = ?1 AND base = ?3
+            AND lower(substr(relative_path, 1, length(?2))) = lower(?2)
+          ORDER BY removed_at IS NOT NULL, created_at, id",
+    )?;
+    let rows = stmt.query_map(params![work_id, prefix, base], |r| r.get(0))?;
+    rows.collect()
+}
+
+/// The asset `id` while it is not removed ([`crate::place::cleanup`]).
 pub fn asset(c: &Connection, id: &str) -> rusqlite::Result<Option<Asset>> {
     c.query_row(
-        "SELECT id, kind, relative_path, byte_size, sha256 FROM subtitle_assets WHERE id = ?1",
+        "SELECT id, kind, relative_path, byte_size, sha256 FROM subtitle_assets
+          WHERE id = ?1 AND removed_at IS NULL",
         [id],
         |r| {
             Ok(Asset {
@@ -630,12 +653,14 @@ pub fn stored(
         }
         let placed = row.placed.as_ref();
         // The same bytes of the same source on the same episode are one
-        // revision, however often received.
+        // revision, however often received; one a person cleaned is no
+        // stored copy any more, so the bytes are stored anew.
         let same: Option<String> = tx
             .query_row(
                 "SELECT id FROM subtitle_stored
                   WHERE subtitle_asset_id = ?1 AND work_id = ?2 AND season = ?3
-                    AND source_id IS ?4 AND episode IS ?5 AND assignment IS ?6",
+                    AND source_id IS ?4 AND episode IS ?5 AND assignment IS ?6
+                    AND cleaned_at IS NULL",
                 params![
                     asset_id,
                     facts.work_id,
@@ -695,11 +720,12 @@ pub fn stored(
     })
 }
 
-/// A stored subtitle's asset, as the apply copies it.
+/// A stored subtitle's asset, as the apply copies it; none for a stored
+/// subtitle a person cleaned.
 pub fn stored_asset(c: &Connection, stored_id: &str) -> rusqlite::Result<Option<Asset>> {
     let id: Option<String> = c
         .query_row(
-            "SELECT subtitle_asset_id FROM subtitle_stored WHERE id = ?1",
+            "SELECT subtitle_asset_id FROM subtitle_stored WHERE id = ?1 AND cleaned_at IS NULL",
             [stored_id],
             |r| r.get(0),
         )
@@ -729,16 +755,19 @@ impl Role {
 }
 
 /// Links each stored subtitle of a stored package to the package's other
-/// files (`subtitle_stored_assets`) and marks its links known. One synced
-/// transaction; links made already stay as they are.
+/// files (`subtitle_stored_assets`), but those a cleanup removed, and marks
+/// its links known. One synced transaction; links made already stay as they
+/// are.
 pub fn link(c: &mut Connection, links: &[(String, Vec<(String, Role)>)]) -> Result<(), JobError> {
     durable(c, |c| {
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
         for (stored, assets) in links {
             for (asset, role) in assets {
+                // A file a person's cleanup removed is linked to nothing.
                 tx.execute(
                     "INSERT OR IGNORE INTO subtitle_stored_assets (stored_id, asset_id, role)
-                     VALUES (?1, ?2, ?3)",
+                     SELECT ?1, ?2, ?3 WHERE EXISTS (SELECT 1 FROM subtitle_assets
+                                                      WHERE id = ?2 AND removed_at IS NULL)",
                     params![stored, asset, role.code()],
                 )?;
             }
@@ -873,15 +902,17 @@ pub struct RowPaths {
     pub in_app_data: bool,
 }
 
-/// [`RowPaths`] of each row of the job's plan, by position.
+/// [`RowPaths`] of each row of the job's plan, by position. A file a cleanup
+/// removed ([`crate::place::cleanup`]) is in none.
 pub fn row_paths(c: &Connection, job_id: &str) -> rusqlite::Result<Vec<(i64, RowPaths)>> {
     let mut stmt = c.prepare(
         "SELECT p.position, coalesce(s.work_id, k.work_id), coalesce(a.relative_path, k.relative_path),
                 ap.path, ap.video_path, coalesce(k.base = 'app_data', 0)
            FROM subtitle_job_plan p
            LEFT JOIN subtitle_stored s ON s.id = p.stored_id
-           LEFT JOIN subtitle_assets a ON a.id = s.subtitle_asset_id AND a.base = 'work'
-           LEFT JOIN subtitle_assets k ON k.id = p.asset_id
+           LEFT JOIN subtitle_assets a
+                  ON a.id = s.subtitle_asset_id AND a.base = 'work' AND a.removed_at IS NULL
+           LEFT JOIN subtitle_assets k ON k.id = p.asset_id AND k.removed_at IS NULL
            LEFT JOIN subtitle_applied ap ON ap.id = p.applied_id AND ap.removed_at IS NULL
           WHERE p.job_id = ?1
           ORDER BY p.position",
@@ -990,7 +1021,8 @@ pub fn clearing(c: &mut Connection, file_id: &str, now: Millis) -> Result<(), Jo
 // Stored subtitles a person applies from an episode's row
 
 /// A stored subtitle of a work on an episode with no applied copy of it
-/// beside a video (보관만 한 자막), for the work's episode rows.
+/// beside a video (보관만 한 자막), for the work's episode rows. One a person
+/// cleaned is none.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredOnly {
     pub id: String,
@@ -1028,7 +1060,7 @@ pub fn stored_only(c: &Connection, work_id: &str) -> rusqlite::Result<Vec<Stored
                   WHERE r.stored_id = s.id AND r.state = 'open'
                   ORDER BY r.created_at LIMIT 1)
            FROM subtitle_stored s JOIN subtitle_assets a ON a.id = s.subtitle_asset_id
-          WHERE s.work_id = ?1 AND s.episode IS NOT NULL
+          WHERE s.work_id = ?1 AND s.episode IS NOT NULL AND s.cleaned_at IS NULL
             AND NOT EXISTS (SELECT 1 FROM subtitle_applied ap
                              WHERE ap.stored_id = s.id AND ap.removed_at IS NULL)
           ORDER BY s.season, s.episode, s.stored_at, s.id",
@@ -1068,7 +1100,8 @@ pub enum StoredChoice {
 /// which file the episode takes, if it asked one: the alternatives asked
 /// about are stored only. Refused for a format the app does not apply, a subtitle
 /// applied already, an episode with a subtitle (whose change is a
-/// replacement's), and when no job can take it.
+/// replacement's), and when no job can take it. A stored subtitle a person
+/// cleaned is not found.
 pub fn choose_stored(
     c: &mut Connection,
     work_id: &str,
@@ -1080,7 +1113,7 @@ pub fn choose_stored(
         let stored: Option<(u32, Option<i64>, SubtitleFormat)> = tx
             .query_row(
                 "SELECT season, episode, format FROM subtitle_stored
-                  WHERE id = ?1 AND work_id = ?2",
+                  WHERE id = ?1 AND work_id = ?2 AND cleaned_at IS NULL",
                 params![stored_id, work_id],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )

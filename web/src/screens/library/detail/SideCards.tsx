@@ -1,38 +1,63 @@
-import { useId, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 
 import { cn } from "@/lib/utils";
 
 import { channelName, ruleTitle } from "../../collect/rules/api";
 import type { SeasonInfo, WorkDetail, WorkRule } from "../api";
+import { canClean, FILES_HASH } from "../storage.ts";
 import { ChevronIcon } from "../icons";
 import { baseName, episodeLabel } from "./model";
+import { StoredCleanup } from "./StoredCleanup";
 
 /**
  * A card of the right column. On a wide screen it is open and always there; on
  * a narrow one (`collapsible`) it is a section under the episode list that
  * starts folded, with a line of what it holds on its button.
+ *
+ * A card with an `anchor` can be the target of an address (`#files`): `arrival` is the key of the navigation that
+ * named it (`null` when none did). Each new `arrival` opens the card if it is folded, scrolls it to the top of the page
+ * and puts the focus on its title, once per arrival.
  */
 function Card({
   title,
   summary,
   collapsible,
+  anchor,
+  arrival = null,
   children,
 }: {
   title: string;
   summary: string;
   collapsible: boolean;
+  anchor?: string;
+  arrival?: string | null;
   children: ReactNode;
 }) {
   const id = useId();
   const [open, setOpen] = useState(false);
   const shown = !collapsible || open;
-  const box = "rounded-card border border-hairline-soft bg-surface-1 shadow-(--card-shadow)";
+  const section = useRef<HTMLElement>(null);
+  const head = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (arrival === null) return;
+    setOpen(true);
+    // After the render that opens the card, so the focus and the scroll find it in place.
+    const frame = requestAnimationFrame(() => {
+      head.current?.focus({ preventScroll: true });
+      section.current?.scrollIntoView({ block: "start", behavior: "instant" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [arrival]);
+  const box = "rounded-card border border-hairline-soft bg-surface-1 shadow-(--card-shadow) scroll-mt-[calc(var(--topbar-h)+16px)]";
   return (
-    <section className={box} aria-labelledby={`${id}-title`}>
+    <section ref={section} id={anchor} className={box} aria-labelledby={`${id}-title`}>
       {collapsible ? (
         <h2 className="m-0">
           <button
+            ref={(el) => {
+              head.current = el;
+            }}
             type="button"
             aria-expanded={open}
             aria-controls={`${id}-body`}
@@ -49,7 +74,14 @@ function Card({
           </button>
         </h2>
       ) : (
-        <h2 id={`${id}-title`} className="m-0 px-4 pt-3.5 pb-1 text-[15px] font-bold">
+        <h2
+          id={`${id}-title`}
+          ref={(el) => {
+            head.current = el;
+          }}
+          tabIndex={-1}
+          className="m-0 px-4 pt-3.5 pb-1 text-[15px] font-bold outline-none"
+        >
           {title}
         </h2>
       )}
@@ -133,15 +165,36 @@ export function InfoCard({ info, collapsible }: { info: SeasonInfo; collapsible:
 
 const subHeading = "text-xs font-bold text-text-muted";
 
-/** The folder, how its files are matched to episodes, and the files that could not be. */
-export function FilesCard({ work, collapsible }: { work: WorkDetail; collapsible: boolean }) {
+/**
+ * The folder, how its files are matched to episodes, the files that could not be, and what stored files can be
+ * cleaned. `arrival` is the key of a navigation to `#files` (see `Card`); `onRefresh` reads the work again.
+ */
+export function FilesCard({
+  work,
+  collapsible,
+  arrival,
+  onRefresh,
+}: {
+  work: WorkDetail;
+  collapsible: boolean;
+  arrival: string | null;
+  onRefresh: () => Promise<void>;
+}) {
   const [mapOpen, setMapOpen] = useState(false);
   const mapId = useId();
   const episodes = work.seasons.reduce((sum, s) => sum + s.episodes.length, 0);
   const left = work.unrecognized.length;
-  const summary = work.missing ? "폴더 없음" : left === 0 ? "작품 폴더와 파일 대응" : `확인하지 못한 파일 ${left}개`;
+  // As the settings count them: the ones a person may clean now.
+  const cleanable = work.storage.cleanable.filter(canClean).length;
+  const summary = work.missing
+    ? "폴더 없음"
+    : left > 0
+      ? `확인하지 못한 파일 ${left}개`
+      : cleanable > 0
+        ? `정리할 수 있는 파일 ${cleanable}개`
+        : "작품 폴더와 파일 대응";
   return (
-    <Card title="파일" summary={summary} collapsible={collapsible}>
+    <Card title="파일" summary={summary} collapsible={collapsible} anchor={FILES_HASH} arrival={arrival}>
       <div className="flex flex-col gap-1">
         <h3 className={subHeading}>작품 폴더</h3>
         <p className="font-mono text-[12.5px] leading-snug break-all">{work.folder_path}</p>
@@ -215,6 +268,8 @@ export function FilesCard({ work, collapsible }: { work: WorkDetail; collapsible
           </>
         )}
       </div>
+
+      <StoredCleanup workId={work.id} storage={work.storage} seasons={work.seasons.length} onRefresh={onRefresh} />
     </Card>
   );
 }

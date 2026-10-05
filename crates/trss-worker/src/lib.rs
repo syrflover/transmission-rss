@@ -96,6 +96,11 @@
 //! real sources (Tistory's attachments) are always on; the fake one only with
 //! [`env::FAKE_SUBTITLE_SOURCE_VAR`].
 //!
+//! The cleanups of stored files a person confirmed on a work's page
+//! ([`trss_jobs::place::cleanup`]) are carried out in the same task, under
+//! the same hold, before the ready jobs run: no job stores or links a file
+//! between a cleanup's look at it and its removal.
+//!
 //! The worker also makes the jobs of the subscribed creators' new episodes and
 //! revisions itself ([`trss_jobs::follow`]): at its start, whenever a reading
 //! of Anissia's lines added observations, when the season link connected a

@@ -201,12 +201,19 @@ impl Worker {
             Ok(n) => println!("Subtitle jobs: {n} waiting for a video are in line again"),
             Err(err) => eprintln!("Subtitle jobs: cannot look for arrived videos: {err}"),
         }
-        if !runner.has_ready().await.map_err(|e| e.to_string())? {
+        let ready = runner.has_ready().await.map_err(|e| e.to_string())?;
+        if !ready && !runner.has_cleanups().await.map_err(|e| e.to_string())? {
             return Ok(Some(0));
         }
         let Some(hold) = self.hold().await.map_err(|e| e.to_string())? else {
             return Ok(None);
         };
+        // A person's cleanups of stored files go first, in this task: no
+        // job stores or links a file between a cleanup's look at it and its
+        // removal (`trss_jobs::place::cleanup`).
+        if let Err(err) = runner.run_cleanups().await {
+            eprintln!("Stored files: cannot carry out the cleanups: {err}");
+        }
         let ran = runner.run_ready(cancel).await;
         hold.release().await;
         ran.map(Some).map_err(|e| e.to_string())
@@ -460,6 +467,106 @@ mod tests {
         .unwrap();
         worker.run_jobs_once(&cancel).await.unwrap();
         assert_eq!(video_came(&db, &job).await, 1);
+    }
+
+    /// A worker with a job runner, no job to run, and the done job `j1` of
+    /// the work `w1` that stored `Show - 01.ass` (`s1`, asset `a1`, the
+    /// bytes `abc`) without applying it.
+    async fn with_a_stored_subtitle() -> (tempfile::TempDir, Worker, Db) {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open(dir.path().join("app.db")).await.unwrap();
+        let shows = dir.path().join("shows");
+        let stored = shows.join("Show/.trss/subtitles/하느");
+        std::fs::create_dir_all(&stored).unwrap();
+        std::fs::write(stored.join("Show - 01.ass"), b"abc").unwrap();
+        let shows = shows.to_string_lossy().into_owned();
+        db.run(move |c| {
+            c.execute(
+                "INSERT INTO watch_folders (id, path, created_at) VALUES ('f1', ?1, 0)",
+                [shows],
+            )?;
+            // SHA-256 of `abc`.
+            let sha = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+            c.execute_batch(&format!(
+                "INSERT INTO works (id, watch_folder_id, dir_name) VALUES ('w1', 'f1', 'Show');
+                 INSERT INTO seasons (work_id, number) VALUES ('w1', 1);
+                 INSERT INTO subtitle_jobs (id, command_id, request, origin, work_id, season,
+                                            state, created_at, updated_at, state_at)
+                     VALUES ('j1', 'c1', '{{}}', 'pick', 'w1', 1, 'done', 0, 0, 0);
+                 INSERT INTO subtitle_job_items (id, job_id, position, episode, post_url,
+                                                 found_at, state, updated_at)
+                     VALUES (1, 'j1', 0, '1', 'https://example.org/p', 0, 'done', 0);
+                 INSERT INTO subtitle_packages (id, work_id, job_id, source_kind, created_at)
+                     VALUES ('p1', 'w1', 'j1', 'post', 0);
+                 INSERT INTO subtitle_job_files (id, job_id, item_id, file_key, name, state,
+                                                 size, sha256, created_at, updated_at)
+                     VALUES ('r1', 'j1', 1, 'k1', 'Show - 01.ass', 'done', 3, '{sha}', 0, 0);
+                 INSERT INTO subtitle_assets (id, work_id, kind, base, relative_path,
+                                              byte_size, sha256, created_at)
+                     VALUES ('a1', 'w1', 'subtitle', 'work',
+                             '.trss/subtitles/하느/Show - 01.ass', 3, '{sha}', 0);
+                 INSERT INTO subtitle_stored (id, work_id, season, package_id,
+                                              subtitle_asset_id, assignment, episode, format,
+                                              creator, stored_at)
+                     VALUES ('s1', 'w1', 1, 'p1', 'a1', 'explicit', 1, 'ass', '하느', 0);
+                 INSERT INTO subtitle_job_plan (job_id, position, file_id, name, kind, format,
+                                                size, sha256, item_id, assignment, episode,
+                                                action, stored_id, outcome, updated_at)
+                     VALUES ('j1', 0, 'r1', 'Show - 01.ass', 'subtitle', 'ass', 3, '{sha}', 1,
+                             'explicit', 1, 'store', 's1', 'stored', 0);"
+            ))?;
+            Ok::<_, trss_core::DbError>(())
+        })
+        .await
+        .unwrap();
+        let env = WorkerEnv::from_lookup(|key| {
+            (key == "TRANSMISSION_URL").then(|| "http://127.0.0.1:1/transmission/rpc".to_owned())
+        })
+        .unwrap();
+        let worker = Worker::new(db.clone(), &env, dir.path().join("app.db.worker.lock"))
+            .unwrap()
+            .with_clock(Arc::new(|| 2_000))
+            .with_jobs(Runner::new(
+                JobStore::new(db.clone()),
+                Sources::none(),
+                ReceiveArea::in_app_data(dir.path()),
+                Arc::new(|| 2_000),
+            ));
+        (dir, worker, db)
+    }
+
+    #[tokio::test]
+    async fn a_confirmed_cleanup_is_carried_out_when_no_job_is_ready() {
+        // Also what a worker started after the confirmation does.
+        let (dir, worker, db) = with_a_stored_subtitle().await;
+        let store = JobStore::new(db.clone());
+        let asked = store
+            .clean_stored("w1", "s1", vec!["a1".to_owned()], 1_000)
+            .await
+            .unwrap();
+        let trss_jobs::place::cleanup::Asked::Asked(cleanup) = asked else {
+            panic!("not asked: {asked:?}");
+        };
+        assert!(!store.has_ready().await.unwrap());
+
+        let cancel = tokio_util::sync::CancellationToken::new();
+        worker.run_jobs_once(&cancel).await.unwrap();
+
+        let file = dir
+            .path()
+            .join("shows/Show/.trss/subtitles/하느/Show - 01.ass");
+        assert!(!file.exists());
+        let state: String = db
+            .run(move |c| {
+                Ok::<_, trss_core::DbError>(c.query_row(
+                    "SELECT state FROM subtitle_cleanups WHERE id = ?1",
+                    [cleanup],
+                    |row| row.get(0),
+                )?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(state, "done");
     }
 
     /// How many remote screens are bound to a run.

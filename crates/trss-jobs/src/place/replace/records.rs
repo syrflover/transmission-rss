@@ -563,13 +563,13 @@ pub fn abandon(c: &mut Connection, effect_id: &str, now: Millis) -> Result<(), J
 }
 
 /// A newer stored subtitle than `stored_id` of the same source and episode
-/// (a revision received since), if one is.
+/// (a revision received since), if one is that a person did not clean.
 pub fn newer_revision(c: &Connection, stored_id: &str) -> rusqlite::Result<Option<String>> {
     c.query_row(
         "SELECT n.id FROM subtitle_stored s JOIN subtitle_stored n
              ON n.work_id = s.work_id AND n.season = s.season AND n.episode = s.episode
             AND n.source_id = s.source_id AND n.id <> s.id
-            AND n.subtitle_asset_id <> s.subtitle_asset_id
+            AND n.subtitle_asset_id <> s.subtitle_asset_id AND n.cleaned_at IS NULL
             AND (n.stored_at > s.stored_at OR (n.stored_at = s.stored_at AND n.id > s.id))
           WHERE s.id = ?1 AND s.source_id IS NOT NULL
           ORDER BY n.stored_at DESC LIMIT 1",
@@ -580,7 +580,7 @@ pub fn newer_revision(c: &Connection, stored_id: &str) -> rusqlite::Result<Optio
 }
 
 /// Where a stored subtitle is now: its episode, what puts it there, and its
-/// asset.
+/// asset. A stored subtitle a person cleaned is nowhere.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredPlace {
     pub episode: Option<i64>,
@@ -591,7 +591,8 @@ pub struct StoredPlace {
 
 pub fn stored_place(c: &Connection, stored_id: &str) -> rusqlite::Result<Option<StoredPlace>> {
     c.query_row(
-        "SELECT episode, assignment, basis, subtitle_asset_id FROM subtitle_stored WHERE id = ?1",
+        "SELECT episode, assignment, basis, subtitle_asset_id FROM subtitle_stored
+          WHERE id = ?1 AND cleaned_at IS NULL",
         [stored_id],
         |r| {
             let assignment: Option<String> = r.get(1)?;
@@ -643,7 +644,8 @@ pub struct Imported {
 /// Records an import: its package (`existing`), the asset (the effect's
 /// published file, or `reused`), the package's entry, and the stored
 /// subtitle of the creator nobody named on the episode (or the one stored
-/// already for the same bytes there); the effect, if it made the file, is
+/// already for the same bytes there, while a person did not clean it); the
+/// effect, if it made the file, is
 /// `done`. One synced transaction; returns the stored subtitle's ID.
 pub fn imported(
     c: &mut Connection,
@@ -684,7 +686,8 @@ pub fn imported(
             .query_row(
                 "SELECT id FROM subtitle_stored
                   WHERE subtitle_asset_id = ?1 AND work_id = ?2 AND season = ?3
-                    AND source_id IS NULL AND creator IS NULL AND episode = ?4",
+                    AND source_id IS NULL AND creator IS NULL AND episode = ?4
+                    AND cleaned_at IS NULL",
                 params![asset_id, what.work_id, what.season, what.episode],
                 |r| r.get(0),
             )

@@ -167,6 +167,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("../migrations/jobs/unpack.sql")),
     // 54: a person confirms an upload's or a find job's placement before any of it is kept; the ones earlier builds finished go back in line
     Migration::Sql(include_str!("../migrations/jobs/placement_confirm.sql")),
+    // 55: a person's cleanup of a stored subtitle and the files that go with it; a removed asset frees its path
+    Migration::Sql(include_str!("../migrations/jobs/cleanup.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -2758,6 +2760,91 @@ mod tests {
         let db = Db::open(&path).await.unwrap();
 
         assert_eq!(version_of(&db).await, MIGRATIONS.len());
+    }
+
+    /// Migration 54's database: cleanups come after it.
+    const BEFORE_CLEANUP: usize = 54;
+
+    #[tokio::test]
+    async fn stored_rows_survive_the_cleanup_migration_and_a_removed_asset_frees_its_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        {
+            let conn = database_at(&path, BEFORE_CLEANUP);
+            conn.execute_batch(
+                "INSERT INTO subtitle_jobs (id, command_id, request, origin, work_id, season,
+                                            state, created_at, updated_at, state_at)
+                     VALUES ('j1', 'c1', '{}', 'pick', 'w', 1, 'done', 0, 0, 0);
+                 INSERT INTO subtitle_packages (id, work_id, job_id, source_kind, created_at)
+                     VALUES ('p1', 'w', 'j1', 'post', 0);
+                 INSERT INTO subtitle_assets (id, work_id, kind, base, relative_path, byte_size,
+                                              sha256, created_at)
+                     VALUES ('a1', 'w', 'subtitle', 'work', '.trss/subtitles/x/a.ass', 1,
+                             printf('%064d', 1), 0),
+                            ('a2', 'w', 'font', 'work', '.trss/subtitles/x/f.ttf', 2,
+                             printf('%064d', 2), 0);
+                 INSERT INTO subtitle_package_entries (package_id, position, asset_id,
+                                                       original_name)
+                     VALUES ('p1', 0, 'a1', 'a.ass'), ('p1', 1, 'a2', 'f.ttf');
+                 INSERT INTO subtitle_stored (id, work_id, season, package_id, subtitle_asset_id,
+                                              assignment, episode, format, stored_at)
+                     VALUES ('s1', 'w', 1, 'p1', 'a1', 'explicit', 1, 'ass', 0);
+                 INSERT INTO subtitle_stored_assets (stored_id, asset_id, role)
+                     VALUES ('s1', 'a2', 'font');",
+            )
+            .unwrap();
+        }
+
+        let db = Db::open(&path).await.unwrap();
+
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+        db.run::<_, DbError, _>(|c| {
+            let kept: (i64, i64, i64, i64) = c.query_row(
+                "SELECT (SELECT count(*) FROM subtitle_assets WHERE removed_at IS NULL),
+                        (SELECT count(*) FROM subtitle_stored WHERE cleaned_at IS NULL),
+                        (SELECT count(*) FROM subtitle_stored_assets),
+                        (SELECT count(*) FROM subtitle_package_entries)",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )?;
+            assert_eq!(kept, (2, 1, 1, 2));
+            let insert = |id: &str| {
+                c.execute(
+                    "INSERT INTO subtitle_assets (id, work_id, kind, base, relative_path,
+                                                  byte_size, sha256, created_at)
+                     VALUES (?1, 'w', 'subtitle', 'work', '.trss/subtitles/X/A.ass', 3,
+                             printf('%064d', 3), 0)",
+                    [id],
+                )
+            };
+            // One path holds one asset, whatever its case, until it is removed.
+            assert!(insert("a3").is_err());
+            c.execute(
+                "UPDATE subtitle_assets SET removed_at = 5 WHERE id = 'a1'",
+                [],
+            )?;
+            insert("a3")?;
+            assert!(insert("a4").is_err());
+            // A stored subtitle has one asked cleanup at a time.
+            c.execute_batch(
+                "INSERT INTO subtitle_cleanups (id, work_id, stored_id, state, asked_at,
+                                                updated_at)
+                     VALUES ('k1', 'w', 's1', 'asked', 0, 0);
+                 INSERT INTO subtitle_asset_removals (cleanup_id, asset_id, state)
+                     VALUES ('k1', 'a2', 'named');",
+            )?;
+            assert!(c
+                .execute(
+                    "INSERT INTO subtitle_cleanups (id, work_id, stored_id, state, asked_at,
+                                                    updated_at)
+                         VALUES ('k2', 'w', 's1', 'asked', 0, 0)",
+                    [],
+                )
+                .is_err());
+            Ok(())
+        })
+        .await
+        .unwrap();
     }
 
     #[test]

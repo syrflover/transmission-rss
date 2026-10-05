@@ -24,9 +24,9 @@ export interface SettingsItem {
   title: string;
   icon: ComponentType<ComponentProps<"svg">>;
   /**
-   * Shown in the panel while the item has no content yet. Each item is filled
-   * by the result goal that owns it (see docs/specs/settings.md); only the
-   * common policy, the collect folder, the watch folders and the import are built so far.
+   * Shown in the panel while the item has no content yet (the file sizes show it while no work has a stored file).
+   * Each item is filled by the result goal that owns it (see docs/specs/settings.md); only the common policy, the
+   * collect folder, the watch folders, the file sizes and the import are built so far.
    */
   empty?: string;
 }

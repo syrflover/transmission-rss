@@ -435,3 +435,318 @@ async fn a_stored_subtitle_waiting_for_a_replacement_names_its_job() {
     assert_eq!(of("01")["stored"][0]["approval_job"], "j1");
     assert_eq!(of("02")["stored"][0]["approval_job"], Value::Null);
 }
+
+async fn post_json(state: &AppState, uri: &str, body: &str) -> (StatusCode, Value) {
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri(uri)
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_owned()))
+        .unwrap();
+    let response = api::router()
+        .with_state(state.clone())
+        .oneshot(request)
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+/// [`state_with_work`] with the watch folder, the work folder and its
+/// `.trss/subtitles` on disk, as a cleanup needs them.
+async fn state_with_work_on_disk() -> (AppState, String, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("Lycoris Recoil/.trss/subtitles")).unwrap();
+    let state = state();
+    state
+        .library
+        .add_folder(
+            dir.path().to_string_lossy().into_owned(),
+            Scan {
+                works: vec![WorkRead::Read(lycoris())],
+            },
+            100,
+            &[],
+        )
+        .await
+        .unwrap();
+    let id = state.library.overview().await.unwrap()[0].id.clone();
+    (state, id, dir)
+}
+
+#[tokio::test]
+async fn a_work_shows_its_stored_files_and_one_is_cleaned_on_request() {
+    let (state, id, _dir) = state_with_work_on_disk().await;
+    stored_only(&state, &id, &[2, 5]).await;
+    let (status, body) = get(&state, &format!("/library/works/{id}")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["storage"]["total"], 2);
+    assert_eq!(body["storage"]["cleaning"], serde_json::json!([]));
+    assert_eq!(
+        body["storage"]["cleanable"][0],
+        serde_json::json!({
+            "id": "s2", "name": "Show - 02.ass", "season": 1, "episode": 2,
+            "creator": "하느", "format": "ass", "size": 1, "stored_at": 2,
+            "kind": "stored", "blocked": null,
+            "with": [{ "id": "a2", "name": "Show - 02.ass", "kind": "subtitle", "size": 1 }],
+            "kept": []
+        })
+    );
+    assert_eq!(body["storage"]["cleanable"][1]["id"], "s5");
+
+    // A body that is not the dialog's is refused before anything happens.
+    let clean = format!("/library/works/{id}/stored/s2/clean");
+    let (status, _) = post_json(&state, &clean, "{\"files\": []}").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    // Files that are not the ones that would go now: the entry as it is.
+    let (status, body) = post_json(&state, &clean, "{\"assets\": []}").await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["message"], FILES_CHANGED);
+    assert_eq!(body["current"]["id"], "s2");
+    assert_eq!(body["current"]["with"][0]["id"], "a2");
+
+    let (status, body) = post_json(&state, &clean, "{\"assets\": [\"a2\"]}").await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    let cleanup = body["cleanup_id"].as_str().unwrap().to_owned();
+
+    // It is no stored copy from then: the episode and the list lose it,
+    // and the cleanup waits for the worker.
+    let (_, body) = get(&state, &format!("/library/works/{id}")).await;
+    let cleanable = body["storage"]["cleanable"].as_array().unwrap();
+    assert_eq!(cleanable.len(), 1);
+    assert_eq!(cleanable[0]["id"], "s5");
+    assert_eq!(
+        body["storage"]["cleaning"],
+        serde_json::json!([{
+            "id": cleanup, "name": "Show - 02.ass", "state": "asked", "reason": null
+        }])
+    );
+    let episodes = body["seasons"][0]["episodes"].as_array().unwrap();
+    let two = episodes.iter().find(|e| e["episode"] == "02").unwrap();
+    assert_eq!(two["stored"], serde_json::json!([]));
+
+    // Again, or from another work: no such stored copy; nor one to apply.
+    let (status, _) = post_json(&state, &clean, "{\"assets\": [\"a2\"]}").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = post(&state, &format!("/library/works/{id}/stored/s2/apply")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = post_json(
+        &state,
+        "/library/works/other/stored/s5/clean",
+        "{\"assets\": [\"a5\"]}",
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn a_stored_subtitle_a_held_job_uses_says_why_it_cannot_be_cleaned() {
+    let (state, id, _dir) = state_with_work_on_disk().await;
+    stored_only(&state, &id, &[2]).await;
+    state
+        .jobs
+        .db()
+        .run(|c| {
+            c.execute_batch("UPDATE subtitle_jobs SET state = 'held' WHERE id = 'j1';")?;
+            Ok::<_, trss_jobs::JobError>(())
+        })
+        .await
+        .unwrap();
+    let (_, body) = get(&state, &format!("/library/works/{id}")).await;
+    let entry = &body["storage"]["cleanable"][0];
+    assert_eq!(entry["blocked"], trss_jobs::place::cleanup::HELD_JOB);
+
+    let (status, body) = post_json(
+        &state,
+        &format!("/library/works/{id}/stored/s2/clean"),
+        "{\"assets\": [\"a2\"]}",
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["message"], trss_jobs::place::cleanup::HELD_JOB);
+    assert_eq!(body["current"], Value::Null);
+}
+
+// 완료 기준: 설정의 파일 용량과 정리는 작품별 종류·표지 용량과 정리할 수
+// 있는 수를 보여줘요.
+#[tokio::test]
+async fn the_storage_list_shows_each_works_kinds_cover_and_cleanable_count() {
+    use trss_anilist::AnilistConfig;
+    use trss_library::artwork::{AppData, Artwork};
+
+    let dir = tempfile::tempdir().unwrap();
+    let db = Db::open(dir.path().join("trss.db")).await.unwrap();
+    let state = AppState::new(db.clone()).with_artwork(Artwork::new(
+        db,
+        Some(AppData::new(dir.path())),
+        AnilistConfig::default(),
+    ));
+    let other = ScannedWork {
+        dir_name: "Other".into(),
+        seasons: BTreeSet::from([1]),
+        files: Vec::new(),
+        unrecognized: Vec::new(),
+    };
+    let empty = ScannedWork {
+        dir_name: "Empty".into(),
+        ..other.clone()
+    };
+    let shows = dir.path().join("shows");
+    for name in ["Lycoris Recoil", "Other", "Empty"] {
+        std::fs::create_dir_all(shows.join(name).join(".trss/subtitles")).unwrap();
+    }
+    state
+        .library
+        .add_folder(
+            shows.to_string_lossy().into_owned(),
+            Scan {
+                works: vec![
+                    WorkRead::Read(lycoris()),
+                    WorkRead::Read(other),
+                    WorkRead::Read(empty),
+                ],
+            },
+            100,
+            &[],
+        )
+        .await
+        .unwrap();
+    let works = state.library.overview().await.unwrap();
+    let id_of = |name: &str| {
+        works
+            .iter()
+            .find(|w| w.dir_name == name)
+            .unwrap()
+            .id
+            .clone()
+    };
+    let (lycoris, other) = (id_of("Lycoris Recoil"), id_of("Other"));
+    stored_only(&state, &lycoris, &[2, 5]).await;
+    // Episode 5's copy waits for its video, which a cleanup may settle.
+    let covers = [
+        (lycoris.clone(), "covers/l.jpg"),
+        (other.clone(), "covers/o.jpg"),
+    ];
+    state
+        .jobs
+        .db()
+        .run(move |c| {
+            c.execute_batch(
+                "UPDATE subtitle_job_plan SET action = 'apply', outcome = 'no_video'
+                  WHERE stored_id = 's5';
+                 UPDATE subtitle_jobs SET state = 'waiting', wait = 'video' WHERE id = 'j1';",
+            )?;
+            for (work, path) in &covers {
+                c.execute(
+                    "UPDATE work_artwork
+                        SET mode = 'manual', source = 'upload', image_id = ?2,
+                            image_origin = 'upload', image_path = ?3, image_size = 10,
+                            image_sha256 = printf('%064d', 0), image_format = 'jpeg',
+                            job = NULL, job_requested_at = NULL
+                      WHERE work_id = ?1",
+                    rusqlite::params![work, format!("i-{work}"), path],
+                )?;
+            }
+            Ok::<_, trss_jobs::JobError>(())
+        })
+        .await
+        .unwrap();
+    // Lycoris Recoil's cover is there; Other's is not.
+    std::fs::create_dir_all(dir.path().join("covers")).unwrap();
+    std::fs::write(dir.path().join("covers/l.jpg"), [0u8; 10]).unwrap();
+
+    let (status, body) = get(&state, "/library/storage").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body,
+        serde_json::json!({ "works": [
+            {
+                "id": lycoris, "name": "Lycoris Recoil", "total": 12,
+                "kinds": [
+                    { "kind": "subtitle", "count": 2, "size": 2 },
+                    { "kind": "cover", "count": 1, "size": 10 }
+                ],
+                "cleanable": 2
+            },
+            {
+                "id": other, "name": "Other", "total": 0,
+                "kinds": [{ "kind": "cover", "count": 1, "size": 0 }],
+                "cleanable": 0
+            }
+        ]})
+    );
+
+    // A held job uses both: neither can be cleaned now.
+    state
+        .jobs
+        .db()
+        .run(|c| {
+            c.execute_batch("UPDATE subtitle_jobs SET state = 'held' WHERE id = 'j1';")?;
+            Ok::<_, trss_jobs::JobError>(())
+        })
+        .await
+        .unwrap();
+    let (_, body) = get(&state, "/library/storage").await;
+    assert_eq!(body["works"][0]["cleanable"], 0);
+    assert_eq!(body["works"][0]["total"], 12);
+}
+
+// A work folder not on disk now (a share not mounted): its stored copies
+// say why they cannot be cleaned, and a confirm is refused.
+#[tokio::test]
+async fn nothing_of_a_work_whose_folder_is_away_is_cleaned() {
+    // The watch folder `/c` is not on disk.
+    let (state, id) = state_with_work().await;
+    stored_only(&state, &id, &[2]).await;
+    let (_, body) = get(&state, &format!("/library/works/{id}")).await;
+    let entry = &body["storage"]["cleanable"][0];
+    assert_eq!(entry["id"], "s2");
+    assert_eq!(entry["blocked"], trss_jobs::place::cleanup::FOLDER_AWAY);
+    assert_eq!(
+        entry["blocked"],
+        "작품 폴더를 찾지 못해 지금은 정리할 수 없어요"
+    );
+
+    let (status, body) = post_json(
+        &state,
+        &format!("/library/works/{id}/stored/s2/clean"),
+        "{\"assets\": [\"a2\"]}",
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["message"], trss_jobs::place::cleanup::FOLDER_AWAY);
+    assert_eq!(body["current"], Value::Null);
+    // Nothing was cleaned: the episode still lists it.
+    let (_, body) = get(&state, &format!("/library/works/{id}")).await;
+    let episodes = body["seasons"][0]["episodes"].as_array().unwrap();
+    let two = episodes.iter().find(|e| e["episode"] == "02").unwrap();
+    assert_eq!(two["stored"][0]["id"], "s2");
+    let (_, body) = get(&state, "/library/storage").await;
+    assert_eq!(body["works"][0]["cleanable"], 0);
+}
+
+#[tokio::test]
+async fn nothing_is_cleaned_where_the_work_folder_has_no_stored_subtitles_folder() {
+    // A share not mounted can leave an empty folder at the work's place: the
+    // work folder is there, its `.trss/subtitles` is not.
+    let (state, id, dir) = state_with_work_on_disk().await;
+    std::fs::remove_dir_all(dir.path().join("Lycoris Recoil/.trss")).unwrap();
+    stored_only(&state, &id, &[2]).await;
+    let (_, body) = get(&state, &format!("/library/works/{id}")).await;
+    assert_eq!(
+        body["storage"]["cleanable"][0]["blocked"],
+        trss_jobs::place::cleanup::FOLDER_AWAY
+    );
+    let (status, body) = post_json(
+        &state,
+        &format!("/library/works/{id}/stored/s2/clean"),
+        "{\"assets\": [\"a2\"]}",
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["message"], trss_jobs::place::cleanup::FOLDER_AWAY);
+}

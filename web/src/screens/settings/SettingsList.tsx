@@ -4,6 +4,8 @@ import { Link } from "react-router-dom";
 import { useCached } from "@/lib/cached";
 import { cn } from "@/lib/utils";
 import { KEYS } from "@/screens/collect/cache";
+import { STORAGE_KEY } from "@/screens/library/api";
+import { cleanableCount, cleanableText, storageSummary, type StorageOverview } from "@/screens/library/storage";
 
 import { collectionSummary, loadCollection, type Collection } from "./collection/api";
 import { foldersSummary, loadWatchFolders, type WatchFolderList } from "./folders/api";
@@ -11,6 +13,7 @@ import { ChevronIcon } from "./icons";
 import { SETTINGS_ITEMS, type SettingsItem, type SettingsItemId } from "./items";
 import { Facts, Tag } from "./parts";
 import { loadPolicy, policySummary, POLICY_KEY, type Policy } from "./policy/api";
+import { loadStorage } from "./storage/api";
 import type { ImportFlow } from "./import/useImportFlow";
 
 /** The collect folder row: the two folders' names, or that none is chosen yet. */
@@ -64,11 +67,32 @@ function PolicyFacts() {
   );
 }
 
+/** The file sizes row: how many works hold stored files and their size, and how many files can be cleaned. */
+function StorageFacts() {
+  // Shared with the panel, and dropped when a clean changes the sizes.
+  const { data } = useCached<StorageOverview>(STORAGE_KEY, loadStorage, "");
+  const summary = data ? storageSummary(data) : null;
+  const cleanable = data ? cleanableText(cleanableCount(data)) : null;
+  return (
+    <Facts>
+      {data === undefined ? (
+        <Tag>&nbsp;</Tag>
+      ) : summary === null ? (
+        <Tag tone="warn">보관한 파일 없음</Tag>
+      ) : (
+        <span className="text-[13px] text-text-secondary">{summary}</span>
+      )}
+      {cleanable !== null && <Tag tone="pending">{cleanable}</Tag>}
+    </Facts>
+  );
+}
+
 /** What the row shows without opening the item: its current value. */
 function RowFacts({ id, importFlow }: { id: SettingsItemId; importFlow: ImportFlow }) {
   if (id === "policy") return <PolicyFacts />;
   if (id === "collection") return <CollectionFacts />;
   if (id === "folders") return <FoldersFacts />;
+  if (id === "storage") return <StorageFacts />;
   if (id === "import") {
     return (
       <Facts>

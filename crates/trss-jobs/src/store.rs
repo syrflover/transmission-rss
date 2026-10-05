@@ -13,6 +13,24 @@ use trss_subtitles::{
 
 use crate::model::{FileState, ItemState, JobState, StepKind, StepState, Wait};
 
+/// Whether the work folder `folder` keeps its stored subtitles on disk now:
+/// its `.trss/subtitles` is a folder. The work folder alone is not enough,
+/// since a share not mounted can leave an empty folder at its place.
+async fn folder_is_dir(folder: Option<String>) -> bool {
+    match folder {
+        Some(folder) => {
+            let kept = crate::place::files::within(
+                std::path::Path::new(&folder),
+                crate::place::files::SUBTITLES_DIR,
+            );
+            tokio::fs::metadata(kept)
+                .await
+                .is_ok_and(|meta| meta.is_dir())
+        }
+        None => false,
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum JobError {
     #[error(transparent)]
@@ -648,6 +666,74 @@ impl JobStore {
         let (work, stored) = (work_id.to_owned(), stored_id.to_owned());
         self.db
             .run(move |c| crate::place::records::choose_stored(c, &work, &stored, now))
+            .await
+    }
+
+    /// What the work keeps and what a person may clean of it
+    /// ([`crate::place::cleanup`]).
+    pub async fn work_files(
+        &self,
+        work_id: &str,
+    ) -> Result<crate::place::cleanup::WorkFiles, JobError> {
+        use crate::place::cleanup;
+        let there = self.work_folder_there(work_id).await?;
+        let id = work_id.to_owned();
+        self.db
+            .run(move |c| {
+                Ok(cleanup::WorkFiles {
+                    total: cleanup::total(c, &id)?,
+                    cleanable: cleanup::cleanable(c, &id, there)?,
+                    cleaning: cleanup::cleaning(c, &id)?,
+                })
+            })
+            .await
+    }
+
+    /// A person's confirming of a stored subtitle's cleanup with the files
+    /// `assets` they were shown ([`crate::place::cleanup::ask`]).
+    pub async fn clean_stored(
+        &self,
+        work_id: &str,
+        stored_id: &str,
+        assets: Vec<String>,
+        now: Millis,
+    ) -> Result<crate::place::cleanup::Asked, JobError> {
+        // The folder is looked at before the transaction, not in it; one
+        // that goes away before the worker's pass holds the cleanup there.
+        let there = self.work_folder_there(work_id).await?;
+        let (work, stored) = (work_id.to_owned(), stored_id.to_owned());
+        self.db
+            .run(move |c| crate::place::cleanup::ask(c, &work, &stored, &assets, there, now))
+            .await
+    }
+
+    /// Whether the work's folder keeps its stored subtitles on disk now (a
+    /// share not mounted, a work moved: not; see [`folder_is_dir`]).
+    async fn work_folder_there(&self, work_id: &str) -> Result<bool, JobError> {
+        let id = work_id.to_owned();
+        let folder = self
+            .db
+            .run(move |c| Ok::<_, JobError>(crate::place::records::work_folder(c, &id)?))
+            .await?;
+        Ok(folder_is_dir(folder).await)
+    }
+
+    /// What each work with a file not removed keeps
+    /// ([`crate::place::cleanup::storage`]).
+    pub async fn storage(&self) -> Result<Vec<crate::place::cleanup::WorkStorage>, JobError> {
+        use crate::place::cleanup;
+        let folders = self
+            .db
+            .run(|c| Ok::<_, JobError>(cleanup::work_folders(c)?))
+            .await?;
+        let mut there = HashSet::new();
+        for (work, folder) in folders {
+            if folder_is_dir(folder).await {
+                there.insert(work);
+            }
+        }
+        self.db
+            .run(move |c| Ok(cleanup::storage(c, &|work| there.contains(work))?))
             .await
     }
 

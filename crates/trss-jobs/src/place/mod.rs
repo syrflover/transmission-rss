@@ -82,7 +82,20 @@
 //! a job held for never ending a run are held too, and so is an effect whose
 //! published file the database refuses to record. A held effect no longer
 //! keeps its target from other effects.
+//!
+//! # Cleanup
+//!
+//! A person removes a stored subtitle that has no applied copy, with the
+//! files only it uses, from the work page ([`cleanup`]). The stored copy
+//! and a removed file are kept as records (`cleaned_at`, `removed_at`) that
+//! the reads above skip: no job reuses, links or applies them, and a new
+//! file may take a removed one's path. A row to apply whose stored copy was
+//! cleaned, whatever put it back in line, ends stored with why
+//! ([`cleanup::NOT_APPLIED`]). The worker removes the files in the
+//! jobs' task before the jobs run, so no store or link of this module comes
+//! between its look at a file and the removal.
 
+pub mod cleanup;
 pub mod episode;
 pub mod files;
 pub mod package;
@@ -1009,8 +1022,9 @@ impl Placer {
     }
 
     /// The job's creator folder in `parent` (relative to `base`): a folder of
-    /// the same name in another case the work has there already is used, so
-    /// one creator has one folder on every share.
+    /// the same name in another case the work has there already (one a
+    /// cleanup emptied of the app's files too) is used, so one creator has
+    /// one folder on every share.
     async fn creator_dir(
         &self,
         facts: &JobFacts,
@@ -1021,12 +1035,13 @@ impl Placer {
         let work = facts.work_id.clone().unwrap_or_default();
         let prefix = format!("{parent}/");
         let under = prefix.clone();
-        let assets = self
-            .read(move |c| records::assets_under(c, &work, base, &under))
+        // Removed files' paths too: their folder may still be there.
+        let paths = self
+            .read(move |c| records::asset_paths_under(c, &work, base, &under))
             .await?;
         let lower = wanted.to_lowercase();
-        let existing = assets.iter().find_map(|a| {
-            let rest = a.relative_path.strip_prefix(&prefix)?;
+        let existing = paths.iter().find_map(|path| {
+            let rest = path.strip_prefix(&prefix)?;
             let (dir, _) = rest.split_once('/')?;
             (dir.to_lowercase() == lower).then(|| dir.to_owned())
         });
@@ -1585,6 +1600,16 @@ impl Placer {
         ) else {
             return Ok(());
         };
+        // A stored subtitle a person cleaned is applied by no path: whatever
+        // put its row back in line, the row ends stored with why.
+        let id = stored_id.clone();
+        if self.read(move |c| cleanup::cleaned(c, &id)).await? {
+            let note = cleanup::NOT_APPLIED.to_owned();
+            self.settle_row(row, Outcome::Stored, note.clone()).await?;
+            return self
+                .event(job, format!("{}: {note}", row_label(row)), None)
+                .await;
+        }
         // A replacement to decide or carry out goes on; one that went stale
         // leaves the row to be looked at anew.
         if let Some(plan) = self.live_plan(row).await? {

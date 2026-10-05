@@ -12,6 +12,7 @@ import { useImportFlow } from "./settings/import/useImportFlow";
 import { findItem, SETTINGS_ITEMS, type SettingsItem } from "./settings/items";
 import { BTN, CARD } from "./settings/parts";
 import { PolicyPanel } from "./settings/policy/PolicyPanel";
+import { StoragePanel } from "./settings/storage/StoragePanel";
 import { SettingsList } from "./settings/SettingsList";
 
 const NARROW = "(max-width: 720px)";
@@ -45,8 +46,8 @@ function EmptyItem({ item }: { item: SettingsItem }) {
 /**
  * Settings as a list and detail. On a PC the list is on the left and the open
  * item on the right; on a phone an item is its own screen and its back button
- * returns to the list. Only the common policy, the collect folder, the watch folders
- * and the import are built so far; the other items show why they are empty.
+ * returns to the list. Only the common policy, the collect folder, the watch folders,
+ * the file sizes and the import are built so far; the other items show why they are empty.
  */
 export function SettingsScreen() {
   const { "*": rest } = useParams();
@@ -88,6 +89,8 @@ export function SettingsScreen() {
                 <CollectionPanel />
               ) : shown.id === "folders" ? (
                 <FoldersPanel />
+              ) : shown.id === "storage" ? (
+                <StoragePanel />
               ) : (
                 <EmptyItem item={shown} />
               )}

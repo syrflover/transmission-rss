@@ -402,6 +402,21 @@ impl Runner {
         self.store.has_ready().await
     }
 
+    /// Whether a person's cleanup of stored files waits for the worker
+    /// ([`crate::place::cleanup`]).
+    pub async fn has_cleanups(&self) -> Result<bool, JobError> {
+        self.placer.has_cleanups().await
+    }
+
+    /// Carries out the asked cleanups of stored files
+    /// ([`crate::place::cleanup`]). The caller holds the worker lock and
+    /// calls it from the task that runs the jobs, between runs: no store or
+    /// link of a job comes between a cleanup's look at a file and its
+    /// removal. Returns how many ended.
+    pub async fn run_cleanups(&self) -> Result<usize, JobError> {
+        self.placer.run_cleanups().await
+    }
+
     /// Runs the ready jobs one after the other until none is left or `cancel`
     /// fires. Returns how many runs ended. The caller holds the worker lock.
     pub async fn run_ready(&self, cancel: &CancellationToken) -> Result<usize, JobError> {

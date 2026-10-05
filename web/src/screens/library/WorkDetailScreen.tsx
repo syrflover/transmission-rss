@@ -30,6 +30,7 @@ import { SeasonTiles } from "./detail/SeasonTiles";
 import { HeadCreators } from "./detail/SubtitleCreators";
 import { CollectCard, FilesCard, InfoCard } from "./detail/SideCards";
 import { coverOf } from "./model";
+import { FILES_HASH } from "./storage.ts";
 import { Cover, FROM_LIBRARY } from "./WorkItem";
 
 const LOAD_FAILED = "작품을 불러오지 못했어요.";
@@ -213,7 +214,9 @@ function Loaded({
   const wide = useMediaQuery(WIDE_QUERY);
   const [order, setOrder] = useEpisodeOrder();
   const [params] = useSearchParams();
-  const { key: locationKey } = useLocation();
+  const { key: locationKey, hash } = useLocation();
+  // An address that names the 파일 card (`#files`, from the settings' file sizes) opens it and brings it into view.
+  const filesArrival = hash === `#${FILES_HASH}` ? locationKey : null;
 
   const [picked, setPicked] = useState<number | null>(null);
   const seasonOf = (number: number | null) => work.seasons.find((s) => s.number === number);
@@ -416,7 +419,7 @@ function Loaded({
         <div className={wide ? (work.seasons.length > 1 ? "mt-[29px] flex flex-col gap-3" : "flex flex-col gap-3") : "flex flex-col gap-3"}>
           {season && <InfoCard info={season.info} collapsible={!wide} />}
           <CollectCard work={work} collapsible={!wide} />
-          <FilesCard work={work} collapsible={!wide} />
+          <FilesCard work={work} collapsible={!wide} arrival={filesArrival} onRefresh={onRetried} />
         </div>
       </div>
     </section>

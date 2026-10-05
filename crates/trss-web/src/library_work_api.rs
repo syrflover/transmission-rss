@@ -1,6 +1,8 @@
 //! `GET /api/library/works/{id}`: one work for the work detail screen
 //! (`docs/specs/library.md`, 작품 상세 화면), the video side: what the library
-//! recorded for the work and the rules that collect into its folder.
+//! recorded for the work and the rules that collect into its folder; with the
+//! cleanup of its stored files (보관 파일의 정리) and `GET /api/library/storage`
+//! for the settings' 파일 용량과 정리.
 //!
 //! ```json
 //! {
@@ -33,7 +35,21 @@
 //!     "id": "…", "channel": { "id": "…", "name": null, "host": "example.org" },
 //!     "match": "Lycoris", "directory": "Lycoris Recoil/Season 01",
 //!     "save_path": "/media/anime/Lycoris Recoil/Season 01", "state": "active"
-//!   }]
+//!   }],
+//!   "storage": {
+//!     "total": 1843200,
+//!     "cleanable": [{
+//!       "id": "…", "name": "Show - 02.ass", "season": 1, "episode": 2, "creator": "하느",
+//!       "format": "ass", "size": 40960, "stored_at": 1760000300000, "kind": "past",
+//!       "blocked": null,
+//!       "with": [{ "id": "…", "name": "Show - 02.ass", "kind": "subtitle", "size": 40960 },
+//!                { "id": "…", "name": "Font.ttf", "kind": "font", "size": 802816 }],
+//!       "kept": [{ "id": "…", "name": "Shared.otf", "kind": "font",
+//!                  "reason": "다른 자막도 이 파일을 써요" }]
+//!     }],
+//!     "cleaning": [{ "id": "…", "name": "Show - 01.ass", "state": "held",
+//!                    "reason": "작품 폴더를 찾지 못했어요" }]
+//!   }
 //! }
 //! ```
 //!
@@ -77,6 +93,41 @@
 //!   with why not in `message` (an episode with a subtitle, whose change is a
 //!   replacement's; a format the app does not apply; a job that runs or is
 //!   held). `trss_jobs::place::records::choose_stored` has the rules.
+//! - `storage` is the work's stored files (보관 파일의 정리,
+//!   [`trss_jobs::place::cleanup`] has the rules). `total` is the length in
+//!   bytes of the files the app keeps for the work and has not removed
+//!   (subtitles, fonts, attachments and companion files; the cover is in
+//!   `GET /api/library/storage`). `cleanable` are its stored subtitles that
+//!   have no applied copy beside a video, by season, episode (`null`: on no
+//!   episode, last) and when stored: `kind` is `past` (지난 수정본),
+//!   `awaiting_video` (영상 대기), `unplaced` (회차에 붙지 않음) or `stored`
+//!   (보관만 함); `blocked` is why it cannot be cleaned now (the work folder
+//!   is not on disk now, or a job that runs, is held or waits uses it),
+//!   `null` when it can. `with` are the files
+//!   that would be removed with it now, its own first (`kind`: `subtitle`,
+//!   `font`, `attachment`, `companion`), and `kept` the ones it uses that
+//!   stay, with why. A file the app did not record is in neither.
+//!   `cleaning` are the cleanups the worker has not carried out yet
+//!   (`asked`) and the ones it held (`held`, with why).
+//! - `POST /api/library/works/{id}/stored/{stored_id}/clean` with
+//!   `{ "assets": [<the IDs the dialog showed in "with">] }` cleans one: the
+//!   stored subtitle is no stored copy from then (no list shows it, no job
+//!   applies it), what waited for its video is settled, and the worker,
+//!   woken, removes the files that are still unused when it comes to them.
+//!   `202` `{ "cleanup_id" }`; `404` for a stored subtitle that is not the
+//!   work's or was cleaned; `409` (`conflict`) with why in `message` when it
+//!   cannot be cleaned now, or, with the entry as it is now in `current`,
+//!   when the files that would go are not the ones named.
+//! - `GET /api/library/storage` is what each work keeps, for the settings'
+//!   파일 용량과 정리:
+//!   `{ "works": [{ "id", "name", "total", "kinds": [{ "kind", "count", "size" }],
+//!   "cleanable" }] }`, the works with a file kept or a cover image, the
+//!   largest `total` first. `kind` is `subtitle`, `font`, `attachment`
+//!   (attachments and companion files) or `cover` (the work's current cover
+//!   image, its length read from its file: `0` when the file is not there);
+//!   `cleanable` is how many stored subtitles of the work can be cleaned now
+//!   (`blocked` is `null`). The screen goes to the work's page from a line;
+//!   nothing is cleaned from there.
 //! - `native_title` is the first (lowest-numbered, not season 0) season's first
 //!   linked AniList entry's native title, `null` without one.
 //! - `korean_title` is the Anissia title (`subject`) of the anime the work's
@@ -115,12 +166,12 @@
 use std::{collections::HashMap, path::Path as FsPath};
 
 use axum::{
-    extract::{Path, State},
+    extract::{rejection::JsonRejection, Path, State},
     http::StatusCode,
     routing::{get, post},
     Json, Router,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use url::Url;
 
 use super::{
@@ -137,6 +188,7 @@ use trss_collect::{
     rss::save_path,
     store::{channels::ChannelWithRules, revisions::Revision},
 };
+use trss_jobs::place::cleanup;
 use trss_library::store::{
     artwork::JobKind,
     library::{EpisodeDetail, FileRecord, LibraryError, WorkDetail},
@@ -146,10 +198,17 @@ use trss_library::store::{
 mod tests;
 
 pub fn routes() -> Router<AppState> {
-    Router::new().route("/library/works/{id}", get(show)).route(
-        "/library/works/{id}/stored/{stored_id}/apply",
-        post(apply_stored),
-    )
+    Router::new()
+        .route("/library/works/{id}", get(show))
+        .route(
+            "/library/works/{id}/stored/{stored_id}/apply",
+            post(apply_stored),
+        )
+        .route(
+            "/library/works/{id}/stored/{stored_id}/clean",
+            post(clean_stored),
+        )
+        .route("/library/storage", get(storage))
 }
 
 #[derive(Serialize)]
@@ -337,6 +396,121 @@ struct WorkDetailView {
     rules: Vec<RuleRef>,
     cover_url: Option<String>,
     cover_pending: bool,
+    storage: StorageView,
+}
+
+/// The work's stored files and their cleanup.
+#[derive(Serialize)]
+struct StorageView {
+    total: u64,
+    cleanable: Vec<CleanableView>,
+    cleaning: Vec<CleaningView>,
+}
+
+/// A file that would go with a stored subtitle.
+#[derive(Serialize)]
+struct FileGoingView {
+    id: String,
+    name: String,
+    kind: &'static str,
+    size: u64,
+}
+
+/// A file a stored subtitle uses that stays, and why.
+#[derive(Serialize)]
+struct FileStayingView {
+    id: String,
+    name: String,
+    kind: &'static str,
+    reason: &'static str,
+}
+
+/// A stored subtitle a person may clean.
+#[derive(Serialize)]
+struct CleanableView {
+    id: String,
+    name: String,
+    season: u32,
+    episode: Option<i64>,
+    creator: Option<String>,
+    format: &'static str,
+    size: u64,
+    stored_at: i64,
+    /// `past`, `awaiting_video`, `unplaced` or `stored`.
+    kind: &'static str,
+    blocked: Option<&'static str>,
+    with: Vec<FileGoingView>,
+    kept: Vec<FileStayingView>,
+}
+
+impl From<cleanup::Cleanable> for CleanableView {
+    fn from(entry: cleanup::Cleanable) -> Self {
+        CleanableView {
+            id: entry.id,
+            name: entry.name,
+            season: entry.season,
+            episode: entry.episode,
+            creator: entry.creator,
+            format: entry.format.code(),
+            size: entry.size,
+            stored_at: entry.stored_at,
+            kind: entry.kind.code(),
+            blocked: entry.blocked,
+            with: entry
+                .with
+                .into_iter()
+                .map(|f| FileGoingView {
+                    id: f.id,
+                    name: f.name,
+                    kind: f.kind.code(),
+                    size: f.size,
+                })
+                .collect(),
+            kept: entry
+                .kept
+                .into_iter()
+                .map(|f| FileStayingView {
+                    id: f.id,
+                    name: f.name,
+                    kind: f.kind.code(),
+                    reason: f.reason,
+                })
+                .collect(),
+        }
+    }
+}
+
+/// A cleanup the worker has not carried out, or held.
+#[derive(Serialize)]
+struct CleaningView {
+    id: String,
+    name: String,
+    /// `asked` or `held`.
+    state: String,
+    reason: Option<String>,
+}
+
+impl From<cleanup::WorkFiles> for StorageView {
+    fn from(files: cleanup::WorkFiles) -> Self {
+        StorageView {
+            total: files.total,
+            cleanable: files
+                .cleanable
+                .into_iter()
+                .map(CleanableView::from)
+                .collect(),
+            cleaning: files
+                .cleaning
+                .into_iter()
+                .map(|k| CleaningView {
+                    id: k.id,
+                    name: k.name,
+                    state: k.state,
+                    reason: k.reason,
+                })
+                .collect(),
+        }
+    }
 }
 
 fn host_of(url: &str) -> String {
@@ -634,6 +808,11 @@ async fn show(
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     attach_stored(&mut seasons, stored);
+    let files = state
+        .jobs
+        .work_files(&work.id)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
     Ok(Json(WorkDetailView {
         id: work.id,
         name: work.dir_name,
@@ -660,6 +839,7 @@ async fn show(
         rules,
         cover_url,
         cover_pending,
+        storage: StorageView::from(files),
     }))
 }
 
@@ -692,4 +872,148 @@ async fn apply_stored(
             current: None,
         }),
     }
+}
+
+/// The files the dialog showed would go with the stored subtitle.
+#[derive(Deserialize)]
+struct CleanBody {
+    assets: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct Cleaning {
+    cleanup_id: String,
+}
+
+const BAD_BODY: &str = "요청 내용을 읽지 못했어요. 화면을 새로고침한 뒤 다시 시도해 주세요.";
+const FILES_CHANGED: &str = "정리할 파일이 바뀌었어요. 다시 확인해 주세요.";
+
+async fn clean_stored(
+    State(state): State<AppState>,
+    Path((id, stored_id)): Path<(String, String)>,
+    parsed: Result<Json<CleanBody>, JsonRejection>,
+) -> Result<(StatusCode, Json<Cleaning>), ApiError> {
+    let Json(body) = parsed.map_err(|_| ApiError::invalid(BAD_BODY))?;
+    let now = super::commands_api::now_millis();
+    match state
+        .jobs
+        .clean_stored(&id, &stored_id, body.assets, now)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+    {
+        cleanup::Asked::Asked(cleanup_id) => {
+            if let Some(path) = &state.worker_wake {
+                trss_core::wake::wake_worker(path);
+            }
+            Ok((StatusCode::ACCEPTED, Json(Cleaning { cleanup_id })))
+        }
+        cleanup::Asked::NotFound => Err(ApiError::not_found("이 보관본을 찾지 못했어요.")),
+        cleanup::Asked::Refused(message) => Err(ApiError::Conflict {
+            message: message.to_owned(),
+            current: None,
+        }),
+        cleanup::Asked::Changed(entry) => Err(ApiError::Conflict {
+            message: FILES_CHANGED.to_owned(),
+            current: serde_json::to_value(CleanableView::from(*entry)).ok(),
+        }),
+    }
+}
+
+/// How many files of one kind a work keeps, and their length.
+#[derive(Serialize)]
+struct KindView {
+    /// `subtitle`, `font`, `attachment` or `cover`.
+    kind: &'static str,
+    count: u64,
+    size: u64,
+}
+
+#[derive(Serialize)]
+struct WorkStorageView {
+    id: String,
+    name: String,
+    total: u64,
+    kinds: Vec<KindView>,
+    cleanable: usize,
+}
+
+#[derive(Serialize)]
+struct StorageList {
+    works: Vec<WorkStorageView>,
+}
+
+/// The length of the cover image at `relative` in the app data folder: `0`
+/// when nothing is there or it is no file.
+async fn cover_size(state: &AppState, relative: &str) -> u64 {
+    let Some(app) = state.artwork.app_data() else {
+        return 0;
+    };
+    let path = relative
+        .split('/')
+        .fold(app.root().to_path_buf(), |path, part| path.join(part));
+    match tokio::fs::symlink_metadata(&path).await {
+        Ok(meta) if meta.is_file() => meta.len(),
+        _ => 0,
+    }
+}
+
+async fn storage(State(state): State<AppState>) -> Result<Json<StorageList>, ApiError> {
+    let kept = state
+        .jobs
+        .storage()
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let covers = state
+        .artwork
+        .store
+        .image_ids()
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let works = state
+        .library
+        .overview()
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let mut listed = Vec::new();
+    for work in works {
+        let files = kept.iter().find(|k| k.work_id == work.id);
+        let cover = match covers.contains_key(&work.id) {
+            true => match state.artwork.store.selection(&work.id).await {
+                Ok(selection) => selection.image.map(|image| image.relative_path),
+                Err(e) => return Err(ApiError::Internal(e.to_string())),
+            },
+            false => None,
+        };
+        if files.is_none() && cover.is_none() {
+            continue;
+        }
+        let mut kinds: Vec<KindView> = files
+            .map(|f| {
+                f.kinds
+                    .iter()
+                    .map(|k| KindView {
+                        kind: k.kind,
+                        count: k.count,
+                        size: k.size,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        if let Some(relative) = cover {
+            kinds.push(KindView {
+                kind: "cover",
+                count: 1,
+                size: cover_size(&state, &relative).await,
+            });
+        }
+        listed.push(WorkStorageView {
+            id: work.id,
+            name: work.dir_name,
+            total: kinds.iter().map(|k| k.size).sum(),
+            kinds,
+            cleanable: files.map_or(0, |f| f.cleanable),
+        });
+    }
+    listed.sort_by(|a, b| b.total.cmp(&a.total).then_with(|| a.name.cmp(&b.name)));
+    Ok(Json(StorageList { works: listed }))
 }
