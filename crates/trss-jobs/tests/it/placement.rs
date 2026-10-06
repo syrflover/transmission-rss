@@ -869,3 +869,283 @@ async fn a_row_on_a_stored_subtitle_of_another_link_is_given_its_own_before_it_i
         .unwrap();
     assert_eq!(applied_from, relinked);
 }
+
+/// A pick of the creator's post with `Show-02.ass` (the bytes of
+/// `/ok/Show-02`) beside another file of its format for Anissia's episode 2:
+/// both are stored and asked about. The pick's job, and the row of
+/// `Show-02.ass`.
+async fn asked_beside(s: &Setup, command: &str) -> (String, PlanRow) {
+    let id = pick(s, command, "2", "/pack/Show-02.ass/Show-02%20[sign].ass").await;
+    s.run().await;
+    assert_eq!(s.detail(&id).await.row.wait, Some(Wait::Placement));
+    let row = s
+        .plan(&id)
+        .await
+        .into_iter()
+        .find(|r| r.name == "Show-02.ass")
+        .unwrap();
+    assert!(row.question.is_some(), "{row:?}");
+    (id, row)
+}
+
+/// Confirms [`asked_beside`]'s table: `Show-02.ass` applied on episode 3,
+/// the other stored only.
+async fn placed_on_three(s: &Setup, id: &str) {
+    assert_eq!(
+        s.confirm(
+            id,
+            &[
+                ("Show-02.ass", Some(3), true),
+                ("Show-02 [sign].ass", None, false)
+            ]
+        )
+        .await,
+        Confirmed::Queued {
+            applied: 1,
+            stored: 1
+        }
+    );
+}
+
+/// When the stored subtitles `a` and `b` were stored.
+async fn stored_at(s: &Setup, a: &str, b: &str) -> (i64, i64) {
+    let (a, b) = (a.to_owned(), b.to_owned());
+    s.db.run(move |c| {
+        c.query_row(
+            "SELECT (SELECT stored_at FROM subtitle_stored WHERE id = ?1),
+                    (SELECT stored_at FROM subtitle_stored WHERE id = ?2)",
+            params![a, b],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(trss_core::DbError::from)
+    })
+    .await
+    .unwrap()
+}
+
+/// The applied copies not removed: (episode, stored subtitle).
+async fn copies(s: &Setup) -> Vec<(i64, String)> {
+    s.db.run(|c| {
+        let mut stmt = c.prepare(
+            "SELECT episode, stored_id FROM subtitle_applied
+              WHERE removed_at IS NULL ORDER BY episode",
+        )?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(trss_core::DbError::from)
+    })
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn a_row_placed_elsewhere_leaves_the_stored_subtitle_other_rows_use_on_its_link() {
+    let s = setup().await;
+    let (_, picked) = picked_and_kept(&s).await;
+    let shared = picked.stored_id.clone().unwrap();
+    let before = s.stored(&shared).await;
+    // A second pick of the same post waits to replace [`MINE`] from the same
+    // stored subtitle, and a third one's row is on it too.
+    let again = pick(&s, "c2", "2", "/ok/Show-02").await;
+    s.run().await;
+    assert_eq!(s.detail(&again).await.row.wait, Some(Wait::Approval));
+    assert_eq!(s.plan(&again).await[0].stored_id, Some(shared.clone()));
+    let (asked, row) = asked_beside(&s, "c3").await;
+    assert_eq!(row.stored_id, Some(shared.clone()));
+    let sign = s
+        .plan(&asked)
+        .await
+        .into_iter()
+        .find(|r| r.name == "Show-02 [sign].ass")
+        .unwrap()
+        .stored_id
+        .unwrap();
+
+    // The person puts it on episode 3: the row takes a stored subtitle of
+    // that link, as old as the one it had, and the one the other rows use
+    // stays on episode 2. The other file's stored subtitle is its row's
+    // alone, and goes on no episode with it.
+    placed_on_three(&s, &asked).await;
+    assert_eq!(s.stored(&shared).await, before);
+    assert_eq!(
+        s.plan(&picked.job_id).await[0].stored_id,
+        Some(shared.clone())
+    );
+    let plan = s.plan(&asked).await;
+    let own = plan[0].stored_id.clone().unwrap();
+    assert_eq!(plan[0].name, "Show-02.ass");
+    assert_ne!(own, shared);
+    let made = s.stored(&own).await;
+    assert_eq!(
+        (made.0, made.1.as_str(), made.2.as_deref(), &made.3, &made.4),
+        (3, "explicit", None, &before.3, &asked)
+    );
+    let (made_at, shared_at) = stored_at(&s, &own, &shared).await;
+    assert_eq!(made_at, shared_at);
+    assert_eq!(plan[1].stored_id.as_deref(), Some(sign.as_str()));
+    let unplaced: (Option<i64>, Option<String>) =
+        s.db.run(move |c| {
+            c.query_row(
+                "SELECT episode, assignment FROM subtitle_stored WHERE id = ?1",
+                [sign],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .map_err(trss_core::DbError::from)
+        })
+        .await
+        .unwrap();
+    assert_eq!(unplaced, (None, None));
+
+    // Each copy is applied from the stored subtitle of its own link, and the
+    // second pick's approval holds: no second look.
+    s.run().await;
+    assert_eq!(s.detail(&asked).await.row.state, JobState::Done);
+    assert_eq!(
+        s.decide(&again, true).await,
+        Decided::Done(PlanState::Approved)
+    );
+    s.run().await;
+    let d = s.detail(&again).await;
+    assert_eq!(
+        d.row.state,
+        JobState::Done,
+        "{:?} {:?}",
+        d.row.note,
+        d.events
+    );
+    for n in [2, 3] {
+        assert_eq!(
+            std::fs::read(s.work().join(format!("Season 02/Show S02E{n:02}.ass"))).unwrap(),
+            fake::ass("Show-02"),
+            "{n}"
+        );
+    }
+    assert_eq!(s.plan(&again).await[0].stored_id, Some(shared.clone()));
+    assert_eq!(copies(&s).await, [(2, shared), (3, own)]);
+    let plans: i64 =
+        s.db.run(move |c| {
+            c.query_row(
+                "SELECT count(*) FROM subtitle_replacements WHERE job_id = ?1",
+                [again],
+                |r| r.get(0),
+            )
+            .map_err(trss_core::DbError::from)
+        })
+        .await
+        .unwrap();
+    assert_eq!(plans, 1, "the approved plan held");
+}
+
+#[tokio::test]
+async fn an_applied_copy_alone_keeps_the_stored_subtitle_it_was_applied_from_on_its_link() {
+    let s = setup().await;
+    s.sql(
+        "INSERT INTO subtitle_episode_mappings
+             (work_id, season, source_id, kind, episode_offset, evidence, decided_at)
+         VALUES ('w1', 2, 'src', 'user', 0, '시험', 0);",
+    )
+    .await;
+    let first = pick(&s, "c1", "2", "/ok/Show-02").await;
+    s.run().await;
+    assert_eq!(s.detail(&first).await.row.state, JobState::Done);
+    let applied = s.plan(&first).await[0].stored_id.clone().unwrap();
+    let before = s.stored(&applied).await;
+    let (asked, row) = asked_beside(&s, "c2").await;
+    assert_eq!(row.stored_id, Some(applied.clone()));
+    // The first pick's row on a stored subtitle of its own, as one a later
+    // run relinked: the copy it applied alone names the one it had.
+    s.db.run({
+        let (first, applied) = (first.clone(), applied.clone());
+        move |c| {
+            c.execute_batch(&format!(
+                "CREATE TEMP TABLE own AS SELECT * FROM subtitle_stored WHERE id = '{applied}';
+                 UPDATE own SET id = 'own';
+                 INSERT INTO subtitle_stored SELECT * FROM own;
+                 UPDATE subtitle_job_plan SET stored_id = 'own' WHERE job_id = '{first}';"
+            ))
+            .map_err(trss_core::DbError::from)
+        }
+    })
+    .await
+    .unwrap();
+
+    placed_on_three(&s, &asked).await;
+    assert_eq!(s.stored(&applied).await, before);
+    let moved = s.plan(&asked).await[0].stored_id.clone().unwrap();
+    assert!(moved != applied && moved != "own", "{moved}");
+    let made = s.stored(&moved).await;
+    assert_eq!(
+        (made.0, made.1.as_str(), made.2.as_deref()),
+        (3, "explicit", None)
+    );
+    s.run().await;
+    assert_eq!(copies(&s).await, [(2, applied), (3, moved)]);
+}
+
+#[tokio::test]
+async fn rows_of_one_stored_subtitle_placed_together_move_it_as_one() {
+    let s = setup().await;
+    s.sql(
+        "INSERT INTO subtitle_episode_mappings
+             (work_id, season, source_id, kind, episode_offset, evidence, decided_at)
+         VALUES ('w1', 2, 'src', 'user', 0, '시험', 0);",
+    )
+    .await;
+    // The same file twice, beside another of its format: all are asked
+    // about, and the two of the same bytes are on one stored subtitle.
+    let id = pick(
+        &s,
+        "c1",
+        "2",
+        "/pack/Show-02.ass/b%2FShow-02.ass/Show-02%20[sign].ass",
+    )
+    .await;
+    s.run().await;
+    assert_eq!(s.detail(&id).await.row.wait, Some(Wait::Placement));
+    let plan = s.plan(&id).await;
+    let same: Vec<&PlanRow> = plan
+        .iter()
+        .filter(|r| r.name.ends_with("Show-02.ass"))
+        .collect();
+    assert_eq!(same.len(), 2, "{plan:?}");
+    assert!(same.iter().all(|r| r.question.is_some()), "{plan:?}");
+    let stored = same[0].stored_id.clone().unwrap();
+    assert_eq!(same[1].stored_id.as_deref(), Some(stored.as_str()));
+
+    // Both go on episode 3, the other file on none.
+    let placings = plan
+        .iter()
+        .map(|r| RowPlacing {
+            position: r.position,
+            episode: (r.name.ends_with("Show-02.ass")).then_some(3),
+            apply: r.name.ends_with("Show-02.ass"),
+        })
+        .collect();
+    assert!(matches!(
+        s.store
+            .confirm_placement(&id, placings, Vec::new(), Some(12), 50_000)
+            .await
+            .unwrap(),
+        Confirmed::Queued { .. }
+    ));
+    // The stored subtitle moves with them: one of that link, not two.
+    let plan = s.plan(&id).await;
+    for row in plan.iter().filter(|r| r.name.ends_with("Show-02.ass")) {
+        assert_eq!(row.stored_id.as_deref(), Some(stored.as_str()), "{row:?}");
+    }
+    let moved = s.stored(&stored).await;
+    assert_eq!((moved.0, moved.1.as_str(), moved.2), (3, "explicit", None));
+    let asset = moved.3;
+    let records: i64 =
+        s.db.run(move |c| {
+            c.query_row(
+                "SELECT count(*) FROM subtitle_stored WHERE subtitle_asset_id = ?1",
+                [asset],
+                |r| r.get(0),
+            )
+            .map_err(trss_core::DbError::from)
+        })
+        .await
+        .unwrap();
+    assert_eq!(records, 1);
+}
