@@ -123,9 +123,9 @@
 //! | `done`, not received (`unchanged_asset`) | no file of its own; the font not removed, its file with its recorded length and hash | the package uses the font when its row is stored |
 //! | `done`, not received | the font removed by a cleanup, its file gone or other bytes | at its row's store: `abandoned` with the receipts that share it, their rows not kept gone, their items `pending`; the job goes back in line and receives the file |
 //!
-//! A file is the recorded object by its inode and birth time
-//! ([`area::same_object`]): a machine restarted meanwhile may have mounted
-//! its file system with another device number.
+//! A file is the recorded object by its inode ([`area::same_object`]): a
+//! machine restarted meanwhile may have mounted its file system with another
+//! device number.
 //!
 //! A held file holds its item, and a held item holds its job: the runner does
 //! not take it up again by itself. Its temporary file and anything at its path

@@ -563,7 +563,7 @@ async fn a_fetched_file_is_published_but_a_copy_with_the_same_bytes_at_its_path_
 
 /// Rewrites the object the receipt recorded as a file system mounted again
 /// (after the machine restarted) shows the same file: another device number,
-/// the same inode and birth time.
+/// the same inode.
 async fn mounted_again(s: &Setup, row: &FileRow) {
     let id = row.id.clone();
     s.store

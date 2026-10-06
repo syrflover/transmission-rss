@@ -80,10 +80,9 @@
 //! | `prepared` | no temporary file, the target is the recorded object, length and hash | the rename happened: synced, then `done` |
 //! | `prepared` | anything else | `held` |
 //!
-//! A file is the recorded object by its inode and birth time
-//! ([`crate::area::same_object`]), here and in [`replace`]: a machine
-//! restarted meanwhile may have mounted its file system with another device
-//! number.
+//! A file is the recorded object by its inode ([`crate::area::same_object`]),
+//! here and in [`replace`]: a machine restarted meanwhile may have mounted
+//! its file system with another device number.
 //!
 //! A held effect holds its row and the job: the runner does not take it up
 //! again by itself, and its files stay as they are. The effects under way of
