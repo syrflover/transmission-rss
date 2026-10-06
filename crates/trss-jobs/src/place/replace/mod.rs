@@ -99,13 +99,11 @@ use std::{
 use trss_core::files::rename_noreplace;
 
 use super::{
-    blocking,
-    episode::Assignment,
-    files,
+    blocking, files,
     files::{Copied, Published},
     joined,
     package::extension,
-    records::{self as place_records, Effect, JobFacts, NewApplied, PlanRow},
+    records::{self as place_records, Effect, JobFacts, NewApplied, Placed, PlanRow},
     row_label, video_parts, Choice, Placer, SUBTITLE_EXTENSIONS,
 };
 use crate::{
@@ -571,19 +569,15 @@ impl Placer {
         let row = self
             .read(move |c| place_records::plan_row_at(c, &job, position))
             .await?;
-        // A same-number link the decided mapping left on its episode is the
-        // same target.
-        let mapped = |episode: Option<i64>, assignment, basis| {
-            episode == Some(plan.episode)
-                && (assignment == Some(plan.assignment)
-                    || (plan.assignment == Assignment::SameNumber
-                        && assignment == Some(Assignment::Mapped)))
-                && basis == plan.basis
+        let link = Placed {
+            episode: plan.episode,
+            assignment: plan.assignment,
+            basis: plan.basis,
         };
         let row_holds = row.as_ref().is_some_and(|r| {
             r.stored_id.as_deref() == Some(plan.stored_id.as_str())
                 && r.action == PlanAction::Apply
-                && mapped(
+                && link.held_by(
                     r.placed.as_ref().map(|p| p.episode),
                     r.placed.as_ref().map(|p| p.assignment),
                     r.placed.as_ref().and_then(|p| p.basis),
@@ -595,7 +589,7 @@ impl Placer {
             .await?;
         let stored_holds = place
             .as_ref()
-            .is_some_and(|s| mapped(s.episode, s.assignment, s.basis));
+            .is_some_and(|s| link.held_by(s.episode, s.assignment, s.basis));
         if !row_holds || !stored_holds {
             return Ok(Some("회차 대응이 바뀌었어요".to_owned()));
         }

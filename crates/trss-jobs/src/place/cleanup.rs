@@ -34,13 +34,16 @@
 //! stored subtitle and leaves its own package with none); a plan row that
 //! kept it of a job not ended that may still link it: one with an item not
 //! received yet, a subtitle row not stored yet, or a stored subtitle not
-//! cleaned whose links are not known (`links_known = 0`, a run cut between
-//! the store and the link) ([`JOB_FILE`]); a receipt of a job not ended that
+//! cleaned whose links are not known (`links_known = 0`: a run cut between
+//! the store and the link, or a row given a stored subtitle of its own link
+//! after the link step, [`records::relink`], which the next run links)
+//! ([`JOB_FILE`]); a receipt of a job not ended that
 //! uses it instead of receiving an unchanged Drive font, until its row is
 //! stored ([`super::unchanged`], the same reason); an effect not ended that
 //! aims at its path (the same reason). A job past its links (waiting for a video
-//! with every item received, or put back in line by a cleanup) keeps no
-//! file this way, and no link is ever made to a removed file
+//! with every item received and its stored subtitles linked, or put back in
+//! line by a cleanup) keeps no file this way, and no link is ever made to a
+//! removed file
 //! ([`records::link`]). The list and the worker's look again use the same
 //! rules. An asset already removed is in neither list, and a file the
 //! records do not have is never in one: nothing is removed by its name.

@@ -68,6 +68,24 @@ pub struct Placed {
     pub basis: Option<Basis>,
 }
 
+impl Placed {
+    /// Whether a stored subtitle on `episode`, put there by `assignment` on
+    /// `basis`, is where this puts its file. A same-number link the decided
+    /// mapping left on its episode is the same.
+    pub fn held_by(
+        &self,
+        episode: Option<i64>,
+        assignment: Option<Assignment>,
+        basis: Option<Basis>,
+    ) -> bool {
+        episode == Some(self.episode)
+            && (assignment == Some(self.assignment)
+                || (self.assignment == Assignment::SameNumber
+                    && assignment == Some(Assignment::Mapped)))
+            && basis == self.basis
+    }
+}
+
 /// One row of a job's placement plan (see the schema's comment).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanRow {
@@ -569,7 +587,7 @@ pub enum Kept {
 /// Records the row's file as stored: its package (made once for the job's
 /// post), the asset (new, or the one reused), the package's entry for it,
 /// and for a subtitle the stored subtitle (or the one already stored for the
-/// same bytes, source and episode) and the row's link to it; a font,
+/// same bytes, source and link, [`same_stored`]) and the row's link to it; a font,
 /// attachment or companion row links to its asset and is `stored`. The
 /// effect, if one made the file, is `done`. One synced transaction. Returns
 /// the stored subtitle's ID, or the asset's for a row that is no subtitle.
@@ -664,26 +682,14 @@ pub fn stored(
             return Ok(asset_id);
         }
         let placed = row.placed.as_ref();
-        // The same bytes of the same source on the same episode are one
-        // revision, however often received; one a person cleaned is no
-        // stored copy any more, so the bytes are stored anew.
-        let same: Option<String> = tx
-            .query_row(
-                "SELECT id FROM subtitle_stored
-                  WHERE subtitle_asset_id = ?1 AND work_id = ?2 AND season = ?3
-                    AND source_id IS ?4 AND episode IS ?5 AND assignment IS ?6
-                    AND cleaned_at IS NULL",
-                params![
-                    asset_id,
-                    facts.work_id,
-                    facts.season,
-                    facts.source_id,
-                    placed.map(|p| p.episode),
-                    placed.map(|p| p.assignment.code()),
-                ],
-                |r| r.get(0),
-            )
-            .optional()?;
+        let same = same_stored(
+            &tx,
+            &asset_id,
+            &facts.work_id,
+            facts.season,
+            facts.source_id.as_deref(),
+            placed,
+        )?;
         let stored = match same {
             Some(id) => id,
             None => {
@@ -729,6 +735,203 @@ pub fn stored(
         )?;
         tx.commit()?;
         Ok(stored)
+    })
+}
+
+/// The stored subtitle, not cleaned, of the asset's bytes from `source` on
+/// the link `placed` (its episode, what put it there and on which basis).
+/// The same bytes of the same source on the same link are one revision,
+/// however often received; a link of another basis is another stored
+/// subtitle, which a mapping change may move elsewhere. One a person
+/// cleaned is no stored copy any more, so the bytes are stored anew.
+pub fn same_stored(
+    c: &Connection,
+    asset_id: &str,
+    work_id: &str,
+    season: u32,
+    source_id: Option<&str>,
+    placed: Option<&Placed>,
+) -> rusqlite::Result<Option<String>> {
+    c.query_row(
+        "SELECT id FROM subtitle_stored
+          WHERE subtitle_asset_id = ?1 AND work_id = ?2 AND season = ?3
+            AND source_id IS ?4 AND episode IS ?5 AND assignment IS ?6 AND basis IS ?7
+            AND cleaned_at IS NULL",
+        params![
+            asset_id,
+            work_id,
+            season,
+            source_id,
+            placed.map(|p| p.episode),
+            placed.map(|p| p.assignment.code()),
+            placed.and_then(|p| p.basis).map(Basis::code),
+        ],
+        |r| r.get(0),
+    )
+    .optional()
+}
+
+/// The stored subtitle a row is on, as [`relink`] reads it.
+struct OnStored {
+    work_id: String,
+    season: u32,
+    package_id: String,
+    asset_id: String,
+    source_id: Option<String>,
+    anissia_episode: Option<String>,
+    observation: Option<String>,
+}
+
+/// The row and the stored subtitle it is on, when that one holds another
+/// link than the row's.
+fn off_link(
+    c: &Connection,
+    job_id: &str,
+    position: i64,
+) -> rusqlite::Result<Option<(PlanRow, OnStored)>> {
+    let Some(row) = plan_row_at(c, job_id, position)? else {
+        return Ok(None);
+    };
+    let (Some(placed), Some(id)) = (row.placed.as_ref(), row.stored_id.as_deref()) else {
+        return Ok(None);
+    };
+    let on = c
+        .query_row(
+            "SELECT work_id, season, package_id, subtitle_asset_id, source_id, anissia_episode,
+                    anissia_observation, episode, assignment, basis
+               FROM subtitle_stored WHERE id = ?1 AND cleaned_at IS NULL",
+            [id],
+            |r| {
+                let assignment: Option<String> = r.get(8)?;
+                let basis: Option<String> = r.get(9)?;
+                let held = placed.held_by(
+                    r.get(7)?,
+                    assignment.as_deref().and_then(Assignment::parse),
+                    basis.as_deref().and_then(Basis::parse),
+                );
+                Ok((!held).then_some(OnStored {
+                    work_id: r.get(0)?,
+                    season: r.get(1)?,
+                    package_id: r.get(2)?,
+                    asset_id: r.get(3)?,
+                    source_id: r.get(4)?,
+                    anissia_episode: r.get(5)?,
+                    observation: r.get(6)?,
+                }))
+            },
+        )
+        .optional()?
+        .flatten();
+    Ok(on.map(|on| (row, on)))
+}
+
+/// Gives the row a stored subtitle of its own link when the one it is on
+/// holds another ([`Placed::held_by`]), so that a plan made for the row
+/// holds once approved. A row comes to such a one when a build that told
+/// stored subtitles apart by episode and assignment alone let it share the
+/// same bytes of another basis, or when a person's 배치 확인 of another job
+/// moved the stored subtitle they shared ([`confirm_placement`]). The row takes the
+/// stored subtitle of its link ([`same_stored`]), else a new one of the same
+/// bytes, stored when the one it had was so that the source's revisions keep
+/// their order. Its package is the row's job's entry of the bytes when there
+/// is one; the links of the one it had are kept, and the link step of the
+/// job's next run adds that package's files ([`link`]), if the job runs
+/// again (one that ends with this row's first copy does not). The one it had
+/// stays as it is for whatever else holds it. Reads first, and writes one
+/// synced transaction only for a row to relink; returns the row as
+/// relinked, or `None` when it was left (no link, its stored subtitle
+/// cleaned, or holding its link).
+pub fn relink(
+    c: &mut Connection,
+    job_id: &str,
+    position: i64,
+    now: Millis,
+) -> Result<Option<PlanRow>, JobError> {
+    if off_link(c, job_id, position)?.is_none() {
+        return Ok(None);
+    }
+    durable(c, |c| {
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let Some((row, on)) = off_link(&tx, job_id, position)? else {
+            return Ok(None);
+        };
+        let Some(placed) = row.placed.as_ref() else {
+            return Ok(None);
+        };
+        let Some(old) = row.stored_id.as_deref() else {
+            return Ok(None);
+        };
+        let same = same_stored(
+            &tx,
+            &on.asset_id,
+            &on.work_id,
+            on.season,
+            on.source_id.as_deref(),
+            Some(placed),
+        )?;
+        let stored = match same {
+            Some(id) => id,
+            None => {
+                let id = uuid::Uuid::new_v4().to_string();
+                let own: Option<String> = tx
+                    .query_row(
+                        "SELECT e.package_id FROM subtitle_package_entries e
+                           JOIN subtitle_packages p ON p.id = e.package_id
+                          WHERE p.job_id = ?1 AND e.asset_id = ?2
+                          ORDER BY e.package_id LIMIT 1",
+                        params![row.job_id, on.asset_id],
+                        |r| r.get(0),
+                    )
+                    .optional()?;
+                // A package of the row's job links its own files once more.
+                let links_known = own.as_ref().map(|_| 0);
+                let package = own.unwrap_or(on.package_id);
+                // What Anissia said of the episode is the row's only when it
+                // is the same episode.
+                let observation = on
+                    .observation
+                    .filter(|_| row.anissia_episode == on.anissia_episode);
+                tx.execute(
+                    "INSERT INTO subtitle_stored
+                         (id, work_id, season, package_id, subtitle_asset_id, source_id,
+                          anissia_episode, attachment_episode, assignment, basis, episode,
+                          format, encoding, creator, language, purpose, release, revision_label,
+                          links_known, anissia_observation, job_id, stored_at)
+                     SELECT ?2, work_id, season, ?3, subtitle_asset_id, source_id,
+                            ?4, ?5, ?6, ?7, ?8,
+                            format, encoding, creator, language, purpose, release, revision_label,
+                            coalesce(?9, links_known), ?10, ?11, stored_at
+                       FROM subtitle_stored WHERE id = ?1",
+                    params![
+                        old,
+                        id,
+                        package,
+                        row.anissia_episode,
+                        row.attachment_episode,
+                        placed.assignment.code(),
+                        placed.basis.map(Basis::code),
+                        placed.episode,
+                        links_known,
+                        observation,
+                        row.job_id,
+                    ],
+                )?;
+                tx.execute(
+                    "INSERT INTO subtitle_stored_assets (stored_id, asset_id, role)
+                     SELECT ?2, asset_id, role FROM subtitle_stored_assets WHERE stored_id = ?1",
+                    params![old, id],
+                )?;
+                id
+            }
+        };
+        tx.execute(
+            "UPDATE subtitle_job_plan SET stored_id = ?3, updated_at = ?4
+              WHERE job_id = ?1 AND position = ?2",
+            params![row.job_id, row.position, stored, now],
+        )?;
+        let relinked = plan_row_at(&tx, job_id, position)?;
+        tx.commit()?;
+        Ok(relinked)
     })
 }
 

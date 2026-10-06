@@ -15,16 +15,20 @@ use rusqlite::params;
 use tokio_util::sync::CancellationToken;
 use trss_core::{Clock, Db};
 use trss_jobs::{
-    model::{AssetKind, Outcome, PlanAction, StepKind, StepState},
+    model::{AssetKind, Outcome, PlanAction, PlanState, StepKind, StepState},
     place::{
         episode::{Assignment, Basis},
         records::{Confirmed, PlanRow, RowPlacing},
+        replace::records::Decided,
     },
     store::JobDetail,
     upload::UploadRequest,
-    Finished, JobState, JobStore, ReceiveArea, Runner, Uploads, Wait,
+    Created, Finished, JobState, JobStore, NewItem, NewJob, ReceiveArea, Runner, Uploads, Wait,
 };
-use trss_subtitles::{fake::FakeSource, Sources};
+use trss_subtitles::{
+    fake::{self, FakeSource},
+    Sources,
+};
 
 const WORK: &str = "w1";
 const CREATOR: &str = "제작자";
@@ -66,6 +70,35 @@ impl Setup {
             .run(move |c| c.execute_batch(sql).map_err(trss_core::DbError::from))
             .await
             .unwrap();
+    }
+
+    /// A stored subtitle's link and asset: (episode, assignment, basis,
+    /// asset, the job that stored it).
+    async fn stored(&self, id: &str) -> (i64, String, Option<String>, String, String) {
+        let id = id.to_owned();
+        self.db
+            .run(move |c| {
+                c.query_row(
+                    "SELECT episode, assignment, basis, subtitle_asset_id, job_id
+                       FROM subtitle_stored WHERE id = ?1",
+                    [id],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+                )
+                .map_err(trss_core::DbError::from)
+            })
+            .await
+            .unwrap()
+    }
+
+    /// Decides the job's one live replacement plan.
+    async fn decide(&self, id: &str, replace: bool) -> Decided {
+        let mut views = self.store.replacements(id).await.unwrap();
+        let plan = views.pop().unwrap().plan;
+        assert_eq!(plan.state, PlanState::Open, "{plan:?}");
+        self.store
+            .decide_replacement(id, &plan.id, plan.version, replace, 5_000_000)
+            .await
+            .unwrap()
     }
 
     /// Confirms the job's table: `placings` by the row's name.
@@ -199,6 +232,85 @@ async fn upload_files(
         Finished::Created { job_id, .. } => job_id,
         other => panic!("{other:?}"),
     }
+}
+
+/// A pick's job of the creator's (`src`) fake post `path` (on
+/// [`fake::HOST`]), as Anissia's episode `episode`.
+async fn pick(s: &Setup, command: &str, episode: &str, path: &str) -> String {
+    let job = NewJob {
+        command_id: command.to_owned(),
+        request: format!("{{\"c\":\"{command}\"}}"),
+        origin: "pick".to_owned(),
+        work_id: Some(WORK.to_owned()),
+        season: Some(2),
+        anime_no: Some(7),
+        source_id: Some("src".to_owned()),
+        creator: Some(CREATOR.to_owned()),
+        revision_of: None,
+        revises_attributed: false,
+        items: vec![NewItem {
+            observation_id: None,
+            episode: episode.to_owned(),
+            post_url: format!("https://{}{path}", fake::HOST),
+            found_at: 500,
+        }],
+    };
+    match s.store.create(job, 900).await.unwrap() {
+        Created::Created(id) => id,
+        other => panic!("created: {other:?}"),
+    }
+}
+
+/// A subtitle at episode 2's path the app did not put there.
+const MINE: &str =
+    "[Script Info]\n[Events]\nDialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,내 자막\n";
+
+/// The creator's mapping decided (each number the season's own), episode 2
+/// holding [`MINE`], and the creator's pick of `/ok/Show-02` kept stored only
+/// there by the person: the pick's job, and its row.
+async fn picked_and_kept(s: &Setup) -> (String, PlanRow) {
+    s.sql(
+        "INSERT INTO subtitle_episode_mappings
+             (work_id, season, source_id, kind, episode_offset, evidence, decided_at)
+         VALUES ('w1', 2, 'src', 'user', 0, '시험', 0);",
+    )
+    .await;
+    std::fs::write(s.work().join("Season 02/Show S02E02.ass"), MINE).unwrap();
+    let first = pick(s, "c1", "2", "/ok/Show-02").await;
+    s.run().await;
+    assert_eq!(s.detail(&first).await.row.wait, Some(Wait::Approval));
+    assert_eq!(
+        s.decide(&first, false).await,
+        Decided::Done(PlanState::Kept)
+    );
+    s.run().await;
+    assert_eq!(s.detail(&first).await.row.state, JobState::Done);
+    let row = s.plan(&first).await.remove(0);
+    let link = row.placed.clone().unwrap();
+    assert_eq!(
+        (link.episode, link.assignment, link.basis),
+        (2, Assignment::Mapped, Some(Basis::Anissia))
+    );
+    (first, row)
+}
+
+/// The same bytes under the same name, uploaded as the creator's and placed
+/// on episode 2 by the file's number: the upload's job, waiting to replace
+/// [`MINE`].
+async fn uploaded_on_the_same_file(s: &Setup) -> String {
+    let files = [("Show-02.ass".to_owned(), fake::ass("Show-02"))];
+    let id = upload_files(s, "u1", &files, true).await;
+    s.run().await;
+    assert_eq!(
+        s.confirm(&id, &[("Show-02.ass", Some(2), true)]).await,
+        Confirmed::Queued {
+            applied: 1,
+            stored: 0
+        }
+    );
+    s.run().await;
+    assert_eq!(s.detail(&id).await.row.wait, Some(Wait::Approval));
+    id
 }
 
 fn placed(row: &PlanRow) -> Option<(i64, Assignment)> {
@@ -569,4 +681,191 @@ async fn a_package_of_fonts_alone_is_confirmed_with_no_row_and_then_kept() {
     assert_eq!(plan.len(), 1);
     assert_eq!(plan[0].kind, AssetKind::Font);
     assert!(plan[0].kept(), "{:?}", plan[0]);
+}
+
+#[tokio::test]
+async fn an_upload_of_bytes_a_pick_stored_keeps_its_own_link_and_is_applied_once_approved() {
+    let s = setup().await;
+    let (_, picked) = picked_and_kept(&s).await;
+    let id = uploaded_on_the_same_file(&s).await;
+    // The file is kept once, but the upload's link is its own: by the
+    // file's number, not Anissia's episode.
+    let row = s.plan(&id).await.remove(0);
+    let link = row.placed.clone().unwrap();
+    assert_eq!(
+        (link.episode, link.assignment, link.basis),
+        (2, Assignment::Mapped, Some(Basis::Attachment))
+    );
+    let (mine, theirs) = (
+        s.stored(row.stored_id.as_deref().unwrap()).await,
+        s.stored(picked.stored_id.as_deref().unwrap()).await,
+    );
+    assert_ne!(row.stored_id, picked.stored_id);
+    assert_eq!(
+        (mine.0, mine.1.as_str(), mine.2.as_deref(), &mine.4),
+        (2, "mapped", Some("attachment"), &id)
+    );
+    assert_eq!(mine.3, theirs.3, "one asset");
+    assert_eq!(theirs.2.as_deref(), Some("anissia"));
+
+    // Approved, it replaces the subtitle there with no second look.
+    assert_eq!(
+        s.decide(&id, true).await,
+        Decided::Done(PlanState::Approved)
+    );
+    s.run().await;
+    let d = s.detail(&id).await;
+    assert_eq!(
+        d.row.state,
+        JobState::Done,
+        "{:?} {:?}",
+        d.row.note,
+        d.events
+    );
+    assert_eq!(
+        std::fs::read(s.work().join("Season 02/Show S02E02.ass")).unwrap(),
+        fake::ass("Show-02")
+    );
+    let plans: i64 =
+        s.db.run(move |c| {
+            c.query_row(
+                "SELECT count(*) FROM subtitle_replacements WHERE job_id = ?1",
+                [id],
+                |r| r.get(0),
+            )
+            .map_err(trss_core::DbError::from)
+        })
+        .await
+        .unwrap();
+    assert_eq!(plans, 1, "the approved plan held");
+}
+
+#[tokio::test]
+async fn a_row_on_a_stored_subtitle_of_another_link_is_given_its_own_before_it_is_compared() {
+    let s = setup().await;
+    let (_, picked) = picked_and_kept(&s).await;
+    let id = uploaded_on_the_same_file(&s).await;
+    let own = s.plan(&id).await.remove(0).stored_id.unwrap();
+    let theirs = picked.stored_id.clone().unwrap();
+    // As a build that told stored subtitles apart by episode and assignment
+    // only left it: the upload's row, and the plan made for it, on the pick's
+    // stored subtitle, and none of its own (the one it had is cleaned).
+    s.db.run({
+        let (id, own, theirs) = (id.clone(), own.clone(), theirs.clone());
+        move |c| {
+            let made: String = c.query_row(
+                "SELECT id FROM subtitle_replacements WHERE job_id = ?1",
+                [&id],
+                |r| r.get(0),
+            )?;
+            c.execute(
+                "UPDATE subtitle_replacements SET state = 'stale' WHERE id = ?1",
+                [&made],
+            )?;
+            c.execute(
+                "INSERT INTO subtitle_replacements
+                     (id, job_id, position, version, state, work_id, season, episode, assignment,
+                      basis, folder, video_path, video_object, video_size, video_mtime, stored_id,
+                      asset_id, asset_path, asset_size, asset_sha256, asset_lines, target,
+                      created_at, updated_at)
+                 SELECT 'legacy', job_id, position, version + 1, 'open', work_id, season,
+                        episode, assignment, basis, folder, video_path, video_object, video_size,
+                        video_mtime, ?2, asset_id, asset_path, asset_size, asset_sha256,
+                        asset_lines, target, created_at, updated_at
+                   FROM subtitle_replacements WHERE id = ?1",
+                params![made, theirs],
+            )?;
+            c.execute(
+                "INSERT INTO subtitle_replacement_paths
+                 SELECT 'legacy', path, action, byte_size, sha256, object, mtime, lines, applied_id
+                   FROM subtitle_replacement_paths WHERE plan_id = ?1",
+                [&made],
+            )?;
+            c.execute(
+                "INSERT INTO subtitle_replacement_diffs
+                 SELECT 'legacy', path, diff, lines, unreadable
+                   FROM subtitle_replacement_diffs WHERE plan_id = ?1",
+                [&made],
+            )?;
+            c.execute(
+                "UPDATE subtitle_job_plan SET stored_id = ?2 WHERE job_id = ?1",
+                params![id, theirs],
+            )?;
+            c.execute(
+                "UPDATE subtitle_stored SET cleaned_at = 1 WHERE id = ?1",
+                [own],
+            )
+            .map_err(trss_core::DbError::from)
+        }
+    })
+    .await
+    .unwrap();
+    let before = s.stored(&theirs).await;
+
+    // The approved plan does not hold for the row any more: the row gets a
+    // stored subtitle of its own link, and the person compares again.
+    assert_eq!(
+        s.decide(&id, true).await,
+        Decided::Done(PlanState::Approved)
+    );
+    s.run().await;
+    assert_eq!(s.detail(&id).await.row.wait, Some(Wait::Approval));
+    let row = s.plan(&id).await.remove(0);
+    let relinked = row.stored_id.clone().unwrap();
+    assert!(relinked != theirs && relinked != own, "{relinked}");
+    let made = s.stored(&relinked).await;
+    assert_eq!(
+        (made.0, made.1.as_str(), made.2.as_deref(), &made.3, &made.4),
+        (2, "mapped", Some("attachment"), &before.3, &id)
+    );
+    // The pick's stays as it was, and the new one is as old: no newer
+    // revision of the source.
+    assert_eq!(s.stored(&theirs).await, before);
+    let (made_at, theirs_at): (i64, i64) =
+        s.db.run({
+            let (relinked, theirs) = (relinked.clone(), theirs.clone());
+            move |c| {
+                c.query_row(
+                    "SELECT (SELECT stored_at FROM subtitle_stored WHERE id = ?1),
+                            (SELECT stored_at FROM subtitle_stored WHERE id = ?2)",
+                    params![relinked, theirs],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .map_err(trss_core::DbError::from)
+            }
+        })
+        .await
+        .unwrap();
+    assert_eq!(made_at, theirs_at);
+
+    // Approved again, it is applied from the row's own.
+    assert_eq!(
+        s.decide(&id, true).await,
+        Decided::Done(PlanState::Approved)
+    );
+    s.run().await;
+    let d = s.detail(&id).await;
+    assert_eq!(
+        d.row.state,
+        JobState::Done,
+        "{:?} {:?}",
+        d.row.note,
+        d.events
+    );
+    assert_eq!(
+        std::fs::read(s.work().join("Season 02/Show S02E02.ass")).unwrap(),
+        fake::ass("Show-02")
+    );
+    let applied_from: String =
+        s.db.run(|c| {
+            c.query_row(
+                "SELECT stored_id FROM subtitle_applied WHERE removed_at IS NULL",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(trss_core::DbError::from)
+        })
+        .await
+        .unwrap();
+    assert_eq!(applied_from, relinked);
 }

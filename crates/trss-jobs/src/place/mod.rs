@@ -1706,6 +1706,20 @@ impl Placer {
                 return Ok(());
             }
         }
+        // A row on a stored subtitle of another link is given one of its
+        // own before it is compared, so that its plan holds once approved;
+        // the row is read anew then.
+        let (job_id, position, now) = (row.job_id.clone(), row.position, self.now());
+        let relinked = self
+            .write(move |c| records::relink(c, &job_id, position, now))
+            .await?;
+        let (row, placed, stored_id) = match &relinked {
+            Some(r) => match (r.placed.as_ref(), r.stored_id.clone()) {
+                (Some(placed), Some(stored_id)) => (r, placed, stored_id),
+                _ => return Ok(()),
+            },
+            None => (row, placed, stored_id),
+        };
         let label = row_label(row);
         let work = facts.work_id.clone().unwrap_or_default();
         let season = facts.season.unwrap_or(0);
