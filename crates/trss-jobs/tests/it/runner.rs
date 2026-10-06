@@ -561,6 +561,58 @@ async fn a_fetched_file_is_published_but_a_copy_with_the_same_bytes_at_its_path_
     assert_eq!(d.items[0].files.len(), 1);
 }
 
+/// Rewrites the object the receipt recorded as a file system mounted again
+/// (after the machine restarted) shows the same file: another device number,
+/// the same inode and birth time.
+async fn mounted_again(s: &Setup, row: &FileRow) {
+    let id = row.id.clone();
+    s.store
+        .db()
+        .run(move |c| {
+            c.execute(
+                "UPDATE subtitle_job_files
+                    SET object = '999999' || substr(object, instr(object, ':'))
+                  WHERE id = ?1",
+                [id],
+            )
+            .map_err(trss_core::DbError::from)
+        })
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_fetched_file_is_found_by_its_object_whatever_device_number_it_was_mounted_with() {
+    // The temporary file still there, or renamed to its path before `done`.
+    for renamed in [false, true] {
+        let s = setup().await;
+        let (id, item) = killed(&s, "/ok/a").await;
+        let row = intended(&s, item, "ok/a", "a.ass", None, Some(&fake::ass("a"))).await;
+        let path = format!("{id}/a.ass");
+        fetched(&s, &row, &path).await;
+        if renamed {
+            std::fs::create_dir_all(s.area.at(&id)).unwrap();
+            std::fs::rename(
+                s.area.at(row.temp_dir.as_deref().unwrap()).join("a.ass"),
+                s.area.at(&path),
+            )
+            .unwrap();
+        }
+        mounted_again(&s, &row).await;
+        run(&s).await;
+
+        let d = detail(&s, &id).await;
+        assert_eq!(
+            d.row.state,
+            JobState::Done,
+            "renamed {renamed}: {:?}",
+            d.row.note
+        );
+        assert_eq!(d.items[0].files.len(), 1, "renamed {renamed}");
+        assert_eq!(d.items[0].files[0].state, FileState::Done);
+    }
+}
+
 #[tokio::test]
 async fn a_done_file_is_reused_after_its_bytes_are_checked_and_held_when_they_changed() {
     for changed in [false, true] {
@@ -888,6 +940,40 @@ async fn a_failure_recorded_before_its_bytes_went_is_finished_by_the_next_start(
     assert_eq!(d.row.state, JobState::Done);
     assert_eq!(std::fs::read(s.area.at(&path)).unwrap(), page);
     assert_eq!(files_in(&s.area.at(&id)), ["a (2).ass", "a.ass"]);
+}
+
+#[tokio::test]
+async fn a_failure_whose_bytes_got_another_device_number_is_finished_by_the_next_start() {
+    let page: &[u8] = b"<!DOCTYPE html><html><body>expired</body></html>";
+    for published in [false, true] {
+        let s = setup().await;
+        let (id, item) = killed(&s, "/ok/a").await;
+        let row = intended(&s, item, "ok/a", "a.ass", None, Some(page)).await;
+        let path = format!("{id}/a.ass");
+        fetched(&s, &row, &path).await;
+        if published {
+            std::fs::create_dir_all(s.area.at(&id)).unwrap();
+            std::fs::rename(
+                s.area.at(row.temp_dir.as_deref().unwrap()).join("a.ass"),
+                s.area.at(&path),
+            )
+            .unwrap();
+        }
+        failed_keeping_path(&s, &row).await;
+        mounted_again(&s, &row).await;
+        run(&s).await;
+
+        let d = detail(&s, &id).await;
+        assert_eq!(d.row.state, JobState::Done, "published: {published}");
+        assert!(!s.area.at(row.temp_dir.as_deref().unwrap()).exists());
+        // The page's bytes are gone and the name was free for the file.
+        assert_eq!(
+            files_in(&s.area.at(&id)),
+            ["a.ass"],
+            "published: {published}"
+        );
+        assert_ne!(std::fs::read(s.area.at(&path)).unwrap(), page);
+    }
 }
 
 #[tokio::test]

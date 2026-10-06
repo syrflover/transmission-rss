@@ -80,6 +80,11 @@
 //! | `prepared` | no temporary file, the target is the recorded object, length and hash | the rename happened: synced, then `done` |
 //! | `prepared` | anything else | `held` |
 //!
+//! A file is the recorded object by its inode and birth time
+//! ([`crate::area::same_object`]), here and in [`replace`]: a machine
+//! restarted meanwhile may have mounted its file system with another device
+//! number.
+//!
 //! A held effect holds its row and the job: the runner does not take it up
 //! again by itself, and its files stay as they are. The effects under way of
 //! a job held for never ending a run are held too, and so is an effect whose
@@ -120,7 +125,7 @@ use trss_core::{Clock, Db, Millis};
 use trss_subtitles::verify::{self, Format};
 
 use crate::{
-    area::{safe_name, ReceiveArea},
+    area::{safe_name, same_object, ReceiveArea},
     follow::Follow,
     model::{
         AssetKind, Chosen, EffectKind, EffectState, FileState, ItemState, Outcome, PlanAction,
@@ -1320,7 +1325,12 @@ impl Placer {
         })
         .await;
         match still {
-            Ok(Some((_, _, object))) if Some(&object) == effect.object.as_ref() => {
+            Ok(Some((_, _, object)))
+                if effect
+                    .object
+                    .as_ref()
+                    .is_some_and(|r| same_object(r, &object)) =>
+            {
                 let _ = blocking(move || files::remove_known(&temp)).await;
                 let reason = match effect.kind {
                     EffectKind::Store | EffectKind::Import => {
@@ -2113,7 +2123,7 @@ impl Placer {
                     found.as_ref().is_some_and(|(n, s, o)| {
                         *n == effect.size
                             && *s == effect.sha256
-                            && Some(o) == effect.object.as_ref()
+                            && effect.object.as_ref().is_some_and(|r| same_object(r, o))
                     })
                 };
                 match (t, g) {

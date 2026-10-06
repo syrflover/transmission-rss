@@ -202,7 +202,8 @@ pub fn name_candidates(name: &str) -> impl Iterator<Item = String> + '_ {
 
 /// What names a file on its file system: `<device>:<inode>`, and its birth
 /// time when the file system keeps one (`:<ns>`), so a number reused by a
-/// later file does not pass for the first.
+/// later file does not pass for the first. A recorded object is compared
+/// with a file found later by [`same_object`].
 pub fn object_of(meta: &std::fs::Metadata) -> String {
     let born = meta
         .created()
@@ -212,6 +213,17 @@ pub fn object_of(meta: &std::fs::Metadata) -> String {
         Some(born) => format!("{}:{}:{}", meta.dev(), meta.ino(), born.as_nanos()),
         None => format!("{}:{}", meta.dev(), meta.ino()),
     }
+}
+
+/// Whether two objects ([`object_of`]) name the same file: the same inode
+/// and birth time. The device number is left out: a file system mounted
+/// again may give the same file another one (btrfs numbers its devices at
+/// each mount), and a record made before a restart would then name no file.
+pub fn same_object(a: &str, b: &str) -> bool {
+    fn file(object: &str) -> &str {
+        object.split_once(':').map_or(object, |(_, file)| file)
+    }
+    file(a) == file(b)
 }
 
 /// A regular file's length, SHA-256 (lower-case hex) and object, read whole.
@@ -314,5 +326,25 @@ mod tests {
         let long = vec!["가".repeat(60); 4].join("/");
         assert!(long.len() > MAX_FOLDER_BYTES);
         assert!(safe_folder(&long).is_err());
+    }
+
+    #[test]
+    fn an_object_is_the_same_file_whatever_its_device_number() {
+        // The same file after its file system was mounted again.
+        assert!(same_object(
+            "47:8716384:1759700000123456789",
+            "46:8716384:1759700000123456789"
+        ));
+        assert!(same_object("47:8716384", "46:8716384"));
+        // Another inode, or the same inode reused by a later file.
+        assert!(!same_object(
+            "47:8716384:1759700000123456789",
+            "47:8716385:1759700000123456789"
+        ));
+        assert!(!same_object(
+            "47:8716384:1759700000123456789",
+            "47:8716384:1759800000000000000"
+        ));
+        assert!(!same_object("47:8716384", "47:8716384:1759700000123456789"));
     }
 }
