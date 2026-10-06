@@ -560,6 +560,88 @@ async fn the_existing_subtitle_changed_to_other_bytes_of_its_size_asks_to_compar
     assert_eq!(v.plan.paths[0].applied_id, None);
 }
 
+/// A recorded object as a file system mounted again (after the machine
+/// restarted) shows the same file: another device number, the same inode and
+/// birth time.
+fn renumbered(column: &str) -> String {
+    format!("'999999' || substr({column}, instr({column}, ':'))")
+}
+
+/// Rewrites the objects the job's plans and effects recorded to
+/// [`renumbered`] ones, past the triggers that keep a plan's evidence:
+/// `which` of the plans' videos (`video`), the files beside them (`paths`)
+/// and the effects' files (`effects`).
+async fn mounted_again(s: &Setup, job: &str, which: &'static [&'static str]) {
+    let job = job.to_owned();
+    s.db.run(move |c| -> Result<(), trss_core::DbError> {
+        let fixed = [
+            "subtitle_replacements_evidence_fixed",
+            "subtitle_replacement_paths_fixed",
+        ];
+        let mut triggers = Vec::new();
+        for name in fixed {
+            triggers.push(c.query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ?1",
+                [name],
+                |r| r.get::<_, String>(0),
+            )?);
+        }
+        let tx = c.transaction()?;
+        for name in fixed {
+            tx.execute_batch(&format!("DROP TRIGGER {name}"))?;
+        }
+        for what in which {
+            let sql = match *what {
+                "video" => format!(
+                    "UPDATE subtitle_replacements SET video_object = {} WHERE job_id = ?1",
+                    renumbered("video_object")
+                ),
+                "paths" => format!(
+                    "UPDATE subtitle_replacement_paths SET object = {}
+                      WHERE object IS NOT NULL
+                        AND plan_id IN (SELECT id FROM subtitle_replacements WHERE job_id = ?1)",
+                    renumbered("object")
+                ),
+                "effects" => format!(
+                    "UPDATE subtitle_file_effects SET object = {}
+                      WHERE object IS NOT NULL AND job_id = ?1",
+                    renumbered("object")
+                ),
+                other => panic!("no such record: {other}"),
+            };
+            tx.execute(&sql, [&job])?;
+        }
+        for sql in &triggers {
+            tx.execute_batch(sql)?;
+        }
+        tx.commit()?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn an_approved_plan_whose_files_got_another_device_number_is_carried_out() {
+    // The video and the subtitle the plan compared are the ones approved,
+    // whatever device number the file system they are on was mounted with.
+    for which in [&["video"][..], &["paths"], &["video", "paths"]] {
+        let s = setup().await;
+        let (job, _) = revision_approved(&s).await;
+        mounted_again(&s, &job, which).await;
+        run(&s).await;
+        let d = detail(&s, &job).await;
+        assert_eq!(
+            d.row.state,
+            JobState::Done,
+            "{which:?}: {:?} {:?}",
+            d.row.note,
+            d.events
+        );
+        replaced_once(&s, &job).await;
+    }
+}
+
 #[tokio::test]
 async fn a_stored_asset_changed_after_approval_is_not_applied() {
     let s = setup().await;
@@ -1511,6 +1593,53 @@ async fn a_job_held_while_its_old_copy_is_aside_holds_the_plan_and_its_effects()
         s.store.plan(&job).await.unwrap()[0].outcome,
         Some(Outcome::Held)
     );
+}
+
+#[tokio::test]
+async fn killed_then_mounted_again_with_another_device_number_carries_the_replacement_on() {
+    // Each point a killed worker leaves the plan at, the machine restarted
+    // before the next run: every file the plan and its effects recorded has
+    // another device number.
+    for point in [
+        "prepared",
+        "set aside unrecorded",
+        "set aside",
+        "published unrecorded",
+        "done",
+    ] {
+        let s = setup().await;
+        let (job, plan) = revision_approved(&s).await;
+        match point {
+            "prepared" => {
+                killed(&s, &plan, "prepared", "prepared").await;
+            }
+            "set aside unrecorded" => {
+                let left = killed(&s, &plan, "prepared", "prepared").await;
+                std::fs::rename(s.at(TARGET), s.at(&left.aside)).unwrap();
+            }
+            "set aside" => {
+                killed(&s, &plan, "prepared", "set_aside").await;
+            }
+            "published unrecorded" => {
+                let left = killed(&s, &plan, "prepared", "set_aside").await;
+                std::fs::rename(s.at(&left.apply_temp), s.at(TARGET)).unwrap();
+            }
+            _ => {
+                done_before_clean_up(&s, &plan).await;
+            }
+        }
+        mounted_again(&s, &job, &["video", "paths", "effects"]).await;
+        run(&s).await;
+        let d = detail(&s, &job).await;
+        assert_eq!(
+            d.row.state,
+            JobState::Done,
+            "{point}: {:?} {:?}",
+            d.row.note,
+            d.events
+        );
+        replaced_once(&s, &job).await;
+    }
 }
 
 // ---- the comparison a plan is made with (ticket 0069)

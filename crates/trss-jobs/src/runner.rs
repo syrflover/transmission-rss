@@ -79,7 +79,7 @@
 //!    file is synced. A length other than the announced one fails the attempt
 //!    and its bytes are removed.
 //! 3. `fetched`: the length, the SHA-256, the temporary file's object
-//!    (`dev:ino`) and the path it is to be published at.
+//!    ([`area::object_of`]) and the path it is to be published at.
 //! 4. The bytes are checked ([`trss_subtitles::verify`]): bytes that are not
 //!    a file (nothing, a web page, a ZIP whose CRC fails, a name's format the
 //!    bytes are not) fail the receipt as `not_a_file`. The failure is recorded
@@ -119,6 +119,10 @@
 //! | nothing (cut between a font's `HEAD` and its record) | nothing of it | the font is looked at again: a new `HEAD` |
 //! | `done`, not received (`unchanged_asset`) | no file of its own; the font not removed, its file with its recorded length and hash | the package uses the font when its row is stored |
 //! | `done`, not received | the font removed by a cleanup, its file gone or other bytes | at its row's store: `abandoned` with the receipts that share it, their rows not kept gone, their items `pending`; the job goes back in line and receives the file |
+//!
+//! A file is the recorded object by its inode and birth time
+//! ([`area::same_object`]): a machine restarted meanwhile may have mounted
+//! its file system with another device number.
 //!
 //! A held file holds its item, and a held item holds its job: the runner does
 //! not take it up again by itself. Its temporary file and anything at its path
@@ -1954,7 +1958,9 @@ impl Runner {
         let recorded = |facts: &(u64, String, String)| {
             Some(facts.0) == r.size
                 && Some(&facts.1) == r.sha256.as_ref()
-                && Some(&facts.2) == r.object.as_ref()
+                && r.object
+                    .as_ref()
+                    .is_some_and(|o| area::same_object(o, &facts.2))
         };
 
         if r.state == FileState::Failed {

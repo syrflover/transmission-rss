@@ -758,6 +758,50 @@ async fn a_prepared_store_is_published_and_one_already_renamed_is_found_by_its_o
     }
 }
 
+/// `object` as a file system mounted again (after the machine restarted)
+/// shows the same file: another device number, the same inode and birth time.
+fn renumbered(object: &str) -> String {
+    format!("999999{}", &object[object.find(':').unwrap()..])
+}
+
+#[tokio::test]
+async fn a_prepared_store_is_found_by_its_object_whatever_device_number_it_was_mounted_with() {
+    for renamed in [false, true] {
+        let s = setup().await;
+        let id = received_not_stored(&s, "/ok/Show-02").await;
+        let bytes = fake::ass("Show-02");
+        let (temp, object) = write_temp(&s, "t1", &bytes);
+        let target = format!(".trss/subtitles/{CREATOR}/Show-02.ass");
+        if renamed {
+            std::fs::create_dir_all(s.stored_dir()).unwrap();
+            std::fs::rename(s.work().join(&temp), s.work().join(&target)).unwrap();
+        }
+        left_effect(
+            &s,
+            &id,
+            "store",
+            "prepared",
+            &temp,
+            &target,
+            None,
+            &bytes,
+            Some(renumbered(&object)),
+        )
+        .await;
+        run(&s).await;
+
+        let d = detail(&s, &id).await;
+        assert_eq!(
+            d.row.state,
+            JobState::Done,
+            "renamed {renamed}: {:?}",
+            d.row.note
+        );
+        assert_eq!(names(&s.stored_dir()), ["Show-02.ass"], "renamed {renamed}");
+        assert_eq!(s.count("subtitle_assets").await, 1);
+    }
+}
+
 #[tokio::test]
 async fn a_prepared_effect_whose_files_are_not_what_it_wrote_is_held() {
     let s = setup().await;
