@@ -150,6 +150,11 @@ async fn an_upload_waiting_for_its_placement_shows_its_table_and_one_to_do() {
         .collect();
     assert_eq!(checks.len(), 1);
     assert_eq!(checks[0]["job_id"], "j1");
+    // Its source, as the work detail's card says it.
+    assert_eq!(
+        (&checks[0]["origin"], &checks[0]["source"]),
+        (&json!("upload"), &Value::Null)
+    );
     // The files its table places, the held one among them.
     assert_eq!(
         checks[0]["files"],
@@ -402,6 +407,7 @@ async fn a_relocation_shows_the_copies_it_takes_off_beside_the_rows_it_applies()
         .collect();
     assert_eq!(checks.len(), 1);
     assert_eq!(checks[0]["job_id"], job.as_str());
+    assert_eq!(checks[0]["origin"], "relocate");
     assert_eq!(checks[0]["files"], json!(["Show - 14.ass"]));
 }
 

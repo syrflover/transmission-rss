@@ -359,3 +359,111 @@ async fn turning_subtitles_off_takes_the_work_out_of_the_suggestions() {
     );
     assert!(app.jobs().await.is_empty());
 }
+
+/// A to-do of `kind` about `work`, the rest of it left plain.
+fn todo_of(kind: &str, work: Option<&str>) -> super::Todo {
+    use super::{Changes, Todo};
+    let work = work.map(|id| crate::jobs_api::WorkRefView {
+        id: id.to_owned(),
+        name: id.to_owned(),
+        cover_url: None,
+    });
+    let (key, at, title) = (format!("{kind}:{work:?}"), 1, "작품".to_owned());
+    match kind {
+        "auth" => Todo::Auth {
+            key,
+            at,
+            work,
+            title,
+            season: None,
+            episodes: vec![],
+            creator: None,
+            reason: String::new(),
+            job_id: "j".into(),
+            jobs: 1,
+        },
+        "receive_failed" => Todo::ReceiveFailed {
+            key,
+            at,
+            context: "revision",
+            work,
+            title,
+            season: None,
+            episodes: vec![],
+            count: 1,
+            reason: None,
+            channel_id: None,
+        },
+        "episode_check" => Todo::EpisodeCheck {
+            key,
+            at,
+            work,
+            title,
+            season: 1,
+            creator: String::new(),
+            source_id: String::new(),
+            episodes: vec![],
+            reason: None,
+            sources: 1,
+        },
+        "placement_check" => Todo::PlacementCheck {
+            key,
+            at,
+            work,
+            title,
+            season: None,
+            creator: None,
+            origin: "upload".into(),
+            source: None,
+            files: vec![],
+            reason: None,
+            job_id: "j".into(),
+        },
+        "replacement" => Todo::Replacement {
+            key,
+            at,
+            work,
+            title,
+            season: None,
+            episodes: vec![],
+            creator: None,
+            job_id: "j".into(),
+            jobs: 1,
+            changes: Changes::default(),
+            current_received_at: None,
+            current_changed_at: None,
+            new_received_at: None,
+        },
+        _ => unreachable!("{kind}"),
+    }
+}
+
+#[test]
+fn a_works_badges_are_its_kinds_once_each_in_the_lists_order() {
+    // As `todo_list` orders them: the red kinds first.
+    let todos = [
+        todo_of("auth", Some("w2")),
+        todo_of("receive_failed", Some("w1")),
+        todo_of("receive_failed", Some("w1")),
+        todo_of("replacement", Some("w1")),
+        todo_of("replacement", None),
+        todo_of("episode_check", Some("w3")),
+        todo_of("placement_check", Some("w3")),
+        todo_of("placement_check", Some("w1")),
+    ];
+
+    let badges = super::badges_by_work(&todos);
+
+    assert_eq!(
+        badges,
+        std::collections::HashMap::from([
+            (
+                "w1".to_owned(),
+                vec!["receive_failed", "replacement", "episode_check"]
+            ),
+            ("w2".to_owned(), vec!["auth"]),
+            // A job's 배치 확인 is the same badge as a mapping's.
+            ("w3".to_owned(), vec!["episode_check"]),
+        ])
+    );
+}

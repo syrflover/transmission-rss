@@ -43,7 +43,9 @@
 //!   names of the files it asks about (an upload's or a find job's subtitles,
 //!   which its table places as a whole, else the held ones), `reason` the
 //!   first one's question, or, for a whole table, what the job waits for (its
-//!   note).
+//!   note). `origin` is how the job came to be (`pick`, `auto`, `upload`,
+//!   `find`, `relocate`) and `source` its posts' host, its source as the work
+//!   detail's card says it.
 //! - `replacement` (`교체 승인`): the subtitle jobs waiting for a person to
 //!   approve or refuse replacing an episode's subtitle
 //!   ([`trss_jobs::place::replace`]), one to-do per work (per job when it
@@ -58,7 +60,14 @@
 //!   compared plans left a part out (a language of the dialogue with no
 //!   counterpart, or the styles and fonts of an ASS set against another
 //!   format), and `plans`, how many open plans were summed (`uncompared` and
-//!   `partial` of them among them).
+//!   `partial` of them among them). `current_received_at` and
+//!   `new_received_at` are when the open plans' current and new subtitles
+//!   were received, the newest of each (the work detail's card line);
+//!   `current_changed_at` is, when no current subtitle is one the app
+//!   manages, the newest change time of those files, else `null`.
+//!
+//! Each work's kinds of to-do are also the badges of the library list
+//! ([`badges_by_work`], [`super::library_api`]).
 //!
 //! `auth` comes before `receive_failed`, that before `replacement`, and that
 //! before `episode_check` and `placement_check`, each newest first. Failed subtitle
@@ -159,7 +168,7 @@ use trss_collect::{
 };
 use trss_jobs::{
     model::PlanState,
-    place::replace::records::{Compared, Comparison, Format, Item},
+    place::replace::records::{Compared, Comparison, Format, Item, PlanView},
     ItemState, Wait,
 };
 
@@ -535,6 +544,8 @@ pub enum Todo {
         title: String,
         season: Option<i64>,
         creator: Option<String>,
+        origin: String,
+        source: Option<String>,
         files: Vec<String>,
         reason: Option<String>,
         job_id: String,
@@ -550,6 +561,9 @@ pub enum Todo {
         job_id: String,
         jobs: usize,
         changes: Changes,
+        current_received_at: Option<i64>,
+        current_changed_at: Option<i64>,
+        new_received_at: Option<i64>,
     },
 }
 
@@ -609,6 +623,34 @@ impl Changes {
     }
 }
 
+/// When the subtitles of a `교체 승인` to-do's open plans were received: the
+/// `현재`·`새 자막` line of its card in the work detail. Of several plans, the
+/// newest of each.
+#[derive(Debug, Default)]
+struct Received {
+    /// The current subtitle the app manages: when it was received.
+    current: Option<i64>,
+    /// A current file the app did not manage: its change time.
+    current_changed: Option<i64>,
+    new: Option<i64>,
+}
+
+impl Received {
+    fn add(&mut self, view: &PlanView) {
+        if let Some((path, file)) = view.plan.current() {
+            match view.applied.iter().find(|(p, _)| *p == path.path) {
+                Some((_, facts)) => self.current = self.current.max(Some(facts.received_at)),
+                None => {
+                    self.current_changed = self.current_changed.max(Some(file.mtime / 1_000_000))
+                }
+            }
+        }
+        if let Some(new) = &view.new {
+            self.new = self.new.max(Some(new.received_at));
+        }
+    }
+}
+
 impl Todo {
     fn at(&self) -> i64 {
         match self {
@@ -619,6 +661,45 @@ impl Todo {
             | Todo::Replacement { at, .. } => *at,
         }
     }
+
+    /// The library's work it is about, when it has one.
+    fn work_id(&self) -> Option<&str> {
+        match self {
+            Todo::Auth { work, .. }
+            | Todo::ReceiveFailed { work, .. }
+            | Todo::EpisodeCheck { work, .. }
+            | Todo::PlacementCheck { work, .. }
+            | Todo::Replacement { work, .. } => work.as_ref().map(|w| w.id.as_str()),
+        }
+    }
+
+    /// Its kind as a badge names it: a job's 배치 확인 is a `회차 확인 필요`
+    /// like a mapping's.
+    fn badge(&self) -> &'static str {
+        match self {
+            Todo::Auth { .. } => "auth",
+            Todo::ReceiveFailed { .. } => "receive_failed",
+            Todo::Replacement { .. } => "replacement",
+            Todo::EpisodeCheck { .. } | Todo::PlacementCheck { .. } => "episode_check",
+        }
+    }
+}
+
+/// Each work's to-do badges (the library grid's): the kinds of its to-dos,
+/// once each, in the order of `todos` ([`todo_list`]'s: the red kinds first).
+/// A to-do of no work has none.
+pub fn badges_by_work(todos: &[Todo]) -> HashMap<String, Vec<&'static str>> {
+    let mut badges: HashMap<String, Vec<&'static str>> = HashMap::new();
+    for todo in todos {
+        let Some(work) = todo.work_id() else {
+            continue;
+        };
+        let kinds = badges.entry(work.to_owned()).or_default();
+        if !kinds.contains(&todo.badge()) {
+            kinds.push(todo.badge());
+        }
+    }
+    badges
 }
 
 #[derive(Debug, Serialize)]
@@ -738,6 +819,7 @@ async fn replacement_todos(state: &AppState) -> Result<Vec<Todo>, ApiError> {
         let oldest = rows[0];
         let mut episodes = Vec::new();
         let mut changes = Changes::default();
+        let mut received = Received::default();
         for row in &rows {
             let plans = state
                 .jobs
@@ -745,14 +827,14 @@ async fn replacement_todos(state: &AppState) -> Result<Vec<Todo>, ApiError> {
                 .await
                 .map_err(|e| internal(&e))?;
             for view in plans {
-                let plan = view.plan;
-                if plan.state != PlanState::Open {
+                if view.plan.state != PlanState::Open {
                     continue;
                 }
-                if !episodes.contains(&plan.episode) {
-                    episodes.push(plan.episode);
+                if !episodes.contains(&view.plan.episode) {
+                    episodes.push(view.plan.episode);
                 }
                 changes.add(view.comparison.as_ref());
+                received.add(&view);
             }
         }
         episodes.sort();
@@ -767,6 +849,11 @@ async fn replacement_todos(state: &AppState) -> Result<Vec<Todo>, ApiError> {
             job_id: oldest.id.clone(),
             jobs: rows.len(),
             changes,
+            current_changed_at: received
+                .current_changed
+                .filter(|_| received.current.is_none()),
+            current_received_at: received.current,
+            new_received_at: received.new,
         });
     }
     Ok(todos)
@@ -802,6 +889,8 @@ async fn placement_check_todos(state: &AppState) -> Result<Vec<Todo>, ApiError> 
             title: title_of(row),
             season: row.season,
             creator: row.creator.clone(),
+            origin: row.origin.clone(),
+            source: row.source.clone(),
             files: asked.iter().map(|r| r.name.clone()).collect(),
             reason: match whole {
                 true => row.note.clone(),

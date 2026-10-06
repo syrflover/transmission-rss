@@ -5,7 +5,6 @@ import { when } from "@/lib/time";
 import { cn } from "@/lib/utils";
 
 import { btnAction } from "../collect/channels/styles";
-import { QuestionIcon } from "../library/icons";
 import { coverOf } from "../library/model";
 import { Cover } from "../library/WorkItem";
 import {
@@ -17,9 +16,9 @@ import {
   type ReplacementTodo,
   type Todo,
 } from "./api";
-import { Badge, Tag } from "./badges";
+import { Tag, TodoBadge } from "./badges";
 import { todoTags } from "./changes";
-import { LockIcon, WarningIcon } from "./icons";
+import { LockIcon } from "./icons";
 import { candidatesLink } from "./Suggestions";
 import { TargetLine } from "./TargetLine";
 
@@ -40,7 +39,8 @@ export function receiveFailedPath(todo: ReceiveFailedTodo): string {
   return `/collect/history?result=add_failed${channel}`;
 }
 
-function receiveFailedAction(todo: ReceiveFailedTodo): string {
+/** What a `받기 실패` card's button says: where it goes. */
+export function receiveFailedAction(todo: ReceiveFailedTodo): string {
   return todo.context === "revision" && todo.work !== null ? "회차 보기" : "기록 보기";
 }
 
@@ -139,11 +139,7 @@ function Card({
 function AuthCard({ todo }: { todo: AuthTodo }) {
   return (
     <Card
-      kind={
-        <Badge tone="urgent" icon={LockIcon}>
-          인증 필요
-        </Badge>
-      }
+      kind={<TodoBadge kind="auth" />}
       at={todo.at}
       title={todo.title}
       work={todo.work}
@@ -168,11 +164,7 @@ function AuthCard({ todo }: { todo: AuthTodo }) {
 function ReceiveFailedCard({ todo }: { todo: ReceiveFailedTodo }) {
   return (
     <Card
-      kind={
-        <Badge tone="urgent" icon={WarningIcon}>
-          받기 실패
-        </Badge>
-      }
+      kind={<TodoBadge kind="receive_failed" />}
       at={todo.at}
       title={todo.title}
       work={todo.work}
@@ -196,11 +188,7 @@ function EpisodeCheckCard({ todo }: { todo: EpisodeCheckTodo }) {
   return (
     <Card
       tone="check"
-      kind={
-        <Badge tone="check" icon={QuestionIcon}>
-          회차 확인 필요
-        </Badge>
-      }
+      kind={<TodoBadge kind="episode_check" />}
       at={todo.at}
       title={todo.title}
       work={todo.work}
@@ -229,11 +217,7 @@ function ReplacementCard({ todo }: { todo: ReplacementTodo }) {
   return (
     <Card
       tone="check"
-      kind={
-        <Badge tone="check" icon={QuestionIcon}>
-          교체 승인
-        </Badge>
-      }
+      kind={<TodoBadge kind="replacement" />}
       at={todo.at}
       title={todo.title}
       work={todo.work}
@@ -264,11 +248,7 @@ function PlacementCheckCard({ todo }: { todo: PlacementCheckTodo }) {
   return (
     <Card
       tone="check"
-      kind={
-        <Badge tone="check" icon={QuestionIcon}>
-          회차 확인 필요
-        </Badge>
-      }
+      kind={<TodoBadge kind="episode_check" />}
       at={todo.at}
       title={todo.title}
       work={todo.work}

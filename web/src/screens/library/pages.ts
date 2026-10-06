@@ -4,6 +4,8 @@ import { useNavigationType } from "react-router-dom";
 import { ApiError } from "@/lib/api";
 import { forgetPrefix, peek, store, useAfterDelay, useStored } from "@/lib/cached";
 
+import { fetchTodos } from "../todo/api";
+import { kindsByWork, withKinds } from "../todo/kinds";
 import { LIST_PREFIX, loadWorkPage, type FilterKey, type LibraryWorkPage, type SortKey } from "./api";
 import { prepare, type Work } from "./model";
 
@@ -22,6 +24,9 @@ import { prepare, type Work } from "./model";
  * - Opening the library from a menu (not back or forward) shows what is kept and
  *   reads the first page again behind it; the answer replaces the kept pages,
  *   which starts the list over at its top, where the page is.
+ * - The pages found as they were still have the to-do badges of when they were read, and a to-do may have been
+ *   handled since (a work's 교체 승인 decided from its detail): the to-do list is read once behind them and each
+ *   kept work takes its badges from it, the pages and the scroll staying where they are.
  * - Another sort, filter or search starts at the first page and the top of the page.
  * - An answer that is not for the current query any more (typing went on,
  *   another sort was picked) is dropped: reads of an old query are cancelled and
@@ -119,7 +124,18 @@ export function useWorkPages(query: WorkPagesQuery): WorkPages {
     opened.current.mounted = true;
     // Back or forward finds the pages as they were; the first read of anything else is behind what is kept.
     const restore = kept !== undefined && round === 0 && (!first || opened.current.type === "POP");
-    if (!restore) {
+    if (restore) {
+      fetchTodos(controller.signal).then(
+        (todos) => {
+          const now = peek<LoadedPages>(key);
+          if (controller.signal.aborted || now === undefined) return;
+          const works = withKinds(now.works, kindsByWork(todos.needs));
+          if (works !== now.works) store(key, { ...now, works });
+        },
+        // The badges stay as they were read; the next read of the list has them again.
+        () => {},
+      );
+    } else {
       loadWorkPage({ sort: latest.current.sort, filter: latest.current.filter, q: latest.current.needle }, controller.signal).then(
         (page) => {
           if (controller.signal.aborted) return;

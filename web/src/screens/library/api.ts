@@ -3,6 +3,7 @@ import { forget, forgetPrefix } from "@/lib/cached";
 import type { Command } from "@/lib/commands";
 
 import { forgetWeek } from "../schedule/api";
+import type { TodoKind } from "../todo/kinds";
 import type { FormatOrder, SubtitleFormat, WorkSubtitles } from "./detail/subtitles.ts";
 import type { WorkStorage } from "./storage.ts";
 
@@ -57,6 +58,8 @@ export interface LibraryWork {
   subtitle_added_at: number | null;
   /** Where the cover image is served while the work has one; it may still fail (the placeholder stays). */
   cover_url: string | null;
+  /** The kinds of its to-dos that need the person, the grid's badges on the cover, in the to-do list's order. */
+  todos: TodoKind[];
 }
 
 /** How a page is ordered (`sort=` of the request). */

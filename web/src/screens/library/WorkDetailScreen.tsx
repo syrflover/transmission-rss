@@ -27,6 +27,7 @@ import { useEpisodeOrder } from "./detail/prefs";
 import { SeasonAnissiaSection } from "./detail/SeasonAnissiaSection";
 import { SeasonInfoSection } from "./detail/SeasonInfoSection";
 import { UploadSection } from "./detail/UploadSection";
+import { WorkTodos } from "./detail/WorkTodos";
 import { SeasonTiles } from "./detail/SeasonTiles";
 import { HeadCreators } from "./detail/SubtitleCreators";
 import { CollectCard, FilesCard, InfoCard } from "./detail/SideCards";
@@ -378,6 +379,7 @@ function Loaded({
               onChanged={onAnissiaChanged}
             />
           )}
+          <WorkTodos workId={work.id} seasonCount={work.seasons.length} />
           {season && (
             <CandidateSection
               key={`candidates-${season.number}`}

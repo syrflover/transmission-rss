@@ -601,6 +601,117 @@ async fn the_replacement_to_do_counts_a_plan_compared_only_in_part() {
     );
 }
 
+#[tokio::test]
+async fn the_replacement_to_do_says_when_the_newest_current_and_new_subtitles_were_received() {
+    let app = App::new().await;
+    let first = app
+        .job_of(
+            "c1",
+            "에루샤",
+            &[("2", "/ok/Show-02"), ("3", "/ok/Show-03")],
+        )
+        .await;
+    let second = app
+        .job_of(
+            "c2",
+            "에루샤",
+            &[("2", "/ok/Show-02v2"), ("3", "/ok/Show-03v2")],
+        )
+        .await;
+    // Each plan's current and new subtitles were received at other times.
+    let received = |job: &str, episode: i64, at: i64| {
+        format!(
+            "UPDATE subtitle_packages SET received_at = {at}
+              WHERE id IN (SELECT package_id FROM subtitle_stored
+                            WHERE job_id = '{job}' AND episode = {episode});"
+        )
+    };
+    app.sql(
+        [
+            received(&first, 2, 1_000),
+            received(&first, 3, 3_000),
+            received(&second, 2, 6_000),
+            received(&second, 3, 5_000),
+        ]
+        .concat(),
+    )
+    .await;
+
+    let (_, todo) = app.call(Method::GET, "/api/todo", None).await;
+
+    let card = &todo["needs"][0];
+    assert_eq!(card["episodes"], json!([2, 3]));
+    assert_eq!(
+        (
+            &card["current_received_at"],
+            &card["current_changed_at"],
+            &card["new_received_at"]
+        ),
+        (&json!(3_000), &Value::Null, &json!(6_000))
+    );
+}
+
+#[tokio::test]
+async fn the_replacement_to_do_of_a_file_the_app_did_not_manage_has_its_change_time() {
+    let app = App::new().await;
+    std::fs::write(app.at(TARGET), fake::ass("Show-02")).unwrap();
+    let changed = std::time::UNIX_EPOCH + std::time::Duration::from_millis(1_700_000_000_000);
+    std::fs::File::options()
+        .write(true)
+        .open(app.at(TARGET))
+        .unwrap()
+        .set_modified(changed)
+        .unwrap();
+    app.job("c1", "에루샤", "/ok/Show-02v2").await;
+
+    let (_, todo) = app.call(Method::GET, "/api/todo", None).await;
+
+    let card = &todo["needs"][0];
+    assert_eq!(card["kind"], "replacement");
+    assert_eq!(card["current_received_at"], Value::Null);
+    assert_eq!(card["current_changed_at"], 1_700_000_000_000_i64);
+    assert!(card["new_received_at"].is_i64(), "{card}");
+}
+
+#[tokio::test]
+async fn a_current_subtitle_the_app_manages_gives_the_time_over_another_plans_file() {
+    let app = App::new().await;
+    app.job("c1", "에루샤", "/ok/Show-02").await;
+    std::fs::write(app.at("Season 01/Show S01E03.ass"), fake::ass("Show-03")).unwrap();
+    app.job_of(
+        "c2",
+        "에루샤",
+        &[("2", "/ok/Show-02v2"), ("3", "/ok/Show-03v2")],
+    )
+    .await;
+
+    let (_, todo) = app.call(Method::GET, "/api/todo", None).await;
+
+    let card = &todo["needs"][0];
+    assert_eq!(card["episodes"], json!([2, 3]));
+    assert!(card["current_received_at"].is_i64(), "{card}");
+    assert_eq!(card["current_changed_at"], Value::Null);
+}
+
+#[tokio::test]
+async fn the_library_badges_a_work_until_its_replacement_is_decided() {
+    let app = App::new().await;
+    let (job, _) = app.waiting_revision().await;
+    let badges = || async {
+        let (status, list) = app.call(Method::GET, "/api/library/works", None).await;
+        assert_eq!(status, StatusCode::OK, "{list}");
+        assert_eq!(list["items"][0]["id"], "w1");
+        list["items"][0]["todos"].clone()
+    };
+    assert_eq!(badges().await, json!(["replacement"]));
+
+    let r = app.replacement(&job).await;
+    let (status, _) = app.decide(&job, &r, json!(1), "keep").await;
+    assert_eq!(status, StatusCode::OK);
+
+    assert_eq!(badges().await, json!([]));
+}
+
 impl App {
     /// A first job applies episodes 2 to 4 (`/ok/Show-0N`) and a second
     /// job's plans for the revisions (`/ok/Show-0Nv2`) wait: the second job

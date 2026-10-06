@@ -11,12 +11,14 @@ import {
   needsLines,
   NOT_COMPARED_YET,
   planChanges,
+  receivedLine,
   timingRows,
   todoTags,
   type ChangesView,
   type ItemView,
 } from "./changes.ts";
 import type { Comparison, DialogueLine, ReplacementChanges, TimingLine } from "./replacementTypes.ts";
+import { when } from "../../lib/time.ts";
 
 type Compared = Extract<Comparison, { state: "compared" }>;
 
@@ -116,6 +118,30 @@ test("the card counts the plans that could not be compared only when others were
   // Two compared plans that change nothing and one that was not compared.
   assert.deepEqual(todoTags(changes({ uncompared: 1, plans: 3 })), ["비교 불가 1"]);
   assert.deepEqual(todoTags(changes({ uncompared: 2, plans: 2 })), ["비교 불가"]);
+});
+
+// ---- the work detail's 교체 승인 card
+
+test("the card's time line says when the current and the new subtitle were received", () => {
+  const NOW = Date.UTC(2026, 9, 6, 3, 0);
+  const [current, next] = [NOW - 3 * 86_400_000, NOW - 600_000];
+  assert.deepEqual(
+    receivedLine({ current_received_at: current, current_changed_at: null, new_received_at: next }, NOW),
+    [
+      { label: "현재", text: `${when(current, NOW)} 받음` },
+      { label: "새 자막", text: `${when(next, NOW)} 받음` },
+    ],
+  );
+  // A current file the app did not manage has its file time, as the job detail says it.
+  assert.deepEqual(
+    receivedLine({ current_received_at: null, current_changed_at: current, new_received_at: next }, NOW),
+    [
+      { label: "현재", text: `파일 시각 ${when(current, NOW)}` },
+      { label: "새 자막", text: `${when(next, NOW)} 받음` },
+    ],
+  );
+  const none = { current_received_at: null, current_changed_at: null, new_received_at: null };
+  assert.deepEqual(receivedLine(none, NOW), []);
 });
 
 // ---- the items

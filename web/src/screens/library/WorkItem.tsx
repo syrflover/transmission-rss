@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 
 import { cn } from "@/lib/utils";
 
+import { TodoBadge } from "../todo/badges";
 import { workPath } from "./api";
 import { QuestionIcon } from "./icons";
 import { subtitleLine, videoLine, type Work } from "./model";
@@ -98,16 +99,31 @@ function SubtitleLine({ work }: { work: Work }) {
 const item =
   "block rounded-card bg-surface-2 text-text-primary no-underline hover:bg-surface-1 hover:no-underline dark:bg-surface-1 dark:hover:bg-surface-3";
 
+/**
+ * A grid item has its to-do badges (`인증 필요`, `교체 승인`, …) over the cover's top left. They come after the title
+ * in the markup, so the link reads the title first.
+ */
 export const GridItem = memo(function GridItem({ work }: { work: Work }) {
   return (
     <li className="min-w-0">
-      <Link to={workPath(work.id)} state={FROM_LIBRARY} className={cn(item, "flex h-full flex-col gap-2.5 p-2.5")}>
+      <Link
+        to={workPath(work.id)}
+        state={FROM_LIBRARY}
+        className={cn(item, "relative flex h-full flex-col gap-2.5 p-2.5")}
+      >
         <Cover work={work} className="aspect-[2/3] w-full" letterClass="text-5xl" imageUrl={work.cover_url} />
         <span className="flex min-w-0 flex-col gap-1 px-0.5 pb-0.5">
           <span className="line-clamp-2 min-w-0 text-sm leading-snug font-semibold">{work.title}</span>
           <VideoLine work={work} />
           <SubtitleLine work={work} />
         </span>
+        {work.todos.length > 0 && (
+          <span className="absolute top-4 right-4 left-4 flex flex-col items-start gap-1">
+            {work.todos.map((kind) => (
+              <TodoBadge key={kind} kind={kind} className="bg-surface-1 px-2 text-[11px] shadow-(--card-shadow)" />
+            ))}
+          </span>
+        )}
       </Link>
     </li>
   );

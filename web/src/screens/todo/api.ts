@@ -141,6 +141,10 @@ export interface PlacementCheckTodo {
   title: string;
   season: number | null;
   creator: string | null;
+  /** How the job came to be (`JobRow.origin`): with `source`, its source as the work detail's card says it. */
+  origin: JobRow["origin"];
+  /** The host of its posts, when it has posts. */
+  source: string | null;
   /** The names of the files it asks about: an upload's or a find job's subtitles its table places, else the held ones. */
   files: string[];
   /** The first file's question, or for an upload's or a find job's table what the job waits for. */
@@ -170,6 +174,13 @@ export interface ReplacementTodo {
   jobs: number;
   /** What the open plans counted in `episodes` change, summed. */
   changes: ReplacementChanges;
+  /**
+   * When the open plans' current and new subtitles were received, the newest of each (Unix ms): the work detail's
+   * card line. `current_changed_at` is the newest change time of the current files when the app manages none of them.
+   */
+  current_received_at: number | null;
+  current_changed_at: number | null;
+  new_received_at: number | null;
 }
 
 export type Todo = AuthTodo | ReceiveFailedTodo | ReplacementTodo | EpisodeCheckTodo | PlacementCheckTodo;

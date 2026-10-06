@@ -15,6 +15,9 @@ export const KEYS = {
   job: (id: string) => `todo:job:${id}`,
 } as const;
 
+/** How often the to-dos (and the 할 일 screen's suggestions) are read while a screen that shows them is visible. */
+export const TODOS_MS = 10_000;
+
 export interface Polled<T> {
   /** The cached or fresh value; `undefined` until the first answer for this key. */
   data: T | undefined;

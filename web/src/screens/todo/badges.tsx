@@ -6,6 +6,7 @@ import type { FailureClass, JobRow } from "./api";
 import { CheckIcon, CircleIcon, ClockIcon, DownloadIcon, LockIcon, PauseIcon, WarningIcon } from "./icons";
 import { QuestionIcon } from "../library/icons";
 import { FAILURE_LABEL, type Shown } from "./format";
+import type { TodoKind } from "./kinds";
 
 type IconType = ComponentType<ComponentProps<"svg">>;
 
@@ -67,6 +68,27 @@ const SHOWN: Record<Exclude<Shown, "done">, { tone: "urgent" | "neutral" | "chec
   finishing: { tone: "neutral", icon: ClockIcon, text: "끝내는 중" },
   nothing: { tone: "neutral", icon: CircleIcon, text: "받은 파일 없음" },
 };
+
+/** A to-do's kind: a job waiting for it has the same badge (`인증 필요`, `교체 승인`, `회차 확인 필요`). */
+const KIND: Record<TodoKind, { tone: "urgent" | "check"; icon: IconType; text: string }> = {
+  auth: { tone: "urgent", icon: LockIcon, text: SHOWN.auth.text },
+  receive_failed: { tone: "urgent", icon: WarningIcon, text: "받기 실패" },
+  replacement: { tone: "check", icon: QuestionIcon, text: SHOWN.approval.text },
+  episode_check: { tone: "check", icon: QuestionIcon, text: SHOWN.placement.text },
+};
+
+/** The tone of a to-do's kind: red for what blocks collecting (`인증 필요`, `받기 실패`), else the calm blue. */
+export const kindTone = (kind: TodoKind) => KIND[kind].tone;
+
+/** A to-do's kind as a badge, the same on the 할 일 screen, the library grid and the work detail. */
+export function TodoBadge({ kind, className }: { kind: TodoKind; className?: string }) {
+  const { tone, icon, text } = KIND[kind];
+  return (
+    <Badge tone={tone} icon={icon} className={className}>
+      {text}
+    </Badge>
+  );
+}
 
 /**
  * A job's state. A `done` job has no badge in a list (its heading says it);

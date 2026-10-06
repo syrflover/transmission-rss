@@ -262,3 +262,80 @@ async fn an_empty_library_answers_an_empty_page() {
         (&Value::Null, &Value::from(0), &Value::from(0))
     );
 }
+
+/// A pick's job of `work` that waits for `wait` (`auth`, `approval`, `placement`).
+async fn waiting(state: &AppState, n: usize, work: Option<&str>, wait: &'static str) {
+    use trss_jobs::{Created, NewItem, NewJob};
+    let made = state
+        .jobs
+        .create(
+            NewJob {
+                command_id: format!("c{n}"),
+                request: "{}".into(),
+                origin: "pick".into(),
+                work_id: work.map(str::to_owned),
+                season: Some(1),
+                anime_no: None,
+                source_id: None,
+                creator: None,
+                revision_of: None,
+                revises_attributed: false,
+                items: vec![NewItem {
+                    observation_id: None,
+                    episode: "1".into(),
+                    post_url: format!("https://post.test/{n}"),
+                    found_at: 1,
+                }],
+            },
+            100 + n as i64,
+        )
+        .await
+        .unwrap();
+    let Created::Created(id) = made else { panic!() };
+    state
+        .jobs
+        .db()
+        .run::<_, trss_core::DbError, _>(move |c| {
+            c.execute(
+                "UPDATE subtitle_jobs SET state = 'waiting', wait = ?1 WHERE id = ?2",
+                [wait, id.as_str()],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_page_badges_each_work_with_its_to_dos_in_the_to_do_order() {
+    let state = state();
+    add_folder(&state, "/media/anime", plain(3)).await;
+    let (_, first) = get(&state, "/library/works?sort=title").await;
+    let id = |n: usize| first["items"][n]["id"].as_str().unwrap().to_owned();
+    let (a, b) = (id(0), id(1));
+    // The replacement waits from before the check, which still comes first.
+    waiting(&state, 1, Some(&a), "approval").await;
+    waiting(&state, 2, Some(&a), "auth").await;
+    waiting(&state, 3, Some(&a), "auth").await;
+    waiting(&state, 4, Some(&b), "placement").await;
+    // A job of no work badges nothing.
+    waiting(&state, 5, None, "auth").await;
+
+    let (status, page) = get(&state, "/library/works?sort=title").await;
+
+    assert_eq!(status, StatusCode::OK);
+    let todos: Vec<(&str, &Value)> = page["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|w| (w["name"].as_str().unwrap(), &w["todos"]))
+        .collect();
+    assert_eq!(
+        todos,
+        [
+            ("Work 000", &serde_json::json!(["auth", "replacement"])),
+            ("Work 001", &serde_json::json!(["episode_check"])),
+            ("Work 002", &serde_json::json!([])),
+        ]
+    );
+}

@@ -16,14 +16,12 @@ import {
 } from "./todo/api";
 import { CountChip } from "./todo/badges";
 import { JobGroupsView } from "./todo/JobList";
-import { KEYS, usePolled } from "./todo/poll";
+import { KEYS, TODOS_MS, usePolled } from "./todo/poll";
 import { SuggestionRows, suggestionRows } from "./todo/Suggestions";
 import { TodoCards } from "./todo/TodoCards";
 
 /** How often the jobs are read while the screen is visible. */
 const JOBS_MS = 2000;
-/** How often the to-dos and the suggestions are read. */
-const TODOS_MS = 10_000;
 
 /**
  * The 할 일 screen: what needs the user (`처리 필요`, red kinds first), the

@@ -26,7 +26,8 @@
 //!     "added_at": 1760000000000,
 //!     "video_added_at": null,
 //!     "subtitle_added_at": 1760000100000,
-//!     "cover_url": "/api/library/works/…/artwork/image?v=…"
+//!     "cover_url": "/api/library/works/…/artwork/image?v=…",
+//!     "todos": ["auth", "replacement"]
 //!   }],
 //!   "next": "7b2273…", "total": 520, "library_count": 520 }
 //! ```
@@ -64,6 +65,13 @@
 //!   (see [`super::artwork_api`]), `null` otherwise. The image is checked when
 //!   it is asked for, so the URL may still answer `404`; the screen then
 //!   keeps the placeholder.
+//! - `todos` are the kinds of the work's to-dos that need the person, the
+//!   grid's badges on the cover: `auth` (`인증 필요`), `receive_failed`
+//!   (`받기 실패`), `replacement` (`교체 승인`) and `episode_check`
+//!   (`회차 확인 필요`, a mapping's or a job's 배치 확인), once each in the
+//!   to-do list's order ([`super::todo_api`]). The page reads the to-dos
+//!   once for all its works; when they cannot be read, the page still
+//!   answers, with no badges.
 
 use axum::{
     extract::{rejection::QueryRejection, Query, State},
@@ -74,7 +82,11 @@ use serde::{Deserialize, Serialize};
 
 use std::collections::HashMap;
 
-use super::{artwork_api::image_url, ApiError, AppState};
+use super::{
+    artwork_api::image_url,
+    todo_api::{badges_by_work, todo_list},
+    ApiError, AppState,
+};
 use trss_library::store::library::{
     Cursor, EpisodeRange, Filter, LibraryError, ListQuery, Sort, WorkOverview,
 };
@@ -119,14 +131,20 @@ struct WorkView {
     video_added_at: Option<i64>,
     subtitle_added_at: Option<i64>,
     cover_url: Option<String>,
+    todos: Vec<&'static str>,
 }
 
 impl WorkView {
-    fn new(work: WorkOverview, image_ids: &HashMap<String, String>) -> Self {
+    fn new(
+        work: WorkOverview,
+        image_ids: &HashMap<String, String>,
+        badges: &mut HashMap<String, Vec<&'static str>>,
+    ) -> Self {
         WorkView {
             cover_url: image_ids
                 .get(&work.id)
                 .map(|image| image_url(&work.id, image)),
+            todos: badges.remove(&work.id).unwrap_or_default(),
             id: work.id,
             name: work.dir_name,
             missing: work.missing,
@@ -235,11 +253,19 @@ async fn list(
         .image_ids()
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
+    // The badges are extra: a list whose to-dos cannot be read still answers.
+    let mut badges = match todo_list(&state).await {
+        Ok(todos) => badges_by_work(&todos.needs),
+        Err(e) => {
+            eprintln!("Cannot read the to-dos for the library's badges: {e:?}");
+            HashMap::new()
+        }
+    };
     Ok(Json(WorkPage {
         items: page
             .items
             .into_iter()
-            .map(|work| WorkView::new(work, &image_ids))
+            .map(|work| WorkView::new(work, &image_ids, &mut badges))
             .collect(),
         next: page.next.map(|cursor| cursor.encode()),
         total: page.total,

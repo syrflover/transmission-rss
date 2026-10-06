@@ -1,3 +1,4 @@
+import { when } from "../../lib/time.ts";
 import type {
   Comparison,
   DialogueLine,
@@ -50,6 +51,31 @@ export function todoTags(changes: ReplacementChanges): string[] {
   // Only what was compared whole can say that nothing differs.
   if (tags.length === 0) tags.push("차이 없음");
   return tags;
+}
+
+/** One fact of the work detail's `교체 승인` card's time line: whose time, and the time as it reads. */
+export interface ReceivedFact {
+  label: "현재" | "새 자막";
+  text: string;
+}
+
+/**
+ * The time line of the work detail's `교체 승인` card (`docs/specs/library.md`, 할 일과 회차 목록): when the current
+ * and the new subtitle were received, the newest of each when several plans wait, said as the job detail's version
+ * lines say it (`replacementView.ts`, `versionFacts`). A current file the app did not manage has its file time.
+ */
+export function receivedLine(
+  todo: { current_received_at: number | null; current_changed_at: number | null; new_received_at: number | null },
+  now: number = Date.now(),
+): ReceivedFact[] {
+  const facts: ReceivedFact[] = [];
+  if (todo.current_received_at !== null) {
+    facts.push({ label: "현재", text: `${when(todo.current_received_at, now)} 받음` });
+  } else if (todo.current_changed_at !== null) {
+    facts.push({ label: "현재", text: `파일 시각 ${when(todo.current_changed_at, now)}` });
+  }
+  if (todo.new_received_at !== null) facts.push({ label: "새 자막", text: `${when(todo.new_received_at, now)} 받음` });
+  return facts;
 }
 
 /**
