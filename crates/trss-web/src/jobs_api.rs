@@ -79,9 +79,10 @@
 //!
 //!   Each of `placements` has its `position`, the episode number its name
 //!   says (`named`, as written) and what put it on its episode
-//!   (`assignment`: `mapped` by the source's mapping, `explicit` by the same
-//!   number or a person). While the job waits for its 배치 확인
-//!   ([`placement`]), its detail has `confirm`: `scope` (`whole`, an
+//!   (`assignment`: `mapped` by the source's mapping, `same_number` by its
+//!   own number while the source has no mapping, `explicit` by a person or
+//!   the same number where no source is known). While the job waits for its
+//!   배치 확인 ([`placement`]), its detail has `confirm`: `scope` (`whole`, an
 //!   upload's or a find job's plan before anything of it is kept;
 //!   `relocate`, a relocation's plan before any copy moves; `held`, the rows
 //!   it asks about), the `positions` of the rows to place, the season's

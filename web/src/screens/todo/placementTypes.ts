@@ -24,8 +24,12 @@ export interface Placement {
   question: string | null;
   /** The episode number the file's name says, as written (`13`), when it does. */
   named: string | null;
-  /** What put the file on `episode`: its source's episode mapping (`mapped`), or the same number or a person's choice (`explicit`). */
-  assignment: "mapped" | "explicit" | null;
+  /**
+   * What put the file on `episode`: its source's episode mapping (`mapped`), its own number while the source has no
+   * mapping (`same_number`, which follows the one decided later), or a person's choice or the same number where no
+   * source is known (`explicit`).
+   */
+  assignment: "mapped" | "same_number" | "explicit" | null;
   action: "apply" | "store" | "drop";
   /** `null` while under way. */
   outcome: PlacementOutcome | null;

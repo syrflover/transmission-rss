@@ -147,6 +147,13 @@ fn ticking_clock() -> Clock {
 /// A library with the work `Show` (season 1) whose episodes 2 to 5 have a
 /// video, the source `src`, and the user's mapping `−12` for it.
 async fn setup() -> Setup {
+    let s = unmapped().await;
+    remap(&s, -12).await;
+    s
+}
+
+/// [`setup`] before the source has a mapping.
+async fn unmapped() -> Setup {
     let dir = tempfile::tempdir().unwrap();
     let db = Db::open(dir.path().join("app.db")).await.unwrap();
     let shows = dir.path().join("shows");
@@ -185,15 +192,13 @@ async fn setup() -> Setup {
         trss_jobs::ReceiveArea::in_app_data(dir.path()),
         ticking_clock(),
     );
-    let s = Setup {
+    Setup {
         follow: Follow::new(db.clone()),
         dir,
         db,
         store,
         runner,
-    };
-    remap(&s, -12).await;
-    s
+    }
 }
 
 /// The user saves the mapping `offset` for the source.
@@ -632,7 +637,8 @@ async fn an_approval_waiting_for_the_old_target_is_not_used_for_the_new_one() {
 #[tokio::test]
 async fn a_link_the_user_made_does_not_follow_the_mapping() {
     let s = setup().await;
-    // A candidate of a creator with no mapping: its own number, `explicit`.
+    // A candidate of no known source: its own number, `explicit`, as a
+    // person's choice is; then named the source's.
     let id = make(&s, "c1", "2", "/ok/Show-2", false).await;
     run(&s).await;
     assert_eq!(detail(&s, &id).await.row.state, JobState::Done);
@@ -647,6 +653,144 @@ async fn a_link_the_user_made_does_not_follow_the_mapping() {
     assert_eq!(s.stored_episode("Show-2.ass").await, Some(2));
     assert!(s.relocations().await.is_empty());
     assert_eq!(s.read(&copy(2)), Some(fake::ass("Show-2")));
+}
+
+/// What puts the stored subtitle received from `name` on its episode, and
+/// that episode.
+async fn link(s: &Setup, name: &'static str) -> (String, Option<String>, i64) {
+    s.db.run(move |c| {
+        c.query_row(
+            "SELECT s.assignment, s.basis, s.episode FROM subtitle_stored s
+               JOIN subtitle_job_plan p ON p.stored_id = s.id
+              WHERE p.name = ?1 LIMIT 1",
+            [name],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .map_err(DbError::from)
+    })
+    .await
+    .unwrap()
+}
+
+// A candidate of a source with no mapping goes on its own number until a
+// mapping is decided, then follows it: the copy moves once a person confirms
+// the relocation.
+#[tokio::test]
+async fn a_link_made_by_the_same_number_follows_the_mapping_decided_later() {
+    let s = unmapped().await;
+    let id = applied(&s, "c1", 3).await;
+    assert_eq!(
+        link(&s, "Show-3.ass").await,
+        ("same_number".to_owned(), Some("anissia".to_owned()), 3)
+    );
+    assert_eq!(s.read(&copy(3)), Some(fake::ass("Show-3")));
+
+    remap(&s, -1).await;
+
+    assert_eq!(
+        link(&s, "Show-3.ass").await,
+        ("mapped".to_owned(), Some("anissia".to_owned()), 2)
+    );
+    let job = s.relocation().await;
+    let off: Vec<i64> = removals(&s, &job).await.iter().map(|r| r.episode).collect();
+    assert_eq!(off, [3]);
+    // Nothing moves before the person confirms.
+    assert_eq!(s.read(&copy(3)), Some(fake::ass("Show-3")));
+    queued(confirm(&s, &job).await);
+    run(&s).await;
+
+    assert_eq!(detail(&s, &job).await.row.state, JobState::Done);
+    assert_eq!(s.read(&copy(2)), Some(fake::ass("Show-3")));
+    assert_eq!(s.read(&copy(3)), None);
+    // The candidate's row is a record of what put it there then.
+    let plan = s.store.plan(&id).await.unwrap();
+    assert_eq!(
+        plan[0]
+            .placed
+            .as_ref()
+            .map(|p| (p.episode, p.assignment.code())),
+        Some((3, "same_number"))
+    );
+}
+
+// A person who put a candidate's file on an episode in the table chose it: a
+// mapping decided later does not move it.
+#[tokio::test]
+async fn an_episode_a_person_chose_for_a_source_with_no_mapping_stays() {
+    let s = unmapped().await;
+    // The name says 4, the candidate 3: asked.
+    let id = make(&s, "c1", "3", "/pack/Show%20-%2004.ass", true).await;
+    run(&s).await;
+    let (asked, whole) = s.store.placeable(&id).await.unwrap().unwrap();
+    assert!(!whole);
+    let placings = asked
+        .iter()
+        .map(|r| RowPlacing {
+            position: r.position,
+            episode: Some(4),
+            apply: true,
+        })
+        .collect();
+    queued(
+        s.store
+            .confirm_placement(&id, placings, Vec::new(), None, 1_500_000)
+            .await
+            .unwrap(),
+    );
+    run(&s).await;
+    assert_eq!(
+        link(&s, "Show - 04.ass").await,
+        ("explicit".to_owned(), None, 4)
+    );
+
+    remap(&s, -1).await;
+
+    assert_eq!(
+        link(&s, "Show - 04.ass").await,
+        ("explicit".to_owned(), None, 4)
+    );
+    assert!(s.relocations().await.is_empty());
+    assert!(s.read(&copy(4)).is_some());
+}
+
+// A mapping decided to keep a same-number link on its episode names the same
+// target: the replacement a person approves is carried out.
+#[tokio::test]
+async fn an_approval_holds_when_the_mapping_keeps_the_same_number() {
+    let s = unmapped().await;
+    std::fs::write(s.at(&copy(3)), MINE).unwrap();
+    let job = make(&s, "c1", "3", "/ok/Show-3", true).await;
+    run(&s).await;
+    assert_eq!(detail(&s, &job).await.row.wait, Some(Wait::Approval));
+
+    remap(&s, 0).await;
+
+    assert_eq!(
+        link(&s, "Show-3.ass").await,
+        ("mapped".to_owned(), Some("anissia".to_owned()), 3)
+    );
+    let row = s.store.plan(&job).await.unwrap().remove(0);
+    assert_eq!(
+        row.placed.map(|p| (p.episode, p.assignment.code())),
+        Some((3, "mapped"))
+    );
+    assert_eq!(detail(&s, &job).await.row.wait, Some(Wait::Approval));
+    let plan = s.store.replacements(&job).await.unwrap().remove(0).plan;
+    s.store
+        .decide_replacement(&job, &plan.id, plan.version, true, 3_500_000)
+        .await
+        .unwrap();
+    run(&s).await;
+
+    let d = detail(&s, &job).await;
+    assert_eq!(
+        d.row.state,
+        JobState::Done,
+        "{:?} {:?}",
+        d.row.note,
+        d.events
+    );
+    assert_eq!(s.read(&copy(3)), Some(fake::ass("Show-3")));
 }
 
 #[tokio::test]

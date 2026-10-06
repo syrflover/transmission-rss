@@ -148,7 +148,7 @@ ID는 비어 있지 않은 문자열이며, 문서 안에서 항목을 선언하
 | `kind`·`base` | `subtitle`·`font`는 미지원 형식의 자막을 포함해 `base: work`이고 작품 폴더의 `.trss/subtitles/` 안에 있어요. `attachment`·`companion`·`other`는 `base: app_data`이고 앱 데이터 폴더 안에 있어요. `kind`만으로 실제 형식이나 자동 적용 지원을 확정하지 않아요. |
 | `stored_subtitles[]` | 특정 보관 수정본의 `id`, `package_id`, `subtitle_asset_id`, 선택적 `source_id`, 원래 회차 관찰값 `source_episodes`, 현재 연결의 근거 `assignment`, 관찰한 `format`·`encoding`·`creator`·`language`·`purpose`·`release`·`revision_label`, `font_asset_ids`·`attachment_asset_ids`·`companion_asset_ids`예요. |
 | `source_episodes` | 관찰 가능한 `anissia`·`attachment` 회차를 각각 원래 문자열로 담아요. 모르는 번호를 다른 쪽 값이나 현재 적용 경로로 채우지 않아요. |
-| `assignment` | `mode: mapped`이면 `mapping_id`를 참조하고 그 대응의 `basis`와 원래 회차로 현재 대상을 계산해요. `mode: explicit`이면 사용자가 직접 연결한 `season_id`·`episode`를 담아요. 미연결은 `null`이며 두 방식을 섞지 않아요. |
+| `assignment` | `mode: mapped`이면 `mapping_id`를 참조하고 그 대응의 `basis`와 원래 회차로 현재 대상을 계산해요. `mode: same_number`이면 출처에 대응이 없어 `basis`가 가리키는 원래 회차의 번호를 그대로 쓴 `season_id`·`episode`를 담고, 그 출처의 대응이 정해지면 `mapped`처럼 계산해요. `mode: explicit`이면 사용자가 직접 연결한 `season_id`·`episode`를 담아요. 미연결은 `null`이며 방식들을 섞지 않아요. |
 | 출처 관찰 정보 | 보관본의 선택적 `anissia_observation`에 `anime_no`·`episode`·`creator`·`website`·`updDt_raw`를 보존해요. 특정 파일과 해당 후보의 관계를 확인하지 못했다면 이 객체로 연결을 확정하지 않아요. |
 
 경로와 표시 이름을 ID로 쓰지 않으므로, 파일 이름 변경이 곧 다른 작품이나 자산의 생성은 아니에요.

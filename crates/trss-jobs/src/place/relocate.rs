@@ -17,9 +17,12 @@
 //! observed episode (`basis`: the candidate's episode as Anissia wrote it,
 //! or the one the file's name says) through the new mapping
 //! ([`crate::mapping::Mapping::season_episode`]), within the season's
-//! episodes when their count is known. The observed episodes and the records
-//! of what was applied where are never rewritten. A person's choice
-//! (`explicit`) is not touched.
+//! episodes when their count is known. What was put on its observed
+//! episode's own number for want of a mapping (`same_number`) is taken
+//! through the first decided one the same way, and is `mapped` from then on
+//! (an unfinished row or a stored subtitle; a row done is a record). The
+//! observed episodes and the records of what was applied where are never
+//! rewritten. A person's choice (`explicit`) is not touched.
 //!
 //! | What | New episode found | No episode found (an exception that does not receive it, past the season, a text the mapping does not take) |
 //! | --- | --- | --- |
@@ -193,8 +196,8 @@ pub fn reevaluate_in(
     let stored: Vec<Stored> = {
         let mut stmt = c.prepare(
             "SELECT id, episode, basis, anissia_episode, attachment_episode FROM subtitle_stored
-              WHERE work_id = ?1 AND season = ?2 AND source_id = ?3 AND assignment = 'mapped'
-                AND cleaned_at IS NULL
+              WHERE work_id = ?1 AND season = ?2 AND source_id = ?3
+                AND assignment IN ('mapped', 'same_number') AND cleaned_at IS NULL
               ORDER BY id",
         )?;
         let rows = stmt.query_map(params![work_id, season, source_id], |r| {
@@ -224,6 +227,12 @@ pub fn reevaluate_in(
             out.stored += 1;
         }
     }
+    c.execute(
+        "UPDATE subtitle_stored SET assignment = 'mapped'
+          WHERE work_id = ?1 AND season = ?2 AND source_id = ?3 AND assignment = 'same_number'
+            AND cleaned_at IS NULL",
+        params![work_id, season, source_id],
+    )?;
 
     // The unfinished rows of the source's jobs; a relocation that waits for
     // its confirmation is planned anew below instead.
@@ -244,7 +253,8 @@ pub fn reevaluate_in(
                     p.attachment_episode, p.question, j.state, j.wait
                FROM subtitle_job_plan p JOIN subtitle_jobs j ON j.id = p.job_id
               WHERE j.work_id = ?1 AND j.season = ?2 AND j.source_id = ?3
-                AND p.assignment = 'mapped' AND (p.outcome IS NULL OR p.outcome = 'no_video')
+                AND p.assignment IN ('mapped', 'same_number')
+                AND (p.outcome IS NULL OR p.outcome = 'no_video')
                 AND NOT (j.origin = ?4 AND j.placement_confirmed_at IS NULL)
               ORDER BY j.seq, p.position",
         )?;
@@ -299,6 +309,17 @@ pub fn reevaluate_in(
         )?;
         touched.insert(row.job_id, (row.state, row.wait));
     }
+    // The same target, now the mapping's: an open replacement plan of a row
+    // left on its episode holds ([`crate::place::replace`]). Not a change of
+    // the row's placement, so `updated_at` (which orders a stored subtitle's
+    // rows) stays.
+    c.execute(
+        "UPDATE subtitle_job_plan SET assignment = 'mapped'
+          WHERE assignment = 'same_number' AND (outcome IS NULL OR outcome = 'no_video')
+            AND job_id IN (SELECT id FROM subtitle_jobs
+                            WHERE work_id = ?1 AND season = ?2 AND source_id = ?3)",
+        params![work_id, season, source_id],
+    )?;
     for (job, (state, wait)) in touched {
         let back = match state {
             JobState::Running => {

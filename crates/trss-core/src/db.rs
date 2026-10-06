@@ -177,6 +177,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("../migrations/jobs/chosen_rows.sql")),
     // 59: a mapping change's relocation: the applied copies its job takes off their old episodes; a run whose plan a mapping change rewrote goes back in line; a stored subtitle a person placed is explicit
     Migration::Sql(include_str!("../migrations/jobs/relocation.sql")),
+    // 60: a file put on its own number for want of an episode mapping follows the mapping decided later; the candidates' files earlier builds put so
+    Migration::Remake(include_str!("../migrations/jobs/same_number.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -2947,6 +2949,200 @@ mod tests {
                     Some("anissia".to_owned()),
                     4
                 )
+            ]
+        );
+    }
+
+    const BEFORE_SAME_NUMBER: usize = 59;
+
+    /// The indexes and triggers of the database at `path`.
+    fn schema_objects(conn: &Connection) -> Vec<(String, String)> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT type, name FROM sqlite_master
+                  WHERE type IN ('index', 'trigger') AND name NOT LIKE 'sqlite_autoindex_%'
+                  ORDER BY type, name",
+            )
+            .unwrap();
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        rows.collect::<Result<_, _>>().unwrap()
+    }
+
+    // A remake makes its tables anew: their indexes and triggers too.
+    #[tokio::test]
+    async fn the_same_number_migration_keeps_every_index_and_trigger() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        let before = schema_objects(&database_at(&path, BEFORE_SAME_NUMBER));
+
+        let db = Db::open(&path).await.unwrap();
+
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+        let after = db
+            .run::<_, DbError, _>(|c| Ok(schema_objects(c)))
+            .await
+            .unwrap();
+        assert_eq!(after, before);
+    }
+
+    #[tokio::test]
+    async fn a_candidates_file_put_on_its_own_number_follows_the_mapping_after_the_migration() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        {
+            let conn = database_at(&path, BEFORE_SAME_NUMBER);
+            // j1: a candidate's job no person confirmed, of a source with no
+            // mapping; j2: one a person confirmed; j3: one whose source has a
+            // decided mapping now; j4: an upload.
+            conn.execute_batch(
+                "INSERT INTO watch_folders (id, path, created_at) VALUES ('f', '/media', 1);
+                 INSERT INTO works (id, watch_folder_id, dir_name) VALUES ('w', 'f', 'Show');
+                 INSERT INTO subtitle_sources (id, anime_no, creator_name, created_at)
+                     VALUES ('src', 7, 'c', 0), ('mapped', 7, 'd', 0);
+                 INSERT INTO subtitle_episode_mappings (work_id, season, source_id, kind,
+                                                        episode_offset, evidence, decided_at)
+                     VALUES ('w', 1, 'mapped', 'user', 0, '시험', 0);
+                 INSERT INTO subtitle_jobs (id, command_id, request, origin, work_id, season,
+                                            source_id, state, created_at, updated_at, state_at)
+                     VALUES ('j1', 'c1', '{}', 'pick', 'w', 1, 'src', 'done', 0, 0, 0),
+                            ('j2', 'c2', '{}', 'auto', 'w', 1, 'src', 'done', 0, 0, 0),
+                            ('j3', 'c3', '{}', 'pick', 'w', 1, 'mapped', 'done', 0, 0, 0),
+                            ('j4', 'c4', '{}', 'upload', 'w', 1, 'src', 'done', 0, 0, 0);
+                 INSERT INTO subtitle_job_steps (job_id, step, state, at)
+                     VALUES ('j2', 'placement', 'done', 0);
+                 INSERT INTO subtitle_job_items (id, job_id, position, episode, post_url,
+                                                 found_at, state, updated_at)
+                     VALUES (1, 'j1', 0, '3', 'https://example.org/1', 0, 'done', 0),
+                            (2, 'j2', 0, '6', 'https://example.org/2', 0, 'done', 0),
+                            (3, 'j3', 0, '7', 'https://example.org/3', 0, 'done', 0),
+                            (4, 'j4', 0, '', 'https://example.org/4', 0, 'done', 0);
+                 INSERT INTO subtitle_job_files (id, job_id, item_id, file_key, name, state, size,
+                                                 sha256, created_at, updated_at)
+                     VALUES ('f1', 'j1', 1, 'k1', 'a.ass', 'done', 1, printf('%064d', 1), 0, 0),
+                            ('f2', 'j2', 2, 'k2', 'b.ass', 'done', 1, printf('%064d', 1), 0, 0),
+                            ('f3', 'j3', 3, 'k3', 'c.ass', 'done', 1, printf('%064d', 1), 0, 0),
+                            ('f4', 'j4', 4, 'k4', 'd.ass', 'done', 1, printf('%064d', 1), 0, 0);
+                 INSERT INTO subtitle_packages (id, work_id, job_id, source_kind, created_at)
+                     VALUES ('p1', 'w', 'j1', 'post', 0);
+                 INSERT INTO subtitle_assets (id, work_id, kind, base, relative_path, byte_size,
+                                              sha256, created_at)
+                     VALUES ('a1', 'w', 'subtitle', 'work', '.trss/subtitles/x/a.ass', 1,
+                             printf('%064d', 1), 0);
+                 INSERT INTO subtitle_package_entries (package_id, position, asset_id,
+                                                       original_name)
+                     VALUES ('p1', 0, 'a1', 'a.ass');
+                 INSERT INTO subtitle_stored (id, work_id, season, package_id, subtitle_asset_id,
+                                              source_id, anissia_episode, attachment_episode,
+                                              assignment, basis, episode, format, stored_at)
+                     VALUES ('s1', 'w', 1, 'p1', 'a1', 'src', '03', '3', 'explicit', NULL, 3,
+                             'ass', 0),
+                            ('s2', 'w', 1, 'p1', 'a1', 'src', '4', '5', 'explicit', NULL, 5,
+                             'ass', 0),
+                            ('s3', 'w', 1, 'p1', 'a1', 'src', '6', '6', 'explicit', NULL, 6,
+                             'ass', 0),
+                            ('s4', 'w', 1, 'p1', 'a1', 'mapped', '7', '7', 'explicit', NULL, 7,
+                             'ass', 0),
+                            ('s5', 'w', 1, 'p1', 'a1', 'src', '8', '8', 'explicit', NULL, 8,
+                             'ass', 0),
+                            ('s6', 'w', 1, 'p1', 'a1', 'src', '9', '9', 'explicit', NULL, 9,
+                             'ass', 0);
+                 INSERT INTO subtitle_job_plan (job_id, position, file_id, name, kind, format,
+                                                size, sha256, anissia_episode, attachment_episode,
+                                                assignment, basis, episode, action, stored_id,
+                                                updated_at)
+                     VALUES ('j1', 0, 'f1', 'a.ass', 'subtitle', 'ass', 1, printf('%064d', 1),
+                             '03', '3', 'explicit', NULL, 3, 'apply', 's1', 0),
+                            ('j1', 1, 'f1', 'e.ass', 'subtitle', 'ass', 1, printf('%064d', 1),
+                             '4', '5', 'explicit', NULL, 5, 'store', 's2', 0),
+                            ('j2', 0, 'f2', 'b.ass', 'subtitle', 'ass', 1, printf('%064d', 1),
+                             '6', '6', 'explicit', NULL, 6, 'apply', 's3', 0),
+                            ('j3', 0, 'f3', 'c.ass', 'subtitle', 'ass', 1, printf('%064d', 1),
+                             '7', '7', 'explicit', NULL, 7, 'apply', 's4', 0),
+                            ('j4', 0, 'f4', 'd.ass', 'subtitle', 'ass', 1, printf('%064d', 1),
+                             '8', '8', 'explicit', NULL, 8, 'apply', 's5', 0),
+                            ('j1', 2, 'f1', 'g.ass', 'subtitle', 'ass', 1, printf('%064d', 1),
+                             '9', '9', 'explicit', NULL, 9, 'apply', 's6', 0),
+                            ('j2', 1, 'f2', 'g.ass', 'subtitle', 'ass', 1, printf('%064d', 1),
+                             '9', '9', 'explicit', NULL, 9, 'apply', 's6', 0);
+                 INSERT INTO subtitle_replacements
+                     (id, job_id, position, version, state, work_id, season, episode, assignment,
+                      basis, folder, video_path, video_object, video_size, video_mtime,
+                      stored_id, asset_id, asset_path, asset_size, asset_sha256, target,
+                      created_at, updated_at)
+                     VALUES ('r1', 'j1', 0, 1, 'open', 'w', 1, 3, 'explicit', NULL, '/media/Show',
+                             'a.mkv', 'o', 1, 0, 's1', 'a1', '.trss/subtitles/x/a.ass', 1,
+                             printf('%064d', 1), 'a.ass', 0, 0),
+                            ('r2', 'j2', 0, 1, 'open', 'w', 1, 6, 'explicit', NULL, '/media/Show',
+                             'b.mkv', 'o', 1, 0, 's3', 'a1', '.trss/subtitles/x/a.ass', 1,
+                             printf('%064d', 1), 'b.ass', 0, 0);",
+            )
+            .unwrap();
+        }
+
+        let db = Db::open(&path).await.unwrap();
+
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+        let read = |sql: &'static str| {
+            let db = db.clone();
+            async move {
+                db.run::<_, DbError, _>(move |c| {
+                    let mut stmt = c.prepare(sql)?;
+                    let rows = stmt.query_map([], |r| {
+                        Ok((
+                            r.get::<_, String>(0)?,
+                            r.get::<_, String>(1)?,
+                            r.get::<_, Option<String>>(2)?,
+                        ))
+                    })?;
+                    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+                })
+                .await
+                .unwrap()
+            }
+        };
+        let row = |id: &str, assignment: &str, basis: Option<&str>| {
+            (
+                id.to_owned(),
+                assignment.to_owned(),
+                basis.map(str::to_owned),
+            )
+        };
+        // Only the unconfirmed candidate's own number, of a source with no
+        // decided mapping, follows; the rest stays the person's.
+        assert_eq!(
+            read(
+                "SELECT job_id || '/' || position, assignment, basis FROM subtitle_job_plan
+                  ORDER BY job_id, position"
+            )
+            .await,
+            [
+                row("j1/0", "same_number", Some("anissia")),
+                row("j1/1", "explicit", None),
+                row("j1/2", "same_number", Some("anissia")),
+                row("j2/0", "explicit", None),
+                row("j2/1", "explicit", None),
+                row("j3/0", "explicit", None),
+                row("j4/0", "explicit", None),
+            ]
+        );
+        assert_eq!(
+            read("SELECT id, assignment, basis FROM subtitle_stored ORDER BY id").await,
+            [
+                row("s1", "same_number", Some("anissia")),
+                row("s2", "explicit", None),
+                row("s3", "explicit", None),
+                row("s4", "explicit", None),
+                row("s5", "explicit", None),
+                // Also a row a person confirmed names it.
+                row("s6", "explicit", None),
+            ]
+        );
+        // A replacement plan binds what puts its row there now.
+        assert_eq!(
+            read("SELECT id, assignment, basis FROM subtitle_replacements ORDER BY id").await,
+            [
+                row("r1", "same_number", Some("anissia")),
+                row("r2", "explicit", None),
             ]
         );
     }

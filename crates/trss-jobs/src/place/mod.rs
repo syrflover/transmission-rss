@@ -795,6 +795,7 @@ impl Placer {
                 .collect();
             let context = package::Context {
                 mapping,
+                source: facts.source_id.is_some(),
                 total,
                 season,
                 order: &order,

@@ -175,6 +175,9 @@ pub struct Candidate<'a> {
 pub struct Context<'a> {
     /// The source's mapping (`None`: it has none).
     pub mapping: Option<&'a Mapping>,
+    /// The job's source is known: a file put on its own number for want of
+    /// a mapping follows the one decided later ([`Assignment::same_number`]).
+    pub source: bool,
     /// The season's episodes, when known.
     pub total: Option<u32>,
     /// The job's season.
@@ -276,12 +279,12 @@ pub fn plan(candidates: &[Candidate<'_>], files: &[File<'_>], ctx: &Context<'_>)
     // undecided, or past the season): why, whatever the files are named.
     let unresolved: Vec<(&Candidate<'_>, String)> = candidates
         .iter()
-        .filter_map(
-            |c| match of_candidate(c.episode, ctx.mapping, "", ctx.total, true) {
+        .filter_map(|c| {
+            match of_candidate(c.episode, ctx.mapping, ctx.source, "", ctx.total, true) {
                 Target::Ask(reason) => Some((c, reason)),
                 Target::Episode { .. } => None,
-            },
-        )
+            }
+        })
         .collect();
 
     // Each subtitle against each candidate.
@@ -295,7 +298,14 @@ pub fn plan(candidates: &[Candidate<'_>], files: &[File<'_>], ctx: &Context<'_>)
             .map(|c| {
                 (
                     c,
-                    of_candidate(c.episode, ctx.mapping, base(i), ctx.total, alone),
+                    of_candidate(
+                        c.episode,
+                        ctx.mapping,
+                        ctx.source,
+                        base(i),
+                        ctx.total,
+                        alone,
+                    ),
                 )
             })
             .collect();
@@ -418,11 +428,20 @@ pub fn plan(candidates: &[Candidate<'_>], files: &[File<'_>], ctx: &Context<'_>)
         };
         let through = ctx.mapping.map(|m| (m, m.season_episode(&key)));
         let target = match (numbering, through) {
-            (Numbering::Season, _) | (_, None) => Target::Episode {
+            // The names number the season's episodes.
+            (Numbering::Season, _) => Target::Episode {
                 episode: number,
                 assignment: Assignment::Explicit,
                 basis: None,
             },
+            (_, None) => {
+                let (assignment, basis) = Assignment::same_number(ctx.source, Basis::Attachment);
+                Target::Episode {
+                    episode: number,
+                    assignment,
+                    basis,
+                }
+            }
             (_, Some((_, Mapped::NotReceived))) => {
                 return Err(format!(
                     "회차 대응이 {}를 받지 않는 회차로 정해 두었어요",
@@ -657,11 +676,14 @@ fn named_target(base: &str, ctx: &Context<'_>) -> Result<Placed, String> {
         ));
     };
     let placed = match ctx.mapping.map(|m| (m, m.season_episode(&key))) {
-        None => Placed {
-            episode: number,
-            assignment: Assignment::Explicit,
-            basis: None,
-        },
+        None => {
+            let (assignment, basis) = Assignment::same_number(ctx.source, Basis::Attachment);
+            Placed {
+                episode: number,
+                assignment,
+                basis,
+            }
+        }
         Some((_, Mapped::Episode(n))) => Placed {
             episode: n,
             assignment: Assignment::Mapped,

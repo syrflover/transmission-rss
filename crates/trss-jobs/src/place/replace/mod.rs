@@ -99,7 +99,9 @@ use std::{
 use trss_core::files::rename_noreplace;
 
 use super::{
-    blocking, files,
+    blocking,
+    episode::Assignment,
+    files,
     files::{Copied, Published},
     joined,
     package::extension,
@@ -569,9 +571,13 @@ impl Placer {
         let row = self
             .read(move |c| place_records::plan_row_at(c, &job, position))
             .await?;
+        // A same-number link the decided mapping left on its episode is the
+        // same target.
         let mapped = |episode: Option<i64>, assignment, basis| {
             episode == Some(plan.episode)
-                && assignment == Some(plan.assignment)
+                && (assignment == Some(plan.assignment)
+                    || (plan.assignment == Assignment::SameNumber
+                        && assignment == Some(Assignment::Mapped)))
                 && basis == plan.basis
         };
         let row_holds = row.as_ref().is_some_and(|r| {

@@ -13,8 +13,10 @@ pub enum Assignment {
     /// The source's mapping from an observed episode: recomputed when the
     /// mapping changes.
     Mapped,
-    /// A person's choice, or the same number where the source had no
-    /// mapping.
+    /// The observed episode's own number, as the source has no mapping yet:
+    /// taken through the first one decided, as [`Assignment::Mapped`] is.
+    SameNumber,
+    /// A person's choice, or the same number where no source is known.
     Explicit,
 }
 
@@ -22,6 +24,7 @@ impl Assignment {
     pub fn code(self) -> &'static str {
         match self {
             Assignment::Mapped => "mapped",
+            Assignment::SameNumber => "same_number",
             Assignment::Explicit => "explicit",
         }
     }
@@ -29,8 +32,19 @@ impl Assignment {
     pub fn parse(code: &str) -> Option<Assignment> {
         match code {
             "mapped" => Some(Assignment::Mapped),
+            "same_number" => Some(Assignment::SameNumber),
             "explicit" => Some(Assignment::Explicit),
             _ => None,
+        }
+    }
+
+    /// What puts a file on its observed number where its source has no
+    /// mapping: the mapping decided later when the job's source is known
+    /// (`source`), the person who named the file otherwise.
+    pub fn same_number(source: bool, basis: Basis) -> (Assignment, Option<Basis>) {
+        match source {
+            true => (Assignment::SameNumber, Some(basis)),
+            false => (Assignment::Explicit, None),
         }
     }
 }
@@ -68,7 +82,7 @@ pub enum Target {
     Episode {
         episode: i64,
         assignment: Assignment,
-        /// `Some` for a mapped assignment.
+        /// `Some` for a mapped or a same-number assignment.
         basis: Option<Basis>,
     },
     /// A person has to say which episode it is (`회차 확인 필요`), for this
@@ -108,18 +122,26 @@ fn label(episode: &str) -> String {
 }
 
 /// The season episode a candidate's episode text is: through the source's
-/// mapping, or the same number where the source has none.
-fn candidate_target(candidate: &str, mapping: Option<&Mapping>) -> Result<(i64, Target), String> {
+/// mapping, or the same number where the source (known when `source`) has
+/// none.
+fn candidate_target(
+    candidate: &str,
+    mapping: Option<&Mapping>,
+    source: bool,
+) -> Result<(i64, Target), String> {
     match mapping {
         None => match whole(candidate) {
-            Some(n) => Ok((
-                n,
-                Target::Episode {
-                    episode: n,
-                    assignment: Assignment::Explicit,
-                    basis: None,
-                },
-            )),
+            Some(n) => {
+                let (assignment, basis) = Assignment::same_number(source, Basis::Anissia);
+                Ok((
+                    n,
+                    Target::Episode {
+                        episode: n,
+                        assignment,
+                        basis,
+                    },
+                ))
+            }
             None => Err(format!(
                 "후보의 회차 {}는 정수 회차가 아니라 시즌의 회차로 옮기지 못했어요",
                 label(candidate)
@@ -151,18 +173,20 @@ fn candidate_target(candidate: &str, mapping: Option<&Mapping>) -> Result<(i64, 
 
 /// Where the subtitle `name` of a candidate's job goes: the candidate's
 /// episode `candidate` taken through the source's `mapping` (`None`: the
-/// source has none, so the same number), within the season's `total`
-/// episodes when that is known. The file's name must say that episode, as the
-/// candidate wrote it or as the season has it, or say none when the file is
-/// the only subtitle the candidate brought (`alone`).
+/// source has none, so the same number, which follows the mapping decided
+/// later when the job's source is known, `source`), within the season's
+/// `total` episodes when that is known. The file's name must say that
+/// episode, as the candidate wrote it or as the season has it, or say none
+/// when the file is the only subtitle the candidate brought (`alone`).
 pub fn of_candidate(
     candidate: &str,
     mapping: Option<&Mapping>,
+    source: bool,
     name: &str,
     total: Option<u32>,
     alone: bool,
 ) -> Target {
-    let (episode, target) = match candidate_target(candidate, mapping) {
+    let (episode, target) = match candidate_target(candidate, mapping, source) {
         Ok(found) => found,
         Err(reason) => return Target::Ask(reason),
     };
@@ -223,18 +247,19 @@ mod tests {
     fn the_candidates_episode_goes_through_the_mapping() {
         let m = offset(-12);
         assert_eq!(
-            of_candidate("14", Some(&m), "Show - 14.ass", Some(12), true),
+            of_candidate("14", Some(&m), true, "Show - 14.ass", Some(12), true),
             mapped(2)
         );
         assert_eq!(
-            of_candidate("14", Some(&m), "Show S2 - 02.ass", Some(12), true),
+            of_candidate("14", Some(&m), true, "Show S2 - 02.ass", Some(12), true),
             mapped(2)
         );
         assert_eq!(
-            of_candidate("14", Some(&m), "Show.ass", Some(12), true),
+            of_candidate("14", Some(&m), true, "Show.ass", Some(12), true),
             mapped(2)
         );
-        let Target::Ask(reason) = of_candidate("14", Some(&m), "Show - 13.ass", Some(12), true)
+        let Target::Ask(reason) =
+            of_candidate("14", Some(&m), true, "Show - 13.ass", Some(12), true)
         else {
             panic!("13 is neither 14 nor 2");
         };
@@ -243,8 +268,25 @@ mod tests {
 
     #[test]
     fn a_source_without_a_mapping_is_the_same_number() {
+        // Until the source's mapping is decided.
         assert_eq!(
-            of_candidate("13", None, "키미시누 13화 미완성.ass", Some(13), true),
+            of_candidate("13", None, true, "키미시누 13화 미완성.ass", Some(13), true),
+            Target::Episode {
+                episode: 13,
+                assignment: Assignment::SameNumber,
+                basis: Some(Basis::Anissia)
+            }
+        );
+        // No source, no mapping to follow.
+        assert_eq!(
+            of_candidate(
+                "13",
+                None,
+                false,
+                "키미시누 13화 미완성.ass",
+                Some(13),
+                true
+            ),
             Target::Episode {
                 episode: 13,
                 assignment: Assignment::Explicit,
@@ -256,6 +298,7 @@ mod tests {
             of_candidate(
                 "8",
                 None,
+                true,
                 "[SubsPlease] Show - 08 (1080p) [F3B053C5].ass",
                 None,
                 true
@@ -272,20 +315,20 @@ mod tests {
             ..offset(0)
         };
         assert!(matches!(
-            of_candidate("3", Some(&undecided), "a - 03.ass", None, true),
+            of_candidate("3", Some(&undecided), true, "a - 03.ass", None, true),
             Target::Ask(r) if r.contains("미정")
         ));
         // A decimal episode, and one outside the season.
         assert!(matches!(
-            of_candidate("13.5", None, "a.ass", None, true),
+            of_candidate("13.5", None, true, "a.ass", None, true),
             Target::Ask(_)
         ));
         assert!(matches!(
-            of_candidate("14", None, "a - 14.ass", Some(12), true),
+            of_candidate("14", None, true, "a - 14.ass", Some(12), true),
             Target::Ask(r) if r.contains("1–12화")
         ));
         assert!(matches!(
-            of_candidate("3", Some(&offset(-12)), "a.ass", Some(12), true),
+            of_candidate("3", Some(&offset(-12)), true, "a.ass", Some(12), true),
             Target::Ask(_)
         ));
     }
@@ -293,11 +336,11 @@ mod tests {
     #[test]
     fn a_name_without_a_number_is_the_candidates_only_when_alone() {
         assert!(matches!(
-            of_candidate("2", None, "Show.ass", None, false),
+            of_candidate("2", None, true, "Show.ass", None, false),
             Target::Ask(_)
         ));
         assert!(matches!(
-            of_candidate("2", None, "Show 01~12.ass", None, true),
+            of_candidate("2", None, true, "Show 01~12.ass", None, true),
             Target::Ask(_)
         ));
         assert_eq!(named("dev-check16.srt"), Named::Nothing);

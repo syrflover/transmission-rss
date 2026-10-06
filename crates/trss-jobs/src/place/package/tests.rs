@@ -33,6 +33,8 @@ struct Case<'a> {
     names: Vec<&'a str>,
     sha: Vec<String>,
     mapping: Option<Mapping>,
+    /// The job's source is known.
+    source: bool,
     total: Option<u32>,
     season: u32,
     follow: bool,
@@ -49,6 +51,7 @@ impl<'a> Case<'a> {
             names,
             sha,
             mapping: None,
+            source: true,
             total: None,
             season: 1,
             follow: false,
@@ -70,6 +73,7 @@ impl<'a> Case<'a> {
             &files,
             &Context {
                 mapping: self.mapping.as_ref(),
+                source: self.source,
                 total: self.total,
                 season: self.season,
                 order: &ORDER,
@@ -427,6 +431,7 @@ impl Case<'_> {
             &files,
             &Context {
                 mapping: self.mapping.as_ref(),
+                source: self.source,
                 total: self.total,
                 season: self.season,
                 order: &ORDER,
@@ -458,6 +463,7 @@ fn an_upload_of_an_unknown_creator_is_placed_under_the_same_numbers_and_one_past
 {
     let names: Vec<String> = (1..=13).map(|n| format!("Show - {n:02}.ass")).collect();
     let mut case = Case::new("", names.iter().map(String::as_str).collect());
+    case.source = false;
     case.total = Some(12);
     let planned = case.named();
     let rows = named_rows(&planned);
@@ -478,6 +484,30 @@ fn an_upload_of_an_unknown_creator_is_placed_under_the_same_numbers_and_one_past
         Some("13화가 시즌의 1–12화 밖이에요")
     );
     assert!(planned.missing.is_empty());
+}
+
+// A known creator without a mapping yet: the same numbers, which follow the
+// mapping decided later.
+#[test]
+fn an_upload_of_a_creator_without_a_mapping_is_placed_until_one_is_decided() {
+    let names: Vec<String> = (1..=3).map(|n| format!("Show - {n:02}.ass")).collect();
+    let case = Case::new("", names.iter().map(String::as_str).collect());
+    let planned = case.named();
+    let placed: Vec<_> = planned
+        .rows
+        .iter()
+        .map(|r| {
+            r.placed
+                .as_ref()
+                .map(|p| (p.episode, p.assignment, p.basis))
+        })
+        .collect();
+    assert_eq!(
+        placed,
+        (1..=3)
+            .map(|n| Some((n, Assignment::SameNumber, Some(Basis::Attachment))))
+            .collect::<Vec<_>>()
+    );
 }
 
 #[test]
@@ -556,7 +586,7 @@ fn an_upload_applies_the_first_format_and_asks_about_alternatives() {
         rows[0],
         (
             Some(1),
-            Some(Assignment::Explicit),
+            Some(Assignment::SameNumber),
             PlanAction::Apply,
             false
         )
@@ -565,24 +595,34 @@ fn an_upload_applies_the_first_format_and_asks_about_alternatives() {
         rows[1],
         (
             Some(1),
-            Some(Assignment::Explicit),
+            Some(Assignment::SameNumber),
             PlanAction::Store,
             false
         )
     );
     assert_eq!(
         rows[2],
-        (Some(2), Some(Assignment::Explicit), PlanAction::Apply, true)
+        (
+            Some(2),
+            Some(Assignment::SameNumber),
+            PlanAction::Apply,
+            true
+        )
     );
     assert_eq!(
         rows[3],
-        (Some(2), Some(Assignment::Explicit), PlanAction::Apply, true)
+        (
+            Some(2),
+            Some(Assignment::SameNumber),
+            PlanAction::Apply,
+            true
+        )
     );
     assert_eq!(
         rows[4],
         (
             Some(3),
-            Some(Assignment::Explicit),
+            Some(Assignment::SameNumber),
             PlanAction::Store,
             false
         )
