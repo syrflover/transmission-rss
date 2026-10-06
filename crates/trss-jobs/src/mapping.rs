@@ -765,7 +765,11 @@ pub enum Saved {
 /// app retired, with the next version. `version` is what the screen read (0 for
 /// a source with no row); another is refused with the stored mapping. The
 /// source's stored conflicts go, since they were found against the mapping
-/// that was there; the follower writes them again at its next look.
+/// that was there; the follower writes them again at its next look. What
+/// follows the mapping moves with it in the same transaction
+/// ([`crate::place::relocate::reevaluate_in`]), within the season's `total`
+/// episodes when known.
+#[allow(clippy::too_many_arguments)]
 pub fn set_user_in(
     c: &mut Connection,
     work_id: &str,
@@ -773,6 +777,7 @@ pub fn set_user_in(
     source_id: &str,
     version: i64,
     user: &UserMapping,
+    total: Option<u32>,
     now: Millis,
 ) -> rusqlite::Result<Saved> {
     let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -818,6 +823,7 @@ pub fn set_user_in(
           WHERE work_id = ?1 AND season = ?2 AND source_id = ?3",
         params![work_id, season, source_id],
     )?;
+    crate::place::relocate::reevaluate_in(&tx, work_id, season, source_id, total, now)?;
     let saved = read_one(&tx, work_id, season, source_id)?.map(|(m, _)| m);
     tx.commit()?;
     Ok(Saved::Done(saved))

@@ -741,7 +741,7 @@ async fn a_decision_made_while_the_job_runs_is_carried_out_by_its_next_run() {
             )
             .await
             .unwrap();
-        assert!(back, "{replace}");
+        assert_eq!(back, Some(DECIDED), "{replace}");
         let d = detail(&s, &job).await;
         assert_eq!(
             (d.row.state, d.row.wait, d.row.note.as_deref()),
@@ -771,7 +771,7 @@ async fn a_job_that_still_has_a_plan_to_decide_waits_for_it() {
         )
         .await
         .unwrap();
-    assert!(!back);
+    assert_eq!(back, None);
     waiting_for_approval(&detail(&s, &job).await);
 }
 

@@ -54,8 +54,11 @@ export interface ConfirmEpisode {
 
 /** What a job asks a person in its 배치 확인 (`jobs_api/placement.rs`). */
 export interface ConfirmView {
-  /** `whole`: the whole plan of an upload or a find job before anything is kept; `held`: only the rows it asks about. */
-  scope: "whole" | "held";
+  /**
+   * `whole`: the whole plan of an upload or a find job before anything is kept; `relocate`: a relocation's plan (its
+   * rows and `relocations`) before any copy moves, confirmed as it is; `held`: only the rows it asks about.
+   */
+  scope: "whole" | "relocate" | "held";
   /** The `position`s of the rows the person places: every one is sent back. */
   positions: number[];
   /** The season's episode count, when known. */
@@ -71,4 +74,24 @@ export interface PlacementChoice {
   episode: number | null;
   /** `false`: kept only (`적용하지 않음`), with the `episode` still recorded. */
   apply: boolean;
+}
+
+/**
+ * One removal of a relocation job (재배치, `jobs_api/placement.rs`): an applied copy it takes off its old episode once
+ * the person confirms.
+ */
+export interface Relocation {
+  id: string;
+  /** The placement that applies the same stored subtitle on its new episode; `null`: it is applied there already. */
+  position: number | null;
+  /** The episode the copy is on, and its path in the work folder. */
+  episode: number;
+  path: string;
+  /**
+   * `planned` until the person confirms; then `intended` and `set_aside` while it is taken off, `done` (taken off),
+   * `kept` (left where it is) or `held` (what became of it is not known).
+   */
+  state: "planned" | "intended" | "set_aside" | "done" | "kept" | "held";
+  /** Why a `kept` or `held` copy is where it is. */
+  reason: string | null;
 }

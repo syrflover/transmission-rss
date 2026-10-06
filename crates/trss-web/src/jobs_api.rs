@@ -82,21 +82,31 @@
 //!   (`assignment`: `mapped` by the source's mapping, `explicit` by the same
 //!   number or a person). While the job waits for its 배치 확인
 //!   ([`placement`]), its detail has `confirm`: `scope` (`whole`, an
-//!   upload's or a find job's plan before anything of it is kept; `held`,
-//!   the rows it asks about), the `positions` of the rows to place, the
-//!   season's episode count `total` (`null` when not known) and the
-//!   `episodes` a row can go on, each with the name of its video when it has
-//!   exactly one, how many it has, and whether it has a subtitle already (one
-//!   applied there waits for a replacement's approval); `null` otherwise.
+//!   upload's or a find job's plan before anything of it is kept;
+//!   `relocate`, a relocation's plan before any copy moves; `held`, the rows
+//!   it asks about), the `positions` of the rows to place, the season's
+//!   episode count `total` (`null` when not known) and the `episodes` a row
+//!   can go on, each with the name of its video when it has exactly one, how
+//!   many it has, and whether it has a subtitle already (one applied there
+//!   waits for a replacement's approval); `null` otherwise. A relocation
+//!   (`relocate`, [`trss_jobs::place::relocate`]) has `relocations`: each
+//!   applied copy it takes off, with its `id`, `episode`, `path` in the work
+//!   folder, the `position` of the row that applies its stored subtitle on
+//!   the new episode (`null`: applied there already), `state` (`planned`
+//!   until confirmed, then `intended`, `set_aside`, `done`, `kept` or
+//!   `held`) and `reason` (why a `kept` or `held` copy is where it is).
 //! - `POST /api/subtitle-jobs/{id}/placement` `{ "rows": [{ "position",
-//!   "episode", "apply" }] }` the person's 배치 확인 (`적용`): every row of
-//!   `confirm.positions` with the episode it goes on (`null`: none) and
-//!   whether it is applied (`false`: `적용하지 않음`, stored only). `200`
-//!   `{ "applied", "stored" }` and the worker woken; `400` with why for a
-//!   placing that cannot be kept (an episode outside the season, a row
-//!   applied on no episode, two different files of one format applied on
-//!   one episode); `409` when the job no longer waits for it or its rows
-//!   changed: the person reloads; `404` for no job.
+//!   "episode", "apply" }], "removals": [<id>] }` the person's 배치 확인
+//!   (`적용`): every row of `confirm.positions` with the episode it goes on
+//!   (`null`: none) and whether it is applied (`false`: `적용하지 않음`,
+//!   stored only), and for a relocation the `id` of each `planned` removal
+//!   it showed (`removals` may be left out otherwise). `200` `{ "applied",
+//!   "stored" }` and the worker woken; `400` with why for a placing that
+//!   cannot be kept (an episode outside the season, a row applied on no
+//!   episode, two different files of one format applied on one episode, a
+//!   relocation's row moved or not applied); `409` when the job no longer
+//!   waits for it or its rows or removals changed: the person reloads; `404`
+//!   for no job.
 //! - `POST /api/subtitle-jobs/find` `{ "id", "work_id", "season", "creator" }`
 //!   makes a find job (직접 찾기): the server browser opens the most recently
 //!   observed post of `creator` (a source ID of the season's Anissia anime's
@@ -134,9 +144,11 @@
 //! its files are settled: how many of them became new stored files.
 //!
 //! A job's `origin` is `pick` (a person picked its candidates), `auto` (the
-//! subscribed creator's episode, made by the app, [`trss_jobs::follow`]) or
+//! subscribed creator's episode, made by the app, [`trss_jobs::follow`]),
 //! `upload` (the subtitles and fonts a person uploaded, received already,
-//! [`super::subtitle_upload_api`]). An upload job has `upload` (what it kept
+//! [`super::subtitle_upload_api`]), `find` (below) or `relocate` (the app's
+//! move of a source's applied copies after its episode mapping changed, with
+//! no items: it waits for its 배치 확인 from the start). An upload job has `upload` (what it kept
 //! by kind, and how many files it dropped), no episodes, the steps it went
 //! through (`receive`, then 배치 확인 and the rest of its placement), its
 //! package's files with their `kind` (`subtitle`, `font`, `archive`) and
@@ -174,7 +186,7 @@ use trss_jobs::{
     },
     store::{DonePage, FileRow, JobDetail, JobRow, StepRow},
     AskedFinish, Created, FileState, ItemState, JobState, NewFind, NewItem, NewJob, StepKind, Wait,
-    FIND, UPLOAD,
+    FIND, RELOCATE, UPLOAD,
 };
 
 use super::{artwork_api::image_url, commands_api::now_millis, ApiError, AppState};
@@ -580,12 +592,15 @@ struct DetailView {
     /// The 배치 확인 table, while the job waits for a person to place its
     /// files; `null` otherwise.
     confirm: Option<placement::ConfirmView>,
+    /// A relocation's removals of applied copies (재배치); empty for
+    /// another job.
+    relocations: Vec<placement::RelocationView>,
 }
 
 /// The steps in order, those not reached `upcoming`; `auth`, `placement` and
 /// `approval` only when the job reached them, and `store` and `apply` not
 /// reached only while the job has not ended. An upload has no fetching to do:
-/// it shows the steps it went through, as a find job does.
+/// it shows the steps it went through, as a find job and a relocation do.
 fn steps_view(steps: &[StepRow], row: &JobRow) -> Vec<StepView> {
     let origin = row.origin.as_str();
     [
@@ -606,6 +621,7 @@ fn steps_view(steps: &[StepRow], row: &JobRow) -> Vec<StepView> {
             StepKind::Auth | StepKind::Placement | StepKind::Approval
         ) || origin == UPLOAD
             || origin == FIND
+            || origin == RELOCATE
             || (matches!(kind, StepKind::Store | StepKind::Apply) && row.finished_at.is_some());
         if row_of.is_none() && only_reached {
             return None;
@@ -804,6 +820,7 @@ async fn detail(
         })
         .collect();
     let confirm = placement::view(&state, &row, &plan).await?;
+    let relocations = placement::relocations(&state, &row).await?;
     let fonts: HashMap<i64, &'static str> = plan
         .iter()
         .filter_map(|p| {
@@ -856,6 +873,7 @@ async fn detail(
         steps: steps_view(&steps, &row),
         replacements,
         confirm,
+        relocations,
         placements,
         items: items_view,
         dropped: dropped

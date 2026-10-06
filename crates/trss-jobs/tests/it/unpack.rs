@@ -266,7 +266,7 @@ async fn confirm_as_planned(s: &Setup, id: &str) -> Confirmed {
         })
         .collect();
     s.store
-        .confirm_placement(id, placings, None, 5_000)
+        .confirm_placement(id, placings, Vec::new(), None, 5_000)
         .await
         .unwrap()
 }

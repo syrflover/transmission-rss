@@ -155,7 +155,7 @@
 | [0068](0068-replacement-approval.md) | 자막이 있는 회차를 승인받아 교체해요 | 완료 | 0063 |
 | [0069](0069-replacement-diff.md) | 교체 비교에 대사·타이밍·스타일·폰트의 차이를 보여줘요 | 완료 | 0068 |
 | [0070](0070-multi-episode-replacement.md) | 여러 회차의 교체를 회차 목록에서 골라요 | 완료 | 0068 |
-| [0071](0071-mapping-change-reevaluation.md) | 회차 대응을 바꾸면 보관본과 작업을 다시 평가해요 | 대기 | 0066, 0068 |
+| [0071](0071-mapping-change-reevaluation.md) | 회차 대응을 바꾸면 보관본과 작업을 다시 평가해요 | 완료 | 0066, 0068 |
 | [0072](0072-choose-stored-subtitle.md) | 고른 보관본을 적용하고 작품별 자막 형식 순서를 정해요 | 완료 | 0068 |
 | [0073](0073-stored-file-cleanup.md) | 보관 파일을 정리하고 용량을 보여줘요 | 완료 | 0064 |
 | [0074](0074-skip-unchanged-drive-fonts.md) | 바뀌지 않은 Drive 폰트를 다시 받지 않아요 | 완료 | 0064 |

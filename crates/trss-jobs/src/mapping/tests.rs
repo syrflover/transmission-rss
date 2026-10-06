@@ -550,6 +550,7 @@ mod stored {
                     "s1",
                     0,
                     &user(-12, &[("14", Some(3)), ("013.0", None)]),
+                    None,
                     10,
                 )
                 .unwrap(),
@@ -587,6 +588,7 @@ mod stored {
                     "s1",
                     saved.version,
                     &user(0, &[("15", Some(15))]),
+                    None,
                     20,
                 )
                 .unwrap(),
@@ -608,7 +610,8 @@ mod stored {
             put(c, &nothing(), 20);
             assert_eq!(row(c), ("undecided".into(), None, Some(0)));
             let version = read_in(c, "w1", 1).unwrap()["s1"].version;
-            let saved = done(set_user_in(c, "w1", 1, "s1", version, &user(3, &[]), 30).unwrap());
+            let saved =
+                done(set_user_in(c, "w1", 1, "s1", version, &user(3, &[]), None, 30).unwrap());
             assert_eq!(row(c), ("user".into(), Some(3), None));
             // The app does not touch it.
             assert_eq!(put(c, &plus_one(), 40), saved);
@@ -632,8 +635,9 @@ mod stored {
         let db = db().await;
         db.run::<_, DbError, _>(|c| {
             // The source has no row: version 0. Two screens read that.
-            let first = done(set_user_in(c, "w1", 1, "s1", 0, &user(0, &[]), 10).unwrap());
-            let late = set_user_in(c, "w1", 1, "s1", 0, &user(5, &[("2", None)]), 20).unwrap();
+            let first = done(set_user_in(c, "w1", 1, "s1", 0, &user(0, &[]), None, 10).unwrap());
+            let late =
+                set_user_in(c, "w1", 1, "s1", 0, &user(5, &[("2", None)]), None, 20).unwrap();
             assert_eq!(late, Saved::Stale(Some(first.clone())));
             assert_eq!(row(c), ("user".into(), Some(0), None));
             assert!(exceptions_of(c).is_empty());
@@ -652,11 +656,12 @@ mod stored {
             let undecided = put(c, &plus_one(), 30);
             assert!(undecided.version > first.version);
             // A user's save from the version read before the app's write is refused.
-            let late = set_user_in(c, "w1", 1, "s1", first.version, &user(0, &[]), 40).unwrap();
+            let late =
+                set_user_in(c, "w1", 1, "s1", first.version, &user(0, &[]), None, 40).unwrap();
             assert_eq!(late, Saved::Stale(Some(undecided.clone())));
             // ...and from the version read after it goes through.
             assert!(matches!(
-                set_user_in(c, "w1", 1, "s1", undecided.version, &user(0, &[]), 50).unwrap(),
+                set_user_in(c, "w1", 1, "s1", undecided.version, &user(0, &[]), None, 50).unwrap(),
                 Saved::Done(Some(_))
             ));
             Ok(())
@@ -676,7 +681,17 @@ mod stored {
             let decided = plus_one();
             let version = read_in(c, "w1", 1).unwrap()["s1"].version;
             let saved = done(
-                set_user_in(c, "w1", 1, "s1", version, &user(-12, &[("13.5", None)]), 20).unwrap(),
+                set_user_in(
+                    c,
+                    "w1",
+                    1,
+                    "s1",
+                    version,
+                    &user(-12, &[("13.5", None)]),
+                    None,
+                    20,
+                )
+                .unwrap(),
             );
             let stored = put(c, &decided, 30);
             assert_eq!(stored, saved);
@@ -693,8 +708,9 @@ mod stored {
     ) {
         let db = db().await;
         db.run::<_, DbError, _>(|c| {
-            let saved =
-                done(set_user_in(c, "w1", 1, "s1", 0, &user(0, &[("2", Some(1))]), 10).unwrap());
+            let saved = done(
+                set_user_in(c, "w1", 1, "s1", 0, &user(0, &[("2", Some(1))]), None, 10).unwrap(),
+            );
             store_conflicts(
                 c,
                 "w1",
@@ -725,7 +741,7 @@ mod stored {
             let again = put(c, &zero(), 20);
             assert_ne!(again.version, saved.version);
             assert_eq!(
-                set_user_in(c, "w1", 1, "s1", saved.version, &user(0, &[]), 30).unwrap(),
+                set_user_in(c, "w1", 1, "s1", saved.version, &user(0, &[]), None, 30).unwrap(),
                 Saved::Stale(Some(again))
             );
             Ok(())

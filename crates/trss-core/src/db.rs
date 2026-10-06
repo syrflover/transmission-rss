@@ -175,6 +175,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("../migrations/jobs/replacement_diffs.sql")),
     // 58: what a person chose to apply from a stored subtitle: on the plan row, to replace the episode's subtitle or to add beside it
     Migration::Sql(include_str!("../migrations/jobs/chosen_rows.sql")),
+    // 59: a mapping change's relocation: the applied copies its job takes off their old episodes; a run whose plan a mapping change rewrote goes back in line; a stored subtitle a person placed is explicit
+    Migration::Sql(include_str!("../migrations/jobs/relocation.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -2864,6 +2866,89 @@ mod tests {
             [r("entries row 0 -> assets")]
         );
         assert_eq!(newly_broken(before.clone(), before), Vec::<String>::new());
+    }
+
+    /// Migration 58's database: relocations come after it.
+    const BEFORE_RELOCATION: usize = 58;
+
+    #[tokio::test]
+    async fn a_stored_subtitle_a_person_placed_is_explicit_after_the_relocation_migration() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.db");
+        {
+            let conn = database_at(&path, BEFORE_RELOCATION);
+            conn.execute_batch(
+                "INSERT INTO subtitle_sources (id, anime_no, creator_name, created_at)
+                     VALUES ('src', 7, 'c', 0);
+                 INSERT INTO subtitle_jobs (id, command_id, request, origin, work_id, season,
+                                            state, created_at, updated_at, state_at)
+                     VALUES ('j1', 'c1', '{}', 'pick', 'w', 1, 'done', 0, 0, 0);
+                 INSERT INTO subtitle_job_items (id, job_id, position, episode, post_url,
+                                                 found_at, state, updated_at)
+                     VALUES (1, 'j1', 0, '14', 'https://example.org/1', 0, 'done', 0);
+                 INSERT INTO subtitle_job_files (id, job_id, item_id, file_key, name, state, size,
+                                                 sha256, created_at, updated_at)
+                     VALUES ('f1', 'j1', 1, 'k1', 'a.ass', 'done', 1, printf('%064d', 1), 0, 0);
+                 INSERT INTO subtitle_packages (id, work_id, job_id, source_kind, created_at)
+                     VALUES ('p1', 'w', 'j1', 'post', 0);
+                 INSERT INTO subtitle_assets (id, work_id, kind, base, relative_path, byte_size,
+                                              sha256, created_at)
+                     VALUES ('a1', 'w', 'subtitle', 'work', '.trss/subtitles/x/a.ass', 1,
+                             printf('%064d', 1), 0),
+                            ('a2', 'w', 'subtitle', 'work', '.trss/subtitles/x/b.ass', 2,
+                             printf('%064d', 2), 0);
+                 INSERT INTO subtitle_package_entries (package_id, position, asset_id,
+                                                       original_name)
+                     VALUES ('p1', 0, 'a1', 'a.ass'), ('p1', 1, 'a2', 'b.ass');
+                 INSERT INTO subtitle_stored (id, work_id, season, package_id, subtitle_asset_id,
+                                              source_id, assignment, basis, episode, format,
+                                              stored_at)
+                     VALUES ('s1', 'w', 1, 'p1', 'a1', 'src', 'mapped', 'anissia', 2, 'ass', 0),
+                            ('s2', 'w', 1, 'p1', 'a2', 'src', 'mapped', 'anissia', 4, 'ass', 0);
+                 INSERT INTO subtitle_job_plan (job_id, position, file_id, name, kind, format,
+                                                size, sha256, assignment, basis, episode,
+                                                action, stored_id, updated_at)
+                     VALUES ('j1', 0, 'f1', 'a.ass', 'subtitle', 'ass', 1, printf('%064d', 1),
+                             'explicit', NULL, 3, 'apply', 's1', 0),
+                            ('j1', 1, 'f1', 'b.ass', 'subtitle', 'ass', 2, printf('%064d', 2),
+                             'mapped', 'anissia', 4, 'apply', 's2', 0);",
+            )
+            .unwrap();
+        }
+
+        let db = Db::open(&path).await.unwrap();
+
+        assert_eq!(version_of(&db).await, MIGRATIONS.len());
+        let stored = db
+            .run::<_, DbError, _>(|c| {
+                let mut stmt = c.prepare(
+                    "SELECT id, assignment, basis, episode FROM subtitle_stored ORDER BY id",
+                )?;
+                let rows = stmt.query_map([], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, Option<String>>(2)?,
+                        r.get::<_, i64>(3)?,
+                    ))
+                })?;
+                Ok(rows.collect::<Result<Vec<_>, _>>()?)
+            })
+            .await
+            .unwrap();
+        // The person's episode; the mapped row's stored subtitle stays mapped.
+        assert_eq!(
+            stored,
+            [
+                ("s1".to_owned(), "explicit".to_owned(), None, 3),
+                (
+                    "s2".to_owned(),
+                    "mapped".to_owned(),
+                    Some("anissia".to_owned()),
+                    4
+                )
+            ]
+        );
     }
 
     #[tokio::test]

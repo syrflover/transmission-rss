@@ -80,7 +80,7 @@ impl Setup {
             })
             .collect();
         self.store
-            .confirm_placement(id, placings, Some(12), 50_000)
+            .confirm_placement(id, placings, Vec::new(), Some(12), 50_000)
             .await
             .unwrap()
     }
@@ -457,7 +457,7 @@ async fn a_table_that_cannot_be_kept_is_refused_and_one_of_other_rows_is_stale()
     );
     assert_eq!(
         s.store
-            .confirm_placement("missing", Vec::new(), Some(12), 1)
+            .confirm_placement("missing", Vec::new(), Vec::new(), Some(12), 1)
             .await
             .unwrap(),
         Confirmed::NotFound
@@ -550,7 +550,7 @@ async fn a_package_of_fonts_alone_is_confirmed_with_no_row_and_then_kept() {
 
     assert_eq!(
         s.store
-            .confirm_placement(&id, Vec::new(), Some(12), 50_000)
+            .confirm_placement(&id, Vec::new(), Vec::new(), Some(12), 50_000)
             .await
             .unwrap(),
         Confirmed::Queued {

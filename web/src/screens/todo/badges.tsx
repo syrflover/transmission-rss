@@ -133,7 +133,8 @@ export function Tag({ children }: { children: ReactNode }) {
 
 /**
  * How a job came to be, when it was not a pick: `자동` for the subscribed creator's episode the app made into a
- * job, `올림` for an upload, `직접 찾기` for a find job, `수정본` for a revision of a subtitle received before.
+ * job, `올림` for an upload, `직접 찾기` for a find job, `재배치` for the move of applied copies after a mapping
+ * change, `수정본` for a revision of a subtitle received before.
  */
 export function OriginTags({
   job,
@@ -146,12 +147,16 @@ export function OriginTags({
       {job.origin === "upload" && <Tag>올림</Tag>}
       {job.origin === "upload" && job.creator === null && <Tag>제작자 알 수 없음</Tag>}
       {job.origin === "find" && <Tag>직접 찾기</Tag>}
+      {job.origin === "relocate" && <Tag>재배치</Tag>}
       {(job.revision_of !== null || job.revises_attributed) && <Tag>수정본</Tag>}
     </>
   );
 }
 
-/** What made a job, as a sentence: `구독 제작자 자동 수신`, `직접 올림`, `직접 찾기`, or `null` for a pick. */
+/**
+ * What made a job, as a sentence: `구독 제작자 자동 수신`, `직접 올림`, `직접 찾기`, `회차 대응 변경`, or `null` for a
+ * pick.
+ */
 export function originSentence(job: Pick<JobRow, "origin">): string | null {
   switch (job.origin) {
     case "auto":
@@ -160,6 +165,8 @@ export function originSentence(job: Pick<JobRow, "origin">): string | null {
       return "직접 올림";
     case "find":
       return "직접 찾기";
+    case "relocate":
+      return "회차 대응 변경";
     case "pick":
       return null;
   }

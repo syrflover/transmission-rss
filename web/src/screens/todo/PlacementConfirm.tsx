@@ -35,7 +35,7 @@ const UNSET = "unset";
  * time. A `conflict` (the job no longer waits, or its rows changed) reads the job again, and the table then shows
  * what the server has now.
  */
-function useConfirm(jobId: string) {
+export function useConfirm(jobId: string) {
   const [sending, setSending] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const busy = useRef(false);
@@ -48,13 +48,13 @@ function useConfirm(jobId: string) {
     }
   };
 
-  const send = async (rows: NonNullable<ReturnType<typeof requestRows>>) => {
+  const send = async (rows: NonNullable<ReturnType<typeof requestRows>>, removals: readonly string[] = []) => {
     if (busy.current) return;
     busy.current = true;
     setSending(true);
     setProblem(null);
     try {
-      await confirmPlacement(jobId, rows);
+      await confirmPlacement(jobId, rows, removals);
       refreshTodoCount();
       await reread();
     } catch (e) {

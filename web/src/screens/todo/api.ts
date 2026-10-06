@@ -1,6 +1,6 @@
 import { api } from "@/lib/api";
 
-import type { ConfirmView, Placement, PlacementChoice } from "./placementTypes";
+import type { ConfirmView, Placement, PlacementChoice, Relocation } from "./placementTypes";
 import type {
   Replacement,
   ReplacementChanges,
@@ -15,6 +15,7 @@ export type {
   Placement,
   PlacementChoice,
   PlacementOutcome,
+  Relocation,
 } from "./placementTypes";
 export type {
   Comparison,
@@ -277,9 +278,11 @@ export interface JobRow {
    * `pick`: the user picked its candidates; `auto`: the subscribed creator's, made by the app;
    * `upload`: subtitles and fonts the user uploaded (they are received at once, then the job waits for the worker's
    * analysis and the person's 배치 확인); `find`: the user browses the chosen creator's posts in the server browser
-   * and every download is a file of the job (직접 찾기), then it waits for the 배치 확인 too.
+   * and every download is a file of the job (직접 찾기), then it waits for the 배치 확인 too; `relocate`: the app's
+   * move of a source's applied copies after its episode mapping changed (재배치), with no episodes, waiting for its
+   * 배치 확인 from the start.
    */
-  origin: "pick" | "auto" | "upload" | "find";
+  origin: "pick" | "auto" | "upload" | "find" | "relocate";
   /**
    * For a find job: its 받기 has not ended, so its remote screen and `받기 끝내기` still apply. `false` for every
    * other job and for a find job after it finished receiving.
@@ -485,6 +488,8 @@ export interface JobDetail extends JobRow {
   screen: JobScreen | null;
   /** The 배치 확인 table's data while the job waits for it (`wait` is `placement`); `null` otherwise. */
   confirm: ConfirmView | null;
+  /** A relocation's removals of applied copies (재배치); empty for another job. */
+  relocations: Relocation[];
 }
 
 /** A job's remote screen, as `screen_api.rs` describes it. */
@@ -605,18 +610,19 @@ export function fetchReplacementLines(jobId: string, planId: string, signal?: Ab
 }
 
 /**
- * A person's answer to a job's 배치 확인: one entry for each of `confirm.positions`. The job becomes `pending` and the
- * worker stores and applies it. `invalid` (a Korean sentence to show as is) for a placing that cannot be kept; a
- * `conflict` when the job no longer waits or its rows changed: the job is read again; `not_found` for no job.
+ * A person's answer to a job's 배치 확인: one entry for each of `confirm.positions`, and for a relocation the `id` of
+ * each planned removal it showed. The job becomes `pending` and the worker stores and applies it. `invalid` (a
+ * Korean sentence to show as is) for a placing that cannot be kept; a `conflict` when the job no longer waits or its rows changed: the job is read again; `not_found` for no job.
  */
 export function confirmPlacement(
   jobId: string,
   rows: readonly PlacementChoice[],
+  removals: readonly string[] = [],
   signal?: AbortSignal,
 ): Promise<{ applied: number; stored: number }> {
   return api<{ applied: number; stored: number }>(`/subtitle-jobs/${encodeURIComponent(jobId)}/placement`, {
     method: "POST",
-    body: { rows },
+    body: { rows, removals },
     signal,
   });
 }

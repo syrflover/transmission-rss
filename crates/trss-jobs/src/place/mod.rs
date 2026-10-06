@@ -103,6 +103,7 @@ pub mod episode;
 pub mod files;
 pub mod package;
 pub mod records;
+pub mod relocate;
 pub mod replace;
 pub mod unchanged;
 pub mod unpack;
@@ -126,7 +127,7 @@ use crate::{
         PlanState, StepKind, StepState, SubtitleFormat,
     },
     runner::episode_label,
-    store::{FileRow, ItemRow, JobError, JobStore, AUTO, FIND, UPLOAD},
+    store::{FileRow, ItemRow, JobError, JobStore, AUTO, FIND, RELOCATE, UPLOAD},
 };
 use files::{Copied, Published};
 use package::extension;
@@ -173,6 +174,11 @@ pub struct Standing {
     pub questions: usize,
     /// The first held row's reason.
     pub held: Option<String>,
+    /// Why a relocation's removal is held ([`relocate`]): the job is held
+    /// once nothing else of it waits (a person, a replacement's approval, a
+    /// video, its folder), so the rows it can still apply are not left
+    /// behind.
+    pub held_removal: Option<String>,
     pub failed: usize,
     /// The first failed row's reason.
     pub failure: Option<String>,
@@ -449,6 +455,8 @@ impl Placer {
             .await?;
         let id = job.to_owned();
         let (unpack_failures, unplanned) = self.read(move |c| unpack::standing(c, &id)).await?;
+        let id = job.to_owned();
+        let held_removal = self.read(move |c| relocate::held_reason(c, &id)).await?;
         let first = |o: Outcome| {
             rows.iter()
                 .find(|r| r.outcome == Some(o))
@@ -461,6 +469,7 @@ impl Placer {
                 .filter(|r| r.question.is_some() && r.outcome != Some(Outcome::Dropped))
                 .count(),
             held: first(Outcome::Held),
+            held_removal,
             failed: rows
                 .iter()
                 .filter(|r| r.outcome == Some(Outcome::Failed))
@@ -520,14 +529,22 @@ impl Placer {
         let id = job.to_owned();
         let rows = self.read(move |c| records::plan(c, &id)).await?;
         // A person confirms an upload's or a find job's plan before
-        // anything of it is kept (배치 확인).
-        let unconfirmed = (facts.origin == UPLOAD || facts.origin == FIND)
+        // anything of it is kept, and a relocation before any copy moves
+        // (배치 확인).
+        let relocation = facts.origin == RELOCATE;
+        let unconfirmed = (facts.origin == UPLOAD || facts.origin == FIND || relocation)
             && facts.placement_confirmed_at.is_none();
         if unconfirmed
             && placement.unanalysed.is_none()
-            && rows.iter().any(|r| r.action != PlanAction::Drop)
+            && (relocation || rows.iter().any(|r| r.action != PlanAction::Drop))
         {
-            let note = confirm_note(&rows);
+            let note = match relocation {
+                true => {
+                    let id = job.to_owned();
+                    self.read(move |c| relocate::waiting_note(c, &id)).await?
+                }
+                false => confirm_note(&rows),
+            };
             let now = self.now();
             self.store.set_stage(job, StepKind::Placement, now).await?;
             self.store
@@ -581,6 +598,13 @@ impl Placer {
         self.end_store_step(job).await?;
         self.link(job, &items).await?;
         self.clear(job).await?;
+        // A relocation takes the copies off their old episodes before it
+        // applies any on the new ones ([`relocate`]); a held removal holds
+        // the rows it touches, and the job once the others are through
+        // ([`Standing::held_removal`]).
+        if relocation {
+            self.relocate(job, &folder).await?;
+        }
 
         let id = job.to_owned();
         let rows = self.read(move |c| records::plan(c, &id)).await?;
@@ -1642,6 +1666,26 @@ impl Placer {
                 .event(job, format!("{}: {note}", row_label(row)), None)
                 .await;
         }
+        // A relocation's stored subtitle a later mapping change put back on
+        // the episode it is applied on is applied there already.
+        if facts.origin == RELOCATE {
+            let (id, episode) = (stored_id.clone(), placed.episode);
+            if let Some(applied) = self
+                .read(move |c| relocate::applied_on(c, &id, episode))
+                .await?
+            {
+                let (id, position, now) = (row.job_id.clone(), row.position, self.now());
+                self.write(move |c| relocate::already_applied(c, &id, position, &applied, now))
+                    .await?;
+                return self
+                    .event(
+                        job,
+                        format!("{}: {}", row_label(row), relocate::ALREADY_APPLIED),
+                        None,
+                    )
+                    .await;
+            }
+        }
         // A replacement to decide or carry out goes on; one that went stale
         // leaves the row to be looked at anew.
         if let Some(plan) = self.live_plan(row).await? {
@@ -1789,6 +1833,40 @@ impl Placer {
         };
         let folder = PathBuf::from(&effect.folder);
         let temp = files::within(&folder, &effect.temp);
+        // A mapping change gave the row another episode since its copy was
+        // made (or the library no longer has the video): nothing is
+        // published, and the job looks at the row again once this run ends.
+        let (work, season, episode) = (
+            facts.work_id.clone().unwrap_or_default(),
+            facts.season.unwrap_or(0),
+            placed.episode,
+        );
+        let (videos, _) = self
+            .read(move |c| records::episode_files(c, &work, season, episode))
+            .await?;
+        if !videos.contains(&video) {
+            let t = temp.clone();
+            if let Err(err) = blocking(move || files::remove_known(&t)).await {
+                let reason = format!("적용할 회차가 바뀌었지만 임시 파일을 지우지 못했어요: {err}");
+                return self.hold_effect(&effect, &reason).await;
+            }
+            let (id, job, now) = (effect.id.clone(), effect.job_id.clone(), self.now());
+            self.write(move |c| {
+                records::end_effect(c, &id, EffectState::Abandoned, None, now)?;
+                relocate::look_again(c, &job, now)
+            })
+            .await?;
+            return self
+                .event(
+                    &effect.job_id,
+                    format!(
+                        "{}: 적용할 회차가 바뀌어 적용하지 않고 다시 살펴봐요",
+                        row_label(&row)
+                    ),
+                    None,
+                )
+                .await;
+        }
         // An added format is published beside the subtitles the episode has:
         // only its own name is taken.
         let only = (row.chosen == Some(Chosen::Add)).then_some(effect.target.as_str());

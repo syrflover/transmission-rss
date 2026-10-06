@@ -9,7 +9,10 @@ use rusqlite::{params, Connection, OptionalExtension, Row, TransactionBehavior};
 use trss_core::Millis;
 
 use crate::{
-    model::{AssetKind, Chosen, EffectKind, EffectState, Outcome, PlanAction, SubtitleFormat},
+    model::{
+        AssetKind, Chosen, EffectKind, EffectState, Outcome, PlanAction, RemovalState,
+        SubtitleFormat,
+    },
     place::episode::{Assignment, Basis},
     store::JobError,
 };
@@ -426,7 +429,8 @@ pub fn withdrawn(
 }
 
 /// The targets in `folder`, lower-cased, of the effects under way (of any
-/// job) but `except`, and the paths a replacement under way takes off:
+/// job) but `except`, and the paths a replacement or a relocation under way
+/// takes off ([`crate::place::relocate`]; `except` may be a removal's ID):
 /// names another effect is about to take or change.
 pub fn busy_targets(
     c: &Connection,
@@ -439,7 +443,10 @@ pub fn busy_targets(
          UNION
          SELECT lower(source) FROM subtitle_file_effects
           WHERE folder = ?1 AND kind = 'remove' AND state IN ('intended', 'prepared', 'set_aside')
-            AND id IS NOT ?2",
+            AND id IS NOT ?2
+         UNION
+         SELECT lower(path) FROM subtitle_relocations
+          WHERE folder = ?1 AND state IN ('intended', 'set_aside') AND id IS NOT ?2",
     )?;
     let rows = stmt.query_map(params![folder, except], |r| r.get::<_, String>(0))?;
     rows.collect()
@@ -839,8 +846,9 @@ pub struct NewApplied {
 }
 
 /// Records the effect's published copy as applied, and the row as
-/// `applied`; the effect is `done`. One synced transaction. Returns the
-/// applied copy's ID.
+/// `applied` on the copy's episode; the effect is `done`. One synced
+/// transaction, which also plans the copy's relocation when the stored
+/// subtitle is on another episode by then. Returns the applied copy's ID.
 pub fn applied(
     c: &mut Connection,
     effect: &Effect,
@@ -885,10 +893,25 @@ pub fn applied(
         )?;
         tx.execute(
             "UPDATE subtitle_job_plan
-                SET outcome = 'applied', applied_id = ?3, note = ?4, updated_at = ?5
+                SET outcome = 'applied', applied_id = ?3, note = ?4, episode = ?6, updated_at = ?5
               WHERE job_id = ?1 AND position = ?2",
-            params![effect.job_id, effect.position, id, note, now],
+            params![effect.job_id, effect.position, id, note, now, copy.episode],
         )?;
+        // A mapping change committed after the run looked at the row's
+        // episode moved the stored subtitle: the copy is on its old episode,
+        // and the source's relocation plans to move it.
+        let moved: Option<String> = tx
+            .query_row(
+                "SELECT source_id FROM subtitle_stored
+                  WHERE id = ?1 AND episode IS NOT ?2 AND assignment = 'mapped'
+                    AND source_id IS NOT NULL",
+                params![copy.stored_id, copy.episode],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if let Some(source) = moved {
+            crate::place::relocate::sync_in(&tx, &copy.work_id, copy.season, &source, now)?;
+        }
         tx.commit()?;
         Ok(id)
     })
@@ -1345,15 +1368,16 @@ fn options_in(
         })
     });
     // The rows that keep it, newest first; a deduplicated file has one in
-    // each job that received it.
+    // each job that received it. A relocation's rows move copies a person
+    // confirmed, so they are not chosen from.
     let rows: Vec<(String, i64, String, Option<String>)> = {
         let mut stmt = c.prepare(
             "SELECT p.job_id, p.position, j.state, j.wait
                FROM subtitle_job_plan p JOIN subtitle_jobs j ON j.id = p.job_id
-              WHERE p.stored_id = ?1 AND p.episode IS NOT NULL
+              WHERE p.stored_id = ?1 AND p.episode IS NOT NULL AND j.origin <> ?2
               ORDER BY p.updated_at DESC, j.seq DESC",
         )?;
-        let found = stmt.query_map([stored_id], |r| {
+        let found = stmt.query_map(params![stored_id, crate::store::RELOCATE], |r| {
             Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
         })?;
         found.collect::<rusqlite::Result<_>>()?
@@ -1441,12 +1465,16 @@ pub fn choose_stored(
             [stored_id],
             |r| r.get(0),
         )?;
+        // The row goes where the stored subtitle is now: a mapping change
+        // may have moved it since the job planned the row.
         tx.execute(
             "UPDATE subtitle_job_plan
                 SET action = 'apply', outcome = NULL, note = NULL, question = NULL,
-                    applied_id = NULL, chosen = ?4, updated_at = ?3
+                    applied_id = NULL, chosen = ?4, updated_at = ?3,
+                    episode = s.episode, assignment = s.assignment, basis = s.basis
+               FROM (SELECT episode, assignment, basis FROM subtitle_stored WHERE id = ?5) AS s
               WHERE job_id = ?1 AND position = ?2",
-            params![job, position, now, mode],
+            params![job, position, now, mode, stored_id],
         )?;
         // The alternatives the job asked about for the episode are kept as
         // they are: this one answers which it takes.
@@ -1511,10 +1539,13 @@ pub enum Confirmed {
 }
 
 /// The rows of `job` a person places at its 배치 확인, and whether it is
-/// the whole plan: an upload's or a find job's subtitles before its first
-/// confirmation, else the rows it asks about (보류한 줄).
+/// the whole plan: an upload's or a find job's subtitles, or a relocation's
+/// rows, before its first confirmation, else the rows it asks about (보류한
+/// 줄).
 pub fn placeable(facts: &JobFacts, rows: &[PlanRow]) -> (Vec<i64>, bool) {
-    let whole = (facts.origin == crate::store::UPLOAD || facts.origin == crate::store::FIND)
+    let whole = (facts.origin == crate::store::UPLOAD
+        || facts.origin == crate::store::FIND
+        || facts.origin == crate::store::RELOCATE)
         && facts.placement_confirmed_at.is_none();
     let positions = rows
         .iter()
@@ -1533,15 +1564,20 @@ pub fn placeable(facts: &JobFacts, rows: &[PlanRow]) -> (Vec<i64>, bool) {
 /// format of the work's order is ([`crate::place::package::placing`]). A
 /// row left on its planned episode keeps what put it there (a mapping's
 /// `mapped`), a row it asked about too; one a person moved, or placed with
-/// no planned episode, is `explicit`. In one synced transaction with its
-/// log line, the rows are written, the job's placement is marked confirmed
-/// and the job queued again. Taken only while the job waits for it: an
-/// upload or a find job waiting for its placement, or a job with rows it
-/// asks about that neither runs, is held nor waits for an approval.
+/// no planned episode, is `explicit`; a row already stored takes its
+/// stored subtitle with it. A relocation ([`crate::place::relocate`]) is
+/// confirmed as planned: each row on its planned episode and applied (every
+/// one of them, the format order aside), and `removals` naming each removal
+/// it plans (another set is a plan the person did not see). In one synced transaction with its log line, the
+/// rows are written, the job's placement is marked confirmed and the job
+/// queued again. Taken only while the job waits for it: an upload, a find
+/// job or a relocation waiting for its placement, or a job with rows it asks
+/// about that neither runs, is held nor waits for an approval.
 pub fn confirm_placement(
     c: &mut Connection,
     job_id: &str,
     placings: &[RowPlacing],
+    removals: &[String],
     total: Option<u32>,
     now: Millis,
 ) -> Result<Confirmed, JobError> {
@@ -1573,7 +1609,31 @@ pub fn confirm_placement(
         if placed != asked {
             return Ok(Confirmed::Stale);
         }
+        let relocation = facts.origin == crate::store::RELOCATE;
+        let mut planned: Vec<String> = match relocation {
+            true => crate::place::relocate::removals(&tx, job_id)?
+                .into_iter()
+                .filter(|r| r.state == RemovalState::Planned)
+                .map(|r| r.id)
+                .collect(),
+            false => Vec::new(),
+        };
+        planned.sort_unstable();
+        let mut named = removals.to_vec();
+        named.sort_unstable();
+        if planned != named {
+            return Ok(Confirmed::Stale);
+        }
         let row_at = |position: i64| rows.iter().find(|r| r.position == position).expect("asked");
+        if relocation
+            && placings.iter().any(|p| {
+                !p.apply || p.episode != row_at(p.position).placed.as_ref().map(|q| q.episode)
+            })
+        {
+            return Ok(Confirmed::Refused(
+                "재배치는 표에 적힌 회차 그대로 확인해요.".to_owned(),
+            ));
+        }
         for p in placings {
             if let Some(episode) = p.episode {
                 if episode < 1 || total.is_some_and(|n| episode > i64::from(n)) {
@@ -1611,23 +1671,28 @@ pub fn confirm_placement(
             Some(work) => format_order(&tx, work)?,
             None => Vec::new(),
         };
-        let decided = match crate::place::package::placing(
-            &placings
-                .iter()
-                .map(|p| {
-                    let row = row_at(p.position);
-                    crate::place::package::Placing {
-                        episode: p.episode,
-                        apply: p.apply,
-                        format: row.format.unwrap_or(SubtitleFormat::Other),
-                        sha256: &row.sha256,
-                    }
-                })
-                .collect::<Vec<_>>(),
-            &order,
-        ) {
-            Ok(decided) => decided,
-            Err(why) => return Ok(Confirmed::Refused(why)),
+        // A relocation applies every row it shows: the copies it moves are
+        // the ones the episodes had, whatever the format order says now.
+        let decided = match relocation {
+            true => placings.iter().map(|_| (PlanAction::Apply, None)).collect(),
+            false => match crate::place::package::placing(
+                &placings
+                    .iter()
+                    .map(|p| {
+                        let row = row_at(p.position);
+                        crate::place::package::Placing {
+                            episode: p.episode,
+                            apply: p.apply,
+                            format: row.format.unwrap_or(SubtitleFormat::Other),
+                            sha256: &row.sha256,
+                        }
+                    })
+                    .collect::<Vec<_>>(),
+                &order,
+            ) {
+                Ok(decided) => decided,
+                Err(why) => return Ok(Confirmed::Refused(why)),
+            },
         };
         let (mut applied, mut stored) = (0, 0);
         for (p, (action, note)) in placings.iter().zip(decided) {
@@ -1664,11 +1729,28 @@ pub fn confirm_placement(
                     now
                 ],
             )?;
+            // A stored row's subtitle goes where the person placed it.
+            if let Some(stored) = &row.stored_id {
+                tx.execute(
+                    "UPDATE subtitle_stored SET episode = ?2, assignment = ?3, basis = ?4
+                      WHERE id = ?1 AND cleaned_at IS NULL",
+                    params![
+                        stored,
+                        p.episode,
+                        assignment.map(Assignment::code),
+                        basis.map(Basis::code)
+                    ],
+                )?;
+            }
         }
         let note = "배치를 확인했어요";
-        let detail = match placings.is_empty() {
-            true => "폰트와 첨부만 보관해요".to_owned(),
-            false => format!("적용 {applied}개 · 보관만 {stored}개"),
+        let detail = match (relocation, placings.is_empty()) {
+            (true, _) => format!(
+                "옛 회차의 적용본 {}개를 지우고 새 회차에 {applied}개를 적용해요",
+                removals.len()
+            ),
+            (false, true) => "폰트와 첨부만 보관해요".to_owned(),
+            (false, false) => format!("적용 {applied}개 · 보관만 {stored}개"),
         };
         tx.execute(
             "UPDATE subtitle_jobs

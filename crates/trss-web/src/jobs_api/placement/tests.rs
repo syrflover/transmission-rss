@@ -283,3 +283,177 @@ async fn an_upload_of_fonts_alone_is_confirmed_with_no_row() {
         (StatusCode::OK, json!({ "applied": 0, "stored": 0 }))
     );
 }
+
+/// The source `src`'s subtitle of Anissia's episode 14, applied on episode 2
+/// under the mapping `−12`, and the mapping changed to `−11`: its relocation
+/// waits for a person. Returns the relocation job.
+async fn waiting_relocation(state: &crate::AppState) -> String {
+    sql(
+        state,
+        "INSERT INTO watch_folders (id, path, created_at) VALUES ('f1', '/media', 1);
+         INSERT INTO works (id, watch_folder_id, dir_name) VALUES ('w1', 'f1', 'Show');
+         INSERT INTO seasons (work_id, number) VALUES ('w1', 1);
+         INSERT INTO episodes (work_id, season, episode) VALUES ('w1', 1, '02'), ('w1', 1, '03');
+         INSERT INTO media_files (work_id, path, season, episode, kind)
+             VALUES ('w1', 'Season 01/Show S01E02.mkv', 1, '02', 'video'),
+                    ('w1', 'Season 01/Show S01E02.ass', 1, '02', 'subtitle'),
+                    ('w1', 'Season 01/Show S01E03.mkv', 1, '03', 'video');
+         INSERT INTO subtitle_sources (id, anime_no, creator_name, created_at)
+             VALUES ('src', 7, '제작자', 0);
+         INSERT INTO subtitle_jobs (id, command_id, request, origin, work_id, season, source_id,
+                                    state, created_at, updated_at, state_at)
+             VALUES ('j0', 'c0', '{}', 'pick', 'w1', 1, 'src', 'done', 0, 0, 0);
+         INSERT INTO subtitle_job_items (id, job_id, position, episode, post_url, found_at, state,
+                                         updated_at)
+             VALUES (1, 'j0', 0, '14', 'https://example.org/p', 0, 'done', 0);
+         INSERT INTO subtitle_packages (id, work_id, job_id, source_kind, created_at)
+             VALUES ('p1', 'w1', 'j0', 'post', 0);
+         INSERT INTO subtitle_job_files (id, job_id, item_id, file_key, name, state, size, sha256,
+                                         created_at, updated_at)
+             VALUES ('f14', 'j0', 1, 'k14', 'Show - 14.ass', 'done', 1, printf('%064d', 14), 0, 0);
+         INSERT INTO subtitle_assets (id, work_id, kind, base, relative_path, byte_size, sha256,
+                                      created_at)
+             VALUES ('a14', 'w1', 'subtitle', 'work', '.trss/subtitles/제작자/Show - 14.ass', 1,
+                     printf('%064d', 14), 0);
+         INSERT INTO subtitle_stored (id, work_id, season, package_id, subtitle_asset_id,
+                                      source_id, anissia_episode, assignment, basis, episode,
+                                      format, creator, stored_at)
+             VALUES ('s14', 'w1', 1, 'p1', 'a14', 'src', '14', 'mapped', 'anissia', 2, 'ass',
+                     '제작자', 0);
+         INSERT INTO subtitle_job_plan (job_id, position, file_id, name, kind, format, size,
+                                        sha256, item_id, anissia_episode, assignment, basis,
+                                        episode, action, stored_id, outcome, updated_at)
+             VALUES ('j0', 0, 'f14', 'Show - 14.ass', 'subtitle', 'ass', 1, printf('%064d', 14), 1,
+                     '14', 'mapped', 'anissia', 2, 'apply', 's14', 'applied', 0);
+         INSERT INTO subtitle_applied (id, work_id, stored_id, season, episode, video_path, path,
+                                       byte_size, sha256, object, job_id, applied_at)
+             VALUES ('ap14', 'w1', 's14', 1, 2, 'Season 01/Show S01E02.mkv',
+                     'Season 01/Show S01E02.ass', 1, printf('%064d', 14), '1:2', 'j0', 0);
+         INSERT INTO subtitle_episode_mappings
+             (work_id, season, source_id, kind, episode_offset, evidence, decided_at)
+             VALUES ('w1', 1, 'src', 'user', -11, '시험', 0);",
+    )
+    .await;
+    let remapped = state
+        .jobs
+        .db()
+        .run(|c| {
+            Ok::<_, trss_core::DbError>(trss_jobs::place::relocate::reevaluate_in(
+                c, "w1", 1, "src", None, 10,
+            )?)
+        })
+        .await
+        .unwrap();
+    assert_eq!(remapped.stored, 1);
+    remapped.relocation.expect("a relocation waits")
+}
+
+#[tokio::test]
+async fn a_relocation_shows_the_copies_it_takes_off_beside_the_rows_it_applies() {
+    let (state, router) = app();
+    let job = waiting_relocation(&state).await;
+
+    let (status, detail) = get(&router, &format!("/api/subtitle-jobs/{job}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(detail["origin"], "relocate");
+    assert_eq!(detail["confirm"]["scope"], "relocate");
+    // Nothing to find, open or receive: the steps it reached.
+    assert_eq!(
+        detail["steps"],
+        json!([{ "step": "placement", "state": "waiting", "at": 10,
+                 "note": "회차 대응이 바뀌어 적용본 1개를 옮길 계획을 확인해 주세요" }])
+    );
+    let position = detail["confirm"]["positions"][0].clone();
+    let row = detail["placements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["position"] == position)
+        .unwrap();
+    assert_eq!(
+        (row["name"].as_str(), row["episode"].as_i64()),
+        (Some("Show - 14.ass"), Some(3))
+    );
+    let relocations = detail["relocations"].as_array().unwrap();
+    assert_eq!(relocations.len(), 1);
+    assert_eq!(
+        (
+            &relocations[0]["episode"],
+            &relocations[0]["path"],
+            &relocations[0]["position"],
+            &relocations[0]["state"],
+            &relocations[0]["reason"],
+        ),
+        (
+            &json!(2),
+            &json!("Season 01/Show S01E02.ass"),
+            &position,
+            &json!("planned"),
+            &Value::Null,
+        )
+    );
+    // One `회차 확인 필요` to-do, naming the subtitle it moves.
+    let (_, todo) = get(&router, "/api/todo").await;
+    let checks: Vec<&Value> = todo["needs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|t| t["kind"] == "placement_check")
+        .collect();
+    assert_eq!(checks.len(), 1);
+    assert_eq!(checks[0]["job_id"], job.as_str());
+    assert_eq!(checks[0]["files"], json!(["Show - 14.ass"]));
+}
+
+#[tokio::test]
+async fn a_relocation_is_confirmed_as_shown_with_its_removals() {
+    let (state, router) = app();
+    let job = waiting_relocation(&state).await;
+    let (_, detail) = get(&router, &format!("/api/subtitle-jobs/{job}")).await;
+    let position = detail["confirm"]["positions"][0].as_i64().unwrap();
+    let removal = detail["relocations"][0]["id"].clone();
+    let uri = format!("/api/subtitle-jobs/{job}/placement");
+
+    // The rows without the removals the table showed.
+    let (status, _) = call(
+        &router,
+        Method::POST,
+        &uri,
+        Some(placing(&[(position, Some(3), true)])),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    // A row moved off its planned episode.
+    let (status, answer) = call(
+        &router,
+        Method::POST,
+        &uri,
+        Some(json!({
+            "rows": [{ "position": position, "episode": 2, "apply": true }],
+            "removals": [removal],
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{answer}");
+    assert_eq!(
+        answer["message"],
+        "재배치는 표에 적힌 회차 그대로 확인해요."
+    );
+
+    let (status, answer) = call(
+        &router,
+        Method::POST,
+        &uri,
+        Some(json!({
+            "rows": [{ "position": position, "episode": 3, "apply": true }],
+            "removals": [removal],
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(answer, json!({ "applied": 1, "stored": 0 }));
+    let (_, detail) = get(&router, &format!("/api/subtitle-jobs/{job}")).await;
+    assert_eq!(detail["state"], "pending");
+    assert_eq!(detail["confirm"], Value::Null);
+    assert_eq!(detail["relocations"][0]["state"], "planned");
+}

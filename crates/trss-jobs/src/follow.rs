@@ -522,6 +522,7 @@ impl Follow {
             .collect();
         let texts: Vec<String> = newest_text.values().map(|c| c.episode.clone()).collect();
         let decided = mapping::decide(&posted, &ground.season(sub.season));
+        let total = ground.season(sub.season).total();
 
         let (mappings, conflicted) = {
             let (work_id, season, source) = (sub.work_id.clone(), sub.season, source_id.clone());
@@ -531,7 +532,17 @@ impl Follow {
                     // meanwhile is not overwritten with the app's, and the
                     // conflicts are the ones of the mapping that stands.
                     let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-                    mapping::store_in(&tx, &work_id, season, &source, &decided, now)?;
+                    let before = mapping::read_in(&tx, &work_id, season)?
+                        .remove(&source)
+                        .map(|m| m.version);
+                    let stored = mapping::store_in(&tx, &work_id, season, &source, &decided, now)?;
+                    // What follows the mapping moves with a change of it
+                    // ([`crate::place::relocate`]).
+                    if before != Some(stored.version) {
+                        crate::place::relocate::reevaluate_in(
+                            &tx, &work_id, season, &source, total, now,
+                        )?;
+                    }
                     let all = mapping::read_in(&tx, &work_id, season)?;
                     let found = match all.get(&source) {
                         Some(stored) => {
@@ -694,7 +705,8 @@ impl Follow {
     }
 
     /// Saves the mapping the user set for a source of the season
-    /// ([`mapping::set_user_in`]).
+    /// ([`mapping::set_user_in`]), moving what follows it within the
+    /// season's episodes.
     pub async fn set_user_mapping(
         &self,
         work_id: &str,
@@ -704,11 +716,16 @@ impl Follow {
         user: mapping::UserMapping,
         now: Millis,
     ) -> Result<mapping::Saved> {
+        let total = self
+            .season_ground(work_id, season)
+            .await?
+            .season(season)
+            .total();
         let (work_id, source_id) = (work_id.to_owned(), source_id.to_owned());
         self.db
             .run(move |c| {
                 Ok::<_, FollowError>(mapping::set_user_in(
-                    c, &work_id, season, &source_id, version, &user, now,
+                    c, &work_id, season, &source_id, version, &user, total, now,
                 )?)
             })
             .await

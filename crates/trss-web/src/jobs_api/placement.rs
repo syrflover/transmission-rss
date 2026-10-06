@@ -12,7 +12,7 @@ use serde_json::json;
 use trss_jobs::{
     model::{JobState, Wait},
     place::records::{Confirmed, PlanRow, RowPlacing},
-    store::JobRow,
+    store::{JobRow, RELOCATE},
 };
 
 use super::{internal, now_millis, ApiError, AppState};
@@ -35,7 +35,9 @@ pub(super) struct EpisodeChoice {
 #[derive(Debug, Serialize)]
 pub(super) struct ConfirmView {
     /// `whole`: an upload's or a find job's plan before anything of it is
-    /// kept; `held`: the rows a job asks about (보류한 줄).
+    /// kept; `relocate`: a relocation's plan before any copy moves, its rows
+    /// and its removals ([`RelocationView`]) confirmed as they are; `held`:
+    /// the rows a job asks about (보류한 줄).
     scope: &'static str,
     /// The plan rows the person places, by position.
     positions: Vec<i64>,
@@ -117,6 +119,7 @@ pub(super) async fn view(
         .collect();
     Ok(Some(ConfirmView {
         scope: match whole {
+            true if row.origin == RELOCATE => "relocate",
             true => "whole",
             false => "held",
         },
@@ -124,6 +127,50 @@ pub(super) async fn view(
         total,
         episodes,
     }))
+}
+
+/// One removal of a relocation job (재배치): an applied copy it takes off
+/// its old episode.
+#[derive(Debug, Serialize)]
+pub(super) struct RelocationView {
+    id: String,
+    /// The row that applies the same stored subtitle on its new episode,
+    /// if the job has one.
+    position: Option<i64>,
+    /// The episode the copy is on, and its path in the work folder.
+    episode: i64,
+    path: String,
+    /// `planned` until the person confirms the relocation; then `intended`,
+    /// `set_aside`, `done` (taken off), `kept` (left where it is) or `held`.
+    state: &'static str,
+    /// Why a `kept` or `held` copy is where it is.
+    reason: Option<String>,
+}
+
+/// The removals of the job: none unless it is a relocation.
+pub(super) async fn relocations(
+    state: &AppState,
+    row: &JobRow,
+) -> Result<Vec<RelocationView>, ApiError> {
+    if row.origin != RELOCATE {
+        return Ok(Vec::new());
+    }
+    let removals = state
+        .jobs
+        .removals(&row.id)
+        .await
+        .map_err(|e| internal(&e))?;
+    Ok(removals
+        .into_iter()
+        .map(|r| RelocationView {
+            id: r.id,
+            position: r.position,
+            episode: r.episode,
+            path: r.path,
+            state: r.state.code(),
+            reason: r.reason,
+        })
+        .collect())
 }
 
 #[derive(Debug, Deserialize)]
@@ -139,6 +186,10 @@ pub(super) struct PlacingRequest {
 pub(super) struct ConfirmRequest {
     /// Every row the table places.
     rows: Vec<PlacingRequest>,
+    /// A relocation's removals the table showed, by `id`: another set is a
+    /// plan the person did not see.
+    #[serde(default)]
+    removals: Vec<String>,
 }
 
 /// `POST /api/subtitle-jobs/{id}/placement`: the person's 배치 확인 of the
@@ -179,7 +230,7 @@ pub(super) async fn confirm(
         .collect();
     let confirmed = state
         .jobs
-        .confirm_placement(&id, placings, total, now_millis())
+        .confirm_placement(&id, placings, request.removals, total, now_millis())
         .await
         .map_err(|e| internal(&e))?;
     match confirmed {

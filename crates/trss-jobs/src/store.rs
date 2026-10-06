@@ -110,6 +110,11 @@ const UPLOAD_POST: &str = "upload:";
 /// browser, starting at a creator's post (`crate::runner`, find jobs).
 pub const FIND: &str = "find";
 
+/// The origin of the job the app makes when a source's episode mapping
+/// changes and moves a subtitle it applied to another episode
+/// ([`crate::place::relocate`]).
+pub const RELOCATE: &str = "relocate";
+
 /// A find job to make: one item for its package, whose post is where the
 /// browser starts.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1157,18 +1162,43 @@ impl JobStore {
     }
 
     /// Applies a person's 배치 확인 of the job
-    /// ([`crate::place::records::confirm_placement`]); `total` is the
+    /// ([`crate::place::records::confirm_placement`]); `removals` are the
+    /// relocation's removals the person was shown, and `total` is the
     /// season's episode count when known.
     pub async fn confirm_placement(
         &self,
         job_id: &str,
         placings: Vec<crate::place::records::RowPlacing>,
+        removals: Vec<String>,
         total: Option<u32>,
         now: Millis,
     ) -> Result<crate::place::records::Confirmed, JobError> {
         let id = job_id.to_owned();
         self.db
-            .run(move |c| crate::place::records::confirm_placement(c, &id, &placings, total, now))
+            .run(move |c| {
+                crate::place::records::confirm_placement(c, &id, &placings, &removals, total, now)
+            })
+            .await
+    }
+
+    /// The relocation's removals of the job, by the episode they take a copy
+    /// off ([`crate::place::relocate::removals`]); none for another job.
+    pub async fn removals(
+        &self,
+        job_id: &str,
+    ) -> Result<Vec<crate::place::relocate::Removal>, JobError> {
+        let id = job_id.to_owned();
+        self.db
+            .run(move |c| Ok(crate::place::relocate::removals(c, &id)?))
+            .await
+    }
+
+    /// What the relocation job came to, for its last note
+    /// ([`crate::place::relocate::outcome_note`]).
+    pub async fn relocation_note(&self, job_id: &str) -> Result<Option<String>, JobError> {
+        let id = job_id.to_owned();
+        self.db
+            .run(move |c| Ok(crate::place::relocate::outcome_note(c, &id)?))
             .await
     }
 
@@ -1505,7 +1535,12 @@ impl JobStore {
     /// counted the plans: a job about to wait for an approval that has an
     /// approved plan, or no plan left to decide, goes back in line instead
     /// ([`DECIDED`]), in the same transaction as the decisions are
-    /// read, so the next run carries them out. Says whether it did.
+    /// read, so the next run carries them out. A job whose plan a mapping
+    /// change rewrote during the run (`remapped_at`) goes back in line too
+    /// ([`crate::place::relocate::REMAPPED`]), unless the run ends it held,
+    /// failed or waiting for anything else than a person's placement, an
+    /// approval or a video. Returns the note it went back in line with, if
+    /// it did.
     pub async fn settle(
         &self,
         job_id: &str,
@@ -1513,7 +1548,7 @@ impl JobStore {
         wait: Option<Wait>,
         note: Option<String>,
         now: Millis,
-    ) -> Result<bool, JobError> {
+    ) -> Result<Option<&'static str>, JobError> {
         let id = job_id.to_owned();
         self.db
             .run(move |c| {
@@ -1528,20 +1563,41 @@ impl JobStore {
                         [&id],
                         |r| r.get::<_, bool>(0),
                     )?;
-                let (state, wait, note) = match decided {
-                    true => (JobState::Pending, None, Some(DECIDED.to_owned())),
-                    false => (state, wait, note),
+                let remapped = matches!(
+                    (state, wait),
+                    (JobState::Done | JobState::Partial, _)
+                        | (
+                            JobState::Waiting,
+                            Some(Wait::Placement | Wait::Approval | Wait::Video)
+                        )
+                ) && tx
+                    .query_row(
+                        "SELECT remapped_at IS NOT NULL FROM subtitle_jobs WHERE id = ?1",
+                        [&id],
+                        |r| r.get::<_, bool>(0),
+                    )
+                    .optional()?
+                    .unwrap_or(false);
+                // A mapping change that left no plan to decide says why.
+                let again = match (decided, remapped) {
+                    (_, true) => Some(crate::place::relocate::REMAPPED),
+                    (true, false) => Some(DECIDED),
+                    (false, false) => None,
+                };
+                let (state, wait, note) = match again {
+                    Some(why) => (JobState::Pending, None, Some(why.to_owned())),
+                    None => (state, wait, note),
                 };
                 let finished = state.is_finished().then_some(now);
                 tx.execute(
                     "UPDATE subtitle_jobs
                      SET state = ?2, wait = ?3, note = ?4, stage = NULL, state_at = ?5,
-                         updated_at = ?5, finished_at = ?6, attempts = 0
+                         updated_at = ?5, finished_at = ?6, attempts = 0, remapped_at = NULL
                      WHERE id = ?1",
                     params![id, state, wait, note, now, finished],
                 )?;
                 tx.commit()?;
-                Ok(decided)
+                Ok(again)
             })
             .await
     }
@@ -1602,6 +1658,16 @@ impl JobStore {
                         "UPDATE subtitle_file_effects SET state = 'held', reason = ?2, updated_at = ?3
                          WHERE id IN (SELECT id FROM ({under_way}))"
                     ),
+                    params![id, note, now],
+                )?;
+                // So are a relocation's removals under way (the copy may be
+                // aside); one not started keeps its copy, which a later
+                // relocation may move.
+                tx.execute(
+                    "UPDATE subtitle_relocations
+                        SET state = CASE state WHEN 'planned' THEN 'kept' ELSE 'held' END,
+                            reason = ?2, updated_at = ?3
+                      WHERE job_id = ?1 AND state IN ('planned', 'intended', 'set_aside')",
                     params![id, note, now],
                 )?;
                 tx.execute(

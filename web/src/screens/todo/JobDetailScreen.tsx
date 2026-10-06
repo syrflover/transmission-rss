@@ -17,6 +17,7 @@ import { BackIcon } from "./icons";
 import { JobAuth } from "./JobAuth";
 import { JobResults, PackageResults } from "./JobResults";
 import { PlacementConfirm } from "./PlacementConfirm";
+import { RelocationConfirm, RelocationResults } from "./RelocationTable";
 import { ReplacementDecisions, ReplacementPaths } from "./Replacement";
 import { cardLayout, openOnes } from "./replacementView";
 import { JobSteps } from "./JobSteps";
@@ -97,7 +98,13 @@ function timeSentence(job: JobRow): string {
     case "partial":
       return `${at} 일부 실패`;
     case "done":
-      return job.origin === "upload" ? `${at} 올림` : job.origin === "find" ? `${at} 끝냄` : `${at} 받음`;
+      return job.origin === "upload"
+        ? `${at} 올림`
+        : job.origin === "find"
+          ? `${at} 끝냄`
+          : job.origin === "relocate"
+            ? `${at} 옮김`
+            : `${at} 받음`;
     default:
       return `${at}부터`;
   }
@@ -193,7 +200,12 @@ function Page({ job, prepare }: { job: JobDetail; prepare: ScreenPrepare }) {
 
       <ReplacementDecisions job={job} />
 
-      {job.confirm !== null && <PlacementConfirm job={job} confirm={job.confirm} />}
+      {job.confirm !== null &&
+        (job.confirm.scope === "relocate" ? (
+          <RelocationConfirm job={job} confirm={job.confirm} />
+        ) : (
+          <PlacementConfirm job={job} confirm={job.confirm} />
+        ))}
 
       {find &&
         (screen !== null ? (
@@ -227,6 +239,12 @@ function Page({ job, prepare }: { job: JobDetail; prepare: ScreenPrepare }) {
             </Part>
           )}
         </>
+      ) : job.origin === "relocate" ? (
+        job.confirm === null && (
+          <Part title="옮긴 적용본">
+            <RelocationResults job={job} />
+          </Part>
+        )
       ) : (
         <Part title="회차별 결과">
           <JobResults items={job.items} placements={job.placements} replacements={job.replacements} />

@@ -15,6 +15,7 @@ mod naver;
 mod place;
 mod placement;
 mod recheck;
+mod relocate;
 mod replace;
 mod replace_many;
 mod runner;

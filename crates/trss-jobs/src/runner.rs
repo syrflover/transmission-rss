@@ -152,7 +152,9 @@ use crate::{
     model::{FileState, ItemState, JobState, StepKind, StepState, Wait},
     place::{Placement, Placer},
     screen::{self, Arrival, ScreenStore},
-    store::{snapshot_json, FileProblem, FileRow, ItemRow, JobError, JobStore, FIND, UPLOAD},
+    store::{
+        snapshot_json, FileProblem, FileRow, ItemRow, JobError, JobStore, FIND, RELOCATE, UPLOAD,
+    },
 };
 
 pub mod find;
@@ -464,12 +466,16 @@ impl Runner {
         let origin = self.store.origin(id).await?;
         let upload = origin.as_deref() == Some(UPLOAD);
         let find = origin.as_deref() == Some(FIND);
+        let relocation = origin.as_deref() == Some(RELOCATE);
         // A find job is received once a person ended it: its one item is
         // done.
         let found = find && items.iter().all(|i| i.state == ItemState::Done);
-        let confirmed = (upload || found) && self.store.placement_confirmed(id).await?;
+        let confirmed =
+            (upload || found || relocation) && self.store.placement_confirmed(id).await?;
         let message = match (resumed, received) {
             (true, _) => "멈췄던 작업을 이어가요",
+            (false, _) if relocation && confirmed => "확인한 재배치로 적용본을 옮겨요",
+            (false, _) if relocation => "재배치 계획을 살펴봐요",
             (false, true) if confirmed => "배치를 확인한 파일을 보관하고 적용해요",
             // An upload or a found package: analysed for a person's
             // 배치 확인.
@@ -507,10 +513,14 @@ impl Runner {
             true => Some(self.store.kept_note(id).await?),
             false => None,
         };
-        let received = self.received(id, kept).await?;
+        let mut received = self.received(id, kept).await?;
         let Some(placement) = self.placer.run(id, cancel).await? else {
             return Ok(false);
         };
+        // A relocation's note says what came of the copies it moved.
+        if relocation {
+            received.note = self.store.relocation_note(id).await?;
+        }
         self.settle(id, received, placement).await?;
         Ok(true)
     }
@@ -2415,7 +2425,18 @@ impl Runner {
             ),
             JobState::Done | JobState::Partial => {
                 let standing = self.placer.standing(job).await?;
-                if let Some(reason) = placement.blocked.or(standing.held) {
+                // A relocation's held removal waits for the rest of the job.
+                let waits = placement.no_folder.is_some()
+                    || standing.questions > 0
+                    || standing.approved > 0
+                    || standing.approvals > 0
+                    || (standing.awaiting_video > 0 && state == JobState::Done);
+                let held = match standing.held_removal.clone() {
+                    Some(_) if waits => None,
+                    Some(reason) => Some(reason),
+                    None => placement.blocked.or(standing.held.clone()),
+                };
+                if let Some(reason) = held {
                     (
                         JobState::Held,
                         None,
@@ -2521,8 +2542,8 @@ impl Runner {
             .settle(job, state, wait, note.clone(), now)
             .await?;
         let (state, message, detail) = match requeued {
-            true => (JobState::Pending, crate::store::DECIDED, None),
-            false => (state, message, detail.or(note)),
+            Some(why) => (JobState::Pending, why, None),
+            None => (state, message, detail.or(note)),
         };
         self.store
             .event(job, message.to_owned(), detail, now)

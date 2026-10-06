@@ -65,6 +65,7 @@ function describe(job: JobRow): string {
     case "partial":
       return "일부 회차는 받았고 일부는 받지 못했어요. 작업 상세에서 회차별 이유를 볼 수 있어요.";
     case "done":
+      if (job.origin === "relocate") return "적용본을 새 회차로 옮겼어요.";
       return job.origin === "upload" || job.origin === "find" ? uploaded(job) : "자막을 모두 받았어요.";
   }
 }

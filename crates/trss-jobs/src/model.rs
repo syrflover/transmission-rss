@@ -230,6 +230,22 @@ codes! {
 }
 
 codes! {
+    /// Where a relocation's removal of an applied copy is (see
+    /// `migrations/jobs/relocation.sql` in `trss-core`).
+    RemovalState {
+        /// Waiting for the person's confirmation of the relocation.
+        Planned = "planned",
+        Intended = "intended",
+        /// The copy is renamed aside, into the work folder's `.trss/tmp/`.
+        SetAside = "set_aside",
+        Done = "done",
+        /// The copy stays where it is (`reason` says why).
+        Kept = "kept",
+        Held = "held",
+    }
+}
+
+codes! {
     /// What a replacement plan does to a path beside the video.
     PathAction {
         Add = "add",
