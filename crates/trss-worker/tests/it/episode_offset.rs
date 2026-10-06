@@ -1794,6 +1794,86 @@ async fn a_file_renamed_before_a_start_was_cut_short_is_recorded_renamed() {
     assert_eq!(s.names(), ["Show S03E25.mkv", "Show S03E26.mkv"]);
 }
 
+impl Scene {
+    /// Rewrites the identities the undo kept as a file system mounted again
+    /// (after the machine restarted) shows the same files: another device
+    /// number, the same inode, size and times.
+    async fn mounted_again(&self) {
+        use trss_core::DbError;
+        self.h
+            .db
+            .run::<_, DbError, _>(|c| {
+                c.execute(
+                    "UPDATE episode_undo_files
+                        SET identity = '999999' || substr(identity, instr(identity, ':'))
+                      WHERE identity IS NOT NULL",
+                    [],
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+    }
+}
+
+/// An undo carried on after a restart that mounted the folder again: the
+/// file Transmission renamed before the start was cut short is recorded
+/// renamed, and the video whose torrent is gone is renamed on disk.
+#[tokio::test]
+async fn an_undo_cut_short_knows_its_videos_whatever_device_number_they_were_mounted_with() {
+    let (s, rule) = Scene::third_season_received().await;
+    s.h.tr.remove(&hash(50));
+    s.undo_cut_short(&rule, "undo-0305-a").await;
+    assert_eq!(s.on_disk(), ["Show S03E02.mkv", "Show S03E25.mkv"]);
+    s.mounted_again().await;
+
+    assert_eq!(
+        s.h.worker()
+            .run_commands(&CancellationToken::new())
+            .await
+            .unwrap(),
+        CommandsOutcome::Ran(1)
+    );
+
+    let view = s.view(&rule).await;
+    assert_eq!(
+        undo_files(&view),
+        [
+            file("Show S03E01.mkv", "Show S03E25.mkv", "renamed"),
+            file("Show S03E02.mkv", "Show S03E26.mkv", "renamed"),
+        ],
+        "{view}"
+    );
+    assert_eq!(s.names(), ["Show S03E25.mkv"]);
+    assert_eq!(s.on_disk(), ["Show S03E25.mkv", "Show S03E26.mkv"]);
+    assert_eq!(
+        fs::read(s.season3().join("Show S03E26.mkv")).unwrap(),
+        b"video 50"
+    );
+}
+
+/// A torrent that waited to finish is renamed by Transmission after a restart
+/// that mounted the folder again: the file at its name is still the one
+/// planned.
+#[tokio::test]
+async fn a_waiting_torrent_is_renamed_whatever_device_number_its_file_was_mounted_with() {
+    let (s, rule) = Scene::third_season_received().await;
+    s.h.tr.unfinish(&hash(50));
+    let command = s.undo(&rule, "undo-0306-a", -48).await;
+    assert_eq!(command["outcome"]["result"], "paused", "{command}");
+
+    s.mounted_again().await;
+    s.h.tr.finish(&hash(50));
+    let command = s.undo(&rule, "undo-0306-b", -48).await;
+
+    assert_eq!(command["outcome"]["result"], "undone", "{command}");
+    assert_eq!(s.names(), ["Show S03E25.mkv", "Show S03E26.mkv"]);
+    assert_eq!(
+        fs::read(s.season3().join("Show S03E26.mkv")).unwrap(),
+        b"video 50"
+    );
+}
+
 /// On a rule that is automatic again (an import marked it so), `되돌리기` is a
 /// new undo of the rule as it is: it does not carry on an older one.
 #[tokio::test]

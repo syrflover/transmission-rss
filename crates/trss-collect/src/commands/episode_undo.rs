@@ -27,7 +27,8 @@
 //!   identity is kept with the plan too.
 //! - **Its torrent is gone** and a file of that name is in the folder that no
 //!   torrent holds: renamed on disk with `RENAME_NOREPLACE`, and only if it is
-//!   still the file planned ([`FileIdentity`]: device, inode, size and times).
+//!   still the file planned ([`FileIdentity::unchanged`]: inode, size and
+//!   times).
 //!   An RSS title without an extension (which takes its torrent's otherwise)
 //!   takes the one of the video of its name in the folder; when videos of
 //!   that name have more than one extension, the item's is not known and the
@@ -49,12 +50,16 @@
 //!
 //! Transmission renames by name, whatever file is there, so right before it
 //! the torrent must be finished (not downloading or verifying), still in the
-//! folder, and the file at its name must be the one planned (same device and
-//! inode); otherwise it keeps its name with the reason. A name another
-//! torrent lists in the folder is not taken either, even while its file is
-//! missing or still being written: Transmission would write that torrent's
-//! file there. Nor is a file another torrent lists too ([`SHARED`]):
-//! Transmission would move it from under that torrent.
+//! folder, and the file at its name must be the one planned (same inode:
+//! [`FileIdentity::same_file`]); otherwise it keeps its name with the reason.
+//! A name another torrent lists in the folder is not taken either, even while
+//! its file is missing or still being written: Transmission would write that
+//! torrent's file there. Nor is a file another torrent lists too
+//! ([`SHARED`]): Transmission would move it from under that torrent.
+//!
+//! The file planned is known by its inode, never by its device number: an
+//! undo may be carried on after a restart, and a file system mounted again
+//! may give the same file another device number (user decision, 2026-10-07).
 //!
 //! The undo's own names overlap when the values differ by less than the
 //! numbers it renames (`−36` back to `−24`: `S03E01` becomes `S03E13`, which
@@ -955,7 +960,7 @@ async fn rename(
         return Ok(Some(MISSING.to_owned()));
     };
     match identity_at(&source) {
-        Ok(Some(now)) if now == planned => {}
+        Ok(Some(now)) if now.unchanged(&planned) => {}
         Ok(Some(_)) => return Ok(Some(FILE_CHANGED.to_owned())),
         Ok(None) => {
             // An earlier start renamed it and stopped before recording it.
@@ -1049,6 +1054,10 @@ mod tests {
         assert_eq!(new_name(None, Some(other), &planned), NewName::Changed);
         assert_eq!(new_name(None, None, &planned), NewName::Changed);
         assert_eq!(new_name(Some(other), None, &planned), NewName::Changed);
+        // The same files after the folder was mounted again (a restart).
+        let remounted = FileIdentity::parse("2:10:5:1.0:2.0").unwrap();
+        assert_eq!(new_name(None, Some(remounted), &planned), NewName::Done);
+        assert_eq!(new_name(Some(remounted), None, &planned), NewName::Back);
     }
 
     #[test]
