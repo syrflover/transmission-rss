@@ -536,17 +536,18 @@ impl ArtworkStore {
             .await
     }
 
-    /// Records the staged file's identity, which the rename to the published
-    /// path keeps.
+    /// Records the staged file's identity (device, inode, birth time), which
+    /// the rename to the published path keeps.
     pub async fn file_identity(
         &self,
         relative_path: &str,
         dev: u64,
         ino: u64,
+        born_ns: Option<i64>,
     ) -> Result<(), ArtworkError> {
         let r = relative_path.to_owned();
         self.db
-            .run(move |c| Ok(repo::file_identity(c, &r, dev, ino)?))
+            .run(move |c| Ok(repo::file_identity(c, &r, dev, ino, born_ns)?))
             .await
     }
 
