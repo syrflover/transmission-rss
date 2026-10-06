@@ -1605,6 +1605,7 @@ async fn a_start_cut_short_carries_on_and_checks_each_file_again() {
     s.revision_row(&rule, "Show - 50", "Show S03E02.mkv", true)
         .await;
     gate.release_all();
+    s.h.wait_lock_free().await;
     assert_eq!(
         s.h.worker()
             .run_commands(&CancellationToken::new())
@@ -1682,19 +1683,7 @@ impl Scene {
         task.abort();
         let _ = task.await;
         gate.release_all();
-        // The stopped worker lets go of its lock between processes only after
-        // its last heartbeat, in a task of its own; the next worker of these
-        // tests is another process to it and finds the lock taken until then.
-        let lock = trss_core::lock_path_for(&self.h.db_path());
-        let mut free = false;
-        for _ in 0..1000 {
-            if trss_core::CycleLock::try_acquire(&lock).unwrap().is_some() {
-                free = true;
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-        assert!(free, "the stopped worker never let go of its lock");
+        self.h.wait_lock_free().await;
         assert_eq!(self.rule(rule).await.episode, -24);
     }
 
