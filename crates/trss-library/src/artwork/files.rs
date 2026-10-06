@@ -9,8 +9,8 @@
 //!
 //! 1. The file is recorded in `artwork_files` (`staging`) before it exists.
 //! 2. The verified bytes are written to a new file in `artwork/.staging/`
-//!    (created exclusively, flushed), and its identity (device, inode, and
-//!    birth time when the file system keeps one) is recorded.
+//!    (created exclusively, flushed), and its identity (`st_dev`, `st_ino`)
+//!    is recorded.
 //! 3. It is renamed to its published name with `RENAME_NOREPLACE`, which
 //!    never replaces a file and keeps the identity. A name that is taken is
 //!    left alone ([`PublishError::Occupied`]).
@@ -46,15 +46,17 @@
 //! publish left: the staged file and a published file no selection took, again
 //! only by recorded identity.
 //!
-//! A recorded file is known by its inode and birth time, not by its device
-//! number: a file system mounted again may give the same file another one
-//! (btrfs numbers its devices at each mount; on the dev PC an unchanged file
-//! went from 47 to 46 after a reboot), and the app's own files would then be
-//! taken for someone else's and left on the disk for good. A record without a
-//! birth time (the file system keeps none, or the record is older than the
-//! birth time's) is known by its inode alone. The identities of the referenced
-//! paths are read under the same mount as the file, so there the device
-//! number still tells files apart.
+//! A recorded file is known by its inode alone, not by its device number: a
+//! file system mounted again may give the same file another one (btrfs numbers
+//! its devices at each mount; on the dev PC an unchanged file went from 47 to
+//! 46 after a reboot), and the app's own files would then be taken for someone
+//! else's and left on the disk for good. No birth time is recorded either, as
+//! `trss_jobs::area::same_object` compares none: the image builds for musl,
+//! where the standard library reads none. A different file that happens to get
+//! the same inode number at the app's own name is then taken for the app's,
+//! and it is still removed only when nothing refers to it. The identities of
+//! the referenced paths are read under the same mount as the file, so there
+//! the device number still tells files apart.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -66,7 +68,7 @@ use std::{
         atomic::{AtomicUsize, Ordering},
         Mutex,
     },
-    time::{Duration, UNIX_EPOCH},
+    time::Duration,
 };
 
 use bytes::Bytes;
@@ -147,16 +149,8 @@ fn ensure_dir(root: &Path, rel: &str) -> io::Result<()> {
     Ok(())
 }
 
-/// A file's birth time in nanoseconds since the Unix epoch, when its file
-/// system keeps one.
-pub(crate) fn born_ns(meta: &fs::Metadata) -> Option<i64> {
-    let born = meta.created().ok()?.duration_since(UNIX_EPOCH).ok()?;
-    i64::try_from(born.as_nanos()).ok()
-}
-
-/// Writes `bytes` to a new file at `staging` and returns its identity:
-/// device, inode and birth time.
-fn write_staged(root: &Path, staging: &str, bytes: &[u8]) -> io::Result<(u64, u64, Option<i64>)> {
+/// Writes `bytes` to a new file at `staging` and returns its identity.
+fn write_staged(root: &Path, staging: &str, bytes: &[u8]) -> io::Result<(u64, u64)> {
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -167,7 +161,7 @@ fn write_staged(root: &Path, staging: &str, bytes: &[u8]) -> io::Result<(u64, u6
     file.set_permissions(fs::Permissions::from_mode(0o644))?;
     file.sync_all()?;
     let meta = file.metadata()?;
-    Ok((meta.dev(), meta.ino(), born_ns(&meta)))
+    Ok((meta.dev(), meta.ino()))
 }
 
 /// Publishes `bytes` (already verified as `format`) under a new app-made name.
@@ -198,14 +192,14 @@ pub(crate) async fn publish_at(
     store.reserve_file(target, staging, now).await?;
     let root = app.root.clone();
     let staging_owned = staging.to_owned();
-    let staged = tokio::task::spawn_blocking(move || -> io::Result<(u64, u64, Option<i64>)> {
+    let staged = tokio::task::spawn_blocking(move || -> io::Result<(u64, u64)> {
         ensure_dir(&root, ARTWORK_DIR)?;
         ensure_dir(&root, STAGING_DIR)?;
         write_staged(&root, &staging_owned, &bytes)
     })
     .await
     .map_err(|e| io::Error::other(e.to_string()))?;
-    let (dev, ino, born) = match staged {
+    let (dev, ino) = match staged {
         Ok(identity) => identity,
         Err(e) => {
             // The file was not made (create_new failed) or is half-written;
@@ -215,7 +209,7 @@ pub(crate) async fn publish_at(
             return Err(e.into());
         }
     };
-    store.file_identity(target, dev, ino, born).await?;
+    store.file_identity(target, dev, ino).await?;
 
     let renamed = rename_noreplace(&app.root.join(staging), &app.root.join(target));
     if let Err(e) = renamed {
@@ -503,14 +497,11 @@ enum Found {
 }
 
 /// What the entry at `path` is to `file`'s record, which knows it by its
-/// inode and birth time, or by its inode alone when it has no birth time (see
-/// the module docs).
+/// inode alone (see the module docs).
 fn found_at(path: &Path, file: &FileRow) -> io::Result<Found> {
     match fs::symlink_metadata(path) {
         Ok(meta) => {
-            let ours = meta.file_type().is_file()
-                && Some(meta.ino()) == file.ino
-                && file.born_ns.is_none_or(|born| born_ns(&meta) == Some(born));
+            let ours = meta.file_type().is_file() && Some(meta.ino()) == file.ino;
             Ok(if ours {
                 Found::Ours((meta.dev(), meta.ino()))
             } else {

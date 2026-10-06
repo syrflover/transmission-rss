@@ -183,8 +183,6 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("../migrations/jobs/unpack_retry.sql")),
     // 62: a video a person is asked about, its size and time as the scan saw it, and the person's `확인함` on it
     Migration::Sql(include_str!("../migrations/library/video_check.sql")),
-    // 63: the birth time of an image file the app made, which knows it after a remount gives it another device number
-    Migration::Sql(include_str!("../migrations/artwork/born.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]

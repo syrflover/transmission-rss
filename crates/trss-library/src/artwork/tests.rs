@@ -958,12 +958,7 @@ async fn an_interrupted_publish_is_finished_by_the_files_identity() {
     use std::os::unix::fs::MetadataExt;
     env.art
         .store
-        .file_identity(
-            "artwork/y.png",
-            meta.dev(),
-            meta.ino(),
-            files::born_ns(&meta),
-        )
+        .file_identity("artwork/y.png", meta.dev(), meta.ino())
         .await
         .unwrap();
     // Stopped before its identity was recorded: the staged file cannot be told
@@ -1507,38 +1502,26 @@ async fn a_file_is_the_apps_own_whatever_device_number_it_was_mounted_with() {
     assert!(!env.path(&path_d).exists());
     assert!(env.path("artwork/alias.jpg").exists());
 
-    // The same inode with another birth time is another file (a number the
-    // file system gave again): left alone, and no longer the app's.
+    // Another file put at the app's own name has another inode: left alone,
+    // and no longer the app's to remove.
     let vd = env.selection("D").await.version;
     let sd = env.art.upload(&d, vd, samples::png(), None).await.unwrap();
-    let reused = image_of(&sd).relative_path.clone();
-    // The row's birth time, `None` without a row.
-    let born = |path: String| {
-        env.art.store.run(move |c| {
-            Ok(crate::store::artwork::files_of_state(c, "published")?
-                .into_iter()
-                .find(|r| r.relative_path == path)
-                .map(|r| r.born_ns))
-        })
-    };
-    // (A file system that keeps no birth time knows the file by its inode
-    // alone; then this case cannot be told and is not checked.)
-    let kept_birth = matches!(born(reused.clone()).await.unwrap(), Some(Some(_)));
-    if kept_birth {
-        env.sql(
-            "UPDATE artwork_files SET born_ns = born_ns + 1 WHERE relative_path = ?1",
-            reused.clone(),
-        )
-        .await;
-        remount(&env).await;
-        clear(d.clone()).await;
-        assert!(env.path(&reused).exists());
-        assert_eq!(born(reused.clone()).await.unwrap(), None, "the row is gone");
-        fs::remove_file(env.path(&reused)).unwrap();
-    }
+    let replaced = image_of(&sd).relative_path.clone();
+    fs::write(env.path("artwork/other.tmp"), b"someone else's").unwrap();
+    fs::rename(env.path("artwork/other.tmp"), env.path(&replaced)).unwrap();
+    remount(&env).await;
+    clear(d.clone()).await;
+    assert_eq!(fs::read(env.path(&replaced)).unwrap(), b"someone else's");
+    let published = env
+        .art
+        .store
+        .run(|c| Ok(crate::store::artwork::files_of_state(c, "published")?))
+        .await
+        .unwrap();
+    assert!(published.iter().all(|r| r.relative_path != replaced));
+    fs::remove_file(env.path(&replaced)).unwrap();
 
-    // Publishes interrupted before the reboot are finished after it, the
-    // staged one recorded before birth times were (by its inode alone).
+    // Publishes interrupted before the reboot are finished after it.
     let app = AppData::new(env.dir.path());
     files::publish_at(
         &app,
@@ -1560,7 +1543,7 @@ async fn a_file_is_the_apps_own_whatever_device_number_it_was_mounted_with() {
     use std::os::unix::fs::MetadataExt;
     env.art
         .store
-        .file_identity("artwork/y.png", meta.dev(), meta.ino(), None)
+        .file_identity("artwork/y.png", meta.dev(), meta.ino())
         .await
         .unwrap();
     remount(&env).await;
@@ -1569,32 +1552,6 @@ async fn a_file_is_the_apps_own_whatever_device_number_it_was_mounted_with() {
     env.art.tidy().await;
     assert_eq!(env.files(), ["alias.jpg"]);
     assert!(env.staging().is_empty());
-}
-
-#[tokio::test]
-async fn a_file_recorded_before_birth_times_is_known_by_its_inode_after_a_remount() {
-    use std::os::unix::fs::MetadataExt;
-    let dir = tempfile::tempdir().unwrap();
-    let app = AppData::new(dir.path());
-    fs::create_dir_all(dir.path().join(ARTWORK_DIR)).unwrap();
-    let path = dir.path().join("artwork/old.png");
-    fs::write(&path, samples::png()).unwrap();
-    let meta = fs::metadata(&path).unwrap();
-    {
-        // Migration 63 records birth times; this build's 62 did not.
-        let conn = trss_core::db::database_at(&dir.path().join("trss.db"), 62);
-        conn.execute(
-            "INSERT INTO artwork_files (relative_path, staging_path, state, dev, ino, created_at)
-             VALUES ('artwork/old.png', 'artwork/.staging/old.tmp', 'published', ?1, ?2, 1)",
-            rusqlite::params![meta.dev() as i64 + 1, meta.ino() as i64],
-        )
-        .unwrap();
-    }
-    let db = Db::open(dir.path().join("trss.db")).await.unwrap();
-    let store = crate::store::artwork::ArtworkStore::new(db);
-    let cleaned = files::cleanup(&app, &store).await.unwrap();
-    assert_eq!((cleaned.removed, cleaned.forgotten), (1, 0));
-    assert!(!path.exists());
 }
 
 // --- missing images ------------------------------------------------------------------------
