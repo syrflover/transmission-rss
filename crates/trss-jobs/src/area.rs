@@ -200,30 +200,28 @@ pub fn name_candidates(name: &str) -> impl Iterator<Item = String> + '_ {
     std::iter::once(name.to_owned()).chain((2..).map(move |n| format!("{stem} ({n}){ext}")))
 }
 
-/// What names a file on its file system: `<device>:<inode>`, and its birth
-/// time when the file system keeps one (`:<ns>`), so a number reused by a
-/// later file does not pass for the first. A recorded object is compared
-/// with a file found later by [`same_object`].
+/// What names a file on its file system: `<device>:<inode>`. A recorded
+/// object is compared with a file found later by [`same_object`].
+///
+/// No birth time: the image's build (musl) cannot read one, as the standard
+/// library asks for it only through glibc. Records an earlier glibc build
+/// made may still carry one after the inode (`:<ns>`).
 pub fn object_of(meta: &std::fs::Metadata) -> String {
-    let born = meta
-        .created()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok());
-    match born {
-        Some(born) => format!("{}:{}:{}", meta.dev(), meta.ino(), born.as_nanos()),
-        None => format!("{}:{}", meta.dev(), meta.ino()),
-    }
+    format!("{}:{}", meta.dev(), meta.ino())
 }
 
-/// Whether two objects ([`object_of`]) name the same file: the same inode
-/// and birth time. The device number is left out: a file system mounted
-/// again may give the same file another one (btrfs numbers its devices at
-/// each mount), and a record made before a restart would then name no file.
+/// Whether two objects ([`object_of`]) name the same file: the same inode.
+/// The device number is left out: a file system mounted again may give the
+/// same file another one (btrfs numbers its devices at each mount), and a
+/// record made before a restart would then name no file. A recorded birth
+/// time is left out too. A later file that reuses the inode passes for the
+/// first; where that matters the callers compare the bytes, or the video's
+/// length and change time, as well.
 pub fn same_object(a: &str, b: &str) -> bool {
-    fn file(object: &str) -> &str {
-        object.split_once(':').map_or(object, |(_, file)| file)
+    fn inode(object: &str) -> Option<&str> {
+        object.split(':').nth(1)
     }
-    file(a) == file(b)
+    inode(a).is_some() && inode(a) == inode(b)
 }
 
 /// A regular file's length, SHA-256 (lower-case hex) and object, read whole.
@@ -329,22 +327,31 @@ mod tests {
     }
 
     #[test]
+    fn an_object_is_the_file_s_device_and_inode() {
+        // No birth time, though the file system keeps one: the image's musl
+        // build cannot read it, and the tests run what it records.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.ass");
+        std::fs::write(&path, b"a").unwrap();
+        let meta = std::fs::metadata(&path).unwrap();
+        assert_eq!(object_of(&meta), format!("{}:{}", meta.dev(), meta.ino()));
+    }
+
+    #[test]
     fn an_object_is_the_same_file_whatever_its_device_number() {
         // The same file after its file system was mounted again.
+        assert!(same_object("47:8716384", "46:8716384"));
+        // A record a build that read birth times made is the file of its inode.
+        assert!(same_object("47:8716384:1759700000123456789", "46:8716384"));
         assert!(same_object(
             "47:8716384:1759700000123456789",
-            "46:8716384:1759700000123456789"
+            "46:8716384:1759800000000000000"
         ));
-        assert!(same_object("47:8716384", "46:8716384"));
-        // Another inode, or the same inode reused by a later file.
-        assert!(!same_object(
-            "47:8716384:1759700000123456789",
-            "47:8716385:1759700000123456789"
-        ));
-        assert!(!same_object(
-            "47:8716384:1759700000123456789",
-            "47:8716384:1759800000000000000"
-        ));
-        assert!(!same_object("47:8716384", "47:8716384:1759700000123456789"));
+        // Another inode.
+        assert!(!same_object("47:8716384", "47:8716385"));
+        assert!(!same_object("47:8716384:1759700000123456789", "47:8716385"));
+        // What names no inode is no file.
+        assert!(!same_object("", ""));
+        assert!(!same_object("8716384", "8716384"));
     }
 }

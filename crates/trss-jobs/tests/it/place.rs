@@ -759,7 +759,7 @@ async fn a_prepared_store_is_published_and_one_already_renamed_is_found_by_its_o
 }
 
 /// `object` as a file system mounted again (after the machine restarted)
-/// shows the same file: another device number, the same inode and birth time.
+/// shows the same file: another device number, the same inode.
 fn renumbered(object: &str) -> String {
     format!("999999{}", &object[object.find(':').unwrap()..])
 }

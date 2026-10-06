@@ -561,8 +561,7 @@ async fn the_existing_subtitle_changed_to_other_bytes_of_its_size_asks_to_compar
 }
 
 /// A recorded object as a file system mounted again (after the machine
-/// restarted) shows the same file: another device number, the same inode and
-/// birth time.
+/// restarted) shows the same file: another device number, the same inode.
 fn renumbered(column: &str) -> String {
     format!("'999999' || substr({column}, instr({column}, ':'))")
 }

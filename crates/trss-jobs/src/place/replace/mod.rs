@@ -41,8 +41,8 @@
 //! Each run looks at an open plan again ([`Placer::changed`]): one whose
 //! evidence no longer holds goes `stale` and the row's next plan is made, so
 //! the person compares again. A file is still the one the plan saw by its
-//! inode and birth time ([`same_object`]), not its device number, which a
-//! machine restarted meanwhile may have changed.
+//! inode ([`same_object`]), not its device number, which a machine restarted
+//! meanwhile may have changed.
 //!
 //! # Carrying out
 //!
