@@ -7,7 +7,8 @@
 //! app's: a value outside them is refused and nothing is saved.
 //!
 //! A work may order the formats its own way ([`WorkFormatOrder`]); the work's
-//! subtitles write that, the settings list the works that have one.
+//! subtitles write that ([`SettingsStore::put_work_format_order`]), the
+//! settings list the works that have one.
 
 use std::{fmt, ops::RangeInclusive};
 
@@ -212,6 +213,90 @@ impl SettingsStore {
                 let stored = read_policy(&tx)?;
                 tx.commit()?;
                 Ok(stored)
+            })
+            .await
+    }
+
+    /// The work's own format order, `None` when it has none (or is no work).
+    pub async fn work_format_order(
+        &self,
+        work_id: &str,
+    ) -> Result<Option<FormatOrder>, SettingsError> {
+        let work = work_id.to_owned();
+        self.db
+            .run(move |c| {
+                let stored: Option<String> = c
+                    .query_row(
+                        "SELECT format_order FROM work_subtitle_policy WHERE work_id = ?1",
+                        [work],
+                        |r| r.get(0),
+                    )
+                    .optional()?;
+                stored
+                    .map(|text| {
+                        FormatOrder::parse_stored(&text)
+                            .ok_or(SettingsError::Invalid("a stored format order is not one"))
+                    })
+                    .transpose()
+            })
+            .await
+    }
+
+    /// Gives the work its own format order, replacing the one it had, and
+    /// puts it first of the works that have one. `false` when there is no such
+    /// work, which nothing was written for.
+    pub async fn put_work_format_order(
+        &self,
+        work_id: &str,
+        format_order: FormatOrder,
+        now: Millis,
+    ) -> Result<bool, SettingsError> {
+        let work = work_id.to_owned();
+        self.db
+            .run(move |c| {
+                let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                let known: i64 =
+                    tx.query_row("SELECT count(*) FROM works WHERE id = ?1", [&work], |r| {
+                        r.get(0)
+                    })?;
+                if known == 0 {
+                    return Ok(false);
+                }
+                tx.execute(
+                    "INSERT INTO work_subtitle_policy (work_id, format_order, updated_at)
+                     VALUES (?1, ?2, ?3)
+                     ON CONFLICT (work_id) DO UPDATE SET
+                         format_order = excluded.format_order,
+                         updated_at = excluded.updated_at",
+                    params![work, format_order.to_string(), now],
+                )?;
+                tx.commit()?;
+                Ok(true)
+            })
+            .await
+    }
+
+    /// Takes the work's own format order away, so it follows the common
+    /// policy again. `false` when there is no such work; a work with no order
+    /// of its own is left as it is.
+    pub async fn delete_work_format_order(&self, work_id: &str) -> Result<bool, SettingsError> {
+        let work = work_id.to_owned();
+        self.db
+            .run(move |c| {
+                let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                let known: i64 =
+                    tx.query_row("SELECT count(*) FROM works WHERE id = ?1", [&work], |r| {
+                        r.get(0)
+                    })?;
+                if known == 0 {
+                    return Ok(false);
+                }
+                tx.execute(
+                    "DELETE FROM work_subtitle_policy WHERE work_id = ?1",
+                    [&work],
+                )?;
+                tx.commit()?;
+                Ok(true)
             })
             .await
     }

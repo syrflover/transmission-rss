@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
 import { cn } from "@/lib/utils";
 import { dateTime } from "@/lib/time";
@@ -18,6 +18,7 @@ import type { Candidate } from "../api";
 import { candidatesOf } from "./candidates";
 import { candidateNote, EpisodePicks, type EpisodeCandidateSource } from "./EpisodeCandidates";
 import { SubtitleFiles } from "./SubtitleCreators";
+import { applyOutcome, formatText } from "./subtitles.ts";
 
 /**
  * One kind of file of an episode: `영상 ✓` or `자막 −`. The label is the same
@@ -137,9 +138,10 @@ function VersionLine({ revision }: { revision: EpisodeRevision }) {
   );
 }
 
-const STORED_FORMAT: Record<StoredSubtitle["format"], string> = { ass: "ASS", srt: "SRT", smi: "SMI", other: "그 밖의 형식" };
-
-/** A stored subtitle shown on an episode with none: applying it is the job's that stored it. */
+/**
+ * A stored subtitle on an episode: applying it is the job's that stored it. On an episode with a subtitle
+ * (`compare`) the job compares the two first, so the button says `교체 비교` and the job's page opens.
+ */
 function StoredLine({
   workId,
   stored,
@@ -151,20 +153,26 @@ function StoredLine({
   hasVideo: boolean;
   onApplied: () => Promise<void>;
 }) {
+  const navigate = useNavigate();
   const [phase, setPhase] = useState<{ kind: "idle" } | { kind: "sending" } | { kind: "sent"; job: string } | { kind: "error"; text: string }>({
     kind: "idle",
   });
   const apply = async () => {
     setPhase({ kind: "sending" });
     try {
-      const { job_id } = await applyStored(workId, stored.id);
-      setPhase({ kind: "sent", job: job_id });
+      const outcome = applyOutcome(await applyStored(workId, stored.id));
+      // The episode has a subtitle: the job compares and waits for `교체 승인` in its own page.
+      if (outcome.kind === "compare") {
+        navigate(jobPath(outcome.job));
+        return;
+      }
+      setPhase({ kind: "sent", job: outcome.job });
       await onApplied();
     } catch (e) {
       setPhase({ kind: "error", text: e instanceof ApiError ? e.message : "적용을 요청하지 못했어요." });
     }
   };
-  const facts = [stored.creator ?? "제작자 알 수 없음", STORED_FORMAT[stored.format], `${dateTime(stored.stored_at)} 받음`];
+  const facts = [stored.creator ?? "제작자 알 수 없음", formatText(stored.format), `${dateTime(stored.stored_at)} 받음`];
   return (
     <span className="flex flex-col gap-1">
       <span title={stored.name} className="font-mono text-[12px] break-all">
@@ -192,7 +200,7 @@ function StoredLine({
             disabled={phase.kind === "sending"}
             className="inline-flex min-h-7 items-center rounded-md border border-hairline px-2.5 text-[12.5px] font-semibold text-text-primary hover:bg-surface-2 focus-visible:outline-2 focus-visible:outline-focus disabled:opacity-60 max-[720px]:min-h-9"
           >
-            {phase.kind === "sending" ? "요청하는 중…" : "적용"}
+            {phase.kind === "sending" ? "요청하는 중…" : stored.compare ? "교체 비교" : "적용"}
           </button>
           {phase.kind === "error" && (
             <span role="alert" className="text-xs text-urgent">
@@ -211,7 +219,7 @@ function StoredLine({
  * the job applies it by itself once the video comes.
  */
 function AwaitingLine({ stored }: { stored: StoredSubtitle }) {
-  const facts = [stored.creator ?? "제작자 알 수 없음", STORED_FORMAT[stored.format], `${dateTime(stored.stored_at)} 받음`];
+  const facts = [stored.creator ?? "제작자 알 수 없음", formatText(stored.format), `${dateTime(stored.stored_at)} 받음`];
   return (
     <span className="flex flex-col gap-1">
       <span title={stored.name} className="font-mono text-[12px] break-all">

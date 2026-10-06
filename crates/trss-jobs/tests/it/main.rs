@@ -6,6 +6,7 @@
 
 mod airtime_sample;
 mod blogger;
+mod choose;
 mod cleanup;
 mod drive_fonts;
 mod find;

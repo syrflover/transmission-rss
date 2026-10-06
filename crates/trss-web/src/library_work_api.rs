@@ -24,7 +24,7 @@
 //!       "revision": { "from": "v1", "to": "v2", "replaced_at": 1760000200000 },
 //!       "failure": null,
 //!       "stored": [{ "id": "…", "name": "Show - 02.ass", "creator": "하느", "format": "ass",
-//!                    "stored_at": 1760000300000, "can_apply": true,
+//!                    "stored_at": 1760000300000, "can_apply": true, "compare": false,
 //!                    "awaiting_video": false, "approval_job": null }]
 //!     }]
 //!   }],
@@ -36,6 +36,19 @@
 //!     "match": "Lycoris", "directory": "Lycoris Recoil/Season 01",
 //!     "save_path": "/media/anime/Lycoris Recoil/Season 01", "state": "active"
 //!   }],
+//!   "subtitles": {
+//!     "format_order": { "order": ["srt", "ass", "smi"], "own": true },
+//!     "creators": [{
+//!       "creator": "하느",
+//!       "copies": [{
+//!         "id": "…", "season": 1, "episode": "02", "name": "Show - 02.ass", "format": "ass",
+//!         "stored_at": 1760000300000,
+//!         "stored_path": ".trss/subtitles/하느/Show - 02.ass",
+//!         "applied": [{ "path": "Season 01/Show S01E02.ass", "applied_at": 1760000400000 }],
+//!         "choice": null, "can_add": false, "blocked": null
+//!       }]
+//!     }]
+//!   },
 //!   "storage": {
 //!     "total": 1843200,
 //!     "cleanable": [{
@@ -86,13 +99,44 @@
 //!   person to approve replacing the episode's subtitle with it (`교체
 //!   승인`, [`trss_jobs::place::replace`]), whose detail compares the two.
 //!   An episode with only such subtitles has a row of its own with no files.
-//! - `POST /api/library/works/{id}/stored/{stored_id}/apply` applies one: the
-//!   job that stored it applies it beside the episode's video, as its first
-//!   apply does, and the worker is woken. `202` `{ "job_id" }`; `404` for a
-//!   stored subtitle that is not the work's; `409` (`conflict`, no `current`)
-//!   with why not in `message` (an episode with a subtitle, whose change is a
-//!   replacement's; a format the app does not apply; a job that runs or is
-//!   held). `trss_jobs::place::records::choose_stored` has the rules.
+//! - `POST /api/library/works/{id}/stored/{stored_id}/apply` asks the job that
+//!   stored a subtitle to apply it, as its first apply does, and the worker is
+//!   woken. The body is optional: `{ "mode": "apply" | "add" }`, and none or an
+//!   empty one is `apply` (the episode row's `적용`). `apply` puts it beside the
+//!   episode's video, or, when the episode has a subtitle, makes the job compare
+//!   it and wait for `교체 승인`; `add` puts the same creator's other format
+//!   beside the applied copies and takes none off, which only an episode with
+//!   an applied copy of that creator and none of the format accepts; a
+//!   subtitle the library recorded at the name it takes makes the job compare
+//!   too. `202` `{ "job_id", "compare" }`, `compare` being whether the person
+//!   compares first; `400` for another mode or an unreadable body; `404` for a stored
+//!   subtitle that is not the work's; `409` (`conflict`, no `current`) with why
+//!   not in `message` (a format the app does not apply; one applied already; an
+//!   add that is not the creator's other format; a job that runs, is held or
+//!   waits for an approval). `trss_jobs::place::records::choose_stored` has the
+//!   rules. `can_apply` of an episode's `stored` is the first two of them and a
+//!   job's record, and `compare` whether the episode has a subtitle.
+//! - `subtitles` is the work's `자막` card. `format_order` is the order the
+//!   work's first apply takes the formats in and `own` whether the work has
+//!   its own (`false`: the common policy's). `creators` are the work's stored
+//!   subtitles on an episode that were not cleaned, by `creator` (`null` is
+//!   `제작자 알 수 없음`, last; the others by name), a creator's copies by
+//!   season, episode and then newest stored first. `episode` is written as
+//!   an episode's row is. `stored_path` is the stored file and `applied`
+//!   its copies beside a video (`path`, `applied_at`), each relative to the
+//!   work folder; `applied` is empty for a copy not applied. `choice` is what
+//!   choosing it does (`POST …/apply` with no mode): `apply` for an episode with
+//!   no subtitle, `compare` for one with a subtitle, and `null` for the copy that
+//!   is applied and for one that cannot be chosen, whose `blocked` says why (as
+//!   the `409` would). `can_add` is whether `add` would be accepted.
+//! - `PUT /api/library/works/{id}/subtitle-order` with
+//!   `{ "format_order": ["srt", "ass", "smi"] }` gives the work its own order,
+//!   which its next first apply and format choice use; `DELETE` takes it away.
+//!   `200` `{ "order", "own" }`: the order as it is now, and whether the work
+//!   has its own. `400` with a sentence for an order that does not name `ass`,
+//!   `srt` and `smi` once each; `404` for a work that is not in the library.
+//!   The settings' list of works with an order of their own
+//!   ([`super::policy_api`]) follows.
 //! - `storage` is the work's stored files (보관 파일의 정리,
 //!   [`trss_jobs::place::cleanup`] has the rules). `total` is the length in
 //!   bytes of the files the app keeps for the work and has not removed
@@ -166,9 +210,10 @@
 use std::{collections::HashMap, path::Path as FsPath};
 
 use axum::{
+    body::Bytes,
     extract::{rejection::JsonRejection, Path, State},
     http::StatusCode,
-    routing::{get, post},
+    routing::{get, post, put},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -188,6 +233,7 @@ use trss_collect::{
     rss::save_path,
     store::{channels::ChannelWithRules, revisions::Revision},
 };
+use trss_core::settings::policy::FormatOrder;
 use trss_jobs::place::cleanup;
 use trss_library::store::{
     artwork::JobKind,
@@ -207,6 +253,10 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/library/works/{id}/stored/{stored_id}/clean",
             post(clean_stored),
+        )
+        .route(
+            "/library/works/{id}/subtitle-order",
+            put(put_order).delete(delete_order),
         )
         .route("/library/storage", get(storage))
 }
@@ -285,6 +335,8 @@ struct StoredView {
     /// The job that waits for a person to approve replacing the episode's
     /// subtitle with it (`교체 승인`), whose detail compares the two.
     approval_job: Option<String>,
+    /// The episode has a subtitle: `적용` opens a comparison first.
+    compare: bool,
 }
 
 impl From<trss_jobs::place::records::StoredOnly> for StoredView {
@@ -298,6 +350,7 @@ impl From<trss_jobs::place::records::StoredOnly> for StoredView {
             stored_at: stored.stored_at,
             awaiting_video: stored.awaiting_video,
             approval_job: stored.awaiting_approval,
+            compare: stored.compare,
         }
     }
 }
@@ -397,6 +450,108 @@ struct WorkDetailView {
     cover_url: Option<String>,
     cover_pending: bool,
     storage: StorageView,
+    subtitles: SubtitlesView,
+}
+
+/// The work's `자막` card: the format order its first apply uses and the
+/// stored subtitles by creator.
+#[derive(Serialize)]
+struct SubtitlesView {
+    format_order: FormatOrderView,
+    creators: Vec<CreatorCopies>,
+}
+
+/// An order of the three formats, and whether the work has its own.
+#[derive(Serialize)]
+struct FormatOrderView {
+    order: Vec<&'static str>,
+    own: bool,
+}
+
+/// The stored subtitles of one creator (`null`: `제작자 알 수 없음`).
+#[derive(Serialize)]
+struct CreatorCopies {
+    creator: Option<String>,
+    copies: Vec<CopyView>,
+}
+
+/// A stored subtitle of an episode, and what a person can ask of it.
+#[derive(Serialize)]
+struct CopyView {
+    id: String,
+    season: u32,
+    /// As the library writes the episode (`02`).
+    episode: String,
+    name: String,
+    /// `ass`, `srt`, `smi` or `other`.
+    format: &'static str,
+    stored_at: i64,
+    /// Relative to the work folder.
+    stored_path: String,
+    applied: Vec<AppliedView>,
+    /// What choosing it does: `apply` it now (the episode has no subtitle) or
+    /// `compare` it with the episode's first. `null` for the applied copy and
+    /// for one that cannot be chosen (`blocked` says why).
+    choice: Option<&'static str>,
+    /// Whether it can be added beside the applied copies of its creator.
+    can_add: bool,
+    blocked: Option<&'static str>,
+}
+
+#[derive(Serialize)]
+struct AppliedView {
+    /// Relative to the work folder.
+    path: String,
+    applied_at: i64,
+}
+
+/// The stored subtitles by creator: creators by name (none last), a
+/// creator's copies by season, episode and then newest stored first.
+fn creators_of(copies: Vec<trss_jobs::place::records::StoredCopy>) -> Vec<CreatorCopies> {
+    let mut groups: Vec<CreatorCopies> = Vec::new();
+    for copy in copies {
+        let view = CopyView {
+            id: copy.id,
+            season: copy.season,
+            episode: format!("{:02}", copy.episode),
+            name: copy.name,
+            format: copy.format.code(),
+            stored_at: copy.stored_at,
+            stored_path: copy.stored_path,
+            applied: copy
+                .applied
+                .into_iter()
+                .map(|a| AppliedView {
+                    path: a.path,
+                    applied_at: a.applied_at,
+                })
+                .collect(),
+            choice: match (&copy.options.apply, copy.options.applied) {
+                (_, true) | (Err(_), _) => None,
+                (Ok(true), _) => Some("compare"),
+                (Ok(false), _) => Some("apply"),
+            },
+            can_add: copy.options.add.is_ok(),
+            blocked: match (&copy.options.apply, copy.options.applied) {
+                (Err(reason), false) => Some(*reason),
+                _ => None,
+            },
+        };
+        match groups.iter_mut().find(|g| g.creator == copy.creator) {
+            Some(group) => group.copies.push(view),
+            None => groups.push(CreatorCopies {
+                creator: copy.creator,
+                copies: vec![view],
+            }),
+        }
+    }
+    groups.sort_by(|a, b| match (&a.creator, &b.creator) {
+        (Some(a), Some(b)) => a.cmp(b),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    });
+    groups
 }
 
 /// The work's stored files and their cleanup.
@@ -813,6 +968,29 @@ async fn show(
         .work_files(&work.id)
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let copies = state
+        .jobs
+        .work_copies(&work.id)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let order = state
+        .jobs
+        .format_order(&work.id)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let own = state
+        .settings
+        .work_format_order(&work.id)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .is_some();
+    let subtitles = SubtitlesView {
+        format_order: FormatOrderView {
+            order: order.iter().map(|f| f.code()).collect(),
+            own,
+        },
+        creators: creators_of(copies),
+    };
     Ok(Json(WorkDetailView {
         id: work.id,
         name: work.dir_name,
@@ -840,31 +1018,56 @@ async fn show(
         cover_url,
         cover_pending,
         storage: StorageView::from(files),
+        subtitles,
     }))
 }
 
 #[derive(Serialize)]
 struct Applying {
     job_id: String,
+    /// The job plans a replacement: the person compares before anything
+    /// beside the video changes (`교체 승인`).
+    compare: bool,
 }
+
+/// How to apply it: `apply` (the default) or `add`.
+#[derive(Deserialize)]
+struct ApplyBody {
+    mode: Option<String>,
+}
+
+const BAD_MODE: &str = "적용 방식을 읽지 못했어요. 화면을 새로고침한 뒤 다시 시도해 주세요.";
 
 async fn apply_stored(
     State(state): State<AppState>,
     Path((id, stored_id)): Path<(String, String)>,
+    body: Bytes,
 ) -> Result<(StatusCode, Json<Applying>), ApiError> {
-    use trss_jobs::place::records::StoredChoice;
+    use trss_jobs::{model::Chosen, place::records::StoredChoice};
+    // No body, or an empty one, is `apply`.
+    let mode = match body.iter().all(u8::is_ascii_whitespace) {
+        true => Chosen::Apply,
+        false => {
+            let ApplyBody { mode } =
+                serde_json::from_slice(&body).map_err(|_| ApiError::invalid(BAD_MODE))?;
+            match mode.as_deref() {
+                None => Chosen::Apply,
+                Some(code) => Chosen::parse(code).ok_or_else(|| ApiError::invalid(BAD_MODE))?,
+            }
+        }
+    };
     let now = super::commands_api::now_millis();
     match state
         .jobs
-        .choose_stored(&id, &stored_id, now)
+        .choose_stored(&id, &stored_id, mode, now)
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?
     {
-        StoredChoice::Queued(job_id) => {
+        StoredChoice::Queued { job_id, compare } => {
             if let Some(path) = &state.worker_wake {
                 trss_core::wake::wake_worker(path);
             }
-            Ok((StatusCode::ACCEPTED, Json(Applying { job_id })))
+            Ok((StatusCode::ACCEPTED, Json(Applying { job_id, compare })))
         }
         StoredChoice::NotFound => Err(ApiError::not_found("이 보관본을 찾지 못했어요.")),
         StoredChoice::Refused(message) => Err(ApiError::Conflict {
@@ -872,6 +1075,70 @@ async fn apply_stored(
             current: None,
         }),
     }
+}
+
+/// The order the work's first apply takes the formats in.
+#[derive(Serialize)]
+struct OrderView {
+    order: Vec<&'static str>,
+    /// Whether the work has its own order (`false`: the common policy's).
+    own: bool,
+}
+
+#[derive(Deserialize)]
+struct OrderBody {
+    format_order: Vec<String>,
+}
+
+async fn put_order(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    parsed: Result<Json<OrderBody>, JsonRejection>,
+) -> Result<Json<OrderView>, ApiError> {
+    let Json(body) = parsed.map_err(|_| ApiError::invalid(BAD_BODY))?;
+    let Some(order) = FormatOrder::from_codes(&body.format_order) else {
+        return Err(ApiError::invalid(
+            "자막 형식 순서에는 ASS·SRT·SMI가 한 번씩 있어야 해요.",
+        ));
+    };
+    let known = state
+        .settings
+        .put_work_format_order(&id, order, super::commands_api::now_millis())
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    match known {
+        true => Ok(Json(OrderView {
+            order: order.formats().iter().map(|f| f.code()).collect(),
+            own: true,
+        })),
+        false => Err(ApiError::not_found("이 작품을 찾지 못했어요.")),
+    }
+}
+
+/// The work follows the common policy again.
+async fn delete_order(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<OrderView>, ApiError> {
+    let internal = |e: trss_core::settings::SettingsError| ApiError::Internal(e.to_string());
+    if !state
+        .settings
+        .delete_work_format_order(&id)
+        .await
+        .map_err(internal)?
+    {
+        return Err(ApiError::not_found("이 작품을 찾지 못했어요."));
+    }
+    let common = state.settings.policy().await.map_err(internal)?;
+    Ok(Json(OrderView {
+        order: common
+            .format_order
+            .formats()
+            .iter()
+            .map(|f| f.code())
+            .collect(),
+        own: false,
+    }))
 }
 
 /// The files the dialog showed would go with the stored subtitle.

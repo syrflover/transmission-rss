@@ -340,6 +340,9 @@ async fn an_episode_lists_its_stored_only_subtitles_and_one_is_applied_on_reques
     assert_eq!(of("02")["stored"][0]["name"], "Show - 02.ass");
     assert_eq!(of("02")["stored"][0]["creator"], "하느");
     assert_eq!(of("02")["stored"][0]["can_apply"], true);
+    // Applying it is a comparison where the episode has a subtitle.
+    assert_eq!(of("01")["stored"][0]["compare"], true);
+    assert_eq!(of("02")["stored"][0]["compare"], false);
     // An episode with stored subtitles only has a row with no files.
     assert_eq!(of("05")["video"], serde_json::json!([]));
     assert_eq!(of("05")["stored"][0]["id"], "s5");
@@ -351,7 +354,10 @@ async fn an_episode_lists_its_stored_only_subtitles_and_one_is_applied_on_reques
 
     let (status, body) = post(&state, &format!("/library/works/{id}/stored/s2/apply")).await;
     assert_eq!(status, StatusCode::ACCEPTED, "{body}");
-    assert_eq!(body["job_id"], "j1");
+    assert_eq!(
+        (body["job_id"].as_str(), body["compare"].as_bool()),
+        (Some("j1"), Some(false))
+    );
     let plan = state.jobs.plan("j1").await.unwrap();
     let row = plan
         .iter()
@@ -362,11 +368,14 @@ async fn an_episode_lists_its_stored_only_subtitles_and_one_is_applied_on_reques
     let job = state.jobs.detail("j1").await.unwrap().unwrap();
     assert_eq!(job.row.state, trss_jobs::JobState::Pending);
 
-    // An episode with a subtitle is a replacement's, and an unknown stored
-    // subtitle is no one's.
+    // An episode with a subtitle is a replacement the person compares, and an
+    // unknown stored subtitle is no one's.
     let (status, body) = post(&state, &format!("/library/works/{id}/stored/s1/apply")).await;
-    assert_eq!(status, StatusCode::CONFLICT, "{body}");
-    assert!(body["message"].as_str().unwrap().contains("자막이 있어요"));
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    assert_eq!(
+        (body["job_id"].as_str(), body["compare"].as_bool()),
+        (Some("j1"), Some(true))
+    );
     let (status, _) = post(&state, &format!("/library/works/{id}/stored/nope/apply")).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     let (status, _) = post(&state, "/library/works/other/stored/s5/apply").await;
@@ -749,4 +758,592 @@ async fn nothing_is_cleaned_where_the_work_folder_has_no_stored_subtitles_folder
     .await;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
     assert_eq!(body["message"], trss_jobs::place::cleanup::FOLDER_AWAY);
+}
+
+async fn send(
+    state: &AppState,
+    method: Method,
+    uri: &str,
+    body: Option<&str>,
+) -> (StatusCode, Value) {
+    let mut request = Request::builder().method(method).uri(uri);
+    if body.is_some() {
+        request = request.header("content-type", "application/json");
+    }
+    let request = request
+        .body(Body::from(body.unwrap_or_default().to_owned()))
+        .unwrap();
+    let response = api::router()
+        .with_state(state.clone())
+        .oneshot(request)
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+/// What a person chose of the stored subtitle's row.
+async fn chosen_of(state: &AppState, stored: &str) -> Option<trss_jobs::model::Chosen> {
+    state
+        .jobs
+        .plan("j1")
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|r| r.stored_id.as_deref() == Some(stored))
+        .unwrap()
+        .chosen
+}
+
+#[tokio::test]
+async fn a_stored_subtitle_is_chosen_with_a_mode_and_a_bad_one_changes_nothing() {
+    use trss_jobs::model::Chosen;
+    let (state, id) = state_with_work().await;
+    // Episode 1 has a subtitle, 2 has a video only, 5 has no file.
+    stored_only(&state, &id, &[1, 2, 5]).await;
+    let apply = |stored: &str| format!("/library/works/{id}/stored/{stored}/apply");
+
+    // A mode that is none, or a body that is not one, is refused.
+    for body in [
+        r#"{"mode":"replace"}"#,
+        r#"{"mode":3}"#,
+        "mode=add",
+        "[]",
+        r#"{"mode":""}"#,
+    ] {
+        let (status, refused) = send(&state, Method::POST, &apply("s1"), Some(body)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}: {refused}");
+        assert!(refused["message"].as_str().is_some_and(|m| !m.is_empty()));
+    }
+    assert_eq!(chosen_of(&state, "s1").await, None);
+    assert_eq!(
+        state.jobs.detail("j1").await.unwrap().unwrap().row.state,
+        trss_jobs::JobState::Done
+    );
+
+    // `apply` by name, by `{}` and by no body at all.
+    let (status, body) = send(
+        &state,
+        Method::POST,
+        &apply("s1"),
+        Some(r#"{"mode":"apply"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    assert_eq!(body["compare"], true);
+    assert_eq!(chosen_of(&state, "s1").await, Some(Chosen::Apply));
+    let (status, body) = send(&state, Method::POST, &apply("s2"), Some("{}")).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    assert_eq!(body["compare"], false);
+    let (status, body) = send(&state, Method::POST, &apply("s5"), None).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    assert_eq!(body["compare"], false);
+    assert_eq!(chosen_of(&state, "s5").await, Some(Chosen::Apply));
+
+    // Nothing of those episodes is applied, so there is nothing to add to.
+    let (status, body) = send(
+        &state,
+        Method::POST,
+        &apply("s2"),
+        Some(r#"{"mode":"add"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(
+        body["message"],
+        "추가로 적용할 수 있는 것은 이 회차에 적용한 제작자의 다른 형식이에요."
+    );
+    let (status, _) = send(
+        &state,
+        Method::POST,
+        &apply("nope"),
+        Some(r#"{"mode":"add"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// More stored subtitles on [`stored_only`]'s episode 2, beside an applied
+/// copy of `s2` (`Season 01/S01E02.ass`): `s2s` (the same creator's SRT), `x2`
+/// (another creator's ASS), `n2` (an ASS of no creator) and `o2` (a format the
+/// app does not apply), each received by job `j1`.
+async fn more_on_episode_two(state: &AppState, work: &str) {
+    let work = work.to_owned();
+    state
+        .jobs
+        .db()
+        .run(move |c| {
+            c.execute_batch(&format!(
+                "INSERT INTO subtitle_applied (id, work_id, stored_id, season, episode, video_path,
+                                               path, byte_size, sha256, object, job_id, applied_at)
+                     VALUES ('ap2', '{work}', 's2', 1, 2, 'Season 01/S01E02.mkv',
+                             'Season 01/S01E02.ass', 1, printf('%064d', 2), '1:2', 'j1', 400);"
+            ))?;
+            let more = [
+                ("s2s", "srt", "하느", "Show - 02.srt", 7),
+                ("x2", "ass", "가나", "Show - 02 [x].ass", 9),
+                ("n2", "ass", "", "Show - 02 [n].ass", 8),
+                ("o2", "ssa", "하느", "Show - 02.ssa", 6),
+            ];
+            for (position, (id, format, creator, name, at)) in more.iter().enumerate() {
+                let (position, sha) = (position + 10, format!("{:064}", position + 10));
+                let creator = match creator.is_empty() {
+                    true => "NULL".to_owned(),
+                    false => format!("'{creator}'"),
+                };
+                let format = if *format == "ssa" { "other" } else { format };
+                c.execute_batch(&format!(
+                    "INSERT INTO subtitle_job_files (id, job_id, item_id, file_key, name, state,
+                                                     size, sha256, created_at, updated_at)
+                         VALUES ('f{id}', 'j1', 1, 'k{id}', '{name}', 'done', 1, '{sha}', 0, 0);
+                     INSERT INTO subtitle_assets (id, work_id, kind, base, relative_path,
+                                                  byte_size, sha256, created_at)
+                         VALUES ('a{id}', '{work}', 'subtitle', 'work',
+                                 '.trss/subtitles/x/{name}', 1, '{sha}', 0);
+                     INSERT INTO subtitle_stored (id, work_id, season, package_id,
+                                                  subtitle_asset_id, assignment, episode, format,
+                                                  creator, stored_at)
+                         VALUES ('{id}', '{work}', 1, 'p1', 'a{id}', 'explicit', 2, '{format}',
+                                 {creator}, {at});
+                     INSERT INTO subtitle_job_plan (job_id, position, file_id, name, kind, format,
+                                                    size, sha256, item_id, assignment, episode,
+                                                    action, stored_id, outcome, note, updated_at)
+                         VALUES ('j1', {position}, 'f{id}', '{name}', 'subtitle', '{format}',
+                                 1, '{sha}', 1, 'explicit', 2, 'store', '{id}', 'stored',
+                                 '고르지 않은 회차라 보관만 해요', 0);"
+                ))?;
+            }
+            Ok::<_, trss_jobs::JobError>(())
+        })
+        .await
+        .unwrap();
+}
+
+/// A copy of the card's creators by its `id`.
+fn copy<'a>(body: &'a Value, id: &str) -> &'a Value {
+    body["subtitles"]["creators"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|c| c["copies"].as_array().unwrap())
+        .find(|c| c["id"] == id)
+        .unwrap_or_else(|| panic!("no copy {id}"))
+}
+
+#[tokio::test]
+async fn the_subtitles_card_groups_stored_copies_by_creator_with_what_choosing_each_does() {
+    let (state, id) = state_with_work().await;
+    // Episode 1 has a subtitle file, 2 an applied copy, 5 nothing.
+    stored_only(&state, &id, &[1, 2, 5]).await;
+    more_on_episode_two(&state, &id).await;
+    let uri = format!("/library/works/{id}");
+    let (status, body) = get(&state, &uri).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let card = &body["subtitles"];
+    assert_eq!(
+        card["format_order"],
+        serde_json::json!({ "order": ["ass", "srt", "smi"], "own": false })
+    );
+
+    // Creators by name, the one with no name last; copies by season, episode
+    // and then the newest stored.
+    let creators: Vec<&Value> = card["creators"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| &c["creator"])
+        .collect();
+    assert_eq!(
+        creators,
+        [&Value::from("가나"), &Value::from("하느"), &Value::Null]
+    );
+    let ids = |creator: usize| -> Vec<&str> {
+        card["creators"][creator]["copies"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["id"].as_str().unwrap())
+            .collect()
+    };
+    assert_eq!(ids(0), ["x2"]);
+    assert_eq!(ids(1), ["s1", "s2s", "o2", "s2", "s5"]);
+    assert_eq!(ids(2), ["n2"]);
+
+    // The applied copy: where it is, and nothing to choose.
+    let applied = copy(&body, "s2");
+    assert_eq!(applied["season"], 1);
+    assert_eq!(applied["episode"], "02");
+    assert_eq!(applied["name"], "Show - 02.ass");
+    assert_eq!(applied["format"], "ass");
+    assert_eq!(applied["stored_at"], 2);
+    assert_eq!(applied["stored_path"], ".trss/subtitles/하느/Show - 02.ass");
+    assert_eq!(
+        applied["applied"],
+        serde_json::json!([{ "path": "Season 01/S01E02.ass", "applied_at": 400 }])
+    );
+    assert_eq!(
+        (&applied["choice"], &applied["can_add"], &applied["blocked"]),
+        (&Value::Null, &Value::Bool(false), &Value::Null)
+    );
+    // The creator's SRT on the episode with an applied copy: compared, and
+    // added beside it.
+    let srt = copy(&body, "s2s");
+    assert_eq!(srt["applied"], serde_json::json!([]));
+    assert_eq!(
+        (&srt["choice"], &srt["can_add"], &srt["blocked"]),
+        (&Value::from("compare"), &Value::Bool(true), &Value::Null)
+    );
+    // Another creator's, and one of no creator: compared, never added.
+    for other in ["x2", "n2"] {
+        let c = copy(&body, other);
+        assert_eq!(
+            (&c["choice"], &c["can_add"], &c["blocked"]),
+            (&Value::from("compare"), &Value::Bool(false), &Value::Null),
+            "{other}"
+        );
+    }
+    // An episode with a subtitle file, and one with none.
+    assert_eq!(copy(&body, "s1")["choice"], "compare");
+    assert_eq!(copy(&body, "s5")["choice"], "apply");
+    assert_eq!(copy(&body, "s5")["can_add"], false);
+    // A format the app does not apply says why.
+    let other = copy(&body, "o2");
+    assert_eq!(other["format"], "other");
+    assert_eq!(other["choice"], Value::Null);
+    assert_eq!(other["can_add"], false);
+    assert_eq!(
+        other["blocked"],
+        "자동으로 적용하지 않는 형식이라 적용할 수 없어요."
+    );
+
+    // Every job running: nothing but the applied copy is blocked on it.
+    state
+        .jobs
+        .db()
+        .run(|c| {
+            c.execute("UPDATE subtitle_jobs SET state = 'running'", [])?;
+            Ok::<_, trss_jobs::JobError>(())
+        })
+        .await
+        .unwrap();
+    let (_, busy) = get(&state, &uri).await;
+    for id in ["s1", "s2s", "s5", "x2", "n2"] {
+        let c = copy(&busy, id);
+        assert_eq!(c["choice"], Value::Null, "{id}");
+        assert_eq!(c["can_add"], false, "{id}");
+        assert_eq!(
+            c["blocked"], "이 보관본을 받은 작업이 진행 중이에요. 끝난 뒤에 다시 적용해 주세요.",
+            "{id}"
+        );
+    }
+    assert_eq!(copy(&busy, "s2")["blocked"], Value::Null);
+
+    // A copy a person cleaned is not on the card.
+    state
+        .jobs
+        .db()
+        .run(|c| {
+            c.execute(
+                "UPDATE subtitle_stored SET cleaned_at = 5 WHERE id = 's5'",
+                [],
+            )?;
+            Ok::<_, trss_jobs::JobError>(())
+        })
+        .await
+        .unwrap();
+    let (_, cleaned) = get(&state, &uri).await;
+    let listed = cleaned["subtitles"]["creators"][1]["copies"]
+        .as_array()
+        .unwrap();
+    assert!(listed.iter().all(|c| c["id"] != "s5"));
+}
+
+#[tokio::test]
+async fn the_creators_other_format_is_added_beside_the_applied_copy_on_request() {
+    use trss_jobs::model::Chosen;
+    let (state, id) = state_with_work().await;
+    stored_only(&state, &id, &[2]).await;
+    more_on_episode_two(&state, &id).await;
+    let apply = |stored: &str| format!("/library/works/{id}/stored/{stored}/apply");
+    // Another creator's copy and one of the format applied already: no add.
+    for refused in ["x2", "n2"] {
+        let (status, body) = send(
+            &state,
+            Method::POST,
+            &apply(refused),
+            Some(r#"{"mode":"add"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{refused}: {body}");
+    }
+    assert_eq!(chosen_of(&state, "x2").await, None);
+    let (status, body) = send(
+        &state,
+        Method::POST,
+        &apply("s2s"),
+        Some(r#"{"mode":"add"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    assert_eq!(
+        (body["job_id"].as_str(), body["compare"].as_bool()),
+        (Some("j1"), Some(false))
+    );
+    assert_eq!(chosen_of(&state, "s2s").await, Some(Chosen::Add));
+    // A subtitle the library recorded at the name the SRT takes: the job
+    // plans its replacement, which the person compares.
+    let work = id.clone();
+    state
+        .jobs
+        .db()
+        .run(move |c| {
+            c.execute(
+                "INSERT INTO media_files (work_id, path, season, episode, kind)
+                     VALUES (?1, 'Season 01/S01E02.srt', 1, '02', 'subtitle')",
+                [work],
+            )
+            .map_err(trss_core::DbError::from)
+        })
+        .await
+        .unwrap();
+    let (status, body) = send(
+        &state,
+        Method::POST,
+        &apply("s2s"),
+        Some(r#"{"mode":"add"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    assert_eq!(body["compare"], true);
+    // The same request, as a replacement the person compares.
+    let (status, body) = send(
+        &state,
+        Method::POST,
+        &apply("x2"),
+        Some(r#"{"mode":"apply"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    assert_eq!(body["compare"], true);
+    assert_eq!(chosen_of(&state, "x2").await, Some(Chosen::Apply));
+}
+
+/// A state with watch folder `/c` holding two works: `Lycoris Recoil` and
+/// `Show`.
+async fn state_with_two_works() -> (AppState, String, String) {
+    let state = state();
+    let show = ScannedWork {
+        dir_name: "Show".into(),
+        seasons: BTreeSet::from([1]),
+        files: vec![file(1, "01", "S01E01.mkv", FileKind::Video)],
+        unrecognized: vec![],
+    };
+    state
+        .library
+        .add_folder(
+            "/c".into(),
+            Scan {
+                works: vec![WorkRead::Read(lycoris()), WorkRead::Read(show)],
+            },
+            100,
+            &[],
+        )
+        .await
+        .unwrap();
+    let works = state.library.overview().await.unwrap();
+    let id = |name: &str| {
+        works
+            .iter()
+            .find(|w| w.dir_name == name)
+            .unwrap()
+            .id
+            .clone()
+    };
+    (state.clone(), id("Lycoris Recoil"), id("Show"))
+}
+
+#[tokio::test]
+async fn a_works_own_format_order_is_set_listed_in_the_policy_and_taken_away() {
+    let (state, lycoris, show) = state_with_two_works().await;
+    let order_uri = |work: &str| format!("/library/works/{work}/subtitle-order");
+    let orders = |body: &Value| -> Vec<(String, Value)> {
+        body["overrides"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|o| {
+                (
+                    o["name"].as_str().unwrap().to_owned(),
+                    o["format_order"].clone(),
+                )
+            })
+            .collect()
+    };
+    let (_, policy) = get(&state, "/settings/policy").await;
+    assert!(orders(&policy).is_empty());
+
+    // A work's own order, which the screens and the settings list show.
+    let (status, body) = send(
+        &state,
+        Method::PUT,
+        &order_uri(&lycoris),
+        Some(r#"{"format_order":["srt","ass","smi"]}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body,
+        serde_json::json!({ "order": ["srt", "ass", "smi"], "own": true })
+    );
+    let (_, policy) = get(&state, "/settings/policy").await;
+    assert_eq!(
+        orders(&policy),
+        [(
+            "Lycoris Recoil".to_owned(),
+            serde_json::json!(["srt", "ass", "smi"])
+        )]
+    );
+    let (_, detail) = get(&state, &format!("/library/works/{lycoris}")).await;
+    assert_eq!(
+        detail["subtitles"]["format_order"],
+        serde_json::json!({ "order": ["srt", "ass", "smi"], "own": true })
+    );
+    // Another work keeps the common order.
+    let (_, other) = get(&state, &format!("/library/works/{show}")).await;
+    assert_eq!(
+        other["subtitles"]["format_order"],
+        serde_json::json!({ "order": ["ass", "srt", "smi"], "own": false })
+    );
+
+    // A format twice, one missing, one unknown and a body that is none are
+    // refused with a sentence, and the order stays.
+    for bad in [
+        r#"{"format_order":["srt","srt","smi"]}"#,
+        r#"{"format_order":["srt","ass"]}"#,
+        r#"{"format_order":["srt","ass","smi","ass"]}"#,
+        r#"{"format_order":["srt","ass","ssa"]}"#,
+        r#"{"format_order":"srt,ass,smi"}"#,
+        r#"{}"#,
+    ] {
+        let (status, refused) = send(&state, Method::PUT, &order_uri(&lycoris), Some(bad)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}: {refused}");
+        assert!(
+            refused["message"].as_str().is_some_and(|m| !m.is_empty()),
+            "{bad}"
+        );
+    }
+    let (_, policy) = get(&state, "/settings/policy").await;
+    assert_eq!(
+        orders(&policy),
+        [(
+            "Lycoris Recoil".to_owned(),
+            serde_json::json!(["srt", "ass", "smi"])
+        )]
+    );
+
+    // The work saved last is first of the settings' list; saving again
+    // replaces the order. The handlers read the wall clock, so the orders
+    // saved so far are set back before each save: two saves within one
+    // millisecond would tie.
+    let set_back = || async {
+        state
+            .jobs
+            .db()
+            .run(|c| {
+                c.execute(
+                    "UPDATE work_subtitle_policy SET updated_at = updated_at - 1000",
+                    [],
+                )
+                .map_err(trss_core::DbError::from)
+            })
+            .await
+            .unwrap();
+    };
+    set_back().await;
+    let (status, _) = send(
+        &state,
+        Method::PUT,
+        &order_uri(&show),
+        Some(r#"{"format_order":["smi","srt","ass"]}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, policy) = get(&state, "/settings/policy").await;
+    assert_eq!(
+        orders(&policy)
+            .iter()
+            .map(|o| o.0.as_str())
+            .collect::<Vec<_>>(),
+        ["Show", "Lycoris Recoil"]
+    );
+    set_back().await;
+    let (status, body) = send(
+        &state,
+        Method::PUT,
+        &order_uri(&lycoris),
+        Some(r#"{"format_order":["smi","ass","srt"]}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["order"], serde_json::json!(["smi", "ass", "srt"]));
+    let (_, policy) = get(&state, "/settings/policy").await;
+    assert_eq!(
+        orders(&policy),
+        [
+            (
+                "Lycoris Recoil".to_owned(),
+                serde_json::json!(["smi", "ass", "srt"])
+            ),
+            ("Show".to_owned(), serde_json::json!(["smi", "srt", "ass"]))
+        ]
+    );
+
+    // Going back: the answer is the common order as it is now, and the work
+    // leaves the settings' list.
+    state
+        .settings
+        .put_policy(
+            0,
+            trss_core::settings::policy::FormatOrder::from_codes(&["srt", "smi", "ass"]).unwrap(),
+            300,
+            1,
+            50,
+        )
+        .await
+        .unwrap();
+    let (status, body) = send(&state, Method::DELETE, &order_uri(&lycoris), None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body,
+        serde_json::json!({ "order": ["srt", "smi", "ass"], "own": false })
+    );
+    let (_, policy) = get(&state, "/settings/policy").await;
+    assert_eq!(
+        orders(&policy),
+        [("Show".to_owned(), serde_json::json!(["smi", "srt", "ass"]))]
+    );
+    let (_, detail) = get(&state, &format!("/library/works/{lycoris}")).await;
+    assert_eq!(
+        detail["subtitles"]["format_order"],
+        serde_json::json!({ "order": ["srt", "smi", "ass"], "own": false })
+    );
+    // Again is no change.
+    let (status, _) = send(&state, Method::DELETE, &order_uri(&lycoris), None).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // No such work.
+    let (status, _) = send(
+        &state,
+        Method::PUT,
+        &order_uri("nope"),
+        Some(r#"{"format_order":["srt","ass","smi"]}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = send(&state, Method::DELETE, &order_uri("nope"), None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }

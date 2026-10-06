@@ -173,6 +173,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("../migrations/jobs/unchanged_fonts.sql")),
     // 57: what differs between a replacement plan's current subtitle and the new one, kept with the plan
     Migration::Sql(include_str!("../migrations/jobs/replacement_diffs.sql")),
+    // 58: what a person chose to apply from a stored subtitle: on the plan row, to replace the episode's subtitle or to add beside it
+    Migration::Sql(include_str!("../migrations/jobs/chosen_rows.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]

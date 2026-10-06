@@ -3,13 +3,13 @@
 //! ([`durable`]), so the record of an effect's intent is on disk before the
 //! effect.
 
-use std::collections::BTreeMap;
+use std::collections::{btree_map::Entry, BTreeMap};
 
 use rusqlite::{params, Connection, OptionalExtension, Row, TransactionBehavior};
 use trss_core::Millis;
 
 use crate::{
-    model::{AssetKind, EffectKind, EffectState, Outcome, PlanAction, SubtitleFormat},
+    model::{AssetKind, Chosen, EffectKind, EffectState, Outcome, PlanAction, SubtitleFormat},
     place::episode::{Assignment, Basis},
     store::JobError,
 };
@@ -89,6 +89,9 @@ pub struct PlanRow {
     pub applied_id: Option<String>,
     /// The asset a font, attachment or companion row was kept as.
     pub asset_id: Option<String>,
+    /// What a person chose to apply from it ([`choose_stored`]); never set by
+    /// the job's own flow.
+    pub chosen: Option<Chosen>,
 }
 
 impl PlanRow {
@@ -100,7 +103,7 @@ impl PlanRow {
 
 const PLAN_COLUMNS: &str = "job_id, position, file_id, member, name, kind, format, size, sha256,
      item_id, anissia_episode, attachment_episode, episode, assignment, basis, action, question,
-     stored_id, outcome, note, applied_id, asset_id";
+     stored_id, outcome, note, applied_id, asset_id, chosen";
 
 fn plan_row(r: &Row<'_>) -> rusqlite::Result<PlanRow> {
     let episode: Option<i64> = r.get(12)?;
@@ -134,6 +137,7 @@ fn plan_row(r: &Row<'_>) -> rusqlite::Result<PlanRow> {
         note: r.get(19)?,
         applied_id: r.get(20)?,
         asset_id: r.get(21)?,
+        chosen: r.get(22)?,
     })
 }
 
@@ -182,7 +186,7 @@ pub fn add_plan(
             &format!(
                 "INSERT INTO subtitle_job_plan ({PLAN_COLUMNS}, updated_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
-                         ?17, ?18, ?19, ?20, ?21, ?22, ?23)"
+                         ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)"
             ),
             params![
                 row.job_id,
@@ -207,6 +211,7 @@ pub fn add_plan(
                 row.note,
                 row.applied_id,
                 row.asset_id,
+                row.chosen,
                 now,
             ],
         )?;
@@ -1051,6 +1056,9 @@ pub struct StoredOnly {
     /// The job whose replacement plan to decide puts it beside the
     /// episode's video (`교체 승인`).
     pub awaiting_approval: Option<String>,
+    /// The episode has a subtitle, so applying it is a replacement the
+    /// person compares first ([`StoredOptions::apply`]).
+    pub compare: bool,
 }
 
 pub fn stored_only(c: &Connection, work_id: &str) -> rusqlite::Result<Vec<StoredOnly>> {
@@ -1086,112 +1094,359 @@ pub fn stored_only(c: &Connection, work_id: &str) -> rusqlite::Result<Vec<Stored
             job_id: r.get(7)?,
             awaiting_video: r.get(8)?,
             awaiting_approval: r.get(9)?,
+            compare: false,
         })
     })?;
-    rows.collect()
+    let mut stored = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut library = Library::of(work_id);
+    for one in &mut stored {
+        let recorded = library
+            .files(c, one.season, one.episode)?
+            .is_some_and(|f| !f.subtitles.is_empty());
+        one.compare = recorded || !applied_formats(c, work_id, one.season, one.episode)?.is_empty();
+    }
+    Ok(stored)
+}
+
+/// The library's files of a work, a season read once
+/// ([`season_files`]): a page that asks about every stored subtitle of the
+/// work does not read the season's files again for each.
+struct Library<'a> {
+    work_id: &'a str,
+    seasons: BTreeMap<u32, BTreeMap<i64, EpisodeFiles>>,
+}
+
+impl<'a> Library<'a> {
+    fn of(work_id: &'a str) -> Library<'a> {
+        Library {
+            work_id,
+            seasons: BTreeMap::new(),
+        }
+    }
+
+    /// The episode's files; none when the library has no file of it.
+    fn files(
+        &mut self,
+        c: &Connection,
+        season: u32,
+        episode: i64,
+    ) -> rusqlite::Result<Option<&EpisodeFiles>> {
+        let files = match self.seasons.entry(season) {
+            Entry::Occupied(read) => read.into_mut(),
+            Entry::Vacant(unread) => unread.insert(season_files(c, self.work_id, season)?),
+        };
+        Ok(files.get(&episode))
+    }
+}
+
+/// The creator and format of each copy the app applied to the episode and has
+/// not removed.
+fn applied_formats(
+    c: &Connection,
+    work_id: &str,
+    season: u32,
+    episode: i64,
+) -> rusqlite::Result<Vec<(Option<String>, SubtitleFormat)>> {
+    let mut stmt = c.prepare(
+        "SELECT s.creator, s.format FROM subtitle_applied ap
+           JOIN subtitle_stored s ON s.id = ap.stored_id
+          WHERE ap.work_id = ?1 AND ap.season = ?2 AND ap.episode = ?3 AND ap.removed_at IS NULL",
+    )?;
+    let copies = stmt.query_map(params![work_id, season, episode], |r| {
+        Ok((r.get(0)?, r.get(1)?))
+    })?;
+    copies.collect()
+}
+
+/// A copy the app applied beside a video and has not removed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppliedPlace {
+    /// Relative to the work folder.
+    pub path: String,
+    pub applied_at: Millis,
+}
+
+/// A stored subtitle of a work on an episode, applied or not, for the work's
+/// 자막 card.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredCopy {
+    pub id: String,
+    pub season: u32,
+    pub episode: i64,
+    /// The stored file's name.
+    pub name: String,
+    /// The stored file's path, relative to the work folder.
+    pub stored_path: String,
+    pub creator: Option<String>,
+    pub format: SubtitleFormat,
+    pub stored_at: Millis,
+    /// Its applied copies, oldest first.
+    pub applied: Vec<AppliedPlace>,
+    pub options: StoredOptions,
+}
+
+/// The work's stored subtitles on an episode that a person did not clean, by
+/// season, episode and then newest stored first, with what a person can ask of
+/// each ([`stored_options`]).
+pub fn work_copies(c: &Connection, work_id: &str) -> rusqlite::Result<Vec<StoredCopy>> {
+    let mut stmt = c.prepare(
+        "SELECT s.id, s.season, s.episode, a.relative_path, s.creator, s.format, s.stored_at
+           FROM subtitle_stored s JOIN subtitle_assets a ON a.id = s.subtitle_asset_id
+          WHERE s.work_id = ?1 AND s.episode IS NOT NULL AND s.cleaned_at IS NULL
+          ORDER BY s.season, s.episode, s.stored_at DESC, s.id",
+    )?;
+    let rows = stmt
+        .query_map([work_id], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, u32>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, Option<String>>(4)?,
+                r.get::<_, SubtitleFormat>(5)?,
+                r.get::<_, Millis>(6)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut applied = c.prepare(
+        "SELECT path, applied_at FROM subtitle_applied
+          WHERE stored_id = ?1 AND removed_at IS NULL ORDER BY applied_at, id",
+    )?;
+    let mut copies = Vec::with_capacity(rows.len());
+    let mut library = Library::of(work_id);
+    for (id, season, episode, stored_path, creator, format, stored_at) in rows {
+        let Some(options) = options_in(c, &mut library, &id)? else {
+            continue;
+        };
+        let placed = applied
+            .query_map([&id], |r| {
+                Ok(AppliedPlace {
+                    path: r.get(0)?,
+                    applied_at: r.get(1)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        copies.push(StoredCopy {
+            season,
+            episode,
+            name: stored_path
+                .rsplit('/')
+                .next()
+                .unwrap_or(&stored_path)
+                .to_owned(),
+            stored_path,
+            creator,
+            format,
+            stored_at,
+            applied: placed,
+            options,
+            id,
+        });
+    }
+    Ok(copies)
 }
 
 /// What came of asking to apply a stored subtitle ([`choose_stored`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StoredChoice {
-    /// The job that applies it, queued again.
-    Queued(String),
+    /// The job that applies it, queued again; `compare` when the job plans a
+    /// replacement for the person to compare and approve before anything
+    /// beside the video changes ([`StoredOptions`]).
+    Queued {
+        job_id: String,
+        compare: bool,
+    },
     NotFound,
     /// Why it is not applied, for the person.
     Refused(&'static str),
 }
 
+/// Why a stored subtitle cannot be added ([`Chosen::Add`]).
+pub const ADD_REFUSED: &str =
+    "추가로 적용할 수 있는 것은 이 회차에 적용한 제작자의 다른 형식이에요.";
+
+/// What a person can ask of a stored subtitle now ([`stored_options`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredOptions {
+    /// Whether a live applied copy is it.
+    pub applied: bool,
+    /// Whether the episode has a subtitle: one beside the video the library
+    /// recorded, or a copy the app applied and has not removed.
+    pub has_subtitle: bool,
+    /// Applying it as the episode's ([`Chosen::Apply`]): whether the person
+    /// compares it with the episode's subtitle, or why not.
+    pub apply: Result<bool, &'static str>,
+    /// Applying it beside the applied copies ([`Chosen::Add`]): whether the
+    /// person compares it with a subtitle the library recorded at the name
+    /// it takes beside the video, or why not.
+    pub add: Result<bool, &'static str>,
+    /// The row of the job that would apply it, or why there is none.
+    job: Result<(String, i64), &'static str>,
+}
+
+/// What a person can ask of the stored subtitle `stored_id` of the work:
+/// `None` for one of another work, one a person cleaned and one on no
+/// episode. These are [`choose_stored`]'s rules.
+pub fn stored_options(
+    c: &Connection,
+    work_id: &str,
+    stored_id: &str,
+) -> rusqlite::Result<Option<StoredOptions>> {
+    options_in(c, &mut Library::of(work_id), stored_id)
+}
+
+/// [`stored_options`] with the library's files read through `library`.
+fn options_in(
+    c: &Connection,
+    library: &mut Library<'_>,
+    stored_id: &str,
+) -> rusqlite::Result<Option<StoredOptions>> {
+    let work_id = library.work_id;
+    let stored: Option<(u32, Option<i64>, SubtitleFormat, Option<String>)> = c
+        .query_row(
+            "SELECT season, episode, format, creator FROM subtitle_stored
+              WHERE id = ?1 AND work_id = ?2 AND cleaned_at IS NULL",
+            params![stored_id, work_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .optional()?;
+    let Some((season, Some(episode), format, creator)) = stored else {
+        return Ok(None);
+    };
+    let applied: i64 = c.query_row(
+        "SELECT count(*) FROM subtitle_applied WHERE stored_id = ?1 AND removed_at IS NULL",
+        [stored_id],
+        |r| r.get(0),
+    )?;
+    let early = if format.extension().is_none() {
+        Some("자동으로 적용하지 않는 형식이라 적용할 수 없어요.")
+    } else if applied > 0 {
+        Some("이 보관본은 이미 영상 옆에 적용했어요.")
+    } else {
+        None
+    };
+    let copies = applied_formats(c, work_id, season, episode)?;
+    let files = library.files(c, season, episode)?;
+    let has_subtitle = !copies.is_empty() || files.is_some_and(|f| !f.subtitles.is_empty());
+    // The same creator's other format; a stored subtitle that names no
+    // creator matches none.
+    let addable = creator.is_some()
+        && copies.iter().any(|(by, _)| *by == creator)
+        && copies.iter().all(|(_, f)| *f != format);
+    // A subtitle the library recorded at the name an added copy takes beside
+    // a video (the placer's, any case): the job plans its replacement.
+    let add_compare = format.extension().is_some_and(|ext| {
+        files.is_some_and(|f| {
+            f.videos.iter().any(|video| {
+                let (dir, stem) = super::video_parts(video);
+                let name = super::joined(dir, &format!("{stem}.{ext}")).to_lowercase();
+                f.subtitles.iter().any(|s| s.to_lowercase() == name)
+            })
+        })
+    });
+    // The rows that keep it, newest first; a deduplicated file has one in
+    // each job that received it.
+    let rows: Vec<(String, i64, String, Option<String>)> = {
+        let mut stmt = c.prepare(
+            "SELECT p.job_id, p.position, j.state, j.wait
+               FROM subtitle_job_plan p JOIN subtitle_jobs j ON j.id = p.job_id
+              WHERE p.stored_id = ?1 AND p.episode IS NOT NULL
+              ORDER BY p.updated_at DESC, j.seq DESC",
+        )?;
+        let found = stmt.query_map([stored_id], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+        })?;
+        found.collect::<rusqlite::Result<_>>()?
+    };
+    let free = |(_, _, state, wait): &&(String, i64, String, Option<String>)| {
+        state != "running" && state != "held" && wait.as_deref() != Some("approval")
+    };
+    let job = match rows.iter().find(free) {
+        Some((job, position, ..)) => Ok((job.clone(), *position)),
+        None => Err(match rows.first() {
+            None => "이 보관본을 받은 작업의 기록이 없어 적용할 수 없어요.",
+            Some((_, _, state, ..)) if state == "running" => {
+                "이 보관본을 받은 작업이 진행 중이에요. 끝난 뒤에 다시 적용해 주세요."
+            }
+            Some((_, _, state, ..)) if state == "held" => {
+                "이 보관본을 받은 작업이 보류 중이라 적용할 수 없어요."
+            }
+            Some(_) => {
+                "이 보관본을 받은 작업이 교체 승인을 기다리고 있어요. 작업 상세에서 정해 주세요."
+            }
+        }),
+    };
+    let taken = job.clone().map(|_| ());
+    let (apply, add) = match early {
+        Some(reason) => (Err(reason), Err(reason)),
+        None => (
+            taken.map(|()| has_subtitle),
+            match addable {
+                true => taken.map(|()| add_compare),
+                false => Err(ADD_REFUSED),
+            },
+        ),
+    };
+    Ok(Some(StoredOptions {
+        applied: applied > 0,
+        has_subtitle,
+        apply,
+        add,
+        job,
+    }))
+}
+
 /// Asks the job that stored `stored_id` (its latest plan row of it whose job
-/// neither runs, is held nor waits for an approval) to apply it: the row goes
-/// back to `apply` with no outcome and the job is queued again, in one synced
-/// transaction with its log line. Choosing it answers the job's question of
-/// which file the episode takes, if it asked one: the alternatives asked
-/// about are stored only. Refused for a format the app does not apply, a subtitle
-/// applied already, an episode with a subtitle (whose change is a
-/// replacement's), and when no job can take it. A stored subtitle a person
-/// cleaned is not found.
+/// neither runs, is held nor waits for an approval) to apply it as `mode`
+/// says: the row goes back to `apply` with no outcome, marked as chosen by a
+/// person, and the job is queued again, in one synced transaction with its
+/// log line. Choosing it answers the job's question of which file the
+/// episode takes, if it asked one: the alternatives asked about are stored
+/// only.
+///
+/// [`Chosen::Apply`] on an episode with a subtitle is a replacement the
+/// worker plans for a person to compare and approve (`compare` in the
+/// result); on one with none the copy is applied at once. [`Chosen::Add`]
+/// applies the same creator's other format beside the episode's applied
+/// copies and takes none off; a subtitle the library recorded at the name it
+/// takes is a replacement to compare too. Refused for a format the app does not apply, a
+/// subtitle applied already, an add that is not another format of a creator
+/// whose copy is applied on the episode, and when no job can take it. A
+/// stored subtitle a person cleaned is not found.
 pub fn choose_stored(
     c: &mut Connection,
     work_id: &str,
     stored_id: &str,
+    mode: Chosen,
     now: Millis,
 ) -> Result<StoredChoice, JobError> {
     durable(c, |c| {
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let stored: Option<(u32, Option<i64>, SubtitleFormat)> = tx
-            .query_row(
-                "SELECT season, episode, format FROM subtitle_stored
-                  WHERE id = ?1 AND work_id = ?2 AND cleaned_at IS NULL",
-                params![stored_id, work_id],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-            )
-            .optional()?;
-        let Some((season, Some(episode), format)) = stored else {
+        let Some(options) = stored_options(&tx, work_id, stored_id)? else {
             return Ok(StoredChoice::NotFound);
         };
-        if format.extension().is_none() {
-            return Ok(StoredChoice::Refused(
-                "자동으로 적용하지 않는 형식이라 적용할 수 없어요.",
-            ));
-        }
-        let live = |sql: &str, p: &[&dyn rusqlite::ToSql]| -> rusqlite::Result<bool> {
-            tx.query_row(sql, p, |r| r.get::<_, i64>(0)).map(|n| n > 0)
+        let allowed = match mode {
+            Chosen::Apply => options.apply,
+            Chosen::Add => options.add,
         };
-        if live(
-            "SELECT count(*) FROM subtitle_applied WHERE stored_id = ?1 AND removed_at IS NULL",
-            &[&stored_id],
-        )? {
-            return Ok(StoredChoice::Refused(
-                "이 보관본은 이미 영상 옆에 적용했어요.",
-            ));
-        }
-        let (_, subtitles) = episode_files(&tx, work_id, season, episode)?;
-        if !subtitles.is_empty()
-            || live(
-                "SELECT count(*) FROM subtitle_applied
-                  WHERE work_id = ?1 AND season = ?2 AND episode = ?3 AND removed_at IS NULL",
-                &[&work_id, &season, &episode],
-            )?
-        {
-            return Ok(StoredChoice::Refused(
-                "이 회차에는 자막이 있어요. 다른 자막으로 바꾸려면 교체 비교를 거쳐요.",
-            ));
-        }
-        // The rows that keep it, newest first; a deduplicated file has one in
-        // each job that received it.
-        let rows: Vec<(String, i64, String, Option<String>)> = {
-            let mut stmt = tx.prepare(
-                "SELECT p.job_id, p.position, j.state, j.wait
-                   FROM subtitle_job_plan p JOIN subtitle_jobs j ON j.id = p.job_id
-                  WHERE p.stored_id = ?1 AND p.episode IS NOT NULL
-                  ORDER BY p.updated_at DESC, j.seq DESC",
-            )?;
-            let found = stmt.query_map([stored_id], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
-            })?;
-            found.collect::<rusqlite::Result<_>>()?
+        let compare = match allowed {
+            Ok(compare) => compare,
+            Err(reason) => return Ok(StoredChoice::Refused(reason)),
         };
-        let free = |(_, _, state, wait): &&(String, i64, String, Option<String>)| {
-            state != "running" && state != "held" && wait.as_deref() != Some("approval")
+        let Ok((job, position)) = options.job else {
+            unreachable!("a subtitle that can be chosen has a job to take it")
         };
-        let Some((job, position, ..)) = rows.iter().find(free).cloned() else {
-            return Ok(StoredChoice::Refused(match rows.first() {
-                None => "이 보관본을 받은 작업의 기록이 없어 적용할 수 없어요.",
-                Some((_, _, state, ..)) if state == "running" => {
-                    "이 보관본을 받은 작업이 진행 중이에요. 끝난 뒤에 다시 적용해 주세요."
-                }
-                Some((_, _, state, ..)) if state == "held" => {
-                    "이 보관본을 받은 작업이 보류 중이라 적용할 수 없어요."
-                }
-                Some(_) => "이 보관본을 받은 작업이 교체 승인을 기다리고 있어요. 작업 상세에서 정해 주세요.",
-            }));
-        };
+        let episode: i64 = tx.query_row(
+            "SELECT episode FROM subtitle_stored WHERE id = ?1",
+            [stored_id],
+            |r| r.get(0),
+        )?;
         tx.execute(
             "UPDATE subtitle_job_plan
                 SET action = 'apply', outcome = NULL, note = NULL, question = NULL,
-                    applied_id = NULL, updated_at = ?3
+                    applied_id = NULL, chosen = ?4, updated_at = ?3
               WHERE job_id = ?1 AND position = ?2",
-            params![job, position, now],
+            params![job, position, now, mode],
         )?;
         // The alternatives the job asked about for the episode are kept as
         // they are: this one answers which it takes.
@@ -1199,12 +1454,15 @@ pub fn choose_stored(
             "UPDATE subtitle_job_plan
                 SET action = 'store', question = NULL,
                     outcome = CASE WHEN stored_id IS NULL THEN NULL ELSE 'stored' END,
-                    note = '회차 줄에서 다른 자막을 골라 보관만 해요', updated_at = ?4
+                    note = '다른 자막을 골라 보관만 해요', updated_at = ?4
               WHERE job_id = ?1 AND position <> ?2 AND episode = ?3
                 AND question IS NOT NULL AND outcome IS NULL",
             params![job, position, episode, now],
         )?;
-        let note = "회차 줄에서 고른 보관본을 적용해요";
+        let note = match mode {
+            Chosen::Apply => "고른 보관본을 적용해요",
+            Chosen::Add => "고른 보관본을 추가로 적용해요",
+        };
         tx.execute(
             "UPDATE subtitle_jobs
                 SET state = 'pending', wait = NULL, finished_at = NULL, note = ?2,
@@ -1218,7 +1476,10 @@ pub fn choose_stored(
             params![job, now, note, format!("{}화", episode)],
         )?;
         tx.commit()?;
-        Ok(StoredChoice::Queued(job))
+        Ok(StoredChoice::Queued {
+            job_id: job,
+            compare,
+        })
     })
 }
 

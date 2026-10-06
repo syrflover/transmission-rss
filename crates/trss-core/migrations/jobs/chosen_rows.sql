@@ -1,0 +1,16 @@
+-- A stored subtitle a person chose to apply, and how (`trss_jobs::place::records::choose_stored`;
+-- docs/specs/subtitles.md, 보관본과 적용본; ticket 0072).
+--
+-- `chosen` on a plan row is what the person asked of the job that received
+-- the stored subtitle (`stored_id`), written when the row is queued again to
+-- apply it and overwritten by a later choice of the same row. The job's own
+-- flow never writes it, so a row the job decided to apply on its own, and a
+-- row from before this column, read NULL:
+--
+-- - `apply`: the stored subtitle is applied as the episode's. An episode with
+--   a subtitle gets a replacement plan for a person to approve as any row to
+--   apply does, and the row's source having a newer revision stored does not
+--   keep it stored only: the person chose this copy over the newer one;
+-- - `add`: the same creator's other format, applied beside the episode's
+--   applied copies, none of which is taken off.
+ALTER TABLE subtitle_job_plan ADD COLUMN chosen TEXT CHECK (chosen IN ('apply', 'add'));

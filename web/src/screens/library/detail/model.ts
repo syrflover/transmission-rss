@@ -1,5 +1,6 @@
 import type { EpisodeRange, FuzzyDate, SeasonInfo, WorkEpisode, WorkSeason } from "../api";
 import { formatRanges } from "../model";
+import { shownEpisode } from "./episodeKey.ts";
 
 /**
  * What the work detail screen derives from the answer. It only reads the
@@ -7,16 +8,8 @@ import { formatRanges } from "../model";
  * file is recorded for it (never a later state such as applied or approved).
  */
 
-/** An episode as shown: leading zeros of a whole number go (`01` is `1`); anything else stays as written. */
-export function shownEpisode(episode: string): string {
-  return /^\d+$/.test(episode) ? episode.replace(/^0+(?=\d)/, "") : episode;
-}
-
-/** `12화` for a number, the text itself for anything else (`SP`). */
-export function episodeLabel(episode: string): string {
-  const shown = shownEpisode(episode);
-  return /^\d/.test(shown) ? `${shown}화` : shown;
-}
+/** `episodeLabel` and `shownEpisode` live in `episodeKey.ts`, which the pure helpers import without the app. */
+export { episodeLabel, shownEpisode } from "./episodeKey.ts";
 
 /** The id of an episode's row, so a link can find it. */
 export function rowId(season: number, episode: string): string {

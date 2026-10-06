@@ -19,7 +19,7 @@ import { StoredCleanup } from "./StoredCleanup";
  * named it (`null` when none did). Each new `arrival` opens the card if it is folded, scrolls it to the top of the page
  * and puts the focus on its title, once per arrival.
  */
-function Card({
+export function Card({
   title,
   summary,
   collapsible,

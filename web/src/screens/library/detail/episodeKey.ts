@@ -1,5 +1,5 @@
 /**
- * How Anissia's episode text is compared. Kept free of imports so the pure helpers and their tests
+ * How an episode's text is shown and compared. Kept free of imports so the pure helpers and their tests
  * (`mapping.ts`) run without the app.
  */
 
@@ -22,4 +22,15 @@ export function numericKey(text: string): string | null {
 export function episodeKey(text: string): string {
   const n = numericKey(text);
   return n === null ? `t:${text}` : `n:${n}`;
+}
+
+/** An episode as shown: leading zeros of a whole number go (`01` is `1`); anything else stays as written. */
+export function shownEpisode(episode: string): string {
+  return /^\d+$/.test(episode) ? episode.replace(/^0+(?=\d)/, "") : episode;
+}
+
+/** `12화` for a number, the text itself for anything else (`SP`). */
+export function episodeLabel(episode: string): string {
+  const shown = shownEpisode(episode);
+  return /^\d/.test(shown) ? `${shown}화` : shown;
 }

@@ -692,17 +692,42 @@ impl JobStore {
             .await
     }
 
-    /// Asks the job that stored `stored_id` to apply it
+    /// The work's stored subtitles on an episode, applied or not, with what a
+    /// person can ask of each ([`crate::place::records::work_copies`]).
+    pub async fn work_copies(
+        &self,
+        work_id: &str,
+    ) -> Result<Vec<crate::place::records::StoredCopy>, JobError> {
+        let id = work_id.to_owned();
+        self.db
+            .run(move |c| Ok(crate::place::records::work_copies(c, &id)?))
+            .await
+    }
+
+    /// The formats in the order the work's first apply takes them
+    /// ([`crate::place::records::format_order`]).
+    pub async fn format_order(
+        &self,
+        work_id: &str,
+    ) -> Result<Vec<crate::model::SubtitleFormat>, JobError> {
+        let id = work_id.to_owned();
+        self.db
+            .run(move |c| Ok(crate::place::records::format_order(c, &id)?))
+            .await
+    }
+
+    /// Asks the job that stored `stored_id` to apply it as `mode` says
     /// ([`crate::place::records::choose_stored`]).
     pub async fn choose_stored(
         &self,
         work_id: &str,
         stored_id: &str,
+        mode: crate::model::Chosen,
         now: Millis,
     ) -> Result<crate::place::records::StoredChoice, JobError> {
         let (work, stored) = (work_id.to_owned(), stored_id.to_owned());
         self.db
-            .run(move |c| crate::place::records::choose_stored(c, &work, &stored, now))
+            .run(move |c| crate::place::records::choose_stored(c, &work, &stored, mode, now))
             .await
     }
 

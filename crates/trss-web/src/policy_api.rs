@@ -27,7 +27,8 @@
 //! - A `version` that is not the stored one answers `409` with the stored
 //!   policy as `current`, and nothing is saved. Nothing retries it.
 //! - `overrides` are the works that order the formats their own way, most
-//!   recently changed first; the work's subtitles change that, not this call.
+//!   recently changed first; the work's `subtitle-order`
+//!   ([`super::library_work_api`]) changes that, not this call.
 
 use axum::{
     extract::{rejection::JsonRejection, State},

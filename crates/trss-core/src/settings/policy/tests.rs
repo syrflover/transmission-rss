@@ -206,3 +206,62 @@ async fn a_stored_count_beyond_what_the_app_writes_still_reads_and_can_be_saved_
         .unwrap();
     assert_eq!((saved.idle_timeout_seconds, saved.version), (300, 4));
 }
+
+#[tokio::test]
+async fn a_work_is_given_its_own_order_replaced_and_taken_away() {
+    let (db, store) = store().await;
+    db.run::<_, DbError, _>(|c| {
+        c.execute_batch(
+            "INSERT INTO watch_folders (id, path, created_at) VALUES ('f1', '/media', 1);
+             INSERT INTO works (id, watch_folder_id, dir_name) VALUES ('w1', 'f1', 'A'), ('w2', 'f1', 'B');",
+        )?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+    assert_eq!(store.work_format_order("w1").await.unwrap(), None);
+
+    assert!(store
+        .put_work_format_order("w1", order(&["srt", "ass", "smi"]), 10)
+        .await
+        .unwrap());
+    assert!(store
+        .put_work_format_order("w2", order(&["smi", "srt", "ass"]), 20)
+        .await
+        .unwrap());
+    assert_eq!(
+        store.work_format_order("w1").await.unwrap(),
+        Some(order(&["srt", "ass", "smi"]))
+    );
+    // A new order replaces the old and puts the work first of the listed.
+    assert!(store
+        .put_work_format_order("w1", order(&["ass", "smi", "srt"]), 30)
+        .await
+        .unwrap());
+    let listed = store.work_format_orders().await.unwrap();
+    let seen: Vec<(&str, String, Millis)> = listed
+        .iter()
+        .map(|w| (w.work_id.as_str(), w.format_order.to_string(), w.updated_at))
+        .collect();
+    assert_eq!(
+        seen,
+        [
+            ("w1", "ass,smi,srt".to_owned(), 30),
+            ("w2", "smi,srt,ass".to_owned(), 20)
+        ]
+    );
+    // The common policy is untouched.
+    assert_eq!(store.policy().await.unwrap(), Policy::default());
+
+    assert!(store.delete_work_format_order("w1").await.unwrap());
+    assert_eq!(store.work_format_order("w1").await.unwrap(), None);
+    // A work with none is left as it is; one that is not a work is none.
+    assert!(store.delete_work_format_order("w1").await.unwrap());
+    assert_eq!(store.work_format_orders().await.unwrap().len(), 1);
+    assert!(!store.delete_work_format_order("nope").await.unwrap());
+    assert!(!store
+        .put_work_format_order("nope", FormatOrder::default(), 40)
+        .await
+        .unwrap());
+    assert_eq!(store.work_format_order("nope").await.unwrap(), None);
+}

@@ -143,16 +143,26 @@ function copyKey(entry: CleanableEntry): string {
 }
 
 /**
- * `9월 7일 받음`; `9월 7일 13:05 받음` when another copy of the same episode was received the same day, so the two can
- * be told apart (docs/specs/subtitles.md, 지난 수정본). The day and the time are the viewer's.
+ * `9월 7일 받음`; `9월 7일 13:05 받음` when `shared` (another copy of the same episode was received the same day), so
+ * the two can be told apart (docs/specs/subtitles.md, 지난 수정본). The day and the time are the viewer's.
  */
-export function receivedText(entry: CleanableEntry, all: readonly CleanableEntry[]): string {
-  const d = new Date(entry.stored_at);
+export function receivedAt(storedAt: number, shared: boolean): string {
+  const d = new Date(storedAt);
   const day = `${d.getMonth() + 1}월 ${d.getDate()}일`;
+  return shared ? `${day} ${pad(d.getHours())}:${pad(d.getMinutes())} 받음` : `${day} 받음`;
+}
+
+/** `receivedAt` of a stored file of the 파일 card, told apart from the other entries of its episode. */
+export function receivedText(entry: CleanableEntry, all: readonly CleanableEntry[]): string {
   const shared = all.some(
     (other) => other.id !== entry.id && copyKey(other) === copyKey(entry) && dayKey(other.stored_at) === dayKey(entry.stored_at),
   );
-  return shared ? `${day} ${pad(d.getHours())}:${pad(d.getMinutes())} 받음` : `${day} 받음`;
+  return receivedAt(entry.stored_at, shared);
+}
+
+/** Whether two moments are on the same calendar day of the viewer. */
+export function sameDay(a: number, b: number): boolean {
+  return dayKey(a) === dayKey(b);
 }
 
 export interface KindGroup {

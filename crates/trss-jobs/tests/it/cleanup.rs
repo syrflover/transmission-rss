@@ -15,7 +15,7 @@ use rusqlite::params;
 use tokio_util::sync::CancellationToken;
 use trss_core::{Clock, Db};
 use trss_jobs::{
-    model::{AssetKind, Outcome},
+    model::{AssetKind, Chosen, Outcome},
     place::{
         cleanup::{self, Asked, CleanKind, Cleanable},
         records::StoredChoice,
@@ -415,10 +415,16 @@ async fn cleaning_one_of_two_revisions_sharing_a_font_keeps_the_font_for_the_oth
     let other = s.entry("Show - 05 [v2].ass").await;
     let choice = s
         .store
-        .choose_stored(WORK, &other.id, 70_000)
+        .choose_stored(WORK, &other.id, Chosen::Apply, 70_000)
         .await
         .unwrap();
-    assert_eq!(choice, StoredChoice::Queued(second.clone()));
+    assert_eq!(
+        choice,
+        StoredChoice::Queued {
+            job_id: second.clone(),
+            compare: false
+        }
+    );
     s.run().await;
     let d = s.store.detail(&second).await.unwrap().unwrap();
     assert_eq!(d.row.state, JobState::Done, "{:?}", d.row.note);

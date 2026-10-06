@@ -15,7 +15,7 @@ use tokio_util::sync::CancellationToken;
 use trss_core::{Clock, Db};
 use trss_jobs::{
     area::{object_of, ReceiveArea},
-    model::{Outcome, PlanAction},
+    model::{Chosen, Outcome, PlanAction},
     store::JobDetail,
     Created, JobState, JobStore, NewItem, NewJob, Runner, StepKind, StepState, Wait,
 };
@@ -1434,8 +1434,11 @@ async fn alternatives_of_one_format_wait_for_a_person_and_none_is_applied() {
         .find(|o| o.name == "Show - 02 [sign].ass")
         .unwrap();
     assert!(matches!(
-        s.store.choose_stored(WORK, &sign.id, 5_000).await.unwrap(),
-        trss_jobs::place::records::StoredChoice::Queued(_)
+        s.store
+            .choose_stored(WORK, &sign.id, Chosen::Apply, 5_000)
+            .await
+            .unwrap(),
+        trss_jobs::place::records::StoredChoice::Queued { compare: false, .. }
     ));
     run(&s).await;
     let d = detail(&s, &id).await;
@@ -1478,8 +1481,11 @@ async fn another_format_chosen_on_the_episode_line_answers_its_alternatives() {
     let only = s.store.stored_only(WORK).await.unwrap();
     let srt = only.iter().find(|o| o.name == "Show - 02.srt").unwrap();
     assert!(matches!(
-        s.store.choose_stored(WORK, &srt.id, 5_000).await.unwrap(),
-        trss_jobs::place::records::StoredChoice::Queued(_)
+        s.store
+            .choose_stored(WORK, &srt.id, Chosen::Apply, 5_000)
+            .await
+            .unwrap(),
+        trss_jobs::place::records::StoredChoice::Queued { compare: false, .. }
     ));
     run(&s).await;
     let d = detail(&s, &id).await;
@@ -1667,12 +1673,15 @@ async fn a_stored_only_episode_is_applied_when_a_person_asks() {
 
     let chosen = s
         .store
-        .choose_stored(WORK, &only[0].id, 5_000)
+        .choose_stored(WORK, &only[0].id, Chosen::Apply, 5_000)
         .await
         .unwrap();
     assert_eq!(
         chosen,
-        trss_jobs::place::records::StoredChoice::Queued(id.clone())
+        trss_jobs::place::records::StoredChoice::Queued {
+            job_id: id.clone(),
+            compare: false
+        }
     );
     // The work folder is away: the job waits for it with the stored file to
     // apply, and goes on once it is back.
@@ -1704,7 +1713,7 @@ async fn a_stored_only_episode_is_applied_when_a_person_asks() {
     // Asked again, it is applied already.
     assert_eq!(
         s.store
-            .choose_stored(WORK, &only[0].id, 6_000)
+            .choose_stored(WORK, &only[0].id, Chosen::Apply, 6_000)
             .await
             .unwrap(),
         trss_jobs::place::records::StoredChoice::Refused("이 보관본은 이미 영상 옆에 적용했어요.")

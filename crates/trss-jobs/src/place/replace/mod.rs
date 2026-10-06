@@ -20,6 +20,16 @@
 //! it), an episode whose paths another effect under way is changing, and one
 //! with two files to take off whose names differ in case only.
 //!
+//! A row a person chose to apply (`chosen`, [`records::choose_stored`](place_records::choose_stored))
+//! is planned the same way, with two differences. The newer revision of its
+//! source does not keep it stored only, here nor in [`Placer::changed`]: the
+//! person chose this copy over it, which is how a past revision is restored.
+//! And a row chosen to `add` the creator's other format takes nothing off:
+//! every other subtitle beside the video stays (`keep`), a file at the new
+//! copy's path is `replace`d, and when none is (nor one whose name differs in
+//! case only) the copy is applied at once as for an episode with no subtitle,
+//! with no plan and no approval.
+//!
 //! The plan keeps what differs between its current subtitle ([`records::Plan::current`])
 //! and the new one, made with it ([`diff`]): the worker reads both files, never
 //! a web request.
@@ -99,7 +109,7 @@ use super::{
 use crate::{
     area::{object_of, read_facts, sync_dir},
     model::{
-        AssetKind, EffectKind, EffectState, Outcome, PathAction, PlanAction, PlanState,
+        AssetKind, Chosen, EffectKind, EffectState, Outcome, PathAction, PlanAction, PlanState,
         SubtitleFormat,
     },
     store::JobError,
@@ -335,11 +345,24 @@ impl Placer {
             return Ok(true);
         };
         let stored_only = |note: &str| (note.to_owned(), present[0].path.clone());
+        // A copy a person chose is applied over the newer revision of its
+        // source (a past revision restored): that one's job compares it.
         let id = stored_id.clone();
-        let newer = self
-            .read(move |c| records::newer_revision(c, &id))
-            .await?
-            .is_some();
+        let newer = row.chosen.is_none()
+            && self
+                .read(move |c| records::newer_revision(c, &id))
+                .await?
+                .is_some();
+        let (dir, stem) = video_parts(video);
+        let target = joined(dir, &format!("{stem}.{ext}"));
+        // The file of the target's own name, else one that differs in case
+        // only: the new copy is published under the target's name once that
+        // file is set aside, so another variant there would take the name.
+        let at_target = present.iter().position(|p| p.path == target).or_else(|| {
+            present
+                .iter()
+                .position(|p| p.path.to_lowercase() == target.to_lowercase())
+        });
         let settled = if present.iter().any(|p| p.file.sha256 == asset.sha256) {
             Some(stored_only(
                 "이 회차에 같은 자막이 이미 있어 그대로 두고 보관만 했어요",
@@ -353,8 +376,6 @@ impl Placer {
             let busy = self
                 .read(move |c| place_records::busy_targets(c, &f, None))
                 .await?;
-            let (dir, stem) = video_parts(video);
-            let target = joined(dir, &format!("{stem}.{ext}"));
             let changing = std::iter::once(&target)
                 .chain(present.iter().map(|p| &p.path))
                 .find(|p| busy.contains(&p.to_lowercase()));
@@ -372,6 +393,11 @@ impl Placer {
             self.event(&row.job_id, format!("{label}: {note}"), Some(detail))
                 .await?;
             return Ok(true);
+        }
+        // An added format with nothing at its path is applied as a first
+        // copy is, the subtitles beside the video left as they are.
+        if row.chosen == Some(Chosen::Add) && at_target.is_none() {
+            return Ok(false);
         }
 
         let video_at = files::within(Path::new(folder), video);
@@ -410,16 +436,6 @@ impl Placer {
             }
         };
 
-        let (dir, stem) = video_parts(video);
-        let target = joined(dir, &format!("{stem}.{ext}"));
-        // The file of the target's own name, else one that differs in case
-        // only: the new copy is published under the target's name once that
-        // file is set aside, so another variant there would take the name.
-        let at_target = present.iter().position(|p| p.path == target).or_else(|| {
-            present
-                .iter()
-                .position(|p| p.path.to_lowercase() == target.to_lowercase())
-        });
         let mut paths = vec![match at_target {
             Some(i) => PlanPath {
                 path: present[i].path.clone(),
@@ -440,9 +456,10 @@ impl Placer {
             }
             paths.push(PlanPath {
                 path: p.path.clone(),
-                action: match p.applied_id {
-                    Some(_) => PathAction::Remove,
-                    None => PathAction::Keep,
+                // An added format takes off nothing.
+                action: match (p.applied_id.as_ref(), row.chosen) {
+                    (Some(_), Some(Chosen::Add)) | (None, _) => PathAction::Keep,
+                    (Some(_), _) => PathAction::Remove,
                 },
                 file: Some(p.file.clone()),
                 applied_id: p.applied_id.clone(),
@@ -589,11 +606,13 @@ impl Placer {
         if !recorded {
             return Ok(Some("새 자막의 보관 기록이 바뀌었어요".to_owned()));
         }
+        // The copy a person chose stays over a newer revision of its source.
         let stored = plan.stored_id.clone();
-        if self
-            .read(move |c| records::newer_revision(c, &stored))
-            .await?
-            .is_some()
+        if !row.as_ref().is_some_and(|r| r.chosen.is_some())
+            && self
+                .read(move |c| records::newer_revision(c, &stored))
+                .await?
+                .is_some()
         {
             return Ok(Some(NEW_REVISION.to_owned()));
         }
@@ -973,6 +992,7 @@ impl Placer {
             note: None,
             applied_id: None,
             asset_id: None,
+            chosen: None,
         };
         let mut effect: Option<Effect> = None;
         for _ in 0..=super::MAX_RETARGETS {

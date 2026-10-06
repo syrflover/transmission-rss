@@ -13,6 +13,7 @@ import {
   loadWork,
   workKey,
   type AnissiaLink,
+  type FormatOrder,
   type SeasonInfo,
   type WorkDetail,
   type WorkSubscription,
@@ -29,6 +30,7 @@ import { UploadSection } from "./detail/UploadSection";
 import { SeasonTiles } from "./detail/SeasonTiles";
 import { HeadCreators } from "./detail/SubtitleCreators";
 import { CollectCard, FilesCard, InfoCard } from "./detail/SideCards";
+import { SubtitlesCard } from "./detail/SubtitlesCard";
 import { coverOf } from "./model";
 import { FILES_HASH } from "./storage.ts";
 import { Cover, FROM_LIBRARY } from "./WorkItem";
@@ -137,6 +139,11 @@ function WorkPage({ workId }: { workId: string }) {
     if (fresh) work.update(fresh);
   };
 
+  // The work's own format order was saved or taken away: the card shows it at once.
+  const orderChanged = (formatOrder: FormatOrder) => {
+    work.update((w) => (w?.subtitles ? { ...w, subtitles: { ...w.subtitles, format_order: formatOrder } } : w));
+  };
+
   // The creator changed (here or in the rule): the page, the rule list and the subscriptions read it again.
   const subscriptionEdited = () => {
     forget(KEYS.subscriptions);
@@ -160,6 +167,7 @@ function WorkPage({ workId }: { workId: string }) {
         onSubscriptionChanged={subscriptionEdited}
         onCreatorsChanged={creatorsChanged}
         onRetried={retried}
+        onOrderChanged={orderChanged}
       />
     );
   }
@@ -195,6 +203,7 @@ function Loaded({
   onSubscriptionChanged,
   onCreatorsChanged,
   onRetried,
+  onOrderChanged,
 }: {
   work: WorkDetail;
   backLink: React.ReactNode;
@@ -204,6 +213,7 @@ function Loaded({
   onSubscriptionChanged: () => void;
   onCreatorsChanged: () => void;
   onRetried: () => Promise<void>;
+  onOrderChanged: (order: FormatOrder) => void;
 }) {
   const cover = coverOf(work.name);
   // The Anissia title takes the place of the folder's name once a subscription is connected.
@@ -419,6 +429,16 @@ function Loaded({
         <div className={wide ? (work.seasons.length > 1 ? "mt-[29px] flex flex-col gap-3" : "flex flex-col gap-3") : "flex flex-col gap-3"}>
           {season && <InfoCard info={season.info} collapsible={!wide} />}
           <CollectCard work={work} collapsible={!wide} />
+          {season && work.subtitles && (
+            <SubtitlesCard
+              workId={work.id}
+              subtitles={work.subtitles}
+              season={season.number}
+              collapsible={!wide}
+              onChanged={onRetried}
+              onOrder={onOrderChanged}
+            />
+          )}
           <FilesCard work={work} collapsible={!wide} arrival={filesArrival} onRefresh={onRetried} />
         </div>
       </div>

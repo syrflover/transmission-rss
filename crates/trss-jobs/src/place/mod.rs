@@ -122,8 +122,8 @@ use crate::{
     area::{safe_name, ReceiveArea},
     follow::Follow,
     model::{
-        AssetKind, EffectKind, EffectState, FileState, ItemState, Outcome, PlanAction, PlanState,
-        StepKind, StepState, SubtitleFormat,
+        AssetKind, Chosen, EffectKind, EffectState, FileState, ItemState, Outcome, PlanAction,
+        PlanState, StepKind, StepState, SubtitleFormat,
     },
     runner::episode_label,
     store::{FileRow, ItemRow, JobError, JobStore, AUTO, FIND, UPLOAD},
@@ -807,6 +807,7 @@ impl Placer {
                 note: None,
                 applied_id: None,
                 asset_id: None,
+                chosen: None,
             };
             let first_item = candidates.first().map(|c| c.id);
             let rows: Vec<PlanRow> = made
@@ -1563,14 +1564,21 @@ impl Placer {
 
     /// Why the episode of `video` has a subtitle, if it has: one the library
     /// recorded that is on the disk, or a file beside the video under its
-    /// stem.
+    /// stem. With `only`, a name an added format would take, the subtitles
+    /// of other names are not counted.
     async fn existing_subtitle(
         &self,
         facts: &JobFacts,
         folder: &str,
         episode: i64,
         video: &str,
+        only: Option<&str>,
     ) -> Result<Option<String>, JobError> {
+        let only = only.map(str::to_lowercase);
+        let named = move |path: &str| {
+            only.as_ref()
+                .is_none_or(|name| path.to_lowercase() == *name)
+        };
         let work = facts.work_id.clone().unwrap_or_default();
         let season = facts.season.unwrap_or(0);
         let (_, subtitles) = self
@@ -1580,9 +1588,11 @@ impl Placer {
         // cannot be looked at): a record the watcher has not dropped yet is
         // not a subtitle.
         let base = PathBuf::from(folder);
+        let named_in = named.clone();
         let recorded = blocking(move || {
             subtitles
                 .into_iter()
+                .filter(|p| named_in(p))
                 .find(|p| files::occupied(&files::within(&base, p)).unwrap_or(true))
         })
         .await;
@@ -1601,6 +1611,7 @@ impl Placer {
                     lower.starts_with(&prefix)
                         && extension(&lower)
                             .is_some_and(|e| SUBTITLE_EXTENSIONS.contains(&e.as_str()))
+                        && named(&joined(dir, n))
                 })
                 .map(|n| joined(dir, &n)),
             Err(err) => Some(format!("영상 폴더를 읽지 못했어요: {err}")),
@@ -1778,8 +1789,11 @@ impl Placer {
         };
         let folder = PathBuf::from(&effect.folder);
         let temp = files::within(&folder, &effect.temp);
+        // An added format is published beside the subtitles the episode has:
+        // only its own name is taken.
+        let only = (row.chosen == Some(Chosen::Add)).then_some(effect.target.as_str());
         if let Some(existing) = self
-            .existing_subtitle(facts, &effect.folder, placed.episode, &video)
+            .existing_subtitle(facts, &effect.folder, placed.episode, &video, only)
             .await?
         {
             let reason = "적용하려던 회차에 다른 자막이 생겨 덮어쓰지 않았어요";

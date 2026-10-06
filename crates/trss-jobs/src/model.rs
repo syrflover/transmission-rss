@@ -163,6 +163,18 @@ codes! {
 }
 
 codes! {
+    /// What a person chose to apply from a stored subtitle (`chosen` of a
+    /// plan row; see `migrations/jobs/chosen_rows.sql` in `trss-core`).
+    Chosen {
+        /// As the episode's subtitle: a replacement when it has one.
+        Apply = "apply",
+        /// Beside the applied copies of the same creator's other format; none
+        /// is taken off.
+        Add = "add",
+    }
+}
+
+codes! {
     /// What came of a row of a job's placement plan (see the schema's
     /// comment).
     Outcome {

@@ -3,7 +3,10 @@ import { forget, forgetPrefix } from "@/lib/cached";
 import type { Command } from "@/lib/commands";
 
 import { forgetWeek } from "../schedule/api";
+import type { FormatOrder, SubtitleFormat, WorkSubtitles } from "./detail/subtitles.ts";
 import type { WorkStorage } from "./storage.ts";
+
+export type { FormatOrder, SubtitleCopy, SubtitleCreatorCopies, SubtitleFormat, WorkSubtitles } from "./detail/subtitles.ts";
 
 export type {
   AssetKind,
@@ -210,14 +213,39 @@ export interface StoredSubtitle {
   awaiting_video: boolean;
   /** The job waiting for the user to approve replacing the episode's subtitle with it (`교체 승인`); it asks for no `적용`. */
   approval_job: string | null;
+  /** The episode has a subtitle: `적용` goes to the comparison (`교체 승인`), not to applying at once; missing is `false`. */
+  compare?: boolean;
 }
 
-/** Asks the job that stored `storedId` to apply it beside the episode's video; answers that job. */
-export function applyStored(id: string, storedId: string): Promise<{ job_id: string }> {
-  return api<{ job_id: string }>(
+/** `apply` takes the stored copy as the episode's subtitle; `add` puts the same creator's other format beside it. */
+export type ApplyMode = "apply" | "add";
+
+/**
+ * Asks to apply the stored subtitle `storedId` beside the episode's video; answers the job. `compare` is `true` when
+ * the episode has a subtitle: the job compares and waits for the person's `교체 승인`, so the job's page is the next
+ * step. A `409` is a refusal whose message is the sentence to show, a `404` says the copy is gone.
+ */
+export function applyStored(
+  id: string,
+  storedId: string,
+  mode: ApplyMode = "apply",
+): Promise<{ job_id: string; compare: boolean }> {
+  return api<{ job_id: string; compare: boolean }>(
     `/library/works/${encodeURIComponent(id)}/stored/${encodeURIComponent(storedId)}/apply`,
-    { method: "POST" },
+    { method: "POST", body: { mode } },
   );
+}
+
+const orderPath = (id: string) => `/library/works/${encodeURIComponent(id)}/subtitle-order`;
+
+/** Sets the work's own format order; a `400` has the sentence for a bad one. */
+export function putSubtitleOrder(id: string, order: SubtitleFormat[]): Promise<FormatOrder> {
+  return api<FormatOrder>(orderPath(id), { method: "PUT", body: { format_order: order } });
+}
+
+/** Takes the work's own order away; the answer is the global order. */
+export function deleteSubtitleOrder(id: string): Promise<FormatOrder> {
+  return api<FormatOrder>(orderPath(id), { method: "DELETE" });
 }
 
 /**
@@ -297,6 +325,8 @@ export interface WorkDetail {
   cover_pending: boolean;
   /** What the app stored for the work, and the stored subtitles that can be cleaned (`파일` card). */
   storage: WorkStorage;
+  /** The received subtitles by creator and the format order (`자막` card); a server without them leaves it out. */
+  subtitles?: WorkSubtitles;
 }
 
 /** The cache key of one work's page. */
