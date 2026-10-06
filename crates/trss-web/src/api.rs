@@ -39,6 +39,7 @@ pub fn router() -> Router<AppState> {
         .merge(super::subscriptions_api::routes())
         .merge(super::subtitle_upload_api::routes())
         .merge(super::subtitle_creator_api::routes())
+        .merge(super::video_check_api::routes())
         .merge(super::todo_api::routes())
         .merge(super::watch_folders_api::routes())
         .fallback(not_found)

@@ -27,6 +27,12 @@
 //! other kinds (images, `.nfo`, text) are not media and are left out of
 //! everything.
 //!
+//! Of these, a video directly in a season folder other than `Season 00` whose
+//! name has no `SxxEyy` or another season's is one a person is asked about
+//! (`회차 확인 필요`, `docs/specs/library.md`): the scan reads its size and
+//! modification time ([`Unrecognized::check`]), so that the person's `확인함`
+//! holds for that file and not for another one put at the same path later.
+//!
 //! # What is skipped
 //!
 //! Hidden entries (a leading `.`, which includes a work's `.trss/`) and the
@@ -50,8 +56,11 @@
 //! when its modification time or identity changed (or it was modified moments
 //! before the last listing, or it holds a link). Entries are classified from
 //! `readdir`'s own file type, so listing costs no call per file; only a link
-//! needs more. The web's first reading of a folder and `다시 확인` list
-//! everything. See [`scan_incremental`] for what this can miss.
+//! needs more. A video a person is asked about is the exception: its size and
+//! time are read at every scan, even from a listing kept from before, since a
+//! file written over in place leaves its directory's time as it was. The web's
+//! first reading of a folder and `다시 확인` list everything. See
+//! [`scan_incremental`] for what this can miss.
 //!
 //! # Failures
 //!
@@ -190,6 +199,32 @@ pub struct Unrecognized {
     /// Relative to the work folder, `/`-separated.
     pub path: String,
     pub reason: Reason,
+    /// For a video a person is asked about (see the module docs): the file as
+    /// the scan saw it. `None` for every other file, and for such a video whose
+    /// size and time could not be read, which is then not asked about until a
+    /// scan reads them.
+    pub check: Option<FileIdentity>,
+}
+
+/// What tells a file from another one put at the same path later.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileIdentity {
+    pub size: u64,
+    /// Modification time, nanoseconds since the Unix epoch.
+    pub mtime_ns: i64,
+}
+
+impl FileIdentity {
+    /// The file at `path` (a link is followed), or `None` when it cannot be
+    /// read or its time is before 1970.
+    fn of(path: &Path) -> Option<FileIdentity> {
+        let metadata = fs::metadata(path).ok()?;
+        let since = metadata.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
+        Some(FileIdentity {
+            size: metadata.len(),
+            mtime_ns: i64::try_from(since.as_nanos()).ok()?,
+        })
+    }
 }
 
 /// One work folder as read.
@@ -626,6 +661,7 @@ impl Walker {
                         work.unrecognized.push(Unrecognized {
                             path: listed.name.clone(),
                             reason,
+                            check: None,
                         });
                     }
                 }
@@ -687,6 +723,7 @@ impl Walker {
                             work.unrecognized.push(Unrecognized {
                                 path,
                                 reason: Reason::InvalidName,
+                                check: None,
                             });
                         }
                         continue;
@@ -695,21 +732,31 @@ impl Walker {
                         work.unrecognized.push(Unrecognized {
                             path,
                             reason: Reason::Partial,
+                            check: None,
                         });
                         continue;
                     }
                     let Some(kind) = kind_of(name) else {
                         continue;
                     };
+                    // A video of a season other than 0 whose episode the name
+                    // does not give is asked about; its file is read now, not
+                    // kept with the listing.
+                    let check = || match kind == FileKind::Video && season != 0 {
+                        true => FileIdentity::of(&listed.path_in(dir)),
+                        false => None,
+                    };
                     match episode_of(name, kind) {
                         None => work.unrecognized.push(Unrecognized {
                             path,
                             reason: Reason::NoEpisode,
+                            check: check(),
                         }),
                         Some((found, _)) if found != season => {
                             work.unrecognized.push(Unrecognized {
                                 path,
                                 reason: Reason::SeasonMismatch,
+                                check: check(),
                             })
                         }
                         Some((_, episode)) => work.files.push(EpisodeFile {
@@ -764,15 +811,21 @@ impl Walker {
                             work.unrecognized.push(Unrecognized {
                                 path,
                                 reason: Reason::InvalidName,
+                                check: None,
                             });
                         }
                     } else if is_partial(name) {
                         work.unrecognized.push(Unrecognized {
                             path,
                             reason: Reason::Partial,
+                            check: None,
                         });
                     } else if kind_of(name).is_some() {
-                        work.unrecognized.push(Unrecognized { path, reason });
+                        work.unrecognized.push(Unrecognized {
+                            path,
+                            reason,
+                            check: None,
+                        });
                     }
                 }
             }
@@ -1099,6 +1152,79 @@ mod tests {
         );
     }
 
+    /// Gives the file at `relative` the modification time `ns` (nanoseconds
+    /// since the Unix epoch).
+    fn set_file_mtime(root: &Path, relative: &str, ns: u64) {
+        fs::File::options()
+            .write(true)
+            .open(root.join(relative))
+            .unwrap()
+            .set_modified(UNIX_EPOCH + std::time::Duration::from_nanos(ns))
+            .unwrap();
+    }
+
+    #[test]
+    fn only_a_season_folders_video_whose_name_gives_no_episode_of_it_is_read_for_a_check() {
+        let dir = tempfile::tempdir().unwrap();
+        for file in [
+            "W/Season 01/extra.mkv",
+            "W/Season 01/W S03E01.mkv",
+            "W/Season 01/W S01E01.mkv",
+            // Not a video, Season 00, below a season folder, outside one,
+            // still downloading.
+            "W/Season 01/extra.ass",
+            "W/Season 00/extra.mkv",
+            "W/Season 00/W S01E01.mkv",
+            "W/Season 01/Batch/ep 02.mkv",
+            "W/Extras/PV.mkv",
+            "W/W S01E02.mkv",
+            "W/Season 01/next.mkv.part",
+        ] {
+            touch(dir.path(), file);
+        }
+        fs::write(dir.path().join("W/Season 01/extra.mkv"), "12345").unwrap();
+        set_file_mtime(
+            dir.path(),
+            "W/Season 01/extra.mkv",
+            1_700_000_000_123_456_789,
+        );
+        set_file_mtime(
+            dir.path(),
+            "W/Season 01/W S03E01.mkv",
+            1_600_000_000_000_000_001,
+        );
+        let scan = scan(dir.path()).unwrap();
+        let mut checks: Vec<_> = work(&scan, "W")
+            .unrecognized
+            .iter()
+            .filter_map(|u| Some((u.path.as_str(), u.reason, u.check?)))
+            .collect();
+        checks.sort_by_key(|(path, ..)| *path);
+        assert_eq!(
+            checks,
+            [
+                (
+                    "Season 01/W S03E01.mkv",
+                    Reason::SeasonMismatch,
+                    FileIdentity {
+                        size: 1,
+                        mtime_ns: 1_600_000_000_000_000_001
+                    }
+                ),
+                (
+                    "Season 01/extra.mkv",
+                    Reason::NoEpisode,
+                    FileIdentity {
+                        size: 5,
+                        mtime_ns: 1_700_000_000_123_456_789
+                    }
+                ),
+            ]
+        );
+        // The others are still counted, with no check.
+        assert_eq!(work(&scan, "W").unrecognized.len(), 9);
+    }
+
     #[test]
     fn links_are_followed_only_inside_the_watch_folder() {
         let dir = tempfile::tempdir().unwrap();
@@ -1394,6 +1520,30 @@ mod tests {
                 "Season 02/A S02E01.mkv"
             ]
         );
+    }
+
+    #[test]
+    fn a_video_asked_about_is_read_again_from_a_listing_kept_from_before() {
+        let dir = tempfile::tempdir().unwrap();
+        touch(dir.path(), "A/Season 01/extra.mkv");
+        age_dirs(dir.path());
+        let size = |scan: &Scan| work(scan, "A").unrecognized[0].check.unwrap().size;
+        let first = scan_incremental(dir.path(), None);
+        assert_eq!(size(first.result.as_ref().unwrap()), 1);
+
+        // Written over in place: its folder's time stays, so the folder's
+        // listing is kept, but the file is read again.
+        fs::write(dir.path().join("A/Season 01/extra.mkv"), "longer").unwrap();
+        set_mtime(&dir.path().join("A/Season 01"), 1_000_000_000);
+        let second = scan_incremental(dir.path(), Some(first.cache));
+        assert_eq!(
+            second.stats,
+            ScanStats {
+                dirs_read: 0,
+                dirs_reused: 3
+            }
+        );
+        assert_eq!(size(second.result.as_ref().unwrap()), 6);
     }
 
     #[test]

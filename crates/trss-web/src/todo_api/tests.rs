@@ -419,6 +419,16 @@ fn todo_of(kind: &str, work: Option<&str>) -> super::Todo {
             reason: None,
             job_id: "j".into(),
         },
+        "video_check" => Todo::VideoCheck {
+            key,
+            at,
+            work,
+            title,
+            season: 1,
+            path: "Season 01/extra.mkv".into(),
+            reason: String::new(),
+            seen: "1:1".into(),
+        },
         "replacement" => Todo::Replacement {
             key,
             at,
@@ -450,6 +460,8 @@ fn a_works_badges_are_its_kinds_once_each_in_the_lists_order() {
         todo_of("episode_check", Some("w3")),
         todo_of("placement_check", Some("w3")),
         todo_of("placement_check", Some("w1")),
+        todo_of("video_check", Some("w4")),
+        todo_of("video_check", Some("w3")),
     ];
 
     let badges = super::badges_by_work(&todos);
@@ -462,8 +474,10 @@ fn a_works_badges_are_its_kinds_once_each_in_the_lists_order() {
                 vec!["receive_failed", "replacement", "episode_check"]
             ),
             ("w2".to_owned(), vec!["auth"]),
-            // A job's 배치 확인 is the same badge as a mapping's.
+            // A job's 배치 확인 and a video's episode are the same badge as
+            // a mapping's.
             ("w3".to_owned(), vec!["episode_check"]),
+            ("w4".to_owned(), vec!["episode_check"]),
         ])
     );
 }

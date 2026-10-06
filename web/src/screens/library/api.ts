@@ -279,6 +279,8 @@ export interface UnrecognizedFile {
   reason: string;
   /** The reason as a sentence. */
   message: string;
+  /** A video the app asks about (`회차 확인 필요`) whose `확인함` holds for it. */
+  checked: boolean;
 }
 
 /** A subscription rule connected to a season of the work. */

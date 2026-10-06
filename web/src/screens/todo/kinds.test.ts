@@ -19,10 +19,12 @@ const LIST = [
   of("episode_check", "w3"),
   of("placement_check", "w3"),
   of("placement_check", "w1"),
+  of("video_check", "w4"),
 ];
 
-test("a job's 배치 확인 is the badge of a mapping's 회차 확인 필요", () => {
+test("a job's 배치 확인 and a video's episode are the badge of a mapping's 회차 확인 필요", () => {
   assert.equal(kindOf({ kind: "placement_check" }), "episode_check");
+  assert.equal(kindOf({ kind: "video_check" }), "episode_check");
   assert.equal(kindOf({ kind: "auth" }), "auth");
 });
 
@@ -33,6 +35,7 @@ test("a work's badges are its kinds once each, in the list's order, as the serve
       ["w2", ["auth"]],
       ["w1", ["receive_failed", "replacement", "episode_check"]],
       ["w3", ["episode_check"]],
+      ["w4", ["episode_check"]],
     ]),
   );
 });

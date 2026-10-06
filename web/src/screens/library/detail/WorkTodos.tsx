@@ -16,6 +16,7 @@ import {
   type ReplacementTodo,
   type Todo,
   type TodoList,
+  type VideoCheckTodo,
 } from "../../todo/api";
 import { kindTone, OriginTags, Tag, TodoBadge } from "../../todo/badges";
 import { receivedLine, todoTags } from "../../todo/changes";
@@ -24,6 +25,7 @@ import { kindOf, todosOfWork } from "../../todo/kinds";
 import { KEYS, TODOS_MS, usePolled } from "../../todo/poll";
 import { TargetLine } from "../../todo/TargetLine";
 import { episodeCheckPath, episodeCheckReason, receiveFailedAction, receiveFailedPath } from "../../todo/TodoCards";
+import { VideoCheckActions } from "../../todo/VideoCheck";
 
 /**
  * The work's `할 일` (`docs/specs/library.md`, 할 일과 회차 목록): its to-dos that need the person, as cards with a
@@ -33,9 +35,19 @@ import { episodeCheckPath, episodeCheckReason, receiveFailedAction, receiveFaile
  *
  * A card has no cover and no title: the page is the work's. Its first line is what it is about (episodes, creator,
  * season), then what the kind needs said, and its button opens where the person acts: the job detail (`인증`,
- * `비교`, `확인`), the creator's group in 자막 후보, or the episode's row.
+ * `비교`, `확인`), the creator's group in 자막 후보, or the episode's row. A video's `회차 확인 필요` is the
+ * exception: what it is about is a file, so the season folder and the file name are its title, and its `확인함` acts
+ * here (`onRefresh` then reads the work again, for the 파일 card's list).
  */
-export function WorkTodos({ workId, seasonCount }: { workId: string; seasonCount: number }) {
+export function WorkTodos({
+  workId,
+  seasonCount,
+  onRefresh,
+}: {
+  workId: string;
+  seasonCount: number;
+  onRefresh?: () => Promise<void>;
+}) {
   const todos = usePolled<TodoList>(KEYS.todos, fetchTodos, TODOS_MS, "할 일을 불러오지 못했어요.");
   const mine = todosOfWork(todos.data?.needs ?? [], workId);
   if (mine.length === 0) return null;
@@ -49,7 +61,7 @@ export function WorkTodos({ workId, seasonCount }: { workId: string; seasonCount
       <ul className="m-0 grid list-none grid-cols-[repeat(auto-fill,minmax(min(100%,280px),1fr))] gap-2.5 p-0">
         {mine.map((todo) => (
           <li key={todo.key} className="min-w-0">
-            <WorkTodoCard todo={todo} season={season} />
+            <WorkTodoCard todo={todo} season={season} onRefresh={onRefresh} />
           </li>
         ))}
       </ul>
@@ -59,7 +71,7 @@ export function WorkTodos({ workId, seasonCount }: { workId: string; seasonCount
 
 type SeasonTag = (n: number | null) => ReactNode;
 
-function WorkTodoCard({ todo, season }: { todo: Todo; season: SeasonTag }) {
+function WorkTodoCard({ todo, season, onRefresh }: { todo: Todo; season: SeasonTag; onRefresh?: () => Promise<void> }) {
   switch (todo.kind) {
     case "auth":
       return <AuthCard todo={todo} season={season} />;
@@ -71,6 +83,8 @@ function WorkTodoCard({ todo, season }: { todo: Todo; season: SeasonTag }) {
       return <EpisodeCheckCard todo={todo} season={season} />;
     case "placement_check":
       return <PlacementCheckCard todo={todo} season={season} />;
+    case "video_check":
+      return <VideoCheckCard todo={todo} season={season} onRefresh={onRefresh} />;
   }
 }
 
@@ -201,6 +215,27 @@ function PlacementCheckCard({ todo, season }: { todo: PlacementCheckTodo; season
         {todo.files.length > 0 && <Tag>파일 {todo.files.length}개</Tag>}
       </TargetLine>
       <Reason>{todo.reason ?? "받은 파일의 회차를 정하지 못했어요."}</Reason>
+    </Card>
+  );
+}
+
+/** A video whose episode its name does not give: the season folder and the file name as the title, and why. */
+function VideoCheckCard({
+  todo,
+  season,
+  onRefresh,
+}: {
+  todo: VideoCheckTodo;
+  season: SeasonTag;
+  onRefresh?: () => Promise<void>;
+}) {
+  return (
+    <Card todo={todo} action={<VideoCheckActions todo={todo} onRefresh={onRefresh} />}>
+      <h3 className="min-w-0 text-[13.5px] leading-snug font-semibold [overflow-wrap:anywhere]">{todo.path}</h3>
+      <TargetLine episodes={[]} creator={null}>
+        {season(todo.season)}
+      </TargetLine>
+      <Reason>{todo.reason}</Reason>
     </Card>
   );
 }

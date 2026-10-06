@@ -38,6 +38,7 @@ fn lycoris() -> ScannedWork {
         unrecognized: vec![Unrecognized {
             path: "Season 01/extra.mkv".into(),
             reason: Reason::NoEpisode,
+            check: None,
         }],
     }
 }
@@ -121,6 +122,7 @@ async fn answers_the_work_with_its_seasons_files_and_leftovers() {
     assert_eq!(leftovers[0]["path"], "Season 01/extra.mkv");
     assert_eq!(leftovers[0]["reason"], "no_episode");
     assert_eq!(leftovers[0]["message"], Reason::NoEpisode.message());
+    assert_eq!(leftovers[0]["checked"], false);
     assert_eq!(body["rules"], serde_json::json!([]));
 }
 

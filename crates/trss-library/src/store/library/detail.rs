@@ -174,13 +174,13 @@ pub(super) fn detail(conn: &Connection, id: &str) -> rusqlite::Result<Option<Wor
         })
         .collect();
 
-    let mut stmt = conn
-        .prepare("SELECT path, reason FROM unrecognized_files WHERE work_id = ?1 ORDER BY path")?;
+    let mut stmt = conn.prepare(super::UNRECOGNIZED_OF_WORK)?;
     work.unrecognized = stmt
         .query_map([id], |row| {
             Ok(UnrecognizedRecord {
                 path: row.get(0)?,
                 reason: Reason::from_code(&row.get::<_, String>(1)?).unwrap_or(Reason::NoEpisode),
+                checked: row.get(2)?,
             })
         })?
         .collect::<rusqlite::Result<_>>()?;
@@ -424,6 +424,7 @@ mod tests {
             vec![Unrecognized {
                 path: "Extras/PV.mkv".into(),
                 reason: Reason::OutsideSeason,
+                check: None,
             }],
         ))
         .await;

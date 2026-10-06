@@ -188,6 +188,7 @@ async fn filter_and_search_narrow_the_pages_and_the_total() {
         vec![Unrecognized {
             path: "Season 01/x.srt".into(),
             reason: Reason::NoEpisode,
+            check: None,
         }],
     ));
     add_folder(&state, "/a", works).await;

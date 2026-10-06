@@ -155,6 +155,39 @@ export interface PlacementCheckTodo {
 }
 
 /**
+ * `회차 확인 필요` of a video: a video directly in a season folder other than `Season 00` whose name gives no episode,
+ * or another season's. The app neither puts it on an episode nor counts it missing. One per video, until the person
+ * says `확인함` (`checkVideo`) or the video is renamed or moved; another video put at the path is asked about again.
+ */
+export interface VideoCheckTodo {
+  kind: "video_check";
+  key: string;
+  /** The video's modification time (Unix ms). */
+  at: number;
+  work: WorkRef | null;
+  title: string;
+  /** The season of the folder it is in. */
+  season: number;
+  /** Relative to the work folder: the season folder and the file name (the card's title in the work detail). */
+  path: string;
+  /** Why its episode is not known, as a sentence. */
+  reason: string;
+  /** The video as the scan saw it, which `checkVideo` sends back as it is. */
+  seen: string;
+}
+
+/**
+ * `확인함` on a video a `video_check` to-do asks about: it is no longer asked about while it is the video at the path.
+ * A `409` (`conflict`) is another video there since the list was read; a `404` is one renamed or moved.
+ */
+export function checkVideo(workId: string, path: string, seen: string): Promise<void> {
+  return api<void>(`/library/works/${encodeURIComponent(workId)}/videos/check`, {
+    method: "POST",
+    body: { path, seen },
+  });
+}
+
+/**
  * `교체 승인`: subtitle jobs of one work wait for a person to approve or refuse replacing the subtitle an episode
  * already has. One to-do per work (per job when it has no work); it opens the oldest such job. Its reason line is the
  * number tags of `changes` (`changes.ts`, `todoTags`).
@@ -185,7 +218,13 @@ export interface ReplacementTodo {
   new_received_at: number | null;
 }
 
-export type Todo = AuthTodo | ReceiveFailedTodo | ReplacementTodo | EpisodeCheckTodo | PlacementCheckTodo;
+export type Todo =
+  | AuthTodo
+  | ReceiveFailedTodo
+  | ReplacementTodo
+  | EpisodeCheckTodo
+  | PlacementCheckTodo
+  | VideoCheckTodo;
 
 export interface TodoList {
   /** Red kinds first (`인증 필요`, `받기 실패`), then `교체 승인`, then `회차 확인 필요`, each newest first. */

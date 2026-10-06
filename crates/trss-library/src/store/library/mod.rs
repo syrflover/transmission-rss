@@ -61,6 +61,9 @@
 //! from the folders as they were read, and applying it fails with
 //! [`LibraryError::Changed`] if they are not the registered folders any more.
 
+mod checks;
+#[cfg(test)]
+mod checks_tests;
 mod creators;
 #[cfg(test)]
 mod creators_tests;
@@ -74,6 +77,8 @@ mod tests;
 
 use std::collections::BTreeMap;
 
+use checks::UNRECOGNIZED_OF_WORK;
+pub use checks::{CheckError, VideoCheck};
 pub use creators::{AttributedSubtitle, CreatorError, CreatorSet};
 pub use detail::{EpisodeDetail, Held, SeasonDetail, SeasonHoldings, WorkDetail};
 use rusqlite::Transaction;
@@ -300,6 +305,8 @@ pub struct EpisodeRecord {
 pub struct UnrecognizedRecord {
     pub path: String,
     pub reason: Reason,
+    /// A video a person is asked about whose `확인함` holds for it (`checks.rs`).
+    pub checked: bool,
 }
 
 /// A recorded work with everything under it.

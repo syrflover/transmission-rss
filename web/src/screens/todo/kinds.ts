@@ -9,13 +9,16 @@ export type TodoKind = "auth" | "receive_failed" | "replacement" | "episode_chec
  * run without the app's module paths.
  */
 export interface TodoOf {
-  kind: TodoKind | "placement_check";
+  kind: TodoKind | "placement_check" | "video_check";
   work: { id: string } | null;
 }
 
-/** A to-do's badge: a job's 배치 확인 is a `회차 확인 필요` like a mapping's (the server's `todo_api::Todo::badge`). */
+/**
+ * A to-do's badge: a job's 배치 확인 and a video's episode are a `회차 확인 필요` like a mapping's (the server's
+ * `todo_api::Todo::badge`).
+ */
 export function kindOf(todo: Pick<TodoOf, "kind">): TodoKind {
-  return todo.kind === "placement_check" ? "episode_check" : todo.kind;
+  return todo.kind === "placement_check" || todo.kind === "video_check" ? "episode_check" : todo.kind;
 }
 
 /**

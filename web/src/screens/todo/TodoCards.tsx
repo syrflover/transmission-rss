@@ -15,12 +15,14 @@ import {
   type ReceiveFailedTodo,
   type ReplacementTodo,
   type Todo,
+  type VideoCheckTodo,
 } from "./api";
 import { Tag, TodoBadge } from "./badges";
 import { todoTags } from "./changes";
 import { LockIcon } from "./icons";
 import { candidatesLink } from "./Suggestions";
 import { TargetLine } from "./TargetLine";
+import { VideoCheckActions } from "./VideoCheck";
 
 /** Where a `받기 실패` card goes: the episode in the work, else the failure in the history. */
 export function receiveFailedPath(todo: ReceiveFailedTodo): string {
@@ -71,6 +73,8 @@ export function TodoCards({ todos }: { todos: readonly Todo[] }) {
             <ReplacementCard todo={todo} />
           ) : todo.kind === "placement_check" ? (
             <PlacementCheckCard todo={todo} />
+          ) : todo.kind === "video_check" ? (
+            <VideoCheckCard todo={todo} />
           ) : (
             <EpisodeCheckCard todo={todo} />
           )}
@@ -264,6 +268,25 @@ function PlacementCheckCard({ todo }: { todo: PlacementCheckTodo }) {
           <Link to={jobPath(todo.job_id)}>확인</Link>
         </Button>
       }
+    />
+  );
+}
+
+/**
+ * A video whose episode its name does not give: the season folder and the file name, and why; `파일 보기` opens the
+ * work's 파일 card and `확인함` stops asking about it.
+ */
+function VideoCheckCard({ todo }: { todo: VideoCheckTodo }) {
+  return (
+    <Card
+      tone="check"
+      kind={<TodoBadge kind="episode_check" />}
+      at={todo.at}
+      title={todo.title}
+      work={todo.work}
+      target={<p className="min-w-0 text-[12.5px] leading-snug font-semibold [overflow-wrap:anywhere]">{todo.path}</p>}
+      reason={todo.reason}
+      action={<VideoCheckActions todo={todo} />}
     />
   );
 }

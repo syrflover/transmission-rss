@@ -379,7 +379,7 @@ function Loaded({
               onChanged={onAnissiaChanged}
             />
           )}
-          <WorkTodos workId={work.id} seasonCount={work.seasons.length} />
+          <WorkTodos workId={work.id} seasonCount={work.seasons.length} onRefresh={onRetried} />
           {season && (
             <CandidateSection
               key={`candidates-${season.number}`}

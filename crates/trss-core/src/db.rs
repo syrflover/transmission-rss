@@ -181,6 +181,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Remake(include_str!("../migrations/jobs/same_number.sql")),
     // 61: a received archive this machine failed to unpack is tried again: how many tries failed, why the last did, when the next may go
     Migration::Sql(include_str!("../migrations/jobs/unpack_retry.sql")),
+    // 62: a video a person is asked about, its size and time as the scan saw it, and the person's `확인함` on it
+    Migration::Sql(include_str!("../migrations/library/video_check.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]

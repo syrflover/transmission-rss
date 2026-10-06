@@ -261,7 +261,10 @@ export function FilesCard({
               {work.unrecognized.map((file) => (
                 <li key={file.path} className="flex min-w-0 flex-col gap-0.5">
                   <span className="font-mono text-[12px] leading-snug break-all">{file.path}</span>
-                  <span className="text-xs leading-snug text-text-secondary">{file.message}</span>
+                  <span className="text-xs leading-snug text-text-secondary">
+                    {file.message}
+                    {file.checked && <span className="text-text-muted"> · 확인함</span>}
+                  </span>
                 </li>
               ))}
             </ul>

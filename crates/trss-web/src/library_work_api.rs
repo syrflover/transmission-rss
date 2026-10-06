@@ -28,7 +28,8 @@
 //!                    "awaiting_video": false, "approval_job": null }]
 //!     }]
 //!   }],
-//!   "unrecognized": [{ "path": "Extras/PV.mkv", "reason": "outside_season", "message": "…" }],
+//!   "unrecognized": [{ "path": "Extras/PV.mkv", "reason": "outside_season", "message": "…",
+//!                      "checked": false }],
 //!   "cover_url": "/api/library/works/…/artwork/image?v=…",
 //!   "cover_pending": false,
 //!   "rules": [{
@@ -192,7 +193,9 @@
 //!   schedules the episode (Unix milliseconds), only while the entry is
 //!   releasing and has a per-episode schedule, `null` otherwise.
 //! - `unrecognized` are the files that could not be attached to an episode,
-//!   with the reason's code and a sentence for it.
+//!   with the reason's code and a sentence for it. `checked` is true for a
+//!   video the app asks about whose `확인함` holds for it
+//!   ([`super::video_check_api`]).
 //! - `rules` are the rules whose save folder is in this work's folder: the
 //!   first part of the rule's `directory` below the collect folder is the work's
 //!   folder name, and the work is in the collect folder or the archive folder
@@ -398,6 +401,7 @@ struct UnrecognizedView {
     path: String,
     reason: &'static str,
     message: &'static str,
+    checked: bool,
 }
 
 #[derive(Debug, PartialEq, Serialize)]
@@ -1012,6 +1016,7 @@ async fn show(
                 path: u.path,
                 reason: u.reason.code(),
                 message: u.reason.message(),
+                checked: u.checked,
             })
             .collect(),
         rules,

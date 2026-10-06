@@ -50,6 +50,7 @@ pub mod subscriptions_api;
 pub mod subtitle_creator_api;
 pub mod subtitle_upload_api;
 pub mod todo_api;
+pub mod video_check_api;
 pub mod watch_folders_api;
 
 pub use error::ApiError;

@@ -46,6 +46,17 @@
 //!   note). `origin` is how the job came to be (`pick`, `auto`, `upload`,
 //!   `find`, `relocate`) and `source` its posts' host, its source as the work
 //!   detail's card says it.
+//! - `video_check` (`회차 확인 필요` too): a video directly in a season folder
+//!   other than `Season 00` whose name gives no episode (`no_episode`) or
+//!   another season's (`season_mismatch`), which the app neither puts on an
+//!   episode nor counts missing ([`trss_library::store::library::VideoCheck`]).
+//!   One to-do per video, until the person says `확인함`
+//!   ([`super::video_check_api`]) or the video is renamed or moved; another
+//!   video put at the path is asked about again. `path` is the season folder
+//!   and the file name (the card's title in the work detail), `season` the
+//!   folder's, `reason` why as a sentence, `at` the video's modification
+//!   time, and `seen` the video as the scan saw it, which `확인함` sends back.
+//!   It opens the work detail's `파일` card (`/library/<work>#files`).
 //! - `replacement` (`교체 승인`): the subtitle jobs waiting for a person to
 //!   approve or refuse replacing an episode's subtitle
 //!   ([`trss_jobs::place::replace`]), one to-do per work (per job when it
@@ -70,7 +81,8 @@
 //! ([`badges_by_work`], [`super::library_api`]).
 //!
 //! `auth` comes before `receive_failed`, that before `replacement`, and that
-//! before `episode_check` and `placement_check`, each newest first. Failed subtitle
+//! before `episode_check`, `placement_check` and `video_check`, each newest
+//! first. Failed subtitle
 //! jobs are not to-dos: the screen's job list shows them. The suggestions
 //! (`제안`) come from their own APIs. `GET /api/todo/count` is `{ "count" }`
 //! alone.
@@ -550,6 +562,16 @@ pub enum Todo {
         reason: Option<String>,
         job_id: String,
     },
+    VideoCheck {
+        key: String,
+        at: i64,
+        work: Option<WorkRefView>,
+        title: String,
+        season: u32,
+        path: String,
+        reason: String,
+        seen: String,
+    },
     Replacement {
         key: String,
         at: i64,
@@ -658,6 +680,7 @@ impl Todo {
             | Todo::ReceiveFailed { at, .. }
             | Todo::EpisodeCheck { at, .. }
             | Todo::PlacementCheck { at, .. }
+            | Todo::VideoCheck { at, .. }
             | Todo::Replacement { at, .. } => *at,
         }
     }
@@ -669,18 +692,21 @@ impl Todo {
             | Todo::ReceiveFailed { work, .. }
             | Todo::EpisodeCheck { work, .. }
             | Todo::PlacementCheck { work, .. }
+            | Todo::VideoCheck { work, .. }
             | Todo::Replacement { work, .. } => work.as_ref().map(|w| w.id.as_str()),
         }
     }
 
-    /// Its kind as a badge names it: a job's 배치 확인 is a `회차 확인 필요`
-    /// like a mapping's.
+    /// Its kind as a badge names it: a job's 배치 확인 and a video's episode
+    /// are a `회차 확인 필요` like a mapping's.
     fn badge(&self) -> &'static str {
         match self {
             Todo::Auth { .. } => "auth",
             Todo::ReceiveFailed { .. } => "receive_failed",
             Todo::Replacement { .. } => "replacement",
-            Todo::EpisodeCheck { .. } | Todo::PlacementCheck { .. } => "episode_check",
+            Todo::EpisodeCheck { .. } | Todo::PlacementCheck { .. } | Todo::VideoCheck { .. } => {
+                "episode_check"
+            }
         }
     }
 }
@@ -738,6 +764,11 @@ pub async fn todo_list(state: &AppState) -> Result<TodoList, ApiError> {
         }
     };
     checks.extend(placement_check_todos(state).await?);
+    // So is a video's: the library's read failing leaves the rest answering.
+    match video_check_todos(state).await {
+        Ok(videos) => checks.extend(videos),
+        Err(e) => eprintln!("Cannot read the videos' 회차 확인 필요 to-dos: {e:?}"),
+    }
     auth.sort_by_key(|t| std::cmp::Reverse(t.at()));
     failed.sort_by_key(|t| std::cmp::Reverse(t.at()));
     replacements.sort_by_key(|t| std::cmp::Reverse(t.at()));
@@ -957,6 +988,48 @@ async fn episode_check_todos(state: &AppState) -> Result<Vec<Todo>, ApiError> {
             episodes: check.episodes,
             reason: check.undecided,
             sources,
+        })
+        .collect())
+}
+
+/// The `회차 확인 필요` to-dos of videos: one per video of a season folder
+/// whose name gives no episode of it, until a person checks it or it is
+/// renamed or moved ([`trss_library::store::library::LibraryStore::video_checks`]).
+async fn video_check_todos(state: &AppState) -> Result<Vec<Todo>, ApiError> {
+    let internal = |e: &dyn std::fmt::Display| ApiError::Internal(e.to_string());
+    let checks = state
+        .library
+        .video_checks()
+        .await
+        .map_err(|e| internal(&e))?;
+    let mut ids: Vec<String> = checks.iter().map(|c| c.work_id.clone()).collect();
+    ids.dedup();
+    let covers = match ids.is_empty() {
+        true => HashMap::new(),
+        false => state
+            .artwork
+            .store
+            .image_ids_of(ids)
+            .await
+            .map_err(|e| internal(&e))?,
+    };
+    Ok(checks
+        .into_iter()
+        .map(|check| Todo::VideoCheck {
+            key: format!("video:{}:{}", check.work_id, check.path),
+            at: check.identity.mtime_ns.div_euclid(1_000_000),
+            title: check.work_name.clone(),
+            work: Some(WorkRefView {
+                cover_url: covers
+                    .get(&check.work_id)
+                    .map(|image| image_url(&check.work_id, image)),
+                id: check.work_id,
+                name: check.work_name,
+            }),
+            season: check.season,
+            reason: check.reason.message().to_owned(),
+            seen: super::video_check_api::seen(check.identity),
+            path: check.path,
         })
         .collect())
 }

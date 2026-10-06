@@ -818,10 +818,12 @@ async fn unrecognized_files_are_replaced_by_each_scan() {
         Unrecognized {
             path: "x.mkv".into(),
             reason: Reason::OutsideSeason,
+            check: None,
         },
         Unrecognized {
             path: "y.part".into(),
             reason: Reason::Partial,
+            check: None,
         },
     ];
     let (folder, _) = store
@@ -903,6 +905,7 @@ async fn an_unrecognized_subtitle_asks_for_a_check_and_a_download_in_progress_do
     let unrecognized = |path: &str, reason: Reason| Unrecognized {
         path: path.into(),
         reason,
+        check: None,
     };
     let with = |name: &str, extra: Vec<Unrecognized>| {
         WorkRead::Read(ScannedWork {

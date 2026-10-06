@@ -711,12 +711,35 @@ fn sync_work(
         [work_id],
     )?;
     for file in &scanned.unrecognized {
+        // A size past `i64` is no file a disk holds; it is recorded as unread.
+        let check = file
+            .check
+            .and_then(|c| Some((i64::try_from(c.size).ok()?, c.mtime_ns)));
         tx.execute(
-            "INSERT OR REPLACE INTO unrecognized_files (work_id, path, reason)
-             VALUES (?1, ?2, ?3)",
-            params![work_id, file.path, file.reason.code()],
+            "INSERT OR REPLACE INTO unrecognized_files (work_id, path, reason, size, mtime_ns)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                work_id,
+                file.path,
+                file.reason.code(),
+                check.map(|c| c.0),
+                check.map(|c| c.1)
+            ],
         )?;
     }
+    // A person's `확인함` lasts while the scan finds the same video at its
+    // path; one it could not read this time keeps it (`checks.rs`).
+    tx.execute(
+        "DELETE FROM unrecognized_checks
+          WHERE work_id = ?1
+            AND NOT EXISTS (
+                SELECT 1 FROM unrecognized_files u
+                 WHERE u.work_id = ?1 AND u.path = unrecognized_checks.path
+                   AND (u.size IS NULL
+                        OR (u.size = unrecognized_checks.size
+                            AND u.mtime_ns = unrecognized_checks.mtime_ns)))",
+        [work_id],
+    )?;
     Ok(())
 }
 
@@ -813,8 +836,13 @@ fn merge_work(tx: &Transaction<'_>, from: &str, into: &str) -> rusqlite::Result<
         params![from, into],
     )?;
     tx.execute(
-        "INSERT OR IGNORE INTO unrecognized_files (work_id, path, reason)
-         SELECT ?2, path, reason FROM unrecognized_files WHERE work_id = ?1",
+        "INSERT OR IGNORE INTO unrecognized_files (work_id, path, reason, size, mtime_ns)
+         SELECT ?2, path, reason, size, mtime_ns FROM unrecognized_files WHERE work_id = ?1",
+        params![from, into],
+    )?;
+    tx.execute(
+        "INSERT OR IGNORE INTO unrecognized_checks (work_id, path, size, mtime_ns, checked_at)
+         SELECT ?2, path, size, mtime_ns, checked_at FROM unrecognized_checks WHERE work_id = ?1",
         params![from, into],
     )?;
     Ok(())
@@ -958,13 +986,12 @@ pub(super) fn works(conn: &Connection, folder_id: &str) -> rusqlite::Result<Vec<
             }
         }
 
-        let mut stmt = conn.prepare(
-            "SELECT path, reason FROM unrecognized_files WHERE work_id = ?1 ORDER BY path",
-        )?;
+        let mut stmt = conn.prepare(super::UNRECOGNIZED_OF_WORK)?;
         let rows = stmt.query_map([&work.id], |row| {
             Ok(UnrecognizedRecord {
                 path: row.get(0)?,
                 reason: Reason::from_code(&row.get::<_, String>(1)?).unwrap_or(Reason::NoEpisode),
+                checked: row.get(2)?,
             })
         })?;
         work.unrecognized = rows.collect::<rusqlite::Result<_>>()?;
