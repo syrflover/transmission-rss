@@ -624,6 +624,7 @@ async fn a_worker_stopped_after_transmission_moved_finishes_the_rest_on_the_next
     task.abort();
     let _ = task.await;
     gate.release_all();
+    s.h.wait_lock_free().await;
 
     let stored = CommandStore::new(s.h.db.clone())
         .get("archive-stop-01")

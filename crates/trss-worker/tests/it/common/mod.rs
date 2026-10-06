@@ -50,7 +50,7 @@ use trss_collect::store::{
     channels::{ChannelInput, ChannelStore, ChannelWithRules, RuleInput},
     history::{HistoryItem, HistoryQuery, HistoryStore, MAX_PAGE_SIZE},
 };
-use trss_core::{lock_path_for, settings::SettingsStore, Db};
+use trss_core::{lock_path_for, settings::SettingsStore, CycleLock, Db};
 use trss_transmission::RenamePolicy;
 use trss_web::AppState;
 use trss_worker::{Worker, WorkerEnv};
@@ -1297,6 +1297,23 @@ impl Harness {
 
     pub fn db_path(&self) -> std::path::PathBuf {
         self.dir.path().join("app.db")
+    }
+
+    /// Waits until a worker stopped midway (its task aborted) has let go of
+    /// the lock between processes. It lets go only after its last heartbeat,
+    /// in a task of its own, and every worker [`Harness::worker`] builds is
+    /// another process to it, which finds the lock taken until then and
+    /// answers `Busy`. A restarted process finds it free at once: the
+    /// operating system let go of the stopped one's.
+    pub async fn wait_lock_free(&self) {
+        let lock = lock_path_for(&self.db_path());
+        for _ in 0..1000 {
+            if CycleLock::try_acquire(&lock).unwrap().is_some() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("the stopped worker never let go of its lock");
     }
 
     pub fn worker_env(&self) -> WorkerEnv {
