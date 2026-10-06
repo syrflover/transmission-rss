@@ -861,8 +861,12 @@ async fn the_worker_process_records_a_new_episode_within_seconds_without_waiting
             lib.has_file(&folder, "A", "Season 01/A S01E02.mkv").await
         })
         .await;
+        // The reading logs after it commits, so the line can trail the row.
+        eventually("the targeted reading logs it", || async {
+            output().contains("works read (A)")
+        })
+        .await;
         let log = output();
-        assert!(log.contains("works read (A)"), "{log}");
         assert!(!log.contains("Cycle failed"), "{log}");
     }
     .await;
