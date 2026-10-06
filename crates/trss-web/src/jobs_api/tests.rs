@@ -452,6 +452,9 @@ async fn an_unfinished_file_is_receiving_only_while_its_episode_runs() {
                 volume_of: None,
                 unpacked_at: None,
                 unpack_error: None,
+                unpack_tries: 0,
+                unpack_failure: None,
+                unpack_retry_at: None,
                 unchanged_asset: None,
             })
             .await
@@ -936,7 +939,20 @@ async fn each_received_archive_says_what_came_of_unpacking_it() {
                     ('d', 'j1', 1, 'd', 'later.7z', 'done', 9, '0000000000000000000000000000000000000000000000000000000000000000', 'j1/d', 1, 1, 'other',
                      'archive', NULL, NULL, NULL),
                     ('e', 'j1', 1, 'e', '01.ass', 'done', 9, '0000000000000000000000000000000000000000000000000000000000000000', 'j1/e', 1, 1, 'ass',
-                     'subtitle', NULL, NULL, NULL);
+                     'subtitle', NULL, NULL, NULL),
+                    ('f', 'j1', 1, 'f', 'full.zip', 'done', 9, '0000000000000000000000000000000000000000000000000000000000000000', 'j1/f', 1, 1, 'zip',
+                     'archive', NULL, NULL, NULL),
+                    ('g', 'j1', 1, 'g', 'started.zip', 'done', 9, '0000000000000000000000000000000000000000000000000000000000000000', 'j1/g', 1, 1, 'zip',
+                     'archive', NULL, NULL, NULL),
+                    ('h', 'j1', 1, 'h', 'thrice.zip', 'done', 9, '0000000000000000000000000000000000000000000000000000000000000000', 'j1/h', 1, 1, 'zip',
+                     'archive', NULL, '120초 안에 다 풀지 못해 멈췄어요', NULL);
+         UPDATE subtitle_job_files SET unpack_tries = 1, unpack_failure = '디스크가 찼어요',
+                                       unpack_retry_at = 3600005 WHERE id = 'f';
+         -- A worker started after its second try failed.
+         UPDATE subtitle_job_files SET unpack_tries = 2, unpack_failure = '디스크가 찼어요'
+          WHERE id = 'g';
+         UPDATE subtitle_job_files SET unpack_tries = 3, unpack_failure = '120초 안에 다 풀지 못해 멈췄어요'
+          WHERE id = 'h';
          INSERT INTO subtitle_job_members (file_id, position, path, size, sha256, format, reason)
              VALUES ('a', 0, 'Show - 01.ass', 1, '0000000000000000000000000000000000000000000000000000000000000000', 'ass', NULL),
                     ('a', 1, 'Fonts/A.ttf', 1, '0000000000000000000000000000000000000000000000000000000000000000', 'other', NULL),
@@ -959,16 +975,44 @@ async fn each_received_archive_says_what_came_of_unpacking_it() {
     // subtitle nor a font.
     assert_eq!(
         unpack("pack.zip"),
-        json!({ "state": "done", "reason": null, "first": null,
+        json!({ "state": "done", "reason": null, "tries": 0, "retry_at": null, "first": null,
                  "files": 4, "subtitles": 1, "fonts": 1 })
     );
     assert_eq!(
         unpack("s.part1.rar"),
-        json!({ "state": "failed", "reason": "나뉜 압축 파일의 조각이 모자라요", "first": null,
-                 "files": null, "subtitles": null, "fonts": null })
+        json!({ "state": "failed", "reason": "나뉜 압축 파일의 조각이 모자라요", "tries": 0,
+                 "retry_at": null, "first": null, "files": null, "subtitles": null, "fonts": null })
     );
     assert_eq!(unpack("s.part3.rar")["state"], "volume");
     assert_eq!(unpack("s.part3.rar")["first"], "s.part1.rar");
+    // A try this machine failed waits for the next, with when it goes at
+    // the latest, or none once a worker started since.
+    assert_eq!(
+        unpack("full.zip"),
+        json!({ "state": "retry", "reason": "디스크가 찼어요", "tries": 1, "retry_at": 3600005,
+                 "first": null, "files": null, "subtitles": null, "fonts": null })
+    );
+    assert_eq!(
+        (
+            &unpack("started.zip")["state"],
+            &unpack("started.zip")["tries"],
+            &unpack("started.zip")["retry_at"]
+        ),
+        (&json!("retry"), &json!(2), &Value::Null)
+    );
+    // The third failure is 풀지 못함, with the tries it took.
+    assert_eq!(
+        (
+            &unpack("thrice.zip")["state"],
+            &unpack("thrice.zip")["reason"],
+            &unpack("thrice.zip")["tries"]
+        ),
+        (
+            &json!("failed"),
+            &json!("120초 안에 다 풀지 못해 멈췄어요"),
+            &json!(3)
+        )
+    );
     // Not tried yet, and no archive.
     assert_eq!(unpack("later.7z"), Value::Null);
     assert_eq!(unpack("01.ass"), Value::Null);

@@ -361,6 +361,15 @@ pub struct FileRow {
     pub unpacked_at: Option<Millis>,
     /// For an archive: why it could not be unpacked (풀지 못함).
     pub unpack_error: Option<String>,
+    /// For an archive: how many tries to unpack it failed for this machine
+    /// (a full disk, a limit, the child), and why the last one did; it is
+    /// tried again until [`crate::place::unpack::UNPACK_TRIES`]. A try after
+    /// them that the archive's own reason ended counts too.
+    pub unpack_tries: u32,
+    pub unpack_failure: Option<String>,
+    /// When the next try may go: an hour after the failure, or `None` once a
+    /// worker started after it.
+    pub unpack_retry_at: Option<Millis>,
     /// For a Google Drive font not received because it did not change: the
     /// stored font it uses instead ([`crate::place::unchanged`]). Such a
     /// receipt is `done` with no path.
@@ -1289,11 +1298,19 @@ impl JobStore {
 
     /// Puts the items and jobs that wait for a source back in line, so a
     /// build that knows more sources tries them again; so are the jobs whose
-    /// work folder was not there (`영상 대기`).
+    /// work folder was not there (`영상 대기`). A worker calls it when it
+    /// starts, which is also when an archive this machine failed to unpack
+    /// is tried again without waiting for its hour
+    /// ([`crate::place::unpack`]).
     pub async fn requeue_waiting_for_sources(&self, now: Millis) -> Result<usize, JobError> {
         self.db
             .run(move |c| {
                 let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                tx.execute(
+                    "UPDATE subtitle_job_files SET unpack_retry_at = NULL, updated_at = ?1
+                     WHERE unpack_retry_at IS NOT NULL",
+                    [now],
+                )?;
                 tx.execute(
                     "UPDATE subtitle_job_items
                      SET state = 'pending', wait = NULL, reason = NULL, updated_at = ?1
@@ -1307,6 +1324,39 @@ impl JobStore {
                      SET state = 'pending', wait = NULL, note = NULL, state_at = ?1,
                          updated_at = ?1
                      WHERE state = 'waiting' AND wait IN ('subtitle', 'video')",
+                    [now],
+                )?;
+                tx.commit()?;
+                Ok(jobs)
+            })
+            .await
+    }
+
+    /// Puts back in line the jobs that wait (`자막 대기`) for an archive's
+    /// next try to unpack it once its time came ([`crate::place::unpack`]);
+    /// how many. Every command poll asks, so a look that finds none takes
+    /// no write lock.
+    pub async fn requeue_unpack_retries(&self, now: Millis) -> Result<usize, JobError> {
+        const DUE: &str = "SELECT f.job_id FROM subtitle_job_files f
+                             JOIN subtitle_jobs j ON j.id = f.job_id
+                            WHERE f.unpack_retry_at <= ?1
+                              AND f.unpacked_at IS NULL AND f.unpack_error IS NULL
+                              AND j.state = 'waiting' AND j.wait = 'subtitle'";
+        self.db
+            .run(move |c| {
+                let due: bool =
+                    c.query_row(&format!("SELECT EXISTS ({DUE})"), [now], |r| r.get(0))?;
+                if !due {
+                    return Ok(0);
+                }
+                let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                let jobs = tx.execute(
+                    &format!(
+                        "UPDATE subtitle_jobs
+                            SET state = 'pending', wait = NULL, note = NULL, state_at = ?1,
+                                updated_at = ?1
+                          WHERE id IN ({DUE})"
+                    ),
                     [now],
                 )?;
                 tx.commit()?;
@@ -2590,7 +2640,8 @@ const FILE_COLUMNS: &str = "
     SELECT id, item_id, file_key, name, state, same_as, temp_dir, expected_size, size, sha256,
            object, path, reason, created_at, format, failure, http_status, content_type,
            response_size, snapshot, kind, archive_type, folder, cleared_at, volume_of,
-           unpacked_at, unpack_error, unchanged_asset
+           unpacked_at, unpack_error, unchanged_asset, unpack_tries, unpack_failure,
+           unpack_retry_at
     FROM subtitle_job_files";
 
 /// A failure class column.
@@ -2658,6 +2709,9 @@ fn file_row(r: &Row<'_>) -> rusqlite::Result<FileRow> {
         unpacked_at: r.get(25)?,
         unpack_error: r.get(26)?,
         unchanged_asset: r.get(27)?,
+        unpack_tries: r.get(28)?,
+        unpack_failure: r.get(29)?,
+        unpack_retry_at: r.get(30)?,
     })
 }
 

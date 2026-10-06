@@ -18,6 +18,7 @@ use trss_jobs::{
     area::ReceiveArea,
     model::{AssetKind, Outcome, PlanAction, StepKind},
     place::records::{Confirmed, RowPlacing},
+    place::unpack::{UNPACK_AGAIN, UNPACK_RETRY_AFTER},
     store::{FileRow, JobDetail},
     Created, JobState, JobStore, NewItem, NewJob, Runner, Unpacker, Wait,
 };
@@ -59,6 +60,24 @@ impl Setup {
             )))),
             false => runner,
         }
+    }
+
+    /// A runner over the fake source with no program to unpack, at the
+    /// times `now` gives (it ticks).
+    fn bare_runner_at(&self, now: &Arc<AtomicI64>) -> Runner {
+        let now = now.clone();
+        Runner::new(
+            self.store.clone(),
+            Sources::none().with_fake(FakeSource),
+            self.area.clone(),
+            Arc::new(move || now.fetch_add(10, Ordering::SeqCst)),
+        )
+    }
+
+    /// The same, unpacking with `program`.
+    fn runner_at(&self, program: PathBuf, now: &Arc<AtomicI64>) -> Runner {
+        self.bare_runner_at(now)
+            .with_unpacker(Unpacker::new(program))
     }
 
     async fn run(&self) {
@@ -387,7 +406,9 @@ async fn an_archive_whose_member_leaves_it_fails_and_stays_received() {
         .iter()
         .all(|p| !p.ends_with("Show - 02.ass")));
 
-    // A later run leaves it as it is: it is not tried again.
+    // A later run leaves it as it is: it is not tried again, the archive's
+    // own reason being no machine's failure.
+    assert_eq!((file.unpack_tries, file.unpack_retry_at), (0, None));
     let again = s.count("subtitle_job_events").await;
     s.store.requeue_waiting_for_sources(5_000).await.unwrap();
     s.run().await;
@@ -478,6 +499,397 @@ async fn an_archive_waits_for_the_program_and_a_killed_unpacking_starts_anew() {
         (&file.id, file.created_at)
     );
     assert!(!s.area.at(&id).exists());
+}
+
+/// What `trss-extract` answers when the disk it unpacks to is full.
+const DISK_FULL: &str = "압축을 풀 자리에 쓰지 못했어요: No space left on device (os error 28)";
+
+/// A program that answers [`DISK_FULL`] for any archive.
+fn full_disk() -> PathBuf {
+    fixtures().join("full-disk-extract.sh")
+}
+
+fn extract() -> PathBuf {
+    PathBuf::from(env!("CARGO_BIN_EXE_trss-extract"))
+}
+
+// This machine fails to unpack (a full disk, ticket 0065): the job waits
+// (`자막 대기`), and the archive is unpacked again from what was received an
+// hour later, or at a worker's start if that comes first; the log says which
+// try each was.
+#[tokio::test]
+async fn an_archive_this_machine_failed_to_unpack_is_tried_again_from_its_receipt() {
+    let s = setup().await;
+    video(&s, "02").await;
+    let id = make(
+        &s,
+        "c1",
+        &[(
+            "2",
+            &zip_post("pack.zip", &["Show - 02.ass", "Show - 03.ass"]),
+        )],
+    )
+    .await;
+    let now = Arc::new(AtomicI64::new(1_000));
+    let go = CancellationToken::new();
+    s.runner_at(full_disk(), &now).run_ready(&go).await.unwrap();
+
+    let d = s.detail(&id).await;
+    assert_eq!(
+        (d.row.state, d.row.wait),
+        (JobState::Waiting, Some(Wait::Subtitle))
+    );
+    assert_eq!(d.row.note.as_deref(), Some(UNPACK_AGAIN));
+    let file = d.items[0].files[0].clone();
+    assert_eq!(
+        (
+            file.unpack_tries,
+            file.unpack_failure.as_deref(),
+            file.unpack_error.as_deref()
+        ),
+        (1, Some(DISK_FULL), None)
+    );
+    let retry_at = file.unpack_retry_at.unwrap();
+    assert!((1_000..now.load(Ordering::SeqCst)).contains(&(retry_at - UNPACK_RETRY_AFTER)));
+    assert!(events(&d).contains(&(
+        "pack.zip: 압축 파일을 풀지 못해 다시 풀어요".to_owned(),
+        Some(format!(
+            "{DISK_FULL} (3번 중 1번째 시도). 1시간 뒤나 worker가 다시 시작할 때 다시 풀어요"
+        ))
+    )));
+    assert_eq!(s.count("subtitle_job_members").await, 0);
+    assert!(!s.area.at(&ReceiveArea::unpack_dir(&id, &file.id)).exists());
+    assert!(!s.work().join(".trss").exists());
+
+    // Before its hour nothing goes back in line, and a run of the job for
+    // another reason (a video came) does not try it.
+    now.store(retry_at - 100, Ordering::SeqCst);
+    let full = s.runner_at(full_disk(), &now);
+    assert_eq!(full.requeue_unpack_retries().await.unwrap(), 0);
+    let id2 = id.clone();
+    s.db.run(move |c| {
+        c.execute(
+            "UPDATE subtitle_jobs SET state = 'pending', wait = NULL WHERE id = ?1",
+            [id2],
+        )
+        .map_err(trss_core::DbError::from)
+    })
+    .await
+    .unwrap();
+    full.run_ready(&go).await.unwrap();
+    let d = s.detail(&id).await;
+    assert_eq!(d.row.note.as_deref(), Some(UNPACK_AGAIN));
+    assert_eq!(
+        (
+            d.items[0].files[0].unpack_tries,
+            d.items[0].files[0].unpack_retry_at
+        ),
+        (1, Some(retry_at))
+    );
+
+    // A worker without the program starts: it lets the try go but cannot
+    // make it, and says so.
+    s.store
+        .requeue_waiting_for_sources(now.load(Ordering::SeqCst))
+        .await
+        .unwrap();
+    s.bare_runner_at(&now).run_ready(&go).await.unwrap();
+    let d = s.detail(&id).await;
+    assert_eq!(d.row.note.as_deref(), Some(trss_jobs::place::ARCHIVE_LATER));
+    assert_eq!(
+        (
+            d.items[0].files[0].unpack_tries,
+            d.items[0].files[0].unpack_retry_at
+        ),
+        (1, None)
+    );
+
+    // A worker with it starts, the disk still full: the second try, at
+    // once, which fails as well and waits its own hour.
+    s.store
+        .requeue_waiting_for_sources(now.load(Ordering::SeqCst))
+        .await
+        .unwrap();
+    let started = now.load(Ordering::SeqCst);
+    full.run_ready(&go).await.unwrap();
+    let d = s.detail(&id).await;
+    assert_eq!(
+        (d.row.state, d.row.wait),
+        (JobState::Waiting, Some(Wait::Subtitle))
+    );
+    let file = d.items[0].files[0].clone();
+    assert_eq!(file.unpack_tries, 2);
+    let retry_at = file.unpack_retry_at.unwrap();
+    assert!(retry_at >= started + UNPACK_RETRY_AFTER);
+    assert!(events(&d).iter().any(|(m, detail)| m
+        == "pack.zip: 압축 파일을 풀지 못해 다시 풀어요"
+        && detail.as_deref().unwrap().contains("(3번 중 2번째 시도)")));
+
+    // Its hour is up: a job a person holds stays as it is.
+    now.store(retry_at, Ordering::SeqCst);
+    let set = |state: &'static str, wait: Option<&'static str>| {
+        let id = id.clone();
+        s.db.run(move |c| {
+            c.execute(
+                "UPDATE subtitle_jobs SET state = ?2, wait = ?3 WHERE id = ?1",
+                params![id, state, wait],
+            )
+            .map_err(trss_core::DbError::from)
+        })
+    };
+    set("held", None).await.unwrap();
+    assert_eq!(full.requeue_unpack_retries().await.unwrap(), 0);
+    set("waiting", Some("subtitle")).await.unwrap();
+    // A worker without the program would not try it either.
+    assert_eq!(
+        s.bare_runner_at(&now)
+            .requeue_unpack_retries()
+            .await
+            .unwrap(),
+        0
+    );
+
+    // The waiting job goes back in line, and the third try, with room on
+    // the disk, unpacks the archive it received.
+    assert_eq!(full.requeue_unpack_retries().await.unwrap(), 1);
+    s.runner_at(extract(), &now).run_ready(&go).await.unwrap();
+    let d = s.detail(&id).await;
+    assert_eq!(d.row.state, JobState::Done, "{:?}", d.row.note);
+    assert_eq!(names(&s.stored_dir()), ["Show - 02.ass", "Show - 03.ass"]);
+    assert!(s.work().join("Season 01/Show S01E02.ass").is_file());
+    assert!(events(&d).contains(&(
+        "pack.zip: 압축 파일을 풀었어요".to_owned(),
+        Some("파일 2개 (3번 중 3번째 시도)".to_owned())
+    )));
+    let again = &d.items[0].files;
+    assert_eq!(again.len(), 1);
+    assert_eq!(
+        (&again[0].id, again[0].created_at, again[0].unpack_retry_at),
+        (&file.id, file.created_at, None)
+    );
+    assert_eq!(full.requeue_unpack_retries().await.unwrap(), 0);
+}
+
+// A try after one this machine failed that the archive's own reason ends
+// (here a member leaving it) leaves it not unpacked, counted with the tries
+// before it, and no later try waits: the job is not put back in line for it
+// while it waits for something else.
+#[tokio::test]
+async fn a_refusal_after_a_failed_try_ends_the_tries() {
+    let s = setup().await;
+    video(&s, "02").await;
+    let id = make(&s, "c1", &[("2", "/zip/evil.zip/..%2F..%2FShow - 02.ass")]).await;
+    let now = Arc::new(AtomicI64::new(1_000));
+    let go = CancellationToken::new();
+    s.runner_at(full_disk(), &now).run_ready(&go).await.unwrap();
+    let retry_at = s.detail(&id).await.items[0].files[0]
+        .unpack_retry_at
+        .unwrap();
+
+    now.store(retry_at, Ordering::SeqCst);
+    let unpacks = s.runner_at(extract(), &now);
+    assert_eq!(unpacks.requeue_unpack_retries().await.unwrap(), 1);
+    unpacks.run_ready(&go).await.unwrap();
+
+    let d = s.detail(&id).await;
+    assert_eq!(d.row.state, JobState::Failed, "{:?}", d.row.note);
+    let file = &d.items[0].files[0];
+    let reason = file.unpack_error.clone().unwrap();
+    assert_ne!(reason, DISK_FULL);
+    assert_eq!((file.unpack_tries, file.unpack_retry_at), (2, None));
+    assert!(events(&d).contains(&(
+        "evil.zip: 압축 파일을 풀지 못했어요".to_owned(),
+        Some(format!("{reason} (3번 중 2번째 시도)"))
+    )));
+
+    let id2 = id.clone();
+    s.db.run(move |c| {
+        c.execute(
+            "UPDATE subtitle_jobs SET state = 'waiting', wait = 'subtitle' WHERE id = ?1",
+            [id2],
+        )
+        .map_err(trss_core::DbError::from)
+    })
+    .await
+    .unwrap();
+    now.fetch_add(UNPACK_RETRY_AFTER, Ordering::SeqCst);
+    assert_eq!(unpacks.requeue_unpack_retries().await.unwrap(), 0);
+}
+
+// The volumes of a split archive wait for the next try together, as one
+// archive, and are unpacked together by it.
+#[tokio::test]
+async fn a_split_archive_is_tried_again_as_one() {
+    let s = setup().await;
+    video(&s, "02").await;
+    let id = make(
+        &s,
+        "c1",
+        &[("2", "/pack/Show.zip.001/Show.zip.002/Show%20-%2002.ass")],
+    )
+    .await;
+    s.runner(false)
+        .run_ready(&CancellationToken::new())
+        .await
+        .unwrap();
+    let whole = fake::zip_of(&["Show - 03.ass".to_owned(), "Show - 04.ass".to_owned()]);
+    let (first, second) = whole.split_at(whole.len() / 2);
+    let d = s.detail(&id).await;
+    for (name, bytes) in [("Show.zip.001", first), ("Show.zip.002", second)] {
+        let file = d.items[0].files.iter().find(|f| f.name == name).unwrap();
+        replace_bytes(&s, file, bytes).await;
+    }
+    let now = Arc::new(AtomicI64::new(1_000));
+    let go = CancellationToken::new();
+    s.store.requeue_waiting_for_sources(1_000).await.unwrap();
+    s.runner_at(full_disk(), &now).run_ready(&go).await.unwrap();
+
+    let d = s.detail(&id).await;
+    assert_eq!(d.row.note.as_deref(), Some(UNPACK_AGAIN));
+    let file = |d: &JobDetail, name: &str| {
+        d.items[0]
+            .files
+            .iter()
+            .find(|f| f.name == name)
+            .unwrap()
+            .clone()
+    };
+    let (one, two) = (file(&d, "Show.zip.001"), file(&d, "Show.zip.002"));
+    assert_eq!((one.unpack_tries, two.unpack_tries), (1, 0));
+    assert_eq!(two.volume_of.as_deref(), Some(one.id.as_str()));
+
+    s.store
+        .requeue_waiting_for_sources(now.load(Ordering::SeqCst))
+        .await
+        .unwrap();
+    s.runner_at(extract(), &now).run_ready(&go).await.unwrap();
+    let d = s.detail(&id).await;
+    assert_eq!(d.row.state, JobState::Done, "{:?}", d.row.note);
+    assert_eq!(
+        names(&s.stored_dir()),
+        ["Show - 02.ass", "Show - 03.ass", "Show - 04.ass"]
+    );
+    assert!(!s.area.at(&id).exists());
+}
+
+// An upload's archive this machine failed waits for its next try before
+// the upload waits for its 배치 확인.
+#[tokio::test]
+async fn an_uploads_archive_is_tried_again_before_its_placement_is_confirmed() {
+    let s = setup().await;
+    let rar = std::fs::read(fixtures().join("pack.rar")).unwrap();
+    let (id, _) = upload(&s, "u1", &[("subs", rar)]).await;
+    let now = Arc::new(AtomicI64::new(1_000));
+    let go = CancellationToken::new();
+    s.runner_at(full_disk(), &now).run_ready(&go).await.unwrap();
+    let d = s.detail(&id).await;
+    assert_eq!(
+        (d.row.state, d.row.wait, d.row.note.as_deref()),
+        (JobState::Waiting, Some(Wait::Subtitle), Some(UNPACK_AGAIN))
+    );
+    assert_eq!(receive_note(&d), Some("압축 파일 1개".to_owned()));
+
+    now.fetch_add(UNPACK_RETRY_AFTER, Ordering::SeqCst);
+    let unpacks = s.runner_at(extract(), &now);
+    assert_eq!(unpacks.requeue_unpack_retries().await.unwrap(), 1);
+    unpacks.run_ready(&go).await.unwrap();
+    let d = s.detail(&id).await;
+    assert_eq!(d.row.wait, Some(Wait::Placement), "{:?}", d.row.note);
+    assert_eq!(s.store.members(&id).await.unwrap().len(), 3);
+}
+
+// The third try this machine fails leaves the archive not unpacked: the job
+// fails with why, the log says it was the last try, and no later start or
+// hour tries it again.
+#[tokio::test]
+async fn the_third_failed_try_leaves_the_archive_not_unpacked() {
+    let s = setup().await;
+    video(&s, "02").await;
+    let id = make(
+        &s,
+        "c1",
+        &[("2", &zip_post("pack.zip", &["Show - 02.ass"]))],
+    )
+    .await;
+    let now = Arc::new(AtomicI64::new(1_000));
+    let go = CancellationToken::new();
+    let full = s.runner_at(full_disk(), &now);
+    full.run_ready(&go).await.unwrap();
+    // Two worker starts, each trying it again at once.
+    for _ in 0..2 {
+        s.store
+            .requeue_waiting_for_sources(now.load(Ordering::SeqCst))
+            .await
+            .unwrap();
+        full.run_ready(&go).await.unwrap();
+    }
+
+    let d = s.detail(&id).await;
+    assert_eq!(d.row.state, JobState::Failed, "{:?}", d.row.note);
+    assert_eq!(d.row.note, Some(format!("pack.zip: {DISK_FULL}")));
+    let file = d.items[0].files[0].clone();
+    assert_eq!(
+        (
+            file.unpack_tries,
+            file.unpack_error.as_deref(),
+            file.unpack_retry_at
+        ),
+        (3, Some(DISK_FULL), None)
+    );
+    let tries: Vec<(String, Option<String>)> = events(&d)
+        .into_iter()
+        .filter(|(m, _)| m.starts_with("pack.zip: "))
+        .collect();
+    assert_eq!(tries.len(), 3, "{tries:?}");
+    assert!(tries.contains(&(
+        "pack.zip: 압축 파일을 풀지 못했어요".to_owned(),
+        Some(format!("{DISK_FULL} (3번 중 3번째 시도)"))
+    )));
+
+    let logged = s.count("subtitle_job_events").await;
+    now.fetch_add(10 * UNPACK_RETRY_AFTER, Ordering::SeqCst);
+    assert_eq!(full.requeue_unpack_retries().await.unwrap(), 0);
+    s.store
+        .requeue_waiting_for_sources(now.load(Ordering::SeqCst))
+        .await
+        .unwrap();
+    s.runner_at(extract(), &now).run_ready(&go).await.unwrap();
+    assert_eq!(s.count("subtitle_job_events").await, logged);
+    assert!(s.area.at(file.path.as_deref().unwrap()).is_file());
+    assert!(!s.work().join(".trss").exists());
+}
+
+// An archive with no file in it (a ZIP of a folder only; one with no entry
+// at all fails its receipt's check) is the archive's own reason, not this
+// machine's: it is not unpacked and not tried again.
+#[tokio::test]
+async fn an_empty_archive_is_not_tried_again() {
+    let s = setup().await;
+    let id = make(&s, "c1", &[("2", &zip_post("folder.zip", &["x.ass"]))]).await;
+    s.runner(false)
+        .run_ready(&CancellationToken::new())
+        .await
+        .unwrap();
+    let d = s.detail(&id).await;
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    zip.add_directory("Fonts/", zip::write::SimpleFileOptions::default())
+        .unwrap();
+    let folder_only = zip.finish().unwrap().into_inner();
+    replace_bytes(&s, &d.items[0].files[0], &folder_only).await;
+    s.store.requeue_waiting_for_sources(5_000).await.unwrap();
+    s.run().await;
+
+    let d = s.detail(&id).await;
+    assert_eq!(d.row.state, JobState::Failed, "{:?}", d.row.note);
+    let file = &d.items[0].files[0];
+    assert_eq!(
+        (
+            file.unpack_error.as_deref(),
+            file.unpack_tries,
+            file.unpack_retry_at
+        ),
+        (Some(trss_jobs::place::unpack::EMPTY_ARCHIVE), 0, None)
+    );
 }
 
 // The volumes of a split ZIP (`.zip.001`, `.zip.002`) come as two files of

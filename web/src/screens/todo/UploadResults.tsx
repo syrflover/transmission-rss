@@ -2,7 +2,8 @@ import { cn } from "@/lib/utils";
 
 import type { ArchiveType, DroppedFile, JobFile, UploadKind } from "./api";
 import { ItemBadge } from "./badges";
-import { FORMAT_LABEL, sizeText, unpackText } from "./format";
+import { FORMAT_LABEL, sizeText } from "./format";
+import { unpackText } from "./unpack";
 
 const KIND_LABEL: Record<UploadKind, string> = {
   subtitle: "자막",

@@ -12,8 +12,11 @@
 //!   worker puts such items back in line when it starts
 //!   ([`Runner::requeue_waiting_for_sources`]). So does a post whose source
 //!   finds its subtitle somewhere it cannot read yet (a Google Drive folder),
-//!   with the source's reason, and a job whose received files wait for their
-//!   work folder to be there again (`영상 대기`, [`crate::place`]).
+//!   with the source's reason, a job whose received files wait for their
+//!   work folder to be there again (`영상 대기`, [`crate::place`]), and one
+//!   whose archive waits for the next try to unpack it, which also goes back
+//!   in line an hour after the failed try
+//!   ([`Runner::requeue_unpack_retries`], [`crate::place::unpack`]).
 //! - A post whose subtitle is in WinPNG images ([`Opened::WinPng`]) is read by
 //!   the runner's [`WinpngReader`] (a server browser; [`Runner::with_winpng`]):
 //!   the files it takes out are put in a folder of the job's, which is the
@@ -408,6 +411,16 @@ impl Runner {
         let (generation, requeued) = self.store.requeue_awaiting_video(seen, self.now()).await?;
         *self.video_seen.lock().expect("not poisoned") = Some(generation);
         Ok(requeued)
+    }
+
+    /// Puts the jobs whose archive waits for its next try to unpack it back
+    /// in line once the try is due ([`crate::place::unpack`]). A runner that
+    /// does not unpack leaves them: its runs would not try.
+    pub async fn requeue_unpack_retries(&self) -> Result<usize, JobError> {
+        if !self.placer.unpacks() {
+            return Ok(0);
+        }
+        self.store.requeue_unpack_retries(self.now()).await
     }
 
     pub async fn has_ready(&self) -> Result<bool, JobError> {
@@ -1473,6 +1486,9 @@ impl Runner {
                 volume_of: None,
                 unpacked_at: None,
                 unpack_error: None,
+                unpack_tries: 0,
+                unpack_failure: None,
+                unpack_retry_at: None,
                 unchanged_asset: Some(kept.asset_id),
             })
             .await?;
@@ -1545,6 +1561,9 @@ impl Runner {
                 volume_of: None,
                 unpacked_at: None,
                 unpack_error: None,
+                unpack_tries: 0,
+                unpack_failure: None,
+                unpack_retry_at: None,
                 unchanged_asset: None,
             })
             .await?;

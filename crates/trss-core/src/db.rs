@@ -179,6 +179,8 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Sql(include_str!("../migrations/jobs/relocation.sql")),
     // 60: a file put on its own number for want of an episode mapping follows the mapping decided later; the candidates' files earlier builds put so
     Migration::Remake(include_str!("../migrations/jobs/same_number.sql")),
+    // 61: a received archive this machine failed to unpack is tried again: how many tries failed, why the last did, when the next may go
+    Migration::Sql(include_str!("../migrations/jobs/unpack_retry.sql")),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -2982,7 +2984,16 @@ mod tests {
             .run::<_, DbError, _>(|c| Ok(schema_objects(c)))
             .await
             .unwrap();
-        assert_eq!(after, before);
+        // What the migrations after the remake add or drop.
+        let at = |n: usize| schema_objects(&database_at(&dir.path().join(format!("{n}.db")), n));
+        let (remade, latest) = (at(BEFORE_SAME_NUMBER + 1), at(MIGRATIONS.len()));
+        let mut expected: Vec<(String, String)> = before
+            .into_iter()
+            .filter(|o| latest.contains(o) || !remade.contains(o))
+            .chain(latest.iter().filter(|o| !remade.contains(o)).cloned())
+            .collect();
+        expected.sort();
+        assert_eq!(after, expected);
     }
 
     #[tokio::test]

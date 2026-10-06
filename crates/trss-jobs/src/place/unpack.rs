@@ -21,12 +21,23 @@
 //!   time (`unpacked_at`) in one transaction, the later volumes naming their
 //!   first (`volume_of`). The analysis then plans the members in place of
 //!   the archive ([`super::records::PlanRow::member`]).
-//! - An archive the child refuses (a limit, a path, a link, a password) or
-//!   that the child does not answer for (the time limit, a crash) is not
-//!   unpacked (풀지 못함): the reason is recorded (`unpack_error`) and logged,
-//!   no row is planned for it, and it stays in the receive area, so a later
-//!   build can analyse it without receiving it again. The job ends failed, or
-//!   partly failed when something else of it was received.
+//! - An archive the child refuses (a limit, a path, a link, a password, a
+//!   volume missing, nothing in it) is not unpacked (풀지 못함): the reason is
+//!   recorded (`unpack_error`) and logged, no row is planned for it, and it
+//!   stays in the receive area, so a later build can analyse it without
+//!   receiving it again. The job ends failed, or partly failed when something
+//!   else of it was received.
+//! - A try this machine fails (a full disk, the memory or time limit, a
+//!   child that died or did not start; [`Unpacked::Failed`]) is not the
+//!   archive's: the archive is tried again from what was received, up to
+//!   [`UNPACK_TRIES`] tries with the first (사용자 결정, 2026-10-05). The next
+//!   try goes [`UNPACK_RETRY_AFTER`] after the failure, or at a worker's
+//!   start if that comes first ([`crate::JobStore::requeue_waiting_for_sources`]
+//!   lets it go, [`crate::JobStore::requeue_unpack_retries`] puts the job back
+//!   in line when its hour is up): freeing the disk needs no restart, and
+//!   changing the memory limit comes with a deploy. Until then the package
+//!   waits ([`UNPACK_AGAIN`], `자막 대기`), and the failure is logged with
+//!   which try it was. The last try's failure is 풀지 못함 as above.
 //! - A worker that stopped while a child unpacked finds no `unpacked_at`: the
 //!   folder is made anew from the received archive. The child dies with the
 //!   worker (its parent-death signal), and its process group is killed at the
@@ -76,6 +87,15 @@ pub const EMPTY_ARCHIVE: &str = "압축 파일 안에 파일이 없어요";
 /// case only) is not unpacked: which one is the volume is not known.
 pub const DUPLICATE_VOLUME: &str = "나뉜 압축 파일에 같은 번호의 조각이 둘 있어요";
 
+/// How many tries an archive gets when this machine fails them, the first
+/// included.
+pub const UNPACK_TRIES: u32 = 3;
+/// How long after a try this machine failed the next one goes, unless a
+/// worker starts sooner.
+pub const UNPACK_RETRY_AFTER: Millis = 60 * 60 * 1000;
+/// What a package whose archive waits for its next try waits for.
+pub const UNPACK_AGAIN: &str = "압축 파일을 풀지 못해 다시 풀기를 기다려요";
+
 /// How many bytes the checks of one archive's members may inflate together
 /// (a ZIP among them that is no archive by its name, a `.docx`): the limit of
 /// what the archive itself may unpack to.
@@ -83,6 +103,15 @@ pub const MEMBERS_INFLATE_BUDGET: u64 = 512 << 20;
 /// Why a ZIP member is not checked once its archive's budget is spent.
 pub const MEMBERS_BUDGET_SPENT: &str =
     "압축 파일 안의 ZIP을 확인할 수 있는 양을 넘어서 이 파일은 받지 않아요";
+
+/// Why a try did not unpack an archive.
+enum NotUnpacked {
+    Cancelled,
+    /// The archive's own reason: no try of this build unpacks it.
+    Refused(String),
+    /// This machine's ([`Unpacked::Failed`]): tried again.
+    Failed(String),
+}
 
 /// A set of volumes: its kind (0 `.partN.rar`, 1 `.rar` and `.rNN`, 2 cut,
 /// 3 spanned ZIP, 4 cut RAR) and name, and its volumes' numbers and indexes.
@@ -340,6 +369,11 @@ impl Placer {
             if first.unpacked_at.is_some() || first.unpack_error.is_some() {
                 continue;
             }
+            // A try this machine failed waits its hour, unless a worker
+            // started since.
+            if first.unpack_retry_at.is_some_and(|at| at > self.now()) {
+                continue;
+            }
             if cancel.is_cancelled() {
                 return Ok(None);
             }
@@ -369,16 +403,16 @@ impl Placer {
                 let mut budget = MEMBERS_INFLATE_BUDGET;
                 let checked = match unpacked {
                     Unpacked::Done(members) if members.is_empty() => {
-                        Err(Unpacked::Failed(EMPTY_ARCHIVE.to_owned()))
+                        Err(NotUnpacked::Refused(EMPTY_ARCHIVE.to_owned()))
                     }
                     Unpacked::Done(members) => members
                         .into_iter()
                         .map(|m| {
                             if cancel.is_cancelled() {
-                                return Err(Unpacked::Cancelled);
+                                return Err(NotUnpacked::Cancelled);
                             }
                             let position = m.file.parse::<i64>().map_err(|_| {
-                                Unpacked::Failed(format!(
+                                NotUnpacked::Failed(format!(
                                     "압축을 푼 프로그램이 알 수 없는 파일 이름을 알렸어요: {}",
                                     m.file
                                 ))
@@ -393,10 +427,15 @@ impl Placer {
                             Ok((position, m, format))
                         })
                         .collect::<Result<Vec<_>, _>>(),
-                    other => Err(other),
+                    Unpacked::Refused(refusal) => Err(NotUnpacked::Refused(refusal.to_string())),
+                    Unpacked::Failed(reason) => Err(NotUnpacked::Failed(reason)),
+                    Unpacked::Cancelled => Err(NotUnpacked::Cancelled),
                 };
                 // Nor with members that are not recorded.
-                if matches!(checked, Err(Unpacked::Failed(_))) {
+                if matches!(
+                    checked,
+                    Err(NotUnpacked::Refused(_) | NotUnpacked::Failed(_))
+                ) {
                     let _ = std::fs::remove_dir_all(&out);
                 }
                 checked
@@ -419,22 +458,24 @@ impl Placer {
                     let (id, now) = (first.id.clone(), self.now());
                     self.write(move |c| record_unpacked(c, &id, &later, &rows, now))
                         .await?;
+                    let detail = match first.unpack_tries {
+                        0 => format!("파일 {count}개"),
+                        n => format!("파일 {count}개 ({})", attempt(n + 1)),
+                    };
                     self.event(
                         job,
                         format!("{}: 압축 파일을 풀었어요", first.name),
-                        Some(format!("파일 {count}개")),
+                        Some(detail),
                     )
                     .await?;
                 }
-                Err(Unpacked::Cancelled) => return Ok(None),
-                Err(Unpacked::Refused(refusal)) => {
-                    self.unpack_failed(job, first, later, refusal.to_string())
-                        .await?;
-                }
-                Err(Unpacked::Failed(reason)) => {
+                Err(NotUnpacked::Cancelled) => return Ok(None),
+                Err(NotUnpacked::Refused(reason)) => {
                     self.unpack_failed(job, first, later, reason).await?;
                 }
-                Err(Unpacked::Done(_)) => unreachable!("members come back as Ok"),
+                Err(NotUnpacked::Failed(reason)) => {
+                    self.try_failed(job, first, later, reason).await?;
+                }
             }
         }
         Ok(Some(()))
@@ -450,13 +491,56 @@ impl Placer {
         let (id, why, now) = (first.id.clone(), reason.clone(), self.now());
         self.write(move |c| record_refused(c, &id, &later, &why, now))
             .await?;
+        // A try after ones this machine failed says which it was.
+        let detail = match first.unpack_tries {
+            0 => reason,
+            n => format!("{reason} ({})", attempt(n + 1)),
+        };
         self.event(
             job,
             format!("{}: 압축 파일을 풀지 못했어요", first.name),
-            Some(reason),
+            Some(detail),
         )
         .await
     }
+
+    /// A try this machine failed, for `reason`: the archive is tried again
+    /// [`UNPACK_RETRY_AFTER`] later or at a worker's start, until the
+    /// [`UNPACK_TRIES`]th try, whose failure leaves it not unpacked.
+    async fn try_failed(
+        &self,
+        job: &str,
+        first: &FileRow,
+        later: Vec<String>,
+        reason: String,
+    ) -> Result<(), JobError> {
+        let tries = first.unpack_tries + 1;
+        let now = self.now();
+        let last = tries >= UNPACK_TRIES;
+        let retry_at = (!last).then_some(now + UNPACK_RETRY_AFTER);
+        let (id, why) = (first.id.clone(), reason.clone());
+        self.write(move |c| record_failed_try(c, &id, &later, &why, tries, retry_at, now))
+            .await?;
+        let (message, detail) = match last {
+            true => (
+                format!("{}: 압축 파일을 풀지 못했어요", first.name),
+                format!("{reason} ({})", attempt(tries)),
+            ),
+            false => (
+                format!("{}: 압축 파일을 풀지 못해 다시 풀어요", first.name),
+                format!(
+                    "{reason} ({}). 1시간 뒤나 worker가 다시 시작할 때 다시 풀어요",
+                    attempt(tries)
+                ),
+            ),
+        };
+        self.event(job, message, Some(detail)).await
+    }
+}
+
+/// `3번 중 2번째 시도`: which of an archive's tries `n` is.
+fn attempt(n: u32) -> String {
+    format!("{UNPACK_TRIES}번 중 {n}번째 시도")
 }
 
 /// The receipts of the job's received items that hold their own bytes.
@@ -502,7 +586,8 @@ fn record_unpacked(
             )?;
         }
         tx.execute(
-            "UPDATE subtitle_job_files SET unpacked_at = ?2, updated_at = ?2 WHERE id = ?1",
+            "UPDATE subtitle_job_files SET unpacked_at = ?2, unpack_retry_at = NULL, updated_at = ?2
+             WHERE id = ?1",
             params![file_id, now],
         )?;
         mark_volumes(&tx, file_id, later, now)?;
@@ -511,6 +596,8 @@ fn record_unpacked(
     })
 }
 
+/// The archive is not unpacked, for `reason` of its own. A try after ones
+/// this machine failed counts with them, and no next try waits.
 fn record_refused(
     c: &mut Connection,
     file_id: &str,
@@ -521,8 +608,39 @@ fn record_refused(
     durable(c, |c| {
         let tx = c.transaction()?;
         tx.execute(
-            "UPDATE subtitle_job_files SET unpack_error = ?2, updated_at = ?3 WHERE id = ?1",
+            "UPDATE subtitle_job_files
+                SET unpack_error = ?2, unpack_retry_at = NULL,
+                    unpack_tries = unpack_tries + (unpack_tries > 0), updated_at = ?3
+              WHERE id = ?1",
             params![file_id, reason, now],
+        )?;
+        mark_volumes(&tx, file_id, later, now)?;
+        tx.commit()?;
+        Ok(())
+    })
+}
+
+/// A try this machine failed: the `tries`th, for `reason`; the next goes
+/// at `retry_at`, and with none left the archive is not unpacked
+/// (`unpack_error`).
+fn record_failed_try(
+    c: &mut Connection,
+    file_id: &str,
+    later: &[String],
+    reason: &str,
+    tries: u32,
+    retry_at: Option<Millis>,
+    now: Millis,
+) -> Result<(), JobError> {
+    let error = retry_at.is_none().then_some(reason);
+    durable(c, |c| {
+        let tx = c.transaction()?;
+        tx.execute(
+            "UPDATE subtitle_job_files
+                SET unpack_tries = ?2, unpack_failure = ?3, unpack_retry_at = ?4,
+                    unpack_error = ?5, updated_at = ?6
+              WHERE id = ?1",
+            params![file_id, tries, reason, retry_at, error, now],
         )?;
         mark_volumes(&tx, file_id, later, now)?;
         tx.commit()?;

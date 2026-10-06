@@ -155,7 +155,8 @@ const MAX_RETARGETS: usize = 5;
 /// What a run of the placement leaves for the job's state.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Placement {
-    /// Why a package of the job waits for a later build to analyse it.
+    /// Why a package of the job waits for a later build to analyse it, or
+    /// for its archive's next try ([`unpack::UNPACK_AGAIN`]).
     pub unanalysed: Option<String>,
     /// Why the job's files wait for its work folder to be there again.
     pub no_folder: Option<String>,
@@ -372,6 +373,12 @@ impl Placer {
     pub fn with_unpacker(mut self, unpacker: Unpacker) -> Placer {
         self.unpacker = Some(unpacker);
         self
+    }
+
+    /// Whether it unpacks received archives (the program is beside the
+    /// worker).
+    pub fn unpacks(&self) -> bool {
+        self.unpacker.is_some()
     }
 
     fn now(&self) -> Millis {
@@ -717,7 +724,12 @@ impl Placer {
                 };
                 if unpack::is_archive_receipt(file, Some(format)) {
                     if file.unpacked_at.is_none() {
-                        later.get_or_insert_with(|| ARCHIVE_LATER.to_owned());
+                        // A try this machine failed waits for the next, or
+                        // there is no program to unpack it.
+                        later.get_or_insert_with(|| match file.unpack_tries {
+                            n if n > 0 && self.unpacks() => unpack::UNPACK_AGAIN.to_owned(),
+                            _ => ARCHIVE_LATER.to_owned(),
+                        });
                         complete = false;
                         continue;
                     }

@@ -521,6 +521,9 @@ async fn a_restart_publishes_a_file_that_came_whole_under_its_folder_and_reads_i
             volume_of: None,
             unpacked_at: None,
             unpack_error: None,
+            unpack_tries: 0,
+            unpack_failure: None,
+            unpack_retry_at: None,
             unchanged_asset: None,
         })
         .await

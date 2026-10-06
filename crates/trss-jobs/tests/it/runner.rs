@@ -391,6 +391,9 @@ async fn intended(
         volume_of: None,
         unpacked_at: None,
         unpack_error: None,
+        unpack_tries: 0,
+        unpack_failure: None,
+        unpack_retry_at: None,
         unchanged_asset: None,
     };
     s.store.file_intend(row.clone()).await.unwrap();

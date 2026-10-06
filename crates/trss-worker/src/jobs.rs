@@ -201,6 +201,15 @@ impl Worker {
             Ok(n) => println!("Subtitle jobs: {n} waiting for a video are in line again"),
             Err(err) => eprintln!("Subtitle jobs: cannot look for arrived videos: {err}"),
         }
+        // An archive whose unpacking failed on this machine an hour ago is
+        // tried again.
+        match runner.requeue_unpack_retries().await {
+            Ok(0) => {}
+            Ok(n) => {
+                println!("Subtitle jobs: {n} waiting to unpack an archive again are in line again")
+            }
+            Err(err) => eprintln!("Subtitle jobs: cannot look for archives to unpack again: {err}"),
+        }
         let ready = runner.has_ready().await.map_err(|e| e.to_string())?;
         if !ready && !runner.has_cleanups().await.map_err(|e| e.to_string())? {
             return Ok(Some(0));

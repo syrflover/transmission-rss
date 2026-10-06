@@ -1,6 +1,6 @@
 # 0065 압축 파일을 한도를 건 별도 프로세스에서 풀어요
 
-- 상태: 진행 중(실제 서버의 측정과 컴퓨터 쪽 실패의 재시도가 남았어요. 측정 명령은 사용자가 실행해요)
+- 상태: 진행 중(실제 서버의 측정이 남았어요. 측정 명령은 사용자가 실행해요)
 - 출처: [압축 해제의 격리와 한도](../specs/subtitles.md#압축-해제의-격리와-한도)(사용자 결정, 2026-10-04), [묶음 분석](../specs/subtitles.md#자막-묶음-분석과-안전한-배치-판단)의 위험 사례, 올리기가 넘긴 ZIP이 아닌 압축 파일([0047](../archive/tickets/3-subtitle-candidates-and-receiving/0047-subtitle-upload.md))
 - 막는 티켓: [0059](0059-archive-tools-and-limits.md)(도구와 한도), [0064](0064-multi-file-packages.md)(멤버를 받을 분석)
 
@@ -55,6 +55,18 @@
 - **가짜 출처**: `fake.trss.invalid/pack/` 게시물의 이름에 `%2F`가 있으면 그 앞을 폴더로 줘요. 같은 이름의 조각이 두 폴더에 있는 묶음을 만들 수 있어요.
 - **명세·문서**: [압축 해제의 격리와 한도](../specs/subtitles.md#압축-해제의-격리와-한도)에 자식 프로세스, 한도 표, 실패의 두 갈래, 멤버 검사의 512MiB를 적었어요. [작업](../specs/jobs.md)과 readme에 압축 파일을 받은 올리기 작업과 자원 한도를 적었어요.
 
+### 컴퓨터 쪽 실패의 재시도 (2026-10-06)
+
+- **DB**(마이그레이션 61 `unpack_retry.sql`): 받은 파일에 `unpack_tries`(이 컴퓨터 쪽 실패로 끝난 시도 수), `unpack_failure`(마지막 실패의 까닭), `unpack_retry_at`(다음 시도 때)을 더했어요. 시도가 남은 동안 `unpack_error`는 비어 있고, 3번째 실패가 그것을 채워요.
+- **배치 앞 단계**(`place/unpack.rs`): 자식 프로세스의 답을 둘로 나눠요. 압축 파일 탓(`Refused`, 빠진 조각 같은 묶음 거절, 안에 파일이 없음)은 그대로 `풀지 못함`이에요. 이 컴퓨터 쪽(`Failed`: 디스크, 메모리·시간 한도, 자식이 죽거나 뜨지 못함, 읽을 수 없는 답)은 `UNPACK_TRIES`(3)번까지 다시 풀어요.
+  - 실패한 시도는 1시간 뒤(`UNPACK_RETRY_AFTER`)를 다음 시도 때로 적고, 그때까지 그 압축 파일을 건너뛰어요. 묶음은 `압축 파일을 풀지 못해 다시 풀기를 기다려요`(`UNPACK_AGAIN`)로 기다리고, 작업은 `자막 대기`예요.
+  - 작업 기록에 `pack.zip: 압축 파일을 풀지 못해 다시 풀어요`와 `<까닭> (3번 중 1번째 시도). 1시간 뒤나 worker가 다시 시작할 때 다시 풀어요`를 남겨요. 3번째 실패는 `pack.zip: 압축 파일을 풀지 못했어요`와 `<까닭> (3번 중 3번째 시도)`예요. 다시 풀어 성공하면 `파일 2개 (3번 중 3번째 시도)`처럼 붙여요.
+- **다시 줄에 세우기**: worker가 시작할 때 부르는 `requeue_waiting_for_sources`가 모든 `unpack_retry_at`을 비워, 다음 실행이 바로 다시 풀어요. 작업 루프는 명령을 살필 때마다 `requeue_unpack_retries`로 1시간이 지난 시도가 있는 `자막 대기` 작업을 다시 줄에 세워요. 그런 작업이 없으면 쓰기 잠금을 잡지 않아요.
+- **API와 화면**: 작업 상세의 압축 파일 `unpack`에 `retry` 상태와 `tries`, `retry_at`을 더했어요. 화면은 `다시 풀기를 기다려요 (3번 중 1번째 시도 실패)`, 까닭, `다음 시도: 오늘 13:00 또는 worker가 다시 시작할 때`(worker가 이미 다시 시작했으면 `다음 실행 때`)를 적어요. 3번 실패한 `풀지 못함`은 까닭 뒤에 `3번 시도했어요`를 붙여요. 문구는 `web/src/screens/todo/unpack.ts`로 옮겼어요.
+- **다시 푼 시도가 거절로 끝남**: 압축 파일 탓의 거절은 다음 시도 때를 지우고, 앞선 실패가 있으면 그 시도도 `unpack_tries`에 세요. 기록은 `<까닭> (3번 중 2번째 시도)`, 압축 파일 줄은 `2번 시도했어요`예요. `requeue_unpack_retries`는 아직 풀지도 거절하지도 않은 압축 파일만 봐요.
+- **프로그램이 없는 worker**: `trss-extract`가 없는 runner는 `requeue_unpack_retries`에서 아무것도 줄에 세우지 않고, 그 묶음의 까닭은 `ARCHIVE_LATER`예요. 시도 횟수는 그대로 남아요.
+- **구현 결정**(2026-10-06): 이 규칙 전에 이 컴퓨터 쪽 실패로 `unpack_error`가 생긴 압축 파일은 다시 풀지 않아요. 남은 까닭 문구만으로 두 갈래를 가르는 일은 하지 않았어요. 안에 파일이 없는 압축 파일은 압축 파일 탓으로 봐요(전에도 다시 풀지 않았어요). 다시 푼 시도가 거절로 끝나면 그 시도도 시도 수에 넣어, 화면의 `N번 시도했어요`가 실제로 푼 횟수가 되게 했어요.
+
 ### 검증한 것
 
 | 완료 기준 | 근거 |
@@ -66,6 +78,11 @@
 | 시간 한도 | 시험 `a_child_that_hangs_on_its_input_is_killed_at_the_time_limit`, `the_whole_process_group_is_killed_at_the_time_limit`, `what_a_child_left_running_is_killed_when_it_ends`: 자식과 그 그룹이 끝나고 남은 프로세스가 없어요. 취소도 같아요(`a_cancellation_kills_the_child_and_leaves_nothing`). |
 | 풀던 중 worker를 죽였다 살림 | 시험 `an_archive_waits_for_the_program_and_a_killed_unpacking_starts_anew`: 반쯤 푼 폴더를 지우고 원 수신물에서 다시 풀며, 다시 받지 않아요. |
 | 암호가 걸린 ZIP | 위 폭탄 시험: `풀지 못함`과 `암호가 걸려 있어요`가 있고 수신 영역에 남아요. |
+| 디스크에 쓰지 못한 압축 파일(시험) | 시험 `an_archive_this_machine_failed_to_unpack_is_tried_again_from_its_receipt`: 디스크가 찼다고 답하는 프로그램(`tests/fixtures/full-disk-extract.sh`)으로 풀면 작업이 `자막 대기`와 `UNPACK_AGAIN`으로 남고, 기록에 `3번 중 1번째 시도`가 있어요. 1시간 전에는 다시 줄에 서지 않고, 1시간이 되면 2번째 시도가 돌아요. worker 시작(`requeue_waiting_for_sources`) 뒤 실제 `trss-extract`로 3번째 시도에 풀려 적용되고, 받은 파일은 처음의 것 하나예요. API 시험 `each_received_archive_says_what_came_of_unpacking_it`가 `retry` 줄의 `tries`·`retry_at`을, 웹 시험 `unpack.test.ts`가 줄의 문구를 확인해요. 개발 DB 사본(2026-10-06)에서 압축 파일 하나를 SQL로 재시도 상태로 바꾸자, 작업 상세에 `다시 풀기를 기다려요 (3번 중 1번째 시도 실패) · 압축을 풀 자리에 쓰지 못했어요: … · 다음 시도: 오늘 18:02 또는 worker가 다시 시작할 때`가 나왔어요. 실제 worker가 디스크를 채운 상태에서 실패한 것은 아니에요. |
+| 같은 컴퓨터 쪽 실패가 3번(화면) | 같은 사본에서 올리기 작업의 압축 파일을 3번 실패한 상태로 바꾸자, 올린 파일의 `풀지 못함` 아래에 `<까닭> · 3번 시도했어요`가 나왔어요(2026-10-06). |
+| 같은 컴퓨터 쪽 실패가 3번 | 시험 `the_third_failed_try_leaves_the_archive_not_unpacked`: 3번째 실패에 `unpack_error`가 생기고 작업이 실패로 끝나며, 기록에 `3번 중 3번째 시도`가 있어요. 그 뒤 몇 시간이 지나거나 worker가 다시 시작해도 기록이 늘지 않고 원 수신물이 남아요. 일부 실패로 끝나는 길은 기존 `a_refused_archive_beside_a_placed_file_leaves_the_job_partial`과 같은 판정을 써요. |
+| 압축 파일 탓의 거절 | 시험 `an_archive_whose_member_leaves_it_fails_and_stays_received`(경로 이탈, `unpack_tries` 0, 다시 시작해도 다시 풀지 않음), `an_empty_archive_is_not_tried_again`(폴더만 든 ZIP), 폭탄과 암호 시험이에요. 디스크 실패 뒤의 시도가 거절로 끝나면 시도가 끝나고, 그 작업이 다른 까닭으로 `자막 대기`여도 다시 줄에 서지 않아요(`a_refusal_after_a_failed_try_ends_the_tries`). |
+| 재시도의 나머지 경로(구현 범위) | 나뉜 압축 파일은 조각을 함께 기다렸다가 함께 풀어요(`a_split_archive_is_tried_again_as_one`). 올리기 작업은 다시 풀기를 먼저 기다리고, 풀린 뒤 배치 확인을 기다려요(`an_uploads_archive_is_tried_again_before_its_placement_is_confirmed`). 시각이 안 된 시도는 작업이 다른 까닭으로 돌아도 풀지 않아요. 프로그램이 없는 worker는 까닭을 `ARCHIVE_LATER`로 두고 줄에 세우지 않아요. 이 둘은 `an_archive_this_machine_failed_to_unpack_is_tried_again_from_its_receipt`에 있어요. |
 | 실제 서버 256M | 아직 재지 않았어요. 명령은 아래 [실제 서버에서 재는 방법](#실제-서버에서-재는-방법)에 있고 사용자가 실행해요. 이 PC의 관찰은 아래에 있어요. |
 
 이 PC(Arch Linux, 커널 7.2.8, Docker)의 256M 컨테이너(`--memory-swap 256m --cpus 0.25`)에서 `trss-probe --unpack`으로 잰 값이에요(2026-10-05, 이 작업 트리로 지은 정적 실행 파일). 서버의 값이 아니에요.
@@ -99,9 +116,31 @@
 
 검토 뒤 고친 코드(2026-10-05, `ab2b458` 위의 작업 트리)에서 `cargo test --workspace`가 2,510개 통과, 실패 0이었어요. `cargo clippy --workspace --all-targets -- -D warnings`와 `cargo fmt --all --check`가 통과해요. 웹은 `npm test` 96개 통과, `npm run typecheck`가 통과했어요.
 
+재시도를 더하고 검토 뒤 고친 코드(2026-10-06, `0ce2f42` 위의 작업 트리)에서 `cargo test --workspace`가 2,720개 통과, 실패 0, 무시 13이었어요. clippy(`-D warnings`)와 `cargo fmt --all --check`가 통과했어요. 웹은 `npm test` 197개 통과, `npm run typecheck`가 통과했어요. 새 마이그레이션 때문에 같은 번호 마이그레이션(60)의 시험이 뒤의 마이그레이션이 더하거나 지운 색인도 받아들이게 고쳤어요.
+
+재시도의 mutation 23개(2026-10-06, `probe-out/0065r-mutations.txt`, 저장소에 없음) 가운데 22개를 시험이 잡았어요. 잡지 못한 U20은 위 한계의 이중 방어예요. 처음 돌렸을 때 놓친 두 개(시각이 안 된 시도를 건너뛰기, 프로그램 없는 runner의 줄 세우기)는 시험을 고친 뒤 잡혔어요.
+
+#### 재시도의 독립 검토 (2026-10-06)
+
+검토 한 번이 분류, 멈춤과 반복, 마이그레이션, 나뉜 조각, 정리, 동시 실행, API·화면을 봤어요. 막는 결함은 없었고 아래를 고쳤어요.
+
+- 다시 푼 시도가 압축 파일 탓으로 거절되면 다음 시도 때가 남았어요. 그 작업이 다른 까닭으로 `자막 대기`면 명령을 살필 때마다 다시 줄에 섰어요. 이제 거절이 그때를 지우고, 줄 세우기도 아직 풀지 않은 압축 파일만 봐요. 화면의 시도 수도 그 시도를 세요.
+- `trss-extract`가 없는 worker에서 시각이 된 시도가 계속 줄에 섰어요. 이제 그런 runner는 줄에 세우지 않고, 까닭은 프로그램이 없다는 것이에요.
+- 다음 시도 때가 지난 줄이 그 시각을 그대로 적었어요. 이제 `다음 실행 때`예요.
+
+검토가 고친 코드를 다시 읽고 앞의 두 결함을 닫았어요. 새 결함은 없었어요.
+
+나머지 지적(재시작이 시도를 빨리 씀, 해석기가 죽어도 다시 시도함, 읽기 오류가 거절임, `UNPACK_TRIES`가 두 곳에 있음)은 위 한계에 적었어요. [0066](0066-placement-confirmation.md)의 `기계 쪽 실패를 다시 시도할지는 아직 정하지 않았어요`는 재시도 결정(2026-10-05 18:33)보다 앞서(같은 날 15:51) 완료한 기록이라 고치지 않았어요.
+
 ### 한계
 
-- 받은 뒤 풀지 못한 압축 파일(`unpack_error`)은 다시 풀어 보지 않아요. 압축 파일 탓인 거절뿐 아니라 디스크가 찼거나 메모리 한도에 닿은 실패도 그대로 남아요. `trss-extract`가 없어서 기다리는 경우만 다음 시작 때 다시 해요. 컴퓨터 쪽 실패를 3번까지 다시 푸는 방식은 사용자가 정했고(2026-10-05, 위 작업 절), 아직 구현하지 않았어요.
+- 컴퓨터 쪽 실패의 재시도(2026-10-06) 전에 그런 실패로 `풀지 못함`이 된 압축 파일은 그대로 남아요(위 구현 결정).
+- 재시도의 1시간과 worker 시작은 시험의 시계와 `requeue_waiting_for_sources` 호출로 확인했어요. 실제 worker를 다시 띄우거나 실제로 디스크를 채워 보지는 않았어요. worker가 명령을 살필 때 `requeue_unpack_retries`를 부르는 연결(`trss-worker`의 `run_jobs_once`)은 시험하지 않았어요. 영상 도착의 같은 연결도 시험이 없어요.
+- worker가 짧은 사이에 여러 번 다시 시작하면(배포 중, 재시작 반복) 시작마다 바로 다시 풀어서, 3번이 1시간 간격 없이 금방 다 쓰일 수 있어요. 사용자가 정한 `worker의 다음 시작`을 그대로 따른 결과예요.
+- 해석기가 깨진 압축 파일에서 SIGSEGV 같은 시그널로 죽거나 시간 한도에 닿아도 명세대로 이 컴퓨터 쪽 실패로 보고 3번 시도해요. 같은 파일이면 대개 같은 결과일 거예요.
+- 받은 조각을 읽지 못한 오류(열기·읽기)는 전처럼 `압축 파일을 읽지 못했어요`라는 압축 파일 탓의 거절이라 다시 풀지 않아요(`trss-archive`의 `input_error`). 명세의 이 컴퓨터 쪽 실패 목록에는 쓰기만 있어요.
+- 화면의 `3번 중`은 웹의 `UNPACK_TRIES`가 worker의 값과 같다고 보고 적어요. API는 그 값을 보내지 않아요.
+- `requeue_unpack_retries`가 아직 풀지도 거절하지도 않은 압축 파일만 보는 조건은 이중 방어예요. 풀거나 거절하면 다음 시도 때를 지우므로, 그 조건을 빼도 시험이 실패하지 않아요(아래 mutation U20).
 - 직접 찾기 작업은 아직 분석을 거치지 않아(배치 확인 [0066](0066-placement-confirmation.md)), 받은 압축 파일이 풀리지 않고 `풀기를 기다려요`에 머물러요.
 - ZIP 끝 기록을 꾸며 크레이트가 앞의 기록으로 돌아가게 하면, 그 중앙 디렉터리는 멤버 수를 세기 전에 크레이트가 읽어요. 이 경우는 자식의 `RLIMIT_AS`와 OOM 점수가 막아요. 압축된 7z 목록도 같아요.
 - RAR이 안쪽의 압축 파일을 여는 길(`rars::read_path`)에서 난 메모리가 아닌 I/O 오류는 아직 거절로 적어요.

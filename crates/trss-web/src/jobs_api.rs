@@ -22,8 +22,10 @@
 //!   files, what became of each received file (`placements`: its episode,
 //!   whether it was stored and applied, and the paths of its video, applied
 //!   copy and stored file), what came of unpacking each received archive
-//!   (`unpack`: unpacked with how many files, not unpacked with why, or a
-//!   later volume of a split archive), its folder in the receive area, its
+//!   (`unpack`: unpacked with how many files, not unpacked with why, waiting
+//!   for the next try after this machine failed one, with which try failed
+//!   and when the next goes, or a later volume of a split archive), its
+//!   folder in the receive area, its
 //!   log, newest first, and its remote screen (`screen`, see [`super::screen_api`];
 //!   `null` for none). It reads only: it never asks for a browser run.
 //! - `POST /api/subtitle-jobs/{id}/screen` and the screen's socket: see
@@ -490,10 +492,19 @@ struct FileView {
 #[derive(Debug, Serialize)]
 struct UnpackView {
     /// `done`: its members were recorded; `failed`: it could not be unpacked
-    /// (풀지 못함, with `reason`) and stays in the receive area; `volume`: a
-    /// later volume of the split archive `first`, unpacked with it.
+    /// (풀지 못함, with `reason`) and stays in the receive area; `retry`: a
+    /// try this machine failed (with `reason`) waits for the next; `volume`:
+    /// a later volume of the split archive `first`, unpacked with it.
     state: &'static str,
     reason: Option<String>,
+    /// How many tries failed for this machine (a full disk, a limit, the
+    /// child), out of [`trss_jobs::place::unpack::UNPACK_TRIES`], and for
+    /// `failed` the try after them that the archive's own reason ended; 0
+    /// for none.
+    tries: u32,
+    /// For `retry`: when the next try goes at the latest; `null` when a
+    /// worker started since, which tries it at its next run.
+    retry_at: Option<i64>,
     /// For `volume`: the first volume's name.
     first: Option<String>,
     /// For `done`: how many files it held, and how many of them are
@@ -657,6 +668,8 @@ fn unpack_view(
     let view = |state| UnpackView {
         state,
         reason: None,
+        tries: file.unpack_tries,
+        retry_at: None,
         first: None,
         files: None,
         subtitles: None,
@@ -665,6 +678,7 @@ fn unpack_view(
     if let Some(first) = &file.volume_of {
         return Some(UnpackView {
             first: names.get(first.as_str()).map(|n| (*n).to_owned()),
+            tries: 0,
             ..view("volume")
         });
     }
@@ -674,7 +688,13 @@ fn unpack_view(
             ..view("failed")
         });
     }
-    file.unpacked_at?;
+    if file.unpacked_at.is_none() {
+        return (file.unpack_tries > 0).then(|| UnpackView {
+            reason: file.unpack_failure.clone(),
+            retry_at: file.unpack_retry_at,
+            ..view("retry")
+        });
+    }
     let of = members.get(file.id.as_str()).map_or(&[][..], Vec::as_slice);
     let kinds: Vec<Member> = of
         .iter()

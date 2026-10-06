@@ -8,7 +8,9 @@ import type {
   ReplacementLines,
   ReplacementResult,
 } from "./replacementTypes";
+import type { UnpackResult } from "./unpack";
 
+export type { UnpackResult } from "./unpack";
 export type {
   ConfirmEpisode,
   ConfirmView,
@@ -428,22 +430,6 @@ export interface JobFile {
    * when each was kept already; `null` before, and for a file that is no archive.
    */
   new_assets: number | null;
-}
-
-/** What came of unpacking a received archive. */
-export interface UnpackResult {
-  /**
-   * `done`: its files were taken out; `failed`: it could not be unpacked (풀지 못함, with `reason`) and stays in
-   * the receive area; `volume`: a later volume of the split archive `first`, unpacked with it.
-   */
-  state: "done" | "failed" | "volume";
-  reason: string | null;
-  /** For `volume`: the first volume's name. */
-  first: string | null;
-  /** For `done`: how many files it held, and how many of them are subtitles and fonts. */
-  files: number | null;
-  subtitles: number | null;
-  fonts: number | null;
 }
 
 /** A file of an upload that was not kept, with why. */

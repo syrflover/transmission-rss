@@ -5,8 +5,9 @@ import { cn } from "@/lib/utils";
 import { jobPath, type JobFile, type JobItem, type Placement, type Replacement } from "./api";
 import { FailureTag, ItemBadge } from "./badges";
 import { archiveReceiptText, fontReceiptText } from "./fontReceipt";
-import { FORMAT_LABEL, episodeName, shownItem, sizeText, unpackText } from "./format";
+import { FORMAT_LABEL, episodeName, shownItem, sizeText } from "./format";
 import { waitingPositions } from "./replacementView";
+import { unpackText } from "./unpack";
 
 /** `받음 2 · 실패 1`: how many items ended in each way, for a job with more than one. */
 function summary(items: readonly JobItem[]): string {
