@@ -958,7 +958,12 @@ async fn an_interrupted_publish_is_finished_by_the_files_identity() {
     use std::os::unix::fs::MetadataExt;
     env.art
         .store
-        .file_identity("artwork/y.png", meta.dev(), meta.ino())
+        .file_identity(
+            "artwork/y.png",
+            meta.dev(),
+            meta.ino(),
+            files::born_ns(&meta),
+        )
         .await
         .unwrap();
     // Stopped before its identity was recorded: the staged file cannot be told
@@ -1429,6 +1434,167 @@ async fn the_cleanup_keeps_files_other_references_lead_to() {
     assert!(!env.path(&path_d).exists());
     assert!(env.path("artwork/alias.jpg").exists());
     assert!(env.path("artwork/stranger.png").exists());
+}
+
+/// What a file system mounted again does to the recorded identities: every
+/// file keeps its inode and may get another device number (btrfs numbers its
+/// devices at each mount).
+async fn remount(env: &Env) {
+    env.db
+        .run::<_, DbError, _>(|conn| {
+            Ok(conn
+                .execute(
+                    "UPDATE artwork_files SET dev = dev + 1 WHERE dev IS NOT NULL",
+                    [],
+                )
+                .map(|_| ())?)
+        })
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_file_is_the_apps_own_whatever_device_number_it_was_mounted_with() {
+    let env = Env::new(&["A", "D", "E"]).await;
+    let (a, d, e) = (env.id("A").await, env.id("D").await, env.id("E").await);
+    let clear = |work: String| {
+        let art = env.art.clone();
+        async move {
+            let v = art.store.selection(&work).await.unwrap().version;
+            art.change(&work, v, UserChange::Clear).await.unwrap();
+        }
+    };
+
+    // An image published before the reboot is removed once nothing refers to
+    // it.
+    let va = env.selection("A").await.version;
+    let sa = env.art.upload(&a, va, samples::png(), None).await.unwrap();
+    let path_a = image_of(&sa).relative_path.clone();
+    remount(&env).await;
+    clear(a).await;
+    assert!(!env.path(&path_a).exists());
+
+    // A hard link another work refers to is still the same file.
+    let vd = env.selection("D").await.version;
+    let sd = env.art.upload(&d, vd, samples::jpeg(), None).await.unwrap();
+    let path_d = image_of(&sd).relative_path.clone();
+    fs::hard_link(env.path(&path_d), env.path("artwork/alias.jpg")).unwrap();
+    {
+        let image = image_of(&sd).clone();
+        let e = e.clone();
+        env.db
+            .run::<_, DbError, _>(move |conn| {
+                Ok(conn
+                    .execute(
+                        "UPDATE work_artwork SET mode = 'manual', source = 'upload',
+                             image_id = 'e-image', image_origin = 'upload',
+                             image_path = 'artwork/alias.jpg', image_size = ?2,
+                             image_sha256 = ?3, image_format = 'jpeg', job = NULL
+                         WHERE work_id = ?1",
+                        rusqlite::params![e, image.byte_size as i64, image.sha256],
+                    )
+                    .map(|_| ())?)
+            })
+            .await
+            .unwrap();
+    }
+    remount(&env).await;
+    clear(d.clone()).await;
+    assert!(env.path(&path_d).exists(), "E's alias is the same file");
+    // Its record stayed, so it goes once E lets go too; the alias, which the
+    // app never recorded, stays.
+    clear(e).await;
+    assert!(!env.path(&path_d).exists());
+    assert!(env.path("artwork/alias.jpg").exists());
+
+    // The same inode with another birth time is another file (a number the
+    // file system gave again): left alone, and no longer the app's.
+    let vd = env.selection("D").await.version;
+    let sd = env.art.upload(&d, vd, samples::png(), None).await.unwrap();
+    let reused = image_of(&sd).relative_path.clone();
+    // The row's birth time, `None` without a row.
+    let born = |path: String| {
+        env.art.store.run(move |c| {
+            Ok(crate::store::artwork::files_of_state(c, "published")?
+                .into_iter()
+                .find(|r| r.relative_path == path)
+                .map(|r| r.born_ns))
+        })
+    };
+    // (A file system that keeps no birth time knows the file by its inode
+    // alone; then this case cannot be told and is not checked.)
+    let kept_birth = matches!(born(reused.clone()).await.unwrap(), Some(Some(_)));
+    if kept_birth {
+        env.sql(
+            "UPDATE artwork_files SET born_ns = born_ns + 1 WHERE relative_path = ?1",
+            reused.clone(),
+        )
+        .await;
+        remount(&env).await;
+        clear(d.clone()).await;
+        assert!(env.path(&reused).exists());
+        assert_eq!(born(reused.clone()).await.unwrap(), None, "the row is gone");
+        fs::remove_file(env.path(&reused)).unwrap();
+    }
+
+    // Publishes interrupted before the reboot are finished after it, the
+    // staged one recorded before birth times were (by its inode alone).
+    let app = AppData::new(env.dir.path());
+    files::publish_at(
+        &app,
+        &env.art.store,
+        samples::png().into(),
+        "artwork/x.png",
+        "artwork/.staging/x.tmp",
+        1_000,
+    )
+    .await
+    .unwrap();
+    env.art
+        .store
+        .reserve_file("artwork/y.png", "artwork/.staging/y.tmp", 1_000)
+        .await
+        .unwrap();
+    fs::write(env.path("artwork/.staging/y.tmp"), samples::png()).unwrap();
+    let meta = fs::metadata(env.path("artwork/.staging/y.tmp")).unwrap();
+    use std::os::unix::fs::MetadataExt;
+    env.art
+        .store
+        .file_identity("artwork/y.png", meta.dev(), meta.ino(), None)
+        .await
+        .unwrap();
+    remount(&env).await;
+    let late = 1_000 + STALE_STAGING.as_millis() as i64 + 1;
+    assert_eq!(files::recover(&app, &env.art.store, late).await.unwrap(), 2);
+    env.art.tidy().await;
+    assert_eq!(env.files(), ["alias.jpg"]);
+    assert!(env.staging().is_empty());
+}
+
+#[tokio::test]
+async fn a_file_recorded_before_birth_times_is_known_by_its_inode_after_a_remount() {
+    use std::os::unix::fs::MetadataExt;
+    let dir = tempfile::tempdir().unwrap();
+    let app = AppData::new(dir.path());
+    fs::create_dir_all(dir.path().join(ARTWORK_DIR)).unwrap();
+    let path = dir.path().join("artwork/old.png");
+    fs::write(&path, samples::png()).unwrap();
+    let meta = fs::metadata(&path).unwrap();
+    {
+        // Migration 63 records birth times; this build's 62 did not.
+        let conn = trss_core::db::database_at(&dir.path().join("trss.db"), 62);
+        conn.execute(
+            "INSERT INTO artwork_files (relative_path, staging_path, state, dev, ino, created_at)
+             VALUES ('artwork/old.png', 'artwork/.staging/old.tmp', 'published', ?1, ?2, 1)",
+            rusqlite::params![meta.dev() as i64 + 1, meta.ino() as i64],
+        )
+        .unwrap();
+    }
+    let db = Db::open(dir.path().join("trss.db")).await.unwrap();
+    let store = crate::store::artwork::ArtworkStore::new(db);
+    let cleaned = files::cleanup(&app, &store).await.unwrap();
+    assert_eq!((cleaned.removed, cleaned.forgotten), (1, 0));
+    assert!(!path.exists());
 }
 
 // --- missing images ------------------------------------------------------------------------

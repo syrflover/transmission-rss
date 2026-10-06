@@ -9,8 +9,8 @@
 //!
 //! 1. The file is recorded in `artwork_files` (`staging`) before it exists.
 //! 2. The verified bytes are written to a new file in `artwork/.staging/`
-//!    (created exclusively, flushed), and its identity (`st_dev`, `st_ino`)
-//!    is recorded.
+//!    (created exclusively, flushed), and its identity (device, inode, and
+//!    birth time when the file system keeps one) is recorded.
 //! 3. It is renamed to its published name with `RENAME_NOREPLACE`, which
 //!    never replaces a file and keeps the identity. A name that is taken is
 //!    left alone ([`PublishError::Occupied`]).
@@ -41,10 +41,20 @@
 //! write lock (so no reference can appear meanwhile), when no selection of any
 //! work refers to it by path or to the same file by identity (a hard link or
 //! another spelling of the path), and when the file at the recorded place is
-//! still the one the app made (same identity). When the identity of a
-//! referenced path cannot be read, it removes nothing. [`recover`] finishes
-//! what an interrupted publish left: the staged file and a published file no
-//! selection took, again only by recorded identity.
+//! still the one the app made. When the identity of a referenced path cannot
+//! be read, it removes nothing. [`recover`] finishes what an interrupted
+//! publish left: the staged file and a published file no selection took, again
+//! only by recorded identity.
+//!
+//! A recorded file is known by its inode and birth time, not by its device
+//! number: a file system mounted again may give the same file another one
+//! (btrfs numbers its devices at each mount; on the dev PC an unchanged file
+//! went from 47 to 46 after a reboot), and the app's own files would then be
+//! taken for someone else's and left on the disk for good. A record without a
+//! birth time (the file system keeps none, or the record is older than the
+//! birth time's) is known by its inode alone. The identities of the referenced
+//! paths are read under the same mount as the file, so there the device
+//! number still tells files apart.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -56,7 +66,7 @@ use std::{
         atomic::{AtomicUsize, Ordering},
         Mutex,
     },
-    time::Duration,
+    time::{Duration, UNIX_EPOCH},
 };
 
 use bytes::Bytes;
@@ -66,7 +76,7 @@ use sha2::{Digest, Sha256};
 use crate::artwork::image::sniff;
 use crate::store::{
     artwork as store,
-    artwork::{ArtworkError, ArtworkStore, Format, ImageRef, Source},
+    artwork::{ArtworkError, ArtworkStore, FileRow, Format, ImageRef, Source},
 };
 use trss_anilist::MAX_IMAGE_BYTES;
 use trss_core::{files::rename_noreplace, Millis};
@@ -137,8 +147,16 @@ fn ensure_dir(root: &Path, rel: &str) -> io::Result<()> {
     Ok(())
 }
 
-/// Writes `bytes` to a new file at `staging` and returns its identity.
-fn write_staged(root: &Path, staging: &str, bytes: &[u8]) -> io::Result<(u64, u64)> {
+/// A file's birth time in nanoseconds since the Unix epoch, when its file
+/// system keeps one.
+pub(crate) fn born_ns(meta: &fs::Metadata) -> Option<i64> {
+    let born = meta.created().ok()?.duration_since(UNIX_EPOCH).ok()?;
+    i64::try_from(born.as_nanos()).ok()
+}
+
+/// Writes `bytes` to a new file at `staging` and returns its identity:
+/// device, inode and birth time.
+fn write_staged(root: &Path, staging: &str, bytes: &[u8]) -> io::Result<(u64, u64, Option<i64>)> {
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -149,7 +167,7 @@ fn write_staged(root: &Path, staging: &str, bytes: &[u8]) -> io::Result<(u64, u6
     file.set_permissions(fs::Permissions::from_mode(0o644))?;
     file.sync_all()?;
     let meta = file.metadata()?;
-    Ok((meta.dev(), meta.ino()))
+    Ok((meta.dev(), meta.ino(), born_ns(&meta)))
 }
 
 /// Publishes `bytes` (already verified as `format`) under a new app-made name.
@@ -180,14 +198,14 @@ pub(crate) async fn publish_at(
     store.reserve_file(target, staging, now).await?;
     let root = app.root.clone();
     let staging_owned = staging.to_owned();
-    let staged = tokio::task::spawn_blocking(move || -> io::Result<(u64, u64)> {
+    let staged = tokio::task::spawn_blocking(move || -> io::Result<(u64, u64, Option<i64>)> {
         ensure_dir(&root, ARTWORK_DIR)?;
         ensure_dir(&root, STAGING_DIR)?;
         write_staged(&root, &staging_owned, &bytes)
     })
     .await
     .map_err(|e| io::Error::other(e.to_string()))?;
-    let (dev, ino) = match staged {
+    let (dev, ino, born) = match staged {
         Ok(identity) => identity,
         Err(e) => {
             // The file was not made (create_new failed) or is half-written;
@@ -197,7 +215,7 @@ pub(crate) async fn publish_at(
             return Err(e.into());
         }
     };
-    store.file_identity(target, dev, ino).await?;
+    store.file_identity(target, dev, ino, born).await?;
 
     let renamed = rename_noreplace(&app.root.join(staging), &app.root.join(target));
     if let Err(e) = renamed {
@@ -440,9 +458,10 @@ fn lexical(root: &Path, relative: &str) -> PathBuf {
     out
 }
 
-/// The identities of what the referenced paths lead to, both the entry itself
-/// and what a link there points to. `None` when one cannot be read for a
-/// reason other than its absence: then nothing can be known to be unreferenced.
+/// The identities (device, inode) of what the referenced paths lead to now,
+/// both the entry itself and what a link there points to. `None` when one
+/// cannot be read for a reason other than its absence: then nothing can be
+/// known to be unreferenced.
 fn referenced_identities(root: &Path, paths: &[String]) -> Option<HashSet<(u64, u64)>> {
     let mut identities = HashSet::new();
     for relative in paths {
@@ -473,13 +492,32 @@ pub struct Cleaned {
     pub unsure: bool,
 }
 
-/// Whether the entry at `path` is the file the app recorded.
-fn is_ours(path: &Path, dev: Option<u64>, ino: Option<u64>) -> io::Result<Option<bool>> {
+/// What is at a recorded place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Found {
+    Nothing,
+    /// Something other than the file the app recorded.
+    Other,
+    /// The recorded file, with its identity (device, inode) as mounted now.
+    Ours((u64, u64)),
+}
+
+/// What the entry at `path` is to `file`'s record, which knows it by its
+/// inode and birth time, or by its inode alone when it has no birth time (see
+/// the module docs).
+fn found_at(path: &Path, file: &FileRow) -> io::Result<Found> {
     match fs::symlink_metadata(path) {
-        Ok(meta) => Ok(Some(
-            meta.file_type().is_file() && Some(meta.dev()) == dev && Some(meta.ino()) == ino,
-        )),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Ok(meta) => {
+            let ours = meta.file_type().is_file()
+                && Some(meta.ino()) == file.ino
+                && file.born_ns.is_none_or(|born| born_ns(&meta) == Some(born));
+            Ok(if ours {
+                Found::Ours((meta.dev(), meta.ino()))
+            } else {
+                Found::Other
+            })
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Found::Nothing),
         Err(e) => Err(e),
     }
 }
@@ -508,23 +546,23 @@ pub async fn cleanup(app: &AppData, store: &ArtworkStore) -> Result<Cleaned, Art
                     cleaned.kept += 1;
                     continue;
                 }
-                match is_ours(&path, file.dev, file.ino) {
+                match found_at(&path, &file) {
                     Err(_) => {
                         cleaned.unsure = true;
                         continue;
                     }
-                    Ok(None) => {
+                    Ok(Found::Nothing) => {
                         store::delete_file_row(&tx, &file.relative_path)?;
                         cleaned.forgotten += 1;
                     }
-                    Ok(Some(false)) => {
+                    Ok(Found::Other) => {
                         // Not the file the app made: left alone, and no longer
                         // the app's to remove.
                         store::delete_file_row(&tx, &file.relative_path)?;
                         cleaned.forgotten += 1;
                     }
-                    Ok(Some(true)) => {
-                        let identity = (file.dev.unwrap_or(0), file.ino.unwrap_or(0));
+                    Ok(Found::Ours(identity)) => {
+                        // Read under the same mount as the referenced paths'.
                         if identities.contains(&identity) {
                             cleaned.kept += 1;
                             continue;
@@ -567,11 +605,11 @@ pub async fn recover(
                     continue;
                 }
                 let staged = root.join(&file.staging_path);
-                if let Ok(Some(true)) = is_ours(&staged, file.dev, file.ino) {
+                if let Ok(Found::Ours(_)) = found_at(&staged, &file) {
                     let _ = fs::remove_file(&staged);
                 }
-                match is_ours(&root.join(&file.relative_path), file.dev, file.ino) {
-                    Ok(Some(true)) => {
+                match found_at(&root.join(&file.relative_path), &file) {
+                    Ok(Found::Ours(_)) => {
                         tx.execute(
                             "UPDATE artwork_files SET state = 'published' WHERE relative_path = ?1",
                             [&file.relative_path],

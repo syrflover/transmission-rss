@@ -544,6 +544,9 @@ pub struct FileRow {
     pub staging_path: String,
     pub dev: Option<u64>,
     pub ino: Option<u64>,
+    /// The birth time in nanoseconds since the Unix epoch; `None` when the
+    /// file system keeps none or the row is older than the record of it.
+    pub born_ns: Option<i64>,
     pub created_at: Millis,
 }
 
@@ -566,10 +569,11 @@ pub(super) fn file_identity(
     relative_path: &str,
     dev: u64,
     ino: u64,
+    born_ns: Option<i64>,
 ) -> rusqlite::Result<()> {
     conn.execute(
-        "UPDATE artwork_files SET dev = ?2, ino = ?3 WHERE relative_path = ?1",
-        params![relative_path, dev as i64, ino as i64],
+        "UPDATE artwork_files SET dev = ?2, ino = ?3, born_ns = ?4 WHERE relative_path = ?1",
+        params![relative_path, dev as i64, ino as i64, born_ns],
     )?;
     Ok(())
 }
@@ -593,7 +597,7 @@ pub(super) fn abandon_file(conn: &mut Connection, relative_path: &str) -> rusqli
 /// The recorded files in `state`.
 pub(crate) fn files_of_state(conn: &Connection, state: &str) -> rusqlite::Result<Vec<FileRow>> {
     let mut stmt = conn.prepare(
-        "SELECT relative_path, staging_path, dev, ino, created_at
+        "SELECT relative_path, staging_path, dev, ino, born_ns, created_at
            FROM artwork_files WHERE state = ?1 ORDER BY relative_path",
     )?;
     let rows = stmt.query_map([state], |r| {
@@ -602,7 +606,8 @@ pub(crate) fn files_of_state(conn: &Connection, state: &str) -> rusqlite::Result
             staging_path: r.get(1)?,
             dev: r.get::<_, Option<i64>>(2)?.map(|v| v as u64),
             ino: r.get::<_, Option<i64>>(3)?.map(|v| v as u64),
-            created_at: r.get(4)?,
+            born_ns: r.get(4)?,
+            created_at: r.get(5)?,
         })
     })?;
     rows.collect()
