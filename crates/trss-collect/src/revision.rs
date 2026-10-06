@@ -162,6 +162,12 @@ pub fn file_crc32(path: &Path) -> io::Result<u32> {
 /// and inode, its size, and its modification and status-change times (a
 /// write into it changes the first; the second also catches a write that put
 /// the modification time back, and any change of mode or owner).
+///
+/// `==` compares all of it. [`FileIdentity::same_file`] and
+/// [`FileIdentity::unchanged`] leave the device number out, for an identity
+/// kept to be compared with the file found later: a file system mounted again
+/// may give the same file another one (btrfs numbers its devices at each
+/// mount).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FileIdentity {
     dev: u64,
@@ -193,10 +199,19 @@ impl FileIdentity {
         std::fs::symlink_metadata(path).map(|meta| FileIdentity::of(&meta))
     }
 
-    /// Whether `other` is the same file on disk (device and inode), whatever
-    /// happened to it since: a rename changes its status-change time.
+    /// Whether `other` is the same file on disk (its inode), whatever happened
+    /// to it since: a rename changes its status-change time.
     pub fn same_file(&self, other: &FileIdentity) -> bool {
-        self.dev == other.dev && self.ino == other.ino
+        self.ino == other.ino
+    }
+
+    /// Whether `other` is the same file ([`FileIdentity::same_file`]) as it
+    /// was: all but the device number is this identity.
+    pub fn unchanged(&self, other: &FileIdentity) -> bool {
+        FileIdentity {
+            dev: other.dev,
+            ..*self
+        } == *other
     }
 
     /// The identity as text, to keep in the database ([`FileIdentity::parse`]
@@ -492,6 +507,30 @@ mod tests {
         assert!(FileIdentity::at(&moved).unwrap().same_file(&before));
         std::fs::write(&path, b"aaaa").unwrap();
         assert!(!FileIdentity::at(&path).unwrap().same_file(&before));
+    }
+
+    #[test]
+    fn a_kept_identity_is_the_same_file_whatever_its_device_number() {
+        let kept = FileIdentity::parse("47:8716384:5:1759700000.1:1759700000.2").unwrap();
+        // The same file after its file system was mounted again.
+        let remounted = FileIdentity::parse("46:8716384:5:1759700000.1:1759700000.2").unwrap();
+        assert_ne!(remounted, kept);
+        assert!(remounted.same_file(&kept));
+        assert!(remounted.unchanged(&kept));
+        // Another inode.
+        let other = FileIdentity::parse("47:8716385:5:1759700000.1:1759700000.2").unwrap();
+        assert!(!other.same_file(&kept));
+        assert!(!other.unchanged(&kept));
+        // The same file renamed, or written into, since.
+        for since in [
+            "46:8716384:5:1759700000.1:1759800000.0",
+            "46:8716384:5:1759800000.0:1759800000.0",
+            "46:8716384:6:1759700000.1:1759700000.2",
+        ] {
+            let since = FileIdentity::parse(since).unwrap();
+            assert!(since.same_file(&kept), "{since:?}");
+            assert!(!since.unchanged(&kept), "{since:?}");
+        }
     }
 
     #[test]
