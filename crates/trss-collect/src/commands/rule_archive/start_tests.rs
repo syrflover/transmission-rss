@@ -17,7 +17,7 @@ use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
 use trss_core::{
-    commands::{Accepted, CommandStore},
+    commands::{Accepted, Command, CommandStore},
     Db,
 };
 use trss_library::{
@@ -213,6 +213,7 @@ fn a_start_is_a_payload_of_its_own() {
     let payload = RuleArchive {
         rule_id: "r1".into(),
         direction: Direction::Start,
+        receive: Vec::new(),
     };
     assert_eq!(
         payload.canonical(),
@@ -223,6 +224,7 @@ fn a_start_is_a_payload_of_its_own() {
     let resume = RuleArchive {
         rule_id: "r1".into(),
         direction: Direction::Resume,
+        receive: Vec::new(),
     };
     assert_eq!(
         resume.canonical(),
@@ -280,6 +282,7 @@ async fn world(directory: &str, with_archive: bool) -> (World, Rule) {
         },
         moves: MovePolicy::default(),
         redactor: transmission::Redactor::none(),
+        commands: CommandStore::new(db.clone()),
     };
     let rule = created.rules.into_iter().next().unwrap();
     assert_eq!(rule.state, RuleState::Paused);
@@ -308,10 +311,31 @@ impl World {
         else {
             panic!("the command was not stored");
         };
+        self.run_again(&command).await
+    }
+
+    /// Stores the `start` of `rule` carrying the ticked items `receive` (at
+    /// 1,000), unless `receive` is empty.
+    async fn start_receiving(&self, rule: &Rule, receive: Vec<i64>) -> Option<Command> {
+        if receive.is_empty() {
+            return None;
+        }
+        let Accepted::Created(command) =
+            ask_start_receiving(&self.commands, &rule.id, Direction::Start, receive, 1_000)
+                .await
+                .unwrap()
+        else {
+            panic!("the command was not stored");
+        };
+        Some(command)
+    }
+
+    /// Runs `command` (at 2,000), as a worker's start of it does.
+    async fn run_again(&self, command: &Command) -> Finished {
         let clock: Clock = Arc::new(|| 2_000);
         run_on(
             &self.ctx,
-            &command,
+            command,
             Arc::new(RealDisk),
             Arc::new(()),
             &clock,
@@ -319,6 +343,21 @@ impl World {
         )
         .await
         .unwrap()
+    }
+
+    /// Every open command, in the order a worker's look claims them.
+    async fn claim_all(&self) -> Vec<Command> {
+        let mut claimed: Vec<Command> = Vec::new();
+        let ids = |claimed: &[Command]| claimed.iter().map(|c| c.id.clone()).collect();
+        while let Some(next) = self
+            .commands
+            .claim_next_excluding(3_000, ids(&claimed))
+            .await
+            .unwrap()
+        {
+            claimed.push(next);
+        }
+        claimed
     }
 
     async fn state(&self, rule: &Rule) -> RuleState {
@@ -442,6 +481,88 @@ async fn a_new_rule_is_turned_on_as_if_it_had_collected_since_it_was_made_and_a_
     assert_eq!(resumed.state, RuleState::Active);
     // The command was accepted at 1,000 and ran at 2,000: it is on since the press.
     assert_eq!(resumed.resumed_at, Some(1_000));
+}
+
+#[test]
+fn a_start_carries_the_ticked_items_and_other_commands_are_as_before() {
+    let payload = RuleArchive {
+        rule_id: "r1".into(),
+        direction: Direction::Start,
+        receive: vec![42, 7],
+    };
+    assert_eq!(
+        payload.canonical(),
+        r#"{"rule_id":"r1","direction":"start","receive":[42,7]}"#
+    );
+    let read: RuleArchive = serde_json::from_str(&payload.canonical()).unwrap();
+    assert_eq!(read, payload);
+    // A command stored before items were carried reads as one with none.
+    let earlier: RuleArchive =
+        serde_json::from_str(r#"{"rule_id":"r1","direction":"start"}"#).unwrap();
+    assert!(earlier.receive.is_empty());
+}
+
+#[tokio::test]
+async fn a_start_receives_the_ticked_items_in_order_once_the_rule_is_on_and_once_each() {
+    // No archive folder: the start only turns the rule on, which is the step
+    // the receives wait for (the move itself is tested in trss-worker).
+    let (w, rule) = world("A/Season 03", false).await;
+    let command = w.start_receiving(&rule, vec![42, 7]).await.unwrap();
+
+    let finished = w.run_again(&command).await;
+
+    assert_eq!(finished.state, CommandState::Done);
+    assert_eq!(finished.outcome.result, KEPT);
+    let reason = finished.outcome.reason.unwrap();
+    assert!(reason.contains("보관 폴더를 정하지 않아서"), "{reason}");
+    assert!(
+        reason.ends_with("구독할 때 체크한 지난 항목 2개를 이어서 받아요."),
+        "{reason}"
+    );
+    assert_eq!(w.state(&rule).await, RuleState::Active);
+
+    // A start cut short after the receives were accepted runs again: each
+    // item is still asked once.
+    w.run_again(&command).await;
+
+    // The worker takes the start first, then the receives in the order ticked.
+    let claimed: Vec<_> = w
+        .claim_all()
+        .await
+        .into_iter()
+        .map(|c| (c.id, c.kind, c.payload))
+        .collect();
+    let receive = |item: i64| {
+        (
+            format!("{}-receive-{item}", command.id),
+            receive_once::KIND.to_owned(),
+            format!(r#"{{"item_id":{item},"rule_id":"{}"}}"#, rule.id),
+        )
+    };
+    assert_eq!(
+        claimed,
+        [
+            (command.id.clone(), KIND.to_owned(), command.payload.clone()),
+            receive(42),
+            receive(7),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_start_that_does_not_turn_the_rule_on_receives_none_of_the_ticked_items() {
+    let (w, rule) = world("A/Season 03", true).await;
+    write(&w.folders.archive.join("A/Season 02/e01.mkv"), "old");
+    let command = w.start_receiving(&rule, vec![42, 7]).await.unwrap();
+
+    // Transmission cannot be reached: the move fails and the rule stays off.
+    let finished = w.run_again(&command).await;
+
+    assert_eq!(finished.state, CommandState::Failed);
+    assert!(!finished.outcome.reason.unwrap().contains("체크한"));
+    assert_eq!(w.state(&rule).await, RuleState::Paused);
+    let claimed: Vec<String> = w.claim_all().await.into_iter().map(|c| c.id).collect();
+    assert_eq!(claimed, [command.id]);
 }
 
 /// The rule on, as a rule saved straight into an archived work's folder is.

@@ -153,6 +153,12 @@ export interface NewSubscription {
   subtitles: SubtitleMode;
   creator: string | null;
   directory: string;
+  /**
+   * The ticked past items (history item IDs), in the order to receive them. The server uses them only when the
+   * subscription waits for its work folder (the rule comes back `paused`): it receives them once the folder came over.
+   * Otherwise the screen receives them itself.
+   */
+  receive: number[];
 }
 
 export async function subscribe(body: NewSubscription): Promise<Rule> {

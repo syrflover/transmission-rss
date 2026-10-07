@@ -49,6 +49,14 @@
 //! that came meanwhile: a new rule is never noted as resumed, and a `영상 받기`
 //! is on from when it was pressed.
 //!
+//! A `start` of a subscription carries the past items the person ticked while
+//! subscribing ([`RuleArchive::receive`], ticket 0125). Once the rule is on, the
+//! command accepts a `receive_once` for each, in order, which the worker runs
+//! after this command like any other: the same receive as `다시 받기`, which
+//! checks the rule picks the item and decides the rule's first episode offset.
+//! A start that does not turn the rule on (the move failed) receives none of
+//! them; they stay past items to pick from the rule's detail.
+//!
 //! **The library follows the folder.** When a work folder has moved (or is found
 //! moved already), the work the library holds under the old place keeps its ID
 //! and belongs to the new place, or is merged into the work the destination
@@ -86,6 +94,7 @@ use trss_core::{
     Clock, Millis,
 };
 
+use super::receive_once;
 use crate::{
     context::TransmissionLink,
     store::channels::{ChannelStore, Rule, RuleState},
@@ -118,6 +127,8 @@ pub struct ArchiveContext {
     /// How the move waits for Transmission.
     pub moves: MovePolicy,
     pub redactor: transmission::Redactor,
+    /// Where a `start` accepts the receives of the items it carries.
+    pub commands: CommandStore,
 }
 
 /// The `kind` of the command.
@@ -167,6 +178,11 @@ impl Direction {
 pub struct RuleArchive {
     pub rule_id: String,
     pub direction: Direction,
+    /// With a `start` of a subscription: the past items the person ticked, to
+    /// receive in this order once the rule is on ([`receive_ticked`]). Empty
+    /// otherwise, and then left out of the stored text.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub receive: Vec<i64>,
 }
 
 impl RuleArchive {
@@ -421,7 +437,7 @@ pub async fn run_on(
     match payload.direction {
         Direction::Archive => archive(&start, rule).await,
         Direction::Restore | Direction::Start | Direction::Resume => {
-            bring_in(&start, rule, payload.direction).await
+            bring_in(&start, rule, &command.id, &payload).await
         }
     }
 }
@@ -635,9 +651,22 @@ pub async fn ask_start(
     direction: Direction,
     now: Millis,
 ) -> Result<Accepted, CommandError> {
+    ask_start_receiving(commands, rule_id, direction, Vec::new(), now).await
+}
+
+/// [`ask_start`] carrying the past items `receive` to receive, in this order,
+/// once the rule is on ([`RuleArchive::receive`]).
+pub async fn ask_start_receiving(
+    commands: &CommandStore,
+    rule_id: &str,
+    direction: Direction,
+    receive: Vec<i64>,
+    now: Millis,
+) -> Result<Accepted, CommandError> {
     let payload = RuleArchive {
         rule_id: rule_id.to_owned(),
         direction,
+        receive,
     };
     commands
         .accept(
@@ -848,9 +877,16 @@ async fn archive(start: &Start<'_>, rule: Rule) -> Result<Finished, Retry> {
 }
 
 /// A restore, a start or a resume: the work folder comes into the collect
-/// folder, and the rule is turned on once it has.
-async fn bring_in(start: &Start<'_>, rule: Rule, direction: Direction) -> Result<Finished, Retry> {
+/// folder, and the rule is turned on once it has. A start then receives the
+/// items it carries ([`receive_ticked`]).
+async fn bring_in(
+    start: &Start<'_>,
+    rule: Rule,
+    command_id: &str,
+    payload: &RuleArchive,
+) -> Result<Finished, Retry> {
     let ctx = start.ctx;
+    let direction = payload.direction;
     let settings = settings(ctx).await?;
     let finished = match plan_move(settings, &rule, Direction::Restore) {
         Ok(request) => match move_folder(start, &request).await? {
@@ -878,10 +914,63 @@ async fn bring_in(start: &Start<'_>, rule: Rule, direction: Direction) -> Result
                 .await
         }
     };
-    match on.map_err(Retry::store)? {
-        Some(_) => Ok(finished),
-        None => Ok(failed(RULE_GONE)),
+    let Some(rule) = on.map_err(Retry::store)? else {
+        return Ok(failed(RULE_GONE));
+    };
+    if direction != Direction::Start || payload.receive.is_empty() {
+        return Ok(finished);
     }
+    let asked = receive_ticked(start, &rule, command_id, &payload.receive).await?;
+    Ok(Finished {
+        outcome: Outcome {
+            reason: Some(match finished.outcome.reason {
+                Some(reason) => format!("{reason} {asked}"),
+                None => asked,
+            }),
+            ..finished.outcome
+        },
+        ..finished
+    })
+}
+
+/// Accepts a `receive_once` of `rule` for each of `items`, in order, and says so
+/// in a sentence for the command's outcome. Each one's ID is made of the start's
+/// and the item, so a start run again after it was cut short accepts each once
+/// (a repeat is `Existing`). An item with another receive open already is left
+/// to it.
+async fn receive_ticked(
+    start: &Start<'_>,
+    rule: &Rule,
+    command_id: &str,
+    items: &[i64],
+) -> Result<String, Retry> {
+    for &item in items {
+        let payload = receive_once::ReceiveOnce::by_rule(item, rule.id.clone());
+        let accepted = start
+            .ctx
+            .commands
+            .accept(
+                NewCommand {
+                    id: format!("{command_id}-receive-{item}"),
+                    kind: receive_once::KIND.to_owned(),
+                    payload: payload.canonical(),
+                    subject: Some(payload.subject()),
+                },
+                (start.clock)(),
+            )
+            .await
+            .map_err(Retry::store)?;
+        if let Accepted::Mismatch(_) | Accepted::Busy(_) = accepted {
+            println!(
+                "Rule {}: item {item} ticked when subscribing has another receive open",
+                rule.id
+            );
+        }
+    }
+    Ok(format!(
+        "구독할 때 체크한 지난 항목 {}개를 이어서 받아요.",
+        items.len()
+    ))
 }
 
 #[cfg(test)]
@@ -928,6 +1017,7 @@ mod tests {
         let payload = RuleArchive {
             rule_id: "r1".into(),
             direction: Direction::Restore,
+            receive: Vec::new(),
         };
         assert_eq!(
             payload.canonical(),

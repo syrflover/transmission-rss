@@ -439,17 +439,20 @@ pub(super) async fn changes_work_folder(
 }
 
 /// Stores the `start` (a new rule) or `resume` (`영상 받기` on) command of the
-/// paused rule `rule_id` and wakes the worker. `false` when the rule has another
-/// `rule_archive` command open.
+/// paused rule `rule_id` and wakes the worker. A `start` carries the past items
+/// `receive` to receive once the rule is on ([`rule_archive::RuleArchive::receive`]).
+/// `false` when the rule has another `rule_archive` command open.
 pub(super) async fn ask_start(
     state: &AppState,
     rule_id: &str,
     direction: rule_archive::Direction,
+    receive: Vec<i64>,
 ) -> Result<bool, ApiError> {
-    let accepted = rule_archive::ask_start(
+    let accepted = rule_archive::ask_start_receiving(
         &state.commands,
         rule_id,
         direction,
+        receive,
         super::commands_api::now_millis(),
     )
     .await
@@ -468,9 +471,10 @@ pub(super) async fn ask_start(
 
 /// [`ask_start`] with `start` for a rule just made, or edited into another work
 /// folder: the rule exists paused whatever happens, so a start that could not
-/// be stored is logged, and `영상 받기` switched on starts it again.
-pub(super) async fn start_new_rule(state: &AppState, rule_id: &str) {
-    match ask_start(state, rule_id, rule_archive::Direction::Start).await {
+/// be stored is logged, and `영상 받기` switched on starts it again. `receive`
+/// are the past items a subscription's person ticked.
+pub(super) async fn start_new_rule(state: &AppState, rule_id: &str, receive: Vec<i64>) {
+    match ask_start(state, rule_id, rule_archive::Direction::Start, receive).await {
         Ok(true) => {}
         Ok(false) => eprintln!("trss-web: rule {rule_id} already has a rule_archive command open"),
         Err(e) => eprintln!("trss-web: cannot store the start of rule {rule_id}: {e:?}"),
@@ -1092,7 +1096,7 @@ async fn create_rule(
         .await
         .map_err(store_error)?;
     if waits {
-        start_new_rule(&state, &created.id).await;
+        start_new_rule(&state, &created.id, Vec::new()).await;
     }
     Ok((
         StatusCode::CREATED,
@@ -1150,7 +1154,7 @@ async fn update_rule(
         Ok(_) => {
             if waits {
                 // The rule had been collecting, so it is not noted as resumed.
-                start_new_rule(&state, &id).await;
+                start_new_rule(&state, &id, Vec::new()).await;
             }
             Ok(Json(rule_view(&state, &id).await?))
         }
@@ -1253,7 +1257,7 @@ async fn switch_rule(
                 } else {
                     rule_archive::Direction::Resume
                 };
-                if !ask_start(&state, &id, direction).await? {
+                if !ask_start(&state, &id, direction, Vec::new()).await? {
                     return Err(ApiError::invalid(MOVING));
                 }
                 return Ok(Json(rule_view(&state, &id).await?));

@@ -68,6 +68,8 @@ export function Confirm({
   const [ruleId, setRuleId] = useState<string | null>(null);
   // The rule was made paused: its work folder is coming over from the archive folder.
   const [held, setHeld] = useState(false);
+  // How many ticked items the server receives after the move, for a held rule.
+  const [heldTicked, setHeldTicked] = useState(0);
   const archivedWork = useArchivedWork(draft.directory);
   // The titles of the items asked for, kept because the preview moves on.
   const [titles, setTitles] = useState<ReadonlyMap<number, string>>(new Map());
@@ -91,15 +93,17 @@ export function Confirm({
         // The creator is only stored with a followed one.
         creator: draft.subtitles === "follow" ? draft.creator : null,
         directory: draft.directory.trim(),
+        receive: tickedNow.map((i) => i.id),
       });
       subscriptionAdded(channel.id);
       setTitles(new Map(tickedNow.map((i) => [i.id, i.title])));
       setRuleId(rule.id);
       // The server decided from the disk, not from the notice above (the library's records can be
-      // stale): a rule that came back paused waits for its work folder and cannot receive yet,
-      // and one that came back collecting receives what was ticked.
+      // stale): a rule that came back paused waits for its work folder, and the server receives
+      // what was ticked once the folder came over; one that came back collecting receives it here.
       const receivesNow = receivesPastItemsNow(rule.state);
       setHeld(!receivesNow);
+      setHeldTicked(receivesNow ? 0 : tickedNow.length);
       onCreated();
       if (tickedNow.length > 0 && receivesNow) receive.start(rule.id, tickedNow.map((i) => i.id));
     } catch (e) {
@@ -129,7 +133,11 @@ export function Confirm({
           ) : (
             <>
               {held
-                ? `${anime.subject}의 작품 폴더를 보관 폴더에서 수집 폴더로 옮기는 중이에요. 옮기기가 끝나면 다음 RSS 확인부터 ${channel.name ?? channel.host} 채널에서 새 회차를 받아요. 그동안 규칙은 멈춰 있고, 지난 항목은 받지 않았어요. 옮긴 뒤 규칙 화면에서 골라 받을 수 있어요. 옮기지 못하면 규칙 화면에 까닭이 나와요.`
+                ? `${anime.subject}의 작품 폴더를 보관 폴더에서 수집 폴더로 옮기는 중이에요. 옮기기가 끝나면 다음 RSS 확인부터 ${channel.name ?? channel.host} 채널에서 새 회차를 받아요. 그동안 규칙은 멈춰 있어요. ${
+                    heldTicked > 0
+                      ? `체크한 지난 항목 ${heldTicked}개는 옮긴 뒤 받아요. 옮기지 못하면 받지 않고, 규칙 화면에 까닭이 나와요.`
+                      : "지난 항목은 받지 않았어요. 옮긴 뒤 규칙 화면에서 골라 받을 수 있어요. 옮기지 못하면 규칙 화면에 까닭이 나와요."
+                  }`
                 : `${anime.subject}의 새 회차는 다음 RSS 확인부터 ${channel.name ?? channel.host} 채널에서 받아요.`}
               {!held && receive.entries.length === 0 && " 지난 항목은 받지 않았어요. 규칙 화면에서 골라 받을 수 있어요."}
             </>
@@ -188,7 +196,7 @@ export function Confirm({
           <p className={hintClass}>
             구독만으로는 아무것도 받지 않아요. 지난 항목은 체크한 것만 받아요. ‘[Batch]’처럼 원하지 않는 항목은 체크하지 않으면 돼요.
             {archivedWork &&
-              " 작품 폴더를 옮기는 동안에는 규칙이 받지 못해요. 그때는 체크한 항목도 받지 않고, 옮긴 뒤 규칙 화면에서 골라 받아요."}
+              " 작품 폴더를 옮기는 동안에는 규칙이 받지 못해요. 체크한 항목은 옮기기가 끝난 뒤 받아요."}
           </p>
 
           {preview.state === "failed" && (

@@ -925,7 +925,18 @@ struct SubscribeBody {
     creator: Option<String>,
     /// The save folder, relative to the collect folder.
     directory: String,
+    /// The past items the person ticked, in the order to receive them (history
+    /// item IDs of this channel). The server uses them only when the
+    /// subscription waits for its work folder (the answer's rule is `paused`):
+    /// its `start` receives them once the rule is on (ticket 0125). Otherwise the
+    /// screen receives them itself, as it shows their progress.
+    #[serde(default)]
+    receive: Vec<i64>,
 }
+
+/// How many ticked items a subscription carries at most: the preview lists no
+/// more than this.
+const MAX_TICKED: usize = 100;
 
 #[derive(Serialize)]
 struct Subscribed {
@@ -983,6 +994,11 @@ async fn subscribe(
     if waits {
         input.state = RuleState::Paused;
     }
+    let receive = if waits {
+        ticked(&items, b.receive)?
+    } else {
+        Vec::new()
+    };
     let created = state
         .channels
         .create_subscription_rule(
@@ -1001,7 +1017,7 @@ async fn subscribe(
             e => e.into(),
         })?;
     if waits {
-        rules_api::start_new_rule(&state, &created.id).await;
+        rules_api::start_new_rule(&state, &created.id, receive).await;
     }
     if !waits
         && created
@@ -1017,6 +1033,33 @@ async fn subscribe(
             rule: rules_api::rule_view(&state, &created.id).await?,
         }),
     ))
+}
+
+/// The ticked items a waiting subscription carries: items of the channel's
+/// history, each once. Whether the rule may receive each is the worker's to
+/// check when it receives it.
+fn ticked(
+    items: &[trss_collect::store::history::HistoryItem],
+    receive: Vec<i64>,
+) -> Result<Vec<i64>, ApiError> {
+    let stale = || {
+        ApiError::invalid(
+            "체크한 지난 항목을 이 채널의 기록에서 찾지 못했어요. 화면을 새로고침해 주세요.",
+        )
+    };
+    if receive.len() > MAX_TICKED {
+        return Err(ApiError::invalid(BAD_BODY));
+    }
+    let mut seen = std::collections::HashSet::new();
+    for id in &receive {
+        if !seen.insert(*id) {
+            return Err(ApiError::invalid(BAD_BODY));
+        }
+        if !items.iter().any(|item| item.id == *id) {
+            return Err(stale());
+        }
+    }
+    Ok(receive)
 }
 
 #[derive(Deserialize)]

@@ -1222,6 +1222,7 @@ async fn the_state_is_not_saved_by_an_edit_and_the_last_archive_move_is_shown() 
     let payload = RuleArchive {
         rule_id: id.clone(),
         direction: Direction::Archive,
+        receive: Vec::new(),
     };
     let new = |cid: &str| NewCommand {
         id: cid.to_owned(),
@@ -1346,6 +1347,7 @@ async fn while_a_work_folder_moves_no_rule_changes_its_folder_into_or_out_of_it(
     let payload = RuleArchive {
         rule_id: moving_id.clone(),
         direction: Direction::Archive,
+        receive: Vec::new(),
     };
     app.state
         .commands

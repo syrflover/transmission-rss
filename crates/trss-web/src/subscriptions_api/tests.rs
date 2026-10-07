@@ -1409,3 +1409,99 @@ async fn subscribing_to_a_work_in_the_archive_folder_makes_the_rule_paused_with_
     assert_eq!(body["rule"]["state"], "active");
     assert_eq!(body["rule"]["archive_move"], Value::Null);
 }
+
+#[tokio::test]
+async fn a_subscription_that_waits_for_its_work_folder_carries_the_ticked_items_in_its_start() {
+    let app = App::new().await;
+    app.schedule_of_wednesday();
+    let channel = app.channel("feed.test").await;
+    app.record(&channel, 1000, &[WORK_1, WORK_2, WORK_3]).await;
+    let ids: std::collections::HashMap<String, i64> =
+        crate::rules_api::channel_items(&app.state.history, &channel.id)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|item| (item.title, item.id))
+            .collect();
+    let (two, three) = (ids[WORK_2], ids[WORK_3]);
+    let tmp = tempfile::tempdir().unwrap();
+    let (collect, archive) = (tmp.path().join("Shows (current)"), tmp.path().join("Shows"));
+    std::fs::create_dir(&collect).unwrap();
+    std::fs::create_dir_all(archive.join("Work/Season 01")).unwrap();
+    app.state
+        .settings
+        .put_collection(
+            1,
+            collect.display().to_string(),
+            Some(archive.display().to_string()),
+        )
+        .await
+        .unwrap();
+    let ticked = |receive: Value| {
+        let mut body = app.subscribe_body(&channel);
+        body["receive"] = receive;
+        body
+    };
+
+    // An item the channel's history does not hold is refused, and nothing is made.
+    let (status, body) = app
+        .call(
+            Method::POST,
+            "/api/subscriptions",
+            Some(ticked(json!([two, 999_999]))),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(app.rules(&channel).await, 0);
+
+    let (status, body) = app
+        .call(
+            Method::POST,
+            "/api/subscriptions",
+            Some(ticked(json!([three, two]))),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let rule = &body["rule"];
+    assert_eq!(rule["state"], "paused");
+    // The start carries them in the order ticked, for the worker to receive
+    // once the rule is on.
+    let start = app
+        .state
+        .commands
+        .get(rule["archive_move"]["command"]["id"].as_str().unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        start.payload,
+        format!(
+            r#"{{"rule_id":"{}","direction":"start","receive":[{three},{two}]}}"#,
+            rule["id"].as_str().unwrap()
+        )
+    );
+
+    // A subscription that need not wait leaves them to the screen, which
+    // receives them itself: nothing is stored for them.
+    let other = app.channel("other.test").await;
+    app.record(&other, 1000, &[WORK_1]).await;
+    let mut body = app.subscribe_body(&other);
+    body["directory"] = json!("Another/Season 01");
+    body["receive"] = json!([ids[WORK_1]]);
+    let (status, body) = app
+        .call(Method::POST, "/api/subscriptions", Some(body))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(body["rule"]["state"], "active");
+    assert_eq!(body["rule"]["archive_move"], Value::Null);
+    let receives = app
+        .state
+        .commands
+        .open_for_subjects(
+            trss_collect::commands::receive_once::KIND,
+            vec![ids[WORK_1].to_string()],
+        )
+        .await
+        .unwrap();
+    assert!(receives.is_empty());
+}

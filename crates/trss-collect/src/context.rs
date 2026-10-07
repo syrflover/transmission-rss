@@ -116,6 +116,7 @@ impl CollectContext {
             transmission: self.transmission.clone(),
             moves: self.moves,
             redactor: self.redactor.clone(),
+            commands: self.commands.clone(),
         }
     }
 
