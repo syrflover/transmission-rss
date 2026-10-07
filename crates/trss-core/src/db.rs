@@ -224,6 +224,9 @@ impl Db {
 
     /// Blocking variant of [`Db::open`], for code outside a runtime.
     pub fn open_blocking(path: impl AsRef<Path>) -> Result<Db, DbError> {
+        let path = path.as_ref();
+        #[cfg(any(test, feature = "test-support"))]
+        template::place(path);
         let mut conn = Connection::open_with_flags(
             path,
             OpenFlags::SQLITE_OPEN_READ_WRITE
@@ -234,6 +237,8 @@ impl Db {
         conn.pragma_update(None, "foreign_keys", true)?;
         conn.query_row("PRAGMA journal_mode = WAL", [], |_| Ok(()))?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
+        #[cfg(any(test, feature = "test-support"))]
+        template::fill(path, &mut conn)?;
         migrate(&mut conn)?;
         Ok(Db {
             conn: Arc::new(Mutex::new(conn)),
@@ -277,6 +282,74 @@ pub fn database_at(path: &Path, n: usize) -> Connection {
     }
     conn.pragma_update(None, "user_version", n as i64).unwrap();
     conn
+}
+
+/// New databases copied from one migrated once per test process. A workspace
+/// test run opens some 1,800 new databases, and running every migration for
+/// each took a quarter of the tests' time on glibc and two thirds on musl
+/// (2026-10-07, ticket 0093): SQLite parses each migration and, after each
+/// `ALTER TABLE`, the whole schema again, and on musl those allocations from
+/// many test threads queue on one malloc lock. A database that is there
+/// already is migrated as a release build migrates it, so the migration tests
+/// still run the migrations they test, and [`migrate`] still makes the copy.
+#[cfg(any(test, feature = "test-support"))]
+mod template {
+    use std::path::Path;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+    use std::time::Duration;
+
+    use rusqlite::backup::Backup;
+    use rusqlite::{Connection, MAIN_DB};
+
+    const MEMORY: &str = ":memory:";
+
+    fn migrated() -> MutexGuard<'static, Connection> {
+        static TEMPLATE: OnceLock<Mutex<Connection>> = OnceLock::new();
+        TEMPLATE
+            .get_or_init(|| {
+                let mut conn = Connection::open_in_memory().expect("open the template");
+                conn.pragma_update(None, "foreign_keys", true)
+                    .expect("turn on foreign keys");
+                super::migrate(&mut conn).expect("migrate the template");
+                Mutex::new(conn)
+            })
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Puts a migrated database at `path` when nothing is there, before
+    /// SQLite creates the file: written beside it and linked in, so an opener
+    /// at the same time finds nothing there or all of it. Where that fails,
+    /// the open goes on as usual, with its usual errors.
+    pub(super) fn place(path: &Path) {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let Some(name) = path.file_name() else { return };
+        if path == Path::new(MEMORY) || path.exists() {
+            return;
+        }
+        let mut beside = name.to_owned();
+        beside.push(format!(
+            ".template-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let beside = path.with_file_name(beside);
+        if migrated().backup(MAIN_DB, &beside, None).is_ok() {
+            let _ = std::fs::hard_link(&beside, path);
+        }
+        let _ = std::fs::remove_file(&beside);
+    }
+
+    /// Fills a new in-memory database from the migrated one.
+    pub(super) fn fill(path: &Path, conn: &mut Connection) -> rusqlite::Result<()> {
+        if path != Path::new(MEMORY) {
+            return Ok(());
+        }
+        let template = migrated();
+        let backup = Backup::new(&template, conn)?;
+        backup.run_to_completion(1000, Duration::ZERO, None)
+    }
 }
 
 /// Applies pending migrations inside write transactions, so two processes
@@ -412,10 +485,18 @@ mod tests {
             .unwrap()
     }
 
+    /// An empty file at `dir/app.db`. It is a database there already, so
+    /// opening it runs every migration instead of copying the template.
+    fn empty_file(dir: &Path) -> std::path::PathBuf {
+        let path = dir.join("app.db");
+        std::fs::File::create(&path).unwrap();
+        path
+    }
+
     #[tokio::test]
     async fn empty_db_is_migrated_once_and_reopen_keeps_it() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("app.db");
+        let path = empty_file(dir.path());
 
         let db = Db::open(&path).await.unwrap();
         assert_eq!(version_of(&db).await, MIGRATIONS.len());
@@ -442,6 +523,59 @@ mod tests {
         let db = Db::open(&path).await.unwrap();
         assert_eq!(count_channels(&db).await, 1);
         assert_eq!(version_of(&db).await, MIGRATIONS.len());
+    }
+
+    /// Everything a database holds, to compare two: its version, its schema
+    /// and every table's rows.
+    fn contents(c: &Connection) -> Result<Vec<String>, DbError> {
+        let mut out = vec![format!("user_version {}", user_version(c)?)];
+        let mut stmt = c.prepare(
+            "SELECT type, name, tbl_name, ifnull(sql, '') FROM sqlite_schema ORDER BY name",
+        )?;
+        let schema = stmt
+            .query_map([], |r| {
+                Ok([r.get::<_, String>(0)?, r.get(1)?, r.get(2)?, r.get(3)?])
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for [kind, name, table, sql] in schema {
+            out.push(format!("{kind} {name} on {table}: {sql}"));
+            if kind == "table" {
+                // Some tables have no rowid to order by.
+                let mut stmt = c.prepare(&format!("SELECT * FROM \"{name}\""))?;
+                let columns = stmt.column_count();
+                let mut rows = Vec::new();
+                let mut query = stmt.query([])?;
+                while let Some(r) = query.next()? {
+                    let values = (0..columns)
+                        .map(|i| r.get_ref(i).map(|v| format!("{v:?}")))
+                        .collect::<rusqlite::Result<Vec<_>>>()?;
+                    rows.push(format!("  {}", values.join(", ")));
+                }
+                rows.sort();
+                out.extend(rows);
+            }
+        }
+        Ok(out)
+    }
+
+    #[tokio::test]
+    async fn a_new_database_holds_what_the_migrations_make_of_an_empty_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let read = |path: std::path::PathBuf| async move {
+            let db = Db::open(&path).await.unwrap();
+            db.run(|c| contents(c)).await.unwrap()
+        };
+        let migrated = read(empty_file(dir.path())).await;
+
+        assert_eq!(read(dir.path().join("new.db")).await, migrated);
+        assert_eq!(read(":memory:".into()).await, migrated);
+        // Nothing is left beside the new file once both are closed.
+        let mut names: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["app.db", "new.db"]);
     }
 
     #[tokio::test]
@@ -2177,7 +2311,7 @@ mod tests {
     #[tokio::test]
     async fn the_rule_start_triggers_survive_every_migration() {
         let dir = tempfile::tempdir().unwrap();
-        let db = Db::open(dir.path().join("app.db")).await.unwrap();
+        let db = Db::open(empty_file(dir.path())).await.unwrap();
         let triggers: String = db
             .run::<_, DbError, _>(|c| {
                 Ok(c.query_row(

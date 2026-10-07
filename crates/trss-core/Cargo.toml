@@ -5,8 +5,9 @@ edition.workspace = true
 
 [features]
 # `db::database_at`, for the tests of the crates above that start from an
-# older schema, and `queue::testing`, for the tests of the queues above.
-test-support = []
+# older schema, `queue::testing`, for the tests of the queues above, and new
+# databases copied from one migrated once (SQLite's backup API).
+test-support = ["rusqlite/backup"]
 
 [dependencies]
 futures.workspace = true
@@ -19,5 +20,6 @@ tokio = { workspace = true, features = ["rt", "macros", "time", "sync"] }
 tokio-util.workspace = true
 
 [dev-dependencies]
+rusqlite = { workspace = true, features = ["backup"] }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
