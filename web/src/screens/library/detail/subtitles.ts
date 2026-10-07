@@ -178,6 +178,34 @@ export function applyOutcome(answer: { job_id: string; compare: boolean }): Appl
   return { kind: answer.compare ? "compare" : "sent", job: answer.job_id };
 }
 
+// --- the stored copies of an episode row ----------------------------------------------------------------------------
+
+/** The part of a stored copy that decides which cell of its episode's row shows it. */
+export interface StoredKind {
+  /** A job applies it once the episode's video comes (`영상 대기`). */
+  awaiting_video: boolean;
+  /** The job that waits for the person's approval of replacing the subtitle with it (`교체 승인`). */
+  approval_job: string | null;
+}
+
+/**
+ * The stored copies of an episode row, and what the row says of them. Those waiting for the video and those waiting
+ * for the approval stay in their own cells (`영상 대기`, `교체 승인`). The others (`others`) are the ones to choose:
+ * `note` is the quiet `보관본 있음` on the row and `cell` the `보관본` cell of the opened row, whether or not the
+ * episode has a subtitle (`library.md`, 할 일과 회차 목록): on an episode that has one, the button is `교체 비교`.
+ * The subtitle check (`자막 ✓/−`) is the files' alone, so the episode's subtitle files are not read here.
+ */
+export function storedOf<T extends StoredKind>(episode: { stored: readonly T[] }) {
+  const others = episode.stored.filter((stored) => !stored.awaiting_video && stored.approval_job === null);
+  return {
+    awaiting: episode.stored.filter((stored) => stored.awaiting_video),
+    approval: episode.stored.filter((stored) => !stored.awaiting_video && stored.approval_job !== null),
+    others,
+    note: others.length > 0,
+    cell: others.length > 0,
+  };
+}
+
 // --- the order editor -----------------------------------------------------------------------------------------------
 
 /** `order` with the format at `index` moved by `by`; the same order when it cannot move. */

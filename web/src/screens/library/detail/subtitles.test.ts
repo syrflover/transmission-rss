@@ -16,6 +16,7 @@ import {
   orderOwnerText,
   orderText,
   seasonGroups,
+  storedOf,
   type SubtitleCopy,
   type WorkSubtitles,
 } from "./subtitles.ts";
@@ -194,4 +195,52 @@ test("`저장` is offered for a changed order, and for the global one even when 
   const global = { order: ["ass", "srt", "smi"] as ("srt" | "ass" | "smi")[], own: false };
   assert.equal(canSaveOrder(["ass", "srt", "smi"], global), true);
   assert.equal(canSaveOrder(["srt", "ass", "smi"], global), true);
+});
+
+// --- the stored copies of an episode row ----------------------------------------------------------------------------
+
+const held = (id: string, over: { awaiting_video?: boolean; approval_job?: string | null; compare?: boolean } = {}) => ({
+  id,
+  awaiting_video: false,
+  approval_job: null,
+  compare: false,
+  ...over,
+});
+
+test("a stored copy to choose is on the row of an episode that has a subtitle, as `교체 비교`", () => {
+  const episode = { subtitle: [{ path: "Season 01/Show S01E02.ass" }], stored: [held("a", { compare: true })] };
+  const view = storedOf(episode);
+  assert.equal(view.note, true);
+  assert.equal(view.cell, true);
+  assert.deepEqual(view.others.map((s) => [s.id, s.compare]), [["a", true]]);
+});
+
+test("a stored copy to choose is on the row of an episode with no subtitle too", () => {
+  const episode = { subtitle: [], stored: [held("a")] };
+  const view = storedOf(episode);
+  assert.equal(view.note, true);
+  assert.equal(view.cell, true);
+});
+
+test("copies waiting for the video or the approval stay in their own cells and not in the stored one", () => {
+  const episode = {
+    subtitle: [{ path: "x.ass" }],
+    stored: [held("v", { awaiting_video: true }), held("p", { approval_job: "j1" })],
+  };
+  const view = storedOf(episode);
+  assert.deepEqual(view.awaiting.map((s) => s.id), ["v"]);
+  assert.deepEqual(view.approval.map((s) => s.id), ["p"]);
+  assert.deepEqual(view.others, []);
+  assert.equal(view.note, false);
+  assert.equal(view.cell, false);
+  // Beside one to choose, the others are still separate.
+  const mixed = storedOf({ stored: [held("v", { awaiting_video: true }), held("c"), held("p", { approval_job: "j1" })] });
+  assert.deepEqual(mixed.others.map((s) => s.id), ["c"]);
+  assert.equal(mixed.note, true);
+});
+
+test("an episode with no stored copy says nothing", () => {
+  const view = storedOf({ stored: [] });
+  assert.equal(view.note, false);
+  assert.equal(view.cell, false);
 });

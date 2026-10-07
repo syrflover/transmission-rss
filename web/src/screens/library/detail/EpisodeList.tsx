@@ -18,7 +18,7 @@ import type { Candidate } from "../api";
 import { candidatesOf } from "./candidates";
 import { candidateNote, EpisodePicks, type EpisodeCandidateSource } from "./EpisodeCandidates";
 import { SubtitleFiles } from "./SubtitleCreators";
-import { applyOutcome, formatText } from "./subtitles.ts";
+import { applyOutcome, formatText, storedOf } from "./subtitles.ts";
 
 /**
  * One kind of file of an episode: `영상 ✓` or `자막 −`. The label is the same
@@ -233,18 +233,6 @@ function AwaitingLine({ stored }: { stored: StoredSubtitle }) {
 /** The time a file was added, or `미상` when it was there before the app first looked. */
 const addedAt = (file: WorkFile) => (file.added_at === null ? "미상" : dateTime(file.added_at));
 
-/**
- * The episode's stored subtitles: those waiting for its video, those waiting for the user to approve a replacement
- * (`교체 승인`), and the others (`보관본 있음`).
- */
-function storedOf(episode: WorkEpisode) {
-  return {
-    awaiting: episode.stored.filter((stored) => stored.awaiting_video),
-    approval: episode.stored.filter((stored) => !stored.awaiting_video && stored.approval_job !== null),
-    others: episode.stored.filter((stored) => !stored.awaiting_video && stored.approval_job === null),
-  };
-}
-
 function Details({
   id,
   workId,
@@ -268,7 +256,7 @@ function Details({
   onRetried: () => Promise<void>;
   onCreatorChanged: () => void;
 }) {
-  const { awaiting, approval, others } = storedOf(episode);
+  const { awaiting, approval, others, cell } = storedOf(episode);
   return (
     <dl id={id} className="m-0 grid grid-cols-[repeat(auto-fit,minmax(170px,1fr))] gap-x-4 gap-y-3 px-4 pt-1 pb-4 max-[720px]:px-3">
       {episode.failure !== null && <Failure failure={episode.failure} onRetried={onRetried} />}
@@ -322,7 +310,7 @@ function Details({
           ))}
         </Cell>
       )}
-      {episode.subtitle.length === 0 && others.length > 0 && (
+      {cell && (
         <Cell label="보관본">
           {others.map((stored) => (
             <StoredLine key={stored.id} workId={workId} stored={stored} hasVideo={episode.video.length > 0} onApplied={onRetried} />
@@ -361,7 +349,7 @@ function Row({
 }) {
   const id = rowId(season, episode.episode);
   const detailId = `${id}-files`;
-  const { awaiting, approval, others } = storedOf(episode);
+  const { awaiting, approval, note } = storedOf(episode);
   return (
     <li className="border-t border-hairline-soft first:border-t-0">
       <button
@@ -399,10 +387,8 @@ function Row({
             )}
             {/* Quiet and uncoloured: a candidate to look at, not a to-do. */}
             {picks.length > 0 && <span className="text-xs text-text-muted [overflow-wrap:anywhere]">{candidateNote(picks)}</span>}
-            {/* A stored subtitle to apply is a choice, not a held subtitle: the check above stays `−`. */}
-            {episode.subtitle.length === 0 && awaiting.length === 0 && others.length > 0 && (
-              <span className="text-xs text-text-muted">보관본 있음</span>
-            )}
+            {/* A stored subtitle to choose is not a held subtitle: the check above counts the episode's files only. */}
+            {note && <span className="text-xs text-text-muted">보관본 있음</span>}
           </span>
           {episode.revision !== null && <VersionLine revision={episode.revision} />}
         </span>
@@ -455,9 +441,11 @@ interface EpisodeListProps {
  * it opens the files and when each was added, and the failed replacement's two
  * files with why (and `다시 받기` when its download stopped). An episode with
  * no subtitle that other creators have a candidate for says so quietly, and its
- * opened row has `받기` for each. One with no subtitle but a stored one (another
- * episode of a package, `보관본 있음`) says so quietly too, and its opened row has
- * the stored subtitles with `적용`, which the job that stored it does.
+ * opened row has `받기` for each. One with a stored subtitle to choose (another
+ * episode of a package, a format the order did not take; `보관본 있음`) says so
+ * quietly too, with or without a subtitle of its own, and its opened row has the
+ * stored subtitles with `적용` (`교체 비교` when the episode has a subtitle), which
+ * the job that stored it does.
  */
 export function EpisodeList({
   workId,
