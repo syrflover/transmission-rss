@@ -6,7 +6,9 @@ import {
   actionMode,
   actionName,
   actionsOf,
+  APPLY_WAIT_MS,
   applyOutcome,
+  applyProgress,
   canSaveOrder,
   cardSummary,
   copyView,
@@ -18,6 +20,7 @@ import {
   seasonGroups,
   storedOf,
   type SubtitleCopy,
+  waitOver,
   type WorkSubtitles,
 } from "./subtitles.ts";
 
@@ -243,4 +246,43 @@ test("an episode with no stored copy says nothing", () => {
   const view = storedOf({ stored: [] });
   assert.equal(view.note, false);
   assert.equal(view.cell, false);
+});
+
+// --- waiting for the job that applies a copy ------------------------------------------------------------------------
+
+test("a job that was only queued or is running is waited for, and the work is read once it is done", () => {
+  // The server turns the job back to `pending` before it answers, so the first reads are not the end.
+  assert.deepEqual(applyProgress({ state: "pending", note: "고른 보관본을 적용해요" }), { kind: "running" });
+  assert.deepEqual(applyProgress({ state: "running", note: null }), { kind: "running" });
+  assert.deepEqual(applyProgress({ state: "done", note: null }), { kind: "done" });
+});
+
+test("a failed job says why in its own sentence, and a plain one when it wrote none", () => {
+  assert.deepEqual(applyProgress({ state: "failed", note: "영상 옆에 같은 이름의 파일이 있어요." }), {
+    kind: "failed",
+    text: "영상 옆에 같은 이름의 파일이 있어요.",
+  });
+  const plain = { kind: "failed", text: "적용하지 못했어요. 작업에서 까닭을 볼 수 있어요." };
+  assert.deepEqual(applyProgress({ state: "failed", note: null }), plain);
+  assert.deepEqual(applyProgress({ state: "failed", note: "  " }), plain);
+  assert.equal(applyProgress({ state: "partial", note: null }).kind, "failed");
+});
+
+test("a job that stops for a person ends the wait and says what it waits for", () => {
+  assert.deepEqual(applyProgress({ state: "waiting", note: "교체 승인을 기다려요." }), {
+    kind: "waiting",
+    text: "교체 승인을 기다려요.",
+  });
+  assert.equal(applyProgress({ state: "held", note: null }).kind, "waiting");
+});
+
+test("a state this build does not know is waited for, not taken as the end", () => {
+  assert.deepEqual(applyProgress({ state: "paused", note: null }), { kind: "running" });
+});
+
+test("the wait is over after five minutes and not before", () => {
+  assert.equal(APPLY_WAIT_MS, 300_000);
+  assert.equal(waitOver(1000, 1000), false);
+  assert.equal(waitOver(1000, 1000 + APPLY_WAIT_MS - 1), false);
+  assert.equal(waitOver(1000, 1000 + APPLY_WAIT_MS), true);
 });

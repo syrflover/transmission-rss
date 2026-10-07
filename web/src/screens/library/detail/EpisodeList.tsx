@@ -17,6 +17,7 @@ import { retryStatus, useItemRetry } from "../../collect/history/useRetry";
 import type { Candidate } from "../api";
 import { candidatesOf } from "./candidates";
 import { candidateNote, EpisodePicks, type EpisodeCandidateSource } from "./EpisodeCandidates";
+import { ApplyStatus, JobLink } from "./ApplyStatus";
 import { SubtitleFiles } from "./SubtitleCreators";
 import { applyOutcome, formatText, storedOf } from "./subtitles.ts";
 
@@ -140,7 +141,9 @@ function VersionLine({ revision }: { revision: EpisodeRevision }) {
 
 /**
  * A stored subtitle on an episode: applying it is the job's that stored it. On an episode with a subtitle
- * (`compare`) the job compares the two first, so the button says `교체 비교` and the job's page opens.
+ * (`compare`) the job compares the two first, so the button says `교체 비교` and the job's page opens. Otherwise the
+ * answer only says the job took the apply, so the line waits for the job to end (`ApplyStatus`) and then reads the work
+ * again; a failure shows the job's own sentence on the line.
  */
 function StoredLine({
   workId,
@@ -154,9 +157,9 @@ function StoredLine({
   onApplied: () => Promise<void>;
 }) {
   const navigate = useNavigate();
-  const [phase, setPhase] = useState<{ kind: "idle" } | { kind: "sending" } | { kind: "sent"; job: string } | { kind: "error"; text: string }>({
-    kind: "idle",
-  });
+  const [phase, setPhase] = useState<
+    { kind: "idle" } | { kind: "sending" } | { kind: "sent"; job: string } | { kind: "error"; text: string; job: string | null }
+  >({ kind: "idle" });
   const apply = async () => {
     setPhase({ kind: "sending" });
     try {
@@ -166,10 +169,10 @@ function StoredLine({
         navigate(jobPath(outcome.job));
         return;
       }
+      // The job only took the apply: `ApplyStatus` reads the work again once the job ends.
       setPhase({ kind: "sent", job: outcome.job });
-      await onApplied();
     } catch (e) {
-      setPhase({ kind: "error", text: e instanceof ApiError ? e.message : "적용을 요청하지 못했어요." });
+      setPhase({ kind: "error", text: e instanceof ApiError ? e.message : "적용을 요청하지 못했어요.", job: null });
     }
   };
   const facts = [stored.creator ?? "제작자 알 수 없음", formatText(stored.format), `${dateTime(stored.stored_at)} 받음`];
@@ -180,12 +183,11 @@ function StoredLine({
       </span>
       <span className="text-[12px] text-text-muted">{facts.join(" · ")}</span>
       {phase.kind === "sent" ? (
-        <span role="status" className="text-xs text-text-secondary">
-          적용을 맡겼어요.{" "}
-          <Link to={jobPath(phase.job)} className="rounded-sm underline underline-offset-2 focus-visible:outline-2 focus-visible:outline-focus">
-            작업 보기
-          </Link>
-        </span>
+        <ApplyStatus
+          job={phase.job}
+          onEnded={onApplied}
+          onFailed={(text) => setPhase({ kind: "error", text, job: phase.job })}
+        />
       ) : !stored.can_apply ? (
         <span className="text-xs text-text-muted">
           {stored.format === "other" ? "자동으로 적용하지 않는 형식이에요." : "받은 작업의 기록이 없어 여기서 적용할 수 없어요."}
@@ -205,6 +207,12 @@ function StoredLine({
           {phase.kind === "error" && (
             <span role="alert" className="text-xs text-urgent">
               {phase.text}
+              {phase.job !== null && (
+                <>
+                  {" "}
+                  <JobLink job={phase.job} />
+                </>
+              )}
             </span>
           )}
         </span>

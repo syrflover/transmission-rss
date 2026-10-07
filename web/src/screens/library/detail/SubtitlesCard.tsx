@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
 import { ApiError } from "@/lib/api";
@@ -9,6 +9,7 @@ import { btnAction, btnNeutral } from "../../collect/channels/styles";
 import { POLICY_KEY, type SubtitleFormat } from "../../settings/policy/api";
 import { jobPath } from "../../todo/api";
 import { applyStored, deleteSubtitleOrder, putSubtitleOrder, type FormatOrder, type WorkSubtitles } from "../api";
+import { ApplyStatus, JobLink } from "./ApplyStatus";
 import { Card } from "./SideCards";
 import {
   ACTION_LABEL,
@@ -84,7 +85,7 @@ type Phase =
   | { kind: "idle" }
   | { kind: "sending"; action: CopyAction }
   | { kind: "sent"; job: string }
-  | { kind: "error"; text: string };
+  | { kind: "error"; text: string; job: string | null };
 
 /** One stored copy: what it is, where it lies when applied, and what can be done with it. */
 function CopyRow({ workId, view, onChanged }: { workId: string; view: CopyView; onChanged: () => Promise<void> }) {
@@ -101,10 +102,10 @@ function CopyRow({ workId, view, onChanged }: { workId: string; view: CopyView; 
         navigate(jobPath(outcome.job));
         return;
       }
+      // The job only took the apply: `ApplyStatus` reads the work again once the job ends.
       setPhase({ kind: "sent", job: outcome.job });
-      await onChanged();
     } catch (e) {
-      setPhase({ kind: "error", text: e instanceof ApiError ? e.message : "적용을 요청하지 못했어요." });
+      setPhase({ kind: "error", text: e instanceof ApiError ? e.message : "적용을 요청하지 못했어요.", job: null });
     }
   };
 
@@ -130,12 +131,11 @@ function CopyRow({ workId, view, onChanged }: { workId: string; view: CopyView; 
         </dl>
       )}
       {phase.kind === "sent" ? (
-        <span role="status" className="text-xs text-text-secondary">
-          적용을 맡겼어요.{" "}
-          <Link to={jobPath(phase.job)} className="rounded-sm underline underline-offset-2 focus-visible:outline-2 focus-visible:outline-focus">
-            작업 보기
-          </Link>
-        </span>
+        <ApplyStatus
+          job={phase.job}
+          onEnded={onChanged}
+          onFailed={(text) => setPhase({ kind: "error", text, job: phase.job })}
+        />
       ) : view.blocked !== null ? (
         <span className="text-xs leading-snug text-text-muted">{view.blocked}</span>
       ) : (
@@ -160,6 +160,12 @@ function CopyRow({ workId, view, onChanged }: { workId: string; view: CopyView; 
       {phase.kind === "error" && (
         <span role="alert" className="text-xs leading-snug text-urgent">
           {phase.text}
+          {phase.job !== null && (
+            <>
+              {" "}
+              <JobLink job={phase.job} />
+            </>
+          )}
         </span>
       )}
     </div>

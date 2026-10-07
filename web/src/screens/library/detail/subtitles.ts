@@ -206,6 +206,52 @@ export function storedOf<T extends StoredKind>(episode: { stored: readonly T[] }
   };
 }
 
+// --- waiting for the job that applies a copy ------------------------------------------------------------------------
+
+/**
+ * Where the job that was asked to apply a copy is. The answer to the request only says the job took it; the worker
+ * applies afterwards (`web-app.md`, 웹 명령과 상태 갱신), so the screen reads the job until it is no longer on its way.
+ * `done`: it ended and the work is read again; `failed`: it failed and `text` is why; `waiting`: it stops for a person
+ * (`교체 승인`, a check) and `text` is what it waits for; `running`: read it again.
+ */
+export type ApplyProgress =
+  | { kind: "running" }
+  | { kind: "done" }
+  | { kind: "failed"; text: string }
+  | { kind: "waiting"; text: string };
+
+/** The part of a job the wait reads: its state and the one sentence about it (`note`). */
+export interface JobGlance {
+  state: string;
+  note: string | null;
+}
+
+export function applyProgress(job: JobGlance): ApplyProgress {
+  const note = job.note !== null && job.note.trim() !== "" ? job.note : null;
+  switch (job.state) {
+    case "done":
+      return { kind: "done" };
+    case "failed":
+      return { kind: "failed", text: note ?? "적용하지 못했어요. 작업에서 까닭을 볼 수 있어요." };
+    case "partial":
+      return { kind: "failed", text: note ?? "일부만 적용했어요. 작업에서 까닭을 볼 수 있어요." };
+    case "waiting":
+    case "held":
+      return { kind: "waiting", text: note ?? "사람이 할 일이 남았어요." };
+    // `pending`, `running`, and a state this build does not know: the wait goes on until it ends or runs out.
+    default:
+      return { kind: "running" };
+  }
+}
+
+/** How long the row waits for the job (milliseconds); a worker that is down leaves the job queued for longer. */
+export const APPLY_WAIT_MS = 5 * 60 * 1000;
+
+/** The wait that began at `startedAt` is over at `now`. */
+export function waitOver(startedAt: number, now: number): boolean {
+  return now - startedAt >= APPLY_WAIT_MS;
+}
+
 // --- the order editor -----------------------------------------------------------------------------------------------
 
 /** `order` with the format at `index` moved by `by`; the same order when it cannot move. */
