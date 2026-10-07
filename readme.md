@@ -276,5 +276,5 @@ dev/musl-test.sh
 ```
 
 - The release binaries are built for `x86_64-unknown-linux-musl` in `clux/muslrust:stable` (`Dockerfile`), while the usual `cargo test` runs on the development machine's glibc. musl's standard library differs in what it can read (it gives no file birth time, for one), and the bundled C code (SQLite, liblzma) builds differently, so a test can pass on one and fail on the other. The script runs `cargo test --locked --workspace -j 4` in that image; arguments after it go to `cargo test`.
-- It runs the tests as you, not root (some tests expect a write to be refused), builds into `target/musl`, and uses this machine's cargo registry and git checkouts. Tests marked `#[ignore]` are skipped, as in the usual run.
+- It runs the tests as you, not root (some tests expect a write to be refused), with a tmpfs `/tmp` as on the development machine (the tests' SQLite files sync to it), builds into `target/musl`, and uses this machine's cargo registry and git checkouts. Tests marked `#[ignore]` are skipped, as in the usual run.
 - Then update the server as [Run, stop, update](#run-stop-update) says.

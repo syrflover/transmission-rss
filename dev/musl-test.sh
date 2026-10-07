@@ -16,6 +16,9 @@
 #   the project's .cargo/config.toml is.
 # - `-j 4`, as on the development machine: linking the test binaries with
 #   more jobs fills the memory.
+# - /tmp is a tmpfs, as on the development machine. The image's own /tmp is
+#   on the disk, where the tests' SQLite files sync each migration to it:
+#   trss-core's tests took 43 s there and 8 s on a tmpfs (2026-10-07).
 # - Tests marked #[ignore] are skipped, as in the usual run.
 set -euo pipefail
 
@@ -31,6 +34,7 @@ fi
 
 exec docker run --rm --init "${tty[@]}" \
   --user "$(id -u):$(id -g)" \
+  --tmpfs /tmp:rw,exec,size=4g,mode=1777 \
   -e HOME=/tmp \
   -e CARGO_TARGET_DIR=/src/target/musl \
   -v "$REPO:/src" \
