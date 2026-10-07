@@ -5,10 +5,11 @@ edition.workspace = true
 
 [features]
 # `db::database_at`, for the tests of the crates above that start from an
-# older schema.
+# older schema, and `queue::testing`, for the tests of the queues above.
 test-support = []
 
 [dependencies]
+futures.workspace = true
 rusqlite.workspace = true
 rustix = { workspace = true, features = ["process"] }
 serde = { workspace = true, features = ["derive"] }

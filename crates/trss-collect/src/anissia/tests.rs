@@ -250,6 +250,30 @@ async fn a_refresh_that_fails_or_stops_halfway_never_records_an_anime_as_unliste
 }
 
 #[tokio::test]
+async fn a_refresh_that_panics_puts_the_anime_off_like_a_failure_and_the_next_one_runs() {
+    let env = Env::new().await;
+    env.subscribe(3320, 3, 10 * DAY - DAY).await;
+    env.fake
+        .set_week(3, vec![env.fake.entry(3, 3320, "23:30", "새 제목", "原題")]);
+    trss_core::queue::testing::panic_next(QUEUE, "refresh");
+    assert_eq!(
+        env.queue.run_next().await.unwrap(),
+        Ran {
+            refreshed: 0,
+            missing: 0,
+            failed: 1
+        }
+    );
+    assert!(env.schedule_requests().is_empty());
+    env.advance(REFRESH_RETRY.as_millis() as i64 - 1);
+    assert!(env.queue.run_next().await.is_none());
+    env.advance(1);
+    assert_eq!(env.queue.run_next().await.unwrap().refreshed, 1);
+    let snapshot = env.store.anime(3320).await.unwrap().unwrap();
+    assert_eq!(snapshot.subject, "새 제목");
+}
+
+#[tokio::test]
 async fn a_schedule_that_lists_nothing_at_all_does_not_make_an_anime_unlisted() {
     let env = Env::new().await;
     env.subscribe(9, 3, 10 * DAY - DAY).await;

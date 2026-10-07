@@ -51,11 +51,13 @@ use std::{
 use tokio_util::sync::CancellationToken;
 
 use trss_anissia::{Anissia, AnissiaError, CaptionLine};
-use trss_core::{CycleLock, Millis};
+use trss_core::{queue::run_item, CycleLock, Millis};
 
 use crate::store::anissia::{AnissiaStore, Line, Observed};
 use trss_library::artwork::queue::{LOCK_RETRY, POLL};
 
+/// The queue's name in its log lines.
+pub(crate) const QUEUE: &str = "Anissia caption observation";
 /// How often the recent list is read.
 pub const OBSERVE_EVERY: Duration = Duration::from_secs(30 * 60);
 /// The most pages one reading takes: a list that does not end is a list that
@@ -309,17 +311,26 @@ impl CaptionObserver {
             Ok(Some((next_at, _))) if !Self::is_due(now, next_at) => return None,
             Ok(_) => {}
             Err(e) => {
-                eprintln!("Anissia caption observation: {e}");
+                eprintln!("{QUEUE}: {e}");
                 return None;
             }
         }
         let next_at = now + OBSERVE_EVERY.as_millis() as i64;
         *self.held_until.lock().unwrap_or_else(|e| e.into_inner()) = next_at;
         if let Err(e) = self.store.schedule_caption_poll(next_at, None).await {
-            eprintln!("Anissia caption observation: cannot write the schedule: {e}");
+            eprintln!("{QUEUE}: cannot write the schedule: {e}");
         }
 
-        let read = self.read_recent().await;
+        // A reading that panics ends as a failed one: the next is due a
+        // period after this one started.
+        let read = match run_item(QUEUE, "reading of the recent list", self.read_recent()).await {
+            Ok(read) => read,
+            Err(panic) => {
+                let mut read = Read::new();
+                read.end = End::Failed(format!("panicked: {panic}"));
+                read
+            }
+        };
 
         let counts = format!(
             "{} page(s) read, {} added, {} unchanged, {} skipped",
@@ -330,20 +341,17 @@ impl CaptionObserver {
         match &read.end {
             End::Complete => {
                 read_at = Some(self.now());
-                println!("Anissia caption observation: {counts}");
+                println!("{QUEUE}: {counts}");
             }
             End::Busy(wait) => {
-                eprintln!(
-                    "Anissia caption observation: asked to wait {}s; {counts}",
-                    wait.as_secs()
-                );
+                eprintln!("{QUEUE}: asked to wait {}s; {counts}", wait.as_secs());
                 next_at = next_at.max(self.now() + wait.as_millis() as i64);
             }
-            End::Failed(why) => eprintln!("Anissia caption observation failed: {why}; {counts}"),
+            End::Failed(why) => eprintln!("{QUEUE} failed: {why}; {counts}"),
         }
         *self.held_until.lock().unwrap_or_else(|e| e.into_inner()) = next_at;
         if let Err(e) = self.store.schedule_caption_poll(next_at, read_at).await {
-            eprintln!("Anissia caption observation: cannot write the schedule: {e}");
+            eprintln!("{QUEUE}: cannot write the schedule: {e}");
         }
         Some(read)
     }
@@ -356,10 +364,7 @@ impl CaptionObserver {
             let lock = match CycleLock::try_acquire(&lock_path) {
                 Ok(lock) => lock,
                 Err(e) => {
-                    eprintln!(
-                        "Anissia caption observation: cannot take {}: {e}",
-                        lock_path.display()
-                    );
+                    eprintln!("{QUEUE}: cannot take {}: {e}", lock_path.display());
                     None
                 }
             };

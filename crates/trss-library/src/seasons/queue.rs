@@ -22,7 +22,7 @@ use std::{path::PathBuf, time::Duration};
 
 use tokio_util::sync::CancellationToken;
 
-use trss_core::CycleLock;
+use trss_core::{queue::run_item, CycleLock};
 
 use crate::{
     artwork::queue::{LOCK_RETRY, POLL, RETRY_DELAYS},
@@ -35,6 +35,8 @@ use trss_anilist::{
     AnilistError,
 };
 
+/// The queue's name in its log lines.
+pub(crate) const QUEUE: &str = "Season queue";
 /// How long a refresh that failed waits before the entry is tried again.
 pub const REFRESH_RETRY: Duration = Duration::from_secs(60 * 60);
 
@@ -106,7 +108,7 @@ impl Seasons {
         if let Err(e) = written {
             // Nothing holds the search back: pause the queue instead, so it is
             // not taken again at once.
-            eprintln!("Season queue: cannot put off work {}: {e}", job.work_id);
+            eprintln!("{QUEUE}: cannot put off work {}: {e}", job.work_id);
             tokio::time::sleep(POLL).await;
         }
         if retry_at.is_some() {
@@ -180,7 +182,7 @@ impl Seasons {
     async fn refresh_off(&self, id: i64, wait: Duration) -> Ran {
         let retry_at = self.now() + wait.as_millis() as i64;
         if let Err(e) = self.store.refresh_later(id, retry_at).await {
-            eprintln!("Season queue: cannot put off entry {id}: {e}");
+            eprintln!("{QUEUE}: cannot put off entry {id}: {e}");
             tokio::time::sleep(POLL).await;
         }
         Ran::RefreshLater(id)
@@ -218,21 +220,37 @@ impl Seasons {
     }
 
     /// Runs the next job that is due, if any: a search first, then a refresh.
+    /// A job that panics is put off as a failure is.
     pub async fn run_next(&self) -> Option<Ran> {
         let now = self.now();
         match self.store.next_search(now).await {
-            Ok(Some(job)) => return Some(self.run_search(&job).await),
+            Ok(Some(job)) => {
+                let item = format!("search for work {} season {}", job.work_id, job.season);
+                return Some(match run_item(QUEUE, &item, self.run_search(&job)).await {
+                    Ok(ran) => ran,
+                    Err(panic) => {
+                        self.put_off(&job, None, &format!("panicked: {panic}"))
+                            .await
+                    }
+                });
+            }
             Ok(None) => {}
             Err(e) => {
-                eprintln!("Season queue: {e}");
+                eprintln!("{QUEUE}: {e}");
                 return None;
             }
         }
         match self.store.next_refresh(now).await {
-            Ok(Some(id)) => Some(self.run_refresh(id).await),
+            Ok(Some(id)) => {
+                let item = format!("refresh of entry {id}");
+                Some(match run_item(QUEUE, &item, self.run_refresh(id)).await {
+                    Ok(ran) => ran,
+                    Err(_) => self.refresh_off(id, REFRESH_RETRY).await,
+                })
+            }
             Ok(None) => None,
             Err(e) => {
-                eprintln!("Season queue: {e}");
+                eprintln!("{QUEUE}: {e}");
                 None
             }
         }
@@ -245,7 +263,7 @@ impl Seasons {
             let lock = match CycleLock::try_acquire(&lock_path) {
                 Ok(lock) => lock,
                 Err(e) => {
-                    eprintln!("Season queue: cannot take {}: {e}", lock_path.display());
+                    eprintln!("{QUEUE}: cannot take {}: {e}", lock_path.display());
                     None
                 }
             };

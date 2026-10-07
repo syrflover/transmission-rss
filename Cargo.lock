@@ -3012,6 +3012,7 @@ dependencies = [
 name = "trss-core"
 version = "0.1.0"
 dependencies = [
+ "futures",
  "rusqlite",
  "rustix",
  "serde",

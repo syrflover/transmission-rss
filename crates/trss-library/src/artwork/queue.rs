@@ -19,7 +19,7 @@ use std::{path::PathBuf, time::Duration};
 
 use tokio_util::sync::CancellationToken;
 
-use trss_core::CycleLock;
+use trss_core::{queue::run_item, CycleLock};
 
 use crate::{
     artwork::{files, ActionError, Artwork},
@@ -30,6 +30,8 @@ use trss_anilist::{
     AnilistError, ImageFetchError,
 };
 
+/// The queue's name in its log lines.
+pub(crate) const QUEUE: &str = "Artwork queue";
 /// How often an idle queue looks for new jobs.
 pub const POLL: Duration = Duration::from_secs(5);
 /// How often the queue recovers interrupted publishes and cleans up.
@@ -105,7 +107,7 @@ impl Artwork {
         if let Err(e) = written {
             // Nothing holds the job back: pause the queue instead, so it is
             // not taken again at once.
-            eprintln!("Artwork queue: cannot put off work {}: {e}", job.work_id);
+            eprintln!("{QUEUE}: cannot put off work {}: {e}", job.work_id);
             tokio::time::sleep(POLL).await;
         }
         if retry_at.is_some() {
@@ -129,7 +131,7 @@ impl Artwork {
             )
             .await;
         if let Err(e) = written {
-            eprintln!("Artwork queue: cannot give up work {}: {e}", job.work_id);
+            eprintln!("{QUEUE}: cannot give up work {}: {e}", job.work_id);
             tokio::time::sleep(POLL).await;
         }
         Ran::GaveUp(note)
@@ -257,16 +259,21 @@ impl Artwork {
         }
     }
 
-    /// Runs the next job that is due, if any.
+    /// Runs the next job that is due, if any. A job that panics is put off as
+    /// a failure is.
     pub async fn run_next(&self) -> Option<Ran> {
         let job = match self.store.next_job(self.now()).await {
             Ok(job) => job?,
             Err(e) => {
-                eprintln!("Artwork queue: {e}");
+                eprintln!("{QUEUE}: {e}");
                 return None;
             }
         };
-        Some(self.run_job(&job).await)
+        let item = format!("{} for work {}", job.kind.code(), job.work_id);
+        Some(match run_item(QUEUE, &item, self.run_job(&job)).await {
+            Ok(ran) => ran,
+            Err(panic) => self.later(&job, format!("panicked: {panic}"), None).await,
+        })
     }
 
     /// Recovers interrupted publishes and removes unreferenced files.
@@ -285,7 +292,7 @@ impl Artwork {
             let lock = match CycleLock::try_acquire(&lock_path) {
                 Ok(lock) => lock,
                 Err(e) => {
-                    eprintln!("Artwork queue: cannot take {}: {e}", lock_path.display());
+                    eprintln!("{QUEUE}: cannot take {}: {e}", lock_path.display());
                     None
                 }
             };

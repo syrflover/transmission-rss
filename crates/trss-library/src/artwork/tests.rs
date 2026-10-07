@@ -408,6 +408,42 @@ async fn a_search_counts_only_when_read_to_its_last_page() {
 // --- pace, failures and the queue --------------------------------------------------------
 
 #[tokio::test]
+async fn a_job_that_panics_is_put_off_like_a_failure_and_the_next_job_runs() {
+    let env = Env::new(&["A", "B"]).await;
+    env.fake
+        .add_search("A", vec![env.fake.entry(1, "A", &[])], &samples::jpeg());
+    env.fake
+        .add_search("B", vec![env.fake.entry(2, "B", &[])], &samples::jpeg());
+    // The job taken first panics.
+    let first = env
+        .art
+        .store
+        .next_job(env.art.now())
+        .await
+        .unwrap()
+        .unwrap();
+    let (panicked, next, next_media) = match first.work_id == env.id("A").await {
+        true => ("A", "B", 2),
+        false => ("B", "A", 1),
+    };
+    trss_core::queue::testing::panic_next(
+        crate::artwork::queue::QUEUE,
+        &format!("search for work {}", first.work_id),
+    );
+    let before = env.art.now();
+    assert_eq!(
+        env.drain().await,
+        [Ran::Later, Ran::Recorded, Ran::Recorded]
+    );
+    let job = env.selection(panicked).await.job.unwrap();
+    assert_eq!(job.attempts, 1);
+    let wait = job.not_before.unwrap() - before;
+    assert!((60_000..65_000).contains(&wait), "{wait}");
+    assert_eq!(env.selection(panicked).await.anilist_media_id, None);
+    assert_eq!(env.selection(next).await.anilist_media_id, Some(next_media));
+}
+
+#[tokio::test]
 async fn a_failure_waits_and_a_429_holds_every_request_without_counting() {
     let env = Env::new(&["A"]).await;
     env.fake

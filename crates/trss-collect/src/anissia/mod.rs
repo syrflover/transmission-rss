@@ -35,7 +35,7 @@ use std::{path::PathBuf, time::Duration};
 
 use tokio_util::sync::CancellationToken;
 
-use trss_core::{CycleLock, Millis};
+use trss_core::{queue::run_item, CycleLock, Millis};
 
 use trss_anissia::{Anissia, AnissiaError, LAST_WEEK};
 
@@ -45,6 +45,8 @@ use trss_library::artwork::queue::{LOCK_RETRY, POLL};
 #[cfg(test)]
 mod tests;
 
+/// The queue's name in its log lines.
+pub(crate) const QUEUE: &str = "Anissia queue";
 /// How long a refresh that failed waits before the anime are tried again.
 pub const REFRESH_RETRY: Duration = Duration::from_secs(60 * 60);
 
@@ -89,7 +91,7 @@ impl AnissiaQueue {
     async fn put_off(&self, anime_nos: Vec<i64>, wait: Duration) {
         let until = self.now() + wait.as_millis() as i64;
         if let Err(e) = self.store.refresh_later(anime_nos, until).await {
-            eprintln!("Anissia queue: cannot put off the refresh: {e}");
+            eprintln!("{QUEUE}: cannot put off the refresh: {e}");
             tokio::time::sleep(POLL).await;
         }
     }
@@ -104,7 +106,7 @@ impl AnissiaQueue {
             .mark_unlisted(anime_nos, at, until, asked_from)
             .await
         {
-            eprintln!("Anissia queue: cannot record the unlisted anime: {e}");
+            eprintln!("{QUEUE}: cannot record the unlisted anime: {e}");
             tokio::time::sleep(POLL).await;
         }
     }
@@ -224,13 +226,29 @@ impl AnissiaQueue {
         }
     }
 
-    /// Runs the refresh if anything is due.
+    /// Runs the refresh if anything is due. A refresh that panics puts every
+    /// due anime off as a failure does, those it received again before the
+    /// panic too.
     pub async fn run_next(&self) -> Option<Ran> {
         match self.store.due(self.now()).await {
             Ok(due) if due.is_empty() => None,
-            Ok(due) => Some(self.refresh(due).await),
+            Ok(due) => {
+                let anime: Vec<i64> = due.iter().map(|d| d.anime_no).collect();
+                Some(match run_item(QUEUE, "refresh", self.refresh(due)).await {
+                    Ok(ran) => ran,
+                    Err(_) => {
+                        let failed = anime.len();
+                        self.put_off(anime, REFRESH_RETRY).await;
+                        Ran {
+                            refreshed: 0,
+                            missing: 0,
+                            failed,
+                        }
+                    }
+                })
+            }
             Err(e) => {
-                eprintln!("Anissia queue: {e}");
+                eprintln!("{QUEUE}: {e}");
                 None
             }
         }
@@ -243,7 +261,7 @@ impl AnissiaQueue {
             let lock = match CycleLock::try_acquire(&lock_path) {
                 Ok(lock) => lock,
                 Err(e) => {
-                    eprintln!("Anissia queue: cannot take {}: {e}", lock_path.display());
+                    eprintln!("{QUEUE}: cannot take {}: {e}", lock_path.display());
                     None
                 }
             };

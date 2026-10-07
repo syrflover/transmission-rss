@@ -673,3 +673,22 @@ async fn two_lines_without_a_comparable_moment_keep_the_last_and_the_anime_answe
         "https://blog.test/dated"
     );
 }
+
+#[tokio::test]
+async fn a_reading_that_panics_ends_as_a_failed_one_and_the_next_reading_runs() {
+    let env = Env::new().await;
+    env.fake.set_recent(env.many(5));
+    trss_core::queue::testing::panic_next(QUEUE, "reading of the recent list");
+    let read = env.observer.run_due().await.unwrap();
+    assert!(
+        matches!(&read.end, End::Failed(why) if why.starts_with("panicked: ")),
+        "{read:?}"
+    );
+    assert_eq!(env.recent_requests(), 0);
+    // Due a period after it started, as a failed reading is.
+    env.advance(OBSERVE_EVERY.as_millis() as i64 - 1);
+    assert!(env.observer.run_due().await.is_none());
+    env.advance(1);
+    let read = env.observer.run_due().await.unwrap();
+    assert_eq!((read.added, read.end), (5, End::Complete));
+}

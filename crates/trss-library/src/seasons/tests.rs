@@ -607,6 +607,46 @@ async fn an_entry_that_is_gone_keeps_what_was_stored_and_is_not_asked_for_every_
 }
 
 #[tokio::test]
+async fn a_search_or_refresh_that_panics_is_put_off_like_a_failure_and_the_next_one_runs() {
+    let env = Env::new(&[("Show", &[1]), ("Other", &[1])]).await;
+    env.serve("Show", vec![media(1, "Show", "RELEASING", None)]);
+    env.serve("Other", vec![media(2, "Other", "FINISHED", Some(12))]);
+    // The search taken first panics.
+    let first = env.seasons.store.next_search(env.seasons.now()).await;
+    let first = first.unwrap().unwrap().work_id;
+    let (panicked, next) = match first == env.id("Show").await {
+        true => (1, 2),
+        false => (2, 1),
+    };
+    let queue = crate::seasons::queue::QUEUE;
+    trss_core::queue::testing::panic_next(queue, &format!("search for work {first} season 1"));
+    assert_eq!(env.drain().await, [Ran::Later, Ran::Linked(next)]);
+    let job = env
+        .seasons
+        .store
+        .link(&first, 1)
+        .await
+        .unwrap()
+        .job
+        .unwrap();
+    assert_eq!(job.attempts, 1);
+    assert!((60_000..65_000).contains(&(job.not_before.unwrap() - env.seasons.now())));
+    env.advance(65_000);
+    assert_eq!(env.drain().await, [Ran::Linked(panicked)]);
+
+    // A refresh that panics waits an hour, as a failed one does.
+    env.advance(DAY);
+    trss_core::queue::testing::panic_next(queue, "refresh of entry 1");
+    let requests = env.requests();
+    assert_eq!(env.seasons.run_next().await, Some(Ran::RefreshLater(1)));
+    assert_eq!(env.requests(), requests);
+    env.advance(HOUR - 1);
+    assert!(env.drain().await.is_empty());
+    env.advance(1);
+    assert_eq!(env.drain().await, [Ran::Refreshed(1)]);
+}
+
+#[tokio::test]
 async fn a_failed_search_is_tried_again_later_and_given_up_after_three_failures() {
     let env = Env::new(&[("Show", &[1])]).await;
     let id = env.id("Show").await;

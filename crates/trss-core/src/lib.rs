@@ -18,6 +18,7 @@ pub mod folder_locks;
 pub mod folders;
 pub mod heartbeat;
 pub mod lock;
+pub mod queue;
 pub mod settings;
 pub mod wake;
 
