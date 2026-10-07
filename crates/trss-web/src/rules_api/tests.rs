@@ -1489,3 +1489,458 @@ async fn an_edit_cannot_pause_a_rule_but_a_paused_rule_still_saves_its_fields() 
     assert_eq!(saved["state"], "paused");
     assert_eq!(saved["episode"], 5);
 }
+
+// --- a rule that starts collecting while its work is in the archive folder (0123) ---------------
+
+/// An app whose collect and archive folders are real temporary folders and
+/// whose library records `works` in the archive folder.
+async fn app_with_archive(works: &[&str]) -> (App, tempfile::TempDir) {
+    use std::collections::BTreeSet;
+    use trss_library::discovery::{EpisodeFile, FileKind, Scan, ScannedWork, WorkRead};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let collect = tmp.path().join("Shows (current)");
+    let archive = tmp.path().join("Shows");
+    std::fs::create_dir(&collect).unwrap();
+    for work in works {
+        std::fs::create_dir_all(archive.join(work).join("Season 01")).unwrap();
+    }
+    let app = App::new().await;
+    app.state
+        .settings
+        .put_collection(
+            1,
+            collect.display().to_string(),
+            Some(archive.display().to_string()),
+        )
+        .await
+        .unwrap();
+    let scan = Scan {
+        works: works
+            .iter()
+            .map(|name| {
+                WorkRead::Read(ScannedWork {
+                    dir_name: (*name).to_owned(),
+                    seasons: BTreeSet::from([1]),
+                    files: vec![EpisodeFile {
+                        path: format!("Season 01/{name} S01E01.mkv"),
+                        kind: FileKind::Video,
+                        season: 1,
+                        episode: "01".to_owned(),
+                    }],
+                    unrecognized: Vec::new(),
+                })
+            })
+            .collect(),
+    };
+    app.state
+        .library
+        .add_folder(archive.display().to_string(), scan, 100, &[])
+        .await
+        .unwrap();
+    (app, tmp)
+}
+
+#[tokio::test]
+async fn a_rule_for_a_work_in_the_archive_folder_is_made_paused_with_its_start_open() {
+    let (app, tmp) = app_with_archive(&["Clevatess"]).await;
+    let a = app.channel("a.test", &[], &[]).await;
+    let new_rule = |directory: &str, state: Option<&str>| {
+        let mut body = json!({
+            "channel_id": a.channel.id,
+            "match": "Clevatess",
+            "directory": directory,
+            "episode": 1,
+        });
+        if let Some(state) = state {
+            body["state"] = json!(state);
+        }
+        body
+    };
+
+    // The archive folder holds the work: the rule is made off, with the start open.
+    let (status, text, rule) = app
+        .call(
+            Method::POST,
+            "/api/rules",
+            Some(new_rule("Clevatess/Season 03", None)),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{text}");
+    assert_eq!(rule["state"], "paused");
+    assert_eq!(rule["archive_move"]["direction"], "start");
+    assert_eq!(rule["archive_move"]["command"]["kind"], "rule_archive");
+    assert_eq!(rule["archive_move"]["command"]["state"], "pending");
+    assert_eq!(rule["archive_move"]["command"]["outcome"], Value::Null);
+
+    // Another rule in the work folder being moved is refused until it is done.
+    let (status, _, _) = app
+        .call(
+            Method::POST,
+            "/api/rules",
+            Some(new_rule("Clevatess/Season 04", None)),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // A rule made paused on purpose, or for a work the archive folder lacks, is
+    // stored as asked, with no move.
+    let (status, _, paused) = app
+        .call(
+            Method::POST,
+            "/api/rules",
+            Some(new_rule("Elsewhere/Season 01", Some("paused"))),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(paused["state"], "paused");
+    assert_eq!(paused["archive_move"], Value::Null);
+    let (status, _, fresh) = app
+        .call(
+            Method::POST,
+            "/api/rules",
+            Some(new_rule("Elsewhere/Season 02", None)),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(fresh["state"], "active");
+    assert_eq!(fresh["archive_move"], Value::Null);
+    drop(tmp);
+}
+
+#[tokio::test]
+async fn turning_video_on_for_a_work_in_the_archive_folder_leaves_the_rule_paused_with_its_resume_open(
+) {
+    let (app, tmp) = app_with_archive(&["Clevatess"]).await;
+    let a = app
+        .channel(
+            "a.test",
+            &[],
+            &[
+                ("Clevatess", "Clevatess/Season 02"),
+                ("Other", "Other/Season 01"),
+            ],
+        )
+        .await;
+    for rule in &a.rules {
+        app.state
+            .channels
+            .set_rule_state(&rule.id, RuleState::Paused, 0)
+            .await
+            .unwrap();
+    }
+    let switch = |rule: &Value| {
+        let (id, version) = (
+            rule["id"].as_str().unwrap().to_owned(),
+            rule["version"].clone(),
+        );
+        let app = &app;
+        async move {
+            app.call(
+                Method::PUT,
+                &format!("/api/rules/{id}/switch"),
+                Some(json!({ "version": version, "video": true })),
+            )
+            .await
+        }
+    };
+    let read = |id: &str| {
+        let id = id.to_owned();
+        let app = &app;
+        async move {
+            app.call(Method::GET, &format!("/api/rules/{id}"), None)
+                .await
+                .2
+        }
+    };
+
+    let (status, text, held) = switch(&read(&a.rules[0].id).await).await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(held["state"], "paused");
+    assert_eq!(held["archive_move"]["direction"], "resume");
+    assert_eq!(held["archive_move"]["command"]["state"], "pending");
+
+    // Pressed again while the move is open: refused, nothing stored.
+    let (status, text, refused) = switch(&read(&a.rules[0].id).await).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+    assert_eq!(refused["error"], "invalid");
+
+    // A work that is not in the archive folder turns on at once.
+    let (status, text, on) = switch(&read(&a.rules[1].id).await).await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(on["state"], "active");
+    assert_eq!(on["archive_move"], Value::Null);
+    drop(tmp);
+}
+
+#[tokio::test]
+async fn the_form_is_told_which_work_in_the_archive_folder_it_would_bring_over() {
+    let (app, tmp) = app_with_archive(&["Clevatess"]).await;
+    let (status, text, told) = app
+        .call(
+            Method::GET,
+            "/api/rules/archived-work?directory=Clevatess%2FSeason%2003",
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let archived = &told["archived"];
+    assert_eq!(archived["work"], "Clevatess");
+    assert_eq!(archived["merges"], false);
+    assert!(archived["archive_folder"]
+        .as_str()
+        .unwrap()
+        .ends_with("/Shows"));
+    assert!(archived["collect_folder"]
+        .as_str()
+        .unwrap()
+        .ends_with("/Shows (current)"));
+
+    for directory in ["Other%2FSeason%2001", ""] {
+        let (status, text, told) = app
+            .call(
+                Method::GET,
+                &format!("/api/rules/archived-work?directory={directory}"),
+                None,
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{text}");
+        assert_eq!(told, json!({ "archived": null }));
+    }
+    drop(tmp);
+}
+
+#[tokio::test]
+async fn a_browser_cannot_post_a_start_or_a_resume() {
+    let (app, tmp) = app_with_archive(&[]).await;
+    let a = app
+        .channel("a.test", &[], &[("Clevatess", "Clevatess/Season 02")])
+        .await;
+    app.state
+        .channels
+        .set_rule_state(&a.rules[0].id, RuleState::Paused, 0)
+        .await
+        .unwrap();
+    // Even for a paused rule: only the web, after it saved the rule paused for
+    // the move, makes them, so a posted one could not turn a rule on early.
+    for (id, direction) in [("start-1", "start"), ("resume-1", "resume")] {
+        let (status, text, body) = app
+            .call(
+                Method::POST,
+                "/api/commands",
+                Some(json!({
+                    "id": id,
+                    "kind": "rule_archive",
+                    "payload": { "rule_id": a.rules[0].id, "direction": direction },
+                })),
+            )
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+        assert_eq!(body["error"], "invalid");
+    }
+    // Nothing was stored; archive and restore are the browser's.
+    assert!(!app.state.commands.has_open().await.unwrap());
+    let (status, text, _) = app
+        .call(
+            Method::POST,
+            "/api/commands",
+            Some(json!({
+                "id": "archive-1",
+                "kind": "rule_archive",
+                "payload": { "rule_id": a.rules[0].id, "direction": "archive" },
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{text}");
+    drop(tmp);
+}
+
+#[tokio::test]
+async fn editing_a_collecting_rule_into_an_archived_work_folder_saves_it_paused_with_its_start_open(
+) {
+    let (app, tmp) = app_with_archive(&["Clevatess"]).await;
+    let a = app
+        .channel(
+            "a.test",
+            &[],
+            &[
+                ("Mushoku", "Mushoku/Season 01"),
+                ("Other", "Other/Season 01"),
+            ],
+        )
+        .await;
+    // Collecting since 777: a `start` must not move that time.
+    let id = a.rules[0].id.clone();
+    app.state
+        .channels
+        .set_rule_state(&id, RuleState::Paused, 700)
+        .await
+        .unwrap();
+    app.state
+        .channels
+        .set_rule_state(&id, RuleState::Active, 777)
+        .await
+        .unwrap();
+    let rule = app.list().await["rules"][0].clone();
+    assert_eq!(rule["state"], "active");
+
+    // The same work folder: nothing moves, the rule keeps collecting.
+    let (status, text, same) = put(
+        &app,
+        &a.channel,
+        &rule,
+        json!({ "directory": "Mushoku/Season 02" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(same["state"], "active");
+    assert_eq!(same["archive_move"], Value::Null);
+
+    // Into a work folder the archive folder holds: saved, but paused, with the
+    // start open, so no cycle makes `Clevatess` in the collect folder first.
+    let (status, text, held) = put(
+        &app,
+        &a.channel,
+        &same,
+        json!({ "directory": "Clevatess/Season 03" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(held["directory"], "Clevatess/Season 03");
+    assert_eq!(held["state"], "paused");
+    assert_eq!(held["archive_move"]["direction"], "start");
+    assert_eq!(held["archive_move"]["command"]["state"], "pending");
+    let stored = app.state.channels.get_rule(&id).await.unwrap().unwrap();
+    assert_eq!(stored.state, RuleState::Paused);
+    assert_eq!(stored.resumed_at, Some(777));
+
+    // A rule that goes to a work the archive lacks is saved as before.
+    let other = app.list().await["rules"][1].clone();
+    let (status, text, moved) = put(
+        &app,
+        &a.channel,
+        &other,
+        json!({ "directory": "Elsewhere/Season 01" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(moved["state"], "active");
+    assert_eq!(moved["archive_move"], Value::Null);
+    drop(tmp);
+}
+
+#[tokio::test]
+async fn a_failed_start_is_retried_as_a_start_and_a_move_open_refuses_off_and_two_switches() {
+    use trss_core::commands::{CommandState, Outcome};
+
+    let (app, tmp) = app_with_archive(&["Clevatess"]).await;
+    let a = app.channel("a.test", &[], &[]).await;
+    let (status, text, made) = app
+        .call(
+            Method::POST,
+            "/api/rules",
+            Some(json!({
+                "channel_id": a.channel.id,
+                "match": "Clevatess",
+                "directory": "Clevatess/Season 03",
+                "episode": 1,
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{text}");
+    let id = made["id"].as_str().unwrap().to_owned();
+    let switch = |body: Value| {
+        let app = &app;
+        let id = id.clone();
+        async move {
+            let rule = app
+                .call(Method::GET, &format!("/api/rules/{id}"), None)
+                .await
+                .2;
+            let mut body = body;
+            body["version"] = rule["version"].clone();
+            app.call(Method::PUT, &format!("/api/rules/{id}/switch"), Some(body))
+                .await
+        }
+    };
+
+    // While the start is open, off changes nothing the worker would honor: the
+    // worker turns the rule on after the move. Two switches at once are no
+    // request, whatever the rule is doing.
+    let (status, text, _) = switch(json!({ "video": false })).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+    let (status, text, bad) = switch(json!({ "video": true, "subtitles": true })).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+    assert!(
+        bad["message"].as_str().unwrap().contains("요청 내용"),
+        "{text}"
+    );
+    let (status, text, _) = switch(json!({ "video": true })).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+
+    // The start fails (an overlapping file, say): the rule stays off.
+    let open = app
+        .state
+        .commands
+        .claim_next(2_000)
+        .await
+        .unwrap()
+        .expect("the start is waiting");
+    app.state
+        .commands
+        .finish(
+            &open.id,
+            CommandState::Failed,
+            Outcome {
+                result: "failed".into(),
+                reason: Some("겹치는 파일이 있어요".into()),
+            },
+            2_001,
+        )
+        .await
+        .unwrap();
+    // Off on a paused rule with nothing open is the no-op it always was.
+    let (status, text, off) = switch(json!({ "video": false })).await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(off["state"], "paused");
+
+    // The retry is a start again: the rule never collected, so the time it
+    // waited does not make what arrived meanwhile a past item.
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    let (status, text, retry) = switch(json!({ "video": true })).await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    assert_eq!(retry["state"], "paused");
+    assert_eq!(retry["archive_move"]["direction"], "start");
+    assert_eq!(retry["archive_move"]["command"]["state"], "pending");
+    assert_ne!(retry["archive_move"]["command"]["id"], json!(open.id));
+    drop(tmp);
+}
+
+#[tokio::test]
+async fn the_edit_form_asks_whether_the_changed_folder_moves_a_work_over() {
+    let (app, tmp) = app_with_archive(&["Clevatess"]).await;
+    let ask = |query: &str| {
+        let uri = format!("/api/rules/archived-work?{query}");
+        let app = &app;
+        async move { app.call(Method::GET, &uri, None).await }
+    };
+    // As typed: the server finds the work folder, whatever the spelling.
+    for directory in [
+        "Clevatess%2FSeason%2003",
+        ".%2FClevatess%2FSeason%2003",
+        "Clevatess%2F",
+    ] {
+        let (status, text, told) = ask(&format!("directory={directory}")).await;
+        assert_eq!(status, StatusCode::OK, "{text}");
+        assert_eq!(told["archived"]["work"], "Clevatess", "{directory}: {text}");
+    }
+    // `.` is the collect folder itself.
+    let (_, _, told) = ask("directory=.").await;
+    assert_eq!(told, json!({ "archived": null }));
+    // A stored rule that stays in the work folder moves nothing.
+    let (_, _, told) = ask("directory=Clevatess%2FSeason%2004&from=Clevatess%2FSeason%2003").await;
+    assert_eq!(told, json!({ "archived": null }));
+    let (_, _, told) = ask("directory=Clevatess%2FSeason%2004&from=Other%2FSeason%2001").await;
+    assert_eq!(told["archived"]["work"], "Clevatess");
+    drop(tmp);
+}

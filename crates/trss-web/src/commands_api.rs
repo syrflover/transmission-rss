@@ -10,7 +10,7 @@
 //! | kind           | on screen    | payload                                                        |
 //! | -------------- | ------------ | -------------------------------------------------------------- |
 //! | `receive_once` | `다시 받기`·`받기` | `{ "item_id": <history item>, "rule_id": <rule> }` (`rule_id` only to receive an item no rule has picked) |
-//! | `rule_archive` | `보관`·`복원` | `{ "rule_id": <rule>, "direction": "archive" \| "restore" }` |
+//! | `rule_archive` | `보관`·`복원`·`영상 받기` | `{ "rule_id": <rule>, "direction": "archive" \| "restore" }` (`"start"` and `"resume"` are the web's own, refused here) |
 //! | `receive_past` | `받기`       | `{ "rule_id": <rule>, "search_id": <past episode search>, "key": <result's key> }` |
 //! | `watch_rescan` | `다시 확인`  | `{ "folder_id": <watch folder> }`                              |
 //! | `episode_undo` | `되돌리기`   | `{ "rule_id": <rule>, "episode": <the automatic offset seen> }` |
@@ -47,6 +47,11 @@
 //!
 //! A rule is archived and restored only through `rule_archive`: the worker
 //! turns the rule off before its folder moves and on after it moved back.
+//! `start` (a new rule, subscription or edited save folder) and `resume`
+//! (`영상 받기` on) turn a paused rule on after its work folder came out of the
+//! archive folder into the collect folder. Only the web makes these, itself,
+//! when it saves a rule that starts collecting for a work in the archive folder
+//! ([`super::rules_api`]); a browser's `POST` of one is refused (`400`).
 //! The browser makes one ID per user action and sends it with the content.
 //!
 //! **Accepted is not done.** The answer to a `POST` says the command is stored
@@ -160,7 +165,7 @@ const MISMATCH: &str =
 const FOLDER_REFUSED: &str = "`다시 받기`는 그 항목을 고른 규칙의 저장 폴더에 받아서 폴더를 고를 수 없어요. 화면을 새로고침한 뒤 다시 시도해 주세요.";
 const BUSY: &str = "이 항목은 이미 추가하는 중이에요. 그 결과가 나올 때까지 기다려 주세요.";
 const RULE_BUSY: &str =
-    "이 규칙은 이미 보관하거나 복원하는 중이에요. 그 결과가 나올 때까지 기다려 주세요.";
+    "이 규칙은 이미 보관하거나 복원하거나 작품 폴더를 옮기는 중이에요. 그 결과가 나올 때까지 기다려 주세요.";
 const FOLDER_BUSY: &str =
     "이 폴더는 이미 다시 확인하는 중이에요. 그 결과가 나올 때까지 기다려 주세요.";
 const CAPTIONS_BUSY: &str =
@@ -531,12 +536,23 @@ async fn check_watch_rescan(
     Ok(())
 }
 
-/// The rule must exist, and only an archived rule is restored. Archiving an
-/// archived rule is `다시 옮기기`: the folder is moved again if it can be.
+/// The rule must exist and only an archived rule is restored. Archiving an
+/// archived rule is `다시 옮기기`: the folder is moved again if it can be. A
+/// `start` or `resume` is refused: the web makes them itself, after it saved
+/// the rule paused for the move, so a posted one could turn a rule on before its
+/// folder came over.
 async fn check_rule_archive(
     payload: &rule_archive::RuleArchive,
     state: &AppState,
 ) -> Result<(), ApiError> {
+    if matches!(
+        payload.direction,
+        rule_archive::Direction::Start | rule_archive::Direction::Resume
+    ) {
+        return Err(ApiError::invalid(
+            "작품 폴더를 옮기고 규칙을 켜는 일은 규칙을 만들거나 영상 받기를 켤 때 서버가 해요. 화면을 새로고침해 주세요.",
+        ));
+    }
     let rule = state
         .channels
         .get_rule(&payload.rule_id)

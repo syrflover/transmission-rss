@@ -2,6 +2,7 @@ import { api } from "@/lib/api";
 import { sendCommand, type Command } from "@/lib/commands";
 
 import type { SubscriptionBrief } from "../subs/api";
+import { archivedWorkPath, type ArchivedWork } from "./archivedWork";
 
 /**
  * The rules API (`src/web/rules_api.rs`). Every write carries the version the
@@ -22,8 +23,33 @@ export interface RegexProblem {
  */
 export type RuleState = "active" | "paused" | "archived";
 
-/** `보관` (`archive`) or `복원` (`restore`) of a rule: the `rule_archive` command. */
-export type ArchiveDirection = "archive" | "restore";
+/**
+ * `보관` (`archive`) or `복원` (`restore`) of a rule: the `rule_archive` command.
+ * `start` (a new rule or subscription) and `resume` (`영상 받기` on) are the
+ * ones the server makes itself when the rule's work folder is in the archive
+ * folder: the folder comes into the collect folder before the rule collects.
+ */
+export type ArchiveDirection = "archive" | "restore" | "start" | "resume";
+
+// The answer's shape lives with the notice it feeds, which `node --test` runs without `@/` imports.
+export type { ArchivedWork };
+
+/**
+ * The work a rule saving to `directory` (as typed) would bring out of the
+ * archive folder; `null` when its work folder is not a work there, or, with
+ * `from` (the folder a stored rule has now), when the rule stays in its work
+ * folder. Asks nothing while no folder is typed.
+ */
+export async function getArchivedWork(
+  directory: string,
+  from: string | null,
+  signal?: AbortSignal,
+): Promise<ArchivedWork | null> {
+  const path = archivedWorkPath(directory, from);
+  if (path === null) return null;
+  const { archived } = await api<{ archived: ArchivedWork | null }>(path, { signal });
+  return archived;
+}
 
 /**
  * The last archive or restore of a rule and where it is. The outcome's

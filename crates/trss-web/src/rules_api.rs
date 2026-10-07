@@ -11,6 +11,7 @@
 //! | `PUT /rules/order`                     | `200 { rules: [RuleView] }` (the channel's) |
 //! | `PUT /rules/{id}/switch`               | `200 RuleView`                            |
 //! | `PUT /rules/{id}/episode`              | `200 RuleView`                            |
+//! | `GET /rules/archived-work?directory=`  | `200 { archived: ArchivedWorkView \| null }` |
 //! | `POST /rules/preview`                  | `200 Preview`                             |
 //!
 //! Failures use the shape in [`super::error`]. A version that is not the
@@ -23,6 +24,32 @@
 //! command (`/api/commands`), because the worker has to turn the rule off
 //! before its folder moves to the archive folder and on only after it moved
 //! back. A rule's view carries the last such command as `archive_move`.
+//!
+//! `GET /rules/archived-work?directory=...[&from=...]` tells a form, before it
+//! makes a rule saving to `directory` (the folder as typed: the server finds
+//! its work folder), whether the rule's work folder is a work in the archive
+//! folder: `200 { archived: null | { work, archive_folder, collect_folder,
+//! merges } }`. It reads the library's records of the archive and collect watch
+//! folders by folder name, never the disk ([`rule_archive::archived_work`]).
+//! The form of a stored rule sends its folder as `from`, and a `directory` in
+//! the same work folder is `null`.
+//!
+//! **A rule that starts collecting waits for its work folder.** When a rule or
+//! a subscription is made as collecting, a collecting rule is saved into
+//! another work folder, or `영상 받기` is switched on, and the rule's work
+//! folder is in the archive folder ([`rule_archive::plan_start`], read from the
+//! disk), the rule is made `paused` (or stays so) and the web stores a `start`
+//! (a new rule, an edit of the folder, or the retry of a `start` that failed:
+//! the rule counts as collecting all along) or `resume` (`영상 받기`)
+//! `rule_archive` command, which the worker runs: it moves the work folder into
+//! the collect folder first, merging into the one there, and turns the rule on
+//! only then. A paused rule collects nothing, so no RSS check can make the work
+//! folder in the collect folder before the move. The answer is the rule as it is
+//! then: `paused`, with the open `start` as `archive_move`. While that command
+//! is open a switch is refused (`400`, `영상 받기` off too, since the worker
+//! turns the rule on whatever is pressed); when it fails the rule stays paused
+//! with the reason in `archive_move`, and switching `영상 받기` on again tries
+//! again.
 //!
 //! `PUT /rules/{id}/switch` (`{ version, video?: bool, subtitles?: bool }`) is
 //! the rule detail's pair of switches, applied at once: `video` is `영상 받기`
@@ -138,7 +165,7 @@ use trss_collect::{
         },
     },
 };
-use trss_core::commands::Command;
+use trss_core::commands::{Accepted, Command, CommandState};
 
 mod episode;
 #[cfg(test)]
@@ -149,6 +176,7 @@ pub fn routes() -> Router<AppState> {
         .route("/rules", get(list_rules).post(create_rule))
         .route("/rules/preview", post(preview))
         .route("/rules/order", put(reorder_rules))
+        .route("/rules/archived-work", get(archived_work))
         .route("/rules/{id}/switch", put(switch_rule))
         .route("/rules/{id}/episode", put(episode::put_episode))
         .route(
@@ -371,6 +399,82 @@ async fn collect_folder(state: &AppState) -> Result<Option<String>, ApiError> {
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?
         .map(|settings| settings.folder))
+}
+
+/// The collect folder and the archive folder, or `None` while no collect folder
+/// is set.
+async fn collection_folders(
+    state: &AppState,
+) -> Result<Option<(String, Option<String>)>, ApiError> {
+    Ok(state
+        .settings
+        .collection()
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .map(|settings| (settings.folder, settings.archive_folder)))
+}
+
+/// Whether a rule saving to `directory` has to wait for its work folder to come
+/// out of the archive folder before it collects (see the module docs).
+pub(super) async fn waits_for_work_folder(
+    state: &AppState,
+    directory: &str,
+) -> Result<bool, ApiError> {
+    let plan = rule_archive::plan_start(collection_folders(state).await?, directory).await;
+    Ok(matches!(plan, rule_archive::StartPlan::MoveFirst { .. }))
+}
+
+/// Whether saving to `to` instead of `from` puts a rule into another work
+/// folder (the first part of the folder below the collect folder).
+pub(super) async fn changes_work_folder(
+    state: &AppState,
+    from: &str,
+    to: &str,
+) -> Result<bool, ApiError> {
+    let Some(collect) = collect_folder(state).await? else {
+        return Ok(false);
+    };
+    let collect = FsPath::new(&collect);
+    Ok(rule_archive::work_folder(collect, from) != rule_archive::work_folder(collect, to))
+}
+
+/// Stores the `start` (a new rule) or `resume` (`영상 받기` on) command of the
+/// paused rule `rule_id` and wakes the worker. `false` when the rule has another
+/// `rule_archive` command open.
+pub(super) async fn ask_start(
+    state: &AppState,
+    rule_id: &str,
+    direction: rule_archive::Direction,
+) -> Result<bool, ApiError> {
+    let accepted = rule_archive::ask_start(
+        &state.commands,
+        rule_id,
+        direction,
+        super::commands_api::now_millis(),
+    )
+    .await
+    .map_err(|e| ApiError::Internal(e.to_string()))?;
+    match accepted {
+        Accepted::Created(_) => {
+            if let Some(path) = &state.worker_wake {
+                trss_core::wake::wake_worker(path);
+            }
+            Ok(true)
+        }
+        Accepted::Existing(_) => Ok(true),
+        Accepted::Mismatch(_) | Accepted::Busy(_) => Ok(false),
+    }
+}
+
+/// [`ask_start`] with `start` for a rule just made, or edited into another work
+/// folder: the rule exists paused whatever happens, so a start that could not
+/// be stored is logged, and `영상 받기` switched on starts it again.
+pub(super) async fn start_new_rule(state: &AppState, rule_id: &str) {
+    match ask_start(state, rule_id, rule_archive::Direction::Start).await {
+        Ok(true) => {}
+        Ok(false) => eprintln!("trss-web: rule {rule_id} already has a rule_archive command open"),
+        Err(e) => eprintln!("trss-web: cannot store the start of rule {rule_id}: {e:?}"),
+    }
 }
 
 /// Refuses a save folder typed for a subscription that is no folder below the
@@ -973,13 +1077,23 @@ async fn create_rule(
     parsed: Result<Json<CreateBody>, JsonRejection>,
 ) -> Result<(StatusCode, Json<RuleView>), ApiError> {
     let b = body(parsed)?;
-    let input = require_valid_regex(b.fields.into_input(None)?)?;
+    let mut input = require_valid_regex(b.fields.into_input(None)?)?;
     check_directory(&state, None, &input.directory).await?;
+    // A rule that would collect into a work folder the archive folder holds is
+    // made paused, and turned on by the worker once the folder is moved.
+    let waits =
+        input.state == RuleState::Active && waits_for_work_folder(&state, &input.directory).await?;
+    if waits {
+        input.state = RuleState::Paused;
+    }
     let created = state
         .channels
         .create_rule(&b.channel_id, input)
         .await
         .map_err(store_error)?;
+    if waits {
+        start_new_rule(&state, &created.id).await;
+    }
     Ok((
         StatusCode::CREATED,
         Json(rule_view(&state, &created.id).await?),
@@ -1011,7 +1125,7 @@ async fn update_rule(
     if stored.version != b.version {
         return Err(rule_conflict(&state, &id).await);
     }
-    let input = require_valid_regex(b.fields.into_input(Some(&stored))?)?;
+    let mut input = require_valid_regex(b.fields.into_input(Some(&stored))?)?;
     if input.state != stored.state {
         return Err(ApiError::invalid(STATE_NOT_EDITED));
     }
@@ -1019,12 +1133,27 @@ async fn update_rule(
         check_work_folder(&input.directory)?;
     }
     check_directory(&state, Some(&stored), &input.directory).await?;
+    // A collecting rule moved into a work folder the archive folder holds
+    // would make that work folder in the collect folder on its next cycle:
+    // it is saved paused, and the worker turns it on once the folder came over.
+    let waits = stored.state == RuleState::Active
+        && changes_work_folder(&state, &stored.directory, &input.directory).await?
+        && waits_for_work_folder(&state, &input.directory).await?;
+    if waits {
+        input.state = RuleState::Paused;
+    }
     match state
         .channels
         .update_rule_at(&id, b.version, &b.channel_id, input, state.anissia.now())
         .await
     {
-        Ok(_) => Ok(Json(rule_view(&state, &id).await?)),
+        Ok(_) => {
+            if waits {
+                // The rule had been collecting, so it is not noted as resumed.
+                start_new_rule(&state, &id).await;
+            }
+            Ok(Json(rule_view(&state, &id).await?))
+        }
         Err(e) if e.is_conflict() => Err(rule_conflict(&state, &id).await),
         Err(e) => Err(store_error(e)),
     }
@@ -1079,6 +1208,58 @@ async fn switch_rule(
             "보관된 규칙은 스위치를 바꿀 수 없어요. 복원한 뒤 바꿔 주세요.",
         ));
     }
+    // Exactly one switch is sent, whatever the rule is doing.
+    if b.video.is_some() == b.subtitles.is_some() {
+        return Err(ApiError::invalid(BAD_BODY));
+    }
+    if stored.state == RuleState::Paused && b.video.is_some() {
+        // The work folder may have to come out of the archive folder before the
+        // rule collects: the worker turns it on after the move (see the module
+        // docs).
+        const MOVING: &str =
+            "작품 폴더를 옮기는 중이에요. 옮기기가 끝나면 켜져요. 끝난 뒤에 다시 바꿔 주세요.";
+        let last = archive_moves(&state, std::slice::from_ref(&stored))
+            .await?
+            .remove(&id);
+        let last_direction = last
+            .as_ref()
+            .and_then(|c| serde_json::from_str::<RuleArchive>(&c.payload).ok())
+            .map(|p| p.direction);
+        let open = last.as_ref().is_some_and(|c| c.state.is_open());
+        if open && b.video == Some(false) {
+            // Off now would change nothing: the worker turns the rule on after
+            // the move, whatever the screen was told.
+            if matches!(
+                last_direction,
+                Some(rule_archive::Direction::Start | rule_archive::Direction::Resume)
+            ) {
+                return Err(ApiError::invalid(MOVING));
+            }
+        }
+        if open && b.video == Some(true) {
+            return Err(ApiError::invalid(MOVING));
+        }
+        if b.video == Some(true) {
+            // A `start` that failed left a rule that never collected: its retry
+            // is a start again, so the time it waited does not make what came
+            // meanwhile past (`resume` notes the time of the press).
+            let never_collected = last
+                .as_ref()
+                .is_some_and(|c| c.state == CommandState::Failed)
+                && last_direction == Some(rule_archive::Direction::Start);
+            if never_collected || waits_for_work_folder(&state, &stored.directory).await? {
+                let direction = if never_collected {
+                    rule_archive::Direction::Start
+                } else {
+                    rule_archive::Direction::Resume
+                };
+                if !ask_start(&state, &id, direction).await? {
+                    return Err(ApiError::invalid(MOVING));
+                }
+                return Ok(Json(rule_view(&state, &id).await?));
+            }
+        }
+    }
     let written = match (b.video, b.subtitles) {
         (Some(on), None) => {
             state
@@ -1100,6 +1281,7 @@ async fn switch_rule(
                 .set_subtitle_receiving(&id, b.version, on)
                 .await
         }
+        // Refused above.
         _ => return Err(ApiError::invalid(BAD_BODY)),
     };
     match written {
@@ -1115,6 +1297,61 @@ async fn switch_rule(
         Err(e) if e.is_conflict() => Err(rule_conflict(&state, &id).await),
         Err(e) => Err(store_error(e)),
     }
+}
+
+#[derive(Deserialize)]
+struct ArchivedWorkQuery {
+    /// The save folder as typed; the server finds its work folder.
+    directory: String,
+    /// The folder a stored rule saves to now, for the form that edits it: a
+    /// rule that stays in its work folder moves nothing.
+    #[serde(default)]
+    from: Option<String>,
+}
+
+/// A work of the archive folder that a rule saving to the typed folder would
+/// bring into the collect folder.
+#[derive(Debug, Serialize)]
+pub struct ArchivedWorkView {
+    /// The work folder's name.
+    pub work: String,
+    pub archive_folder: String,
+    pub collect_folder: String,
+    /// The collect folder holds a work of that name too; the archive's merges
+    /// into it.
+    pub merges: bool,
+}
+
+#[derive(Serialize)]
+struct ArchivedWorkAnswer {
+    archived: Option<ArchivedWorkView>,
+}
+
+async fn archived_work(
+    State(state): State<AppState>,
+    parsed: Result<Query<ArchivedWorkQuery>, QueryRejection>,
+) -> Result<Json<ArchivedWorkAnswer>, ApiError> {
+    let Query(q) = parsed.map_err(|_| ApiError::invalid(BAD_BODY))?;
+    if let Some(from) = &q.from {
+        if !changes_work_folder(&state, from.trim(), q.directory.trim()).await? {
+            return Ok(Json(ArchivedWorkAnswer { archived: None }));
+        }
+    }
+    let found = rule_archive::archived_work(
+        collection_folders(&state).await?,
+        &state.library,
+        q.directory.trim(),
+    )
+    .await
+    .map_err(|e| ApiError::Internal(e.to_string()))?;
+    Ok(Json(ArchivedWorkAnswer {
+        archived: found.map(|work| ArchivedWorkView {
+            work: work.work,
+            archive_folder: work.archive_folder,
+            collect_folder: work.collect_folder,
+            merges: work.merges,
+        }),
+    }))
 }
 
 async fn reorder_rules(

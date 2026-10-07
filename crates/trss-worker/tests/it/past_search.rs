@@ -1476,3 +1476,57 @@ async fn a_lower_revision_that_a_higher_one_replaced_is_not_received_again_when_
     assert_eq!(command["outcome"]["result"], "duplicate", "{command}");
     assert!(s.added().is_empty(), "{:?}", s.added());
 }
+
+/// Ticket 0123, follow-up 2: a result received into a work folder that is in
+/// the archive folder waits for the folder to come into the collect folder, as
+/// every other path that adds into a rule's folder does.
+#[tokio::test]
+async fn a_result_received_into_an_archived_work_folder_waits_for_its_move_and_goes_in_after_it() {
+    let s = Setup::new(Options::show()).await;
+    let media = s.h.dir.path().join("media");
+    let archive = s.h.dir.path().join("Shows");
+    std::fs::remove_dir_all(media.join("Show")).unwrap();
+    std::fs::create_dir_all(archive.join("Show/Season 01")).unwrap();
+    std::fs::write(archive.join("Show/Season 01/Show S01E01.mkv"), b"x").unwrap();
+    SettingsStore::new(s.h.db.clone())
+        .put_collection(
+            1,
+            media.to_str().unwrap().to_owned(),
+            Some(archive.to_str().unwrap().to_owned()),
+        )
+        .await
+        .unwrap();
+    let release = episode("SubsPlease", "Show", 2, "");
+    s.nyaa.set_releases(std::slice::from_ref(&release));
+    s.on_add(&release, b"video");
+
+    let poll = s.search("[SubsPlease] Show 1080p", 1, 2).await;
+    let key = item(&poll, "- 02 ")["key"].as_str().unwrap().to_owned();
+    let command = s.receive(&poll, &key).await;
+    s.run_commands().await;
+    let command = s.command(&command).await;
+    assert_eq!(command["state"], "failed", "{command}");
+    let reason = command["outcome"]["reason"].as_str().unwrap();
+    assert!(reason.contains("먼저 수집 폴더로 옮기고"), "{reason}");
+    assert!(s.added().is_empty(), "{:?}", s.added());
+    let (_, rule) = s
+        .call("GET", &format!("/api/rules/{}", s.rule_id), None)
+        .await;
+    assert_eq!(rule["archive_move"]["direction"], "start", "{rule}");
+
+    // The move has run (it was stored while the command ran, and the same
+    // look took it): the folder is in the collect folder and the rule is on.
+    assert!(!archive.join("Show").exists());
+    assert!(media.join("Show/Season 01/Show S01E01.mkv").exists());
+    let (_, rule) = s
+        .call("GET", &format!("/api/rules/{}", s.rule_id), None)
+        .await;
+    assert_eq!(rule["state"], "active", "{rule}");
+
+    // Chosen again, the result goes in.
+    let command = s.receive(&poll, &key).await;
+    s.run_commands().await;
+    let command = s.command(&command).await;
+    assert_eq!(command["outcome"]["result"], "received", "{command}");
+    assert_eq!(s.added().len(), 1);
+}

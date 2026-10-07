@@ -35,6 +35,20 @@
 //! leaves the rule archived, with the reason. When the work folder is in the
 //! collect folder already, or in neither, the rule is just turned on.
 //!
+//! **Start** and **Resume** are a new rule or subscription beginning to
+//! collect and `영상 받기` turning on, for a rule whose work folder is in the
+//! archive folder: the same ordering as a restore. The web leaves such a rule
+//! `paused` (it collects nothing, so no cycle can make a work folder in the
+//! collect folder first) and stores the command; the worker moves the work
+//! folder from the archive folder into the collect folder (merging into one
+//! that is there) and only then turns the rule on. A move that fails leaves the
+//! rule paused, with the reason; turning `영상 받기` on again tries again. The
+//! web decides whether this is needed ([`plan_start`]) and the command decides
+//! again from the disk when it runs: a work folder found in no archive folder
+//! just turns the rule on. The time the rule waited does not cost it the items
+//! that came meanwhile: a new rule is never noted as resumed, and a `영상 받기`
+//! is on from when it was pressed.
+//!
 //! **The library follows the folder.** When a work folder has moved (or is found
 //! moved already), the work the library holds under the old place keeps its ID
 //! and belongs to the new place, or is merged into the work the destination
@@ -49,6 +63,8 @@
 //! and only its last start ([`MAX_ATTEMPTS`]) ends it `failed`, with that
 //! reason.
 
+#[cfg(test)]
+mod start_tests;
 pub mod work_folder;
 
 use std::{
@@ -60,18 +76,25 @@ use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
 use trss_core::{
-    commands::{Command, CommandState, Outcome, MAX_ATTEMPTS},
+    commands::{
+        Accepted, Command, CommandError, CommandState, CommandStore, NewCommand, Outcome,
+        MAX_ATTEMPTS,
+    },
     folder_locks::Section,
     folders::has_parent_dir,
     settings::SettingsStore,
-    Clock,
+    Clock, Millis,
 };
 
 use crate::{
     context::TransmissionLink,
     store::channels::{ChannelStore, Rule, RuleState},
 };
-use trss_library::{live::LiveWatch, store::library::LibraryStore, watch};
+use trss_library::{
+    live::LiveWatch,
+    store::library::{LibraryError, LibraryStore},
+    watch,
+};
 use trss_transmission as transmission;
 
 use work_folder::{
@@ -116,6 +139,15 @@ pub enum Direction {
     Archive,
     /// `복원`: back into the collect folder, then on.
     Restore,
+    /// A new rule or subscription: into the collect folder when its work
+    /// folder is in the archive folder, then on. The web made the rule paused
+    /// for the time between, which counts as if it had collected all along: the
+    /// rule is not noted as resumed.
+    Start,
+    /// `영상 받기` on, for a rule whose work folder is in the archive folder:
+    /// into the collect folder, then on. The rule is noted as resumed when the
+    /// switch was pressed, as the switch does for a rule that needs no move.
+    Resume,
 }
 
 impl Direction {
@@ -123,6 +155,8 @@ impl Direction {
         match self {
             Direction::Archive => "archive",
             Direction::Restore => "restore",
+            Direction::Start => "start",
+            Direction::Resume => "resume",
         }
     }
 }
@@ -337,6 +371,8 @@ struct Start<'a> {
     cancel: &'a CancellationToken,
     /// Notes when a restored rule was turned back on.
     clock: &'a Clock,
+    /// When the command was accepted: a `영상 받기` pressed then is on from then.
+    requested_at: Millis,
 }
 
 /// Runs a `rule_archive` command to its end, with its turn ([`section`]) taken.
@@ -368,6 +404,7 @@ pub async fn run_on(
         last: command.attempts >= MAX_ATTEMPTS,
         cancel,
         clock,
+        requested_at: command.created_at,
     };
     let Ok(payload) = serde_json::from_str::<RuleArchive>(&command.payload) else {
         return Ok(failed("요청 내용을 읽지 못했어요."));
@@ -383,7 +420,9 @@ pub async fn run_on(
 
     match payload.direction {
         Direction::Archive => archive(&start, rule).await,
-        Direction::Restore => restore(&start, rule).await,
+        Direction::Restore | Direction::Start | Direction::Resume => {
+            bring_in(&start, rule, payload.direction).await
+        }
     }
 }
 
@@ -447,7 +486,7 @@ fn plan_move(
             to: Side::Archive,
             name,
         },
-        Direction::Restore => Request {
+        Direction::Restore | Direction::Start | Direction::Resume => Request {
             from_root: archive,
             from: Side::Archive,
             to_root: collect,
@@ -490,6 +529,211 @@ pub fn forecast_archive(
     } else {
         format!("{who} 아직 이 작품 폴더에 받고 있어서 폴더는 옮기지 않아요. 남은 규칙까지 보관할 때 옮겨요.")
     }
+}
+
+/// What a rule that is about to collect needs first ([`plan_start`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StartPlan {
+    /// Nothing to bring in: turn the rule on now.
+    Now,
+    /// The work folder `work` is in the archive folder (or it cannot be told it
+    /// is not): the rule stays off until a `start` command has moved it into
+    /// the collect folder.
+    MoveFirst { work: String },
+}
+
+/// Whether a rule saving to `directory` has to wait for its work folder to come
+/// out of the archive folder before it collects: when the archive folder is set,
+/// the rule has a work folder, and the archive folder holds an entry of that
+/// name. `settings` are the collect folder and the archive folder.
+///
+/// This reads the disk (one `lstat`), as the move does; the screens' notice
+/// before a rule is made reads the library instead ([`archived_work`]). An
+/// entry that cannot be told apart from a missing one (the disk says anything
+/// but "not found") counts as there, so the rule waits and the command reports
+/// what it finds, rather than the rule collecting beside a work folder it
+/// cannot see.
+pub async fn plan_start(settings: Option<(String, Option<String>)>, directory: &str) -> StartPlan {
+    let Some((collect, Some(archive))) = settings else {
+        return StartPlan::Now;
+    };
+    let WorkFolder::Named(name) = work_folder(Path::new(&collect), directory) else {
+        return StartPlan::Now;
+    };
+    let entry = Path::new(&archive).join(&name);
+    let found = tokio::task::spawn_blocking(move || match std::fs::symlink_metadata(entry) {
+        Ok(_) => true,
+        Err(err) => err.kind() != std::io::ErrorKind::NotFound,
+    })
+    .await
+    // A panic of the blocking task tells nothing: wait for the command.
+    .unwrap_or(true);
+    if found {
+        StartPlan::MoveFirst { work: name }
+    } else {
+        StartPlan::Now
+    }
+}
+
+/// A work of the archive folder that a new rule would bring into the collect
+/// folder, as the screens tell before the rule is made.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArchivedWork {
+    /// The work folder's name.
+    pub work: String,
+    pub archive_folder: String,
+    pub collect_folder: String,
+    /// The collect folder holds a work of that name too: the archive's work
+    /// merges into it.
+    pub merges: bool,
+}
+
+/// The work a rule saving to `directory` would bring out of the archive folder,
+/// judged by the library's records of the two watch folders (a work by folder
+/// name), not by the disk: a screen asks it on every keystroke. `None` when
+/// there is no such work, no archive folder, or the rule has no work folder.
+pub async fn archived_work(
+    settings: Option<(String, Option<String>)>,
+    library: &LibraryStore,
+    directory: &str,
+) -> Result<Option<ArchivedWork>, LibraryError> {
+    let Some((collect, Some(archive))) = settings else {
+        return Ok(None);
+    };
+    let WorkFolder::Named(name) = work_folder(Path::new(&collect), directory) else {
+        return Ok(None);
+    };
+    let collect_folder = collect.trim_end_matches('/').to_owned();
+    let archive_folder = archive.trim_end_matches('/').to_owned();
+    if library
+        .work_in_folder(&archive_folder, &name)
+        .await?
+        .is_none()
+    {
+        return Ok(None);
+    }
+    let merges = library
+        .work_in_folder(&collect_folder, &name)
+        .await?
+        .is_some();
+    Ok(Some(ArchivedWork {
+        work: name,
+        archive_folder,
+        collect_folder,
+        merges,
+    }))
+}
+
+/// Stores the `start` command of a new rule, or the `resume` command of a
+/// `영상 받기` switched on, for `rule_id` (the web makes it itself, as it does
+/// the read of Anissia's captions). Its ID is made of the direction, the rule
+/// and the time. `Accepted::Busy` when the rule has another `rule_archive`
+/// command open.
+pub async fn ask_start(
+    commands: &CommandStore,
+    rule_id: &str,
+    direction: Direction,
+    now: Millis,
+) -> Result<Accepted, CommandError> {
+    let payload = RuleArchive {
+        rule_id: rule_id.to_owned(),
+        direction,
+    };
+    commands
+        .accept(
+            NewCommand {
+                id: format!("{}-{rule_id}-{now}", direction.code()),
+                kind: KIND.to_owned(),
+                payload: payload.canonical(),
+                subject: Some(payload.subject()),
+            },
+            now,
+        )
+        .await
+}
+
+/// What a path that is about to add a torrent into a rule's save folder does
+/// first ([`move_before_receiving`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Receiving {
+    /// The work folder is not in the archive folder: receive.
+    Go,
+    /// The work folder `work` is in the archive folder (or it cannot be told it
+    /// is not). Nothing is received now: the item is left, and a `start`
+    /// command is bringing the folder into the collect folder. `asked` is set
+    /// when this call stored that command and paused the rule for it; it is
+    /// not when another `rule_archive` command of the rule was open already,
+    /// which this call leaves as it is.
+    MoveFirst { work: String, asked: bool },
+}
+
+/// Why [`move_before_receiving`] could not decide or ask. The item is left for
+/// a later look, as for a move.
+#[derive(Debug, thiserror::Error)]
+pub enum GuardError {
+    #[error("cannot read the collect folder: {0}")]
+    Settings(String),
+    #[error("cannot store the command that brings the work folder in: {0}")]
+    Command(String),
+}
+
+/// The sentence a command that adds an item ends with when the item was left
+/// because the rule's work folder is moving into the collect folder first.
+pub const MOVING_FIRST: &str = "작품 폴더가 보관 폴더에 있어서 먼저 수집 폴더로 옮기고 있어요. 다 옮긴 뒤 다시 받기를 다시 누를 수 있어요.";
+
+/// The one rule for every path that adds a torrent into the save folder of the
+/// active rule `rule`: a work is never split across the collect folder and the
+/// archive folder, so nothing is received while the archive folder holds the
+/// rule's work folder ([`plan_start`]).
+///
+/// When it does, the rule is paused and a `start` command is stored for it (as
+/// the web does for a rule it turns on), so the folder is moved in before the
+/// rule collects: the rule keeps its `resumed_at`, and the items seen meanwhile
+/// are received afterwards. An existing split (the collect folder holds the work
+/// too) is the same case: the move merges the archive's folder into the collect
+/// one.
+///
+/// The caller holds the work folder's turn (a read of it), so the command, which
+/// needs write turns on both folders, runs after the caller lets go: never wait
+/// for it here. The caller leaves the item, records nothing for it, and wakes the
+/// command runner when `asked` is set.
+///
+/// Another open command of the rule (`rule_archive` has one per rule) is left to
+/// finish and the rule as it is.
+pub async fn move_before_receiving(
+    channels: &ChannelStore,
+    settings: &SettingsStore,
+    commands: &CommandStore,
+    rule: &Rule,
+    now: Millis,
+) -> Result<Receiving, GuardError> {
+    let folders = settings
+        .collection()
+        .await
+        .map_err(|err| GuardError::Settings(err.to_string()))?
+        .map(|s| (s.folder, s.archive_folder));
+    let StartPlan::MoveFirst { work } = plan_start(folders, &rule.directory).await else {
+        return Ok(Receiving::Go);
+    };
+    // The command is stored first: a rule paused with no command to turn it on
+    // again would stay off.
+    let accepted = ask_start(commands, &rule.id, Direction::Start, now)
+        .await
+        .map_err(|err| GuardError::Command(err.to_string()))?;
+    let asked = matches!(accepted, Accepted::Created(_));
+    if asked {
+        // Left active, the command's turning the rule on changes nothing.
+        if let Err(err) = channels
+            .set_rule_state(&rule.id, RuleState::Paused, now)
+            .await
+        {
+            eprintln!(
+                "Cannot pause rule {} for its work folder's move: {err}",
+                rule.id
+            );
+        }
+    }
+    Ok(Receiving::MoveFirst { work, asked })
 }
 
 async fn settings(ctx: &ArchiveContext) -> Result<Option<(String, Option<String>)>, Retry> {
@@ -603,25 +847,38 @@ async fn archive(start: &Start<'_>, rule: Rule) -> Result<Finished, Retry> {
         .unwrap_or_else(|failed| failed))
 }
 
-async fn restore(start: &Start<'_>, rule: Rule) -> Result<Finished, Retry> {
+/// A restore, a start or a resume: the work folder comes into the collect
+/// folder, and the rule is turned on once it has.
+async fn bring_in(start: &Start<'_>, rule: Rule, direction: Direction) -> Result<Finished, Retry> {
     let ctx = start.ctx;
     let settings = settings(ctx).await?;
     let finished = match plan_move(settings, &rule, Direction::Restore) {
         Ok(request) => match move_folder(start, &request).await? {
             Ok(finished) => finished,
-            // The rule stays archived: the folder is not back.
+            // The rule stays as it was (archived, or paused for a start): the
+            // folder is not in the collect folder.
             Err(failed) => return Ok(failed),
         },
         Err(no_move) => done(KEPT, Some(no_move.reason())),
     };
 
     // On only once the folder is back.
-    match ctx
-        .channels
-        .set_rule_state(&rule.id, RuleState::Active, (start.clock)())
-        .await
-        .map_err(Retry::store)?
-    {
+    let on = match direction {
+        // The rule counts as collecting since it was made.
+        Direction::Start => ctx.channels.begin_rule(&rule.id).await,
+        // A switch is on from when it was pressed, a restore from now.
+        Direction::Resume => {
+            ctx.channels
+                .set_rule_state(&rule.id, RuleState::Active, start.requested_at)
+                .await
+        }
+        Direction::Restore | Direction::Archive => {
+            ctx.channels
+                .set_rule_state(&rule.id, RuleState::Active, (start.clock)())
+                .await
+        }
+    };
+    match on.map_err(Retry::store)? {
         Some(_) => Ok(finished),
         None => Ok(failed(RULE_GONE)),
     }

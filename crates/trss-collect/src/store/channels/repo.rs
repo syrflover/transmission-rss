@@ -614,6 +614,22 @@ pub fn set_rule_state(
     Ok(rule)
 }
 
+/// Turns a rule on without noting it as resumed: the worker's end of a start
+/// of a new rule, which counts as collecting since it was made (see
+/// `commands::rule_archive`). The version goes up when the state changes.
+/// `None` when the rule is gone.
+pub fn begin_rule(conn: &mut Connection, id: &str) -> Result<Option<Rule>> {
+    let tx = begin(conn)?;
+    tx.execute(
+        "UPDATE rules SET state = 'active', version = version + 1
+         WHERE id = ?1 AND state <> 'active'",
+        [id],
+    )?;
+    let rule = fetch_rule(&tx, id)?;
+    tx.commit()?;
+    Ok(rule)
+}
+
 fn require_rule(tx: &Transaction<'_>, id: &str, expected: Version) -> Result<Rule> {
     let rule = fetch_rule(tx, id)?.ok_or_else(|| ChannelError::NotFound {
         kind: "rule",

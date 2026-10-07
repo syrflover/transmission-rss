@@ -13,6 +13,7 @@ use tokio_util::sync::CancellationToken;
 use transmission_rpc::types::{TorrentGetField, TorrentStatus};
 
 use trss_collect::{
+    commands::rule_archive::{move_before_receiving, Receiving},
     context::{CollectContext, MAX_REASON_CHARS},
     episode_offset::may_decide,
     feed::{self, FeedItem},
@@ -73,6 +74,14 @@ pub struct CycleReport {
     /// conversion (a command archived it or undid its offset meanwhile). They
     /// are not recorded at all, so the next cycle judges them again.
     pub rule_changed: usize,
+    /// Items a rule selected that were left alone because the archive folder
+    /// holds the rule's work folder: nothing is received into a work that is
+    /// split across the two folders ([`move_before_receiving`]). They are not
+    /// recorded at all, so the next cycle judges them again.
+    pub waiting_for_move: usize,
+    /// The `start` commands the cycle stored for those rules, each pausing its
+    /// rule until the folder is in the collect folder.
+    pub moves_asked: usize,
     /// Torrents taken out of Transmission because they left the feeds.
     pub removed: Vec<RemovedTorrent>,
     /// Items whose task panicked. Their torrents may or may not be in
@@ -207,6 +216,10 @@ enum JobOutcome {
     /// The rule changed while the item waited for its turn; nothing was done
     /// or recorded (see [`CycleReport::rule_changed`]).
     RuleChanged,
+    /// The rule's work folder is in the archive folder, so nothing was added;
+    /// nothing was recorded either. `asked` is set when this item's turn stored
+    /// the `start` command that brings it in and paused the rule.
+    MovingFirst { asked: bool },
 }
 
 /// Runs one cycle whose records are stamped `at`. `removal` is what the
@@ -811,6 +824,10 @@ async fn add_jobs(
             JobOutcome::Withheld => report.revisions_withheld += 1,
             JobOutcome::Later => report.revisions_left += 1,
             JobOutcome::RuleChanged => report.rule_changed += 1,
+            JobOutcome::MovingFirst { asked } => {
+                report.waiting_for_move += 1;
+                report.moves_asked += usize::from(asked);
+            }
         }
     }
 
@@ -866,7 +883,8 @@ async fn process_job(
     // Such a command may have changed the rule while the item waited: an
     // archived rule receives nothing, and an undone offset names nothing.
     if let Some(rule_id) = &job.observation.rule_id {
-        let unchanged = match ctx.channels.get_rule(rule_id).await {
+        let found = ctx.channels.get_rule(rule_id).await;
+        let unchanged = match &found {
             Ok(Some(rule)) => {
                 rule.state == RuleState::Active && rule.episode as isize == job.episode
             }
@@ -885,6 +903,34 @@ async fn process_job(
                 job.title, job.channel_label
             );
             return (JobOutcome::RuleChanged, false);
+        }
+        // Right before the add, under the turn: a work is never split across
+        // the collect folder and the archive folder. A rule whose work folder
+        // is in the archive folder (a title given to a subscription that
+        // waited for one, a rule changed as its sibling was archived) is
+        // paused and its folder brought in first; the item waits for a later
+        // cycle. The command needs write turns on the folders, so nothing
+        // waits for it here.
+        if let Ok(Some(rule)) = &found {
+            match move_before_receiving(&ctx.channels, &ctx.settings, &ctx.commands, rule, at).await
+            {
+                Ok(Receiving::Go) => {}
+                Ok(Receiving::MoveFirst { work, asked }) => {
+                    println!(
+                        "{} ({}) waits for the next cycle: its work folder {work:?} is in the \
+                         archive folder and moves into the collect folder first",
+                        job.title, job.channel_label
+                    );
+                    return (JobOutcome::MovingFirst { asked }, false);
+                }
+                Err(err) => {
+                    eprintln!(
+                        "{} ({}) waits for the next cycle: cannot tell where its work folder is: {err}",
+                        job.title, job.channel_label
+                    );
+                    return (JobOutcome::RuleChanged, false);
+                }
+            }
         }
     }
 

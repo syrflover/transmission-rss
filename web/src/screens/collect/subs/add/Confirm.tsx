@@ -8,6 +8,9 @@ import { useAfterDelay } from "@/lib/cached";
 import { subscriptionAdded } from "../../cache";
 import { btnAction, btnNeutral, btnPrimary, hintClass } from "../../channels/styles";
 import type { RuleFields } from "../../rules/api";
+import { ArchivedWorkNotice } from "../../rules/ArchivedWorkNotice";
+import { receivesPastItemsNow } from "../../rules/archivedWork";
+import { useArchivedWork } from "../../rules/useArchivedWork";
 import { usePreview } from "../../rules/usePreview";
 import type { Channel } from "../../channels/api";
 import { subscribe, type ScheduleEntry, type TitleGroup } from "../api";
@@ -63,6 +66,9 @@ export function Confirm({
   // The rule that already follows this anime in this channel (a `409`), to open.
   const [existing, setExisting] = useState<string | null>(null);
   const [ruleId, setRuleId] = useState<string | null>(null);
+  // The rule was made paused: its work folder is coming over from the archive folder.
+  const [held, setHeld] = useState(false);
+  const archivedWork = useArchivedWork(draft.directory);
   // The titles of the items asked for, kept because the preview moves on.
   const [titles, setTitles] = useState<ReadonlyMap<number, string>>(new Map());
   const receive = useReceive(ruleId);
@@ -89,8 +95,13 @@ export function Confirm({
       subscriptionAdded(channel.id);
       setTitles(new Map(tickedNow.map((i) => [i.id, i.title])));
       setRuleId(rule.id);
+      // The server decided from the disk, not from the notice above (the library's records can be
+      // stale): a rule that came back paused waits for its work folder and cannot receive yet,
+      // and one that came back collecting receives what was ticked.
+      const receivesNow = receivesPastItemsNow(rule.state);
+      setHeld(!receivesNow);
       onCreated();
-      if (tickedNow.length > 0) receive.start(rule.id, tickedNow.map((i) => i.id));
+      if (tickedNow.length > 0 && receivesNow) receive.start(rule.id, tickedNow.map((i) => i.id));
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "구독하지 못했어요. 다시 시도해 주세요.");
       // Subscribed already, from another tab or by an earlier press whose
@@ -117,8 +128,10 @@ export function Confirm({
             </>
           ) : (
             <>
-              {anime.subject}의 새 회차는 다음 RSS 확인부터 {channel.name ?? channel.host} 채널에서 받아요.
-              {receive.entries.length === 0 && " 지난 항목은 받지 않았어요. 규칙 화면에서 골라 받을 수 있어요."}
+              {held
+                ? `${anime.subject}의 작품 폴더를 보관 폴더에서 수집 폴더로 옮기는 중이에요. 옮기기가 끝나면 다음 RSS 확인부터 ${channel.name ?? channel.host} 채널에서 새 회차를 받아요. 그동안 규칙은 멈춰 있고, 지난 항목은 받지 않았어요. 옮긴 뒤 규칙 화면에서 골라 받을 수 있어요. 옮기지 못하면 규칙 화면에 까닭이 나와요.`
+                : `${anime.subject}의 새 회차는 다음 RSS 확인부터 ${channel.name ?? channel.host} 채널에서 받아요.`}
+              {!held && receive.entries.length === 0 && " 지난 항목은 받지 않았어요. 규칙 화면에서 골라 받을 수 있어요."}
             </>
           )}
         </p>
@@ -160,6 +173,8 @@ export function Confirm({
         <dd className="m-0 min-w-0 break-all">{draft.directory.trim()}</dd>
       </dl>
 
+      {archivedWork && <ArchivedWorkNotice archived={archivedWork} />}
+
       {waiting && (
         <p className="min-w-0 rounded-xl border border-hairline bg-surface-2 px-3.5 py-3 text-[13px] leading-normal text-text-secondary">
           첫 화가 나오기 전이라 일치 문구가 아직 없어요. 구독해 두면 아무것도 받지 않고, 이 채널에 새 작품 제목이 처음 나타날 때
@@ -172,6 +187,8 @@ export function Confirm({
           <h4 className="text-[14px] font-bold">이미 기록된 항목</h4>
           <p className={hintClass}>
             구독만으로는 아무것도 받지 않아요. 지난 항목은 체크한 것만 받아요. ‘[Batch]’처럼 원하지 않는 항목은 체크하지 않으면 돼요.
+            {archivedWork &&
+              " 작품 폴더를 옮기는 동안에는 규칙이 받지 못해요. 그때는 체크한 항목도 받지 않고, 옮긴 뒤 규칙 화면에서 골라 받아요."}
           </p>
 
           {preview.state === "failed" && (

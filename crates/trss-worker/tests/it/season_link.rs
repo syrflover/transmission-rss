@@ -586,22 +586,11 @@ async fn connecting_a_subscription_to_a_season_has_the_animes_subtitle_lines_rea
     assert_eq!(fake.count("/anime/caption/animeNo/"), 1);
 }
 
-// --- a subscribed creator's season, once connected, is looked at (ticket 0045) ---
-
-#[tokio::test]
-async fn connecting_a_followed_subscription_to_its_season_makes_the_creators_jobs_in_that_cycle() {
-    use std::sync::Arc;
-    use trss_jobs::{area::ReceiveArea, JobStore, Runner};
-    use trss_subtitles::{fake::FakeSource, Sources};
-
-    let mut scene = Scene::new().await;
-    let jobs = JobStore::new(scene.h.db.clone());
-    scene.worker = scene.h.worker().with_jobs(Runner::new(
-        jobs.clone(),
-        Sources::none().with_fake(FakeSource),
-        ReceiveArea::in_app_data(scene.h.dir.path()),
-        Arc::new(|| 2_000),
-    ));
+/// A subscription to anime 7 that follows creator 에루샤 and has received the
+/// first episode of `Work`, with that creator's episode 2 observed and the
+/// season's AniList entry stored: once the cycle connects the rule to its
+/// season, the creator's episode 2 is there to receive.
+async fn followed_subscription(scene: &mut Scene) -> Rule {
     let rule = scene
         .h
         .channels
@@ -667,6 +656,26 @@ async fn connecting_a_followed_subscription_to_its_season_makes_the_creators_job
         })
         .await
         .unwrap();
+    rule
+}
+
+// --- a subscribed creator's season, once connected, is looked at (ticket 0045) ---
+
+#[tokio::test]
+async fn connecting_a_followed_subscription_to_its_season_makes_the_creators_jobs_in_that_cycle() {
+    use std::sync::Arc;
+    use trss_jobs::{area::ReceiveArea, JobStore, Runner};
+    use trss_subtitles::{fake::FakeSource, Sources};
+
+    let mut scene = Scene::new().await;
+    let jobs = JobStore::new(scene.h.db.clone());
+    scene.worker = scene.h.worker().with_jobs(Runner::new(
+        jobs.clone(),
+        Sources::none().with_fake(FakeSource),
+        ReceiveArea::in_app_data(scene.h.dir.path()),
+        Arc::new(|| 2_000),
+    ));
+    let rule = followed_subscription(&mut scene).await;
     // Without a season the rule's creator has nothing to receive.
     assert_eq!(scene.worker.follow_once().await.unwrap(), 0);
 
@@ -676,4 +685,59 @@ async fn connecting_a_followed_subscription_to_its_season_makes_the_creators_job
     let open = jobs.open_jobs().await.unwrap();
     assert_eq!(open.len(), 1);
     assert_eq!(open[0].origin, trss_jobs::AUTO);
+}
+
+#[tokio::test]
+async fn a_start_or_resume_that_turns_a_followed_subscription_on_makes_the_creators_jobs() {
+    use std::sync::Arc;
+    use trss_collect::commands::rule_archive::{ask_start, Direction};
+    use trss_collect::store::channels::RuleState;
+    use trss_core::commands::CommandStore;
+    use trss_jobs::{area::ReceiveArea, JobStore, Runner};
+    use trss_subtitles::{fake::FakeSource, Sources};
+    use trss_worker::CommandsOutcome;
+
+    for direction in [Direction::Resume, Direction::Start] {
+        let mut scene = Scene::new().await;
+        let rule = followed_subscription(&mut scene).await;
+        // The cycle connects the rule to its season; this worker runs no jobs.
+        scene.tick().await;
+        assert!(season_of(&scene.rule(&rule).await).is_some());
+        // The rule is off, as the web leaves it for a move, and the creator's
+        // episode 2 is there to receive when it is on again.
+        scene
+            .h
+            .channels
+            .set_rule_state(&rule.id, RuleState::Paused, 1)
+            .await
+            .unwrap();
+        let jobs = JobStore::new(scene.h.db.clone());
+        scene.worker = scene.h.worker().with_jobs(Runner::new(
+            jobs.clone(),
+            Sources::none().with_fake(FakeSource),
+            ReceiveArea::in_app_data(scene.h.dir.path()),
+            Arc::new(|| 2_000),
+        ));
+        assert_eq!(scene.worker.follow_once().await.unwrap(), 0);
+        assert!(jobs.open_jobs().await.unwrap().is_empty());
+
+        // No archive folder is set, so the command only turns the rule on.
+        let commands = CommandStore::new(scene.h.db.clone());
+        ask_start(&commands, &rule.id, direction, 3_000)
+            .await
+            .unwrap();
+        assert_eq!(
+            scene
+                .worker
+                .run_commands(&CancellationToken::new())
+                .await
+                .unwrap(),
+            CommandsOutcome::Ran(1)
+        );
+
+        assert_eq!(scene.rule(&rule).await.state, RuleState::Active);
+        let open = jobs.open_jobs().await.unwrap();
+        assert_eq!(open.len(), 1, "{direction:?}");
+        assert_eq!(open[0].origin, trss_jobs::AUTO);
+    }
 }

@@ -1361,3 +1361,51 @@ mod rule_detail {
 
 #[path = "title_tests.rs"]
 mod title_waiting;
+
+#[tokio::test]
+async fn subscribing_to_a_work_in_the_archive_folder_makes_the_rule_paused_with_its_start_open() {
+    let app = App::new().await;
+    app.schedule_of_wednesday();
+    let channel = app.channel("feed.test").await;
+    app.record(&channel, 1000, &[WORK_1]).await;
+    let tmp = tempfile::tempdir().unwrap();
+    let (collect, archive) = (tmp.path().join("Shows (current)"), tmp.path().join("Shows"));
+    std::fs::create_dir(&collect).unwrap();
+    std::fs::create_dir_all(archive.join("Work/Season 01")).unwrap();
+    app.state
+        .settings
+        .put_collection(
+            1,
+            collect.display().to_string(),
+            Some(archive.display().to_string()),
+        )
+        .await
+        .unwrap();
+
+    let (status, body) = app
+        .call(
+            Method::POST,
+            "/api/subscriptions",
+            Some(app.subscribe_body(&channel)),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let rule = &body["rule"];
+    // Still a subscription, off until the worker has moved the work folder.
+    assert_eq!(rule["state"], "paused");
+    assert_eq!(rule["subscription"]["anissia_anime_no"], 3320);
+    assert_eq!(rule["archive_move"]["direction"], "start");
+    assert_eq!(rule["archive_move"]["command"]["state"], "pending");
+
+    // A work the archive folder lacks is subscribed on at once, as before.
+    let other = app.channel("other.test").await;
+    app.record(&other, 1000, &[WORK_1]).await;
+    let mut body = app.subscribe_body(&other);
+    body["directory"] = json!("Another/Season 01");
+    let (status, body) = app
+        .call(Method::POST, "/api/subscriptions", Some(body))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(body["rule"]["state"], "active");
+    assert_eq!(body["rule"]["archive_move"], Value::Null);
+}

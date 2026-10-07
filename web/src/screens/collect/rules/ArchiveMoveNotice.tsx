@@ -5,34 +5,40 @@ import { cn } from "@/lib/utils";
 
 import { btnAction, btnNeutral } from "../channels/styles";
 import type { ArchiveDirection, ArchiveMove, Rule } from "./api";
+import { moveStillTells } from "./moveStillTells";
 import type { MovePhase } from "./useArchiveMove";
 
+// `start` (a new rule or subscription) and `resume` (`영상 받기` on) are the
+// moves the server makes itself for a rule whose work folder is in the archive
+// folder: the rule collects only after the folder came over.
 const MOVING: Record<ArchiveDirection, string> = {
   archive: "보관 폴더로 옮기는 중이에요.",
   restore: "수집 폴더로 옮기는 중이에요.",
+  start: "보관 폴더의 작품 폴더를 수집 폴더로 옮기는 중이에요. 끝나면 받기 시작해요.",
+  resume: "보관 폴더의 작품 폴더를 수집 폴더로 옮기는 중이에요. 끝나면 받기 시작해요.",
 };
 
 const MOVED: Record<ArchiveDirection, string> = {
   archive: "보관 폴더로 옮겼어요.",
   restore: "수집 폴더로 옮겼어요.",
+  start: "작품 폴더를 보관 폴더에서 수집 폴더로 옮기고 받기 시작했어요.",
+  resume: "작품 폴더를 보관 폴더에서 수집 폴더로 옮기고 받기 시작했어요.",
 };
 
 /** The rule changed state and its folder stayed on purpose; the reason says why. */
 const KEPT: Record<ArchiveDirection, string> = {
   archive: "규칙을 보관했어요. 폴더는 옮기지 않았어요.",
   restore: "규칙을 복원했어요. 폴더는 옮기지 않았어요.",
+  start: "받기 시작했어요. 폴더는 옮기지 않았어요.",
+  resume: "받기 시작했어요. 폴더는 옮기지 않았어요.",
 };
 
 const FAILED_AFTER: Record<ArchiveDirection, string> = {
   archive: "규칙은 보관된 채 폴더는 제자리에 있어요.",
   restore: "폴더를 되돌리지 못해서 규칙은 보관된 채로 있어요.",
+  start: "규칙은 멈춘 채 아무것도 받지 않아요. 까닭을 해결한 뒤 영상 받기를 다시 켜 주세요.",
+  resume: "규칙은 멈춘 채 아무것도 받지 않아요. 까닭을 해결한 뒤 영상 받기를 다시 켜 주세요.",
 };
-
-/** Whether the ended move still says something about the rule as it is now. */
-function stillTelling(move: ArchiveMove, rule: Rule): boolean {
-  if (move.command.state === "failed") return true;
-  return move.direction === "archive" ? rule.state === "archived" : rule.state === "active";
-}
 
 interface Line {
   title: string;
@@ -105,7 +111,7 @@ export function ArchiveMoveNotice({ rule, phase, onMoveAgain, onResend, onRechec
   let move: ArchiveMove | null = phase.kind === "ended" ? phase.move : null;
   if (line === null && rule.archive_move && !isOpen(rule.archive_move.command)) {
     move = rule.archive_move;
-    line = stillTelling(move, rule) ? endedLine(move) : null;
+    line = moveStillTells(move, rule.state) ? endedLine(move) : null;
   }
   if (line === null) return null;
 

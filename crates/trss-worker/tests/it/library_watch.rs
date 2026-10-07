@@ -23,7 +23,7 @@ use tokio_util::sync::CancellationToken;
 use trss_anilist::{Entry, FuzzyDate};
 use trss_collect::{
     commands::rule_archive::work_folder::MovePolicy,
-    store::channels::{ChannelInput, ChannelWithRules, RuleInput},
+    store::channels::{ChannelInput, ChannelWithRules, RuleInput, RuleState},
 };
 use trss_core::settings::SettingsStore;
 use trss_library::{
@@ -1158,6 +1158,9 @@ impl Archive {
         touch(&collect.join("Solo/Season 01/Solo S01E01.mkv"));
         // The archive already has the earlier season of Clevatess.
         touch(&archive.join("Clevatess/Season 01/Clevatess S01E01.mkv"));
+        // A work only the archive folder has.
+        touch(&archive.join("Mushoku/Season 01/Mushoku S01E01.mkv"));
+        touch(&archive.join("Mushoku/Season 01/Mushoku S01E02.mkv"));
         // Saving the settings makes both folders watch folders and reads them.
         let (status, body) = lib.save_collection(0, &collect, Some(&archive)).await;
         assert_eq!(status, StatusCode::OK, "{body}");
@@ -1261,6 +1264,215 @@ async fn archiving_into_an_existing_work_folder_merges_into_the_destinations_id(
         .filter(|w| w.dir_name == "Clevatess")
         .collect();
     assert_eq!(rows.len(), 1);
+}
+
+impl Archive {
+    /// A new rule on the channel, as the rule-add form sends it (ticket 0123):
+    /// its work folder is in the archive folder, so the rule is made off and its
+    /// move is the open command, which the worker then runs.
+    async fn add_rule(&self, phrase: &str, directory: &str) -> Value {
+        let (status, _, rule) = self
+            .lib
+            .api
+            .call(
+                "POST",
+                "/api/rules",
+                Some(json!({
+                    "channel_id": self.channel.channel.id,
+                    "match": phrase,
+                    "directory": directory,
+                    "episode": 1,
+                })),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "{rule}");
+        assert_eq!(rule["state"], "paused", "{rule}");
+        assert_eq!(rule["archive_move"]["direction"], "start", "{rule}");
+        assert_eq!(self.lib.run_commands().await, CommandsOutcome::Ran(1));
+        let command = self
+            .lib
+            .command(rule["archive_move"]["command"]["id"].as_str().unwrap())
+            .await;
+        assert_eq!(command["state"], "done", "{command}");
+        rule
+    }
+}
+
+#[tokio::test]
+async fn starting_a_rule_for_an_archived_work_keeps_its_id_under_the_collect_folder() {
+    let a = Archive::new().await;
+    let mushoku = a.lib.work(&a.archive_folder, "Mushoku").await;
+    assert_eq!(mushoku.episodes.len(), 2);
+
+    // What the user chose for the work before: no cover, and season 1 linked.
+    let artwork = format!("/api/library/works/{}/artwork", mushoku.id);
+    let (status, _, cover) = a.lib.api.call("GET", &artwork, None).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _, cleared) = a
+        .lib
+        .api
+        .call(
+            "POST",
+            &format!("{artwork}/clear"),
+            Some(json!({ "version": cover["version"] })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{cleared}");
+    let seasons = SeasonStore::new(a.lib.h.db.clone());
+    seasons
+        .put_entry(Entry {
+            id: 166873,
+            romaji: Some("Mushoku Tensei".into()),
+            english: None,
+            native: None,
+            format: Some("TV".into()),
+            status: Some("FINISHED".into()),
+            episodes: Some(2),
+            start: FuzzyDate::default(),
+            end: FuzzyDate::default(),
+            studios: Vec::new(),
+            genres: Vec::new(),
+            description: None,
+            airing: Vec::new(),
+            korean_titles: Vec::new(),
+            sequels: Vec::new(),
+            fetched_at: 1,
+        })
+        .await
+        .unwrap();
+    let link = seasons.link(&mushoku.id, 1).await.unwrap();
+    let linked = seasons
+        .set_links(&mushoku.id, 1, link.version, vec![166873])
+        .await
+        .unwrap();
+
+    a.add_rule("Mushoku", "Mushoku/Season 02").await;
+    assert!(!a.archive.join("Mushoku").exists());
+    assert!(a
+        .collect
+        .join("Mushoku/Season 01/Mushoku S01E01.mkv")
+        .exists());
+
+    // Same ID, now under the collect folder, with nothing left behind.
+    assert!(a
+        .lib
+        .works(&a.archive_folder)
+        .await
+        .iter()
+        .all(|w| w.dir_name != "Mushoku"));
+    let moved = a.lib.work(&a.collect_folder, "Mushoku").await;
+    assert_eq!(moved.id, mushoku.id);
+    assert_eq!(moved.episodes, mushoku.episodes);
+    assert_eq!(moved.first_seen_at, mushoku.first_seen_at);
+    // What the user chose for the work is still on it.
+    let (status, _, cover) = a.lib.api.call("GET", &artwork, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(cover, cleared);
+    assert_eq!(seasons.link(&mushoku.id, 1).await.unwrap(), linked);
+
+    // The next cycle reads the folders as they are, and the work is the same one.
+    a.lib.h.advance(1000);
+    a.lib.tick().await;
+    let read = a.lib.work(&a.collect_folder, "Mushoku").await;
+    assert_eq!(read.id, mushoku.id);
+    assert!(!read.missing);
+    assert_eq!(seasons.link(&mushoku.id, 1).await.unwrap(), linked);
+}
+
+#[tokio::test]
+async fn starting_a_rule_for_a_work_in_both_folders_merges_the_archives_into_the_collect_folders_id(
+) {
+    let a = Archive::new().await;
+    let kept = a.lib.work(&a.collect_folder, "Clevatess").await;
+    let moved = a.lib.work(&a.archive_folder, "Clevatess").await;
+    assert_ne!(kept.id, moved.id);
+
+    a.add_rule("Clevatess S03", "Clevatess/Season 03").await;
+
+    assert!(!a.archive.join("Clevatess").exists());
+    assert!(a
+        .lib
+        .works(&a.archive_folder)
+        .await
+        .iter()
+        .all(|w| w.dir_name != "Clevatess"));
+    let merged = a.lib.work(&a.collect_folder, "Clevatess").await;
+    assert_eq!(merged.id, kept.id);
+    assert_eq!(merged.seasons, [1, 2]);
+    assert_eq!(merged.episodes.len(), 3);
+
+    // One row, not two, and the same after the next reading.
+    a.lib.h.advance(1000);
+    a.lib.tick().await;
+    let read = a.lib.work(&a.collect_folder, "Clevatess").await;
+    assert_eq!(read.id, kept.id);
+    assert_eq!(read.episodes.len(), 3);
+    let rows: Vec<_> = a
+        .lib
+        .works(&a.collect_folder)
+        .await
+        .into_iter()
+        .filter(|w| w.dir_name == "Clevatess")
+        .collect();
+    assert_eq!(rows.len(), 1);
+}
+
+#[tokio::test]
+async fn saving_a_collecting_rule_into_an_archived_work_folder_moves_the_work_before_it_collects_there(
+) {
+    let a = Archive::new().await;
+    let mushoku = a.lib.work(&a.archive_folder, "Mushoku").await;
+    // Solo collects since 777; the edit must not change that.
+    let solo = a.channel.rules[1].id.clone();
+    let channels = &a.lib.h.channels;
+    channels
+        .set_rule_state(&solo, RuleState::Paused, 700)
+        .await
+        .unwrap();
+    channels
+        .set_rule_state(&solo, RuleState::Active, 777)
+        .await
+        .unwrap();
+    let stored = channels.get_rule(&solo).await.unwrap().unwrap();
+
+    let (status, _, rule) = a
+        .lib
+        .api
+        .call(
+            "PUT",
+            &format!("/api/rules/{solo}"),
+            Some(json!({
+                "version": stored.version,
+                "channel_id": a.channel.channel.id,
+                "match": "Solo",
+                "regex": false,
+                "case_insensitive": false,
+                "directory": "Mushoku/Season 02",
+                "episode": stored.episode,
+                "state": "active",
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{rule}");
+    // Saved, but off until the work folder came over: nothing can make
+    // `Shows (current)/Mushoku` first.
+    assert_eq!(rule["state"], "paused", "{rule}");
+    assert_eq!(rule["archive_move"]["direction"], "start", "{rule}");
+    assert_eq!(a.lib.run_commands().await, CommandsOutcome::Ran(1));
+
+    let stored = channels.get_rule(&solo).await.unwrap().unwrap();
+    assert_eq!(stored.state, RuleState::Active);
+    assert_eq!(stored.directory, "Mushoku/Season 02");
+    assert_eq!(stored.resumed_at, Some(777));
+    assert!(!a.archive.join("Mushoku").exists());
+    assert!(a
+        .collect
+        .join("Mushoku/Season 01/Mushoku S01E02.mkv")
+        .exists());
+    assert_eq!(
+        a.lib.work(&a.collect_folder, "Mushoku").await.id,
+        mushoku.id
+    );
 }
 
 #[tokio::test]

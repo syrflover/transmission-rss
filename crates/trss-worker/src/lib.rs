@@ -600,6 +600,15 @@ impl Worker {
         };
         let report = run_cycle(&self.ctx, &self.session, started, &removal, cancel).await?;
 
+        // The `start` commands the cycle stored for rules whose work folder
+        // was in the archive folder: the command runner looks at once, not at
+        // its next poll.
+        if report.moves_asked > 0 {
+            if let Some(path) = &self.wake_path {
+                trss_core::wake::wake_worker(path);
+            }
+        }
+
         // An interrupted cycle stays unfinished in the marker.
         if !report.interrupted {
             self.ctx.history.finish_cycle((self.clock)()).await?;

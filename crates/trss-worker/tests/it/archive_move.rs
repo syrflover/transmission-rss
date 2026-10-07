@@ -24,11 +24,11 @@ use common::*;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 use trss_collect::{
-    commands::rule_archive::work_folder::MovePolicy,
+    commands::rule_archive::{self, work_folder::MovePolicy, Direction},
     store::channels::{ChannelInput, ChannelWithRules, RuleInput, RuleState},
 };
 use trss_core::{
-    commands::{CommandState, CommandStore},
+    commands::{Accepted, CommandState, CommandStore},
     settings::SettingsStore,
 };
 use trss_worker::{CommandsOutcome, TickOutcome, Worker};
@@ -1865,4 +1865,725 @@ async fn a_torrent_reached_through_a_link_inside_the_work_folder_stops_the_move(
     assert!(s.h.tr.calls_of("torrent-set-location").is_empty());
     assert_eq!(files(&s.collect), before);
     assert!(files(&s.archive).is_empty());
+}
+
+// --- 9. a rule starts collecting while its work folder is in the archive folder (ticket 0123) ---
+
+impl Scene {
+    /// `POST /api/rules` of a rule on `channel`, as the rule-add form sends it.
+    async fn create_rule(
+        &self,
+        channel: &str,
+        phrase: &str,
+        directory: &str,
+    ) -> (StatusCode, Value) {
+        let (status, _, body) = self
+            .api
+            .call(
+                "POST",
+                "/api/rules",
+                Some(json!({
+                    "channel_id": channel,
+                    "match": phrase,
+                    "directory": directory,
+                    "episode": 1,
+                })),
+            )
+            .await;
+        (status, body)
+    }
+
+    /// `PUT /api/rules/{id}/switch` of `영상 받기`.
+    async fn switch_video(&self, rule: &Value, on: bool) -> (StatusCode, Value) {
+        let (status, _, body) = self
+            .api
+            .call(
+                "PUT",
+                &format!("/api/rules/{}/switch", rule["id"].as_str().unwrap()),
+                Some(json!({ "version": rule["version"], "video": on })),
+            )
+            .await;
+        (status, body)
+    }
+
+    /// The `download-dir` of every torrent a cycle added.
+    fn added_dirs(&self) -> Vec<String> {
+        self.h
+            .tr
+            .calls_of("torrent-add")
+            .iter()
+            .map(|call| call.args["download-dir"].as_str().unwrap().to_owned())
+            .collect()
+    }
+
+    /// One cycle, after the pause the cycles keep between them.
+    async fn cycle(&self, worker: &Worker) -> trss_worker::cycle::CycleReport {
+        self.h.advance(300_000);
+        let TickOutcome::Ran(report) = worker.tick(&CancellationToken::new()).await.unwrap() else {
+            panic!("expected a cycle");
+        };
+        report
+    }
+}
+
+#[tokio::test]
+async fn a_new_rule_for_an_archived_work_collects_only_after_its_folder_came_into_the_collect_folder(
+) {
+    let s = Scene::new(true).await;
+    let c = s.channel("feed-a", &[]).await;
+    let season = s.archive.join("Clevatess/Season 02");
+    s.seeding(1, "Clevatess S02E01.mkv", &season);
+    write(&s.archive.join("Clevatess/.trss/subs/S02E01.ass"), "sub");
+    // The first episode of the new season is in the feed already.
+    s.h.feeds
+        .set_xml("feed-a", &feed_xml(&[(2, "Clevatess S03E01.mkv")]));
+
+    // The rule exists, off, with its move waiting for the worker.
+    let (status, rule) = s
+        .create_rule(&c.channel.id, "Clevatess", "Clevatess/Season 03")
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{rule}");
+    assert_eq!(rule["state"], "paused");
+    assert_eq!(rule["archive_move"]["direction"], "start");
+    assert_eq!(rule["archive_move"]["command"]["state"], "pending");
+    let id = rule["id"].as_str().unwrap();
+    let command_id = rule["archive_move"]["command"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    // A check of the feed before the move receives nothing, and makes no work
+    // folder in the collect folder for the move to run into.
+    let worker = s.worker();
+    let report = s.cycle(&worker).await;
+    assert_eq!(report.added, 0);
+    assert!(s.added_dirs().is_empty());
+    assert!(!s.collect.join("Clevatess").exists());
+
+    // Mid-move the rule is still off, and a check beside the move receives
+    // nothing either.
+    let gate = s.h.tr.hold("torrent-set-location");
+    let moving = tokio::spawn({
+        let worker = worker.clone();
+        async move { worker.run_commands(&CancellationToken::new()).await }
+    });
+    gate.wait_arrived().await;
+    assert_eq!(s.rule(id).await["state"], "paused");
+    let report = s.cycle(&worker).await;
+    assert_eq!(report.added, 0);
+    assert!(s.added_dirs().is_empty());
+    assert!(!s.collect.join("Clevatess").exists());
+
+    gate.release_all();
+    assert_eq!(moving.await.unwrap().unwrap(), CommandsOutcome::Ran(1));
+    let command = s.command(&command_id).await;
+    assert_eq!(command["state"], "done", "{command}");
+    assert_eq!(command["outcome"]["result"], "moved");
+
+    // The whole work folder is in the collect folder, with its torrent, and
+    // the rule is on.
+    assert!(!s.archive.join("Clevatess").exists());
+    assert_eq!(
+        files(&s.collect),
+        [
+            "Clevatess/.trss/subs/S02E01.ass",
+            "Clevatess/Season 02/Clevatess S02E01.mkv"
+        ]
+    );
+    let moved_to = text(s.collect.join("Clevatess/Season 02"));
+    assert_eq!(s.h.tr.torrent(&hash(1)).download_dir, moved_to);
+    let view = s.rule(id).await;
+    assert_eq!(view["state"], "active");
+    assert_eq!(view["archive_move"]["command"]["state"], "done");
+
+    // Only now does the feed's item go in, into the work folder that came over.
+    let report = s.cycle(&worker).await;
+    assert_eq!(report.added, 1);
+    assert_eq!(
+        s.added_dirs(),
+        [text(s.collect.join("Clevatess/Season 03"))]
+    );
+}
+
+#[tokio::test]
+async fn a_new_rule_whose_work_folder_cannot_be_moved_stays_off_and_shows_the_reason() {
+    let s = Scene::new(true).await;
+    let c = s
+        .channel("feed-a", &[("Clevatess", "Clevatess/Season 02")])
+        .await;
+    // The same file on both sides: the move refuses before it moves anything.
+    write(
+        &s.collect.join("Clevatess/Season 02/Clevatess S02E02.mkv"),
+        "new",
+    );
+    write(
+        &s.archive.join("Clevatess/Season 02/Clevatess S02E02.mkv"),
+        "old",
+    );
+    write(
+        &s.archive.join("Clevatess/Season 01/Clevatess S01E01.mkv"),
+        "old",
+    );
+    s.h.feeds
+        .set_xml("feed-a", &feed_xml(&[(2, "Clevatess S03E01.mkv")]));
+    let (collect_before, archive_before) = (files(&s.collect), files(&s.archive));
+
+    // The Season 02 rule would take the item too: pause it, so only the new
+    // rule could.
+    s.h.channels
+        .set_rule_state(&c.rules[0].id, RuleState::Paused, 0)
+        .await
+        .unwrap();
+    let (status, rule) = s
+        .create_rule(&c.channel.id, "Clevatess S03", "Clevatess/Season 03")
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{rule}");
+    let id = rule["id"].as_str().unwrap();
+    assert_eq!(s.run().await, CommandsOutcome::Ran(1));
+
+    let view = s.rule(id).await;
+    assert_eq!(view["state"], "paused");
+    let moved = &view["archive_move"];
+    assert_eq!(moved["direction"], "start");
+    assert_eq!(moved["command"]["state"], "failed", "{moved}");
+    let reason = moved["command"]["outcome"]["reason"].as_str().unwrap();
+    assert!(
+        reason.contains("`Season 02/Clevatess S02E02.mkv`"),
+        "{reason}"
+    );
+    assert!(reason.contains("아무것도 옮기지 않았어요"), "{reason}");
+    assert_eq!(files(&s.collect), collect_before);
+    assert_eq!(files(&s.archive), archive_before);
+    assert!(s.h.tr.calls_of("torrent-set-location").is_empty());
+
+    // The rule receives nothing while it is off.
+    s.h.feeds
+        .set_xml("feed-a", &feed_xml(&[(2, "Clevatess S03 E01.mkv")]));
+    let report = s.cycle(&s.worker()).await;
+    assert_eq!(report.added, 0);
+    assert!(s.added_dirs().is_empty());
+
+    // Once the overlap is cleared, `영상 받기` on again starts it again.
+    fs::remove_file(s.archive.join("Clevatess/Season 02/Clevatess S02E02.mkv")).unwrap();
+    let (status, view) = s.switch_video(&view, true).await;
+    assert_eq!(status, StatusCode::OK, "{view}");
+    assert_eq!(view["state"], "paused");
+    // A rule that never collected starts again, so the time it waited does not
+    // make the items that came meanwhile past ones.
+    assert_eq!(view["archive_move"]["direction"], "start", "{view}");
+    assert_eq!(view["archive_move"]["command"]["state"], "pending");
+    assert_eq!(s.run().await, CommandsOutcome::Ran(1));
+    let view = s.rule(id).await;
+    assert_eq!(view["state"], "active");
+    assert_eq!(
+        view["archive_move"]["command"]["outcome"]["result"],
+        "moved"
+    );
+    let stored = s.h.channels.get_rule(id).await.unwrap().unwrap();
+    assert_eq!(stored.resumed_at, None);
+    assert!(!s.archive.join("Clevatess").exists());
+    assert_eq!(
+        files(&s.collect),
+        [
+            "Clevatess/Season 01/Clevatess S01E01.mkv",
+            "Clevatess/Season 02/Clevatess S02E02.mkv",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn turning_video_on_moves_an_archived_work_first_and_a_work_not_archived_turns_on_at_once() {
+    let s = Scene::new(true).await;
+    let c = s
+        .channel(
+            "feed-a",
+            &[
+                ("Solo", "Solo/Season 01"),
+                ("Clevatess", "Clevatess/Season 02"),
+                ("Fresh", "Fresh/Season 01"),
+            ],
+        )
+        .await;
+    for rule in &c.rules {
+        s.h.channels
+            .set_rule_state(&rule.id, RuleState::Paused, 0)
+            .await
+            .unwrap();
+    }
+    // Solo is in the archive folder only; Clevatess is in both folders; Fresh
+    // is in neither.
+    s.seeding(1, "Solo S01E01.mkv", &s.archive.join("Solo/Season 01"));
+    write(
+        &s.archive.join("Clevatess/Season 01/Clevatess S01E01.mkv"),
+        "old",
+    );
+    write(
+        &s.collect.join("Clevatess/Season 02/Clevatess S02E01.mkv"),
+        "now",
+    );
+    let ids: Vec<String> = c.rules.iter().map(|r| r.id.clone()).collect();
+
+    // A work that is not in the archive folder turns on at once, as before.
+    let (status, fresh) = s.switch_video(&s.rule(&ids[2]).await, true).await;
+    assert_eq!(status, StatusCode::OK, "{fresh}");
+    assert_eq!(fresh["state"], "active");
+    assert!(fresh["archive_move"].is_null());
+
+    // An archived work waits: the rule stays off with the move open, and a
+    // second press while it is open is refused.
+    let (status, solo) = s.switch_video(&s.rule(&ids[0]).await, true).await;
+    assert_eq!(status, StatusCode::OK, "{solo}");
+    assert_eq!(solo["state"], "paused");
+    assert_eq!(solo["archive_move"]["direction"], "resume");
+    assert_eq!(solo["archive_move"]["command"]["state"], "pending");
+    let (status, refused) = s.switch_video(&s.rule(&ids[0]).await, true).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert!(refused["message"].as_str().unwrap().contains("옮기는 중"));
+    // A work in both folders merges the archive's into the collect folder's.
+    let (status, _) = s.switch_video(&s.rule(&ids[1]).await, true).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // The two starts queue behind each other and both run.
+    assert_eq!(s.run().await, CommandsOutcome::Ran(2));
+
+    assert_eq!(s.rule(&ids[0]).await["state"], "active");
+    assert_eq!(s.rule(&ids[1]).await["state"], "active");
+    assert!(!s.archive.join("Solo").exists());
+    assert!(!s.archive.join("Clevatess").exists());
+    assert_eq!(
+        files(&s.collect),
+        [
+            "Clevatess/Season 01/Clevatess S01E01.mkv",
+            "Clevatess/Season 02/Clevatess S02E01.mkv",
+            "Solo/Season 01/Solo S01E01.mkv",
+        ]
+    );
+    assert_eq!(
+        s.h.tr.torrent(&hash(1)).download_dir,
+        text(s.collect.join("Solo/Season 01"))
+    );
+}
+
+#[tokio::test]
+async fn two_starts_for_one_work_folder_run_one_after_the_other_and_the_second_just_turns_its_rule_on(
+) {
+    let s = Scene::new(true).await;
+    let c = s
+        .channel(
+            "feed-a",
+            &[
+                ("Clevatess S3", "Clevatess/Season 03"),
+                ("Clevatess S4", "Clevatess/Season 04"),
+            ],
+        )
+        .await;
+    let season = s.archive.join("Clevatess/Season 02");
+    s.seeding(1, "Clevatess S02E01.mkv", &season);
+    for rule in &c.rules {
+        s.h.channels
+            .set_rule_state(&rule.id, RuleState::Paused, 0)
+            .await
+            .unwrap();
+    }
+    // Both rules are switched on while the work folder is in the archive folder
+    // (the second is not refused: only a rule's own move is).
+    let mut commands = Vec::new();
+    for rule in &c.rules {
+        let view = s.rule(&rule.id).await;
+        let (status, view) = s.switch_video(&view, true).await;
+        assert_eq!(status, StatusCode::OK, "{view}");
+        commands.push(
+            view["archive_move"]["command"]["id"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+        );
+    }
+
+    // Both are claimed together; the work folder's turn lets one move it while
+    // the other waits, and both rules stay off until their own command ends.
+    let gate = s.h.tr.hold("torrent-set-location");
+    let worker = s.worker();
+    let running = tokio::spawn({
+        let worker = worker.clone();
+        async move { worker.run_commands(&CancellationToken::new()).await }
+    });
+    gate.wait_arrived().await;
+    for rule in &c.rules {
+        assert_eq!(s.rule(&rule.id).await["state"], "paused");
+    }
+    gate.release_all();
+    assert_eq!(running.await.unwrap().unwrap(), CommandsOutcome::Ran(2));
+
+    for (rule, command) in c.rules.iter().zip(&commands) {
+        assert_eq!(s.rule(&rule.id).await["state"], "active");
+        assert_eq!(s.command(command).await["state"], "done");
+    }
+    // The work folder moved once, with its torrent asked once.
+    assert!(!s.archive.join("Clevatess").exists());
+    assert_eq!(
+        files(&s.collect),
+        ["Clevatess/Season 02/Clevatess S02E01.mkv"]
+    );
+    assert_eq!(s.h.tr.calls_of("torrent-set-location").len(), 1);
+    assert_eq!(
+        s.h.tr.torrent(&hash(1)).download_dir,
+        text(s.collect.join("Clevatess/Season 02"))
+    );
+}
+
+#[tokio::test]
+async fn a_start_stopped_midway_leaves_the_rule_off_until_the_next_run_finishes_it() {
+    let s = Scene::new(true).await;
+    let c = s.channel("feed-a", &[]).await;
+    s.seeding(
+        1,
+        "Clevatess S02E01.mkv",
+        &s.archive.join("Clevatess/Season 02"),
+    );
+    write(&s.archive.join("Clevatess/Season 02/notes.txt"), "x");
+    s.h.feeds
+        .set_xml("feed-a", &feed_xml(&[(2, "Clevatess S03E01.mkv")]));
+    let (_, rule) = s
+        .create_rule(&c.channel.id, "Clevatess", "Clevatess/Season 03")
+        .await;
+    let id = rule["id"].as_str().unwrap();
+    let command_id = rule["archive_move"]["command"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    // Transmission moves the torrent's data, and the worker is stopped before
+    // it hears back.
+    let gate = s.h.tr.hold_answer("torrent-set-location");
+    let worker = s.worker();
+    let task = tokio::spawn(async move { worker.run_commands(&CancellationToken::new()).await });
+    gate.wait_arrived().await;
+    task.abort();
+    let _ = task.await;
+    gate.release_all();
+    s.h.wait_lock_free().await;
+
+    let stored = CommandStore::new(s.h.db.clone())
+        .get(&command_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.state, CommandState::Running);
+    assert_eq!(s.rule(id).await["state"], "paused");
+    // The work is split for now: the torrent's file came over, the rest did not.
+    assert_eq!(
+        files(&s.collect),
+        ["Clevatess/Season 02/Clevatess S02E01.mkv"]
+    );
+    assert_eq!(files(&s.archive), ["Clevatess/Season 02/notes.txt"]);
+
+    // A restarted worker runs a cycle first: the rule is still off, so nothing
+    // is added into the half-moved folder.
+    let report = s.cycle(&s.worker()).await;
+    assert_eq!(report.added, 0);
+    assert!(s.added_dirs().is_empty());
+
+    // Then it picks the command up again, moves what is left and turns the
+    // rule on.
+    assert_eq!(s.run().await, CommandsOutcome::Ran(1));
+    let command = s.command(&command_id).await;
+    assert_eq!(command["state"], "done", "{command}");
+    assert_eq!(command["outcome"]["result"], "moved");
+    assert_eq!(s.rule(id).await["state"], "active");
+    assert!(!s.archive.join("Clevatess").exists());
+    assert_eq!(
+        files(&s.collect),
+        [
+            "Clevatess/Season 02/Clevatess S02E01.mkv",
+            "Clevatess/Season 02/notes.txt"
+        ]
+    );
+    assert_eq!(s.h.tr.calls_of("torrent-set-location").len(), 1);
+}
+
+#[tokio::test]
+async fn a_rule_for_a_work_that_is_not_archived_is_made_on_and_collects_at_once() {
+    let s = Scene::new(true).await;
+    let c = s.channel("feed-a", &[]).await;
+    write(
+        &s.collect.join("Clevatess/Season 02/Clevatess S02E01.mkv"),
+        "now",
+    );
+    // The archive folder has another work, and the rule's work is only in the
+    // collect folder.
+    write(&s.archive.join("Other/Season 01/Other S01E01.mkv"), "old");
+    s.h.feeds
+        .set_xml("feed-a", &feed_xml(&[(2, "Clevatess S03E01.mkv")]));
+
+    let (status, rule) = s
+        .create_rule(&c.channel.id, "Clevatess", "Clevatess/Season 03")
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{rule}");
+    assert_eq!(rule["state"], "active");
+    assert!(rule["archive_move"].is_null());
+
+    let report = s.cycle(&s.worker()).await;
+    assert_eq!(report.added, 1);
+    assert_eq!(
+        s.added_dirs(),
+        [text(s.collect.join("Clevatess/Season 03"))]
+    );
+    assert_eq!(files(&s.archive), ["Other/Season 01/Other S01E01.mkv"]);
+}
+
+// --- 10. the worker checks again right before receiving (ticket 0123, follow-up 2) ---
+
+impl Scene {
+    /// A rule saving to `directory`, made straight in the store and on, as a
+    /// title given to a subscription that waited for one leaves it (no web gate
+    /// moved its work folder first), with `resumed_at` 777.
+    async fn rule_made_in_the_store(&self, feed: &str, phrase: &str, directory: &str) -> String {
+        let c = self.channel(feed, &[(phrase, directory)]).await;
+        let id = c.rules[0].id.clone();
+        self.h
+            .channels
+            .set_rule_state(&id, RuleState::Paused, 700)
+            .await
+            .unwrap();
+        self.h
+            .channels
+            .set_rule_state(&id, RuleState::Active, 777)
+            .await
+            .unwrap();
+        id
+    }
+
+    /// `receive_once` of `item_id`, stored as the retry button does.
+    async fn retry(&self, command_id: &str, item_id: i64) {
+        let (status, _, body) = self
+            .api
+            .call(
+                "POST",
+                "/api/commands",
+                Some(json!({
+                    "id": command_id,
+                    "kind": "receive_once",
+                    "payload": { "item_id": item_id },
+                })),
+            )
+            .await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    }
+
+    async fn resumed_at(&self, rule_id: &str) -> Option<i64> {
+        self.h
+            .channels
+            .get_rule(rule_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .resumed_at
+    }
+}
+
+#[tokio::test]
+async fn a_cycle_leaves_an_item_of_a_rule_whose_work_folder_is_archived_and_brings_the_folder_in_first(
+) {
+    let s = Scene::new(true).await;
+    let id = s
+        .rule_made_in_the_store("feed-a", "Clevatess", "Clevatess/Season 03")
+        .await;
+    s.seeding(
+        1,
+        "Clevatess S02E01.mkv",
+        &s.archive.join("Clevatess/Season 02"),
+    );
+    s.h.feeds
+        .set_xml("feed-a", &feed_xml(&[(2, "Clevatess S03E01.mkv")]));
+
+    // The rule is on, the work folder is in the archive folder: the item is
+    // not received, no folder is made in the collect folder, and nothing is
+    // recorded for it.
+    let worker = s.worker();
+    let report = s.cycle(&worker).await;
+    assert_eq!(report.added, 0);
+    assert_eq!(report.waiting_for_move, 1);
+    assert_eq!(report.moves_asked, 1);
+    assert!(s.added_dirs().is_empty());
+    assert!(!s.collect.join("Clevatess").exists());
+    assert!(s.h.history_items().await.is_empty());
+
+    // The rule is off with its work folder's move open, which the screen tells
+    // as a move, and it keeps the time it was turned on.
+    let view = s.rule(&id).await;
+    assert_eq!(view["state"], "paused", "{view}");
+    assert_eq!(view["archive_move"]["direction"], "start", "{view}");
+    assert_eq!(view["archive_move"]["command"]["state"], "pending");
+    let command_id = view["archive_move"]["command"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(s.resumed_at(&id).await, Some(777));
+
+    // Another check beside the open move stores nothing more.
+    let report = s.cycle(&worker).await;
+    assert_eq!(report.moves_asked, 0);
+    assert!(s.added_dirs().is_empty());
+
+    // The command brings the folder in and turns the rule on, still with its
+    // old `resumed_at`.
+    assert_eq!(s.run().await, CommandsOutcome::Ran(1));
+    let command = s.command(&command_id).await;
+    assert_eq!(command["state"], "done", "{command}");
+    assert_eq!(command["outcome"]["result"], "moved");
+    assert!(!s.archive.join("Clevatess").exists());
+    assert_eq!(
+        files(&s.collect),
+        ["Clevatess/Season 02/Clevatess S02E01.mkv"]
+    );
+    assert_eq!(s.rule(&id).await["state"], "active");
+    assert_eq!(s.resumed_at(&id).await, Some(777));
+
+    // The next check receives the item into the work folder that came over.
+    let report = s.cycle(&worker).await;
+    assert_eq!(report.added, 1);
+    assert_eq!(report.waiting_for_move, 0);
+    assert_eq!(
+        s.added_dirs(),
+        [text(s.collect.join("Clevatess/Season 03"))]
+    );
+}
+
+#[tokio::test]
+async fn a_cycle_also_heals_a_work_split_across_both_folders_by_merging_the_archive_into_the_collect_one(
+) {
+    let s = Scene::new(true).await;
+    let id = s
+        .rule_made_in_the_store("feed-a", "Clevatess", "Clevatess/Season 03")
+        .await;
+    write(
+        &s.collect.join("Clevatess/Season 01/Clevatess S01E01.mkv"),
+        "a",
+    );
+    write(
+        &s.archive.join("Clevatess/Season 02/Clevatess S02E01.mkv"),
+        "b",
+    );
+    s.h.feeds
+        .set_xml("feed-a", &feed_xml(&[(2, "Clevatess S03E01.mkv")]));
+
+    let worker = s.worker();
+    let report = s.cycle(&worker).await;
+    assert_eq!(report.added, 0);
+    assert_eq!(report.moves_asked, 1);
+    assert_eq!(s.rule(&id).await["state"], "paused");
+
+    assert_eq!(s.run().await, CommandsOutcome::Ran(1));
+    assert!(!s.archive.join("Clevatess").exists());
+    assert_eq!(
+        files(&s.collect),
+        [
+            "Clevatess/Season 01/Clevatess S01E01.mkv",
+            "Clevatess/Season 02/Clevatess S02E01.mkv"
+        ]
+    );
+    assert_eq!(s.rule(&id).await["state"], "active");
+    assert_eq!(s.cycle(&worker).await.added, 1);
+}
+
+#[tokio::test]
+async fn a_cycle_with_a_move_already_open_for_the_rule_leaves_the_item_and_stores_nothing_more() {
+    let s = Scene::new(true).await;
+    let id = s
+        .rule_made_in_the_store("feed-a", "Clevatess", "Clevatess/Season 03")
+        .await;
+    s.seeding(
+        1,
+        "Clevatess S02E01.mkv",
+        &s.archive.join("Clevatess/Season 02"),
+    );
+    s.h.feeds
+        .set_xml("feed-a", &feed_xml(&[(2, "Clevatess S03E01.mkv")]));
+    let commands = CommandStore::new(s.h.db.clone());
+    let accepted = rule_archive::ask_start(&commands, &id, Direction::Start, s.h.now())
+        .await
+        .unwrap();
+    let Accepted::Created(open) = accepted else {
+        panic!("expected a stored command: {accepted:?}");
+    };
+
+    let worker = s.worker();
+    let report = s.cycle(&worker).await;
+    assert_eq!(report.added, 0);
+    assert_eq!(report.waiting_for_move, 1);
+    assert_eq!(report.moves_asked, 0);
+    assert!(s.added_dirs().is_empty());
+    assert!(!s.collect.join("Clevatess").exists());
+    // The open command is the only one, and the rule was left as it was.
+    let view = s.rule(&id).await;
+    assert_eq!(view["archive_move"]["command"]["id"], open.id);
+    assert_eq!(view["state"], "active", "{view}");
+
+    // It runs, and the next check receives the item.
+    assert_eq!(s.run().await, CommandsOutcome::Ran(1));
+    assert_eq!(s.command(&open.id).await["state"], "done");
+    assert_eq!(s.cycle(&worker).await.added, 1);
+}
+
+#[tokio::test]
+async fn a_retry_into_an_archived_work_folder_ends_saying_so_pauses_the_rule_and_the_move_runs() {
+    let s = Scene::new(true).await;
+    let id = s
+        .rule_made_in_the_store("feed-a", "Clevatess", "Clevatess/Season 02")
+        .await;
+    // Transmission refused the rule's next episode: `다시 받기` is offered.
+    s.h.feeds
+        .set_xml("feed-a", &feed_xml(&[(2, "Clevatess S02E02.mkv")]));
+    s.h.tr.reject_adds(Some("not today"));
+    s.cycle(&s.worker()).await;
+    s.h.tr.reject_adds(None);
+    s.h.tr.clear_calls();
+    let item = s.h.item("Clevatess S02E02").await;
+    // The work folder went to the archive folder meanwhile.
+    s.seeding(
+        1,
+        "Clevatess S02E01.mkv",
+        &s.archive.join("Clevatess/Season 02"),
+    );
+
+    // The retry ends first, and the move it asked for starts in the same look:
+    // held at Transmission, the rule is still off.
+    let gate = s.h.tr.hold("torrent-set-location");
+    s.retry("retry-guard-0001", item.id).await;
+    let look = tokio::spawn({
+        let worker = s.worker();
+        async move { worker.run_commands(&CancellationToken::new()).await }
+    });
+    gate.wait_arrived().await;
+    let retry = s.command("retry-guard-0001").await;
+    assert_eq!(retry["state"], "failed", "{retry}");
+    let reason = retry["outcome"]["reason"].as_str().unwrap();
+    assert!(reason.contains("먼저 수집 폴더로 옮기고"), "{reason}");
+    assert!(s.h.tr.calls_of("torrent-add").is_empty());
+    assert!(!s.collect.join("Clevatess").exists());
+    // The item is as it was, and the rule is off with its move open.
+    assert_eq!(s.h.item("Clevatess S02E02").await.result, item.result);
+    let view = s.rule(&id).await;
+    assert_eq!(view["state"], "paused", "{view}");
+    assert_eq!(view["archive_move"]["direction"], "start", "{view}");
+    assert_eq!(s.resumed_at(&id).await, Some(777));
+
+    // The move ends; the retry then goes into the folder that came over.
+    gate.release_all();
+    assert_eq!(look.await.unwrap().unwrap(), CommandsOutcome::Ran(2));
+    assert_eq!(s.rule(&id).await["state"], "active");
+    assert_eq!(s.resumed_at(&id).await, Some(777));
+    assert!(!s.archive.join("Clevatess").exists());
+    s.h.tr.on_disk(s.h.dir.path());
+    s.h.tr.content_on_add(&hash(2), b"video");
+    s.h.tr.seeding_on_add(&hash(2));
+    s.retry("retry-guard-0002", item.id).await;
+    assert_eq!(s.run().await, CommandsOutcome::Ran(1));
+    let retry = s.command("retry-guard-0002").await;
+    assert_eq!(retry["outcome"]["result"], "received", "{retry}");
+    assert_eq!(
+        s.h.tr.torrent(&hash(2)).download_dir,
+        text(s.collect.join("Clevatess/Season 02"))
+    );
 }

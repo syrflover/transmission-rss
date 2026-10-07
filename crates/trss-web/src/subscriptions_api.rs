@@ -970,12 +970,19 @@ async fn subscribe(
     let creator =
         chosen_creator(&state, subtitles, b.creator.as_deref(), b.anissia_anime_no).await?;
 
-    let input = RuleInput {
+    let mut input = RuleInput {
         r#match: phrase,
         directory,
         ..RuleInput::default()
     };
     rules_api::check_directory(&state, None, &input.directory).await?;
+    // A subscription to a work the archive folder holds is made paused, and
+    // turned on by the worker once the work folder is moved into the collect
+    // folder (see `rules_api`).
+    let waits = rules_api::waits_for_work_folder(&state, &input.directory).await?;
+    if waits {
+        input.state = RuleState::Paused;
+    }
     let created = state
         .channels
         .create_subscription_rule(
@@ -993,10 +1000,14 @@ async fn subscribe(
             ChannelError::Invalid(_) => ApiError::invalid("입력한 값으로는 구독할 수 없어요."),
             e => e.into(),
         })?;
-    if created
-        .subscription
-        .as_ref()
-        .is_some_and(|s| s.creator.is_some())
+    if waits {
+        rules_api::start_new_rule(&state, &created.id).await;
+    }
+    if !waits
+        && created
+            .subscription
+            .as_ref()
+            .is_some_and(|s| s.creator.is_some())
     {
         jobs_api::follow_now(&state).await;
     }

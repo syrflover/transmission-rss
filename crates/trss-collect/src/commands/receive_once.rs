@@ -77,7 +77,10 @@ use tokio_util::sync::CancellationToken;
 use transmission_rpc::types::{Id, TorrentAction};
 use trname::trname;
 
-use super::link;
+use super::{
+    link,
+    rule_archive::{move_before_receiving, Receiving, MOVING_FIRST},
+};
 use crate::{
     context::TransmissionLink,
     offsets,
@@ -787,6 +790,24 @@ pub async fn execute_with(
         Err(reason) => return Ok(ended_early(failed(reason.message(), None))),
     };
     let channel = plan.channel.clone();
+    // A work is never split across the collect folder and the archive folder:
+    // while the archive folder holds the rule's work folder nothing is added
+    // into the rule's folder. The rule is paused and a `start` command brings
+    // the folder in (the same rule as the cycle's, `move_before_receiving`);
+    // the command ends here, the item as it was, and says so.
+    match move_before_receiving(
+        &ctx.channels,
+        &ctx.settings,
+        &ctx.commands,
+        plan.rule,
+        now(),
+    )
+    .await
+    .map_err(Retry::store)?
+    {
+        Receiving::Go => {}
+        Receiving::MoveFirst { .. } => return Ok(ended_early(failed(MOVING_FIRST, None))),
+    }
     // The folder is read now, like the rule: it decides where the torrent goes.
     let Some(collect_folder) = ctx.settings.collection().await.map_err(Retry::store)? else {
         return Ok(ended_early(failed(NO_COLLECT_FOLDER, None)));

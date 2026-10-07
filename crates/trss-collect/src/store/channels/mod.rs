@@ -346,6 +346,14 @@ impl ChannelStore {
             .await
     }
 
+    /// Turns a rule on without noting it as resumed: the end of a `start` of a
+    /// new rule or subscription (see `commands::rule_archive`). `None` when the
+    /// rule is gone.
+    pub async fn begin_rule(&self, id: &str) -> Result<Option<Rule>, ChannelError> {
+        let id = id.to_owned();
+        self.db.run(move |c| repo::begin_rule(c, &id)).await
+    }
+
     /// `영상 받기`: turns a rule's collecting on or off (`active`/`paused`) if
     /// it is still at `expected_version`; on, it is noted as resumed at `at`
     /// ([`Rule::resumed_at`]). An archived rule is refused: it is restored

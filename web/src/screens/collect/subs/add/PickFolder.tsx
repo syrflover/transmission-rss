@@ -4,6 +4,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 import { hintClass, inputClass, labelClass } from "../../channels/styles";
+import { ArchivedWorkNotice } from "../../rules/ArchivedWorkNotice";
+import { useArchivedWork } from "../../rules/useArchivedWork";
 import { folderProblem } from "./draft";
 
 /**
@@ -23,6 +25,7 @@ export function PickFolder({
 }) {
   const uid = useId();
   const problem = folderProblem(directory);
+  const archivedWork = useArchivedWork(directory, problem === null);
 
   return (
     <section aria-labelledby={`${uid}-h`} className="flex min-w-0 flex-col gap-3">
@@ -54,6 +57,7 @@ export function PickFolder({
               ? "수집 폴더 아래의 상대 경로로 적어요."
               : "고른 릴리스 제목으로 만든 제안이에요. 수집 폴더 아래의 상대 경로이고, 고쳐도 돼요.")}
         </p>
+        {archivedWork && <ArchivedWorkNotice archived={archivedWork} />}
       </div>
     </section>
   );

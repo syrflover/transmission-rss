@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 
 import { ApiError } from "@/lib/api";
 import { forget } from "@/lib/cached";
+import { isOpen } from "@/lib/commands";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -32,6 +33,7 @@ import {
   type Rule,
 } from "./api";
 import { ArchiveMoveNotice } from "./ArchiveMoveNotice";
+import { ArchivedWorkNotice } from "./ArchivedWorkNotice";
 import { EpisodeGrounds } from "./EpisodeGrounds";
 import { BLANK_DRAFT, draftOf, fieldsOf, parseEpisode, sameDraft, type Draft } from "./draft";
 import { LinkToSchedule } from "./LinkToSchedule";
@@ -42,6 +44,7 @@ import { RulePreview, type PastReceive } from "./RulePreview";
 import { SwitchRows } from "./SwitchRows";
 import { WaitingBanner } from "./WaitingBanner";
 import { useArchiveMove } from "./useArchiveMove";
+import { useArchivedWork } from "./useArchivedWork";
 import { usePreview } from "./usePreview";
 
 interface RuleDetailProps {
@@ -162,6 +165,12 @@ export function RuleDetail({
   // `받기` on a past item row receives it with the stored rule. Once an item is
   // added the preview is asked again, so its row reads as received.
   const received = useReceive(known?.id ?? null);
+  // The stored rule is waiting for its work folder to come into the collect folder.
+  const bringingInStored =
+    known?.state === "paused" &&
+    known.archive_move !== null &&
+    (known.archive_move.direction === "start" || known.archive_move.direction === "resume") &&
+    isOpen(known.archive_move.command);
   const addedCount = received.entries.filter((e) => e.phase.kind === "added").length;
   // Results of a past episode search that were added also change the recorded items.
   const [searchAdded, setSearchAdded] = useState(0);
@@ -175,7 +184,9 @@ export function RuleDetail({
           known.state === "archived"
             ? "보관된 규칙이에요. 복원한 뒤에 받을 수 있어요."
             : known.state === "paused"
-              ? "영상 받기를 켠 뒤에 받을 수 있어요."
+              ? bringingInStored
+                ? "작품 폴더를 옮기는 중이에요. 옮긴 뒤에 받을 수 있어요."
+                : "영상 받기를 켠 뒤에 받을 수 있어요."
               : dirty
                 ? "저장하지 않은 변경이 있어요. 저장한 뒤에 받을 수 있어요."
                 : null,
@@ -268,6 +279,15 @@ export function RuleDetail({
       ? move.phase.direction
       : null;
   const moving = movingDirection !== null;
+  // A rule made now, or a collecting rule saved into another work folder, whose
+  // work folder is in the archive folder moves it first and waits meanwhile.
+  const archivedWork = useArchivedWork(
+    draft.directory,
+    isNew ? draft.state === "active" : known?.state === "active" && draft.directory.trim() !== known.directory.trim(),
+    isNew ? null : (known?.directory ?? null),
+  );
+  // The work folder is coming into the collect folder before the rule collects.
+  const bringingIn = bringingInStored || movingDirection === "start" || movingDirection === "resume";
 
   /** A switch, the creator or `편성표와 연결` changed the rule: take it, the list and the other screens. */
   const taken = (fresh: Rule) => {
@@ -395,7 +415,7 @@ export function RuleDetail({
         />
       )}
 
-      {known?.state === "paused" && (
+      {known?.state === "paused" && !bringingIn && (
         <p
           role="status"
           data-testid="paused-banner"
@@ -541,6 +561,7 @@ export function RuleDetail({
                 </>
               )}
             </p>
+            {archivedWork && <ArchivedWorkNotice archived={archivedWork} />}
           </div>
           <div className="flex min-w-0 flex-col gap-1.5">
             <Label htmlFor={`${uid}-ep`} className={labelClass}>
@@ -695,7 +716,9 @@ export function RuleDetail({
                     ? "복원하는 중"
                     : movingDirection === "archive"
                       ? "보관하는 중"
-                      : known.state === "archived"
+                      : bringingIn
+                        ? "폴더 옮기는 중"
+                        : known.state === "archived"
                         ? "복원"
                         : "보관"}
                 </Button>

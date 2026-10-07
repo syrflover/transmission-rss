@@ -97,14 +97,18 @@
 //! `receive_once` of a result no feed showed: it records the result as a past
 //! item and receives it the same way ([`receive_past`]).
 //!
-//! A `rule_archive` command (보관·복원) moves a work folder on disk. It holds
-//! the folder's turn, so no cycle adds a torrent into the folder while it
+//! A `rule_archive` command (보관·복원, and the `start` or `resume` of a rule
+//! whose work folder is in the archive folder) moves a work folder on disk. It
+//! holds the folder's turn, so no cycle adds a torrent into the folder while it
 //! moves, and a start cut short leaves it `running`: the next start looks at
 //! the disk and Transmission again and moves what is left (see
 //! [`rule_archive`]). Its blocking renames keep the worker's lock
 //! ([`trss_core::WorkerHold::keep`]), the command's turn at the folders and
 //! the torrent gate themselves, so a shutdown that aborts the command's task
-//! lets go of them only once the renames have returned.
+//! lets go of them only once the renames have returned. Once such a command
+//! ended, the subscribed creators' episodes are looked at ([`Worker::follow_once`]),
+//! as the web does after `영상 받기` for a rule that needs no move: a rule the
+//! command turned on receives what its creator posted while it was off.
 //!
 //! A `watch_rescan` command (`다시 확인` of a watch folder) reads the folder
 //! again, like the cycles do, and only reads ([`watch_rescan`]); it runs
@@ -546,6 +550,17 @@ impl Worker {
         drop(started);
         drop(turn);
         hold.release().await;
+        // A `start` or `resume` turned a rule on: a subscription that takes part
+        // again receives its creator's episodes it missed meanwhile, as the web's
+        // `영상 받기` does for a rule that needs no move
+        // (`trss_jobs::follow`). A command that failed left its rule off, which
+        // the look skips.
+        if kind == Kind::RuleArchive
+            && matches!(carried, Carried::Ended)
+            && self.follow_logged().await
+        {
+            self.job_wake.notify_one();
+        }
         carried
     }
 
