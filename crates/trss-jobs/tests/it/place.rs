@@ -1572,7 +1572,7 @@ async fn another_seasons_file_and_an_executable_are_told_apart() {
     assert_eq!(other.placed, None);
     assert_eq!(other.outcome, Some(Outcome::Stored));
     assert!(
-        other.note.as_deref().unwrap().contains("시즌 3"),
+        other.note.as_deref().unwrap().contains("시즌(3)"),
         "{other:?}"
     );
     let exe = plan.iter().find(|r| r.name == "setup.exe").unwrap();

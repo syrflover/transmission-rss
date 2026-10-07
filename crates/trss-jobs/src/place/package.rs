@@ -399,9 +399,15 @@ pub fn plan(candidates: &[Candidate<'_>], files: &[File<'_>], ctx: &Context<'_>)
                 (false, false) => Numbering::Unknown,
             });
         }
-        mark = mark.or(season_mark(base(i)));
+        mark = mark.or(season_mark(base(i)).map(|m| (m, candidate.episode)));
     }
-    let expected_mark = mark.unwrap_or(ctx.season);
+    // Another episode's file is held against the season the candidate's file
+    // is named with, else the job's season; the reason says which.
+    let expected_mark = mark.map_or(ctx.season, |(m, _)| m);
+    let held_against = match mark {
+        Some((m, episode)) => format!("후보의 {} 파일에 적힌 시즌({m})", label(episode)),
+        None => format!("이 작업의 시즌({})", ctx.season),
+    };
     let range = || match ctx.total {
         Some(n) => format!("1–{n}화"),
         None => "1화부터".to_owned(),
@@ -416,8 +422,7 @@ pub fn plan(candidates: &[Candidate<'_>], files: &[File<'_>], ctx: &Context<'_>)
         };
         if let Some(m) = season_mark(base(i)).filter(|&m| m != expected_mark) {
             return Err(format!(
-                "파일 이름의 시즌 {m}이 이 작업의 시즌 {}과 달라 보여요",
-                ctx.season
+                "파일 이름이 가리키는 시즌({m})이 {held_against}과 달라 보여요"
             ));
         }
         let Some(number) = whole(&key) else {

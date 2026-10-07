@@ -204,10 +204,10 @@ fn another_seasons_file_is_on_no_episode() {
     assert_eq!(rows[0].action, PlanAction::Apply);
     assert_eq!(rows[1].placed, None);
     assert_eq!(rows[1].action, PlanAction::Store);
-    assert!(
-        rows[1].note.as_deref().unwrap().contains("시즌 3"),
-        "{:?}",
-        rows[1]
+    // The candidate's file has no mark: the reason names the job's season.
+    assert_eq!(
+        rows[1].note.as_deref(),
+        Some("회차에 붙이지 않고 보관만 해요: 파일 이름이 가리키는 시즌(3)이 이 작업의 시즌(2)과 달라 보여요")
     );
     // Of the candidate's files under two marks, the job season's is its.
     let mut case = Case::new(
@@ -250,6 +250,24 @@ fn another_seasons_file_is_on_no_episode() {
     let rows = case.plan().rows;
     assert_eq!(rows[0].action, PlanAction::Apply);
     assert_eq!(episode(&rows[1]), Some(2));
+}
+
+#[test]
+fn another_season_is_told_against_the_mark_of_the_candidates_file() {
+    // The candidate's file is marked with another season than the job's
+    // (season 1); the other files are held against that mark.
+    let case = Case::new(
+        "1",
+        vec!["Show S02E01.smi", "Show S02E02.smi", "Show S01E03.smi"],
+    );
+    let rows = case.plan().rows;
+    assert_eq!(rows[0].action, PlanAction::Apply);
+    assert_eq!(episode(&rows[1]), Some(2));
+    assert_eq!(rows[2].placed, None);
+    assert_eq!(
+        rows[2].note.as_deref(),
+        Some("회차에 붙이지 않고 보관만 해요: 파일 이름이 가리키는 시즌(1)이 후보의 1화 파일에 적힌 시즌(2)과 달라 보여요")
+    );
 }
 
 #[test]
