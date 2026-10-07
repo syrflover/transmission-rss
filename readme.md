@@ -266,3 +266,15 @@ dev/compose.sh down           # stop; dev/local stays for the next up
 - The web listens on `127.0.0.1:8080` only. The feeds, AniList and Anissia are the real ones, so a cycle reads the server's channels and new work folders fetch real covers.
 - The containers run as 1000:1000 here too, so `dev/local/data` must belong to that user (`prepare` makes it as you, which is 1000 on most Linux machines; another user sets `TRSS_UID` and `TRSS_GID` in `dev/dev.env`). A `dev/local/data` that an earlier run as root left files in is refused at the start; `chown -R` it as [Running as 1000:1000](#running-as-10001000) says.
 - Changes stay in `dev/local`: archiving a rule moves the empty files there, and the server's data is never written.
+
+### Releasing
+
+A release is a tag: pushing one makes the [Deploy workflow](.github/workflows/deploy.yml) build and publish the app image and the browser image under that tag and `latest`. Before tagging, run the workspace tests on the release's target too:
+
+```sh
+dev/musl-test.sh
+```
+
+- The release binaries are built for `x86_64-unknown-linux-musl` in `clux/muslrust:stable` (`Dockerfile`), while the usual `cargo test` runs on the development machine's glibc. musl's standard library differs in what it can read (it gives no file birth time, for one), and the bundled C code (SQLite, liblzma) builds differently, so a test can pass on one and fail on the other. The script runs `cargo test --locked --workspace -j 4` in that image; arguments after it go to `cargo test`.
+- It runs the tests as you, not root (some tests expect a write to be refused), builds into `target/musl`, and uses this machine's cargo registry and git checkouts. Tests marked `#[ignore]` are skipped, as in the usual run.
+- Then update the server as [Run, stop, update](#run-stop-update) says.
