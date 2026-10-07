@@ -116,7 +116,7 @@ To switch an install that ran as root (release 0.5.x and before), on the host, w
 ```sh
 docker build --target probe-binary --output type=local,dest=probe-out .   # writes probe-out/trss-probe and probe-out/trss-extract
 # copy probe-out/trss-probe, probe-out/trss-extract and deploy/probe.sh to the compose folder, then there:
-./probe.sh -- --work "/downloads/downloads/<a folder Transmission made>" 2>&1 | tee probe.txt
+./probe.sh -- --work "/downloads/<collect folder>/<a work folder in it>" 2>&1 | tee probe.txt
 ./probe.sh --samples ~/samples -- --size-mib 0 --unpack /samples/big.rar 2>&1 | tee unpack.txt
 ```
 

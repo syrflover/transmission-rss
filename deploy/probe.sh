@@ -37,8 +37,8 @@
 #
 # Everything after `--` goes to the probe, for example
 #
-#   ./probe.sh -- --work /downloads/downloads/<a folder Transmission made>
-#   ./probe.sh -- --media /downloads/downloads --size-mib 400
+#   ./probe.sh -- --work "/downloads/<collect folder>/<a work folder in it>"
+#   ./probe.sh -- --media "/downloads/<collect folder>" --size-mib 400
 #   ./probe.sh --samples ~/samples -- --size-mib 0 --unpack /samples/big.rar \
 #     --unpack /samples/split.part1.rar,/samples/split.part2.rar
 #

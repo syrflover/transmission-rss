@@ -58,19 +58,33 @@
    ```sh
    scp probe-out/trss-probe deploy/probe.sh j4105:~/trss/
    ```
-3. `[서버]` 확인에 쓸 작품 폴더를 정해요. Transmission이 만든 폴더 하나면 되고, 안의 파일은 건드리지 않아요. 호스트 경로가 `$MEDIA_DIR/downloads/<작품 폴더>`이면 컨테이너 안의 경로는 `/downloads/downloads/<작품 폴더>`예요.
-4. `[서버]` 탐침을 돌리고 출력을 파일에도 남겨요. 도중에 컨테이너가 죽으면 출력이 중간에서 끊겨요.
+3. `[서버]` 확인에 쓸 작품 폴더를 변수에 담아요.
+   작품 폴더는 감시 폴더인 수집 폴더와 보관 폴더 바로 아래의 폴더이고, worker가 `.trss/`를 만들고 적용본을 쓰는 곳이에요. 그래서 수집 폴더에서 하나, 보관 폴더에서 하나를 골라요. 안의 파일은 건드리지 않아요.
+   `$MEDIA_DIR/downloads/`는 Transmission의 기본 저장 폴더이고 감시 폴더가 아니라서 쓰지 않아요.
+   `COLLECT`와 `ARCHIVE`는 앱의 수집 설정에 있는 두 폴더에서 `/downloads/`를 뺀 이름이에요. 아래 값은 개발 환경에 가져온 서버 DB의 설정이에요(2026-10-07 확인).
+   명령은 `.env`에서 `MEDIA_DIR`를 읽고, 두 폴더에서 숨김이 아닌 첫 폴더를 하나씩 골라요. 파일 하나뿐인 torrent는 폴더 없이 수집 폴더에 바로 놓이므로 고르지 않아요. 마지막 줄은 두 감시 폴더와 고른 작품 폴더의 소유와 권한을 보여 줘요.
+   다른 폴더를 쓰려면 `WORK1`이나 `WORK2`에 그 이름을 다시 넣어요. 변수는 그 터미널에만 있으니 4·5단계도 같은 터미널에서 실행해요.
    ```sh
    cd ~/trss
-   chmod +x probe.sh trss-probe
-   ./probe.sh -- --work "/downloads/downloads/<작품 폴더>" 2>&1 | tee probe-$(date +%F).txt
+   MEDIA=$(grep '^MEDIA_DIR=' .env | tail -n 1 | cut -d= -f2- | tr -d '"')
+   COLLECT='Shows (current)'
+   ARCHIVE='Shows'
+   WORK1=$(ls -p "$MEDIA/$COLLECT" | grep '/$' | head -n 1 | tr -d /)
+   WORK2=$(ls -p "$MEDIA/$ARCHIVE" | grep '/$' | head -n 1 | tr -d /)
+   ls -ld "$MEDIA/$COLLECT" "$MEDIA/$COLLECT/$WORK1" "$MEDIA/$ARCHIVE" "$MEDIA/$ARCHIVE/$WORK2"
    ```
-   작품 폴더가 여럿이면 `--work`를 더 붙여요.
-5. `[서버]` 출력에 `make the test folder`의 `Permission denied`가 있으면 미디어 디스크의 루트에 1000:1000이 쓰지 못하는 거예요. 그 결과도 기록할 값이니 그대로 두고, 같은 명령에 `--media /downloads/downloads`를 더해 다시 돌려요.
+   컨테이너 안에서는 `$MEDIA_DIR`가 `/downloads`라서, 같은 폴더가 `/downloads/$COLLECT/$WORK1`로 보여요.
+4. `[서버]` 탐침을 돌리고 출력을 파일에도 남겨요. 도중에 컨테이너가 죽으면 출력이 중간에서 끊겨요.
    ```sh
-   ./probe.sh -- --media /downloads/downloads --work "/downloads/downloads/<작품 폴더>" 2>&1 | tee probe-$(date +%F)-b.txt
+   chmod +x probe.sh trss-probe
+   ./probe.sh -- --work "/downloads/$COLLECT/$WORK1" --work "/downloads/$ARCHIVE/$WORK2" 2>&1 | tee probe-$(date +%F).txt
    ```
-6. `probe-<날짜>.txt`의 내용을 저에게 붙여 주세요. 제가 날짜·커널·파일시스템과 항목별 결과를 이 티켓에 적고, 결과가 다르면 임시 파일의 위치와 명세를 다시 정해요.
+   더 확인할 작품 폴더가 있으면 `--work`를 더 붙여요.
+5. `[서버]` 출력에 `make the test folder`의 `Permission denied`가 있으면 미디어 디스크의 루트에 1000:1000이 쓰지 못하는 거예요. 그 결과도 기록할 값이니 그대로 두고, 시험 폴더를 수집 폴더 안에 만들도록 `--media`를 더해 다시 돌려요. worker가 작품 폴더를 옮기는 곳이 수집 폴더와 보관 폴더라서, 루트보다 이쪽이 운영과 같은 조건이에요.
+   ```sh
+   ./probe.sh -- --media "/downloads/$COLLECT" --work "/downloads/$COLLECT/$WORK1" --work "/downloads/$ARCHIVE/$WORK2" 2>&1 | tee probe-$(date +%F)-b.txt
+   ```
+6. 3단계 `ls -ld`의 출력과 `probe-<날짜>.txt`의 내용을 저에게 붙여 주세요. 제가 날짜·커널·파일시스템과 항목별 결과를 이 티켓에 적고, 결과가 다르면 임시 파일의 위치와 명세를 다시 정해요.
 
 알아 둘 것이에요.
 
