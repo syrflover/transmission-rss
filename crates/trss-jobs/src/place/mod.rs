@@ -2057,10 +2057,6 @@ impl Placer {
         if apply.is_empty() || apply.iter().any(|r| r.outcome.is_none()) {
             return Ok(());
         }
-        let applied = apply
-            .iter()
-            .filter(|r| r.outcome == Some(Outcome::Applied))
-            .count();
         let failed = apply
             .iter()
             .filter(|r| r.outcome == Some(Outcome::Failed))
@@ -2075,12 +2071,14 @@ impl Placer {
                 Some(format!("{failed}개를 적용하지 못했어요")),
             ),
             None if awaiting => (StepState::Waiting, Some(AWAITING_VIDEO.to_owned())),
-            // Done: what was not applied says why.
+            // Done: what was not applied says why (an applied row's own note
+            // tells what was done for its episode, not for the others).
             None => (
                 StepState::Done,
-                (applied < apply.len())
-                    .then(|| apply.iter().find_map(|r| r.note.clone()))
-                    .flatten(),
+                apply
+                    .iter()
+                    .filter(|r| r.outcome != Some(Outcome::Applied))
+                    .find_map(|r| r.note.clone()),
             ),
         };
         self.store

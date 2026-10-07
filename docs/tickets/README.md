@@ -214,7 +214,7 @@ fsync를 하지 않는 파일 이름 바꾸기는 미디어 디스크에 비용�
 | [0118](0118-applied-copy-creator.md) | 작품 상세가 trss가 적용한 자막의 제작자를 보관본에서 읽어요 | 완료 | 없음 |
 | [0119](0119-refresh-after-stored-apply.md) | 보관본을 적용하면 작품 상세가 적용이 끝난 뒤 바로 바뀌어요 | 완료 | 없음 |
 | [0120](0120-stored-copy-on-subtitled-row.md) | 자막이 있는 회차의 줄에도 보관본과 `교체 비교`가 보여요 | 완료 | 없음 |
-| [0121](0121-identical-copy-becomes-applied.md) | 현재 자막과 바이트가 같은 보관본을 고르면 그 파일이 적용본이 돼요 | 대기 | 없음 |
+| [0121](0121-identical-copy-becomes-applied.md) | 현재 자막과 바이트가 같은 보관본을 고르면 그 파일이 적용본이 돼요 | 완료 | 없음 |
 | [0122](0122-imported-copy-choosable.md) | 교체하며 들인 보관본을 다시 고를 수 있어요 | 대기 | 없음 |
 | [0123](0123-collect-moves-archived-work-folder.md) | 보관 폴더에 있는 작품의 규칙이 수집을 시작하면 작품 폴더를 수집 폴더로 옮겨요 | 대기 | 없음 |
 

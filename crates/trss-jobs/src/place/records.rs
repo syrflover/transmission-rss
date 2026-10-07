@@ -1137,6 +1137,95 @@ pub fn applied(
     })
 }
 
+/// A file beside a video whose bytes are a stored subtitle's, to be recorded
+/// as that subtitle's applied copy ([`adopt`]).
+#[derive(Debug, Clone)]
+pub struct Adopted {
+    pub work_id: String,
+    pub stored_id: String,
+    pub season: u32,
+    pub episode: i64,
+    /// The video it is beside, relative to the work folder.
+    pub video: String,
+    /// The file, relative to the work folder, as it was read.
+    pub path: String,
+    pub size: u64,
+    pub sha256: String,
+    pub object: String,
+    /// The plan row it settles.
+    pub job_id: String,
+    pub position: i64,
+    /// A person chose the stored subtitle: the file is its copy even when
+    /// the app recorded it as another stored subtitle's.
+    pub take_over: bool,
+}
+
+/// Records the file beside the video as the stored subtitle's applied copy,
+/// the file left as it is, and the row as `applied` with `note`; the new
+/// record's ID. `None`, nothing recorded, when the file is a live applied copy
+/// of the stored subtitle already, or of another stored subtitle's while
+/// `take_over` is not set. A record at the path whose bytes are not the file's
+/// is of a file that is gone: it ends as [`applied`] ends it. One synced
+/// transaction.
+pub fn adopt(
+    c: &mut Connection,
+    what: &Adopted,
+    note: &str,
+    now: Millis,
+) -> Result<Option<String>, JobError> {
+    durable(c, |c| {
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let live: Option<(String, String)> = tx
+            .query_row(
+                "SELECT stored_id, sha256 FROM subtitle_applied
+                  WHERE work_id = ?1 AND path = ?2 AND removed_at IS NULL",
+                params![what.work_id, what.path],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        if let Some((stored, sha256)) = &live {
+            let same_file = *sha256 == what.sha256;
+            if same_file && (*stored == what.stored_id || !what.take_over) {
+                return Ok(None);
+            }
+            tx.execute(
+                "UPDATE subtitle_applied SET removed_at = ?3
+                  WHERE work_id = ?1 AND path = ?2 AND removed_at IS NULL",
+                params![what.work_id, what.path, now],
+            )?;
+        }
+        let id = uuid::Uuid::new_v4().to_string();
+        tx.execute(
+            "INSERT INTO subtitle_applied
+                 (id, work_id, stored_id, season, episode, video_path, path, byte_size, sha256,
+                  object, job_id, applied_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            params![
+                id,
+                what.work_id,
+                what.stored_id,
+                what.season,
+                what.episode,
+                what.video,
+                what.path,
+                what.size as i64,
+                what.sha256,
+                what.object,
+                what.job_id,
+                now
+            ],
+        )?;
+        tx.execute(
+            "UPDATE subtitle_job_plan
+                SET outcome = 'applied', applied_id = ?3, note = ?4, episode = ?6, updated_at = ?5
+              WHERE job_id = ?1 AND position = ?2",
+            params![what.job_id, what.position, id, note, now, what.episode],
+        )?;
+        tx.commit()?;
+        Ok(Some(id))
+    })
+}
+
 /// Where a plan row's files are, for a job's detail: the work folder and,
 /// relative to it, the stored file, the applied copy (while it was not
 /// removed) and the video it was put beside. A row kept in the app data

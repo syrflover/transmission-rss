@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { cn } from "@/lib/utils";
 
 import { jobPath, type JobFile, type JobItem, type Placement, type Replacement } from "./api";
+import { appliedDetail, clusterByNote } from "./appliedNote";
 import { FailureTag, ItemBadge } from "./badges";
 import { archiveReceiptText, fontReceiptText } from "./fontReceipt";
 import { FORMAT_LABEL, episodeName, shownItem, sizeText } from "./format";
@@ -179,7 +180,7 @@ function placementText(
   }
   switch (p.outcome) {
     case "applied":
-      return { word: "적용함", detail: episode, urgent: false };
+      return { word: "적용함", detail: appliedDetail(episode, p.note), urgent: false };
     case "stored":
     case "existing":
       return { word: "보관만 함", detail: p.note, urgent: false };
@@ -259,15 +260,18 @@ const ASSET_KIND: Record<Placement["kind"], string> = {
 function GroupLine({
   placement: p,
   group,
+  showNote = true,
 }: {
   placement: Placement;
   group: string;
+  /** Left out where the group says it once for the rows that share it. */
+  showNote?: boolean;
 }) {
   const detail = [
     p.episode !== null ? episodeName(String(p.episode)) : null,
     group === "assets" ? ASSET_KIND[p.kind] : null,
     group === "assets" ? fontReceiptText(p.font_receipt) : null,
-    group === "ask" ? p.question : group === "applied" ? null : p.note,
+    group === "ask" ? p.question : showNote ? p.note : null,
   ].filter((part): part is string => part !== null && part !== "");
   return (
     <li className="flex min-w-0 flex-col gap-0.5">
@@ -317,14 +321,41 @@ function PackageGroups({
               {g.rows.length}
             </span>
           </h4>
-          <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
-            {g.rows.map((p) => (
-              <GroupLine key={p.position} placement={p} group={g.key} />
-            ))}
-          </ul>
+          {g.key === "applied" ? (
+            <AppliedRows rows={g.rows} />
+          ) : (
+            <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
+              {g.rows.map((p) => (
+                <GroupLine key={p.position} placement={p} group={g.key} />
+              ))}
+            </ul>
+          )}
         </section>
       ))}
     </div>
+  );
+}
+
+/**
+ * The applied files: each says what was done for its episode (its own note), and the rows that share a note say it
+ * once above them, so twelve episodes replaced the same way do not repeat it.
+ */
+function AppliedRows({ rows }: { rows: readonly Placement[] }) {
+  return (
+    <>
+      {clusterByNote(rows).map((cluster) => (
+        <div key={cluster.note ?? ""} className="flex flex-col gap-1.5">
+          {cluster.note !== null && (
+            <p className="text-xs leading-snug text-text-secondary [overflow-wrap:anywhere]">{cluster.note}</p>
+          )}
+          <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
+            {cluster.rows.map((p) => (
+              <GroupLine key={p.position} placement={p} group="applied" showNote={false} />
+            ))}
+          </ul>
+        </div>
+      ))}
+    </>
   );
 }
 

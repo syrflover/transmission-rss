@@ -105,7 +105,7 @@ use super::{
     files::{Copied, Published},
     joined,
     package::extension,
-    records::{self as place_records, Effect, JobFacts, NewApplied, Placed, PlanRow},
+    records::{self as place_records, Adopted, Effect, JobFacts, NewApplied, Placed, PlanRow},
     row_label, video_parts, Choice, Placer, SUBTITLE_EXTENSIONS,
 };
 use crate::{
@@ -120,6 +120,9 @@ use records::{Claimed, Compared, Comparison, FileSeen, Imported, Plan, PlanPath,
 
 /// The reason a plan goes stale for a newer revision (`새 수정본 발견`).
 pub const NEW_REVISION: &str = "같은 출처의 새 수정본이 들어왔어요";
+/// What a row says when the subtitle beside the video has the stored copy's
+/// bytes and is recorded as its applied copy.
+pub const ADOPTED: &str = "이 회차에 같은 자막이 이미 있어 그 파일을 적용본으로 기록했어요";
 /// A row whose plan waits for the person.
 pub const AWAITING_APPROVAL: &str = "이 회차에 자막이 있어 교체 승인을 기다려요";
 
@@ -373,29 +376,72 @@ impl Placer {
                 .iter()
                 .position(|p| p.path.to_lowercase() == target.to_lowercase())
         });
-        let settled = if present.iter().any(|p| p.file.sha256 == asset.sha256) {
-            Some(stored_only(
-                "이 회차에 같은 자막이 이미 있어 그대로 두고 보관만 했어요",
-            ))
-        } else if newer {
-            Some(stored_only(
-                "같은 출처의 새 수정본이 들어와 이 자막은 보관만 했어요",
-            ))
-        } else {
+        let busy = {
             let f = folder.to_owned();
-            let busy = self
-                .read(move |c| place_records::busy_targets(c, &f, None))
-                .await?;
-            let changing = std::iter::once(&target)
-                .chain(present.iter().map(|p| &p.path))
-                .find(|p| busy.contains(&p.to_lowercase()));
-            changing.map(|path| {
+            self.read(move |c| place_records::busy_targets(c, &f, None))
+                .await?
+        };
+        let changing = std::iter::once(&target)
+            .chain(present.iter().map(|p| &p.path))
+            .find(|p| busy.contains(&p.to_lowercase()));
+        // A file beside the video with the stored copy's bytes: the one at the
+        // target's name first (the case-only match too), else the first in the
+        // order the files were found.
+        let identical: Vec<usize> = present
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.file.sha256 == asset.sha256)
+            .map(|(i, _)| i)
+            .collect();
+        let same = identical
+            .iter()
+            .copied()
+            .find(|i| Some(*i) == at_target)
+            .or_else(|| identical.first().copied());
+        let same_note = "이 회차에 같은 자막이 이미 있어 그대로 두고 보관만 했어요";
+        let settled = match same {
+            // The revision's own job compares it, and another job's effect
+            // under way may take the path: neither is made the applied copy.
+            Some(_) if newer || changing.is_some() => Some(stored_only(same_note)),
+            Some(i) => {
+                // The stored copy is what the applied copy is a copy of: it
+                // is read as the comparison reads it, and a file that is gone
+                // or not the recorded bytes holds the row, so a person's file
+                // is not recorded as managed while nothing else keeps its bytes.
+                if !self.stored_as_recorded(folder, &asset).await {
+                    let reason = "보관본이 기록과 달라 영상 옆 자막을 적용본으로 기록하지 못했어요"
+                        .to_owned();
+                    self.hold_row(row, &label, reason, &asset.relative_path)
+                        .await?;
+                    return Ok(true);
+                }
+                if self
+                    .adopt(
+                        facts,
+                        row,
+                        video,
+                        &present[i],
+                        stored_id.clone(),
+                        placed.episode,
+                    )
+                    .await?
+                {
+                    return Ok(true);
+                }
+                // It is a copy applied already (of this stored subtitle, or of
+                // another that a job's own apply does not take over).
+                Some(stored_only(same_note))
+            }
+            None if newer => Some(stored_only(
+                "같은 출처의 새 수정본이 들어와 이 자막은 보관만 했어요",
+            )),
+            None => changing.map(|path| {
                 (
                     "다른 작업이 이 회차의 자막을 바꾸는 중이라 그대로 두고 보관만 했어요"
                         .to_owned(),
                     path.clone(),
                 )
-            })
+            }),
         };
         if let Some((note, detail)) = settled {
             self.settle_row(row, Outcome::Existing, note.clone())
@@ -435,13 +481,8 @@ impl Placer {
             }
             _ => {
                 let reason = "보관본이 기록과 달라 비교하지 못했어요".to_owned();
-                self.settle_row(row, Outcome::Held, reason.clone()).await?;
-                self.event(
-                    &row.job_id,
-                    format!("{label}: 보류했어요"),
-                    Some(format!("{reason} ({})", asset.relative_path)),
-                )
-                .await?;
+                self.hold_row(row, &label, reason, &asset.relative_path)
+                    .await?;
                 return Ok(true);
             }
         };
@@ -1337,6 +1378,83 @@ impl Placer {
                 .await?;
         }
         Ok(moved)
+    }
+
+    /// Whether the stored copy's file is there with the length and SHA-256
+    /// recorded for it.
+    async fn stored_as_recorded(&self, folder: &str, asset: &place_records::Asset) -> bool {
+        let at = files::within(Path::new(folder), &asset.relative_path);
+        let (size, sha256) = (asset.size, asset.sha256.clone());
+        matches!(
+            blocking(move || read_facts(&at)).await,
+            Ok((n, sha, _)) if n == size && sha == sha256
+        )
+    }
+
+    /// Holds the row with `reason` and tells the job's log, naming `path`.
+    async fn hold_row(
+        &self,
+        row: &PlanRow,
+        label: &str,
+        reason: String,
+        path: &str,
+    ) -> Result<(), JobError> {
+        self.settle_row(row, Outcome::Held, reason.clone()).await?;
+        self.event(
+            &row.job_id,
+            format!("{label}: 보류했어요"),
+            Some(format!("{reason} ({path})")),
+        )
+        .await
+    }
+
+    /// Records the subtitle beside the video, whose bytes are the row's stored
+    /// copy's, as that copy's applied one, the file left as it is: whether it
+    /// did (else the row is stored only). A row a person chose takes the file
+    /// over from another stored subtitle of the same bytes; a job's own first
+    /// apply does not.
+    async fn adopt(
+        &self,
+        facts: &JobFacts,
+        row: &PlanRow,
+        video: &str,
+        file: &Present,
+        stored_id: String,
+        episode: i64,
+    ) -> Result<bool, JobError> {
+        let what = Adopted {
+            work_id: facts.work_id.clone().unwrap_or_default(),
+            stored_id,
+            season: facts.season.unwrap_or(0),
+            episode,
+            video: video.to_owned(),
+            path: file.path.clone(),
+            size: file.file.size,
+            sha256: file.file.sha256.clone(),
+            object: file.file.object.clone(),
+            job_id: row.job_id.clone(),
+            position: row.position,
+            take_over: row.chosen.is_some(),
+        };
+        let now = self.now();
+        match self
+            .write(move |c| place_records::adopt(c, &what, ADOPTED, now))
+            .await
+        {
+            Ok(Some(_)) => {
+                self.event(
+                    &row.job_id,
+                    format!("{}: {ADOPTED}", row_label(row)),
+                    Some(file.path.clone()),
+                )
+                .await?;
+                Ok(true)
+            }
+            Ok(None) => Ok(false),
+            // A record the database refuses: the row stays stored only.
+            Err(err) if super::is_constraint(&err) => Ok(false),
+            Err(err) => Err(err),
+        }
     }
 
     /// Records the plan's new copy, published, as applied; whether it could

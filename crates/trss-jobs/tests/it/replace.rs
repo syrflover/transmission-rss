@@ -18,9 +18,9 @@ use trss_jobs::{
     area::{object_of, ReceiveArea},
     model::{Outcome, PathAction, PlanState},
     place::replace::records::{Compared, Decided, Plan, PlanView},
-    place::replace::AWAITING_APPROVAL,
+    place::replace::{ADOPTED, AWAITING_APPROVAL},
     store::{JobDetail, DECIDED},
-    Created, JobState, JobStore, NewItem, NewJob, Runner, Wait,
+    Created, JobState, JobStore, NewItem, NewJob, Runner, StepKind, StepState, Wait,
 };
 use trss_subtitles::{
     fake::{self, FakeSource},
@@ -450,6 +450,60 @@ async fn an_unmanaged_subtitle_is_imported_as_the_unknown_creators_before_it_is_
         .message
         .contains("관리하지 않던 자막을 '제작자 알 수 없음' 보관본으로 들였어요")));
     assert_eq!(s.temps(), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn a_jobs_first_apply_beside_the_same_bytes_records_that_file_as_the_applied_copy() {
+    let s = setup().await;
+    // A subtitle the app did not manage, with the bytes the job receives.
+    std::fs::write(s.at(TARGET), fake::ass("Show-02")).unwrap();
+    let job = make(&s, "c1", CREATOR, "/ok/Show-02").await;
+    run(&s).await;
+    let d = detail(&s, &job).await;
+    assert_eq!(
+        d.row.state,
+        JobState::Done,
+        "{:?} {:?}",
+        d.row.note,
+        d.events
+    );
+    assert_eq!(s.read(TARGET), fake::ass("Show-02"), "left as it is");
+    assert_eq!(
+        s.count("SELECT count(*) FROM subtitle_replacements").await,
+        0
+    );
+    // The file is the stored copy's applied copy, the row says so, and the
+    // job's apply step has nothing else to say.
+    let rows = s.store.plan(&job).await.unwrap();
+    assert_eq!(rows[0].outcome, Some(Outcome::Applied));
+    assert_eq!(rows[0].note.as_deref(), Some(ADOPTED));
+    assert_eq!(
+        s.count(
+            "SELECT count(*) FROM subtitle_applied
+              WHERE removed_at IS NULL AND path = 'Season 01/Show S01E02.ass'
+                AND stored_id = (SELECT stored_id FROM subtitle_job_plan)
+                AND id = (SELECT applied_id FROM subtitle_job_plan)"
+        )
+        .await,
+        1
+    );
+    let apply = d.steps.iter().find(|s| s.step == StepKind::Apply).unwrap();
+    assert_eq!(
+        (apply.state, apply.note.as_deref()),
+        (StepState::Done, None)
+    );
+    assert!(d.events.iter().any(|e| e.message.contains(ADOPTED)));
+}
+
+#[tokio::test]
+async fn other_bytes_beside_the_video_still_wait_for_approval() {
+    let s = setup().await;
+    std::fs::write(s.at(TARGET), MINE).unwrap();
+    let job = make(&s, "c1", CREATOR, "/ok/Show-02").await;
+    run(&s).await;
+    waiting_for_approval(&detail(&s, &job).await);
+    assert_eq!(s.read(TARGET), MINE.as_bytes());
+    assert_eq!(s.count("SELECT count(*) FROM subtitle_applied").await, 0);
 }
 
 #[tokio::test]

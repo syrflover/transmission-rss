@@ -20,10 +20,13 @@ use trss_core::{
 };
 use trss_jobs::{
     area::ReceiveArea,
-    model::{Chosen, PathAction, PlanState, SubtitleFormat},
+    model::{Chosen, Outcome, PathAction, PlanState, StepKind, StepState, SubtitleFormat},
     place::{
-        records::{StoredChoice, ADD_REFUSED},
-        replace::records::{Decided, Plan, PlanView},
+        records::{PlanRow, StoredChoice, ADD_REFUSED},
+        replace::{
+            records::{Decided, Plan, PlanView},
+            ADOPTED,
+        },
     },
     store::JobDetail,
     Created, JobState, JobStore, NewItem, NewJob, Runner, Wait,
@@ -793,6 +796,229 @@ async fn a_works_own_order_decides_its_first_apply_and_going_back_restores_the_c
         fake::bytes_of("Show - 03.ass")
     );
     assert!(!s.at("Season 01/Show S01E03.srt").exists());
+}
+
+/// The row of the job's plan that keeps `stored`.
+async fn row_of(s: &Setup, job: &str, stored: &str) -> PlanRow {
+    s.store
+        .plan(job)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|r| r.stored_id.as_deref() == Some(stored))
+        .expect("the row")
+}
+
+/// [`ass_applied_srt_stored`], then `names` written beside the video with
+/// the SRT's bytes, as a person put them there: the job and the SRT's
+/// stored subtitle.
+async fn srt_stored_and_beside(s: &Setup, names: &[&str]) -> (String, String) {
+    let (job, srt) = ass_applied_srt_stored(s).await;
+    for name in names {
+        std::fs::write(s.at(name), fake::bytes_of("Show - 02.srt")).unwrap();
+    }
+    (job, srt)
+}
+
+#[tokio::test]
+async fn a_chosen_copy_whose_bytes_are_beside_the_video_becomes_its_applied_copy() {
+    let s = setup().await;
+    let (job, srt) = srt_stored_and_beside(&s, &[SRT]).await;
+    let ass = s.stored("Show - 02.ass").await;
+
+    // The episode has a subtitle, so the person is to compare; the worker
+    // finds the same bytes beside the video and compares nothing.
+    assert_eq!(
+        s.choose(&srt, Chosen::Apply).await,
+        StoredChoice::Queued {
+            job_id: job.clone(),
+            compare: true
+        }
+    );
+    run(&s).await;
+    done(&detail(&s, &job).await);
+    assert_eq!(
+        s.read(SRT),
+        fake::bytes_of("Show - 02.srt"),
+        "left as it is"
+    );
+    assert_eq!(
+        s.applied().await,
+        [(TARGET.to_owned(), ass), (SRT.to_owned(), srt.clone())]
+    );
+    assert_eq!(
+        s.count("SELECT count(*) FROM subtitle_replacements".into())
+            .await,
+        0
+    );
+    let row = row_of(&s, &job, &srt).await;
+    assert_eq!(row.outcome, Some(Outcome::Applied));
+    assert_eq!(row.note.as_deref(), Some(ADOPTED));
+    assert!(row.applied_id.is_some());
+    // It is the applied copy now: the card offers nothing for it.
+    assert_eq!(
+        s.choose(&srt, Chosen::Apply).await,
+        StoredChoice::Refused("이 보관본은 이미 영상 옆에 적용했어요.")
+    );
+}
+
+#[tokio::test]
+async fn the_identical_file_at_another_name_is_the_applied_copy_unless_the_targets_own_is_too() {
+    const KO: &str = "Season 01/Show S01E02.ko.srt";
+    // Only `.ko.srt` has the bytes: it is the applied copy, and nothing is
+    // written at the target's name.
+    let s = setup().await;
+    let (job, srt) = srt_stored_and_beside(&s, &[KO]).await;
+    s.choose(&srt, Chosen::Apply).await;
+    run(&s).await;
+    done(&detail(&s, &job).await);
+    assert!(!s.at(SRT).exists());
+    assert!(s.applied().await.contains(&(KO.to_owned(), srt)));
+
+    // Both have them: the target's own name wins.
+    let s = setup().await;
+    let (job, srt) = srt_stored_and_beside(&s, &[KO, SRT]).await;
+    s.choose(&srt, Chosen::Apply).await;
+    run(&s).await;
+    done(&detail(&s, &job).await);
+    let applied = s.applied().await;
+    assert!(applied.contains(&(SRT.to_owned(), srt)), "{applied:?}");
+    assert_eq!(applied.len(), 2, "{applied:?}");
+}
+
+#[tokio::test]
+async fn a_job_leaves_a_file_applied_for_another_copy_but_a_chosen_copy_takes_it_over() {
+    let s = setup().await;
+    // The same bytes from two sources are two stored copies of one file.
+    let first = make(&s, "c1", CREATOR, "/ok/Show-02", true).await;
+    run(&s).await;
+    done(&detail(&s, &first).await);
+    let kept = row_of_first(&s, &first).await;
+    let twin = make(&s, "c2", CREATOR, "/ok/Show-02", false).await;
+    run(&s).await;
+    done(&detail(&s, &twin).await);
+    let twin_stored = row_of_first(&s, &twin).await;
+    assert_ne!(kept, twin_stored);
+    // The job's own apply found the file applied for the first: stored only.
+    assert_eq!(s.applied().await, [(TARGET.to_owned(), kept.clone())]);
+    assert_eq!(
+        row_of(&s, &twin, &twin_stored).await.outcome,
+        Some(Outcome::Existing)
+    );
+
+    // A person chose the twin: the file is its copy.
+    assert!(matches!(
+        s.choose(&twin_stored, Chosen::Apply).await,
+        StoredChoice::Queued { .. }
+    ));
+    run(&s).await;
+    done(&detail(&s, &twin).await);
+    assert_eq!(
+        s.applied().await,
+        [(TARGET.to_owned(), twin_stored.clone())]
+    );
+    assert_eq!(
+        row_of(&s, &twin, &twin_stored).await.outcome,
+        Some(Outcome::Applied)
+    );
+    assert_eq!(s.read(TARGET), fake::ass("Show-02"));
+}
+
+#[tokio::test]
+async fn an_identical_file_is_not_recorded_as_applied_when_the_stored_file_is_gone_or_changed() {
+    const STORED: &str = ".trss/subtitles/제작자/Show - 02.srt";
+    for altered in [false, true] {
+        let s = setup().await;
+        let (job, srt) = srt_stored_and_beside(&s, &[SRT]).await;
+        assert_eq!(s.read(STORED), fake::bytes_of("Show - 02.srt"));
+        match altered {
+            false => std::fs::remove_file(s.at(STORED)).unwrap(),
+            true => std::fs::write(s.at(STORED), b"changed").unwrap(),
+        }
+        let applied_before = s.applied().await;
+
+        assert!(matches!(
+            s.choose(&srt, Chosen::Apply).await,
+            StoredChoice::Queued { .. }
+        ));
+        run(&s).await;
+
+        // The person's file stays what it is, unrecorded: the stored copy
+        // was the only other holder of its bytes.
+        assert_eq!(s.read(SRT), fake::bytes_of("Show - 02.srt"));
+        assert_eq!(s.applied().await, applied_before, "altered: {altered}");
+        let row = row_of(&s, &job, &srt).await;
+        assert_eq!(row.outcome, Some(Outcome::Held), "altered: {altered}");
+        assert!(
+            row.note
+                .as_deref()
+                .is_some_and(|n| n.contains("보관본이 기록과 달라")),
+            "{:?}",
+            row.note
+        );
+        assert_eq!(row.applied_id, None);
+        assert_eq!(
+            s.count("SELECT count(*) FROM subtitle_replacements".into())
+                .await,
+            0
+        );
+    }
+}
+
+/// The stored subtitle of the job's first plan row.
+async fn row_of_first(s: &Setup, job: &str) -> String {
+    s.store.plan(job).await.unwrap()[0]
+        .stored_id
+        .clone()
+        .expect("stored")
+}
+
+#[tokio::test]
+async fn an_applied_rows_note_is_not_shown_for_another_episodes_apply_step() {
+    let s = setup().await;
+    // Episode 2 has a subtitle the app did not apply, which the job's
+    // package replaces once approved; episode 3 is stored only.
+    std::fs::write(s.at(TARGET), b"mine").unwrap();
+    let job = make(
+        &s,
+        "c1",
+        CREATOR,
+        "/pack/Show - 02.ass/Show - 03.ass",
+        false,
+    )
+    .await;
+    run(&s).await;
+    waiting_for_approval(&detail(&s, &job).await);
+    let plan = view(&s, &job).await.plan;
+    decide(&s, &job, &plan, true).await;
+    run(&s).await;
+    done(&detail(&s, &job).await);
+    let two = row_of(&s, &job, &s.stored("Show - 02.ass").await).await;
+    assert_eq!(
+        two.note.as_deref(),
+        Some("기존 자막을 새 자막으로 교체했어요")
+    );
+
+    // A person chooses episode 3's copy, whose bytes are beside its video.
+    let three = s.stored("Show - 03.ass").await;
+    let beside = "Season 01/Show S01E03.ass";
+    std::fs::write(s.at(beside), fake::bytes_of("Show - 03.ass")).unwrap();
+    assert!(matches!(
+        s.choose(&three, Chosen::Apply).await,
+        StoredChoice::Queued { .. }
+    ));
+    run(&s).await;
+    let d = detail(&s, &job).await;
+    done(&d);
+    let row = row_of(&s, &job, &three).await;
+    assert_eq!(row.outcome, Some(Outcome::Applied));
+    assert_eq!(row.note.as_deref(), Some(ADOPTED));
+    assert_eq!(s.read(beside), fake::bytes_of("Show - 03.ass"));
+    let apply = d.steps.iter().find(|s| s.step == StepKind::Apply).unwrap();
+    assert_eq!(
+        (apply.state, apply.note.as_deref()),
+        (StepState::Done, None)
+    );
 }
 
 #[tokio::test]
