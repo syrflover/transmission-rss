@@ -77,6 +77,8 @@ docker compose -f docker-compose.trss.yml up -d
 
 Restarting one container leaves the other running: `docker compose -f docker-compose.trss.yml restart trss-web` does not pause collection.
 
+To see what an update did to Transmission, list its torrents before and after with `python3 deploy/torrent-list.py > torrents-before.tsv` (hash, download folder, name and labels, sorted by hash; only Python's standard library), and `diff` the two lists after the worker's first cycle: a line that went, came or changed is a torrent removed, added, moved or renamed. It reads Transmission at `http://127.0.0.1:9091/transmission/rpc`; give another RPC URL, with `user:password@` if it asks for a login, as its argument.
+
 To back up, copy `TRSS_DATA_DIR/trss.db`, `TRSS_DATA_DIR/artwork/` and `TRSS_DATA_DIR/subtitle-files/` together while the containers are stopped (or use `sqlite3 trss.db ".backup copy.db"` while they run, then copy the two folders). The database records which cover file each work uses and checks the file's size and SHA-256 before showing it (again whenever the file changed), so a database restored without its `artwork/` folder shows no covers until the files are back. The files there belong to the user the containers run as (1000:1000 by default); copy them with that user's rights, or as root and then check the owner when you put them back (see [Running as 1000:1000](#running-as-10001000)).
 
 ### Running as 1000:1000
