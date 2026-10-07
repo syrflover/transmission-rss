@@ -52,6 +52,22 @@ impl RequestPace {
             .await
     }
 
+    /// Until when AniList asked for no request, if it did.
+    pub async fn blocked_until(&self) -> Result<Option<Millis>, DbError> {
+        self.db
+            .run(|c| {
+                let blocked: Option<Option<Millis>> = c
+                    .query_row(
+                        "SELECT blocked_until FROM anilist_pace WHERE id = 1",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .optional()?;
+                Ok::<_, DbError>(blocked.flatten())
+            })
+            .await
+    }
+
     /// AniList asked for no request before `until`.
     pub async fn block_requests(&self, until: Millis) -> Result<(), DbError> {
         self.db

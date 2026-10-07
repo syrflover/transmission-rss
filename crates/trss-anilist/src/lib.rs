@@ -6,7 +6,7 @@
 //!   (`RequestPace::take_request_slot`), so the web and the worker together
 //!   send at most one request every [`REQUEST_SPACING`] (30 a minute, AniList's
 //!   lowest published limit). A `429` answer blocks every request until its
-//!   `Retry-After` has passed.
+//!   `Retry-After` has passed, a request already waiting for its turn included.
 //! - **Images only from allowed origins.** An image is fetched only from a URL
 //!   an AniList answer gave whose origin is one of
 //!   [`AnilistConfig::image_origins`], without following redirects, within
@@ -308,6 +308,14 @@ impl Anilist {
             Ok(at) => {
                 if at > now {
                     tokio::time::sleep(Duration::from_millis((at - now) as u64)).await;
+                    // Another request may have been answered `429` while this
+                    // one waited: its turn was taken before the block was.
+                    let now = (self.clock)();
+                    if let Some(until) = self.pace.blocked_until().await?.filter(|u| *u > now) {
+                        return Err(AnilistError::Busy {
+                            retry_after: Duration::from_millis((until - now) as u64),
+                        });
+                    }
                 }
                 Ok(())
             }
@@ -584,5 +592,57 @@ mod tests {
         assert!(
             AnilistConfig::from_lookup(|k| (k == API_URL_VAR).then(|| "nope".to_owned())).is_err()
         );
+    }
+
+    /// A fake serving entry 1, and a client for it at a clock that stays at
+    /// `NOW` while real time passes.
+    async fn waiting_client(spacing: Duration) -> (fake::Fake, Anilist) {
+        let fake = fake::Fake::start().await;
+        let entry = fake.entry(1, "A", &[]);
+        fake.state.lock().unwrap().media.insert(1, entry);
+        let anilist = Anilist::new(
+            fake.config(),
+            Db::open(":memory:").await.unwrap(),
+            std::sync::Arc::new(|| NOW),
+        )
+        .with_spacing(spacing);
+        // Another request holds the turn before the test's.
+        let slot = anilist
+            .pace
+            .take_request_slot(NOW, spacing.as_millis() as i64, None);
+        assert_eq!(slot.await.unwrap(), Ok(NOW));
+        (fake, anilist)
+    }
+
+    const NOW: i64 = 1_000_000;
+
+    #[tokio::test]
+    async fn a_request_waits_for_its_turn_and_is_then_sent() {
+        let (fake, anilist) = waiting_client(Duration::from_millis(300)).await;
+        let started = std::time::Instant::now();
+        assert!(anilist.media(1, None).await.unwrap().is_some());
+        assert!(started.elapsed() >= Duration::from_millis(250));
+        assert_eq!(fake.api_requests().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_block_that_comes_while_a_request_waits_for_its_turn_stops_the_request() {
+        let (fake, anilist) = waiting_client(Duration::from_millis(600)).await;
+        let blocker = tokio::spawn({
+            let pace = anilist.pace.clone();
+            async move {
+                tokio::time::sleep(Duration::from_millis(150)).await;
+                pace.block_requests(NOW + 10_000).await.unwrap();
+            }
+        });
+        let answer = anilist.media(1, None).await;
+        blocker.await.unwrap();
+        match answer {
+            Err(AnilistError::Busy { retry_after }) => {
+                assert_eq!(retry_after, Duration::from_secs(10))
+            }
+            other => panic!("expected Busy, got {other:?}"),
+        }
+        assert!(fake.api_requests().is_empty());
     }
 }

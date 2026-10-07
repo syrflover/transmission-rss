@@ -19,7 +19,8 @@
 //! - **Pace.** Every request takes a slot from the database
 //!   ([`RequestPace::take_request_slot`]), so the web and the worker together
 //!   send at most one request every [`REQUEST_SPACING`]. A `429` answer blocks
-//!   every request until its `Retry-After` has passed.
+//!   every request until its `Retry-After` has passed, a request already
+//!   waiting for its turn included.
 //! - **Bounded answers.** An answer is read up to [`MAX_ANSWER_BYTES`]; a longer
 //!   one is refused before it is parsed. Redirects are not followed.
 //! - **Short cache.** The web asks Anissia when the user looks at a schedule,
@@ -261,6 +262,14 @@ impl Anissia {
             Ok(at) => {
                 if at > now {
                     tokio::time::sleep(Duration::from_millis((at - now) as u64)).await;
+                    // Another request may have been answered `429` while this
+                    // one waited: its turn was taken before the block was.
+                    let now = self.now();
+                    if let Some(until) = self.pace.blocked_until().await?.filter(|u| *u > now) {
+                        return Err(AnissiaError::Busy {
+                            retry_after: Duration::from_millis((until - now) as u64),
+                        });
+                    }
                 }
                 Ok(())
             }

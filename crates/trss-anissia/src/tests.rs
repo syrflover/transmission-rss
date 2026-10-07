@@ -188,6 +188,39 @@ async fn a_caller_that_may_wait_waits_for_its_turn_in_real_time() {
 }
 
 #[tokio::test]
+async fn a_block_that_comes_while_a_request_waits_for_its_turn_stops_the_request() {
+    let env = Env::new().await;
+    // The test's clock stays put while real time passes.
+    let anissia = env.anissia.clone().with_spacing(Duration::from_millis(600));
+    let now = anissia.now();
+    // Another request holds the turn before the test's.
+    assert_eq!(
+        anissia
+            .pace
+            .take_request_slot(now, 600, None)
+            .await
+            .unwrap(),
+        Ok(now)
+    );
+    let blocker = tokio::spawn({
+        let pace = anissia.pace.clone();
+        async move {
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            pace.block_requests(now + 10_000).await.unwrap();
+        }
+    });
+    let answer = anissia.fetch_schedule(1, None).await;
+    blocker.await.unwrap();
+    match answer {
+        Err(AnissiaError::Busy { retry_after }) => {
+            assert_eq!(retry_after, Duration::from_secs(10))
+        }
+        other => panic!("expected Busy, got {other:?}"),
+    }
+    assert!(env.fake.requests().is_empty());
+}
+
+#[tokio::test]
 async fn a_429_blocks_every_request_until_its_retry_after_has_passed() {
     let env = Env::new().await;
     env.fake
