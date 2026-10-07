@@ -75,6 +75,26 @@ async fn a_block_that_comes_while_a_request_waits_for_its_slot_stops_the_request
     assert!(matches!(err, SearchError::Wait(_)), "{err}");
 }
 
+#[tokio::test]
+async fn a_search_redirected_to_another_host_is_read_without_the_channel_url_going_along() {
+    let hosts = crate::feed::testing::Redirect::start().await;
+    let (client, _pace, _dir) = client(Duration::from_millis(10), system_clock()).await;
+    let channel = Channel {
+        url: format!(
+            "{}/?page=rss&passkey={}",
+            hosts.base,
+            crate::feed::testing::SECRET
+        ),
+        ..channel()
+    };
+    let page = client
+        .page(&channel, "Show", &Redactor::none())
+        .await
+        .unwrap();
+    assert_eq!(page.raw_count, 1);
+    hosts.assert_nothing_leaked();
+}
+
 #[test]
 fn a_wait_is_told_in_seconds_minutes_or_hours_rounded_up() {
     let secs = Duration::from_secs;

@@ -206,7 +206,7 @@ fsync를 하지 않는 파일 이름 바꾸기는 미디어 디스크에 비용�
 | [0083](0083-deployed-end-to-end.md) | 실제 서버에서 구독부터 자막 적용까지 이어 봐요 | 대기 | 0081 |
 | [0084](0084-three-players.md) | 세 재생기에서 적용본, 폰트, 다시 읽기를 확인해요 | 대기 | 0081, 0061 |
 | [0085](0085-phone-and-tablet-flows.md) | 휴대폰과 태블릿으로 주요 흐름을 끝내 봐요 | 대기 | 0081 |
-| [0086](0086-feed-redirect-referer.md) | RSS 채널을 읽다 리디렉션돼도 채널 URL이 다음 호스트로 가지 않아요 | 대기 | 없음 |
+| [0086](0086-feed-redirect-referer.md) | RSS 채널을 읽다 리디렉션돼도 채널 URL이 다음 호스트로 가지 않아요 | 완료 | 없음 |
 | [0087](0087-pace-block-while-waiting.md) | AniList와 Anissia 요청이 차례를 기다리는 사이에 생긴 막힘을 지켜요 | 대기 | 없음 |
 | [0088](0088-queue-survives-panic.md) | worker의 백그라운드 큐가 항목 하나의 패닉으로 멈추지 않아요 | 대기 | 없음 |
 | [0089](0089-package-season-reason.md) | 묶음 배치에서 시즌이 다른 파일의 까닭을 맞게 적어요 | 대기 | 없음 |

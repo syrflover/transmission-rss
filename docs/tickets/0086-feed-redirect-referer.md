@@ -1,6 +1,6 @@
 # 0086 RSS 채널을 읽다 리디렉션돼도 채널 URL이 다음 호스트로 가지 않아요
 
-- 상태: 대기
+- 상태: 완료 (2026-10-07)
 - 출처: [채널 URL의 비밀 값](../specs/collection.md#채널-url의-비밀-값), [자막 출처의 같은 수정](../archive/tickets/3-subtitle-candidates-and-receiving/0038-receive-result-tistory.md)
 - 막는 티켓: 없음
 
@@ -19,3 +19,25 @@ reqwest는 리디렉션할 때 앞 주소에서 사용자 이름, 암호, fragme
 
 - 가짜 채널 서버가 쿼리에 비밀 값이 든 주소를 다른 호스트로 리디렉션하는 테스트가 있어요. 채널 읽기와 지난 회차 검색 모두에서, 다음 호스트가 받은 요청의 어느 헤더에도 비밀 값과 앞 주소가 없어요.
 - 리디렉션된 채널을 읽은 결과는 지금과 같아요. 다른 호스트로 가는 리디렉션도 지금처럼 따라가요.
+
+## 결과
+
+### 만든 것 (2026-10-07)
+
+- `feed::client`가 자동 `Referer`를 꺼요(`.referer(false)`). 리디렉션은 전처럼 reqwest의 기본값대로 따라가요.
+  채널 읽기(worker의 수집 주기, 한 번 받기에서 링크를 되찾는 읽기)와 지난 회차 검색(`SearchClient`)이 모두 이 클라이언트를 쓰므로, 한 곳을 고쳐 둘 다 막았어요.
+- 테스트용 가짜 호스트 `feed::testing::Redirect`를 더했어요. 채널 호스트(`127.0.0.1`)는 어느 요청에나 `302`로 다른 호스트(`127.0.0.2`)의 `/feed`를 가리키고, 그 호스트는 항목 하나인 피드를 주며 받은 요청의 헤더를 모두 남겨요.
+- [채널 URL의 비밀 값](../specs/collection.md#채널-url의-비밀-값)에 리디렉션 때 `Referer`를 보내지 않는다는 문장을 더했어요.
+
+### 검증한 것
+
+| 완료 기준 | 근거 |
+| --- | --- |
+| 리디렉션된 다음 호스트의 헤더에 비밀 값과 앞 주소가 없음 | 채널 읽기는 `feed::tests::a_channel_redirected_to_another_host_is_read_without_its_url_going_along`, 지난 회차 검색은 `past_search::client::tests::a_search_redirected_to_another_host_is_read_without_the_channel_url_going_along`이 확인해요. 다음 호스트가 받은 모든 헤더 값에 비밀 값과 채널 호스트의 `주소:포트`가 없어야 통과해요. 고치기 전에는 둘 다 실패했어요. 채널 읽기에서는 `referer: http://127.0.0.1:<포트>/rss?passkey=<비밀 값>`, 검색에서는 `referer: http://127.0.0.1:<포트>/?page=rss&passkey=<비밀 값>&q=Show`가 다음 호스트로 갔어요. |
+| 리디렉션된 채널을 읽은 결과가 같고, 다른 호스트로 가는 리디렉션도 따라감 | 같은 두 테스트에서 다른 호스트가 요청을 받았고(받지 않으면 실패해요), 채널 읽기는 항목 1개, 검색은 `raw_count` 1을 읽었어요. |
+
+2026-10-07(`6ee9612` 위의 변경)에 `cargo test -p trss-collect -j 4`가 475개 모두 통과했어요(라이브러리 474개, `revision_crc_peak` 1개).
+
+### 검증하지 못한 것
+
+- 실제 트래커의 리디렉션으로는 돌려 보지 않았어요. 가짜 호스트 두 개로만 확인했어요.

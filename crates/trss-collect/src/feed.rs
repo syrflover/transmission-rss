@@ -44,9 +44,14 @@ pub enum FetchError {
     Parse(rss::Error),
 }
 
+/// The client for channel feeds and search pages. A redirect is followed as
+/// reqwest does by default, but with no `Referer`: reqwest would put the
+/// previous address there with its query, which holds the channel's secret
+/// values, and send it to the next host.
 pub fn client() -> Result<reqwest::Client, reqwest::Error> {
     reqwest::Client::builder()
         .user_agent(trss_core::USER_AGENT)
+        .referer(false)
         .timeout(FETCH_TIMEOUT)
         .build()
 }
@@ -171,6 +176,92 @@ pub fn items(
     out
 }
 
+/// A channel host that redirects to another host, for the tests of the
+/// readers that use [`client`].
+#[cfg(test)]
+pub(crate) mod testing {
+    use std::sync::{Arc, Mutex};
+
+    use axum::{
+        http::{header, HeaderMap, StatusCode},
+        response::IntoResponse,
+        routing::get,
+        Router,
+    };
+
+    /// The secret value the tests put in the channel URL's query.
+    pub(crate) const SECRET: &str = "s3cr3tpasskey";
+
+    /// The channel host (`127.0.0.1`) answers every request with a `302` to
+    /// `/feed` on another host (`127.0.0.2`), which answers a feed of one item
+    /// and keeps the headers of each request it gets.
+    pub(crate) struct Redirect {
+        /// `http://127.0.0.1:<port>`.
+        pub(crate) base: String,
+        seen: Arc<Mutex<Vec<HeaderMap>>>,
+        tasks: [tokio::task::JoinHandle<()>; 2],
+    }
+
+    impl Redirect {
+        pub(crate) async fn start() -> Redirect {
+            let seen = Arc::new(Mutex::new(Vec::new()));
+            let other = tokio::net::TcpListener::bind("127.0.0.2:0").await.unwrap();
+            let target = format!("http://{}/feed", other.local_addr().unwrap());
+            let feed = Router::new().route(
+                "/feed",
+                get({
+                    let seen = seen.clone();
+                    move |headers: HeaderMap| async move {
+                        seen.lock().unwrap().push(headers);
+                        r#"<?xml version="1.0"?><rss version="2.0"><channel><title>t</title>
+                        <link>http://x/</link><description>d</description>
+                        <item><title>A</title><guid>a</guid></item></channel></rss>"#
+                    }
+                }),
+            );
+            let channel = Router::new().fallback(move || async move {
+                (StatusCode::FOUND, [(header::LOCATION, target)]).into_response()
+            });
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let base = format!("http://{}", listener.local_addr().unwrap());
+            let tasks = [
+                tokio::spawn(async move {
+                    axum::serve(other, feed).await.ok();
+                }),
+                tokio::spawn(async move {
+                    axum::serve(listener, channel).await.ok();
+                }),
+            ];
+            Redirect { base, seen, tasks }
+        }
+
+        /// Asserts that the other host was asked, and that no header of its
+        /// requests carries [`SECRET`] or the channel host's address.
+        pub(crate) fn assert_nothing_leaked(&self) {
+            let seen = self.seen.lock().unwrap();
+            assert!(!seen.is_empty(), "the redirect was not followed");
+            let channel_host = self.base.trim_start_matches("http://");
+            for headers in seen.iter() {
+                for (name, value) in headers {
+                    let value = String::from_utf8_lossy(value.as_bytes());
+                    assert!(
+                        !value.contains(SECRET) && !value.contains(channel_host),
+                        "{name}: {value}"
+                    );
+                }
+            }
+        }
+    }
+
+    impl Drop for Redirect {
+        fn drop(&mut self) {
+            for task in &self.tasks {
+                task.abort();
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -293,6 +384,15 @@ mod tests {
             "unexpected failure: {err}"
         );
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn a_channel_redirected_to_another_host_is_read_without_its_url_going_along() {
+        let hosts = testing::Redirect::start().await;
+        let url = format!("{}/rss?passkey={}", hosts.base, testing::SECRET);
+        let channel = fetch(&client().unwrap(), &url).await.unwrap();
+        assert_eq!(channel.items().len(), 1);
+        hosts.assert_nothing_leaked();
     }
 
     #[test]
