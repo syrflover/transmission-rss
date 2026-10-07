@@ -1378,7 +1378,8 @@ pub struct StoredOnly {
     pub creator: Option<String>,
     pub format: SubtitleFormat,
     pub stored_at: Millis,
-    /// The job whose plan row has it, which applies it when asked.
+    /// The job whose plan row has it, which applies it when asked; for an
+    /// imported copy, the job whose replacement imported it.
     pub job_id: Option<String>,
     /// A job applies it by itself once the episode's video comes (`영상
     /// 대기`): one that waits for the video or a source, ended partly failed,
@@ -1396,9 +1397,15 @@ pub struct StoredOnly {
 pub fn stored_only(c: &Connection, work_id: &str) -> rusqlite::Result<Vec<StoredOnly>> {
     let mut stmt = c.prepare(
         "SELECT s.id, s.season, s.episode, a.relative_path, s.creator, s.format, s.stored_at,
-                (SELECT p.job_id FROM subtitle_job_plan p
-                  WHERE p.stored_id = s.id AND p.episode IS NOT NULL
-                  ORDER BY p.updated_at DESC LIMIT 1),
+                coalesce(
+                    (SELECT p.job_id FROM subtitle_job_plan p
+                      WHERE p.stored_id = s.id AND p.episode IS NOT NULL
+                      ORDER BY p.updated_at DESC LIMIT 1),
+                    -- an imported copy: the job whose replacement imported it
+                    (SELECT j.id FROM subtitle_packages pk JOIN subtitle_jobs j ON j.id = s.job_id
+                      WHERE pk.id = s.package_id AND pk.source_kind = 'existing'
+                        AND j.origin <> ?2
+                        AND EXISTS (SELECT 1 FROM subtitle_job_plan q WHERE q.job_id = j.id))),
                 EXISTS (SELECT 1 FROM subtitle_job_plan p JOIN subtitle_jobs j ON j.id = p.job_id
                          WHERE p.stored_id = s.id AND p.action = 'apply'
                            AND p.outcome = 'no_video'
@@ -1413,7 +1420,7 @@ pub fn stored_only(c: &Connection, work_id: &str) -> rusqlite::Result<Vec<Stored
                              WHERE ap.stored_id = s.id AND ap.removed_at IS NULL)
           ORDER BY s.season, s.episode, s.stored_at, s.id",
     )?;
-    let rows = stmt.query_map([work_id], |r| {
+    let rows = stmt.query_map(params![work_id, crate::store::RELOCATE], |r| {
         let path: String = r.get(3)?;
         Ok(StoredOnly {
             id: r.get(0)?,
@@ -1613,7 +1620,30 @@ pub struct StoredOptions {
     /// it takes beside the video, or why not.
     pub add: Result<bool, &'static str>,
     /// The row of the job that would apply it, or why there is none.
-    job: Result<(String, i64), &'static str>,
+    job: Result<(String, Option<i64>), &'static str>,
+}
+
+/// A job that may take a stored subtitle: its ID, the position of the row
+/// that keeps it (none for an imported copy), the job's state and what it
+/// waits for.
+type Taker = (String, Option<i64>, String, Option<String>);
+
+/// The job whose replacement imported the stored subtitle (a file found
+/// beside the video and kept, in an `existing` package), as a row of
+/// [`options_in`] with no position. None for a received copy, for one whose
+/// job is gone, and for a job with no plan row to take a receipt from
+/// ([`choose_stored`]).
+fn imported_by(c: &Connection, stored_id: &str) -> rusqlite::Result<Option<Taker>> {
+    c.query_row(
+        "SELECT j.id, j.state, j.wait
+           FROM subtitle_stored s JOIN subtitle_packages p ON p.id = s.package_id
+                JOIN subtitle_jobs j ON j.id = s.job_id
+          WHERE s.id = ?1 AND p.source_kind = 'existing' AND j.origin <> ?2
+            AND EXISTS (SELECT 1 FROM subtitle_job_plan q WHERE q.job_id = j.id)",
+        params![stored_id, crate::store::RELOCATE],
+        |r| Ok((r.get(0)?, None, r.get(1)?, r.get(2)?)),
+    )
+    .optional()
 }
 
 /// What a person can ask of the stored subtitle `stored_id` of the work:
@@ -1678,8 +1708,11 @@ fn options_in(
     });
     // The rows that keep it, newest first; a deduplicated file has one in
     // each job that received it. A relocation's rows move copies a person
-    // confirmed, so they are not chosen from.
-    let rows: Vec<(String, i64, String, Option<String>)> = {
+    // confirmed, so they are not chosen from. An imported copy (a file found
+    // beside a video, kept before a replacement) is in no job's plan: the job
+    // whose replacement imported it takes it, with a row made when it is
+    // chosen (no position yet).
+    let mut rows: Vec<Taker> = {
         let mut stmt = c.prepare(
             "SELECT p.job_id, p.position, j.state, j.wait
                FROM subtitle_job_plan p JOIN subtitle_jobs j ON j.id = p.job_id
@@ -1691,7 +1724,10 @@ fn options_in(
         })?;
         found.collect::<rusqlite::Result<_>>()?
     };
-    let free = |(_, _, state, wait): &&(String, i64, String, Option<String>)| {
+    if rows.is_empty() {
+        rows.extend(imported_by(c, stored_id)?);
+    }
+    let free = |(_, _, state, wait): &&Taker| {
         state != "running" && state != "held" && wait.as_deref() != Some("approval")
     };
     let job = match rows.iter().find(free) {
@@ -1774,6 +1810,32 @@ pub fn choose_stored(
             [stored_id],
             |r| r.get(0),
         )?;
+        // An imported copy is in no plan yet: the job that imported it keeps
+        // it as a row of its own, stored only, which the update below turns
+        // into the apply. The row takes its receipt from one of the job's
+        // rows, as a relocation's rows do; the file's name is the one it had
+        // beside the video.
+        let position = match position {
+            Some(position) => position,
+            None => tx.query_row(
+                "INSERT INTO subtitle_job_plan
+                     (job_id, position, file_id, name, kind, format, size, sha256, episode,
+                      assignment, basis, action, outcome, note, stored_id, updated_at)
+                 SELECT ?1,
+                        (SELECT max(position) + 1 FROM subtitle_job_plan WHERE job_id = ?1),
+                        (SELECT file_id FROM subtitle_job_plan WHERE job_id = ?1
+                          ORDER BY position LIMIT 1),
+                        coalesce((SELECT original_name FROM subtitle_package_entries e
+                                   WHERE e.package_id = s.package_id AND e.asset_id = a.id), 'x'),
+                        'subtitle', s.format, a.byte_size, a.sha256, s.episode, s.assignment,
+                        s.basis, 'store', 'stored', NULL, s.id, ?3
+                   FROM subtitle_stored s JOIN subtitle_assets a ON a.id = s.subtitle_asset_id
+                  WHERE s.id = ?2
+                 RETURNING position",
+                params![job, stored_id, now],
+                |r| r.get(0),
+            )?,
+        };
         // The row goes where the stored subtitle is now: a mapping change
         // may have moved it since the job planned the row.
         tx.execute(

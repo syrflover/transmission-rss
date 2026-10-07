@@ -16,9 +16,12 @@ use tokio_util::sync::CancellationToken;
 use trss_core::{Clock, Db};
 use trss_jobs::{
     area::{object_of, ReceiveArea},
-    model::{Outcome, PathAction, PlanState},
-    place::replace::records::{Compared, Decided, Plan, PlanView},
+    model::{Chosen, Outcome, PathAction, PlanState},
     place::replace::{ADOPTED, AWAITING_APPROVAL},
+    place::{
+        records::StoredChoice,
+        replace::records::{Compared, Decided, Plan, PlanView},
+    },
     store::{JobDetail, DECIDED},
     Created, JobState, JobStore, NewItem, NewJob, Runner, StepKind, StepState, Wait,
 };
@@ -504,6 +507,191 @@ async fn other_bytes_beside_the_video_still_wait_for_approval() {
     waiting_for_approval(&detail(&s, &job).await);
     assert_eq!(s.read(TARGET), MINE.as_bytes());
     assert_eq!(s.count("SELECT count(*) FROM subtitle_applied").await, 0);
+}
+
+/// `MINE` at `TARGET` replaced by a job's `/ok/Show-02` once approved: the
+/// job, done, and the stored subtitle the replacement imported `MINE` as.
+async fn imported_by_a_replacement(s: &Setup) -> (String, String) {
+    let (job, plan) = unmanaged_waiting(s).await;
+    decide(s, &job, &plan, true).await;
+    run(s).await;
+    assert_eq!(detail(s, &job).await.row.state, JobState::Done);
+    assert_eq!(s.read(TARGET), fake::ass("Show-02"));
+    let imported =
+        s.db.run(|c| {
+            c.query_row(
+                "SELECT id FROM subtitle_stored WHERE creator IS NULL",
+                [],
+                |r| r.get::<_, String>(0),
+            )
+            .map_err(trss_core::DbError::from)
+        })
+        .await
+        .unwrap();
+    (job, imported)
+}
+
+#[tokio::test]
+async fn an_imported_copy_on_an_episode_with_a_subtitle_is_compared_then_put_back_beside_the_video()
+{
+    let s = setup().await;
+    let (job, imported) = imported_by_a_replacement(&s).await;
+    let replaced = s.store.plan(&job).await.unwrap()[0]
+        .stored_id
+        .clone()
+        .unwrap();
+
+    // The 자막 card offers it a comparison, as any stored copy, and the
+    // episode's row offers it too.
+    let copies = s.store.work_copies(WORK).await.unwrap();
+    let copy = copies.iter().find(|c| c.id == imported).expect("listed");
+    assert_eq!(
+        (
+            copy.creator.as_deref(),
+            copy.options.applied,
+            &copy.options.apply
+        ),
+        (None, false, &Ok(true))
+    );
+    let only = s.store.stored_only(WORK).await.unwrap();
+    let only = only.iter().find(|c| c.id == imported).expect("listed");
+    assert_eq!(
+        (only.job_id.as_deref(), only.compare),
+        (Some(job.as_str()), true)
+    );
+
+    // Choosing it asks the job that imported it for a comparison.
+    assert_eq!(
+        s.store
+            .choose_stored(WORK, &imported, Chosen::Apply, 5_000_000)
+            .await
+            .unwrap(),
+        StoredChoice::Queued {
+            job_id: job.clone(),
+            compare: true
+        }
+    );
+    run(&s).await;
+    waiting_for_approval(&detail(&s, &job).await);
+    let rows = s.store.plan(&job).await.unwrap();
+    assert_eq!(rows.len(), 2, "the import's row joined the job's plan");
+    assert_eq!(rows[1].chosen, Some(Chosen::Apply));
+    // While the job waits for the approval, the copy is not offered again.
+    let copies = s.store.work_copies(WORK).await.unwrap();
+    let copy = copies.iter().find(|c| c.id == imported).expect("listed");
+    assert_eq!(
+        copy.options.apply,
+        Err("이 보관본을 받은 작업이 교체 승인을 기다리고 있어요. 작업 상세에서 정해 주세요.")
+    );
+    // The plan is the replacement of the applied copy by the imported bytes;
+    // nothing beside the video changed yet.
+    let v = s
+        .store
+        .replacements(&job)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|v| v.plan.stored_id == imported)
+        .expect("its plan");
+    assert_eq!(actions(&v.plan), [(TARGET, PathAction::Replace)]);
+    assert!(v.plan.paths[0].applied_id.is_some());
+    assert_eq!(s.read(TARGET), fake::ass("Show-02"));
+
+    decide(&s, &job, &v.plan, true).await;
+    run(&s).await;
+    let d = detail(&s, &job).await;
+    assert_eq!(
+        d.row.state,
+        JobState::Done,
+        "{:?} {:?}",
+        d.row.note,
+        d.events
+    );
+    assert_eq!(s.read(TARGET), MINE.as_bytes());
+    // The replaced applied copy is its own stored copy still, which can be
+    // chosen again; the imported one is the applied copy now.
+    assert_eq!(
+        s.read(".trss/subtitles/제작자/Show-02.ass"),
+        fake::ass("Show-02")
+    );
+    let copies = s.store.work_copies(WORK).await.unwrap();
+    let find = |id: &str| copies.iter().find(|c| c.id == id).expect("listed");
+    assert!(find(&imported).options.applied);
+    assert_eq!(find(&imported).applied.len(), 1);
+    assert_eq!(find(&replaced).options.apply, Ok(true));
+    assert!(!find(&replaced).options.applied);
+    assert_eq!(
+        s.count("SELECT count(*) FROM subtitle_stored WHERE creator IS NULL")
+            .await,
+        1,
+        "nothing was imported again"
+    );
+    assert_eq!(s.temps(), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn an_imported_copy_on_an_episode_with_no_subtitle_is_applied_at_once() {
+    let s = setup().await;
+    let (job, imported) = imported_by_a_replacement(&s).await;
+    // The episode has no subtitle any more: the applied copy was removed.
+    std::fs::remove_file(s.at(TARGET)).unwrap();
+    s.sql("UPDATE subtitle_applied SET removed_at = 1".to_owned())
+        .await;
+    let plans = s.count("SELECT count(*) FROM subtitle_replacements").await;
+
+    let copies = s.store.work_copies(WORK).await.unwrap();
+    let copy = copies.iter().find(|c| c.id == imported).expect("listed");
+    assert_eq!(copy.options.apply, Ok(false));
+    assert_eq!(
+        s.store
+            .choose_stored(WORK, &imported, Chosen::Apply, 5_000_000)
+            .await
+            .unwrap(),
+        StoredChoice::Queued {
+            job_id: job.clone(),
+            compare: false
+        }
+    );
+    run(&s).await;
+    let d = detail(&s, &job).await;
+    assert_eq!(
+        d.row.state,
+        JobState::Done,
+        "{:?} {:?}",
+        d.row.note,
+        d.events
+    );
+    assert_eq!(s.read(TARGET), MINE.as_bytes());
+    assert_eq!(
+        s.count("SELECT count(*) FROM subtitle_replacements").await,
+        plans,
+        "no comparison"
+    );
+    let copies = s.store.work_copies(WORK).await.unwrap();
+    let copy = copies.iter().find(|c| c.id == imported).expect("listed");
+    assert!(copy.options.applied);
+    assert_eq!(copy.applied.len(), 1);
+}
+
+#[tokio::test]
+async fn an_imported_copy_whose_job_is_gone_stays_blocked_with_the_reason() {
+    let s = setup().await;
+    let (_, imported) = imported_by_a_replacement(&s).await;
+    s.sql("UPDATE subtitle_stored SET job_id = NULL WHERE creator IS NULL".to_owned())
+        .await;
+    let copies = s.store.work_copies(WORK).await.unwrap();
+    let copy = copies.iter().find(|c| c.id == imported).expect("listed");
+    assert_eq!(
+        copy.options.apply,
+        Err("이 보관본을 받은 작업의 기록이 없어 적용할 수 없어요.")
+    );
+    assert_eq!(
+        s.store
+            .choose_stored(WORK, &imported, Chosen::Apply, 5_000_000)
+            .await
+            .unwrap(),
+        StoredChoice::Refused("이 보관본을 받은 작업의 기록이 없어 적용할 수 없어요.")
+    );
 }
 
 #[tokio::test]
