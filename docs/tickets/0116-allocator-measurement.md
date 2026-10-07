@@ -60,7 +60,21 @@
 - mimalloc은 web이 128M 한도에 41번 닿았어요. major fault도 600번 났어요. 한도에 닿아 회수된 파일 페이지(실행 파일 같은)를 디스크에서 다시 읽은 것으로 보여요. 지금 설정으로는 쓸 수 없어요.
 - p95가 세 이미지 모두 약 95 ms인 것은 CPU 0.25개 한도의 throttling 주기(100 ms) 때문이에요.
 - J4105는 이 PC보다 core가 느려서 같은 CPU 시간이 더 긴 걸린 시간이 돼요. 서버의 절대값은 측정하지 않았어요.
-- 할당기와 별개로, web의 user 표본에서 SQL을 해석하는 함수(`sqlite3RunParser`, `yy_reduce`, `sqlite3GetToken`, `keywordCode`)가 glibc에서 10.3%, musl에서 8.2%였어요. 코드에 `prepare`가 175곳 있고 `prepare_cached`는 없어서, 요청마다 SQL을 다시 해석해요. 리팩터링의 [0117](0117-sql-statement-cache.md)에서 고쳐요(사용자 결정, 2026-10-07).
+- 할당기와 별개로, web의 user 표본에서 SQL을 해석하는 함수(`sqlite3RunParser`, `yy_reduce`, `sqlite3GetToken`, `keywordCode`)가 세 이미지의 1–3회차에서 8.2–10.3%였어요. 코드에 `prepare`가 175곳 있고 `prepare_cached`는 없어서, 요청마다 SQL을 다시 해석해요. 리팩터링의 [0117](0117-sql-statement-cache.md)에서 고쳐요(사용자 결정, 2026-10-07).
+
+### 자료와 재현
+
+- 원자료는 이 PC의 `dev/local/measure/0116/`에 있어요. 측정마다의 cgroup 값, 부하 결과, perf 기록, 로그와 perf의 symbol을 읽는 바이너리, 측정용 이미지를 만든 변경(`259c19e` 기준의 diff), 앞선 musl 테스트 원인 분석의 보고와 자료예요. 폴더의 `README.md`가 회차와 파일을 설명해요. worker 로그에 torrent hash가 있어서 저장소에 넣지 않았어요.
+- 측정 스크립트는 `dev/measure/`예요. `run.sh`가 이미지 하나를 측정하고, `summary.py`가 결과를 표로 모아요. 2026-10-07에 `run.sh`로 musl 이미지를 한 번 더 측정했더니 4회차와 2% 안에서 같았어요. `summary.py`로 1–3회차를 모으면 위의 표와 값이 같아요.
+
+### 측정하지 않은 것과 한계
+
+- kernel 시간의 내역은 보지 못했어요. 이 PC의 `perf_event_paranoid`가 2라서 user 표본만 잡았어요. musl이 메모리를 바로 돌려주고 다시 받는다는 설명은 page fault 수와 메모리 크기로 추정한 것이고, `madvise`·`munmap` 같은 syscall 수는 세지 않았어요.
+- release 빌드에 frame pointer가 없어서 perf의 호출 경로가 깨졌어요. 어떤 코드가 할당하는지는 나누지 못했어요. SQL 해석 비중은 파서 함수 네 개의 자체 표본만 더한 하한이에요.
+- 부하는 web의 읽기 요청과 감시 폴더 다시 확인뿐이에요. 받기, 이름 바꾸기, 자막 작업, 압축 해제, 표지 받기, 업로드는 측정하지 않았어요. 데이터도 작품 88개로 작아요.
+- mimalloc은 `MIMALLOC_PURGE_DELAY=0` 하나만, glibc는 기본 설정만 측정했어요. glibc의 `MALLOC_ARENA_MAX`는 시험하지 않았어요.
+- page fault와 한도 이벤트는 이미지마다 한 번(4회차)이에요. 측정하는 동안 이 PC의 부하는 기록하지 않았어요. 제가 측정하는 동안 무거운 빌드나 테스트를 함께 돌리지는 않았어요.
+- 측정은 이 PC에서만 했어요. 서버(J4105)의 절대 시간과, 실제로 새 회차를 받는 부하는 없어요.
 
 ## 완료 기준
 
