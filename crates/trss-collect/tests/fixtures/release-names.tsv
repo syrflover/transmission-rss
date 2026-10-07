@@ -1,0 +1,780 @@
+# Release names and what each one means, read by crates/trss-collect/src/release_names.rs
+# (docs/adr/0015-test-a-rule-once-in-its-crate.md).
+#
+# Fields, tab-separated:
+#   name      the release name
+#   source    history: the collection history of a copy of the server's database (names only)
+#             feed: a public feed (SubsPlease, nyaa.si), read 2026-10-07
+#   work      the work's title as the name writes it (a rule's match phrase), - for none
+#   episode   12, 12.5, batch, batch 1-12, or - for no episode
+#   version   the revision, 1 for a name without one
+#   known     the readings that differ today, comma-separated: work, episode, version
+#             (trss-collect), trname (the episode trname gives a video file of the name)
+#
+# A reading that is fixed fails the test until its mark is removed here.
+[Magnet] Ao Ashi Season 2 - 01 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][pl][Airing]	history	Ao Ashi Season 2	1	1	
+[Magnet] Ao no Hako Season 2 - 01 (NF) [1080p NF WEB-DL AVC EAC3][us][br][mx][es][sa][fr][de][it][jp][pt][pl][nl][no][fi][tr][se][gr][il][ro][id][th][kr][dk][cn][vn][ua][hu][cz][hr][my][ph][Airing]	history	Ao no Hako Season 2	1	1	
+[Magnet] Azur Lane: Bisoku Zenshin! Ni!! - 11 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Azur Lane: Bisoku Zenshin! Ni!!	11	1	
+[Magnet] Azur Lane: Bisoku Zenshin! Ni!! - 12 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Azur Lane: Bisoku Zenshin! Ni!!	12	1	
+[Magnet] Bang Dream! Yumemita - 13 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Bang Dream! Yumemita	13	1	
+[Magnet] Battle Spirits -Re- Zekkai no Kuu - 01 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Battle Spirits -Re- Zekkai no Kuu	1	1	
+[Magnet] Black Clover 2nd Season - 01 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][pl][Airing]	history	Black Clover 2nd Season	1	1	
+[Magnet] Black Torch - 11 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][pl][id][my][th][vn][cn][Airing]	history	Black Torch	11	1	
+[Magnet] Black Torch - 12 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][pl][id][my][th][vn][cn][Airing]	history	Black Torch	12	1	
+[Magnet] Bleach: Sennen Kessen Hen - Kashin Tan - 08 [1080p DSNP WEB-DL AVC AAC][us][br][mx][fr][de][it][Airing]	history	Bleach: Sennen Kessen Hen - Kashin Tan	8	1	
+[Magnet] Buchigire Reijou wa Houfuku wo Chikaimashita. Madousho no Chikara de Sokoku wo Tatakitsubushimasu - 10 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][id][my][th][vn][cn][Airing]	history	Buchigire Reijou wa Houfuku wo Chikaimashita. Madousho no Chikara de Sokoku wo Tatakitsubushimasu	10	1	
+[Magnet] Buchigire Reijou wa Houfuku wo Chikaimashita. Madousho no Chikara de Sokoku wo Tatakitsubushimasu - 11 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][id][my][th][vn][cn][Airing]	history	Buchigire Reijou wa Houfuku wo Chikaimashita. Madousho no Chikara de Sokoku wo Tatakitsubushimasu	11	1	
+[Magnet] Buchigire Reijou wa Houfuku wo Chikaimashita. Madousho no Chikara de Sokoku wo Tatakitsubushimasu - 12 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][id][my][th][vn][cn][Airing]	history	Buchigire Reijou wa Houfuku wo Chikaimashita. Madousho no Chikara de Sokoku wo Tatakitsubushimasu	12	1	
+[Magnet] Bungou Stray Dogs Wan! 2 - 11 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Bungou Stray Dogs Wan! 2	11	1	
+[Magnet] Bungou Stray Dogs Wan! 2 - 12 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Bungou Stray Dogs Wan! 2	12	1	
+[Magnet] Chii Fuyo - 01 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Chii Fuyo	1	1	
+[Magnet] Choujun Choujou-senpai - 01 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Choujun Choujou-senpai	1	1	
+[Magnet] Clevatess II - 10 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][pl][my][Airing]	history	Clevatess II	10	1	
+[Magnet] Clevatess II - 11 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][pl][my][Airing]	history	Clevatess II	11	1	
+[Magnet] Clevatess II - 12 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][Airing]	history	Clevatess II	12	1	
+[Magnet] Clevatess II - 13 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][pl][my][Airing]	history	Clevatess II	13	1	
+[Magnet] Crowned in a Hundred Days - 23 (Chinese Audio) [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][Airing]	history	Crowned in a Hundred Days	23	1	
+[Magnet] Crowned in a Hundred Days - 24 (Chinese Audio) [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][Airing]	history	Crowned in a Hundred Days	24	1	
+[Magnet] Crowned in a Hundred Days - 25 (Chinese Audio) [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][Airing]	history	Crowned in a Hundred Days	25	1	
+[Magnet] Dark Summoner to Dekiteiru - 01 [1080p HIDIVE WEB-DL AVC AAC][us][Airing]	history	Dark Summoner to Dekiteiru	1	1	
+[Magnet] Detective Conan - 1213 [1080p CR WEB-DL AVC AAC][us][de][Airing]	history	Detective Conan	1213	1	
+[Magnet] Detective Conan - 1214 [1080p CR WEB-DL AVC AAC][us][de][Airing]	history	Detective Conan	1214	1	
+[Magnet] Detective Conan - 1215 [1080p CR WEB-DL AVC AAC][us][de][Airing]	history	Detective Conan	1215	1	
+[Magnet] Digimon Beatbreak - 46 (REPACK) [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][ru][Airing]	history	Digimon Beatbreak	46	1	
+[Magnet] Digimon Beatbreak - 47 (REPACK) [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][ru][Airing]	history	Digimon Beatbreak	47	1	
+[Magnet] Digimon Beatbreak - 48 (REPACK) [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][ru][Airing]	history	Digimon Beatbreak	48	1	
+[Magnet] Digimon Beatbreak - 49 (REPACK) [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][ru][Airing]	history	Digimon Beatbreak	49	1	
+[Magnet] Dogulwang - 10 (Japanese Audio) [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][id][my][vn][cn][Airing]	history	Dogulwang	10	1	
+[Magnet] Dogulwang - 10 (Korean Audio) [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Dogulwang	10	1	
+[Magnet] Dogulwang - 11 (Japanese Audio) [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][id][my][vn][cn][Airing]	history	Dogulwang	11	1	
+[Magnet] Dogulwang - 11 (Korean Audio) [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Dogulwang	11	1	
+[Magnet] Dogulwang - 12 (Japanese Audio) [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][id][my][vn][cn][Airing]	history	Dogulwang	12	1	
+[Magnet] Dogulwang - 12 (Korean Audio) [1080p CR WEB-DL AVC AAC][us][Airing]	history	Dogulwang	12	1	
+[Magnet] Dogulwang - 12 (Korean Audio) [1080p CR WEB-DL AVC AAC][us][br][mx][sa][fr][de][it][Airing]	history	Dogulwang	12	1	
+[Magnet] Doumo, Suki na Hito ni Horegusuri wo Irai sareta Majo desu - 01 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][id][my][th][vn][cn][Airing]	history	Doumo, Suki na Hito ni Horegusuri wo Irai sareta Majo desu	1	1	
+[Magnet] FX Senshi Kurumi-chan - 01 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	FX Senshi Kurumi-chan	1	1	
+[Magnet] Futsutsuka na Akujo dewa Gozaimasu ga - 10 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][ru][id][my][th][vn][cn][Airing]	history	Futsutsuka na Akujo dewa Gozaimasu ga	10	1	
+[Magnet] Futsutsuka na Akujo dewa Gozaimasu ga - 11 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][ru][id][my][vn][cn][Airing]	history	Futsutsuka na Akujo dewa Gozaimasu ga	11	1	
+[Magnet] Gaikotsu Kishi-sama Tadaima Isekai e Odekake-chuu II - 10 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][pl][Airing]	history	Gaikotsu Kishi-sama Tadaima Isekai e Odekake-chuu II	10	1	
+[Magnet] Gaikotsu Kishi-sama Tadaima Isekai e Odekake-chuu II - 11 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][pl][Airing]	history	Gaikotsu Kishi-sama Tadaima Isekai e Odekake-chuu II	11	1	
+[Magnet] Gaikotsu Kishi-sama Tadaima Isekai e Odekake-chuu II - 12 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][pl][Airing]	history	Gaikotsu Kishi-sama Tadaima Isekai e Odekake-chuu II	12	1	
+[Magnet] Grand Blue Season 3 - 10 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Grand Blue Season 3	10	1	
+[Magnet] Grand Blue Season 3 - 11 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Grand Blue Season 3	11	1	
+[Magnet] Grand Blue Season 3 - 12 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Grand Blue Season 3	12	1	
+[Magnet] Grow Up Show: Himawari no Circus-dan - 11 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][id][my][th][vn][cn][Airing]	history	Grow Up Show: Himawari no Circus-dan	11	1	
+[Magnet] Grow Up Show: Himawari no Circus-dan - 12 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][id][my][th][vn][cn][Airing]	history	Grow Up Show: Himawari no Circus-dan	12	1	
+[Magnet] Grow Up Show: Himawari no Circus-dan - 13 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][it][ru][my][cn][Airing]	history	Grow Up Show: Himawari no Circus-dan	13	1	
+[Magnet] Hanaori-san wa Tensei Shite mo Kenka ga Shitai - 10 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Hanaori-san wa Tensei Shite mo Kenka ga Shitai	10	1	
+[Magnet] Hanaori-san wa Tensei Shite mo Kenka ga Shitai - 11 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Hanaori-san wa Tensei Shite mo Kenka ga Shitai	11	1	
+[Magnet] Hanaori-san wa Tensei Shite mo Kenka ga Shitai - 12 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Hanaori-san wa Tensei Shite mo Kenka ga Shitai	12	1	
+[Magnet] Hanazakari no Kimitachi e 2nd Season - 12 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][pl][Airing]	history	Hanazakari no Kimitachi e 2nd Season	12	1	
+[Magnet] Hanazakari no Kimitachi e 2nd Season - 13 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][pl][Airing]	history	Hanazakari no Kimitachi e 2nd Season	13	1	
+[Magnet] Hell Mode: Yarikomizuki no Gamer wa Hai Settei no Isekai de Musou suru S2 - 11 [1080p HIDIVE WEB-DL AVC AAC][us][Airing]	history	Hell Mode: Yarikomizuki no Gamer wa Hai Settei no Isekai de Musou suru S2	11	1	
+[Magnet] Hell Mode: Yarikomizuki no Gamer wa Hai Settei no Isekai de Musou suru S2 - 12 [1080p HIDIVE WEB-DL AVC AAC][us][Airing]	history	Hell Mode: Yarikomizuki no Gamer wa Hai Settei no Isekai de Musou suru S2	12	1	
+[Magnet] Hell Mode: Yarikomizuki no Gamer wa Hai Settei no Isekai de Musou suru S2 - 13 [1080p HIDIVE WEB-DL AVC AAC][us][Airing]	history	Hell Mode: Yarikomizuki no Gamer wa Hai Settei no Isekai de Musou suru S2	13	1	
+[Magnet] Heroine? Seijo? Iie, All Works Maid desu (Hokori)! - 12 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][id][my][th][vn][cn][Airing]	history	Heroine? Seijo? Iie, All Works Maid desu (Hokori)!	12	1	
+[Magnet] Honzuki no Gekokujou: Shisho ni Naru Tame ni wa Shudan wo Erandeiraremasen - Ryushu no Youjo - 21 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][pl][id][my][th][vn][cn][Airing]	history	Honzuki no Gekokujou: Shisho ni Naru Tame ni wa Shudan wo Erandeiraremasen - Ryushu no Youjo	21	1	
+[Magnet] Honzuki no Gekokujou: Shisho ni Naru Tame ni wa Shudan wo Erandeiraremasen - Ryushu no Youjo - 22 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][pl][id][my][th][vn][cn][Airing]	history	Honzuki no Gekokujou: Shisho ni Naru Tame ni wa Shudan wo Erandeiraremasen - Ryushu no Youjo	22	1	
+[Magnet] Honzuki no Gekokujou: Shisho ni Naru Tame ni wa Shudan wo Erandeiraremasen - Ryushu no Youjo - 23 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][pl][id][my][th][vn][cn][Airing]	history	Honzuki no Gekokujou: Shisho ni Naru Tame ni wa Shudan wo Erandeiraremasen - Ryushu no Youjo	23	1	
+[Magnet] Honzuki no Gekokujou: Shisho ni Naru Tame ni wa Shudan wo Erandeiraremasen - Ryushu no Youjo - 24 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][pl][id][my][th][vn][cn][Airing]	history	Honzuki no Gekokujou: Shisho ni Naru Tame ni wa Shudan wo Erandeiraremasen - Ryushu no Youjo	24	1	
+[Magnet] Hotel Inhumans Season 2 - 01 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][id][my][th][vn][cn][Airing]	history	Hotel Inhumans Season 2	1	1	
+[Magnet] Iwamoto-senpai no Suisen - 11 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Iwamoto-senpai no Suisen	11	1	
+[Magnet] Iwamoto-senpai no Suisen - 12 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Iwamoto-senpai no Suisen	12	1	
+[Magnet] JoJo no Kimyou na Bouken: Steel Ball Run - 02 (NF) [1080p NF WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][jp][pt][pl][nl][no][fi][tr][se][gr][il][ro][id][th][kr][dk][cn][vn][ua][hu][cz][hr][my][ph][Airing]	history	JoJo no Kimyou na Bouken: Steel Ball Run	2	1	
+[Magnet] JoJo no Kimyou na Bouken: Steel Ball Run - 03 (NF) [1080p NF WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][jp][pt][pl][nl][no][fi][tr][se][gr][il][ro][id][th][kr][dk][cn][vn][ua][hu][cz][hr][my][ph][Airing]	history	JoJo no Kimyou na Bouken: Steel Ball Run	3	1	
+[Magnet] Kabushikigaisha Magilumiere 2nd Season - 09 [1080p AMZN WEB-DL AVC EAC3][us][br][mx][es][sa][fr][de][it][jp][pl][nl][tr][id][th][kr][cn][my][in][Airing]	history	Kabushikigaisha Magilumiere 2nd Season	9	1	
+[Magnet] Kabushikigaisha Magilumiere 2nd Season - 10 [1080p AMZN WEB-DL AVC EAC3][us][br][mx][es][sa][fr][de][it][jp][pl][nl][tr][id][th][kr][cn][my][in][Airing]	history	Kabushikigaisha Magilumiere 2nd Season	10	1	
+[Magnet] Kabushikigaisha Magilumiere 2nd Season - 11 [1080p AMZN WEB-DL AVC EAC3][us][br][mx][es][sa][fr][de][it][jp][pl][nl][tr][id][th][kr][cn][my][in][Airing]	history	Kabushikigaisha Magilumiere 2nd Season	11	1	
+[Magnet] Kabushikigaisha Magilumiere 2nd Season - 12 [1080p AMZN WEB-DL AVC EAC3][us][br][mx][es][sa][fr][de][it][jp][pl][nl][tr][id][th][kr][cn][my][in][Airing]	history	Kabushikigaisha Magilumiere 2nd Season	12	1	
+[Magnet] Kami no Shizuku - 23 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Kami no Shizuku	23	1	
+[Magnet] Kami no Shizuku - 24 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Kami no Shizuku	24	1	
+[Magnet] Kanata kara - 01 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Kanata kara	1	1	
+[Magnet] Kashita Maryoku wa ~Revo Barai~ de Kyousei Choushuu - 01 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Kashita Maryoku wa ~Revo Barai~ de Kyousei Choushuu	1	1	
+[Magnet] Katainaka no Ossan, Kensei ni Naru II - 10 [1080p AMZN WEB-DL AVC EAC3][us][br][mx][es][sa][fr][de][it][jp][pl][nl][tr][id][th][kr][cn][my][in][Airing]	history	Katainaka no Ossan, Kensei ni Naru II	10	1	
+[Magnet] Katainaka no Ossan, Kensei ni Naru II - 11 [1080p AMZN WEB-DL AVC EAC3][us][br][mx][es][sa][fr][de][it][jp][pl][nl][tr][id][th][kr][cn][my][in][Airing]	history	Katainaka no Ossan, Kensei ni Naru II	11	1	
+[Magnet] Katainaka no Ossan, Kensei ni Naru II - 12 [1080p AMZN WEB-DL AVC EAC3][us][br][mx][es][sa][fr][de][it][jp][pl][nl][tr][id][th][kr][cn][my][in][Airing]	history	Katainaka no Ossan, Kensei ni Naru II	12	1	
+[Magnet] Keroro Gunsou (2026) - 01 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][it][ru][Airing]	history	Keroro Gunsou (2026)	1	1	
+[Magnet] Kimi ga Shinu made Koi wo Shitai - 10 [1080p CR WEB-DL AVC AAC][us][br][mx][es][fr][de][it][ru][Airing]	history	Kimi ga Shinu made Koi wo Shitai	10	1	
+[Magnet] Kimi ga Shinu made Koi wo Shitai - 11 [1080p CR WEB-DL AVC AAC][us][br][mx][es][fr][de][it][ru][Airing]	history	Kimi ga Shinu made Koi wo Shitai	11	1	
+[Magnet] Kimi ga Shinu made Koi wo Shitai - 12 [1080p CR WEB-DL AVC AAC][us][br][mx][es][fr][de][it][ru][Airing]	history	Kimi ga Shinu made Koi wo Shitai	12	1	
+[Magnet] Kimi ga Shinu made Koi wo Shitai - 13 [1080p CR WEB-DL AVC AAC][us][br][mx][es][fr][de][it][ru][Airing]	history	Kimi ga Shinu made Koi wo Shitai	13	1	
+[Magnet] Kimi no Koto ga Dai Dai Dai Dai Daisuki na 100-nin no Kanojo S3 - 11 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][pl][Airing]	history	Kimi no Koto ga Dai Dai Dai Dai Daisuki na 100-nin no Kanojo S3	11	1	
+[Magnet] Kimi no Koto ga Dai Dai Dai Dai Daisuki na 100-nin no Kanojo S3 - 12 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][pl][Airing]	history	Kimi no Koto ga Dai Dai Dai Dai Daisuki na 100-nin no Kanojo S3	12	1	
+[Magnet] Kimi wo Aisuru Ki wa Nai to Itta Jiki Koushaku-sama ga Nazeka Dekiai Shitekimasu - 11 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][id][my][th][vn][cn][Airing]	history	Kimi wo Aisuru Ki wa Nai to Itta Jiki Koushaku-sama ga Nazeka Dekiai Shitekimasu	11	1	
+[Magnet] Kimi wo Aisuru Ki wa Nai to Itta Jiki Koushaku-sama ga Nazeka Dekiai Shitekimasu - 12 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][id][my][th][vn][cn][Airing]	history	Kimi wo Aisuru Ki wa Nai to Itta Jiki Koushaku-sama ga Nazeka Dekiai Shitekimasu	12	1	
+[Magnet] Koko wa Ore ni Makasete Saki ni Ike to Itte kara 10-nen ga Tattara Densetsu ni Natteita - 11 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][id][my][th][vn][cn][Airing]	history	Koko wa Ore ni Makasete Saki ni Ike to Itte kara 10-nen ga Tattara Densetsu ni Natteita	11	1	
+[Magnet] Koko wa Ore ni Makasete Saki ni Ike to Itte kara 10-nen ga Tattara Densetsu ni Natteita - 12 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][id][my][th][vn][cn][Airing]	history	Koko wa Ore ni Makasete Saki ni Ike to Itte kara 10-nen ga Tattara Densetsu ni Natteita	12	1	
+[Magnet] Koori no Jouheki 2nd Season - 01 (NF) [1080p NF WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][jp][pt][pl][nl][no][fi][tr][se][gr][il][ro][id][th][kr][dk][cn][vn][ua][hu][cz][hr][my][ph][es-ct][es-ga][es-pv][Airing]	history	Koori no Jouheki 2nd Season	1	1	
+[Magnet] Kore Kaite Shine - 10 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Kore Kaite Shine	10	1	
+[Magnet] Kore Kaite Shine - 11 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Kore Kaite Shine	11	1	
+[Magnet] Kore Kaite Shine - 12 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Kore Kaite Shine	12	1	
+[Magnet] Koukaku Kidoutai (2026) - 10 [1080p AMZN WEB-DL AVC EAC3][us][br][mx][es][sa][fr][de][it][jp][pl][nl][tr][id][th][kr][cn][my][in][Airing]	history	Koukaku Kidoutai (2026)	10	1	
+[Magnet] Kuroneko to Majo no Kyoushitsu - 23 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Kuroneko to Majo no Kyoushitsu	23	1	
+[Magnet] Kuroneko to Majo no Kyoushitsu - 24 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Kuroneko to Majo no Kyoushitsu	24	1	
+[Magnet] Kusuriya no Hitorigoto 3rd Season - 01 (V2) [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][pl][Airing]	history	Kusuriya no Hitorigoto 3rd Season	1	2	version
+[Magnet] Kusuriya no Hitorigoto 3rd Season - 01 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Kusuriya no Hitorigoto 3rd Season	1	1	
+[Magnet] Kyouran Reijou Nia Liston - 01 [1080p HIDIVE WEB-DL AVC AAC][us][Airing]	history	Kyouran Reijou Nia Liston	1	1	
+[Magnet] Let's Go Kaiki-gumi - 11 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][id][my][th][vn][cn][Airing]	history	Let's Go Kaiki-gumi	11	1	
+[Magnet] Let's Go Kaiki-gumi - 12 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][id][my][th][vn][cn][Airing]	history	Let's Go Kaiki-gumi	12	1	
+[Magnet] Liar Game - 23 [1080p CR WEB-DL AVC AAC][us][br][mx][es][fr][de][it][ru][pl][id][my][th][vn][cn][Airing]	history	Liar Game	23	1	
+[Magnet] Liar Game - 24 [1080p CR WEB-DL AVC AAC][us][br][mx][es][fr][de][it][ru][pl][id][my][th][vn][cn][Airing]	history	Liar Game	24	1	
+[Magnet] Liar Game - 25 [1080p CR WEB-DL AVC AAC][us][br][mx][es][fr][de][it][ru][pl][id][my][th][vn][cn][Airing]	history	Liar Game	25	1	
+[Magnet] Liar Game - 26 [1080p CR WEB-DL AVC AAC][us][br][mx][es][fr][de][it][ru][pl][id][my][th][vn][cn][Airing]	history	Liar Game	26	1	
+[Magnet] Lv999 no Murabito - 12 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Lv999 no Murabito	12	1	
+[Magnet] Magical Explorer - 01 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][cn][Airing]	history	Magical Explorer	1	1	
+[Magnet] Magical Explorer - 02 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][cn][Airing]	history	Magical Explorer	2	1	
+[Magnet] Mahou Shoujo Lyrical Nanoha Exceeds: Gun Blaze Vengeance - 11 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Mahou Shoujo Lyrical Nanoha Exceeds: Gun Blaze Vengeance	11	1	
+[Magnet] Mahou Shoujo Lyrical Nanoha Exceeds: Gun Blaze Vengeance - 12 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Mahou Shoujo Lyrical Nanoha Exceeds: Gun Blaze Vengeance	12	1	
+[Magnet] Mairimashita! Iruma-kun 4th Season - 22 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Mairimashita! Iruma-kun 4th Season	22	1	
+[Magnet] Mairimashita! Iruma-kun 4th Season - 23 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Mairimashita! Iruma-kun 4th Season	23	1	
+[Magnet] Mairimashita! Iruma-kun 4th Season - 24 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Mairimashita! Iruma-kun 4th Season	24	1	
+[Magnet] Mao - 24 [1080p DSNP WEB-DL AVC AAC][us][br][mx][Airing]	history	Mao	24	1	
+[Magnet] Mao - 25 [1080p DSNP WEB-DL AVC AAC][us][br][mx][Airing]	history	Mao	25	1	
+[Magnet] Mao - 26 [1080p DSNP WEB-DL AVC AAC][us][br][mx][Airing]	history	Mao	26	1	
+[Magnet] Marronnier Oukoku no Shichinin no Kishi - 01 [1080p AMZN WEB-DL AVC EAC3][us][br][mx][es][sa][fr][de][it][jp][pt][pl][nl][no][fi][tr][se][gr][il][ro][id][th][kr][dk][cn][hu][cz][my][in][Airing]	history	Marronnier Oukoku no Shichinin no Kishi	1	1	
+[Magnet] Mebius Dust - 10 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][id][my][th][vn][cn][Airing]	history	Mebius Dust	10	1	
+[Magnet] Mebius Dust - 11 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][id][my][th][vn][cn][Airing]	history	Mebius Dust	11	1	
+[Magnet] Mebius Dust - 12 [1080p CR WEB-DL AVC AAC][us][br][sa][fr][de][Airing]	history	Mebius Dust	12	1	
+[Magnet] Meitantei Precure - 32 (Multi) [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Meitantei Precure	32	1	
+[Magnet] Meitantei Precure - 33 (Multi) [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Meitantei Precure	33	1	
+[Magnet] Meitantei Precure - 34 (Multi) [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Meitantei Precure	34	1	
+[Magnet] Meitantei Precure - 35 (Multi) [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][de][it][ru][Airing]	history	Meitantei Precure	35	1	
+[Magnet] Meitantei Precure - 36 (Multi) [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][de][it][ru][Airing]	history	Meitantei Precure	36	1	
+[Magnet] Meitantei Precure - 36 [1080p CR WEB-DL AVC AAC][us][Airing]	history	Meitantei Precure	36	1	
+[Magnet] Mezametara Saikyou Soubi to Uchuusenmochi Datta node - 01 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][pl][cn][Airing]	history	Mezametara Saikyou Soubi to Uchuusenmochi Datta node	1	1	
+[Magnet] Mujikaku Seijo wa Kyou mo Muishiki ni Chikara wo Tare Nagasu - 11 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][id][my][th][vn][cn][Airing]	history	Mujikaku Seijo wa Kyou mo Muishiki ni Chikara wo Tare Nagasu	11	1	
+[Magnet] Mujikaku Seijo wa Kyou mo Muishiki ni Chikara wo Tare Nagasu - 12 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][id][my][th][vn][cn][Airing]	history	Mujikaku Seijo wa Kyou mo Muishiki ni Chikara wo Tare Nagasu	12	1	
+[Magnet] Mushoku Tensei III: Isekai Ittara Honki Dasu - 12 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][pl][id][my][th][vn][cn][Airing]	history	Mushoku Tensei III: Isekai Ittara Honki Dasu	12	1	
+[Magnet] Mushoku Tensei III: Isekai Ittara Honki Dasu - 13 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][pl][id][my][th][vn][cn][Airing]	history	Mushoku Tensei III: Isekai Ittara Honki Dasu	13	1	
+[Magnet] Mushoku Tensei III: Isekai Ittara Honki Dasu - 14 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][pl][Airing]	history	Mushoku Tensei III: Isekai Ittara Honki Dasu	14	1	
+[Magnet] Neko to Ryuu - 12 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Neko to Ryuu	12	1	
+[Magnet] Nige Jouzu no Wakagimi 2nd Season - 09 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][id][my][th][vn][cn][Airing]	history	Nige Jouzu no Wakagimi 2nd Season	9	1	
+[Magnet] Nige Jouzu no Wakagimi 2nd Season - 10 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][id][th][vn][cn][Airing]	history	Nige Jouzu no Wakagimi 2nd Season	10	1	
+[Magnet] Nige Jouzu no Wakagimi 2nd Season - 11 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Nige Jouzu no Wakagimi 2nd Season	11	1	
+[Magnet] Nige Jouzu no Wakagimi 2nd Season - 12 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][id][my][th][vn][cn][Airing]	history	Nige Jouzu no Wakagimi 2nd Season	12	1	
+[Magnet] Nijuuseiki Denki Mokuroku: Eureka Evrika - 11 (NF) [1080p NF WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][jp][pt][pl][nl][no][fi][tr][se][gr][il][ro][id][th][kr][dk][cn][vn][ua][hu][cz][hr][my][ph][Airing]	history	Nijuuseiki Denki Mokuroku: Eureka Evrika	11	1	
+[Magnet] Nijuuseiki Denki Mokuroku: Eureka Evrika - 12 (NF) [1080p NF WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][jp][pt][pl][nl][no][fi][tr][se][gr][il][ro][id][th][kr][dk][cn][vn][ua][hu][cz][hr][my][ph][Airing]	history	Nijuuseiki Denki Mokuroku: Eureka Evrika	12	1	
+[Magnet] Nijuuseiki Denki Mokuroku: Eureka Evrika - 13 (NF) [1080p NF WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][jp][pt][pl][nl][no][fi][tr][se][gr][il][ro][id][th][kr][dk][cn][vn][ua][hu][cz][hr][my][ph][Airing]	history	Nijuuseiki Denki Mokuroku: Eureka Evrika	13	1	
+[Magnet] Ojisan wa Kawaii Mono ga Osuki - 01 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Ojisan wa Kawaii Mono ga Osuki	1	1	
+[Magnet] One Piece - 1177 (Multi) [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	One Piece	1177	1	
+[Magnet] One Piece - 1178 (Multi) [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][Airing]	history	One Piece	1178	1	
+[Magnet] One Piece - 1179 (Multi) [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	One Piece	1179	1	
+[Magnet] One Piece - 1180 (Multi) [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][Airing]	history	One Piece	1180	1	
+[Magnet] Oni no Hanayome - 11 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][id][my][th][vn][cn][Airing]	history	Oni no Hanayome	11	1	
+[Magnet] Oni no Hanayome - 12 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][id][my][th][vn][cn][Airing]	history	Oni no Hanayome	12	1	
+[Magnet] Otome Kaijuu Carameliser - 11 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Otome Kaijuu Carameliser	11	1	
+[Magnet] Otome Kaijuu Carameliser - 12 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][pl][Airing]	history	Otome Kaijuu Carameliser	12	1	
+[Magnet] Otomege Sekai wa Mob ni Kibishii Sekai Desu 2 - 10 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Otomege Sekai wa Mob ni Kibishii Sekai Desu 2	10	1	
+[Magnet] Otomege Sekai wa Mob ni Kibishii Sekai Desu 2 - 11 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Otomege Sekai wa Mob ni Kibishii Sekai Desu 2	11	1	
+[Magnet] Otomege Sekai wa Mob ni Kibishii Sekai Desu 2 - 12 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Otomege Sekai wa Mob ni Kibishii Sekai Desu 2	12	1	
+[Magnet] Psyren - 01 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][pl][id][my][th][vn][cn][Airing]	history	Psyren	1	1	
+[Magnet] Rakudai Kenja no Gakuin Musou - 12 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][id][my][th][vn][cn][Airing]	history	Rakudai Kenja no Gakuin Musou	12	1	
+[Magnet] Ranma 1/2 (2024) 3rd Season - 01 (NF) [1080p NF WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][jp][pt][pl][nl][no][fi][tr][se][gr][il][ro][id][th][kr][dk][cn][vn][ua][hu][cz][hr][my][ph][es-ct][es-ga][es-pv][Airing]	history	Ranma 1/2 (2024) 3rd Season	1	1	
+[Magnet] Re:Zero kara Hajimeru Isekai Seikatsu 4th Season - 16 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][pl][Airing]	history	Re:Zero kara Hajimeru Isekai Seikatsu 4th Season	16	1	
+[Magnet] Re:Zero kara Hajimeru Isekai Seikatsu 4th Season - 17 [1080p CR WEB-DL AVC AAC][us][mx][es][sa][fr][de][it][ru][pl][Airing]	history	Re:Zero kara Hajimeru Isekai Seikatsu 4th Season	17	1	
+[Magnet] Re:Zero kara Hajimeru Isekai Seikatsu 4th Season - 18 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][pl][Airing]	history	Re:Zero kara Hajimeru Isekai Seikatsu 4th Season	18	1	
+[Magnet] Re:Zero kara Hajimeru Isekai Seikatsu 4th Season - 19 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][it][ru][Airing]	history	Re:Zero kara Hajimeru Isekai Seikatsu 4th Season	19	1	
+[Magnet] Reiwa no Dara-san - 11 [1080p CR WEB-DL AVC AAC][us][br][mx][es][fr][de][it][ru][id][my][th][vn][cn][Airing]	history	Reiwa no Dara-san	11	1	
+[Magnet] Reiwa no Dara-san - 12 [1080p CR WEB-DL AVC AAC][us][br][mx][es][fr][de][it][ru][id][my][th][vn][cn][Airing]	history	Reiwa no Dara-san	12	1	
+[Magnet] Reiwa no Dara-san - 13 [1080p CR WEB-DL AVC AAC][us][br][fr][id][my][th][vn][cn][Airing]	history	Reiwa no Dara-san	13	1	
+[Magnet] Rilakkuma - 24 [1080p CR WEB-DL AVC AAC][us][br][mx][es][fr][Airing]	history	Rilakkuma	24	1	
+[Magnet] Rilakkuma - 25 [1080p CR WEB-DL AVC AAC][us][br][mx][es][fr][Airing]	history	Rilakkuma	25	1	
+[Magnet] Rilakkuma - 26 [1080p CR WEB-DL AVC AAC][us][mx][es][fr][Airing]	history	Rilakkuma	26	1	
+[Magnet] Romelia Senki - 01 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Romelia Senki	1	1	
+[Magnet] Ryoumin 0-nin Start no Henkyou Ryoushu-sama - 11 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][Airing]	history	Ryoumin 0-nin Start no Henkyou Ryoushu-sama	11	1	
+[Magnet] Ryoumin 0-nin Start no Henkyou Ryoushu-sama - 12 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][Airing]	history	Ryoumin 0-nin Start no Henkyou Ryoushu-sama	12	1	
+[Magnet] Saijo no Osewa - 11 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Saijo no Osewa	11	1	
+[Magnet] Saijo no Osewa - 12 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Saijo no Osewa	12	1	
+[Magnet] Saikyou Degarashi Ouji no Anyaku Teii Arasoi - 10 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][id][my][th][vn][cn][Airing]	history	Saikyou Degarashi Ouji no Anyaku Teii Arasoi	10	1	
+[Magnet] Saikyou Degarashi Ouji no Anyaku Teii Arasoi - 11 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][pl][id][my][th][vn][cn][Airing]	history	Saikyou Degarashi Ouji no Anyaku Teii Arasoi	11	1	
+[Magnet] Saikyou Degarashi Ouji no Anyaku Teii Arasoi - 12 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][pl][id][my][th][vn][cn][Airing]	history	Saikyou Degarashi Ouji no Anyaku Teii Arasoi	12	1	
+[Magnet] Sayonara Lara - 11 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][id][my][th][vn][cn][Airing]	history	Sayonara Lara	11	1	
+[Magnet] Sayonara Lara - 12 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][id][my][th][vn][cn][Airing]	history	Sayonara Lara	12	1	
+[Magnet] Seihantai na Kimi to Boku 2nd Season - 11 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][pl][Airing]	history	Seihantai na Kimi to Boku 2nd Season	11	1	
+[Magnet] Seihantai na Kimi to Boku 2nd Season - 12 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][pl][Airing]	history	Seihantai na Kimi to Boku 2nd Season	12	1	
+[Magnet] Seihantai na Kimi to Boku 2nd Season - 13 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][pl][Airing]	history	Seihantai na Kimi to Boku 2nd Season	13	1	
+[Magnet] Sekai Saikyou no Kouei - 11 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Sekai Saikyou no Kouei	11	1	
+[Magnet] Sekai Saikyou no Kouei - 12 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Sekai Saikyou no Kouei	12	1	
+[Magnet] Shiguang Dailiren Season 3 - 06 (Chinese Audio) [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Shiguang Dailiren Season 3	6	1	
+[Magnet] Shiguang Dailiren Season 3 - 07 (Chinese Audio) [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Shiguang Dailiren Season 3	7	1	
+[Magnet] Shiguang Dailiren Season 3 - 08 (Chinese Audio) [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Shiguang Dailiren Season 3	8	1	
+[Magnet] Shiguang Dailiren Season 3 - 09 (Chinese Audio) [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Shiguang Dailiren Season 3	9	1	
+[Magnet] Shin Tennis no Ouji-sama: U-17 World Cup Kesshou Member Ketteisen - 01 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Shin Tennis no Ouji-sama: U-17 World Cup Kesshou Member Ketteisen	1	1	
+[Magnet] Shiotaiou no Satou-san ga Ore ni dake Amai - 01 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][Airing]	history	Shiotaiou no Satou-san ga Ore ni dake Amai	1	1	
+[Magnet] Sora wa Akai Kawa no Hotori - 10 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Sora wa Akai Kawa no Hotori	10	1	
+[Magnet] Sora wa Akai Kawa no Hotori - 11 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Sora wa Akai Kawa no Hotori	11	1	
+[Magnet] Sora wa Akai Kawa no Hotori - 12 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Sora wa Akai Kawa no Hotori	12	1	
+[Magnet] Sora wa Akai Kawa no Hotori - 13 [1080p CR WEB-DL AVC AAC][us][br][mx][fr][it][Airing]	history	Sora wa Akai Kawa no Hotori	13	1	
+[Magnet] Sora wa Akai Kawa no Hotori - 14 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Sora wa Akai Kawa no Hotori	14	1	
+[Magnet] Super no Ura de Yani Suu Futari - 10 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Super no Ura de Yani Suu Futari	10	1	
+[Magnet] Super no Ura de Yani Suu Futari - 11 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][pl][Airing]	history	Super no Ura de Yani Suu Futari	11	1	
+[Magnet] Super no Ura de Yani Suu Futari - 12 [1080p CR WEB-DL AVC AAC][us][br][fr][it][Airing]	history	Super no Ura de Yani Suu Futari	12	1	
+[Magnet] Suterare Seijo no Isekai Gohan Tabi: Kakure Skill de Camping Car wo Shoukan shimashita - 10 [1080p HIDIVE WEB-DL AVC AAC][us][Airing]	history	Suterare Seijo no Isekai Gohan Tabi: Kakure Skill de Camping Car wo Shoukan shimashita	10	1	
+[Magnet] Suterare Seijo no Isekai Gohan Tabi: Kakure Skill de Camping Car wo Shoukan shimashita - 11 [1080p HIDIVE WEB-DL AVC AAC][us][Airing]	history	Suterare Seijo no Isekai Gohan Tabi: Kakure Skill de Camping Car wo Shoukan shimashita	11	1	
+[Magnet] Suterare Seijo no Isekai Gohan Tabi: Kakure Skill de Camping Car wo Shoukan shimashita - 12 [1080p HIDIVE WEB-DL AVC AAC][us][Airing]	history	Suterare Seijo no Isekai Gohan Tabi: Kakure Skill de Camping Car wo Shoukan shimashita	12	1	
+[Magnet] Tai Ari Deshita. Ojou-sama wa Kakutou Game Nante Shinai - 10 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][id][my][th][vn][cn][Airing]	history	Tai Ari Deshita. Ojou-sama wa Kakutou Game Nante Shinai	10	1	
+[Magnet] Tai Ari Deshita. Ojou-sama wa Kakutou Game Nante Shinai - 11 [1080p CR WEB-DL AVC AAC][us][br][sa][fr][de][it][ru][id][my][th][vn][cn][Airing]	history	Tai Ari Deshita. Ojou-sama wa Kakutou Game Nante Shinai	11	1	
+[Magnet] Tai Ari Deshita. Ojou-sama wa Kakutou Game Nante Shinai - 12 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][id][my][th][vn][cn][Airing]	history	Tai Ari Deshita. Ojou-sama wa Kakutou Game Nante Shinai	12	1	
+[Magnet] Tank Chair - 01 [1080p AMZN WEB-DL AVC EAC3][us][br][mx][es][sa][fr][de][it][jp][pl][nl][tr][id][th][kr][cn][my][in][Airing]	history	Tank Chair	1	1	
+[Magnet] Tempal: Item no Chikara - 01 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][pl][Airing]	history	Tempal: Item no Chikara	1	1	
+[Magnet] Tempal: Item no Chikara - 02 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][pl][Airing]	history	Tempal: Item no Chikara	2	1	
+[Magnet] Tenkou-saki no Seiso Karen na Bishoujo ga, Mukashi Danshi to Omotte Issho ni Asonda Osananajimi Datta Ken - 10 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][id][my][th][vn][cn][Airing]	history	Tenkou-saki no Seiso Karen na Bishoujo ga, Mukashi Danshi to Omotte Issho ni Asonda Osananajimi Datta Ken	10	1	
+[Magnet] Tenkou-saki no Seiso Karen na Bishoujo ga, Mukashi Danshi to Omotte Issho ni Asonda Osananajimi Datta Ken - 11 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][id][my][th][vn][cn][Airing]	history	Tenkou-saki no Seiso Karen na Bishoujo ga, Mukashi Danshi to Omotte Issho ni Asonda Osananajimi Datta Ken	11	1	
+[Magnet] Tenkou-saki no Seiso Karen na Bishoujo ga, Mukashi Danshi to Omotte Issho ni Asonda Osananajimi Datta Ken - 12 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][id][my][th][vn][cn][Airing]	history	Tenkou-saki no Seiso Karen na Bishoujo ga, Mukashi Danshi to Omotte Issho ni Asonda Osananajimi Datta Ken	12	1	
+[Magnet] Tenmaku no Jaadugar - 12 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Tenmaku no Jaadugar	12	1	
+[Magnet] Tensei Goblin dakedo Shitsumon Aru - 01 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][id][my][th][vn][cn][Airing]	history	Tensei Goblin dakedo Shitsumon Aru	1	1	
+[Magnet] Tensei Goblin dakedo Shitsumon Aru - 02 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][id][my][th][vn][cn][Airing]	history	Tensei Goblin dakedo Shitsumon Aru	2	1	
+[Magnet] Tensei Kizoku, Kantei Skill de Nariagaru S3 - 01 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Tensei Kizoku, Kantei Skill de Nariagaru S3	1	1	
+[Magnet] Tensei Kizoku, Kantei Skill de Nariagaru S3 - 02 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Tensei Kizoku, Kantei Skill de Nariagaru S3	2	1	
+[Magnet] Tensei Shitara Ken Deshita II - 01 [1080p HIDIVE WEB-DL AVC AAC][us][Airing]	history	Tensei Shitara Ken Deshita II	1	1	
+[Magnet] Tensei Shitara Slime Datta Ken 4th Season - 22 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][pl][Airing]	history	Tensei Shitara Slime Datta Ken 4th Season	22	1	
+[Magnet] Tensei Shitara Slime Datta Ken 4th Season - 23 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][pl][Airing]	history	Tensei Shitara Slime Datta Ken 4th Season	23	1	
+[Magnet] Tensei Shitara Slime Datta Ken 4th Season - 24 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][pl][Airing]	history	Tensei Shitara Slime Datta Ken 4th Season	24	1	
+[Magnet] Tensei shita Daiseijo wa, Seijo de Aru Koto wo Hitakakusu - 01 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Tensei shita Daiseijo wa, Seijo de Aru Koto wo Hitakakusu	1	1	
+[Magnet] Tensei shita Daiseijo wa, Seijo de Aru Koto wo Hitakakusu - 02 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Tensei shita Daiseijo wa, Seijo de Aru Koto wo Hitakakusu	2	1	
+[Magnet] Tetsunabe no Jan - 11 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][id][my][th][vn][cn][Airing]	history	Tetsunabe no Jan	11	1	
+[Magnet] Tetsunabe no Jan - 12 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][id][my][th][vn][cn][Airing]	history	Tetsunabe no Jan	12	1	
+[Magnet] Thunder 3 - 10 (NF) [1080p NF WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][jp][pt][pl][nl][no][fi][tr][se][gr][il][ro][id][th][kr][dk][cn][vn][ua][hu][cz][hr][my][ph][Airing]	history	Thunder 3	10	1	
+[Magnet] Thunder 3 - 11 (NF) [1080p NF WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][jp][pt][pl][nl][no][fi][tr][se][gr][il][ro][id][th][kr][dk][cn][vn][ua][hu][cz][hr][my][ph][Airing]	history	Thunder 3	11	1	
+[Magnet] Thunder 3 - 12 (NF) [1080p NF WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][jp][pt][pl][nl][no][fi][tr][se][gr][il][ro][id][th][kr][dk][cn][vn][ua][hu][cz][hr][my][ph][Airing]	history	Thunder 3	12	1	
+[Magnet] Tokyo Revengers: Santen Sensou Hen - 01 [1080p DSNP WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][jp][pt][pl][nl][no][fi][se][gr][il][ro][kr][dk][cn][hu][cz][hr][sk][Airing]	history	Tokyo Revengers: Santen Sensou Hen	1	1	
+[Magnet] Tougen Anki: Nikko Kegon no Taki-hen - 01 [1080p CR WEB-DL AVC AAC][us][mx][es][fr][de][it][ru][id][my][th][vn][Airing]	history	Tougen Anki: Nikko Kegon no Taki-hen	1	1	
+[Magnet] Toumei na Yoru ni Kakeru Kimi to, Me ni Mienai Koi wo Shita - 10 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Toumei na Yoru ni Kakeru Kimi to, Me ni Mienai Koi wo Shita	10	1	
+[Magnet] Toumei na Yoru ni Kakeru Kimi to, Me ni Mienai Koi wo Shita - 11 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Toumei na Yoru ni Kakeru Kimi to, Me ni Mienai Koi wo Shita	11	1	
+[Magnet] Toumei na Yoru ni Kakeru Kimi to, Me ni Mienai Koi wo Shita - 12 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Toumei na Yoru ni Kakeru Kimi to, Me ni Mienai Koi wo Shita	12	1	
+[Magnet] Tsuihou sareta Tensei Juukishi wa Game Chishiki de Musou suru - 11 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Tsuihou sareta Tensei Juukishi wa Game Chishiki de Musou suru	11	1	
+[Magnet] Tsuihou sareta Tensei Juukishi wa Game Chishiki de Musou suru - 12 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][pl][Airing]	history	Tsuihou sareta Tensei Juukishi wa Game Chishiki de Musou suru	12	1	
+[Magnet] Tsuihou sareta Tensei Juukishi wa Game Chishiki de Musou suru - 13 [1080p CR WEB-DL AVC AAC][us][br][sa][fr][de][it][pl][Airing]	history	Tsuihou sareta Tensei Juukishi wa Game Chishiki de Musou suru	13	1	
+[Magnet] Tsuihou sareta Tensei Juukishi wa Game Chishiki de Musou suru - 14 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][pl][Airing]	history	Tsuihou sareta Tensei Juukishi wa Game Chishiki de Musou suru	14	1	
+[Magnet] Uchi no Otouto-domo ga Sumimasen - 11 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][id][my][th][vn][cn][Airing]	history	Uchi no Otouto-domo ga Sumimasen	11	1	
+[Magnet] Uchi no Otouto-domo ga Sumimasen - 12 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][it][ru][id][my][th][vn][cn][Airing]	history	Uchi no Otouto-domo ga Sumimasen	12	1	
+[Magnet] Uchi no Otouto-domo ga Sumimasen - 13 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Uchi no Otouto-domo ga Sumimasen	13	1	
+[Magnet] Vertex Force - 01 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][id][my][th][vn][cn][Airing]	history	Vertex Force	1	1	
+[Magnet] World Is Dancing - 11 [1080p HIDIVE WEB-DL AVC AAC][us][Airing]	history	World Is Dancing	11	1	
+[Magnet] World Is Dancing - 12 [1080p HIDIVE WEB-DL AVC AAC][us][Airing]	history	World Is Dancing	12	1	
+[Magnet] World Is Dancing - 13 [1080p HIDIVE WEB-DL AVC AAC][us][Airing]	history	World Is Dancing	13	1	
+[Magnet] Yani Neko - 10 (NF) [1080p NF WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][jp][pl][tr][id][th][kr][cn][vn][Airing]	history	Yani Neko	10	1	
+[Magnet] Yani Neko - 11 (NF) [1080p NF WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][jp][pl][tr][id][th][kr][cn][vn][my][Airing]	history	Yani Neko	11	1	
+[Magnet] Yani Neko - 12 (NF) [1080p NF WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][jp][pl][tr][id][th][kr][cn][vn][my][Airing]	history	Yani Neko	12	1	
+[Magnet] Yasei no Last Boss ga Arawareta 2nd Season - 01 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Yasei no Last Boss ga Arawareta 2nd Season	1	1	
+[Magnet] Yasei no Last Boss ga Arawareta 2nd Season - 02 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Yasei no Last Boss ga Arawareta 2nd Season	2	1	
+[Magnet] Yomi no Tsugai - 23 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][pl][id][my][th][vn][cn][Airing]	history	Yomi no Tsugai	23	1	
+[Magnet] Yomi no Tsugai - 24 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][pl][id][my][th][vn][cn][Airing]	history	Yomi no Tsugai	24	1	
+[Magnet] Yoroi-Shinden Samurai Troopers Part 2 - 10 [1080p CR WEB-DL AVC AAC][us][br][mx][fr][de][ru][Airing]	history	Yoroi-Shinden Samurai Troopers Part 2	10	1	
+[Magnet] Yoroi-Shinden Samurai Troopers Part 2 - 11 [1080p CR WEB-DL AVC AAC][us][br][mx][fr][de][ru][Airing]	history	Yoroi-Shinden Samurai Troopers Part 2	11	1	
+[Magnet] Yoroi-Shinden Samurai Troopers Part 2 - 12 [1080p CR WEB-DL AVC AAC][us][br][mx][fr][de][ru][Airing]	history	Yoroi-Shinden Samurai Troopers Part 2	12	1	
+[Magnet] Youjo Senki II - 10 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Youjo Senki II	10	1	
+[Magnet] Youjo Senki II - 11 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Youjo Senki II	11	1	
+[Magnet] Youjo Senki II - 12 [1080p CR WEB-DL AVC AAC][us][br][sa][fr][de][it][Airing]	history	Youjo Senki II	12	1	
+[Magnet] Yowaki Max Reijou nanoni, Ratsuwan Konyakusha-sama no Kake ni Notte Shimatta - 01 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][id][my][th][vn][cn][Airing]	history	Yowaki Max Reijou nanoni, Ratsuwan Konyakusha-sama no Kake ni Notte Shimatta	1	1	
+[Magnet] Zombie Sagashitemasu - 01 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]	history	Zombie Sagashitemasu	1	1	
+[SubsPlease] Ao Ashi S2 - 01 (1080p) [6DCF3E95].mkv	history	Ao Ashi S2	1	1	
+[SubsPlease] Azur Lane - Bisoku Zenshin! S2 (01-12) (1080p) [Batch]	history	Azur Lane - Bisoku Zenshin! S2	batch 1-12	1	
+[SubsPlease] Battle Spirits Re - Zekkai no Kuu - 01 (1080p) [FEF39255].mkv	history	Battle Spirits Re - Zekkai no Kuu	1	1	
+[SubsPlease] Black Clover - 171 (1080p) [7AD4AFC7].mkv	history	Black Clover	171	1	trname
+[SubsPlease] Black Torch (01-12) (1080p) [Batch]	history	Black Torch	batch 1-12	1	
+[SubsPlease] Buchigire Reijou wa Houfuku wo Chikaimashita (01-12) (1080p) [Batch]	history	Buchigire Reijou wa Houfuku wo Chikaimashita	batch 1-12	1	
+[SubsPlease] Bungou Stray Dogs Wan! S2 (01-12) (1080p) [Batch]	history	Bungou Stray Dogs Wan! S2	batch 1-12	1	
+[SubsPlease] Chii Fuyo - 01 (1080p) [09AA1B3D].mkv	history	Chii Fuyo	1	1	
+[SubsPlease] Chitose-kun wa Ramune Bin no Naka - 13.5 (1080p) [D53C2E1E].mkv	history	Chitose-kun wa Ramune Bin no Naka	13.5	1	
+[SubsPlease] Choujun! Choujou-senpai - 01 (1080p) [10168184].mkv	history	Choujun! Choujou-senpai	1	1	
+[SubsPlease] Clevatess S2 - 12 (1080p) [9D58C13E].mkv	history	Clevatess S2	12	1	
+[SubsPlease] Clevatess S2 - 13 (1080p) [1D924413].mkv	history	Clevatess S2	13	1	
+[SubsPlease] Dark Summoner to Dekiteiru - 01 (1080p) [00C3F7E4].mkv	history	Dark Summoner to Dekiteiru	1	1	
+[SubsPlease] Detective Conan - 1214 (1080p) [8B96A8AE].mkv	history	Detective Conan	1214	1	trname
+[SubsPlease] Detective Conan - 1215 (1080p) [06ADA3D6].mkv	history	Detective Conan	1215	1	trname
+[SubsPlease] Detective Conan - The Counterfeit Case of Ultra 30 (1080p) [6BD3ED0A].mkv	history	Detective Conan - The Counterfeit Case of Ultra 30	-	1	work,episode,trname
+[SubsPlease] Digimon Beatbreak - 49 (1080p) [F83752E2].mkv	history	Digimon Beatbreak	49	1	
+[SubsPlease] Doumo, Suki na Hito ni Horegusuri wo Irai sareta Majo desu. - 01 (1080p) [A749E700].mkv	history	Doumo, Suki na Hito ni Horegusuri wo Irai sareta Majo desu.	1	1	
+[SubsPlease] FX Senshi Kurumi-chan - 01 (1080p) [99D53D33].mkv	history	FX Senshi Kurumi-chan	1	1	
+[SubsPlease] Futsutsuka na Akujo dewa Gozaimasu ga (01-11) (1080p) [Batch]	history	Futsutsuka na Akujo dewa Gozaimasu ga	batch 1-11	1	
+[SubsPlease] Grow Up Show - Himawari no Circus-dan - 13 (1080p) [F852433D].mkv	history	Grow Up Show - Himawari no Circus-dan	13	1	
+[SubsPlease] Hanaori-san wa Tensei shitemo Kenka ga Shitai - 12 (1080p) [0E3DE4FA].mkv	history	Hanaori-san wa Tensei shitemo Kenka ga Shitai	12	1	
+[SubsPlease] Hell Mode S2 (01-13) (1080p) [Batch]	history	Hell Mode S2	batch 1-13	1	
+[SubsPlease] Hell Mode S2 - 13 (1080p) [35AEEB80].mkv	history	Hell Mode S2	13	1	
+[SubsPlease] Honzuki no Gekokujou S4 - 23 (1080p) [5FFF934E].mkv	history	Honzuki no Gekokujou S4	23	1	
+[SubsPlease] Honzuki no Gekokujou S4 - 24 (1080p) [DC6030F7].mkv	history	Honzuki no Gekokujou S4	24	1	
+[SubsPlease] Hotel Inhumans S2 - 01 (1080p) [710C7BFA].mkv	history	Hotel Inhumans S2	1	1	
+[SubsPlease] Hyakkano (01-12) (1080p) [Batch]	history	Hyakkano	batch 1-12	1	
+[SubsPlease] Hyakkano (13-24) (1080p) [Batch]	history	Hyakkano	batch 13-24	1	
+[SubsPlease] Hyakkano (25-36) (1080p) [Batch]	history	Hyakkano	batch 25-36	1	
+[SubsPlease] Iwamoto-senpai no Suisen (01-12) (1080p) [Batch]	history	Iwamoto-senpai no Suisen	batch 1-12	1	
+[SubsPlease] Kaijuu 8-gou - Narumi no Heijitsu (01-04) (1080p) [Batch]	history	Kaijuu 8-gou - Narumi no Heijitsu	batch 1-4	1	
+[SubsPlease] Kaijuu 8-gou - Narumi no Heijitsu - 04 (1080p) [34E47358].mkv	history	Kaijuu 8-gou - Narumi no Heijitsu	4	1	
+[SubsPlease] Kami no Shizuku (01-24) (1080p) [Batch]	history	Kami no Shizuku	batch 1-24	1	
+[SubsPlease] Kanata kara - 01 (1080p) [8397508F].mkv	history	Kanata kara	1	1	
+[SubsPlease] Kashita Maryoku wa Revo Barai de Kyousei Choushuu - 01 (1080p) [7CA1B362].mkv	history	Kashita Maryoku wa Revo Barai de Kyousei Choushuu	1	1	
+[SubsPlease] Keroro Gunsou (2026) - 01 (1080p) [1FF6452A].mkv	history	Keroro Gunsou (2026)	1	1	
+[SubsPlease] Kimi ga Shinu made Koi wo Shitai - 13 (1080p) [01E0B8A4].mkv	history	Kimi ga Shinu made Koi wo Shitai	13	1	
+[SubsPlease] Kimiai (01-12) (1080p) [Batch]	history	Kimiai	batch 1-12	1	
+[SubsPlease] Kokoore (01-12) (1080p) [Batch]	history	Kokoore	batch 1-12	1	
+[SubsPlease] Kore Kaite Shine (01-12) (1080p) [Batch]	history	Kore Kaite Shine	batch 1-12	1	
+[SubsPlease] Kore Kaite Shine - 12 (1080p) [B84E98D8].mkv	history	Kore Kaite Shine	12	1	
+[SubsPlease] Kusuriya no Hitorigoto - 49 (1080p) [884CCC2D].mkv	history	Kusuriya no Hitorigoto	49	1	
+[SubsPlease] Kusuriya no Hitorigoto - 49v2 (1080p) [F14E89B9].mkv	history	Kusuriya no Hitorigoto	49	2	
+[SubsPlease] Kyouran Reijou Nia Liston - 01 (1080p) [7F8BCA0B].mkv	history	Kyouran Reijou Nia Liston	1	1	
+[SubsPlease] LIAR GAME - 26 (1080p) [A9057F68].mkv	history	LIAR GAME	26	1	
+[SubsPlease] Let's Go Kaiki-gumi (01-12) (1080p) [Batch]	history	Let's Go Kaiki-gumi	batch 1-12	1	
+[SubsPlease] Let's Go Kaiki-gumi - 12 (1080p) [FAE8EF03].mkv	history	Let's Go Kaiki-gumi	12	1	
+[SubsPlease] Link Click S3 - 08 (1080p) [FE7080C1].mkv	history	Link Click S3	8	1	
+[SubsPlease] Link Click S3 - 09 (1080p) [917188EC].mkv	history	Link Click S3	9	1	
+[SubsPlease] Magical Explorer - 01 (1080p) [05E18C23].mkv	history	Magical Explorer	1	1	
+[SubsPlease] Magical Explorer - 02 (1080p) [8E539ADF].mkv	history	Magical Explorer	2	1	
+[SubsPlease] Mahou Shoujo Lyrical Nanoha EXCEEDS - Gun Blaze Vengeance (01-12) (1080p) [Batch]	history	Mahou Shoujo Lyrical Nanoha EXCEEDS - Gun Blaze Vengeance	batch 1-12	1	
+[SubsPlease] Mairimashita! Iruma-kun S4 - 24 (1080p) [F4329E1A].mkv	history	Mairimashita! Iruma-kun S4	24	1	
+[SubsPlease] Mebius Dust (01-12) (1080p) [Batch]	history	Mebius Dust	batch 1-12	1	
+[SubsPlease] Mebius Dust - 12 (1080p) [7624D7BF].mkv	history	Mebius Dust	12	1	
+[SubsPlease] Meitantei Precure! - 35 (1080p) [ABFFD193].mkv	history	Meitantei Precure!	35	1	
+[SubsPlease] Meitantei Precure! - 36 (1080p) [9FCCC9B6].mkv	history	Meitantei Precure!	36	1	
+[SubsPlease] Mushoku Tensei S3 - 14 (1080p) [73CF848B].mkv	history	Mushoku Tensei S3	14	1	
+[SubsPlease] Nige Jouzu no Wakagimi S2 - 11 (1080p) [F9B7ADC0].mkv	history	Nige Jouzu no Wakagimi S2	11	1	
+[SubsPlease] Nige Jouzu no Wakagimi S2 - 12 (1080p) [FAB3AD24].mkv	history	Nige Jouzu no Wakagimi S2	12	1	
+[SubsPlease] Ojisan wa Kawaii Mono ga Osuki. - 01 (1080p) [B92446CD].mkv	history	Ojisan wa Kawaii Mono ga Osuki.	1	1	
+[SubsPlease] One Piece - 1180 (1080p) [97492A4D].mkv	history	One Piece	1180	1	trname
+[SubsPlease] Oni no Hanayome (01-12) (1080p) [Batch]	history	Oni no Hanayome	batch 1-12	1	
+[SubsPlease] Otome Game Sekai wa Mob ni Kibishii Sekai desu S2 - 12 (1080p) [53C5979F].mkv	history	Otome Game Sekai wa Mob ni Kibishii Sekai desu S2	12	1	
+[SubsPlease] PSYREN - 01 (1080p) [EB85F891].mkv	history	PSYREN	1	1	
+[SubsPlease] Re Zero kara Hajimeru Isekai Seikatsu - 84 (1080p) [5188BBC4].mkv	history	Re Zero kara Hajimeru Isekai Seikatsu	84	1	
+[SubsPlease] Re Zero kara Hajimeru Isekai Seikatsu - 85 (1080p) [C0F3B0D6].mkv	history	Re Zero kara Hajimeru Isekai Seikatsu	85	1	
+[SubsPlease] Reiwa no Dara-san - 13 (1080p) [2DB3406F].mkv	history	Reiwa no Dara-san	13	1	
+[SubsPlease] Rilakkuma - 26 (1080p) [DDF69993].mkv	history	Rilakkuma	26	1	
+[SubsPlease] Romelia Senki - 01 (1080p) [53376D43].mkv	history	Romelia Senki	1	1	
+[SubsPlease] Saijo no Osewa (01-12) (1080p) [Batch]	history	Saijo no Osewa	batch 1-12	1	
+[SubsPlease] Saikyosoubi - 01 (1080p) [C5119B59].mkv	history	Saikyosoubi	1	1	
+[SubsPlease] Sayonara Lara (01-12) (1080p) [Batch]	history	Sayonara Lara	batch 1-12	1	
+[SubsPlease] Seihantai na Kimi to Boku - 24 (1080p) [78085A98].mkv	history	Seihantai na Kimi to Boku	24	1	
+[SubsPlease] Seihantai na Kimi to Boku - 25 (1080p) [6ABA7297].mkv	history	Seihantai na Kimi to Boku	25	1	
+[SubsPlease] Shiotaiou no Satou-san ga Ore ni dake Amai - 01 (1080p) [B707B8A1].mkv	history	Shiotaiou no Satou-san ga Ore ni dake Amai	1	1	
+[SubsPlease] Sora wa Akai Kawa no Hotori - 13 (1080p) [678AD271].mkv	history	Sora wa Akai Kawa no Hotori	13	1	
+[SubsPlease] Sora wa Akai Kawa no Hotori - 14 (1080p) [CE0F05AB].mkv	history	Sora wa Akai Kawa no Hotori	14	1	
+[SubsPlease] Super no Ura de Yani Suu Futari (01-12) (1080p) [Batch]	history	Super no Ura de Yani Suu Futari	batch 1-12	1	
+[SubsPlease] Super no Ura de Yani Suu Futari - 12 (1080p) [D45A9B48].mkv	history	Super no Ura de Yani Suu Futari	12	1	
+[SubsPlease] Suterare Seijo no Isekai Gohan Tabi (01-12) (1080p) [Batch]	history	Suterare Seijo no Isekai Gohan Tabi	batch 1-12	1	
+[SubsPlease] Tempal - Item no Chikara - 01 (1080p) [C5492B78].mkv	history	Tempal - Item no Chikara	1	1	
+[SubsPlease] Tempal - Item no Chikara - 02 (1080p) [38DA9158].mkv	history	Tempal - Item no Chikara	2	1	
+[SubsPlease] Tenkosaki (01-12) (1080p) [Batch]	history	Tenkosaki	batch 1-12	1	
+[SubsPlease] Tensei Goblin dakedo Shitsumon Aru - 01 (1080p) [DF38018F].mkv	history	Tensei Goblin dakedo Shitsumon Aru	1	1	
+[SubsPlease] Tensei Goblin dakedo Shitsumon Aru - 02 (1080p) [9EAD40D9].mkv	history	Tensei Goblin dakedo Shitsumon Aru	2	1	
+[SubsPlease] Tensei Kizoku, Kantei Skill de Nariagaru - 25 (1080p) [AF193997].mkv	history	Tensei Kizoku, Kantei Skill de Nariagaru	25	1	
+[SubsPlease] Tensei Kizoku, Kantei Skill de Nariagaru - 26 (1080p) [5957C6BD].mkv	history	Tensei Kizoku, Kantei Skill de Nariagaru	26	1	
+[SubsPlease] Tensei Shitara Ken Deshita S2 - 01 (1080p) [EA337770].mkv	history	Tensei Shitara Ken Deshita S2	1	1	
+[SubsPlease] Tensei Shitara Slime Datta Ken S4 - 24 (1080p) [AA94BC1F].mkv	history	Tensei Shitara Slime Datta Ken S4	24	1	
+[SubsPlease] Tensei shita Daiseijo wa, Seijo de Aru Koto wo Hitakakusu - 01 (1080p) [345E53B1].mkv	history	Tensei shita Daiseijo wa, Seijo de Aru Koto wo Hitakakusu	1	1	
+[SubsPlease] Tensei shita Daiseijo wa, Seijo de Aru Koto wo Hitakakusu - 02 (1080p) [33C61857].mkv	history	Tensei shita Daiseijo wa, Seijo de Aru Koto wo Hitakakusu	2	1	
+[SubsPlease] Tetsunabe no Jan! (01-12) (1080p) [Batch]	history	Tetsunabe no Jan!	batch 1-12	1	
+[SubsPlease] The Prince of Tennis II - U-17 World Cup Final Member Selection Match - 01 (1080p) [0F00010F].mkv	history	The Prince of Tennis II - U-17 World Cup Final Member Selection Match	1	1	
+[SubsPlease] The Prince of Tennis II - U-17 World Cup Semifinal (01-13) (1080p) [Batch]	history	The Prince of Tennis II - U-17 World Cup Semifinal	batch 1-13	1	
+[SubsPlease] Tougen Anki - Nikko Kegon no Taki-hen - 01 (1080p) [E8DAF239].mkv	history	Tougen Anki - Nikko Kegon no Taki-hen	1	1	
+[SubsPlease] Toukutsu Ou - 12 (1080p) [8D7839FB].mkv	history	Toukutsu Ou	12	1	
+[SubsPlease] Toumei na Yoru ni Kakeru Kimi to, Me ni Mienai Koi wo Shita. (01-12) (1080p) [Batch]	history	Toumei na Yoru ni Kakeru Kimi to, Me ni Mienai Koi wo Shita.	batch 1-12	1	
+[SubsPlease] Tsuihou sareta Tensei Juukishi wa Game Chishiki de Musou suru - 13 (1080p) [CEC8715E].mkv	history	Tsuihou sareta Tensei Juukishi wa Game Chishiki de Musou suru	13	1	
+[SubsPlease] Tsuihou sareta Tensei Juukishi wa Game Chishiki de Musou suru - 14 (1080p) [DCA181BE].mkv	history	Tsuihou sareta Tensei Juukishi wa Game Chishiki de Musou suru	14	1	
+[SubsPlease] Uchi no Otouto-domo ga Sumimasen - 13 (1080p) [42B5B5D6].mkv	history	Uchi no Otouto-domo ga Sumimasen	13	1	
+[SubsPlease] VERTEX FORCE - 01 (1080p) [629EC3D9].mkv	history	VERTEX FORCE	1	1	
+[SubsPlease] World Is Dancing (01-13) (1080p) [Batch]	history	World Is Dancing	batch 1-13	1	
+[SubsPlease] Yasei no Last Boss ga Arawareta! - 13 (1080p) [19AF0F11].mkv	history	Yasei no Last Boss ga Arawareta!	13	1	
+[SubsPlease] Yasei no Last Boss ga Arawareta! - 14 (1080p) [7B854EBF].mkv	history	Yasei no Last Boss ga Arawareta!	14	1	
+[SubsPlease] Yomi no Tsugai (01-24) (1080p) [Batch]	history	Yomi no Tsugai	batch 1-24	1	
+[SubsPlease] Yoroi Shin Den Samurai Troopers (13-24) (1080p) [Batch]	history	Yoroi Shin Den Samurai Troopers	batch 13-24	1	
+[SubsPlease] Youjo Senki S2 (01-12) (1080p) [Batch]	history	Youjo Senki S2	batch 1-12	1	
+[SubsPlease] Youjo Senki S2 - 12 (1080p) [12B35D58].mkv	history	Youjo Senki S2	12	1	
+[SubsPlease] Yowaki Max - 01 (1080p) [D76C12BB].mkv	history	Yowaki Max	1	1	
+[SubsPlease] Zombie Sagashitemasu - 01 (1080p) [15F667B4].mkv	history	Zombie Sagashitemasu	1	1	
+Beyblade X - Episode 130 [English Dub][720p]	feed	Beyblade X	130	1	work
+Chitose Is in the Ramune Bottle S01E13 5 Recap 1080p CR WEB-DL AAC2.0 H.264-VARYG (Chitose-kun wa Ramune Bin no Naka, Multi-Subs)	feed	Chitose Is in the Ramune Bottle	13	1	
+Detective Conan (1996) The Complete Anime Series English Subtitles (0001 ~ 1214)	feed	Detective Conan (1996) The Complete Anime Series English Subtitles	batch 1-1214	1	
+Detective Conan - The Counterfeit Case of Ultra 30 - The 30th Murder Case (English subtitles)	feed	Detective Conan - The Counterfeit Case of Ultra 30 - The 30th Murder Case	-	1	
+Detective Conan Movies 01-26 (Only subs) [Netflix SEA] [Multi-Subs] [EN-MS-TH-ID-VI-ZH-JA]	feed	Detective Conan Movies	batch 1-26	1	work,episode
+Detective Conan Remastered 0001-0520 (Only subs) [Netflix SEA] [Multi-Subs] [EN-MS-TH-ID-VI-ZH]	feed	Detective Conan Remastered	batch 1-520	1	work,episode
+Detective Conan S01E1210 The Cursed Neighbors House 1080p CR WEB-DL AAC2.0 H.264-VARYG (Meitantei Conan, Multi-Subs)	feed	Detective Conan	1210	1	
+Detective Conan S01E1211 The Birdman Rally Bombing Part One 1080p CR WEB-DL AAC2.0 H.264-VARYG (Meitantei Conan, Multi-Subs)	feed	Detective Conan	1211	1	
+Detective Conan S01E1212 The Birdman Rally Bombing Part Two 1080p CR WEB-DL AAC2.0 H.264-VARYG (Meitantei Conan, Multi-Subs)	feed	Detective Conan	1212	1	
+Detective Conan S01E1214 The Crimson Closing Day Opening Day 1080p CR WEB-DL AAC2.0 H.264-VARYG (Meitantei Conan, Multi-Subs)	feed	Detective Conan	1214	1	
+Detective Conan S01E1215 The Crimson Closing Day The Penultimate Show 1080p CR WEB-DL AAC2.0 H.264-VARYG (Meitantei Conan, Multi-Subs)	feed	Detective Conan	1215	1	
+Detective Conan The Counterfeit Crime Case of Ultra 30 S00E01 1080p CR WEB-DL AAC2.0 H.264-VARYG (Multi-Subs)	feed	Detective Conan The Counterfeit Crime Case of Ultra 30	1	1	
+Mahoujin Guru Guru (1994) [AI-Raws] (HDTV 1080p) (retimed)	feed	Mahoujin Guru Guru	-	1	
+One Piece S01E1175 Elbaph in Flames Jinbes Shoulder Throw Explodes 1080p BILI WEB-DL AAC2.0 H.264-VARYG (Multi-Subs)	feed	One Piece	1175	1	
+One Piece S01E1176 1080p NF WEB-DL AAC2.0 H.264-VARYG (Multi-Subs)	feed	One Piece	1176	1	
+One Piece S01E1176 The Threat of the Arrow-Arrow Fruit-Gunko vs the Straw Hats REPACK 1080p CR WEB-DL AAC2.0 H.264-VARYG (Multi-Subs)	feed	One Piece	1176	1	
+One Piece S01E1176 Threat of the Arrow-Arrow Fruit-Gunko vs the Straw Hats 1080p BILI WEB-DL AAC2.0 H.264-VARYG (Multi-Subs)	feed	One Piece	1176	1	
+One Piece S01E1177 1080p NF WEB-DL AAC2.0 H.264-VARYG (Multi-Subs)	feed	One Piece	1177	1	
+One Piece S01E1177 A Despicable Hostage Game-Sommerss Brazen Demands 1080p BILI WEB-DL AAC2.0 H.264-VARYG (Multi-Subs)	feed	One Piece	1177	1	
+One Piece S01E1177 A Despicable Hostage Game-Sommerss Brazen Demands 1080p CR WEB-DL AAC2.0 H.264-VARYG	feed	One Piece	1177	1	
+One Piece S01E1177 A Despicable Hostage Game-Sommerss Brazen Demands REPACK 1080p CR WEB-DL AAC2.0 H.264-VARYG (Multi-Subs)	feed	One Piece	1177	1	
+One Piece S01E1178 1080p NF WEB-DL AAC2.0 H.264-VARYG (Multi-Subs)	feed	One Piece	1178	1	
+One Piece S01E1178 Protect History and the Future-Robin and Gaban Go on the Attack 1080p BILI WEB-DL AAC2.0 H.264-VARYG (Multi-Subs)	feed	One Piece	1178	1	
+One Piece S01E1178 Protect History and the Future-Robin and Gaban Go on the Attack 1080p CR WEB-DL AAC2.0 H.264-VARYG	feed	One Piece	1178	1	
+One Piece S01E1178 Protect History and the Future-Robin and Gaban Go on the Attack REPACK 1080p CR WEB-DL AAC2.0 H.264-VARYG (Multi-Subs)	feed	One Piece	1178	1	
+One Piece S01E1179 1080p NF WEB-DL AAC2.0 H.264-VARYG (Multi-Subs)	feed	One Piece	1179	1	
+One Piece S01E1179 One Do-or-Die Second-Gaban vs the Knights of God 1080p BILI WEB-DL AAC2.0 H.264-VARYG (Multi-Subs)	feed	One Piece	1179	1	
+One Piece S01E1179 One Do-or-Die Second-Gaban vs the Knights of God 1080p CR WEB-DL AAC2.0 H.264-VARYG (Multi-Subs)	feed	One Piece	1179	1	
+One Piece S01E1179 One Do-or-Die Second-Gaban vs the Knights of God REPACK 1080p CR WEB-DL AAC2.0 H.264-VARYG (Multi-Subs)	feed	One Piece	1179	1	
+One Piece S01E1180 Elbaph in Despair-Diabolical Covenant Domi Reversi 1080p BILI WEB-DL AAC2.0 H.264-VARYG (Multi-Subs)	feed	One Piece	1180	1	
+One Piece S01E1180 Elbaph in Despair-Diabolical Covenant Domi Reversi 1080p CR WEB-DL AAC2.0 H.264-VARYG	feed	One Piece	1180	1	
+One Piece S01E1180 Elbaph in Despair-Diabolical Covenant Domi Reversi REPACK 1080p CR WEB-DL AAC2.0 H.264-VARYG (Multi-Subs)	feed	One Piece	1180	1	
+Red River 2026 S01E14 The Arrow Wound of Grief 1080p CR WEB-DL AAC2.0 H.264-VARYG (Multi-Subs)	feed	Red River 2026	14	1	
+The Laid Off Cheat Granting Mage Enjoys a Second Lease on Life S01E01 1080p CR WEB-DL DUAL AAC2.0 H.264-VARYG (Tsuihou Sareta Cheat Fuyo Majutsushi wa Kimama na Second Life wo Ouka Suru.: Ore, Dual-Audio, Multi-Subs)	feed	The Laid Off Cheat Granting Mage Enjoys a Second Lease on Life	1	1	
+[ASW] Battle Spirits Re - Zekkai no Kuu - 01 [1080p HEVC x265 10Bit][AAC]	feed	Battle Spirits Re - Zekkai no Kuu	1	1	
+[ASW] Chii Fuyo - 01 [1080p HEVC x265 10Bit][AAC]	feed	Chii Fuyo	1	1	
+[ASW] Chitose-kun wa Ramune Bin no Naka - 13.5 [1080p HEVC x265 10Bit][AAC]	feed	Chitose-kun wa Ramune Bin no Naka	13.5	1	
+[ASW] Choujun! Choujou-senpai - 01 [1080p HEVC x265 10Bit][AAC]	feed	Choujun! Choujou-senpai	1	1	
+[ASW] Detective Conan - 1210 [1080p HEVC x265 10Bit][AAC]	feed	Detective Conan	1210	1	
+[ASW] Detective Conan - 1211 [1080p HEVC x265 10Bit][AAC]	feed	Detective Conan	1211	1	
+[ASW] Detective Conan - 1212 [1080p HEVC x265 10Bit][AAC]	feed	Detective Conan	1212	1	
+[ASW] Detective Conan - 1213 [1080p HEVC x265 10Bit][AAC]	feed	Detective Conan	1213	1	
+[ASW] Detective Conan - 1214 [1080p HEVC x265 10Bit][AAC]	feed	Detective Conan	1214	1	
+[ASW] Detective Conan - 1215 [1080p HEVC x265 10Bit][AAC]	feed	Detective Conan	1215	1	
+[ASW] One Piece - 1176 [1080p HEVC x265 10Bit][AAC]	feed	One Piece	1176	1	
+[ASW] One Piece - 1177 [1080p HEVC x265 10Bit][AAC]	feed	One Piece	1177	1	
+[ASW] One Piece - 1178 [1080p HEVC x265 10Bit][AAC]	feed	One Piece	1178	1	
+[ASW] One Piece - 1179 [1080p HEVC x265 10Bit][AAC]	feed	One Piece	1179	1	
+[ASW] One Piece - 1180 [1080p HEVC x265 10Bit][AAC]	feed	One Piece	1180	1	
+[ASW] Sora wa Akai Kawa no Hotori - 14 [1080p HEVC x265 10Bit][AAC]	feed	Sora wa Akai Kawa no Hotori	14	1	
+[Anime Land] One Piece Film Red (UHD BDRip 1080p AV1 HDR10 TrueHD ATMOS) [2F959F75].mkv	feed	One Piece Film Red	-	1	trname
+[AnoZu] Chitose Is in the Ramune Bottle S00E15 1080p CR WEB-DL AAC 2.0 H.264 | Chitose-kun wa Ramune Bin no Naka	feed	Chitose Is in the Ramune Bottle	15	1	
+[AnoZu] One Piece S23E22 1080p CR WEB-DL AAC 2.0 H.264	feed	One Piece	22	1	
+[AnoZu] One Piece S23E23 1080p CR WEB-DL AAC 2.0 H.264	feed	One Piece	23	1	
+[AnoZu] One Piece S23E24 1080p CR WEB-DL AAC 2.0 H.264	feed	One Piece	24	1	
+[AnoZu] One Piece S23E25 1080p CR WEB-DL AAC 2.0 H.264	feed	One Piece	25	1	
+[AnoZu] Red River 2026 S01E14 1080p CR WEB-DL AAC 2.0 H.264 | Sora wa Akai Kawa no Hotori	feed	Red River 2026	14	1	
+[AnoZu] The Laid-Off Cheat-Granting Mage Enjoys a Second Lease on Life S01E01 1080p CR WEB-DL Dual-Audio DDP 2.0 H.264	feed	The Laid-Off Cheat-Granting Mage Enjoys a Second Lease on Life	1	1	
+[Anonymous] Welcome to Yu-hachi's House! (Yuusanchi! from Yuuhachi) S01E01	feed	Welcome to Yu-hachi's House! (Yuusanchi! from Yuuhachi)	1	1	
+[Beatrice-Raws] Ani Tore! EX [BDRip 1920x1080 HEVC FLAC]	feed	Ani Tore! EX	-	1	
+[Beatrice-Raws] Assault Lily Bouquet [BDRip 1920x1080 HEVC TrueHD]	feed	Assault Lily Bouquet	-	1	
+[Beatrice-Raws] Blue Sonnet [LDRip 768x576 HEVC FLAC]	feed	Blue Sonnet	-	1	
+[Beatrice-Raws] Bokura no Nanokakan Sensou (Seven Days War) [BDRip 1920x1080 HEVC FLAC]	feed	Bokura no Nanokakan Sensou	-	1	
+[Beatrice-Raws] Chibi Maruko-chan (1990) [BDRip 992x720 HEVC FLAC].mkv	feed	Chibi Maruko-chan	-	1	trname
+[Beatrice-Raws] Chibi Maruko-chan Watashi no Suki na Uta [BDRip 1280x692 HEVC AAC].mkv	feed	Chibi Maruko-chan Watashi no Suki na Uta	-	1	trname
+[Beatrice-Raws] Deji Meets Girl [BDRip 1920x1080 HEVC FLAC]	feed	Deji Meets Girl	-	1	
+[Beatrice-Raws] Fragtime [BDRip 1920x1080 HEVC FLAC]	feed	Fragtime	-	1	
+[Beatrice-Raws] Free! [BDRip 1920x1080 x264 FLAC] 10bit	feed	Free!	-	1	work
+[Beatrice-Raws] Fruits Basket Prelude [BDRip 1920x1080 HEVC TrueHD]	feed	Fruits Basket Prelude	-	1	
+[Beatrice-Raws] Gake no Ue no Ponyo [DCPrip 1998x1080 HEVC TrueHD].mkv	feed	Gake no Ue no Ponyo	-	1	trname
+[Beatrice-Raws] Ganbare Douki-chan [BDRip 1920x1080 HEVC FLAC]	feed	Ganbare Douki-chan	-	1	
+[Beatrice-Raws] Getsuyoubi no Tawawa 2nd \ Tawawa on Monday 2 [BDRip 1920x1080 HEVC TrueHD]	feed	Getsuyoubi no Tawawa 2nd \ Tawawa on Monday 2	-	1	work,episode
+[Beatrice-Raws] Getsuyoubi no Tawawa \ Tawawa on Monday [BDRip 1920x1080 HEVC TrueHD]	feed	Getsuyoubi no Tawawa \ Tawawa on Monday	-	1	
+[Beatrice-Raws] Ghost in the Shell Stand Alone Complex - Solid State Society [BDRip 1920x1080 HEVC FLAC TrueHD]	feed	Ghost in the Shell Stand Alone Complex - Solid State Society	-	1	
+[Beatrice-Raws] Goodbye, Don Glees! [BDRip 1920x1080 HEVC FLAC]	feed	Goodbye, Don Glees!	-	1	
+[Beatrice-Raws] Granblue Fantasy The Animation 2nd Season (Vol 1) [BDRip 1920x1080 HEVC FLAC]	feed	Granblue Fantasy The Animation 2nd Season	-	1	
+[Beatrice-Raws] Grancrest Senki [BDRip 1920x1080 HEVC FLAC]	feed	Grancrest Senki	-	1	
+[Beatrice-Raws] Heike Monogatari [BDRip 1920x1080 HEVC FLAC]	feed	Heike Monogatari	-	1	
+[Beatrice-Raws] Hello World [BDRip 1920x1080 HEVC FLAC]	feed	Hello World	-	1	
+[Beatrice-Raws] High School Fleet Gekijouban [BDRip 1920x1080 HEVC DTS-HD]	feed	High School Fleet Gekijouban	-	1	
+[Beatrice-Raws] Hisone to Masotan [BDRip 1920x1080 HEVC FLAC]	feed	Hisone to Masotan	-	1	
+[Beatrice-Raws] Houkago no Pleiades [BDRip 1920x1080 HEVC FLAC]	feed	Houkago no Pleiades	-	1	
+[Beatrice-Raws] Human Lost [BDRip 1920x1080 HEVC FLAC]	feed	Human Lost	-	1	
+[Beatrice-Raws] Hyouka (01-16) [BDRip 1920x1080 x264 FLAC]	feed	Hyouka	batch 1-16	1	
+[Beatrice-Raws] Hyouka [BDRip 1920x1080 HEVC FLAC] (fixed 1st episode)	feed	Hyouka	-	1	
+[Beatrice-Raws] Kimetsu no Yaiba (Demon Slayer) [BDRip 1920x1080 HEVC FLAC]	feed	Kimetsu no Yaiba	-	1	
+[Beatrice-Raws] Kimi no Iro (The Colors Within) [DCPrip 1998x1080 HEVC TrueHD].mkv	feed	Kimi no Iro	-	1	trname
+[Beatrice-Raws] Kimi to Boku no Saigo no Senjou Arui wa Sekai ga Hajimaru Seisen / Our Last Crusade or the Rise of a New World [BDRip 1920x1080 HEVC TrueHD]	feed	Kimi to Boku no Saigo no Senjou Arui wa Sekai ga Hajimaru Seisen / Our Last Crusade or the Rise of a New World	-	1	
+[Beatrice-Raws] Kimi to, Nami ni Noretara [BDRip 1920x1080 HEVC FLAC]	feed	Kimi to, Nami ni Noretara	-	1	
+[Beatrice-Raws] Kobayashi-san Chi no Maid Dragon [BDRip 1920x1080 x264 FLAC]	feed	Kobayashi-san Chi no Maid Dragon	-	1	
+[Beatrice-Raws] Kono Sekai no (Sara ni Ikutsumo no) Katasumi ni [BDRip 1920x1038 HEVC FLAC]	feed	Kono Sekai no (Sara ni Ikutsumo no) Katasumi ni	-	1	
+[Beatrice-Raws] Kyousougiga [BDRip 1920x1080 HEVC FLAC]	feed	Kyousougiga	-	1	
+[Beatrice-Raws] Lupin III Prison of the Past [BDRip 1920x1080 HEVC FLAC]	feed	Lupin III Prison of the Past	-	1	
+[Beatrice-Raws] Lupin the IIIrd Jigen Daisuke no Bohyou [BDRip 1920x1080 HEVC FLAC]	feed	Lupin the IIIrd Jigen Daisuke no Bohyou	-	1	
+[Beatrice-Raws] Magic Tree House [BDRip 1920x1080 HEVC FLAC].mkv	feed	Magic Tree House	-	1	trname
+[Beatrice-Raws] Midori no Makibao [BDRip 960x720 HEVC FLAC]	feed	Midori no Makibao	-	1	
+[Beatrice-Raws] NEKOPARA [BDRip 1920x1080 HEVC FLAC]	feed	NEKOPARA	-	1	
+[Beatrice-Raws] Nagato Yuki-chan no Shoushitsu OVA [BDRip 1920x1080 x264 FLAC]	feed	Nagato Yuki-chan no Shoushitsu OVA	-	1	
+[Beatrice-Raws] Nagato Yuki-chan no Shoushitsu [BDRip 1920x1080 x264 FLAC]	feed	Nagato Yuki-chan no Shoushitsu	-	1	
+[Beatrice-Raws] Natsu e no Tunnel, Sayonara no Deguchi / The Tunnel to Summer, the Exit of Goodbyes [BDRip 1920x804 HEVC TrueHD]	feed	Natsu e no Tunnel, Sayonara no Deguchi / The Tunnel to Summer, the Exit of Goodbyes	-	1	
+[Beatrice-Raws] Oomuro-ke - Dear Sisters & Dear Friends [BDRip 1920x1080 HEVC FLAC]	feed	Oomuro-ke - Dear Sisters & Dear Friends	-	1	
+[Beatrice-Raws] Ryuu to Sobakasu no Hime [BDRip 3840x1608 HEVC HDR TrueHD]	feed	Ryuu to Sobakasu no Hime	-	1	
+[Beatrice-Raws] Saenai Heroine no Sodatekata. Fine [BDRip 1920x1080 HEVC FLAC]	feed	Saenai Heroine no Sodatekata. Fine	-	1	
+[Beatrice-Raws] Seishun Buta Yarou wa Odekake Sister no Yume o Minai / Rascal Does Not Dream of a Sister Venturing Out [BDRip 1920x1080 HEVC DTSHD]	feed	Seishun Buta Yarou wa Odekake Sister no Yume o Minai / Rascal Does Not Dream of a Sister Venturing Out	-	1	
+[Beatrice-Raws] Seishun Buta Yarou wa Yumemiru Shoujo no Yume wo Minai [BDRip 1280x720 HEVC Vorbis]	feed	Seishun Buta Yarou wa Yumemiru Shoujo no Yume wo Minai	-	1	
+[Beatrice-Raws] Seishun Buta Yarou wa Yumemiru Shoujo no Yume wo Minai [BDRip 1920x1080 HEVC FLAC]	feed	Seishun Buta Yarou wa Yumemiru Shoujo no Yume wo Minai	-	1	
+[Beatrice-Raws] Shashinkan [BDRip 1920x820 HEVC FLAC]	feed	Shashinkan	-	1	
+[Beatrice-Raws] Shijou Saikyou no Deshi Kenichi OVA [DVDRip 1024x576 HEVC AC3]	feed	Shijou Saikyou no Deshi Kenichi OVA	-	1	
+[Beatrice-Raws] Shika no Ou Yuna to Yakusoku no Tabi [BDRip 1920x1080 HEVC FLAC]	feed	Shika no Ou Yuna to Yakusoku no Tabi	-	1	
+[Beatrice-Raws] Steins;Gate 0 [BDRip 1920x1080 HEVC FLAC]	feed	Steins;Gate 0	-	1	work,episode
+[Beatrice-Raws] Strike the Blood Final [BDRip 1920x1080 HEVC TrueHD]	feed	Strike the Blood Final	-	1	
+[Beatrice-Raws] Strike the Blood IV [BDRip 1920x1080 HEVC FLAC]	feed	Strike the Blood IV	-	1	
+[Beatrice-Raws] Strike the Blood Kieta Seisou Hen [BDRip 1920x1080 HEVC FLAC]	feed	Strike the Blood Kieta Seisou Hen	-	1	
+[Beatrice-Raws] Summer Ghost [BDRip 1920x1080 HEVC DTSHD]	feed	Summer Ghost	-	1	
+[Beatrice-Raws] Sunohara-sou no Kanrinin-san [BDRip 1920x1080 HEVC FLAC]	feed	Sunohara-sou no Kanrinin-san	-	1	
+[Beatrice-Raws] Tenshi no 3P! [BDRip 1920x1080 x264 FLAC]	feed	Tenshi no 3P!	-	1	
+[Beatrice-Raws] Toji no Miko [BDRip 1920x1080 HEVC FLAC]	feed	Toji no Miko	-	1	
+[Beatrice-Raws] Two Car [BDRip 1920x1080 HEVC FLAC]	feed	Two Car	-	1	
+[Beatrice-Raws] Violet Evergarden Gaiden Eien to Jidou Shuki Ningyou [BDRip 1920x804 HEVC FLAC]	feed	Violet Evergarden Gaiden Eien to Jidou Shuki Ningyou	-	1	
+[Beatrice-Raws] Wakakusa no Charlotte [BDRip 1026x720 HEVC FLAC]	feed	Wakakusa no Charlotte	-	1	
+[Beatrice-Raws] Watashi ni Tenshi ga Maiorita! Precious Friends [BDRip 1920x1080 HEVC FLAC]	feed	Watashi ni Tenshi ga Maiorita! Precious Friends	-	1	
+[Beatrice-Raws] Yahari Ore no Seishun LoveCome wa Machigatte Iru. Kan: Dakara, Shishunki wa Owarazu ni, Seishun wa Tsuzuite Iku. OVA \ My Teen Romantic Comedy: SNAFU Climax (Oregairu 3) [BDRip 1920x1080 HEVC TrueHD]	feed	Yahari Ore no Seishun LoveCome wa Machigatte Iru. Kan: Dakara, Shishunki wa Owarazu ni, Seishun wa Tsuzuite Iku. OVA \ My Teen Romantic Comedy: SNAFU Climax	-	1	
+[Beatrice-Raws] Yuri Seijin Naoko-san [BDRip 1920x1080 HEVC FLAC]	feed	Yuri Seijin Naoko-san	-	1	
+[Beatrice-Raws] Yuru Yuri 2 [BDRip 1920x1080 HEVC FLAC]	feed	Yuru Yuri 2	-	1	work,episode
+[Beatrice-Raws] Yuru Yuri Nachuyachumi! [BDRip 1920x1080 HEVC FLAC]	feed	Yuru Yuri Nachuyachumi!	-	1	
+[Beatrice-Raws] Yuru Yuri Nachuyachumi!+ [BDRip 1920x1080 HEVC FLAC]	feed	Yuru Yuri Nachuyachumi!+	-	1	
+[Beatrice-Raws] Yuru Yuri San Hai! [BDRip 1920x1080 HEVC FLAC]	feed	Yuru Yuri San Hai!	-	1	
+[Beatrice-Raws] Yuru Yuri Ten OVA [BDRip 1920x1080 HEVC FLAC]	feed	Yuru Yuri Ten OVA	-	1	
+[Beatrice-Raws] Yuru Yuri [BDRip 1920x1080 HEVC FLAC]	feed	Yuru Yuri	-	1	
+[Breeze] Mushoku Tensei S03E13 [1080p AV1 Dual Audio] | Jobless Reincarnation (weekly)	feed	Mushoku Tensei	13	1	
+[DKB] Battle Spirits [Re]: Zekkai no Kuu - S01E01 [1080p][HEVC x265 10bit][Multi-Subs][weekly]	feed	Battle Spirits [Re]: Zekkai no Kuu	1	1	work
+[DKB] Chii Fuyo - S01E01 [1080p][HEVC x265 10bit][Multi-Subs][weekly]	feed	Chii Fuyo	1	1	work
+[DKB] Chitose-kun wa Ramune Bin no Naka - S00E15 [1080p][HEVC x265 10bit][Multi-Subs]	feed	Chitose-kun wa Ramune Bin no Naka	15	1	work
+[DKB] Kyouran Reijou Nia Liston: Byoujaku Reijou ni Tensei shita Kamigoroshi no Bujin no Karei Naru Musouroku - S01E01 [1080p][HEVC x265 10bit][weekly]	feed	Kyouran Reijou Nia Liston: Byoujaku Reijou ni Tensei shita Kamigoroshi no Bujin no Karei Naru Musouroku	1	1	work
+[Doomdos] - Galilei Donna - 05 [1080p OV WEB-DL]	feed	Galilei Donna	5	1	work
+[Doomdos] - Mononoke - 01 [Dub] [720p OV WEB-DL]	feed	Mononoke	1	1	work
+[Doomdos] - One Piece - 1177 [1080p IQ WEB-DL]	feed	One Piece	1177	1	work
+[Doomdos] - One Piece - 1178 [1080p IQ WEB-DL]	feed	One Piece	1178	1	work
+[Doomdos] - One Piece - 1179 [1080p IQ WEB-DL]	feed	One Piece	1179	1	work
+[Doomdos] - One Piece - 1180 [1080p IQ WEB-DL]	feed	One Piece	1180	1	work
+[Doomdos] - Raised by Demons Panda Li - 13 [1080p IQ WEB-DL]	feed	Raised by Demons Panda Li	13	1	work
+[Doomdos] - The Laid-Off Cheat-Granting Mage Enjoys a Second Lease on Life - 第01话 - [1080p BILIBILI COM WEB-DL]	feed	The Laid-Off Cheat-Granting Mage Enjoys a Second Lease on Life	1	1	work,episode
+[Doomdos] - Urban Miracle Doctor - 219 [1080p IQ WEB-DL]	feed	Urban Miracle Doctor	219	1	work
+[Erai-raws] Battle Spirits -Re- Zekkai no Kuu - 01 [1080p CR WEBRip HEVC AAC][MultiSub][A7FC74EC]	feed	Battle Spirits -Re- Zekkai no Kuu	1	1	
+[Erai-raws] Chii Fuyo - 01 [1080p CR WEBRip HEVC AAC][MultiSub][D710BBE1]	feed	Chii Fuyo	1	1	
+[Erai-raws] Chii Fuyo - 01 [480p CR WEB-DL AVC AAC][MultiSub][5F148B7C]	feed	Chii Fuyo	1	1	
+[Erai-raws] Choujun Choujou-senpai - 01 [1080p CR WEBRip HEVC AAC][MultiSub][CA72AEBB]	feed	Choujun Choujou-senpai	1	1	
+[Erai-raws] Detective Conan - 1210 [1080p CR WEB-DL AVC AAC][E1A36070]	feed	Detective Conan	1210	1	
+[Erai-raws] Detective Conan - 1210 [1080p CR WEBRip HEVC AAC][MultiSub][1FBD4765]	feed	Detective Conan	1210	1	
+[Erai-raws] Detective Conan - 1210 [480p CR WEB-DL AVC AAC][8A999545]	feed	Detective Conan	1210	1	
+[Erai-raws] Detective Conan - 1210 [720p CR WEB-DL AVC AAC][B6285C94]	feed	Detective Conan	1210	1	
+[Erai-raws] Detective Conan - 1211 [1080p CR WEB-DL AVC AAC][MultiSub][FD0B0ECC]	feed	Detective Conan	1211	1	
+[Erai-raws] Detective Conan - 1211 [1080p CR WEBRip HEVC AAC][MultiSub][75259239]	feed	Detective Conan	1211	1	
+[Erai-raws] Detective Conan - 1211 [480p CR WEB-DL AVC AAC][MultiSub][602890E9]	feed	Detective Conan	1211	1	
+[Erai-raws] Detective Conan - 1211 [720p CR WEB-DL AVC AAC][MultiSub][274DE1BF]	feed	Detective Conan	1211	1	
+[Erai-raws] Detective Conan - 1212 [1080p CR WEB-DL AVC AAC][07691027]	feed	Detective Conan	1212	1	
+[Erai-raws] Detective Conan - 1212 [1080p CR WEBRip HEVC AAC][MultiSub][B06415F6]	feed	Detective Conan	1212	1	
+[Erai-raws] Detective Conan - 1212 [480p CR WEB-DL AVC AAC][4436649F]	feed	Detective Conan	1212	1	
+[Erai-raws] Detective Conan - 1212 [720p CR WEB-DL AVC AAC][F30D80C3]	feed	Detective Conan	1212	1	
+[Erai-raws] Detective Conan - 1213 [1080p CR WEB-DL AVC AAC][MultiSub][CF384D18]	feed	Detective Conan	1213	1	
+[Erai-raws] Detective Conan - 1213 [1080p CR WEBRip HEVC AAC][MultiSub][BF8CCCE0]	feed	Detective Conan	1213	1	
+[Erai-raws] Detective Conan - 1213 [480p CR WEB-DL AVC AAC][MultiSub][2E20D505]	feed	Detective Conan	1213	1	
+[Erai-raws] Detective Conan - 1213 [720p CR WEB-DL AVC AAC][MultiSub][A2AE4571]	feed	Detective Conan	1213	1	
+[Erai-raws] Detective Conan - 1214 [1080p CR WEB-DL AVC AAC][MultiSub][D46111FD]	feed	Detective Conan	1214	1	
+[Erai-raws] Detective Conan - 1214 [1080p CR WEBRip HEVC AAC][MultiSub][84C86508]	feed	Detective Conan	1214	1	
+[Erai-raws] Detective Conan - 1214 [480p CR WEB-DL AVC AAC][MultiSub][F01CF130]	feed	Detective Conan	1214	1	
+[Erai-raws] Detective Conan - 1214 [720p CR WEB-DL AVC AAC][MultiSub][A00C98FA]	feed	Detective Conan	1214	1	
+[Erai-raws] Detective Conan - 1215 [1080p CR WEB-DL AVC AAC][MultiSub][36334760]	feed	Detective Conan	1215	1	
+[Erai-raws] Detective Conan - 1215 [1080p CR WEBRip HEVC AAC][MultiSub][89594C9E]	feed	Detective Conan	1215	1	
+[Erai-raws] Detective Conan - 1215 [480p CR WEB-DL AVC AAC][MultiSub][52462DCB]	feed	Detective Conan	1215	1	
+[Erai-raws] Detective Conan - 1215 [720p CR WEB-DL AVC AAC][MultiSub][275C6A6D]	feed	Detective Conan	1215	1	
+[Erai-raws] One Piece - 1176 [1080p CR WEB-DL AVC AAC][MultiSub][F7365FAC]	feed	One Piece	1176	1	
+[Erai-raws] One Piece - 1176 [1080p CR WEBRip HEVC AAC][MultiSub][8962D233]	feed	One Piece	1176	1	
+[Erai-raws] One Piece - 1177 [1080p CR WEB-DL AVC AAC][B414A5D7]	feed	One Piece	1177	1	
+[Erai-raws] One Piece - 1177 [1080p CR WEB-DL AVC AAC][MultiSub][832FE4CD]	feed	One Piece	1177	1	
+[Erai-raws] One Piece - 1177 [1080p CR WEBRip HEVC AAC][MultiSub][4AFFFCF0]	feed	One Piece	1177	1	
+[Erai-raws] One Piece - 1178 [1080p CR WEB-DL AVC AAC][283F666E]	feed	One Piece	1178	1	
+[Erai-raws] One Piece - 1178 [1080p CR WEB-DL AVC AAC][MultiSub][AC92A0BB]	feed	One Piece	1178	1	
+[Erai-raws] One Piece - 1178 [1080p CR WEBRip HEVC AAC][MultiSub][8265FD3E]	feed	One Piece	1178	1	
+[Erai-raws] One Piece - 1179 [1080p CR WEB-DL AVC AAC][B6C3E9A6]	feed	One Piece	1179	1	
+[Erai-raws] One Piece - 1179 [1080p CR WEB-DL AVC AAC][MultiSub][C8DDB99A]	feed	One Piece	1179	1	
+[Erai-raws] One Piece - 1179 [1080p CR WEBRip HEVC AAC][MultiSub][1E64DF74]	feed	One Piece	1179	1	
+[Erai-raws] One Piece - 1180 [1080p CR WEB-DL AVC AAC][6447A9D6]	feed	One Piece	1180	1	
+[Erai-raws] One Piece - 1180 [1080p CR WEB-DL AVC AAC][MultiSub][98D73D8A]	feed	One Piece	1180	1	
+[Erai-raws] One Piece - 1180 [1080p CR WEBRip HEVC AAC][MultiSub][F01B2367]	feed	One Piece	1180	1	
+[Erai-raws] Sora wa Akai Kawa no Hotori - 14 [1080p CR WEB-DL AVC AAC][MultiSub][6C2C263A]	feed	Sora wa Akai Kawa no Hotori	14	1	
+[Erai-raws] Sora wa Akai Kawa no Hotori - 14 [1080p CR WEBRip HEVC AAC][MultiSub][C7E3ADF0]	feed	Sora wa Akai Kawa no Hotori	14	1	
+[Erai-raws] Sora wa Akai Kawa no Hotori - 14 [480p CR WEB-DL AVC AAC][MultiSub][6DFF1ACA]	feed	Sora wa Akai Kawa no Hotori	14	1	
+[Erai-raws] Sora wa Akai Kawa no Hotori - 14 [720p CR WEB-DL AVC AAC][MultiSub][110134B9]	feed	Sora wa Akai Kawa no Hotori	14	1	
+[Gecko] Battle Spirits [Re] ZEKKAI NO KU - S01E01 (Battle Spirits [Re] 絶界の空; Battle Spirits [Re]: Zekkai no Kuu) [CTHP.WEB-DL 1080P AVC, AAC, M-SUB][DBAAD22D]	feed	Battle Spirits [Re] ZEKKAI NO KU	1	1	work
+[Gecko] Fabulous Beasts - S06E11 (有兽焉; You Shou Yan 6th Season) [BILI.WEB-DL 1080P HEVC, AAC, M-SUB][E64A3050]	feed	Fabulous Beasts	11	1	work
+[Gecko] Super Psychic Policeman Chojo - S01E01 (超巡！超条先輩; Choujun! Choujou-senpai) [CTHP.WEB-DL 1080P AVC, AAC, M-SUB][0B518184]	feed	Super Psychic Policeman Chojo	1	1	work
+[Gecko] The Guardian of Daxia - S01E05 (大夏守墓人; Daxia Shou Mu Ren) [WETV.WEB-DL 1080P AVC, AAC, M-SUB][88F38460]	feed	The Guardian of Daxia	5	1	work
+[Gecko] Uncle's Obsession with Cute Things - S01E01 (おじさんはカワイイものがお好き; Ojisan wa Kawaii Mono ga Osuki.) [MW.WEB-DL 1080P AVC, AAC, M-SUB][631BFB89]	feed	Uncle's Obsession with Cute Things	1	1	work
+[HatSubs] One Piece 1176 (WEB 1080p) [89B17C7D].mkv	feed	One Piece	1176	1	work,episode
+[HatSubs] One Piece 1177 (WEB 1080p) [8EBDFB8B].mkv	feed	One Piece	1177	1	work,episode
+[HatSubs] One Piece 1178 (WEB 1080p) [871D6F73].mkv	feed	One Piece	1178	1	work,episode
+[HatSubs] One Piece 1179 (WEB 1080p) [948B7F1B].mkv	feed	One Piece	1179	1	work,episode
+[HatSubs] One Piece 1180 (WEB 1080p) [C2F305AA].mkv	feed	One Piece	1180	1	work,episode
+[HuangSubs] Perfect World Season 6 (1080p) | (Wanmei Shijie 6, 完美世界 第六季)	feed	Perfect World Season 6	-	1	work,episode
+[HuangSubs] Slay the Gods Season 2 (1080p) | (Zhan Shen: Fanchen Shen Yu 2, 斩神之凡尘神域 第2季)	feed	Slay the Gods Season 2	-	1	work,episode
+[Ioroid] Ars no Kyojuu - 02 [AMZN WEB-DL 1080p AVC E-AC3]	feed	Ars no Kyojuu	2	1	
+[Ioroid] Ars no Kyojuu - 03 [AMZN WEB-DL 1080p AVC E-AC3]	feed	Ars no Kyojuu	3	1	
+[Ioroid] Ars no Kyojuu - 04 [AMZN WEB-DL 1080p AVC E-AC3]	feed	Ars no Kyojuu	4	1	
+[Ioroid] Ars no Kyojuu - 05 [AMZN WEB-DL 1080p AVC E-AC3]	feed	Ars no Kyojuu	5	1	
+[Ioroid] Ars no Kyojuu - 06 [AMZN WEB-DL 1080p AVC E-AC3]	feed	Ars no Kyojuu	6	1	
+[Ioroid] Ars no Kyojuu - 07 [AMZN WEB-DL 1080p AVC E-AC3]	feed	Ars no Kyojuu	7	1	
+[Ioroid] Ars no Kyojuu - 08 [AMZN WEB-DL 1080p AVC E-AC3]	feed	Ars no Kyojuu	8	1	
+[Ioroid] Ars no Kyojuu - 09 [AMZN WEB-DL 1080p AVC E-AC3]	feed	Ars no Kyojuu	9	1	
+[Ioroid] Ars no Kyojuu - 10 [AMZN WEB-DL 1080p AVC E-AC3]	feed	Ars no Kyojuu	10	1	
+[Ioroid] Ars no Kyojuu - 11 [AMZN WEB-DL 1080p AVC E-AC3]	feed	Ars no Kyojuu	11	1	
+[Ioroid] Ars no Kyojuu - 12 [AMZN WEB-DL 1080p AVC E-AC3]	feed	Ars no Kyojuu	12	1	
+[Ioroid] Ars no Kyojuu [AMZN WEB-DL 1080p AVC E-AC3][Batch]	feed	Ars no Kyojuu	batch	1	
+[Ioroid] Golden Kamuy - 44 [AMZN WEB-DL 1080p AVC E-AC3]	feed	Golden Kamuy	44	1	
+[Ioroid] Golden Kamuy - 45 [AMZN WEB-DL 1080p AVC E-AC3]	feed	Golden Kamuy	45	1	
+[Ioroid] Golden Kamuy - 46 [AMZN WEB-DL 1080p AVC E-AC3]	feed	Golden Kamuy	46	1	
+[Ioroid] Gundam Build Metaverse - 01 [AMZN WEB-DL 1080p AVC E-AC3]	feed	Gundam Build Metaverse	1	1	
+[Ioroid] Gundam Build Metaverse [AMZN WEB-DL 1080p AVC E-AC3]	feed	Gundam Build Metaverse	-	1	
+[Ioroid] LasTame - 01 [ABEMA WEB-DL 1080p AVC AAC]	feed	LasTame	1	1	
+[Ioroid] LasTame - 02 [ABEMA WEB-DL 1080p AVC AAC]	feed	LasTame	2	1	
+[Ioroid] LasTame - 03 [ABEMA WEB-DL 1080p AVC AAC]	feed	LasTame	3	1	
+[Ioroid] LasTame - 04 [ABEMA WEB-DL 1080p AVC AAC]	feed	LasTame	4	1	
+[Ioroid] LasTame - 05 [ABEMA WEB-DL 1080p AVC AAC]	feed	LasTame	5	1	
+[Ioroid] LasTame - 06 [ABEMA WEB-DL 1080p AVC AAC]	feed	LasTame	6	1	
+[Ioroid] LasTame - 07 [ABEMA WEB-DL 1080p AVC AAC]	feed	LasTame	7	1	
+[Ioroid] LasTame - 08 [ABEMA WEB-DL 1080p AVC AAC]	feed	LasTame	8	1	
+[Ioroid] LasTame - 09 [ABEMA WEB-DL 1080p AVC AAC]	feed	LasTame	9	1	
+[Ioroid] LasTame - 10 [ABEMA WEB-DL 1080p AVC AAC]	feed	LasTame	10	1	
+[Ioroid] LasTame - 11 [ABEMA WEB-DL 1080p AVC AAC]	feed	LasTame	11	1	
+[Ioroid] LasTame - 12 [ABEMA WEB-DL 1080p AVC AAC]	feed	LasTame	12	1	
+[Ioroid] Lupin III vs. Cat's Eye [AMZN WEB-DL 1080p AVC E-AC3][Multi-Subs][Multi-Audio]	feed	Lupin III vs. Cat's Eye	-	1	
+[Ioroid] Lv1 Maou to One Room Yuusha - 03 [AMZN WEB-DL 1080p AVC E-AC3]	feed	Lv1 Maou to One Room Yuusha	3	1	
+[Ioroid] Lv1 Maou to One Room Yuusha - 05 [AMZN WEB-DL 1080p AVC E-AC3]	feed	Lv1 Maou to One Room Yuusha	5	1	
+[Ioroid] Lv1 Maou to One Room Yuusha - 06 [AMZN WEB-DL 1080p AVC E-AC3]	feed	Lv1 Maou to One Room Yuusha	6	1	
+[Ioroid] Lv1 Maou to One Room Yuusha - 07 [AMZN WEB-DL 1080p AVC E-AC3]	feed	Lv1 Maou to One Room Yuusha	7	1	
+[Ioroid] Lv1 Maou to One Room Yuusha - 08 [AMZN WEB-DL 1080p AVC E-AC3]	feed	Lv1 Maou to One Room Yuusha	8	1	
+[Ioroid] Lv1 Maou to One Room Yuusha - 09 [AMZN WEB-DL 1080p AVC E-AC3]	feed	Lv1 Maou to One Room Yuusha	9	1	
+[Ioroid] Lv1 Maou to One Room Yuusha - 10 [AMZN WEB-DL 1080p AVC E-AC3]	feed	Lv1 Maou to One Room Yuusha	10	1	
+[Ioroid] Lv1 Maou to One Room Yuusha - 11 [AMZN WEB-DL 1080p AVC E-AC3]	feed	Lv1 Maou to One Room Yuusha	11	1	
+[Ioroid] Lv1 Maou to One Room Yuusha - 12 [AMZN WEB-DL 1080p AVC E-AC3]	feed	Lv1 Maou to One Room Yuusha	12	1	
+[Ioroid] Mou Ippon! - 03 [AMZN WEB-DL 1080p AVC E-AC3]	feed	Mou Ippon!	3	1	
+[Ioroid] Mou Ippon! - 04 [AMZN WEB-DL 1080p AVC E-AC3]	feed	Mou Ippon!	4	1	
+[Ioroid] Mou Ippon! - 05 [AMZN WEB-DL 1080p AVC E-AC3]	feed	Mou Ippon!	5	1	
+[Ioroid] Mou Ippon! - 06 [AMZN WEB-DL 1080p AVC E-AC3]	feed	Mou Ippon!	6	1	
+[Ioroid] Mou Ippon! - 07 [AMZN WEB-DL 1080p AVC E-AC3]	feed	Mou Ippon!	7	1	
+[Ioroid] Mou Ippon! - 08 [AMZN WEB-DL 1080p AVC E-AC3]	feed	Mou Ippon!	8	1	
+[Ioroid] Mou Ippon! - 09 [AMZN WEB-DL 1080p AVC E-AC3]	feed	Mou Ippon!	9	1	
+[Ioroid] Mou Ippon! - 10 [AMZN WEB-DL 1080p AVC E-AC3]	feed	Mou Ippon!	10	1	
+[Ioroid] Mou Ippon! - 11 [AMZN WEB-DL 1080p AVC E-AC3]	feed	Mou Ippon!	11	1	
+[Ioroid] Mou Ippon! - 12 [AMZN WEB-DL 1080p AVC E-AC3]	feed	Mou Ippon!	12	1	
+[Ioroid] Mou Ippon! - 13 [AMZN WEB-DL 1080p AVC E-AC3]	feed	Mou Ippon!	13	1	
+[Ioroid] Nekketsu Jinmen Inu - Life Is Movie [AMZN WEB-DL 1080p AVC E-AC3]	feed	Nekketsu Jinmen Inu - Life Is Movie	-	1	
+[Ioroid] Ochibi-san [AMZN WEB-DL 1080P AVC E-AC3][Multi-Subs]	feed	Ochibi-san	-	1	
+[Ioroid] Ragna Crimson - 01 [AMZN WEB-DL 1080p AVC E-AC3]	feed	Ragna Crimson	1	1	
+[Ioroid] Uma Musume Pretty Derby - Road to the Top - 01 [AMZN WEB-DL 1080p AVC E-AC3][Multi-Subs]	feed	Uma Musume Pretty Derby - Road to the Top	1	1	
+[Ioroid] Uma Musume Pretty Derby - Road to the Top - 01 [U-NEXT WEB-DL 1080p AVC AAC][Multi-Subs]	feed	Uma Musume Pretty Derby - Road to the Top	1	1	
+[Ioroid] Uma Musume Pretty Derby - Road to the Top - 02 [AMZN WEB-DL 1080p AVC E-AC3][Multi-Subs]	feed	Uma Musume Pretty Derby - Road to the Top	2	1	
+[Ioroid] Uma Musume Pretty Derby - Road to the Top - 02 [U-NEXT WEB-DL 1080p AVC AAC][Multi-Subs]	feed	Uma Musume Pretty Derby - Road to the Top	2	1	
+[Ioroid] Uma Musume Pretty Derby - Road to the Top - 03 [AMZN WEB-DL 1080p AVC E-AC3][Multi-Subs]	feed	Uma Musume Pretty Derby - Road to the Top	3	1	
+[Ioroid] Uma Musume Pretty Derby - Road to the Top - 03 [U-NEXT WEB-DL 1080p AVC AAC][Multi-Subs]	feed	Uma Musume Pretty Derby - Road to the Top	3	1	
+[Ioroid] Uma Musume Pretty Derby - Road to the Top - 04 [AMZN WEB-DL 1080p AVC E-AC3][Multi-Subs]	feed	Uma Musume Pretty Derby - Road to the Top	4	1	
+[Ioroid] Uma Musume Pretty Derby - Road to the Top - 04 [U-NEXT WEB-DL 1080p AVC AAC][Multi-Subs]	feed	Uma Musume Pretty Derby - Road to the Top	4	1	
+[Ioroid] Uma Musume Pretty Derby - Road to the Top [AMZN WEB-DL 1080p AVC E-AC3][Multi-Subs][Batch]	feed	Uma Musume Pretty Derby - Road to the Top	batch	1	
+[Ioroid] Uma Musume Pretty Derby - Road to the Top [U-NEXT WEB-DL 1080p AVC AAC][Multi-Subs][Batch]	feed	Uma Musume Pretty Derby - Road to the Top	batch	1	
+[Ioroid] Urusei Yatsura (2022) 2nd Season - 01 (24) [AMZN WEB-DL 1080p AVC E-AC3]	feed	Urusei Yatsura (2022) 2nd Season	1	1	
+[Ioroid] Urusei Yatsura (2022) 2nd Season - 02 (25) [AMZN WEB-DL 1080p AVC E-AC3]	feed	Urusei Yatsura (2022) 2nd Season	2	1	
+[Ioroid] Urusei Yatsura (2022) 2nd Season - 03 (26) [AMZN WEB-DL 1080p AVC E-AC3]	feed	Urusei Yatsura (2022) 2nd Season	3	1	
+[Ioroid] Urusei Yatsura (2022) 2nd Season - 04 (27) [AMZN WEB-DL 1080p AVC E-AC3]	feed	Urusei Yatsura (2022) 2nd Season	4	1	
+[Ioroid] Urusei Yatsura (2022) 2nd Season - 05 (28) [AMZN WEB-DL 1080p AVC E-AC3]	feed	Urusei Yatsura (2022) 2nd Season	5	1	
+[Ioroid] Urusei Yatsura (2022) 2nd Season - 06 (29) [AMZN WEB-DL 1080p AVC E-AC3]	feed	Urusei Yatsura (2022) 2nd Season	6	1	
+[Ioroid] Urusei Yatsura (2022) 2nd Season - 07 (30) [AMZN WEB-DL 1080p AVC E-AC3]	feed	Urusei Yatsura (2022) 2nd Season	7	1	
+[Ironclad] Sora wa Akai Kawa no Hotori - S01E14 [WEB.1080p.AV1] | Red River (Multi-Subs) (Weekly)	feed	Sora wa Akai Kawa no Hotori	14	1	work
+[Judas] Choujun! Choujou Senpai (Super Psychic Policeman Chojo) - S01E01 [1080p][HEVC x265 10bit][Multi-Subs] (Weekly)	feed	Choujun! Choujou Senpai (Super Psychic Policeman Chojo)	1	1	work
+[Judas] One Piece - 1176 [1080p][HEVC x265 10bit][Multi-Subs] (Weekly)	feed	One Piece	1176	1	
+[Judas] One Piece - 1177 [1080p][HEVC x265 10bit][Multi-Subs] (Weekly)	feed	One Piece	1177	1	
+[Judas] One Piece - 1178 [1080p][HEVC x265 10bit][Multi-Subs] (Weekly)	feed	One Piece	1178	1	
+[Judas] One Piece - 1179 [1080p][HEVC x265 10bit][Multi-Subs] (Weekly)	feed	One Piece	1179	1	
+[Judas] One Piece - 1180 [1080p][HEVC x265 10bit][Multi-Subs] (Weekly)	feed	One Piece	1180	1	
+[Judas] Tsuihou sareta Cheat Fuyo Majutsushi wa Kimama na Second Life wo Ouka suru (The Laid-Off Cheat-Granting Mage Enjoys a Second Lease on Life) - S01E01 [1080p][HEVC x265 10bit][Dual-Audio][Multi-Subs] (Weekly)	feed	Tsuihou sareta Cheat Fuyo Majutsushi wa Kimama na Second Life wo Ouka suru (The Laid-Off Cheat-Granting Mage Enjoys a Second Lease on Life)	1	1	work
+[KawaSubs] The Demon King's Daughter is Too Kind - S01E10 [WEB 1080p AVC EAC3] [Eng-Sub] | Maou no Musume wa Yasashi Sugiru!!	feed	The Demon King's Daughter is Too Kind	10	1	work
+[KawaSubs] The World Is Dancing - S01E02 [WEB DUAL 1080p AVC AAC] [Eng-Sub]	feed	The World Is Dancing	2	1	work
+[Ommex] Doraemon (2005) Episode 936 [ENG SUB][1080p x265 AAC]	feed	Doraemon (2005)	936	1	work
+[PrinceOtaku] Detective Conan: The Million-dollar Pentagram (2024) WEB.AMZN 1080p [Dual Audio]	feed	Detective Conan: The Million-dollar Pentagram (2024)	-	1	work
+[SubsPlease] 86 - Eighty Six - 11.5 (1080p) [FFBC5AF1].mkv	feed	86 - Eighty Six	11.5	1	
+[SubsPlease] 86 - Eighty Six - 17.5 (1080p) [4857FFD2].mkv	feed	86 - Eighty Six	17.5	1	
+[SubsPlease] 86 - Eighty Six - 18.5 (1080p) [41CF0AD9].mkv	feed	86 - Eighty Six	18.5	1	
+[SubsPlease] 86 - Eighty Six - 21.5 (1080p) [AE393F27].mkv	feed	86 - Eighty Six	21.5	1	
+[SubsPlease] Aparida - 09.5 (1080p) [9EEAF24C].mkv	feed	Aparida	9.5	1	
+[SubsPlease] Ayakashi Triangle - 06.5 (1080p) [4679650F].mkv	feed	Ayakashi Triangle	6.5	1	
+[SubsPlease] Baraou no Souretsu - 12.5 (1080p) [19D386FA].mkv	feed	Baraou no Souretsu	12.5	1	
+[SubsPlease] Boku no Kokoro no Yabai Yatsu - 12.5 (1080p) [67210C23].mkv	feed	Boku no Kokoro no Yabai Yatsu	12.5	1	
+[SubsPlease] Bokutachi no Remake - 06.5 (1080p) [8B196C6B].mkv	feed	Bokutachi no Remake	6.5	1	
+[SubsPlease] Bucchigiri - 06.5 (1080p) [74A146BB].mkv	feed	Bucchigiri	6.5	1	
+[SubsPlease] Buddy Daddies - 08.5 (1080p) [CED1D9AE].mkv	feed	Buddy Daddies	8.5	1	
+[SubsPlease] Chitose-kun wa Ramune Bin no Naka - 13.5 (480p) [D8344B61].mkv	feed	Chitose-kun wa Ramune Bin no Naka	13.5	1	
+[SubsPlease] Chitose-kun wa Ramune Bin no Naka - 13.5 (720p) [E19EC93B].mkv	feed	Chitose-kun wa Ramune Bin no Naka	13.5	1	
+[SubsPlease] Delico's Nursery - 06.5 (1080p) [2AF8E99E].mkv	feed	Delico's Nursery	6.5	1	
+[SubsPlease] Detective Conan - 1210 (1080p) [7B025382].mkv	feed	Detective Conan	1210	1	trname
+[SubsPlease] Detective Conan - 1210 (480p) [51697563].mkv	feed	Detective Conan	1210	1	trname
+[SubsPlease] Detective Conan - 1210 (720p) [3B1DAAB7].mkv	feed	Detective Conan	1210	1	trname
+[SubsPlease] Detective Conan - 1211 (1080p) [14EEFA05].mkv	feed	Detective Conan	1211	1	trname
+[SubsPlease] Detective Conan - 1211 (480p) [6851E5BB].mkv	feed	Detective Conan	1211	1	trname
+[SubsPlease] Detective Conan - 1211 (720p) [FD32B197].mkv	feed	Detective Conan	1211	1	trname
+[SubsPlease] Detective Conan - 1212 (1080p) [5EF3901C].mkv	feed	Detective Conan	1212	1	trname
+[SubsPlease] Detective Conan - 1212 (480p) [2B21E51A].mkv	feed	Detective Conan	1212	1	trname
+[SubsPlease] Detective Conan - 1212 (720p) [121C5A9D].mkv	feed	Detective Conan	1212	1	trname
+[SubsPlease] Detective Conan - 1213 (1080p) [7A01A0DF].mkv	feed	Detective Conan	1213	1	trname
+[SubsPlease] Detective Conan - 1213 (480p) [05B52A2A].mkv	feed	Detective Conan	1213	1	trname
+[SubsPlease] Detective Conan - 1213 (720p) [B30B8BCF].mkv	feed	Detective Conan	1213	1	trname
+[SubsPlease] Detective Conan - 1214 (480p) [CFB33A28].mkv	feed	Detective Conan	1214	1	trname
+[SubsPlease] Detective Conan - 1214 (720p) [D4FAB22A].mkv	feed	Detective Conan	1214	1	trname
+[SubsPlease] Detective Conan - 1215 (480p) [0B0711B8].mkv	feed	Detective Conan	1215	1	trname
+[SubsPlease] Detective Conan - 1215 (720p) [3D091F1D].mkv	feed	Detective Conan	1215	1	trname
+[SubsPlease] Detective Conan - The Counterfeit Case of Ultra 30 (480p) [4CAE7FA5].mkv	feed	Detective Conan - The Counterfeit Case of Ultra 30	-	1	work,episode,trname
+[SubsPlease] Detective Conan - The Counterfeit Case of Ultra 30 (720p) [3B6CFA75].mkv	feed	Detective Conan - The Counterfeit Case of Ultra 30	-	1	work,episode,trname
+[SubsPlease] Dragon Quest - Dai no Daibouken (2020) - 37.5 (1080p) [F929D960].mkv	feed	Dragon Quest - Dai no Daibouken (2020)	37.5	1	
+[SubsPlease] Fairy Tail - 100 Years Quest - 13.5 (1080p) [CDB92274].mkv	feed	Fairy Tail - 100 Years Quest	13.5	1	
+[SubsPlease] Hoshi no Samidare - 12.5 (1080p) [B7BFD935].mkv	feed	Hoshi no Samidare	12.5	1	
+[SubsPlease] Kore Kaite Shine (01-12) (480p) [Batch]	feed	Kore Kaite Shine	batch 1-12	1	
+[SubsPlease] Kore Kaite Shine (01-12) (720p) [Batch]	feed	Kore Kaite Shine	batch 1-12	1	
+[SubsPlease] Koujo Denka no Kateikyoushi - 04.5 (1080p) [F76FE935].mkv	feed	Koujo Denka no Kateikyoushi	4.5	1	
+[SubsPlease] Let's Go Kaiki-gumi (01-12) (480p) [Batch]	feed	Let's Go Kaiki-gumi	batch 1-12	1	
+[SubsPlease] Let's Go Kaiki-gumi (01-12) (720p) [Batch]	feed	Let's Go Kaiki-gumi	batch 1-12	1	
+[SubsPlease] Link Click - 05.5 (1080p) [24D66260].mkv	feed	Link Click	5.5	1	
+[SubsPlease] Magia Record S2 - 07.5 (1080p) [65DFCACC].mkv	feed	Magia Record S2	7.5	1	
+[SubsPlease] Mashle - 06.5 (1080p) [2106637B].mkv	feed	Mashle	6.5	1	
+[SubsPlease] Mebius Dust (01-12) (480p) [Batch]	feed	Mebius Dust	batch 1-12	1	
+[SubsPlease] Mebius Dust (01-12) (720p) [Batch]	feed	Mebius Dust	batch 1-12	1	
+[SubsPlease] Megumi no Daigo - Kyuukoku no Orange - 12.5 (1080p) [113C367E].mkv	feed	Megumi no Daigo - Kyuukoku no Orange	12.5	1	
+[SubsPlease] Megumi no Daigo - Kyuukoku no Orange - 17.5 (1080p) [49F13E12].mkv	feed	Megumi no Daigo - Kyuukoku no Orange	17.5	1	
+[SubsPlease] Monogatari Series - Off & Monster Season - 06.5 (1080p) [C500CD9D].mkv	feed	Monogatari Series - Off & Monster Season	6.5	1	
+[SubsPlease] NieR Automata Ver1.1a - 18.5 (1080p) [8DD052D8].mkv	feed	NieR Automata Ver1.1a	18.5	1	
+[SubsPlease] Nige Jouzu no Wakagimi - 09.5 (1080p) [9886D593].mkv	feed	Nige Jouzu no Wakagimi	9.5	1	
+[SubsPlease] One Piece - 1177 (1080p) [1D212675].mkv	feed	One Piece	1177	1	trname
+[SubsPlease] One Piece - 1178 (1080p) [49944784].mkv	feed	One Piece	1178	1	trname
+[SubsPlease] One Piece - 1179 (1080p) [A02F35FE].mkv	feed	One Piece	1179	1	trname
+[SubsPlease] Oshi no Ko - 07.5 (1080p) [878FF310].mkv	feed	Oshi no Ko	7.5	1	
+[SubsPlease] SK8 the Infinity - 09.5 (1080p) [AA77FAEE].mkv	feed	SK8 the Infinity	9.5	1	
+[SubsPlease] Saihate no Paladin - 07.5 (1080p) [1A0E139A].mkv	feed	Saihate no Paladin	7.5	1	
+[SubsPlease] Sengoku Youko - 13.5 (1080p) [9185EC37].mkv	feed	Sengoku Youko	13.5	1	
+[SubsPlease] Sengoku Youko - 23.5 (1080p) [DF852889].mkv	feed	Sengoku Youko	23.5	1	
+[SubsPlease] Senyoku no Sigrdrifa - 08.5 (1080p) [23B68137].mkv	feed	Senyoku no Sigrdrifa	8.5	1	
+[SubsPlease] Shangri-La Frontier - 14.5 (1080p) [46CF7C03].mkv	feed	Shangri-La Frontier	14.5	1	
+[SubsPlease] Shuumatsu Train Doko e Iku - 11.5 (1080p) [16FA6F03].mkv	feed	Shuumatsu Train Doko e Iku	11.5	1	
+[SubsPlease] Silent Witch - Chinmoku no Majo no Kakushigoto - 09.5 (1080p) [7C33D2BA].mkv	feed	Silent Witch - Chinmoku no Majo no Kakushigoto	9.5	1	
+[SubsPlease] Solo Leveling - 07.5 (1080p) [9F8A2A07].mkv	feed	Solo Leveling	7.5	1	
+[SubsPlease] Sora wa Akai Kawa no Hotori - 14 (480p) [43C06403].mkv	feed	Sora wa Akai Kawa no Hotori	14	1	
+[SubsPlease] Sora wa Akai Kawa no Hotori - 14 (720p) [FC4ABFA6].mkv	feed	Sora wa Akai Kawa no Hotori	14	1	
+[SubsPlease] Tensei Shitara Slime Datta Ken - 36.5 (1080p) [9BF24474].mkv	feed	Tensei Shitara Slime Datta Ken	36.5	1	
+[SubsPlease] Tensei Shitara Slime Datta Ken - 48.5 (1080p) [7D4911AC].mkv	feed	Tensei Shitara Slime Datta Ken	48.5	1	
+[SubsPlease] Tensei Shitara Slime Datta Ken - 65.5 (1080p) [CF367D39].mkv	feed	Tensei Shitara Slime Datta Ken	65.5	1	
+[SubsPlease] Tokyo 24-ku - 09.5 (1080p) [093FF220].mkv	feed	Tokyo 24-ku	9.5	1	
+[SubsPlease] Tonikaku Kawaii - 12.5 (1080p) [C1C98DE6].mkv	feed	Tonikaku Kawaii	12.5	1	
+[SubsPlease] Vanitas no Carte - 12.5 (1080p) [2186EEC2].mkv	feed	Vanitas no Carte	12.5	1	
+[SubsPlease] Vivy - Fluorite Eye's Song - 13.5 (1080p) [3CBF1CC0].mkv	feed	Vivy - Fluorite Eye's Song	13.5	1	
+[SubsPlease] Yakusoku no Neverland S2 - 05.5 (1080p) [EA769F28].mkv	feed	Yakusoku no Neverland S2	5.5	1	
+[ToonsHub] Blue Box S02E01 1080p AMZN WEB-DL DUAL DDP5.1 H.264 (Ao no Hako, Dual-Audio, Multi-Subs)	feed	Blue Box	1	1	
+[ToonsHub] Chitose Is in the Ramune Bottle S00E15 1080p BILI WEB-DL AAC2.0 H.265 (Chitose-kun wa Ramune Bin no Naka, Multi-Subs)	feed	Chitose Is in the Ramune Bottle	15	1	
+[ToonsHub] Chitose Is in the Ramune Bottle S00E15 1080p CR WEB-DL AAC2.0 H.264 (Chitose-kun wa Ramune Bin no Naka, Multi-Subs)	feed	Chitose Is in the Ramune Bottle	15	1	
+[ToonsHub] Detective Conan EP1210 1080p CR WEB-DL AAC2.0 H.264 (Meitantei Conan, English-Sub)	feed	Detective Conan	1210	1	work,episode
+[ToonsHub] Detective Conan EP1210 1080p NF WEB-DL AAC2.0 H.264 (Meitantei Conan, Multi-Subs)	feed	Detective Conan	1210	1	work,episode
+[ToonsHub] Detective Conan EP1211 1080p CR WEB-DL AAC2.0 H.264 (Meitantei Conan, English-Sub)	feed	Detective Conan	1211	1	work,episode
+[ToonsHub] Detective Conan EP1211 1080p NF WEB-DL AAC2.0 H.264 (Meitantei Conan, Multi-Subs)	feed	Detective Conan	1211	1	work,episode
+[ToonsHub] Detective Conan EP1212 1080p CR WEB-DL AAC2.0 H.264 (Meitantei Conan, English-Sub)	feed	Detective Conan	1212	1	work,episode
+[ToonsHub] Detective Conan EP1212 1080p NF WEB-DL AAC2.0 H.264 (Meitantei Conan, Multi-Subs)	feed	Detective Conan	1212	1	work,episode
+[ToonsHub] Detective Conan EP1213 1080p CR WEB-DL AAC2.0 H.264 (Meitantei Conan, Multi-Subs)	feed	Detective Conan	1213	1	work,episode
+[ToonsHub] Detective Conan EP1213 1080p NF WEB-DL AAC2.0 H.264 (Meitantei Conan, Multi-Subs)	feed	Detective Conan	1213	1	work,episode
+[ToonsHub] Detective Conan EP1214 1080p CR WEB-DL AAC2.0 H.264 (Meitantei Conan, Multi-Subs)	feed	Detective Conan	1214	1	work,episode
+[ToonsHub] Detective Conan EP1214 1080p NF WEB-DL AAC2.0 H.264 (Meitantei Conan, Multi-Subs)	feed	Detective Conan	1214	1	work,episode
+[ToonsHub] Detective Conan EP1215 1080p CR WEB-DL AAC2.0 H.264 (Meitantei Conan, English-Sub)	feed	Detective Conan	1215	1	work,episode
+[ToonsHub] Detective Conan EP1215 1080p NF WEB-DL AAC2.0 H.264 (Meitantei Conan, Multi-Subs)	feed	Detective Conan	1215	1	work,episode
+[ToonsHub] Detective Conan: The Counterfeit Case of Ultra 30 (2026) 1080p CR WEB-DL AAC2.0 H.264 (Meitantei Conan: 30-Gou Satsujin Jiken, Multi-Subs)	feed	Detective Conan: The Counterfeit Case of Ultra 30 (2026)	-	1	work,episode
+[ToonsHub] Fabulous Beasts S06E11 1080p BILI WEB-DL AAC2.0 H.265 (You Shou Yan 6th Season, Multi-Subs)	feed	Fabulous Beasts	11	1	
+[ToonsHub] Magic Knight Rayearth 2026 S01E01 1080p MW WEB-DL AAC2.0 H.264 (Multi-Subs)	feed	Magic Knight Rayearth 2026	1	1	
+[ToonsHub] Magical Girl Raising Project Restart S01E01 REPACK 1080p AMZN WEB-DL DDP2.0 H.264 (Mahou Shoujo Ikusei Keikaku: restart, Multi-Subs)	feed	Magical Girl Raising Project Restart	1	1	
+[ToonsHub] One Piece EP1176 1080p BILI WEB-DL AAC2.0 H.265 (Multi-Subs)	feed	One Piece	1176	1	work,episode
+[ToonsHub] One Piece EP1176 1080p NF WEB-DL AAC2.0 H.264 (Multi-Subs)	feed	One Piece	1176	1	work,episode
+[ToonsHub] One Piece EP1177 1080p BILI WEB-DL AAC2.0 H.265 (Multi-Subs)	feed	One Piece	1177	1	work,episode
+[ToonsHub] One Piece EP1177 1080p CR WEB-DL AAC2.0 H.264 (English-Sub)	feed	One Piece	1177	1	work,episode
+[ToonsHub] One Piece EP1177 1080p NF WEB-DL AAC2.0 H.264 (Multi-Subs)	feed	One Piece	1177	1	work,episode
+[ToonsHub] One Piece EP1178 1080p BILI WEB-DL AAC2.0 H.265 (Multi-Subs)	feed	One Piece	1178	1	work,episode
+[ToonsHub] One Piece EP1178 1080p CR WEB-DL AAC2.0 H.264 (Multi-Subs)	feed	One Piece	1178	1	work,episode
+[ToonsHub] One Piece EP1178 1080p NF WEB-DL AAC2.0 H.264 (Multi-Subs)	feed	One Piece	1178	1	work,episode
+[ToonsHub] One Piece EP1179 1080p BILI WEB-DL AAC2.0 H.265 (Multi-Subs)	feed	One Piece	1179	1	work,episode
+[ToonsHub] One Piece EP1179 1080p CR WEB-DL AAC2.0 H.264 (English-Sub)	feed	One Piece	1179	1	work,episode
+[ToonsHub] One Piece EP1179 1080p NF WEB-DL AAC2.0 H.264 (Multi-Subs)	feed	One Piece	1179	1	work,episode
+[ToonsHub] One Piece EP1180 1080p BILI WEB-DL AAC2.0 H.265 (Multi-Subs)	feed	One Piece	1180	1	work,episode
+[ToonsHub] One Piece EP1180 1080p CR WEB-DL AAC2.0 H.264 (English-Sub)	feed	One Piece	1180	1	work,episode
+[ToonsHub] One Piece EP1180 1080p NF WEB-DL AAC2.0 H.264 (Multi-Subs)	feed	One Piece	1180	1	work,episode
+[ToonsHub] Red River 2026 S01E14 1080p CR WEB-DL AAC2.0 H.264 (Sora wa Akai Kawa no Hotori, Multi-Subs)	feed	Red River 2026	14	1	
+[ToonsHub] The Eternal Supreme Li Yunxiao S01E25 1080p BILI WEB-DL AAC2.0 H.265 (Wangu Zhizun: Li Yunxiao Zhuan, Multi-Subs)	feed	The Eternal Supreme Li Yunxiao	25	1	
+[ToonsHub] The Laid-Off Cheat-Granting Mage Enjoys a Second Lease on Life S01E01 1080p BILI WEB-DL AAC2.0 H.265 (Multi-Subs)	feed	The Laid-Off Cheat-Granting Mage Enjoys a Second Lease on Life	1	1	
+[ToonsHub] The Laid-Off Cheat-Granting Mage Enjoys a Second Lease on Life S01E01 1080p CR WEB-DL DUAL AAC2.0 H.264 (Dual-Audio, Multi-Subs)	feed	The Laid-Off Cheat-Granting Mage Enjoys a Second Lease on Life	1	1	
+[ToonsHub] To Be Winner S01E12 1080p BSITE WEB-DL AAC2.0 H.264 (Cheng Ye Xiao He, Multi-Subs)	feed	To Be Winner	12	1	
+[Trix] The Laid-Off Cheat-Granting Mage Enjoys a Second Lease on Life S01E01 [WEBRip 1080p AV1 Opus] (Dual Audio, Multi Subs, VOSTFR) | Tsuihou Sareta Cheat Fuyo Majutsushi wa Kimama na Second Life wo Ouka Suru Chii Fuyo (Weekly)	feed	The Laid-Off Cheat-Granting Mage Enjoys a Second Lease on Life	1	1	
+[Yameii] The Laid-Off Cheat-Granting Mage Enjoys a Second Lease on Life - S01E01 [English Dub] [CR WEB-DL 1080p H264 AAC] [A619AFEB] (Tsuihou Sareta Cheat Fuyo Majutsushi wa Kimama na Second Life o Ouka Suru.)	feed	The Laid-Off Cheat-Granting Mage Enjoys a Second Lease on Life	1	1	work
+[Yameii] The Laid-Off Cheat-Granting Mage Enjoys a Second Lease on Life - S01E01 [English Dub] [CR WEB-DL 720p H264 AAC] [1217E9F0] (Tsuihou Sareta Cheat Fuyo Majutsushi wa Kimama na Second Life o Ouka Suru.)	feed	The Laid-Off Cheat-Granting Mage Enjoys a Second Lease on Life	1	1	work
+[ethan&Ioroid] Eiga Sumikko Gurashi Aoi Tsukiyo no Mahou no Ko [AMZN WEB-DL 1080p AVC E-AC3]	feed	Eiga Sumikko Gurashi Aoi Tsukiyo no Mahou no Ko	-	1	

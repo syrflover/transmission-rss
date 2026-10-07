@@ -28,6 +28,8 @@ pub mod feed;
 pub mod offsets;
 pub mod past_search;
 pub mod plan;
+#[cfg(test)]
+mod release_names;
 pub mod revision;
 pub mod revisions;
 pub mod rss;
