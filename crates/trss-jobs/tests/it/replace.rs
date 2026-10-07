@@ -19,7 +19,7 @@ use trss_jobs::{
     model::{Chosen, Outcome, PathAction, PlanState},
     place::replace::{ADOPTED, AWAITING_APPROVAL},
     place::{
-        records::StoredChoice,
+        records::{StoredChoice, StoredOnly},
         replace::records::{Compared, Decided, Plan, PlanView},
     },
     store::{JobDetail, DECIDED},
@@ -692,6 +692,67 @@ async fn an_imported_copy_whose_job_is_gone_stays_blocked_with_the_reason() {
             .unwrap(),
         StoredChoice::Refused("이 보관본을 받은 작업의 기록이 없어 적용할 수 없어요.")
     );
+}
+
+/// The plan of `stored` that `job` waits on a person for.
+async fn plan_of(s: &Setup, job: &str, stored: &str) -> Plan {
+    s.store
+        .replacements(job)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|v| v.plan.stored_id == stored)
+        .expect("its plan")
+        .plan
+}
+
+#[tokio::test]
+async fn a_copy_kept_off_the_episode_leaves_its_row_until_chosen_again_or_the_subtitle_goes() {
+    let s = setup().await;
+    let (job, imported) = imported_by_a_replacement(&s).await;
+    let on_row = |only: &[StoredOnly]| only.iter().find(|c| c.id == imported).cloned();
+    let choose = || {
+        s.store
+            .choose_stored(WORK, &imported, Chosen::Apply, 5_000_000)
+    };
+
+    // Compared and kept: the episode keeps its subtitle, and the row no longer
+    // offers the copy; the 자막 card still does.
+    choose().await.unwrap();
+    run(&s).await;
+    let plan = plan_of(&s, &job, &imported).await;
+    assert_eq!(
+        decide(&s, &job, &plan, false).await,
+        Decided::Done(PlanState::Kept)
+    );
+    run(&s).await;
+    assert_eq!(s.read(TARGET), fake::ass("Show-02"));
+    assert_eq!(on_row(&s.store.stored_only(WORK).await.unwrap()), None);
+    let copies = s.store.work_copies(WORK).await.unwrap();
+    let copy = copies.iter().find(|c| c.id == imported).expect("listed");
+    assert_eq!(copy.options.apply, Ok(true));
+
+    // Chosen again from the card: the row shows it waiting for the approval.
+    choose().await.unwrap();
+    run(&s).await;
+    waiting_for_approval(&detail(&s, &job).await);
+    let row = on_row(&s.store.stored_only(WORK).await.unwrap()).expect("on the row");
+    assert_eq!(row.awaiting_approval.as_deref(), Some(job.as_str()));
+
+    // Kept again, then the episode loses its subtitle: nothing is kept over
+    // any more, and the row offers the copy to apply.
+    let plan = plan_of(&s, &job, &imported).await;
+    assert_eq!(
+        decide(&s, &job, &plan, false).await,
+        Decided::Done(PlanState::Kept)
+    );
+    run(&s).await;
+    assert_eq!(on_row(&s.store.stored_only(WORK).await.unwrap()), None);
+    std::fs::remove_file(s.at(TARGET)).unwrap();
+    s.sql("UPDATE subtitle_applied SET removed_at = 1".to_owned())
+        .await;
+    let row = on_row(&s.store.stored_only(WORK).await.unwrap()).expect("on the row");
+    assert!(!row.compare);
 }
 
 #[tokio::test]

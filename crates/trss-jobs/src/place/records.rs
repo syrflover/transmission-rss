@@ -1367,7 +1367,9 @@ pub fn clearing(c: &mut Connection, file_id: &str, now: Millis) -> Result<(), Jo
 
 /// A stored subtitle of a work on an episode with no applied copy of it
 /// beside a video (보관만 한 자막), for the work's episode rows. One a person
-/// cleaned is none.
+/// cleaned is none, and so is one whose last replacement plan the person
+/// decided `현재 유지` (`kept`) while the episode has a subtitle: the 자막 card
+/// still offers it ([`work_copies`]), and choosing it again opens a new plan.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredOnly {
     pub id: String,
@@ -1413,7 +1415,12 @@ pub fn stored_only(c: &Connection, work_id: &str) -> rusqlite::Result<Vec<Stored
                                 OR j.state IN ('partial', 'pending', 'running'))),
                 (SELECT r.job_id FROM subtitle_replacements r
                   WHERE r.stored_id = s.id AND r.state = 'open'
-                  ORDER BY r.created_at LIMIT 1)
+                  ORDER BY r.created_at LIMIT 1),
+                coalesce(
+                    (SELECT r.state = 'kept' FROM subtitle_replacements r
+                      WHERE r.stored_id = s.id
+                      ORDER BY r.created_at DESC, r.rowid DESC LIMIT 1),
+                    0)
            FROM subtitle_stored s JOIN subtitle_assets a ON a.id = s.subtitle_asset_id
           WHERE s.work_id = ?1 AND s.episode IS NOT NULL AND s.cleaned_at IS NULL
             AND NOT EXISTS (SELECT 1 FROM subtitle_applied ap
@@ -1422,27 +1429,36 @@ pub fn stored_only(c: &Connection, work_id: &str) -> rusqlite::Result<Vec<Stored
     )?;
     let rows = stmt.query_map(params![work_id, crate::store::RELOCATE], |r| {
         let path: String = r.get(3)?;
-        Ok(StoredOnly {
-            id: r.get(0)?,
-            season: r.get(1)?,
-            episode: r.get(2)?,
-            name: path.rsplit('/').next().unwrap_or(&path).to_owned(),
-            creator: r.get(4)?,
-            format: r.get(5)?,
-            stored_at: r.get(6)?,
-            job_id: r.get(7)?,
-            awaiting_video: r.get(8)?,
-            awaiting_approval: r.get(9)?,
-            compare: false,
-        })
+        let kept: bool = r.get(10)?;
+        Ok((
+            kept,
+            StoredOnly {
+                id: r.get(0)?,
+                season: r.get(1)?,
+                episode: r.get(2)?,
+                name: path.rsplit('/').next().unwrap_or(&path).to_owned(),
+                creator: r.get(4)?,
+                format: r.get(5)?,
+                stored_at: r.get(6)?,
+                job_id: r.get(7)?,
+                awaiting_video: r.get(8)?,
+                awaiting_approval: r.get(9)?,
+                compare: false,
+            },
+        ))
     })?;
-    let mut stored = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    let rows = rows.collect::<rusqlite::Result<Vec<_>>>()?;
     let mut library = Library::of(work_id);
-    for one in &mut stored {
+    let mut stored = Vec::with_capacity(rows.len());
+    for (kept, mut one) in rows {
         let recorded = library
             .files(c, one.season, one.episode)?
             .is_some_and(|f| !f.subtitles.is_empty());
         one.compare = recorded || !applied_formats(c, work_id, one.season, one.episode)?.is_empty();
+        // Kept over the episode's subtitle: decided, until the episode has none.
+        if !(kept && one.compare) {
+            stored.push(one);
+        }
     }
     Ok(stored)
 }

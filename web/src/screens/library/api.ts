@@ -200,7 +200,10 @@ export interface WorkEpisode {
   revision: EpisodeRevision | null;
   /** Set while a replacement of the video has failed; `null` otherwise. */
   failure: EpisodeFailure | null;
-  /** Stored subtitles on the episode with no applied copy beside its video (`보관본 있음`), oldest first. */
+  /**
+   * Stored subtitles on the episode with no applied copy beside its video (`보관본 있음`), oldest first. One whose
+   * last comparison a person ended with `현재 유지` is left out while the episode has a subtitle.
+   */
   stored: StoredSubtitle[];
 }
 

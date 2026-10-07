@@ -103,7 +103,9 @@
 //! - `stored` are the stored subtitles on the episode with no applied copy of
 //!   them beside a video (보관만 한 자막: another episode of a package, a
 //!   format the order did not take; or one waiting for the episode's video),
-//!   oldest first. `can_apply` says whether `적용` can ask for it: a format the app
+//!   oldest first. A copy whose last comparison a person ended with `현재 유지`
+//!   is not among them while the episode has a subtitle (the `subtitles` card
+//!   still lists it, [`trss_jobs::place::records::stored_only`]). `can_apply` says whether `적용` can ask for it: a format the app
 //!   applies, received by a job whose record is there. `awaiting_video` says
 //!   a job applies it once the episode's video comes (`영상 대기`): no
 //!   `적용` is asked for it. `approval_job` is the job that waits for a
