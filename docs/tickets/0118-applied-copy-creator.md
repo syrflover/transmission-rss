@@ -57,9 +57,13 @@ trss가 코코렛의 보관본으로 `FX Senshi Kurumi-chan` 1화에 적용한 �
 - API 모양은 trss-web의 `a_subtitle_file_tells_whether_it_is_an_applied_copy_and_of_whom`이 확인해요(`applied`가 `null`에서 `{ "creator": "하느" }`로 바뀌고 `creator`는 `null`).
 - 2026-10-07 실행(이 티켓의 커밋 위): `cargo test -p trss-library -j 3`은 240개와 `artwork_header_check` 1개가 통과했고, `cargo test -p trss-web -j 3`은 462개와 통합 테스트 파일이 통과했어요(건너뛴 4개는 Docker 테스트). 웹은 0119·0120을 합친 master 위에서 `npm run typecheck`(앱과 테스트의 두 project)가 오류 없이 끝났고 `npm test`가 211개 모두 통과했어요. `fileCreators.ts`는 처음에 `@/`를 쓰는 `api.ts`의 타입을 가져와, 경로 설정이 없는 테스트 project의 typecheck가 실패했어요. 그래서 읽는 모양을 파일 안의 타입으로 두고, 구독 줄의 문장(`subtitleChoice`)은 화면이 넘겨요.
 
+### 실제 서버 (2026-10-08, 0.6.1)
+
+- 0.6.1을 올린 뒤 개발 PC의 브라우저(데스크톱 폭)로 실제 서버의 `FX Senshi Kurumi-chan` 작품 상세를 열었어요. 머리는 `자막 제작자 · 코코렛 · 제작자 변경`이고, `제작자 알 수 없음`이 없어요. 페이지에 남은 `제작자 알 수 없음`은 `자막 올리기` 양식의 제작자 선택지예요.
+- 같은 때 API는 이 시즌의 자막 파일을 1화 적용본 하나로 보내요. 그 파일은 `creator: null`, `applied: { "creator": "코코렛" }`이에요. 구독은 코코렛을 따라가요.
+
 ### 검증하지 못한 것
 
-- 0.6.1을 올린 뒤 실제 서버의 `FX Senshi Kurumi-chan` 머리에서 `제작자 알 수 없음`이 사라진 것은 아직 보지 못했어요. 이 티켓은 그 확인이 남아 있어요.
-- 화면은 브라우저로 열어 보지 않았어요. 규칙은 `node --test`와 타입 검사로만 확인했어요.
+- 화면은 위의 머리 하나만 브라우저로 봤어요. 직접 넣은 자막이 있는 시즌, 교체된 경로, `제작자 알 수 없음` 보관본의 적용본은 `node --test`와 타입 검사로만 확인했어요.
 - 구독 제작자 자동 수신과 수정 후보 판단(`attributed_subtitles`)은 `media_files`에 남은 사용자가 붙인 제작자를 그대로 읽어요. 붙인 파일을 trss가 교체한 경우 그 판단이 옛 제작자를 쓸 수 있는지는 이 티켓에서 다루지 않았어요.
 - 화면이 읽은 뒤에 적용된 파일의 `제작자 바꾸기`를 눌러 보낸 요청은 서버가 막지 않아요. 값은 쓰이지만 적용 관계가 앞서 보이지 않아요.
