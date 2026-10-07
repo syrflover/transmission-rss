@@ -23,7 +23,7 @@ trss-browser = { path = "crates/trss-browser" }
 trss-web = { path = "crates/trss-web" }
 
 # trname = { path = "../trname" }
-trname = { git = "https://github.com/syrflover/trname", rev = "6169808" }
+trname = { git = "https://github.com/syrflover/trname", rev = "ee46f04" }
 
 axum = "0.8.9"
 bytes = "1"

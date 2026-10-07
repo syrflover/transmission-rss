@@ -2890,7 +2890,7 @@ dependencies = [
 [[package]]
 name = "trname"
 version = "0.1.0"
-source = "git+https://github.com/syrflover/trname?rev=6169808#616980813076180c682d03f9d6b4716bcba50256"
+source = "git+https://github.com/syrflover/trname?rev=ee46f04#ee46f045f383d9298f884b0699d21e2a9b4faff6"
 dependencies = [
  "clap",
  "inquire",

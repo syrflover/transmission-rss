@@ -680,8 +680,9 @@ pub fn has_trname_form(
 /// Whether `name` is the name `trname` gives in `download_dir`
 /// (`.../<title>/Season NN`): the folder's title and an episode, as in
 /// `<title> S01E05.mkv`, `S01E05.5` or a three-digit `S01E105`, with the
-/// title's case not counting. `trname` itself only accepts a two-digit
-/// episode, so it would read `E105` as a release name and take `05` from it.
+/// title's case not counting. `trname` itself takes its form only under the
+/// title as written, with a two-digit season and at most four digits of
+/// episode, and reads any other name as a release's.
 /// A release that merely ends in `SxxEyy` under another title is not one.
 fn looks_renamed(name: &str, download_dir: &Path) -> bool {
     static EPISODE: LazyLock<Regex> =

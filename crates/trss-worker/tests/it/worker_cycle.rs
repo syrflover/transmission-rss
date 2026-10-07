@@ -384,8 +384,8 @@ async fn a_torrent_in_another_rules_folder_is_not_renamed_after_this_rule() {
 async fn a_named_torrent_with_a_three_digit_episode_is_not_renamed() {
     let h = Harness::new().await;
     channel_a(&h).await;
-    // trname only reads two-digit episodes as its own form, and would take
-    // `05` out of `E105`.
+    // Renamed again, `E105` would be read as a release's episode and
+    // converted a second time.
     h.tr.preload(held(4, "Slime S04E105.mkv", "/media/anime/Slime/Season 04"));
 
     run(&h.worker()).await;
