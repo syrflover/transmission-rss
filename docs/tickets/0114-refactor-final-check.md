@@ -2,7 +2,7 @@
 
 - 상태: 대기
 - 출처: [잣대와 기록](refactoring.md#잣대와-기록), [완료 판정](refactoring.md#완료-판정)
-- 막는 티켓: [0093](0093-migrated-test-db-once.md)–[0113](0113-remaining-area-tests.md), [0115](0115-erai-magnet-revisions.md)
+- 막는 티켓: [0093](0093-migrated-test-db-once.md)–[0113](0113-remaining-area-tests.md), [0115](0115-erai-magnet-revisions.md), [0117](0117-sql-statement-cache.md)
 
 ## 작업
 

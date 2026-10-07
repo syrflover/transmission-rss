@@ -60,7 +60,7 @@
 - mimalloc은 web이 128M 한도에 41번 닿았어요. major fault도 600번 났어요. 한도에 닿아 회수된 파일 페이지(실행 파일 같은)를 디스크에서 다시 읽은 것으로 보여요. 지금 설정으로는 쓸 수 없어요.
 - p95가 세 이미지 모두 약 95 ms인 것은 CPU 0.25개 한도의 throttling 주기(100 ms) 때문이에요.
 - J4105는 이 PC보다 core가 느려서 같은 CPU 시간이 더 긴 걸린 시간이 돼요. 서버의 절대값은 측정하지 않았어요.
-- 할당기와 별개로, web의 user 표본에서 SQL을 해석하는 함수(`sqlite3RunParser`, `yy_reduce`, `sqlite3GetToken`, `keywordCode`)가 glibc에서 10.3%, musl에서 8.2%였어요. 코드에 `prepare`가 175곳 있고 `prepare_cached`는 없어서, 요청마다 SQL을 다시 해석해요.
+- 할당기와 별개로, web의 user 표본에서 SQL을 해석하는 함수(`sqlite3RunParser`, `yy_reduce`, `sqlite3GetToken`, `keywordCode`)가 glibc에서 10.3%, musl에서 8.2%였어요. 코드에 `prepare`가 175곳 있고 `prepare_cached`는 없어서, 요청마다 SQL을 다시 해석해요. 리팩터링의 [0117](0117-sql-statement-cache.md)에서 고쳐요(사용자 결정, 2026-10-07).
 
 ## 완료 기준
 
