@@ -969,6 +969,7 @@ pub(super) fn works(conn: &Connection, folder_id: &str) -> rusqlite::Result<Vec<
                     added_at: row.get(4)?,
                     creator: super::creators::creator_of(row.get(5)?, row.get(6)?, row.get(7)?),
                     creator_version: row.get(8)?,
+                    applied: None,
                 },
             ))
         })?;

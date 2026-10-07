@@ -7,6 +7,7 @@ import { channelName, ruleTitle } from "../../collect/rules/api";
 import type { SeasonInfo, WorkDetail, WorkRule } from "../api";
 import { canClean, FILES_HASH } from "../storage.ts";
 import { ChevronIcon } from "../icons";
+import { creatorOf, UNKNOWN } from "./fileCreators";
 import { baseName, episodeLabel } from "./model";
 import { StoredCleanup } from "./StoredCleanup";
 
@@ -235,7 +236,7 @@ export function FilesCard({
                               {episode.subtitle.map((f) => (
                                 <span key={f.path}>
                                   자막 {baseName(f.path)}
-                                  <span className="font-sans text-text-muted"> · {f.creator ? f.creator.name : "제작자 알 수 없음"}</span>
+                                  <span className="font-sans text-text-muted"> · {creatorOf(f) ?? UNKNOWN}</span>
                                 </span>
                               ))}
                             </span>

@@ -141,10 +141,14 @@ export interface FileCreator {
 /**
  * A subtitle file. `creator` is `null` for `제작자 알 수 없음`, which every file found in a watch folder is until the
  * user names one; `creator_version` is what a change of it names, so a change made from an older version is refused.
+ * `applied` is set for a copy trss applied beside a video: its creator is the stored copy's (`null` is
+ * `제작자 알 수 없음`), it comes before a creator the user named for the path, so `creator` is `null` for it, and its
+ * creator is not changed from here.
  */
 export interface WorkSubtitle extends WorkFile {
   creator: FileCreator | null;
   creator_version: number;
+  applied: { creator: string | null } | null;
 }
 
 /** The episode's video was replaced by a higher revision of the same release: the quiet version line. */

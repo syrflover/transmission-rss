@@ -126,6 +126,41 @@ async fn answers_the_work_with_its_seasons_files_and_leftovers() {
     assert_eq!(body["rules"], serde_json::json!([]));
 }
 
+/// The wire shape of a subtitle file's `applied`: `null` for a file a person
+/// put there, `{ "creator": … }` for a copy the app applied (the rule that makes
+/// it so is the library's).
+#[tokio::test]
+async fn a_subtitle_file_tells_whether_it_is_an_applied_copy_and_of_whom() {
+    let (state, id) = state_with_work().await;
+    let uri = format!("/library/works/{id}");
+    let (_, body) = get(&state, &uri).await;
+    let file = &body["seasons"][0]["episodes"][0]["subtitle"][0];
+    assert_eq!(file["creator"], Value::Null);
+    assert_eq!(file["applied"], Value::Null);
+
+    stored_only(&state, &id, &[1]).await;
+    let work = id.clone();
+    state
+        .jobs
+        .db()
+        .run(move |c| {
+            c.execute(
+                "INSERT INTO subtitle_applied (id, work_id, stored_id, season, episode, video_path,
+                                               path, byte_size, sha256, object, job_id, applied_at)
+                     VALUES ('ap1', ?1, 's1', 1, 1, 'Season 01/S01E01.mkv',
+                             'Season 01/S01E01.ko.ass', 1, printf('%064d', 1), '1:1', 'j1', 400)",
+                [work],
+            )?;
+            Ok::<_, trss_jobs::JobError>(())
+        })
+        .await
+        .unwrap();
+    let (_, body) = get(&state, &uri).await;
+    let file = &body["seasons"][0]["episodes"][0]["subtitle"][0];
+    assert_eq!(file["creator"], Value::Null);
+    assert_eq!(file["applied"], serde_json::json!({ "creator": "하느" }));
+}
+
 #[tokio::test]
 async fn an_unknown_work_is_a_json_404() {
     let (state, _) = state_with_work().await;

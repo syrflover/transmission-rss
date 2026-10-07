@@ -5,10 +5,11 @@ import { ApiError } from "@/lib/api";
 import { useCached } from "@/lib/cached";
 
 import { btnAction, btnNeutral } from "../../collect/channels/styles";
-import { changeCreator, fetchCreators, type Creators, type SubtitleMode } from "../../collect/subs/api";
+import { changeCreator, fetchCreators, type Creators } from "../../collect/subs/api";
 import { CreatorPicker } from "../../collect/subs/CreatorPicker";
 import { subtitleChoice } from "../../collect/subs/format";
 import { nameUnknownCreators, setFileCreator, type WorkSeason, type WorkSubscription, type WorkSubtitle } from "../api";
+import { creatorOf, headNames, isNameable, unknownFiles, UNKNOWN } from "./fileCreators";
 import { baseName } from "./model";
 
 /**
@@ -16,8 +17,6 @@ import { baseName } from "./model";
  * `제작자 알 수 없음` until the user names one of the creators of the season's Anissia anime. The head names one for all
  * the season's unknown files at once; an expanded episode row changes one file's. Neither moves or receives a file.
  */
-
-const UNKNOWN = "제작자 알 수 없음";
 
 const radio = "mt-0.5 size-[18px] flex-none accent-focus";
 const option =
@@ -28,31 +27,6 @@ const textButton =
 /** The subtitle files of a season, in the episodes' order. */
 function subtitlesOf(season: WorkSeason): WorkSubtitle[] {
   return season.episodes.flatMap((e) => e.subtitle);
-}
-
-/** The creators the user named for the season's subtitle files, once each, by name. */
-export function namedCreators(files: readonly WorkSubtitle[]): string[] {
-  const names = new Set<string>();
-  for (const file of files) if (file.creator) names.add(file.creator.name);
-  return [...names].sort((a, b) => a.localeCompare(b, "ko"));
-}
-
-/**
- * The names the head shows for a season: the subscription's choice, every creator named for a file, and
- * `제작자 알 수 없음` while some file has none.
- */
-export function headNames(files: readonly WorkSubtitle[], subscription: WorkSubscription | undefined): string[] {
-  const named = namedCreators(files);
-  const names: string[] = [];
-  let followed: string | null = null;
-  if (subscription) {
-    const text = subtitleChoice({ subtitles: subscription.subtitles as SubtitleMode, creator: subscription.creator });
-    if (text !== "") names.push(text);
-    if (subscription.subtitles === "follow") followed = subscription.creator;
-  }
-  names.push(...named.filter((name) => name !== followed));
-  if (files.some((f) => f.creator === null)) names.push(UNKNOWN);
-  return names;
 }
 
 /**
@@ -198,9 +172,15 @@ export function HeadCreators({
   const [namingOpen, setNamingOpen] = useState(false);
   const [named, setNamed] = useState<string | null>(null);
   const files = subtitlesOf(season);
-  const unknown = files.filter((f) => f.creator === null).length;
+  const unknown = unknownFiles(files).length;
   const animeNo = season.anissia.anime?.anime_no ?? null;
-  const names = headNames(files, subscription);
+  const names = headNames(
+    files,
+    subscription && {
+      text: subtitleChoice(subscription),
+      followed: subscription.subtitles === "follow" ? subscription.creator : null,
+    },
+  );
 
   return (
     <div className="mt-3 flex min-w-0 flex-col gap-2.5" data-testid="head-creator">
@@ -307,6 +287,7 @@ function SubtitleFile({
   const [open, setOpen] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const name = baseName(file.path);
+  const creator = creatorOf(file);
   return (
     <div className="flex min-w-0 flex-col gap-1" data-testid="subtitle-file">
       <span title={file.path} className="font-mono text-[12px] break-all">
@@ -314,10 +295,10 @@ function SubtitleFile({
       </span>
       <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
         <span className="text-text-muted">제작자</span>
-        <span className={file.creator ? "font-semibold text-text-secondary" : "text-text-muted"}>
-          {file.creator ? file.creator.name : UNKNOWN}
+        <span className={creator !== null ? "font-semibold text-text-secondary" : "text-text-muted"}>
+          {creator ?? UNKNOWN}
         </span>
-        {animeNo !== null && (
+        {animeNo !== null && isNameable(file) && (
           <button
             type="button"
             aria-expanded={open}
@@ -336,7 +317,7 @@ function SubtitleFile({
           {note}
         </p>
       )}
-      {open && animeNo !== null && (
+      {open && animeNo !== null && isNameable(file) && (
         <SubtitleCreatorPicker
           key={file.creator_version}
           animeNo={animeNo}

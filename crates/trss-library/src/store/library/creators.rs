@@ -6,6 +6,14 @@
 //!   creator (`제작자 알 수 없음`). The user names one for all of a season's
 //!   unknown ones at once ([`LibraryStore::name_unknown_creators`]) or changes
 //!   one file's ([`LibraryStore::set_file_creator`]).
+//! - **An applied copy has its stored copy's creator.** A subtitle file the app
+//!   applied beside a video (a live `subtitle_applied` row at the file's path)
+//!   is by the creator of the stored copy it was made from (`제작자 알 수
+//!   없음` when that has none), read from that relation when the work detail is
+//!   read ([`crate::store::library::AppliedCopy`]) and written nowhere. It
+//!   comes before a creator the user named for the same path, and a season's
+//!   unknown files, which [`LibraryStore::name_unknown_creators`] names, leave
+//!   applied copies out. Subscribed-creator receipt does not read it.
 //! - The time the creator was named (`creator_set_at`) is kept with it: the
 //!   subscribed creator's automatic receipt takes a line of that creator for the
 //!   file's episode as a revision only when the app first observed it after
@@ -128,7 +136,10 @@ pub(super) fn name_unknown(
             SET creator_source_id = ?3, creator_set_at = ?4,
                 creator_version = creator_version + 1
           WHERE work_id = ?1 AND season = ?2 AND kind = 'subtitle'
-            AND creator_source_id IS NULL",
+            AND creator_source_id IS NULL
+            AND NOT EXISTS (SELECT 1 FROM subtitle_applied ap
+                             WHERE ap.work_id = media_files.work_id
+                               AND ap.path = media_files.path AND ap.removed_at IS NULL)",
         params![work_id, season, source_id, now],
     )
 }
@@ -208,7 +219,8 @@ impl LibraryStore {
 
     /// Names `source_id` the creator of every subtitle file of the season that
     /// has none yet, and returns how many. Files that have a creator are left
-    /// as they are.
+    /// as they are, and so are the app's applied copies, whose creator is that
+    /// of their stored copy.
     pub async fn name_unknown_creators(
         &self,
         work_id: &str,

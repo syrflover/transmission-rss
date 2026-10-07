@@ -273,11 +273,28 @@ pub struct FileRecord {
     /// `None`: unknown.
     pub added_at: Option<Millis>,
     /// The creator of a subtitle file the user named; `None` is `제작자 알 수
-    /// 없음` (and always so for a video).
+    /// 없음` (and always so for a video, and for a file the app applied: see
+    /// [`FileRecord::applied`]).
     pub creator: Option<FileCreator>,
     /// Goes up with every change of the file's creator (0 for a file never
     /// given one), so a change made from an older version changes nothing.
     pub creator_version: i64,
+    /// Set when the file is a copy the app applied beside a video and has not
+    /// removed. Only the work detail reads it (`None` elsewhere).
+    pub applied: Option<AppliedCopy>,
+}
+
+/// A subtitle file that is the app's applied copy of a stored subtitle.
+///
+/// The file's creator is its stored copy's, read from the applied relation each
+/// time: nothing is written for it, so a file applied before the relation was
+/// read this way shows right too. The relation comes before a creator the user
+/// named for the same path (a named file the app later replaced shows the
+/// stored copy's creator), and [`FileRecord::creator`] is `None` for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppliedCopy {
+    /// The stored copy's creator's name; `None` is `제작자 알 수 없음`.
+    pub creator: Option<String>,
 }
 
 /// The creator the user named for a subtitle file: a subtitle source, which is

@@ -211,7 +211,7 @@ fsync를 하지 않는 파일 이름 바꾸기는 미디어 디스크에 비용�
 | [0090](0090-release-name-corpus.md) | 실제 릴리스 이름 묶음을 만들어요 | 완료 | 0080 |
 | [0091](0091-trname-long-and-half-episodes.md) | trname이 세 자리 회차와 .5 회차를 맞게 읽어요 | 완료 | 0090 |
 | [0116](0116-allocator-measurement.md) | 운영 앱의 메모리 할당기를 측정해서 골라요 | 완료 | 없음 |
-| [0118](0118-applied-copy-creator.md) | 작품 상세가 trss가 적용한 자막의 제작자를 보관본에서 읽어요 | 대기 | 없음 |
+| [0118](0118-applied-copy-creator.md) | 작품 상세가 trss가 적용한 자막의 제작자를 보관본에서 읽어요 | 완료 | 없음 |
 | [0119](0119-refresh-after-stored-apply.md) | 보관본을 적용하면 작품 상세가 적용이 끝난 뒤 바로 바뀌어요 | 완료 | 없음 |
 | [0120](0120-stored-copy-on-subtitled-row.md) | 자막이 있는 회차의 줄에도 보관본과 `교체 비교`가 보여요 | 완료 | 없음 |
 | [0121](0121-identical-copy-becomes-applied.md) | 현재 자막과 바이트가 같은 보관본을 고르면 그 파일이 적용본이 돼요 | 대기 | 없음 |

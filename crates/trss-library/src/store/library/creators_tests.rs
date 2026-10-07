@@ -726,3 +726,186 @@ async fn a_merge_brings_the_time_of_the_creator_it_keeps() {
     assert!(at.contains(&("01".to_owned(), SET_AT + 50)), "{at:?}");
     assert!(at.contains(&("04".to_owned(), SET_AT + 50)), "{at:?}");
 }
+
+impl Library {
+    /// Records a copy the app applied at `path` (the file the scan found), of a
+    /// stored copy by `creator` (`None`: no creator), which a person removed
+    /// again when `removed`. The tables are the jobs' own, which this crate
+    /// only reads, so the rows stand alone, without the job and files they
+    /// refer to.
+    async fn apply_copy(&self, id: &str, path: &str, creator: Option<&str>, removed: bool) {
+        let (work, id, path, creator) = (
+            self.work.clone(),
+            id.to_owned(),
+            path.to_owned(),
+            creator.map(str::to_owned),
+        );
+        self.store
+            .db
+            .run::<_, DbError, _>(move |c| {
+                c.execute_batch("PRAGMA foreign_keys = OFF")?;
+                c.execute(
+                    "INSERT INTO subtitle_stored
+                         (id, work_id, season, package_id, subtitle_asset_id, format, creator,
+                          stored_at)
+                     VALUES (?1, ?2, 1, 'p', 'a', 'ass', ?3, 1)",
+                    rusqlite::params![format!("s-{id}"), work, creator],
+                )?;
+                c.execute(
+                    "INSERT INTO subtitle_applied
+                         (id, work_id, stored_id, season, episode, video_path, path, byte_size,
+                          sha256, object, applied_at, removed_at)
+                     VALUES (?1, ?2, ?3, 1, 1, 'v.mkv', ?4, 1, printf('%064d', 1), 'o', 300, ?5)",
+                    rusqlite::params![id, work, format!("s-{id}"), path, removed.then_some(400)],
+                )?;
+                c.execute_batch("PRAGMA foreign_keys = ON")?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+    }
+
+    /// Each subtitle file of season `season`: its path, the creator the user
+    /// named, and what the applied copy says (`None`: not applied; `Some(None)`:
+    /// applied from a copy with no creator).
+    async fn shown(&self, season: u32) -> Vec<Entry> {
+        let detail = self.store.work_detail(&self.work).await.unwrap().unwrap();
+        detail
+            .seasons
+            .iter()
+            .filter(|s| s.number == season)
+            .flat_map(|s| &s.episodes)
+            .flat_map(|e| &e.subtitle)
+            .map(|f| {
+                (
+                    f.path.clone(),
+                    f.creator.as_ref().map(|c| c.name.clone()),
+                    f.applied.as_ref().map(|a| a.creator.clone()),
+                )
+            })
+            .collect()
+    }
+}
+
+type Entry = (String, Option<String>, Option<Option<String>>);
+
+fn entry(path: &str, named: Option<&str>, applied: Option<Option<&str>>) -> Entry {
+    (
+        path.to_owned(),
+        named.map(str::to_owned),
+        applied.map(|a| a.map(str::to_owned)),
+    )
+}
+
+#[tokio::test]
+async fn a_season_applied_from_a_creators_copies_shows_that_creator_and_has_no_unknown_file_to_name(
+) {
+    let lib = library().await;
+    for (id, episode) in [("1", "01"), ("2", "02"), ("3", "03")] {
+        lib.apply_copy(
+            id,
+            &format!("Season 01/S01E{episode}.ass"),
+            Some("하느"),
+            false,
+        )
+        .await;
+    }
+
+    assert_eq!(
+        lib.shown(1).await,
+        [
+            entry("Season 01/S01E01.ass", None, Some(Some("하느"))),
+            entry("Season 01/S01E02.ass", None, Some(Some("하느"))),
+            entry("Season 01/S01E03.ass", None, Some(Some("하느"))),
+        ]
+    );
+    // None of them is unknown, so naming the season's unknown files names none.
+    let named = lib
+        .store
+        .name_unknown_creators(&lib.work, 1, "kairan", SET_AT)
+        .await
+        .unwrap();
+    assert_eq!(named, 0);
+    assert_eq!(lib.shown(1).await[0].1, None);
+}
+
+#[tokio::test]
+async fn a_file_put_in_by_hand_stays_unknown_and_is_named_while_applied_copies_are_left_out() {
+    let lib = library().await;
+    lib.apply_copy("1", "Season 01/S01E01.ass", Some("하느"), false)
+        .await;
+
+    let named = lib
+        .store
+        .name_unknown_creators(&lib.work, 1, "kairan", SET_AT)
+        .await
+        .unwrap();
+
+    assert_eq!(named, 2);
+    assert_eq!(
+        lib.shown(1).await,
+        [
+            entry("Season 01/S01E01.ass", None, Some(Some("하느"))),
+            entry("Season 01/S01E02.ass", Some("카이란"), None),
+            entry("Season 01/S01E03.ass", Some("카이란"), None),
+        ]
+    );
+    // The applied file's own column was never written.
+    assert_eq!(
+        lib.store
+            .file_creator(&lib.work, 1, "Season 01/S01E01.ass")
+            .await
+            .unwrap()
+            .unwrap()
+            .creator,
+        None
+    );
+}
+
+#[tokio::test]
+async fn a_named_file_the_app_replaced_shows_the_applied_copys_creator_and_the_named_one_returns_if_the_copy_is_gone(
+) {
+    let lib = library().await;
+    lib.store
+        .name_unknown_creators(&lib.work, 1, "kairan", SET_AT)
+        .await
+        .unwrap();
+    lib.apply_copy("1", "Season 01/S01E01.ass", Some("하느"), false)
+        .await;
+    lib.apply_copy("2", "Season 01/S01E02.ass", Some("하느"), true)
+        .await;
+
+    assert_eq!(
+        lib.shown(1).await,
+        [
+            // Replaced: the copy's creator, not the one the user named.
+            entry("Season 01/S01E01.ass", None, Some(Some("하느"))),
+            // A copy a person removed is no applied copy.
+            entry("Season 01/S01E02.ass", Some("카이란"), None),
+            entry("Season 01/S01E03.ass", Some("카이란"), None),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_copy_of_a_stored_subtitle_with_no_creator_is_applied_from_an_unknown_creator_and_not_named(
+) {
+    let lib = library().await;
+    lib.apply_copy("1", "Season 01/S01E01.ass", None, false)
+        .await;
+
+    assert_eq!(
+        lib.shown(1).await[0],
+        entry("Season 01/S01E01.ass", None, Some(None))
+    );
+    let named = lib
+        .store
+        .name_unknown_creators(&lib.work, 1, "kairan", SET_AT)
+        .await
+        .unwrap();
+    assert_eq!(named, 2);
+    assert_eq!(
+        lib.shown(1).await[0],
+        entry("Season 01/S01E01.ass", None, Some(None))
+    );
+}

@@ -20,7 +20,10 @@
 //!       "video":    [{ "path": "Season 01/… S01E01.mkv", "added_at": null }],
 //!       "subtitle": [{ "path": "Season 01/… S01E01.ko.ass", "added_at": 1760000100000,
 //!                      "creator": { "source_id": "…", "name": "하느", "anime_no": 3441 },
-//!                      "creator_version": 1 }],
+//!                      "creator_version": 1, "applied": null },
+//!                    { "path": "Season 01/… S01E01.ass", "added_at": 1760000150000,
+//!                      "creator": null, "creator_version": 0,
+//!                      "applied": { "creator": "코코렛" } }],
 //!       "revision": { "from": "v1", "to": "v2", "replaced_at": 1760000200000 },
 //!       "failure": null,
 //!       "stored": [{ "id": "…", "name": "Show - 02.ass", "creator": "하느", "format": "ass",
@@ -79,7 +82,14 @@
 //! - A subtitle file's `creator` is the creator the user named for it
 //!   (`null` is `제작자 알 수 없음`, which is what every file found in a watch
 //!   folder is until then), and `creator_version` the version a change of it
-//!   names ([`super::subtitle_creator_api`]).
+//!   names ([`super::subtitle_creator_api`]). `applied` is `null` for a file
+//!   put there by a person; for a copy the app applied beside a video (and has
+//!   not removed) it is `{ "creator": … }`, the creator of the stored copy it
+//!   was made from (`null` is `제작자 알 수 없음`). That is the file's creator,
+//!   read from the applied relation each time and written nowhere. It comes
+//!   before a creator the user named for the same path, so such a file answers
+//!   `creator: null`, and no change of its creator is offered. See
+//!   [`trss_library::store::library::AppliedCopy`].
 //! - `revision` is the version line of an episode whose video was replaced by
 //!   a higher revision of the same release (the latest such replacement;
 //!   `from` is `null` when the old video's revision was not known), `null`
@@ -285,16 +295,26 @@ impl From<FileRecord> for FileView {
     }
 }
 
-/// A subtitle file, with the creator the user named for it.
+/// A subtitle file, with the creator the user named for it or, for a copy the
+/// app applied, the creator of its stored copy.
 #[derive(Serialize)]
 struct SubtitleView {
     path: String,
     added_at: Option<i64>,
-    /// The creator the user named; `null` is `제작자 알 수 없음`.
+    /// The creator the user named; `null` is `제작자 알 수 없음` (and for an
+    /// applied copy, whose creator is in `applied`).
     creator: Option<CreatorView>,
     /// The version of the file's creator, which a change of it names
     /// (see [`super::subtitle_creator_api`]).
     creator_version: i64,
+    /// Set for a copy the app applied beside a video.
+    applied: Option<AppliedCreatorView>,
+}
+
+/// An applied copy's creator: its stored copy's (`null` is `제작자 알 수 없음`).
+#[derive(Serialize)]
+struct AppliedCreatorView {
+    creator: Option<String>,
 }
 
 impl From<FileRecord> for SubtitleView {
@@ -304,6 +324,9 @@ impl From<FileRecord> for SubtitleView {
             added_at: file.added_at,
             creator: file.creator.map(CreatorView::from),
             creator_version: file.creator_version,
+            applied: file
+                .applied
+                .map(|a| AppliedCreatorView { creator: a.creator }),
         }
     }
 }

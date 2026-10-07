@@ -20,7 +20,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::{
     discovery::{FileKind, Reason},
-    store::library::{FileRecord, UnrecognizedRecord},
+    store::library::{AppliedCopy, FileRecord, UnrecognizedRecord},
 };
 use trss_core::Millis;
 
@@ -127,20 +127,33 @@ pub(super) fn detail(conn: &Connection, id: &str) -> rusqlite::Result<Option<Wor
     {
         let mut stmt = conn.prepare(
             "SELECT m.season, m.episode, m.path, m.kind, m.added_at,
-                    m.creator_source_id, s.creator_name, s.anime_no, m.creator_version
-               FROM media_files m LEFT JOIN subtitle_sources s ON s.id = m.creator_source_id
+                    m.creator_source_id, s.creator_name, s.anime_no, m.creator_version,
+                    ap.id IS NOT NULL, st.creator
+               FROM media_files m
+               LEFT JOIN subtitle_sources s ON s.id = m.creator_source_id
+               LEFT JOIN subtitle_applied ap ON ap.work_id = m.work_id AND ap.path = m.path
+                    AND ap.removed_at IS NULL AND m.kind = 'subtitle'
+               LEFT JOIN subtitle_stored st ON st.id = ap.stored_id
               WHERE m.work_id = ?1 ORDER BY m.path",
         )?;
         let mut cursor = stmt.query([id])?;
         while let Some(row) = cursor.next()? {
             let season: u32 = row.get(0)?;
             let episode: String = row.get(1)?;
+            // An applied copy shows its stored copy's creator, whatever the user
+            // named for the path before the app replaced the file.
+            let applied = row
+                .get::<_, bool>(9)?
+                .then(|| row.get(10).map(|creator| AppliedCopy { creator }))
+                .transpose()?;
+            let named = super::creators::creator_of(row.get(5)?, row.get(6)?, row.get(7)?);
             let file = FileRecord {
                 path: row.get(2)?,
                 kind: FileKind::from_code(&row.get::<_, String>(3)?).unwrap_or(FileKind::Video),
                 added_at: row.get(4)?,
-                creator: super::creators::creator_of(row.get(5)?, row.get(6)?, row.get(7)?),
+                creator: named.filter(|_| applied.is_none()),
                 creator_version: row.get(8)?,
+                applied,
             };
             let gathered = seasons
                 .entry(season)
