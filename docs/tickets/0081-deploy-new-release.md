@@ -2,7 +2,7 @@
 
 - 상태: 대기
 - 출처: [구현 경계와 실행 순서](../specs/web-app.md#구현-경계와-실행-순서), [실제 재생 환경](../specs/subtitles.md#실제-재생-환경), [0062](0062-run-as-media-user.md)의 남은 일
-- 막는 티켓: [0079](0079-musl-test-run.md)(musl 테스트), [0080](0080-server-db-migration-check.md)(마이그레이션), [0060](0060-server-filesystem-probe.md)(서버 미디어 디스크의 파일 쓰기)
+- 막는 티켓: [0079](0079-musl-test-run.md)(musl 테스트), [0080](0080-server-db-migration-check.md)(마이그레이션), [0086](0086-feed-redirect-referer.md)–[0089](0089-package-season-reason.md)와 [0091](0091-trname-long-and-half-episodes.md)(배포 전에 고칠 결함), [0060](0060-server-filesystem-probe.md)(서버 미디어 디스크의 파일 쓰기)
 
 ## 작업
 
