@@ -13,7 +13,7 @@ Both keep their state in one SQLite database (channels, rules, collection histor
 
 ### Requirements
 
-Docker Engine 28 or later with Docker Compose 2.33 or later. The compose file gives the web its default gateway with `gw_priority` (see `trss-browser` below), which older versions do not have. A web whose default route still goes through the server browser's network does not start, and its log names `gw_priority` and these versions. Only Docker Engine 29.8.2 with Compose 5.5.1 was tried.
+Docker Engine 28 or later with Docker Compose 2.33 or later. The compose file gives the web its default gateway with `gw_priority` (see `trss-browser` below), which older versions do not have. A web whose default route still goes through the server browser's network does not start, and its log names `gw_priority` and these versions. Only Compose 5.5.1 with Docker Engine 29.8.1 and 29.8.2 was tried.
 
 ### Setup
 
@@ -103,13 +103,16 @@ sudo chown 1000:1000 ./data ./data/browser-downloads
 sudo chmod 1777 ./data/browser-downloads
 ```
 
-To switch an install that ran as root (release 0.5.x and before), on the host, with a release that has this change:
+To switch an install that ran as root (release 0.5.x and before) to a release that has this change, on the host, in the folder with the compose files (a clone of this repository):
 
-1. Stop trss: `docker compose -f docker-compose.trss.yml down`. Transmission can keep running.
-2. Give the data folder to the new user, as root (the files an earlier run made belong to root), in the compose folder: `sudo chown -R 1000:1000 ./data` (use the `TRSS_DATA_DIR` path from `.env` instead of `./data` if it sets one). This includes `browser-downloads`; its mode stays 1777. Mind the same for any copy you restore a backup into.
-3. Check that the media folders the worker writes to are writable by 1000: the collect folder and the archive folder (and the folders in them), and the work folders it adds `.trss/` to. Folders Transmission made are 1000's already; one that root made (by hand, or by an earlier trss that created a folder) is not. List them with `ls -ldn`, and change one that is not 1000's or group-writable with `sudo chown 1000:1000 <folder>` (add `-R` for a tree). Do not chown the whole media disk: files and folders keep the owners they have, and an archive move keeps them too.
-4. Update `TRSS_VERSION` and start: `docker compose -f docker-compose.trss.yml pull && docker compose -f docker-compose.trss.yml up -d`.
-5. Look at both logs (`docker compose -f docker-compose.trss.yml logs trss-worker trss-web`). A start that stops with `cannot write the app data folder` names the path to fix.
+1. Check first; nothing here changes anything, so trss can keep running. `docker compose version` meets [Requirements](#requirements), and `.env` has `TRSS_WEB_HOST_IP` and `TRSS_BROWSER_TOKEN` (see [Setup](#setup)). The media folders the worker writes to are writable by 1000: the collect folder and the archive folder (and the folders in them), and the work folders it adds `.trss/` to. Folders Transmission made are 1000's already; one that root made (by hand, or by an earlier trss that created a folder) is not. `ls -ldn` shows a folder's owner and mode, and `find <collect folder> <archive folder> -type d ! -uid 1000` lists every folder in them that is not 1000's. Change one that is not 1000's or group-writable with `sudo chown 1000:1000 <folder>` (add `-R` for a tree). Do not chown the whole media disk: files and folders keep the owners they have, and an archive move keeps them too.
+2. Stop trss: `docker compose -f docker-compose.trss.yml down`. Transmission can keep running.
+3. Bring the compose files to the release (`git pull` in the clone): `docker-compose.trss.yml` gets `trss-browser` and its network. Then save Transmission's torrent list (`python3 deploy/torrent-list.py > torrents-before.tsv`, see [above](#run-stop-update)); trss cannot change it while it is stopped.
+4. Copy the data folder as root, since its files are root's: `sudo cp -a ./data ~/trss-data-before-update`. The new release migrates the database at its first start; this copy, the earlier image and the earlier compose files are what you go back with.
+5. Give the data folder to the new user, as root: `sudo chown -R 1000:1000 ./data`. Use the `TRSS_DATA_DIR` path from `.env` instead of `./data` if it sets one, here and in the other steps. Then make `browser-downloads` with the three commands above: `chown -R` gave a folder that was there to 1000 and kept its mode, and the commands make a missing one. `find ./data ! -uid 1000` prints nothing when this is done. Mind the same for any copy you restore a backup into.
+6. Set `TRSS_VERSION` in `.env` to the release and start: `docker compose -f docker-compose.trss.yml pull && docker compose -f docker-compose.trss.yml up -d`.
+7. Check that the web and the worker run as 1000:1000 (`docker inspect trss-web trss-worker --format '{{.Name}} {{.Config.User}}'`) and look at the logs (`docker compose -f docker-compose.trss.yml logs trss-worker trss-web trss-browser`). A start that stops with `cannot write the app data folder` names the path to fix.
+8. After the worker's first cycle (`Cycle finished` in its log), list the torrents again and `diff` the two lists.
 
 ### File probe
 
