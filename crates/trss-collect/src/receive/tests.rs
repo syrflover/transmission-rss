@@ -153,7 +153,6 @@ impl World {
             episode: -24,
             mode: RenameMode::Added,
             original: Original::Current,
-            underivable: Underivable::Remove,
             note: None,
             redactor: &self.redactor,
         }
@@ -167,7 +166,6 @@ impl World {
                 name: Some(RELEASE.into()),
                 added_before: false,
             },
-            underivable: Underivable::Keep,
             ..self.cycle_job()
         }
     }
@@ -252,20 +250,30 @@ async fn the_cycles_rename_of_a_torrent_with_several_files_stops_at_once() {
 }
 
 #[tokio::test]
-async fn the_cycles_rename_stops_once_it_has_removed_a_torrent_trname_cannot_name() {
-    let w = World::new().await;
-    // Saved straight into the work folder, without a `Season NN` folder:
-    // `trname` has no name for it.
-    let work = w.season.parent().unwrap().to_owned();
-    w.tr.preload(FakeTorrent::new(HASH, RELEASE).in_dir(&work).bot());
-    let job = RenameJob {
-        save_path: &work,
-        ..w.cycle_job()
-    };
-    assert_eq!(w.rename(&job).await, RenameResult::Removed);
-    assert_eq!(w.tr.calls_of("torrent-get").len(), 1);
-    assert_eq!(w.tr.calls_of("torrent-remove").len(), 1);
-    assert!(w.tr.torrents().is_empty());
+async fn a_new_torrent_trname_cannot_name_keeps_its_name_at_once_on_both_paths() {
+    for cycle in [true, false] {
+        let w = World::new().await;
+        // Saved straight into the work folder, without a `Season NN` folder:
+        // `trname` has no name for it.
+        let work = w.season.parent().unwrap().to_owned();
+        w.tr.preload(FakeTorrent::new(HASH, RELEASE).in_dir(&work).bot());
+        let job = RenameJob {
+            save_path: &work,
+            ..if cycle {
+                w.cycle_job()
+            } else {
+                w.command_job()
+            }
+        };
+        assert_eq!(
+            w.rename(&job).await,
+            RenameResult::Kept(NAME_NOT_DERIVED),
+            "cycle: {cycle}"
+        );
+        assert_eq!(w.tr.calls_of("torrent-get").len(), 1, "cycle: {cycle}");
+        assert!(w.tr.calls_of("torrent-remove").is_empty());
+        assert_eq!(w.name(), RELEASE);
+    }
 }
 
 #[tokio::test]

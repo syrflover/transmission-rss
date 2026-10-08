@@ -1324,8 +1324,8 @@ async fn a_rule_that_later_selects_an_item_received_by_hand_neither_removes_nor_
     .await;
 
     // A rule made from the item (항목에서 새 규칙) selects it now, into a folder
-    // trname cannot name the file for either: the legacy renaming would remove
-    // the torrent and its data.
+    // trname cannot name the file for either: the legacy renaming removed such
+    // a torrent with its data.
     s.h.channels
         .create_rule(
             &s.channel.channel.id,

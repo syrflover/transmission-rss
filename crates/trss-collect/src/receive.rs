@@ -15,9 +15,9 @@
 //! gate. What the two callers do differently is theirs, given as values:
 //! whether an add that got no answer counts as unconfirmed ([`AddFailure`]),
 //! how a history write names its item ([`HistoryWrite`]), which name a file is
-//! named from ([`Original`]), what becomes of a new torrent `trname` has no
-//! name for ([`Underivable`]) and whether a kept name is noted
-//! ([`RenameJob::note`]).
+//! named from ([`Original`]) and which item a kept name is noted on
+//! ([`RenameJob::note`]). Neither removes a torrent whose name stays: it is
+//! kept under its received name.
 
 use std::path::Path;
 
@@ -185,9 +185,9 @@ pub async fn record(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenameMode {
     /// A torrent the caller has just added, or one its own earlier add put in.
-    /// The single file is renamed; what becomes of it when `trname` has no
-    /// name for it is [`RenameJob::underivable`]. A name the caller keeps
-    /// ([`name_for_trname`]) is left as it is.
+    /// The single file is renamed; one `trname` has no name for keeps its
+    /// received name ([`NAME_NOT_DERIVED`]), and so does a name the caller
+    /// keeps ([`name_for_trname`]).
     Added,
     /// A torrent Transmission already had. Its file is renamed only while it
     /// sits in the save path and its name is not in the `trname` form yet (a
@@ -221,16 +221,6 @@ pub enum Original {
     },
 }
 
-/// What becomes of a torrent added in [`RenameMode::Added`] whose name the
-/// caller reads as an episode and `trname` has no name for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Underivable {
-    /// Removed with its data (the rule cycle's legacy treatment; 0128 ends it).
-    Remove,
-    /// Left under its received name ([`NAME_NOT_DERIVED`]).
-    Keep,
-}
-
 /// One torrent to rename.
 #[derive(Debug, Clone)]
 pub struct RenameJob<'a> {
@@ -242,7 +232,6 @@ pub struct RenameJob<'a> {
     pub episode: isize,
     pub mode: RenameMode,
     pub original: Original,
-    pub underivable: Underivable,
     /// The history item to note why the name stayed on
     /// ([`RenameResult::Kept`]), or none to note nothing.
     pub note: Option<i64>,
@@ -259,8 +248,6 @@ pub enum RenameResult {
     Unchanged,
     /// The file keeps its original name; the note says why, for the history item.
     Kept(&'static str),
-    /// The torrent was removed with its data ([`Underivable::Remove`]).
-    Removed,
 }
 
 /// The file's name gave `trname` no title and episode to work with.
@@ -408,19 +395,7 @@ async fn rename_file(
             }
             (_, Some((_, _, new_name))) => new_name,
             (RenameMode::Existing, None) => return RenameResult::Unchanged,
-            (RenameMode::Added, None) => match job.underivable {
-                Underivable::Keep => return RenameResult::Kept(NAME_NOT_DERIVED),
-                Underivable::Remove => {
-                    match transmission
-                        .torrent_remove(vec![Id::Hash(job.hash.to_owned())], true)
-                        .await
-                    {
-                        Ok(_) => return RenameResult::Removed,
-                        Err(err) => println!("{}", job.redactor.apply(&err.to_string())),
-                    }
-                    continue;
-                }
-            },
+            (RenameMode::Added, None) => return RenameResult::Kept(NAME_NOT_DERIVED),
         };
         if new_name == current {
             return RenameResult::Unchanged;

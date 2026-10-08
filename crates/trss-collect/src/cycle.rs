@@ -19,7 +19,7 @@ use crate::{
     feed::{self, FeedItem},
     offsets,
     plan::{work_folder_of, ChannelPlan, Judgement},
-    receive::{self, Original, RenameJob, RenameMode, Underivable},
+    receive::{self, Original, RenameJob, RenameMode},
     revisions::{self, Decided, Listing, Plan, Replaced, Selected},
     store::{
         channels::{ChannelWithRules, Rule, RuleState},
@@ -672,11 +672,11 @@ pub async fn process_job(
     // Recorded as soon as Transmission has answered, before the renaming
     // that can take many seconds.
     let written = receive::record(&receiving, at, HistoryWrite::Observe(observation), None).await;
-    let was_new = match written {
-        Ok(stored) => stored.recorded == Some(Recorded::New),
+    let (was_new, item_id) = match written {
+        Ok(stored) => (stored.recorded == Some(Recorded::New), stored.item_id),
         Err(err) => {
             eprintln!("Cannot record history for {}: {err}", job.channel_label);
-            false
+            (false, None)
         }
     };
 
@@ -690,12 +690,13 @@ pub async fn process_job(
                 episode: job.episode,
                 mode,
                 original: Original::Current,
-                // A torrent this cycle has just added gets the legacy
-                // treatment (ticket 0128 ends it); one that was there already
-                // is never removed.
-                underivable: Underivable::Remove,
-                // The cycle notes nothing on the item (0128 adds it).
-                note: None,
+                // Why the name of a torrent this cycle added stays is noted
+                // on its item, as `다시 받기` notes it. A torrent that was
+                // there already came in with another add, not this item.
+                note: match mode {
+                    RenameMode::Added => item_id,
+                    RenameMode::Existing => None,
+                },
                 redactor: &redactor,
             };
             receive::rename(&receiving, &mut transmission, &rename, &cancel).await;
@@ -889,9 +890,9 @@ async fn start_replacement(
 /// How the rule path may rename a torrent Transmission holds for an item,
 /// or `None` to leave it alone.
 ///
-/// - A torrent this cycle has just added gets the legacy treatment, including
-///   removal with its data when `trname` has no name for it.
-/// - A torrent that was there already is never removed, and is renamed only
+/// - A torrent this cycle has just added is renamed, or keeps its received
+///   name when it cannot be ([`RenameMode::Added`]).
+/// - A torrent that was there already is renamed only
 ///   while its name is not in the `trname` form ([`RenameMode::Existing`]),
 ///   which finishes a rename an earlier run did not get to.
 /// - A torrent that history records as received by hand is not touched at

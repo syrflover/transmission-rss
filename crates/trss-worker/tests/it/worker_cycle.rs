@@ -7,6 +7,7 @@ use common::*;
 use tokio_util::sync::CancellationToken;
 use trss_collect::{
     feed::MAX_FEED_BYTES,
+    receive::{NAME_NOT_DERIVED, NAME_TAKEN, SEVERAL_FILES},
     store::{
         channels::{RuleInput, RuleState},
         history::{HistoryQuery, HistoryResult, MAX_PAGE_SIZE},
@@ -337,12 +338,11 @@ async fn a_release_read_as_no_episode_keeps_its_name_and_its_torrent() {
     assert!(h.tr.calls_of("torrent-rename-path").is_empty());
 }
 
-/// Until 0128: a name this crate reads as an episode that `trname` cannot
-/// name (the rule's folder has no title and season to name it after) is still
-/// removed with its data when the cycle has just added it, unlike a name the
-/// crate reads as no episode.
+/// A name this crate reads as an episode that `trname` cannot name (the
+/// rule's folder has no title and season to name it after) keeps its received
+/// name and its torrent, and the item notes why, as `다시 받기` leaves it.
 #[tokio::test]
-async fn a_numbered_release_trname_cannot_name_is_still_removed_with_its_data() {
+async fn a_numbered_release_trname_cannot_name_keeps_its_name_its_torrent_and_a_note() {
     let h = Harness::new().await;
     h.feeds.set_xml(
         "feed-a",
@@ -359,41 +359,44 @@ async fn a_numbered_release_trname_cannot_name_is_still_removed_with_its_data() 
     let report = run(&h.worker()).await;
 
     assert_eq!(report.added, 1);
-    assert_eq!(h.tr.calls_of("torrent-remove").len(), 1);
-    assert!(h.tr.torrents().is_empty());
+    assert!(h.tr.calls_of("torrent-remove").is_empty());
+    assert_eq!(name_of(&h, 1), "[Group] Show - 05 (1080p) [ABCD1234].mkv");
+    let item = h.item("[Group] Show - 05").await;
+    assert_eq!(item.result, HistoryResult::Received);
+    assert_eq!(item.torrent_hash.as_deref(), Some(hash_a(1).as_str()));
+    assert_eq!(item.reason.as_deref(), Some(NAME_NOT_DERIVED));
 }
 
-// The cycle's own adds whose name stays: what the cycle leaves, unlike
-// `다시 받기`, which notes on the item why the name stayed.
+// The cycle's own adds whose name stays keep their torrent, and the item notes
+// why the name stayed, as `다시 받기` does.
 
-/// Until 0128: the item of a torrent the cycle removed because `trname` has no
-/// name for it stays `received`, with no note.
+/// `trname` reads no episode from `00`, so it has no name for an episode 0.
 #[tokio::test]
-async fn the_item_of_a_new_torrent_removed_for_its_name_stays_received_without_a_note() {
+async fn an_episode_zero_keeps_its_name_its_torrent_and_a_note() {
     let h = Harness::new().await;
-    h.feeds.set_xml(
-        "feed-a",
-        &titled_feed(&[(1, "[Group] Show - 05 (1080p) [ABCD1234].mkv")]),
-    );
+    let zero = "[SubsPlease] Show - 00 (1080p) [ABCD1234].mkv";
+    h.feeds.set_xml("feed-a", &titled_feed(&[(1, zero)]));
     h.add_channel(
         "feed-a",
         "/media/anime",
         &[],
-        vec![rule("[Group] Show", "")],
+        vec![rule("[SubsPlease] Show", "Show/Season 01")],
     )
     .await;
 
-    run(&h.worker()).await;
+    let report = run(&h.worker()).await;
 
-    assert!(h.tr.torrents().is_empty());
-    let item = h.item("[Group] Show - 05").await;
+    assert_eq!(report.added, 1);
+    assert!(h.tr.calls_of("torrent-remove").is_empty());
+    assert!(h.tr.calls_of("torrent-rename-path").is_empty());
+    assert_eq!(name_of(&h, 1), zero);
+    let item = h.item("[SubsPlease] Show - 00").await;
     assert_eq!(item.result, HistoryResult::Received);
-    assert_eq!(item.torrent_hash.as_deref(), Some(hash_a(1).as_str()));
-    assert_eq!(item.reason, None);
+    assert_eq!(item.reason.as_deref(), Some(NAME_NOT_DERIVED));
 }
 
 #[tokio::test]
-async fn a_new_torrent_with_several_files_keeps_its_name_and_its_torrent_without_a_note() {
+async fn a_new_torrent_with_several_files_keeps_its_name_and_its_torrent_with_a_note() {
     let h = Harness::new().await;
     channel_a(&h).await;
     h.tr.files_on_add(&hash_a(4), 2);
@@ -409,13 +412,13 @@ async fn a_new_torrent_with_several_files_keeps_its_name_and_its_torrent_without
     assert!(h.tr.calls_of("torrent-remove").is_empty());
     let slime = h.item("Slime Datta Ken - 62").await;
     assert_eq!(slime.result, HistoryResult::Received);
-    assert_eq!(slime.reason, None);
+    assert_eq!(slime.reason.as_deref(), Some(SEVERAL_FILES));
     // The others are named as always.
     assert_eq!(name_of(&h, 1), "Sayonara Lara S01E03.mkv");
 }
 
 #[tokio::test]
-async fn a_new_torrent_whose_name_is_taken_keeps_its_name_and_its_torrent_without_a_note() {
+async fn a_new_torrent_whose_name_is_taken_keeps_its_name_and_its_torrent_with_a_note() {
     let h = Harness::without_collect_folder().await;
     let shows = h.dir.path().join("shows");
     trss_core::settings::SettingsStore::new(h.db.clone())
@@ -455,7 +458,7 @@ async fn a_new_torrent_whose_name_is_taken_keeps_its_name_and_its_torrent_withou
     );
     let slime = h.item("Slime Datta Ken - 62").await;
     assert_eq!(slime.result, HistoryResult::Received);
-    assert_eq!(slime.reason, None);
+    assert_eq!(slime.reason.as_deref(), Some(NAME_TAKEN));
 }
 
 #[tokio::test]

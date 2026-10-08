@@ -85,7 +85,7 @@ use crate::{
     context::{TransmissionLink, MAX_REASON_CHARS},
     offsets,
     plan::{picks, rule_destination, rule_work_folder, ChannelPlan},
-    receive::{self, Original, RenameJob, RenameMode, Underivable},
+    receive::{self, Original, RenameJob, RenameMode},
     release_name::name_for_trname,
     revisions,
     store::{
@@ -648,9 +648,6 @@ pub async fn finish(
                 name: step.original_name.clone(),
                 added_before: step.added_before,
             },
-            // A person chose to receive this item again: the torrent is never
-            // removed, as the rule cycle removes one `trname` has no name for.
-            underivable: Underivable::Keep,
             note: Some(step.item_id),
             redactor: &step.redactor,
         };
