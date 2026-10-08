@@ -201,8 +201,10 @@ pub enum RenameMode {
 /// Which name a file's `trname` name is derived from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Original {
-    /// The name the file has when it is looked at, on every attempt (the rule
-    /// cycle).
+    /// The name the file has when this rename first reads it, kept in memory
+    /// for its later attempts (the rule cycle): a rename Transmission carried
+    /// out but whose answer was lost leaves the file with its new name, which
+    /// read again would have its episode converted a second time.
     Current,
     /// The name the file had before a command first renamed it, which the
     /// command records ([`trss_core::commands::Command::original_name`]):
@@ -353,9 +355,10 @@ async fn rename_file(
         // name this command's earlier start or a cycle gave is then the same
         // name again and stays, so no episode is converted twice, while a
         // release that comes in the `trname` form of another season or
-        // episode is still converted.
+        // episode is still converted. The cycle keeps the first name it reads
+        // for the same reason, within one rename.
         let original = match &job.original {
-            Original::Current => current.clone(),
+            Original::Current => recorded.get_or_insert_with(|| current.clone()).clone(),
             Original::Recorded {
                 command_id,
                 added_before,

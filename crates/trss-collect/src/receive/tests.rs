@@ -281,3 +281,24 @@ async fn the_cycles_rename_of_a_name_that_is_right_already_stops_at_once() {
     assert!(w.tr.calls_of("torrent-rename-path").is_empty());
     assert_eq!(w.name(), RENAMED);
 }
+
+#[tokio::test]
+async fn a_rename_whose_answer_was_lost_does_not_convert_the_episode_twice() {
+    for cycle in [true, false] {
+        let w = World::new().await.holding();
+        let job = if cycle {
+            w.cycle_job()
+        } else {
+            w.command_job()
+        };
+        // Transmission renames the file and the answer does not come back.
+        w.tr.break_rename_answer_of(HASH);
+        w.rename(&job).await;
+        assert_eq!(w.name(), RENAMED, "cycle: {cycle}");
+        assert_eq!(
+            w.tr.calls_of("torrent-rename-path").len(),
+            1,
+            "cycle: {cycle}"
+        );
+    }
+}

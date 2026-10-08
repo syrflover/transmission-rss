@@ -237,6 +237,9 @@ struct TrState {
     /// Torrents whose `torrent-remove` is carried out and then answered with
     /// a broken response, as a timeout after Transmission acted would be.
     broken_remove_answers: std::collections::HashSet<String>,
+    /// Torrents whose `torrent-rename-path` is carried out and then answered
+    /// with a broken response, as a timeout after Transmission acted would be.
+    broken_rename_answers: std::collections::HashSet<String>,
     /// Torrents whose `torrent-remove` with their data takes the torrent out
     /// and leaves the data on disk.
     kept_data_on_remove: std::collections::HashSet<String>,
@@ -497,6 +500,14 @@ impl FakeTransmission {
     pub fn break_remove_answer_of(&self, hash: &str) {
         let mut st = self.state.lock().unwrap();
         st.broken_remove_answers.insert(hash.to_owned());
+    }
+
+    /// Makes a `torrent-rename-path` of the torrent `hash` carry the rename
+    /// out and then answer with a broken response: the client sees an error,
+    /// as for a timeout after Transmission acted.
+    pub fn break_rename_answer_of(&self, hash: &str) {
+        let mut st = self.state.lock().unwrap();
+        st.broken_rename_answers.insert(hash.to_owned());
     }
 
     /// Makes a `torrent-remove` of the torrent `hash` with its data take the
@@ -851,7 +862,12 @@ async fn tr_rpc_answer(
                         std::fs::rename(&src, &tgt).unwrap();
                     }
                     t.name = name.to_owned();
-                    ok(json!({ "path": path, "name": name, "id": t.id })).into_response()
+                    let id = t.id;
+                    if st.broken_rename_answers.contains(&hash) {
+                        return (StatusCode::INTERNAL_SERVER_ERROR, "broken answer")
+                            .into_response();
+                    }
+                    ok(json!({ "path": path, "name": name, "id": id })).into_response()
                 }
                 Some(_) => err("file not found").into_response(),
                 None => err("no torrent").into_response(),
