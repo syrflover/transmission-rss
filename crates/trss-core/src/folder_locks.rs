@@ -319,6 +319,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_parent_above_the_root_is_the_root_as_the_kernel_resolves_it() {
+        let locks = FolderLocks::new();
+        let _moving = locks.lock(Section::new().write("/media/A")).await;
+
+        // `/..` is `/`, so these are the same folder as `/media/A`.
+        assert!(locks.try_lock(Section::new().read("/../media/A")).is_none());
+        assert!(locks
+            .try_lock(Section::new().read("/media/../../media/A/Season 01"))
+            .is_none());
+        assert!(locks.try_lock(Section::new().read("/../media/B")).is_some());
+    }
+
+    #[tokio::test]
     async fn a_folder_overlaps_the_folders_inside_it_but_not_its_neighbours() {
         let locks = FolderLocks::new();
         let _moving = locks.lock(Section::new().write("/media/A")).await;

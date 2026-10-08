@@ -11,6 +11,7 @@
 - trss-web의 API 테스트 461개 중 70–110개가 다른 크레이트의 규칙을 다시 확인한다고 2026-10-07에 추정했어요. 0101과 0110에서 나누지 않은 것을 여기서 나눠요. 규칙의 주인 크레이트에 같은 경우가 있으면 지우고, 없으면 내려요.
 - trss-web의 `folders_on_different_filesystems_are_refused`는 `/proc`를 훑어 혼자 4.9초가 걸리고, trss-collect의 같은 이름 테스트와 같은 규칙을 확인해요. 웹 쪽을 정리해요.
 - 보관 제안은 trss-web 테스트 15개 중 12개가 trss-collect 테스트와 같은 경우였어요.
+- worker의 `app_data_folders_cover_the_receive_area_the_artwork_and_the_subtitle_files`는 [0096](0096-file-and-path-helpers.md)에서 두 목록이 trss-core의 같은 상수를 쓰게 되어 실패할 수 없어요. 지워요.
 
 [라이브러리와 작품](../specs/library.md), [설정과 이전](../specs/settings.md), [웹 앱 공통](../specs/web-app.md) 명세에 요구별 검증 표를 둬요.
 

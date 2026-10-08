@@ -82,7 +82,7 @@ use crate::store::{
     artwork::{ArtworkError, ArtworkStore, FileRow, Format, ImageRef, Source},
 };
 use trss_anilist::MAX_IMAGE_BYTES;
-use trss_core::{file_id::FileId, files::rename_noreplace, Millis};
+use trss_core::{file_id::FileId, files::rename_noreplace, folders::lexical, Millis};
 
 // The folder of the images, and where new ones are written before they are
 // published, relative to the app data folder.
@@ -435,22 +435,6 @@ pub fn check(
     Ok(read.then_some(bytes))
 }
 
-/// The path a reference names, spelled out lexically (`.` and `..` resolved
-/// without the file system), for comparing references by path.
-fn lexical(root: &Path, relative: &str) -> PathBuf {
-    let mut out = PathBuf::new();
-    for component in root.join(relative).components() {
-        match component {
-            Component::ParentDir => {
-                out.pop();
-            }
-            Component::CurDir => {}
-            other => out.push(other),
-        }
-    }
-    out
-}
-
 /// The ids (device, inode) of what the referenced paths lead to now,
 /// both the entry itself and what a link there points to. `None` when one
 /// cannot be read for a reason other than its absence: then nothing can be
@@ -525,14 +509,15 @@ pub async fn cleanup(app: &AppData, store: &ArtworkStore) -> Result<Cleaned, Art
                 return Ok(cleaned);
             }
             let referenced = store::referenced_paths(&tx)?;
-            let by_path: HashSet<PathBuf> = referenced.iter().map(|p| lexical(&root, p)).collect();
+            let by_path: HashSet<PathBuf> =
+                referenced.iter().map(|p| lexical(&root.join(p))).collect();
             let Some(identities) = referenced_identities(&root, &referenced) else {
                 cleaned.unsure = true;
                 return Ok(cleaned);
             };
             for file in files {
                 let path = root.join(&file.relative_path);
-                if by_path.contains(&lexical(&root, &file.relative_path)) {
+                if by_path.contains(&lexical(&root.join(&file.relative_path))) {
                     cleaned.kept += 1;
                     continue;
                 }

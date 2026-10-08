@@ -167,7 +167,7 @@
 | [0093](0093-migrated-test-db-once.md) | 테스트 DB를 테스트 프로세스마다 한 번만 만들어요 | 완료 | 없음 |
 | [0094](0094-file-identity-in-core.md) | 같은 파일 알아보기를 trss-core 하나로 모아요 | 완료 | 0092 |
 | [0095](0095-episode-text-key-in-core.md) | 회차 텍스트의 키, 정렬, 표기를 trss-core 하나로 모아요 | 완료 | 0092 |
-| [0096](0096-file-and-path-helpers.md) | 파일과 경로의 작은 도우미와 폴더 검사를 모아요 | 대기 | 0092 |
+| [0096](0096-file-and-path-helpers.md) | 파일과 경로의 작은 도우미와 폴더 검사를 모아요 | 완료 | 0092 |
 | [0097](0097-shared-transmission-fake.md) | Transmission 가짜 서버를 trss-collect의 테스트도 쓰게 옮겨요 | 대기 | 0092 |
 | [0098](0098-release-name-reading.md) | 릴리스 이름과 회차 읽기를 모아요 | 대기 | 0090, 0091, 0092 |
 | [0099](0099-one-receive-path.md) | 토렌트 하나를 더하고, 기록하고, 이름을 바꾸는 경로를 하나로 만들어요 | 대기 | 0098 |

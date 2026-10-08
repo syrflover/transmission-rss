@@ -134,18 +134,19 @@ fn components(path: &Path) -> Vec<Component<'_>> {
 }
 
 /// `path` with `.` and `..` resolved by text alone, without the disk: a `..`
-/// removes the component before it, and one with nothing before it is kept.
-/// Links are not followed, so this is where a path lands only if no link is
-/// in it; the folder locks and the rules' save folders place paths by it.
+/// removes the component before it, and one with nothing before it is
+/// dropped. The root is its own parent, so `/../x` is `/x`; a relative path
+/// cannot climb out of where it starts, which is the confinement the
+/// artwork's references rely on. Links are not followed, so this is where a
+/// path lands only if no link is in it; the folder locks, the rules' save
+/// folders and the artwork's references place paths by it.
 pub fn lexical(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for component in path.components() {
         match component {
             Component::CurDir => {}
             Component::ParentDir => {
-                if !out.pop() {
-                    out.push("..");
-                }
+                out.pop();
             }
             other => out.push(other),
         }
@@ -216,11 +217,14 @@ mod tests {
     }
 
     #[test]
-    fn lexical_keeps_a_parent_that_has_nothing_before_it() {
+    fn lexical_drops_a_parent_that_has_nothing_before_it() {
         let of = |path: &str| lexical(Path::new(path));
-        assert_eq!(of("/../x"), Path::new("/../x"));
-        assert_eq!(of("../x"), Path::new("../x"));
-        assert_eq!(of("a/../../x"), Path::new("../x"));
+        // The root is its own parent: `/../x` and `/x` are one folder.
+        assert_eq!(of("/../x"), Path::new("/x"));
+        assert_eq!(of("/a/../../.."), Path::new("/"));
+        // A relative path cannot climb out of where it starts.
+        assert_eq!(of("../x"), Path::new("x"));
+        assert_eq!(of("a/../../x"), Path::new("x"));
     }
 
     fn fold(bases: &[&str]) -> Folding {
