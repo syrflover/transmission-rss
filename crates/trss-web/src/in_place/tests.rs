@@ -14,7 +14,7 @@ use tower::ServiceExt;
 
 use crate::{commands_api::now_millis, AppState};
 use trss_collect::store::{
-    channels::{Channel, ChannelInput, Rule, RuleInput},
+    channels::{Channel, ChannelInput, Rule, RuleInput, RuleState},
     history::{HistoryItem, HistoryResult, Observation},
     revisions::{NewRevision, OldVideo, RevisionState, Step},
 };
@@ -573,4 +573,102 @@ async fn a_held_magnet_item_with_other_language_tags_hides_the_button() {
     let hash = w.placed(MAGNET_V3.replace("14", "15")).await;
     w.listing(MINUTE, &[&hash]).await;
     assert!(offered(&w.history_row(&item).await));
+}
+
+// --- the offer of a stopped revision and its refusals ---------------------
+
+/// A stopped revision is offered `다시 받기`; a request shows on the failure
+/// as pending until the worker runs it.
+#[tokio::test]
+async fn a_stopped_revision_is_offered_and_an_accepted_request_shows_as_pending() {
+    let w = World::new().await;
+    let item = w.stopped_v2().await;
+    let row = w.failure().await;
+    assert!(offered(&row), "{row}");
+    assert_eq!(row["history_item_id"], item.id);
+    assert_eq!(row["command"], Value::Null);
+
+    let (status, body) = w.retry(&item).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    assert_eq!(w.failure().await["command"]["state"], "pending");
+}
+
+/// A revision received into another folder (it failed after it was received)
+/// would end the same way, so it is not offered again and the request is
+/// refused; the failure's own reason says why it failed, so the refusal adds
+/// none to the row.
+#[tokio::test]
+async fn a_revision_received_elsewhere_is_not_offered_and_its_request_is_refused() {
+    let w = World::new().await;
+    let (item, hash) = w.item(title(14, 2), HistoryResult::Received).await;
+    let row = w
+        .state
+        .revisions
+        .create(10, w.row(&item, &hash, 2))
+        .await
+        .unwrap();
+    let step = Step::Failed {
+        reason: "받은 위치가 달라요.".into(),
+        received_name: Some("v2.mkv".into()),
+    };
+    w.state
+        .revisions
+        .advance(row.id, 20, RevisionState::Receiving, step)
+        .await
+        .unwrap();
+
+    let row = w.failure().await;
+    assert!(!offered(&row), "{row}");
+    assert_eq!(row["retry_blocked"], Value::Null);
+    let (status, body) = w.retry(&item).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(w.state.commands.get(COMMAND_ID).await.unwrap().is_none());
+}
+
+/// A stopped revision whose rule is paused says why `다시 받기` is missing,
+/// and the request is refused.
+#[tokio::test]
+async fn a_stopped_revision_of_a_paused_rule_says_why_and_its_request_is_refused() {
+    let w = World::new().await;
+    let item = w.stopped_v2().await;
+    w.state
+        .channels
+        .set_rule_state(&w.rule.id, RuleState::Paused, now_millis())
+        .await
+        .unwrap();
+
+    let row = w.failure().await;
+    assert!(!offered(&row), "{row}");
+    assert!(row["retry_blocked"].as_str().unwrap().contains("멈춰"));
+    let (status, body) = w.retry(&item).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(w.state.commands.get(COMMAND_ID).await.unwrap().is_none());
+}
+
+/// The rule's folder changed after the replacement was decided: a torrent
+/// added now would be received away from the video it replaces.
+#[tokio::test]
+async fn a_stopped_revision_of_a_rule_whose_folder_changed_says_why_and_its_request_is_refused() {
+    let w = World::new().await;
+    let item = w.stopped_v2().await;
+    let rule_id = w.rule.id.clone();
+    w.state
+        .jobs
+        .db()
+        .run::<_, trss_core::DbError, _>(move |c| {
+            c.execute(
+                "UPDATE rules SET directory = 'Show/Season 02' WHERE id = ?1",
+                [rule_id],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+    let row = w.failure().await;
+    assert!(!offered(&row), "{row}");
+    assert!(row["retry_blocked"].as_str().unwrap().contains("폴더"));
+    let (status, body) = w.retry(&item).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(w.state.commands.get(COMMAND_ID).await.unwrap().is_none());
 }

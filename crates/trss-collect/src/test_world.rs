@@ -25,7 +25,10 @@ use std::{
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 use trss_core::{
-    commands::CommandStore, folder_locks::FolderLocks, settings::SettingsStore, Db, Millis,
+    commands::{Accepted, Command, CommandStore, NewCommand},
+    folder_locks::FolderLocks,
+    settings::SettingsStore,
+    Db, Millis,
 };
 use trss_library::{
     live::LiveWatch,
@@ -34,7 +37,10 @@ use trss_library::{
 use trss_transmission::{fake::FakeTransmission, Redactor, RenamePolicy};
 
 use crate::{
-    commands::rule_archive::work_folder::MovePolicy,
+    commands::{
+        receive_once::{self, Finished, ReceiveOnce, Retry},
+        rule_archive::work_folder::MovePolicy,
+    },
     context::{CollectContext, TransmissionLink},
     cycle::{self, JobOutcome},
     fake::FeedServer,
@@ -327,6 +333,64 @@ impl World {
     /// The replacements the to-do source lists as `받기 실패`.
     pub async fn failures(&self) -> Vec<Revision> {
         self.ctx.revisions.failures().await.unwrap()
+    }
+
+    // --- 다시 받기 ---------------------------------------------------------------------
+
+    /// Accepts `다시 받기` of `item_id` as the command `id`, as the web does,
+    /// and claims it as the worker does.
+    pub async fn start_retry(&self, item_id: i64, id: &str) -> Command {
+        let payload = ReceiveOnce::new(item_id);
+        let new = NewCommand {
+            id: id.to_owned(),
+            kind: receive_once::KIND.to_owned(),
+            payload: payload.canonical(),
+            subject: Some(payload.subject()),
+        };
+        match self.ctx.commands.accept(new, self.now()).await.unwrap() {
+            Accepted::Created(_) => {}
+            other => panic!("the command was not stored: {other:?}"),
+        }
+        self.ctx
+            .commands
+            .claim_next(self.now())
+            .await
+            .unwrap()
+            .expect("the command waits")
+    }
+
+    /// Runs `command` as the worker does and, when it ends, writes the end:
+    /// the add, the rename and the labels, then the command's state. A
+    /// [`Retry`] leaves the command running, to be run again.
+    pub async fn run_command(&self, command: &Command) -> Result<Finished, Retry> {
+        let clock = self.clock.clone();
+        let finished = receive_once::run(
+            &self.ctx.receive(),
+            command,
+            move || clock.load(Ordering::SeqCst),
+            &CancellationToken::new(),
+        )
+        .await?;
+        let (state, outcome) = (finished.state, finished.outcome.clone());
+        let ended = if finished.add_unconfirmed {
+            self.ctx
+                .commands
+                .finish_with_unconfirmed_add(&command.id, state, outcome, self.now())
+                .await
+        } else {
+            self.ctx
+                .commands
+                .finish(&command.id, state, outcome, self.now())
+                .await
+        };
+        ended.unwrap();
+        Ok(finished)
+    }
+
+    /// `다시 받기` of `item_id` as the command `id`, run once.
+    pub async fn retry(&self, item_id: i64, id: &str) -> Result<Finished, Retry> {
+        let command = self.start_retry(item_id, id).await;
+        self.run_command(&command).await
     }
 
     // --- Transmission ------------------------------------------------------------------

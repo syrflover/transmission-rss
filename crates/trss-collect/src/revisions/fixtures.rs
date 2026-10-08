@@ -5,11 +5,13 @@
 
 use std::path::{Path, PathBuf};
 
+use trss_core::commands::CommandState;
+
 use crate::{
-    commands::receive_once,
+    commands::receive_once::{self, Finished, NotRetryable, Retry},
     store::{
         channels::RuleState,
-        history::{HistoryResult, Observation},
+        history::{HistoryItem, HistoryResult, Observation},
         revisions::{Revision, RevisionState},
     },
     test_world::{crc, magnet, read, World},
@@ -256,9 +258,10 @@ impl World {
             .unwrap();
     }
 
-    /// Whether `다시 받기` is offered for the item titled `title`: a plan
-    /// exists for it, by its row and its rule.
-    pub async fn can_retry(&self, title: &str) -> bool {
+    /// Why `다시 받기` of the item titled `title` is not offered or would be
+    /// refused: the plan by its row and its rule, and the folder it would be
+    /// received into, as the web asks for them.
+    pub async fn retry_refusal(&self, title: &str) -> Option<NotRetryable> {
         let item = self.item(title).await;
         let channel = self
             .ctx
@@ -273,6 +276,77 @@ impl World {
         let revision = receive_once::revision_retry(&self.ctx.revisions, item.id)
             .await
             .unwrap();
-        receive_once::retry_plan_for(&item, channel.as_ref(), rule.as_ref(), &revision).is_ok()
+        let plan = receive_once::retry_plan_for(&item, channel.as_ref(), rule.as_ref(), &revision)
+            .and_then(|plan| {
+                let folder = self.media.to_str().unwrap();
+                receive_once::same_destination(&revision, Path::new(folder), plan.rule)?;
+                Ok(plan)
+            });
+        plan.err()
     }
+
+    /// Whether `다시 받기` is offered for the item titled `title`.
+    pub async fn can_retry(&self, title: &str) -> bool {
+        self.retry_refusal(title).await.is_none()
+    }
+
+    /// `14v2` received while `14` is in place, its torrent taken out of
+    /// Transmission before it finished, and the release gone from the feed:
+    /// no cycle receives it again.
+    pub async fn stopped_after_leaving_the_feed(&self) -> HistoryItem {
+        self.received_v1().await;
+        self.feed(&[(NEW_HASH, &v2()), (OLD_HASH, &v1())]);
+        self.tr.unfinished_on_add(NEW_HASH);
+        self.cycle().await;
+        self.tr.remove(NEW_HASH);
+        self.feed(&[(OLD_HASH, &v1())]);
+        self.cycle().await;
+        assert_eq!(self.state_of(&v2()).await, RevisionState::Failed);
+        self.cycle().await;
+        assert_eq!(self.added(NEW_HASH), 1, "no cycle receives it again");
+        self.item(&v2()).await
+    }
+
+    /// The episode's video and its torrent are taken away, and `14v3` is the
+    /// only item of the feed: it finds the episode name free, so it is
+    /// received as an ordinary item (no replacement row) and takes the name.
+    pub async fn v3_placed_without_a_row(&self) {
+        self.tr.remove(OLD_HASH);
+        std::fs::remove_file(self.file(EPISODE_NAME)).unwrap();
+        self.feed(&[(V3_HASH, &v3())]);
+        self.tr.content_on_add(V3_HASH, V3_BYTES);
+        self.cycle().await;
+        self.complete(V3_HASH);
+        assert_eq!(read(&self.file(EPISODE_NAME)), V3_BYTES);
+        assert_eq!(self.tr.torrent(V3_HASH).name, EPISODE_NAME);
+        assert!(self.row_if(&v3()).await.is_none());
+    }
+
+    /// `14v2` removed `14`, then lost its video before it took the name; its
+    /// torrent is still in Transmission, its rename no longer refused.
+    pub async fn v2_ended_with_no_video(&self) {
+        self.v2_waits_for_its_name().await;
+        std::fs::remove_file(self.file(&v2())).unwrap();
+        self.cycle().await;
+        self.cycle().await;
+        assert_eq!(self.state_of(&v2()).await.code(), "abandoned");
+        assert!(self.can_retry(&v2()).await);
+        self.tr.reject_rename_of(NEW_HASH, None);
+    }
+
+    pub fn verifies(&self) -> usize {
+        self.tr.calls_of("torrent-verify").len()
+    }
+
+    pub fn starts(&self) -> usize {
+        self.tr.calls_of("torrent-start").len()
+    }
+}
+
+/// The command ended `failed`, with a reason that says `says`.
+pub(super) fn assert_refused(done: Result<Finished, Retry>, says: &str) {
+    let finished = done.expect("the command ended");
+    assert_eq!(finished.state, CommandState::Failed, "{finished:?}");
+    let reason = finished.outcome.reason.as_deref().unwrap_or_default();
+    assert!(reason.contains(says), "{finished:?}");
 }

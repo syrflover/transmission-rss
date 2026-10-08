@@ -1579,4 +1579,34 @@ mod replacements {
         let episodes = body["seasons"][0]["episodes"].as_array().unwrap();
         assert_eq!(episodes.len(), 3, "{body}");
     }
+
+    /// A replacement whose download stopped offers `다시 받기` on its episode
+    /// row too; one that failed after it was received does not.
+    #[tokio::test]
+    async fn a_stopped_replacements_retry_offer_is_on_its_episode_row() {
+        let (state, id) = state_with_work().await;
+        let stopped = row(&state, SEASON_FOLDER, "S01E02.mkv", 2).await;
+        let step = Step::Failed {
+            reason: "새 영상의 토렌트가 Transmission에서 사라져 받기가 끝나지 않았어요. 이전 영상은 그대로 있어요."
+                .into(),
+            received_name: None,
+        };
+        state
+            .revisions
+            .advance(stopped, 20, RevisionState::Receiving, step)
+            .await
+            .unwrap();
+        let received = row(&state, SEASON_FOLDER, "S01E03.mkv", 3).await;
+        failed(&state, received).await;
+
+        let (status, body) = get(&state, &format!("/library/works/{id}")).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let offered = &episode(&body, "02")["failure"];
+        assert_eq!(offered["can_retry"], true, "{offered}");
+        assert_eq!(offered["retry_blocked"], Value::Null);
+        assert_eq!(offered["command"], Value::Null);
+        assert_eq!(offered["files"][1]["state"], "not_received");
+        let not_offered = &episode(&body, "03")["failure"];
+        assert_eq!(not_offered["can_retry"], false, "{not_offered}");
+    }
 }

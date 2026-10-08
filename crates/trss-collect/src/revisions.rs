@@ -1892,6 +1892,8 @@ mod magnet_tests;
 #[cfg(test)]
 mod replacing_tests;
 #[cfg(test)]
+mod retry_tests;
+#[cfg(test)]
 mod several_tests;
 
 #[cfg(test)]
