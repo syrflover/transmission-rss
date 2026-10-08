@@ -14,11 +14,12 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     commands::rule_archive::{move_before_receiving, Receiving},
-    context::{CollectContext, MAX_REASON_CHARS},
+    context::CollectContext,
     episode_offset::may_decide,
     feed::{self, FeedItem},
     offsets,
     plan::{work_folder_of, ChannelPlan, Judgement},
+    receive,
     release_name::name_for_trname,
     revisions::{self, Decided, Listing, Plan, Replaced, Selected},
     store::{
@@ -462,7 +463,7 @@ pub async fn record_panic(ctx: &CollectContext, at: Millis, fallback: Fallback) 
     );
     let observation = Observation {
         result: HistoryResult::AddFailed,
-        reason: Some("internal error while adding the item".to_owned()),
+        reason: Some(receive::ADD_PANICKED.to_owned()),
         ..fallback.observation
     };
     if let Err(err) = ctx.history.record(at, vec![observation]).await {
@@ -633,7 +634,7 @@ pub async fn process_job(
             )
         }
         Err(err) => {
-            let reason = failure_reason(err, &redactor);
+            let reason = receive::failure_reason(err, &redactor);
             eprintln!("Cannot add {} ({}): {reason}", job.title, job.channel_label);
             (
                 Observation {
@@ -860,20 +861,6 @@ async fn rename_mode(ctx: &CollectContext, kind: AddKind, hash: &str) -> Option<
             }
         },
     }
-}
-
-fn failure_reason(err: &AddError, redactor: &Redactor) -> String {
-    let text = match err {
-        AddError::Unreachable(err) | AddError::Rpc(err) => {
-            format!("Transmission unreachable or failed: {err}")
-        }
-        AddError::Rejected(result) => format!("Transmission refused the torrent: {result}"),
-    };
-    redactor
-        .apply(&text)
-        .chars()
-        .take(MAX_REASON_CHARS)
-        .collect()
 }
 
 /// Removes the finished bot-labelled torrents nothing accounts for: not

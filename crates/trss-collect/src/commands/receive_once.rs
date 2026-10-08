@@ -82,9 +82,10 @@ use super::{
     rule_archive::{move_before_receiving, Receiving, MOVING_FIRST},
 };
 use crate::{
-    context::TransmissionLink,
+    context::{TransmissionLink, MAX_REASON_CHARS},
     offsets,
     plan::{picks, rule_destination, rule_work_folder, ChannelPlan},
+    receive,
     release_name::name_for_trname,
     revisions,
     store::{
@@ -150,9 +151,6 @@ const RECEIVED_NAME_UNREAD: &str = "받은 이름의 파일을 확인하지 못�
 /// Why it was not started: Transmission did not check the torrent's data.
 const NOT_VERIFIED: &str = "Transmission이 토렌트의 데이터를 다시 확인하지 않아서 시작하지 않았어요. 잠시 뒤 다시 받기를 다시 누를 수 있어요: ";
 const PLACE_UNREAD: &str = "폴더의 회차 영상이 어떤 수정본인지 확인하지 못해서 받지 않았어요. 잠시 뒤 다시 받기를 다시 누를 수 있어요.";
-
-/// Longest failure reason kept, in characters.
-const MAX_REASON_CHARS: usize = 300;
 
 /// The content of a `receive_once` request: the item, and for an item no rule
 /// has picked yet, the rule that receives it. The save folder and the episode
@@ -1063,7 +1061,7 @@ pub async fn execute_with(
             Ok(held(stored, rename))
         }
         Err(err) => {
-            let reason = add_failure_reason(&err, &redactor);
+            let reason = receive::failure_reason(&err, &redactor);
             eprintln!(
                 "Cannot add item {} of {}: {reason}",
                 item.id, item.channel_label
@@ -1198,19 +1196,6 @@ fn redactor_for(ctx: &ReceiveContext, channel: &Channel) -> Redactor {
     );
     redactor.extend(&plan.redactor());
     redactor
-}
-
-fn add_failure_reason(err: &AddError, redactor: &Redactor) -> String {
-    let text = match err {
-        AddError::Unreachable(err) => format!("Transmission에 연결하지 못했어요: {err}"),
-        AddError::Rpc(err) => format!("Transmission이 응답하지 않았어요: {err}"),
-        AddError::Rejected(result) => format!("Transmission이 토렌트를 받지 않았어요: {result}"),
-    };
-    redactor
-        .apply(&text)
-        .chars()
-        .take(MAX_REASON_CHARS)
-        .collect()
 }
 
 /// What [`rename`] did.

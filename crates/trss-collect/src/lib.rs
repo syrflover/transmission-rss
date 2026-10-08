@@ -12,6 +12,8 @@
 //! - [`revisions`], [`revision`]: replacing a video with its revision;
 //! - [`cycle`]: what a collection cycle decides item by item, which the
 //!   worker's cycle calls;
+//! - [`receive`]: how one item's torrent is added, recorded and renamed, for
+//!   the cycle and the commands alike;
 //! - [`commands`]: each kind of web command and how it is carried out;
 //! - [`offsets`], [`episode_offset`]: a rule's episode offset;
 //! - [`season_link`]: connecting subscriptions to the seasons of the library;
@@ -34,6 +36,7 @@ pub mod feed;
 pub mod offsets;
 pub mod past_search;
 pub mod plan;
+pub mod receive;
 pub mod release_name;
 #[cfg(test)]
 mod release_names;

@@ -1499,7 +1499,7 @@ async fn secret_values_are_masked_in_history_under_other_names_in_paths_and_enco
     assert_eq!(first.result, HistoryResult::AddFailed);
     assert_eq!(
         first.reason.as_deref(),
-        Some("Transmission refused the torrent: cannot use *** or ***")
+        Some("Transmission이 토렌트를 받지 않았어요: cannot use *** or ***")
     );
     let second = h.item("Show - 02").await;
     assert_eq!(
