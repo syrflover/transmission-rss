@@ -69,7 +69,10 @@ use std::{
 
 use tokio_util::sync::CancellationToken;
 use transmission_rpc::TransClient;
-use trss_core::{files::rename_noreplace, folders::has_parent_dir};
+use trss_core::{
+    files::{part_name, rename_noreplace},
+    folders::has_parent_dir,
+};
 
 use trss_transmission as transmission;
 use trss_transmission::{Redactor, TorrentFile, TorrentPlace};
@@ -786,7 +789,7 @@ pub fn plan_torrents(
 
 /// The file `name` in `dir`, or its `.part` name, when either is there.
 fn present(dir: &Path, name: &str) -> Option<PathBuf> {
-    [name.to_owned(), format!("{name}.part")]
+    [name.to_owned(), part_name(name)]
         .into_iter()
         .map(|name| dir.join(name))
         .find(|path| fs::symlink_metadata(path).is_ok())

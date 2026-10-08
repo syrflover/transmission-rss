@@ -110,7 +110,7 @@ use crate::{
         },
     },
 };
-use trss_core::{file_id::FileId, folder_locks::FolderLocks, Millis};
+use trss_core::{file_id::FileId, files::occupied, folder_locks::FolderLocks, Millis};
 use trss_transmission::{get_torrent, torrent_places, Redactor, TorrentPlace};
 
 /// What the video revisions use (made from
@@ -954,7 +954,7 @@ async fn recover(ctx: &RevisionsContext, row: &Revision) -> Next {
     }
     let old = Path::new(&row.folder).join(&row.episode_name);
     // A replacement that removed the old video itself left the name empty.
-    if row.claimed_at.is_none() && matches!(exists(&old), Ok(false)) {
+    if row.claimed_at.is_none() && matches!(occupied(&old), Ok(false)) {
         match another_naming(ctx, row).await {
             Ok(true) => {}
             Ok(false) => return Next::Step(Step::Cleared),
@@ -1059,7 +1059,7 @@ fn new_video_gone(row: &Revision) -> Result<bool, String> {
         return Ok(true);
     };
     let path = folder.join(name);
-    exists(&path)
+    occupied(&path)
         .map(|present| !present)
         .map_err(|err| format!("cannot look at {}: {err}", path.display()))
 }
@@ -1171,14 +1171,6 @@ async fn new_video_kept(row: &Revision) -> NewLook {
     }
 }
 
-fn exists(path: &Path) -> io::Result<bool> {
-    match std::fs::symlink_metadata(path) {
-        Ok(_) => Ok(true),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
-        Err(err) => Err(err),
-    }
-}
-
 /// Step 2: the old video is removed, or the replacement fails (or is
 /// skipped) with it in place. `removing` is written before anything is
 /// removed, by a claim that lets one replacement of the episode at a time.
@@ -1203,7 +1195,7 @@ async fn remove_old(
         return folder_away(ctx, row, why, Some(NEW_UNCHECKED_OLD_KEPT)).await;
     }
     let old = Path::new(&row.folder).join(&row.episode_name);
-    let present = match exists(&old) {
+    let present = match occupied(&old) {
         Ok(present) => present,
         Err(err) => return Next::Later(format!("cannot look at {}: {err}", old.display())),
     };
@@ -1356,7 +1348,7 @@ async fn remove_old(
             }
         }
     }
-    match exists(&old) {
+    match occupied(&old) {
         Ok(false) => Next::Step(Step::Removed { reason: None }),
         // Transmission may delete the data after it has answered.
         Ok(true) => Next::Later(format!("{} is still there", old.display())),
@@ -1525,7 +1517,7 @@ async fn rename(ctx: &RevisionsContext, row: &mut Revision, listing: &Listing) -
     let folder = PathBuf::from(&row.folder);
     let folder = folder.as_path();
     let target = folder.join(&row.episode_name);
-    match exists(&target) {
+    match occupied(&target) {
         Ok(false) => {}
         Ok(true) => {
             return match renamed_already(ctx, row, &target).await {
@@ -1604,7 +1596,7 @@ async fn rename(ctx: &RevisionsContext, row: &mut Revision, listing: &Listing) -
             )),
         });
     }
-    match (exists(&target), exists(&source)) {
+    match (occupied(&target), occupied(&source)) {
         (Ok(true), Ok(false)) => Next::Step(Step::Done),
         _ => Next::Step(Step::Removed {
             reason: Some(
@@ -1627,7 +1619,7 @@ async fn renamed_already(
     let Some(received_name) = &row.received_name else {
         return Ok(false);
     };
-    match exists(&Path::new(&row.folder).join(received_name)) {
+    match occupied(&Path::new(&row.folder).join(received_name)) {
         Ok(false) => {}
         Ok(true) => return Ok(false),
         Err(err) => return Err(format!("cannot look at {received_name}: {err}")),
@@ -1666,7 +1658,7 @@ async fn ended_watch(ctx: &RevisionsContext, row: &Revision) -> Next {
     if folder_there(row).is_err() {
         return Next::Wait;
     }
-    let held = exists(&Path::new(&row.folder).join(&row.episode_name));
+    let held = occupied(&Path::new(&row.folder).join(&row.episode_name));
     let watched = row.reason.as_deref() == Some(OLD_FILE_WATCHED);
     match (watched, held) {
         (true, Ok(false)) => {
@@ -1691,11 +1683,11 @@ fn cleared(row: &Revision) -> Next {
         return Next::Wait;
     }
     let folder = Path::new(&row.folder);
-    let old_gone = matches!(exists(&folder.join(&row.episode_name)), Ok(false));
+    let old_gone = matches!(occupied(&folder.join(&row.episode_name)), Ok(false));
     let new_gone = row
         .received_name
         .as_ref()
-        .is_some_and(|name| matches!(exists(&folder.join(name)), Ok(false)));
+        .is_some_and(|name| matches!(occupied(&folder.join(name)), Ok(false)));
     if old_gone || new_gone {
         Next::Step(Step::Cleared)
     } else {

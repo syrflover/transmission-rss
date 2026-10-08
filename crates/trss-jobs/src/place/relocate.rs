@@ -988,7 +988,10 @@ impl Placer {
         }
         if removal.state == RemovalState::Intended {
             let a = aside_at.clone();
-            if blocking(move || files::occupied(&a)).await.unwrap_or(true) {
+            if blocking(move || trss_core::files::occupied(&a))
+                .await
+                .unwrap_or(true)
+            {
                 // Renamed before the record that it was found aside.
                 return match self.check_aside(&copy, &at, &aside_at, &label).await {
                     Aside::Done => {
@@ -1099,7 +1102,10 @@ impl Placer {
                 // Either nothing moved, or the move is not known to be on
                 // disk: the next run looks at both paths again.
                 let a = aside_at.clone();
-                if blocking(move || files::occupied(&a)).await.unwrap_or(true) {
+                if blocking(move || trss_core::files::occupied(&a))
+                    .await
+                    .unwrap_or(true)
+                {
                     return self
                         .end(
                             &removal,

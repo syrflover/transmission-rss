@@ -177,15 +177,6 @@ pub fn facts(path: &Path) -> io::Result<Option<(u64, String, String)>> {
     }
 }
 
-/// Whether something is at `path` (a link counts, whatever it points to).
-pub fn occupied(path: &Path) -> io::Result<bool> {
-    match fs::symlink_metadata(path) {
-        Ok(_) => Ok(true),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
-        Err(err) => Err(err),
-    }
-}
-
 /// The names in `folder` (none when it is not there).
 pub fn names_in(folder: &Path) -> io::Result<Vec<String>> {
     match fs::read_dir(folder) {

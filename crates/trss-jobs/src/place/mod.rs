@@ -1635,7 +1635,7 @@ impl Placer {
             subtitles
                 .into_iter()
                 .filter(|p| named_in(p))
-                .find(|p| files::occupied(&files::within(&base, p)).unwrap_or(true))
+                .find(|p| trss_core::files::occupied(&files::within(&base, p)).unwrap_or(true))
         })
         .await;
         if let Some(first) = recorded {
@@ -1735,7 +1735,7 @@ impl Placer {
         let mut present = Vec::new();
         for video in videos {
             let path = files::within(Path::new(folder), &video);
-            if blocking(move || files::occupied(&path))
+            if blocking(move || trss_core::files::occupied(&path))
                 .await
                 .unwrap_or(false)
             {

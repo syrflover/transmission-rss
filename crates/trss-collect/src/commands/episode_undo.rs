@@ -122,7 +122,7 @@ use transmission_rpc::types::Id;
 
 use trss_core::{
     commands::{Command, CommandState, Outcome},
-    files::rename_noreplace,
+    files::{occupied, rename_noreplace},
     folder_locks::Section,
     settings::SettingsStore,
     Clock,
@@ -688,15 +688,6 @@ fn by_extension(
     found
 }
 
-/// Whether something is at `path` (a link counts as itself).
-fn exists(path: &Path) -> io::Result<bool> {
-    match std::fs::symlink_metadata(path) {
-        Ok(_) => Ok(true),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
-        Err(err) => Err(err),
-    }
-}
-
 /// Which of the `pending` files to rename next: the first whose new name is
 /// not the old name of another one still to rename, so that a name the undo
 /// frees is free before a file takes it (`S03E13` goes to `S03E25` before
@@ -904,7 +895,7 @@ async fn rename(
             Ok(None) => return Ok(Some(MISSING.to_owned())),
             Err(err) => return Ok(looked(err)),
         }
-        match exists(&target) {
+        match occupied(&target) {
             Ok(false) => {}
             Ok(true) => return Ok(Some(TAKEN.to_owned())),
             Err(err) => return Ok(looked(err)),
@@ -934,7 +925,7 @@ async fn rename(
         // Transmission answers success without moving the file when the
         // target appeared meanwhile: both files are there, and the torrent's
         // name goes back to its own file.
-        if matches!(exists(&source), Ok(true)) && matches!(exists(&target), Ok(true)) {
+        if matches!(occupied(&source), Ok(true)) && matches!(occupied(&target), Ok(true)) {
             let back = client
                 .torrent_rename_path(
                     vec![Id::Hash(hash.to_owned())],

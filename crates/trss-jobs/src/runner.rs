@@ -157,7 +157,7 @@ use url::Url;
 use crate::{
     area::{self, ReceiveArea},
     model::{FileState, ItemState, JobState, StepKind, StepState, Wait},
-    place::{Placement, Placer},
+    place::{files::remove_known, Placement, Placer},
     screen::{self, Arrival, ScreenStore},
     store::{
         snapshot_json, FileProblem, FileRow, ItemRow, JobError, JobStore, FIND, RELOCATE, UPLOAD,
@@ -287,14 +287,6 @@ async fn check(path: PathBuf, name: String) -> Checked {
         Ok(Ok(format)) => Checked::File(format),
         Ok(Err(failure)) => Checked::NotAFile(FileProblem::from(&failure)),
         Err(_) => Checked::Broken(CHECK_BROKEN.to_owned()),
-    }
-}
-
-/// Removes a file: whether it is gone, as removed now or found missing.
-fn remove_known(path: &Path) -> io::Result<()> {
-    match std::fs::remove_file(path) {
-        Err(err) if err.kind() != io::ErrorKind::NotFound => Err(err),
-        _ => Ok(()),
     }
 }
 

@@ -28,6 +28,7 @@ use std::{
 
 use sha2::{Digest, Sha256};
 use trss_core::file_id::FileId;
+pub use trss_core::files::hex;
 
 /// The folder of received files.
 #[derive(Debug, Clone)]
@@ -234,10 +235,6 @@ pub fn read_facts(path: &Path) -> io::Result<(u64, String, String)> {
         hasher.update(&buf[..n]);
     }
     Ok((size, hex(&hasher.finalize()), object_of(&meta)))
-}
-
-pub fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// Syncs a folder, so a rename into it outlives a power loss.

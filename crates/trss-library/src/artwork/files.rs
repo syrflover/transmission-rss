@@ -128,8 +128,7 @@ pub enum PublishError {
 
 /// SHA-256 as lowercase hex.
 pub fn sha256_hex(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    digest.iter().map(|b| format!("{b:02x}")).collect()
+    trss_core::files::hex(&Sha256::digest(bytes))
 }
 
 /// Makes the folder `rel` under `root` if needed, and checks that it is a real

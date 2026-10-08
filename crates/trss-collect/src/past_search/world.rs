@@ -28,6 +28,7 @@ use crate::{
     revision::season_episode,
     store::{history::HistoryItem, status::TorrentListing},
 };
+use trss_core::files::without_part;
 
 /// The most files of one folder that are looked at.
 const MAX_FILES: usize = 5000;
@@ -75,7 +76,7 @@ pub fn read_folder(folder: &Path) -> io::Result<Folder> {
         if !entry.file_type().is_ok_and(|t| t.is_file()) {
             continue;
         }
-        let name = name.strip_suffix(".part").unwrap_or(&name);
+        let name = without_part(&name).unwrap_or(&name);
         let Some((_, text)) = season_episode(name) else {
             continue;
         };

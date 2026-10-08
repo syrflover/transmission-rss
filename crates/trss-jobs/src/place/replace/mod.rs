@@ -683,7 +683,7 @@ impl Placer {
         let videos = blocking(move || {
             videos
                 .into_iter()
-                .filter(|v| files::occupied(&files::within(&base, v)).unwrap_or(false))
+                .filter(|v| trss_core::files::occupied(&files::within(&base, v)).unwrap_or(false))
                 .collect::<Vec<_>>()
         })
         .await;

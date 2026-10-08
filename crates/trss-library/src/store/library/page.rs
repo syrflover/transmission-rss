@@ -195,7 +195,7 @@ impl Cursor {
             i: self.key.id.clone(),
         };
         let json = serde_json::to_vec(&body).expect("a cursor is plain data");
-        json.iter().map(|byte| format!("{byte:02x}")).collect()
+        trss_core::files::hex(&json)
     }
 
     /// The cursor that `text` stands for, `None` when it is none of ours.
