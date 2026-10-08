@@ -122,11 +122,6 @@ fn picked_rules() -> Vec<RuleInput> {
     ]
 }
 
-/// A rule that matches neither release above, so both are `no_match`.
-fn unrelated_rule() -> Vec<RuleInput> {
-    vec![rule("Some Other Show", "Some Other Show/Season 01")]
-}
-
 /// What the fake Transmission says while it refuses the adds of a cycle.
 const REFUSAL: &str = "Transmission is having a bad day";
 
@@ -142,15 +137,9 @@ struct Scene {
 
 impl Scene {
     /// A channel on `FEED` with `rules`, the feed serving `releases`, and one
-    /// cycle run so that history holds them.
-    async fn new(releases: &[&Release], rules: Vec<RuleInput>) -> Scene {
-        Scene::with(releases, BASE, &[], rules, false).await
-    }
-
-    /// Like [`Scene::new`], but Transmission refuses every add of that first
-    /// cycle: the items the rules pick are `add_failed` with their rule
-    /// recorded, which is what `다시 받기` is for. Transmission takes adds again
-    /// when this returns.
+    /// cycle run in which Transmission refuses every add: the items the rules
+    /// pick are `add_failed` with their rule recorded, which is what `다시 받기`
+    /// is for. Transmission takes adds again when this returns.
     async fn failing(releases: &[&Release], rules: Vec<RuleInput>) -> Scene {
         Scene::with(releases, BASE, &[], rules, true).await
     }
@@ -411,148 +400,6 @@ async fn the_command_ends_only_after_its_rename_step_and_note() {
 // --- getting the original link back -------------------------------------------------------
 
 // --- the next cycle ------------------------------------------------------------------------
-
-#[tokio::test]
-async fn a_torrent_a_retry_added_is_kept_and_left_alone_by_the_next_cycles() {
-    let liar = release("guid-liar-26", 26, LIAR, "");
-    let other = release("guid-other-3", 3, OTHER, "");
-    let s = Scene::failing(
-        &[&liar, &other],
-        vec![rule("LIAR GAME", "LIAR GAME/Season 01")],
-    )
-    .await;
-    let item = s.item("LIAR GAME - 26").await;
-    s.post(CMD, &item).await;
-    s.run_commands().await;
-    assert_eq!(s.h.tr.torrents().len(), 1);
-    assert_eq!(s.h.tr.torrents()[0].name, "LIAR GAME S01E26.mkv");
-
-    // The rule picks the item again each cycle and meets its own torrent: nothing
-    // is removed, and the file, named already, is not named again.
-    s.h.tr.clear_calls();
-    for _ in 0..2 {
-        let report = s.cycle().await;
-        assert_eq!(report.duplicates, 1);
-        assert!(report.removed.is_empty(), "{:?}", report.removed);
-    }
-    assert_eq!(s.h.tr.torrents().len(), 1);
-    assert!(s.h.tr.calls_of("torrent-remove").is_empty());
-    assert!(s.h.tr.calls_of("torrent-rename-path").is_empty());
-    let kept = s.item("LIAR GAME - 26").await;
-    assert_eq!(kept.result, HistoryResult::Received);
-    assert_eq!(kept.rule_id, item.rule_id);
-
-    // Once the item leaves the feed, the ordinary cleanup applies to it again.
-    s.feed(&[&other]);
-    let report = s.cycle().await;
-    assert_eq!(report.removed.len(), 1);
-    assert_eq!(report.removed[0].hash, hash(26));
-    assert!(s.h.tr.torrents().is_empty());
-}
-
-/// Sets `item` up as the `한 번 받기` that `다시 받기` replaced left it: received
-/// with no rule, its torrent in the folder and under the name a person chose.
-/// Rows like it are still in the database, and the rule's cycle leaves their
-/// torrents alone.
-async fn received_by_hand(s: &Scene, item: &HistoryItem, torrent: FakeTorrent, note: Option<&str>) {
-    let labelled = FakeTorrent {
-        labels: vec![
-            BOT_LABEL.to_owned(),
-            item_label(&item.channel_id, &item.identity_key),
-        ],
-        ..torrent
-    };
-    let hash = labelled.hash.clone();
-    s.h.tr.preload(labelled);
-    s.h.history
-        .record_outcome(
-            item.id,
-            s.h.now(),
-            HistoryResult::Received,
-            None,
-            None,
-            Some(hash),
-        )
-        .await
-        .unwrap();
-    if let Some(note) = note {
-        s.h.history.note_received(item.id, note).await.unwrap();
-    }
-}
-
-#[tokio::test]
-async fn a_rule_that_later_selects_an_item_received_by_hand_neither_removes_nor_renames_it() {
-    // Received by hand into a folder where trname has no name for the file.
-    let odd = release("guid-odd", 9, "Some Special Collection.mkv", "");
-    let s = Scene::new(&[&odd], unrelated_rule()).await;
-    let item = s.item("Some Special").await;
-    received_by_hand(
-        &s,
-        &item,
-        FakeTorrent {
-            download_dir: "/media/anime/Some Show".to_owned(),
-            ..FakeTorrent::new(&hash(9), "Some Special Collection.mkv")
-        },
-        Some(NAME_NOT_DERIVED),
-    )
-    .await;
-
-    // A rule made from the item (항목에서 새 규칙) selects it now, into a folder
-    // trname cannot name the file for either: the legacy renaming removed such
-    // a torrent with its data.
-    s.h.channels
-        .create_rule(
-            &s.channel.channel.id,
-            rule("Some Special", "Some Special/Season 01"),
-        )
-        .await
-        .unwrap();
-    s.h.tr.clear_calls();
-    let report = s.cycle().await;
-
-    assert_eq!(report.duplicates, 1);
-    assert!(report.removed.is_empty(), "{:?}", report.removed);
-    assert!(s.h.tr.calls_of("torrent-remove").is_empty());
-    assert!(s.h.tr.calls_of("torrent-rename-path").is_empty());
-    let torrents = s.h.tr.torrents();
-    assert_eq!(torrents.len(), 1);
-    assert_eq!(torrents[0].name, "Some Special Collection.mkv");
-    assert_eq!(torrents[0].download_dir, "/media/anime/Some Show");
-    let kept = s.item("Some Special").await;
-    assert_eq!(kept.result, HistoryResult::Received);
-    assert_eq!(kept.rule_id, None, "still received by hand");
-    assert_eq!(kept.reason.as_deref(), Some(NAME_NOT_DERIVED));
-}
-
-#[tokio::test]
-async fn a_rule_with_another_folder_does_not_rename_a_file_received_by_hand() {
-    let liar = release("guid-liar-26", 26, LIAR, "");
-    let s = Scene::new(&[&liar], unrelated_rule()).await;
-    let item = s.item("LIAR GAME - 26").await;
-    received_by_hand(
-        &s,
-        &item,
-        FakeTorrent {
-            download_dir: "/media/anime/LIAR GAME/Season 01".to_owned(),
-            ..FakeTorrent::new(&hash(26), "LIAR GAME S01E26.mkv")
-        },
-        None,
-    )
-    .await;
-
-    s.h.channels
-        .create_rule(
-            &s.channel.channel.id,
-            rule("LIAR GAME", "LIAR GAME/Season 02"),
-        )
-        .await
-        .unwrap();
-    s.h.tr.clear_calls();
-    s.cycle().await;
-
-    assert!(s.h.tr.calls_of("torrent-rename-path").is_empty());
-    assert_eq!(s.h.tr.torrents()[0].name, "LIAR GAME S01E26.mkv");
-}
 
 // --- restarts, two workers and the lock --------------------------------------------------------
 
@@ -837,48 +684,6 @@ async fn a_torrent_a_rule_met_between_the_starts_is_named_by_the_rule_and_the_co
     );
     s.cycle().await;
     assert_eq!(s.h.tr.torrents().len(), 1);
-}
-
-#[tokio::test]
-async fn a_torrent_whose_hash_was_never_learned_stays_while_its_item_is_in_the_feed() {
-    let liar = release("guid-liar-26", 26, LIAR, "");
-    let other = release("guid-other-3", 3, OTHER, "");
-    let s = Scene::failing(
-        &[&liar, &other],
-        vec![rule("LIAR GAME", "LIAR GAME/Season 01")],
-    )
-    .await;
-    let worker = after_an_unanswered_add(&s).await;
-    // Every later start is refused, so history never learns the hash.
-    s.h.tr
-        .reject_adds(Some("gotMetadataFromURL: http error 429"));
-    for _ in 2..=MAX_ATTEMPTS {
-        s.run_commands_with(&worker).await;
-    }
-    assert_eq!(s.command(CMD).await.1["state"], "failed");
-    assert_eq!(s.item("LIAR GAME - 26").await.torrent_hash, None);
-    s.h.tr.reject_adds(None);
-    // The rule is archived, so the cycles do not meet the torrent again and
-    // learn its hash that way.
-    s.archive_rule(0).await;
-
-    // The torrent says which item it is for, and that item is still in the feed.
-    let torrent = s.h.tr.torrents().into_iter().next().unwrap();
-    let item = s.item("LIAR GAME - 26").await;
-    assert!(torrent.labels.contains(&format!(
-        "trss-item:{}:{}",
-        item.channel_id, item.identity_key
-    )));
-    for _ in 0..3 {
-        let report = s.cycle().await;
-        assert!(report.removed.is_empty(), "{:?}", report.removed);
-    }
-    assert_eq!(s.h.tr.torrents().len(), 1);
-
-    // Once the item leaves the feed, the ordinary cleanup applies to it again.
-    s.feed(&[&other]);
-    let report = s.cycle().await;
-    assert_eq!(report.removed.len(), 1);
 }
 
 #[tokio::test]

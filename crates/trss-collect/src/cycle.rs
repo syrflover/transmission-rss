@@ -989,3 +989,6 @@ pub async fn remove_departed(
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
