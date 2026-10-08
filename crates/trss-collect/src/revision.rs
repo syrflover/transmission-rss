@@ -214,13 +214,6 @@ impl FileIdentity {
             } == *other
     }
 
-    /// Kept for the tests of this file only; the rule is
-    /// [`FileId::same_file`].
-    #[cfg(test)]
-    fn same_file(&self, other: &FileIdentity) -> bool {
-        other.id.same_file(self.id)
-    }
-
     /// The identity as text, to keep in the database ([`FileIdentity::parse`]
     /// reads it back).
     pub fn to_text(&self) -> String {
@@ -516,22 +509,23 @@ mod tests {
 
         let moved = dir.path().join("b.mkv");
         std::fs::rename(&path, &moved).unwrap();
-        assert!(FileIdentity::at(&moved).unwrap().same_file(&before));
+        assert!(FileIdentity::at(&moved)
+            .unwrap()
+            .id()
+            .same_file(before.id()));
         std::fs::write(&path, b"aaaa").unwrap();
-        assert!(!FileIdentity::at(&path).unwrap().same_file(&before));
+        assert!(!FileIdentity::at(&path).unwrap().id().same_file(before.id()));
     }
 
     #[test]
-    fn a_kept_identity_is_the_same_file_whatever_its_device_number() {
+    fn a_kept_identity_is_unchanged_whatever_its_device_number_until_the_file_is_written() {
         let kept = FileIdentity::parse("47:8716384:5:1759700000.1:1759700000.2").unwrap();
         // The same file after its file system was mounted again.
         let remounted = FileIdentity::parse("46:8716384:5:1759700000.1:1759700000.2").unwrap();
         assert_ne!(remounted, kept);
-        assert!(remounted.same_file(&kept));
         assert!(remounted.unchanged(&kept));
         // Another inode.
         let other = FileIdentity::parse("47:8716385:5:1759700000.1:1759700000.2").unwrap();
-        assert!(!other.same_file(&kept));
         assert!(!other.unchanged(&kept));
         // The same file renamed, or written into, since.
         for since in [
@@ -540,7 +534,6 @@ mod tests {
             "46:8716384:6:1759700000.1:1759700000.2",
         ] {
             let since = FileIdentity::parse(since).unwrap();
-            assert!(since.same_file(&kept), "{since:?}");
             assert!(!since.unchanged(&kept), "{since:?}");
         }
     }

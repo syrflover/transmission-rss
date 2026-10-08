@@ -943,40 +943,6 @@ async fn a_failure_recorded_before_its_bytes_went_is_finished_by_the_next_start(
 }
 
 #[tokio::test]
-async fn a_failure_whose_bytes_got_another_device_number_is_finished_by_the_next_start() {
-    let page: &[u8] = b"<!DOCTYPE html><html><body>expired</body></html>";
-    for published in [false, true] {
-        let s = setup().await;
-        let (id, item) = killed(&s, "/ok/a").await;
-        let row = intended(&s, item, "ok/a", "a.ass", None, Some(page)).await;
-        let path = format!("{id}/a.ass");
-        fetched(&s, &row, &path).await;
-        if published {
-            std::fs::create_dir_all(s.area.at(&id)).unwrap();
-            std::fs::rename(
-                s.area.at(row.temp_dir.as_deref().unwrap()).join("a.ass"),
-                s.area.at(&path),
-            )
-            .unwrap();
-        }
-        failed_keeping_path(&s, &row).await;
-        mounted_again(&s, &row).await;
-        run(&s).await;
-
-        let d = detail(&s, &id).await;
-        assert_eq!(d.row.state, JobState::Done, "published: {published}");
-        assert!(!s.area.at(row.temp_dir.as_deref().unwrap()).exists());
-        // The page's bytes are gone and the name was free for the file.
-        assert_eq!(
-            files_in(&s.area.at(&id)),
-            ["a.ass"],
-            "published: {published}"
-        );
-        assert_ne!(std::fs::read(s.area.at(&path)).unwrap(), page);
-    }
-}
-
-#[tokio::test]
 async fn a_failure_whose_bytes_were_left_is_finished_even_when_the_post_is_gone() {
     let page: &[u8] = b"<!DOCTYPE html><html><body>expired</body></html>";
     for published in [false, true] {

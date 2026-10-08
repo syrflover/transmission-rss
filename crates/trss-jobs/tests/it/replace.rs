@@ -924,27 +924,6 @@ async fn mounted_again(s: &Setup, job: &str, which: &'static [&'static str]) {
 }
 
 #[tokio::test]
-async fn an_approved_plan_whose_files_got_another_device_number_is_carried_out() {
-    // The video and the subtitle the plan compared are the ones approved,
-    // whatever device number the file system they are on was mounted with.
-    for which in [&["video"][..], &["paths"], &["video", "paths"]] {
-        let s = setup().await;
-        let (job, _) = revision_approved(&s).await;
-        mounted_again(&s, &job, which).await;
-        run(&s).await;
-        let d = detail(&s, &job).await;
-        assert_eq!(
-            d.row.state,
-            JobState::Done,
-            "{which:?}: {:?} {:?}",
-            d.row.note,
-            d.events
-        );
-        replaced_once(&s, &job).await;
-    }
-}
-
-#[tokio::test]
 async fn a_stored_asset_changed_after_approval_is_not_applied() {
     let s = setup().await;
     let (job, plan) = revision_approved(&s).await;

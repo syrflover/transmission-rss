@@ -164,7 +164,7 @@
 | --- | --- | --- | --- |
 | [0092](0092-refactor-baseline.md) | 리팩터링을 시작하며 기준값을 재요 | 완료 | 목표 5, 0118–0126 |
 | [0093](0093-migrated-test-db-once.md) | 테스트 DB를 테스트 프로세스마다 한 번만 만들어요 | 완료 | 없음 |
-| [0094](0094-file-identity-in-core.md) | 같은 파일 알아보기를 trss-core 하나로 모아요 | 대기 | 0092 |
+| [0094](0094-file-identity-in-core.md) | 같은 파일 알아보기를 trss-core 하나로 모아요 | 완료 | 0092 |
 | [0095](0095-episode-text-key-in-core.md) | 회차 텍스트의 키, 정렬, 표기를 trss-core 하나로 모아요 | 대기 | 0092 |
 | [0096](0096-file-and-path-helpers.md) | 파일과 경로의 작은 도우미와 폴더 검사를 모아요 | 대기 | 0092 |
 | [0097](0097-shared-transmission-fake.md) | Transmission 가짜 서버를 trss-collect의 테스트도 쓰게 옮겨요 | 대기 | 0092 |

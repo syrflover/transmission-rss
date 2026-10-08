@@ -74,7 +74,7 @@ workspace 테스트 한 번에 새 DB를 약 1,814번 열어요. 테스트별 �
 
 | 개념 | 지금 | 둘 곳 | 지킬 것 |
 | --- | --- | --- | --- |
-| 같은 파일 알아보기 | trss-jobs의 `area`, trss-collect의 `revision`과 `revisions`, trss-library의 표지, 모두 6곳이에요. 저장 형식은 `dev:ino`, `dev:ino:len:mtime:ctime`, 표지의 `dev`·`ino` 열이에요. | trss-core | inode만 견주는 규칙과 그 남은 위험(사용자 결정, 2026-10-06·07). 세 저장 형식을 모두 읽어요. 해시, CRC, 수정 시각 검사는 각 크레이트에 남아요. 감시 폴더 발견의 `FileIdentity`(크기와 수정 시각)는 다른 개념이라 이름만 바꿔요. |
+| 같은 파일 알아보기 | trss-jobs의 `area`, trss-collect의 `revision`과 `revisions`, trss-library의 표지, 모두 6곳이었어요. [0094](0094-file-identity-in-core.md)에서 trss-core의 `file_id`로 모았어요. 저장 형식은 `dev:ino`, `dev:ino:len:mtime:ctime`, 표지의 `dev`·`ino` 열이에요. | trss-core | inode만 견주는 규칙과 그 남은 위험(사용자 결정, 2026-10-06·07). 세 저장 형식을 모두 읽어요. 해시, CRC, 수정 시각 검사는 각 크레이트에 남아요. 감시 폴더 발견의 `FileIdentity`(크기와 수정 시각)는 다른 개념이라 이름만 바꿔요. |
 | 회차 텍스트의 키, 정렬, `N화` 표기 | trss-subtitles, trss-collect의 Anissia 자막 목록, trss-library의 작품 상세와 목록, trss-jobs, trss-web, 모두 8곳이에요. | trss-core | 저장된 `n:13` 꼴 키. 작품 상세와 목록이 `13.0`을 달리 다루는 차이는 맞는 쪽을 정하고, 화면이 바뀌면 따로 커밋해요. |
 | 요청 간격, `429` 대기, `Retry-After`, 응답 크기 제한 | 요청 간격 저장이 AniList, Anissia, 지난 회차 검색에 3벌, `Retry-After` 읽기가 3벌, 응답 크기 제한이 5벌이에요. | trss-core([ADR 0016](../adr/0016-shared-parts-in-core.md)) | 간격 표 세 개는 그대로 둬요(마이그레이션 없음). 자막 출처의 메모리 안 간격은 다른 개념이라 남겨요. |
 | worker 백그라운드 큐의 루프 | 표지, 시즌 정보, Anissia 편성, Anissia 자막 목록의 4벌이고, 잠금 파일 경로가 5곳에 있어요. | trss-core | 큐마다의 간격과 재시도, [0088](../archive/tickets/5-deployed-verification/0088-queue-survives-panic.md)의 패닉 격리. |

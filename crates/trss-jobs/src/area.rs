@@ -25,9 +25,6 @@ use std::{
     io,
     path::{Path, PathBuf},
 };
-// Only the tests of this file still read a device number and an inode here.
-#[cfg(test)]
-use std::os::unix::fs::MetadataExt;
 
 use sha2::{Digest, Sha256};
 use trss_core::file_id::FileId;
@@ -211,13 +208,6 @@ pub fn object_of(meta: &std::fs::Metadata) -> String {
     FileId::of(meta).to_string()
 }
 
-/// Kept for the tests of this file only; the rule is
-/// [`trss_core::file_id::same_recorded_file`].
-#[cfg(test)]
-fn same_object(a: &str, b: &str) -> bool {
-    trss_core::file_id::same_recorded_file(a, b)
-}
-
 /// A regular file's length, SHA-256 (lower-case hex) and object, read whole.
 /// A link or anything else at `path` is refused, and so is a file that is
 /// replaced while it is opened.
@@ -257,6 +247,8 @@ pub fn sync_dir(path: &Path) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::MetadataExt;
+
     use super::*;
 
     #[test]
@@ -329,23 +321,5 @@ mod tests {
         std::fs::write(&path, b"a").unwrap();
         let meta = std::fs::metadata(&path).unwrap();
         assert_eq!(object_of(&meta), format!("{}:{}", meta.dev(), meta.ino()));
-    }
-
-    #[test]
-    fn an_object_is_the_same_file_whatever_its_device_number() {
-        // The same file after its file system was mounted again.
-        assert!(same_object("47:8716384", "46:8716384"));
-        // A record a build that read birth times made is the file of its inode.
-        assert!(same_object("47:8716384:1759700000123456789", "46:8716384"));
-        assert!(same_object(
-            "47:8716384:1759700000123456789",
-            "46:8716384:1759800000000000000"
-        ));
-        // Another inode.
-        assert!(!same_object("47:8716384", "47:8716385"));
-        assert!(!same_object("47:8716384:1759700000123456789", "47:8716385"));
-        // What names no inode is no file.
-        assert!(!same_object("", ""));
-        assert!(!same_object("8716384", "8716384"));
     }
 }
