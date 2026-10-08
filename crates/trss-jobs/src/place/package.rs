@@ -49,7 +49,8 @@
 
 use std::collections::BTreeMap;
 
-use trss_subtitles::{episode::numeric_key, verify::Format};
+use trss_core::episode::{episode_label, EpisodeNumber};
+use trss_subtitles::verify::Format;
 
 use crate::{
     mapping::{whole, Mapped, Mapping},
@@ -240,13 +241,6 @@ impl Numbering {
     }
 }
 
-fn label(episode: &str) -> String {
-    match numeric_key(episode) {
-        Some(_) => format!("{episode}화"),
-        None => episode.to_owned(),
-    }
-}
-
 fn format_name(format: SubtitleFormat) -> &'static str {
     match format {
         SubtitleFormat::Ass => "ASS",
@@ -314,7 +308,7 @@ pub fn plan(candidates: &[Candidate<'_>], files: &[File<'_>], ctx: &Context<'_>)
             .filter(|(_, t)| matches!(t, Target::Episode { .. }))
             .collect();
         let theirs = unresolved.iter().find(|(c, _)| match &numbers[i] {
-            Some(key) => numeric_key(c.episode.trim()).as_ref() == Some(key),
+            Some(key) => EpisodeNumber::parse(c.episode.trim()).is_some_and(|n| n.is_key(key)),
             None => alone && named(base(i)) == Named::Nothing,
         });
         match found.as_slice() {
@@ -390,7 +384,8 @@ pub fn plan(candidates: &[Candidate<'_>], files: &[File<'_>], ctx: &Context<'_>)
     let mut mark = None;
     for (&i, (candidate, target)) in &chosen {
         if let (Some(key), Target::Episode { episode, .. }) = (&numbers[i], target) {
-            let anissia = numeric_key(candidate.episode.trim()).as_ref() == Some(key);
+            let anissia =
+                EpisodeNumber::parse(candidate.episode.trim()).is_some_and(|n| n.is_key(key));
             let season = *key == episode.to_string();
             numbering = numbering.with(match (anissia, season) {
                 (true, true) => Numbering::Both,
@@ -405,7 +400,7 @@ pub fn plan(candidates: &[Candidate<'_>], files: &[File<'_>], ctx: &Context<'_>)
     // is named with, else the job's season; the reason says which.
     let expected_mark = mark.map_or(ctx.season, |(m, _)| m);
     let held_against = match mark {
-        Some((m, episode)) => format!("후보의 {} 파일에 적힌 시즌({m})", label(episode)),
+        Some((m, episode)) => format!("후보의 {} 파일에 적힌 시즌({m})", episode_label(episode)),
         None => format!("이 작업의 시즌({})", ctx.season),
     };
     let range = || match ctx.total {
@@ -428,7 +423,7 @@ pub fn plan(candidates: &[Candidate<'_>], files: &[File<'_>], ctx: &Context<'_>)
         let Some(number) = whole(&key) else {
             return Err(format!(
                 "{}는 정수 회차가 아니라 시즌의 회차로 정하지 못했어요",
-                label(&key)
+                episode_label(&key)
             ));
         };
         let through = ctx.mapping.map(|m| (m, m.season_episode(&key)));
@@ -450,13 +445,16 @@ pub fn plan(candidates: &[Candidate<'_>], files: &[File<'_>], ctx: &Context<'_>)
             (_, Some((_, Mapped::NotReceived))) => {
                 return Err(format!(
                     "회차 대응이 {}를 받지 않는 회차로 정해 두었어요",
-                    label(&key)
+                    episode_label(&key)
                 ))
             }
             (_, Some((m, Mapped::Unmapped))) => {
                 return Err(match m.decided_offset() {
                     None => "이 제작자의 회차 대응이 아직 미정이에요".to_owned(),
-                    Some(_) => format!("{}는 회차 대응으로 옮길 수 없는 회차예요", label(&key)),
+                    Some(_) => format!(
+                        "{}는 회차 대응으로 옮길 수 없는 회차예요",
+                        episode_label(&key)
+                    ),
                 })
             }
             (Numbering::Unknown | Numbering::Mixed, Some((_, Mapped::Episode(n))))
@@ -464,7 +462,7 @@ pub fn plan(candidates: &[Candidate<'_>], files: &[File<'_>], ctx: &Context<'_>)
             {
                 return Err(format!(
                     "파일 이름의 {}가 Anissia의 회차인지 시즌의 회차인지 정하지 못했어요",
-                    label(&key)
+                    episode_label(&key)
                 ))
             }
             (_, Some((_, Mapped::Episode(n)))) => Target::Episode {
@@ -479,7 +477,7 @@ pub fn plan(candidates: &[Candidate<'_>], files: &[File<'_>], ctx: &Context<'_>)
             {
                 Err(format!(
                     "{}가 시즌의 {} 밖이라 다른 시즌의 파일로 보여요",
-                    label(&key),
+                    episode_label(&key),
                     range()
                 ))
             }
@@ -588,7 +586,10 @@ pub fn plan(candidates: &[Candidate<'_>], files: &[File<'_>], ctx: &Context<'_>)
             .map(|c| {
                 (
                     c.item_id,
-                    format!("받은 묶음에 후보의 {} 파일이 없어요", label(c.episode)),
+                    format!(
+                        "받은 묶음에 후보의 {} 파일이 없어요",
+                        episode_label(c.episode)
+                    ),
                 )
             })
             .collect(),
@@ -677,7 +678,7 @@ fn named_target(base: &str, ctx: &Context<'_>) -> Result<Placed, String> {
     let Some(number) = whole(&key) else {
         return Err(format!(
             "{}는 정수 회차가 아니라 시즌의 회차로 정하지 못했어요",
-            label(&key)
+            episode_label(&key)
         ));
     };
     let placed = match ctx.mapping.map(|m| (m, m.season_episode(&key))) {
@@ -697,20 +698,23 @@ fn named_target(base: &str, ctx: &Context<'_>) -> Result<Placed, String> {
         Some((_, Mapped::NotReceived)) => {
             return Err(format!(
                 "회차 대응이 {}를 받지 않는 회차로 정해 두었어요",
-                label(&key)
+                episode_label(&key)
             ))
         }
         Some((m, Mapped::Unmapped)) => {
             return Err(match m.decided_offset() {
                 None => "이 제작자의 회차 대응이 아직 미정이에요".to_owned(),
-                Some(_) => format!("{}는 회차 대응으로 옮길 수 없는 회차예요", label(&key)),
+                Some(_) => format!(
+                    "{}는 회차 대응으로 옮길 수 없는 회차예요",
+                    episode_label(&key)
+                ),
             })
         }
     };
     if placed.episode < 1 || ctx.total.is_some_and(|n| placed.episode > i64::from(n)) {
         return Err(format!(
             "{}가 시즌의 {} 밖이에요",
-            label(&key),
+            episode_label(&key),
             match ctx.total {
                 Some(n) => format!("1–{n}화"),
                 None => "1화부터".to_owned(),

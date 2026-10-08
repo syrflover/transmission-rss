@@ -146,10 +146,7 @@ fn target(
     let Some(text) = text.map(str::trim).filter(|t| !t.is_empty()) else {
         return Err("원래 회차의 기록이 없어요".to_owned());
     };
-    let label = match trss_subtitles::episode::numeric_key(text) {
-        Some(_) => format!("{text}화"),
-        None => text.to_owned(),
-    };
+    let label = trss_core::episode::episode_label(text);
     match mapping.season_episode(text) {
         Mapped::Episode(n) if n >= 1 && total.is_none_or(|t| n <= i64::from(t)) => Ok(n),
         Mapped::Episode(n) => Err(format!(

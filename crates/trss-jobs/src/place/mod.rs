@@ -120,7 +120,7 @@ use std::{
 
 use tokio_util::sync::CancellationToken;
 use trss_archive::run::Unpacker;
-use trss_core::{file_id::same_recorded_file, Clock, Db, Millis};
+use trss_core::{episode::episode_label, file_id::same_recorded_file, Clock, Db, Millis};
 use trss_subtitles::verify::{self, Format};
 
 use crate::{
@@ -130,7 +130,6 @@ use crate::{
         AssetKind, Chosen, EffectKind, EffectState, FileState, ItemState, Outcome, PlanAction,
         PlanState, StepKind, StepState, SubtitleFormat,
     },
-    runner::episode_label,
     store::{FileRow, ItemRow, JobError, JobStore, AUTO, FIND, RELOCATE, UPLOAD},
 };
 use files::{Copied, Published};

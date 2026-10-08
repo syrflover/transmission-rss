@@ -8,7 +8,7 @@
 //! - A link that names episodes is taken when one of them is the candidate's:
 //!   a single one (`24화`, `제24화`, `EP24`, `고양이와 용 08`) when it is the
 //!   same, a range (`1 ~ 12화`, `03-04`, `01~13.ass`) when it holds it. The
-//!   comparison is the app's (`numeric_key`): `08`, `8` and `8.0` are one
+//!   comparison is the app's (`trss_core::episode`): `08`, `8` and `8.0` are one
 //!   episode, and `8.5` is never rounded.
 //! - A font (`폰트`, `글꼴`, `font`) that names no episode is always taken: an
 //!   ASS needs it. One that names an episode (`24화 (폰트 포함)`) is that
@@ -30,46 +30,7 @@
 //! and dates, numbers over 1000 and decimals but `.5` ([`mentions`] has the
 //! ranges).
 
-use std::cmp::Ordering;
-
-/// The key two episode texts share when they are one episode: a decimal
-/// number without its leading zeros and the trailing zeros of its decimal part
-/// (`013`, `13` and `13.0` are `13`; `13.50` is `13.5`), as the app compares
-/// them (`docs/specs/library.md`, 자막의 회차 대응). `None` for any other
-/// text. No float is made.
-pub fn numeric_key(text: &str) -> Option<String> {
-    let (whole, decimal) = match text.split_once('.') {
-        Some((whole, decimal)) => (whole, Some(decimal)),
-        None => (text, None),
-    };
-    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
-    if !digits(whole) || decimal.is_some_and(|d| !digits(d)) {
-        return None;
-    }
-    let integer = match whole.trim_start_matches('0') {
-        "" => "0",
-        integer => integer,
-    };
-    match decimal.map(|d| d.trim_end_matches('0')).unwrap_or_default() {
-        "" => Some(integer.to_owned()),
-        fraction => Some(format!("{integer}.{fraction}")),
-    }
-}
-
-/// Two keys of [`numeric_key`] as the numbers they are.
-fn compare(a: &str, b: &str) -> Ordering {
-    let split = |k: &str| match k.split_once('.') {
-        Some((i, f)) => (i.to_owned(), f.to_owned()),
-        None => (k.to_owned(), String::new()),
-    };
-    let ((ai, af), (bi, bf)) = (split(a), split(b));
-    // No leading zeros: the longer whole part is the larger one. The decimal
-    // parts have no trailing zeros, so their text order is their order.
-    ai.len()
-        .cmp(&bi.len())
-        .then_with(|| ai.cmp(&bi))
-        .then_with(|| af.cmp(&bf))
-}
+use trss_core::episode::{EpisodeKey, EpisodeNumber};
 
 /// Episodes from one to another, both included (one episode: the same key
 /// twice).
@@ -80,8 +41,12 @@ pub struct Span {
 }
 
 impl Span {
-    pub(crate) fn holds(&self, key: &str) -> bool {
-        compare(&self.from, key) != Ordering::Greater && compare(key, &self.to) != Ordering::Greater
+    pub(crate) fn holds(&self, key: &EpisodeNumber) -> bool {
+        let number = |text: &str| EpisodeNumber::parse(text);
+        match (number(&self.from), number(&self.to)) {
+            (Some(from), Some(to)) => from <= *key && *key <= to,
+            _ => false,
+        }
     }
 }
 
@@ -193,12 +158,12 @@ fn mentions(text: &str) -> Vec<(Span, bool)> {
                 let tilde = !matches!(joint, '-' | '–');
                 let spaced = dash > end || gap > dash + 1;
                 let either = marked || marked_last;
-                if (tilde || !spaced || either) && compare(&first, &last) == Ordering::Less {
+                if (tilde || !spaced || either) && first < last {
                     keep(
                         &mut found,
                         Span {
-                            from: first,
-                            to: last,
+                            from: first.to_string(),
+                            to: last.to_string(),
                         },
                         either,
                         dotted(i, end) || dotted(start, end_last),
@@ -210,8 +175,8 @@ fn mentions(text: &str) -> Vec<(Span, bool)> {
                 keep(
                     &mut found,
                     Span {
-                        from: first.clone(),
-                        to: first,
+                        from: first.to_string(),
+                        to: first.to_string(),
                     },
                     marked,
                     dotted(i, end),
@@ -223,8 +188,8 @@ fn mentions(text: &str) -> Vec<(Span, bool)> {
         keep(
             &mut found,
             Span {
-                from: first.clone(),
-                to: first,
+                from: first.to_string(),
+                to: first.to_string(),
             },
             marked,
             dotted(i, end),
@@ -266,7 +231,9 @@ fn episode_word_at(chars: &[char], at: usize) -> usize {
 fn keep(found: &mut Vec<(Span, bool)>, span: Span, marked: bool, dotted: bool) {
     let plausible = |key: &str| {
         let (whole, fraction) = key.split_once('.').unwrap_or((key, ""));
-        compare(whole, "1000") != Ordering::Greater
+        EpisodeNumber::parse(whole)
+            .and_then(|n| n.whole())
+            .is_some_and(|n| n <= 1000)
             && match dotted {
                 true => fraction == "5",
                 false => fraction.is_empty(),
@@ -303,8 +270,8 @@ fn date_at(chars: &[char], i: usize) -> Option<usize> {
     (1..=2).contains(&day).then_some(day_at + day)
 }
 
-/// The number starting at `i` (`08`, `12.5`) as its key, and where it ends.
-fn number_at(chars: &[char], i: usize) -> Option<(String, usize)> {
+/// The number starting at `i` (`08`, `12.5`), and where it ends.
+fn number_at(chars: &[char], i: usize) -> Option<(EpisodeNumber, usize)> {
     let digits_from = |at: usize| {
         chars[at..]
             .iter()
@@ -321,7 +288,7 @@ fn number_at(chars: &[char], i: usize) -> Option<(String, usize)> {
         end += 1 + digits_from(end + 1);
     }
     let text: String = chars[i..end].iter().collect();
-    Some((numeric_key(&text)?, end))
+    Some((EpisodeNumber::parse(&text)?, end))
 }
 
 /// Whether the number at `start` is not glued to a word before it, but for
@@ -410,11 +377,11 @@ fn skip_spaces(chars: &[char], from: usize) -> usize {
 /// Which of a post's links, by the words of each, serve `episode`: their
 /// places in `texts`, in order, or why none does (see the module docs).
 pub fn choose(episode: &str, texts: &[&str]) -> Result<Vec<usize>, String> {
-    let key = numeric_key(episode.trim());
+    let key = EpisodeKey::of(episode.trim());
     let held: Vec<Holds> = texts.iter().map(|t| holds(t)).collect();
     let serves = |h: &Holds| match h {
         Holds::Episodes(spans) => key
-            .as_deref()
+            .number()
             .is_some_and(|k| spans.iter().any(|s| s.holds(k))),
         Holds::Bundle => true,
         Holds::Font | Holds::Nothing => false,
@@ -430,10 +397,7 @@ pub fn choose(episode: &str, texts: &[&str]) -> Result<Vec<usize>, String> {
             return Ok(all.filter(|i| font(i) || *i == only).collect());
         }
     }
-    let label = match &key {
-        Some(key) => format!("{key}화"),
-        None => episode.trim().to_owned(),
-    };
+    let label = key.label();
     let unnamed = subtitles
         .iter()
         .filter(|i| held[**i] == Holds::Nothing)
@@ -461,30 +425,6 @@ mod tests {
 
     fn one(n: &str) -> Holds {
         Holds::Episodes(vec![span(n, n)])
-    }
-
-    #[test]
-    fn the_key_is_the_apps() {
-        for (text, key) in [
-            ("013", Some("13")),
-            ("13", Some("13")),
-            ("13.0", Some("13")),
-            ("13.50", Some("13.5")),
-            ("0", Some("0")),
-            ("00", Some("0")),
-            ("0.5", Some("0.5")),
-            ("SP", None),
-            ("", None),
-            ("1.", None),
-            (".5", None),
-            ("1e3", None),
-            ("-1", None),
-        ] {
-            assert_eq!(numeric_key(text).as_deref(), key, "{text}");
-        }
-        assert_eq!(compare("9", "10"), Ordering::Less);
-        assert_eq!(compare("12.5", "12.25"), Ordering::Greater);
-        assert_eq!(compare("12", "12.5"), Ordering::Less);
     }
 
     /// The words of the links seen on real posts (2026-10-03).

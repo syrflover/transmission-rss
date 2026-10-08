@@ -42,6 +42,7 @@ use std::{sync::Arc, time::Duration};
 
 use scraper::{Html, Selector};
 use trss_browser::Page;
+use trss_core::episode::{EpisodeKey, EpisodeNumber};
 use url::Url;
 
 use crate::{
@@ -171,19 +172,20 @@ fn post_address(post: &Url, reach: Reach) -> Result<Url, Failure> {
 /// holds it (`해골기사님2 (1-12)`), else the only card when it names no
 /// episode. One card only: each is a check of its own.
 pub fn choose_card(episode: &str, titles: &[&str]) -> Result<usize, String> {
-    let key = episode::numeric_key(episode.trim());
+    let key = EpisodeKey::of(episode.trim());
     let held: Vec<Holds> = titles.iter().map(|t| episode::holds(t)).collect();
     let spans = |h: &Holds| match h {
         Holds::Episodes(spans) => spans.clone(),
         _ => Vec::new(),
     };
-    if let Some(key) = key.as_deref() {
+    if let Some(number) = key.number() {
+        let only = |text: &str| EpisodeNumber::parse(text).is_some_and(|n| n == *number);
         let exact = held
             .iter()
-            .position(|h| spans(h).iter().any(|s| s.from == key && s.to == key));
+            .position(|h| spans(h).iter().any(|s| only(&s.from) && only(&s.to)));
         let within = || {
             held.iter()
-                .position(|h| spans(h).iter().any(|s| s.holds(key)))
+                .position(|h| spans(h).iter().any(|s| s.holds(number)))
         };
         if let Some(found) = exact.or_else(within) {
             return Ok(found);
@@ -192,10 +194,7 @@ pub fn choose_card(episode: &str, titles: &[&str]) -> Result<usize, String> {
     if let [Holds::Nothing | Holds::Bundle] = held[..] {
         return Ok(0);
     }
-    let label = match &key {
-        Some(key) => format!("{key}화"),
-        None => episode.trim().to_owned(),
-    };
+    let label = key.label();
     Err(match titles.len() {
         0 => "게시물에 받기 카드가 없어요".to_owned(),
         _ => format!("게시물에 {label} 받기 카드가 없어요"),

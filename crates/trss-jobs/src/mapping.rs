@@ -93,9 +93,9 @@ use std::collections::{BTreeMap, HashMap};
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use trss_collect::{
     episode_offset::{ranges, signed},
-    store::anissia::{episode_key, numeric_episode},
+    store::anissia::episode_key,
 };
-use trss_core::Millis;
+use trss_core::{episode::EpisodeNumber, Millis};
 
 /// How long after the last scheduled episode aired a post still belongs to it.
 const LAST_WINDOW_MS: i64 = 7 * 24 * 60 * 60 * 1000;
@@ -181,11 +181,8 @@ pub enum Mapped {
 
 /// A positive whole episode number (not `0`, `13.5` or text).
 pub(crate) fn whole(text: &str) -> Option<i64> {
-    let n = numeric_episode(text)?;
-    match n.parse::<i64>() {
-        Ok(n) if n > 0 => Some(n),
-        _ => None,
-    }
+    let n = i64::try_from(EpisodeNumber::parse(text)?.whole()?).ok()?;
+    (n > 0).then_some(n)
 }
 
 impl Mapping {
@@ -424,17 +421,17 @@ pub fn conflicts(
         if mapping.exception_of(text).is_some() {
             continue;
         }
-        let reason = match numeric_episode(text) {
+        let reason = match EpisodeNumber::parse(text) {
             None => Some(format!(
                 "숫자가 아닌 회차({text})는 정한 차이로 알 수 없어요"
             )),
-            Some(n) if n == "0" => None,
-            Some(n) if n.contains('.') => {
+            Some(n) if n.whole() == Some(0) => None,
+            Some(n) if !n.is_whole() => {
                 Some(format!("소수 회차({text})는 정한 차이로 알 수 없어요"))
             }
-            Some(n) => match n.parse::<u32>() {
-                Err(_) => Some(format!("회차 번호({text})가 너무 커요")),
-                Ok(n) => {
+            Some(n) => match n.whole().and_then(|n| u32::try_from(n).ok()) {
+                None => Some(format!("회차 번호({text})가 너무 커요")),
+                Some(n) => {
                     let video = i64::from(n) + offset;
                     let outside = video < 1 || total.is_some_and(|t| video > i64::from(t));
                     if outside {

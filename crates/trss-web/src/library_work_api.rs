@@ -248,7 +248,7 @@ use trss_collect::{
     rss::save_path,
     store::{channels::ChannelWithRules, revisions::Revision},
 };
-use trss_core::settings::policy::FormatOrder;
+use trss_core::{episode::EpisodeNumber, settings::policy::FormatOrder};
 use trss_jobs::place::cleanup;
 use trss_library::store::{
     artwork::JobKind,
@@ -799,7 +799,7 @@ fn attach_revisions(
         if FsPath::new(&row.folder).parent() != Some(work_folder) {
             continue;
         }
-        let number = episode.parse::<f64>().ok();
+        let number = EpisodeNumber::parse(&episode).map(|n| n.to_f64());
         let same = |e: &EpisodeView| match (e.sort, number) {
             (Some(a), Some(b)) => a == b,
             _ => e.episode == episode,

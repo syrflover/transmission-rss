@@ -22,7 +22,10 @@ use crate::{
     discovery::{FileKind, Reason},
     store::library::{AppliedCopy, FileRecord, UnrecognizedRecord},
 };
-use trss_core::Millis;
+use trss_core::{
+    episode::{EpisodeKey, EpisodeNumber},
+    Millis,
+};
 
 /// An episode of a season with its files.
 #[derive(Debug, Clone, PartialEq)]
@@ -57,30 +60,6 @@ pub struct WorkDetail {
     /// Ascending.
     pub seasons: Vec<SeasonDetail>,
     pub unrecognized: Vec<UnrecognizedRecord>,
-}
-
-/// An episode as a key: whole and decimal numbers by value (the fraction as its
-/// digits without trailing zeros, which compare as text the way fractions
-/// compare as numbers), anything else by its text and after every number.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-enum EpisodeKey {
-    Number(u128, String),
-    Other(String),
-}
-
-fn key_of(episode: &str) -> EpisodeKey {
-    let (whole, fraction) = match episode.split_once('.') {
-        Some((whole, fraction)) => (whole, Some(fraction)),
-        None => (episode, None),
-    };
-    let digits = |text: &str| !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit());
-    if digits(whole) && fraction.is_none_or(digits) {
-        if let Ok(number) = whole.parse::<u128>() {
-            let fraction = fraction.unwrap_or("").trim_end_matches('0');
-            return EpisodeKey::Number(number, fraction.to_owned());
-        }
-    }
-    EpisodeKey::Other(episode.to_owned())
 }
 
 #[derive(Default)]
@@ -157,7 +136,7 @@ pub(super) fn detail(conn: &Connection, id: &str) -> rusqlite::Result<Option<Wor
             let gathered = seasons
                 .entry(season)
                 .or_default()
-                .entry(key_of(&episode))
+                .entry(EpisodeKey::of(&episode))
                 .or_default();
             if gathered.written.is_empty() || episode < gathered.written {
                 gathered.written = episode;
@@ -175,9 +154,7 @@ pub(super) fn detail(conn: &Connection, id: &str) -> rusqlite::Result<Option<Wor
             episodes: episodes
                 .into_iter()
                 .map(|(key, gathered)| EpisodeDetail {
-                    number: matches!(key, EpisodeKey::Number(..))
-                        .then(|| gathered.written.parse::<f64>().ok())
-                        .flatten(),
+                    number: key.number().map(EpisodeNumber::to_f64),
                     episode: gathered.written,
                     video: gathered.video,
                     subtitle: gathered.subtitle,
@@ -235,7 +212,7 @@ pub(super) fn season_holdings(
     )?;
     let episodes: std::collections::BTreeSet<EpisodeKey> = stmt
         .query_map(params![id, season], |row| {
-            Ok(key_of(&row.get::<_, String>(0)?))
+            Ok(EpisodeKey::of(&row.get::<_, String>(0)?))
         })?
         .collect::<rusqlite::Result<_>>()?;
     Ok(Some(SeasonHoldings {
@@ -283,13 +260,9 @@ pub(super) fn season_episodes(
     while let Some(row) = cursor.next()? {
         let episode: String = row.get(0)?;
         let kind: String = row.get(1)?;
-        let EpisodeKey::Number(whole, fraction) = key_of(&episode) else {
-            continue;
-        };
-        let Some(number) = fraction
-            .is_empty()
-            .then(|| u32::try_from(whole).ok())
-            .flatten()
+        let Some(number) = EpisodeNumber::parse(&episode)
+            .and_then(|n| n.whole())
+            .and_then(|n| u32::try_from(n).ok())
         else {
             continue;
         };
@@ -389,31 +362,6 @@ mod tests {
         store.add_folder("/w".into(), scan, 100, &[]).await.unwrap();
         let id = store.overview().await.unwrap()[0].id.clone();
         (store, id)
-    }
-
-    #[test]
-    fn episodes_order_as_numbers_and_other_text_comes_last() {
-        let mut keys: Vec<(&str, EpisodeKey)> =
-            ["10", "9", "17.5", "17", "18", "SP", "2.25", "2.5", "02"]
-                .into_iter()
-                .map(|e| (e, key_of(e)))
-                .collect();
-        keys.sort_by(|a, b| a.1.cmp(&b.1).then(a.0.cmp(b.0)));
-        let order: Vec<&str> = keys.into_iter().map(|(e, _)| e).collect();
-        assert_eq!(
-            order,
-            ["02", "2.25", "2.5", "9", "10", "17", "17.5", "18", "SP"]
-        );
-        // Spellings of one number are one key.
-        assert_eq!(key_of("013"), key_of("13"));
-        assert_eq!(key_of("1.50"), key_of("1.5"));
-        assert_ne!(key_of("1.5"), key_of("1"));
-        // Larger than any float keeps its digits.
-        assert!(key_of("9007199254740993") < key_of("9007199254740994"));
-        // Not a number: a sign, an empty part or a second dot.
-        for text in ["-1", ".5", "1.", "1.2.3", "1e3", ""] {
-            assert!(matches!(key_of(text), EpisodeKey::Other(_)), "{text}");
-        }
     }
 
     #[tokio::test]

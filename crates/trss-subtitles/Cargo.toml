@@ -16,6 +16,7 @@ test-hooks = []
 
 [dependencies]
 trss-browser.workspace = true
+trss-core.workspace = true
 axum = { workspace = true, optional = true }
 bytes.workspace = true
 # Decodes a subtitle in CP949 (`EUC_KR` is Windows-949) and UTF-16
@@ -35,7 +36,6 @@ url.workspace = true
 zip.workspace = true
 
 [dev-dependencies]
-trss-core = { workspace = true }
 axum.workspace = true
 futures.workspace = true
 sha2.workspace = true

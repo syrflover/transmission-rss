@@ -2,7 +2,8 @@
 //! 파일의 회차): for a candidate's job, the candidate's episode taken through
 //! its source's mapping, checked against the number the file's name says.
 
-use trss_subtitles::episode::{holds, numeric_key, Holds};
+use trss_core::episode::{episode_label, EpisodeNumber};
+use trss_subtitles::episode::{holds, Holds};
 
 use crate::mapping::{whole, Mapped, Mapping};
 
@@ -95,7 +96,7 @@ pub enum Target {
 pub enum Named {
     /// No number that stands for an episode.
     Nothing,
-    /// One episode, as [`numeric_key`] has it (`13`, `13.5`).
+    /// One episode, as [`EpisodeNumber`]'s `Display` has it (`13`, `13.5`).
     One(String),
     /// Several episodes or a range: not one file of one episode.
     Several,
@@ -110,14 +111,6 @@ pub fn named(name: &str) -> Named {
             _ => Named::Several,
         },
         Holds::Font | Holds::Bundle | Holds::Nothing => Named::Nothing,
-    }
-}
-
-/// `13화`, or the text as it is when it is no number.
-fn label(episode: &str) -> String {
-    match numeric_key(episode) {
-        Some(_) => format!("{episode}화"),
-        None => episode.to_owned(),
     }
 }
 
@@ -144,7 +137,7 @@ fn candidate_target(
             }
             None => Err(format!(
                 "후보의 회차 {}는 정수 회차가 아니라 시즌의 회차로 옮기지 못했어요",
-                label(candidate)
+                episode_label(candidate)
             )),
         },
         Some(mapping) => match mapping.season_episode(candidate) {
@@ -158,14 +151,14 @@ fn candidate_target(
             )),
             Mapped::NotReceived => Err(format!(
                 "회차 대응이 후보의 {}를 받지 않는 회차로 정해 두었어요",
-                label(candidate)
+                episode_label(candidate)
             )),
             Mapped::Unmapped if mapping.decided_offset().is_none() => {
                 Err("이 제작자의 회차 대응이 아직 미정이에요".to_owned())
             }
             Mapped::Unmapped => Err(format!(
                 "후보의 회차 {}는 회차 대응으로 옮길 수 없는 회차예요",
-                label(candidate)
+                episode_label(candidate)
             )),
         },
     }
@@ -197,7 +190,7 @@ pub fn of_candidate(
         };
         return Target::Ask(format!(
             "후보의 {}를 옮긴 시즌 {episode}화가 시즌의 {range} 밖이에요",
-            label(candidate)
+            episode_label(candidate)
         ));
     }
     match named(name) {
@@ -205,13 +198,13 @@ pub fn of_candidate(
         Named::Nothing => Target::Ask("파일 이름에 회차 번호가 없어요".to_owned()),
         Named::Several => Target::Ask("파일 이름이 회차 여럿을 가리켜요".to_owned()),
         Named::One(key) => {
-            let as_written = numeric_key(candidate.trim()).is_some_and(|c| c == key);
+            let as_written = EpisodeNumber::parse(candidate.trim()).is_some_and(|c| c.is_key(&key));
             if as_written || key == episode.to_string() {
                 target
             } else {
                 Target::Ask(format!(
                     "파일 이름의 {key}화가 후보의 {}(시즌 {episode}화)와 달라요",
-                    label(candidate)
+                    episode_label(candidate)
                 ))
             }
         }

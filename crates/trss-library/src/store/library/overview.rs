@@ -35,7 +35,7 @@ use crate::{
     discovery::{kind_of, FileKind, Reason},
     store::seasons,
 };
-use trss_core::Millis;
+use trss_core::{episode::EpisodeNumber, Millis};
 
 /// A run of consecutive episodes, as written (`first` and `last` are the
 /// written forms of its ends; they are equal for a single episode).
@@ -99,32 +99,24 @@ pub struct WorkOverview {
     pub linked_titles: Vec<String>,
 }
 
-/// An episode as a key: whole numbers by value (`13.0` is `13`, as the work
-/// detail reads it), anything else by its text.
+/// An episode as the list keys it: a whole number by value (`13.0` is `13`,
+/// as the work detail reads it), anything else, a number with a fraction
+/// included, by its text.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-enum EpisodeKey {
+enum ListKey {
     Number(u128),
     Other(String),
 }
 
-fn key_of(episode: &str) -> EpisodeKey {
-    // A fraction of zeros only (`13.0`) leaves the whole number.
-    let whole = match episode.split_once('.') {
-        Some((whole, fraction)) if !fraction.is_empty() && fraction.bytes().all(|b| b == b'0') => {
-            whole
-        }
-        _ => episode,
-    };
-    if !whole.is_empty() && whole.bytes().all(|b| b.is_ascii_digit()) {
-        if let Ok(number) = whole.parse::<u128>() {
-            return EpisodeKey::Number(number);
-        }
+fn key_of(episode: &str) -> ListKey {
+    match EpisodeNumber::parse(episode).and_then(|n| n.whole()) {
+        Some(number) => ListKey::Number(number),
+        None => ListKey::Other(episode.to_owned()),
     }
-    EpisodeKey::Other(episode.to_owned())
 }
 
 /// The episodes (one written form for each distinct episode) in order.
-type Episodes = BTreeMap<EpisodeKey, String>;
+type Episodes = BTreeMap<ListKey, String>;
 
 fn add(episodes: &mut Episodes, episode: &str) {
     let written = episodes
@@ -140,7 +132,7 @@ fn ranges(episodes: &Episodes) -> Vec<EpisodeRange> {
     let mut last_number: Option<u128> = None;
     for (key, written) in episodes {
         match key {
-            EpisodeKey::Number(n) => {
+            ListKey::Number(n) => {
                 if last_number.is_some_and(|last| last.checked_add(1) == Some(*n)) {
                     out.last_mut().expect("a run is open").last = written.clone();
                 } else {
@@ -151,7 +143,7 @@ fn ranges(episodes: &Episodes) -> Vec<EpisodeRange> {
                 }
                 last_number = Some(*n);
             }
-            EpisodeKey::Other(_) => out.push(EpisodeRange {
+            ListKey::Other(_) => out.push(EpisodeRange {
                 first: written.clone(),
                 last: written.clone(),
             }),

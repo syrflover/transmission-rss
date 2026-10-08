@@ -145,7 +145,7 @@ use std::{
 use sha2::{Digest, Sha256};
 use tokio::{io::AsyncWriteExt, sync::Notify};
 use tokio_util::sync::CancellationToken;
-use trss_core::{file_id::same_recorded_file, Clock, Millis};
+use trss_core::{episode::episode_label, file_id::same_recorded_file, Clock, Millis};
 use trss_subtitles::{
     auth::{self, AuthBrowser, AuthPage, Waited},
     verify,
@@ -2587,14 +2587,6 @@ impl Runner {
         }
         println!("Subtitle job {job}: {} ({done}/{total})", state.code());
         Ok(())
-    }
-}
-
-/// `"11"` as `11화`; a text that is not a number as it is.
-pub fn episode_label(episode: &str) -> String {
-    match episode.parse::<f64>() {
-        Ok(_) => format!("{episode}화"),
-        Err(_) => episode.to_owned(),
     }
 }
 

@@ -6,7 +6,7 @@
 use std::collections::{btree_map::Entry, BTreeMap};
 
 use rusqlite::{params, Connection, OptionalExtension, Row, TransactionBehavior};
-use trss_core::Millis;
+use trss_core::{episode::EpisodeNumber, Millis};
 
 use crate::{
     model::{
@@ -2271,7 +2271,7 @@ pub fn episode_files(
     let (mut videos, mut subtitles) = (Vec::new(), Vec::new());
     for row in rows {
         let (path, text, kind) = row?;
-        if trss_subtitles::episode::numeric_key(&text).as_deref() != Some(key.as_str()) {
+        if !EpisodeNumber::parse(&text).is_some_and(|n| n.is_key(&key)) {
             continue;
         }
         match kind.as_str() {
@@ -2311,8 +2311,9 @@ pub fn season_files(
     let mut by_episode: BTreeMap<i64, EpisodeFiles> = BTreeMap::new();
     for row in rows {
         let (path, text, kind) = row?;
-        let Some(episode) =
-            trss_subtitles::episode::numeric_key(&text).and_then(|key| key.parse::<i64>().ok())
+        let Some(episode) = EpisodeNumber::parse(&text)
+            .and_then(|n| n.whole())
+            .and_then(|n| i64::try_from(n).ok())
         else {
             continue;
         };

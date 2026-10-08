@@ -22,7 +22,10 @@ use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use uuid::Uuid;
 
 use super::{AnissiaStore, Result};
-use trss_core::Millis;
+use trss_core::{
+    episode::{stored_key, EpisodeNumber},
+    Millis,
+};
 
 /// A line as the worker read it, ready to be compared with the last
 /// observation of its creator.
@@ -119,36 +122,11 @@ pub struct Received {
 
 /// The key two episode texts of Anissia's lines share when they are one
 /// episode, which the revision mark and the subscribed creator's receipts
-/// (`trss-jobs`) compare by: `n:` and a decimal number without its leading
-/// zeros and the trailing zeros of its decimal part (`013`, `13` and `13.0`
-/// are `n:13`; `13.50` is `n:13.5`), the same number the subtitle sources use
-/// (`trss_subtitles::episode::numeric_key`, which this crate does not see);
-/// `t:` and the text as written for any other (`SP`). No float is made.
+/// (`trss-jobs`) compare by: `n:` and the number (`013`, `13` and `13.0` are
+/// `n:13`; `13.50` is `n:13.5`), or `t:` and the text as written for any other
+/// (`SP`). It is `trss_core::episode`'s key in the form the database keeps.
 pub fn episode_key(text: &str) -> String {
-    match numeric_episode(text) {
-        Some(n) => format!("n:{n}"),
-        None => format!("t:{text}"),
-    }
-}
-
-/// The number part of [`episode_key`]; `None` for a text that is no number.
-pub fn numeric_episode(text: &str) -> Option<String> {
-    let (whole, decimal) = match text.split_once('.') {
-        Some((whole, decimal)) => (whole, Some(decimal)),
-        None => (text, None),
-    };
-    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
-    if !digits(whole) || decimal.is_some_and(|d| !digits(d)) {
-        return None;
-    }
-    let integer = match whole.trim_start_matches('0') {
-        "" => "0",
-        integer => integer,
-    };
-    match decimal.map(|d| d.trim_end_matches('0')).unwrap_or_default() {
-        "" => Some(integer.to_owned()),
-        fraction => Some(format!("{integer}.{fraction}")),
-    }
+    stored_key(text)
 }
 
 /// The revision mark of `candidate`, given the subtitles received of its
@@ -210,7 +188,7 @@ pub fn revision_by_attribution(
         }
         key
     } else {
-        let n: i64 = numeric_episode(&candidate.episode)?.parse().ok()?;
+        let n = i64::try_from(EpisodeNumber::parse(&candidate.episode)?.whole()?).ok()?;
         let mapped = n.checked_add(offset)?;
         if n <= 0 || mapped <= 0 {
             return None;

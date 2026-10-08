@@ -71,10 +71,10 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use rusqlite::{OptionalExtension, TransactionBehavior};
 use serde_json::json;
 use trss_collect::store::{
-    anissia::{episode_key, numeric_episode, AnissiaStore, AnissiaStoreError, Candidate},
+    anissia::{episode_key, AnissiaStore, AnissiaStoreError, Candidate},
     channels::{ChannelError, ChannelStore, RuleState, SeasonRef, SubtitleMode},
 };
-use trss_core::{Db, DbError, Millis};
+use trss_core::{episode::EpisodeNumber, Db, DbError, Millis};
 use trss_library::{
     seasons::combine::{combine, schedule_times},
     store::{
@@ -810,7 +810,8 @@ impl Follow {
                         )?;
                         let episodes = stmt.query_map([&source], |r| r.get::<_, String>(0))?;
                         for episode in episodes {
-                            if numeric_episode(&episode?).as_deref() != Some("0") {
+                            let whole = EpisodeNumber::parse(&episode?).and_then(|n| n.whole());
+                            if whole != Some(0) {
                                 has_episode = true;
                                 break;
                             }
