@@ -3,6 +3,14 @@
 //! code and Transmission client, a fake Transmission and fake RSS feeds.
 //! Ticket 0008's completion rows.
 //!
+//! What a retry decides (where it adds, what it names the file, which torrent
+//! is its own, which request ends at once, how the original link is got back)
+//! is tested in trss-collect (`commands::receive_once`, ADR 0015). This file
+//! keeps what only a process shows: that a command the web accepted reaches
+//! the worker and ends, the lock and the order of cycles and commands, a worker
+//! that restarts or dies, and a cycle that must not remove what a command
+//! has put in.
+//!
 //! The items retried here were picked by a rule whose add Transmission refused
 //! (`Scene::failing`), so they are `add_failed` with the rule recorded, as the
 //! rule's own cycle leaves them.
@@ -23,14 +31,14 @@ use common::*;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 use trss_collect::{
-    commands::receive_once::{NAME_NOT_DERIVED, SEVERAL_FILES},
+    commands::receive_once::NAME_NOT_DERIVED,
     store::{
         channels::{ChannelWithRules, RuleInput, RuleState},
         history::{HistoryItem, HistoryResult},
     },
 };
 use trss_core::{
-    commands::{CommandState, CommandStore, NewCommand, MAX_ATTEMPTS},
+    commands::{CommandState, CommandStore, MAX_ATTEMPTS},
     lock_path_for, CycleLock, Db,
 };
 use trss_transmission::item_label;
@@ -302,14 +310,17 @@ impl Scene {
 
 // --- the completion rows ----------------------------------------------------------------
 
+/// The path of a retry through the web and the worker: accepted pending, run by
+/// the worker, ended `done`, read back by the screen. What the retry adds,
+/// where and under which name is trss-collect's
+/// (`commands::receive_once::retry_tests`).
 #[tokio::test]
-async fn a_failed_item_is_added_again_into_its_rules_folder_by_the_worker() {
+async fn a_failed_item_is_added_again_by_the_worker_and_the_screen_reads_the_end() {
     let liar = release("guid-liar-26", 26, LIAR, "");
     let other = release("guid-other-3", 3, OTHER, "");
     let s = Scene::failing(&[&liar, &other], picked_rules()).await;
     let item = s.item("LIAR GAME - 26").await;
     assert_eq!(item.result, HistoryResult::AddFailed);
-    assert_eq!(item.rule_id.as_deref(), Some(s.rule_of(0).id.as_str()));
     assert!(s.h.tr.torrents().is_empty());
 
     let (status, accepted) = s.post(CMD, &item).await;
@@ -339,38 +350,13 @@ async fn a_failed_item_is_added_again_into_its_rules_folder_by_the_worker() {
 
     assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
 
-    // In the rule's folder, with the bot label and a trname name.
-    let torrents = s.h.tr.torrents();
-    assert_eq!(torrents.len(), 1);
-    assert_eq!(torrents[0].hash, hash(26));
-    assert_eq!(torrents[0].download_dir, "/media/anime/LIAR GAME/Season 01");
-    let item_label = format!("trss-item:{}:{}", item.channel_id, item.identity_key);
-    // The add carried the command's label too; the command took it off once it
-    // had recorded the torrent.
-    let add = &s.h.tr.calls_of("torrent-add")[0];
-    assert_eq!(
-        add.args["labels"],
-        json!([BOT_LABEL, item_label, format!("trss-cmd:{CMD}")])
-    );
-    assert_eq!(torrents[0].labels, [BOT_LABEL, item_label.as_str()]);
-    assert_eq!(torrents[0].name, "LIAR GAME S01E26.mkv");
-    // The item is the rule's now: it shows `규칙 ‘…’`, not a receive by hand.
-    let received = s.item("LIAR GAME - 26").await;
-    assert_eq!(received.result, HistoryResult::Received);
-    assert_eq!(received.rule_id.as_deref(), Some(s.rule_of(0).id.as_str()));
-    assert_eq!(received.reason, None, "a renamed file needs no note");
-    assert_eq!(received.torrent_hash.as_deref(), Some(hash(26).as_str()));
-    // Its neighbour was not touched, and no rule was made.
+    assert_eq!(s.h.tr.torrents().len(), 1);
+    assert_eq!(s.h.tr.torrents()[0].hash, hash(26));
+    // Its neighbour was not touched.
     assert_eq!(
         s.item("Another Show").await.result,
         HistoryResult::AddFailed
     );
-    let rules =
-        s.h.channels
-            .list_rules(&s.channel.channel.id)
-            .await
-            .unwrap();
-    assert_eq!(rules.len(), 2);
 
     // The screen's poll sees the outcome on the command and on the row.
     let (_, view) = s.command(CMD).await;
@@ -386,154 +372,6 @@ async fn a_failed_item_is_added_again_into_its_rules_folder_by_the_worker() {
     assert_eq!(row["can_retry"], false);
     assert_eq!(row["command"], Value::Null);
     s.assert_secret_nowhere().await;
-}
-
-#[tokio::test]
-async fn the_rules_episode_conversion_names_the_file() {
-    let title = "[SubsPlease] Sono Bisque Doll - 13 (1080p) [ABCD1236].mkv";
-    let sono = release("guid-sono-13", 13, title, "");
-    let rules = vec![RuleInput {
-        episode: -12,
-        ..rule("Sono Bisque Doll", "Sono Bisque Doll/Season 02")
-    }];
-    let s = Scene::failing(&[&sono], rules).await;
-    let item = s.item("Sono Bisque Doll - 13").await;
-    assert_eq!(item.result, HistoryResult::AddFailed);
-
-    s.post(CMD, &item).await;
-    s.run_commands().await;
-
-    // Release 13 is episode 1 of season 2, as the rule's own cycle would name it.
-    let torrents = s.h.tr.torrents();
-    assert_eq!(torrents.len(), 1);
-    assert_eq!(
-        torrents[0].download_dir,
-        "/media/anime/Sono Bisque Doll/Season 02"
-    );
-    assert_eq!(torrents[0].name, "Sono Bisque Doll S02E01.mkv");
-    assert_eq!(s.command(CMD).await.1["state"], "done");
-}
-
-#[tokio::test]
-async fn a_retry_goes_where_the_rules_own_cycle_puts_the_same_release() {
-    // The same release, added by a cycle in one scene and by a retry in another:
-    // the folder and the file name agree.
-    let title = "[SubsPlease] Sono Bisque Doll - 13 (1080p) [ABCD1236].mkv";
-    let sono = release("guid-sono-13", 13, title, "");
-    let rules = || {
-        vec![RuleInput {
-            episode: -12,
-            ..rule("Sono Bisque Doll", "Sono Bisque Doll/Season 02")
-        }]
-    };
-    let cycled = Scene::new(&[&sono], rules()).await;
-    let retried = Scene::failing(&[&sono], rules()).await;
-    retried
-        .post(CMD, &retried.item("Sono Bisque Doll - 13").await)
-        .await;
-    retried.run_commands().await;
-
-    let by_cycle = &cycled.h.tr.torrents()[0];
-    let by_retry = &retried.h.tr.torrents()[0];
-    assert_eq!(by_retry.download_dir, by_cycle.download_dir);
-    assert_eq!(by_retry.name, by_cycle.name);
-}
-
-#[tokio::test]
-async fn a_rule_without_a_folder_retries_into_the_collect_folder() {
-    let liar = release("guid-liar-26", 26, LIAR, "");
-    let s = Scene::with(
-        &[&liar],
-        COLLECT_FOLDER,
-        &[],
-        vec![rule("LIAR GAME", "")],
-        true,
-    )
-    .await;
-    let item = s.item("LIAR GAME - 26").await;
-
-    assert_eq!(s.post(CMD, &item).await.0, StatusCode::ACCEPTED);
-    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
-
-    assert_eq!(s.adds().len(), 1);
-    // The rule's own cycle joins an empty folder on the same way.
-    assert_eq!(s.adds()[0]["download-dir"], "/media/");
-    // The collect folder has no title and season to name the file after: the torrent
-    // stays as it is (the rule's cycle would have removed it and its data).
-    let torrents = s.h.tr.torrents();
-    assert_eq!(torrents.len(), 1, "{torrents:?}");
-    assert_eq!(torrents[0].name, LIAR);
-    assert!(s.h.tr.calls_of("torrent-remove").is_empty());
-    let received = s.item("LIAR GAME - 26").await;
-    assert_eq!(received.result, HistoryResult::Received);
-    assert_eq!(received.reason.as_deref(), Some(NAME_NOT_DERIVED));
-}
-
-#[tokio::test]
-async fn a_name_trname_cannot_derive_stays_in_transmission_with_its_data_and_is_noted() {
-    // A release name with no episode in it, into a folder without a season:
-    // the rule's cycle would remove the torrent and its data here.
-    let odd = release("guid-odd", 9, "Some Special Collection.mkv", "");
-    let s = Scene::failing(&[&odd], vec![rule("Some Special", "Some Show")]).await;
-    let item = s.item("Some Special").await;
-
-    s.post(CMD, &item).await;
-    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
-
-    // Still there, in the rule's folder, under its own name; nothing was removed.
-    let torrents = s.h.tr.torrents();
-    assert_eq!(torrents.len(), 1, "{torrents:?}");
-    assert_eq!(torrents[0].name, "Some Special Collection.mkv");
-    assert_eq!(torrents[0].download_dir, "/media/anime/Some Show");
-    assert!(s.h.tr.calls_of("torrent-remove").is_empty());
-    assert!(s.h.tr.calls_of("torrent-rename-path").is_empty());
-    // Added, with a note that the name was not changed.
-    let received = s.item("Some Special").await;
-    assert_eq!(received.result, HistoryResult::Received);
-    assert_eq!(received.reason.as_deref(), Some(NAME_NOT_DERIVED));
-    let (_, view) = s.command(CMD).await;
-    assert_eq!(view["state"], "done");
-    assert_eq!(view["outcome"]["result"], "received");
-    let (_, row) = s
-        .call("GET", &format!("/api/history/{}", item.id), None)
-        .await;
-    assert_eq!(row["result"], "received");
-    assert_eq!(row["reason"], NAME_NOT_DERIVED);
-
-    // The next cycle leaves it as well.
-    let report = s.cycle().await;
-    assert!(report.removed.is_empty(), "{:?}", report.removed);
-    assert_eq!(s.h.tr.torrents().len(), 1);
-    assert_eq!(s.h.tr.torrents()[0].name, "Some Special Collection.mkv");
-}
-
-#[tokio::test]
-async fn a_release_read_as_no_episode_keeps_its_name_in_a_season_folder() {
-    // `trname` would read the digits of the CRC32 as an episode and name the
-    // movie `Show S01E34.mkv`.
-    let movie = release(
-        "guid-movie",
-        9,
-        "[Group] Show Movie (BD 1080p) [ABCD1234].mkv",
-        "",
-    );
-    let s = Scene::failing(&[&movie], vec![rule("Show Movie", "Show/Season 01")]).await;
-    let item = s.item("Show Movie").await;
-
-    s.post(CMD, &item).await;
-    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
-
-    let torrents = s.h.tr.torrents();
-    assert_eq!(torrents.len(), 1, "{torrents:?}");
-    assert_eq!(
-        torrents[0].name,
-        "[Group] Show Movie (BD 1080p) [ABCD1234].mkv"
-    );
-    assert!(s.h.tr.calls_of("torrent-remove").is_empty());
-    assert!(s.h.tr.calls_of("torrent-rename-path").is_empty());
-    let received = s.item("Show Movie").await;
-    assert_eq!(received.result, HistoryResult::Received);
-    assert_eq!(received.reason.as_deref(), Some(NAME_NOT_DERIVED));
 }
 
 #[tokio::test]
@@ -566,651 +404,11 @@ async fn the_command_ends_only_after_its_rename_step_and_note() {
     assert_eq!(row["reason"], NAME_NOT_DERIVED);
 }
 
-#[tokio::test]
-async fn a_torrent_with_several_files_is_left_as_it_is_without_retrying() {
-    let liar = release("guid-liar-26", 26, LIAR, "");
-    let s = Scene::failing(&[&liar], picked_rules()).await;
-    let item = s.item("LIAR GAME - 26").await;
-    s.h.tr.files_on_add(&hash(26), 12);
-    s.post(CMD, &item).await;
-    s.h.tr.clear_calls();
-
-    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
-
-    // One lookup by the add, one by the rename step, which stops there, and
-    // one to take the command's label off.
-    assert_eq!(s.h.tr.calls_of("torrent-get").len(), 3);
-    assert!(s.h.tr.calls_of("torrent-rename-path").is_empty());
-    assert_eq!(s.h.tr.torrents()[0].name, LIAR);
-    let received = s.item("LIAR GAME - 26").await;
-    assert_eq!(received.result, HistoryResult::Received);
-    assert_eq!(received.reason.as_deref(), Some(SEVERAL_FILES));
-    assert_eq!(s.command(CMD).await.1["state"], "done");
-}
-
-#[tokio::test]
-async fn the_same_command_id_delivered_twice_adds_one_torrent_and_returns_the_result() {
-    let liar = release("guid-liar-26", 26, LIAR, "");
-    let s = Scene::failing(&[&liar], picked_rules()).await;
-    let item = s.item("LIAR GAME - 26").await;
-    s.h.tr.clear_calls();
-
-    let (first, one) = s.post(CMD, &item).await;
-    // A page from before the folder went away repeats it with an empty one.
-    let (second, two) = s
-        .post_payload(CMD, json!({ "item_id": item.id, "folder": "" }))
-        .await;
-    assert_eq!((first, second), (StatusCode::ACCEPTED, StatusCode::OK));
-    assert_eq!(one, two);
-
-    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
-    // A late repeat, after the work is done, answers with the outcome.
-    let (third, late) = s.post(CMD, &item).await;
-    assert_eq!(third, StatusCode::OK);
-    assert_eq!(late["state"], "done");
-    assert_eq!(late["outcome"]["result"], "received");
-    assert_eq!(s.run_commands().await, CommandsOutcome::Idle);
-
-    assert_eq!(s.adds().len(), 1, "one torrent-add for three deliveries");
-    assert_eq!(s.h.tr.torrents().len(), 1);
-}
-
-#[tokio::test]
-async fn the_same_command_id_with_another_item_is_refused() {
-    let liar = release("guid-liar-26", 26, LIAR, "");
-    let other = release("guid-other-3", 3, OTHER, "");
-    let s = Scene::failing(&[&liar, &other], picked_rules()).await;
-    let liar_item = s.item("LIAR GAME - 26").await;
-    let other_item = s.item("Another Show").await;
-    s.h.tr.clear_calls();
-    s.post(CMD, &liar_item).await;
-
-    let (status, body) = s.post(CMD, &other_item).await;
-
-    assert_eq!(status, StatusCode::CONFLICT);
-    assert_eq!(body["error"], "conflict");
-    s.run_commands().await;
-    // Only the first request was carried out.
-    assert_eq!(s.adds().len(), 1);
-    assert_eq!(s.adds()[0]["filename"], liar.link);
-    assert_eq!(
-        s.item("Another Show").await.result,
-        HistoryResult::AddFailed
-    );
-}
-
-#[tokio::test]
-async fn a_request_naming_a_folder_is_refused_and_nothing_is_accepted() {
-    let liar = release("guid-liar-26", 26, LIAR, "");
-    let s = Scene::failing(&[&liar], picked_rules()).await;
-    let item = s.item("LIAR GAME - 26").await;
-    s.h.tr.clear_calls();
-
-    for folder in ["LIAR GAME/Season 01", "../../etc", "/etc/cron.d"] {
-        let (status, body) = s
-            .post_payload(CMD, json!({ "item_id": item.id, "folder": folder }))
-            .await;
-        assert_eq!(status, StatusCode::BAD_REQUEST, "{folder}");
-        assert_eq!(body["error"], "invalid");
-    }
-
-    assert_eq!(s.command(CMD).await.0, StatusCode::NOT_FOUND);
-    assert_eq!(s.run_commands().await, CommandsOutcome::Idle);
-    assert!(s.adds().is_empty());
-    assert_eq!(
-        s.item("LIAR GAME - 26").await.result,
-        HistoryResult::AddFailed
-    );
-}
-
-/// Stores a command the way a version that let a person type the folder did.
-async fn store_legacy(s: &Scene, item: &HistoryItem, folder: &str) {
-    CommandStore::new(s.h.db.clone())
-        .accept(
-            NewCommand {
-                id: CMD.to_owned(),
-                kind: "receive_once".to_owned(),
-                payload: format!(r#"{{"item_id":{},"folder":{}}}"#, item.id, json!(folder)),
-                subject: Some(item.id.to_string()),
-            },
-            s.h.now(),
-        )
-        .await
-        .unwrap();
-}
-
-#[tokio::test]
-async fn a_command_stored_with_an_empty_folder_before_the_change_runs_as_a_retry() {
-    let liar = release("guid-liar-26", 26, LIAR, "");
-    let s = Scene::failing(&[&liar], picked_rules()).await;
-    let item = s.item("LIAR GAME - 26").await;
-    store_legacy(&s, &item, "").await;
-
-    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
-
-    let torrents = s.h.tr.torrents();
-    assert_eq!(torrents.len(), 1);
-    assert_eq!(torrents[0].download_dir, "/media/anime/LIAR GAME/Season 01");
-    assert_eq!(torrents[0].name, "LIAR GAME S01E26.mkv");
-    assert_eq!(s.command(CMD).await.1["outcome"]["result"], "received");
-}
-
-#[tokio::test]
-async fn a_command_stored_with_a_folder_before_the_change_is_not_run_into_the_rules_folder() {
-    let liar = release("guid-liar-26", 26, LIAR, "");
-    let s = Scene::failing(&[&liar], picked_rules()).await;
-    let item = s.item("LIAR GAME - 26").await;
-    store_legacy(&s, &item, "Somewhere/Else").await;
-    // An earlier start of it put a torrent in under its label, and the worker
-    // died before it wrote the result.
-    CommandStore::new(s.h.db.clone())
-        .claim_next(s.h.now())
-        .await
-        .unwrap()
-        .unwrap();
-    s.h.tr.preload(taken_by_the_commands_add(&item));
-
-    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
-
-    let (_, command) = s.command(CMD).await;
-    assert_eq!(command["state"], "failed", "{command}");
-    assert_eq!(command["outcome"]["result"], "add_failed");
-    assert_eq!(
-        command["outcome"]["reason"],
-        "폴더를 고르던 예전 요청이라 실행하지 않았어요. 필요하면 다시 받기로 받아요."
-    );
-    assert!(s.adds().is_empty(), "nothing went to Transmission");
-    assert_eq!(
-        s.item("LIAR GAME - 26").await,
-        item,
-        "the item is as it was"
-    );
-    let torrents = s.h.tr.torrents();
-    assert_eq!(torrents.len(), 1, "the torrent is not removed");
-    assert!(
-        !torrents[0]
-            .labels
-            .iter()
-            .any(|l| l.starts_with("trss-cmd:")),
-        "{:?}",
-        torrents[0].labels
-    );
-}
-
 // --- items that cannot be retried ----------------------------------------------------------
-
-/// What a retry that was accepted and then found ineligible leaves: the command
-/// ended `add_failed` with the reason, nothing went to Transmission, and the
-/// item is as it was.
-async fn assert_ended_without_adding(s: &Scene, says: &str, item_before: &HistoryItem) {
-    let (_, view) = s.command(CMD).await;
-    assert_eq!(view["state"], "failed", "{view}");
-    assert_eq!(view["outcome"]["result"], "add_failed");
-    let reason = view["outcome"]["reason"].as_str().unwrap();
-    assert!(reason.contains(says), "{reason}");
-    assert!(s.adds().is_empty(), "nothing went to Transmission");
-    assert_eq!(&s.item(&item_before.title).await, item_before);
-}
-
-#[tokio::test]
-async fn a_retry_with_no_collect_folder_ends_at_once_and_leaves_the_item_as_it_was() {
-    let liar = release("guid-liar-26", 26, LIAR, "");
-    let s = Scene::failing(&[&liar], picked_rules()).await;
-    let item = s.item("LIAR GAME - 26").await;
-    s.post(CMD, &item).await;
-    // The app cannot unset the folder once it is set; this is a database that
-    // has none, as a fresh one does.
-    s.h.db
-        .run::<_, trss_core::DbError, _>(|c| {
-            Ok(c.execute("DELETE FROM collection_settings", [])
-                .map(|_| ())?)
-        })
-        .await
-        .unwrap();
-
-    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
-
-    // The rule's folder is relative to the collect folder, so there is nowhere
-    // to put the torrent. The item stays `add_failed` as it was, not failed anew.
-    assert_ended_without_adding(&s, "수집 폴더", &item).await;
-}
-
-#[tokio::test]
-async fn a_rule_deleted_after_the_request_ends_the_command_at_once() {
-    let liar = release("guid-liar-26", 26, LIAR, "");
-    let s = Scene::failing(&[&liar], picked_rules()).await;
-    let item = s.item("LIAR GAME - 26").await;
-    s.post(CMD, &item).await;
-    s.h.tr.clear_calls();
-    let rule = s.rule_of(0);
-    s.h.channels
-        .delete_rule(&rule.id, rule.version)
-        .await
-        .unwrap();
-
-    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
-
-    assert_ended_without_adding(&s, "지워져서", &item).await;
-    // The same item is now refused when it is asked for, with the same reason.
-    let (status, body) = s.post("1e2d3c4b-0000-4000-8000-000000000004", &item).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(body["message"].as_str().unwrap().contains("지워져서"));
-}
-
-#[tokio::test]
-async fn a_rule_archived_after_the_request_ends_the_command_at_once() {
-    let liar = release("guid-liar-26", 26, LIAR, "");
-    let s = Scene::failing(&[&liar], picked_rules()).await;
-    let item = s.item("LIAR GAME - 26").await;
-    s.post(CMD, &item).await;
-    s.h.tr.clear_calls();
-    s.archive_rule(0).await;
-
-    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
-
-    assert_ended_without_adding(&s, "복원한 뒤", &item).await;
-    let (status, body) = s.post("1e2d3c4b-0000-4000-8000-000000000004", &item).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(body["message"].as_str().unwrap().contains("복원한 뒤"));
-}
-
-#[tokio::test]
-async fn an_item_that_a_later_cycle_found_no_rule_for_ends_the_command_at_once() {
-    let liar = release("guid-liar-26", 26, LIAR, "");
-    let s = Scene::failing(&[&liar], picked_rules()).await;
-    let item = s.item("LIAR GAME - 26").await;
-    s.post(CMD, &item).await;
-    // The rule is edited so that it no longer picks the item, and a cycle sees that.
-    let rule = s.rule_of(0);
-    s.h.channels
-        .update_rule(
-            &rule.id,
-            rule.version,
-            &rule.channel_id,
-            RuleInput {
-                r#match: Some("Something Else".into()),
-                ..rule.to_input()
-            },
-        )
-        .await
-        .unwrap();
-    s.cycle().await;
-    assert_eq!(
-        s.item("LIAR GAME - 26").await.result,
-        HistoryResult::NoMatch
-    );
-    let item = s.item("LIAR GAME - 26").await;
-    s.h.tr.clear_calls();
-
-    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
-
-    assert_ended_without_adding(&s, "규칙이 고르지 않아서", &item).await;
-}
-
-#[tokio::test]
-async fn a_failure_with_no_rule_recorded_is_not_offered_and_ends_the_command_at_once() {
-    // What the receive-once that took any item into a typed folder left behind:
-    // a failed item with no rule.
-    let liar = release("guid-liar-26", 26, LIAR, "");
-    let s = Scene::new(&[&liar], unrelated_rule()).await;
-    let item = s.item("LIAR GAME - 26").await;
-    assert_eq!(item.result, HistoryResult::NoMatch);
-    s.h.history
-        .record_outcome(
-            item.id,
-            s.h.now(),
-            HistoryResult::AddFailed,
-            None,
-            Some("Transmission이 응답하지 않았어요".into()),
-            None,
-        )
-        .await
-        .unwrap();
-    let item = s.item("LIAR GAME - 26").await;
-    assert_eq!(item.rule_id, None);
-
-    let (status, body) = s.post(CMD, &item).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(body["message"].as_str().unwrap().contains("규칙 없이"));
-    let (_, row) = s
-        .call("GET", &format!("/api/history/{}", item.id), None)
-        .await;
-    assert_eq!(row["can_retry"], false);
-    assert!(row["retry_blocked"].as_str().unwrap().contains("규칙 없이"));
-
-    // A command accepted before, run now, ends the same way.
-    CommandStore::new(s.h.db.clone())
-        .accept(
-            NewCommand {
-                id: CMD.to_owned(),
-                kind: "receive_once".to_owned(),
-                payload: format!(r#"{{"item_id":{},"folder":""}}"#, item.id),
-                subject: Some(item.id.to_string()),
-            },
-            s.h.now(),
-        )
-        .await
-        .unwrap();
-    s.h.tr.clear_calls();
-    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
-    assert_ended_without_adding(&s, "규칙 없이", &item).await;
-}
-
-#[tokio::test]
-async fn items_no_rule_picked_and_items_transmission_holds_are_not_retried() {
-    let liar = release("guid-liar-26", 26, LIAR, "");
-    let other = release("guid-other-3", 3, OTHER, "");
-    // `Another Show` has no rule, so it is `no_match`; LIAR GAME is added by its rule.
-    let s = Scene::new(
-        &[&liar, &other],
-        vec![rule("LIAR GAME", "LIAR GAME/Season 01")],
-    )
-    .await;
-    let no_match = s.item("Another Show").await;
-    let added = s.item("LIAR GAME - 26").await;
-    assert_eq!(no_match.result, HistoryResult::NoMatch);
-    assert_eq!(added.result, HistoryResult::Received);
-
-    for (item, says) in [(&no_match, "규칙이 고르지 않아서"), (&added, "이미")] {
-        let (status, body) = s.post(CMD, item).await;
-        assert_eq!(status, StatusCode::BAD_REQUEST, "{}", item.title);
-        assert!(body["message"].as_str().unwrap().contains(says), "{body}");
-    }
-    assert_eq!(s.command(CMD).await.0, StatusCode::NOT_FOUND);
-}
 
 // --- outcomes ------------------------------------------------------------------------------
 
-#[tokio::test]
-async fn after_a_lost_answer_the_command_is_looked_up_by_the_same_id() {
-    let liar = release("guid-liar-26", 26, LIAR, "");
-    let s = Scene::failing(&[&liar], picked_rules()).await;
-    let item = s.item("LIAR GAME - 26").await;
-    s.h.tr.clear_calls();
-
-    // The request reached the server; the answer never reached the browser.
-    let _lost = s.post(CMD, &item).await;
-
-    let (status, view) = s.command(CMD).await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(view["state"], "pending");
-    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
-    let (_, view) = s.command(CMD).await;
-    assert_eq!(view["state"], "done");
-    assert_eq!(s.adds().len(), 1);
-
-    // A request that never reached the server is told apart from a failed one:
-    // it is simply not there, and sending it again with the same ID is safe.
-    let never_sent = "9f2c1d3e-0000-4000-8000-000000000001";
-    let (status, body) = s.command(never_sent).await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
-    assert_eq!(body["error"], "not_found");
-}
-
-#[tokio::test]
-async fn a_stopped_transmission_leaves_add_failed_with_a_reason_and_the_rule() {
-    let liar = release("guid-liar-26", 26, LIAR, "");
-    let mut s = Scene::failing(&[&liar], picked_rules()).await;
-    let item = s.item("LIAR GAME - 26").await;
-    s.h.tr.clear_calls();
-    s.post(CMD, &item).await;
-    s.h.tr.stop().await;
-
-    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
-
-    let failed = s.item("LIAR GAME - 26").await;
-    assert_eq!(failed.result, HistoryResult::AddFailed);
-    assert_eq!(
-        failed.rule_id, item.rule_id,
-        "still the rule's, so it can be tried again"
-    );
-    let reason = failed.reason.expect("a reason");
-    assert!(reason.contains("Transmission"), "{reason}");
-    let (_, view) = s.command(CMD).await;
-    assert_eq!(view["state"], "failed");
-    assert_eq!(view["outcome"]["result"], "add_failed");
-    assert_eq!(view["outcome"]["reason"], reason);
-    s.assert_secret_nowhere().await;
-
-    // It ended: Transmission coming back does not resurrect it.
-    s.h.tr.restart().await;
-    assert_eq!(s.run_commands().await, CommandsOutcome::Idle);
-    assert!(s.adds().is_empty());
-}
-
-#[tokio::test]
-async fn a_transmission_that_refuses_the_torrent_gives_its_reason() {
-    let liar = release("guid-liar-26", 26, LIAR, "");
-    let s = Scene::failing(&[&liar], picked_rules()).await;
-    let item = s.item("LIAR GAME - 26").await;
-    s.h.tr.reject_adds(Some("duplicate or corrupt torrent"));
-    s.post(CMD, &item).await;
-
-    s.run_commands().await;
-
-    let failed = s.item("LIAR GAME - 26").await;
-    assert_eq!(failed.result, HistoryResult::AddFailed);
-    assert!(failed
-        .reason
-        .unwrap()
-        .contains("duplicate or corrupt torrent"));
-    assert!(s.h.tr.torrents().is_empty());
-}
-
-#[tokio::test]
-async fn a_retry_that_failed_can_be_tried_again_with_a_new_command() {
-    let liar = release("guid-liar-26", 26, LIAR, "");
-    let s = Scene::failing(&[&liar], picked_rules()).await;
-    let item = s.item("LIAR GAME - 26").await;
-    s.h.tr.reject_adds(Some("nope"));
-    s.post(CMD, &item).await;
-    s.run_commands().await;
-    let failed = s.item("LIAR GAME - 26").await;
-    assert_eq!(failed.result, HistoryResult::AddFailed);
-    assert_eq!(failed.rule_id, item.rule_id);
-
-    s.h.tr.reject_adds(None);
-    let second = "1e2d3c4b-0000-4000-8000-000000000002";
-    let (status, _) = s.post(second, &item).await;
-    assert_eq!(
-        status,
-        StatusCode::ACCEPTED,
-        "the earlier command has ended"
-    );
-    s.run_commands().await;
-
-    let received = s.item("LIAR GAME - 26").await;
-    assert_eq!(received.result, HistoryResult::Received);
-    assert_eq!(received.rule_id, item.rule_id);
-    assert_eq!(received.reason, None);
-    assert_eq!(s.h.tr.torrents().len(), 1);
-}
-
 // --- getting the original link back -------------------------------------------------------
-
-#[tokio::test]
-async fn a_secret_in_a_query_of_the_channels_name_is_filled_back_from_the_channel() {
-    // A download link on the channel's own host.
-    let with_token = Release {
-        guid: "guid-liar-26",
-        title: LIAR.to_owned(),
-        link: download_link(FEED_HOST, 26, LIAR, &format!("&token={SECRET}")),
-    };
-    let s = Scene::failing(&[&with_token], picked_rules()).await;
-    let item = s.item("LIAR GAME - 26").await;
-    assert!(item.link.contains("token=***"), "{}", item.link);
-    assert!(!item.link.contains(SECRET));
-    let feed_reads = s.h.feeds.hits(FEED);
-
-    s.post(CMD, &item).await;
-    s.run_commands().await;
-
-    // Transmission got the link with the channel's token in place.
-    assert_eq!(s.adds().len(), 1);
-    assert_eq!(s.adds()[0]["filename"], with_token.link);
-    assert_eq!(s.h.feeds.hits(FEED), feed_reads, "the feed was not needed");
-    assert_eq!(
-        s.item("LIAR GAME - 26").await.result,
-        HistoryResult::Received
-    );
-    s.assert_secret_nowhere().await;
-    // Still masked in history afterwards.
-    assert!(s.item("LIAR GAME - 26").await.link.contains("token=***"));
-}
-
-#[tokio::test]
-async fn a_link_whose_own_value_differs_from_the_channels_is_taken_from_the_feed_instead() {
-    // No GUID, so the item's identity is its link; the channel's token fills the
-    // mask into a link that hashes to something else, which is not trusted.
-    let own = "OWNTOKEN9876543210";
-    let with_own_token = Release {
-        guid: "",
-        title: LIAR.to_owned(),
-        link: download_link(FEED_HOST, 26, LIAR, &format!("&token={own}")),
-    };
-    let s = Scene::failing(&[&with_own_token], picked_rules()).await;
-    let item = s.item("LIAR GAME - 26").await;
-    assert!(item.identity_key.starts_with("link:"));
-    let feed_reads = s.h.feeds.hits(FEED);
-
-    s.post(CMD, &item).await;
-    s.run_commands().await;
-
-    assert_eq!(s.adds()[0]["filename"], with_own_token.link);
-    assert_eq!(s.h.feeds.hits(FEED), feed_reads + 1, "the feed was read");
-    assert_eq!(
-        s.item("LIAR GAME - 26").await.result,
-        HistoryResult::Received
-    );
-    assert!(!format!("{:?}", s.h.history_items().await).contains(own));
-}
-
-#[tokio::test]
-async fn a_link_on_another_host_is_not_filled_with_the_channels_secret() {
-    // A GUID identity says nothing about the link, so a filled link could not be
-    // checked: the channel's token would go to another host.
-    let own = "OWNTOKEN9876543210";
-    let elsewhere = Release {
-        guid: "guid-liar-26",
-        title: LIAR.to_owned(),
-        link: download_link("elsewhere.test", 26, LIAR, &format!("&token={own}")),
-    };
-    let s = Scene::failing(&[&elsewhere], picked_rules()).await;
-    let item = s.item("LIAR GAME - 26").await;
-    assert!(item.link.contains("token=***"), "{}", item.link);
-    let feed_reads = s.h.feeds.hits(FEED);
-
-    s.post(CMD, &item).await;
-    s.run_commands().await;
-
-    // The link came from the current feed, with its own value.
-    assert_eq!(s.h.feeds.hits(FEED), feed_reads + 1, "the feed was read");
-    assert_eq!(s.adds().len(), 1);
-    assert_eq!(s.adds()[0]["filename"], elsewhere.link);
-    for call in s.h.tr.calls() {
-        assert!(!call.args.to_string().contains(SECRET), "{call:?}");
-    }
-    assert_eq!(
-        s.item("LIAR GAME - 26").await.result,
-        HistoryResult::Received
-    );
-    s.assert_secret_nowhere().await;
-}
-
-#[tokio::test]
-async fn a_link_on_another_host_that_left_the_feed_is_not_received() {
-    let own = "OWNTOKEN9876543210";
-    let elsewhere = Release {
-        guid: "guid-liar-26",
-        title: LIAR.to_owned(),
-        link: download_link("elsewhere.test", 26, LIAR, &format!("&token={own}")),
-    };
-    let other = release("guid-other-3", 3, OTHER, "");
-    let s = Scene::failing(&[&elsewhere, &other], picked_rules()).await;
-    let item = s.item("LIAR GAME - 26").await;
-    s.h.feeds.set_xml(FEED, &feed_xml(&[&other]));
-
-    s.post(CMD, &item).await;
-    s.run_commands().await;
-
-    assert!(s.adds().is_empty(), "nothing goes to Transmission");
-    let failed = s.item("LIAR GAME - 26").await;
-    assert_eq!(failed.result, HistoryResult::AddFailed);
-    assert!(failed
-        .reason
-        .unwrap()
-        .contains("원래 링크를 되살리지 못했어요"));
-    assert_eq!(s.command(CMD).await.1["state"], "failed");
-    s.assert_secret_nowhere().await;
-}
-
-#[tokio::test]
-async fn a_secret_under_another_name_is_found_in_the_current_feed() {
-    // The channel's token, but under a name the channel's URL does not have.
-    let with_passkey = release("guid-liar-26", 26, LIAR, &format!("&passkey={SECRET}"));
-    let s = Scene::failing(&[&with_passkey], picked_rules()).await;
-    let item = s.item("LIAR GAME - 26").await;
-    assert!(item.link.contains("passkey=***"), "{}", item.link);
-    let feed_reads = s.h.feeds.hits(FEED);
-
-    s.post(CMD, &item).await;
-    s.run_commands().await;
-
-    assert_eq!(s.h.feeds.hits(FEED), feed_reads + 1);
-    assert_eq!(s.adds().len(), 1);
-    assert_eq!(s.adds()[0]["filename"], with_passkey.link);
-    assert_eq!(
-        s.item("LIAR GAME - 26").await.result,
-        HistoryResult::Received
-    );
-    s.assert_secret_nowhere().await;
-}
-
-#[tokio::test]
-async fn when_the_item_has_left_the_feed_the_link_cannot_be_recovered() {
-    let with_passkey = release("guid-liar-26", 26, LIAR, &format!("&passkey={SECRET}"));
-    let other = release("guid-other-3", 3, OTHER, "");
-    let s = Scene::failing(&[&with_passkey, &other], picked_rules()).await;
-    let item = s.item("LIAR GAME - 26").await;
-    // The item drops out of the feed.
-    s.h.feeds.set_xml(FEED, &feed_xml(&[&other]));
-
-    s.post(CMD, &item).await;
-    s.run_commands().await;
-
-    let failed = s.item("LIAR GAME - 26").await;
-    assert_eq!(failed.result, HistoryResult::AddFailed);
-    let reason = failed.reason.expect("a reason");
-    assert!(reason.contains("원래 링크를 되살리지 못했어요"), "{reason}");
-    assert!(s.adds().is_empty(), "the masked link is never handed out");
-    let (_, view) = s.command(CMD).await;
-    assert_eq!(view["state"], "failed");
-    assert!(view["outcome"]["reason"]
-        .as_str()
-        .unwrap()
-        .contains("원래 링크를 되살리지 못했어요"));
-    s.assert_secret_nowhere().await;
-}
-
-#[tokio::test]
-async fn when_the_feed_cannot_be_read_the_link_cannot_be_recovered_either() {
-    let with_passkey = release("guid-liar-26", 26, LIAR, &format!("&passkey={SECRET}"));
-    let s = Scene::failing(&[&with_passkey], picked_rules()).await;
-    let item = s.item("LIAR GAME - 26").await;
-    s.h.feeds.set_status(FEED, 500);
-
-    s.post(CMD, &item).await;
-    s.run_commands().await;
-
-    let failed = s.item("LIAR GAME - 26").await;
-    assert_eq!(failed.result, HistoryResult::AddFailed);
-    assert!(failed
-        .reason
-        .unwrap()
-        .contains("원래 링크를 되살리지 못했어요"));
-    assert!(s.adds().is_empty());
-    s.assert_secret_nowhere().await;
-}
 
 // --- the next cycle ------------------------------------------------------------------------
 
@@ -1250,30 +448,6 @@ async fn a_torrent_a_retry_added_is_kept_and_left_alone_by_the_next_cycles() {
     assert_eq!(report.removed.len(), 1);
     assert_eq!(report.removed[0].hash, hash(26));
     assert!(s.h.tr.torrents().is_empty());
-}
-
-#[tokio::test]
-async fn a_torrent_transmission_already_had_is_kept_too() {
-    let liar = release("guid-liar-26", 26, LIAR, "");
-    let s = Scene::failing(&[&liar], picked_rules()).await;
-    let item = s.item("LIAR GAME - 26").await;
-    // Transmission holds it already (the bot added it some time ago).
-    s.h.tr
-        .preload(FakeTorrent::new(&hash(26), LIAR).bot().status(6));
-
-    s.post(CMD, &item).await;
-    s.run_commands().await;
-    assert_eq!(
-        s.item("LIAR GAME - 26").await.result,
-        HistoryResult::Duplicate
-    );
-    let (_, view) = s.command(CMD).await;
-    assert_eq!(view["state"], "done");
-    assert_eq!(view["outcome"]["result"], "duplicate");
-
-    let report = s.cycle().await;
-    assert!(report.removed.is_empty(), "{:?}", report.removed);
-    assert_eq!(s.h.tr.torrents().len(), 1);
 }
 
 /// Sets `item` up as the `한 번 받기` that `다시 받기` replaced left it: received
@@ -1380,77 +554,6 @@ async fn a_rule_with_another_folder_does_not_rename_a_file_received_by_hand() {
     assert_eq!(s.h.tr.torrents()[0].name, "LIAR GAME S01E26.mkv");
 }
 
-#[tokio::test]
-async fn an_item_a_rule_added_after_the_request_ends_with_the_items_result_without_adding_again() {
-    let liar = release("guid-liar-26", 26, LIAR, "");
-    let s = Scene::failing(&[&liar], picked_rules()).await;
-    let item = s.item("LIAR GAME - 26").await;
-    s.post(CMD, &item).await;
-    // Before the worker gets to the command, the rule's own cycle adds the item.
-    s.cycle().await;
-    assert_eq!(s.h.tr.torrents()[0].name, "LIAR GAME S01E26.mkv");
-    s.h.tr.clear_calls();
-
-    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
-
-    // Nothing is added or named a second time.
-    assert!(s.adds().is_empty());
-    assert!(s.h.tr.calls_of("torrent-rename-path").is_empty());
-    assert_eq!(s.h.tr.torrents().len(), 1);
-    // It ends with what the item says, without calling it a duplicate.
-    let (_, view) = s.command(CMD).await;
-    assert_eq!(view["state"], "done");
-    assert_eq!(view["outcome"]["result"], "received");
-    assert_eq!(view["outcome"]["reason"], Value::Null);
-    let received = s.item("LIAR GAME - 26").await;
-    assert_eq!(received.result, HistoryResult::Received);
-    assert_eq!(received.rule_id, item.rule_id);
-    assert_eq!(received.reason, None);
-}
-
-#[tokio::test]
-async fn items_the_rules_took_after_the_requests_end_with_the_items_results() {
-    let liar = release("guid-liar-26", 26, LIAR, "");
-    let other = release("guid-other-3", 3, OTHER, "");
-    let s = Scene::failing(&[&liar, &other], picked_rules()).await;
-    let liar_item = s.item("LIAR GAME - 26").await;
-    let other_item = s.item("Another Show").await;
-    s.post(CMD, &liar_item).await;
-    let second = "1e2d3c4b-0000-4000-8000-000000000003";
-    s.post(second, &other_item).await;
-    // Before the worker gets to the commands, the rules take both items: one is
-    // received, the other was in Transmission already.
-    s.h.tr
-        .preload(FakeTorrent::new(&hash(3), OTHER).bot().status(6));
-    s.cycle().await;
-    // Then Transmission refuses adds, which the commands must not even try.
-    s.h.tr.reject_adds(Some("nope"));
-    s.h.tr.clear_calls();
-
-    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(2));
-
-    assert!(s.adds().is_empty());
-    let (_, view) = s.command(CMD).await;
-    assert_eq!(view["state"], "done");
-    assert_eq!(view["outcome"]["result"], "received");
-    assert_eq!(view["outcome"]["reason"], Value::Null);
-    let (_, view) = s.command(second).await;
-    assert_eq!(view["state"], "done");
-    assert_eq!(view["outcome"]["result"], "duplicate");
-    assert!(view["outcome"]["reason"]
-        .as_str()
-        .unwrap()
-        .contains("이미 같은 토렌트"));
-    assert_eq!(
-        s.item("LIAR GAME - 26").await.result,
-        HistoryResult::Received
-    );
-    assert_eq!(
-        s.item("Another Show").await.result,
-        HistoryResult::Duplicate
-    );
-}
-
 // --- restarts, two workers and the lock --------------------------------------------------------
 
 #[tokio::test]
@@ -1509,43 +612,57 @@ async fn a_command_whose_torrent_went_in_before_the_worker_died_adds_no_second_t
 
     s.run_commands().await;
 
-    let torrents = s.h.tr.torrents();
-    assert_eq!(torrents.len(), 1, "one torrent in Transmission");
-    let held = s.item("LIAR GAME - 26").await;
-    assert_eq!(held.result, HistoryResult::Received);
-    assert_eq!(held.torrent_hash.as_deref(), Some(hash(26).as_str()));
+    // The rerun met the torrent and took it as its own by the command's label
+    // (trss-collect decides that: `commands::receive_once::unanswered_tests`).
+    assert_eq!(s.h.tr.torrents().len(), 1, "one torrent in Transmission");
+    assert_eq!(
+        s.item("LIAR GAME - 26").await.result,
+        HistoryResult::Received
+    );
     let (_, view) = s.command(CMD).await;
     assert_eq!(view["state"], "done");
     assert_eq!(view["outcome"]["result"], "received");
-    // The rerun knows the torrent as its own add's by the command's label, so it
-    // renames it and takes the label off.
-    assert_eq!(torrents[0].name, "LIAR GAME S01E26.mkv");
-    assert_eq!(
-        torrents[0].labels,
-        [BOT_LABEL, &item_label(&item.channel_id, &item.identity_key)]
-    );
 }
 
+/// A look that cannot write the result (here the database refusing it) leaves
+/// the command `running` and not ended, and the next look runs it again
+/// (`Ran::NotNow`; trss-collect's `Retry::Store`).
 #[tokio::test]
-async fn a_bot_torrent_without_the_commands_label_is_not_taken_as_its_own() {
+async fn a_command_whose_result_could_not_be_written_is_run_again_at_a_later_look() {
     let liar = release("guid-liar-26", 26, LIAR, "");
     let s = Scene::failing(&[&liar], picked_rules()).await;
     let item = s.item("LIAR GAME - 26").await;
     s.post(CMD, &item).await;
-    // Put in the rule's folder before the command ran, by an add that was not
-    // this command's (the cron before the switch, say).
-    s.h.tr.preload(FakeTorrent {
-        download_dir: "/media/anime/LIAR GAME/Season 01".to_owned(),
-        ..FakeTorrent::new(&hash(26), LIAR).bot()
-    });
+    let sql = |sql: &str| {
+        rusqlite::Connection::open(s.h.db_path())
+            .unwrap()
+            .execute_batch(sql)
+            .unwrap()
+    };
+    sql("CREATE TRIGGER no_result BEFORE UPDATE ON history_items
+         WHEN NEW.result = 'received'
+         BEGIN SELECT RAISE(ABORT, 'injected'); END;");
 
-    s.run_commands().await;
+    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(0));
 
-    let item = s.item("LIAR GAME - 26").await;
-    assert_eq!(item.result, HistoryResult::Duplicate);
-    assert_eq!(s.command(CMD).await.1["outcome"]["result"], "duplicate");
-    assert!(s.h.tr.calls_of("torrent-rename-path").is_empty());
-    assert_eq!(item.reason, None);
+    let (_, view) = s.command(CMD).await;
+    assert_eq!(view["state"], "running", "not ended: {view}");
+    assert_eq!(
+        s.item("LIAR GAME - 26").await.result,
+        HistoryResult::AddFailed
+    );
+    sql("DROP TRIGGER no_result;");
+
+    // The next look runs it again; the torrent its first start put in is its own.
+    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
+    let (_, view) = s.command(CMD).await;
+    assert_eq!(view["state"], "done");
+    assert_eq!(view["outcome"]["result"], "received");
+    assert_eq!(s.h.tr.torrents().len(), 1);
+    assert_eq!(
+        s.item("LIAR GAME - 26").await.result,
+        HistoryResult::Received
+    );
 }
 
 /// The torrent Transmission holds after taking this command's add for `item`
@@ -1628,19 +745,15 @@ async fn a_command_add_that_timed_out_after_transmission_took_it_is_received_on_
     let report = s.cycle().await;
     assert!(report.removed.is_empty(), "{:?}", report.removed);
 
-    // The next look adds it again; Transmission answers that it has it, with
-    // its hash, and the command takes that torrent as its own.
+    // The next look adds it again, and the command ends (what it makes of
+    // Transmission's answer is trss-collect's: `unanswered_tests`).
     late.release_all();
     assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
 
     let (_, view) = s.command(CMD).await;
     assert_eq!(view["state"], "done");
     assert_eq!(view["outcome"]["result"], "received");
-    let held = s.item("LIAR GAME - 26").await;
-    assert_eq!(held.result, HistoryResult::Received);
-    let torrent = s.h.tr.torrents().into_iter().next().unwrap();
-    assert_eq!(held.torrent_hash.as_deref(), Some(torrent.hash.as_str()));
-    assert_eq!(torrent.name, "LIAR GAME S01E26.mkv");
+    assert_eq!(s.h.tr.torrents().len(), 1);
 
     // Kept by the cycles after that, while the item is in the feed.
     s.feed(&[&liar]);
@@ -1665,54 +778,6 @@ async fn after_an_unanswered_add(s: &Scene) -> Worker {
     );
     late.release_all();
     impatient
-}
-
-#[tokio::test]
-async fn a_refused_add_after_an_unanswered_one_leaves_the_command_for_the_next_look() {
-    let liar = release("guid-liar-26", 26, LIAR, "");
-    let s = Scene::failing(&[&liar], picked_rules()).await;
-    let worker = after_an_unanswered_add(&s).await;
-    // Fetching a `.torrent` URL again can fail (a one-time link, a rate
-    // limit) whatever Transmission holds.
-    s.h.tr
-        .reject_adds(Some("gotMetadataFromURL: http error 429"));
-
-    assert_eq!(s.run_commands_with(&worker).await, CommandsOutcome::Ran(0));
-    assert_eq!(s.command(CMD).await.1["state"], "running");
-    let report = s.cycle().await;
-    assert!(report.removed.is_empty(), "{:?}", report.removed);
-
-    s.h.tr.reject_adds(None);
-    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
-    assert_eq!(s.command(CMD).await.1["outcome"]["result"], "received");
-    s.cycle().await;
-    assert_eq!(s.h.tr.torrents().len(), 1);
-}
-
-#[tokio::test]
-async fn a_refused_connection_after_an_unanswered_add_leaves_the_command_for_the_next_look() {
-    let liar = release("guid-liar-26", 26, LIAR, "");
-    let mut s = Scene::failing(&[&liar], picked_rules()).await;
-    let worker = after_an_unanswered_add(&s).await;
-    // Transmission restarting: the next start cannot connect.
-    s.h.tr.stop().await;
-
-    assert_eq!(s.run_commands_with(&worker).await, CommandsOutcome::Ran(0));
-    assert_eq!(s.command(CMD).await.1["state"], "running");
-
-    s.h.tr.restart().await;
-    // The item has left the feed while the cycles run, so they do not pick it
-    // themselves.
-    s.feed(&[]);
-    let first = s.cycle().await;
-    let second = s.cycle().await;
-    assert!(first.removed.is_empty(), "{:?}", first.removed);
-    assert!(second.removed.is_empty(), "{:?}", second.removed);
-    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
-    assert_eq!(s.command(CMD).await.1["outcome"]["result"], "received");
-    s.feed(&[&liar]);
-    s.cycle().await;
-    assert_eq!(s.h.tr.torrents().len(), 1);
 }
 
 #[tokio::test]
@@ -1775,35 +840,6 @@ async fn a_torrent_a_rule_met_between_the_starts_is_named_by_the_rule_and_the_co
 }
 
 #[tokio::test]
-async fn a_deleted_channel_after_an_unanswered_add_ends_the_command_at_once() {
-    let liar = release("guid-liar-26", 26, LIAR, "");
-    let s = Scene::failing(&[&liar], picked_rules()).await;
-    let worker = after_an_unanswered_add(&s).await;
-    // Trying again cannot learn the hash any more: the save folder and the
-    // original link came from the channel.
-    let channel = &s.channel.channel;
-    s.h.channels
-        .delete_channel(&channel.id, channel.version, s.channel.rules.len())
-        .await
-        .unwrap();
-
-    assert_eq!(s.run_commands_with(&worker).await, CommandsOutcome::Ran(1));
-    let (_, command) = s.command(CMD).await;
-    assert_eq!(command["state"], "failed");
-    assert!(
-        command["outcome"]["reason"]
-            .as_str()
-            .unwrap()
-            .contains("채널이 삭제"),
-        "{command}"
-    );
-    // The first add's torrent is still unaccounted for.
-    let report = s.cycle().await;
-    assert_eq!(report.commands_unconfirmed, 1);
-    assert!(report.removed.is_empty(), "{:?}", report.removed);
-}
-
-#[tokio::test]
 async fn a_torrent_whose_hash_was_never_learned_stays_while_its_item_is_in_the_feed() {
     let liar = release("guid-liar-26", 26, LIAR, "");
     let other = release("guid-other-3", 3, OTHER, "");
@@ -1843,53 +879,6 @@ async fn a_torrent_whose_hash_was_never_learned_stays_while_its_item_is_in_the_f
     s.feed(&[&other]);
     let report = s.cycle().await;
     assert_eq!(report.removed.len(), 1);
-}
-
-#[tokio::test]
-async fn a_torrent_the_bot_did_not_add_is_not_taken_as_the_commands_own_after_an_unanswered_add() {
-    let liar = release("guid-liar-26", 26, LIAR, "");
-    let s = Scene::failing(&[&liar], picked_rules()).await;
-    // Added by hand in Transmission, into the folder the rule gives the command.
-    s.h.tr.preload(FakeTorrent {
-        download_dir: "/media/anime/LIAR GAME/Season 01".to_owned(),
-        ..FakeTorrent::new(&hash(26), LIAR)
-    });
-    let worker = after_an_unanswered_add(&s).await;
-
-    assert_eq!(s.run_commands_with(&worker).await, CommandsOutcome::Ran(1));
-
-    assert_eq!(s.command(CMD).await.1["outcome"]["result"], "duplicate");
-    assert_eq!(
-        s.item("LIAR GAME - 26").await.result,
-        HistoryResult::Duplicate
-    );
-    assert_eq!(s.h.tr.torrents()[0].name, LIAR, "its name is left alone");
-}
-
-#[tokio::test]
-async fn another_items_bot_torrent_in_the_rules_folder_is_not_taken_as_the_commands_own() {
-    let liar = release("guid-liar-26", 26, LIAR, "");
-    let s = Scene::failing(&[&liar], picked_rules()).await;
-    // The same torrent, put in the folder the rule gives the command by another
-    // channel's rule for its own item.
-    s.h.tr.preload(FakeTorrent {
-        download_dir: "/media/anime/LIAR GAME/Season 01".to_owned(),
-        labels: vec![
-            BOT_LABEL.to_owned(),
-            item_label("another-channel", "guid:another-item"),
-        ],
-        ..FakeTorrent::new(&hash(26), LIAR)
-    });
-    let worker = after_an_unanswered_add(&s).await;
-
-    assert_eq!(s.run_commands_with(&worker).await, CommandsOutcome::Ran(1));
-
-    assert_eq!(s.command(CMD).await.1["outcome"]["result"], "duplicate");
-    assert_eq!(
-        s.item("LIAR GAME - 26").await.result,
-        HistoryResult::Duplicate
-    );
-    assert_eq!(s.h.tr.torrents()[0].name, LIAR, "its name is left alone");
 }
 
 #[tokio::test]
@@ -2164,606 +1153,11 @@ async fn a_started_worker_process_runs_an_accepted_command_and_prints_no_secret(
     s.assert_secret_nowhere().await;
 }
 
-#[tokio::test]
-async fn an_item_no_rule_picked_is_left_as_it_is_when_its_channel_is_gone_and_the_label_comes_off()
-{
-    let liar = release("guid-liar-26", 26, LIAR, "");
-    let other = release("guid-other-3", 3, OTHER, "");
-    let s = Scene::failing(
-        &[&liar, &other],
-        vec![rule("LIAR GAME", "LIAR GAME/Season 01")],
-    )
-    .await;
-    let picked = s.item("LIAR GAME - 26").await;
-    let unpicked = s.item("Another Show - 03").await;
-    assert_eq!(unpicked.result, HistoryResult::NoMatch);
-    let channel = &s.channel.channel;
-    s.h.channels
-        .delete_channel(&channel.id, channel.version, s.channel.rules.len())
-        .await
-        .unwrap();
-    // Accepted before the channel went; an earlier start left a torrent with
-    // its label.
-    CommandStore::new(s.h.db.clone())
-        .accept(
-            NewCommand {
-                id: CMD.to_owned(),
-                kind: "receive_once".to_owned(),
-                payload: format!(r#"{{"item_id":{}}}"#, unpicked.id),
-                subject: Some(unpicked.id.to_string()),
-            },
-            s.h.now(),
-        )
-        .await
-        .unwrap();
-    CommandStore::new(s.h.db.clone())
-        .claim_next(s.h.now())
-        .await
-        .unwrap()
-        .unwrap();
-    s.h.tr.preload(taken_by_the_commands_add(&picked));
-
-    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
-
-    let (_, command) = s.command(CMD).await;
-    assert_eq!(command["state"], "failed", "{command}");
-    assert!(command["outcome"]["reason"]
-        .as_str()
-        .unwrap()
-        .contains("규칙이 고르지"));
-    assert!(s.adds().is_empty());
-    assert_eq!(s.item("Another Show - 03").await, unpicked);
-    assert!(
-        !s.h.tr.torrents()[0]
-            .labels
-            .iter()
-            .any(|l| l.starts_with("trss-cmd:")),
-        "{:?}",
-        s.h.tr.torrents()[0].labels
-    );
-}
-
-#[tokio::test]
-async fn a_held_item_whose_channel_is_gone_ends_with_its_result_and_the_label_comes_off() {
-    let liar = release("guid-liar-26", 26, LIAR, "");
-    let s = Scene::failing(&[&liar], picked_rules()).await;
-    let item = s.item("LIAR GAME - 26").await;
-    store_legacy(&s, &item, "").await;
-    CommandStore::new(s.h.db.clone())
-        .claim_next(s.h.now())
-        .await
-        .unwrap()
-        .unwrap();
-    // An earlier start's add put the torrent in; the rule's cycle then met it
-    // and recorded the item, as it does when it finds one already there.
-    s.h.tr.preload(taken_by_the_commands_add(&item));
-    s.h.tr.reject_adds(None);
-    s.cycle().await;
-    let held = s.item("LIAR GAME - 26").await;
-    assert_eq!(held.result, HistoryResult::Duplicate);
-    let channel = &s.channel.channel;
-    s.h.channels
-        .delete_channel(&channel.id, channel.version, s.channel.rules.len())
-        .await
-        .unwrap();
-
-    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
-
-    let (_, command) = s.command(CMD).await;
-    assert_eq!(command["state"], "done", "{command}");
-    assert_eq!(command["outcome"]["result"], "duplicate");
-    assert_eq!(s.item("LIAR GAME - 26").await, held);
-    assert!(s
-        .h
-        .tr
-        .torrents()
-        .iter()
-        .all(|t| !t.labels.iter().any(|l| l.starts_with("trss-cmd:"))));
-}
-
 // --- receiving the past items of a subscription ------------------------------------------
-
-/// Makes `phrase` a subscription rule of the scene's channel, as of the harness's clock.
-async fn subscribe(
-    s: &Scene,
-    phrase: &str,
-    directory: &str,
-) -> trss_collect::store::channels::Rule {
-    use trss_anissia::Anime;
-    use trss_collect::store::channels::{NewSubscription, SubtitleMode};
-    s.h.channels
-        .create_subscription_rule(
-            &s.channel.channel.id,
-            rule(phrase, directory),
-            NewSubscription {
-                anime: Anime {
-                    anime_no: 3320,
-                    subject: phrase.to_owned(),
-                    original_subject: None,
-                    week: 3,
-                    air_time: Some("22:00".to_owned()),
-                    start_date: Some("2026-10-07".to_owned()),
-                    end_date: None,
-                    status: "ON".to_owned(),
-                    fetched_at: s.h.now(),
-                },
-                subtitles: SubtitleMode::Undecided,
-                creator: None,
-                subscribed_at: s.h.now(),
-            },
-        )
-        .await
-        .unwrap()
-}
-
-fn liar(episode: u32) -> Release {
-    let title = format!("[SubsPlease] LIAR GAME - {episode} (1080p) [ABCD12{episode}].mkv");
-    let guid: &'static str = Box::leak(format!("guid-liar-{episode}").into_boxed_str());
-    release(guid, episode, &title, "")
-}
-
-#[tokio::test]
-async fn a_subscription_receives_nothing_that_was_recorded_before_it_until_the_user_picks() {
-    let (liar25, liar26) = (liar(25), liar(26));
-    let s = Scene::new(&[&liar25, &liar26], unrelated_rule()).await;
-    assert_eq!(
-        s.item("LIAR GAME - 25").await.result,
-        HistoryResult::NoMatch
-    );
-
-    s.h.advance(1_000);
-    let sub = subscribe(&s, "LIAR GAME", "anime/LIAR GAME/Season 01").await;
-
-    // The next cycle sees both in the feed and the new rule matches them, but
-    // they are past: creating the rule received nothing.
-    s.cycle().await;
-    assert!(s.adds().is_empty());
-    assert!(s.h.tr.torrents().is_empty());
-    for part in ["LIAR GAME - 25", "LIAR GAME - 26"] {
-        let item = s.item(part).await;
-        assert_eq!(item.result, HistoryResult::NoMatch, "{part}");
-        assert_eq!(item.rule_id, None);
-    }
-
-    // The user ticked the 25th only.
-    let item = s.item("LIAR GAME - 25").await;
-    let (status, _) = s
-        .post_payload(CMD, json!({ "item_id": item.id, "rule_id": sub.id }))
-        .await;
-    assert_eq!(status, StatusCode::ACCEPTED);
-    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
-
-    let torrents = s.h.tr.torrents();
-    assert_eq!(torrents.len(), 1);
-    assert_eq!(torrents[0].hash, hash(25));
-    assert_eq!(torrents[0].download_dir, "/media/anime/LIAR GAME/Season 01");
-    assert_eq!(torrents[0].name, "LIAR GAME S01E25.mkv");
-    let received = s.item("LIAR GAME - 25").await;
-    assert_eq!(received.result, HistoryResult::Received);
-    assert_eq!(received.rule_id.as_deref(), Some(sub.id.as_str()));
-    assert_eq!(s.command(CMD).await.1["outcome"]["result"], "received");
-
-    // The 26th stays unreceived, cycle after cycle.
-    s.cycle().await;
-    assert_eq!(s.h.tr.torrents().len(), 1);
-    assert_eq!(
-        s.item("LIAR GAME - 26").await.result,
-        HistoryResult::NoMatch
-    );
-
-    // A release that appears after the subscription is collected as usual.
-    let liar27 = liar(27);
-    s.feed(&[&liar25, &liar26, &liar27]);
-    s.cycle().await;
-    let hashes: Vec<String> = s.h.tr.torrents().into_iter().map(|t| t.hash).collect();
-    assert_eq!(hashes.len(), 2, "{hashes:?}");
-    assert!(hashes.contains(&hash(27)));
-    assert_eq!(
-        s.item("LIAR GAME - 27").await.result,
-        HistoryResult::Received
-    );
-    s.assert_secret_nowhere().await;
-}
-
-#[tokio::test]
-async fn a_plain_rule_still_takes_the_items_in_the_feed_the_cycle_has_recorded_without_a_rule() {
-    // Only subscriptions hold back the past: a rule made by hand keeps taking
-    // what the feed still holds, as before.
-    let liar26 = liar(26);
-    let s = Scene::new(&[&liar26], unrelated_rule()).await;
-    s.h.advance(1_000);
-    s.h.channels
-        .create_rule(
-            &s.channel.channel.id,
-            rule("LIAR GAME", "LIAR GAME/Season 01"),
-        )
-        .await
-        .unwrap();
-    s.cycle().await;
-    assert_eq!(s.h.tr.torrents().len(), 1);
-}
-
-#[tokio::test]
-async fn a_request_for_a_rule_is_refused_when_the_rule_would_not_pick_the_item() {
-    let (liar26, other) = (liar(26), release("guid-other-3", 3, OTHER, ""));
-    let s = Scene::new(&[&liar26, &other], unrelated_rule()).await;
-    s.h.advance(1_000);
-    let sub = subscribe(&s, "LIAR GAME", "anime/LIAR GAME/Season 01").await;
-    let item = s.item("Another Show").await;
-
-    // The title does not match the rule.
-    let (status, body) = s
-        .post_payload(CMD, json!({ "item_id": item.id, "rule_id": sub.id }))
-        .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(body["message"].as_str().unwrap().contains("고르지 않는"));
-    // A rule that does not exist.
-    let liar_item = s.item("LIAR GAME - 26").await;
-    let (status, _) = s
-        .post_payload(
-            CMD,
-            json!({ "item_id": liar_item.id, "rule_id": "no-such-rule" }),
-        )
-        .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    // Without a rule, an item no rule picked is still not retried.
-    let (status, _) = s.post(CMD, &liar_item).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-
-    assert_eq!(s.run_commands().await, CommandsOutcome::Idle);
-    assert!(s.h.tr.torrents().is_empty());
-    assert_eq!(
-        s.item("LIAR GAME - 26").await.result,
-        HistoryResult::NoMatch
-    );
-}
-
-#[tokio::test]
-async fn a_repeat_of_a_request_is_not_stored_twice_and_an_archived_rule_receives_nothing() {
-    let liar26 = liar(26);
-    let s = Scene::new(&[&liar26], unrelated_rule()).await;
-    s.h.advance(1_000);
-    let sub = subscribe(&s, "LIAR GAME", "anime/LIAR GAME/Season 01").await;
-    let item = s.item("LIAR GAME - 26").await;
-    let payload = json!({ "item_id": item.id, "rule_id": sub.id });
-
-    assert_eq!(
-        s.post_payload(CMD, payload.clone()).await.0,
-        StatusCode::ACCEPTED
-    );
-    // The same request again is the stored command.
-    assert_eq!(s.post_payload(CMD, payload.clone()).await.0, StatusCode::OK);
-
-    let rule = s.h.channels.get_rule(&sub.id).await.unwrap().unwrap();
-    s.h.channels
-        .update_rule(
-            &rule.id,
-            rule.version,
-            &rule.channel_id,
-            RuleInput {
-                state: RuleState::Archived,
-                ..rule.to_input()
-            },
-        )
-        .await
-        .unwrap();
-    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
-    assert!(s.h.tr.torrents().is_empty());
-    let (_, view) = s.command(CMD).await;
-    assert_eq!(view["state"], "failed");
-    assert_eq!(
-        s.item("LIAR GAME - 26").await.result,
-        HistoryResult::NoMatch
-    );
-}
 
 // --- the rule detail's view of the past items ----------------------------------------------
 
-/// What the rule detail sends to preview the stored rule as it is.
-fn preview_of(channel_id: &str, rule: &trss_collect::store::channels::Rule) -> Value {
-    json!({
-        "channel_id": channel_id,
-        "rule_id": rule.id,
-        "rule": {
-            "match": rule.r#match,
-            "regex": rule.regex,
-            "case_insensitive": rule.case_insensitive,
-            "directory": rule.directory,
-            "episode": rule.episode,
-        },
-    })
-}
-
-fn kind_of<'a>(preview: &'a Value, title_part: &str) -> &'a str {
-    preview["items"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|i| i["title"].as_str().unwrap().contains(title_part))
-        .unwrap_or_else(|| panic!("the preview lists no {title_part}: {preview}"))["kind"]
-        .as_str()
-        .unwrap()
-}
-
-async fn preview_rule(s: &Scene, rule: &trss_collect::store::channels::Rule) -> Value {
-    let (status, preview) = s
-        .call(
-            "POST",
-            "/api/rules/preview",
-            Some(preview_of(&s.channel.channel.id, rule)),
-        )
-        .await;
-    assert_eq!(status, StatusCode::OK, "{preview}");
-    preview
-}
-
-#[tokio::test]
-async fn the_preview_calls_the_items_the_cycle_leaves_alone_past() {
-    let (liar25, liar26) = (liar(25), liar(26));
-    let s = Scene::new(&[&liar25, &liar26], unrelated_rule()).await;
-    s.h.advance(1_000);
-    let sub = subscribe(&s, "LIAR GAME", "anime/LIAR GAME/Season 01").await;
-
-    // The cycle leaves both alone ...
-    s.cycle().await;
-    assert!(s.adds().is_empty());
-
-    // ... and the rule detail says the same of them, with the folder `받기`
-    // would use.
-    let preview = preview_rule(&s, &sub).await;
-    assert_eq!(kind_of(&preview, "LIAR GAME - 25"), "past", "{preview}");
-    assert_eq!(kind_of(&preview, "LIAR GAME - 26"), "past", "{preview}");
-    assert_eq!(preview["counts"]["past"], 2, "{preview}");
-    assert_eq!(preview["counts"]["mine"], 0, "{preview}");
-    assert_eq!(
-        preview["items"][0]["save_path"],
-        "/media/anime/LIAR GAME/Season 01"
-    );
-
-    // A release first seen after the subscription is the rule's own.
-    let liar27 = liar(27);
-    s.feed(&[&liar25, &liar26, &liar27]);
-    s.cycle().await;
-    assert_eq!(s.h.tr.torrents().len(), 1);
-    let preview = preview_rule(&s, &sub).await;
-    assert_eq!(kind_of(&preview, "LIAR GAME - 27"), "mine", "{preview}");
-    assert_eq!(kind_of(&preview, "LIAR GAME - 26"), "past", "{preview}");
-}
-
-#[tokio::test]
-async fn a_past_item_of_the_rule_detail_is_received_by_that_rule_and_then_reads_as_received() {
-    let (liar25, liar26) = (liar(25), liar(26));
-    let s = Scene::new(&[&liar25, &liar26], unrelated_rule()).await;
-    s.h.advance(1_000);
-    let sub = subscribe(&s, "LIAR GAME", "anime/LIAR GAME/Season 01").await;
-    s.cycle().await;
-
-    let preview = preview_rule(&s, &sub).await;
-    let id = preview["items"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|i| i["kind"] == "past" && i["title"].as_str().unwrap().contains("LIAR GAME - 25"))
-        .expect("a past item to receive")["id"]
-        .as_i64()
-        .unwrap();
-
-    // `받기` of that row, long after the subscribe flow ended.
-    let (status, _) = s
-        .post_payload(CMD, json!({ "item_id": id, "rule_id": sub.id }))
-        .await;
-    assert_eq!(status, StatusCode::ACCEPTED);
-    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
-    assert_eq!(s.command(CMD).await.1["outcome"]["result"], "received");
-    assert_eq!(s.h.tr.torrents().len(), 1);
-    assert_eq!(
-        s.h.tr.torrents()[0].download_dir,
-        "/media/anime/LIAR GAME/Season 01"
-    );
-
-    // The row stops being past: the rule received it. The other still is.
-    let after = preview_rule(&s, &sub).await;
-    assert_eq!(kind_of(&after, "LIAR GAME - 25"), "mine", "{after}");
-    assert_eq!(kind_of(&after, "LIAR GAME - 26"), "past", "{after}");
-    assert_eq!(after["counts"]["past"], 1);
-}
-
-#[tokio::test]
-async fn an_item_that_failed_without_any_rule_is_not_said_to_belong_to_another_rule() {
-    let liar26 = liar(26);
-    let s = Scene::new(&[&liar26], unrelated_rule()).await;
-    s.h.advance(1_000);
-    let sub = subscribe(&s, "LIAR GAME", "anime/LIAR GAME/Season 01").await;
-    let item = s.item("LIAR GAME - 26").await;
-    s.h.history
-        .record_outcome(
-            item.id,
-            s.h.now(),
-            HistoryResult::AddFailed,
-            None,
-            Some("Transmission이 응답하지 않았어요".into()),
-            None,
-        )
-        .await
-        .unwrap();
-
-    let (status, body) = s
-        .post_payload(CMD, json!({ "item_id": item.id, "rule_id": sub.id }))
-        .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    let message = body["message"].as_str().unwrap();
-    assert!(message.contains("규칙 없이"), "{message}");
-    assert!(!message.contains("다른 규칙"), "{message}");
-}
-
 // --- what a rule missed while it was off ------------------------------------------------------
-
-/// The `n`-th rule of the scene as stored now.
-async fn stored_rule(s: &Scene, n: usize) -> trss_collect::store::channels::Rule {
-    s.h.channels
-        .get_rule(&s.rule_of(n).id)
-        .await
-        .unwrap()
-        .unwrap()
-}
-
-/// `영상 받기` turned off or on, as of the harness's clock.
-async fn switch_video(s: &Scene, n: usize, on: bool) {
-    let rule = stored_rule(s, n).await;
-    s.h.channels
-        .set_video_receiving(&rule.id, rule.version, on, s.h.now())
-        .await
-        .unwrap();
-}
-
-#[tokio::test]
-async fn an_item_first_seen_while_a_rule_was_paused_is_left_to_the_user_when_it_resumes() {
-    let (liar25, liar26) = (liar(25), liar(26));
-    let s = Scene::new(&[], vec![rule("LIAR GAME", "LIAR GAME/Season 01")]).await;
-
-    switch_video(&s, 0, false).await;
-    s.feed(&[&liar25]);
-    s.cycle().await;
-    assert!(s.h.tr.torrents().is_empty());
-    assert_eq!(
-        s.item("LIAR GAME - 25").await.result,
-        HistoryResult::NoMatch
-    );
-
-    s.h.advance(1_000);
-    switch_video(&s, 0, true).await;
-
-    // Turned on, the rule does not take what appeared while it was off ...
-    s.cycle().await;
-    assert!(s.adds().is_empty());
-    assert!(s.h.tr.torrents().is_empty());
-    assert_eq!(
-        s.item("LIAR GAME - 25").await.result,
-        HistoryResult::NoMatch
-    );
-
-    // ... and its detail lists the item as past, as the cycle treats it.
-    let rule = stored_rule(&s, 0).await;
-    let preview = preview_rule(&s, &rule).await;
-    assert_eq!(kind_of(&preview, "LIAR GAME - 25"), "past", "{preview}");
-    assert_eq!(preview["items"][0]["past_cause"], "resumed");
-    assert_eq!(preview["counts"]["past"], 1);
-
-    // `받기` receives it with the rule.
-    let item = s.item("LIAR GAME - 25").await;
-    let (status, _) = s
-        .post_payload(CMD, json!({ "item_id": item.id, "rule_id": rule.id }))
-        .await;
-    assert_eq!(status, StatusCode::ACCEPTED);
-    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
-    let received = s.item("LIAR GAME - 25").await;
-    assert_eq!(received.result, HistoryResult::Received);
-    assert_eq!(received.rule_id.as_deref(), Some(rule.id.as_str()));
-    assert_eq!(
-        s.h.tr.torrents()[0].download_dir,
-        "/media/anime/LIAR GAME/Season 01"
-    );
-
-    // What appears after it resumed is received on its own.
-    s.feed(&[&liar25, &liar26]);
-    s.cycle().await;
-    assert_eq!(
-        s.item("LIAR GAME - 26").await.result,
-        HistoryResult::Received
-    );
-    assert_eq!(s.h.tr.torrents().len(), 2);
-    let after = preview_rule(&s, &rule).await;
-    assert_eq!(kind_of(&after, "LIAR GAME - 26"), "mine", "{after}");
-}
-
-#[tokio::test]
-async fn a_rule_that_was_never_paused_takes_the_recorded_items_as_before() {
-    // The rule is made after the cycle recorded the item without a rule.
-    let liar26 = liar(26);
-    let s = Scene::new(&[&liar26], unrelated_rule()).await;
-    s.h.advance(1_000);
-    s.h.channels
-        .create_rule(
-            &s.channel.channel.id,
-            rule("LIAR GAME", "LIAR GAME/Season 01"),
-        )
-        .await
-        .unwrap();
-    s.cycle().await;
-    assert_eq!(s.h.tr.torrents().len(), 1);
-
-    // Pausing alone holds nothing back: the rule has never been turned back on.
-    let created =
-        s.h.channels
-            .list_channels_with_rules()
-            .await
-            .unwrap()
-            .remove(0)
-            .rules
-            .into_iter()
-            .find(|r| r.r#match.as_deref() == Some("LIAR GAME"))
-            .unwrap();
-    assert_eq!(created.resumed_at, None);
-    let preview = preview_rule(&s, &created).await;
-    assert_eq!(kind_of(&preview, "LIAR GAME - 26"), "mine", "{preview}");
-    assert_eq!(preview["counts"]["past"], 0);
-}
-
-#[tokio::test]
-async fn an_item_first_seen_while_a_rule_was_archived_is_left_to_the_user_after_the_restore() {
-    let (liar25, liar26) = (liar(25), liar(26));
-    let s = Scene::new(&[], vec![rule("LIAR GAME", "LIAR GAME/Season 01")]).await;
-    let id = s.rule_of(0).id.clone();
-    let command = |name: &str, direction: &str| {
-        json!({ "id": name, "kind": "rule_archive",
-                "payload": { "rule_id": id, "direction": direction } })
-    };
-
-    let (status, body) = s
-        .call(
-            "POST",
-            "/api/commands",
-            Some(command("0b7d5a44-6c1e-4c62-9a6a-3f0c1d2e4b01", "archive")),
-        )
-        .await;
-    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
-    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
-    assert_eq!(stored_rule(&s, 0).await.state, RuleState::Archived);
-
-    s.feed(&[&liar25]);
-    s.cycle().await;
-    assert!(s.h.tr.torrents().is_empty());
-
-    s.h.advance(1_000);
-    let (status, body) = s
-        .call(
-            "POST",
-            "/api/commands",
-            Some(command("0b7d5a44-6c1e-4c62-9a6a-3f0c1d2e4b02", "restore")),
-        )
-        .await;
-    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
-    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
-    let restored = stored_rule(&s, 0).await;
-    assert_eq!(restored.state, RuleState::Active);
-    assert!(restored.resumed_at.is_some());
-
-    // Restored, it leaves the item that came while it was archived, and the
-    // detail offers it as past.
-    s.cycle().await;
-    assert!(s.h.tr.torrents().is_empty());
-    let preview = preview_rule(&s, &restored).await;
-    assert_eq!(kind_of(&preview, "LIAR GAME - 25"), "past", "{preview}");
-
-    // A later release is received as usual.
-    s.feed(&[&liar25, &liar26]);
-    s.cycle().await;
-    assert_eq!(s.h.tr.torrents().len(), 1);
-    assert_eq!(
-        s.item("LIAR GAME - 26").await.result,
-        HistoryResult::Received
-    );
-}
 
 // --- the worker's heartbeat while a command holds the lock (ticket 0021) -----------------------
 
@@ -3005,175 +1399,6 @@ fn counting_on_rules() -> Vec<RuleInput> {
         episode: 12,
         ..rule("Sono Bisque Doll", "Sono Bisque Doll/Season 01")
     }]
-}
-
-#[tokio::test]
-async fn a_rerun_leaves_the_name_its_earlier_start_gave_and_converts_no_episode_twice() {
-    let sono = release("guid-sono-13", 13, SONO, "");
-    let s = Scene::failing(&[&sono], counting_on_rules()).await;
-    let item = s.item("Sono Bisque Doll - 13").await;
-    s.post(CMD, &item).await;
-    let store = CommandStore::new(s.h.db.clone());
-    store.claim_next(s.h.now()).await.unwrap().unwrap();
-    // Transmission took the torrent and the earlier start renamed it, then the
-    // worker died before writing the result.
-    s.h.tr.preload(FakeTorrent {
-        download_dir: "/media/anime/Sono Bisque Doll/Season 01".to_owned(),
-        labels: vec![
-            BOT_LABEL.to_owned(),
-            item_label(&item.channel_id, &item.identity_key),
-            format!("trss-cmd:{CMD}"),
-        ],
-        ..FakeTorrent::new(&hash(13), "Sono Bisque Doll S01E24.mkv")
-    });
-
-    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
-
-    assert_eq!(s.command(CMD).await.1["outcome"]["result"], "received");
-    assert!(s.h.tr.calls_of("torrent-rename-path").is_empty());
-    assert_eq!(
-        s.h.tr.torrent(&hash(13)).name,
-        "Sono Bisque Doll S01E24.mkv"
-    );
-}
-
-#[tokio::test]
-async fn a_release_that_comes_in_the_form_of_another_season_is_converted() {
-    // The release is named as a continuing count of the first season; the rule
-    // makes its episode 25 the second season's first.
-    let title = "Sono Bisque Doll S01E25.mkv";
-    let sono = release("guid-sono-25", 25, title, "");
-    let rules = vec![RuleInput {
-        episode: -24,
-        ..rule("Sono Bisque Doll", "Sono Bisque Doll/Season 02")
-    }];
-    let s = Scene::failing(&[&sono], rules).await;
-    let item = s.item("Sono Bisque Doll S01E25").await;
-    assert_eq!(item.result, HistoryResult::AddFailed);
-
-    s.post(CMD, &item).await;
-    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
-
-    assert_eq!(s.command(CMD).await.1["outcome"]["result"], "received");
-    let torrents = s.h.tr.torrents();
-    assert_eq!(torrents.len(), 1);
-    assert_eq!(torrents[0].name, "Sono Bisque Doll S02E01.mkv");
-}
-
-/// A feed whose item title is not its torrent's file name: read alone, the
-/// title's `1080p` would give episode 80.
-const SHOW_TITLE: &str = "Show - 05 [1080p]";
-const SHOW_FILE: &str = "[Group] Show - 05 [1080p].mkv";
-
-fn show() -> Release {
-    Release {
-        guid: "guid-show-05",
-        title: SHOW_TITLE.to_owned(),
-        link: magnet(5, SHOW_FILE, ""),
-    }
-}
-
-/// With an episode conversion of 12: release 5 is named episode 16.
-fn show_rules() -> Vec<RuleInput> {
-    vec![RuleInput {
-        episode: 12,
-        ..rule("Show", "Show/Season 01")
-    }]
-}
-
-#[tokio::test]
-async fn a_retry_names_the_file_as_the_cycle_does_when_the_feed_title_is_not_the_file_name() {
-    let cycled = Scene::new(&[&show()], show_rules()).await;
-    let retried = Scene::failing(&[&show()], show_rules()).await;
-    retried.post(CMD, &retried.item("Show - 05").await).await;
-    assert_eq!(retried.run_commands().await, CommandsOutcome::Ran(1));
-
-    let by_cycle = &cycled.h.tr.torrents()[0];
-    let by_retry = &retried.h.tr.torrents()[0];
-    assert_eq!(by_cycle.name, "Show S01E16.mkv");
-    assert_eq!(by_retry.name, by_cycle.name);
-    // The command recorded the name the file came with.
-    let store = CommandStore::new(retried.h.db.clone());
-    assert_eq!(
-        store
-            .get(CMD)
-            .await
-            .unwrap()
-            .unwrap()
-            .original_name
-            .as_deref(),
-        Some(SHOW_FILE)
-    );
-}
-
-/// The scene of a rerun: the earlier start put the torrent in, recorded its
-/// file's name `SHOW_FILE`, and the worker died; the file is now `name`.
-async fn rerun_over(name: &str) -> Scene {
-    let s = Scene::failing(&[&show()], show_rules()).await;
-    let item = s.item("Show - 05").await;
-    s.post(CMD, &item).await;
-    let store = CommandStore::new(s.h.db.clone());
-    store.claim_next(s.h.now()).await.unwrap().unwrap();
-    store.note_original_name(CMD, SHOW_FILE).await.unwrap();
-    s.h.tr.preload(FakeTorrent {
-        download_dir: "/media/anime/Show/Season 01".to_owned(),
-        labels: vec![
-            BOT_LABEL.to_owned(),
-            item_label(&item.channel_id, &item.identity_key),
-            format!("trss-cmd:{CMD}"),
-        ],
-        ..FakeTorrent::new(&hash(5), name)
-    });
-    s
-}
-
-#[tokio::test]
-async fn a_rerun_after_a_cycle_renamed_the_torrent_leaves_its_name() {
-    // A cycle that met the torrent renamed it meanwhile. Read as a release,
-    // that name would be converted again, to episode 27.
-    let s = rerun_over("Show S01E16.mkv").await;
-
-    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
-
-    assert_eq!(s.command(CMD).await.1["outcome"]["result"], "received");
-    assert!(s.h.tr.calls_of("torrent-rename-path").is_empty());
-    assert_eq!(s.h.tr.torrent(&hash(5)).name, "Show S01E16.mkv");
-}
-
-#[tokio::test]
-async fn a_rerun_renames_from_the_recorded_name_a_file_the_earlier_start_did_not() {
-    let s = rerun_over(SHOW_FILE).await;
-
-    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
-
-    assert_eq!(s.command(CMD).await.1["outcome"]["result"], "received");
-    assert_eq!(s.h.tr.torrent(&hash(5)).name, "Show S01E16.mkv");
-}
-
-#[tokio::test]
-async fn a_start_after_one_that_added_nothing_converts_a_release_in_another_seasons_form() {
-    let title = "Sono Bisque Doll S01E25.mkv";
-    let sono = release("guid-sono-25", 25, title, "");
-    let rules = vec![RuleInput {
-        episode: -24,
-        ..rule("Sono Bisque Doll", "Sono Bisque Doll/Season 02")
-    }];
-    let s = Scene::failing(&[&sono], rules).await;
-    let item = s.item("Sono Bisque Doll S01E25").await;
-    s.post(CMD, &item).await;
-    // An earlier start ended before it added anything, and recorded no name.
-    CommandStore::new(s.h.db.clone())
-        .claim_next(s.h.now())
-        .await
-        .unwrap()
-        .unwrap();
-
-    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
-
-    assert_eq!(s.command(CMD).await.1["outcome"]["result"], "received");
-    let torrents = s.h.tr.torrents();
-    assert_eq!(torrents.len(), 1);
-    assert_eq!(torrents[0].name, "Sono Bisque Doll S02E01.mkv");
 }
 
 #[tokio::test]

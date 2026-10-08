@@ -1575,3 +1575,24 @@ mod tests {
 
 #[cfg(test)]
 mod offset_tests;
+
+#[cfg(test)]
+mod fixtures;
+
+#[cfg(test)]
+mod retry_tests;
+
+#[cfg(test)]
+mod unanswered_tests;
+
+#[cfg(test)]
+mod ended_tests;
+
+#[cfg(test)]
+mod link_tests;
+
+#[cfg(test)]
+mod past_tests;
+
+#[cfg(test)]
+mod name_tests;

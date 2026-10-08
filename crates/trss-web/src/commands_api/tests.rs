@@ -271,6 +271,88 @@ async fn a_second_command_for_an_item_still_being_added_is_refused() {
 }
 
 #[tokio::test]
+async fn a_retry_is_accepted_again_once_the_earlier_command_ended() {
+    let app = App::new();
+    let channel = app.channel().await;
+    let rule = app.rule(&channel, RuleState::Active).await;
+    let item = app.failed(&channel, "26", &rule).await;
+    assert_eq!(app.post(ID, &item).await.0, StatusCode::ACCEPTED);
+    let claimed = app.state.commands.claim_next(2_000).await.unwrap().unwrap();
+    // While it is open, another command for the item is refused.
+    assert_eq!(
+        app.post("another-command-id", &item).await.0,
+        StatusCode::CONFLICT
+    );
+
+    app.state
+        .commands
+        .finish(
+            &claimed.id,
+            CommandState::Failed,
+            trss_core::commands::Outcome {
+                result: "add_failed".into(),
+                reason: Some("Transmission에 연결하지 못했어요".into()),
+            },
+            3_000,
+        )
+        .await
+        .unwrap();
+    let (status, text, view) = app.post("another-command-id", &item).await;
+
+    assert_eq!(status, StatusCode::ACCEPTED, "{text}");
+    assert_eq!(view["id"], "another-command-id");
+    assert_eq!(view["state"], "pending");
+}
+
+#[tokio::test]
+async fn a_request_for_a_rule_is_refused_when_the_rule_would_not_pick_the_item() {
+    let app = App::new();
+    let channel = app.channel().await;
+    let liar = app.rule(&channel, RuleState::Active).await;
+    let another = app
+        .state
+        .channels
+        .create_rule(
+            &channel.id,
+            RuleInput {
+                r#match: Some("Another Show".into()),
+                directory: "Another Show/Season 01".into(),
+                ..RuleInput::default()
+            },
+        )
+        .await
+        .unwrap();
+    let item = app.item(&channel, "26", HistoryResult::NoMatch).await;
+
+    // The title does not match the rule.
+    let (status, text, body) = app
+        .post_payload(ID, json!({ "item_id": item.id, "rule_id": another.id }))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+    assert_eq!(body["error"], "invalid");
+    let message = body["message"].as_str().unwrap();
+    assert!(message.contains("고르지 않는"), "{message}");
+    assert!(message.ends_with("요."), "{message}");
+    // A rule that does not exist.
+    let (status, _, _) = app
+        .post_payload(ID, json!({ "item_id": item.id, "rule_id": "no-such-rule" }))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    // Without a rule, an item no rule picked is still not retried.
+    assert_eq!(app.post(ID, &item).await.0, StatusCode::BAD_REQUEST);
+    assert!(app.state.commands.get(ID).await.unwrap().is_none());
+
+    // The rule that would pick it is accepted, and the request is stored with
+    // the rule.
+    let (status, text, _) = app
+        .post_payload(ID, json!({ "item_id": item.id, "rule_id": liar.id }))
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{text}");
+    let stored = app.state.commands.get(ID).await.unwrap().unwrap();
+    assert!(stored.payload.contains(&liar.id), "{}", stored.payload);
+}
+
+#[tokio::test]
 async fn a_request_that_names_a_folder_is_refused_and_nothing_is_stored() {
     let app = App::new();
     let channel = app.channel().await;

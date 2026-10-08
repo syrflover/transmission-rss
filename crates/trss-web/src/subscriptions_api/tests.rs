@@ -1148,6 +1148,74 @@ mod rule_detail {
     }
 
     #[tokio::test]
+    async fn the_preview_calls_what_was_recorded_before_a_subscription_past_until_the_rule_received_it(
+    ) {
+        let app = App::new().await;
+        let (channel, rule) = app.subscribed().await;
+        let preview = || async {
+            let (status, view) = app
+                .call(
+                    Method::POST,
+                    "/api/rules/preview",
+                    Some(json!({
+                        "channel_id": channel.id, "rule_id": rule.id,
+                        "rule": { "match": "Work", "directory": "Work/Season 01", "episode": 0 },
+                    })),
+                )
+                .await;
+            assert_eq!(status, StatusCode::OK, "{view}");
+            view
+        };
+        let item_of = |view: &Value, title: &str| {
+            view["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|i| i["title"] == title)
+                .unwrap_or_else(|| panic!("the preview lists no {title}: {view}"))
+                .clone()
+        };
+
+        // The item recorded before the subscription is past, with the folder
+        // that `받기` would save it into and the cause.
+        let view = preview().await;
+        let first = item_of(&view, WORK_1);
+        assert_eq!(first["kind"], "past", "{view}");
+        assert_eq!(first["past_cause"], "subscribed", "{view}");
+        assert!(first["save_path"]
+            .as_str()
+            .unwrap()
+            .ends_with("Work/Season 01"));
+        assert_eq!(view["counts"]["past"], 1, "{view}");
+        assert_eq!(view["counts"]["mine"], 0, "{view}");
+
+        // One recorded after the subscription is the rule's own.
+        app.record(&channel, NOW + 1_000, &[WORK_2]).await;
+        let view = preview().await;
+        assert_eq!(item_of(&view, WORK_2)["kind"], "mine", "{view}");
+        assert_eq!(item_of(&view, WORK_1)["kind"], "past", "{view}");
+
+        // The rule received the past item (the worker's `받기`): it stops being past.
+        let id = first["id"].as_i64().unwrap();
+        app.state
+            .history
+            .record_outcome(
+                id,
+                NOW + 2_000,
+                HistoryResult::Received,
+                Some(rule.id.clone()),
+                None,
+                Some("abcd".repeat(10)),
+            )
+            .await
+            .unwrap();
+        let view = preview().await;
+        assert_eq!(item_of(&view, WORK_1)["kind"], "mine", "{view}");
+        assert_eq!(view["counts"]["past"], 0, "{view}");
+        assert_eq!(view["counts"]["mine"], 2, "{view}");
+    }
+
+    #[tokio::test]
     async fn the_view_of_a_connected_subscription_has_its_season_and_progress() {
         let app = App::new().await;
         let (_, rule) = app.subscribed().await;

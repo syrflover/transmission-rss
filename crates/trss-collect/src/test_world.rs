@@ -54,7 +54,8 @@ use crate::{
     season_link,
     store::{
         channels::{
-            ChannelInput, ChannelStore, EpisodeMark, NewSubscription, Rule, RuleInput, SubtitleMode,
+            ChannelInput, ChannelStore, EpisodeMark, NewSubscription, Rule, RuleInput, RuleState,
+            SubtitleMode,
         },
         history::{HistoryItem, HistoryQuery, HistoryStore, MAX_PAGE_SIZE},
         revisions::{Revision, RevisionStore},
@@ -64,6 +65,10 @@ use crate::{
 /// A channel URL query value that must never show up in logs or history.
 pub(crate) const SECRET: &str = "SECRETTOKEN0123456789";
 
+/// What the fake Transmission says while it refuses the adds of a cycle
+/// ([`World::fail_adds`]).
+pub(crate) const REFUSAL: &str = "Transmission is having a bad day";
+
 /// The `dn` of a magnet link is the release name.
 pub(crate) fn magnet(hash: &str, name: &str) -> String {
     let dn: String = url::form_urlencoded::byte_serialize(name.as_bytes()).collect();
@@ -72,13 +77,38 @@ pub(crate) fn magnet(hash: &str, name: &str) -> String {
 
 /// A feed of `(hash, title)` items.
 pub(crate) fn feed_xml(items: &[(&str, &str)]) -> String {
+    let items: Vec<(String, String, String)> = items
+        .iter()
+        .map(|(hash, title)| {
+            (
+                format!("guid-{hash}"),
+                (*title).to_owned(),
+                magnet(hash, title),
+            )
+        })
+        .collect();
+    let items: Vec<(&str, &str, &str)> = items
+        .iter()
+        .map(|(guid, title, link)| (guid.as_str(), title.as_str(), link.as_str()))
+        .collect();
+    feed_xml_of(&items)
+}
+
+/// A feed of `(guid, title, link)` items; an empty `guid` leaves the `<guid>`
+/// out, so the item is known by its link.
+pub(crate) fn feed_xml_of(items: &[(&str, &str, &str)]) -> String {
     let mut xml = String::from(
         r#"<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel><title>Show</title><link>https://feeds.example.test/show</link><description>made up</description>"#,
     );
-    for (hash, title) in items {
-        let link = magnet(hash, title).replace('&', "&amp;");
+    for (guid, title, link) in items {
+        let link = link.replace('&', "&amp;");
+        let guid = if guid.is_empty() {
+            String::new()
+        } else {
+            format!("<guid isPermaLink=\"false\">{guid}</guid>")
+        };
         xml.push_str(&format!(
-            "<item><title>{title}</title><link>{link}</link><guid isPermaLink=\"false\">guid-{hash}</guid></item>"
+            "<item><title>{title}</title><link>{link}</link>{guid}</item>"
         ));
     }
     xml.push_str("</channel></rss>");
@@ -126,7 +156,8 @@ impl World {
         World::with_rules(Vec::new()).await
     }
 
-    async fn with_rules(rules: Vec<RuleInput>) -> World {
+    /// A world whose channel has these rules.
+    pub async fn with_rules(rules: Vec<RuleInput>) -> World {
         let dir = tempfile::tempdir().unwrap();
         let db = Db::open(dir.path().join("app.db")).await.unwrap();
         let tr = FakeTransmission::start().await;
@@ -550,29 +581,69 @@ impl World {
         rule_id: &str,
         id: &str,
     ) -> Result<Finished, Retry> {
-        let command = self
-            .start_receive(ReceiveOnce::by_rule(item_id, rule_id), id)
-            .await;
+        let command = self.start_receive_for(item_id, rule_id, id).await;
         self.run_command(&command).await
     }
 
+    /// Accepts `이 규칙으로 받기` of `item_id` for the rule `rule_id` as the
+    /// command `id`, and claims it as the worker does.
+    pub async fn start_receive_for(&self, item_id: i64, rule_id: &str, id: &str) -> Command {
+        self.start_receive(ReceiveOnce::by_rule(item_id, rule_id), id)
+            .await
+    }
+
     async fn start_receive(&self, payload: ReceiveOnce, id: &str) -> Command {
+        self.accept_receive(id, &payload.canonical(), payload.item_id)
+            .await;
+        self.claim().await
+    }
+
+    /// Stores the `receive_once` command `id` with the payload text `payload`
+    /// about the item `item_id`, as the web does (or an older version did,
+    /// with a payload the web no longer sends).
+    pub async fn accept_receive(&self, id: &str, payload: &str, item_id: i64) {
         let new = NewCommand {
             id: id.to_owned(),
             kind: receive_once::KIND.to_owned(),
-            payload: payload.canonical(),
-            subject: Some(payload.subject()),
+            payload: payload.to_owned(),
+            subject: Some(item_id.to_string()),
         };
         match self.ctx.commands.accept(new, self.now()).await.unwrap() {
             Accepted::Created(_) => {}
             other => panic!("the command was not stored: {other:?}"),
         }
+    }
+
+    /// The oldest open command, started one more time, as the worker claims
+    /// it: a command an earlier start left `running` is handed out again.
+    pub async fn claim(&self) -> Command {
         self.ctx
             .commands
             .claim_next(self.now())
             .await
             .unwrap()
             .expect("the command waits")
+    }
+
+    /// The look after one whose run ended in [`Retry::AddUnanswered`]: the
+    /// worker notes the unconfirmed add on the command and claims it again.
+    pub async fn look_again(&self, command: &Command) -> Command {
+        self.ctx
+            .commands
+            .note_unconfirmed_add(&command.id, self.now())
+            .await
+            .unwrap();
+        self.claim().await
+    }
+
+    /// The command `id` as the store holds it now.
+    pub async fn command(&self, id: &str) -> Command {
+        self.ctx
+            .commands
+            .get(id)
+            .await
+            .unwrap()
+            .expect("the command")
     }
 
     /// Runs `command` as the worker does and, when it ends, writes the end:
@@ -607,6 +678,112 @@ impl World {
     pub async fn retry(&self, item_id: i64, id: &str) -> Result<Finished, Retry> {
         let command = self.start_retry(item_id, id).await;
         self.run_command(&command).await
+    }
+
+    // --- items a rule picked and Transmission refused -------------------------------------
+
+    /// The `show` feed holds `items` and one cycle runs while Transmission
+    /// refuses every add, so that the items the rules pick are `add_failed`
+    /// with their rule recorded, which is what `다시 받기` is for.
+    /// Transmission takes adds again when this returns, and what the cycle
+    /// asked of it is forgotten.
+    pub async fn fail_adds(&self, items: &[(&str, &str)]) {
+        self.feed(items);
+        self.tr.reject_adds(Some(REFUSAL));
+        self.cycle().await;
+        self.tr.reject_adds(None);
+        self.tr.clear_calls();
+    }
+
+    /// The channel's `n`-th rule as stored now.
+    pub async fn rule_of(&self, n: usize) -> Rule {
+        self.ctx
+            .channels
+            .list_rules(&self.channel_id)
+            .await
+            .unwrap()
+            .remove(n)
+    }
+
+    /// Archives the channel's `n`-th rule, so that cycles no longer pick what
+    /// it matched.
+    pub async fn archive_rule(&self, n: usize) {
+        let rule = self.rule_of(n).await;
+        self.ctx
+            .channels
+            .update_rule(
+                &rule.id,
+                rule.version,
+                &rule.channel_id,
+                RuleInput {
+                    state: RuleState::Archived,
+                    ..rule.to_input()
+                },
+            )
+            .await
+            .unwrap();
+    }
+
+    /// Deletes the channel's `n`-th rule.
+    pub async fn delete_rule(&self, n: usize) {
+        let rule = self.rule_of(n).await;
+        self.ctx
+            .channels
+            .delete_rule(&rule.id, rule.version)
+            .await
+            .unwrap();
+    }
+
+    /// Deletes the channel with its rules.
+    pub async fn delete_channel(&self) {
+        let channel = self
+            .ctx
+            .channels
+            .get_channel(&self.channel_id)
+            .await
+            .unwrap()
+            .expect("the channel");
+        let rules = self
+            .ctx
+            .channels
+            .list_rules(&self.channel_id)
+            .await
+            .unwrap()
+            .len();
+        self.ctx
+            .channels
+            .delete_channel(&channel.id, channel.version, rules)
+            .await
+            .unwrap();
+    }
+
+    /// The label the add of `item` puts on its torrent.
+    pub fn item_label(&self, item: &HistoryItem) -> String {
+        trss_transmission::item_label(&item.channel_id, &item.identity_key)
+    }
+
+    /// This world's Transmission client gives up on an answer after
+    /// `timeout`.
+    pub fn impatient(mut self, timeout: Duration) -> World {
+        self.ctx.transmission.http = trss_transmission::http_client(timeout).unwrap();
+        self
+    }
+
+    /// The channel's secret is in no history item, no trail of one and no
+    /// command.
+    pub async fn assert_secret_nowhere(&self, command_id: &str) {
+        for item in self.history_items().await {
+            let text = format!("{item:?}");
+            assert!(!text.contains(SECRET), "secret in history: {text}");
+            for change in self.ctx.history.changes(item.id).await.unwrap() {
+                let text = format!("{change:?}");
+                assert!(!text.contains(SECRET), "secret in the trail: {text}");
+            }
+        }
+        if let Some(command) = self.ctx.commands.get(command_id).await.unwrap() {
+            let text = format!("{command:?}");
+            assert!(!text.contains(SECRET), "secret in a command: {text}");
+        }
     }
 
     // --- Transmission ------------------------------------------------------------------
