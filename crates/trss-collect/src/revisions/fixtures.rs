@@ -3,12 +3,16 @@
 //! CRC32 is the CRC32 of the bytes its torrent writes, unless a test says
 //! otherwise.
 
+use std::path::{Path, PathBuf};
+
 use crate::{
+    commands::receive_once,
     store::{
+        channels::RuleState,
         history::{HistoryResult, Observation},
-        revisions::RevisionState,
+        revisions::{Revision, RevisionState},
     },
-    test_world::{crc, magnet, World},
+    test_world::{crc, magnet, read, World},
 };
 
 pub(super) const OLD_HASH: &str = "1111000000000000000000000000000000000014";
@@ -105,5 +109,170 @@ impl World {
             .calls_of("torrent-rename-path")
             .iter()
             .any(|c| c.args["ids"][0] == hash && c.args["name"] == EPISODE_NAME)
+    }
+}
+
+pub(super) fn sorted(mut names: Vec<String>) -> Vec<String> {
+    names.sort();
+    names
+}
+
+/// The one replacement the to-do source lists as `받기 실패`.
+pub(super) fn one_failure(failures: &[Revision]) -> &Revision {
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    &failures[0]
+}
+
+impl World {
+    /// `14` in place; `14v2` and `14v3` both received, `14v2` complete and
+    /// skipped because `14v3` is still on its way.
+    pub async fn v2_skipped_for_v3(&self) {
+        self.received_v1().await;
+        self.feed(&[(NEW_HASH, &v2()), (V3_HASH, &v3()), (OLD_HASH, &v1())]);
+        self.tr.content_on_add(NEW_HASH, NEW_BYTES);
+        self.tr.content_on_add(V3_HASH, V3_BYTES);
+        self.tr.unfinished_on_add(NEW_HASH);
+        self.tr.unfinished_on_add(V3_HASH);
+        self.cycle().await;
+        self.complete(NEW_HASH);
+        self.cycle().await;
+        assert_eq!(self.state_of(&v2()).await, RevisionState::Skipped);
+        assert_eq!(self.state_of(&v3()).await, RevisionState::Receiving);
+        assert_eq!(read(&self.file(EPISODE_NAME)), OLD_BYTES);
+    }
+
+    /// `14` in place; `14v2` removed `14`'s torrent but Transmission left its
+    /// file, so `14v2` waits as removing.
+    pub async fn removal_waits(&self) {
+        self.received_v1().await;
+        self.feed(&[(NEW_HASH, &v2()), (OLD_HASH, &v1())]);
+        self.tr.content_on_add(NEW_HASH, NEW_BYTES);
+        self.cycle().await;
+        self.complete(NEW_HASH);
+        self.tr.keep_data_on_remove_of(OLD_HASH);
+        self.cycle().await;
+        self.cycle().await;
+        assert_eq!(self.state_of(&v2()).await, RevisionState::Removing);
+        assert!(!self.tr.torrents().iter().any(|t| t.hash == OLD_HASH));
+        assert_eq!(read(&self.file(EPISODE_NAME)), OLD_BYTES);
+    }
+
+    /// How many torrent removals asked for the data to go too.
+    pub fn removals_with_data(&self) -> usize {
+        self.tr
+            .calls_of("torrent-remove")
+            .iter()
+            .filter(|c| c.args["delete-local-data"] == true)
+            .count()
+    }
+
+    /// `14v3` appears and is received and checked.
+    pub async fn v3_received(&self) {
+        self.feed(&[(V3_HASH, &v3()), (OLD_HASH, &v1())]);
+        self.tr.content_on_add(V3_HASH, V3_BYTES);
+        self.tr.unfinished_on_add(V3_HASH);
+        self.cycle().await;
+        assert_eq!(self.state_of(&v3()).await, RevisionState::Receiving);
+        self.complete(V3_HASH);
+    }
+
+    /// `14v3` is received and checked while `14v2` waits for `14`'s file to
+    /// go, so it waits as verified: one replacement of the episode at a time.
+    /// Then `14`'s file goes and `14v2`'s rename is refused for now. Once
+    /// `14v2` takes the name, `14v3` replaces it.
+    pub async fn v3_verified_behind_v2(&self) {
+        self.removal_waits().await;
+        self.feed(&[(NEW_HASH, &v2()), (V3_HASH, &v3()), (OLD_HASH, &v1())]);
+        self.tr.content_on_add(V3_HASH, V3_BYTES);
+        self.tr.unfinished_on_add(V3_HASH);
+        self.cycle().await;
+        assert_eq!(self.state_of(&v3()).await, RevisionState::Receiving);
+        self.complete(V3_HASH);
+        self.cycle().await;
+        assert_eq!(self.state_of(&v3()).await, RevisionState::Verified);
+
+        self.tr.reject_rename_of(NEW_HASH, Some("busy"));
+        std::fs::remove_file(self.file(EPISODE_NAME)).unwrap();
+        self.cycle().await;
+        assert_eq!(self.state_of(&v2()).await, RevisionState::Removed);
+        assert_eq!(self.state_of(&v3()).await, RevisionState::Verified);
+    }
+
+    /// `14v2` removed `14` and its rename is refused for now.
+    pub async fn v2_waits_for_its_name(&self) {
+        self.received_v1().await;
+        self.feed(&[(NEW_HASH, &v2()), (OLD_HASH, &v1())]);
+        self.tr.content_on_add(NEW_HASH, NEW_BYTES);
+        self.cycle().await;
+        self.complete(NEW_HASH);
+        self.tr.reject_rename_of(NEW_HASH, Some("busy"));
+        self.cycle().await;
+        assert_eq!(self.state_of(&v2()).await, RevisionState::Removed);
+        assert_eq!(self.names(), vec![v2()]);
+    }
+
+    /// Where a test puts `14v2`'s file while it is "missing".
+    pub fn away(&self) -> PathBuf {
+        self.season.parent().unwrap().join("away.mkv")
+    }
+
+    /// Takes the season folder away (a mount that is not there) and returns
+    /// where it went.
+    pub fn folder_away(&self) -> PathBuf {
+        let elsewhere = self.season.with_file_name("Season 01 away");
+        std::fs::rename(&self.season, &elsewhere).unwrap();
+        elsewhere
+    }
+
+    pub fn folder_back(&self, elsewhere: &Path) {
+        std::fs::rename(elsewhere, &self.season).unwrap();
+    }
+
+    /// Archives the rule of `14` (`보관`): the rule is off and its work
+    /// folder is in the archive folder. Returns where the folder went.
+    pub async fn archive(&self) -> PathBuf {
+        let rule_id = self.row_of(&v2()).await.rule_id;
+        self.ctx
+            .channels
+            .set_rule_state(&rule_id, RuleState::Archived, self.now())
+            .await
+            .unwrap();
+        let work = self.season.parent().unwrap();
+        let archive = self.dir.path().join("archive");
+        std::fs::create_dir_all(&archive).unwrap();
+        let archived = archive.join("Show");
+        std::fs::rename(work, &archived).unwrap();
+        archived
+    }
+
+    /// Restores the rule archived with [`World::archive`] (`복원`).
+    pub async fn restore(&self, archived: &Path) {
+        std::fs::rename(archived, self.season.parent().unwrap()).unwrap();
+        let rule_id = self.row_of(&v2()).await.rule_id;
+        self.ctx
+            .channels
+            .set_rule_state(&rule_id, RuleState::Active, self.now())
+            .await
+            .unwrap();
+    }
+
+    /// Whether `다시 받기` is offered for the item titled `title`: a plan
+    /// exists for it, by its row and its rule.
+    pub async fn can_retry(&self, title: &str) -> bool {
+        let item = self.item(title).await;
+        let channel = self
+            .ctx
+            .channels
+            .get_channel(&item.channel_id)
+            .await
+            .unwrap();
+        let rule = match &item.rule_id {
+            Some(id) => self.ctx.channels.get_rule(id).await.unwrap(),
+            None => None,
+        };
+        let revision = receive_once::revision_retry(&self.ctx.revisions, item.id)
+            .await
+            .unwrap();
+        receive_once::retry_plan_for(&item, channel.as_ref(), rule.as_ref(), &revision).is_ok()
     }
 }

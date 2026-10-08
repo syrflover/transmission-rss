@@ -84,7 +84,7 @@ pub(crate) struct World {
     pub tr: FakeTransmission,
     pub feeds: FeedServer,
     pub ctx: CollectContext,
-    _dir: TempDir,
+    pub dir: TempDir,
     pub media: PathBuf,
     /// The rule's folder, `media/Show/Season 01`.
     pub season: PathBuf,
@@ -156,7 +156,7 @@ impl World {
             media,
             season,
             channel_id: channel.channel.id,
-            _dir: dir,
+            dir,
             clock: Arc::new(AtomicI64::new(1_000_000)),
         }
     }
@@ -164,6 +164,11 @@ impl World {
     /// The manual clock.
     pub fn now(&self) -> Millis {
         self.clock.load(Ordering::SeqCst)
+    }
+
+    /// Moves the manual clock forward.
+    pub fn advance(&self, millis: i64) {
+        self.clock.fetch_add(millis, Ordering::SeqCst);
     }
 
     // --- the feeds and the folder ------------------------------------------------------
@@ -192,6 +197,19 @@ impl World {
             .unwrap()
             .channel
             .id
+    }
+
+    /// The database file the stores share.
+    pub fn db_path(&self) -> PathBuf {
+        self.dir.path().join("app.db")
+    }
+
+    /// Runs `sql` on the database from another connection.
+    pub fn sql(&self, sql: &str) {
+        rusqlite::Connection::open(self.db_path())
+            .unwrap()
+            .execute_batch(sql)
+            .unwrap();
     }
 
     pub fn file(&self, name: &str) -> PathBuf {

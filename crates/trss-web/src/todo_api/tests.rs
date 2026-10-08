@@ -13,10 +13,12 @@ use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 use tower::ServiceExt;
 
+use super::failure_of;
 use crate::AppState;
 use trss_collect::store::{
     channels::{ChannelInput, NewSubscription, Rule, RuleInput, SubtitleMode},
     history::{HistoryResult, Observation},
+    revisions::{NewRevision, Revision, RevisionState, Step},
 };
 use trss_core::{Db, DbError};
 use trss_jobs::{area::ReceiveArea, Runner};
@@ -517,4 +519,242 @@ async fn an_add_failure_is_in_the_receive_failure_source_too() {
     assert_eq!(items[0]["kind"], "add_failed");
     assert_eq!(items[0]["title"], title);
     assert!(items[0]["reason"].as_str().unwrap().contains("refused"));
+}
+
+// --- a failed replacement of a video revision ----------------------------------------
+
+const EPISODE_NAME: &str = "Show S01E14.mkv";
+const NEW_NAME: &str = "[SubsPlease] Show - 14v2 (1080p) [8F2EFECC].mkv";
+const SEASON_FOLDER: &str = "/media/Show/Season 01";
+
+/// A replacement row as the store keeps it, in `state` with the given
+/// `reason`, received name and claim; the fields `failure_of` does not read
+/// are made up.
+fn replacement(
+    state: RevisionState,
+    reason: Option<&str>,
+    received_name: Option<&str>,
+    claimed_at: Option<i64>,
+) -> Revision {
+    Revision {
+        id: 1,
+        item_id: 7,
+        old_item_id: None,
+        rule_id: "r1".into(),
+        folder: SEASON_FOLDER.into(),
+        episode_name: EPISODE_NAME.into(),
+        old_version: Some(1),
+        new_version: 2,
+        old_crc: None,
+        old_torrent_hash: None,
+        expected_crc: Some("8F2EFECC".into()),
+        torrent_hash: None,
+        received_name: received_name.map(str::to_owned),
+        file_crc: None,
+        file_identity: None,
+        new_missing_at: None,
+        folder_away_since: None,
+        claimed_at,
+        superseded_hash: None,
+        state,
+        reason: reason.map(str::to_owned),
+        created_at: 10,
+        updated_at: 20,
+        replaced_at: None,
+        overtaken_by: None,
+    }
+}
+
+/// What a failed replacement says of its two files comes from the row alone:
+/// the old video is `removed` once the replacement went ahead to remove it
+/// (or was received again after that) and `kept` before, the new one is
+/// under its received name, `missing` after the replacement ended, or not
+/// received yet.
+#[test]
+fn a_failed_replacements_files_are_told_by_its_row() {
+    use RevisionState::*;
+    // (what, the row, old file, new file)
+    let cases = [
+        (
+            "a check or a removal failed",
+            replacement(Failed, Some("CRC32"), Some(NEW_NAME), None),
+            "kept",
+            Some((
+                "Season 01/[SubsPlease] Show - 14v2 (1080p) [8F2EFECC].mkv",
+                "received_name",
+            )),
+        ),
+        (
+            "the download stopped",
+            replacement(Failed, Some("stopped"), None, None),
+            "kept",
+            None,
+        ),
+        (
+            "received again after the old video was removed",
+            replacement(Failed, Some("stopped"), None, Some(15)),
+            "removed",
+            None,
+        ),
+        (
+            "the rename has not gone through",
+            replacement(Removed, Some("busy"), Some(NEW_NAME), Some(15)),
+            "removed",
+            Some((
+                "Season 01/[SubsPlease] Show - 14v2 (1080p) [8F2EFECC].mkv",
+                "received_name",
+            )),
+        ),
+        (
+            "the replacement ended with no video left",
+            replacement(Abandoned, Some("no video"), Some(NEW_NAME), Some(15)),
+            "removed",
+            Some((
+                "Season 01/[SubsPlease] Show - 14v2 (1080p) [8F2EFECC].mkv",
+                "missing",
+            )),
+        ),
+        (
+            "the old file is waited for",
+            replacement(Removing, Some("waits"), Some(NEW_NAME), Some(15)),
+            "kept",
+            Some((
+                "Season 01/[SubsPlease] Show - 14v2 (1080p) [8F2EFECC].mkv",
+                "received_name",
+            )),
+        ),
+        (
+            "the new file was missing on one look",
+            replacement(Verified, Some("missing once"), Some(NEW_NAME), None),
+            "kept",
+            Some((
+                "Season 01/[SubsPlease] Show - 14v2 (1080p) [8F2EFECC].mkv",
+                "received_name",
+            )),
+        ),
+    ];
+    for (what, row, old, new) in cases {
+        let shown = failure_of(&row, Some(std::path::Path::new("/media/Show")));
+        let new = match new {
+            Some((path, state)) => json!({ "role": "new", "path": path, "state": state }),
+            None => json!({ "role": "new", "path": null, "state": "not_received" }),
+        };
+        assert_eq!(
+            serde_json::to_value(&shown.files).unwrap(),
+            json!([
+                { "role": "old", "path": "Season 01/Show S01E14.mkv", "state": old },
+                new,
+            ]),
+            "{what}"
+        );
+        assert_eq!(shown.reason, row.reason.clone().unwrap(), "{what}");
+    }
+}
+
+/// A path is shown under the work's folder when it is inside it, and whole
+/// otherwise.
+#[test]
+fn a_failed_replacements_paths_are_shown_under_the_works_folder_when_inside_it() {
+    let row = replacement(RevisionState::Failed, Some("x"), Some(NEW_NAME), None);
+    let old_path = |base: Option<&str>| {
+        let shown = failure_of(&row, base.map(std::path::Path::new));
+        serde_json::to_value(&shown.files).unwrap()[0]["path"].clone()
+    };
+    assert_eq!(old_path(Some("/media/Show")), "Season 01/Show S01E14.mkv");
+    assert_eq!(
+        old_path(Some("/elsewhere")),
+        "/media/Show/Season 01/Show S01E14.mkv"
+    );
+    assert_eq!(old_path(None), "/media/Show/Season 01/Show S01E14.mkv");
+}
+
+/// A failed replacement is listed with the receive failures with its work, its
+/// episode, why, and both files (`GET /api/todo/receive-failures`).
+#[tokio::test]
+async fn a_failed_replacement_is_in_the_receive_failures_with_its_work_and_both_files() {
+    let app = App::new().await;
+    app.state
+        .history
+        .record(
+            1,
+            vec![Observation {
+                channel_id: app.rule.channel_id.clone(),
+                channel_label: "https://feed.test/rss".into(),
+                identity_key: "guid:14v2".into(),
+                title: NEW_NAME.into(),
+                link: "magnet:?xt=urn:btih:2222000000000000000000000000000000000014".into(),
+                result: HistoryResult::Received,
+                rule_id: Some(app.rule.id.clone()),
+                torrent_hash: Some("2222000000000000000000000000000000000014".into()),
+                reason: None,
+            }],
+        )
+        .await
+        .unwrap();
+    let item = app
+        .state
+        .history
+        .item_by_key(app.rule.channel_id.clone(), "guid:14v2".into())
+        .await
+        .unwrap()
+        .unwrap();
+    let row = app
+        .state
+        .revisions
+        .create(
+            10,
+            NewRevision {
+                item_id: item.id,
+                old_item_id: None,
+                rule_id: app.rule.id.clone(),
+                folder: SEASON_FOLDER.into(),
+                episode_name: EPISODE_NAME.into(),
+                old_version: Some(1),
+                new_version: 2,
+                old_crc: None,
+                expected_crc: Some("8F2EFECC".into()),
+                torrent_hash: None,
+                state: RevisionState::Receiving,
+                reason: None,
+            },
+        )
+        .await
+        .unwrap();
+    app.state
+        .revisions
+        .advance(
+            row.id,
+            20,
+            RevisionState::Receiving,
+            Step::Failed {
+                reason: "받은 파일의 CRC32가 이름과 달라요.".into(),
+                received_name: Some(NEW_NAME.into()),
+            },
+        )
+        .await
+        .unwrap();
+
+    let list = app.get("/api/todo/receive-failures").await;
+    let items = list["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{list}");
+    let entry = &items[0];
+    assert_eq!(entry["kind"], "revision");
+    assert_eq!(entry["history_item_id"], item.id);
+    assert_eq!(entry["title"], NEW_NAME);
+    assert_eq!(entry["work"], json!({ "id": "w1", "name": "Show" }));
+    assert_eq!(
+        (entry["season"].clone(), entry["episode"].clone()),
+        (json!(1), json!("14"))
+    );
+    assert!(
+        entry["reason"].as_str().unwrap().contains("CRC32"),
+        "{entry}"
+    );
+    assert_eq!(
+        entry["files"],
+        json!([
+            { "role": "old", "path": "Season 01/Show S01E14.mkv", "state": "kept" },
+            { "role": "new", "path": format!("Season 01/{NEW_NAME}"), "state": "received_name" },
+        ])
+    );
 }

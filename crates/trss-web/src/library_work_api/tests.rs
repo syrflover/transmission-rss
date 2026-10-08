@@ -1384,3 +1384,199 @@ async fn a_works_own_format_order_is_set_listed_in_the_policy_and_taken_away() {
     let (status, _) = send(&state, Method::DELETE, &order_uri("nope"), None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
+
+// --- the replacements of a work's episodes -------------------------------------------
+
+mod replacements {
+    use super::*;
+    use trss_collect::store::{
+        history::{HistoryResult, Observation},
+        revisions::{NewRevision, OldVideo, RevisionState, Step},
+    };
+
+    const SEASON_FOLDER: &str = "/c/Lycoris Recoil/Season 01";
+
+    /// A replacement row of the episode file `episode_name` in `folder`, in
+    /// the state a store test would leave it in: a rule of the work, a history
+    /// item received for it, and the row (receiving).
+    async fn row(state: &AppState, folder: &str, episode_name: &str, n: u32) -> i64 {
+        let channel = state
+            .channels
+            .create_channel_with_rules(
+                ChannelInput::new(format!("https://feeds.example.org/rss?n={n}")),
+                vec![rule("Lycoris Recoil/Season 01", RuleState::Active)],
+            )
+            .await
+            .unwrap();
+        let rule_id = channel.rules[0].id.clone();
+        let hash = format!("{n:040x}");
+        state
+            .history
+            .record(
+                1,
+                vec![Observation {
+                    channel_id: channel.channel.id.clone(),
+                    channel_label: "https://feeds.example.org/rss".into(),
+                    identity_key: format!("guid:{n}"),
+                    title: format!("[SubsPlease] Lycoris Recoil - 0{n}v2 (1080p).mkv"),
+                    link: format!("magnet:?xt=urn:btih:{hash}"),
+                    result: HistoryResult::Received,
+                    rule_id: Some(rule_id.clone()),
+                    torrent_hash: Some(hash.clone()),
+                    reason: None,
+                }],
+            )
+            .await
+            .unwrap();
+        let item = state
+            .history
+            .item_by_key(channel.channel.id, format!("guid:{n}"))
+            .await
+            .unwrap()
+            .unwrap();
+        state
+            .revisions
+            .create(
+                10,
+                NewRevision {
+                    item_id: item.id,
+                    old_item_id: None,
+                    rule_id,
+                    folder: folder.into(),
+                    episode_name: episode_name.into(),
+                    old_version: Some(1),
+                    new_version: 2,
+                    old_crc: None,
+                    expected_crc: Some("8F2EFECC".into()),
+                    torrent_hash: Some(hash),
+                    state: RevisionState::Receiving,
+                    reason: None,
+                },
+            )
+            .await
+            .unwrap()
+            .id
+    }
+
+    /// The replacement is done at `at`.
+    async fn done(state: &AppState, id: i64, at: i64) {
+        let store = &state.revisions;
+        let step = Step::Verified {
+            received_name: "v.mkv".into(),
+            file_crc: "8F2EFECC".into(),
+            file_identity: "1:2:3:4:5:6:7".into(),
+        };
+        store
+            .advance(id, 11, RevisionState::Receiving, step)
+            .await
+            .unwrap();
+        let old = OldVideo {
+            item_id: None,
+            version: Some(1),
+            torrent_hash: None,
+        };
+        store.claim(id, 12, old).await.unwrap();
+        store
+            .advance(
+                id,
+                13,
+                RevisionState::Removing,
+                Step::Removed { reason: None },
+            )
+            .await
+            .unwrap();
+        store
+            .advance(id, at, RevisionState::Removed, Step::Done)
+            .await
+            .unwrap();
+    }
+
+    /// The replacement failed (the new file is in the folder under its
+    /// received name).
+    async fn failed(state: &AppState, id: i64) {
+        let step = Step::Failed {
+            reason: "받은 파일의 CRC32가 이름과 달라요.".into(),
+            received_name: Some("[SubsPlease] Lycoris Recoil - 02v2 (1080p).mkv".into()),
+        };
+        state
+            .revisions
+            .advance(id, 20, RevisionState::Receiving, step)
+            .await
+            .unwrap();
+    }
+
+    fn episode<'a>(body: &'a Value, episode: &str) -> &'a Value {
+        body["seasons"][0]["episodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["episode"] == episode)
+            .unwrap_or_else(|| panic!("no episode {episode}: {body}"))
+    }
+
+    /// An episode whose video a revision replaced shows the version line, quietly:
+    /// no failure.
+    #[tokio::test]
+    async fn an_episode_whose_video_was_replaced_shows_the_version_line() {
+        let (state, id) = state_with_work().await;
+        let revision = row(&state, SEASON_FOLDER, "S01E02.mkv", 2).await;
+        done(&state, revision, 777).await;
+
+        let (status, body) = get(&state, &format!("/library/works/{id}")).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let shown = episode(&body, "02");
+        assert_eq!(
+            shown["revision"],
+            serde_json::json!({ "from": "v1", "to": "v2", "replaced_at": 777 })
+        );
+        assert_eq!(shown["failure"], Value::Null);
+        assert_eq!(shown["video"][0]["path"], "Season 01/S01E02.mkv");
+        assert_eq!(episode(&body, "01")["revision"], Value::Null);
+    }
+
+    /// A failed replacement is on its episode's row, with both files and why;
+    /// one whose episode has no row (its old video is gone and the new one
+    /// does not have the episode name yet) gets a row of its own with no
+    /// files; one outside the work's season folders is left out.
+    #[tokio::test]
+    async fn a_failed_replacement_is_on_its_episode_row_or_on_one_of_its_own() {
+        let (state, id) = state_with_work().await;
+        let on_row = row(&state, SEASON_FOLDER, "S01E02.mkv", 2).await;
+        failed(&state, on_row).await;
+        let own = row(&state, SEASON_FOLDER, "S01E03.mkv", 3).await;
+        failed(&state, own).await;
+        let elsewhere = row(&state, "/c/Another Show/Season 01", "S01E01.mkv", 4).await;
+        failed(&state, elsewhere).await;
+
+        let (status, body) = get(&state, &format!("/library/works/{id}")).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let shown = episode(&body, "02");
+        assert_eq!(shown["revision"], Value::Null);
+        assert!(
+            shown["failure"]["reason"]
+                .as_str()
+                .unwrap()
+                .contains("CRC32"),
+            "{shown}"
+        );
+        assert_eq!(
+            shown["failure"]["files"],
+            serde_json::json!([
+                { "role": "old", "path": "Season 01/S01E02.mkv", "state": "kept" },
+                {
+                    "role": "new",
+                    "path": "Season 01/[SubsPlease] Lycoris Recoil - 02v2 (1080p).mkv",
+                    "state": "received_name",
+                },
+            ])
+        );
+        assert_eq!(shown["video"][0]["path"], "Season 01/S01E02.mkv");
+
+        let alone = episode(&body, "03");
+        assert_eq!(alone["video"], serde_json::json!([]));
+        assert_eq!(alone["failure"]["files"][0]["state"], "kept");
+        assert_eq!(episode(&body, "01")["failure"], Value::Null);
+        let episodes = body["seasons"][0]["episodes"].as_array().unwrap();
+        assert_eq!(episodes.len(), 3, "{body}");
+    }
+}
