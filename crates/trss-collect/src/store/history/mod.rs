@@ -104,6 +104,18 @@ impl HistoryStore {
         self.record_from(at, Origin::Elsewhere, observations).await
     }
 
+    /// [`HistoryStore::record`] of one sighting, with the ID of its item: the
+    /// item a later write about it (a note) names.
+    pub async fn record_one(
+        &self,
+        at: Millis,
+        observation: Observation,
+    ) -> Result<(i64, Recorded), HistoryError> {
+        self.db
+            .run(move |c| repo::record_one(c, at, Origin::Feed, &observation))
+            .await
+    }
+
     async fn record_from(
         &self,
         at: Millis,

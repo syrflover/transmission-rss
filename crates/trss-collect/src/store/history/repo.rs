@@ -75,6 +75,27 @@ pub fn record(
     Ok(out)
 }
 
+/// [`record`] of one observation, with the ID of its item.
+pub fn record_one(
+    conn: &mut Connection,
+    at: Millis,
+    origin: Origin,
+    observation: &Observation,
+) -> Result<(i64, Recorded)> {
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let recorded = record_in(&tx, at, origin, std::slice::from_ref(observation))?
+        .pop()
+        .expect("one observation is recorded once");
+    let id = tx
+        .prepare_cached("SELECT id FROM history_items WHERE channel_id = ?1 AND identity_key = ?2")?
+        .query_row(
+            params![observation.channel_id, observation.identity_key],
+            |row| row.get(0),
+        )?;
+    tx.commit()?;
+    Ok((id, recorded))
+}
+
 /// [`record`] inside the caller's transaction `tx`, which another store
 /// writes in too (`store::revisions` writes a revision row with its item).
 pub fn record_in(

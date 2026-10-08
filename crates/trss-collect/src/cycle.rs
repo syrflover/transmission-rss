@@ -14,13 +14,12 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     commands::rule_archive::{move_before_receiving, Receiving},
-    context::CollectContext,
+    context::{CollectContext, ReceiveContext},
     episode_offset::may_decide,
     feed::{self, FeedItem},
     offsets,
     plan::{work_folder_of, ChannelPlan, Judgement},
-    receive,
-    release_name::name_for_trname,
+    receive::{self, Original, RenameJob, RenameMode, Underivable},
     revisions::{self, Decided, Listing, Plan, Replaced, Selected},
     store::{
         channels::{ChannelWithRules, Rule, RuleState},
@@ -30,10 +29,7 @@ use crate::{
 };
 use trss_core::{folder_locks::Section, Millis};
 use trss_transmission as transmission;
-use trss_transmission::{
-    add_item, remove_stale, rename_with_retries, AddError, AddKind, Redactor, RemovedTorrent,
-    RenameMode,
-};
+use trss_transmission::{remove_stale, AddKind, AddLabels, Redactor, RemovedTorrent};
 
 /// The plan of each channel. A channel with a subscription gets one more
 /// look at history, for its first read: when history has no first read of it
@@ -466,7 +462,9 @@ pub async fn record_panic(ctx: &CollectContext, at: Millis, fallback: Fallback) 
         reason: Some(receive::ADD_PANICKED.to_owned()),
         ..fallback.observation
     };
-    if let Err(err) = ctx.history.record(at, vec![observation]).await {
+    let receiving = ctx.receive();
+    let written = receive::record(&receiving, at, HistoryWrite::Observe(observation), None);
+    if let Err(err) = written.await {
         eprintln!(
             "Cannot record history for {}: {err}",
             fallback.channel_label
@@ -599,15 +597,16 @@ pub async fn process_job(
         }
     };
 
+    let receiving = ctx.receive();
     let mut transmission = ctx.transmission.client();
 
     let label =
         transmission::item_label(&job.observation.channel_id, &job.observation.identity_key);
-    let added = add_item(
+    let added = receive::add(
         &mut transmission,
         &job.link,
         &job.save_path,
-        transmission::AddLabels {
+        AddLabels {
             item: Some(&label),
             command: None,
         },
@@ -633,8 +632,8 @@ pub async fn process_job(
                 },
             )
         }
-        Err(err) => {
-            let reason = receive::failure_reason(err, &redactor);
+        Err(failure) => {
+            let reason = failure.reason.clone();
             eprintln!("Cannot add {} ({}): {reason}", job.title, job.channel_label);
             (
                 Observation {
@@ -647,7 +646,7 @@ pub async fn process_job(
                 // the item may be one whose hash only this add's `duplicate`
                 // answer would have given (an earlier add of it got no answer).
                 JobOutcome::Failed {
-                    unconfirmed: !matches!(err, AddError::Rejected(_)),
+                    unconfirmed: !failure.refused(),
                 },
             )
         }
@@ -658,7 +657,7 @@ pub async fn process_job(
         // (see [`revisions::advance`]). Its replacement is written with the
         // history record.
         let was_new = start_replacement(
-            &ctx,
+            &receiving,
             &job,
             at,
             observation,
@@ -672,8 +671,9 @@ pub async fn process_job(
 
     // Recorded as soon as Transmission has answered, before the renaming
     // that can take many seconds.
-    let was_new = match ctx.history.record(at, vec![observation]).await {
-        Ok(recorded) => recorded.first() == Some(&Recorded::New),
+    let written = receive::record(&receiving, at, HistoryWrite::Observe(observation), None).await;
+    let was_new = match written {
+        Ok(stored) => stored.recorded == Some(Recorded::New),
         Err(err) => {
             eprintln!("Cannot record history for {}: {err}", job.channel_label);
             false
@@ -682,21 +682,22 @@ pub async fn process_job(
 
     if let Ok(torrent) = &added {
         if let Some(mode) = rename_mode(&ctx, torrent.kind, &torrent.hash).await {
-            rename_with_retries(
-                &mut transmission,
-                &torrent.hash,
-                &job.save_path,
-                job.episode,
+            let rename = RenameJob {
+                hash: &torrent.hash,
+                save_path: &job.save_path,
+                episode: job.episode,
                 mode,
-                // Read without the revision marker: `trname` does not read
-                // `06v2` as episode 6 in every name (Erai-raws' gives episode
-                // 34). A name read as no episode or as a batch keeps its name.
-                name_for_trname,
-                ctx.rename,
-                &redactor,
-                &cancel,
-            )
-            .await;
+                original: Original::Current,
+                // A torrent this cycle has just added gets the legacy
+                // treatment (ticket 0128 ends it); one that was there already
+                // is never removed.
+                underivable: Underivable::Remove,
+                // The cycle notes nothing on the item (0128 adds it).
+                note: None,
+                until_renamed: true,
+                redactor: &redactor,
+            };
+            receive::rename(&receiving, &rename, &cancel).await;
         }
     }
 
@@ -784,7 +785,7 @@ async fn withhold(
 /// when the torrent was added again (it had gone); one Transmission still
 /// holds is looked at by the replacement steps.
 async fn start_replacement(
-    ctx: &CollectContext,
+    ctx: &ReceiveContext,
     job: &Job,
     at: Millis,
     observation: Observation,
@@ -801,17 +802,16 @@ async fn start_replacement(
         Some(hash.to_owned()),
     );
     let reopened = job.retry.is_some() && kind == AddKind::Added;
-    let written = ctx
-        .revisions
-        .write_with_history(
-            at,
-            HistoryWrite::Observe(observation),
-            RowWrite::Create {
-                new: row,
-                reopen: kind == AddKind::Added,
-            },
-        )
-        .await;
+    let written = receive::record(
+        ctx,
+        at,
+        HistoryWrite::Observe(observation),
+        Some(RowWrite::Create {
+            new: row,
+            reopen: kind == AddKind::Added,
+        }),
+    )
+    .await;
     let written = match written {
         Ok(written) => written,
         Err(err) => {

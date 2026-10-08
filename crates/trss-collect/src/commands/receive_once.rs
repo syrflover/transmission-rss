@@ -85,7 +85,7 @@ use crate::{
     context::{TransmissionLink, MAX_REASON_CHARS},
     offsets,
     plan::{picks, rule_destination, rule_work_folder, ChannelPlan},
-    receive,
+    receive::{self, Original, RenameJob, RenameMode, Underivable},
     release_name::name_for_trname,
     revisions,
     store::{
@@ -106,8 +106,7 @@ use trss_core::{
 use trss_library::store::{library::LibraryStore, seasons::SeasonStore};
 use trss_transmission as transmission;
 use trss_transmission::{
-    add_item, get_torrent, get_torrents, has_label, has_trname_form, remove_label, AddError,
-    AddKind, AddLabels, Redactor, RenamePolicy,
+    get_torrents, has_label, remove_label, AddKind, AddLabels, Redactor, RenamePolicy,
 };
 
 /// What `receive_once` and `receive_past` use (made from
@@ -610,8 +609,8 @@ pub(crate) async fn rule_section(
 }
 
 /// Runs a `receive_once` command to its end, with its turn ([`section`])
-/// taken: [`execute`], then, when the add put the torrent in, [`rename`] and
-/// the note when the name stays. The caller ends the command with the
+/// taken: [`execute`], then, when the add put the torrent in, its rename and
+/// the note when the name stays ([`receive::rename`]). The caller ends the command with the
 /// returned [`Finished`] afterwards, so a screen that re-reads the item once
 /// the command has ended sees the note too.
 ///
@@ -637,13 +636,25 @@ pub async fn finish(
     cancel: &CancellationToken,
 ) -> Result<Finished, Retry> {
     if let Some(step) = &finished.rename {
-        if let RenameResult::Kept(note) = rename(ctx, step, cancel).await {
-            // Only reported: the item's result is written already, and a rerun
-            // would not rename or note it.
-            if let Err(err) = ctx.history.note_received(step.item_id, note).await {
-                eprintln!("Cannot note the kept name on item {}: {err}", step.item_id);
-            }
-        }
+        let job = RenameJob {
+            hash: &step.hash,
+            save_path: &step.save_path,
+            episode: step.episode,
+            // Only a torrent this command's add put in is renamed.
+            mode: RenameMode::Added,
+            original: Original::Recorded {
+                command_id: step.command_id.clone(),
+                name: step.original_name.clone(),
+                added_before: step.added_before,
+            },
+            // A person chose to receive this item again: the torrent is never
+            // removed, as the rule cycle removes one `trname` has no name for.
+            underivable: Underivable::Keep,
+            note: Some(step.item_id),
+            until_renamed: false,
+            redactor: &step.redactor,
+        };
+        receive::rename(ctx, &job, cancel).await;
         // History holds the torrent's hash now; the command's label has done
         // its job. One left behind (this fails, or the worker dies first) only
         // names a command that has ended.
@@ -910,7 +921,7 @@ pub async fn execute_with(
     let mut transmission = ctx.transmission.client();
     let item_label = transmission::item_label(&item.channel_id, &item.identity_key);
     let command_label = transmission::command_label(&command.id);
-    let added = add_item(
+    let added = receive::add(
         &mut transmission,
         &raw_link,
         &save_path,
@@ -987,49 +998,34 @@ pub async fn execute_with(
                 }
                 _ => None,
             };
-            let (stored, replacing) = match row {
-                Some(row) => {
-                    let written = ctx
-                        .revisions
-                        .write_with_history(
-                            now(),
-                            HistoryWrite::Outcome {
-                                item_id: item.id,
-                                result,
-                                rule_id: Some(rule_id.clone()),
-                                reason: None,
-                                torrent_hash: Some(torrent.hash.clone()),
-                            },
-                            row,
-                        )
-                        .await
-                        .map_err(|err| {
-                            Retry::Store(format!(
-                                "cannot record item {} with its revision: {err}",
-                                item.id
-                            ))
-                        })?;
-                    let replacing = written
-                        .row
-                        .is_some_and(|row| row.state != RevisionState::Unknown);
-                    (written.stored, replacing)
+            let with_row = row.is_some();
+            let written = receive::record(
+                ctx,
+                now(),
+                HistoryWrite::Outcome {
+                    item_id: item.id,
+                    result,
+                    rule_id: Some(rule_id.clone()),
+                    reason: None,
+                    torrent_hash: Some(torrent.hash.clone()),
+                },
+                row,
+            )
+            .await
+            .map_err(|err| {
+                if with_row {
+                    Retry::Store(format!(
+                        "cannot record item {} with its revision: {err}",
+                        item.id
+                    ))
+                } else {
+                    Retry::store(err)
                 }
-                None => {
-                    let stored = ctx
-                        .history
-                        .record_outcome(
-                            item.id,
-                            now(),
-                            result,
-                            Some(rule_id.clone()),
-                            None,
-                            Some(torrent.hash.clone()),
-                        )
-                        .await
-                        .map_err(Retry::store)?;
-                    (stored, false)
-                }
-            };
+            })?;
+            let replacing = written
+                .row
+                .is_some_and(|row| row.state != RevisionState::Unknown);
+            let stored = written.stored;
             let stored = stored.unwrap_or(result);
             // Transmission still had the revision's torrent, stopped on an
             // error: it is started again, and the replacement looks at it.
@@ -1060,13 +1056,13 @@ pub async fn execute_with(
             });
             Ok(held(stored, rename))
         }
-        Err(err) => {
-            let reason = receive::failure_reason(&err, &redactor);
+        Err(failure) => {
+            let unanswered = failure.unanswered();
+            let reason = failure.reason;
             eprintln!(
                 "Cannot add item {} of {}: {reason}",
                 item.id, item.channel_label
             );
-            let unanswered = matches!(err, AddError::Rpc(_));
             if (unanswered && command.attempts < MAX_ATTEMPTS) || keep_trying {
                 return Err(Retry::AddUnanswered);
             }
@@ -1142,19 +1138,22 @@ async fn refuse(
     now: &impl Fn() -> Millis,
 ) -> Result<Finished, Retry> {
     let reason: String = reason.chars().take(MAX_REASON_CHARS).collect();
-    let stored = ctx
-        .history
-        .record_outcome(
-            item.id,
-            now(),
-            HistoryResult::AddFailed,
-            Some(rule_id.to_owned()),
-            Some(reason.clone()),
-            None,
-        )
-        .await
-        .map_err(Retry::store)?
-        .unwrap_or(HistoryResult::AddFailed);
+    let stored = receive::record(
+        ctx,
+        now(),
+        HistoryWrite::Outcome {
+            item_id: item.id,
+            result: HistoryResult::AddFailed,
+            rule_id: Some(rule_id.to_owned()),
+            reason: Some(reason.clone()),
+            torrent_hash: None,
+        },
+        None,
+    )
+    .await
+    .map_err(Retry::store)?
+    .stored
+    .unwrap_or(HistoryResult::AddFailed);
     if stored.is_settled() {
         return Ok(held(stored, None));
     }
@@ -1198,139 +1197,9 @@ fn redactor_for(ctx: &ReceiveContext, channel: &Channel) -> Redactor {
     redactor
 }
 
-/// What [`rename`] did.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RenameResult {
-    /// The file has the `trname` name now.
-    Renamed,
-    /// Nothing to do: the name was already right, the torrent is gone, or
-    /// shutdown was asked for.
-    Unchanged,
-    /// The file keeps its original name; the note says why, for the history item.
-    Kept(&'static str),
-}
-
-/// The file's name gave `trname` no title and episode to work with.
-pub const NAME_NOT_DERIVED: &str =
-    "파일 이름에서 작품과 회차를 알아내지 못해서 원래 이름 그대로 뒀어요.";
-/// The torrent has more than one file; `trname` names a single file.
-pub const SEVERAL_FILES: &str = "파일이 여러 개인 토렌트라 이름을 바꾸지 않았어요.";
-/// The name `trname` gives is taken by another file in the folder.
-pub const NAME_TAKEN: &str = "같은 회차 이름의 파일이 이미 있어서 원래 이름 그대로 뒀어요.";
-/// Renaming was tried and did not go through.
-pub const NAME_NOT_CHANGED: &str = "이름을 바꾸지 못해서 원래 이름 그대로 뒀어요.";
-
-/// Gives the torrent's single file its `trname` name for the folder it was
-/// saved in, with the rule's episode conversion, derived from the name the
-/// file had before the command first renamed it, which the command records
-/// ([`Command::original_name`]): run again over a file it named already, it
-/// finds the same name and leaves it. A torrent an earlier start put in with
-/// no name recorded keeps a name in the `trname` form. A torrent with several
-/// files is left as it is at once, as the rule cycle leaves it.
-///
-/// Unlike the renaming after a rule's add, a torrent whose name cannot be
-/// derived is left alone: that path removes the torrent and its data, which is
-/// no answer to a person who chose to receive this item again (a rule saving
-/// to the base folder, for one, has no title and season parts to name a file
-/// after). The result says
-/// when the original name was kept, so the caller can note it on the history
-/// item. Attempts follow `ctx.rename`, as a magnet link's file name is only
-/// known once Transmission has its metadata.
-pub async fn rename(
-    ctx: &ReceiveContext,
-    rename: &Rename,
-    cancel: &CancellationToken,
-) -> RenameResult {
-    let mut transmission = ctx.transmission.client();
-    let mut original = rename.original_name.clone();
-    for _ in 0..ctx.rename.attempts {
-        tokio::select! {
-            _ = tokio::time::sleep(ctx.rename.delay) => {}
-            _ = cancel.cancelled() => return RenameResult::Unchanged,
-        }
-
-        let torrent = match get_torrent(&mut transmission, &rename.hash).await {
-            Ok(Some(torrent)) => torrent,
-            Ok(None) => return RenameResult::Unchanged,
-            Err(err) => {
-                println!("{}", rename.redactor.apply(&err.to_string()));
-                continue;
-            }
-        };
-        match torrent.file_count {
-            Some(1) => {}
-            // Transmission counts no files until a magnet link's metadata is in.
-            Some(0) | None => continue,
-            Some(_) => return RenameResult::Kept(SEVERAL_FILES),
-        }
-        let Some(old_name) = torrent.name else {
-            continue;
-        };
-        // The name is derived from the name the file had before any rename,
-        // as the rule cycle derives it from the name of a torrent it has just
-        // put in, never from the name the file has now: a name this command's
-        // earlier start or a cycle gave is then the same name again and stays,
-        // so no episode is converted twice, while a release that comes in the
-        // `trname` form of another season or episode is still converted.
-        let original = match &original {
-            Some(name) => name.clone(),
-            None => {
-                // An earlier start put the torrent in and recorded no name (the
-                // worker died between the two): a name in the `trname` form
-                // may be one it or a cycle gave.
-                if rename.added_before
-                    && has_trname_form(
-                        &old_name,
-                        &rename.save_path,
-                        rename.episode,
-                        name_for_trname,
-                    )
-                {
-                    return RenameResult::Unchanged;
-                }
-                // Recorded before any rename, so a later start finds it.
-                match ctx
-                    .commands
-                    .note_original_name(&rename.command_id, &old_name)
-                    .await
-                {
-                    Ok(Some(name)) => {
-                        original = Some(name.clone());
-                        name
-                    }
-                    Ok(None) => return RenameResult::Unchanged,
-                    Err(err) => {
-                        eprintln!("Cannot record the name of item {}: {err}", rename.item_id);
-                        continue;
-                    }
-                }
-            }
-        };
-        let Some(new_name) = derived_name(&rename.save_path, &original, rename.episode) else {
-            return RenameResult::Kept(NAME_NOT_DERIVED);
-        };
-        if new_name == old_name {
-            return RenameResult::Unchanged;
-        }
-        // Never onto a name that is taken (see `transmission::rename_torrent`).
-        let folder = torrent
-            .download_dir
-            .as_deref()
-            .map_or(rename.save_path.as_path(), Path::new);
-        if std::fs::symlink_metadata(folder.join(&new_name)).is_ok() {
-            return RenameResult::Kept(NAME_TAKEN);
-        }
-        match transmission
-            .torrent_rename_path(vec![Id::Hash(rename.hash.clone())], old_name, new_name)
-            .await
-        {
-            Ok(response) if response.result == "success" => return RenameResult::Renamed,
-            Ok(_) => {}
-            Err(err) => println!("{}", rename.redactor.apply(&err.to_string())),
-        }
-    }
-    RenameResult::Kept(NAME_NOT_CHANGED)
-}
+pub use crate::receive::{
+    RenameResult, NAME_NOT_CHANGED, NAME_NOT_DERIVED, NAME_TAKEN, SEVERAL_FILES,
+};
 
 /// The name `trname` gives `file_name` in `save_path` with the rule's `episode`
 /// conversion, as the rule cycle's renaming derives it: read from the name

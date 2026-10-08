@@ -1,12 +1,12 @@
 //! The Transmission side of collection: adding an item's torrent, handling one
-//! that is already present, renaming the single file with `trname`, and
-//! removing bot-labelled torrents that have left the feed.
+//! that is already present, and removing bot-labelled torrents that have left
+//! the feed. What becomes of a torrent after its add (its record and its
+//! rename with `trname`) is the collection's (`trss_collect::receive`); this
+//! crate keeps the requests to Transmission.
 //!
 //! The logic here moved out of the former cron binary unchanged. Where that
 //! binary printed an error, these functions print it through a [`Redactor`], so
-//! the worker never logs a secret that an HTTP error quotes. Renaming takes a
-//! [`RenameMode`]: the former binary renamed every torrent as one it had just
-//! added, while the worker does that for its own new adds only.
+//! the worker never logs a secret that an HTTP error quotes.
 
 #[cfg(any(test, feature = "test-support"))]
 pub mod fake;
@@ -15,8 +15,6 @@ mod redact;
 use std::{fmt, path::Path, time::Duration};
 
 pub use redact::{Redactor, MIN_QUERY_SECRET_LEN, REDACTED};
-use tokio::time::sleep;
-use tokio_util::sync::CancellationToken;
 use transmission_rpc::{
     types::{
         Id, SessionSetArgs, Torrent, TorrentAction, TorrentAddArgs, TorrentAddedOrDuplicate,
@@ -24,7 +22,6 @@ use transmission_rpc::{
     },
     TransClient,
 };
-use trname::trname_raw;
 
 /// How long connecting to Transmission may take.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -535,171 +532,9 @@ pub async fn remove_label(
     }
 }
 
-/// Which torrent [`rename_torrent`] is renaming, which decides how far it may go.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RenameMode {
-    /// A torrent the caller has just added. The single file is renamed, and the
-    /// torrent is removed together with its data when `trname` cannot derive
-    /// a name from what the caller reads. A name the caller keeps
-    /// ([`NameForTrname`]) is left as it is.
-    Added,
-    /// A torrent Transmission already had. Its file is renamed only while it
-    /// sits in `download_dir` and its name is not in the `trname` form yet (a
-    /// rename that was cut short earlier). A name in that form is left alone,
-    /// because applying the episode offset again would change the episode, and
-    /// a torrent in another folder was named after another title. Nothing is
-    /// ever removed.
-    Existing,
-}
-
-/// What one [`rename_torrent`] call came to.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Renamed {
-    /// The file has the new name now.
-    To(String),
-    /// Nothing more to do: the torrent was removed or is gone, the name it
-    /// would take is taken by another file, or (in [`RenameMode::Existing`])
-    /// its name is to be left as it is.
-    Finished,
-    /// Not now: the metadata or the rename is not there yet; try again later.
-    NotYet,
-}
-
-/// How the caller reads a torrent's name for `trname`: the name to derive the
-/// episode from, given the name Transmission holds the file under, or `None`
-/// to keep the name as it is. Release names carry notation (a revision such as
-/// `06v2`) that `trname` does not read the same way in every name, and a name
-/// the caller reads as no episode (a movie, a batch) is one `trname` would
-/// find digits in all the same; what to do with them is the caller's rule, not
-/// Transmission's.
-///
-/// `None` is the caller's answer and leaves the torrent and its name alone in
-/// both modes. It is not the same as `trname` having no name for what the
-/// caller returned: that removes a torrent in [`RenameMode::Added`].
-pub type NameForTrname = fn(&str) -> Option<String>;
-
-/// Renames the torrent's single file to the `trname` name for `download_dir`
-/// (`.../<title>/Season NN`), deriving it from the torrent's name as
-/// `name_for_trname` gives it. What happens when the name cannot be derived, or
-/// is in that form already, depends on `mode`. Torrents with more than one
-/// file are left alone, and so is a torrent whose new name is taken by a file
-/// in its folder (looked up on this host's disk, which sees the folders at the
-/// paths Transmission reports).
-pub async fn rename_torrent(
-    transmission: &mut TransClient,
-    hash: &str,
-    download_dir: &Path,
-    starts_episode_at: isize,
-    mode: RenameMode,
-    name_for_trname: NameForTrname,
-) -> transmission_rpc::types::Result<Renamed> {
-    let Some(torrent) = get_torrent(transmission, hash).await? else {
-        return Ok(match mode {
-            RenameMode::Added => Renamed::NotYet,
-            RenameMode::Existing => Renamed::Finished,
-        });
-    };
-
-    if mode == RenameMode::Existing
-        && torrent.download_dir.as_deref().map(Path::new) != Some(download_dir)
-    {
-        return Ok(Renamed::Finished);
-    }
-
-    let file_count = torrent.file_count.unwrap();
-    if file_count == 1 {
-        let old_file_name = torrent.name.clone().unwrap();
-
-        if mode == RenameMode::Existing && looks_renamed(&old_file_name, download_dir) {
-            return Ok(Renamed::Finished);
-        }
-
-        // The caller keeps this name: not renamed, and not removed either.
-        let Some(read_as) = name_for_trname(&old_file_name) else {
-            return Ok(Renamed::Finished);
-        };
-        let derived = trname_raw(download_dir, &read_as, starts_episode_at);
-        match (mode, derived) {
-            (RenameMode::Existing, Some((_, file, _))) if file.already_formatted => {
-                return Ok(Renamed::Finished);
-            }
-            (_, Some((_, _, new_file_name))) => {
-                // Never onto a name that is taken: Transmission would answer
-                // success and point the torrent at the other file, leaving its
-                // own under the old name (libtransmission's `renamePath`
-                // renames on disk only when the target is not there). That is
-                // the old video when a higher revision of a received episode
-                // comes in; its replacement is the worker's (the revision
-                // replacement in `trss-collect`).
-                let folder = torrent
-                    .download_dir
-                    .as_deref()
-                    .map_or(download_dir, Path::new);
-                if std::fs::symlink_metadata(folder.join(&new_file_name)).is_ok() {
-                    println!(
-                        "Not renaming {old_file_name}: {new_file_name} is taken in {}",
-                        folder.display()
-                    );
-                    return Ok(Renamed::Finished);
-                }
-                let res = transmission
-                    .torrent_rename_path(
-                        vec![Id::Hash(hash.to_owned())],
-                        old_file_name,
-                        new_file_name.clone(),
-                    )
-                    .await?;
-
-                if res.result == "success" {
-                    return Ok(Renamed::To(new_file_name));
-                }
-            }
-            (RenameMode::Added, None) => {
-                let _res = transmission
-                    .torrent_remove(vec![Id::Hash(hash.to_owned())], true)
-                    .await?;
-            }
-            (RenameMode::Existing, None) => return Ok(Renamed::Finished),
-        }
-    } else if file_count > 1 && mode == RenameMode::Existing {
-        return Ok(Renamed::Finished);
-    }
-
-    Ok(Renamed::NotYet)
-}
-
-/// Whether the file `name` in `download_dir` has the `trname` form already,
-/// read as [`RenameMode::Existing`] reads it: it looks renamed, or `trname`
-/// finds it formatted. A rename of such a name would read its episode as a
-/// release's and convert it a second time (`E13` with a conversion of `+12`
-/// becoming `E25`), so a rename that may meet a name it or another rename
-/// gave already asks this first.
-pub fn has_trname_form(
-    name: &str,
-    download_dir: &Path,
-    starts_episode_at: isize,
-    name_for_trname: NameForTrname,
-) -> bool {
-    looks_renamed(name, download_dir)
-        || name_for_trname(name)
-            .and_then(|read_as| trname_raw(download_dir, &read_as, starts_episode_at))
-            .is_some_and(|(_, file, _)| file.already_formatted)
-}
-
-/// Whether `name` is the name `trname` gives in `download_dir`
-/// (`.../<title>/Season NN`): the folder's title and an episode
-/// ([`trss_core::trname_names::is_trname_name`]).
-fn looks_renamed(name: &str, download_dir: &Path) -> bool {
-    download_dir
-        .components()
-        .rev()
-        .nth(1)
-        .and_then(|c| c.as_os_str().to_str())
-        .is_some_and(|title| trss_core::trname_names::is_trname_name(name, title))
-}
-
-/// How persistently a freshly added torrent is renamed: Transmission needs a
-/// moment before a magnet link's metadata, and with it the file name, is known.
+/// How persistently a freshly added torrent is renamed
+/// (`trss_collect::receive::rename`): Transmission needs a moment before a
+/// magnet link's metadata, and with it the file name, is known.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RenamePolicy {
     /// Wait before each attempt.
@@ -714,44 +549,6 @@ impl Default for RenamePolicy {
         RenamePolicy {
             delay: Duration::from_secs(1),
             attempts: 17,
-        }
-    }
-}
-
-/// Calls [`rename_torrent`] until it succeeds or the attempts run out, printing
-/// each error. Stops early, without a further attempt, once `cancel` fires;
-/// the next collection run tries again because it meets the torrent again.
-#[allow(clippy::too_many_arguments)]
-pub async fn rename_with_retries(
-    transmission: &mut TransClient,
-    hash: &str,
-    save_path: &Path,
-    episode: isize,
-    mode: RenameMode,
-    name_for_trname: NameForTrname,
-    policy: RenamePolicy,
-    redactor: &Redactor,
-    cancel: &CancellationToken,
-) {
-    for _ in 0..policy.attempts {
-        tokio::select! {
-            _ = sleep(policy.delay) => {}
-            _ = cancel.cancelled() => break,
-        }
-
-        let res = rename_torrent(
-            transmission,
-            hash,
-            save_path,
-            episode,
-            mode,
-            name_for_trname,
-        )
-        .await
-        .inspect_err(|err| println!("{}", redactor.apply(&err.to_string())));
-
-        if let Ok(Renamed::To(_) | Renamed::Finished) = res {
-            break;
         }
     }
 }
@@ -831,7 +628,7 @@ pub async fn remove_stale(
 
 #[cfg(test)]
 mod tests {
-    use super::{item_label, item_of_label, looks_renamed};
+    use super::{item_label, item_of_label};
 
     #[test]
     fn an_item_label_names_its_channel_and_identity_key() {
@@ -846,33 +643,5 @@ mod tests {
         );
         assert_eq!(item_of_label("managed:transmission-rss"), None);
         assert_eq!(item_of_label("trss-item:no-key"), None);
-    }
-
-    #[test]
-    fn a_trname_name_is_told_apart_from_a_release_name() {
-        let dir = std::path::Path::new("/media/anime/Slime/Season 04");
-        for name in [
-            "Slime S04E38.mkv",
-            "SLIME S04E38.mkv",
-            "Slime S04E105.mkv",
-            "Slime S04E05.5.mp4",
-        ] {
-            assert!(looks_renamed(name, dir), "{name}");
-        }
-        for name in [
-            "[SubsPlease] Tensei Shitara Slime Datta Ken - 62 (1080p) [AAAA0006].mkv",
-            "Tensura S04E62.mkv",
-            "S04E05.mkv",
-            "Slime.S04E05.1080p.WEB.mkv",
-            "Slime S04E05 (1080p).mkv",
-            "SlimeS04E05.mkv",
-            "Slime Special.mkv",
-        ] {
-            assert!(!looks_renamed(name, dir), "{name}");
-        }
-        assert!(!looks_renamed(
-            "Slime S04E38.mkv",
-            std::path::Path::new("/")
-        ));
     }
 }

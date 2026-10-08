@@ -44,7 +44,7 @@
 //! the screen says so (`이름을 되돌리지 못했어요` with the names), while the
 //! other files go on. Before Transmission's rename the target is looked up on
 //! disk; Transmission answers success without moving anything when the target
-//! is there (see [`trss_transmission::rename_torrent`]), so a target that
+//! is there (see [`crate::receive::rename`]), so a target that
 //! appeared in between leaves the source in place, and the torrent's name is
 //! then put back. A rename on disk refuses an existing target by itself.
 //!
