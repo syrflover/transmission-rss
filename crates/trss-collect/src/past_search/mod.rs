@@ -4,8 +4,6 @@
 //!
 //! - [`query`]: the search words (a channel's format with the rule's match
 //!   phrase, the extra searches' episode alternatives) and the search address.
-//! - [`release`]: what a result's title says (episode, revision, batch) and the
-//!   notation its number is written in.
 //! - [`judge`]: the preview of results, against the range and what the work has.
 //! - [`client`]: one request for one page, paced for the host across processes.
 //! - [`range`]: the release range the search starts with.
@@ -36,7 +34,6 @@ pub mod client;
 pub mod judge;
 pub mod query;
 pub mod range;
-pub mod release;
 pub mod run;
 pub mod service;
 pub mod world;

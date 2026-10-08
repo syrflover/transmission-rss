@@ -8,6 +8,7 @@
 //! - [`store`]: the queries and rules of the collection's tables;
 //! - [`rss`], [`rule`], [`config`], [`plan`] and [`feed`]: the feeds and what
 //!   a rule picks from them;
+//! - [`release_name`]: what a release name says (work, episode, revision, CRC32);
 //! - [`revisions`], [`revision`]: replacing a video with its revision;
 //! - [`commands`]: each kind of web command and how it is carried out;
 //! - [`offsets`], [`episode_offset`]: a rule's episode offset;
@@ -30,6 +31,7 @@ pub mod feed;
 pub mod offsets;
 pub mod past_search;
 pub mod plan;
+pub mod release_name;
 #[cfg(test)]
 mod release_names;
 pub mod revision;

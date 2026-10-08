@@ -9,7 +9,7 @@
 use regex::Regex;
 use url::Url;
 
-use crate::{past_search::release::Notation, store::channels::Rule};
+use crate::{release_name::Notation, store::channels::Rule};
 
 /// The place in a search format that the rule's match phrase takes.
 pub const PLACEHOLDER: &str = "{match}";

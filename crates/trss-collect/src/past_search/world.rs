@@ -22,10 +22,8 @@ use std::{
 
 use crate::{
     episode_offset::folder_episode,
-    past_search::{
-        judge::{Known, Present, World},
-        release::{read, Episode, Kind},
-    },
+    past_search::judge::{Known, Present, World},
+    release_name::{Episode, Kind, ReleaseName},
     store::{history::HistoryItem, status::TorrentListing},
 };
 use trss_core::{files::without_part, trname_names::season_episode};
@@ -132,8 +130,8 @@ pub fn folder_episode_of(item: &HistoryItem, offset: i64) -> Option<Episode> {
 
 /// [`folder_episode_of`] for a release title.
 pub fn folder_episode_of_title(title: &str, offset: i64) -> Option<Episode> {
-    match read(title).kind {
-        Kind::Episode { episode, .. } => Some(folder_episode(episode, offset)),
+    match ReleaseName::read(title).kind {
+        Kind::Episode(episode) => Some(folder_episode(episode, offset)),
         Kind::Batch { .. } | Kind::Unnumbered => None,
     }
 }

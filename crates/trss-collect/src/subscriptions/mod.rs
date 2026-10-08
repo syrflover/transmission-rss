@@ -1,113 +1,18 @@
 //! The pure parts of subscribing to an Anissia anime (`docs/specs/collection.md`,
-//! 방영작 구독): the work part of a release title (the rule's match phrase),
-//! the titles a channel's history offers, the folder suggested for it, and the
-//! quarter a subscription belongs to.
+//! 방영작 구독): the titles a channel's history offers (grouped by the work
+//! [`crate::release_name`] reads from them), the folder suggested for a work,
+//! and the quarter a subscription belongs to.
 
 pub mod candidates;
 
-use std::{collections::HashMap, sync::OnceLock};
+use std::collections::HashMap;
 
-use regex::Regex;
 use trss_core::{
     calendar::{civil_from_days, DAY_MS, KST_OFFSET_MS},
     Millis,
 };
 
-use crate::store::history::HistoryItem;
-
-/// A release title read into the parts the subscription flow needs.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Release {
-    /// The leading `[Group]` tags, without the brackets.
-    pub groups: Vec<String>,
-    /// The title of the work: what the rule looks for.
-    pub work: String,
-    /// The episode as written (`01`, `12v2`, `01-12`), if the title has one.
-    pub episode: Option<String>,
-}
-
-fn regex(cell: &'static OnceLock<Regex>, pattern: &str) -> &'static Regex {
-    cell.get_or_init(|| Regex::new(pattern).expect("a valid pattern"))
-}
-
-/// Reads the work and the episode out of a release title such as
-/// `[SubsPlease] Work - 01 (1080p) [ABCD1234].mkv`. `None` when no work is left
-/// once the group tags and the trailing details are taken away.
-pub fn parse_release(title: &str) -> Option<Release> {
-    static LEADING: OnceLock<Regex> = OnceLock::new();
-    static EXT: OnceLock<Regex> = OnceLock::new();
-    static DASH: OnceLock<Regex> = OnceLock::new();
-    static SXXEYY: OnceLock<Regex> = OnceLock::new();
-    static BARE: OnceLock<Regex> = OnceLock::new();
-    static TRAILING: OnceLock<Regex> = OnceLock::new();
-
-    let leading = regex(&LEADING, r"^\s*(?:\[([^\]]*)\]|【([^】]*)】)\s*");
-    let mut rest = title.trim();
-    let mut groups = Vec::new();
-    while let Some(found) = leading.captures(rest) {
-        let tag = found.get(1).or(found.get(2)).map_or("", |m| m.as_str());
-        if !tag.trim().is_empty() {
-            groups.push(tag.trim().to_owned());
-        }
-        rest = &rest[found.get(0).map_or(0, |m| m.end())..];
-    }
-    let rest = regex(&EXT, r"(?i)\.(?:mkv|mp4|avi|torrent)$").replace(rest, "");
-    let rest = rest.trim();
-
-    // `Work - 01 (1080p)`: the last ` - <number>` that something else follows.
-    let dash = regex(
-        &DASH,
-        r"^(.*\S)\s+-\s+(\d{1,4}(?:\.\d)?(?:v\d+)?(?:\s*-\s*\d{1,4})?)(?:\s|[(\[]|$)",
-    );
-    // `Work S01E03`.
-    let sxxeyy = regex(
-        &SXXEYY,
-        r"(?i)^(.*?\S)\s+S\d{1,2}E(\d{1,4}(?:\.\d)?)(?:\s|[(\[.]|$)",
-    );
-    // `Work 04 [BDRip ...]`: the number after the title with no dash.
-    let bare = regex(&BARE, r"^(.*\S)\s+(\d{1,3}(?:v\d+)?)\s*(?:[(\[].*)?$");
-    for pattern in [dash, sxxeyy, bare] {
-        if let Some(found) = pattern.captures(rest) {
-            let work = found[1].trim();
-            if !work.is_empty() {
-                return Some(Release {
-                    groups,
-                    work: work.to_owned(),
-                    episode: Some(found[2].to_owned()),
-                });
-            }
-        }
-    }
-
-    // No episode: a batch or a movie. Take the title without its trailing
-    // `(…)` and `[…]` details.
-    let trailing = regex(&TRAILING, r"\s*(?:\([^)]*\)|\[[^\]]*\])\s*$");
-    let mut work = rest;
-    while let Some(m) = trailing.find(work) {
-        work = &work[..m.start()];
-    }
-    let work = work.trim();
-    (!work.is_empty()).then(|| Release {
-        groups,
-        work: work.to_owned(),
-        episode: None,
-    })
-}
-
-/// The episode a release title names as a whole number (`12`, `12v2`); not a
-/// batch (`01-12`) or a half episode.
-pub fn whole_episode(title: &str) -> Option<u32> {
-    let written = parse_release(title)?.episode?;
-    let digits: String = written.chars().take_while(char::is_ascii_digit).collect();
-    let rest = &written[digits.len()..];
-    let revision = rest
-        .strip_prefix('v')
-        .is_some_and(|v| !v.is_empty() && v.chars().all(|c| c.is_ascii_digit()));
-    if digits.is_empty() || !(rest.is_empty() || revision) {
-        return None;
-    }
-    digits.parse().ok()
-}
+use crate::{release_name::ReleaseName, store::history::HistoryItem};
 
 /// How two spellings of a work are told to be one: case and runs of spaces do
 /// not count.
@@ -136,15 +41,15 @@ pub struct TitleGroup {
 pub fn title_groups<'a>(items: impl IntoIterator<Item = &'a HistoryItem>) -> Vec<TitleGroup> {
     let mut by_key: HashMap<String, TitleGroup> = HashMap::new();
     for item in items {
-        let Some(release) = parse_release(&item.title) else {
+        let Some(work) = ReleaseName::read(&item.title).work else {
             continue;
         };
-        let key = work_key(&release.work);
+        let key = work_key(&work);
         match by_key.get_mut(&key) {
             Some(group) => {
                 group.items += 1;
                 if item.first_seen_at > group.latest_seen_at {
-                    group.work = release.work;
+                    group.work = work;
                     group.latest_title = item.title.clone();
                     group.latest_seen_at = item.first_seen_at;
                 }
@@ -153,7 +58,7 @@ pub fn title_groups<'a>(items: impl IntoIterator<Item = &'a HistoryItem>) -> Vec
                 by_key.insert(
                     key,
                     TitleGroup {
-                        work: release.work,
+                        work,
                         latest_title: item.title.clone(),
                         items: 1,
                         latest_seen_at: item.first_seen_at,

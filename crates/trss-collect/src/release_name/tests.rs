@@ -1,0 +1,405 @@
+use super::*;
+
+fn without_version(name: &str) -> String {
+    ReleaseName::read(name).without_revision().to_owned()
+}
+
+fn parsed(title: &str) -> (String, Option<String>) {
+    let release = ReleaseName::read(title);
+    let work = release
+        .work
+        .clone()
+        .unwrap_or_else(|| panic!("no work in {title:?}"));
+    (work, release.written_episode().map(str::to_owned))
+}
+
+#[test]
+fn the_work_is_the_title_between_the_group_and_the_episode() {
+    for (title, work, episode) in [
+        (
+            "[SubsPlease] Work - 01 (1080p) [ABCD1234].mkv",
+            "Work",
+            "01",
+        ),
+        (
+            "[SubsPlease] Re:Zero kara - Hajimeru - 12v2 (720p)",
+            "Re:Zero kara - Hajimeru",
+            "12v2",
+        ),
+        (
+            "[Erai-raws] Work Name - 07 [1080p][Multiple Subtitle][ABCD]",
+            "Work Name",
+            "07",
+        ),
+        ("[Moozzi2] Work - 05.5 (BD 1920x1080 x265)", "Work", "05.5"),
+        ("[Group] [Extra] Work - 03", "Work", "03"),
+        ("Work Name S01E03 1080p WEB", "Work Name", "03"),
+        (
+            "[Beatrice-Raws] Kono Subarashii 04 [BDRip 1920x1080 HEVC FLAC]",
+            "Kono Subarashii",
+            "04",
+        ),
+        ("[Batch] Work - 01-12 (BD 1080p)", "Work", "01-12"),
+        ("【Group】 작품 이름 - 02", "작품 이름", "02"),
+        (
+            "[SubsPlease] 86 - Eighty Six - 01 (1080p)",
+            "86 - Eighty Six",
+            "01",
+        ),
+    ] {
+        assert_eq!(
+            parsed(title),
+            (work.to_owned(), Some(episode.to_owned())),
+            "{title}"
+        );
+    }
+    let release = ReleaseName::read("[SubsPlease] Work - 01 (1080p)");
+    assert_eq!(release.groups, ["SubsPlease"]);
+}
+
+#[test]
+fn a_title_without_an_episode_keeps_its_work_without_the_trailing_details() {
+    assert_eq!(
+        parsed("[Group] Work Movie (BD 1080p) [ABCD]"),
+        ("Work Movie".to_owned(), None)
+    );
+    assert_eq!(parsed("Plain Title"), ("Plain Title".to_owned(), None));
+    assert!(ReleaseName::read("[Group]").work.is_none());
+    assert!(ReleaseName::read("   ").work.is_none());
+    assert!(ReleaseName::read("[Group] (1080p)").work.is_none());
+}
+
+#[test]
+fn a_number_inside_the_title_is_not_taken_for_the_episode() {
+    assert_eq!(
+        parsed("[SubsPlease] 2.5 Dimensional Seduction - 03 (1080p)"),
+        (
+            "2.5 Dimensional Seduction".to_owned(),
+            Some("03".to_owned())
+        )
+    );
+    assert_eq!(
+        parsed("[SubsPlease] Mob Psycho 100 - 03 (1080p)"),
+        ("Mob Psycho 100".to_owned(), Some("03".to_owned()))
+    );
+}
+
+fn kind(title: &str) -> Kind {
+    ReleaseName::read(title).kind
+}
+
+/// The kind and the revision of a name.
+fn episode_of(title: &str) -> (Kind, u32) {
+    let read = ReleaseName::read(title);
+    (read.kind, read.version)
+}
+
+fn episode(number: u32, version: u32) -> (Kind, u32) {
+    (Kind::Episode(Episode::whole(number)), version)
+}
+
+#[test]
+fn an_episode_title_gives_its_number_and_revision() {
+    assert_eq!(
+        episode_of("[SubsPlease] Sono Bisque Doll - 14 (1080p) [E2675E51].mkv"),
+        episode(14, 1)
+    );
+    assert_eq!(
+        episode_of("[SubsPlease] Sono Bisque Doll - 14v2 (1080p) [1A2B3C4D].mkv"),
+        episode(14, 2)
+    );
+    assert_eq!(
+        episode_of("[Erai-raws] Show - 05 [1080p CR WEBRip HEVC AAC][MultiSub][1BBD34E6].mkv"),
+        episode(5, 1)
+    );
+    assert_eq!(
+        episode_of("[SubsPlease] Tensei Shitara Slime Datta Ken - 65.5 (1080p) [0214B01E].mkv"),
+        (
+            Kind::Episode(Episode {
+                number: 65,
+                half: true
+            }),
+            1
+        )
+    );
+    assert_eq!(
+        episode_of("[SubsPlease] One Piece - 1000 (1080p) [AAAA1111].mkv"),
+        episode(1000, 1)
+    );
+}
+
+#[test]
+fn a_batch_says_so_or_names_a_range() {
+    assert_eq!(
+        kind("[SubsPlease] Sayonara Lara (01-12) (1080p) [Batch]"),
+        Kind::Batch {
+            range: Some((1, 12))
+        }
+    );
+    assert_eq!(
+        kind("[Unofficial] Sono Bisque Doll (01-24) Unofficial Batch"),
+        Kind::Batch {
+            range: Some((1, 24))
+        }
+    );
+    assert_eq!(
+        kind("[SubsPlease] Sono Bisque Doll - 01~12 [Batch] (1080p)"),
+        Kind::Batch {
+            range: Some((1, 12))
+        }
+    );
+    assert_eq!(
+        kind("[Group] Show - 01-12 (1080p)"),
+        Kind::Batch {
+            range: Some((1, 12))
+        }
+    );
+    // The word alone is a batch with no range.
+    assert_eq!(
+        kind("[Group] Show Complete (1080p) [Batch]"),
+        Kind::Batch { range: None }
+    );
+}
+
+#[test]
+fn a_title_without_a_number_is_unnumbered() {
+    assert_eq!(
+        kind("[SubsPlease] Show Movie (1080p).mkv"),
+        Kind::Unnumbered
+    );
+}
+
+#[test]
+fn the_resolution_and_the_crc_are_not_a_range() {
+    assert_eq!(
+        episode_of("[SubsPlease] Show - 05 (1080p) [ABCD1234].mkv"),
+        episode(5, 1)
+    );
+    assert_eq!(
+        episode_of("[SubsPlease] Show - 05 (1080p) [01234567].mkv"),
+        episode(5, 1)
+    );
+}
+
+#[test]
+fn the_release_carries_the_stem_the_version_and_the_crc() {
+    let read = ReleaseName::read("[SubsPlease] Show - 14v2 (1080p) [1A2B3C4D].mkv");
+    assert_eq!(read.stem, "[SubsPlease] Show - 14 (1080p)");
+    assert_eq!(read.version, 2);
+    assert_eq!(read.crc, Some(0x1A2B3C4D));
+}
+
+#[test]
+fn the_notation_is_read_from_the_title() {
+    let width = |title: &str| ReleaseName::read(title).notation;
+    assert_eq!(
+        width("[SubsPlease] One Piece - 1000 (1080p) [AAAA1111].mkv"),
+        Some(Notation::Dash { width: 4 })
+    );
+    assert_eq!(
+        width("[SubsPlease] Show - 05 (1080p) [AAAA1111].mkv"),
+        Some(Notation::Dash { width: 2 })
+    );
+    assert_eq!(
+        width("[SubsPlease] Show - 5 (1080p) [AAAA1111].mkv"),
+        Some(Notation::Dash { width: 1 })
+    );
+    assert_eq!(
+        width("Show S02E05 1080p WEB.mkv"),
+        Some(Notation::SeasonEpisode {
+            season: 2,
+            season_width: 2,
+            width: 2
+        })
+    );
+    assert_eq!(width("[SubsPlease] Show (01-12) (1080p) [Batch]"), None);
+}
+
+#[test]
+fn a_notation_writes_a_search_for_episodes_as_the_release_does() {
+    assert_eq!(
+        Notation::Dash { width: 4 }.alternatives(&[1000, 1001, 1002]),
+        " - (1000|1001|1002)"
+    );
+    assert_eq!(
+        Notation::Dash { width: 2 }.alternatives(&[1, 12]),
+        " - (01|12)"
+    );
+    assert_eq!(Notation::Dash { width: 1 }.alternatives(&[7]), " - (7)");
+    assert_eq!(
+        Notation::SeasonEpisode {
+            season: 2,
+            season_width: 2,
+            width: 2
+        }
+        .alternatives(&[5, 6]),
+        " (S02E05|S02E06)"
+    );
+}
+
+#[test]
+fn a_subsplease_name_gives_its_crc_and_its_revision() {
+    let v1 = ReleaseName::read("[SubsPlease] Sono Bisque Doll - 14 (1080p) [E2675E51].mkv");
+    let v2 = ReleaseName::read("[SubsPlease] Sono Bisque Doll - 14v2 (1080p) [1A2B3C4D].mkv");
+    assert_eq!(v1.stem, "[SubsPlease] Sono Bisque Doll - 14 (1080p)");
+    assert_eq!((v1.version, v1.crc), (1, Some(0xE2675E51)));
+    assert_eq!(v2.stem, v1.stem);
+    assert_eq!((v2.version, v2.crc), (2, Some(0x1A2B3C4D)));
+}
+
+#[test]
+fn an_erai_raws_name_takes_the_hex_bracket_before_the_extension() {
+    let release = ReleaseName::read(
+        "[Erai-raws] Kimi to Idol Precure - 06v2 [1080p CR WEBRip HEVC AAC][MultiSub][1BBD34E6].mkv",
+    );
+    assert_eq!(release.crc, Some(0x1BBD34E6));
+    assert_eq!(release.version, 2);
+    assert_eq!(
+        release.stem,
+        "[Erai-raws] Kimi to Idol Precure - 06 [1080p CR WEBRip HEVC AAC][MultiSub]"
+    );
+    // An RSS title without the extension reads the same.
+    let title = ReleaseName::read(
+        "[Erai-raws] Kimi to Idol Precure - 06v2 [1080p CR WEBRip HEVC AAC][MultiSub][1BBD34E6]",
+    );
+    assert_eq!(
+        (title.stem, title.version, title.crc),
+        (release.stem, release.version, release.crc)
+    );
+}
+
+#[test]
+fn a_number_v_number_in_the_show_name_is_not_the_revision() {
+    let name = "[SubsPlease] Show 3v3 - 06v2 (1080p) [1A2B3C4D].mkv";
+    let release = ReleaseName::read(name);
+    assert_eq!(release.version, 2);
+    assert_eq!(release.stem, "[SubsPlease] Show 3v3 - 06 (1080p)");
+    assert_eq!(
+        without_version(name),
+        "[SubsPlease] Show 3v3 - 06 (1080p) [1A2B3C4D].mkv"
+    );
+}
+
+/// A show named with `NvM` whose episode carries no revision marker is
+/// the first revision of that episode: only a marker on the episode's
+/// number counts.
+#[test]
+fn a_number_v_number_in_the_show_name_of_an_unversioned_episode_is_no_revision() {
+    let first = "Show 3v3 - 06 [1080p].mkv";
+    let second = "Show 3v3 - 06v2 [1080p].mkv";
+    let v1 = ReleaseName::read(first);
+    let v2 = ReleaseName::read(second);
+    assert_eq!((v1.version, v1.stem.as_str()), (1, "Show 3v3 - 06 [1080p]"));
+    assert_eq!((v2.version, v2.stem.as_str()), (2, "Show 3v3 - 06 [1080p]"));
+    assert_eq!(without_version(first), first);
+    assert_eq!(without_version(second), first);
+    // The same with a CRC32, and with the extension left out.
+    let named = "[SubsPlease] Show 3v3 - 06 (1080p) [1A2B3C4D].mkv";
+    assert_eq!(ReleaseName::read(named).version, 1);
+    assert_eq!(without_version(named), named);
+    let title = "[SubsPlease] Show 3v3 - 06 (1080p) [1A2B3C4D]";
+    assert_eq!(ReleaseName::read(title).version, 1);
+    assert_eq!(
+        ReleaseName::read(title).stem,
+        "[SubsPlease] Show 3v3 - 06 (1080p)"
+    );
+    // A revision marker in brackets right after the show is still read.
+    let bracketed = "[Group] Show [06v2][1080p].mkv";
+    assert_eq!(ReleaseName::read(bracketed).version, 2);
+}
+
+/// The `NvM` right after ` - ` is the episode's and its revision, whatever
+/// numbers follow it (audio channels, a part); one in the show's name is
+/// followed by ` - ` and the episode's number.
+#[test]
+fn the_revision_on_the_episode_number_is_read_whatever_follows() {
+    for (name, version, stem) in [
+        (
+            "[Group] Show - 03v2 1080p WEB AAC 2.0 x264.mkv",
+            2,
+            "[Group] Show - 03 1080p WEB AAC 2.0 x264",
+        ),
+        (
+            "[Group] Show - 03v2 - Part 2.mkv",
+            2,
+            "[Group] Show - 03 - Part 2",
+        ),
+        ("Show 2 - 03v2.mkv", 2, "Show 2 - 03"),
+        ("Show - 03v2 (2024).mkv", 2, "Show - 03 (2024)"),
+        ("Show S2 - 03v2 [1080p].mkv", 2, "Show S2 - 03 [1080p]"),
+        ("86 - 03v2.mkv", 2, "86 - 03"),
+        ("Re:Zero 3v3 - 06.mkv", 1, "Re:Zero 3v3 - 06"),
+        ("Re:Zero 3v3 - 06v2.mkv", 2, "Re:Zero 3v3 - 06"),
+        (
+            "[Group] Show 14v2 (1080p).mkv",
+            2,
+            "[Group] Show 14 (1080p)",
+        ),
+    ] {
+        let release = ReleaseName::read(name);
+        assert_eq!(
+            (release.version, release.stem.as_str()),
+            (version, stem),
+            "{name}"
+        );
+    }
+    assert_eq!(
+        without_version("[Group] Show - 03v2 - Part 2.mkv"),
+        "[Group] Show - 03 - Part 2.mkv"
+    );
+}
+
+#[test]
+fn a_v_number_that_does_not_follow_a_number_is_no_revision() {
+    for name in [
+        "[Group] Gundam V2 - 06 (1080p) [1A2B3C4D].mkv",
+        "[Group] Show Ver.2 - 06 (1080p) [1A2B3C4D].mkv",
+        "[Group] Show S01E06v2 (1080p) [1A2B3C4D].mkv",
+        "[Group] Show - 06 (x264v2) [1A2B3C4D].mkv",
+    ] {
+        let release = ReleaseName::read(name);
+        assert_eq!(release.version, 1, "{name}");
+        assert_eq!(without_version(name), name, "{name}");
+    }
+}
+
+#[test]
+fn a_name_without_its_revision_keeps_everything_else() {
+    assert_eq!(
+        without_version(
+            "[Erai-raws] Show - 06v2 [1080p CR WEBRip HEVC AAC][MultiSub][1BBD34E6].mkv"
+        ),
+        "[Erai-raws] Show - 06 [1080p CR WEBRip HEVC AAC][MultiSub][1BBD34E6].mkv"
+    );
+    assert_eq!(
+        without_version("[SubsPlease] Show - 14v2 (1080p) [8F2EFECC].mkv"),
+        "[SubsPlease] Show - 14 (1080p) [8F2EFECC].mkv"
+    );
+    let first = "[SubsPlease] Show - 14 (1080p) [8F2EFECC].mkv";
+    assert_eq!(without_version(first), first);
+}
+
+#[test]
+fn a_last_bracket_that_is_not_eight_hex_digits_is_no_crc() {
+    for name in [
+        "[Erai-raws] Show - 06 [1080p][1BBD34E6][MultiSub].mkv",
+        "[SubsPlease] Show - 14v2 (1080p).mkv",
+        "[Group] Show - 14 [1BBD34E].mkv",
+        "[Group] Show - 14 [1BBD34EG].mkv",
+    ] {
+        assert_eq!(ReleaseName::read(name).crc, None, "{name}");
+    }
+    assert_eq!(
+        ReleaseName::read("[SubsPlease] Show - 14v2 (1080p).mkv").version,
+        2
+    );
+}
+
+#[test]
+fn another_groups_release_of_the_episode_is_another_release() {
+    let a = ReleaseName::read("[SubsPlease] Show - 14 (1080p) [E2675E51].mkv");
+    let b = ReleaseName::read("[Erai-raws] Show - 14 [1080p][E2675E51].mkv");
+    assert_ne!(a.stem, b.stem);
+    let c = ReleaseName::read("[SubsPlease] Show - 15 (1080p) [E2675E51].mkv");
+    assert_ne!(a.stem, c.stem);
+}

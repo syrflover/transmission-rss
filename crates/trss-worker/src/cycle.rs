@@ -19,7 +19,7 @@ use trss_collect::{
     feed::{self, FeedItem},
     offsets,
     plan::{work_folder_of, ChannelPlan, Judgement},
-    revision::Release,
+    release_name::without_revision,
     revisions::{self, Decided, Listing, Plan, Replaced, Selected},
     store::{
         channels::{ChannelError, ChannelWithRules, RuleState},
@@ -1065,7 +1065,7 @@ async fn process_job(
                 // Read without the revision marker: `trname` does not read
                 // `06v2` as episode 6 in every name (Erai-raws' gives episode
                 // 34).
-                Release::without_version,
+                without_revision,
                 ctx.rename,
                 &redactor,
                 &cancel,

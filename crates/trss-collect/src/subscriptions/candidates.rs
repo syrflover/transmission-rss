@@ -34,7 +34,7 @@
 //!
 //! One candidate stands for the work, however many of its episodes and
 //! releases appear: items are grouped by [`work_key`] of the work part of the
-//! title ([`parse_release`]). Which subscription the work belongs to is only
+//! title ([`ReleaseName::work`]). Which subscription the work belongs to is only
 //! the user's call; the candidate lists the waiting subscriptions to pick from.
 
 use std::{
@@ -45,11 +45,12 @@ use std::{
 
 use crate::{
     plan::{ChannelPlan, Judgement},
+    release_name::ReleaseName,
     store::{
         channels::{ChannelWithRules, Rule, RuleState},
         history::{HistoryItem, HistoryResult},
     },
-    subscriptions::{parse_release, work_key},
+    subscriptions::work_key,
 };
 use trss_core::Millis;
 
@@ -153,10 +154,10 @@ pub fn title_candidates(
     let mut groups: Vec<Group> = Vec::new();
     let mut index: HashMap<String, usize> = HashMap::new();
     for item in items {
-        let Some(release) = parse_release(&item.title) else {
+        let Some(work) = ReleaseName::read(&item.title).work else {
             continue;
         };
-        let key = work_key(&release.work);
+        let key = work_key(&work);
         let taken = matches!(
             item.result,
             HistoryResult::Received
@@ -173,7 +174,7 @@ pub fn title_candidates(
                 group.taken |= taken;
                 group.unmatched |= unmatched;
                 if item.first_seen_at > group.latest_seen_at {
-                    group.work = release.work;
+                    group.work = work;
                     group.latest_title = item.title.clone();
                     group.latest_seen_at = item.first_seen_at;
                 }
@@ -182,7 +183,7 @@ pub fn title_candidates(
                 index.insert(key.clone(), groups.len());
                 groups.push(Group {
                     key,
-                    work: release.work,
+                    work,
                     latest_title: item.title.clone(),
                     items: 1,
                     first_seen_at: item.first_seen_at,

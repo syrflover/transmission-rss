@@ -244,7 +244,7 @@ use super::{
 };
 use trss_collect::{
     commands::rule_archive::{work_folder, WorkFolder},
-    revision::Release,
+    revision,
     rss::save_path,
     store::{channels::ChannelWithRules, revisions::Revision},
 };
@@ -847,8 +847,8 @@ fn attach_revisions(
                 .is_none_or(|r| r.replaced_at <= replaced_at)
             {
                 view.revision = Some(RevisionView {
-                    from: row.old_version.map(Release::label),
-                    to: Release::label(row.new_version),
+                    from: row.old_version.map(revision::label),
+                    to: revision::label(row.new_version),
                     replaced_at,
                 });
             }

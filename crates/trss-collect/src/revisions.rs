@@ -6,12 +6,12 @@
 //! # Deciding, when a rule selects a revision ([`plan`])
 //!
 //! A selected item is looked at only when its name says it is a revision
-//! (`14v2`, see [`Release`]) and the episode's name in the rule's folder (the
+//! (`14v2`, see [`ReleaseName`]) and the episode's name in the rule's folder (the
 //! one `trname` gives the name without its revision, [`episode_name`]) is
 //! taken by a file. Then the file's revision is found:
 //!
 //! - **Known**: the file belongs to a torrent that history records, under the
-//!   same release ([`Release::stem`]). A lower revision is replaced; the same
+//!   same release ([`ReleaseName::stem`]). A lower revision is replaced; the same
 //!   or a higher one is skipped. A torrent of another release makes the item a
 //!   duplicate, not a revision: it is received as before and keeps its own
 //!   name, since no rename ever takes a name that is taken. The item's own
@@ -100,7 +100,8 @@ use crate::{
     context::{TransmissionLink, MAX_REASON_CHARS},
 };
 use crate::{
-    revision::{crc_text, file_crc32_identified, FileIdentity, Release},
+    release_name::ReleaseName,
+    revision::{crc_text, file_crc32_identified, FileIdentity},
     store::{
         channels::{ChannelStore, RuleState},
         history::{HistoryItem, HistoryResult, HistoryStore},
@@ -198,7 +199,7 @@ impl Replaced {
     pub fn new(rows: Vec<Replacement>) -> Replaced {
         Replaced(
             rows.into_iter()
-                .map(|r| (r.folder, Release::parse(&r.title).stem, r.new_version))
+                .map(|r| (r.folder, ReleaseName::read(&r.title).stem, r.new_version))
                 .collect(),
         )
     }
@@ -209,7 +210,7 @@ impl Replaced {
         if self.0.is_empty() {
             return false;
         }
-        let release = Release::parse(title);
+        let release = ReleaseName::read(title);
         let folder = folder.to_string_lossy();
         self.0.iter().any(|(at, stem, version)| {
             *at == folder && *stem == release.stem && release.version < *version
@@ -220,7 +221,7 @@ impl Replaced {
 /// Whether the release name `title` is a revision at all: the cheap test that
 /// leaves every other item to the cycle as before.
 pub fn is_revision(title: &str) -> bool {
-    Release::parse(title).version > 1
+    ReleaseName::read(title).version > 1
 }
 
 /// The episode's file name in `save_path` for the release `title`, as the
@@ -343,7 +344,7 @@ async fn identified_crc_of(path: PathBuf) -> io::Result<(u32, FileIdentity)> {
 
 /// Decides what to do with a selected item (see the module docs).
 pub async fn plan(ctx: &RevisionsContext, item: &Selected<'_>, listing: &Listing) -> Plan {
-    let release = Release::parse(item.title);
+    let release = ReleaseName::read(item.title);
     if release.version < 2 {
         return Plan::Normal;
     }
@@ -358,7 +359,7 @@ pub async fn plan(ctx: &RevisionsContext, item: &Selected<'_>, listing: &Listing
 async fn plan_at(
     ctx: &RevisionsContext,
     item: &Selected<'_>,
-    release: Release,
+    release: ReleaseName,
     episode_name: String,
     listing: &Listing,
 ) -> Plan {
@@ -425,7 +426,7 @@ async fn plan_at(
             };
             if let Some((id, old)) = records
                 .iter()
-                .map(|record| (record.id, Release::parse(&record.title)))
+                .map(|record| (record.id, ReleaseName::read(&record.title)))
                 .find(|(_, old)| old.stem == release.stem)
             {
                 let old = Some((id, old.version));
@@ -481,9 +482,9 @@ async fn plan_at(
         Ok(titles) => titles,
         Err(err) => return Plan::Later(err.to_string()),
     };
-    let same: Vec<(i64, Release)> = titles
+    let same: Vec<(i64, ReleaseName)> = titles
         .into_iter()
-        .map(|(id, title)| (id, Release::parse(&title)))
+        .map(|(id, title)| (id, ReleaseName::read(&title)))
         .filter(|(_, other)| other.stem == release.stem && other.crc == Some(file_crc))
         .collect();
     if same
@@ -524,7 +525,7 @@ pub async fn holds_same_or_higher(
         save_path: Path::new(&row.folder),
         episode: 0,
     };
-    let release = Release::parse(&item.title);
+    let release = ReleaseName::read(&item.title);
     let plan = plan_at(
         ctx,
         &selected,
@@ -547,7 +548,7 @@ pub async fn holds_same_or_higher(
 pub fn confirm(title: &str, hash: &str) -> RowWrite {
     RowWrite::Confirm {
         hash: hash.to_owned(),
-        expected_crc: Release::parse(title).crc.map(crc_text),
+        expected_crc: ReleaseName::read(title).crc.map(crc_text),
     }
 }
 
@@ -1429,7 +1430,7 @@ async fn old_video(
             }
             let new = new_release(ctx, row).await?;
             let Some((id, version)) = records.iter().find_map(|record| {
-                let release = Release::parse(&record.title);
+                let release = ReleaseName::read(&record.title);
                 (release.stem == new.stem).then_some((record.id, release.version))
             }) else {
                 return Err(failed(OTHER_RELEASE, None));
@@ -1459,7 +1460,7 @@ async fn old_video(
                     .await
                     .map_err(|err| Next::Later(err.to_string()))?;
                 if let Some(item) = item {
-                    let release = Release::parse(&item.title);
+                    let release = ReleaseName::read(&item.title);
                     if let Some(crc) = release.crc {
                         known.push((crc_text(crc), Some(id), Some(release.version)));
                     }
@@ -1504,9 +1505,9 @@ async fn old_video(
 }
 
 /// The row's new release, as its history item names it.
-async fn new_release(ctx: &RevisionsContext, row: &Revision) -> Result<Release, Next> {
+async fn new_release(ctx: &RevisionsContext, row: &Revision) -> Result<ReleaseName, Next> {
     match ctx.history.get(row.item_id).await {
-        Ok(Some(item)) => Ok(Release::parse(&item.title)),
+        Ok(Some(item)) => Ok(ReleaseName::read(&item.title)),
         Ok(None) => Err(failed(OTHER_RELEASE, None)),
         Err(err) => Err(Next::Later(err.to_string())),
     }

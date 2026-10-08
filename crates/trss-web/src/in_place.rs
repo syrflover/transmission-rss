@@ -35,7 +35,8 @@ use std::{
 use super::{commands_api::now_millis, ApiError, AppState};
 use trss_collect::{
     plan::rule_destination,
-    revision::Release,
+    release_name::ReleaseName,
+    revision,
     revisions::{episode_name, same_folder},
     store::{
         history::{HistoryItem, HistoryResult},
@@ -67,7 +68,7 @@ impl InPlace {
     pub fn message(&self) -> String {
         format!(
             "이미 같거나 더 높은 수정본({})이 있어서 다시 받지 않아요.",
-            Release::label(self.version)
+            revision::label(self.version)
         )
     }
 }
@@ -132,7 +133,7 @@ impl<'a> Evidence<'a> {
         if !has_file(&Path::new(&row.folder).join(&row.episode_name)).await {
             return Ok(None);
         }
-        let release = Release::parse(&item.title);
+        let release = ReleaseName::read(&item.title);
         let mut best = self.done_replacement(item, row, &release).await?;
         if let Some(placed) = self.placed_item(item, row, &release, best).await? {
             best = Some(placed);
@@ -146,7 +147,7 @@ impl<'a> Evidence<'a> {
         &self,
         item: &HistoryItem,
         row: &Revision,
-        release: &Release,
+        release: &ReleaseName,
     ) -> Result<Option<u32>, ApiError> {
         let rows = self
             .state
@@ -172,7 +173,7 @@ impl<'a> Evidence<'a> {
             else {
                 continue;
             };
-            if Release::parse(&other.title).stem == release.stem {
+            if ReleaseName::read(&other.title).stem == release.stem {
                 best = Some(done.new_version);
             }
         }
@@ -186,7 +187,7 @@ impl<'a> Evidence<'a> {
         &mut self,
         item: &HistoryItem,
         row: &Revision,
-        release: &Release,
+        release: &ReleaseName,
         already: Option<u32>,
     ) -> Result<Option<u32>, ApiError> {
         let (Some(listing), Some(collect)) = (self.listing.clone(), self.collect.clone()) else {
@@ -204,7 +205,7 @@ impl<'a> Evidence<'a> {
         let mut candidates: Vec<(u32, i64)> = self.titles[&item.channel_id]
             .iter()
             .filter(|(id, _)| *id != item.id)
-            .map(|(id, title)| (*id, Release::parse(title)))
+            .map(|(id, title)| (*id, ReleaseName::read(title)))
             .filter(|(_, other)| other.stem == release.stem && other.version >= release.version)
             .map(|(id, other)| (other.version, id))
             .collect();

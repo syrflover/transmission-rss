@@ -81,9 +81,10 @@ use trss_anissia::{
     Anime,
 };
 use trss_collect::{
+    release_name::ReleaseName,
     schedule::state::{self, Facts, SubtitleState, VideoState},
     store::channels::{Rule, RuleState, SeasonRef, SubtitleMode},
-    subscriptions::{whole_episode, Quarter},
+    subscriptions::Quarter,
 };
 use trss_core::{
     calendar::{date_text, day_of, week_start, weekday},
@@ -238,7 +239,7 @@ async fn season_facts(
 /// The episode a release title names as a whole number (`12`, `12v2`); not a
 /// batch (`01-12`) or a half episode.
 fn release_episode(title: &str) -> Option<i64> {
-    whole_episode(title).map(i64::from)
+    ReleaseName::read(title).whole_episode().map(i64::from)
 }
 
 /// The quarter after `quarter`.

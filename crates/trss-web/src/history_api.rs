@@ -53,11 +53,12 @@ use super::{
 use trss_anissia::Anime;
 use trss_collect::{
     commands::receive_once,
+    release_name::ReleaseName,
     store::{
         channels::{Channel, ChannelWithRules, Rule},
         history::{HistoryCursor, HistoryItem, HistoryQuery, HistoryResult, DEFAULT_PAGE_SIZE},
     },
-    subscriptions::{candidates, folder_suggestion, parse_release},
+    subscriptions::{candidates, folder_suggestion},
 };
 
 #[cfg(test)]
@@ -209,7 +210,7 @@ impl Directory {
 /// channel has one and the item's title has a work.
 fn name_title_of(item: &HistoryItem, directory: &Directory) -> Option<NameTitleView> {
     let waiting = directory.waiting.get(&item.channel_id)?;
-    let work = parse_release(&item.title)?.work;
+    let work = ReleaseName::read(&item.title).work?;
     Some(NameTitleView {
         folder: folder_suggestion(&work),
         work,

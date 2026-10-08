@@ -61,7 +61,7 @@ use std::{
 
 use crate::{
     episode_offset::folder_episode,
-    past_search::release::{read, Episode, Kind, Read},
+    release_name::{Episode, Kind, ReleaseName},
 };
 
 /// The release numbers the person confirmed, both included.
@@ -84,7 +84,7 @@ impl Range {
 /// A release already in the work, as its name tells it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Known {
-    /// See [`crate::revision::Release::stem`].
+    /// See [`ReleaseName::stem`].
     pub stem: String,
     pub version: u32,
     pub crc: Option<u32>,
@@ -92,7 +92,7 @@ pub struct Known {
 
 impl Known {
     pub fn of(title: &str) -> Known {
-        let release = crate::revision::Release::parse(title);
+        let release = ReleaseName::read(title);
         Known {
             stem: release.stem,
             version: release.version,
@@ -265,7 +265,7 @@ pub type CrcOf<'a> = &'a mut dyn FnMut(&Path) -> io::Result<u32>;
 struct Entry<'a> {
     index: usize,
     result: &'a Result,
-    read: Read,
+    read: ReleaseName,
 }
 
 /// Judges `results` for a rule that picks the titles `picks` says it does.
@@ -284,14 +284,14 @@ pub fn judge(
             preview.not_picked += 1;
             continue;
         }
-        let read = read(&result.title);
+        let read = ReleaseName::read(&result.title);
         let entry = Entry {
             index,
             result,
             read,
         };
         match entry.read.kind {
-            Kind::Episode { episode, .. } => {
+            Kind::Episode(episode) => {
                 if range.contains(episode.number) {
                     entries.push(entry);
                 } else {
@@ -308,9 +308,10 @@ pub fn judge(
     let mut reads_left = MAX_CRC_READS;
     let mut judged: Vec<(Entry<'_>, Episode, State, Option<String>)> = Vec::new();
     for entry in entries {
-        let Kind::Episode { episode, version } = entry.read.kind else {
+        let Kind::Episode(episode) = entry.read.kind else {
             continue;
         };
+        let version = entry.read.version;
         let folder = world.folder_of(episode);
         let (state, note) = state_of(
             &entry,
@@ -333,7 +334,7 @@ pub fn judge(
         }
         let rank = |at: usize| {
             (
-                judged[at].0.read.release.version,
+                judged[at].0.read.version,
                 std::cmp::Reverse(judged[at].0.index),
             )
         };
@@ -348,18 +349,19 @@ pub fn judge(
 
     let mut items: Vec<(Option<Episode>, Item)> = Vec::new();
     for (at, (entry, folder, state, note)) in judged.iter().enumerate() {
-        let Kind::Episode { episode, version } = entry.read.kind else {
+        let Kind::Episode(episode) = entry.read.kind else {
             continue;
         };
+        let version = entry.read.version;
         let (mut state, mut note) = (*state, note.clone());
         let wins = winner.get(folder) == Some(&at);
         if matches!(state, State::Missing | State::Replace) && !wins {
             let top = &judged[winner[folder]].0;
-            if top.read.release.stem == entry.read.release.stem {
+            if top.read.stem == entry.read.stem {
                 state = State::Superseded;
                 note = Some(format!(
                     "같은 회차의 더 높은 수정본(v{})이 있어요.",
-                    top.read.release.version
+                    top.read.version
                 ));
             } else {
                 state = State::Alternate;
@@ -467,7 +469,7 @@ fn state_of(
     let Some(present) = world.has(&folder) else {
         return (State::Missing, None);
     };
-    let release = &entry.read.release;
+    let release = &entry.read;
     let same: Vec<&Known> = present
         .records
         .iter()

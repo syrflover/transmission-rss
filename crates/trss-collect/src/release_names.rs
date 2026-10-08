@@ -12,8 +12,7 @@ use std::{collections::BTreeSet, path::PathBuf};
 
 use crate::{
     commands::receive_once::derived_name,
-    past_search::release::{read, Kind},
-    subscriptions::parse_release,
+    release_name::{Kind, ReleaseName},
 };
 
 const NAMES: &str = include_str!("../tests/fixtures/release-names.tsv");
@@ -55,16 +54,16 @@ fn written_episode(text: &str) -> String {
 }
 
 fn reading(name: &str) -> Reading {
-    let read = read(name);
+    let read = ReleaseName::read(name);
     let episode = match read.kind {
-        Kind::Episode { episode, .. } => episode.text(),
+        Kind::Episode(episode) => episode.text(),
         Kind::Batch {
             range: Some((from, to)),
         } => format!("batch {from}-{to}"),
         Kind::Batch { range: None } => "batch".to_owned(),
         Kind::Unnumbered => "-".to_owned(),
     };
-    let work = parse_release(name).map_or_else(|| "-".to_owned(), |r| r.work);
+    let work = read.work.clone().unwrap_or_else(|| "-".to_owned());
     let trname = is_video_file(name).then(|| {
         // The rule's folder for the work, its first season, no conversion.
         let title = if work == "-" { "Work" } else { &work };
@@ -81,7 +80,7 @@ fn reading(name: &str) -> Reading {
     Reading {
         work,
         episode,
-        version: read.release.version,
+        version: read.version,
         trname,
     }
 }

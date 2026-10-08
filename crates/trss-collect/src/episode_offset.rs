@@ -96,9 +96,8 @@
 use std::path::{Component, Path};
 
 use crate::{
-    past_search::release::Episode,
+    release_name::{Episode, ReleaseName},
     store::channels::{Rule, SeasonRef},
-    subscriptions::whole_episode,
 };
 use trss_library::{
     seasons::combine::combine,
@@ -392,7 +391,10 @@ fn particle_ro(value: i64) -> &'static str {
 
 /// The lowest whole episode among the release titles, if any has one.
 pub fn first_release(titles: &[String]) -> Option<u32> {
-    titles.iter().filter_map(|t| whole_episode(t)).min()
+    titles
+        .iter()
+        .filter_map(|t| ReleaseName::read(t).whole_episode())
+        .min()
 }
 
 /// What a subscription that has picked nothing is offered before its first
@@ -465,7 +467,7 @@ pub fn leaves_numbers(offset: i64) -> bool {
 /// `<work>/Season NN` folder, `12화` in another. `None` when the title names no
 /// whole episode.
 pub fn received_as(directory: &str, offset: i64, title: &str) -> Option<String> {
-    let release = whole_episode(title)?;
+    let release = ReleaseName::read(title).whole_episode()?;
     let folder = folder_episode(Episode::whole(release), offset);
     Some(match place_of(directory) {
         Some((_, season)) => format!("S{season:02}E{:02}", folder.number),

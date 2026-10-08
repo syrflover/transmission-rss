@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 
-use crate::past_search::{judge::*, release::Episode};
+use crate::{past_search::judge::*, release_name::Episode};
 
 fn result(n: usize, title: &str) -> Result {
     Result {

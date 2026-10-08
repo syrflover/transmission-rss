@@ -23,9 +23,9 @@ use crate::{
         client::{wait_phrase, SearchClient, SearchError},
         judge::{Range, World},
         query::batch_query,
-        release::{read, Kind, Notation},
         BATCH_SIZE, MAX_EXTRA_SEARCHES, MAX_RESULTS, PAGE_LIMIT,
     },
+    release_name::{Kind, Notation, ReleaseName},
     store::channels::Channel,
 };
 use trss_transmission::Redactor;
@@ -65,7 +65,7 @@ impl Default for Limits {
 fn common_notation(titles: &[&str]) -> Option<Notation> {
     let mut counts: Vec<(Notation, usize)> = Vec::new();
     for title in titles {
-        let Some(notation) = read(title).notation else {
+        let Some(notation) = ReleaseName::read(title).notation else {
             continue;
         };
         match counts.iter_mut().find(|(n, _)| *n == notation) {
@@ -139,8 +139,8 @@ pub async fn run(
         .items
         .iter()
         .filter(|item| picks(&item.title))
-        .filter_map(|item| match read(&item.title).kind {
-            Kind::Episode { episode, .. } => Some(episode.number),
+        .filter_map(|item| match ReleaseName::read(&item.title).kind {
+            Kind::Episode(episode) => Some(episode.number),
             _ => None,
         })
         .collect();

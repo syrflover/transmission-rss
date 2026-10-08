@@ -154,6 +154,7 @@ use trss_collect::{
     commands::rule_archive::{self, RuleArchive},
     episode_offset,
     plan::{ChannelPlan, Judgement, PastCause, PlanEvaluation},
+    release_name::ReleaseName,
     rss::{ChannelEvaluator, ChannelSpec, RuleSpec},
     store::{
         channels::{
@@ -165,7 +166,6 @@ use trss_collect::{
             MAX_PAGE_SIZE,
         },
     },
-    subscriptions::whole_episode,
 };
 use trss_core::commands::{Accepted, Command, CommandState};
 
@@ -1670,7 +1670,7 @@ pub fn build_preview(
             Kind::Past => counts.past += 1,
         }
         let release = matches!(kind, Kind::Mine | Kind::Past)
-            .then(|| whole_episode(&item.title))
+            .then(|| ReleaseName::read(&item.title).whole_episode())
             .flatten();
         if item.result == HistoryResult::NoMatch {
             if let Some(release) = release {
