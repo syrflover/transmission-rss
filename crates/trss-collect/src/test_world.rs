@@ -539,7 +539,24 @@ impl World {
     /// Accepts `다시 받기` of `item_id` as the command `id`, as the web does,
     /// and claims it as the worker does.
     pub async fn start_retry(&self, item_id: i64, id: &str) -> Command {
-        let payload = ReceiveOnce::new(item_id);
+        self.start_receive(ReceiveOnce::new(item_id), id).await
+    }
+
+    /// `이 규칙으로 받기` of `item_id` for the rule `rule_id` as the command
+    /// `id`, run once.
+    pub async fn receive_for(
+        &self,
+        item_id: i64,
+        rule_id: &str,
+        id: &str,
+    ) -> Result<Finished, Retry> {
+        let command = self
+            .start_receive(ReceiveOnce::by_rule(item_id, rule_id), id)
+            .await;
+        self.run_command(&command).await
+    }
+
+    async fn start_receive(&self, payload: ReceiveOnce, id: &str) -> Command {
         let new = NewCommand {
             id: id.to_owned(),
             kind: receive_once::KIND.to_owned(),

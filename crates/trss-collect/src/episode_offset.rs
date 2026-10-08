@@ -1111,6 +1111,44 @@ mod tests {
         assert_eq!(basis.held, [1, 2, 4]);
     }
 
+    /// The cours of a season are the episode counts of the entries linked to
+    /// it, when there are several; the restart is then offered or not.
+    #[tokio::test]
+    async fn the_cours_of_a_season_are_the_counts_of_its_linked_entries() {
+        let twelve: Vec<String> = (1..=12).map(|e| format!("{e:02}")).collect();
+        let twelve: Vec<&str> = twelve.iter().map(String::as_str).collect();
+        let missing_7: Vec<&str> = twelve.iter().copied().filter(|e| *e != "07").collect();
+        let at_two = rule("Show/Season 02", None);
+
+        // The first cour whole: the restart is offered where it ended.
+        let place = Place::new(&[(1, &["01"]), (2, &twelve)]).await;
+        place.link(1, &[Some(12)]).await;
+        place.link(2, &[Some(12), Some(12)]).await;
+        let basis = place.basis(&at_two).await.unwrap();
+        assert_eq!(basis.cours, [12, 12]);
+        assert_eq!(basis.held, (1..=12).collect::<Vec<_>>());
+        assert_eq!(
+            decide(1, &basis).as_suggestion().map(|(value, _)| value),
+            Some(Some(13))
+        );
+
+        // Episode 7 of the first cour is missing: nothing is offered.
+        let place = Place::new(&[(1, &["01"]), (2, &missing_7)]).await;
+        place.link(1, &[Some(12)]).await;
+        place.link(2, &[Some(12), Some(12)]).await;
+        let basis = place.basis(&at_two).await.unwrap();
+        assert_eq!(basis.cours, [12, 12]);
+        assert_eq!(decide(1, &basis), Verdict::Nothing);
+
+        // One entry linked to the season: no cours to tell apart.
+        let place = Place::new(&[(1, &["01"]), (2, &twelve)]).await;
+        place.link(1, &[Some(12)]).await;
+        place.link(2, &[Some(24)]).await;
+        let basis = place.basis(&at_two).await.unwrap();
+        assert!(basis.cours.is_empty());
+        assert_eq!(decide(1, &basis), Verdict::Nothing);
+    }
+
     #[tokio::test]
     async fn an_earlier_season_that_cannot_be_counted_makes_the_sum_unknown() {
         let place = Place::new(&[(1, &["01"]), (2, &["01"]), (4, &[])]).await;
@@ -1203,6 +1241,27 @@ mod tests {
                 "{directory}"
             );
         }
+    }
+
+    #[test]
+    fn a_suggestion_is_worth_offering_when_it_names_releases_otherwise_than_the_field_does() {
+        let held = |episode: i64| Rule {
+            episode,
+            ..rule("Show/Season 03", None)
+        };
+        // A rule that started with a carried-over value is offered the sum
+        // once the grounds are known, whatever the field holds ...
+        assert!(worth_offering(&held(-12), Some(-24)));
+        // ... a field that already holds it is offered nothing ...
+        assert!(!worth_offering(&held(-24), Some(-24)));
+        // ... and `0` and `1` both leave numbers as they are.
+        assert!(!worth_offering(&held(1), Some(0)));
+        assert!(worth_offering(&held(1), Some(13)));
+        // Without a value only a field that leaves numbers as they are is
+        // told why: a note says nothing to a field the user filled.
+        assert!(worth_offering(&held(0), None));
+        assert!(worth_offering(&held(1), None));
+        assert!(!worth_offering(&held(-12), None));
     }
 
     #[test]

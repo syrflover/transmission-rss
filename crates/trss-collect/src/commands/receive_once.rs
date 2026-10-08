@@ -1572,3 +1572,6 @@ mod tests {
         assert_eq!(episode, -12);
     }
 }
+
+#[cfg(test)]
+mod offset_tests;

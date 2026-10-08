@@ -412,3 +412,48 @@ async fn the_first_item_of_a_third_season_is_named_from_the_sum_of_the_earlier_o
     assert_eq!(s.torrent_names(), ["Show S03E01.mkv", "Show S03E02.mkv"]);
     assert_eq!(s.stored_rule(&rule).await.episode, -24);
 }
+
+/// A second cour whose first release restarts at `- 01` is received as it is
+/// (`S02E01` is the first cour's), and once the user sets the offset the
+/// cycle names it too: a rename an earlier cycle could not make is finished.
+#[tokio::test]
+async fn a_cycle_finishes_the_rename_of_a_restarted_cour_it_could_not_make_before() {
+    let s = World::bare().await;
+    let season = s.media.join("Show/Season 02");
+    std::fs::create_dir_all(&season).unwrap();
+    for e in 1..=12 {
+        std::fs::write(season.join(format!("Show S02E{e:02}.mkv")), "x").unwrap();
+    }
+    let twelve: Vec<String> = (1..=12).map(|e| format!("{e:02}")).collect();
+    let twelve: Vec<&str> = twelve.iter().map(String::as_str).collect();
+    let place = s.library_of(&[(1, &["01"]), (2, &twelve)]).await;
+    place.link(1, &[Some(12)]).await;
+    place.link(2, &[Some(12), Some(12)]).await;
+    s.advance(1_000);
+    let rule = s.subscribe("Show", "Show/Season 02", 8, 0).await;
+    s.feed_shows(&[]);
+    s.cycle_later().await;
+    s.feed_shows(&[1]);
+    s.cycle_later().await;
+
+    // Never set by the app: received as it is, so the video keeps its
+    // release name.
+    assert_eq!(
+        s.torrent_names(),
+        ["[SubsPlease] Show - 01 (1080p) [ABCD0001].mkv"]
+    );
+    let stored = s.stored_rule(&rule).await;
+    assert_eq!((stored.episode, stored.episode_auto), (0, false));
+
+    // The user applies the suggestion (the offset `13`): the cour's releases
+    // are named on from the first cour's twelve, and `- 01`, which the feed
+    // still shows, is named now too.
+    s.ctx
+        .channels
+        .set_episode(&rule.id, stored.version, 13)
+        .await
+        .unwrap();
+    s.feed_shows(&[1, 2]);
+    s.cycle_later().await;
+    assert_eq!(s.torrent_names(), ["Show S02E13.mkv", "Show S02E14.mkv"]);
+}
