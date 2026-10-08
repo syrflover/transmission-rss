@@ -71,6 +71,7 @@ use tokio_util::sync::CancellationToken;
 use transmission_rpc::TransClient;
 use trss_core::{
     files::{part_name, rename_noreplace},
+    folder_check::{conflict, resolve_folder, Conflict, Folder},
     folders::has_parent_dir,
 };
 
@@ -338,17 +339,20 @@ pub fn check(request: &Request, disk: &dyn Disk) -> Result<Checked, String> {
             request.name
         ));
     }
-    let (from_real, from_dev) = root(&request.from_root, request.from, disk)?;
-    let (to_real, to_dev) = root(&request.to_root, request.to, disk)?;
-    if from_real.starts_with(&to_real) || to_real.starts_with(&from_real) {
-        return Err(
-            "수집 폴더와 보관 폴더가 같거나 한쪽이 다른 쪽 안에 있어서 옮기지 않았어요. 설정에서 두 폴더를 확인해 주세요."
-                .to_owned(),
-        );
+    let from = root(&request.from_root, request.from, disk)?;
+    let to = root(&request.to_root, request.to, disk)?;
+    match conflict(&from, &to) {
+        None => {}
+        Some(Conflict::Overlapping(_)) => {
+            return Err(
+                "수집 폴더와 보관 폴더가 같거나 한쪽이 다른 쪽 안에 있어서 옮기지 않았어요. 설정에서 두 폴더를 확인해 주세요."
+                    .to_owned(),
+            );
+        }
+        Some(Conflict::DifferentDevice) => return Err(different_filesystems()),
     }
-    if from_dev != to_dev {
-        return Err(different_filesystems());
-    }
+    let (from_real, from_dev) = (from.real, from.device);
+    let to_real = to.real;
 
     let source = request.source();
     let destination = request.destination();
@@ -481,20 +485,14 @@ fn probe_renames(request: &Request, disk: &dyn Disk) -> Result<(), String> {
 }
 
 /// A root folder with links resolved, and its filesystem.
-fn root(path: &Path, side: Side, disk: &dyn Disk) -> Result<(PathBuf, u64), String> {
-    let missing = || {
+fn root(path: &Path, side: Side, disk: &dyn Disk) -> Result<Folder, String> {
+    resolve_folder(path, |path, meta| disk.device(path, meta)).map_err(|_| {
         format!(
             "{} {}를 찾지 못해서 옮기지 않았어요.",
             side.name(),
             quoted(path)
         )
-    };
-    let meta = fs::metadata(path).map_err(|_| missing())?;
-    if !meta.is_dir() {
-        return Err(missing());
-    }
-    let real = fs::canonicalize(path).map_err(|_| missing())?;
-    Ok((real, disk.device(path, &meta)))
+    })
 }
 
 /// The entry at `path` itself (a link is not followed), or `None` when there

@@ -56,6 +56,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use super::{commands_api::now_millis, ApiError, AppState};
+use trss_core::folder_check::{check_folder, overlap, Overlap, Problem};
 use trss_library::{
     discovery,
     store::library::{FolderSummary, LibraryError, WatchFolder},
@@ -243,7 +244,7 @@ async fn remove(
 
 /// The folder text as stored: surrounding spaces and trailing slashes dropped
 /// (a lone `/` stays).
-fn normalize(text: &str) -> String {
+pub(crate) fn normalize(text: &str) -> String {
     let text = text.trim();
     match text.trim_end_matches('/') {
         "" if text.starts_with('/') => "/".to_owned(),
@@ -259,56 +260,50 @@ fn check_and_scan(
     read: Option<discovery::Scan>,
 ) -> Result<discovery::Scan, ApiError> {
     let path = Path::new(text);
-    if !path.is_absolute() {
-        return Err(ApiError::invalid(
-            "감시 폴더는 `/`로 시작하는 전체 경로로 입력해 주세요. 예: `/media/anime`",
-        ));
-    }
-    let metadata = match std::fs::metadata(path) {
-        Ok(metadata) => metadata,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Err(ApiError::invalid(format!(
-                "`{text}`를 찾지 못했어요. 웹이 볼 수 있는 경로인지, 폴더가 마운트돼 있는지 확인해 주세요."
-            )))
-        }
-        Err(_) => {
-            return Err(ApiError::invalid(format!(
-                "`{text}`를 열지 못했어요. 웹이 볼 수 있는 경로인지, 읽을 권한이 있는지 확인해 주세요."
-            )))
-        }
-    };
-    if !metadata.is_dir() {
-        return Err(ApiError::invalid(format!("`{text}`는 폴더가 아니에요.")));
-    }
-
-    let real = std::fs::canonicalize(path).map_err(|_| {
-        ApiError::invalid(format!(
-            "`{text}`를 열지 못했어요. 웹이 볼 수 있는 경로인지 확인해 주세요."
-        ))
-    })?;
+    let real = check_folder(path)
+        .map_err(|problem| {
+            ApiError::invalid(match problem {
+                Problem::NotAbsolute => {
+                    "감시 폴더는 `/`로 시작하는 전체 경로로 입력해 주세요. 예: `/media/anime`"
+                        .to_owned()
+                }
+                Problem::NotFound => format!(
+                    "`{text}`를 찾지 못했어요. 웹이 볼 수 있는 경로인지, 폴더가 마운트돼 있는지 확인해 주세요."
+                ),
+                Problem::Unreadable => format!(
+                    "`{text}`를 열지 못했어요. 웹이 볼 수 있는 경로인지, 읽을 권한이 있는지 확인해 주세요."
+                ),
+                Problem::NotAFolder => format!("`{text}`는 폴더가 아니에요."),
+                Problem::Unresolvable => format!(
+                    "`{text}`를 열지 못했어요. 웹이 볼 수 있는 경로인지 확인해 주세요."
+                ),
+            })
+        })?
+        .real;
     for other in registered {
         let other_real = trss_library::automatic_watch::resolved(&other.path);
-        if other_real == real {
-            return Err(ApiError::invalid("이미 등록한 감시 폴더예요."));
-        }
-        if real.starts_with(&other_real) {
-            return Err(ApiError::invalid(format!(
-                "이미 등록한 감시 폴더 `{}` 안에 있는 폴더예요. 그 폴더가 이 안의 작품도 이미 찾고 있어요.",
-                other.path
-            )));
-        }
-        if other_real.starts_with(&real) {
-            return Err(ApiError::invalid(if other.automatic {
-                format!(
-                    "이 폴더 안에 수집 폴더나 보관 폴더 `{}`가 있어요. 두 폴더는 늘 감시하므로, 같은 작품을 두 번 찾게 되는 이 폴더는 추가할 수 없어요.",
+        match overlap(&real, &other_real) {
+            None => {}
+            Some(Overlap::Same) => return Err(ApiError::invalid("이미 등록한 감시 폴더예요.")),
+            Some(Overlap::FirstInsideSecond) => {
+                return Err(ApiError::invalid(format!(
+                    "이미 등록한 감시 폴더 `{}` 안에 있는 폴더예요. 그 폴더가 이 안의 작품도 이미 찾고 있어요.",
                     other.path
-                )
-            } else {
-                format!(
-                    "이 폴더 안에 이미 등록한 감시 폴더 `{}`가 있어요. 같은 작품을 두 번 찾게 되므로, 그 폴더의 등록을 해제한 뒤 이 폴더를 추가해 주세요.",
-                    other.path
-                )
-            }));
+                )))
+            }
+            Some(Overlap::SecondInsideFirst) => {
+                return Err(ApiError::invalid(if other.automatic {
+                    format!(
+                        "이 폴더 안에 수집 폴더나 보관 폴더 `{}`가 있어요. 두 폴더는 늘 감시하므로, 같은 작품을 두 번 찾게 되는 이 폴더는 추가할 수 없어요.",
+                        other.path
+                    )
+                } else {
+                    format!(
+                        "이 폴더 안에 이미 등록한 감시 폴더 `{}`가 있어요. 같은 작품을 두 번 찾게 되므로, 그 폴더의 등록을 해제한 뒤 이 폴더를 추가해 주세요.",
+                        other.path
+                    )
+                }))
+            }
         }
     }
 

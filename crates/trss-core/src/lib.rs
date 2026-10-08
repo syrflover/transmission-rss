@@ -17,6 +17,7 @@ pub mod db;
 pub mod episode;
 pub mod file_id;
 pub mod files;
+pub mod folder_check;
 pub mod folder_locks;
 pub mod folders;
 pub mod heartbeat;

@@ -28,6 +28,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use trss_core::folder_check::{overlap, Overlap};
+
 use crate::{
     discovery,
     store::library::{AutomaticPlan, NewAutomatic, WatchFolder},
@@ -76,17 +78,20 @@ pub fn plan(wanted: &[Wanted], registered: &[WatchFolder]) -> Result<AutomaticPl
             if other.automatic {
                 continue;
             }
-            if real_want.starts_with(&real[i]) {
-                return Err(format!(
-                    "{} `{}`가 이미 등록한 감시 폴더 `{}` 안에 있어요. 같은 작품을 두 번 찾게 되므로, 그 감시 폴더의 등록을 해제하거나 다른 폴더를 정해 주세요.",
-                    want.what, want.path, other.path
-                ));
-            }
-            if real[i].starts_with(&real_want) {
-                return Err(format!(
-                    "{} `{}` 안에 이미 등록한 감시 폴더 `{}`가 있어요. 같은 작품을 두 번 찾게 되므로, 그 감시 폴더의 등록을 해제하거나 다른 폴더를 정해 주세요.",
-                    want.what, want.path, other.path
-                ));
+            match overlap(&real_want, &real[i]) {
+                Some(Overlap::Same | Overlap::FirstInsideSecond) => {
+                    return Err(format!(
+                        "{} `{}`가 이미 등록한 감시 폴더 `{}` 안에 있어요. 같은 작품을 두 번 찾게 되므로, 그 감시 폴더의 등록을 해제하거나 다른 폴더를 정해 주세요.",
+                        want.what, want.path, other.path
+                    ));
+                }
+                Some(Overlap::SecondInsideFirst) => {
+                    return Err(format!(
+                        "{} `{}` 안에 이미 등록한 감시 폴더 `{}`가 있어요. 같은 작품을 두 번 찾게 되므로, 그 감시 폴더의 등록을 해제하거나 다른 폴더를 정해 주세요.",
+                        want.what, want.path, other.path
+                    ));
+                }
+                None => {}
             }
         }
         plan.add.push(NewAutomatic {

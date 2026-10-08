@@ -44,7 +44,7 @@
 //! and removes the automatic watch folder of a path that is not used any more,
 //! all in the transaction that stores the settings.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use axum::{
     extract::{rejection::JsonRejection, State},
@@ -53,9 +53,14 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::{commands_api::now_millis, watch_folders_api, ApiError, AppState};
+use super::{
+    commands_api::now_millis,
+    watch_folders_api::{self, normalize},
+    ApiError, AppState,
+};
 use trss_core::{
     db::DbError,
+    folder_check::{check_folder, conflict, Conflict, Folder, Overlap, Problem},
     settings::{CollectionSettings, SettingsError},
 };
 use trss_library::{
@@ -243,89 +248,37 @@ pub fn check_folders(
     };
     let archive = checked_directory("보관 폴더", archive_text)?;
 
-    if collect.real == archive.real {
-        return Err(ApiError::invalid(
+    match conflict(&collect, &archive) {
+        None => Ok((folder, archive_folder)),
+        Some(Conflict::Overlapping(Overlap::Same)) => Err(ApiError::invalid(
             "수집 폴더와 보관 폴더가 같은 폴더예요. 서로 다른 폴더를 정해 주세요.",
-        ));
-    }
-    if archive.real.starts_with(&collect.real) {
-        return Err(ApiError::invalid(
+        )),
+        Some(Conflict::Overlapping(Overlap::SecondInsideFirst)) => Err(ApiError::invalid(
             "보관 폴더가 수집 폴더 안에 있어요. 작품 폴더를 옮기면 수집 폴더 안에서 겹치므로, 서로 밖에 있는 폴더를 정해 주세요.",
-        ));
-    }
-    if collect.real.starts_with(&archive.real) {
-        return Err(ApiError::invalid(
+        )),
+        Some(Conflict::Overlapping(Overlap::FirstInsideSecond)) => Err(ApiError::invalid(
             "수집 폴더가 보관 폴더 안에 있어요. 작품 폴더를 옮기면 보관 폴더 안에서 겹치므로, 서로 밖에 있는 폴더를 정해 주세요.",
-        ));
-    }
-    if collect.device != archive.device {
-        return Err(ApiError::invalid(
+        )),
+        Some(Conflict::DifferentDevice) => Err(ApiError::invalid(
             "수집 폴더와 보관 폴더가 서로 다른 파일시스템에 있어요. 보관할 때 폴더를 복사하지 않고 이름만 바꿔 옮기므로, 같은 파일시스템 안의 폴더를 정해 주세요.",
-        ));
+        )),
     }
-    Ok((folder, archive_folder))
-}
-
-/// The folder text as stored: surrounding spaces and trailing slashes dropped
-/// (a lone `/` stays).
-fn normalize(text: &str) -> String {
-    let text = text.trim();
-    match text.trim_end_matches('/') {
-        "" if text.starts_with('/') => "/".to_owned(),
-        trimmed => trimmed.to_owned(),
-    }
-}
-
-struct Checked {
-    /// The folder with links resolved, for comparing the two.
-    real: PathBuf,
-    device: Option<u64>,
 }
 
 /// An existing directory the web can open. `what` names the field in messages.
-fn checked_directory(what: &str, text: &str) -> Result<Checked, ApiError> {
-    let path = Path::new(text);
-    if !path.is_absolute() {
-        return Err(ApiError::invalid(format!(
-            "{what}는 `/`로 시작하는 전체 경로로 입력해 주세요. 예: `/downloads/Shows`"
-        )));
-    }
-    let metadata = match std::fs::metadata(path) {
-        Ok(metadata) => metadata,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Err(ApiError::invalid(format!(
+fn checked_directory(what: &str, text: &str) -> Result<Folder, ApiError> {
+    check_folder(Path::new(text)).map_err(|problem| {
+        ApiError::invalid(match problem {
+            Problem::NotAbsolute => {
+                format!("{what}는 `/`로 시작하는 전체 경로로 입력해 주세요. 예: `/downloads/Shows`")
+            }
+            Problem::NotFound => format!(
                 "{what} `{text}`를 찾지 못했어요. 폴더를 먼저 만들어 두고, 웹이 볼 수 있는 경로인지 확인해 주세요."
-            )))
-        }
-        Err(_) => {
-            return Err(ApiError::invalid(format!(
+            ),
+            Problem::NotAFolder => format!("{what} `{text}`는 폴더가 아니에요."),
+            Problem::Unreadable | Problem::Unresolvable => format!(
                 "{what} `{text}`를 열지 못했어요. 웹이 볼 수 있는 경로인지 확인해 주세요."
-            )))
-        }
-    };
-    if !metadata.is_dir() {
-        return Err(ApiError::invalid(format!(
-            "{what} `{text}`는 폴더가 아니에요."
-        )));
-    }
-    let real = std::fs::canonicalize(path).map_err(|_| {
-        ApiError::invalid(format!(
-            "{what} `{text}`를 열지 못했어요. 웹이 볼 수 있는 경로인지 확인해 주세요."
-        ))
-    })?;
-    Ok(Checked {
-        real,
-        device: device_of(&metadata),
+            ),
+        })
     })
-}
-
-#[cfg(unix)]
-fn device_of(metadata: &std::fs::Metadata) -> Option<u64> {
-    use std::os::unix::fs::MetadataExt;
-    Some(metadata.dev())
-}
-
-#[cfg(not(unix))]
-fn device_of(_: &std::fs::Metadata) -> Option<u64> {
-    None
 }
