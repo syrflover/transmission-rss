@@ -48,3 +48,5 @@ pub mod schedule;
 pub mod season_link;
 pub mod store;
 pub mod subscriptions;
+#[cfg(test)]
+mod test_world;

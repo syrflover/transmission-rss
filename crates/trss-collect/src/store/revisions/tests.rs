@@ -72,6 +72,60 @@ async fn an_item_is_decided_once() {
     assert_eq!(first.created_at, 10);
 }
 
+/// A `버전 미상` decision is written with its history record: an item that
+/// history holds as `버전 미상` always has the decision `다시 받기` needs. A
+/// write whose row cannot be written leaves no record of the item either.
+#[tokio::test]
+async fn a_version_unknown_item_is_recorded_with_its_decision() {
+    let (dir, db) = db().await;
+    let store = RevisionStore::new(db.clone());
+    let history = HistoryStore::new(db.clone());
+    let observation = Observation {
+        channel_id: "c1".into(),
+        channel_label: "https://x/".into(),
+        identity_key: "14v2".into(),
+        title: "[SubsPlease] Show - 14v2 (1080p).mkv".into(),
+        link: "magnet:?".into(),
+        result: HistoryResult::VersionUnknown,
+        rule_id: Some("r1".into()),
+        torrent_hash: None,
+        reason: Some("no CRC32".into()),
+    };
+    let row = NewRevision {
+        torrent_hash: None,
+        expected_crc: None,
+        ..new(0, None, RevisionState::Unknown)
+    };
+    let write = || {
+        store.write_with_history(
+            10,
+            HistoryWrite::Observe(observation.clone()),
+            RowWrite::Create {
+                new: row.clone(),
+                reopen: false,
+            },
+        )
+    };
+    let item_of = || history.item_by_key("c1".into(), "14v2".into());
+
+    let conn = rusqlite::Connection::open(dir.path().join("app.db")).unwrap();
+    conn.execute_batch(
+        "CREATE TRIGGER no_row BEFORE INSERT ON video_revisions
+         BEGIN SELECT RAISE(ABORT, 'injected'); END;",
+    )
+    .unwrap();
+    assert!(write().await.is_err());
+    assert_eq!(item_of().await.unwrap(), None, "the record without its row");
+    conn.execute_batch("DROP TRIGGER no_row;").unwrap();
+
+    let written = write().await.unwrap();
+    let item = item_of().await.unwrap().expect("the item is recorded");
+    assert_eq!(item.result, HistoryResult::VersionUnknown);
+    let stored = store.by_item(item.id).await.unwrap().expect("its decision");
+    assert_eq!(stored.state, RevisionState::Unknown);
+    assert_eq!(written.row, Some(stored));
+}
+
 #[tokio::test]
 async fn a_confirmed_unknown_revision_is_received_without_a_crc_check() {
     let (_dir, db) = db().await;

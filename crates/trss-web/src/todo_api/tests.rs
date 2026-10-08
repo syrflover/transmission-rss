@@ -14,7 +14,10 @@ use tokio_util::sync::CancellationToken;
 use tower::ServiceExt;
 
 use crate::AppState;
-use trss_collect::store::channels::{ChannelInput, NewSubscription, Rule, RuleInput, SubtitleMode};
+use trss_collect::store::{
+    channels::{ChannelInput, NewSubscription, Rule, RuleInput, SubtitleMode},
+    history::{HistoryResult, Observation},
+};
 use trss_core::{Db, DbError};
 use trss_jobs::{area::ReceiveArea, Runner};
 use trss_subtitles::{fake::FakeSource, Sources};
@@ -480,4 +483,38 @@ fn a_works_badges_are_its_kinds_once_each_in_the_lists_order() {
             ("w4".to_owned(), vec!["episode_check"]),
         ])
     );
+}
+
+/// A history item a rule picked and Transmission did not add is listed with
+/// the receive failures (`GET /api/todo/receive-failures`), with Transmission's
+/// reason.
+#[tokio::test]
+async fn an_add_failure_is_in_the_receive_failure_source_too() {
+    let app = App::new().await;
+    let title = "[SubsPlease] Show - 14 (1080p) [8F2EFECC].mkv";
+    app.state
+        .history
+        .record(
+            1,
+            vec![Observation {
+                channel_id: app.rule.channel_id.clone(),
+                channel_label: "https://feed.test/rss".into(),
+                identity_key: "guid:14".into(),
+                title: title.into(),
+                link: "magnet:?xt=urn:btih:1111000000000000000000000000000000000014".into(),
+                result: HistoryResult::AddFailed,
+                rule_id: Some(app.rule.id.clone()),
+                torrent_hash: None,
+                reason: Some("duplicate torrent? no: refused".into()),
+            }],
+        )
+        .await
+        .unwrap();
+
+    let list = app.get("/api/todo/receive-failures").await;
+    let items = list["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{list}");
+    assert_eq!(items[0]["kind"], "add_failed");
+    assert_eq!(items[0]["title"], title);
+    assert!(items[0]["reason"].as_str().unwrap().contains("refused"));
 }

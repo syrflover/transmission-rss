@@ -1880,6 +1880,10 @@ fn cleared(row: &Revision) -> Next {
 }
 
 #[cfg(test)]
+mod deciding_tests;
+#[cfg(test)]
+mod fixtures;
+#[cfg(test)]
 mod magnet_tests;
 
 #[cfg(test)]
