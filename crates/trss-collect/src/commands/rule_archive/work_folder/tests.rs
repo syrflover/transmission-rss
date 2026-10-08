@@ -1,7 +1,8 @@
 //! The move's checks and renames on real temporary folders, and the Transmission
-//! step against the fake Transmission (`trss_transmission::fake`). The command
-//! around the move and the interplay with the cycle are tested end to end in
-//! trss-worker's `tests/it/archive_move.rs`.
+//! step against the fake Transmission (`trss_transmission::fake`): which
+//! torrents move, what stops the move, and how it waits for Transmission. The
+//! command around the move is in `run_tests.rs`, and the interplay with the
+//! cycle and the commands' turns in trss-worker's `tests/it/archive_move.rs`.
 
 use std::{
     fs,
@@ -15,6 +16,7 @@ use tokio_util::sync::CancellationToken;
 use trss_transmission::fake::{FakeTorrent, FakeTransmission};
 
 use super::*;
+use crate::test_world::{files, write};
 
 struct Folders {
     _tmp: tempfile::TempDir,
@@ -39,11 +41,6 @@ fn folders() -> Folders {
     }
 }
 
-fn write(path: &Path, text: &str) {
-    fs::create_dir_all(path.parent().unwrap()).unwrap();
-    fs::write(path, text).unwrap();
-}
-
 fn archive_request(f: &Folders, name: &str) -> Request {
     Request {
         from_root: f.collect.clone(),
@@ -62,28 +59,6 @@ fn restore_request(f: &Folders, name: &str) -> Request {
         to: Side::Collect,
         name: name.to_owned(),
     }
-}
-
-/// Every file below `root`, relative, sorted.
-fn files(root: &Path) -> Vec<String> {
-    fn walk(dir: &Path, root: &Path, out: &mut Vec<String>) {
-        let Ok(entries) = fs::read_dir(dir) else {
-            return;
-        };
-        for entry in entries {
-            let path = entry.unwrap().path();
-            let meta = fs::symlink_metadata(&path).unwrap();
-            if meta.is_dir() {
-                walk(&path, root, out);
-            } else {
-                out.push(path.strip_prefix(root).unwrap().display().to_string());
-            }
-        }
-    }
-    let mut out = Vec::new();
-    walk(root, root, &mut out);
-    out.sort();
-    out
 }
 
 /// `move_entries` of the work folder `X` from the collect to the archive folder.
@@ -436,6 +411,7 @@ fn torrents_are_matched_by_where_their_folders_really_are() {
         let err =
             plan_torrents(&request, &[place("c", "e01.mkv", &f.collect.join(dir))]).unwrap_err();
         assert!(err.contains("링크"), "{dir}: {err}");
+        assert!(err.contains("`e01.mkv`"), "{dir}: {err}");
     }
 
     // `..` that lands elsewhere is not this work's; one that lands in it
@@ -568,9 +544,12 @@ fn a_torrent_split_between_the_two_folders_is_named_without_asking_to_clear_a_si
     write(&to.join("e05.mkv"), "moved");
     let split = two_files("a", "Pack", &from, ["e04.mkv", "e05.mkv"]);
     let err = plan_torrents(&archive_request(&f, "X"), &[split]).unwrap_err();
+    assert!(err.contains("아무것도 옮기지 않았어요"), "{err}");
     assert!(err.contains("`Pack`"), "{err}");
     assert!(err.contains("수집 폴더와 보관 폴더에 나뉘어"), "{err}");
     assert!(err.contains("어느 쪽도 지우지 말고"), "{err}");
+    assert!(err.contains("남은 파일을 한쪽으로 모으거나"), "{err}");
+    assert!(err.contains("Transmission에서 그 토렌트의 위치를"), "{err}");
     assert!(err.contains("`다시 옮기기`를 눌러"), "{err}");
     assert!(!err.contains("정리"), "{err}");
     assert!(!err.contains("`S/e05.mkv`"), "{err}");
@@ -798,33 +777,54 @@ fn client_of(transmission: &FakeTransmission) -> TransClient {
     )
 }
 
-#[tokio::test]
-async fn a_transmission_that_refuses_the_move_leaves_everything_in_place() {
-    let f = folders();
-    let season = f.collect.join("Clevatess/Season 02");
-    write(&season.join("Clevatess S02E01.mkv"), "video");
-    let transmission = FakeTransmission::start().await;
-    // A seeding torrent of a person (no bot label) with its single file in the
-    // work folder.
-    transmission.preload(
-        FakeTorrent::new(&format!("dddd{:036}", 1), "Clevatess S02E01.mkv")
-            .in_dir(&season)
-            .status(6),
-    );
-    transmission.reject_locations(Some("permission denied"));
-    let policy = MovePolicy {
-        poll: Duration::from_millis(10),
-        timeout: Duration::from_secs(5),
-    };
+fn hash(n: u32) -> String {
+    format!("dddd{n:036}")
+}
 
-    let result = move_work_folder(
-        &mut client_of(&transmission),
+/// A seeding torrent of a person (no bot label) with its single file in `dir`.
+fn seeding(transmission: &FakeTransmission, n: u32, name: &str, dir: &Path) {
+    write(&dir.join(name), "video");
+    transmission.preload(FakeTorrent::new(&hash(n), name).in_dir(dir).status(6));
+}
+
+/// A wait for Transmission that ends after `timeout`.
+fn waiting(timeout: Duration) -> MovePolicy {
+    MovePolicy {
+        poll: Duration::from_millis(10),
+        timeout,
+    }
+}
+
+/// The move of `request` against the fake, on the real disk.
+async fn move_of(
+    transmission: &FakeTransmission,
+    request: &Request,
+    policy: MovePolicy,
+) -> Result<Moved, MoveError> {
+    move_work_folder(
+        &mut client_of(transmission),
         &Redactor::none(),
-        &archive_request(&f, "Clevatess"),
+        request,
         policy,
         Arc::new(RealDisk),
         Arc::new(()),
         &CancellationToken::new(),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn a_transmission_that_refuses_the_move_leaves_everything_in_place() {
+    let f = folders();
+    let season = f.collect.join("Clevatess/Season 02");
+    let transmission = FakeTransmission::start().await;
+    seeding(&transmission, 1, "Clevatess S02E01.mkv", &season);
+    transmission.reject_locations(Some("permission denied"));
+
+    let result = move_of(
+        &transmission,
+        &archive_request(&f, "Clevatess"),
+        waiting(Duration::from_secs(5)),
     )
     .await;
 
@@ -837,4 +837,436 @@ async fn a_transmission_that_refuses_the_move_leaves_everything_in_place() {
         ["Clevatess/Season 02/Clevatess S02E01.mkv"]
     );
     assert!(files(&f.archive).is_empty());
+}
+
+#[tokio::test]
+async fn every_torrent_in_the_work_folder_moves_with_its_files_whoever_added_it() {
+    let f = folders();
+    let transmission = FakeTransmission::start().await;
+    let season = f.collect.join("Clevatess/Season 02");
+    seeding(&transmission, 1, "Clevatess S02E01.mkv", &season);
+    // A bot torrent too: every torrent in the folder moves, whoever added it.
+    write(&season.join("Clevatess S02E02.mkv"), "video");
+    transmission.preload(
+        FakeTorrent::new(&hash(2), "Clevatess S02E02.mkv")
+            .in_dir(&season)
+            .bot()
+            .status(6),
+    );
+    write(&f.collect.join("Clevatess/.trss/subs/S02E01.ass"), "sub");
+    write(&season.join("notes.txt"), "not a torrent");
+    // Another work that stays.
+    seeding(
+        &transmission,
+        3,
+        "Other S01E01.mkv",
+        &f.collect.join("Other/Season 01"),
+    );
+
+    let moved = move_of(
+        &transmission,
+        &archive_request(&f, "Clevatess"),
+        waiting(Duration::from_secs(5)),
+    )
+    .await;
+
+    assert_eq!(moved, Ok(Moved::Moved));
+    assert!(!f.collect.join("Clevatess").exists());
+    assert_eq!(
+        files(&f.archive.join("Clevatess")),
+        [
+            ".trss/subs/S02E01.ass",
+            "Season 02/Clevatess S02E01.mkv",
+            "Season 02/Clevatess S02E02.mkv",
+            "Season 02/notes.txt",
+        ]
+    );
+    assert_eq!(files(&f.collect), ["Other/Season 01/Other S01E01.mkv"]);
+    // Transmission moved its torrents first, with their files, and keeps them.
+    let new_dir = f.archive.join("Clevatess/Season 02");
+    for n in [1, 2] {
+        let torrent = transmission.torrent(&hash(n));
+        assert_eq!(torrent.download_dir, new_dir.to_str().unwrap());
+        assert_eq!(torrent.status, 6);
+    }
+    assert_eq!(
+        transmission.torrent(&hash(3)).download_dir,
+        f.collect.join("Other/Season 01").to_str().unwrap()
+    );
+    let moves = transmission.calls_of("torrent-set-location");
+    assert_eq!(moves.len(), 2);
+    for call in &moves {
+        assert_eq!(call.args["move"], true);
+        assert_eq!(call.args["location"], new_dir.to_str().unwrap());
+    }
+    assert!(transmission.calls_of("torrent-add").is_empty());
+}
+
+#[tokio::test]
+async fn a_season_merges_beside_the_archived_one_and_new_folders_take_the_parents_owner() {
+    let f = folders();
+    let transmission = FakeTransmission::start().await;
+    write(
+        &f.archive.join("Clevatess/Season 01/Clevatess S01E01.mkv"),
+        "old",
+    );
+    write(
+        &f.archive.join("Clevatess/.trss/subs/S01E01.ass"),
+        "old sub",
+    );
+    seeding(
+        &transmission,
+        1,
+        "Clevatess S02E01.mkv",
+        &f.collect.join("Clevatess/Season 02"),
+    );
+    write(&f.collect.join("Clevatess/Season 02/extra.txt"), "x");
+    write(&f.collect.join("Clevatess/.trss/subs/S02E01.ass"), "sub");
+    write(&f.collect.join("Clevatess/.trss/fonts/a.ttf"), "font");
+    let fonts_inode = fs::metadata(f.collect.join("Clevatess/.trss/fonts"))
+        .unwrap()
+        .ino();
+
+    let moved = move_of(
+        &transmission,
+        &archive_request(&f, "Clevatess"),
+        waiting(Duration::from_secs(5)),
+    )
+    .await;
+
+    assert_eq!(moved, Ok(Moved::Moved));
+    assert!(
+        !f.collect.join("Clevatess").exists(),
+        "the emptied source is removed"
+    );
+    assert_eq!(
+        files(&f.archive.join("Clevatess")),
+        [
+            ".trss/fonts/a.ttf",
+            ".trss/subs/S01E01.ass",
+            ".trss/subs/S02E01.ass",
+            "Season 01/Clevatess S01E01.mkv",
+            "Season 02/Clevatess S02E01.mkv",
+            "Season 02/extra.txt",
+        ]
+    );
+    // `Season 02` is new in the archive: Transmission made it for its torrent,
+    // as its own user; the move makes no folder. Every folder here belongs to
+    // the user running the tests, so this cannot tell owners apart: it only
+    // holds the expected result in place.
+    let parent = fs::metadata(f.archive.join("Clevatess")).unwrap();
+    let season = fs::metadata(f.archive.join("Clevatess/Season 02")).unwrap();
+    assert_eq!((season.uid(), season.gid()), (parent.uid(), parent.gid()));
+    // What the move renamed is renamed, not copied: it keeps its inode, and so
+    // its owner.
+    assert_eq!(
+        fs::metadata(f.archive.join("Clevatess/.trss/fonts"))
+            .unwrap()
+            .ino(),
+        fonts_inode
+    );
+    assert_eq!(
+        transmission.torrent(&hash(1)).download_dir,
+        f.archive.join("Clevatess/Season 02").to_str().unwrap()
+    );
+}
+
+#[tokio::test]
+async fn a_move_stopped_during_the_renames_finishes_the_rest_when_it_runs_again() {
+    let f = folders();
+    let transmission = FakeTransmission::start().await;
+    // The state a move that was stopped midway through the renames leaves:
+    // the torrent at the archive, and the files split between the two folders.
+    seeding(
+        &transmission,
+        1,
+        "Clevatess S02E01.mkv",
+        &f.archive.join("Clevatess/Season 02"),
+    );
+    write(
+        &f.archive.join("Clevatess/Season 02/Clevatess S02E02.mkv"),
+        "moved",
+    );
+    write(
+        &f.collect.join("Clevatess/Season 02/Clevatess S02E03.mkv"),
+        "left",
+    );
+    write(&f.collect.join("Clevatess/.trss/subs/S02E01.ass"), "left");
+
+    let moved = move_of(
+        &transmission,
+        &archive_request(&f, "Clevatess"),
+        waiting(Duration::from_secs(5)),
+    )
+    .await;
+
+    assert_eq!(moved, Ok(Moved::Moved));
+    assert!(!f.collect.join("Clevatess").exists());
+    assert_eq!(
+        files(&f.archive),
+        [
+            "Clevatess/.trss/subs/S02E01.ass",
+            "Clevatess/Season 02/Clevatess S02E01.mkv",
+            "Clevatess/Season 02/Clevatess S02E02.mkv",
+            "Clevatess/Season 02/Clevatess S02E03.mkv",
+        ]
+    );
+    assert!(transmission.calls_of("torrent-set-location").is_empty());
+}
+
+#[tokio::test]
+async fn a_torrent_transmission_would_still_write_stops_the_move_whatever_its_state() {
+    struct Case {
+        what: &'static str,
+        torrent: FakeTorrent,
+        /// The work folder is not on disk at all: its torrent's data is in
+        /// Transmission's incomplete folder, and the archive has a file of
+        /// that name.
+        folder_gone: bool,
+        says: &'static [&'static str],
+    }
+    const UNFINISHED: &[&str] = &[
+        "`Clevatess S02E02.mkv`",
+        "다 받거나",
+        "지운 뒤 `다시 옮기기`",
+    ];
+    const NO_METADATA: &[&str] = &["`Clevatess S02E03", "지운 뒤", "`다시 옮기기`"];
+    let cases = [
+        Case {
+            what: "downloading",
+            torrent: FakeTorrent::new(&hash(1), "Clevatess S02E02.mkv").unfinished(),
+            folder_gone: false,
+            says: UNFINISHED,
+        },
+        Case {
+            what: "verifying",
+            torrent: FakeTorrent::new(&hash(2), "Clevatess S02E02.mkv").status(2),
+            folder_gone: false,
+            says: UNFINISHED,
+        },
+        Case {
+            what: "a magnet still fetching its metadata, stopped",
+            torrent: FakeTorrent::new(&hash(1), "Clevatess S02E03")
+                .without_metadata()
+                .status(0),
+            folder_gone: false,
+            says: NO_METADATA,
+        },
+        Case {
+            what: "a magnet still fetching its metadata, downloading",
+            torrent: FakeTorrent::new(&hash(2), "Clevatess S02E03")
+                .without_metadata()
+                .status(4),
+            folder_gone: false,
+            says: NO_METADATA,
+        },
+        Case {
+            what: "downloading, although it reports nothing left",
+            torrent: FakeTorrent::new(&hash(3), "Clevatess S02E03.mkv").status(4),
+            folder_gone: false,
+            says: NO_METADATA,
+        },
+        Case {
+            what: "downloading, with the work folder gone",
+            torrent: FakeTorrent::new(&hash(1), "Clevatess S02E02.mkv").unfinished(),
+            folder_gone: true,
+            says: UNFINISHED,
+        },
+    ];
+    for case in cases {
+        let f = folders();
+        let transmission = FakeTransmission::start().await;
+        let season = f.collect.join("Clevatess/Season 02");
+        let hash = case.torrent.hash.clone();
+        if case.folder_gone {
+            write(
+                &f.archive.join("Clevatess/Season 02/Clevatess S02E02.mkv"),
+                "archived",
+            );
+        } else {
+            seeding(&transmission, 9, "Clevatess S02E01.mkv", &season);
+        }
+        transmission.preload(case.torrent.in_dir(&season));
+        let (collect_before, archive_before) = (files(&f.collect), files(&f.archive));
+
+        let result = move_of(
+            &transmission,
+            &archive_request(&f, "Clevatess"),
+            waiting(Duration::from_secs(5)),
+        )
+        .await;
+
+        let Err(MoveError::Failed(reason)) = result else {
+            panic!("{}: {result:?}", case.what);
+        };
+        for part in case.says {
+            assert!(reason.contains(part), "{}: {reason}", case.what);
+        }
+        assert!(
+            transmission.calls_of("torrent-set-location").is_empty(),
+            "{}",
+            case.what
+        );
+        assert_eq!(files(&f.collect), collect_before, "{}", case.what);
+        assert_eq!(files(&f.archive), archive_before, "{}", case.what);
+        if case.folder_gone {
+            assert_eq!(
+                transmission.torrent(&hash).download_dir,
+                season.to_str().unwrap()
+            );
+            assert_eq!(
+                fs::read_to_string(f.archive.join("Clevatess/Season 02/Clevatess S02E02.mkv"))
+                    .unwrap(),
+                "archived"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn the_renames_wait_until_transmission_reports_the_new_folder() {
+    let f = folders();
+    let transmission = FakeTransmission::start().await;
+    seeding(
+        &transmission,
+        1,
+        "Clevatess S02E01.mkv",
+        &f.collect.join("Clevatess/Season 02"),
+    );
+    write(&f.collect.join("Clevatess/Season 02/notes.txt"), "x");
+    // Transmission 4 answers first and moves the data in the background.
+    transmission.async_locations(true);
+    transmission.lag_locations(3);
+
+    let moved = move_of(
+        &transmission,
+        &archive_request(&f, "Clevatess"),
+        waiting(Duration::from_secs(5)),
+    )
+    .await;
+
+    assert_eq!(moved, Ok(Moved::Moved));
+    // One look before the move and the ones until the new folder showed.
+    assert!(transmission.calls_of("torrent-get").len() >= 5);
+    assert_eq!(
+        transmission.torrent(&hash(1)).download_dir,
+        f.archive.join("Clevatess/Season 02").to_str().unwrap()
+    );
+    assert!(!f.collect.join("Clevatess").exists());
+}
+
+#[tokio::test]
+async fn a_move_error_transmission_reports_fails_the_move_with_its_reason_without_waiting() {
+    let f = folders();
+    let transmission = FakeTransmission::start().await;
+    seeding(
+        &transmission,
+        1,
+        "Clevatess S02E01.mkv",
+        &f.collect.join("Clevatess/Season 02"),
+    );
+    write(&f.collect.join("Clevatess/Season 02/notes.txt"), "x");
+    transmission.async_locations(true);
+    transmission.fail_location_of(&hash(1), Some("Permission denied"));
+    let policy = MovePolicy {
+        poll: Duration::from_millis(20),
+        timeout: Duration::from_secs(60),
+    };
+
+    let started = std::time::Instant::now();
+    let result = move_of(&transmission, &archive_request(&f, "Clevatess"), policy).await;
+    assert!(started.elapsed() < Duration::from_secs(20));
+
+    let Err(MoveError::Failed(reason)) = result else {
+        panic!("{result:?}");
+    };
+    assert!(reason.contains("Permission denied"), "{reason}");
+    assert!(!reason.contains("정리"), "{reason}");
+    // The move renamed nothing of its own.
+    assert_eq!(
+        files(&f.collect),
+        [
+            "Clevatess/Season 02/Clevatess S02E01.mkv",
+            "Clevatess/Season 02/notes.txt"
+        ]
+    );
+    assert!(files(&f.archive).is_empty());
+}
+
+#[tokio::test]
+async fn transmission_slower_than_the_wait_leaves_the_move_for_the_next_look() {
+    let f = folders();
+    let transmission = FakeTransmission::start().await;
+    seeding(
+        &transmission,
+        1,
+        "Clevatess S02E01.mkv",
+        &f.collect.join("Clevatess/Season 02"),
+    );
+    write(&f.collect.join("Clevatess/Season 02/notes.txt"), "x");
+    transmission.async_locations(true);
+    transmission.lag_locations(u32::MAX);
+    let request = archive_request(&f, "Clevatess");
+    let slow = MovePolicy {
+        poll: Duration::from_millis(20),
+        timeout: Duration::from_millis(300),
+    };
+
+    let result = move_of(&transmission, &request, slow).await;
+
+    assert!(matches!(result, Err(MoveError::Later(_))), "{result:?}");
+    // The move renamed nothing of its own meanwhile.
+    assert_eq!(
+        files(&f.collect),
+        [
+            "Clevatess/Season 02/Clevatess S02E01.mkv",
+            "Clevatess/Season 02/notes.txt"
+        ]
+    );
+
+    // Transmission catches up; the next look finishes the same move.
+    transmission.settle_locations();
+    transmission.lag_locations(0);
+    let moved = move_of(&transmission, &request, slow).await;
+    assert_eq!(moved, Ok(Moved::Moved));
+    assert!(!f.collect.join("Clevatess").exists());
+    assert_eq!(
+        files(&f.archive),
+        [
+            "Clevatess/Season 02/Clevatess S02E01.mkv",
+            "Clevatess/Season 02/notes.txt",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_refusal_after_some_torrents_moved_says_so_and_moving_again_finishes() {
+    let f = folders();
+    let transmission = FakeTransmission::start().await;
+    let season = f.collect.join("Clevatess/Season 02");
+    seeding(&transmission, 1, "Clevatess S02E01.mkv", &season);
+    seeding(&transmission, 2, "Clevatess S02E02.mkv", &season);
+    transmission.reject_location_of(&hash(2), Some("torrent is busy"));
+    let request = archive_request(&f, "Clevatess");
+
+    let result = move_of(&transmission, &request, waiting(Duration::from_secs(5))).await;
+
+    let Err(MoveError::Failed(reason)) = result else {
+        panic!("{result:?}");
+    };
+    assert!(reason.contains("torrent is busy"), "{reason}");
+    assert!(reason.contains("1개"), "{reason}");
+    assert!(reason.contains("다시 옮기면 남은 것만"), "{reason}");
+    assert!(!reason.contains("정리"), "{reason}");
+
+    transmission.reject_location_of(&hash(2), None);
+    let moved = move_of(&transmission, &request, waiting(Duration::from_secs(5))).await;
+    assert_eq!(moved, Ok(Moved::Moved));
+    assert!(!f.collect.join("Clevatess").exists());
+    for n in [1, 2] {
+        assert_eq!(
+            transmission.torrent(&hash(n)).download_dir,
+            f.archive.join("Clevatess/Season 02").to_str().unwrap()
+        );
+    }
 }

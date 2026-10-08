@@ -2,8 +2,9 @@
 //! folder (ticket 0123): what the web decides before it makes or turns on the
 //! rule ([`plan_start`], [`archived_work`], [`ask_start`]) and the order the
 //! `start` command keeps (move first, turn on after). The move's checks and
-//! renames are in `work_folder/tests.rs`; the move with Transmission, and a
-//! cycle running beside it, are tested in trss-worker.
+//! renames are in `work_folder/tests.rs`; the command around the move with
+//! Transmission is in `run_tests.rs`, and a cycle running beside it, with the
+//! order of the commands, in trss-worker.
 
 use std::{
     collections::BTreeSet,
@@ -26,7 +27,10 @@ use trss_library::{
 };
 
 use super::*;
-use crate::store::channels::{ChannelInput, RuleInput};
+use crate::{
+    store::channels::{ChannelInput, RuleInput},
+    test_world::{files as listing, write},
+};
 
 fn both(collect: &Path, archive: &Path) -> Option<(String, Option<String>)> {
     Some((
@@ -52,11 +56,6 @@ fn folders() -> Folders {
         collect,
         archive,
     }
-}
-
-fn write(path: &Path, text: &str) {
-    fs::create_dir_all(path.parent().unwrap()).unwrap();
-    fs::write(path, text).unwrap();
 }
 
 #[tokio::test]
@@ -505,7 +504,7 @@ fn a_start_carries_the_ticked_items_and_other_commands_are_as_before() {
 #[tokio::test]
 async fn a_start_receives_the_ticked_items_in_order_once_the_rule_is_on_and_once_each() {
     // No archive folder: the start only turns the rule on, which is the step
-    // the receives wait for (the move itself is tested in trss-worker).
+    // the receives wait for (the move itself is in `run_tests.rs`).
     let (w, rule) = world("A/Season 03", false).await;
     let command = w.start_receiving(&rule, vec![42, 7]).await.unwrap();
 
@@ -640,25 +639,4 @@ async fn receiving_goes_on_when_the_archive_folder_does_not_hold_the_work_folder
         .await
         .unwrap();
     assert_eq!(guard, Receiving::Go);
-}
-
-/// Every file below `root`, relative, sorted.
-fn listing(root: &Path) -> Vec<String> {
-    fn walk(dir: &Path, root: &Path, out: &mut Vec<String>) {
-        let Ok(entries) = fs::read_dir(dir) else {
-            return;
-        };
-        for entry in entries {
-            let path = entry.unwrap().path();
-            if fs::symlink_metadata(&path).unwrap().is_dir() {
-                walk(&path, root, out);
-            } else {
-                out.push(path.strip_prefix(root).unwrap().display().to_string());
-            }
-        }
-    }
-    let mut out = Vec::new();
-    walk(root, root, &mut out);
-    out.sort();
-    out
 }

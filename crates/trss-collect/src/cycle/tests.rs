@@ -10,13 +10,15 @@
 //! Release names, hashes and secrets are made up.
 
 use serde_json::json;
+use trss_core::commands::{Accepted, CommandState};
 use trss_transmission::{fake::FakeTorrent, item_label, BOT_LABEL};
 
 use crate::{
+    commands::rule_archive::{self, Direction, MOVED},
     feed::MAX_FEED_BYTES,
     receive::{NAME_NOT_DERIVED, NAME_TAKEN, SEVERAL_FILES},
     store::{
-        channels::{ChannelInput, RuleInput},
+        channels::{ChannelInput, RuleInput, RuleState},
         history::{HistoryItem, HistoryResult},
     },
     test_world::{feed_xml_of, magnet, World, SECRET},
@@ -869,4 +871,111 @@ async fn an_add_that_fails_is_recorded_with_its_reason_and_rule_and_a_later_cycl
             "{trouble:?}"
         );
     }
+}
+
+// --- a rule whose work folder is in the archive folder -------------------------------------
+
+#[tokio::test]
+async fn a_cycle_leaves_an_item_of_a_rule_whose_work_folder_is_archived_and_brings_the_folder_in_first(
+) {
+    let s = World::with_rules(vec![rule("Clevatess", "Clevatess/Season 03")])
+        .await
+        .with_archive_folder()
+        .await;
+    let rule = s.resumed(0, 777).await;
+    s.seeding_in(
+        1,
+        "Clevatess S02E01.mkv",
+        &s.archive.join("Clevatess/Season 02"),
+    );
+    s.feed_numbered(&[(2, "Clevatess S03E01.mkv")]);
+
+    // The rule is on, the work folder is in the archive folder: the item is
+    // not received, no folder is made in the collect folder, and nothing is
+    // recorded for it.
+    let outcomes = s.cycle_outcomes().await;
+    assert_eq!(World::moving_first(&outcomes), [true]);
+    assert_eq!(outcomes.len(), 1);
+    assert!(s.tr.calls_of("torrent-add").is_empty());
+    assert!(!s.media.join("Clevatess").exists());
+    assert!(s.history_items().await.is_empty());
+
+    // The rule is off with its work folder's move open, and it keeps the time
+    // it was turned on.
+    let stored = s.stored_rule(&rule).await;
+    assert_eq!(stored.state, RuleState::Paused);
+    assert_eq!(stored.resumed_at, Some(777));
+    let open = open_move(&s, &rule).await;
+    assert_eq!(
+        open.payload,
+        format!(r#"{{"rule_id":"{}","direction":"start"}}"#, rule.id)
+    );
+
+    // The rule being off, another cycle beside the open move selects nothing
+    // for it (the item is no match for a rule that is off) and stores nothing
+    // more.
+    s.advance(300_000);
+    let outcomes = s.cycle_outcomes().await;
+    assert!(outcomes.is_empty());
+    assert!(s.tr.calls_of("torrent-add").is_empty());
+    assert_eq!(open_move(&s, &rule).await.id, open.id);
+    let waiting = s.item_containing("Clevatess S03E01").await;
+    assert_eq!(waiting.result, HistoryResult::NoMatch);
+
+    // The same, with the rule on again while the move is open: the item is
+    // left again, no second command is stored, and the rule is left as it is.
+    s.ctx
+        .channels
+        .set_rule_state(&rule.id, RuleState::Active, 777)
+        .await
+        .unwrap();
+    s.advance(300_000);
+    let outcomes = s.cycle_outcomes().await;
+    assert_eq!(World::moving_first(&outcomes), [false]);
+    assert!(s.tr.calls_of("torrent-add").is_empty());
+    assert!(!s.media.join("Clevatess").exists());
+    assert_eq!(s.item_containing("Clevatess S03E01").await, waiting);
+    assert_eq!(open_move(&s, &rule).await.id, open.id);
+    assert_eq!(s.stored_rule(&rule).await.state, RuleState::Active);
+
+    // The command brings the folder in and turns the rule on, still with its
+    // old `resumed_at`.
+    let start = s.claim().await;
+    assert_eq!(start.id, open.id);
+    let finished = s.run_archive(&start).await.unwrap();
+    assert_eq!(finished.state, CommandState::Done, "{finished:?}");
+    assert_eq!(finished.outcome.result, MOVED);
+    assert!(!s.archive.join("Clevatess").exists());
+    assert_eq!(
+        crate::test_world::files(&s.media),
+        ["Clevatess/Season 02/Clevatess S02E01.mkv"]
+    );
+    let stored = s.stored_rule(&rule).await;
+    assert_eq!(stored.state, RuleState::Active);
+    assert_eq!(stored.resumed_at, Some(777));
+
+    // The next cycle receives the item into the work folder that came over.
+    s.advance(300_000);
+    let outcomes = s.cycle_outcomes().await;
+    assert!(World::moving_first(&outcomes).is_empty());
+    let adds: Vec<String> =
+        s.tr.calls_of("torrent-add")
+            .iter()
+            .map(|c| c.args["download-dir"].as_str().unwrap().to_owned())
+            .collect();
+    assert_eq!(
+        adds,
+        [s.media.join("Clevatess/Season 03").to_str().unwrap()]
+    );
+}
+
+/// The `start` command open for `rule`, as a look for another one is told.
+async fn open_move(s: &World, rule: &crate::store::channels::Rule) -> trss_core::commands::Command {
+    let asked = rule_archive::ask_start(&s.ctx.commands, &rule.id, Direction::Resume, s.now())
+        .await
+        .unwrap();
+    let Accepted::Busy(open) = asked else {
+        panic!("no command is open: {asked:?}");
+    };
+    open
 }

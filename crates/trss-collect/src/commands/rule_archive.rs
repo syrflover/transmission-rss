@@ -72,6 +72,8 @@
 //! reason.
 
 #[cfg(test)]
+mod run_tests;
+#[cfg(test)]
 mod start_tests;
 pub mod work_folder;
 

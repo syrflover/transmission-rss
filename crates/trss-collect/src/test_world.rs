@@ -37,13 +37,19 @@ use trss_library::{
     live::LiveWatch,
     store::{library::LibraryStore, seasons::SeasonStore},
 };
-use trss_transmission::{fake::FakeTransmission, Redactor, RenamePolicy};
+use trss_transmission::{
+    fake::{FakeTorrent, FakeTransmission},
+    Redactor, RenamePolicy,
+};
 
 use crate::{
     commands::{
         episode_undo::{self, EpisodeUndo, Finished as UndoFinished, Retry as UndoRetry},
         receive_once::{self, Finished, ReceiveOnce, Retry},
-        rule_archive::work_folder::MovePolicy,
+        rule_archive::{
+            self, work_folder::MovePolicy, Direction, Finished as ArchiveFinished,
+            Retry as ArchiveRetry,
+        },
     },
     context::{CollectContext, TransmissionLink},
     cycle::{self, JobOutcome},
@@ -54,8 +60,8 @@ use crate::{
     season_link,
     store::{
         channels::{
-            ChannelInput, ChannelStore, EpisodeMark, NewSubscription, Rule, RuleInput, RuleState,
-            SubtitleMode,
+            ChannelInput, ChannelStore, ChannelWithRules, EpisodeMark, NewSubscription, Rule,
+            RuleInput, RuleState, SubtitleMode,
         },
         history::{HistoryItem, HistoryQuery, HistoryStore, MAX_PAGE_SIZE},
         revisions::{Revision, RevisionStore},
@@ -131,6 +137,9 @@ pub(crate) struct World {
     pub media: PathBuf,
     /// The rule's folder, `media/Show/Season 01`.
     pub season: PathBuf,
+    /// Where the archive folder is once [`World::with_archive_folder`] has
+    /// made and set it.
+    pub archive: PathBuf,
     pub channel_id: String,
     clock: Arc<AtomicI64>,
 }
@@ -163,6 +172,7 @@ impl World {
         let tr = FakeTransmission::start().await;
         let feeds = FeedServer::start().await;
         let media = dir.path().join("media");
+        let archive = dir.path().join("archive");
         let season = media.join("Show").join("Season 01");
         std::fs::create_dir_all(&season).unwrap();
         let settings = SettingsStore::new(db.clone());
@@ -207,6 +217,7 @@ impl World {
             ctx,
             media,
             season,
+            archive,
             channel_id: channel.channel.id,
             dir,
             clock: Arc::new(AtomicI64::new(1_000_000)),
@@ -251,6 +262,17 @@ impl World {
             .id
     }
 
+    /// A channel reading the feed `path` (empty until set) with these rules.
+    pub async fn channel_with(&self, path: &str, rules: Vec<RuleInput>) -> ChannelWithRules {
+        self.feeds.set_xml(path, &feed_xml(&[]));
+        let url = format!("{}?token={SECRET}", self.feeds.url(path));
+        self.ctx
+            .channels
+            .create_channel_with_rules(ChannelInput::new(url), rules)
+            .await
+            .unwrap()
+    }
+
     /// The database file the stores share.
     pub fn db_path(&self) -> PathBuf {
         self.dir.path().join("app.db")
@@ -289,6 +311,11 @@ impl World {
     /// settings, status board records and the gate it shares with the
     /// commands are not part of it.
     pub async fn cycle(&self) {
+        self.cycle_outcomes().await;
+    }
+
+    /// [`World::cycle`], with what became of each item that was started.
+    pub async fn cycle_outcomes(&self) -> Vec<JobOutcome> {
         let at = self.now();
         let ctx = &self.ctx;
         let cancel = CancellationToken::new();
@@ -321,6 +348,7 @@ impl World {
         let listing = Arc::new(Listing::new());
         let mut kept = HashSet::new();
         let mut removable = read > 0;
+        let mut outcomes = Vec::new();
         for job in jobs {
             let (outcome, _) = cycle::process_job(
                 ctx.clone(),
@@ -331,18 +359,33 @@ impl World {
                 listing.clone(),
             )
             .await;
-            match outcome {
+            match &outcome {
                 JobOutcome::Held { hash, .. } => {
-                    kept.insert(hash);
+                    kept.insert(hash.clone());
                 }
                 JobOutcome::Failed { unconfirmed: true } => removable = false,
                 _ => {}
             }
+            outcomes.push(outcome);
         }
         revisions::advance(&ctx.revision_work(), &ctx.folders, at, &redactor, &cancel).await;
         if removable {
             cycle::remove_departed(ctx, kept, present, unread, &redactor).await;
         }
+        outcomes
+    }
+
+    /// What the items of [`World::cycle_outcomes`] that waited for their work
+    /// folder to come out of the archive folder came to: `asked` of each, in
+    /// order.
+    pub fn moving_first(outcomes: &[JobOutcome]) -> Vec<bool> {
+        outcomes
+            .iter()
+            .filter_map(|outcome| match outcome {
+                JobOutcome::MovingFirst { asked } => Some(*asked),
+                _ => None,
+            })
+            .collect()
     }
 
     // --- a subscription to a new season ------------------------------------------------
@@ -680,6 +723,96 @@ impl World {
         self.run_command(&command).await
     }
 
+    // --- the archive folder and the work folders' moves -----------------------------------
+
+    /// The archive folder (`archive`, beside the collect folder) made and set
+    /// in the settings.
+    pub async fn with_archive_folder(self) -> World {
+        std::fs::create_dir_all(&self.archive).unwrap();
+        self.ctx
+            .settings
+            .put_collection(
+                1,
+                self.media.to_str().unwrap().to_owned(),
+                Some(self.archive.to_str().unwrap().to_owned()),
+            )
+            .await
+            .unwrap();
+        self
+    }
+
+    /// A seeding torrent of a person (no bot label, so no cycle removes it)
+    /// with its single file `name` in `dir`.
+    pub fn seeding_in(&self, n: u32, name: &str, dir: &Path) {
+        write(&dir.join(name), "video");
+        self.tr
+            .preload(FakeTorrent::new(&show_hash(n), name).in_dir(dir).status(6));
+    }
+
+    /// The channel's `n`-th rule turned off and on again at `at`, so that its
+    /// `resumed_at` is `at`.
+    pub async fn resumed(&self, n: usize, at: Millis) -> Rule {
+        let rule = self.rule_of(n).await;
+        let channels = &self.ctx.channels;
+        channels
+            .set_rule_state(&rule.id, RuleState::Paused, at - 1)
+            .await
+            .unwrap();
+        channels
+            .set_rule_state(&rule.id, RuleState::Active, at)
+            .await
+            .unwrap()
+            .expect("the rule")
+    }
+
+    /// Accepts the `rule_archive` command of `direction` for `rule` as the
+    /// web does, and claims it as the worker does. The command's ID is made
+    /// of the direction, the rule and the clock: [`World::advance`] between
+    /// two of the same direction.
+    pub async fn start_archive(&self, rule: &Rule, direction: Direction) -> Command {
+        let accepted = rule_archive::ask_start(&self.ctx.commands, &rule.id, direction, self.now())
+            .await
+            .unwrap();
+        match accepted {
+            Accepted::Created(_) => {}
+            other => panic!("the command was not stored: {other:?}"),
+        }
+        self.claim().await
+    }
+
+    /// Runs the `rule_archive` command `command` as the worker does and, when
+    /// it ends, writes the end. A [`ArchiveRetry`] leaves the command running,
+    /// to be started again.
+    pub async fn run_archive(&self, command: &Command) -> Result<ArchiveFinished, ArchiveRetry> {
+        let clock = self.clock.clone();
+        let clock: Clock = Arc::new(move || clock.load(Ordering::SeqCst));
+        let finished = rule_archive::run(
+            &self.ctx.archive(),
+            command,
+            Arc::new(()),
+            &clock,
+            &CancellationToken::new(),
+        )
+        .await?;
+        self.ctx
+            .commands
+            .finish(
+                &command.id,
+                finished.state,
+                finished.outcome.clone(),
+                self.now(),
+            )
+            .await
+            .unwrap();
+        Ok(finished)
+    }
+
+    /// `direction` of `rule` as one command, run once: how it ended.
+    pub async fn archive_of(&self, rule: &Rule, direction: Direction) -> ArchiveFinished {
+        let command = self.start_archive(rule, direction).await;
+        self.run_archive(&command).await.expect("the command ended")
+    }
+
     // --- items a rule picked and Transmission refused -------------------------------------
 
     /// The `show` feed holds `items` and one cycle runs while Transmission
@@ -943,4 +1076,31 @@ impl Place {
 /// The text of `path`'s bytes.
 pub(crate) fn read(path: &Path) -> Vec<u8> {
     std::fs::read(path).unwrap()
+}
+
+/// Writes `text` to `path`, making its folders.
+pub(crate) fn write(path: &Path, text: &str) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, text).unwrap();
+}
+
+/// Every file below `root`, relative, sorted; empty when `root` is missing.
+pub(crate) fn files(root: &Path) -> Vec<String> {
+    fn walk(dir: &Path, root: &Path, out: &mut Vec<String>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries {
+            let path = entry.unwrap().path();
+            if std::fs::symlink_metadata(&path).unwrap().is_dir() {
+                walk(&path, root, out);
+            } else {
+                out.push(path.strip_prefix(root).unwrap().display().to_string());
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(root, root, &mut out);
+    out.sort();
+    out
 }

@@ -4,11 +4,15 @@
 //! The cases run through [`World::retry`] against the fake Transmission.
 
 use serde_json::json;
-use trss_core::commands::CommandState;
+use trss_core::commands::{Accepted, CommandState};
 use trss_transmission::BOT_LABEL;
 
 use super::fixtures::*;
-use crate::{store::history::HistoryResult, test_world::World};
+use crate::{
+    commands::rule_archive::{self, Direction, MOVED, MOVING_FIRST},
+    store::{channels::RuleState, history::HistoryResult},
+    test_world::{files, World},
+};
 
 #[tokio::test]
 async fn a_failed_item_is_added_again_into_its_rules_folder() {
@@ -157,4 +161,72 @@ async fn a_retry_that_failed_can_be_tried_again_with_a_new_command() {
     assert_eq!(received.rule_id, item.rule_id);
     assert_eq!(received.reason, None);
     assert_eq!(s.tr.torrents().len(), 1);
+}
+
+#[tokio::test]
+async fn a_retry_into_an_archived_work_folder_ends_saying_so_pauses_the_rule_and_the_move_runs() {
+    let s = World::with_rules(vec![rule("Clevatess", "Clevatess/Season 02")])
+        .await
+        .with_archive_folder()
+        .await;
+    let rule = s.resumed(0, 777).await;
+    // Transmission refused the rule's next episode: `다시 받기` is offered.
+    s.fail_adds(&[(&hash(2), "Clevatess S02E02.mkv")]).await;
+    let item = s.item_containing("Clevatess S02E02").await;
+    // The work folder went to the archive folder meanwhile.
+    s.seeding_in(
+        1,
+        "Clevatess S02E01.mkv",
+        &s.archive.join("Clevatess/Season 02"),
+    );
+
+    // The retry ends first, and the move it asked for is open: the rule is off.
+    let finished = s.retry(item.id, CMD).await.unwrap();
+
+    assert_eq!(finished.state, CommandState::Failed, "{finished:?}");
+    let reason = finished.outcome.reason.unwrap();
+    assert!(reason.contains("먼저 수집 폴더로 옮기고"), "{reason}");
+    assert_eq!(reason, MOVING_FIRST);
+    assert!(s.tr.calls_of("torrent-add").is_empty());
+    assert!(!s.media.join("Clevatess").exists());
+    // The item is as it was, and the rule is off with its move open.
+    assert_eq!(
+        s.item_containing("Clevatess S02E02").await.result,
+        item.result
+    );
+    let stored = s.stored_rule(&rule).await;
+    assert_eq!(stored.state, RuleState::Paused);
+    assert_eq!(stored.resumed_at, Some(777));
+    let asked = rule_archive::ask_start(&s.ctx.commands, &rule.id, Direction::Resume, s.now())
+        .await
+        .unwrap();
+    let Accepted::Busy(open) = asked else {
+        panic!("no start is open: {asked:?}");
+    };
+    assert_eq!(
+        open.payload,
+        format!(r#"{{"rule_id":"{}","direction":"start"}}"#, rule.id)
+    );
+
+    // The move ends; the retry then goes into the folder that came over.
+    let start = s.claim().await;
+    assert_eq!(start.id, open.id);
+    let moved = s.run_archive(&start).await.unwrap();
+    assert_eq!(moved.outcome.result, MOVED, "{moved:?}");
+    let stored = s.stored_rule(&rule).await;
+    assert_eq!(stored.state, RuleState::Active);
+    assert_eq!(stored.resumed_at, Some(777));
+    assert!(!s.archive.join("Clevatess").exists());
+    assert_eq!(
+        files(&s.media),
+        ["Clevatess/Season 02/Clevatess S02E01.mkv"]
+    );
+    s.tr.content_on_add(&hash(2), b"video");
+    s.tr.seeding_on_add(&hash(2));
+    let finished = s.retry(item.id, SECOND_CMD).await.unwrap();
+    assert_eq!(finished.outcome.result, "received", "{finished:?}");
+    assert_eq!(
+        s.tr.torrent(&hash(2)).download_dir,
+        s.media.join("Clevatess/Season 02").to_str().unwrap()
+    );
 }
