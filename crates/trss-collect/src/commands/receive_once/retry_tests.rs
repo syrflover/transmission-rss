@@ -9,8 +9,15 @@ use trss_transmission::BOT_LABEL;
 
 use super::fixtures::*;
 use crate::{
-    commands::rule_archive::{self, Direction, MOVED, MOVING_FIRST},
-    store::{channels::RuleState, history::HistoryResult},
+    commands::{
+        receive_once::{retry_plan_for, revision_retry, NotRetryable, RevisionRetry},
+        rule_archive::{self, Direction, MOVED, MOVING_FIRST},
+    },
+    store::{
+        channels::RuleState,
+        history::HistoryResult,
+        revisions::{NewRevision, OldVideo, RevisionState, Step},
+    },
     test_world::{files, World},
 };
 
@@ -229,4 +236,94 @@ async fn a_retry_into_an_archived_work_folder_ends_saying_so_pauses_the_rule_and
         s.tr.torrent(&hash(2)).download_dir,
         s.media.join("Clevatess/Season 02").to_str().unwrap()
     );
+}
+
+/// The reason of a revision whose torrent vanished from Transmission before it
+/// was received (`revisions::RECEIVE_STOPPED`).
+const STOPPED: &str =
+    "새 영상의 토렌트가 Transmission에서 사라져 받기가 끝나지 않았어요. 이전 영상은 그대로 있어요.";
+
+/// The worker's verdict on a stopped revision (`RevisionRetry::Overtaken`) comes
+/// from the rows of the episode alone, so the web's check that a file is at the
+/// episode name cannot make it looser: a higher revision done for the episode
+/// refuses the retry whatever the folder holds (here, nothing).
+#[tokio::test]
+async fn a_stopped_revision_below_a_done_one_stays_refused_whatever_the_folder_holds() {
+    let s = World::with_rules(picked_rules()).await;
+    s.fail_adds(&[(&hash(26), LIAR), (&hash(3), OTHER)]).await;
+    let item = s.item_containing("LIAR GAME - 26").await;
+    let higher = s.item_containing("Another Show").await;
+    let rule = s.rule_of(0).await;
+    let row = |item_id, version, hash: &str| NewRevision {
+        item_id,
+        old_item_id: None,
+        rule_id: rule.id.clone(),
+        folder: s.media.join(LIAR_DIR).to_str().unwrap().to_owned(),
+        episode_name: "LIAR GAME S01E26.mkv".into(),
+        old_version: Some(1),
+        new_version: version,
+        old_crc: None,
+        expected_crc: Some("8F2EFEC2".into()),
+        torrent_hash: Some(hash.to_owned()),
+        state: RevisionState::Receiving,
+        reason: None,
+    };
+    let revisions = &s.ctx.revisions;
+
+    // The revision 2 whose download stopped before it was received.
+    let stopped = revisions
+        .create(10, row(item.id, 2, &hash(26)))
+        .await
+        .unwrap();
+    let step = Step::Failed {
+        reason: STOPPED.into(),
+        received_name: None,
+    };
+    revisions
+        .advance(stopped.id, 20, RevisionState::Receiving, step)
+        .await
+        .unwrap();
+    assert!(
+        matches!(
+            revision_retry(revisions, item.id).await.unwrap(),
+            RevisionRetry::Again(_)
+        ),
+        "nothing overtakes it yet"
+    );
+
+    // A revision 3 of the episode is done.
+    let done = revisions
+        .create(10, row(higher.id, 3, &hash(3)))
+        .await
+        .unwrap();
+    let verified = Step::Verified {
+        received_name: "v.mkv".into(),
+        file_crc: "1A2B3C4D".into(),
+        file_identity: "1:2:3:4:5:6:7".into(),
+    };
+    revisions
+        .advance(done.id, 11, RevisionState::Receiving, verified)
+        .await
+        .unwrap();
+    let old = OldVideo {
+        item_id: None,
+        version: Some(1),
+        torrent_hash: None,
+    };
+    revisions.claim(done.id, 12, old).await.unwrap();
+    let removed = Step::Removed { reason: None };
+    revisions
+        .advance(done.id, 13, RevisionState::Removing, removed)
+        .await
+        .unwrap();
+    revisions
+        .advance(done.id, 14, RevisionState::Removed, Step::Done)
+        .await
+        .unwrap();
+
+    let revision = revision_retry(revisions, item.id).await.unwrap();
+    assert_eq!(revision, RevisionRetry::Overtaken);
+    let channel = s.ctx.channels.get_channel(&item.channel_id).await.unwrap();
+    let plan = retry_plan_for(&item, channel.as_ref(), Some(&rule), &revision);
+    assert_eq!(plan.map(|_| ()), Err(NotRetryable::Overtaken));
 }

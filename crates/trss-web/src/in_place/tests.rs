@@ -1,5 +1,9 @@
 //! `다시 받기` of a video revision is not offered when the web can tell the
 //! episode's place holds the same or a higher revision already.
+//!
+//! The rule (what [`Evidence::held`] tells, from which rows, listing and
+//! files) is tested directly on `Evidence`; the router tests that stay check
+//! that the screens and the command take its verdict (ADR 0015, ticket 0101).
 
 use std::path::PathBuf;
 
@@ -12,6 +16,7 @@ use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
+use super::Evidence;
 use crate::{commands_api::now_millis, AppState};
 use trss_collect::store::{
     channels::{Channel, ChannelInput, Rule, RuleInput, RuleState},
@@ -271,6 +276,23 @@ impl World {
             .unwrap();
     }
 
+    /// The revision [`Evidence::held`] tells for the replacement row of `item`.
+    async fn held(&self, item: &HistoryItem) -> Option<u32> {
+        let row = self
+            .state
+            .revisions
+            .by_item(item.id)
+            .await
+            .unwrap()
+            .expect("a replacement row");
+        let mut evidence = Evidence::load(&self.state).await.unwrap();
+        evidence
+            .held(item, &row)
+            .await
+            .unwrap()
+            .map(|place| place.version)
+    }
+
     /// The `revision` entry of the to-do source.
     async fn failure(&self) -> Value {
         let (status, json) = self
@@ -349,56 +371,54 @@ async fn a_version_unknown_item_below_a_done_revision_of_the_episode_has_no_butt
     assert_eq!(in_list["retry_blocked"], IN_PLACE_V3);
 }
 
+// --- what `Evidence::held` tells ---------------------------------------------
+
+/// The two kinds of row that wait for `다시 받기`: a revision whose download
+/// stopped, and a `버전 미상` item.
+#[derive(Clone, Copy, Debug)]
+enum Waiting {
+    Stopped,
+    Unknown,
+}
+
+impl World {
+    async fn waiting(&self, kind: Waiting) -> HistoryItem {
+        match kind {
+            Waiting::Stopped => self.stopped_v2().await,
+            Waiting::Unknown => self.unknown_v2().await,
+        }
+    }
+}
+
+const BOTH: [Waiting; 2] = [Waiting::Stopped, Waiting::Unknown];
+
 #[tokio::test]
-async fn a_done_revision_of_the_same_version_hides_the_button_too() {
-    let w = World::new().await;
-    let item = w.unknown_v2().await;
-    w.done(2).await;
-    let row = w.history_row(&item).await;
-    assert!(!offered(&row), "{row}");
-    assert_eq!(
-        row["retry_blocked"],
-        "이미 같거나 더 높은 수정본(v2)이 있어서 다시 받지 않아요."
-    );
+async fn a_done_revision_of_the_same_or_a_higher_version_holds_the_episode_a_lower_one_does_not() {
+    for kind in BOTH {
+        for (done, expected) in [(3, Some(3)), (2, Some(2)), (1, None)] {
+            let w = World::new().await;
+            let item = w.waiting(kind).await;
+            w.done(done).await;
+            assert_eq!(w.held(&item).await, expected, "{kind:?}, done v{done}");
+        }
+    }
 }
 
 #[tokio::test]
-async fn a_done_revision_of_a_lower_version_leaves_the_button() {
-    let w = World::new().await;
-    let item = w.unknown_v2().await;
-    w.done(1).await;
-    let row = w.history_row(&item).await;
-    assert!(offered(&row), "{row}");
+async fn a_higher_item_held_by_transmission_at_the_episode_name_holds_the_episode() {
+    for kind in BOTH {
+        let w = World::new().await;
+        let item = w.waiting(kind).await;
+        let hash = w.placed(title(14, 3)).await;
+        w.listing(MINUTE, &[&hash]).await;
+        assert_eq!(w.held(&item).await, Some(3), "{kind:?}");
+    }
 }
 
-// --- an ordinary item of the release placed at the episode name -----------
-
+/// Evidence that is one thing short holds nothing: the worker looks at the
+/// folder when the command runs.
 #[tokio::test]
-async fn a_higher_item_held_by_transmission_at_the_episode_name_hides_the_button() {
-    let w = World::new().await;
-    let item = w.unknown_v2().await;
-    let hash = w.placed(title(14, 3)).await;
-    w.listing(MINUTE, &[&hash]).await;
-    let row = w.history_row(&item).await;
-    assert!(!offered(&row), "{row}");
-    assert_eq!(row["retry_blocked"], IN_PLACE_V3);
-}
-
-#[tokio::test]
-async fn a_stopped_revision_below_a_held_higher_item_has_no_button() {
-    let w = World::new().await;
-    w.stopped_v2().await;
-    let hash = w.placed(title(14, 3)).await;
-    w.listing(MINUTE, &[&hash]).await;
-    let row = w.failure().await;
-    assert!(!offered(&row), "{row}");
-    assert_eq!(row["retry_blocked"], IN_PLACE_V3);
-}
-
-/// Evidence that is one thing short leaves the button where it was: the
-/// worker looks at the folder when the command runs.
-#[tokio::test]
-async fn a_listing_that_is_absent_stale_or_without_the_torrent_leaves_the_button() {
+async fn a_listing_that_is_absent_stale_or_without_the_torrent_holds_nothing() {
     // (what is short, the listing's age, whether it holds the torrent)
     let cases = [
         ("no listing", None, true),
@@ -413,59 +433,120 @@ async fn a_listing_that_is_absent_stale_or_without_the_torrent_leaves_the_button
             let other = "f".repeat(40);
             w.listing(ago, &[if holds { &hash } else { &other }]).await;
         }
-        let row = w.history_row(&item).await;
-        assert!(offered(&row), "{what}: {row}");
+        assert_eq!(w.held(&item).await, None, "{what}");
     }
 }
 
 #[tokio::test]
-async fn a_held_item_of_another_episode_or_a_lower_revision_leaves_the_button() {
-    for (episode, version) in [(15, 3), (14, 1)] {
+async fn a_held_item_of_another_episode_release_or_a_lower_revision_holds_nothing() {
+    for (what, title) in [
+        ("another episode", self::title(15, 3)),
+        ("a lower revision", self::title(14, 1)),
+        (
+            "another release",
+            "[Other] Show - 14v3 (1080p) [8F2EFEC3].mkv".to_owned(),
+        ),
+    ] {
         let w = World::new().await;
         let item = w.unknown_v2().await;
-        let hash = w.placed(title(episode, version)).await;
+        let hash = w.placed(title).await;
         w.listing(MINUTE, &[&hash]).await;
-        let row = w.history_row(&item).await;
-        assert!(offered(&row), "episode {episode} v{version}: {row}");
+        assert_eq!(w.held(&item).await, None, "{what}");
     }
 }
 
+/// A place with no file at the episode name, or one that cannot be looked at,
+/// holds nothing, whatever the rows and the listing say.
 #[tokio::test]
-async fn a_held_item_of_another_release_leaves_the_button() {
+async fn a_place_without_a_file_at_the_episode_name_holds_nothing() {
+    // (what is missing, whether the evidence is a done row or a held item)
+    for (what, done_row, remove_folder) in [
+        ("the file, with a done revision", true, false),
+        ("the file, with a held item", false, false),
+        ("the folder", true, true),
+    ] {
+        let w = World::new().await;
+        let item = w.unknown_v2().await;
+        if done_row {
+            w.done(3).await;
+        } else {
+            let hash = w.placed(title(14, 3)).await;
+            w.listing(MINUTE, &[&hash]).await;
+        }
+        assert_eq!(w.held(&item).await, Some(3), "{what}: with the file");
+        if remove_folder {
+            std::fs::remove_dir_all(&w.folder).unwrap();
+        } else {
+            w.remove_video();
+        }
+        assert_eq!(w.held(&item).await, None, "{what}");
+    }
+}
+
+// Erai-raws' magnet titles have no extension and other language lists.
+const MAGNET_V2: &str = "[Magnet] Show - 14 (V2) [1080p CR WEB-DL AVC AAC][us][br][pl][Airing]";
+const MAGNET_V3: &str = "[Magnet] Show - 14 (V3) [1080p CR WEB-DL AVC AAC][us][br][Airing]";
+
+/// The release is told without its language tags: a done replacement by
+/// another list of the same release holds the episode, another group's does
+/// not.
+#[tokio::test]
+async fn a_done_revision_listed_with_other_language_tags_is_the_same_release() {
     let w = World::new().await;
-    let item = w.unknown_v2().await;
-    let hash = w
-        .placed("[Other] Show - 14v3 (1080p) [8F2EFEC3].mkv".into())
+    let item = w.unknown_titled(MAGNET_V2.into()).await;
+    w.done_titled(MAGNET_V3.into(), 3).await;
+    assert_eq!(w.held(&item).await, Some(3));
+
+    let w = World::new().await;
+    let item = w.unknown_titled(MAGNET_V2.into()).await;
+    w.done_titled(MAGNET_V3.replacen("[Magnet]", "[Other]", 1), 3)
         .await;
+    assert_eq!(w.held(&item).await, None);
+}
+
+/// An item held at the episode name is found for a title without an
+/// extension (the name `trname` gives it, with any video extension), and by
+/// its release without the language tags.
+#[tokio::test]
+async fn a_held_magnet_item_with_other_language_tags_holds_the_episode() {
+    let w = World::new().await;
+    let item = w.unknown_titled(MAGNET_V2.into()).await;
+    let hash = w.placed(MAGNET_V3.into()).await;
     w.listing(MINUTE, &[&hash]).await;
-    let row = w.history_row(&item).await;
-    assert!(offered(&row), "{row}");
+    assert_eq!(w.held(&item).await, Some(3));
+
+    // One of another episode names another file.
+    let w = World::new().await;
+    let item = w.unknown_titled(MAGNET_V2.into()).await;
+    let hash = w.placed(MAGNET_V3.replace("14", "15")).await;
+    w.listing(MINUTE, &[&hash]).await;
+    assert_eq!(w.held(&item).await, None);
 }
 
 // --- the command ----------------------------------------------------------
 
+/// The command takes the verdict for either row kind and either evidence: a
+/// stopped revision below a done one, and a `버전 미상` item the listing places.
 #[tokio::test]
 async fn a_retry_of_a_revision_the_episode_holds_already_is_refused_with_the_reason() {
-    let w = World::new().await;
-    let item = w.stopped_v2().await;
-    w.done(3).await;
-    let (status, body) = w.retry(&item).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
-    assert_eq!(body["message"], IN_PLACE_V3);
-    let stored = w.state.commands.get(COMMAND_ID).await.unwrap();
-    assert!(stored.is_none(), "nothing is stored");
-}
-
-#[tokio::test]
-async fn a_retry_of_a_version_unknown_item_the_listing_places_is_refused() {
-    let w = World::new().await;
-    let item = w.unknown_v2().await;
-    let hash = w.placed(title(14, 3)).await;
-    w.listing(MINUTE, &[&hash]).await;
-    let (status, body) = w.retry(&item).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
-    assert_eq!(body["message"], IN_PLACE_V3);
-    assert!(w.state.commands.get(COMMAND_ID).await.unwrap().is_none());
+    for placed in [false, true] {
+        let w = World::new().await;
+        let item = if placed {
+            let item = w.unknown_v2().await;
+            let hash = w.placed(title(14, 3)).await;
+            w.listing(MINUTE, &[&hash]).await;
+            item
+        } else {
+            let item = w.stopped_v2().await;
+            w.done(3).await;
+            item
+        };
+        let (status, body) = w.retry(&item).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "placed {placed}: {body}");
+        assert_eq!(body["message"], IN_PLACE_V3);
+        let stored = w.state.commands.get(COMMAND_ID).await.unwrap();
+        assert!(stored.is_none(), "nothing is stored");
+    }
 }
 
 #[tokio::test]
@@ -474,105 +555,6 @@ async fn a_retry_with_no_evidence_is_accepted_and_the_worker_stays_the_authority
     let item = w.unknown_v2().await;
     let (status, body) = w.retry(&item).await;
     assert_eq!(status, StatusCode::ACCEPTED, "{body}");
-}
-
-// --- the file at the episode name -----------------------------------------
-
-#[tokio::test]
-async fn a_done_revision_without_a_file_at_the_episode_name_leaves_the_button() {
-    let w = World::new().await;
-    let item = w.unknown_v2().await;
-    w.done(3).await;
-    w.remove_video();
-    let row = w.history_row(&item).await;
-    assert!(offered(&row), "{row}");
-    let (status, body) = w.retry(&item).await;
-    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
-}
-
-#[tokio::test]
-async fn a_held_item_without_a_file_at_the_episode_name_leaves_the_button() {
-    let w = World::new().await;
-    let item = w.unknown_v2().await;
-    let hash = w.placed(title(14, 3)).await;
-    w.listing(MINUTE, &[&hash]).await;
-    w.remove_video();
-    let row = w.history_row(&item).await;
-    assert!(offered(&row), "{row}");
-    let (status, body) = w.retry(&item).await;
-    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
-}
-
-#[tokio::test]
-async fn a_folder_that_cannot_be_looked_at_leaves_the_button() {
-    let w = World::new().await;
-    let item = w.unknown_v2().await;
-    w.done(3).await;
-    std::fs::remove_dir_all(&w.folder).unwrap();
-    let row = w.history_row(&item).await;
-    assert!(offered(&row), "{row}");
-    let (status, body) = w.retry(&item).await;
-    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
-}
-
-/// A stopped revision is also refused by the worker's own verdict on the rows
-/// of the episode (`RevisionRetry::Overtaken`), whatever the folder holds, so
-/// the web is no stricter than the worker in keeping it hidden.
-#[tokio::test]
-async fn a_stopped_revision_below_a_done_one_stays_refused_as_the_worker_refuses_it() {
-    let w = World::new().await;
-    let item = w.stopped_v2().await;
-    w.done(3).await;
-    w.remove_video();
-    let row = w.failure().await;
-    assert!(!offered(&row), "{row}");
-    let (status, _) = w.retry(&item).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-}
-
-// --- Erai-raws' magnet titles: no extension, other language lists ----------
-
-const MAGNET_V2: &str = "[Magnet] Show - 14 (V2) [1080p CR WEB-DL AVC AAC][us][br][pl][Airing]";
-const MAGNET_V3: &str = "[Magnet] Show - 14 (V3) [1080p CR WEB-DL AVC AAC][us][br][Airing]";
-
-/// The release is told without its language tags: a done replacement by
-/// another list of the same release hides the button.
-#[tokio::test]
-async fn a_done_revision_listed_with_other_language_tags_is_the_same_release() {
-    let w = World::new().await;
-    let item = w.unknown_titled(MAGNET_V2.into()).await;
-    w.done_titled(MAGNET_V3.into(), 3).await;
-    let row = w.history_row(&item).await;
-    assert!(!offered(&row), "{row}");
-    assert_eq!(row["retry_blocked"], IN_PLACE_V3);
-
-    // Another group's release is another release.
-    let w = World::new().await;
-    let item = w.unknown_titled(MAGNET_V2.into()).await;
-    w.done_titled(MAGNET_V3.replacen("[Magnet]", "[Other]", 1), 3)
-        .await;
-    assert!(offered(&w.history_row(&item).await));
-}
-
-/// An item held at the episode name is found for a title without an
-/// extension (the name `trname` gives it, with any video extension), and by
-/// its release without the language tags.
-#[tokio::test]
-async fn a_held_magnet_item_with_other_language_tags_hides_the_button() {
-    let w = World::new().await;
-    let item = w.unknown_titled(MAGNET_V2.into()).await;
-    let hash = w.placed(MAGNET_V3.into()).await;
-    w.listing(MINUTE, &[&hash]).await;
-    let row = w.history_row(&item).await;
-    assert!(!offered(&row), "{row}");
-    assert_eq!(row["retry_blocked"], IN_PLACE_V3);
-
-    // One of another episode names another file.
-    let w = World::new().await;
-    let item = w.unknown_titled(MAGNET_V2.into()).await;
-    let hash = w.placed(MAGNET_V3.replace("14", "15")).await;
-    w.listing(MINUTE, &[&hash]).await;
-    assert!(offered(&w.history_row(&item).await));
 }
 
 // --- the offer of a stopped revision and its refusals ---------------------
