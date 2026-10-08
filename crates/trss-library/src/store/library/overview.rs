@@ -209,7 +209,7 @@ pub(super) fn overview(conn: &Connection) -> rusqlite::Result<Vec<WorkOverview>>
         latest_season: Option<u32>,
     }
     let rows: Vec<Row> = {
-        let mut stmt = conn.prepare(
+        let mut stmt = conn.prepare_cached(
             "SELECT w.id, w.dir_name, w.missing, w.first_seen_at, f.id, f.path,
                     (SELECT max(s.number) FROM seasons s WHERE s.work_id = w.id)
                FROM works w JOIN watch_folders f ON f.id = w.watch_folder_id
@@ -232,8 +232,8 @@ pub(super) fn overview(conn: &Connection) -> rusqlite::Result<Vec<WorkOverview>>
 
     let mut files: HashMap<String, Vec<Media>> = HashMap::new();
     {
-        let mut stmt =
-            conn.prepare("SELECT work_id, season, episode, kind, added_at FROM media_files")?;
+        let mut stmt = conn
+            .prepare_cached("SELECT work_id, season, episode, kind, added_at FROM media_files")?;
         let mut cursor = stmt.query([])?;
         while let Some(row) = cursor.next()? {
             let kind = FileKind::from_code(&row.get::<_, String>(3)?).unwrap_or(FileKind::Video);
@@ -248,7 +248,8 @@ pub(super) fn overview(conn: &Connection) -> rusqlite::Result<Vec<WorkOverview>>
 
     let mut check_needed: HashMap<String, bool> = HashMap::new();
     {
-        let mut stmt = conn.prepare("SELECT work_id, path, reason FROM unrecognized_files")?;
+        let mut stmt =
+            conn.prepare_cached("SELECT work_id, path, reason FROM unrecognized_files")?;
         let mut cursor = stmt.query([])?;
         while let Some(row) = cursor.next()? {
             let path: String = row.get(1)?;

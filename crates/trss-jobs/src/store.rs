@@ -523,7 +523,7 @@ impl JobStore {
     pub async fn known_receive_ids(&self, ids: Vec<String>) -> Result<HashSet<String>, JobError> {
         self.db
             .run(move |c| {
-                let mut stmt = c.prepare(
+                let mut stmt = c.prepare_cached(
                     "SELECT EXISTS(SELECT 1 FROM subtitle_jobs WHERE id = ?1)
                          OR EXISTS(SELECT 1 FROM subtitle_job_files WHERE id = ?1)",
                 )?;
@@ -543,7 +543,7 @@ impl JobStore {
     pub async fn open_items(&self, ids: Vec<i64>) -> Result<HashSet<i64>, JobError> {
         self.db
             .run(move |c| {
-                let mut stmt = c.prepare(
+                let mut stmt = c.prepare_cached(
                     "SELECT EXISTS(SELECT 1 FROM subtitle_job_items
                                    WHERE id = ?1 AND state IN ('pending', 'running', 'waiting'))",
                 )?;
@@ -851,19 +851,19 @@ impl JobStore {
         self.db
             .run(move |c| {
                 let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-                tx.execute(
+                tx.prepare_cached(
                     "UPDATE subtitle_job_items
                      SET state = 'done', wait = NULL, reason = NULL, failure = NULL,
                          updated_at = ?2
                      WHERE id = ?1",
-                    params![item_id, now],
-                )?;
+                )?
+                .execute(params![item_id, now])?;
                 let unchanged = unchanged_from(&tx, item_id)?;
                 if let Some(job) = &unchanged {
-                    tx.execute(
+                    tx.prepare_cached(
                         "UPDATE subtitle_job_items SET unchanged_from = ?2 WHERE id = ?1",
-                        params![item_id, job],
-                    )?;
+                    )?
+                    .execute(params![item_id, job])?;
                 }
                 tx.commit()?;
                 Ok(unchanged)
@@ -876,7 +876,7 @@ impl JobStore {
     pub async fn picks_of_anime(&self, anime_no: i64) -> Result<Vec<Pick>, JobError> {
         self.db
             .run(move |c| {
-                let mut stmt = c.prepare(
+                let mut stmt = c.prepare_cached(
                     "SELECT i.observation_id, j.source_id, i.episode, i.post_url, i.state,
                             i.wait, j.id, j.state, i.updated_at
                        FROM subtitle_job_items i
@@ -920,12 +920,11 @@ impl JobStore {
         let id = job_id.to_owned();
         self.db
             .run(move |c| {
-                Ok(c.query_row(
-                    "SELECT origin FROM subtitle_jobs WHERE id = ?1",
-                    [id],
-                    |r| r.get(0),
+                Ok(
+                    c.prepare_cached("SELECT origin FROM subtitle_jobs WHERE id = ?1")?
+                        .query_row([id], |r| r.get(0))
+                        .optional()?,
                 )
-                .optional()?)
             })
             .await
     }
@@ -965,32 +964,36 @@ impl JobStore {
         self.db
             .run(move |c| {
                 let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-                tx.execute(
+                tx.prepare_cached(
                     "INSERT INTO subtitle_job_files
                          (id, job_id, item_id, file_key, name, state, size, sha256, object,
                           path, created_at, updated_at, format, kind, archive_type)
                      VALUES (?1, ?2, ?3, ?4, ?5, 'done', ?6, ?7, ?8, ?9, ?10, ?10, ?11, ?12, ?13)",
-                    params![
-                        file.id,
-                        id,
-                        item_id,
-                        file.file_key,
-                        file.name,
-                        i64::try_from(file.size).unwrap_or(i64::MAX),
-                        file.sha256,
-                        file.object,
-                        file.path,
-                        now,
-                        file.format.code(),
-                        file.kind.code(),
-                        file.archive.map(Archive::code)
-                    ],
-                )?;
-                tx.execute(
+                )?
+                .execute(params![
+                    file.id,
+                    id,
+                    item_id,
+                    file.file_key,
+                    file.name,
+                    i64::try_from(file.size).unwrap_or(i64::MAX),
+                    file.sha256,
+                    file.object,
+                    file.path,
+                    now,
+                    file.format.code(),
+                    file.kind.code(),
+                    file.archive.map(Archive::code)
+                ])?;
+                tx.prepare_cached(
                     "INSERT INTO subtitle_job_events (job_id, at, message, detail)
                      VALUES (?1, ?2, '서버 브라우저가 받은 파일을 남겼어요', ?3)",
-                    params![id, now, format!("{} · {}", file.name, file.kind.label())],
-                )?;
+                )?
+                .execute(params![
+                    id,
+                    now,
+                    format!("{} · {}", file.name, file.kind.label())
+                ])?;
                 tx.commit()?;
                 Ok(())
             })
@@ -1009,17 +1012,21 @@ impl JobStore {
         self.db
             .run(move |c| {
                 let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-                tx.execute(
+                tx.prepare_cached(
                     "INSERT INTO subtitle_job_dropped (job_id, position, name, reason)
                      VALUES (?1, (SELECT COALESCE(MAX(position), -1) + 1
                                   FROM subtitle_job_dropped WHERE job_id = ?1), ?2, ?3)",
-                    params![id, dropped.name, dropped.reason],
-                )?;
-                tx.execute(
+                )?
+                .execute(params![id, dropped.name, dropped.reason])?;
+                tx.prepare_cached(
                     "INSERT INTO subtitle_job_events (job_id, at, message, detail)
                      VALUES (?1, ?2, '서버 브라우저가 받은 파일을 뺐어요', ?3)",
-                    params![id, now, format!("{} · {}", dropped.name, dropped.reason)],
-                )?;
+                )?
+                .execute(params![
+                    id,
+                    now,
+                    format!("{} · {}", dropped.name, dropped.reason)
+                ])?;
                 tx.commit()?;
                 Ok(())
             })
@@ -1031,11 +1038,10 @@ impl JobStore {
         let id = job_id.to_owned();
         self.db
             .run(move |c| {
-                Ok(c.query_row(
+                Ok(c.prepare_cached(
                     "SELECT finish_at IS NOT NULL FROM subtitle_jobs WHERE id = ?1",
-                    [id],
-                    |r| r.get(0),
-                )
+                )?
+                .query_row([id], |r| r.get(0))
                 .optional()?
                 .unwrap_or(false))
             })
@@ -1053,11 +1059,8 @@ impl JobStore {
             .run(move |c| {
                 let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
                 let found: Option<(String, JobState)> = tx
-                    .query_row(
-                        "SELECT origin, state FROM subtitle_jobs WHERE id = ?1",
-                        [&id],
-                        |r| Ok((r.get(0)?, r.get(1)?)),
-                    )
+                    .prepare_cached("SELECT origin, state FROM subtitle_jobs WHERE id = ?1")?
+                    .query_row([&id], |r| Ok((r.get(0)?, r.get(1)?)))
                     .optional()?;
                 let Some((origin, state)) = found else {
                     return Ok(AskedFinish::Missing);
@@ -1068,11 +1071,11 @@ impl JobStore {
                 if state.is_finished() || received(&tx, &id)? {
                     return Ok(AskedFinish::Ended);
                 }
-                tx.execute(
+                tx.prepare_cached(
                     "UPDATE subtitle_jobs SET finish_at = COALESCE(finish_at, ?2), updated_at = ?2
                      WHERE id = ?1",
-                    params![id, now],
-                )?;
+                )?
+                .execute(params![id, now])?;
                 tx.commit()?;
                 Ok(AskedFinish::Asked)
             })
@@ -1115,11 +1118,8 @@ impl JobStore {
         self.db
             .run(move |c| {
                 let origin: Option<String> = c
-                    .query_row(
-                        "SELECT origin FROM subtitle_jobs WHERE id = ?1",
-                        [&id],
-                        |r| r.get(0),
-                    )
+                    .prepare_cached("SELECT origin FROM subtitle_jobs WHERE id = ?1")?
+                    .query_row([&id], |r| r.get(0))
                     .optional()?;
                 let summary = upload_summary(c, &id)?;
                 Ok(match origin.as_deref() {
@@ -1135,11 +1135,10 @@ impl JobStore {
         let id = job_id.to_owned();
         self.db
             .run(move |c| {
-                Ok(c.query_row(
+                Ok(c.prepare_cached(
                     "SELECT placement_confirmed_at IS NOT NULL FROM subtitle_jobs WHERE id = ?1",
-                    [id],
-                    |r| r.get::<_, bool>(0),
-                )
+                )?
+                .query_row([id], |r| r.get::<_, bool>(0))
                 .optional()?
                 .unwrap_or(false))
             })
@@ -1230,7 +1229,7 @@ impl JobStore {
     pub async fn unbound_finishes(&self) -> Result<Vec<String>, JobError> {
         self.db
             .run(|c| {
-                let mut stmt = c.prepare(
+                let mut stmt = c.prepare_cached(
                     "SELECT j.id FROM subtitle_jobs j
                      WHERE j.origin = 'find' AND j.finish_at IS NOT NULL
                        AND j.state IN ('waiting', 'held')
@@ -1254,12 +1253,11 @@ impl JobStore {
     pub async fn has_ready(&self) -> Result<bool, JobError> {
         self.db
             .run(|c| {
-                Ok(c.query_row(
+                Ok(c.prepare_cached(
                     "SELECT EXISTS (SELECT 1 FROM subtitle_jobs
                                     WHERE state IN ('pending', 'running'))",
-                    [],
-                    |r| r.get(0),
-                )?)
+                )?
+                .query_row([], |r| r.get(0))?)
             })
             .await
     }
@@ -1272,24 +1270,23 @@ impl JobStore {
             .run(move |c| {
                 let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
                 let found: Option<(String, JobState, i64)> = tx
-                    .query_row(
+                    .prepare_cached(
                         "SELECT id, state, attempts FROM subtitle_jobs
                          WHERE state IN ('pending', 'running') ORDER BY seq LIMIT 1",
-                        [],
-                        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-                    )
+                    )?
+                    .query_row([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
                     .optional()?;
                 let Some((id, state, attempts)) = found else {
                     return Ok(None);
                 };
-                tx.execute(
+                tx.prepare_cached(
                     "UPDATE subtitle_jobs
                      SET state = 'running', wait = NULL, attempts = attempts + 1,
                          state_at = CASE state WHEN 'running' THEN state_at ELSE ?2 END,
                          updated_at = ?2
                      WHERE id = ?1",
-                    params![id, now],
-                )?;
+                )?
+                .execute(params![id, now])?;
                 tx.commit()?;
                 Ok(Some((id, state == JobState::Running, attempts + 1)))
             })
@@ -1306,26 +1303,27 @@ impl JobStore {
         self.db
             .run(move |c| {
                 let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-                tx.execute(
+                tx.prepare_cached(
                     "UPDATE subtitle_job_files SET unpack_retry_at = NULL, updated_at = ?1
                      WHERE unpack_retry_at IS NOT NULL",
-                    [now],
-                )?;
-                tx.execute(
+                )?
+                .execute([now])?;
+                tx.prepare_cached(
                     "UPDATE subtitle_job_items
                      SET state = 'pending', wait = NULL, reason = NULL, updated_at = ?1
                      WHERE state = 'waiting' AND wait = 'subtitle'
                        AND job_id IN (SELECT id FROM subtitle_jobs
                                       WHERE state = 'waiting' AND wait = 'subtitle')",
-                    [now],
-                )?;
-                let jobs = tx.execute(
-                    "UPDATE subtitle_jobs
+                )?
+                .execute([now])?;
+                let jobs = tx
+                    .prepare_cached(
+                        "UPDATE subtitle_jobs
                      SET state = 'pending', wait = NULL, note = NULL, state_at = ?1,
                          updated_at = ?1
                      WHERE state = 'waiting' AND wait IN ('subtitle', 'video')",
-                    [now],
-                )?;
+                    )?
+                    .execute([now])?;
                 tx.commit()?;
                 Ok(jobs)
             })
@@ -1344,21 +1342,21 @@ impl JobStore {
                               AND j.state = 'waiting' AND j.wait = 'subtitle'";
         self.db
             .run(move |c| {
-                let due: bool =
-                    c.query_row(&format!("SELECT EXISTS ({DUE})"), [now], |r| r.get(0))?;
+                let due: bool = c
+                    .prepare_cached(&format!("SELECT EXISTS ({DUE})"))?
+                    .query_row([now], |r| r.get(0))?;
                 if !due {
                     return Ok(0);
                 }
                 let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-                let jobs = tx.execute(
-                    &format!(
+                let jobs = tx
+                    .prepare_cached(&format!(
                         "UPDATE subtitle_jobs
                             SET state = 'pending', wait = NULL, note = NULL, state_at = ?1,
                                 updated_at = ?1
                           WHERE id IN ({DUE})"
-                    ),
-                    [now],
-                )?;
+                    ))?
+                    .execute([now])?;
                 tx.commit()?;
                 Ok(jobs)
             })
@@ -1377,13 +1375,12 @@ impl JobStore {
         now: Millis,
     ) -> Result<(i64, usize), JobError> {
         fn generation(c: &Connection) -> rusqlite::Result<i64> {
-            Ok(c.query_row(
-                "SELECT generation FROM library_generation WHERE id = 1",
-                [],
-                |r| r.get(0),
+            Ok(
+                c.prepare_cached("SELECT generation FROM library_generation WHERE id = 1")?
+                    .query_row([], |r| r.get(0))
+                    .optional()?
+                    .unwrap_or(0),
             )
-            .optional()?
-            .unwrap_or(0))
         }
         self.db
             .run(move |c| {
@@ -1397,7 +1394,7 @@ impl JobStore {
                 let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
                 let generation = generation(&tx)?;
                 let waiting: Vec<(String, String, u32, i64)> = {
-                    let mut stmt = tx.prepare(
+                    let mut stmt = tx.prepare_cached(
                         "SELECT DISTINCT j.id, j.work_id, j.season, p.episode
                            FROM subtitle_jobs j JOIN subtitle_job_plan p ON p.job_id = j.id
                           WHERE (j.state = 'waiting' AND j.wait IN ('video', 'subtitle')
@@ -1423,18 +1420,18 @@ impl JobStore {
                     }
                 }
                 for (job, episode) in &requeued {
-                    tx.execute(
+                    tx.prepare_cached(
                         "UPDATE subtitle_jobs
                             SET state = 'pending', wait = NULL, note = NULL, finished_at = NULL,
                                 state_at = ?2, updated_at = ?2
                           WHERE id = ?1",
-                        params![job, now],
-                    )?;
-                    tx.execute(
+                    )?
+                    .execute(params![job, now])?;
+                    tx.prepare_cached(
                         "INSERT INTO subtitle_job_events (job_id, at, message, detail)
                          VALUES (?1, ?2, '영상이 들어와 적용을 이어가요', ?3)",
-                        params![job, now, format!("{episode}화")],
-                    )?;
+                    )?
+                    .execute(params![job, now, format!("{episode}화")])?;
                 }
                 tx.commit()?;
                 Ok((generation, requeued.len()))
@@ -1457,12 +1454,12 @@ impl JobStore {
     ) -> Result<(), JobError> {
         self.db
             .run(move |c| {
-                c.execute(
+                c.prepare_cached(
                     "UPDATE subtitle_job_items
                      SET state = ?2, wait = ?3, reason = ?4, failure = NULL, updated_at = ?5
                      WHERE id = ?1",
-                    params![item_id, state, wait, reason, now],
-                )?;
+                )?
+                .execute(params![item_id, state, wait, reason, now])?;
                 Ok(())
             })
             .await
@@ -1479,12 +1476,17 @@ impl JobStore {
     ) -> Result<(), JobError> {
         self.db
             .run(move |c| {
-                c.execute(
+                c.prepare_cached(
                     "UPDATE subtitle_job_items
                      SET state = 'failed', wait = NULL, reason = ?2, failure = ?3, updated_at = ?4
                      WHERE id = ?1",
-                    params![item_id, reason, failure.map(FailureKind::code), now],
-                )?;
+                )?
+                .execute(params![
+                    item_id,
+                    reason,
+                    failure.map(FailureKind::code),
+                    now
+                ])?;
                 Ok(())
             })
             .await
@@ -1499,10 +1501,10 @@ impl JobStore {
         let id = job_id.to_owned();
         self.db
             .run(move |c| {
-                c.execute(
+                c.prepare_cached(
                     "UPDATE subtitle_jobs SET stage = ?2, updated_at = ?3 WHERE id = ?1",
-                    params![id, stage, now],
-                )?;
+                )?
+                .execute(params![id, stage, now])?;
                 Ok(())
             })
             .await
@@ -1521,14 +1523,14 @@ impl JobStore {
         let id = job_id.to_owned();
         self.db
             .run(move |c| {
-                c.execute(
+                c.prepare_cached(
                     "INSERT INTO subtitle_job_steps (job_id, step, state, at, note)
                      VALUES (?1, ?2, ?3, ?4, ?5)
                      ON CONFLICT (job_id, step) DO UPDATE
                      SET at = CASE WHEN state = excluded.state THEN at ELSE excluded.at END,
                          state = excluded.state, note = excluded.note",
-                    params![id, step, state, now, note],
-                )?;
+                )?
+                .execute(params![id, step, state, now, note])?;
                 Ok(())
             })
             .await
@@ -1544,11 +1546,11 @@ impl JobStore {
         let id = job_id.to_owned();
         self.db
             .run(move |c| {
-                c.execute(
+                c.prepare_cached(
                     "INSERT OR IGNORE INTO subtitle_job_steps (job_id, step, state, at)
                      VALUES (?1, ?2, 'current', ?3)",
-                    params![id, step, now],
-                )?;
+                )?
+                .execute(params![id, step, now])?;
                 Ok(())
             })
             .await
@@ -1569,11 +1571,11 @@ impl JobStore {
         let id = job_id.to_owned();
         self.db
             .run(move |c| {
-                c.execute(
+                c.prepare_cached(
                     "INSERT INTO subtitle_job_events (job_id, at, message, detail)
                      VALUES (?1, ?2, ?3, ?4)",
-                    params![id, now, message, detail],
-                )?;
+                )?
+                .execute(params![id, now, message, detail])?;
                 Ok(())
             })
             .await
@@ -1605,14 +1607,14 @@ impl JobStore {
                 let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
                 let decided = state == JobState::Waiting
                     && wait == Some(Wait::Approval)
-                    && tx.query_row(
-                        "SELECT EXISTS (SELECT 1 FROM subtitle_replacements
+                    && tx
+                        .prepare_cached(
+                            "SELECT EXISTS (SELECT 1 FROM subtitle_replacements
                                          WHERE job_id = ?1 AND state = 'approved')
                              OR NOT EXISTS (SELECT 1 FROM subtitle_replacements
                                              WHERE job_id = ?1 AND state = 'open')",
-                        [&id],
-                        |r| r.get::<_, bool>(0),
-                    )?;
+                        )?
+                        .query_row([&id], |r| r.get::<_, bool>(0))?;
                 let remapped = matches!(
                     (state, wait),
                     (JobState::Done | JobState::Partial, _)
@@ -1621,11 +1623,10 @@ impl JobStore {
                             Some(Wait::Placement | Wait::Approval | Wait::Video)
                         )
                 ) && tx
-                    .query_row(
+                    .prepare_cached(
                         "SELECT remapped_at IS NOT NULL FROM subtitle_jobs WHERE id = ?1",
-                        [&id],
-                        |r| r.get::<_, bool>(0),
-                    )
+                    )?
+                    .query_row([&id], |r| r.get::<_, bool>(0))
                     .optional()?
                     .unwrap_or(false);
                 // A mapping change that left no plan to decide says why.
@@ -1639,13 +1640,13 @@ impl JobStore {
                     None => (state, wait, note),
                 };
                 let finished = state.is_finished().then_some(now);
-                tx.execute(
+                tx.prepare_cached(
                     "UPDATE subtitle_jobs
                      SET state = ?2, wait = ?3, note = ?4, stage = NULL, state_at = ?5,
                          updated_at = ?5, finished_at = ?6, attempts = 0, remapped_at = NULL
                      WHERE id = ?1",
-                    params![id, state, wait, note, now, finished],
-                )?;
+                )?
+                .execute(params![id, state, wait, note, now, finished])?;
                 tx.commit()?;
                 Ok(again)
             })
@@ -1664,17 +1665,17 @@ impl JobStore {
         self.db
             .run(move |c| {
                 let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-                tx.execute(
+                tx.prepare_cached(
                     "UPDATE subtitle_job_items
                      SET state = 'held', wait = NULL, reason = ?2, updated_at = ?3
                      WHERE job_id = ?1 AND state = 'running'",
-                    params![id, note, now],
-                )?;
-                tx.execute(
+                )?
+                .execute(params![id, note, now])?;
+                tx.prepare_cached(
                     "UPDATE subtitle_job_steps SET state = 'waiting', at = ?3, note = ?2
                      WHERE job_id = ?1 AND state = 'current'",
-                    params![id, note, now],
-                )?;
+                )?
+                .execute(params![id, note, now])?;
                 // Its file effects under way are not known to have ended:
                 // held with their rows and replacement plans, so their
                 // targets are free again and the plans are not carried on.
@@ -1687,46 +1688,40 @@ impl JobStore {
                                     AND (plan_id IS NULL OR plan_id NOT IN
                                          (SELECT id FROM subtitle_replacements
                                            WHERE state = 'done'))";
-                tx.execute(
-                    &format!(
-                        "UPDATE subtitle_job_plan SET outcome = 'held', note = ?2, updated_at = ?3
+                tx.prepare_cached(&format!(
+                    "UPDATE subtitle_job_plan SET outcome = 'held', note = ?2, updated_at = ?3
                          WHERE job_id = ?1 AND position IN
                                (SELECT position FROM ({under_way}))"
-                    ),
-                    params![id, note, now],
-                )?;
-                tx.execute(
-                    &format!(
-                        "UPDATE subtitle_replacements SET state = 'held', reason = ?2, updated_at = ?3
+                ))?
+                .execute(params![id, note, now])?;
+                tx.prepare_cached(&format!(
+                    "UPDATE subtitle_replacements SET state = 'held', reason = ?2, updated_at = ?3
                          WHERE state = 'approved' AND id IN
                                (SELECT plan_id FROM ({under_way}) WHERE plan_id IS NOT NULL)"
-                    ),
-                    params![id, note, now],
-                )?;
-                tx.execute(
-                    &format!(
-                        "UPDATE subtitle_file_effects SET state = 'held', reason = ?2, updated_at = ?3
+                ))?
+                .execute(params![id, note, now])?;
+                tx.prepare_cached(&format!(
+                    "UPDATE subtitle_file_effects SET state = 'held', reason = ?2, updated_at = ?3
                          WHERE id IN (SELECT id FROM ({under_way}))"
-                    ),
-                    params![id, note, now],
-                )?;
+                ))?
+                .execute(params![id, note, now])?;
                 // So are a relocation's removals under way (the copy may be
                 // aside); one not started keeps its copy, which a later
                 // relocation may move.
-                tx.execute(
+                tx.prepare_cached(
                     "UPDATE subtitle_relocations
                         SET state = CASE state WHEN 'planned' THEN 'kept' ELSE 'held' END,
                             reason = ?2, updated_at = ?3
                       WHERE job_id = ?1 AND state IN ('planned', 'intended', 'set_aside')",
-                    params![id, note, now],
-                )?;
-                tx.execute(
+                )?
+                .execute(params![id, note, now])?;
+                tx.prepare_cached(
                     "UPDATE subtitle_jobs
                      SET state = 'held', wait = NULL, note = ?2, stage = NULL, state_at = ?3,
                          updated_at = ?3, attempts = 0
                      WHERE id = ?1",
-                    params![id, note, now],
-                )?;
+                )?
+                .execute(params![id, note, now])?;
                 tx.commit()?;
                 Ok(())
             })
@@ -1745,7 +1740,7 @@ impl JobStore {
         let (id, key) = (job_id.to_owned(), file_key.to_owned());
         self.db
             .run(move |c| {
-                let mut stmt = c.prepare(&format!(
+                let mut stmt = c.prepare_cached(&format!(
                     "{FILE_COLUMNS} WHERE job_id = ?1 AND file_key = ?2 ORDER BY created_at, id"
                 ))?;
                 let rows = stmt
@@ -1761,7 +1756,7 @@ impl JobStore {
         let id = job_id.to_owned();
         self.db
             .run(move |c| {
-                let mut stmt = c.prepare(
+                let mut stmt = c.prepare_cached(
                     "SELECT path FROM subtitle_job_files
                      WHERE job_id = ?1 AND path IS NOT NULL AND state <> 'abandoned'",
                 )?;
@@ -1783,28 +1778,28 @@ impl JobStore {
         self.db
             .run(move |c| {
                 durable(c, |c| {
-                    c.execute(
+                    c.prepare_cached(
                         "INSERT INTO subtitle_job_files
                          (id, job_id, item_id, file_key, name, state, expected_size, size,
                           sha256, format, snapshot, created_at, updated_at, folder,
                           unchanged_asset)
                      SELECT ?1, job_id, ?2, ?3, ?4, 'done', ?5, ?6, ?7, ?8, ?9, ?10, ?10, ?11, ?12
                      FROM subtitle_job_items WHERE id = ?2",
-                        params![
-                            file.id,
-                            file.item_id,
-                            file.file_key,
-                            file.name,
-                            file.expected_size.map(|s| s as i64),
-                            file.size.map(|s| s as i64),
-                            file.sha256,
-                            file.format.map(Format::code),
-                            file.snapshot,
-                            file.created_at,
-                            file.folder,
-                            file.unchanged_asset,
-                        ],
-                    )
+                    )?
+                    .execute(params![
+                        file.id,
+                        file.item_id,
+                        file.file_key,
+                        file.name,
+                        file.expected_size.map(|s| s as i64),
+                        file.size.map(|s| s as i64),
+                        file.sha256,
+                        file.format.map(Format::code),
+                        file.snapshot,
+                        file.created_at,
+                        file.folder,
+                        file.unchanged_asset,
+                    ])
                 })
                 .and_then(|rows| match rows {
                     1 => Ok(()),
@@ -1819,23 +1814,23 @@ impl JobStore {
         self.db
             .run(move |c| {
                 durable(c, |c| {
-                    c.execute(
+                    c.prepare_cached(
                         "INSERT INTO subtitle_job_files
                          (id, job_id, item_id, file_key, name, state, temp_dir, snapshot,
                           created_at, updated_at, folder)
                      SELECT ?1, job_id, ?2, ?3, ?4, 'intended', ?5, ?7, ?6, ?6, ?8
                      FROM subtitle_job_items WHERE id = ?2",
-                        params![
-                            file.id,
-                            file.item_id,
-                            file.file_key,
-                            file.name,
-                            file.temp_dir,
-                            file.created_at,
-                            file.snapshot,
-                            file.folder
-                        ],
-                    )
+                    )?
+                    .execute(params![
+                        file.id,
+                        file.item_id,
+                        file.file_key,
+                        file.name,
+                        file.temp_dir,
+                        file.created_at,
+                        file.snapshot,
+                        file.folder
+                    ])
                 })
                 .and_then(|rows| match rows {
                     1 => Ok(()),
@@ -1855,10 +1850,14 @@ impl JobStore {
         let id = id.to_owned();
         self.db
             .run(move |c| {
-                durable(c, |c| c.execute(
-                    "UPDATE subtitle_job_files SET expected_size = ?2, updated_at = ?3 WHERE id = ?1",
-                    params![id, size.and_then(stored_size), now],
-                )).map(|_| ())
+                durable(c, |c| {
+                    c.prepare_cached(
+                        "UPDATE subtitle_job_files SET expected_size = ?2, updated_at = ?3
+                          WHERE id = ?1",
+                    )?
+                    .execute(params![id, size.and_then(stored_size), now])
+                })
+                .map(|_| ())
             })
             .await
     }
@@ -1883,22 +1882,22 @@ impl JobStore {
         self.db
             .run(move |c| {
                 durable(c, |c| {
-                    c.execute(
+                    c.prepare_cached(
                         "UPDATE subtitle_job_files
                          SET expected_size = ?2, http_status = ?3, content_type = ?4,
                              snapshot = coalesce(?5, snapshot), name = coalesce(?7, name),
                              updated_at = ?6
                          WHERE id = ?1",
-                        params![
-                            id,
-                            size.and_then(stored_size),
-                            kept_status(status),
-                            content_type,
-                            snapshot,
-                            now,
-                            name
-                        ],
-                    )
+                    )?
+                    .execute(params![
+                        id,
+                        size.and_then(stored_size),
+                        kept_status(status),
+                        content_type,
+                        snapshot,
+                        now,
+                        name
+                    ])
                 })
                 .map(|_| ())
             })
@@ -1920,13 +1919,20 @@ impl JobStore {
         self.db
             .run(move |c| {
                 durable(c, |c| {
-                    c.execute(
+                    c.prepare_cached(
                         "UPDATE subtitle_job_files
                      SET state = 'fetched', size = ?2, sha256 = ?3, object = ?4, path = ?5,
                          updated_at = ?6
                      WHERE id = ?1",
-                        params![id, stored_size(size), sha256, object, path, now],
-                    )
+                    )?
+                    .execute(params![
+                        id,
+                        stored_size(size),
+                        sha256,
+                        object,
+                        path,
+                        now
+                    ])
                 })
                 .map(|_| ())
             })
@@ -1945,11 +1951,11 @@ impl JobStore {
         self.db
             .run(move |c| {
                 durable(c, |c| {
-                    c.execute(
+                    c.prepare_cached(
                         "UPDATE subtitle_job_files SET state = ?2, reason = ?3, updated_at = ?4
                      WHERE id = ?1",
-                        params![id, state, reason, now],
-                    )
+                    )?
+                    .execute(params![id, state, reason, now])
                 })
                 .map(|_| ())
             })
@@ -1962,12 +1968,12 @@ impl JobStore {
         self.db
             .run(move |c| {
                 durable(c, |c| {
-                    c.execute(
+                    c.prepare_cached(
                         "UPDATE subtitle_job_files
                          SET state = 'done', reason = NULL, format = ?2, updated_at = ?3
                          WHERE id = ?1",
-                        params![id, format.code(), now],
-                    )
+                    )?
+                    .execute(params![id, format.code(), now])
                 })
                 .map(|_| ())
             })
@@ -1989,24 +1995,24 @@ impl JobStore {
         self.db
             .run(move |c| {
                 durable(c, |c| {
-                    c.execute(
+                    c.prepare_cached(
                         "UPDATE subtitle_job_files
                          SET state = ?2, reason = ?3, failure = ?4,
                              http_status = coalesce(?5, http_status),
                              content_type = coalesce(?6, content_type),
                              response_size = ?7, updated_at = ?8
                          WHERE id = ?1",
-                        params![
-                            id,
-                            state,
-                            problem.reason,
-                            problem.class.map(FailureKind::code),
-                            kept_status(problem.status),
-                            problem.content_type,
-                            problem.size.and_then(stored_size),
-                            now
-                        ],
-                    )
+                    )?
+                    .execute(params![
+                        id,
+                        state,
+                        problem.reason,
+                        problem.class.map(FailureKind::code),
+                        kept_status(problem.status),
+                        problem.content_type,
+                        problem.size.and_then(stored_size),
+                        now
+                    ])
                 })
                 .map(|_| ())
             })
@@ -2020,10 +2026,10 @@ impl JobStore {
         self.db
             .run(move |c| {
                 durable(c, |c| {
-                    c.execute(
+                    c.prepare_cached(
                         "UPDATE subtitle_job_files SET path = NULL, updated_at = ?2 WHERE id = ?1",
-                        params![id, now],
-                    )
+                    )?
+                    .execute(params![id, now])
                 })
                 .map(|_| ())
             })
@@ -2042,7 +2048,7 @@ impl JobStore {
         self.db
             .run(move |c| {
                 durable(c, |c| {
-                    c.execute(
+                    c.prepare_cached(
                         "INSERT INTO subtitle_job_files
                          (id, job_id, item_id, file_key, name, state, same_as, size, sha256,
                           object, path, format, http_status, content_type, snapshot,
@@ -2051,8 +2057,8 @@ impl JobStore {
                             path, format, http_status, content_type, snapshot, ?3, ?3, folder,
                             cleared_at, unchanged_asset
                      FROM subtitle_job_files WHERE id = ?4",
-                        params![id, item_id, now, original.id],
-                    )
+                    )?
+                    .execute(params![id, item_id, now, original.id])
                 })
                 .map(|_| ())
             })
@@ -2079,12 +2085,13 @@ fn create(
     let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
     if let Some(under) = under {
         let version: i64 = tx
-            .query_row(
+            .prepare_cached(
                 "SELECT version FROM subtitle_episode_mappings
                   WHERE work_id = ?1 AND season = ?2 AND source_id = ?3",
-                params![under.work_id, under.season, under.source_id],
-                |r| r.get(0),
-            )
+            )?
+            .query_row(params![under.work_id, under.season, under.source_id], |r| {
+                r.get(0)
+            })
             .optional()?
             .unwrap_or(0);
         if version != under.version {
@@ -2092,11 +2099,8 @@ fn create(
         }
     }
     let known: Option<(String, String)> = tx
-        .query_row(
-            "SELECT id, request FROM subtitle_jobs WHERE command_id = ?1",
-            [&job.command_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
+        .prepare_cached("SELECT id, request FROM subtitle_jobs WHERE command_id = ?1")?
+        .query_row([&job.command_id], |r| Ok((r.get(0)?, r.get(1)?)))
         .optional()?;
     if let Some((id, request)) = known {
         return Ok(Some(match request == job.request {
@@ -2105,49 +2109,49 @@ fn create(
         }));
     }
     let id = uuid::Uuid::new_v4().to_string();
-    tx.execute(
+    tx.prepare_cached(
         "INSERT INTO subtitle_jobs
              (id, command_id, request, origin, work_id, season, anime_no, source_id, creator,
               revision_of, revises_attributed, state, created_at, updated_at, state_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'pending', ?12, ?12, ?12)",
-        params![
-            id,
-            job.command_id,
-            job.request,
-            job.origin,
-            job.work_id,
-            job.season,
-            job.anime_no,
-            job.source_id,
-            job.creator,
-            job.revision_of,
-            job.revises_attributed,
-            now
-        ],
-    )?;
+    )?
+    .execute(params![
+        id,
+        job.command_id,
+        job.request,
+        job.origin,
+        job.work_id,
+        job.season,
+        job.anime_no,
+        job.source_id,
+        job.creator,
+        job.revision_of,
+        job.revises_attributed,
+        now
+    ])?;
     for (position, item) in job.items.iter().enumerate() {
-        tx.execute(
+        tx.prepare_cached(
             "INSERT INTO subtitle_job_items
                  (job_id, position, observation_id, episode, post_url, found_at, state,
                   updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending', ?7)",
-            params![
-                id,
-                position as i64,
-                item.observation_id,
-                item.episode,
-                item.post_url,
-                item.found_at,
-                now
-            ],
-        )?;
+        )?
+        .execute(params![
+            id,
+            position as i64,
+            item.observation_id,
+            item.episode,
+            item.post_url,
+            item.found_at,
+            now
+        ])?;
     }
     let count = job.items.len();
-    tx.execute(
+    tx.prepare_cached(
         "INSERT INTO subtitle_job_steps (job_id, step, state, at, note)
          VALUES (?1, 'found', 'done', ?2, ?3)",
-        params![id, now, format!("후보 {count}개")],
-    )?;
+    )?
+    .execute(params![id, now, format!("후보 {count}개")])?;
     let message = match (
         job.origin == AUTO,
         job.revision_of.is_some(),
@@ -2160,11 +2164,11 @@ fn create(
         (true, false, false) => "구독 제작자의 새 회차라 자동으로 작업을 만들었어요",
         _ => "작업을 만들었어요",
     };
-    tx.execute(
+    tx.prepare_cached(
         "INSERT INTO subtitle_job_events (job_id, at, message, detail)
          VALUES (?1, ?2, ?3, ?4)",
-        params![id, now, message, format!("후보 {count}개")],
-    )?;
+    )?
+    .execute(params![id, now, message, format!("후보 {count}개")])?;
     tx.commit()?;
     Ok(Some(Created::Created(id)))
 }
@@ -2172,11 +2176,8 @@ fn create(
 fn create_upload(c: &mut Connection, up: &NewUpload, now: Millis) -> Result<Created, JobError> {
     let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let known: Option<(String, String)> = tx
-        .query_row(
-            "SELECT id, request FROM subtitle_jobs WHERE command_id = ?1",
-            [&up.command_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
+        .prepare_cached("SELECT id, request FROM subtitle_jobs WHERE command_id = ?1")?
+        .query_row([&up.command_id], |r| Ok((r.get(0)?, r.get(1)?)))
         .optional()?;
     if let Some((id, request)) = known {
         return Ok(match request == up.request {
@@ -2197,73 +2198,73 @@ fn create_upload(c: &mut Connection, up: &NewUpload, now: Millis) -> Result<Crea
     // The worker analyses what was uploaded (unpacking an archive,
     // `crate::place::unpack`), and the job waits for the person's
     // 배치 확인 before anything is kept.
-    tx.execute(
+    tx.prepare_cached(
         "INSERT INTO subtitle_jobs
              (id, command_id, request, origin, work_id, season, anime_no, source_id, creator,
               state, note, created_at, updated_at, state_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12, ?12)",
-        params![
-            up.id,
-            up.command_id,
-            up.request,
-            UPLOAD,
-            up.work_id,
-            up.season,
-            up.anime_no,
-            up.source_id,
-            up.creator,
-            JobState::Pending,
-            upload_note(&counts),
-            now
-        ],
-    )?;
-    tx.execute(
+    )?
+    .execute(params![
+        up.id,
+        up.command_id,
+        up.request,
+        UPLOAD,
+        up.work_id,
+        up.season,
+        up.anime_no,
+        up.source_id,
+        up.creator,
+        JobState::Pending,
+        upload_note(&counts),
+        now
+    ])?;
+    tx.prepare_cached(
         "INSERT INTO subtitle_job_items
              (job_id, position, observation_id, episode, post_url, found_at, state, updated_at)
          VALUES (?1, 0, NULL, '', ?2, ?3, 'done', ?3)",
-        params![up.id, UPLOAD_POST, now],
-    )?;
+    )?
+    .execute(params![up.id, UPLOAD_POST, now])?;
     let item_id = tx.last_insert_rowid();
     for file in &up.files {
-        tx.execute(
+        tx.prepare_cached(
             "INSERT INTO subtitle_job_files
                  (id, job_id, item_id, file_key, name, state, size, sha256, object, path,
                   created_at, updated_at, format, kind, archive_type)
              VALUES (?1, ?2, ?3, ?4, ?5, 'done', ?6, ?7, ?8, ?9, ?10, ?10, ?11, ?12, ?13)",
-            params![
-                file.id,
-                up.id,
-                item_id,
-                file.file_key,
-                file.name,
-                i64::try_from(file.size).unwrap_or(i64::MAX),
-                file.sha256,
-                file.object,
-                file.path,
-                now,
-                file.format.code(),
-                file.kind.code(),
-                file.archive.map(Archive::code)
-            ],
-        )?;
+        )?
+        .execute(params![
+            file.id,
+            up.id,
+            item_id,
+            file.file_key,
+            file.name,
+            i64::try_from(file.size).unwrap_or(i64::MAX),
+            file.sha256,
+            file.object,
+            file.path,
+            now,
+            file.format.code(),
+            file.kind.code(),
+            file.archive.map(Archive::code)
+        ])?;
     }
     for (position, file) in up.dropped.iter().enumerate() {
-        tx.execute(
+        tx.prepare_cached(
             "INSERT INTO subtitle_job_dropped (job_id, position, name, reason)
              VALUES (?1, ?2, ?3, ?4)",
-            params![up.id, position as i64, file.name, file.reason],
-        )?;
+        )?
+        .execute(params![up.id, position as i64, file.name, file.reason])?;
     }
-    tx.execute(
+    tx.prepare_cached(
         "INSERT INTO subtitle_job_steps (job_id, step, state, at, note)
          VALUES (?1, 'receive', 'done', ?2, ?3)",
-        params![up.id, now, format!("{kept}{dropped_note}")],
-    )?;
-    tx.execute(
+    )?
+    .execute(params![up.id, now, format!("{kept}{dropped_note}")])?;
+    tx.prepare_cached(
         "INSERT INTO subtitle_job_events (job_id, at, message, detail)
          VALUES (?1, ?2, '자막과 폰트를 올렸어요', ?3)",
-        params![up.id, now, format!("{kept}{dropped_note}")],
-    )?;
+    )?
+    .execute(params![up.id, now, format!("{kept}{dropped_note}")])?;
     tx.commit()?;
     Ok(Created::Created(up.id.clone()))
 }
@@ -2271,11 +2272,8 @@ fn create_upload(c: &mut Connection, up: &NewUpload, now: Millis) -> Result<Crea
 fn create_find(c: &mut Connection, find: &NewFind, now: Millis) -> Result<Created, JobError> {
     let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let known: Option<(String, String)> = tx
-        .query_row(
-            "SELECT id, request FROM subtitle_jobs WHERE command_id = ?1",
-            [&find.command_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
+        .prepare_cached("SELECT id, request FROM subtitle_jobs WHERE command_id = ?1")?
+        .query_row([&find.command_id], |r| Ok((r.get(0)?, r.get(1)?)))
         .optional()?;
     if let Some((id, request)) = known {
         return Ok(match request == find.request {
@@ -2284,47 +2282,47 @@ fn create_find(c: &mut Connection, find: &NewFind, now: Millis) -> Result<Create
         });
     }
     let id = uuid::Uuid::new_v4().to_string();
-    tx.execute(
+    tx.prepare_cached(
         "INSERT INTO subtitle_jobs
              (id, command_id, request, origin, work_id, season, anime_no, source_id, creator,
               state, created_at, updated_at, state_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'pending', ?10, ?10, ?10)",
-        params![
-            id,
-            find.command_id,
-            find.request,
-            FIND,
-            find.work_id,
-            find.season,
-            find.anime_no,
-            find.source_id,
-            find.creator,
-            now
-        ],
-    )?;
+    )?
+    .execute(params![
+        id,
+        find.command_id,
+        find.request,
+        FIND,
+        find.work_id,
+        find.season,
+        find.anime_no,
+        find.source_id,
+        find.creator,
+        now
+    ])?;
     // The item stands for the package: no episode, no observation (it is no
     // candidate the person picked, and nothing reads it as one).
-    tx.execute(
+    tx.prepare_cached(
         "INSERT INTO subtitle_job_items
              (job_id, position, observation_id, episode, post_url, found_at, state, updated_at)
          VALUES (?1, 0, NULL, '', ?2, ?3, 'pending', ?3)",
-        params![id, find.post_url, now],
-    )?;
+    )?
+    .execute(params![id, find.post_url, now])?;
     let host = url::Url::parse(&find.post_url)
         .ok()
         .and_then(|u| u.host_str().map(str::to_owned));
-    tx.execute(
+    tx.prepare_cached(
         "INSERT INTO subtitle_job_events (job_id, at, message, detail)
          VALUES (?1, ?2, '직접 찾기 작업을 만들었어요', ?3)",
-        params![
-            id,
-            now,
-            match host {
-                Some(host) => format!("{} · {host}", find.creator),
-                None => find.creator.clone(),
-            }
-        ],
-    )?;
+    )?
+    .execute(params![
+        id,
+        now,
+        match host {
+            Some(host) => format!("{} · {host}", find.creator),
+            None => find.creator.clone(),
+        }
+    ])?;
     tx.commit()?;
     Ok(Created::Created(id))
 }
@@ -2333,11 +2331,8 @@ fn create_find(c: &mut Connection, find: &NewFind, now: Millis) -> Result<Create
 /// ended now.
 fn end_find(tx: &Connection, id: &str, run: Option<&str>, now: Millis) -> Result<bool, JobError> {
     let open: Option<JobState> = tx
-        .query_row(
-            "SELECT state FROM subtitle_jobs WHERE id = ?1 AND origin = 'find'",
-            [id],
-            |r| r.get(0),
-        )
+        .prepare_cached("SELECT state FROM subtitle_jobs WHERE id = ?1 AND origin = 'find'")?
+        .query_row([id], |r| r.get(0))
         .optional()?;
     if open.is_none_or(JobState::is_finished) || received(tx, id)? {
         return Ok(false);
@@ -2350,11 +2345,8 @@ fn end_find(tx: &Connection, id: &str, run: Option<&str>, now: Millis) -> Result
         return Ok(false);
     }
     let bound: Option<String> = tx
-        .query_row(
-            "SELECT run_id FROM subtitle_job_screens WHERE job_id = ?1",
-            [id],
-            |r| r.get(0),
-        )
+        .prepare_cached("SELECT run_id FROM subtitle_job_screens WHERE job_id = ?1")?
+        .query_row([id], |r| r.get(0))
         .optional()?
         .flatten();
     if bound.as_deref() != run {
@@ -2382,58 +2374,58 @@ fn end_find(tx: &Connection, id: &str, run: Option<&str>, now: Millis) -> Result
             None,
         ),
     };
-    tx.execute(
+    tx.prepare_cached(
         "UPDATE subtitle_job_items
          SET state = 'done', wait = NULL, reason = NULL, failure = NULL, updated_at = ?2
          WHERE job_id = ?1",
-        params![id, now],
-    )?;
+    )?
+    .execute(params![id, now])?;
     // A step `open` the last run left waiting (its screen was not prepared)
     // says nothing of a job that ended: done when an earlier run opened the
     // post (the step `receive` began), gone when none did.
-    tx.execute(
+    tx.prepare_cached(
         "UPDATE subtitle_job_steps SET state = 'done', note = NULL
          WHERE job_id = ?1 AND step = 'open' AND state <> 'done'
            AND EXISTS (SELECT 1 FROM subtitle_job_steps
                        WHERE job_id = ?1 AND step = 'receive')",
-        [id],
-    )?;
-    tx.execute(
+    )?
+    .execute([id])?;
+    tx.prepare_cached(
         "DELETE FROM subtitle_job_steps WHERE job_id = ?1 AND step = 'open' AND state <> 'done'",
-        [id],
-    )?;
-    tx.execute(
+    )?
+    .execute([id])?;
+    tx.prepare_cached(
         "INSERT INTO subtitle_job_steps (job_id, step, state, at, note)
          VALUES (?1, 'receive', 'done', ?2, ?3)
          ON CONFLICT (job_id, step) DO UPDATE
          SET state = 'done', at = excluded.at, note = excluded.note",
-        params![id, now, note],
-    )?;
-    tx.execute(
+    )?
+    .execute(params![id, now, note])?;
+    tx.prepare_cached(
         "UPDATE subtitle_jobs
          SET state = ?4, wait = NULL, note = ?2, stage = NULL, state_at = ?3,
              updated_at = ?3, finished_at = ?5, attempts = 0
          WHERE id = ?1",
-        params![id, note, now, state, finished_at],
-    )?;
-    tx.execute("DELETE FROM subtitle_job_screens WHERE job_id = ?1", [id])?;
-    tx.execute(
+    )?
+    .execute(params![id, note, now, state, finished_at])?;
+    tx.prepare_cached("DELETE FROM subtitle_job_screens WHERE job_id = ?1")?
+        .execute([id])?;
+    tx.prepare_cached(
         "INSERT INTO subtitle_job_events (job_id, at, message, detail)
          VALUES (?1, ?2, ?3, ?4)",
-        params![id, now, message, note],
-    )?;
+    )?
+    .execute(params![id, now, message, note])?;
     Ok(true)
 }
 
 /// Whether the find job `id`'s 받기 ended: [`end_find`] made its item done,
 /// and it went on to its placement.
 fn received(tx: &Connection, id: &str) -> rusqlite::Result<bool> {
-    tx.query_row(
+    tx.prepare_cached(
         "SELECT NOT EXISTS (SELECT 1 FROM subtitle_job_items
                             WHERE job_id = ?1 AND state <> 'done')",
-        [id],
-        |r| r.get(0),
-    )
+    )?
+    .query_row([id], |r| r.get(0))
 }
 
 /// The note of a find job that ended with no file kept.
@@ -2446,7 +2438,7 @@ pub const DECIDED: &str = "결정한 교체를 이어가요";
 
 /// The files a job dropped, in order.
 fn dropped_rows(c: &Connection, id: &str) -> Result<Vec<DroppedRow>, JobError> {
-    let mut stmt = c.prepare(
+    let mut stmt = c.prepare_cached(
         "SELECT name, reason FROM subtitle_job_dropped WHERE job_id = ?1 ORDER BY position",
     )?;
     let rows = stmt
@@ -2512,9 +2504,9 @@ fn job_row(r: &Row<'_>) -> rusqlite::Result<JobRow> {
 
 /// The jobs `tail` picks, with their items' episodes, source and progress.
 fn rows<P: rusqlite::Params>(c: &Connection, tail: &str, p: P) -> Result<Vec<JobRow>, JobError> {
-    let mut stmt = c.prepare(&format!("{JOB_COLUMNS} {tail}"))?;
+    let mut stmt = c.prepare_cached(&format!("{JOB_COLUMNS} {tail}"))?;
     let mut jobs = stmt.query_map(p, job_row)?.collect::<Result<Vec<_>, _>>()?;
-    let mut items = c.prepare(
+    let mut items = c.prepare_cached(
         "SELECT episode, post_url, state, failure FROM subtitle_job_items
          WHERE job_id = ?1 ORDER BY position",
     )?;
@@ -2579,7 +2571,7 @@ fn found_note(summary: &UploadSummary) -> String {
 /// What the upload job `id` kept and dropped.
 fn upload_summary(c: &Connection, id: &str) -> Result<UploadSummary, JobError> {
     let mut summary = UploadSummary::default();
-    let mut stmt = c.prepare(
+    let mut stmt = c.prepare_cached(
         "SELECT kind, count(*) FROM subtitle_job_files
          WHERE job_id = ?1 AND state = 'done' AND kind IS NOT NULL GROUP BY kind",
     )?;
@@ -2594,11 +2586,9 @@ fn upload_summary(c: &Connection, id: &str) -> Result<UploadSummary, JobError> {
             None => {}
         }
     }
-    summary.dropped = c.query_row(
-        "SELECT count(*) FROM subtitle_job_dropped WHERE job_id = ?1",
-        [id],
-        |r| r.get::<_, i64>(0),
-    )? as usize;
+    summary.dropped = c
+        .prepare_cached("SELECT count(*) FROM subtitle_job_dropped WHERE job_id = ?1")?
+        .query_row([id], |r| r.get::<_, i64>(0))? as usize;
     Ok(summary)
 }
 
@@ -2624,11 +2614,9 @@ fn done_page(c: &Connection, after: Option<&str>, limit: usize) -> Result<DonePa
         }
         false => None,
     };
-    let total: i64 = c.query_row(
-        "SELECT count(*) FROM subtitle_jobs WHERE state = 'done'",
-        [],
-        |r| r.get(0),
-    )?;
+    let total: i64 = c
+        .prepare_cached("SELECT count(*) FROM subtitle_jobs WHERE state = 'done'")?
+        .query_row([], |r| r.get(0))?;
     Ok(DonePage {
         items,
         next,
@@ -2744,7 +2732,7 @@ fn kind_at(r: &Row<'_>, i: usize) -> rusqlite::Result<Option<Kind>> {
 }
 
 fn items(c: &Connection, job_id: &str) -> Result<Vec<ItemRow>, JobError> {
-    let mut stmt = c.prepare(
+    let mut stmt = c.prepare_cached(
         "SELECT id, position, observation_id, episode, post_url, state, wait, reason, failure,
                 unchanged_from
          FROM subtitle_job_items WHERE job_id = ?1 ORDER BY position",
@@ -2766,7 +2754,7 @@ fn items(c: &Connection, job_id: &str) -> Result<Vec<ItemRow>, JobError> {
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
-    let mut files = c.prepare(&format!(
+    let mut files = c.prepare_cached(&format!(
         "{FILE_COLUMNS} WHERE item_id = ?1 ORDER BY created_at, id"
     ))?;
     for item in &mut items {
@@ -2779,7 +2767,7 @@ fn items(c: &Connection, job_id: &str) -> Result<Vec<ItemRow>, JobError> {
 
 fn steps(c: &Connection, job_id: &str) -> Result<Vec<StepRow>, JobError> {
     let mut stmt =
-        c.prepare("SELECT step, state, at, note FROM subtitle_job_steps WHERE job_id = ?1")?;
+        c.prepare_cached("SELECT step, state, at, note FROM subtitle_job_steps WHERE job_id = ?1")?;
     let rows = stmt
         .query_map([job_id], |r| {
             Ok(StepRow {
@@ -2800,7 +2788,7 @@ fn detail(c: &mut Connection, id: &str) -> Result<Option<JobDetail>, JobError> {
     let Some(row) = rows(c, "WHERE j.id = ?1", [id])?.pop() else {
         return Ok(None);
     };
-    let mut stmt = c.prepare(
+    let mut stmt = c.prepare_cached(
         "SELECT at, message, detail FROM subtitle_job_events
          WHERE job_id = ?1 ORDER BY id DESC",
     )?;
@@ -2830,32 +2818,30 @@ fn detail(c: &mut Connection, id: &str) -> Result<Option<JobDetail>, JobError> {
 /// ([`JobStore::finish_item`]).
 fn unchanged_from(tx: &Connection, item_id: i64) -> Result<Option<String>, JobError> {
     let revised: Option<i64> = tx
-        .query_row(
+        .prepare_cached(
             "SELECT j.revision_of FROM subtitle_job_items i
                JOIN subtitle_jobs j ON j.id = i.job_id
               WHERE i.id = ?1 AND i.state = 'done'",
-            [item_id],
-            |r| r.get(0),
-        )
+        )?
+        .query_row([item_id], |r| r.get(0))
         .optional()?
         .flatten();
     let Some(revised) = revised else {
         return Ok(None);
     };
     let earlier: Option<(i64, String)> = tx
-        .query_row(
+        .prepare_cached(
             "SELECT id, job_id FROM subtitle_job_items
               WHERE observation_id = ?1 AND state = 'done' AND id < ?2
               ORDER BY id DESC LIMIT 1",
-            params![revised, item_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
+        )?
+        .query_row(params![revised, item_id], |r| Ok((r.get(0)?, r.get(1)?)))
         .optional()?;
     let Some((earlier_item, earlier_job)) = earlier else {
         return Ok(None);
     };
     let hashes = |item: i64| -> Result<Vec<(String, Option<String>)>, JobError> {
-        let mut stmt = tx.prepare(
+        let mut stmt = tx.prepare_cached(
             "SELECT file_key, sha256 FROM subtitle_job_files
               WHERE item_id = ?1 AND state = 'done' ORDER BY file_key",
         )?;

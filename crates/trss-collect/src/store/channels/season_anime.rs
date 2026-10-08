@@ -71,21 +71,20 @@ impl ChannelStore {
         self.db
             .run(move |conn| {
                 let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-                let work_exists: bool = tx.query_row(
-                    "SELECT EXISTS (SELECT 1 FROM works WHERE id = ?1)",
-                    [&work_id],
-                    |r| r.get(0),
-                )?;
+                let work_exists: bool = tx
+                    .prepare_cached("SELECT EXISTS (SELECT 1 FROM works WHERE id = ?1)")?
+                    .query_row([&work_id], |r| r.get(0))?;
                 if !work_exists {
                     return Err(SeasonAnimeError::NoWork);
                 }
                 let held = tx
-                    .query_row(
+                    .prepare_cached(
                         "SELECT rule_id, anissia_anime_no FROM rule_subscriptions
                           WHERE season_id = ?1 ORDER BY rule_id LIMIT 1",
-                        [format!("{work_id}:{season}")],
-                        |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)),
-                    )
+                    )?
+                    .query_row([format!("{work_id}:{season}")], |r| {
+                        Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+                    })
                     .optional()?;
                 if let Some((rule_id, anime_no)) = held {
                     return Err(SeasonAnimeError::Subscribed { rule_id, anime_no });
@@ -109,13 +108,13 @@ impl ChannelStore {
 /// Stores `anime` as its snapshot, unless a rule subscribes to the anime: the
 /// worker keeps that one, from the schedule.
 fn keep_snapshot(tx: &rusqlite::Transaction<'_>, anime: &Anime) -> rusqlite::Result<()> {
-    let subscribed: bool = tx.query_row(
-        "SELECT EXISTS (SELECT 1 FROM rule_subscriptions s
+    let subscribed: bool = tx
+        .prepare_cached(
+            "SELECT EXISTS (SELECT 1 FROM rule_subscriptions s
                           JOIN anissia_anime a ON a.anime_no = s.anissia_anime_no
                          WHERE s.anissia_anime_no = ?1)",
-        params![anime.anime_no],
-        |r| r.get(0),
-    )?;
+        )?
+        .query_row(params![anime.anime_no], |r| r.get(0))?;
     if subscribed {
         return Ok(());
     }

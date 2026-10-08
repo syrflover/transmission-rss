@@ -80,19 +80,16 @@ fn ensure_row(tx: &Transaction<'_>, work_id: &str) -> Result<(), ArtworkError> {
     if !in_library(tx, work_id)? {
         return Err(ArtworkError::NotFound);
     }
-    tx.execute(
-        "INSERT OR IGNORE INTO work_artwork (work_id, mode) VALUES (?1, 'auto')",
-        [work_id],
-    )?;
+    tx.prepare_cached("INSERT OR IGNORE INTO work_artwork (work_id, mode) VALUES (?1, 'auto')")?
+        .execute([work_id])?;
     Ok(())
 }
 
 fn read(conn: &Connection, work_id: &str) -> rusqlite::Result<Option<Selection>> {
-    conn.query_row(
-        &format!("SELECT {COLUMNS} FROM work_artwork a WHERE a.work_id = ?1"),
-        [work_id],
-        |row| from_row(work_id.to_owned(), row, 0),
-    )
+    conn.prepare_cached(&format!(
+        "SELECT {COLUMNS} FROM work_artwork a WHERE a.work_id = ?1"
+    ))?
+    .query_row([work_id], |row| from_row(work_id.to_owned(), row, 0))
     .optional()
 }
 
@@ -101,12 +98,11 @@ fn read(conn: &Connection, work_id: &str) -> rusqlite::Result<Option<Selection>>
 /// is neither shown nor changed until the folder is registered again.
 fn in_library(conn: &Connection, work_id: &str) -> rusqlite::Result<bool> {
     Ok(conn
-        .query_row(
+        .prepare_cached(
             "SELECT 1 FROM works w JOIN watch_folders f ON f.id = w.watch_folder_id
               WHERE w.id = ?1 AND f.unregistered_at IS NULL",
-            [work_id],
-            |r| r.get::<_, i64>(0),
-        )
+        )?
+        .query_row([work_id], |r| r.get::<_, i64>(0))
         .optional()?
         .is_some())
 }
@@ -126,8 +122,8 @@ pub(super) fn selection(conn: &mut Connection, work_id: &str) -> Result<Selectio
 }
 
 pub(super) fn image_ids(conn: &Connection) -> rusqlite::Result<HashMap<String, String>> {
-    let mut stmt =
-        conn.prepare("SELECT work_id, image_id FROM work_artwork WHERE image_id IS NOT NULL")?;
+    let mut stmt = conn
+        .prepare_cached("SELECT work_id, image_id FROM work_artwork WHERE image_id IS NOT NULL")?;
     let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
     rows.collect()
 }
@@ -136,8 +132,9 @@ pub(super) fn image_ids_of(
     conn: &Connection,
     work_ids: &[String],
 ) -> rusqlite::Result<HashMap<String, String>> {
-    let mut stmt = conn
-        .prepare("SELECT image_id FROM work_artwork WHERE work_id = ?1 AND image_id IS NOT NULL")?;
+    let mut stmt = conn.prepare_cached(
+        "SELECT image_id FROM work_artwork WHERE work_id = ?1 AND image_id IS NOT NULL",
+    )?;
     let mut out = HashMap::new();
     for id in work_ids {
         if let Some(image_id) = stmt.query_row([id], |r| r.get(0)).optional()? {
@@ -168,7 +165,7 @@ pub(super) fn change(
     let selection = current(&tx, work_id, expected)?;
     match change {
         UserChange::Clear => {
-            tx.execute(
+            tx.prepare_cached(
                 "UPDATE work_artwork SET mode = 'disabled', source = NULL,
                      anilist_media_id = NULL, image_id = NULL, image_origin = NULL,
                      image_path = NULL, image_size = NULL, image_sha256 = NULL,
@@ -176,13 +173,13 @@ pub(super) fn change(
                      job_requested_at = NULL, job_attempts = 0, job_not_before = NULL,
                      job_image_url = NULL, note = NULL, note_at = NULL
                  WHERE work_id = ?1",
-                [work_id],
-            )?;
+            )?
+            .execute([work_id])?;
         }
         UserChange::Auto => {
             // Going back to `auto` drops what was selected (a new search
             // decides), and asks for that search.
-            tx.execute(
+            tx.prepare_cached(
                 "UPDATE work_artwork SET mode = 'auto', source = NULL,
                      anilist_media_id = NULL, image_id = NULL, image_origin = NULL,
                      image_path = NULL, image_size = NULL, image_sha256 = NULL,
@@ -190,8 +187,8 @@ pub(super) fn change(
                      job_requested_at = ?2, job_attempts = 0, job_not_before = NULL,
                      job_image_url = NULL, note = NULL, note_at = NULL
                  WHERE work_id = ?1",
-                params![work_id, now],
-            )?;
+            )?
+            .execute(params![work_id, now])?;
         }
         UserChange::Repair => {
             if selection.source != Some(Source::Anilist) {
@@ -202,14 +199,14 @@ pub(super) fn change(
             // The selected ID's image again; what is selected stays. The
             // request time moves past a job still running, so that job's
             // late result or failure tells itself apart from this request.
-            tx.execute(
+            tx.prepare_cached(
                 "UPDATE work_artwork SET job = 'fetch',
                      job_requested_at = MAX(?2, COALESCE(job_requested_at + 1, ?2)),
                      job_attempts = 0, job_not_before = NULL, job_image_url = NULL,
                      note = NULL, note_at = NULL
                  WHERE work_id = ?1",
-                params![work_id, now],
-            )?;
+            )?
+            .execute(params![work_id, now])?;
         }
     }
     let selection = read(&tx, work_id)?.ok_or(ArtworkError::NotFound)?;
@@ -220,11 +217,8 @@ pub(super) fn change(
 /// Whether `relative_path` is a reserved file that no selection took yet.
 fn staged(tx: &Transaction<'_>, relative_path: &str) -> rusqlite::Result<bool> {
     let state: Option<String> = tx
-        .query_row(
-            "SELECT state FROM artwork_files WHERE relative_path = ?1",
-            [relative_path],
-            |r| r.get(0),
-        )
+        .prepare_cached("SELECT state FROM artwork_files WHERE relative_path = ?1")?
+        .query_row([relative_path], |r| r.get(0))
         .optional()?;
     Ok(state.as_deref() == Some("staging"))
 }
@@ -240,30 +234,28 @@ fn set_image(
     image: &ImageRef,
     bump: bool,
 ) -> rusqlite::Result<()> {
-    tx.execute(
+    tx.prepare_cached(
         "UPDATE work_artwork SET mode = ?2, source = ?3, anilist_media_id = ?4,
              image_id = ?5, image_origin = ?3, image_path = ?6, image_size = ?7,
              image_sha256 = ?8, image_format = ?9, version = version + ?10, job = NULL,
              job_requested_at = NULL, job_attempts = 0, job_not_before = NULL,
              job_image_url = NULL, note = NULL, note_at = NULL
          WHERE work_id = ?1",
-        params![
-            work_id,
-            mode.code(),
-            image.origin.code(),
-            anilist_media_id,
-            image.id,
-            image.relative_path,
-            image.byte_size as i64,
-            image.sha256,
-            image.format.code(),
-            bump as i64,
-        ],
-    )?;
-    tx.execute(
-        "UPDATE artwork_files SET state = 'published' WHERE relative_path = ?1",
-        [&image.relative_path],
-    )?;
+    )?
+    .execute(params![
+        work_id,
+        mode.code(),
+        image.origin.code(),
+        anilist_media_id,
+        image.id,
+        image.relative_path,
+        image.byte_size as i64,
+        image.sha256,
+        image.format.code(),
+        bump as i64,
+    ])?;
+    tx.prepare_cached("UPDATE artwork_files SET state = 'published' WHERE relative_path = ?1")?
+        .execute([&image.relative_path])?;
     Ok(())
 }
 
@@ -313,20 +305,20 @@ pub(super) fn follow_season_link(
     }
     // A new selection: a search or fetch of the old one that is still running
     // finds the version moved on and drops its result.
-    tx.execute(
+    tx.prepare_cached(
         "UPDATE work_artwork SET source = 'anilist', anilist_media_id = ?2,
              version = version + 1, job = 'fetch', job_requested_at = ?3,
              job_attempts = 0, job_not_before = NULL, job_image_url = NULL,
              note = NULL, note_at = NULL
          WHERE work_id = ?1",
-        params![work_id, target, now],
-    )?;
+    )?
+    .execute(params![work_id, target, now])?;
     tx.commit()?;
     Ok(true)
 }
 
 pub(super) fn next_job(conn: &Connection, now: Millis) -> rusqlite::Result<Option<ClaimedJob>> {
-    conn.query_row(
+    conn.prepare_cached(
         "SELECT a.work_id, w.dir_name, a.version, a.job, a.anilist_media_id,
                 a.job_image_url, a.job_attempts, a.job_requested_at
            FROM work_artwork a JOIN works w ON w.id = a.work_id
@@ -334,21 +326,20 @@ pub(super) fn next_job(conn: &Connection, now: Millis) -> rusqlite::Result<Optio
           WHERE a.job IS NOT NULL AND (a.job_not_before IS NULL OR a.job_not_before <= ?1)
           ORDER BY a.job = 'search', a.job_requested_at, a.work_id
           LIMIT 1",
-        [now],
-        |row| {
-            let kind: String = row.get(3)?;
-            Ok(ClaimedJob {
-                work_id: row.get(0)?,
-                dir_name: row.get(1)?,
-                version: row.get(2)?,
-                kind: JobKind::from_code(&kind).ok_or_else(|| bad(3, "job"))?,
-                anilist_media_id: row.get(4)?,
-                image_url: row.get(5)?,
-                attempts: row.get::<_, i64>(6)?.max(0) as u32,
-                requested_at: row.get(7)?,
-            })
-        },
-    )
+    )?
+    .query_row([now], |row| {
+        let kind: String = row.get(3)?;
+        Ok(ClaimedJob {
+            work_id: row.get(0)?,
+            dir_name: row.get(1)?,
+            version: row.get(2)?,
+            kind: JobKind::from_code(&kind).ok_or_else(|| bad(3, "job"))?,
+            anilist_media_id: row.get(4)?,
+            image_url: row.get(5)?,
+            attempts: row.get::<_, i64>(6)?.max(0) as u32,
+            requested_at: row.get(7)?,
+        })
+    })
     .optional()
 }
 
@@ -394,7 +385,7 @@ pub(super) fn searched(
         } => {
             // The ID is selected now; the image follows, and until it is
             // verified the work shows no new image.
-            tx.execute(
+            tx.prepare_cached(
                 "UPDATE work_artwork SET source = 'anilist', anilist_media_id = ?2,
                      image_id = NULL, image_origin = NULL, image_path = NULL,
                      image_size = NULL, image_sha256 = NULL, image_format = NULL,
@@ -402,17 +393,17 @@ pub(super) fn searched(
                      job_attempts = 0, job_not_before = NULL, job_image_url = ?4,
                      note = NULL, note_at = NULL
                  WHERE work_id = ?1",
-                params![work_id, anilist_media_id, now, image_url],
-            )?;
+            )?
+            .execute(params![work_id, anilist_media_id, now, image_url])?;
         }
         Searched::Left(note) => {
-            tx.execute(
+            tx.prepare_cached(
                 "UPDATE work_artwork SET job = NULL, job_requested_at = NULL,
                      job_attempts = 0, job_not_before = NULL, job_image_url = NULL,
                      note = ?2, note_at = ?3
                  WHERE work_id = ?1",
-                params![work_id, note.code(), now],
-            )?;
+            )?
+            .execute(params![work_id, note.code(), now])?;
         }
     }
     tx.commit()?;
@@ -437,10 +428,8 @@ pub(super) fn fetched(
     };
     if !applies {
         // Nobody refers to the new file: the cleanup removes it.
-        tx.execute(
-            "UPDATE artwork_files SET state = 'published' WHERE relative_path = ?1",
-            [&image.relative_path],
-        )?;
+        tx.prepare_cached("UPDATE artwork_files SET state = 'published' WHERE relative_path = ?1")?
+            .execute([&image.relative_path])?;
         tx.commit()?;
         return Ok(false);
     }
@@ -475,21 +464,21 @@ pub(super) fn job_later(
     }
     match retry_at {
         Some(at) => {
-            tx.execute(
+            tx.prepare_cached(
                 "UPDATE work_artwork SET job_not_before = ?2,
                      job_attempts = job_attempts + ?3
                  WHERE work_id = ?1",
-                params![work_id, at, failed as i64],
-            )?;
+            )?
+            .execute(params![work_id, at, failed as i64])?;
         }
         None => {
-            tx.execute(
+            tx.prepare_cached(
                 "UPDATE work_artwork SET job = NULL, job_requested_at = NULL,
                      job_attempts = 0, job_not_before = NULL, job_image_url = NULL,
                      note = ?2, note_at = ?3
                  WHERE work_id = ?1",
-                params![work_id, note.code(), now],
-            )?;
+            )?
+            .execute(params![work_id, note.code(), now])?;
         }
     }
     tx.commit()
@@ -521,7 +510,7 @@ pub(crate) fn merge_selection(
         return Ok(());
     }
     let version = kept.map_or(0, |k| k.version).max(moved.version) + 1;
-    tx.execute(
+    tx.prepare_cached(
         "INSERT OR REPLACE INTO work_artwork
              (work_id, mode, source, anilist_media_id, image_id, image_origin, image_path,
               image_size, image_sha256, image_format, version, job, job_requested_at,
@@ -530,8 +519,8 @@ pub(crate) fn merge_selection(
                 image_size, image_sha256, image_format, ?3, job, job_requested_at,
                 job_attempts, job_not_before, job_image_url, note, note_at
            FROM work_artwork WHERE work_id = ?1",
-        params![from, into, version],
-    )?;
+    )?
+    .execute(params![from, into, version])?;
     Ok(())
 }
 
@@ -553,11 +542,11 @@ pub(super) fn reserve_file(
     staging_path: &str,
     now: Millis,
 ) -> rusqlite::Result<()> {
-    conn.execute(
+    conn.prepare_cached(
         "INSERT INTO artwork_files (relative_path, staging_path, state, created_at)
          VALUES (?1, ?2, 'staging', ?3)",
-        params![relative_path, staging_path, now],
-    )?;
+    )?
+    .execute(params![relative_path, staging_path, now])?;
     Ok(())
 }
 
@@ -567,32 +556,28 @@ pub(super) fn file_identity(
     dev: u64,
     ino: u64,
 ) -> rusqlite::Result<()> {
-    conn.execute(
-        "UPDATE artwork_files SET dev = ?2, ino = ?3 WHERE relative_path = ?1",
-        params![relative_path, dev as i64, ino as i64],
-    )?;
+    conn.prepare_cached("UPDATE artwork_files SET dev = ?2, ino = ?3 WHERE relative_path = ?1")?
+        .execute(params![relative_path, dev as i64, ino as i64])?;
     Ok(())
 }
 
 pub(super) fn forget_file(conn: &mut Connection, relative_path: &str) -> rusqlite::Result<()> {
-    conn.execute(
+    conn.prepare_cached(
         "DELETE FROM artwork_files WHERE relative_path = ?1 AND state = 'staging'",
-        [relative_path],
-    )?;
+    )?
+    .execute([relative_path])?;
     Ok(())
 }
 
 pub(super) fn abandon_file(conn: &mut Connection, relative_path: &str) -> rusqlite::Result<()> {
-    conn.execute(
-        "UPDATE artwork_files SET state = 'published' WHERE relative_path = ?1",
-        [relative_path],
-    )?;
+    conn.prepare_cached("UPDATE artwork_files SET state = 'published' WHERE relative_path = ?1")?
+        .execute([relative_path])?;
     Ok(())
 }
 
 /// The recorded files in `state`.
 pub(crate) fn files_of_state(conn: &Connection, state: &str) -> rusqlite::Result<Vec<FileRow>> {
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare_cached(
         "SELECT relative_path, staging_path, dev, ino, created_at
            FROM artwork_files WHERE state = ?1 ORDER BY relative_path",
     )?;
@@ -610,17 +595,16 @@ pub(crate) fn files_of_state(conn: &Connection, state: &str) -> rusqlite::Result
 
 /// Every image path a selection refers to, as written.
 pub(crate) fn referenced_paths(conn: &Connection) -> rusqlite::Result<Vec<String>> {
-    let mut stmt =
-        conn.prepare("SELECT DISTINCT image_path FROM work_artwork WHERE image_path IS NOT NULL")?;
+    let mut stmt = conn.prepare_cached(
+        "SELECT DISTINCT image_path FROM work_artwork WHERE image_path IS NOT NULL",
+    )?;
     let rows = stmt.query_map([], |r| r.get(0))?;
     rows.collect()
 }
 
 pub(crate) fn delete_file_row(conn: &Connection, relative_path: &str) -> rusqlite::Result<()> {
-    conn.execute(
-        "DELETE FROM artwork_files WHERE relative_path = ?1",
-        [relative_path],
-    )?;
+    conn.prepare_cached("DELETE FROM artwork_files WHERE relative_path = ?1")?
+        .execute([relative_path])?;
     Ok(())
 }
 

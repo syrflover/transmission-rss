@@ -28,11 +28,8 @@ impl RequestPace {
             .run(move |c| {
                 let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
                 let pace: Option<(Millis, Option<Millis>)> = tx
-                    .query_row(
-                        "SELECT next_at, blocked_until FROM anissia_pace WHERE id = 1",
-                        [],
-                        |r| Ok((r.get(0)?, r.get(1)?)),
-                    )
+                    .prepare_cached("SELECT next_at, blocked_until FROM anissia_pace WHERE id = 1")?
+                    .query_row([], |r| Ok((r.get(0)?, r.get(1)?)))
                     .optional()?;
                 let (next_at, blocked) = pace.unwrap_or((now, None));
                 let slot = now.max(next_at).max(blocked.unwrap_or(now));
@@ -41,11 +38,11 @@ impl RequestPace {
                         return Ok::<_, DbError>(Err(slot - now));
                     }
                 }
-                tx.execute(
+                tx.prepare_cached(
                     "INSERT INTO anissia_pace (id, next_at, blocked_until) VALUES (1, ?1, ?2)
                      ON CONFLICT (id) DO UPDATE SET next_at = excluded.next_at",
-                    params![slot + spacing_ms, blocked],
-                )?;
+                )?
+                .execute(params![slot + spacing_ms, blocked])?;
                 tx.commit()?;
                 Ok(Ok(slot))
             })
@@ -57,11 +54,8 @@ impl RequestPace {
         self.db
             .run(|c| {
                 let blocked: Option<Option<Millis>> = c
-                    .query_row(
-                        "SELECT blocked_until FROM anissia_pace WHERE id = 1",
-                        [],
-                        |r| r.get(0),
-                    )
+                    .prepare_cached("SELECT blocked_until FROM anissia_pace WHERE id = 1")?
+                    .query_row([], |r| r.get(0))
                     .optional()?;
                 Ok::<_, DbError>(blocked.flatten())
             })
@@ -73,13 +67,13 @@ impl RequestPace {
         self.db
             .run(move |c| {
                 let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-                tx.execute(
+                tx.prepare_cached(
                     "INSERT INTO anissia_pace (id, next_at, blocked_until) VALUES (1, ?1, ?1)
                      ON CONFLICT (id) DO UPDATE SET
                          next_at = max(next_at, excluded.next_at),
                          blocked_until = max(coalesce(blocked_until, 0), excluded.blocked_until)",
-                    params![until],
-                )?;
+                )?
+                .execute(params![until])?;
                 tx.commit()?;
                 Ok::<_, DbError>(())
             })

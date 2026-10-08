@@ -32,9 +32,8 @@ fn delete_rule(
     // The write lock is taken before the version check, like every mutation.
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let version: Version = tx
-        .query_row("SELECT version FROM rules WHERE id = ?1", [id], |r| {
-            r.get(0)
-        })
+        .prepare_cached("SELECT version FROM rules WHERE id = ?1")?
+        .query_row([id], |r| r.get(0))
         .optional()?
         .ok_or_else(|| ChannelError::NotFound {
             kind: "rule",
@@ -48,7 +47,8 @@ fn delete_rule(
             actual: version,
         });
     }
-    tx.execute("DELETE FROM rules WHERE id = ?1", [id])?;
+    tx.prepare_cached("DELETE FROM rules WHERE id = ?1")?
+        .execute([id])?;
     tx.commit()?;
     Ok(())
 }

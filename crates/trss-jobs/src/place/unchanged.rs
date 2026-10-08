@@ -175,7 +175,7 @@ struct Record {
 /// The latest receipt of `key` kept as a font of `work_id` under `dir/` (not
 /// in a folder within it) that is not removed.
 fn record(c: &Connection, work_id: &str, key: &str, dir: &str) -> rusqlite::Result<Option<Record>> {
-    c.query_row(
+    c.prepare_cached(
         "SELECT f.name, f.size, f.snapshot, a.id
            FROM subtitle_job_files f
            JOIN subtitle_job_plan p
@@ -188,16 +188,15 @@ fn record(c: &Connection, work_id: &str, key: &str, dir: &str) -> rusqlite::Resu
             AND instr(substr(a.relative_path, length(?3) + 1), '/') = 0
           ORDER BY f.created_at DESC, f.updated_at DESC, f.id
           LIMIT 1",
-        params![key, work_id, format!("{dir}/")],
-        |r| {
-            Ok(Record {
-                name: r.get(0)?,
-                size: r.get(1)?,
-                snapshot: r.get(2)?,
-                asset_id: r.get(3)?,
-            })
-        },
-    )
+    )?
+    .query_row(params![key, work_id, format!("{dir}/")], |r| {
+        Ok(Record {
+            name: r.get(0)?,
+            size: r.get(1)?,
+            snapshot: r.get(2)?,
+            asset_id: r.get(3)?,
+        })
+    })
     .optional()
 }
 
@@ -216,7 +215,7 @@ pub fn revoke(
     durable(c, |c| {
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let items: Vec<i64> = {
-            let mut stmt = tx.prepare(
+            let mut stmt = tx.prepare_cached(
                 "SELECT DISTINCT item_id FROM subtitle_job_files
                   WHERE (id = ?1 OR same_as = ?1) AND state = 'done'
                     AND unchanged_asset IS NOT NULL",
@@ -224,28 +223,28 @@ pub fn revoke(
             let rows = stmt.query_map([receipt], |r| r.get(0))?;
             rows.collect::<rusqlite::Result<_>>()?
         };
-        tx.execute(
+        tx.prepare_cached(
             "UPDATE subtitle_job_files SET state = 'abandoned', reason = ?2, updated_at = ?3
               WHERE (id = ?1 OR same_as = ?1) AND state = 'done'
                 AND unchanged_asset IS NOT NULL",
-            params![receipt, reason, now],
-        )?;
-        tx.execute(
+        )?
+        .execute(params![receipt, reason, now])?;
+        tx.prepare_cached(
             "DELETE FROM subtitle_job_plan
               WHERE file_id = ?1 AND stored_id IS NULL AND asset_id IS NULL AND outcome IS NULL
                 AND NOT EXISTS (SELECT 1 FROM subtitle_file_effects e
                                  WHERE e.job_id = subtitle_job_plan.job_id
                                    AND e.position = subtitle_job_plan.position)",
-            [receipt],
-        )?;
+        )?
+        .execute([receipt])?;
         for item in items {
-            tx.execute(
+            tx.prepare_cached(
                 "UPDATE subtitle_job_items
                     SET state = 'pending', wait = NULL, reason = NULL, failure = NULL,
                         unchanged_from = NULL, updated_at = ?2
                   WHERE id = ?1 AND state = 'done'",
-                params![item, now],
-            )?;
+            )?
+            .execute(params![item, now])?;
         }
         tx.commit()?;
         Ok(())

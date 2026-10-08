@@ -27,11 +27,10 @@ pub struct AnissiaLink {
 /// The link of a season as stored, or the untouched one (version 0).
 pub fn link_in(conn: &Connection, work_id: &str, season: u32) -> rusqlite::Result<AnissiaLink> {
     let stored: Option<(i64, Option<i64>)> = conn
-        .query_row(
+        .prepare_cached(
             "SELECT version, anime_no FROM season_anissia WHERE work_id = ?1 AND season = ?2",
-            params![work_id, season],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
+        )?
+        .query_row(params![work_id, season], |r| Ok((r.get(0)?, r.get(1)?)))
         .optional()?;
     let (version, anime_no) = stored.unwrap_or((0, None));
     Ok(AnissiaLink {
@@ -56,13 +55,13 @@ pub fn set_in(
     if current.anime_no == anime_no {
         return Ok(current);
     }
-    tx.execute(
+    tx.prepare_cached(
         "INSERT INTO season_anissia (work_id, season, anime_no, version)
          VALUES (?1, ?2, ?3, 1)
          ON CONFLICT (work_id, season) DO UPDATE SET
              anime_no = excluded.anime_no, version = version + 1",
-        params![work_id, season, anime_no],
-    )?;
+    )?
+    .execute(params![work_id, season, anime_no])?;
     link_in(tx, work_id, season)
 }
 
@@ -74,7 +73,7 @@ pub fn set_in(
 /// kept work wins over the moved work's link.
 pub(crate) fn merge_links(tx: &Transaction<'_>, from: &str, into: &str) -> rusqlite::Result<()> {
     let moved: Vec<(u32, i64, i64)> = {
-        let mut stmt = tx.prepare(
+        let mut stmt = tx.prepare_cached(
             "SELECT season, anime_no, version FROM season_anissia
               WHERE work_id = ?1 AND anime_no IS NOT NULL ORDER BY season",
         )?;
@@ -87,11 +86,16 @@ pub(crate) fn merge_links(tx: &Transaction<'_>, from: &str, into: &str) -> rusql
         if kept.version > 0 {
             continue;
         }
-        tx.execute(
+        tx.prepare_cached(
             "INSERT INTO season_anissia (work_id, season, anime_no, version)
              VALUES (?1, ?2, ?3, ?4)",
-            params![into, season, anime_no, kept.version.max(moved_version) + 1],
-        )?;
+        )?
+        .execute(params![
+            into,
+            season,
+            anime_no,
+            kept.version.max(moved_version) + 1
+        ])?;
     }
     Ok(())
 }
@@ -123,7 +127,7 @@ pub(crate) fn follow_subscriptions(
     let prefix = format!("{from}:");
     let id_in = |season: u32| format!("{into}:{season}");
     let held: Vec<(String, String, i64)> = {
-        let mut stmt = tx.prepare(
+        let mut stmt = tx.prepare_cached(
             "SELECT rule_id, season_id, anissia_anime_no FROM rule_subscriptions
               WHERE substr(season_id, 1, length(?1)) = ?1 ORDER BY rule_id",
         )?;
@@ -135,36 +139,34 @@ pub(crate) fn follow_subscriptions(
             continue;
         };
         let target = id_in(season);
-        let other_subscription: bool = tx.query_row(
-            "SELECT EXISTS (SELECT 1 FROM rule_subscriptions
+        let other_subscription: bool = tx
+            .prepare_cached(
+                "SELECT EXISTS (SELECT 1 FROM rule_subscriptions
                              WHERE season_id = ?1 AND rule_id <> ?2 AND anissia_anime_no <> ?3)",
-            params![target, rule_id, anime_no],
-            |r| r.get(0),
-        )?;
+            )?
+            .query_row(params![target, rule_id, anime_no], |r| r.get(0))?;
         let link = link_in(tx, into, season)?;
         let other_link = link.anime_no.is_some_and(|linked| linked != anime_no);
         if other_subscription || other_link {
-            tx.execute(
+            tx.prepare_cached(
                 "UPDATE rule_subscriptions SET season_id = NULL, season_blocked = ?2
                   WHERE rule_id = ?1",
-                params![rule_id, target],
-            )?;
+            )?
+            .execute(params![rule_id, target])?;
         } else {
-            tx.execute(
+            tx.prepare_cached(
                 "UPDATE rule_subscriptions SET season_id = ?2, season_blocked = NULL
                   WHERE rule_id = ?1",
-                params![rule_id, target],
-            )?;
+            )?
+            .execute(params![rule_id, target])?;
             set_in(tx, into, season, Some(anime_no))?;
         }
-        tx.execute(
-            "UPDATE rules SET version = version + 1 WHERE id = ?1",
-            [&rule_id],
-        )?;
+        tx.prepare_cached("UPDATE rules SET version = version + 1 WHERE id = ?1")?
+            .execute([&rule_id])?;
     }
     // A note about a season of `from` is about the same season of `into` now.
     let noted: Vec<(String, String)> = {
-        let mut stmt = tx.prepare(
+        let mut stmt = tx.prepare_cached(
             "SELECT rule_id, season_blocked FROM rule_subscriptions
               WHERE substr(season_blocked, 1, length(?1)) = ?1 ORDER BY rule_id",
         )?;
@@ -175,14 +177,10 @@ pub(crate) fn follow_subscriptions(
         let Some(season) = note[prefix.len()..].parse::<u32>().ok() else {
             continue;
         };
-        tx.execute(
-            "UPDATE rule_subscriptions SET season_blocked = ?2 WHERE rule_id = ?1",
-            params![rule_id, id_in(season)],
-        )?;
-        tx.execute(
-            "UPDATE rules SET version = version + 1 WHERE id = ?1",
-            [&rule_id],
-        )?;
+        tx.prepare_cached("UPDATE rule_subscriptions SET season_blocked = ?2 WHERE rule_id = ?1")?
+            .execute(params![rule_id, id_in(season)])?;
+        tx.prepare_cached("UPDATE rules SET version = version + 1 WHERE id = ?1")?
+            .execute([&rule_id])?;
     }
     Ok(())
 }
@@ -211,11 +209,10 @@ impl SeasonStore {
     pub async fn anime_is_linked(&self, anime_no: i64) -> Result<bool, SeasonError> {
         self.db
             .run(move |c| {
-                Ok(c.query_row(
+                Ok(c.prepare_cached(
                     "SELECT EXISTS (SELECT 1 FROM season_anissia WHERE anime_no = ?1)",
-                    [anime_no],
-                    |r| r.get(0),
-                )?)
+                )?
+                .query_row([anime_no], |r| r.get(0))?)
             })
             .await
     }
@@ -229,7 +226,7 @@ impl SeasonStore {
         let id = work_id.to_owned();
         self.db
             .run(move |c| {
-                let mut stmt = c.prepare(
+                let mut stmt = c.prepare_cached(
                     "SELECT season, version, anime_no FROM season_anissia WHERE work_id = ?1",
                 )?;
                 let rows = stmt.query_map([&id], |r| {

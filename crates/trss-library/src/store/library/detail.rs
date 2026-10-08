@@ -93,24 +93,23 @@ struct Gathered {
 /// The work `id` with everything under it, or `None` when there is no such work.
 pub(super) fn detail(conn: &Connection, id: &str) -> rusqlite::Result<Option<WorkDetail>> {
     let head = conn
-        .query_row(
+        .prepare_cached(
             "SELECT w.id, w.dir_name, w.missing, w.first_seen_at, f.id, f.path
                FROM works w JOIN watch_folders f ON f.id = w.watch_folder_id
               WHERE w.id = ?1 AND f.unregistered_at IS NULL",
-            [id],
-            |row| {
-                Ok(WorkDetail {
-                    id: row.get(0)?,
-                    dir_name: row.get(1)?,
-                    missing: row.get::<_, i64>(2)? != 0,
-                    first_seen_at: row.get(3)?,
-                    watch_folder_id: row.get(4)?,
-                    watch_folder_path: row.get(5)?,
-                    seasons: Vec::new(),
-                    unrecognized: Vec::new(),
-                })
-            },
-        )
+        )?
+        .query_row([id], |row| {
+            Ok(WorkDetail {
+                id: row.get(0)?,
+                dir_name: row.get(1)?,
+                missing: row.get::<_, i64>(2)? != 0,
+                first_seen_at: row.get(3)?,
+                watch_folder_id: row.get(4)?,
+                watch_folder_path: row.get(5)?,
+                seasons: Vec::new(),
+                unrecognized: Vec::new(),
+            })
+        })
         .optional()?;
     let Some(mut work) = head else {
         return Ok(None);
@@ -118,14 +117,14 @@ pub(super) fn detail(conn: &Connection, id: &str) -> rusqlite::Result<Option<Wor
 
     let mut seasons: BTreeMap<u32, BTreeMap<EpisodeKey, Gathered>> = BTreeMap::new();
     {
-        let mut stmt = conn.prepare("SELECT number FROM seasons WHERE work_id = ?1")?;
+        let mut stmt = conn.prepare_cached("SELECT number FROM seasons WHERE work_id = ?1")?;
         let mut cursor = stmt.query([id])?;
         while let Some(row) = cursor.next()? {
             seasons.entry(row.get(0)?).or_default();
         }
     }
     {
-        let mut stmt = conn.prepare(
+        let mut stmt = conn.prepare_cached(
             "SELECT m.season, m.episode, m.path, m.kind, m.added_at,
                     m.creator_source_id, s.creator_name, s.anime_no, m.creator_version,
                     ap.id IS NOT NULL, st.creator
@@ -187,7 +186,7 @@ pub(super) fn detail(conn: &Connection, id: &str) -> rusqlite::Result<Option<Wor
         })
         .collect();
 
-    let mut stmt = conn.prepare(super::UNRECOGNIZED_OF_WORK)?;
+    let mut stmt = conn.prepare_cached(super::UNRECOGNIZED_OF_WORK)?;
     work.unrecognized = stmt
         .query_map([id], |row| {
             Ok(UnrecognizedRecord {
@@ -220,18 +219,17 @@ pub(super) fn season_holdings(
     season: u32,
 ) -> rusqlite::Result<Option<SeasonHoldings>> {
     let head: Option<(String, bool)> = conn
-        .query_row(
+        .prepare_cached(
             "SELECT w.dir_name, w.missing FROM works w
                JOIN watch_folders f ON f.id = w.watch_folder_id
               WHERE w.id = ?1 AND f.unregistered_at IS NULL",
-            [id],
-            |row| Ok((row.get(0)?, row.get::<_, i64>(1)? != 0)),
-        )
+        )?
+        .query_row([id], |row| Ok((row.get(0)?, row.get::<_, i64>(1)? != 0)))
         .optional()?;
     let Some((dir_name, missing)) = head else {
         return Ok(None);
     };
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare_cached(
         "SELECT DISTINCT episode FROM media_files
           WHERE work_id = ?1 AND season = ?2 AND kind = 'video'",
     )?;
@@ -264,13 +262,12 @@ pub(super) fn season_episodes(
     season: u32,
 ) -> rusqlite::Result<Option<BTreeMap<u32, Held>>> {
     let head: Option<bool> = conn
-        .query_row(
+        .prepare_cached(
             "SELECT w.missing FROM works w
                JOIN watch_folders f ON f.id = w.watch_folder_id
               WHERE w.id = ?1 AND f.unregistered_at IS NULL",
-            [id],
-            |row| Ok(row.get::<_, i64>(0)? != 0),
-        )
+        )?
+        .query_row([id], |row| Ok(row.get::<_, i64>(0)? != 0))
         .optional()?;
     let Some(missing) = head else {
         return Ok(None);
@@ -279,8 +276,9 @@ pub(super) fn season_episodes(
     if missing {
         return Ok(Some(held));
     }
-    let mut stmt =
-        conn.prepare("SELECT episode, kind FROM media_files WHERE work_id = ?1 AND season = ?2")?;
+    let mut stmt = conn.prepare_cached(
+        "SELECT episode, kind FROM media_files WHERE work_id = ?1 AND season = ?2",
+    )?;
     let mut cursor = stmt.query(params![id, season])?;
     while let Some(row) = cursor.next()? {
         let episode: String = row.get(0)?;
@@ -322,11 +320,11 @@ pub(super) fn find_videos(
     paths: &[String],
 ) -> rusqlite::Result<Vec<Option<(String, u32)>>> {
     let mut folders =
-        conn.prepare("SELECT id, path FROM watch_folders WHERE unregistered_at IS NULL")?;
+        conn.prepare_cached("SELECT id, path FROM watch_folders WHERE unregistered_at IS NULL")?;
     let folders: Vec<(String, String)> = folders
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
         .collect::<rusqlite::Result<_>>()?;
-    let mut find = conn.prepare(FIND_VIDEO_SQL)?;
+    let mut find = conn.prepare_cached(FIND_VIDEO_SQL)?;
 
     let mut found = Vec::with_capacity(paths.len());
     for path in paths {

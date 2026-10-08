@@ -35,7 +35,7 @@ fn with_items(conn: &Connection, rule_ids: &[String]) -> Result<HashSet<String>>
 /// picked at one moment, so these are the items of the cycle (or of the one
 /// `다시 받기`) that first picked something for the rule.
 fn first_titles(conn: &Connection, rule_id: &str) -> Result<Vec<String>> {
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare_cached(
         "SELECT title FROM history_items
           WHERE rule_id = ?1
             AND result_at = (SELECT MIN(result_at) FROM history_items WHERE rule_id = ?1)
@@ -58,7 +58,7 @@ pub struct ReceivedItem {
 /// The items the rule received (`received` with the rule recorded and a
 /// torrent hash), oldest first. Reads through `history_items_by_rule`.
 fn received_of_rule(conn: &Connection, rule_id: &str) -> Result<Vec<ReceivedItem>> {
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare_cached(
         "SELECT id, title, torrent_hash FROM history_items
           WHERE rule_id = ?1 AND result = 'received' AND torrent_hash IS NOT NULL
           ORDER BY id",

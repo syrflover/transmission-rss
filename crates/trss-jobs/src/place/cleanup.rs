@@ -248,7 +248,8 @@ fn file_name(path: &str) -> String {
 }
 
 fn exists(c: &Connection, sql: &str, p: impl rusqlite::Params) -> rusqlite::Result<bool> {
-    c.query_row(&format!("SELECT EXISTS ({sql})"), p, |r| r.get(0))
+    c.prepare_cached(&format!("SELECT EXISTS ({sql})"))?
+        .query_row(p, |r| r.get(0))
 }
 
 /// Why the stored subtitle is not cleanable now, if it is not.
@@ -386,7 +387,7 @@ fn in_use(
 /// The stored subtitle's files that are not removed: its own, then the ones
 /// linked to it (fonts, attachments, companion files).
 fn files_of(c: &Connection, stored: &str) -> rusqlite::Result<Vec<AssetRow>> {
-    let mut stmt = c.prepare(
+    let mut stmt = c.prepare_cached(
         "SELECT a.id, a.kind, a.relative_path, a.byte_size, 0
            FROM subtitle_stored s JOIN subtitle_assets a ON a.id = s.subtitle_asset_id
           WHERE s.id = ?1 AND a.removed_at IS NULL
@@ -419,7 +420,7 @@ fn entries(
     folder_there: bool,
 ) -> rusqlite::Result<Vec<Cleanable>> {
     let heads: Vec<Cleanable> = {
-        let mut stmt = c.prepare(
+        let mut stmt = c.prepare_cached(
             "SELECT s.id, a.relative_path, s.season, s.episode, s.creator, s.format, a.byte_size,
                     s.stored_at,
                     EXISTS (SELECT 1 FROM subtitle_applied ap
@@ -502,7 +503,7 @@ pub fn cleanable(
 /// The work's cleanups the worker has not finished, and the held ones, in
 /// the order they were asked.
 pub fn cleaning(c: &Connection, work_id: &str) -> rusqlite::Result<Vec<Cleaning>> {
-    let mut stmt = c.prepare(
+    let mut stmt = c.prepare_cached(
         "SELECT k.id, a.relative_path, k.state, k.reason
            FROM subtitle_cleanups k JOIN subtitle_stored s ON s.id = k.stored_id
                 JOIN subtitle_assets a ON a.id = s.subtitle_asset_id
@@ -531,12 +532,11 @@ pub struct WorkFiles {
 
 /// The length of the work's files that are not removed.
 pub fn total(c: &Connection, work_id: &str) -> rusqlite::Result<u64> {
-    c.query_row(
+    c.prepare_cached(
         "SELECT coalesce(sum(byte_size), 0) FROM subtitle_assets
           WHERE work_id = ?1 AND removed_at IS NULL",
-        [work_id],
-        |r| r.get::<_, i64>(0).map(|n| n as u64),
-    )
+    )?
+    .query_row([work_id], |r| r.get::<_, i64>(0).map(|n| n as u64))
 }
 
 /// How many files of one kind a work keeps, and their length: `subtitle`,
@@ -566,7 +566,7 @@ pub fn storage(
     folder_there: &dyn Fn(&str) -> bool,
 ) -> rusqlite::Result<Vec<WorkStorage>> {
     let rows: Vec<(String, String, i64, i64)> = {
-        let mut stmt = c.prepare(
+        let mut stmt = c.prepare_cached(
             "SELECT work_id,
                     CASE kind WHEN 'subtitle' THEN 'subtitle' WHEN 'font' THEN 'font'
                               ELSE 'attachment' END AS k,
@@ -638,14 +638,13 @@ pub fn ask(
     durable(c, |c| {
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let applied: Option<bool> = tx
-            .query_row(
+            .prepare_cached(
                 "SELECT EXISTS (SELECT 1 FROM subtitle_applied ap
                                  WHERE ap.stored_id = s.id AND ap.removed_at IS NULL)
                    FROM subtitle_stored s
                   WHERE s.id = ?1 AND s.work_id = ?2 AND s.cleaned_at IS NULL",
-                params![stored_id, work_id],
-                |r| r.get(0),
-            )
+            )?
+            .query_row(params![stored_id, work_id], |r| r.get(0))
             .optional()?;
         match applied {
             None => return Ok(Asked::NotFound),
@@ -670,54 +669,53 @@ pub fn ask(
             return Ok(Asked::Changed(Box::new(entry)));
         }
         let id = uuid::Uuid::new_v4().to_string();
-        tx.execute(
+        tx.prepare_cached(
             "INSERT INTO subtitle_cleanups (id, work_id, stored_id, state, asked_at, updated_at)
              VALUES (?1, ?2, ?3, 'asked', ?4, ?4)",
-            params![id, work_id, stored_id, now],
-        )?;
+        )?
+        .execute(params![id, work_id, stored_id, now])?;
         for asset in &going {
-            tx.execute(
+            tx.prepare_cached(
                 "INSERT INTO subtitle_asset_removals (cleanup_id, asset_id, state)
                  VALUES (?1, ?2, 'named')",
-                params![id, asset],
-            )?;
+            )?
+            .execute(params![id, asset])?;
         }
-        tx.execute(
-            "UPDATE subtitle_stored SET cleaned_at = ?2 WHERE id = ?1",
-            params![stored_id, now],
-        )?;
+        tx.prepare_cached("UPDATE subtitle_stored SET cleaned_at = ?2 WHERE id = ?1")?
+            .execute(params![stored_id, now])?;
         // What waited for its video is settled as stored, and a job that
         // waited for nothing else settles at its next run.
         let jobs: Vec<String> = {
-            let mut stmt = tx.prepare(
+            let mut stmt = tx.prepare_cached(
                 "SELECT DISTINCT job_id FROM subtitle_job_plan
                   WHERE stored_id = ?1 AND action = 'apply' AND outcome = 'no_video'",
             )?;
             let rows = stmt.query_map([stored_id], |r| r.get(0))?;
             rows.collect::<rusqlite::Result<_>>()?
         };
-        tx.execute(
+        tx.prepare_cached(
             "UPDATE subtitle_job_plan SET outcome = 'stored', note = ?2, updated_at = ?3
               WHERE stored_id = ?1 AND action = 'apply' AND outcome = 'no_video'",
-            params![stored_id, CLEANED_WHILE_WAITING, now],
-        )?;
+        )?
+        .execute(params![stored_id, CLEANED_WHILE_WAITING, now])?;
         for job in jobs {
-            let queued = tx.execute(
-                "UPDATE subtitle_jobs
+            let queued = tx
+                .prepare_cached(
+                    "UPDATE subtitle_jobs
                     SET state = 'pending', wait = NULL, finished_at = NULL, note = ?2,
                         state_at = ?3, updated_at = ?3
                   WHERE id = ?1 AND state = 'waiting' AND wait = 'video'
                     AND NOT EXISTS (SELECT 1 FROM subtitle_job_plan
                                      WHERE job_id = ?1 AND action = 'apply'
                                        AND outcome = 'no_video')",
-                params![job, REFLECT, now],
-            )?;
+                )?
+                .execute(params![job, REFLECT, now])?;
             if queued == 1 {
-                tx.execute(
+                tx.prepare_cached(
                     "INSERT INTO subtitle_job_events (job_id, at, message, detail)
                      VALUES (?1, ?2, ?3, ?4)",
-                    params![job, now, REFLECT, entry.name],
-                )?;
+                )?
+                .execute(params![job, now, REFLECT, entry.name])?;
             }
         }
         tx.commit()?;
@@ -739,7 +737,7 @@ pub fn any_asked(c: &Connection) -> rusqlite::Result<bool> {
 /// which are on disk now.
 pub fn work_folders(c: &Connection) -> rusqlite::Result<Vec<(String, Option<String>)>> {
     let works: Vec<String> = {
-        let mut stmt = c.prepare(
+        let mut stmt = c.prepare_cached(
             "SELECT DISTINCT work_id FROM subtitle_assets WHERE removed_at IS NULL ORDER BY 1",
         )?;
         let rows = stmt.query_map([], |r| r.get(0))?;
@@ -765,8 +763,9 @@ pub fn cleaned(c: &Connection, stored_id: &str) -> rusqlite::Result<bool> {
 
 /// The cleanups that wait for the worker, the oldest first.
 pub fn asked(c: &Connection) -> rusqlite::Result<Vec<String>> {
-    let mut stmt =
-        c.prepare("SELECT id FROM subtitle_cleanups WHERE state = 'asked' ORDER BY asked_at, id")?;
+    let mut stmt = c.prepare_cached(
+        "SELECT id FROM subtitle_cleanups WHERE state = 'asked' ORDER BY asked_at, id",
+    )?;
     let rows = stmt.query_map([], |r| r.get(0))?;
     rows.collect()
 }
@@ -799,18 +798,17 @@ pub fn intend(c: &mut Connection, cleanup_id: &str, now: Millis) -> Result<Optio
     durable(c, |c| {
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let found: Option<(String, String)> = tx
-            .query_row(
+            .prepare_cached(
                 "SELECT work_id, stored_id FROM subtitle_cleanups
                   WHERE id = ?1 AND state = 'asked'",
-                [cleanup_id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
+            )?
+            .query_row([cleanup_id], |r| Ok((r.get(0)?, r.get(1)?)))
             .optional()?;
         let Some((work_id, stored)) = found else {
             return Ok(None);
         };
         let named: Vec<(Removal, bool)> = {
-            let mut stmt = tx.prepare(
+            let mut stmt = tx.prepare_cached(
                 "SELECT a.id, a.base, a.relative_path, a.byte_size, a.sha256,
                         a.removed_at IS NOT NULL
                    FROM subtitle_asset_removals m JOIN subtitle_assets a ON a.id = m.asset_id
@@ -840,19 +838,17 @@ pub fn intend(c: &mut Connection, cleanup_id: &str, now: Millis) -> Result<Optio
                     None => ("intended", None),
                 },
             };
-            tx.execute(
+            tx.prepare_cached(
                 "UPDATE subtitle_asset_removals SET state = ?3, reason = ?4
                   WHERE cleanup_id = ?1 AND asset_id = ?2",
-                params![cleanup_id, removal.asset_id, state, reason],
-            )?;
+            )?
+            .execute(params![cleanup_id, removal.asset_id, state, reason])?;
             if state == "intended" {
                 removals.push(removal);
             }
         }
-        tx.execute(
-            "UPDATE subtitle_cleanups SET updated_at = ?2 WHERE id = ?1",
-            params![cleanup_id, now],
-        )?;
+        tx.prepare_cached("UPDATE subtitle_cleanups SET updated_at = ?2 WHERE id = ?1")?
+            .execute(params![cleanup_id, now])?;
         tx.commit()?;
         Ok(Some(Pass {
             cleanup_id: cleanup_id.to_owned(),
@@ -885,23 +881,23 @@ pub fn finish(
         for (asset, result) in results {
             match result {
                 Removed::Done => {
-                    tx.execute(
+                    tx.prepare_cached(
                         "UPDATE subtitle_asset_removals SET state = 'done', reason = NULL
                           WHERE cleanup_id = ?1 AND asset_id = ?2 AND state = 'intended'",
-                        params![cleanup_id, asset],
-                    )?;
-                    tx.execute(
+                    )?
+                    .execute(params![cleanup_id, asset])?;
+                    tx.prepare_cached(
                         "UPDATE subtitle_assets SET removed_at = ?2
                           WHERE id = ?1 AND removed_at IS NULL",
-                        params![asset, now],
-                    )?;
+                    )?
+                    .execute(params![asset, now])?;
                 }
                 Removed::Held(reason) => {
-                    tx.execute(
+                    tx.prepare_cached(
                         "UPDATE subtitle_asset_removals SET state = 'held', reason = ?3
                           WHERE cleanup_id = ?1 AND asset_id = ?2 AND state = 'intended'",
-                        params![cleanup_id, asset, reason],
-                    )?;
+                    )?
+                    .execute(params![cleanup_id, asset, reason])?;
                 }
             }
         }
@@ -909,15 +905,15 @@ pub fn finish(
             Removed::Held(reason) => Some(reason.clone()),
             Removed::Done => None,
         });
-        tx.execute(
+        tx.prepare_cached(
             "UPDATE subtitle_cleanups
                 SET state = CASE WHEN ?2 IS NULL THEN 'done' ELSE 'held' END, reason = ?2,
                     updated_at = ?3
               WHERE id = ?1 AND state = 'asked'
                 AND NOT EXISTS (SELECT 1 FROM subtitle_asset_removals
                                  WHERE cleanup_id = ?1 AND state IN ('named', 'intended'))",
-            params![cleanup_id, held, now],
-        )?;
+        )?
+        .execute(params![cleanup_id, held, now])?;
         tx.commit()?;
         Ok(())
     })

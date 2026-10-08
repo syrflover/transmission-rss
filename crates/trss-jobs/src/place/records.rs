@@ -42,21 +42,20 @@ pub struct JobFacts {
 }
 
 pub fn job_facts(c: &Connection, job_id: &str) -> rusqlite::Result<Option<JobFacts>> {
-    c.query_row(
+    c.prepare_cached(
         "SELECT origin, work_id, season, source_id, creator, placement_confirmed_at
            FROM subtitle_jobs WHERE id = ?1",
-        [job_id],
-        |r| {
-            Ok(JobFacts {
-                origin: r.get(0)?,
-                work_id: r.get(1)?,
-                season: r.get(2)?,
-                source_id: r.get(3)?,
-                creator: r.get(4)?,
-                placement_confirmed_at: r.get(5)?,
-            })
-        },
-    )
+    )?
+    .query_row([job_id], |r| {
+        Ok(JobFacts {
+            origin: r.get(0)?,
+            work_id: r.get(1)?,
+            season: r.get(2)?,
+            source_id: r.get(3)?,
+            creator: r.get(4)?,
+            placement_confirmed_at: r.get(5)?,
+        })
+    })
     .optional()
 }
 
@@ -163,7 +162,7 @@ fn plan_row(r: &Row<'_>) -> rusqlite::Result<PlanRow> {
 }
 
 pub fn plan(c: &Connection, job_id: &str) -> rusqlite::Result<Vec<PlanRow>> {
-    let mut stmt = c.prepare(&format!(
+    let mut stmt = c.prepare_cached(&format!(
         "SELECT {PLAN_COLUMNS} FROM subtitle_job_plan WHERE job_id = ?1 ORDER BY position"
     ))?;
     let rows = stmt.query_map([job_id], plan_row)?;
@@ -175,13 +174,10 @@ pub fn plan_row_at(
     job_id: &str,
     position: i64,
 ) -> rusqlite::Result<Option<PlanRow>> {
-    c.query_row(
-        &format!(
-            "SELECT {PLAN_COLUMNS} FROM subtitle_job_plan WHERE job_id = ?1 AND position = ?2"
-        ),
-        params![job_id, position],
-        plan_row,
-    )
+    c.prepare_cached(&format!(
+        "SELECT {PLAN_COLUMNS} FROM subtitle_job_plan WHERE job_id = ?1 AND position = ?2"
+    ))?
+    .query_row(params![job_id, position], plan_row)
     .optional()
 }
 
@@ -194,48 +190,46 @@ pub fn add_plan(
     now: Millis,
 ) -> Result<Vec<PlanRow>, JobError> {
     let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let next: i64 = tx.query_row(
-        "SELECT coalesce(max(position) + 1, 0) FROM subtitle_job_plan WHERE job_id = ?1",
-        [job_id],
-        |r| r.get(0),
-    )?;
+    let next: i64 = tx
+        .prepare_cached(
+            "SELECT coalesce(max(position) + 1, 0) FROM subtitle_job_plan WHERE job_id = ?1",
+        )?
+        .query_row([job_id], |r| r.get(0))?;
     let mut added = Vec::with_capacity(rows.len());
     for (offset, mut row) in rows.into_iter().enumerate() {
         row.job_id = job_id.to_owned();
         row.position = next + offset as i64;
-        tx.execute(
-            &format!(
-                "INSERT INTO subtitle_job_plan ({PLAN_COLUMNS}, updated_at)
+        tx.prepare_cached(&format!(
+            "INSERT INTO subtitle_job_plan ({PLAN_COLUMNS}, updated_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
                          ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)"
-            ),
-            params![
-                row.job_id,
-                row.position,
-                row.file_id,
-                row.member,
-                row.name,
-                row.kind,
-                row.format,
-                row.size as i64,
-                row.sha256,
-                row.item_id,
-                row.anissia_episode,
-                row.attachment_episode,
-                row.placed.as_ref().map(|p| p.episode),
-                row.placed.as_ref().map(|p| p.assignment.code()),
-                row.placed.as_ref().and_then(|p| p.basis).map(Basis::code),
-                row.action,
-                row.question,
-                row.stored_id,
-                row.outcome,
-                row.note,
-                row.applied_id,
-                row.asset_id,
-                row.chosen,
-                now,
-            ],
-        )?;
+        ))?
+        .execute(params![
+            row.job_id,
+            row.position,
+            row.file_id,
+            row.member,
+            row.name,
+            row.kind,
+            row.format,
+            row.size as i64,
+            row.sha256,
+            row.item_id,
+            row.anissia_episode,
+            row.attachment_episode,
+            row.placed.as_ref().map(|p| p.episode),
+            row.placed.as_ref().map(|p| p.assignment.code()),
+            row.placed.as_ref().and_then(|p| p.basis).map(Basis::code),
+            row.action,
+            row.question,
+            row.stored_id,
+            row.outcome,
+            row.note,
+            row.applied_id,
+            row.asset_id,
+            row.chosen,
+            now,
+        ])?;
         added.push(row);
     }
     tx.commit()?;
@@ -252,11 +246,11 @@ pub fn set_outcome(
     now: Millis,
 ) -> Result<(), JobError> {
     durable(c, |c| {
-        c.execute(
+        c.prepare_cached(
             "UPDATE subtitle_job_plan SET outcome = ?3, note = ?4, updated_at = ?5
              WHERE job_id = ?1 AND position = ?2",
-            params![job_id, position, outcome, note, now],
-        )?;
+        )?
+        .execute(params![job_id, position, outcome, note, now])?;
         Ok(())
     })
 }
@@ -313,7 +307,7 @@ pub(crate) fn effect(r: &Row<'_>) -> rusqlite::Result<Effect> {
 /// The job's effects that did not end: `intended`, `prepared` or
 /// `set_aside`.
 pub fn unfinished_effects(c: &Connection, job_id: &str) -> rusqlite::Result<Vec<Effect>> {
-    let mut stmt = c.prepare(&format!(
+    let mut stmt = c.prepare_cached(&format!(
         "SELECT {EFFECT_COLUMNS} FROM subtitle_file_effects
           WHERE job_id = ?1 AND state IN ('intended', 'prepared', 'set_aside')
           ORDER BY created_at, id"
@@ -324,28 +318,26 @@ pub fn unfinished_effects(c: &Connection, job_id: &str) -> rusqlite::Result<Vec<
 
 /// Inserts an effect as `intended`, in the caller's transaction.
 pub(crate) fn insert_intended(c: &Connection, e: &Effect, now: Millis) -> rusqlite::Result<()> {
-    c.execute(
-        &format!(
-            "INSERT INTO subtitle_file_effects ({EFFECT_COLUMNS}, created_at, updated_at)
+    c.prepare_cached(&format!(
+        "INSERT INTO subtitle_file_effects ({EFFECT_COLUMNS}, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, 'intended', ?5, ?6, ?7, ?8, ?9, ?10, NULL, NULL, ?11, ?12,
                      ?13, ?13)"
-        ),
-        params![
-            e.id,
-            e.job_id,
-            e.position,
-            e.kind,
-            e.folder,
-            e.temp,
-            e.target,
-            e.video,
-            e.size as i64,
-            e.sha256,
-            e.source,
-            e.plan_id,
-            now
-        ],
-    )?;
+    ))?
+    .execute(params![
+        e.id,
+        e.job_id,
+        e.position,
+        e.kind,
+        e.folder,
+        e.temp,
+        e.target,
+        e.video,
+        e.size as i64,
+        e.sha256,
+        e.source,
+        e.plan_id,
+        now
+    ])?;
     Ok(())
 }
 
@@ -357,11 +349,11 @@ pub fn intend(c: &mut Connection, e: &Effect, now: Millis) -> Result<(), JobErro
 /// The temporary file of an intended effect is written and checked.
 pub fn prepared(c: &mut Connection, id: &str, object: &str, now: Millis) -> Result<(), JobError> {
     durable(c, |c| {
-        c.execute(
+        c.prepare_cached(
             "UPDATE subtitle_file_effects SET state = 'prepared', object = ?2, updated_at = ?3
              WHERE id = ?1 AND state = 'intended'",
-            params![id, object, now],
-        )?;
+        )?
+        .execute(params![id, object, now])?;
         Ok(())
     })
 }
@@ -369,11 +361,11 @@ pub fn prepared(c: &mut Connection, id: &str, object: &str, now: Millis) -> Resu
 /// A prepared store's target was taken: it goes to `target` instead.
 pub fn retarget(c: &mut Connection, id: &str, target: &str, now: Millis) -> Result<(), JobError> {
     durable(c, |c| {
-        c.execute(
+        c.prepare_cached(
             "UPDATE subtitle_file_effects SET target = ?2, updated_at = ?3
              WHERE id = ?1 AND state = 'prepared'",
-            params![id, target, now],
-        )?;
+        )?
+        .execute(params![id, target, now])?;
         Ok(())
     })
 }
@@ -387,11 +379,11 @@ pub fn end_effect(
     now: Millis,
 ) -> Result<(), JobError> {
     durable(c, |c| {
-        c.execute(
+        c.prepare_cached(
             "UPDATE subtitle_file_effects SET state = ?2, reason = ?3, updated_at = ?4
              WHERE id = ?1",
-            params![id, state, reason, now],
-        )?;
+        )?
+        .execute(params![id, state, reason, now])?;
         Ok(())
     })
 }
@@ -405,16 +397,16 @@ pub fn hold(
 ) -> Result<(), JobError> {
     durable(c, |c| {
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        tx.execute(
+        tx.prepare_cached(
             "UPDATE subtitle_file_effects SET state = 'held', reason = ?2, updated_at = ?3
              WHERE id = ?1",
-            params![effect.id, reason, now],
-        )?;
-        tx.execute(
+        )?
+        .execute(params![effect.id, reason, now])?;
+        tx.prepare_cached(
             "UPDATE subtitle_job_plan SET outcome = 'held', note = ?3, updated_at = ?4
              WHERE job_id = ?1 AND position = ?2",
-            params![effect.job_id, effect.position, reason, now],
-        )?;
+        )?
+        .execute(params![effect.job_id, effect.position, reason, now])?;
         tx.commit()?;
         Ok(())
     })
@@ -431,16 +423,16 @@ pub fn withdrawn(
 ) -> Result<(), JobError> {
     durable(c, |c| {
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        tx.execute(
+        tx.prepare_cached(
             "UPDATE subtitle_file_effects SET state = 'abandoned', reason = ?2, updated_at = ?3
              WHERE id = ?1",
-            params![effect.id, reason, now],
-        )?;
-        tx.execute(
+        )?
+        .execute(params![effect.id, reason, now])?;
+        tx.prepare_cached(
             "UPDATE subtitle_job_plan SET outcome = 'held', note = ?3, updated_at = ?4
              WHERE job_id = ?1 AND position = ?2",
-            params![effect.job_id, effect.position, reason, now],
-        )?;
+        )?
+        .execute(params![effect.job_id, effect.position, reason, now])?;
         tx.commit()?;
         Ok(())
     })
@@ -455,7 +447,7 @@ pub fn busy_targets(
     folder: &str,
     except: Option<&str>,
 ) -> rusqlite::Result<Vec<String>> {
-    let mut stmt = c.prepare(
+    let mut stmt = c.prepare_cached(
         "SELECT lower(target) FROM subtitle_file_effects
           WHERE folder = ?1 AND state IN ('intended', 'prepared', 'set_aside') AND id IS NOT ?2
          UNION
@@ -501,7 +493,7 @@ pub fn assets_under(
     base: &str,
     prefix: &str,
 ) -> rusqlite::Result<Vec<Asset>> {
-    let mut stmt = c.prepare(
+    let mut stmt = c.prepare_cached(
         "SELECT id, kind, relative_path, byte_size, sha256 FROM subtitle_assets
           WHERE work_id = ?1 AND base = ?3 AND removed_at IS NULL
             AND lower(substr(relative_path, 1, length(?2))) = lower(?2)",
@@ -528,7 +520,7 @@ pub fn asset_paths_under(
     base: &str,
     prefix: &str,
 ) -> rusqlite::Result<Vec<String>> {
-    let mut stmt = c.prepare(
+    let mut stmt = c.prepare_cached(
         "SELECT relative_path FROM subtitle_assets
           WHERE work_id = ?1 AND base = ?3
             AND lower(substr(relative_path, 1, length(?2))) = lower(?2)
@@ -540,20 +532,19 @@ pub fn asset_paths_under(
 
 /// The asset `id` while it is not removed ([`crate::place::cleanup`]).
 pub fn asset(c: &Connection, id: &str) -> rusqlite::Result<Option<Asset>> {
-    c.query_row(
+    c.prepare_cached(
         "SELECT id, kind, relative_path, byte_size, sha256 FROM subtitle_assets
           WHERE id = ?1 AND removed_at IS NULL",
-        [id],
-        |r| {
-            Ok(Asset {
-                id: r.get(0)?,
-                kind: r.get(1)?,
-                relative_path: r.get(2)?,
-                size: r.get::<_, i64>(3)? as u64,
-                sha256: r.get(4)?,
-            })
-        },
-    )
+    )?
+    .query_row([id], |r| {
+        Ok(Asset {
+            id: r.get(0)?,
+            kind: r.get(1)?,
+            relative_path: r.get(2)?,
+            size: r.get::<_, i64>(3)? as u64,
+            sha256: r.get(4)?,
+        })
+    })
     .optional()
 }
 
@@ -603,31 +594,30 @@ pub fn stored(
     durable(c, |c| {
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let package: Option<String> = tx
-            .query_row(
+            .prepare_cached(
                 "SELECT id FROM subtitle_packages
                   WHERE job_id = ?1 AND source_page IS ?2",
-                params![facts.job_id, facts.source_page],
-                |r| r.get(0),
-            )
+            )?
+            .query_row(params![facts.job_id, facts.source_page], |r| r.get(0))
             .optional()?;
         let package = match package {
             Some(id) => id,
             None => {
                 let id = uuid::Uuid::new_v4().to_string();
-                tx.execute(
+                tx.prepare_cached(
                     "INSERT INTO subtitle_packages
                          (id, work_id, job_id, source_kind, source_page, received_at, created_at)
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                    params![
-                        id,
-                        facts.work_id,
-                        facts.job_id,
-                        facts.source_kind,
-                        facts.source_page,
-                        facts.received_at,
-                        now
-                    ],
-                )?;
+                )?
+                .execute(params![
+                    id,
+                    facts.work_id,
+                    facts.job_id,
+                    facts.source_kind,
+                    facts.source_page,
+                    facts.received_at,
+                    now
+                ])?;
                 id
             }
         };
@@ -638,46 +628,46 @@ pub fn stored(
                 relative_path,
             } => {
                 let id = uuid::Uuid::new_v4().to_string();
-                tx.execute(
+                tx.prepare_cached(
                     "INSERT INTO subtitle_assets
                          (id, work_id, kind, base, relative_path, byte_size, sha256, created_at)
                      VALUES (?1, ?2, ?3, ?8, ?4, ?5, ?6, ?7)",
-                    params![
-                        id,
-                        facts.work_id,
-                        row.kind,
-                        relative_path,
-                        row.size as i64,
-                        row.sha256,
-                        now,
-                        base_of(row.kind),
-                    ],
-                )?;
-                tx.execute(
+                )?
+                .execute(params![
+                    id,
+                    facts.work_id,
+                    row.kind,
+                    relative_path,
+                    row.size as i64,
+                    row.sha256,
+                    now,
+                    base_of(row.kind),
+                ])?;
+                tx.prepare_cached(
                     "UPDATE subtitle_file_effects SET state = 'done', target = ?2, updated_at = ?3
                      WHERE id = ?1",
-                    params![effect_id, relative_path, now],
-                )?;
+                )?
+                .execute(params![effect_id, relative_path, now])?;
                 id
             }
         };
-        let entry: i64 = tx.query_row(
-            "SELECT coalesce(max(position) + 1, 0) FROM subtitle_package_entries
+        let entry: i64 = tx
+            .prepare_cached(
+                "SELECT coalesce(max(position) + 1, 0) FROM subtitle_package_entries
               WHERE package_id = ?1",
-            [&package],
-            |r| r.get(0),
-        )?;
-        tx.execute(
+            )?
+            .query_row([&package], |r| r.get(0))?;
+        tx.prepare_cached(
             "INSERT INTO subtitle_package_entries (package_id, position, asset_id, original_name)
              VALUES (?1, ?2, ?3, ?4)",
-            params![package, entry, asset_id, row.name],
-        )?;
+        )?
+        .execute(params![package, entry, asset_id, row.name])?;
         if row.kind != AssetKind::Subtitle {
-            tx.execute(
+            tx.prepare_cached(
                 "UPDATE subtitle_job_plan SET asset_id = ?3, outcome = 'stored', updated_at = ?4
                   WHERE job_id = ?1 AND position = ?2",
-                params![row.job_id, row.position, asset_id, now],
-            )?;
+            )?
+            .execute(params![row.job_id, row.position, asset_id, now])?;
             tx.commit()?;
             return Ok(asset_id);
         }
@@ -694,7 +684,7 @@ pub fn stored(
             Some(id) => id,
             None => {
                 let id = uuid::Uuid::new_v4().to_string();
-                tx.execute(
+                tx.prepare_cached(
                     "INSERT INTO subtitle_stored
                          (id, work_id, season, package_id, subtitle_asset_id, source_id,
                           anissia_episode, attachment_episode, assignment, basis, episode,
@@ -702,37 +692,37 @@ pub fn stored(
                           stored_at)
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 0, ?15,
                              ?16, ?17)",
-                    params![
-                        id,
-                        facts.work_id,
-                        facts.season,
-                        package,
-                        asset_id,
-                        facts.source_id,
-                        row.anissia_episode,
-                        row.attachment_episode,
-                        placed.map(|p| p.assignment.code()),
-                        placed.and_then(|p| p.basis).map(Basis::code),
-                        placed.map(|p| p.episode),
-                        row.format.unwrap_or(SubtitleFormat::Other),
-                        facts.encoding,
-                        facts.creator,
-                        facts.observation,
-                        facts.job_id,
-                        now
-                    ],
-                )?;
+                )?
+                .execute(params![
+                    id,
+                    facts.work_id,
+                    facts.season,
+                    package,
+                    asset_id,
+                    facts.source_id,
+                    row.anissia_episode,
+                    row.attachment_episode,
+                    placed.map(|p| p.assignment.code()),
+                    placed.and_then(|p| p.basis).map(Basis::code),
+                    placed.map(|p| p.episode),
+                    row.format.unwrap_or(SubtitleFormat::Other),
+                    facts.encoding,
+                    facts.creator,
+                    facts.observation,
+                    facts.job_id,
+                    now
+                ])?;
                 id
             }
         };
         // A row only stored is settled by its store.
-        tx.execute(
+        tx.prepare_cached(
             "UPDATE subtitle_job_plan
                 SET stored_id = ?3, updated_at = ?4,
                     outcome = CASE action WHEN 'store' THEN 'stored' ELSE outcome END
               WHERE job_id = ?1 AND position = ?2",
-            params![row.job_id, row.position, stored, now],
-        )?;
+        )?
+        .execute(params![row.job_id, row.position, stored, now])?;
         tx.commit()?;
         Ok(stored)
     })
@@ -752,11 +742,13 @@ pub fn same_stored(
     source_id: Option<&str>,
     placed: Option<&Placed>,
 ) -> rusqlite::Result<Option<String>> {
-    c.query_row(
+    c.prepare_cached(
         "SELECT id FROM subtitle_stored
           WHERE subtitle_asset_id = ?1 AND work_id = ?2 AND season = ?3
             AND source_id IS ?4 AND episode IS ?5 AND assignment IS ?6 AND basis IS ?7
             AND cleaned_at IS NULL",
+    )?
+    .query_row(
         params![
             asset_id,
             work_id,
@@ -789,28 +781,27 @@ struct OnStored {
 
 /// The stored subtitle `id`, unless a person cleaned it.
 fn on_stored(c: &Connection, id: &str) -> rusqlite::Result<Option<OnStored>> {
-    c.query_row(
+    c.prepare_cached(
         "SELECT work_id, season, package_id, subtitle_asset_id, source_id, anissia_episode,
                 anissia_observation, episode, assignment, basis
            FROM subtitle_stored WHERE id = ?1 AND cleaned_at IS NULL",
-        [id],
-        |r| {
-            let assignment: Option<String> = r.get(8)?;
-            let basis: Option<String> = r.get(9)?;
-            Ok(OnStored {
-                work_id: r.get(0)?,
-                season: r.get(1)?,
-                package_id: r.get(2)?,
-                asset_id: r.get(3)?,
-                source_id: r.get(4)?,
-                anissia_episode: r.get(5)?,
-                observation: r.get(6)?,
-                episode: r.get(7)?,
-                assignment: assignment.as_deref().and_then(Assignment::parse),
-                basis: basis.as_deref().and_then(Basis::parse),
-            })
-        },
-    )
+    )?
+    .query_row([id], |r| {
+        let assignment: Option<String> = r.get(8)?;
+        let basis: Option<String> = r.get(9)?;
+        Ok(OnStored {
+            work_id: r.get(0)?,
+            season: r.get(1)?,
+            package_id: r.get(2)?,
+            asset_id: r.get(3)?,
+            source_id: r.get(4)?,
+            anissia_episode: r.get(5)?,
+            observation: r.get(6)?,
+            episode: r.get(7)?,
+            assignment: assignment.as_deref().and_then(Assignment::parse),
+            basis: basis.as_deref().and_then(Basis::parse),
+        })
+    })
     .optional()
 }
 
@@ -859,14 +850,13 @@ fn of_link(
     }
     let id = uuid::Uuid::new_v4().to_string();
     let own: Option<String> = c
-        .query_row(
+        .prepare_cached(
             "SELECT e.package_id FROM subtitle_package_entries e
                JOIN subtitle_packages p ON p.id = e.package_id
               WHERE p.job_id = ?1 AND e.asset_id = ?2
               ORDER BY e.package_id LIMIT 1",
-            params![row.job_id, on.asset_id],
-            |r| r.get(0),
-        )
+        )?
+        .query_row(params![row.job_id, on.asset_id], |r| r.get(0))
         .optional()?;
     // A package of the row's job links its own files once more.
     let links_known = own.as_ref().map(|_| 0);
@@ -876,7 +866,7 @@ fn of_link(
     let observation = on
         .observation
         .filter(|_| row.anissia_episode == on.anissia_episode);
-    c.execute(
+    c.prepare_cached(
         "INSERT INTO subtitle_stored
              (id, work_id, season, package_id, subtitle_asset_id, source_id,
               anissia_episode, attachment_episode, assignment, basis, episode,
@@ -887,25 +877,25 @@ fn of_link(
                 format, encoding, creator, language, purpose, release, revision_label,
                 coalesce(?9, links_known), ?10, ?11, stored_at
            FROM subtitle_stored WHERE id = ?1",
-        params![
-            old,
-            id,
-            package,
-            row.anissia_episode,
-            row.attachment_episode,
-            placed.map(|p| p.assignment.code()),
-            placed.and_then(|p| p.basis).map(Basis::code),
-            placed.map(|p| p.episode),
-            links_known,
-            observation,
-            row.job_id,
-        ],
-    )?;
-    c.execute(
+    )?
+    .execute(params![
+        old,
+        id,
+        package,
+        row.anissia_episode,
+        row.attachment_episode,
+        placed.map(|p| p.assignment.code()),
+        placed.and_then(|p| p.basis).map(Basis::code),
+        placed.map(|p| p.episode),
+        links_known,
+        observation,
+        row.job_id,
+    ])?;
+    c.prepare_cached(
         "INSERT INTO subtitle_stored_assets (stored_id, asset_id, role)
          SELECT ?2, asset_id, role FROM subtitle_stored_assets WHERE stored_id = ?1",
-        params![old, id],
-    )?;
+    )?
+    .execute(params![old, id])?;
     Ok(id)
 }
 
@@ -941,11 +931,11 @@ pub fn relink(
             return Ok(None);
         };
         let stored = of_link(&tx, &row, old, on, Some(placed))?;
-        tx.execute(
+        tx.prepare_cached(
             "UPDATE subtitle_job_plan SET stored_id = ?3, updated_at = ?4
               WHERE job_id = ?1 AND position = ?2",
-            params![row.job_id, row.position, stored, now],
-        )?;
+        )?
+        .execute(params![row.job_id, row.position, stored, now])?;
         let relinked = plan_row_at(&tx, job_id, position)?;
         tx.commit()?;
         Ok(relinked)
@@ -956,11 +946,10 @@ pub fn relink(
 /// subtitle a person cleaned.
 pub fn stored_asset(c: &Connection, stored_id: &str) -> rusqlite::Result<Option<Asset>> {
     let id: Option<String> = c
-        .query_row(
+        .prepare_cached(
             "SELECT subtitle_asset_id FROM subtitle_stored WHERE id = ?1 AND cleaned_at IS NULL",
-            [stored_id],
-            |r| r.get(0),
-        )
+        )?
+        .query_row([stored_id], |r| r.get(0))
         .optional()?;
     match id {
         Some(id) => asset(c, &id),
@@ -996,17 +985,15 @@ pub fn link(c: &mut Connection, links: &[(String, Vec<(String, Role)>)]) -> Resu
         for (stored, assets) in links {
             for (asset, role) in assets {
                 // A file a person's cleanup removed is linked to nothing.
-                tx.execute(
+                tx.prepare_cached(
                     "INSERT OR IGNORE INTO subtitle_stored_assets (stored_id, asset_id, role)
                      SELECT ?1, ?2, ?3 WHERE EXISTS (SELECT 1 FROM subtitle_assets
                                                       WHERE id = ?2 AND removed_at IS NULL)",
-                    params![stored, asset, role.code()],
-                )?;
+                )?
+                .execute(params![stored, asset, role.code()])?;
             }
-            tx.execute(
-                "UPDATE subtitle_stored SET links_known = 1 WHERE id = ?1",
-                [stored],
-            )?;
+            tx.prepare_cached("UPDATE subtitle_stored SET links_known = 1 WHERE id = ?1")?
+                .execute([stored])?;
         }
         tx.commit()?;
         Ok(())
@@ -1015,7 +1002,7 @@ pub fn link(c: &mut Connection, links: &[(String, Vec<(String, Role)>)]) -> Resu
 
 /// Of the stored subtitles `ids`, those whose links are not known yet.
 pub fn links_unknown(c: &Connection, ids: &[String]) -> rusqlite::Result<Vec<String>> {
-    let mut stmt = c.prepare("SELECT links_known FROM subtitle_stored WHERE id = ?1")?;
+    let mut stmt = c.prepare_cached("SELECT links_known FROM subtitle_stored WHERE id = ?1")?;
     let mut unknown = Vec::new();
     for id in ids {
         let known: Option<bool> = stmt.query_row([id], |r| r.get(0)).optional()?;
@@ -1029,14 +1016,14 @@ pub fn links_unknown(c: &Connection, ids: &[String]) -> rusqlite::Result<Vec<Str
 /// The formats in the order the work's first apply takes them: the work's
 /// own order, else the common policy's, else ASS, SRT, SMI.
 pub fn format_order(c: &Connection, work_id: &str) -> rusqlite::Result<Vec<SubtitleFormat>> {
-    let text: String = c.query_row(
-        "SELECT coalesce(
+    let text: String = c
+        .prepare_cached(
+            "SELECT coalesce(
                     (SELECT format_order FROM work_subtitle_policy WHERE work_id = ?1),
                     (SELECT format_order FROM policy_settings LIMIT 1),
                     'ass,srt,smi')",
-        [work_id],
-        |r| r.get(0),
-    )?;
+        )?
+        .query_row([work_id], |r| r.get(0))?;
     let order: Vec<SubtitleFormat> = text
         .split(',')
         .filter_map(|code| match code.trim() {
@@ -1081,53 +1068,59 @@ pub fn applied(
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
         // The rename replaced nothing, so an earlier copy recorded at this
         // path is gone: a person removed it.
-        tx.execute(
+        tx.prepare_cached(
             "UPDATE subtitle_applied SET removed_at = ?3
               WHERE work_id = ?1 AND path = ?2 AND removed_at IS NULL",
-            params![copy.work_id, effect.target, now],
-        )?;
+        )?
+        .execute(params![copy.work_id, effect.target, now])?;
         let id = uuid::Uuid::new_v4().to_string();
-        tx.execute(
+        tx.prepare_cached(
             "INSERT INTO subtitle_applied
                  (id, work_id, stored_id, season, episode, video_path, path, byte_size, sha256,
                   object, job_id, applied_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-            params![
-                id,
-                copy.work_id,
-                copy.stored_id,
-                copy.season,
-                copy.episode,
-                effect.video,
-                effect.target,
-                effect.size as i64,
-                effect.sha256,
-                object,
-                effect.job_id,
-                now
-            ],
-        )?;
-        tx.execute(
+        )?
+        .execute(params![
+            id,
+            copy.work_id,
+            copy.stored_id,
+            copy.season,
+            copy.episode,
+            effect.video,
+            effect.target,
+            effect.size as i64,
+            effect.sha256,
+            object,
+            effect.job_id,
+            now
+        ])?;
+        tx.prepare_cached(
             "UPDATE subtitle_file_effects SET state = 'done', updated_at = ?2 WHERE id = ?1",
-            params![effect.id, now],
-        )?;
-        tx.execute(
+        )?
+        .execute(params![effect.id, now])?;
+        tx.prepare_cached(
             "UPDATE subtitle_job_plan
                 SET outcome = 'applied', applied_id = ?3, note = ?4, episode = ?6, updated_at = ?5
               WHERE job_id = ?1 AND position = ?2",
-            params![effect.job_id, effect.position, id, note, now, copy.episode],
-        )?;
+        )?
+        .execute(params![
+            effect.job_id,
+            effect.position,
+            id,
+            note,
+            now,
+            copy.episode
+        ])?;
         // A mapping change committed after the run looked at the row's
         // episode moved the stored subtitle: the copy is on its old episode,
         // and the source's relocation plans to move it.
         let moved: Option<String> = tx
-            .query_row(
+            .prepare_cached(
                 "SELECT source_id FROM subtitle_stored
                   WHERE id = ?1 AND episode IS NOT ?2 AND assignment = 'mapped'
                     AND source_id IS NOT NULL",
-                params![copy.stored_id, copy.episode],
-                |r| r.get(0),
-            )
+            )?
+            .query_row(params![copy.stored_id, copy.episode], |r| r.get(0))
             .optional()?;
         if let Some(source) = moved {
             crate::place::relocate::sync_in(&tx, &copy.work_id, copy.season, &source, now)?;
@@ -1176,51 +1169,59 @@ pub fn adopt(
     durable(c, |c| {
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let live: Option<(String, String)> = tx
-            .query_row(
+            .prepare_cached(
                 "SELECT stored_id, sha256 FROM subtitle_applied
                   WHERE work_id = ?1 AND path = ?2 AND removed_at IS NULL",
-                params![what.work_id, what.path],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
+            )?
+            .query_row(params![what.work_id, what.path], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
             .optional()?;
         if let Some((stored, sha256)) = &live {
             let same_file = *sha256 == what.sha256;
             if same_file && (*stored == what.stored_id || !what.take_over) {
                 return Ok(None);
             }
-            tx.execute(
+            tx.prepare_cached(
                 "UPDATE subtitle_applied SET removed_at = ?3
                   WHERE work_id = ?1 AND path = ?2 AND removed_at IS NULL",
-                params![what.work_id, what.path, now],
-            )?;
+            )?
+            .execute(params![what.work_id, what.path, now])?;
         }
         let id = uuid::Uuid::new_v4().to_string();
-        tx.execute(
+        tx.prepare_cached(
             "INSERT INTO subtitle_applied
                  (id, work_id, stored_id, season, episode, video_path, path, byte_size, sha256,
                   object, job_id, applied_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-            params![
-                id,
-                what.work_id,
-                what.stored_id,
-                what.season,
-                what.episode,
-                what.video,
-                what.path,
-                what.size as i64,
-                what.sha256,
-                what.object,
-                what.job_id,
-                now
-            ],
-        )?;
-        tx.execute(
+        )?
+        .execute(params![
+            id,
+            what.work_id,
+            what.stored_id,
+            what.season,
+            what.episode,
+            what.video,
+            what.path,
+            what.size as i64,
+            what.sha256,
+            what.object,
+            what.job_id,
+            now
+        ])?;
+        tx.prepare_cached(
             "UPDATE subtitle_job_plan
                 SET outcome = 'applied', applied_id = ?3, note = ?4, episode = ?6, updated_at = ?5
               WHERE job_id = ?1 AND position = ?2",
-            params![what.job_id, what.position, id, note, now, what.episode],
-        )?;
+        )?
+        .execute(params![
+            what.job_id,
+            what.position,
+            id,
+            note,
+            now,
+            what.episode
+        ])?;
         tx.commit()?;
         Ok(Some(id))
     })
@@ -1245,7 +1246,7 @@ pub struct RowPaths {
 /// [`RowPaths`] of each row of the job's plan, by position. A file a cleanup
 /// removed ([`crate::place::cleanup`]) is in none.
 pub fn row_paths(c: &Connection, job_id: &str) -> rusqlite::Result<Vec<(i64, RowPaths)>> {
-    let mut stmt = c.prepare(
+    let mut stmt = c.prepare_cached(
         "SELECT p.position, coalesce(s.work_id, k.work_id), coalesce(a.relative_path, k.relative_path),
                 ap.path, ap.video_path, coalesce(k.base = 'app_data', 0),
                 EXISTS (SELECT 1 FROM subtitle_file_effects e
@@ -1314,7 +1315,7 @@ pub struct Clearable {
 /// The job's receipts every plan row of which is stored or dropped, with the
 /// ones already cleared.
 pub fn clearable(c: &Connection, job_id: &str) -> rusqlite::Result<Vec<Clearable>> {
-    let mut stmt = c.prepare(
+    let mut stmt = c.prepare_cached(
         "SELECT f.id, f.path, f.cleared_at IS NOT NULL, f.unpacked_at IS NOT NULL
            FROM subtitle_job_files f
           WHERE f.job_id = ?1 AND f.state = 'done' AND f.same_as IS NULL AND f.path IS NOT NULL
@@ -1333,7 +1334,7 @@ pub fn clearable(c: &Connection, job_id: &str) -> rusqlite::Result<Vec<Clearable
         })
     })?;
     let mut rows = rows.collect::<rusqlite::Result<Vec<_>>>()?;
-    let mut volumes = c.prepare(
+    let mut volumes = c.prepare_cached(
         "SELECT path FROM subtitle_job_files
           WHERE volume_of = ?1 AND same_as IS NULL AND path IS NOT NULL ORDER BY name",
     )?;
@@ -1351,13 +1352,13 @@ pub fn clearing(c: &mut Connection, file_id: &str, now: Millis) -> Result<(), Jo
     durable(c, |c| {
         // The receipts that share its bytes lose them too, and so do the
         // later volumes of a split archive and the receipts sharing theirs.
-        c.execute(
+        c.prepare_cached(
             "UPDATE subtitle_job_files SET cleared_at = ?2, updated_at = ?2
              WHERE (id = ?1 OR same_as = ?1 OR volume_of = ?1
                     OR same_as IN (SELECT id FROM subtitle_job_files WHERE volume_of = ?1))
                AND cleared_at IS NULL",
-            params![file_id, now],
-        )?;
+        )?
+        .execute(params![file_id, now])?;
         Ok(())
     })
 }
@@ -1397,7 +1398,7 @@ pub struct StoredOnly {
 }
 
 pub fn stored_only(c: &Connection, work_id: &str) -> rusqlite::Result<Vec<StoredOnly>> {
-    let mut stmt = c.prepare(
+    let mut stmt = c.prepare_cached(
         "SELECT s.id, s.season, s.episode, a.relative_path, s.creator, s.format, s.stored_at,
                 coalesce(
                     (SELECT p.job_id FROM subtitle_job_plan p
@@ -1502,7 +1503,7 @@ fn applied_formats(
     season: u32,
     episode: i64,
 ) -> rusqlite::Result<Vec<(Option<String>, SubtitleFormat)>> {
-    let mut stmt = c.prepare(
+    let mut stmt = c.prepare_cached(
         "SELECT s.creator, s.format FROM subtitle_applied ap
            JOIN subtitle_stored s ON s.id = ap.stored_id
           WHERE ap.work_id = ?1 AND ap.season = ?2 AND ap.episode = ?3 AND ap.removed_at IS NULL",
@@ -1544,7 +1545,7 @@ pub struct StoredCopy {
 /// season, episode and then newest stored first, with what a person can ask of
 /// each ([`stored_options`]).
 pub fn work_copies(c: &Connection, work_id: &str) -> rusqlite::Result<Vec<StoredCopy>> {
-    let mut stmt = c.prepare(
+    let mut stmt = c.prepare_cached(
         "SELECT s.id, s.season, s.episode, a.relative_path, s.creator, s.format, s.stored_at
            FROM subtitle_stored s JOIN subtitle_assets a ON a.id = s.subtitle_asset_id
           WHERE s.work_id = ?1 AND s.episode IS NOT NULL AND s.cleaned_at IS NULL
@@ -1563,7 +1564,7 @@ pub fn work_copies(c: &Connection, work_id: &str) -> rusqlite::Result<Vec<Stored
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    let mut applied = c.prepare(
+    let mut applied = c.prepare_cached(
         "SELECT path, applied_at FROM subtitle_applied
           WHERE stored_id = ?1 AND removed_at IS NULL ORDER BY applied_at, id",
     )?;
@@ -1650,15 +1651,16 @@ type Taker = (String, Option<i64>, String, Option<String>);
 /// job is gone, and for a job with no plan row to take a receipt from
 /// ([`choose_stored`]).
 fn imported_by(c: &Connection, stored_id: &str) -> rusqlite::Result<Option<Taker>> {
-    c.query_row(
+    c.prepare_cached(
         "SELECT j.id, j.state, j.wait
            FROM subtitle_stored s JOIN subtitle_packages p ON p.id = s.package_id
                 JOIN subtitle_jobs j ON j.id = s.job_id
           WHERE s.id = ?1 AND p.source_kind = 'existing' AND j.origin <> ?2
             AND EXISTS (SELECT 1 FROM subtitle_job_plan q WHERE q.job_id = j.id)",
-        params![stored_id, crate::store::RELOCATE],
-        |r| Ok((r.get(0)?, None, r.get(1)?, r.get(2)?)),
-    )
+    )?
+    .query_row(params![stored_id, crate::store::RELOCATE], |r| {
+        Ok((r.get(0)?, None, r.get(1)?, r.get(2)?))
+    })
     .optional()
 }
 
@@ -1681,21 +1683,22 @@ fn options_in(
 ) -> rusqlite::Result<Option<StoredOptions>> {
     let work_id = library.work_id;
     let stored: Option<(u32, Option<i64>, SubtitleFormat, Option<String>)> = c
-        .query_row(
+        .prepare_cached(
             "SELECT season, episode, format, creator FROM subtitle_stored
               WHERE id = ?1 AND work_id = ?2 AND cleaned_at IS NULL",
-            params![stored_id, work_id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
-        )
+        )?
+        .query_row(params![stored_id, work_id], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+        })
         .optional()?;
     let Some((season, Some(episode), format, creator)) = stored else {
         return Ok(None);
     };
-    let applied: i64 = c.query_row(
-        "SELECT count(*) FROM subtitle_applied WHERE stored_id = ?1 AND removed_at IS NULL",
-        [stored_id],
-        |r| r.get(0),
-    )?;
+    let applied: i64 = c
+        .prepare_cached(
+            "SELECT count(*) FROM subtitle_applied WHERE stored_id = ?1 AND removed_at IS NULL",
+        )?
+        .query_row([stored_id], |r| r.get(0))?;
     let early = if format.extension().is_none() {
         Some("자동으로 적용하지 않는 형식이라 적용할 수 없어요.")
     } else if applied > 0 {
@@ -1729,7 +1732,7 @@ fn options_in(
     // whose replacement imported it takes it, with a row made when it is
     // chosen (no position yet).
     let mut rows: Vec<Taker> = {
-        let mut stmt = c.prepare(
+        let mut stmt = c.prepare_cached(
             "SELECT p.job_id, p.position, j.state, j.wait
                FROM subtitle_job_plan p JOIN subtitle_jobs j ON j.id = p.job_id
               WHERE p.stored_id = ?1 AND p.episode IS NOT NULL AND j.origin <> ?2
@@ -1821,11 +1824,9 @@ pub fn choose_stored(
         let Ok((job, position)) = options.job else {
             unreachable!("a subtitle that can be chosen has a job to take it")
         };
-        let episode: i64 = tx.query_row(
-            "SELECT episode FROM subtitle_stored WHERE id = ?1",
-            [stored_id],
-            |r| r.get(0),
-        )?;
+        let episode: i64 = tx
+            .prepare_cached("SELECT episode FROM subtitle_stored WHERE id = ?1")?
+            .query_row([stored_id], |r| r.get(0))?;
         // An imported copy is in no plan yet: the job that imported it keeps
         // it as a row of its own, stored only, which the update below turns
         // into the apply. The row takes its receipt from one of the job's
@@ -1833,8 +1834,9 @@ pub fn choose_stored(
         // beside the video.
         let position = match position {
             Some(position) => position,
-            None => tx.query_row(
-                "INSERT INTO subtitle_job_plan
+            None => tx
+                .prepare_cached(
+                    "INSERT INTO subtitle_job_plan
                      (job_id, position, file_id, name, kind, format, size, sha256, episode,
                       assignment, basis, action, outcome, note, stored_id, updated_at)
                  SELECT ?1,
@@ -1848,48 +1850,47 @@ pub fn choose_stored(
                    FROM subtitle_stored s JOIN subtitle_assets a ON a.id = s.subtitle_asset_id
                   WHERE s.id = ?2
                  RETURNING position",
-                params![job, stored_id, now],
-                |r| r.get(0),
-            )?,
+                )?
+                .query_row(params![job, stored_id, now], |r| r.get(0))?,
         };
         // The row goes where the stored subtitle is now: a mapping change
         // may have moved it since the job planned the row.
-        tx.execute(
+        tx.prepare_cached(
             "UPDATE subtitle_job_plan
                 SET action = 'apply', outcome = NULL, note = NULL, question = NULL,
                     applied_id = NULL, chosen = ?4, updated_at = ?3,
                     episode = s.episode, assignment = s.assignment, basis = s.basis
                FROM (SELECT episode, assignment, basis FROM subtitle_stored WHERE id = ?5) AS s
               WHERE job_id = ?1 AND position = ?2",
-            params![job, position, now, mode, stored_id],
-        )?;
+        )?
+        .execute(params![job, position, now, mode, stored_id])?;
         // The alternatives the job asked about for the episode are kept as
         // they are: this one answers which it takes.
-        tx.execute(
+        tx.prepare_cached(
             "UPDATE subtitle_job_plan
                 SET action = 'store', question = NULL,
                     outcome = CASE WHEN stored_id IS NULL THEN NULL ELSE 'stored' END,
                     note = '다른 자막을 골라 보관만 해요', updated_at = ?4
               WHERE job_id = ?1 AND position <> ?2 AND episode = ?3
                 AND question IS NOT NULL AND outcome IS NULL",
-            params![job, position, episode, now],
-        )?;
+        )?
+        .execute(params![job, position, episode, now])?;
         let note = match mode {
             Chosen::Apply => "고른 보관본을 적용해요",
             Chosen::Add => "고른 보관본을 추가로 적용해요",
         };
-        tx.execute(
+        tx.prepare_cached(
             "UPDATE subtitle_jobs
                 SET state = 'pending', wait = NULL, finished_at = NULL, note = ?2,
                     state_at = ?3, updated_at = ?3
               WHERE id = ?1",
-            params![job, note, now],
-        )?;
-        tx.execute(
+        )?
+        .execute(params![job, note, now])?;
+        tx.prepare_cached(
             "INSERT INTO subtitle_job_events (job_id, at, message, detail)
              VALUES (?1, ?2, ?3, ?4)",
-            params![job, now, note, format!("{}화", episode)],
-        )?;
+        )?
+        .execute(params![job, now, note, format!("{}화", episode)])?;
         tx.commit()?;
         Ok(StoredChoice::Queued {
             job_id: job,
@@ -1974,11 +1975,9 @@ pub fn confirm_placement(
         let Some(facts) = job_facts(&tx, job_id)? else {
             return Ok(Confirmed::NotFound);
         };
-        let (state, wait): (String, Option<String>) = tx.query_row(
-            "SELECT state, wait FROM subtitle_jobs WHERE id = ?1",
-            [job_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )?;
+        let (state, wait): (String, Option<String>) = tx
+            .prepare_cached("SELECT state, wait FROM subtitle_jobs WHERE id = ?1")?
+            .query_row([job_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
         let rows = plan(&tx, job_id)?;
         let (positions, whole) = placeable(&facts, &rows);
         let waiting = match whole {
@@ -2100,7 +2099,7 @@ pub fn confirm_placement(
                 PlanAction::Apply => applied += 1,
                 _ => stored += 1,
             }
-            tx.execute(
+            tx.prepare_cached(
                 "UPDATE subtitle_job_plan
                     SET episode = ?3, assignment = ?4, basis = ?5, action = ?6, question = NULL,
                         note = ?7,
@@ -2108,17 +2107,17 @@ pub fn confirm_placement(
                                        THEN 'stored' END,
                         updated_at = ?8
                   WHERE job_id = ?1 AND position = ?2",
-                params![
-                    job_id,
-                    p.position,
-                    p.episode,
-                    assignment.map(Assignment::code),
-                    basis.map(Basis::code),
-                    action,
-                    note,
-                    now
-                ],
-            )?;
+            )?
+            .execute(params![
+                job_id,
+                p.position,
+                p.episode,
+                assignment.map(Assignment::code),
+                basis.map(Basis::code),
+                action,
+                note,
+                now
+            ])?;
             if row.stored_id.is_some() {
                 let to = p
                     .episode
@@ -2148,26 +2147,26 @@ pub fn confirm_placement(
             (false, true) => "폰트와 첨부만 보관해요".to_owned(),
             (false, false) => format!("적용 {applied}개 · 보관만 {stored}개"),
         };
-        tx.execute(
+        tx.prepare_cached(
             "UPDATE subtitle_jobs
                 SET state = 'pending', wait = NULL, finished_at = NULL, note = ?2,
                     placement_confirmed_at = CASE WHEN ?4 THEN ?3 ELSE placement_confirmed_at END,
                     state_at = ?3, updated_at = ?3
               WHERE id = ?1",
-            params![job_id, note, now, whole],
-        )?;
-        tx.execute(
+        )?
+        .execute(params![job_id, note, now, whole])?;
+        tx.prepare_cached(
             "INSERT INTO subtitle_job_steps (job_id, step, state, at, note)
              VALUES (?1, 'placement', 'done', ?2, ?3)
              ON CONFLICT (job_id, step) DO UPDATE
              SET state = 'done', at = excluded.at, note = excluded.note",
-            params![job_id, now, detail],
-        )?;
-        tx.execute(
+        )?
+        .execute(params![job_id, now, detail])?;
+        tx.prepare_cached(
             "INSERT INTO subtitle_job_events (job_id, at, message, detail)
              VALUES (?1, ?2, ?3, ?4)",
-            params![job_id, now, note, detail],
-        )?;
+        )?
+        .execute(params![job_id, now, note, detail])?;
         tx.commit()?;
         Ok(Confirmed::Queued { applied, stored })
     })
@@ -2194,21 +2193,24 @@ fn place_stored(
         to.map(|p| p.assignment.code()),
         to.and_then(|p| p.basis).map(Basis::code),
     );
-    let shared: bool = c.query_row(
-        "SELECT EXISTS (SELECT 1 FROM subtitle_job_plan
+    let shared: bool = c
+        .prepare_cached(
+            "SELECT EXISTS (SELECT 1 FROM subtitle_job_plan
                          WHERE stored_id = ?1 AND (job_id <> ?2 OR position <> ?3)
                            AND NOT (episode IS ?4 AND assignment IS ?5 AND basis IS ?6))
              OR EXISTS (SELECT 1 FROM subtitle_applied
                          WHERE stored_id = ?1 AND removed_at IS NULL)",
-        params![stored, row.job_id, row.position, episode, assignment, basis],
-        |r| r.get(0),
-    )?;
+        )?
+        .query_row(
+            params![stored, row.job_id, row.position, episode, assignment, basis],
+            |r| r.get(0),
+        )?;
     if !shared {
-        c.execute(
+        c.prepare_cached(
             "UPDATE subtitle_stored SET episode = ?2, assignment = ?3, basis = ?4
               WHERE id = ?1 AND cleaned_at IS NULL",
-            params![stored, episode, assignment, basis],
-        )?;
+        )?
+        .execute(params![stored, episode, assignment, basis])?;
         return Ok(());
     }
     let Some(on) = on_stored(c, stored)? else {
@@ -2222,10 +2224,10 @@ fn place_stored(
         return Ok(());
     }
     let id = of_link(c, row, stored, on, to)?;
-    c.execute(
+    c.prepare_cached(
         "UPDATE subtitle_job_plan SET stored_id = ?3 WHERE job_id = ?1 AND position = ?2",
-        params![row.job_id, row.position, id],
-    )?;
+    )?
+    .execute(params![row.job_id, row.position, id])?;
     Ok(())
 }
 
@@ -2236,13 +2238,12 @@ fn place_stored(
 /// and the folder is there.
 pub fn work_folder(c: &Connection, work_id: &str) -> rusqlite::Result<Option<String>> {
     let found: Option<(String, String)> = c
-        .query_row(
+        .prepare_cached(
             "SELECT f.path, w.dir_name FROM works w
                JOIN watch_folders f ON f.id = w.watch_folder_id
               WHERE w.id = ?1 AND f.unregistered_at IS NULL AND w.missing = 0",
-            [work_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
+        )?
+        .query_row([work_id], |r| Ok((r.get(0)?, r.get(1)?)))
         .optional()?;
     Ok(found.map(|(folder, dir)| format!("{}/{dir}", folder.trim_end_matches('/'))))
 }
@@ -2255,7 +2256,7 @@ pub fn episode_files(
     season: u32,
     episode: i64,
 ) -> rusqlite::Result<(Vec<String>, Vec<String>)> {
-    let mut stmt = c.prepare(
+    let mut stmt = c.prepare_cached(
         "SELECT path, episode, kind FROM media_files WHERE work_id = ?1 AND season = ?2
           ORDER BY path",
     )?;
@@ -2296,7 +2297,7 @@ pub fn season_files(
     work_id: &str,
     season: u32,
 ) -> rusqlite::Result<BTreeMap<i64, EpisodeFiles>> {
-    let mut stmt = c.prepare(
+    let mut stmt = c.prepare_cached(
         "SELECT path, episode, kind FROM media_files WHERE work_id = ?1 AND season = ?2
           ORDER BY path",
     )?;
@@ -2328,14 +2329,13 @@ pub fn season_files(
 /// (`anissia_observation`): `anime_no`, `episode`, `creator`, `website` and
 /// `updDt_raw`, in JSON.
 pub fn observation(c: &Connection, observation_id: i64) -> rusqlite::Result<Option<String>> {
-    c.query_row(
+    c.prepare_cached(
         "SELECT json_object('anime_no', s.anime_no, 'episode', o.episode,
                             'creator', s.creator_name, 'website', o.post_url,
                             'updDt_raw', o.updated)
            FROM caption_observations o JOIN subtitle_sources s ON s.id = o.source_id
           WHERE o.id = ?1",
-        [observation_id],
-        |r| r.get(0),
-    )
+    )?
+    .query_row([observation_id], |r| r.get(0))
     .optional()
 }

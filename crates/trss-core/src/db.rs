@@ -16,6 +16,14 @@ pub const DB_PATH_ENV: &str = "TRSS_DB_PATH";
 /// How long a connection waits for a lock held by the other process.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// How many prepared statements the connection keeps for `prepare_cached`.
+/// The code outside the tests takes some 680 distinct SQL texts from it, in
+/// all (the web and the worker each use some of them, and the shapes of an
+/// `IN (?, ?, ..)` list of any length are not taken from it), and a text
+/// that does not fit is parsed again each time it is evicted and used.
+/// Raise it when new statements bring that number near the capacity.
+const STATEMENT_CACHE_CAPACITY: usize = 1024;
+
 /// One step of the schema history.
 enum Migration {
     /// A SQL script.
@@ -233,6 +241,7 @@ impl Db {
                 | OpenFlags::SQLITE_OPEN_CREATE
                 | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
+        conn.set_prepared_statement_cache_capacity(STATEMENT_CACHE_CAPACITY);
         conn.busy_timeout(BUSY_TIMEOUT)?;
         conn.pragma_update(None, "foreign_keys", true)?;
         conn.query_row("PRAGMA journal_mode = WAL", [], |_| Ok(()))?;
@@ -3319,5 +3328,82 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(count_channels(&b).await, 1);
+    }
+
+    /// The columns and the rows of `SELECT * FROM cache_probe`, with the
+    /// statement taken from the connection's cache.
+    async fn read_probe(db: &Db) -> (Vec<String>, Vec<Vec<i64>>) {
+        db.run::<_, DbError, _>(|c| {
+            let mut stmt = c.prepare_cached("SELECT * FROM cache_probe")?;
+            // Read once the statement ran: SQLite prepares it again when it
+            // steps, so what a statement says of its columns before that is
+            // still the old table's.
+            let mut columns = Vec::new();
+            let mut rows = Vec::new();
+            let mut found = stmt.query([])?;
+            while let Some(row) = found.next()? {
+                let stmt = row.as_ref();
+                columns = stmt.column_names().into_iter().map(str::to_owned).collect();
+                rows.push(
+                    (0..stmt.column_count())
+                        .map(|i| row.get::<_, i64>(i))
+                        .collect::<rusqlite::Result<Vec<_>>>()?,
+                );
+            }
+            Ok((columns, rows))
+        })
+        .await
+        .unwrap()
+    }
+
+    async fn change_schema(db: &Db, sql: &'static str) {
+        db.run::<_, DbError, _>(move |c| Ok(c.execute_batch(sql)?))
+            .await
+            .unwrap();
+    }
+
+    fn names(columns: &[&str]) -> Vec<String> {
+        columns.iter().map(|c| (*c).to_owned()).collect()
+    }
+
+    #[tokio::test]
+    async fn a_cached_statement_is_prepared_again_after_the_schema_changed() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open(dir.path().join("app.db")).await.unwrap();
+
+        change_schema(
+            &db,
+            "CREATE TABLE cache_probe (a INTEGER); INSERT INTO cache_probe VALUES (1)",
+        )
+        .await;
+        // The first read puts the statement into the cache; the second takes it
+        // from there.
+        for _ in 0..2 {
+            assert_eq!(read_probe(&db).await, (names(&["a"]), vec![vec![1]]));
+        }
+
+        // As a migration that adds a column changes the table.
+        change_schema(
+            &db,
+            "ALTER TABLE cache_probe ADD COLUMN b INTEGER NOT NULL DEFAULT 7",
+        )
+        .await;
+        assert_eq!(
+            read_probe(&db).await,
+            (names(&["a", "b"]), vec![vec![1, 7]])
+        );
+
+        // As one that makes the table anew with other columns does.
+        change_schema(
+            &db,
+            "DROP TABLE cache_probe;
+             CREATE TABLE cache_probe (c INTEGER, d INTEGER, e INTEGER);
+             INSERT INTO cache_probe VALUES (3, 4, 5)",
+        )
+        .await;
+        assert_eq!(
+            read_probe(&db).await,
+            (names(&["c", "d", "e"]), vec![vec![3, 4, 5]])
+        );
     }
 }

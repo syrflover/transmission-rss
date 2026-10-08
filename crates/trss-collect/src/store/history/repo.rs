@@ -87,11 +87,12 @@ pub fn record_in(
 
     for obs in observations {
         let stored: Option<(i64, String)> = tx
-            .query_row(
+            .prepare_cached(
                 "SELECT id, result FROM history_items WHERE channel_id = ?1 AND identity_key = ?2",
-                params![obs.channel_id, obs.identity_key],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
+            )?
+            .query_row(params![obs.channel_id, obs.identity_key], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
             .optional()?;
 
         let Some((id, code)) = stored else {
@@ -105,45 +106,44 @@ pub fn record_in(
                 Origin::Elsewhere => false,
                 Origin::Feed => {
                     let first_read_cycle: Option<bool> = tx
-                        .query_row(
+                        .prepare_cached(
                             "SELECT first_read_at = ?2 FROM history_first_reads
                              WHERE channel_id = ?1",
-                            params![obs.channel_id, at],
-                            |row| row.get(0),
-                        )
+                        )?
+                        .query_row(params![obs.channel_id, at], |row| row.get(0))
                         .optional()?;
                     match first_read_cycle {
                         Some(same_cycle) => same_cycle,
                         None => {
-                            tx.execute(
+                            tx.prepare_cached(
                                 "INSERT INTO history_first_reads (channel_id, first_read_at)
                                  VALUES (?1, ?2)",
-                                params![obs.channel_id, at],
-                            )?;
+                            )?
+                            .execute(params![obs.channel_id, at])?;
                             true
                         }
                     }
                 }
             };
-            tx.execute(
+            tx.prepare_cached(
                 "INSERT INTO history_items (channel_id, channel_label, identity_key, title, link,
                      first_seen_at, last_seen_at, result, result_at, rule_id, reason, torrent_hash,
                      first_read)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7, ?6, ?8, ?9, ?10, ?11)",
-                params![
-                    obs.channel_id,
-                    obs.channel_label,
-                    obs.identity_key,
-                    obs.title,
-                    obs.link,
-                    at,
-                    obs.result.code(),
-                    obs.rule_id,
-                    obs.reason,
-                    obs.torrent_hash,
-                    first_read,
-                ],
-            )?;
+            )?
+            .execute(params![
+                obs.channel_id,
+                obs.channel_label,
+                obs.identity_key,
+                obs.title,
+                obs.link,
+                at,
+                obs.result.code(),
+                obs.rule_id,
+                obs.reason,
+                obs.torrent_hash,
+                first_read,
+            ])?;
             out.push(Recorded::New);
             continue;
         };
@@ -152,51 +152,50 @@ pub fn record_in(
 
         // Every sighting refreshes when the item was last in the feed and its
         // latest title and link; `first_seen_at` is never touched.
-        tx.execute(
+        tx.prepare_cached(
             "UPDATE history_items
              SET last_seen_at = max(last_seen_at, ?2), title = ?3, link = ?4, channel_label = ?5
              WHERE id = ?1",
-            params![id, at, obs.title, obs.link, obs.channel_label],
-        )?;
+        )?
+        .execute(params![id, at, obs.title, obs.link, obs.channel_label])?;
 
         match Transition::between(stored_result, obs.result) {
             Transition::Keep => {
                 // A settled item whose hash was unknown learns it.
                 if obs.torrent_hash.is_some() && stored_result.is_settled() {
-                    tx.execute(
+                    tx.prepare_cached(
                         "UPDATE history_items SET torrent_hash = ?2
                          WHERE id = ?1 AND torrent_hash IS NULL",
-                        params![id, obs.torrent_hash],
-                    )?;
+                    )?
+                    .execute(params![id, obs.torrent_hash])?;
                 }
                 out.push(Recorded::Unchanged);
             }
             Transition::Refresh => {
-                tx.execute(
+                tx.prepare_cached(
                     "UPDATE history_items SET rule_id = ?2, reason = ?3 WHERE id = ?1",
-                    params![id, obs.rule_id, obs.reason],
-                )?;
+                )?
+                .execute(params![id, obs.rule_id, obs.reason])?;
                 out.push(Recorded::Unchanged);
             }
             Transition::Change => {
-                tx.execute(
+                tx.prepare_cached(
                     "UPDATE history_items
                      SET result = ?2, result_at = ?3, rule_id = ?4, reason = ?5,
                          torrent_hash = COALESCE(?6, torrent_hash)
                      WHERE id = ?1",
-                    params![
-                        id,
-                        obs.result.code(),
-                        at,
-                        obs.rule_id,
-                        obs.reason,
-                        obs.torrent_hash
-                    ],
-                )?;
-                tx.execute(
-                    "INSERT INTO history_changes
+                )?
+                .execute(params![
+                    id,
+                    obs.result.code(),
+                    at,
+                    obs.rule_id,
+                    obs.reason,
+                    obs.torrent_hash
+                ])?;
+                tx.prepare_cached("INSERT INTO history_changes
                          (item_id, changed_at, from_result, to_result, rule_id, reason, torrent_hash)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)")?.execute(
                     params![
                         id,
                         at,
@@ -274,7 +273,7 @@ pub fn list(conn: &Connection, query: &HistoryQuery) -> Result<HistoryPage> {
 }
 
 pub fn changes(conn: &Connection, item_id: i64) -> Result<Vec<HistoryChange>> {
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare_cached(
         "SELECT id, item_id, changed_at, from_result, to_result, rule_id, reason, torrent_hash
          FROM history_changes WHERE item_id = ?1 ORDER BY id",
     )?;
@@ -401,40 +400,34 @@ pub fn received_titles_of_rules(
 pub fn try_begin_cycle(conn: &mut Connection, now: Millis, min_gap: Millis) -> Result<bool> {
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let last: Option<Millis> = tx
-        .query_row(
-            "SELECT started_at FROM collection_cycle WHERE id = 1",
-            [],
-            |row| row.get(0),
-        )
+        .prepare_cached("SELECT started_at FROM collection_cycle WHERE id = 1")?
+        .query_row([], |row| row.get(0))
         .optional()?;
     // `now < last` means the clock went backwards; do not wait for it to catch up.
     if last.is_some_and(|last| now >= last && now - last < min_gap) {
         return Ok(false);
     }
-    tx.execute(
+    tx.prepare_cached(
         "INSERT INTO collection_cycle (id, started_at, finished_at) VALUES (1, ?1, NULL)
          ON CONFLICT (id) DO UPDATE SET started_at = ?1, finished_at = NULL",
-        [now],
-    )?;
+    )?
+    .execute([now])?;
     tx.commit()?;
     Ok(true)
 }
 
 pub fn finish_cycle(conn: &Connection, now: Millis) -> Result<()> {
-    conn.execute(
-        "UPDATE collection_cycle SET finished_at = ?1 WHERE id = 1",
-        [now],
-    )?;
+    conn.prepare_cached("UPDATE collection_cycle SET finished_at = ?1 WHERE id = 1")?
+        .execute([now])?;
     Ok(())
 }
 
 pub fn get(conn: &Connection, id: i64) -> Result<Option<HistoryItem>> {
     Ok(conn
-        .query_row(
-            &format!("SELECT {ITEM_COLUMNS} FROM history_items WHERE id = ?1"),
-            [id],
-            item_from_row,
-        )
+        .prepare_cached(&format!(
+            "SELECT {ITEM_COLUMNS} FROM history_items WHERE id = ?1"
+        ))?
+        .query_row([id], item_from_row)
         .optional()?)
 }
 
@@ -445,20 +438,17 @@ pub fn item_by_key(
     identity_key: &str,
 ) -> Result<Option<HistoryItem>> {
     Ok(conn
-        .query_row(
-            &format!(
-                "SELECT {ITEM_COLUMNS} FROM history_items
+        .prepare_cached(&format!(
+            "SELECT {ITEM_COLUMNS} FROM history_items
                   WHERE channel_id = ?1 AND identity_key = ?2"
-            ),
-            [channel_id, identity_key],
-            item_from_row,
-        )
+        ))?
+        .query_row([channel_id, identity_key], item_from_row)
         .optional()?)
 }
 
 /// The items that record the torrent `hash`, newest record first.
 pub fn items_of_hash(conn: &Connection, hash: &str) -> Result<Vec<HistoryItem>> {
-    let mut stmt = conn.prepare(&format!(
+    let mut stmt = conn.prepare_cached(&format!(
         "SELECT {ITEM_COLUMNS} FROM history_items WHERE torrent_hash = ?1 ORDER BY id DESC"
     ))?;
     let items = stmt
@@ -469,8 +459,8 @@ pub fn items_of_hash(conn: &Connection, hash: &str) -> Result<Vec<HistoryItem>> 
 
 /// The ID and title of every item of the channel `channel_id`.
 pub fn titles_of_channel(conn: &Connection, channel_id: &str) -> Result<Vec<(i64, String)>> {
-    let mut stmt =
-        conn.prepare("SELECT id, title FROM history_items WHERE channel_id = ?1 ORDER BY id")?;
+    let mut stmt = conn
+        .prepare_cached("SELECT id, title FROM history_items WHERE channel_id = ?1 ORDER BY id")?;
     let titles = stmt
         .query_map([channel_id], |row| Ok((row.get(0)?, row.get(1)?)))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -483,7 +473,7 @@ pub fn recent_titles_of_channel(
     channel_id: &str,
     limit: usize,
 ) -> Result<Vec<(i64, String)>> {
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare_cached(
         "SELECT id, title FROM history_items WHERE channel_id = ?1 ORDER BY id DESC LIMIT ?2",
     )?;
     let titles = stmt
@@ -496,7 +486,7 @@ pub fn recent_titles_of_channel(
 
 /// How many items have each result, optionally within one channel.
 pub fn counts(conn: &Connection, channel_id: Option<&str>) -> Result<Vec<(HistoryResult, i64)>> {
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare_cached(
         "SELECT result, count(*) FROM history_items
          WHERE (?1 IS NULL OR channel_id = ?1) GROUP BY result",
     )?;
@@ -512,21 +502,22 @@ pub fn counts(conn: &Connection, channel_id: Option<&str>) -> Result<Vec<(Histor
 /// Sets the note of a `received` item that has none (its `reason` column);
 /// any other item is left alone. Returns whether a note was written.
 pub fn note_received(conn: &Connection, item_id: i64, note: &str) -> Result<bool> {
-    let changed = conn.execute(
-        "UPDATE history_items SET reason = ?2
+    let changed = conn
+        .prepare_cached(
+            "UPDATE history_items SET reason = ?2
          WHERE id = ?1 AND result = 'received' AND reason IS NULL",
-        params![item_id, note],
-    )?;
+        )?
+        .execute(params![item_id, note])?;
     Ok(changed > 0)
 }
 
 pub fn received_by_hand(conn: &Connection, hash: &str) -> Result<bool> {
-    Ok(conn.query_row(
-        "SELECT EXISTS (SELECT 1 FROM history_items
+    Ok(conn
+        .prepare_cached(
+            "SELECT EXISTS (SELECT 1 FROM history_items
                         WHERE torrent_hash = ?1 AND result = 'received' AND rule_id IS NULL)",
-        [hash],
-        |row| row.get(0),
-    )?)
+        )?
+        .query_row([hash], |row| row.get(0))?)
 }
 
 /// The torrent hashes of the items among the given `(channel_id,
@@ -611,7 +602,7 @@ pub fn first_sightings(
     channel_ids: &[String],
 ) -> Result<std::collections::HashMap<String, Millis>> {
     let mut stmt =
-        conn.prepare("SELECT first_read_at FROM history_first_reads WHERE channel_id = ?1")?;
+        conn.prepare_cached("SELECT first_read_at FROM history_first_reads WHERE channel_id = ?1")?;
     let mut found = std::collections::HashMap::new();
     for channel_id in channel_ids {
         let first: Option<Millis> = stmt.query_row([channel_id], |row| row.get(0)).optional()?;
@@ -639,7 +630,7 @@ pub fn last_received_of_rules(
     conn: &Connection,
     rule_ids: &[String],
 ) -> Result<std::collections::HashMap<String, Millis>> {
-    let mut stmt = conn.prepare(LAST_RECEIVED_SQL)?;
+    let mut stmt = conn.prepare_cached(LAST_RECEIVED_SQL)?;
     let mut found = std::collections::HashMap::new();
     for rule_id in rule_ids {
         let last: Option<Millis> = stmt.query_row([rule_id], |row| row.get(0))?;
@@ -659,7 +650,7 @@ pub fn titles_since(
     since: Millis,
     limit: usize,
 ) -> Result<(Vec<String>, bool)> {
-    let mut stmt = conn.prepare(TITLES_SINCE_SQL)?;
+    let mut stmt = conn.prepare_cached(TITLES_SINCE_SQL)?;
     let mut titles = stmt
         .query_map(params![channel_id, since, limit as i64 + 1], |row| {
             row.get::<_, String>(0)
@@ -700,11 +691,8 @@ pub fn record_outcome_in(
     torrent_hash: Option<&str>,
 ) -> Result<Option<HistoryResult>> {
     let stored: Option<String> = tx
-        .query_row(
-            "SELECT result FROM history_items WHERE id = ?1",
-            [item_id],
-            |row| row.get(0),
-        )
+        .prepare_cached("SELECT result FROM history_items WHERE id = ?1")?
+        .query_row([item_id], |row| row.get(0))
         .optional()?;
     let Some(code) = stored else {
         return Ok(None);
@@ -714,43 +702,48 @@ pub fn record_outcome_in(
     let after = match Transition::between(stored_result, result) {
         Transition::Keep => {
             if torrent_hash.is_some() && stored_result.is_settled() {
-                tx.execute(
+                tx.prepare_cached(
                     "UPDATE history_items SET torrent_hash = ?2
                      WHERE id = ?1 AND torrent_hash IS NULL",
-                    params![item_id, torrent_hash],
-                )?;
+                )?
+                .execute(params![item_id, torrent_hash])?;
             }
             stored_result
         }
         Transition::Refresh => {
-            tx.execute(
-                "UPDATE history_items SET rule_id = ?2, reason = ?3 WHERE id = ?1",
-                params![item_id, rule_id, reason],
-            )?;
+            tx.prepare_cached("UPDATE history_items SET rule_id = ?2, reason = ?3 WHERE id = ?1")?
+                .execute(params![item_id, rule_id, reason])?;
             stored_result
         }
         Transition::Change => {
-            tx.execute(
+            tx.prepare_cached(
                 "UPDATE history_items
                  SET result = ?2, result_at = ?3, rule_id = ?4, reason = ?5,
                      torrent_hash = COALESCE(?6, torrent_hash)
                  WHERE id = ?1",
-                params![item_id, result.code(), at, rule_id, reason, torrent_hash],
-            )?;
-            tx.execute(
+            )?
+            .execute(params![
+                item_id,
+                result.code(),
+                at,
+                rule_id,
+                reason,
+                torrent_hash
+            ])?;
+            tx.prepare_cached(
                 "INSERT INTO history_changes
                      (item_id, changed_at, from_result, to_result, rule_id, reason, torrent_hash)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                params![
-                    item_id,
-                    at,
-                    stored_result.code(),
-                    result.code(),
-                    rule_id,
-                    reason,
-                    torrent_hash
-                ],
-            )?;
+            )?
+            .execute(params![
+                item_id,
+                at,
+                stored_result.code(),
+                result.code(),
+                rule_id,
+                reason,
+                torrent_hash
+            ])?;
             result
         }
     };
@@ -760,15 +753,12 @@ pub fn record_outcome_in(
 
 pub fn last_cycle(conn: &Connection) -> Result<Option<CycleState>> {
     Ok(conn
-        .query_row(
-            "SELECT started_at, finished_at FROM collection_cycle WHERE id = 1",
-            [],
-            |row| {
-                Ok(CycleState {
-                    started_at: row.get(0)?,
-                    finished_at: row.get(1)?,
-                })
-            },
-        )
+        .prepare_cached("SELECT started_at, finished_at FROM collection_cycle WHERE id = 1")?
+        .query_row([], |row| {
+            Ok(CycleState {
+                started_at: row.get(0)?,
+                finished_at: row.get(1)?,
+            })
+        })
         .optional()?)
 }

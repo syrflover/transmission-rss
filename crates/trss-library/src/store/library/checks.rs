@@ -75,7 +75,7 @@ pub(super) fn identity_of(size: Option<i64>, mtime_ns: Option<i64>) -> Option<Fi
 }
 
 pub(super) fn open_checks(conn: &Connection) -> rusqlite::Result<Vec<VideoCheck>> {
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare_cached(
         "SELECT u.work_id, w.dir_name, u.path, u.reason, u.size, u.mtime_ns
            FROM unrecognized_files u
            JOIN works w ON w.id = u.work_id
@@ -134,11 +134,12 @@ pub(super) fn check(
 ) -> Result<(), CheckError> {
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let current = tx
-        .query_row(
+        .prepare_cached(
             "SELECT size, mtime_ns FROM unrecognized_files WHERE work_id = ?1 AND path = ?2",
-            params![work_id, path],
-            |row| Ok(identity_of(row.get(0)?, row.get(1)?)),
-        )
+        )?
+        .query_row(params![work_id, path], |row| {
+            Ok(identity_of(row.get(0)?, row.get(1)?))
+        })
         .optional()?;
     let Some(Some(current)) = current else {
         return Err(CheckError::NoFile);
@@ -146,11 +147,17 @@ pub(super) fn check(
     if current != seen {
         return Err(CheckError::Changed);
     }
-    tx.execute(
+    tx.prepare_cached(
         "INSERT OR REPLACE INTO unrecognized_checks (work_id, path, size, mtime_ns, checked_at)
          VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![work_id, path, current.size as i64, current.mtime_ns, now],
-    )?;
+    )?
+    .execute(params![
+        work_id,
+        path,
+        current.size as i64,
+        current.mtime_ns,
+        now
+    ])?;
     tx.commit()?;
     Ok(())
 }

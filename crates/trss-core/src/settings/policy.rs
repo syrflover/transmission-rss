@@ -137,12 +137,13 @@ fn stored_count(value: i64) -> u32 {
 
 fn read_policy(conn: &Connection) -> Result<Policy, SettingsError> {
     let row: Option<(String, i64, i64, i64, Millis)> = conn
-        .query_row(
+        .prepare_cached(
             "SELECT format_order, idle_timeout_seconds, max_concurrent_jobs, version, saved_at
                FROM policy_settings WHERE id = 1",
-            [],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
-        )
+        )?
+        .query_row([], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+        })
         .optional()?;
     let Some((order, idle, jobs, version, saved_at)) = row else {
         return Ok(Policy::default());
@@ -193,8 +194,7 @@ impl SettingsStore {
                         actual,
                     });
                 }
-                tx.execute(
-                    "INSERT INTO policy_settings
+                tx.prepare_cached("INSERT INTO policy_settings
                          (id, format_order, idle_timeout_seconds, max_concurrent_jobs, version, saved_at)
                      VALUES (1, ?1, ?2, ?3, 1, ?4)
                      ON CONFLICT (id) DO UPDATE SET
@@ -202,7 +202,7 @@ impl SettingsStore {
                          idle_timeout_seconds = excluded.idle_timeout_seconds,
                          max_concurrent_jobs = excluded.max_concurrent_jobs,
                          version = version + 1,
-                         saved_at = excluded.saved_at",
+                         saved_at = excluded.saved_at")?.execute(
                     params![
                         format_order.to_string(),
                         idle_timeout_seconds,
@@ -226,11 +226,10 @@ impl SettingsStore {
         self.db
             .run(move |c| {
                 let stored: Option<String> = c
-                    .query_row(
+                    .prepare_cached(
                         "SELECT format_order FROM work_subtitle_policy WHERE work_id = ?1",
-                        [work],
-                        |r| r.get(0),
-                    )
+                    )?
+                    .query_row([work], |r| r.get(0))
                     .optional()?;
                 stored
                     .map(|text| {
@@ -255,21 +254,20 @@ impl SettingsStore {
         self.db
             .run(move |c| {
                 let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-                let known: i64 =
-                    tx.query_row("SELECT count(*) FROM works WHERE id = ?1", [&work], |r| {
-                        r.get(0)
-                    })?;
+                let known: i64 = tx
+                    .prepare_cached("SELECT count(*) FROM works WHERE id = ?1")?
+                    .query_row([&work], |r| r.get(0))?;
                 if known == 0 {
                     return Ok(false);
                 }
-                tx.execute(
+                tx.prepare_cached(
                     "INSERT INTO work_subtitle_policy (work_id, format_order, updated_at)
                      VALUES (?1, ?2, ?3)
                      ON CONFLICT (work_id) DO UPDATE SET
                          format_order = excluded.format_order,
                          updated_at = excluded.updated_at",
-                    params![work, format_order.to_string(), now],
-                )?;
+                )?
+                .execute(params![work, format_order.to_string(), now])?;
                 tx.commit()?;
                 Ok(true)
             })
@@ -284,17 +282,14 @@ impl SettingsStore {
         self.db
             .run(move |c| {
                 let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-                let known: i64 =
-                    tx.query_row("SELECT count(*) FROM works WHERE id = ?1", [&work], |r| {
-                        r.get(0)
-                    })?;
+                let known: i64 = tx
+                    .prepare_cached("SELECT count(*) FROM works WHERE id = ?1")?
+                    .query_row([&work], |r| r.get(0))?;
                 if known == 0 {
                     return Ok(false);
                 }
-                tx.execute(
-                    "DELETE FROM work_subtitle_policy WHERE work_id = ?1",
-                    [&work],
-                )?;
+                tx.prepare_cached("DELETE FROM work_subtitle_policy WHERE work_id = ?1")?
+                    .execute([&work])?;
                 tx.commit()?;
                 Ok(true)
             })
@@ -306,7 +301,7 @@ impl SettingsStore {
     pub async fn work_format_orders(&self) -> Result<Vec<WorkFormatOrder>, SettingsError> {
         self.db
             .run(|c| {
-                let mut stmt = c.prepare(
+                let mut stmt = c.prepare_cached(
                     "SELECT p.work_id, w.dir_name, p.format_order, p.updated_at
                        FROM work_subtitle_policy p
                        JOIN works w ON w.id = p.work_id

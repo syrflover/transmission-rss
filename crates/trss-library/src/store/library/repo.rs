@@ -42,7 +42,7 @@ fn folder_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WatchFolder> {
 }
 
 pub(super) fn folders(conn: &Connection) -> rusqlite::Result<Vec<WatchFolder>> {
-    let mut stmt = conn.prepare(&format!(
+    let mut stmt = conn.prepare_cached(&format!(
         "SELECT {FOLDER_COLUMNS} FROM watch_folders WHERE unregistered_at IS NULL ORDER BY rowid"
     ))?;
     let rows = stmt.query_map([], folder_from_row)?;
@@ -50,13 +50,10 @@ pub(super) fn folders(conn: &Connection) -> rusqlite::Result<Vec<WatchFolder>> {
 }
 
 pub(super) fn folder(conn: &Connection, id: &str) -> rusqlite::Result<Option<WatchFolder>> {
-    conn.query_row(
-        &format!(
-            "SELECT {FOLDER_COLUMNS} FROM watch_folders WHERE id = ?1 AND unregistered_at IS NULL"
-        ),
-        [id],
-        folder_from_row,
-    )
+    conn.prepare_cached(&format!(
+        "SELECT {FOLDER_COLUMNS} FROM watch_folders WHERE id = ?1 AND unregistered_at IS NULL"
+    ))?
+    .query_row([id], folder_from_row)
     .optional()
 }
 
@@ -64,7 +61,7 @@ pub(super) fn summaries(
     conn: &Connection,
     new_since: Millis,
 ) -> rusqlite::Result<Vec<FolderSummary>> {
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare_cached(
         "SELECT f.id, f.path, f.created_at, f.baselined, f.checked_at, f.error, f.automatic, f.watch_note,
                 (SELECT count(*) FROM works w WHERE w.watch_folder_id = f.id),
                 (SELECT count(*) FROM works w WHERE w.watch_folder_id = f.id AND w.missing = 1),
@@ -131,23 +128,23 @@ fn insert_folder(
     now: Millis,
 ) -> Result<String, LibraryError> {
     let back: Option<String> = tx
-        .query_row(
+        .prepare_cached(
             "UPDATE watch_folders SET unregistered_at = NULL, automatic = ?2, created_at = ?3,
                     baselined = 0, error = NULL, watch_note = NULL
               WHERE path = ?1 AND unregistered_at IS NOT NULL
              RETURNING id",
-            params![path, automatic, now],
-            |row| row.get(0),
-        )
+        )?
+        .query_row(params![path, automatic, now], |row| row.get(0))
         .optional()?;
     if let Some(id) = back {
         return Ok(id);
     }
     let id = new_id();
-    let inserted = tx.execute(
-        "INSERT INTO watch_folders (id, path, created_at, automatic) VALUES (?1, ?2, ?3, ?4)",
-        params![id, path, now, automatic],
-    );
+    let inserted = tx
+        .prepare_cached(
+            "INSERT INTO watch_folders (id, path, created_at, automatic) VALUES (?1, ?2, ?3, ?4)",
+        )?
+        .execute(params![id, path, now, automatic]);
     match inserted {
         Ok(_) => Ok(id),
         Err(rusqlite::Error::SqliteFailure(e, _))
@@ -164,21 +161,21 @@ fn insert_folder(
 /// to them, so registering the same path again finds them under the same IDs.
 /// How many works left the library; `None` when no such folder is registered.
 fn detach_folder(tx: &Transaction<'_>, id: &str, now: Millis) -> rusqlite::Result<Option<usize>> {
-    let works: i64 = tx.query_row(
-        "SELECT count(*) FROM works WHERE watch_folder_id = ?1",
-        [id],
-        |row| row.get(0),
-    )?;
-    let detached = tx.execute(
-        "UPDATE watch_folders SET unregistered_at = ?2, automatic = 0, watch_note = NULL
+    let works: i64 = tx
+        .prepare_cached("SELECT count(*) FROM works WHERE watch_folder_id = ?1")?
+        .query_row([id], |row| row.get(0))?;
+    let detached = tx
+        .prepare_cached(
+            "UPDATE watch_folders SET unregistered_at = ?2, automatic = 0, watch_note = NULL
           WHERE id = ?1 AND unregistered_at IS NULL",
-        params![id, now],
-    )?;
+        )?
+        .execute(params![id, now])?;
     if detached == 0 {
         return Ok(None);
     }
     // Work folders waiting to be readable are a reading's state, not a record.
-    tx.execute("DELETE FROM unread_works WHERE watch_folder_id = ?1", [id])?;
+    tx.prepare_cached("DELETE FROM unread_works WHERE watch_folder_id = ?1")?
+        .execute([id])?;
     Ok(Some(works as usize))
 }
 
@@ -214,7 +211,7 @@ pub(super) fn apply_automatic(
         // An unregistered folder holding the path keeps it (it is that path's
         // to come back to); this folder then keeps the path it has, which is
         // the same place written otherwise.
-        tx.execute(
+        tx.prepare_cached(
             "UPDATE watch_folders SET automatic = 1,
                     path = CASE WHEN EXISTS (SELECT 1 FROM watch_folders o
                                               WHERE o.path = ?2 AND o.id <> ?1)
@@ -224,8 +221,8 @@ pub(super) fn apply_automatic(
                                                    WHERE o.path = ?2 AND o.id <> ?1)
                                       THEN watch_note END
               WHERE id = ?1",
-            params![id, path],
-        )?;
+        )?
+        .execute(params![id, path])?;
         applied.converted += 1;
     }
     for new in &plan.add {
@@ -246,11 +243,8 @@ pub(super) fn sync_automatic(
 ) -> Result<AutomaticApplied, LibraryError> {
     let tx = begin(conn)?;
     let version: Option<i64> = tx
-        .query_row(
-            "SELECT version FROM collection_settings WHERE id = 1",
-            [],
-            |row| row.get(0),
-        )
+        .prepare_cached("SELECT version FROM collection_settings WHERE id = 1")?
+        .query_row([], |row| row.get(0))
         .optional()?;
     if version.unwrap_or(0) != settings_version {
         return Err(LibraryError::Changed);
@@ -267,20 +261,21 @@ pub(super) fn ensure_automatic(
     now: Millis,
 ) -> rusqlite::Result<()> {
     // A folder unregistered at the path comes back with its works, read anew.
-    let updated = tx.execute(
-        "UPDATE watch_folders SET automatic = 1,
+    let updated = tx
+        .prepare_cached(
+            "UPDATE watch_folders SET automatic = 1,
                 baselined = CASE WHEN unregistered_at IS NULL THEN baselined ELSE 0 END,
                 error = CASE WHEN unregistered_at IS NULL THEN error END,
                 created_at = CASE WHEN unregistered_at IS NULL THEN created_at ELSE ?2 END,
                 unregistered_at = NULL
           WHERE path = ?1",
-        params![path, now],
-    )?;
+        )?
+        .execute(params![path, now])?;
     if updated == 0 {
-        tx.execute(
+        tx.prepare_cached(
             "INSERT INTO watch_folders (id, path, created_at, automatic) VALUES (?1, ?2, ?3, 1)",
-            params![new_id(), path, now],
-        )?;
+        )?
+        .execute(params![new_id(), path, now])?;
     }
     Ok(())
 }
@@ -317,10 +312,10 @@ pub(super) fn set_watch_note(
     id: &str,
     note: Option<&str>,
 ) -> rusqlite::Result<()> {
-    conn.execute(
+    conn.prepare_cached(
         "UPDATE watch_folders SET watch_note = ?2 WHERE id = ?1 AND unregistered_at IS NULL",
-        params![id, note],
-    )?;
+    )?
+    .execute(params![id, note])?;
     Ok(())
 }
 
@@ -344,11 +339,10 @@ fn apply(
 ) -> rusqlite::Result<Option<ScanReport>> {
     let in_scope = |name: &str| scope.is_none_or(|names| names.contains(name));
     let baselined: Option<i64> = tx
-        .query_row(
+        .prepare_cached(
             "SELECT baselined FROM watch_folders WHERE id = ?1 AND unregistered_at IS NULL",
-            [folder_id],
-            |row| row.get(0),
-        )
+        )?
+        .query_row([folder_id], |row| row.get(0))
         .optional()?;
     let Some(baselined) = baselined else {
         return Ok(None);
@@ -358,10 +352,10 @@ fn apply(
         Err(error) => {
             // What was known stays: a folder that cannot be read says nothing
             // about what is in it.
-            tx.execute(
+            tx.prepare_cached(
                 "UPDATE watch_folders SET checked_at = ?2, error = ?3 WHERE id = ?1",
-                params![folder_id, now, error.message],
-            )?;
+            )?
+            .execute(params![folder_id, now, error.message])?;
             return Ok(Some(ScanReport {
                 error: Some(error.message.clone()),
                 ..ScanReport::default()
@@ -380,8 +374,9 @@ fn apply(
     // scan was, `None` for the first one).
     let mut pending: HashMap<String, Option<Millis>> = HashMap::new();
     {
-        let mut stmt =
-            tx.prepare("SELECT dir_name, seen_at FROM unread_works WHERE watch_folder_id = ?1")?;
+        let mut stmt = tx.prepare_cached(
+            "SELECT dir_name, seen_at FROM unread_works WHERE watch_folder_id = ?1",
+        )?;
         let rows = stmt.query_map([folder_id], |row| Ok((row.get(0)?, row.get(1)?)))?;
         for row in rows {
             let (name, seen_at): (String, Option<Millis>) = row?;
@@ -393,8 +388,8 @@ fn apply(
 
     let mut known: HashMap<String, KnownWork> = HashMap::new();
     {
-        let mut stmt =
-            tx.prepare("SELECT dir_name, id, missing FROM works WHERE watch_folder_id = ?1")?;
+        let mut stmt = tx
+            .prepare_cached("SELECT dir_name, id, missing FROM works WHERE watch_folder_id = ?1")?;
         let rows = stmt.query_map([folder_id], |row| {
             Ok((
                 row.get::<_, String>(0)?,
@@ -424,11 +419,11 @@ fn apply(
                 // Its records stay; a work not recorded yet waits for a scan
                 // that can read it, and is dated by this one.
                 if !known.contains_key(dir_name) && !pending.contains_key(dir_name) {
-                    tx.execute(
+                    tx.prepare_cached(
                         "INSERT INTO unread_works (watch_folder_id, dir_name, seen_at)
                          VALUES (?1, ?2, ?3)",
-                        params![folder_id, dir_name, stamp],
-                    )?;
+                    )?
+                    .execute(params![folder_id, dir_name, stamp])?;
                 }
                 unreadable.push((dir_name, reason));
                 report.works_unreadable += 1;
@@ -438,7 +433,8 @@ fn apply(
                 let id = match known.get(&work.dir_name) {
                     Some(known) => {
                         if known.missing {
-                            tx.execute("UPDATE works SET missing = 0 WHERE id = ?1", [&known.id])?;
+                            tx.prepare_cached("UPDATE works SET missing = 0 WHERE id = ?1")?
+                                .execute([&known.id])?;
                         }
                         known.id.clone()
                     }
@@ -454,11 +450,16 @@ fn apply(
                             }
                             None => stamp,
                         };
-                        tx.execute(
+                        tx.prepare_cached(
                             "INSERT INTO works (id, watch_folder_id, dir_name, first_seen_at)
                              VALUES (?1, ?2, ?3, ?4)",
-                            params![id, folder_id, work.dir_name, first_seen],
-                        )?;
+                        )?
+                        .execute(params![
+                            id,
+                            folder_id,
+                            work.dir_name,
+                            first_seen
+                        ])?;
                         report.works_added += 1;
                         id
                     }
@@ -474,44 +475,43 @@ fn apply(
             continue;
         }
         if !work.missing {
-            tx.execute("UPDATE works SET missing = 1 WHERE id = ?1", [&work.id])?;
+            tx.prepare_cached("UPDATE works SET missing = 1 WHERE id = ?1")?
+                .execute([&work.id])?;
         }
     }
     // A pending folder that was read is a work now, and one that is gone is
     // not waiting for anything.
     for name in pending.keys() {
         if !unreadable.iter().any(|(n, _)| n == name) {
-            tx.execute(
+            tx.prepare_cached(
                 "DELETE FROM unread_works WHERE watch_folder_id = ?1 AND dir_name = ?2",
-                params![folder_id, name],
-            )?;
+            )?
+            .execute(params![folder_id, name])?;
         }
     }
-    report.works_missing = tx.query_row(
-        "SELECT count(*) FROM works WHERE watch_folder_id = ?1 AND missing = 1",
-        [folder_id],
-        |row| row.get::<_, i64>(0),
-    )? as usize;
+    report.works_missing = tx
+        .prepare_cached("SELECT count(*) FROM works WHERE watch_folder_id = ?1 AND missing = 1")?
+        .query_row([folder_id], |row| row.get::<_, i64>(0))? as usize;
 
     let error = unreadable_sentence(&unreadable);
     if scope.is_some() {
         // Only some works were read: that can add to the folder's error, not
         // clear what other works or an earlier folder-wide read left there.
         match &error {
-            Some(error) => tx.execute(
-                "UPDATE watch_folders SET checked_at = ?2, error = ?3 WHERE id = ?1",
-                params![folder_id, now, error],
-            )?,
-            None => tx.execute(
-                "UPDATE watch_folders SET checked_at = ?2 WHERE id = ?1",
-                params![folder_id, now],
-            )?,
+            Some(error) => tx
+                .prepare_cached(
+                    "UPDATE watch_folders SET checked_at = ?2, error = ?3 WHERE id = ?1",
+                )?
+                .execute(params![folder_id, now, error])?,
+            None => tx
+                .prepare_cached("UPDATE watch_folders SET checked_at = ?2 WHERE id = ?1")?
+                .execute(params![folder_id, now])?,
         };
     } else {
-        tx.execute(
+        tx.prepare_cached(
             "UPDATE watch_folders SET checked_at = ?2, error = ?3, baselined = 1 WHERE id = ?1",
-            params![folder_id, now, error],
-        )?;
+        )?
+        .execute(params![folder_id, now, error])?;
     }
     report.error = error;
     Ok(Some(report))
@@ -562,7 +562,7 @@ fn sync_work(
 ) -> rusqlite::Result<()> {
     let mut known: HashMap<String, KnownFile> = HashMap::new();
     {
-        let mut stmt = tx.prepare(
+        let mut stmt = tx.prepare_cached(
             "SELECT path, season, episode, kind, added_at, creator_source_id, creator_version,
                     creator_set_at
                FROM media_files WHERE work_id = ?1",
@@ -602,10 +602,8 @@ fn sync_work(
         if unchanged {
             continue;
         }
-        tx.execute(
-            "DELETE FROM media_files WHERE work_id = ?1 AND path = ?2",
-            params![work_id, path],
-        )?;
+        tx.prepare_cached("DELETE FROM media_files WHERE work_id = ?1 AND path = ?2")?
+            .execute(params![work_id, path])?;
         if now.is_some() {
             carried.insert(
                 path,
@@ -623,33 +621,29 @@ fn sync_work(
     report.files_removed += removed;
     if removed > 0 || !carried.is_empty() {
         // An episode lives only while a file of it does.
-        tx.execute(
+        tx.prepare_cached(
             "DELETE FROM episodes WHERE work_id = ?1 AND NOT EXISTS (
                  SELECT 1 FROM media_files m
                   WHERE m.work_id = episodes.work_id AND m.season = episodes.season
                     AND m.episode = episodes.episode)",
-            [work_id],
-        )?;
+        )?
+        .execute([work_id])?;
     }
 
     // Seasons that have a folder.
     let recorded: HashSet<u32> = {
-        let mut stmt = tx.prepare("SELECT number FROM seasons WHERE work_id = ?1")?;
+        let mut stmt = tx.prepare_cached("SELECT number FROM seasons WHERE work_id = ?1")?;
         let rows = stmt.query_map([work_id], |row| row.get::<_, u32>(0))?;
         rows.collect::<rusqlite::Result<_>>()?
     };
     for season in recorded.difference(&scanned.seasons.iter().copied().collect()) {
-        tx.execute(
-            "DELETE FROM seasons WHERE work_id = ?1 AND number = ?2",
-            params![work_id, season],
-        )?;
+        tx.prepare_cached("DELETE FROM seasons WHERE work_id = ?1 AND number = ?2")?
+            .execute(params![work_id, season])?;
     }
     for season in &scanned.seasons {
         if !recorded.contains(season) {
-            tx.execute(
-                "INSERT INTO seasons (work_id, number) VALUES (?1, ?2)",
-                params![work_id, season],
-            )?;
+            tx.prepare_cached("INSERT INTO seasons (work_id, number) VALUES (?1, ?2)")?
+                .execute(params![work_id, season])?;
         }
     }
 
@@ -683,53 +677,51 @@ fn sync_work(
                 (stamp, None, now, None)
             }
         };
-        tx.execute(
+        tx.prepare_cached(
             "INSERT OR IGNORE INTO episodes (work_id, season, episode) VALUES (?1, ?2, ?3)",
-            params![work_id, file.season, file.episode],
-        )?;
-        tx.execute(
+        )?
+        .execute(params![work_id, file.season, file.episode])?;
+        tx.prepare_cached(
             "INSERT INTO media_files
                  (work_id, path, season, episode, kind, added_at, creator_source_id,
                   creator_version, creator_set_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![
-                work_id,
-                file.path,
-                file.season,
-                file.episode,
-                file.kind.code(),
-                added_at,
-                creator,
-                creator_version,
-                creator_set_at
-            ],
-        )?;
+        )?
+        .execute(params![
+            work_id,
+            file.path,
+            file.season,
+            file.episode,
+            file.kind.code(),
+            added_at,
+            creator,
+            creator_version,
+            creator_set_at
+        ])?;
     }
 
-    tx.execute(
-        "DELETE FROM unrecognized_files WHERE work_id = ?1",
-        [work_id],
-    )?;
+    tx.prepare_cached("DELETE FROM unrecognized_files WHERE work_id = ?1")?
+        .execute([work_id])?;
     for file in &scanned.unrecognized {
         // A size past `i64` is no file a disk holds; it is recorded as unread.
         let check = file
             .check
             .and_then(|c| Some((i64::try_from(c.size).ok()?, c.mtime_ns)));
-        tx.execute(
+        tx.prepare_cached(
             "INSERT OR REPLACE INTO unrecognized_files (work_id, path, reason, size, mtime_ns)
              VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![
-                work_id,
-                file.path,
-                file.reason.code(),
-                check.map(|c| c.0),
-                check.map(|c| c.1)
-            ],
-        )?;
+        )?
+        .execute(params![
+            work_id,
+            file.path,
+            file.reason.code(),
+            check.map(|c| c.0),
+            check.map(|c| c.1)
+        ])?;
     }
     // A person's `확인함` lasts while the scan finds the same video at its
     // path; one it could not read this time keeps it (`checks.rs`).
-    tx.execute(
+    tx.prepare_cached(
         "DELETE FROM unrecognized_checks
           WHERE work_id = ?1
             AND NOT EXISTS (
@@ -738,8 +730,8 @@ fn sync_work(
                    AND (u.size IS NULL
                         OR (u.size = unrecognized_checks.size
                             AND u.mtime_ns = unrecognized_checks.mtime_ns)))",
-        [work_id],
-    )?;
+    )?
+    .execute([work_id])?;
     Ok(())
 }
 
@@ -751,11 +743,10 @@ pub(super) fn follow_move(
 ) -> rusqlite::Result<Followed> {
     let tx = begin(conn)?;
     let find = |folder: &str| -> rusqlite::Result<Option<(String, Option<Millis>)>> {
-        tx.query_row(
+        tx.prepare_cached(
             "SELECT id, first_seen_at FROM works WHERE watch_folder_id = ?1 AND dir_name = ?2",
-            params![folder, name],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
+        )?
+        .query_row(params![folder, name], |row| Ok((row.get(0)?, row.get(1)?)))
         .optional()
     };
     let Some((moved, moved_seen)) = find(from)? else {
@@ -763,10 +754,8 @@ pub(super) fn follow_move(
     };
     let followed = match find(to)? {
         None => {
-            tx.execute(
-                "UPDATE works SET watch_folder_id = ?2, missing = 0 WHERE id = ?1",
-                params![moved, to],
-            )?;
+            tx.prepare_cached("UPDATE works SET watch_folder_id = ?2, missing = 0 WHERE id = ?1")?
+                .execute(params![moved, to])?;
             Followed::Moved
         }
         Some((kept, kept_seen)) => {
@@ -783,11 +772,10 @@ pub(super) fn follow_move(
                 (Some(a), Some(b)) => Some(a.min(b)),
                 _ => None,
             };
-            tx.execute(
-                "UPDATE works SET first_seen_at = ?2, missing = 0 WHERE id = ?1",
-                params![kept, seen],
-            )?;
-            tx.execute("DELETE FROM works WHERE id = ?1", [&moved])?;
+            tx.prepare_cached("UPDATE works SET first_seen_at = ?2, missing = 0 WHERE id = ?1")?
+                .execute(params![kept, seen])?;
+            tx.prepare_cached("DELETE FROM works WHERE id = ?1")?
+                .execute([&moved])?;
             Followed::Merged
         }
     };
@@ -798,29 +786,29 @@ pub(super) fn follow_move(
 /// Copies what is recorded for work `from` into work `into`; what `into`
 /// already has of the same key stays as it is.
 fn merge_work(tx: &Transaction<'_>, from: &str, into: &str) -> rusqlite::Result<()> {
-    tx.execute(
+    tx.prepare_cached(
         "INSERT OR IGNORE INTO seasons (work_id, number)
          SELECT ?2, number FROM seasons WHERE work_id = ?1",
-        params![from, into],
-    )?;
-    tx.execute(
+    )?
+    .execute(params![from, into])?;
+    tx.prepare_cached(
         "INSERT OR IGNORE INTO episodes (work_id, season, episode)
          SELECT ?2, season, episode FROM episodes WHERE work_id = ?1",
-        params![from, into],
-    )?;
-    tx.execute(
+    )?
+    .execute(params![from, into])?;
+    tx.prepare_cached(
         "INSERT OR IGNORE INTO media_files
              (work_id, path, season, episode, kind, added_at, creator_source_id, creator_version,
               creator_set_at)
          SELECT ?2, path, season, episode, kind, added_at, creator_source_id, creator_version,
                 creator_set_at
            FROM media_files WHERE work_id = ?1",
-        params![from, into],
-    )?;
+    )?
+    .execute(params![from, into])?;
     // A subtitle both works have: the one with a creator named wins over one
     // with none (`into`'s creator stays when both are named), and the version
     // goes past both so no screen that read either can change it.
-    tx.execute(
+    tx.prepare_cached(
         "UPDATE media_files
             SET creator_source_id = (SELECT f.creator_source_id FROM media_files f
                                       WHERE f.work_id = ?1 AND f.path = media_files.path),
@@ -833,18 +821,18 @@ fn merge_work(tx: &Transaction<'_>, from: &str, into: &str) -> rusqlite::Result<
             AND EXISTS (SELECT 1 FROM media_files f
                          WHERE f.work_id = ?1 AND f.path = media_files.path
                            AND f.kind = 'subtitle' AND f.creator_source_id IS NOT NULL)",
-        params![from, into],
-    )?;
-    tx.execute(
+    )?
+    .execute(params![from, into])?;
+    tx.prepare_cached(
         "INSERT OR IGNORE INTO unrecognized_files (work_id, path, reason, size, mtime_ns)
          SELECT ?2, path, reason, size, mtime_ns FROM unrecognized_files WHERE work_id = ?1",
-        params![from, into],
-    )?;
-    tx.execute(
+    )?
+    .execute(params![from, into])?;
+    tx.prepare_cached(
         "INSERT OR IGNORE INTO unrecognized_checks (work_id, path, size, mtime_ns, checked_at)
          SELECT ?2, path, size, mtime_ns, checked_at FROM unrecognized_checks WHERE work_id = ?1",
-        params![from, into],
-    )?;
+    )?
+    .execute(params![from, into])?;
     Ok(())
 }
 
@@ -862,12 +850,12 @@ fn merge_work(tx: &Transaction<'_>, from: &str, into: &str) -> rusqlite::Result<
 /// mapping they belong to. A mapping written here has a new version (the next
 /// of `subtitle_mapping_clock`), since it is not the row a screen read.
 fn merge_subtitle_mappings(tx: &Transaction<'_>, from: &str, into: &str) -> rusqlite::Result<()> {
-    let version: i64 = tx.query_row(
-        "UPDATE subtitle_mapping_clock SET version = version + 1 RETURNING version",
-        [],
-        |r| r.get(0),
-    )?;
-    tx.execute(
+    let version: i64 = tx
+        .prepare_cached(
+            "UPDATE subtitle_mapping_clock SET version = version + 1 RETURNING version",
+        )?
+        .query_row([], |r| r.get(0))?;
+    tx.prepare_cached(
         "INSERT INTO subtitle_episode_mappings
              (work_id, season, source_id, kind, episode_offset, evidence, decided_at,
               retired_offset, version)
@@ -879,8 +867,8 @@ fn merge_subtitle_mappings(tx: &Transaction<'_>, from: &str, into: &str) -> rusq
              evidence = excluded.evidence, decided_at = excluded.decided_at,
              retired_offset = excluded.retired_offset, version = excluded.version
          WHERE excluded.kind = 'user'",
-        params![from, into, version],
-    )?;
+    )?
+    .execute(params![from, into, version])?;
     // The (season, source) pairs whose mapping `into` has from `from` now.
     let moved = "SELECT m.season, m.source_id
                    FROM subtitle_episode_mappings m
@@ -889,46 +877,38 @@ fn merge_subtitle_mappings(tx: &Transaction<'_>, from: &str, into: &str) -> rusq
                   WHERE m.work_id = ?2 AND m.kind = f.kind
                     AND m.episode_offset IS f.episode_offset AND m.evidence = f.evidence
                     AND m.decided_at = f.decided_at";
-    tx.execute(
-        &format!(
-            "DELETE FROM subtitle_episode_exceptions
+    tx.prepare_cached(&format!(
+        "DELETE FROM subtitle_episode_exceptions
               WHERE work_id = ?2 AND (season, source_id) IN ({moved})"
-        ),
-        params![from, into],
-    )?;
-    tx.execute(
-        &format!(
-            "INSERT INTO subtitle_episode_exceptions
+    ))?
+    .execute(params![from, into])?;
+    tx.prepare_cached(&format!(
+        "INSERT INTO subtitle_episode_exceptions
                  (work_id, season, source_id, episode_key, episode, target)
              SELECT ?2, season, source_id, episode_key, episode, target
                FROM subtitle_episode_exceptions
               WHERE work_id = ?1 AND (season, source_id) IN ({moved})"
-        ),
-        params![from, into],
-    )?;
-    tx.execute(
-        &format!(
-            "DELETE FROM subtitle_mapping_conflicts
+    ))?
+    .execute(params![from, into])?;
+    tx.prepare_cached(&format!(
+        "DELETE FROM subtitle_mapping_conflicts
               WHERE work_id = ?2 AND (season, source_id) IN ({moved})"
-        ),
-        params![from, into],
-    )?;
-    tx.execute(
-        &format!(
-            "INSERT OR IGNORE INTO subtitle_mapping_conflicts
+    ))?
+    .execute(params![from, into])?;
+    tx.prepare_cached(&format!(
+        "INSERT OR IGNORE INTO subtitle_mapping_conflicts
                  (work_id, season, source_id, episode, reason, found_at)
              SELECT ?2, season, source_id, episode, reason, found_at
                FROM subtitle_mapping_conflicts
               WHERE work_id = ?1 AND (season, source_id) IN ({moved})"
-        ),
-        params![from, into],
-    )?;
+    ))?
+    .execute(params![from, into])?;
     Ok(())
 }
 
 pub(super) fn works(conn: &Connection, folder_id: &str) -> rusqlite::Result<Vec<WorkRecord>> {
     let mut works: Vec<WorkRecord> = {
-        let mut stmt = conn.prepare(
+        let mut stmt = conn.prepare_cached(
             "SELECT id, watch_folder_id, dir_name, first_seen_at, missing
                FROM works WHERE watch_folder_id = ?1 ORDER BY dir_name",
         )?;
@@ -948,12 +928,12 @@ pub(super) fn works(conn: &Connection, folder_id: &str) -> rusqlite::Result<Vec<
     };
     for work in &mut works {
         let mut stmt =
-            conn.prepare("SELECT number FROM seasons WHERE work_id = ?1 ORDER BY number")?;
+            conn.prepare_cached("SELECT number FROM seasons WHERE work_id = ?1 ORDER BY number")?;
         work.seasons = stmt
             .query_map([&work.id], |row| row.get(0))?
             .collect::<rusqlite::Result<_>>()?;
 
-        let mut stmt = conn.prepare(
+        let mut stmt = conn.prepare_cached(
             "SELECT m.season, m.episode, m.path, m.kind, m.added_at,
                     m.creator_source_id, s.creator_name, s.anime_no, m.creator_version
                FROM media_files m LEFT JOIN subtitle_sources s ON s.id = m.creator_source_id
@@ -987,7 +967,7 @@ pub(super) fn works(conn: &Connection, folder_id: &str) -> rusqlite::Result<Vec<
             }
         }
 
-        let mut stmt = conn.prepare(super::UNRECOGNIZED_OF_WORK)?;
+        let mut stmt = conn.prepare_cached(super::UNRECOGNIZED_OF_WORK)?;
         let rows = stmt.query_map([&work.id], |row| {
             Ok(UnrecognizedRecord {
                 path: row.get(0)?,
@@ -1002,9 +982,6 @@ pub(super) fn works(conn: &Connection, folder_id: &str) -> rusqlite::Result<Vec<
 
 /// See [`super::LibraryStore::generation`].
 pub(super) fn generation(conn: &Connection) -> rusqlite::Result<i64> {
-    conn.query_row(
-        "SELECT generation FROM library_generation WHERE id = 1",
-        [],
-        |row| row.get(0),
-    )
+    conn.prepare_cached("SELECT generation FROM library_generation WHERE id = 1")?
+        .query_row([], |row| row.get(0))
 }

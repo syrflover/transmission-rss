@@ -52,7 +52,7 @@ fn select_one(
     sql: &str,
     args: impl rusqlite::Params,
 ) -> Result<Option<Command>> {
-    let mut stmt = conn.prepare(sql)?;
+    let mut stmt = conn.prepare_cached(sql)?;
     let mut rows = stmt.query(args)?;
     match rows.next()? {
         Some(row) => Ok(Some(command_from_row(row)?)),
@@ -96,11 +96,11 @@ pub fn accept(conn: &mut Connection, new: &NewCommand, now: Millis) -> Result<Ac
         }
     }
 
-    tx.execute(
+    tx.prepare_cached(
         "INSERT INTO commands (id, kind, payload, subject, state, attempts, created_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, 'pending', 0, ?5, ?5)",
-        params![new.id, new.kind, new.payload, new.subject, now],
-    )?;
+    )?
+    .execute(params![new.id, new.kind, new.payload, new.subject, now])?;
     let created = get(&tx, &new.id)?.expect("the command was just inserted");
     tx.commit()?;
     Ok(Accepted::Created(created))
@@ -160,11 +160,11 @@ pub fn latest_for_subjects(
 }
 
 pub fn has_open(conn: &Connection) -> Result<bool> {
-    Ok(conn.query_row(
-        "SELECT EXISTS (SELECT 1 FROM commands WHERE state IN ('pending', 'running'))",
-        [],
-        |row| row.get(0),
-    )?)
+    Ok(conn
+        .prepare_cached(
+            "SELECT EXISTS (SELECT 1 FROM commands WHERE state IN ('pending', 'running'))",
+        )?
+        .query_row([], |row| row.get(0))?)
 }
 
 /// `ids` as the JSON array `json_each` reads.
@@ -173,12 +173,12 @@ fn id_list(ids: &[String]) -> String {
 }
 
 pub fn running_count_excluding(conn: &Connection, excluded: &[String]) -> Result<usize> {
-    let count: i64 = conn.query_row(
-        "SELECT count(*) FROM commands WHERE state = 'running'
+    let count: i64 = conn
+        .prepare_cached(
+            "SELECT count(*) FROM commands WHERE state = 'running'
          AND id NOT IN (SELECT value FROM json_each(?1))",
-        [id_list(excluded)],
-        |row| row.get(0),
-    )?;
+        )?
+        .query_row([id_list(excluded)], |row| row.get(0))?;
     Ok(count as usize)
 }
 
@@ -221,11 +221,11 @@ pub fn claim_next_excluding(
             continue;
         }
 
-        tx.execute(
+        tx.prepare_cached(
             "UPDATE commands SET state = 'running', attempts = attempts + 1, updated_at = ?2
              WHERE id = ?1",
-            params![command.id, now],
-        )?;
+        )?
+        .execute(params![command.id, now])?;
         let claimed = get(&tx, &command.id)?.expect("the command was just updated");
         tx.commit()?;
         return Ok(Some(claimed));
@@ -234,28 +234,26 @@ pub fn claim_next_excluding(
 
 pub fn note_unconfirmed_add(conn: &mut Connection, id: &str, now: Millis) -> Result<bool> {
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let changed = tx.execute(
-        "UPDATE commands SET add_unconfirmed = 1, updated_at = ?2
+    let changed = tx
+        .prepare_cached(
+            "UPDATE commands SET add_unconfirmed = 1, updated_at = ?2
          WHERE id = ?1 AND state = 'running'",
-        params![id, now],
-    )?;
+        )?
+        .execute(params![id, now])?;
     tx.commit()?;
     Ok(changed == 1)
 }
 
 pub fn note_original_name(conn: &mut Connection, id: &str, name: &str) -> Result<Option<String>> {
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    tx.execute(
+    tx.prepare_cached(
         "UPDATE commands SET original_name = ?2
          WHERE id = ?1 AND state = 'running' AND original_name IS NULL",
-        params![id, name],
-    )?;
+    )?
+    .execute(params![id, name])?;
     let recorded = tx
-        .query_row(
-            "SELECT original_name FROM commands WHERE id = ?1 AND state = 'running'",
-            params![id],
-            |row| row.get(0),
-        )
+        .prepare_cached("SELECT original_name FROM commands WHERE id = ?1 AND state = 'running'")?
+        .query_row(params![id], |row| row.get(0))
         .optional()?
         .flatten();
     tx.commit()?;
@@ -271,12 +269,13 @@ fn end(
     add_unconfirmed: bool,
 ) -> Result<bool> {
     let outcome = serde_json::to_string(outcome).expect("an outcome serializes");
-    let changed = conn.execute(
-        "UPDATE commands
+    let changed = conn
+        .prepare_cached(
+            "UPDATE commands
          SET state = ?2, outcome = ?3, updated_at = ?4, finished_at = ?4, add_unconfirmed = ?5
          WHERE id = ?1 AND state IN ('pending', 'running')",
-        params![id, state.code(), outcome, now, add_unconfirmed],
-    )?;
+        )?
+        .execute(params![id, state.code(), outcome, now, add_unconfirmed])?;
     Ok(changed == 1)
 }
 
@@ -295,12 +294,12 @@ pub fn finish(
 }
 
 pub fn unconfirmed_adds_since(conn: &Connection, since: Option<Millis>) -> Result<usize> {
-    let count: i64 = conn.query_row(
-        "SELECT count(*) FROM commands
+    let count: i64 = conn
+        .prepare_cached(
+            "SELECT count(*) FROM commands
          WHERE add_unconfirmed = 1 AND finished_at IS NOT NULL
            AND (?1 IS NULL OR finished_at >= ?1)",
-        [since],
-        |row| row.get(0),
-    )?;
+        )?
+        .query_row([since], |row| row.get(0))?;
     Ok(count as usize)
 }

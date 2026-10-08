@@ -570,24 +570,23 @@ fn record_unpacked(
                 Ok(format) => (Some(format.code()), None),
                 Err(reason) => (None, Some(reason.as_str())),
             };
-            tx.execute(
+            tx.prepare_cached(
                 "INSERT INTO subtitle_job_members
                  (file_id, position, path, size, sha256, format, reason)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                params![
-                    m.file_id,
-                    m.position,
-                    m.path,
-                    m.size as i64,
-                    m.sha256,
-                    format,
-                    reason
-                ],
-            )?;
+            )?
+            .execute(params![
+                m.file_id,
+                m.position,
+                m.path,
+                m.size as i64,
+                m.sha256,
+                format,
+                reason
+            ])?;
         }
-        tx.execute(
-            "UPDATE subtitle_job_files SET unpacked_at = ?2, unpack_retry_at = NULL, updated_at = ?2
-             WHERE id = ?1",
+        tx.prepare_cached("UPDATE subtitle_job_files SET unpacked_at = ?2, unpack_retry_at = NULL, updated_at = ?2
+             WHERE id = ?1")?.execute(
             params![file_id, now],
         )?;
         mark_volumes(&tx, file_id, later, now)?;
@@ -607,13 +606,13 @@ fn record_refused(
 ) -> Result<(), JobError> {
     durable(c, |c| {
         let tx = c.transaction()?;
-        tx.execute(
+        tx.prepare_cached(
             "UPDATE subtitle_job_files
                 SET unpack_error = ?2, unpack_retry_at = NULL,
                     unpack_tries = unpack_tries + (unpack_tries > 0), updated_at = ?3
               WHERE id = ?1",
-            params![file_id, reason, now],
-        )?;
+        )?
+        .execute(params![file_id, reason, now])?;
         mark_volumes(&tx, file_id, later, now)?;
         tx.commit()?;
         Ok(())
@@ -635,13 +634,13 @@ fn record_failed_try(
     let error = retry_at.is_none().then_some(reason);
     durable(c, |c| {
         let tx = c.transaction()?;
-        tx.execute(
+        tx.prepare_cached(
             "UPDATE subtitle_job_files
                 SET unpack_tries = ?2, unpack_failure = ?3, unpack_retry_at = ?4,
                     unpack_error = ?5, updated_at = ?6
               WHERE id = ?1",
-            params![file_id, tries, reason, retry_at, error, now],
-        )?;
+        )?
+        .execute(params![file_id, tries, reason, retry_at, error, now])?;
         mark_volumes(&tx, file_id, later, now)?;
         tx.commit()?;
         Ok(())
@@ -655,10 +654,10 @@ fn mark_volumes(
     now: Millis,
 ) -> rusqlite::Result<()> {
     for id in later {
-        c.execute(
+        c.prepare_cached(
             "UPDATE subtitle_job_files SET volume_of = ?2, updated_at = ?3 WHERE id = ?1",
-            params![id, first, now],
-        )?;
+        )?
+        .execute(params![id, first, now])?;
     }
     Ok(())
 }
@@ -668,7 +667,7 @@ fn mark_volumes(
 /// not one of them, not a later volume (its first stands for it) and not of
 /// an item whose files are unchanged since an earlier receipt.
 pub fn standing(c: &Connection, job_id: &str) -> rusqlite::Result<(Vec<String>, bool)> {
-    let mut stmt = c.prepare(
+    let mut stmt = c.prepare_cached(
         "SELECT name || ': ' || unpack_error FROM subtitle_job_files
           WHERE job_id = ?1 AND state = 'done' AND same_as IS NULL
             AND unpack_error IS NOT NULL
@@ -677,23 +676,23 @@ pub fn standing(c: &Connection, job_id: &str) -> rusqlite::Result<(Vec<String>, 
     let failures = stmt
         .query_map([job_id], |r| r.get(0))?
         .collect::<rusqlite::Result<Vec<String>>>()?;
-    let unplanned = c.query_row(
-        "SELECT EXISTS (
+    let unplanned = c
+        .prepare_cached(
+            "SELECT EXISTS (
              SELECT 1 FROM subtitle_job_files f
               WHERE f.job_id = ?1 AND f.state = 'done' AND f.same_as IS NULL
                 AND f.unpack_error IS NULL AND f.volume_of IS NULL
                 AND NOT EXISTS (SELECT 1 FROM subtitle_job_plan p WHERE p.file_id = f.id)
                 AND NOT EXISTS (SELECT 1 FROM subtitle_job_items i
                                  WHERE i.id = f.item_id AND i.unchanged_from IS NOT NULL))",
-        [job_id],
-        |r| r.get(0),
-    )?;
+        )?
+        .query_row([job_id], |r| r.get(0))?;
     Ok((failures, unplanned))
 }
 
 /// The members `file_id` was unpacked to, in order.
 pub fn members(c: &Connection, file_id: &str) -> rusqlite::Result<Vec<MemberRow>> {
-    let mut stmt = c.prepare(
+    let mut stmt = c.prepare_cached(
         "SELECT file_id, position, path, size, sha256, format, reason
          FROM subtitle_job_members WHERE file_id = ?1 ORDER BY position",
     )?;
@@ -703,7 +702,7 @@ pub fn members(c: &Connection, file_id: &str) -> rusqlite::Result<Vec<MemberRow>
 
 /// The members of the job's received archives, by archive and in order.
 pub fn job_members(c: &Connection, job_id: &str) -> rusqlite::Result<Vec<MemberRow>> {
-    let mut stmt = c.prepare(
+    let mut stmt = c.prepare_cached(
         "SELECT m.file_id, m.position, m.path, m.size, m.sha256, m.format, m.reason
          FROM subtitle_job_members m JOIN subtitle_job_files f ON f.id = m.file_id
          WHERE f.job_id = ?1 ORDER BY m.file_id, m.position",
@@ -731,12 +730,9 @@ fn member_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<MemberRow> {
 /// Where the member of `file_id` at `path` is in the unpack folder: its
 /// position.
 pub fn member_position(c: &Connection, file_id: &str, path: &str) -> rusqlite::Result<Option<i64>> {
-    c.query_row(
-        "SELECT position FROM subtitle_job_members WHERE file_id = ?1 AND path = ?2",
-        params![file_id, path],
-        |r| r.get(0),
-    )
-    .optional()
+    c.prepare_cached("SELECT position FROM subtitle_job_members WHERE file_id = ?1 AND path = ?2")?
+        .query_row(params![file_id, path], |r| r.get(0))
+        .optional()
 }
 
 #[cfg(test)]

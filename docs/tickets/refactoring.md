@@ -59,7 +59,7 @@ workspace 테스트 한 번에 새 DB를 약 1,814번 열어요. 테스트별 �
 ### SQL 문 캐시
 
 2026-10-07 [0116](../archive/tickets/5-deployed-verification/0116-allocator-measurement.md)의 측정에서, 운영 한도로 띄운 trss-web의 user CPU 표본 중 8–10%가 SQL을 해석하는 함수였어요.
-같은 날 `tests/` 폴더와 `_tests.rs` 파일을 빼고 `prepare`를 부르는 곳이 175곳이었고, `prepare_cached`를 쓰는 곳은 없었어요. 그래서 요청마다 같은 SQL을 다시 해석해요.
+같은 날 `tests/` 폴더와 `_tests.rs` 파일을 빼고 `prepare`를 부르는 곳이 175곳이었고, `prepare_cached`를 쓰는 곳은 없었어요. 그래서 요청마다 같은 SQL을 다시 해석했어요. [0117](0117-sql-statement-cache.md)에서 고쳤어요.
 
 - 되풀이해 쓰는 SQL 문은 연결의 문 캐시(`prepare_cached`)로 받아요. 캐시 크기는 쓰는 문의 수에 맞춰요.
 - 결과와 동작은 그대로예요. 마이그레이션이 스키마를 바꾼 뒤에 캐시한 문이 맞게 다시 준비되는지 확인해요.

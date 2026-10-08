@@ -1404,11 +1404,8 @@ impl Placer {
         let file_id = row.file_id.clone();
         let received_at = self
             .read(move |c| {
-                c.query_row(
-                    "SELECT updated_at FROM subtitle_job_files WHERE id = ?1",
-                    [file_id],
-                    |r| r.get::<_, Millis>(0),
-                )
+                c.prepare_cached("SELECT updated_at FROM subtitle_job_files WHERE id = ?1")?
+                    .query_row([file_id], |r| r.get::<_, Millis>(0))
             })
             .await
             .ok();

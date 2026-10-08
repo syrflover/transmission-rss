@@ -463,7 +463,7 @@ impl Recheck {
             .run(move |c| {
                 // `trigger`: what the recheck that made the job of an item
                 // received again with the same bytes had read.
-                let mut stmt = c.prepare(
+                let mut stmt = c.prepare_cached(
                     "SELECT i.id, i.observation_id, i.episode, i.post_url, i.found_at, i.state,
                             i.updated_at, r.checked_at, r.checks, r.result, r.observed,
                             r.job_id, r.result_at,
@@ -587,7 +587,7 @@ impl Recheck {
     async fn known(&self, item_id: i64) -> Result<Vec<Known>> {
         self.db
             .run(move |c| {
-                let mut stmt = c.prepare(
+                let mut stmt = c.prepare_cached(
                     "SELECT file_key, name, size, snapshot FROM subtitle_job_files
                       WHERE item_id = ?1 AND state = 'done' ORDER BY created_at, id",
                 )?;
@@ -634,15 +634,16 @@ impl Recheck {
             .run(move |c| {
                 let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
                 let now = clock();
-                let taken = tx.execute(
-                    "INSERT INTO subtitle_item_rechecks (item_id, checked_at, checks)
+                let taken = tx
+                    .prepare_cached(
+                        "INSERT INTO subtitle_item_rechecks (item_id, checked_at, checks)
                      VALUES (?1, ?2, 1)
                      ON CONFLICT (item_id) DO UPDATE
                      SET checked_at = ?2, checks = checks + 1,
                          result = NULL, observed = NULL, job_id = NULL, result_at = NULL
                      WHERE ?2 - checked_at >= ?3 OR checked_at - ?2 > ?4",
-                    params![item_id, now, INTERVAL - SLACK, CLOCK_BACK],
-                )?;
+                    )?
+                    .execute(params![item_id, now, INTERVAL - SLACK, CLOCK_BACK])?;
                 tx.commit()?;
                 Ok::<_, RecheckError>((taken == 1).then_some(now))
             })
@@ -655,12 +656,14 @@ impl Recheck {
         self.db
             .run(move |c| {
                 match before {
-                    Some(p) => c.execute(
-                        "UPDATE subtitle_item_rechecks
+                    Some(p) => c
+                        .prepare_cached(
+                            "UPDATE subtitle_item_rechecks
                          SET checked_at = ?2, checks = ?3, result = ?4, observed = ?5,
                              job_id = ?6, result_at = ?7
                          WHERE item_id = ?1 AND checked_at = ?8",
-                        params![
+                        )?
+                        .execute(params![
                             id,
                             p.checked_at,
                             p.checks,
@@ -669,13 +672,13 @@ impl Recheck {
                             p.job_id,
                             p.result_at,
                             claimed
-                        ],
-                    )?,
-                    None => c.execute(
-                        "DELETE FROM subtitle_item_rechecks
+                        ])?,
+                    None => c
+                        .prepare_cached(
+                            "DELETE FROM subtitle_item_rechecks
                          WHERE item_id = ?1 AND checked_at = ?2 AND result IS NULL",
-                        params![id, claimed],
-                    )?,
+                        )?
+                        .execute(params![id, claimed])?,
                 };
                 Ok::<_, RecheckError>(())
             })
@@ -934,12 +937,12 @@ impl Recheck {
         );
         self.db
             .run(move |c| {
-                c.execute(
+                c.prepare_cached(
                     "UPDATE subtitle_item_rechecks
                      SET result = ?2, observed = ?3, job_id = ?4, result_at = ?5
                      WHERE item_id = ?1",
-                    params![id, verdict.code(), observed, job_id, now],
-                )?;
+                )?
+                .execute(params![id, verdict.code(), observed, job_id, now])?;
                 Ok::<_, RecheckError>(())
             })
             .await?;

@@ -195,18 +195,16 @@ impl ScreenStore {
         self.db
             .run(move |c| {
                 let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-                tx.execute(
-                    &format!(
-                        "UPDATE subtitle_job_screens
+                tx.prepare_cached(&format!(
+                    "UPDATE subtitle_job_screens
                          SET prepare_at = MAX(?2, COALESCE(prepare_at, 0) + 1,
                                               COALESCE(prepared_at, 0) + 1),
                              updated_at = ?2
                          WHERE job_id = ?1
                            AND EXISTS (SELECT 1 FROM subtitle_jobs j
                                        WHERE j.id = ?1 AND {WAITS_FOR_CHECK})"
-                    ),
-                    params![id, now],
-                )?;
+                ))?
+                .execute(params![id, now])?;
                 let screen = screen(&tx, &id)?;
                 tx.commit()?;
                 Ok(screen)
@@ -225,12 +223,13 @@ impl ScreenStore {
         let (id, run) = (job_id.to_owned(), run_id.to_owned());
         self.db
             .run(move |c| {
-                Ok(c.execute(
+                Ok(c.prepare_cached(
                     "UPDATE subtitle_job_screens
                      SET input_at = MAX(?3, COALESCE(input_at, 0))
                      WHERE job_id = ?1 AND run_id = ?2",
-                    params![id, run, now],
-                )? > 0)
+                )?
+                .execute(params![id, run, now])?
+                    > 0)
             })
             .await
     }
@@ -270,13 +269,13 @@ impl ScreenStore {
                 if !asked.contains(&target) {
                     asked.push(target);
                 }
-                tx.execute(
+                tx.prepare_cached(
                     "UPDATE subtitle_job_screens
                      SET close_target_id = ?3, updated_at = ?4,
                          input_at = MAX(?4, COALESCE(input_at, 0))
                      WHERE job_id = ?1 AND run_id = ?2",
-                    params![id, run, asked.join(" "), now],
-                )?;
+                )?
+                .execute(params![id, run, asked.join(" "), now])?;
                 tx.commit()?;
                 Ok(true)
             })
@@ -306,13 +305,13 @@ impl ScreenStore {
                 if !row.pages.contains(&target) {
                     return Ok(false);
                 }
-                tx.execute(
+                tx.prepare_cached(
                     "UPDATE subtitle_job_screens
                      SET switch_target_id = ?3, updated_at = ?4,
                          input_at = MAX(?4, COALESCE(input_at, 0))
                      WHERE job_id = ?1 AND run_id = ?2",
-                    params![id, run, target, now],
-                )?;
+                )?
+                .execute(params![id, run, target, now])?;
                 tx.commit()?;
                 Ok(true)
             })
@@ -339,7 +338,7 @@ impl ScreenStore {
                 if asked_row(&tx, &id, &run, bound_at)?.is_none() {
                     return Ok(false);
                 }
-                tx.execute(
+                tx.prepare_cached(
                     "UPDATE subtitle_job_screens
                      SET restart_run_id = ?2,
                          prepare_at = MAX(?3, COALESCE(prepare_at, 0) + 1,
@@ -347,8 +346,8 @@ impl ScreenStore {
                          input_at = MAX(?3, COALESCE(input_at, 0)),
                          updated_at = ?3
                      WHERE job_id = ?1 AND run_id = ?2",
-                    params![id, run, now],
-                )?;
+                )?
+                .execute(params![id, run, now])?;
                 tx.commit()?;
                 Ok(true)
             })
@@ -367,20 +366,19 @@ impl ScreenStore {
             .run(move |c| {
                 let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
                 let asked: Option<String> = tx
-                    .query_row(
+                    .prepare_cached(
                         "SELECT close_target_id FROM subtitle_job_screens
                          WHERE job_id = ?1 AND run_id = ?2",
-                        params![id, run],
-                        |r| r.get(0),
-                    )
+                    )?
+                    .query_row(params![id, run], |r| r.get(0))
                     .optional()?
                     .flatten();
                 if asked.is_some() {
-                    tx.execute(
+                    tx.prepare_cached(
                         "UPDATE subtitle_job_screens SET close_target_id = NULL
                          WHERE job_id = ?1 AND run_id = ?2",
-                        params![id, run],
-                    )?;
+                    )?
+                    .execute(params![id, run])?;
                 }
                 tx.commit()?;
                 Ok(split_asked(asked))
@@ -401,20 +399,19 @@ impl ScreenStore {
             .run(move |c| {
                 let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
                 let asked: Option<String> = tx
-                    .query_row(
+                    .prepare_cached(
                         "SELECT switch_target_id FROM subtitle_job_screens
                          WHERE job_id = ?1 AND run_id = ?2",
-                        params![id, run],
-                        |r| r.get(0),
-                    )
+                    )?
+                    .query_row(params![id, run], |r| r.get(0))
                     .optional()?
                     .flatten();
                 if asked.is_some() {
-                    tx.execute(
+                    tx.prepare_cached(
                         "UPDATE subtitle_job_screens SET switch_target_id = NULL
                          WHERE job_id = ?1 AND run_id = ?2",
-                        params![id, run],
-                    )?;
+                    )?
+                    .execute(params![id, run])?;
                 }
                 tx.commit()?;
                 Ok(asked)
@@ -436,12 +433,13 @@ impl ScreenStore {
         let pages = pages_json(pages);
         self.db
             .run(move |c| {
-                Ok(c.execute(
+                Ok(c.prepare_cached(
                     "UPDATE subtitle_job_screens
                      SET pages = ?3, updated_at = ?4
                      WHERE job_id = ?1 AND run_id = ?2 AND pages IS NOT ?3",
-                    params![id, run, pages, now],
-                )? > 0)
+                )?
+                .execute(params![id, run, pages, now])?
+                    > 0)
             })
             .await
     }
@@ -460,7 +458,7 @@ impl ScreenStore {
         let (id, run, target) = (job_id.to_owned(), run_id.to_owned(), target_id.to_owned());
         self.db
             .run(move |c| {
-                c.execute(
+                c.prepare_cached(
                     "INSERT INTO subtitle_job_screens
                          (job_id, item_id, run_id, target_id, bound_at, note, prepared_at,
                           input_at, updated_at, first_target_id, close_target_id, pages,
@@ -475,15 +473,15 @@ impl ScreenStore {
                          first_target_id = excluded.target_id, close_target_id = NULL,
                          pages = excluded.pages, switch_target_id = NULL,
                          restart_run_id = NULL",
-                    params![
-                        id,
-                        item_id,
-                        run,
-                        target,
-                        now,
-                        pages_json(std::slice::from_ref(&target))
-                    ],
-                )?;
+                )?
+                .execute(params![
+                    id,
+                    item_id,
+                    run,
+                    target,
+                    now,
+                    pages_json(std::slice::from_ref(&target))
+                ])?;
                 Ok(())
             })
             .await
@@ -502,7 +500,7 @@ impl ScreenStore {
         let id = job_id.to_owned();
         self.db
             .run(move |c| {
-                c.execute(
+                c.prepare_cached(
                     "INSERT INTO subtitle_job_screens
                          (job_id, item_id, run_id, target_id, bound_at, note, prepared_at,
                           updated_at)
@@ -515,8 +513,8 @@ impl ScreenStore {
                          first_target_id = NULL, close_target_id = NULL,
                          pages = NULL, switch_target_id = NULL,
                          restart_run_id = NULL",
-                    params![id, item_id, note, now],
-                )?;
+                )?
+                .execute(params![id, item_id, note, now])?;
                 Ok(())
             })
             .await
@@ -536,12 +534,13 @@ impl ScreenStore {
         let (id, run, target) = (job_id.to_owned(), run_id.to_owned(), target_id.to_owned());
         self.db
             .run(move |c| {
-                Ok(c.execute(
+                Ok(c.prepare_cached(
                     "UPDATE subtitle_job_screens
                      SET target_id = ?3, bound_at = MAX(?4, bound_at + 1), updated_at = ?4
                      WHERE job_id = ?1 AND run_id = ?2 AND target_id <> ?3",
-                    params![id, run, target, now],
-                )? > 0)
+                )?
+                .execute(params![id, run, target, now])?
+                    > 0)
             })
             .await
     }
@@ -563,7 +562,7 @@ impl ScreenStore {
         let (id, run, note) = (job_id.to_owned(), run_id.to_owned(), note.to_owned());
         self.db
             .run(move |c| {
-                Ok(c.execute(
+                Ok(c.prepare_cached(
                     "UPDATE subtitle_job_screens
                      SET run_id = NULL, target_id = NULL, bound_at = NULL, note = ?3,
                          input_at = NULL, updated_at = ?4,
@@ -571,8 +570,9 @@ impl ScreenStore {
                          pages = NULL, switch_target_id = NULL,
                          restart_run_id = NULL
                      WHERE job_id = ?1 AND run_id = ?2 AND restart_run_id IS NOT ?2",
-                    params![id, run, note, now],
-                )? > 0)
+                )?
+                .execute(params![id, run, note, now])?
+                    > 0)
             })
             .await
     }
@@ -601,7 +601,8 @@ impl ScreenStore {
         let id = job_id.to_owned();
         self.db
             .run(move |c| {
-                c.execute("DELETE FROM subtitle_job_screens WHERE job_id = ?1", [id])?;
+                c.prepare_cached("DELETE FROM subtitle_job_screens WHERE job_id = ?1")?
+                    .execute([id])?;
                 Ok(())
             })
             .await
@@ -612,15 +613,14 @@ impl ScreenStore {
         let id = job_id.to_owned();
         self.db
             .run(move |c| {
-                Ok(c.query_row(
+                Ok(c.prepare_cached(
                     "SELECT s.job_id, s.item_id, s.run_id, s.target_id,
                             COALESCE(s.first_target_id, s.target_id),
                             COALESCE(j.origin = 'find', 0)
                      FROM subtitle_job_screens s LEFT JOIN subtitle_jobs j ON j.id = s.job_id
                      WHERE s.job_id = ?1 AND s.run_id IS NOT NULL",
-                    [id],
-                    binding_row,
-                )
+                )?
+                .query_row([id], binding_row)
                 .optional()?)
             })
             .await
@@ -631,7 +631,7 @@ impl ScreenStore {
     pub async fn bindings(&self) -> Result<Vec<Binding>, JobError> {
         self.db
             .run(|c| {
-                let mut stmt = c.prepare(&format!(
+                let mut stmt = c.prepare_cached(&format!(
                     "SELECT s.job_id, s.item_id, s.run_id, s.target_id,
                             COALESCE(s.first_target_id, s.target_id), j.origin = 'find'
                      FROM subtitle_job_screens s JOIN subtitle_jobs j ON j.id = s.job_id
@@ -649,7 +649,7 @@ impl ScreenStore {
     pub async fn prepare_requests(&self) -> Result<Vec<PrepareRequest>, JobError> {
         self.db
             .run(|c| {
-                let mut stmt = c.prepare(&format!(
+                let mut stmt = c.prepare_cached(&format!(
                     "SELECT s.job_id, s.run_id, s.prepare_at, j.origin = 'find',
                             s.restart_run_id IS NOT NULL AND s.restart_run_id IS s.run_id
                      FROM subtitle_job_screens s JOIN subtitle_jobs j ON j.id = s.job_id
@@ -680,12 +680,12 @@ impl ScreenStore {
         let id = job_id.to_owned();
         self.db
             .run(move |c| {
-                c.execute(
+                c.prepare_cached(
                     "UPDATE subtitle_job_screens
                      SET prepared_at = MAX(?2, COALESCE(prepared_at, 0)), updated_at = ?3
                      WHERE job_id = ?1",
-                    params![id, asked_at, now],
-                )?;
+                )?
+                .execute(params![id, asked_at, now])?;
                 Ok(())
             })
             .await
@@ -710,7 +710,7 @@ impl ScreenStore {
                 let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
                 let back = requeue(&tx, &id, now)?;
                 if back {
-                    tx.execute(
+                    tx.prepare_cached(
                         "UPDATE subtitle_job_screens
                          SET run_id = NULL, target_id = NULL, bound_at = NULL, note = NULL,
                              input_at = NULL, prepared_at = MAX(?2, COALESCE(prepared_at, 0)),
@@ -718,27 +718,27 @@ impl ScreenStore {
                              pages = NULL, switch_target_id = NULL,
                              restart_run_id = NULL
                          WHERE job_id = ?1",
-                        params![id, asked_at, now],
-                    )?;
-                    tx.execute(
+                    )?
+                    .execute(params![id, asked_at, now])?;
+                    tx.prepare_cached(
                         "INSERT INTO subtitle_job_events (job_id, at, message, detail)
                          SELECT ?1, ?2, CASE origin WHEN 'find' THEN ?3 ELSE ?4 END, NULL
                          FROM subtitle_jobs WHERE id = ?1",
-                        params![
-                            id,
-                            now,
-                            if restarted {
-                                RESTARTED_FIND
-                            } else {
-                                FIND_PREPARED_AGAIN
-                            },
-                            if restarted {
-                                RESTARTED_CHECK
-                            } else {
-                                CHECK_PREPARED_AGAIN
-                            }
-                        ],
-                    )?;
+                    )?
+                    .execute(params![
+                        id,
+                        now,
+                        if restarted {
+                            RESTARTED_FIND
+                        } else {
+                            FIND_PREPARED_AGAIN
+                        },
+                        if restarted {
+                            RESTARTED_CHECK
+                        } else {
+                            CHECK_PREPARED_AGAIN
+                        }
+                    ])?;
                 }
                 tx.commit()?;
                 Ok(back)
@@ -767,37 +767,34 @@ impl ScreenStore {
             .run(move |c| {
                 let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
                 let bound: Option<String> = tx
-                    .query_row(
-                        "SELECT run_id FROM subtitle_job_screens WHERE job_id = ?1",
-                        [&id],
-                        |r| r.get(0),
-                    )
+                    .prepare_cached("SELECT run_id FROM subtitle_job_screens WHERE job_id = ?1")?
+                    .query_row([&id], |r| r.get(0))
                     .optional()?
                     .flatten();
                 if bound.as_deref() != Some(run.as_str()) || !requeue(&tx, &id, now)? {
                     let item_open = tx
-                        .query_row(
+                        .prepare_cached(
                             "SELECT 1 FROM subtitle_job_items
                              WHERE id = ?1 AND job_id = ?2
                                AND state IN ('pending', 'running', 'waiting')",
-                            params![item_id, id],
-                            |_| Ok(()),
-                        )
+                        )?
+                        .query_row(params![item_id, id], |_| Ok(()))
                         .optional()?
                         .is_some();
                     return Ok(Arrival::Stale { item_open });
                 }
-                tx.execute("DELETE FROM subtitle_job_screens WHERE job_id = ?1", [&id])?;
-                tx.execute(
+                tx.prepare_cached("DELETE FROM subtitle_job_screens WHERE job_id = ?1")?
+                    .execute([&id])?;
+                tx.prepare_cached(
                     "UPDATE subtitle_job_steps SET state = 'done', at = ?2, note = NULL
                      WHERE job_id = ?1 AND step = 'auth'",
-                    params![id, now],
-                )?;
-                tx.execute(
+                )?
+                .execute(params![id, now])?;
+                tx.prepare_cached(
                     "INSERT INTO subtitle_job_events (job_id, at, message, detail)
                      VALUES (?1, ?2, ?3, ?4)",
-                    params![id, now, message, detail],
-                )?;
+                )?
+                .execute(params![id, now, message, detail])?;
                 tx.commit()?;
                 Ok(Arrival::Taken)
             })
@@ -809,7 +806,7 @@ impl ScreenStore {
     pub async fn live_inputs(&self) -> Result<Vec<(String, Millis)>, JobError> {
         self.db
             .run(|c| {
-                let mut stmt = c.prepare(
+                let mut stmt = c.prepare_cached(
                     "SELECT run_id, input_at FROM subtitle_job_screens
                      WHERE run_id IS NOT NULL AND input_at IS NOT NULL",
                 )?;
@@ -835,27 +832,24 @@ fn binding_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Binding> {
 /// Whether it waited.
 fn requeue(c: &Connection, job_id: &str, now: Millis) -> Result<bool, JobError> {
     let state: Option<(JobState, Option<Wait>)> = c
-        .query_row(
-            "SELECT state, wait FROM subtitle_jobs WHERE id = ?1",
-            [job_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
+        .prepare_cached("SELECT state, wait FROM subtitle_jobs WHERE id = ?1")?
+        .query_row([job_id], |r| Ok((r.get(0)?, r.get(1)?)))
         .optional()?;
     if state != Some((JobState::Waiting, Some(Wait::Auth))) {
         return Ok(false);
     }
-    c.execute(
+    c.prepare_cached(
         "UPDATE subtitle_job_items
          SET state = 'pending', wait = NULL, reason = NULL, updated_at = ?2
          WHERE job_id = ?1 AND state = 'waiting' AND wait = 'auth'",
-        params![job_id, now],
-    )?;
-    c.execute(
+    )?
+    .execute(params![job_id, now])?;
+    c.prepare_cached(
         "UPDATE subtitle_jobs
          SET state = 'pending', wait = NULL, note = NULL, state_at = ?2, updated_at = ?2
          WHERE id = ?1",
-        params![job_id, now],
-    )?;
+    )?
+    .execute(params![job_id, now])?;
     Ok(true)
 }
 
@@ -915,49 +909,45 @@ fn asked_row(
     run_id: &str,
     bound_at: Millis,
 ) -> Result<Option<AskedRow>, JobError> {
-    Ok(c.query_row(
-        &format!(
-            "SELECT s.target_id, s.first_target_id, s.pages, s.close_target_id
+    Ok(c.prepare_cached(&format!(
+        "SELECT s.target_id, s.first_target_id, s.pages, s.close_target_id
              FROM subtitle_job_screens s JOIN subtitle_jobs j ON j.id = s.job_id
              WHERE s.job_id = ?1 AND s.run_id = ?2 AND s.bound_at = ?3 AND {WAITS_FOR_CHECK}"
-        ),
-        params![job_id, run_id, bound_at],
-        |r| {
-            Ok(AskedRow {
-                shown: r.get(0)?,
-                first: r.get(1)?,
-                pages: page_list(r.get(2)?),
-                closing: split_asked(r.get(3)?),
-            })
-        },
-    )
+    ))?
+    .query_row(params![job_id, run_id, bound_at], |r| {
+        Ok(AskedRow {
+            shown: r.get(0)?,
+            first: r.get(1)?,
+            pages: page_list(r.get(2)?),
+            closing: split_asked(r.get(3)?),
+        })
+    })
     .optional()?)
 }
 
 fn screen(c: &Connection, job_id: &str) -> Result<Option<Screen>, JobError> {
     let row: Option<ScreenRow> = c
-        .query_row(
+        .prepare_cached(
             "SELECT s.run_id, s.target_id, s.bound_at, s.note,
                     COALESCE(s.prepare_at, 0) > COALESCE(s.prepared_at, 0), j.state, j.wait,
                     COALESCE(s.target_id <> s.first_target_id, 0), s.first_target_id, s.pages
              FROM subtitle_job_screens s JOIN subtitle_jobs j ON j.id = s.job_id
              WHERE s.job_id = ?1",
-            [job_id],
-            |r| {
-                Ok((
-                    r.get(0)?,
-                    r.get(1)?,
-                    r.get(2)?,
-                    r.get(3)?,
-                    r.get(4)?,
-                    r.get(5)?,
-                    r.get(6)?,
-                    r.get(7)?,
-                    r.get(8)?,
-                    r.get(9)?,
-                ))
-            },
-        )
+        )?
+        .query_row([job_id], |r| {
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get(3)?,
+                r.get(4)?,
+                r.get(5)?,
+                r.get(6)?,
+                r.get(7)?,
+                r.get(8)?,
+                r.get(9)?,
+            ))
+        })
         .optional()?;
     let Some((run_id, target_id, bound_at, note, asked, state, wait, popup, first, pages)) = row
     else {

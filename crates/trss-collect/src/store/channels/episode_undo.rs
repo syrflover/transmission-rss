@@ -153,22 +153,21 @@ fn under_way() -> Vec<&'static str> {
 
 fn read_undo(conn: &Connection, command_id: &str) -> Result<Option<EpisodeUndo>> {
     let head = conn
-        .query_row(
+        .prepare_cached(
             "SELECT rule_id, from_offset, to_offset FROM episode_undos WHERE command_id = ?1",
-            params![command_id],
-            |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, i64>(1)?,
-                    row.get::<_, i64>(2)?,
-                ))
-            },
-        )
+        )?
+        .query_row(params![command_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })
         .optional()?;
     let Some((rule_id, from, to)) = head else {
         return Ok(None);
     };
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare_cached(
         "SELECT item_id, folder, from_name, to_name, torrent_hash, identity, state, reason
            FROM episode_undo_files WHERE command_id = ?1 ORDER BY rowid",
     )?;
@@ -215,12 +214,11 @@ fn begin(
         return Ok(UndoBegun::Begun(undo));
     }
     let previous: Option<Option<i64>> = tx
-        .query_row(
+        .prepare_cached(
             "SELECT episode_previous FROM rules
               WHERE id = ?1 AND episode_auto = 1 AND episode = ?2",
-            params![rule_id, from],
-            |row| row.get(0),
-        )
+        )?
+        .query_row(params![rule_id, from], |row| row.get(0))
         .optional()?;
     // The plan was made for `to`; another previous value is another undo.
     if previous != Some(Some(to)) {
@@ -231,7 +229,7 @@ fn begin(
     let marks = vec!["?"; states.len()].join(", ");
     let mut busy: Vec<String> = Vec::new();
     {
-        let mut stmt = tx.prepare(&format!(
+        let mut stmt = tx.prepare_cached(&format!(
             "SELECT DISTINCT episode_name FROM video_revisions
               WHERE folder = ? AND episode_name IN (?, ?) AND state IN ({marks})"
         ))?;
@@ -252,48 +250,48 @@ fn begin(
         return Ok(UndoBegun::Busy(busy));
     }
 
-    tx.execute(
+    tx.prepare_cached(
         "UPDATE rules
             SET episode = ?2, episode_auto = 0, episode_basis = NULL, episode_previous = NULL,
                 version = version + 1
           WHERE id = ?1",
-        params![rule_id, to],
-    )?;
+    )?
+    .execute(params![rule_id, to])?;
     // The files an older undo of the rule left wait no more: this one
     // planned the rule's files anew.
-    tx.execute(
+    tx.prepare_cached(
         "UPDATE episode_undo_files SET state = 'kept', reason = ?2
           WHERE state = 'pending'
             AND command_id IN (SELECT command_id FROM episode_undos WHERE rule_id = ?1)",
-        params![rule_id, SUPERSEDED],
-    )?;
-    tx.execute(
+    )?
+    .execute(params![rule_id, SUPERSEDED])?;
+    tx.prepare_cached(
         "INSERT INTO episode_undos (command_id, rule_id, from_offset, to_offset, started_at)
          VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![command_id, rule_id, from, to, at],
-    )?;
+    )?
+    .execute(params![command_id, rule_id, from, to, at])?;
     for file in files {
-        tx.execute(
+        tx.prepare_cached(
             "INSERT OR IGNORE INTO episode_undo_files
                  (command_id, item_id, folder, from_name, to_name, torrent_hash, identity,
                   state, reason)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![
-                command_id,
-                file.item_id,
-                file.folder,
-                file.from_name,
-                file.to_name,
-                file.torrent_hash,
-                file.identity,
-                if file.kept.is_some() {
-                    "kept"
-                } else {
-                    "pending"
-                },
-                file.kept,
-            ],
-        )?;
+        )?
+        .execute(params![
+            command_id,
+            file.item_id,
+            file.folder,
+            file.from_name,
+            file.to_name,
+            file.torrent_hash,
+            file.identity,
+            if file.kept.is_some() {
+                "kept"
+            } else {
+                "pending"
+            },
+            file.kept,
+        ])?;
     }
     let undo = read_undo(&tx, command_id)?.expect("the undo was just written");
     tx.commit()?;
@@ -309,12 +307,13 @@ fn finish_file(
 ) -> Result<()> {
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let file: Option<(String, String, String)> = tx
-        .query_row(
+        .prepare_cached(
             "SELECT folder, from_name, to_name FROM episode_undo_files
               WHERE command_id = ?1 AND item_id = ?2 AND state = 'pending'",
-            params![command_id, item_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )
+        )?
+        .query_row(params![command_id, item_id], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })
         .optional()?;
     let Some((folder, from_name, to_name)) = file else {
         return Ok(());
@@ -324,21 +323,19 @@ fn finish_file(
     } else {
         UndoFileState::Renamed
     };
-    tx.execute(
+    tx.prepare_cached(
         "UPDATE episode_undo_files SET state = ?3, reason = ?4
           WHERE command_id = ?1 AND item_id = ?2",
-        params![command_id, item_id, state.code(), kept],
-    )?;
+    )?
+    .execute(params![command_id, item_id, state.code(), kept])?;
     if kept.is_none() {
         // The rows of the file's own episode: its item's, or written before
         // the undo began, under the automatic value. A cycle since names
         // under the restored value, and its rows at the old name are of
         // another episode that has that name now.
-        let began: Millis = tx.query_row(
-            "SELECT started_at FROM episode_undos WHERE command_id = ?1",
-            params![command_id],
-            |row| row.get(0),
-        )?;
+        let began: Millis = tx
+            .prepare_cached("SELECT started_at FROM episode_undos WHERE command_id = ?1")?
+            .query_row(params![command_id], |row| row.get(0))?;
         let states = under_way();
         let marks = (7..7 + states.len())
             .map(|n| format!("?{n}"))
@@ -347,34 +344,32 @@ fn finish_file(
         let mut args: Vec<&dyn rusqlite::ToSql> =
             vec![&folder, &from_name, &to_name, &at, &item_id, &began];
         args.extend(states.iter().map(|s| s as &dyn rusqlite::ToSql));
-        tx.execute(
-            &format!(
-                "UPDATE video_revisions SET episode_name = ?3, updated_at = ?4
+        tx.prepare_cached(&format!(
+            "UPDATE video_revisions SET episode_name = ?3, updated_at = ?4
                   WHERE folder = ?1 AND episode_name = ?2 AND state NOT IN ({marks})
                     AND (item_id = ?5 OR old_item_id = ?5 OR created_at <= ?6)"
-            ),
-            args.as_slice(),
-        )?;
+        ))?
+        .execute(args.as_slice())?;
     }
     tx.commit()?;
     Ok(())
 }
 
 fn wait_file(conn: &Connection, command_id: &str, item_id: i64, reason: &str) -> Result<()> {
-    conn.execute(
+    conn.prepare_cached(
         "UPDATE episode_undo_files SET reason = ?3
           WHERE command_id = ?1 AND item_id = ?2 AND state = 'pending'",
-        params![command_id, item_id, reason],
-    )?;
+    )?
+    .execute(params![command_id, item_id, reason])?;
     Ok(())
 }
 
 fn note_identity(conn: &Connection, command_id: &str, item_id: i64, identity: &str) -> Result<()> {
-    conn.execute(
+    conn.prepare_cached(
         "UPDATE episode_undo_files SET identity = ?3
           WHERE command_id = ?1 AND item_id = ?2 AND state = 'pending' AND identity IS NULL",
-        params![command_id, item_id, identity],
-    )?;
+    )?
+    .execute(params![command_id, item_id, identity])?;
     Ok(())
 }
 
@@ -384,7 +379,7 @@ fn file_hold(
     from_name: &str,
     to_name: &str,
 ) -> Result<Option<&'static str>> {
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare_cached(
         "SELECT episode_name, state FROM video_revisions
           WHERE folder = ?1 AND episode_name IN (?2, ?3)",
     )?;
@@ -409,15 +404,14 @@ fn file_hold(
 /// The latest undo of `rule_id` that still has files to rename.
 fn unfinished(conn: &Connection, rule_id: &str) -> Result<Option<EpisodeUndo>> {
     let command_id: Option<String> = conn
-        .query_row(
+        .prepare_cached(
             "SELECT u.command_id FROM episode_undos u
               WHERE u.rule_id = ?1
                 AND EXISTS (SELECT 1 FROM episode_undo_files f
                              WHERE f.command_id = u.command_id AND f.state = 'pending')
               ORDER BY u.started_at DESC, u.command_id DESC LIMIT 1",
-            params![rule_id],
-            |row| row.get(0),
-        )
+        )?
+        .query_row(params![rule_id], |row| row.get(0))
         .optional()?;
     match command_id {
         Some(id) => read_undo(conn, &id),
@@ -435,23 +429,20 @@ fn adopt(
         tx.commit()?;
         return Ok(Some(undo));
     }
-    let copied = tx.execute(
-        "INSERT INTO episode_undos (command_id, rule_id, from_offset, to_offset, started_at)
+    let copied = tx
+        .prepare_cached(
+            "INSERT INTO episode_undos (command_id, rule_id, from_offset, to_offset, started_at)
          SELECT ?2, rule_id, from_offset, to_offset, started_at
            FROM episode_undos WHERE command_id = ?1",
-        params![from_command, to_command],
-    )?;
+        )?
+        .execute(params![from_command, to_command])?;
     if copied == 0 {
         return Ok(None);
     }
-    tx.execute(
-        "UPDATE episode_undo_files SET command_id = ?2 WHERE command_id = ?1",
-        params![from_command, to_command],
-    )?;
-    tx.execute(
-        "DELETE FROM episode_undos WHERE command_id = ?1",
-        params![from_command],
-    )?;
+    tx.prepare_cached("UPDATE episode_undo_files SET command_id = ?2 WHERE command_id = ?1")?
+        .execute(params![from_command, to_command])?;
+    tx.prepare_cached("DELETE FROM episode_undos WHERE command_id = ?1")?
+        .execute(params![from_command])?;
     let undo = read_undo(&tx, to_command)?;
     tx.commit()?;
     Ok(undo)

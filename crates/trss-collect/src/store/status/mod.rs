@@ -158,18 +158,24 @@ impl StatusStore {
         self.db
             .run(move |c| {
                 let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-                tx.execute(
+                tx.prepare_cached(
                     "INSERT INTO transmission_snapshot (id, downloading, seeding, taken_at)
                      VALUES (1, ?1, ?2, ?3)
                      ON CONFLICT (id) DO UPDATE SET
                          downloading = excluded.downloading,
                          seeding = excluded.seeding,
                          taken_at = excluded.taken_at",
-                    params![counts.downloading, counts.seeding, counts.taken_at],
+                )?
+                .execute(params![
+                    counts.downloading,
+                    counts.seeding,
+                    counts.taken_at
+                ])?;
+                tx.prepare_cached("DELETE FROM transmission_downloading")?
+                    .execute([])?;
+                let mut insert = tx.prepare_cached(
+                    "INSERT OR IGNORE INTO transmission_downloading (hash) VALUES (?1)",
                 )?;
-                tx.execute("DELETE FROM transmission_downloading", [])?;
-                let mut insert = tx
-                    .prepare("INSERT OR IGNORE INTO transmission_downloading (hash) VALUES (?1)")?;
                 for hash in downloading.iter().filter(|h| !h.is_empty()) {
                     insert.execute([hash])?;
                 }
@@ -185,14 +191,16 @@ impl StatusStore {
         self.db
             .run(move |c| {
                 let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-                tx.execute(
+                tx.prepare_cached(
                     "INSERT INTO transmission_listing (id, taken_at) VALUES (1, ?1)
                      ON CONFLICT (id) DO UPDATE SET taken_at = excluded.taken_at",
-                    [at],
+                )?
+                .execute([at])?;
+                tx.prepare_cached("DELETE FROM transmission_torrents")?
+                    .execute([])?;
+                let mut insert = tx.prepare_cached(
+                    "INSERT OR IGNORE INTO transmission_torrents (hash) VALUES (?1)",
                 )?;
-                tx.execute("DELETE FROM transmission_torrents", [])?;
-                let mut insert =
-                    tx.prepare("INSERT OR IGNORE INTO transmission_torrents (hash) VALUES (?1)")?;
                 for hash in hashes.iter().filter(|h| !h.is_empty()) {
                     insert.execute([hash.to_ascii_lowercase()])?;
                 }
@@ -209,16 +217,13 @@ impl StatusStore {
         self.db
             .run(|c| {
                 let Some(taken_at) = c
-                    .query_row(
-                        "SELECT taken_at FROM transmission_listing WHERE id = 1",
-                        [],
-                        |r| r.get(0),
-                    )
+                    .prepare_cached("SELECT taken_at FROM transmission_listing WHERE id = 1")?
+                    .query_row([], |r| r.get(0))
                     .optional()?
                 else {
                     return Ok::<_, StatusError>(None);
                 };
-                let mut stmt = c.prepare("SELECT hash FROM transmission_torrents")?;
+                let mut stmt = c.prepare_cached("SELECT hash FROM transmission_torrents")?;
                 let hashes = stmt
                     .query_map([], |r| r.get(0))?
                     .collect::<rusqlite::Result<HashSet<String>>>()?;
@@ -232,7 +237,7 @@ impl StatusStore {
     pub async fn downloading_hashes(&self) -> Result<HashSet<String>, StatusError> {
         self.db
             .run(|c| {
-                let mut stmt = c.prepare("SELECT hash FROM transmission_downloading")?;
+                let mut stmt = c.prepare_cached("SELECT hash FROM transmission_downloading")?;
                 let hashes = stmt
                     .query_map([], |r| r.get(0))?
                     .collect::<rusqlite::Result<HashSet<String>>>()?;
@@ -261,12 +266,9 @@ impl StatusStore {
         self.db
             .run(|c| {
                 Ok::<_, StatusError>(
-                    c.query_row(
-                        "SELECT cycle_interval_ms FROM worker_info WHERE id = 1",
-                        [],
-                        |r| r.get(0),
-                    )
-                    .optional()?,
+                    c.prepare_cached("SELECT cycle_interval_ms FROM worker_info WHERE id = 1")?
+                        .query_row([], |r| r.get(0))
+                        .optional()?,
                 )
             })
             .await
@@ -277,18 +279,17 @@ impl StatusStore {
         self.db
             .run(|c| {
                 Ok::<_, StatusError>(
-                    c.query_row(
+                    c.prepare_cached(
                         "SELECT downloading, seeding, taken_at
                          FROM transmission_snapshot WHERE id = 1",
-                        [],
-                        |r| {
-                            Ok(TransmissionCounts {
-                                downloading: r.get(0)?,
-                                seeding: r.get(1)?,
-                                taken_at: r.get(2)?,
-                            })
-                        },
-                    )
+                    )?
+                    .query_row([], |r| {
+                        Ok(TransmissionCounts {
+                            downloading: r.get(0)?,
+                            seeding: r.get(1)?,
+                            taken_at: r.get(2)?,
+                        })
+                    })
                     .optional()?,
                 )
             })
@@ -300,7 +301,7 @@ impl StatusStore {
     pub async fn received_since(&self, since: Millis) -> Result<Vec<Millis>, StatusError> {
         self.db
             .run(move |c| {
-                let mut stmt = c.prepare(
+                let mut stmt = c.prepare_cached(
                     "SELECT result_at FROM history_items
                      WHERE result = 'received' AND result_at >= ?1
                      ORDER BY result_at",
@@ -318,9 +319,8 @@ impl StatusStore {
     pub async fn problems_since(&self, since: Millis) -> Result<u32, StatusError> {
         self.db
             .run(move |c| {
-                Ok::<_, StatusError>(c.query_row(
-                    "SELECT count(*) FROM history_items
-                     WHERE result IN ('add_failed', 'version_unknown', 'duplicate') AND result_at >= ?1",
+                Ok::<_, StatusError>(c.prepare_cached("SELECT count(*) FROM history_items
+                     WHERE result IN ('add_failed', 'version_unknown', 'duplicate') AND result_at >= ?1")?.query_row(
                     [since],
                     |r| r.get(0),
                 )?)
@@ -337,61 +337,58 @@ fn record_reads(
 ) -> Result<(), StatusError> {
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     for read in reads {
-        tx.execute(
+        tx.prepare_cached(
             "INSERT INTO channel_read_status (channel_id, ok, read_at, ok_at)
              VALUES (?1, ?2, ?3, CASE WHEN ?2 THEN ?3 END)
              ON CONFLICT (channel_id) DO UPDATE SET
                  ok = excluded.ok,
                  read_at = excluded.read_at,
                  ok_at = CASE WHEN excluded.ok THEN excluded.read_at ELSE ok_at END",
-            params![read.channel_id, read.ok, at],
-        )?;
+        )?
+        .execute(params![read.channel_id, read.ok, at])?;
     }
     for read in reads.iter().filter(|read| read.ok) {
         // A day after this read's own is from a clock that was ahead and has
         // come back: it was not a day the feed was read, and it must not take
         // the place of the real days among the newest ones.
-        tx.execute(
-            "DELETE FROM channel_read_days WHERE channel_id = ?1 AND day > ?2",
-            params![read.channel_id, read_day(at)],
-        )?;
+        tx.prepare_cached("DELETE FROM channel_read_days WHERE channel_id = ?1 AND day > ?2")?
+            .execute(params![read.channel_id, read_day(at)])?;
         // The newest `READ_DAYS_KEPT` days are all that is asked for; an older
         // one (a clock that went back) is gone as soon as it is written.
-        tx.execute(
+        tx.prepare_cached(
             "INSERT OR IGNORE INTO channel_read_days (channel_id, day) VALUES (?1, ?2)",
-            params![read.channel_id, read_day(at)],
-        )?;
-        tx.execute(
+        )?
+        .execute(params![read.channel_id, read_day(at)])?;
+        tx.prepare_cached(
             "DELETE FROM channel_read_days
              WHERE channel_id = ?1 AND day < (
                  SELECT day FROM channel_read_days WHERE channel_id = ?1
                  ORDER BY day DESC LIMIT 1 OFFSET ?2)",
-            params![read.channel_id, READ_DAYS_KEPT as i64 - 1],
-        )?;
+        )?
+        .execute(params![read.channel_id, READ_DAYS_KEPT as i64 - 1])?;
     }
     let keep: HashSet<&str> = existing.iter().map(String::as_str).collect();
     let stored: Vec<String> = {
-        let mut stmt = tx.prepare("SELECT channel_id FROM channel_read_status")?;
+        let mut stmt = tx.prepare_cached("SELECT channel_id FROM channel_read_status")?;
         let ids = stmt
             .query_map([], |r| r.get(0))?
             .collect::<rusqlite::Result<Vec<String>>>()?;
         ids
     };
     for id in stored.iter().filter(|id| !keep.contains(id.as_str())) {
-        tx.execute(
-            "DELETE FROM channel_read_status WHERE channel_id = ?1",
-            [id],
-        )?;
+        tx.prepare_cached("DELETE FROM channel_read_status WHERE channel_id = ?1")?
+            .execute([id])?;
     }
     let days_of: Vec<String> = {
-        let mut stmt = tx.prepare("SELECT DISTINCT channel_id FROM channel_read_days")?;
+        let mut stmt = tx.prepare_cached("SELECT DISTINCT channel_id FROM channel_read_days")?;
         let ids = stmt
             .query_map([], |r| r.get(0))?
             .collect::<rusqlite::Result<Vec<String>>>()?;
         ids
     };
     for id in days_of.iter().filter(|id| !keep.contains(id.as_str())) {
-        tx.execute("DELETE FROM channel_read_days WHERE channel_id = ?1", [id])?;
+        tx.prepare_cached("DELETE FROM channel_read_days WHERE channel_id = ?1")?
+            .execute([id])?;
     }
     tx.commit()?;
     Ok(())
@@ -404,7 +401,7 @@ fn read_day_floors(
 ) -> Result<std::collections::HashMap<String, i64>, StatusError> {
     // The days up to today only: a day after it was written by a clock that was
     // ahead, and is no day the feed was read.
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare_cached(
         "SELECT MIN(day), COUNT(*) FROM (
              SELECT day FROM channel_read_days WHERE channel_id = ?1 AND day <= ?2
              ORDER BY day DESC LIMIT ?3)",
@@ -423,7 +420,7 @@ fn read_day_floors(
 }
 
 fn channel_reads(conn: &Connection) -> Result<Vec<ChannelRead>, StatusError> {
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare_cached(
         "SELECT channel_id, ok, read_at, ok_at FROM channel_read_status ORDER BY channel_id",
     )?;
     let reads = stmt

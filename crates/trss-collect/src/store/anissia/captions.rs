@@ -266,17 +266,21 @@ fn says(
 }
 
 fn source_of(conn: &Connection, line: &Line, at: Millis) -> rusqlite::Result<String> {
-    conn.execute(
+    conn.prepare_cached(
         "INSERT INTO subtitle_sources (id, anime_no, creator_name, created_at)
          VALUES (?1, ?2, ?3, ?4)
          ON CONFLICT (anime_no, creator_name) DO NOTHING",
-        params![Uuid::new_v4().to_string(), line.anime_no, line.creator, at],
-    )?;
-    conn.query_row(
+    )?
+    .execute(params![
+        Uuid::new_v4().to_string(),
+        line.anime_no,
+        line.creator,
+        at
+    ])?;
+    conn.prepare_cached(
         "SELECT id FROM subtitle_sources WHERE anime_no = ?1 AND creator_name = ?2",
-        params![line.anime_no, line.creator],
-        |r| r.get(0),
-    )
+    )?
+    .query_row(params![line.anime_no, line.creator], |r| r.get(0))
 }
 
 impl AnissiaStore {
@@ -316,13 +320,14 @@ impl AnissiaStore {
                 for line in &lines {
                     let source = source_of(&tx, line, at)?;
                     let last: Option<(String, String, String, Option<Millis>)> = tx
-                        .query_row(
+                        .prepare_cached(
                             "SELECT episode, post_url, updated, updated_at
                                FROM caption_observations
                               WHERE source_id = ?1 ORDER BY id DESC LIMIT 1",
-                            [&source],
-                            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
-                        )
+                        )?
+                        .query_row([&source], |r| {
+                            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+                        })
                         .optional()?;
                     if last.is_some_and(|(episode, post, updated, updated_at)| {
                         says(&episode, &post, &updated, updated_at, line)
@@ -330,19 +335,19 @@ impl AnissiaStore {
                         done.unchanged += 1;
                         continue;
                     }
-                    tx.execute(
+                    tx.prepare_cached(
                         "INSERT INTO caption_observations
                              (source_id, post_url, episode, updated, updated_at, first_seen_at)
                          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                        params![
-                            source,
-                            line.post_url,
-                            line.episode,
-                            line.updated,
-                            line.updated_at,
-                            at
-                        ],
-                    )?;
+                    )?
+                    .execute(params![
+                        source,
+                        line.post_url,
+                        line.episode,
+                        line.updated,
+                        line.updated_at,
+                        at
+                    ])?;
                     done.added += 1;
                 }
                 tx.commit()?;
@@ -361,7 +366,7 @@ impl AnissiaStore {
     ) -> Result<Vec<Candidate>> {
         self.db
             .run(move |c| {
-                let mut stmt = c.prepare(
+                let mut stmt = c.prepare_cached(
                     "SELECT o.id, o.source_id, s.creator_name, o.post_url, o.episode,
                             o.updated, o.updated_at, o.first_seen_at
                        FROM caption_observations o
@@ -400,11 +405,10 @@ impl AnissiaStore {
         self.db
             .run(|c| {
                 Ok::<_, super::AnissiaStoreError>(
-                    c.query_row(
+                    c.prepare_cached(
                         "SELECT next_at, last_read_at FROM anissia_caption_poll WHERE id = 1",
-                        [],
-                        |r| Ok((r.get(0)?, r.get(1)?)),
-                    )
+                    )?
+                    .query_row([], |r| Ok((r.get(0)?, r.get(1)?)))
                     .optional()?,
                 )
             })
@@ -420,14 +424,14 @@ impl AnissiaStore {
     ) -> Result<()> {
         self.db
             .run(move |c| {
-                c.execute(
+                c.prepare_cached(
                     "INSERT INTO anissia_caption_poll (id, next_at, last_read_at)
                      VALUES (1, ?1, ?2)
                      ON CONFLICT (id) DO UPDATE SET
                          next_at = excluded.next_at,
                          last_read_at = coalesce(excluded.last_read_at, last_read_at)",
-                    params![next_at, read_at],
-                )?;
+                )?
+                .execute(params![next_at, read_at])?;
                 Ok::<_, super::AnissiaStoreError>(())
             })
             .await

@@ -107,22 +107,21 @@ impl FirstRun {
 }
 
 fn read(conn: &Connection) -> rusqlite::Result<Option<FirstRun>> {
-    conn.query_row(
+    conn.prepare_cached(
         "SELECT folder_added_at IS NOT NULL, import_applied_at IS NOT NULL,
                 folder_skipped_at IS NOT NULL, import_skipped_at IS NOT NULL,
                 ended_at IS NOT NULL
            FROM first_run WHERE id = 1",
-        [],
-        |r| {
-            Ok(FirstRun {
-                folder_added: r.get(0)?,
-                import_applied: r.get(1)?,
-                folder_skipped: r.get(2)?,
-                import_skipped: r.get(3)?,
-                ended: r.get(4)?,
-            })
-        },
-    )
+    )?
+    .query_row([], |r| {
+        Ok(FirstRun {
+            folder_added: r.get(0)?,
+            import_applied: r.get(1)?,
+            folder_skipped: r.get(2)?,
+            import_skipped: r.get(3)?,
+            ended: r.get(4)?,
+        })
+    })
     .optional()
 }
 
@@ -135,10 +134,8 @@ fn settle_in(conn: &Connection, now: Millis) -> rusqlite::Result<Option<FirstRun
     if run.ended || Step::ALL.into_iter().any(|step| !run.settled(step)) {
         return Ok(Some(run));
     }
-    conn.execute(
-        "UPDATE first_run SET ended_at = coalesce(ended_at, ?1) WHERE id = 1",
-        [now],
-    )?;
+    conn.prepare_cached("UPDATE first_run SET ended_at = coalesce(ended_at, ?1) WHERE id = 1")?
+        .execute([now])?;
     read(conn)
 }
 
@@ -182,16 +179,15 @@ impl SetupStore {
             .run(move |c| {
                 let tx = c.transaction()?;
                 let (skip, done) = (step.skipped_column(), step.done_column());
-                let changed = tx.execute(
-                    &format!(
+                let changed = tx
+                    .prepare_cached(&format!(
                         "UPDATE first_run
                             SET {skip} = CASE WHEN ?1 THEN coalesce({skip}, ?2) END,
                                 ended_at = CASE WHEN ?1 OR {done} IS NOT NULL
                                                 THEN ended_at END
                           WHERE id = 1"
-                    ),
-                    params![skipped, now],
-                )?;
+                    ))?
+                    .execute(params![skipped, now])?;
                 settle_in(&tx, now)?;
                 tx.commit()?;
                 Ok::<_, SetupError>(changed > 0)
@@ -205,11 +201,11 @@ impl SetupStore {
     pub async fn mark_import_applied(&self, now: Millis) -> Result<(), SetupError> {
         self.db
             .run(move |c| {
-                c.execute(
+                c.prepare_cached(
                     "UPDATE first_run SET import_applied_at = coalesce(import_applied_at, ?1)
                       WHERE id = 1",
-                    [now],
-                )?;
+                )?
+                .execute([now])?;
                 Ok::<_, SetupError>(())
             })
             .await

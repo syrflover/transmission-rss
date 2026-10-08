@@ -81,7 +81,7 @@ fn anime_from_row(row: &Row<'_>) -> rusqlite::Result<Anime> {
 /// that failed earlier is forgotten: this one is the newest. Anissia listing
 /// the anime also ends its having been found unlisted.
 pub(crate) fn upsert_in(conn: &Connection, anime: &Anime) -> rusqlite::Result<()> {
-    conn.execute(
+    conn.prepare_cached(
         "INSERT INTO anissia_anime (anime_no, subject, original_subject, week, air_time,
                                     start_date, end_date, status, fetched_at, refresh_not_before)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL)
@@ -91,18 +91,18 @@ pub(crate) fn upsert_in(conn: &Connection, anime: &Anime) -> rusqlite::Result<()
              start_date = excluded.start_date, end_date = excluded.end_date,
              status = excluded.status, fetched_at = excluded.fetched_at,
              refresh_not_before = NULL, unlisted_at = NULL",
-        params![
-            anime.anime_no,
-            anime.subject,
-            anime.original_subject,
-            anime.week,
-            anime.air_time,
-            anime.start_date,
-            anime.end_date,
-            anime.status,
-            anime.fetched_at,
-        ],
-    )?;
+    )?
+    .execute(params![
+        anime.anime_no,
+        anime.subject,
+        anime.original_subject,
+        anime.week,
+        anime.air_time,
+        anime.start_date,
+        anime.end_date,
+        anime.status,
+        anime.fetched_at,
+    ])?;
     Ok(())
 }
 
@@ -123,11 +123,10 @@ impl AnissiaStore {
         self.db
             .run(move |c| {
                 Ok::<_, AnissiaStoreError>(
-                    c.query_row(
-                        &format!("SELECT {COLUMNS} FROM anissia_anime WHERE anime_no = ?1"),
-                        [anime_no],
-                        anime_from_row,
-                    )
+                    c.prepare_cached(&format!(
+                        "SELECT {COLUMNS} FROM anissia_anime WHERE anime_no = ?1"
+                    ))?
+                    .query_row([anime_no], anime_from_row)
                     .optional()?,
                 )
             })
@@ -138,7 +137,7 @@ impl AnissiaStore {
     pub async fn animes(&self, anime_nos: Vec<i64>) -> Result<HashMap<i64, Anime>> {
         self.db
             .run(move |c| {
-                let mut stmt = c.prepare(&format!(
+                let mut stmt = c.prepare_cached(&format!(
                     "SELECT {COLUMNS} FROM anissia_anime WHERE anime_no = ?1"
                 ))?;
                 let mut out = HashMap::new();
@@ -157,7 +156,7 @@ impl AnissiaStore {
     pub async fn unlisted(&self, anime_nos: Vec<i64>) -> Result<HashSet<i64>> {
         self.db
             .run(move |c| {
-                let mut stmt = c.prepare(
+                let mut stmt = c.prepare_cached(
                     "SELECT unlisted_at IS NOT NULL FROM anissia_anime WHERE anime_no = ?1",
                 )?;
                 let mut out = HashSet::new();
@@ -180,7 +179,7 @@ impl AnissiaStore {
     pub async fn due(&self, now: Millis) -> Result<Vec<Due>> {
         self.db
             .run(move |c| {
-                let mut stmt = c.prepare(
+                let mut stmt = c.prepare_cached(
                     "SELECT s.anissia_anime_no, a.week
                        FROM rule_subscriptions s
                        JOIN rules r ON r.id = s.rule_id AND r.state IN ('active', 'paused')
@@ -210,10 +209,10 @@ impl AnissiaStore {
             .run(move |c| {
                 let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
                 for no in anime_nos {
-                    tx.execute(
+                    tx.prepare_cached(
                         "UPDATE anissia_anime SET refresh_not_before = ?2 WHERE anime_no = ?1",
-                        params![no, until],
-                    )?;
+                    )?
+                    .execute(params![no, until])?;
                 }
                 tx.commit()?;
                 Ok::<_, AnissiaStoreError>(())
@@ -238,12 +237,12 @@ impl AnissiaStore {
             .run(move |c| {
                 let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
                 for no in anime_nos {
-                    tx.execute(
+                    tx.prepare_cached(
                         "UPDATE anissia_anime
                             SET unlisted_at = coalesce(unlisted_at, ?2), refresh_not_before = ?3
                           WHERE anime_no = ?1 AND fetched_at < ?4",
-                        params![no, at, until, asked_from],
-                    )?;
+                    )?
+                    .execute(params![no, at, until, asked_from])?;
                 }
                 tx.commit()?;
                 Ok::<_, AnissiaStoreError>(())

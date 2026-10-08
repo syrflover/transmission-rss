@@ -55,12 +55,12 @@ impl HeartbeatStore {
     pub async fn record(&self, beat_at: Millis, held_since: Option<Millis>) -> Result<(), DbError> {
         self.db
             .run(move |c| {
-                c.execute(
+                c.prepare_cached(
                     "INSERT INTO worker_heartbeat (id, beat_at, held_since) VALUES (1, ?1, ?2)
                      ON CONFLICT (id) DO UPDATE
                      SET beat_at = excluded.beat_at, held_since = excluded.held_since",
-                    rusqlite::params![beat_at, held_since],
-                )?;
+                )?
+                .execute(rusqlite::params![beat_at, held_since])?;
                 Ok::<_, DbError>(())
             })
             .await
@@ -72,16 +72,15 @@ impl HeartbeatStore {
         self.db
             .run(|c| {
                 Ok::<_, DbError>(
-                    c.query_row(
+                    c.prepare_cached(
                         "SELECT beat_at, held_since FROM worker_heartbeat WHERE id = 1",
-                        [],
-                        |r| {
-                            Ok(WorkerHeartbeat {
-                                beat_at: r.get(0)?,
-                                held_since: r.get(1)?,
-                            })
-                        },
-                    )
+                    )?
+                    .query_row([], |r| {
+                        Ok(WorkerHeartbeat {
+                            beat_at: r.get(0)?,
+                            held_since: r.get(1)?,
+                        })
+                    })
                     .optional()?,
                 )
             })

@@ -13,14 +13,13 @@ fn work_in_folder(
     folder_path: &str,
     dir_name: &str,
 ) -> rusqlite::Result<Option<String>> {
-    conn.query_row(
+    conn.prepare_cached(
         "SELECT w.id FROM works w
            JOIN watch_folders f ON f.id = w.watch_folder_id
           WHERE f.path = ?1 AND f.unregistered_at IS NULL
             AND w.dir_name = ?2 AND w.missing = 0",
-        params![folder_path, dir_name],
-        |row| row.get(0),
-    )
+    )?
+    .query_row(params![folder_path, dir_name], |row| row.get(0))
     .optional()
 }
 

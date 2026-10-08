@@ -40,9 +40,8 @@ fn delete_channel(
     // version check, so nothing can slip in between the check and the delete.
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let version: Version = tx
-        .query_row("SELECT version FROM channels WHERE id = ?1", [id], |r| {
-            r.get(0)
-        })
+        .prepare_cached("SELECT version FROM channels WHERE id = ?1")?
+        .query_row([id], |r| r.get(0))
         .optional()?
         .ok_or_else(|| ChannelError::NotFound {
             kind: "channel",
@@ -56,16 +55,16 @@ fn delete_channel(
             actual: version,
         });
     }
-    let rules: i64 = tx.query_row(
-        "SELECT count(*) FROM rules WHERE channel_id = ?1",
-        [id],
-        |r| r.get(0),
-    )?;
+    let rules: i64 = tx
+        .prepare_cached("SELECT count(*) FROM rules WHERE channel_id = ?1")?
+        .query_row([id], |r| r.get(0))?;
     if rules as usize != expected_rules {
         return Err(ChannelError::OrderMismatch { kind: "rule" });
     }
-    tx.execute("DELETE FROM rules WHERE channel_id = ?1", [id])?;
-    tx.execute("DELETE FROM channels WHERE id = ?1", [id])?;
+    tx.prepare_cached("DELETE FROM rules WHERE channel_id = ?1")?
+        .execute([id])?;
+    tx.prepare_cached("DELETE FROM channels WHERE id = ?1")?
+        .execute([id])?;
     tx.commit()?;
     Ok(rules as usize)
 }

@@ -106,7 +106,7 @@ pub(super) fn attributed(
     work_id: &str,
     season: u32,
 ) -> rusqlite::Result<Vec<AttributedSubtitle>> {
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare_cached(
         "SELECT path, episode, creator_source_id, creator_set_at FROM media_files
           WHERE work_id = ?1 AND season = ?2 AND kind = 'subtitle'
             AND creator_source_id IS NOT NULL
@@ -131,7 +131,7 @@ pub(super) fn name_unknown(
     source_id: &str,
     now: Millis,
 ) -> rusqlite::Result<usize> {
-    conn.execute(
+    conn.prepare_cached(
         "UPDATE media_files
             SET creator_source_id = ?3, creator_set_at = ?4,
                 creator_version = creator_version + 1
@@ -140,8 +140,8 @@ pub(super) fn name_unknown(
             AND NOT EXISTS (SELECT 1 FROM subtitle_applied ap
                              WHERE ap.work_id = media_files.work_id
                                AND ap.path = media_files.path AND ap.removed_at IS NULL)",
-        params![work_id, season, source_id, now],
-    )
+    )?
+    .execute(params![work_id, season, source_id, now])
 }
 
 pub(super) fn file_creator(
@@ -150,18 +150,17 @@ pub(super) fn file_creator(
     season: u32,
     path: &str,
 ) -> rusqlite::Result<Option<CreatorSet>> {
-    conn.query_row(
+    conn.prepare_cached(
         "SELECT m.creator_source_id, s.creator_name, s.anime_no, m.creator_version
            FROM media_files m LEFT JOIN subtitle_sources s ON s.id = m.creator_source_id
           WHERE m.work_id = ?1 AND m.season = ?2 AND m.path = ?3 AND m.kind = 'subtitle'",
-        params![work_id, season, path],
-        |row| {
-            Ok(CreatorSet {
-                creator: creator_of(row.get(0)?, row.get(1)?, row.get(2)?),
-                version: row.get(3)?,
-            })
-        },
-    )
+    )?
+    .query_row(params![work_id, season, path], |row| {
+        Ok(CreatorSet {
+            creator: creator_of(row.get(0)?, row.get(1)?, row.get(2)?),
+            version: row.get(3)?,
+        })
+    })
     .optional()
 }
 
@@ -176,12 +175,13 @@ pub(super) fn set_file(
 ) -> Result<CreatorSet, CreatorError> {
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let current: Option<(Option<String>, i64)> = tx
-        .query_row(
+        .prepare_cached(
             "SELECT creator_source_id, creator_version FROM media_files
               WHERE work_id = ?1 AND season = ?2 AND path = ?3 AND kind = 'subtitle'",
-            params![work_id, season, path],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
+        )?
+        .query_row(params![work_id, season, path], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })
         .optional()?;
     let Some((held, held_version)) = current else {
         return Err(CreatorError::NoFile);
@@ -191,13 +191,13 @@ pub(super) fn set_file(
     }
     // The same creator again is no change, so it does not move the version.
     if held.as_deref() != source_id {
-        tx.execute(
+        tx.prepare_cached(
             "UPDATE media_files
                 SET creator_source_id = ?4, creator_version = creator_version + 1,
                     creator_set_at = CASE WHEN ?4 IS NULL THEN NULL ELSE ?5 END
               WHERE work_id = ?1 AND season = ?2 AND path = ?3",
-            params![work_id, season, path, source_id, now],
-        )?;
+        )?
+        .execute(params![work_id, season, path, source_id, now])?;
     }
     tx.commit()?;
     file_creator(conn, work_id, season, path)?.ok_or(CreatorError::NoFile)

@@ -62,22 +62,21 @@ impl SearchPace {
             .run(move |c| {
                 let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
                 let pace: Option<(Millis, Option<Millis>)> = tx
-                    .query_row(
+                    .prepare_cached(
                         "SELECT next_at, blocked_until FROM search_pace WHERE host = ?1",
-                        params![host],
-                        |r| Ok((r.get(0)?, r.get(1)?)),
-                    )
+                    )?
+                    .query_row(params![host], |r| Ok((r.get(0)?, r.get(1)?)))
                     .optional()?;
                 let (next_at, blocked) = pace.unwrap_or((now, None));
                 let slot = now.max(next_at).max(blocked.unwrap_or(now));
                 if max_wait_ms.is_some_and(|max| slot - now > max) {
                     return Ok::<_, PaceError>(Err(slot - now));
                 }
-                tx.execute(
+                tx.prepare_cached(
                     "INSERT INTO search_pace (host, next_at, blocked_until) VALUES (?1, ?2, ?3)
                      ON CONFLICT (host) DO UPDATE SET next_at = excluded.next_at",
-                    params![host, slot + spacing_ms, blocked],
-                )?;
+                )?
+                .execute(params![host, slot + spacing_ms, blocked])?;
                 tx.commit()?;
                 Ok::<_, PaceError>(Ok(slot))
             })
@@ -90,11 +89,8 @@ impl SearchPace {
         self.db
             .run(move |c| {
                 let blocked: Option<Option<Millis>> = c
-                    .query_row(
-                        "SELECT blocked_until FROM search_pace WHERE host = ?1",
-                        params![host],
-                        |r| r.get(0),
-                    )
+                    .prepare_cached("SELECT blocked_until FROM search_pace WHERE host = ?1")?
+                    .query_row(params![host], |r| r.get(0))
                     .optional()?;
                 Ok::<_, PaceError>(blocked.flatten())
             })
@@ -107,13 +103,13 @@ impl SearchPace {
         self.db
             .run(move |c| {
                 let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-                tx.execute(
+                tx.prepare_cached(
                     "INSERT INTO search_pace (host, next_at, blocked_until) VALUES (?1, ?2, ?2)
                      ON CONFLICT (host) DO UPDATE SET
                          next_at = max(next_at, excluded.next_at),
                          blocked_until = max(coalesce(blocked_until, 0), excluded.blocked_until)",
-                    params![host, until],
-                )?;
+                )?
+                .execute(params![host, until])?;
                 tx.commit()?;
                 Ok::<_, PaceError>(())
             })

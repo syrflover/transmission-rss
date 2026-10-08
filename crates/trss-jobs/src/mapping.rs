@@ -506,7 +506,7 @@ fn exceptions_in(
     work_id: &str,
     season: u32,
 ) -> rusqlite::Result<HashMap<String, Vec<Exception>>> {
-    let mut stmt = c.prepare(
+    let mut stmt = c.prepare_cached(
         "SELECT source_id, episode_key, episode, target FROM subtitle_episode_exceptions
           WHERE work_id = ?1 AND season = ?2 ORDER BY episode_key",
     )?;
@@ -534,7 +534,7 @@ pub fn read_in(
     work_id: &str,
     season: u32,
 ) -> rusqlite::Result<HashMap<String, Mapping>> {
-    let mut stmt = c.prepare(&format!(
+    let mut stmt = c.prepare_cached(&format!(
         "SELECT {MAPPING_COLUMNS} FROM subtitle_episode_mappings
           WHERE work_id = ?1 AND season = ?2"
     ))?;
@@ -558,14 +558,11 @@ fn read_one(
     source_id: &str,
 ) -> rusqlite::Result<Option<(Mapping, Option<i64>)>> {
     let row = c
-        .query_row(
-            &format!(
-                "SELECT {MAPPING_COLUMNS} FROM subtitle_episode_mappings
+        .prepare_cached(&format!(
+            "SELECT {MAPPING_COLUMNS} FROM subtitle_episode_mappings
                   WHERE work_id = ?1 AND season = ?2 AND source_id = ?3"
-            ),
-            params![work_id, season, source_id],
-            mapping_of,
-        )
+        ))?
+        .query_row(params![work_id, season, source_id], mapping_of)
         .optional()?;
     let Some((_, mut mapping, retired)) = row else {
         return Ok(None);
@@ -578,11 +575,8 @@ fn read_one(
 
 /// The next value of the version counter (see the module docs).
 fn next_version(c: &Connection) -> rusqlite::Result<i64> {
-    c.query_row(
-        "UPDATE subtitle_mapping_clock SET version = version + 1 RETURNING version",
-        [],
-        |r| r.get(0),
-    )
+    c.prepare_cached("UPDATE subtitle_mapping_clock SET version = version + 1 RETURNING version")?
+        .query_row([], |r| r.get(0))
 }
 
 /// Writes what the app decided for the source, unless the user set its
@@ -639,7 +633,7 @@ pub fn store_in(
         }
     }
     let version = next_version(c)?;
-    c.execute(
+    c.prepare_cached(
         "INSERT INTO subtitle_episode_mappings
              (work_id, season, source_id, kind, episode_offset, evidence, decided_at,
               retired_offset, version)
@@ -649,18 +643,18 @@ pub fn store_in(
              evidence = excluded.evidence, decided_at = excluded.decided_at,
              retired_offset = excluded.retired_offset, version = excluded.version
          WHERE subtitle_episode_mappings.kind <> 'user'",
-        params![
-            work_id,
-            season,
-            source_id,
-            kind.code(),
-            offset,
-            evidence,
-            now,
-            retired,
-            version
-        ],
-    )?;
+    )?
+    .execute(params![
+        work_id,
+        season,
+        source_id,
+        kind.code(),
+        offset,
+        evidence,
+        now,
+        retired,
+        version
+    ])?;
     // The row as it is now: a user's mapping that came in between stays.
     Ok(read_one(c, work_id, season, source_id)?
         .map(|(m, _)| m)
@@ -786,7 +780,7 @@ pub fn set_user_in(
         return Ok(Saved::Stale(stored));
     }
     let next = next_version(&tx)?;
-    tx.execute(
+    tx.prepare_cached(
         "INSERT INTO subtitle_episode_mappings
              (work_id, season, source_id, kind, episode_offset, evidence, decided_at,
               retired_offset, version)
@@ -795,34 +789,36 @@ pub fn set_user_in(
              kind = 'user', episode_offset = excluded.episode_offset,
              evidence = excluded.evidence, decided_at = excluded.decided_at,
              retired_offset = NULL, version = excluded.version",
-        params![
-            work_id,
-            season,
-            source_id,
-            user.offset,
-            USER_EVIDENCE,
-            now,
-            next
-        ],
-    )?;
-    tx.execute(
+    )?
+    .execute(params![
+        work_id,
+        season,
+        source_id,
+        user.offset,
+        USER_EVIDENCE,
+        now,
+        next
+    ])?;
+    tx.prepare_cached(
         "DELETE FROM subtitle_episode_exceptions
           WHERE work_id = ?1 AND season = ?2 AND source_id = ?3",
-        params![work_id, season, source_id],
-    )?;
+    )?
+    .execute(params![work_id, season, source_id])?;
     for e in &user.exceptions {
-        tx.execute(
+        tx.prepare_cached(
             "INSERT INTO subtitle_episode_exceptions
                  (work_id, season, source_id, episode_key, episode, target)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![work_id, season, source_id, e.key, e.episode, e.target],
-        )?;
+        )?
+        .execute(params![
+            work_id, season, source_id, e.key, e.episode, e.target
+        ])?;
     }
-    tx.execute(
+    tx.prepare_cached(
         "DELETE FROM subtitle_mapping_conflicts
           WHERE work_id = ?1 AND season = ?2 AND source_id = ?3",
-        params![work_id, season, source_id],
-    )?;
+    )?
+    .execute(params![work_id, season, source_id])?;
     crate::place::relocate::reevaluate_in(&tx, work_id, season, source_id, total, now)?;
     let saved = read_one(&tx, work_id, season, source_id)?.map(|(m, _)| m);
     tx.commit()?;
@@ -849,16 +845,16 @@ pub fn revert_in(
         return Ok(Saved::NotTheUsers(stored));
     }
     // The exceptions go with the row.
-    tx.execute(
+    tx.prepare_cached(
         "DELETE FROM subtitle_episode_mappings
           WHERE work_id = ?1 AND season = ?2 AND source_id = ?3",
-        params![work_id, season, source_id],
-    )?;
-    tx.execute(
+    )?
+    .execute(params![work_id, season, source_id])?;
+    tx.prepare_cached(
         "DELETE FROM subtitle_mapping_conflicts
           WHERE work_id = ?1 AND season = ?2 AND source_id = ?3",
-        params![work_id, season, source_id],
-    )?;
+    )?
+    .execute(params![work_id, season, source_id])?;
     tx.commit()?;
     Ok(Saved::Done(None))
 }
@@ -874,7 +870,7 @@ pub fn store_conflicts(
     now: Millis,
 ) -> rusqlite::Result<()> {
     let before: HashMap<String, (String, Millis)> = {
-        let mut stmt = c.prepare(
+        let mut stmt = c.prepare_cached(
             "SELECT episode, reason, found_at FROM subtitle_mapping_conflicts
               WHERE work_id = ?1 AND season = ?2 AND source_id = ?3",
         )?;
@@ -892,25 +888,25 @@ pub fn store_conflicts(
     if same {
         return Ok(());
     }
-    c.execute(
+    c.prepare_cached(
         "DELETE FROM subtitle_mapping_conflicts
           WHERE work_id = ?1 AND season = ?2 AND source_id = ?3",
-        params![work_id, season, source_id],
-    )?;
+    )?
+    .execute(params![work_id, season, source_id])?;
     for f in found {
-        c.execute(
+        c.prepare_cached(
             "INSERT INTO subtitle_mapping_conflicts
                  (work_id, season, source_id, episode, reason, found_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![
-                work_id,
-                season,
-                source_id,
-                f.episode,
-                f.reason,
-                before.get(&f.episode).map_or(now, |(_, at)| *at)
-            ],
-        )?;
+        )?
+        .execute(params![
+            work_id,
+            season,
+            source_id,
+            f.episode,
+            f.reason,
+            before.get(&f.episode).map_or(now, |(_, at)| *at)
+        ])?;
     }
     Ok(())
 }
@@ -922,7 +918,7 @@ pub fn conflicts_in(
     season: u32,
     source_id: &str,
 ) -> rusqlite::Result<Vec<Conflict>> {
-    let mut stmt = c.prepare(
+    let mut stmt = c.prepare_cached(
         "SELECT episode, reason FROM subtitle_mapping_conflicts
           WHERE work_id = ?1 AND season = ?2 AND source_id = ?3 ORDER BY episode",
     )?;

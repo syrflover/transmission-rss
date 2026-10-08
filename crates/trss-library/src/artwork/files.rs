@@ -601,10 +601,10 @@ pub async fn recover(
                 }
                 match found_at(&root.join(&file.relative_path), &file) {
                     Ok(Found::Ours(_)) => {
-                        tx.execute(
+                        tx.prepare_cached(
                             "UPDATE artwork_files SET state = 'published' WHERE relative_path = ?1",
-                            [&file.relative_path],
-                        )?;
+                        )?
+                        .execute([&file.relative_path])?;
                     }
                     Err(_) => continue,
                     Ok(_) => store::delete_file_row(&tx, &file.relative_path)?,

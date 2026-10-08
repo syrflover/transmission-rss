@@ -109,16 +109,15 @@ fn rule_from_row(row: &Row<'_>) -> rusqlite::Result<Rule> {
 
 fn fetch_channel(conn: &Connection, id: &str) -> Result<Option<Channel>> {
     Ok(conn
-        .query_row(
-            &format!("SELECT {CHANNEL_COLUMNS} FROM channels WHERE id = ?1"),
-            [id],
-            channel_from_row,
-        )
+        .prepare_cached(&format!(
+            "SELECT {CHANNEL_COLUMNS} FROM channels WHERE id = ?1"
+        ))?
+        .query_row([id], channel_from_row)
         .optional()?)
 }
 
 fn fetch_channels(conn: &Connection) -> Result<Vec<Channel>> {
-    let mut stmt = conn.prepare(&format!(
+    let mut stmt = conn.prepare_cached(&format!(
         "SELECT {CHANNEL_COLUMNS} FROM channels ORDER BY position, id"
     ))?;
     let rows = stmt.query_map([], channel_from_row)?;
@@ -127,16 +126,15 @@ fn fetch_channels(conn: &Connection) -> Result<Vec<Channel>> {
 
 fn fetch_rule(conn: &Connection, id: &str) -> Result<Option<Rule>> {
     Ok(conn
-        .query_row(
-            &format!("SELECT {RULE_COLUMNS} FROM {RULE_FROM} WHERE r.id = ?1"),
-            [id],
-            rule_from_row,
-        )
+        .prepare_cached(&format!(
+            "SELECT {RULE_COLUMNS} FROM {RULE_FROM} WHERE r.id = ?1"
+        ))?
+        .query_row([id], rule_from_row)
         .optional()?)
 }
 
 fn fetch_rules(conn: &Connection, channel_id: &str) -> Result<Vec<Rule>> {
-    let mut stmt = conn.prepare(&format!(
+    let mut stmt = conn.prepare_cached(&format!(
         "SELECT {RULE_COLUMNS} FROM {RULE_FROM} WHERE r.channel_id = ?1 ORDER BY r.position, r.id"
     ))?;
     let rows = stmt.query_map([channel_id], rule_from_row)?;
@@ -165,14 +163,11 @@ fn check_version(kind: &'static str, id: &str, expected: Version, actual: Versio
 
 fn insert_channel(tx: &Transaction<'_>, input: &ChannelInput) -> Result<String> {
     let id = new_id();
-    let position: i64 = tx.query_row(
-        "SELECT COALESCE(MAX(position), -1) + 1 FROM channels",
-        [],
-        |r| r.get(0),
-    )?;
-    tx.execute(
-        "INSERT INTO channels (id, position, url, excludes, secret_query, past_search, name, version)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1)",
+    let position: i64 = tx
+        .prepare_cached("SELECT COALESCE(MAX(position), -1) + 1 FROM channels")?
+        .query_row([], |r| r.get(0))?;
+    tx.prepare_cached("INSERT INTO channels (id, position, url, excludes, secret_query, past_search, name, version)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1)")?.execute(
         params![
             id,
             position,
@@ -193,23 +188,23 @@ fn insert_rule(
     input: &RuleInput,
 ) -> Result<String> {
     let id = new_id();
-    tx.execute(
+    tx.prepare_cached(
         "INSERT INTO rules (id, channel_id, position, match_text, regex, case_insensitive,
                             directory, episode, episode_auto, episode_decided, state, version)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?10, 1)",
-        params![
-            id,
-            channel_id,
-            position,
-            input.r#match,
-            input.regex,
-            input.case_insensitive,
-            input.directory,
-            input.episode,
-            input.episode_auto,
-            input.state.as_str(),
-        ],
-    )?;
+    )?
+    .execute(params![
+        id,
+        channel_id,
+        position,
+        input.r#match,
+        input.regex,
+        input.case_insensitive,
+        input.directory,
+        input.episode,
+        input.episode_auto,
+        input.state.as_str(),
+    ])?;
     Ok(id)
 }
 
@@ -269,17 +264,14 @@ const UPDATE_CHANNEL: &str = "UPDATE channels
      WHERE id = ?1";
 
 fn write_channel_fields(tx: &Transaction<'_>, id: &str, input: &ChannelInput) -> Result<()> {
-    tx.execute(
-        UPDATE_CHANNEL,
-        params![
-            id,
-            input.url,
-            to_json(&input.excludes),
-            to_json(&input.secret_query),
-            input.past_search,
-            input.stored_name(),
-        ],
-    )?;
+    tx.prepare_cached(UPDATE_CHANNEL)?.execute(params![
+        id,
+        input.url,
+        to_json(&input.excludes),
+        to_json(&input.secret_query),
+        input.past_search,
+        input.stored_name(),
+    ])?;
     Ok(())
 }
 
@@ -316,7 +308,8 @@ pub fn replace_channel(
     let current = require_channel(&tx, id)?;
     check_version("channel", id, expected, current.version)?;
     write_channel_fields(&tx, id, input)?;
-    tx.execute("DELETE FROM rules WHERE channel_id = ?1", [id])?;
+    tx.prepare_cached("DELETE FROM rules WHERE channel_id = ?1")?
+        .execute([id])?;
     insert_rules(&tx, id, rules)?;
     let replaced = channel_with_rules(&tx, id)?;
     tx.commit()?;
@@ -328,11 +321,9 @@ pub fn create_rule(conn: &mut Connection, channel_id: &str, input: &RuleInput) -
 
     let tx = begin(conn)?;
     require_channel(&tx, channel_id)?;
-    let position: i64 = tx.query_row(
-        "SELECT COALESCE(MAX(position), -1) + 1 FROM rules WHERE channel_id = ?1",
-        [channel_id],
-        |r| r.get(0),
-    )?;
+    let position: i64 = tx
+        .prepare_cached("SELECT COALESCE(MAX(position), -1) + 1 FROM rules WHERE channel_id = ?1")?
+        .query_row([channel_id], |r| r.get(0))?;
     let id = insert_rule(&tx, channel_id, position, input)?;
     let created = fetch_rule(&tx, &id)?.expect("the rule was just inserted");
     tx.commit()?;
@@ -380,12 +371,11 @@ pub(super) fn check_not_subscribed(
     anime_no: i64,
 ) -> Result<()> {
     let existing: Option<String> = tx
-        .query_row(
+        .prepare_cached(
             "SELECT s.rule_id FROM rule_subscriptions s JOIN rules r ON r.id = s.rule_id
               WHERE r.channel_id = ?1 AND s.anissia_anime_no = ?2",
-            params![channel_id, anime_no],
-            |r| r.get(0),
-        )
+        )?
+        .query_row(params![channel_id, anime_no], |r| r.get(0))
         .optional()?;
     match existing {
         Some(rule_id) => Err(ChannelError::AlreadySubscribed { rule_id }),
@@ -410,15 +400,12 @@ pub fn create_subscription_rule(
     require_channel(&tx, channel_id)?;
     check_not_subscribed(&tx, channel_id, subscription.anime.anime_no)?;
     anissia::upsert_in(&tx, &subscription.anime)?;
-    let position: i64 = tx.query_row(
-        "SELECT COALESCE(MAX(position), -1) + 1 FROM rules WHERE channel_id = ?1",
-        [channel_id],
-        |r| r.get(0),
-    )?;
+    let position: i64 = tx
+        .prepare_cached("SELECT COALESCE(MAX(position), -1) + 1 FROM rules WHERE channel_id = ?1")?
+        .query_row([channel_id], |r| r.get(0))?;
     let id = insert_rule(&tx, channel_id, position, input)?;
-    tx.execute(
-        "INSERT INTO rule_subscriptions (rule_id, anissia_anime_no, subtitles, creator, season_id, subscribed_at)
-         VALUES (?1, ?2, ?3, ?4, NULL, ?5)",
+    tx.prepare_cached("INSERT INTO rule_subscriptions (rule_id, anissia_anime_no, subtitles, creator, season_id, subscribed_at)
+         VALUES (?1, ?2, ?3, ?4, NULL, ?5)")?.execute(
         params![
             id,
             subscription.anime.anime_no,
@@ -479,7 +466,7 @@ pub fn update_rule_at(
         });
     }
     check_version("rule", id, expected, current.version)?;
-    tx.execute(
+    tx.prepare_cached(
         "UPDATE rules
          SET match_text = ?2, regex = ?3, case_insensitive = ?4, directory = ?5,
              episode_basis = CASE WHEN ?7 AND episode = ?6 THEN episode_basis END,
@@ -487,17 +474,17 @@ pub fn update_rule_at(
              episode_decided = episode_decided OR ?7,
              episode = ?6, episode_auto = ?7, state = ?8, version = version + 1
          WHERE id = ?1",
-        params![
-            id,
-            input.r#match,
-            input.regex,
-            input.case_insensitive,
-            input.directory,
-            input.episode,
-            input.episode_auto,
-            input.state.as_str(),
-        ],
-    )?;
+    )?
+    .execute(params![
+        id,
+        input.r#match,
+        input.regex,
+        input.case_insensitive,
+        input.directory,
+        input.episode,
+        input.episode_auto,
+        input.state.as_str(),
+    ])?;
     // The phrase of a subscription changes hands: given, or cleared so that it
     // waits for a title again. Either way what happens next is judged from now.
     if current.subscription.is_some() && current.r#match.is_none() != input.r#match.is_none() {
@@ -511,10 +498,8 @@ pub fn update_rule_at(
 /// Notes that the phrase of the subscription of rule `id` was given or cleared
 /// at `at`.
 fn note_titled(tx: &Transaction<'_>, id: &str, at: Millis) -> Result<()> {
-    tx.execute(
-        "UPDATE rule_subscriptions SET titled_at = ?2 WHERE rule_id = ?1",
-        params![id, at],
-    )?;
+    tx.prepare_cached("UPDATE rule_subscriptions SET titled_at = ?2 WHERE rule_id = ?1")?
+        .execute(params![id, at])?;
     Ok(())
 }
 
@@ -546,13 +531,13 @@ pub fn give_title(
             "only a collecting subscription that waits for its title is given one",
         ));
     }
-    tx.execute(
+    tx.prepare_cached(
         "UPDATE rules
          SET match_text = ?2, regex = 0, directory = COALESCE(?3, directory),
              version = version + 1
          WHERE id = ?1",
-        params![id, title, directory],
-    )?;
+    )?
+    .execute(params![id, title, directory])?;
     note_titled(&tx, id, at)?;
     let updated = fetch_rule(&tx, id)?.expect("the rule still exists");
     tx.commit()?;
@@ -574,18 +559,18 @@ pub fn reject_title(
     }
     let tx = begin(conn)?;
     require_channel(&tx, channel_id)?;
-    tx.execute(
+    tx.prepare_cached(
         "INSERT OR IGNORE INTO rejected_titles (channel_id, title_key, work, rejected_at)
          VALUES (?1, ?2, ?3, ?4)",
-        params![channel_id, key, work, at],
-    )?;
+    )?
+    .execute(params![channel_id, key, work, at])?;
     tx.commit()?;
     Ok(())
 }
 
 /// Every rejected title as `(channel ID, title key)`.
 pub fn rejected_titles(conn: &Connection) -> Result<HashSet<(String, String)>> {
-    let mut stmt = conn.prepare("SELECT channel_id, title_key FROM rejected_titles")?;
+    let mut stmt = conn.prepare_cached("SELECT channel_id, title_key FROM rejected_titles")?;
     let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
@@ -602,13 +587,13 @@ pub fn set_rule_state(
     at: Millis,
 ) -> Result<Option<Rule>> {
     let tx = begin(conn)?;
-    tx.execute(
+    tx.prepare_cached(
         "UPDATE rules
          SET state = ?2, version = version + 1,
              resumed_at = CASE WHEN ?2 = 'active' THEN ?3 ELSE resumed_at END
          WHERE id = ?1 AND state <> ?2",
-        params![id, state.as_str(), at],
-    )?;
+    )?
+    .execute(params![id, state.as_str(), at])?;
     let rule = fetch_rule(&tx, id)?;
     tx.commit()?;
     Ok(rule)
@@ -620,11 +605,11 @@ pub fn set_rule_state(
 /// `None` when the rule is gone.
 pub fn begin_rule(conn: &mut Connection, id: &str) -> Result<Option<Rule>> {
     let tx = begin(conn)?;
-    tx.execute(
+    tx.prepare_cached(
         "UPDATE rules SET state = 'active', version = version + 1
          WHERE id = ?1 AND state <> 'active'",
-        [id],
-    )?;
+    )?
+    .execute([id])?;
     let rule = fetch_rule(&tx, id)?;
     tx.commit()?;
     Ok(rule)
@@ -640,7 +625,8 @@ fn require_rule(tx: &Transaction<'_>, id: &str, expected: Version) -> Result<Rul
 }
 
 fn bump_version(tx: &Transaction<'_>, id: &str) -> Result<()> {
-    tx.execute("UPDATE rules SET version = version + 1 WHERE id = ?1", [id])?;
+    tx.prepare_cached("UPDATE rules SET version = version + 1 WHERE id = ?1")?
+        .execute([id])?;
     Ok(())
 }
 
@@ -669,13 +655,13 @@ pub fn set_video_receiving(
         RuleState::Paused
     };
     if rule.state != wanted {
-        tx.execute(
+        tx.prepare_cached(
             "UPDATE rules
              SET state = ?2, version = version + 1,
                  resumed_at = CASE WHEN ?2 = 'active' THEN ?3 ELSE resumed_at END
              WHERE id = ?1",
-            params![id, wanted.as_str(), at],
-        )?;
+        )?
+        .execute(params![id, wanted.as_str(), at])?;
     }
     let updated = fetch_rule(&tx, id)?.expect("the rule still exists");
     tx.commit()?;
@@ -710,10 +696,8 @@ pub fn set_subtitle_receiving(
         (true, false) => SubtitleMode::Undecided,
     };
     if subscription.subtitles != wanted {
-        tx.execute(
-            "UPDATE rule_subscriptions SET subtitles = ?2 WHERE rule_id = ?1",
-            params![id, wanted.as_str()],
-        )?;
+        tx.prepare_cached("UPDATE rule_subscriptions SET subtitles = ?2 WHERE rule_id = ?1")?
+            .execute(params![id, wanted.as_str()])?;
         bump_version(&tx, id)?;
     }
     let updated = fetch_rule(&tx, id)?.expect("the rule still exists");
@@ -751,10 +735,10 @@ pub fn set_creator(
         } else {
             SubtitleMode::Undecided
         };
-        tx.execute(
+        tx.prepare_cached(
             "UPDATE rule_subscriptions SET subtitles = ?2, creator = ?3 WHERE rule_id = ?1",
-            params![id, mode.as_str(), creator],
-        )?;
+        )?
+        .execute(params![id, mode.as_str(), creator])?;
         bump_version(&tx, id)?;
     }
     let updated = fetch_rule(&tx, id)?.expect("the rule still exists");
@@ -781,9 +765,8 @@ pub fn subscribe_rule(
     }
     check_not_subscribed(&tx, &rule.channel_id, subscription.anime.anime_no)?;
     anissia::upsert_in(&tx, &subscription.anime)?;
-    tx.execute(
-        "INSERT INTO rule_subscriptions (rule_id, anissia_anime_no, subtitles, creator, season_id, subscribed_at)
-         VALUES (?1, ?2, ?3, ?4, NULL, ?5)",
+    tx.prepare_cached("INSERT INTO rule_subscriptions (rule_id, anissia_anime_no, subtitles, creator, season_id, subscribed_at)
+         VALUES (?1, ?2, ?3, ?4, NULL, ?5)")?.execute(
         params![
             id,
             subscription.anime.anime_no,
@@ -819,23 +802,21 @@ pub enum SeasonLinked {
 /// found first among the subscriptions.
 fn other_holder(tx: &Connection, season_id: &str, anime_no: i64) -> Result<Option<i64>> {
     let by_subscription: Option<i64> = tx
-        .query_row(
+        .prepare_cached(
             "SELECT anissia_anime_no FROM rule_subscriptions
               WHERE season_id = ?1 AND anissia_anime_no <> ?2 ORDER BY rule_id LIMIT 1",
-            params![season_id, anime_no],
-            |r| r.get(0),
-        )
+        )?
+        .query_row(params![season_id, anime_no], |r| r.get(0))
         .optional()?;
     if by_subscription.is_some() {
         return Ok(by_subscription);
     }
     Ok(tx
-        .query_row(
+        .prepare_cached(
             "SELECT anime_no FROM season_anissia
               WHERE work_id || ':' || season = ?1 AND anime_no IS NOT NULL AND anime_no <> ?2",
-            params![season_id, anime_no],
-            |r| r.get(0),
-        )
+        )?
+        .query_row(params![season_id, anime_no], |r| r.get(0))
         .optional()?)
 }
 
@@ -858,26 +839,24 @@ pub fn link_season(conn: &mut Connection, id: &str, season_id: &str) -> Result<S
     }
     if other_holder(&tx, season_id, subscription.anissia_anime_no)?.is_some() {
         if subscription.season_blocked.as_deref() != Some(season_id) {
-            tx.execute(
+            tx.prepare_cached(
                 "UPDATE rule_subscriptions SET season_blocked = ?2 WHERE rule_id = ?1",
-                params![id, season_id],
-            )?;
+            )?
+            .execute(params![id, season_id])?;
             bump_version(&tx, id)?;
         }
         tx.commit()?;
         return Ok(SeasonLinked::Taken);
     }
-    tx.execute(
+    tx.prepare_cached(
         "UPDATE rule_subscriptions SET season_id = ?2, season_blocked = NULL WHERE rule_id = ?1",
-        params![id, season_id],
-    )?;
+    )?
+    .execute(params![id, season_id])?;
     bump_version(&tx, id)?;
     if let Some(season) = SeasonRef::parse(season_id) {
-        let work_exists: bool = tx.query_row(
-            "SELECT EXISTS (SELECT 1 FROM works WHERE id = ?1)",
-            [&season.work_id],
-            |r| r.get(0),
-        )?;
+        let work_exists: bool = tx
+            .prepare_cached("SELECT EXISTS (SELECT 1 FROM works WHERE id = ?1)")?
+            .query_row([&season.work_id], |r| r.get(0))?;
         if work_exists {
             season_anissia::set_in(
                 &tx,
@@ -896,23 +875,21 @@ pub fn link_season(conn: &mut Connection, id: &str, season_id: &str) -> Result<S
 /// take the season names as the reason.
 pub fn season_holder(conn: &Connection, season_id: &str) -> Result<Option<i64>> {
     let by_subscription: Option<i64> = conn
-        .query_row(
+        .prepare_cached(
             "SELECT anissia_anime_no FROM rule_subscriptions WHERE season_id = ?1
               ORDER BY rule_id LIMIT 1",
-            [season_id],
-            |r| r.get(0),
-        )
+        )?
+        .query_row([season_id], |r| r.get(0))
         .optional()?;
     if by_subscription.is_some() {
         return Ok(by_subscription);
     }
     Ok(conn
-        .query_row(
+        .prepare_cached(
             "SELECT anime_no FROM season_anissia
               WHERE work_id || ':' || season = ?1 AND anime_no IS NOT NULL",
-            [season_id],
-            |r| r.get(0),
-        )
+        )?
+        .query_row([season_id], |r| r.get(0))
         .optional()?)
 }
 
@@ -936,7 +913,9 @@ pub fn release_unheld_seasons(conn: &mut Connection) -> Result<Vec<String>> {
          ORDER BY s.rule_id";
     // Most passes find nothing: look before taking the write lock.
     let ids = |conn: &Connection| -> rusqlite::Result<Vec<String>> {
-        conn.prepare(UNHELD)?.query_map([], |r| r.get(0))?.collect()
+        conn.prepare_cached(UNHELD)?
+            .query_map([], |r| r.get(0))?
+            .collect()
     };
     if ids(conn)?.is_empty() {
         return Ok(Vec::new());
@@ -944,10 +923,10 @@ pub fn release_unheld_seasons(conn: &mut Connection) -> Result<Vec<String>> {
     let tx = begin(conn)?;
     let released = ids(&tx)?;
     for id in &released {
-        tx.execute(
+        tx.prepare_cached(
             "UPDATE rule_subscriptions SET season_blocked = NULL WHERE rule_id = ?1",
-            [id],
-        )?;
+        )?
+        .execute([id])?;
         bump_version(&tx, id)?;
     }
     tx.commit()?;
@@ -957,7 +936,7 @@ pub fn release_unheld_seasons(conn: &mut Connection) -> Result<Vec<String>> {
 /// The rules whose subscription is connected to a season of the work
 /// `work_id`, with the season's number, in channel and rule order.
 pub fn subscriptions_of_work(conn: &Connection, work_id: &str) -> Result<Vec<(u32, Rule)>> {
-    let mut stmt = conn.prepare(&format!(
+    let mut stmt = conn.prepare_cached(&format!(
         "SELECT {RULE_COLUMNS} FROM {RULE_FROM} JOIN channels c ON c.id = r.channel_id
           WHERE s.season_id IS NOT NULL AND substr(s.season_id, 1, length(?1) + 1) = ?1 || ':'
           ORDER BY c.position, r.position, r.id"
@@ -1004,7 +983,8 @@ fn apply_order(
     for (index, item) in order.iter().enumerate() {
         let index = index as i64;
         if by_id[item.id.as_str()].1 != index {
-            tx.execute(&update, params![index, item.id])?;
+            tx.prepare_cached(&update)?
+                .execute(params![index, item.id])?;
         }
     }
     Ok(())

@@ -122,17 +122,16 @@ impl SettingsStore {
 }
 
 fn read_collection(conn: &Connection) -> rusqlite::Result<Option<CollectionSettings>> {
-    conn.query_row(
+    conn.prepare_cached(
         "SELECT collect_folder, archive_folder, version FROM collection_settings WHERE id = 1",
-        [],
-        |row| {
-            Ok(CollectionSettings {
-                folder: row.get(0)?,
-                archive_folder: row.get(1)?,
-                version: row.get(2)?,
-            })
-        },
-    )
+    )?
+    .query_row([], |row| {
+        Ok(CollectionSettings {
+            folder: row.get(0)?,
+            archive_folder: row.get(1)?,
+            version: row.get(2)?,
+        })
+    })
     .optional()
 }
 
@@ -163,15 +162,16 @@ where
         }
         .into());
     }
-    tx.execute(
+    tx.prepare_cached(
         "INSERT INTO collection_settings (id, collect_folder, archive_folder, version)
          VALUES (1, ?1, ?2, 1)
          ON CONFLICT (id) DO UPDATE SET
              collect_folder = excluded.collect_folder,
              archive_folder = excluded.archive_folder,
              version = version + 1",
-        params![folder, archive_folder],
     )
+    .map_err(sql)?
+    .execute(params![folder, archive_folder])
     .map_err(sql)?;
     let stored = read_collection(&tx)
         .map_err(sql)?
@@ -195,11 +195,11 @@ pub fn set_collect_folder_if_unset(
             actual: found.version,
         });
     }
-    tx.execute(
+    tx.prepare_cached(
         "INSERT INTO collection_settings (id, collect_folder, archive_folder, version)
          VALUES (1, ?1, NULL, 1)",
-        [folder],
-    )?;
+    )?
+    .execute([folder])?;
     Ok(())
 }
 

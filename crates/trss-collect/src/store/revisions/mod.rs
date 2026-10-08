@@ -540,7 +540,7 @@ fn query(
     filter: &str,
     values: &[&dyn rusqlite::ToSql],
 ) -> Result<Vec<Revision>> {
-    let mut stmt = conn.prepare(&format!(
+    let mut stmt = conn.prepare_cached(&format!(
         "SELECT {COLUMNS} FROM video_revisions {filter} ORDER BY id"
     ))?;
     let rows = stmt
@@ -556,13 +556,13 @@ fn by_id(conn: &Connection, id: i64) -> Result<Option<Revision>> {
 /// Whether another row than `id` that is under way or done has the torrent
 /// `hash`: the same release reached the worker through another channel.
 fn torrent_taken(conn: &Connection, id: Option<i64>, hash: &str) -> Result<bool> {
-    Ok(conn.query_row(
-        "SELECT EXISTS (SELECT 1 FROM video_revisions
+    Ok(conn
+        .prepare_cached(
+            "SELECT EXISTS (SELECT 1 FROM video_revisions
            WHERE torrent_hash = ?1 AND id IS NOT ?2
              AND state IN ('receiving', 'verified', 'removing', 'removed', 'done'))",
-        params![hash, id],
-        |row| row.get(0),
-    )?)
+        )?
+        .query_row(params![hash, id], |row| row.get(0))?)
 }
 
 /// The rows skipped for the row `id` while it was on its way
@@ -579,20 +579,20 @@ fn revive_overtaken(tx: &Connection, id: i64, at: Millis) -> Result<()> {
             None => false,
         };
         if taken {
-            tx.execute(
+            tx.prepare_cached(
                 "UPDATE video_revisions SET reason = ?2, overtaken_by = NULL, updated_at = ?3
                   WHERE id = ?1",
-                params![row.id, SAME_TORRENT, at],
-            )?;
+            )?
+            .execute(params![row.id, SAME_TORRENT, at])?;
         } else {
-            tx.execute(
+            tx.prepare_cached(
                 "UPDATE video_revisions
                     SET state = 'receiving', reason = NULL, received_name = NULL,
                         file_crc = NULL, file_identity = NULL, overtaken_by = NULL,
                         new_missing_at = NULL, updated_at = ?2
                   WHERE id = ?1",
-                params![row.id, at],
-            )?;
+            )?
+            .execute(params![row.id, at])?;
         }
     }
     Ok(())
@@ -609,27 +609,27 @@ fn create_in(tx: &Connection, at: Millis, new: NewRevision) -> Result<Revision> 
         }
         _ => (new.state, new.reason),
     };
-    tx.execute(
+    tx.prepare_cached(
         "INSERT INTO video_revisions (item_id, old_item_id, rule_id, folder,
              episode_name, old_version, new_version, old_crc, expected_crc,
              torrent_hash, state, reason, created_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13)",
-        params![
-            new.item_id,
-            new.old_item_id,
-            new.rule_id,
-            new.folder,
-            new.episode_name,
-            new.old_version,
-            new.new_version,
-            new.old_crc,
-            new.expected_crc,
-            new.torrent_hash,
-            state.code(),
-            reason,
-            at
-        ],
-    )?;
+    )?
+    .execute(params![
+        new.item_id,
+        new.old_item_id,
+        new.rule_id,
+        new.folder,
+        new.episode_name,
+        new.old_version,
+        new.new_version,
+        new.old_crc,
+        new.expected_crc,
+        new.torrent_hash,
+        state.code(),
+        reason,
+        at
+    ])?;
     Ok(query(tx, "WHERE item_id = ?1", &[&new.item_id])?
         .pop()
         .expect("the row just written"))
@@ -646,7 +646,7 @@ fn reopen_in(tx: &Connection, id: i64, at: Millis, hash: &str) -> Result<Option<
     } else {
         ("receiving", None)
     };
-    tx.execute(
+    tx.prepare_cached(
         "UPDATE video_revisions
             SET state = ?2, torrent_hash = ?3, reason = ?4, received_name = NULL,
                 file_crc = NULL, file_identity = NULL, new_missing_at = NULL,
@@ -654,8 +654,8 @@ fn reopen_in(tx: &Connection, id: i64, at: Millis, hash: &str) -> Result<Option<
           WHERE id = ?1
             AND ((state = 'failed' AND received_name IS NULL)
                  OR (state = 'abandoned' AND reason IS NOT NULL AND reason <> ?6))",
-        params![id, state, hash, reason, at, OLD_FILE_WATCHED],
-    )?;
+    )?
+    .execute(params![id, state, hash, reason, at, OLD_FILE_WATCHED])?;
     by_id(tx, id)
 }
 
@@ -676,13 +676,13 @@ fn confirm_in(
         } else {
             ("receiving", None)
         };
-        tx.execute(
+        tx.prepare_cached(
             "UPDATE video_revisions
                 SET state = ?2, torrent_hash = ?3, expected_crc = ?4,
                     reason = ?5, updated_at = ?6
               WHERE id = ?1",
-            params![row.id, state, hash, expected_crc, reason, at],
-        )?;
+        )?
+        .execute(params![row.id, state, hash, expected_crc, reason, at])?;
     }
     by_id(tx, row.id)
 }
@@ -690,8 +690,8 @@ fn confirm_in(
 /// The ID of the history item of `observation`'s channel and identity key.
 fn item_of(tx: &Connection, observation: &Observation) -> Result<Option<i64>> {
     Ok(tx
+        .prepare_cached("SELECT id FROM history_items WHERE channel_id = ?1 AND identity_key = ?2")?
         .query_row(
-            "SELECT id FROM history_items WHERE channel_id = ?1 AND identity_key = ?2",
             params![observation.channel_id, observation.identity_key],
             |r| r.get(0),
         )
@@ -810,11 +810,11 @@ impl RevisionStore {
                         }
                     },
                     HistoryWrite::Outcome { item_id, .. } => {
-                        let exists: bool = tx.query_row(
-                            "SELECT EXISTS (SELECT 1 FROM history_items WHERE id = ?1)",
-                            [item_id],
-                            |r| r.get(0),
-                        )?;
+                        let exists: bool = tx
+                            .prepare_cached(
+                                "SELECT EXISTS (SELECT 1 FROM history_items WHERE id = ?1)",
+                            )?
+                            .query_row([item_id], |r| r.get(0))?;
                         exists.then_some(*item_id)
                     }
                 };
@@ -959,7 +959,7 @@ impl RevisionStore {
                     // keeps the torrent the first look found, which may be
                     // gone by now.
                     let fresh = row.state == RevisionState::Verified;
-                    tx.execute(
+                    tx.prepare_cached(
                         "UPDATE video_revisions
                             SET state = 'removing', old_item_id = COALESCE(?2, old_item_id),
                                 old_version = COALESCE(?3, old_version),
@@ -969,8 +969,15 @@ impl RevisionStore {
                                 claimed_at = COALESCE(claimed_at, ?5),
                                 updated_at = ?5
                           WHERE id = ?1",
-                        params![id, old.item_id, old.version, old.torrent_hash, at, fresh],
-                    )?;
+                    )?
+                    .execute(params![
+                        id,
+                        old.item_id,
+                        old.version,
+                        old.torrent_hash,
+                        at,
+                        fresh
+                    ])?;
                 }
                 tx.commit()?;
                 Ok(claim)
@@ -992,7 +999,7 @@ impl RevisionStore {
             .run(move |c| {
                 let wanted: std::collections::HashSet<&String> = keys.iter().collect();
                 let mut out = HashMap::new();
-                let mut stmt = c.prepare(&format!(
+                let mut stmt = c.prepare_cached(&format!(
                     "SELECT h.identity_key, {} FROM video_revisions r
                        JOIN history_items h ON h.id = r.item_id WHERE h.channel_id = ?1",
                     COLUMNS
@@ -1020,7 +1027,7 @@ impl RevisionStore {
                 // replacement received again after it ended with no video
                 // ([`RevisionStore::reopen`]) went ahead before
                 // ([`Revision::claimed_at`]).
-                let mut stmt = c.prepare(
+                let mut stmt = c.prepare_cached(
                     "SELECT h.identity_key FROM video_revisions r
                        JOIN history_items h
                          ON h.id = r.old_item_id
@@ -1050,7 +1057,7 @@ impl RevisionStore {
     pub async fn replacements(&self) -> Result<Vec<Replacement>> {
         self.db
             .run(|c| {
-                let mut stmt = c.prepare(
+                let mut stmt = c.prepare_cached(
                     "SELECT r.folder, h.title, r.new_version FROM video_revisions r
                        JOIN history_items h ON h.id = r.item_id
                       WHERE r.state IN ('removing', 'removed', 'done')",
@@ -1104,7 +1111,7 @@ impl RevisionStore {
     pub async fn held_hashes(&self) -> Result<Vec<String>> {
         self.db
             .run(|c| {
-                let mut stmt = c.prepare(
+                let mut stmt = c.prepare_cached(
                     "SELECT torrent_hash FROM video_revisions
                       WHERE torrent_hash IS NOT NULL
                         AND state IN ('receiving', 'verified', 'removing', 'removed')
@@ -1142,44 +1149,45 @@ impl RevisionStore {
             .run(move |c| {
                 let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
                 let state: Option<String> = tx
-                    .query_row(
-                        "SELECT state FROM video_revisions WHERE id = ?1",
-                        [id],
-                        |r| r.get(0),
-                    )
+                    .prepare_cached("SELECT state FROM video_revisions WHERE id = ?1")?
+                    .query_row([id], |r| r.get(0))
                     .optional()?;
                 if state.as_deref() != Some(from.code()) {
                     return Ok(false);
                 }
                 match step {
-                    Step::Receiving => tx.execute(
-                        "UPDATE video_revisions SET state = 'receiving', reason = NULL,
+                    Step::Receiving => tx
+                        .prepare_cached(
+                            "UPDATE video_revisions SET state = 'receiving', reason = NULL,
                              updated_at = ?2 WHERE id = ?1",
-                        params![id, at],
-                    )?,
+                        )?
+                        .execute(params![id, at])?,
                     Step::Verified {
                         received_name,
                         file_crc,
                         file_identity,
-                    } => tx.execute(
-                        "UPDATE video_revisions SET state = 'verified', received_name = ?2,
+                    } => tx
+                        .prepare_cached(
+                            "UPDATE video_revisions SET state = 'verified', received_name = ?2,
                              file_crc = ?3, file_identity = ?5, new_missing_at = NULL,
                              reason = NULL, updated_at = ?4
                           WHERE id = ?1",
-                        params![id, received_name, file_crc, at, file_identity],
-                    )?,
-                    Step::Removing => tx.execute(
-                        "UPDATE video_revisions SET state = 'removing', updated_at = ?2
+                        )?
+                        .execute(params![id, received_name, file_crc, at, file_identity])?,
+                    Step::Removing => tx
+                        .prepare_cached(
+                            "UPDATE video_revisions SET state = 'removing', updated_at = ?2
                           WHERE id = ?1",
-                        params![id, at],
-                    )?,
-                    Step::Removed { reason } => tx.execute(
-                        "UPDATE video_revisions SET state = 'removed', reason = ?2,
+                        )?
+                        .execute(params![id, at])?,
+                    Step::Removed { reason } => tx
+                        .prepare_cached(
+                            "UPDATE video_revisions SET state = 'removed', reason = ?2,
                              updated_at = ?3 WHERE id = ?1",
-                        params![id, reason, at],
-                    )?,
+                        )?
+                        .execute(params![id, reason, at])?,
                     Step::Done => {
-                        tx.execute(
+                        tx.prepare_cached(
                             "UPDATE video_revisions
                                 SET state = 'skipped', reason = ?2, overtaken_by = NULL,
                                     updated_at = ?3
@@ -1189,37 +1197,40 @@ impl RevisionStore {
                                    AND o.folder = r.folder AND o.episode_name = r.episode_name
                                    AND o.new_version <= r.new_version
                                    AND o.state IN ('receiving', 'verified'))",
-                            params![id, OVERTAKEN, at],
-                        )?;
-                        tx.execute(
+                        )?
+                        .execute(params![id, OVERTAKEN, at])?;
+                        tx.prepare_cached(
                             "UPDATE video_revisions SET state = 'done', reason = NULL,
                                  replaced_at = ?2, updated_at = ?2 WHERE id = ?1",
-                            params![id, at],
                         )?
+                        .execute(params![id, at])?
                     }
                     Step::Failed {
                         reason,
                         received_name,
                     } => {
-                        let written = tx.execute(
-                            "UPDATE video_revisions SET state = 'failed', reason = ?2,
+                        let written = tx
+                            .prepare_cached(
+                                "UPDATE video_revisions SET state = 'failed', reason = ?2,
                                  received_name = COALESCE(?4, received_name), updated_at = ?3
                               WHERE id = ?1",
-                            params![id, reason, at, received_name],
-                        )?;
+                            )?
+                            .execute(params![id, reason, at, received_name])?;
                         revive_overtaken(&tx, id, at)?;
                         written
                     }
-                    Step::Cleared => tx.execute(
-                        "UPDATE video_revisions SET state = 'cleared', updated_at = ?2
+                    Step::Cleared => tx
+                        .prepare_cached(
+                            "UPDATE video_revisions SET state = 'cleared', updated_at = ?2
                           WHERE id = ?1",
-                        params![id, at],
-                    )?,
-                    Step::Skipped { reason } => tx.execute(
-                        "UPDATE video_revisions SET state = 'skipped', reason = ?2,
+                        )?
+                        .execute(params![id, at])?,
+                    Step::Skipped { reason } => tx
+                        .prepare_cached(
+                            "UPDATE video_revisions SET state = 'skipped', reason = ?2,
                              overtaken_by = NULL, updated_at = ?3 WHERE id = ?1",
-                        params![id, reason, at],
-                    )?,
+                        )?
+                        .execute(params![id, reason, at])?,
                     Step::Overtaken => {
                         let row = by_id(&tx, id)?.expect("the row whose state was read");
                         let by = match overtaker(&siblings(&tx, &row)?, &row) {
@@ -1227,36 +1238,40 @@ impl RevisionStore {
                             Overtaker::InPlace => None,
                             Overtaker::OnItsWay(by) => Some(by),
                         };
-                        tx.execute(
+                        tx.prepare_cached(
                             "UPDATE video_revisions SET state = 'skipped', reason = ?2,
                                  overtaken_by = ?3, updated_at = ?4 WHERE id = ?1",
-                            params![id, OVERTAKEN, by, at],
                         )?
+                        .execute(params![id, OVERTAKEN, by, at])?
                     }
                     Step::Abandoned { reason } => {
-                        let written = tx.execute(
-                            "UPDATE video_revisions SET state = 'abandoned', reason = ?2,
+                        let written = tx
+                            .prepare_cached(
+                                "UPDATE video_revisions SET state = 'abandoned', reason = ?2,
                                  updated_at = ?3 WHERE id = ?1",
-                            params![id, reason, at],
-                        )?;
+                            )?
+                            .execute(params![id, reason, at])?;
                         revive_overtaken(&tx, id, at)?;
                         written
                     }
-                    Step::RemovalWaits { reason } => tx.execute(
-                        "UPDATE video_revisions SET reason = ?2, updated_at = ?3
+                    Step::RemovalWaits { reason } => tx
+                        .prepare_cached(
+                            "UPDATE video_revisions SET reason = ?2, updated_at = ?3
                           WHERE id = ?1 AND state = 'removing'",
-                        params![id, reason, at],
-                    )?,
-                    Step::FolderGone => tx.execute(
-                        "UPDATE video_revisions SET reason = ?2, updated_at = ?3
+                        )?
+                        .execute(params![id, reason, at])?,
+                    Step::FolderGone => tx
+                        .prepare_cached(
+                            "UPDATE video_revisions SET reason = ?2, updated_at = ?3
                           WHERE id = ?1",
-                        params![id, FOLDER_AWAY, at],
-                    )?,
-                    Step::NewMissing { reason } => tx.execute(
-                        "UPDATE video_revisions SET reason = ?2, new_missing_at = ?3,
+                        )?
+                        .execute(params![id, FOLDER_AWAY, at])?,
+                    Step::NewMissing { reason } => tx
+                        .prepare_cached(
+                            "UPDATE video_revisions SET reason = ?2, new_missing_at = ?3,
                              updated_at = ?3 WHERE id = ?1",
-                        params![id, reason, at],
-                    )?,
+                        )?
+                        .execute(params![id, reason, at])?,
                 };
                 tx.commit()?;
                 Ok(true)
@@ -1271,13 +1286,13 @@ impl RevisionStore {
     pub async fn forget_miss(&self, id: i64, miss_reason: Option<String>) -> Result<()> {
         self.db
             .run(move |c| {
-                c.execute(
+                c.prepare_cached(
                     "UPDATE video_revisions
                         SET new_missing_at = NULL,
                             reason = CASE WHEN reason = ?2 THEN NULL ELSE reason END
                       WHERE id = ?1 AND new_missing_at IS NOT NULL",
-                    params![id, miss_reason],
-                )?;
+                )?
+                .execute(params![id, miss_reason])?;
                 Ok(())
             })
             .await
@@ -1290,11 +1305,11 @@ impl RevisionStore {
     pub async fn keep_identity(&self, id: i64, file_identity: String) -> Result<()> {
         self.db
             .run(move |c| {
-                c.execute(
+                c.prepare_cached(
                     "UPDATE video_revisions SET file_identity = ?2
                       WHERE id = ?1 AND state IN ('verified', 'removing')",
-                    params![id, file_identity],
-                )?;
+                )?
+                .execute(params![id, file_identity])?;
                 Ok(())
             })
             .await
@@ -1308,18 +1323,20 @@ impl RevisionStore {
         self.db
             .run(move |c| {
                 match away {
-                    Some(at) => c.execute(
-                        "UPDATE video_revisions SET folder_away_since = ?2
+                    Some(at) => c
+                        .prepare_cached(
+                            "UPDATE video_revisions SET folder_away_since = ?2
                           WHERE id = ?1 AND folder_away_since IS NULL",
-                        params![id, at],
-                    )?,
-                    None => c.execute(
-                        "UPDATE video_revisions
+                        )?
+                        .execute(params![id, at])?,
+                    None => c
+                        .prepare_cached(
+                            "UPDATE video_revisions
                             SET folder_away_since = NULL,
                                 reason = CASE WHEN reason = ?2 THEN NULL ELSE reason END
                           WHERE id = ?1 AND folder_away_since IS NOT NULL",
-                        params![id, FOLDER_AWAY],
-                    )?,
+                        )?
+                        .execute(params![id, FOLDER_AWAY])?,
                 };
                 Ok(())
             })
@@ -1378,19 +1395,18 @@ impl RevisionStore {
                     return Ok(None);
                 };
                 let parent = parent.trim_end_matches('/').to_owned();
-                Ok(c.query_row(
+                Ok(c.prepare_cached(
                     "SELECT w.id, w.dir_name FROM works w
                        JOIN watch_folders f ON f.id = w.watch_folder_id
                       WHERE f.unregistered_at IS NULL
                         AND rtrim(f.path, '/') || '/' || w.dir_name = ?1",
-                    [parent],
-                    |row| {
-                        Ok(WorkRef {
-                            id: row.get(0)?,
-                            name: row.get(1)?,
-                        })
-                    },
-                )
+                )?
+                .query_row([parent], |row| {
+                    Ok(WorkRef {
+                        id: row.get(0)?,
+                        name: row.get(1)?,
+                    })
+                })
                 .optional()?)
             })
             .await

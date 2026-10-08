@@ -148,18 +148,14 @@ pub(super) fn subscribe(
         }
 
         let known: Option<i64> = tx
-            .query_row(
-                "SELECT anime_no FROM anissia_anime WHERE anime_no = ?1",
-                [new.anime.anime_no],
-                |r| r.get(0),
-            )
+            .prepare_cached("SELECT anime_no FROM anissia_anime WHERE anime_no = ?1")?
+            .query_row([new.anime.anime_no], |r| r.get(0))
             .optional()?;
         if !(import.placeholder && known.is_some()) {
             anissia::upsert_in(tx, &new.anime)?;
         }
-        tx.execute(
-            "INSERT INTO rule_subscriptions (rule_id, anissia_anime_no, subtitles, creator, season_id, subscribed_at)
-             VALUES (?1, ?2, ?3, ?4, NULL, ?5)",
+        tx.prepare_cached("INSERT INTO rule_subscriptions (rule_id, anissia_anime_no, subtitles, creator, season_id, subscribed_at)
+             VALUES (?1, ?2, ?3, ?4, NULL, ?5)")?.execute(
             params![
                 rule_id,
                 new.anime.anime_no,

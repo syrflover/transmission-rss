@@ -48,13 +48,14 @@ fn set_auto(
     basis: &str,
 ) -> Result<Option<Rule>> {
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let changed = tx.execute(
-        "UPDATE rules
+    let changed = tx
+        .prepare_cached(
+            "UPDATE rules
             SET episode_previous = episode, episode = ?3, episode_auto = 1, episode_decided = 1,
                 episode_basis = ?4, version = version + 1
           WHERE id = ?1 AND version = ?2 AND episode_auto = 0 AND episode_decided = 0",
-        params![id, expected, offset, basis],
-    )?;
+        )?
+        .execute(params![id, expected, offset, basis])?;
     let rule = if changed == 1 {
         repo::get_rule(&tx, id)?
     } else {
@@ -81,13 +82,13 @@ fn set_manual(conn: &mut Connection, id: &str, expected: Version, episode: i64) 
         });
     }
     if rule.episode != episode || rule.episode_auto {
-        tx.execute(
+        tx.prepare_cached(
             "UPDATE rules
                 SET episode = ?2, episode_auto = 0, episode_basis = NULL, episode_previous = NULL,
                     version = version + 1
               WHERE id = ?1",
-            params![id, episode],
-        )?;
+        )?
+        .execute(params![id, episode])?;
     }
     let updated = repo::get_rule(&tx, id)?.expect("the rule still exists");
     tx.commit()?;

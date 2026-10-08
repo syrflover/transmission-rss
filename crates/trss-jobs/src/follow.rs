@@ -421,10 +421,9 @@ impl Follow {
             .db
             .run(move |c| {
                 Ok::<_, FollowError>(
-                    c.query_row("SELECT missing FROM works WHERE id = ?1", [work_id], |r| {
-                        r.get::<_, i64>(0)
-                    })
-                    .optional()?,
+                    c.prepare_cached("SELECT missing FROM works WHERE id = ?1")?
+                        .query_row([work_id], |r| r.get::<_, i64>(0))
+                        .optional()?,
                 )
             })
             .await?;
@@ -683,12 +682,9 @@ impl Follow {
         self.db
             .run(move |c| {
                 Ok::<_, FollowError>(
-                    c.query_row(
-                        "SELECT anime_no FROM subtitle_sources WHERE id = ?1",
-                        [source_id],
-                        |r| r.get::<_, i64>(0),
-                    )
-                    .optional()?,
+                    c.prepare_cached("SELECT anime_no FROM subtitle_sources WHERE id = ?1")?
+                        .query_row([source_id], |r| r.get::<_, i64>(0))
+                        .optional()?,
                 )
             })
             .await
@@ -775,9 +771,8 @@ impl Follow {
                 .db
                 .run(move |c| {
                     let Some(source) = c
-                        .query_row(
-                            "SELECT id FROM subtitle_sources
-                              WHERE anime_no = ?1 AND creator_name = ?2 ORDER BY id LIMIT 1",
+                        .prepare_cached("SELECT id FROM subtitle_sources
+                              WHERE anime_no = ?1 AND creator_name = ?2 ORDER BY id LIMIT 1")?.query_row(
                             rusqlite::params![anime_no, name],
                             |r| r.get::<_, String>(0),
                         )
@@ -789,7 +784,7 @@ impl Follow {
                     else {
                         return Ok(None);
                     };
-                    let mut stmt = c.prepare(
+                    let mut stmt = c.prepare_cached(
                         "SELECT episode, found_at FROM subtitle_mapping_conflicts
                           WHERE work_id = ?1 AND season = ?2 AND source_id = ?3
                           ORDER BY episode",
@@ -810,7 +805,7 @@ impl Follow {
                     // observation of another episode.
                     let mut has_episode = false;
                     if stored.kind == mapping::MappingKind::Undecided {
-                        let mut stmt = c.prepare(
+                        let mut stmt = c.prepare_cached(
                             "SELECT DISTINCT episode FROM caption_observations WHERE source_id = ?1",
                         )?;
                         let episodes = stmt.query_map([&source], |r| r.get::<_, String>(0))?;
@@ -861,13 +856,16 @@ impl Follow {
         let work_id = work_id.to_owned();
         self.db
             .run(move |c| {
-                Ok::<_, FollowError>(c.query_row(
-                    "SELECT w.dir_name,
+                Ok::<_, FollowError>(
+                    c.prepare_cached(
+                        "SELECT w.dir_name,
                             (SELECT a.subject FROM anissia_anime a WHERE a.anime_no = ?2)
                      FROM works w WHERE w.id = ?1",
-                    rusqlite::params![work_id, anime_no],
-                    |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)),
-                )?)
+                    )?
+                    .query_row(rusqlite::params![work_id, anime_no], |r| {
+                        Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
+                    })?,
+                )
             })
             .await
     }

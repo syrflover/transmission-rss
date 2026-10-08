@@ -65,16 +65,15 @@ fn entry_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Entry> {
 }
 
 pub(super) fn entry(conn: &Connection, id: i64) -> rusqlite::Result<Option<Entry>> {
-    conn.query_row(
-        &format!("SELECT {ENTRY_COLUMNS} FROM anilist_entries e WHERE e.id = ?1"),
-        [id],
-        entry_from_row,
-    )
+    conn.prepare_cached(&format!(
+        "SELECT {ENTRY_COLUMNS} FROM anilist_entries e WHERE e.id = ?1"
+    ))?
+    .query_row([id], entry_from_row)
     .optional()
 }
 
 pub(super) fn put_entry(conn: &Connection, entry: &Entry) -> rusqlite::Result<()> {
-    conn.execute(
+    conn.prepare_cached(
         "INSERT INTO anilist_entries
              (id, romaji, english, native, format, status, episodes,
               start_year, start_month, start_day, end_year, end_month, end_day,
@@ -93,29 +92,29 @@ pub(super) fn put_entry(conn: &Connection, entry: &Entry) -> rusqlite::Result<()
              sequels = excluded.sequels, fetched_at = excluded.fetched_at,
              korean_titles = excluded.korean_titles,
              refresh_not_before = NULL",
-        params![
-            entry.id,
-            entry.romaji,
-            entry.english,
-            entry.native,
-            entry.format,
-            entry.status,
-            entry.episodes,
-            entry.start.year,
-            entry.start.month,
-            entry.start.day,
-            entry.end.year,
-            entry.end.month,
-            entry.end.day,
-            to_json(&entry.studios),
-            to_json(&entry.genres),
-            entry.description,
-            to_json(&entry.airing),
-            to_json(&entry.sequels),
-            entry.fetched_at,
-            to_json(&entry.korean_titles),
-        ],
-    )?;
+    )?
+    .execute(params![
+        entry.id,
+        entry.romaji,
+        entry.english,
+        entry.native,
+        entry.format,
+        entry.status,
+        entry.episodes,
+        entry.start.year,
+        entry.start.month,
+        entry.start.day,
+        entry.end.year,
+        entry.end.month,
+        entry.end.day,
+        to_json(&entry.studios),
+        to_json(&entry.genres),
+        entry.description,
+        to_json(&entry.airing),
+        to_json(&entry.sequels),
+        entry.fetched_at,
+        to_json(&entry.korean_titles),
+    ])?;
     Ok(())
 }
 
@@ -132,42 +131,37 @@ pub(super) fn season_exists(
     season: u32,
 ) -> rusqlite::Result<bool> {
     Ok(conn
-        .query_row(
+        .prepare_cached(
             "SELECT 1 FROM seasons s
                JOIN works w ON w.id = s.work_id
                JOIN watch_folders f ON f.id = w.watch_folder_id AND f.unregistered_at IS NULL
               WHERE s.work_id = ?1 AND s.number = ?2",
-            params![work_id, season],
-            |r| r.get::<_, i64>(0),
-        )
+        )?
+        .query_row(params![work_id, season], |r| r.get::<_, i64>(0))
         .optional()?
         .is_some())
 }
 
 pub(super) fn first_season(conn: &Connection, work_id: &str) -> rusqlite::Result<Option<u32>> {
-    conn.query_row(
-        "SELECT min(number) FROM seasons WHERE work_id = ?1 AND number >= 1",
-        [work_id],
-        |r| r.get(0),
-    )
+    conn.prepare_cached("SELECT min(number) FROM seasons WHERE work_id = ?1 AND number >= 1")?
+        .query_row([work_id], |r| r.get(0))
 }
 
 /// The AniList entry the work's cover follows: the first entry of the lowest
 /// numbered recorded season that links one (not season 0, the specials).
 pub(crate) fn cover_target(conn: &Connection, work_id: &str) -> rusqlite::Result<Option<i64>> {
-    conn.query_row(
+    conn.prepare_cached(
         "SELECT l.anilist_id FROM season_entries l
            JOIN seasons s ON s.work_id = l.work_id AND s.number = l.season
           WHERE l.work_id = ?1 AND l.season >= 1
           ORDER BY l.season, l.position LIMIT 1",
-        [work_id],
-        |r| r.get(0),
-    )
+    )?
+    .query_row([work_id], |r| r.get(0))
     .optional()
 }
 
 fn entries_of(conn: &Connection, work_id: &str, season: u32) -> rusqlite::Result<Vec<Entry>> {
-    let mut stmt = conn.prepare(&format!(
+    let mut stmt = conn.prepare_cached(&format!(
         "SELECT {ENTRY_COLUMNS} FROM season_entries l JOIN anilist_entries e ON e.id = l.anilist_id
           WHERE l.work_id = ?1 AND l.season = ?2 ORDER BY l.position"
     ))?;
@@ -211,11 +205,10 @@ const INFO_COLUMNS: &str =
     "i.version, i.origin, i.job, i.job_requested_at, i.job_attempts, i.job_not_before, i.note";
 
 fn read_info(conn: &Connection, work_id: &str, season: u32) -> rusqlite::Result<Option<InfoRow>> {
-    conn.query_row(
-        &format!("SELECT {INFO_COLUMNS} FROM season_info i WHERE i.work_id = ?1 AND i.season = ?2"),
-        params![work_id, season],
-        |row| info_from_row(row, 0),
-    )
+    conn.prepare_cached(&format!(
+        "SELECT {INFO_COLUMNS} FROM season_info i WHERE i.work_id = ?1 AND i.season = ?2"
+    ))?
+    .query_row(params![work_id, season], |row| info_from_row(row, 0))
     .optional()
 }
 
@@ -261,7 +254,7 @@ pub(super) fn links_of(
     work_id: &str,
 ) -> rusqlite::Result<BTreeMap<u32, SeasonLink>> {
     let seasons: Vec<u32> = {
-        let mut stmt = conn.prepare("SELECT season FROM season_info WHERE work_id = ?1")?;
+        let mut stmt = conn.prepare_cached("SELECT season FROM season_info WHERE work_id = ?1")?;
         let rows = stmt.query_map([work_id], |r| r.get(0))?;
         rows.collect::<rusqlite::Result<_>>()?
     };
@@ -299,15 +292,21 @@ fn bump(
     search_requested: Option<Millis>,
 ) -> rusqlite::Result<()> {
     let job = search_requested.map(|_| "search");
-    tx.execute(
+    tx.prepare_cached(
         "INSERT INTO season_info (work_id, season, version, origin, job, job_requested_at)
          VALUES (?1, ?2, 1, ?3, ?4, ?5)
          ON CONFLICT (work_id, season) DO UPDATE SET
              version = version + 1, origin = excluded.origin, job = excluded.job,
              job_requested_at = excluded.job_requested_at, job_attempts = 0,
              job_not_before = NULL, note = NULL",
-        params![work_id, season, origin.code(), job, search_requested],
-    )?;
+    )?
+    .execute(params![
+        work_id,
+        season,
+        origin.code(),
+        job,
+        search_requested
+    ])?;
     Ok(())
 }
 
@@ -317,24 +316,21 @@ fn replace_entries(
     season: u32,
     ids: &[i64],
 ) -> Result<(), SeasonError> {
-    tx.execute(
-        "DELETE FROM season_entries WHERE work_id = ?1 AND season = ?2",
-        params![work_id, season],
-    )?;
+    tx.prepare_cached("DELETE FROM season_entries WHERE work_id = ?1 AND season = ?2")?
+        .execute(params![work_id, season])?;
     for (position, id) in ids.iter().enumerate() {
         let known = tx
-            .query_row("SELECT 1 FROM anilist_entries WHERE id = ?1", [id], |r| {
-                r.get::<_, i64>(0)
-            })
+            .prepare_cached("SELECT 1 FROM anilist_entries WHERE id = ?1")?
+            .query_row([id], |r| r.get::<_, i64>(0))
             .optional()?;
         if known.is_none() {
             return Err(SeasonError::MissingEntry(*id));
         }
-        tx.execute(
+        tx.prepare_cached(
             "INSERT INTO season_entries (work_id, season, position, anilist_id)
              VALUES (?1, ?2, ?3, ?4)",
-            params![work_id, season, position as i64, id],
-        )?;
+        )?
+        .execute(params![work_id, season, position as i64, id])?;
     }
     Ok(())
 }
@@ -347,7 +343,7 @@ fn replace_entries(
 /// has linked keep their links.
 pub(crate) fn merge_links(tx: &Transaction<'_>, from: &str, into: &str) -> rusqlite::Result<()> {
     let seasons: Vec<(u32, i64, String)> = {
-        let mut stmt = tx.prepare(
+        let mut stmt = tx.prepare_cached(
             "SELECT i.season, i.version, i.origin FROM season_info i
               WHERE i.work_id = ?1
                 AND EXISTS (SELECT 1 FROM season_entries l
@@ -358,37 +354,34 @@ pub(crate) fn merge_links(tx: &Transaction<'_>, from: &str, into: &str) -> rusql
         rows.collect::<rusqlite::Result<_>>()?
     };
     for (season, moved_version, origin) in seasons {
-        let linked: i64 = tx.query_row(
-            "SELECT count(*) FROM season_entries WHERE work_id = ?1 AND season = ?2",
-            params![into, season],
-            |r| r.get(0),
-        )?;
+        let linked: i64 = tx
+            .prepare_cached(
+                "SELECT count(*) FROM season_entries WHERE work_id = ?1 AND season = ?2",
+            )?
+            .query_row(params![into, season], |r| r.get(0))?;
         if linked > 0 {
             continue;
         }
         let kept_version: Option<i64> = tx
-            .query_row(
-                "SELECT version FROM season_info WHERE work_id = ?1 AND season = ?2",
-                params![into, season],
-                |r| r.get(0),
-            )
+            .prepare_cached("SELECT version FROM season_info WHERE work_id = ?1 AND season = ?2")?
+            .query_row(params![into, season], |r| r.get(0))
             .optional()?;
         let version = kept_version.unwrap_or(0).max(moved_version) + 1;
-        tx.execute(
+        tx.prepare_cached(
             "INSERT INTO season_info (work_id, season, version, origin)
              VALUES (?1, ?2, ?3, ?4)
              ON CONFLICT (work_id, season) DO UPDATE SET
                  version = excluded.version, origin = excluded.origin, job = NULL,
                  job_requested_at = NULL, job_attempts = 0, job_not_before = NULL,
                  note = NULL",
-            params![into, season, version, origin],
-        )?;
-        tx.execute(
+        )?
+        .execute(params![into, season, version, origin])?;
+        tx.prepare_cached(
             "INSERT INTO season_entries (work_id, season, position, anilist_id)
              SELECT ?2, season, position, anilist_id FROM season_entries
               WHERE work_id = ?1 AND season = ?3",
-            params![from, into, season],
-        )?;
+        )?
+        .execute(params![from, into, season])?;
     }
     Ok(())
 }
@@ -441,23 +434,22 @@ pub(super) fn next_search(
     loop {
         let tx = begin(conn)?;
         let row = tx
-            .query_row(
+            .prepare_cached(
                 "SELECT i.work_id, i.season, w.dir_name, i.version, i.job_attempts
                    FROM season_info i JOIN works w ON w.id = i.work_id
                    JOIN watch_folders f ON f.id = w.watch_folder_id AND f.unregistered_at IS NULL
                   WHERE i.job = 'search' AND (i.job_not_before IS NULL OR i.job_not_before <= ?1)
                   ORDER BY i.job_requested_at, i.work_id, i.season LIMIT 1",
-                [now],
-                |row| {
-                    Ok(ClaimedSearch {
-                        work_id: row.get(0)?,
-                        season: row.get(1)?,
-                        dir_name: row.get(2)?,
-                        version: row.get(3)?,
-                        attempts: row.get::<_, i64>(4)?.max(0) as u32,
-                    })
-                },
-            )
+            )?
+            .query_row([now], |row| {
+                Ok(ClaimedSearch {
+                    work_id: row.get(0)?,
+                    season: row.get(1)?,
+                    dir_name: row.get(2)?,
+                    version: row.get(3)?,
+                    attempts: row.get::<_, i64>(4)?.max(0) as u32,
+                })
+            })
             .optional()?;
         let Some(job) = row else {
             return Ok(None);
@@ -467,12 +459,12 @@ pub(super) fn next_search(
         }
         // The season is not the first any more (or is gone): the search no
         // longer applies.
-        tx.execute(
+        tx.prepare_cached(
             "UPDATE season_info SET job = NULL, job_requested_at = NULL, job_attempts = 0,
                  job_not_before = NULL
               WHERE work_id = ?1 AND season = ?2",
-            params![job.work_id, job.season],
-        )?;
+        )?
+        .execute(params![job.work_id, job.season])?;
         tx.commit()?;
     }
 }
@@ -485,12 +477,11 @@ fn job_stands(
     version: i64,
 ) -> rusqlite::Result<bool> {
     Ok(tx
-        .query_row(
+        .prepare_cached(
             "SELECT 1 FROM season_info
               WHERE work_id = ?1 AND season = ?2 AND version = ?3 AND job = 'search'",
-            params![work_id, season, version],
-            |r| r.get::<_, i64>(0),
-        )
+        )?
+        .query_row(params![work_id, season, version], |r| r.get::<_, i64>(0))
         .optional()?
         .is_some())
 }
@@ -527,19 +518,19 @@ pub(super) fn search_later(
     }
     match retry_at {
         Some(at) => {
-            tx.execute(
+            tx.prepare_cached(
                 "UPDATE season_info SET job_not_before = ?3, job_attempts = job_attempts + ?4
                   WHERE work_id = ?1 AND season = ?2",
-                params![work_id, season, at, i64::from(failed)],
-            )?;
+            )?
+            .execute(params![work_id, season, at, i64::from(failed)])?;
         }
         None => {
-            tx.execute(
+            tx.prepare_cached(
                 "UPDATE season_info SET job = NULL, job_requested_at = NULL, job_attempts = 0,
                      job_not_before = NULL, note = ?3
                   WHERE work_id = ?1 AND season = ?2",
-                params![work_id, season, note.code()],
-            )?;
+            )?
+            .execute(params![work_id, season, note.code()])?;
         }
     }
     tx.commit()?;
@@ -547,7 +538,7 @@ pub(super) fn search_later(
 }
 
 pub(super) fn next_refresh(conn: &Connection, now: Millis) -> rusqlite::Result<Option<i64>> {
-    conn.query_row(
+    conn.prepare_cached(
         // A finished entry is read again only while its stored schedule is
         // the 25 airings an earlier build kept of a longer season (AniList
         // gives 25 a page; the schedule is now read in full).
@@ -561,26 +552,23 @@ pub(super) fn next_refresh(conn: &Connection, now: Millis) -> rusqlite::Result<O
                           JOIN watch_folders f ON f.id = w.watch_folder_id
                          WHERE l.anilist_id = e.id AND f.unregistered_at IS NULL)
           ORDER BY e.fetched_at, e.id LIMIT 1",
-        params![now, DAY_MS],
-        |r| r.get(0),
-    )
+    )?
+    .query_row(params![now, DAY_MS], |r| r.get(0))
     .optional()
 }
 
 pub(super) fn refresh_later(conn: &Connection, id: i64, retry_at: Millis) -> rusqlite::Result<()> {
-    conn.execute(
-        "UPDATE anilist_entries SET refresh_not_before = ?2 WHERE id = ?1",
-        params![id, retry_at],
-    )?;
+    conn.prepare_cached("UPDATE anilist_entries SET refresh_not_before = ?2 WHERE id = ?1")?
+        .execute(params![id, retry_at])?;
     Ok(())
 }
 
 pub(super) fn refresh_gone(conn: &Connection, id: i64, now: Millis) -> rusqlite::Result<()> {
     // Treated as received now: what is kept shows, and the next try is a day on.
-    conn.execute(
+    conn.prepare_cached(
         "UPDATE anilist_entries SET fetched_at = ?2, refresh_not_before = NULL WHERE id = ?1",
-        params![id, now],
-    )?;
+    )?
+    .execute(params![id, now])?;
     Ok(())
 }
 
@@ -597,7 +585,7 @@ pub struct LinkedFact {
 
 /// The linked entries of the recorded seasons, by work.
 pub fn facts(conn: &Connection) -> rusqlite::Result<HashMap<String, Vec<LinkedFact>>> {
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare_cached(
         "SELECT l.work_id, l.season, l.position, e.start_year, e.status,
                 e.native, e.english, e.romaji
            FROM season_entries l

@@ -194,7 +194,7 @@ pub fn reevaluate_in(
         attachment: Option<String>,
     }
     let stored: Vec<Stored> = {
-        let mut stmt = c.prepare(
+        let mut stmt = c.prepare_cached(
             "SELECT id, episode, basis, anissia_episode, attachment_episode FROM subtitle_stored
               WHERE work_id = ?1 AND season = ?2 AND source_id = ?3
                 AND assignment IN ('mapped', 'same_number') AND cleaned_at IS NULL
@@ -220,19 +220,17 @@ pub fn reevaluate_in(
             total,
         );
         if let Some(n) = found.ok().filter(|n| *n != s.episode) {
-            c.execute(
-                "UPDATE subtitle_stored SET episode = ?2 WHERE id = ?1",
-                params![s.id, n],
-            )?;
+            c.prepare_cached("UPDATE subtitle_stored SET episode = ?2 WHERE id = ?1")?
+                .execute(params![s.id, n])?;
             out.stored += 1;
         }
     }
-    c.execute(
+    c.prepare_cached(
         "UPDATE subtitle_stored SET assignment = 'mapped'
           WHERE work_id = ?1 AND season = ?2 AND source_id = ?3 AND assignment = 'same_number'
             AND cleaned_at IS NULL",
-        params![work_id, season, source_id],
-    )?;
+    )?
+    .execute(params![work_id, season, source_id])?;
 
     // The unfinished rows of the source's jobs; a relocation that waits for
     // its confirmation is planned anew below instead.
@@ -248,7 +246,7 @@ pub fn reevaluate_in(
         wait: Option<String>,
     }
     let unfinished: Vec<Unfinished> = {
-        let mut stmt = c.prepare(
+        let mut stmt = c.prepare_cached(
             "SELECT p.job_id, p.position, p.episode, p.basis, p.anissia_episode,
                     p.attachment_episode, p.question, j.state, j.wait
                FROM subtitle_job_plan p JOIN subtitle_jobs j ON j.id = p.job_id
@@ -284,49 +282,54 @@ pub fn reevaluate_in(
             total,
         );
         let changed = match found {
-            Ok(n) if Some(n) != row.episode || held => c.execute(
-                "UPDATE subtitle_job_plan
+            Ok(n) if Some(n) != row.episode || held => c
+                .prepare_cached(
+                    "UPDATE subtitle_job_plan
                     SET episode = ?3, question = CASE WHEN ?4 THEN NULL ELSE question END,
                         updated_at = ?5
                   WHERE job_id = ?1 AND position = ?2",
-                params![row.job_id, row.position, n, held, now],
-            )?,
-            Err(why) if row.question.is_none() => c.execute(
-                "UPDATE subtitle_job_plan SET question = ?3, updated_at = ?4
+                )?
+                .execute(params![row.job_id, row.position, n, held, now])?,
+            Err(why) if row.question.is_none() => c
+                .prepare_cached(
+                    "UPDATE subtitle_job_plan SET question = ?3, updated_at = ?4
                   WHERE job_id = ?1 AND position = ?2",
-                params![row.job_id, row.position, format!("{HELD}: {why}"), now],
-            )?,
+                )?
+                .execute(params![
+                    row.job_id,
+                    row.position,
+                    format!("{HELD}: {why}"),
+                    now
+                ])?,
             _ => 0,
         };
         if changed == 0 {
             continue;
         }
         out.rows += 1;
-        c.execute(
+        c.prepare_cached(
             "UPDATE subtitle_replacements SET state = 'stale', reason = ?3, updated_at = ?4
               WHERE job_id = ?1 AND position = ?2 AND state = 'open'",
-            params![row.job_id, row.position, STALE, now],
-        )?;
+        )?
+        .execute(params![row.job_id, row.position, STALE, now])?;
         touched.insert(row.job_id, (row.state, row.wait));
     }
     // The same target, now the mapping's: an open replacement plan of a row
     // left on its episode holds ([`crate::place::replace`]). Not a change of
     // the row's placement, so `updated_at` (which orders a stored subtitle's
     // rows) stays.
-    c.execute(
+    c.prepare_cached(
         "UPDATE subtitle_job_plan SET assignment = 'mapped'
           WHERE assignment = 'same_number' AND (outcome IS NULL OR outcome = 'no_video')
             AND job_id IN (SELECT id FROM subtitle_jobs
                             WHERE work_id = ?1 AND season = ?2 AND source_id = ?3)",
-        params![work_id, season, source_id],
-    )?;
+    )?
+    .execute(params![work_id, season, source_id])?;
     for (job, (state, wait)) in touched {
         let back = match state {
             JobState::Running => {
-                c.execute(
-                    "UPDATE subtitle_jobs SET remapped_at = ?2 WHERE id = ?1",
-                    params![job, now],
-                )?;
+                c.prepare_cached("UPDATE subtitle_jobs SET remapped_at = ?2 WHERE id = ?1")?
+                    .execute(params![job, now])?;
                 true
             }
             JobState::Waiting
@@ -347,13 +350,14 @@ pub fn reevaluate_in(
 
 /// Puts the job back in line for its rows' new episodes, with a log line.
 fn requeue(c: &Connection, job: &str, now: Millis) -> rusqlite::Result<bool> {
-    let changed = c.execute(
-        "UPDATE subtitle_jobs
+    let changed = c
+        .prepare_cached(
+            "UPDATE subtitle_jobs
             SET state = 'pending', wait = NULL, finished_at = NULL, note = ?2, state_at = ?3,
                 updated_at = ?3
           WHERE id = ?1",
-        params![job, REMAPPED, now],
-    )?;
+        )?
+        .execute(params![job, REMAPPED, now])?;
     event(c, job, REMAPPED, None, now)?;
     Ok(changed > 0)
 }
@@ -365,10 +369,10 @@ fn event(
     detail: Option<&str>,
     now: Millis,
 ) -> rusqlite::Result<()> {
-    c.execute(
+    c.prepare_cached(
         "INSERT INTO subtitle_job_events (job_id, at, message, detail) VALUES (?1, ?2, ?3, ?4)",
-        params![job, now, message, detail],
-    )?;
+    )?
+    .execute(params![job, now, message, detail])?;
     Ok(())
 }
 
@@ -400,7 +404,7 @@ fn wanted(
     source_id: &str,
     waiting: Option<&str>,
 ) -> rusqlite::Result<Vec<Move>> {
-    let mut stmt = c.prepare(
+    let mut stmt = c.prepare_cached(
         "SELECT s.id, s.episode, a.id, a.episode, a.path,
                 EXISTS (SELECT 1 FROM subtitle_applied b
                          WHERE b.stored_id = s.id AND b.removed_at IS NULL
@@ -457,20 +461,19 @@ fn waiting_job(
     season: u32,
     source_id: &str,
 ) -> rusqlite::Result<Option<String>> {
-    c.query_row(
+    c.prepare_cached(
         "SELECT id FROM subtitle_jobs
           WHERE origin = ?4 AND work_id = ?1 AND season = ?2 AND source_id = ?3
             AND placement_confirmed_at IS NULL AND state = 'waiting'
           ORDER BY seq DESC LIMIT 1",
-        params![work_id, season, source_id, RELOCATE],
-        |r| r.get(0),
-    )
+    )?
+    .query_row(params![work_id, season, source_id, RELOCATE], |r| r.get(0))
     .optional()
 }
 
 /// What the job plans now, as [`wanted`] says it.
 fn planned(c: &Connection, job: &str) -> rusqlite::Result<Vec<Move>> {
-    let mut stmt = c.prepare(
+    let mut stmt = c.prepare_cached(
         "SELECT a.stored_id, p.episode, r.applied_id, r.episode, r.path
            FROM subtitle_relocations r JOIN subtitle_applied a ON a.id = r.applied_id
            LEFT JOIN subtitle_job_plan p ON p.job_id = r.job_id AND p.position = r.position
@@ -545,7 +548,7 @@ pub fn sync_in(
         (None, false) => {
             let job = uuid::Uuid::new_v4().to_string();
             let note = confirm_note(&moves);
-            c.execute(
+            c.prepare_cached(
                 "INSERT INTO subtitle_jobs
                      (id, command_id, request, origin, work_id, season, anime_no, source_id,
                       creator, state, wait, stage, note, created_at, updated_at, state_at)
@@ -554,10 +557,13 @@ pub fn sync_in(
                         s.anime_no, s.id, s.creator_name, 'waiting', 'placement', 'placement',
                         ?6, ?7, ?7, ?7
                    FROM subtitle_sources s WHERE s.id = ?4",
-                params![job, work_id, season, source_id, RELOCATE, note, now],
-            )?;
+            )?
+            .execute(params![
+                job, work_id, season, source_id, RELOCATE, note, now
+            ])?;
             if plan(c, &job, &moves, now)? == 0 {
-                c.execute("DELETE FROM subtitle_jobs WHERE id = ?1", [&job])?;
+                c.prepare_cached("DELETE FROM subtitle_jobs WHERE id = ?1")?
+                    .execute([&job])?;
                 return Ok(None);
             }
             event(
@@ -574,20 +580,22 @@ pub fn sync_in(
 
 /// Ends the waiting relocation job: no copy is left to move by it.
 fn nothing_to_move(c: &Connection, job: &str, now: Millis) -> rusqlite::Result<()> {
-    c.execute("DELETE FROM subtitle_job_plan WHERE job_id = ?1", [job])?;
-    c.execute("DELETE FROM subtitle_relocations WHERE job_id = ?1", [job])?;
-    c.execute(
+    c.prepare_cached("DELETE FROM subtitle_job_plan WHERE job_id = ?1")?
+        .execute([job])?;
+    c.prepare_cached("DELETE FROM subtitle_relocations WHERE job_id = ?1")?
+        .execute([job])?;
+    c.prepare_cached(
         "UPDATE subtitle_jobs
             SET state = 'done', wait = NULL, stage = NULL, note = ?2, finished_at = ?3,
                 state_at = ?3, updated_at = ?3
           WHERE id = ?1",
-        params![job, NOTHING_TO_MOVE, now],
-    )?;
-    c.execute(
+    )?
+    .execute(params![job, NOTHING_TO_MOVE, now])?;
+    c.prepare_cached(
         "UPDATE subtitle_job_steps SET state = 'done', at = ?2, note = ?3
           WHERE job_id = ?1 AND step = 'placement'",
-        params![job, now, NOTHING_TO_MOVE],
-    )?;
+    )?
+    .execute(params![job, now, NOTHING_TO_MOVE])?;
     event(c, job, NOTHING_TO_MOVE, None, now)
 }
 
@@ -602,38 +610,40 @@ fn nothing_to_move(c: &Connection, job: &str, now: Millis) -> rusqlite::Result<(
 /// episode too, after the rows that put a first copy there. Returns how many
 /// moves it wrote: one whose stored subtitle no row is left to copy is not.
 fn plan(c: &Connection, job: &str, moves: &[Move], now: Millis) -> rusqlite::Result<usize> {
-    let first: i64 = c.query_row(
-        "SELECT coalesce(max(position) + 1, 0) FROM subtitle_job_plan WHERE job_id = ?1",
-        [job],
-        |r| r.get(0),
-    )?;
+    let first: i64 = c
+        .prepare_cached(
+            "SELECT coalesce(max(position) + 1, 0) FROM subtitle_job_plan WHERE job_id = ?1",
+        )?
+        .query_row([job], |r| r.get(0))?;
     let mut next = first;
     let mut written = 0;
     let mut ordered: Vec<(&Move, bool)> = Vec::with_capacity(moves.len());
     for m in moves {
         let mut added = false;
         for (applied, _, _) in &m.off {
-            added |= c.query_row(
-                "SELECT EXISTS (SELECT 1 FROM subtitle_job_plan
+            added |= c
+                .prepare_cached(
+                    "SELECT EXISTS (SELECT 1 FROM subtitle_job_plan
                                  WHERE applied_id = ?1 AND chosen = 'add')",
-                [applied],
-                |r| r.get::<_, bool>(0),
-            )?;
+                )?
+                .query_row([applied], |r| r.get::<_, bool>(0))?;
         }
         ordered.push((m, added));
     }
     ordered.sort_by_key(|(_, added)| *added);
     // The earlier rows go once the new ones are in: a stored subtitle only
     // they name is still found to copy.
-    c.execute("DELETE FROM subtitle_relocations WHERE job_id = ?1", [job])?;
+    c.prepare_cached("DELETE FROM subtitle_relocations WHERE job_id = ?1")?
+        .execute([job])?;
     for (m, added) in ordered {
         let position = match m.to {
             None => None,
             Some(to) => {
                 // The row is the stored subtitle's, as a job that received
                 // or moved it planned it, on its new episode.
-                let inserted = c.execute(
-                    "INSERT INTO subtitle_job_plan
+                let inserted = c
+                    .prepare_cached(
+                        "INSERT INTO subtitle_job_plan
                          (job_id, position, file_id, member, name, kind, format, size, sha256,
                           anissia_episode, attachment_episode, episode, assignment, basis,
                           action, stored_id, chosen, updated_at)
@@ -646,8 +656,8 @@ fn plan(c: &Connection, job: &str, moves: &[Move], now: Millis) -> rusqlite::Res
                        JOIN subtitle_job_plan p ON p.stored_id = s.id
                       WHERE s.id = ?3
                       ORDER BY p.updated_at, p.job_id, p.position LIMIT 1",
-                    params![job, next, m.stored_id, to, now, added],
-                )?;
+                    )?
+                    .execute(params![job, next, m.stored_id, to, now, added])?;
                 // [`wanted`] moves only what a row names. Should none be
                 // left, the copies stay where they are rather than be taken
                 // off with nothing to apply.
@@ -660,39 +670,35 @@ fn plan(c: &Connection, job: &str, moves: &[Move], now: Millis) -> rusqlite::Res
         };
         written += 1;
         for (applied, episode, path) in &m.off {
-            c.execute(
+            c.prepare_cached(
                 "INSERT INTO subtitle_relocations
                      (id, job_id, position, applied_id, episode, path, state, created_at,
                       updated_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'planned', ?7, ?7)",
-                params![
-                    uuid::Uuid::new_v4().to_string(),
-                    job,
-                    position,
-                    applied,
-                    episode,
-                    path,
-                    now
-                ],
-            )?;
+            )?
+            .execute(params![
+                uuid::Uuid::new_v4().to_string(),
+                job,
+                position,
+                applied,
+                episode,
+                path,
+                now
+            ])?;
         }
     }
-    c.execute(
-        "DELETE FROM subtitle_job_plan WHERE job_id = ?1 AND position < ?2",
-        params![job, first],
-    )?;
+    c.prepare_cached("DELETE FROM subtitle_job_plan WHERE job_id = ?1 AND position < ?2")?
+        .execute(params![job, first])?;
     let note = confirm_note(&planned(c, job)?);
-    c.execute(
-        "UPDATE subtitle_jobs SET note = ?2, updated_at = ?3 WHERE id = ?1",
-        params![job, note, now],
-    )?;
-    c.execute(
+    c.prepare_cached("UPDATE subtitle_jobs SET note = ?2, updated_at = ?3 WHERE id = ?1")?
+        .execute(params![job, note, now])?;
+    c.prepare_cached(
         "INSERT INTO subtitle_job_steps (job_id, step, state, at, note)
          VALUES (?1, 'placement', 'waiting', ?2, ?3)
          ON CONFLICT (job_id, step) DO UPDATE
          SET state = 'waiting', at = excluded.at, note = excluded.note",
-        params![job, now, note],
-    )?;
+    )?
+    .execute(params![job, now, note])?;
     Ok(written)
 }
 
@@ -717,7 +723,7 @@ pub struct Removal {
 
 /// The job's removals, by the episode they take a copy off.
 pub fn removals(c: &Connection, job_id: &str) -> rusqlite::Result<Vec<Removal>> {
-    let mut stmt = c.prepare(
+    let mut stmt = c.prepare_cached(
         "SELECT id, job_id, position, applied_id, episode, path, state, folder, aside, reason
            FROM subtitle_relocations WHERE job_id = ?1 ORDER BY episode, path, id",
     )?;
@@ -749,20 +755,19 @@ struct Applied {
 }
 
 fn applied_of(c: &Connection, applied_id: &str) -> rusqlite::Result<Option<Applied>> {
-    c.query_row(
+    c.prepare_cached(
         "SELECT a.byte_size, a.sha256, a.removed_at IS NOT NULL, s.episode IS a.episode
            FROM subtitle_applied a JOIN subtitle_stored s ON s.id = a.stored_id
           WHERE a.id = ?1",
-        [applied_id],
-        |r| {
-            Ok(Applied {
-                size: r.get::<_, i64>(0)? as u64,
-                sha256: r.get(1)?,
-                removed: r.get(2)?,
-                back: r.get(3)?,
-            })
-        },
-    )
+    )?
+    .query_row([applied_id], |r| {
+        Ok(Applied {
+            size: r.get::<_, i64>(0)? as u64,
+            sha256: r.get(1)?,
+            removed: r.get(2)?,
+            back: r.get(3)?,
+        })
+    })
     .optional()
 }
 
@@ -774,11 +779,11 @@ fn set_state(
     now: Millis,
 ) -> Result<(), JobError> {
     durable(c, |c| {
-        c.execute(
+        c.prepare_cached(
             "UPDATE subtitle_relocations SET state = ?2, reason = ?3, updated_at = ?4
               WHERE id = ?1",
-            params![id, state, reason, now],
-        )?;
+        )?
+        .execute(params![id, state, reason, now])?;
         Ok(())
     })
 }
@@ -795,16 +800,17 @@ fn intend(
     now: Millis,
 ) -> Result<bool, JobError> {
     durable(c, |c| {
-        let marked = c.execute(
-            "UPDATE subtitle_relocations
+        let marked = c
+            .prepare_cached(
+                "UPDATE subtitle_relocations
                 SET state = 'intended', folder = ?2, aside = ?3, reason = NULL, updated_at = ?4
               WHERE id = ?1 AND state IN ('planned', 'intended')
                 AND EXISTS (
                     SELECT 1 FROM subtitle_applied a JOIN subtitle_stored s ON s.id = a.stored_id
                      WHERE a.id = subtitle_relocations.applied_id AND a.removed_at IS NULL
                        AND s.episode IS NOT a.episode)",
-            params![id, folder, aside, now],
-        )?;
+            )?
+            .execute(params![id, folder, aside, now])?;
         Ok(marked == 1)
     })
 }
@@ -814,15 +820,15 @@ fn intend(
 fn done(c: &mut Connection, removal: &Removal, now: Millis) -> Result<(), JobError> {
     durable(c, |c| {
         let tx = c.transaction()?;
-        tx.execute(
+        tx.prepare_cached(
             "UPDATE subtitle_relocations SET state = 'done', reason = NULL, updated_at = ?2
               WHERE id = ?1",
-            params![removal.id, now],
-        )?;
-        tx.execute(
+        )?
+        .execute(params![removal.id, now])?;
+        tx.prepare_cached(
             "UPDATE subtitle_applied SET removed_at = ?2 WHERE id = ?1 AND removed_at IS NULL",
-            params![removal.applied_id, now],
-        )?;
+        )?
+        .execute(params![removal.applied_id, now])?;
         tx.commit()?;
         Ok(())
     })
@@ -861,12 +867,11 @@ pub const COPY_HERE_HELD: &str = "이 회차의 적용본을 지우지 못해 �
 
 /// Why the job's first held removal is held, if one is.
 pub(super) fn held_reason(c: &Connection, job: &str) -> rusqlite::Result<Option<String>> {
-    c.query_row(
+    c.prepare_cached(
         "SELECT reason FROM subtitle_relocations WHERE job_id = ?1 AND state = 'held'
           ORDER BY updated_at, id LIMIT 1",
-        [job],
-        |r| r.get(0),
-    )
+    )?
+    .query_row([job], |r| r.get(0))
     .optional()
 }
 
@@ -880,15 +885,14 @@ pub(super) fn hold_rows(c: &mut Connection, job: &str, now: Millis) -> Result<us
             (OLD_COPY_HELD, "p.position = r.position"),
             (COPY_HERE_HELD, "p.episode = r.episode"),
         ] {
-            held += tx.execute(
-                &format!(
+            held += tx
+                .prepare_cached(&format!(
                     "UPDATE subtitle_job_plan AS p SET outcome = 'held', note = ?2, updated_at = ?3
                       WHERE p.job_id = ?1 AND (p.outcome IS NULL OR p.outcome = 'no_video')
                         AND EXISTS (SELECT 1 FROM subtitle_relocations r
                                      WHERE r.job_id = ?1 AND r.state = 'held' AND {touched})"
-                ),
-                params![job, note, now],
-            )?;
+                ))?
+                .execute(params![job, note, now])?;
         }
         tx.commit()?;
         Ok(held)
@@ -902,11 +906,8 @@ pub const STORED_MISSING: &str = "보관본 파일이 없거나 기록과 달라
 /// The asset of the applied copy's stored subtitle; none when it was cleaned.
 fn stored_of(c: &Connection, applied_id: &str) -> rusqlite::Result<Option<records::Asset>> {
     let stored: Option<String> = c
-        .query_row(
-            "SELECT stored_id FROM subtitle_applied WHERE id = ?1",
-            [applied_id],
-            |r| r.get(0),
-        )
+        .prepare_cached("SELECT stored_id FROM subtitle_applied WHERE id = ?1")?
+        .query_row([applied_id], |r| r.get(0))
         .optional()?;
     match stored {
         Some(id) => records::stored_asset(c, &id),
@@ -1227,13 +1228,12 @@ pub fn applied_on(
     stored_id: &str,
     episode: i64,
 ) -> rusqlite::Result<Option<String>> {
-    c.query_row(
+    c.prepare_cached(
         "SELECT id FROM subtitle_applied
           WHERE stored_id = ?1 AND episode = ?2 AND removed_at IS NULL
           ORDER BY applied_at LIMIT 1",
-        params![stored_id, episode],
-        |r| r.get(0),
-    )
+    )?
+    .query_row(params![stored_id, episode], |r| r.get(0))
     .optional()
 }
 
@@ -1248,12 +1248,12 @@ pub fn already_applied(
     now: Millis,
 ) -> Result<(), JobError> {
     durable(c, |c| {
-        c.execute(
+        c.prepare_cached(
             "UPDATE subtitle_job_plan
                 SET outcome = 'applied', applied_id = ?3, note = ?4, updated_at = ?5
               WHERE job_id = ?1 AND position = ?2",
-            params![job_id, position, applied_id, ALREADY_APPLIED, now],
-        )?;
+        )?
+        .execute(params![job_id, position, applied_id, ALREADY_APPLIED, now])?;
         Ok(())
     })
 }
@@ -1265,10 +1265,8 @@ pub const ALREADY_APPLIED: &str = "이미 이 회차에 적용돼 있어요";
 /// Marks the job to go back in line once its run ends (`remapped_at`): what
 /// a row of it was to be applied by no longer holds.
 pub fn look_again(c: &mut Connection, job_id: &str, now: Millis) -> Result<(), JobError> {
-    c.execute(
-        "UPDATE subtitle_jobs SET remapped_at = ?2 WHERE id = ?1",
-        params![job_id, now],
-    )?;
+    c.prepare_cached("UPDATE subtitle_jobs SET remapped_at = ?2 WHERE id = ?1")?
+        .execute(params![job_id, now])?;
     Ok(())
 }
 
@@ -1276,14 +1274,16 @@ pub fn look_again(c: &mut Connection, job_id: &str, now: Millis) -> Result<(), J
 /// off and how many it left where they are, and whether it applied any on
 /// the new episodes (one whose new episodes had them already only took off).
 pub fn outcome_note(c: &Connection, job_id: &str) -> rusqlite::Result<Option<String>> {
-    let (done, kept, applied): (i64, i64, bool) = c.query_row(
-        "SELECT count(*) FILTER (WHERE state = 'done'), count(*) FILTER (WHERE state = 'kept'),
+    let (done, kept, applied): (i64, i64, bool) = c
+        .prepare_cached(
+            "SELECT count(*) FILTER (WHERE state = 'done'), count(*) FILTER (WHERE state = 'kept'),
                 EXISTS (SELECT 1 FROM subtitle_job_plan
                          WHERE job_id = ?1 AND outcome = 'applied' AND note IS NOT ?2)
            FROM subtitle_relocations WHERE job_id = ?1",
-        params![job_id, ALREADY_APPLIED],
-        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-    )?;
+        )?
+        .query_row(params![job_id, ALREADY_APPLIED], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })?;
     Ok(match (done, kept) {
         (0, 0) => None,
         (done, 0) if applied => Some(format!(
