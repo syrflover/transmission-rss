@@ -24,7 +24,12 @@
 //!   marker takes the last `vN` right after a number (`Show 14v2 (1080p)`),
 //!   unless ` - ` and a number follow it outside brackets: then it is part of
 //!   the show's name (`Show 3v3 - 06` is the first revision of episode 6).
-//!   Without one the release is its first revision.
+//!   Without one the release is its first revision. A name that writes the
+//!   revision in parentheses right after the episode's number
+//!   (`Show - 01 (V2) [1080p…]`, Erai-raws' magnet feed) takes that, when it
+//!   has no `NvM`, unless ` - ` and a number follow it outside brackets (then
+//!   it belongs to the show's name, as `3v3` does); the mark is left out of
+//!   the name like `v2` is.
 //! - **The same release** of an episode is the name without its revision,
 //!   its CRC32 bracket and its extension ([`ReleaseName::stem`]): `[SubsPlease]
 //!   Show - 14 (1080p)` for both `14` and `14v2`. Another group's release of
@@ -151,6 +156,15 @@ const EPISODE_DASH: &str = r"\s+-\s+";
 static EXTENSION: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(&format!(r"(?i:{EXTENSION_PART})\s*$")).unwrap());
 static CRC: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[([0-9A-Fa-f]{8})\]\s*$").unwrap());
+/// A revision written in parentheses after the episode's number
+/// (`- 01 (V2)`): group 1 is the part to leave out of the name, group 2 the
+/// revision's digits.
+static PAREN_REVISION: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(&format!(
+        r"{EPISODE_DASH}\d{{1,4}}(?:\.\d)?(\s*\((?i:v)(\d{{1,2}})\))"
+    ))
+    .unwrap()
+});
 /// A number and its revision mark: group 1 is the number, group 2 the mark.
 static VERSION: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(&format!(r"\b(\d{{1,4}}(?:\.\d)?)({REVISION_PART})\b")).unwrap());
@@ -226,10 +240,16 @@ fn last_version(text: &str) -> Option<Captures<'_>> {
     }
     let found = all.pop()?;
     let after = &text[found.get(0).unwrap().end()..];
-    let episode_after = EPISODE_AFTER_DASH
+    (!episode_follows(after)).then_some(found)
+}
+
+/// Whether ` - ` and a number follow outside brackets in `after`: the
+/// episode's number comes after the show's name, so what precedes them is
+/// part of the name.
+fn episode_follows(after: &str) -> bool {
+    EPISODE_AFTER_DASH
         .find_iter(after)
-        .any(|dash| bracket_depth(&after[..dash.start()]) == 0);
-    (!episode_after).then_some(found)
+        .any(|dash| bracket_depth(&after[..dash.start()]) == 0)
 }
 
 /// How deep in brackets or parentheses the end of `text` is, counting from
@@ -268,6 +288,15 @@ fn read_revision(name: &str) -> Revision {
     if let Some(found) = last_version(&name[..end]) {
         version = found[2][1..].parse().unwrap_or(1).max(1);
         let range = found.get(1).unwrap().end()..found.get(0).unwrap().end();
+        stem.replace_range(range.clone(), "");
+        without_revision.replace_range(range, "");
+    } else if let Some(found) = PAREN_REVISION
+        .captures_iter(&name[..end])
+        .filter(|found| !episode_follows(&name[found.get(0).unwrap().end()..end]))
+        .last()
+    {
+        version = found[2].parse().unwrap_or(1).max(1);
+        let range = found.get(1).unwrap().range();
         stem.replace_range(range.clone(), "");
         without_revision.replace_range(range, "");
     }

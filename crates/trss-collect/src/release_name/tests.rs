@@ -106,6 +106,63 @@ fn an_erai_raws_name_takes_the_hex_bracket_before_the_extension() {
     );
 }
 
+/// Erai-raws' magnet feed writes a revision as `- 01 (V2)`, with no
+/// extension and no CRC32, and lists the subtitle languages at the end.
+#[test]
+fn a_revision_in_parentheses_after_the_episode_is_read_like_nvm() {
+    let first = "[Magnet] Kusuriya no Hitorigoto 3rd Season - 01 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][Airing]";
+    let second = "[Magnet] Kusuriya no Hitorigoto 3rd Season - 01 (V2) [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][pl][Airing]";
+    let (v1, v2) = (ReleaseName::read(first), ReleaseName::read(second));
+    assert_eq!((v1.version, v2.version), (1, 2));
+    assert_eq!(v2.kind, Kind::Episode(Episode::whole(1)));
+    assert_eq!(
+        v2.work.as_deref(),
+        Some("Kusuriya no Hitorigoto 3rd Season")
+    );
+    assert_eq!((v2.crc, v2.notation), (None, v1.notation));
+    // The mark is left out of the name like `v2` is.
+    assert_eq!(
+        v2.stem,
+        "[Magnet] Kusuriya no Hitorigoto 3rd Season - 01 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][pl][Airing]"
+    );
+    assert_eq!(
+        v2.without_revision(),
+        v2.stem,
+        "no extension and no CRC32 to take away"
+    );
+    assert_eq!(v1.without_revision(), first);
+
+    for (name, version) in [
+        ("[Magnet] Show - 01 (v3) [1080p][us][Airing]", 3),
+        ("[Magnet] Show - 12.5 (V2) [1080p][us]", 2),
+        ("[Magnet] Show - 01 (V2)", 2),
+        ("[Magnet] Show - 01(V2) [1080p]", 2),
+        // The mark counts right after the episode's number only.
+        ("[Magnet] Show (V2) - 01 [1080p][us]", 1),
+        ("[Magnet] Show - 01 (NF) [1080p][us]", 1),
+        ("[Magnet] Show - 01 [1080p (V2)][us]", 1),
+        // `NvM` is the revision of a name that has it.
+        ("[Group] Show - 01v4 (V2) [1080p]", 4),
+        // The show's own `NvM` is not the revision.
+        ("[Group] Show 3v3 - 06 (V2) [1080p]", 2),
+        // Nor is a mark that ` - ` and a number follow: it is in the name.
+        ("[Group] Show - 2 (V3) - 05 [1080p]", 1),
+        ("[Group] Show - 2 (V3) - 05 (V2) [1080p]", 2),
+        ("[Group] Show - 2 (V3) - 05 [1080p - 2]", 1),
+        ("[Group] Show - 2 (V3) [1080p - 3]", 3),
+    ] {
+        assert_eq!(ReleaseName::read(name).version, version, "{name}");
+    }
+    assert_eq!(
+        without_version("[Magnet] Show - 01 (V2)"),
+        "[Magnet] Show - 01"
+    );
+    assert_eq!(
+        ReleaseName::read("[Group] Show 3v3 - 06 (V2) [1080p]").stem,
+        "[Group] Show 3v3 - 06 [1080p]"
+    );
+}
+
 #[test]
 fn a_number_v_number_in_the_show_name_is_not_the_revision() {
     let name = "[SubsPlease] Show 3v3 - 06v2 (1080p) [1A2B3C4D].mkv";
