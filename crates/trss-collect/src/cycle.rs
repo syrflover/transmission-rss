@@ -696,7 +696,6 @@ pub async fn process_job(
                 underivable: Underivable::Remove,
                 // The cycle notes nothing on the item (0128 adds it).
                 note: None,
-                until_renamed: true,
                 redactor: &redactor,
             };
             receive::rename(&receiving, &rename, &cancel).await;

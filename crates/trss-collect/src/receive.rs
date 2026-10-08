@@ -244,11 +244,6 @@ pub struct RenameJob<'a> {
     /// The history item to note why the name stayed on
     /// ([`RenameResult::Kept`]), or none to note nothing.
     pub note: Option<i64>,
-    /// Keeps trying until the file is renamed or the attempts run out, as the
-    /// cycle's renaming did, instead of stopping once nothing more can come of
-    /// it: a torrent that is gone or was removed, several files, a name that
-    /// is right already.
-    pub until_renamed: bool,
     pub redactor: &'a Redactor,
 }
 
@@ -325,7 +320,6 @@ async fn rename_file(
 
         let torrent = match get_torrent(&mut transmission, job.hash).await {
             Ok(Some(torrent)) => torrent,
-            Ok(None) if job.until_renamed && job.mode == RenameMode::Added => continue,
             Ok(None) => return RenameResult::Unchanged,
             Err(err) => {
                 println!("{}", job.redactor.apply(&err.to_string()));
@@ -343,7 +337,6 @@ async fn rename_file(
             // Transmission counts no files until a magnet link's metadata is
             // in; an answer without the count is read the same way.
             Some(0) | None => continue,
-            Some(_) if job.until_renamed && job.mode == RenameMode::Added => continue,
             Some(_) => return RenameResult::Kept(SEVERAL_FILES),
         }
         let current = match torrent.name {
@@ -415,7 +408,6 @@ async fn rename_file(
                         .torrent_remove(vec![Id::Hash(job.hash.to_owned())], true)
                         .await
                     {
-                        Ok(_) if job.until_renamed => {}
                         Ok(_) => return RenameResult::Removed,
                         Err(err) => println!("{}", job.redactor.apply(&err.to_string())),
                     }
@@ -423,7 +415,7 @@ async fn rename_file(
                 }
             },
         };
-        if new_name == current && !job.until_renamed {
+        if new_name == current {
             return RenameResult::Unchanged;
         }
         // Never onto a name that is taken (see above). That is the old video

@@ -651,7 +651,6 @@ pub async fn finish(
             // removed, as the rule cycle removes one `trname` has no name for.
             underivable: Underivable::Keep,
             note: Some(step.item_id),
-            until_renamed: false,
             redactor: &step.redactor,
         };
         receive::rename(ctx, &job, cancel).await;

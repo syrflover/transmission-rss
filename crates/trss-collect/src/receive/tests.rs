@@ -155,7 +155,6 @@ impl World {
             original: Original::Current,
             underivable: Underivable::Remove,
             note: None,
-            until_renamed: true,
             redactor: &self.redactor,
         }
     }
@@ -169,7 +168,6 @@ impl World {
                 added_before: false,
             },
             underivable: Underivable::Keep,
-            until_renamed: false,
             ..self.cycle_job()
         }
     }
@@ -224,4 +222,62 @@ async fn a_torrent_transmission_gives_no_file_count_for_is_asked_again_on_both_p
         );
         assert!(w.tr.calls_of("torrent-rename-path").is_empty());
     }
+}
+
+// The cycle's rename stops as soon as nothing more can come of it, as the
+// `다시 받기` one does: one `torrent-get` each, where it used to ask again
+// until its attempts ran out.
+
+#[tokio::test]
+async fn the_cycles_rename_of_a_torrent_that_is_gone_stops_at_once() {
+    let w = World::new().await;
+    assert_eq!(w.rename(&w.cycle_job()).await, RenameResult::Unchanged);
+    assert_eq!(w.tr.calls_of("torrent-get").len(), 1);
+}
+
+#[tokio::test]
+async fn the_cycles_rename_of_a_torrent_with_several_files_stops_at_once() {
+    let w = World::new().await;
+    let mut torrent = FakeTorrent::new(HASH, RELEASE).in_dir(&w.season).bot();
+    torrent.file_count = 2;
+    w.tr.preload(torrent);
+    assert_eq!(
+        w.rename(&w.cycle_job()).await,
+        RenameResult::Kept(SEVERAL_FILES)
+    );
+    assert_eq!(w.tr.calls_of("torrent-get").len(), 1);
+    assert!(w.tr.calls_of("torrent-rename-path").is_empty());
+    assert_eq!(w.name(), RELEASE);
+}
+
+#[tokio::test]
+async fn the_cycles_rename_stops_once_it_has_removed_a_torrent_trname_cannot_name() {
+    let w = World::new().await;
+    // Saved straight into the work folder, without a `Season NN` folder:
+    // `trname` has no name for it.
+    let work = w.season.parent().unwrap().to_owned();
+    w.tr.preload(FakeTorrent::new(HASH, RELEASE).in_dir(&work).bot());
+    let job = RenameJob {
+        save_path: &work,
+        ..w.cycle_job()
+    };
+    assert_eq!(w.rename(&job).await, RenameResult::Removed);
+    assert_eq!(w.tr.calls_of("torrent-get").len(), 1);
+    assert_eq!(w.tr.calls_of("torrent-remove").len(), 1);
+    assert!(w.tr.torrents().is_empty());
+}
+
+#[tokio::test]
+async fn the_cycles_rename_of_a_name_that_is_right_already_stops_at_once() {
+    let w = World::new().await;
+    w.tr.preload(FakeTorrent::new(HASH, RENAMED).in_dir(&w.season).bot());
+    // Without a conversion, the name `trname` gives is the one it has.
+    let job = RenameJob {
+        episode: 0,
+        ..w.cycle_job()
+    };
+    assert_eq!(w.rename(&job).await, RenameResult::Unchanged);
+    assert_eq!(w.tr.calls_of("torrent-get").len(), 1);
+    assert!(w.tr.calls_of("torrent-rename-path").is_empty());
+    assert_eq!(w.name(), RENAMED);
 }
