@@ -170,7 +170,7 @@ worker 잠금은 멈춘 worker가 마지막 하트비트 뒤에 따로 띄운 ta
 
 - 병합이 아닌 커밋 161개 중 Rust 크레이트나 `web/src`를 바꾼 것은 109개예요. 이 109개가 건드린 크레이트 수(화면은 하나로 셈)는 1개 42번, 2개 20번, 3개 8번, 4개 15번, 5개 11번, 6개 8번, 7개 3번, 9개와 10개가 1번씩이에요.
 - trss-core를 건드린 커밋은 45개이고, 그중 35개가 마이그레이션 목록 `db.rs`예요.
-- 2026-10-04부터 10-07까지의 기능과 수정 커밋은 평균 크레이트 3.05개, 파일 15.6개를 건드렸어요.
+- 2026-10-04부터 10-07까지의 기능·수정·성능 커밋 38개(`feat` 25개, `fix` 10개, `perf` 3개)는 평균 크레이트 3.05개, 파일 15.6개를 건드렸어요. 10-07의 `6c175f1`까지 셌고, 세는 방법은 아래 [기준값](#기준값)의 변경 범위와 같아요.
 - 조사에서 찾은, 같은 수정이 여러 복사본에 따로 들어간 수정 커밋은 같은 파일 알아보기의 다섯 번(2026-10-06–07)이에요. 크레이트 분리 전인 2026-10-02에는 worker 살아 있음 판정의 수정 두 번(`24024b5`, `86189e4`)이 웹의 상태 API와 편성 API에 똑같이 들어갔어요.
 
 크레이트별 테스트 바이너리 실행 시간이에요. 명령은 `RUSTC_BOOTSTRAP=1 cargo test -p <크레이트> -j 4 -- -Zunstable-options --report-time`이고, 시간은 cargo가 출력한 `finished in`의 합이에요. 크레이트마다 따로 돌려서 빌드 시간은 견줄 수 없고, 이것은 기준값이 아니에요.
@@ -193,4 +193,72 @@ worker 잠금은 멈춘 worker가 마지막 하트비트 뒤에 따로 띄운 ta
 
 ### 기준값과 마지막 측정
 
-리팩터링을 시작할 때 적어요.
+#### 기준값
+
+2026-10-08에 [0092](0092-refactor-baseline.md)에서 `ff7e6df`를 측정했어요. 코드는 0127을 고친 `ef90d40`과 같고, 그 뒤의 커밋은 문서만 바꿨어요.
+개발 PC(Ryzen 5 5600X, 12 스레드, RAM 32 GB, glibc)에서 측정했고, 측정을 시작할 때 다른 cargo 빌드나 테스트는 돌고 있지 않았어요. 원자료는 이 PC의 `dev/local/measure/0092/`에 있어요.
+
+테스트 시간이에요.
+
+- 명령은 `cargo test --locked --workspace -j 4`예요.
+- 빌드 상태는 같은 명령에 `--no-run`을 붙여 한 번 빌드한 뒤, 바꾸지 않고 다시 돈 것이에요. 이 상태로 두 번 측정했어요.
+- 처음 빌드는 ``Finished `test` profile [unoptimized + debuginfo] target(s) in 7.98s``였어요. 이미 있던 `target/`에서 trss-worker 하나만 다시 컴파일했고, rustc는 kache를 거쳤어요. 처음부터 빌드한 시간이 아니라서 견주는 데 쓰지 않아요.
+
+| | 1회 | 2회 |
+| --- | ---: | ---: |
+| cargo의 `Finished … in` | 0.12s | 0.13s |
+| 테스트 바이너리 31개의 `finished in` 합 | 56.6초 | 56.3초 |
+| 걸린 시간(doc test 포함) | 59.36초 | 58.71초 |
+| 통과·실패·무시 | 2,818·0·14 | 2,818·0·14 |
+
+- 두 번의 차이는 합으로 0.5%, 걸린 시간으로 1.1%예요.
+- doc test는 13개 크레이트에서 돌지만 테스트가 0개예요.
+- [0093](0093-migrated-test-db-once.md)의 뒤 값(합 53.0초, 통과 2,756개)과 견주면 합이 3.6초 길고, 통과한 테스트가 62개 많아요.
+
+테스트 바이너리마다의 `finished in`이에요. `dev/measure/test-times.py`로 모았어요.
+
+| 바이너리 | 1회 | 2회 |
+| --- | ---: | ---: |
+| trss-worker `tests/it` | 11.73초 | 11.71초 |
+| trss-jobs `tests/it` | 10.89초 | 10.97초 |
+| trss-web lib | 7.58초 | 7.51초 |
+| trss-browser `tests/it` | 3.16초 | 3.15초 |
+| trss-web `tests/subtitle_upload_peak.rs` | 3.12초 | 3.02초 |
+| trss-archive `tests/it` | 2.84초 | 2.95초 |
+| trss-jobs `tests/extract_process.rs` | 2.72초 | 2.72초 |
+| trss-library lib | 2.29초 | 2.22초 |
+| trss-jobs lib | 2.07초 | 2.05초 |
+| trss-collect `tests/revision_crc_peak.rs` | 2.00초 | 1.99초 |
+| trss-web `tests/artwork_serving_peak.rs` | 1.50초 | 1.46초 |
+| trss-browser lib | 1.50초 | 1.50초 |
+| trss-subtitles lib | 1.22초 | 1.13초 |
+| trss-core lib | 1.04초 | 1.05초 |
+| trss-collect lib | 1.04초 | 1.03초 |
+| trss-anissia lib | 0.70초 | 0.71초 |
+| trss-anilist lib | 0.69초 | 0.69초 |
+| trss-library `tests/artwork_header_check.rs` | 0.18초 | 0.17초 |
+| trss-web `tests/artwork_upload_peak.rs` | 0.13초 | 0.11초 |
+| trss-worker lib | 0.09초 | 0.09초 |
+| trss-probe main | 0.08초 | 0.08초 |
+| trss-import lib | 0.01초 | 0.01초 |
+| 나머지 9개 | 각 0.00초 | 각 0.00초 |
+
+나머지 9개는 trss-archive lib, trss-transmission lib, trss-subtitles `tests/it`, trss-web `tests/remote_screen_docker.rs`, trss-jobs의 `trss-extract`, trss-web·trss-worker·trss-browser의 main, trss-browser의 `fake_chromium`이에요.
+
+변경 범위예요.
+
+- 세는 방법은 `dev/measure/change-spread.sh <첫날> <끝날> [<rev>]`예요. 구조 조사의 스크립트를 옮긴 것이고, 조사 기간(2026-10-04–07, `6c175f1`)에 돌려 조사와 같은 값이 나오는 것을 확인했어요.
+  - 병합이 아닌 `feat`·`fix`·`refactor`·`perf` 커밋을 author date로 골라요. 0092의 작업에는 "기능·수정 커밋"이라고 적었지만 조사는 `refactor`와 `perf`도 셌으므로, 견줄 수 있게 조사의 방법을 따랐어요.
+  - 파일은 `docs/`와 `*.md`를 뺀, 바뀐 텍스트 파일이에요. 크레이트는 `crates/<이름>/`이고, `web/` 아래는 하나로 세요. 크레이트를 건드리지 않은 커밋도 0개로 평균에 들어가요.
+- 기준값의 기간은 조사와 같은 나흘인 2026-10-05–08이고, `ff7e6df`까지 셌어요. 조사 기간과 10-05–07의 사흘이 겹쳐요.
+
+| 기간 | 커밋 | 크레이트 | 파일 |
+| --- | --- | ---: | ---: |
+| 2026-10-04–07, `6c175f1`까지(구조 조사) | 38개(`feat` 25, `fix` 10, `perf` 3) | 3.05개 | 15.6개 |
+| 2026-10-05–08, `ff7e6df`까지(기준값) | 49개(`feat` 25, `fix` 19, `perf` 5) | 2.45개 | 12.0개 |
+
+이 방법은 `refactor` 커밋도 세요. 리팩터링 동안의 커밋은 대부분 `refactor`일 것이므로, 마지막 측정에서 기간을 고를 때 이 점을 함께 봐요.
+
+#### 마지막 측정
+
+[0114](0114-refactor-final-check.md)에서 적어요.
