@@ -368,9 +368,8 @@ impl FakeTransmission {
         self.state.lock().unwrap().reject_adds = result.map(str::to_owned);
     }
 
-    /// Makes `torrent-get` answers leave out `file-count`. The worker's renaming
-    /// step then panics (after the torrent was added), which is how tests
-    /// reach a panic in an item's task without a hook in the product code.
+    /// Makes `torrent-get` answers leave out `file-count`, as a Transmission
+    /// that has not counted the files yet.
     pub fn omit_file_count(&self, omit: bool) {
         self.state.lock().unwrap().omit_file_count = omit;
     }

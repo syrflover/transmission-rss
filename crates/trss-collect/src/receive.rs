@@ -247,7 +247,7 @@ pub struct RenameJob<'a> {
     /// Keeps trying until the file is renamed or the attempts run out, as the
     /// cycle's renaming did, instead of stopping once nothing more can come of
     /// it: a torrent that is gone or was removed, several files, a name that
-    /// is right already; and a torrent without its file count or name panics.
+    /// is right already.
     pub until_renamed: bool,
     pub redactor: &'a Redactor,
 }
@@ -340,16 +340,14 @@ async fn rename_file(
         }
         match torrent.file_count {
             Some(1) => {}
-            // Transmission counts no files until a magnet link's metadata is in.
-            Some(0) => continue,
-            None if job.until_renamed => panic!("Transmission gave no file count"),
-            None => continue,
+            // Transmission counts no files until a magnet link's metadata is
+            // in; an answer without the count is read the same way.
+            Some(0) | None => continue,
             Some(_) if job.until_renamed && job.mode == RenameMode::Added => continue,
             Some(_) => return RenameResult::Kept(SEVERAL_FILES),
         }
         let current = match torrent.name {
             Some(name) => name,
-            None if job.until_renamed => panic!("Transmission gave no name"),
             None => continue,
         };
 

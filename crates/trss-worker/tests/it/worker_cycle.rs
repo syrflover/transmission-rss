@@ -758,9 +758,9 @@ async fn a_panic_after_torrent_add_does_not_remove_the_new_torrent_or_any_other(
     let h = Harness::new().await;
     channel_a(&h).await;
     h.tr.preload(FakeTorrent::new(STALE_HASH, "Old Show").bot());
-    // Every `torrent-get` leaves out `file-count`, so the renaming that follows
-    // each successful add panics inside the item's task.
-    h.tr.omit_file_count(true);
+    // Each item task panics right after its successful add is recorded,
+    // before the renaming.
+    let panicking = trss_collect::cycle::fault::panic_after_record(&h.tr.url());
     let worker = h.worker();
 
     let report = run(&worker).await;
@@ -782,7 +782,7 @@ async fn a_panic_after_torrent_add_does_not_remove_the_new_torrent_or_any_other(
 
     // A healthy cycle carries on: the torrents are renamed and kept, the
     // departed one goes.
-    h.tr.omit_file_count(false);
+    drop(panicking);
     h.advance(300_000);
     let report = run(&worker).await;
     assert_eq!(report.job_panics, 0);

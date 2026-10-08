@@ -681,6 +681,8 @@ pub async fn process_job(
     };
 
     if let Ok(torrent) = &added {
+        #[cfg(feature = "test-support")]
+        fault::check(&ctx.transmission.url);
         if let Some(mode) = rename_mode(&ctx, torrent.kind, &torrent.hash).await {
             let rename = RenameJob {
                 hash: &torrent.hash,
@@ -702,6 +704,60 @@ pub async fn process_job(
     }
 
     (outcome, was_new)
+}
+
+/// Test support: a panic in a cycle's item task right after its torrent is
+/// recorded, before the rename, for the tests of what the worker makes of an
+/// item task that panics. Nothing on that path panics on what Transmission
+/// answers, so a test cannot get there through the fake Transmission.
+#[cfg(feature = "test-support")]
+pub mod fault {
+    use std::sync::{Mutex, PoisonError};
+
+    use url::Url;
+
+    /// The Transmission URLs whose cycles panic so.
+    static PANIC_AFTER_RECORD: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    /// Until the returned guard is dropped, every item task of a cycle that
+    /// reaches Transmission at `url` and gets a torrent from it panics right
+    /// after the item is recorded. Keyed by the URL, so tests running side by
+    /// side, each with its own fake Transmission, are left alone.
+    pub fn panic_after_record(url: &str) -> PanicAfterRecord {
+        let url = Url::parse(url).map_or_else(|_| url.to_owned(), String::from);
+        PANIC_AFTER_RECORD
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(url.clone());
+        PanicAfterRecord { url }
+    }
+
+    /// Stops the panics of [`panic_after_record`] when dropped.
+    pub struct PanicAfterRecord {
+        url: String,
+    }
+
+    impl Drop for PanicAfterRecord {
+        fn drop(&mut self) {
+            let mut urls = PANIC_AFTER_RECORD
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if let Some(at) = urls.iter().position(|url| *url == self.url) {
+                urls.swap_remove(at);
+            }
+        }
+    }
+
+    pub(super) fn check(url: &Url) {
+        let asked = PANIC_AFTER_RECORD
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .any(|asked| asked == url.as_str());
+        if asked {
+            panic!("a panic asked for after the item was recorded");
+        }
+    }
 }
 
 /// The row a cycle decides for `job` (its item ID is filled in when the row
