@@ -11,7 +11,10 @@ use trss_collect::{
         revisions::RevisionStore, search_pace::SearchPace, status::StatusStore,
     },
 };
-use trss_core::{commands::CommandStore, heartbeat::HeartbeatStore, settings::SettingsStore, Db};
+use trss_core::{
+    app_data::RECEIVE_DIR, commands::CommandStore, heartbeat::HeartbeatStore,
+    settings::SettingsStore, Db,
+};
 use trss_jobs::{Follow, JobStore, ReceiveArea, ScreenStore, Uploads};
 use trss_library::{
     artwork::Artwork,
@@ -97,8 +100,8 @@ impl AppState {
             worker_wake: None,
             jobs: JobStore::new(db.clone()),
             follow: Follow::new(db.clone()),
-            receive_root: PathBuf::from("receive"),
-            uploads: Uploads::new(JobStore::new(db.clone()), ReceiveArea::new("receive")),
+            receive_root: PathBuf::from(RECEIVE_DIR),
+            uploads: Uploads::new(JobStore::new(db.clone()), ReceiveArea::new(RECEIVE_DIR)),
             screens: ScreenStore::new(db.clone()),
             remote: None,
             // No app data folder: covers can be read and changed but no image

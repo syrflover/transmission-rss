@@ -27,8 +27,8 @@ use std::{
 };
 
 use sha2::{Digest, Sha256};
-use trss_core::file_id::FileId;
 pub use trss_core::files::hex;
+use trss_core::{app_data::RECEIVE_DIR, file_id::FileId};
 
 /// The folder of received files.
 #[derive(Debug, Clone)]
@@ -49,7 +49,7 @@ impl ReceiveArea {
     /// The area in the app data folder `app_data` (the database's folder).
     pub fn in_app_data(app_data: &Path) -> ReceiveArea {
         ReceiveArea {
-            root: app_data.join("receive"),
+            root: app_data.join(RECEIVE_DIR),
             app_data: Some(app_data.to_owned()),
         }
     }

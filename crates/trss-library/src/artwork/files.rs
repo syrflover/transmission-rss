@@ -84,10 +84,9 @@ use crate::store::{
 use trss_anilist::MAX_IMAGE_BYTES;
 use trss_core::{file_id::FileId, files::rename_noreplace, Millis};
 
-/// The folder of the images, relative to the app data folder.
-pub const ARTWORK_DIR: &str = "artwork";
-/// Where new images are written before they are published.
-pub const STAGING_DIR: &str = "artwork/.staging";
+// The folder of the images, and where new ones are written before they are
+// published, relative to the app data folder.
+pub use trss_core::app_data::{ARTWORK_DIR, ARTWORK_STAGING_DIR as STAGING_DIR};
 /// A publish recorded this long ago and not finished was interrupted; its
 /// files are recovered. Far longer than one publish may take
 /// ([`super::FETCH_TIMEOUT`] plus a decode).

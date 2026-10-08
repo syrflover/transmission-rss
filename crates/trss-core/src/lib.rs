@@ -9,6 +9,7 @@
 //! code that reads and writes its own tables.
 
 pub mod access;
+pub mod app_data;
 pub mod calendar;
 mod clock;
 pub mod commands;

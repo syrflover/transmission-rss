@@ -22,6 +22,8 @@ use rustix::{
     process::{getegid, geteuid},
 };
 
+use crate::app_data::{ARTWORK_DIR, RECEIVE_DIR, SUBTITLE_FILES_DIR};
+
 /// How many unwritable paths the message names; the rest is counted.
 const NAMED: usize = 5;
 
@@ -106,7 +108,7 @@ pub const DATABASE_FILE_SUFFIXES: &[&str] = &[
 /// The folders in the app data folder that trss writes into, with their
 /// subfolders: the receive area, the work covers (and their staging) and the
 /// subtitle packages' attachments and companion files.
-pub const APP_DATA_FOLDERS: &[&str] = &["receive", "artwork", "subtitle-files"];
+pub const APP_DATA_FOLDERS: &[&str] = &[RECEIVE_DIR, ARTWORK_DIR, SUBTITLE_FILES_DIR];
 
 /// [`check_writable`] for the app data folder of the database at `db_path`
 /// (its folder), with the files [`DATABASE_FILE_SUFFIXES`] names and the

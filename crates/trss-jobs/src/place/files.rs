@@ -26,12 +26,12 @@ pub const TRSS_DIR: &str = ".trss";
 pub const SUBTITLES_DIR: &str = ".trss/subtitles";
 /// Where the temporary files of effects go, relative to the work folder.
 pub const TEMP_DIR: &str = ".trss/tmp";
-/// Where a package's attachments and companion files go, relative to the
-/// app data folder: `<work id>/<creator>/<name>` under it.
-pub const APP_FILES_DIR: &str = "subtitle-files";
-/// Where the temporary files of effects in the app data folder go, relative
-/// to it.
-pub const APP_TEMP_DIR: &str = "subtitle-files/.tmp";
+// Where a package's attachments and companion files go, relative to the
+// app data folder (`<work id>/<creator>/<name>` under it), and where the
+// temporary files of effects in the app data folder go, relative to it.
+pub use trss_core::app_data::{
+    SUBTITLE_FILES_DIR as APP_FILES_DIR, SUBTITLE_FILES_TEMP_DIR as APP_TEMP_DIR,
+};
 
 /// What came of writing a temporary file.
 #[derive(Debug)]
