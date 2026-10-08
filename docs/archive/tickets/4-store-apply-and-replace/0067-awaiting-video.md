@@ -1,7 +1,7 @@
 # 0067 영상이 없는 회차의 자막을 영상이 들어오면 적용해요
 
 - 상태: 완료
-- 출처: [영상 대기](../specs/subtitles.md#영상-대기), [할 일과 회차 목록](../specs/library.md#할-일과-회차-목록), [할 일 화면](../specs/jobs.md#할-일-화면)
+- 출처: [영상 대기](../../../specs/subtitles.md#영상-대기), [할 일과 회차 목록](../../../specs/library.md#할-일과-회차-목록), [할 일 화면](../../../specs/jobs.md#할-일-화면)
 - 막는 티켓: [0063](0063-store-and-first-apply.md)
 
 ## 작업
@@ -31,7 +31,7 @@
 - **다시 줄에 세우기**(`JobStore::requeue_awaiting_video`, `Runner::requeue_awaiting_video`): worker는 명령을 확인할 때마다(3초) 라이브러리의 세대(`library_generation`)를 봐요. 지난번과 다르면, 대기하는 줄이 있는 `영상 대기`·`자막 대기`·`일부 실패` 작업 가운데 그 회차의 영상이 기록된 작업을 대기로 돌리고 `영상이 들어와 적용을 이어가요`를 적어요. 세대가 같으면 쓰기 잠금을 잡지 않아요.
 - **마이그레이션 51**(`awaiting_video.sql`): 예전 빌드가 `영상이 없어 보관만 했어요`로 끝낸 줄의 까닭을 바꾸고, 그런 줄이 있는 `완료`·`일부 실패` 작업을 대기로 돌려 worker가 다시 판단하게 해요.
 - **웹**: 작품 상세의 보관본에 `awaiting_video`를 더했어요. 저절로 적용될 보관본에만 붙어요. 회차 줄은 `영상 −`·`자막 ✓`와 `영상 대기` 배지예요. 펼친 자리의 `영상 대기` 칸에 까닭과 받은 자막을 보여주고 `적용`은 두지 않아요. `자막 파일` 칸은 그대로 `없음`이에요. 작업 상세의 묶음 결과에 `영상 대기` 무리를 더했어요.
-- **명세**: [영상 대기](../specs/subtitles.md#영상-대기)에 판단·다시 세우기·한계를, [작업 상세](../specs/jobs.md#작업-상세)와 [체크포인트와 중단 복구](../specs/jobs.md#체크포인트와-중단-복구)에 결과 무리와 대기를 적었어요.
+- **명세**: [영상 대기](../../../specs/subtitles.md#영상-대기)에 판단·다시 세우기·한계를, [작업 상세](../../../specs/jobs.md#작업-상세)와 [체크포인트와 중단 복구](../../../specs/jobs.md#체크포인트와-중단-복구)에 결과 무리와 대기를 적었어요.
 
 
 ### 검증한 것
@@ -41,7 +41,7 @@
 | 영상이 없는 회차의 후보를 받음 | 시험 `an_episode_with_a_subtitle_keeps_it_and_one_without_a_video_waits_for_it`: 보관되고, 시즌 폴더에는 그 회차의 파일이 생기지 않으며, 작업이 `영상 대기`예요. API 시험 `a_stored_subtitle_waiting_for_its_video_says_so`가 `awaiting_video`를 확인해요. 개발 환경(2026-10-05)에서 마이그레이션 51 뒤에 작업 `c20d06b6`(11·12화, 영상 없음)이 `영상 대기`가 됐고, 회차 줄이 `영상 −`·`자막 ✓`·`영상 대기`였어요. 펼친 자리에는 `영상 파일 없음`·`자막 파일 없음`과 `영상 대기` 칸(까닭, `dev-series.ass`, 제작자·형식·받은 시각)이 있었고 `적용`은 없었어요. |
 | 그 회차의 영상 파일을 넣음 | 시험 `a_subtitle_waiting_for_its_video_is_applied_once_the_library_has_it`: 영상을 기록하면 다시 줄에 서서 적용하고, 받은 파일 수가 그대로예요. worker 시험 `a_video_the_library_records_puts_the_job_waiting_for_it_back_in_line`이 명령 확인마다 다시 세우는 것을 확인해요(호출을 빼면 실패해요). 개발 환경에서 11화 영상의 이름을 바꿔 넣자 4.3초 뒤에 `S01E11.ass`가 생겼어요. 보관본과 SHA-256이 같고 inode가 달랐으며 소유는 1000:1000이었어요. 받은 파일 수는 2개 그대로였고, 회차 줄은 `영상 ✓`·`자막 ✓`이 되어 배지가 사라졌어요. 작업 상세에는 `적용함 1`·`영상 대기 1`이 나뉘어 보였어요. |
 | 영상이 Transmission에서 받는 중 | 개발 환경에서 `S01E11.mkv.part`를 두자 감시가 그 작품을 읽고도 `0 files added`였고, 세대와 작업 상태가 그대로였어요. 이름을 `.mkv`로 바꾸자 적용됐어요(위 행). 라이브러리가 `.part`를 받는 중으로 두는 것은 `trss-library`의 `what_does_not_fit_is_counted_with_a_reason_and_hidden_things_are_skipped`가 확인해요. Transmission이 실제로 받는 중인 파일은 쓰지 않았어요. |
-| 대기 중에 worker 재시작, Anissia 줄 삭제 | 시험(위 적용 시험의 앞부분): 시작 때 다시 돌아도 계속 기다리고 까닭은 한 번만 적어요. 개발 환경에서 worker를 다시 시작하자 `c20d06b6`이 한 번 다시 돌고 12화를 계속 기다렸어요. Anissia 줄 삭제는 따로 시험하지 않았어요. 앱은 관찰을 지우지 않고([지난 회차 ADR](../adr/0012-past-subtitles-find-and-upload.md)), 대기 작업과 보관본은 관찰에 매이지 않아요. |
+| 대기 중에 worker 재시작, Anissia 줄 삭제 | 시험(위 적용 시험의 앞부분): 시작 때 다시 돌아도 계속 기다리고 까닭은 한 번만 적어요. 개발 환경에서 worker를 다시 시작하자 `c20d06b6`이 한 번 다시 돌고 12화를 계속 기다렸어요. Anissia 줄 삭제는 따로 시험하지 않았어요. 앱은 관찰을 지우지 않고([지난 회차 ADR](../../../adr/0012-past-subtitles-find-and-upload.md)), 대기 작업과 보관본은 관찰에 매이지 않아요. |
 | 영상과 함께 다른 자막이 생김 | 시험 `a_subtitle_that_came_with_the_video_is_kept`: 그 줄이 `existing`이 되고 영상 옆 `.smi`는 바이트가 그대로이며 `.ass`는 생기지 않아요. 개발 환경의 `3e730dee`(2화)도 마이그레이션 뒤 다시 돌아, 그사이 생긴 자막을 그대로 두고 `일부 실패`(받지 못한 회차 하나)로 남았어요. |
 
 그 밖의 시험: 일부 실패·자막 대기 작업도 영상이 오면 적용하는 것(`a_partly_received_job_stays_partial_and_applies_once_the_video_comes`, `a_job_waiting_for_a_source_applies_once_the_video_comes`), 보류된 작업의 보관본은 `영상 대기`로 말하지 않는 것(`a_held_job_does_not_tell_its_row_as_waiting_for_the_video`), 작품 폴더가 없을 때 폴더를 기다리는 것(`a_video_that_comes_while_the_folder_is_away_waits_for_the_folder`), 기록된 영상이 디스크에 없을 때 라이브러리가 바뀔 때만 다시 보는 것(`a_video_recorded_but_not_on_the_disk_is_looked_at_once_per_library_change`, 세대 검사를 빼면 실패해요), 마이그레이션(`a_job_an_earlier_build_finished_with_an_episode_without_a_video_goes_back_in_line`).

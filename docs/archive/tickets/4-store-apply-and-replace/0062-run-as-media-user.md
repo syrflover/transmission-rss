@@ -1,7 +1,7 @@
 # 0062 web과 worker를 1000:1000으로 실행해요
 
 - 상태: 완료 (2026-10-04, 개발 환경에서 확인했어요. 실제 서버의 전환은 목표 5예요. 아래 "결과")
-- 출처: [구현 경계](../specs/web-app.md#구현-경계와-실행-순서)의 실행 사용자(사용자 결정, 2026-10-04)
+- 출처: [구현 경계](../../../specs/web-app.md#구현-경계와-실행-순서)의 실행 사용자(사용자 결정, 2026-10-04)
 - 막는 티켓: 없음
 
 ## 작업
@@ -9,12 +9,12 @@
 trss가 미디어 디스크에 쓰는 보관본·적용본이 Transmission이 받은 영상과 같은 소유(1000:1000)가 되게 해요. 재생기는 미디어를 NFS로 읽고, NFS는 소유를 숫자로 보여요.
 이미지와 Compose만 바꾸고, 실제 서버의 전환은 목표 5의 배포에서 해요(사용자 결정, 2026-10-04).
 
-- 앱 이미지(`Dockerfile`)와 [trss Compose](../../docker-compose.trss.yml)가 `trss-worker`·`trss-web`을 1000:1000으로 실행해요.
+- 앱 이미지(`Dockerfile`)와 [trss Compose](../../../../docker-compose.trss.yml)가 `trss-worker`·`trss-web`을 1000:1000으로 실행해요.
   사용자가 정한 것은 worker이고, web은 같은 DB(WAL과 공유 메모리 파일 포함)와 수신 영역을 쓰므로 함께 바꿔요. uid·gid가 다른 배포를 위해 값은 `.env`로 바꿀 수 있게 하고, 기본은 1000:1000이에요.
 - worker가 시작할 때 서버 브라우저의 다운로드 폴더(`browser-downloads`, 모드 1777)를 준비하는 동작이 root가 아니어도 되는지 확인해요. 폴더 주인이 아니면 모드를 바꾸지 못해요.
 - 시작할 때 앱 데이터 폴더와 DB에 쓸 수 있는지 확인해, 쓸 수 없으면 경로와 필요한 uid를 알리고 멈춰요. 이전 배포에서 root로 만든 파일 때문에 조용히 실패하지 않게 하려는 거예요.
 - 운영 안내(`readme.md`)에 전환 절차를 적어요. 앱 데이터 폴더의 소유를 옮기고(`chown -R 1000:1000`), 미디어 폴더의 권한을 확인하는 절차예요.
-- worker가 root로 돈다고 적은 현재형 문장을 고쳐요. [보관과 복원의 폴더 이동](../specs/collection.md#보관과-복원의-폴더-이동)의 소유 설명이에요.
+- worker가 root로 돈다고 적은 현재형 문장을 고쳐요. [보관과 복원의 폴더 이동](../../../specs/collection.md#보관과-복원의-폴더-이동)의 소유 설명이에요.
 
 ## 완료 기준
 
@@ -28,11 +28,11 @@ trss가 미디어 디스크에 쓰는 보관본·적용본이 Transmission이 �
 
 ### 만든 것 (2026-10-04)
 
-- **실행 사용자**: `Dockerfile`이 `USER 1000:1000`을 두고, [trss Compose](../../docker-compose.trss.yml)가 두 서비스에 `user: "${TRSS_UID:-1000}:${TRSS_GID:-1000}"`를 줘요. uid·gid가 다른 배포는 `.env`의 `TRSS_UID`·`TRSS_GID`로 바꿔요. web도 같은 사용자예요.
+- **실행 사용자**: `Dockerfile`이 `USER 1000:1000`을 두고, [trss Compose](../../../../docker-compose.trss.yml)가 두 서비스에 `user: "${TRSS_UID:-1000}:${TRSS_GID:-1000}"`를 줘요. uid·gid가 다른 배포는 `.env`의 `TRSS_UID`·`TRSS_GID`로 바꿔요. web도 같은 사용자예요.
 - **시작할 때 쓰기 확인**: `trss-core`의 `access::check_app_data`를 두 바이너리가 DB를 열기 전에 불러요. trss가 쓰는 것만 봐요. 앱 데이터 폴더 자체, DB 이름에 붙는 바로 아래의 파일(`trss.db`와 `-wal`·`-shm`·`-journal`, 잠금 파일 여섯 개, 깨우기 소켓), `receive/`와 `artwork/`의 모든 하위 폴더에 이 프로세스가 쓸 수 있는지 봐요. 나머지(`lost+found`, 백업으로 떠 둔 `copy.db`, `browser-downloads/`)는 보지 않아요. 쓸 수 없으면 경로 다섯 개까지와 그 소유자·모드, 이 프로세스의 uid·gid, `chown -R` 안내를 적고 오류로 멈춰요. 두 폴더 안의 파일은 보지 않아요. 수신 영역은 브라우저 컨테이너가 받은 파일을 그 소유(uid 10001)로 옮겨 두기 때문이고, 폴더를 쓸 수 있으면 파일을 지우고 읽을 수 있어서예요.
 - **`browser-downloads` 준비**: `trss_browser::prepare_downloads_root`가 폴더를 만들고, 폴더의 주인이 이 프로세스(또는 root)가 아니면 모드와 상관없이 오류를 돌려줘요. 스티키 비트 아래에서는 주인만 브라우저가 만든 실행 폴더를 지울 수 있어서예요. 주인이 맞고 모드가 1777이 아니면 바꿔요. worker는 이 오류로 멈추지 않고 경로·주인·`sudo chown 1000:1000 browser-downloads && sudo chmod 1777 browser-downloads`를 적은 뒤 서버 브라우저 없이 돌아요. 브라우저 풀이 처음 쓸 때 다시 부르면 같은 오류를 돌려줘요.
 - **운영 안내**: `readme.md`에 `Running as 1000:1000` 절을 더했어요. root로 돌던 설치를 옮기는 절차(trss 멈춤, 앱 데이터 폴더 `chown -R 1000:1000`, 미디어 폴더 권한 확인, 새 릴리스로 시작, 로그 확인)와 앱 데이터 폴더를 미리 만들어야 하는 까닭(없는 경로는 Docker가 root 소유로 만들어요)을 적었어요. 개발 환경 안내와 백업 문장(컨테이너가 root로 돈다던 것)도 고쳤어요.
-- **명세**: [collection.md](../specs/collection.md#보관과-복원의-폴더-이동)의 "worker는 root로 돌지만" 문장을 1000:1000에 맞게 고치고, 이름 바꾸기가 소유를 바꾸지 않는다는 설명은 그대로 뒀어요. [web-app.md](../specs/web-app.md#구현-경계와-실행-순서)에 시작할 때 쓰기 확인을, [jobs.md](../specs/jobs.md)에 `browser-downloads` 준비의 새 동작과 받은 파일의 소유를 적었어요.
+- **명세**: [collection.md](../../../specs/collection.md#보관과-복원의-폴더-이동)의 "worker는 root로 돌지만" 문장을 1000:1000에 맞게 고치고, 이름 바꾸기가 소유를 바꾸지 않는다는 설명은 그대로 뒀어요. [web-app.md](../../../specs/web-app.md#구현-경계와-실행-순서)에 시작할 때 쓰기 확인을, [jobs.md](../../../specs/jobs.md)에 `browser-downloads` 준비의 새 동작과 받은 파일의 소유를 적었어요.
 
 ### 검증한 것
 
@@ -74,7 +74,7 @@ trss가 미디어 디스크에 쓰는 보관본·적용본이 Transmission이 �
 - worker가 미디어에 새로 만든 파일·폴더를 남기는 코드는 아직 없어요(0063부터). 그래서 새 파일의 소유 1000:1000은 이 프로세스의 uid로 만든 시험 파일(위 보관 명령의 이름 바꾸기 시험 파일)로만 봤고, 남는 파일로는 보지 못했어요. 보관과 적용을 만드는 티켓이 확인해요. 서버에서의 확인은 [0060](0060-server-filesystem-probe.md)의 탐침이에요.
 - 받은 파일은 브라우저의 소유(10001)로 수신 영역에 있고, 이름 바꾸기로는 미디어 디스크로 옮길 수 없어서 적용할 때 복사해요. 복사본은 worker의 소유(1000:1000)예요.
 - 앱 데이터 폴더가 없으면 Docker가 root 소유로 만들어서 두 프로세스가 멈춰요. `browser-downloads`만 없으면 worker는 멈추지 않고 서버 브라우저 없이 돌아요. 개발 환경은 `dev/compose.sh`가 둘 다 만들어 주고, 서버는 `readme.md`의 절차가 먼저 만들게 해요. 브라우저 없이 도는 worker가 쥔 서버 브라우저 잠금은 폴더를 고치고 worker를 다시 시작할 때까지 풀리지 않아요.
-- 개발 환경의 직접 찾기는 `fake.trss.invalid`의 가짜 블로그라서 실제 사이트의 다운로드 경로(외부 이름 해석, 실제 호스트)는 이 확인에 없어요. 그 부분은 [0046](../archive/tickets/3-subtitle-candidates-and-receiving/0046-find-in-browser.md)이 실제 사이트로 봤어요.
+- 개발 환경의 직접 찾기는 `fake.trss.invalid`의 가짜 블로그라서 실제 사이트의 다운로드 경로(외부 이름 해석, 실제 호스트)는 이 확인에 없어요. 그 부분은 [0046](../3-subtitle-candidates-and-receiving/0046-find-in-browser.md)이 실제 사이트로 봤어요.
 - 독립 검토를 2026-10-04에 받았고, 고친 뒤 다시 확인했어요(검토와 고침 참고). 다시 확인에서 나온 P3 하나(브라우저 없는 worker의 화면 묶음)를 고쳤고, 나머지 하나(`/tmp`·`/usr` 시험이 root 소유 시스템 폴더를 전제해요)는 그대로 뒀어요.
 - 이 변경 뒤 개발 환경의 `dev/local/data`에는 root가 만든 `receive/`와 잠금 파일, 소켓이 있어서 `chown -R 1000:1000` 한 번이 필요해요.
 

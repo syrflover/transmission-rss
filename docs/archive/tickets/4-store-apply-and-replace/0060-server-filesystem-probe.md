@@ -1,7 +1,7 @@
 # 0060 실제 서버의 미디어 디스크에서 파일 쓰기를 확인해요
 
 - 상태: 완료 (2026-10-07, 실제 서버에서 확인했어요. 아래 "서버 결과")
-- 출처: [체크포인트와 중단 복구](../specs/jobs.md#체크포인트와-중단-복구)의 실제 파일시스템 검증, [보관본과 적용본](../specs/subtitles.md#보관본과-적용본)의 임시 파일 위치, [구현 경계](../specs/web-app.md#구현-경계와-실행-순서)의 실행 사용자
+- 출처: [체크포인트와 중단 복구](../../../specs/jobs.md#체크포인트와-중단-복구)의 실제 파일시스템 검증, [보관본과 적용본](../../../specs/subtitles.md#보관본과-적용본)의 임시 파일 위치, [구현 경계](../../../specs/web-app.md#구현-경계와-실행-순서)의 실행 사용자
 - 막는 티켓: 없음
 
 ## 작업
@@ -17,7 +17,7 @@
   - 파일과 폴더의 `fsync`, 이름 바꾸기 뒤에도 `장치:inode`가 그대로인지
   - 1000:1000으로 만든 파일·폴더의 소유와 권한, Transmission이 만든 작품 폴더 안에 `.trss/`를 만들 수 있는지
 - worker의 memcg 안에서 수백 MiB 파일을 읽고 쓰는 동안 `memory.current`의 최대치, 페이지 캐시, `memory.events`의 `oom_kill`을 재요.
-  [0058](0058-server-oom-and-resource-limits.md)의 커널 문제(memcg 재시도)가 worker에도 닿는지 보려는 거예요.
+  [0058](../../../tickets/0058-server-oom-and-resource-limits.md)의 커널 문제(memcg 재시도)가 worker에도 닿는지 보려는 거예요.
 - 탐침은 저장소에 남겨 다시 돌릴 수 있게 해요. 서버에서 돌릴 명령은 사용자가 실행하고, 저는 결과를 받아 기록해요.
 
 ## 완료 기준
@@ -120,7 +120,7 @@
 
 - 보관·적용이 기대는 파일 동작은 서버의 xfs에서도 개발 환경과 같았어요. 같은 파일시스템의 `RENAME_NOREPLACE`, 다른 마운트 사이의 `EXDEV`, `fsync`, 식별 유지가 모두 기대대로예요. 그래서 임시 파일을 `.trss/` 안에 두는 명세는 그대로 둬요.
 - Transmission이 만든 작품 폴더는 이미 1000:1000 소유예요. 1000:1000으로 도는 worker가 그 안에 `.trss/`를 만들 수 있어요.
-- 이 커널에도 [0009](../archive/tickets/1-app-owned-collection/0009-deploy-web-worker.md#이름과-라벨이-되돌아간-일-호스트-커널의-oom-강제-종료)에서 Transmission을 죽인 memcg 재시도 변경이 있어요. 이번에는 한도에 374번 닿았지만 `oom_kill`은 없었어요. 그래서 [0058](0058-server-oom-and-resource-limits.md)에 적을 일은 없고 worker의 한도도 그대로 둬요.
+- 이 커널에도 [0009](../1-app-owned-collection/0009-deploy-web-worker.md#이름과-라벨이-되돌아간-일-호스트-커널의-oom-강제-종료)에서 Transmission을 죽인 memcg 재시도 변경이 있어요. 이번에는 한도에 374번 닿았지만 `oom_kill`은 없었어요. 그래서 [0058](../../../tickets/0058-server-oom-and-resource-limits.md)에 적을 일은 없고 worker의 한도도 그대로 둬요.
   다만 탐침은 한 프로세스가 차례로 쓰고 읽었어요. 0009의 강제 종료는 비운 자리를 다른 쓰기가 먼저 가져가는 동안 났어요. 그래서 여러 곳이 함께 쓰는 경우에도 같을지는 이 결과로 알 수 없어요. 압축 해제처럼 자식 프로세스와 함께 쓰는 경우는 [0065](0065-archive-extraction.md)의 서버 측정이 봐요.
 
 이 결과로 알 수 없는 것이에요.

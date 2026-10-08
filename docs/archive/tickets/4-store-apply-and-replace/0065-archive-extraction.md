@@ -1,7 +1,7 @@
 # 0065 압축 파일을 한도를 건 별도 프로세스에서 풀어요
 
-- 상태: 진행 중(실제 서버의 측정이 남았어요. 측정 명령은 사용자가 실행해요)
-- 출처: [압축 해제의 격리와 한도](../specs/subtitles.md#압축-해제의-격리와-한도)(사용자 결정, 2026-10-04), [묶음 분석](../specs/subtitles.md#자막-묶음-분석과-안전한-배치-판단)의 위험 사례, 올리기가 넘긴 ZIP이 아닌 압축 파일([0047](../archive/tickets/3-subtitle-candidates-and-receiving/0047-subtitle-upload.md))
+- 상태: 완료 (2026-10-08, 실제 서버의 측정은 아래 "실제 서버의 측정")
+- 출처: [압축 해제의 격리와 한도](../../../specs/subtitles.md#압축-해제의-격리와-한도)(사용자 결정, 2026-10-04), [묶음 분석](../../../specs/subtitles.md#자막-묶음-분석과-안전한-배치-판단)의 위험 사례, 올리기가 넘긴 ZIP이 아닌 압축 파일([0047](../3-subtitle-candidates-and-receiving/0047-subtitle-upload.md))
 - 막는 티켓: [0059](0059-archive-tools-and-limits.md)(도구와 한도), [0064](0064-multi-file-packages.md)(멤버를 받을 분석)
 
 ## 작업
@@ -11,7 +11,7 @@
 - 형식은 ZIP, RAR(4·5), 7z, gzip, bzip2, xz, tar와 나뉜 조각이에요. 같은 묶음의 조각을 모아 풀어요. 0059에서 풀지 못한다고 정한 형식은 `풀지 못함`과 그 까닭이에요.
 - 경로 이탈(`..`, 절대 경로), 심볼릭·하드 링크, 장치 파일, 한도 초과, 중첩 한도 초과, 암호는 거부해요. 그 묶음만 실패하고 까닭을 작업 상세에 적으며, 이미 보관한 파일은 그대로예요.
 - 풀지 못한 압축 파일은 수신 영역에 남겨, 나중에 풀 수 있게 되면 다시 받지 않고 분석해요.
-  이 컴퓨터 쪽의 실패(디스크, 메모리 한도, 시간 한도, 자식 프로세스 오류)는 처음을 포함해 3번까지 원 수신물에서 다시 풀어요. 다음 시도는 1시간 뒤와 worker의 다음 시작 가운데 먼저 오는 때예요. 압축 파일 탓의 거절은 다시 풀지 않아요(사용자 결정, 2026-10-05). 자세한 규칙은 [압축 해제의 격리와 한도](../specs/subtitles.md#압축-해제의-격리와-한도)에 있어요.
+  이 컴퓨터 쪽의 실패(디스크, 메모리 한도, 시간 한도, 자식 프로세스 오류)는 처음을 포함해 3번까지 원 수신물에서 다시 풀어요. 다음 시도는 1시간 뒤와 worker의 다음 시작 가운데 먼저 오는 때예요. 압축 파일 탓의 거절은 다시 풀지 않아요(사용자 결정, 2026-10-05). 자세한 규칙은 [압축 해제의 격리와 한도](../../../specs/subtitles.md#압축-해제의-격리와-한도)에 있어요.
 - 풀던 중 worker가 죽으면 원 수신물에서 다시 풀어요. 자식 프로세스가 남지 않게 해요.
 - 실제 서버의 256M worker 컨테이너 안에서 큰 정상 묶음과 폭탄 표본을 풀어, 최대 메모리와 `oom_kill`을 재요. [0060](0060-server-filesystem-probe.md)의 탐침 방식을 써요.
   worker 한도는 자식 프로세스의 `RLIMIT_AS` 256MiB가 들어가도록 128M에서 256M로 올렸어요(사용자 결정, 2026-10-05). web은 128M 그대로예요.
@@ -53,7 +53,7 @@
 - **탐침**: `trss-probe --unpack FILE[,FILE...]`가 worker와 같은 방식으로 자식 프로세스를 띄워 풀고, 그동안 `memory.current`·`memory.stat`의 최대치와 `memory.events`의 `oom_kill`을 재요. `deploy/probe.sh`는 `--samples DIR`(컨테이너의 `/samples`)과 `--extract FILE`을 받아요. `probe-binary` 빌드 대상이 `trss-probe`와 `trss-extract`를 함께 내보내요.
 - **API와 화면**: 작업 상세의 받은 압축 파일마다 `파일 N개를 풀었어요 (자막 a · 폰트 b)`, `풀지 못함`과 까닭, `나뉜 조각 · 첫 조각과 함께 풀어요`가 나와요. 올리기 결과와 작품 상세의 올리기 칸은 압축 파일에 `받은 뒤 풀어요`를 붙이고, 풀기 전에는 `풀기를 기다려요`라고 적어요.
 - **가짜 출처**: `fake.trss.invalid/pack/` 게시물의 이름에 `%2F`가 있으면 그 앞을 폴더로 줘요. 같은 이름의 조각이 두 폴더에 있는 묶음을 만들 수 있어요.
-- **명세·문서**: [압축 해제의 격리와 한도](../specs/subtitles.md#압축-해제의-격리와-한도)에 자식 프로세스, 한도 표, 실패의 두 갈래, 멤버 검사의 512MiB를 적었어요. [작업](../specs/jobs.md)과 readme에 압축 파일을 받은 올리기 작업과 자원 한도를 적었어요.
+- **명세·문서**: [압축 해제의 격리와 한도](../../../specs/subtitles.md#압축-해제의-격리와-한도)에 자식 프로세스, 한도 표, 실패의 두 갈래, 멤버 검사의 512MiB를 적었어요. [작업](../../../specs/jobs.md)과 readme에 압축 파일을 받은 올리기 작업과 자원 한도를 적었어요.
 
 ### 컴퓨터 쪽 실패의 재시도 (2026-10-06)
 
@@ -83,7 +83,7 @@
 | 같은 컴퓨터 쪽 실패가 3번 | 시험 `the_third_failed_try_leaves_the_archive_not_unpacked`: 3번째 실패에 `unpack_error`가 생기고 작업이 실패로 끝나며, 기록에 `3번 중 3번째 시도`가 있어요. 그 뒤 몇 시간이 지나거나 worker가 다시 시작해도 기록이 늘지 않고 원 수신물이 남아요. 일부 실패로 끝나는 길은 기존 `a_refused_archive_beside_a_placed_file_leaves_the_job_partial`과 같은 판정을 써요. |
 | 압축 파일 탓의 거절 | 시험 `an_archive_whose_member_leaves_it_fails_and_stays_received`(경로 이탈, `unpack_tries` 0, 다시 시작해도 다시 풀지 않음), `an_empty_archive_is_not_tried_again`(폴더만 든 ZIP), 폭탄과 암호 시험이에요. 디스크 실패 뒤의 시도가 거절로 끝나면 시도가 끝나고, 그 작업이 다른 까닭으로 `자막 대기`여도 다시 줄에 서지 않아요(`a_refusal_after_a_failed_try_ends_the_tries`). |
 | 재시도의 나머지 경로(구현 범위) | 나뉜 압축 파일은 조각을 함께 기다렸다가 함께 풀어요(`a_split_archive_is_tried_again_as_one`). 올리기 작업은 다시 풀기를 먼저 기다리고, 풀린 뒤 배치 확인을 기다려요(`an_uploads_archive_is_tried_again_before_its_placement_is_confirmed`). 시각이 안 된 시도는 작업이 다른 까닭으로 돌아도 풀지 않아요. 프로그램이 없는 worker는 까닭을 `ARCHIVE_LATER`로 두고 줄에 세우지 않아요. 이 둘은 `an_archive_this_machine_failed_to_unpack_is_tried_again_from_its_receipt`에 있어요. |
-| 실제 서버 256M | 아직 재지 않았어요. 명령은 아래 [실제 서버에서 재는 방법](#실제-서버에서-재는-방법)에 있고 사용자가 실행해요. 이 PC의 관찰은 아래에 있어요. |
+| 실제 서버 256M | 2026-10-08 실제 서버(j4105)의 256M 컨테이너에서 정상 묶음 4개가 풀리고 폭탄 표본 8개가 거절됐어요. 모든 표본에서 `oom_kill`이 0이었어요. 아래 [실제 서버의 측정](#실제-서버의-측정-2026-10-08)에 있어요. |
 
 이 PC(Arch Linux, 커널 7.2.8, Docker)의 256M 컨테이너(`--memory-swap 256m --cpus 0.25`)에서 `trss-probe --unpack`으로 잰 값이에요(2026-10-05, 이 작업 트리로 지은 정적 실행 파일). 서버의 값이 아니에요.
 
@@ -96,6 +96,23 @@
 | 멤버 10만 개 ZIP, 30단 중첩 ZIP, 사전 1.5GiB xz·4GiB 7z·1GiB RAR5, 1GiB 0 멤버 RAR, 사전 512MiB 7z·xz, 암호 ZIP, `../../` ZIP | 모두 거절 | 각 0.1초 미만 | 44.9MiB 이하 | 0.3MiB 이하 | 0 |
 
 최대 `memory.current`가 한도에 닿은 것은 거의 모두 쓴 파일의 페이지 캐시예요. `big.7z`와 `big.rar`에서 `memory.events`의 `max`가 늘었지만(149, 9) 회수로 끝났고 `oom` 0, `oom_kill` 0이었어요.
+
+### 실제 서버의 측정 (2026-10-08)
+
+사용자가 [실제 서버에서 재는 방법](#실제-서버에서-재는-방법)대로 서버(j4105)에서 돌렸어요(07:59 UTC). 서버는 Rocky Linux 9.8, 커널 5.14.0-687.53.1.el9_8, Docker 29.8.1이에요. 이미지는 배포된 `0.6.2`이고, 컨테이너는 1000:1000, 메모리 256m(스왑도 같음), CPU 0.25개로 worker와 같아요. `trss-probe`와 `trss-extract`는 2026-10-08에 `ef90d40`에서 지었어요. 그 커밋의 `crates/`는 0.6.2에 worker 시험 하나만 더한 거예요. 원본 출력은 `dev/local/measure/0065/unpack-2026-10-08.txt`(저장소에 없음)에 있어요.
+
+| 표본 | 결과 | 걸린 시간 | 최대 `memory.current` | 그 가운데 익명 메모리 | `memory.events`의 `max` | `oom_kill` |
+| --- | --- | --- | --- | --- | --- | --- |
+| `big.zip`(멤버 30개, 200.3MiB) | 풀림 | 5.7초 | 232.6MiB | 0.4MiB | 0 | 0 |
+| `big.7z` | 풀림 | 26.0초 | 256.0MiB | 8.5MiB | 65 | 0 |
+| `big.tar.xz` | 풀림 | 21.0초 | 256.0MiB | 1.4MiB | 135 | 0 |
+| `big.rar` | 풀림 | 37.9초 | 256.0MiB | 13.3MiB | 184 | 0 |
+| 멤버 10만 개 ZIP, 30단 중첩 ZIP, 사전 1.5GiB xz·4GiB 7z·1GiB RAR5, 1GiB 0 멤버 RAR, 암호 ZIP, `../../` ZIP | 모두 거절 | 각 0.1초 이하 | 49.4MiB 이하 | 0.3MiB 이하 | 0 | 0 |
+
+- 이 PC와 같이 한도에 닿은 것은 쓴 파일의 페이지 캐시예요. 익명 메모리는 가장 많을 때 13.3MiB였고, `memory.events`의 `max`가 늘어도 회수로 끝나 `oom`과 `oom_kill`이 0이었어요. 0058에서 한도를 다시 정할 일은 없어요.
+- 거절의 까닭은 명세의 한도 그대로였어요. `멤버가 2000개를 넘어요`, `압축 파일 안의 압축 파일이 3단을 넘어요`, `사전 크기가 64MiB를 넘어요`(세 형식), `z1g.bin: 멤버 하나가 200MiB를 넘어요`, `암호가 걸려 있어요`, `../../escape1.ass: 풀 수 없는 경로예요`예요.
+- 정상 묶음은 이 PC의 측정(CPU 0.25개)보다 2.5–3.1배 오래 걸렸어요. 이 PC에서 측정한 사전 512MiB 7z·xz는 서버 명령에 들어 있지 않아 서버에서는 측정하지 않았어요.
+- 같은 실행에서 [0060](0060-server-filesystem-probe.md)의 파일시스템 탐침도 0.6.2 이미지로 다시 돌았어요. 압축 해제를 포함한 59개 검사가 모두 통과했어요.
 
 ### 독립 검토
 
@@ -147,6 +164,7 @@
 - 멤버 검사의 512MiB를 압축 파일 하나에서 다 쓰는 경로는 단위 시험만 있고 통합 시험은 없어요.
 - WinRAR로 만든 파일, `.tar.001`·`.gz.001`, PPMd 7z, BCJ2, 4GiB 넘는 ZIP64, deflate64는 시험하지 않았어요(0059).
 - 위 개발 환경 관찰(작업 `6e8c97b4`)은 검토 전의 코드로 지은 이미지에서 했어요.
+- 시간 한도의 여유는 실제 서버에서 풀린 속도로 어림한 것이고 측정하지 않았어요. 정상 묶음의 속도가 같다면 모두 512MiB인 묶음은 RAR 97초, 7z 66초, xz 54초, ZIP 15초쯤 걸려요. RAR은 120초 한도에 20%쯤 여유가 있고, 같은 때 worker가 같은 CPU 0.25개로 다른 일을 하면 넘을 수 있어요. 넘으면 이 컴퓨터 쪽 실패로 3번까지 다시 풀어요. 실제로 받은 자막 묶음의 크기를 모아 보지는 않았어요.
 - 이 PC의 측정에 쓴 표본은 `probe-out/samples`(저장소에 없음)에 있어요. 0059의 시험용 생성 코드와 그때 만든 폭탄 표본에서 복사했어요.
 
 ### 실제 서버에서 재는 방법
@@ -167,4 +185,4 @@
    chmod +x probe.sh trss-probe trss-extract
    ./probe.sh --samples ./samples -- --size-mib 0 --unpack /samples/big.zip --unpack /samples/big.7z --unpack /samples/big.tar.xz --unpack /samples/big.rar --unpack /samples/many100k.zip --unpack /samples/nested30.zip --unpack /samples/dict1536m.xz --unpack /samples/dict4095m.7z --unpack /samples/dict_rar50_1g.rar --unpack /samples/zeros1g.rar --unpack /samples/enc_aes.zip --unpack /samples/esc.zip 2>&1 | tee unpack-$(date +%F).txt
    ```
-4. `unpack-<날짜>.txt`의 내용을 저에게 붙여 주세요. 제가 날짜·커널과 표본마다의 최대 `memory.current`·`oom_kill`을 이 티켓에 적어요. `oom_kill`이 생기면 [0058](0058-server-oom-and-resource-limits.md)에서 한도를 다시 정해요.
+4. `unpack-<날짜>.txt`의 내용을 저에게 붙여 주세요. 제가 날짜·커널과 표본마다의 최대 `memory.current`·`oom_kill`을 이 티켓에 적어요. `oom_kill`이 생기면 [0058](../../../tickets/0058-server-oom-and-resource-limits.md)에서 한도를 다시 정해요.

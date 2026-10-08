@@ -1,7 +1,7 @@
 # 0077 대응이 없어 같은 번호로 본 연결이 나중에 정한 대응을 따라요
 
 - 상태: 완료 (2026-10-06)
-- 출처: [파일의 회차](../specs/subtitles.md#파일의-회차), [자막의 회차 대응](../specs/library.md#자막의-회차-대응)의 재평가, [0071](0071-mapping-change-reevaluation.md)의 한계에서 사용자가 고른 후속(사용자 결정, 2026-10-06)
+- 출처: [파일의 회차](../../../specs/subtitles.md#파일의-회차), [자막의 회차 대응](../../../specs/library.md#자막의-회차-대응)의 재평가, [0071](0071-mapping-change-reevaluation.md)의 한계에서 사용자가 고른 후속(사용자 결정, 2026-10-06)
 - 막는 티켓: [0071](0071-mapping-change-reevaluation.md)(재평가와 재배치)
 
 ## 작업
@@ -33,7 +33,7 @@
 - **마이그레이션 60**(`same_number.sql`, 재생성): `subtitle_stored`·`subtitle_job_plan`·`subtitle_replacements`의 CHECK에 `same_number`를 더하고, 색인과 트리거를 다시 만들어요. 보관본의 CHECK는 `same_number`에도 근거와 출처를 요구해요.
   이전 빌드가 `explicit`로 남긴 같은 번호 연결은 사람이 관여하지 않은 것만 바꿔요. 조건은 넷이에요. 후보 작업(`pick`·`auto`)이고 출처가 있어요. 배치 확인 단계가 없어요(어떤 범위의 확인이든 이 단계를 남겨요). 회차가 후보의 회차 번호와 같아요. 출처에 정한 대응이 지금 없어요.
   보관본은 가리키는 줄이 모두 바뀐 경우에만 바꾸고, 그 줄의 교체 계획도 같은 연결로 다시 적어요.
-- 문서: [파일의 회차](../specs/subtitles.md#파일의-회차)·[배치 확인](../specs/subtitles.md#배치-확인), [자막의 회차 대응](../specs/library.md#자막의-회차-대응), [보관 관계 필드](../specs/settings.md#보관-관계-필드)의 `mode: same_number`, [용어집](../glossary.md)의 `같은 번호로 본 연결`, 작업 API 문서와 웹 타입(`placementTypes.ts`).
+- 문서: [파일의 회차](../../../specs/subtitles.md#파일의-회차)·[배치 확인](../../../specs/subtitles.md#배치-확인), [자막의 회차 대응](../../../specs/library.md#자막의-회차-대응), [보관 관계 필드](../../../specs/settings.md#보관-관계-필드)의 `mode: same_number`, [용어집](../../../glossary.md)의 `같은 번호로 본 연결`, 작업 API 문서와 웹 타입(`placementTypes.ts`).
 
 ### 검증한 것
 

@@ -1,7 +1,7 @@
 # 0072 고른 보관본을 적용하고 작품별 자막 형식 순서를 정해요
 
 - 상태: 완료 (2026-10-06)
-- 출처: [보관본과 적용본](../specs/subtitles.md#보관본과-적용본)의 선택·추가 적용·지난 수정본 복원, [오른쪽 카드 열](../specs/library.md#오른쪽-카드-열)의 `자막`, [공통 정책](../specs/settings.md#공통-정책)의 작품별 재정의(목표 3의 [0049](../archive/tickets/3-subtitle-candidates-and-receiving/0049-common-policy-settings.md)가 남긴 편집 자리)
+- 출처: [보관본과 적용본](../../../specs/subtitles.md#보관본과-적용본)의 선택·추가 적용·지난 수정본 복원, [오른쪽 카드 열](../../../specs/library.md#오른쪽-카드-열)의 `자막`, [공통 정책](../../../specs/settings.md#공통-정책)의 작품별 재정의(목표 3의 [0049](../3-subtitle-candidates-and-receiving/0049-common-policy-settings.md)가 남긴 편집 자리)
 - 막는 티켓: [0068](0068-replacement-approval.md)
 
 ## 작업
@@ -11,7 +11,7 @@
   보관만 한 회차의 `적용`([0064](0064-multi-file-packages.md))도 자막이 있는 회차면 이 비교로 이어요.
 - 같은 제작자의 다른 형식은 추가로 적용할 수 있고, 추가 적용은 기존 적용본을 지우지 않아요.
 - 작품별 형식 순서는 `자막` 카드에서 전역 순서를 재정의하거나 되돌려요(`work_subtitle_policy`). 그 뒤의 첫 적용과 형식 선택은 작품의 순서를 써요.
-  명세에 편집 자리가 없으므로 [오른쪽 카드 열](../specs/library.md#오른쪽-카드-열)의 `자막`에 적어요.
+  명세에 편집 자리가 없으므로 [오른쪽 카드 열](../../../specs/library.md#오른쪽-카드-열)의 `자막`에 적어요.
 
 ## 완료 기준
 
@@ -35,7 +35,7 @@
 - **마이그레이션 58**(`chosen_rows.sql`): `subtitle_job_plan.chosen`을 더해요. 작업이 스스로 정한 줄과 그 전의 줄은 비어 있어요.
 - **API**: 적용 요청이 `{mode}`를 받고 `{job_id, compare}`를 돌려줘요. 작품 상세에 `자막` 카드의 `subtitles`(형식 순서와 `own`, 제작자별 보관본의 `applied`·`choice`·`can_add`·`blocked`)를 더했어요. 카드와 요청은 같은 판정(`stored_options`)을 써요. `PUT`·`DELETE /api/library/works/{id}/subtitle-order`가 작품의 형식 순서를 정하고 되돌려요. 회차 줄의 `stored`에 `compare`를 더했어요.
 - **웹**: 작품 상세 오른쪽 카드 열의 `수집`과 `파일` 사이에 `자막` 카드(`SubtitlesCard`, `subtitles.ts`)를 뒀어요. 고른 시즌의 보관본을 제작자별로 보여주고, 영상 옆 보관본에 `적용`과 `적용 위치`·`보관 위치`를 따로 적어요. 받은 날짜는 `9월 7일 받음`이고 같은 날 또 받았으면 시각을 붙여요. `적용`·`교체 비교`·`추가 적용`과 형식 순서 편집기(`위로`·`아래로`, `저장`, `전역 순서로 되돌리기`)가 있어요. 화면 낭독기는 각 버튼을 회차·형식·받은 날짜로 불러요(`2화 ASS 10월 5일 01:36 받음 교체 비교`). 회차 줄의 버튼은 자막이 있는 회차에서 `교체 비교`라고 적혀요.
-- **명세**: [보관본과 적용본](../specs/subtitles.md#보관본과-적용본), [고르지 않은 회차](../specs/subtitles.md#고르지-않은-회차), [교체 계획과 반영](../specs/subtitles.md#교체-계획과-반영), [오른쪽 카드 열](../specs/library.md#오른쪽-카드-열), [공통 정책](../specs/settings.md#공통-정책)을 고쳤어요.
+- **명세**: [보관본과 적용본](../../../specs/subtitles.md#보관본과-적용본), [고르지 않은 회차](../../../specs/subtitles.md#고르지-않은-회차), [교체 계획과 반영](../../../specs/subtitles.md#교체-계획과-반영), [오른쪽 카드 열](../../../specs/library.md#오른쪽-카드-열), [공통 정책](../../../specs/settings.md#공통-정책)을 고쳤어요.
 
 ### 검증한 것
 
