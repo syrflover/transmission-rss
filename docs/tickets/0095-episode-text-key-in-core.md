@@ -35,7 +35,7 @@ trss-subtitles는 trss-core와 trss-browser에만 의존하므로, 모두가 볼
 
 ### 바꾼 것
 
-`ea12f18`(`refactor(core): read, order and label an episode text in one place`)에서 trss-core에 `episode` 모듈을 더했어요.
+`eb58482`(`refactor(core): read, order and label an episode text in one place`)에서 trss-core에 `episode` 모듈을 더했어요.
 
 - `EpisodeNumber`는 회차 텍스트가 십진수일 때의 값이에요. `f64`를 만들지 않고 숫자를 글자로 지녀서 `013`, `13`, `13.0`이 같은 수예요. 숫자는 ASCII 숫자와, 있으면 `.` 뒤의 ASCII 숫자뿐이에요.
 - `EpisodeKey`는 수이거나 그 밖의 글자예요. 수가 먼저 값 순서로 오고, 글자는 그 뒤예요.
@@ -68,5 +68,5 @@ trss-subtitles는 trss-core와 trss-browser에만 의존하므로, 모두가 볼
 
 - 앞은 통과 2,825개, 실패 0개, 무시 14개였어요.
 - `e03223e` 뒤에는 2,826·0·14예요. 목록이 `12`, `13.0`, `14`, `13.5`를 `12–14화`와 그 뒤의 `13.5`로 보이는지, `13.0`만 있으면 쓴 그대로 보이는지, `13.0` 자막이 `13` 영상을 덮는지 확인하는 테스트를 더했어요. 기존 테스트는 고치지 않았어요.
-- `ea12f18` 뒤에는 2,832·0·14예요. 저장 꼴 `n:13`, `n:13.5`, `n:15`를 확인하는 trss-collect와 trss-jobs의 기존 테스트가 고치지 않고 통과했어요.
+- `eb58482` 뒤에는 2,832·0·14예요. 저장 꼴 `n:13`, `n:13.5`, `n:15`를 확인하는 trss-collect와 trss-jobs의 기존 테스트가 고치지 않고 통과했어요.
 - [ADR 0015](../adr/0015-test-a-rule-once-in-its-crate.md)대로 trss-subtitles의 `the_key_is_the_apps`와 trss-library의 `episodes_order_as_numbers_and_other_text_comes_last`를 지우고, 그 단언을 trss-core로 옮겼어요. trss-core의 테스트 8개는 키, 받지 않는 글자, 한 수의 여러 표기, 순서, `whole`과 `is_key`, `to_f64`, 저장 꼴, 두 표기를 확인해요.
