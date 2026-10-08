@@ -102,7 +102,7 @@ function CopyRow({ workId, view, onChanged }: { workId: string; view: CopyView; 
         navigate(jobPath(outcome.job));
         return;
       }
-      // The job only took the apply: `ApplyStatus` reads the work again once the job ends.
+      // The job only took the apply: `ApplyStatus` reads the work again once the job ends and the work shows it.
       setPhase({ kind: "sent", job: outcome.job });
     } catch (e) {
       setPhase({ kind: "error", text: e instanceof ApiError ? e.message : "적용을 요청하지 못했어요.", job: null });
@@ -133,6 +133,8 @@ function CopyRow({ workId, view, onChanged }: { workId: string; view: CopyView; 
       {phase.kind === "sent" ? (
         <ApplyStatus
           job={phase.job}
+          workId={workId}
+          storedId={view.id}
           onEnded={onChanged}
           onFailed={(text) => setPhase({ kind: "error", text, job: phase.job })}
         />

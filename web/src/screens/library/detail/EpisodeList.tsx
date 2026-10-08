@@ -142,8 +142,8 @@ function VersionLine({ revision }: { revision: EpisodeRevision }) {
 /**
  * A stored subtitle on an episode: applying it is the job's that stored it. On an episode with a subtitle
  * (`compare`) the job compares the two first, so the button says `교체 비교` and the job's page opens. Otherwise the
- * answer only says the job took the apply, so the line waits for the job to end (`ApplyStatus`) and then reads the work
- * again; a failure shows the job's own sentence on the line.
+ * answer only says the job took the apply, so the line waits for the job to end and for the work to list the applied
+ * file (`ApplyStatus`), and then reads the work again; a failure shows the job's own sentence on the line.
  */
 function StoredLine({
   workId,
@@ -169,7 +169,7 @@ function StoredLine({
         navigate(jobPath(outcome.job));
         return;
       }
-      // The job only took the apply: `ApplyStatus` reads the work again once the job ends.
+      // The job only took the apply: `ApplyStatus` reads the work again once the job ends and the work shows it.
       setPhase({ kind: "sent", job: outcome.job });
     } catch (e) {
       setPhase({ kind: "error", text: e instanceof ApiError ? e.message : "적용을 요청하지 못했어요.", job: null });
@@ -185,6 +185,8 @@ function StoredLine({
       {phase.kind === "sent" ? (
         <ApplyStatus
           job={phase.job}
+          workId={workId}
+          storedId={stored.id}
           onEnded={onApplied}
           onFailed={(text) => setPhase({ kind: "error", text, job: phase.job })}
         />

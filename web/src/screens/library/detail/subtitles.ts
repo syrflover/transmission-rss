@@ -211,7 +211,8 @@ export function storedOf<T extends StoredKind>(episode: { stored: readonly T[] }
 /**
  * Where the job that was asked to apply a copy is. The answer to the request only says the job took it; the worker
  * applies afterwards (`web-app.md`, 웹 명령과 상태 갱신), so the screen reads the job until it is no longer on its way.
- * `done`: it ended and the work is read again; `failed`: it failed and `text` is why; `waiting`: it stops for a person
+ * `done`: it ended and the work is read again once it shows the apply (`appliedShown`); `failed`: it failed and
+ * `text` is why; `waiting`: it stops for a person
  * (`교체 승인`, a check) and `text` is what it waits for; `running`: read it again.
  */
 export type ApplyProgress =
@@ -250,6 +251,29 @@ export const APPLY_WAIT_MS = 5 * 60 * 1000;
 /** The wait that began at `startedAt` is over at `now`. */
 export function waitOver(startedAt: number, now: number): boolean {
   return now - startedAt >= APPLY_WAIT_MS;
+}
+
+/** The parts of a work (`GET /api/library/works/{id}`) that say whether an apply shows yet. */
+export interface WorkGlance {
+  seasons: { episodes: { subtitle: { path: string }[] }[] }[];
+  subtitles?: WorkSubtitles;
+}
+
+/**
+ * Whether the work as read shows the apply of the stored copy `storedId` that its job finished: every file the job put
+ * beside a video for it (the copy's `applied`) is among the episodes' subtitle files. The job's own record has the copy
+ * applied as soon as the job ends, but the episodes list what the worker's reading of the watch folder found, which
+ * comes a few seconds later (it gathers a work's changes first), so a work read at once has the stored copy gone and
+ * the subtitle not there yet. A copy that is not listed or not applied (cleaned, or left stored by the job), and a
+ * server that sends no `subtitles`, leave nothing to wait for.
+ */
+export function appliedShown(work: WorkGlance, storedId: string): boolean {
+  const copy = work.subtitles?.creators.flatMap((group) => group.copies).find((c) => c.id === storedId);
+  if (!copy) return true;
+  const listed = new Set(
+    work.seasons.flatMap((season) => season.episodes.flatMap((episode) => episode.subtitle.map((file) => file.path))),
+  );
+  return copy.applied.every((place) => listed.has(place.path));
 }
 
 // --- the order editor -----------------------------------------------------------------------------------------------

@@ -9,6 +9,7 @@ import {
   APPLY_WAIT_MS,
   applyOutcome,
   applyProgress,
+  appliedShown,
   canSaveOrder,
   cardSummary,
   copyView,
@@ -285,4 +286,41 @@ test("the wait is over after five minutes and not before", () => {
   assert.equal(waitOver(1000, 1000), false);
   assert.equal(waitOver(1000, 1000 + APPLY_WAIT_MS - 1), false);
   assert.equal(waitOver(1000, 1000 + APPLY_WAIT_MS), true);
+});
+
+// --- waiting for the work to show a finished apply (0127) -----------------------------------------------------------
+
+/** A work whose season 1 has episodes with these subtitle files, and these stored copies. */
+const workWith = (files: string[][], ...creators: WorkSubtitles["creators"]) => ({
+  seasons: [{ episodes: files.map((paths) => ({ subtitle: paths.map((path) => ({ path })) })) }],
+  subtitles: subtitles(...creators),
+});
+
+const applied = (path: string) => ({ path, applied_at: at(10, 8) });
+
+test("a finished apply shows once the episode lists the file the job put beside the video, and not before", () => {
+  const copies = [copy("c1", { episode: "09", applied: [applied("Season 01/Show S01E09.ass")], choice: null })];
+  // Read right after the job ended: the job's record has the copy applied, the watch folder has not found the file.
+  assert.equal(appliedShown(workWith([[], []], { creator: null, copies }), "c1"), false);
+  assert.equal(appliedShown(workWith([["Season 01/Show S01E08.ass"], []], { creator: null, copies }), "c1"), false);
+  assert.equal(appliedShown(workWith([[], ["Season 01/Show S01E09.ass"]], { creator: null, copies }), "c1"), true);
+});
+
+test("a copy applied in two places shows once both are listed", () => {
+  const copies = [
+    copy("c1", { applied: [applied("Season 01/Show S01E02.ass"), applied("Season 01/Show S01E02.ko.ass")] }),
+  ];
+  const card = { creator: "하느", copies };
+  assert.equal(appliedShown(workWith([["Season 01/Show S01E02.ass"]], card), "c1"), false);
+  assert.equal(
+    appliedShown(workWith([["Season 01/Show S01E02.ass", "Season 01/Show S01E02.ko.ass"]], card), "c1"),
+    true,
+  );
+});
+
+test("a copy that is gone or was left stored, and a work with no card, leave nothing to wait for", () => {
+  const stored = { creator: null, copies: [copy("c1")] };
+  assert.equal(appliedShown(workWith([[]], stored), "c1"), true);
+  assert.equal(appliedShown(workWith([[]], stored), "cleaned"), true);
+  assert.equal(appliedShown({ seasons: [{ episodes: [{ subtitle: [] }] }] }, "c1"), true);
 });
