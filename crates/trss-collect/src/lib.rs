@@ -10,6 +10,8 @@
 //!   a rule picks from them;
 //! - [`release_name`]: what a release name says (work, episode, revision, CRC32);
 //! - [`revisions`], [`revision`]: replacing a video with its revision;
+//! - [`cycle`]: what a collection cycle decides item by item, which the
+//!   worker's cycle calls;
 //! - [`commands`]: each kind of web command and how it is carried out;
 //! - [`offsets`], [`episode_offset`]: a rule's episode offset;
 //! - [`season_link`]: connecting subscriptions to the seasons of the library;
@@ -24,6 +26,7 @@ pub mod archive_suggestions;
 pub mod commands;
 pub mod config;
 pub mod context;
+pub mod cycle;
 pub mod episode_offset;
 #[cfg(any(test, feature = "test-support"))]
 pub mod fake;
