@@ -87,10 +87,11 @@ workspace 테스트 한 번에 새 DB를 약 1,814번 열어요. 테스트별 �
 
 ### 수집 받기 줄기의 재구성
 
-worker의 수집 주기(`cycle.rs`)와 trss-collect의 한 번 받기 명령(`receive_once.rs`)은 토렌트를 더하고, 기록하고, 이름을 바꾸는 일을 각자 해요.
-이름 바꾸기와 그 재시도도 trss-transmission과 한 번 받기에 따로 있어요. 같은 실패를 한쪽은 영어로, 다른 쪽은 한국어로 적어요.
+2026-10-07에는 worker의 수집 주기(`cycle.rs`)와 trss-collect의 한 번 받기 명령(`receive_once.rs`)이 토렌트를 더하고, 기록하고, 이름을 바꾸는 일을 각자 했어요.
+이름 바꾸기와 그 재시도도 trss-transmission과 한 번 받기에 따로 있었고, 같은 실패를 한쪽은 영어로, 다른 쪽은 한국어로 적었어요.
 이력 전체에서 `cycle.rs`를 바꾼 커밋 49개 중 22개, `receive_once.rs`를 바꾼 커밋 52개 중 29개가 수정 커밋이에요. [ADR 0015](../adr/0015-test-a-rule-once-in-its-crate.md)에 적은, 다시 받은 토렌트의 이름을 58분 사이에 네 번 고친 일도 여기서 났어요.
-수집 판단(`process_job`, `withhold`, `start_replacement`, `make_plans`)이 아직 worker에 남아 있어서, worker에는 실행 루프, 명령 분배, 주기만 남긴다는 [ADR 0011](../adr/0011-feature-crate-workspace.md)과 어긋나요.
+수집 판단(`process_job`, `withhold`, `start_replacement`, `make_plans`)이 worker에 남아 있어서, worker에는 실행 루프, 명령 분배, 주기만 남긴다는 [ADR 0011](../adr/0011-feature-crate-workspace.md)과 어긋났어요.
+[0099](0099-one-receive-path.md)에서 trss-collect의 `receive`(더하기, 기록, 이름 바꾸기)와 `cycle`(수집 판단)로 모았어요.
 
 - 항목 하나를 더하고, 기록하고, 이름을 바꾸는 일은 trss-collect의 한 경로가 맡고, 수집 주기와 한 번 받기 명령이 그 경로를 불러요.
 - 이름 바꾸기와 재시도는 한 곳에 있어요. trss-transmission에는 RPC 호출과, 호출하는 쪽이 넘긴 이름 계산만 남아요.

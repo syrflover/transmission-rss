@@ -173,7 +173,8 @@ impl World {
     }
 
     async fn rename(&self, job: &RenameJob<'_>) -> RenameResult {
-        rename(&self.ctx, job, &CancellationToken::new()).await
+        let mut transmission = self.ctx.transmission.client();
+        rename(&self.ctx, &mut transmission, job, &CancellationToken::new()).await
     }
 
     fn name(&self) -> String {

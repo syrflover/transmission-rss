@@ -288,12 +288,16 @@ pub const NAME_NOT_CHANGED: &str = "이름을 바꾸지 못해서 원래 이름 
 /// Transmission has its metadata. `cancel` stops it before the next attempt.
 /// When the name stays ([`RenameResult::Kept`]) and the job names an item to
 /// note, the note is written on it ([`crate::store::history::HistoryStore::note_received`]).
+///
+/// `transmission` is the caller's client, so a rename right after the add
+/// goes on in the session the add opened.
 pub async fn rename(
     ctx: &ReceiveContext,
+    transmission: &mut TransClient,
     job: &RenameJob<'_>,
     cancel: &CancellationToken,
 ) -> RenameResult {
-    let result = rename_file(ctx, job, cancel).await;
+    let result = rename_file(ctx, transmission, job, cancel).await;
     if let (RenameResult::Kept(note), Some(item_id)) = (result, job.note) {
         // Only reported: the item's result is written already, and a rerun
         // would not rename or note it.
@@ -306,10 +310,10 @@ pub async fn rename(
 
 async fn rename_file(
     ctx: &ReceiveContext,
+    transmission: &mut TransClient,
     job: &RenameJob<'_>,
     cancel: &CancellationToken,
 ) -> RenameResult {
-    let mut transmission = ctx.transmission.client();
     let mut recorded = match &job.original {
         Original::Recorded { name, .. } => name.clone(),
         Original::Current => None,
@@ -320,7 +324,7 @@ async fn rename_file(
             _ = cancel.cancelled() => return RenameResult::Unchanged,
         }
 
-        let torrent = match get_torrent(&mut transmission, job.hash).await {
+        let torrent = match get_torrent(transmission, job.hash).await {
             Ok(Some(torrent)) => torrent,
             Ok(None) => return RenameResult::Unchanged,
             Err(err) => {

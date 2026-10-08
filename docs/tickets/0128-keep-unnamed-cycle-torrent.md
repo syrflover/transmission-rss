@@ -9,7 +9,7 @@
 2026-10-08에 [0098](0098-release-name-reading.md)을 준비하며 코드를 읽다가 찾았어요. 실제로 일어난 것을 보지는 않았고, [0090](../archive/tickets/5-deployed-verification/0090-release-name-corpus.md)의 이름 묶음에도 `- 00` 이름은 없어요.
 
 - trname은 회차 `00`을 읽지 못해요. `parse_episode`가 앞의 `0`을 모두 떼어 빈 글자를 읽으려 하기 때문이에요. 그래서 `[SubsPlease] Show - 00 (1080p).mkv`에는 새 이름을 만들지 못해요.
-- 수집 주기는 새로 더한 토렌트(`RenameMode::Added`)의 이름을 정하지 못하면 그 토렌트를 데이터와 함께 지워요(trss-transmission의 `rename_torrent`).
+- 수집 주기는 새로 더한 토렌트(`RenameMode::Added`)의 이름을 정하지 못하면 그 토렌트를 데이터와 함께 지워요. 2026-10-08에는 trss-transmission의 `rename_torrent`였고, [0099](0099-one-receive-path.md) 뒤로는 trss-collect `receive`의 `Underivable::Remove`예요.
 - 수집 이력은 이름을 바꾸기 전에 이미 `추가함`으로 적혀요. 그래서 그 회차는 받지 못한 채 `추가함`으로 보이고, 다음 주기도 그 항목을 다시 받지 않아요.
 - `다시 받기`는 명세대로 토렌트를 지우지 않고 원래 이름으로 받아 두고, 이름을 바꾸지 못했다는 메모를 남겨요.
 - 0098에서 trss-collect가 회차 없음이나 묶음으로 읽는 이름을 trname으로 바꾸지 않게 하면, 지우는 경로에는 trss-collect가 회차로 읽지만 trname이 이름을 만들지 못하는 이름만 남아요. 알려진 것은 0화예요.

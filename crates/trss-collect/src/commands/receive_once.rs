@@ -636,6 +636,7 @@ pub async fn finish(
     cancel: &CancellationToken,
 ) -> Result<Finished, Retry> {
     if let Some(step) = &finished.rename {
+        let mut transmission = ctx.transmission.client();
         let job = RenameJob {
             hash: &step.hash,
             save_path: &step.save_path,
@@ -653,11 +654,10 @@ pub async fn finish(
             note: Some(step.item_id),
             redactor: &step.redactor,
         };
-        receive::rename(ctx, &job, cancel).await;
+        receive::rename(ctx, &mut transmission, &job, cancel).await;
         // History holds the torrent's hash now; the command's label has done
         // its job. One left behind (this fails, or the worker dies first) only
         // names a command that has ended.
-        let mut transmission = ctx.transmission.client();
         let label = transmission::command_label(&command.id);
         remove_label(&mut transmission, &step.hash, &label, &step.redactor).await;
     }

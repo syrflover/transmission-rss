@@ -698,7 +698,7 @@ pub async fn process_job(
                 note: None,
                 redactor: &redactor,
             };
-            receive::rename(&receiving, &rename, &cancel).await;
+            receive::rename(&receiving, &mut transmission, &rename, &cancel).await;
         }
     }
 
