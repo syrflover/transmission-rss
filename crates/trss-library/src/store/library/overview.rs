@@ -9,9 +9,10 @@
 //!   a subtitle, come as [`EpisodeRange`]s.
 //! - **Episodes are compared as numbers without converting them to a float**:
 //!   `013` and `13` are the same episode and count once, shown as the smallest
-//!   of the written forms (`013` < `13`). A range is a run of consecutive
-//!   numbers, so a gap splits it (`1–3`, `5–12`). An episode that is not a
-//!   whole number (`17.5`) is its own range, listed after the numeric ones.
+//!   of the written forms (`013` < `13`); `13.0` is `13` too. A range is a run
+//!   of consecutive numbers, so a gap splits it (`1–3`, `5–12`). An episode that
+//!   is not a whole number (`17.5`) is its own range, listed after the numeric
+//!   ones.
 //! - **A work whose folder is gone** has no holdings counted: its files are
 //!   still recorded, but they are not there to open. It keeps its name and the
 //!   times recorded for it, so it stays in the list and in the orders.
@@ -98,7 +99,8 @@ pub struct WorkOverview {
     pub linked_titles: Vec<String>,
 }
 
-/// An episode as a key: whole numbers by value, anything else by its text.
+/// An episode as a key: whole numbers by value (`13.0` is `13`, as the work
+/// detail reads it), anything else by its text.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum EpisodeKey {
     Number(u128),
@@ -106,8 +108,15 @@ enum EpisodeKey {
 }
 
 fn key_of(episode: &str) -> EpisodeKey {
-    if !episode.is_empty() && episode.bytes().all(|b| b.is_ascii_digit()) {
-        if let Ok(number) = episode.parse::<u128>() {
+    // A fraction of zeros only (`13.0`) leaves the whole number.
+    let whole = match episode.split_once('.') {
+        Some((whole, fraction)) if !fraction.is_empty() && fraction.bytes().all(|b| b == b'0') => {
+            whole
+        }
+        _ => episode,
+    };
+    if !whole.is_empty() && whole.bytes().all(|b| b.is_ascii_digit()) {
+        if let Ok(number) = whole.parse::<u128>() {
             return EpisodeKey::Number(number);
         }
     }
@@ -375,6 +384,30 @@ mod tests {
             episodes(&["1", "1.5", "2"]),
             pairs(&[("1", "2"), ("1.5", "1.5")])
         );
+    }
+
+    #[test]
+    fn a_whole_number_written_with_a_zero_fraction_is_that_number() {
+        // `13.0` joins `12` and `14` in one range; `13.5` stays apart, after it.
+        assert_eq!(
+            episodes(&["12", "13.0", "14", "13.5"]),
+            pairs(&[("12", "14"), ("13.5", "13.5")])
+        );
+        // `13.0` and `13` are one episode, shown as the smaller written form;
+        // `13.0` alone is shown as written.
+        assert_eq!(episodes(&["13.0", "13", "14"]), pairs(&[("13", "14")]));
+        assert_eq!(episodes(&["13.00"]), pairs(&[("13.00", "13.00")]));
+        // A fraction that is not zeros, or is empty, is no whole number.
+        assert_eq!(
+            episodes(&["13.01", "13."]),
+            pairs(&[("13.", "13."), ("13.01", "13.01")])
+        );
+        // A subtitle written `13.0` covers the video `13`.
+        let files = [
+            media(1, "13", FileKind::Video, None),
+            media(1, "13.0", FileKind::Subtitle, None),
+        ];
+        assert_eq!(holdings(Some(1), &files).coverage, SubtitleCoverage::All);
     }
 
     fn media(season: u32, episode: &str, kind: FileKind, added_at: Option<Millis>) -> Media {
