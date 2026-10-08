@@ -363,6 +363,101 @@ async fn a_numbered_release_trname_cannot_name_is_still_removed_with_its_data() 
     assert!(h.tr.torrents().is_empty());
 }
 
+// The cycle's own adds whose name stays: what the cycle leaves, unlike
+// `다시 받기`, which notes on the item why the name stayed.
+
+/// Until 0128: the item of a torrent the cycle removed because `trname` has no
+/// name for it stays `received`, with no note.
+#[tokio::test]
+async fn the_item_of_a_new_torrent_removed_for_its_name_stays_received_without_a_note() {
+    let h = Harness::new().await;
+    h.feeds.set_xml(
+        "feed-a",
+        &titled_feed(&[(1, "[Group] Show - 05 (1080p) [ABCD1234].mkv")]),
+    );
+    h.add_channel(
+        "feed-a",
+        "/media/anime",
+        &[],
+        vec![rule("[Group] Show", "")],
+    )
+    .await;
+
+    run(&h.worker()).await;
+
+    assert!(h.tr.torrents().is_empty());
+    let item = h.item("[Group] Show - 05").await;
+    assert_eq!(item.result, HistoryResult::Received);
+    assert_eq!(item.torrent_hash.as_deref(), Some(hash_a(1).as_str()));
+    assert_eq!(item.reason, None);
+}
+
+#[tokio::test]
+async fn a_new_torrent_with_several_files_keeps_its_name_and_its_torrent_without_a_note() {
+    let h = Harness::new().await;
+    channel_a(&h).await;
+    h.tr.files_on_add(&hash_a(4), 2);
+
+    let report = run(&h.worker()).await;
+
+    assert_eq!(report.added, 3);
+    assert_eq!(
+        name_of(&h, 4),
+        "[SubsPlease] Tensei Shitara Slime Datta Ken - 62 (1080p) [AAAA0006].mkv"
+    );
+    assert_eq!(renames_of(&h, 4), 0);
+    assert!(h.tr.calls_of("torrent-remove").is_empty());
+    let slime = h.item("Slime Datta Ken - 62").await;
+    assert_eq!(slime.result, HistoryResult::Received);
+    assert_eq!(slime.reason, None);
+    // The others are named as always.
+    assert_eq!(name_of(&h, 1), "Sayonara Lara S01E03.mkv");
+}
+
+#[tokio::test]
+async fn a_new_torrent_whose_name_is_taken_keeps_its_name_and_its_torrent_without_a_note() {
+    let h = Harness::without_collect_folder().await;
+    let shows = h.dir.path().join("shows");
+    trss_core::settings::SettingsStore::new(h.db.clone())
+        .put_collection(0, shows.to_str().unwrap().to_owned(), None)
+        .await
+        .unwrap();
+    // Another file holds the name the rule gives the episode.
+    let season = shows.join("Slime/Season 04");
+    std::fs::create_dir_all(&season).unwrap();
+    std::fs::write(season.join("Slime S04E38.mkv"), b"someone else's").unwrap();
+    h.channels
+        .create_channel_with_rules(
+            trss_collect::store::channels::ChannelInput::new(h.feeds.url("feed-a")),
+            vec![RuleInput {
+                episode: -24,
+                ..rule(
+                    "[SubsPlease] Tensei Shitara Slime Datta Ken",
+                    "Slime/Season 04",
+                )
+            }],
+        )
+        .await
+        .unwrap();
+
+    let report = run(&h.worker()).await;
+
+    assert_eq!(report.added, 1);
+    assert_eq!(
+        name_of(&h, 4),
+        "[SubsPlease] Tensei Shitara Slime Datta Ken - 62 (1080p) [AAAA0006].mkv"
+    );
+    assert!(h.tr.calls_of("torrent-rename-path").is_empty());
+    assert!(h.tr.calls_of("torrent-remove").is_empty());
+    assert_eq!(
+        std::fs::read(season.join("Slime S04E38.mkv")).unwrap(),
+        b"someone else's"
+    );
+    let slime = h.item("Slime Datta Ken - 62").await;
+    assert_eq!(slime.result, HistoryResult::Received);
+    assert_eq!(slime.reason, None);
+}
+
 #[tokio::test]
 async fn a_torrent_a_rule_received_and_named_is_not_renamed_again() {
     let h = Harness::new().await;
@@ -1221,6 +1316,25 @@ async fn a_refused_add_still_lets_departed_torrents_go() {
     assert_eq!(report.add_failed, 3);
     assert_eq!(report.adds_unconfirmed, 0);
     assert_eq!(report.removed.len(), 1);
+}
+
+/// Unlike `다시 받기`, which fails an add that could not connect at once, the
+/// cycle counts it as unconfirmed: it has nowhere to remember an earlier add
+/// of the item that got no answer, which only this add's `duplicate` answer
+/// would have accounted for.
+#[tokio::test]
+async fn an_add_that_cannot_connect_is_unconfirmed_and_removes_nothing() {
+    let mut h = Harness::new().await;
+    channel_a(&h).await;
+    h.tr.preload(FakeTorrent::new("stale0000", "Gone - 01.mkv").bot());
+    let worker = h.worker();
+    h.tr.stop().await;
+
+    let report = run(&worker).await;
+
+    assert_eq!(report.add_failed, 3);
+    assert_eq!(report.adds_unconfirmed, 3);
+    assert!(report.removed.is_empty(), "{:?}", report.removed);
 }
 
 #[tokio::test]
