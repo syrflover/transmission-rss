@@ -2506,4 +2506,185 @@ mod episode_offset {
             .await;
         assert_eq!(received_names(&preview), ["S03E48", "S03E49"]);
     }
+
+    /// The last undo of the rule comes with its view: the command, the value
+    /// undone and put back, and each video with where it stands.
+    #[tokio::test]
+    async fn the_view_tells_the_last_undo_with_the_videos_it_renamed_or_left() {
+        use trss_collect::store::channels::NewUndoFile;
+        use trss_core::commands::{CommandState, NewCommand, Outcome};
+        let app = App::new().await;
+        let a = app.channel("a.test", &[], &[]).await;
+        let rule = subscription(&app, &a.channel, 7, "Show/Season 03", 1).await;
+        app.state
+            .channels
+            .set_auto_episode(&rule.id, rule.version, -24, BASIS)
+            .await
+            .unwrap()
+            .expect("the rule was at the version read");
+        assert_eq!(view(&app, &rule).await["episode_undo"], Value::Null);
+        let titles = [
+            "[SubsPlease] Show - 25 (1080p)",
+            "[SubsPlease] Show - 26 (1080p)",
+            "[SubsPlease] Show - 27 (1080p)",
+        ];
+        app.record_as(
+            &a.channel,
+            2_000,
+            &titles,
+            HistoryResult::Received,
+            Some(&rule.id),
+        )
+        .await;
+        let items = app
+            .state
+            .history
+            .list(Default::default())
+            .await
+            .unwrap()
+            .items;
+        let item = |n: usize| items.iter().find(|i| i.title == titles[n]).unwrap().id;
+        let planned = |n: usize, from: &str, to: &str| NewUndoFile {
+            item_id: item(n),
+            folder: "/media/Show/Season 03".into(),
+            from_name: from.into(),
+            to_name: to.into(),
+            torrent_hash: None,
+            identity: None,
+            kept: None,
+        };
+
+        // The request is told as it ended before the undo began.
+        let new = |id: &str| NewCommand {
+            id: id.into(),
+            kind: "episode_undo".into(),
+            payload: format!(r#"{{"rule_id":"{}","episode":-24}}"#, rule.id),
+            subject: Some(rule.id.clone()),
+        };
+        app.state
+            .commands
+            .accept(new("undo-1"), 1_000)
+            .await
+            .unwrap();
+        app.state
+            .commands
+            .finish(
+                "undo-1",
+                CommandState::Failed,
+                Outcome {
+                    result: "failed".into(),
+                    reason: Some("수정본으로 대체하는 중인 영상이 있어요.".into()),
+                },
+                1_500,
+            )
+            .await
+            .unwrap();
+        let told = view(&app, &rule).await["episode_undo"].clone();
+        assert_eq!(told["command"]["state"], "failed");
+        assert_eq!(
+            (
+                told["from"].clone(),
+                told["to"].clone(),
+                told["files"].clone()
+            ),
+            (Value::Null, Value::Null, json!([]))
+        );
+
+        // The undo of a second request began: one video is renamed, one waits
+        // for its torrent, one is left as it is.
+        app.state
+            .commands
+            .accept(new("undo-2"), 2_000)
+            .await
+            .unwrap();
+        app.state
+            .channels
+            .begin_episode_undo(
+                "undo-2",
+                &rule.id,
+                -24,
+                1,
+                vec![
+                    planned(0, "Show S03E01.mkv", "Show S03E25.mkv"),
+                    planned(1, "Show S03E02.mkv", "Show S03E26.mkv"),
+                    NewUndoFile {
+                        kept: Some("같은 이름의 파일이 이미 있어요.".into()),
+                        ..planned(2, "Show S03E03.mkv", "Show S03E27.mkv")
+                    },
+                ],
+                2_500,
+            )
+            .await
+            .unwrap();
+        app.state
+            .channels
+            .finish_undo_file("undo-2", item(0), None, 3_000)
+            .await
+            .unwrap();
+        app.state
+            .commands
+            .finish(
+                "undo-2",
+                CommandState::Done,
+                Outcome {
+                    result: "paused".into(),
+                    reason: None,
+                },
+                3_500,
+            )
+            .await
+            .unwrap();
+
+        let view = view(&app, &rule).await;
+        let told = &view["episode_undo"];
+        assert_eq!(told["command"]["id"], "undo-2");
+        assert_eq!(told["command"]["state"], "done");
+        assert_eq!(
+            (told["from"].clone(), told["to"].clone()),
+            (json!(-24), json!(1))
+        );
+        let files: Vec<(String, String, String, Value)> = told["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| {
+                (
+                    f["from_name"].as_str().unwrap().to_owned(),
+                    f["to_name"].as_str().unwrap().to_owned(),
+                    f["state"].as_str().unwrap().to_owned(),
+                    f["reason"].clone(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            files,
+            [
+                (
+                    "Show S03E01.mkv".to_owned(),
+                    "Show S03E25.mkv".to_owned(),
+                    "renamed".to_owned(),
+                    Value::Null
+                ),
+                (
+                    "Show S03E02.mkv".to_owned(),
+                    "Show S03E26.mkv".to_owned(),
+                    "pending".to_owned(),
+                    Value::Null
+                ),
+                (
+                    "Show S03E03.mkv".to_owned(),
+                    "Show S03E27.mkv".to_owned(),
+                    "kept".to_owned(),
+                    json!("같은 이름의 파일이 이미 있어요.")
+                ),
+            ]
+        );
+        // The value is back, as the user's own.
+        assert_eq!(
+            (view["episode"].clone(), view["episode_auto"].clone()),
+            (json!(1), json!(false))
+        );
+        assert_eq!(view["episode_basis"], Value::Null);
+        assert_eq!(view["episode_previous"], Value::Null);
+    }
 }

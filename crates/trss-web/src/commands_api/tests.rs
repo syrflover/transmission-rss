@@ -680,3 +680,202 @@ async fn a_restore_needs_an_archived_rule_and_a_missing_rule_is_not_found() {
         assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
     }
 }
+
+// --- `되돌리기` of an automatic episode offset --------------------------------------
+
+use trss_core::commands::Outcome;
+
+fn undo_body(id: &str, rule_id: &str, episode: i64) -> Value {
+    json!({
+        "id": id,
+        "kind": "episode_undo",
+        "payload": { "rule_id": rule_id, "episode": episode },
+    })
+}
+
+/// A rule whose offset the app set to `−48`, over the `1` it held.
+async fn automatic_rule(app: &App, channel: &Channel) -> Rule {
+    let rule = app.rule(channel, RuleState::Active).await;
+    app.state
+        .channels
+        .set_auto_episode(
+            &rule.id,
+            rule.version,
+            -48,
+            "첫 화가 49화라서 −48로 정했어요.",
+        )
+        .await
+        .unwrap()
+        .expect("the rule was at the version read")
+}
+
+#[tokio::test]
+async fn an_undo_is_accepted_for_the_automatic_value_the_user_saw_and_refused_otherwise() {
+    let app = App::new();
+    let channel = app.channel().await;
+    let rule = app.rule(&channel, RuleState::Active).await;
+
+    // A rule that is gone.
+    let (status, text, _) = app
+        .call(
+            Method::POST,
+            "/api/commands",
+            Some(undo_body(ID, "gone", -48)),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{text}");
+
+    // A value the user typed is nothing to undo.
+    let (status, text, _) = app
+        .call(
+            Method::POST,
+            "/api/commands",
+            Some(undo_body(ID, &rule.id, -48)),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+
+    // The user typed another value meanwhile: nothing automatic is left.
+    let rule = automatic_rule(&app, &channel).await;
+    app.state
+        .channels
+        .set_episode(&rule.id, rule.version, -40)
+        .await
+        .unwrap();
+    let (status, text, _) = app
+        .call(
+            Method::POST,
+            "/api/commands",
+            Some(undo_body(ID, &rule.id, -48)),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+    assert!(app.state.commands.get(ID).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn an_automatic_value_other_than_the_one_asked_is_refused_and_the_one_asked_accepted() {
+    let app = App::new();
+    let channel = app.channel().await;
+    let rule = automatic_rule(&app, &channel).await;
+
+    let (status, text, _) = app
+        .call(
+            Method::POST,
+            "/api/commands",
+            Some(undo_body(ID, &rule.id, -40)),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+
+    let (status, text, view) = app
+        .call(
+            Method::POST,
+            "/api/commands",
+            Some(undo_body(ID, &rule.id, -48)),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{text}");
+    assert_eq!(view["kind"], "episode_undo");
+    let stored = app.state.commands.get(ID).await.unwrap().unwrap();
+    assert_eq!(stored.subject.as_deref(), Some(rule.id.as_str()));
+}
+
+/// An undo that began and left files to rename is carried on by a request
+/// for the same value, though the rule is not automatic any more; once
+/// nothing is left, or for another value, it is refused.
+#[tokio::test]
+async fn an_undo_with_files_left_is_carried_on_by_a_request_for_the_same_value_only() {
+    use trss_collect::store::channels::NewUndoFile;
+    let app = App::new();
+    let channel = app.channel().await;
+    let rule = automatic_rule(&app, &channel).await;
+    let item = app.item(&channel, "49", HistoryResult::Received).await;
+    let (status, text, _) = app
+        .call(
+            Method::POST,
+            "/api/commands",
+            Some(undo_body("undo-first", &rule.id, -48)),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{text}");
+    // The undo began: the value is back, and one file is still to rename.
+    app.state
+        .channels
+        .begin_episode_undo(
+            "undo-first",
+            &rule.id,
+            -48,
+            1,
+            vec![NewUndoFile {
+                item_id: item.id,
+                folder: "/media/Show/Season 03".into(),
+                from_name: "Show S03E01.mkv".into(),
+                to_name: "Show S03E49.mkv".into(),
+                torrent_hash: None,
+                identity: None,
+                kept: None,
+            }],
+            2_000,
+        )
+        .await
+        .unwrap();
+    app.state
+        .commands
+        .finish(
+            "undo-first",
+            CommandState::Done,
+            Outcome {
+                result: "paused".into(),
+                reason: None,
+            },
+            3_000,
+        )
+        .await
+        .unwrap();
+
+    let (status, text, _) = app
+        .call(
+            Method::POST,
+            "/api/commands",
+            Some(undo_body("undo-other", &rule.id, -40)),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+    let (status, text, _) = app
+        .call(
+            Method::POST,
+            "/api/commands",
+            Some(undo_body("undo-second", &rule.id, -48)),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{text}");
+
+    // Nothing is left once the file is renamed.
+    app.state
+        .channels
+        .finish_undo_file("undo-first", item.id, None, 4_000)
+        .await
+        .unwrap();
+    app.state
+        .commands
+        .finish(
+            "undo-second",
+            CommandState::Done,
+            Outcome {
+                result: "undone".into(),
+                reason: None,
+            },
+            5_000,
+        )
+        .await
+        .unwrap();
+    let (status, text, _) = app
+        .call(
+            Method::POST,
+            "/api/commands",
+            Some(undo_body("undo-third", &rule.id, -48)),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+}

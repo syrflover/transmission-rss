@@ -13,17 +13,8 @@ use crate::{
         channels::RuleInput,
         history::{HistoryResult, Observation},
     },
-    test_world::World,
+    test_world::{show_hash, show_title, World},
 };
-
-/// Episode `n` of `Show`, released by SubsPlease.
-fn show(n: u32) -> String {
-    format!("[SubsPlease] Show - {n:02} (1080p) [ABCD{n:04}].mkv")
-}
-
-fn hash(n: u32) -> String {
-    format!("dddd{n:036}")
-}
 
 /// What the user does to the rule while the cycle reads its feed.
 #[derive(Clone, Copy)]
@@ -96,20 +87,16 @@ impl World {
                     channel_id: self.channel_id.clone(),
                     channel_label: "https://feeds.example.test/show".into(),
                     identity_key: format!("guid:{n}"),
-                    title: show(n),
-                    link: crate::test_world::magnet(&hash(n), &show(n)),
+                    title: show_title(n),
+                    link: crate::test_world::magnet(&show_hash(n), &show_title(n)),
                     result: HistoryResult::Received,
                     rule_id: Some(rule.id.clone()),
-                    torrent_hash: Some(hash(n)),
+                    torrent_hash: Some(show_hash(n)),
                     reason: None,
                 }],
             )
             .await
             .unwrap();
-    }
-
-    async fn stored_rule(&self, rule: &Rule) -> Rule {
-        self.ctx.channels.get_rule(&rule.id).await.unwrap().unwrap()
     }
 }
 
@@ -334,7 +321,10 @@ async fn the_first_items_of_a_rule_decide_its_offset_once() {
         let open = HashMap::from([(rule.id.clone(), rule.clone())]);
         let firsts = HashMap::from([(
             rule.id.clone(),
-            case.firsts.iter().map(|n| show(*n)).collect::<Vec<_>>(),
+            case.firsts
+                .iter()
+                .map(|n| show_title(*n))
+                .collect::<Vec<_>>(),
         )]);
         match case.meanwhile {
             Meanwhile::Nothing => {}
@@ -372,14 +362,7 @@ async fn the_first_items_of_a_rule_decide_its_offset_once() {
         assert_eq!(handed.get(&rule.id).copied(), case.handed, "{name}");
         let stored = s.stored_rule(&rule).await;
         assert_eq!((stored.episode, stored.episode_auto), case.stored, "{name}");
-        let mark = s
-            .ctx
-            .channels
-            .episode_marks(vec![rule.id.clone()])
-            .await
-            .unwrap()
-            .remove(&rule.id)
-            .unwrap();
+        let mark = s.mark_of(&rule).await;
         assert_eq!(mark.previous, case.replaced, "{name}");
         let basis = mark.basis.unwrap_or_default();
         for piece in case.grounds {
@@ -409,25 +392,14 @@ async fn the_first_item_of_a_third_season_is_named_from_the_sum_of_the_earlier_o
     place.link(2, &[Some(12)]).await;
     s.advance(1_000);
     let rule = s.subscribe("Show", "Show/Season 03", 7, 1).await;
-    let release = |n: u32| (hash(n), show(n));
-    let feed = |numbers: &[u32]| {
-        let releases: Vec<(String, String)> = numbers.iter().map(|n| release(*n)).collect();
-        let items: Vec<(&str, &str)> = releases
-            .iter()
-            .map(|(hash, title)| (hash.as_str(), title.as_str()))
-            .collect();
-        s.feed_after_other(&items);
-    };
 
     // The first read leaves what the feed held; the new season's first
     // release comes after it.
-    feed(&[24]);
-    s.advance(300_000);
-    s.cycle().await;
+    s.feed_shows(&[24]);
+    s.cycle_later().await;
     assert!(s.torrent_names().is_empty());
-    feed(&[24, 25]);
-    s.advance(300_000);
-    s.cycle().await;
+    s.feed_shows(&[24, 25]);
+    s.cycle_later().await;
 
     assert_eq!(s.torrent_names(), ["Show S03E01.mkv"]);
     let stored = s.stored_rule(&rule).await;
@@ -435,9 +407,8 @@ async fn the_first_item_of_a_third_season_is_named_from_the_sum_of_the_earlier_o
 
     // The decision is made once: the next release is converted by the same
     // value, and the item already received keeps its name.
-    feed(&[24, 25, 26]);
-    s.advance(300_000);
-    s.cycle().await;
+    s.feed_shows(&[24, 25, 26]);
+    s.cycle_later().await;
     assert_eq!(s.torrent_names(), ["Show S03E01.mkv", "Show S03E02.mkv"]);
     assert_eq!(s.stored_rule(&rule).await.episode, -24);
 }

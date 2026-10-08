@@ -30,7 +30,7 @@ use trss_core::{
     commands::{Accepted, Command, CommandStore, NewCommand},
     folder_locks::FolderLocks,
     settings::SettingsStore,
-    Db, Millis,
+    Clock, Db, Millis,
 };
 use trss_library::{
     discovery::{EpisodeFile, FileKind, Scan, ScannedWork, WorkRead},
@@ -41,6 +41,7 @@ use trss_transmission::{fake::FakeTransmission, Redactor, RenamePolicy};
 
 use crate::{
     commands::{
+        episode_undo::{self, EpisodeUndo, Finished as UndoFinished, Retry as UndoRetry},
         receive_once::{self, Finished, ReceiveOnce, Retry},
         rule_archive::work_folder::MovePolicy,
     },
@@ -52,7 +53,9 @@ use crate::{
     revisions::{self, Listing},
     season_link,
     store::{
-        channels::{ChannelInput, ChannelStore, NewSubscription, Rule, RuleInput, SubtitleMode},
+        channels::{
+            ChannelInput, ChannelStore, EpisodeMark, NewSubscription, Rule, RuleInput, SubtitleMode,
+        },
         history::{HistoryItem, HistoryQuery, HistoryStore, MAX_PAGE_SIZE},
         revisions::{Revision, RevisionStore},
     },
@@ -378,6 +381,26 @@ impl World {
         .await
     }
 
+    /// The `show` feed holds these episodes of `Show` after a release of
+    /// another work ([`World::feed_after_other`]).
+    pub fn feed_shows(&self, numbers: &[u32]) {
+        let releases: Vec<(String, String)> = numbers
+            .iter()
+            .map(|n| (show_hash(*n), show_title(*n)))
+            .collect();
+        let items: Vec<(&str, &str)> = releases
+            .iter()
+            .map(|(hash, title)| (hash.as_str(), title.as_str()))
+            .collect();
+        self.feed_after_other(&items);
+    }
+
+    /// A cycle five minutes after the last one.
+    pub async fn cycle_later(&self) {
+        self.advance(300_000);
+        self.cycle().await;
+    }
+
     /// The names Transmission's torrents have now, sorted.
     pub fn torrent_names(&self) -> Vec<String> {
         let mut names: Vec<String> = self.tr.torrents().into_iter().map(|t| t.name).collect();
@@ -397,6 +420,23 @@ impl World {
             .await
             .unwrap()
             .items
+    }
+
+    /// The one history item whose title contains `part`.
+    pub async fn item_containing(&self, part: &str) -> HistoryItem {
+        let mut found = self
+            .history_items()
+            .await
+            .into_iter()
+            .filter(|i| i.title.contains(part));
+        let item = found
+            .next()
+            .unwrap_or_else(|| panic!("no history item with {part:?}"));
+        assert!(
+            found.next().is_none(),
+            "several history items with {part:?}"
+        );
+        item
     }
 
     /// The history item titled `title`.
@@ -422,6 +462,76 @@ impl World {
     /// The replacements the to-do source lists as `받기 실패`.
     pub async fn failures(&self) -> Vec<Revision> {
         self.ctx.revisions.failures().await.unwrap()
+    }
+
+    // --- the rule's episode offset -------------------------------------------------------
+
+    /// The rule as stored now.
+    pub async fn stored_rule(&self, rule: &Rule) -> Rule {
+        self.ctx.channels.get_rule(&rule.id).await.unwrap().unwrap()
+    }
+
+    /// What is kept of the app's decision about the rule's offset.
+    pub async fn mark_of(&self, rule: &Rule) -> EpisodeMark {
+        self.ctx
+            .channels
+            .episode_marks(vec![rule.id.clone()])
+            .await
+            .unwrap()
+            .remove(&rule.id)
+            .unwrap()
+    }
+
+    // --- 되돌리기 -----------------------------------------------------------------------
+
+    /// Accepts `되돌리기` of the automatic offset `episode` of `rule` as the
+    /// command `id`, and claims it as the worker does.
+    pub async fn start_undo(&self, rule: &Rule, id: &str, episode: i64) -> Command {
+        let payload = EpisodeUndo {
+            rule_id: rule.id.clone(),
+            episode,
+        };
+        let new = NewCommand {
+            id: id.to_owned(),
+            kind: episode_undo::KIND.to_owned(),
+            payload: payload.canonical(),
+            subject: Some(payload.subject()),
+        };
+        match self.ctx.commands.accept(new, self.now()).await.unwrap() {
+            Accepted::Created(_) => {}
+            other => panic!("the command was not stored: {other:?}"),
+        }
+        self.ctx
+            .commands
+            .claim_next(self.now())
+            .await
+            .unwrap()
+            .expect("the command waits")
+    }
+
+    /// Runs `command` as the worker does and writes its end. A [`Retry`]
+    /// leaves the command running, to be run again.
+    pub async fn run_undo(&self, command: &Command) -> Result<UndoFinished, UndoRetry> {
+        let clock = self.clock.clone();
+        let clock: Clock = Arc::new(move || clock.load(Ordering::SeqCst));
+        let finished = episode_undo::run(&self.ctx.undo(), command, &clock).await?;
+        self.ctx
+            .commands
+            .finish(
+                &command.id,
+                finished.state,
+                finished.outcome.clone(),
+                self.now(),
+            )
+            .await
+            .unwrap();
+        Ok(finished)
+    }
+
+    /// `되돌리기` of `episode` as the command `id`, run once: how it ended.
+    pub async fn undo(&self, rule: &Rule, id: &str, episode: i64) -> UndoFinished {
+        let command = self.start_undo(rule, id, episode).await;
+        self.run_undo(&command).await.expect("the undo ran")
     }
 
     // --- 다시 받기 ---------------------------------------------------------------------
@@ -506,6 +616,16 @@ impl World {
             .iter()
             .any(|c| c.args["ids"] == serde_json::json!([hash]))
     }
+}
+
+/// Episode `n` of `Show`, released by SubsPlease.
+pub(crate) fn show_title(n: u32) -> String {
+    format!("[SubsPlease] Show - {n:02} (1080p) [ABCD{n:04}].mkv")
+}
+
+/// The hash of episode `n` of `Show`.
+pub(crate) fn show_hash(n: u32) -> String {
+    format!("dddd{n:036}")
 }
 
 /// The hash and title of a release of another work, which a channel read once

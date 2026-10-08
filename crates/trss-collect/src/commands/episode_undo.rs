@@ -1066,3 +1066,12 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod fixtures;
+#[cfg(test)]
+mod renaming_tests;
+#[cfg(test)]
+mod rows_tests;
+#[cfg(test)]
+mod waiting_tests;
