@@ -1,7 +1,7 @@
-//! The move's checks and renames on real temporary folders. The Transmission
-//! step, the command around it and the interplay with the cycle are tested end
-//! to end in trss-worker's `tests/it/archive_move.rs`, against a fake
-//! Transmission.
+//! The move's checks and renames on real temporary folders, and the Transmission
+//! step against the fake Transmission (`trss_transmission::fake`). The command
+//! around the move and the interplay with the cycle are tested end to end in
+//! trss-worker's `tests/it/archive_move.rs`.
 
 use std::{
     fs,
@@ -12,6 +12,7 @@ use std::{
 };
 
 use tokio_util::sync::CancellationToken;
+use trss_transmission::fake::{FakeTorrent, FakeTransmission};
 
 use super::*;
 
@@ -786,5 +787,54 @@ async fn a_refused_move_changes_nothing_and_asks_transmission_nothing() {
         "{reason}"
     );
     assert_eq!(files(&f.collect), before);
+    assert!(files(&f.archive).is_empty());
+}
+
+/// A Transmission client for the fake.
+fn client_of(transmission: &FakeTransmission) -> TransClient {
+    trss_transmission::client(
+        transmission.url().parse().unwrap(),
+        &trss_transmission::http_client(Duration::from_secs(2)).unwrap(),
+    )
+}
+
+#[tokio::test]
+async fn a_transmission_that_refuses_the_move_leaves_everything_in_place() {
+    let f = folders();
+    let season = f.collect.join("Clevatess/Season 02");
+    write(&season.join("Clevatess S02E01.mkv"), "video");
+    let transmission = FakeTransmission::start().await;
+    // A seeding torrent of a person (no bot label) with its single file in the
+    // work folder.
+    transmission.preload(
+        FakeTorrent::new(&format!("dddd{:036}", 1), "Clevatess S02E01.mkv")
+            .in_dir(&season)
+            .status(6),
+    );
+    transmission.reject_locations(Some("permission denied"));
+    let policy = MovePolicy {
+        poll: Duration::from_millis(10),
+        timeout: Duration::from_secs(5),
+    };
+
+    let result = move_work_folder(
+        &mut client_of(&transmission),
+        &Redactor::none(),
+        &archive_request(&f, "Clevatess"),
+        policy,
+        Arc::new(RealDisk),
+        Arc::new(()),
+        &CancellationToken::new(),
+    )
+    .await;
+
+    let Err(MoveError::Failed(reason)) = result else {
+        panic!("{result:?}");
+    };
+    assert!(reason.contains("permission denied"), "{reason}");
+    assert_eq!(
+        files(&f.collect),
+        ["Clevatess/Season 02/Clevatess S02E01.mkv"]
+    );
     assert!(files(&f.archive).is_empty());
 }

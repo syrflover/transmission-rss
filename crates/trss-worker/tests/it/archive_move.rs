@@ -1293,35 +1293,6 @@ async fn the_renames_wait_until_transmission_reports_the_new_folder() {
     assert!(!s.collect.join("Clevatess").exists());
 }
 
-#[tokio::test]
-async fn a_transmission_that_refuses_the_move_leaves_everything_in_place() {
-    let s = Scene::new(true).await;
-    let c = s
-        .channel("feed-a", &[("Clevatess", "Clevatess/Season 02")])
-        .await;
-    s.seeding(
-        1,
-        "Clevatess S02E01.mkv",
-        &s.collect.join("Clevatess/Season 02"),
-    );
-    s.h.tr.reject_locations(Some("permission denied"));
-
-    s.send("archive-refus-1", &c.rules[0].id, "archive").await;
-    s.run().await;
-
-    let command = s.command("archive-refus-1").await;
-    assert_eq!(command["state"], "failed");
-    assert!(command["outcome"]["reason"]
-        .as_str()
-        .unwrap()
-        .contains("permission denied"));
-    assert_eq!(
-        files(&s.collect),
-        ["Clevatess/Season 02/Clevatess S02E01.mkv"]
-    );
-    assert!(files(&s.archive).is_empty());
-}
-
 // --- review: torrents Transmission would still write ------------------------------------------
 
 #[tokio::test]

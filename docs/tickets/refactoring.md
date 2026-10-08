@@ -104,7 +104,7 @@ worker 잠금은 멈춘 worker가 마지막 하트비트 뒤에 따로 띄운 ta
 
 테스트는 정리를 마친 뒤 ADR 0015대로 나눠요.
 
-- Transmission 가짜 서버는 지금 trss-worker의 테스트 폴더에만 있어요. trss-collect의 테스트도 쓸 수 있는 곳으로 먼저 옮겨요.
+- Transmission 가짜 서버는 trss-worker의 테스트 폴더에만 있었어요. [0097](0097-shared-transmission-fake.md)에서 trss-transmission의 `fake`로 옮겨, trss-collect의 테스트도 써요. 피드 서버와 nyaa 검색의 가짜는 trss-collect의 `fake`에 있어요.
 - 2026-10-07 worker의 해당 테스트는 한 번 받기 78개, 영상 수정본 86개, 수집 주기 41개, 영상 회차 변환 44개, 보관 폴더 이동 30개예요. 규칙만 확인하는 테스트는 trss-collect로 내리고, worker에는 잠금, 주기와 명령의 순서, 동시 실행, 중단 뒤 이어 하기, 웹에서 worker까지 이어지는 명령만 남겨요.
 - 조사에서는 그대로 겹치는 테스트를 30–60개, 내릴 규칙 테스트를 약 100개로 추정했어요. 앞뒤 개수를 기록해요.
 - 완료는 위의 요구가 코드에 있고, 기존 worker 테스트가 정리 전까지 고치지 않고 통과했고, 테스트를 나눈 뒤 [RSS 수집 명세](../specs/collection.md)에 검증 표가 있는 때예요.
