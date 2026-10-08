@@ -5,6 +5,7 @@
 #   name      the release name
 #   source    history: the collection history of a copy of the server's database (names only)
 #             feed: a public feed (SubsPlease, nyaa.si), read 2026-10-07
+#             example: a made-up name that shows one reading
 #   work      the work's title as the name writes it (a rule's match phrase), - for none
 #   episode   12, 12.5, batch, batch 1-12, or - for no episode
 #   version   the revision, 1 for a name without one
@@ -779,3 +780,31 @@ The Laid Off Cheat Granting Mage Enjoys a Second Lease on Life S01E01 1080p CR W
 [Yameii] The Laid-Off Cheat-Granting Mage Enjoys a Second Lease on Life - S01E01 [English Dub] [CR WEB-DL 1080p H264 AAC] [A619AFEB] (Tsuihou Sareta Cheat Fuyo Majutsushi wa Kimama na Second Life o Ouka Suru.)	feed	The Laid-Off Cheat-Granting Mage Enjoys a Second Lease on Life	1	1	work
 [Yameii] The Laid-Off Cheat-Granting Mage Enjoys a Second Lease on Life - S01E01 [English Dub] [CR WEB-DL 720p H264 AAC] [1217E9F0] (Tsuihou Sareta Cheat Fuyo Majutsushi wa Kimama na Second Life o Ouka Suru.)	feed	The Laid-Off Cheat-Granting Mage Enjoys a Second Lease on Life	1	1	work
 [ethan&Ioroid] Eiga Sumikko Gurashi Aoi Tsukiyo no Mahou no Ko [AMZN WEB-DL 1080p AVC E-AC3]	feed	Eiga Sumikko Gurashi Aoi Tsukiyo no Mahou no Ko	-	1	
+[SubsPlease] Work - 01 (1080p) [ABCD1234].mkv	example	Work	1	1	
+[SubsPlease] Re:Zero kara - Hajimeru - 12v2 (720p)	example	Re:Zero kara - Hajimeru	12	2	
+[Erai-raws] Work Name - 07 [1080p][Multiple Subtitle][ABCD]	example	Work Name	7	1	
+[Moozzi2] Work - 05.5 (BD 1920x1080 x265)	example	Work	5.5	1	
+[Group] [Extra] Work - 03	example	Work	3	1	
+Work Name S01E03 1080p WEB	example	Work Name	3	1	
+[Beatrice-Raws] Kono Subarashii 04 [BDRip 1920x1080 HEVC FLAC]	example	Kono Subarashii	4	1	
+[Batch] Work - 01-12 (BD 1080p)	example	Work	batch 1-12	1	
+【Group】 작품 이름 - 02	example	작품 이름	2	1	
+[SubsPlease] 86 - Eighty Six - 01 (1080p)	example	86 - Eighty Six	1	1	
+[Group] Work Movie (BD 1080p) [ABCD]	example	Work Movie	-	1	
+Plain Title	example	Plain Title	-	1	
+[Group]	example	-	-	1	
+[Group] (1080p)	example	-	-	1	
+[SubsPlease] 2.5 Dimensional Seduction - 03 (1080p)	example	2.5 Dimensional Seduction	3	1	
+[SubsPlease] Mob Psycho 100 - 03 (1080p)	example	Mob Psycho 100	3	1	
+[SubsPlease] Sono Bisque Doll - 14 (1080p) [E2675E51].mkv	example	Sono Bisque Doll	14	1	
+[SubsPlease] Sono Bisque Doll - 14v2 (1080p) [1A2B3C4D].mkv	example	Sono Bisque Doll	14	2	
+[Erai-raws] Show - 05 [1080p CR WEBRip HEVC AAC][MultiSub][1BBD34E6].mkv	example	Show	5	1	
+[SubsPlease] Tensei Shitara Slime Datta Ken - 65.5 (1080p) [0214B01E].mkv	example	Tensei Shitara Slime Datta Ken	65.5	1	
+[SubsPlease] One Piece - 1000 (1080p) [AAAA1111].mkv	example	One Piece	1000	1	
+[Unofficial] Sono Bisque Doll (01-24) Unofficial Batch	example	Sono Bisque Doll	batch 1-24	1	work
+[SubsPlease] Sono Bisque Doll - 01~12 [Batch] (1080p)	example	Sono Bisque Doll	batch 1-12	1	work
+[Group] Show - 01-12 (1080p)	example	Show	batch 1-12	1	
+[Group] Show Complete (1080p) [Batch]	example	Show Complete	batch	1	
+[SubsPlease] Show Movie (1080p).mkv	example	Show Movie	-	1	
+[SubsPlease] Show - 05 (1080p) [ABCD1234].mkv	example	Show	5	1	
+[SubsPlease] Show - 05 (1080p) [01234567].mkv	example	Show	5	1	

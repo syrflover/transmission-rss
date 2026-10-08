@@ -4,181 +4,19 @@ fn without_version(name: &str) -> String {
     ReleaseName::read(name).without_revision().to_owned()
 }
 
-fn parsed(title: &str) -> (String, Option<String>) {
-    let release = ReleaseName::read(title);
-    let work = release
-        .work
-        .clone()
-        .unwrap_or_else(|| panic!("no work in {title:?}"));
-    (work, release.written_episode().map(str::to_owned))
-}
-
+/// The groups are the bracketed names before the work; the work and the
+/// episode of a name are checked in the release-name corpus.
 #[test]
-fn the_work_is_the_title_between_the_group_and_the_episode() {
-    for (title, work, episode) in [
-        (
-            "[SubsPlease] Work - 01 (1080p) [ABCD1234].mkv",
-            "Work",
-            "01",
-        ),
-        (
-            "[SubsPlease] Re:Zero kara - Hajimeru - 12v2 (720p)",
-            "Re:Zero kara - Hajimeru",
-            "12v2",
-        ),
-        (
-            "[Erai-raws] Work Name - 07 [1080p][Multiple Subtitle][ABCD]",
-            "Work Name",
-            "07",
-        ),
-        ("[Moozzi2] Work - 05.5 (BD 1920x1080 x265)", "Work", "05.5"),
-        ("[Group] [Extra] Work - 03", "Work", "03"),
-        ("Work Name S01E03 1080p WEB", "Work Name", "03"),
-        (
-            "[Beatrice-Raws] Kono Subarashii 04 [BDRip 1920x1080 HEVC FLAC]",
-            "Kono Subarashii",
-            "04",
-        ),
-        ("[Batch] Work - 01-12 (BD 1080p)", "Work", "01-12"),
-        ("【Group】 작품 이름 - 02", "작품 이름", "02"),
-        (
-            "[SubsPlease] 86 - Eighty Six - 01 (1080p)",
-            "86 - Eighty Six",
-            "01",
-        ),
-    ] {
-        assert_eq!(
-            parsed(title),
-            (work.to_owned(), Some(episode.to_owned())),
-            "{title}"
-        );
-    }
-    let release = ReleaseName::read("[SubsPlease] Work - 01 (1080p)");
-    assert_eq!(release.groups, ["SubsPlease"]);
-}
-
-#[test]
-fn a_title_without_an_episode_keeps_its_work_without_the_trailing_details() {
+fn the_groups_are_the_bracketed_names_before_the_work() {
     assert_eq!(
-        parsed("[Group] Work Movie (BD 1080p) [ABCD]"),
-        ("Work Movie".to_owned(), None)
+        ReleaseName::read("[SubsPlease] Work - 01 (1080p)").groups,
+        ["SubsPlease"]
     );
-    assert_eq!(parsed("Plain Title"), ("Plain Title".to_owned(), None));
-    assert!(ReleaseName::read("[Group]").work.is_none());
+}
+
+#[test]
+fn a_blank_title_has_no_work() {
     assert!(ReleaseName::read("   ").work.is_none());
-    assert!(ReleaseName::read("[Group] (1080p)").work.is_none());
-}
-
-#[test]
-fn a_number_inside_the_title_is_not_taken_for_the_episode() {
-    assert_eq!(
-        parsed("[SubsPlease] 2.5 Dimensional Seduction - 03 (1080p)"),
-        (
-            "2.5 Dimensional Seduction".to_owned(),
-            Some("03".to_owned())
-        )
-    );
-    assert_eq!(
-        parsed("[SubsPlease] Mob Psycho 100 - 03 (1080p)"),
-        ("Mob Psycho 100".to_owned(), Some("03".to_owned()))
-    );
-}
-
-fn kind(title: &str) -> Kind {
-    ReleaseName::read(title).kind
-}
-
-/// The kind and the revision of a name.
-fn episode_of(title: &str) -> (Kind, u32) {
-    let read = ReleaseName::read(title);
-    (read.kind, read.version)
-}
-
-fn episode(number: u32, version: u32) -> (Kind, u32) {
-    (Kind::Episode(Episode::whole(number)), version)
-}
-
-#[test]
-fn an_episode_title_gives_its_number_and_revision() {
-    assert_eq!(
-        episode_of("[SubsPlease] Sono Bisque Doll - 14 (1080p) [E2675E51].mkv"),
-        episode(14, 1)
-    );
-    assert_eq!(
-        episode_of("[SubsPlease] Sono Bisque Doll - 14v2 (1080p) [1A2B3C4D].mkv"),
-        episode(14, 2)
-    );
-    assert_eq!(
-        episode_of("[Erai-raws] Show - 05 [1080p CR WEBRip HEVC AAC][MultiSub][1BBD34E6].mkv"),
-        episode(5, 1)
-    );
-    assert_eq!(
-        episode_of("[SubsPlease] Tensei Shitara Slime Datta Ken - 65.5 (1080p) [0214B01E].mkv"),
-        (
-            Kind::Episode(Episode {
-                number: 65,
-                half: true
-            }),
-            1
-        )
-    );
-    assert_eq!(
-        episode_of("[SubsPlease] One Piece - 1000 (1080p) [AAAA1111].mkv"),
-        episode(1000, 1)
-    );
-}
-
-#[test]
-fn a_batch_says_so_or_names_a_range() {
-    assert_eq!(
-        kind("[SubsPlease] Sayonara Lara (01-12) (1080p) [Batch]"),
-        Kind::Batch {
-            range: Some((1, 12))
-        }
-    );
-    assert_eq!(
-        kind("[Unofficial] Sono Bisque Doll (01-24) Unofficial Batch"),
-        Kind::Batch {
-            range: Some((1, 24))
-        }
-    );
-    assert_eq!(
-        kind("[SubsPlease] Sono Bisque Doll - 01~12 [Batch] (1080p)"),
-        Kind::Batch {
-            range: Some((1, 12))
-        }
-    );
-    assert_eq!(
-        kind("[Group] Show - 01-12 (1080p)"),
-        Kind::Batch {
-            range: Some((1, 12))
-        }
-    );
-    // The word alone is a batch with no range.
-    assert_eq!(
-        kind("[Group] Show Complete (1080p) [Batch]"),
-        Kind::Batch { range: None }
-    );
-}
-
-#[test]
-fn a_title_without_a_number_is_unnumbered() {
-    assert_eq!(
-        kind("[SubsPlease] Show Movie (1080p).mkv"),
-        Kind::Unnumbered
-    );
-}
-
-#[test]
-fn the_resolution_and_the_crc_are_not_a_range() {
-    assert_eq!(
-        episode_of("[SubsPlease] Show - 05 (1080p) [ABCD1234].mkv"),
-        episode(5, 1)
-    );
-    assert_eq!(
-        episode_of("[SubsPlease] Show - 05 (1080p) [01234567].mkv"),
-        episode(5, 1)
-    );
 }
 
 #[test]
