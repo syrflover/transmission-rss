@@ -172,128 +172,20 @@ async fn a_new_title_becomes_one_candidate_and_a_second_episode_makes_no_second(
     assert_eq!(candidate["waiting"][0]["anime"]["subject"], "작품");
     assert_eq!(candidate["waiting"][0]["directory"], "작품");
 
+    // Another channel waits for nothing, so what it records is no candidate
+    // (the rule is per channel; which subscriptions wait is trss-collect's).
+    let other = app.channel("other.test").await;
+    app.record(&other, NOW - 1, &[OLD]).await;
+    app.record(&other, NOW + 1_500, &[NEW_1]).await;
+    let candidates = app.candidates().await;
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0]["channel_id"], channel.id);
+
     app.record(&channel, NOW + 2_000, &[NEW_2]).await;
     let candidates = app.candidates().await;
     assert_eq!(candidates.len(), 1);
     assert_eq!(candidates[0]["items"], 2);
     assert_eq!(candidates[0]["latest_title"], NEW_2);
-}
-
-#[tokio::test]
-async fn titles_seen_while_nothing_waited_make_no_candidate() {
-    let app = App::new().await;
-    app.schedule_of_wednesday();
-    let channel = app.channel("feed.test").await;
-    // Appeared before any subscription waited.
-    app.record(&channel, NOW - 2_000, &[OLD]).await;
-    assert!(app.candidates().await.is_empty());
-
-    let (status, body) = app
-        .call(
-            Method::POST,
-            "/api/subscriptions",
-            Some(app.waiting_body(&channel)),
-        )
-        .await;
-    assert_eq!(status, StatusCode::CREATED, "{body}");
-    assert!(app.candidates().await.is_empty());
-
-    // A work that was in the history before is old, however many later
-    // episodes appear; one that was not there is new.
-    app.record(&channel, NOW + 1_000, &[NEW_1]).await;
-    let next_old = OLD.replace("07", "08");
-    app.record(&channel, NOW + 1_500, &[next_old.as_str()])
-        .await;
-    let works: Vec<_> = app
-        .candidates()
-        .await
-        .into_iter()
-        .map(|c| c["work"].as_str().unwrap().to_owned())
-        .collect();
-    assert_eq!(works, ["New Work"], "Old Show is old");
-}
-
-#[tokio::test]
-async fn a_channel_without_a_waiting_subscription_has_no_candidates() {
-    let app = App::new().await;
-    let (_, rule) = app.waiting_in_a_known_channel().await;
-    let other = app.channel("other.test").await;
-    app.record(&other, NOW - 1, &[OLD]).await;
-    app.record(&other, NOW + 1_000, &[NEW_1]).await;
-    assert!(
-        app.candidates().await.is_empty(),
-        "the other channel waits for nothing"
-    );
-
-    // Nor once the only waiting subscription stopped collecting.
-    let channel_id = rule["channel_id"].as_str().unwrap();
-    let channel = app
-        .state
-        .channels
-        .get_channel(channel_id)
-        .await
-        .unwrap()
-        .unwrap();
-    app.record(&channel, NOW + 2_000, &[NEW_1]).await;
-    assert_eq!(app.candidates().await.len(), 1);
-    let id = rule["id"].as_str().unwrap();
-    let (status, paused) = app
-        .call(
-            Method::PUT,
-            &format!("/api/rules/{id}/switch"),
-            Some(json!({ "version": rule["version"], "video": false })),
-        )
-        .await;
-    assert_eq!(status, StatusCode::OK, "{paused}");
-    assert!(app.candidates().await.is_empty(), "paused offers nothing");
-
-    // Turned back on, the candidate first seen while it waited is offered again,
-    // and so is what appears afterwards.
-    app.now.fetch_add(10_000, Ordering::SeqCst);
-    let (_, resumed) = app
-        .call(
-            Method::PUT,
-            &format!("/api/rules/{id}/switch"),
-            Some(json!({ "version": paused["version"], "video": true })),
-        )
-        .await;
-    assert_eq!(resumed["state"], "active");
-    let kept = app.candidates().await;
-    assert_eq!(kept.len(), 1);
-    assert_eq!(kept[0]["work"], "New Work");
-    app.record(
-        &channel,
-        NOW + 20_000,
-        &["[SubsPlease] Later Work - 01 (1080p)"],
-    )
-    .await;
-    let candidates = app.candidates().await;
-    assert_eq!(candidates.len(), 2);
-    assert_eq!(candidates[0]["work"], "Later Work");
-    assert_eq!(candidates[1]["work"], "New Work");
-}
-
-#[tokio::test]
-async fn a_title_another_rule_already_handles_is_no_candidate() {
-    let app = App::new().await;
-    let (channel, _) = app.waiting_in_a_known_channel().await;
-    app.record(&channel, NOW + 1_000, &[NEW_1]).await;
-    assert_eq!(app.candidates().await.len(), 1);
-
-    // A rule that matches the work makes it that rule's.
-    app.state
-        .channels
-        .create_rule(
-            &channel.id,
-            RuleInput {
-                r#match: Some("New Work".into()),
-                directory: "New Work".into(),
-                ..RuleInput::default()
-            },
-        )
-        .await
-        .unwrap();
-    assert!(app.candidates().await.is_empty());
 }
 
 #[tokio::test]

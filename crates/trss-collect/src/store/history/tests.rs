@@ -873,6 +873,48 @@ async fn history_survives_channel_and_rule_deletion() {
     assert!(!items[0].channel_label.contains("abc"));
 }
 
+/// The deletion a person asks for (`DELETE /api/rules/{id}`), through the
+/// store call it ends in, not a raw delete.
+#[tokio::test]
+async fn the_history_survives_the_deletion_of_its_rule() {
+    use crate::store::channels::{ChannelInput, ChannelStore, RuleInput};
+
+    let (_dir, db, history) = store().await;
+    let channels = ChannelStore::new(db.clone());
+    let channel = channels
+        .create_channel(ChannelInput::new("https://a.test/rss"))
+        .await
+        .unwrap();
+    let rule = channels
+        .create_rule(
+            &channel.id,
+            RuleInput {
+                r#match: Some("Alpha".to_owned()),
+                directory: "a".to_owned(),
+                ..RuleInput::default()
+            },
+        )
+        .await
+        .unwrap();
+    history
+        .record(
+            1_000,
+            vec![Observation {
+                channel_id: channel.id.clone(),
+                channel_label: channel.masked_url(),
+                ..received("a", &rule.id, "hash-a")
+            }],
+        )
+        .await
+        .unwrap();
+
+    channels.delete_rule(&rule.id, rule.version).await.unwrap();
+
+    let items = all(&history).await;
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].rule_id.as_deref(), Some(rule.id.as_str()));
+}
+
 // --- listing ----------------------------------------------------------------
 
 async fn seeded(history: &HistoryStore, n: usize) {
@@ -1035,6 +1077,68 @@ async fn filtered_pages_continue_from_the_cursor() {
     sorted.sort_unstable_by(|a, b| b.cmp(a));
     sorted.dedup();
     assert_eq!(sorted, ids, "strictly descending, no repeats");
+}
+
+/// Items arrive while a screen scrolls through a filtered list: the pages that
+/// follow the cursor hold every item that matched when the first page was read,
+/// once and newest first, and none of the arrivals.
+#[tokio::test]
+async fn a_filtered_list_pages_without_jumping_while_new_items_arrive() {
+    let (_dir, _db, history) = store().await;
+    let record = |n: i64, result| {
+        history.record(1_000_000 + n * 60_000, vec![obs(&format!("k{n}"), result)])
+    };
+    let total = 130;
+    for n in 0..total {
+        let result = match n % 5 {
+            0 => HistoryResult::AddFailed,
+            1 | 2 => HistoryResult::NoMatch,
+            3 => HistoryResult::Received,
+            _ => HistoryResult::Excluded,
+        };
+        record(n, result).await.unwrap();
+    }
+    let query = |after| HistoryQuery {
+        result: Some(HistoryResult::AddFailed),
+        after,
+        limit: 5,
+        ..Default::default()
+    };
+
+    let first = history.list(query(None)).await.unwrap();
+    let mut seen: Vec<i64> = first.items.iter().map(|i| i.id).collect();
+    assert_eq!(seen.len(), 5);
+    let newest_at_first_page = seen[0];
+    let mut next = first.next;
+    assert!(next.is_some());
+
+    // The newest of the arrivals failed too.
+    for n in total..total + 7 {
+        record(n, HistoryResult::AddFailed).await.unwrap();
+    }
+
+    while let Some(cursor) = next {
+        let page = history.list(query(Some(cursor))).await.unwrap();
+        seen.extend(page.items.iter().map(|i| i.id));
+        next = page.next;
+    }
+
+    // 26 of the 130 failed before the first page was read.
+    assert_eq!(seen.len(), 26);
+    let mut newest_first = seen.clone();
+    newest_first.sort_unstable_by(|a, b| b.cmp(a));
+    newest_first.dedup();
+    assert_eq!(seen, newest_first, "newest first, no repeats");
+    assert!(
+        seen.iter().all(|id| *id <= newest_at_first_page),
+        "an item that arrived after the first page must not appear in the later pages"
+    );
+    for id in &seen {
+        assert_eq!(
+            history.get(*id).await.unwrap().unwrap().result,
+            HistoryResult::AddFailed
+        );
+    }
 }
 
 #[test]

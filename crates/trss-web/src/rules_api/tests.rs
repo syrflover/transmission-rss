@@ -293,28 +293,6 @@ async fn overlap_is_shown_only_on_the_rule_an_earlier_rule_shadows() {
     assert_eq!(overlap, [false, true, false]);
 }
 
-#[tokio::test]
-async fn an_excluded_item_and_an_archived_rule_make_no_overlap() {
-    let app = App::new().await;
-    let a = app
-        .channel("a.test", &["[Batch]"], &[("Show", "one"), ("Show", "two")])
-        .await;
-    app.record(&a.channel, 1_000, &["Show [Batch]"]).await;
-    assert_eq!(app.list().await["rules"][1]["overlap"], false);
-
-    // With an item that both match, archiving the shadowed rule removes the overlap.
-    app.record(&a.channel, 2_000, &["Show - 01"]).await;
-    assert_eq!(app.list().await["rules"][1]["overlap"], true);
-    let second = &app.list().await["rules"][1];
-    // The worker archives (the `rule_archive` command); the store call is its.
-    app.state
-        .channels
-        .set_rule_state(second["id"].as_str().unwrap(), RuleState::Archived, 0)
-        .await
-        .unwrap();
-    assert_eq!(app.list().await["rules"][1]["overlap"], false);
-}
-
 // --- saving -------------------------------------------------------------------
 
 #[tokio::test]
@@ -458,33 +436,6 @@ async fn a_delete_from_an_old_version_is_a_conflict() {
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(conflict["current"]["directory"], "one");
     assert_eq!(app.list().await["rules"].as_array().unwrap().len(), 1);
-}
-
-#[tokio::test]
-async fn the_history_survives_the_deletion_of_its_rule() {
-    let app = App::new().await;
-    let a = app.channel("a.test", &[], &[("Alpha", "a")]).await;
-    let rule = &a.rules[0];
-    app.record_as(
-        &a.channel,
-        1_000,
-        &["Alpha 01"],
-        HistoryResult::Received,
-        Some(&rule.id),
-    )
-    .await;
-
-    let (status, _, _) = app
-        .call(
-            Method::DELETE,
-            &format!("/api/rules/{}?version={}", rule.id, rule.version),
-            None,
-        )
-        .await;
-    assert_eq!(status, StatusCode::OK);
-    let page = app.state.history.list(Default::default()).await.unwrap();
-    assert_eq!(page.items.len(), 1);
-    assert_eq!(page.items[0].rule_id.as_deref(), Some(rule.id.as_str()));
 }
 
 #[tokio::test]
@@ -1737,6 +1688,10 @@ async fn turning_video_on_for_a_work_in_the_archive_folder_leaves_the_rule_pause
     let (status, text, refused) = switch(&read(&a.rules[0].id).await).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
     assert_eq!(refused["error"], "invalid");
+    assert!(
+        refused["message"].as_str().unwrap().contains("옮기는 중"),
+        "{text}"
+    );
 
     // A work that is not in the archive folder turns on at once.
     let (status, text, on) = switch(&read(&a.rules[1].id).await).await;

@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use axum::{
     body::Body,
     http::{header, Method, Request, StatusCode},
@@ -227,75 +225,6 @@ async fn the_channel_filter_limits_the_list_and_the_counts() {
 }
 
 #[tokio::test]
-async fn over_a_thousand_records_the_add_failed_filter_pages_without_jumping() {
-    let app = App::new();
-    let channel = app.channel("nyaa.example", None).await;
-    let total = 1_300;
-    let mut failed = 0;
-    for n in 0..total {
-        let result = match n % 5 {
-            0 => {
-                failed += 1;
-                HistoryResult::AddFailed
-            }
-            1 | 2 => HistoryResult::NoMatch,
-            3 => HistoryResult::Received,
-            _ => HistoryResult::Excluded,
-        };
-        app.record(&channel, n, result, None).await;
-    }
-
-    let (status, _, first) = app.get("/api/history?result=add_failed&limit=50").await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(first["counts"]["total"], total);
-    assert_eq!(first["counts"]["add_failed"], failed);
-    let mut seen: Vec<i64> = ids(&first);
-    let newest_at_first_page = seen[0];
-    assert_eq!(seen.len(), 50);
-    let mut next = first["next"].as_str().map(str::to_owned);
-    assert!(next.is_some());
-
-    // New items arrive while the screen scrolls: at the top, and the newest of them failed.
-    for n in total..total + 7 {
-        app.record(&channel, n, HistoryResult::AddFailed, None)
-            .await;
-    }
-
-    while let Some(cursor) = next {
-        let (status, _, page) = app
-            .get(&format!(
-                "/api/history?result=add_failed&limit=50&after={cursor}"
-            ))
-            .await;
-        assert_eq!(status, StatusCode::OK);
-        seen.extend(ids(&page));
-        next = page["next"].as_str().map(str::to_owned);
-    }
-
-    // Every record that failed before the first page was read comes exactly
-    // once, newest first, and the ones that arrived later were not slipped in.
-    assert_eq!(seen.len() as i64, failed);
-    assert_eq!(
-        seen.iter().collect::<HashSet<_>>().len(),
-        seen.len(),
-        "no repeats"
-    );
-    let mut newest_first = seen.clone();
-    newest_first.sort_by(|a, b| b.cmp(a));
-    assert_eq!(seen, newest_first);
-    for id in &seen {
-        assert_eq!(
-            app.state.history.get(*id).await.unwrap().unwrap().result,
-            HistoryResult::AddFailed
-        );
-    }
-    assert!(
-        seen.iter().all(|id| *id <= newest_at_first_page),
-        "an item that arrived after the first page must not appear in the later pages"
-    );
-}
-
-#[tokio::test]
 async fn a_bad_cursor_or_query_is_refused_and_the_page_size_is_capped() {
     let app = App::new();
     let channel = app.channel("nyaa.example", None).await;
@@ -319,7 +248,15 @@ async fn a_bad_cursor_or_query_is_refused_and_the_page_size_is_capped() {
         1,
         "at least one item per page"
     );
-    assert!(one["next"].is_string());
+    // The cursor a page hands out is the `after` the next request takes. (The
+    // paging rule is tested in trss-collect.)
+    let cursor = one["next"].as_str().unwrap();
+    let (status, _, second) = app
+        .get(&format!("/api/history?limit=1&after={cursor}"))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(ids(&second).len(), 1);
+    assert_ne!(ids(&second), ids(&one));
 }
 
 #[tokio::test]
