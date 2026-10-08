@@ -403,3 +403,104 @@ fn another_groups_release_of_the_episode_is_another_release() {
     let c = ReleaseName::read("[SubsPlease] Show - 15 (1080p) [E2675E51].mkv");
     assert_ne!(a.stem, c.stem);
 }
+
+/// One extension, whichever reader asks: a dot and two to four letters or
+/// digits, or `torrent`.
+#[test]
+fn every_reading_takes_the_same_extension_off() {
+    let titled = "[Group] Show - 05v2 (1080p) [ABCD1234]";
+    for ext in [".torrent", ".Torrent", ".mkv", ".webm", ""] {
+        let read = ReleaseName::read(&format!("{titled}{ext}"));
+        assert_eq!(read.crc, Some(0xABCD1234), "{ext}");
+        assert_eq!(read.stem, "[Group] Show - 05 (1080p)", "{ext}");
+        assert_eq!(read.version, 2, "{ext}");
+        assert_eq!(read.work.as_deref(), Some("Show"), "{ext}");
+        assert_eq!(read.whole_episode(), Some(5), "{ext}");
+    }
+    // The work reader loses the same suffixes the revision reader does, so
+    // `.webm` and a dot that starts two to four characters (`Vol.12`,
+    // `H.264`) are no part of a name.
+    assert_eq!(ReleaseName::read("Show - 05.webm").whole_episode(), Some(5));
+    assert_eq!(
+        ReleaseName::read("Show Vol.12").work.as_deref(),
+        Some("Show Vol")
+    );
+    assert_eq!(
+        ReleaseName::read("[AnoZu] One Piece S23E22 1080p CR WEB-DL AAC 2.0 H.264").stem,
+        "[AnoZu] One Piece S23E22 1080p CR WEB-DL AAC 2.0 H"
+    );
+}
+
+/// One revision mark, whichever reader asks: `v` or `V` and one or two digits.
+#[test]
+fn every_reading_takes_the_same_revision_mark() {
+    for mark in ["v2", "V2", "v12"] {
+        let read = ReleaseName::read(&format!("[Group] Show - 05{mark} (1080p)"));
+        assert_eq!(read.version, mark[1..].parse::<u32>().unwrap(), "{mark}");
+        assert_eq!(read.whole_episode(), Some(5), "{mark}");
+        assert_eq!(read.kind, Kind::Episode(Episode::whole(5)), "{mark}");
+        assert_eq!(
+            read.without_revision(),
+            "[Group] Show - 05 (1080p)",
+            "{mark}"
+        );
+        let bare = ReleaseName::read(&format!("[Group] Show 05{mark} (1080p)"));
+        assert_eq!(bare.work.as_deref(), Some("Show"), "{mark}");
+        assert_eq!(bare.whole_episode(), Some(5), "{mark}");
+    }
+    // Three digits are no revision mark, so the number is no episode.
+    let read = ReleaseName::read("[Group] Show - 05v123 (1080p)");
+    assert_eq!(read.version, 1);
+    assert_eq!(read.whole_episode(), None);
+    assert_eq!(read.kind, Kind::Unnumbered);
+    assert_eq!(read.work.as_deref(), Some("Show - 05v123"));
+    assert_eq!(read.without_revision(), "[Group] Show - 05v123 (1080p)");
+}
+
+/// One season, `S` and one or two digits, for the episode and its notation.
+#[test]
+fn a_season_has_one_or_two_digits() {
+    assert_eq!(
+        ReleaseName::read("Show S12E05 1080p").notation,
+        Some(Notation::SeasonEpisode {
+            season: 12,
+            season_width: 2,
+            width: 2
+        })
+    );
+    // `S100E05` is no season, so only the dash number gives the notation.
+    let read = ReleaseName::read("Show S100E05 - 05 (1080p)");
+    assert_eq!(read.notation, Some(Notation::Dash { width: 2 }));
+    assert_eq!(
+        ReleaseName::read("Show S100E05 (1080p)").kind,
+        Kind::Unnumbered
+    );
+}
+
+/// One dash, spaces on both sides, sets an episode's number apart from the
+/// work, for the episode, its revision and its notation.
+#[test]
+fn an_episode_follows_a_dash_with_a_space_on_each_side() {
+    for dash in [" - ", "  -  ", " -  "] {
+        let read = ReleaseName::read(&format!("Show{dash}05 (1080p)"));
+        assert_eq!(read.notation, Some(Notation::Dash { width: 2 }), "{dash:?}");
+        assert_eq!(read.whole_episode(), Some(5), "{dash:?}");
+    }
+    // Without the spaces the dash is part of the work, and the number after
+    // it is not an episode's: a `3v3` before it is the work's, not a revision.
+    for name in ["Show -05 (1080p)", "Show-05 (1080p)"] {
+        let read = ReleaseName::read(name);
+        assert_eq!(read.whole_episode(), None, "{name}");
+        assert_eq!(read.notation, None, "{name}");
+    }
+    let spaced = ReleaseName::read("Show 3v3 - 06 (1080p)");
+    assert_eq!(
+        (spaced.version, spaced.stem.as_str()),
+        (1, "Show 3v3 - 06 (1080p)")
+    );
+    let tight = ReleaseName::read("Show 3v3 -06 (1080p)");
+    assert_eq!(
+        (tight.version, tight.stem.as_str()),
+        (3, "Show 3 -06 (1080p)")
+    );
+}

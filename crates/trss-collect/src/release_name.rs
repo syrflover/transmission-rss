@@ -134,36 +134,59 @@ pub struct ReleaseName {
     without_revision: String,
 }
 
-// The extension, as the revision reading takes it: a dot and two to four
-// letters or digits.
-static EXTENSION: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\.[A-Za-z0-9]{2,4}\s*$").unwrap());
-static CRC: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[([0-9A-Fa-f]{8})\]\s*$").unwrap());
-static VERSION: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)\b(\d{1,4}(?:\.\d)?)v(\d{1,2})\b").unwrap());
+// The pieces the patterns below share, so that every reader of a name takes a
+// part of it the same way.
 
-/// ` - ` and a number, as a name gives its episode's number after the
+/// The extension: a dot and two to four letters or digits, or `torrent`. A
+/// name that ends in `H.264` loses `.264` as well; so does `Vol.12`.
+const EXTENSION_PART: &str = r"\.(?:[A-Za-z0-9]{2,4}|torrent)";
+/// A revision mark: `v2`, `V12`. It removes files when it is read for a
+/// replacement, so it is the narrow reading: one or two digits.
+const REVISION_PART: &str = r"(?i:v)\d{1,2}";
+/// The season of `S01E05`.
+const SEASON_DIGITS: &str = r"\d{1,2}";
+/// The dash that sets an episode's number apart from the work.
+const EPISODE_DASH: &str = r"\s+-\s+";
+
+static EXTENSION: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(&format!(r"(?i:{EXTENSION_PART})\s*$")).unwrap());
+static CRC: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[([0-9A-Fa-f]{8})\]\s*$").unwrap());
+/// A number and its revision mark: group 1 is the number, group 2 the mark.
+static VERSION: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(&format!(r"\b(\d{{1,4}}(?:\.\d)?)({REVISION_PART})\b")).unwrap());
+
+/// The dash and a number, as a name gives its episode's number after the
 /// show's name.
 static EPISODE_AFTER_DASH: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\s-\s*\d{1,4}(?:\.\d)?(?:\D|$)").unwrap());
+    LazyLock::new(|| Regex::new(&format!(r"{EPISODE_DASH}\d{{1,4}}(?:\.\d)?(?:\D|$)")).unwrap());
+/// The dash right before the end of the text.
+static ENDS_IN_DASH: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(&format!(r"{EPISODE_DASH}$")).unwrap());
 
 // The work and the episode, as the subscription flow takes them.
 static LEADING: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s*(?:\[([^\]]*)\]|【([^】]*)】)\s*").unwrap());
-static WORK_EXTENSION: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)\.(?:mkv|mp4|avi|torrent)$").unwrap());
 /// `Work - 01 (1080p)`: the last ` - <number>` that something else follows.
 static DASH: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(.*\S)\s+-\s+(\d{1,4}(?:\.\d)?(?:v\d+)?(?:\s*-\s*\d{1,4})?)(?:\s|[(\[]|$)")
-        .unwrap()
+    Regex::new(&format!(
+        r"^(.*\S){EPISODE_DASH}(\d{{1,4}}(?:\.\d)?(?:{REVISION_PART})?(?:\s*-\s*\d{{1,4}})?)(?:\s|[(\[]|$)"
+    ))
+    .unwrap()
 });
 /// `Work S01E03`.
 static SXXEYY: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)^(.*?\S)\s+S\d{1,2}E(\d{1,4}(?:\.\d)?)(?:\s|[(\[.]|$)").unwrap()
+    Regex::new(&format!(
+        r"(?i)^(.*?\S)\s+S{SEASON_DIGITS}E(\d{{1,4}}(?:\.\d)?)(?:\s|[(\[.]|$)"
+    ))
+    .unwrap()
 });
 /// `Work 04 [BDRip ...]`: the number after the title with no dash.
-static BARE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(.*\S)\s+(\d{1,4}(?:v\d+)?)\s*(?:[(\[].*)?$").unwrap());
+static BARE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(&format!(
+        r"^(.*\S)\s+(\d{{1,4}}(?:{REVISION_PART})?)\s*(?:[(\[].*)?$"
+    ))
+    .unwrap()
+});
 static TRAILING: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\s*(?:\([^)]*\)|\[[^\]]*\])\s*$").unwrap());
 
@@ -175,12 +198,18 @@ static TILDE_RANGE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\b(\d{1,4})\s*~\s*(\d{1,4})\b").unwrap());
 static WRITTEN_RANGE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^(\d{1,4})\s*[-~–]\s*(\d{1,4})$").unwrap());
-static WRITTEN_EPISODE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(\d{1,4})(?:\.(\d))?(?:v(\d{1,2}))?$").unwrap());
-static DASH_NUMBER: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\s-\s(\d{1,4})(?:\.\d)?(?:v\d+)?(?:\s|[(\[]|$)").unwrap());
-static SEASON_EPISODE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)\bS(\d{1,3})E(\d{1,4})(?:\.\d)?\b").unwrap());
+static WRITTEN_EPISODE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(&format!(r"^(\d{{1,4}})(?:\.(\d))?(?:{REVISION_PART})?$")).unwrap()
+});
+static DASH_NUMBER: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(&format!(
+        r"{EPISODE_DASH}(\d{{1,4}})(?:\.\d)?(?:{REVISION_PART})?(?:\s|[(\[]|$)"
+    ))
+    .unwrap()
+});
+static SEASON_EPISODE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(&format!(r"(?i)\bS({SEASON_DIGITS})E(\d{{1,4}})(?:\.\d)?\b")).unwrap()
+});
 
 /// The episode's revision marker in `text`. The last `NvM` right after ` - `
 /// is on the episode's number, whatever follows it. Without one, the last
@@ -191,7 +220,7 @@ fn last_version(text: &str) -> Option<Captures<'_>> {
     let mut all: Vec<Captures<'_>> = VERSION.captures_iter(text).collect();
     let on_episode = all
         .iter()
-        .rposition(|c| text[..c.get(0).unwrap().start()].trim_end().ends_with('-'));
+        .rposition(|c| ENDS_IN_DASH.is_match(&text[..c.get(0).unwrap().start()]));
     if let Some(at) = on_episode {
         return Some(all.swap_remove(at));
     }
@@ -237,7 +266,7 @@ fn read_revision(name: &str) -> Revision {
     let mut without_revision = name.to_owned();
     let mut version = 1;
     if let Some(found) = last_version(&name[..end]) {
-        version = found[2].parse().unwrap_or(1).max(1);
+        version = found[2][1..].parse().unwrap_or(1).max(1);
         let range = found.get(1).unwrap().end()..found.get(0).unwrap().end();
         stem.replace_range(range.clone(), "");
         without_revision.replace_range(range, "");
@@ -270,7 +299,7 @@ fn read_work(name: &str) -> Option<Work> {
         }
         rest = &rest[found.get(0).map_or(0, |m| m.end())..];
     }
-    let rest = WORK_EXTENSION.replace(rest, "");
+    let rest = EXTENSION.replace(rest, "");
     let rest = rest.trim();
 
     for pattern in [&DASH, &SXXEYY, &BARE] {
@@ -315,6 +344,13 @@ fn named_range(name: &str) -> Option<(u32, u32)> {
         })
 }
 
+/// The number a written episode (`12`, `12v2`, `12.5`) gives, and its fraction
+/// digit. `None` for a range (`01-12`) and anything else that is no number.
+fn written_number(written: &str) -> Option<(u32, Option<&str>)> {
+    let found = WRITTEN_EPISODE.captures(written)?;
+    Some((found[1].parse().ok()?, found.get(2).map(|d| d.as_str())))
+}
+
 fn kind_of(name: &str, written: Option<&str>) -> Kind {
     let range = written
         .and_then(|w| {
@@ -327,15 +363,11 @@ fn kind_of(name: &str, written: Option<&str>) -> Kind {
         return Kind::Batch { range };
     }
 
-    let episode = written.and_then(|w| {
-        let found = WRITTEN_EPISODE.captures(w)?;
-        let number = found[1].parse().ok()?;
-        let half = found.get(2).is_some_and(|d| d.as_str() == "5");
+    let episode = written.and_then(|w| match written_number(w)? {
+        (number, None) => Some(Episode::whole(number)),
+        (number, Some("5")) => Some(Episode { number, half: true }),
         // `.0` and other fractions are not episodes of a folder.
-        if found.get(2).is_some_and(|d| d.as_str() != "5") {
-            return None;
-        }
-        Some(Episode { number, half })
+        (_, Some(_)) => None,
     });
     match episode {
         Some(episode) => Kind::Episode(episode),
@@ -402,16 +434,10 @@ impl ReleaseName {
     /// The episode the name gives as a whole number (`12`, `12v2`); not a
     /// batch (`01-12`) or a half episode.
     pub fn whole_episode(&self) -> Option<u32> {
-        let written = self.written.as_deref()?;
-        let digits: String = written.chars().take_while(char::is_ascii_digit).collect();
-        let rest = &written[digits.len()..];
-        let revision = rest
-            .strip_prefix('v')
-            .is_some_and(|v| !v.is_empty() && v.chars().all(|c| c.is_ascii_digit()));
-        if digits.is_empty() || !(rest.is_empty() || revision) {
-            return None;
+        match written_number(self.written.as_deref()?)? {
+            (number, None) => Some(number),
+            _ => None,
         }
-        digits.parse().ok()
     }
 
     /// The name without its revision (`14v2` becomes `14`), everything else as
