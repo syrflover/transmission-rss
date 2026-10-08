@@ -3,7 +3,8 @@
 //!
 //! What a cycle decides about an item (which rule takes it, what its torrent
 //! is named, what stays in Transmission and why, how secrets are masked) is
-//! tested in trss-collect (`cycle/tests.rs`, ADR 0015). This file keeps what
+//! tested in trss-collect (`cycle/tests.rs`, ADR 0015), and what a torrent that
+//! is already there gets or what the cleanup takes out in trss-transmission. This file keeps what
 //! only the worker shows: the report, the cycle marker and the lock, the
 //! order of cycles, edits made while a cycle runs, and what a cycle does when
 //! Transmission hangs, stops or the worker shuts down.
@@ -23,10 +24,6 @@ async fn run(worker: &Worker) -> CycleReport {
         TickOutcome::Ran(report) => report,
         other => panic!("expected a cycle, got {other:?}"),
     }
-}
-
-fn hash_a(n: u32) -> String {
-    format!("aaaa{n:036}")
 }
 
 async fn channel_a(h: &Harness) -> trss_collect::store::channels::ChannelWithRules {
@@ -150,107 +147,6 @@ async fn processing_the_same_feed_twice_adds_no_records_and_no_torrents() {
 
 // The cycle's own adds whose name stays keep their torrent, and the item notes
 // why the name stayed, as `다시 받기` does.
-
-#[tokio::test]
-async fn every_torrent_the_cycle_holds_for_an_item_says_which_item_it_is() {
-    let h = Harness::new().await;
-    channel_a(&h).await;
-    // A bot torrent from before the item labels (the legacy cron's), and one a
-    // person added: only the bot's gets the item's label.
-    h.tr.preload(FakeTorrent::new(&hash_a(1), "Sayonara Lara S01E03.mkv").bot());
-    h.tr.preload(FakeTorrent::new(&hash_a(3), "Sono Bisque Doll S02E01.mkv"));
-
-    run(&h.worker()).await;
-
-    let items = h.history_items().await;
-    let label_of = |n: u32| {
-        let item = items
-            .iter()
-            .find(|i| i.torrent_hash.as_deref() == Some(hash_a(n).as_str()))
-            .unwrap();
-        format!("trss-item:{}:{}", item.channel_id, item.identity_key)
-    };
-    let labels_of = |n: u32| {
-        h.tr.torrents()
-            .into_iter()
-            .find(|t| t.hash == hash_a(n))
-            .unwrap()
-            .labels
-    };
-    assert!(labels_of(1).contains(&label_of(1)), "{:?}", labels_of(1));
-    assert!(labels_of(1).contains(&BOT_LABEL.to_owned()));
-    assert!(labels_of(4).contains(&label_of(4)), "{:?}", labels_of(4));
-    assert_eq!(
-        labels_of(3),
-        Vec::<String>::new(),
-        "a person's torrent is left as it is"
-    );
-}
-
-#[tokio::test]
-async fn a_finished_bot_torrent_is_stopped_when_it_is_met_again() {
-    let h = Harness::new().await;
-    channel_a(&h).await;
-    let worker = h.worker();
-
-    run(&worker).await;
-    h.tr.set_status(&hash_a(1), 6); // seeding
-    h.tr.clear_calls();
-
-    run(&worker).await;
-    let stops = h.tr.calls_of("torrent-stop");
-    assert_eq!(stops.len(), 1);
-    assert_eq!(stops[0].args["ids"], serde_json::json!([hash_a(1)]));
-    let stopped =
-        h.tr.torrents()
-            .into_iter()
-            .find(|t| t.hash == hash_a(1))
-            .unwrap();
-    assert_eq!(stopped.status, 0);
-}
-
-#[tokio::test]
-async fn torrents_that_left_the_feed_are_removed_but_only_bot_labelled_ones() {
-    let h = Harness::new().await;
-    channel_a(&h).await;
-    h.tr.preload(FakeTorrent::new("gone0000000000000000000000000000000000aa", "Old Show").bot());
-    h.tr.preload(FakeTorrent::new(
-        "mine0000000000000000000000000000000000bb",
-        "Manual Download",
-    ));
-
-    run(&h.worker()).await;
-
-    let removes = h.tr.calls_of("torrent-remove");
-    assert_eq!(removes.len(), 1);
-    assert_eq!(
-        removes[0].args["ids"],
-        serde_json::json!(["gone0000000000000000000000000000000000aa"])
-    );
-    assert_eq!(removes[0].args["delete-local-data"], false, "data is kept");
-    let hashes: Vec<String> = h.tr.torrents().into_iter().map(|t| t.hash).collect();
-    assert!(hashes.contains(&"mine0000000000000000000000000000000000bb".to_owned()));
-    assert!(!hashes.contains(&"gone0000000000000000000000000000000000aa".to_owned()));
-}
-
-#[tokio::test]
-async fn a_bot_torrent_that_left_the_feed_unfinished_is_removed_once_it_has_finished() {
-    let h = Harness::new().await;
-    channel_a(&h).await;
-    let hash = "slow0000000000000000000000000000000000aa";
-    h.tr.preload(FakeTorrent::new(hash, "Stalled.mkv").bot().unfinished());
-    let worker = h.worker();
-
-    let report = run(&worker).await;
-    assert!(report.removed.is_empty(), "{:?}", report.removed);
-    assert!(h.tr.calls_of("torrent-remove").is_empty());
-
-    h.tr.finish(hash);
-    h.advance(300_000);
-    let report = run(&worker).await;
-    let removed: Vec<_> = report.removed.iter().map(|t| t.name.as_str()).collect();
-    assert_eq!(removed, ["Stalled.mkv"]);
-}
 
 #[tokio::test]
 async fn nothing_is_removed_when_no_feed_could_be_read() {

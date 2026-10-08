@@ -627,6 +627,9 @@ pub async fn remove_stale(
 }
 
 #[cfg(test)]
+mod item_tests;
+
+#[cfg(test)]
 mod tests {
     use super::{item_label, item_of_label};
 
