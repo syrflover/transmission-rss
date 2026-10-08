@@ -48,11 +48,13 @@
 
 use std::{
     collections::BTreeMap,
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
 use tokio::sync::Notify;
+
+use crate::folders::lexical;
 
 /// How a section uses one of its folders; see the module docs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -146,23 +148,6 @@ impl Section {
             })
         })
     }
-}
-
-/// `path` with `.` and `..` resolved by text alone.
-fn lexical(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                if !out.pop() {
-                    out.push("..");
-                }
-            }
-            other => out.push(other),
-        }
-    }
-    out
 }
 
 #[derive(Default)]

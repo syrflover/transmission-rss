@@ -658,13 +658,16 @@ pub fn plan_torrents(
 ) -> Result<Vec<TorrentMove>, String> {
     let (source, from_root) = (request.source(), request.from_root.clone());
     let (work_real, root_real) = (resolve(&source), resolve(&from_root));
-    let (work_text, root_text) = (super::lexical(&source), super::lexical(&from_root));
+    let (work_text, root_text) = (
+        trss_core::folders::lexical(&source),
+        trss_core::folders::lexical(&from_root),
+    );
 
     let mut moves = Vec::new();
     for place in places {
         let folder = Path::new(&place.download_dir);
         let by_text = new_location(
-            &super::lexical(folder),
+            &trss_core::folders::lexical(folder),
             &place.name,
             &work_text,
             &root_text,

@@ -89,7 +89,7 @@ use trss_core::{
         MAX_ATTEMPTS,
     },
     folder_locks::Section,
-    folders::has_parent_dir,
+    folders::{has_parent_dir, lexical},
     settings::SettingsStore,
     Clock, Millis,
 };
@@ -256,23 +256,6 @@ pub enum WorkFolder {
     CollectItself,
     /// The save folder is not inside the collect folder.
     Outside,
-}
-
-/// `path` with `.` and `..` resolved by text alone.
-pub(crate) fn lexical(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                if !out.pop() {
-                    out.push("..");
-                }
-            }
-            other => out.push(other),
-        }
-    }
-    out
 }
 
 /// Where the rule saving to `directory` (relative to `collect`, or absolute)

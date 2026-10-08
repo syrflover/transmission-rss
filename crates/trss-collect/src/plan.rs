@@ -325,8 +325,8 @@ pub fn rule_destination(collect_folder: &Path, rule: &Rule) -> (PathBuf, isize) 
 /// the collect folder; the save folder for one outside it. Placed by text, as
 /// the turns are.
 pub fn work_folder_of(collect_folder: &Path, save_path: &Path) -> PathBuf {
-    let collect = crate::commands::rule_archive::lexical(collect_folder);
-    let save = crate::commands::rule_archive::lexical(save_path);
+    let collect = trss_core::folders::lexical(collect_folder);
+    let save = trss_core::folders::lexical(save_path);
     match save.strip_prefix(&collect) {
         Ok(below) => match below.components().next() {
             Some(first) => collect.join(first),

@@ -133,6 +133,26 @@ fn components(path: &Path) -> Vec<Component<'_>> {
     path.components().collect()
 }
 
+/// `path` with `.` and `..` resolved by text alone, without the disk: a `..`
+/// removes the component before it, and one with nothing before it is kept.
+/// Links are not followed, so this is where a path lands only if no link is
+/// in it; the folder locks and the rules' save folders place paths by it.
+pub fn lexical(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !out.pop() {
+                    out.push("..");
+                }
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
 /// Whether `path` has a `..` component. Such a path cannot be placed against
 /// another by its text: `/d/Shows/../Movies` is textually inside `/d/Shows`
 /// but is not.
@@ -180,6 +200,28 @@ pub fn relative_under(folder: &Path, path: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lexical_resolves_dots_and_slashes_by_text() {
+        let of = |path: &str| lexical(Path::new(path));
+        assert_eq!(of("/media/./A/"), Path::new("/media/A"));
+        assert_eq!(of("/media//A"), Path::new("/media/A"));
+        assert_eq!(of("/media/B/../A"), Path::new("/media/A"));
+        assert_eq!(of("/media/A/B/../.."), Path::new("/media"));
+        assert_eq!(of("/media/A/.."), Path::new("/media"));
+        assert_eq!(of("/"), Path::new("/"));
+        assert_eq!(of("/media/.."), Path::new("/"));
+        assert_eq!(of("a/b/../c"), Path::new("a/c"));
+        assert_eq!(of(""), Path::new(""));
+    }
+
+    #[test]
+    fn lexical_keeps_a_parent_that_has_nothing_before_it() {
+        let of = |path: &str| lexical(Path::new(path));
+        assert_eq!(of("/../x"), Path::new("/../x"));
+        assert_eq!(of("../x"), Path::new("../x"));
+        assert_eq!(of("a/../../x"), Path::new("../x"));
+    }
 
     fn fold(bases: &[&str]) -> Folding {
         fold_bases(bases).unwrap().unwrap()
