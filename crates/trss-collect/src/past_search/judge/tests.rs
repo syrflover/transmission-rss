@@ -443,37 +443,3 @@ fn two_releases_of_one_episode_select_only_one() {
     assert_eq!(selected(&preview), vec![5]);
     assert_eq!(state_of(&preview, "(720p)").state, State::Alternate);
 }
-
-#[test]
-fn the_folder_episode_follows_trname() {
-    let folder = std::path::Path::new("/media/Show/Season 02");
-    for (offset, release) in [
-        (-12i64, 13u32),
-        (-12, 24),
-        (-12, 5),
-        (0, 7),
-        (1, 7),
-        (3, 7),
-        (-48, 62),
-        (-24, 25),
-    ] {
-        let title = format!("[SubsPlease] Show - {release:02} (1080p) [ABCD1234].mkv");
-        let named = trname::trname(folder, &title, offset as isize).unwrap();
-        let got = folder_episode(Episode::whole(release), offset);
-        let expected = format!("Show S02E{:02}.mkv", got.number);
-        assert_eq!(named, expected, "release {release} by {offset}");
-    }
-    assert_eq!(
-        folder_episode(
-            Episode {
-                number: 65,
-                half: true
-            },
-            -48
-        ),
-        Episode {
-            number: 17,
-            half: true
-        }
-    );
-}

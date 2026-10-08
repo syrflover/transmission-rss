@@ -96,6 +96,7 @@
 use std::path::{Component, Path};
 
 use crate::{
+    past_search::release::Episode,
     store::channels::{Rule, SeasonRef},
     subscriptions::whole_episode,
 };
@@ -423,16 +424,49 @@ pub fn before_receiving(first: u32, basis: &Basis) -> Option<(i64, String)> {
     }
 }
 
+/// What a rule's episode conversion adds to a release number, as `trname`
+/// does (`starts_episode_at`): a negative value is added as it is, a positive
+/// value `p` makes the release's `1` the folder's `p` (it adds `p - 1`), and
+/// `0` adds nothing. A negative value that would take the number below 1 is
+/// not applied ([`folder_episode`]).
+pub fn shift(offset: i64) -> i64 {
+    if offset > 0 {
+        offset - 1
+    } else {
+        offset
+    }
+}
+
+/// How a rule's episode conversion moves a release number to the folder's,
+/// the way `trname` names the file: a negative value is added when the result
+/// stays at 1 or above, a positive value `p` makes the release's `1` the
+/// folder's `p`, and `0` changes nothing.
+pub fn folder_episode(release: Episode, offset: i64) -> Episode {
+    let number = i64::from(release.number);
+    let moved = number + shift(offset);
+    let number = if offset < 0 && moved < 1 {
+        number
+    } else {
+        moved
+    };
+    Episode {
+        number: u32::try_from(number).unwrap_or(0),
+        half: release.half,
+    }
+}
+
+/// Whether a conversion leaves release numbers as they are: `0` and `1`.
+pub fn leaves_numbers(offset: i64) -> bool {
+    matches!(offset, 0 | 1)
+}
+
 /// The episode a release `title` is received as by a rule saving to
 /// `directory` with the offset `offset`, as `trname` names it: `S02E12` in a
 /// `<work>/Season NN` folder, `12화` in another. `None` when the title names no
 /// whole episode.
 pub fn received_as(directory: &str, offset: i64, title: &str) -> Option<String> {
     let release = whole_episode(title)?;
-    let folder = crate::past_search::judge::folder_episode(
-        crate::past_search::release::Episode::whole(release),
-        offset,
-    );
+    let folder = folder_episode(Episode::whole(release), offset);
     Some(match place_of(directory) {
         Some((_, season)) => format!("S{season:02}E{:02}", folder.number),
         None => format!("{}화", folder.number),
@@ -455,14 +489,14 @@ pub fn may_decide(rule: &Rule) -> bool {
 pub fn worth_offering(rule: &Rule, value: Option<i64>) -> bool {
     match value {
         Some(value) => !same_effect(value, rule.episode),
-        None => matches!(rule.episode, 0 | 1),
+        None => leaves_numbers(rule.episode),
     }
 }
 
 /// Whether two offsets name every release alike: equal, or both `0` and `1`,
 /// which leave numbers as they are.
 pub fn same_effect(a: i64, b: i64) -> bool {
-    a == b || (matches!(a, 0 | 1) && matches!(b, 0 | 1))
+    a == b || (leaves_numbers(a) && leaves_numbers(b))
 }
 
 /// The work folder and season number of a rule's save folder, which must be
@@ -660,6 +694,40 @@ async fn previous_total(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_folder_episode_follows_trname() {
+        let folder = std::path::Path::new("/media/Show/Season 02");
+        for (offset, release) in [
+            (-12i64, 13u32),
+            (-12, 24),
+            (-12, 5),
+            (0, 7),
+            (1, 7),
+            (3, 7),
+            (-48, 62),
+            (-24, 25),
+        ] {
+            let title = format!("[SubsPlease] Show - {release:02} (1080p) [ABCD1234].mkv");
+            let named = trname::trname(folder, &title, offset as isize).unwrap();
+            let got = folder_episode(Episode::whole(release), offset);
+            let expected = format!("Show S02E{:02}.mkv", got.number);
+            assert_eq!(named, expected, "release {release} by {offset}");
+        }
+        assert_eq!(
+            folder_episode(
+                Episode {
+                    number: 65,
+                    half: true
+                },
+                -48
+            ),
+            Episode {
+                number: 17,
+                half: true
+            }
+        );
+    }
 
     fn basis(previous: Previous, held: &[u32]) -> Basis {
         Basis {

@@ -15,7 +15,7 @@
 
 use serde::Serialize;
 
-use crate::episode_offset::signed;
+use crate::episode_offset::{leaves_numbers, shift, signed};
 
 /// What the app knows of the range.
 #[derive(Debug, Clone, Default)]
@@ -48,14 +48,6 @@ fn release_of(folder: u32, offset: i64) -> u32 {
     u32::try_from(release.max(1)).unwrap_or(u32::MAX)
 }
 
-fn shift(offset: i64) -> i64 {
-    match offset {
-        o if o < 0 => o,
-        0 => 0,
-        o => o - 1,
-    }
-}
-
 /// Offers a range from the grounds.
 pub fn suggest(grounds: &Grounds) -> Suggestion {
     let offset = grounds.offset;
@@ -66,7 +58,7 @@ pub fn suggest(grounds: &Grounds) -> Suggestion {
 
     if let Some(total) = grounds.episodes.filter(|n| *n > 0) {
         let last = release_of(total, offset);
-        let converted = if offset == 0 || offset == 1 {
+        let converted = if leaves_numbers(offset) {
             "릴리스 번호가 그대로 시즌 회차예요.".to_owned()
         } else {
             format!("회차 변환 {}이 적용돼요.", signed(offset))

@@ -21,8 +21,9 @@ use std::{
 };
 
 use crate::{
+    episode_offset::folder_episode,
     past_search::{
-        judge::{folder_episode, Known, Present, World},
+        judge::{Known, Present, World},
         release::{read, Episode, Kind},
     },
     store::{history::HistoryItem, status::TorrentListing},

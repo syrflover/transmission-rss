@@ -59,7 +59,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::past_search::release::{read, Episode, Kind, Read};
+use crate::{
+    episode_offset::folder_episode,
+    past_search::release::{read, Episode, Kind, Read},
+};
 
 /// The release numbers the person confirmed, both included.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,26 +78,6 @@ impl Range {
 
     fn overlaps(self, from: u32, to: u32) -> bool {
         from <= self.to && to >= self.from
-    }
-}
-
-/// How a rule's episode conversion moves a release number to the folder's,
-/// the way `trname` names the file: a negative value is added when the result
-/// stays at 1 or above, a positive value `p` makes the release's `1` the
-/// folder's `p`, and `0` changes nothing.
-pub fn folder_episode(release: Episode, offset: i64) -> Episode {
-    let mut number = i64::from(release.number);
-    if offset < 0 {
-        let moved = number + offset;
-        if moved >= 1 {
-            number = moved;
-        }
-    } else if offset > 0 {
-        number += offset - 1;
-    }
-    Episode {
-        number: u32::try_from(number).unwrap_or(0),
-        half: release.half,
     }
 }
 

@@ -358,7 +358,7 @@ async fn undos(state: &AppState, ids: Vec<String>) -> HashMap<String, EpisodeUnd
 /// `… 정했어요 (전에는 −24).`, or `(전에는 변환 없음)` for a value that left
 /// numbers as they were.
 fn with_previous(basis: &str, previous: i64) -> String {
-    let before = if matches!(previous, 0 | 1) {
+    let before = if episode_offset::leaves_numbers(previous) {
         "변환 없음".to_owned()
     } else {
         signed(previous)
