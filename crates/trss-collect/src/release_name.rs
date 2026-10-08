@@ -163,7 +163,7 @@ static SXXEYY: LazyLock<Regex> = LazyLock::new(|| {
 });
 /// `Work 04 [BDRip ...]`: the number after the title with no dash.
 static BARE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(.*\S)\s+(\d{1,3}(?:v\d+)?)\s*(?:[(\[].*)?$").unwrap());
+    LazyLock::new(|| Regex::new(r"^(.*\S)\s+(\d{1,4}(?:v\d+)?)\s*(?:[(\[].*)?$").unwrap());
 static TRAILING: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\s*(?:\([^)]*\)|\[[^\]]*\])\s*$").unwrap());
 
