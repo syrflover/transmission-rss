@@ -539,8 +539,9 @@ pub async fn remove_label(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenameMode {
     /// A torrent the caller has just added. The single file is renamed, and the
-    /// torrent is removed together with its data when its name cannot be
-    /// derived.
+    /// torrent is removed together with its data when `trname` cannot derive
+    /// a name from what the caller reads. A name the caller keeps
+    /// ([`NameForTrname`]) is left as it is.
     Added,
     /// A torrent Transmission already had. Its file is renamed only while it
     /// sits in `download_dir` and its name is not in the `trname` form yet (a
@@ -565,11 +566,17 @@ pub enum Renamed {
 }
 
 /// How the caller reads a torrent's name for `trname`: the name to derive the
-/// episode from, given the name Transmission holds the file under. Release
-/// names carry notation (a revision such as `06v2`) that `trname` does not read
-/// the same way in every name, and what to do with it is the caller's rule,
-/// not Transmission's.
-pub type NameForTrname = fn(&str) -> String;
+/// episode from, given the name Transmission holds the file under, or `None`
+/// to keep the name as it is. Release names carry notation (a revision such as
+/// `06v2`) that `trname` does not read the same way in every name, and a name
+/// the caller reads as no episode (a movie, a batch) is one `trname` would
+/// find digits in all the same; what to do with them is the caller's rule, not
+/// Transmission's.
+///
+/// `None` is the caller's answer and leaves the torrent and its name alone in
+/// both modes. It is not the same as `trname` having no name for what the
+/// caller returned: that removes a torrent in [`RenameMode::Added`].
+pub type NameForTrname = fn(&str) -> Option<String>;
 
 /// Renames the torrent's single file to the `trname` name for `download_dir`
 /// (`.../<title>/Season NN`), deriving it from the torrent's name as
@@ -607,11 +614,11 @@ pub async fn rename_torrent(
             return Ok(Renamed::Finished);
         }
 
-        let derived = trname_raw(
-            download_dir,
-            &name_for_trname(&old_file_name),
-            starts_episode_at,
-        );
+        // The caller keeps this name: not renamed, and not removed either.
+        let Some(read_as) = name_for_trname(&old_file_name) else {
+            return Ok(Renamed::Finished);
+        };
+        let derived = trname_raw(download_dir, &read_as, starts_episode_at);
         match (mode, derived) {
             (RenameMode::Existing, Some((_, file, _))) if file.already_formatted => {
                 return Ok(Renamed::Finished);
@@ -674,7 +681,8 @@ pub fn has_trname_form(
     name_for_trname: NameForTrname,
 ) -> bool {
     looks_renamed(name, download_dir)
-        || trname_raw(download_dir, &name_for_trname(name), starts_episode_at)
+        || name_for_trname(name)
+            .and_then(|read_as| trname_raw(download_dir, &read_as, starts_episode_at))
             .is_some_and(|(_, file, _)| file.already_formatted)
 }
 

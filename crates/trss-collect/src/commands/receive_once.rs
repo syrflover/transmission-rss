@@ -85,7 +85,7 @@ use crate::{
     context::TransmissionLink,
     offsets,
     plan::{picks, rule_destination, rule_work_folder, ChannelPlan},
-    release_name::without_revision,
+    release_name::name_for_trname,
     revisions,
     store::{
         channels::{Channel, ChannelStore, ChannelWithRules, Rule, RuleState},
@@ -1298,7 +1298,7 @@ pub async fn rename(
                         &old_name,
                         &rename.save_path,
                         rename.episode,
-                        without_revision,
+                        name_for_trname,
                     )
                 {
                     return RenameResult::Unchanged;
@@ -1349,10 +1349,11 @@ pub async fn rename(
 
 /// The name `trname` gives `file_name` in `save_path` with the rule's `episode`
 /// conversion, as the rule cycle's renaming derives it: read from the name
-/// without its revision ([`without_revision`]), because `trname` does
-/// not read `06v2` as episode 6 in every name.
+/// without its revision ([`name_for_trname`]), because `trname` does
+/// not read `06v2` as episode 6 in every name. `None` when `trname` has no name
+/// for it and when the file keeps its name because it is no episode's.
 pub fn derived_name(save_path: &Path, file_name: &str, episode: isize) -> Option<String> {
-    trname(save_path, &without_revision(file_name), episode)
+    trname(save_path, &name_for_trname(file_name)?, episode)
 }
 
 #[cfg(test)]

@@ -390,10 +390,21 @@ fn notation_of(name: &str) -> Option<Notation> {
     })
 }
 
-/// `name` without its revision ([`ReleaseName::without_revision`]), as the
-/// name `trname` reads an episode from.
-pub fn without_revision(name: &str) -> String {
-    ReleaseName::read(name).without_revision().to_owned()
+/// What `trname` reads the episode of a torrent's file name from, or `None`
+/// when the file keeps the name it was received under.
+///
+/// - The name is read without its revision ([`ReleaseName::without_revision`]),
+///   because `trname` does not read `06v2` as episode 6 in every name.
+/// - A name this crate reads as having no episode, or as a batch, is not given
+///   to `trname`: it would find digits in a resolution or a CRC32 and name a
+///   movie or a batch after an episode (`trname` reads the names of subtitles a
+///   person renames by hand, and stays as it is for them).
+pub fn name_for_trname(name: &str) -> Option<String> {
+    let read = ReleaseName::read(name);
+    match read.kind {
+        Kind::Episode(_) => Some(read.without_revision),
+        Kind::Batch { .. } | Kind::Unnumbered => None,
+    }
 }
 
 impl ReleaseName {

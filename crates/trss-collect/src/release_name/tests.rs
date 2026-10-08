@@ -504,3 +504,30 @@ fn an_episode_follows_a_dash_with_a_space_on_each_side() {
         (3, "Show 3 -06 (1080p)")
     );
 }
+
+/// What `trname` reads an episode from: the name without its revision, and
+/// nothing for a name this crate reads as no episode or as a batch.
+#[test]
+fn trname_reads_only_the_names_of_episodes() {
+    assert_eq!(
+        name_for_trname("[SubsPlease] Show - 14v2 (1080p) [8F2EFECC].mkv").as_deref(),
+        Some("[SubsPlease] Show - 14 (1080p) [8F2EFECC].mkv")
+    );
+    assert_eq!(
+        name_for_trname("[SubsPlease] Show - 14.5 (1080p) [8F2EFECC].mkv").as_deref(),
+        Some("[SubsPlease] Show - 14.5 (1080p) [8F2EFECC].mkv")
+    );
+    assert_eq!(
+        name_for_trname("Show S01E14.mkv").as_deref(),
+        Some("Show S01E14.mkv")
+    );
+    for name in [
+        "[Group] Show Movie (BD 1080p) [ABCD1234].mkv",
+        "[Group] Show - 01-12 (1080p).mkv",
+        "[Group] Show (01-12) [Batch].mkv",
+        "[Group] Show Complete [Batch].mkv",
+        "[Group] Show - 12.0 (1080p).mkv",
+    ] {
+        assert_eq!(name_for_trname(name), None, "{name}");
+    }
+}

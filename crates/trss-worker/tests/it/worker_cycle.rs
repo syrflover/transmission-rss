@@ -291,6 +291,78 @@ async fn a_torrent_transmission_already_had_is_never_removed_by_the_renaming() {
         .any(|t| t.hash == hash_a(1) && t.name == "Some Special Collection.mkv"));
 }
 
+/// A feed with one item per `(number, title)`, each a magnet link named after
+/// its title.
+fn titled_feed(items: &[(u32, &str)]) -> String {
+    let items: String = items
+        .iter()
+        .map(|(n, title)| {
+            let dn: String = url::form_urlencoded::byte_serialize(title.as_bytes()).collect();
+            let link = format!("magnet:?xt=urn:btih:{}&dn={dn}", hash_a(*n)).replace('&', "&amp;");
+            format!(
+                "<item><title>{title}</title><link>{link}</link><guid isPermaLink=\"false\">g{n}</guid></item>"
+            )
+        })
+        .collect();
+    format!(
+        r#"<?xml version="1.0"?><rss version="2.0"><channel><title>x</title>
+        <link>http://x/</link><description>d</description>{items}</channel></rss>"#
+    )
+}
+
+#[tokio::test]
+async fn a_release_read_as_no_episode_keeps_its_name_and_its_torrent() {
+    let h = Harness::new().await;
+    // A movie and a batch: `trname` would read digits of the resolution or of
+    // the CRC32 as an episode and name them `Show S01E80.mkv`.
+    let movie = "[Group] Show Movie (BD 1080p) [ABCD1234].mkv";
+    let batch = "[Group] Show Season 1 [BDRip 1920x1080 HEVC FLAC] (01-12).mkv";
+    h.feeds
+        .set_xml("feed-a", &titled_feed(&[(1, movie), (2, batch)]));
+    h.add_channel(
+        "feed-a",
+        "/media/anime",
+        &[],
+        vec![rule("[Group] Show", "Show/Season 01")],
+    )
+    .await;
+
+    let report = run(&h.worker()).await;
+
+    assert_eq!(report.added, 2);
+    let mut names: Vec<String> = h.tr.torrents().into_iter().map(|t| t.name).collect();
+    names.sort();
+    assert_eq!(names, [movie, batch], "both stay under the received name");
+    assert!(h.tr.calls_of("torrent-remove").is_empty());
+    assert!(h.tr.calls_of("torrent-rename-path").is_empty());
+}
+
+/// Until 0128: a name this crate reads as an episode that `trname` cannot
+/// name (the rule's folder has no title and season to name it after) is still
+/// removed with its data when the cycle has just added it, unlike a name the
+/// crate reads as no episode.
+#[tokio::test]
+async fn a_numbered_release_trname_cannot_name_is_still_removed_with_its_data() {
+    let h = Harness::new().await;
+    h.feeds.set_xml(
+        "feed-a",
+        &titled_feed(&[(1, "[Group] Show - 05 (1080p) [ABCD1234].mkv")]),
+    );
+    h.add_channel(
+        "feed-a",
+        "/media/anime",
+        &[],
+        vec![rule("[Group] Show", "")],
+    )
+    .await;
+
+    let report = run(&h.worker()).await;
+
+    assert_eq!(report.added, 1);
+    assert_eq!(h.tr.calls_of("torrent-remove").len(), 1);
+    assert!(h.tr.torrents().is_empty());
+}
+
 #[tokio::test]
 async fn a_torrent_a_rule_received_and_named_is_not_renamed_again() {
     let h = Harness::new().await;

@@ -508,6 +508,35 @@ async fn a_name_trname_cannot_derive_stays_in_transmission_with_its_data_and_is_
 }
 
 #[tokio::test]
+async fn a_release_read_as_no_episode_keeps_its_name_in_a_season_folder() {
+    // `trname` would read the digits of the CRC32 as an episode and name the
+    // movie `Show S01E34.mkv`.
+    let movie = release(
+        "guid-movie",
+        9,
+        "[Group] Show Movie (BD 1080p) [ABCD1234].mkv",
+        "",
+    );
+    let s = Scene::failing(&[&movie], vec![rule("Show Movie", "Show/Season 01")]).await;
+    let item = s.item("Show Movie").await;
+
+    s.post(CMD, &item).await;
+    assert_eq!(s.run_commands().await, CommandsOutcome::Ran(1));
+
+    let torrents = s.h.tr.torrents();
+    assert_eq!(torrents.len(), 1, "{torrents:?}");
+    assert_eq!(
+        torrents[0].name,
+        "[Group] Show Movie (BD 1080p) [ABCD1234].mkv"
+    );
+    assert!(s.h.tr.calls_of("torrent-remove").is_empty());
+    assert!(s.h.tr.calls_of("torrent-rename-path").is_empty());
+    let received = s.item("Show Movie").await;
+    assert_eq!(received.result, HistoryResult::Received);
+    assert_eq!(received.reason.as_deref(), Some(NAME_NOT_DERIVED));
+}
+
+#[tokio::test]
 async fn the_command_ends_only_after_its_rename_step_and_note() {
     let odd = release("guid-odd", 9, "Some Special Collection.mkv", "");
     let s = Scene::failing(&[&odd], vec![rule("Some Special", "Some Show")]).await;

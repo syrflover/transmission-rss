@@ -9,7 +9,8 @@
 #   episode   12, 12.5, batch, batch 1-12, or - for no episode
 #   version   the revision, 1 for a name without one
 #   known     the readings that differ today, comma-separated: work, episode, version
-#             (trss-collect), trname (the episode trname gives a video file of the name)
+#             (trss-collect), trname (the episode in the name the worker gives a video file
+#             of the name: trss-collect's rule for what trname reads, then trname)
 #
 # A reading that is fixed fails the test until its mark is removed here.
 [Magnet] Ao Ashi Season 2 - 01 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][pl][Airing]	history	Ao Ashi Season 2	1	1	
@@ -430,7 +431,7 @@ The Laid Off Cheat Granting Mage Enjoys a Second Lease on Life S01E01 1080p CR W
 [ASW] One Piece - 1179 [1080p HEVC x265 10Bit][AAC]	feed	One Piece	1179	1	
 [ASW] One Piece - 1180 [1080p HEVC x265 10Bit][AAC]	feed	One Piece	1180	1	
 [ASW] Sora wa Akai Kawa no Hotori - 14 [1080p HEVC x265 10Bit][AAC]	feed	Sora wa Akai Kawa no Hotori	14	1	
-[Anime Land] One Piece Film Red (UHD BDRip 1080p AV1 HDR10 TrueHD ATMOS) [2F959F75].mkv	feed	One Piece Film Red	-	1	trname
+[Anime Land] One Piece Film Red (UHD BDRip 1080p AV1 HDR10 TrueHD ATMOS) [2F959F75].mkv	feed	One Piece Film Red	-	1	
 [AnoZu] Chitose Is in the Ramune Bottle S00E15 1080p CR WEB-DL AAC 2.0 H.264 | Chitose-kun wa Ramune Bin no Naka	feed	Chitose Is in the Ramune Bottle	15	1	
 [AnoZu] One Piece S23E22 1080p CR WEB-DL AAC 2.0 H.264	feed	One Piece	22	1	
 [AnoZu] One Piece S23E23 1080p CR WEB-DL AAC 2.0 H.264	feed	One Piece	23	1	
@@ -443,13 +444,13 @@ The Laid Off Cheat Granting Mage Enjoys a Second Lease on Life S01E01 1080p CR W
 [Beatrice-Raws] Assault Lily Bouquet [BDRip 1920x1080 HEVC TrueHD]	feed	Assault Lily Bouquet	-	1	
 [Beatrice-Raws] Blue Sonnet [LDRip 768x576 HEVC FLAC]	feed	Blue Sonnet	-	1	
 [Beatrice-Raws] Bokura no Nanokakan Sensou (Seven Days War) [BDRip 1920x1080 HEVC FLAC]	feed	Bokura no Nanokakan Sensou	-	1	
-[Beatrice-Raws] Chibi Maruko-chan (1990) [BDRip 992x720 HEVC FLAC].mkv	feed	Chibi Maruko-chan	-	1	trname
-[Beatrice-Raws] Chibi Maruko-chan Watashi no Suki na Uta [BDRip 1280x692 HEVC AAC].mkv	feed	Chibi Maruko-chan Watashi no Suki na Uta	-	1	trname
+[Beatrice-Raws] Chibi Maruko-chan (1990) [BDRip 992x720 HEVC FLAC].mkv	feed	Chibi Maruko-chan	-	1	
+[Beatrice-Raws] Chibi Maruko-chan Watashi no Suki na Uta [BDRip 1280x692 HEVC AAC].mkv	feed	Chibi Maruko-chan Watashi no Suki na Uta	-	1	
 [Beatrice-Raws] Deji Meets Girl [BDRip 1920x1080 HEVC FLAC]	feed	Deji Meets Girl	-	1	
 [Beatrice-Raws] Fragtime [BDRip 1920x1080 HEVC FLAC]	feed	Fragtime	-	1	
 [Beatrice-Raws] Free! [BDRip 1920x1080 x264 FLAC] 10bit	feed	Free!	-	1	work
 [Beatrice-Raws] Fruits Basket Prelude [BDRip 1920x1080 HEVC TrueHD]	feed	Fruits Basket Prelude	-	1	
-[Beatrice-Raws] Gake no Ue no Ponyo [DCPrip 1998x1080 HEVC TrueHD].mkv	feed	Gake no Ue no Ponyo	-	1	trname
+[Beatrice-Raws] Gake no Ue no Ponyo [DCPrip 1998x1080 HEVC TrueHD].mkv	feed	Gake no Ue no Ponyo	-	1	
 [Beatrice-Raws] Ganbare Douki-chan [BDRip 1920x1080 HEVC FLAC]	feed	Ganbare Douki-chan	-	1	
 [Beatrice-Raws] Getsuyoubi no Tawawa 2nd \ Tawawa on Monday 2 [BDRip 1920x1080 HEVC TrueHD]	feed	Getsuyoubi no Tawawa 2nd \ Tawawa on Monday 2	-	1	work,episode
 [Beatrice-Raws] Getsuyoubi no Tawawa \ Tawawa on Monday [BDRip 1920x1080 HEVC TrueHD]	feed	Getsuyoubi no Tawawa \ Tawawa on Monday	-	1	
@@ -466,7 +467,7 @@ The Laid Off Cheat Granting Mage Enjoys a Second Lease on Life S01E01 1080p CR W
 [Beatrice-Raws] Hyouka (01-16) [BDRip 1920x1080 x264 FLAC]	feed	Hyouka	batch 1-16	1	
 [Beatrice-Raws] Hyouka [BDRip 1920x1080 HEVC FLAC] (fixed 1st episode)	feed	Hyouka	-	1	
 [Beatrice-Raws] Kimetsu no Yaiba (Demon Slayer) [BDRip 1920x1080 HEVC FLAC]	feed	Kimetsu no Yaiba	-	1	
-[Beatrice-Raws] Kimi no Iro (The Colors Within) [DCPrip 1998x1080 HEVC TrueHD].mkv	feed	Kimi no Iro	-	1	trname
+[Beatrice-Raws] Kimi no Iro (The Colors Within) [DCPrip 1998x1080 HEVC TrueHD].mkv	feed	Kimi no Iro	-	1	
 [Beatrice-Raws] Kimi to Boku no Saigo no Senjou Arui wa Sekai ga Hajimaru Seisen / Our Last Crusade or the Rise of a New World [BDRip 1920x1080 HEVC TrueHD]	feed	Kimi to Boku no Saigo no Senjou Arui wa Sekai ga Hajimaru Seisen / Our Last Crusade or the Rise of a New World	-	1	
 [Beatrice-Raws] Kimi to, Nami ni Noretara [BDRip 1920x1080 HEVC FLAC]	feed	Kimi to, Nami ni Noretara	-	1	
 [Beatrice-Raws] Kobayashi-san Chi no Maid Dragon [BDRip 1920x1080 x264 FLAC]	feed	Kobayashi-san Chi no Maid Dragon	-	1	
@@ -474,7 +475,7 @@ The Laid Off Cheat Granting Mage Enjoys a Second Lease on Life S01E01 1080p CR W
 [Beatrice-Raws] Kyousougiga [BDRip 1920x1080 HEVC FLAC]	feed	Kyousougiga	-	1	
 [Beatrice-Raws] Lupin III Prison of the Past [BDRip 1920x1080 HEVC FLAC]	feed	Lupin III Prison of the Past	-	1	
 [Beatrice-Raws] Lupin the IIIrd Jigen Daisuke no Bohyou [BDRip 1920x1080 HEVC FLAC]	feed	Lupin the IIIrd Jigen Daisuke no Bohyou	-	1	
-[Beatrice-Raws] Magic Tree House [BDRip 1920x1080 HEVC FLAC].mkv	feed	Magic Tree House	-	1	trname
+[Beatrice-Raws] Magic Tree House [BDRip 1920x1080 HEVC FLAC].mkv	feed	Magic Tree House	-	1	
 [Beatrice-Raws] Midori no Makibao [BDRip 960x720 HEVC FLAC]	feed	Midori no Makibao	-	1	
 [Beatrice-Raws] NEKOPARA [BDRip 1920x1080 HEVC FLAC]	feed	NEKOPARA	-	1	
 [Beatrice-Raws] Nagato Yuki-chan no Shoushitsu OVA [BDRip 1920x1080 x264 FLAC]	feed	Nagato Yuki-chan no Shoushitsu OVA	-	1	

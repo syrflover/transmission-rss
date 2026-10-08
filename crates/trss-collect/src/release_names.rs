@@ -1,7 +1,9 @@
 //! The release names of `tests/fixtures/release-names.tsv`, read the ways
 //! trss reads them (`docs/adr/0015-test-a-rule-once-in-its-crate.md`): the
 //! work, episode and revision this crate reads from a title, and the episode
-//! `trname` reads from a video file's name when the worker renames it.
+//! in the name the worker gives a video file when it renames it: the name
+//! this crate has `trname` read ([`crate::release_name::name_for_trname`], none for an unnumbered
+//! video or a batch, which keeps its name) and what `trname` makes of it.
 //!
 //! The names come from the collection history of the server's database (names
 //! only) and from public feeds. Each line holds what the name means; a reading
@@ -18,8 +20,9 @@ use crate::{
 const NAMES: &str = include_str!("../tests/fixtures/release-names.tsv");
 
 /// What a name is read as. `episode` is `12`, `12.5`, `batch`, `batch 1-12`
-/// or `-` (no episode); `trname` is the episode `trname` gives a video file
-/// of that name, `-` for none, and is not read for other names.
+/// or `-` (no episode); `trname` is the episode in the name the worker gives a
+/// video file of that name, `-` when the file keeps its name, and is not read
+/// for other names.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Reading {
     work: String,
@@ -35,7 +38,7 @@ fn is_video_file(name: &str) -> bool {
     [".mkv", ".mp4"].iter().any(|ext| lower.ends_with(ext))
 }
 
-/// The episode `trname` should give a video file whose name means `episode`:
+/// The episode the worker should give a video file whose name means `episode`:
 /// none for a batch or a name without an episode, which keeps its name.
 fn trname_episode(episode: &str) -> &str {
     if episode.starts_with("batch") {
