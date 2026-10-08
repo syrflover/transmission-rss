@@ -1057,33 +1057,8 @@ mod tests {
 
     // --- what is known of the place, from the library and the season info ---
 
-    use std::collections::BTreeSet;
-
     use crate::store::channels::{RuleState, Subscription, SubtitleMode};
-    use trss_anilist::{Entry, FuzzyDate};
-    use trss_core::db::Db;
-    use trss_library::discovery::{EpisodeFile, FileKind, Scan, ScannedWork, WorkRead};
-
-    fn entry(id: i64, episodes: Option<u32>) -> Entry {
-        Entry {
-            id,
-            romaji: None,
-            english: None,
-            native: None,
-            format: None,
-            status: None,
-            episodes,
-            start: FuzzyDate::default(),
-            end: FuzzyDate::default(),
-            studios: Vec::new(),
-            genres: Vec::new(),
-            description: None,
-            airing: Vec::new(),
-            korean_titles: Vec::new(),
-            sequels: Vec::new(),
-            fetched_at: 1,
-        }
-    }
+    use crate::test_world::Place;
 
     fn rule(directory: &str, season_id: Option<&str>) -> Rule {
         Rule {
@@ -1111,74 +1086,9 @@ mod tests {
         }
     }
 
-    struct Place {
-        library: LibraryStore,
-        seasons: SeasonStore,
-        work: String,
-    }
-
-    /// `Show` under `/shows` with the given seasons, each with the videos
-    /// named.
-    async fn place(seasons: &[(u32, &[&str])]) -> Place {
-        let db = Db::open_blocking(":memory:").unwrap();
-        let library = LibraryStore::new(db.clone());
-        let files = seasons
-            .iter()
-            .flat_map(|(season, episodes)| {
-                episodes.iter().map(move |episode| EpisodeFile {
-                    path: format!("Season {season:02}/Show S{season:02}E{episode}.mkv"),
-                    kind: FileKind::Video,
-                    season: *season,
-                    episode: (*episode).to_owned(),
-                })
-            })
-            .collect();
-        let scan = Scan {
-            works: vec![WorkRead::Read(ScannedWork {
-                dir_name: "Show".into(),
-                seasons: seasons.iter().map(|(s, _)| *s).collect::<BTreeSet<_>>(),
-                files,
-                unrecognized: Vec::new(),
-            })],
-        };
-        let (folder, _) = library
-            .add_folder("/shows".into(), scan, 100, &[])
-            .await
-            .unwrap();
-        let work = library.works(&folder.id).await.unwrap().remove(0).id;
-        Place {
-            library,
-            seasons: SeasonStore::new(db),
-            work,
-        }
-    }
-
-    impl Place {
-        /// Links entries with these counts to the season.
-        async fn link(&self, season: u32, counts: &[Option<u32>]) {
-            let mut ids = Vec::new();
-            for (index, count) in counts.iter().enumerate() {
-                let id = i64::from(season) * 10 + index as i64;
-                self.seasons.put_entry(entry(id, *count)).await.unwrap();
-                ids.push(id);
-            }
-            let link = self.seasons.link(&self.work, season).await.unwrap();
-            self.seasons
-                .set_links(&self.work, season, link.version, ids)
-                .await
-                .unwrap();
-        }
-
-        async fn basis(&self, rule: &Rule) -> Option<Basis> {
-            gather(&self.library, &self.seasons, "/shows/", None, rule)
-                .await
-                .unwrap()
-        }
-    }
-
     #[tokio::test]
     async fn the_earlier_seasons_are_the_sum_of_their_linked_counts_and_a_split_cour_adds_up() {
-        let place = place(&[(1, &["01"]), (2, &["01"]), (3, &[])]).await;
+        let place = Place::new(&[(1, &["01"]), (2, &["01"]), (3, &[])]).await;
         place.link(1, &[Some(12)]).await;
         // Two cours linked to one local season.
         place.link(2, &[Some(12), Some(13)]).await;
@@ -1192,7 +1102,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_season_with_videos_says_which_episodes_it_holds() {
-        let place = place(&[(1, &["01"]), (2, &["01", "02", "04"])]).await;
+        let place = Place::new(&[(1, &["01"]), (2, &["01", "02", "04"])]).await;
         place.link(1, &[Some(12)]).await;
 
         let basis = place.basis(&rule("Show/Season 02", None)).await.unwrap();
@@ -1203,7 +1113,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_earlier_season_that_cannot_be_counted_makes_the_sum_unknown() {
-        let place = place(&[(1, &["01"]), (2, &["01"]), (4, &[])]).await;
+        let place = Place::new(&[(1, &["01"]), (2, &["01"]), (4, &[])]).await;
         let at = |season: u32| rule(&format!("Show/Season {season:02}"), None);
 
         // Season 1 has no AniList entry yet.
@@ -1224,7 +1134,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_first_season_has_nothing_before_it_and_a_stranger_has_no_work() {
-        let place = place(&[(1, &["01"])]).await;
+        let place = Place::new(&[(1, &["01"])]).await;
 
         let first = place.basis(&rule("Show/Season 01", None)).await.unwrap();
         assert_eq!((first.previous, first.held), (Previous::Known(0), vec![1]));
@@ -1240,7 +1150,7 @@ mod tests {
     #[tokio::test]
     async fn a_work_the_collect_folder_lacks_is_looked_for_in_the_archive_folder() {
         // The library holds `Show` under `/shows`, the archive folder here.
-        let place = place(&[(1, &["01"]), (2, &[])]).await;
+        let place = Place::new(&[(1, &["01"]), (2, &[])]).await;
         place.link(1, &[Some(12)]).await;
         let sequel = rule("Show/Season 02", None);
 
@@ -1268,7 +1178,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_connected_season_is_the_place_not_the_folders_name() {
-        let place = place(&[(1, &["01"]), (2, &[])]).await;
+        let place = Place::new(&[(1, &["01"]), (2, &[])]).await;
         place.link(1, &[Some(12)]).await;
         let connected = rule("Elsewhere/Season 09", Some(&format!("{}:2", place.work)));
 
@@ -1279,7 +1189,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_folder_that_trname_cannot_read_or_the_specials_have_no_place() {
-        let place = place(&[(0, &["01"]), (1, &[])]).await;
+        let place = Place::new(&[(0, &["01"]), (1, &[])]).await;
         for directory in [
             "Show",
             "Show/Specials",

@@ -13,7 +13,7 @@
 //! hashes and contents are made up.
 
 use std::{
-    collections::HashSet,
+    collections::{BTreeSet, HashSet},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicI64, Ordering},
@@ -24,6 +24,8 @@ use std::{
 
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
+use trss_anilist::{Entry, FuzzyDate};
+use trss_anissia::Anime;
 use trss_core::{
     commands::{Accepted, Command, CommandStore, NewCommand},
     folder_locks::FolderLocks,
@@ -31,6 +33,7 @@ use trss_core::{
     Db, Millis,
 };
 use trss_library::{
+    discovery::{EpisodeFile, FileKind, Scan, ScannedWork, WorkRead},
     live::LiveWatch,
     store::{library::LibraryStore, seasons::SeasonStore},
 };
@@ -43,12 +46,13 @@ use crate::{
     },
     context::{CollectContext, TransmissionLink},
     cycle::{self, JobOutcome},
+    episode_offset::{gather, Basis},
     fake::FeedServer,
     feed,
     revisions::{self, Listing},
     season_link,
     store::{
-        channels::{ChannelInput, ChannelStore, RuleInput},
+        channels::{ChannelInput, ChannelStore, NewSubscription, Rule, RuleInput, SubtitleMode},
         history::{HistoryItem, HistoryQuery, HistoryStore, MAX_PAGE_SIZE},
         revisions::{Revision, RevisionStore},
     },
@@ -105,6 +109,21 @@ impl World {
 
     /// A world whose rule matches titles containing `text`.
     pub async fn with_match(text: &str) -> World {
+        World::with_rules(vec![RuleInput {
+            r#match: Some(text.to_owned()),
+            directory: "Show/Season 01".to_owned(),
+            ..Default::default()
+        }])
+        .await
+    }
+
+    /// A world whose channel has no rule: a test adds the rules it needs,
+    /// such as [`World::subscribe`].
+    pub async fn bare() -> World {
+        World::with_rules(Vec::new()).await
+    }
+
+    async fn with_rules(rules: Vec<RuleInput>) -> World {
         let dir = tempfile::tempdir().unwrap();
         let db = Db::open(dir.path().join("app.db")).await.unwrap();
         let tr = FakeTransmission::start().await;
@@ -121,14 +140,7 @@ impl World {
         let channels = ChannelStore::new(db.clone());
         let url = format!("{}?token={SECRET}", feeds.url("show"));
         let channel = channels
-            .create_channel_with_rules(
-                ChannelInput::new(url),
-                vec![RuleInput {
-                    r#match: Some(text.to_owned()),
-                    directory: "Show/Season 01".to_owned(),
-                    ..Default::default()
-                }],
-            )
+            .create_channel_with_rules(ChannelInput::new(url), rules)
             .await
             .unwrap();
         let library = LibraryStore::new(db.clone());
@@ -238,14 +250,16 @@ impl World {
     /// the items judged, the revisions' items left to their replacements, the
     /// selected items added and named, the replacements carried on, and the
     /// torrents of items that left the feeds removed, in the order of the
-    /// worker's `run_cycle`. Its session settings, status board records,
-    /// episode offsets and the gate it shares with the commands are not part
-    /// of it.
+    /// worker's `run_cycle`; a new season's rule gets its episode offset
+    /// ([`cycle::settle_offsets`]) before its first item is added. Its session
+    /// settings, status board records and the gate it shares with the
+    /// commands are not part of it.
     pub async fn cycle(&self) {
         let at = self.now();
         let ctx = &self.ctx;
         let cancel = CancellationToken::new();
         let snapshot = ctx.channels.list_channels_with_rules().await.unwrap();
+        let open_rules = cycle::open_rules(&snapshot);
         let plans = cycle::make_plans(ctx, snapshot, &self.media).await;
         let mut redactor = ctx.redactor.clone();
         for plan in &plans {
@@ -267,7 +281,8 @@ impl World {
                 Err(_) => unread.push(plan.channel.id.clone()),
             }
         }
-        let (jobs, _) = cycle::leave_revisions(ctx, jobs, at).await;
+        let (mut jobs, _) = cycle::leave_revisions(ctx, jobs, at).await;
+        cycle::settle_offsets(ctx, self.media.to_str().unwrap(), &open_rules, &mut jobs).await;
 
         let listing = Arc::new(Listing::new());
         let mut kept = HashSet::new();
@@ -294,6 +309,80 @@ impl World {
         if removable {
             cycle::remove_departed(ctx, kept, present, unread, &redactor).await;
         }
+    }
+
+    // --- a subscription to a new season ------------------------------------------------
+
+    /// A subscription of the channel to the anime `anime_no`, matching titles
+    /// that contain `phrase`, saving into `directory` with the offset
+    /// `episode` in its field. The channel's feed is read by a cycle after
+    /// [`World::feed_after_other`] has given it something else to hold.
+    pub async fn subscribe(
+        &self,
+        phrase: &str,
+        directory: &str,
+        anime_no: i64,
+        episode: i64,
+    ) -> Rule {
+        self.ctx
+            .channels
+            .create_subscription_rule(
+                &self.channel_id,
+                RuleInput {
+                    r#match: Some(phrase.to_owned()),
+                    directory: directory.to_owned(),
+                    episode,
+                    ..Default::default()
+                },
+                NewSubscription {
+                    anime: Anime {
+                        anime_no,
+                        subject: phrase.to_owned(),
+                        original_subject: None,
+                        week: 4,
+                        air_time: Some("23:00".to_owned()),
+                        start_date: Some("2026-10-08".to_owned()),
+                        end_date: None,
+                        status: "ON".to_owned(),
+                        fetched_at: self.now(),
+                    },
+                    subtitles: SubtitleMode::Undecided,
+                    creator: None,
+                    subscribed_at: self.now(),
+                },
+            )
+            .await
+            .unwrap()
+    }
+
+    /// The `show` feed holds `items` after a release of another work: a
+    /// channel read once holds something already, so that what comes later is
+    /// not what the feed held at the first read.
+    pub fn feed_after_other(&self, items: &[(&str, &str)]) {
+        let other = (OTHER_HASH, OTHER_TITLE);
+        let all: Vec<(&str, &str)> = std::iter::once(other)
+            .chain(items.iter().copied())
+            .collect();
+        self.feed(&all);
+    }
+
+    /// The library of the collect folder, holding `Show` with these seasons
+    /// and the videos named in each.
+    pub async fn library_of(&self, seasons: &[(u32, &[&str])]) -> Place {
+        Place::on(
+            self.ctx.library.clone(),
+            self.ctx.seasons.clone(),
+            self.media.to_str().unwrap(),
+            seasons,
+        )
+        .await
+    }
+
+    /// The names Transmission's torrents have now, sorted.
+    pub fn torrent_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.tr.torrents().into_iter().map(|t| t.name).collect();
+        names.sort();
+        names
     }
 
     // --- history and the replacements --------------------------------------------------
@@ -416,6 +505,124 @@ impl World {
             .calls_of("torrent-remove")
             .iter()
             .any(|c| c.args["ids"] == serde_json::json!([hash]))
+    }
+}
+
+/// The hash and title of a release of another work, which a channel read once
+/// holds already.
+pub(crate) const OTHER_HASH: &str = "9999000000000000000000000000000000000001";
+pub(crate) const OTHER_TITLE: &str = "[SubsPlease] Other - 01 (1080p) [ZZZZ0001].mkv";
+
+/// An AniList entry with this episode count.
+pub(crate) fn entry(id: i64, episodes: Option<u32>) -> Entry {
+    Entry {
+        id,
+        romaji: None,
+        english: None,
+        native: None,
+        format: None,
+        status: None,
+        episodes,
+        start: FuzzyDate::default(),
+        end: FuzzyDate::default(),
+        studios: Vec::new(),
+        genres: Vec::new(),
+        description: None,
+        airing: Vec::new(),
+        korean_titles: Vec::new(),
+        sequels: Vec::new(),
+        fetched_at: 1,
+    }
+}
+
+/// The library holding `Show` under a collect folder, with AniList entries
+/// linked to its seasons: what the episode offset reads of the earlier
+/// seasons ([`gather`]).
+pub(crate) struct Place {
+    pub library: LibraryStore,
+    pub seasons: SeasonStore,
+    pub work: String,
+    folder: String,
+}
+
+impl Place {
+    /// `Show` under `/shows`, in a database of its own, with the given
+    /// seasons, each with the videos named.
+    pub async fn new(seasons: &[(u32, &[&str])]) -> Place {
+        let db = Db::open_blocking(":memory:").unwrap();
+        Place::on(
+            LibraryStore::new(db.clone()),
+            SeasonStore::new(db),
+            "/shows",
+            seasons,
+        )
+        .await
+    }
+
+    /// `Show` under the collect folder `folder`, in these stores.
+    pub async fn on(
+        library: LibraryStore,
+        seasons: SeasonStore,
+        folder: &str,
+        held: &[(u32, &[&str])],
+    ) -> Place {
+        let files = held
+            .iter()
+            .flat_map(|(season, episodes)| {
+                episodes.iter().map(move |episode| EpisodeFile {
+                    path: format!("Season {season:02}/Show S{season:02}E{episode}.mkv"),
+                    kind: FileKind::Video,
+                    season: *season,
+                    episode: (*episode).to_owned(),
+                })
+            })
+            .collect();
+        let scan = Scan {
+            works: vec![WorkRead::Read(ScannedWork {
+                dir_name: "Show".into(),
+                seasons: held.iter().map(|(s, _)| *s).collect::<BTreeSet<_>>(),
+                files,
+                unrecognized: Vec::new(),
+            })],
+        };
+        let (added, _) = library
+            .add_folder(folder.to_owned(), scan, 100, &[])
+            .await
+            .unwrap();
+        let work = library.works(&added.id).await.unwrap().remove(0).id;
+        Place {
+            library,
+            seasons,
+            work,
+            folder: folder.to_owned(),
+        }
+    }
+
+    /// Links entries with these counts to the season.
+    pub async fn link(&self, season: u32, counts: &[Option<u32>]) {
+        let mut ids = Vec::new();
+        for (index, count) in counts.iter().enumerate() {
+            let id = i64::from(season) * 10 + index as i64;
+            self.seasons.put_entry(entry(id, *count)).await.unwrap();
+            ids.push(id);
+        }
+        let link = self.seasons.link(&self.work, season).await.unwrap();
+        self.seasons
+            .set_links(&self.work, season, link.version, ids)
+            .await
+            .unwrap();
+    }
+
+    pub async fn basis(&self, rule: &Rule) -> Option<Basis> {
+        gather(
+            &self.library,
+            &self.seasons,
+            &format!("{}/", self.folder),
+            None,
+            rule,
+        )
+        .await
+        .unwrap()
     }
 }
 

@@ -17,19 +17,21 @@ use trss_core::Db;
 struct App {
     state: AppState,
     router: Router,
+    db: Db,
 }
 
 impl App {
     /// An app whose collect folder is `/media`.
     async fn new() -> App {
-        let state = AppState::new(Db::open_blocking(":memory:").unwrap());
+        let db = Db::open_blocking(":memory:").unwrap();
+        let state = AppState::new(db.clone());
         state
             .settings
             .put_collection(0, "/media".to_owned(), None)
             .await
             .unwrap();
         let router = Router::new().nest("/api", crate::api::router().with_state(state.clone()));
-        App { state, router }
+        App { state, router, db }
     }
 
     async fn call(
@@ -2014,4 +2016,494 @@ async fn the_edit_form_asks_whether_the_changed_folder_moves_a_work_over() {
     let (_, _, told) = ask("directory=Clevatess%2FSeason%2004&from=Other%2FSeason%2001").await;
     assert_eq!(told["archived"]["work"], "Clevatess");
     drop(tmp);
+}
+
+// --- the episode offset in the rule detail (ticket 0024) ------------------------
+//
+// What the cycle decides is tested in `trss-collect`'s `offsets`; here are the
+// rule detail's grounds and suggestions read from the stores, and `적용`.
+
+mod episode_offset {
+    use std::collections::BTreeSet;
+
+    use super::*;
+    use trss_anilist::{Entry, FuzzyDate};
+    use trss_anissia::Anime;
+    use trss_collect::store::channels::{NewSubscription, Rule, SubtitleMode};
+    use trss_library::discovery::{EpisodeFile, FileKind, Scan, ScannedWork, WorkRead};
+
+    fn entry(id: i64, episodes: Option<u32>) -> Entry {
+        Entry {
+            id,
+            romaji: None,
+            english: None,
+            native: None,
+            format: None,
+            status: None,
+            episodes,
+            start: FuzzyDate::default(),
+            end: FuzzyDate::default(),
+            studios: Vec::new(),
+            genres: Vec::new(),
+            description: None,
+            airing: Vec::new(),
+            korean_titles: Vec::new(),
+            sequels: Vec::new(),
+            fetched_at: 1,
+        }
+    }
+
+    /// `Show` in the library of the collect folder `/media`, with these
+    /// seasons and the videos named in each; AniList entries with these
+    /// episode counts are linked to the seasons before the third.
+    async fn library(app: &App, seasons: &[(u32, &[&str])], counts: &[Option<u32>]) {
+        let files = seasons
+            .iter()
+            .flat_map(|(season, episodes)| {
+                episodes.iter().map(move |episode| EpisodeFile {
+                    path: format!("Season {season:02}/Show S{season:02}E{episode}.mkv"),
+                    kind: FileKind::Video,
+                    season: *season,
+                    episode: (*episode).to_owned(),
+                })
+            })
+            .collect();
+        let scan = Scan {
+            works: vec![WorkRead::Read(ScannedWork {
+                dir_name: "Show".into(),
+                seasons: seasons.iter().map(|(s, _)| *s).collect::<BTreeSet<_>>(),
+                files,
+                unrecognized: Vec::new(),
+            })],
+        };
+        let (folder, _) = app
+            .state
+            .library
+            .add_folder("/media".into(), scan, 100, &[])
+            .await
+            .unwrap();
+        let work = app
+            .state
+            .library
+            .works(&folder.id)
+            .await
+            .unwrap()
+            .remove(0)
+            .id;
+        for (index, count) in counts.iter().enumerate() {
+            let season = index as u32 + 1;
+            let id = 100 + i64::from(season);
+            app.state
+                .seasons
+                .store
+                .put_entry(entry(id, *count))
+                .await
+                .unwrap();
+            let link = app.state.seasons.store.link(&work, season).await.unwrap();
+            app.state
+                .seasons
+                .store
+                .set_links(&work, season, link.version, vec![id])
+                .await
+                .unwrap();
+        }
+    }
+
+    /// A subscription of the channel to the anime `no` saving into
+    /// `directory` with the offset `episode` in its field.
+    async fn subscription(
+        app: &App,
+        channel: &Channel,
+        no: i64,
+        directory: &str,
+        episode: i64,
+    ) -> Rule {
+        app.state
+            .channels
+            .create_subscription_rule(
+                &channel.id,
+                RuleInput {
+                    r#match: Some("Show".to_owned()),
+                    directory: directory.to_owned(),
+                    episode,
+                    ..RuleInput::default()
+                },
+                NewSubscription {
+                    anime: Anime {
+                        anime_no: no,
+                        subject: "Show".to_owned(),
+                        original_subject: None,
+                        week: 4,
+                        air_time: Some("23:00".to_owned()),
+                        start_date: Some("2026-10-08".to_owned()),
+                        end_date: None,
+                        status: "ON".to_owned(),
+                        fetched_at: 1,
+                    },
+                    subtitles: SubtitleMode::Undecided,
+                    creator: None,
+                    subscribed_at: 1,
+                },
+            )
+            .await
+            .unwrap()
+    }
+
+    async fn view(app: &App, rule: &Rule) -> Value {
+        let (status, text, view) = app
+            .call(Method::GET, &format!("/api/rules/{}", rule.id), None)
+            .await;
+        assert_eq!(status, StatusCode::OK, "{text}");
+        view
+    }
+
+    /// The rule picked `title` as its first item.
+    async fn picked(app: &App, channel: &Channel, rule: &Rule, title: &str) {
+        app.record_as(
+            channel,
+            2_000,
+            &[title],
+            HistoryResult::Received,
+            Some(&rule.id),
+        )
+        .await;
+    }
+
+    const BASIS: &str =
+        "AniList 기준 이전 시즌이 24화까지이고 첫 화가 25화라서 회차 변환을 −24로 정했어요.";
+
+    #[tokio::test]
+    async fn the_view_of_an_automatic_offset_says_its_grounds_and_what_it_replaced() {
+        let app = App::new().await;
+        let a = app.channel("a.test", &[], &[]).await;
+        let rule = subscription(&app, &a.channel, 7, "Show/Season 03", 1).await;
+        app.state
+            .channels
+            .set_auto_episode(&rule.id, rule.version, -24, BASIS)
+            .await
+            .unwrap()
+            .expect("the rule was at the version read");
+
+        let view = view(&app, &rule).await;
+
+        assert_eq!(view["episode"], -24);
+        assert_eq!(view["episode_auto"], true);
+        // A value that left numbers as they were is said so.
+        let basis = view["episode_basis"].as_str().unwrap();
+        assert!(basis.contains("24화") && basis.contains("25화"), "{basis}");
+        assert!(basis.ends_with("(전에는 변환 없음)."), "{basis}");
+        assert_eq!(view["episode_previous"], 1);
+        assert_eq!(view["episode_suggestion"], Value::Null);
+
+        // A value carried over from the previous season is said too.
+        let carried = subscription(&app, &a.channel, 8, "Show/Season 03", -24).await;
+        app.state
+            .channels
+            .set_auto_episode(&carried.id, carried.version, -48, BASIS)
+            .await
+            .unwrap()
+            .expect("the rule was at the version read");
+        let view = self::view(&app, &carried).await;
+        assert_eq!(view["episode_previous"], -24);
+        assert!(view["episode_basis"]
+            .as_str()
+            .unwrap()
+            .ends_with("(전에는 −24)."));
+    }
+
+    #[tokio::test]
+    async fn an_automatic_value_the_user_changes_loses_its_mark_and_its_grounds() {
+        let app = App::new().await;
+        let a = app.channel("a.test", &[], &[]).await;
+        let rule = subscription(&app, &a.channel, 7, "Show/Season 03", 1).await;
+        app.state
+            .channels
+            .set_auto_episode(&rule.id, rule.version, -24, BASIS)
+            .await
+            .unwrap()
+            .expect("the rule was at the version read");
+        let auto = view(&app, &rule).await;
+        let uri = format!("/api/rules/{}", rule.id);
+
+        // The rule detail saves the whole rule. Saving the value as it is
+        // keeps the mark and the grounds ...
+        let (status, _, kept) = app
+            .call(
+                Method::PUT,
+                &uri,
+                Some(rule_body(
+                    &a.channel,
+                    &auto,
+                    json!({ "directory": "Show/Season 03" }),
+                )),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{kept}");
+        assert_eq!(kept["episode_auto"], true);
+        assert_eq!(kept["episode_basis"], auto["episode_basis"]);
+
+        // ... and a changed value is the user's.
+        let (status, _, saved) = app
+            .call(
+                Method::PUT,
+                &uri,
+                Some(rule_body(&a.channel, &kept, json!({ "episode": -12 }))),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{saved}");
+        assert_eq!(saved["episode"], -12);
+        assert_eq!(saved["episode_auto"], false);
+        assert_eq!(saved["episode_basis"], Value::Null);
+        assert_eq!(saved["episode_previous"], Value::Null);
+    }
+
+    /// What the rule detail offers.
+    enum Offer {
+        Nothing,
+        /// A suggestion with this value (`None`: the grounds say none and the
+        /// user has to write it) and these pieces of its sentence.
+        Suggests(Option<i64>, &'static [&'static str]),
+    }
+
+    /// A rule that picked its first item is offered what the earlier seasons
+    /// give, or told why it is not (`{ value, basis }`), whatever its field
+    /// holds once the value differs from it.
+    #[tokio::test]
+    async fn a_rule_that_picked_its_first_item_is_offered_what_the_earlier_seasons_give() {
+        let both: &[(u32, &[&str])] = &[(1, &["01", "02"]), (2, &["01", "02"])];
+        let with_third: &[(u32, &[&str])] =
+            &[(1, &["01", "02"]), (2, &["01", "02"]), (3, &["01", "02"])];
+        // (name, library, counts of seasons 1 and 2, field, first release, offer)
+        let cases = [
+            (
+                "a_first_release_in_the_middle_of_a_season_is_suggested",
+                both,
+                [Some(12), Some(12)],
+                1,
+                27,
+                Offer::Suggests(Some(-24), &["27화", "24화"]),
+            ),
+            (
+                "earlier_seasons_without_a_known_count_are_never_guessed",
+                both,
+                [Some(12), None],
+                1,
+                25,
+                Offer::Suggests(None, &["시즌 2의 AniList 회차 수"]),
+            ),
+            (
+                "a_season_folder_that_has_videos_already_has_no_value_to_offer",
+                with_third,
+                [Some(12), Some(12)],
+                1,
+                25,
+                Offer::Suggests(None, &["1–2화"]),
+            ),
+            (
+                "numbers_run_on_from_the_season_before_are_offered",
+                both,
+                [Some(24), Some(24)],
+                0,
+                25,
+                Offer::Suggests(
+                    Some(-24),
+                    &["2기부터 이어 센 번호로 보여요. 회차 변환을 −24로 할까요?"],
+                ),
+            ),
+            // A value that differs from the field is offered whatever the
+            // field holds (user direction, 2026-10-02) ...
+            (
+                "a_rule_that_started_with_a_carried_over_value_is_offered_the_sum",
+                both,
+                [Some(12), Some(12)],
+                -12,
+                25,
+                Offer::Suggests(Some(-24), &["25화"]),
+            ),
+            // ... and a field that already holds it is offered nothing.
+            (
+                "a_rule_whose_field_already_holds_the_suggestion_is_offered_nothing",
+                both,
+                [Some(12), Some(12)],
+                -24,
+                25,
+                Offer::Nothing,
+            ),
+        ];
+        for (name, seasons, counts, field, first, offer) in cases {
+            let app = App::new().await;
+            library(&app, seasons, &counts).await;
+            let a = app.channel("a.test", &[], &[]).await;
+            let rule = subscription(&app, &a.channel, 7, "Show/Season 03", field).await;
+            let title = format!("[SubsPlease] Show - {first:02} (1080p)");
+            picked(&app, &a.channel, &rule, &title).await;
+
+            let view = view(&app, &rule).await;
+
+            assert_eq!(view["episode_basis"], Value::Null, "{name}");
+            assert_eq!(view["episode"], field, "{name}");
+            match offer {
+                Offer::Nothing => assert_eq!(view["episode_suggestion"], Value::Null, "{name}"),
+                Offer::Suggests(value, grounds) => {
+                    assert_eq!(view["episode_suggestion"]["value"], json!(value), "{name}");
+                    let basis = view["episode_suggestion"]["basis"].as_str().unwrap();
+                    for piece in grounds {
+                        assert!(basis.contains(piece), "{name}: {basis}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_suggestion_is_applied_as_the_users_own_value() {
+        let app = App::new().await;
+        library(
+            &app,
+            &[(1, &["01", "02"]), (2, &["01", "02"])],
+            &[Some(12), Some(12)],
+        )
+        .await;
+        let a = app.channel("a.test", &[], &[]).await;
+        let rule = subscription(&app, &a.channel, 7, "Show/Season 03", 1).await;
+        picked(&app, &a.channel, &rule, "[SubsPlease] Show - 27 (1080p)").await;
+        let offered = view(&app, &rule).await;
+        assert_eq!(offered["episode_suggestion"]["value"], -24);
+        let uri = format!("/api/rules/{}/episode", rule.id);
+
+        // `적용` saves the value as the user's own.
+        let (status, text, applied) = app
+            .call(
+                Method::PUT,
+                &uri,
+                Some(json!({ "version": offered["version"], "episode": -24 })),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{text}");
+        assert_eq!(applied["episode"], -24);
+        assert_eq!(applied["episode_auto"], false);
+        assert_eq!(applied["episode_suggestion"], Value::Null);
+
+        // A stale version is a conflict that carries the current rule.
+        let (status, text, conflict) = app
+            .call(
+                Method::PUT,
+                &uri,
+                Some(json!({ "version": offered["version"], "episode": -12 })),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{text}");
+        assert_eq!(conflict["current"]["episode"], -24);
+    }
+
+    #[tokio::test]
+    async fn a_suggestion_that_cannot_be_read_leaves_the_rule_list_answering() {
+        let app = App::new().await;
+        library(
+            &app,
+            &[(1, &["01", "02"]), (2, &["01", "02"])],
+            &[Some(12), Some(12)],
+        )
+        .await;
+        let a = app.channel("a.test", &[], &[]).await;
+        let rule = subscription(&app, &a.channel, 7, "Show/Season 03", 1).await;
+        picked(&app, &a.channel, &rule, "[SubsPlease] Show - 27 (1080p)").await;
+        assert_eq!(view(&app, &rule).await["episode_suggestion"]["value"], -24);
+
+        // The AniList counts the suggestion needs cannot be read any more.
+        app.db
+            .run(|c| {
+                c.execute_batch("ALTER TABLE season_info RENAME TO season_info_gone")
+                    .map_err(trss_core::db::DbError::from)
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(view(&app, &rule).await["episode_suggestion"], Value::Null);
+        let (status, text, _) = app
+            .call(
+                Method::GET,
+                &format!("/api/channels/{}", a.channel.id),
+                None,
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{text}");
+    }
+
+    /// The names a preview gives the items its rule may receive, sorted.
+    fn received_names(preview: &Value) -> Vec<String> {
+        let mut names: Vec<String> = preview["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|i| i["episode_name"].as_str().map(str::to_owned))
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// A season that ended before it is subscribed brings no new release, so
+    /// the earliest of its past items decides what is offered, before any is
+    /// received and named.
+    #[tokio::test]
+    async fn a_season_that_ended_is_offered_its_offset_before_its_first_past_item_is_received() {
+        let app = App::new().await;
+        library(
+            &app,
+            &[(1, &["01", "02"]), (2, &["01", "02"])],
+            &[Some(12), Some(12)],
+        )
+        .await;
+        let a = app.channel("a.test", &[], &[]).await;
+        app.record(
+            &a.channel,
+            1_000,
+            &[
+                "[SubsPlease] Show - 49 (1080p)",
+                "[SubsPlease] Show - 48 (1080p)",
+            ],
+        )
+        .await;
+        let draft = |episode: i64| {
+            json!({
+                "channel_id": a.channel.id,
+                "subscribing": true,
+                "rule": { "match": "Show", "directory": "Show/Season 03", "episode": episode },
+            })
+        };
+
+        // The subscription about to be made: each item says its name, and the
+        // offset the earliest one gives is offered.
+        let preview = app.preview(draft(1)).await;
+        assert_eq!(received_names(&preview), ["S03E48", "S03E49"]);
+        assert_eq!(preview["episode_suggestion"]["value"], -24);
+        let basis = preview["episode_suggestion"]["basis"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(
+            basis.contains("고를 수 있는 지난 회차 중 가장 앞선 릴리스가 48화")
+                && basis.contains("시즌 24화"),
+            "{basis}"
+        );
+        // Applied, the names follow and nothing is offered any more.
+        let applied = app.preview(draft(-24)).await;
+        assert_eq!(received_names(&applied), ["S03E24", "S03E25"]);
+        assert!(applied.get("episode_suggestion").is_none(), "{applied}");
+
+        // Subscribed without it, the rule detail offers the same before
+        // anything is received, and its preview names the past items.
+        let rule = subscription(&app, &a.channel, 7, "Show/Season 03", 1).await;
+        let view = view(&app, &rule).await;
+        assert_eq!(view["episode_suggestion"]["value"], -24);
+        assert_eq!(view["episode_suggestion"]["basis"], basis);
+        let preview = app
+            .preview(json!({
+                "channel_id": a.channel.id,
+                "rule_id": rule.id,
+                "rule": { "match": "Show", "directory": "Show/Season 03", "episode": 1 },
+            }))
+            .await;
+        assert_eq!(received_names(&preview), ["S03E48", "S03E49"]);
+    }
 }

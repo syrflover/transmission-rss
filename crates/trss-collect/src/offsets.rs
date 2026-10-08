@@ -223,3 +223,6 @@ fn same_choice(now: &Rule, read: &Rule) -> bool {
         && now.case_insensitive == read.case_insensitive
         && now.directory == read.directory
 }
+
+#[cfg(test)]
+mod tests;
