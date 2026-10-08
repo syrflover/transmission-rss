@@ -11,7 +11,10 @@
 #   version   the revision, 1 for a name without one
 #   known     the readings that differ today, comma-separated: work, episode, version
 #             (trss-collect), trname (the episode in the name the worker gives a video file
-#             of the name: trss-collect's rule for what trname reads, then trname)
+#             of the name: trss-collect's rule for what trname reads, then trname),
+#             predicted (the episode past-search judging and the episode-offset preview predict for
+#             a video file, which is not the episode in the name the worker gives it; checked
+#             for every video line, "no episode" on both sides counting as equal)
 #
 # A reading that is fixed fails the test until its mark is removed here.
 [Magnet] Ao Ashi Season 2 - 01 [1080p CR WEB-DL AVC AAC][us][br][mx][es][sa][fr][de][it][ru][pl][Airing]	history	Ao Ashi Season 2	1	1	

@@ -12,8 +12,11 @@
 
 use std::{collections::BTreeSet, path::PathBuf};
 
+use trss_core::trname_names::season_episode;
+
 use crate::{
     commands::receive_once::derived_name,
+    episode_offset::folder_episode,
     release_name::{Kind, ReleaseName},
 };
 
@@ -56,6 +59,30 @@ fn written_episode(text: &str) -> String {
     }
 }
 
+/// The episode in the name the worker gives the video file `name` when a rule
+/// saves it under the first season of the work folder `work`, with no
+/// conversion: [`derived_name`], read back from the name `trname` wrote.
+fn worker_episode(name: &str, work: &str) -> Option<String> {
+    let title = if work == "-" { "Work" } else { work };
+    let folder = PathBuf::from("/media")
+        .join(title.replace('/', " "))
+        .join("Season 01");
+    let named = derived_name(&folder, name, 0)?;
+    let (_, episode) = season_episode(&named)?;
+    Some(written_episode(&episode))
+}
+
+/// The episode past-search judging and the episode-offset preview predict for a
+/// release `name` received with no offset: this crate's reading of the name
+/// through the conversion they share. `None` for a name with no episode or a
+/// batch.
+fn predicted_episode(name: &str) -> Option<String> {
+    match ReleaseName::read(name).kind {
+        Kind::Episode(episode) => Some(folder_episode(episode, 0).text()),
+        Kind::Batch { .. } | Kind::Unnumbered => None,
+    }
+}
+
 fn reading(name: &str) -> Reading {
     let read = ReleaseName::read(name);
     let episode = match read.kind {
@@ -67,19 +94,8 @@ fn reading(name: &str) -> Reading {
         Kind::Unnumbered => "-".to_owned(),
     };
     let work = read.work.clone().unwrap_or_else(|| "-".to_owned());
-    let trname = is_video_file(name).then(|| {
-        // The rule's folder for the work, its first season, no conversion.
-        let title = if work == "-" { "Work" } else { &work };
-        let folder = PathBuf::from("/media")
-            .join(title.replace('/', " "))
-            .join("Season 01");
-        derived_name(&folder, name, 0)
-            .and_then(|named| {
-                let rest = named.rsplit_once(" S01E")?.1;
-                Some(written_episode(rest.rsplit_once('.')?.0))
-            })
-            .unwrap_or_else(|| "-".to_owned())
-    });
+    let trname =
+        is_video_file(name).then(|| worker_episode(name, &work).unwrap_or_else(|| "-".to_owned()));
     Reading {
         work,
         episode,
@@ -157,6 +173,35 @@ fn every_release_name_reads_as_it_means_but_the_known_failures() {
         "{} of {} names read otherwise than the file says:\n{}",
         wrong.len(),
         lines.len(),
+        wrong.join("\n")
+    );
+}
+
+/// What a rule's preview and past-search judging predict for a video file is
+/// the episode in the name the worker gives it, "no episode" on both sides
+/// counting as equal. A line marked `predicted` is a difference known today.
+#[test]
+fn the_predicted_episode_is_the_one_in_the_name_the_worker_gives() {
+    let mut wrong = Vec::new();
+    let mut checked = 0;
+    for line in lines().iter().filter(|line| is_video_file(line.name)) {
+        checked += 1;
+        let work = reading(line.name).work;
+        let predicted = predicted_episode(line.name);
+        let given = worker_episode(line.name, &work);
+        if line.known.contains("predicted") == (predicted == given) {
+            wrong.push(format!(
+                "{}\n  predicted {predicted:?}, the worker gives {given:?}, known: {}",
+                line.name,
+                line.known.contains("predicted")
+            ));
+        }
+    }
+    assert!(checked >= 100, "{checked} video names");
+    assert!(
+        wrong.is_empty(),
+        "{} of {checked} video names are predicted otherwise than the worker names them:\n{}",
+        wrong.len(),
         wrong.join("\n")
     );
 }
