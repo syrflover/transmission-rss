@@ -1,7 +1,7 @@
 # 0079 배포하기 전에 테스트를 musl 대상으로도 돌려요
 
 - 상태: 완료 (2026-10-07)
-- 출처: [테스트 나눔 ADR](../adr/0015-test-a-rule-once-in-its-crate.md), [검증 근거와 완료 판정](../specs/web-app.md#검증-근거와-완료-판정)
+- 출처: [테스트 나눔 ADR](../../../adr/0015-test-a-rule-once-in-its-crate.md), [검증 근거와 완료 판정](../../../specs/web-app.md#검증-근거와-완료-판정)
 - 막는 티켓: 없음
 
 ## 작업
@@ -28,7 +28,7 @@ ADR 0015에 따라, 배포하기 전에 workspace 테스트를 musl 대상으로
 - `dev/musl-test.sh`가 이미지 빌드와 같은 `clux/muslrust:stable` 컨테이너에서 `cargo test --locked --workspace -j 4`를 돌려요. 뒤에 준 인자는 `cargo test`로 가요.
   - 호출한 사용자로 돌려요. root는 쓰기가 거절되지 않아서, 거절을 기대하는 테스트가 root에서는 다르게 돌 수 있어요.
   - 빌드는 이 checkout의 `target/musl`에 하고, 개발 PC의 cargo registry와 git checkout(`~/.cargo`)을 마운트해 다시 받지 않아요. 개발 PC의 cargo 설정은 읽지 않고, 프로젝트의 `.cargo/config.toml`(SQLite 빌드 옵션)은 읽어요.
-- readme의 개발 환경 절에 [Releasing](../../readme.md#releasing)을 더했어요. 태그를 올리기 전에 이 명령을 돌리는 것이 릴리스 절차의 한 단계예요.
+- readme의 개발 환경 절에 [Releasing](../../../../readme.md#releasing)을 더했어요. 태그를 올리기 전에 이 명령을 돌리는 것이 릴리스 절차의 한 단계예요.
 
 ### 검증한 것
 

@@ -1,12 +1,12 @@
 # 0117 되풀이해 쓰는 SQL 문을 캐시해요
 
 - 상태: 대기
-- 출처: [SQL 문 캐시](refactoring.md#sql-문-캐시), [0116](0116-allocator-measurement.md)의 측정
+- 출처: [SQL 문 캐시](refactoring.md#sql-문-캐시), [0116](../archive/tickets/5-deployed-verification/0116-allocator-measurement.md)의 측정
 - 막는 티켓: [0092](0092-refactor-baseline.md)(기준값)
 
 ## 작업
 
-2026-10-07 [0116](0116-allocator-measurement.md)의 측정에서, 운영 한도로 띄운 trss-web의 user CPU 표본 중 8–10%가 SQL을 해석하는 함수(`sqlite3RunParser`, `yy_reduce`, `sqlite3GetToken`, `keywordCode`)였어요.
+2026-10-07 [0116](../archive/tickets/5-deployed-verification/0116-allocator-measurement.md)의 측정에서, 운영 한도로 띄운 trss-web의 user CPU 표본 중 8–10%가 SQL을 해석하는 함수(`sqlite3RunParser`, `yy_reduce`, `sqlite3GetToken`, `keywordCode`)였어요.
 같은 날 `tests/` 폴더와 `_tests.rs` 파일을 빼고 `prepare`를 부르는 곳이 175곳이었고, `prepare_cached`를 쓰는 곳은 없었어요.
 프로세스마다 SQLite 연결이 하나이고 `Mutex` 뒤에 있으므로(trss-core의 `db.rs`), 그 연결의 문 캐시가 모든 요청에 쓰여요.
 

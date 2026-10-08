@@ -1,7 +1,7 @@
 # 0090 실제 릴리스 이름 묶음을 만들어요
 
 - 상태: 완료 (2026-10-07)
-- 출처: [테스트 나눔 ADR](../adr/0015-test-a-rule-once-in-its-crate.md), [영상 회차 변환](../specs/collection.md#영상-회차-변환), [영상 수정본의 대체](../specs/collection.md#영상-수정본의-대체)
+- 출처: [테스트 나눔 ADR](../../../adr/0015-test-a-rule-once-in-its-crate.md), [영상 회차 변환](../../../specs/collection.md#영상-회차-변환), [영상 수정본의 대체](../../../specs/collection.md#영상-수정본의-대체)
 - 막는 티켓: [0080](0080-server-db-migration-check.md)(서버 DB 복사본)
 
 ## 작업
@@ -88,4 +88,4 @@ trss-collect의 읽기에서 출발해서, 이름을 보고 틀렸다고 판단�
 ### 남은 일
 
 - trname의 세 종류는 [0091](0091-trname-long-and-half-episodes.md)에서 고쳐요.
-- trss-collect의 종류는 맡은 티켓이 없어요. [0098](0098-release-name-reading.md)은 읽기를 동작 그대로 모으는 일이에요. 이 중 Erai-raws의 `(V2)`는 사용자가 쓰는 채널에서 나왔어요. 규칙에 맞는 작품의 `(V2)` 항목은 수정본으로 읽히지 않아서, [영상 수정본의 대체](../specs/collection.md#영상-수정본의-대체)의 판정(이름에 CRC가 없는 수정본은 `버전 미상`)을 거치지 않아요. 수집 이력의 그 항목은 규칙에 맞지 않았어요(`no_match`).
+- trss-collect의 종류는 맡은 티켓이 없어요. [0098](../../../tickets/0098-release-name-reading.md)은 읽기를 동작 그대로 모으는 일이에요. 이 중 Erai-raws의 `(V2)`는 사용자가 쓰는 채널에서 나왔어요. 규칙에 맞는 작품의 `(V2)` 항목은 수정본으로 읽히지 않아서, [영상 수정본의 대체](../../../specs/collection.md#영상-수정본의-대체)의 판정(이름에 CRC가 없는 수정본은 `버전 미상`)을 거치지 않아요. 수집 이력의 그 항목은 규칙에 맞지 않았어요(`no_match`).

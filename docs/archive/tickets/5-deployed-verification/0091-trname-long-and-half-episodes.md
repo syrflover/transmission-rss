@@ -1,7 +1,7 @@
 # 0091 trname이 세 자리 회차와 .5 회차를 맞게 읽어요
 
 - 상태: 완료 (2026-10-07)
-- 출처: [영상 회차 변환](../specs/collection.md#영상-회차-변환), [0090](0090-release-name-corpus.md)
+- 출처: [영상 회차 변환](../../../specs/collection.md#영상-회차-변환), [0090](0090-release-name-corpus.md)
 - 막는 티켓: [0090](0090-release-name-corpus.md)(실제 릴리스 이름 묶음)
 
 ## 작업
@@ -51,5 +51,5 @@ SubsPlease와 Moozzi2의 규칙은 회차를 두 자리까지만 읽어요. 어�
 
 ### 남은 일
 
-- 번호 없는 영상 이름(극장판, BD)에서 해상도나 CRC의 숫자를 회차로 읽는 것(묶음의 공개 피드 6개)은 고치지 않았어요. trname의 마지막 규칙은 이름 안의 아무 숫자나 회차로 잡아서, CLI로 손수 이름을 바꾸는 자막(`nogame01.ass`, `프리렌 1.ass`)을 읽어요. 괄호 안의 숫자를 빼면 `Show [01].ass`처럼 괄호 안에만 회차가 있는 이름을 못 읽게 돼요. 그래서 trss 쪽에서, trss-collect가 회차 없음이나 묶음으로 읽는 이름은 trname으로 바꾸지 않기로 하고 [0098](0098-release-name-reading.md)에서 해요(사용자 결정, 2026-10-07).
+- 번호 없는 영상 이름(극장판, BD)에서 해상도나 CRC의 숫자를 회차로 읽는 것(묶음의 공개 피드 6개)은 고치지 않았어요. trname의 마지막 규칙은 이름 안의 아무 숫자나 회차로 잡아서, CLI로 손수 이름을 바꾸는 자막(`nogame01.ass`, `프리렌 1.ass`)을 읽어요. 괄호 안의 숫자를 빼면 `Show [01].ass`처럼 괄호 안에만 회차가 있는 이름을 못 읽게 돼요. 그래서 trss 쪽에서, trss-collect가 회차 없음이나 묶음으로 읽는 이름은 trname으로 바꾸지 않기로 하고 [0098](../../../tickets/0098-release-name-reading.md)에서 해요(사용자 결정, 2026-10-07).
 - 제목 안의 숫자(`Detective Conan - The Counterfeit Case of Ultra 30`)는 이름만으로 극장판인지 알 수 없어서 알려진 실패로 남겨요.

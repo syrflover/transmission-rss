@@ -1,8 +1,8 @@
 # 0081 실제 서버를 새 릴리스로 올리고 1000:1000으로 바꿔요
 
 - 상태: 완료 (2026-10-07)
-- 출처: [구현 경계와 실행 순서](../specs/web-app.md#구현-경계와-실행-순서), [실제 재생 환경](../specs/subtitles.md#실제-재생-환경), [0062](0062-run-as-media-user.md)의 남은 일
-- 막는 티켓: [0079](0079-musl-test-run.md)(musl 테스트), [0080](0080-server-db-migration-check.md)(마이그레이션), [0086](0086-feed-redirect-referer.md)–[0089](0089-package-season-reason.md)와 [0091](0091-trname-long-and-half-episodes.md)(배포 전에 고칠 결함), [0116](0116-allocator-measurement.md)(메모리 할당기), [0060](0060-server-filesystem-probe.md)(서버 미디어 디스크의 파일 쓰기)
+- 출처: [구현 경계와 실행 순서](../../../specs/web-app.md#구현-경계와-실행-순서), [실제 재생 환경](../../../specs/subtitles.md#실제-재생-환경), [0062](../../../tickets/0062-run-as-media-user.md)의 남은 일
+- 막는 티켓: [0079](0079-musl-test-run.md)(musl 테스트), [0080](0080-server-db-migration-check.md)(마이그레이션), [0086](0086-feed-redirect-referer.md)–[0089](0089-package-season-reason.md)와 [0091](0091-trname-long-and-half-episodes.md)(배포 전에 고칠 결함), [0116](0116-allocator-measurement.md)(메모리 할당기), [0060](../../../tickets/0060-server-filesystem-probe.md)(서버 미디어 디스크의 파일 쓰기)
 
 ## 작업
 
@@ -10,12 +10,12 @@
 지금 코드를 새 릴리스로 올리고, readme의 절차대로 실행 사용자를 1000:1000으로 바꿔요.
 이 배포에서 확인한 동작이 뒤의 리팩터링이 동작을 바꾸지 않았는지 견줄 기준선이 돼요.
 
-- 0060의 탐침은 이 배포가 미디어 디스크에 쓰기 전에 그 디스크의 파일 동작을 확인하므로 막는 티켓이에요. [0065](0065-archive-extraction.md)의 압축 해제 측정과 [0061](0061-infuse-placement-check.md)의 Infuse 확인은 막지 않아요. 다만 0061에서 Infuse가 `.trss/` 안의 자막을 보여주면 배치를 다시 정해야 하므로, 그 결과가 먼저 나오면 이 배포 전에 반영해요.
-- 릴리스 태그를 올리면 [배포 workflow](../../.github/workflows/deploy.yml)가 앱 이미지와 브라우저 이미지를 게시해요. 태그와 게시는 원격 쓰기라서, 버전 번호와 함께 사용자가 승인한 때만 해요.
+- 0060의 탐침은 이 배포가 미디어 디스크에 쓰기 전에 그 디스크의 파일 동작을 확인하므로 막는 티켓이에요. [0065](../../../tickets/0065-archive-extraction.md)의 압축 해제 측정과 [0061](../../../tickets/0061-infuse-placement-check.md)의 Infuse 확인은 막지 않아요. 다만 0061에서 Infuse가 `.trss/` 안의 자막을 보여주면 배치를 다시 정해야 하므로, 그 결과가 먼저 나오면 이 배포 전에 반영해요.
+- 릴리스 태그를 올리면 [배포 workflow](../../../../.github/workflows/deploy.yml)가 앱 이미지와 브라우저 이미지를 게시해요. 태그와 게시는 원격 쓰기라서, 버전 번호와 함께 사용자가 승인한 때만 해요.
 - 서버 작업은 사용자가 실행하고, 명령과 확인할 출력은 이쪽에서 드려요. 서버 명령은 서버 터미널에서 실행한다고 명령 위에 적어요.
 - 서버의 Docker Engine이 28 이상이고 Compose가 2.33 이상인지 먼저 봐요. 웹의 기본 경로를 정하는 `gw_priority`가 그 버전부터 있어요.
-- 전환 순서는 readme의 [Running as 1000:1000](../../readme.md#running-as-10001000)이에요. 새로 생기는 설정(`TRSS_BROWSER_TOKEN`, `TRSS_WEB_HOST_IP`)과 `browser-downloads` 폴더를 먼저 준비해요.
-- [0009](../archive/tickets/1-app-owned-collection/0009-deploy-web-worker.md)처럼, 전환 전에 Transmission의 토렌트 목록을 저장해 두고 전환 뒤와 견줘요.
+- 전환 순서는 readme의 [Running as 1000:1000](../../../../readme.md#running-as-10001000)이에요. 새로 생기는 설정(`TRSS_BROWSER_TOKEN`, `TRSS_WEB_HOST_IP`)과 `browser-downloads` 폴더를 먼저 준비해요.
+- [0009](../1-app-owned-collection/0009-deploy-web-worker.md)처럼, 전환 전에 Transmission의 토렌트 목록을 저장해 두고 전환 뒤와 견줘요.
 - 이 배포에서 알게 된 것은 readme의 운영 안내에 고쳐 넣어요.
 
 ## 완료 기준
@@ -43,7 +43,7 @@
 | 확인 | 결과 |
 | --- | --- |
 | 사용자 | uid 1000 |
-| Docker | Engine 29.8.1([0060](0060-server-filesystem-probe.md)), Compose v5.5.1. `gw_priority`가 필요로 하는 Engine 28·Compose 2.33 이상이에요 |
+| Docker | Engine 29.8.1([0060](../../../tickets/0060-server-filesystem-probe.md)), Compose v5.5.1. `gw_priority`가 필요로 하는 Engine 28·Compose 2.33 이상이에요 |
 | 서버 저장소 | `4b37f5e`(0.5.0의 기록). 추적되지 않는 것은 `data/`와 0060의 탐침 파일뿐이라 fast-forward와 겹치지 않았어요 |
 | `.env` | `TRSS_BROWSER_TOKEN`과 `TRSS_WEB_HOST_IP`가 있어요. `TRSS_DATA_DIR`는 없어서 기본값 `./data`예요 |
 | 미디어 폴더 | 미디어 루트, `Shows`, `Shows (current)` 모두 1000:1000, `0775`예요 |
@@ -53,7 +53,7 @@
 
 ### 전환
 
-readme의 [Running as 1000:1000](../../readme.md#running-as-10001000)를 따랐지만 실제 순서는 아래였어요. readme는 이 순서로 고쳤어요.
+readme의 [Running as 1000:1000](../../../../readme.md#running-as-10001000)를 따랐지만 실제 순서는 아래였어요. readme는 이 순서로 고쳤어요.
 
 1. trss를 멈추고(`down`), 서버 저장소를 `git pull --ff-only`로 `78e8efd`까지 올렸어요. 이어서 Transmission의 토렌트 목록을 `deploy/torrent-list.py`로 저장했어요(2개). Transmission은 계속 돌았어요.
 2. 앱 데이터 폴더를 `sudo cp -a data ~/trss-data-before-0.6.0`으로 복사했어요. 이어서 테이블마다 행 수를 기록했어요(`user_version` 29). 행 수는 `chown` 전에 읽었어요. root로 DB를 읽으면 SQLite가 `-shm`을 root 소유로 만들 수 있는데, 뒤의 `chown -R`이 그 파일까지 옮겨요.
@@ -100,7 +100,7 @@ readme의 [Running as 1000:1000](../../readme.md#running-as-10001000)를 따랐�
 | 파일 | `.trss/subtitles/코코렛/` 아래의 받은 이름 그대로인 `.smi`(보관본) | 1000:1000 | `0644` |
 
 - 작품 폴더와 `Season 01`은 Transmission이 만든 원래 폴더예요. 안에 항목이 더해져서 ctime만 바뀌었어요.
-- 빈 `.trss/tmp`는 [자막 명세](../specs/subtitles.md)가 임시 파일과 옮겨 둔 파일(`.aside`)을 두는 자리예요.
+- 빈 `.trss/tmp`는 [자막 명세](../../../specs/subtitles.md)가 임시 파일과 옮겨 둔 파일(`.aside`)을 두는 자리예요.
 - 처음에는 mtime(`find -newer`)으로 찾았어요. 그러자 사용자가 예전에 넣은 `.smi`가 여럿 섞였어요. 그 파일들의 mtime은 2107-12-31 23:59로, ZIP의 DOS 시각이 나타낼 수 있는 마지막 날이에요. 그런데 ctime은 2026년 5–7월이고 모드는 `0664`예요. 배포와 상관없는 파일이에요. 그래서 디스크에서 바뀐 것은 ctime으로 견줘요.
 
 ### 웹 화면

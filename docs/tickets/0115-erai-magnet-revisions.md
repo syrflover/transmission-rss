@@ -1,12 +1,12 @@
 # 0115 Erai-raws magnet 피드의 수정본이 수정본 대체를 거쳐요
 
 - 상태: 대기
-- 출처: [0090](0090-release-name-corpus.md), [영상 수정본의 대체](../specs/collection.md#영상-수정본의-대체)
+- 출처: [0090](../archive/tickets/5-deployed-verification/0090-release-name-corpus.md), [영상 수정본의 대체](../specs/collection.md#영상-수정본의-대체)
 - 막는 티켓: [0098](0098-release-name-reading.md)(이름 읽기), [0099](0099-one-receive-path.md)(받기 경로)
 
 ## 작업
 
-2026-10-07 실제 릴리스 이름 묶음([0090](0090-release-name-corpus.md))에서 찾았어요.
+2026-10-07 실제 릴리스 이름 묶음([0090](../archive/tickets/5-deployed-verification/0090-release-name-corpus.md))에서 찾았어요.
 사용자의 Erai-raws 채널은 magnet 피드라서, 항목 제목이 `[Magnet] 작품 - 01 [1080p CR WEB-DL AVC AAC][us][br]…[Airing]` 꼴이에요.
 서버 DB 복사본의 수집 이력에 이런 제목이 256개 있었고, 확장자나 CRC가 있는 제목은 없었어요.
 수정본은 `- 01 (V2)`로 적어요. 수집 이력에 1개 있었고, 규칙에 맞지 않았어요.

@@ -1,7 +1,7 @@
 # 0086 RSS 채널을 읽다 리디렉션돼도 채널 URL이 다음 호스트로 가지 않아요
 
 - 상태: 완료 (2026-10-07)
-- 출처: [채널 URL의 비밀 값](../specs/collection.md#채널-url의-비밀-값), [자막 출처의 같은 수정](../archive/tickets/3-subtitle-candidates-and-receiving/0038-receive-result-tistory.md)
+- 출처: [채널 URL의 비밀 값](../../../specs/collection.md#채널-url의-비밀-값), [자막 출처의 같은 수정](../3-subtitle-candidates-and-receiving/0038-receive-result-tistory.md)
 - 막는 티켓: 없음
 
 ## 작업
@@ -10,7 +10,7 @@
 채널 읽기와 지난 회차 검색은 같은 HTTP 클라이언트(trss-collect의 `feed::client`)를 써요. 이 클라이언트는 reqwest 0.13의 기본값대로 리디렉션을 따라가고, 자동 `Referer`도 켜져 있어요.
 reqwest는 리디렉션할 때 앞 주소에서 사용자 이름, 암호, fragment만 빼고 쿼리는 남긴 채 `Referer`에 실어요.
 그래서 채널 호스트가 다른 호스트로 리디렉션하면, 비밀 값이 든 채널 URL 전체가 그 호스트에 가요.
-자막 출처의 클라이언트는 0038에서 자동 `Referer`를 꺼서 같은 문제를 막았어요([공통 수신 결과와 실패 분류](../specs/jobs.md#공통-수신-결과와-실패-분류)).
+자막 출처의 클라이언트는 0038에서 자동 `Referer`를 꺼서 같은 문제를 막았어요([공통 수신 결과와 실패 분류](../../../specs/jobs.md#공통-수신-결과와-실패-분류)).
 실제 리디렉션으로 돌려 보지는 않았고, 코드와 reqwest의 설정에서 확인했어요.
 
 리팩터링은 동작을 바꾸지 않으므로, 배포하기 전에 따로 고쳐요(사용자 결정, 2026-10-07).
@@ -27,7 +27,7 @@ reqwest는 리디렉션할 때 앞 주소에서 사용자 이름, 암호, fragme
 - `feed::client`가 자동 `Referer`를 꺼요(`.referer(false)`). 리디렉션은 전처럼 reqwest의 기본값대로 따라가요.
   채널 읽기(worker의 수집 주기, 한 번 받기에서 링크를 되찾는 읽기)와 지난 회차 검색(`SearchClient`)이 모두 이 클라이언트를 쓰므로, 한 곳을 고쳐 둘 다 막았어요.
 - 테스트용 가짜 호스트 `feed::testing::Redirect`를 더했어요. 채널 호스트(`127.0.0.1`)는 어느 요청에나 `302`로 다른 호스트(`127.0.0.2`)의 `/feed`를 가리키고, 그 호스트는 항목 하나인 피드를 주며 받은 요청의 헤더를 모두 남겨요.
-- [채널 URL의 비밀 값](../specs/collection.md#채널-url의-비밀-값)에 리디렉션 때 `Referer`를 보내지 않는다는 문장을 더했어요.
+- [채널 URL의 비밀 값](../../../specs/collection.md#채널-url의-비밀-값)에 리디렉션 때 `Referer`를 보내지 않는다는 문장을 더했어요.
 
 ### 검증한 것
 

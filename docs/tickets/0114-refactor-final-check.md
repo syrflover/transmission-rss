@@ -9,8 +9,8 @@
 리팩터링의 다른 티켓을 모두 마친 뒤, [0092](0092-refactor-baseline.md)와 같은 명령과 빌드 상태로 다시 재요.
 그다음 정리한 릴리스를 실제 서버에 올리고, 목표 5에서 기준선으로 삼은 흐름을 한 번 더 이어 봐요.
 
-- 배포하기 전에 workspace 테스트를 musl 대상으로도 돌려요([0079](0079-musl-test-run.md)의 절차).
-- 마이그레이션이 더해졌으면 실제 서버 DB의 새 복사본으로 먼저 확인해요([0080](0080-server-db-migration-check.md)의 절차).
+- 배포하기 전에 workspace 테스트를 musl 대상으로도 돌려요([0079](../archive/tickets/5-deployed-verification/0079-musl-test-run.md)의 절차).
+- 마이그레이션이 더해졌으면 실제 서버 DB의 새 복사본으로 먼저 확인해요([0080](../archive/tickets/5-deployed-verification/0080-server-db-migration-check.md)의 절차).
 - 태그, 이미지 게시, 실제 서버에 올리는 일은 사용자 승인을 받아요.
 
 ## 완료 기준
@@ -18,5 +18,5 @@
 - [리팩터링 명세의 기록](refactoring.md#기준값과-마지막-측정)에 마지막 측정이 0092와 같은 항목으로 있어요. 테스트 시간이 줄지 않았으면 까닭이 있어요.
 - 변경 범위와 테스트 개수의 앞뒤가 기록에 있어요.
 - [흩어진 개념 모으기](refactoring.md#흩어진-개념-모으기)의 행마다 예전 복사본이 없는지 이름으로 찾아본 결과가 결과 절에 있어요.
-- 실제 서버에서 [0083](0083-deployed-end-to-end.md)의 흐름을 다시 이어 본 결과가 있어요. 0083과 다른 점이 있으면 원인을 가려요.
+- 실제 서버에서 [0083](../archive/tickets/5-deployed-verification/0083-deployed-end-to-end.md)의 흐름을 다시 이어 본 결과가 있어요. 0083과 다른 점이 있으면 원인을 가려요.
 - 리팩터링 명세에 완료 날짜, 결과, 남은 일, 리팩터링 커밋들(제목과 hash)이 있고, 명세와 리팩터링 티켓을 `docs/archive/tickets/` 아래의 한 폴더로 옮겼어요.

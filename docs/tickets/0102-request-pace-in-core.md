@@ -8,7 +8,7 @@
 
 2026-10-07에 web과 worker가 함께 쓰는 요청 간격이 DB에 세 벌 있었어요.
 trss-anilist와 trss-anissia의 `pace`는 표 이름(`anilist_pace`, `anissia_pace`)만 다르고, trss-collect의 `search_pace`는 호스트마다 간격을 둬요.
-차례를 기다리는 코드도 AniList, Anissia, 지난 회차 검색에 따로 있어요. 기다린 뒤 막힘을 다시 읽는 일은 [0087](0087-pace-block-while-waiting.md)에서 세 곳 모두에 들어갔어요.
+차례를 기다리는 코드도 AniList, Anissia, 지난 회차 검색에 따로 있어요. 기다린 뒤 막힘을 다시 읽는 일은 [0087](../archive/tickets/5-deployed-verification/0087-pace-block-while-waiting.md)에서 세 곳 모두에 들어갔어요.
 응답을 다루는 일도 흩어져 있어요.
 
 - `Retry-After`를 초로 읽고 기본값 60초, 상한 1시간을 두는 코드가 trss-anilist, trss-anissia, trss-collect의 피드에 3벌 있어요.

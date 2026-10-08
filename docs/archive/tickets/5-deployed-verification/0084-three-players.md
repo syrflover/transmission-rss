@@ -1,13 +1,13 @@
 # 0084 세 재생기에서 적용본, 폰트, 다시 읽기를 확인해요
 
 - 상태: 완료 (2026-10-07, Infuse의 관찰과 사용자 결정. 아래 "결과")
-- 출처: [실제 재생 환경](../specs/subtitles.md#실제-재생-환경), [폰트](../specs/subtitles.md#폰트)
-- 막는 티켓: [0081](0081-deploy-new-release.md), [0061](0061-infuse-placement-check.md)
+- 출처: [실제 재생 환경](../../../specs/subtitles.md#실제-재생-환경), [폰트](../../../specs/subtitles.md#폰트)
+- 막는 티켓: [0081](0081-deploy-new-release.md), [0061](../../../tickets/0061-infuse-placement-check.md)
 
 ## 작업
 
 주 재생기는 Infuse, IINA, 팟플레이어이고, 미디어 디스크를 NFS로 읽어요.
-[0061](0061-infuse-placement-check.md)은 Infuse 하나로 적용본과 `.trss/`가 어떻게 보이는지만 봐요. 세 재생기의 폰트 렌더링, 다시 읽기, 여러 형식의 선택은 목표 4에서 이 목표로 넘겼어요.
+[0061](../../../tickets/0061-infuse-placement-check.md)은 Infuse 하나로 적용본과 `.trss/`가 어떻게 보이는지만 봐요. 세 재생기의 폰트 렌더링, 다시 읽기, 여러 형식의 선택은 목표 4에서 이 목표로 넘겼어요.
 실제 서버가 적용한 자막으로 세 재생기를 확인해요. 사용자가 재생기에서 보고, 저는 표본 준비와 기록을 맡아요.
 
 - 폰트는 기본 글꼴과 구별되는 서체를 쓰는 자막과 폰트 표본으로 봐요. 그 폰트를 쓸 수 있을 때와 없을 때를 견주거나, 재생기가 고른 글꼴 정보를 봐서 대체 글꼴과 가려요.
@@ -32,7 +32,7 @@
 
 ### Infuse (2026-10-07)
 
-[0061](0061-infuse-placement-check.md)에서 사용자가 실제 서버의 `FX Senshi Kurumi-chan`을 Infuse로 열어 봤어요. 영상과 같은 이름의 적용본(SMI)은 자막으로 보였고, `.trss/` 안의 보관본은 자막 목록에 나오지 않았어요.
+[0061](../../../tickets/0061-infuse-placement-check.md)에서 사용자가 실제 서버의 `FX Senshi Kurumi-chan`을 Infuse로 열어 봤어요. 영상과 같은 이름의 적용본(SMI)은 자막으로 보였고, `.trss/` 안의 보관본은 자막 목록에 나오지 않았어요.
 
 ### 사용자 결정 (2026-10-07)
 

@@ -1,7 +1,7 @@
 # 0088 worker의 백그라운드 큐가 항목 하나의 패닉으로 멈추지 않아요
 
 - 상태: 완료 (2026-10-07)
-- 출처: [작품 표지](../specs/library.md#작품-표지), [시즌 정보](../specs/library.md#시즌-정보), [방영작 구독](../specs/collection.md#방영작-구독), [자막 후보 조회](../specs/subtitles.md#자막-후보-조회)
+- 출처: [작품 표지](../../../specs/library.md#작품-표지), [시즌 정보](../../../specs/library.md#시즌-정보), [방영작 구독](../../../specs/collection.md#방영작-구독), [자막 후보 조회](../../../specs/subtitles.md#자막-후보-조회)
 - 막는 티켓: 없음
 
 ## 작업
@@ -24,7 +24,7 @@ worker는 큐의 handle을 종료할 때만 기다려요. 그래서 패닉 메�
 
 ### 만든 것 (2026-10-07)
 
-- trss-core에 `queue::run_item`을 더했어요([ADR 0016](../adr/0016-shared-parts-in-core.md)의 큐 부품 가운데 첫 조각이에요). 큐 항목 하나를 돌리다 패닉이 나면 잡아서 `큐 이름: 항목 panicked: 메시지`를 로그에 남기고, 패닉 메시지를 `Err`로 돌려줘요. 기본 panic hook이 찍는 줄(파일과 줄 번호)도 그대로 남아요.
+- trss-core에 `queue::run_item`을 더했어요([ADR 0016](../../../adr/0016-shared-parts-in-core.md)의 큐 부품 가운데 첫 조각이에요). 큐 항목 하나를 돌리다 패닉이 나면 잡아서 `큐 이름: 항목 panicked: 메시지`를 로그에 남기고, 패닉 메시지를 `Err`로 돌려줘요. 기본 panic hook이 찍는 줄(파일과 줄 번호)도 그대로 남아요.
 - 네 큐가 항목을 `run_item` 안에서 처리하고, 패닉한 항목은 각 큐의 실패처럼 미뤄요.
 
   | 큐 | 로그의 큐 이름 | 패닉한 항목의 처리 |

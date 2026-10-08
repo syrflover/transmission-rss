@@ -2,7 +2,7 @@
 
 - 상태: 대기
 - 출처: [흩어진 개념 모으기](refactoring.md#흩어진-개념-모으기), [수집 받기 줄기의 재구성](refactoring.md#수집-받기-줄기의-재구성), [영상 회차 변환](../specs/collection.md#영상-회차-변환)
-- 막는 티켓: [0090](0090-release-name-corpus.md)(이름 묶음), [0091](0091-trname-long-and-half-episodes.md)(trname 수정), [0092](0092-refactor-baseline.md)(기준값)
+- 막는 티켓: [0090](../archive/tickets/5-deployed-verification/0090-release-name-corpus.md)(이름 묶음), [0091](../archive/tickets/5-deployed-verification/0091-trname-long-and-half-episodes.md)(trname 수정), [0092](0092-refactor-baseline.md)(기준값)
 
 ## 작업
 
@@ -20,7 +20,7 @@ trname이 쓴 이름(`<작품> SxxEyy.ext`)과 시즌 폴더를 읽는 곳도 tr
 - trname이 쓴 이름과 시즌 폴더 읽기는 trss-core에 둬요. trss-transmission은 trss-core를 부를 수 있어요.
 - 받은 영상의 회차를 예상할 때는 trname의 읽기와 변환을 그대로 써서, 예상과 실제 파일 이름이 같은 규칙에서 나와요.
 - trname은 번호 없는 영상 이름(극장판, BD)에서 해상도나 CRC의 숫자를 회차로 읽어요(0090의 묶음에서 공개 피드 6개). trname의 마지막 규칙은 CLI로 손수 바꾸는 자막 이름(`nogame01.ass`)을 읽으므로 trname은 그대로 두고, trss-collect가 회차 없음이나 묶음으로 읽는 이름은 trname으로 바꾸지 않고 받은 이름을 남겨요(사용자 결정, 2026-10-07). 동작 변경이므로 정리 커밋과 따로 커밋해요.
-- [0090](0090-release-name-corpus.md)의 묶음 테스트가 읽기가 바뀌지 않았는지 지켜요. 모은 뒤 묶음의 어느 이름이라도 읽는 결과가 달라지면, 그것은 동작 변경이에요. 맞는 쪽을 정해 결과 절에 적고 정리 커밋과 따로 커밋해요.
+- [0090](../archive/tickets/5-deployed-verification/0090-release-name-corpus.md)의 묶음 테스트가 읽기가 바뀌지 않았는지 지켜요. 모은 뒤 묶음의 어느 이름이라도 읽는 결과가 달라지면, 그것은 동작 변경이에요. 맞는 쪽을 정해 결과 절에 적고 정리 커밋과 따로 커밋해요.
 
 ## 완료 기준
 

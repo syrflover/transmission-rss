@@ -22,7 +22,7 @@ trss는 결과 목표 1–4를 만들며 2주 사이에 커졌어요. 2026-10-07
 
 다음은 범위 밖이에요.
 
-- 동작을 바꾸는 수정. 구조 조사에서 찾은 결함은 목표 5의 [0086](0086-feed-redirect-referer.md)–[0091](0091-trname-long-and-half-episodes.md)에서 따로 고쳐요. 리팩터링 중에 찾은 결함도 정리 커밋에 섞지 않고 따로 고쳐요.
+- 동작을 바꾸는 수정. 구조 조사에서 찾은 결함은 목표 5의 [0086](../archive/tickets/5-deployed-verification/0086-feed-redirect-referer.md)–[0091](../archive/tickets/5-deployed-verification/0091-trname-long-and-half-episodes.md)에서 따로 고쳐요. 리팩터링 중에 찾은 결함도 정리 커밋에 섞지 않고 따로 고쳐요.
 - 새 기능. 앱 YAML 내보내기·가져오기는 [목표 6](README.md#6-앱-yaml-내보내기와-가져오기)이에요.
 - API 타입 생성 도구. Rust 응답 구조체와 TypeScript 타입은 손으로 맞춰요([모듈 구성](../specs/web-app.md#공통-라이브러리의-모듈-구성), 사용자 결정, 2026-10-07).
 - 실제 브라우저로 화면을 여는 테스트와 Docker 배포 환경의 테스트([테스트 나눔 ADR](../adr/0015-test-a-rule-once-in-its-crate.md)).
@@ -58,7 +58,7 @@ workspace 테스트 한 번에 새 DB를 약 1,814번 열어요. 테스트별 �
 
 ### SQL 문 캐시
 
-2026-10-07 [0116](0116-allocator-measurement.md)의 측정에서, 운영 한도로 띄운 trss-web의 user CPU 표본 중 8–10%가 SQL을 해석하는 함수였어요.
+2026-10-07 [0116](../archive/tickets/5-deployed-verification/0116-allocator-measurement.md)의 측정에서, 운영 한도로 띄운 trss-web의 user CPU 표본 중 8–10%가 SQL을 해석하는 함수였어요.
 같은 날 `tests/` 폴더와 `_tests.rs` 파일을 빼고 `prepare`를 부르는 곳이 175곳이었고, `prepare_cached`를 쓰는 곳은 없었어요. 그래서 요청마다 같은 SQL을 다시 해석해요.
 
 - 되풀이해 쓰는 SQL 문은 연결의 문 캐시(`prepare_cached`)로 받아요. 캐시 크기는 쓰는 문의 수에 맞춰요.
@@ -77,9 +77,9 @@ workspace 테스트 한 번에 새 DB를 약 1,814번 열어요. 테스트별 �
 | 같은 파일 알아보기 | trss-jobs의 `area`, trss-collect의 `revision`과 `revisions`, trss-library의 표지, 모두 6곳이에요. 저장 형식은 `dev:ino`, `dev:ino:len:mtime:ctime`, 표지의 `dev`·`ino` 열이에요. | trss-core | inode만 견주는 규칙과 그 남은 위험(사용자 결정, 2026-10-06·07). 세 저장 형식을 모두 읽어요. 해시, CRC, 수정 시각 검사는 각 크레이트에 남아요. 감시 폴더 발견의 `FileIdentity`(크기와 수정 시각)는 다른 개념이라 이름만 바꿔요. |
 | 회차 텍스트의 키, 정렬, `N화` 표기 | trss-subtitles, trss-collect의 Anissia 자막 목록, trss-library의 작품 상세와 목록, trss-jobs, trss-web, 모두 8곳이에요. | trss-core | 저장된 `n:13` 꼴 키. 작품 상세와 목록이 `13.0`을 달리 다루는 차이는 맞는 쪽을 정하고, 화면이 바뀌면 따로 커밋해요. |
 | 요청 간격, `429` 대기, `Retry-After`, 응답 크기 제한 | 요청 간격 저장이 AniList, Anissia, 지난 회차 검색에 3벌, `Retry-After` 읽기가 3벌, 응답 크기 제한이 5벌이에요. | trss-core([ADR 0016](../adr/0016-shared-parts-in-core.md)) | 간격 표 세 개는 그대로 둬요(마이그레이션 없음). 자막 출처의 메모리 안 간격은 다른 개념이라 남겨요. |
-| worker 백그라운드 큐의 루프 | 표지, 시즌 정보, Anissia 편성, Anissia 자막 목록의 4벌이고, 잠금 파일 경로가 5곳에 있어요. | trss-core | 큐마다의 간격과 재시도, [0088](0088-queue-survives-panic.md)의 패닉 격리. |
+| worker 백그라운드 큐의 루프 | 표지, 시즌 정보, Anissia 편성, Anissia 자막 목록의 4벌이고, 잠금 파일 경로가 5곳에 있어요. | trss-core | 큐마다의 간격과 재시도, [0088](../archive/tickets/5-deployed-verification/0088-queue-survives-panic.md)의 패닉 격리. |
 | 파일을 안전하게 쓰기 | 임시 파일, fsync, `rename_noreplace`, 폴더 fsync를 5개 크레이트의 10곳 넘게 손으로 써요. | trss-core | 서버 브라우저가 다른 파일 시스템으로 옮길 때의 대비(EXDEV, linkat). 표지 파일 권한(0700·0644)은 까닭을 확인한 뒤 맞춰요. |
-| 릴리스 이름과 회차 읽기 | trss-collect 안의 읽기 3곳과 trname이 따로 읽어요. 회차 변환 계산이 3벌, trname이 쓴 이름과 시즌 폴더를 읽는 곳이 4곳이에요. | 릴리스 이름 읽기는 trss-collect의 한 모듈. trname이 쓴 이름과 시즌 폴더 읽기는 trss-core. 받은 영상의 회차 예상은 trname의 읽기를 그대로 써요. | [0090](0090-release-name-corpus.md)의 실제 릴리스 이름 묶음이 먼저 있어야 해요. 예제 테스트 약 35개는 묶음 테스트로 바꿔요. |
+| 릴리스 이름과 회차 읽기 | trss-collect 안의 읽기 3곳과 trname이 따로 읽어요. 회차 변환 계산이 3벌, trname이 쓴 이름과 시즌 폴더를 읽는 곳이 4곳이에요. | 릴리스 이름 읽기는 trss-collect의 한 모듈. trname이 쓴 이름과 시즌 폴더 읽기는 trss-core. 받은 영상의 회차 예상은 trname의 읽기를 그대로 써요. | [0090](../archive/tickets/5-deployed-verification/0090-release-name-corpus.md)의 실제 릴리스 이름 묶음이 먼저 있어야 해요. 예제 테스트 약 35개는 묶음 테스트로 바꿔요. |
 | 회차 대응의 계산과 까닭 문구 | trss-jobs의 `mapping`과, 대응한 회차를 배치 대상이나 까닭 문구로 바꾸는 5곳이에요. trss-collect도 회차 이동을 따로 더해요. | trss-library(ADR 0015가 회차 대응의 주인으로 적은 곳) | 화면 문구는 글자 그대로 둬요. |
 | 웹이 다시 구현한 규칙 | worker가 살아 있는지 판정(웹의 상태와 편성 API), 할 일 집계(약 630줄), 규칙 미리보기의 분류, 폴더 검사 2벌, 날짜·분기·자막 형식·방영 시각 계산이에요. | 살아 있음 판정은 trss-core의 하트비트, 할 일 집계는 trss-jobs([모듈 구성](../specs/web-app.md#공통-라이브러리의-모듈-구성)의 작업 관리), 미리보기 분류는 trss-collect, 폴더 검사는 trss-core | JSON 모양. 미리보기와 실제 처리가 같은 결과. 웹의 사전 검사는 worker의 실행 검사를 대신하지 않아요. |
 | 화면이 다시 계산하는 규칙 | 변경 합계, 배지, 회차 범위 5벌, 앞자리 0 지우기 3벌, 같은 날 공유본 판정 2벌, 서버 한도 숫자예요. | 서버가 계산해 보내요. 요일 이름 6벌과 크기 표기 2벌처럼 표기만 하는 것은 화면의 한 모듈이에요. | 화면에 보이는 내용. 크기 표기의 `22 KB`와 `22KB`처럼 화면이 달라지는 통일은 따로 커밋해요. |
@@ -142,11 +142,11 @@ worker 잠금은 멈춘 worker가 마지막 하트비트 뒤에 따로 띄운 ta
 1. 기준값을 재요.
 2. 테스트 DB를 한 번만 만들고, 되풀이해 쓰는 SQL 문을 캐시해요. 뒤의 모든 확인이 빨라져요. 테스트 DB는 [0093](0093-migrated-test-db-once.md)에서 기준값보다 먼저 만들었어요(사용자 요청, 2026-10-07).
 3. 위험이 낮은 개념을 먼저 모아요. 같은 파일 알아보기, 회차 텍스트의 키, 작은 도우미의 일부예요.
-4. 수집 받기 줄기를 재구성하고 그 테스트를 나눠요. 릴리스 이름과 회차 읽기가 여기 들어가며, [0090](0090-release-name-corpus.md)과 [0091](0091-trname-long-and-half-episodes.md)이 끝나 있어야 해요.
+4. 수집 받기 줄기를 재구성하고 그 테스트를 나눠요. 릴리스 이름과 회차 읽기가 여기 들어가며, [0090](../archive/tickets/5-deployed-verification/0090-release-name-corpus.md)과 [0091](../archive/tickets/5-deployed-verification/0091-trname-long-and-half-episodes.md)이 끝나 있어야 해요.
 5. 요청 간격, 큐 루프, 파일 쓰기를 모아요.
 6. 자막 작업 줄기를 재구성하고 그 테스트를 나눠요. 회차 대응, 할 일 집계, 화면이 다시 계산하는 규칙이 여기 들어가요.
 7. 남은 웹 규칙과 작은 도우미를 모으고, 라이브러리, 설정, 웹 앱 공통 영역의 테스트를 나눠요.
-8. 마지막으로 다시 재고, 정리한 릴리스를 실제 서버에 올려 목표 5의 [0083](0083-deployed-end-to-end.md) 흐름을 한 번 더 이어 봐요. 실제 서버에 올리는 일은 사용자 승인을 받아요.
+8. 마지막으로 다시 재고, 정리한 릴리스를 실제 서버에 올려 목표 5의 [0083](../archive/tickets/5-deployed-verification/0083-deployed-end-to-end.md) 흐름을 한 번 더 이어 봐요. 실제 서버에 올리는 일은 사용자 승인을 받아요.
 
 ### 티켓에서 받을 사용자 결정
 
