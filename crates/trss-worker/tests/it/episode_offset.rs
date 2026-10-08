@@ -629,11 +629,107 @@ async fn a_past_item_the_user_picks_first_is_named_with_the_decided_offset() {
     s.cycle().await;
     assert!(s.names().is_empty());
 
+    // Before it is received, the rule detail offers what receiving it sets.
+    let offer = &s.view(&rule).await["episode_suggestion"];
+    assert_eq!(offer["value"], -24);
+    let basis = offer["basis"].as_str().unwrap();
+    assert!(
+        basis.contains("가장 앞선 릴리스가 25화") && basis.contains("시즌 1화"),
+        "{basis}"
+    );
+
     s.receive("Show - 25", &rule).await;
 
     assert_eq!(s.names(), ["Show S03E01.mkv"]);
     let stored = s.rule(&rule).await;
     assert_eq!((stored.episode, stored.episode_auto), (-24, true));
+    assert_eq!(s.view(&rule).await["episode_suggestion"], Value::Null);
+}
+
+/// The episode names a preview gives the items its rule may receive, sorted.
+fn received_names(preview: &Value) -> Vec<String> {
+    let mut names: Vec<String> = preview["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|i| i["episode_name"].as_str().map(str::to_owned))
+        .collect();
+    names.sort();
+    names
+}
+
+#[tokio::test]
+async fn a_season_that_ended_is_offered_its_offset_before_its_first_past_item_is_received() {
+    let s = Scene::new().await;
+    s.link_earlier_seasons([Some(12), Some(12)]).await;
+    // The season ended before it is subscribed: its releases are past, and the
+    // earliest of them is in the middle of the season's numbers.
+    s.feed(&[&show(49), &show(48)]);
+    s.cycle().await;
+    s.h.advance(1_000);
+    let draft = |episode: i64| {
+        json!({
+            "channel_id": s.channel,
+            "subscribing": true,
+            "rule": { "match": "Show", "directory": "Show/Season 03", "episode": episode },
+        })
+    };
+
+    // The subscription about to be made: each item says its name, and the
+    // offset the earliest one gives is offered.
+    let (status, _, preview) = s
+        .api
+        .call("POST", "/api/rules/preview", Some(draft(1)))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert_eq!(received_names(&preview), ["S03E48", "S03E49"]);
+    assert_eq!(preview["episode_suggestion"]["value"], -24);
+    let basis = preview["episode_suggestion"]["basis"].as_str().unwrap();
+    assert!(
+        basis.contains("고를 수 있는 지난 회차 중 가장 앞선 릴리스가 48화")
+            && basis.contains("시즌 24화"),
+        "{basis}"
+    );
+    // Applied, the names follow and nothing is offered any more.
+    let (_, _, applied) = s
+        .api
+        .call("POST", "/api/rules/preview", Some(draft(-24)))
+        .await;
+    assert_eq!(received_names(&applied), ["S03E24", "S03E25"]);
+    assert!(applied.get("episode_suggestion").is_none(), "{applied}");
+
+    // Subscribed without it, the rule detail offers the same before anything
+    // is received, and its preview names the past items.
+    let rule = s.subscribe("Show", "Show/Season 03", 7, 1).await;
+    let view = s.view(&rule).await;
+    assert_eq!(view["episode_suggestion"]["value"], -24);
+    assert_eq!(view["episode_suggestion"]["basis"], basis);
+    let (_, _, preview) = s
+        .api
+        .call(
+            "POST",
+            "/api/rules/preview",
+            Some(json!({
+                "channel_id": s.channel,
+                "rule_id": rule.id,
+                "rule": { "match": "Show", "directory": "Show/Season 03", "episode": 1 },
+            })),
+        )
+        .await;
+    assert_eq!(received_names(&preview), ["S03E48", "S03E49"]);
+
+    // `적용` before receiving names the first item with it.
+    let (status, _, _) = s
+        .api
+        .call(
+            "PUT",
+            &format!("/api/rules/{}/episode", rule.id),
+            Some(json!({ "version": view["version"], "episode": -24 })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    s.receive("Show - 48", &rule).await;
+    assert_eq!(s.names(), ["Show S03E24.mkv"]);
 }
 
 #[tokio::test]

@@ -932,6 +932,12 @@ struct SubscribeBody {
     /// screen receives them itself, as it shows their progress.
     #[serde(default)]
     receive: Vec<i64>,
+    /// The episode offset to make the rule with: the one the person applied
+    /// from the suggestion the preview offered before receiving (ticket 0126).
+    /// It is the person's own value. Absent leaves the default (`1`, numbers
+    /// as they are).
+    #[serde(default)]
+    episode: Option<i64>,
 }
 
 /// How many ticked items a subscription carries at most: the preview lists no
@@ -986,6 +992,9 @@ async fn subscribe(
         directory,
         ..RuleInput::default()
     };
+    if let Some(episode) = b.episode {
+        input.episode = episode;
+    }
     rules_api::check_directory(&state, None, &input.directory).await?;
     // A subscription to a work the archive folder holds is made paused, and
     // turned on by the worker once the work folder is moved into the collect

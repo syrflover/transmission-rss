@@ -207,6 +207,10 @@ export interface PreviewItem {
    */
   past_cause: "subscribed" | "titled" | "resumed" | "first_read" | null;
   stored_result: string;
+  /** The whole episode the release names (`24` of `- 24`), for a `mine` or `past` item; `null` otherwise. */
+  release: number | null;
+  /** The episode it is received as with the edited offset and folder (`S02E24`); set with `release`. */
+  episode_name: string | null;
 }
 
 export interface Preview {
@@ -215,6 +219,11 @@ export interface Preview {
   masked_total: number;
   items: PreviewItem[];
   truncated: boolean;
+  /**
+   * What the app offers a new subscription's offset before anything is received; only when the preview was asked
+   * for a subscription, and always with a value.
+   */
+  episode_suggestion?: EpisodeSuggestion;
 }
 
 /** What a channel is called on screen: its name, or the host when it has none. */
@@ -306,17 +315,27 @@ export async function reorderRules(
   return rules;
 }
 
-/** `position` is the edited rule's place among the channel's rules, from 0. */
+/**
+ * `position` is the edited rule's place among the channel's rules, from 0. `subscribing` asks, for a rule not saved
+ * yet, what the app offers its offset before anything is received.
+ */
 export function previewRule(
   channelId: string,
   ruleId: string | null,
   fields: RuleFields,
   position: number,
+  subscribing: boolean,
   signal?: AbortSignal,
 ): Promise<Preview> {
   return api<Preview>("/rules/preview", {
     method: "POST",
     signal,
-    body: { channel_id: channelId, rule_id: ruleId ?? undefined, rule: body(fields), position },
+    body: {
+      channel_id: channelId,
+      rule_id: ruleId ?? undefined,
+      rule: body(fields),
+      position,
+      subscribing: subscribing || undefined,
+    },
   });
 }

@@ -3,6 +3,7 @@ import { useAfterDelay } from "@/lib/cached";
 import { cn } from "@/lib/utils";
 
 import { btnNeutral } from "../channels/styles";
+import { ReceivedAs } from "../subs/add/PastItems";
 import { PHASE_TEXT, type ReceivePhase } from "../subs/add/useReceive";
 import type { Preview, PreviewItem, PreviewKind } from "./api";
 import type { PreviewState } from "./usePreview";
@@ -90,6 +91,7 @@ function Row({ item, receive }: { item: PreviewItem; receive?: PastReceive }) {
       <p className="min-w-0 text-[13px] leading-snug break-all" data-testid="preview-title">
         {item.title}
       </p>
+      <ReceivedAs item={item} />
       {item.kind === "mine" && item.save_path && (
         <p className="min-w-0 font-mono text-xs break-all text-text-secondary">→ {item.save_path}</p>
       )}

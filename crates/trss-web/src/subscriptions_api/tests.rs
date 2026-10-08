@@ -432,6 +432,39 @@ async fn subscribing_creates_the_rule_with_the_chosen_work_and_receives_nothing(
 }
 
 #[tokio::test]
+async fn a_subscription_is_made_with_the_offset_applied_before_receiving() {
+    let app = App::new().await;
+    app.schedule_of_wednesday();
+    let channel = app.channel("feed.test").await;
+    app.record(&channel, 1000, &[WORK_1]).await;
+    let mut body = app.subscribe_body(&channel);
+    body["directory"] = json!("Work/Season 02");
+    body["episode"] = json!(-12);
+
+    let (status, body) = app
+        .call(Method::POST, "/api/subscriptions", Some(body))
+        .await;
+
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    // The person's own value, not one the app set.
+    assert_eq!(body["rule"]["episode"], -12);
+    assert_eq!(body["rule"]["episode_auto"], false);
+
+    // Without one, the rule leaves numbers as they are.
+    let other = app.channel("other.test").await;
+    app.record(&other, 1000, &[WORK_1]).await;
+    let (status, body) = app
+        .call(
+            Method::POST,
+            "/api/subscriptions",
+            Some(app.subscribe_body(&other)),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(body["rule"]["episode"], 1);
+}
+
+#[tokio::test]
 async fn the_subscription_lists_under_this_quarter_with_its_stored_schedule() {
     let app = App::new().await;
     app.schedule_of_wednesday();

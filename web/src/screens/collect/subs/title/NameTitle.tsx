@@ -14,7 +14,7 @@ import { channelName, listRules, type Rule, type RuleFields, type RuleList } fro
 import { usePreview } from "../../rules/usePreview";
 import { nameTitle } from "../api";
 import { airing } from "../format";
-import { listed, PastChecklist, ReceiveProgress, receivable } from "../add/PastItems";
+import { listed, PastChecklist, ReceiveProgress, receivable, receiveOrder } from "../add/PastItems";
 import { folderProblem, optionClass } from "../add/draft";
 import { useReceive } from "../add/useReceive";
 
@@ -187,7 +187,7 @@ function Naming({
       candidatesChanged();
       setTitles(new Map(tickedNow.map((i) => [i.id, i.title])));
       setDone(rule);
-      if (tickedNow.length > 0) receive.start(rule.id, tickedNow.map((i) => i.id));
+      if (tickedNow.length > 0) receive.start(rule.id, receiveOrder(tickedNow).map((i) => i.id));
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "제목을 정하지 못했어요. 다시 시도해 주세요.");
     } finally {

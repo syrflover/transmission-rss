@@ -17,9 +17,13 @@
 //! The suggestion is read from what is known now (the rule's first items in
 //! history, the library and the AniList counts), so it appears when the user
 //! links the seasons the sum needs, and goes when the user sets the offset it
-//! offers. It is offered to a subscription that the app has never decided and
-//! that has picked an item, whatever its field holds, when the value differs
-//! from it ([`trss_collect::episode_offset::worth_offering`]).
+//! offers. It is offered to a subscription that the app has never decided,
+//! whatever its field holds, when the value differs from it
+//! ([`trss_collect::episode_offset::worth_offering`]). One that has picked
+//! nothing yet is offered what the earliest of its past items would give, when
+//! that gives a value ([`episode_offset::before_receiving`], ticket 0126), so
+//! the person sees it before the first item is received and named; so is a
+//! subscription about to be made, in the preview ([`for_new_subscription`]).
 
 use std::collections::HashMap;
 
@@ -29,13 +33,17 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::{body, rule_conflict, rule_view, store_error, RuleView};
+use super::{body, build_preview, channel_items, rule_conflict, rule_view, store_error, RuleView};
 use crate::{commands_api::CommandView, ApiError, AppState};
 use trss_collect::{
     commands::episode_undo,
-    episode_offset::{decide, first_release, gather, may_decide, signed, worth_offering},
-    store::channels::{ChannelError, Rule},
+    episode_offset::{self, decide, first_release, gather, may_decide, signed, worth_offering},
+    store::{
+        channels::{ChannelError, ChannelWithRules, Rule, RuleInput, RuleState},
+        history::HistoryItem,
+    },
 };
+use trss_core::settings::CollectionSettings;
 
 /// What the app offers for a rule's offset.
 #[derive(Debug, Clone, Serialize)]
@@ -87,7 +95,8 @@ pub(super) struct Episodes {
 /// The grounds and suggestions of the given rules. What cannot be read leaves
 /// the rule without them, with a line in the log: they only explain and offer,
 /// so the rule list still answers.
-pub(super) async fn analyze(state: &AppState, rules: &[Rule]) -> Episodes {
+pub(super) async fn analyze(state: &AppState, cwr: &ChannelWithRules) -> Episodes {
+    let rules = &cwr.rules;
     let mut out = Episodes::default();
     let ids: Vec<String> = rules.iter().map(|r| r.id.clone()).collect();
     out.undo = undos(state, ids.clone()).await;
@@ -129,6 +138,8 @@ pub(super) async fn analyze(state: &AppState, rules: &[Rule]) -> Episodes {
             return out;
         }
     };
+    // The channel's items, read once for the rules that picked nothing.
+    let mut items: Option<Vec<HistoryItem>> = None;
     for rule in open {
         let titles = match state.history.first_titles_of_rule(&rule.id).await {
             Ok(titles) => titles,
@@ -138,9 +149,27 @@ pub(super) async fn analyze(state: &AppState, rules: &[Rule]) -> Episodes {
             }
         };
         let Some(first) = first_release(&titles) else {
+            // Nothing picked yet: what its past items would give. A
+            // subscription waiting for its title takes none.
+            if rule.r#match.is_none() {
+                continue;
+            }
+            if let Some(first) = earliest_past(state, &collect.folder, cwr, &mut items, rule).await
+            {
+                if let Some(offer) = offer_before_receiving(state, &collect, rule, first).await {
+                    out.suggestion.insert(rule.id.clone(), offer);
+                }
+            }
             continue;
         };
-        let basis = match gather(&state.library, &state.seasons.store, &collect.folder, rule).await
+        let basis = match gather(
+            &state.library,
+            &state.seasons.store,
+            &collect.folder,
+            collect.archive_folder.as_deref(),
+            rule,
+        )
+        .await
         {
             Ok(Some(basis)) => basis,
             Ok(None) => continue,
@@ -158,6 +187,116 @@ pub(super) async fn analyze(state: &AppState, rules: &[Rule]) -> Episodes {
         }
     }
     out
+}
+
+/// The earliest release among the past items `rule` of `cwr` may be asked to
+/// receive, judged as the rule's preview judges them; `None` (with a line in
+/// the log when something cannot be read) when there is none. `items` holds
+/// the channel's items once read, for the next rule.
+async fn earliest_past(
+    state: &AppState,
+    collect_folder: &str,
+    cwr: &ChannelWithRules,
+    items: &mut Option<Vec<HistoryItem>>,
+    rule: &Rule,
+) -> Option<u32> {
+    if items.is_none() {
+        *items = Some(match channel_items(&state.history, &cwr.channel.id).await {
+            Ok(read) => read,
+            Err(err) => {
+                eprintln!(
+                    "Episode offset: no suggestion before receiving in channel {}: {err:?}",
+                    cwr.channel.id
+                );
+                Vec::new()
+            }
+        });
+    }
+    let items = items.as_deref().unwrap_or_default();
+    match build_preview(
+        std::path::Path::new(collect_folder),
+        cwr,
+        Some(&rule.id),
+        &rule.to_input(),
+        None,
+        items,
+    ) {
+        Ok(preview) => preview.earliest_receivable,
+        Err(err) => {
+            eprintln!(
+                "Episode offset: no suggestion for rule {}: {err:?}",
+                rule.id
+            );
+            None
+        }
+    }
+}
+
+/// What `rule`, which has picked nothing, is offered before its first receive
+/// when `first` is the earliest of its past items.
+async fn offer_before_receiving(
+    state: &AppState,
+    collect: &CollectionSettings,
+    rule: &Rule,
+    first: u32,
+) -> Option<EpisodeSuggestion> {
+    let basis = match gather(
+        &state.library,
+        &state.seasons.store,
+        &collect.folder,
+        collect.archive_folder.as_deref(),
+        rule,
+    )
+    .await
+    {
+        Ok(basis) => basis?,
+        Err(err) => {
+            eprintln!("Episode offset: no suggestion for rule {}: {err}", rule.id);
+            return None;
+        }
+    };
+    let (value, basis) = episode_offset::before_receiving(first, &basis)?;
+    worth_offering(rule, Some(value)).then_some(EpisodeSuggestion {
+        value: Some(value),
+        basis,
+    })
+}
+
+/// What a subscription about to be made on `channel_id` with the fields
+/// `edited` is offered before anything is received, when `first` is the
+/// earliest of the past items it would list. The work the folder names is
+/// looked for in the archive folder too: the subscription brings it over.
+pub(super) async fn for_new_subscription(
+    state: &AppState,
+    channel_id: &str,
+    edited: &RuleInput,
+    first: u32,
+) -> Option<EpisodeSuggestion> {
+    let collect = match state.settings.collection().await {
+        Ok(collect) => collect?,
+        Err(err) => {
+            eprintln!("Episode offset: cannot read the collect folder: {err}");
+            return None;
+        }
+    };
+    // Only its folder and field are read; it is no subscription the app has
+    // decided, nor linked to a season.
+    let draft = Rule {
+        id: String::new(),
+        channel_id: channel_id.to_owned(),
+        position: 0,
+        version: 0,
+        r#match: edited.r#match.clone(),
+        regex: edited.regex,
+        case_insensitive: edited.case_insensitive,
+        directory: edited.directory.clone(),
+        episode: edited.episode,
+        episode_auto: false,
+        state: RuleState::Active,
+        subscription: None,
+        resumed_at: None,
+    };
+    offer_before_receiving(state, &collect, &draft, first).await
 }
 
 /// The last undo of each of the rules that had one. What cannot be read leaves

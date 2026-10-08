@@ -1004,6 +1004,75 @@ async fn a_rule_not_saved_yet_previews_as_the_last_rule_and_an_archived_one_as_c
 }
 
 #[tokio::test]
+async fn the_items_the_rule_takes_say_the_episode_they_are_received_as() {
+    let app = App::new().await;
+    let a = app
+        .channel("a.test", &[], &[("Other", "Other/Season 01")])
+        .await;
+    app.record(
+        &a.channel,
+        1_000,
+        &[
+            "[SubsPlease] Show - 24 (1080p)",
+            "[SubsPlease] Show - 25 (1080p)",
+            "[SubsPlease] Show (01-12) (1080p) [Batch]",
+            "[SubsPlease] Other - 03 (1080p)",
+        ],
+    )
+    .await;
+    let named = |preview: &Value| {
+        let mut named: Vec<(String, Value, Value)> = preview["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| {
+                (
+                    i["title"].as_str().unwrap().to_owned(),
+                    i["release"].clone(),
+                    i["episode_name"].clone(),
+                )
+            })
+            .collect();
+        named.sort_by(|a, b| a.0.cmp(&b.0));
+        named
+    };
+    let row = |title: &str, release: Value, name: Value| (title.to_owned(), release, name);
+    let preview = |episode: i64| {
+        app.preview(json!({
+            "channel_id": a.channel.id,
+            "rule": { "match": "SubsPlease", "directory": "Show/Season 02", "episode": episode },
+        }))
+    };
+
+    let plain = preview(1).await;
+    let converted = preview(-12).await;
+
+    // An item another rule takes, or a batch, names no episode of this rule.
+    assert_eq!(
+        named(&plain),
+        [
+            row("[SubsPlease] Other - 03 (1080p)", Value::Null, Value::Null),
+            row(
+                "[SubsPlease] Show (01-12) (1080p) [Batch]",
+                Value::Null,
+                Value::Null
+            ),
+            row("[SubsPlease] Show - 24 (1080p)", json!(24), json!("S02E24")),
+            row("[SubsPlease] Show - 25 (1080p)", json!(25), json!("S02E25")),
+        ]
+    );
+    assert_eq!(
+        named(&converted)[2..],
+        [
+            row("[SubsPlease] Show - 24 (1080p)", json!(24), json!("S02E12")),
+            row("[SubsPlease] Show - 25 (1080p)", json!(25), json!("S02E13")),
+        ]
+    );
+    // Only a preview asked for a subscription about to be made carries an offer.
+    assert!(plain.get("episode_suggestion").is_none());
+}
+
+#[tokio::test]
 async fn titles_with_the_secret_mask_are_flagged() {
     let app = App::new().await;
     let a = app.channel("a.test", &[], &[("Show", "first")]).await;

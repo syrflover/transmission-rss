@@ -228,8 +228,19 @@ impl Missing {
     }
 }
 
+/// How the grounds name the first release: the one a rule picked first, or,
+/// before it picked anything, the earliest of the past items it may receive
+/// ([`before_receiving`]). Each ends in `릴리스`, for the particles after it.
+const FIRST_SEEN: &str = "처음 본 릴리스";
+const EARLIEST_PAST: &str = "고를 수 있는 지난 회차 중 가장 앞선 릴리스";
+
 /// What the grounds come to for `first`, the first release's number.
 pub fn decide(first: u32, basis: &Basis) -> Verdict {
+    decide_as(first, basis, FIRST_SEEN)
+}
+
+/// [`decide`], naming the first release `lead` in the sentences.
+fn decide_as(first: u32, basis: &Basis, lead: &str) -> Verdict {
     if let Some(verdict) = restarted_cour(first, basis) {
         return verdict;
     }
@@ -259,7 +270,7 @@ pub fn decide(first: u32, basis: &Basis) -> Verdict {
                 Verdict::Suggest {
                     value: None,
                     basis: format!(
-                        "시즌 폴더에 이미 {}화가 있어서 처음 본 릴리스 {first}화가 시즌 몇 화인지 \
+                        "시즌 폴더에 이미 {}화가 있어서 {lead} {first}화가 시즌 몇 화인지 \
                          알 수 없어요. 회차 변환을 직접 적어 주세요.",
                         ranges(&basis.held)
                     ),
@@ -268,7 +279,7 @@ pub fn decide(first: u32, basis: &Basis) -> Verdict {
                 Verdict::Suggest {
                     value: Some(-total_i),
                     basis: format!(
-                        "처음 본 릴리스가 {first}화예요. AniList 기준 이전 시즌이 {total}화까지라, \
+                        "{lead}가 {first}화예요. AniList 기준 이전 시즌이 {total}화까지라, \
                          번호가 이어진다면 {}{} 시즌 {}화가 돼요.",
                         signed(-total_i),
                         particle_ro(-total_i),
@@ -282,7 +293,7 @@ pub fn decide(first: u32, basis: &Basis) -> Verdict {
         Previous::Unknown(missing) if first > 1 => Verdict::Suggest {
             value: None,
             basis: format!(
-                "처음 본 릴리스가 {first}화인데, {} 시즌 몇 화인지 알 수 없어요. \
+                "{lead}가 {first}화인데, {} 시즌 몇 화인지 알 수 없어요. \
                  회차 변환을 직접 적어 주세요.",
                 missing.clause()
             ),
@@ -383,6 +394,51 @@ pub fn first_release(titles: &[String]) -> Option<u32> {
     titles.iter().filter_map(|t| whole_episode(t)).min()
 }
 
+/// What a subscription that has picked nothing is offered before its first
+/// receive (ticket 0126): the value the grounds give for `first`, the earliest
+/// release among the past items it may receive, and why. A season that ended
+/// before it was subscribed brings no new release, so the person's first pick
+/// decides, and a pick from the middle of the season would only be suggested
+/// after its video is named. Only a value is offered: an offset the app would
+/// set when that item is received first (it is set then all the same), or a
+/// suggestion with one. `None` when there is nothing to convert or no value.
+pub fn before_receiving(first: u32, basis: &Basis) -> Option<(i64, String)> {
+    match decide_as(first, basis, EARLIEST_PAST) {
+        Verdict::Auto { offset: 0, .. } | Verdict::Nothing => None,
+        Verdict::Auto {
+            offset,
+            first,
+            total,
+            ..
+        } => Some((
+            offset,
+            format!(
+                "{EARLIEST_PAST}가 {first}화예요. AniList 기준 이전 시즌이 {total}화까지라 \
+                 번호가 이어지니 {}{} 시즌 1화가 돼요.",
+                signed(offset),
+                particle_ro(offset)
+            ),
+        )),
+        Verdict::Suggest { value, basis } => value.map(|value| (value, basis)),
+    }
+}
+
+/// The episode a release `title` is received as by a rule saving to
+/// `directory` with the offset `offset`, as `trname` names it: `S02E12` in a
+/// `<work>/Season NN` folder, `12화` in another. `None` when the title names no
+/// whole episode.
+pub fn received_as(directory: &str, offset: i64, title: &str) -> Option<String> {
+    let release = whole_episode(title)?;
+    let folder = crate::past_search::judge::folder_episode(
+        crate::past_search::release::Episode::whole(release),
+        offset,
+    );
+    Some(match place_of(directory) {
+        Some((_, season)) => format!("S{season:02}E{:02}", folder.number),
+        None => format!("{}화", folder.number),
+    })
+}
+
 /// Whether the app may set the rule's offset, as far as the rule itself
 /// tells: a subscription whose offset is not automatic, whatever value it
 /// holds. The rule must also not have been decided before (kept beside it,
@@ -436,10 +492,14 @@ pub enum BasisError {
 
 /// The work (when the library has it) and the season number the rule's videos
 /// go to, or `None` when there is no telling (the rule's folder is not
-/// `<work>/Season NN`, or it is the specials folder).
+/// `<work>/Season NN`, or it is the specials folder). A work the collect folder
+/// lacks is looked for in `archive_folder` when one is given: a rule that waits
+/// for its work folder gets that work, with its ID, once the folder came over
+/// (`commands::rule_archive`).
 async fn locate(
     library: &LibraryStore,
     collect_folder: &str,
+    archive_folder: Option<&str>,
     rule: &Rule,
 ) -> Result<Option<(Option<String>, u32)>, LibraryError> {
     let collect_folder = collect_folder.trim_end_matches('/');
@@ -453,24 +513,32 @@ async fn locate(
         .and_then(SeasonRef::parse);
     let (work_id, season) = match linked {
         Some(link) => (Some(link.work_id), link.number),
-        None => (
-            library.work_in_folder(collect_folder, &work_dir).await?,
-            folder_season,
-        ),
+        None => {
+            let mut work = library.work_in_folder(collect_folder, &work_dir).await?;
+            if let (None, Some(archive)) = (&work, archive_folder) {
+                work = library
+                    .work_in_folder(archive.trim_end_matches('/'), &work_dir)
+                    .await?;
+            }
+            (work, folder_season)
+        }
     };
     Ok((season != 0).then_some((work_id, season)))
 }
 
 /// Where the rule's first video goes and what is known of it, or `None` when
 /// there is no telling (the collect folder is not set, the rule's folder is not
-/// `<work>/Season NN`, or it is the specials folder).
+/// `<work>/Season NN`, or it is the specials folder). `archive_folder`, when
+/// given, is where a work the collect folder lacks is looked for ([`locate`]).
 pub async fn gather(
     library: &LibraryStore,
     seasons: &SeasonStore,
     collect_folder: &str,
+    archive_folder: Option<&str>,
     rule: &Rule,
 ) -> Result<Option<Basis>, BasisError> {
-    let Some((work_id, season)) = locate(library, collect_folder, rule).await? else {
+    let Some((work_id, season)) = locate(library, collect_folder, archive_folder, rule).await?
+    else {
         return Ok(None);
     };
 
@@ -516,7 +584,7 @@ pub async fn season_total(
     collect_folder: &str,
     rule: &Rule,
 ) -> Result<Option<(u32, Option<u32>)>, BasisError> {
-    let Some((work_id, season)) = locate(library, collect_folder, rule).await? else {
+    let Some((work_id, season)) = locate(library, collect_folder, None, rule).await? else {
         return Ok(None);
     };
     let Some(work_id) = work_id else {
@@ -659,6 +727,62 @@ mod tests {
         assert!(
             basis.contains("27화") && basis.contains("시즌 3화"),
             "{basis}"
+        );
+    }
+
+    #[test]
+    fn before_receiving_the_earliest_past_item_is_judged_as_the_first_release() {
+        // A sequel after a 12-episode season whose past items start at `- 24`.
+        let sequel = after(&[12], &[]);
+        let (value, why) = before_receiving(24, &sequel).unwrap();
+        assert_eq!(value, -12);
+        assert!(
+            why.starts_with("고를 수 있는 지난 회차 중 가장 앞선 릴리스가 24화예요")
+                && why.contains("시즌 12화"),
+            "{why}"
+        );
+        // The number after the earlier seasons is what the app would set on
+        // receiving it; before that it is offered all the same.
+        let (value, why) = before_receiving(13, &sequel).unwrap();
+        assert_eq!(value, -12);
+        assert!(
+            why.contains("13화") && why.contains("−12로 시즌 1화"),
+            "{why}"
+        );
+        // Nothing to convert, or no value to apply: nothing is offered.
+        assert_eq!(before_receiving(1, &sequel), None);
+        assert_eq!(before_receiving(1, &after(&[], &[])), None);
+        assert_eq!(
+            before_receiving(24, &basis(Previous::Unknown(Missing::NoWork), &[])),
+            None
+        );
+    }
+
+    #[test]
+    fn a_release_is_received_as_trname_names_it_with_the_offset() {
+        let title = "[SubsPlease] Show - 24 (1080p) [ABCD1234].mkv";
+        assert_eq!(
+            received_as("Show/Season 02", 1, title).as_deref(),
+            Some("S02E24")
+        );
+        assert_eq!(
+            received_as("Show/Season 02", -12, title).as_deref(),
+            Some("S02E12")
+        );
+        assert_eq!(
+            received_as("Show/Season 02", 13, "[SubsPlease] Show - 01 (1080p).mkv").as_deref(),
+            Some("S02E13")
+        );
+        // A folder trname does not read as a season gets the number alone.
+        assert_eq!(received_as("Show", -12, title).as_deref(), Some("12화"));
+        // A batch names no whole episode.
+        assert_eq!(
+            received_as(
+                "Show/Season 02",
+                1,
+                "[SubsPlease] Show (01-12) (1080p) [Batch]"
+            ),
+            None
         );
     }
 
@@ -976,7 +1100,7 @@ mod tests {
         }
 
         async fn basis(&self, rule: &Rule) -> Option<Basis> {
-            gather(&self.library, &self.seasons, "/shows/", rule)
+            gather(&self.library, &self.seasons, "/shows/", None, rule)
                 .await
                 .unwrap()
         }
@@ -1041,6 +1165,35 @@ mod tests {
         assert_eq!((fresh.previous, fresh.held), (Previous::Known(0), vec![]));
         let later = place.basis(&rule("Fresh/Season 02", None)).await.unwrap();
         assert_eq!(later.previous, Previous::Unknown(Missing::NoWork));
+    }
+
+    #[tokio::test]
+    async fn a_work_the_collect_folder_lacks_is_looked_for_in_the_archive_folder() {
+        // The library holds `Show` under `/shows`, the archive folder here.
+        let place = place(&[(1, &["01"]), (2, &[])]).await;
+        place.link(1, &[Some(12)]).await;
+        let sequel = rule("Show/Season 02", None);
+
+        let collect_only = gather(&place.library, &place.seasons, "/collect/", None, &sequel)
+            .await
+            .unwrap()
+            .unwrap();
+        let with_archive = gather(
+            &place.library,
+            &place.seasons,
+            "/collect/",
+            Some("/shows/"),
+            &sequel,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(collect_only.previous, Previous::Unknown(Missing::NoWork));
+        assert_eq!(
+            (with_archive.season, with_archive.previous),
+            (2, Previous::Known(12))
+        );
     }
 
     #[tokio::test]

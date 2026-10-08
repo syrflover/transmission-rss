@@ -1,6 +1,6 @@
 # 0126 지난 회차를 처음 받기 전에 받을 이름과 회차 변환 제안을 보여줘요
 
-- 상태: 대기
+- 상태: 완료 (2026-10-08)
 - 출처: [0123](0123-collect-moves-archived-work-folder.md)의 실제 서버 관찰(2026-10-08), [영상 회차 변환](../specs/collection.md#영상-회차-변환), 사용자 결정(2026-10-08)
 - 막는 티켓: 없음. 0092 전에 고치고, 이것만으로 배포하지는 않아요(0124와 같이, 사용자 결정 2026-10-08).
 
@@ -27,3 +27,34 @@
 
 - 판단은 trss-collect에, 미리보기와 규칙 보기의 모양은 trss-web에 둬요([테스트 나눔 ADR](../adr/0015-test-a-rule-once-in-its-crate.md)).
 - 실제 서버 확인은 다음 배포 뒤 시즌 중간 번호로 이어지는 속편을 구독할 때 해요.
+
+## 결과
+
+2026-10-08에 구현했어요.
+
+- 규칙 미리보기(`POST /api/rules/preview`)의 항목에 `release`와 `episode_name`을 더했어요. `release`는 릴리스 제목이 이르는 회차 번호(`- 24`의 24)이고, `episode_name`은 편집 중인 회차 변환과 저장 폴더로 받을 회차(`S02E24`, 시즌 폴더가 아니면 `24화`)예요. 규칙이 가져가는 항목(`mine`, `past`)에만 있고, 배치처럼 한 회차를 이르지 않는 제목은 비어요. 화면은 아직 받지 않은 항목에만 `받을 회차 S02E24`를 보여줘요. 규칙 화면의 미리보기, 구독 확인 단계, 제목 정하기 단계의 목록이 같아요.
+- 받기 전 판단은 trss-collect의 `episode_offset::before_receiving`이에요. 받을 수 있는 지난 항목(규칙이 가져가고 아직 어느 규칙도 받지 않은 항목) 가운데 가장 앞선 번호로 `decide`와 같은 판단을 하고, 값이 있을 때만 그 값과 근거를 내요. 근거 문장은 `처음 본 릴리스` 대신 `고를 수 있는 지난 회차 중 가장 앞선 릴리스`라고 써요.
+- 규칙 보기의 `episode_suggestion`은 아직 아무것도 고르지 않은 구독 규칙에도 이 제안을 실어요. 규칙 상세는 회차 변환 칸 아래의 제안 자리와 `적용`을 그대로 써요.
+- 미리보기 요청에 `subscribing`을 붙이면 저장하지 않은 새 규칙에 같은 제안을 `episode_suggestion`으로 실어요. 구독 확인 단계는 이것을 지난 항목 목록 위에 보여줘요. `적용`하면 만들 규칙의 회차 변환을 그 값으로 바꿔 미리보기를 다시 받으므로, 받을 회차도 그 값으로 바뀌어요. `적용 취소`로 되돌릴 수 있어요. 구독 요청(`POST /api/subscriptions`)의 `episode`가 그 값으로 규칙을 만들고, 사용자의 값이라 `자동` 표시는 없어요.
+- 이전 시즌을 찾을 때 수집 폴더에 없는 작품은 보관 폴더에서도 찾아요(`gather`의 `archive_folder`). 웹의 규칙 보기와 미리보기만 보관 폴더를 넘겨요. worker가 첫 항목을 받으며 정하는 것은 지금처럼 수집 폴더만 봐요. 그때는 `start`가 작품 폴더를 옮긴 뒤예요.
+- 구독 확인 단계와 제목 정하기 단계는 체크한 항목을 번호가 앞선 것부터 보내요. 구독 요청의 `receive`(0125)도 같은 순서예요.
+- [영상 회차 변환](../specs/collection.md#영상-회차-변환)에 받기 전 제안과 받을 회차 표시를 더했어요.
+
+### 완료 기준과 시험
+
+| 완료 기준 | 시험 |
+| --- | --- |
+| 확인 단계가 받을 회차와 제안을 보여주고, `적용`하면 이름이 바뀌며 그 값으로 구독 | `trss-worker`의 `a_season_that_ended_is_offered_its_offset_before_its_first_past_item_is_received`: 이전 시즌 합계 24화인 3기의 지난 회차 `- 48`, `- 49`에 미리보기가 `S03E48`, `S03E49`와 −24를 줘요. −24로 다시 물으면 `S03E24`, `S03E25`이고 제안이 없어요. 구독 요청의 `episode`는 `trss-web`의 `a_subscription_is_made_with_the_offset_applied_before_receiving` |
+| 1기 작품이 보관 폴더에 있어도 같음 | `trss-collect`의 `a_work_the_collect_folder_lacks_is_looked_for_in_the_archive_folder`: 보관 폴더를 넘기면 그곳의 작품으로 이전 시즌 합계를 알아요. |
+| 규칙 화면에 같은 제안과 받을 회차 | 같은 worker 시험의 뒷부분: 구독한 규칙의 보기가 같은 제안을 주고, 규칙 미리보기가 받을 회차를 줘요. `적용`한 뒤 `- 48`을 받으면 `S03E24`예요. |
+| 지난 회차가 이전 시즌 합계 + 1부터 있음 | `a_past_item_the_user_picks_first_is_named_with_the_decided_offset`: 받기 전에 −24를 보여주고, `적용`하지 않고 `- 25`를 받으면 앱이 −24로 정해요. 판단은 `trss-collect`의 `before_receiving_the_earliest_past_item_is_judged_as_the_first_release` |
+| 이미 받은 항목이 있는 규칙 | 처음 받은 항목으로 제안하는 기존 시험(`a_first_release_in_the_middle_of_a_season_is_suggested_and_received_unconverted` 등)이 그대로 통과해요. |
+
+- 받을 회차의 계산은 `trss-collect`의 `a_release_is_received_as_trname_names_it_with_the_offset`이, 미리보기 항목의 모양은 `trss-web`의 `the_items_the_rule_takes_say_the_episode_they_are_received_as`가 봐요.
+- 2026-10-08 이 변경을 담은 작업 트리에서 `cargo test --locked --workspace -j 4`(glibc)가 2,817개 통과, 실패 0, 무시 14개였어요. `cargo clippy --workspace --all-targets -j 4`는 경고가 없고 `cargo fmt --all --check`도 통과해요. 웹은 `npm run typecheck`와 `npm test`(223개)가 통과해요.
+
+### 검증하지 못한 것
+
+- 구독 확인 단계의 제안, `적용`, `적용 취소`, 받을 회차 표시는 타입 검사만 했고 브라우저에서 보지 않았어요.
+- 구독 확인 단계의 미리보기가 보관 폴더를 넘겨 보관된 작품으로 계산하는 연결은 시험하지 않았어요. 보관 폴더에서 찾는 것은 `gather` 단위에서만 봤어요.
+- 제목 정하기 단계(`NameTitle`)는 받기 전 제안을 보여주지 않아요. 그 구독 규칙은 이미 있으므로 `적용`은 규칙 화면에서 해요.

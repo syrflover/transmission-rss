@@ -24,6 +24,27 @@ export function listed(items: PreviewItem[]): PreviewItem[] {
 }
 
 /**
+ * Ticked items in the order to receive them: the lowest episode first, so a subscription's first episode offset is
+ * decided from the earliest one; items that name no episode keep their place after them.
+ */
+export function receiveOrder(items: PreviewItem[]): PreviewItem[] {
+  return [...items].sort((a, b) => {
+    if (a.release === null || b.release === null) return (a.release === null ? 1 : 0) - (b.release === null ? 1 : 0);
+    return a.release - b.release;
+  });
+}
+
+/** `받을 회차 S02E24` for an item the rule may still receive, or nothing. */
+export function ReceivedAs({ item }: { item: PreviewItem }) {
+  if (!receivable(item) || item.episode_name === null) return null;
+  return (
+    <span className="text-xs text-text-secondary">
+      받을 회차 <span className="font-mono">{item.episode_name}</span>
+    </span>
+  );
+}
+
+/**
  * The toolbar over a list the user ticks from: what to tick all at once, how to
  * clear, and how many are ticked. The history's past items and a past episode
  * search's results share it.
@@ -123,6 +144,7 @@ export function PastChecklist({
             return (
               <PickRow key={item.id} can={can} checked={ticked.has(item.id)} onChange={() => toggle(item.id)}>
                 <span className="min-w-0 text-[13px] leading-snug break-all">{item.title}</span>
+                <ReceivedAs item={item} />
                 <span className="text-xs text-text-muted">
                   {dateTime(item.first_seen_at)} 기록
                   {!can && " · 이미 처리된 항목이라 받을 수 없어요"}

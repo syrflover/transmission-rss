@@ -31,6 +31,8 @@ export function usePreview(
   refresh = 0,
   /** Whether to ask at all; a rule with nothing to compare does not. */
   enabled = true,
+  /** The rule is a subscription about to be made: ask for the offset the app offers it. */
+  subscribing = false,
 ): PreviewState {
   const [result, setResult] = useState<PreviewState>(() => ({
     state: "loading",
@@ -38,7 +40,7 @@ export function usePreview(
   }));
   const asked = useRef(false);
   // The edited fields as one string, so the effect depends on their content.
-  const key = JSON.stringify([channelId, ruleId, fields, position, refresh, enabled]);
+  const key = JSON.stringify([channelId, ruleId, fields, position, refresh, enabled, subscribing]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -50,7 +52,7 @@ export function usePreview(
     const delay = asked.current ? DEBOUNCE_MS : 0;
     asked.current = true;
     const timer = window.setTimeout(() => {
-      previewRule(channelId, ruleId, fields, position, controller.signal).then(
+      previewRule(channelId, ruleId, fields, position, subscribing, controller.signal).then(
         (preview) => {
           if (controller.signal.aborted) return;
           if (ruleId) store(lastKey(ruleId), preview);

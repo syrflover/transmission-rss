@@ -159,6 +159,8 @@ export interface NewSubscription {
    * Otherwise the screen receives them itself.
    */
   receive: number[];
+  /** The episode offset to make the rule with: the one applied from the preview's suggestion. Absent leaves `1`. */
+  episode?: number;
 }
 
 export async function subscribe(body: NewSubscription): Promise<Rule> {

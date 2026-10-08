@@ -7,7 +7,7 @@ import { useAfterDelay } from "@/lib/cached";
 
 import { subscriptionAdded } from "../../cache";
 import { btnAction, btnNeutral, btnPrimary, hintClass } from "../../channels/styles";
-import type { RuleFields } from "../../rules/api";
+import type { EpisodeSuggestion, RuleFields } from "../../rules/api";
 import { ArchivedWorkNotice } from "../../rules/ArchivedWorkNotice";
 import { receivesPastItemsNow } from "../../rules/archivedWork";
 import { useArchivedWork } from "../../rules/useArchivedWork";
@@ -16,14 +16,19 @@ import type { Channel } from "../../channels/api";
 import { subscribe, type ScheduleEntry, type TitleGroup } from "../api";
 import { subtitleChoice } from "../format";
 import type { Draft } from "./draft";
-import { listed, PastChecklist, ReceiveProgress, receivable } from "./PastItems";
+import { listed, PastChecklist, ReceiveProgress, receivable, receiveOrder } from "./PastItems";
 import { useReceive } from "./useReceive";
 
 /**
  * The last step: the past items of the channel that the new rule would pick,
  * unticked until the user ticks them, and the button that creates the rule.
  * Creating the rule receives nothing; only the ticked items are received, each
- * with its own command, and their progress replaces the list.
+ * with its own command, lowest episode first, and their progress replaces the
+ * list.
+ *
+ * Each item says the episode it is received as. When the app has a value for
+ * the episode offset before anything is received, it is offered over the list;
+ * `적용` makes the rule with it, and the names follow.
  *
  * A subscription made before the first episode (`work` is `null`) has no
  * phrase and so no items to list: it only says what happens next.
@@ -44,19 +49,21 @@ export function Confirm({
 }) {
   const uid = useId();
   const waiting = work === null;
+  // The offered offset the person applied, kept with its grounds: the preview offers nothing once it is applied.
+  const [applied, setApplied] = useState<EpisodeSuggestion | null>(null);
   const fields = useMemo<RuleFields>(
     () => ({
       match: work?.work ?? "",
       regex: false,
       case_insensitive: false,
       directory: draft.directory.trim(),
-      episode: 1,
+      episode: applied?.value ?? 1,
       state: "active",
     }),
-    [work, draft.directory],
+    [work, draft.directory, applied],
   );
   // A new rule is checked last in its channel. A waiting one has nothing to compare, so it asks for nothing.
-  const preview = usePreview(channel.id, null, fields, channel.rule_count, 0, !waiting);
+  const preview = usePreview(channel.id, null, fields, channel.rule_count, 0, !waiting, true);
   const shown = preview.state === "ready" ? preview.preview : preview.state === "loading" ? preview.previous : null;
   const slow = useAfterDelay(shown === null && preview.state === "loading");
 
@@ -76,8 +83,10 @@ export function Confirm({
   const receive = useReceive(ruleId);
 
   const items = shown ? listed(shown.items) : [];
-  const tickedNow = items.filter((i) => receivable(i) && ticked.has(i.id));
+  const tickedNow = receiveOrder(items.filter((i) => receivable(i) && ticked.has(i.id)));
   const blocked = !waiting && shown?.error != null;
+  // Only an answer for the fields as they are now: one asked before `적용` still offers it.
+  const offered = applied === null && preview.state === "ready" ? (preview.preview.episode_suggestion ?? null) : null;
 
   const submit = async () => {
     setBusy(true);
@@ -94,6 +103,7 @@ export function Confirm({
         creator: draft.subtitles === "follow" ? draft.creator : null,
         directory: draft.directory.trim(),
         receive: tickedNow.map((i) => i.id),
+        episode: applied?.value ?? undefined,
       });
       subscriptionAdded(channel.id);
       setTitles(new Map(tickedNow.map((i) => [i.id, i.title])));
@@ -210,6 +220,47 @@ export function Confirm({
             </p>
           )}
           {slow && <p className="text-[13px] text-text-muted">기록을 확인하는 중이에요.</p>}
+
+          {offered !== null && offered.value !== null && (
+            <div
+              className="flex min-w-0 flex-col gap-2 rounded-lg border border-hairline bg-surface-2 p-2.5"
+              data-testid="episode-suggestion"
+            >
+              <p className="text-[12.5px] leading-normal text-text-secondary">{offered.basis}</p>
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <span className="font-mono text-[13px]">{offered.value}</span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className={`${btnNeutral} max-[720px]:min-h-11`}
+                  onClick={() => setApplied(offered)}
+                >
+                  적용
+                </Button>
+              </div>
+            </div>
+          )}
+          {applied !== null && (
+            <div
+              className="flex min-w-0 flex-col gap-2 rounded-lg border border-hairline bg-surface-2 p-2.5"
+              data-testid="episode-applied"
+            >
+              <p className="text-[12.5px] leading-normal text-text-secondary">
+                회차 변환에 <span className="font-mono">{applied.value}</span> 값을 적용했어요. 구독하면 이 값으로 규칙을 만들어요.
+                아래 항목의 받을 회차도 이 값으로 계산했어요.
+              </p>
+              <div className="flex">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className={`${btnNeutral} max-[720px]:min-h-11`}
+                  onClick={() => setApplied(null)}
+                >
+                  적용 취소
+                </Button>
+              </div>
+            </div>
+          )}
 
           {shown && !shown.error && items.length === 0 && (
             <p className="text-[13px] leading-normal text-text-secondary">

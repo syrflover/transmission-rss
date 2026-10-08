@@ -152,6 +152,7 @@ use super::{
 use trss_anissia::Anime;
 use trss_collect::{
     commands::rule_archive::{self, RuleArchive},
+    episode_offset,
     plan::{ChannelPlan, Judgement, PastCause, PlanEvaluation},
     rss::{ChannelEvaluator, ChannelSpec, RuleSpec},
     store::{
@@ -164,6 +165,7 @@ use trss_collect::{
             MAX_PAGE_SIZE,
         },
     },
+    subscriptions::whole_episode,
 };
 use trss_core::commands::{Accepted, Command, CommandState};
 
@@ -746,7 +748,7 @@ async fn analyze(state: &AppState, cwr: &ChannelWithRules) -> Result<Analysis, A
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?;
     }
-    analysis.episodes = episode::analyze(state, &cwr.rules).await;
+    analysis.episodes = episode::analyze(state, cwr).await;
     // Only the judgement is used here, never a save path.
     let plan = ChannelPlan::new(cwr.clone(), FsPath::new(""));
     for rule in &cwr.rules {
@@ -994,6 +996,11 @@ struct PreviewBody {
     /// keeps its place (a new rule goes last).
     #[serde(default)]
     position: Option<usize>,
+    /// The rule not saved yet is a subscription about to be made: the preview
+    /// says what the app offers its offset before anything is received
+    /// ([`Preview::episode_suggestion`]).
+    #[serde(default)]
+    subscribing: bool,
 }
 
 const BAD_BODY: &str = "요청 내용을 읽지 못했어요. 화면을 새로고침한 뒤 다시 시도해 주세요.";
@@ -1436,6 +1443,14 @@ pub struct PreviewItem {
     pub past_cause: Option<&'static str>,
     /// What history recorded for the item so far, as its stable code.
     pub stored_result: &'static str,
+    /// The whole episode the release names (`24` of `- 24`), for an item the
+    /// edited rule takes ([`Kind::Mine`], [`Kind::Past`]); `null` otherwise or
+    /// when the title names none. A screen receiving several sends the lowest
+    /// first, so the rule's first episode offset is decided from it.
+    pub release: Option<u32>,
+    /// The episode the item is received as with the edited rule's offset and
+    /// folder (`S02E24`, [`episode_offset::received_as`]); set with `release`.
+    pub episode_name: Option<String>,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -1464,6 +1479,16 @@ pub struct Preview {
     pub items: Vec<PreviewItem>,
     /// There are more matching items than `items` lists.
     pub truncated: bool,
+    /// What the app offers a new subscription's offset before anything is
+    /// received (ticket 0126): only for a preview asked for a subscription
+    /// (`subscribing`), and only with a value. The rule detail carries its own
+    /// in the rule's view.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub episode_suggestion: Option<episode::EpisodeSuggestion>,
+    /// The earliest release among the items the edited rule may be asked to
+    /// receive (taken by it and not received by any rule), listed or not.
+    #[serde(skip)]
+    pub earliest_receivable: Option<u32>,
 }
 
 /// The channel's rules with the edited one put in: replacing the stored rule
@@ -1572,6 +1597,7 @@ pub fn build_preview(
     };
     let mut masked_total = 0;
     let mut listed = Vec::new();
+    let mut earliest_receivable: Option<u32> = None;
 
     for item in items {
         let masked = item.title.contains(MASK);
@@ -1643,6 +1669,14 @@ pub fn build_preview(
             Kind::Excluded => counts.excluded += 1,
             Kind::Past => counts.past += 1,
         }
+        let release = matches!(kind, Kind::Mine | Kind::Past)
+            .then(|| whole_episode(&item.title))
+            .flatten();
+        if item.result == HistoryResult::NoMatch {
+            if let Some(release) = release {
+                earliest_receivable = Some(earliest_receivable.map_or(release, |e| e.min(release)));
+            }
+        }
         if listed.len() < PREVIEW_LIST_LIMIT {
             listed.push(PreviewItem {
                 id: item.id,
@@ -1655,6 +1689,10 @@ pub fn build_preview(
                 excluded_by,
                 past_cause,
                 stored_result: item.result.code(),
+                release,
+                episode_name: release.and_then(|_| {
+                    episode_offset::received_as(&edited.directory, edited.episode, &item.title)
+                }),
             });
         }
     }
@@ -1666,6 +1704,8 @@ pub fn build_preview(
         masked_total,
         truncated: matching > listed.len(),
         items: listed,
+        episode_suggestion: None,
+        earliest_receivable,
     })
 }
 
@@ -1681,12 +1721,19 @@ async fn preview(
     let items = channel_items(&state.history, &b.channel_id).await?;
     // Unset, the folder is empty and a save path is the rule's directory alone.
     let collect_folder = collect_folder(&state).await?.unwrap_or_default();
-    Ok(Json(build_preview(
+    let mut preview = build_preview(
         FsPath::new(&collect_folder),
         &cwr,
         b.rule_id.as_deref(),
         &edited,
         b.position,
         &items,
-    )?))
+    )?;
+    if b.subscribing && b.rule_id.is_none() {
+        if let Some(first) = preview.earliest_receivable {
+            preview.episode_suggestion =
+                episode::for_new_subscription(&state, &b.channel_id, &edited, first).await;
+        }
+    }
+    Ok(Json(preview))
 }

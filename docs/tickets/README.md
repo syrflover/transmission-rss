@@ -222,7 +222,7 @@ fsync를 하지 않는 파일 이름 바꾸기는 미디어 디스크에 비용�
 | [0123](0123-collect-moves-archived-work-folder.md) | 보관 폴더에 있는 작품의 규칙이 수집을 시작하면 작품 폴더를 수집 폴더로 옮겨요 | 완료 | 없음 |
 | [0124](0124-kept-copy-off-episode-row.md) | `현재 유지`로 정한 보관본은 회차 줄에서 빠져요 | 완료 | 없음 |
 | [0125](0125-receive-ticked-items-after-move.md) | 작품 폴더를 옮기느라 받지 못한 체크 항목을 옮긴 뒤 받아요 | 완료 | 없음 |
-| [0126](0126-offset-suggestion-before-first-receive.md) | 지난 회차를 처음 받기 전에 받을 이름과 회차 변환 제안을 보여줘요 | 대기 | 없음 |
+| [0126](0126-offset-suggestion-before-first-receive.md) | 지난 회차를 처음 받기 전에 받을 이름과 회차 변환 제안을 보여줘요 | 완료 | 없음 |
 
 ### 목표 5와 6 사이의 리팩터링
 
