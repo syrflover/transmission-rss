@@ -419,6 +419,7 @@ enum Revision {
     Held(Finished),
 }
 
+/// The row of `item`, received by `rule` into `save_path`.
 fn new_revision(
     item: &HistoryItem,
     rule: &Rule,
@@ -428,20 +429,7 @@ fn new_revision(
     reason: Option<String>,
     hash: Option<String>,
 ) -> NewRevision {
-    NewRevision {
-        item_id: item.id,
-        old_item_id: decided.old_item_id,
-        rule_id: rule.id.clone(),
-        folder: save_path.to_string_lossy().into_owned(),
-        episode_name: decided.episode_name,
-        old_version: decided.old_version,
-        new_version: decided.version,
-        expected_crc: decided.crc,
-        old_crc: decided.old_crc,
-        torrent_hash: hash,
-        state,
-        reason,
-    }
+    decided.row(item.id, rule.id.clone(), save_path, state, reason, hash)
 }
 
 /// Decides a result that is a revision, with the worker's own judgment

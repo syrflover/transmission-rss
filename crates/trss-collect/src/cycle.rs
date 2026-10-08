@@ -708,26 +708,19 @@ pub async fn process_job(
 /// is written with the item's history record).
 fn new_revision(
     job: &Job,
-    item_id: i64,
     decided: Decided,
     state: RevisionState,
     reason: Option<String>,
     hash: Option<String>,
 ) -> NewRevision {
-    NewRevision {
-        item_id,
-        old_item_id: decided.old_item_id,
-        rule_id: job.observation.rule_id.clone().unwrap_or_default(),
-        folder: job.save_path.to_string_lossy().into_owned(),
-        episode_name: decided.episode_name,
-        old_version: decided.old_version,
-        new_version: decided.version,
-        old_crc: decided.old_crc,
-        expected_crc: decided.crc,
-        torrent_hash: hash,
+    decided.row(
+        0,
+        job.observation.rule_id.clone().unwrap_or_default(),
+        &job.save_path,
         state,
         reason,
-    }
+        hash,
+    )
 }
 
 /// Records a revision that is not received (`버전 미상`, or the folder holds
@@ -750,7 +743,7 @@ async fn withhold(
         reason: Some(reason.to_owned()),
         ..job.observation.clone()
     };
-    let row = new_revision(&job, 0, decided, state, Some(reason.to_owned()), None);
+    let row = new_revision(&job, decided, state, Some(reason.to_owned()), None);
     let written = ctx
         .revisions
         .write_with_history(
@@ -795,7 +788,6 @@ async fn start_replacement(
 ) -> bool {
     let row = new_revision(
         job,
-        0,
         decided,
         RevisionState::Receiving,
         None,

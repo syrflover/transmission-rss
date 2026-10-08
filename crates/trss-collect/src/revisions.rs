@@ -106,8 +106,8 @@ use crate::{
         channels::{ChannelStore, RuleState},
         history::{HistoryItem, HistoryResult, HistoryStore},
         revisions::{
-            Claim, OldVideo, Replacement, Revision, RevisionState, RevisionStore, RowWrite, Step,
-            FOLDER_AWAY, FOLDER_GONE_AFTER, OLD_FILE_WATCHED,
+            Claim, NewRevision, OldVideo, Replacement, Revision, RevisionState, RevisionStore,
+            RowWrite, Step, FOLDER_AWAY, FOLDER_GONE_AFTER, OLD_FILE_WATCHED,
         },
     },
 };
@@ -176,6 +176,35 @@ impl Decided {
             old_item_id: row.old_item_id,
             old_version: row.old_version,
             old_crc: row.old_crc.clone(),
+        }
+    }
+
+    /// The row this decision writes for the history item `item_id` of the rule
+    /// `rule_id` saving into `folder`, in `state` with its `reason`, and with
+    /// the new revision's torrent `hash` once Transmission holds it. A row
+    /// written with its item's history record gets the item's ID then.
+    pub fn row(
+        self,
+        item_id: i64,
+        rule_id: String,
+        folder: &Path,
+        state: RevisionState,
+        reason: Option<String>,
+        hash: Option<String>,
+    ) -> NewRevision {
+        NewRevision {
+            item_id,
+            old_item_id: self.old_item_id,
+            rule_id,
+            folder: folder.to_string_lossy().into_owned(),
+            episode_name: self.episode_name,
+            old_version: self.old_version,
+            new_version: self.version,
+            old_crc: self.old_crc,
+            expected_crc: self.crc,
+            torrent_hash: hash,
+            state,
+            reason,
         }
     }
 }
