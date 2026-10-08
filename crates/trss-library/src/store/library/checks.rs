@@ -8,7 +8,7 @@
 //!   unrecognized row (migration `library/video_check.sql`). One whose size and
 //!   time the scan could not read is not asked about until a scan reads them.
 //! - A person's `확인함` ([`LibraryStore::check_video`]) names the file as the
-//!   screen saw it ([`FileIdentity`]), and holds while the scan finds a video of
+//!   screen saw it ([`SeenFile`]), and holds while the scan finds a video of
 //!   that size and time at the path. Renaming or moving the video ends the
 //!   question too (the path is no longer one the scan could not attach); a
 //!   different video put at the path is asked about again
@@ -21,7 +21,7 @@
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 
 use super::LibraryStore;
-use crate::discovery::{season_of_folder, FileIdentity, Reason};
+use crate::discovery::{season_of_folder, Reason, SeenFile};
 use trss_core::{db::DbError, Millis};
 
 #[derive(Debug, thiserror::Error)]
@@ -54,7 +54,7 @@ pub struct VideoCheck {
     pub path: String,
     /// [`Reason::NoEpisode`] or [`Reason::SeasonMismatch`].
     pub reason: Reason,
-    pub identity: FileIdentity,
+    pub identity: SeenFile,
 }
 
 /// A work's unrecognized files, by path: the path, the reason, and whether a
@@ -67,8 +67,8 @@ pub(super) const UNRECOGNIZED_OF_WORK: &str = "
       FROM unrecognized_files u WHERE u.work_id = ?1 ORDER BY u.path";
 
 /// The size and time columns as an identity, when both are there.
-pub(super) fn identity_of(size: Option<i64>, mtime_ns: Option<i64>) -> Option<FileIdentity> {
-    Some(FileIdentity {
+pub(super) fn identity_of(size: Option<i64>, mtime_ns: Option<i64>) -> Option<SeenFile> {
+    Some(SeenFile {
         size: u64::try_from(size?).ok()?,
         mtime_ns: mtime_ns?,
     })
@@ -129,7 +129,7 @@ pub(super) fn check(
     conn: &mut Connection,
     work_id: &str,
     path: &str,
-    seen: FileIdentity,
+    seen: SeenFile,
     now: Millis,
 ) -> Result<(), CheckError> {
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -176,7 +176,7 @@ impl LibraryStore {
         &self,
         work_id: &str,
         path: &str,
-        seen: FileIdentity,
+        seen: SeenFile,
         now: Millis,
     ) -> Result<(), CheckError> {
         let (work_id, path) = (work_id.to_owned(), path.to_owned());

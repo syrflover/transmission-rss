@@ -11,13 +11,13 @@ use tower::ServiceExt;
 
 use crate::AppState;
 use trss_core::Db;
-use trss_library::discovery::{FileIdentity, Reason, Scan, ScannedWork, Unrecognized, WorkRead};
+use trss_library::discovery::{Reason, Scan, ScannedWork, SeenFile, Unrecognized, WorkRead};
 
 const ASKED: &str = "Season 01/[Group] Show - 03 (1080p).mkv";
 const MTIME_NS: i64 = 1_700_000_000_123_456_789;
 
-fn identity(size: u64) -> FileIdentity {
-    FileIdentity {
+fn identity(size: u64) -> SeenFile {
+    SeenFile {
         size,
         mtime_ns: MTIME_NS,
     }
@@ -25,7 +25,7 @@ fn identity(size: u64) -> FileIdentity {
 
 /// Work `Show`: a video in season 1 the name gives no episode of, which is
 /// `check`, and files the app does not ask about.
-fn show(check: FileIdentity) -> Scan {
+fn show(check: SeenFile) -> Scan {
     let unrecognized = |path: &str, check| Unrecognized {
         path: path.into(),
         reason: Reason::NoEpisode,

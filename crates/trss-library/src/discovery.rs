@@ -203,24 +203,26 @@ pub struct Unrecognized {
     /// the scan saw it. `None` for every other file, and for such a video whose
     /// size and time could not be read, which is then not asked about until a
     /// scan reads them.
-    pub check: Option<FileIdentity>,
+    pub check: Option<SeenFile>,
 }
 
-/// What tells a file from another one put at the same path later.
+/// A file as a scan saw it: its size and modification time, which tell it from
+/// another file put at the same path later. Not how a recorded file is
+/// recognized again (that is its inode: `trss_core::file_id`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FileIdentity {
+pub struct SeenFile {
     pub size: u64,
     /// Modification time, nanoseconds since the Unix epoch.
     pub mtime_ns: i64,
 }
 
-impl FileIdentity {
+impl SeenFile {
     /// The file at `path` (a link is followed), or `None` when it cannot be
     /// read or its time is before 1970.
-    fn of(path: &Path) -> Option<FileIdentity> {
+    fn of(path: &Path) -> Option<SeenFile> {
         let metadata = fs::metadata(path).ok()?;
         let since = metadata.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
-        Some(FileIdentity {
+        Some(SeenFile {
             size: metadata.len(),
             mtime_ns: i64::try_from(since.as_nanos()).ok()?,
         })
@@ -743,7 +745,7 @@ impl Walker {
                     // does not give is asked about; its file is read now, not
                     // kept with the listing.
                     let check = || match kind == FileKind::Video && season != 0 {
-                        true => FileIdentity::of(&listed.path_in(dir)),
+                        true => SeenFile::of(&listed.path_in(dir)),
                         false => None,
                     };
                     match episode_of(name, kind) {
@@ -1206,7 +1208,7 @@ mod tests {
                 (
                     "Season 01/W S03E01.mkv",
                     Reason::SeasonMismatch,
-                    FileIdentity {
+                    SeenFile {
                         size: 1,
                         mtime_ns: 1_600_000_000_000_000_001
                     }
@@ -1214,7 +1216,7 @@ mod tests {
                 (
                     "Season 01/extra.mkv",
                     Reason::NoEpisode,
-                    FileIdentity {
+                    SeenFile {
                         size: 5,
                         mtime_ns: 1_700_000_000_123_456_789
                     }

@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 
 use crate::{
-    discovery::{FileIdentity, ScannedWork, Unrecognized, WorkRead},
+    discovery::{ScannedWork, SeenFile, Unrecognized, WorkRead},
     store::library::*,
 };
 
@@ -13,8 +13,8 @@ fn store() -> LibraryStore {
     LibraryStore::new(Db::open_blocking(":memory:").unwrap())
 }
 
-fn identity(size: u64) -> FileIdentity {
-    FileIdentity {
+fn identity(size: u64) -> SeenFile {
+    SeenFile {
         size,
         mtime_ns: 1_700_000_000_123_456_789,
     }
@@ -22,7 +22,7 @@ fn identity(size: u64) -> FileIdentity {
 
 /// Work `name` with an unrecognized video at [`ASKED`] as `check` says, a
 /// subtitle the name gives no episode of, and a video outside a season.
-fn work(name: &str, check: Option<Option<FileIdentity>>) -> WorkRead {
+fn work(name: &str, check: Option<Option<SeenFile>>) -> WorkRead {
     let mut unrecognized = vec![
         Unrecognized {
             path: "Season 01/extra.ass".into(),

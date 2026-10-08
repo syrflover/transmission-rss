@@ -27,7 +27,7 @@ use axum::{
 use serde::Deserialize;
 
 use super::{ApiError, AppState};
-use trss_library::{discovery::FileIdentity, store::library::CheckError};
+use trss_library::{discovery::SeenFile, store::library::CheckError};
 
 #[cfg(test)]
 mod tests;
@@ -39,13 +39,13 @@ pub fn routes() -> Router<AppState> {
 /// A video as the scan saw it, as the to-do gives it to the screen: its size
 /// and modification time in nanoseconds, which a JSON number in a browser could
 /// not hold exactly.
-pub fn seen(identity: FileIdentity) -> String {
+pub fn seen(identity: SeenFile) -> String {
     format!("{}:{}", identity.size, identity.mtime_ns)
 }
 
-fn parse_seen(seen: &str) -> Option<FileIdentity> {
+fn parse_seen(seen: &str) -> Option<SeenFile> {
     let (size, mtime_ns) = seen.split_once(':')?;
-    Some(FileIdentity {
+    Some(SeenFile {
         size: size.parse().ok()?,
         mtime_ns: mtime_ns.parse().ok()?,
     })
