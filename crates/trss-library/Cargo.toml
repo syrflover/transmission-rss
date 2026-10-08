@@ -14,7 +14,6 @@ trss-anilist.workspace = true
 
 # Image bytes shared between the web, the decode and the file writer without copies.
 bytes.workspace = true
-regex.workspace = true
 rusqlite.workspace = true
 rustix.workspace = true
 serde = { workspace = true, features = ["derive"] }

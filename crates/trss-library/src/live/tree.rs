@@ -46,6 +46,8 @@ use rustix::{
     io::Errno,
 };
 
+use trss_core::trname_names::season_folder;
+
 use crate::discovery;
 
 /// Why a directory has no watch.
@@ -551,7 +553,7 @@ impl WatchTree {
                 }
             }
             Role::Work(work) => {
-                if discovery::season_of_folder(name).is_some() {
+                if season_folder(name).is_some() {
                     let path = dir.path.join(name);
                     if removed {
                         self.drop_subtree(&path);
@@ -679,7 +681,7 @@ fn season_names(work: &Path) -> io::Result<Vec<(String, bool)>> {
         let Ok(name) = entry.file_name().into_string() else {
             continue;
         };
-        if discovery::is_skipped(&name) || discovery::season_of_folder(&name).is_none() {
+        if discovery::is_skipped(&name) || season_folder(&name).is_none() {
             continue;
         }
         let Ok(file_type) = entry.file_type() else {

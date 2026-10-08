@@ -25,10 +25,9 @@ use crate::{
         judge::{folder_episode, Known, Present, World},
         release::{read, Episode, Kind},
     },
-    revision::season_episode,
     store::{history::HistoryItem, status::TorrentListing},
 };
-use trss_core::files::without_part;
+use trss_core::{files::without_part, trname_names::season_episode};
 
 /// The most files of one folder that are looked at.
 const MAX_FILES: usize = 5000;

@@ -278,32 +278,11 @@ pub fn file_crc32_identified(path: &Path) -> io::Result<(u32, FileIdentity)> {
     Ok((hasher.finalize(), after))
 }
 
-/// The season and episode an episode file name (`Show S01E14.mkv`) is of.
-pub fn season_episode(name: &str) -> Option<(u32, String)> {
-    static NAME: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"(?i)S(\d{2,})E(\d{2,}(?:\.\d)?)\.\w+$").unwrap());
-    let found = NAME.captures(name)?;
-    Some((found[1].parse().ok()?, found[2].to_owned()))
-}
-
 #[cfg(test)]
 mod tests {
     use std::os::unix::fs::FileExt;
 
     use super::*;
-
-    #[test]
-    fn an_episode_name_gives_its_season_and_episode() {
-        assert_eq!(
-            season_episode("Show S01E14.mkv"),
-            Some((1, "14".to_owned()))
-        );
-        assert_eq!(
-            season_episode("Show S02E05.5.mp4"),
-            Some((2, "05.5".to_owned()))
-        );
-        assert_eq!(season_episode("[SubsPlease] Show - 14.mkv"), None);
-    }
 
     #[test]
     fn a_subsplease_name_gives_its_crc_and_its_revision() {

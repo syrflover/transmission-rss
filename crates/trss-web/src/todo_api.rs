@@ -171,13 +171,13 @@ use super::{
 };
 use trss_collect::{
     commands::receive_once,
-    revision::season_episode,
     revisions::received_again_on_retry,
     store::{
         history::{HistoryQuery, HistoryResult},
         revisions::{Revision, RevisionState},
     },
 };
+use trss_core::trname_names::season_episode;
 use trss_jobs::{
     model::PlanState,
     place::replace::records::{Compared, Comparison, Format, Item, PlanView},

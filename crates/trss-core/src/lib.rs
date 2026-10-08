@@ -24,6 +24,7 @@ pub mod heartbeat;
 pub mod lock;
 pub mod queue;
 pub mod settings;
+pub mod trname_names;
 pub mod wake;
 
 pub use clock::{system_clock, Clock, Millis};

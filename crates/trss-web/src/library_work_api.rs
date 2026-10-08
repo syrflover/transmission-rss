@@ -244,11 +244,13 @@ use super::{
 };
 use trss_collect::{
     commands::rule_archive::{work_folder, WorkFolder},
-    revision::{season_episode, Release},
+    revision::Release,
     rss::save_path,
     store::{channels::ChannelWithRules, revisions::Revision},
 };
-use trss_core::{episode::EpisodeNumber, settings::policy::FormatOrder};
+use trss_core::{
+    episode::EpisodeNumber, settings::policy::FormatOrder, trname_names::season_episode,
+};
 use trss_jobs::place::cleanup;
 use trss_library::store::{
     artwork::JobKind,

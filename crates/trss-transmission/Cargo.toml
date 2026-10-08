@@ -8,10 +8,11 @@ edition.workspace = true
 test-support = ["dep:axum", "dep:serde_json", "tokio/net", "tokio/rt", "tokio/sync"]
 
 [dependencies]
+trss-core.workspace = true
+
 trname.workspace = true
 
 axum = { workspace = true, optional = true }
-regex.workspace = true
 reqwest012.workspace = true
 serde_json = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["macros", "time"] }

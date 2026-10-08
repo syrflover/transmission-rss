@@ -12,10 +12,9 @@
 pub mod fake;
 mod redact;
 
-use std::{fmt, path::Path, sync::LazyLock, time::Duration};
+use std::{fmt, path::Path, time::Duration};
 
 pub use redact::{Redactor, MIN_QUERY_SECRET_LEN, REDACTED};
-use regex::Regex;
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 use transmission_rpc::{
@@ -680,29 +679,15 @@ pub fn has_trname_form(
 }
 
 /// Whether `name` is the name `trname` gives in `download_dir`
-/// (`.../<title>/Season NN`): the folder's title and an episode, as in
-/// `<title> S01E05.mkv`, `S01E05.5` or a three-digit `S01E105`, with the
-/// title's case not counting. `trname` itself takes its form only under the
-/// title as written, with a two-digit season and at most four digits of
-/// episode, and reads any other name as a release's.
-/// A release that merely ends in `SxxEyy` under another title is not one.
+/// (`.../<title>/Season NN`): the folder's title and an episode
+/// ([`trss_core::trname_names::is_trname_name`]).
 fn looks_renamed(name: &str, download_dir: &Path) -> bool {
-    static EPISODE: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"(?i)^ S\d{2,}E\d{2,}(?:\.\d)?\.\w+$").unwrap());
-    let Some(title) = download_dir
+    download_dir
         .components()
         .rev()
         .nth(1)
         .and_then(|c| c.as_os_str().to_str())
-    else {
-        return false;
-    };
-    match name.get(..title.len()) {
-        Some(head) if head.to_lowercase() == title.to_lowercase() => {
-            EPISODE.is_match(&name[title.len()..])
-        }
-        _ => false,
-    }
+        .is_some_and(|title| trss_core::trname_names::is_trname_name(name, title))
 }
 
 /// How persistently a freshly added torrent is renamed: Transmission needs a

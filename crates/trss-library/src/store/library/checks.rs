@@ -21,8 +21,9 @@
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 
 use super::LibraryStore;
-use crate::discovery::{season_of_folder, Reason, SeenFile};
-use trss_core::{db::DbError, Millis};
+
+use crate::discovery::{Reason, SeenFile};
+use trss_core::{db::DbError, trname_names::season_folder, Millis};
 
 #[derive(Debug, thiserror::Error)]
 pub enum CheckError {
@@ -105,7 +106,7 @@ pub(super) fn open_checks(conn: &Connection) -> rusqlite::Result<Vec<VideoCheck>
         // left out rather than shown wrong.
         let season = path
             .split_once('/')
-            .and_then(|(folder, _)| season_of_folder(folder));
+            .and_then(|(folder, _)| season_folder(folder));
         let (Some(season), Some(reason), Some(identity)) = (
             season,
             Reason::from_code(&reason),

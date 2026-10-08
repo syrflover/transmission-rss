@@ -3013,6 +3013,7 @@ name = "trss-core"
 version = "0.1.0"
 dependencies = [
  "futures",
+ "regex",
  "rusqlite",
  "rustix",
  "serde",
@@ -3067,7 +3068,6 @@ dependencies = [
  "bytes",
  "futures",
  "image",
- "regex",
  "rusqlite",
  "rustix",
  "serde",
@@ -3121,13 +3121,13 @@ name = "trss-transmission"
 version = "0.1.0"
 dependencies = [
  "axum",
- "regex",
  "reqwest 0.12.28",
  "serde_json",
  "tokio",
  "tokio-util",
  "transmission-rpc",
  "trname",
+ "trss-core",
  "url",
 ]
 
