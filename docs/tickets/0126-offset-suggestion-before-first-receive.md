@@ -53,6 +53,12 @@
 - 받을 회차의 계산은 `trss-collect`의 `a_release_is_received_as_trname_names_it_with_the_offset`이, 미리보기 항목의 모양은 `trss-web`의 `the_items_the_rule_takes_say_the_episode_they_are_received_as`가 봐요.
 - 2026-10-08 이 변경을 담은 작업 트리에서 `cargo test --locked --workspace -j 4`(glibc)가 2,817개 통과, 실패 0, 무시 14개였어요. `cargo clippy --workspace --all-targets -j 4`는 경고가 없고 `cargo fmt --all --check`도 통과해요. 웹은 `npm run typecheck`와 `npm test`(223개)가 통과해요.
 
+### 실제 서버 (2026-10-08, 0.6.2)
+
+- `정반대의 너와 나` 2기 규칙은 배포 전에 사용자가 회차 변환을 −12로 직접 정해 둔 상태였어요. 규칙 미리보기가 받지 않은 두 지난 회차 `- 24`, `- 25`를 `S02E12`, `S02E13`으로 보여줬어요.
+- 사용자가 `- 24`를 받았고, `S02E12`로 받아졌어요(사용자 확인). 미리보기에 보인 받을 회차와 실제 이름이 같아요.
+- 받기 전 제안과 `적용`은 확인하지 못했어요. 이 규칙은 값이 이미 정해져 있어 제안할 것이 없었어요. 시즌 중간 번호로 시작하는 속편을 다음에 구독할 때 봐요.
+
 ### 검증하지 못한 것
 
 - 구독 확인 단계의 제안, `적용`, `적용 취소`, 받을 회차 표시는 타입 검사만 했고 브라우저에서 보지 않았어요.
