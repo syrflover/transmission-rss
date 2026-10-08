@@ -16,9 +16,9 @@ use std::{
 };
 
 use sha2::{Digest, Sha256};
-use trss_core::files::rename_noreplace;
+use trss_core::{file_id::FileId, files::rename_noreplace};
 
-use crate::area::{hex, object_of, read_facts, sync_dir};
+use crate::area::{hex, read_facts, sync_dir};
 
 /// The hidden folder of the app in a work folder.
 pub const TRSS_DIR: &str = ".trss";
@@ -130,7 +130,7 @@ fn open_regular(path: &Path) -> io::Result<File> {
         return Err(io::Error::other("not a regular file"));
     }
     let file = File::open(path)?;
-    if object_of(&file.metadata()?) != object_of(&seen) {
+    if !FileId::of(&file.metadata()?).same_file_now(FileId::of(&seen)) {
         return Err(io::Error::other("replaced while opened"));
     }
     Ok(file)

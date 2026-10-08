@@ -80,7 +80,7 @@
 //! | `prepared` | no temporary file, the target is the recorded object, length and hash | the rename happened: synced, then `done` |
 //! | `prepared` | anything else | `held` |
 //!
-//! A file is the recorded object by its inode ([`crate::area::same_object`]),
+//! A file is the recorded object by its inode ([`trss_core::file_id::same_recorded_file`]),
 //! here and in [`replace`]: a machine restarted meanwhile may have mounted
 //! its file system with another device number.
 //!
@@ -120,11 +120,11 @@ use std::{
 
 use tokio_util::sync::CancellationToken;
 use trss_archive::run::Unpacker;
-use trss_core::{Clock, Db, Millis};
+use trss_core::{file_id::same_recorded_file, Clock, Db, Millis};
 use trss_subtitles::verify::{self, Format};
 
 use crate::{
-    area::{safe_name, same_object, ReceiveArea},
+    area::{safe_name, ReceiveArea},
     follow::Follow,
     model::{
         AssetKind, Chosen, EffectKind, EffectState, FileState, ItemState, Outcome, PlanAction,
@@ -1328,7 +1328,7 @@ impl Placer {
                 if effect
                     .object
                     .as_ref()
-                    .is_some_and(|r| same_object(r, &object)) =>
+                    .is_some_and(|r| same_recorded_file(r, &object)) =>
             {
                 let _ = blocking(move || files::remove_known(&temp)).await;
                 let reason = match effect.kind {
@@ -2117,7 +2117,10 @@ impl Placer {
                     found.as_ref().is_some_and(|(n, s, o)| {
                         *n == effect.size
                             && *s == effect.sha256
-                            && effect.object.as_ref().is_some_and(|r| same_object(r, o))
+                            && effect
+                                .object
+                                .as_ref()
+                                .is_some_and(|r| same_recorded_file(r, o))
                     })
                 };
                 match (t, g) {

@@ -51,7 +51,7 @@
 //! Transmission renames by name, whatever file is there, so right before it
 //! the torrent must be finished (not downloading or verifying), still in the
 //! folder, and the file at its name must be the one planned (same inode:
-//! [`FileIdentity::same_file`]); otherwise it keeps its name with the reason.
+//! [`FileId::same_file`](trss_core::file_id::FileId::same_file)); otherwise it keeps its name with the reason.
 //! A name another torrent lists in the folder is not taken either, even while
 //! its file is missing or still being written: Transmission would write that
 //! torrent's file there. Nor is a file another torrent lists too
@@ -771,8 +771,8 @@ fn new_name(
     planned: &FileIdentity,
 ) -> NewName {
     match (source, target) {
-        (None, Some(target)) if target.same_file(planned) => NewName::Done,
-        (Some(source), _) if source.same_file(planned) => NewName::Back,
+        (None, Some(target)) if target.id().same_file(planned.id()) => NewName::Done,
+        (Some(source), _) if source.id().same_file(planned.id()) => NewName::Back,
         _ => NewName::Changed,
     }
 }
@@ -802,7 +802,7 @@ async fn renamed_before(
             identity_at(&folder.join(&file.from_name)),
             identity_at(&folder.join(&file.to_name)),
         ),
-        (Ok(None), Ok(Some(there))) if there.same_file(&planned)
+        (Ok(None), Ok(Some(there))) if there.id().same_file(planned.id())
     ))
 }
 
@@ -899,7 +899,7 @@ async fn rename(
         // Transmission renames by name: the file there must be the torrent's
         // own, as planned, or another file would be moved under its name.
         match identity_at(&source) {
-            Ok(Some(now)) if now.same_file(&planned) => {}
+            Ok(Some(now)) if now.id().same_file(planned.id()) => {}
             Ok(Some(_)) => return Ok(Some(FILE_CHANGED.to_owned())),
             Ok(None) => return Ok(Some(MISSING.to_owned())),
             Err(err) => return Ok(looked(err)),
@@ -965,7 +965,7 @@ async fn rename(
         Ok(None) => {
             // An earlier start renamed it and stopped before recording it.
             return Ok(match identity_at(&target) {
-                Ok(Some(there)) if there.same_file(&planned) => None,
+                Ok(Some(there)) if there.id().same_file(planned.id()) => None,
                 _ => Some(MISSING.to_owned()),
             });
         }

@@ -23,11 +23,14 @@
 
 use std::{
     io,
-    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
 };
+// Only the tests of this file still read a device number and an inode here.
+#[cfg(test)]
+use std::os::unix::fs::MetadataExt;
 
 use sha2::{Digest, Sha256};
+use trss_core::file_id::FileId;
 
 /// The folder of received files.
 #[derive(Debug, Clone)]
@@ -200,28 +203,19 @@ pub fn name_candidates(name: &str) -> impl Iterator<Item = String> + '_ {
     std::iter::once(name.to_owned()).chain((2..).map(move |n| format!("{stem} ({n}){ext}")))
 }
 
-/// What names a file on its file system: `<device>:<inode>`. A recorded
-/// object is compared with a file found later by [`same_object`].
-///
-/// No birth time: the image's build (musl) cannot read one, as the standard
-/// library asks for it only through glibc. Records an earlier glibc build
-/// made may still carry one after the inode (`:<ns>`).
+/// What names a file on its file system, as a record keeps it:
+/// `<device>:<inode>` ([`FileId`]). A recorded object is compared with a file
+/// found later by [`trss_core::file_id::same_recorded_file`], which reads the
+/// records an earlier glibc build made with a birth time after the inode too.
 pub fn object_of(meta: &std::fs::Metadata) -> String {
-    format!("{}:{}", meta.dev(), meta.ino())
+    FileId::of(meta).to_string()
 }
 
-/// Whether two objects ([`object_of`]) name the same file: the same inode.
-/// The device number is left out: a file system mounted again may give the
-/// same file another one (btrfs numbers its devices at each mount), and a
-/// record made before a restart would then name no file. A recorded birth
-/// time is left out too. A later file that reuses the inode passes for the
-/// first; where that matters the callers compare the bytes, or the video's
-/// length and change time, as well.
-pub fn same_object(a: &str, b: &str) -> bool {
-    fn inode(object: &str) -> Option<&str> {
-        object.split(':').nth(1)
-    }
-    inode(a).is_some() && inode(a) == inode(b)
+/// Kept for the tests of this file only; the rule is
+/// [`trss_core::file_id::same_recorded_file`].
+#[cfg(test)]
+fn same_object(a: &str, b: &str) -> bool {
+    trss_core::file_id::same_recorded_file(a, b)
 }
 
 /// A regular file's length, SHA-256 (lower-case hex) and object, read whole.
@@ -235,7 +229,7 @@ pub fn read_facts(path: &Path) -> io::Result<(u64, String, String)> {
     }
     let mut file = std::fs::File::open(path)?;
     let meta = file.metadata()?;
-    if object_of(&meta) != object_of(&seen) {
+    if !FileId::of(&meta).same_file_now(FileId::of(&seen)) {
         return Err(io::Error::other("replaced while opened"));
     }
     let mut hasher = Sha256::new();

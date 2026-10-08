@@ -123,7 +123,7 @@
 //! | `done`, not received (`unchanged_asset`) | no file of its own; the font not removed, its file with its recorded length and hash | the package uses the font when its row is stored |
 //! | `done`, not received | the font removed by a cleanup, its file gone or other bytes | at its row's store: `abandoned` with the receipts that share it, their rows not kept gone, their items `pending`; the job goes back in line and receives the file |
 //!
-//! A file is the recorded object by its inode ([`area::same_object`]): a
+//! A file is the recorded object by its inode ([`trss_core::file_id::same_recorded_file`]): a
 //! machine restarted meanwhile may have mounted its file system with another
 //! device number.
 //!
@@ -145,7 +145,7 @@ use std::{
 use sha2::{Digest, Sha256};
 use tokio::{io::AsyncWriteExt, sync::Notify};
 use tokio_util::sync::CancellationToken;
-use trss_core::{Clock, Millis};
+use trss_core::{file_id::same_recorded_file, Clock, Millis};
 use trss_subtitles::{
     auth::{self, AuthBrowser, AuthPage, Waited},
     verify,
@@ -1979,7 +1979,7 @@ impl Runner {
                 && Some(&facts.1) == r.sha256.as_ref()
                 && r.object
                     .as_ref()
-                    .is_some_and(|o| area::same_object(o, &facts.2))
+                    .is_some_and(|o| same_recorded_file(o, &facts.2))
         };
 
         if r.state == FileState::Failed {

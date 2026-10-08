@@ -51,12 +51,13 @@
 //! its devices at each mount; on the dev PC an unchanged file went from 47 to
 //! 46 after a reboot), and the app's own files would then be taken for someone
 //! else's and left on the disk for good. No birth time is recorded either, as
-//! `trss_jobs::area::same_object` compares none: the image builds for musl,
-//! where the standard library reads none. A different file that happens to get
-//! the same inode number at the app's own name is then taken for the app's,
-//! and it is still removed only when nothing refers to it. The identities of
-//! the referenced paths are read under the same mount as the file, so there
-//! the device number still tells files apart.
+//! `trss_core::file_id::FileId::same_file` compares none: the image builds for
+//! musl, where the standard library reads none. A different file that happens
+//! to get the same inode number at the app's own name is then taken for the
+//! app's, and it is still removed only when nothing refers to it. The ids of
+//! the referenced paths are read under the same mount as the file
+//! ([`FileId::same_file_now`]), so there the device number still tells files
+//! apart.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -81,7 +82,7 @@ use crate::store::{
     artwork::{ArtworkError, ArtworkStore, FileRow, Format, ImageRef, Source},
 };
 use trss_anilist::MAX_IMAGE_BYTES;
-use trss_core::{files::rename_noreplace, Millis};
+use trss_core::{file_id::FileId, files::rename_noreplace, Millis};
 
 /// The folder of the images, relative to the app data folder.
 pub const ARTWORK_DIR: &str = "artwork";
@@ -150,7 +151,7 @@ fn ensure_dir(root: &Path, rel: &str) -> io::Result<()> {
 }
 
 /// Writes `bytes` to a new file at `staging` and returns its identity.
-fn write_staged(root: &Path, staging: &str, bytes: &[u8]) -> io::Result<(u64, u64)> {
+fn write_staged(root: &Path, staging: &str, bytes: &[u8]) -> io::Result<FileId> {
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -161,7 +162,7 @@ fn write_staged(root: &Path, staging: &str, bytes: &[u8]) -> io::Result<(u64, u6
     file.set_permissions(fs::Permissions::from_mode(0o644))?;
     file.sync_all()?;
     let meta = file.metadata()?;
-    Ok((meta.dev(), meta.ino()))
+    Ok(FileId::of(&meta))
 }
 
 /// Publishes `bytes` (already verified as `format`) under a new app-made name.
@@ -192,15 +193,15 @@ pub(crate) async fn publish_at(
     store.reserve_file(target, staging, now).await?;
     let root = app.root.clone();
     let staging_owned = staging.to_owned();
-    let staged = tokio::task::spawn_blocking(move || -> io::Result<(u64, u64)> {
+    let staged = tokio::task::spawn_blocking(move || -> io::Result<FileId> {
         ensure_dir(&root, ARTWORK_DIR)?;
         ensure_dir(&root, STAGING_DIR)?;
         write_staged(&root, &staging_owned, &bytes)
     })
     .await
     .map_err(|e| io::Error::other(e.to_string()))?;
-    let (dev, ino) = match staged {
-        Ok(identity) => identity,
+    let id = match staged {
+        Ok(id) => id,
         Err(e) => {
             // The file was not made (create_new failed) or is half-written;
             // either way it is the one this call made, or nothing.
@@ -209,7 +210,7 @@ pub(crate) async fn publish_at(
             return Err(e.into());
         }
     };
-    store.file_identity(target, dev, ino).await?;
+    store.file_identity(target, id.dev(), id.ino()).await?;
 
     let renamed = rename_noreplace(&app.root.join(staging), &app.root.join(target));
     if let Err(e) = renamed {
@@ -452,18 +453,18 @@ fn lexical(root: &Path, relative: &str) -> PathBuf {
     out
 }
 
-/// The identities (device, inode) of what the referenced paths lead to now,
+/// The ids (device, inode) of what the referenced paths lead to now,
 /// both the entry itself and what a link there points to. `None` when one
 /// cannot be read for a reason other than its absence: then nothing can be
 /// known to be unreferenced.
-fn referenced_identities(root: &Path, paths: &[String]) -> Option<HashSet<(u64, u64)>> {
+fn referenced_identities(root: &Path, paths: &[String]) -> Option<HashSet<FileId>> {
     let mut identities = HashSet::new();
     for relative in paths {
         let path = root.join(relative);
         for meta in [fs::symlink_metadata(&path), fs::metadata(&path)] {
             match meta {
                 Ok(meta) => {
-                    identities.insert((meta.dev(), meta.ino()));
+                    identities.insert(FileId::of(&meta));
                 }
                 Err(e) if e.kind() == io::ErrorKind::NotFound => {}
                 Err(_) => return None,
@@ -492,8 +493,8 @@ enum Found {
     Nothing,
     /// Something other than the file the app recorded.
     Other,
-    /// The recorded file, with its identity (device, inode) as mounted now.
-    Ours((u64, u64)),
+    /// The recorded file, with its id (device, inode) as mounted now.
+    Ours(FileId),
 }
 
 /// What the entry at `path` is to `file`'s record, which knows it by its
@@ -501,12 +502,12 @@ enum Found {
 fn found_at(path: &Path, file: &FileRow) -> io::Result<Found> {
     match fs::symlink_metadata(path) {
         Ok(meta) => {
-            let ours = meta.file_type().is_file() && Some(meta.ino()) == file.ino;
-            Ok(if ours {
-                Found::Ours((meta.dev(), meta.ino()))
-            } else {
-                Found::Other
-            })
+            let id = FileId::of(&meta);
+            let ours = meta.file_type().is_file()
+                && file
+                    .recorded_id()
+                    .is_some_and(|recorded| id.same_file(recorded));
+            Ok(if ours { Found::Ours(id) } else { Found::Other })
         }
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Found::Nothing),
         Err(e) => Err(e),

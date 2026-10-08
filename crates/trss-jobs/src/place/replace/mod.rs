@@ -41,7 +41,7 @@
 //! Each run looks at an open plan again ([`Placer::changed`]): one whose
 //! evidence no longer holds goes `stale` and the row's next plan is made, so
 //! the person compares again. A file is still the one the plan saw by its
-//! inode ([`same_object`]), not its device number, which a machine restarted
+//! inode ([`same_recorded_file`]), not its device number, which a machine restarted
 //! meanwhile may have changed.
 //!
 //! # Carrying out
@@ -98,7 +98,7 @@ use std::{
     time::UNIX_EPOCH,
 };
 
-use trss_core::files::rename_noreplace;
+use trss_core::{file_id::same_recorded_file, files::rename_noreplace};
 
 use super::{
     blocking, files,
@@ -109,7 +109,7 @@ use super::{
     row_label, video_parts, Choice, Placer, SUBTITLE_EXTENSIONS,
 };
 use crate::{
-    area::{object_of, read_facts, same_object, sync_dir},
+    area::{object_of, read_facts, sync_dir},
     model::{
         AssetKind, Chosen, EffectKind, EffectState, Outcome, PathAction, PlanAction, PlanState,
         SubtitleFormat,
@@ -202,14 +202,14 @@ fn seen_video(path: &Path, relative: &str) -> io::Result<VideoSeen> {
 /// The same file as the plan saw: its object and bytes.
 fn same_file(found: &Option<(u64, String, String)>, seen: &FileSeen) -> bool {
     found.as_ref().is_some_and(|(n, s, o)| {
-        *n == seen.size && *s == seen.sha256 && same_object(o, &seen.object)
+        *n == seen.size && *s == seen.sha256 && same_recorded_file(o, &seen.object)
     })
 }
 
 /// The same video as the plan saw: its path, object, length and change time.
 fn same_video(found: &VideoSeen, seen: &VideoSeen) -> bool {
     found.path == seen.path
-        && same_object(&found.object, &seen.object)
+        && same_recorded_file(&found.object, &seen.object)
         && found.size == seen.size
         && found.mtime == seen.mtime
 }
@@ -712,7 +712,7 @@ impl Placer {
                 (Some(seen), Some(found))
                     if found.file.size != seen.size
                         || found.file.sha256 != seen.sha256
-                        || !same_object(&found.file.object, &seen.object) =>
+                        || !same_recorded_file(&found.file.object, &seen.object) =>
                 {
                     return Ok(Some(format!(
                         "기존 자막이 비교한 뒤 바뀌었어요 ({})",
@@ -954,7 +954,11 @@ impl Placer {
             let gone = blocking(move || match files::facts(&temp)? {
                 // Only this effect writes its temporary file; a prepared
                 // one is removed while it is the one recorded.
-                Some((_, _, found)) if object.as_ref().is_some_and(|o| !same_object(o, &found)) => {
+                Some((_, _, found))
+                    if object
+                        .as_ref()
+                        .is_some_and(|o| !same_recorded_file(o, &found)) =>
+                {
                     Err(io::Error::other("임시 파일이 기록과 달라요"))
                 }
                 Some(_) => files::remove_known(&temp),
@@ -1245,7 +1249,7 @@ impl Placer {
                     let temp = files::within(&folder, &apply.temp);
                     let still = blocking(move || files::facts(&temp)).await;
                     let kept = matches!(&still, Ok(Some((_, _, o)))
-                        if apply.object.as_ref().is_some_and(|r| same_object(r, o)));
+                        if apply.object.as_ref().is_some_and(|r| same_recorded_file(r, o)));
                     if !kept {
                         let reason = format!("새 자막을 공개한 결과를 확인하지 못했어요: {err}");
                         return self.hold_plan(plan, &reason).await;
@@ -1506,7 +1510,7 @@ impl Placer {
                         let p = files::facts(&protective)?;
                         let ours_aside = a.is_none() || same_file(&a, &seen);
                         let ours_copy = p.as_ref().is_none_or(|(_, _, o)| {
-                            object.as_ref().is_some_and(|r| same_object(r, o))
+                            object.as_ref().is_some_and(|r| same_recorded_file(r, o))
                         });
                         if !(ours_aside && ours_copy) {
                             return Ok(false);
@@ -1576,7 +1580,10 @@ impl Placer {
                 found.as_ref().is_some_and(|(n, s, o)| {
                     *n == effect.size
                         && *s == effect.sha256
-                        && effect.object.as_ref().is_some_and(|r| same_object(r, o))
+                        && effect
+                            .object
+                            .as_ref()
+                            .is_some_and(|r| same_recorded_file(r, o))
                 })
             };
             match (effect.kind, effect.state) {

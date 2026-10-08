@@ -13,6 +13,7 @@ pub mod calendar;
 mod clock;
 pub mod commands;
 pub mod db;
+pub mod file_id;
 pub mod files;
 pub mod folder_locks;
 pub mod folders;

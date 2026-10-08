@@ -87,7 +87,6 @@
 
 use std::{
     io,
-    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -111,7 +110,7 @@ use crate::{
         },
     },
 };
-use trss_core::{folder_locks::FolderLocks, Millis};
+use trss_core::{file_id::FileId, folder_locks::FolderLocks, Millis};
 use trss_transmission::{get_torrent, torrent_places, Redactor, TorrentPlace};
 
 /// What the video revisions use (made from
@@ -280,7 +279,7 @@ pub(crate) enum Owner<'a> {
 /// Transmission spells another way (a symbolic link, a doubled slash) is
 /// still the same file.
 pub(crate) fn owner_of<'a>(places: &'a [TorrentPlace], path: &Path) -> io::Result<Owner<'a>> {
-    let file = std::fs::metadata(path)?;
+    let file = FileId::of(&std::fs::metadata(path)?);
     let mut owners: Vec<&TorrentPlace> = Vec::new();
     let mut unsure = false;
     for place in places {
@@ -290,7 +289,7 @@ pub(crate) fn owner_of<'a>(places: &'a [TorrentPlace], path: &Path) -> io::Resul
                 continue;
             }
             match std::fs::metadata(&candidate) {
-                Ok(meta) if meta.dev() == file.dev() && meta.ino() == file.ino() => {
+                Ok(meta) if FileId::of(&meta).same_file_now(file) => {
                     if !owners.iter().any(|owner| owner.hash == place.hash) {
                         owners.push(place);
                     }
@@ -314,7 +313,7 @@ pub fn same_folder(a: &Path, b: &Path) -> bool {
         return true;
     }
     match (std::fs::metadata(a), std::fs::metadata(b)) {
-        (Ok(a), Ok(b)) => a.dev() == b.dev() && a.ino() == b.ino(),
+        (Ok(a), Ok(b)) => FileId::of(&a).same_file_now(FileId::of(&b)),
         _ => false,
     }
 }

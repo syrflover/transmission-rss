@@ -10,7 +10,7 @@ use crate::store::artwork::{
     ArtworkError, ClaimedJob, Format, ImageRef, Job, JobKind, Mode, Note, Searched, Selection,
     Source, UserChange,
 };
-use trss_core::Millis;
+use trss_core::{file_id::FileId, Millis};
 
 fn begin(conn: &mut Connection) -> rusqlite::Result<Transaction<'_>> {
     conn.transaction_with_behavior(TransactionBehavior::Immediate)
@@ -534,6 +534,13 @@ pub struct FileRow {
     pub dev: Option<u64>,
     pub ino: Option<u64>,
     pub created_at: Millis,
+}
+
+impl FileRow {
+    /// The recorded file's id, once its device and inode were recorded.
+    pub fn recorded_id(&self) -> Option<FileId> {
+        Some(FileId::new(self.dev?, self.ino?))
+    }
 }
 
 pub(super) fn reserve_file(

@@ -23,6 +23,7 @@
 use std::{fs::File, io, io::Read, path::Path, sync::LazyLock};
 
 use regex::Regex;
+use trss_core::file_id::FileId;
 
 /// What a release name says.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -158,20 +159,19 @@ pub fn file_crc32(path: &Path) -> io::Result<u32> {
     file_crc32_identified(path).map(|(crc, _)| crc)
 }
 
-/// What tells a file apart from another one put under its name: its device
-/// and inode, its size, and its modification and status-change times (a
-/// write into it changes the first; the second also catches a write that put
-/// the modification time back, and any change of mode or owner).
+/// What tells a file apart from another one put under its name: its
+/// [`FileId`] (device and inode), its size, and its modification and
+/// status-change times (a write into it changes the first; the second also
+/// catches a write that put the modification time back, and any change of
+/// mode or owner).
 ///
-/// `==` compares all of it. [`FileIdentity::same_file`] and
-/// [`FileIdentity::unchanged`] leave the device number out, for an identity
-/// kept to be compared with the file found later: a file system mounted again
-/// may give the same file another one (btrfs numbers its devices at each
-/// mount).
+/// `==` compares all of it. For an identity kept to be compared with the file
+/// found later, [`FileIdentity::unchanged`] leaves the device number out as
+/// [`FileId::same_file`] does, and the file itself is recognized by
+/// [`FileIdentity::id`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FileIdentity {
-    dev: u64,
-    ino: u64,
+    id: FileId,
     len: u64,
     mtime: i64,
     mtime_nsec: i64,
@@ -183,8 +183,7 @@ impl FileIdentity {
     pub fn of(meta: &std::fs::Metadata) -> FileIdentity {
         use std::os::unix::fs::MetadataExt;
         FileIdentity {
-            dev: meta.dev(),
-            ino: meta.ino(),
+            id: FileId::of(meta),
             len: meta.len(),
             mtime: meta.mtime(),
             mtime_nsec: meta.mtime_nsec(),
@@ -199,19 +198,27 @@ impl FileIdentity {
         std::fs::symlink_metadata(path).map(|meta| FileIdentity::of(&meta))
     }
 
-    /// Whether `other` is the same file on disk (its inode), whatever happened
-    /// to it since: a rename changes its status-change time.
-    pub fn same_file(&self, other: &FileIdentity) -> bool {
-        self.ino == other.ino
+    /// The file's id, which recognizes it again whatever happened to it since
+    /// (a rename changes its status-change time): [`FileId::same_file`].
+    pub fn id(&self) -> FileId {
+        self.id
     }
 
-    /// Whether `other` is the same file ([`FileIdentity::same_file`]) as it
-    /// was: all but the device number is this identity.
+    /// Whether `other` is the same file ([`FileId::same_file`]) as it was:
+    /// this identity but for the device number.
     pub fn unchanged(&self, other: &FileIdentity) -> bool {
-        FileIdentity {
-            dev: other.dev,
-            ..*self
-        } == *other
+        other.id.same_file(self.id)
+            && FileIdentity {
+                id: other.id,
+                ..*self
+            } == *other
+    }
+
+    /// Kept for the tests of this file only; the rule is
+    /// [`FileId::same_file`].
+    #[cfg(test)]
+    fn same_file(&self, other: &FileIdentity) -> bool {
+        other.id.same_file(self.id)
     }
 
     /// The identity as text, to keep in the database ([`FileIdentity::parse`]
@@ -219,7 +226,13 @@ impl FileIdentity {
     pub fn to_text(&self) -> String {
         format!(
             "{}:{}:{}:{}.{}:{}.{}",
-            self.dev, self.ino, self.len, self.mtime, self.mtime_nsec, self.ctime, self.ctime_nsec
+            self.id.dev(),
+            self.id.ino(),
+            self.len,
+            self.mtime,
+            self.mtime_nsec,
+            self.ctime,
+            self.ctime_nsec
         )
     }
 
@@ -236,8 +249,7 @@ impl FileIdentity {
             return None;
         }
         Some(FileIdentity {
-            dev,
-            ino,
+            id: FileId::new(dev, ino),
             len,
             mtime: mtime.parse().ok()?,
             mtime_nsec: mtime_nsec.parse().ok()?,
