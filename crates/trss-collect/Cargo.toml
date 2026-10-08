@@ -3,6 +3,10 @@ name = "trss-collect"
 version.workspace = true
 edition.workspace = true
 
+[features]
+# The fake feed and nyaa servers (`fake`), for the tests of the crates above.
+test-support = ["dep:axum", "trss-transmission/test-support"]
+
 [dependencies]
 trss-core.workspace = true
 trss-anissia.workspace = true
@@ -28,12 +32,14 @@ tokio-util.workspace = true
 transmission-rpc.workspace = true
 url.workspace = true
 uuid.workspace = true
+axum = { workspace = true, optional = true }
 
 [dev-dependencies]
 trss-core = { workspace = true, features = ["test-support"] }
 trss-anissia = { workspace = true, features = ["test-support"] }
 trss-anilist = { workspace = true, features = ["test-support"] }
 trss-library = { workspace = true, features = ["test-support"] }
+trss-transmission = { workspace = true, features = ["test-support"] }
 axum.workspace = true
 rustix.workspace = true
 tempfile.workspace = true

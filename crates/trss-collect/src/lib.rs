@@ -24,6 +24,8 @@ pub mod commands;
 pub mod config;
 pub mod context;
 pub mod episode_offset;
+#[cfg(any(test, feature = "test-support"))]
+pub mod fake;
 pub mod feed;
 pub mod offsets;
 pub mod past_search;

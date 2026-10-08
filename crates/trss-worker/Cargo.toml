@@ -29,7 +29,8 @@ trss-core = { workspace = true, features = ["test-support"] }
 trss-anissia = { workspace = true, features = ["test-support"] }
 trss-anilist = { workspace = true, features = ["test-support"] }
 trss-library = { workspace = true, features = ["test-support"] }
-trss-collect.workspace = true
+trss-collect = { workspace = true, features = ["test-support"] }
+trss-transmission = { workspace = true, features = ["test-support"] }
 trss-web.workspace = true
 axum.workspace = true
 crc32fast.workspace = true

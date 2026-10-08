@@ -8,6 +8,8 @@
 //! [`RenameMode`]: the former binary renamed every torrent as one it had just
 //! added, while the worker does that for its own new adds only.
 
+#[cfg(any(test, feature = "test-support"))]
+pub mod fake;
 mod redact;
 
 use std::{fmt, path::Path, sync::LazyLock, time::Duration};

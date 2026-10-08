@@ -3120,8 +3120,10 @@ dependencies = [
 name = "trss-transmission"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "regex",
  "reqwest 0.12.28",
+ "serde_json",
  "tokio",
  "tokio-util",
  "transmission-rpc",
