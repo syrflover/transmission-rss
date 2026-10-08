@@ -82,6 +82,7 @@ use std::{
 };
 
 use regex::Regex;
+use trss_core::files::without_part;
 
 /// Video extensions, lower case.
 pub const VIDEO_EXTENSIONS: &[&str] = &[
@@ -951,8 +952,9 @@ pub fn kind_of(name: &str) -> Option<FileKind> {
     }
 }
 
+/// Whether `name` is the name Transmission gives a download in progress.
 fn is_partial(name: &str) -> bool {
-    name.len() > ".part".len() && name.to_ascii_lowercase().ends_with(".part")
+    without_part(name).is_some()
 }
 
 /// Whether a file is something discovery counts: media, or a download in progress.
@@ -1149,6 +1151,36 @@ mod tests {
                 ("Season 01/[Group] Batch/ep 02.mkv", Reason::InSubfolder),
                 ("Season 01/extra.mkv", Reason::NoEpisode),
                 ("W S01E02.mkv", Reason::OutsideSeason),
+                ("loose.part", Reason::Partial),
+            ]
+        );
+    }
+
+    #[test]
+    fn only_the_lowercase_part_of_transmission_is_a_download_in_progress() {
+        let dir = tempfile::tempdir().unwrap();
+        for file in [
+            "W/Season 01/W S01E01.mkv",
+            "W/Season 01/W S01E02.mkv.part",
+            // Transmission never writes the suffix in capitals.
+            "W/Season 01/W S01E03.mkv.PART",
+            "W/loose.Part",
+            "W/loose.part",
+        ] {
+            touch(dir.path(), file);
+        }
+        let scan = scan(dir.path()).unwrap();
+        let work = work(&scan, "W");
+        let mut unrecognized: Vec<_> = work
+            .unrecognized
+            .iter()
+            .map(|u| (u.path.as_str(), u.reason))
+            .collect();
+        unrecognized.sort();
+        assert_eq!(
+            unrecognized,
+            [
+                ("Season 01/W S01E02.mkv.part", Reason::Partial),
                 ("loose.part", Reason::Partial),
             ]
         );
