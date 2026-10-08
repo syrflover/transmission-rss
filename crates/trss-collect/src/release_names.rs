@@ -206,6 +206,31 @@ fn the_predicted_episode_is_the_one_in_the_name_the_worker_gives() {
     );
 }
 
+/// Releases are compared without the bracketed language tags
+/// ([`ReleaseName::release_key`]). In the corpus only the Erai-raws magnet
+/// titles (`[Magnet] Work - 01 [1080p …][us][br]…[Airing]`) carry such tags,
+/// so only their key differs from their stem.
+#[test]
+fn only_the_erai_magnet_titles_have_a_release_key_other_than_their_stem() {
+    let mut wrong = Vec::new();
+    let mut tagged = 0;
+    for line in lines() {
+        let read = ReleaseName::read(line.name);
+        let differs = read.release_key() != read.stem;
+        tagged += usize::from(differs);
+        if differs != line.name.starts_with("[Magnet] ") {
+            wrong.push(line.name);
+        }
+    }
+    assert!(tagged >= 250, "{tagged} names with a key of their own");
+    assert!(
+        wrong.is_empty(),
+        "{} names:\n{}",
+        wrong.len(),
+        wrong.join("\n")
+    );
+}
+
 /// Prints the file's lines for the names of `TRSS_RELEASE_NAMES` (a name and
 /// its source per line, tab-separated), to extend the file: this crate's
 /// reading as what the name means, and `trname` as a known failure where it

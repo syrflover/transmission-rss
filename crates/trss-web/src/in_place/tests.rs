@@ -197,7 +197,12 @@ impl World {
 
     /// A `버전 미상` `14v2`: the worker did not receive it.
     async fn unknown_v2(&self) -> HistoryItem {
-        let (item, _) = self.item(title(14, 2), HistoryResult::VersionUnknown).await;
+        self.unknown_titled(title(14, 2)).await
+    }
+
+    /// A `버전 미상` item of `title`.
+    async fn unknown_titled(&self, title: String) -> HistoryItem {
+        let (item, _) = self.item(title, HistoryResult::VersionUnknown).await;
         let mut row = self.row(&item, "", 2);
         row.state = RevisionState::Unknown;
         row.torrent_hash = None;
@@ -208,7 +213,12 @@ impl World {
 
     /// A replacement of the episode by the revision `version`, done.
     async fn done(&self, version: u32) {
-        let (item, hash) = self.item(title(14, version), HistoryResult::Received).await;
+        self.done_titled(title(14, version), version).await;
+    }
+
+    /// [`World::done`] of the release `title`.
+    async fn done_titled(&self, title: String, version: u32) {
+        let (item, hash) = self.item(title, HistoryResult::Received).await;
         let store = &self.state.revisions;
         let row = store
             .create(10, self.row(&item, &hash, version))
@@ -518,4 +528,49 @@ async fn a_stopped_revision_below_a_done_one_stays_refused_as_the_worker_refuses
     assert!(!offered(&row), "{row}");
     let (status, _) = w.retry(&item).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+// --- Erai-raws' magnet titles: no extension, other language lists ----------
+
+const MAGNET_V2: &str = "[Magnet] Show - 14 (V2) [1080p CR WEB-DL AVC AAC][us][br][pl][Airing]";
+const MAGNET_V3: &str = "[Magnet] Show - 14 (V3) [1080p CR WEB-DL AVC AAC][us][br][Airing]";
+
+/// The release is told without its language tags: a done replacement by
+/// another list of the same release hides the button.
+#[tokio::test]
+async fn a_done_revision_listed_with_other_language_tags_is_the_same_release() {
+    let w = World::new().await;
+    let item = w.unknown_titled(MAGNET_V2.into()).await;
+    w.done_titled(MAGNET_V3.into(), 3).await;
+    let row = w.history_row(&item).await;
+    assert!(!offered(&row), "{row}");
+    assert_eq!(row["retry_blocked"], IN_PLACE_V3);
+
+    // Another group's release is another release.
+    let w = World::new().await;
+    let item = w.unknown_titled(MAGNET_V2.into()).await;
+    w.done_titled(MAGNET_V3.replacen("[Magnet]", "[Other]", 1), 3)
+        .await;
+    assert!(offered(&w.history_row(&item).await));
+}
+
+/// An item held at the episode name is found for a title without an
+/// extension (the name `trname` gives it, with any video extension), and by
+/// its release without the language tags.
+#[tokio::test]
+async fn a_held_magnet_item_with_other_language_tags_hides_the_button() {
+    let w = World::new().await;
+    let item = w.unknown_titled(MAGNET_V2.into()).await;
+    let hash = w.placed(MAGNET_V3.into()).await;
+    w.listing(MINUTE, &[&hash]).await;
+    let row = w.history_row(&item).await;
+    assert!(!offered(&row), "{row}");
+    assert_eq!(row["retry_blocked"], IN_PLACE_V3);
+
+    // One of another episode names another file.
+    let w = World::new().await;
+    let item = w.unknown_titled(MAGNET_V2.into()).await;
+    let hash = w.placed(MAGNET_V3.replace("14", "15")).await;
+    w.listing(MINUTE, &[&hash]).await;
+    assert!(offered(&w.history_row(&item).await));
 }

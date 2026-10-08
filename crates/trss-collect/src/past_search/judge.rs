@@ -86,6 +86,8 @@ impl Range {
 pub struct Known {
     /// See [`ReleaseName::stem`].
     pub stem: String,
+    /// What releases are compared by: [`ReleaseName::release_key`].
+    pub key: String,
     pub version: u32,
     pub crc: Option<u32>,
 }
@@ -94,6 +96,7 @@ impl Known {
     pub fn of(title: &str) -> Known {
         let release = ReleaseName::read(title);
         Known {
+            key: release.release_key().into_owned(),
             stem: release.stem,
             version: release.version,
             crc: release.crc,
@@ -357,7 +360,7 @@ pub fn judge(
         let wins = winner.get(folder) == Some(&at);
         if matches!(state, State::Missing | State::Replace) && !wins {
             let top = &judged[winner[folder]].0;
-            if top.read.stem == entry.read.stem {
+            if top.read.release_key() == entry.read.release_key() {
                 state = State::Superseded;
                 note = Some(format!(
                     "같은 회차의 더 높은 수정본(v{})이 있어요.",
@@ -442,7 +445,7 @@ pub fn judge(
 /// of `release` in the results or in the channel's history.
 fn lower_revision_with(
     crc: u32,
-    stem: &str,
+    key: &str,
     version: u32,
     results: &[Result],
     world: &World,
@@ -450,7 +453,7 @@ fn lower_revision_with(
     let from_results = results.iter().map(|r| Known::of(&r.title));
     from_results
         .chain(world.releases.iter().cloned())
-        .any(|known| known.stem == stem && known.version < version && known.crc == Some(crc))
+        .any(|known| known.key == key && known.version < version && known.crc == Some(crc))
 }
 
 fn state_of(
@@ -473,7 +476,7 @@ fn state_of(
     let same: Vec<&Known> = present
         .records
         .iter()
-        .filter(|k| k.stem == release.stem)
+        .filter(|k| k.key == release.release_key())
         .collect();
     let in_folder = present.file.is_some();
     let have = |note: String| (State::Have, Some(note));
@@ -528,7 +531,13 @@ fn state_of(
     if file_crc == crc {
         return have("폴더의 영상이 이미 이 수정본이에요.".to_owned());
     }
-    if lower_revision_with(file_crc, &release.stem, release.version, results, world) {
+    if lower_revision_with(
+        file_crc,
+        &release.release_key(),
+        release.version,
+        results,
+        world,
+    ) {
         return replace(1, &label);
     }
     unknown(Why::Mismatch)

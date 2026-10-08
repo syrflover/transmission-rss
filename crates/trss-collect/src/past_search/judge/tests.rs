@@ -443,3 +443,43 @@ fn two_releases_of_one_episode_select_only_one() {
     assert_eq!(selected(&preview), vec![5]);
     assert_eq!(state_of(&preview, "(720p)").state, State::Alternate);
 }
+
+/// The language tags of a list (`[us][pl]`) are not part of the release:
+/// Erai-raws' list differs between an episode and its revision.
+#[test]
+fn releases_are_told_apart_without_their_language_tags() {
+    let first = "[Erai-raws] Show - 14 [1080p][us][br][Airing][AAAA0014].mkv";
+    let second = "[Erai-raws] Show - 14v2 [1080p][us][br][pl][Airing][1A2B3C4D].mkv";
+
+    // The release history knows (the record is of the same release): replaced.
+    let mut recorded = world(0);
+    recorded.present.insert(
+        Episode::whole(14),
+        Present {
+            file: Some("/media/Show/Season 01/Show S01E14.mkv".into()),
+            records: vec![Known::of(first)],
+            in_transmission: false,
+        },
+    );
+    let preview = judged(&[second], range(14, 14), &recorded);
+    assert_eq!(preview.items[0].state, State::Replace);
+
+    // The video is told by its CRC32 from a lower revision of the release in
+    // the channel's history.
+    let mut by_crc = file_world("/media/Show/Season 01/Show S01E14.mkv");
+    by_crc.releases.push(Known::of(first));
+    let preview = judge(
+        &results(&[second]),
+        range(14, 14),
+        &by_crc,
+        &everything,
+        &mut |_: &Path| Ok(0xAAAA0014),
+    );
+    assert_eq!(preview.items[0].state, State::Replace);
+
+    // Of two results for one episode, the lower revision of the selected
+    // release is superseded, not another release.
+    let preview = judged(&[first, second], range(14, 14), &world(0));
+    let lower = state_of(&preview, "Show - 14 [");
+    assert_eq!(lower.state, State::Superseded);
+}

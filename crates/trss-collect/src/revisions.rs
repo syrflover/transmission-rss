@@ -6,17 +6,23 @@
 //! # Deciding, when a rule selects a revision ([`plan`])
 //!
 //! A selected item is looked at only when its name says it is a revision
-//! (`14v2`, see [`ReleaseName`]) and the episode's name in the rule's folder (the
-//! one `trname` gives the name without its revision, [`episode_name`]) is
-//! taken by a file. Then the file's revision is found:
+//! (`14v2`, or `01 (V2)` in Erai-raws' magnet feed, see [`ReleaseName`]) and
+//! the episode's name in the rule's folder (the one `trname` gives the name
+//! without its revision, [`episode_name`]) is taken by a file. A title without
+//! an extension, as a magnet feed's, has no file name of its own: the file is
+//! the folder's video of the name `trname` gives it, with any video extension
+//! ([`episode_file`]); none means the episode is not received yet, and
+//! several (`.mkv` and `.mp4`) leave the revision `버전 미상`
+//! ([`SEVERAL_VIDEOS`]). Then the file's revision is found:
 //!
 //! - **Known**: the file belongs to a torrent that history records, under the
-//!   same release ([`ReleaseName::stem`]). A lower revision is replaced; the same
-//!   or a higher one is skipped. A torrent of another release makes the item a
-//!   duplicate, not a revision: it is received as before and keeps its own
-//!   name, since no rename ever takes a name that is taken. The item's own
-//!   torrent is asked about first, alone; Transmission's whole file list
-//!   ([`Listing`]) is read at most once for all the items of a cycle.
+//!   same release ([`ReleaseName::release_key`]). A lower revision is
+//!   replaced; the same or a higher one is skipped. A torrent of another
+//!   release makes the item a duplicate, not a revision: it is received as
+//!   before and keeps its own name, since no rename ever takes a name that is
+//!   taken. The item's own torrent is asked about first, alone;
+//!   Transmission's whole file list ([`Listing`]) is read at most once for all
+//!   the items of a cycle.
 //! - **Unknown** (no torrent, or one history does not know): the file's CRC32
 //!   is read (one file at a time) and compared with the names of the new
 //!   release and of the other revisions of it in the channel's history, and
@@ -48,9 +54,11 @@
 //! disk:
 //!
 //! 1. **Received and checked**: Transmission has all of the torrent's single
-//!    file, not empty, in the rule's folder and under a name of its own, and
-//!    its CRC32 (read as a stream) is the one its name carries (or the person
-//!    confirmed). One still downloading waits. A torrent that is gone, reports
+//!    file, not empty, in the rule's folder and under a name of its own with
+//!    the extension of the episode's file (case aside, as it takes that name),
+//!    and its CRC32 (read as a stream) is the one its name carries (or the
+//!    person confirmed). One of another extension fails the replacement like
+//!    a CRC32 that differs: both files stay. One still downloading waits. A torrent that is gone, reports
 //!    a local error, is elsewhere or is not one file fails the replacement for
 //!    now: the worker looks at the torrent again every cycle and goes on once
 //!    it is right, and a cycle that meets the item in its feed receives it
@@ -100,7 +108,7 @@ use crate::{
     context::{TransmissionLink, MAX_REASON_CHARS},
 };
 use crate::{
-    release_name::ReleaseName,
+    release_name::{has_extension, ReleaseName},
     revision::{crc_text, file_crc32_identified, FileIdentity},
     store::{
         channels::{ChannelStore, RuleState},
@@ -112,6 +120,7 @@ use crate::{
     },
 };
 use trss_core::{file_id::FileId, files::occupied, folder_locks::FolderLocks, Millis};
+use trss_library::discovery::VIDEO_EXTENSIONS;
 use trss_transmission::{get_torrent, torrent_places, Redactor, TorrentPlace};
 
 /// What the video revisions use (made from
@@ -132,6 +141,9 @@ pub const NO_CRC: &str = "이름에 CRC32 값이 없어서 받은 영상을 확�
 pub const UNKNOWN_FILE: &str = "폴더에 있는 영상의 CRC32가 이 릴리스의 어느 수정본과도 달라서 버전을 알 수 없어요. 다시 받기로 받으면 이전 영상을 대체해요.";
 /// Why a revision is not received when several torrents hold the folder's video.
 pub const SHARED_FILE: &str = "폴더에 있는 영상을 토렌트 여러 개가 함께 가리키고 있어서 버전을 알 수 없어 자동으로 받지 않았어요.";
+/// Why a revision whose episode has several video files in the folder is not
+/// received.
+pub const SEVERAL_VIDEOS: &str = "폴더에 이 회차의 영상이 확장자만 다르게 여러 개 있어서 어느 영상의 수정본인지 알 수 없어 자동으로 받지 않았어요.";
 /// Why a revision the folder already holds is not received.
 pub const ALREADY_THERE: &str = "폴더의 영상이 이미 이 수정본이에요.";
 /// Why a revision lower than the folder's video is not received.
@@ -228,7 +240,13 @@ impl Replaced {
     pub fn new(rows: Vec<Replacement>) -> Replaced {
         Replaced(
             rows.into_iter()
-                .map(|r| (r.folder, ReleaseName::read(&r.title).stem, r.new_version))
+                .map(|r| {
+                    (
+                        r.folder,
+                        ReleaseName::read(&r.title).release_key().into_owned(),
+                        r.new_version,
+                    )
+                })
                 .collect(),
         )
     }
@@ -241,9 +259,10 @@ impl Replaced {
         }
         let release = ReleaseName::read(title);
         let folder = folder.to_string_lossy();
-        self.0.iter().any(|(at, stem, version)| {
-            *at == folder && *stem == release.stem && release.version < *version
-        })
+        let key = release.release_key();
+        self.0
+            .iter()
+            .any(|(at, held, version)| *at == folder && *held == key && release.version < *version)
     }
 }
 
@@ -258,6 +277,92 @@ pub fn is_revision(title: &str) -> bool {
 /// read from the name without its revision).
 pub fn episode_name(save_path: &Path, title: &str, episode: isize) -> Option<String> {
     derived_name(save_path, title, episode)
+}
+
+/// The video file an episode title names in a folder ([`episode_file`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EpisodeFile {
+    /// The title gives no episode name (`trname` has none for it).
+    Unnamed,
+    /// The title names this file. For a title with an extension it is the
+    /// name `trname` gives, whether or not the folder has the file; for one
+    /// without, the one video file the folder has of that name.
+    One(String),
+    /// A title without an extension, and no video file of its name in the
+    /// folder: the episode is not received yet.
+    Absent,
+    /// A title without an extension, and several video files of its name in
+    /// the folder (`X S01E01.mkv` and `X S01E01.mp4`), sorted.
+    Several(Vec<String>),
+}
+
+/// The video extension a title without one is read with, to ask `trname` for
+/// the name it gives the episode.
+const PROBE_EXTENSION: &str = "mkv";
+
+/// What an RSS title without an extension (a magnet feed's) names as its
+/// episode's file in `save_path`: `trname`'s name for the title read as if it
+/// had a video extension, without that extension, and then the folder's video
+/// file of that name with any video extension. A title with an extension
+/// names [`episode_name`], as before.
+pub fn episode_file(save_path: &Path, title: &str, episode: isize) -> io::Result<EpisodeFile> {
+    if has_extension(title) {
+        return Ok(
+            episode_name(save_path, title, episode).map_or(EpisodeFile::Unnamed, EpisodeFile::One)
+        );
+    }
+    let Some(base) = episode_base(save_path, title, episode) else {
+        return Ok(EpisodeFile::Unnamed);
+    };
+    let entries = match std::fs::read_dir(save_path) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(EpisodeFile::Absent),
+        Err(err) => return Err(err),
+    };
+    let mut found = Vec::new();
+    for entry in entries {
+        let entry = entry?;
+        let Ok(name) = entry.file_name().into_string() else {
+            continue;
+        };
+        if is_video_of(&base, &name) && entry.file_type()?.is_file() {
+            found.push(name);
+        }
+    }
+    found.sort();
+    Ok(match found.len() {
+        0 => EpisodeFile::Absent,
+        1 => EpisodeFile::One(found.remove(0)),
+        _ => EpisodeFile::Several(found),
+    })
+}
+
+/// Whether the file `file_name` is the episode file the release `title`
+/// names in `save_path`: [`episode_name`] for a title with an extension, a
+/// video file of the title's episode name for one without
+/// ([`episode_file`]), looked at by name only.
+pub fn names_file(save_path: &Path, title: &str, episode: isize, file_name: &str) -> bool {
+    if has_extension(title) {
+        return episode_name(save_path, title, episode).as_deref() == Some(file_name);
+    }
+    episode_base(save_path, title, episode).is_some_and(|base| is_video_of(&base, file_name))
+}
+
+/// The name `trname` gives the episode of a title without an extension, left
+/// without its extension.
+fn episode_base(save_path: &Path, title: &str, episode: isize) -> Option<String> {
+    let named = derived_name(save_path, &format!("{title}.{PROBE_EXTENSION}"), episode)?;
+    named
+        .strip_suffix(&format!(".{PROBE_EXTENSION}"))
+        .map(str::to_owned)
+}
+
+/// Whether `file_name` is `base` and a video extension.
+fn is_video_of(base: &str, file_name: &str) -> bool {
+    file_name
+        .strip_prefix(base)
+        .and_then(|rest| rest.strip_prefix('.'))
+        .is_some_and(|ext| VIDEO_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
 }
 
 /// Transmission's whole file list, read when first needed and then shared:
@@ -377,8 +482,28 @@ pub async fn plan(ctx: &RevisionsContext, item: &Selected<'_>, listing: &Listing
     if release.version < 2 {
         return Plan::Normal;
     }
-    let Some(episode_name) = episode_name(item.save_path, item.title, item.episode) else {
-        return Plan::Normal;
+    let episode_name = match episode_file(item.save_path, item.title, item.episode) {
+        Ok(EpisodeFile::One(name)) => name,
+        Ok(EpisodeFile::Unnamed | EpisodeFile::Absent) => return Plan::Normal,
+        Ok(EpisodeFile::Several(names)) => {
+            // Which of them the revision is of cannot be told: the first
+            // names the row, and nothing is received.
+            let decided = Decided {
+                episode_name: names.into_iter().next().unwrap_or_default(),
+                version: release.version,
+                crc: release.crc.map(crc_text),
+                old_item_id: None,
+                old_version: None,
+                old_crc: None,
+            };
+            return Plan::Unknown(decided, SEVERAL_VIDEOS);
+        }
+        Err(err) => {
+            return Plan::Later(format!(
+                "cannot look at {}: {err}",
+                item.save_path.display()
+            ))
+        }
     };
     plan_at(ctx, item, release, episode_name, listing).await
 }
@@ -392,6 +517,7 @@ async fn plan_at(
     episode_name: String,
     listing: &Listing,
 ) -> Plan {
+    let key = release.release_key().into_owned();
     let target = item.save_path.join(&episode_name);
     match std::fs::symlink_metadata(&target) {
         Ok(meta) if meta.is_file() => {}
@@ -456,7 +582,7 @@ async fn plan_at(
             if let Some((id, old)) = records
                 .iter()
                 .map(|record| (record.id, ReleaseName::read(&record.title)))
-                .find(|(_, old)| old.stem == release.stem)
+                .find(|(_, old)| old.release_key() == key)
             {
                 let old = Some((id, old.version));
                 if old.is_some_and(|(_, version)| version >= release.version) {
@@ -514,7 +640,7 @@ async fn plan_at(
     let same: Vec<(i64, ReleaseName)> = titles
         .into_iter()
         .map(|(id, title)| (id, ReleaseName::read(&title)))
-        .filter(|(_, other)| other.stem == release.stem && other.crc == Some(file_crc))
+        .filter(|(_, other)| other.release_key() == key && other.crc == Some(file_crc))
         .collect();
     if same
         .iter()
@@ -925,6 +1051,11 @@ async fn received(ctx: &RevisionsContext, row: &Revision) -> Next {
     if file.name == row.episode_name {
         return failed(NAME_TAKEN_BY_NEW, None);
     }
+    // The new video takes the episode's name, extension included: another
+    // kind of file would be named as the old one. Nothing is removed.
+    if let Some(reason) = different_extension(&file.name, &row.episode_name) {
+        return failed(reason, Some(file.name.clone()));
+    }
     if !file.complete {
         return failed(NOT_COMPLETE, None);
     }
@@ -965,6 +1096,29 @@ async fn received(ctx: &RevisionsContext, row: &Revision) -> Next {
         file_crc: crc,
         file_identity: identity.to_text(),
     })
+}
+
+/// The reason a new video named `received` does not replace the episode file
+/// `episode` when their extensions differ (compared without regard to case),
+/// else `None`.
+fn different_extension(received: &str, episode: &str) -> Option<String> {
+    let extension = |name: &str| {
+        Path::new(name)
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(str::to_ascii_lowercase)
+    };
+    let (new, old) = (extension(received), extension(episode));
+    if new == old {
+        return None;
+    }
+    let shown =
+        |ext: Option<String>| ext.map_or_else(|| "없음".to_owned(), |ext| format!(".{ext}"));
+    Some(format!(
+        "받은 새 영상의 확장자({})가 회차 이름의 영상({})과 달라서 대체하지 않았어요. 이전 영상은 그대로 있어요.",
+        shown(new),
+        shown(old)
+    ))
 }
 
 /// A failure before the new video was received, looked at again: once the
@@ -1460,7 +1614,7 @@ async fn old_video(
             let new = new_release(ctx, row).await?;
             let Some((id, version)) = records.iter().find_map(|record| {
                 let release = ReleaseName::read(&record.title);
-                (release.stem == new.stem).then_some((record.id, release.version))
+                (release.release_key() == new.release_key()).then_some((record.id, release.version))
             }) else {
                 return Err(failed(OTHER_RELEASE, None));
             };
@@ -1724,6 +1878,9 @@ fn cleared(row: &Revision) -> Next {
         Next::Wait
     }
 }
+
+#[cfg(test)]
+mod magnet_tests;
 
 #[cfg(test)]
 mod tests {

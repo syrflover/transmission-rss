@@ -105,7 +105,7 @@ fn releases(titles: &[String]) -> Vec<Known> {
         .iter()
         .map(|title| Known::of(title))
         .filter(|known| known.crc.is_some())
-        .filter(|known| seen.insert((known.stem.clone(), known.version, known.crc)))
+        .filter(|known| seen.insert((known.key.clone(), known.version, known.crc)))
         .collect()
 }
 
@@ -352,6 +352,19 @@ mod tests {
         let versions: Vec<(u32, Option<u32>)> =
             world.releases.iter().map(|k| (k.version, k.crc)).collect();
         assert_eq!(versions, vec![(1, Some(0xAAAA0005)), (2, Some(0xBBBB0005))]);
+    }
+
+    /// The same release listed with two language lists is kept once.
+    #[test]
+    fn a_release_listed_with_other_language_tags_is_kept_once() {
+        let titles: Vec<String> = [
+            "[Erai-raws] Show - 05 [1080p][us][br][Airing][AAAA0005].mkv",
+            "[Erai-raws] Show - 05 [1080p][us][Airing][AAAA0005].mkv",
+        ]
+        .map(str::to_owned)
+        .to_vec();
+        let world = build(0, None, Folder::default(), "r", &[], None, &titles);
+        assert_eq!(world.releases.len(), 1);
     }
 
     // --- an item whose torrent and video are both gone ----------------------------------

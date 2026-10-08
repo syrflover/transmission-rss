@@ -131,6 +131,13 @@ fn a_revision_in_parentheses_after_the_episode_is_read_like_nvm() {
         "no extension and no CRC32 to take away"
     );
     assert_eq!(v1.without_revision(), first);
+    // The language list differs between the two; the release does not.
+    assert_ne!(v1.stem, v2.stem);
+    assert_eq!(v1.release_key(), v2.release_key());
+    assert_eq!(
+        v1.release_key(),
+        "[Magnet] Kusuriya no Hitorigoto 3rd Season - 01 [1080p CR WEB-DL AVC AAC][Airing]"
+    );
 
     for (name, version) in [
         ("[Magnet] Show - 01 (v3) [1080p][us][Airing]", 3),
@@ -160,6 +167,36 @@ fn a_revision_in_parentheses_after_the_episode_is_read_like_nvm() {
     assert_eq!(
         ReleaseName::read("[Group] Show 3v3 - 06 (V2) [1080p]").stem,
         "[Group] Show 3v3 - 06 [1080p]"
+    );
+}
+
+/// The language tags are left out of the comparison only, and only the
+/// bracketed two-letter lower-case ones.
+#[test]
+fn the_release_key_leaves_out_the_bracketed_language_tags_only() {
+    let key = |name: &str| ReleaseName::read(name).release_key().into_owned();
+    assert_eq!(
+        key("[Magnet] Show - 01 [1080p CR WEB-DL AVC AAC][us][br][pl][Airing]"),
+        "[Magnet] Show - 01 [1080p CR WEB-DL AVC AAC][Airing]"
+    );
+    // The revision, the CRC32 and the extension are not in the stem either.
+    assert_eq!(
+        key("[Erai-raws] Show - 06v2 [1080p CR WEBRip HEVC AAC][MultiSub][1BBD34E6].mkv"),
+        "[Erai-raws] Show - 06 [1080p CR WEBRip HEVC AAC][MultiSub]"
+    );
+    // A name without such tags compares as its stem.
+    for name in [
+        "[SubsPlease] Show - 14v2 (1080p) [1A2B3C4D].mkv",
+        "[Group] Show - 05 [1080p][MultiSub][Airing]",
+        "[Group] Show - 05 [US][1080p][eng][e5]",
+    ] {
+        let read = ReleaseName::read(name);
+        assert_eq!(read.release_key(), read.stem, "{name}");
+    }
+    // Another group's release of the episode is still another release.
+    assert_ne!(
+        key("[Magnet] Show - 01 [1080p][us]"),
+        key("[Other] Show - 01 [1080p][us]")
     );
 }
 

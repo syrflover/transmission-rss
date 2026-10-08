@@ -34,12 +34,15 @@
 //!   its CRC32 bracket and its extension ([`ReleaseName::stem`]): `[SubsPlease]
 //!   Show - 14 (1080p)` for both `14` and `14v2`. Another group's release of
 //!   the same episode has another stem, so it is a duplicate, not a revision.
+//!   Releases are compared by [`ReleaseName::release_key`], the stem without
+//!   the bracketed two-letter language tags (`[us][br]`), because Erai-raws'
+//!   list of subtitle languages differs between an episode and its revision.
 //! - The **notation** is how the number is attached to the work: `Work - 05`
 //!   (a dash, the number zero-padded to a width) or `Work S02E05`. A search of
 //!   the episodes `1000` to `1002` is written in the notation of the titles
 //!   the first search returned, since releases differ (`- 01` against `- 1`).
 
-use std::sync::LazyLock;
+use std::{borrow::Cow, sync::LazyLock};
 
 use regex::{Captures, Regex};
 
@@ -127,6 +130,7 @@ pub struct ReleaseName {
     pub work: Option<String>,
     pub kind: Kind,
     /// The name without its revision, CRC32 bracket and extension, trimmed.
+    /// Releases are compared by [`ReleaseName::release_key`], not by this.
     pub stem: String,
     /// 1 for a name without `vN`.
     pub version: u32,
@@ -165,6 +169,8 @@ static PAREN_REVISION: LazyLock<Regex> = LazyLock::new(|| {
     ))
     .unwrap()
 });
+/// A bracketed language tag of a release list: `[us]`, `[pl]`.
+static LANGUAGE_TAG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[[a-z]{2}\]").unwrap());
 /// A number and its revision mark: group 1 is the number, group 2 the mark.
 static VERSION: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(&format!(r"\b(\d{{1,4}}(?:\.\d)?)({REVISION_PART})\b")).unwrap());
@@ -419,6 +425,12 @@ fn notation_of(name: &str) -> Option<Notation> {
     })
 }
 
+/// Whether `name` ends in an extension, as every reading of a name takes it
+/// off: an RSS title of a magnet feed has none.
+pub fn has_extension(name: &str) -> bool {
+    EXTENSION.is_match(name.trim())
+}
+
 /// What `trname` reads the episode of a torrent's file name from, or `None`
 /// when the file keeps the name it was received under.
 ///
@@ -464,6 +476,15 @@ impl ReleaseName {
             written,
             without_revision: revision.without_revision,
         }
+    }
+
+    /// What two names must share to be the same release: the [`stem`](Self::stem)
+    /// without its bracketed two-letter language tags (`[us][br]`). Erai-raws
+    /// lists the subtitle languages in its titles, and the list of a revision
+    /// can differ from the episode's. A name without such tags has its stem
+    /// as its key.
+    pub fn release_key(&self) -> Cow<'_, str> {
+        LANGUAGE_TAG.replace_all(&self.stem, "")
     }
 
     /// The episode as the name writes it (`01`, `12v2`, `01-12`), if it has one.

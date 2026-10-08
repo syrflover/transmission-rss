@@ -37,7 +37,7 @@ use trss_collect::{
     plan::rule_destination,
     release_name::ReleaseName,
     revision,
-    revisions::{episode_name, same_folder},
+    revisions::{names_file, same_folder},
     store::{
         history::{HistoryItem, HistoryResult},
         revisions::{Revision, RevisionState},
@@ -173,7 +173,7 @@ impl<'a> Evidence<'a> {
             else {
                 continue;
             };
-            if ReleaseName::read(&other.title).stem == release.stem {
+            if ReleaseName::read(&other.title).release_key() == release.release_key() {
                 best = Some(done.new_version);
             }
         }
@@ -206,7 +206,9 @@ impl<'a> Evidence<'a> {
             .iter()
             .filter(|(id, _)| *id != item.id)
             .map(|(id, title)| (*id, ReleaseName::read(title)))
-            .filter(|(_, other)| other.stem == release.stem && other.version >= release.version)
+            .filter(|(_, other)| {
+                other.release_key() == release.release_key() && other.version >= release.version
+            })
             .map(|(id, other)| (other.version, id))
             .collect();
         candidates.sort_by(|a, b| b.cmp(a));
@@ -259,9 +261,10 @@ impl<'a> Evidence<'a> {
             return Ok(false);
         };
         let (save_path, episode) = rule_destination(collect, &rule);
-        Ok(episode_name(&save_path, &other.title, episode).as_deref()
-            == Some(row.episode_name.as_str())
-            && same_folder(&save_path, Path::new(&row.folder)))
+        Ok(
+            names_file(&save_path, &other.title, episode, &row.episode_name)
+                && same_folder(&save_path, Path::new(&row.folder)),
+        )
     }
 }
 

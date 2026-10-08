@@ -186,7 +186,7 @@
 | [0112](0112-small-helpers-and-test-helpers.md) | 남은 작은 도우미와 테스트 도우미를 모아요 | 대기 | 0092 |
 | [0113](0113-remaining-area-tests.md) | 라이브러리, 설정, 웹 앱 공통 영역의 테스트를 나누고 검증 표를 둬요 | 대기 | 0094–0096, 0102–0104, 0111, 0112 |
 | [0114](0114-refactor-final-check.md) | 리팩터링을 마치며 다시 재고 실제 서버에서 확인해요 | 대기 | 0093–0113, 0115, 0117, 0128 |
-| [0115](0115-erai-magnet-revisions.md) | Erai-raws magnet 피드의 수정본이 수정본 대체를 거쳐요 | 대기 | 0098, 0099 |
+| [0115](0115-erai-magnet-revisions.md) | Erai-raws magnet 피드의 수정본이 수정본 대체를 거쳐요 | 완료 | 0098, 0099 |
 | [0117](0117-sql-statement-cache.md) | 되풀이해 쓰는 SQL 문을 캐시해요 | 완료 | 0092 |
 | [0128](0128-keep-unnamed-cycle-torrent.md) | 수집 주기가 이름을 정하지 못한 토렌트를 지우지 않고 받은 이름으로 남겨요 | 완료 | 0099 |
 
