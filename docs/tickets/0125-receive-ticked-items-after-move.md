@@ -41,7 +41,7 @@
 
 | 완료 기준 | 시험 |
 | --- | --- |
-| 옮긴 뒤 체크한 순서대로 받음 | `trss-collect`의 `a_start_receives_the_ticked_items_in_order_once_the_rule_is_on_and_once_each`: 규칙이 켜지고, worker가 `start` 다음에 두 받기 명령을 체크한 순서로 가져가며, 결과 문장이 그렇게 알려요. 요청의 모양은 `trss-web`의 `a_subscription_that_waits_for_its_work_folder_carries_the_ticked_items_in_its_start` |
+| 옮긴 뒤 체크한 순서대로 받음 | `trss-collect`의 `a_start_receives_the_ticked_items_in_order_once_the_rule_is_on_and_once_each`: 규칙이 켜지고, worker가 `start` 다음에 두 받기 명령을 체크한 순서로 가져가며, 결과 문장이 그렇게 알려요. 요청의 모양은 `trss-web`의 `a_subscription_that_waits_for_its_work_folder_carries_the_ticked_items_in_its_start`. 실제 worker의 흐름은 `trss-worker`의 `a_subscriptions_start_receives_the_ticked_items_into_the_work_folder_that_came_over`(2026-10-08 추가): 한 번의 명령 실행이 보관 폴더의 작품 폴더를 옮기고 규칙을 켠 뒤 두 받기 명령까지 돌려, 두 토렌트가 옮겨 온 시즌 폴더에 체크한 순서로 들어가고 규칙이 정한 이름(`S02E02`, `S02E03`)이 돼요. |
 | 옮기지 못함 | `a_start_that_does_not_turn_the_rule_on_receives_none_of_the_ticked_items`: 규칙은 `멈춤`이고 받기 명령이 없어요. |
 | 받기 명령을 다 접수하기 전에 멈춤 | 첫 시험이 같은 `start`를 두 번 돌려도 받기 명령이 항목마다 하나예요. |
 | 작품 폴더가 보관 폴더에 없음 | `trss-web` 시험의 마지막 부분: 규칙이 켜진 채 만들어지고 서버는 받기 명령을 만들지 않아요. |
@@ -49,8 +49,17 @@
 - 명령 값의 모양은 `a_start_carries_the_ticked_items_and_other_commands_are_as_before`가 봐요.
 - 2026-10-08 `cargo test -p trss-collect -p trss-web -p trss-worker -j 4`가 모두 통과했어요(실패 0). `npm run typecheck`도 통과했어요.
 
+### 로컬 확인 (2026-10-08, 0.6.2와 같은 코드)
+
+로컬 개발 환경(`dev/compose.sh`, 서버 DB의 사본)에서 `정반대의 너와 나` 2기를 새로 구독했어요. 사본에서는 1기 작품 폴더가 보관 폴더에 있어요.
+
+- 구독 확인 단계의 지난 항목 안내에 "작품 폴더를 옮기는 동안에는 규칙이 받지 못해요. 체크한 항목은 옮기기가 끝난 뒤 받아요."가 있었어요.
+- 지난 항목 `- 24`, `- 25`를 체크하고 구독하자 완료 화면이 "체크한 지난 항목 2개는 옮긴 뒤 받아요. 옮기지 못하면 받지 않고, 규칙 화면에 까닭이 나와요."라고 알렸어요.
+- `start` 명령 값의 `receive`가 `[212, 319]`(`- 24`가 먼저)였어요. worker가 작품 폴더를 수집 폴더로 옮기고 규칙을 켠 뒤, 두 받기 명령이 모두 받음으로 끝났어요.
+- 규칙 상세의 폴더 이동 문장("작품 폴더를 보관 폴더에서 수집 폴더로 옮기고 받기 시작했어요.") 아래에 "구독할 때 체크한 지난 항목 2개를 이어서 받아요."가 있었어요.
+- 받은 두 토렌트의 이름은 바뀌지 않았어요(기록: "이름을 바꾸지 못해서 원래 이름 그대로 뒀어요."). 로컬 Transmission은 넣은 토렌트를 멈춘 채 두어서 magnet의 메타데이터와 파일 목록이 없기 때문이에요. 이 환경의 한계이고, 이름은 위 worker 시험과 0126의 서버 확인(24화가 `S02E12`)으로 봐요.
+
 ### 검증하지 못한 것
 
-- 실제 worker가 폴더를 옮긴 뒤 받기 명령까지 이어 돌려 토렌트를 수집 폴더에 넣는 흐름은 시험하지 않았어요. trss-collect 시험은 보관 폴더가 없는 경우로 규칙을 켜는 단계까지만 봐요. 명령 실행기가 명령이 끝날 때마다 새로 접수된 명령을 가져가는 것은 기존 동작이에요.
-- 구독 확인 단계의 문장은 타입 검사만 했고 브라우저에서 보지 않았어요.
+- 실제 서버에서 보관 폴더에 있는 작품의 속편을 구독해 체크한 항목을 옮긴 뒤 받는 흐름은 아직 보지 않았어요.
 - 제목을 기다리던 구독에 제목을 정하며 체크한 항목(`NameTitle`)은 바꾸지 않았어요. 그때는 구독할 때의 `start`가 이미 폴더를 옮겨 두었어요.

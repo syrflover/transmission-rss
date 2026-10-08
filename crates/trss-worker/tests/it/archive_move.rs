@@ -2587,3 +2587,114 @@ async fn a_retry_into_an_archived_work_folder_ends_saying_so_pauses_the_rule_and
         text(s.collect.join("Clevatess/Season 02"))
     );
 }
+
+// --- 11. the past items ticked while subscribing (ticket 0125) -------------------------------------
+
+#[tokio::test]
+async fn a_subscriptions_start_receives_the_ticked_items_into_the_work_folder_that_came_over() {
+    let s = Scene::new(true).await;
+    // Two releases were posted before the subscription: a check records them
+    // as items no rule took.
+    let c = s.channel("feed-a", &[]).await;
+    s.h.feeds.set_xml(
+        "feed-a",
+        &feed_xml(&[
+            (2, "[Group] Clevatess - 02 (1080p).mkv"),
+            (3, "[Group] Clevatess - 03 (1080p).mkv"),
+        ]),
+    );
+    let worker = s.worker();
+    assert_eq!(s.cycle(&worker).await.added, 0);
+    let (two, three) = (
+        s.h.item("Clevatess - 02").await.id,
+        s.h.item("Clevatess - 03").await.id,
+    );
+    // The work folder is in the archive folder, with its first episode's torrent.
+    s.seeding(
+        1,
+        "Clevatess S02E01.mkv",
+        &s.archive.join("Clevatess/Season 02"),
+    );
+    s.h.tr.on_disk(s.h.dir.path());
+    for n in [2, 3] {
+        s.h.tr
+            .content_on_add(&hash(n), format!("video {n}").as_bytes());
+        s.h.tr.seeding_on_add(&hash(n));
+    }
+
+    // The subscription as the web makes it: the rule off, and its start
+    // carrying the ticked items in the order the confirm step sends them.
+    let rule =
+        s.h.channels
+            .create_rule(
+                &c.channel.id,
+                RuleInput {
+                    r#match: Some("Clevatess".to_owned()),
+                    directory: "Clevatess/Season 02".to_owned(),
+                    state: RuleState::Paused,
+                    ..RuleInput::default()
+                },
+            )
+            .await
+            .unwrap();
+    let commands = CommandStore::new(s.h.db.clone());
+    let accepted = rule_archive::ask_start_receiving(
+        &commands,
+        &rule.id,
+        Direction::Start,
+        vec![two, three],
+        s.h.now(),
+    )
+    .await
+    .unwrap();
+    let Accepted::Created(start) = accepted else {
+        panic!("expected a stored command: {accepted:?}");
+    };
+
+    // One look moves the work folder, turns the rule on, and runs the two
+    // receives the start accepted after it.
+    assert_eq!(s.run().await, CommandsOutcome::Ran(3));
+    let start = s.command(&start.id).await;
+    assert_eq!(start["state"], "done", "{start}");
+    assert_eq!(start["outcome"]["result"], "moved");
+    let reason = start["outcome"]["reason"].as_str().unwrap();
+    assert!(
+        reason.ends_with("구독할 때 체크한 지난 항목 2개를 이어서 받아요."),
+        "{reason}"
+    );
+    assert_eq!(s.rule(&rule.id).await["state"], "active");
+    assert!(!s.archive.join("Clevatess").exists());
+
+    // Both went into the folder that came over, in the order ticked, under the
+    // names the rule gives them.
+    let season = text(s.collect.join("Clevatess/Season 02"));
+    let adds: Vec<(String, String)> =
+        s.h.tr
+            .calls_of("torrent-add")
+            .iter()
+            .map(|call| {
+                let magnet = call.args["filename"].as_str().unwrap();
+                let n = if magnet.contains(&hash(2)) { 2 } else { 3 };
+                (
+                    hash(n),
+                    call.args["download-dir"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect();
+    assert_eq!(adds, [(hash(2), season.clone()), (hash(3), season.clone())]);
+    for item in [two, three] {
+        let receive = s
+            .command(&format!("{}-receive-{item}", start["id"].as_str().unwrap()))
+            .await;
+        assert_eq!(receive["state"], "done", "{receive}");
+        assert_eq!(receive["outcome"]["result"], "received", "{receive}");
+    }
+    assert_eq!(
+        files(&s.collect),
+        [
+            "Clevatess/Season 02/Clevatess S02E01.mkv",
+            "Clevatess/Season 02/Clevatess S02E02.mkv",
+            "Clevatess/Season 02/Clevatess S02E03.mkv",
+        ]
+    );
+}
