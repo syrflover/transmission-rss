@@ -265,6 +265,24 @@ impl SubtitleFormat {
             SubtitleFormat::Other => None,
         }
     }
+
+    /// The format a file's name says it is, for showing a subtitle the app holds
+    /// no facts about: `None` when the name has no extension, otherwise by the
+    /// extension, case aside (`ssa` is shown as `ass` and `sami` as `smi`; `zip`
+    /// and any other extension are `other`).
+    ///
+    /// This is the shown format. What the app stores for a subtitle it applied
+    /// is decided when it analyses the file (`place`), and differs for `ssa`
+    /// and `sami`, which are stored as `other`.
+    pub fn shown_for_name(name: &str) -> Option<SubtitleFormat> {
+        name.rsplit_once('.')?;
+        Some(match trss_subtitles::verify::Format::promised_by(name) {
+            Some(trss_subtitles::verify::Format::Ass) => SubtitleFormat::Ass,
+            Some(trss_subtitles::verify::Format::Srt) => SubtitleFormat::Srt,
+            Some(trss_subtitles::verify::Format::Smi) => SubtitleFormat::Smi,
+            Some(_) | None => SubtitleFormat::Other,
+        })
+    }
 }
 
 impl JobState {
@@ -272,5 +290,35 @@ impl JobState {
     /// work, not by the runner.
     pub fn is_finished(self) -> bool {
         matches!(self, JobState::Failed | JobState::Partial | JobState::Done)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SubtitleFormat::{self, *};
+
+    #[test]
+    fn the_shown_format_of_a_name_is_its_extensions() {
+        let shown = |name| SubtitleFormat::shown_for_name(name);
+        for (name, expected) in [
+            ("Show - 01.ass", Some(Ass)),
+            ("Show - 01.ASS", Some(Ass)),
+            ("Show - 01.ssa", Some(Ass)),
+            ("Show - 01.srt", Some(Srt)),
+            ("Show - 01.Srt", Some(Srt)),
+            ("Show - 01.smi", Some(Smi)),
+            ("Show - 01.sami", Some(Smi)),
+            ("Show - 01.zip", Some(Other)),
+            ("Show - 01.vtt", Some(Other)),
+            ("Show - 01.", Some(Other)),
+            ("Show.01.mkv", Some(Other)),
+            ("dir.d/Show - 01.srt", Some(Srt)),
+            ("dir.d/Show - 01", Some(Other)),
+            (".ass", Some(Ass)),
+            ("Show - 01", None),
+            ("", None),
+        ] {
+            assert_eq!(shown(name), expected, "{name:?}");
+        }
     }
 }

@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use trss_jobs::{
-    model::{PathAction, PlanState},
+    model::{PathAction, PlanState, SubtitleFormat},
     place::replace::{
         records::{
             Compared, Comparison, Decided, Decision, Diff, Encoding, NotCompared, PlanPath,
@@ -277,7 +277,7 @@ fn view(v: &PlanView) -> ReplacementView {
             creator: facts.and_then(|f| f.creator.clone()),
             format: facts
                 .map(|f| f.format.code())
-                .or_else(|| format_of(&path.path)),
+                .or_else(|| SubtitleFormat::shown_for_name(&path.path).map(SubtitleFormat::code)),
             post: facts.and_then(|f| f.post.clone()),
             encoding: facts.and_then(|f| f.encoding.clone()),
             managed: path.applied_id.is_some(),
@@ -347,17 +347,6 @@ fn view(v: &PlanView) -> ReplacementView {
             .collect(),
         limits,
     }
-}
-
-/// The format a file's extension says.
-fn format_of(path: &str) -> Option<&'static str> {
-    let (_, ext) = path.rsplit_once('.')?;
-    Some(match ext.to_ascii_lowercase().as_str() {
-        "ass" | "ssa" => "ass",
-        "srt" => "srt",
-        "smi" | "sami" => "smi",
-        _ => "other",
-    })
 }
 
 /// `GET /api/subtitle-jobs/{id}/replacements/{plan}/lines`: the dialogue and
