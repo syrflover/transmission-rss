@@ -1,6 +1,7 @@
-//! What the integration tests share: the clocks the runner is given, and the
+//! What the integration tests share: the clocks the runner is given, the
 //! base every test file's setup builds on (a database, the handles over it, a
-//! receive area, and the library of one watch folder).
+//! receive area, and the library of one watch folder), and the list of the
+//! files under a folder.
 
 use crate::Handles;
 use std::sync::{
@@ -218,4 +219,26 @@ impl Shows {
             false => format!("Season {season:02}/Show S{season:02}E{episode:02}.mkv"),
         }
     }
+}
+
+/// Every file under `dir`, as paths relative to it, sorted.
+pub fn tree(dir: &std::path::Path) -> Vec<String> {
+    fn walk(root: &std::path::Path, dir: &std::path::Path, out: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).into_iter().flatten() {
+            let path = entry.unwrap().path();
+            match path.is_dir() {
+                true => walk(root, &path, out),
+                false => out.push(
+                    path.strip_prefix(root)
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned(),
+                ),
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(dir, dir, &mut out);
+    out.sort();
+    out
 }

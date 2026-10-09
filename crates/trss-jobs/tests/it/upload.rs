@@ -3,15 +3,26 @@
 //! unpacks and analyses them for a person's 배치 확인, a refused or abandoned
 //! upload leaves no byte, and uploads wait for their turn.
 
-use crate::{world::Base, Handles};
+use crate::{
+    world::{tree, Base},
+    Handles,
+};
 use std::time::Duration;
 
 use trss_jobs::{
-    upload::{Counts, Limits, UploadError, UploadRequest, UPLOAD_SLOTS},
+    upload::{Counts, Dropped, Limits, UploadError, UploadRequest, UPLOAD_SLOTS},
     Finished, JobState, ReceiveArea, Uploads,
 };
 
 const ASS: &[u8] = b"[Script Info]\nTitle: x\n";
+const SRT: &[u8] = b"1\r\n00:00:01,000 --> 00:00:02,500\r\nHello\r\n";
+const PNG: &[u8] = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06";
+
+fn ttf() -> Vec<u8> {
+    let mut bytes = b"\x00\x01\x00\x00\x00\x0C".to_vec();
+    bytes.resize(12 + 16 * 12, 0);
+    bytes
+}
 
 struct Setup {
     _dir: tempfile::TempDir,
@@ -84,7 +95,12 @@ async fn an_upload_is_a_received_job_that_waits_for_the_worker() {
             archives: 0
         }
     );
-    assert_eq!(dropped.len(), 1);
+    // The text file is dropped by its content, and the job names it.
+    let not_them = Dropped {
+        name: "note.txt".to_owned(),
+        reason: trss_subtitles::upload::NOT_THEM.to_owned(),
+    };
+    assert_eq!(dropped, std::slice::from_ref(&not_them));
 
     // The worker takes it next, to analyse it for its 배치 확인; a
     // restart's look at the waiting jobs leaves it as it is.
@@ -103,7 +119,20 @@ async fn an_upload_is_a_received_job_that_waits_for_the_worker() {
     assert_eq!(detail.row.origin, "upload");
     assert_eq!(detail.row.episodes, Vec::<String>::new());
     assert_eq!(detail.row.source, None);
-    assert_eq!(detail.dropped.len(), 1);
+    assert_eq!(
+        detail
+            .dropped
+            .iter()
+            .map(|d| (d.name.as_str(), d.reason.as_str()))
+            .collect::<Vec<_>>(),
+        [(not_them.name.as_str(), not_them.reason.as_str())]
+    );
+    // The log says what was left out.
+    assert!(detail.events[0]
+        .detail
+        .as_deref()
+        .unwrap()
+        .contains("뺀 파일 1개"));
     assert_eq!(detail.items.len(), 1);
     let file = &detail.items[0].files[0];
     assert_eq!(file.size, Some(ASS.len() as u64));
@@ -199,6 +228,13 @@ async fn the_limits_are_held_as_the_bytes_come() {
         file_bytes: 12,
         ..Limits::default()
     });
+    // A file of exactly the size of one file is taken.
+    let mut staging = tight.begin().await.unwrap();
+    staging.start("a.srt").await.unwrap();
+    staging.write(&[b'x'; 12]).await.unwrap();
+    staging.end().await.unwrap();
+    drop(staging);
+
     let mut staging = tight.begin().await.unwrap();
     staging.start("a.srt").await.unwrap();
     assert!(matches!(
@@ -913,4 +949,331 @@ fn reason_of_in(made: &Finished, name: &str) -> Option<String> {
         .into_iter()
         .find(|(n, _)| n == name)
         .map(|(_, r)| r)
+}
+
+#[tokio::test]
+async fn a_file_dropped_by_its_content_is_not_stored_whatever_its_name_says() {
+    let s = setup().await;
+    let made = upload_of(
+        &s,
+        "img",
+        &[
+            ("cover.ass", PNG.to_vec()),
+            ("real.ass", ASS.to_vec()),
+            // A subtitle under a name that is no subtitle's is kept all the same.
+            ("notes.txt", SRT.to_vec()),
+        ],
+    )
+    .await;
+    let Finished::Created {
+        job_id,
+        counts,
+        dropped,
+    } = &made
+    else {
+        panic!("{made:?}");
+    };
+    assert_eq!(
+        dropped.iter().map(|d| d.name.as_str()).collect::<Vec<_>>(),
+        ["cover.ass"]
+    );
+    assert_eq!(
+        *counts,
+        Counts {
+            subtitles: 2,
+            fonts: 0,
+            archives: 0
+        }
+    );
+    let detail = s.store.views.detail(job_id).await.unwrap().unwrap();
+    let names: Vec<_> = detail.items[0]
+        .files
+        .iter()
+        .map(|f| f.name.as_str())
+        .collect();
+    assert_eq!(names, ["real.ass", "notes.txt"]);
+    // The image was not stored.
+    assert_eq!(tree(&s.area.at(job_id)), ["notes.txt", "real.ass"]);
+}
+
+#[tokio::test]
+async fn a_zip_stays_whole_in_the_package_and_one_cut_short_is_dropped_with_its_reason() {
+    use trss_subtitles::{upload::Kind, verify::Format};
+    let s = setup().await;
+    let zip = trss_subtitles::verify::zip_of(&[
+        ("01.ass", ASS),
+        ("fonts/Font.ttf", &ttf()),
+        ("readme.txt", b"hi"),
+    ]);
+    let made = upload_of(&s, "z1", &[("pack.zip", zip.clone())]).await;
+    let Finished::Created {
+        job_id,
+        counts,
+        dropped,
+    } = &made
+    else {
+        panic!("{made:?}");
+    };
+    assert_eq!(
+        *counts,
+        Counts {
+            subtitles: 0,
+            fonts: 0,
+            archives: 1
+        }
+    );
+    // What is inside is not judged here: the readme is not a dropped file.
+    assert!(dropped.is_empty());
+    let detail = s.store.views.detail(job_id).await.unwrap().unwrap();
+    let file = &detail.items[0].files[0];
+    assert_eq!(file.name, "pack.zip");
+    assert_eq!(file.kind, Some(Kind::Archive));
+    assert_eq!(file.format, Some(Format::Zip));
+    assert_eq!(file.size, Some(zip.len() as u64));
+    assert_eq!(
+        std::fs::read(s.area.at(file.path.as_deref().unwrap())).unwrap(),
+        zip
+    );
+
+    // A ZIP that cannot be read to its end is dropped, with the reason.
+    let made = upload_of(
+        &s,
+        "z2",
+        &[
+            ("broken.zip", zip[..zip.len() / 2].to_vec()),
+            ("ok.srt", SRT.to_vec()),
+        ],
+    )
+    .await;
+    let reasons = dropped_reasons(&made);
+    assert_eq!(reasons.len(), 1, "{reasons:?}");
+    assert_eq!(reasons[0].0, "broken.zip");
+    assert!(reasons[0].1.contains("ZIP"), "{reasons:?}");
+}
+
+/// What an upload sends: the files, the names the browser left out, and the names the
+/// server drops.
+type Sent<'a> = (&'a [(&'a str, &'a [u8])], &'a [&'a str], &'a [&'a str]);
+
+#[tokio::test]
+async fn nothing_to_keep_makes_no_job_no_folder_and_leaves_nothing_staged() {
+    let s = setup().await;
+    let cases: [Sent; 4] = [
+        (
+            &[("cover.jpg", PNG), ("readme.txt", b"text")],
+            &[],
+            &["cover.jpg", "readme.txt"],
+        ),
+        (&[], &["a.mkv", "b.nfo"], &["a.mkv", "b.nfo"]),
+        (&[], &[], &[]),
+        (&[("empty.ass", b"")], &[], &["empty.ass"]),
+    ];
+    for (i, (files, skipped, names)) in cases.into_iter().enumerate() {
+        let mut staging = stage(&s.uploads, files).await;
+        for name in skipped {
+            staging.skip(name).unwrap();
+        }
+        let made = s
+            .uploads
+            .finish(staging, request(&format!("n{i}")), 1_000)
+            .await
+            .unwrap();
+        assert!(matches!(made, Finished::Nothing { .. }), "{i}: {made:?}");
+        let dropped: Vec<_> = dropped_reasons(&made).into_iter().map(|(n, _)| n).collect();
+        assert_eq!(dropped, names, "{i}");
+    }
+    assert!(s.store.views.open_jobs().await.unwrap().is_empty());
+    assert_eq!(s.store.views.done_page(None, 50).await.unwrap().total, 0);
+    // No folder of a job, and nothing staged is left.
+    let folders: Vec<_> = std::fs::read_dir(s.area.root())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n != ".tmp")
+        .collect();
+    assert!(folders.is_empty(), "{folders:?}");
+    assert_eq!(tmp_entries(&s.area), 0);
+}
+
+#[tokio::test]
+async fn names_cannot_leave_the_jobs_folder_and_a_folders_paths_are_kept_as_names() {
+    let s = setup().await;
+    let made = upload_of(
+        &s,
+        "names",
+        &[
+            ("../../evil.ass", ASS.to_vec()),
+            ("Show/Season 1/01.ass", ASS.to_vec()),
+            ("Show/Season 2/01.ass", SRT.to_vec()),
+            ("Show/fonts/\u{202E}gpj.ttf", ttf()),
+            ("/abs/path/ep.srt", SRT.to_vec()),
+            ("..\\..\\win.ass", ASS.to_vec()),
+        ],
+    )
+    .await;
+    let Finished::Created { job_id: id, .. } = &made else {
+        panic!("{made:?}");
+    };
+    let detail = s.store.views.detail(id).await.unwrap().unwrap();
+    let names: Vec<_> = detail.items[0]
+        .files
+        .iter()
+        .map(|f| f.name.as_str())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "evil.ass",
+            "Show/Season 1/01.ass",
+            "Show/Season 2/01.ass",
+            "Show/fonts/gpj.ttf",
+            "abs/path/ep.srt",
+            "win.ass"
+        ]
+    );
+    // Every file is flat in the job's folder, the second `01.ass` numbered,
+    // and nothing is anywhere else under the receive area.
+    assert_eq!(
+        tree(s.area.root()),
+        [
+            "01 (2).ass",
+            "01.ass",
+            "ep.srt",
+            "evil.ass",
+            "gpj.ttf",
+            "win.ass"
+        ]
+        .map(|file| format!("{id}/{file}"))
+    );
+    assert!(!s._dir.path().join("evil.ass").exists());
+    assert!(!s._dir.path().parent().unwrap().join("evil.ass").exists());
+}
+
+fn font_upload() -> Vec<(&'static str, Vec<u8>)> {
+    vec![("01.ass", ASS.to_vec()), ("Font.ttf", ttf())]
+}
+
+#[tokio::test]
+async fn an_upload_under_a_used_id_that_differs_in_creator_season_names_or_bytes_is_a_mismatch() {
+    let s = setup().await;
+    s.store
+        .run
+        .db()
+        .run::<_, trss_core::DbError, _>(|c| {
+            c.execute_batch(
+                "INSERT INTO subtitle_sources (id, anime_no, creator_name, created_at)
+                 VALUES ('s1', 3424, '에루샤', 5), ('s2', 3424, '다른', 5);",
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let base = UploadRequest {
+        anime_no: Some(3424),
+        source_id: Some("s1".to_owned()),
+        creator: Some("에루샤".to_owned()),
+        ..request("same")
+    };
+    let send = |request: UploadRequest,
+                skipped: &'static [&'static str],
+                files: Vec<(&'static str, Vec<u8>)>| {
+        let uploads = s.uploads.clone();
+        async move {
+            let mut staging = uploads.begin().await.unwrap();
+            for name in skipped {
+                staging.skip(name).unwrap();
+            }
+            for (name, bytes) in &files {
+                staging.start(name).await.unwrap();
+                staging.write(bytes).await.unwrap();
+                staging.end().await.unwrap();
+            }
+            uploads.finish(staging, request, 1_000).await.unwrap()
+        }
+    };
+    let Finished::Created { job_id, .. } = send(base.clone(), &[], font_upload()).await else {
+        panic!("not created");
+    };
+    // The answer was lost: the same upload again.
+    assert_eq!(
+        send(base.clone(), &[], font_upload()).await,
+        Finished::Existing(job_id.clone())
+    );
+
+    let variants = [
+        (
+            "one file fewer",
+            base.clone(),
+            &[][..],
+            vec![font_upload().remove(0)],
+        ),
+        (
+            "another creator",
+            UploadRequest {
+                source_id: Some("s2".to_owned()),
+                creator: Some("다른".to_owned()),
+                ..base.clone()
+            },
+            &[],
+            font_upload(),
+        ),
+        (
+            "another season",
+            UploadRequest {
+                season: 2,
+                anime_no: None,
+                source_id: None,
+                creator: None,
+                ..base.clone()
+            },
+            &[],
+            font_upload(),
+        ),
+        ("a name left out", base.clone(), &["x"][..], font_upload()),
+        (
+            "other bytes",
+            base.clone(),
+            &[],
+            vec![("01.ass", SRT.to_vec()), font_upload().remove(1)],
+        ),
+    ];
+    for (what, request, skipped, files) in variants {
+        assert_eq!(
+            send(request, skipped, files).await,
+            Finished::Mismatch(job_id.clone()),
+            "{what}"
+        );
+    }
+    // Only the first upload's files were kept, and nothing staged is left.
+    assert_eq!(s.store.views.open_jobs().await.unwrap().len(), 1);
+    assert_eq!(
+        tree(s.area.root()),
+        ["01.ass", "Font.ttf"].map(|file| format!("{job_id}/{file}"))
+    );
+    assert_eq!(tmp_entries(&s.area), 0);
+}
+
+#[tokio::test]
+async fn two_deliveries_at_once_under_one_id_make_one_job() {
+    let s = setup().await;
+    let files = [("01.ass", ASS.to_vec()), ("02.srt", SRT.to_vec())];
+    let (first, second) =
+        tokio::join!(upload_of(&s, "race", &files), upload_of(&s, "race", &files));
+    let (created, existing): (Vec<_>, Vec<_>) = [first, second]
+        .into_iter()
+        .partition(|made| matches!(made, Finished::Created { .. }));
+    assert_eq!(
+        (created.len(), existing.len()),
+        (1, 1),
+        "{created:?} {existing:?}"
+    );
+    let Finished::Created { job_id, .. } = &created[0] else {
+        unreachable!()
+    };
+    assert_eq!(existing[0], Finished::Existing(job_id.clone()));
+    assert_eq!(s.store.views.open_jobs().await.unwrap().len(), 1);
+    assert_eq!(
+        tree(s.area.root()),
+        ["01.ass", "02.srt"].map(|file| format!("{job_id}/{file}"))
+    );
+    assert_eq!(tmp_entries(&s.area), 0);
 }

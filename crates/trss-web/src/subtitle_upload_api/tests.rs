@@ -264,10 +264,11 @@ async fn two_ass_a_font_and_a_text_file_make_one_package_that_says_what_it_dropp
         .map(|s| (s["step"].as_str().unwrap(), s["state"].as_str().unwrap()))
         .collect();
     assert_eq!(steps, [("receive", "done")]);
-    assert!(job["log"][0]["detail"]
-        .as_str()
-        .unwrap()
-        .contains("뺀 파일 1개"));
+    // Its files are shown at their paths in the job's folder of the receive area.
+    assert_eq!(
+        files[0]["path"].as_str().unwrap(),
+        s.receive().join(id).join("01.ass").to_string_lossy()
+    );
 
     // The bytes are in the job's folder of the receive area, and nowhere else.
     assert_eq!(
@@ -296,92 +297,7 @@ async fn two_ass_a_font_and_a_text_file_make_one_package_that_says_what_it_dropp
 }
 
 #[tokio::test]
-async fn a_text_file_sent_anyway_is_dropped_by_the_server_and_named_in_the_job() {
-    let s = setup().await;
-    let form = Form::to("u1", 1, None)
-        .file("01.ass", ASS)
-        .file("readme.txt", b"Thanks for downloading.")
-        .file("Font.ttf", &ttf());
-    let (status, made) = upload(&s.router, &form).await;
-    assert_eq!(status, StatusCode::ACCEPTED, "{made}");
-    assert_eq!(made["dropped"][0]["name"], "readme.txt");
-    assert_eq!(
-        made["dropped"][0]["reason"],
-        "내용이 자막이나 폰트가 아니에요"
-    );
-    let job = detail(&s.router, made["id"].as_str().unwrap()).await;
-    assert_eq!(job["dropped"][0]["name"], "readme.txt");
-    assert_eq!(names(&job["items"][0]["files"]), ["01.ass", "Font.ttf"]);
-}
-
-#[tokio::test]
-async fn an_image_with_an_ass_name_is_dropped_by_its_content() {
-    let s = setup().await;
-    let form = Form::to("u1", 1, None)
-        .file("cover.ass", PNG)
-        .file("real.ass", ASS)
-        // A subtitle under a name that is no subtitle's is kept all the same.
-        .file("notes.txt", SRT);
-    let (status, made) = upload(&s.router, &form).await;
-    assert_eq!(status, StatusCode::ACCEPTED, "{made}");
-    assert_eq!(names(&made["dropped"]), ["cover.ass"]);
-    assert_eq!(
-        made["kept"],
-        json!({ "subtitles": 2, "fonts": 0, "archives": 0 })
-    );
-    let job = detail(&s.router, made["id"].as_str().unwrap()).await;
-    assert_eq!(names(&job["items"][0]["files"]), ["real.ass", "notes.txt"]);
-    // The image was not stored.
-    let id = made["id"].as_str().unwrap();
-    assert!(!s.receive().join(id).join("cover.ass").exists());
-}
-
-#[tokio::test]
-async fn a_zip_stays_whole_in_the_package() {
-    let s = setup().await;
-    let zip = zip_of(&[
-        ("01.ass", ASS),
-        ("fonts/Font.ttf", &ttf()),
-        ("readme.txt", b"hi"),
-    ]);
-    let (status, made) = upload(&s.router, &Form::to("u1", 1, None).file("pack.zip", &zip)).await;
-    assert_eq!(status, StatusCode::ACCEPTED, "{made}");
-    assert_eq!(
-        made["kept"],
-        json!({ "subtitles": 0, "fonts": 0, "archives": 1 })
-    );
-    // What is inside is not judged here: the readme is not a dropped file.
-    assert_eq!(made["dropped"], json!([]));
-    let id = made["id"].as_str().unwrap();
-    let job = detail(&s.router, id).await;
-    let file = &job["items"][0]["files"][0];
-    assert_eq!(file["name"], "pack.zip");
-    assert_eq!(file["kind"], "archive");
-    assert_eq!(file["format"], "zip");
-    assert_eq!(file["size"], zip.len());
-    assert_eq!(
-        std::fs::read(s.receive().join(id).join("pack.zip")).unwrap(),
-        zip
-    );
-
-    // A ZIP that cannot be read to its end is dropped, with the reason.
-    let (status, made) = upload(
-        &s.router,
-        &Form::to("u2", 1, None)
-            .file("broken.zip", &zip[..zip.len() / 2])
-            .file("ok.srt", SRT),
-    )
-    .await;
-    assert_eq!(status, StatusCode::ACCEPTED, "{made}");
-    assert_eq!(names(&made["dropped"]), ["broken.zip"]);
-    assert!(made["dropped"][0]["reason"]
-        .as_str()
-        .unwrap()
-        .contains("ZIP"));
-}
-
-#[tokio::test]
-async fn a_rar_or_a_7z_stays_whole_in_the_package_and_a_fake_one_is_dropped() {
+async fn a_rar_a_7z_and_a_zip_tell_their_archive_in_the_detail_and_a_subtitle_tells_none() {
     let s = setup().await;
     let rar = [&b"Rar!\x1A\x07\x01\x00"[..], b"volume bytes"].concat();
     let sevenz = [&b"7z\xBC\xAF\x27\x1C\x00\x04"[..], b"volume bytes"].concat();
@@ -390,19 +306,12 @@ async fn a_rar_or_a_7z_stays_whole_in_the_package_and_a_fake_one_is_dropped() {
         &Form::to("a1", 1, None)
             .file("pack.part1.rar", &rar)
             .file("pack.7z.001", &sevenz)
-            .file("fake.rar", b"this is a text file")
+            .file("z.zip", &zip_of(&[("a.srt", SRT)]))
             .file("01.ass", ASS),
     )
     .await;
     assert_eq!(status, StatusCode::ACCEPTED, "{made}");
-    assert_eq!(
-        made["kept"],
-        json!({ "subtitles": 1, "fonts": 0, "archives": 2 })
-    );
-    assert_eq!(names(&made["dropped"]), ["fake.rar"]);
-    assert_eq!(made["dropped"][0]["reason"], "내용이 압축 파일이 아니에요");
-    let id = made["id"].as_str().unwrap();
-    let job = detail(&s.router, id).await;
+    let job = detail(&s.router, made["id"].as_str().unwrap()).await;
     let files = job["items"][0]["files"].as_array().unwrap();
     let archives: Vec<_> = files
         .iter()
@@ -419,109 +328,46 @@ async fn a_rar_or_a_7z_stays_whole_in_the_package_and_a_fake_one_is_dropped() {
         archives,
         [
             ("pack.part1.rar", "rar", "other"),
-            ("pack.7z.001", "7z", "other")
+            ("pack.7z.001", "7z", "other"),
+            ("z.zip", "zip", "zip")
         ]
     );
-    assert_eq!(
-        std::fs::read(s.receive().join(id).join("pack.part1.rar")).unwrap(),
-        rar
-    );
-    // A ZIP says so too, and a file that is not an archive says nothing.
-    let (_, made) = upload(
-        &s.router,
-        &Form::to("a2", 1, None).file("z.zip", &zip_of(&[("a.srt", SRT)])),
-    )
-    .await;
-    let job = detail(&s.router, made["id"].as_str().unwrap()).await;
-    assert_eq!(job["items"][0]["files"][0]["archive"], "zip");
     let ass = files.iter().find(|f| f["name"] == "01.ass").unwrap();
     assert_eq!(ass["archive"], Value::Null);
 }
 
 #[tokio::test]
-async fn nothing_to_receive_makes_no_job_and_leaves_no_file() {
+async fn nothing_to_receive_is_a_400_that_says_how_many_files_were_dropped() {
     let s = setup().await;
-    for form in [
-        Form::to("n1", 1, None)
-            .file("cover.jpg", PNG)
-            .file("readme.txt", b"text"),
-        Form::to("n2", 1, None)
-            .text("skipped", "a.mkv")
-            .text("skipped", "b.nfo"),
-        Form::to("n3", 1, None),
-        Form::to("n4", 1, None).file("empty.ass", b""),
+    let none = "올린 파일이 없어요. 받을 자막이나 폰트가 없어서 작업을 만들지 않았어요.";
+    let all_dropped = |n: usize| {
+        format!(
+            "받을 자막이나 폰트가 없어요. 올린 파일 {n}개는 모두 자막이나 폰트가 아니라서 작업을 만들지 않았어요."
+        )
+    };
+    for (form, message) in [
+        (
+            Form::to("n1", 1, None)
+                .file("cover.jpg", PNG)
+                .file("readme.txt", b"text"),
+            all_dropped(2),
+        ),
+        (
+            Form::to("n2", 1, None)
+                .text("skipped", "a.mkv")
+                .text("skipped", "b.nfo"),
+            all_dropped(2),
+        ),
+        (Form::to("n3", 1, None), none.to_owned()),
+        (
+            Form::to("n4", 1, None).file("empty.ass", b""),
+            all_dropped(1),
+        ),
     ] {
         let (status, refused) = upload(&s.router, &form).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
         assert_eq!(refused["error"], "invalid");
-        assert!(
-            refused["message"]
-                .as_str()
-                .unwrap()
-                .contains("받을 자막이나 폰트가 없어요")
-                || refused["message"]
-                    .as_str()
-                    .unwrap()
-                    .contains("올린 파일이 없어요"),
-            "{refused}"
-        );
-    }
-    assert_eq!(job_count(&s).await, 0);
-    // No folder of a job, and nothing staged is left.
-    assert_eq!(tree(&s.receive()), [".tmp".to_owned()]);
-}
-
-#[tokio::test]
-async fn names_cannot_leave_the_jobs_folder_and_a_folders_paths_are_kept_as_names() {
-    let s = setup().await;
-    let form = Form::to("u1", 1, None)
-        .file("../../evil.ass", ASS)
-        .file("Show/Season 1/01.ass", ASS)
-        .file("Show/Season 2/01.ass", SRT)
-        .file("Show/fonts/\u{202E}gpj.ttf", &ttf())
-        .file("/abs/path/ep.srt", SRT)
-        .file("..\\..\\win.ass", ASS);
-    let (status, made) = upload(&s.router, &form).await;
-    assert_eq!(status, StatusCode::ACCEPTED, "{made}");
-    let id = made["id"].as_str().unwrap();
-    let job = detail(&s.router, id).await;
-    assert_eq!(
-        names(&job["items"][0]["files"]),
-        [
-            "evil.ass",
-            "Show/Season 1/01.ass",
-            "Show/Season 2/01.ass",
-            "Show/fonts/gpj.ttf",
-            "abs/path/ep.srt",
-            "win.ass"
-        ]
-    );
-    // Every file is flat in the job's folder, the second `01.ass` numbered.
-    let on_disk = tree(&s.receive());
-    for file in [
-        "evil.ass",
-        "01.ass",
-        "01 (2).ass",
-        "gpj.ttf",
-        "ep.srt",
-        "win.ass",
-    ] {
-        assert!(
-            on_disk.contains(&format!("{id}/{file}")),
-            "{file}: {on_disk:?}"
-        );
-    }
-    assert!(on_disk
-        .iter()
-        .all(|p| p == ".tmp" || p == id || p.starts_with(&format!("{id}/"))));
-    assert!(!s.dir.path().join("evil.ass").exists());
-    assert!(!s.dir.path().parent().unwrap().join("evil.ass").exists());
-    // The paths the detail shows are in the job's folder too.
-    for file in job["items"][0]["files"].as_array().unwrap() {
-        assert!(file["path"]
-            .as_str()
-            .unwrap()
-            .starts_with(&format!("{}/", s.receive().join(id).to_string_lossy())));
+        assert_eq!(refused["message"], message.as_str());
     }
 }
 
@@ -581,11 +427,9 @@ async fn a_bad_request_is_refused_before_a_file_is_stored() {
     for (form, expected) in [
         (file(blank.clone()), StatusCode::BAD_REQUEST),
         (file(Form::to("   ", 1, None)), StatusCode::BAD_REQUEST),
+        // An ID the app's own jobs take (`trss_jobs::is_app_command` has the
+        // prefixes).
         (file(Form::to("auto:3", 1, None)), StatusCode::BAD_REQUEST),
-        (
-            file(Form::to("recheck:3:0123456789abcdef", 1, None)),
-            StatusCode::BAD_REQUEST,
-        ),
         (
             file(Form::to(&"x".repeat(129), 1, None)),
             StatusCode::BAD_REQUEST,
@@ -653,7 +497,7 @@ fn limits(files: usize, entries: usize, total: u64, one: u64) -> Limits {
 async fn an_upload_past_a_limit_is_refused_while_it_is_stored_and_the_limit_is_told() {
     let s = setup_with(Some(limits(3, 5, 1 << 20, 100))).await;
 
-    // Too many files: the fourth is refused, and the first three are removed.
+    // Too many files: the fourth is refused.
     let many = Form::to("l1", 1, None)
         .file("1.srt", SRT)
         .file("2.srt", SRT)
@@ -689,30 +533,6 @@ async fn an_upload_past_a_limit_is_refused_while_it_is_stored_and_the_limit_is_t
         refused["message"],
         "파일 하나는 100바이트까지 올릴 수 있어요."
     );
-
-    assert_eq!(job_count(&s).await, 0);
-    assert_eq!(tree(&s.receive()), [".tmp".to_owned()]);
-    // A file at the limit is taken.
-    let exact = vec![b'1'; 100];
-    let (status, _) = upload(
-        &s.router,
-        &Form::to("l4", 1, None).file("exact.srt", &exact),
-    )
-    .await;
-    assert_eq!(
-        status,
-        StatusCode::BAD_REQUEST,
-        "100 bytes of '1' are no subtitle"
-    );
-    let (status, made) = upload(
-        &s.router,
-        &Form::to("l5", 1, None)
-            .file("a.srt", SRT)
-            .file("b.srt", SRT)
-            .file("c.srt", SRT),
-    )
-    .await;
-    assert_eq!(status, StatusCode::ACCEPTED, "{made}");
 }
 
 #[tokio::test]
@@ -726,8 +546,6 @@ async fn the_total_size_is_held_while_the_bytes_come_and_by_the_declared_length(
         refused["message"],
         "한 번에 모두 합쳐 150바이트까지 올릴 수 있어요. 나눠서 올려 주세요."
     );
-    assert_eq!(job_count(&s).await, 0);
-    assert_eq!(tree(&s.receive()), [".tmp".to_owned()]);
 
     // A length declared past the limit (and the framing allowance) is refused
     // before the body is read, whatever the body is.
@@ -808,7 +626,7 @@ fn half_of(form: &Form) -> Vec<u8> {
 }
 
 #[tokio::test]
-async fn a_retry_with_the_same_id_makes_one_job() {
+async fn a_retry_with_the_same_id_gets_the_job_back_and_another_upload_is_a_conflict() {
     let s = setup().await;
     let form = Form::to("same", 1, Some("s1"))
         .file("01.ass", ASS)
@@ -823,65 +641,16 @@ async fn a_retry_with_the_same_id_makes_one_job() {
         (status, again["id"].as_str()),
         (StatusCode::OK, Some(id.as_str()))
     );
-    assert_eq!(job_count(&s).await, 1);
-    // Its files were not kept a second time, and nothing staged is left.
-    assert_eq!(
-        tree(&s.receive()),
-        [
-            ".tmp".to_owned(),
-            id.clone(),
-            format!("{id}/01.ass"),
-            format!("{id}/Font.ttf"),
-        ]
-    );
-
     // Another upload under the same ID is a conflict that names the job.
-    for other in [
-        Form::to("same", 1, Some("s1")).file("01.ass", ASS),
-        Form::to("same", 1, Some("s2"))
-            .file("01.ass", ASS)
-            .file("Font.ttf", &ttf()),
-        Form::to("same", 2, None)
-            .file("01.ass", ASS)
-            .file("Font.ttf", &ttf()),
-        Form::to("same", 1, Some("s1"))
-            .text("skipped", "x")
-            .file("01.ass", ASS)
-            .file("Font.ttf", &ttf()),
-        Form::to("same", 1, Some("s1"))
+    let (status, conflict) = upload(
+        &s.router,
+        &Form::to("same", 1, Some("s1"))
             .file("01.ass", SRT)
             .file("Font.ttf", &ttf()),
-    ] {
-        let (status, conflict) = upload(&s.router, &other).await;
-        assert_eq!(status, StatusCode::CONFLICT, "{conflict}");
-        assert_eq!(conflict["current"]["id"].as_str(), Some(id.as_str()));
-    }
-    assert_eq!(job_count(&s).await, 1);
-    assert_eq!(tree(&s.receive()).len(), 4);
-}
-
-#[tokio::test]
-async fn two_deliveries_at_once_make_one_job() {
-    let s = setup().await;
-    let form = Form::to("race", 1, None)
-        .file("01.ass", ASS)
-        .file("02.srt", SRT);
-    let (first, second) = tokio::join!(upload(&s.router, &form), upload(&s.router, &form));
-    let mut statuses = [first.0, second.0];
-    statuses.sort();
-    assert_eq!(statuses, [StatusCode::OK, StatusCode::ACCEPTED]);
-    assert_eq!(first.1["id"], second.1["id"]);
-    assert_eq!(job_count(&s).await, 1);
-    let id = first.1["id"].as_str().unwrap();
-    assert_eq!(
-        tree(&s.receive()),
-        [
-            ".tmp".to_owned(),
-            id.to_owned(),
-            format!("{id}/01.ass"),
-            format!("{id}/02.srt"),
-        ]
-    );
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{conflict}");
+    assert_eq!(conflict["current"]["id"].as_str(), Some(id.as_str()));
 }
 
 // --- the framing and the sender are bounded ------------------------------------------
@@ -1167,11 +936,6 @@ async fn a_busy_server_says_so_at_once_when_the_queue_is_full() {
     assert_eq!(json["error"], "unavailable");
     assert!(json["message"].as_str().unwrap().contains("잠시 뒤"));
     assert!(started.elapsed() < Duration::from_secs(2));
-    // Nothing was made, and the turn that is free later serves the same upload.
-    assert_eq!(job_count(&s).await, 0);
-    drop(held);
-    let (status, _) = upload(&s.router, &Form::to("busy", 1, None).file("01.ass", ASS)).await;
-    assert_eq!(status, StatusCode::ACCEPTED);
 }
 
 #[tokio::test]
