@@ -98,12 +98,10 @@ use std::{
     time::UNIX_EPOCH,
 };
 
-use trss_core::{
-    file_id::same_recorded_file,
-    files::{rename_noreplace, sync_dir, sync_renamed},
-};
+use trss_core::file_id::same_recorded_file;
 
 use super::{
+    aside::{self, Check, Expected, Moved},
     blocking, files,
     files::{Copied, Published},
     joined,
@@ -120,6 +118,9 @@ use crate::{
     store::JobError,
 };
 use records::{Claimed, Compared, Comparison, FileSeen, Imported, Plan, PlanPath, VideoSeen};
+
+/// The error number of a rename of a file that is not there.
+const ENOENT: i32 = 2;
 
 /// The reason a plan goes stale for a newer revision (`새 수정본 발견`).
 pub const NEW_REVISION: &str = "같은 출처의 새 수정본이 들어왔어요";
@@ -202,11 +203,18 @@ fn seen_video(path: &Path, relative: &str) -> io::Result<VideoSeen> {
     })
 }
 
+/// What the file the plan saw is: its object and bytes.
+fn expected(seen: &FileSeen) -> Expected<'_> {
+    Expected {
+        size: seen.size,
+        sha256: &seen.sha256,
+        object: Some(&seen.object),
+    }
+}
+
 /// The same file as the plan saw: its object and bytes.
 fn same_file(found: &Option<(u64, String, String)>, seen: &FileSeen) -> bool {
-    found.as_ref().is_some_and(|(n, s, o)| {
-        *n == seen.size && *s == seen.sha256 && same_recorded_file(o, &seen.object)
-    })
+    expected(seen).matches(found)
 }
 
 /// The same video as the plan saw: its path, object, length and change time.
@@ -1340,40 +1348,28 @@ impl Placer {
         let from = files::within(&folder, &path.path);
         let aside = files::within(&folder, &removal.target);
         let shown = path.path.clone();
-        let moved = blocking(move || -> Result<Aside, io::Error> {
-            match rename_noreplace(&from, &aside) {
-                Ok(()) => {}
-                Err(err) if err.kind() == io::ErrorKind::NotFound => {
-                    return Ok(Aside::Untouched(format!("기존 자막이 없어졌어요 ({shown})")))
-                }
-                Err(err) => return Ok(Aside::Failed(err)),
-            }
-            sync_renamed(&from, &aside)?;
-            let found = files::facts(&aside).ok().flatten();
-            if same_file(&found, &seen) {
-                return Ok(Aside::Done);
-            }
-            // Not the file the plan saw: it goes back where it was.
-            match rename_noreplace(&aside, &from) {
-                Ok(()) => {
-                    sync_renamed(&aside, &from)?;
-                    Ok(Aside::Untouched(format!(
-                        "기존 자막이 비교한 뒤 바뀌었어요 ({shown})"
-                    )))
-                }
-                Err(err) => Ok(Aside::Unsure(format!(
-                    "옮긴 기존 자막이 비교한 것과 달라 되돌리려 했지만 하지 못했어요 ({shown}): {err}"
-                ))),
-            }
-        })
-        .await;
+        let moved = blocking(move || aside::set_aside(&from, &aside, &expected(&seen))).await;
+        let not_put_back = |err: io::Error| {
+            Aside::Unsure(format!(
+                "옮긴 기존 자막이 비교한 것과 달라 되돌리려 했지만 하지 못했어요 ({shown}): {err}"
+            ))
+        };
+        let unsynced = |err: io::Error| {
+            Aside::Unsure(format!(
+                "기존 자막을 옮긴 뒤 폴더를 동기화하지 못했어요: {err}"
+            ))
+        };
         let moved = match moved {
-            Ok(moved) => moved,
-            Err(err) => {
-                return Ok(Aside::Unsure(format!(
-                    "기존 자막을 옮긴 뒤 폴더를 동기화하지 못했어요: {err}"
-                )))
+            Moved::Missing => Aside::Untouched(format!("기존 자막이 없어졌어요 ({shown})")),
+            Moved::NotMoved(err) => Aside::Failed(err),
+            Moved::Unsynced(err) | Moved::Checked(Check::PutBackUnsynced(err)) => unsynced(err),
+            Moved::Checked(Check::Expected) => Aside::Done,
+            Moved::Checked(Check::PutBack) => {
+                Aside::Untouched(format!("기존 자막이 비교한 뒤 바뀌었어요 ({shown})"))
             }
+            Moved::Checked(Check::NotPutBack(err)) => not_put_back(err),
+            // Taken away after the rename: there is nothing to put back.
+            Moved::Checked(Check::Gone) => not_put_back(io::Error::from_raw_os_error(ENOENT)),
         };
         if let Aside::Done = moved {
             let (id, applied, now) = (removal.id.clone(), path.applied_id.clone(), self.now());
@@ -1514,14 +1510,7 @@ impl Placer {
                         if !(ours_aside && ours_copy) {
                             return Ok(false);
                         }
-                        files::remove_known(&aside)?;
-                        files::remove_known(&protective)?;
-                        // The names stay removed after a power loss.
-                        let (kept_in, copy_in) = (aside.parent(), protective.parent());
-                        let folders = [kept_in, copy_in.filter(|c| Some(*c) != kept_in)];
-                        for folder in folders.into_iter().flatten().filter(|f| f.is_dir()) {
-                            sync_dir(folder)?;
-                        }
+                        aside::remove(&[&aside, &protective])?;
                         Ok(true)
                     })
                     .await;

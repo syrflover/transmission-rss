@@ -103,6 +103,7 @@
 //! between its look at a file and the removal.
 
 mod api;
+pub mod aside;
 pub mod cleanup;
 pub mod episode;
 pub mod files;

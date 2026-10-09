@@ -66,7 +66,7 @@
 //! found to be the applied bytes there), that file is removed, and the
 //! removal is `done` with the applied copy recorded removed. The stored
 //! subtitle keeps its bytes, so no copy of them is made first, and the
-//! bytes alone say a file is the applied copy (see [`Found::Copy`]).
+//! bytes alone say a file is the applied copy (see [`Applied::expected`]).
 //!
 //! | Record | On disk | Then |
 //! | --- | --- | --- |
@@ -88,18 +88,14 @@
 use std::{collections::BTreeMap, path::Path};
 
 use rusqlite::{params, Connection, OptionalExtension};
-use trss_core::{
-    files::{
-        create_dir_all_synced, rename_noreplace, rename_noreplace_synced, sync_dir, sync_renamed,
-    },
-    Millis,
-};
+use trss_core::{files::create_dir_all_synced, Millis};
 use trss_library::mapping::reason::{self, Wording};
 
 use crate::{
     mapping::{self, Mapping},
     model::{JobState, RemovalState, StepKind},
     place::{
+        aside::{self, Check, Expected, Look, Moved},
         blocking,
         episode::Basis,
         files,
@@ -829,25 +825,17 @@ fn done(c: &mut Connection, removal: &Removal, now: Millis) -> Result<(), JobErr
     })
 }
 
-/// What a look at a removal's files found.
-enum Found {
-    /// The applied bytes on its path. The file's object is not compared: a
+impl Applied {
+    /// The file the copy is: the applied bytes. Its object is not compared: a
     /// file system mounted again may give the same file another device
     /// number, and a file of the applied bytes loses nothing when removed,
     /// since its stored subtitle keeps them.
-    Copy,
-    /// Nothing on its path.
-    Gone,
-    /// Another file there, or one that could not be read.
-    Other(String),
-}
-
-fn found(path: &Path, copy: &Applied) -> Found {
-    match files::facts(path) {
-        Ok(None) => Found::Gone,
-        Ok(Some((size, sha, _))) if size == copy.size && sha == copy.sha256 => Found::Copy,
-        Ok(Some(_)) => Found::Other("적용한 뒤 바뀐 파일이라 그대로 뒀어요".to_owned()),
-        Err(err) => Found::Other(format!("적용본을 확인하지 못해 그대로 뒀어요: {err}")),
+    fn expected(&self) -> Expected<'_> {
+        Expected {
+            size: self.size,
+            sha256: &self.sha256,
+            object: None,
+        }
     }
 }
 
@@ -910,20 +898,11 @@ fn stored_of(c: &Connection, applied_id: &str) -> rusqlite::Result<Option<record
     }
 }
 
+/// Why a removal keeps a file that is not the applied bytes.
+const CHANGED: &str = "적용한 뒤 바뀐 파일이라 그대로 뒀어요";
+
 /// Why a removal keeps a copy whose stored subtitle is on its episode again.
 const BACK_HERE: &str = "회차 대응이 다시 바뀌어 보관본이 이 회차의 것이라 그대로 뒀어요";
-
-/// What came of renaming a copy aside.
-enum Aside {
-    /// It is aside, the applied bytes.
-    Done,
-    /// Nothing was left changed: the removal ends `kept` (or `done` when the
-    /// copy is gone), with why.
-    Kept(String),
-    Gone,
-    /// What became of it is not known.
-    Unsure(String),
-}
 
 impl Placer {
     /// Takes off the copies the job's confirmed relocation moves, before any
@@ -991,15 +970,11 @@ impl Placer {
                 .unwrap_or(true)
             {
                 // Renamed before the record that it was found aside.
-                return match self.check_aside(&copy, &at, &aside_at, &label).await {
-                    Aside::Done => {
-                        self.mark_aside(&removal).await?;
-                        self.remove_aside(&removal, &aside_at, &label).await
-                    }
-                    Aside::Kept(why) => self.end(&removal, RemovalState::Kept, &why).await,
-                    Aside::Gone => self.gone(&removal, &label).await,
-                    Aside::Unsure(why) => self.end(&removal, RemovalState::Held, &why).await,
-                };
+                let (expected, to, back) = (copy.clone(), aside_at.clone(), at.clone());
+                let checked = blocking(move || aside::check(&to, &back, &expected.expected()));
+                return self
+                    .settle(&removal, checked.await, &aside_at, &label)
+                    .await;
             }
             // Not renamed: looked at anew below.
         }
@@ -1043,12 +1018,15 @@ impl Placer {
         if !intact {
             return self.end(&removal, RemovalState::Kept, STORED_MISSING).await;
         }
-        let a = at.clone();
-        let seen = blocking(move || found(&a, &copy)).await;
-        match seen {
-            Found::Gone => return self.gone(&removal, &label).await,
-            Found::Other(why) => return self.end(&removal, RemovalState::Kept, &why).await,
-            Found::Copy => {}
+        let (a, expected) = (at.clone(), copy.clone());
+        match blocking(move || aside::look(&a, &expected.expected())).await {
+            Look::Gone => return self.gone(&removal, &label).await,
+            Look::Differs => return self.end(&removal, RemovalState::Kept, CHANGED).await,
+            Look::Unreadable(err) => {
+                let why = format!("적용본을 확인하지 못해 그대로 뒀어요: {err}");
+                return self.end(&removal, RemovalState::Kept, &why).await;
+            }
+            Look::Expected => {}
         }
         let (id, f, a, now) = (
             removal.id.clone(),
@@ -1079,22 +1057,25 @@ impl Placer {
                 }
             };
         }
-        let (from, to) = (at.clone(), aside_at.clone());
-        let renamed = blocking(move || -> std::io::Result<()> {
-            if let Some(dir) = to.parent() {
-                create_dir_all_synced(dir)?;
+        let (from, to, expected) = (at.clone(), aside_at.clone(), copy.clone());
+        let moved = blocking(move || {
+            // A folder that cannot be made fails the rename the same way.
+            match to.parent().map_or(Ok(()), create_dir_all_synced) {
+                Ok(()) => aside::set_aside(&from, &to, &expected.expected()),
+                Err(err) => Moved::refused(err),
             }
-            rename_noreplace_synced(&from, &to)
         })
         .await;
-        match renamed {
-            Ok(()) => {}
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                return self.gone(&removal, &label).await;
+        match moved {
+            Moved::Missing => self.gone(&removal, &label).await,
+            // `rename_noreplace_synced` answered `NotFound` for the rename and
+            // for a sync alike, and both were taken for a copy that is gone.
+            Moved::Unsynced(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                self.gone(&removal, &label).await
             }
-            Err(err) => {
-                // Either nothing moved, or the move is not known to be on
-                // disk: the next run looks at both paths again.
+            // Either nothing moved, or the move is not known to be on disk:
+            // the next run looks at both paths again.
+            Moved::NotMoved(err) | Moved::Unsynced(err) => {
                 let a = aside_at.clone();
                 if blocking(move || trss_core::files::occupied(&a))
                     .await
@@ -1108,47 +1089,44 @@ impl Placer {
                         )
                         .await;
                 }
-                return self
-                    .end(
-                        &removal,
-                        RemovalState::Kept,
-                        &format!("적용본을 옮기지 못해 그대로 뒀어요: {err}"),
-                    )
-                    .await;
+                self.end(
+                    &removal,
+                    RemovalState::Kept,
+                    &format!("적용본을 옮기지 못해 그대로 뒀어요: {err}"),
+                )
+                .await
             }
-        }
-        match self.check_aside(&copy, &at, &aside_at, &label).await {
-            Aside::Done => {
-                self.mark_aside(&removal).await?;
-                self.remove_aside(&removal, &aside_at, &label).await
-            }
-            Aside::Kept(why) => self.end(&removal, RemovalState::Kept, &why).await,
-            Aside::Gone => self.gone(&removal, &label).await,
-            Aside::Unsure(why) => self.end(&removal, RemovalState::Held, &why).await,
+            Moved::Checked(checked) => self.settle(&removal, checked, &aside_at, &label).await,
         }
     }
 
-    /// Whether the file renamed aside is the applied copy; one that is not
-    /// goes back on its path.
-    async fn check_aside(&self, copy: &Applied, at: &Path, aside: &Path, label: &str) -> Aside {
-        let copy = copy.clone();
-        let (at, aside, label) = (at.to_path_buf(), aside.to_path_buf(), label.to_owned());
-        blocking(move || match found(&aside, &copy) {
-            Found::Copy => Aside::Done,
-            Found::Gone => Aside::Gone,
-            Found::Other(_) => match rename_noreplace(&aside, &at) {
-                Ok(()) => match sync_renamed(&aside, &at) {
-                    Ok(()) => Aside::Kept("적용한 뒤 바뀐 파일이라 그대로 뒀어요".to_owned()),
-                    Err(err) => Aside::Unsure(format!(
-                        "{label}을 되돌린 뒤 폴더를 동기화하지 못했어요: {err}"
-                    )),
-                },
-                Err(err) => Aside::Unsure(format!(
+    /// Ends the removal by what was found aside: the applied bytes are
+    /// recorded set aside and removed; another file went back on its path.
+    async fn settle(
+        &self,
+        removal: &Removal,
+        checked: Check,
+        aside_at: &Path,
+        label: &str,
+    ) -> Result<(), JobError> {
+        match checked {
+            Check::Expected => {
+                self.mark_aside(removal).await?;
+                self.remove_aside(removal, aside_at, label).await
+            }
+            Check::Gone => self.gone(removal, label).await,
+            Check::PutBack => self.end(removal, RemovalState::Kept, CHANGED).await,
+            Check::PutBackUnsynced(err) => {
+                let why = format!("{label}을 되돌린 뒤 폴더를 동기화하지 못했어요: {err}");
+                self.end(removal, RemovalState::Held, &why).await
+            }
+            Check::NotPutBack(err) => {
+                let why = format!(
                     "옮긴 {label}이 적용한 파일과 달라 되돌리려 했지만 하지 못했어요: {err}"
-                )),
-            },
-        })
-        .await
+                );
+                self.end(removal, RemovalState::Held, &why).await
+            }
+        }
     }
 
     async fn mark_aside(&self, removal: &Removal) -> Result<(), JobError> {
@@ -1165,14 +1143,7 @@ impl Placer {
         label: &str,
     ) -> Result<(), JobError> {
         let a = aside.to_path_buf();
-        let removed = blocking(move || -> std::io::Result<()> {
-            files::remove_known(&a)?;
-            match a.parent() {
-                Some(dir) if dir.is_dir() => sync_dir(dir),
-                _ => Ok(()),
-            }
-        })
-        .await;
+        let removed = blocking(move || aside::remove(&[&a])).await;
         if let Err(err) = removed {
             return self
                 .end(
