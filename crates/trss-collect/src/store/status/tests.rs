@@ -483,3 +483,22 @@ fn a_look_is_believed_for_three_intervals_and_a_busy_workers_look_ages_only_up_t
     // A cycle start after `now` (a clock a little behind) counts `now`.
     assert!(!look.look_is_fresh(5 * MINUTE, at(16), Some(at(60))));
 }
+
+#[test]
+fn a_look_four_minutes_old_is_kept_only_by_a_busy_workers_cycle_that_began_within_three_intervals()
+{
+    const MINUTE: i64 = 60_000;
+    let now = 1_790_769_600_000;
+    let look = TransmissionCounts {
+        downloading: 1,
+        seeding: 0,
+        taken_at: now - 4 * MINUTE,
+    };
+    // A one-minute interval: between cycles the look is more than three intervals old.
+    assert!(!look.look_is_fresh(MINUTE, now, None));
+    // A cycle began three minutes ago (a minute after the look) and the worker is
+    // busy with it: what it saw is kept until the cycle ends.
+    assert!(look.look_is_fresh(MINUTE, now, Some(now - 3 * MINUTE)));
+    // A cycle that began before the look's age passed three intervals.
+    assert!(!look.look_is_fresh(MINUTE, now, Some(now - MINUTE / 2)));
+}

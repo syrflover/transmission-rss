@@ -262,7 +262,7 @@ async fn transmission_counts_and_the_last_cycle_are_reported_with_their_time() {
 }
 
 #[tokio::test]
-async fn a_next_check_more_than_one_interval_overdue_is_stalled() {
+async fn without_a_recorded_interval_nothing_is_stalled() {
     let (state, _router) = app();
     assert!(state.history.try_begin_cycle(NOON - HOUR, 0).await.unwrap());
     state
@@ -275,95 +275,13 @@ async fn a_next_check_more_than_one_interval_overdue_is_stalled() {
     // Without a recorded interval nothing is known to be late.
     assert!(!stalled(board(&state, NOON, 0).await.unwrap()));
 
+    // With one, the same cycle is late (the rule is trss-core's).
     state
         .status
         .record_cycle_interval(20 * 60_000)
         .await
         .unwrap();
-    // Due at 11:20; late but within one more interval until 11:40.
-    assert!(!stalled(
-        board(&state, NOON - 20 * 60_000, 0).await.unwrap()
-    ));
-    assert!(stalled(
-        board(&state, NOON - 20 * 60_000 + 1, 0).await.unwrap()
-    ));
     assert!(stalled(board(&state, NOON, 0).await.unwrap()));
-
-    // A new cycle starting puts it back on time.
-    assert!(state
-        .history
-        .try_begin_cycle(NOON - 60_000, 0)
-        .await
-        .unwrap());
-    assert!(!stalled(board(&state, NOON, 0).await.unwrap()));
-}
-
-#[tokio::test]
-async fn a_cycle_that_is_running_is_not_stalled_however_short_the_interval() {
-    let (state, _router) = app();
-    let minute = 60_000;
-    state.status.record_cycle_interval(minute).await.unwrap();
-    let stalled = |board: Board| board.cycle.unwrap().stalled;
-
-    // A cycle began three minutes ago (three intervals) and has not ended: the
-    // worker is busy with it, not stopped.
-    assert!(state
-        .history
-        .try_begin_cycle(NOON - 3 * minute, 0)
-        .await
-        .unwrap());
-    assert!(!stalled(board(&state, NOON, 0).await.unwrap()));
-
-    // Still running at the bound: the larger of 30 minutes and ten intervals.
-    assert!(!stalled(
-        board(&state, NOON - 3 * minute + 30 * minute, 0)
-            .await
-            .unwrap()
-    ));
-    // Past it, a cycle that has not ended is a worker that hung or died.
-    assert!(stalled(
-        board(&state, NOON - 3 * minute + 30 * minute + 1, 0)
-            .await
-            .unwrap()
-    ));
-
-    // With a long interval the bound is ten intervals.
-    state
-        .status
-        .record_cycle_interval(10 * minute)
-        .await
-        .unwrap();
-    assert!(!stalled(
-        board(&state, NOON - 3 * minute + 100 * minute, 0)
-            .await
-            .unwrap()
-    ));
-    assert!(stalled(
-        board(&state, NOON - 3 * minute + 100 * minute + 1, 0)
-            .await
-            .unwrap()
-    ));
-}
-
-#[tokio::test]
-async fn a_finished_cycle_three_intervals_overdue_is_stalled() {
-    let (state, _router) = app();
-    let minute = 60_000;
-    state.status.record_cycle_interval(minute).await.unwrap();
-    assert!(state
-        .history
-        .try_begin_cycle(NOON - 4 * minute, 0)
-        .await
-        .unwrap());
-    state
-        .history
-        .finish_cycle(NOON - 4 * minute + 1_000)
-        .await
-        .unwrap();
-
-    // No cycle is running and the next check was due three intervals ago.
-    let board = board(&state, NOON, 0).await.unwrap();
-    assert!(board.cycle.unwrap().stalled);
 }
 
 /// Records a five-minute interval and a cycle that began `ago` before `NOON`
@@ -410,126 +328,6 @@ async fn a_worker_killed_in_a_cycle_is_stalled_once_its_heartbeat_is_stale() {
         .await
         .unwrap();
     assert!(stalled_at(board(&state, NOON, 0).await.unwrap()));
-}
-
-#[tokio::test]
-async fn the_heartbeat_is_fresh_for_a_minute() {
-    let (state, _router) = app();
-    cycle_of_five_minutes(&state, 10 * MINUTE, false).await;
-    state
-        .heartbeat
-        .record(NOON, Some(NOON - 10 * MINUTE))
-        .await
-        .unwrap();
-
-    assert!(!stalled_at(board(&state, NOON + MINUTE, 0).await.unwrap()));
-    assert!(stalled_at(
-        board(&state, NOON + MINUTE + 1, 0).await.unwrap()
-    ));
-}
-
-#[tokio::test]
-async fn a_long_folder_scan_after_the_cycle_ended_is_not_stalled_while_the_worker_beats() {
-    let (state, _router) = app();
-    // The cycle began fifteen minutes ago (three intervals) and its RSS work
-    // ended a minute later; the worker still holds the lock reading the watch
-    // folders and beats every few seconds.
-    cycle_of_five_minutes(&state, 15 * MINUTE, true).await;
-    state
-        .heartbeat
-        .record(NOON - 5_000, Some(NOON - 15 * MINUTE))
-        .await
-        .unwrap();
-    assert!(!stalled_at(board(&state, NOON, 0).await.unwrap()));
-
-    // The scan ends and the worker lets go; the next cycle is about to start,
-    // so the board waits a minute before calling the next check overdue.
-    state.heartbeat.record(NOON, None).await.unwrap();
-    assert!(!stalled_at(board(&state, NOON + 30_000, 0).await.unwrap()));
-    // But a worker that does not come back is reported.
-    assert!(stalled_at(
-        board(&state, NOON + MINUTE + 1, 0).await.unwrap()
-    ));
-}
-
-#[tokio::test]
-async fn a_worker_that_beats_but_holds_the_lock_past_the_bound_is_stalled() {
-    let (state, _router) = app();
-    cycle_of_five_minutes(&state, 50 * MINUTE, false).await;
-    let held = NOON - 50 * MINUTE;
-
-    // Fifty minutes (ten intervals) is the bound for a five-minute interval: still busy.
-    state
-        .heartbeat
-        .record(NOON - 5_000, Some(held))
-        .await
-        .unwrap();
-    assert!(!stalled_at(board(&state, NOON, 0).await.unwrap()));
-
-    // Beating on, but hung in the cycle: reported once past it.
-    state
-        .heartbeat
-        .record(NOON + 1 - 5_000, Some(held))
-        .await
-        .unwrap();
-    assert!(stalled_at(board(&state, NOON + 1, 0).await.unwrap()));
-
-    // With a long interval the bound is ten intervals (100 minutes here).
-    state
-        .status
-        .record_cycle_interval(10 * MINUTE)
-        .await
-        .unwrap();
-    let later = held + 100 * MINUTE;
-    state
-        .heartbeat
-        .record(later - 5_000, Some(held))
-        .await
-        .unwrap();
-    assert!(!stalled_at(board(&state, later, 0).await.unwrap()));
-    state
-        .heartbeat
-        .record(later + 1 - 5_000, Some(held))
-        .await
-        .unwrap();
-    assert!(stalled_at(board(&state, later + 1, 0).await.unwrap()));
-}
-
-#[tokio::test]
-async fn an_idle_worker_with_a_stale_heartbeat_is_stalled_only_when_the_next_check_is_overdue() {
-    let (state, _router) = app();
-    cycle_of_five_minutes(&state, 6 * MINUTE, true).await;
-    state
-        .heartbeat
-        .record(NOON - 5 * MINUTE, None)
-        .await
-        .unwrap();
-    // Between cycles the heartbeat is old by design; the next check is late
-    // but within one more interval.
-    assert!(!stalled_at(board(&state, NOON, 0).await.unwrap()));
-    // Past one more interval it is overdue.
-    assert!(stalled_at(
-        board(&state, NOON - 6 * MINUTE + 10 * MINUTE + 1, 0)
-            .await
-            .unwrap()
-    ));
-}
-
-#[tokio::test]
-async fn without_a_heartbeat_an_unfinished_cycle_counts_as_running_until_the_bound() {
-    let (state, _router) = app();
-    // A worker older than the heartbeat leaves no row: the cycle's own marker
-    // is all there is.
-    cycle_of_five_minutes(&state, 10 * MINUTE, false).await;
-    assert!(state.heartbeat.read().await.unwrap().is_none());
-    assert!(!stalled_at(board(&state, NOON, 0).await.unwrap()));
-    let start = NOON - 10 * MINUTE;
-    assert!(!stalled_at(
-        board(&state, start + 50 * MINUTE, 0).await.unwrap()
-    ));
-    assert!(stalled_at(
-        board(&state, start + 50 * MINUTE + 1, 0).await.unwrap()
-    ));
 }
 
 #[tokio::test]

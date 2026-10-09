@@ -280,6 +280,364 @@ mod tests {
         assert_eq!(running_bound(i64::MAX), i64::MAX);
     }
 
+    const MINUTE: i64 = 60_000;
+    /// 2026-09-30 12:00:00 UTC.
+    const NOON: i64 = 1_790_769_600_000;
+
+    fn cycle(started_at: Millis, finished_at: Option<Millis>) -> CycleMarks {
+        CycleMarks {
+            started_at,
+            finished_at,
+        }
+    }
+
+    fn beat(beat_at: Millis, held_since: Option<Millis>) -> Option<WorkerHeartbeat> {
+        Some(WorkerHeartbeat {
+            beat_at,
+            held_since,
+        })
+    }
+
+    /// One judgement: the cycle, the heartbeat and the interval the worker
+    /// recorded, as of `now`.
+    struct Case {
+        what: &'static str,
+        cycle: CycleMarks,
+        beat: Option<WorkerHeartbeat>,
+        interval: i64,
+        now: Millis,
+        expected: bool,
+    }
+
+    fn run(cases: &[Case], judge: fn(CycleMarks, Option<&WorkerHeartbeat>, i64, Millis) -> bool) {
+        for case in cases {
+            assert_eq!(
+                judge(case.cycle, case.beat.as_ref(), case.interval, case.now),
+                case.expected,
+                "{}",
+                case.what
+            );
+        }
+    }
+
+    #[test]
+    fn a_finished_cycle_is_stalled_once_the_next_check_is_more_than_one_interval_overdue() {
+        let started = NOON - 60 * MINUTE;
+        let finished = cycle(started, Some(started + 1_000));
+        let case = |what, now, expected| Case {
+            what,
+            cycle: finished,
+            beat: None,
+            interval: 20 * MINUTE,
+            now,
+            expected,
+        };
+        run(
+            &[
+                // Due at 11:20; late but within one more interval until 11:40.
+                case("due 20 minutes ago", NOON - 20 * MINUTE, false),
+                case(
+                    "one more interval and a millisecond",
+                    NOON - 20 * MINUTE + 1,
+                    true,
+                ),
+                case("40 minutes overdue", NOON, true),
+                Case {
+                    what: "a new cycle starting puts it back on time",
+                    cycle: cycle(NOON - MINUTE, None),
+                    beat: None,
+                    interval: 20 * MINUTE,
+                    now: NOON,
+                    expected: false,
+                },
+                Case {
+                    what: "three intervals overdue",
+                    cycle: cycle(NOON - 4 * MINUTE, Some(NOON - 4 * MINUTE + 1_000)),
+                    beat: None,
+                    interval: MINUTE,
+                    now: NOON,
+                    expected: true,
+                },
+            ],
+            cycle_stalled,
+        );
+    }
+
+    #[test]
+    fn without_a_heartbeat_an_unfinished_cycle_runs_until_the_larger_of_half_an_hour_and_ten_intervals(
+    ) {
+        let case = |what, started_ago, interval, now_after_start, expected| Case {
+            what,
+            cycle: cycle(NOON - started_ago, None),
+            beat: None,
+            interval,
+            now: NOON - started_ago + now_after_start,
+            expected,
+        };
+        run(
+            &[
+                // A cycle three intervals old that has not ended is the worker busy.
+                case("three intervals in", 3 * MINUTE, MINUTE, 3 * MINUTE, false),
+                case(
+                    "at the 30 minute floor",
+                    3 * MINUTE,
+                    MINUTE,
+                    30 * MINUTE,
+                    false,
+                ),
+                case("past the floor", 3 * MINUTE, MINUTE, 30 * MINUTE + 1, true),
+                // With a long interval the bound is ten intervals.
+                case(
+                    "at ten intervals",
+                    3 * MINUTE,
+                    10 * MINUTE,
+                    100 * MINUTE,
+                    false,
+                ),
+                case(
+                    "past ten intervals",
+                    3 * MINUTE,
+                    10 * MINUTE,
+                    100 * MINUTE + 1,
+                    true,
+                ),
+                // A five-minute interval has a bound of fifty minutes, from ten minutes in.
+                case(
+                    "ten minutes in",
+                    10 * MINUTE,
+                    5 * MINUTE,
+                    10 * MINUTE,
+                    false,
+                ),
+                case(
+                    "at fifty minutes",
+                    10 * MINUTE,
+                    5 * MINUTE,
+                    50 * MINUTE,
+                    false,
+                ),
+                case(
+                    "past fifty minutes",
+                    10 * MINUTE,
+                    5 * MINUTE,
+                    50 * MINUTE + 1,
+                    true,
+                ),
+            ],
+            cycle_stalled,
+        );
+    }
+
+    #[test]
+    fn a_stale_heartbeat_tells_a_worker_killed_in_a_cycle_from_a_slow_one() {
+        // The cycle began ten minutes ago and never ended: well within the half
+        // hour a cycle may take, so only the heartbeat tells it from a slow one.
+        let unfinished = cycle(NOON - 10 * MINUTE, None);
+        let held = Some(NOON - 10 * MINUTE);
+        let case = |what, beat_at, now, expected| Case {
+            what,
+            cycle: unfinished,
+            beat: beat(beat_at, held),
+            interval: 5 * MINUTE,
+            now,
+            expected,
+        };
+        run(
+            &[
+                case("beating", NOON - 10_000, NOON, false),
+                case(
+                    "killed: the beat stopped two minutes ago",
+                    NOON - 2 * MINUTE,
+                    NOON,
+                    true,
+                ),
+                // The heartbeat is fresh for a minute.
+                case("a minute after the last beat", NOON, NOON + MINUTE, false),
+                case(
+                    "a minute and a millisecond after",
+                    NOON,
+                    NOON + MINUTE + 1,
+                    true,
+                ),
+            ],
+            cycle_stalled,
+        );
+    }
+
+    #[test]
+    fn a_worker_that_beats_through_a_long_folder_scan_is_not_stalled_but_one_that_does_not_come_back_is(
+    ) {
+        // The cycle began fifteen minutes ago (three intervals) and its RSS work
+        // ended a minute later; the worker still holds the lock reading the watch
+        // folders and beats every few seconds.
+        let ended = cycle(NOON - 15 * MINUTE, Some(NOON - 14 * MINUTE));
+        let case = |what, beat: Option<WorkerHeartbeat>, now, expected| Case {
+            what,
+            cycle: ended,
+            beat,
+            interval: 5 * MINUTE,
+            now,
+            expected,
+        };
+        run(
+            &[
+                case(
+                    "scanning",
+                    beat(NOON - 5_000, Some(NOON - 15 * MINUTE)),
+                    NOON,
+                    false,
+                ),
+                // The scan ends and the worker lets go; the next cycle is about to
+                // start, so a minute passes before the next check is overdue.
+                case(
+                    "let go a moment ago",
+                    beat(NOON, None),
+                    NOON + 30_000,
+                    false,
+                ),
+                case(
+                    "did not come back",
+                    beat(NOON, None),
+                    NOON + MINUTE + 1,
+                    true,
+                ),
+            ],
+            cycle_stalled,
+        );
+    }
+
+    #[test]
+    fn a_worker_that_beats_but_holds_the_lock_past_the_bound_is_stalled() {
+        let held = NOON - 50 * MINUTE;
+        let unfinished = cycle(held, None);
+        let case = |what, interval, now: Millis, expected| Case {
+            what,
+            cycle: unfinished,
+            // Beating five seconds before `now`.
+            beat: beat(now - 5_000, Some(held)),
+            interval,
+            now,
+            expected,
+        };
+        run(
+            &[
+                // Fifty minutes (ten intervals) is the bound for a five-minute interval.
+                case("at the bound", 5 * MINUTE, NOON, false),
+                case("past the bound", 5 * MINUTE, NOON + 1, true),
+                // With a long interval the bound is ten intervals (100 minutes).
+                case(
+                    "long interval at the bound",
+                    10 * MINUTE,
+                    held + 100 * MINUTE,
+                    false,
+                ),
+                case(
+                    "long interval past the bound",
+                    10 * MINUTE,
+                    held + 100 * MINUTE + 1,
+                    true,
+                ),
+            ],
+            cycle_stalled,
+        );
+    }
+
+    #[test]
+    fn an_idle_worker_with_a_stale_heartbeat_is_stalled_only_when_the_next_check_is_overdue() {
+        let idle = cycle(NOON - 6 * MINUTE, Some(NOON - 5 * MINUTE));
+        let case = |what, now, expected| Case {
+            what,
+            cycle: idle,
+            // Between cycles the heartbeat is old by design.
+            beat: beat(NOON - 5 * MINUTE, None),
+            interval: 5 * MINUTE,
+            now,
+            expected,
+        };
+        run(
+            &[
+                case("late but within one more interval", NOON, false),
+                case(
+                    "past one more interval",
+                    NOON - 6 * MINUTE + 10 * MINUTE + 1,
+                    true,
+                ),
+            ],
+            cycle_stalled,
+        );
+    }
+
+    #[test]
+    fn the_worker_is_busy_while_it_beats_until_it_holds_the_lock_past_the_bound() {
+        // A one-minute interval: the bound is the 30 minute floor.
+        let unfinished = cycle(NOON - 3 * MINUTE, None);
+        let scanning = cycle(NOON - 3 * MINUTE, Some(NOON - 2 * MINUTE));
+        let case = |what, cycle, beat, expected| Case {
+            what,
+            cycle,
+            beat,
+            interval: MINUTE,
+            now: NOON,
+            expected,
+        };
+        run(
+            &[
+                // Without a heartbeat only the cycle's own marker is known.
+                case("a cycle three intervals in", unfinished, None, true),
+                case(
+                    "a cycle that ended",
+                    cycle(NOON - 3 * MINUTE, Some(NOON - 1_000)),
+                    None,
+                    false,
+                ),
+                case(
+                    "a cycle past the floor",
+                    cycle(NOON - 31 * MINUTE, None),
+                    None,
+                    false,
+                ),
+                // With one, the whole time under the worker lock counts.
+                case(
+                    "scanning after the cycle ended",
+                    scanning,
+                    beat(NOON - 5_000, Some(NOON - 3 * MINUTE)),
+                    true,
+                ),
+                case(
+                    "let go a moment ago",
+                    scanning,
+                    beat(NOON - 5_000, None),
+                    true,
+                ),
+                case(
+                    "the beat stopped (died in the scan)",
+                    scanning,
+                    beat(NOON - 2 * MINUTE, Some(NOON - 3 * MINUTE)),
+                    false,
+                ),
+                case(
+                    "beating but hung past the bound",
+                    scanning,
+                    beat(NOON - 5_000, Some(NOON - 31 * MINUTE)),
+                    false,
+                ),
+                case(
+                    "beating in a cycle",
+                    unfinished,
+                    beat(NOON - 5_000, Some(NOON - 3 * MINUTE)),
+                    true,
+                ),
+                case(
+                    "killed in a cycle",
+                    unfinished,
+                    beat(NOON - 2 * MINUTE, Some(NOON - 3 * MINUTE)),
+                    false,
+                ),
+            ],
+            worker_busy,
+        );
+    }
+
     async fn heartbeat_of(store: &HeartbeatStore) -> Option<WorkerHeartbeat> {
         store.read().await.unwrap()
     }
