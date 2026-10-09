@@ -94,11 +94,13 @@ pub async fn fake_launcher(
         .route("/runs/{id}/cdp", get(cdp))
         .route("/reset", post(reset))
         .with_state(state.clone());
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port())
+    let served = trss_core::loopback::serve(|listener| async move {
+        axum::serve(listener, app).await.ok();
+    })
+    .await;
+    let url = format!("http://127.0.0.1:{}", served.addr.port())
         .parse()
         .unwrap();
-    tokio::spawn(async move { axum::serve(listener, app).await });
     FakeLauncher { state, url }
 }
 

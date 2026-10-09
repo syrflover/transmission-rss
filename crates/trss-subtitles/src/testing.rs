@@ -230,8 +230,8 @@ impl reqwest::dns::Resolve for Loopback {
 
 impl SourceServer {
     pub async fn start() -> SourceServer {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
+        let bound = trss_core::loopback::bind().await;
+        let port = bound.addr.port();
         let state = Arc::new(Mutex::new(State {
             port,
             ..State::default()
@@ -243,9 +243,11 @@ impl SourceServer {
                 async move { answer(&state, request) }
             }
         });
-        let task = tokio::spawn(async move {
-            axum::serve(listener, app).await.unwrap();
-        });
+        let task = bound
+            .spawn(|listener| async move {
+                axum::serve(listener, app).await.unwrap();
+            })
+            .task;
         SourceServer { port, state, task }
     }
 

@@ -15,7 +15,8 @@ use axum::{
     routing::get,
     Router,
 };
-use tokio::{net::TcpListener, task::JoinHandle};
+use tokio::task::JoinHandle;
+use trss_core::loopback::Served;
 use trss_transmission::fake::Gate;
 
 enum Route {
@@ -42,16 +43,13 @@ pub struct FeedServer {
 impl FeedServer {
     pub async fn start() -> Self {
         let state = Arc::new(Mutex::new(FeedState::default()));
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind fake feeds");
-        let addr = listener.local_addr().unwrap();
         let app = Router::new()
             .route("/{*path}", get(serve_feed))
             .with_state(state.clone());
-        let task = tokio::spawn(async move {
+        let Served { addr, task } = trss_core::loopback::serve(|listener| async move {
             axum::serve(listener, app).await.ok();
-        });
+        })
+        .await;
         FeedServer { addr, state, task }
     }
 

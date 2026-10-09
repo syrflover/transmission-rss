@@ -323,10 +323,7 @@ async fn logs_and_history_never_contain_secret_query_values() {
     h.add_channel("broken", "/media/x", &[], vec![rule("x", "x")])
         .await;
     h.feeds.set_status("broken", 500);
-    let dead = {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        listener.local_addr().unwrap()
-    };
+    let dead = trss_core::loopback::unused_addr();
     h.channels
         .create_channel(trss_collect::store::channels::ChannelInput::new(format!(
             "http://{dead}/feed?filter=1080p&token={SECRET}"

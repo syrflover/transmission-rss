@@ -43,12 +43,12 @@ async fn harness_with(tweak: impl FnOnce(&mut Config)) -> Harness {
     config.ready_timeout = Duration::from_secs(10);
     tweak(&mut config);
     let launcher = Launcher::open(config).await.unwrap();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
-    tokio::spawn({
-        let app = api::router(launcher.clone());
-        async move { axum::serve(listener, app).await }
-    });
+    let app = api::router(launcher.clone());
+    let served = trss_core::loopback::serve(|listener| async move {
+        axum::serve(listener, app).await.ok();
+    })
+    .await;
+    let base = format!("127.0.0.1:{}", served.addr.port());
     Harness {
         _dir: dir,
         base,

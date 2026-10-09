@@ -22,7 +22,7 @@
 //! it then prints what was reached and asserts nothing.
 
 use std::{
-    net::{IpAddr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, SocketAddr},
     path::Path,
     process::{Command, Output},
     sync::{
@@ -171,10 +171,11 @@ async fn spawn_site() -> (SocketAddr, Site) {
         .route("/download-page", get(download_page))
         .route("/file.zip", get(file))
         .with_state(site.clone());
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, app).await });
-    (addr, site)
+    let served = trss_core::loopback::serve_on(Ipv4Addr::UNSPECIFIED, |listener| async move {
+        axum::serve(listener, app).await.ok();
+    })
+    .await;
+    (served.addr, site)
 }
 
 fn note(site: &Site, path: &str, headers: &HeaderMap) {
@@ -575,11 +576,9 @@ fn lan_address() -> IpAddr {
 /// connections it is given and answers each with `site reached` (readable
 /// from any origin, so that a page could see it).
 async fn counting_site() -> (u16, Arc<AtomicUsize>) {
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
     let hits = Arc::new(AtomicUsize::new(0));
     let counter = hits.clone();
-    tokio::spawn(async move {
+    let served = trss_core::loopback::serve_on(Ipv4Addr::UNSPECIFIED, |listener| async move {
         loop {
             let Ok((mut socket, _)) = listener.accept().await else {
                 continue;
@@ -597,8 +596,9 @@ async fn counting_site() -> (u16, Arc<AtomicUsize>) {
                 let _ = socket.write_all(answer.as_bytes()).await;
             });
         }
-    });
-    (port, hits)
+    })
+    .await;
+    (served.addr.port(), hits)
 }
 
 /// A UDP socket on every address of the test host that counts the datagrams

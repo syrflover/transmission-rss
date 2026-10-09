@@ -14,7 +14,7 @@ use axum::{
     routing::get,
     Router,
 };
-use tokio::{net::TcpListener, task::JoinHandle};
+use tokio::task::JoinHandle;
 
 /// What a fake nyaa knows.
 #[derive(Default)]
@@ -44,10 +44,8 @@ impl FakeNyaa {
 
     pub async fn start() -> Self {
         let state = Arc::new(Mutex::new(NyaaState::default()));
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind fake nyaa");
-        let addr = listener.local_addr().unwrap();
+        let bound = trss_core::loopback::bind().await;
+        let addr = bound.addr;
         let app = Router::new()
             .route("/", get(serve_nyaa))
             .with_state((state.clone(), addr))
@@ -65,9 +63,11 @@ impl FakeNyaa {
                     }
                 },
             ));
-        let task = tokio::spawn(async move {
-            axum::serve(listener, app).await.ok();
-        });
+        let task = bound
+            .spawn(|listener| async move {
+                axum::serve(listener, app).await.ok();
+            })
+            .task;
         FakeNyaa { addr, state, task }
     }
 

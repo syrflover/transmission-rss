@@ -41,7 +41,7 @@ use std::{
 
 use futures::{SinkExt, StreamExt};
 use serde_json::{json, Value};
-use tokio::{net::TcpListener, sync::Notify};
+use tokio::sync::Notify;
 use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message};
 use tokio_util::sync::CancellationToken;
 use trss_browser::{
@@ -277,11 +277,13 @@ async fn a_tap_relayed_through_the_remote_screen_passes_the_check_and_the_file_i
         })
         .unwrap(),
     );
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let web = listener.local_addr().unwrap();
     // The app's own router, with its Host and Origin checks.
     let router = trss_web::router(dir.path(), state);
-    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let web = trss_core::loopback::serve(|listener| async move {
+        axum::serve(listener, router).await.unwrap()
+    })
+    .await
+    .addr;
     let mut request = format!("ws://{web}/api/subtitle-jobs/{job}/screen/socket?run={run}")
         .into_client_request()
         .unwrap();
@@ -781,10 +783,12 @@ async fn find_world(test: &str) -> FindWorld {
         })
         .unwrap(),
     );
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let web = listener.local_addr().unwrap();
     let router = trss_web::router(dir.path(), state);
-    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let web = trss_core::loopback::serve(|listener| async move {
+        axum::serve(listener, router).await.unwrap()
+    })
+    .await
+    .addr;
     FindWorld {
         _dir: dir,
         _container: container,

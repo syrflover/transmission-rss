@@ -22,6 +22,8 @@ pub mod folder_locks;
 pub mod folders;
 pub mod heartbeat;
 pub mod lock;
+#[cfg(any(test, feature = "test-support"))]
+pub mod loopback;
 pub mod net_route;
 pub mod pace;
 pub mod queue;

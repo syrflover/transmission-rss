@@ -5,7 +5,7 @@ edition.workspace = true
 
 [features]
 # The fake Anissia server (`fake`), for the tests of the crates above.
-test-support = ["dep:axum", "dep:futures"]
+test-support = ["dep:axum", "dep:futures", "trss-core/test-support"]
 
 [dependencies]
 trss-core.workspace = true

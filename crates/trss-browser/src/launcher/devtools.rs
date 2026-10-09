@@ -88,9 +88,7 @@ mod tests {
     /// Chromium answers `/json/version` and keeps the connection open.
     #[tokio::test]
     async fn it_does_not_wait_for_the_connection_to_close() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        tokio::spawn(async move {
+        let served = trss_core::loopback::serve(|listener| async move {
             let (mut socket, _) = listener.accept().await.unwrap();
             let mut request = [0u8; 1024];
             let _ = socket.read(&mut request).await.unwrap();
@@ -102,10 +100,11 @@ mod tests {
             socket.write_all(answer.as_bytes()).await.unwrap();
             // Open: no close, no more bytes.
             tokio::time::sleep(Duration::from_secs(30)).await;
-        });
+        })
+        .await;
         let began = std::time::Instant::now();
         assert_eq!(
-            browser_socket_path(port).await.as_deref(),
+            browser_socket_path(served.addr.port()).await.as_deref(),
             Some("/devtools/browser/kept-open")
         );
         assert!(began.elapsed() < Duration::from_secs(1));

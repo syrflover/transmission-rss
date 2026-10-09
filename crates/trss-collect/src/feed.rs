@@ -169,7 +169,10 @@ pub fn items(
 /// readers that use [`client`].
 #[cfg(test)]
 pub(crate) mod testing {
-    use std::sync::{Arc, Mutex};
+    use std::{
+        net::Ipv4Addr,
+        sync::{Arc, Mutex},
+    };
 
     use axum::{
         http::{header, HeaderMap, StatusCode},
@@ -177,6 +180,7 @@ pub(crate) mod testing {
         routing::get,
         Router,
     };
+    use trss_core::loopback::{bind_on, serve};
 
     /// The secret value the tests put in the channel URL's query.
     pub(crate) const SECRET: &str = "s3cr3tpasskey";
@@ -194,8 +198,8 @@ pub(crate) mod testing {
     impl Redirect {
         pub(crate) async fn start() -> Redirect {
             let seen = Arc::new(Mutex::new(Vec::new()));
-            let other = tokio::net::TcpListener::bind("127.0.0.2:0").await.unwrap();
-            let target = format!("http://{}/feed", other.local_addr().unwrap());
+            let other = bind_on(Ipv4Addr::new(127, 0, 0, 2)).await;
+            let target = format!("http://{}/feed", other.addr);
             let feed = Router::new().route(
                 "/feed",
                 get({
@@ -211,15 +215,18 @@ pub(crate) mod testing {
             let channel = Router::new().fallback(move || async move {
                 (StatusCode::FOUND, [(header::LOCATION, target)]).into_response()
             });
-            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-            let base = format!("http://{}", listener.local_addr().unwrap());
+            let channel_server = serve(|listener| async move {
+                axum::serve(listener, channel).await.ok();
+            })
+            .await;
+            let base = format!("http://{}", channel_server.addr);
             let tasks = [
-                tokio::spawn(async move {
-                    axum::serve(other, feed).await.ok();
-                }),
-                tokio::spawn(async move {
-                    axum::serve(listener, channel).await.ok();
-                }),
+                other
+                    .spawn(|listener| async move {
+                        axum::serve(listener, feed).await.ok();
+                    })
+                    .task,
+                channel_server.task,
             ];
             Redirect { base, seen, tasks }
         }
@@ -314,12 +321,11 @@ mod tests {
                         .into_response()
                 }),
             );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let base = format!("http://{}", listener.local_addr().unwrap());
-        let task = tokio::spawn(async move {
+        let served = trss_core::loopback::serve(|listener| async move {
             axum::serve(listener, app).await.ok();
-        });
-        (base, task)
+        })
+        .await;
+        (format!("http://{}", served.addr), served.task)
     }
 
     #[tokio::test]

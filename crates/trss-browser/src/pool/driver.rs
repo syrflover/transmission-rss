@@ -358,11 +358,9 @@ mod tests {
         use futures::{SinkExt, StreamExt};
         use tokio_tungstenite::tungstenite::Message;
 
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let url = format!("ws://{}", listener.local_addr().unwrap());
         let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
         let record = seen.clone();
-        tokio::spawn(async move {
+        let served = trss_core::loopback::serve(|listener| async move {
             let (stream, _) = listener.accept().await.unwrap();
             let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
             let mut held = None;
@@ -400,7 +398,9 @@ mod tests {
                         .unwrap();
                 }
             }
-        });
+        })
+        .await;
+        let url = format!("ws://{}", served.addr);
         let conn = Connection::connect(&url, "token").await.unwrap();
         (conn, seen)
     }

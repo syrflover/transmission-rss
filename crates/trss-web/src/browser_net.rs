@@ -365,22 +365,21 @@ eth1\t000017AC\t00000000\t0001\t0\t0\t0\t0000FFFF\t0\t0\t0
     /// Serves `/` on loopback behind a listener that refuses `refused`, and
     /// asks it once: the answer, or nothing when the connection was closed.
     async fn ask(refused: Option<Subnet>) -> String {
-        let inner = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = inner.local_addr().unwrap();
         let app = Router::new().route("/", get(|| async { "hello" }));
-        let server = tokio::spawn(async move {
+        let server = trss_core::loopback::serve(|inner| async move {
             axum::serve(GuardedListener::new(inner, refused), app)
                 .await
                 .unwrap()
-        });
-        let mut stream = TcpStream::connect(addr).await.unwrap();
+        })
+        .await;
+        let mut stream = TcpStream::connect(server.addr).await.unwrap();
         // The write may fail on a closed connection; the read says the rest.
         let _ = stream
             .write_all(b"GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
             .await;
         let mut answer = Vec::new();
         let _ = tokio::time::timeout(Duration::from_secs(5), stream.read_to_end(&mut answer)).await;
-        server.abort();
+        server.task.abort();
         String::from_utf8_lossy(&answer).into_owned()
     }
 

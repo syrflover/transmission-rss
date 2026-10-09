@@ -611,10 +611,7 @@ async fn secret_query_values_never_reach_history() {
     // HTTP errors of both quote the request URL.
     h.add_channel("broken", "/media/x", &[], vec![rule("x", "x")])
         .await;
-    let dead = {
-        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        l.local_addr().unwrap()
-    };
+    let dead = trss_core::loopback::unused_addr();
     let dead_url = format!("http://{dead}/feed?token={SECRET}");
     h.channels
         .create_channel(trss_collect::store::channels::ChannelInput::new(dead_url))

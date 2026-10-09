@@ -5,7 +5,7 @@ edition.workspace = true
 
 [features]
 # The fake feed and nyaa servers (`fake`), for the tests of the crates above.
-test-support = ["dep:axum", "trss-transmission/test-support"]
+test-support = ["dep:axum", "trss-core/test-support", "trss-transmission/test-support"]
 
 [dependencies]
 trss-core.workspace = true

@@ -939,9 +939,7 @@ async fn an_image_that_ends_short_of_its_announced_length_is_not_taken() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     // A server that announces 100 bytes, sends 3 and closes.
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let origin = format!("http://{}", listener.local_addr().unwrap());
-    tokio::spawn(async move {
+    let served = trss_core::loopback::serve(|listener| async move {
         loop {
             let (mut socket, _) = listener.accept().await.unwrap();
             let mut request = [0u8; 1024];
@@ -950,7 +948,9 @@ async fn an_image_that_ends_short_of_its_announced_length_is_not_taken() {
                 .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nabc")
                 .await;
         }
-    });
+    })
+    .await;
+    let origin = format!("http://{}", served.addr);
     let env = Env::new(&["A"]).await;
     let config = AnilistConfig {
         image_origins: vec![origin.clone()],

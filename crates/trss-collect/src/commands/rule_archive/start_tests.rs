@@ -267,9 +267,7 @@ async fn world(directory: &str, with_archive: bool) -> (World, Rule) {
         )
         .await
         .unwrap();
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
-    drop(listener);
+    let addr = trss_core::loopback::unused_addr();
     let ctx = ArchiveContext {
         channels: channels.clone(),
         settings,

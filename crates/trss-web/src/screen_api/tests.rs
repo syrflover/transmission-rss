@@ -18,7 +18,6 @@ use axum::{
 };
 use futures::{SinkExt, StreamExt};
 use serde_json::{json, Value};
-use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::{self, client::IntoClientRequest, Message as WsMessage};
 use tokio_util::sync::CancellationToken;
 use trss_core::{Db, DbError};
@@ -417,10 +416,11 @@ async fn other(
 }
 
 async fn serve(router: Router) -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-    format!("127.0.0.1:{}", addr.port())
+    let served = trss_core::loopback::serve(|listener| async move {
+        axum::serve(listener, router).await.unwrap()
+    })
+    .await;
+    format!("127.0.0.1:{}", served.addr.port())
 }
 
 struct Setup {

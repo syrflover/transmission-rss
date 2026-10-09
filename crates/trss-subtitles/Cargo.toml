@@ -6,7 +6,7 @@ edition.workspace = true
 [features]
 # `testing`: a local HTTP server shaped like Tistory, Blogger, Naver blogs
 # and Google Drive, for the tests of the crates above.
-test-support = ["dep:axum", "dep:futures", "tokio/net", "tokio/rt"]
+test-support = ["dep:axum", "dep:futures", "tokio/net", "tokio/rt", "trss-core/test-support"]
 # `BrowserReader::with_script_after_ready`, which the real-viewer test
 # (`tests/it/winpng_sample.rs`, ignored) uses to make the viewer see a picture and
 # an image it cannot read, and `BrowserAuth::with_page_setup`, with which the
@@ -36,6 +36,7 @@ url.workspace = true
 zip.workspace = true
 
 [dev-dependencies]
+trss-core = { workspace = true, features = ["test-support"] }
 axum.workspace = true
 futures.workspace = true
 sha2.workspace = true

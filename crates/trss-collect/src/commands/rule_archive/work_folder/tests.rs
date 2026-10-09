@@ -696,9 +696,7 @@ async fn the_blocking_work_keeps_its_hold_after_the_waiting_task_is_aborted() {
 
 /// A Transmission client for an address nothing listens on.
 fn unreachable_transmission() -> TransClient {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
-    drop(listener);
+    let addr = trss_core::loopback::unused_addr();
     trss_transmission::client(
         format!("http://{addr}/transmission/rpc").parse().unwrap(),
         &trss_transmission::http_client(Duration::from_secs(2)).unwrap(),

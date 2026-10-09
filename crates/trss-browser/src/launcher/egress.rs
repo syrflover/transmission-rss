@@ -760,11 +760,9 @@ mod tests {
     /// A site on loopback that counts the connections it is given and
     /// answers each request with `site` and the request line it saw.
     async fn site() -> (SocketAddr, Arc<AtomicU64>) {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
         let seen = Arc::new(AtomicU64::new(0));
         let counter = seen.clone();
-        tokio::spawn(async move {
+        let served = trss_core::loopback::serve(|listener| async move {
             loop {
                 let (mut socket, _) = listener.accept().await.unwrap();
                 counter.fetch_add(1, Ordering::SeqCst);
@@ -787,16 +785,19 @@ mod tests {
                     let _ = socket.write_all(answer.as_bytes()).await;
                 });
             }
-        });
-        (address, seen)
+        })
+        .await;
+        (served.addr, seen)
     }
 
     async fn proxy(egress: Egress) -> (SocketAddr, Arc<Egress>) {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
         let egress = Arc::new(egress);
-        tokio::spawn(serve(listener, egress.clone()));
-        (address, egress)
+        let served = trss_core::loopback::serve({
+            let egress = egress.clone();
+            |listener| serve(listener, egress)
+        })
+        .await;
+        (served.addr, egress)
     }
 
     /// Sends `head` to the proxy and reads one answer: up to the end of the
@@ -1029,10 +1030,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_name_that_resolves_to_nothing_and_an_address_that_does_not_answer() {
-        let closed = {
-            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-            listener.local_addr().unwrap()
-        };
+        let closed = trss_core::loopback::unused_addr();
         let names = Names::default().with("closed.example", &[&["127.0.0.1"]]);
         let egress = Egress::new(names, vec![closed]);
         assert_eq!(

@@ -56,8 +56,8 @@ pub struct Fake {
 
 impl Fake {
     pub async fn start() -> Fake {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let bound = trss_core::loopback::bind().await;
+        let origin = format!("http://{}", bound.addr);
         let fake = Fake {
             state: Arc::new(Mutex::new(FakeState::default())),
             held: Arc::new(Mutex::new(HashSet::new())),
@@ -67,7 +67,7 @@ impl Fake {
             .route("/graphql", post(graphql))
             .route("/img/{name}", get(image))
             .with_state(fake.clone());
-        tokio::spawn(async move {
+        bound.spawn(|listener| async move {
             axum::serve(listener, app).await.unwrap();
         });
         fake

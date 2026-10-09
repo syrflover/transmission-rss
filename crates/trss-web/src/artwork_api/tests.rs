@@ -645,10 +645,12 @@ async fn a_slow_client_holds_its_room_and_a_client_that_leaves_gives_it_back() {
     let env = env().await;
     let size = MAX_IMAGE_BYTES;
     let url = plant_cover(&env, size).await;
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
     let app = api::router().with_state(env.state.clone());
-    let server = tokio::spawn(async move { axum::serve(listener, app).await });
+    let server = trss_core::loopback::serve(|listener| async move {
+        axum::serve(listener, app).await.ok();
+    })
+    .await;
+    let addr = server.addr;
 
     // A client that asks and never reads: its small receive window leaves most
     // of the 10 MiB with the server.
@@ -675,5 +677,5 @@ async fn a_slow_client_holds_its_room_and_a_client_that_leaves_gives_it_back() {
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    server.abort();
+    server.task.abort();
 }
