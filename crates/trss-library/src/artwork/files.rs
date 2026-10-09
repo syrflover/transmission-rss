@@ -61,9 +61,9 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    fs::{self, File, OpenOptions},
+    fs::{self, File},
     io::{self, Read, Write},
-    os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
+    os::unix::fs::{MetadataExt, PermissionsExt},
     path::{Component, Path, PathBuf},
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -82,7 +82,12 @@ use crate::store::{
     artwork::{ArtworkError, ArtworkStore, FileRow, Format, ImageRef, Source},
 };
 use trss_anilist::MAX_IMAGE_BYTES;
-use trss_core::{file_id::FileId, files::rename_noreplace, folders::lexical, Millis};
+use trss_core::{
+    file_id::FileId,
+    files::{rename_noreplace, sync_dir, write_new},
+    folders::lexical,
+    Millis,
+};
 
 // The folder of the images, and where new ones are written before they are
 // published, relative to the app data folder.
@@ -150,17 +155,11 @@ fn ensure_dir(root: &Path, rel: &str) -> io::Result<()> {
 
 /// Writes `bytes` to a new file at `staging` and returns its identity.
 fn write_staged(root: &Path, staging: &str, bytes: &[u8]) -> io::Result<FileId> {
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
-        .open(root.join(staging))?;
-    file.write_all(bytes)?;
-    file.set_permissions(fs::Permissions::from_mode(0o644))?;
-    file.sync_all()?;
-    let meta = file.metadata()?;
-    Ok(FileId::of(&meta))
+    write_new(&root.join(staging), Some(0o600), |file| {
+        file.write_all(bytes)?;
+        file.set_permissions(fs::Permissions::from_mode(0o644))?;
+        Ok(FileId::of(&file.metadata()?))
+    })
 }
 
 /// Publishes `bytes` (already verified as `format`) under a new app-made name.
@@ -222,9 +221,7 @@ pub(crate) async fn publish_at(
         });
     }
     // Make the rename durable before a selection refers to the name.
-    if let Ok(dir) = File::open(app.root.join(ARTWORK_DIR)) {
-        let _ = dir.sync_all();
-    }
+    let _ = sync_dir(&app.root.join(ARTWORK_DIR));
     Ok(())
 }
 
