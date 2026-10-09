@@ -815,4 +815,22 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn a_find_job_waits_among_the_ordinary_waits_not_with_the_checks() {
+        use JobState::*;
+        // A person browses the find job's screen: it waits as a check's job
+        // does, and was made first.
+        let open = vec![
+            job(1, FIND, Waiting, Some(Wait::Auth), 40),
+            job(2, "pick", Waiting, Some(Wait::Subtitle), 50),
+            job(3, "pick", Waiting, Some(Wait::Auth), 60),
+        ];
+
+        let groups = OpenGroups::of(open);
+
+        // The check made last comes first; the find job then sits by its order
+        // among the other waits.
+        assert_eq!(ids(&groups.waiting), ["j3", "j1", "j2"]);
+    }
 }
