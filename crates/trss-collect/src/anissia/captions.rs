@@ -51,7 +51,7 @@ use std::{
 use tokio_util::sync::CancellationToken;
 
 use trss_anissia::{Anissia, AnissiaError, CaptionLine};
-use trss_core::{queue::run_item, CycleLock, Millis};
+use trss_core::{queue::run_item, CycleLock, LockFile, Millis};
 
 use crate::store::anissia::{AnissiaStore, Line, Observed};
 use trss_library::artwork::queue::{LOCK_RETRY, POLL};
@@ -74,9 +74,7 @@ pub const LONGEST_WAIT: Duration = Duration::from_secs(60 * 60);
 
 /// The lock file's path for a database file.
 pub fn lock_path_for(db_path: &std::path::Path) -> PathBuf {
-    let mut name = db_path.as_os_str().to_owned();
-    name.push(".anissia-captions.lock");
-    PathBuf::from(name)
+    LockFile::AnissiaCaptions.path_for(db_path)
 }
 
 /// How a reading ended.

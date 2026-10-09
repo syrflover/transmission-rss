@@ -31,7 +31,7 @@ pub mod wake;
 
 pub use clock::{system_clock, Clock, Millis};
 pub use db::{Db, DbError};
-pub use lock::{lock_path_for, CycleLock, WorkerHold, WorkerLock};
+pub use lock::{lock_path_for, CycleLock, LockFile, WorkerHold, WorkerLock};
 
 /// The `User-Agent` of the requests trss makes to feeds and outside services.
 pub const USER_AGENT: &str = "trss/0.3";

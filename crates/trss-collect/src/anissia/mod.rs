@@ -35,7 +35,7 @@ use std::{path::PathBuf, time::Duration};
 
 use tokio_util::sync::CancellationToken;
 
-use trss_core::{queue::run_item, CycleLock, Millis};
+use trss_core::{queue::run_item, CycleLock, LockFile, Millis};
 
 use trss_anissia::{Anissia, AnissiaError, LAST_WEEK};
 
@@ -52,9 +52,7 @@ pub const REFRESH_RETRY: Duration = Duration::from_secs(60 * 60);
 
 /// The lock file's path for a database file.
 pub fn lock_path_for(db_path: &std::path::Path) -> PathBuf {
-    let mut name = db_path.as_os_str().to_owned();
-    name.push(".anissia.lock");
-    PathBuf::from(name)
+    LockFile::Anissia.path_for(db_path)
 }
 
 /// What one refresh came to (tests and logs).

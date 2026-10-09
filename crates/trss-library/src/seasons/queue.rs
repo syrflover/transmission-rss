@@ -22,7 +22,7 @@ use std::{path::PathBuf, time::Duration};
 
 use tokio_util::sync::CancellationToken;
 
-use trss_core::{queue::run_item, CycleLock};
+use trss_core::{queue::run_item, CycleLock, LockFile};
 
 use crate::{
     artwork::queue::{LOCK_RETRY, POLL, RETRY_DELAYS},
@@ -42,9 +42,7 @@ pub const REFRESH_RETRY: Duration = Duration::from_secs(60 * 60);
 
 /// The lock file's path for a database file.
 pub fn lock_path_for(db_path: &std::path::Path) -> PathBuf {
-    let mut name = db_path.as_os_str().to_owned();
-    name.push(".seasons.lock");
-    PathBuf::from(name)
+    LockFile::Seasons.path_for(db_path)
 }
 
 /// What running one job came to (tests and logs).

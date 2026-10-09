@@ -22,7 +22,10 @@ use rustix::{
     process::{getegid, geteuid},
 };
 
-use crate::app_data::{ARTWORK_DIR, RECEIVE_DIR, SUBTITLE_FILES_DIR};
+use crate::{
+    app_data::{ARTWORK_DIR, RECEIVE_DIR, SUBTITLE_FILES_DIR},
+    lock::LockFile,
+};
 
 /// How many unwritable paths the message names; the rest is counted.
 const NAMED: usize = 5;
@@ -87,23 +90,31 @@ impl std::error::Error for AccessError {}
 
 /// What trss writes in the app data folder next to the database file, as
 /// suffixes of the database's file name: the database's WAL, shared-memory
-/// and journal files, the lock files (`lock_path_for` of the worker, the
-/// browser, Anissia, its captions, the artwork and the seasons) and the wake
-/// socket (`wake_path_for`). The test `app_data_files_cover_every_lock_and_the_wake_socket` in
-/// the worker's tests keeps this in step with those functions.
-pub const DATABASE_FILE_SUFFIXES: &[&str] = &[
-    "",
-    "-wal",
-    "-shm",
-    "-journal",
-    ".worker.lock",
-    ".browser.lock",
-    ".anissia.lock",
-    ".anissia-captions.lock",
-    ".artwork.lock",
-    ".seasons.lock",
-    ".wake",
-];
+/// and journal files, every lock file ([`LockFile::ALL`]) and the wake socket
+/// (`wake_path_for`). The lock files come from [`LockFile`], so a new one is
+/// checked without being added here; the test
+/// `app_data_files_cover_every_lock_and_the_wake_socket` in the worker's
+/// tests keeps the wake socket and the paths the crates above make in step
+/// with this.
+pub const DATABASE_FILE_SUFFIXES: &[&str] = &SUFFIXES;
+
+const SUFFIXES: [&str; 5 + LockFile::ALL.len()] = {
+    const BEFORE_LOCKS: [&str; 4] = ["", "-wal", "-shm", "-journal"];
+    let mut all = [""; 5 + LockFile::ALL.len()];
+    let mut at = 0;
+    while at < BEFORE_LOCKS.len() {
+        all[at] = BEFORE_LOCKS[at];
+        at += 1;
+    }
+    let mut lock = 0;
+    while lock < LockFile::ALL.len() {
+        all[at] = LockFile::ALL[lock].suffix();
+        at += 1;
+        lock += 1;
+    }
+    all[at] = ".wake";
+    all
+};
 
 /// The folders in the app data folder that trss writes into, with their
 /// subfolders: the receive area, the work covers (and their staging) and the
@@ -302,6 +313,28 @@ mod tests {
             "{message}"
         );
         assert!(message.contains("chown -R"), "{message}");
+    }
+
+    #[test]
+    fn the_checked_suffixes_hold_every_lock_file_and_the_wake_socket_once() {
+        let db = Path::new("/data/trss.db");
+        let mut suffixes: Vec<&str> = DATABASE_FILE_SUFFIXES.to_vec();
+        for lock in LockFile::ALL {
+            let at = suffixes.iter().position(|s| *s == lock.suffix());
+            assert!(at.is_some(), "{lock:?} is not checked");
+            suffixes.remove(at.unwrap());
+        }
+        let wake = crate::wake::wake_path_for(db);
+        let wake_suffix = wake
+            .to_str()
+            .unwrap()
+            .strip_prefix("/data/trss.db")
+            .unwrap();
+        let at = suffixes.iter().position(|s| *s == wake_suffix);
+        assert!(at.is_some(), "the wake socket is not checked");
+        suffixes.remove(at.unwrap());
+        // What is left are the database's own files.
+        assert_eq!(suffixes, ["", "-wal", "-shm", "-journal"]);
     }
 
     #[test]

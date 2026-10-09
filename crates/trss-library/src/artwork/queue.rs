@@ -19,7 +19,7 @@ use std::{path::PathBuf, time::Duration};
 
 use tokio_util::sync::CancellationToken;
 
-use trss_core::{queue::run_item, CycleLock};
+use trss_core::{queue::run_item, CycleLock, LockFile};
 
 use crate::{
     artwork::{files, ActionError, Artwork},
@@ -48,9 +48,7 @@ pub const RETRY_DELAYS: [Duration; 3] = [
 
 /// The lock file's path for a database file.
 pub fn lock_path_for(db_path: &std::path::Path) -> PathBuf {
-    let mut name = db_path.as_os_str().to_owned();
-    name.push(".artwork.lock");
-    PathBuf::from(name)
+    LockFile::Artwork.path_for(db_path)
 }
 
 /// What running one job came to (tests and logs).

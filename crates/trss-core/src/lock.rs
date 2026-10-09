@@ -24,12 +24,68 @@ use crate::{
     Clock,
 };
 
-/// The lock file's path for a database file: the database path plus
-/// `.worker.lock`, so it sits next to the database on the same local volume.
+/// A lock file next to the database file. Every lock trss takes on the local
+/// volume is one of these, so the names are defined here and nowhere else:
+/// the start-up check of the app data folder ([`crate::access`]) is built from
+/// [`LockFile::ALL`].
+///
+/// Only [`LockFile::Worker`] is the worker's lock proper
+/// ([`lock_path_for`], [`WorkerLock`]). The browser's lock keeps a second
+/// worker off the browser container for the worker's whole life, and the
+/// four queues' locks ([`crate::queue::Queue`]) keep a second worker from
+/// running a queue; none of the three is the cycle's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LockFile {
+    /// The worker's cycle, the web's commands and the folder watches' readings.
+    Worker,
+    /// The use of the server browser's container.
+    Browser,
+    /// The artwork queue.
+    Artwork,
+    /// The season info queue.
+    Seasons,
+    /// The Anissia schedule queue.
+    Anissia,
+    /// The Anissia caption queue.
+    AnissiaCaptions,
+}
+
+impl LockFile {
+    /// Every lock file. A new variant is added here too.
+    pub const ALL: [LockFile; 6] = [
+        LockFile::Worker,
+        LockFile::Browser,
+        LockFile::Anissia,
+        LockFile::AnissiaCaptions,
+        LockFile::Artwork,
+        LockFile::Seasons,
+    ];
+
+    /// What follows the database file's name in the lock file's name.
+    pub const fn suffix(self) -> &'static str {
+        match self {
+            LockFile::Worker => ".worker.lock",
+            LockFile::Browser => ".browser.lock",
+            LockFile::Artwork => ".artwork.lock",
+            LockFile::Seasons => ".seasons.lock",
+            LockFile::Anissia => ".anissia.lock",
+            LockFile::AnissiaCaptions => ".anissia-captions.lock",
+        }
+    }
+
+    /// The lock file's path for a database file: the database path plus
+    /// [`LockFile::suffix`], so it sits next to the database on the same
+    /// local volume.
+    pub fn path_for(self, db_path: &Path) -> PathBuf {
+        let mut name: OsString = db_path.as_os_str().to_owned();
+        name.push(self.suffix());
+        PathBuf::from(name)
+    }
+}
+
+/// The worker's lock file for a database file ([`LockFile::Worker`]).
 pub fn lock_path_for(db_path: &Path) -> PathBuf {
-    let mut name: OsString = db_path.as_os_str().to_owned();
-    name.push(".worker.lock");
-    PathBuf::from(name)
+    LockFile::Worker.path_for(db_path)
 }
 
 /// An exclusive advisory lock (`flock`) on a file, held while a worker works.
@@ -385,6 +441,35 @@ mod tests {
         assert_eq!(
             lock_path_for(Path::new("/data/trss/app.db")),
             Path::new("/data/trss/app.db.worker.lock")
+        );
+    }
+
+    #[test]
+    fn every_lock_file_has_its_own_name_next_to_the_database() {
+        let db = Path::new("/data/trss/app.db");
+        let names: Vec<(LockFile, &str)> = vec![
+            (LockFile::Worker, "/data/trss/app.db.worker.lock"),
+            (LockFile::Browser, "/data/trss/app.db.browser.lock"),
+            (LockFile::Artwork, "/data/trss/app.db.artwork.lock"),
+            (LockFile::Seasons, "/data/trss/app.db.seasons.lock"),
+            (LockFile::Anissia, "/data/trss/app.db.anissia.lock"),
+            (
+                LockFile::AnissiaCaptions,
+                "/data/trss/app.db.anissia-captions.lock",
+            ),
+        ];
+        assert_eq!(names.len(), LockFile::ALL.len());
+        for (file, path) in names {
+            assert!(LockFile::ALL.contains(&file), "{file:?} is not in ALL");
+            assert_eq!(file.path_for(db), Path::new(path), "{file:?}");
+        }
+        let mut suffixes: Vec<&str> = LockFile::ALL.iter().map(|f| f.suffix()).collect();
+        suffixes.sort_unstable();
+        suffixes.dedup();
+        assert_eq!(
+            suffixes.len(),
+            LockFile::ALL.len(),
+            "two locks share a name"
         );
     }
 

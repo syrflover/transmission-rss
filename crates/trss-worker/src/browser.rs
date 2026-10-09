@@ -2,13 +2,12 @@
 //! environment and the common policy in the app database.
 
 use std::{
-    ffi::OsString,
     io,
     path::{Path, PathBuf},
 };
 
 use trss_browser::{ActivitySource, BrowserPolicy, BrowserPool, PolicySource, PoolConfig};
-use trss_core::{settings::SettingsStore, Clock, CycleLock, Db};
+use trss_core::{settings::SettingsStore, Clock, CycleLock, Db, LockFile};
 use trss_jobs::ScreenStore;
 
 use crate::env::BrowserEnv;
@@ -51,9 +50,7 @@ pub fn screen_activity(db: Db) -> ActivitySource {
 /// The lock file of the server browser for a database file: the database
 /// path plus `.browser.lock`, next to the database like the worker's own lock.
 pub fn lock_path_for(db_path: &Path) -> PathBuf {
-    let mut name: OsString = db_path.as_os_str().to_owned();
-    name.push(".browser.lock");
-    PathBuf::from(name)
+    LockFile::Browser.path_for(db_path)
 }
 
 /// Takes the right to use the browser container, for as long as the guard
