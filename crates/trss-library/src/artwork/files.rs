@@ -13,7 +13,8 @@
 //!    is recorded.
 //! 3. It is renamed to its published name with `RENAME_NOREPLACE`, which
 //!    never replaces a file and keeps the identity. A name that is taken is
-//!    left alone ([`PublishError::Occupied`]).
+//!    left alone ([`PublishError::Occupied`]). The folder it came into and the
+//!    one it left are synced, and a sync that fails takes the file away again.
 //! 4. The caller makes a selection refer to it in the transaction that checks
 //!    the selection's version, which marks the file `published`.
 //!
@@ -84,7 +85,7 @@ use crate::store::{
 use trss_anilist::MAX_IMAGE_BYTES;
 use trss_core::{
     file_id::FileId,
-    files::{rename_noreplace, sync_dir, write_new},
+    files::{rename_noreplace, sync_dir, sync_renamed, write_new},
     folders::lexical,
     Millis,
 };
@@ -136,12 +137,17 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 /// Makes the folder `rel` under `root` if needed, and checks that it is a real
-/// folder, not a link.
+/// folder, not a link. A folder made is private to the app (`0700`), and the
+/// folder it is in is synced, since an image kept in it is only as durable as
+/// its name is.
 fn ensure_dir(root: &Path, rel: &str) -> io::Result<()> {
     let path = root.join(rel);
     match fs::create_dir(&path) {
         Ok(()) => {
             fs::set_permissions(&path, fs::Permissions::from_mode(0o700))?;
+            if let Some(parent) = path.parent() {
+                sync_dir(parent)?;
+            }
         }
         Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
         Err(e) => return Err(e),
@@ -209,20 +215,47 @@ pub(crate) async fn publish_at(
     };
     store.file_identity(target, id.dev(), id.ino()).await?;
 
-    let renamed = rename_noreplace(&app.root.join(staging), &app.root.join(target));
-    if let Err(e) = renamed {
-        // The staged file is this call's own (created exclusively just now).
-        let _ = fs::remove_file(app.root.join(staging));
-        store.forget_file(target).await?;
-        return Err(if e.kind() == io::ErrorKind::AlreadyExists {
-            PublishError::Occupied
-        } else {
-            e.into()
-        });
+    let (staged_at, target_at) = (app.root.join(staging), app.root.join(target));
+    let placed = tokio::task::spawn_blocking({
+        let (staged_at, target_at) = (staged_at.clone(), target_at.clone());
+        move || -> Result<(), Placing> {
+            rename_noreplace(&staged_at, &target_at).map_err(Placing::Rename)?;
+            // Make the rename durable before a selection refers to the name:
+            // the folder the file came into and the one it left.
+            sync_renamed(&staged_at, &target_at).map_err(Placing::Sync)
+        }
+    })
+    .await
+    .map_err(|e| io::Error::other(e.to_string()))?;
+    match placed {
+        Ok(()) => Ok(()),
+        Err(Placing::Rename(e)) => {
+            // The staged file is this call's own (created exclusively just now).
+            let _ = fs::remove_file(&staged_at);
+            store.forget_file(target).await?;
+            Err(if e.kind() == io::ErrorKind::AlreadyExists {
+                PublishError::Occupied
+            } else {
+                e.into()
+            })
+        }
+        Err(Placing::Sync(e)) => {
+            // A rename that is not known to last is not offered: the file is
+            // this call's own (renamed from the staged one just now), so it
+            // goes again.
+            let _ = fs::remove_file(&target_at);
+            store.forget_file(target).await?;
+            Err(e.into())
+        }
     }
-    // Make the rename durable before a selection refers to the name.
-    let _ = sync_dir(&app.root.join(ARTWORK_DIR));
-    Ok(())
+}
+
+/// How putting the staged file under its name failed.
+enum Placing {
+    /// Not renamed: the staged file is where it was.
+    Rename(io::Error),
+    /// Renamed, but the folders could not be synced.
+    Sync(io::Error),
 }
 
 /// Builds the reference to a just published image.

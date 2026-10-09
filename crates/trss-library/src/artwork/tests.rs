@@ -27,7 +27,7 @@ use crate::{
     },
 };
 use trss_anilist::fake::Fake;
-use trss_core::DbError;
+use trss_core::{files::testing, DbError};
 
 struct Env {
     dir: TempDir,
@@ -1051,6 +1051,84 @@ async fn a_taken_place_is_never_overwritten() {
     assert!(rows.is_empty());
     env.art.tidy().await;
     assert_eq!(env.files(), ["taken.png"]);
+}
+
+/// A published image outlasts a power loss: its bytes, its name in `artwork/`,
+/// and the folders it was made in.
+#[tokio::test]
+async fn a_published_image_has_its_bytes_and_its_folders_synced() {
+    let env = Env::new(&["A"]).await;
+    let app = AppData::new(env.dir.path());
+
+    files::publish_at(
+        &app,
+        &env.art.store,
+        samples::png().into(),
+        "artwork/new.png",
+        "artwork/.staging/new.tmp",
+        1,
+    )
+    .await
+    .unwrap();
+
+    assert!(testing::syncs_of_file(&env.path("artwork/new.png")) >= 1);
+    // `artwork/` was made in the app data folder, `.staging/` in `artwork/`.
+    assert!(testing::syncs_of(env.dir.path()) >= 1);
+    // The rename came into `artwork/` and left `.staging/`.
+    assert!(testing::syncs_of(&env.path("artwork")) >= 2);
+    assert!(testing::syncs_of(&env.path("artwork/.staging")) >= 1);
+}
+
+/// The folder sync after the rename is what lets a selection refer to the
+/// name, so a publish whose folder cannot be synced fails, as one whose file
+/// cannot be written does, and leaves neither file nor record.
+#[tokio::test]
+async fn a_publish_whose_folder_cannot_be_synced_fails_and_leaves_nothing() {
+    let env = Env::new(&["A"]).await;
+    let app = AppData::new(env.dir.path());
+    // Both folders are there already, so only the sync after the rename
+    // reaches `artwork/`.
+    fs::create_dir_all(env.path("artwork/.staging")).unwrap();
+    let failing = testing::fail_syncs_of(&env.path("artwork"));
+
+    let result = files::publish_at(
+        &app,
+        &env.art.store,
+        samples::png().into(),
+        "artwork/new.png",
+        "artwork/.staging/new.tmp",
+        1,
+    )
+    .await;
+
+    assert!(
+        matches!(result, Err(files::PublishError::Io(_))),
+        "{result:?}"
+    );
+    assert!(env.files().is_empty());
+    assert!(!env.path("artwork/new.png").exists());
+    assert!(env.staging().is_empty());
+    let rows = env
+        .art
+        .store
+        .run(|c| Ok(crate::store::artwork::files_of_state(c, "staging")?))
+        .await
+        .unwrap();
+    assert!(rows.is_empty());
+
+    // The same publish goes through once the folder can be synced.
+    drop(failing);
+    files::publish_at(
+        &app,
+        &env.art.store,
+        samples::png().into(),
+        "artwork/new.png",
+        "artwork/.staging/new.tmp",
+        2,
+    )
+    .await
+    .unwrap();
+    assert_eq!(env.files(), ["new.png"]);
 }
 
 #[tokio::test]
