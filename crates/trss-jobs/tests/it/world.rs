@@ -9,8 +9,16 @@ use std::sync::{
 };
 
 use tempfile::TempDir;
-use trss_core::{Clock, Db, DbError, Millis};
-use trss_jobs::{area::ReceiveArea, Runner};
+use trss_collect::store::{
+    channels::ChannelStore, history::HistoryStore, revisions::RevisionStore,
+};
+use trss_core::{settings::SettingsStore, Clock, Db, DbError, Millis};
+use trss_jobs::{
+    area::ReceiveArea,
+    todo::{self, TodoError, TodoList},
+    Follow, JobViews, PlaceStore, Runner,
+};
+use trss_library::store::{artwork::ArtworkStore, library::LibraryStore};
 use trss_subtitles::Sources;
 
 /// A clock that starts at 1_000 and ticks 10 ms at every call, the first call
@@ -34,6 +42,57 @@ pub fn counting_clock(now: &Arc<AtomicI64>) -> Clock {
 /// A clock that shows `at`.
 pub fn fixed_clock(at: Millis) -> Clock {
     Arc::new(move || at)
+}
+
+/// The nine stores `trss_jobs::todo::list` reads, all over one database, and
+/// the address of a cover as `cover/<work>/<image>`.
+pub struct TodoStores {
+    jobs: JobViews,
+    place: PlaceStore,
+    follow: Follow,
+    library: LibraryStore,
+    artwork: ArtworkStore,
+    revisions: RevisionStore,
+    history: HistoryStore,
+    channels: ChannelStore,
+    settings: SettingsStore,
+}
+
+impl TodoStores {
+    pub fn new(db: &Db) -> TodoStores {
+        TodoStores {
+            jobs: JobViews::new(db.clone()),
+            place: PlaceStore::new(db.clone()),
+            follow: Follow::new(db.clone()),
+            library: LibraryStore::new(db.clone()),
+            artwork: ArtworkStore::new(db.clone()),
+            revisions: RevisionStore::new(db.clone()),
+            history: HistoryStore::new(db.clone()),
+            channels: ChannelStore::new(db.clone()),
+            settings: SettingsStore::new(db.clone()),
+        }
+    }
+
+    /// The stores as the to-dos' sources.
+    pub fn sources(&self) -> todo::Sources<'_> {
+        todo::Sources {
+            jobs: &self.jobs,
+            place: &self.place,
+            follow: &self.follow,
+            library: &self.library,
+            artwork: &self.artwork,
+            revisions: &self.revisions,
+            history: &self.history,
+            channels: &self.channels,
+            settings: &self.settings,
+            cover_url: |work, image| format!("cover/{work}/{image}"),
+        }
+    }
+
+    /// The to-dos that need a person, as the web answers them.
+    pub async fn list(&self) -> Result<TodoList, TodoError> {
+        todo::list(&self.sources()).await
+    }
 }
 
 /// The work every library holds, the creator its source has, and its source.
@@ -72,6 +131,11 @@ impl Base {
     /// A runner over `sources` that is given `clock`.
     pub fn runner_with(&self, sources: Sources, clock: Clock) -> Runner {
         Runner::new(self.store.run.clone(), sources, self.area.clone(), clock)
+    }
+
+    /// The to-dos that need a person over this database.
+    pub async fn todo(&self) -> TodoList {
+        TodoStores::new(&self.db).list().await.unwrap()
     }
 
     /// The library: the watch folder `f1` at `shows` of the tempdir, whose

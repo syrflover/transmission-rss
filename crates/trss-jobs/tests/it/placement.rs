@@ -4,7 +4,7 @@
 //! then the job keeps and applies what the person placed.
 
 use crate::{
-    world::{ticking_clock, Base, Shows},
+    world::{ticking_clock, Base, Shows, TodoStores},
     Handles,
 };
 use std::path::PathBuf;
@@ -20,6 +20,7 @@ use trss_jobs::{
         replace::records::Decided,
     },
     store::JobDetail,
+    todo::Todo,
     upload::UploadRequest,
     Created, Finished, JobState, NewItem, NewJob, ReceiveArea, Runner, Uploads, Wait,
 };
@@ -387,6 +388,83 @@ async fn an_upload_of_an_unknown_creator_waits_with_its_names_and_holds_one_outs
 }
 
 #[tokio::test]
+async fn an_upload_waiting_for_its_table_is_one_to_do_naming_its_files_until_the_table_is_confirmed(
+) {
+    let s = setup().await;
+    // `01` and `02` on their numbers, `13` held outside the season, and a
+    // font kept as it is.
+    let mut font = b"\x00\x01\x00\x00\x00\x0C".to_vec();
+    font.resize(12 + 16 * 12, 0);
+    let files = [
+        ("Show - 01.ass".to_owned(), ass(1)),
+        ("Show - 02.ass".to_owned(), ass(2)),
+        ("Show - 13.ass".to_owned(), ass(13)),
+        ("A.ttf".to_owned(), font),
+    ];
+    let id = upload_files(&s, "u1", &files, false).await;
+    s.run().await;
+    let note = s.detail(&id).await.row.note;
+    assert_eq!(
+        note.as_deref(),
+        Some("자막 3개가 붙을 회차를 확인해 주세요 · 회차를 정할 파일 1개")
+    );
+
+    let list = TodoStores::new(&s.db).list().await.unwrap();
+
+    assert_eq!(list.count, 1);
+    let Todo::PlacementCheck {
+        key,
+        work,
+        title,
+        season,
+        creator,
+        origin,
+        source,
+        files,
+        reason,
+        job_id,
+        ..
+    } = &list.needs[0]
+    else {
+        panic!("{:?}", list.needs)
+    };
+    assert_eq!(key, &format!("placement:{id}"));
+    assert_eq!(work.as_ref().map(|w| w.id.as_str()), Some(WORK));
+    assert_eq!(
+        (title.as_str(), *season, creator.as_deref()),
+        ("Show", Some(2), None)
+    );
+    // Its source, as the work detail's card says it.
+    assert_eq!((origin.as_str(), source.as_deref()), ("upload", None));
+    // The files its table places, the held one among them.
+    assert_eq!(files, &["Show - 01.ass", "Show - 02.ass", "Show - 13.ass"]);
+    assert_eq!(reason, &note);
+    assert_eq!(job_id, &id);
+    // As an episode check among the work's badges.
+    assert_eq!(list.badges.get(WORK), Some(&vec!["episode_check"]));
+
+    // Confirmed, it asks no more.
+    assert_eq!(
+        s.confirm(
+            &id,
+            &[
+                ("Show - 01.ass", Some(1), true),
+                ("Show - 02.ass", Some(2), true),
+                ("Show - 13.ass", None, false),
+            ]
+        )
+        .await,
+        Confirmed::Queued {
+            applied: 2,
+            stored: 1
+        }
+    );
+    let list = TodoStores::new(&s.db).list().await.unwrap();
+    assert_eq!((list.count, list.needs.len()), (0, 0));
+    assert!(list.badges.is_empty());
+}
+
+#[tokio::test]
 async fn the_confirmed_table_applies_its_episodes_and_stores_the_one_not_applied() {
     let s = setup().await;
     let id = upload(&s, "u1", 1..=13, false).await;
@@ -522,7 +600,10 @@ async fn a_table_that_cannot_be_kept_is_refused_and_one_of_other_rows_is_stale()
         other => panic!("{other:?}"),
     };
     // An episode outside the season.
-    assert!(refused(s.confirm(&id, &all((Some(13), true))).await).contains("13"));
+    assert_eq!(
+        refused(s.confirm(&id, &all((Some(13), true))).await),
+        "13화는 이 시즌의 1–12화 밖이에요."
+    );
     // Applied on no episode.
     refused(s.confirm(&id, &all((None, true))).await);
     // Two different files of one format applied on one episode.

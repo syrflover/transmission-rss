@@ -69,3 +69,30 @@ pub use upload::{Finished, Uploads};
 pub fn is_app_command(command_id: &str) -> bool {
     command_id.starts_with(follow::AUTO_PREFIX) || command_id.starts_with(recheck::COMMAND_PREFIX)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::is_app_command;
+
+    #[test]
+    fn the_ids_of_the_apps_own_receipts_are_not_a_persons_to_take() {
+        for id in ["auto:3", "auto:", "recheck:3:ab12", "recheck:"] {
+            assert!(is_app_command(id), "{id}");
+        }
+    }
+
+    #[test]
+    fn a_browsers_id_is_not_one_unless_it_starts_with_a_prefix() {
+        for id in [
+            "",
+            "b1",
+            "Auto:3",
+            "auto",
+            "recheck",
+            "x-auto:3",
+            "c:recheck:1",
+        ] {
+            assert!(!is_app_command(id), "{id}");
+        }
+    }
+}

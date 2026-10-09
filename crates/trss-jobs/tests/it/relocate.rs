@@ -4,7 +4,7 @@
 //! `trss_jobs::place::relocate`).
 
 use crate::{
-    world::{Base, Shows},
+    world::{Base, Shows, TodoStores},
     Handles,
 };
 use std::path::{Path, PathBuf};
@@ -20,6 +20,7 @@ use trss_jobs::{
         replace::AWAITING_APPROVAL,
     },
     store::{JobDetail, JobError},
+    todo::Todo,
     Created, Follow, JobState, NewItem, NewJob, Runner, Wait,
 };
 use trss_subtitles::{
@@ -349,6 +350,43 @@ async fn a_mapping_change_plans_a_relocation_and_moves_nothing() {
         .unwrap()
         .iter()
         .any(|j| j.id == job));
+}
+
+#[tokio::test]
+async fn a_relocation_waiting_for_its_table_is_one_to_do_naming_the_subtitle_it_moves_until_confirmed(
+) {
+    let s = setup().await;
+    applied(&s, "c1", 14).await;
+    remap(&s, -11).await;
+    let job = s.relocation().await;
+
+    let list = TodoStores::new(&s.db).list().await.unwrap();
+
+    assert_eq!(list.count, 1);
+    let Todo::PlacementCheck {
+        key,
+        work,
+        origin,
+        files,
+        reason,
+        job_id,
+        ..
+    } = &list.needs[0]
+    else {
+        panic!("{:?}", list.needs)
+    };
+    assert_eq!(key, &format!("placement:{job}"));
+    assert_eq!(work.as_ref().map(|w| w.id.as_str()), Some(WORK));
+    assert_eq!((origin.as_str(), job_id), ("relocate", &job));
+    assert_eq!(files, &["Show-14.ass"]);
+    assert_eq!(
+        reason.as_deref(),
+        Some("회차 대응이 바뀌어 적용본 1개를 옮길 계획을 확인해 주세요")
+    );
+
+    queued(confirm(&s, &job).await);
+    let list = TodoStores::new(&s.db).list().await.unwrap();
+    assert_eq!(list.count, 0);
 }
 
 #[tokio::test]
@@ -847,7 +885,10 @@ async fn a_change_before_the_confirmation_plans_anew_and_refuses_the_old_table()
         )
         .await
         .unwrap();
-    assert!(matches!(moved, Confirmed::Refused(_)), "{moved:?}");
+    assert_eq!(
+        moved,
+        Confirmed::Refused("재배치는 표에 적힌 회차 그대로 확인해요.".to_owned())
+    );
     // The new table moves the copy to episode 4.
     queued(confirm(&s, &job).await);
     run(&s).await;

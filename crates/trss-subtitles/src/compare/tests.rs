@@ -359,6 +359,52 @@ fn smi_against_ass_compares_the_dialogue_and_says_what_it_did_not() {
 }
 
 #[test]
+fn an_ass_with_one_start_time_moved_counts_one_timing_change_and_no_dialogue_change() {
+    let old = thirty();
+    let mut new = old.clone();
+    // The first line starts half a second later; its end and text stay.
+    new[0].0 = "0:00:10.50".into();
+    let diff = compare(&read_ass(&ass_of(&old)), &read_ass(&ass_of(&new)));
+    assert_eq!(diff.dialogue, Dialogue::default());
+    assert_eq!(diff.timing.count, 1);
+    assert_eq!(diff.timing.lines[0].text, "line 1");
+    assert_eq!(
+        (
+            diff.timing.lines[0].old.start,
+            diff.timing.lines[0].new.start
+        ),
+        (10_000, 10_500)
+    );
+    assert!(diff.differs());
+}
+
+#[test]
+fn an_ass_against_an_srt_of_the_same_dialogue_does_not_differ_and_says_styles_and_fonts_were_not_compared(
+) {
+    let srt = read(
+        "1\n00:00:01,000 --> 00:00:03,000\nhello\n\n2\n00:00:05,000 --> 00:00:07,500\nworld\n"
+            .as_bytes(),
+        "srt",
+    )
+    .unwrap();
+    let ass = read_ass(&ass(
+        &[("Default", "Arial")],
+        &[
+            ("0:00:01.00", "0:00:03.00", "Default", "hello"),
+            ("0:00:05.00", "0:00:07.50", "Default", "world"),
+        ],
+    ));
+    let diff = compare(&srt, &ass);
+    assert!(!diff.differs(), "{diff:?}");
+    assert_eq!(diff.dialogue, Dialogue::default());
+    assert_eq!(diff.timing, Timing::default());
+    assert_eq!((diff.styles.as_ref(), diff.fonts.as_ref()), (None, None));
+    let items: Vec<Item> = diff.not_compared.iter().map(|n| n.item).collect();
+    assert_eq!(items, [Item::Styles, Item::Fonts]);
+    assert!(diff.not_compared[0].reason.contains("SRT"));
+}
+
+#[test]
 fn srt_against_srt_says_there_are_no_styles() {
     let srt = "1\n00:00:01,000 --> 00:00:02,000\nhi\n";
     let script = read(srt.as_bytes(), "srt").unwrap();

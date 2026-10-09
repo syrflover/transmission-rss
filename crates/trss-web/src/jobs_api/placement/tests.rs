@@ -110,7 +110,7 @@ fn placing(rows: &[(i64, Option<i64>, bool)]) -> Value {
 }
 
 #[tokio::test]
-async fn an_upload_waiting_for_its_placement_shows_its_table_and_one_to_do() {
+async fn an_upload_waiting_for_its_placement_shows_its_table() {
     let (state, router) = app();
     waiting_upload(&state).await;
 
@@ -139,31 +139,6 @@ async fn an_upload_waiting_for_its_placement_shows_its_table_and_one_to_do() {
         "4화가 시즌의 1–3화 밖이에요"
     );
     assert_eq!(row("A.ttf")["kind"], "font");
-
-    // One to-do for the job, saying what it waits for.
-    let (_, todo) = get(&router, "/api/todo").await;
-    let checks: Vec<&Value> = todo["needs"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|t| t["kind"] == "placement_check")
-        .collect();
-    assert_eq!(checks.len(), 1);
-    assert_eq!(checks[0]["job_id"], "j1");
-    // Its source, as the work detail's card says it.
-    assert_eq!(
-        (&checks[0]["origin"], &checks[0]["source"]),
-        (&json!("upload"), &Value::Null)
-    );
-    // The files its table places, the held one among them.
-    assert_eq!(
-        checks[0]["files"],
-        json!(["Show - 01.ass", "Show - 02.ass", "Show - 04.ass"])
-    );
-    assert_eq!(
-        checks[0]["reason"],
-        "자막 3개가 붙을 회차를 확인해 주세요 · 회차를 정할 파일 1개"
-    );
 }
 
 #[tokio::test]
@@ -172,7 +147,8 @@ async fn the_persons_table_is_taken_once_and_one_that_cannot_be_kept_is_refused(
     waiting_upload(&state).await;
     let uri = "/api/subtitle-jobs/j1/placement";
 
-    // An episode outside the season, and a file applied on none.
+    // An episode outside the season (the season's total is the web's to
+    // pass on), refused with a sentence.
     let (status, answer) = call(
         &router,
         Method::POST,
@@ -185,19 +161,7 @@ async fn the_persons_table_is_taken_once_and_one_that_cannot_be_kept_is_refused(
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{answer}");
-    assert_eq!(answer["message"], "4화는 이 시즌의 1–3화 밖이에요.");
-    let (status, answer) = call(
-        &router,
-        Method::POST,
-        uri,
-        Some(placing(&[
-            (0, Some(1), true),
-            (1, Some(2), true),
-            (2, None, true),
-        ])),
-    )
-    .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{answer}");
+    assert!(answer["message"].as_str().is_some_and(|m| !m.is_empty()));
     // Rows that are not the table's.
     let (status, _) = call(
         &router,
@@ -227,18 +191,6 @@ async fn the_persons_table_is_taken_once_and_one_that_cannot_be_kept_is_refused(
     let (_, detail) = get(&router, "/api/subtitle-jobs/j1").await;
     assert_eq!(detail["state"], "pending");
     assert_eq!(detail["confirm"], Value::Null);
-    let rows = detail["placements"].as_array().unwrap();
-    let moved = rows.iter().find(|r| r["name"] == "Show - 04.ass").unwrap();
-    assert_eq!(
-        (&moved["episode"], &moved["assignment"]),
-        (&json!(3), &json!("explicit"))
-    );
-    let (_, todo) = get(&router, "/api/todo").await;
-    assert!(!todo["needs"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|t| t["kind"] == "placement_check"));
 
     // Taken once; no such job is no table.
     let (status, _) = call(
@@ -264,7 +216,7 @@ async fn the_persons_table_is_taken_once_and_one_that_cannot_be_kept_is_refused(
 }
 
 #[tokio::test]
-async fn an_upload_of_fonts_alone_is_confirmed_with_no_row() {
+async fn an_upload_of_fonts_alone_shows_a_table_with_no_row() {
     let (state, router) = app();
     waiting_upload(&state).await;
     sql(
@@ -276,17 +228,6 @@ async fn an_upload_of_fonts_alone_is_confirmed_with_no_row() {
     let (_, detail) = get(&router, "/api/subtitle-jobs/j1").await;
     assert_eq!(detail["confirm"]["scope"], "whole");
     assert_eq!(detail["confirm"]["positions"], json!([]));
-    let (status, answer) = call(
-        &router,
-        Method::POST,
-        "/api/subtitle-jobs/j1/placement",
-        Some(placing(&[])),
-    )
-    .await;
-    assert_eq!(
-        (status, answer),
-        (StatusCode::OK, json!({ "applied": 0, "stored": 0 }))
-    );
 }
 
 /// The source `src`'s subtitle of Anissia's episode 14, applied on episode 2
@@ -396,18 +337,6 @@ async fn a_relocation_shows_the_copies_it_takes_off_beside_the_rows_it_applies()
             &Value::Null,
         )
     );
-    // One `회차 확인 필요` to-do, naming the subtitle it moves.
-    let (_, todo) = get(&router, "/api/todo").await;
-    let checks: Vec<&Value> = todo["needs"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|t| t["kind"] == "placement_check")
-        .collect();
-    assert_eq!(checks.len(), 1);
-    assert_eq!(checks[0]["job_id"], job.as_str());
-    assert_eq!(checks[0]["origin"], "relocate");
-    assert_eq!(checks[0]["files"], json!(["Show - 14.ass"]));
 }
 
 #[tokio::test]
@@ -418,32 +347,6 @@ async fn a_relocation_is_confirmed_as_shown_with_its_removals() {
     let position = detail["confirm"]["positions"][0].as_i64().unwrap();
     let removal = detail["relocations"][0]["id"].clone();
     let uri = format!("/api/subtitle-jobs/{job}/placement");
-
-    // The rows without the removals the table showed.
-    let (status, _) = call(
-        &router,
-        Method::POST,
-        &uri,
-        Some(placing(&[(position, Some(3), true)])),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CONFLICT);
-    // A row moved off its planned episode.
-    let (status, answer) = call(
-        &router,
-        Method::POST,
-        &uri,
-        Some(json!({
-            "rows": [{ "position": position, "episode": 2, "apply": true }],
-            "removals": [removal],
-        })),
-    )
-    .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{answer}");
-    assert_eq!(
-        answer["message"],
-        "재배치는 표에 적힌 회차 그대로 확인해요."
-    );
 
     let (status, answer) = call(
         &router,

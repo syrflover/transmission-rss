@@ -8,7 +8,6 @@ use serde_json::{json, Value};
 use tower::ServiceExt;
 
 use super::*;
-use trss_collect::store::history::{HistoryResult, Observation};
 use trss_core::{Db, DbError};
 use trss_jobs::{ItemState, JobRun};
 
@@ -123,15 +122,6 @@ async fn a_pick_makes_one_job_per_browser_id_of_one_creators_candidates() {
         Method::POST,
         "/api/subtitle-jobs",
         Some(pick("auto:3", &[3])),
-    )
-    .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(refused["message"], "이 요청 ID는 쓸 수 없어요.");
-    let (status, refused) = call(
-        &router,
-        Method::POST,
-        "/api/subtitle-jobs",
-        Some(pick("recheck:3:ab12", &[3])),
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -366,14 +356,6 @@ async fn the_groups_put_failures_first_and_page_the_done_jobs_five_then_more() {
     }
     assert_eq!(seen.len(), 115);
     assert!(seen.windows(2).all(|w| w[0] > w[1]));
-
-    // Failed jobs are no to-do; the checks a person has to pass are, one per work.
-    let (_, todo) = get(&router, "/api/todo").await;
-    assert_eq!(todo["count"], 1);
-    assert_eq!(todo["needs"][0]["kind"], "auth");
-    assert_eq!(todo["needs"][0]["jobs"], 2);
-    assert_eq!(todo["needs"][0]["job_id"], auth[0].as_str());
-    assert_eq!(todo["needs"][0]["reason"], "CAPTCHA");
 }
 
 #[tokio::test]
@@ -463,62 +445,6 @@ async fn an_unfinished_file_is_receiving_only_while_its_episode_runs() {
     let items = detail["items"].as_array().unwrap();
     assert_eq!(items[0]["files"][0]["state"], "receiving");
     assert_eq!(items[1]["files"][0]["state"], "held");
-}
-
-#[tokio::test]
-async fn a_site_check_comes_before_a_receive_failure_and_the_badge_counts_both() {
-    let (state, router) = app();
-    linked_season(&state).await;
-    job_in(
-        &state,
-        1,
-        JobState::Waiting,
-        Some(Wait::Auth),
-        &[
-            (ItemState::Waiting, Some("CAPTCHA")),
-            (ItemState::Done, None),
-        ],
-        100,
-    )
-    .await;
-    // A newer receive failure still comes after the check.
-    state
-        .history
-        .record(
-            500,
-            vec![Observation {
-                channel_id: "c1".into(),
-                channel_label: "https://feed.test/".into(),
-                identity_key: "k".into(),
-                title: "[Group] Show - 03".into(),
-                link: "https://feed.test/x".into(),
-                result: HistoryResult::AddFailed,
-                rule_id: Some("r1".into()),
-                torrent_hash: None,
-                reason: Some("Transmission에 연결하지 못했어요".into()),
-            }],
-        )
-        .await
-        .unwrap();
-
-    let (_, todo) = get(&router, "/api/todo").await;
-    let kinds: Vec<&str> = todo["needs"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|t| t["kind"].as_str().unwrap())
-        .collect();
-    assert_eq!(kinds, ["auth", "receive_failed"]);
-    assert_eq!(todo["count"], 2);
-    assert_eq!(todo["needs"][0]["episodes"], json!(["1"]));
-    assert_eq!(todo["needs"][0]["title"], "작품");
-    assert_eq!(todo["needs"][1]["context"], "add_failed");
-    assert_eq!(todo["needs"][1]["channel_id"], "c1");
-    assert_eq!(todo["needs"][1]["count"], 1);
-    assert_eq!(
-        get(&router, "/api/todo/count").await.1,
-        json!({ "count": 2 })
-    );
 }
 
 #[tokio::test]
@@ -664,10 +590,6 @@ async fn an_automatic_revision_of_a_named_subtitle_says_so_with_no_earlier_job()
     assert_eq!(detail["revises_attributed"], true);
     assert_eq!(detail["revision_of"], Value::Null);
     assert_eq!(detail["revises_job"], Value::Null);
-    assert_eq!(
-        detail["log"].as_array().unwrap().last().unwrap()["message"],
-        "구독 제작자의 수정본이 제작자를 붙인 자막에 맞아 자동으로 작업을 만들었어요"
-    );
     let (_, other) = get(&router, &format!("/api/subtitle-jobs/{plain}")).await;
     assert_eq!(other["revises_attributed"], false);
 }

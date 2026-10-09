@@ -26,8 +26,8 @@ use trss_jobs::{
     screen::{FIND_PREPARED_AGAIN, RESTARTED_FIND, RUN_ENDED},
     store::JobDetail,
     upload::Kind,
-    AskedFinish, Created, FileState, ItemState, JobState, NewFind, Runner, ScreenState,
-    ScreenStore, StepKind, StepState, Wait, FIND, NOTHING_FOUND,
+    AskedFinish, Created, FileState, ItemState, JobState, NewFind, NewItem, NewJob, Runner,
+    ScreenState, ScreenStore, StepKind, StepState, Wait, FIND, NOTHING_FOUND,
 };
 use trss_subtitles::{
     auth::{AuthBrowser, AuthPage, BoxFuture, PrepareRequest, Prepared, Waited},
@@ -1148,6 +1148,32 @@ async fn a_find_job_command_is_made_once_and_other_jobs_cannot_be_finished() {
     assert_eq!(
         s.store.requests.ask_finish("nope", 1_000).await.unwrap(),
         AskedFinish::Missing
+    );
+    // A pick's job has no browser to finish.
+    let pick = NewJob {
+        command_id: "pick-1".to_owned(),
+        request: "{}".to_owned(),
+        origin: "pick".to_owned(),
+        work_id: Some("w1".to_owned()),
+        season: Some(1),
+        anime_no: Some(3441),
+        source_id: Some("src-maker".to_owned()),
+        creator: Some("메이커".to_owned()),
+        revision_of: None,
+        revises_attributed: false,
+        items: vec![NewItem {
+            observation_id: None,
+            episode: "1".to_owned(),
+            post_url: POST.to_owned(),
+            found_at: 500,
+        }],
+    };
+    let Created::Created(pick) = s.store.requests.create(pick, 1_000).await.unwrap() else {
+        panic!()
+    };
+    assert_eq!(
+        s.store.requests.ask_finish(&pick, 1_000).await.unwrap(),
+        AskedFinish::NotFind
     );
 }
 
