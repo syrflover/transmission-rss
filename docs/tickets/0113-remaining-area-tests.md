@@ -12,6 +12,7 @@
 - trss-web의 `folders_on_different_filesystems_are_refused`는 `/proc`를 훑어 혼자 4.9초가 걸리고, trss-collect의 같은 이름 테스트와 같은 규칙을 확인해요. 웹 쪽을 정리해요.
 - 0101에서 trss-web의 보관 제안, 수집 이력, 규칙, 제목 후보, `in_place` 테스트를 나눴어요. 규칙 미리보기의 분류 테스트는 [0111](0111-web-and-screen-rules.md)에서 `build_preview`와 함께 내려요.
 - worker의 수집 영역 테스트 중 0101의 다섯 파일 밖에 있는 것도 같은 방식으로 나눠요. 2026-10-09 `a4bb97c`에서 `collect_folder.rs` 3개, `first_read.rs` 8개, `title_waiting.rs` 3개, `past_search.rs` 32개였어요.
+- trss-anilist와 trss-anissia의 `Retry-After` 클라이언트 테스트는 [0102](0102-request-pace-in-core.md) 뒤로 trss-core `response::retry_after`의 테스트와 같은 값을 확인해요. 클라이언트에는 헤더를 읽어 넘기는 연결만 남겨요.
 - worker의 `app_data_folders_cover_the_receive_area_the_artwork_and_the_subtitle_files`는 [0096](0096-file-and-path-helpers.md)에서 두 목록이 trss-core의 같은 상수를 쓰게 되어 실패할 수 없어요. 지워요.
 
 [라이브러리와 작품](../specs/library.md), [설정과 이전](../specs/settings.md), [웹 앱 공통](../specs/web-app.md) 명세에 요구별 검증 표를 둬요.

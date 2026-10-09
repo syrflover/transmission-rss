@@ -15,15 +15,7 @@ use trss_core::{
     Millis,
 };
 
-#[derive(Debug, thiserror::Error)]
-pub enum PaceError {
-    #[error(transparent)]
-    Db(#[from] DbError),
-}
-
-type Result<T> = std::result::Result<T, PaceError>;
-
-/// Async access to the per-host pace. Cheap to clone.
+/// Access to the per-host pace. Cheap to clone.
 #[derive(Clone)]
 pub struct SearchPace {
     db: Db,
@@ -39,27 +31,8 @@ impl SearchPace {
         RequestPace::host(self.db.clone(), host)
     }
 
-    /// See [`RequestPace::take_request_slot`].
-    pub async fn take_slot(
-        &self,
-        host: &str,
-        now: Millis,
-        spacing_ms: i64,
-        max_wait_ms: Option<i64>,
-    ) -> Result<std::result::Result<Millis, i64>> {
-        Ok(self
-            .host(host)
-            .take_request_slot(now, spacing_ms, max_wait_ms)
-            .await?)
-    }
-
-    /// Until when the host asked for no request, if it did.
-    pub async fn blocked_until(&self, host: &str) -> Result<Option<Millis>> {
-        Ok(self.host(host).blocked_until().await?)
-    }
-
     /// The host asked for no request before `until`.
-    pub async fn block(&self, host: &str, until: Millis) -> Result<()> {
-        Ok(self.host(host).block_requests(until).await?)
+    pub async fn block(&self, host: &str, until: Millis) -> Result<(), DbError> {
+        self.host(host).block_requests(until).await
     }
 }
