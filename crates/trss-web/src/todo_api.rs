@@ -183,13 +183,10 @@ use super::{
 use trss_collect::{
     commands::receive_once,
     revisions::received_again_on_retry,
-    store::{
-        history::{HistoryQuery, HistoryResult},
-        revisions::{NewVideo, Revision},
-    },
+    store::revisions::{NewVideo, Revision},
 };
 use trss_core::trname_names::season_episode;
-use trss_jobs::todo::{Sources, TodoError, TodoList, ADD_FAILURES};
+use trss_jobs::todo::{receive_failures, AddFailed, FailedRevision, Sources, TodoError, TodoList};
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -237,13 +234,13 @@ pub struct RetryOffer {
 /// [`RetryOffer`]s of the failed replacements `rows`, by history item. A
 /// row `다시 받기` does not receive again ([`received_again_on_retry`]) has
 /// none.
-pub async fn retry_offers(
+pub async fn retry_offers<'a>(
     state: &AppState,
-    rows: &[Revision],
+    rows: impl IntoIterator<Item = &'a Revision>,
 ) -> Result<HashMap<i64, RetryOffer>, ApiError> {
     let internal = |e: &dyn std::fmt::Display| ApiError::Internal(e.to_string());
     let stopped: Vec<&Revision> = rows
-        .iter()
+        .into_iter()
         .filter(|row| received_again_on_retry(row))
         .collect();
     let mut offers = HashMap::new();
@@ -362,14 +359,9 @@ struct FailureList {
 async fn list(State(state): State<AppState>) -> Result<Json<FailureList>, ApiError> {
     let internal = |e: &dyn std::fmt::Display| ApiError::Internal(e.to_string());
     let mut items = Vec::new();
-    let rows = state.revisions.failures().await.map_err(|e| internal(&e))?;
-    let mut offers = retry_offers(&state, &rows).await?;
-    for row in rows {
-        let work = state
-            .revisions
-            .work_at(row.folder.clone())
-            .await
-            .map_err(|e| internal(&e))?;
+    let gathered = receive_failures(&state.revisions, &state.history).await?;
+    let mut offers = retry_offers(&state, gathered.revisions.iter().map(|f| &f.row)).await?;
+    for FailedRevision { row, work } in gathered.revisions {
         let title = state
             .history
             .get(row.item_id)
@@ -394,21 +386,11 @@ async fn list(State(state): State<AppState>) -> Result<Json<FailureList>, ApiErr
             retry: Box::new(offers.remove(&row.item_id).unwrap_or_default()),
         });
     }
-    let failed = state
-        .history
-        .list(HistoryQuery {
-            result: Some(HistoryResult::AddFailed),
-            limit: ADD_FAILURES,
-            ..Default::default()
-        })
-        .await
-        .map_err(|e| internal(&e))?;
     items.extend(
-        failed
-            .items
+        gathered
+            .adds
             .into_iter()
-            .filter(|item| item.rule_id.is_some())
-            .map(|item| FailureItem::AddFailed {
+            .map(|AddFailed { item, .. }| FailureItem::AddFailed {
                 at: item.result_at,
                 history_item_id: item.id,
                 title: item.title,

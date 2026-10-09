@@ -27,7 +27,9 @@ use trss_library::discovery::SeenFile;
 
 pub use changes::{Changes, Received};
 pub use gather::Sources;
-pub use receive_failed::ADD_FAILURES;
+pub use receive_failed::{
+    receive_failures, AddFailed, FailedRevision, ReceiveFailures, ADD_FAILURES,
+};
 
 /// Why the to-dos could not be read.
 #[derive(Debug, Error)]

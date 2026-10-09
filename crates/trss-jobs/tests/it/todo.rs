@@ -611,3 +611,47 @@ async fn a_decided_replacement_is_no_card_and_no_badge() {
         assert_eq!((list.count, list.badges.len()), (0, 0), "{replace}");
     }
 }
+
+#[tokio::test]
+async fn the_receive_failures_have_the_adds_a_rule_failed_and_no_other_history_item() {
+    let base = Base::new().await;
+    let observation = |key: &str, result, rule_id: Option<&str>| Observation {
+        channel_id: "c1".into(),
+        channel_label: "https://feed.test/".into(),
+        identity_key: key.into(),
+        title: format!("[Group] Show - {key}"),
+        link: format!("https://feed.test/{key}"),
+        result,
+        rule_id: rule_id.map(str::to_owned),
+        torrent_hash: None,
+        reason: Some("Transmission에 연결하지 못했어요".into()),
+    };
+    let history = HistoryStore::new(base.db.clone());
+    history
+        .record(
+            500_000,
+            vec![
+                observation("03", HistoryResult::AddFailed, Some("r1")),
+                // A failure of no rule (a hand-made add), and one that was added.
+                observation("04", HistoryResult::AddFailed, None),
+                observation("05", HistoryResult::Received, Some("r1")),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let failures = trss_jobs::todo::receive_failures(
+        &trss_collect::store::revisions::RevisionStore::new(base.db.clone()),
+        &history,
+    )
+    .await
+    .unwrap();
+
+    assert!(failures.revisions.is_empty());
+    let added: Vec<(&str, &str)> = failures
+        .adds
+        .iter()
+        .map(|a| (a.rule_id.as_str(), a.item.title.as_str()))
+        .collect();
+    assert_eq!(added, [("r1", "[Group] Show - 03")]);
+}

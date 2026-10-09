@@ -3,13 +3,77 @@
 
 use std::{collections::HashMap, path::Path};
 
-use trss_collect::store::history::{HistoryQuery, HistoryResult};
+use trss_collect::store::{
+    history::{HistoryItem, HistoryQuery, HistoryResult, HistoryStore},
+    revisions::{Revision, RevisionStore, WorkRef as FolderWork},
+};
 use trss_core::trname_names::season_episode;
 
 use super::{gather::Sources, Todo, TodoError, WorkRef};
 
 /// The newest add failures listed.
 pub const ADD_FAILURES: usize = 200;
+
+/// A failed video replacement with the library's work at its folder.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FailedRevision {
+    pub row: Revision,
+    /// `None` when the library has no work at the folder.
+    pub work: Option<FolderWork>,
+}
+
+/// A history item a rule picked that Transmission did not add.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AddFailed {
+    pub rule_id: String,
+    pub item: HistoryItem,
+}
+
+/// What the `받기 실패` are made of: the failed replacements, and the newest
+/// [`ADD_FAILURES`] adds of the rules that failed, newest first
+/// (`GET /api/todo/receive-failures` lists them item by item, the to-do per
+/// work and rule).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReceiveFailures {
+    pub revisions: Vec<FailedRevision>,
+    pub adds: Vec<AddFailed>,
+}
+
+/// Reads the failures the `받기 실패` are made of.
+pub async fn receive_failures(
+    revisions: &RevisionStore,
+    history: &HistoryStore,
+) -> Result<ReceiveFailures, TodoError> {
+    let mut failed = Vec::new();
+    for row in revisions.failures().await.map_err(TodoError::read)? {
+        let work = revisions
+            .work_at(row.folder.clone())
+            .await
+            .map_err(TodoError::read)?;
+        failed.push(FailedRevision { row, work });
+    }
+    let adds = history
+        .list(HistoryQuery {
+            result: Some(HistoryResult::AddFailed),
+            limit: ADD_FAILURES,
+            ..Default::default()
+        })
+        .await
+        .map_err(TodoError::read)?
+        .items
+        .into_iter()
+        .filter_map(|item| {
+            Some(AddFailed {
+                rule_id: item.rule_id.clone()?,
+                item,
+            })
+        })
+        .collect();
+    Ok(ReceiveFailures {
+        revisions: failed,
+        adds,
+    })
+}
 
 /// One `받기 실패` to-do as it is gathered.
 struct FailedGroup {
@@ -58,17 +122,8 @@ pub(super) async fn todos(sources: &Sources<'_>) -> Result<Vec<Todo>, TodoError>
         groups[index].add(at, reason, episode);
     };
 
-    for row in sources
-        .revisions
-        .failures()
-        .await
-        .map_err(TodoError::read)?
-    {
-        let work = sources
-            .revisions
-            .work_at(row.folder.clone())
-            .await
-            .map_err(TodoError::read)?;
+    let gathered = receive_failures(sources.revisions, sources.history).await?;
+    for FailedRevision { row, work } in gathered.revisions {
         let folder_name = Path::new(&row.folder)
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -97,15 +152,6 @@ pub(super) async fn todos(sources: &Sources<'_>) -> Result<Vec<Todo>, TodoError>
         );
     }
 
-    let failed = sources
-        .history
-        .list(HistoryQuery {
-            result: Some(HistoryResult::AddFailed),
-            limit: ADD_FAILURES,
-            ..Default::default()
-        })
-        .await
-        .map_err(TodoError::read)?;
     let collect_folder = sources
         .settings
         .collection()
@@ -113,10 +159,7 @@ pub(super) async fn todos(sources: &Sources<'_>) -> Result<Vec<Todo>, TodoError>
         .map_err(TodoError::read)?
         .map(|collect| collect.folder);
     let mut rules = HashMap::new();
-    for item in failed.items {
-        let Some(rule_id) = item.rule_id.clone() else {
-            continue;
-        };
+    for AddFailed { rule_id, item } in gathered.adds {
         if !rules.contains_key(&rule_id) {
             let rule = sources.channels.get_rule(&rule_id).await?;
             let work = match (&rule, &collect_folder) {
