@@ -1,4 +1,5 @@
-import { creatorText, receivedAt, sameDay } from "../storage.ts";
+import { carriesTime, receivedAt } from "../received.ts";
+import { creatorText } from "../storage.ts";
 import { episodeLabel } from "./episodeKey.ts";
 
 /**
@@ -151,20 +152,17 @@ export function actionsOf(copy: SubtitleCopy): CopyAction[] {
  * received the same day makes the date carry the time.
  */
 export function copyView(copy: SubtitleCopy, group: readonly SubtitleCopy[]): CopyView {
-  const shared = group.some(
-    (other) =>
-      other.id !== copy.id &&
-      other.season === copy.season &&
-      other.episode_shown === copy.episode_shown &&
-      other.format === copy.format &&
-      sameDay(other.stored_at, copy.stored_at),
+  const withTime = carriesTime(
+    copy,
+    group,
+    (a, b) => a.season === b.season && a.episode_shown === b.episode_shown && a.format === b.format,
   );
   const isApplied = copy.applied.length > 0;
   return {
     id: copy.id,
     episode: episodeLabel(copy.episode_shown),
     format: formatText(copy.format),
-    received: receivedAt(copy.stored_at, shared),
+    received: receivedAt(copy.stored_at, withTime),
     name: copy.name,
     isApplied,
     places: isApplied ? { applied: copy.applied.map((a) => a.path), stored: copy.stored_path } : null,

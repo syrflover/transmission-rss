@@ -1,4 +1,5 @@
 import { sizeText } from "../../lib/size.ts";
+import { carriesTime, receivedAt } from "./received.ts";
 
 /**
  * The stored files of a work and what can be cleaned (`GET /api/library/works/{id}` `storage`, `GET
@@ -129,40 +130,17 @@ export function creatorText(creator: string | null): string {
   return creator === null || creator === "" ? NO_CREATOR : creator;
 }
 
-const pad = (n: number) => String(n).padStart(2, "0");
-
-/** The viewer's calendar day of a moment, as a number that grows by one a day. */
-function dayKey(at: number): string {
-  const d = new Date(at);
-  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
-}
-
 /** What an entry is a copy of, so two received on one day can be told apart: its episode, or its name when it has none. */
 function copyKey(entry: CleanableEntry): string {
   return entry.episode === null ? `name:${entry.name}` : `s${entry.season}e${entry.episode}`;
 }
 
 /**
- * `9월 7일 받음`; `9월 7일 13:05 받음` when `shared` (another copy of the same episode was received the same day), so
- * the two can be told apart (docs/specs/subtitles.md, 지난 수정본). The day and the time are the viewer's.
+ * `receivedAt` of a stored file of the 파일 card: the date carries its time when another entry of the same episode (any
+ * creator and format) was received the same day.
  */
-export function receivedAt(storedAt: number, shared: boolean): string {
-  const d = new Date(storedAt);
-  const day = `${d.getMonth() + 1}월 ${d.getDate()}일`;
-  return shared ? `${day} ${pad(d.getHours())}:${pad(d.getMinutes())} 받음` : `${day} 받음`;
-}
-
-/** `receivedAt` of a stored file of the 파일 card, told apart from the other entries of its episode. */
 export function receivedText(entry: CleanableEntry, all: readonly CleanableEntry[]): string {
-  const shared = all.some(
-    (other) => other.id !== entry.id && copyKey(other) === copyKey(entry) && dayKey(other.stored_at) === dayKey(entry.stored_at),
-  );
-  return receivedAt(entry.stored_at, shared);
-}
-
-/** Whether two moments are on the same calendar day of the viewer. */
-export function sameDay(a: number, b: number): boolean {
-  return dayKey(a) === dayKey(b);
+  return receivedAt(entry.stored_at, carriesTime(entry, all, (a, b) => copyKey(a) === copyKey(b)));
 }
 
 export interface KindGroup {
