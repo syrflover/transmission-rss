@@ -737,3 +737,57 @@ async fn an_undo_is_accepted_for_the_automatic_value_the_user_saw_and_refused_ot
     let stored = app.state.commands.get(ID).await.unwrap().unwrap();
     assert_eq!(stored.subject.as_deref(), Some(rule.id.as_str()));
 }
+
+// --- watch_rescan ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn a_rescan_is_accepted_for_a_registered_folder_once_and_refused_otherwise() {
+    let app = App::new();
+    app.state
+        .library
+        .add_folder(
+            "/anime".into(),
+            trss_library::discovery::Scan { works: vec![] },
+            100,
+            &[],
+        )
+        .await
+        .unwrap();
+    let folder = app.state.library.folders().await.unwrap().remove(0);
+    let send = |id: &str, payload: Value| {
+        let body = json!({ "id": id, "kind": "watch_rescan", "payload": payload });
+        let app = &app;
+        async move { app.call(Method::POST, "/api/commands", Some(body)).await }
+    };
+    let payload = json!({ "folder_id": folder.id });
+
+    // Accepted is not done: the worker reads the folder.
+    let (status, text, body) = send("rescan-0001", payload.clone()).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{text}");
+    assert_eq!(body["state"], "pending");
+    assert_eq!(body["kind"], "watch_rescan");
+
+    // The same command again is the same command; a second one for the same
+    // folder is refused while the first is open.
+    let (status, _, again) = send("rescan-0001", payload.clone()).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(again["id"], "rescan-0001");
+    let (status, _, body) = send("rescan-0002", payload.clone()).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(body["message"]
+        .as_str()
+        .unwrap()
+        .contains("다시 확인하는 중"));
+
+    // A folder that is not registered is refused, and a payload without one.
+    let (status, _, _) = send("rescan-0003", json!({ "folder_id": "nope" })).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _, _) = send("rescan-0004", json!({})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // Nothing but the first was stored.
+    let (status, _, _) = app
+        .call(Method::GET, "/api/commands/rescan-0002", None)
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}

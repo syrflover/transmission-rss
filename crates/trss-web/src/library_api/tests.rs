@@ -300,3 +300,122 @@ async fn a_page_badges_a_work_with_its_to_dos_and_a_job_of_no_work_badges_nothin
         ]
     );
 }
+
+fn season_file(season: u32, episode: &str, kind: FileKind) -> EpisodeFile {
+    let (ext, tag) = match kind {
+        FileKind::Video => ("mkv", ""),
+        FileKind::Subtitle => ("ass", ".ko"),
+    };
+    EpisodeFile {
+        path: format!("Season {season:02}/W S{season:02}E{episode}{tag}.{ext}"),
+        kind,
+        season,
+        episode: episode.to_owned(),
+    }
+}
+
+fn work_in_seasons(
+    name: &str,
+    files: Vec<EpisodeFile>,
+    unrecognized: Vec<Unrecognized>,
+) -> WorkRead {
+    WorkRead::Read(ScannedWork {
+        dir_name: name.to_owned(),
+        seasons: files.iter().map(|f| f.season).collect(),
+        files,
+        unrecognized,
+    })
+}
+
+#[tokio::test]
+async fn the_list_answers_ranges_flags_and_times_of_every_work() {
+    use serde_json::json;
+    let state = state();
+    let video = |s, e| season_file(s, e, FileKind::Video);
+    let subtitle = |s, e| season_file(s, e, FileKind::Subtitle);
+    let extras = |name: &str| Unrecognized {
+        path: format!("Season 01/{name}.srt"),
+        reason: Reason::NoEpisode,
+        check: None,
+    };
+    // The first reading: season 2 is the latest of Alpha (videos 1-5, subtitles
+    // 1-2 and 4-5), Beta has a subtitle whose episode cannot be read.
+    let first = |with_subtitle_3: bool| {
+        let mut alpha: Vec<EpisodeFile> = ["01", "02", "03", "04", "05"]
+            .into_iter()
+            .map(|e| video(2, e))
+            .chain(["01", "02", "04", "05"].into_iter().map(|e| subtitle(2, e)))
+            .collect();
+        alpha.push(video(1, "01"));
+        if with_subtitle_3 {
+            alpha.push(subtitle(2, "03"));
+        }
+        vec![
+            work_in_seasons("Alpha", alpha, vec![]),
+            work_in_seasons("Beta", vec![video(1, "01")], vec![extras("Beta-extras")]),
+            work_in_seasons("Gamma", vec![video(1, "13"), subtitle(1, "13")], vec![]),
+        ]
+    };
+    add_folder(&state, "/anime", first(false)).await;
+    let folder = state.library.folders().await.unwrap().remove(0);
+
+    // A later reading: a new subtitle and a new work get its time, and a work
+    // folder that is gone stays in the list.
+    let mut later = first(true);
+    later.remove(2);
+    later.push(work_in_seasons("Delta", vec![video(1, "01")], vec![]));
+    state
+        .library
+        .record_scan(&folder.id, Ok(Scan { works: later }), 5_000)
+        .await
+        .unwrap();
+
+    let (status, body) = get(&state, "/library/works?sort=title").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(names(&body), ["Alpha", "Beta", "Delta", "Gamma"]);
+    let by = |name: &str| {
+        body["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|w| w["name"] == name)
+            .unwrap()
+    };
+
+    let alpha = by("Alpha");
+    assert_eq!(alpha["latest_season"], 2);
+    assert_eq!(
+        alpha["video"],
+        json!([{ "first": "01", "last": "05", "text": "1–5" }])
+    );
+    // Episode 3's subtitle arrived after the first reading.
+    assert_eq!(
+        alpha["subtitle"],
+        json!([{ "first": "01", "last": "05", "text": "1–5" }])
+    );
+    assert_eq!(alpha["subtitle_coverage"], "all");
+    assert_eq!(alpha["subtitle_check_needed"], false);
+    assert_eq!(alpha["added_at"], Value::Null);
+    assert_eq!(alpha["video_added_at"], Value::Null);
+    assert_eq!(alpha["subtitle_added_at"], 5_000);
+    assert_eq!(
+        alpha["watch_folder"],
+        json!({ "id": folder.id, "path": "/anime" })
+    );
+    assert_eq!(alpha["missing"], false);
+
+    let beta = by("Beta");
+    assert_eq!(beta["subtitle"], json!([]));
+    assert_eq!(beta["subtitle_coverage"], "none");
+    assert_eq!(beta["subtitle_check_needed"], true);
+
+    let delta = by("Delta");
+    assert_eq!(delta["added_at"], 5_000);
+    assert_eq!(delta["video_added_at"], 5_000);
+    assert_eq!(delta["subtitle_added_at"], Value::Null);
+
+    let gamma = by("Gamma");
+    assert_eq!(gamma["missing"], true);
+    assert_eq!(gamma["video"], json!([]));
+    assert_eq!(gamma["subtitle_coverage"], Value::Null);
+}

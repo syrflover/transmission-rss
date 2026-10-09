@@ -317,3 +317,6 @@ fn check_and_scan(
         ApiError::invalid(format!("`{text}`를 읽지 못했어요. {}", e.message))
     })
 }
+
+#[cfg(test)]
+mod tests;
