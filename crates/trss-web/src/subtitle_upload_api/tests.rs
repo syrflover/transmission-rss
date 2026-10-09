@@ -385,13 +385,10 @@ async fn the_creator_is_one_of_the_seasons_or_unknown() {
     let job = detail(&s.router, made["id"].as_str().unwrap()).await;
     assert_eq!(job["creator"], Value::Null);
 
-    // Another anime's creator, one that is not there, and any creator of a
-    // season with no Anissia link are refused before a file is stored.
+    // A creator that is not the season's, and any creator of a season with no
+    // Anissia link, are refused before a file is stored (whose creators are
+    // the season's is tested in trss-collect).
     for (form, expected) in [
-        (
-            Form::to("c3", 1, Some("s9")).file("a.ass", ASS),
-            StatusCode::BAD_REQUEST,
-        ),
         (
             Form::to("c4", 1, Some("nope")).file("a.ass", ASS),
             StatusCode::BAD_REQUEST,

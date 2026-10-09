@@ -660,8 +660,7 @@ async fn a_find_makes_one_job_per_browser_id_that_opens_the_creators_newest_post
     assert_eq!(detail["steps"], json!([]));
 
     let refused = [
-        // A creator of another anime, or none of the season's.
-        (find("f2", 1, "s9"), StatusCode::BAD_REQUEST),
+        // A creator that is none of the season's.
         (find("f3", 1, "nope"), StatusCode::BAD_REQUEST),
         // A season with no Anissia anime has no creators to find.
         (find("f4", 2, "s1"), StatusCode::BAD_REQUEST),
