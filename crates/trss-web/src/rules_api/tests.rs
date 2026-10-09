@@ -12,7 +12,7 @@ use trss_collect::{
     plan::Judgement,
     store::{
         channels::{ChannelInput, ChannelWithRules},
-        history::Observation,
+        history::{HistoryResult, Observation},
     },
 };
 use trss_core::Db;
@@ -264,6 +264,31 @@ async fn last_received_is_the_latest_time_the_rule_got_an_item_into_transmission
     let list = app.list().await;
     assert_eq!(list["rules"][0]["last_received_at"], 2_000);
     assert_eq!(list["rules"][1]["last_received_at"], Value::Null);
+}
+
+#[tokio::test]
+async fn last_received_is_told_for_an_item_older_than_the_newest_20000_of_the_channel() {
+    let app = App::new().await;
+    let a = app.channel("a.test", &[], &[("Alpha", "a")]).await;
+    let alpha = a.rules[0].id.as_str();
+    app.record_as(
+        &a.channel,
+        1_000,
+        &["Alpha 01"],
+        HistoryResult::Received,
+        Some(alpha),
+    )
+    .await;
+    // More items than the list reads of a channel, all newer than the received one.
+    let fillers: Vec<String> = (0..MAX_ITEMS_PER_CHANNEL + 1)
+        .map(|n| format!("Filler {n}"))
+        .collect();
+    let fillers: Vec<&str> = fillers.iter().map(String::as_str).collect();
+    app.record_as(&a.channel, 2_000, &fillers, HistoryResult::NoMatch, None)
+        .await;
+
+    let list = app.list().await;
+    assert_eq!(list["rules"][0]["last_received_at"], 1_000);
 }
 
 // --- overlap ------------------------------------------------------------------

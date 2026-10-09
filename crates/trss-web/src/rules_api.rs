@@ -161,9 +161,7 @@ use trss_collect::{
             Channel, ChannelError, ChannelWithRules, OrderItem, Rule, RuleInput, RuleState,
             SeasonRef,
         },
-        history::{
-            HistoryError, HistoryItem, HistoryQuery, HistoryResult, HistoryStore, MAX_PAGE_SIZE,
-        },
+        history::{HistoryError, HistoryItem, HistoryQuery, HistoryStore, MAX_PAGE_SIZE},
     },
 };
 use trss_core::commands::{Accepted, Command, CommandState};
@@ -770,15 +768,14 @@ async fn analyze(state: &AppState, cwr: &ChannelWithRules) -> Result<Analysis, A
             .errors
             .insert(problem.rule_id, regex_problem(&problem.error));
     }
+    // Asked of the store rule by rule, so that an item older than the window
+    // of recorded items read below still counts.
+    analysis.last_received = state
+        .history
+        .last_received_of_rules(cwr.rules.iter().map(|r| r.id.clone()).collect())
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
     let items = channel_items(&state.history, &cwr.channel.id).await?;
-    for item in &items {
-        if item.result == HistoryResult::Received {
-            if let Some(rule_id) = &item.rule_id {
-                let latest = analysis.last_received.entry(rule_id.clone()).or_insert(0);
-                *latest = (*latest).max(item.result_at);
-            }
-        }
-    }
     analysis.overlap = preview::overlapping_rules(&plan, items.iter().map(|i| i.title.as_str()));
     Ok(analysis)
 }
