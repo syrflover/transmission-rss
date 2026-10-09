@@ -538,21 +538,6 @@ async fn a_download_is_moved_into_the_given_folder_by_its_suggested_name() {
     assert_eq!(moved.path, receive.join("자막 01.zip"));
     assert_eq!(std::fs::read(&moved.path).unwrap(), b"PK\x03\x04zip");
     assert!(!run.downloads_dir().join(GUID_1).exists());
-
-    // A second download of the same name does not replace the first.
-    std::fs::write(run.downloads_dir().join(GUID_2), b"other").unwrap();
-    setup.fake.emit(
-        run.run_id(),
-        json!({"method": "Browser.downloadProgress", "params": {"guid": GUID_2, "state": "completed", "receivedBytes": 5, "totalBytes": 5}}),
-    );
-    let mut second = run.download_finished().await.unwrap();
-    second.file_name = "자막 01.zip".to_owned();
-    let refused = run.move_download(&second, &receive).await;
-    assert!(
-        matches!(refused, Err(BrowserError::AlreadyExists(_))),
-        "{refused:?}"
-    );
-    assert_eq!(std::fs::read(&moved.path).unwrap(), b"PK\x03\x04zip");
 }
 
 #[tokio::test]

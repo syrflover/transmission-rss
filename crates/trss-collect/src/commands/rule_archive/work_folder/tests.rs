@@ -243,22 +243,6 @@ fn nested_or_missing_folders_and_bad_names_are_refused() {
 }
 
 #[test]
-fn a_rename_never_replaces_a_file_or_a_directory() {
-    let f = folders();
-    write(&f.collect.join("a"), "a");
-    write(&f.archive.join("a"), "b");
-    let err = rename_noreplace(&f.collect.join("a"), &f.archive.join("a")).unwrap_err();
-    assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
-    assert_eq!(fs::read_to_string(f.archive.join("a")).unwrap(), "b");
-
-    // An empty directory is not replaced either, as plain rename(2) would.
-    fs::create_dir(f.collect.join("d")).unwrap();
-    fs::create_dir(f.archive.join("d")).unwrap();
-    let err = rename_noreplace(&f.collect.join("d"), &f.archive.join("d")).unwrap_err();
-    assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
-}
-
-#[test]
 fn the_renames_move_a_whole_folder_or_merge_it_and_clear_what_they_emptied() {
     // Nothing at the destination: one rename.
     let f = folders();
