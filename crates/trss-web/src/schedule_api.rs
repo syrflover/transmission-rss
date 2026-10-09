@@ -77,7 +77,7 @@ use super::{
     ApiError, AppState,
 };
 use trss_anissia::{
-    slot::{episode_on, slot_in_week, Slot},
+    slot::{episode_on, run_over, slot_in_week, Over, Slot},
     Anime,
 };
 use trss_collect::{
@@ -355,7 +355,7 @@ pub async fn week_at(state: &AppState, now: Millis) -> Result<WeekView, ApiError
         let Some(anime) = anime else { continue };
         // An end date says when the anime leaves (see `slot_in_week`); only
         // one without leaves when Anissia no longer lists it.
-        if anime.end_date.is_none() && unlisted.contains(&anime.anime_no) {
+        if run_over(anime, unlisted.contains(&anime.anime_no), today) == Some(Over::Unlisted) {
             continue;
         }
         if let Some(slot) = slot_in_week(anime, start) {

@@ -516,15 +516,11 @@ async fn a_card_leaves_once_the_end_date_has_passed() {
     assert_eq!(card_titles(&body["week"]["days"][3]), ["마지막 주"]);
 }
 
+/// When an anime's run is over is trss-anissia `slot::run_over`'s, which
+/// `week_at` asks; the web only passes what the store knows of the listing.
 #[tokio::test]
-async fn an_anime_without_an_end_date_leaves_once_anissia_is_found_not_to_list_it_and_comes_back_if_listed(
-) {
+async fn an_anime_anissia_no_longer_lists_has_no_card() {
     let app = App::new().await;
-    // A snapshot a month old: Anissia could not be reached since, so the card stays.
-    let mut old = anime(1, "오래됨", 4, Some("10:00"), Some("2026-07-02"));
-    old.fetched_at = NOW - 30 * 24 * 60 * 60 * 1000;
-    app.subscribe(old, rule("O"), SubtitleMode::None, None)
-        .await;
     app.subscribe(
         anime(2, "빠짐", 4, Some("10:00"), Some("2026-07-02")),
         rule("G"),
@@ -532,14 +528,13 @@ async fn an_anime_without_an_end_date_leaves_once_anissia_is_found_not_to_list_i
         None,
     )
     .await;
-
     let titles = |body: &Value| -> Vec<String> {
         card_titles(&body["week"]["days"][3])
             .into_iter()
             .map(str::to_owned)
             .collect()
     };
-    assert_eq!(titles(&app.week().await), ["빠짐", "오래됨"]);
+    assert_eq!(titles(&app.week().await), ["빠짐"]);
 
     // The refresh asked every week and the anime was in none of them.
     app.state
@@ -547,31 +542,7 @@ async fn an_anime_without_an_end_date_leaves_once_anissia_is_found_not_to_list_i
         .mark_unlisted(vec![2], NOW, NOW + 24 * 60 * 60 * 1000, NOW)
         .await
         .unwrap();
-    assert_eq!(titles(&app.week().await), ["오래됨"]);
-
-    // Anissia lists it again.
-    app.state
-        .anissia_store
-        .put_anime(anime(2, "빠짐", 4, Some("10:00"), Some("2026-07-02")))
-        .await
-        .unwrap();
-    assert_eq!(titles(&app.week().await), ["빠짐", "오래됨"]);
-
-    // With an end date still ahead, the end date decides, not the listing.
-    app.state
-        .anissia_store
-        .put_anime(Anime {
-            end_date: Some("2026-12-31".into()),
-            ..anime(2, "빠짐", 4, Some("10:00"), Some("2026-07-02"))
-        })
-        .await
-        .unwrap();
-    app.state
-        .anissia_store
-        .mark_unlisted(vec![2], NOW, NOW + 24 * 60 * 60 * 1000, NOW)
-        .await
-        .unwrap();
-    assert_eq!(titles(&app.week().await), ["빠짐", "오래됨"]);
+    assert!(titles(&app.week().await).is_empty());
 }
 
 #[tokio::test]
