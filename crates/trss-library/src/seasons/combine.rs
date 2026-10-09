@@ -75,6 +75,15 @@ pub fn air_times(entries: &[Entry]) -> BTreeMap<u32, i64> {
     times(entries, true)
 }
 
+/// The airing time of one episode of `times` ([`air_times`]) by the episode's
+/// number: only a whole number from 1 up has one (a half episode or a batch
+/// number has none).
+pub fn air_time_of(times: &BTreeMap<u32, i64>, number: Option<f64>) -> Option<i64> {
+    number
+        .filter(|n| n.fract() == 0.0 && *n >= 1.0 && *n <= f64::from(u32::MAX))
+        .and_then(|n| times.get(&(n as u32)).copied())
+}
+
 /// [`air_times`] from every entry that has a schedule, whatever its status: a
 /// finished entry's airings say when its episodes aired, which is what the
 /// episode mapping of a subtitle source is decided from. An entry with no
@@ -212,6 +221,22 @@ mod tests {
             ..entry(4)
         };
         assert_eq!(combine(&[unknown]).unwrap().state, None);
+    }
+
+    #[test]
+    fn an_episode_has_an_air_time_only_by_a_whole_number_the_schedule_holds() {
+        let times = BTreeMap::from([(1, 1_000), (12, 12_000), (u32::MAX, 9)]);
+        let at = |number| air_time_of(&times, number);
+        assert_eq!(at(Some(1.0)), Some(1_000));
+        assert_eq!(at(Some(12.0)), Some(12_000));
+        assert_eq!(at(Some(f64::from(u32::MAX))), Some(9));
+        assert_eq!(at(Some(2.0)), None);
+        assert_eq!(at(Some(12.5)), None);
+        assert_eq!(at(Some(0.0)), None);
+        assert_eq!(at(Some(-1.0)), None);
+        assert_eq!(at(Some(f64::from(u32::MAX) + 1.0)), None);
+        assert_eq!(at(Some(f64::NAN)), None);
+        assert_eq!(at(None), None);
     }
 
     #[test]

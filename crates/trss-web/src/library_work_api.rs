@@ -252,6 +252,7 @@ use trss_core::{
     episode::EpisodeNumber, settings::policy::FormatOrder, trname_names::season_episode,
 };
 use trss_jobs::place::cleanup;
+use trss_library::seasons::combine::air_time_of;
 use trss_library::store::{
     artwork::JobKind,
     library::{EpisodeDetail, FileRecord, LibraryError, WorkDetail},
@@ -957,10 +958,7 @@ async fn show(
                     .episodes
                     .into_iter()
                     .map(|episode| {
-                        let air_at = episode
-                            .number
-                            .filter(|n| n.fract() == 0.0 && *n >= 1.0 && *n <= f64::from(u32::MAX))
-                            .and_then(|n| air_times.get(&(n as u32)).copied());
+                        let air_at = air_time_of(&air_times, episode.number);
                         EpisodeView {
                             air_at,
                             ..EpisodeView::from(episode)
