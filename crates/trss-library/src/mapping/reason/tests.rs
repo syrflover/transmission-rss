@@ -23,10 +23,10 @@ fn mapping(kind: MappingKind, offset: Option<i64>, exceptions: &[(&str, Option<u
 }
 
 #[test]
-fn the_season_range_is_one_to_the_count_or_one_onwards() {
-    assert_eq!(season_range(Some(12)), "1–12화");
-    assert_eq!(season_range(Some(1)), "1–1화");
-    assert_eq!(season_range(None), "1화부터");
+fn outside_the_season_is_past_its_range_or_before_one_without_a_count() {
+    assert_eq!(outside(Some(12)), "시즌의 1–12화 밖");
+    assert_eq!(outside(Some(1)), "시즌의 1–1화 밖");
+    assert_eq!(outside(None), "1화보다 앞");
 }
 
 #[test]
@@ -61,14 +61,12 @@ fn an_episode_the_mapping_does_not_receive_is_said_so_in_each_wording() {
         place(&m, "5", Wording::Candidate),
         Err("회차 대응이 후보의 5화를 받지 않는 회차로 정해 두었어요".to_owned())
     );
-    assert_eq!(
-        place(&m, "5", Wording::File),
-        Err("회차 대응이 5화를 받지 않는 회차로 정해 두었어요".to_owned())
-    );
-    assert_eq!(
-        place(&m, "5", Wording::Stored),
-        Err("회차 대응이 5화를 받지 않는 회차로 정했어요".to_owned())
-    );
+    for wording in [Wording::File, Wording::Stored] {
+        assert_eq!(
+            place(&m, "5", wording),
+            Err("회차 대응이 5화를 받지 않는 회차로 정해 두었어요".to_owned())
+        );
+    }
 }
 
 #[test]
@@ -107,7 +105,7 @@ fn an_undecided_mapping_places_nothing_and_says_so_in_every_wording() {
 fn an_episode_that_is_no_whole_number_is_said_so_in_each_wording() {
     assert_eq!(
         not_whole("5.5", Wording::Candidate),
-        "후보의 회차 5.5화는 정수 회차가 아니라 시즌의 회차로 옮기지 못했어요"
+        "후보의 회차 5.5화는 정수 회차가 아니라 시즌의 회차로 정하지 못했어요"
     );
     for wording in [Wording::File, Wording::Stored] {
         assert_eq!(
@@ -128,12 +126,17 @@ fn an_episode_outside_the_season_is_said_so_in_each_wording() {
         "후보의 14화를 옮긴 시즌 14화가 시즌의 1–12화 밖이에요"
     );
     assert_eq!(
-        outside_season("14", 2, None, Wording::Candidate),
-        "후보의 14화를 옮긴 시즌 2화가 시즌의 1화부터 밖이에요"
+        outside_season("14", 0, None, Wording::Candidate),
+        "후보의 14화를 옮긴 시즌 0화가 1화보다 앞이에요"
     );
     assert_eq!(
-        outside_season("13", 1, Some(12), Wording::File),
+        outside_season("13", 13, Some(12), Wording::File),
         "13화가 시즌의 1–12화 밖이에요"
+    );
+    // Without a count only a mapping puts a file's episode below 1.
+    assert_eq!(
+        outside_season("5", -7, None, Wording::File),
+        "5화를 옮긴 시즌 -7화가 1화보다 앞이에요"
     );
     assert_eq!(
         outside_season("3", -9, Some(12), Wording::Stored),
@@ -144,12 +147,12 @@ fn an_episode_outside_the_season_is_said_so_in_each_wording() {
 #[test]
 fn the_other_sentences_about_the_season_read_as_they_are_shown() {
     assert_eq!(
-        another_seasons_file("13", Some(12)),
+        another_seasons_file("13", 13, Some(12)),
         "13화가 시즌의 1–12화 밖이라 다른 시즌의 파일로 보여요"
     );
     assert_eq!(
-        another_seasons_file("013", None),
-        "013화가 시즌의 1화부터 밖이라 다른 시즌의 파일로 보여요"
+        another_seasons_file("013", 0, None),
+        "013화를 옮긴 시즌 0화가 1화보다 앞이라 다른 시즌의 파일로 보여요"
     );
     assert_eq!(
         numbering_unclear("13"),

@@ -3,10 +3,10 @@
 //! episode text, the season episode a [`Mapping`] puts it on, and the season's
 //! episode count.
 //!
-//! The same condition is worded a little differently where it is shown: a
-//! candidate's job says `후보의`, a file of a received package does not, and
-//! the stored subtitles a changed mapping moves say `정했어요` where the other
-//! two say `정해 두었어요`. [`Wording`] names the three places, and the
+//! One condition is said with the same words wherever it is shown, but a
+//! candidate's job says `후보의`, and the sentences of an episode outside the
+//! season name the season episode the mapping moved it to where a file's would
+//! not say it otherwise. [`Wording`] names the three places, and the
 //! differences live in one `match` each, so a wording is changed here and
 //! nowhere else. The screens and the web tests read these sentences
 //! literally; `reason/tests.rs` has each of them as it is shown.
@@ -24,11 +24,13 @@ pub enum Wording {
     Stored,
 }
 
-/// `1–12화`, or `1화부터` when the season's episode count is unknown.
-pub fn season_range(total: Option<u32>) -> String {
+/// Where an episode outside the season lies: `시즌의 1–12화 밖`, or `1화보다
+/// 앞` when the season's episode count is unknown, as an episode is then
+/// outside only below 1.
+fn outside(total: Option<u32>) -> String {
     match total {
-        Some(n) => format!("1–{n}화"),
-        None => "1화부터".to_owned(),
+        Some(n) => format!("시즌의 1–{n}화 밖"),
+        None => "1화보다 앞".to_owned(),
     }
 }
 
@@ -52,8 +54,9 @@ pub fn place(mapping: &Mapping, text: &str, wording: Wording) -> Result<i64, Str
             Wording::Candidate => {
                 format!("회차 대응이 후보의 {label}를 받지 않는 회차로 정해 두었어요")
             }
-            Wording::File => format!("회차 대응이 {label}를 받지 않는 회차로 정해 두었어요"),
-            Wording::Stored => format!("회차 대응이 {label}를 받지 않는 회차로 정했어요"),
+            Wording::File | Wording::Stored => {
+                format!("회차 대응이 {label}를 받지 않는 회차로 정해 두었어요")
+            }
         }),
         Mapped::Unmapped if mapping.decided_offset().is_none() => Err(UNDECIDED.to_owned()),
         Mapped::Unmapped => Err(match wording {
@@ -73,7 +76,7 @@ pub fn not_whole(text: &str, wording: Wording) -> String {
     let label = trss_core::episode::episode_label(text);
     match wording {
         Wording::Candidate => {
-            format!("후보의 회차 {label}는 정수 회차가 아니라 시즌의 회차로 옮기지 못했어요")
+            format!("후보의 회차 {label}는 정수 회차가 아니라 시즌의 회차로 정하지 못했어요")
         }
         Wording::File | Wording::Stored => {
             format!("{label}는 정수 회차가 아니라 시즌의 회차로 정하지 못했어요")
@@ -82,27 +85,32 @@ pub fn not_whole(text: &str, wording: Wording) -> String {
 }
 
 /// The text `text` got the season episode `episode` through the mapping (or as
-/// it is), and that is not one of the season's.
+/// it is), and that is not one of the season's. Without the season's episode
+/// count only a mapping puts an episode below 1, so a file's sentence then
+/// names where it was moved to as well.
 pub fn outside_season(text: &str, episode: i64, total: Option<u32>, wording: Wording) -> String {
     let label = trss_core::episode::episode_label(text);
-    let range = season_range(total);
-    match wording {
-        Wording::Candidate => {
-            format!("후보의 {label}를 옮긴 시즌 {episode}화가 시즌의 {range} 밖이에요")
+    let place = outside(total);
+    match (wording, total) {
+        (Wording::Candidate, _) => {
+            format!("후보의 {label}를 옮긴 시즌 {episode}화가 {place}이에요")
         }
-        Wording::File => format!("{label}가 시즌의 {range} 밖이에요"),
-        Wording::Stored => format!("{label}를 옮긴 시즌 {episode}화가 시즌의 {range} 밖이에요"),
+        (Wording::File, Some(_)) => format!("{label}가 {place}이에요"),
+        (Wording::File, None) | (Wording::Stored, _) => {
+            format!("{label}를 옮긴 시즌 {episode}화가 {place}이에요")
+        }
     }
 }
 
 /// [`outside_season`] for a file of a package placed with others, whose
 /// episode outside the season means it is another season's file.
-pub fn another_seasons_file(text: &str, total: Option<u32>) -> String {
-    format!(
-        "{}가 시즌의 {} 밖이라 다른 시즌의 파일로 보여요",
-        trss_core::episode::episode_label(text),
-        season_range(total)
-    )
+pub fn another_seasons_file(text: &str, episode: i64, total: Option<u32>) -> String {
+    let label = trss_core::episode::episode_label(text);
+    let place = outside(total);
+    match total {
+        Some(_) => format!("{label}가 {place}이라 다른 시즌의 파일로 보여요"),
+        None => format!("{label}를 옮긴 시즌 {episode}화가 {place}이라 다른 시즌의 파일로 보여요"),
+    }
 }
 
 /// The names of a package number its files in Anissia's way or the season's

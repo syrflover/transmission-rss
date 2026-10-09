@@ -448,7 +448,7 @@ pub fn plan(candidates: &[Candidate<'_>], files: &[File<'_>], ctx: &Context<'_>)
         };
         match target {
             Target::Episode { episode, .. } if !reason::in_season(episode, ctx.total) => {
-                Err(reason::another_seasons_file(&key, ctx.total))
+                Err(reason::another_seasons_file(&key, episode, ctx.total))
             }
             target => Ok(target),
         }
