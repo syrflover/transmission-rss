@@ -146,7 +146,7 @@ use super::{
 use trss_anissia::{Anime, AnissiaError, ScheduleEntry};
 use trss_collect::store::{
     anissia::{mark_attributed, Attributed},
-    channels::{Rule, SeasonAnimeError},
+    channels::{season_holders, Rule, SeasonAnimeError},
 };
 use trss_core::episode::{segments, shown, EpisodeSegment};
 use trss_library::store::seasons::SeasonError;
@@ -278,26 +278,11 @@ pub async fn link_views(
         .anissia_links_of(work_id)
         .await
         .map_err(|e| internal(&e))?;
-    // The holder is the first by rule ID, as the store's checks name it, whatever
-    // order the work's subscriptions are listed in.
-    let mut held: HashMap<u32, (&Rule, i64)> = HashMap::new();
-    for (season, rule) in connected {
-        let Some(subscription) = rule.subscription.as_ref() else {
-            continue;
-        };
-        let entry = (rule, subscription.anissia_anime_no);
-        held.entry(*season)
-            .and_modify(|first| {
-                if rule.id < first.0.id {
-                    *first = entry;
-                }
-            })
-            .or_insert(entry);
-    }
+    let held = season_holders(connected);
     let wanted: Vec<i64> = links
         .values()
         .filter_map(|l| l.anime_no)
-        .chain(held.values().map(|(_, no)| *no))
+        .chain(held.values().map(|h| h.anime_no))
         .collect();
     let animes = state
         .anissia_store
@@ -326,13 +311,11 @@ pub async fn link_views(
                     .and_then(|l| l.anime_no)
                     .and_then(|no| animes.get(&no))
                     .map(LinkedAnime::from),
-                subscription: held
-                    .get(season)
-                    .map(|(rule, anime_no)| HoldingSubscription {
-                        rule_id: rule.id.clone(),
-                        anime_no: *anime_no,
-                        subject: animes.get(anime_no).map(|a| a.subject.clone()),
-                    }),
+                subscription: held.get(season).map(|holder| HoldingSubscription {
+                    rule_id: holder.rule.id.clone(),
+                    anime_no: holder.anime_no,
+                    subject: animes.get(&holder.anime_no).map(|a| a.subject.clone()),
+                }),
             };
             (*season, view)
         })

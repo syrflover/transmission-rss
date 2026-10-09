@@ -13,8 +13,8 @@ use trss_library::{
 use crate::store::{
     anissia::AnissiaStore,
     channels::{
-        ChannelInput, ChannelStore, NewSubscription, Rule, RuleInput, SeasonAnimeError,
-        SeasonLinked, SubtitleMode,
+        season_holders, ChannelInput, ChannelStore, NewSubscription, Rule, RuleInput,
+        SeasonAnimeError, SeasonLinked, SubtitleMode,
     },
 };
 
@@ -404,4 +404,67 @@ async fn a_subscribed_anime_keeps_the_schedule_snapshot_when_a_search_names_it()
         .await
         .unwrap();
     assert_eq!(rows, 1);
+}
+
+/// Two subscriptions on one season, the one that sorts first by rule ID listed
+/// second (rules list by position): every place that names the holder names
+/// the same rule. The connection itself refuses a second anime on a season, so
+/// a database that holds two (one the migration made) is built by hand.
+#[tokio::test]
+async fn the_holder_of_a_season_is_the_first_subscription_by_rule_id_whatever_the_listing_order() {
+    let env = Env::new().await;
+    let mut rules = vec![env.subscribe("Sub 0", 100).await];
+    // Rule IDs are random: subscribe until one sorts before the first.
+    while rules.last().unwrap().id >= rules[0].id {
+        let n = rules.len() as i64;
+        rules.push(env.subscribe(&format!("Sub {n}"), 100 + n).await);
+        assert!(rules.len() < 1_000, "no rule sorted before the first");
+    }
+    let season = env.season(2);
+    let ids: Vec<String> = rules.iter().map(|r| r.id.clone()).collect();
+    let target = season.clone();
+    env.db
+        .run::<_, trss_core::DbError, _>(move |c| {
+            for id in &ids {
+                c.execute(
+                    "UPDATE rule_subscriptions SET season_id = ?2 WHERE rule_id = ?1",
+                    rusqlite::params![id, target],
+                )?;
+            }
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let first = rules.iter().min_by_key(|r| r.id.clone()).unwrap();
+    let first_anime = first.subscription.as_ref().unwrap().anissia_anime_no;
+    assert_ne!(
+        first.id, rules[0].id,
+        "the listing order is not the ID order"
+    );
+
+    // The store's query.
+    assert_eq!(
+        env.channels.season_holder(&season).await.unwrap(),
+        Some(first_anime)
+    );
+    // The refusal to change the link.
+    match env.channels.set_season_anime(&env.work, 2, 0, None).await {
+        Err(SeasonAnimeError::Subscribed { rule_id, anime_no }) => {
+            assert_eq!((rule_id, anime_no), (first.id.clone(), first_anime))
+        }
+        other => panic!("expected the subscription to hold the season, got {other:?}"),
+    }
+    // The holder of the work's listing, in the order it lists and reversed.
+    let mut connected = env.channels.subscriptions_of_work(&env.work).await.unwrap();
+    assert_eq!(connected[0].1.id, rules[0].id);
+    for _ in 0..2 {
+        let held = season_holders(&connected);
+        assert_eq!(held.len(), 1);
+        let holder = held[&2];
+        assert_eq!(
+            (holder.rule.id.as_str(), holder.anime_no),
+            (first.id.as_str(), first_anime)
+        );
+        connected.reverse();
+    }
 }

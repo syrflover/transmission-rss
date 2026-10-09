@@ -15,10 +15,15 @@
 //! An anime some rule subscribes to keeps the snapshot the worker refreshes;
 //! the schedule's snapshot of it is not replaced by a search result.
 
+use std::collections::HashMap;
+
 use rusqlite::{params, OptionalExtension, TransactionBehavior};
 use trss_library::store::seasons::anissia::{self as season_anissia, AnissiaLink};
 
-use crate::store::{anissia, channels::ChannelStore};
+use crate::store::{
+    anissia,
+    channels::{ChannelStore, Rule},
+};
 use trss_anissia::Anime;
 use trss_core::DbError;
 
@@ -43,6 +48,40 @@ pub enum SeasonAnimeError {
     /// current link.
     #[error("the season's Anissia link was changed by someone else")]
     Conflict(Box<AnissiaLink>),
+}
+
+/// The subscription that holds a season, as the work detail shows it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SeasonHolder<'a> {
+    pub rule: &'a Rule,
+    /// The rule's Anissia anime.
+    pub anime_no: i64,
+}
+
+/// The holder of each season among `connected` (the work's subscriptions
+/// that are connected to a season, as
+/// [`ChannelStore::subscriptions_of_work`] lists them): the first by rule ID,
+/// whatever order they are listed in, as [`ChannelStore::season_holder`] and
+/// [`ChannelStore::set_season_anime`] name it.
+pub fn season_holders(connected: &[(u32, Rule)]) -> HashMap<u32, SeasonHolder<'_>> {
+    let mut held: HashMap<u32, SeasonHolder<'_>> = HashMap::new();
+    for (season, rule) in connected {
+        let Some(subscription) = rule.subscription.as_ref() else {
+            continue;
+        };
+        let holder = SeasonHolder {
+            rule,
+            anime_no: subscription.anissia_anime_no,
+        };
+        held.entry(*season)
+            .and_modify(|first| {
+                if rule.id < first.rule.id {
+                    *first = holder;
+                }
+            })
+            .or_insert(holder);
+    }
+    held
 }
 
 impl From<rusqlite::Error> for SeasonAnimeError {

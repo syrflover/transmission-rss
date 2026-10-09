@@ -40,7 +40,7 @@ pub use episode_undo::{
     EpisodeUndo, NewUndoFile, UndoBegun, UndoFile, UndoFileState, REVISION_UNDER_WAY,
 };
 pub use repo::{NewSubscription, SeasonLinked};
-pub use season_anime::SeasonAnimeError;
+pub use season_anime::{season_holders, SeasonAnimeError, SeasonHolder};
 
 pub use model::{
     mask_url, query_names, Channel, ChannelInput, ChannelWithRules, OrderItem, Rule, RuleInput,

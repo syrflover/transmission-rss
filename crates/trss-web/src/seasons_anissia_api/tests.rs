@@ -22,7 +22,6 @@ use trss_library::discovery::{Scan, ScannedWork, WorkRead};
 const NOW: i64 = 1_790_780_400_000;
 
 struct App {
-    db: Db,
     state: AppState,
     router: Router,
     fake: Fake,
@@ -41,7 +40,7 @@ impl App {
             Arc::new(move || now.load(Ordering::SeqCst))
         };
         let anissia = Anissia::new(db.clone(), fake.config(), clock).with_spacing(Duration::ZERO);
-        let state = AppState::new(db.clone()).with_anissia(anissia);
+        let state = AppState::new(db).with_anissia(anissia);
         let scan = Scan {
             works: vec![WorkRead::Read(ScannedWork {
                 dir_name: "Sayonara Lara".into(),
@@ -58,7 +57,6 @@ impl App {
         let work = state.library.works(&folder.id).await.unwrap().remove(0).id;
         let router = testing::api(&state);
         App {
-            db,
             state,
             router,
             fake,
@@ -434,6 +432,7 @@ async fn a_season_a_subscription_holds_cannot_be_changed_from_the_work_detail() 
     assert_eq!(held["version"], 1);
     assert_eq!(held["anime"]["anime_no"], 3320);
     assert_eq!(held["subscription"]["rule_id"], rule.id.as_str());
+    assert_eq!(held["subscription"]["anime_no"], 3320);
     assert_eq!(held["subscription"]["subject"], "구독 작품");
 
     // A change, a cut and the same anime again are all refused, with the way out.
@@ -784,91 +783,6 @@ async fn a_search_without_a_query_is_refused_and_asks_nothing_of_anissia() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
     assert_eq!(app.requests_for("/anime/"), 0);
     assert_eq!(app.get(1).await["version"], 0);
-}
-
-#[tokio::test]
-async fn the_holder_shown_is_the_first_subscription_by_rule_id_whatever_the_listing_order() {
-    let app = App::new().await;
-    let channel = app
-        .state
-        .channels
-        .create_channel(ChannelInput::new("https://feed.test/rss"))
-        .await
-        .unwrap();
-    let anime = |no: i64, subject: &str| trss_anissia::Anime {
-        anime_no: no,
-        subject: subject.into(),
-        original_subject: None,
-        week: 3,
-        air_time: None,
-        start_date: None,
-        end_date: None,
-        status: "ON".into(),
-        fetched_at: NOW,
-    };
-    // Two rules on one season for one anime, the one that sorts first by ID
-    // listed second (rules list by position).
-    let mut rules = Vec::new();
-    for n in 0..64 {
-        let rule = app
-            .state
-            .channels
-            .create_subscription_rule(
-                &channel.id,
-                RuleInput {
-                    r#match: Some(format!("Sub {n}")),
-                    directory: "Sayonara Lara/Season 02".into(),
-                    ..RuleInput::default()
-                },
-                NewSubscription {
-                    anime: anime(3320 + n, "구독 작품"),
-                    subtitles: SubtitleMode::None,
-                    creator: None,
-                    subscribed_at: NOW,
-                },
-            )
-            .await
-            .unwrap();
-        let lower = rules
-            .first()
-            .is_some_and(|first: &trss_collect::store::channels::Rule| rule.id < first.id);
-        rules.push(rule);
-        if lower {
-            break;
-        }
-    }
-    assert!(
-        rules.len() >= 2,
-        "no rule sorted before the first in 64 tries"
-    );
-    // The connection itself refuses a second anime on a season, so a database
-    // that holds two (one the migration made) is built by hand.
-    let season = format!("{}:2", app.work);
-    let ids: Vec<String> = rules.iter().map(|r| r.id.clone()).collect();
-    app.db
-        .run::<_, trss_core::DbError, _>(move |c| {
-            for id in &ids {
-                c.execute(
-                    "UPDATE rule_subscriptions SET season_id = ?2 WHERE rule_id = ?1",
-                    rusqlite::params![id, season],
-                )?;
-            }
-            Ok(())
-        })
-        .await
-        .unwrap();
-    let first = rules.iter().min_by_key(|r| r.id.clone()).unwrap();
-    assert_ne!(
-        first.id, rules[0].id,
-        "the listing order differs from the ID order"
-    );
-
-    let shown = app.detail(2).await;
-    assert_eq!(shown["subscription"]["rule_id"], first.id.as_str());
-    assert_eq!(
-        shown["subscription"]["anime_no"],
-        first.subscription.as_ref().unwrap().anissia_anime_no
-    );
 }
 
 #[test]
