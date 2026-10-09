@@ -991,4 +991,7 @@ pub async fn remove_departed(
 }
 
 #[cfg(test)]
+mod first_read_tests;
+
+#[cfg(test)]
 mod tests;

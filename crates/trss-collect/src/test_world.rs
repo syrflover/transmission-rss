@@ -56,6 +56,7 @@ use crate::{
     episode_offset::{gather, Basis},
     fake::FeedServer,
     feed,
+    plan::preview::{self, Preview},
     revisions::{self, Listing},
     season_link,
     store::{
@@ -428,12 +429,29 @@ impl World {
         anime_no: i64,
         episode: i64,
     ) -> Rule {
+        self.subscribe_as(Some(phrase), directory, anime_no, episode)
+            .await
+    }
+
+    /// A subscription of the channel to the anime `anime_no` that has no
+    /// phrase yet and waits for its title, saving into `directory`.
+    pub async fn subscribe_waiting(&self, directory: &str, anime_no: i64) -> Rule {
+        self.subscribe_as(None, directory, anime_no, 0).await
+    }
+
+    async fn subscribe_as(
+        &self,
+        phrase: Option<&str>,
+        directory: &str,
+        anime_no: i64,
+        episode: i64,
+    ) -> Rule {
         self.ctx
             .channels
             .create_subscription_rule(
                 &self.channel_id,
                 RuleInput {
-                    r#match: Some(phrase.to_owned()),
+                    r#match: phrase.map(str::to_owned),
                     directory: directory.to_owned(),
                     episode,
                     ..Default::default()
@@ -441,7 +459,7 @@ impl World {
                 NewSubscription {
                     anime: Anime {
                         anime_no,
-                        subject: phrase.to_owned(),
+                        subject: phrase.unwrap_or(directory).to_owned(),
                         original_subject: None,
                         week: 4,
                         air_time: Some("23:00".to_owned()),
@@ -563,6 +581,29 @@ impl World {
     /// The replacements the to-do source lists as `받기 실패`.
     pub async fn failures(&self) -> Vec<Revision> {
         self.ctx.revisions.failures().await.unwrap()
+    }
+
+    /// What the rule detail shows for the stored `rule` as it is: the preview
+    /// of the channel's recorded items under the collect folder.
+    pub async fn preview_of(&self, rule: &Rule) -> Preview {
+        let channels = self.ctx.channels.list_channels_with_rules().await.unwrap();
+        let cwr = channels
+            .into_iter()
+            .find(|cwr| cwr.channel.id == rule.channel_id)
+            .expect("the rule's channel");
+        let input = rule.to_input();
+        preview::preview(
+            &self.media,
+            &cwr,
+            preview::Edit {
+                id: Some(&rule.id),
+                input: &input,
+                position: None,
+            },
+            &self.history_items().await,
+            100,
+        )
+        .unwrap()
     }
 
     // --- the rule's episode offset -------------------------------------------------------

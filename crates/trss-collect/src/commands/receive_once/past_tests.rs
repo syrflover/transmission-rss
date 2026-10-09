@@ -31,6 +31,9 @@ enum Made {
     Resumed,
     /// The rule was archived when the item came, and is restored.
     Restored,
+    /// A subscription that waited for its title when the item came, and is
+    /// given one.
+    Titled,
 }
 
 #[tokio::test]
@@ -40,14 +43,24 @@ async fn a_cycle_leaves_the_past_to_the_user_and_the_user_receives_it_with_the_r
         Made::PlainRule,
         Made::Resumed,
         Made::Restored,
+        Made::Titled,
     ] {
         let (title25, title26) = (liar_title(25), liar_title(26));
         let s = World::with_rules(match made {
             Made::Resumed | Made::Restored => vec![rule("LIAR GAME", LIAR_DIR)],
-            Made::Subscription | Made::PlainRule => unrelated_rule(),
+            Made::Subscription | Made::PlainRule | Made::Titled => unrelated_rule(),
         })
         .await;
+        let mut waiting = None;
         match made {
+            Made::Titled => {
+                // A channel read once holds something already, and the
+                // subscription waits for its title from then on.
+                s.feed_after_other(&[]);
+                s.cycle().await;
+                s.advance(1_000);
+                waiting = Some(s.subscribe_waiting(LIAR_DIR, 3320).await);
+            }
             Made::Resumed => {
                 let rule = s.rule_of(0).await;
                 s.ctx
@@ -75,6 +88,14 @@ async fn a_cycle_leaves_the_past_to_the_user_and_the_user_receives_it_with_the_r
         s.advance(1_000);
         let rule = match made {
             Made::Subscription => s.subscribe("LIAR GAME", LIAR_DIR, 3320, 0).await,
+            Made::Titled => {
+                let waiting = waiting.take().expect("the subscription that waited");
+                s.ctx
+                    .channels
+                    .give_title(&waiting.id, waiting.version, "LIAR GAME", None, s.now())
+                    .await
+                    .unwrap()
+            }
             Made::PlainRule => s
                 .ctx
                 .channels
