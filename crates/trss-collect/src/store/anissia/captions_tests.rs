@@ -1,4 +1,7 @@
+use std::collections::HashMap;
+
 use trss_core::Db;
+use trss_library::mapping::Mapping;
 
 use super::*;
 
@@ -530,4 +533,159 @@ async fn without_an_offset_an_episode_that_is_no_whole_number_is_compared_as_it_
         revision_by_attribution(&huge, -1, &[held(&id, "99999999999999999999")]),
         None
     );
+}
+
+fn plain_candidate(id: i64, source_id: &str, episode: &str) -> Candidate {
+    Candidate {
+        id,
+        source_id: source_id.into(),
+        creator: "하느".into(),
+        post_url: format!("https://a.test/{id}"),
+        episode: episode.into(),
+        updated: String::new(),
+        updated_at: None,
+        first_seen_at: NOON_UTC,
+        revision: None,
+    }
+}
+
+fn mapping_of(
+    kind: trss_library::mapping::MappingKind,
+    offset: Option<i64>,
+    exceptions: &[(&str, Option<u32>)],
+) -> Mapping {
+    Mapping {
+        kind,
+        offset,
+        evidence: String::new(),
+        decided_at: 0,
+        version: 1,
+        exceptions: exceptions
+            .iter()
+            .map(|(episode, target)| trss_library::mapping::Exception {
+                key: trss_core::episode::stored_key(episode),
+                episode: (*episode).into(),
+                target: *target,
+            })
+            .collect(),
+    }
+}
+
+#[test]
+fn the_revision_mark_of_a_candidate_goes_by_the_exception_then_the_offset_else_by_number() {
+    use trss_library::mapping::MappingKind::{Auto, Undecided, User};
+    let marked = Some(Revision {
+        of: None,
+        same_post: None,
+    });
+    let held = [held("s1", "05"), held("s1", "12"), held("s1", "SP")];
+    let no_exceptions = [];
+    let exceptions = [("014", Some(12)), ("5", None), ("7", Some(0))];
+    // (candidate episode, the source's mapping, whether it is marked)
+    let cases: Vec<(&str, Option<Mapping>, Option<Revision>)> = vec![
+        // No mapping: compared by number as they are, a text that is no whole
+        // number as it is.
+        ("5", None, marked.clone()),
+        ("14", None, None),
+        ("SP", None, marked.clone()),
+        ("0", None, None),
+        // A mapping decided with offset 0 compares the same way.
+        (
+            "5",
+            Some(mapping_of(Auto, Some(0), &no_exceptions)),
+            marked.clone(),
+        ),
+        (
+            "SP",
+            Some(mapping_of(Auto, Some(0), &no_exceptions)),
+            marked.clone(),
+        ),
+        // An offset moves a whole episode only.
+        (
+            "17",
+            Some(mapping_of(User, Some(-5), &no_exceptions)),
+            marked.clone(),
+        ),
+        ("5", Some(mapping_of(User, Some(-5), &no_exceptions)), None),
+        ("SP", Some(mapping_of(Auto, Some(-5), &no_exceptions)), None),
+        // A mapping that is undecided marks nothing, whatever it carries.
+        ("5", Some(mapping_of(Undecided, None, &no_exceptions)), None),
+        (
+            "5",
+            Some(mapping_of(Undecided, Some(0), &no_exceptions)),
+            None,
+        ),
+        // An exception comes before the offset: 14 is the season's 12, 5 is
+        // not received, and a target below 1 is no episode.
+        (
+            "14",
+            Some(mapping_of(User, Some(0), &exceptions)),
+            marked.clone(),
+        ),
+        (
+            "014",
+            Some(mapping_of(User, Some(0), &exceptions)),
+            marked.clone(),
+        ),
+        ("5", Some(mapping_of(User, Some(0), &exceptions)), None),
+        ("7", Some(mapping_of(User, Some(0), &exceptions)), None),
+        // The other episodes go by the offset.
+        (
+            "12",
+            Some(mapping_of(User, Some(0), &exceptions)),
+            marked.clone(),
+        ),
+        (
+            "17",
+            Some(mapping_of(User, Some(-5), &exceptions)),
+            marked.clone(),
+        ),
+    ];
+    for (episode, mapping, expected) in cases {
+        let candidate = plain_candidate(1, "s1", episode);
+        assert_eq!(
+            revision_by_mapping(&candidate, mapping.as_ref(), &held),
+            expected,
+            "episode {episode:?} under {mapping:?}"
+        );
+    }
+    // The creator is the source's: the same episode of another source is none.
+    let other = plain_candidate(2, "s2", "5");
+    assert_eq!(revision_by_mapping(&other, None, &held), None);
+}
+
+#[test]
+fn marking_the_attributed_leaves_a_mark_the_receipts_made_and_waits_for_a_file() {
+    let marked = Some(Revision {
+        of: None,
+        same_post: None,
+    });
+    let received = Some(Revision {
+        of: Some(1),
+        same_post: Some(true),
+    });
+    let mut candidates = vec![
+        plain_candidate(3, "s1", "5"),
+        plain_candidate(4, "s1", "6"),
+        plain_candidate(5, "s2", "5"),
+    ];
+    candidates[0].revision = received.clone();
+    candidates[1].revision = None;
+    let held = [held("s1", "05"), held("s1", "06")];
+    let mappings: HashMap<String, Mapping> = HashMap::from([(
+        "s2".to_owned(),
+        mapping_of(trss_library::mapping::MappingKind::Auto, Some(0), &[]),
+    )]);
+
+    // Nothing is held: no candidate is touched.
+    let mut untouched = candidates.clone();
+    mark_attributed(&mut untouched, &mappings, &[]);
+    assert_eq!(untouched, candidates);
+
+    mark_attributed(&mut candidates, &mappings, &held);
+    // A mark the receipts made stays as it was; another gets the file's mark;
+    // a candidate of a source none of the files is of gets none.
+    assert_eq!(candidates[0].revision, received);
+    assert_eq!(candidates[1].revision, marked);
+    assert_eq!(candidates[2].revision, None);
 }

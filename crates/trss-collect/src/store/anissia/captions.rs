@@ -18,12 +18,14 @@
 //! revision mark described at [`revision_of`], given what the subtitle jobs
 //! received ([`Received`]).
 
+use std::collections::HashMap;
+
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use uuid::Uuid;
 
 use super::{AnissiaStore, Result};
 use trss_core::{episode::stored_key, Millis};
-use trss_library::mapping::shifted;
+use trss_library::mapping::{shifted, Mapping};
 
 /// A line as the worker read it, ready to be compared with the last
 /// observation of its creator.
@@ -206,7 +208,7 @@ pub fn revision_by_attribution(
 /// holds a subtitle of the candidate's creator for that episode. Like
 /// [`revision_by_attribution`], the mark carries no `of` and no `same_post`;
 /// an episode below 1 is none.
-pub fn revision_by_attributed_episode(
+fn revision_by_attributed_episode(
     candidate: &Candidate,
     season_episode: i64,
     held: &[Attributed],
@@ -221,6 +223,48 @@ pub fn revision_by_attributed_episode(
             of: None,
             same_post: None,
         })
+}
+
+/// The revision mark of `candidate` by the subtitle files of the library
+/// whose creator the user named, given the mapping of the candidate's source
+/// to the season (`None` for a source with no mapping): the user's exception
+/// for the episode comes first ([`revision_by_attributed_episode`]; one that
+/// puts the episode nowhere has no mark), then the mapping's decided offset
+/// ([`revision_by_attribution`]; a mapping that is undecided has no mark), and
+/// a source with no mapping is compared by number as it is (offset `0`).
+pub fn revision_by_mapping(
+    candidate: &Candidate,
+    mapping: Option<&Mapping>,
+    held: &[Attributed],
+) -> Option<Revision> {
+    match mapping {
+        None => revision_by_attribution(candidate, 0, held),
+        Some(mapping) => match mapping.exception_of(&candidate.episode) {
+            Some(exception) => exception.target.and_then(|target| {
+                revision_by_attributed_episode(candidate, i64::from(target), held)
+            }),
+            None => mapping
+                .decided_offset()
+                .and_then(|offset| revision_by_attribution(candidate, offset, held)),
+        },
+    }
+}
+
+/// Marks the candidates that have no revision mark yet by
+/// [`revision_by_mapping`], with each source's mapping in `mappings` (by
+/// source ID). There is nothing to mark while `held` is empty.
+pub fn mark_attributed(
+    candidates: &mut [Candidate],
+    mappings: &HashMap<String, Mapping>,
+    held: &[Attributed],
+) {
+    if held.is_empty() {
+        return;
+    }
+    for candidate in candidates.iter_mut().filter(|c| c.revision.is_none()) {
+        candidate.revision =
+            revision_by_mapping(candidate, mappings.get(&candidate.source_id), held);
+    }
 }
 
 /// Whether an observation says what `line` says. The times are compared as

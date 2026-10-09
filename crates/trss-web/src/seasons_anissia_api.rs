@@ -92,7 +92,7 @@
 //!   episode, once the source's mapping is applied (compared as numbers when the
 //!   source has none, and not marked while its mapping is undecided). Such a
 //!   mark has `of` and `same_post` `null`, because the file's post is not known
-//!   ([`trss_collect::store::anissia::revision_by_attribution`]).
+//!   ([`trss_collect::store::anissia::revision_by_mapping`]).
 //! - `job` is how the latest subtitle job that took the candidate stands, as
 //!   its item for the candidate: `state` `pending`, `running`, `waiting`
 //!   (`wait` `auth` or `subtitle`), `held`, `failed` or `done`, with the job's
@@ -132,7 +132,7 @@ use super::{
 };
 use trss_anissia::{Anime, AnissiaError, ScheduleEntry};
 use trss_collect::store::{
-    anissia::{revision_by_attributed_episode, revision_by_attribution, Attributed},
+    anissia::{mark_attributed, Attributed},
     channels::{Rule, SeasonAnimeError},
 };
 use trss_library::store::seasons::SeasonError;
@@ -758,24 +758,7 @@ async fn candidates(
             episode: a.episode,
         })
         .collect();
-    if !attributed.is_empty() {
-        for candidate in observed.iter_mut().filter(|c| c.revision.is_none()) {
-            // A source with no mapping is compared by number as it is; one
-            // the app could not decide a mapping for cannot say. The user's
-            // exception for the episode comes before the offset.
-            candidate.revision = match mappings.get(&candidate.source_id) {
-                None => revision_by_attribution(candidate, 0, &attributed),
-                Some(mapping) => match mapping.exception_of(&candidate.episode) {
-                    Some(exception) => exception.target.and_then(|target| {
-                        revision_by_attributed_episode(candidate, i64::from(target), &attributed)
-                    }),
-                    None => mapping
-                        .decided_offset()
-                        .and_then(|offset| revision_by_attribution(candidate, offset, &attributed)),
-                },
-            };
-        }
-    }
+    mark_attributed(&mut observed, &mappings, &attributed);
     let refresh = state
         .commands
         .latest_for_subjects(
