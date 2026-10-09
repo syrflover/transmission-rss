@@ -68,6 +68,8 @@ export interface ResultItem {
 export interface SearchResult {
   from: number;
   to: number;
+  /** The range as the work folder names its episodes (`S02E01–12`, `1–12화`); `null` when the rule is gone. */
+  range_label: string | null;
   query: string;
   items: ResultItem[];
   /** Individual episodes and batches outside the range. */
@@ -101,6 +103,15 @@ export function searchContext(ruleId: string): Promise<SearchContext> {
   return api<SearchContext>(`/rules/${encodeURIComponent(ruleId)}/past-search`);
 }
 
+/** The folder episodes of the releases a person typed (`POST …/past-search/range`), written by the server. */
+export function rangeLabelOf(ruleId: string, from: number, to: number, signal?: AbortSignal): Promise<{ label: string }> {
+  return api<{ label: string }>(`/rules/${encodeURIComponent(ruleId)}/past-search/range`, {
+    method: "POST",
+    body: { from, to },
+    signal,
+  });
+}
+
 export function startSearch(
   ruleId: string,
   body: { query: string; from: number; to: number },
@@ -122,25 +133,4 @@ export function cancelSearch(searchId: string): Promise<void> {
 /** Asks the worker to add one result of a finished search (`receive_past`). */
 export function receivePast(id: string, ruleId: string, searchId: string, key: string): Promise<Command> {
   return sendCommand(id, "receive_past", { rule_id: ruleId, search_id: searchId, key });
-}
-
-/**
- * The work folder's episode a release number lands on, as the worker names the
- * video: a negative conversion adds only while the result stays at 1 or above,
- * a positive `p` makes release `1` the folder's `p`, `0` changes nothing.
- */
-export function folderEpisode(release: number, offset: number): number {
-  if (offset < 0) return release + offset >= 1 ? release + offset : release;
-  if (offset > 0) return release + offset - 1;
-  return release;
-}
-
-/** `S02E01–12` for the folder episodes of releases `from` to `to`, `1–12화` without a season. */
-export function rangeLabel(from: number, to: number, offset: number, season: number | null): string {
-  const first = folderEpisode(from, offset);
-  const last = folderEpisode(to, offset);
-  if (season === null) return `${first}–${last}화`;
-  const s = `S${String(season).padStart(2, "0")}`;
-  const e = (n: number) => String(n).padStart(2, "0");
-  return first === last ? `${s}E${e(first)}` : `${s}E${e(first)}–${e(last)}`;
 }

@@ -11,7 +11,6 @@ import { btnAction, btnNeutral, hintClass, inputClass, labelClass } from "../../
 import { PickRow, ProgressRows, SelectionBar } from "../../subs/add/PastItems";
 import { useCommandRows } from "../../subs/add/useReceive";
 import {
-  rangeLabel,
   receivePast,
   type ResultItem,
   type ResultState,
@@ -19,6 +18,7 @@ import {
   type SearchResult,
 } from "./api";
 import { usePastSearch } from "./usePastSearch";
+import { useRangeLabel } from "./useRangeLabel";
 
 const STATE: Record<ResultState, { label: string; badge: string }> = {
   missing: { label: "받을 회차", badge: "border-ok text-ok" },
@@ -79,8 +79,11 @@ function RangeStep({
   const [to, setTo] = useState(context.suggestion.to?.toString() ?? "");
   const a = digits(from);
   const b = digits(to);
-  const valid = query.trim() !== "" && a !== null && b !== null && a >= 1 && a <= b;
+  const ranged = a !== null && b !== null && a >= 1 && a <= b;
+  const valid = query.trim() !== "" && ranged;
   const blocked = disabled ?? context.blocked;
+  // The folder episodes of the typed range come from the server, which applies the rule's conversion.
+  const named = useRangeLabel(context.rule_id, ranged ? a : null, ranged ? b : null);
 
   return (
     <div className="flex min-w-0 flex-col gap-3">
@@ -142,10 +145,15 @@ function RangeStep({
             autoComplete="off"
           />
           {valid && (
-            <span className="min-w-0 font-mono text-[13px] font-semibold break-all" data-testid="past-range">
-              릴리스 {a}–{b} → {rangeLabel(a, b, context.offset, context.season)}
+            <span
+              className={cn("min-w-0 font-mono text-[13px] font-semibold break-all", !named.fresh && "opacity-60")}
+              data-testid="past-range"
+            >
+              릴리스 {a}–{b}
+              {named.label !== null && <> → {named.label}</>}
             </span>
           )}
+          {valid && named.failure && <span className="text-xs font-semibold text-urgent">{named.failure}</span>}
         </div>
         <p className={hintClass} data-testid="past-range-basis">
           {context.suggestion.basis}
@@ -259,14 +267,21 @@ function ResultStep({
     );
   };
   const blocked = disabled ?? context.blocked;
-  const label = rangeLabel(result.from, result.to, context.offset, context.season);
+  const label = result.range_label;
 
   return (
     <div className="flex min-w-0 flex-col gap-3">
       <Steps current={receiving ? 2 : 1} />
       <div className="flex min-w-0 flex-col gap-1.5" data-testid="past-summary">
         <p className="text-[13px] leading-normal text-text-secondary">
-          릴리스 <strong>{result.from}–{result.to}</strong> (<span className="font-mono">{label}</span>)에서 결과{" "}
+          릴리스 <strong>{result.from}–{result.to}</strong>
+          {label !== null && (
+            <>
+              {" "}
+              (<span className="font-mono">{label}</span>)
+            </>
+          )}
+          에서 결과{" "}
           <strong>{result.items.length}개</strong>를 보여요.
           {result.out_of_range > 0 && <> 범위 밖 {result.out_of_range}개는 접어 두었어요.</>}
           {result.not_picked > 0 && <> 규칙이 고르지 않는 {result.not_picked}개는 뺐어요.</>}
