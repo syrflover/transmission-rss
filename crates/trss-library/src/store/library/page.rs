@@ -614,6 +614,143 @@ mod tests {
         assert_eq!(search("").1, 4);
     }
 
+    /// A work with what its linked entries say: the airing year, whether one is
+    /// airing now, and the titles.
+    fn linked(
+        id: &str,
+        name: &str,
+        airing_year: Option<i32>,
+        airing: bool,
+        titles: &[&str],
+    ) -> WorkOverview {
+        WorkOverview {
+            airing_year,
+            airing,
+            linked_titles: titles.iter().map(|t| (*t).to_owned()).collect(),
+            ..work(id, name)
+        }
+    }
+
+    fn library() -> Vec<WorkOverview> {
+        vec![
+            linked(
+                "a",
+                "Alpha",
+                Some(2019),
+                false,
+                &["アルファ", "Alpha Romaji"],
+            ),
+            linked("b", "Beta", Some(2024), true, &["ベータ", "Beta Romaji"]),
+            linked("c", "Gamma", None, false, &[]),
+            linked(
+                "d",
+                "Delta",
+                Some(2025),
+                true,
+                &["デルタ", "Delta One", "デルタ2", "Delta Two"],
+            ),
+            linked("e", "Epsilon", None, false, &["イプシロン"]),
+        ]
+    }
+
+    fn named(works: Vec<WorkOverview>, query: &ListQuery) -> Vec<String> {
+        page(works, query)
+            .items
+            .into_iter()
+            .map(|w| w.dir_name)
+            .collect()
+    }
+
+    #[test]
+    fn the_year_sort_is_latest_first_with_unknown_last_by_title_and_the_pages_follow_it() {
+        let year = query(Sort::Year);
+        assert_eq!(
+            named(library(), &year),
+            ["Delta", "Beta", "Alpha", "Epsilon", "Gamma"]
+        );
+
+        let first = page(
+            library(),
+            &ListQuery {
+                limit: 2,
+                ..year.clone()
+            },
+        );
+        assert_eq!(ids(&first), ["d", "b"]);
+        let rest = page(
+            library(),
+            &ListQuery {
+                limit: 2,
+                after: first.next,
+                ..year
+            },
+        );
+        assert_eq!(ids(&rest), ["a", "e"]);
+    }
+
+    #[test]
+    fn the_airing_filter_lists_the_works_whose_latest_season_has_an_airing_entry() {
+        let airing = ListQuery {
+            filter: Filter::Airing,
+            ..query(Sort::Title)
+        };
+        let p = page(library(), &airing);
+        assert_eq!(ids(&p), ["b", "d"]);
+        assert_eq!((p.total, p.library_count), (2, 5));
+    }
+
+    #[test]
+    fn a_search_finds_a_work_by_its_folder_name_or_the_titles_of_its_linked_entries() {
+        for (text, expected) in [
+            ("ベータ", vec!["Beta"]),
+            ("alpha romaji", vec!["Alpha"]),
+            ("DELTA TWO", vec!["Delta"]),
+            ("デルタ", vec!["Delta"]),
+            ("delta", vec!["Delta"]),
+            ("イプ", vec!["Epsilon"]),
+            ("gamma", vec!["Gamma"]),
+            ("nothing", vec![]),
+        ] {
+            let search = ListQuery {
+                search: text.into(),
+                ..query(Sort::Title)
+            };
+            assert_eq!(named(library(), &search), expected, "{text}");
+        }
+    }
+
+    #[test]
+    fn the_filter_and_the_search_apply_together_and_the_total_counts_what_both_pass() {
+        let mut complete = work("c", "Complete One");
+        complete.subtitle_coverage = Some(SubtitleCoverage::All);
+        let mut partial = work("p", "Partial Two");
+        partial.subtitle_coverage = Some(SubtitleCoverage::Some);
+        let works = vec![
+            complete,
+            partial,
+            work("n", "Work 001"),
+            work("m", "Work 002"),
+        ];
+
+        let both = |filter, search: &str| {
+            let p = page(
+                works.clone(),
+                &ListQuery {
+                    filter,
+                    search: search.into(),
+                    ..query(Sort::Title)
+                },
+            );
+            (ids(&p).join(","), p.total, p.library_count)
+        };
+        assert_eq!(both(Filter::Partial, "TWO"), ("p".into(), 1, 4));
+        // Passes the search, not the filter; passes the filter, not the search.
+        assert_eq!(both(Filter::Complete, " two "), (String::new(), 0, 4));
+        assert_eq!(both(Filter::Partial, "complete"), (String::new(), 0, 4));
+        assert_eq!(both(Filter::None, "work 001"), ("n".into(), 1, 4));
+        assert_eq!(both(Filter::None, "work").1, 2);
+    }
+
     #[test]
     fn a_page_is_cut_at_the_limit_and_an_empty_result_has_no_next() {
         let works = mixed();

@@ -586,3 +586,79 @@ async fn an_entrys_korean_titles_are_stored_and_replaced_when_it_is_received_aga
         ["봇치 더 록!", "외톨이 THE ROCK!"]
     );
 }
+
+/// An entry of `status` that starts in `year` (`None` when AniList does not say).
+fn aired(id: i64, status: &str, year: Option<i32>) -> Entry {
+    Entry {
+        start: FuzzyDate {
+            year,
+            month: None,
+            day: None,
+        },
+        ..entry(id, status, 1)
+    }
+}
+
+#[tokio::test]
+async fn the_overview_takes_the_year_and_airing_of_the_latest_season_from_its_linked_entries() {
+    let env = Env::new(&[
+        ("Alpha", &[1]),
+        ("Beta", &[1]),
+        ("Delta", &[1, 2]),
+        ("Epsilon", &[1]),
+        ("Gamma", &[1]),
+        ("Zeta", &[1, 2]),
+        ("Eta", &[1]),
+    ])
+    .await;
+    for entry in [
+        aired(1, "FINISHED", Some(2019)),
+        aired(2, "RELEASING", Some(2024)),
+        aired(3, "RELEASING", Some(2010)),
+        aired(4, "RELEASING", Some(2025)),
+        aired(5, "NOT_YET_RELEASED", None),
+        aired(6, "FINISHED", Some(2015)),
+        aired(7, "RELEASING", Some(2026)),
+    ] {
+        env.store.put_entry(entry).await.unwrap();
+    }
+    let link = |name: &'static str, season: u32, ids: Vec<i64>| {
+        let env = &env;
+        async move {
+            let work = env.id(name).await;
+            let version = env.store.link(&work, season).await.unwrap().version;
+            env.store
+                .set_links(&work, season, version, ids)
+                .await
+                .unwrap();
+        }
+    };
+    link("Alpha", 1, vec![1]).await;
+    link("Beta", 1, vec![2]).await;
+    // Season 1 is releasing and season 2 is the latest: the latest decides.
+    link("Delta", 1, vec![3]).await;
+    link("Delta", 2, vec![4]).await;
+    link("Epsilon", 1, vec![5]).await;
+    // Season 1 is releasing, but the latest season, 2, has no link.
+    link("Zeta", 1, vec![3]).await;
+    // The year is the first entry's; any releasing entry of the season is airing.
+    link("Eta", 1, vec![6, 7]).await;
+
+    let overview = env.library.overview().await.unwrap();
+    let of = |name: &str| overview.iter().find(|w| w.dir_name == name).unwrap();
+    let facts = |name: &str| (of(name).airing_year, of(name).airing);
+    assert_eq!(facts("Alpha"), (Some(2019), false));
+    assert_eq!(facts("Beta"), (Some(2024), true));
+    assert_eq!(facts("Delta"), (Some(2025), true));
+    assert_eq!(facts("Epsilon"), (None, false));
+    assert_eq!(facts("Gamma"), (None, false));
+    assert_eq!(facts("Zeta"), (None, false));
+    assert_eq!(facts("Eta"), (Some(2015), true));
+
+    // Every linked entry of every season lends its titles, the native one first.
+    assert_eq!(
+        of("Delta").linked_titles,
+        ["エントリー 3", "Entry 3", "エントリー 4", "Entry 4"]
+    );
+    assert!(of("Gamma").linked_titles.is_empty());
+}

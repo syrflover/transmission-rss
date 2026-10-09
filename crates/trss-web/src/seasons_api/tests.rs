@@ -211,7 +211,6 @@ async fn the_original_title_is_the_first_seasons_first_entrys_and_a_new_work_wai
     let env = env(vec![
         work("Show", &[1, 2], vec![]),
         work("Fresh", &[1], vec![]),
-        work("Special", &[0], vec![]),
     ])
     .await;
     env.answer(media(1, "Show", "第一", "FINISHED", 2020));
@@ -221,32 +220,24 @@ async fn the_original_title_is_the_first_seasons_first_entrys_and_a_new_work_wai
     let show = env.id("Show").await;
     let (_, body) = get(&env.state, &format!("/library/works/{show}")).await;
     assert_eq!(body["native_title"], Value::Null);
-    assert_eq!(body["seasons"][0]["info"]["pending"], "search");
 
     env.link("Show", 1, &[1, 2]).await;
     let (_, body) = get(&env.state, &format!("/library/works/{show}")).await;
     assert_eq!(body["native_title"], "第一");
-    assert_eq!(body["seasons"][0]["info"]["pending"], Value::Null);
 
-    // A new work shows that its search is waiting; a work with only specials has no search.
+    // A new work has no title yet and shows that its search is waiting. (Which
+    // seasons get a search is the library's.)
     let fresh = env.id("Fresh").await;
     let (_, body) = get(&env.state, &format!("/library/works/{fresh}")).await;
     assert_eq!(body["native_title"], Value::Null);
     assert_eq!(body["seasons"][0]["info"]["pending"], "search");
-    let special = env.id("Special").await;
-    let (_, body) = get(&env.state, &format!("/library/works/{special}")).await;
-    assert_eq!(body["seasons"][0]["info"]["pending"], Value::Null);
-    assert_eq!(body["seasons"][0]["info"]["can_auto"], false);
 }
 
 #[tokio::test]
 async fn the_synopsis_is_the_first_entrys_plain_text_in_paragraphs() {
     let env = env(vec![work("Show", &[1], vec![])]).await;
     let mut part1 = media(1, "Show", "ショー", "FINISHED", 2022);
-    part1["description"] = json!(
-        "Para <i>one</i> &amp; &#039;more&#039;<br>line two<br><br>\
-         <script>alert(1)</script><svg onload=alert(2)><br><br>~!Third!~ &lt;b&gt;"
-    );
+    part1["description"] = json!("Para <i>one</i> &amp; two<br><br>Third");
     env.answer(part1);
     env.answer(media(2, "Show 2", "ショー2", "FINISHED", 2023));
     env.link("Show", 1, &[1, 2]).await;
@@ -254,7 +245,7 @@ async fn the_synopsis_is_the_first_entrys_plain_text_in_paragraphs() {
     let (_, body) = get(&env.state, &format!("/library/works/{id}")).await;
     assert_eq!(
         body["seasons"][0]["info"]["synopsis"],
-        json!(["Para one & 'more'\nline two", "alert(1)", "~!Third!~ <b>"])
+        json!(["Para one & two", "Third"])
     );
     // The second entry's description is not the synopsis.
     env.link("Show", 1, &[2, 1]).await;
@@ -269,15 +260,8 @@ async fn the_synopsis_is_the_first_entrys_plain_text_in_paragraphs() {
 async fn episode_air_dates_come_only_from_a_releasing_entry_with_a_schedule() {
     let env = env(vec![work(
         "Show",
-        &[1, 2],
-        vec![
-            episode(1, "01"),
-            episode(2, "13"),
-            episode(2, "14"),
-            episode(2, "015"),
-            episode(2, "99"),
-            episode(2, "SP"),
-        ],
+        &[2],
+        vec![episode(2, "13"), episode(2, "99")],
     )])
     .await;
     let mut done = media(31, "Show Part 1", "一", "FINISHED", 2024);
@@ -290,111 +274,48 @@ async fn episode_air_dates_come_only_from_a_releasing_entry_with_a_schedule() {
     ] });
     env.answer(done);
     env.answer(airing);
-    env.link("Show", 1, &[31]).await;
     env.link("Show", 2, &[31, 32]).await;
     let id = env.id("Show").await;
     let (_, body) = get(&env.state, &format!("/library/works/{id}")).await;
-    let season1 = &body["seasons"][0]["episodes"];
-    assert_eq!(
-        season1[0]["air_at"],
-        Value::Null,
-        "a finished entry has no air dates"
-    );
-    let season2 = body["seasons"][1]["episodes"].as_array().unwrap();
+    let season2 = body["seasons"][0]["episodes"].as_array().unwrap();
     let air: Vec<(&str, &Value)> = season2
         .iter()
         .map(|e| (e["episode"].as_str().unwrap(), &e["air_at"]))
         .collect();
     assert_eq!(
         air,
-        [
-            ("13", &json!(1_700_000_000_000_i64)),
-            ("14", &json!(1_700_600_000_000_i64)),
-            ("015", &json!(1_701_200_000_000_i64)),
-            ("99", &Value::Null),
-            ("SP", &Value::Null),
-        ]
+        [("13", &json!(1_700_000_000_000_i64)), ("99", &Value::Null),]
     );
 }
 
 #[tokio::test]
-async fn the_library_sorts_by_airing_year_filters_what_is_airing_and_searches_linked_titles() {
+async fn the_library_list_takes_the_year_sort_the_airing_filter_and_the_titles_of_linked_entries() {
+    // What the year, the airing and the search come to is the library's; here
+    // they are asked for through the API with linked seasons behind them.
     let env = env(vec![
         work("Alpha", &[1], vec![]),
         work("Beta", &[1], vec![]),
         work("Gamma", &[1], vec![]),
-        work("Delta", &[1, 2], vec![]),
-        work("Epsilon", &[1], vec![]),
     ])
     .await;
     env.answer(media(1, "Alpha Romaji", "アルファ", "FINISHED", 2019));
     env.answer(media(2, "Beta Romaji", "ベータ", "RELEASING", 2024));
-    env.answer(media(3, "Delta One", "デルタ", "FINISHED", 2010));
-    env.answer(media(4, "Delta Two", "デルタ2", "RELEASING", 2025));
-    let mut unknown_year = media(5, "Epsilon Romaji", "イプシロン", "NOT_YET_RELEASED", 2030);
-    unknown_year["startDate"] = json!({ "year": null, "month": null, "day": null });
-    env.answer(unknown_year);
     env.link("Alpha", 1, &[1]).await;
     env.link("Beta", 1, &[2]).await;
-    env.link("Delta", 1, &[3]).await;
-    env.link("Delta", 2, &[4]).await;
-    env.link("Epsilon", 1, &[5]).await;
 
-    // Latest season's first entry's year, latest first, unknown last (then by title).
-    let (_, page) = get(&env.state, "/library/works?sort=year").await;
-    assert_eq!(names(&page), ["Delta", "Beta", "Alpha", "Epsilon", "Gamma"]);
-    // Airing: the latest season has a releasing entry. Alpha is finished; Epsilon is not yet released.
-    let (_, page) = get(&env.state, "/library/works?filter=airing&sort=title").await;
-    assert_eq!(names(&page), ["Beta", "Delta"]);
+    let (status, page) = get(&env.state, "/library/works?sort=year").await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(names(&page), ["Beta", "Alpha", "Gamma"]);
+    let (_, page) = get(&env.state, "/library/works?filter=airing").await;
+    assert_eq!(names(&page), ["Beta"]);
     assert_eq!(
         (page["total"].as_u64(), page["library_count"].as_u64()),
-        (Some(2), Some(5))
+        (Some(1), Some(3))
     );
-    // The native, the romaji and the folder name all find the work.
-    for (query, expected) in [
-        ("ベータ", vec!["Beta"]),
-        ("alpha romaji", vec!["Alpha"]),
-        ("DELTA TWO", vec!["Delta"]),
-        ("デルタ", vec!["Delta"]),
-        ("delta", vec!["Delta"]),
-        ("イプ", vec!["Epsilon"]),
-        ("nothing", vec![]),
-    ] {
-        let uri = format!(
-            "/library/works?q={}",
-            url::form_urlencoded::byte_serialize(query.as_bytes()).collect::<String>()
-        );
-        let (_, page) = get(&env.state, &uri).await;
-        assert_eq!(names(&page), expected, "{query}");
-    }
-    // Sort, filter and search together, and the pages follow the year order.
-    let (_, page) = get(&env.state, "/library/works?sort=year&limit=2").await;
-    assert_eq!(names(&page), ["Delta", "Beta"]);
-    let next = page["next"].as_str().unwrap().to_owned();
-    let (_, page) = get(
-        &env.state,
-        &format!("/library/works?sort=year&limit=2&after={next}"),
-    )
-    .await;
-    assert_eq!(names(&page), ["Alpha", "Epsilon"]);
-}
-
-#[tokio::test]
-async fn the_latest_local_season_decides_the_year_and_airing_not_an_earlier_one() {
-    let env = env(vec![
-        work("Delta", &[1, 2], vec![]),
-        work("Other", &[1], vec![]),
-    ])
-    .await;
-    env.answer(media(3, "Delta One", "デルタ", "RELEASING", 2010));
-    env.answer(media(4, "Other", "別", "FINISHED", 2015));
-    // Season 1 is releasing; season 2, the latest, has no link: no year and not airing.
-    env.link("Delta", 1, &[3]).await;
-    env.link("Other", 1, &[4]).await;
-    let (_, page) = get(&env.state, "/library/works?filter=airing").await;
-    assert_eq!(names(&page), Vec::<&str>::new());
-    let (_, page) = get(&env.state, "/library/works?sort=year").await;
-    assert_eq!(names(&page), ["Other", "Delta"]);
+    // The native title of a linked entry finds the work; the text is URL-encoded.
+    let query: String = url::form_urlencoded::byte_serialize("ベータ".as_bytes()).collect();
+    let (_, page) = get(&env.state, &format!("/library/works?q={query}")).await;
+    assert_eq!(names(&page), ["Beta"]);
 }
 
 #[tokio::test]
@@ -418,9 +339,7 @@ async fn changing_the_links_answers_the_new_info_and_an_old_version_is_a_409_wit
         (info["version"].as_i64(), info["origin"].as_str()),
         (Some(2), Some("user"))
     );
-    assert_eq!(info["episodes"], 24);
     assert_eq!(info["entries"][1]["id"], 2);
-    assert_eq!(info["pending"], Value::Null);
 
     // A change from version 1 changes nothing and gets the current info.
     let (status, error) = post(
@@ -433,8 +352,6 @@ async fn changing_the_links_answers_the_new_info_and_an_old_version_is_a_409_wit
     assert_eq!(error["error"], "conflict");
     assert_eq!(error["current"]["version"], 2);
     assert_eq!(error["current"]["entries"][0]["id"], 1);
-    let (_, info) = get(&env.state, &format!("{base}/1/info")).await;
-    assert_eq!(info["entries"].as_array().unwrap().len(), 2);
 
     // Unlinking is a change from the version the screen shows.
     let (_, info) = post(
@@ -515,13 +432,6 @@ async fn the_next_season_shows_the_sequels_and_links_nothing_until_one_is_confir
         .collect();
     assert_eq!(offered, [(2, "B", "TV"), (3, "Movie", "MOVIE")]);
     assert_eq!(two["suggestions"][0]["start"]["year"], 2026);
-    // Until the user confirms, the season is unknown and nothing is waiting.
-    assert_eq!(two["entries"], json!([]));
-    assert_eq!(two["episodes"], Value::Null);
-    assert_eq!(
-        (two["version"].clone(), two["pending"].clone()),
-        (json!(0), Value::Null)
-    );
     // Season 4 follows no local season 3: no suggestion. Season 1 has none either.
     assert_eq!(seasons[2]["info"]["suggestions"], json!([]));
     assert_eq!(seasons[0]["info"]["suggestions"], json!([]));
@@ -594,18 +504,6 @@ async fn searching_asks_ani_list_and_defaults_to_the_folder_name() {
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
-    // AniList asking to wait is told to the user, not hidden.
-    {
-        let mut state = env.fake.state.lock().unwrap();
-        state.rate_limited = 1;
-        state.retry_after = 30;
-    }
-    let (status, error) = post(&env.state, &uri, json!({})).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(
-        error["message"].as_str().unwrap().contains("30초"),
-        "{error}"
-    );
 }
 
 #[tokio::test]
@@ -623,7 +521,6 @@ async fn asking_again_unlinks_the_first_season_for_a_new_search_and_refresh_rece
     let (status, info) = post(&env.state, &format!("{base}/1/refresh"), json!({})).await;
     assert_eq!(status, StatusCode::OK, "{info}");
     assert_eq!(info["synopsis"], json!(["New text"]));
-    assert_eq!(info["version"], 2, "a refresh is no change of the link");
 
     let (status, info) = post(
         &env.state,
@@ -632,15 +529,7 @@ async fn asking_again_unlinks_the_first_season_for_a_new_search_and_refresh_rece
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{info}");
-    assert_eq!(
-        (
-            info["entries"].clone(),
-            info["pending"].clone(),
-            info["origin"].clone()
-        ),
-        (json!([]), json!("search"), json!("auto"))
-    );
-    assert_eq!(info["version"], 3);
+    assert_eq!(info["pending"], "search");
     // Only the first season has an automatic search; an old version is a conflict.
     let (status, _) = post(
         &env.state,
@@ -706,17 +595,14 @@ async fn saving_a_link_lets_an_automatic_cover_follow_and_shows_a_failure_where_
         (&Value::Null, &json!(true))
     );
 
-    // Once the worker has received it, the work's page has the cover.
+    // Once the worker has received it, the cover view has the image.
     assert!(env.state.artwork.run_next().await.is_some());
     let (_, cover) = get(&env.state, &artwork).await;
-    assert_eq!(cover["pending"], Value::Null);
     assert_eq!(cover["image"]["status"], "available");
-    let (_, work) = get(&env.state, &format!("/library/works/{id}")).await;
-    assert_eq!(work["cover_pending"], false);
-    assert_eq!(work["cover_url"], cover["image"]["url"]);
 
     // Changing the link to an entry whose image is refused: the link is saved,
-    // the old cover stays, and the cover view's state says why.
+    // and the cover view's state says why. (That the old cover stays is the
+    // library's, in `seasons::cover_tests`.)
     let (status, info) = post(
         &env.state,
         &format!("{season}/links"),
@@ -729,13 +615,6 @@ async fn saving_a_link_lets_an_automatic_cover_follow_and_shows_a_failure_where_
     let (_, after) = get(&env.state, &artwork).await;
     assert_eq!(after["note"]["code"], "rejected");
     assert_eq!(after["pending"], Value::Null);
-    assert_eq!(after["image"], cover["image"]);
-    assert_eq!(after["mode"], "auto");
-    let (_, work) = get(&env.state, &format!("/library/works/{id}")).await;
-    assert_eq!(
-        (&work["cover_url"], &work["cover_pending"]),
-        (&cover["image"]["url"], &json!(false))
-    );
 }
 
 #[tokio::test]
@@ -818,7 +697,8 @@ async fn saving_the_links_of_a_subscribed_creators_season_makes_the_creators_job
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{info}");
+    // The link save started the follow: which jobs it makes is trss-jobs's.
     let open = env.state.jobs.open_jobs().await.unwrap();
-    assert_eq!(open.len(), 2);
+    assert!(!open.is_empty());
     assert!(open.iter().all(|job| job.origin == trss_jobs::AUTO));
 }

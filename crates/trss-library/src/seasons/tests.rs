@@ -334,6 +334,35 @@ async fn a_stale_version_changes_nothing_and_a_missing_entry_links_nothing() {
 }
 
 #[tokio::test]
+async fn a_season_links_eight_entries_at_most_and_the_ninth_is_refused_before_any_request() {
+    let env = Env::new(&[("Show", &[1])]).await;
+    let id = env.id("Show").await;
+    env.drain().await;
+    for n in 1..=9 {
+        env.answer(media(n, &format!("Part {n}"), "FINISHED", Some(12)));
+    }
+    let v = env.seasons.store.link(&id, 1).await.unwrap().version;
+    assert_eq!(MAX_ENTRIES, 8);
+
+    let before = env.requests();
+    match env.seasons.set_links(&id, 1, v, (1..=9).collect()).await {
+        Err(ActionError::Store(SeasonError::Invalid(_))) => {}
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+    assert_eq!(env.requests(), before, "nothing was asked of AniList");
+    let link = env.seasons.store.link(&id, 1).await.unwrap();
+    assert_eq!((link.version, ids(&link)), (v, vec![]));
+
+    // That many are taken, in the order given.
+    let link = env
+        .seasons
+        .set_links(&id, 1, v, (1..=8).rev().collect())
+        .await
+        .unwrap();
+    assert_eq!(ids(&link), [8, 7, 6, 5, 4, 3, 2, 1]);
+}
+
+#[tokio::test]
 async fn an_automatic_result_that_finishes_after_the_user_chose_changes_nothing() {
     let env = Env::new(&[("Lycoris Recoil", &[1])]).await;
     let id = env.id("Lycoris Recoil").await;
