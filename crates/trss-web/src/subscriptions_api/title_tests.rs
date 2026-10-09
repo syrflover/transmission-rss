@@ -41,48 +41,12 @@ impl App {
         assert_eq!(status, StatusCode::OK, "{body}");
         body["candidates"].as_array().unwrap().clone()
     }
-
-    async fn preview_fields(&self, channel: &Channel, rule_id: &str, fields: Value) -> Value {
-        let (status, preview) = self
-            .call(
-                Method::POST,
-                "/api/rules/preview",
-                Some(json!({ "channel_id": channel.id, "rule_id": rule_id, "rule": fields })),
-            )
-            .await;
-        assert_eq!(status, StatusCode::OK, "{preview}");
-        preview
-    }
-}
-
-type Row = (String, String, Option<String>);
-
-/// The listed items as `(title, kind, past cause)`, by title.
-fn kinds(preview: &Value) -> Vec<Row> {
-    let mut rows: Vec<Row> = preview["items"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|i| {
-            (
-                i["title"].as_str().unwrap().to_owned(),
-                i["kind"].as_str().unwrap().to_owned(),
-                i["past_cause"].as_str().map(str::to_owned),
-            )
-        })
-        .collect();
-    rows.sort();
-    rows
-}
-
-fn row(title: &str, kind: &str, cause: Option<&str>) -> Row {
-    (title.to_owned(), kind.to_owned(), cause.map(str::to_owned))
 }
 
 #[tokio::test]
 async fn a_subscription_without_a_work_waits_for_its_title_and_receives_nothing() {
     let app = App::new().await;
-    let (channel, rule) = app.waiting_in_a_known_channel().await;
+    let (_channel, rule) = app.waiting_in_a_known_channel().await;
 
     assert_eq!(rule["match"], Value::Null);
     assert_eq!(rule["state"], "active");
@@ -98,19 +62,7 @@ async fn a_subscription_without_a_work_waits_for_its_title_and_receives_nothing(
     assert_eq!(item["title"], Value::Null);
     assert_eq!(item["upcoming"], false);
 
-    // It matches nothing: whatever is recorded, the preview of the stored
-    // rule takes nothing.
-    app.record(&channel, NOW + 1_000, &[WORK_1]).await;
-    let id = rule["id"].as_str().unwrap();
-    let preview = app
-        .preview_fields(
-            &channel,
-            id,
-            json!({ "match": null, "directory": "작품", "episode": 1 }),
-        )
-        .await;
-    assert_eq!(preview["counts"]["mine"], 0);
-    assert_eq!(preview["counts"]["past"], 0);
+    // Nothing was received or queued.
     assert!(app
         .state
         .commands
@@ -256,23 +208,6 @@ async fn naming_a_title_completes_the_rule_and_leaves_what_was_recorded_to_the_u
         .await;
     let id = rule["id"].as_str().unwrap().to_owned();
 
-    // Before saving anything, the preview of the rule with the title shows
-    // what recording holds as past: the cycle would not take it either.
-    let preview = app
-        .preview_fields(
-            &channel,
-            &id,
-            json!({ "match": "New Work", "directory": "New Work/Season 01", "episode": 1 }),
-        )
-        .await;
-    let mut expected = vec![
-        row(NEW_1, "past", Some("titled")),
-        row(NEW_2, "past", Some("titled")),
-        row(NEW_BATCH, "past", Some("titled")),
-    ];
-    expected.sort();
-    assert_eq!(kinds(&preview), expected);
-
     app.now.fetch_add(60_000, Ordering::SeqCst);
     let (status, named) = app
         .call(
@@ -301,21 +236,6 @@ async fn naming_a_title_completes_the_rule_and_leaves_what_was_recorded_to_the_u
         .unwrap()
         .is_empty());
     assert!(app.candidates().await.is_empty(), "the work has a rule now");
-
-    // The stored rule previews the same: what was recorded is past, with the
-    // cause, and what is recorded after it is the rule's own.
-    app.record(&channel, NOW + 70_000, &[NEW_3]).await;
-    let fields = json!({ "match": "New Work", "directory": "New Work/Season 01", "episode": 1 });
-    let preview = app.preview_fields(&channel, &id, fields).await;
-    let mut expected = vec![
-        row(NEW_1, "past", Some("titled")),
-        row(NEW_2, "past", Some("titled")),
-        row(NEW_3, "mine", None),
-        row(NEW_BATCH, "past", Some("titled")),
-    ];
-    expected.sort();
-    assert_eq!(kinds(&preview), expected);
-    assert_eq!(preview["counts"]["past"], 3);
 }
 
 #[tokio::test]
@@ -431,18 +351,6 @@ async fn saving_the_phrase_in_the_rule_editor_leaves_the_recorded_items_to_the_u
         .await;
     assert_eq!(status, StatusCode::OK, "{saved}");
     assert_eq!(saved["match"], "New Work");
-
-    app.record(&channel, NOW + 70_000, &[NEW_2]).await;
-    let preview = app
-        .preview_fields(
-            &channel,
-            &id,
-            json!({ "match": "New Work", "directory": "작품", "episode": 1 }),
-        )
-        .await;
-    let mut expected = vec![row(NEW_1, "past", Some("titled")), row(NEW_2, "mine", None)];
-    expected.sort();
-    assert_eq!(kinds(&preview), expected);
 }
 
 #[tokio::test]

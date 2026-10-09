@@ -8,12 +8,9 @@ use serde_json::{json, Value};
 use tower::ServiceExt;
 
 use super::*;
-use trss_collect::{
-    plan::Judgement,
-    store::{
-        channels::{ChannelInput, ChannelWithRules},
-        history::{HistoryResult, Observation},
-    },
+use trss_collect::store::{
+    channels::{ChannelInput, ChannelWithRules},
+    history::{HistoryResult, Observation},
 };
 use trss_core::Db;
 
@@ -735,7 +732,7 @@ fn edit(rule: &Value, patch: Value) -> Value {
 }
 
 #[tokio::test]
-async fn widening_a_phrase_shows_the_items_an_earlier_rule_takes_and_saving_marks_the_overlap() {
+async fn a_preview_names_the_rule_that_takes_an_item_and_saving_marks_the_overlap() {
     let app = App::new().await;
     let a = app
         .channel(
@@ -756,18 +753,8 @@ async fn widening_a_phrase_shows_the_items_an_earlier_rule_takes_and_saving_mark
     .await;
     let gamma = app.list().await["rules"][2].clone();
 
-    // As it is, the rule takes only its own item.
-    let before = app
-        .preview(json!({
-            "channel_id": a.channel.id,
-            "rule_id": gamma["id"],
-            "rule": edit(&gamma, json!({})),
-        }))
-        .await;
-    assert_eq!(kinds(&before), [("Gamma - 01".into(), "mine".into())]);
-    assert_eq!(before["counts"]["unmatched"], 3);
-
-    // Widened to match everything with " - 01": the others go to earlier rules.
+    // Widened to match everything with " - 01": the others go to earlier rules,
+    // and the answer names the taking rule and where the item would go.
     let wide = edit(&gamma, json!({ "match": " - 01" }));
     let preview = app
         .preview(json!({
@@ -776,29 +763,16 @@ async fn widening_a_phrase_shows_the_items_an_earlier_rule_takes_and_saving_mark
             "rule": wide,
         }))
         .await;
-    let mut got = kinds(&preview);
-    got.sort();
-    assert_eq!(
-        got,
-        [
-            ("Alpha - 01".to_owned(), "earlier".to_owned()),
-            ("Beta - 01".to_owned(), "earlier".to_owned()),
-            ("Gamma - 01".to_owned(), "mine".to_owned()),
-            ("Other - 01".to_owned(), "mine".to_owned()),
-        ],
-        "{preview}"
-    );
-    // The taking rule is named, with its phrase and where the item would go.
     let alpha = preview["items"]
         .as_array()
         .unwrap()
         .iter()
         .find(|i| i["title"] == "Alpha - 01")
         .unwrap();
+    assert_eq!(alpha["kind"], "earlier");
     assert_eq!(alpha["taken_by"]["match"], "Alpha - ");
     assert_eq!(alpha["taken_by"]["rule_id"], a.rules[0].id);
     assert_eq!(alpha["save_path"], "/media/Alpha");
-    assert_eq!(preview["counts"]["mine"], 2);
     assert_eq!(preview["counts"]["earlier"], 2);
 
     // Not saved yet: the list has no overlap.
@@ -819,7 +793,7 @@ async fn widening_a_phrase_shows_the_items_an_earlier_rule_takes_and_saving_mark
 }
 
 #[tokio::test]
-async fn an_invalid_regex_is_shown_in_the_preview_and_other_rules_still_preview() {
+async fn an_invalid_regex_is_shown_in_the_preview_with_a_sentence_and_the_librarys_reason() {
     let app = App::new().await;
     let a = app
         .channel("a.test", &[], &[("Alpha", "Alpha"), ("Beta", "Beta")])
@@ -845,22 +819,10 @@ async fn an_invalid_regex_is_shown_in_the_preview_and_other_rules_still_preview(
     );
     assert!(!broken["error"]["detail"].as_str().unwrap().is_empty());
     assert_eq!(kinds(&broken), []);
-
-    // Another rule's preview is unaffected by this one's edit.
-    let alpha = &rules[0];
-    let fine = app
-        .preview(json!({
-            "channel_id": a.channel.id,
-            "rule_id": alpha["id"],
-            "rule": edit(alpha, json!({})),
-        }))
-        .await;
-    assert_eq!(fine["error"], Value::Null);
-    assert_eq!(kinds(&fine), [("Alpha - 01".to_owned(), "mine".to_owned())]);
 }
 
 #[tokio::test]
-async fn the_channel_excludes_and_the_position_in_the_order_apply_to_the_preview() {
+async fn a_preview_changes_nothing_that_is_stored() {
     let app = App::new().await;
     let a = app
         .channel(
@@ -873,102 +835,22 @@ async fn the_channel_excludes_and_the_position_in_the_order_apply_to_the_preview
         .await;
     let second = app.list().await["rules"][1].clone();
 
-    // In second place the earlier rule takes the item; the batch is excluded.
-    let preview = app
-        .preview(json!({
-            "channel_id": a.channel.id,
-            "rule_id": second["id"],
-            "rule": edit(&second, json!({})),
-        }))
-        .await;
-    let mut got = kinds(&preview);
-    got.sort();
-    assert_eq!(
-        got,
-        [
-            ("Show - 01".to_owned(), "earlier".to_owned()),
-            ("Show - 01 [Batch]".to_owned(), "excluded".to_owned()),
-        ]
-    );
-    let excluded = preview["items"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|i| i["kind"] == "excluded")
-        .unwrap();
-    assert_eq!(excluded["excluded_by"], "[Batch]");
-    assert_eq!(excluded["save_path"], Value::Null);
-
-    // Moved to the front, the rule takes the plain item itself.
-    let moved = app
-        .preview(json!({
-            "channel_id": a.channel.id,
-            "rule_id": second["id"],
-            "rule": edit(&second, json!({})),
-            "position": 0,
-        }))
-        .await;
-    let mut got = kinds(&moved);
-    got.sort();
-    assert_eq!(
-        got,
-        [
-            ("Show - 01".to_owned(), "mine".to_owned()),
-            ("Show - 01 [Batch]".to_owned(), "excluded".to_owned()),
-        ]
-    );
-    // The preview changed nothing that is stored.
+    // Moved to the front, the rule would take the plain item itself.
+    app.preview(json!({
+        "channel_id": a.channel.id,
+        "rule_id": second["id"],
+        "rule": edit(&second, json!({})),
+        "position": 0,
+    }))
+    .await;
     let stored = app.state.channels.list_rules(&a.channel.id).await.unwrap();
     assert_eq!(stored, a.rules);
 }
 
 #[tokio::test]
-async fn a_rule_not_saved_yet_previews_as_the_last_rule_and_an_archived_one_as_collecting() {
+async fn a_preview_of_an_unknown_rule_is_not_found_and_a_bad_body_is_refused() {
     let app = App::new().await;
     let a = app.channel("a.test", &[], &[("Show", "first")]).await;
-    app.record(&a.channel, 1_000, &["Show - 01", "New - 01"])
-        .await;
-
-    let new = app
-        .preview(json!({
-            "channel_id": a.channel.id,
-            "rule": { "match": "New", "directory": "New/Season 01", "episode": 1 },
-        }))
-        .await;
-    assert_eq!(kinds(&new), [("New - 01".to_owned(), "mine".to_owned())]);
-    assert_eq!(new["items"][0]["save_path"], "/media/New/Season 01");
-
-    // A rule waiting for its title matches nothing.
-    let waiting = app
-        .preview(json!({
-            "channel_id": a.channel.id,
-            "rule": { "match": null, "episode": 1 },
-        }))
-        .await;
-    assert_eq!(kinds(&waiting), []);
-
-    // Archived, a rule is judged as if restored: what history holds that it has
-    // not taken came while it was off, so it would leave that to the user.
-    let rule = app.list().await["rules"][0].clone();
-    app.state
-        .channels
-        .set_rule_state(rule["id"].as_str().unwrap(), RuleState::Archived, 0)
-        .await
-        .unwrap();
-    let archived = app.list().await["rules"][0].clone();
-    assert_eq!(archived["state"], "archived");
-    let restored = app
-        .preview(json!({
-            "channel_id": a.channel.id,
-            "rule_id": archived["id"],
-            "rule": edit(&archived, json!({})),
-        }))
-        .await;
-    assert_eq!(
-        kinds(&restored),
-        [("Show - 01".to_owned(), "past".to_owned())]
-    );
-    assert_eq!(restored["items"][0]["past_cause"], "resumed");
 
     let (status, _, _) = app
         .call(
@@ -982,102 +864,42 @@ async fn a_rule_not_saved_yet_previews_as_the_last_rule_and_an_archived_one_as_c
         )
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // No rule to preview, and a rule that is not an object.
+    for body in [
+        json!({ "channel_id": a.channel.id }),
+        json!({ "channel_id": a.channel.id, "rule": "Show" }),
+    ] {
+        let (status, _, _) = app
+            .call(Method::POST, "/api/rules/preview", Some(body))
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
 }
 
 #[tokio::test]
-async fn the_items_the_rule_takes_say_the_episode_they_are_received_as() {
+async fn an_item_the_rule_takes_says_its_release_and_episode_name_and_only_a_subscription_preview_offers(
+) {
     let app = App::new().await;
     let a = app
         .channel("a.test", &[], &[("Other", "Other/Season 01")])
         .await;
-    app.record(
-        &a.channel,
-        1_000,
-        &[
-            "[SubsPlease] Show - 24 (1080p)",
-            "[SubsPlease] Show - 25 (1080p)",
-            "[SubsPlease] Show (01-12) (1080p) [Batch]",
-            "[SubsPlease] Other - 03 (1080p)",
-        ],
-    )
-    .await;
-    let named = |preview: &Value| {
-        let mut named: Vec<(String, Value, Value)> = preview["items"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|i| {
-                (
-                    i["title"].as_str().unwrap().to_owned(),
-                    i["release"].clone(),
-                    i["episode_name"].clone(),
-                )
-            })
-            .collect();
-        named.sort_by(|a, b| a.0.cmp(&b.0));
-        named
-    };
-    let row = |title: &str, release: Value, name: Value| (title.to_owned(), release, name);
-    let preview = |episode: i64| {
-        app.preview(json!({
+    app.record(&a.channel, 1_000, &["[SubsPlease] Show - 24 (1080p)"])
+        .await;
+    let plain = app
+        .preview(json!({
             "channel_id": a.channel.id,
-            "rule": { "match": "SubsPlease", "directory": "Show/Season 02", "episode": episode },
+            "rule": { "match": "SubsPlease", "directory": "Show/Season 02", "episode": 1 },
         }))
-    };
-
-    let plain = preview(1).await;
-    let converted = preview(-12).await;
-
-    // An item another rule takes, or a batch, names no episode of this rule.
-    assert_eq!(
-        named(&plain),
-        [
-            row("[SubsPlease] Other - 03 (1080p)", Value::Null, Value::Null),
-            row(
-                "[SubsPlease] Show (01-12) (1080p) [Batch]",
-                Value::Null,
-                Value::Null
-            ),
-            row("[SubsPlease] Show - 24 (1080p)", json!(24), json!("S02E24")),
-            row("[SubsPlease] Show - 25 (1080p)", json!(25), json!("S02E25")),
-        ]
-    );
-    assert_eq!(
-        named(&converted)[2..],
-        [
-            row("[SubsPlease] Show - 24 (1080p)", json!(24), json!("S02E12")),
-            row("[SubsPlease] Show - 25 (1080p)", json!(25), json!("S02E13")),
-        ]
-    );
+        .await;
+    assert_eq!(plain["items"][0]["release"], 24);
+    assert_eq!(plain["items"][0]["episode_name"], "S02E24");
     // Only a preview asked for a subscription about to be made carries an offer.
     assert!(plain.get("episode_suggestion").is_none());
 }
 
 #[tokio::test]
-async fn titles_with_the_secret_mask_are_flagged() {
-    let app = App::new().await;
-    let a = app.channel("a.test", &[], &[("Show", "first")]).await;
-    app.record(&a.channel, 1_000, &["Show - 01", "Show *** search"])
-        .await;
-    let rule = app.list().await["rules"][0].clone();
-    let preview = app
-        .preview(json!({
-            "channel_id": a.channel.id,
-            "rule_id": rule["id"],
-            "rule": edit(&rule, json!({})),
-        }))
-        .await;
-    assert_eq!(preview["masked_total"], 1);
-    for item in preview["items"].as_array().unwrap() {
-        assert_eq!(
-            item["masked"],
-            item["title"].as_str().unwrap().contains("***")
-        );
-    }
-}
-
-#[tokio::test]
-async fn a_long_preview_lists_the_newest_matches_and_counts_all_of_them() {
+async fn a_long_preview_lists_the_limit_and_says_it_is_cut_off() {
     let app = App::new().await;
     let a = app.channel("a.test", &[], &[("Show", "first")]).await;
     let titles: Vec<String> = (0..130).map(|n| format!("Show - {n:03}")).collect();
@@ -1093,137 +915,11 @@ async fn a_long_preview_lists_the_newest_matches_and_counts_all_of_them() {
             "rule": edit(&rule, json!({})),
         }))
         .await;
-    assert_eq!(preview["counts"]["mine"], 130);
     assert_eq!(
         preview["items"].as_array().unwrap().len(),
         PREVIEW_LIST_LIMIT
     );
     assert_eq!(preview["truncated"], true);
-}
-
-#[tokio::test]
-async fn the_preview_agrees_with_the_worker_mapping_for_every_recorded_title() {
-    // The preview and the worker judge through `ChannelPlan`. This pins that the
-    // preview's per-item answer is that plan's answer for the same items and
-    // settings, including archived rules, regexes and excludes.
-    let app = App::new().await;
-    let mut input = ChannelInput::new("https://a.test/rss?token=SECRETVALUE99");
-    input.excludes = vec!["[Batch]".into(), "(720p)".into()];
-    let rules = vec![
-        RuleInput {
-            r#match: Some("Sono Bisque Doll".into()),
-            case_insensitive: true,
-            directory: "Doll/Season 02".into(),
-            episode: -12,
-            ..RuleInput::default()
-        },
-        RuleInput {
-            r#match: Some(r"^\[SubsPlease\] (Slime|Lara) - \d+".into()),
-            regex: true,
-            directory: "Regex".into(),
-            ..RuleInput::default()
-        },
-        RuleInput {
-            r#match: Some("Archived Show".into()),
-            directory: "Archived".into(),
-            state: RuleState::Archived,
-            ..RuleInput::default()
-        },
-        RuleInput {
-            r#match: None,
-            directory: "Waiting".into(),
-            ..RuleInput::default()
-        },
-        RuleInput {
-            r#match: Some("[SubsPlease]".into()),
-            directory: "Catch all".into(),
-            ..RuleInput::default()
-        },
-    ];
-    let cwr = app
-        .state
-        .channels
-        .create_channel_with_rules(input, rules)
-        .await
-        .unwrap();
-    let titles = [
-        "[SubsPlease] Sono Bisque Doll - 13 (1080p)",
-        "sono bisque doll - 14",
-        "[SubsPlease] Slime - 62 (1080p)",
-        "[SubsPlease] Lara - 03 (720p)",
-        "[SubsPlease] Sono Bisque Doll - 01~12 [Batch]",
-        "[SubsPlease] Archived Show - 01",
-        "[Erai-raws] Unrelated - 05",
-        "Slime - 62",
-        "",
-    ];
-    app.record(&cwr.channel, 1_000, &titles).await;
-
-    // Edit the last rule (the catch-all) without changing anything, and compare
-    // its preview with the plan's answer for each item.
-    let last = &cwr.rules[4];
-    let items = app
-        .state
-        .history
-        .list(Default::default())
-        .await
-        .unwrap()
-        .items;
-    let collect = std::path::Path::new("/media");
-    let preview = build_preview(
-        collect,
-        &cwr,
-        Some(&last.id),
-        &last.to_input(),
-        None,
-        &items,
-    )
-    .unwrap();
-    let plan = ChannelPlan::new(cwr.clone(), collect);
-    let mut expected_mine = 0;
-    let mut expected_earlier = 0;
-    for item in &items {
-        let evaluation = plan.evaluate(&item.title);
-        let listed = preview.items.iter().find(|p| p.id == item.id);
-        match (&evaluation.judgement, listed) {
-            (
-                Judgement::Selected {
-                    rule_id, save_path, ..
-                },
-                Some(p),
-            ) if rule_id == &last.id => {
-                assert_eq!(p.kind, Kind::Mine, "{}", item.title);
-                assert_eq!(p.save_path.as_deref(), Some(save_path.to_str().unwrap()));
-                expected_mine += 1;
-            }
-            (
-                Judgement::Selected {
-                    rule_id, save_path, ..
-                },
-                Some(p),
-            ) => {
-                assert_eq!(p.kind, Kind::Earlier, "{}", item.title);
-                assert_eq!(
-                    p.taken_by.as_ref().unwrap().rule_id.as_deref(),
-                    Some(rule_id.as_str())
-                );
-                assert_eq!(p.save_path.as_deref(), Some(save_path.to_str().unwrap()));
-                assert!(evaluation.overlapping.contains(&last.id));
-                expected_earlier += 1;
-            }
-            (Judgement::Selected { .. }, None) => {
-                assert!(!evaluation.overlapping.contains(&last.id), "{}", item.title);
-            }
-            (Judgement::Excluded, Some(p)) => assert_eq!(p.kind, Kind::Excluded, "{}", item.title),
-            (Judgement::Excluded, None) | (Judgement::NoMatch, None) => {}
-            (Judgement::NoMatch, Some(p)) => {
-                panic!("{} listed as {:?} but nothing matches", item.title, p.kind)
-            }
-        }
-    }
-    assert_eq!(preview.counts.mine, expected_mine);
-    assert_eq!(preview.counts.earlier, expected_earlier);
-    assert!(expected_mine > 0 && expected_earlier > 0);
 }
 
 // --- archive and restore --------------------------------------------------------

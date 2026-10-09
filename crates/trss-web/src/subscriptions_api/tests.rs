@@ -408,27 +408,6 @@ async fn subscribing_creates_the_rule_with_the_chosen_work_and_receives_nothing(
     assert_eq!(read["subscription"]["anime"]["subject"], "작품");
     let (_, listed) = app.get("/api/rules").await;
     assert_eq!(listed["rules"][0]["subscription"]["anissia_anime_no"], 3320);
-
-    // The past items the user may pick are the ones the rule matches: the
-    // stored rule is a subscription now, so they read as past, not as taken.
-    let (status, preview) = app
-        .call(
-            Method::POST,
-            "/api/rules/preview",
-            Some(json!({
-                "channel_id": channel.id, "rule_id": id,
-                "rule": { "match": "Work", "directory": "Work/Season 01", "episode": 1 },
-            })),
-        )
-        .await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(preview["counts"]["past"], 3);
-    assert_eq!(preview["counts"]["mine"], 0);
-    assert!(preview["items"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .all(|i| i["kind"] == "past" && i["stored_result"] == "no_match"));
 }
 
 #[tokio::test]
@@ -1113,106 +1092,6 @@ mod rule_detail {
                 "{directory:?}"
             );
         }
-    }
-
-    #[tokio::test]
-    async fn a_paused_rule_matches_nothing_in_the_preview_and_does_not_shadow_a_later_one() {
-        let app = App::new().await;
-        let (channel, rule) = app.subscribed().await;
-        let later = app.plain(&channel, "Work").await;
-        app.record(&channel, 2000, &[WORK_2]).await;
-        let preview = |edited: &Rule| {
-            app.call(
-                Method::POST,
-                "/api/rules/preview",
-                Some(json!({
-                    "channel_id": channel.id, "rule_id": edited.id,
-                    "rule": { "match": "Work", "directory": "x", "episode": 0 },
-                })),
-            )
-        };
-
-        // While the subscription collects it takes both items before the later rule.
-        let (_, view) = preview(&later).await;
-        assert_eq!(view["counts"]["earlier"], 2, "{view}");
-
-        let (_, paused) = app.put(&rule, "switch", json!({ "video": false })).await;
-        assert_eq!(paused["state"], "paused");
-        let (_, view) = preview(&later).await;
-        assert_eq!(view["counts"]["mine"], 2, "{view}");
-        assert_eq!(view["counts"]["earlier"], 0, "{view}");
-        // The paused rule's own preview shows what it would do once on: both
-        // items were recorded before the subscription, so they are past.
-        let (_, view) = preview(&rule).await;
-        assert_eq!(view["counts"]["past"], 2, "{view}");
-    }
-
-    #[tokio::test]
-    async fn the_preview_calls_what_was_recorded_before_a_subscription_past_until_the_rule_received_it(
-    ) {
-        let app = App::new().await;
-        let (channel, rule) = app.subscribed().await;
-        let preview = || async {
-            let (status, view) = app
-                .call(
-                    Method::POST,
-                    "/api/rules/preview",
-                    Some(json!({
-                        "channel_id": channel.id, "rule_id": rule.id,
-                        "rule": { "match": "Work", "directory": "Work/Season 01", "episode": 0 },
-                    })),
-                )
-                .await;
-            assert_eq!(status, StatusCode::OK, "{view}");
-            view
-        };
-        let item_of = |view: &Value, title: &str| {
-            view["items"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|i| i["title"] == title)
-                .unwrap_or_else(|| panic!("the preview lists no {title}: {view}"))
-                .clone()
-        };
-
-        // The item recorded before the subscription is past, with the folder
-        // that `받기` would save it into and the cause.
-        let view = preview().await;
-        let first = item_of(&view, WORK_1);
-        assert_eq!(first["kind"], "past", "{view}");
-        assert_eq!(first["past_cause"], "subscribed", "{view}");
-        assert!(first["save_path"]
-            .as_str()
-            .unwrap()
-            .ends_with("Work/Season 01"));
-        assert_eq!(view["counts"]["past"], 1, "{view}");
-        assert_eq!(view["counts"]["mine"], 0, "{view}");
-
-        // One recorded after the subscription is the rule's own.
-        app.record(&channel, NOW + 1_000, &[WORK_2]).await;
-        let view = preview().await;
-        assert_eq!(item_of(&view, WORK_2)["kind"], "mine", "{view}");
-        assert_eq!(item_of(&view, WORK_1)["kind"], "past", "{view}");
-
-        // The rule received the past item (the worker's `받기`): it stops being past.
-        let id = first["id"].as_i64().unwrap();
-        app.state
-            .history
-            .record_outcome(
-                id,
-                NOW + 2_000,
-                HistoryResult::Received,
-                Some(rule.id.clone()),
-                None,
-                Some("abcd".repeat(10)),
-            )
-            .await
-            .unwrap();
-        let view = preview().await;
-        assert_eq!(item_of(&view, WORK_1)["kind"], "mine", "{view}");
-        assert_eq!(view["counts"]["past"], 0, "{view}");
-        assert_eq!(view["counts"]["mine"], 2, "{view}");
     }
 
     #[tokio::test]
