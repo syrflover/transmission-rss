@@ -144,6 +144,59 @@ mod tests {
     }
 
     #[test]
+    fn a_path_that_goes_up_and_down_again_is_the_folder_it_reaches() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(dir.path()).unwrap();
+        fs::create_dir_all(root.join("current/Shows")).unwrap();
+
+        let plain = check_folder(&root.join("current")).unwrap();
+        let roundabout = check_folder(&root.join("current/Shows/../../current")).unwrap();
+        assert_eq!(roundabout.real, root.join("current"));
+        assert_eq!(
+            conflict(&plain, &roundabout),
+            Some(Conflict::Overlapping(Overlap::Same))
+        );
+        // The trailing slash is no other folder either.
+        let slashed = check_folder(Path::new(&format!("{}/current/", root.display()))).unwrap();
+        assert_eq!(
+            conflict(&plain, &slashed),
+            Some(Conflict::Overlapping(Overlap::Same))
+        );
+    }
+
+    #[test]
+    fn a_link_cannot_hide_a_folder_inside_the_other() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(dir.path()).unwrap();
+        fs::create_dir_all(root.join("current/Shows")).unwrap();
+        fs::create_dir(root.join("archive")).unwrap();
+        std::os::unix::fs::symlink(root.join("current/Shows"), root.join("archive-link")).unwrap();
+        // A link to the collect folder itself, and a link to a link.
+        std::os::unix::fs::symlink(root.join("current"), root.join("current-link")).unwrap();
+        std::os::unix::fs::symlink(root.join("current-link"), root.join("current-link-2")).unwrap();
+
+        let collect = check_folder(&root.join("current")).unwrap();
+        let hidden = check_folder(&root.join("archive-link")).unwrap();
+        assert_eq!(hidden.real, root.join("current/Shows"));
+        assert_eq!(
+            conflict(&collect, &hidden),
+            Some(Conflict::Overlapping(Overlap::SecondInsideFirst))
+        );
+        assert_eq!(
+            conflict(&hidden, &collect),
+            Some(Conflict::Overlapping(Overlap::FirstInsideSecond))
+        );
+        let twice = check_folder(&root.join("current-link-2")).unwrap();
+        assert_eq!(
+            conflict(&collect, &twice),
+            Some(Conflict::Overlapping(Overlap::Same))
+        );
+        // A folder beside them is no overlap.
+        let beside = check_folder(&root.join("archive")).unwrap();
+        assert_eq!(conflict(&collect, &beside), None);
+    }
+
+    #[test]
     fn each_failure_of_a_path_is_told_apart() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("a.txt");

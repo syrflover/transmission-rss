@@ -146,6 +146,35 @@ async fn the_checklist_ends_once_both_steps_are_done_or_skipped_and_stays_ended(
 }
 
 #[tokio::test]
+async fn skipping_both_steps_ends_the_checklist_with_the_second_skip() {
+    let store = store().await;
+
+    store.set_skipped(Step::Folder, true, 10).await.unwrap();
+    let run = store.first_run().await.unwrap().unwrap();
+    assert!(run.active() && !run.ended);
+
+    store.set_skipped(Step::Import, true, 20).await.unwrap();
+    let run = store.first_run().await.unwrap().unwrap();
+    assert!(run.ended);
+    assert!(!run.active());
+}
+
+#[tokio::test]
+async fn a_checklist_finished_by_the_data_ends_whatever_has_been_removed_before_anyone_looks() {
+    let db = Db::open(":memory:").await.unwrap();
+    let store = SetupStore::new(db.clone());
+    exec(&db, ADD_FOLDER).await;
+    store.mark_import_applied(150).await.unwrap();
+    // The folder goes before the first `settle`: both steps happened all the same.
+    exec(&db, REMOVE_FOLDER).await;
+
+    let run = store.settle(200).await.unwrap().unwrap();
+    assert!(run.done(Step::Folder) && run.done(Step::Import));
+    assert!(run.ended);
+    assert!(!run.active());
+}
+
+#[tokio::test]
 async fn settling_ends_a_checklist_finished_by_the_data_and_keeps_its_first_end() {
     let db = Db::open(":memory:").await.unwrap();
     let store = SetupStore::new(db.clone());
@@ -177,6 +206,22 @@ async fn taking_back_the_last_skip_brings_the_checklist_back() {
     let run = store.first_run().await.unwrap().unwrap();
     assert!(run.active());
     assert!(!run.ended);
+}
+
+#[tokio::test]
+async fn taking_back_the_last_skip_after_the_folder_went_keeps_the_folder_step_done() {
+    let db = Db::open(":memory:").await.unwrap();
+    let store = SetupStore::new(db.clone());
+    exec(&db, ADD_FOLDER).await;
+    store.set_skipped(Step::Import, true, 10).await.unwrap();
+    assert!(store.first_run().await.unwrap().unwrap().ended);
+    exec(&db, REMOVE_FOLDER).await;
+
+    store.set_skipped(Step::Import, false, 20).await.unwrap();
+    let run = store.first_run().await.unwrap().unwrap();
+    assert!(run.active());
+    assert!(run.done(Step::Folder));
+    assert!(!run.done(Step::Import) && !run.skipped(Step::Import));
 }
 
 #[tokio::test]
