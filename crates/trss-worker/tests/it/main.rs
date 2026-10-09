@@ -4,7 +4,6 @@
 mod common;
 
 mod anissia_captions;
-mod app_data_files;
 mod archive_move;
 mod channel_edit_then_cycle;
 mod collect_folder;

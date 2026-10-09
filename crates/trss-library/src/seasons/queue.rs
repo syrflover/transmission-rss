@@ -22,10 +22,7 @@ use std::{path::PathBuf, time::Duration};
 
 use tokio_util::sync::CancellationToken;
 
-use trss_core::{
-    queue::{after, retry, run_item, Queue, Retry, LOCK_RETRY, POLL},
-    LockFile,
-};
+use trss_core::queue::{after, retry, run_item, Queue, Retry, LOCK_RETRY, POLL};
 
 use crate::{
     artwork::queue::RETRY_DELAYS,
@@ -42,11 +39,6 @@ use trss_anilist::{
 pub(crate) const QUEUE: &str = "Season queue";
 /// How long a refresh that failed waits before the entry is tried again.
 pub const REFRESH_RETRY: Duration = Duration::from_secs(60 * 60);
-
-/// The lock file's path for a database file.
-pub fn lock_path_for(db_path: &std::path::Path) -> PathBuf {
-    LockFile::Seasons.path_for(db_path)
-}
 
 /// What running one job came to (tests and logs).
 #[derive(Debug, Clone, PartialEq, Eq)]

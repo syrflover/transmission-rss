@@ -19,10 +19,7 @@ use std::{path::PathBuf, time::Duration};
 
 use tokio_util::sync::CancellationToken;
 
-use trss_core::{
-    queue::{retry, run_item, Queue, Retry, LOCK_RETRY, POLL},
-    LockFile,
-};
+use trss_core::queue::{retry, run_item, Queue, Retry, LOCK_RETRY, POLL};
 
 use crate::{
     artwork::{files, ActionError, Artwork},
@@ -44,11 +41,6 @@ pub const RETRY_DELAYS: [Duration; 3] = [
     Duration::from_secs(10 * 60),
     Duration::from_secs(60 * 60),
 ];
-
-/// The lock file's path for a database file.
-pub fn lock_path_for(db_path: &std::path::Path) -> PathBuf {
-    LockFile::Artwork.path_for(db_path)
-}
 
 /// What running one job came to (tests and logs).
 #[derive(Debug, Clone, PartialEq, Eq)]

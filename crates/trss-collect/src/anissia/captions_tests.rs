@@ -492,36 +492,15 @@ async fn a_list_that_never_ends_is_cut_at_the_page_limit() {
     assert_eq!(read.added, MAX_RECENT_PAGES as usize);
 }
 
-#[test]
-fn the_lock_sits_next_to_the_database_and_apart_from_the_other_queues() {
-    let path = lock_path_for(std::path::Path::new("/data/trss.db"));
-    assert_eq!(path.to_str(), Some("/data/trss.db.anissia-captions.lock"));
-    assert_ne!(
-        path,
-        crate::anissia::lock_path_for(std::path::Path::new("/data/trss.db"))
-    );
-}
-
 #[tokio::test]
-async fn the_queue_holds_its_lock_and_a_second_observer_waits_for_it() {
+async fn the_queue_reads_the_recent_list_once_and_then_waits_for_the_period() {
+    // That a queue waits while its lock is taken elsewhere is trss-core's rule
+    // (`queue` tests); this is the caption list's read interval.
     let dir = tempfile::tempdir().unwrap();
     let lock = dir.path().join("x.lock");
-    let held = trss_core::CycleLock::try_acquire(&lock).unwrap().unwrap();
-    // While the lock is held elsewhere the queue reads nothing.
     let env = Env::new().await;
     env.fake.set_recent(env.many(3));
-    let cancel = tokio_util::sync::CancellationToken::new();
-    let queue = tokio::spawn({
-        let (observer, lock, cancel) = (env.observer.clone(), lock.clone(), cancel.clone());
-        async move { observer.run_queue(lock, cancel).await }
-    });
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    assert_eq!(env.fake.requests().len(), 0);
-    cancel.cancel();
-    queue.await.unwrap();
-    drop(held);
 
-    // With the lock free the queue reads once and then waits for the period.
     let cancel = tokio_util::sync::CancellationToken::new();
     let queue = tokio::spawn({
         let (observer, lock, cancel) = (env.observer.clone(), lock.clone(), cancel.clone());

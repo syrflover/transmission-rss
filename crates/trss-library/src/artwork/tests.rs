@@ -712,11 +712,6 @@ async fn hundreds_of_new_works_are_searched_one_at_a_time_at_the_pace() {
         .await
         .unwrap();
     assert!(left >= 512, "{left}");
-    // The queue's lock is not the cycle's.
-    assert_ne!(
-        queue::lock_path_for(&env.dir.path().join("trss.db")),
-        trss_core::lock_path_for(&env.dir.path().join("trss.db"))
-    );
 }
 
 #[tokio::test]
@@ -725,7 +720,7 @@ async fn the_queue_stops_on_shutdown_and_a_restart_resumes_it() {
     env.fake.add_search("A", vec![], &[]);
     env.fake.add_search("B", vec![], &[]);
     let cancel = tokio_util::sync::CancellationToken::new();
-    let lock = queue::lock_path_for(&env.dir.path().join("trss.db"));
+    let lock = trss_core::LockFile::Artwork.path_for(&env.dir.path().join("trss.db"));
     let art = env.art.clone().with_spacing(Duration::from_secs(3600));
     let run = tokio::spawn({
         let (art, lock, cancel) = (art.clone(), lock.clone(), cancel.clone());

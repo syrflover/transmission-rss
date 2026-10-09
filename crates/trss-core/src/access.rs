@@ -93,9 +93,8 @@ impl std::error::Error for AccessError {}
 /// and journal files, every lock file ([`LockFile::ALL`]) and the wake socket
 /// (`wake_path_for`). The lock files come from [`LockFile`], so a new one is
 /// checked without being added here; the test
-/// `app_data_files_cover_every_lock_and_the_wake_socket` in the worker's
-/// tests keeps the wake socket and the paths the crates above make in step
-/// with this.
+/// `the_checked_suffixes_hold_every_lock_file_and_the_wake_socket_once` keeps
+/// the wake socket in step with this.
 pub const DATABASE_FILE_SUFFIXES: &[&str] = &SUFFIXES;
 
 const SUFFIXES: [&str; 5 + LockFile::ALL.len()] = {

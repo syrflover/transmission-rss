@@ -37,7 +37,7 @@ use tokio_util::sync::CancellationToken;
 
 use trss_core::{
     queue::{after, run_item, Queue, LOCK_RETRY, POLL},
-    LockFile, Millis,
+    Millis,
 };
 
 use trss_anissia::{Anissia, AnissiaError, LAST_WEEK};
@@ -51,11 +51,6 @@ mod tests;
 pub(crate) const QUEUE: &str = "Anissia queue";
 /// How long a refresh that failed waits before the anime are tried again.
 pub const REFRESH_RETRY: Duration = Duration::from_secs(60 * 60);
-
-/// The lock file's path for a database file.
-pub fn lock_path_for(db_path: &std::path::Path) -> PathBuf {
-    LockFile::Anissia.path_for(db_path)
-}
 
 /// What one refresh came to (tests and logs).
 #[derive(Debug, Clone, PartialEq, Eq)]

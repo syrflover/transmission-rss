@@ -1,10 +1,7 @@
 //! The server browser of the worker ([`trss_browser`]), made from the
 //! environment and the common policy in the app database.
 
-use std::{
-    io,
-    path::{Path, PathBuf},
-};
+use std::{io, path::Path};
 
 use trss_browser::{ActivitySource, BrowserPolicy, BrowserPool, PolicySource, PoolConfig};
 use trss_core::{settings::SettingsStore, Clock, CycleLock, Db, LockFile};
@@ -47,12 +44,6 @@ pub fn screen_activity(db: Db) -> ActivitySource {
     })
 }
 
-/// The lock file of the server browser for a database file: the database
-/// path plus `.browser.lock`, next to the database like the worker's own lock.
-pub fn lock_path_for(db_path: &Path) -> PathBuf {
-    LockFile::Browser.path_for(db_path)
-}
-
 /// Takes the right to use the browser container, for as long as the guard
 /// lives (the worker keeps it for its whole life; the operating system lets it
 /// go if the worker dies). `Ok(None)` means another worker has it.
@@ -61,7 +52,7 @@ pub fn lock_path_for(db_path: &Path) -> PathBuf {
 /// it does not know, so two workers on one container would end each other's
 /// runs. One worker at a time uses it.
 pub fn take_lock(db_path: &Path) -> io::Result<Option<CycleLock>> {
-    CycleLock::try_acquire(&lock_path_for(db_path))
+    CycleLock::try_acquire(&LockFile::Browser.path_for(db_path))
 }
 
 /// The pool over the browser container `env` names. This resets the
@@ -83,15 +74,12 @@ mod tests {
     fn one_worker_at_a_time_has_the_browser() {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("trss.db");
-        assert_eq!(lock_path_for(&db), dir.path().join("trss.db.browser.lock"));
 
         let first = take_lock(&db).unwrap();
         assert!(first.is_some());
+        // The lock file's name is trss-core's (`LockFile::Browser`).
+        assert!(LockFile::Browser.path_for(&db).exists());
         assert!(take_lock(&db).unwrap().is_none(), "a second worker got it");
-        // It is the browser's own lock, not the worker's.
-        assert!(CycleLock::try_acquire(&trss_core::lock_path_for(&db))
-            .unwrap()
-            .is_some());
 
         drop(first);
         assert!(take_lock(&db).unwrap().is_some());

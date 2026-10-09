@@ -53,7 +53,7 @@ use tokio_util::sync::CancellationToken;
 use trss_anissia::{Anissia, AnissiaError, CaptionLine};
 use trss_core::{
     queue::{after, run_item, Queue, LOCK_RETRY, POLL},
-    LockFile, Millis,
+    Millis,
 };
 
 use crate::store::anissia::{AnissiaStore, Line, Observed};
@@ -73,11 +73,6 @@ pub const ANIME_MAX_WAIT: Duration = Duration::from_secs(30);
 /// The longest wait a `429` can make the next reading keep (the client honours
 /// a `Retry-After` up to an hour).
 pub const LONGEST_WAIT: Duration = Duration::from_secs(60 * 60);
-
-/// The lock file's path for a database file.
-pub fn lock_path_for(db_path: &std::path::Path) -> PathBuf {
-    LockFile::AnissiaCaptions.path_for(db_path)
-}
 
 /// How a reading ended.
 #[derive(Debug, Clone, PartialEq, Eq)]

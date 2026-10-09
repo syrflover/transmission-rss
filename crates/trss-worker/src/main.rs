@@ -4,14 +4,16 @@ use tokio_util::sync::CancellationToken;
 use trss_anilist::AnilistConfig;
 use trss_anissia::{Anissia, AnissiaConfig};
 use trss_collect::{
-    anissia::{self, captions::CaptionObserver, AnissiaQueue},
+    anissia::{captions::CaptionObserver, AnissiaQueue},
     store::anissia::AnissiaStore,
 };
-use trss_core::{access::check_app_data, db::DB_PATH_ENV, lock_path_for, wake::wake_path_for, Db};
+use trss_core::{
+    access::check_app_data, db::DB_PATH_ENV, lock_path_for, wake::wake_path_for, Db, LockFile,
+};
 use trss_jobs::{place::unpack, JobRun, ReceiveArea, Runner, Unpacker};
 use trss_library::{
-    artwork::{self, AppData, Artwork},
-    seasons::{self, Seasons},
+    artwork::{AppData, Artwork},
+    seasons::Seasons,
 };
 use trss_subtitles::{
     auth::BrowserAuth, blogger::BloggerSource, drive::Drive, erulabo::ErulaboSource,
@@ -162,7 +164,7 @@ async fn run() -> Result<(), String> {
     // the collection loop and outside its lock.
     let queue = tokio::spawn({
         let cancel = cancel.clone();
-        let lock = artwork::queue::lock_path_for(&db_path);
+        let lock = LockFile::Artwork.path_for(&db_path);
         async move { artwork.run_queue(lock, cancel).await }
     });
 
@@ -170,7 +172,7 @@ async fn run() -> Result<(), String> {
     // refresh of entries that are not finished, on the same pace.
     let season_queue = tokio::spawn({
         let cancel = cancel.clone();
-        let lock = seasons::queue::lock_path_for(&db_path);
+        let lock = LockFile::Seasons.path_for(&db_path);
         async move { season_info.run_queue(lock, cancel).await }
     });
 
@@ -178,7 +180,7 @@ async fn run() -> Result<(), String> {
     // Anissia's own pace.
     let anissia_queue = tokio::spawn({
         let cancel = cancel.clone();
-        let lock = anissia::lock_path_for(&db_path);
+        let lock = LockFile::Anissia.path_for(&db_path);
         async move { anissia.run_queue(lock, cancel).await }
     });
 
@@ -186,7 +188,7 @@ async fn run() -> Result<(), String> {
     // minutes, whatever the collection cycle is doing, under its own lock.
     let caption_queue = tokio::spawn({
         let cancel = cancel.clone();
-        let lock = anissia::captions::lock_path_for(&db_path);
+        let lock = LockFile::AnissiaCaptions.path_for(&db_path);
         async move { captions.run_queue(lock, cancel).await }
     });
 

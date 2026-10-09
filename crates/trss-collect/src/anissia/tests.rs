@@ -368,9 +368,3 @@ async fn a_failed_refresh_puts_the_anime_off_for_an_hour_and_a_429_for_as_long_a
         }]
     );
 }
-
-#[test]
-fn the_lock_file_sits_next_to_the_database_and_apart_from_the_other_queues() {
-    let path = lock_path_for(std::path::Path::new("/data/trss.db"));
-    assert_eq!(path, std::path::PathBuf::from("/data/trss.db.anissia.lock"));
-}
