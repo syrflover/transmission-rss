@@ -34,6 +34,7 @@ use std::{
 
 use super::{commands_api::now_millis, ApiError, AppState};
 use trss_collect::{
+    commands::receive_once::{self, NotRetryable},
     plan::rule_destination,
     release_name::ReleaseName,
     revision,
@@ -97,6 +98,25 @@ fn internal(err: impl std::fmt::Display) -> ApiError {
     ApiError::Internal(err.to_string())
 }
 
+/// Why `다시 받기` of an item is not offered or not accepted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Blocked {
+    /// The episode's place holds the revision or a higher one already.
+    InPlace(InPlace),
+    /// The worker's own plan for the retry refuses it.
+    Refused(NotRetryable),
+}
+
+impl Blocked {
+    /// The sentence for the person.
+    pub fn message(&self) -> String {
+        match self {
+            Blocked::InPlace(place) => place.message(),
+            Blocked::Refused(why) => why.message().to_owned(),
+        }
+    }
+}
+
 impl<'a> Evidence<'a> {
     pub async fn load(state: &'a AppState) -> Result<Evidence<'a>, ApiError> {
         let now = now_millis();
@@ -118,6 +138,43 @@ impl<'a> Evidence<'a> {
             collect,
             titles: HashMap::new(),
         })
+    }
+
+    /// Whether `다시 받기` of `item` would be received, as the screens and the
+    /// request both say it: the sentence of an episode that holds the revision
+    /// already comes first, as it is what makes the button pointless whatever
+    /// else is the matter; then the worker's retry plan for the item's rule,
+    /// and that a revision is received into the folder its replacement was
+    /// decided for. The worker checks again when the command runs and stays
+    /// the authority.
+    pub async fn retry_check(
+        &mut self,
+        item: &HistoryItem,
+    ) -> Result<Result<(), Blocked>, ApiError> {
+        let state = self.state;
+        let revision = receive_once::revision_retry(&state.revisions, item.id)
+            .await
+            .map_err(internal)?;
+        if let Some(row) = receive_once::waiting_revision(&state.revisions, item, &revision)
+            .await
+            .map_err(internal)?
+        {
+            if let Some(place) = self.held(item, &row).await? {
+                return Ok(Err(Blocked::InPlace(place)));
+            }
+        }
+        let channel = state.channels.get_channel(&item.channel_id).await?;
+        let rule = match &item.rule_id {
+            Some(id) => state.channels.get_rule(id).await?,
+            None => None,
+        };
+        // Received into the folder it was decided for, or not at all.
+        let plan = receive_once::retry_plan_for(item, channel.as_ref(), rule.as_ref(), &revision)
+            .and_then(|plan| match &self.collect {
+                Some(folder) => receive_once::same_destination(&revision, folder, plan.rule),
+                None => Ok(()),
+            });
+        Ok(plan.map_err(Blocked::Refused))
     }
 
     /// Whether the place of `row`, the replacement of `item` that waits for

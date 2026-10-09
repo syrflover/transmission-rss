@@ -576,49 +576,23 @@ async fn check_receive_once(
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?
         .ok_or_else(|| ApiError::not_found("기록에서 이 항목을 찾지 못했어요."))?;
-    let channel = state.channels.get_channel(&item.channel_id).await?;
-    let rule = match payload.rule_id.as_ref().or(item.rule_id.as_ref()) {
-        Some(id) => state.channels.get_rule(id).await?,
-        None => None,
-    };
-    let planned = if payload.rule_id.is_some() {
-        receive_once::adoption_plan(&item, channel.as_ref(), rule.as_ref()).map(|_| ())
+    if payload.rule_id.is_some() {
+        let channel = state.channels.get_channel(&item.channel_id).await?;
+        let rule = match &payload.rule_id {
+            Some(id) => state.channels.get_rule(id).await?,
+            None => None,
+        };
+        receive_once::adoption_plan(&item, channel.as_ref(), rule.as_ref())
+            .map(|_| ())
+            .map_err(|why| ApiError::invalid(why.message()))
     } else {
-        // A video revision whose download stopped is retried by its
-        // replacement's record, whatever the item's result.
-        let revision = receive_once::revision_retry(&state.revisions, item.id)
-            .await
-            .map_err(|e| ApiError::Internal(e.to_string()))?;
         // A revision whose episode already holds it or a higher one is
         // refused first, as the screens say it first (`web::in_place`).
-        if let Some(row) = receive_once::waiting_revision(&state.revisions, &item, &revision)
-            .await
-            .map_err(|e| ApiError::Internal(e.to_string()))?
-        {
-            if let Some(place) = Evidence::load(state).await?.held(&item, &row).await? {
-                return Err(ApiError::invalid(place.message()));
-            }
+        match Evidence::load(state).await?.retry_check(&item).await? {
+            Ok(()) => Ok(()),
+            Err(blocked) => Err(ApiError::invalid(blocked.message())),
         }
-        match receive_once::retry_plan_for(&item, channel.as_ref(), rule.as_ref(), &revision) {
-            // Received into the folder it was decided for, or not at all.
-            Ok(plan) => match state
-                .settings
-                .collection()
-                .await
-                .map_err(|e| ApiError::Internal(e.to_string()))?
-            {
-                Some(collect) => receive_once::same_destination(
-                    &revision,
-                    std::path::Path::new(&collect.folder),
-                    plan.rule,
-                ),
-                None => Ok(()),
-            },
-            Err(why) => Err(why),
-        }
-    };
-    planned.map_err(|why| ApiError::invalid(why.message()))?;
-    Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------

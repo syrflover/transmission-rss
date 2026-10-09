@@ -174,7 +174,10 @@ use axum::{extract::State, routing::get, Json, Router};
 use serde::Serialize;
 
 use super::{
-    artwork_api::image_url, commands_api::CommandView, in_place::Evidence, jobs_api::WorkRefView,
+    artwork_api::image_url,
+    commands_api::CommandView,
+    in_place::{Blocked, Evidence},
+    jobs_api::WorkRefView,
     ApiError, AppState,
 };
 use trss_collect::{
@@ -253,12 +256,6 @@ pub async fn retry_offers(
         .open_for_subjects(receive_once::KIND, subjects)
         .await
         .map_err(|e| internal(&e))?;
-    let collect_folder = state
-        .settings
-        .collection()
-        .await
-        .map_err(|e| internal(&e))?
-        .map(|collect| collect.folder);
     let mut evidence = Evidence::load(state).await?;
     for row in stopped {
         let Some(item) = state
@@ -270,44 +267,18 @@ pub async fn retry_offers(
             continue;
         };
         let command = open.get(&item.id.to_string()).map(CommandView::from);
-        // The episode's place holds this revision or a higher one already:
-        // told first, as it is what makes the button pointless whatever else
-        // is the matter.
-        if let Some(place) = evidence.held(&item, row).await? {
-            offers.insert(
-                item.id,
-                RetryOffer {
-                    can_retry: false,
-                    retry_blocked: Some(place.message()),
-                    command,
-                },
-            );
-            continue;
-        }
-        let revision = receive_once::revision_retry(&state.revisions, item.id)
-            .await
-            .map_err(|e| internal(&e))?;
-        let channel = state.channels.get_channel(&item.channel_id).await?;
-        let rule = match &item.rule_id {
-            Some(id) => state.channels.get_rule(id).await?,
-            None => None,
-        };
-        let plan = receive_once::retry_plan_for(&item, channel.as_ref(), rule.as_ref(), &revision)
-            .and_then(|plan| match &collect_folder {
-                Some(folder) => {
-                    receive_once::same_destination(&revision, FsPath::new(folder), plan.rule)?;
-                    Ok(plan)
-                }
-                None => Ok(plan),
-            });
+        let blocked = evidence.retry_check(&item).await?;
         offers.insert(
             item.id,
             RetryOffer {
-                can_retry: plan.is_ok(),
-                retry_blocked: plan
-                    .err()
-                    .filter(|why| why.explains_missing_button())
-                    .map(|why| why.message().to_owned()),
+                can_retry: blocked.is_ok(),
+                retry_blocked: blocked.err().and_then(|why| match why {
+                    // Told whatever else is the matter.
+                    Blocked::InPlace(_) => Some(why.message()),
+                    Blocked::Refused(refused) => {
+                        refused.explains_missing_button().then(|| why.message())
+                    }
+                }),
                 command,
             },
         );
