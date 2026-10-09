@@ -24,6 +24,16 @@
 - 2026-10-09 [0101](0101-receive-line-tests.md)에서 두 곳을 더 찾았어요. 옮길지는 여기서 정해요.
   - 웹의 "이미 놓였는지" 규칙(`in_place`)은 수정본 `다시 받기`를 trss-collect의 판정보다 먼저 거절하고, 그 순서를 웹이 가져요.
   - 규칙 API는 규칙마다 마지막으로 받은 시각을 `channel_items`에서 다시 계산해요. 보관 제안 API는 trss-collect의 `last_received_of_rules`를 써요.
+- 2026-10-09 [0110](0110-job-line-tests.md)에서 자막 작업 줄기의 아홉 곳을 더 찾았어요. 그 웹 테스트는 남겼고, 옮길지는 여기서 정해요.
+  - Anissia 후보의 수정본 표시: `seasons_anissia_api.rs`가 회차 대응, 예외, 오프셋 순으로 후보의 회차를 정한 뒤 trss-collect의 `revision_by_attribution`·`revision_by_attributed_episode`를 불러요. 웹 테스트는 `mapping_api`의 `an_exception_decides_which_candidate_revises_a_subtitle_file_the_user_named`와 `subtitle_creator_api`의 `the_creators_later_candidate_of_an_episode_with_such_a_file_is_a_revision_candidate`, `the_sources_mapping_decides_which_episode_of_the_season_a_candidate_is`, `a_season_without_a_creator_named_marks_no_candidate_a_revision`이에요.
+  - 실패한 교체의 옛 파일과 새 파일의 상태(`todo_api::failure_of`): `a_failed_replacements_files_are_told_by_its_row`.
+  - 올린 자막의 제작자가 그 시즌의 후보 중 하나여야 하는 것(`subtitle_upload_api::target_of`): `the_creator_is_one_of_the_seasons_or_unknown`.
+  - 원격 화면의 연결이 아직 그 작업의 것인지 정하는 조건이 `screen_api.rs`의 `socket`과 `screen_api/hub.rs`의 `watch_binding` 두 곳에 있어요. 웹 테스트는 `a_socket_from_another_site_for_a_job_not_waiting_or_for_an_ended_run_is_refused`, `another_check_in_the_same_run_ends_the_socket_and_is_connected_to_anew`, `a_socket_ends_when_the_run_is_no_longer_the_jobs_or_the_browser_goes`예요.
+  - 작업 목록의 묶음과 기다리는 작업의 순서(`jobs_api.rs`의 `groups`, `waiting_rank`, `DONE_FIRST`, `DONE_PAGE`).
+  - 고르기 작업의 후보 검사(그 시즌의 후보이고, 겹치지 않고, 한 제작자의 것)와 찾기 작업이 제작자의 가장 새 게시물을 고르는 것(`jobs_api.rs`의 `create`, `create_find`).
+  - 파일과 풀기 단계의 상태를 화면의 상태로 바꾸는 것(`jobs_api.rs`의 `file_view`, `unpack_view`).
+  - 교체 화면이 파일의 `mtime`을 밀리초로 바꾸는 계산(`jobs_api/replacement.rs`)이 trss-jobs `todo/changes.rs`와 두 벌이에요.
+  - 작품 화면이 보관본을 제작자별로 묶고 고르면 무엇을 하는지 정하는 것(`library_work_api.rs`의 `creators_of`).
 
 ## 완료 기준
 

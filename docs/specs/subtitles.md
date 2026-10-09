@@ -67,7 +67,7 @@ Anissia의 회차 표시 `0`처럼 뜻을 확인하지 못한 값은 숫자 회�
 
 - 자동 수신은 구독 제작자의 받지 않은 회차와, 구독 제작자의 자막이 이미 있는 회차의 수정 후보에 한정해요.
   수정 후보는 같은 회차·같은 게시물의 갱신일만 바뀐 줄과, 같은 회차에 새 게시물 주소가 나타난 줄이에요.
-  받은 수정본은 [교체 비교와 승인](#교체-비교와-승인)의 `교체 승인`에서 멈추며, 현재 자막과 바이트가 같으면 교체할 것이 없다고 기록만 해요.
+  받은 수정본은 [교체 비교와 승인](#교체-비교와-승인)의 `교체 승인`에서 멈추며, 이전에 받은 파일과 바이트가 같으면 `바꿀 것이 없음`만 기록해요.
 - Anissia 줄이 그대로인 수정도 찾도록, 구독 제작자에게서 받은 회차는 받은 뒤 14일 동안 하루 한 번 그 게시물의 파일 정보를 다시 읽어요(사용자 결정, 2026-10-02).
   2026-10-02 표본에서 게시물 열한 곳 가운데 넷이 줄의 갱신일보다 58시간 넘게 뒤에 고쳐졌고, Drive 파일 여섯 가운데 둘이 13·20시간 뒤에 바뀌었기 때문이에요([경로별 재확인](../brainstorm/web-gui-subtitles.md#2026-10-02-경로별-재확인)).
   다시 읽는 값은 출처가 인증 없이 주는 파일 정보(Drive 파일의 수정 시각·크기, Tistory 첨부와 WinPNG 이미지의 전체 크기, Naver 첨부의 크기)이고, 받은 때와 다르면 그 게시물을 다시 받아 위 수정본처럼 다뤄요.
@@ -124,7 +124,7 @@ Anissia의 회차 표시 `0`처럼 뜻을 확인하지 못한 값은 숫자 회�
   사용자가 정한 [회차 대응](library.md#자막의-회차-대응)의 예외가 있는 회차는, 위 표의 '대응한 시즌 회차'를 예외가 정한 시즌 회차로 읽어요. 예외가 `받지 않음`이면 받지 않고 어긋남으로 기록하지도 않으며, 위 표에서 가장 먼저 적용해요.
   다른 제작자가 같은 시즌 회차를 받고 있는지, 제작자를 붙인 자막이 있는지 살필 때도 같은 읽기를 써요.
 
-  제작자를 붙인 자막의 수정본(사용자 결정, 2026-10-03)도 위 조건(규칙 켜짐, 영상 받기·자막 받기 켜짐, 시즌 연결, 폴더 있음, 회차 대응이 정해짐, 다른 출처의 작업이 그 회차를 맡고 있지 않음)을 그대로 따라요. 받기만 하고, 현재 자막과 바이트가 같은지는 비교하지 않아요(교체 비교가 생기면 거기서 `교체할 것 없음`을 기록해요).
+  제작자를 붙인 자막의 수정본(사용자 결정, 2026-10-03)도 위 조건(규칙 켜짐, 영상 받기·자막 받기 켜짐, 시즌 연결, 폴더 있음, 회차 대응이 정해짐, 다른 출처의 작업이 그 회차를 맡고 있지 않음)을 그대로 따라요. 받을 때는 현재 자막과 바이트가 같은지 비교하지 않아요. 같으면 적용할 때 [보관본과 적용본](#보관본과-적용본)의 규칙대로 그 파일을 적용본으로 기록하고 교체 승인을 만들지 않아요.
   작업은 후보 하나마다 하나이고, 사용자가 고른 수신과 같은 작업으로 만들되 `자동`으로 표시해요.
   같은 관찰로는 작업을 두 번 만들지 않아서, 같은 줄을 두 번 읽거나 worker가 다시 시작해도 작업이 늘지 않아요.
   갱신일이 다시 바뀐 줄은 새 관찰이라 새 수정본 작업이 돼요.
@@ -170,12 +170,12 @@ WinPNG 이미지를 trss가 직접 해석하지 않는 것은, JMK를 SMI·ASS�
 
 | 필수 경로 | 해당 경로의 관찰 조건 |
 | --- | --- |
-| erulabo | 서버가 정상 다운로드를 시작하고 사용자가 필요한 CAPTCHA를 해결한 뒤 같은 서버 브라우저가 파일을 수신해요. 만료·오류 HTML을 자막으로 보관·적용하지 않아요. `erulabo.com/<번호>` 게시물의 카드 가운데 후보의 회차 카드 하나를 서버 브라우저가 가운데로 스크롤해 누르고 `인증`에서 기다려요. 사이트가 30초 뒤 확인을 거두면 작업 화면을 열 때 다시 눌러요. 확인 뒤 Drive·erulabo의 받기 주소가 파일 대신 문서로 답하면 그 분류로 실패하고 다시 요청하지 않아요(0041, [작업과 인증 명세](jobs.md#작업-화면-안의-인증과-브라우저-수명)). 확인 직전까지와 거절 판단까지 구현했고, 사람이 실제로 풀어 받는 확인은 남았어요. |
-| Blogger·Google Drive 개별 자막 | 게시물에서 연결된 개별 파일을 수신하고 실제 자막 형식과 회차를 확인해 적용해요. `<블로그>.blogspot.com` 게시물의 본문(`.post-body`)에서 Drive 파일 링크와 그 글자를 읽어, 후보의 회차를 밝힌 링크와 글꼴 링크만 쿠키·Referer 없이 `drive.usercontent.google.com`에서 받아요(리디렉션도 Drive 호스트로만, 파일 하나 200MiB까지). 회차를 밝힌 링크가 없는 게시물은 하나뿐인 자막 링크를 받고, 고를 수 없으면 회차를 밝혀 `출처 구조 바뀜`이에요. Drive가 파일 대신 웹 페이지를 주면 분류된 실패이고 확인 페이지를 건너뛰지 않아요(0042, [공통 수신 결과와 실패 분류](jobs.md#공통-수신-결과와-실패-분류)). 수신까지 구현했고, 회차 확인과 적용은 묶음 분석 이후예요. |
-| Blogger·Google Drive 회차 ZIP | 여러 회차를 복원하고 사용자가 선택한 범위만 적용해요. 개별 파일 수신 성공만으로 묶음 처리를 완료로 보지 않아요. 범위를 밝힌 링크(`1 ~ 12화`)는 후보의 회차가 범위 안이면 받고, 회차를 밝히지 않은 압축 파일은 받아요. 받은 ZIP은 작업 상세에 묶음으로 보여요. 수신까지 구현했고(0042), 복원과 범위 적용은 묶음 분석이에요. |
-| Tistory 일반 첨부 | 일반 첨부에서 파일을 수신하고 압축 내부 자막을 처리해요. 실제 구현에 필요한 URL 취득·재취득 경로를 확인해요. 게시물의 `.fileblock`마다 `*.kakaocdn.net`·`*.daumcdn.net`의 HTTPS 서명 URL을 얻어 쿠키·Referer 없이 받고(리디렉션도 이 CDN으로만, 파일 하나 200MiB까지), 거절되면 게시물을 한 번 다시 읽어 새 URL을 얻어요. 첨부가 없으면 본문 안만 봐요. 본문의 Google Drive 파일 링크는 Blogger와 같은 규칙으로 후보의 회차에 맞는 것을 받고(0042), Drive 폴더 링크만 있으면 `자막 대기`로 두고, WinPNG 이미지만 있으면 서버 브라우저가 있는 worker는 아래 Tistory WinPNG 방식으로 읽고 없는 worker는 `자막 대기`로 둬요(0038, 0043, [공통 수신 결과와 실패 분류](jobs.md#공통-수신-결과와-실패-분류)). 수신까지 구현했고, 압축 내부 처리는 묶음 분석이에요. |
-| Tistory WinPNG | 게시물의 WinPNG 뷰어가 이미지에서 꺼낸 파일을 받아 개별 회차 파일 수신·적용으로 이어져요. 자막 파일은 그대로 받고, JMK(Jamaker 프로젝트)는 뷰어가 변환한 SMI·ASS를 둘 다 받아 한 묶음으로 다루며 JMK 자체는 보관하지 않아요(사용자 결정, 2026-10-02). PNG 다운로드나 뷰어 표시만으로 성공으로 보지 않고, 뷰어가 만든 파일이 실제로 내려받아져 형식 검증을 통과해야 해요. 파일은 뷰어가 보여 주는 하위 폴더와 이름을 그대로 두고 받아요. 본문의 `.png` 이미지가 뷰어가 읽을 수 있는 이미지가 아니면 `자막 없음`, 뷰어가 키를 물으면 `추가 입력 필요`로 실패해요(키를 넣는 방법은 아직 없어요). 구현했어요(0043). 읽는 단계와 실제 게시물 결과는 [jobs.md](jobs.md#출처별-단계-초안)에 있어요. |
-| Naver 블로그 첨부 | 게시물(내부 프레임 포함)에서 유효한 첨부 경로를 얻어 실제 파일을 수신해요. 함께 올라온 글꼴은 폰트로 다뤄요. `blog.naver.com` 글의 내부 페이지(`PostView.naver`)를 읽어 `aPostFiles`의 첨부 가운데 후보의 회차에 맞는 파일과 글꼴 파일을 쿠키·Referer 없이 `download.blog.naver.com`에서 받아요(파일 하나 200MiB까지, 길이는 `attachFileSize`와 같아야 해요). 주소의 토큰이 거절되면 내부 페이지를 한 번 다시 읽어요. Naver가 악성·제한으로 표시한 첨부는 받지 않고 `원본 없음`이며, CAPTCHA처럼 글이 아닌 페이지는 첨부와 섞지 않고 분류된 실패예요(0044, [공통 수신 결과와 실패 분류](jobs.md#공통-수신-결과와-실패-분류)). 수신까지 구현했고, 회차 확인과 적용은 묶음 분석 이후예요. |
+| erulabo | 서버가 정상 다운로드를 시작하고 사용자가 필요한 CAPTCHA를 해결한 뒤 같은 서버 브라우저가 파일을 수신해요. 만료·오류 HTML을 자막으로 보관·적용하지 않아요. `erulabo.com/<번호>` 게시물의 카드 가운데 후보의 회차 카드 하나를 서버 브라우저가 가운데로 스크롤해 누르고 `인증`에서 기다려요. 사이트가 30초 뒤 확인을 거두면 작업 화면을 열 때 다시 눌러요. 확인 뒤 Drive·erulabo의 받기 주소가 파일 대신 문서로 답하면 그 분류로 실패하고 다시 요청하지 않아요(0041, [작업과 인증 명세](jobs.md#작업-화면-안의-인증과-브라우저-수명)). 구현했어요. 사람이 확인을 풀고 서버 브라우저가 받는 것을 2026-10-03 개발 환경과 2026-10-07 실제 서버에서 봤어요(0041, [0083](../archive/tickets/5-deployed-verification/0083-deployed-end-to-end.md)). |
+| Blogger·Google Drive 개별 자막 | 게시물에서 연결된 개별 파일을 수신하고 실제 자막 형식과 회차를 확인해 적용해요. `<블로그>.blogspot.com` 게시물의 본문(`.post-body`)에서 Drive 파일 링크와 그 글자를 읽어, 후보의 회차를 밝힌 링크와 글꼴 링크만 쿠키·Referer 없이 `drive.usercontent.google.com`에서 받아요(리디렉션도 Drive 호스트로만, 파일 하나 200MiB까지). 회차를 밝힌 링크가 없는 게시물은 하나뿐인 자막 링크를 받고, 고를 수 없으면 회차를 밝혀 `출처 구조 바뀜`이에요. Drive가 파일 대신 웹 페이지를 주면 분류된 실패이고 확인 페이지를 건너뛰지 않아요(0042, [공통 수신 결과와 실패 분류](jobs.md#공통-수신-결과와-실패-분류)). 회차 확인과 적용까지 구현했고, 2026-10-05에 실제 게시물의 파일이 적용본까지 갔어요([0076](../archive/tickets/4-store-apply-and-replace/0076-eight-paths-end-to-end.md)). |
+| Blogger·Google Drive 회차 ZIP | 여러 회차를 복원하고 사용자가 선택한 범위만 적용해요. 개별 파일 수신 성공만으로 묶음 처리를 완료로 보지 않아요. 범위를 밝힌 링크(`1 ~ 12화`)는 후보의 회차가 범위 안이면 받고, 회차를 밝히지 않은 압축 파일은 받아요. 받은 ZIP은 작업 상세에 묶음으로 보여요. 복원과 범위 적용까지 구현했고(0042, [0065](../archive/tickets/4-store-apply-and-replace/0065-archive-extraction.md)), 2026-10-06에 Drive의 실제 ZIP이 풀려 적용본까지 갔어요([0076](../archive/tickets/4-store-apply-and-replace/0076-eight-paths-end-to-end.md)). |
+| Tistory 일반 첨부 | 일반 첨부에서 파일을 수신하고 압축 내부 자막을 처리해요. 실제 구현에 필요한 URL 취득·재취득 경로를 확인해요. 게시물의 `.fileblock`마다 `*.kakaocdn.net`·`*.daumcdn.net`의 HTTPS 서명 URL을 얻어 쿠키·Referer 없이 받고(리디렉션도 이 CDN으로만, 파일 하나 200MiB까지), 거절되면 게시물을 한 번 다시 읽어 새 URL을 얻어요. 첨부가 없으면 본문 안만 봐요. 본문의 Google Drive 파일 링크는 Blogger와 같은 규칙으로 후보의 회차에 맞는 것을 받고(0042), Drive 폴더 링크만 있으면 `자막 대기`로 두고, WinPNG 이미지만 있으면 서버 브라우저가 있는 worker는 아래 Tistory WinPNG 방식으로 읽고 없는 worker는 `자막 대기`로 둬요(0038, 0043, [공통 수신 결과와 실패 분류](jobs.md#공통-수신-결과와-실패-분류)). 압축 내부 처리까지 구현했고, 2026-10-05에 실제 첨부 ZIP이 풀려 적용본까지 갔어요([0076](../archive/tickets/4-store-apply-and-replace/0076-eight-paths-end-to-end.md)). |
+| Tistory WinPNG | 게시물의 WinPNG 뷰어가 이미지에서 꺼낸 파일을 받아 개별 회차 파일 수신·적용으로 이어져요. 자막 파일은 그대로 받고, JMK(Jamaker 프로젝트)는 뷰어가 변환한 SMI·ASS를 둘 다 받아 한 묶음으로 다루며 JMK 자체는 보관하지 않아요(사용자 결정, 2026-10-02). PNG 다운로드나 뷰어 표시만으로 성공으로 보지 않고, 뷰어가 만든 파일이 실제로 내려받아져 형식 검증을 통과해야 해요. 파일은 뷰어가 보여 주는 하위 폴더와 이름을 그대로 두고 받아요. 본문의 `.png` 이미지가 뷰어가 읽을 수 있는 이미지가 아니면 `자막 없음`, 뷰어가 키를 물으면 `추가 입력 필요`로 실패해요(키를 넣는 방법은 아직 없어요). 구현했어요(0043). 읽는 단계와 실제 게시물 결과는 [jobs.md](jobs.md#출처별-단계)에 있어요. |
+| Naver 블로그 첨부 | 게시물(내부 프레임 포함)에서 유효한 첨부 경로를 얻어 실제 파일을 수신해요. 함께 올라온 글꼴은 폰트로 다뤄요. `blog.naver.com` 글의 내부 페이지(`PostView.naver`)를 읽어 `aPostFiles`의 첨부 가운데 후보의 회차에 맞는 파일과 글꼴 파일을 쿠키·Referer 없이 `download.blog.naver.com`에서 받아요(파일 하나 200MiB까지, 길이는 `attachFileSize`와 같아야 해요). 주소의 토큰이 거절되면 내부 페이지를 한 번 다시 읽어요. Naver가 악성·제한으로 표시한 첨부는 받지 않고 `원본 없음`이며, CAPTCHA처럼 글이 아닌 페이지는 첨부와 섞지 않고 분류된 실패예요(0044, [공통 수신 결과와 실패 분류](jobs.md#공통-수신-결과와-실패-분류)). 회차 확인과 적용까지 구현했고, 2026-10-05에 실제 첨부 ZIP에서 고른 8화가 적용되고 1–7화는 보관됐어요([0076](../archive/tickets/4-store-apply-and-replace/0076-eight-paths-end-to-end.md)). |
 
 출처가 요구하지 않는 CAPTCHA·로그인을 추가하지 않아요.
 실제 다운로드 과정의 사용자 조작은 필요한 인증에 한정하며, 후보 선택·연결 확인·교체 승인은 별개의 의도적인 입력으로 유지해요.
@@ -327,7 +327,7 @@ Anissia의 한국어 자막을 대상으로 하고, 별도의 다국어 선호·
 묶음에는 고른 회차 밖의 자막이 들어 있을 수 있어요.
 Tistory 게시물은 첨부를 모두 받아서 회차 하나를 골라도 파일 스물다섯 개가 온 적이 있고(isulbi 40), Drive의 `1-12` 묶음에는 열두 회차가 들어 있어요.
 같은 시즌의 회차로 판정한 그 밖의 자막은 보관만 하고 적용하지 않아요(사용자 결정, 2026-10-04).
-작품 상세의 회차 줄은 그 회차에 `보관본 있음`을 조용히 적고 펼친 자리에 `적용`을 둬요([할 일과 회차 목록](library.md#할-일과-회차-목록)). 연결하기 전에 지나간 회차를 다시 받지 않고 들이게 하려는 거예요.
+작품 상세의 회차 줄은 그 회차에 `보관본 있음`을 조용히 적고 펼친 자리에 `적용`을 둬요. 그 회차에 자막이 있으면 `교체 비교`예요([할 일과 회차 목록](library.md#할-일과-회차-목록)). 연결하기 전에 지나간 회차를 다시 받지 않고 들이게 하려는 거예요.
 구독 제작자의 자동 작업이 받은 묶음이면, 그 제작자의 다른 회차에도 [자동 수신의 규칙](#구독-제작자-자동-수신)을 그대로 적용해요. 받지 않은 회차는 적용까지 가고, 자막이 이미 있는 회차의 바뀐 파일은 교체 승인을 기다려요.
 다른 시즌으로 보이거나 회차를 정할 수 없는 자막도 보관하되 어느 회차에도 붙이지 않고, 작업 상세에 그 까닭을 적어요.
 
@@ -734,8 +734,439 @@ worker를 다시 시작하면 기다리는 작업을 한 번 다시 살펴보고
 
 ## 남은 구체화
 
-- 출처마다 인증 없이 다시 읽을 수 있는 파일 정보(Drive `HEAD`의 `Last-Modified`·크기, Tistory 파일 주소의 `Range` 응답에서 얻는 전체 크기, Naver `aPostFiles`의 크기, 게시물 수정 시각)는 2026-10-02에 확인했어요([경로별 재확인](../brainstorm/web-gui-subtitles.md#2026-10-02-경로별-재확인)). Drive·Tistory·Naver의 재확인(티켓 0050)은 이 값 가운데 크기와 Drive의 `Last-Modified`만 비교하고, 2026-10-03에 실제 게시물에서 세 출처의 값을 읽어 받을 때의 값과 맞는 것을 확인했어요. 같은 크기로 고친 Tistory·Naver 파일은 찾지 못하고, 실제 게시물이 고쳐지는 것은 지켜보지 않았어요. erulabo는 게시물 수정 시각만 비교하고 Drive 파일 정보는 기록만 하는데, 가짜 출처로만 시험했어요(2026-10-04). 실제 erulabo 게시물의 `dateModified`와 Drive `HEAD` 읽기는 사람이 실제로 한 번 받은 뒤에야 볼 수 있어요. 부분 수신은 검증하지 않았어요.
+- 출처마다 인증 없이 다시 읽을 수 있는 파일 정보(Drive `HEAD`의 `Last-Modified`·크기, Tistory 파일 주소의 `Range` 응답에서 얻는 전체 크기, Naver `aPostFiles`의 크기, 게시물 수정 시각)는 2026-10-02에 확인했어요([경로별 재확인](../brainstorm/web-gui-subtitles.md#2026-10-02-경로별-재확인)). Drive·Tistory·Naver의 재확인(티켓 0050)은 이 값 가운데 크기와 Drive의 `Last-Modified`만 비교하고, 2026-10-03에 실제 게시물에서 세 출처의 값을 읽어 받을 때의 값과 맞는 것을 확인했어요. 같은 크기로 고친 Tistory·Naver 파일은 찾지 못하고, 실제 게시물이 고쳐지는 것은 지켜보지 않았어요. erulabo는 게시물 수정 시각만 비교하고 Drive 파일 정보는 기록만 하는데, 재확인은 가짜 출처로만 시험했어요(2026-10-04). 같은 날 0041의 실제 수신이 남긴 `dateModified`와 Drive `HEAD` 값을 같은 요청으로 다시 읽어 스냅샷과 같은 것을 확인했지만, worker의 재확인이 실제 erulabo 수신을 읽은 적은 없어요(0050). 부분 수신은 검증하지 않았어요.
   현재 표본에는 폰트가 없고, 같은 폰트의 실제 전송 생략이나 ZIP 부분 수신도 확인하지 않았어요.
   개별 링크의 존재와 변경 없는 바이트의 증명은 구분하고, 실제 전송량과 보관 중복 제거를 각각 검증해요.
 - 구성 파일(IDX와 짝을 이루는 SUB 등)을 앱 데이터 폴더에 두는 배치는 [작품 폴더 배치 ADR](../adr/0008-trss-folder-and-app-data-files.md)이 `.trss/`에 자막과 폰트만 둔다고 정한 데서 따른 해석이에요.
   이미지 자막의 자동 적용을 지원하게 되면 이 배치를 다시 정해요.
+
+## 검증 표
+
+요구마다 실제 사용에서 본 것(날짜와 티켓), 테스트로 확인한 것(크레이트와 파일, 테스트 이름), 확인하지 않은 것을 나눠 적었어요. 테스트는 요구를 가장 직접 겨눈 것만 골라 적었고 같은 요구를 다루는 다른 테스트는 나열하지 않았어요.
+이 표는 2026-10-09에 `5d1fb3b`에서, [0110](../tickets/0110-job-line-tests.md)이 자막 작업 줄기의 테스트를 나눈 뒤 만들었어요. 실제 사용은 배포한 서버(j4105), 로컬 개발 환경에서 돌린 서버 DB 사본과 실제 외부 사이트, 서버에서 돌리던 worker 밖에서 실행한 trss 코드(`서버(일회용 컨테이너)`)예요.
+행은 요구의 항목 하나(최상위 글머리 기호, 규칙을 담은 문단, 입력·결과 표의 행)이고, 한 항목 안에서 확인 방법이 갈리는 부분은 칸 안에서 `<br>`로 나누고 `(1)`, `(2)`로 번호를 붙였어요. 외부 서비스, 브라우저, 디스크, 재생기를 본 기록은 trss를 본 것이 아니라서 `근거만:`으로, 가짜 출처나 바꿔 넣은 응답으로 본 개발 환경의 확인은 `참고(가짜 출처):`로 따로 적었어요.
+
+### 자막 후보 조회
+
+요구 절: [자막 후보 조회](#자막-후보-조회)
+
+| 요구 | 실제 사용에서 본 것 | 테스트로 확인한 것 | 확인하지 않은 것 |
+| --- | --- | --- | --- |
+| 자막 후보의 관찰 모델 | 2026-10-07 서버: 배포 첫 주기에 관찰 87개가 생겼어요 ([0081]) | `trss-collect` `anissia/captions_tests.rs` `a_creator_moving_to_the_next_episode_leaves_both_candidates`, `a_line_that_leaves_the_list_leaves_its_observations` | Anissia의 덮어쓰기와 `updDt` 미래 시각 줄이기는 외부 동작이라 테스트가 없어요. `0`을 원래 표시로 보이는 화면도 없어요. |
+| 30분마다 최근 자막 목록 전체 읽기 | 2026-10-07 서버: 첫 주기에 최근 목록 5쪽을 읽었어요 ([0081]) | `trss-collect` `anissia/captions_tests.rs` `a_reading_takes_every_page_to_the_empty_one_and_observes_every_anime`, `nothing_is_read_again_within_thirty_minutes_even_after_a_restart` | 로그 문구는 겨누지 않았고, 잠금 테스트는 잠금 파일의 경로 이름만 봐요. 첫 주기 뒤의 주기와 `429`를 만난 읽기는 서버에서 못 봤고, 긴 `429` 대기에 걸리면 다음 주기를 기다려요 ([0035]). 영상 RSS 주기는 테스트가 없어요. |
+| 시즌 연결·새로고침 때 작품 자막 정보 읽기 | 2026-10-07 서버: 시즌 1을 3492에 연결한 뒤 에루샤의 12화 후보를 받았어요. 연결 읽기 기록은 없어요 ([0083]) | `trss-worker` `tests/it/anissia_captions.rs` `linking_a_season_reads_the_anime_in_the_worker_and_the_older_lines_become_candidates` | 서버에서 연결 읽기로 90일보다 오래된 줄이 더해진 기록은 없어요. 연결 읽기와 30분 읽기가 몇 ms 차이로 엇갈리면 옛 상태가 한 번 더 관찰될 수 있어요 ([0035]). |
+| 30분 사이의 변화와 읽지 못한 동안의 변화 | 없음 | `trss-collect` `anissia/captions_tests.rs` `a_failure_is_read_again_next_period_and_leaves_the_observations_there` | 30분 사이에 줄을 두 번 바꾸면 마지막만 남는데, 중간 상태가 남지 않음을 겨눈 테스트는 없어요. |
+| 줄은 그대로인 게시물 파일 수정 | 근거만: 2026-10-02 표본의 게시물 11곳 중 4곳이 갱신일보다 58시간 넘게 뒤에 고쳐졌어요 ([경로별 재확인]) | `trss-collect` `anissia/captions_tests.rs` `a_reading_after_which_no_line_changed_adds_nothing` | 게시물 쪽 변화가 관찰에 들어오지 않는 점은 테스트가 없어요. 범위 밖이라고 적은 실제 사례는 [0035]에 있어요. |
+| 관찰의 내용, 자막 출처 연결, 중복·건너뛴 줄 | 2026-10-07 서버: `caption_observations`와 `subtitle_sources`가 87행씩 생겼어요 ([0081]) | `trss-collect` `store/anissia/captions_tests.rs` `a_creators_lines_share_a_source_of_the_app_per_anime` | 제작자 128자·주소 2048자·`updDt` 64자 한도는 값으로 겨누지 않았고 회차 64자만 겨눠요. 제작자 이름의 대소문자·공백이 다르면 다른 출처가 돼요 ([0035]). 서버에서 건너뛴 줄 수는 못 봤어요. |
+| `updDt`의 시간대 해석 | 근거만: 2026-10-02 실제 Anissia API가 시간대 없는 값을 줬어요. 해석한 값은 못 봤어요 ([0035]) | `trss-anissia` `observe.rs` `a_value_without_a_zone_is_seoul_time_in_either_spelling` | 서버 시간대를 바꿔 같은 시점이 나오는지는 못 봤어요. `updDt`를 확정 증거로 표시하지 않는 화면과 해석 실패 표시는 웹 테스트가 없어요. |
+| 작품 상세의 자막 후보 구역과 수정 후보 | 2026-10-07 서버: 후보 구역에서 에루샤의 12화 후보를 골라 받았어요 ([0083]) | `trss-web` `seasons_anissia_api/tests.rs` `a_fix_of_a_received_post_is_a_revision_and_each_candidate_says_how_its_job_stands`<br>`trss-collect` `store/anissia/captions_tests.rs` `a_candidate_revises_the_creators_episode_only_once_its_subtitle_was_received` | 구역 화면(제작자·출처별 묶음, 제작자 단위 받기, 제작자 지정 문구, `자막 후보` 이름)은 웹 테스트가 없어요. 제작자마다 회차 번호가 다른 사례(Anissia 3495)는 출처의 회차 대응을 정해야 맞아요 ([0037]). 수정 후보 개수는 개발에서 응답을 바꿔 넣어 본 것뿐이고, 회차 대응이 미정일 때 수정 후보로 표시하지 않는 동작은 직접 겨눈 테스트를 못 찾았어요. |
+
+### 구독 제작자 자동 수신
+
+요구 절: [구독 제작자 자동 수신](#구독-제작자-자동-수신)
+
+| 요구 | 실제 사용에서 본 것 | 테스트로 확인한 것 | 확인하지 않은 것 |
+| --- | --- | --- | --- |
+| 구독 제작자의 받지 않은 회차 자동 수신 | 2026-10-07 서버: 코코렛의 자동 작업이 `FX Senshi Kurumi-chan` 1화로 생겨 SMI가 영상 옆에 적용됐어요 ([0083]) | `trss-jobs` `tests/it/follow.rs` `a_new_episode_of_the_subscribed_creator_is_received_without_a_pick`<br>`trss-worker` `tests/it/anissia_captions.rs` `a_reading_that_finds_the_subscribed_creators_new_episode_makes_and_runs_its_job` | 실제 Anissia의 새 줄에서 실제 worker가 자동 작업을 만드는 흐름은 못 봤고, 사용자 결정(2026-10-04)에 따라 가짜 Anissia·가짜 출처 테스트로 갈음해요 ([0045]). worker 테스트는 자동 작업이 끝난 것까지만 봐요. 수신·분석·보관·최초 적용의 요구와 안전 경계가 사용자가 고른 수신과 같은 점은 겨누지 않았어요. |
+| 자동 수신의 한정과 수정 후보 | 없음 | `trss-jobs` `tests/it/follow.rs` `another_creators_episode_is_never_received_by_itself` | 새 게시물 주소로 올라온 수정본의 자동 작업 생성은 후보 분류까지만 겨눠요. 구독 제작자의 수정본은 못 봤고, 사용자 결정(2026-10-04)에 따라 [0045] 테스트로 갈음해요. |
+| 받은 뒤 14일 동안 하루 한 번 게시물 파일 정보 다시 읽기 | 2026-10-03 개발(서버 DB 사본, 실제 사이트): 무시된 실제 네트워크 테스트를 손으로 돌려 Drive·Tistory·Naver의 다시 읽은 값이 받은 때와 같았어요 ([0050]) | `trss-jobs` `tests/it/recheck.rs` `hourly_looks_read_a_received_episode_fourteen_times_in_fourteen_days` | 실제 게시물이 고쳐지는 것과 worker의 재확인을 실제 사이트로 돌린 것은 못 봤고, 위 확인은 같은 요청을 직접 읽은 거예요. 서버에서 재확인이 수정본 작업을 만든 기록도 없어요. |
+| 표: 읽는 회차 | 없음 | `trss-jobs` `tests/it/recheck.rs` `an_upload_of_the_subscribed_creator_is_never_read_again` | 수정본을 받으면 새로 14일을 시작하는 점은 테스트가 없어요. |
+| 표: 읽는 때 | 없음 | `trss-jobs` `tests/it/recheck.rs` `a_receipt_fifteen_days_old_is_not_read`, `a_restart_the_same_day_reads_nothing_twice_and_the_next_day_reads_again` | 읽기를 가져갈 때 지난 결과를 비우는 것과 종료로 끊긴 읽기의 지난 읽기를 돌려놓는 것은 테스트가 없어요. 서버에서 하루 한 번 주기를 이어 본 기록은 없어요. |
+| 표: 읽는 조건 | 없음 | `trss-jobs` `tests/it/recheck.rs` `only_the_subscribed_creators_receipts_are_read_while_the_subscription_takes_part` | `영상 받기`를 끈 경우만 겨눠요. `자막 받기`를 끈 경우, 시즌 연결이 없는 경우, 작품 폴더가 없는 경우, 그 회차를 맡은 작업이 진행 중인 경우는 테스트가 없어요. |
+| 표: Google Drive | 2026-10-05 개발(서버 DB 사본, 실제 Drive): 파일 둘의 `HEAD` 크기와 `Last-Modified`가 받을 때 기록과 같았어요 ([0074]) | `trss-subtitles` `testing.rs` `a_drive_file_is_read_again_by_a_head_with_no_body_cookie_or_referer` | 호스트 허용 목록을 따르는 점은 겨누지 않았어요. 실제 Drive 파일이 고쳐지는 것은 못 봤어요 ([0050]). |
+| 표: Tistory 일반 첨부 | 2026-10-03 개발(서버 DB 사본, 실제 Tistory): 받은 바이트 11,724가 다시 읽은 값과 같았어요 ([0050]) | `trss-subtitles` `testing.rs` `a_tistory_attachment_is_read_again_by_a_one_byte_range_for_its_total` | 크기가 같은 채 고친 수정은 찾지 못해요(명세가 밝힌 한계). 실제 게시물이 고쳐지는 것은 못 봤어요. |
+| 표: Naver | 2026-10-03 개발(서버 DB 사본, 실제 Naver): 받은 바이트 106,408과 44,480이 다시 읽은 값과 같았어요 ([0050]) | `trss-subtitles` `testing.rs` `a_naver_attachment_is_read_again_from_the_posts_page_alone` | 크기가 같은 채 고친 수정은 찾지 못해요(명세가 밝힌 한계). 처음 스냅샷에 없던 `publish_date`가 생긴 것이 변경이 아니라는 점은 테스트가 없어요. |
+| 표: erulabo의 게시물 | 2026-10-04 개발(서버 DB 사본, 실제 erulabo 859): 게시물의 `dateModified`가 스냅샷과 같았어요. 재확인과 같은 요청으로 읽은 거예요 ([0050]) | `trss-subtitles` `testing.rs` `an_erulabo_post_is_read_again_for_its_modified_time_and_its_drive_file_by_a_head` | 실제 `dateModified`가 파일을 고칠 때만 바뀌는지와 worker의 재확인이 실제 erulabo 수신을 읽는 것은 못 봤어요. 재확인이 만든 `인증 필요` 할 일을 사람이 풀어 수정본을 받는 흐름도 실제 사이트에서 본 기록이 없어요. |
+| 표: erulabo의 Drive 관찰 | 2026-10-04 개발(서버 DB 사본, 실제 Drive): `HEAD`의 `Content-Length` 13,673과 `Last-Modified`가 스냅샷과 같았어요 ([0050]) | `trss-jobs` `tests/it/recheck.rs` `a_changed_drive_file_with_the_post_as_it_was_is_only_recorded_and_the_id_is_nowhere_else` | 제작자가 수정본을 같은 Drive 파일에 덮어쓰는지는 관찰이 쌓여야 정해요(사용자 결정, 2026-10-02). 읽기마다 지난 값을 덮어써 날마다의 값은 남지 않고, 새 수신의 스냅샷과 견주는 일은 사람이 직접 해요. |
+| 표: 다르다고 보는 값 | 2026-10-03 개발(서버 DB 사본, 실제 사이트): 받은 직후 첫 읽기가 받은 때와 같아 변경을 찾지 않았어요 ([0050]) | `trss-jobs` `tests/it/recheck.rs` `a_size_that_differs_between_the_receipt_and_the_recheck_makes_one_job_not_one_a_day` | Tistory와 Naver는 크기가 같은 채 고친 수정을 찾지 못해요(명세가 밝힌 한계). `Last-Modified`만 다른 Drive 파일과 받을 때 없던 값이 새로 생긴 경우는 테스트가 없어요. |
+| 표: 같은 변화가 되풀이될 때 | 없음 | `trss-jobs` `tests/it/recheck.rs` `a_file_saved_again_every_day_with_the_same_bytes_makes_one_job_not_one_a_day` | 서버에서 같은 변화가 이어진 사례는 없어요. |
+| 표: 다를 때 | 없음 | `trss-jobs` `tests/it/recheck.rs` `a_drive_file_whose_size_changed_three_days_after_makes_a_revision_job_and_the_subtitle_stays` | 재확인이 만든 수정본 작업은 못 봤고, 개발에서 실제 게시물이 고쳐지는 것도 못 봤어요 ([0050]). |
+| 표: 받은 바이트가 같을 때 | 참고(가짜 출처): 2026-10-03 개발(서버 DB 사본): `unchanged_from`을 잠시 넣어 작업 상세에 문장이 보였어요 ([0050]) | `trss-jobs` `tests/it/recheck.rs` `a_revision_with_the_same_bytes_records_that_there_is_nothing_to_replace` | 교체 승인이 만들어지지 않는 점은 작업이 끝나고 현재 자막이 그대로인 데까지만 봐요. 서버에서 이 기록은 못 봤어요. |
+| 표: 파일이나 게시물이 사라졌을 때 | 없음 | `trss-jobs` `tests/it/recheck.rs` `a_file_that_is_gone_is_recorded_makes_no_job_and_is_read_again_only_within_the_window` | Naver의 새 이름과 Blogger 본문의 새 Drive 링크로 바뀐 경우는 테스트가 없어요. 옛 파일이 있는 채 링크만 새 파일로 바꾼 수정은 찾지 못해요(명세가 밝힌 한계). 실제 사이트에서 파일이 사라진 기록은 없어요. |
+| 표: 읽지 못했을 때 | 없음 | `trss-jobs` `tests/it/recheck.rs` `a_failing_site_is_recorded_and_tried_again_the_next_day` | 응답이 이상할 때의 `읽을 수 없음`을 Drive·Tistory·Naver별로 겨눈 테스트는 없어요. |
+| 표: 남기지 않는 것 | 2026-10-03 개발(서버 DB 사본, 실제 erulabo): 사람이 푼 수신의 스냅샷에는 Drive 파일 ID가, 로그에는 호스트만 있었어요 ([작업과 인증 명세]) | `trss-jobs` `tests/it/recheck.rs` `a_changed_drive_file_with_the_post_as_it_was_is_only_recorded_and_the_id_is_nowhere_else` | 서명 URL·토큰·쿠키가 기록·로그·오류에 없다는 점을 Tistory·Naver별로 겨눈 테스트는 없어요. 재확인 기록이 웹 API에 나오지 않는 점도 겨누지 않았어요. |
+| 재확인의 한계(보류·대기 중인 작업, 겹치는 작업, 작품 병합) | 없음 | 없음 | 명세가 한계로 적은 동작이라 테스트가 없어요: 회차에 보류·대기 중인 작업이 있으면 읽지 않는 것, 새 줄로 만든 작업과 재확인 작업이 짧은 틈에 같은 회차에 둘 다 생기는 것, 작품 병합 뒤 이전 수신이 재확인에서 빠지는 것이에요. |
+| WinPNG 제외와 erulabo의 재확인 기록 | 2026-10-04 개발(서버 DB 사본, 실제 erulabo): 사람이 푼 수신 스냅샷의 값과 게시물 `dateModified`를 다시 읽어 같았고 Drive 파일 ID가 남았어요 ([0050]) | `trss-jobs` `tests/it/winpng.rs` `a_file_out_of_an_image_is_not_read_again_by_a_recheck`<br>`trss-jobs` `tests/it/recheck.rs` `an_erulabo_post_whose_modified_time_changed_raises_a_check_to_do_and_receives_nothing` | 제작자가 수정본을 같은 Drive 파일에 덮어쓰는지는 관찰이 쌓여야 정해요(사용자 결정, 2026-10-02). 재확인 기록이 설정 내보내기에 들어가는 점은 내보내기가 없어 테스트가 없어요. erulabo의 `인증 필요` 할 일이 열려 있는 동안 그 회차를 다시 읽지 않는 점도 테스트가 없어요. |
+| 규칙·시즌 연결·폴더가 갖춰진 동안만 자동 수신과 `자막 구독` 할 일 | 2026-10-07 서버: 구독 규칙과 시즌 연결이 있는 `FX Senshi Kurumi-chan`에서 자동 작업이 생겼어요 ([0083]) | `trss-jobs` `tests/it/follow.rs` `a_paused_or_archived_rule_or_no_subtitles_receives_and_suggests_nothing`, `a_work_whose_folder_is_gone_receives_nothing_until_it_is_back` | 멈춤·보관된 규칙과 `missing` 작품이 서버에서 받지 않는 것은 못 봤어요. 시즌이 구독의 Anissia 작품과 연결되지 않은 경우는 테스트가 없어요. |
+| 구독 제작자 회차의 비교와 처리 순서 | 2026-10-04 개발(서버 DB 사본): 코코렛의 유일한 관찰(1화)이 이미 받은 것이라 작업이 생기지 않았어요 ([0045]) | `trss-jobs` `tests/it/follow.rs` `a_revision_of_a_received_episode_is_received_and_the_subtitle_in_place_stays` | 아래 표 여덟 행의 순서는 행마다 겨눠요. 여러 행에 동시에 해당하는 입력에서 순서 자체를 겨눈 테스트는 없어요. |
+| 표: 이미 받았거나 맡은 작업이 있는 회차 | 2026-10-04 개발(서버 DB 사본): 이미 받은 관찰이라 작업이 생기지 않았어요 ([0045]) | `trss-jobs` `tests/it/follow.rs` `the_same_line_twice_or_a_restart_makes_one_job_and_a_new_update_time_another` | 맡은 작업이 끝난 뒤 다시 보는 것은 테스트가 없어요. |
+| 표: 사용자가 `받지 않음`으로 정한 회차 | 없음 | `trss-jobs` `tests/it/follow.rs` `an_episode_the_user_does_not_receive_is_left_while_the_others_follow_the_default` | 서버에서 `받지 않음`으로 정한 회차는 못 봤어요. |
+| 표: 같은 출처에서 이전 관찰을 받은 적 있는 회차 | 없음 | `trss-jobs` `tests/it/follow.rs` `a_revision_of_a_received_episode_is_received_and_the_subtitle_in_place_stays` | 실제 제작자의 수정본이 자동으로 받아진 기록은 없어요. 사용자 결정(2026-10-04)에 따라 [0045] 테스트로 갈음해요 ([결과 목표 3 기록]). |
+| 표: 제작자를 붙인 자막의 수정본 | 없음 | `trss-jobs` `tests/it/follow.rs` `a_line_first_seen_after_the_creator_was_named_for_the_file_is_received_as_its_revision` | 구독 제작자에게 붙일 자막이 있는 작품이 개발 사본에 없어서 수정본 자동 수신은 돌려 보지 않았어요 ([0048]). |
+| 표: 대응이 미정이거나 회차가 자연수가 아닌 경우 | 2026-10-04 개발(서버 DB 사본): 시즌 1의 AniList 회차 수를 몰라 대응이 `미정`으로 기록돼 작품 상세에 그렇게 보였어요. 받지 않은 결과는 못 봤어요 ([0045]) | `trss-jobs` `tests/it/follow.rs` `grounds_that_do_not_agree_decide_nothing_and_receive_nothing` | 자연수가 아닌 회차(`13.5`·`SP`)는 아래 `대응과 어긋나는 회차` 행이 봐요. |
+| 표: 대응과 어긋나는 회차 | 없음 | `trss-jobs` `tests/it/follow.rs` `an_episode_that_does_not_fit_is_not_received_and_is_recorded_while_the_others_are` | `회차 확인 필요` 할 일로 올라오는 화면은 겨누지 않았어요. 서버에서 어긋난 회차는 못 봤어요. |
+| 표: 대응한 시즌 회차에 자막 파일이 있거나 다른 제작자가 받은 경우 | 없음 | `trss-jobs` `tests/it/follow.rs` `a_new_creators_episode_where_the_earlier_ones_subtitle_was_received_is_no_revision` | 작품 상세에서 제작자를 정하기 전에 본 줄이 수정 후보로만 보인다는 점은 화면 테스트가 없어요. |
+| 표: 그 밖의 회차(새 회차 작업) | 2026-10-07 서버: `FX Senshi Kurumi-chan` 1화의 자동 작업이 생겼어요 ([0083]) | `trss-jobs` `tests/it/follow.rs` `a_new_episode_of_the_subscribed_creator_is_received_without_a_pick` |  |
+| 사용자 회차 대응의 예외가 있는 회차 | 없음 | `trss-jobs` `tests/it/follow.rs` `an_exception_receives_an_episode_as_the_season_episode_it_names` | 서버에서 예외가 있는 회차는 못 봤어요. |
+| 제작자를 붙인 수정본의 조건, 후보마다 작업 하나, `자동` 표시, 중복 방지 | 2026-10-04 개발(서버 DB 사본): 이미 받은 관찰로 작업이 중복 생성되지 않았어요 ([0045]) | `trss-jobs` `tests/it/follow.rs` `an_attributed_revision_of_an_episode_that_conflicts_is_not_received` | 실패한 자동 작업을 저절로 다시 만들지 않는 점은 테스트가 없어요. 붙인 수정본은 구독 제작자에 붙일 자막이 개발 사본에 없어 돌려 보지 않았어요 ([0048]). |
+| 받을 회차를 살피는 때와 할 일 화면의 표시 | 2026-10-07 서버: worker가 시작한 뒤 첫 주기에 자동 작업이 생겼고 사용자가 할 일 화면에서 봤어요 ([0083]) | `trss-worker` `tests/it/season_link.rs` `connecting_a_followed_subscription_to_its_season_makes_the_creators_jobs_in_that_cycle` | worker가 시작할 때, 자막 작업이 끝났을 때, 작품 상세에서 시즌의 Anissia 연결을 저장했을 때 살피는 것은 테스트가 없어요. 할 일 화면의 `자동`·`수정본` 표시 문구는 웹 화면 테스트가 없어요. |
+| `인증 필요`로 올라오는 CAPTCHA | 2026-10-07 서버: 사용자가 고른 후보에서 Turnstile이 원격 화면에 떴고 사용자가 풀었어요 ([0083]) | `trss-jobs` `tests/it/follow.rs` `a_post_that_asks_for_a_check_stops_at_auth` | 구독 제작자의 자동 작업이 서버에서 `인증 필요`로 멈춘 것은 못 봤어요. CAPTCHA를 자동으로 풀지 않는 점은 겨누지 않았어요. |
+| 구독 제작자가 올리지 않은 회차의 다른 제작자 후보 | 2026-10-03 개발(서버 DB 사본, 실제 데이터): 회차 줄에 후보 메모가 적히고 펼친 자리에 `받기`가 있었으며 할 일은 만들어지지 않았어요 ([0037]) | `trss-jobs` `tests/it/follow.rs` `another_creators_episode_is_never_received_by_itself` | 회차 줄의 조용한 표시와 펼친 자리의 `받기`는 웹 테스트가 없어요. |
+| 제작자 미정 작품의 `자막 구독` 할 일 | 2026-10-04 개발(서버 DB 사본): `자막 받기`를 켜자 `자막 구독` 제안이 생겼고 수퍼소닉EX를 제작자로 정하자 사라졌어요 ([결과 목표 3 기록]) | `trss-jobs` `tests/it/follow.rs` `an_undecided_work_with_candidates_is_one_suggestion_until_a_creator_is_chosen` | 할 일 카드 문구(`1–4화`, `자막 후보 1명`)와 `제작자 지정` 뒤 후보 구역으로 가는 화면은 웹 화면 테스트가 없어요. 제작자 미정 구독이 개발 사본에 없을 때도 있었어요 ([0045]). |
+| 작품과 제작자의 연결·변경 | 2026-10-08 서버: 작품 상세 머리에 `자막 제작자 · 코코렛 · 제작자 변경`이 보였어요 ([0118]) | `trss-web` `subscriptions_api/tests.rs` `the_creator_is_changed_to_one_of_the_anime_or_to_undecided` | 제작자를 바꾼 뒤의 동작은 서버에서 못 봤어요. 규칙 상세의 제작자 줄과 후보 구역 묶음의 `구독 제작자로 정하기`·`제작자 변경` 화면은 웹 테스트가 없어요. |
+| 구독 제작자가 오래 올리지 않을 때 | 없음 | `trss-jobs` `tests/it/follow.rs` `another_creators_episode_is_never_received_by_itself` |  |
+| 표: 5화 후보가 나타나고 5화 자막이 없음 | 2026-10-07 서버: Kurumi 1화가 선택 없이 수신돼 영상 옆 `.smi`가 됐어요 ([0083]) | `trss-jobs` `tests/it/follow.rs` `a_new_episode_of_the_subscribed_creator_is_received_without_a_pick` | 서버에서 `인증 필요`로 멈춘 자동 작업은 못 봤어요. |
+| 표: 3화 수정본이 나타나고 같은 제작자의 3화 자막이 적용돼 있음 | 없음 | `trss-jobs` `tests/it/replace.rs` `a_revision_waits_for_approval_then_replaces_and_the_earlier_stored_copy_stays` | 실제 구독 제작자의 수정본이 `교체 승인`에서 멈춘 기록은 없어요. 사용자 결정(2026-10-04)에 따라 테스트로 갈음해요 ([결과 목표 3 기록]). |
+| 표: ZIP 게시물을 고쳐 6화를 더하고 2화만 바뀜 | 없음 | `trss-jobs` `tests/it/place.rs` `the_subscribed_creators_package_applies_its_other_episodes` | 6화 추가와 2화만 바뀐 상황을 한 입력으로 겨눈 테스트는 없고, 바이트가 같은 1·3–5화가 교체 대상이 아닌 점도 없어요. |
+| 표: 다른 제작자의 3화 후보, 3화 자막은 구독 제작자의 것 | 없음 | `trss-jobs` `tests/it/follow.rs` `another_creators_episode_is_never_received_by_itself` | 회차 줄에 조용히 적는 표시는 웹 테스트가 없어요. |
+| 표: 다른 제작자의 6화 후보만 있음 | 2026-10-03 개발(서버 DB 사본, 실제 데이터): 회차 줄에 조용히 표시되고 할 일은 만들어지지 않았어요 ([0037]) | `trss-jobs` `tests/it/follow.rs` `another_creators_episode_is_never_received_by_itself` | 회차 줄 표시 화면은 웹 테스트가 없어요. |
+| 표: 3화를 받은 지 사흘 뒤 Drive 파일 크기가 바뀜 | 없음 | `trss-jobs` `tests/it/recheck.rs` `a_drive_file_whose_size_changed_three_days_after_makes_a_revision_job_and_the_subtitle_stays` | 서버에서 재확인이 만든 수정본이 `교체 승인`에서 멈춘 기록은 없어요. |
+| 표: 게시물 수정 시각만 바뀌고 파일 크기는 같음 | 없음 | `trss-jobs` `tests/it/recheck.rs` `a_tistory_post_whose_modified_time_changed_with_the_same_total_is_not_received_again` |  |
+| 표: 받은 지 15일 지난 회차 | 없음 | `trss-jobs` `tests/it/recheck.rs` `a_receipt_fifteen_days_old_is_not_read` | Anissia 줄이 바뀌면 수정 후보로 다룬다는 뒷부분은 위 수정 후보 행들이 봐요. |
+| 표: 제작자 미정 작품에 1–4화 후보 2명 | 2026-10-04 개발(서버 DB 사본): `자막 구독` 제안이 생겼고 수퍼소닉EX를 정하자 `auto:14`가 받았어요. 후보 구성은 달랐어요 ([결과 목표 3 기록]) | `trss-jobs` `tests/it/follow.rs` `an_undecided_work_with_candidates_is_one_suggestion_until_a_creator_is_chosen` |  |
+
+### 출처별 다운로드
+
+요구 절: [출처별 다운로드](#출처별-다운로드)
+
+| 요구 | 실제 사용에서 본 것 | 테스트로 확인한 것 | 확인하지 않은 것 |
+| --- | --- | --- | --- |
+| 여섯 경로 각각의 수신·분석·보관·영상 연결·적용 확인과 수신 방식 구분 | 2026-10-07 서버: 구독 제작자 코코렛의 자동 작업과 에루샤의 후보가 영상 옆에 적용됐어요 ([0083]) | `trss-jobs` `tests/it/blogger.rs`, `tests/it/tistory.rs`, `tests/it/naver.rs`, `tests/it/winpng.rs`(경로마다 수신까지)<br>`trss-jobs` `tests/it/place.rs` `a_received_subtitle_is_stored_applied_beside_its_video_and_leaves_the_receive_area` | 경로별 테스트는 수신 단계에서 끝나서 각 경로를 보관·영상 연결·적용까지 이은 테스트는 없어요. 서버에서 적용까지 본 경로는 Tistory(본문의 Drive 링크)와 erulabo뿐이에요 ([0083]). 서명 URL이 만료된 응답은 월 말 뒤에도 못 봤고 휴대폰·VPN 경로도 못 봤어요 ([0038]). |
+| 표: erulabo | 2026-10-07 서버: 사용자가 iPhone으로 에루샤의 12화 후보를 골라 Turnstile을 풀었고 ZIP이 적용됐어요 ([0083], [0085]) | `trss-jobs` `tests/it/screen.rs` `a_check_post_waits_with_its_run_bound_and_a_passed_check_brings_its_file_in` | 만료·오류 HTML을 실제 erulabo가 준 적은 없고 가짜 브라우저의 `403` HTML로만 봤어요 ([0041]). 확인을 푼 뒤 다운로드가 새 창으로 남는지는 못 봤어요 ([0055]). |
+| 표: Blogger·Google Drive 개별 자막 | 2026-10-03 개발(서버 DB 사본, 실제 Blogger·Drive): 카이란 13화 `.ass` 39,453바이트를 받았고 무시된 실제 네트워크 테스트로 C소라의 `.ass`도 받았어요 ([0042]) | `trss-jobs` `tests/it/blogger.rs` `individual_links_give_only_the_chosen_episodes_file_and_the_fonts_once`, `a_confirmation_or_error_page_from_drive_is_a_classified_failure` | Drive의 확인·할당량·로그인 페이지는 본 적이 없어 알려진 표시로만 가려요 ([결과 목표 3 기록]). 회차를 밝힌 링크가 없는 게시물이 하나뿐인 자막 링크를 받는 것과 고를 수 없을 때 `출처 구조 바뀜`이 되는 것은 테스트가 없어요. 파일 하나 200MiB 한도와 리디렉션 호스트 제한은 겨누지 않았어요. |
+| 표: Blogger·Google Drive 회차 ZIP | 2026-10-03 개발(서버 DB 사본): 코코렛의 felia ZIP(Tistory 본문의 Drive 링크)과, 무시된 실제 네트워크 테스트로 실제 Blogger 별명따위의 ZIP을 받았어요 ([0042]) | `trss-jobs` `tests/it/blogger.rs` `a_zip_of_a_range_is_received_once_for_its_episodes_as_a_zip` | 실제 Drive의 12회차 묶음은 풀어 본 적이 없어요 ([0065]). Blogger 호스트의 ZIP을 풀어 적용한 기록은 없고 서버 적용([0083])이 ZIP이었는지는 기록에 없어요. 회차를 밝히지 않은 압축 파일을 받는 점은 테스트가 없어요. |
+| 표: Tistory 일반 첨부 | 2026-10-03 개발(서버 DB 사본, 실제 Tistory): 스모모 491의 ZIP 11,724바이트를 받았고 무시된 실제 네트워크 테스트로 492의 11,379바이트도 받았어요 ([0038]) | `trss-jobs` `tests/it/tistory.rs` `a_tistory_post_goes_through_open_and_receive_and_leaves_its_zip_with_size_and_sha256` | 서명 URL이 리디렉션되는 경우와 월 말 뒤의 실제 만료 응답은 못 봤어요 ([0038]). 서버에서 일반 첨부(`.fileblock`) 경로는 못 봤어요. |
+| 표: Tistory WinPNG | 2026-10-03 개발(서버 DB 사본, 실제 서버 브라우저와 실제 뷰어): 하느 761에서 파일 48개, 762에서 SMI 12개, 763에서 SMI와 ASS를 받았어요 ([0043]) | `trss-jobs` `tests/it/winpng.rs` `files_out_of_an_image_are_received_under_their_names_and_folders`<br>`trss-subtitles` `tests/it/winpng_sample.rs` `the_real_viewer_gives_the_files_of_real_posts`(무시된 테스트, 실제 뷰어) | 키가 필요한 실제 이미지는 못 봤어요. 같은 게시물에서 꺼낸 바이트가 실행마다 달랐고 그 바이트를 같은 파일의 판정 근거로 써도 되는지는 확인하지 못했어요 ([0043]). |
+| 표: Naver 블로그 첨부 | 2026-10-03 개발(서버 DB 사본, 실제 Naver): 공룡이 8화 ZIP 106,408바이트와 ASS 44,480바이트를 받았어요 ([0044]) | `trss-jobs` `tests/it/naver.rs` `an_attachment_inside_the_inner_frame_is_received_with_the_posts_fonts` | 비공개 글과 보안 확인 페이지는 본 적이 없어 알려진 표시로만 가려요 ([결과 목표 3 기록]). |
+| 출처가 요구하지 않는 CAPTCHA·로그인을 추가하지 않는다는 요구 | 2026-10-03 개발(서버 DB 사본): 사람이 실제 erulabo의 확인만 풀었고 수동 다운로드·업로드는 없었어요 ([0041]) | `trss-jobs` `tests/it/screen.rs` `a_job_that_does_not_wait_for_its_check_takes_no_request` | 후보 선택·연결 확인·교체 승인이 별개의 입력으로 남는 점은 겨누지 않았어요. 출처가 요구하지 않는 확인을 추가하지 않는다는 점은 테스트로 직접 겨눌 수 없는 설계 요구예요. |
+
+### 직접 찾기와 자막 올리기
+
+요구 절: [직접 찾기와 자막 올리기](#직접-찾기와-자막-올리기)
+
+| 요구 | 실제 사용에서 본 것 | 테스트로 확인한 것 | 확인하지 않은 것 |
+| --- | --- | --- | --- |
+| 관찰한 후보가 없는 회차를 사람이 고른 파일로 받는 두 경로 | 2026-10-05 개발(서버 DB 사본): 올리기와 직접 찾기가 배치 확인을 거쳐 적용됐어요 ([0076]) | `trss-jobs` `tests/it/find.rs` `two_downloads_are_two_files_of_one_package_and_finishing_hands_them_to_placement` | 올리기를 실제 브라우저의 파일 고르기 창으로 올린 것은 못 봤고 같은 API를 직접 불렀어요 ([0047]). 두 경로의 성공으로 출처별 다운로드를 대신하지 않는다는 요구는 정책이라 겨눈 테스트가 없어요. |
+| 직접 찾기: 서버 브라우저가 게시물을 열고 사용자가 원격 화면에서 받음 | 2026-10-04 개발(서버 DB 사본, 실제 `felia.tistory.com/1187`): 코코렛을 고르자 서버 브라우저가 1화 게시물을 열었고 원격 화면에서 받기를 눌러 ZIP을 받았어요 ([0046]) | `trss-jobs` `tests/it/find.rs` `a_find_job_opens_the_creators_post_and_keeps_what_a_persons_click_downloads` | 시작 게시물이 곧 1화 게시물이라 지난 게시물로 옮기는 일은 이 확인에 없어요 ([0046]). 받은 파일의 제작자가 연 게시물의 제작자라는 점은 겨누지 않았어요. |
+| 자막 올리기(낱개·여러 개·압축 파일·폴더) | 2026-10-06 개발(서버 DB 사본): 올린 `FX Senshi Kurumi-chan - 03.smi`가 3화로 적용됐어요 ([0076])<br>2026-10-03 개발(서버 DB 사본): 자막 2·폰트 1·`readme.txt`를 API로 올려 작업 상세에 자막 2개·폰트 1개와 뺀 `readme.txt`가 보였어요 ([0047]) | `trss-web` `subtitle_upload_api/tests.rs` `two_ass_a_font_and_a_text_file_make_one_package_that_says_what_it_dropped`<br>`trss-jobs` `tests/it/upload.rs` `archives_of_every_format_are_kept_whole_and_one_that_is_none_is_dropped` | 실제 브라우저의 파일 고르기 창으로 올린 것은 못 봤고 휴대폰은 흉내로만 봤어요 ([0047]). 폴더 올리기 화면은 실제 브라우저에서 본 기록이 없어요. |
+| 올리기의 multipart 요청 | 2026-10-03 개발(서버 DB 사본): API를 직접 불러 확인했어요 ([0047]) | `trss-web` `subtitle_upload_api/tests.rs` `a_bad_request_is_refused_before_a_file_is_stored`, `the_creator_is_one_of_the_seasons_or_unknown` | 필드를 `id`·`work_id`·`season`·`creator`·`skipped`·`file` 순서로 보내는 화면 코드는 테스트가 없어요. |
+| 내용으로 가리기와 압축·나뉜 압축 파일의 처리 | 2026-10-03 개발(서버 DB 사본): PNG를 `fake.ass`로 올리자 "내용이 자막이나 폰트가 아니에요"로 빠졌고, RAR은 `묶음 분석을 기다려요`로 들어갔어요 ([0047]) | `trss-subtitles` `upload.rs` `an_image_renamed_to_a_subtitle_is_dropped`<br>`trss-jobs` `tests/it/upload.rs` `the_volumes_of_a_split_archive_are_kept_with_the_volume_that_has_the_magic` | 나뉜 ZIP 전체의 구조는 확인하지 않고 묶음 분석이 알려요 ([0047]). 서버에서 나뉜 압축 파일을 올린 기록은 없어요. |
+| 올리기의 한도와 본문 제한 | 없음 | `trss-web` `subtitle_upload_api/tests.rs` `an_upload_past_a_limit_is_refused_while_it_is_stored_and_the_limit_is_told`, `a_body_that_stalls_or_takes_too_long_is_dropped_and_leaves_nothing` | 테스트는 줄인 한도(파일 3개 등)로 거절 동작을 겨누고 기본값 500개·2000개·200MiB·1GiB 자체는 겨누지 않아요. 서버나 실제 브라우저에서 한도에 닿는 올리기를 본 기록은 없어요. |
+| 올리다 중단된 폴더의 정리 | 없음 | `trss-jobs` `tests/it/upload.rs` `the_sweep_removes_only_old_orphans_of_a_uuid_name`, `an_upload_dropped_halfway_leaves_nothing_and_gives_its_turn_back` | 받기 시도의 `.tmp/<attempt>/`가 남는 점은 겨누지 않았어요. 서버에서 올리는 도중 프로세스가 죽은 기록은 없어요. |
+| 올리기의 응답 | 2026-10-03 개발(서버 DB 사본): 같은 ID로 다시 보내자 200이었고 `readme.txt`만 올리자 400이었어요 ([0047]) | `trss-web` `subtitle_upload_api/tests.rs` `two_ass_a_font_and_a_text_file_make_one_package_that_says_what_it_dropped`(202), `a_retry_with_the_same_id_gets_the_job_back_and_another_upload_is_a_conflict`(200·409), `nothing_to_receive_is_a_400_that_says_how_many_files_were_dropped`(400) | 개발 확인에서 `409`는 본 적이 없어요. |
+| 올리기 작업의 모양 | 2026-10-05 개발: 올리기 작업이 배치 확인을 거쳐 적용됐어요 ([0076]) | `trss-jobs` `tests/it/upload.rs` `an_upload_is_a_received_job_that_waits_for_the_worker` |  |
+| 후보 구역 끝의 `직접 찾기` | 2026-10-04 개발(서버 DB 사본): 후보 구역의 `직접 찾기`에서 코코렛을 골랐어요 ([0046]) | 없음 | `직접 찾기` 버튼과 후보가 없는 시즌에서 버튼이 없는 것은 웹 화면 테스트가 없어요. |
+| 직접 찾기의 만들기 요청과 작업 모양 | 2026-10-04 개발(서버 DB 사본, 실제 사이트): 작업이 출처 `직접 찾기`·제작자 `코코렛`으로 만들어졌어요 ([0046]) | `trss-web` `jobs_api/tests.rs` `a_find_makes_one_job_per_browser_id_that_opens_the_creators_newest_post` |  |
+| 직접 찾기의 원격 화면, 팝업, 탭 줄 | 2026-10-04 개발(서버 DB 사본, 실제 `felia.tistory.com` 게시물): iPhone으로 원격 화면의 도구 줄을 썼고 이상 없었어요. 새 창은 별도 CDP 스크립트로 만들었어요 ([0055]) | `trss-jobs` `tests/it/find.rs` `the_screen_follows_a_page_the_post_opens_and_comes_back_when_it_closes`<br>`web` `screens/todo/remote/tabs.test.ts` `the row shows from two tabs on` | 실제 휴대폰으로 탭을 누르고 닫는 느낌은 못 봤어요. 실제 제작자 블로그에서 탭 이름을 정하는 판단은 가짜 시험과 단위 시험으로만 봤어요 ([0055]). |
+| 끝낸 다운로드가 묶음의 파일이 되는 규칙과 다운로드 한도 | 2026-10-04 개발(서버 DB 사본): ZIP 하나가 묶음의 파일이 됐고 아무것도 받지 않은 작업은 `받은 파일 없음`으로 끝났어요 ([0046]) | `trss-jobs` `tests/it/find.rs` `a_download_that_is_no_subtitle_is_dropped_with_why`<br>`trss-jobs` `upload.rs` `the_rules_between_files_see_the_files_that_came_before` | 직접 찾기 작업 전체에서 `.idx`보다 먼저 받은 `.sub`가 빠지고 다시 받으면 남는 흐름은 테스트가 없고, `upload.rs` 테스트는 파일 규칙 함수만 겨눠요. ZIP을 확인하느라 풀어 읽는 양을 작업기가 지켜보는 동안 2GiB로 한정하는 점도 테스트가 없어요. |
+| `받기 끝내기` | 2026-10-04 개발(서버 DB 사본): `받기 끝내기`를 누르자 `받은 파일: 압축 파일 1개`로 끝났고 아무것도 받지 않은 작업은 `받은 파일 없음`이었어요 ([0046]) | `trss-jobs` `tests/it/find.rs` `finishing_waits_for_a_download_under_way_and_keeps_it`, `without_a_server_browser_a_find_job_waits_and_the_worker_ends_it_when_finished` | 서버에서 `받기 끝내기`는 못 봤어요. 끝나면 서버 브라우저 실행을 닫는 점은 겨누지 않았어요. 화면 테스트는 상태 분류만 겨누고 화면 문구는 겨누지 않아요. |
+| 직접 찾기의 브라우저 수명 | 참고(가짜 출처): 2026-10-03 개발(서버 DB 사본): 가짜 확인 작업이 입력 없이 300초 뒤 실행이 닫혔고 다시 열면 준비됐으며 웹만 다시 시작해도 같은 실행에 붙었어요 ([작업과 인증 명세]) | `trss-jobs` `tests/it/find.rs` `an_idle_end_closes_the_run_keeps_the_files_and_a_reopening_opens_the_same_post`, `a_restart_ends_the_stuck_run_after_its_download_and_opens_the_same_post_in_a_new_one` | 실제 휴대폰과 실제 erulabo로 유휴 종료 뒤 다시 여는 것은 못 봤어요 ([작업과 인증 명세]). |
+| 받기 주소·토큰·쿠키를 기록하지 않음 | 2026-10-04 개발(서버 DB 사본, 실제 사이트): 직접 찾기의 작업 기록과 worker 로그에는 호스트(`felia.tistory.com`, `drive.usercontent.google.com`)만 있었어요 ([0046]) | `trss-subtitles` `auth.rs` `what_the_answer_said_goes_with_the_file_and_its_address_does_not` | 직접 찾기 작업의 로그는 테스트가 없고, 위 테스트는 브라우저로 받은 파일의 기록과 화면 메시지를 봐요. |
+| 표: 이름만 `.ass`인 이미지 | 2026-10-03 개발(서버 DB 사본): PNG를 `fake.ass`로 올리자 "내용이 자막이나 폰트가 아니에요"로 빠졌어요 ([0047]) | `trss-subtitles` `upload.rs` `an_image_renamed_to_a_subtitle_is_dropped` | 작업 상세 `뺀 파일`의 문구는 웹 화면 테스트가 없어요. |
+| 표: 파일 501개 | 없음 | `trss-web` `subtitle_upload_api/tests.rs` `an_upload_past_a_limit_is_refused_while_it_is_stored_and_the_limit_is_told` | 기본 한도인 500개에 501개를 올리는 입력은 확인하지 못했어요. |
+| 표: 응답이 끊긴 뒤 같은 `id`로 다시 보냄 | 2026-10-03 개발(서버 DB 사본): 같은 ID로 다시 보내자 같은 작업 ID가 200으로 왔어요 ([0047]) | `trss-web` `subtitle_upload_api/tests.rs` `a_retry_with_the_same_id_gets_the_job_back_and_another_upload_is_a_conflict`<br>`trss-jobs` `tests/it/upload.rs` `a_repeat_or_another_upload_under_the_same_id_stores_no_second_package` |  |
+| 표: ASS 12개·폰트 2개·`readme.txt`가 든 ZIP을 올림 | 2026-10-03 개발(서버 DB 사본): ASS 2개·TTF 1개·`readme.txt`를 ZIP이 아니라 낱개로 올려 자막 2·폰트 1이 한 묶음으로 보이고 `readme.txt`가 빠졌어요 ([0047]) | `trss-jobs` `tests/it/upload.rs` `a_zip_stays_whole_in_the_package_and_one_cut_short_is_dropped_with_its_reason`<br>`web` `screens/todo/unpack.test.ts` `an unpacked archive says how many files it held, whatever tries it took` | ZIP으로 올려 풀고 12+2를 한 묶음으로 분석하는 흐름을 한 입력으로 이은 테스트와 관찰은 없어요. |
+| 표: 회차마다 게시물을 쓰는 제작자의 3화 게시물을 직접 찾기로 받음 | (부분) 2026-10-06 개발: 그 직접 찾기 작업이 풀기·배치 확인·보관·교체 승인을 거쳐 적용됐어요 ([0076]) | `trss-jobs` `tests/it/find.rs` `two_downloads_are_two_files_of_one_package_and_finishing_hands_them_to_placement`, `a_find_job_opens_the_creators_post_and_keeps_what_a_persons_click_downloads` | 시작 게시물이 아닌 3화 게시물로 옮겨 받는 일은 실제로 본 적이 없어요 ([0046]). |
+| 표: 자막·폰트가 하나도 없는 파일만 올림 | 2026-10-03 개발(서버 DB 사본): `readme.txt`만 올리자 400과 "받을 자막이나 폰트가 없어요"가 왔어요 ([0047]) | `trss-web` `subtitle_upload_api/tests.rs` `nothing_to_receive_is_a_400_that_says_how_many_files_were_dropped` |  |
+
+### 자막 묶음 분석과 안전한 배치 판단
+
+요구 절: [자막 묶음 분석과 안전한 배치 판단](#자막-묶음-분석과-안전한-배치-판단)
+
+| 요구 | 실제 사용에서 본 것 | 테스트로 확인한 것 | 확인하지 않은 것 |
+| --- | --- | --- | --- |
+| 소개 문단: 묶음 분석과 배치 계획, 지원 형식, 후보 작업과 올리기·직접 찾기의 확인 구분 | 2026-10-07 서버: 구독 제작자 자동 작업과 고른 후보 작업이 확인 없이 적용됐어요 ([0083]) | `trss-jobs` `tests/it/place.rs` `the_candidates_file_of_a_package_is_applied_and_the_other_episodes_stored` | 다국어 선호 설정은 기능이 없어 확인할 대상이 없어요. 미지원 상태는 계획 줄의 메모 문구까지만 확인했어요. |
+| 표: 여러 회차·하위 폴더 | 2026-10-07 서버: 에루샤 1–12화 ZIP에서 12개를 보관하고 12화만 적용했어요 ([0083]) | `trss-jobs` `tests/it/unpack.rs` `the_candidates_episode_of_a_season_zip_is_applied_and_the_rest_stored` | Tistory 25개 묶음과 Drive `1-12` 묶음은 시험으로만 확인했고 ([0064]), 하위 폴더가 든 실제 묶음은 없어요. |
+| 표: ASS·SRT·SMI 복수 형식 | 2026-10-05 개발(서버 DB 사본): 하느 작업 21·34에서 그 회차에 `.smi`가 이미 있어 ASS도 보관만 했어요 ([0064]) | `trss-jobs` `tests/it/place.rs` `the_first_format_of_the_order_is_applied_and_the_other_stored` | 형식 보존을 겨눈 테스트는 없고 판별까지만 확인해요. 서버는 보지 않았어요. |
+| 표: 같은 회차·확장자의 여러 파일 | 없음 | `trss-jobs` `place/package/tests.rs` `alternatives_of_one_format_are_asked_and_none_is_taken` | `[TV]`·`[sign]` 표시로 용도·릴리스를 구분하는 것과 제작자·수정본 차이를 구분하는 것은 테스트가 없어요. |
+| 표: 한 파일의 여러 언어·IDX와 SUB 같은 구성 파일 | 없음 | (1) `trss-jobs` `place/package/tests.rs` `files_none_of_the_kept_kinds_are_dropped_with_the_reason`<br>(2) `trss-subtitles` `compare/tests.rs` `an_smi_with_two_language_classes`(내용 비교만) | (2) 배치 판단이 파일 하나를 언어 하나라고 단정하지 않는 것은 테스트가 없어요. IDX 짝 누락 밖의 구성 요소 누락 표시도 없어요. |
+| 표: 폰트·설명·라이선스 파일 | 2026-10-05 개발(서버 DB 사본): Naver 작업 `e328d060`이 폰트 3개를 `.trss/subtitles/수퍼소닉EX/`에 뒀어요 ([0064]) | `trss-jobs` `tests/it/place.rs` `fonts_are_kept_beside_their_subtitle_and_linked_to_it` | 서버는 보지 않았어요. |
+| 표: 중복과 이름 충돌 | 2026-10-07 서버: `All Works Maid` 2화가 보관본과 바이트가 같아 보관만 했어요 ([0083]) | `trss-jobs` `tests/it/place.rs` `a_name_taken_by_other_bytes_is_numbered_and_the_same_bytes_are_one_file` | 대상 경로 충돌을 변경 전에 표시하는 화면은 계획·승인 대기까지만 확인했어요. |
+| 표: 인코딩 차이·잘못된 확장자·손상 | 2026-10-07 서버: ZIP 안의 `__MACOSX/._*.ko.ass` 12개를 ASS 형식이 아니라며 보관하지 않았어요 ([0083]) | `trss-subtitles` `upload.rs` `an_image_renamed_to_a_subtitle_is_dropped` | 인코딩이 다른 자막은 서버에서 읽지 않았어요. |
+| 표: 중첩 압축·암호·알 수 없는 첨부 | 2026-10-08 서버(일회용 컨테이너): 30단 중첩 ZIP과 암호 ZIP이 거절됐어요 ([0065]) | `trss-archive` `tests/it/refusals.rs` `nesting_bombs_and_odd_depths_are_refused`, `encrypted_archives_are_refused` | 지원 여부·추가 입력 필요·분석 실패를 나눠 보여주는 것은 `풀지 못함`의 까닭 문구까지만 확인했어요. |
+| 표: ZIP 밖의 압축 형식·나뉜 압축 파일 | 2026-10-08 서버(일회용 컨테이너): 200MiB 묶음 ZIP·7z·`tar.xz`·RAR가 풀렸어요 ([0065]) | `trss-jobs` `tests/it/unpack.rs` `uploaded_archives_of_each_format_are_unpacked_by_the_worker` | 서버 표본에 나뉜 조각, gzip, bzip2는 없었어요. WinRAR로 만든 RAR, `.tar.001`·`.gz.001`, PPMd 7z는 시험하지 않았어요 ([0059], [티켓 목록]). |
+| 표: 경로 이탈·링크·과도한 압축 해제 | 2026-10-08 서버(일회용 컨테이너): 경로 이탈 멤버와 폭탄 표본 8개가 거절됐어요 ([0065]) | `trss-archive` `tests/it/refusals.rs` `paths_that_leave_the_folder_or_cannot_be_one_are_refused`, `links_are_refused_in_every_format` | 사전 512MiB 7z·xz 표본은 재지 않았고, 링크·장치 멤버 표본도 없어요. worker를 실제로 죽였다 살린 관찰은 없어요 ([티켓 목록]). |
+| 보류된 대안의 표시와 선택, 미상 값, 작은 화면 상세, 선택·승인이 저절로 생기지 않음 | 없음 | (1) `trss-jobs` `place/package/tests.rs` `alternatives_of_one_format_are_asked_and_none_is_taken`<br>(2) 없음 | (2) 원래 파일명·출처·용도·릴리스·판별 근거를 함께 보여주는 것, 미상 값 표시, 작은 화면 상세, 필터·상세 열기·새로고침이 선택이나 교체 승인을 만들지 않는 것은 테스트가 없어요. |
+
+#### 파일의 회차
+
+요구 절: [파일의 회차](#파일의-회차)
+
+| 요구 | 실제 사용에서 본 것 | 테스트로 확인한 것 | 확인하지 않은 것 |
+| --- | --- | --- | --- |
+| 소개 문단: 작업이 생긴 방식에 따라 정하는 파일의 회차 | 2026-10-07 서버: 고른 후보 작업과 구독 제작자 자동 작업이 후보의 회차 파일을 골랐어요 ([0083]) | `trss-jobs` `place/episode.rs` `the_candidates_episode_goes_through_the_mapping` | 올리기·직접 찾기가 파일의 회차를 정한 것은 서버에서 보지 않았어요. |
+| 후보 작업: 후보의 회차 표시를 출처의 회차 대응으로 옮겨 대상 회차를 정함 | 2026-10-07 서버: 후보 12화가 묶음의 12화 파일로 적용됐어요 ([0083])<br>2026-10-06 개발(서버 DB 사본): 마이그레이션 60의 순서를 사본에 흉내 내도 참조가 끊기지 않았어요 ([0077]) | (1) `trss-jobs` `place/episode.rs` `the_candidates_episode_goes_through_the_mapping`<br>(2) `trss-jobs` `place/episode.rs` `a_source_without_a_mapping_is_the_same_number`<br>(3) `trss-jobs` `tests/it/relocate.rs` `a_link_made_by_the_same_number_follows_the_mapping_decided_later`<br>(4) `trss-core` `db.rs` `a_candidates_file_put_on_its_own_number_follows_the_mapping_after_the_migration` | 위 개발 관찰은 `Db::open`의 실제 경로가 아니고, 대응이 미정인 출처를 정해 보지 않고 둔 경우는 시험하지 않았어요. 서버 DB에서 마이그레이션 60이 바꿀 행이 있었는지는 문서에 없고, 2쿨을 1화부터 다시 세는 출처에서 틀린 회차에 붙은 적은 없어요. |
+| 올리기·직접 찾기: 파일 이름의 번호를 출처의 회차 대응으로 옮기고, 제작자를 알면 `same_number`(`attachment`), 모르면 `explicit` | 2026-10-05 개발(서버 DB 사본): 직접 찾기 `851595e8`과 올리기 `481f672b`가 파일 이름의 번호대로 배치 확인을 거쳐 적용됐어요 ([0076]) | `trss-jobs` `place/package/tests.rs` `an_upload_of_a_mapped_creator_goes_through_the_mapping` | 올리기 줄이 나중에 정한 대응을 따라 재배치되는 시험은 없어요(후보 작업의 시험만 있어요). 서버는 보지 않았어요. |
+| 두 경우 모두: 시즌 밖·소수·문자 회차·읽을 수 없는 번호·미정 대응은 보류 | 참고(가짜 출처): 2026-10-04 개발에서 시즌 범위를 넘는 가짜 작업 14–19화가 `회차 확인 필요`로 기다렸어요 ([0063]) | `trss-jobs` `place/episode.rs` `what_the_mapping_cannot_place_is_asked` | 문자 회차(`5a` 같은 이름)를 입력으로 쓴 테스트는 없어요. 실제 출처의 묶음으로는 본 적이 없어요. |
+| 후보 작업의 묶음에서 후보 회차 밖의 파일: 고른 파일의 번호 체계로 회차를 정하고, 시즌 표시를 견주고, 시즌 밖·소수·번호 없음은 회차에 붙이지 않고 보관 | 2026-10-07 서버: `All Works Maid` 에루샤 1–11화가 보관만 됐어요 ([0083]) | (1) `trss-jobs` `place/package/tests.rs` `the_package_numbers_as_its_candidates_file_does`<br>(2) `trss-jobs` `place/package/tests.rs` `another_season_is_told_against_the_mark_of_the_candidates_file`<br>(3) `trss-jobs` `place/package/tests.rs` `the_file_of_a_candidate_whose_episode_cannot_be_told_is_asked` | (1) 고른 파일로는 어느 쪽 번호인지 알 수 없는데 대응이 번호를 옮기는 경우는 테스트가 없어요.<br>(2) Tistory 25개 묶음과 Drive `1-12` 묶음, 시즌 표시가 든 이름의 실제 묶음은 본 적이 없어요 ([0064]). |
+| 후보 회차의 파일이 하나도 없는 묶음: 번호가 한 가지면 `회차 확인 필요`, 여러 가지면 보관하고 `일부 실패` | 없음 | `trss-jobs` `place/package/tests.rs` `a_package_without_the_candidates_file_says_so` | |
+| 표: 후보 `14`, 출처 대응 −12, 묶음에 `Show - 14.ass` | 없음 | `trss-jobs` `place/episode.rs` `the_candidates_episode_goes_through_the_mapping` | |
+| 표: 같은 후보, 묶음에 `Show S2 - 02.ass` | 없음 | `trss-jobs` `place/package/tests.rs` `the_package_numbers_as_its_candidates_file_does` | |
+| 표: 같은 후보, 묶음에 `Show - 13.ass`뿐 | 없음 | `trss-jobs` `place/package/tests.rs` `a_single_file_of_another_number_is_asked` | |
+| 표: 같은 후보, 묶음에 번호 없는 `Show.ass` 하나 | 없음 | `trss-jobs` `place/package/tests.rs` `an_unnumbered_package_of_one_episode_is_the_candidates` | |
+| 표: 같은 후보, 묶음에 `Show - 13.ass`~`Show - 25.ass` | 2026-10-07 서버: 에루샤 1–12화 ZIP에서 고른 12화만 적용하고 나머지 11개를 보관만 했어요(대응 −12나 시즌 밖 번호는 없는 경우) ([0083]) | `trss-jobs` `place/package/tests.rs` `the_package_numbers_as_its_candidates_file_does` | 대응 −12 입력에서 `15`–`24`가 보관만 되는 동작은 회차까지만 단정해요. `25`가 시즌 밖이라 보관되는 경우는 본 적이 없어요. |
+| 표: 같은 후보, 묶음에 `Show S2 - 02.ass`와 `Show S2 - 05.ass` | 없음 | `trss-jobs` `place/package/tests.rs` `the_package_numbers_as_its_candidates_file_does` | `05`가 보관만 되는 동작(`Store`)은 단정하지 않아요. |
+| 표: 같은 후보, 묶음에 `a - 05.ass`와 `a - 06.ass`뿐 | 없음 | `trss-jobs` `place/package/tests.rs` `a_package_without_the_candidates_file_says_so` | 통합 테스트(`tests/it/place.rs`)는 후보 2화·대응 없음·`Show - 04/05.ass` 입력이라 명세의 값과 달라요. |
+| 표: 시즌 2, 후보 `1`, 묶음에 `Show - 01.ass`와 `Show S03E01.ass` | 없음 | `trss-jobs` `place/package/tests.rs` `another_seasons_file_is_on_no_episode` | |
+| 표: 시즌 2(12화)에 `Show - 01.ass`~`Show - 13.ass`를 제작자 알 수 없음으로 올림 | 없음 | `trss-jobs` `tests/it/placement.rs` `an_upload_of_an_unknown_creator_waits_with_its_names_and_holds_one_outside_the_season` | |
+
+#### 고르지 않은 회차
+
+요구 절: [고르지 않은 회차](#고르지-않은-회차)
+
+| 요구 | 실제 사용에서 본 것 | 테스트로 확인한 것 | 확인하지 않은 것 |
+| --- | --- | --- | --- |
+| 고르지 않은 회차는 보관만 하고, 회차 줄에 `보관본 있음`을 적고, 구독 제작자 자동 작업은 다른 회차도 적용하고, 다른 시즌·회차 불명은 보관하되 까닭을 적음 | 2026-10-08 서버(0.6.1): 휴대폰 크기로 연 `All Works Maid`에서 자막이 있는 회차의 줄에 `보관본 있음`이 있었어요 ([0120]) | (1) `trss-jobs` `tests/it/place.rs` `the_candidates_file_of_a_package_is_applied_and_the_other_episodes_stored`<br>(2) `trss-jobs` `tests/it/place.rs` `the_subscribed_creators_package_applies_its_other_episodes`<br>(3) `trss-jobs` `tests/it/place.rs` `another_seasons_file_and_an_executable_are_told_apart`<br>(4) `web` `src/screens/library/detail/subtitles.test.ts` `a stored copy to choose is on the row of an episode with no subtitle too` | 실제 휴대폰으로는 보지 않았고 브라우저의 휴대폰 크기 흉내로만 봤어요. 서버의 구독 제작자 자동 작업은 1화 하나뿐이라 다른 회차를 적용한 적이 없어요. 다른 시즌의 까닭 화면은 계획 줄의 메모까지만 확인했어요. |
+| 회차 줄의 `적용`: 보관본을 받은 작업의 줄을 다시 적용으로 돌리고, 가장 최근 작업이 적용하고, 작품 폴더가 없으면 `영상 대기`, 보류된 대안의 답, 적용하지 못하면 까닭, 자막이 있는 회차는 교체 계획과 `교체 승인` | 2026-10-07 서버: 사용자가 9–11화 보관본을 회차 줄에서 적용했고, 자막이 있던 1화는 교체 승인을 거쳐 적용됐어요 ([0083]) | (1) `trss-jobs` `tests/it/place.rs` `a_stored_only_episode_is_applied_when_a_person_asks`<br>(2)(3)(5) `trss-jobs` `tests/it/choose.rs` `a_copy_on_an_episode_with_no_subtitle_is_applied_at_once_and_marked_chosen`<br>(4) `trss-jobs` `tests/it/place.rs` `alternatives_of_one_format_wait_for_a_person_and_none_is_applied` | 가장 최근 작업이 적용하는 순서를 겨눈 테스트는 없어요. 서버(0.6.1)에는 자막 없는 회차의 보관본이 없어 `적용`을 눌러 볼 곳이 없었고, 적용 직후 화면을 고친 0127은 배포한 뒤에 보지 않았어요 ([0127]). |
+
+#### 배치 확인
+
+요구 절: [배치 확인](#배치-확인)
+
+| 요구 | 실제 사용에서 본 것 | 테스트로 확인한 것 | 확인하지 않은 것 |
+| --- | --- | --- | --- |
+| 소개 문단: 사용자가 화면 앞에 있는 흐름에서 배치 계획을 한 번 확인받는 단계, 올리기·직접 찾기와 대응 변경 계획에 둠 | 2026-10-05 개발(서버 DB 사본): 올리기·직접 찾기 세 작업이 확인할 때까지 `회차 확인 필요`로 남았어요 ([0066]) | `trss-jobs` `tests/it/placement.rs` `an_upload_of_an_unknown_creator_waits_with_its_names_and_holds_one_outside_the_season` | 서버는 보지 않았어요. 시즌을 잘못 고르거나 다른 작품 게시물로 들어가 엉뚱한 회차에 붙는 사례를 만들어 본 적도 없어요. |
+| `파일 → 회차 → 붙을 영상 이름` 표와 `적용` 한 번, 보류한 줄은 그 자리에서 회차·대안·적용하지 않음을 고름 | 2026-10-05 개발(서버 DB 사본): 세 작업의 표에서 `적용`까지 눌렀고 보류한 줄은 1·2화나 `적용하지 않음`으로 확인했어요 ([0066]) | `trss-web` `jobs_api/placement/tests.rs` `an_upload_waiting_for_its_placement_shows_its_table` | 보류한 줄이 있는 후보 작업의 같은 표는 개발에서도 보지 않았어요 ([0066]). 실제 기기는 보지 않았어요. |
+| 확인을 기다리는 동안은 `회차 확인 필요` 할 일 | 2026-10-05 개발(서버 DB 사본): 세 작업이 `회차 확인 필요`로 남았어요 ([0066]) | `trss-jobs` `tests/it/placement.rs` `an_upload_waiting_for_its_table_is_one_to_do_naming_its_files_until_the_table_is_confirmed` | 카드의 `올림` 태그는 화면에서 보지 못했어요 ([0075]). |
+| 표를 그대로 반영한 줄의 연결: `mapped`·`same_number`·`explicit`, 대응을 바꾸면 앞의 둘만 다시 평가 | 없음 | (1) `trss-jobs` `tests/it/placement.rs` `the_creators_mapping_moves_the_names_onto_the_season_and_a_moved_row_is_the_persons`<br>(2) `trss-jobs` `tests/it/relocate.rs` `a_link_made_by_the_same_number_follows_the_mapping_decided_later` | 표를 고치지 않고 확인한 올리기의 `same_number` 줄이 나중 대응을 따르는 시험은 없어요(후보 작업의 시험뿐이에요). |
+| 배치 확인은 교체 승인을 대신하지 않음 | 2026-10-05 개발(서버 DB 사본): 1화에 이미 자막이 있던 직접 찾기 `851595e8`을 확인하자 `교체 승인`으로 갔어요 ([0066]) | `trss-jobs` `tests/it/placement.rs` `an_upload_of_bytes_a_pick_stored_keeps_its_own_link_and_is_applied_once_approved` | 서버는 보지 않았어요. |
+| 사람 없이 도는 후보 작업에는 배치 확인을 두지 않음 | 2026-10-07 서버: 후보 작업(코코렛 1화 자동, 에루샤 12화)이 확인 없이 적용됐어요 ([0083]) | `trss-jobs` `tests/it/place.rs` `the_candidates_file_of_a_package_is_applied_and_the_other_episodes_stored` | |
+| 받기 뒤 worker가 압축 파일을 풀고 분석해 `배치 확인`에서 `회차 확인 필요`(`wait = placement`)로 기다림, 메모, 폰트·첨부만 남은 묶음, 남길 것이 없는 묶음 | 2026-10-05 개발(서버 DB 사본): 마이그레이션 54가 다시 줄에 세운 세 작업이 `회차 확인 필요`로 남았어요 ([0066]) | (1) `trss-jobs` `tests/it/placement.rs` `an_upload_of_an_unknown_creator_waits_with_its_names_and_holds_one_outside_the_season`<br>(2) `trss-jobs` `tests/it/unpack.rs` `uploaded_archives_of_each_format_are_unpacked_by_the_worker`<br>(3) `trss-jobs` `tests/it/placement.rs` `a_package_of_fonts_alone_is_confirmed_with_no_row_and_then_kept` | 남길 것이 하나도 없는 묶음이 확인 없이 끝나는 것은 테스트가 없어요. 서버는 보지 않았어요. |
+| 표의 줄: 작업의 자막 전부, 이름의 번호 옮기기, 연결 종류, 보류하는 경우, 미지원 형식, 형식 여럿 | 2026-10-05 개발(서버 DB 사본): 올린 작업 `d7422d05`의 보류한 두 줄을 1·2화로 골라 확인했어요 ([0066]) | (1) `trss-jobs` `place/package/tests.rs` `an_upload_asks_about_an_undecided_mapping_a_decimal_another_season_and_no_number`<br>(2) `trss-jobs` `tests/it/placement.rs` `the_creators_mapping_moves_the_names_onto_the_season_and_a_moved_row_is_the_persons`<br>(3) `web` `src/screens/todo/placementTable.test.ts` `unsetCount counts the rows nobody chose` | 문자 회차를 입력으로 쓴 테스트는 없어요. 보류 사유마다 화면에 나오는 모습은 본 적이 없어요. |
+| 회차 선택지(시즌의 1–N화), 줄마다 붙을 영상 이름과 기존 자막 표시 | 2026-10-05 개발(서버 DB 사본, 375px 흉내): 표가 가로 스크롤 없이 세 칸이 위아래로 쌓였어요 ([0066]) | `trss-web` `jobs_api/placement/tests.rs` `an_upload_waiting_for_its_placement_shows_its_table` | AniList 화수를 모를 때 라이브러리와 계획이 아는 마지막 회차까지 보이는 경우는 테스트가 없어요. 실제 기기에서는 보지 않았어요. |
+| `적용` 요청(`POST /api/subtitle-jobs/{id}/placement`)과 거절 조건, `409` | 2026-10-05 개발(서버 DB 사본): 375px에서 `적용`까지 눌렀고 거절 경로는 만나지 않았어요 ([0066]) | (1) `trss-jobs` `tests/it/placement.rs` `a_table_that_cannot_be_kept_is_refused_and_one_of_other_rows_is_stale`<br>(2) `trss-jobs` `place/package/tests.rs` `two_different_files_of_one_format_on_an_episode_are_refused`<br>(3) `trss-web` `jobs_api/placement/tests.rs` `the_persons_table_is_taken_once_and_one_that_cannot_be_kept_is_refused` | 이 작업이 이미 그 회차에 적용한 자막과 겹치는 요청의 거절(`이 작업이 N화에 적용할 자막이 이미 있어요`)을 겨눈 테스트는 없어요. |
+| 확인 트랜잭션: 줄의 회차·연결·적용 여부와 `placement_confirmed_at`을 함께 쓰고 다시 줄에 세움, 이미 보관한 줄의 보관본을 확인한 회차·연결에 맞춤, 마이그레이션 59 | 2026-10-05 개발(서버 DB 사본): `d7422d05`가 확인 뒤 보관, 수신 영역 정리, `교체 승인 대기 2`로 이어졌어요 ([0066]) | (1) `trss-jobs` `tests/it/placement.rs` `the_confirmed_table_applies_its_episodes_and_stores_the_one_not_applied`<br>(2) `trss-jobs` `tests/it/placement.rs` `a_row_placed_elsewhere_leaves_the_stored_subtitle_other_rows_use_on_its_link`<br>(3) `trss-core` `db.rs` `a_stored_subtitle_a_person_placed_is_explicit_after_the_relocation_migration` | `placement_confirmed_at` 값을 직접 읽는 단정은 없어요. 가리키던 보관본이 이미 그 연결의 다른 보관본인 경우는 테스트가 없고, 서버 DB에서 마이그레이션 59가 바꿀 행이 있었는지는 문서에 없어요 ([0080]). |
+| 다른 작업이 보류한 줄도 같은 표(보류한 줄만)와 같은 요청으로 정함 | 참고(가짜 출처): 2026-10-06 개발에서 고른 후보 작업의 보류한 파일 여섯 건이 카드로 보였어요 ([0075]) | `trss-jobs` `tests/it/placement.rs` `a_row_placed_elsewhere_leaves_the_stored_subtitle_other_rows_use_on_its_link` | 보류한 줄이 있는 후보 작업의 확인은 개발에서도 눌러 보지 않았어요 ([0066]). 표에 보류한 줄만 나오는 화면은 테스트가 없어요. |
+| 직접 찾기 작업은 받기를 끝내면 원격 화면과 `받기 끝내기`가 사라지고(`receiving = false`), 받기는 한 번만 끝나며, 다시 보내면 `done` | 없음 | `trss-jobs` `tests/it/find.rs` `two_downloads_are_two_files_of_one_package_and_finishing_hands_them_to_placement` | 받기를 끝내는 흐름은 가짜 브라우저로만 시험했고 실제 사이트로 새 직접 찾기를 열어 받지 않았어요 ([0066]). |
+| 이전 빌드가 끝낸 올리기·직접 찾기 가운데 받은 파일이 남은 작업은 마이그레이션 54가 다시 줄에 세움 | 2026-10-05 개발(서버 DB 사본): 세 작업이 다시 줄에 서서 `회차 확인 필요`로 남았어요 ([0066]) | `trss-jobs` `tests/it/placement.rs` `the_migration_puts_received_uploads_and_find_jobs_back_in_line` | 서버 DB에 이 마이그레이션이 다시 줄에 세울 작업이 있었는지는 문서에 없고, 서버 DB 사본에서는 마이그레이션이 끝까지 돌고 행 수가 같았다는 것까지만 있어요 ([0080]). |
+
+#### 재배치
+
+요구 절: [재배치](#재배치)
+
+| 요구 | 실제 사용에서 본 것 | 테스트로 확인한 것 | 확인하지 않은 것 |
+| --- | --- | --- | --- |
+| 소개 문단: 대응이 바뀌면 적용본은 사람이 확인할 때까지 옛 회차에 두고, 재배치가 새 회차로 옮김 | 2026-10-06 개발(서버 DB 사본): 수퍼소닉EX 대응을 `+1`로 저장하자 파일은 그대로였고, 재배치 작업 `1b997ba2`가 확인 뒤 2화로 옮겼어요 ([0071]) | `trss-jobs` `tests/it/relocate.rs` `a_mapping_change_plans_a_relocation_and_moves_nothing` | 개발 관찰은 독립 검토로 고치기 전의 이미지로 했어요 ([티켓 목록]). 서버는 보지 않았어요. |
+| 재배치 작업(`origin = relocate`, 회차 항목 없음), 계획 줄과 제거, `회차 확인 필요`, 메모, 작업 머리의 `재배치`·`회차 대응 변경` | 2026-10-06 개발(서버 DB 사본): `1화 적용본 제거 → 2화 적용`과 `회차 확인 필요`가 나왔어요 ([0071]) | `trss-jobs` `tests/it/relocate.rs` `a_mapping_change_plans_a_relocation_and_moves_nothing` | 작업 머리의 `재배치`·`회차 대응 변경` 표시(`web/src/screens/todo/badges.tsx`)는 테스트가 없어요. |
+| 출처마다 확인을 기다리는 재배치 작업은 하나, 확인 전에 대응이 다시 바뀌면 같은 작업을 새로 계획하고 옛 표는 `409`, 되돌아가면 작업이 끝남, 지우는 중·보류한 제거는 다시 계획하지 않음, 계획 줄이 없는 보관본은 옮기지 않음 | 없음 | `trss-jobs` `tests/it/relocate.rs` `a_change_before_the_confirmation_plans_anew_and_refuses_the_old_table`, `a_relocation_moved_back_before_its_confirmation_ends_with_nothing_moved` | 보류한 제거의 적용본을 다시 계획하지 않는 것과 계획 줄이 없는 보관본을 옮기지 않는 것은 테스트가 없어요(변이 M5는 적용되지 않아 확인하지 못했어요, [0071]). 확인하지 않은 재배치 작업이 기다림이 아닌 상태가 되면 두 번째 작업이 생길 수 있어요(한계 N2). |
+| 적용을 준비하는 사이 대응이 바뀐 경우: 적용을 기록하는 트랜잭션에서 재배치 계획, 줄은 실제로 적용한 회차를 적음 | 없음 | `trss-jobs` `tests/it/relocate.rs` `a_copy_recorded_after_a_mapping_change_moved_its_subtitle_is_planned_to_move` | 적용 기록 안의 재배치 계획이 실패하는 경우는 실패할 제약을 찾지 못해 시험이 없어요 ([0071]). |
+| 표 `파일 → 옛 회차 → 새 회차`(제거·적용 나란히, 이미 적용된 회차는 제거만, 안내문), 줄을 고치지 않고 `적용` 한 번, 요청의 `removals`와 서버의 수락 조건 | 2026-10-06 개발(서버 DB 사본): 표를 보고 확인하자 2화 옆에 같은 SHA-256의 적용본이 생겼어요 ([0071]) | `trss-web` `jobs_api/placement/tests.rs` `a_relocation_shows_the_copies_it_takes_off_beside_the_rows_it_applies` | |
+| 확인한 뒤 제거를 모두 먼저 하고 줄을 적용, 자막이 있는 새 회차는 교체 비교, 영상이 없는 회차는 `영상 대기`, 보관본은 그대로 | 2026-10-06 개발(서버 DB 사본): 확인 뒤 2화 옆에 적용본이 생겼어요. 제거가 먼저였는지는 기록이 없어요 ([0071]) | `trss-jobs` `tests/it/relocate.rs` `a_shift_by_one_episode_moves_every_copy_with_no_approval` | 영상이 없는 새 회차가 `영상 대기`로 가는 재배치 경로를 겨눈 테스트는 없어요(`a_stored_only_subtitle_moves_without_asking`는 보관만 한 경우예요). |
+| 제거의 재검사: 이미 없으면 `이미 없어요`, 돌아온 보관본·다른 효과·보관본 파일 없음·사람이 바꾼 파일이면 `그대로 둠`, `intended` 쓰기에서 다시 확인, 덮어쓰지 않는 이름 바꾸기로 `.trss/tmp/<제거 ID>.aside`에 옮기고 바이트를 확인한 뒤 지움, 보호 복사본 없음, 바이트로만 판정 | 2026-10-06 개발(서버 DB 사본): 재부팅으로 btrfs의 장치 번호가 바뀌어 1화 적용본이 바뀐 파일로 보였고, 바이트로만 비교하도록 고친 이미지에서 지워졌어요 ([0071]) | `trss-jobs` `tests/it/relocate.rs` `a_copy_a_person_changed_stays_where_it_is`<br>`trss-jobs` `place/aside.rs` `a_file_changed_before_the_rename_is_put_back_where_it_was` | `이미 없어요` 기록, `intended` 쓰기에서 보관본 재확인, 보호 복사본을 만들지 않는 결정은 직접 단정하는 테스트가 없어요. 이름을 바꾸기 전에 대응이 되돌아가면 적용본이 지워지는 한계가 있고 시험은 `set_aside` 상태에서만 이 경우를 만들어요 ([0071]). 이름을 바꾼 뒤 공유 폴더가 내려간 경우도 시험이 없어요. |
+| 보류한 제거는 자기가 건드리는 줄만 `보류`, 나머지는 적용, 기다림(`배치 확인`·`교체 승인`·`영상 대기`)을 먼저 하고 보류, 실행마다 기록에서 다시 읽음 | 없음 | `trss-jobs` `tests/it/relocate.rs` `a_held_removal_holds_only_the_rows_it_touches` | 보류한 제거가 있는 재배치 작업에 실패한 줄과 영상을 기다리는 줄이 함께 있어 `부분 실패`로 남는 경우는 시험이 없어요 ([0071]). 다른 재배치가 보류한 같은 회차의 적용본이나 영상 하나가 두 회차를 덮는 경우는 보지 않아요(한계). |
+| 확인한 뒤 아직 적용하지 않은 줄은 그 뒤의 대응 변경을 따라 회차가 바뀜(구현 결정) | 없음 | `trss-jobs` `tests/it/relocate.rs` `a_mapping_saved_after_the_confirmation_keeps_what_is_back_in_place` | |
+| 작업이 거듭 중단돼 보류되면 지우는 중이던 제거는 `보류`, 시작하지 않은 제거는 `그대로 둠`, 다른 효과는 지우는 중인 적용본의 경로를 쓰는 중으로 봄 | 없음 | `trss-jobs` `tests/it/relocate.rs` `a_relocation_cut_short_too_often_holds_its_removals_under_way` | |
+| 확인하고 반영하기 전에 대응이 되돌아가 보관본이 이미 그 회차에 적용돼 있으면 제거는 그대로, 줄은 `이미 이 회차에 적용돼 있어요` | 없음 | `trss-jobs` `tests/it/relocate.rs` `a_mapping_saved_after_the_confirmation_keeps_what_is_back_in_place` | |
+| 확인한 뒤 작업 상세의 `옮긴 적용본`(제거마다 `지움`·`그대로 둠`·`보류`, 줄마다 적용 결과), 끝난 작업의 메모 | 없음 | (1) `trss-jobs` `tests/it/relocate.rs` `a_relocation_that_only_takes_copies_off_says_it_took_them_off`<br>(2) `web` `src/screens/todo/relocation.test.ts` `after the confirmation each removal and row says what came of it` | 지운 수와 그대로 둔 수를 함께 적는 메모(`…개는 그대로 뒀어요`)는 겨눈 테스트가 없어요. |
+
+#### 압축 해제의 격리와 한도
+
+요구 절: [압축 해제의 격리와 한도](#압축-해제의-격리와-한도)
+
+| 요구 | 실제 사용에서 본 것 | 테스트로 확인한 것 | 확인하지 않은 것 |
+| --- | --- | --- | --- |
+| 별도 프로세스에서 풀고 메모리·시간 한도를 걺, 폭탄·해석기 오류·멈춤은 그 묶음의 실패, 다른 작업은 계속, worker 컨테이너 한도 256M | 2026-10-08 서버(일회용 컨테이너): worker와 같은 조건(256m, CPU 0.25개)에서 `trss-extract`가 정상 묶음 4개를 풀고 폭탄 표본 8개를 거절했어요 ([0065]) | (1)(3) `trss-jobs` `tests/extract_process.rs` `a_zip_is_unpacked_by_the_child`<br>(2) `trss-jobs` `tests/it/unpack.rs` `bombs_and_a_password_fail_alone_and_the_next_job_goes_on` | 돌고 있는 서버 worker가 256M 한도로 떠 있다는 기록은 읽은 문서에 없어요(저장소의 `docker-compose.trss.yml`에는 256M가 있어요). worker의 RSS 수집이 계속되는 것은 확인하지 않았어요. |
+| `trss-extract`: 푸는 위치, 멤버의 경로·크기·SHA-256 보고, worker의 멤버 검사, 멤버 안 ZIP 검사 512MiB, 나뉜 조각 모으기, 죽은 뒤 재시작 복구, 프로그램이 없으면 `자막 대기`, `oom_score_adj` 1000과 코어 덤프 없음 | 2026-10-08 서버(일회용 컨테이너): 네 형식이 풀리고 `oom_kill`이 0이었어요 ([0065]) | `trss-jobs` `tests/extract_process.rs` `what_the_child_prints_is_not_believed`<br>`trss-jobs` `tests/it/unpack.rs` `an_archive_waits_for_the_program_and_a_killed_unpacking_starts_anew` | 부모 종료 신호(`PR_SET_PDEATHSIG`)는 테스트가 없고, 512MiB는 1,500바이트 같은 작은 예산으로만 확인했어요. worker를 실제로 죽였다 살린 관찰은 없어요 ([티켓 목록]). |
+| 자식 프로세스도 worker 컨테이너의 memcg를 함께 씀, 풀어 쓰는 동안의 페이지 캐시를 서버에서 측정 | 2026-10-08 서버(일회용 컨테이너): 200MiB 묶음 네 형식을 풀 때 최대 `memory.current`가 232.6–256.0MiB였고 `oom_kill`은 0이었어요 ([0065])<br>2026-10-07 서버(일회용 컨테이너, `trss-probe`): 256M에서 300MiB를 쓰고 `fsync`해도 `oom_kill`은 0이었어요 ([0060]) | 없음 | 탐침은 한 프로세스가 차례로 쓰고 읽어서, 여러 곳이 함께 쓰는 경우에도 같을지는 알 수 없어요. 돌고 있는 worker 안에서 worker와 자식이 함께 쓴 경우의 `oom_kill`은 본 적이 없어요. |
+| 형식마다 순수 Rust 크레이트(xz만 C의 liblzma), 외부 실행 파일을 쓰지 않음, 크레이트와 형식의 대응, `.z01`은 풀지 않음 | 2026-10-08 서버(일회용 컨테이너): ZIP·7z·`tar.xz`·RAR 네 형식이 풀렸어요 ([0065]) | `trss-archive` `tests/it/formats.rs`(파일 전체)<br>`trss-jobs` `place/unpack.rs` `spanned_zips_and_cut_rars_are_not_unpacked` | 외부 실행 파일을 쓰지 않는 것은 구조라 테스트가 없어요. 서버 표본에 gzip·bzip2·나뉜 조각은 없었어요. WinRAR로 만든 RAR, CP949 멤버 이름, `.tar.001`·`.gz.001`, PPMd 7z, BCJ2, 4GiB가 넘는 ZIP64, deflate64는 시험하지 않았어요 ([0059], [티켓 목록]). |
+| 한도를 넘으면 그 묶음은 `풀지 못함`이고 풀던 폴더를 지움, 계획에 줄이 없음, 다른 받은 것이 없으면 실패·있으면 일부 실패, 까닭은 작업 상세와 기록 | 2026-10-08 서버(일회용 컨테이너): 거절 까닭이 명세의 한도 그대로였어요 ([0065]) | `trss-jobs` `tests/it/unpack.rs` `an_archive_whose_member_leaves_it_fails_and_stays_received`<br>`trss-jobs` `tests/extract_process.rs` `a_zip_bomb_is_refused_and_leaves_nothing` | 돌고 있는 서버 worker가 실제 압축 파일을 거절한 적은 없어요. |
+| 이 컴퓨터 쪽의 실패(디스크, 메모리, 시간, 자식 프로세스 오류)는 처음을 포함해 3번까지 원 수신물에서 다시 풀고, 1시간 뒤나 worker의 다음 시작에 다시 시도하고, `자막 대기`로 기다리며, 3번째 실패나 압축 파일 탓의 거절이면 `풀지 못함`이고 다시 풀지 않음 | 2026-10-06 개발(서버 DB 사본, 상태를 SQL로 만듦): 재시도 상태에서 `다시 풀기를 기다려요 (3번 중 1번째 시도 실패)`가, 3번 실패한 상태에서 `3번 시도했어요`가 나왔어요 ([0065]) | (1) `trss-archive` `failure.rs` `running_out_of_memory_is_a_failure_of_the_machine`<br>(2)(3)(4) `trss-jobs` `tests/it/unpack.rs` `an_archive_this_machine_failed_to_unpack_is_tried_again_from_its_receipt`<br>(5) `web` `src/screens/todo/unpack.test.ts` `a try this machine failed says which, why, and when the next goes` | 실제 worker가 디스크를 채운 상태에서 실패한 적은 없어요. 규칙 전에 이 컴퓨터 쪽 실패로 `풀지 못함`이 된 압축 파일을 다시 풀지 않는 구현 결정은 테스트가 없어요. worker가 1시간 지난 시도를 다시 줄에 세우는 호출(`trss-worker`의 `jobs.rs`)도 테스트가 없고 `requeue_unpack_retries`를 직접 부른 테스트만 있어요. |
+| 표: 멤버 수 2,000(ZIP은 끝 기록의 총수, 7z는 목록 헤더의 크기를 풀기 전에 봄, 끝 기록이 파일 끝 64KiB 밖인 ZIP은 풀지 않음) | 2026-10-08 서버(일회용 컨테이너): 멤버 10만 개 ZIP이 `멤버가 2000개를 넘어요`로 0.1초 이하에 거절됐어요 ([0065]) | `trss-archive` `tests/it/refusals.rs` `too_many_members_are_refused_in_every_format` | 멤버 10만 개 ZIP이 `zip` 크레이트로 8.9초와 61MB를 쓴 값은 개발 PC의 측정이에요 ([0059]). |
+| 표: 풀린 크기 묶음 전체(중첩 포함) 512MiB | 없음 | `trss-archive` `tests/it/refusals.rs` `the_total_limit_refuses_what_a_listing_adds_up_to` | 기본값 512MiB 자체를 단정하는 테스트는 없어요(작은 값으로 바꿔 확인해요). |
+| 표: 멤버 하나 200MiB(RAR은 목록에 64MiB를 넘는 멤버가 있으면 풀지 않음) | 2026-10-08 서버(일회용 컨테이너): `z1g.bin: 멤버 하나가 200MiB를 넘어요`로 거절됐어요 ([0065]) | `trss-archive` `tests/it/refusals.rs` `a_member_over_the_member_limit_is_refused_by_its_declared_size_and_by_its_count` | 기본값 200MiB와 RAR의 64MiB를 단정하는 테스트는 없어요. 서버 표본에서 RAR 64MiB 멤버의 거절은 따로 적히지 않았어요. |
+| 표: 압축률(풀린 크기가 압축 파일 크기의 100배와 16MiB를 더한 값을 넘으면 멈춤) | 2026-10-04 개발(측정용 프로그램 `probe`, 128M 컨테이너): 0으로 채운 4GiB ZIP·7z와 gz·bz2·xz가 0.1–2초에 거절됐어요 ([0059]) | `trss-jobs` `tests/extract_process.rs` `a_zip_bomb_is_refused_and_leaves_nothing` | 2026-10-08 서버 표본에는 압축률을 겨눈 표본이 없었어요. |
+| 표: 중첩 바깥 압축 파일을 포함해 3단, 멤버 수·크기·시간은 중첩 전체가 함께 씀 | 2026-10-08 서버(일회용 컨테이너): 30단 중첩 ZIP이 `압축 파일 안의 압축 파일이 3단을 넘어요`로 거절됐어요 ([0065]) | `trss-archive` `tests/it/formats.rs` `three_archives_deep_is_the_limit` | 시간을 중첩 전체가 함께 쓰는 것은 테스트가 없어요. |
+| 표: 경로(16단계, 1,024바이트, 이름 하나 255바이트, 빈 이름·`.`·`..`·절대 경로·NUL·드라이브 문자·역슬래시는 거절) | 2026-10-08 서버(일회용 컨테이너): `../../escape1.ass: 풀 수 없는 경로예요`로 거절됐어요 ([0065]) | `trss-archive` `name.rs` `bad_paths_are_refused` | |
+| 표: 사전 xz·7z 64MiB와 RAR도 같음, 풀기 전에 선언을 읽어 거절, xz는 `memlimit`을 사전에 16MiB를 더한 값으로 둠 | 2026-10-08 서버(일회용 컨테이너): 사전 1.5GiB xz·4GiB 7z·1GiB RAR5가 `사전 크기가 64MiB를 넘어요`로 거절됐어요 ([0065]) | `trss-archive` `tests/it/refusals.rs` `a_big_dictionary_is_refused_and_the_limit_itself_is_fine` | 사전 512MiB 7z·xz는 서버에서 재지 않았어요. xz의 `memlimit` 값(사전 + 16MiB)은 단정하는 테스트가 없어요. |
+| 표: 시간 묶음 전체 120초, 넘으면 자식 프로세스 그룹을 `SIGKILL`로 끝냄 | 없음 | `trss-jobs` `tests/extract_process.rs` `a_child_that_hangs_on_its_input_is_killed_at_the_time_limit` | 기본값 120초를 단정하는 테스트는 없어요. 가장 오래 걸린 `big.rar` 37.9초도 한도에 닿지 않았고, 모두 512MiB인 RAR이 120초의 80%쯤 걸린다는 어림은 측정값이 아니에요 ([0065], [티켓 목록]). |
+| 표: 자식 프로세스 `RLIMIT_AS` 256MiB, `RLIMIT_FSIZE` 201MiB, `RLIMIT_NOFILE` 64, `RLIMIT_CORE` 0, `oom_score_adj` 1000 | 2026-10-08 서버(일회용 컨테이너): 이 한도를 거는 `trss-extract`로 네 형식을 풀었고 익명 메모리는 최대 13.3MiB, `oom_kill`은 0이었어요. 한도를 다 쓴 값은 아니에요 ([0065]) | `trss-jobs` `tests/extract_process.rs` `the_child_is_the_process_the_oom_killer_picks_and_leaves_no_core_dump` | `RLIMIT_AS` 256MiB, `RLIMIT_FSIZE` 201MiB, `RLIMIT_NOFILE` 64의 값을 읽는 테스트는 없어요. `RLIMIT_NOFILE` 64는 재지 않았어요 ([0059]). |
+| 표: 페이지 캐시 8MiB마다 `fsync`와 `fadvise(DONTNEED)` | 2026-10-08 서버(일회용 컨테이너): 최대 `memory.current`가 256.0MiB(한도)였지만 `oom_kill`은 0이었어요 ([0065]) | 없음 | 8MiB마다 `fsync`·`fadvise`를 호출하는 것 자체를 확인하는 테스트는 없어요. `memory.current`가 한도에 닿았으므로 이 호출이 캐시를 눌렀다는 근거는 아니고, 회수로 끝나 `oom_kill`이 0이었다는 것까지예요. |
+| 링크·장치·FIFO 멤버는 만들지 않고 거절, 암호가 걸린 멤버는 풀지 못함 | 2026-10-08 서버(일회용 컨테이너): 암호 ZIP이 `암호가 걸려 있어요`로 거절됐어요 ([0065]) | `trss-archive` `tests/it/refusals.rs` `links_are_refused_in_every_format` | 서버 표본에는 링크·장치·FIFO 멤버가 없었어요. |
+| 디스크가 차거나 메모리가 모자라 쓰지 못한 것은 압축 파일이 깨졌다고 하지 않고 `압축을 풀 자리에 쓰지 못했어요: …`를 적음 | 2026-10-06 개발(서버 DB 사본, 상태를 SQL로 만듦): 작업 상세에 `압축을 풀 자리에 쓰지 못했어요: …`가 나왔어요 ([0065]) | `trss-archive` `job.rs` `a_write_that_fails_is_a_failure_not_a_refusal` | 실제 디스크가 가득 차거나 메모리 한도에 닿아 이 문구가 나온 일은 없어요. |
+| 데스크톱의 128M 컨테이너에서 압축률·크기·사전 폭탄은 3초 안에 거절, 정상 200MiB 묶음은 최대 80MB (2026-10-04) | 2026-10-04 개발(측정용 프로그램 `probe`, 128M 컨테이너): 폭탄이 0.00–2.7초 안에 거절됐고 정상 200MiB 묶음은 ZIP 47MB·7z 80MB로 풀렸어요 ([0059]) | 없음 | 개발 PC의 측정값이고 테스트로 고정한 값이 아니에요. |
+| 256M 컨테이너 측정: 데스크톱에서 네 형식과 폭탄 표본 10개, 100,000개 ZIP의 8.9초·61MB, 실제 서버(J4105)에서 네 형식과 폭탄 표본 8개, 형식별 시간 | 2026-10-08 서버(일회용 컨테이너, 256m·CPU 0.25개): 네 형식이 풀렸고(ZIP 5.7초, 7z 26.0초, `tar.xz` 21.0초, RAR 37.9초) 폭탄 표본 8개가 거절됐어요 ([0065])<br>2026-10-05 개발(이 PC의 256M 컨테이너): 네 형식이 풀렸고 폭탄 표본 10개가 각각 0.1초 안에 거절됐어요 | 없음 | 사전 512MiB 7z·xz는 서버에서 재지 않았고, 모두 512MiB인 RAR이 시간 한도 120초의 80%쯤 걸린다는 어림은 측정값이 아니에요 ([티켓 목록]). |
+
+### 보관본과 적용본
+
+요구 절: [보관본과 적용본](#보관본과-적용본)
+
+| 요구 | 실제 사용에서 본 것 | 테스트로 확인한 것 | 확인하지 않은 것 |
+| --- | --- | --- | --- |
+| 보관본의 위치·이름·번호와 연결별 보관본 | (1)~(4) 2026-10-07 서버: 코코렛 자막이 `.trss/subtitles/코코렛/`에 받은 이름의 `.smi`로 보관되고 소유가 1000:1000이었어요 ([0081])<br>(7) 2026-10-06 개발(서버 DB 사본): 다른 연결의 보관본을 쓰던 줄이 제 연결의 새 보관본으로 옮겨져 v4가 적용됐어요 ([0076]) | `trss-jobs` `tests/it/place.rs`: (1) `a_name_taken_by_other_bytes_is_numbered_and_the_same_bytes_are_one_file` (3) `a_creator_named_in_another_case_keeps_one_attachment_folder` (4) `a_name_another_jobs_store_is_about_to_take_is_taken_whatever_its_case` (5) `a_received_subtitle_is_stored_applied_beside_its_video_and_leaves_the_receive_area`<br>(2) `trss-jobs` `area.rs` `names_are_made_safe_and_numbered`<br>(6)(7) `trss-jobs` `tests/it/placement.rs` `a_row_on_a_stored_subtitle_of_another_link_is_given_its_own_before_it_is_compared`<br>(8) `trss-jobs` `place/files.rs` `a_copy_is_checked_and_published_without_replacing` | (2) `:`·`?`와 예약 이름 `con`·`LPT1.x`만 입력으로 썼어요. 다른 금지 문자, `COM1`–`COM9`, 실제 SMB·Windows 공유는 확인하지 않았어요.<br>(5) 보관 관계를 내보내는 기능이 아직 없어([목표 6](../tickets/README.md#6-앱-yaml-내보내기와-가져오기)) DB 기록과 견주지 못했어요.<br>(8) SSA·WebVTT를 제작자 폴더에 두는 통합 테스트가 없어요. |
+| 앱 데이터 폴더의 첨부·구성 파일 | 참고(가짜 출처): 2026-10-05 개발(서버 DB 사본)에서 `readme.txt`가 `subtitle-files/<작품 ID>/가짜 출처/`에 놓였어요 ([0064]) | `trss-jobs` `tests/it/place.rs` `another_seasons_file_and_an_executable_are_told_apart` | 첨부 확장자는 `.TXT`와 `.docx`만 입력으로 썼어요. 이미지와 `hwp` 같은 나머지는 확인하지 않았어요. |
+| 묶음의 `entries`와 보관하지 않는 멤버 | 2026-10-07 서버: ZIP 안 `__MACOSX/`의 `._*.ko.ass` 12개가 "받은 바이트는 ASS 형식이 아니에요"라는 까닭으로 보관되지 않았어요 ([0083]) | `trss-jobs` `tests/it/unpack.rs` `members_in_folders_are_placed_and_one_that_is_no_file_is_dropped_with_why` | `entries` 표의 내용을 직접 단언한 테스트가 없어요(행 수 1개와 계획의 멤버 경로만 봐요). |
+| 수신 영역 원 수신물의 삭제 | 2026-10-04 개발(서버 DB 사본): 보관·적용을 마친 작업 `d0c42b4b`의 원 수신물이 수신 영역에서 지워졌어요 ([0063]) | `trss-jobs` `tests/it/place.rs` `a_received_subtitle_is_stored_applied_beside_its_video_and_leaves_the_receive_area` | 서버에서 수신물이 지워진 것을 직접 본 기록이 없어요. |
+| 임시 파일과 보호 복사본의 자리 | 2026-10-07 서버: 작품 폴더의 `.trss/tmp/`가 비어 있었어요 ([0081]) | `trss-jobs` `place/files.rs` `a_copy_is_checked_and_published_without_replacing` | 같은 파일시스템에 있어야 하는 이유는 테스트하지 않았어요. 재생기가 `.trss/tmp`의 쓰는 도중 파일을 집지 않는지는 본 적이 없어요. |
+| 사이드카 없음과 경로 변경 때의 참조 갱신 | 2026-10-07 서버: 배포 뒤 디스크에서 바뀐 것은 자막 작업이 만든 8개 경로뿐이었어요 ([0081]) | 없음 | (1) 사이드카를 만들지 않는다는 점을 겨눈 테스트가 없고, 서버<br>(2) 경로가 바뀔 때 DB와 내보내는 정보의 파일 참조를 맞추는 동작은 테스트도 실제 사용 기록도 없어요. |
+| 적용본은 독립된 복사 | 2026-10-07 서버: Kurumi-chan 1화의 보관본과 적용본의 SHA-256이 같았어요 ([0083]) | `trss-jobs` `tests/it/place.rs` `a_received_subtitle_is_stored_applied_beside_its_video_and_leaves_the_receive_area` | 서버에서 적용본을 고치거나 지운 뒤 보관본이 남는지, inode가 다른지는 본 기록이 없어요. 하드 링크·심볼릭 링크를 쓰지 않는 점은 inode 단언으로만 막아요. |
+| 최초 적용 | 2026-10-07 서버: 구독 제작자의 자동 작업이 1화 SMI를 확인 없이 보관·적용하고 3초 만에 끝났어요 ([0083]) | `trss-jobs` `tests/it/place.rs` `a_received_subtitle_is_stored_applied_beside_its_video_and_leaves_the_receive_area` | 파일 처리 실패가 실패로 보이는 쪽을 겨눈 테스트는 이 항목에 없어요. 서버에서는 대안이 구분되지 않는 묶음을 본 적이 없어요. |
+| 형식 우선순위와 작품별 재정의, 추가 적용 | 2026-10-06 개발(서버 DB 사본): 3화의 `Kurumi-03.srt`를 `추가 적용`하자 승인 없이 SRT가 생기고 ASS는 그대로였어요 ([0072]) | `trss-core` `settings/policy/tests.rs` `the_policy_is_the_defaults_until_saved_and_versioned_after`<br>`trss-jobs` `tests/it/choose.rs` `a_works_own_order_decides_its_first_apply_and_going_back_restores_the_common_one`, `the_creators_other_format_is_added_beside_the_applied_copy_with_no_approval` | 서버에서 쓴 기록이 없어요. |
+| 웹에서 비교·선택·복원 | 2026-10-08 서버: 사용자가 3화의 `교체 비교`를 누르고 2화의 보관본도 골라 둘 다 잘됐다고 했어요 ([0121]) | `trss-jobs` `tests/it/choose.rs` `another_creators_copy_on_an_episode_with_a_subtitle_is_compared_then_replaces_it`, `a_past_revision_is_restored_over_the_newer_one_which_stays_stored` | 서버에서 지난 수정본을 복원하거나 다른 형식을 고른 기록이 없어요. |
+| 고르기 동작 | (1)(2) 2026-10-07 서버: 사용자가 9–11화의 보관본을 회차 줄에서 적용했고 1화는 `자막` 카드에서 `교체 비교`를 눌렀어요 ([0083])<br>(3) 2026-10-08 개발(서버 DB 사본, 시험 자막): 11화는 `적용` 약 4초 뒤 새로고침 없이 자막 `보유`가 됐어요 ([0127]) | `trss-jobs` `tests/it/choose.rs`: (2) `a_copy_on_an_episode_with_no_subtitle_is_applied_at_once_and_marked_chosen` (3) `another_creators_copy_on_an_episode_with_a_subtitle_is_compared_then_replaces_it` (4) `a_past_revision_is_restored_over_the_newer_one_which_stays_stored` (5) `the_creators_other_format_is_added_beside_the_applied_copy_with_no_approval` (6) `an_added_format_counts_only_its_own_name_among_the_subtitles_the_library_recorded`<br>(1) `trss-web` `library_work_api/tests.rs` `a_stored_subtitle_is_chosen_with_a_mode_and_a_bad_one_changes_nothing`<br>(7) `trss-jobs` `tests/it/replace.rs` `an_imported_copy_on_an_episode_with_a_subtitle_is_compared_then_put_back_beside_the_video` | (3) 서버에는 자막 없는 회차에 남은 보관본이 없어 서버에서 `적용`을 눌러 볼 곳이 없었어요([0119]). 0127의 고침은 다음 배포 뒤에 서버에서 봐요([0127]).<br>(5) 추가 적용을 서버에서 쓴 기록이 없어요.<br>(6) 화면이 `작업 보기` 링크만 보이는 경우는 화면 판단 테스트로만 봤어요.<br>(7) 들인 작업이 진행 중이거나 보류 중이라 줄을 만들기 전에 막히는 경로는 시험하지 않았어요([0122]). |
+| 영상 옆 같은 바이트는 적용본으로 기록 | 2026-10-08 서버: 3화와 2화의 보관본을 고르자 두 회차의 자막이 `applied: 에루샤`로 나오고 남은 보관본과 `교체 비교`가 없어졌어요 ([0121]) | `trss-jobs` `tests/it/choose.rs`: (1) `a_chosen_copy_whose_bytes_are_beside_the_video_becomes_its_applied_copy` (2) `the_identical_file_at_another_name_is_the_applied_copy_unless_the_targets_own_is_too` (3) `a_job_leaves_a_file_applied_for_another_copy_but_a_chosen_copy_takes_it_over` (6) `an_identical_file_is_not_recorded_as_applied_when_the_stored_file_is_gone_or_changed`<br>(5) `web` `src/screens/todo/appliedNote.test.ts` `an episode applied by adoption is told apart from one replaced before it` | (2) 바이트가 같은 파일이 여럿일 때 이름순으로 처음 찾은 파일을 고르는 쪽과 대소문자만 다른 이름은 테스트가 없어요.<br>(4) 같은 출처의 더 새 수정본이 있는 줄과 다른 작업의 미완 효과가 그 경로를 쓰는 줄을 보관만 하는 쪽은 테스트가 없어요.<br>사람이 고른 줄이 아닌 `records::adopt`와 보관본 회차 변경이 겹치는 짧은 틈은 시험하지 않았어요. 서버 5–8화는 영상 옆 자막과 보관본의 바이트가 같은지 보지 않았어요([0121]). 고르지 않은 보관본을 화면을 그릴 때 견주지 않는 점(사용자 결정, 2026-10-07)은 테스트가 없어요. |
+| 정리는 앱이 소유를 확인한 파일만 | 2026-10-05 개발(서버 DB 사본): 지난 수정본 `dev-1.ass`를 정리하자 파일이 사라지고 정리가 `done`이 됐어요 ([0073]) | `trss-jobs` `tests/it/cleanup.rs` `a_stored_subtitle_a_running_or_held_job_uses_is_not_cleanable`, `a_file_the_app_did_not_record_is_listed_nowhere_and_stays` | 서버에서 정리를 실행한 기록이 없어요. |
+| 적용 위치와 보관 위치의 구분 | 2026-10-07 서버: 작품 상세의 `자막` 카드가 코코렛 보관본을 영상 옆 적용본에 적용된 것으로 보였어요 ([0083]) | `web` `src/screens/library/detail/subtitles.test.ts` `the applied copy is \`적용\` and shows where it is applied and where it is stored, apart` | 적용됐다는 표시가 재생기의 트랙 선택을 뜻하지 않는다는 문구와, 숨김 폴더명을 접근 권한 보호로 안내하지 않는 점은 테스트가 없어요. |
+
+### 폰트
+
+요구 절: [폰트](#폰트)
+
+| 요구 | 실제 사용에서 본 것 | 테스트로 확인한 것 | 확인하지 않은 것 |
+| --- | --- | --- | --- |
+| 폰트를 자막과 한 묶음으로 둠 | 2026-10-05 개발(서버 DB 사본): 수퍼소닉EX 묶음의 폰트 3개가 자막과 같은 `.trss/subtitles/수퍼소닉EX/`에 놓였어요 ([0064]) | `trss-jobs` `tests/it/place.rs` `fonts_are_kept_beside_their_subtitle_and_linked_to_it` | 두 제작자가 같은 폰트를 쓸 때 각 제작자 폴더에 한 벌씩 두는 쪽은 테스트도 관찰도 없어요. |
+| 자막과 폰트의 관계와 정리 | 없음 | `trss-jobs` `tests/it/cleanup.rs` `cleaning_one_of_two_revisions_sharing_a_font_keeps_the_font_for_the_other`, `cleaning_a_revision_alone_with_its_font_and_attachment_removes_all_three` | 구성 파일이 이름 줄기가 같은 자막에만 이어지는 쪽과, 자막이 실제로 어느 폰트를 부르는지 읽지 않는다는 점은 테스트가 없어요. 진행 중인 작업의 참조 보호와 정리의 경쟁은 [체크포인트와 중단 복구](jobs.md#체크포인트와-중단-복구)가 맡아요. |
+| 파일별 수신과 `HEAD` 비교 | (7) 2026-10-05 개발(서버 DB 사본): 작업 상세가 Naver 폰트 3개마다 `폰트 · 새로 받음`을 보였어요 ([0074]). 데스크톱 너비에서만 봤어요 | `trss-jobs` `tests/it/drive_fonts.rs`: (1)(2) `the_next_episodes_unchanged_drive_font_is_not_received_and_its_font_is_used` (3) `a_font_whose_kept_file_is_missing_is_received_with_no_head` (4) `a_font_is_received_when_its_head_fails_or_has_no_last_modified` (5) `a_font_not_received_whose_kept_file_changed_meanwhile_is_received`<br>(7) `web` `src/screens/todo/fontReceipt.test.ts` `each font receipt has its own words, and a file that is no kept font has none` | 개발 데이터의 Drive 게시물에는 폰트가 따로 없어 두 번째 받기에서 폰트를 받지 않는 것은 실제로 보지 못했어요([0074]). 파일명만으로 변경 없음을 판단하지 않는 점은 이름이 같아도 기록과 파일이 맞지 않으면 받는 입력으로만 겨눠요. |
+| Naver·Tistory 첨부의 내용 비교 | 2026-10-05 개발(서버 DB 사본): Naver 폰트 3개를 받은 작업 상세가 폰트마다 `새로 받음`을 보였어요 ([0074]) | `trss-jobs` `tests/it/drive_fonts.rs` `a_naver_font_is_received_compared_and_not_kept_twice` | Tistory 첨부는 입력도 관찰도 없어요. 이미 같다고 확인한 다른 폰트를 다시 받지 않는 점은 위 테스트가 한 폰트만 다뤄서 겨누지 못했어요. |
+| 통째 묶음으로만 받는 출처 | 2026-10-05 개발(서버 DB 사본): Drive ZIP 작업이 `묶음 전체를 받음 · 새로 보관한 파일 0개`를 보였어요 ([0074]) | `trss-jobs` `tests/it/drive_fonts.rs` `a_zip_whose_font_is_kept_is_received_whole_and_adds_no_font` | 로컬 중복 제거만 확인하고 네트워크 재수신도 막았다고 보고하지 않는 점은 `묶음 전체를 받음` 문구로만 겨눠요. |
+| 폰트 보관과 실제 재생기의 사용 구분 | 없음 | 없음 | 화면이 폰트 보관과 재생기의 사용을 구분해서 말하는지, 폰트가 없다고 기기에 폰트가 없다고 판정하지 않는지는 테스트가 없어요. 어떤 재생기에서도 폰트를 쓴 자막을 본 적이 없어요([0084]). |
+
+### 교체 비교와 승인
+
+요구 절: [교체 비교와 승인](#교체-비교와-승인)
+
+| 요구 | 실제 사용에서 본 것 | 테스트로 확인한 것 | 확인하지 않은 것 |
+| --- | --- | --- | --- |
+| 교체는 비교한 뒤 승인한 것만 반영함 | 2026-10-07 서버: All Works Maid 1화의 교체 비교를 13:52:30에 승인하자 그 회차만 새 자막으로 바뀌었어요 ([0083]) | `trss-jobs` `tests/it/replace.rs` `a_revision_waits_for_approval_then_replaces_and_the_earlier_stored_copy_stays`<br>`trss-web` `jobs_api/replacement/tests.rs` `a_plan_with_no_comparison_or_an_unreadable_one_says_so_and_never_no_difference` | 서버에서 비교 불가를 본 기록이 없어요. |
+| 대상(작품·시즌·회차)을 머리에 합침 | 없음 | 없음 | 머리가 대상을 합쳐 보이는지 겨눈 테스트와 관찰이 없어요. |
+| 결정 카드의 버전 줄과 버튼 | 2026-10-07 서버: 작은 화면(iPhone)에서 비교 정보와 `현재 유지`·`새 자막으로 교체`가 빠짐없이 보였다고 사용자가 알렸어요 ([0085]) | `trss-web` `jobs_api/replacement/tests.rs` `a_revision_of_the_same_post_shows_two_version_lines_and_nothing_else` | 결정 카드에 설명 줄을 두지 않는 점과 `v1`·`v2` 대신 역할로 부르는 점을 겨눈 단언이 없어요. |
+| PC에서 따라오고 휴대폰에서 버튼을 고정함 | 참고(가짜 출처): 2026-10-05 개발(서버 DB 사본)에서 폭 375 px일 때 버튼 두 개가 고정됐고 PC에서 카드가 머리 아래(top 71 px)에 붙었어요. ([0068]) | `web` `src/screens/todo/replacementView.test.ts` `the phone's buttons are fixed only for the one decision, and only the first card follows the page` | 붙는 위치가 CSS라서 테스트는 어떤 카드가 붙는지만 겨눠요. 실제 휴대폰·PC 브라우저에서 서버로 본 고정 버튼은 기록이 없어요. |
+| 나란한 비교는 다를 때만 | 없음 | `trss-web` `jobs_api/replacement/tests.rs` `another_creators_subtitle_is_compared_side_by_side`<br>`web` `src/screens/todo/replacementView.test.ts` `the side-by-side rows appear only when the API says so` | 형식이 다를 때의 나란한 비교는 제작자가 다른 경우로만 겨눠요. |
+| 변경 사항 네 항목과 요약 태그 | 2026-10-05 개발(서버 DB 사본): 3화의 SMI 327줄과 ASS 24줄을 견주자 `추가 303`·`변경 24`가 나왔어요 ([0069]) | `web` `src/screens/todo/changes.test.ts` `a compared plan has the four items, collapsed, with their number tags`, `an unreadable plan has one 비교 불가 block with the API's reason and no items` | `−`·`+`, 취소선, 밑줄과 회색 막대의 모양은 시험하지 않았고 막대가 있는지만 봤어요. |
+| 실제 변경의 경로는 예상 밖일 때만 경고 | 2026-10-05 개발(서버 DB 사본): 손으로 고친 2화 `S01E02.ass`에서 덮어쓰기 경고가 휴대폰 폭에 보였어요 ([0068]) | `trss-web` `jobs_api/replacement/tests.rs` `overwriting_a_file_the_app_did_not_manage_is_a_warning_and_a_limit` | 교체해도 현재 보관본이 남는다는 사실을 결정 카드에서 되풀이하지 않는 점은 결정 카드에 없음을 단언한 테스트가 없어요. |
+| 판단 한계는 조건이 있을 때만 | 2026-10-05 개발(서버 DB 사본): 손으로 고친 2화에서 `출처 미상` 한계가 보였어요 ([0068]) | `web` `src/screens/todo/replacementView.test.ts` `limits show only the ones that hold, and say which file's lines are unknown` | 최신 날짜·큰 크기·많은 대사만으로 더 좋다고 판정하지 않는 점은 테스트가 없어요. |
+| 승인 직전 재확인은 변화가 있을 때만 | 2026-10-06 개발(서버 DB 사본): 가짜 작업이 올리기 3화에 다른 자막을 만들자 첫 계획이 `이 회차에 다른 자막이 생겼어요`로 낡았어요 ([0076]) | `trss-web` `jobs_api/replacement/tests.rs` `a_plan_compared_again_says_why` | 서버에서는 재확인이 변화를 찾은 일이 없었어요. |
+| 승인 계획의 ID와 판을 화면에 보이지 않음 | 없음 | `trss-web` `jobs_api/replacement/tests.rs` `a_decision_names_the_version_it_saw` | 화면에 ID와 판이 보이지 않는다는 점을 겨눈 단언이 없어요. |
+| 표: 대상·연결 근거 | 없음 | `trss-jobs` `tests/it/replace.rs` `a_mapping_changed_after_approval_is_not_applied` | 영상 경로·원본 자막 이름·불명확한 연결의 이유를 한 화면에서 보이는지는 API 테스트가 일부만 겨눠요. |
+| 표: 출처·이력 | 2026-10-05 개발(서버 DB 사본): 손으로 고친 2화에서 기존 파일의 `출처 미상`이 보였어요 ([0068]) | `web` `src/screens/todo/replacementView.test.ts` `an unmanaged current file's creator reads 출처 미상, a stored one without a creator 제작자 알 수 없음` | Anissia 갱신일과 앱 수신 시각을 구분해 보이는 쪽은 수신 시각 줄만 겨눠요. |
+| 표: 파일 특성 | 없음 | `trss-web` `jobs_api/replacement/tests.rs` `another_creators_subtitle_is_compared_side_by_side` | 확인 가능한 인코딩·언어·용도를 화면에서 보이는지 겨눈 테스트가 없어요. |
+| 표: 내용·시간·스타일 | 2026-10-05 개발(서버 DB 사본): 실제 SMI 4개(UTF-16 479줄 두 벌, UTF-8 2,406줄과 327줄)를 읽었어요 ([0069]) | `trss-jobs` `tests/it/replace.rs` `an_ass_with_two_lines_added_and_twelve_changed_is_stored_with_its_counts_and_lines` | 세부는 아래 [내용 비교](#내용-비교) 행들이 맡아요. |
+| 표: 의존 파일 | 없음 | 없음 | 신규·변경·재사용 폰트와 구성 파일의 누락·충돌, 재생 환경의 폰트 활용 미확인 여부를 비교 화면에서 보이는지는 테스트도 관찰도 없어요. |
+| 표: 실제 변경 | 2026-10-05 개발(서버 DB 사본): 손으로 고친 2화에서 덮어쓸 경로 경고를 봤어요 ([0068]) | `web` `src/screens/todo/replacementView.test.ts` `the paths part names each path's action and the stored copy that stays` | 없음 |
+| 여러 교체 후보를 모아 보여주고 승인한 항목만 반영함 | (1) 2026-10-05 개발(서버 DB 사본): 열린 계획이 둘인 작업에서 `모두 교체`를 눌렀고 폭 375 px도 봤어요 ([0070])<br>(2)(5) 2026-10-07 서버: 1화를 승인하자 원래 자막이 `제작자 알 수 없음` 보관본으로 들어가고 새 자막으로 교체됐어요 ([0083]) | `trss-jobs` `tests/it/replace_many.rs`: (1) `approving_all_at_once_replaces_every_episode_with_one_requeue_and_a_record_each` (2) `keeping_one_episode_and_approving_the_rest_in_a_batch`<br>`trss-jobs` `tests/it/replace.rs`: (3) `another_creators_ass_removes_the_applied_srt_and_keeps_its_stored_copy` (5) `an_unmanaged_subtitle_is_imported_as_the_unknown_creators_before_it_is_replaced` (6) `an_imported_copy_on_an_episode_with_a_subtitle_is_compared_then_put_back_beside_the_video` | (1) 한 작업의 여러 회차를 서버에서 한 번에 승인한 기록이 없어요. 개발의 `모두 교체`는 계획이 둘뿐이었고, `모두 유지`·섞은 결정·12화·새 수정본·실패는 시험으로만 봤어요([0070]).<br>(3) 이전 적용 파일을 제거하는 경로를 서버에서 승인한 기록이 없어요. |
+| 표: 같은 제작자·같은 게시물의 파일만 바뀐 수정본 | 2026-10-05 개발(서버 DB 사본): 1화 `/ok/dev-1v2`에서 `비교` 카드와 `교체 승인` 배지를 본 뒤 승인하자 파일이 새 보관본의 바이트가 됐어요 ([0068]) | `trss-web` `jobs_api/replacement/tests.rs` `a_revision_of_the_same_post_shows_two_version_lines_and_nothing_else` | 서버에서 같은 게시물의 수정본을 본 기록이 없어요. |
+| 표: 제작자가 다른 새 자막 | 2026-10-07 서버: All Works Maid 1화에서 에루샤의 새 자막으로 교체 비교를 열어 승인했어요 ([0083]). 비교 화면의 구성은 기록하지 않았어요 | `trss-web` `jobs_api/replacement/tests.rs` `another_creators_subtitle_is_compared_side_by_side` | 서버 화면에서 나란한 비교가 보인 것은 사용자의 한 줄 보고([0085])로만 알아요. |
+| 표: 교체하면 관리하지 않는 기존 자막을 덮어씀 | 2026-10-07 서버: 1화 승인에서 원래 자막이 `제작자 알 수 없음` 보관본으로 들어가고 교체됐어요 ([0083]) | `trss-jobs` `tests/it/replace.rs` `an_unmanaged_subtitle_is_imported_as_the_unknown_creators_before_it_is_replaced`<br>`trss-web` `jobs_api/replacement/tests.rs` `overwriting_a_file_the_app_did_not_manage_is_a_warning_and_a_limit` | 덮어쓸 경로 경고를 서버에서 본 기록이 없어요. 들인 보관본을 서버에서 되돌려 승인한 기록도 없어요. |
+| 표: 한 작업에서 12회차가 교체를 기다림 | 없음 | `trss-jobs` `tests/it/replace_many.rs` `twelve_episodes_waiting_give_twelve_open_plans_in_one_job`, `a_new_revision_of_one_episode_leaves_it_to_compare_again_and_the_others_are_replaced` | 서버에서 한 작업에 열린 계획이 12개인 경우를 본 적이 없어요. |
+| 표: 기존 파일의 출처를 모름 | 2026-10-05 개발(서버 DB 사본): 손으로 고친 2화에서 `출처 미상` 한계를 봤어요 ([0068]) | `trss-web` `jobs_api/replacement/tests.rs` `overwriting_a_file_the_app_did_not_manage_is_a_warning_and_a_limit` | 없음 |
+| 표: 비교 뒤 같은 게시물에 새 수정본이 올라옴 | 참고(가짜 출처): 2026-10-06 개발(서버 DB 사본)에서 가짜 작업이 만든 자막으로 계획이 `이 회차에 다른 자막이 생겼어요`로 낡았어요 ([0076]) | `trss-jobs` `tests/it/replace_many.rs` `a_new_revision_of_one_episode_leaves_it_to_compare_again_and_the_others_are_replaced` | 서버에서는 본 적이 없어요. |
+
+#### 승인 증거와 반영 직전 검사
+
+요구 절: [승인 증거와 반영 직전 검사](#승인-증거와-반영-직전-검사)
+
+| 요구 | 실제 사용에서 본 것 | 테스트로 확인한 것 | 확인하지 않은 것 |
+| --- | --- | --- | --- |
+| 승인 기록이 바뀌지 않는 계획에 묶임 | 2026-10-06 개발(서버 DB 사본): 연결이 달라 낡은 v1–v3 뒤에 새 계획 v4를 승인하자 적용됐어요 ([0076]) | (1) `trss-core` `db.rs` `the_remade_package_and_effect_tables_keep_their_rows_and_references`<br>(2) `trss-web` `jobs_api/replacement/tests.rs` `a_decision_names_the_version_it_saw`<br>(3) `trss-jobs` `tests/it/replace.rs` `a_decision_on_a_plan_that_is_not_the_rows_to_decide_is_refused` | 기록이 가리키는 열(영상 식별 정보, 기존 파일의 크기·SHA-256, 새 보관 자산의 ID·경로·크기·SHA-256, 동작)이 모두 들어 있는지는 한 번에 겨눈 테스트가 없어요. 작업 ID에 붙인 포괄적 승인 표시만으로 실행하지 않는 점도 테스트가 없어요. |
+| 영상 식별 정보와 옛 inode·장치 번호 | 2026-10-06 개발(btrfs): 재부팅 뒤 같은 파일(inode 6574705)의 장치 번호가 47에서 46으로 바뀌어 계획이 낡았어요, 다시 만든 계획을 승인하자 반영됐어요 ([0076]) | `trss-jobs` `tests/it/replace.rs`: (1) `a_video_replaced_after_approval_asks_to_compare_again` (2) `killed_then_mounted_again_with_another_device_number_carries_the_replacement_on` (3) `the_existing_subtitle_changed_to_other_bytes_of_its_size_asks_to_compare_again` | (1) 전체 영상 해시를 계산하지 않는 점과, 식별 정보를 못 믿거나 읽는 도중 달라질 때 보류하는 점은 테스트가 없어요.<br>(2) 고침 뒤 실제 재부팅에서 다시 재현해 본 기록이 없어요.<br>(3) 마운트마다 inode를 새로 매기는 FUSE와 백업에서 되살린 폴더는 입력으로 쓰지 않았어요. 지운 파일의 inode를 새 파일이 받는 경우와 영상 수정본 대체 뒤 재비교도 테스트가 없어요. |
+| 운영 조건과 겹치는 경로의 직렬화 | 없음 | `trss-jobs` `tests/it/relocate.rs` `a_path_a_removal_is_taking_off_is_busy_for_other_effects`<br>`trss-jobs` `tests/it/replace.rs` `of_two_approved_jobs_on_one_path_the_later_compares_again` | 긴 다운로드·해시 계산 중에 SQLite 쓰기 트랜잭션을 잡아두지 않는 점, 검사와 `rename`·삭제 사이의 경쟁을 원자적이라고 안내하지 않는 문구, 외부 프로그램의 동시 수정, 운영 조건을 못 지킬 때 파괴적 반영을 하지 않는 쪽은 테스트도 관찰도 없어요. |
+| 반영 직전 검사 항목별 보류·재확인 | 2026-10-06 개발(서버 DB 사본): 가짜 작업이 같은 회차에 다른 자막을 만들자 올리기 3화의 첫 계획이 낡았어요 ([0076]) | `trss-jobs` `tests/it/replace.rs`: (영상 식별 정보) `a_video_replaced_after_approval_asks_to_compare_again` (보관 자산) `a_stored_asset_changed_after_approval_is_not_applied` (회차 대응) `a_mapping_changed_after_approval_is_not_applied` (추가 예정 경로) `a_file_at_the_path_to_add_after_approval_asks_to_compare_again` (같은 경로의 두 작업) `of_two_approved_jobs_on_one_path_the_later_compares_again` | 서버에서는 이 가운데 어느 것도 일어난 적이 없어요. 운영 조건 밖의 외부 쓰기와 메타데이터로 안 보이는 변경을 탐지했다고 과장하지 않는 점은 테스트가 없어요. |
+
+#### 교체 계획과 반영
+
+요구 절: [교체 계획과 반영](#교체-계획과-반영)
+
+| 요구 | 실제 사용에서 본 것 | 테스트로 확인한 것 | 확인하지 않은 것 |
+| --- | --- | --- | --- |
+| 자막이 있는 회차는 덮어쓰지 않고 `교체 승인`에서 멈춤 | 2026-10-07 서버: 에루샤 1–8화가 `교체 비교`로 남았고 1화는 `교체 승인`을 거쳐 승인됐어요 ([0083]) | `trss-jobs` `tests/it/place.rs` `an_episode_with_a_subtitle_waits_for_approval_and_one_without_a_video_for_it` | 영상 대기 뒤의 적용과 공개 직전 적용은 서버에서 보지 못했어요. 회차의 자막으로 세는 세 종류(영상 줄기 이름, 라이브러리 기록, 앱 적용본)를 한 입력에서 모두 겨눈 테스트는 없어요. |
+| 계획 줄의 동작 `교체`·`추가`·`제거`·`유지` | 2026-10-05 개발(서버 DB 사본): 손으로 고친 2화 `S01E02.ass`의 덮어쓰기 경고를 봤어요 ([0068]) | `trss-jobs` `tests/it/replace.rs` `another_creators_ass_removes_the_applied_srt_and_keeps_its_stored_copy`, `approving_a_plan_with_a_kept_file_adds_beside_it` | 서버에서 `추가`·`제거`를 담은 계획을 승인한 기록이 없어요. |
+| 보관만 하고 계획을 만들지 않는 경우 | 2026-10-07 서버: 2화가 "이 회차에 같은 자막이 이미 있어 그대로 두고 보관만 했어요"로 끝났어요. 이 동작은 바이트가 같으면 적용본으로 기록하도록 바뀌었어요 ([0083], [0121]) | `trss-jobs` `tests/it/replace.rs`: (같은 바이트) `a_jobs_first_apply_beside_the_same_bytes_records_that_file_as_the_applied_copy`<br>`trss-jobs` `tests/it/choose.rs` (더 새 수정본) `a_newer_revision_still_keeps_a_row_nobody_chose_stored_only` (사람이 고른 줄) `a_past_revision_is_restored_over_the_newer_one_which_stays_stored`<br>`trss-jobs` `tests/it/place.rs` (다른 작업의 효과) `an_episode_another_jobs_apply_is_about_to_take_keeps_it` | 다른 작업이 끝내지 못한 파일 효과가 그 회차의 경로를 쓰는 경우는 다른 작업이 적용하려는 경우로만 겨눠요. |
+| 계획의 증거는 바뀌지 않고 반영 직전에 한 번 더 검사함 | 2026-10-06 개발(서버 DB 사본): 연결이 달라 v1–v3이 낡은 뒤 v4가 승인됐어요 ([0076]) | `trss-core` `db.rs` `the_remade_package_and_effect_tables_keep_their_rows_and_references`<br>`trss-jobs` `tests/it/replace.rs` `a_video_replaced_after_approval_asks_to_compare_again` | 작품 폴더가 바뀐 경우를 입력으로 쓴 테스트를 찾지 못했어요. 다시 계획할 때 줄마다 판이 올라가는 점은 `trss-web` `jobs_api/replacement/tests.rs` `a_plan_compared_again_says_why`가 두 번째 판의 까닭으로만 겨눠요. |
+| 결정은 그 판이 마지막 판일 때만 받음 | 2026-10-07 서버: 1화를 13:52:30에 승인하자 원래 자막을 들이고 교체했어요 ([0083]) | `trss-jobs` `tests/it/replace.rs` `a_decision_on_a_plan_that_is_not_the_rows_to_decide_is_refused` | 서버에서 `409`를 본 기록이 없어요. 이미 정한 판의 결정을 거절하는 쪽은 다른 판 번호의 `409`로만 겨눠요. |
+| 계획이 여럿이면 회차 목록이 주 영역 | 2026-10-05 개발(서버 DB 사본): 열린 계획이 둘인 작업에서 `모두 교체`와 폭 375 px 화면을 봤어요 ([0070]) | `web` `src/screens/todo/replacementView.test.ts` `several plans to decide are an episode list; one keeps its decision card`, `모두 교체 and 모두 유지 decide each plan the list shows, at the version it shows` | 목록 머리가 PC에서 따라오는 것과 휴대폰에서 버튼을 고정하지 않는 것은 CSS라서 일부만 겨눠요. 요청이 실패할 때 까닭을 목록 머리에 한 번만 보이는 점은 테스트가 없어요. |
+| `현재 유지` | 2026-10-08 서버: 들인 1화 보관본의 교체 비교에서 사용자가 `현재 유지`를 골랐고 보관본과 `교체 비교`가 남았어요 ([0122])<br>2026-10-08 서버: 0.6.2 배포 뒤 API의 1화 줄에는 보관본이 없고 `자막` 카드에는 남아 있었어요 ([0124]) | `trss-jobs` `tests/it/replace.rs` `keeping_the_current_subtitle_leaves_the_file_and_ends_the_job`, `a_copy_kept_off_the_episode_leaves_its_row_until_chosen_again_or_the_subtitle_goes` | `자막` 카드에서 다시 골라 회차 줄에 `교체 승인`으로 돌아오는 쪽은 서버에서 해 본 기록이 없어요. |
+| 승인한 계획의 반영 순서(1)–(6) | (1)~(6) 2026-10-07 서버: 1화 승인으로 원래 자막이 `제작자 알 수 없음` 보관본으로 들어가고 새 자막으로 교체됐어요 ([0083]) | `trss-jobs` `tests/it/replace.rs`: (1)(2) `no_room_for_the_copies_stops_before_anything_beside_the_video_changes` (3) `killed_after_setting_the_old_copy_aside_publishes_the_new_one` (4) `a_new_copy_published_but_not_recorded_holds_the_plan_and_removes_nothing_more` (5) `killed_after_setting_an_earlier_applied_copy_aside_before_its_record_ends_the_replacement` (6) `killed_after_the_plan_was_done_cleans_up` | (5)에서 이전 적용본을 옮기지 못해 새 자막만 적용하고 계획을 보류하는 갈래는 중단 지점에서 이어 가는 쪽만 겨눠요. 서버에서 단계별 중단은 없었어요. |
+| 보관본은 지우지 않음 | 2026-10-07 서버: 1화 승인 뒤 교체된 원래 자막이 `제작자 알 수 없음` 보관본으로 남았어요 ([0083]) | `trss-jobs` `tests/it/replace.rs` `a_revision_waits_for_approval_then_replaces_and_the_earlier_stored_copy_stays` | 없음 |
+| 회차 줄의 `교체 승인` 배지 | 없음 | `trss-web` `library_work_api/tests.rs` `a_stored_subtitle_waiting_for_a_replacement_names_its_job` | 배지 글자 `교체 승인`을 서버에서 본 기록이 없어요. 보관본에 `적용`을 두지 않는 쪽은 칸을 나누는 것으로만 겨눠요. |
+| 한계: 줄 수는 형식의 표지만 셈 | 없음 | `trss-jobs` `place/replace/lines.rs` `each_format_counts_its_dialogue_lines`, `what_is_not_its_format_is_not_counted` | 없음 |
+| 한계: 끝내지 못한 효과 때문에 보관만 한 줄은 다시 비교하지 않음 | 없음 | `trss-jobs` `tests/it/place.rs` `an_episode_another_jobs_apply_is_about_to_take_keeps_it` | 멈춘 worker가 남긴 효과 때문에 보관만 한 줄은 서버에서 본 적이 없어요. |
+| 한계: 옮긴 뒤 공개 실패는 되돌리지 않고 보류 | 없음 | `trss-jobs` `tests/it/replace.rs` `a_new_copy_published_but_not_recorded_holds_the_plan_and_removes_nothing_more` | 옮겨 둔 뒤 새 적용본을 공개하지 못하는 실패는 시험으로 일으키지 못했어요(이 명세 667행). |
+| 한계: 같은 출처의 새 수정본이 앞 계획이 기다리는 동안 들어옴 | 없음 | `trss-jobs` `tests/it/choose.rs` `a_newer_revision_still_keeps_a_row_nobody_chose_stored_only` | 없음 |
+
+#### 내용 비교
+
+요구 절: [내용 비교](#내용-비교)
+
+| 요구 | 실제 사용에서 본 것 | 테스트로 확인한 것 | 확인하지 않은 것 |
+| --- | --- | --- | --- |
+| 계획을 만들 때 한 번 견주고 계획과 같은 트랜잭션에 남김 | 2026-10-05 개발(서버 DB 사본): 3화의 SMI 327줄과 ASS 24줄을 견줘 `추가 303`·`변경 24`가 나왔어요 ([0069]) | `trss-jobs` `tests/it/replace.rs` `an_ass_with_two_lines_added_and_twelve_changed_is_stored_with_its_counts_and_lines` | 같은 트랜잭션에 남는다는 점은 계획과 비교를 함께 읽는 것으로만 봐요. |
+| 형식과 인코딩 판정 | 2026-10-05 개발(서버 DB 사본): 실제 SMI(UTF-16 479줄, UTF-8 2,406줄과 327줄)를 읽었어요 ([0069]) | `trss-subtitles` `compare/tests.rs` `utf16_with_a_bom_in_both_byte_orders`, `an_smi_in_no_known_encoding_is_unreadable` | BOM 없는 UTF-8 판정과 PGS·VobSub 외 형식을 읽지 않는 쪽은 한 입력씩 겨누지 않았어요. |
+| 8 MiB 한도와 다시 읽은 현재 자막의 SHA-256 | 없음 | `trss-jobs` `place/replace/diff/tests.rs` `a_file_larger_than_the_limit_is_not_compared_and_the_side_is_named`, `a_current_file_changed_after_the_plan_saw_it_is_not_compared` | 없음 |
+| 읽는 시간과 크기의 상한 | 없음 | `trss-subtitles` `compare/tests.rs` `a_script_of_more_cues_than_the_limit_is_unreadable` | 파일 길이에 비례하는 읽기 시간은 개발 PC에서만 겨눴고 j4105에서는 재지 않았어요. |
+| 대사 비교와 언어 구분 | 2026-10-05 개발(서버 DB 사본): 실제 SMI에서 계획이 센 `<SYNC>`가 493개였어요 ([0069]) | `trss-subtitles` `compare/tests.rs` `an_ass_with_two_lines_added_and_twelve_changed`, `an_smi_with_two_language_classes` | 색·위치 태그만 바뀐 줄을 변경으로 세지 않는 쪽은 한 입력씩 겨누지 않았어요. |
+| 타이밍 비교 | 없음 | `trss-subtitles` `compare/tests.rs` `an_srt_with_only_its_timings_shifted` | 없음 |
+| 스타일과 폰트 비교 | 없음 | `trss-subtitles` `compare/tests.rs` `a_style_whose_font_name_alone_changed`, `an_ass_against_an_srt_of_the_same_dialogue_does_not_differ_and_says_styles_and_fonts_were_not_compared` | 없음 |
+| `변경 사항` 네 항목과 줄 받기 | 2026-10-05 개발(서버 DB 사본): 3화의 숫자 태그를 봤어요 ([0069]) | `web` `src/screens/todo/changes.test.ts` `a compared plan has the four items, collapsed, with their number tags`, `the first 200 lines show, and the button says how many more it adds` | 작업 상세가 몇 초마다 다시 읽는 비용(수백 KB)을 서버에서 본 기록이 없어요. |
+| 할 일 화면 카드의 태그 합산 | 2026-10-05 개발(서버 DB 사본): 열린 계획 11개를 합친 카드가 `대사 추가 305`·`일부 비교 불가 1`·`비교 불가 9` 등으로 보였고 계획들의 합과 같았어요 ([0069]) | `trss-jobs` `tests/it/todo.rs` `the_replacement_card_sums_what_its_open_plans_change_and_says_when_their_subtitles_came` | 없음 |
+| 한계: 인코딩 | 없음 | `trss-subtitles` `compare/tests.rs` `an_smi_in_no_known_encoding_is_unreadable` | 다른 인코딩의 바이트가 CP949로 읽혀 깨진 글자로 견줘지는 경우는 테스트가 없어요. |
+| 한계: 반복되는 줄의 정렬 | 없음 | `trss-subtitles` `compare/tests.rs` `repeated_lines_align_in_order` | 없음 |
+| 한계: 줄 맞추기 시간 | 2026-10-05 개발: release 빌드에서 50,000줄끼리 모든 줄이 다를 때 3.26초, 같을 때 4.5 ms였어요(이 명세의 [내용 비교](#내용-비교)) | 없음 | j4105에서는 재지 않았어요. 실제로 읽어 본 가장 긴 SMI는 2,406줄이에요. |
+
+### 영상 대기
+
+요구 절: [영상 대기](#영상-대기)
+
+| 요구 | 실제 사용에서 본 것 | 테스트로 확인한 것 | 확인하지 않은 것 |
+| --- | --- | --- | --- |
+| 영상이 없어도 자막을 받아 보관하고, 영상이 준비되면 적용함 | 2026-10-08 개발(서버 DB 사본, 시험 자막): 영상 `S01E02.mkv`를 넣자 4.8초 뒤 작업이 `done`이 되고 적용본이 보관본과 SHA-256이 같았어요 ([0083]) | `trss-jobs` `tests/it/place.rs` `a_subtitle_waiting_for_its_video_is_applied_once_the_library_has_it` | 실제 서버의 영상 대기는 보지 못했어요([0083]). |
+| 인증 필요와 구분하고 자동 삭제하지 않음 | 2026-10-05 개발(서버 DB 사본): worker를 다시 시작해도 작업이 계속 기다렸어요 ([0067]) | `trss-jobs` `tests/it/cleanup.rs` `a_subtitle_waiting_for_its_video_is_cleaned_and_its_job_settles` | 인증 필요와 영상 대기를 구분해서 보이는지는 테스트도 관찰도 없어요. 브라우저 종료 뒤와 Anissia 줄 삭제 뒤에도 남는지는 해 보지 않았어요([0067]). |
+| `영상 −`·`자막 ✓`와 `영상 대기` 배지 | 2026-10-05 개발(서버 DB 사본): 영상 없는 회차 줄이 `영상 −`·`자막 ✓`·`영상 대기`였어요 ([0067]) | `trss-web` `library_work_api/tests.rs` `a_stored_subtitle_waiting_for_its_video_says_so` | `영상 −`·`자막 ✓` 글자 자체를 단언한 테스트가 없어요. |
+| 영상 대기의 판단·다시 줄 세우기·재시작 | 2026-10-08 개발(서버 DB 사본): 로그 `Subtitle jobs: 1 waiting for a video are in line again` 뒤 4.8초 만에 `done`이 됐어요 ([0083]) | `trss-worker` `jobs.rs` `a_video_the_library_records_puts_the_job_waiting_for_it_back_in_line`<br>`trss-jobs` `tests/it/place.rs` `a_video_recorded_but_not_on_the_disk_is_looked_at_once_per_library_change` | Transmission의 `rename-partial-files`가 꺼져 받는 중인 파일이 처음부터 제 이름인 경우는 확인하지 않았어요. Anissia 줄 삭제는 지워 보지 않았어요([0067]). |
+
+### 실제 재생 환경
+
+요구 절: [실제 재생 환경](#실제-재생-환경)
+
+| 요구 | 실제 사용에서 본 것 | 테스트로 확인한 것 | 확인하지 않은 것 |
+| --- | --- | --- | --- |
+| 주 재생 환경과 NFS의 소유 uid·gid | 2026-10-07 서버: trss가 쓴 보관본·적용본의 소유가 모두 1000:1000이었어요 ([0081]) | 없음 | IINA와 팟플레이어에서 본 기록이 없어요. Infuse의 버전·기기·공유 경로·자막 검색 설정은 기록하지 않았어요([0084]). 재생기가 NFS로 읽는 것은 사용자 확인(2026-10-04)이고 NFS 위에서 소유 숫자를 본 기록은 없어요. |
+| 실제 시험에서 구분해 관찰할 항목 | 근거만: 2026-10-07 서버에서 Infuse가 영상과 같은 이름의 적용본을 자막으로 인식하고 `.trss/`의 보관본은 자막 목록에 올리지 않았어요 ([0061]) | 없음 | 추가 형식의 선택 동작과 필요한 폰트의 실제 렌더링은 본 기록이 없어요. 재생기·버전·기기·공유 경로·자막 검색 설정과 검증하지 않은 조합도 기록하지 않았어요. |
+| 폰트 확인과 파일 교체 뒤 확인 | 없음 | 없음 | 폰트 표본으로 대체 글꼴과 구분한 시험, 파일 교체 뒤 재생기의 자막 다시 읽기, 폰트를 제작자 폴더에 둔 배치에서 재생기가 폰트를 찾는 방식을 본 기록이 없어요. |
+
+### 확인하지 않은 요구
+
+실제 사용에서 본 것도 없고 테스트도 없는 요구는 240행 중 6행이에요.
+
+- 구독 제작자 자동 수신: 재확인의 한계(보류·대기 중인 작업, 겹치는 작업, 작품 병합).
+- 폰트: 폰트 보관과 실제 재생기의 사용 구분.
+- 교체 비교와 승인: 대상(작품·시즌·회차)을 머리에 합침, `표: 의존 파일`.
+- 실제 재생 환경: 실제 시험에서 구분해 관찰할 항목(`근거만:`의 Infuse 기록만 있어요), 폰트 확인과 파일 교체 뒤 확인.
+
+나머지 행에도 일부만 확인한 요구가 있어요. 그 부분은 행마다 `확인하지 않은 것`에 적었어요.
+
+[0035]: ../archive/tickets/3-subtitle-candidates-and-receiving/0035-candidate-observation.md
+[0037]: ../archive/tickets/3-subtitle-candidates-and-receiving/0037-candidate-section.md
+[0038]: ../archive/tickets/3-subtitle-candidates-and-receiving/0038-receive-result-tistory.md
+[0041]: ../archive/tickets/3-subtitle-candidates-and-receiving/0041-source-erulabo.md
+[0042]: ../archive/tickets/3-subtitle-candidates-and-receiving/0042-source-blogger-drive.md
+[0043]: ../archive/tickets/3-subtitle-candidates-and-receiving/0043-source-tistory-winpng.md
+[0044]: ../archive/tickets/3-subtitle-candidates-and-receiving/0044-source-naver.md
+[0045]: ../archive/tickets/3-subtitle-candidates-and-receiving/0045-follow-creator-auto-receive.md
+[0046]: ../archive/tickets/3-subtitle-candidates-and-receiving/0046-find-in-browser.md
+[0047]: ../archive/tickets/3-subtitle-candidates-and-receiving/0047-subtitle-upload.md
+[0048]: ../archive/tickets/3-subtitle-candidates-and-receiving/0048-attribute-unknown-creator.md
+[0050]: ../archive/tickets/3-subtitle-candidates-and-receiving/0050-silent-revision-recheck.md
+[0055]: ../archive/tickets/3-subtitle-candidates-and-receiving/0055-remote-screen-browser-controls.md
+[0059]: ../archive/tickets/4-store-apply-and-replace/0059-archive-tools-and-limits.md
+[0060]: ../archive/tickets/4-store-apply-and-replace/0060-server-filesystem-probe.md
+[0061]: ../archive/tickets/4-store-apply-and-replace/0061-infuse-placement-check.md
+[0063]: ../archive/tickets/4-store-apply-and-replace/0063-store-and-first-apply.md
+[0064]: ../archive/tickets/4-store-apply-and-replace/0064-multi-file-packages.md
+[0065]: ../archive/tickets/4-store-apply-and-replace/0065-archive-extraction.md
+[0066]: ../archive/tickets/4-store-apply-and-replace/0066-placement-confirmation.md
+[0067]: ../archive/tickets/4-store-apply-and-replace/0067-awaiting-video.md
+[0068]: ../archive/tickets/4-store-apply-and-replace/0068-replacement-approval.md
+[0069]: ../archive/tickets/4-store-apply-and-replace/0069-replacement-diff.md
+[0070]: ../archive/tickets/4-store-apply-and-replace/0070-multi-episode-replacement.md
+[0071]: ../archive/tickets/4-store-apply-and-replace/0071-mapping-change-reevaluation.md
+[0072]: ../archive/tickets/4-store-apply-and-replace/0072-choose-stored-subtitle.md
+[0073]: ../archive/tickets/4-store-apply-and-replace/0073-stored-file-cleanup.md
+[0074]: ../archive/tickets/4-store-apply-and-replace/0074-skip-unchanged-drive-fonts.md
+[0075]: ../archive/tickets/4-store-apply-and-replace/0075-todo-badges-and-cards.md
+[0076]: ../archive/tickets/4-store-apply-and-replace/0076-eight-paths-end-to-end.md
+[0077]: ../archive/tickets/4-store-apply-and-replace/0077-same-number-follows-mapping.md
+[0080]: ../archive/tickets/5-deployed-verification/0080-server-db-migration-check.md
+[0081]: ../archive/tickets/5-deployed-verification/0081-deploy-new-release.md
+[0083]: ../archive/tickets/5-deployed-verification/0083-deployed-end-to-end.md
+[0084]: ../archive/tickets/5-deployed-verification/0084-three-players.md
+[0085]: ../archive/tickets/5-deployed-verification/0085-phone-and-tablet-flows.md
+[0118]: ../archive/tickets/5-deployed-verification/0118-applied-copy-creator.md
+[0119]: ../archive/tickets/5-deployed-verification/0119-refresh-after-stored-apply.md
+[0120]: ../archive/tickets/5-deployed-verification/0120-stored-copy-on-subtitled-row.md
+[0121]: ../archive/tickets/5-deployed-verification/0121-identical-copy-becomes-applied.md
+[0122]: ../archive/tickets/5-deployed-verification/0122-imported-copy-choosable.md
+[0124]: ../archive/tickets/5-deployed-verification/0124-kept-copy-off-episode-row.md
+[0127]: ../archive/tickets/5-deployed-verification/0127-row-waits-for-library-after-apply.md
+[결과 목표 3 기록]: ../tickets/README.md#3-자막-후보와-수신
+[경로별 재확인]: ../brainstorm/web-gui-subtitles.md#2026-10-02-경로별-재확인
+[작업과 인증 명세]: jobs.md#작업-화면-안의-인증과-브라우저-수명
+[티켓 목록]: ../tickets/README.md
