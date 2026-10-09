@@ -525,6 +525,8 @@ mod tests {
     fn leading_zeros_of_a_text_of_digits_go_and_nothing_else_changes() {
         for (text, shown_text) in [
             ("01", "1"),
+            ("02", "2"),
+            ("2", "2"),
             ("013", "13"),
             ("1", "1"),
             ("10", "10"),

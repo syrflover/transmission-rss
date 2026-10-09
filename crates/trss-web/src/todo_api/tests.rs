@@ -558,3 +558,67 @@ async fn a_failed_replacement_is_in_the_receive_failures_with_its_work_and_both_
         .collect();
     assert_eq!(roles, ["old", "new"]);
 }
+
+/// The failed replacement's card names its episode as written and shown, for
+/// the link to the episode's row.
+#[tokio::test]
+async fn a_failed_replacements_card_carries_its_episodes_shown_and_as_runs() {
+    let app = App::new().await;
+    app.state
+        .history
+        .record(
+            1,
+            vec![Observation {
+                channel_id: app.rule.channel_id.clone(),
+                channel_label: "https://feed.test/rss".into(),
+                identity_key: "guid:14v2".into(),
+                title: NEW_NAME.into(),
+                link: "magnet:?xt=urn:btih:2222000000000000000000000000000000000014".into(),
+                result: HistoryResult::Received,
+                rule_id: Some(app.rule.id.clone()),
+                torrent_hash: Some("2222000000000000000000000000000000000014".into()),
+                reason: None,
+            }],
+        )
+        .await
+        .unwrap();
+    let item = app
+        .state
+        .history
+        .item_by_key(app.rule.channel_id.clone(), "guid:14v2".into())
+        .await
+        .unwrap()
+        .unwrap();
+    app.state
+        .revisions
+        .create(
+            10,
+            NewRevision {
+                item_id: item.id,
+                old_item_id: None,
+                rule_id: app.rule.id.clone(),
+                folder: SEASON_FOLDER.into(),
+                episode_name: EPISODE_NAME.into(),
+                old_version: Some(1),
+                new_version: 2,
+                old_crc: None,
+                expected_crc: Some("8F2EFECC".into()),
+                torrent_hash: None,
+                state: RevisionState::Failed,
+                reason: Some("받은 파일의 CRC32가 이름과 달라요.".into()),
+            },
+        )
+        .await
+        .unwrap();
+
+    let todo = app.get("/api/todo").await;
+
+    let card = &todo["needs"][0];
+    assert_eq!(card["kind"], "receive_failed", "{todo}");
+    assert_eq!(card["episodes"], json!(["14"]));
+    assert_eq!(card["episodes_shown"], json!(["14"]));
+    assert_eq!(
+        card["episode_segments"],
+        json!([{ "text": "14", "count": 1, "whole": true }])
+    );
+}

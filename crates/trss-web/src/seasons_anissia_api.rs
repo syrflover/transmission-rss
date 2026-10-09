@@ -59,7 +59,7 @@
 //!   "refresh": { "id": "captions-3441-1790780400000", "state": "done", … },
 //!   "candidates": [
 //!     { "id": 12, "source_id": "6f0c…", "creator": "에루샤",
-//!       "post_url": "https://erulabo.com/837", "episode": "12",
+//!       "post_url": "https://erulabo.com/837", "episode": "12", "episode_shown": "12",
 //!       "updated": "2026-09-10T12:10:00", "updated_at": 1789009800000,
 //!       "updated_parse_failed": false, "first_seen_at": 1790780400000,
 //!       "sort_at": 1789009800000,
@@ -82,7 +82,8 @@
 //!   is Anissia's text as it was). A season with no link has `anime_no`
 //!   `null` and none.
 //! - `episode` is Anissia's text as written (`0`, `13.5`): it is not a number
-//!   and no episode of the season. `source_id` is the app's ID of the creator's
+//!   and no episode of the season; `episode_shown` is it without the leading
+//!   zeros of a whole number (`1` for `01`). `source_id` is the app's ID of the creator's
 //!   lines of the anime; `creator` is the display name Anissia gives and is not
 //!   an ID.
 //! - `revision` marks a revision candidate: a subtitle job received the
@@ -144,7 +145,7 @@ use trss_collect::store::{
     anissia::{mark_attributed, Attributed},
     channels::{Rule, SeasonAnimeError},
 };
-use trss_core::episode::{segments, EpisodeSegment};
+use trss_core::episode::{segments, shown, EpisodeSegment};
 use trss_library::store::seasons::SeasonError;
 
 #[cfg(test)]
@@ -635,6 +636,8 @@ struct CandidateObservation {
     creator: String,
     post_url: String,
     episode: String,
+    /// `episode` without the leading zeros of a whole number.
+    episode_shown: String,
     updated: String,
     updated_at: Option<i64>,
     updated_parse_failed: bool,
@@ -690,6 +693,7 @@ impl From<&trss_collect::store::anissia::Candidate> for CandidateObservation {
             creator: c.creator.clone(),
             post_url: c.post_url.clone(),
             episode: c.episode.clone(),
+            episode_shown: shown(&c.episode).to_owned(),
             updated: c.updated.clone(),
             updated_at: c.updated_at,
             updated_parse_failed: c.updated_at.is_none(),

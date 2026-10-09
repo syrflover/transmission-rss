@@ -25,6 +25,9 @@
 //!   `episode_segments`: their `episodes` as runs for a line to name and
 //!   shorten, `{ "text": "1–4", "count": 4, "whole": true }`, `{ "text": "7",
 //!   … }`, the other texts (`SP`) after them ([`trss_core::episode::segments`]).
+//!   `receive_failed` also has `episodes_shown`: its `episodes` without the
+//!   leading zeros of a whole number (`1` for `01`), which a link to the
+//!   episode's row carries.
 //! - `receive_failed` (`받기 실패`): the failures listed below, one to-do per
 //!   work for revisions (`context: "revision"`, the work's folder when the
 //!   library has no work there) and one per rule for add failures

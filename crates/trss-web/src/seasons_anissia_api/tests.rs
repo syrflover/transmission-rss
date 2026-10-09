@@ -1038,6 +1038,29 @@ async fn each_creators_episodes_come_as_runs_with_zero_inside_them() {
 }
 
 #[tokio::test]
+async fn a_candidate_tells_its_episode_as_written_and_shown() {
+    let app = App::new().await;
+    app.schedule_3320();
+    app.fake.set_recent(vec![app.fake.recent_line(
+        3320,
+        "05",
+        "2026-10-02T11:00:00",
+        "https://blog.test/a",
+        "에루샤",
+    )]);
+    app.observer().run_due().await.unwrap();
+    let (status, linked) = app
+        .link(1, json!({ "version": 0, "anime_no": 3320, "week": 3 }))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{linked}");
+
+    let shown = app.candidates(1).await;
+
+    assert_eq!(shown["candidates"][0]["episode"], "05");
+    assert_eq!(shown["candidates"][0]["episode_shown"], "5");
+}
+
+#[tokio::test]
 async fn linking_after_observations_exist_shows_the_earlier_ones_at_once_and_asks_the_worker_to_read(
 ) {
     let app = App::new().await;

@@ -83,6 +83,8 @@ pub enum Todo {
         title: String,
         season: Option<u32>,
         episodes: Vec<String>,
+        /// `episodes` without the leading zeros of a whole number.
+        episodes_shown: Vec<String>,
         /// `episodes` as the lines name them: runs, shown without leading zeros.
         episode_segments: Vec<EpisodeSegment>,
         count: usize,

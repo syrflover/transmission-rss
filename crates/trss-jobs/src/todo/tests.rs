@@ -49,6 +49,7 @@ fn at_time(kind: &str, work: Option<&str>, at: i64) -> Todo {
             title,
             season: None,
             episodes: vec![],
+            episodes_shown: vec![],
             episode_segments: vec![],
             count: 1,
             reason: None,
