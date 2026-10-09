@@ -145,7 +145,7 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
 use trss_collect::store::anissia::episode_key;
-use trss_core::{Clock, Db, DbError, Millis};
+use trss_core::{calendar::DAY_MS, files::hex, Clock, Db, DbError, Millis};
 use trss_subtitles::{
     Failure, FailureKind, FileInfo, Opened, PostFile, PostReading, Received, Sources,
 };
@@ -157,13 +157,11 @@ use crate::{
     Created, ItemState,
 };
 
-const DAY: Millis = 24 * 60 * 60 * 1000;
-
 /// How long after its receipt an episode is read again.
-pub const WINDOW: Millis = 14 * DAY;
+pub const WINDOW: Millis = 14 * DAY_MS;
 
 /// About how often an item is read: once a day.
-pub const INTERVAL: Millis = DAY;
+pub const INTERVAL: Millis = DAY_MS;
 
 /// How much earlier than [`INTERVAL`] a reading is due. The worker looks for
 /// due items hourly, so a strict day would push each reading up to an hour
@@ -951,7 +949,7 @@ impl Recheck {
         println!(
             "Subtitle recheck of episode {} (received {} days ago): {}",
             item.episode,
-            (now - item.received_at) / DAY,
+            (now - item.received_at) / DAY_MS,
             verdict.code()
         );
         Ok(verdict)
@@ -990,7 +988,7 @@ impl Recheck {
         }
         lines.sort();
         let digest = Sha256::digest(lines.join("\n").as_bytes());
-        let digest: String = digest.iter().take(8).map(|b| format!("{b:02x}")).collect();
+        let digest = hex(&digest[..8]);
         let request = json!({
             "recheck": item.id,
             "observation": item.observation,
@@ -1174,7 +1172,7 @@ mod tests {
 
         // A day later it is, and what the last reading said is gone while this
         // one is under way.
-        let now = 100 + DAY;
+        let now = 100 + DAY_MS;
         assert_eq!(recheck.claim(1, &at(now)).await.unwrap(), Some(now));
         assert_eq!(row(&recheck).await, (now, 4, None, None, None, None));
         // Nobody else takes it meanwhile, even a pass that began earlier.

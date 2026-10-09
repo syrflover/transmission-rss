@@ -28,6 +28,7 @@ use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use transmission_rpc::types::{Torrent, TorrentStatus};
 
 use trss_core::{
+    calendar::DAY_MS,
     db::{Db, DbError},
     Millis,
 };
@@ -38,8 +39,6 @@ mod tests;
 /// How many of a channel's newest read days are kept: the 28 days of the
 /// `새 항목 없음` ground of the archive suggestions.
 pub const READ_DAYS_KEPT: usize = 28;
-
-const DAY_MS: Millis = 24 * 60 * 60 * 1000;
 
 /// The day a moment belongs to: Unix milliseconds divided by a day. Read days
 /// are told apart by this and nothing more, so the time zone does not matter.

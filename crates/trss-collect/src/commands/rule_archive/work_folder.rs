@@ -71,7 +71,7 @@ use tokio_util::sync::CancellationToken;
 use transmission_rpc::TransClient;
 use trss_core::{
     files::{noreplace_unsupported, part_name, rename_noreplace},
-    folder_check::{conflict, resolve_folder, Conflict, Folder},
+    folder_check::{conflict, device_of, resolve_folder, Conflict, Folder},
     folders::has_parent_dir,
 };
 
@@ -185,8 +185,7 @@ pub struct RealDisk;
 
 impl Disk for RealDisk {
     fn device(&self, _path: &Path, metadata: &fs::Metadata) -> u64 {
-        use std::os::unix::fs::MetadataExt;
-        metadata.dev()
+        device_of(metadata)
     }
 }
 

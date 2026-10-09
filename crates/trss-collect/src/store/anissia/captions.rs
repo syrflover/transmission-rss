@@ -182,13 +182,13 @@ pub fn revision_by_attribution(
     // episode of the season (as the subscribed creator's receipt reads them),
     // so there is nothing to revise.
     let wanted = match shifted(&candidate.episode, offset) {
-        Some(mapped) if mapped > 0 => format!("n:{mapped}"),
+        Some(mapped) if mapped > 0 => stored_key(&mapped.to_string()),
         Some(_) => return None,
         // Without a mapping a text that is no whole episode (`5.5`, `SP`) is
         // compared as it is, which the mapping cannot do.
         None if offset == 0 => {
             let key = episode_key(&candidate.episode);
-            if key == "n:0" {
+            if key == stored_key("0") {
                 return None;
             }
             key
@@ -216,7 +216,7 @@ fn revision_by_attributed_episode(
     if season_episode <= 0 {
         return None;
     }
-    let wanted = format!("n:{season_episode}");
+    let wanted = stored_key(&season_episode.to_string());
     held.iter()
         .any(|a| a.source_id == candidate.source_id && episode_key(&a.episode) == wanted)
         .then_some(Revision {
