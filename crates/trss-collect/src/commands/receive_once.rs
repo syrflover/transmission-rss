@@ -1585,6 +1585,45 @@ mod tests {
         }
     }
 
+    /// The sentence is what the person reads, from the web's 400 and from the
+    /// row that explains the missing `다시 받기`: each reason has its own, in
+    /// the same polite form, and the web answers with it as it is.
+    #[test]
+    fn every_reason_an_item_is_not_retried_says_its_own_sentence() {
+        use NotRetryable::*;
+        let says = [
+            (Held, "이미 있어서"),
+            (NotPicked, "규칙이 고르지 않아서"),
+            (ChannelDeleted, "채널이 삭제돼서"),
+            (NoRule, "규칙 없이"),
+            (RuleDeleted, "지워져서"),
+            (RuleArchived, "복원한 뒤"),
+            (RulePaused, "영상 받기를 켠 뒤"),
+            (RuleMissing, "받으려는 규칙을 찾지 못했어요"),
+            (WrongChannel, "다른 채널의 규칙"),
+            (NotMatching, "제외 조건"),
+            (OtherRule, "다른 규칙이 받으려다"),
+            (Overtaken, "더 높은 수정본"),
+            (FolderMoved, "저장 폴더가 바뀌어서"),
+            (InPlace, "같거나 더 높은 수정본"),
+        ];
+        let mut seen = std::collections::HashSet::new();
+        for (reason, phrase) in says {
+            let message = reason.message();
+            assert!(message.contains(phrase), "{reason:?}: {message}");
+            assert!(message.ends_with("요."), "{reason:?}: {message}");
+            assert!(seen.insert(message), "{reason:?} says what another says");
+        }
+        // Every variant is in the table: this match stops compiling when one is
+        // added.
+        let _ = |reason: NotRetryable| match reason {
+            Held | NotPicked | ChannelDeleted | NoRule | RuleDeleted | RuleArchived
+            | RulePaused | RuleMissing | WrongChannel | NotMatching | OtherRule | Overtaken
+            | FolderMoved | InPlace => (),
+        };
+        assert_eq!(seen.len(), 14);
+    }
+
     #[test]
     fn a_stopped_revision_overtaken_by_a_higher_one_is_not_retried() {
         let (channel, active) = (channel(), rule(RuleState::Active));

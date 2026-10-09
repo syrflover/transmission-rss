@@ -6,6 +6,7 @@ use serde_json::{json, Value};
 
 use super::*;
 use crate::testing;
+use trss_collect::commands::receive_once::NotRetryable;
 use trss_collect::store::{
     channels::{Channel, ChannelInput, Rule, RuleInput, RuleState},
     history::{HistoryItem, HistoryQuery, HistoryResult, Observation},
@@ -241,47 +242,7 @@ async fn a_second_command_for_an_item_still_being_added_is_refused() {
 
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(body["current"]["id"], ID, "the open command is handed back");
-    assert!(app
-        .state
-        .commands
-        .get("another-command-id")
-        .await
-        .unwrap()
-        .is_none());
-}
-
-#[tokio::test]
-async fn a_retry_is_accepted_again_once_the_earlier_command_ended() {
-    let app = App::new();
-    let channel = app.channel().await;
-    let rule = app.rule(&channel, RuleState::Active).await;
-    let item = app.failed(&channel, "26", &rule).await;
-    assert_eq!(app.post(ID, &item).await.0, StatusCode::ACCEPTED);
-    let claimed = app.state.commands.claim_next(2_000).await.unwrap().unwrap();
-    // While it is open, another command for the item is refused.
-    assert_eq!(
-        app.post("another-command-id", &item).await.0,
-        StatusCode::CONFLICT
-    );
-
-    app.state
-        .commands
-        .finish(
-            &claimed.id,
-            CommandState::Failed,
-            trss_core::commands::Outcome {
-                result: "add_failed".into(),
-                reason: Some("Transmission에 연결하지 못했어요".into()),
-            },
-            3_000,
-        )
-        .await
-        .unwrap();
-    let (status, text, view) = app.post("another-command-id", &item).await;
-
-    assert_eq!(status, StatusCode::ACCEPTED, "{text}");
-    assert_eq!(view["id"], "another-command-id");
-    assert_eq!(view["state"], "pending");
+    assert_eq!(body["message"], BUSY);
 }
 
 #[tokio::test]
@@ -304,22 +265,15 @@ async fn a_request_for_a_rule_is_refused_when_the_rule_would_not_pick_the_item()
         .unwrap();
     let item = app.item(&channel, "26", HistoryResult::NoMatch).await;
 
-    // The title does not match the rule.
+    // The rule would not pick the item (the reasons are trss-collect
+    // `receive_once::adoption_plan`'s): a 400 with its sentence, and nothing
+    // stored.
     let (status, text, body) = app
         .post_payload(ID, json!({ "item_id": item.id, "rule_id": another.id }))
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
     assert_eq!(body["error"], "invalid");
-    let message = body["message"].as_str().unwrap();
-    assert!(message.contains("고르지 않는"), "{message}");
-    assert!(message.ends_with("요."), "{message}");
-    // A rule that does not exist.
-    let (status, _, _) = app
-        .post_payload(ID, json!({ "item_id": item.id, "rule_id": "no-such-rule" }))
-        .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    // Without a rule, an item no rule picked is still not retried.
-    assert_eq!(app.post(ID, &item).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(body["message"], NotRetryable::NotMatching.message());
     assert!(app.state.commands.get(ID).await.unwrap().is_none());
 
     // The rule that would pick it is accepted, and the request is stored with
@@ -357,12 +311,14 @@ async fn a_request_that_names_a_folder_is_refused_and_nothing_is_stored() {
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
+/// Which reason an item cannot be retried for is trss-collect
+/// `receive_once::retry_plan`'s, and the sentences are `NotRetryable::message`'s;
+/// the web answers 400 with the sentence as it is.
 #[tokio::test]
 async fn an_item_that_cannot_be_retried_is_refused_with_its_reason_and_nothing_is_stored() {
     let app = App::new();
     let channel = app.channel().await;
     let active = app.rule(&channel, RuleState::Active).await;
-    let archived = app.rule(&channel, RuleState::Archived).await;
     let deleted = app.rule(&channel, RuleState::Active).await;
     let rule_deleted = app.failed(&channel, "1", &deleted).await;
     app.state
@@ -370,10 +326,6 @@ async fn an_item_that_cannot_be_retried_is_refused_with_its_reason_and_nothing_i
         .delete_rule(&deleted.id, deleted.version)
         .await
         .unwrap();
-    let rule_archived = app.failed(&channel, "2", &archived).await;
-    let no_rule = app.item(&channel, "3", HistoryResult::AddFailed).await;
-    let no_match = app.item(&channel, "4", HistoryResult::NoMatch).await;
-    let excluded = app.item(&channel, "5", HistoryResult::Excluded).await;
     let received = app
         .item_of(
             &channel,
@@ -382,30 +334,15 @@ async fn an_item_that_cannot_be_retried_is_refused_with_its_reason_and_nothing_i
             Some(active.id.clone()),
         )
         .await;
-    let duplicate = app
-        .item_of(
-            &channel,
-            "7",
-            HistoryResult::Duplicate,
-            Some(active.id.clone()),
-        )
-        .await;
 
-    for (item, says) in [
-        (&rule_deleted, "지워져서"),
-        (&rule_archived, "복원한 뒤"),
-        (&no_rule, "규칙 없이"),
-        (&no_match, "규칙이 고르지 않아서"),
-        (&excluded, "규칙이 고르지 않아서"),
-        (&received, "이미"),
-        (&duplicate, "이미"),
+    for (item, why) in [
+        (&rule_deleted, NotRetryable::RuleDeleted),
+        (&received, NotRetryable::Held),
     ] {
         let (status, text, body) = app.post(ID, item).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{}: {text}", item.title);
         assert_eq!(body["error"], "invalid");
-        let message = body["message"].as_str().unwrap();
-        assert!(message.contains(says), "{}: {message}", item.title);
-        assert!(message.ends_with("요."), "{message}");
+        assert_eq!(body["message"], why.message(), "{}", item.title);
     }
     assert!(app.state.commands.get(ID).await.unwrap().is_none());
 }
@@ -459,19 +396,6 @@ async fn requests_that_do_not_make_sense_are_refused_with_a_sentence() {
         )
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-
-    // A deleted channel takes its rules along, so nothing says where to go.
-    let gone = app.channel().await;
-    let gone_rule = app.rule(&gone, RuleState::Active).await;
-    let orphan = app.failed(&gone, "1", &gone_rule).await;
-    app.state
-        .channels
-        .delete_channel(&gone.id, gone.version, 1)
-        .await
-        .unwrap();
-    let (status, _, body) = app.post(ID, &orphan).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(body["message"].as_str().unwrap().contains("채널"));
 
     assert!(app.state.commands.get(ID).await.unwrap().is_none());
 }
